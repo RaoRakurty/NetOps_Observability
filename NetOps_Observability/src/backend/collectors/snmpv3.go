@@ -445,7 +445,19 @@ func (s *v3Session) exchange(conn net.Conn, pduTag byte, oid []int, reqID int) (
 		var scopedResp []byte
 		scopedResp, err = s.parseScoped(buf[:n])
 		if err != nil {
-			return 0, nil, nil, err // auth/decrypt failure: not stale, refuse outright
+			// Auth/verify/decrypt failure. An off-path attacker who can guess the
+			// deterministic msgID (starts 1, ++ per exchange, fresh session per
+			// poll) can time bad-HMAC datagrams to a poll; returning here would
+			// abort the exchange on the FIRST forged packet, before the genuine
+			// reply is read, failing the device's cycle on demand (a cheap DoS).
+			// Treat it like a stale read instead: discard this datagram and
+			// re-read within the SAME bounded budget. The trust boundary is
+			// unchanged — parseScoped rejected the packet, so no engine state was
+			// adopted and nothing was decrypted from it (H3/M2 hold); only the
+			// reason for looping changes, not what is trusted. Still bounded by
+			// maxStaleReads and the shared read deadline, so a flood with no
+			// genuine reply terminates with an honest error rather than spinning.
+			continue
 		}
 		valTag, val, retOID, err = varbindFromScoped(scopedResp, reqID)
 		if errors.Is(err, errStaleResponse) {

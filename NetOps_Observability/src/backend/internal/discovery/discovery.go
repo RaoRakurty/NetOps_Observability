@@ -204,7 +204,21 @@ func (a *DiscoveryAggregator) pollOnce(ctx context.Context, src DiscoverySource)
 	for _, d := range devices {
 		// An operator deleted this device: honour that instead of resurrecting
 		// it every poll (F-69). Recreating it via POST clears the tombstone.
-		if a.store != nil && a.store.IsSuppressed(d.ID) {
+		//
+		// A tombstone is checked against BOTH scan-id derivations, not just the
+		// live d.ID, so a delete sticks regardless of which id era it was made
+		// in: the pre-hash legacy id ScanDeviceID(name, "") and the current
+		// address-hashed id ScanDeviceID(name, addr). ScanDeviceID gained an
+		// address-hash suffix mid-flight; a device deleted before OR during that
+		// window has its tombstone keyed by the id of that era, which no longer
+		// equals today's d.ID. Deriving both from the (name, address) we already
+		// have makes suppression order- and era-independent without giving up the
+		// address-hash uniqueness (see snapshotLocked). d.ID itself is still
+		// checked first so non-SNMP sources (static/netbox), whose ids are not
+		// scan ids, keep honouring their own tombstones.
+		if a.store != nil && (a.store.IsSuppressed(d.ID) ||
+			a.store.IsSuppressed(ScanDeviceID(d.Name, "")) ||
+			a.store.IsSuppressed(ScanDeviceID(d.Name, d.Address))) {
 			continue
 		}
 		existing, ok := a.cache[d.ID]

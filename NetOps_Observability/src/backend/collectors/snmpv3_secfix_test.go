@@ -226,3 +226,71 @@ func TestH3ExchangeSurvivesPrivFlaggedReply(t *testing.T) {
 		t.Fatal("priv-flagged reply on an authNoPriv session must be refused")
 	}
 }
+
+// ---- F-v3DoS: parseScoped auth failure re-reads within the stale budget ------
+
+// mintBadHMACResponse builds a datagram that ECHOES the client's msgID/reqID/OID
+// (so it passes the msgID gate) but is signed with a WRONG localized auth key —
+// exactly what an off-path attacker who guessed the deterministic msgID but not
+// the shared secret can produce. parseScoped's HMAC verify must reject it.
+func mintBadHMACResponse(t *testing.T, msgID, reqID int, oid []int) []byte {
+	t.Helper()
+	ss, creds := authSession(t, "authNoPriv", "SHA", "")
+	ss.msgID = msgID
+	// Sign with a key the client does not hold. buildV3Message HMACs with
+	// sess.authKeyL, so a wrong localized key yields a bad-HMAC packet whose
+	// header msgID still parses.
+	creds.AuthKey = "wrong-key-guess-999"
+	newHash, _ := authHash("SHA")
+	ss.authKeyL = localizeKey(newHash, creds.AuthKey, ss.engineID)
+	vb := berTLV(0x30, berTLV(0x30, append(berOID(oid), berTLV(0x02, []byte{42})...)))
+	scoped := buildScopedPDU(ss.engineID, "", buildPDU(0xA2, reqID, vb))
+	return mintResponse(t, ss, creds, scoped)
+}
+
+// TestV3ExchangeDoSStaleReadBudget: an off-path attacker who guesses the
+// deterministic msgID can blast bad-HMAC datagrams timed to a poll. Before the
+// fix, exchange returned on the FIRST auth failure, so one forged packet ahead
+// of the genuine reply failed the device's whole cycle. Now a parseScoped auth
+// failure is discarded and re-read within the SAME bounded stale-read budget:
+// forged packets ahead of the real reply no longer abort the exchange, while a
+// flood with no genuine reply still terminates with an honest error. The trust
+// boundary is unchanged — every forged packet is rejected, never adopted or
+// decrypted.
+func TestV3ExchangeDoSStaleReadBudget(t *testing.T) {
+	oid := []int{1, 3, 6, 1, 2, 1, 1, 3, 0}
+
+	t.Run("forged packets ahead of the genuine reply still succeed", func(t *testing.T) {
+		valTag, val, err := runV3Exchange(t, func(t *testing.T, mid int) [][]byte {
+			// 3 bad-HMAC forgeries, then the real authenticated reply — inside
+			// the maxStaleReads budget (4 reads).
+			return [][]byte{
+				mintBadHMACResponse(t, mid, 99, oid),
+				mintBadHMACResponse(t, mid, 99, oid),
+				mintBadHMACResponse(t, mid, 99, oid),
+				mintGetResponse(t, mid, 99, oid),
+			}
+		})
+		if err != nil {
+			t.Fatalf("genuine reply behind forged packets was not read: %v", err)
+		}
+		if valTag != 0x02 || len(val) != 1 || val[0] != 42 {
+			t.Fatalf("wrong varbind returned: tag %#x val %v", valTag, val)
+		}
+	})
+
+	t.Run("flood with no genuine reply terminates with an honest error", func(t *testing.T) {
+		_, _, err := runV3Exchange(t, func(t *testing.T, mid int) [][]byte {
+			return [][]byte{
+				mintBadHMACResponse(t, mid, 99, oid),
+				mintBadHMACResponse(t, mid, 99, oid),
+				mintBadHMACResponse(t, mid, 99, oid),
+				mintBadHMACResponse(t, mid, 99, oid),
+				mintBadHMACResponse(t, mid, 99, oid),
+			}
+		})
+		if err == nil {
+			t.Fatal("a flood of forged packets with no genuine reply must fail, not be consumed")
+		}
+	})
+}

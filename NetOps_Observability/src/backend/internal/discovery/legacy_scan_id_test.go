@@ -1,12 +1,22 @@
 package discovery
 
-// legacy_scan_id_test.go — M1: the ScanDeviceID address-hash change shipped
-// with no migration. Every consumer keyed by scan id predates it — the F-69
-// delete tombstones (IsSuppressed) and per-device state — so re-keying the
-// whole fleet on upgrade would resurrect every operator-deleted device and
-// orphan its state. The fix keeps a uniquely-named device on its legacy
-// (address-less) id and only applies the hash when a name collision actually
-// exists. These tests lock both halves.
+// legacy_scan_id_test.go — scan-id migration safety.
+//
+// ScanDeviceID gained an address-hash suffix to stop same-name collisions, but
+// every consumer keyed by scan id — the F-69 delete tombstones (IsSuppressed)
+// and per-device state — predates it. M1's first attempt at a migration re-keyed
+// a UNIQUELY-named device back to the address-less legacy id so its tombstone
+// still matched. That rewrite caused two regressions (F5/F6): it collided with a
+// static-file device that already used the bare name as its id (the SNMP record
+// was then dropped as a lower-precedence duplicate), and it still missed
+// tombstones written DURING the hashed-id window.
+//
+// The fix keeps the collision-safe hashed id for EVERY device and instead makes
+// suppression order- and era-independent in the aggregator (pollOnce checks both
+// the legacy address-less id and the hashed id). These tests lock: hashed ids
+// stay unique (no cross-source collision), a legacy-id tombstone still sticks
+// (pre-hash delete), a hashed-window tombstone sticks, and a static+SNMP name
+// clash no longer drops the SNMP record.
 
 import (
 	"context"
@@ -36,7 +46,7 @@ func newLegacyIDSource() *SNMPSource {
 	s.SetProbeForTest(func(_ context.Context, addr, _ string) (string, string, string, bool) {
 		switch addr {
 		case "10.9.0.1":
-			return "core1", "arista", "descr", true // unique name → legacy id
+			return "core1", "arista", "descr", true // unique name
 		case "10.9.0.2", "10.9.0.3":
 			return "switch", "cisco", "descr", true // colliding factory default
 		}
@@ -45,7 +55,27 @@ func newLegacyIDSource() *SNMPSource {
 	return s
 }
 
-func TestM1LegacyScanIDPreservedAndCollisionsStillDisambiguated(t *testing.T) {
+// newCore1Source is a single-device SNMP source (only 10.9.0.1 answers, sysName
+// "core1", vendor arista) — used for the static-clash and hashed-window cases.
+func newCore1Source() *SNMPSource {
+	cfg := func() ScanSettings {
+		return ScanSettings{Enabled: true, Ranges: []string{"10.9.0.0/29"}, Community: "public"}
+	}
+	s := NewSNMPSource(cfg, nil)
+	s.SetProbeForTest(func(_ context.Context, addr, _ string) (string, string, string, bool) {
+		if addr == "10.9.0.1" {
+			return "core1", "arista", "descr", true
+		}
+		return "", "", "", false
+	})
+	return s
+}
+
+// TestScanIDsAlwaysHashedNoBareLegacyID: the collision-safe hashed scan id is
+// kept for EVERY device (M1's legacy-id rewrite is reverted). A uniquely-named
+// device is under ScanDeviceID(name, addr), never the bare name; the colliding
+// pair still gets distinct, address-hashed ids.
+func TestScanIDsAlwaysHashedNoBareLegacyID(t *testing.T) {
 	s := newLegacyIDSource()
 	devs, err := s.Poll(context.Background())
 	if err != nil {
@@ -55,13 +85,15 @@ func TestM1LegacyScanIDPreservedAndCollisionsStillDisambiguated(t *testing.T) {
 	for _, d := range devs {
 		byID[d.ID] = d
 	}
-	// The uniquely-named device keeps its pre-change, address-less id — the id
-	// its tombstone and per-device state are keyed by.
-	if _, ok := byID["core1"]; !ok {
-		t.Fatalf("uniquely-named device re-keyed away from legacy id: ids=%v", keysOf(byID))
+	// The uniquely-named device is under its collision-safe hashed id, not the
+	// bare legacy name — no cross-source collision with a static "core1".
+	if _, ok := byID[ScanDeviceID("core1", "10.9.0.1")]; !ok {
+		t.Fatalf("unique device not under its hashed id: ids=%v", keysOf(byID))
 	}
-	// The colliding pair still gets distinct, address-hashed ids (the collision
-	// fix this change exists for must survive the migration shim).
+	if _, ok := byID["core1"]; ok {
+		t.Fatalf("unique device must not appear under the bare legacy id: ids=%v", keysOf(byID))
+	}
+	// The colliding pair still gets distinct, address-hashed ids.
 	h2 := ScanDeviceID("switch", "10.9.0.2")
 	h3 := ScanDeviceID("switch", "10.9.0.3")
 	if h2 == h3 {
@@ -79,11 +111,12 @@ func TestM1LegacyScanIDPreservedAndCollisionsStillDisambiguated(t *testing.T) {
 }
 
 // TestM1SuppressedLegacyIDStaysSuppressed: an operator deleted a device before
-// the id change (tombstone keyed by the LEGACY id). A rescan returning the same
-// name+address must stay suppressed — resurrecting it would undo the delete.
+// the id change (tombstone keyed by the LEGACY address-less id). A rescan
+// returning the same name+address must stay suppressed — pollOnce's dual-
+// derivation check matches ScanDeviceID(name, "") to the tombstone.
 func TestM1SuppressedLegacyIDStaysSuppressed(t *testing.T) {
 	st := NewDevStore("devices.json", memKV{}, nil)
-	if err := st.Remove("core1"); err != nil { // records the F-69 tombstone
+	if err := st.Remove("core1"); err != nil { // records the F-69 tombstone under the legacy id
 		t.Fatalf("remove: %v", err)
 	}
 	a := NewDiscoveryAggregator()
@@ -100,6 +133,49 @@ func TestM1SuppressedLegacyIDStaysSuppressed(t *testing.T) {
 	// The un-deleted devices still arrive.
 	if got := len(a.RawDevices()); got != 2 {
 		t.Fatalf("want the 2 surviving devices, got %d: %+v", got, a.RawDevices())
+	}
+}
+
+// TestSameDeviceStaticPlusSnmpMergeLost (F5): a static-file device already owns
+// the bare name "core1" as its id and is polled first (higher precedence).
+// Under M1's legacy-id rewrite the SNMP record re-keyed to the same "core1" and
+// was skipped as a lower-precedence duplicate — losing its vendor/OS/address.
+// With the hashed id kept, the SNMP record has a distinct id and survives.
+func TestSameDeviceStaticPlusSnmpMergeLost(t *testing.T) {
+	a := NewDiscoveryAggregator()
+	static := &fakeSource{name: "static", devices: []models.Device{
+		{ID: "core1", Name: "core1", Address: "10.1.0.1", Source: "static"},
+	}}
+	a.PollOnceForTest(context.Background(), static) // static registered/polled first
+	a.PollOnceForTest(context.Background(), newCore1Source())
+
+	var arista bool
+	for _, d := range a.RawDevices() {
+		if d.Vendor == "arista" {
+			arista = true
+		}
+	}
+	if !arista {
+		t.Fatalf("SNMP record dropped by cross-source id collision; RawDevices=%+v", a.RawDevices())
+	}
+}
+
+// TestHashWindowTombstoneResurrects (F6): a device deleted while the build keyed
+// by the HASHED id has its tombstone under ScanDeviceID(name, addr). A rescan of
+// the same unique device must stay suppressed (0 survivors) — pollOnce's dual-
+// derivation check matches the hashed id.
+func TestHashWindowTombstoneResurrects(t *testing.T) {
+	st := NewDevStore("devices.json", memKV{}, nil)
+	if err := st.Remove(ScanDeviceID("core1", "10.9.0.1")); err != nil { // tombstone under the hashed id
+		t.Fatalf("remove: %v", err)
+	}
+	a := NewDiscoveryAggregator()
+	a.SetStore(st)
+
+	a.PollOnceForTest(context.Background(), newCore1Source())
+
+	if got := len(a.RawDevices()); got != 0 {
+		t.Fatalf("hashed-id tombstone did not suppress rescan: %d survivors %+v", got, a.RawDevices())
 	}
 }
 
