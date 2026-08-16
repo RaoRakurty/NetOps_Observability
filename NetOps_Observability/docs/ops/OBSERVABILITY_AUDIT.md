@@ -520,3 +520,48 @@ applogs/platformlogs the moment the stack boots. Guards: refuses a data dir
 resolving outside the repo, refuses to run unattended without `--yes`, refuses
 to wipe while project containers are still running, and every step reports its
 own failure (no `|| true` error-swallowing — §16 scripts bar).
+
+---
+
+## 12. G2 scale mini-ladder (`scripts/scale-miniladder.py`)
+
+Self-judging nightly scale-regression harness — the G2 GA gate. Runs against
+the LIVE stack and asserts the RELATIVE/invariant properties whose loss
+produced the three 2026-08 scale defects, so it is valid on any hardware:
+onboarding linearity (the O(N²) per-device-persistence class), consumer-lag
+drain after a 10×-nominal burst (the "lag never drains" class), and exact
+loss accounting — every injected event must be OpenSearch-persisted,
+DLQ-counted, or an explicitly-counted rejection (the 238k-silent-drop class;
+`quarantine_write_failures` movement fails the run). Plus per-container
+memory flatness, and a cleanup phase that always runs: devices deleted and
+verified gone, run telemetry purged from ClickHouse/OpenSearch — a green run
+leaves the stack passing `clean-slate.sh --verify`.
+
+```bash
+scripts/scale-miniladder.py --dry-run              # print the plan, touch nothing
+scripts/scale-miniladder.py                        # full gate: 1000 devices, 5-min burst @2000 eps
+scripts/scale-miniladder.py --devices 100 --burst-minutes 1 --eps 400   # smoke profile
+```
+
+Credentials come from `deployment/docker/.env` (or `MLX_ADMIN_USER`/
+`MLX_ADMIN_PASSWORD`), never argv. Reports land in
+`data/miniladder/<ts>-<runid>/report.{md,json}`; the summary heartbeat
+`data/miniladder/last-run.json` is refreshed every run so the watchdog can
+tell "G2 failed" from "G2 stopped running". Nightly wiring is cron on the lab
+host — sample line and the hostile-cron-environment notes are in the script
+header (same discipline as `stack-watchdog.sh`); do not install it blindly.
+
+CI: a REDUCED profile (200 devices, 2-min burst) runs on GH-hosted runners in
+`.github/workflows/scale-miniladder-nightly.yml`, reusing the proven
+`tls-install-boot` full-stack bring-up from `fresh-install-integrity.yml`.
+The full-size run stays lab-cron on purpose: shared 4-vCPU runners make
+absolute ceilings meaningless, and the harness's invariants at small scale
+are the honest subset that fits there.
+
+Preflight will refuse a stack whose bus consumers hold no group membership —
+that is the fresh-TLS-install wiped-ACL failure shape (2026-08-16: broker
+enforces `allow.everyone.if.no.acl.found=false`, `data/kafka` reset wiped the
+ACL matrix, nothing re-applies `deployment/docker/kafka/apply-acls.sh` — the
+whole ingest tier is auth-dead while every container reports healthy). Until
+the install path applies the matrix itself, re-apply it per the SEC-007
+runbook after any clean-slate reinstall.

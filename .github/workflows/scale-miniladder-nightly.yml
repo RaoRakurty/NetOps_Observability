@@ -1,0 +1,125 @@
+name: scale-miniladder-nightly
+
+# G2 scale-regression gate — REDUCED CI PROFILE.
+#
+# Feasibility verdict (2026-08-16): the full TLS stack demonstrably boots on
+# GH-hosted ubuntu-latest — fresh-install-integrity.yml's `tls-install-boot`
+# job runs `install.py --tls=yes` end-to-end and asserts the mesh serves. This
+# workflow reuses that exact bring-up and then runs the self-judging harness
+# (scripts/scale-miniladder.py) with SMALL parameters: 200 devices, a 2-minute
+# burst. The harness asserts RELATIVE/invariant properties (onboarding
+# linearity, lag drain, loss accounting, memory flatness), so shared-runner
+# jitter does not invalidate it — but the FULL G2 evidence run (1000 devices,
+# 5-minute burst) stays on the lab host via cron (see the harness header):
+# GH runners are 4-vCPU/16 GiB shared VMs whose absolute ceilings mean
+# nothing, and the L1-scale run's disk/time budget does not belong here.
+#
+# `schedule:` only fires on the DEFAULT branch — until this merges to main,
+# use workflow_dispatch to exercise it.
+
+on:
+  schedule:
+    - cron: "30 2 * * *"   # nightly, 02:30 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: scale-miniladder-nightly
+  cancel-in-progress: false   # never kill a run mid-burst; let it clean up
+
+jobs:
+  miniladder:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      # ---- bring-up: byte-for-byte the tls-install-boot recipe -------------
+      - name: free runner disk
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+            /opt/hostedtoolcache/CodeQL
+          df -h /
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 20
+      - name: build web assets the images bake in
+        run: |
+          set -euo pipefail
+          (cd NetOps_Observability/src/frontend && npm ci --no-audit --no-fund && npm run build)
+          (cd NetOps_Observability/docs-portal && npm ci --no-audit --no-fund && npm run build)
+
+      - name: install.py --tls=yes (full stack)
+        working-directory: NetOps_Observability
+        env:
+          PYTHONUNBUFFERED: "1"
+        run: sudo -E python3 scripts/install.py --tls=yes
+
+      # INTERIM (remove when the install path applies the ACL matrix itself):
+      # a fresh TLS install boots the broker with StandardAuthorizer +
+      # allow.everyone.if.no.acl.found=false but ZERO ACLs — kafka-init only
+      # creates topics, and nothing re-applies deployment/docker/kafka/
+      # apply-acls.sh, so every downstream consumer (vector-router,
+      # correlation) is denied and the ingest pipeline is dead on arrival
+      # (found live 2026-08-16 by this harness's preflight after a
+      # clean-slate reinstall). Apply the documented SEC-007.1 matrix exactly
+      # as the operator runbook does, so this job measures SCALE regressions,
+      # not the (tracked) install-path defect — which
+      # fresh-install-integrity.yml should grow an assertion for.
+      - name: apply Kafka ACL matrix (interim — install-path gap)
+        run: |
+          set -euo pipefail
+          sudo docker cp NetOps_Observability/deployment/docker/kafka/apply-acls.sh \
+            netops-kafka-1:/tmp/apply-acls.sh
+          sudo docker exec \
+            -e KAFKA_BOOTSTRAP='kafka:9094 --command-config /tmp/kafka-tls/admin.properties' \
+            netops-kafka-1 sh /tmp/apply-acls.sh
+
+      - name: assert the mesh stayed up (no crash-loops behind exit 0)
+        working-directory: NetOps_Observability/deployment/docker
+        run: |
+          set -euo pipefail
+          sleep 20
+          ps_out=$(sudo docker compose ps -a --format '{{.Name}} {{.State}} {{.ExitCode}}')
+          echo "$ps_out"
+          bad=$(echo "$ps_out" | awk '$2 == "restarting" || ($2 == "exited" && $3 != "0")' || true)
+          if [ -n "$bad" ]; then
+            echo "::error::services unhealthy after boot:"; echo "$bad"
+            exit 1
+          fi
+
+      # ---- the gate itself --------------------------------------------------
+      - name: "scale mini-ladder (reduced: 200 devices, 2-min burst)"
+        working-directory: NetOps_Observability
+        env:
+          PYTHONUNBUFFERED: "1"
+        # sudo: install.py ran as root, so .env and data/ are root-owned; the
+        # harness reads credentials from .env and drives docker. eps 500 keeps
+        # the burst ~60k events — above the engine's ~1k/s drain rate (the
+        # drain proof stays meaningful) without flooding a shared runner.
+        run: |
+          sudo -E python3 scripts/scale-miniladder.py \
+            --devices 200 --burst-minutes 2 --eps 500 \
+            --run-dir "$RUNNER_TEMP/miniladder-run"
+
+      - name: failure diagnostics
+        if: failure()
+        working-directory: NetOps_Observability/deployment/docker
+        run: |
+          echo "=== docker compose ps -a ==="; sudo docker compose ps -a || true
+          echo "=== correlation log ==="; sudo docker compose logs correlation --tail 80 || true
+          echo "=== vector-router log ==="; sudo docker compose logs vector-router --tail 60 || true
+          echo "=== kafka log ==="; sudo docker compose logs kafka --tail 40 || true
+          echo "=== df -h ==="; df -h / || true
+
+      - name: upload run report (GA evidence)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: miniladder-report
+          path: ${{ runner.temp }}/miniladder-run/
+          if-no-files-found: warn
+          retention-days: 30
