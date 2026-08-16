@@ -102,7 +102,11 @@ func pgResetPublicAsAdmin(t *testing.T) {
 func openPG(t *testing.T) *platformdb.DB {
 	t.Helper()
 	pgResetPublicAsAdmin(t)
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	// The reset above forces a FULL migration replay on every open; on a loaded
+	// host that legitimately runs into the minutes. The per-statement guard is
+	// the DB statement_timeout (F-60), not this ctx — give the whole migrate
+	// real headroom so a slow host is not misread as a migration hang.
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 	db, err := platformdb.NewDB(ctx, pgDSN(t))
 	if err != nil {
