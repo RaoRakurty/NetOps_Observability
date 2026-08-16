@@ -127,10 +127,15 @@ category `platform`), all audited with new `SecEventQuarantine*` constants:
   tenant key). Replay-safe, per lane: OS-canonical lanes re-run as upserts of
   the same `_id`; the flows lane's canonical store is ClickHouse (plain
   MergeTree, no id dedup — verified 2026-08-14), so the api enforces
-  at-most-once produce restore-side instead: a CAS `_update` stamps
-  `cx_restored_at` on the envelope before the produce, a stamped envelope is
-  only ever tombstoned (never re-produced), and the stamp is rolled back only
-  when the bus refused the event (`quarantine.Restore` replay guard).
+  at-most-once produce restore-side instead, via a two-phase mark (2026-08-16
+  NV fix): a CAS `_update` stamps `cx_restored_at` on the envelope before the
+  produce, `cx_restored_produced` is stamped after the bus accepted (before
+  the tombstone), a claimed envelope is never re-produced, the stamp is rolled
+  back only when the bus refused the event, and the tombstone is retried only
+  when BOTH stamps are present — a bare claim (a run crashed between its claim
+  and its produce; outcome indeterminate) is preserved untouched
+  (`claim_stranded`) for manual adjudication, never tombstoned
+  (`quarantine.Restore` replay guard).
 - `POST /api/quarantine/inspect` (audited decrypt-view, sensitive_data:admin,
   fingerprint-only audit detail) — optional; ship if cheap.
 - Retention: `apply-ism.sh` gains a second policy
@@ -207,9 +212,11 @@ mitigation ladder. State this in the verdict.
 - INV-F11-05: correlation claim refusal + flows claim_rejected + §3 note.
 - INV-F11-06: exit-78 boot semantics + drop_on_abort no-reroute + alert.
 - INV-F11-07/08: D5 re-attribution (decrypt→re-encrypt via pipeline;
-  id_key idempotency on OS lanes, `cx_restored_at` CAS replay guard on the
-  flows/ClickHouse lane — TestRestoreFlowsNeverProducesTheSameEventTwice,
-  TestQuarantineReattributeFlowsReplayGuard).
+  id_key idempotency on OS lanes, `cx_restored_at`/`cx_restored_produced`
+  two-phase CAS replay guard on the flows/ClickHouse lane —
+  TestRestoreFlowsNeverProducesTheSameEventTwice,
+  TestQuarantineReattributeFlowsReplayGuard,
+  TestRestoreFlowsCrashBetweenClaimAndProduceIsNotLoss).
 - INV-F11-09: ISM quarantine policy + contract test.
 - INV-F11-10: D4 correlation skip + ticketing chain tests.
 - INV-F11-11: F-10 e2e re-run post-change.

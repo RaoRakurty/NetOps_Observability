@@ -116,10 +116,12 @@ func TopicForLane(lane string) (string, bool) {
 // canonical store is the ClickHouse netops.flows table (plain MergeTree, no
 // id column at all — the sink's skip_unknown_fields silently drops
 // cx_event_id), so every re-produce lands a DUPLICATE canonical row. Guarded
-// lanes get at-most-once produce semantics instead: the envelope is claimed
-// (CAS on the OS doc, see RestoreDeps.Claim) before its single produce, and
-// an envelope carrying a claim is never produced again — only its tombstone
-// is retried.
+// lanes get at-most-once produce semantics instead, via a two-phase mark: the
+// envelope is claimed (CAS on the OS doc, see RestoreDeps.Claim) before its
+// single produce, and the bus's acceptance is stamped back onto the doc
+// (RestoreDeps.MarkProduced) before the tombstone. An envelope carrying a
+// claim is never produced again; whether its tombstone is retried or the
+// envelope is preserved depends on the produced-stamp (see Restore).
 func laneReplayGuarded(lane string) bool { return lane == "flows" }
 
 // ErrClaimConflict is returned by RestoreDeps.Claim when the CAS lost: another
@@ -128,9 +130,30 @@ func laneReplayGuarded(lane string) bool { return lane == "flows" }
 var ErrClaimConflict = errors.New("quarantine: envelope already claimed by a concurrent restore")
 
 // RestoredAtField is the envelope field a successful claim stamps
-// (RestoreDeps.Claim) and ParseSearch reads back — the persistent "produce was
-// attempted" marker that survives a failed tombstone.
+// (RestoreDeps.Claim) and ParseSearch reads back — the persistent "a produce
+// MAY have been attempted" marker that survives a crash or a failed tombstone.
+// On its own it is deliberately ambiguous: a process killed between the claim
+// landing and the produce landing leaves exactly this stamp and nothing else,
+// so the claim alone must never justify a tombstone (that was the pre-fix
+// silent-loss window: crash after Claim, before Produce → next run tombstoned
+// an envelope whose event never reached the bus). RestoredProducedField is the
+// disambiguator.
 const RestoredAtField = "cx_restored_at"
+
+// RestoredProducedField is the second half of the two-phase replay mark: it is
+// stamped (RestoreDeps.MarkProduced) only AFTER the bus durably accepted the
+// guarded produce, and before the tombstone. Persistent doc states, and what a
+// later Restore does with each:
+//
+//   - neither field: never attempted → restore normally.
+//   - claim only: INDETERMINATE — the previous run died between the claim
+//     landing and this stamp landing, so the produce may or may not have
+//     reached the bus. Never re-produce (could duplicate a canonical
+//     ClickHouse row), never tombstone (could delete a flow that never
+//     arrived): the envelope is preserved (ClaimStranded).
+//   - both fields: produce provably succeeded, only the tombstone remains →
+//     refuse the replay and retry the delete (ReplayRefused).
+const RestoredProducedField = "cx_restored_produced"
 
 // SealContext is the exact authenticated context the router sealed quarantine
 // payloads under (processors/quarantine.go). The MAC covers every field, so
@@ -159,11 +182,17 @@ type Doc struct {
 	SourceIP    string `json:"source_ip,omitempty"`
 	Reason      string `json:"reason"`
 	// RestoredAt is the replay-guard claim stamp (RestoredAtField): non-empty
-	// means an earlier restore already ATTEMPTED the produce and only the
-	// tombstone remains. Listed so a lingering claimed envelope is visible to
-	// the operator, not a mystery row.
+	// means an earlier restore claimed the envelope and MAY have produced it.
+	// Listed so a lingering claimed envelope is visible to the operator, not a
+	// mystery row.
 	RestoredAt string `json:"cx_restored_at,omitempty"`
-	Payload    string `json:"-"` // sealed token — NEVER serialized
+	// RestoredProduced is the produced-stamp (RestoredProducedField): non-empty
+	// means the bus provably accepted the produce and only the tombstone
+	// remains. A doc with RestoredAt set but RestoredProduced empty is a
+	// STRANDED claim (see Restore) — listed so the operator can tell the two
+	// lingering states apart.
+	RestoredProduced string `json:"cx_restored_produced,omitempty"`
+	Payload          string `json:"-"` // sealed token — NEVER serialized
 	// Optimistic-concurrency coordinates of the doc at search time; the claim
 	// CAS (RestoreDeps.Claim) conditions on them so two concurrent restores
 	// cannot both win the same envelope. Transport detail, never serialized.
@@ -178,7 +207,7 @@ const quarantineIndexPrefix = "netops-quarantine-"
 
 // metadataFields is the _source projection for the list query — the payload
 // is not even transferred from OpenSearch for a metadata listing.
-var metadataFields = []string{"cx_event_id", "received_at", "lane", "identity_sha", "source_ip", "reason", RestoredAtField}
+var metadataFields = []string{"cx_event_id", "received_at", "lane", "identity_sha", "source_ip", "reason", RestoredAtField, RestoredProducedField}
 
 // ListQuery is the metadata-list search body: newest first, exact totals, and
 // a min aggregation over received_at for the summary.
@@ -259,18 +288,19 @@ func ParseSearch(r io.Reader) (docs []Doc, total int64, oldest string, err error
 			eventID = h.ID
 		}
 		docs = append(docs, Doc{
-			Index:       h.Index,
-			ID:          h.ID,
-			EventID:     eventID,
-			ReceivedAt:  str("received_at"),
-			Lane:        str("lane"),
-			IdentitySha: str("identity_sha"),
-			SourceIP:    str("source_ip"),
-			Reason:      str("reason"),
-			RestoredAt:  str(RestoredAtField),
-			Payload:     str(processors.QuarantinePayloadField),
-			SeqNo:       h.SeqNo,
-			PrimaryTerm: h.PrimaryTerm,
+			Index:            h.Index,
+			ID:               h.ID,
+			EventID:          eventID,
+			ReceivedAt:       str("received_at"),
+			Lane:             str("lane"),
+			IdentitySha:      str("identity_sha"),
+			SourceIP:         str("source_ip"),
+			Reason:           str("reason"),
+			RestoredAt:       str(RestoredAtField),
+			RestoredProduced: str(RestoredProducedField),
+			Payload:          str(processors.QuarantinePayloadField),
+			SeqNo:            h.SeqNo,
+			PrimaryTerm:      h.PrimaryTerm,
 		})
 	}
 	if body.Aggregations.OldestReceived.Value != nil {
@@ -318,39 +348,57 @@ type RestoreDeps struct {
 	// Claim is nil, because producing a flow without the guard reopens the
 	// canonical-store duplication path.
 	Claim func(ctx context.Context, index, id string, seqNo, primaryTerm int64) error
+	// MarkProduced stamps RestoredProducedField on the envelope doc AFTER the
+	// bus durably accepted a guarded produce and BEFORE the tombstone — the
+	// persistent fact that lets a later run distinguish "produce landed, only
+	// the tombstone remains" (safe to finish) from a stranded claim (preserved,
+	// never tombstoned). Required for guarded lanes, same fail-closed rule as
+	// Claim: without it every crash-after-produce would strand its envelope.
+	// No CAS needed — the claim CAS already made this run the doc's sole owner.
+	MarkProduced func(ctx context.Context, index, id string) error
 	// Unclaim clears the claim stamp after the bus REFUSED the produce (the
 	// event is provably not in the canonical store), so the envelope stays
-	// restorable. Best-effort: a failed rollback leaves the claim in place and
-	// the next run refuses the replay — the deliberate at-most-once loss
-	// window, and it takes a produce failure AND a rollback failure to hit it.
+	// restorable. Best-effort: a failed rollback leaves a bare claim in place
+	// and the next run STRANDS the envelope (preserved, neither re-produced
+	// nor tombstoned — see ClaimStranded); it takes a produce failure AND a
+	// rollback failure to reach that state.
 	Unclaim func(ctx context.Context, index, id string) error
 }
 
 // RestoreResult counts one run's outcomes. Restored counts events accepted by
 // the bus; DeleteFailed counts restored events whose tombstone failed (the
 // doc lingers as noise — replays are refused or upsert, see Restore).
-// ReplayRefused counts envelopes skipped by the replay guard (already claimed
-// by an earlier or concurrent run); UnclaimFailed counts claim rollbacks that
-// failed after a refused produce (the envelope will be refused, not retried).
-// Aborted counts envelopes never attempted because ctx was cancelled mid-batch
-// — they stay untouched (no claim, no tombstone) and restore on the next run.
+// ReplayRefused counts envelopes skipped by the replay guard (claimed AND
+// provably produced by an earlier run, or lost to a concurrent run's CAS);
+// ClaimStranded counts envelopes carrying a bare claim with no produced-stamp
+// — a previous run died between the claim landing and the produce being
+// proven, so they are preserved untouched (neither re-produced nor tombstoned;
+// see Restore). UnclaimFailed counts claim rollbacks that failed after a
+// refused produce (the envelope will strand, not retry). MarkProducedFailed
+// counts produced-stamps that failed after a successful produce (harmless if
+// the tombstone right after succeeds; otherwise the envelope strands instead
+// of auto-tombstoning). Aborted counts envelopes never attempted because ctx
+// was cancelled mid-batch — they stay untouched (no claim, no tombstone) and
+// restore on the next run.
 type RestoreResult struct {
-	Restored      int
-	Failed        int
-	Deleted       int
-	DeleteFailed  int
-	ReplayRefused int
-	UnclaimFailed int
-	Aborted       int
+	Restored           int
+	Failed             int
+	Deleted            int
+	DeleteFailed       int
+	ReplayRefused      int
+	ClaimStranded      int
+	UnclaimFailed      int
+	MarkProducedFailed int
+	Aborted            int
 }
 
 // Restore unseals and re-injects each doc, then tombstones it. Per-doc
 // failures are counted and never abort the batch; a cancelled/expired ctx DOES
 // abort it (counted in Aborted) — the guarded claim is a persistent
 // side-effect, and taking it with a ctx the remaining steps will refuse is how
-// an envelope gets stranded as "already restored" and later tombstoned without
-// its event ever reaching the bus (H9). Callers therefore run Restore on a
-// context detached from the client connection (see handleQuarantineReattribute).
+// an envelope gets stranded with a bare claim, needing manual adjudication
+// (H9). Callers therefore run Restore on a context detached from the client
+// connection (see handleQuarantineReattribute).
 //
 // REPLAY SAFETY — two dedup contracts, by lane, both promising "re-running
 // the same restore never duplicates tenant data":
@@ -361,10 +409,13 @@ type RestoreResult struct {
 //     failed tombstone is noise, not corruption.
 //   - flows (laneReplayGuarded): the canonical store is ClickHouse (plain
 //     MergeTree, no id dedup), so the same outcome is enforced restore-side
-//     with at-most-once produce: each envelope is claimed via CAS before its
-//     single produce, an envelope already carrying a claim only gets its
-//     tombstone retried, and a claim is rolled back only when the bus refused
-//     the event outright.
+//     with at-most-once produce and a two-phase mark: each envelope is claimed
+//     via CAS before its single produce, the bus's acceptance is stamped back
+//     (MarkProduced) before the tombstone, an envelope carrying claim+stamp
+//     only gets its tombstone retried, an envelope carrying a BARE claim is
+//     preserved untouched (ClaimStranded — the produce outcome is unknowable,
+//     so neither re-producing nor tombstoning is safe), and a claim is rolled
+//     back only when the bus refused the event outright.
 func Restore(ctx context.Context, deps RestoreDeps, docs []Doc, tenant string) RestoreResult {
 	var res RestoreResult
 	for i, d := range docs {
@@ -393,11 +444,26 @@ func Restore(ctx context.Context, deps RestoreDeps, docs []Doc, tenant string) R
 		}
 		guarded := laneReplayGuarded(d.Lane)
 		if guarded && d.RestoredAt != "" {
-			// An earlier run claimed this envelope: its produce was at least
-			// ATTEMPTED and may have landed in ClickHouse (the common way
-			// here is a produce that succeeded but a tombstone that failed).
-			// At-most-once for canonical flow data: never produce again —
-			// finish the tombstone instead.
+			if d.RestoredProduced == "" {
+				// BARE claim: the run that claimed this envelope died before
+				// the produced-stamp landed — anywhere from "never called
+				// Produce" (a crash right after the claim CAS) to "the bus
+				// accepted but the stamp write was lost". The produce outcome
+				// is UNKNOWABLE from here: re-producing could duplicate a
+				// canonical ClickHouse row (no id dedup — irreversible), and
+				// tombstoning could delete a flow that never reached the bus
+				// (the pre-fix silent-loss bug: a crash between Claim and
+				// Produce lost the event with zero failures recorded). Do
+				// NEITHER — preserve the envelope, sealed payload intact and
+				// operator-visible (the list shows cx_restored_at with no
+				// cx_restored_produced), for manual adjudication via the
+				// reveal path. At-most-once holds; custody holds.
+				res.ClaimStranded++
+				continue
+			}
+			// Claim + produced-stamp: the bus provably accepted this event
+			// and only the tombstone failed. At-most-once for canonical flow
+			// data: never produce again — finish the tombstone instead.
 			res.ReplayRefused++
 			if err := deps.Delete(ctx, d.Index, d.ID); err != nil {
 				res.DeleteFailed++
@@ -417,9 +483,11 @@ func Restore(ctx context.Context, deps RestoreDeps, docs []Doc, tenant string) R
 			continue
 		}
 		if guarded {
-			if deps.Claim == nil {
-				// Fail closed: a guarded produce without the replay guard
-				// would reopen the duplication path.
+			if deps.Claim == nil || deps.MarkProduced == nil {
+				// Fail closed: a guarded produce without the full two-phase
+				// replay guard would reopen the duplication path (no Claim)
+				// or strand every crash-after-produce envelope (no
+				// MarkProduced).
 				res.Failed++
 				continue
 			}
@@ -443,7 +511,10 @@ func Restore(ctx context.Context, deps RestoreDeps, docs []Doc, tenant string) R
 			// way the ctx is dead: stop before claiming more envelopes.
 			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 				if guarded {
-					res.UnclaimFailed++ // the claim sticks; refused, not retried
+					// The claim sticks with no produced-stamp: the next run
+					// preserves the envelope as ClaimStranded (indeterminate
+					// produce — neither re-produced nor tombstoned).
+					res.UnclaimFailed++
 				}
 				res.Aborted += len(docs) - i - 1
 				break
@@ -451,9 +522,9 @@ func Restore(ctx context.Context, deps RestoreDeps, docs []Doc, tenant string) R
 			if guarded {
 				// The bus refused, so the event is NOT in ClickHouse — roll
 				// the claim back so the envelope stays restorable. If the
-				// rollback also fails, the claim sticks and the next run
-				// refuses the replay: the accepted at-most-once loss window
-				// (it takes BOTH failures), surfaced via UnclaimFailed.
+				// rollback also fails, the bare claim sticks and the next run
+				// preserves the envelope as ClaimStranded (it takes BOTH
+				// failures to get there), surfaced via UnclaimFailed.
 				if deps.Unclaim == nil || deps.Unclaim(ctx, d.Index, d.ID) != nil {
 					res.UnclaimFailed++
 				}
@@ -461,6 +532,19 @@ func Restore(ctx context.Context, deps RestoreDeps, docs []Doc, tenant string) R
 			continue
 		}
 		res.Restored++
+		if guarded {
+			// Second phase of the replay mark: persist "the bus accepted it"
+			// BEFORE the tombstone, so a failed/crashed tombstone leaves a
+			// doc a later run can safely finish (ReplayRefused + delete)
+			// instead of stranding it as indeterminate. A failed stamp is
+			// deliberately non-fatal: if the delete below succeeds the stamp
+			// is moot, and if both fail the envelope strands — operator
+			// noise, never loss or duplication. Counted (§10) so neither
+			// outcome is silent.
+			if err := deps.MarkProduced(ctx, d.Index, d.ID); err != nil {
+				res.MarkProducedFailed++
+			}
+		}
 		if err := deps.Delete(ctx, d.Index, d.ID); err != nil {
 			res.DeleteFailed++
 		} else {

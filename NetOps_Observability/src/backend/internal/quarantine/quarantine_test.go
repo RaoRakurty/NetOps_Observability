@@ -143,6 +143,7 @@ const searchReply = `{
         "cx_quarantine_payload": "<enc:v1:quarantine:1:aa:bb:cc>"}},
       {"_index": "netops-quarantine-2026.08.11", "_id": "d2", "_source": {
         "cx_event_id": "e2", "received_at": "2026-08-11T01:00:00Z", "lane": "flows",
+        "cx_restored_at": "2026-08-14T01:00:00Z", "cx_restored_produced": "2026-08-14T01:00:01Z",
         "identity_sha": "bb", "reason": "TENANT_UNATTRIBUTABLE"}}
     ]
   },
@@ -174,6 +175,14 @@ func TestParseSearch(t *testing.T) {
 	}
 	if docs[1].Payload != "" || docs[1].SourceIP != "" {
 		t.Errorf("absent fields must stay empty: %+v", docs[1])
+	}
+	// Both halves of the two-phase replay mark must round-trip — the restore
+	// path branches on them (bare claim = stranded, claim+stamp = tombstone).
+	if docs[1].RestoredAt != "2026-08-14T01:00:00Z" || docs[1].RestoredProduced != "2026-08-14T01:00:01Z" {
+		t.Errorf("replay-mark fields not parsed: %+v", docs[1])
+	}
+	if docs[0].RestoredAt != "" || docs[0].RestoredProduced != "" {
+		t.Errorf("unclaimed doc must carry no replay marks: %+v", docs[0])
 	}
 }
 
@@ -289,8 +298,9 @@ func TestRestoreFlowsNeverProducesTheSameEventTwice(t *testing.T) {
 }
 
 // The flows replay guard, happy path: claim (CAS on the doc's search-time
-// seq_no/primary_term) strictly BEFORE the produce, tombstone after — and the
-// OS lanes' behavior is untouched (no claim calls at all).
+// seq_no/primary_term) strictly BEFORE the produce, produced-stamp strictly
+// AFTER the bus accepted and BEFORE the tombstone — and the OS lanes'
+// behavior is untouched (no claim/stamp calls at all).
 func TestRestoreFlowsClaimProtocol(t *testing.T) {
 	docs := []Doc{
 		{Index: "netops-quarantine-2026.08.12", ID: "f1", EventID: "e1", Lane: "flows", Payload: "tok", SeqNo: 7, PrimaryTerm: 2},
@@ -306,7 +316,8 @@ func TestRestoreFlowsClaimProtocol(t *testing.T) {
 			calls = append(calls, "claim:"+id)
 			return nil
 		},
-		Unclaim: func(_ context.Context, _, id string) error { calls = append(calls, "unclaim:"+id); return nil },
+		Unclaim:      func(_ context.Context, _, id string) error { calls = append(calls, "unclaim:"+id); return nil },
+		MarkProduced: func(_ context.Context, _, id string) error { calls = append(calls, "produced:"+id); return nil },
 		Produce: func(_ context.Context, topic, _ string, ev map[string]any) error {
 			calls = append(calls, "produce:"+topic+":"+ev["cx_event_id"].(string))
 			return nil
@@ -318,21 +329,21 @@ func TestRestoreFlowsClaimProtocol(t *testing.T) {
 		t.Fatalf("counts: %+v", res)
 	}
 	want := []string{
-		"claim:f1", "produce:netops.flows:e1", "delete:f1", // guarded lane: claim strictly first
-		"produce:netops.syslog:e2", "delete:s1", // OS lane: NO claim — id_key upsert is the guard
+		"claim:f1", "produce:netops.flows:e1", "produced:f1", "delete:f1", // guarded lane: claim first, stamp before tombstone
+		"produce:netops.syslog:e2", "delete:s1", // OS lane: NO claim/stamp — id_key upsert is the guard
 	}
 	if fmt.Sprint(calls) != fmt.Sprint(want) {
 		t.Fatalf("call order = %v, want %v", calls, want)
 	}
 }
 
-// An envelope already carrying the claim stamp (an earlier run produced but
-// its tombstone failed) is never produced again — only the tombstone is
-// retried. This is the at-most-once contract that keeps the canonical
-// ClickHouse store duplicate-free.
+// An envelope carrying BOTH replay marks (an earlier run produced — proven by
+// the produced-stamp — but its tombstone failed) is never produced again —
+// only the tombstone is retried. This is the at-most-once contract that keeps
+// the canonical ClickHouse store duplicate-free.
 func TestRestoreFlowsAlreadyClaimedOnlyTombstones(t *testing.T) {
 	docs := []Doc{{Index: "netops-quarantine-2026.08.12", ID: "f1", EventID: "e1", Lane: "flows",
-		Payload: "tok", RestoredAt: "2026-08-14T01:00:00Z"}}
+		Payload: "tok", RestoredAt: "2026-08-14T01:00:00Z", RestoredProduced: "2026-08-14T01:00:01Z"}}
 	var produced, unsealed bool
 	var deleted []string
 	deps := RestoreDeps{
@@ -367,8 +378,9 @@ func TestRestoreFlowsClaimConflictDoesNothingElse(t *testing.T) {
 		Claim: func(context.Context, string, string, int64, int64) error {
 			return fmt.Errorf("wrapped: %w", ErrClaimConflict)
 		},
-		Produce: func(context.Context, string, string, map[string]any) error { produced = true; return nil },
-		Delete:  func(context.Context, string, string) error { deleted = true; return nil },
+		MarkProduced: func(context.Context, string, string) error { return nil },
+		Produce:      func(context.Context, string, string, map[string]any) error { produced = true; return nil },
+		Delete:       func(context.Context, string, string) error { deleted = true; return nil },
 	}
 	res := Restore(context.Background(), deps, docs, "acme")
 	if produced || deleted {
@@ -385,10 +397,11 @@ func TestRestoreFlowsClaimErrorFails(t *testing.T) {
 	docs := []Doc{{Index: "netops-quarantine-2026.08.12", ID: "f1", EventID: "e1", Lane: "flows", Payload: "tok"}}
 	var produced bool
 	deps := RestoreDeps{
-		Unseal:  func(context.Context, string) (string, error) { return `{"bytes":42}`, nil },
-		Claim:   func(context.Context, string, string, int64, int64) error { return errors.New("os down") },
-		Produce: func(context.Context, string, string, map[string]any) error { produced = true; return nil },
-		Delete:  func(context.Context, string, string) error { t.Error("tombstone without produce"); return nil },
+		Unseal:       func(context.Context, string) (string, error) { return `{"bytes":42}`, nil },
+		Claim:        func(context.Context, string, string, int64, int64) error { return errors.New("os down") },
+		MarkProduced: func(context.Context, string, string) error { return nil },
+		Produce:      func(context.Context, string, string, map[string]any) error { produced = true; return nil },
+		Delete:       func(context.Context, string, string) error { t.Error("tombstone without produce"); return nil },
 	}
 	res := Restore(context.Background(), deps, docs, "acme")
 	if produced || res.Failed != 1 || res.ReplayRefused != 0 {
@@ -402,11 +415,12 @@ func TestRestoreFlowsProduceFailureRollsBackClaim(t *testing.T) {
 	docs := []Doc{{Index: "netops-quarantine-2026.08.12", ID: "f1", EventID: "e1", Lane: "flows", Payload: "tok"}}
 	var unclaimed, deleted bool
 	deps := RestoreDeps{
-		Unseal:  func(context.Context, string) (string, error) { return `{"bytes":42}`, nil },
-		Claim:   func(context.Context, string, string, int64, int64) error { return nil },
-		Unclaim: func(context.Context, string, string) error { unclaimed = true; return nil },
-		Produce: func(context.Context, string, string, map[string]any) error { return errors.New("bus down") },
-		Delete:  func(context.Context, string, string) error { deleted = true; return nil },
+		Unseal:       func(context.Context, string) (string, error) { return `{"bytes":42}`, nil },
+		Claim:        func(context.Context, string, string, int64, int64) error { return nil },
+		MarkProduced: func(context.Context, string, string) error { t.Error("produced-stamp without produce"); return nil },
+		Unclaim:      func(context.Context, string, string) error { unclaimed = true; return nil },
+		Produce:      func(context.Context, string, string, map[string]any) error { return errors.New("bus down") },
+		Delete:       func(context.Context, string, string) error { deleted = true; return nil },
 	}
 	res := Restore(context.Background(), deps, docs, "acme")
 	if !unclaimed {
@@ -426,11 +440,12 @@ func TestRestoreFlowsProduceFailureRollsBackClaim(t *testing.T) {
 func TestRestoreFlowsUnclaimFailureIsCounted(t *testing.T) {
 	docs := []Doc{{Index: "netops-quarantine-2026.08.12", ID: "f1", EventID: "e1", Lane: "flows", Payload: "tok"}}
 	deps := RestoreDeps{
-		Unseal:  func(context.Context, string) (string, error) { return `{"bytes":42}`, nil },
-		Claim:   func(context.Context, string, string, int64, int64) error { return nil },
-		Unclaim: func(context.Context, string, string) error { return errors.New("os down too") },
-		Produce: func(context.Context, string, string, map[string]any) error { return errors.New("bus down") },
-		Delete:  func(context.Context, string, string) error { t.Error("tombstone without produce"); return nil },
+		Unseal:       func(context.Context, string) (string, error) { return `{"bytes":42}`, nil },
+		Claim:        func(context.Context, string, string, int64, int64) error { return nil },
+		MarkProduced: func(context.Context, string, string) error { t.Error("produced-stamp without produce"); return nil },
+		Unclaim:      func(context.Context, string, string) error { return errors.New("os down too") },
+		Produce:      func(context.Context, string, string, map[string]any) error { return errors.New("bus down") },
+		Delete:       func(context.Context, string, string) error { t.Error("tombstone without produce"); return nil },
 	}
 	res := Restore(context.Background(), deps, docs, "acme")
 	if res.Failed != 1 || res.UnclaimFailed != 1 {
@@ -438,19 +453,29 @@ func TestRestoreFlowsUnclaimFailureIsCounted(t *testing.T) {
 	}
 }
 
-// A guarded lane without a Claim dependency fails CLOSED: producing a flow
-// without the replay guard would reopen the duplication path.
+// A guarded lane without the FULL two-phase replay guard fails CLOSED: no
+// Claim would reopen the duplication path, no MarkProduced would strand every
+// crash-after-produce envelope as indeterminate.
 func TestRestoreFlowsFailsClosedWithoutClaimDep(t *testing.T) {
 	docs := []Doc{{Index: "netops-quarantine-2026.08.12", ID: "f1", EventID: "e1", Lane: "flows", Payload: "tok"}}
-	var produced bool
-	deps := RestoreDeps{
-		Unseal:  func(context.Context, string) (string, error) { return `{"bytes":42}`, nil },
-		Produce: func(context.Context, string, string, map[string]any) error { produced = true; return nil },
-		Delete:  func(context.Context, string, string) error { return nil },
-	}
-	res := Restore(context.Background(), deps, docs, "acme")
-	if produced || res.Failed != 1 {
-		t.Fatalf("produced=%v counts=%+v", produced, res)
+	for name, claim := range map[string]func(context.Context, string, string, int64, int64) error{
+		"no Claim": nil,
+		"no MarkProduced": func(context.Context, string, string, int64, int64) error {
+			t.Error("claimed without the full guard")
+			return nil
+		},
+	} {
+		var produced bool
+		deps := RestoreDeps{
+			Unseal:  func(context.Context, string) (string, error) { return `{"bytes":42}`, nil },
+			Claim:   claim, // MarkProduced deliberately nil in both cases
+			Produce: func(context.Context, string, string, map[string]any) error { produced = true; return nil },
+			Delete:  func(context.Context, string, string) error { return nil },
+		}
+		res := Restore(context.Background(), deps, docs, "acme")
+		if produced || res.Failed != 1 {
+			t.Fatalf("%s: produced=%v counts=%+v", name, produced, res)
+		}
 	}
 }
 
@@ -493,11 +518,12 @@ func TestRestoreH9PreCancelledCtxTouchesNothing(t *testing.T) {
 	doc := Doc{Index: "netops-quarantine-2026.08.12", ID: "f1", EventID: "e1", Lane: "flows", Payload: "tok", SeqNo: 3, PrimaryTerm: 1}
 	claims, produces, deletes := 0, 0, 0
 	deps := RestoreDeps{
-		Unseal:  func(context.Context, string) (string, error) { return `{"bytes":1}`, nil },
-		Produce: func(ctx context.Context, _, _ string, _ map[string]any) error { produces++; return ctx.Err() },
-		Delete:  func(context.Context, string, string) error { deletes++; return nil },
-		Claim:   func(context.Context, string, string, int64, int64) error { claims++; return nil },
-		Unclaim: func(ctx context.Context, _, _ string) error { return ctx.Err() },
+		Unseal:       func(context.Context, string) (string, error) { return `{"bytes":1}`, nil },
+		Produce:      func(ctx context.Context, _, _ string, _ map[string]any) error { produces++; return ctx.Err() },
+		Delete:       func(context.Context, string, string) error { deletes++; return nil },
+		Claim:        func(context.Context, string, string, int64, int64) error { claims++; return nil },
+		MarkProduced: func(context.Context, string, string) error { return nil },
+		Unclaim:      func(ctx context.Context, _, _ string) error { return ctx.Err() },
 	}
 	cancelled, cancel := context.WithCancel(context.Background())
 	cancel()
@@ -536,8 +562,12 @@ func TestRestoreH9ProduceCtxCancelAbortsBatch(t *testing.T) {
 			cancel() // the client disconnects while the produce is in flight
 			return context.Canceled
 		},
-		Delete:  func(context.Context, string, string) error { return nil },
-		Claim:   func(context.Context, string, string, int64, int64) error { claims++; return nil },
+		Delete: func(context.Context, string, string) error { return nil },
+		Claim:  func(context.Context, string, string, int64, int64) error { claims++; return nil },
+		MarkProduced: func(context.Context, string, string) error {
+			t.Error("produced-stamp without a successful produce")
+			return nil
+		},
 		Unclaim: func(context.Context, string, string) error { unclaims++; return nil },
 	}
 	res := Restore(ctx, deps, docs, "acme")
@@ -549,5 +579,101 @@ func TestRestoreH9ProduceCtxCancelAbortsBatch(t *testing.T) {
 	}
 	if res.Failed != 1 || res.UnclaimFailed != 1 || res.Aborted != 1 {
 		t.Fatalf("res = %+v, want failed=1 unclaim_failed=1 aborted=1", res)
+	}
+}
+
+// ── two-phase replay mark: crash between Claim and Produce ───────────────────
+
+// FAILING-FIRST (NV item, 2026-08-16 review): a bare crash (SIGKILL/SIGTERM)
+// after the claim CAS persisted cx_restored_at but before the produce landed
+// used to be SILENT LOSS — the restarted run saw the claim, counted
+// ReplayRefused and tombstoned an envelope whose event NEVER reached the bus,
+// with zero failures recorded (broader than the documented "produce failure
+// AND rollback failure" window: this path had zero produce attempts). With
+// the two-phase mark the bare claim is INDETERMINATE: the next run must
+// neither tombstone (custody: the flow may never have arrived) nor re-produce
+// (at-most-once: the produce may have landed just before the crash) — the
+// envelope is preserved, counted in ClaimStranded, for manual adjudication.
+func TestRestoreFlowsCrashBetweenClaimAndProduceIsNotLoss(t *testing.T) {
+	doc := Doc{Index: "netops-quarantine-2026.08.12", ID: "f1", EventID: "e1", Lane: "flows", Payload: "tok", SeqNo: 1, PrimaryTerm: 1}
+	produces, deletes := 0, 0
+	claimStamped := false
+	deps := RestoreDeps{
+		Unseal: func(context.Context, string) (string, error) { return `{"bytes":1}`, nil },
+		Claim: func(context.Context, string, string, int64, int64) error {
+			claimStamped = true // the CAS _update persisted cx_restored_at
+			return nil
+		},
+		MarkProduced: func(context.Context, string, string) error { return nil },
+		Unclaim:      func(context.Context, string, string) error { t.Error("nothing runs after a crash"); return nil },
+		Produce: func(context.Context, string, string, map[string]any) error {
+			panic("process killed mid-produce") // bare crash: no error path runs
+		},
+		Delete: func(context.Context, string, string) error { deletes++; return nil },
+	}
+	func() {
+		defer func() {
+			if recover() == nil {
+				t.Fatal("probe broken: produce did not crash")
+			}
+		}()
+		_ = Restore(context.Background(), deps, []Doc{doc}, "acme")
+	}()
+	if !claimStamped {
+		t.Fatal("probe broken: claim never landed")
+	}
+	// Restart: the doc as re-read from OS carries the bare claim (no
+	// produced-stamp — the crash happened before the bus's acceptance was
+	// proven and stamped).
+	doc.RestoredAt = "2026-08-16T00:00:00Z"
+	deps.Produce = func(context.Context, string, string, map[string]any) error { produces++; return nil }
+	res := Restore(context.Background(), deps, []Doc{doc}, "acme")
+	if deletes != 0 {
+		t.Fatal("tombstoned an envelope whose event may never have reached the bus — silent data loss")
+	}
+	if produces != 0 {
+		t.Fatal("re-produced an indeterminate envelope — the crashed produce may have landed: duplicate canonical row")
+	}
+	if res.ClaimStranded != 1 || res.ReplayRefused != 0 || res.Failed != 0 || res.Restored != 0 {
+		t.Fatalf("res = %+v, want claim_stranded=1 and nothing else", res)
+	}
+	// However many times the operator re-runs, the envelope stays preserved.
+	res = Restore(context.Background(), deps, []Doc{doc}, "acme")
+	if deletes != 0 || produces != 0 || res.ClaimStranded != 1 {
+		t.Fatalf("re-run changed the stranded envelope: deletes=%d produces=%d res=%+v", deletes, produces, res)
+	}
+}
+
+// A produced-stamp failure after a successful produce is counted, the
+// tombstone is still attempted, and — when the tombstone also fails, leaving
+// a bare claim behind — the next run preserves the envelope rather than
+// producing a duplicate or tombstoning: across both runs the flow is produced
+// exactly once.
+func TestRestoreFlowsMarkProducedFailureNeverDuplicates(t *testing.T) {
+	doc := Doc{Index: "netops-quarantine-2026.08.12", ID: "f1", EventID: "e1", Lane: "flows", Payload: "tok"}
+	produces, deletes := 0, 0
+	deps := RestoreDeps{
+		Unseal:       func(context.Context, string) (string, error) { return `{"bytes":1}`, nil },
+		Claim:        func(context.Context, string, string, int64, int64) error { return nil },
+		MarkProduced: func(context.Context, string, string) error { return errors.New("os hiccup") },
+		Produce:      func(context.Context, string, string, map[string]any) error { produces++; return nil },
+		Delete:       func(context.Context, string, string) error { deletes++; return errors.New("os hiccup") },
+	}
+	res := Restore(context.Background(), deps, []Doc{doc}, "acme")
+	if produces != 1 || deletes != 1 {
+		t.Fatalf("produces=%d deletes=%d, want 1/1", produces, deletes)
+	}
+	if res.Restored != 1 || res.MarkProducedFailed != 1 || res.DeleteFailed != 1 {
+		t.Fatalf("res = %+v, want restored=1 mark_produced_failed=1 delete_failed=1", res)
+	}
+	// Next run re-reads the doc: bare claim (the produced-stamp never landed).
+	// Preserved — no second produce, no tombstone.
+	doc.RestoredAt = "2026-08-16T00:00:00Z"
+	res = Restore(context.Background(), deps, []Doc{doc}, "acme")
+	if produces != 1 {
+		t.Fatalf("flow produced %d times across two runs — duplicate canonical row", produces)
+	}
+	if deletes != 1 || res.ClaimStranded != 1 {
+		t.Fatalf("bare-claim envelope not preserved: deletes=%d res=%+v", deletes, res)
 	}
 }

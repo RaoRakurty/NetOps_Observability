@@ -458,14 +458,19 @@ func quarJSON(t *testing.T, v any) string {
 
 // The flows lane's canonical store is ClickHouse (plain MergeTree — no id_key
 // dedup), so its restore path must be guarded end to end: claim the envelope
-// via CAS _update BEFORE the produce, refuse the replay of an already-claimed
-// envelope, and stand down entirely on a lost CAS. This pins the handler
-// wiring of quarantine.RestoreDeps.{Claim,Unclaim}.
+// via CAS _update BEFORE the produce, stamp cx_restored_produced AFTER the bus
+// accepted (two-phase mark), refuse the replay of a claimed-AND-produced
+// envelope, preserve a bare-claim (indeterminate) envelope untouched, and
+// stand down entirely on a lost CAS. This pins the handler wiring of
+// quarantine.RestoreDeps.{Claim,MarkProduced,Unclaim}.
 func TestQuarantineReattributeFlowsReplayGuard(t *testing.T) {
-	flowsReply := func(sha, tok, restoredAt string) string {
+	flowsReply := func(sha, tok, restoredAt, producedAt string) string {
 		restored := ""
 		if restoredAt != "" {
 			restored = `"cx_restored_at":"` + restoredAt + `",`
+		}
+		if producedAt != "" {
+			restored += `"cx_restored_produced":"` + producedAt + `",`
 		}
 		return `{"hits":{"total":{"value":1,"relation":"eq"},"hits":[
 		  {"_index":"netops-quarantine-2026.08.14","_id":"fd1","_seq_no":7,"_primary_term":2,"_source":{
@@ -474,7 +479,7 @@ func TestQuarantineReattributeFlowsReplayGuard(t *testing.T) {
 		    "cx_quarantine_payload":` + tok + `}}
 		]},"aggregations":{}}`
 	}
-	newFlowsFixture := func(t *testing.T, restoredAt string) (*httptest.Server, string, *quarFakeOS, *quarBusRecorder, string) {
+	newFlowsFixture := func(t *testing.T, restoredAt, producedAt string) (*httptest.Server, string, *quarFakeOS, *quarBusRecorder, string) {
 		t.Helper()
 		ts, s, p := sealTestServer(t)
 		admin := login(t, ts, "admin", "Passw0rd!2345").Token
@@ -491,7 +496,7 @@ func TestQuarantineReattributeFlowsReplayGuard(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		osRec := newQuarFakeOS(t, flowsReply(sha, quarJSON(t, tok), restoredAt), emptyQuarSearchReply())
+		osRec := newQuarFakeOS(t, flowsReply(sha, quarJSON(t, tok), restoredAt, producedAt), emptyQuarSearchReply())
 		bus := newQuarBusRecorder(t)
 		return ts, admin, osRec, bus, sha
 	}
@@ -514,7 +519,7 @@ func TestQuarantineReattributeFlowsReplayGuard(t *testing.T) {
 	}
 
 	t.Run("happy path claims before producing", func(t *testing.T) {
-		ts, admin, osRec, bus, sha := newFlowsFixture(t, "")
+		ts, admin, osRec, bus, sha := newFlowsFixture(t, "", "")
 		out := reattr(t, ts, admin, sha)
 		if out["restored"] != float64(1) || out["replay_refused"] != float64(0) || out["deleted"] != float64(1) {
 			t.Fatalf("counts: %v", out)
@@ -526,8 +531,10 @@ func TestQuarantineReattributeFlowsReplayGuard(t *testing.T) {
 		updates := append([]string(nil), osRec.updates...)
 		deletes := append([]string(nil), osRec.deletes...)
 		osRec.mu.Unlock()
-		if len(updates) != 1 {
-			t.Fatalf("claim _update calls = %v, want exactly 1", updates)
+		// Two-phase mark: the claim CAS before the produce, the produced-stamp
+		// after the bus accepted (and before the tombstone).
+		if len(updates) != 2 {
+			t.Fatalf("_update calls = %v, want exactly 2 (claim + produced-stamp)", updates)
 		}
 		u := updates[0]
 		if !strings.HasPrefix(u, "/netops-quarantine-2026.08.14/_update/fd1?") {
@@ -539,13 +546,20 @@ func TestQuarantineReattributeFlowsReplayGuard(t *testing.T) {
 		if !strings.Contains(u, "cx_restored_at") {
 			t.Errorf("claim does not stamp cx_restored_at: %s", u)
 		}
+		p := updates[1]
+		if !strings.HasPrefix(p, "/netops-quarantine-2026.08.14/_update/fd1?") {
+			t.Errorf("produced-stamp outside the quarantine envelope: %s", p)
+		}
+		if !strings.Contains(p, "cx_restored_produced") {
+			t.Errorf("second update does not stamp cx_restored_produced: %s", p)
+		}
 		if len(deletes) != 1 {
 			t.Errorf("tombstone deletes = %v, want 1", deletes)
 		}
 	})
 
 	t.Run("lost CAS produces nothing", func(t *testing.T) {
-		ts, admin, osRec, bus, sha := newFlowsFixture(t, "")
+		ts, admin, osRec, bus, sha := newFlowsFixture(t, "", "")
 		osRec.mu.Lock()
 		osRec.updateConflict = true
 		osRec.mu.Unlock()
@@ -564,23 +578,55 @@ func TestQuarantineReattributeFlowsReplayGuard(t *testing.T) {
 		}
 	})
 
-	t.Run("already claimed envelope is never re-produced", func(t *testing.T) {
-		ts, admin, osRec, bus, sha := newFlowsFixture(t, "2026-08-14T00:30:00Z")
+	t.Run("claimed and produced envelope only gets its tombstone retried", func(t *testing.T) {
+		ts, admin, osRec, bus, sha := newFlowsFixture(t, "2026-08-14T00:30:00Z", "2026-08-14T00:30:01Z")
 		out := reattr(t, ts, admin, sha)
 		if out["restored"] != float64(0) || out["replay_refused"] != float64(1) || out["deleted"] != float64(1) {
 			t.Fatalf("counts: %v", out)
 		}
 		if busCount(bus) != 0 {
-			t.Fatal("an already-claimed flows envelope was produced AGAIN — duplicate canonical row")
+			t.Fatal("an already-produced flows envelope was produced AGAIN — duplicate canonical row")
 		}
 		osRec.mu.Lock()
 		nUpdates, nDeletes := len(osRec.updates), len(osRec.deletes)
 		osRec.mu.Unlock()
 		if nUpdates != 0 {
-			t.Error("no claim update expected for an envelope that already carries the stamp")
+			t.Error("no update expected for an envelope that already carries both stamps")
 		}
 		if nDeletes != 1 {
 			t.Error("the lingering tombstone was not retried")
+		}
+	})
+
+	// NV regression (2026-08-16): a bare claim — cx_restored_at with no
+	// cx_restored_produced — is what a run killed between its claim CAS and
+	// its produce leaves behind. Pre-fix this was tombstoned as "already
+	// restored" even though the event may never have reached the bus: silent
+	// loss on a bare SIGTERM, with zero produce attempts. Now it is
+	// indeterminate: preserved untouched (no produce — could duplicate; no
+	// tombstone — could lose), surfaced via claim_stranded, and it stays in
+	// `remaining`.
+	t.Run("bare claim (crashed mid-restore) is preserved, not tombstoned", func(t *testing.T) {
+		ts, admin, osRec, bus, sha := newFlowsFixture(t, "2026-08-14T00:30:00Z", "")
+		out := reattr(t, ts, admin, sha)
+		if out["claim_stranded"] != float64(1) || out["replay_refused"] != float64(0) ||
+			out["restored"] != float64(0) || out["deleted"] != float64(0) {
+			t.Fatalf("counts: %v", out)
+		}
+		if out["remaining"] != float64(1) {
+			t.Errorf("a preserved envelope must still count as remaining: %v", out)
+		}
+		if busCount(bus) != 0 {
+			t.Fatal("an indeterminate flows envelope was produced — the crashed produce may have landed: duplicate canonical row")
+		}
+		osRec.mu.Lock()
+		nUpdates, nDeletes := len(osRec.updates), len(osRec.deletes)
+		osRec.mu.Unlock()
+		if nDeletes != 0 {
+			t.Fatal("tombstoned an envelope whose event may never have reached the bus — silent data loss")
+		}
+		if nUpdates != 0 {
+			t.Error("no update expected for a preserved indeterminate envelope")
 		}
 	})
 }

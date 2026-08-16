@@ -1165,8 +1165,8 @@ func quarantineIdentityRows(devices []models.Device) []quarantine.IdentityRow {
 // (syslog, snmptrap) re-runs upsert the same cx_event_id (`id_key` on the OS
 // event sinks); on the flows lane the canonical store is ClickHouse (plain
 // MergeTree — no id dedup), so the quarantine package enforces at-most-once
-// produce via a CAS claim on the envelope doc (quarantine.Restore) wired to
-// the Claim/Unclaim deps below. Either way, calling this twice can never
+// produce via a two-phase mark on the envelope doc (quarantine.Restore) wired
+// to the Claim/MarkProduced/Unclaim deps below. Either way, calling this twice can never
 // duplicate tenant data — proven by TestQuarantineReattributeHappyPathAndReplay
 // and TestQuarantineReattributeFlowsReplayGuard.
 func (s *server) handleQuarantineReattribute(w http.ResponseWriter, r *http.Request) {
@@ -1278,14 +1278,33 @@ func (s *server) handleQuarantineReattribute(w http.ResponseWriter, r *http.Requ
 			}
 			return nil
 		},
+		// MarkProduced is the second phase of the flows replay mark: a plain
+		// _update (no CAS — the claim CAS already made this run the doc's sole
+		// owner; any concurrent run either lost that CAS or sees the bare
+		// claim and stands down) stamping cx_restored_produced AFTER the bus
+		// durably accepted the produce, BEFORE the tombstone. It is what lets
+		// a later run tell "produce landed, finish the tombstone" from an
+		// indeterminate bare claim (preserved, never tombstoned).
+		MarkProduced: func(ctx context.Context, index, id string) error {
+			err := s.osJSON(ctx, http.MethodPost, "/"+index+"/_update/"+url.PathEscape(id),
+				[]byte(`{"doc":{"`+quarantine.RestoredProducedField+`":"`+time.Now().UTC().Format(time.RFC3339)+`"}}`), nil)
+			if err != nil {
+				// §10 no silent failures: harmless if the tombstone right
+				// after succeeds; otherwise the envelope strands (preserved,
+				// operator-visible) instead of auto-tombstoning.
+				logError("quarantine", "flows produced-stamp failed after successful re-injection",
+					map[string]any{"index": index, "doc": id, "error": err.Error()})
+			}
+			return err
+		},
 		// Unclaim rolls the stamp back after the bus refused a produce, so the
 		// envelope stays restorable. Failure is surfaced (UnclaimFailed count +
-		// this log): the envelope would be replay-refused on the next run.
+		// this log): the envelope would strand (bare claim) on the next run.
 		Unclaim: func(ctx context.Context, index, id string) error {
 			err := s.osJSON(ctx, http.MethodPost, "/"+index+"/_update/"+url.PathEscape(id),
 				[]byte(`{"doc":{"`+quarantine.RestoredAtField+`":null}}`), nil)
 			if err != nil {
-				logError("quarantine", "flows replay-claim rollback failed — envelope will be refused on the next restore",
+				logError("quarantine", "flows replay-claim rollback failed — envelope will strand (bare claim) on the next restore",
 					map[string]any{"index": index, "doc": id, "error": err.Error()})
 			}
 			return err
@@ -1295,9 +1314,9 @@ func (s *server) handleQuarantineReattribute(w http.ResponseWriter, r *http.Requ
 	// bounded by its own timeout. The loop's steps are persistent side-effects
 	// (claim → produce → tombstone); with r.Context() a closed tab or nginx's
 	// 120s read timeout cancelled the ctx mid-envelope, stranding a flows
-	// claim whose produce never ran — the next restore then read the claim as
-	// "already restored" and tombstoned the envelope: the event was lost
-	// forever on nothing more than a disconnect. WithoutCancel keeps the
+	// claim whose produce never ran — a bare claim the next restore preserves
+	// as claim_stranded, needing manual adjudication, on nothing more than a
+	// disconnect (pre-fix it was worse: tombstoned, i.e. lost). WithoutCancel keeps the
 	// request's values (trace ids) while ignoring its cancellation; the
 	// explicit timeout keeps the batch bounded (§9: all IO has a timeout).
 	restoreCtx, cancelRestore := context.WithTimeout(context.WithoutCancel(r.Context()), quarantineRestoreTimeout)
@@ -1305,6 +1324,8 @@ func (s *server) handleQuarantineReattribute(w http.ResponseWriter, r *http.Requ
 	res := quarantine.Restore(restoreCtx, deps, docs, tenant)
 	// Replay-refused envelopes are resolved too: either their tombstone was
 	// just retried or a concurrent restore owns them — they do not remain.
+	// Claim-stranded envelopes DO remain (preserved on purpose — bare claim,
+	// produce outcome unknowable), so they are not subtracted.
 	remaining := int(total) - res.Restored - res.ReplayRefused
 	if remaining < 0 {
 		remaining = 0
@@ -1323,7 +1344,9 @@ func (s *server) handleQuarantineReattribute(w http.ResponseWriter, r *http.Requ
 		"deleted":                res.Deleted,
 		"delete_failed":          res.DeleteFailed,
 		"replay_refused":         res.ReplayRefused,
+		"claim_stranded":         res.ClaimStranded,
 		"unclaim_failed":         res.UnclaimFailed,
+		"mark_produced_failed":   res.MarkProducedFailed,
 		"aborted":                res.Aborted,
 	})
 }
@@ -1346,18 +1369,20 @@ func (s *server) auditQuarantineRestore(claims jwtClaims, sha, tenant string, re
 		Status:   http.StatusOK,
 		Decision: "allow",
 		Detail: map[string]any{
-			secobs.SecEventKey: secobs.SecEventQuarantineRestore,
-			"identity_sha":     sha, // a hash of a device identity — not PII, not payload
-			"tenant":           tenant,
-			"restored":         res.Restored,
-			"failed":           res.Failed,
-			"deleted":          res.Deleted,
-			"delete_failed":    res.DeleteFailed,
-			"replay_refused":   res.ReplayRefused,
-			"unclaim_failed":   res.UnclaimFailed,
-			"aborted":          res.Aborted,
-			"actor_tenant":     actorTenant,
-			"cross_tenant":     cross,
+			secobs.SecEventKey:     secobs.SecEventQuarantineRestore,
+			"identity_sha":         sha, // a hash of a device identity — not PII, not payload
+			"tenant":               tenant,
+			"restored":             res.Restored,
+			"failed":               res.Failed,
+			"deleted":              res.Deleted,
+			"delete_failed":        res.DeleteFailed,
+			"replay_refused":       res.ReplayRefused,
+			"claim_stranded":       res.ClaimStranded,
+			"unclaim_failed":       res.UnclaimFailed,
+			"mark_produced_failed": res.MarkProducedFailed,
+			"aborted":              res.Aborted,
+			"actor_tenant":         actorTenant,
+			"cross_tenant":         cross,
 		},
 	})
 }
