@@ -1048,7 +1048,25 @@ class Harness:
         if remaining != 0:
             problems.append(f"{remaining} run devices still present after delete")
 
-        # 7c. Purge run telemetry so the stack (and clean-slate.sh --verify)
+        # 7c. Wait (bounded) for the consumer to finish draining before purging:
+        # a purge issued while lag is still draining races the engine's late
+        # inserts, which then land AFTER the delete and survive as residue —
+        # proven live 2026-08-16 (run 08162031su88 left exactly its 100
+        # coverage rows behind this way). A drain-phase FAIL does not skip
+        # this wait: the whole point is to purge after the last insert.
+        drain_deadline = time.monotonic() + 600
+        lag = -1
+        while time.monotonic() < drain_deadline:
+            lag = self.stack.group_lag("netops-correlation").get("_total", -1)
+            if 0 <= lag <= 100:
+                break
+            time.sleep(15)
+        else:
+            problems.append(
+                f"consumer lag still {lag} after 600s pre-purge wait — purge may race late inserts")
+        ev["pre_purge_lag"] = lag
+
+        # Purge run telemetry so the stack (and clean-slate.sh --verify)
         # is left as found. corr_objects/evidence TTL out on their own and are
         # not part of --verify; noted honestly rather than silently skipped.
         ok, out = self.stack.ch_mutation(
