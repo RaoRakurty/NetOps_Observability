@@ -197,3 +197,24 @@ the §7 correlated-failure scenarios; L2+ needs the readiness-doc rig._
   correlation falls behind by millions → RCA/incident detection latency grows
   unbounded independent of storage. This is a distinct, engine-side ceiling and is
   the correlation-scale bottleneck (matches readiness-doc §7 correlation-latency).
+
+### Device-store ceiling latency (fleet ~3,346)
+- Batch create: **13.6/s** (was 155/s empty); per-create p50=52 ms, p95=94 ms,
+  **max=4,804 ms** — a multi-second tail when the whole-fleet blob write + the
+  device_tenant.csv regen (now 7,293 rows) coincide with a create. api/postgres CPU
+  low between spikes (bursty). Soft ceiling: onboarding crawls + periodic 4–5 s stalls.
+
+## Module: Correlation SIGNAL GENERATION (value path) — ⚠ test-realism gate
+- With correlation at latest (real-time, lag 6) and events tenant-TAGGED, injected
+  raw-syslog "LINK_DOWN/BGP_NEIGHBOR_DOWN/TUNNEL_DOWN" text produced **0 corr_signals
+  and 0 corr_objects (incidents)**. Existing 3,677 signals are the platform's own
+  self-telemetry (empty tenant).
+- Conclusion: correlation only emits signals from events matching its **structured
+  producer patterns** (control-plane / port-event / trap / gNMI oper-state shapes),
+  which Vector VRL parses from real device output — NOT arbitrary syslog strings.
+- Implication: raw syslog injection tests ingest/storage/throughput, but the RCA
+  value path (§7 correlated-failure) needs GOLDEN-FORMAT events or real protocol
+  simulators (SNMP traps / gNMI oper-status / structured RFC5424). This is the top
+  build item for a real correlation/RCA scale test (readiness-doc Network Digital Twin).
+- What IS proven end-to-end: tenant attribution (tagged index), correlation
+  consumption + throughput ceiling (~1k evt/s), ingest→storage flow.
