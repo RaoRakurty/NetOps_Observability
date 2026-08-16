@@ -191,6 +191,13 @@ class _NConsumer:
             _Msg("netops.metrics", json.dumps({"i": i}).encode(), offset=i)
             for i in range(type(self).count))
 
+    def subscribe(self, topics=(), pattern=None, listener=None):
+        # Scale P0: build_consumer() subscribes with a rebalance listener.
+        self.subscribed = (tuple(topics), listener)
+
+    def partitions_for_topic(self, topic):
+        return {0}
+
     async def start(self):
         return None
 

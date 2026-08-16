@@ -139,6 +139,13 @@ class _PoisonConsumer:
             _Msg("netops.metrics", _wire({"ok": True})),
         ])
 
+    def subscribe(self, topics=(), pattern=None, listener=None):
+        # Scale P0: build_consumer() subscribes with a rebalance listener.
+        self.subscribed = (tuple(topics), listener)
+
+    def partitions_for_topic(self, topic):
+        return {0}
+
     async def start(self):
         return None
 
@@ -265,6 +272,13 @@ class _MalformedConsumer:
             _Msg("netops.syslog", type(self).poison, offset=41),
             _Msg("netops.metrics", _wire({"ok": True}), offset=42),
         ])
+
+    def subscribe(self, topics=(), pattern=None, listener=None):
+        # Scale P0: build_consumer() subscribes with a rebalance listener.
+        self.subscribed = (tuple(topics), listener)
+
+    def partitions_for_topic(self, topic):
+        return {0}
 
     async def start(self):
         return None
@@ -645,10 +659,11 @@ def test_syslog_bucket_key_set_is_swept(monkeypatch):
     monkeypatch.setattr(main, "_tenant_mtime", main.time.time() + 3600)
     old = main.time.time() - 10 * main.SYSLOG_WINDOW
     for i in range(100):
-        main.SYSLOG_BUCKET[f"spoofed-{i}"] = [(old, 3)]
+        # Scale P0: buckets are keyed (tenant, hostname) — see SYSLOG_BUCKET.
+        main.SYSLOG_BUCKET[("global", f"spoofed-{i}")] = [(old, 3)]
     run(main.handle_syslog({"hostname": "real1", "severity": "err", "message": "x"}))
     assert len(main.SYSLOG_BUCKET) == 1
-    assert "real1" in main.SYSLOG_BUCKET
+    assert ("global", "real1") in main.SYSLOG_BUCKET
 
 
 def test_dedup_token_derived_from_kafka_coordinate(monkeypatch):

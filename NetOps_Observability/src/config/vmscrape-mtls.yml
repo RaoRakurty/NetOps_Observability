@@ -49,13 +49,20 @@ scrape_configs:
   # APP-001: mTLS variant scrapes the :8443 listener presenting victoria's
   # SVID; correlation's identity middleware scopes this identity to /metrics
   # and /healthz only.
+  # Scale P0: DNS A-record discovery so every `--scale correlation=N` replica
+  # is scraped as its own instance (per-process counters — see vmscrape.yml).
+  # server_name pins certificate verification to the shared correlation SVID
+  # even though the discovered target is an IP.
   - job_name: 'correlation'
     scheme: https
-    static_configs:
-      - targets: ['correlation:8443']
+    dns_sd_configs:
+      - names: ['correlation']
+        type: A
+        port: 8443
     metrics_path: '/metrics'
     tls_config:
       ca_file: /etc/victoria/tls/ca.pem
+      server_name: correlation
       cert_file: /etc/victoria/tls/victoria/victoria.crt
       key_file: /etc/victoria/tls/victoria/victoria.key
 

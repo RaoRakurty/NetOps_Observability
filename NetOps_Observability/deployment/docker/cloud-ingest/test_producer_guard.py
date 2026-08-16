@@ -124,3 +124,41 @@ def test_metrics_exposition_carries_the_produce_failure_counter():
     inner.futures[0].fail(RuntimeError("boom"))
     text = ingest_metrics.render()
     assert 'netops_cloud_ingest_produce_failures_total{topic="netops.cloud"} 1' in text
+
+
+# ── Scale P0: tenant partition keying (co-partitioned correlation scale) ─────
+
+class _KeyProducer(_Producer):
+    def send(self, topic, value, **kw):
+        self.kw = kw
+        return super().send(topic, value, **kw)
+
+
+def test_send_keys_by_tenant_id():
+    """Every record is keyed by its tenant so one tenant's cloud events land
+    on ONE partition — kafka-python's default murmur2 partitioner matches the
+    Java/librdkafka hashing every other bus producer uses."""
+    p = _KeyProducer()
+    g = producer_guard.GuardedProducer(p)
+    g.send("netops.cloud", {"kind": "cloud_change", "tenant_id": "t_acme"})
+    assert p.kw["key"] == b"t_acme"
+
+
+def test_send_keys_untenanted_as_global():
+    p = _KeyProducer()
+    g = producer_guard.GuardedProducer(p)
+    g.send("netops.cloud", {"kind": "cloud_change"})
+    assert p.kw["key"] == b"global"
+
+
+def test_send_respects_explicit_key():
+    p = _KeyProducer()
+    g = producer_guard.GuardedProducer(p)
+    g.send("netops.cloud", {"tenant_id": "t_acme"}, key=b"custom")
+    assert p.kw["key"] == b"custom"
+
+
+def test_tenant_key_fold():
+    assert producer_guard.tenant_key({"tenant_id": ""}) == b"global"
+    assert producer_guard.tenant_key(None) == b"global"
+    assert producer_guard.tenant_key({"tenant_id": "t_x"}) == b"t_x"

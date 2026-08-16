@@ -50,5 +50,10 @@ transport:
   type: kafka          # see the transport note above; set via the compose command
   kafka:
     brokers: kafka:9092
-    topic: netops.flows
+    # Scale P0: the RAW topic. vector-router re-keys each record by tenant
+    # onto netops.flows (Java-murmur2 co-partitioning for the scaled
+    # correlation consumer) — goflow2 has no tenant knowledge and sarama's
+    # hash partitioner is FNV-1a, not murmur2. Keep in sync with the compose
+    # command (which is what actually runs).
+    topic: netops.flows.raw
     compression: snappy

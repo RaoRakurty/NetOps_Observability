@@ -19,6 +19,15 @@ class FakeConsumer:
     def __init__(self, *topics, **kwargs):
         self.created.append(self)
         self.index = len(self.created)
+        self.subscribed: tuple = ()
+
+    def subscribe(self, topics=(), pattern=None, listener=None):
+        # Scale P0: build_consumer() subscribes with a rebalance listener
+        # instead of passing topics to the constructor.
+        self.subscribed = (tuple(topics), listener)
+
+    def partitions_for_topic(self, topic):
+        return {0}
 
     async def start(self):
         return None

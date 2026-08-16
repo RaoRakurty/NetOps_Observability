@@ -657,6 +657,18 @@ transforms:
       skew_s = ots - to_unix_timestamp(now())
       if abs(skew_s) > 300 { .clock_skew_s = skew_s }
 
+      # ── Scale P0: tenant partition key ──────────────────────────────────
+      # Kafka message key = the tenant this event was attributed to ("global"
+      # for platform/untagged — the same fold canon_tenant applies in the
+      # consumer), so one tenant's events land on ONE partition of every
+      # topic and `--scale correlation=N` instances own disjoint tenant
+      # slices. Stripped from the payload at the sink (except_fields); the
+      # sink's murmur2_random partitioner keeps the hash Java-compatible
+      # across every producer. NEVER key by hostname/device — high-cardinality
+      # keys scatter a tenant across partitions and break co-partitioning.
+      .__key = "global"
+      if .tenant_id != "" { .__key = .tenant_id }
+
   # SNMP traps — the receiver already decoded the PDU into structured fields
   # (trap_oid, trap_name, severity, varbinds, snmp_version, device/host). Here we
   # just stamp the tenant the same way syslog does: match the device id (or the
@@ -683,6 +695,9 @@ transforms:
           .tenant_registry = "hit"
         }
       }
+      # Scale P0: tenant partition key — see the syslog lane's note.
+      .__key = "global"
+      if .tenant_id != "" { .__key = .tenant_id }
 
   # Probe events: stamp the tenant when the target matches a device identity.
   # Most probe targets are external hosts → "" (global/platform); the
@@ -700,6 +715,9 @@ transforms:
           .tenant_id = to_string(trows[0].tenant_id) ?? ""
         }
       }
+      # Scale P0: tenant partition key — see the syslog lane's note.
+      .__key = "global"
+      if .tenant_id != "" { .__key = .tenant_id }
 
   # Metric events: the Go collector already canonicalized them (typed code), so
   # this is minimal — tag the signal and stamp the tenant from the device id, the
@@ -717,6 +735,9 @@ transforms:
           .tenant_id = to_string(trows[0].tenant_id) ?? ""
         }
       }
+      # Scale P0: tenant partition key — see the syslog lane's note.
+      .__key = "global"
+      if .tenant_id != "" { .__key = .tenant_id }
 
   # Cloud provider metrics (CloudWatch / Azure Monitor) → real VALUES in
   # VictoriaMetrics, so the Service View counters render measured numbers. The
@@ -881,7 +902,18 @@ transforms:
       if err != null { abort }
       . = ev
       .__topic = t
-      .__key = k
+      # Scale P0: the partition key must be the tenant the correlation engine
+      # will attribute the event to (co-partitioned tenant slices — see the
+      # syslog lane's note). For bus-bridge lanes that attribution is the
+      # event's own tenant_id claim (cloud/app/verification/wireless lanes
+      # accept the authenticated producer's claim), so prefer it; fall back to
+      # the envelope key the producer chose (the Go producers already set
+      # key=tenant), then to "global" — never an absent key, which would land
+      # on a RANDOM partition and split a tenant across instances.
+      kt = to_string(.tenant_id) ?? ""
+      if kt == "" { kt = k }
+      if kt == "" { kt = "global" }
+      .__key = kt
 
       # ── F-10: `ts` is the canonical event-time field on EVERY topic ─────
       # Measured 2026-07-21: netops.controller_events carried NO time field at
@@ -1036,6 +1068,9 @@ transforms:
       if tserr != null { ts = format_timestamp!(now(), format: "%+") }
       . = {
         "kind": "cloud_health",
+        # Scale P0: tenant partition key (already "global"-folded above) —
+        # see the syslog lane's note. Stripped at the kafka_cloud sink.
+        "__key": tenant,
         "tenant_id": tenant,
         "app": svc,
         "severity": sev,
@@ -1106,7 +1141,17 @@ sinks:
     inputs: [cloud_app_health]
     bootstrap_servers: "${BROKER_URLS:-kafka:9092}"
     topic: "netops.cloud"
-    encoding: { codec: json }
+    key_field: "__key"
+    # Scale P0: keyed by tenant (__key, stamped in the lane transform) with the
+    # JAVA-compatible murmur2 partitioner, so the same tenant hashes to the
+    # same partition NUMBER at every producer on the bus (librdkafka's default
+    # consistent_random is CRC32 and would disagree with kafka-python/Java —
+    # silently splitting a tenant across correlation instances).
+    librdkafka_options:
+      partitioner: "murmur2_random"
+    encoding:
+      codec: json
+      except_fields: ["__key"]
     compression: snappy
 
   # Tagged raw cloud HOST logs → the cloudlogs topic (vector-router indexes it
@@ -1183,7 +1228,17 @@ sinks:
     inputs: [syslog_normalized]
     bootstrap_servers: "${BROKER_URLS:-kafka:9092}"
     topic: "netops.syslog"
-    encoding: { codec: json }
+    key_field: "__key"
+    # Scale P0: keyed by tenant (__key, stamped in the lane transform) with the
+    # JAVA-compatible murmur2 partitioner, so the same tenant hashes to the
+    # same partition NUMBER at every producer on the bus (librdkafka's default
+    # consistent_random is CRC32 and would disagree with kafka-python/Java —
+    # silently splitting a tenant across correlation instances).
+    librdkafka_options:
+      partitioner: "murmur2_random"
+    encoding:
+      codec: json
+      except_fields: ["__key"]
     compression: snappy
 
   # F-03 — dead letters from THIS tier, onto the bus like every other signal.
@@ -1250,7 +1305,17 @@ sinks:
     inputs: [snmptrap_normalized]
     bootstrap_servers: "${BROKER_URLS:-kafka:9092}"
     topic: "netops.snmptrap"
-    encoding: { codec: json }
+    key_field: "__key"
+    # Scale P0: keyed by tenant (__key, stamped in the lane transform) with the
+    # JAVA-compatible murmur2 partitioner, so the same tenant hashes to the
+    # same partition NUMBER at every producer on the bus (librdkafka's default
+    # consistent_random is CRC32 and would disagree with kafka-python/Java —
+    # silently splitting a tenant across correlation instances).
+    librdkafka_options:
+      partitioner: "murmur2_random"
+    encoding:
+      codec: json
+      except_fields: ["__key"]
     compression: snappy
 
   kafka_probes:
@@ -1294,7 +1359,17 @@ sinks:
     inputs: [probe_normalized]
     bootstrap_servers: "${BROKER_URLS:-kafka:9092}"
     topic: "netops.probes"
-    encoding: { codec: json }
+    key_field: "__key"
+    # Scale P0: keyed by tenant (__key, stamped in the lane transform) with the
+    # JAVA-compatible murmur2 partitioner, so the same tenant hashes to the
+    # same partition NUMBER at every producer on the bus (librdkafka's default
+    # consistent_random is CRC32 and would disagree with kafka-python/Java —
+    # silently splitting a tenant across correlation instances).
+    librdkafka_options:
+      partitioner: "murmur2_random"
+    encoding:
+      codec: json
+      except_fields: ["__key"]
     compression: snappy
 
   victoria_cloud_metrics:
@@ -1356,7 +1431,17 @@ sinks:
     inputs: [metrics_normalized]
     bootstrap_servers: "${BROKER_URLS:-kafka:9092}"
     topic: "netops.metrics"
-    encoding: { codec: json }
+    key_field: "__key"
+    # Scale P0: keyed by tenant (__key, stamped in the lane transform) with the
+    # JAVA-compatible murmur2 partitioner, so the same tenant hashes to the
+    # same partition NUMBER at every producer on the bus (librdkafka's default
+    # consistent_random is CRC32 and would disagree with kafka-python/Java —
+    # silently splitting a tenant across correlation instances).
+    librdkafka_options:
+      partitioner: "murmur2_random"
+    encoding:
+      codec: json
+      except_fields: ["__key"]
     compression: snappy
 
   # Bus-bridge events land on whatever netops.* topic their envelope named
@@ -1406,6 +1491,10 @@ sinks:
     bootstrap_servers: "${BROKER_URLS:-kafka:9092}"
     topic: "{{ __topic }}"
     key_field: "__key"
+    # Scale P0: same Java-murmur2 partitioner as every other keyed sink — see
+    # the kafka_syslog note.
+    librdkafka_options:
+      partitioner: "murmur2_random"
     encoding:
       codec: json
       except_fields: ["__topic", "__key"]

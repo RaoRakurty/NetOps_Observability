@@ -31,9 +31,17 @@ scrape_configs:
 
   # Correlation engine intake counters (#99 R6) — silent ingestion failures
   # (received flat-lined / dropped rising / dead-letters) become alertable.
+  # Scale P0: DNS discovery, not a static target. Correlation counters are
+  # PER-PROCESS monotonic, and with `--scale correlation=N` a static
+  # 'correlation:8000' target round-robins Docker DNS — one series stitched
+  # from N different processes makes every increase()/flat-line alert lie.
+  # A-record discovery scrapes EVERY replica as its own instance (single
+  # replica: same one target as before, instance label = IP:8000).
   - job_name: 'correlation'
-    static_configs:
-      - targets: ['correlation:8000']
+    dns_sd_configs:
+      - names: ['correlation']
+        type: A
+        port: 8000
     metrics_path: '/metrics'
 
   # ClickHouse native Prometheus endpoint (enabled via <prometheus> in config).

@@ -220,7 +220,10 @@ services:
       KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: "1"
       KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: "1"
       KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: "0"
-      KAFKA_NUM_PARTITIONS: "1"
+      # Scale P0: aligned with kafka-init's BUS_PARTITIONS so a topic created
+      # outside kafka-init (auto-create is OFF; admin tooling only) defaults
+      # to the same count co-partitioning expects.
+      KAFKA_NUM_PARTITIONS: ${BUS_PARTITIONS:-1}
       # SEC-006.1: OFF. An authenticated bus with auto-create is still an
       # injection surface — anything that can reach the broker could mint
       # topics. Every canonical topic is created explicitly by kafka-init
@@ -262,18 +265,40 @@ services:
     image: apache/kafka:4.1.1@sha256:0bc1bb2478f45b6cea78864df86acdc11e8df2c5172477819a4d12942cbe5d40
     profiles: ["embedded-bus"]
     restart: "no"
+    environment:
+      # Scale P0: partition count for EVERY netops.* topic. All topics must
+      # share ONE count — correlation instances rely on co-partitioning
+      # (partition k of every topic on instance k), which equal counts + the
+      # range assignor guarantee. Raise it together with
+      # `--scale correlation=N` (see the correlation service + docs/
+      # scale-correlation.md); an existing topic with fewer partitions is
+      # ALTERed up (increase-only — Kafka cannot shrink). Keyed records
+      # produced BEFORE the increase stay in the old partitions: scale up in
+      # a quiet window (or drain: stop producers, let correlation catch up,
+      # then raise) — see the docs drain note.
+      BUS_PARTITIONS: ${BUS_PARTITIONS:-1}
     entrypoint:
       - bash
       - -c
       - >-
-        for t in netops.applogs netops.syslog netops.flows netops.snmptrap
+        p="$${BUS_PARTITIONS:-1}";
+        for t in netops.applogs netops.syslog netops.flows netops.flows.raw
+        netops.snmptrap
         netops.probes netops.metrics netops.cloud netops.app.identities.v1
         netops.controller_events netops.app.edge netops.verification
         netops.cloudlogs netops.cloudcosts netops.deadletter
         netops.wireless_sessions netops.wireless_events; do
         /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9092
         --create --if-not-exists --topic "$$t"
-        --partitions 1 --replication-factor 1 || exit 1; done
+        --partitions "$$p" --replication-factor 1 || exit 1;
+        cur="$$(/opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9092
+        --describe --topic "$$t"
+        | sed -n 's/.*PartitionCount: \([0-9]*\).*/\1/p' | head -1)";
+        if [ -z "$$cur" ]; then echo "kafka-init: describe $$t failed" >&2; exit 1; fi;
+        if [ "$$cur" -lt "$$p" ]; then
+        echo "kafka-init: $$t partitions $$cur -> $$p" >&2;
+        /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9092
+        --alter --topic "$$t" --partitions "$$p" || exit 1; fi; done
     depends_on:
       kafka: { condition: service_healthy }
     networks: [netops]
@@ -411,8 +436,14 @@ services:
       - "kafka"
       - "-transport.kafka.brokers"
       - "${BROKER_URLS:-kafka:9092}"
+      # Scale P0: goflow2 produces the RAW topic; vector-router re-keys it by
+      # tenant onto netops.flows (see vector-router/vector.yaml
+      # kafka_flows_raw). goflow2 cannot do the keying itself: it has no
+      # device→tenant registry, and sarama's hash partitioner (FNV-1a) is
+      # incompatible with the Java-murmur2 partitioning the co-partitioned
+      # correlation scale-out requires on every keyed topic.
       - "-transport.kafka.topic"
-      - "netops.flows"
+      - "netops.flows.raw"
       - "-transport.kafka.compression"
       - "snappy"
     ports:
@@ -1079,6 +1110,23 @@ services:
   # CORRELATION + AI ENGINE — Python/FastAPI
   # =========================================================================
 
+  # HORIZONTAL SCALE (scale P0 — docs/scale-correlation.md):
+  #   BUS_PARTITIONS=N python3 scripts/install.py   (or set BUS_PARTITIONS in
+  #   .env and re-run kafka-init), then:
+  #   docker compose up -d --scale correlation=N
+  # Every bus producer keys records by tenant (Java murmur2), every topic has
+  # BUS_PARTITIONS partitions, and the consumer's RANGE assignor gives
+  # instance k partition k of EVERY topic — a complete, disjoint tenant slice
+  # per instance with worker-local state. No container_name / host ports here
+  # ON PURPOSE: both would collide under --scale.
+  # Multi-replica notes:
+  #   * /healthz /metrics /deadletters are PER-INSTANCE diagnostics; Docker
+  #     DNS round-robins correlation:8000, /findings + /correlations/{id}/
+  #     replay are ClickHouse-backed and replica-safe (vmscrape uses dns_sd
+  #     to scrape every replica).
+  #   * all replicas share the CORR_DLQ_DIR volume below (append-only NDJSON;
+  #     per-line appends — acceptable; rotation may interleave under N>1).
+  #   * replicas > partitions sit idle (range assignor leaves them empty).
   correlation:
     # SC-008: runs as non-root appuser (see Dockerfile); lock down escalation+caps.
     security_opt: ["no-new-privileges:true"]

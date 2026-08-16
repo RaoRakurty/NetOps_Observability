@@ -20,6 +20,19 @@ This wrapper is the one place that observes the delivery RESULT:
 Labels stay bounded (topic only — never a tenant, account or payload), matching
 the ingest_metrics honesty contract.
 
+Scale P0 — tenant partition keying: this wrapper is ALSO the single choke
+point where every record this service produces gets its Kafka message key.
+The correlation tier scales horizontally by tenant-keyed co-partitioning:
+every producer on the bus must key each record by the event's tenant
+("global" when untenanted) so one tenant's events land on ONE partition of
+every topic. kafka-python's DefaultPartitioner is the Java-compatible murmur2
+— the same hash Vector's sinks use (librdkafka `murmur2_random`) — so keying
+here, with no partitioner override, lands on the same partition NUMBER as
+every other producer. A caller may pass an explicit `key=`; otherwise the key
+derives from `value["tenant_id"]`. Never key by account/resource/region —
+high-cardinality keys scatter a tenant across partitions and break
+co-partitioning.
+
 stdlib-only; the wrapped object only has to provide send()/flush().
 """
 from __future__ import annotations
@@ -33,6 +46,18 @@ import ingest_metrics
 # One error log per topic per interval: a broker outage fails every record in
 # the batch, and 10k identical lines drown the one line that explains it.
 LOG_EVERY_S = 30.0
+
+
+def tenant_key(value) -> bytes:
+    """The Kafka message key for one record: its tenant, "global" fallback.
+
+    Mirrors the platform-wide keying rule (Vector lanes, the Go bus-bridge
+    producers): key = tenant_id, empty/absent → "global" (the same fold the
+    correlation consumer's canon_tenant applies)."""
+    tenant = ""
+    if isinstance(value, dict):
+        tenant = str(value.get("tenant_id") or "")
+    return (tenant or "global").encode("utf-8")
 
 
 class GuardedProducer:
@@ -81,6 +106,11 @@ class GuardedProducer:
         """
         with self._lock:
             self._sent += 1
+        # Scale P0: tenant partition key (see the module docstring). Derived
+        # here so every lane — current and future — is keyed without each
+        # call site remembering to; an explicit key= wins.
+        if "key" not in kw:
+            kw["key"] = tenant_key(value)
         try:
             fut = self._producer.send(topic, value, **kw)
         except Exception as exc:  # noqa: BLE001 — a produce error never kills a lane

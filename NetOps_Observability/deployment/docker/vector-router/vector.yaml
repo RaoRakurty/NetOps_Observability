@@ -123,6 +123,32 @@ sources:
     group_id: "netops-router-applogs"
     decoding: { codec: json }
 
+  # Scale P0 — the RAW flow feed from goflow2, consumed only to be re-keyed.
+  #
+  # WHY THIS HOP EXISTS: horizontal correlation scale partitions every bus
+  # topic by TENANT (Java-murmur2 on the tenant key) so `--scale
+  # correlation=N` instances own disjoint tenant slices. goflow2 cannot key
+  # by tenant — it has no device→tenant knowledge, and its sarama client's
+  # hash partitioner (FNV-1a) disagrees with the Java/librdkafka/kafka-python
+  # murmur2 everything else on the bus uses. The router is the tier that
+  # already owns flow tenancy (see the enrichment-tables F-49 note), so
+  # goflow2 now produces netops.flows.raw and THIS lane republishes each
+  # record — payload untouched — onto netops.flows keyed by the exporter's
+  # tenant. The storage pipeline (the kafka_flows source) keeps consuming
+  # netops.flows, so the F-11 quarantine-restore loop (restores re-enter on
+  # netops.flows) and the correlation consumer are unchanged.
+  kafka_flows_raw:
+    type: kafka
+    tls:
+      enabled: ${KAFKA_TLS_ENABLED:-false}
+      ca_file: "${KAFKA_TLS_CA:-/tls/ca.pem}"
+      crt_file: "${KAFKA_TLS_CRT:-/tls/ca.pem}"
+      key_file: "${KAFKA_TLS_KEY:-/tls/ca.pem}"
+    bootstrap_servers: "${BROKER_URLS:-kafka:9092}"
+    topics: ["netops.flows.raw"]
+    group_id: "netops-router-flows-rekey"
+    decoding: { codec: json }
+
   kafka_syslog:
     type: kafka
     # SEC-006.2: mTLS to the broker when the deployment enables it — unquoted
@@ -540,6 +566,37 @@ transforms:
         .tenant_attribution = "claim_rejected"
       }
 
+  # Scale P0 — re-key the raw goflow2 feed by tenant (see kafka_flows_raw).
+  # PASS-THROUGH on purpose: the payload the correlation consumer sees on
+  # netops.flows must stay byte-equivalent to what goflow2 produced (its
+  # tenancy is re-verified there against the same registry), so this stamps
+  # ONLY the routing key and strips the kafka-source/log-schema metadata the
+  # source added. Tenant resolution mirrors flows_decoded: sampler_address →
+  # device_tenant registry; miss/platform → "global" (canon_tenant's fold).
+  flows_rekey:
+    type: remap
+    inputs: [kafka_flows_raw]
+    source: |
+      # Fields the kafka source / log schema stamped on ingest — not part of
+      # the goflow2 record; deleting them restores the raw payload shape.
+      del(.timestamp)
+      del(.source_type)
+      del(.topic)
+      del(.partition)
+      del(.offset)
+      del(.message_key)
+      del(.headers)
+      sampler = to_string(.sampler_address) ?? ""
+      k = ""
+      if sampler != "" {
+        trows = find_enrichment_table_records("device_tenant", { "identity": sampler }) ?? []
+        if length(trows) > 0 {
+          k = to_string(trows[0].tenant_id) ?? ""
+        }
+      }
+      if k == "" { k = "global" }
+      .__key = k
+
   # Cloud cost records → the ClickHouse cloud_costs schema. Zero-trust gate on
   # the bus payload: only kind=cloud_cost with a well-formed day passes; the
   # amount is coerced to a float so a string-typed value can't 400 the whole
@@ -904,6 +961,32 @@ sinks:
       index: "netops-flows-{{ tenant_seg }}-%Y.%m.%d"
       action: index
     api_version: v7
+
+  # Scale P0 — the tenant-keyed flow feed (see kafka_flows_raw). Same
+  # Java-murmur2 partitioner as every keyed producer on the bus (the
+  # aggregator's kafka sinks, kafka-python in cloud-ingest): the same tenant
+  # key MUST hash to the same partition NUMBER everywhere, or a tenant's
+  # flows land on a different correlation instance than its other lanes.
+  # Offsets on kafka_flows_raw commit only after this sink acks (global
+  # `acknowledgements`), so the retained raw topic is the replay buffer —
+  # no disk buffer needed, same reasoning as the storage sinks.
+  kafka_flows_keyed:
+    type: kafka
+    tls:
+      enabled: ${KAFKA_TLS_ENABLED:-false}
+      ca_file: "${KAFKA_TLS_CA:-/tls/ca.pem}"
+      crt_file: "${KAFKA_TLS_CRT:-/tls/ca.pem}"
+      key_file: "${KAFKA_TLS_KEY:-/tls/ca.pem}"
+    inputs: [flows_rekey]
+    bootstrap_servers: "${BROKER_URLS:-kafka:9092}"
+    topic: "netops.flows"
+    key_field: "__key"
+    librdkafka_options:
+      partitioner: "murmur2_random"
+    encoding:
+      codec: json
+      except_fields: ["__key"]
+    compression: snappy
 
   clickhouse_flows:
     type: clickhouse

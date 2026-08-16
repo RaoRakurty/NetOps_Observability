@@ -79,7 +79,7 @@ topics:
 | `netops.applogs`   | docker_logs        | OpenSearch `netops-applogs-*`    |
 | `netops.syslog`    | syslog-ng          | OpenSearch `netops-syslog-*`     |
 | `netops.metrics`   | Go collectors (api) | VictoriaMetrics remote_write     |
-| `netops.flows`     | goflow2 (stdout)   | OpenSearch + ClickHouse          |
+| `netops.flows`     | vector-router re-key of `netops.flows.raw` (goflow2 kafka://) | OpenSearch + ClickHouse |
 
 ### Apache Kafka
 
@@ -138,6 +138,14 @@ the netops.* topics, runs:
 
 Writes findings to `clickhouse.netops.findings`; the Findings tab in the
 UI renders them as a ranked triage queue.
+
+**Horizontal scale (scale P0):** the engine scales by tenant-keyed
+co-partitioning — every bus producer keys records by tenant (Java murmur2),
+every `netops.*` topic carries `BUS_PARTITIONS` partitions, and the
+consumer's range assignor gives `docker compose up --scale correlation=N`
+instance k partition k of every topic: a complete, disjoint slice of tenants
+with worker-local state. Full design, producer/keying matrix, scale-up drain
+procedure and multi-replica endpoint semantics: `docs/scale-correlation.md`.
 
 ### API + query layer
 

@@ -22,17 +22,20 @@
 #                      the kafka_bus sink multiplexes every HTTP-ingested
 #                      lane by __topic, so enumerating lanes here would just
 #                      go stale; the HTTP side authenticates producers.
-#   vector-router      consume  its 7 lanes; produce netops.deadletter;
+#   vector-router      consume  its 8 lanes (incl. netops.flows.raw — the
+#                      scale-P0 re-key hop); produce netops.deadletter AND
+#                      netops.flows (the tenant-keyed flow feed);
 #                      groups netops-router-* (prefixed)
 #   correlation        consume  its 12 topics; group netops-correlation
 #   kafka-exporter     describe netops.* topics + netops-* groups (lag math
 #                      is ListOffsets/OffsetFetch = Describe on both)
-#   ANONYMOUS          produce  netops.flows ONLY — goflow2 on the FLOWS
+#   ANONYMOUS          produce  netops.flows.raw ONLY — goflow2 on the FLOWS
 #                      listener (no client-cert capability; owner decision
-#                      2026-08-05). NOTE: until the PLAINTEXT listener dies
-#                      (SEC-006.3), everything on :9092 is also ANONYMOUS —
-#                      the flip to enforce narrows that blast radius to
-#                      exactly this one topic.
+#                      2026-08-05; scale P0 moved goflow2 from netops.flows
+#                      to the raw topic the router re-keys). NOTE: until the
+#                      PLAINTEXT listener dies (SEC-006.3), everything on
+#                      :9092 is also ANONYMOUS — the flip to enforce narrows
+#                      that blast radius to exactly this one topic.
 set -eu
 
 BOOTSTRAP="${KAFKA_BOOTSTRAP:-localhost:9092}"
@@ -48,14 +51,20 @@ echo "acls: aggregator — produce on netops.* (prefixed, bus-bridge role)" >&2
 $ACLS --add --allow-principal "$AGG" --producer \
     --topic netops. --resource-pattern-type prefixed >/dev/null
 
-echo "acls: router — consume its lanes, produce deadletter, own its groups" >&2
-for t in netops.applogs netops.syslog netops.flows netops.snmptrap \
+echo "acls: router — consume its lanes, produce deadletter+flows, own its groups" >&2
+for t in netops.applogs netops.syslog netops.flows netops.flows.raw \
+         netops.snmptrap \
          netops.cloudlogs netops.cloudcosts netops.deadletter; do
     $ACLS --add --allow-principal "$ROUTER" \
         --operation Read --operation Describe --topic "$t" >/dev/null
 done
 $ACLS --add --allow-principal "$ROUTER" --producer \
     --topic netops.deadletter >/dev/null
+# Scale P0: the router is the flows re-key hop — it consumes goflow2's raw
+# feed (netops.flows.raw, Read above) and republishes it tenant-keyed onto
+# netops.flows for the co-partitioned correlation consumers.
+$ACLS --add --allow-principal "$ROUTER" --producer \
+    --topic netops.flows >/dev/null
 $ACLS --add --allow-principal "$ROUTER" --operation Read \
     --group netops-router- --resource-pattern-type prefixed >/dev/null
 
@@ -76,8 +85,14 @@ $ACLS --add --allow-principal "$EXPORTER" --operation Describe \
 $ACLS --add --allow-principal "$EXPORTER" --operation Describe \
     --group netops- --resource-pattern-type prefixed >/dev/null
 
-echo "acls: ANONYMOUS (goflow2/FLOWS) — produce netops.flows ONLY" >&2
+echo "acls: ANONYMOUS (goflow2/FLOWS) — produce netops.flows.raw ONLY" >&2
 $ACLS --add --allow-principal "User:ANONYMOUS" \
+    --operation Write --operation Describe --topic netops.flows.raw >/dev/null
+# Scale P0 retirement: goflow2 moved to netops.flows.raw; the keyed
+# netops.flows is now written ONLY by the router (and the aggregator's
+# prefixed bus-bridge grant). --remove is idempotent (removing an absent ACL
+# is a no-op), so this converges like the interim-grant retirements below.
+$ACLS --remove --force --allow-principal "User:ANONYMOUS" \
     --operation Write --operation Describe --topic netops.flows >/dev/null
 
 CLOUDINGEST="User:$SA/cloud-ingest"

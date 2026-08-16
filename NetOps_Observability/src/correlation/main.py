@@ -46,6 +46,9 @@ from datetime import datetime, timezone
 
 import httpx
 from aiokafka import AIOKafkaConsumer
+from aiokafka.abc import ConsumerRebalanceListener
+from aiokafka.coordinator.assignors.range import RangePartitionAssignor
+from aiokafka.partitioner import murmur2
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
@@ -2560,8 +2563,23 @@ async def cloud_log_tailer() -> None:
         log.warning("CLOUD_LOGS_DIR set but CLOUD_LOGS_TENANT empty — cloud-log ingestion DISABLED (default-closed)")
         return
     log.info("cloud-log tailer watching %s (tenant=%s, every %.0fs)", CLOUD_LOGS_DIR, CLOUD_LOGS_TENANT, CLOUD_LOGS_REFRESH_S)
+    skipped_logged = False
     while True:
         try:
+            # Scale P0: the tailer is a SINGLETON side-input (files, not the
+            # bus). With --scale correlation=N every replica sees the same
+            # files, so only the replica that owns CLOUD_LOGS_TENANT's
+            # partition may feed them — the same instance whose engine holds
+            # that tenant's state. owns_tenant() fails open before the first
+            # rebalance (single-replica / broker-less dev behavior unchanged).
+            if not owns_tenant(CLOUD_LOGS_TENANT):
+                if not skipped_logged:
+                    skipped_logged = True
+                    log.info("cloud-log tailer idle: tenant %s owned by another "
+                             "replica (co-partitioned scale-out)", CLOUD_LOGS_TENANT)
+                await asyncio.sleep(max(CLOUD_LOGS_REFRESH_S, 5.0))
+                continue
+            skipped_logged = False
             n = await _scan_cloud_logs()
             if n:
                 log.info("cloud-log tailer fed %d signal(s)", n)
@@ -2792,6 +2810,133 @@ def quarantine_event(topic: str, event: object, exc: BaseException) -> None:
                       exc_info=exc)
 
 
+# ── horizontal scale: tenant-keyed co-partitioning (scale P0) ────────────────
+#
+# THE CONTRACT: every producer onto the 12 consumed topics keys each record by
+# the tenant the engine will attribute it to (fallback "global"), using the
+# Java-compatible murmur2 partitioner (Vector sinks: librdkafka
+# `murmur2_random`; cloud-ingest: kafka-python's default murmur2; flows are
+# re-keyed by vector-router — goflow2 itself cannot key by tenant). With every
+# topic created at the SAME partition count (kafka-init `BUS_PARTITIONS`) and
+# the RANGE assignor below, instance k of `docker compose up --scale
+# correlation=N` owns partition k of EVERY topic — a complete, disjoint slice
+# of tenants with worker-local state (Kafka-Streams-style co-partitioned
+# tasks). The engine core is tenant-partitioned (run_window refuses a
+# mixed-tenant window), so N slices produce the union a single instance would,
+# below the capacity caps (WINDOW_BUFFER / series LRU budgets are per-process
+# — see docs/scale-correlation.md).
+#
+# aiokafka's DEFAULT assignor is RoundRobin, which spreads TopicPartitions
+# round-robin over members — partition k of topic A and partition k of topic B
+# can land on DIFFERENT members, silently breaking tenant stickiness. Range
+# assigns each topic's partition list contiguously over the same sorted member
+# list, so equal partition counts ⇒ member i owns partition set i of every
+# topic. Pinned here and by test_scale_copartition.py.
+
+CONSUMER_ASSIGNMENT: dict[str, list[int]] = {}   # topic -> owned partitions (last rebalance)
+CONSUMER_PARTITION_TOTALS: dict[str, int] = {}   # topic -> total partitions (broker metadata)
+CONSUMER_REBALANCES = 0                          # monotonic; /healthz + logs
+
+
+def tenant_partition(tenant: str, num_partitions: int) -> int:
+    """The partition a tenant's records land on — mirrors every producer's
+    keying (Java murmur2 on the UTF-8 tenant key, positive-masked, mod N).
+    The single source of truth for 'which instance owns tenant T'."""
+    key = (tenant or "global").encode("utf-8")
+    return (murmur2(key) & 0x7FFFFFFF) % max(1, int(num_partitions))
+
+
+class _AssignmentLogger(ConsumerRebalanceListener):
+    """Records + logs partition ownership at every rebalance, and verifies the
+    co-partitioning invariant: with the range assignor and equal partition
+    counts, this member's partition SET must be identical across all 12
+    topics. A mismatch means the topics' partition counts diverged (e.g. a
+    failed `kafka-topics --alter` after raising BUS_PARTITIONS) — tenants
+    would be split across instances, so it is an ERROR, not a debug line."""
+
+    def __init__(self, consumer: AIOKafkaConsumer) -> None:
+        self._consumer = consumer
+
+    async def on_partitions_revoked(self, revoked) -> None:
+        log.info("rebalance: %d partition(s) revoked", len(revoked))
+
+    async def on_partitions_assigned(self, assigned) -> None:
+        global CONSUMER_REBALANCES
+        CONSUMER_REBALANCES += 1
+        owned: dict[str, list[int]] = {t: [] for t in TOPICS}
+        for tp in assigned:
+            owned.setdefault(tp.topic, []).append(tp.partition)
+        for parts in owned.values():
+            parts.sort()
+        CONSUMER_ASSIGNMENT.clear()
+        CONSUMER_ASSIGNMENT.update(owned)
+        for topic in TOPICS:
+            total = self._consumer.partitions_for_topic(topic)
+            if total:
+                CONSUMER_PARTITION_TOTALS[topic] = len(total)
+        log.info("rebalance #%d: assignment=%s totals=%s", CONSUMER_REBALANCES,
+                 {t: p for t, p in owned.items() if p}, dict(CONSUMER_PARTITION_TOTALS))
+        distinct = {tuple(p) for p in owned.values()}
+        if len(distinct) > 1:
+            log.error("CO-PARTITIONING BROKEN: this member owns different "
+                      "partition sets per topic (%s) — topic partition counts "
+                      "have diverged; re-run kafka-init with BUS_PARTITIONS "
+                      "and check `kafka-topics --describe`",
+                      {t: p for t, p in owned.items()})
+
+
+def owns_tenant(tenant: str, *, topic: str = "netops.cloud") -> bool:
+    """Does THIS instance own `tenant`'s partition of `topic`?
+
+    Used to elect exactly one replica for singleton side-inputs (the cloud-log
+    tailer). Fail-OPEN before the first rebalance (no assignment recorded yet
+    — single-replica/offline behavior unchanged); fail-closed once an
+    assignment exists and excludes the tenant's partition."""
+    total = CONSUMER_PARTITION_TOTALS.get(topic)
+    if not total or not CONSUMER_ASSIGNMENT:
+        return True
+    return tenant_partition(tenant, total) in CONSUMER_ASSIGNMENT.get(topic, [])
+
+
+def build_consumer() -> AIOKafkaConsumer:
+    """Construct (but do not start) the co-partitioned group consumer.
+
+    A factory so tests can pin the wiring: range assignor (co-partitioning),
+    manual commit, no deserializer, subscription with the rebalance listener."""
+    consumer = AIOKafkaConsumer(
+        bootstrap_servers=KAFKA_BOOTSTRAP,
+        group_id="netops-correlation",
+        auto_offset_reset="latest",
+        # Co-partitioning: see the scale-P0 comment above. Round-robin (the
+        # aiokafka default) breaks tenant stickiness across topics.
+        partition_assignment_strategy=(RangePartitionAssignor,),
+        # SEC-006.2: {} on the plaintext baseline; SSL + the correlation
+        # SVID when the KAFKA_SSL_* env is present (kafka_security_kwargs).
+        **KAFKA_SECURITY,
+        # NO value_deserializer, deliberately. aiokafka runs the deserializer
+        # inside its fetcher (_consumer_record) BEFORE it advances
+        # next_fetch_offset — so a malformed payload raised OUTSIDE the
+        # per-event try below, escaped to the supervisor, and (with manual
+        # commit) the offset never moved: the restart re-read the same poison
+        # bytes forever and every one of the topics starved, with no counter
+        # moving to say so. Decoding moved INSIDE the per-event try, where
+        # the existing quarantine path preserves the payload and the offset
+        # advances past it. Keep the raw bytes here.
+        # Tracker #126 (write-integrity criterion 8): offsets advance ONLY
+        # after the handler returned — never on a timer that runs ahead of
+        # the outcome. Auto-commit could commit an offset whose handler then
+        # crashed BEFORE the durable-DLQ append, losing the event silently.
+        # A quarantined event counts as handled (its payload is preserved);
+        # redelivery after a crash is safe because every critical insert
+        # carries the Phase-3 dedup token (set_dedup_coord below).
+        enable_auto_commit=False,
+    )
+    # Topics via subscribe() (not the constructor) so the rebalance listener
+    # sees every assignment — the ownership log/check above.
+    consumer.subscribe(topics=list(TOPICS), listener=_AssignmentLogger(consumer))
+    return consumer
+
+
 async def consume() -> None:
     """Supervised consumer: a poison batch / codec error / broker hiccup is
     logged and retried with backoff, NEVER a silent task death (§10 — the
@@ -2801,32 +2946,7 @@ async def consume() -> None:
     broker itself is wedged (see CONSUMER_*_TIMEOUT_S above)."""
     backoff = 1.0
     while True:
-        consumer = AIOKafkaConsumer(
-            *TOPICS,
-            bootstrap_servers=KAFKA_BOOTSTRAP,
-            group_id="netops-correlation",
-            auto_offset_reset="latest",
-            # SEC-006.2: {} on the plaintext baseline; SSL + the correlation
-            # SVID when the KAFKA_SSL_* env is present (kafka_security_kwargs).
-            **KAFKA_SECURITY,
-            # NO value_deserializer, deliberately. aiokafka runs the deserializer
-            # inside its fetcher (_consumer_record) BEFORE it advances
-            # next_fetch_offset — so a malformed payload raised OUTSIDE the
-            # per-event try below, escaped to the supervisor, and (with manual
-            # commit) the offset never moved: the restart re-read the same poison
-            # bytes forever and every one of the topics starved, with no counter
-            # moving to say so. Decoding moved INSIDE the per-event try, where
-            # the existing quarantine path preserves the payload and the offset
-            # advances past it. Keep the raw bytes here.
-            # Tracker #126 (write-integrity criterion 8): offsets advance ONLY
-            # after the handler returned — never on a timer that runs ahead of
-            # the outcome. Auto-commit could commit an offset whose handler then
-            # crashed BEFORE the durable-DLQ append, losing the event silently.
-            # A quarantined event counts as handled (its payload is preserved);
-            # redelivery after a crash is safe because every critical insert
-            # carries the Phase-3 dedup token (set_dedup_coord below).
-            enable_auto_commit=False,
-        )
+        consumer = build_consumer()
         # Batched manual commit: per-message commits would round-trip the broker
         # on every event. Committing every N/T bounds replay after a crash to at
         # most N already-handled messages — which dedup absorbs.
@@ -3085,7 +3205,12 @@ SEVERITY_WEIGHT = {
     "info": 1, "information": 1, "informational": 1,
     "debug": 0,
 }
-SYSLOG_BUCKET: dict[str, list[tuple[float, int]]] = {}
+# Keyed by (tenant, hostname) — NOT hostname alone. Two tenants can each own a
+# device named "core-sw1" (or hit the "unknown" fallback); a shared bucket let
+# tenant A's log volume fire a burst finding stamped with tenant B (§3a
+# cross-tenant leak), and made burst output depend on which tenants share an
+# instance (scale P0 tenant-slice equivalence).
+SYSLOG_BUCKET: dict[tuple[str, str], list[tuple[float, int]]] = {}
 SYSLOG_WINDOW = 60.0   # seconds
 SYSLOG_THRESHOLD = 30  # cumulative weight
 # Cap on distinct syslog hostnames tracked for burst detection. The key comes
@@ -3749,17 +3874,23 @@ async def handle_syslog(ev: dict) -> None:
     if weight == 0:
         return
     now = time.time()
-    bucket = SYSLOG_BUCKET.setdefault(host, [])
+    # Tenant-scoped bucket key: cp_tenant is the VERIFIED tenant from the top
+    # of this handler (a refused claim returned before reaching here), so two
+    # tenants sharing a hostname can never pool weight into one finding — and
+    # a finding's burst math is identical whether the tenant's slice runs
+    # alone or alongside every other tenant (scale P0 equivalence).
+    bkey = (cp_tenant, host)
+    bucket = SYSLOG_BUCKET.setdefault(bkey, [])
     bucket.append((now, weight))
     # Drop expired entries.
     cutoff = now - SYSLOG_WINDOW
-    SYSLOG_BUCKET[host] = [(t, w) for t, w in bucket if t >= cutoff]
+    SYSLOG_BUCKET[bkey] = [(t, w) for t, w in bucket if t >= cutoff]
     # The per-host LISTS were pruned but the KEY SET never was — and the key is
     # the device-supplied, spoofable syslog hostname, so a single misbehaving or
     # hostile sender could grow this map without limit. Sweep empty buckets, and
     # hard-cap the key set as the backstop.
     _sweep_syslog_buckets(now)
-    total = sum(w for _, w in SYSLOG_BUCKET[host])
+    total = sum(w for _, w in SYSLOG_BUCKET[bkey])
     if total >= SYSLOG_THRESHOLD:
         await emit(
             kind="correlation",
@@ -3770,8 +3901,9 @@ async def handle_syslog(ev: dict) -> None:
             description=f"≥{SYSLOG_THRESHOLD} severity-points within {int(SYSLOG_WINDOW)}s window.",
             score=float(total),
             labels={"host": host},
+            tenant_id=cp_tenant,
         )
-        SYSLOG_BUCKET[host] = []   # reset so we don't spam
+        SYSLOG_BUCKET[bkey] = []   # reset so we don't spam
 
 
 async def handle_flow(ev: dict) -> None:
@@ -4094,6 +4226,15 @@ async def metrics_exposition():
 async def health() -> dict:
     return {
         "status": "ok",
+        # Scale P0: per-instance partition ownership (co-partitioned tenant
+        # slices). PER-INSTANCE diagnostics by design — with --scale
+        # correlation=N, Docker DNS round-robins correlation:8000, so this
+        # names WHICH slice answered; rebalances counts group churn.
+        "consumer": {
+            "assignment": {t: p for t, p in CONSUMER_ASSIGNMENT.items() if p},
+            "partition_totals": dict(CONSUMER_PARTITION_TOTALS),
+            "rebalances": CONSUMER_REBALANCES,
+        },
         "engine_v2": {
             "corr_signals_enabled": CORR_SIGNALS_ENABLED,
             "open_episodes": DETECTOR.open_episodes(),

@@ -425,7 +425,8 @@ services:
   #   FLOWS://9095 TLS   (client.auth=none)          — goflow2 ONLY (owner
   #     option-1 decision 2026-08-05: goflow2 v2.2.1 has no client-cert flags
   #     and SASL is rejected §0a; its ANONYMOUS principal is ACL-bounded to
-  #     produce netops.flows — SEC-007.1).
+  #     produce netops.flows.raw — SEC-007.1; scale P0 moved goflow2 to the
+  #     raw topic, re-keyed by vector-router).
   # Authorizer runs in OBSERVE posture (allow.everyone=true) so denials log
   # before anything enforces. Principal mapping folds the SVID's
   # CN=spiffe://... down to the bare service name for readable ACLs.
@@ -518,7 +519,9 @@ services:
         umask 077 && cat /certs-src/kafka.key /certs-src/kafka.crt > /tmp/ks.pem
         && cp /certs-src/ca.pem /tmp/ts.pem
         && printf 'security.protocol=SSL\nssl.keystore.type=PEM\nssl.keystore.location=/tmp/ks.pem\nssl.truststore.type=PEM\nssl.truststore.location=/tmp/ts.pem\n' > /tmp/admin.properties
-        && for t in netops.applogs netops.syslog netops.flows netops.snmptrap
+        && p="$${BUS_PARTITIONS:-1}"
+        && for t in netops.applogs netops.syslog netops.flows netops.flows.raw
+        netops.snmptrap
         netops.probes netops.metrics netops.cloud netops.app.identities.v1
         netops.controller_events netops.app.edge netops.verification
         netops.cloudlogs netops.cloudcosts netops.deadletter
@@ -526,7 +529,17 @@ services:
         /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9094
         --command-config /tmp/admin.properties
         --create --if-not-exists --topic "$$t"
-        --partitions 1 --replication-factor 1 || exit 1; done
+        --partitions "$$p" --replication-factor 1 || exit 1;
+        cur="$$(/opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9094
+        --command-config /tmp/admin.properties
+        --describe --topic "$$t"
+        | sed -n 's/.*PartitionCount: \([0-9]*\).*/\1/p' | head -1)";
+        if [ -z "$$cur" ]; then echo "kafka-init: describe $$t failed" >&2; exit 1; fi;
+        if [ "$$cur" -lt "$$p" ]; then
+        echo "kafka-init: $$t partitions $$cur -> $$p" >&2;
+        /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9094
+        --command-config /tmp/admin.properties
+        --alter --topic "$$t" --partitions "$$p" || exit 1; fi; done
 
   # SEC-006.2 client 1/5: kafka-exporter on the mTLS listener (metrics-only —
   # lowest blast radius, per the epic's cutover order). `command` replaces the
@@ -547,7 +560,8 @@ services:
   # FLOWS://9095 — encrypted + server-verified TLS, NO client cert (v2.2.1
   # has no client-cert flags; SASL rejected §0a). Trust rides SSL_CERT_FILE
   # (goflow2 is Go). Identity on this hop is ANONYMOUS by construction;
-  # SEC-007.1 bounds it to produce-only on netops.flows. `command` replaces
+  # SEC-007.1 bounds it to produce-only on netops.flows.raw (scale P0: the
+  # router re-keys it by tenant onto netops.flows). `command` replaces
   # the base list wholesale, so everything is restated.
   goflow2:
     command:
@@ -560,8 +574,10 @@ services:
       - "-transport.kafka.brokers"
       - "kafka:9095"
       - "-transport.kafka.tls"
+      # Scale P0: raw topic; vector-router re-keys by tenant onto netops.flows
+      # (see the base compose goflow2 note).
       - "-transport.kafka.topic"
-      - "netops.flows"
+      - "netops.flows.raw"
       - "-transport.kafka.compression"
       - "snappy"
     environment:
