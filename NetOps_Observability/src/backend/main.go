@@ -1130,7 +1130,14 @@ func devicesPath() string {
 }
 
 // newDeviceStore wires the manual-device store onto the platform kv + logger.
+// When the active backend supports per-record persistence (both production
+// backends do), the store gets the prefix capability and writes O(1) records
+// per Put/Remove instead of the whole fleet (GA scale P0); otherwise it keeps
+// the whole-blob path.
 func newDeviceStore(path string) *discovery.DevStore {
+	if _, ok := platformdb.ActivePrefix(); ok {
+		return discovery.NewDevStore(path, platformPrefixKV{}, logError)
+	}
 	return discovery.NewDevStore(path, platformKV{}, logError)
 }
 

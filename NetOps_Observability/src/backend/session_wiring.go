@@ -20,6 +20,18 @@ type platformKV struct{}
 func (platformKV) Load(key string) ([]byte, error) { return platformdb.Load(key) }
 func (platformKV) Save(key string, b []byte) error { return platformdb.Save(key, b) }
 
+// platformPrefixKV additionally exposes the OPTIONAL per-record prefix
+// capability (platformdb.PrefixBackend). Wire it ONLY when
+// platformdb.ActivePrefix() reports the active backend supports it — handing
+// it out unconditionally would defeat the capability type-assertion in stores
+// (they would see the methods and then hit ErrNoPrefixCapability at runtime).
+type platformPrefixKV struct{ platformKV }
+
+func (platformPrefixKV) LoadPrefix(prefix string) (map[string][]byte, error) {
+	return platformdb.LoadPrefix(prefix)
+}
+func (platformPrefixKV) Delete(key string) error { return platformdb.Delete(key) }
+
 // sessionDeps returns the store backend and error sink the session stores run
 // against.
 func sessionDeps() (session.KV, session.Errorf) {
