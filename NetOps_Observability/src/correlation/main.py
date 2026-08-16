@@ -4283,6 +4283,11 @@ async def health() -> dict:
             "handler_failures": dict(sorted(HANDLER_FAILURES.items())),
             "quarantined_events": len(QUARANTINE),
             "quarantine_write_failures": QUARANTINE_WRITE_FAILURES,
+            # GA counter-exposure contract (test_ga_failure_accounting): every
+            # module-level failure/drop counter MUST surface here. A rotation
+            # is a capped-DLQ eviction of the oldest .1 file — old payloads
+            # aging out is a (bounded, intended) loss and must be visible.
+            "quarantine_rotations": QUARANTINE_ROTATIONS,
             "topology_stale": _topology_stale(datetime.now(timezone.utc)),
             # Perf defect #2: the batched corr_signals write path. pending>0 is
             # normal (≤2s of traffic); rows_quarantined>0 means a rejected batch
@@ -4347,6 +4352,12 @@ async def health() -> dict:
             "verification_received": VERIFICATION_RECEIVED,
             "verification_signals": VERIFICATION_SIGNALS,
             "verification_dropped": VERIFICATION_DROPPED,
+            # #128 wireless lane — was the one ingest lane with counters but no
+            # exposure (found by the GA counter-exposure contract test): a
+            # default-closed drop nobody can see is a silent loss.
+            "wireless_received": WIRELESS_RECEIVED,
+            "wireless_signals": WIRELESS_SIGNALS,
+            "wireless_dropped": WIRELESS_DROPPED,
         },
     }
 
