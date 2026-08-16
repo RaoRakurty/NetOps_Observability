@@ -192,6 +192,7 @@ func TestDeliverM11NamedChannelSkipRecipients(t *testing.T) {
 		now: fixedNow,
 	}
 	got := d.Deliver(context.Background(), deliverReq{
+		Cross:          true, // named-channel dispatch is platform-owned (M15)
 		Channels:       []string{"slack-ops", "pd-oncall"},
 		Attempt:        2,
 		SkipRecipients: map[string]bool{"slack-ops": true}, // delivered on attempt 1

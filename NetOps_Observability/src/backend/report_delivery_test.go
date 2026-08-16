@@ -110,7 +110,7 @@ func TestDeliverNamedChannelsRecordPerChannel(t *testing.T) {
 		},
 		now: fixedNow,
 	}
-	got := d.Deliver(context.Background(), deliverReq{Channels: []string{"slack", "pagerduty"}, Alert: models.Alert{Rule: "report"}})
+	got := d.Deliver(context.Background(), deliverReq{Cross: true, Channels: []string{"slack", "pagerduty"}, Alert: models.Alert{Rule: "report"}}) // Cross: named-channel dispatch is platform-owned (M15)
 	if len(got) != 2 {
 		t.Fatalf("statuses = %d, want 2", len(got))
 	}
