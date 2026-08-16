@@ -38,14 +38,14 @@ import os
 import time
 import uuid
 from collections import Counter, OrderedDict, deque
-from collections.abc import Iterable
+from collections.abc import Awaitable, Callable, Iterable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from dataclasses import replace as dc_replace
 from datetime import datetime, timezone
 
 import httpx
-from aiokafka import AIOKafkaConsumer
+from aiokafka import AIOKafkaConsumer, TopicPartition
 from aiokafka.abc import ConsumerRebalanceListener
 from aiokafka.coordinator.assignors.range import RangePartitionAssignor
 from aiokafka.partitioner import murmur2
@@ -1727,6 +1727,10 @@ async def engine_cycle() -> None:
     by_tenant: dict[str, list[Signal]] = {}
     for s in WINDOW_BUFFER:
         by_tenant.setdefault(s.tenant_id, []).append(s)
+    # P1 max-poll thrash: the prune + partition pass above is pure sync over a
+    # buffer that can hold 50k signals in a storm — hand the loop back to the
+    # consumer/heartbeat tasks before the per-tenant work starts.
+    await asyncio.sleep(0)
 
     gap_hints = 0
     adj_by_tenant = topology_links_by_tenant()  # L2/L3 links for the adjacency rung (G1)
@@ -1794,6 +1798,10 @@ async def engine_cycle() -> None:
     materialized = {s.correlation_id for _, _, snaps in evaluated for s in snaps}
     seen_this_cycle: set[str] = set()
     for tenant, window, snapshots in evaluated:
+        # P1 max-poll thrash: a damped-heavy cycle walks every snapshot with
+        # no awaits (content_hash is sync CPU) — yield per tenant so the
+        # consumer's poll cadence survives a storm cycle.
+        await asyncio.sleep(0)
         for snap in snapshots:
             gap_hints += snap.gap_hints
             reg = OPEN_OBJECTS.get(snap.correlation_id)
@@ -2290,6 +2298,16 @@ CORR_BATCH_QUEUE_MAX = int(os.environ.get("CORR_BATCH_QUEUE_MAX", "5000"))
 BATCH_FLUSHES = 0            # committed batch inserts (monotonic)
 BATCH_ROWS_FLUSHED = 0       # rows landed through the batcher (monotonic)
 BATCH_ROWS_QUARANTINED = 0   # rows a rejected batch preserved in the DLQ
+BATCH_ROWS_REPLAY_DEDUPED = 0  # redelivered rows dropped by the commit guard
+# P1 thrash fix: identities of rows that FLUSHED but whose Kafka offsets have
+# not yet committed. A member ejection between flush and commit redelivers the
+# messages; their handlers re-add the same rows to a FRESH batch whose
+# content-hash token differs from the one that landed — so ClickHouse could
+# not dedup and corr_signals (plain MergeTree) got duplicate causal rows. The
+# guard makes the replayed add a no-op within this process (the dominant
+# thrash case: the supervisor rebuilds the CONSUMER, not the process). Bounded
+# per §9; a successful offset commit clears it (nothing left to replay).
+CORR_BATCH_COMMIT_GUARD_MAX = int(os.environ.get("CORR_BATCH_COMMIT_GUARD_MAX", "100000"))
 
 
 class _TableBatch:
@@ -2327,6 +2345,10 @@ class CHBatcher:
         # before touching the live batch, and only a successful retry frees the
         # slot for a newly-failed live batch.
         self._retry: dict[str, _TableBatch] = {}
+        # Flushed-but-uncommitted row identities per table (see
+        # CORR_BATCH_COMMIT_GUARD_MAX above). OrderedDict as a bounded
+        # insertion-ordered set: oldest identities evict first.
+        self._flushed_uncommitted: dict[str, OrderedDict] = {}
         self._lock = asyncio.Lock()
 
     @staticmethod
@@ -2352,7 +2374,14 @@ class CHBatcher:
         n = self.pending()
         self._batches.clear()
         self._retry.clear()
+        self._flushed_uncommitted.clear()
         return n
+
+    def note_committed(self) -> None:
+        """The Kafka offsets covering every flushed row have COMMITTED — no
+        redelivery of them is possible, so the replay guard can forget them.
+        Called by the consumer after each successful offset commit."""
+        self._flushed_uncommitted.clear()
 
     def due(self, now: float | None = None) -> bool:
         now = time.monotonic() if now is None else now
@@ -2363,6 +2392,7 @@ class CHBatcher:
                    for b in self._batches.values())
 
     async def add(self, table: str, row: dict) -> None:
+        global BATCH_ROWS_REPLAY_DEDUPED
         b = self._batches.get(table)
         if b is None:
             b = self._batches[table] = _TableBatch()
@@ -2370,6 +2400,12 @@ class CHBatcher:
         parked = self._retry.get(table)
         if rid in b.ids or (parked is not None and rid in parked.ids):
             return  # H12: redelivered row already pending — replay, not new data
+        if rid in self._flushed_uncommitted.get(table, ()):
+            # Post-flush redelivery (member ejected between flush and commit):
+            # the row already LANDED; re-adding it would re-insert it under a
+            # different batch token and duplicate it (plain MergeTree).
+            BATCH_ROWS_REPLAY_DEDUPED += 1
+            return
         b.ids.add(rid)
         b.rows.append(row)
         if len(b.rows) >= CORR_BATCH_MAX_ROWS or self.pending() >= CORR_BATCH_QUEUE_MAX:
@@ -2427,6 +2463,12 @@ class CHBatcher:
             return
         BATCH_FLUSHES += 1
         BATCH_ROWS_FLUSHED += len(b.rows)
+        # Remember what landed until its offsets commit (replay guard, §9-bounded).
+        guard = self._flushed_uncommitted.setdefault(table, OrderedDict())
+        for rid in b.ids:
+            guard[rid] = None
+        while len(guard) > CORR_BATCH_COMMIT_GUARD_MAX:
+            guard.popitem(last=False)
 
     @staticmethod
     def _quarantine_rows(table: str, rows: list[dict]) -> None:
@@ -2604,6 +2646,45 @@ CONSUMER_START_TIMEOUT_S = float(os.environ.get("CONSUMER_START_TIMEOUT_S", "90"
 # unhandled offset is never committed.
 CORR_COMMIT_EVERY_N = int(os.environ.get("CORR_COMMIT_EVERY_N", "100"))
 CORR_COMMIT_EVERY_S = float(os.environ.get("CORR_COMMIT_EVERY_S", "5"))
+
+# ── Group-membership tuning (P1 max-poll rebalance thrash, 2026-08-16) ──────
+#
+# The G2 mini-ladder measured the failure live: a 24k-event backlog put the
+# consumer in a session-expiry rebalance loop (78x UnknownMemberIdError, 9x
+# CommitFailedError, drain collapsed 1k/s -> ~40/s, lag never drained). The
+# container logs show 17-second event-loop stalls (19:15:34,257 -> 19:15:51,342
+# with ZERO lines between) — longer than aiokafka's 10s session_timeout_ms
+# default, so the broker ejected the member, the next commit raised
+# CommitFailedError, the uncommitted batch replayed, and the loop repeated.
+#
+# The stalls themselves are fixed structurally (run_window in an executor,
+# batched CH writes, the explicit yield cadence below). These values make the
+# session contract honest on top of that fix, with the arithmetic:
+#
+#   * session_timeout 30s / heartbeat 3s: worst measured event-loop latency
+#     with the engine chewing a storm window in the executor is ~0.2s (GIL
+#     convoy, gil_probe 2026-08-16), so 30s tolerates a >100x regression plus
+#     GC/CPU-throttle pauses. 3s = session/10 (Kafka's recommended <= 1/3).
+#   * max_poll_interval 300s (explicit, was implicit default): the worst
+#     legitimate gap between polls is one loop iteration = handle() with up to
+#     ~5 direct CH inserts x 10s httpx timeout (wireless lane) + a commit
+#     (flush <= 10s/table + 30s commit bound) ~= 90s << 300s. A gap beyond
+#     that is a real wedge and SHOULD trigger leave + supervisor restart.
+#   * rebalance_timeout 60s: the revoke hook flushes + commits before
+#     partitions move (see _AssignmentLogger); its bound is one batch flush
+#     (<= 10s) + one commit (<= 30s), so 60s covers it with margin.
+CORR_SESSION_TIMEOUT_MS = int(os.environ.get("CORR_SESSION_TIMEOUT_MS", "30000"))
+CORR_HEARTBEAT_INTERVAL_MS = int(os.environ.get("CORR_HEARTBEAT_INTERVAL_MS", "3000"))
+CORR_MAX_POLL_INTERVAL_MS = int(os.environ.get("CORR_MAX_POLL_INTERVAL_MS", "300000"))
+CORR_REBALANCE_TIMEOUT_MS = int(os.environ.get("CORR_REBALANCE_TIMEOUT_MS", "60000"))
+# Cooperative poll cadence: aiokafka's fetcher returns already-buffered records
+# WITHOUT yielding to the event loop (fetcher.next_record's fast path), and a
+# handler whose awaits all complete synchronously (CH batcher below its flush
+# thresholds) never yields either — so under a backlog the consume task could
+# monopolize the loop between commit-triggered flushes and starve the heartbeat
+# task. Force a loop yield every N messages: N=20 x <=10ms/event worst-case
+# sync handler CPU = <=200ms between yields << heartbeat 3s << session 30s.
+CORR_CONSUME_YIELD_EVERY_N = int(os.environ.get("CORR_CONSUME_YIELD_EVERY_N", "20"))
 
 
 async def _stop_bounded(consumer) -> None:
@@ -2836,6 +2917,8 @@ def quarantine_event(topic: str, event: object, exc: BaseException) -> None:
 CONSUMER_ASSIGNMENT: dict[str, list[int]] = {}   # topic -> owned partitions (last rebalance)
 CONSUMER_PARTITION_TOTALS: dict[str, int] = {}   # topic -> total partitions (broker metadata)
 CONSUMER_REBALANCES = 0                          # monotonic; /healthz + logs
+CONSUMER_REVOKE_COMMITS = 0                      # revoke-hook flush+commit landed
+CONSUMER_REVOKE_COMMIT_FAILURES = 0              # revoke-hook could not commit (replay-safe)
 
 
 def tenant_partition(tenant: str, num_partitions: int) -> int:
@@ -2856,9 +2939,34 @@ class _AssignmentLogger(ConsumerRebalanceListener):
 
     def __init__(self, consumer: AIOKafkaConsumer) -> None:
         self._consumer = consumer
+        # P1 thrash fix: consume() installs its flush-then-commit closure here
+        # so work that is already durably persisted is acknowledged BEFORE the
+        # partitions move to another member (aiokafka keeps the member's
+        # heartbeat alive during this callback precisely so it can commit).
+        # None until consume() wires it — a bare listener stays log-only.
+        self.revoke_hook: Callable[[], Awaitable[None]] | None = None
 
     async def on_partitions_revoked(self, revoked) -> None:
         log.info("rebalance: %d partition(s) revoked", len(revoked))
+        if self.revoke_hook is None or not revoked:
+            return
+        global CONSUMER_REVOKE_COMMITS, CONSUMER_REVOKE_COMMIT_FAILURES
+        try:
+            # Bounded (§9): the hook's own awaits are individually bounded
+            # (flush <= httpx timeout/table, commit <= CONSUMER_STOP_TIMEOUT_S)
+            # but the JOIN must never wedge on a surprise — cap the whole hook.
+            await asyncio.wait_for(
+                self.revoke_hook(), timeout=CORR_REBALANCE_TIMEOUT_MS / 1000)
+            CONSUMER_REVOKE_COMMITS += 1
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:  # noqa: BLE001 — a raise here would kill the rejoin
+            # Replay-safe by design: an uncommitted offset is redelivered and
+            # the dedup machinery (per-message tokens + the batcher's commit
+            # guard) absorbs it. Counted + logged, never silent (§10).
+            CONSUMER_REVOKE_COMMIT_FAILURES += 1
+            log.warning("revoke-time flush/commit failed (replay-safe, dedup "
+                        "absorbs the redelivery): %s", type(exc).__name__)
 
     async def on_partitions_assigned(self, assigned) -> None:
         global CONSUMER_REBALANCES
@@ -2910,6 +3018,12 @@ def build_consumer() -> AIOKafkaConsumer:
         # Co-partitioning: see the scale-P0 comment above. Round-robin (the
         # aiokafka default) breaks tenant stickiness across topics.
         partition_assignment_strategy=(RangePartitionAssignor,),
+        # P1 max-poll thrash: explicit group-membership contract — the
+        # arithmetic behind these values lives at CORR_SESSION_TIMEOUT_MS.
+        session_timeout_ms=CORR_SESSION_TIMEOUT_MS,
+        heartbeat_interval_ms=CORR_HEARTBEAT_INTERVAL_MS,
+        max_poll_interval_ms=CORR_MAX_POLL_INTERVAL_MS,
+        rebalance_timeout_ms=CORR_REBALANCE_TIMEOUT_MS,
         # SEC-006.2: {} on the plaintext baseline; SSL + the correlation
         # SVID when the KAFKA_SSL_* env is present (kafka_security_kwargs).
         **KAFKA_SECURITY,
@@ -2933,7 +3047,11 @@ def build_consumer() -> AIOKafkaConsumer:
     )
     # Topics via subscribe() (not the constructor) so the rebalance listener
     # sees every assignment — the ownership log/check above.
-    consumer.subscribe(topics=list(TOPICS), listener=_AssignmentLogger(consumer))
+    listener = _AssignmentLogger(consumer)
+    consumer.subscribe(topics=list(TOPICS), listener=listener)
+    # Same-module wiring point for consume()'s revoke hook (the closure over
+    # the commit ledger cannot exist before the consumer does).
+    consumer._corr_listener = listener  # our own consumer instance, same module
     return consumer
 
 
@@ -2952,6 +3070,12 @@ async def consume() -> None:
         # most N already-handled messages — which dedup absorbs.
         uncommitted = 0
         last_commit = time.monotonic()
+        # F-38 ledger: next-commit offset per partition, advanced ONLY after a
+        # message was handled (or durably quarantined — that counts as handled).
+        # The revoke hook commits exactly this dict, so a rebalance that fires
+        # MID-handle can never acknowledge the in-flight message.
+        handled_offsets: dict[TopicPartition, int] = {}
+        since_yield = 0
 
         async def _commit(force: bool = False, consumer: AIOKafkaConsumer = consumer) -> None:
             # `consumer` bound at definition time (B023): the enclosing while-loop
@@ -2971,8 +3095,36 @@ async def consume() -> None:
             # as handled — exactly the per-row discipline, at batch granularity.
             await SIGNAL_BATCH.flush()
             await asyncio.wait_for(consumer.commit(), timeout=CONSUMER_STOP_TIMEOUT_S)
+            # Every flushed row's offset is now committed — the batcher's
+            # replay guard has nothing left to absorb (P1 thrash fix).
+            SIGNAL_BATCH.note_committed()
             uncommitted = 0
             last_commit = time.monotonic()
+
+        async def _revoke_commit(consumer: AIOKafkaConsumer = consumer,
+                                 handled_offsets: dict = handled_offsets) -> None:
+            # Rebalance listener hook (P1 max-poll thrash): before this
+            # member's partitions move, land what is already safely persisted
+            # so the successor (or this member's own rejoin) does not replay
+            # the whole uncommitted batch. Flush FIRST (never acknowledge an
+            # offset whose rows are still buffered — the F-38 anchor), then
+            # commit ONLY the handled ledger: the in-flight message's offset
+            # is not in it, so a revoke mid-handle cannot advance past
+            # unpersisted work. The batcher's replay guard is deliberately
+            # NOT cleared here — the hook's flush may include rows of the
+            # in-flight message, whose offset stays uncommitted.
+            nonlocal uncommitted, last_commit
+            await SIGNAL_BATCH.flush()
+            if handled_offsets:
+                await asyncio.wait_for(
+                    consumer.commit(dict(handled_offsets)),
+                    timeout=CONSUMER_STOP_TIMEOUT_S)
+                uncommitted = 0
+                last_commit = time.monotonic()
+
+        listener = getattr(consumer, "_corr_listener", None)
+        if listener is not None:
+            listener.revoke_hook = _revoke_commit
 
         try:
             await asyncio.wait_for(consumer.start(), timeout=CONSUMER_START_TIMEOUT_S)
@@ -3011,11 +3163,26 @@ async def consume() -> None:
                     # — commit through it so restart resumes AFTER it instead
                     # of replaying the poison forever.
                     if consecutive_failures >= CORR_QUARANTINE_BURST_MAX:
+                        handled_offsets[TopicPartition(msg.topic, msg.partition)] = msg.offset + 1
                         uncommitted += 1
                         await _commit(force=True)
                         raise
+                # Handled (or quarantined — payload durably kept): the ledger
+                # may now advance past this message.
+                handled_offsets[TopicPartition(msg.topic, msg.partition)] = msg.offset + 1
                 uncommitted += 1
                 await _commit()
+                # Cooperative poll cadence (P1 max-poll thrash): aiokafka's
+                # buffered fast path and an all-sync handler never yield, so
+                # under a backlog this task could monopolize the event loop
+                # between commit-triggered flushes and starve the heartbeat
+                # task into a session-timeout ejection. Hand the loop back
+                # every CORR_CONSUME_YIELD_EVERY_N messages (arithmetic at the
+                # constant).
+                since_yield += 1
+                if since_yield >= CORR_CONSUME_YIELD_EVERY_N:
+                    since_yield = 0
+                    await asyncio.sleep(0)
         except asyncio.CancelledError:
             with contextlib.suppress(Exception):
                 await _commit(force=True)  # clean shutdown: nothing replays
@@ -4169,6 +4336,14 @@ async def metrics_exposition():
         f'corr_signal_batch{{event="flushes"}} {BATCH_FLUSHES}',
         f'corr_signal_batch{{event="rows_flushed"}} {BATCH_ROWS_FLUSHED}',
         f'corr_signal_batch{{event="rows_quarantined"}} {BATCH_ROWS_QUARANTINED}',
+        f'corr_signal_batch{{event="rows_replay_deduped"}} {BATCH_ROWS_REPLAY_DEDUPED}',
+        # P1 max-poll thrash: revoke-hook flush+commit outcomes. "failed" is
+        # replay-safe (dedup absorbs) but rising = rebalances are landing on a
+        # broken flush path.
+        "# HELP corr_consumer_revoke_commits_total Rebalance revoke-hook flush+commit outcomes.",
+        "# TYPE corr_consumer_revoke_commits_total counter",
+        f'corr_consumer_revoke_commits_total{{outcome="ok"}} {CONSUMER_REVOKE_COMMITS}',
+        f'corr_consumer_revoke_commits_total{{outcome="failed"}} {CONSUMER_REVOKE_COMMIT_FAILURES}',
         "# TYPE corr_signal_batch_pending gauge",
         f"corr_signal_batch_pending {SIGNAL_BATCH.pending()}",
         "# TYPE corr_archive_rows_written counter",
@@ -4234,6 +4409,11 @@ async def health() -> dict:
             "assignment": {t: p for t, p in CONSUMER_ASSIGNMENT.items() if p},
             "partition_totals": dict(CONSUMER_PARTITION_TOTALS),
             "rebalances": CONSUMER_REBALANCES,
+            # P1 max-poll thrash: revoke-hook outcomes. "failures" rising =
+            # rebalances landing on a broken flush path (replay-safe, but
+            # every one of them re-processes the uncommitted batch).
+            "revoke_commits": CONSUMER_REVOKE_COMMITS,
+            "revoke_commit_failures": CONSUMER_REVOKE_COMMIT_FAILURES,
         },
         "engine_v2": {
             "corr_signals_enabled": CORR_SIGNALS_ENABLED,

@@ -132,6 +132,37 @@ moved to produce-only on `netops.flows.raw`; the router gained produce on
 * Commit/replay semantics are unchanged (manual batched commits; dedup
   tokens absorb redelivery, including partition hand-offs at rebalance).
 
+### Group-membership tuning (P1 max-poll rebalance thrash, 2026-08-16)
+
+The G2 mini-ladder measured the defect live: a 24k-event backlog put the
+consumer in a session-expiry rebalance loop (78× `UnknownMemberIdError`,
+9× `CommitFailedError`, 3 supervisor restarts; drain collapsed ~1k/s → ~40/s,
+lag never returned to baseline). Container logs showed 17-second event-loop
+stalls — beyond aiokafka's 10 s `session_timeout_ms` default — so the broker
+ejected the member, the commit failed, the batch replayed, repeat.
+
+The stalls are fixed structurally (`run_window` in an executor; cooperative
+yield every `CORR_CONSUME_YIELD_EVERY_N` messages in the consume loop —
+aiokafka's buffered fast path never yields on its own; batched CH writes).
+`build_consumer()` additionally pins an honest membership contract
+(env-tunable, defaults in `main.py`):
+
+| Setting | Default | Arithmetic |
+|---|---|---|
+| `CORR_SESSION_TIMEOUT_MS` | 30000 | worst measured loop latency with the engine chewing a storm window in the executor is ~0.2 s (GIL convoy); 30 s tolerates a >100× regression plus GC/CPU-throttle pauses |
+| `CORR_HEARTBEAT_INTERVAL_MS` | 3000 | session/10 (Kafka guidance ≤ 1/3) |
+| `CORR_MAX_POLL_INTERVAL_MS` | 300000 | worst legitimate poll gap = one loop iteration ≈ handler (≤5 direct CH inserts × 10 s httpx timeout) + commit (flush ≤10 s/table + 30 s commit bound) ≈ 90 s ≪ 300 s; a bigger gap is a real wedge and SHOULD leave the group |
+| `CORR_REBALANCE_TIMEOUT_MS` | 60000 | revoke hook bound = one flush (≤10 s) + one commit (≤30 s) |
+| `CORR_CONSUME_YIELD_EVERY_N` | 20 | 20 msgs × ≤10 ms/event sync CPU = ≤200 ms between loop hand-backs ≪ heartbeat 3 s |
+
+On `on_partitions_revoked` the consumer now flushes the signal batch and
+commits exactly the handled-offset ledger (never the in-flight message —
+F-38), so a rebalance no longer replays the whole uncommitted batch; a
+member ejected between flush and commit is absorbed by the batcher's
+commit guard (redelivered rows are not re-inserted — `corr_signals` is
+plain MergeTree and would otherwise duplicate). Regression suite:
+`src/correlation/test_consume_poll_cadence.py`.
+
 ## HTTP endpoints under `--scale N` (Docker DNS round-robins `correlation:8000`)
 
 | Endpoint | Backing | Multi-replica semantics |
