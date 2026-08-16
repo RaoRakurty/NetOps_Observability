@@ -62,15 +62,12 @@ ALLOWLIST: dict[tuple[str, int], str] = {
     ("seed-test-traffic.py", 183): "test-traffic generator prints each send failure to stderr and keeps seeding",
     ("secret_rotation.py", 251): "service-owned marker unreadable from operator uid; commented, rotation proceeds",
     ("secret_rotation.py", 266): "service-owned marker dir unreadable from operator uid; commented fallback",
-    ("install.py", 2157): "external-broker reachability preflight; warn states services retry from inside the network",
-    # -- §16.1 FINDINGS (2026-08-16): the chown-swallow class OUTSIDE the fixed
-    # chown_tree path. TODO(#scale-P0 follow-up): route these secondary chowns
-    # through chown_tree (or drop them) — allowlisted, NOT endorsed. Out of
-    # scope for the G1 test wave; do not grow this block.
-    ("install.py", 1322): "TODO: enrichment-seed chown swallowed ('api adopts on first write') — route via chown_tree",
-    ("install.py", 1340): "TODO: processors-seed chown swallowed ('api adopts on first write') — route via chown_tree",
-    ("install.py", 1365): "TODO: appid/cloud-fixture chown swallowed ('api adopts where it can') — route via chown_tree",
-    ("install.py", 1378): "TODO: vuln-dir SUDO_UID chown swallowed — route via chown_tree",
+    ("install.py", 2169): "external-broker reachability preflight; warn states services retry from inside the network",
+    # The four 2026-08-16 chown-swallow findings (enrichment seed, processors
+    # seed, appid/cloud fixtures, vuln SUDO_UID dir) were RESOLVED the same
+    # day: all now route through chown_tree (repair-or-refuse), and the vuln
+    # site validates SUDO_UID/SUDO_GID explicitly with a loud warn on a
+    # mangled environment. See tests/test_install_data_dirs.py.
 }
 
 # Rule 1: literal swallows, any text file (catches heredoc Python in .sh too).

@@ -199,6 +199,8 @@ def test_ensure_data_dirs_covers_tls_and_deadletter(fake_root, monkeypatch):
         seen[name] = (uid, gid)
 
     monkeypatch.setattr(install, "chown_tree", record)
+    monkeypatch.delenv("SUDO_UID", raising=False)
+    monkeypatch.delenv("SUDO_GID", raising=False)
     install.ensure_data_dirs(fake_root)
 
     # The two dirs whose wrong ownership shipped broken deployments:
@@ -207,6 +209,45 @@ def test_ensure_data_dirs_covers_tls_and_deadletter(fake_root, monkeypatch):
     # ...and both directories exist afterwards.
     assert (fake_root / "data" / "tls").is_dir()
     assert (fake_root / "data" / "correlation" / "deadletter").is_dir()
+    # 2026-08-16 §16.1 findings: the api-written seed trees and the
+    # operator-written feed dirs go through the SAME repair-or-refuse
+    # contract — their chowns used to be `except OSError: pass`.
+    api_ug = (os.getuid(), os.getgid())
+    assert seen["data/api/enrichment"] == api_ug          # api re-exports the CSV
+    assert seen["data/api/processors"] == api_ug          # api rewrites processors.yaml
+    assert seen["data/api/appid-feeds"] == api_ug         # operator drops feeds
+    assert seen["data/api/cloud-fixtures"] == api_ug      # operator drops fixtures
+    # No SUDO_UID → the operator-owned vuln dir is not chowned at all.
+    assert not any("vuln" in name for name in seen)
+
+
+def test_ensure_data_dirs_hands_vuln_dir_to_the_sudo_invoker(fake_root, monkeypatch):
+    """Under sudo, data/vuln goes to the INVOKING user (they run
+    vuln-feed-prepare.py without root afterwards) — through chown_tree, not
+    the old silently-swallowed chown."""
+    seen: dict[str, tuple[int, int]] = {}
+    monkeypatch.setattr(install, "chown_tree",
+                        lambda d, uid, gid, name: seen.update({name: (uid, gid)}))
+    monkeypatch.setenv("SUDO_UID", "1234")
+    monkeypatch.setenv("SUDO_GID", "5678")
+    install.ensure_data_dirs(fake_root)
+    assert seen["data/vuln (operator-owned)"] == (1234, 5678)
+
+
+def test_ensure_data_dirs_reports_malformed_sudo_ids_and_skips_vuln_chown(
+        fake_root, monkeypatch, capsys):
+    """A mangled SUDO_UID must not be guessed around: no chown for data/vuln,
+    and the degraded state is REPORTED (§16.1), never silent."""
+    seen: dict[str, tuple[int, int]] = {}
+    monkeypatch.setattr(install, "chown_tree",
+                        lambda d, uid, gid, name: seen.update({name: (uid, gid)}))
+    monkeypatch.setenv("SUDO_UID", "not-a-uid")
+    monkeypatch.delenv("SUDO_GID", raising=False)
+    install.ensure_data_dirs(fake_root)
+    assert not any("vuln" in name for name in seen)
+    err = capsys.readouterr().err
+    assert "SUDO_UID/SUDO_GID malformed" in err
+    assert "vuln-feed-prepare.py" in err
 
 
 # ── nginx ingress TLS key: same §16.1 class, same contract ───────────────────

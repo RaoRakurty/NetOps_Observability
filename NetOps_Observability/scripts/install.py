@@ -1309,18 +1309,18 @@ def ensure_data_dirs(root: Path) -> None:
     # #20: device→tenant enrichment dir. The api exports the CSV here; the
     # Vector aggregator + correlation mount it read-only. Seed a header-only
     # CSV so the aggregator's enrichment-table load never fails on a cold
-    # start (before the api has written its first map). Owned by the api's
-    # runtime uid (CORRELIX_UID).
+    # start (before the api has written its first map). The api WRITES this
+    # dir at runtime (CSV re-export, path_graph.json), so it must OWN it —
+    # same escalation contract as the service dirs above (chown_tree), never
+    # the old swallowed chown: a wrong-owned enrichment dir means the api
+    # cannot refresh the device→tenant map and telemetry silently keeps the
+    # stale (header-only) tenant stamping.
     enrich = root / "data" / "api" / "enrichment"
     enrich.mkdir(parents=True, exist_ok=True)
     seed = enrich / "device_tenant.csv"
     if not seed.exists():
         seed.write_text("identity,tenant_id\n")
-    try:
-        os.chown(enrich, api_uid, api_gid)
-        os.chown(seed, api_uid, api_gid)
-    except (PermissionError, OSError):
-        pass  # not root; api will adopt it on first write where it can
+    chown_tree(enrich, api_uid, api_gid, "data/api/enrichment")
 
     # Item 121: per-tenant processor rules → generated Vector-router config.
     # The api (nonroot 65532) writes processors/router/processors.yaml; the
@@ -1333,12 +1333,11 @@ def ensure_data_dirs(root: Path) -> None:
     if not proc_seed.exists():
         default = root / "deployment" / "docker" / "vector-router" / "processors-default.yaml"
         proc_seed.write_text(default.read_text())
-    try:
-        os.chown(proc_dir.parent, api_uid, api_gid)
-        os.chown(proc_dir, api_uid, api_gid)
-        os.chown(proc_seed, api_uid, api_gid)
-    except (PermissionError, OSError):
-        pass  # not root; api will adopt it on first write where it can
+    # The api rewrites processors.yaml on first start and on EVERY rule
+    # change, so it must own the tree — a wrong owner means per-tenant rule
+    # changes silently stop reaching the router. Recursive chown_tree on the
+    # parent covers processors/ + router/ + the seed in one contract.
+    chown_tree(proc_dir.parent, api_uid, api_gid, "data/api/processors")
 
     # #81 P1: Application Identification IP→app catalog feeds dir. The api (nonroot
     # 65532) reads vendor IP-range snapshots dropped here by scripts/fetch-appid-feeds.sh
@@ -1359,11 +1358,15 @@ def ensure_data_dirs(root: Path) -> None:
     # uid, 1000 in the lab); the api only reads it.
     cloud_runtime = root / "data" / "api" / "cloud-runtime"
     cloud_runtime.mkdir(parents=True, exist_ok=True)
+    # The api only READS these two (appid.NewCatalogHolder /
+    # cloud.LoadTopologiesLayered — no non-test writes in either package), but
+    # the WRITER is the operator (scripts/fetch-appid-feeds.sh, fixture JSON
+    # drops) whose uid is CORRELIX_UID by construction — and a sudo install /
+    # legacy-.env re-install can leave them owned by the wrong uid, breaking
+    # that operator workflow with EACCES. Same contract as above: repair or
+    # refuse, never swallow.
     for d in (appid_feeds, cloud_fixtures):
-        try:
-            os.chown(d, api_uid, api_gid)
-        except (PermissionError, OSError):
-            pass  # not root; api adopts it where it can
+        chown_tree(d, api_uid, api_gid, f"data/api/{d.name}")
 
     # #13: vulnerability-feed dir. OPERATOR-owned (unlike the service dirs) —
     # the operator writes it with scripts/vuln-feed-prepare.py and the api only
@@ -1373,10 +1376,19 @@ def ensure_data_dirs(root: Path) -> None:
     vuln.mkdir(parents=True, exist_ok=True)
     sudo_uid, sudo_gid = os.environ.get("SUDO_UID"), os.environ.get("SUDO_GID")
     if sudo_uid:
+        # sudo sets numeric SUDO_UID/SUDO_GID itself; a malformed value means a
+        # mangled environment — report it and leave the dir root-owned rather
+        # than guessing an owner (the prepare script will then need sudo, and
+        # the operator was told why). A chown FAILURE, by contrast, escalates
+        # through chown_tree like every other ownership handoff.
         try:
-            os.chown(vuln, int(sudo_uid), int(sudo_gid or sudo_uid))
-        except (PermissionError, OSError, ValueError):
-            pass
+            vuln_uid, vuln_gid = int(sudo_uid), int(sudo_gid or sudo_uid)
+        except ValueError:
+            warn(f"SUDO_UID/SUDO_GID malformed ({sudo_uid!r}/{sudo_gid!r}) — "
+                 f"leaving {vuln} owner unchanged; scripts/vuln-feed-prepare.py "
+                 f"will need sudo (or chown {vuln} to your user) until fixed")
+        else:
+            chown_tree(vuln, vuln_uid, vuln_gid, "data/vuln (operator-owned)")
 
     ok("data/ directories ready")
 
