@@ -83,7 +83,10 @@ Sustained ~8k EPS syslog on this box:
 - OpenSearch never the limit (0 rejections, heap 42%); limit = router bulk ~10k/s.
 - **Recovery:** drains ~10k/s once input stops → a few-min overload = **minutes of
   data staleness** (delayed, not lost, until Kafka retention/disk).
-- **Disk drained ~3 GB during the run**; sustained overload → disk-full in ~1 h = hard stop.
+- **Disk drained ~3 GB over the ~5-minute overload window** (~36 GB/h). Against the
+  ~26 GiB free measured in §1 that projects to disk-full in **~45 min** of SUSTAINED
+  overload = hard stop. (Extrapolated from one short window, not observed to
+  exhaustion; retention TTLs do not reclaim fast enough at this rate.)
 - **No OOM, no restarts, host RAM safe** — ceiling here = throughput/latency + disk,
   not memory.
 
@@ -106,24 +109,37 @@ the two 🔴 fixes first.
 
 ## 7. Recommended resources per host, by device count (plan §25 capacity)
 
-Derived from observed ceilings on this box (4 vCPU/16 GiB = ~L1) + the repo's
-`docs/RESOURCE_SIZING.md` model, **assuming the two 🔴 fixes land** (device-store
-per-row writes; correlation scaled-out). Without those fixes, device count is
-capped at low-thousands and correlation latency is unbounded regardless of hardware.
+**PROVENANCE — read before quoting any row.** Only the ✱-marked row is MEASURED
+(this box, L0/L1). Every other row is MODELED from `docs/RESOURCE_SIZING.md` +
+vendor guidance and has never been run. Treat unmarked rows as a starting point to
+validate on a rig (tracker 153), not as qualified capacity.
 
-**Assumptions per device (steady state):** ~24–48 interfaces polled; ~5 events/device/
-day baseline; modest flows; per-tenant indices. Retention: 14 d logs / 30 d flows /
-default metrics. Numbers are the CORRELIX stack (single-node bundle) footprint —
-add headroom for bursts (§25: qualify at ~2× projected load).
+**CPU/RAM assumptions per device (steady state):** ~24–48 interfaces polled; ~5
+events/device/day syslog baseline; per-tenant indices. Numbers are the CORRELIX
+stack (single-node bundle) footprint — add headroom for bursts (§25: qualify at
+~2× projected load). Assumes the two 🔴 fixes are in (device-store per-row writes,
+shipped 2026-08-17; correlation scaled-out, shipped 2026-08-17); without them
+device count caps at low-thousands and RCA latency is unbounded on any hardware.
+
+**DISK is deliberately NOT sized per device here.** Disk is retention × ingest-rate
+bound, and the dominant terms are FLOW and METRIC volume, which this report never
+measured per device — the syslog baseline above accounts for only tens of MB at
+1k devices, so a per-device disk column would be arithmetic theatre. Size disk from
+`docs/RESOURCE_SIZING.md` (its 32 GiB worked example needs ~1.5 TB at DEFAULT
+retention — an order above what a syslog-only reading would suggest) by feeding your
+real flows/s + retention into `correlix-sizing.yaml`; the planner refuses an install
+whose disk cannot hold the configured retention.
 
 ### On-prem (single host, bundled single-node stack)
-| Devices | vCPU | RAM | Disk (NVMe) | Notes |
-|--------:|-----:|----:|------------:|-------|
-| ≤ 50 (demo/L0) | 4 | 16 GiB | 100 GiB | eval only; OpenSearch alone idles ~2.3 GiB |
-| ≤ 250 | 8 | 32 GiB | 250 GiB | `small` profile; strict budgets from here up |
-| ≤ 1,000 | 16 | 64 GiB | 500 GiB | `medium`; OpenSearch heap ≥ 8 GiB |
-| ≤ 2,500 | 24 | 96 GiB | 1 TB | ingest approaching single-node OpenSearch limit |
-| ≤ 5,000 | 32 | 128 GiB | 2 TB | `large`; **split storage tiers off-box recommended** |
+Disk: see the note above — plan it from retention, not from this table.
+
+| Devices | vCPU | RAM | Profile | Notes |
+|--------:|-----:|----:|---------|-------|
+| ✱ ≤ 50 (demo/L0) | 4 | 16 GiB | `demo` | **MEASURED** (this box); eval only — OpenSearch alone idles ~2.3 GiB |
+| ≤ 250 | 8 | 32 GiB | `small` | modeled; strict budget enforcement from here up |
+| ≤ 1,000 | 16 | 64 GiB | `medium` | modeled; OpenSearch gets ~8.5 GiB → **heap ~4.25 GiB** (planner: 50% of the OS budget, cap 31 GiB) |
+| ≤ 2,500 | 24 | 96 GiB | `large` | modeled; auto-selection puts ≥96 GiB in `large`; ingest approaching single-node OpenSearch limit |
+| ≤ 5,000 | 32 | 128 GiB | `large` | modeled; **split storage tiers off-box recommended** |
 | 10,000+ | — | — | — | **single host insufficient — go clustered (below)** |
 
 ### On-prem / cloud CLUSTERED (10k+ devices, GA scale)
@@ -135,7 +151,7 @@ reach here — matches §11/§12 topology notes):
 | ClickHouse | flow rate + merges | keeper + 2+ replicas, 16 vCPU / 64 GiB, fast NVMe |
 | Kafka | producer EPS + consumer count | 3 brokers, 8 vCPU / 32 GiB, dedicated disks |
 | VictoriaMetrics | active series (devices×interfaces×metrics) | vmstorage 16 vCPU / 64 GiB; front with vmauth |
-| **Correlation** | events/s (the §7 limiter, ~1k/s per instance today) | **N partitioned instances**; 1 per ~1k sustained evt/s |
+| **Correlation** | events/s (the §7 limiter, ~1k/s per instance today) | **N instances, N ≤ `BUS_PARTITIONS`** (see the ⚠ below); ~1 per 1k sustained evt/s. Each is CHEAP: ~1 core, <1 GiB (measured flat ~60 MiB of a 768 MiB cap) — do NOT size these like the tiers above |
 | API + Vector | request + ingest throughput | 2× API (8 vCPU/16 GiB), 2× vector-router (8 vCPU/16 GiB) |
 | PostgreSQL | tenants + inventory (light) | 8 vCPU / 32 GiB, replica for HA |
 
@@ -146,6 +162,15 @@ reach here — matches §11/§12 topology notes):
 | 16 vCPU/64 GiB | m6i.4xlarge | D16s_v5 | n2-standard-16 |
 | 32 vCPU/128 GiB | m6i.8xlarge | D32s_v5 | n2-standard-32 |
 | ClickHouse/OpenSearch data nodes | i4i/i3en (NVMe) | Lsv3 (NVMe) | n2 + local SSD |
+
+> ⚠ **`BUS_PARTITIONS` is the HARD CAP on correlation instances.** A Kafka consumer
+> group can have at most one active consumer per partition, so replicas beyond the
+> partition count are assigned nothing and sit **silently idle** — no error, no
+> warning, just missing throughput. `instances ≤ BUS_PARTITIONS` always. Size
+> partitions for the TARGET EPS at install time (e.g. ≥16 for a 10k-EPS build, which
+> also leaves headroom): `kafka-init` can only ever RAISE the count, and keyed data
+> already on the bus stays in its original partitions across a raise, so a
+> repartition needs a drain window (`docs/scale-correlation.md`). The default is 1.
 
 **Rule of thumb:** OpenSearch RAM and correlation instance-count are the two levers
 that scale fastest with load; disk is retention-bound; PostgreSQL is not the limit.
@@ -193,7 +218,11 @@ The correlation/RCA engine (`src/correlation`, Python) is the value-path limiter
 - **Not memory- or disk-bound** — purely CPU/single-thread bound.
 - **To scale:** partition the input by tenant/entity and run **N correlation
   instances** (one consumer per partition), sizing **~1 instance per ~1k sustained
-  events/s**. E.g. 10k EPS of correlatable telemetry ≈ 10 partitioned instances.
+  events/s**. E.g. 10k EPS of correlatable telemetry ≈ 10 instances — which REQUIRES
+  `BUS_PARTITIONS ≥ 10` first: instances beyond the partition count are assigned
+  nothing and idle silently. Partitions are raise-only and keyed data does not
+  migrate, so pick the target count at install (see §7's ⚠ and
+  `docs/scale-correlation.md`).
 - **Caveat:** signal GENERATION requires producer-recognized event shapes (Cisco
   mnemonics, traps, gNMI oper-state); raw text is consumed (costing throughput) but
   emits nothing. The ~1k/s is the PROCESSING ceiling either way.
