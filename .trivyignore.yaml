@@ -31,6 +31,17 @@ misconfigurations:
   - id: DS-0002
     paths:
       - "NetOps_Observability/scripts/lab/traffic-generator/Dockerfile"
+  # DS-0002 — also excepted for the LAB twin agent image (tracker 152 fidelity
+  # wave). PID 1 must START as root in its own netns: it adds per-device IP
+  # aliases (`ip addr add`, CAP_NET_ADMIN) and binds :161 for the snmpsim
+  # responders, which then IMMEDIATELY drop to the image's dedicated `twin`
+  # user via snmpsim's --process-user (snmpsim REFUSES to keep running as
+  # root). A Dockerfile USER would break the alias/bind phase; the drop
+  # already happens where it matters. Lab overlay only — never part of the
+  # product stack (added 2026-08-17).
+  - id: DS-0002
+    paths:
+      - "NetOps_Observability/scripts/lab/twin/docker/Dockerfile"
 vulnerabilities:
   # GHSA-5c6j-r48x-rmvq — serialize-javascript RCE via RegExp.flags/toISOString.
   # Transitive dev-dependency of the DOCS PORTAL's Docusaurus/webpack build chain
