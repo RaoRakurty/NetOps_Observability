@@ -70,6 +70,11 @@ EXPLICIT_COUNTERS = {
     "QUARANTINE_WRITE_FAILURES",  # the 238k-loss counter — never optional
     "QUARANTINE_ROTATIONS",
     "DEADLETTER_COUNT",
+    # A replica that JOINED the group and was assigned nothing consumes at zero
+    # rate forever while every health signal looks normal (more replicas than
+    # BUS_PARTITIONS). It is not a "failure" by name, so the suffix convention
+    # misses it — this set is the documented extension point for exactly that.
+    "CONSUMER_ZERO_ASSIGNMENTS",
 }
 
 

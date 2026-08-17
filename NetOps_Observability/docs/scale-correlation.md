@@ -202,6 +202,129 @@ aiokafka's buffered fast path never yields on its own; batched CH writes).
 | `CORR_REBALANCE_TIMEOUT_MS` | 60000 | revoke hook bound = one flush (≤10 s) + one commit (≤30 s) |
 | `CORR_CONSUME_YIELD_EVERY_N` | 20 | 20 msgs × ≤10 ms/event sync CPU = ≤200 ms between loop hand-backs ≪ heartbeat 3 s |
 
+### Bounded event-loop blocking (P1 regression at 1000-device scale, 2026-08-17)
+
+The tuning above was **not sufficient**: the next ladder run (1000 devices,
+600k events @ ~1784/s) reproduced the rebalance loop, and the honest cause was
+a different one. Live evidence from `netops-correlation-2`:
+
+```
+03:34:47Z  corr-object 859c45d9 v4 open: ... nodes=750 edges=48375
+```
+
+The object **count** stayed small (5–15 per 5-minute interval, verified against
+`netops.corr_objects`) but each object was **enormous** — a 1000-device fleet
+emits one uniform link-fault signature, so the whole access layer folds into a
+few giant graphs. Every per-object step is then a *single monolithic
+synchronous call* whose cost scales with the graph. Measured on that exact
+750-node / 48,375-edge shape:
+
+| Call | Blocking |
+|---|---|
+| `ObjectSnapshot.content_hash()` | 1.60 s |
+| `to_object_row()` | 0.66 s |
+| `to_typed_edge_rows()` | 0.40 s |
+| `to_evidence_rows()` | 0.31 s |
+| `to_edge_rows()` | 0.16 s |
+| `material_hash()` | 0.13 s |
+| `CH.insert` NDJSON body build (22.5 MiB) | 0.68 s |
+| `CHBatcher` content-hash token | 0.93 s |
+| **per object, per cycle** | **~7.5 s** |
+
+At 10–15 such objects that is **75–110 s of loop-owning time per cycle**, which
+matches the 84 s / 193 s / 421 s gaps in the container log (2003 gaps ≥5 s,
+44,340 s total).
+
+**The mechanism is CUMULATIVE starvation, not one monster call.** No single call
+above blocks for 30 s — the largest measured is 1.60 s. aiokafka runs
+heartbeat/coordinator work in *background asyncio tasks*, so it is enough for the
+loop to be owned by a long back-to-back *sequence* of medium blocks across the
+session window: the heartbeat task simply does not get scheduled often enough.
+That is why the session expires (→ `UnknownMemberIdError`) and the commit then
+fails (`CommitFailedError`, poll gap past `max_poll_interval_ms`) → the batch
+replays → repeat. **Cooperative `asyncio.sleep(0)` yields cannot fix it** —
+each individual call is a single uninterruptible C-level `json.dumps`/`sha256`,
+so there is no point *inside* one at which a yield could run; the work has to
+leave the loop thread entirely.
+
+The fix is structural, not tuned: every size-unbounded pure-CPU step goes
+through `main._offload` (the default thread-pool executor). Measured on the
+same object, inline froze the loop for **2.40 s**; offloaded the worst loop
+latency was **0.39 s** — the loop keeps running no matter how large the object
+gets, because the blocking call no longer owns the loop thread. Objects below
+`CORR_OFFLOAD_MIN_ELEMENTS` (default 2000 nodes+edges, ≈0.1 s of work — 30×
+under the 3 s heartbeat) keep the zero-overhead inline path.
+
+A **loop-lag watchdog** (`loop_lag_watchdog`) now samples the loop's own
+scheduling delay and counts stalls over `CORR_LOOP_LAG_WARN_MS` (default 1000,
+3× under the heartbeat interval), surfaced as `corr_loop_lag_stalls_total` /
+`corr_loop_lag_max_ms` and on `/healthz` — so the next blocker reports itself
+instead of having to be inferred from gaps between log lines.
+
+### Consumer state is a FOUR-value enum on `/healthz`
+
+`consumer.state` distinguishes states that used to be indistinguishable:
+
+| State | Meaning |
+|---|---|
+| `pending` | no assignment callback has run yet — says nothing about health |
+| `idle` | joined the group, holds **zero** partitions. A **misconfiguration**: replicas beyond `BUS_PARTITIONS` get an empty set from the range assignor and consume nothing forever. Also counted as `corr_consumer_zero_assignments_total` with a WARNING naming cause and remedy |
+| `cold_window` | holds partitions, at least one acquired less than one engine window ago — those tenants' RCA is **thin (degraded), not wrong** |
+| `active` | holds partitions, all held for at least one engine window |
+
+Previously `pending` and `idle` both serialized to `{}`, so a surplus replica
+looked healthy forever while contributing no throughput. The state is computed
+from *recorded assignment facts* (`CONSUMER_ASSIGNMENT_SEEN`,
+`CONSUMER_PARTITION_ACQUIRED_AT`), never from `rebalances > 0` — that is racy
+(the counter is bumped inside the callback) and cannot express `cold_window`.
+`consumer.cold_partitions` names *which* partitions are thin, and
+`corr_consumer_state{state=...}` / `corr_consumer_cold_partitions` are scraped.
+
+**Honest limitation (tracker 155, NOT fixed here).** `cold_window` is a
+*time-based proxy* for "the sliding window has not had time to refill". It is
+not a measurement of carried-over state: `OPEN_OBJECTS` and `WINDOW_BUFFER` are
+per-process with **no rehydration path**, so a partition acquired at a rebalance
+necessarily starts with none of its tenants' in-flight correlation state — that
+state is stranded in whichever replica held the partition before, and merges and
+continuations that depended on it are lost. No elapsed time repairs that, so
+**`active` must not be read as "no state was lost at the last rebalance"**. With
+one replica this was a rare restart edge; with N replicas plus rebalances it is
+routine, which is what tracker 155 covers.
+
+### The revoke hook was an amplifier — now tightly bounded
+
+`on_partitions_revoked` awaits the flush-then-commit hook, and the first version
+capped the whole hook at `rebalance_timeout` (60 s). That callback runs **inside
+the rejoin**, so a slow ClickHouse flush could add up to a full rebalance
+timeout of latency *per revoke* — the hook that exists to break the thrash could
+instead deepen it (starve → revoke → 60 s of flush I/O → re-revoke). The live
+counters from the thrash window fit that reading: correlation-1 logged **20
+rebalances against 17 hook runs, 6 of them FAILED** (i.e. hitting the bound).
+
+Each leg now gets its own small budget, `CORR_REVOKE_BUDGET_S` (default 5 s),
+with a 2× backstop on the whole hook — worst added rejoin latency ~10 s, ≤1/6 of
+`rebalance_timeout` instead of equal to it. If the flush misses its budget the
+hook **skips the commit and returns** (counted as
+`corr_consumer_revoke_commits_total{outcome="skipped"}`): F-38 is preserved by
+*not acknowledging*, never by waiting longer — the successor replays and the
+per-message dedup tokens plus the batcher's commit guard absorb it.
+
+**Deliberately NOT changed:** the dead-letter write path stays synchronous.
+Microbenchmarked on the live volume it is p50 102 µs / p99 429 µs / max 7.1 ms
+per record (~7.5k/s ceiling). More importantly it was **refuted empirically**:
+in a 600k-event verification burst every event was tenant-refused and
+dead-lettered, driving ~2.3k *synchronous* DLQ writes/s per replica — above the
+ladder's 1784/s total — and the loop-lag watchdog recorded **max 633 ms drift
+and ZERO stalls** while the backlog drained at ~3.7k events/s with zero
+rebalances. A batched off-loop variant was prototyped and reverted: it trades
+the immediate-durability property that seven durability tests and the
+238k-lost-payload incident (`dlq_startup_check`) rest on for a saving that is
+measurably not on the critical path. If `corr_loop_lag_stalls_total` ever
+implicates it, the watchdog will say so with a number, and it gets its own
+change then.
+
+Regression suite: `src/correlation/test_loop_blocking.py`.
+
 On `on_partitions_revoked` the consumer now flushes the signal batch and
 commits exactly the handled-offset ledger (never the in-flight message —
 F-38), so a rebalance no longer replays the whole uncommitted batch; a

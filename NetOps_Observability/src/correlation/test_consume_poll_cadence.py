@@ -281,7 +281,7 @@ def test_build_consumer_sets_membership_tuning(monkeypatch):
 
 # ── 2. revoke commit discipline (F-38) ──────────────────────────────────────
 
-def _drive_revoke(monkeypatch, *, flush_fails: bool):
+def _drive_revoke(monkeypatch, *, flush_fails: bool, flush_hangs: bool = False):
     """Run consume() until message offset 2 is IN FLIGHT (handler blocked),
     fire on_partitions_revoked, and return (commits, order) observed."""
     monkeypatch.setattr(main, "CONSUMER_STOP_TIMEOUT_S", 1.0)
@@ -292,6 +292,9 @@ def _drive_revoke(monkeypatch, *, flush_fails: bool):
     order: list = []
 
     async def recording_flush():
+        if flush_hangs:
+            order.append("flush_hanging")
+            await asyncio.sleep(3600)   # a wedged ClickHouse
         if flush_fails:
             order.append("flush_failed")
             raise RuntimeError("clickhouse transport down")
@@ -363,6 +366,46 @@ def test_revoke_flush_failure_blocks_commit(monkeypatch):
     assert commits == [], f"offsets committed past an unflushed batch: {commits}"
     assert "commit" not in order
     assert ok_delta == 0 and fail_delta == 1
+
+
+def test_revoke_is_tightly_bounded_and_never_costs_a_rebalance_timeout(monkeypatch):
+    """AMPLIFIER GUARD. The revoke callback runs INSIDE the rejoin, so every
+    second it spends is a second the group is not re-forming. The first version
+    capped the whole hook at rebalance_timeout (60s), which let one slow
+    ClickHouse flush add a full rebalance timeout of latency PER REVOKE —
+    plausibly making the thrash loop self-sustaining (starve -> revoke -> 60s of
+    flush I/O -> re-revoke). Live counters from the thrash window fit that
+    reading: correlation-1 logged 20 rebalances against 17 hook runs, 6 FAILED.
+
+    With a wedged flush the hook must (a) return inside its small budget,
+    (b) NOT commit — F-38 is preserved by not acknowledging, never by waiting
+    longer — and (c) count the skip."""
+    monkeypatch.setattr(main, "CORR_REVOKE_BUDGET_S", 0.2)
+    before = main.CONSUMER_REVOKE_SKIPPED
+    t0 = time.monotonic()
+    commits, order, _ok, _fail = _drive_revoke(
+        monkeypatch, flush_fails=False, flush_hangs=True)
+    elapsed = time.monotonic() - t0
+
+    assert "flush_hanging" in order
+    assert commits == [], f"committed despite an unfinished flush: {commits}"
+    assert main.CONSUMER_REVOKE_SKIPPED == before + 1, "the skip must be counted"
+    # The whole drive (including consumer startup) must finish far inside the old
+    # 60s bound; the hook itself is capped at 2x budget = 0.4s.
+    assert elapsed < 10.0, (
+        f"revoke path took {elapsed:.1f}s — it is not bounded by "
+        f"CORR_REVOKE_BUDGET_S any more")
+
+
+def test_revoke_budget_is_a_small_fraction_of_the_rebalance_timeout():
+    """The arithmetic that keeps the hook from becoming the amplifier: two legs
+    (flush + commit) at CORR_REVOKE_BUDGET_S each, with a 2x backstop, must stay
+    well inside rebalance_timeout — otherwise a revoke can cost the group its
+    whole rejoin window."""
+    worst_hook_s = 2 * main.CORR_REVOKE_BUDGET_S
+    assert worst_hook_s * 3 <= main.CORR_REBALANCE_TIMEOUT_MS / 1000, (
+        f"revoke budget {worst_hook_s}s is not a small fraction of "
+        f"rebalance_timeout {main.CORR_REBALANCE_TIMEOUT_MS / 1000}s")
 
 
 # ── 3. replay dedup (flushed-but-uncommitted rows) ──────────────────────────

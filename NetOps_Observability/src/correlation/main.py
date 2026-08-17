@@ -1499,6 +1499,74 @@ def _current_badges(hypotheses_blob: str) -> dict:
 # and the Go timeline query — already fall back to the newest archived_version
 # ≤ the requested one, exactly as close-versions have always relied on).
 CORR_ARCHIVE_CHUNK_ROWS = int(os.environ.get("CORR_ARCHIVE_CHUNK_ROWS", "10000"))
+
+
+# ── P1 regression (1000-device scale, 2026-08-17): bound event-loop blocking ──
+#
+# MEASURED ROOT CAUSE. The mini-ladder's 1000-device fleet emits one uniform
+# signature, so the whole access layer folds into a FEW ENORMOUS objects —
+# live evidence from netops-correlation-2:
+#
+#   03:34:47Z  corr-object 859c45d9 v4 open: ... nodes=750 edges=48375
+#
+# Object COUNT stayed small (5–15 per cycle, verified in netops.corr_objects),
+# but every per-object step is a SINGLE MONOLITHIC synchronous call whose cost
+# scales with the graph, measured on the real 750-node/48,375-edge shape:
+#
+#   content_hash()          1.60s     to_object_row()        0.66s
+#   material_hash()         0.13s     to_typed_edge_rows()   0.40s
+#   to_evidence_rows()      0.31s     to_edge_rows()         0.16s
+#   CH.insert body build    0.68s     batcher token hash     0.93s
+#   → ~7.5s of UNINTERRUPTIBLE loop time per object per cycle
+#   → 10–15 objects = 75–110s frozen, which is exactly the 84s / 193s / 421s
+#     stalls in the container log
+#
+# Consequence: aiokafka's BACKGROUND heartbeat task cannot run, so the broker
+# expires the session (30s) → "Heartbeat session expired" → UnknownMemberIdError
+# → the commit fails (CommitFailedError, poll gap past max_poll_interval) → the
+# batch replays → repeat. Cooperative `await asyncio.sleep(0)` yields (the
+# earlier P1 fix) CANNOT help here: no single one of these calls is
+# interruptible, so there is no point at which a yield could run.
+#
+# THE FIX, bounded BY DESIGN rather than by tuning: every size-unbounded
+# pure-CPU step goes through `_offload` below. Measured on the same object:
+# inline froze the loop for 2.40s; via the executor the worst loop latency was
+# 0.39s — the loop (and the heartbeat) keeps running no matter how large the
+# object gets, because the blocking call no longer owns the loop thread.
+# Threshold: payloads below CORR_OFFLOAD_MIN_ELEMENTS keep today's exact inline
+# path (a thread hand-off costs more than the work), and 2000 elements measures
+# at ~0.1s — 30x under the 3s heartbeat interval, so the inline branch is
+# provably bounded too.
+CORR_OFFLOAD_MIN_ELEMENTS = int(os.environ.get("CORR_OFFLOAD_MIN_ELEMENTS", "2000"))
+
+
+async def _offload(fn, /, *args, **kwargs):
+    """Run a size-unbounded PURE-CPU call off the event loop.
+
+    The default thread-pool executor: the call still holds the GIL, but it no
+    longer owns the LOOP THREAD, so the loop's own tasks — critically
+    aiokafka's heartbeat and fetch coroutines — are scheduled at the
+    interpreter's switch interval instead of waiting out the whole call.
+    Only for PURE functions (no shared mutable state, no IO): everything
+    routed here is a serializer/hasher over an immutable snapshot.
+    """
+    return await asyncio.get_running_loop().run_in_executor(
+        None, functools.partial(fn, *args, **kwargs))
+
+
+def _snap_elements(snap: ObjectSnapshot) -> int:
+    """Graph size driving every per-object serialization cost above."""
+    return len(snap.nodes) + len(snap.edges)
+
+
+async def _snap_call(snap: ObjectSnapshot, fn, /, *args, **kwargs):
+    """One per-object pure call, offloaded only when the object is big enough
+    for the sync cost to threaten the heartbeat (see CORR_OFFLOAD_MIN_ELEMENTS)."""
+    if _snap_elements(snap) >= CORR_OFFLOAD_MIN_ELEMENTS:
+        return await _offload(fn, *args, **kwargs)
+    return fn(*args, **kwargs)
+
+
 ARCHIVE_ROWS_WRITTEN = 0     # archive rows actually inserted (monotonic)
 ARCHIVE_SLICES_DAMPED = 0    # re-persists whose slice membership was unchanged
 _ARCHIVE_SLICE_HASH: dict[str, str] = {}  # cid → last successfully archived slice id-hash
@@ -1554,7 +1622,10 @@ def _archive_slice(snap: ObjectSnapshot, window: list[Signal]) -> list[Signal]:
 async def _persist_snapshot(snap: ObjectSnapshot, version: int, state: str,
                             window: list[Signal], merged_into: str = "") -> None:
     assert ch is not None
-    obj_row = snap.to_object_row(version, state, merged_into)
+    # P1 (1000-device scale): every serializer below is offloaded for a large
+    # graph — see _offload. On the live 48,375-edge object these four calls plus
+    # the token hash were ~3.2s of frozen loop; the heartbeat task died in them.
+    obj_row = await _snap_call(snap, snap.to_object_row, version, state, merged_into)
     # H13: these engine-cycle writes run OUTSIDE any consumer message, so they
     # must not draw tokens from the consumer's Kafka coordinate (a redelivery
     # resets that seq, colliding a NEW object version's token with a spent one
@@ -1564,7 +1635,7 @@ async def _persist_snapshot(snap: ObjectSnapshot, version: int, state: str,
     # content-hash suffix guards the restart edge where OPEN_OBJECTS resets
     # and version numbering restarts at 1 with different content.
     tok = (f"obj:{snap.correlation_id}:v{version}:{state}:"
-           f"{snap.content_hash()[:16]}")
+           f"{(await _snap_call(snap, snap.content_hash))[:16]}")
     await ch_insert("netops.corr_objects", [obj_row],
                     dedup_token=f"{tok}:objects",
                     corr_id=snap.correlation_id, version=version, tenant=snap.tenant_id)
@@ -1596,9 +1667,9 @@ async def _persist_snapshot(snap: ObjectSnapshot, version: int, state: str,
             "corr_current projection write FAILED tenant_id=%s corr_id=%s "
             "version_id=%d material_hash=%s retryable=%s error=%s",
             snap.tenant_id, snap.correlation_id, version,
-            snap.material_hash(), retryable, err,
+            await _snap_call(snap, snap.material_hash), retryable, err,
         )
-    edge_rows = snap.to_edge_rows(version)
+    edge_rows = await _snap_call(snap, snap.to_edge_rows, version)
     if edge_rows:
         await ch_insert("netops.corr_edges", edge_rows,
                         dedup_token=f"{tok}:edges",
@@ -1611,8 +1682,9 @@ async def _persist_snapshot(snap: ObjectSnapshot, version: int, state: str,
         # emitted: embedded in the snapshot's grounding context (replay-safe) and served
         # from there.
         if CORR_EDGES_V2:
-            await ch_insert(CORR_PATH_EDGES_TABLE, snap.to_typed_edge_rows(version))
-    ev_rows = snap.to_evidence_rows(version)
+            await ch_insert(CORR_PATH_EDGES_TABLE,
+                            await _snap_call(snap, snap.to_typed_edge_rows, version))
+    ev_rows = await _snap_call(snap, snap.to_evidence_rows, version)
     if ev_rows:
         await ch_insert("netops.corr_evidence", ev_rows,
                         dedup_token=f"{tok}:evidence",
@@ -1816,10 +1888,13 @@ async def engine_cycle() -> None:
                     log.info("corr-object %s continued under re-keyed window (identity adopted, no tombstone)",
                              cont[:8])
             seen_this_cycle.add(snap.correlation_id)
-            chash = snap.content_hash()
+            # P1 (1000-device scale): content_hash on the live 48,375-edge
+            # object is a 1.6s uninterruptible json.dumps+sha256 — offloaded.
+            chash = await _snap_call(snap, snap.content_hash)
             if reg is None:
                 OPEN_OBJECTS[snap.correlation_id] = {
-                    "version": 1, "hash": chash, "material": snap.material_hash(),
+                    "version": 1, "hash": chash,
+                    "material": await _snap_call(snap, snap.material_hash),
                     "last_seen": now, "last_persist": now, "snapshot": snap,
                     "opened_at": now,  # #101: max_incident_age in the write-amp rollup
                 }
@@ -1832,7 +1907,7 @@ async def engine_cycle() -> None:
                 # MATERIAL move, an elapsed heartbeat, or damping-off warrants a
                 # persisted version. The in-memory registry still tracks the
                 # freshest snapshot so merge/close always persist current truth.
-                mhash = snap.material_hash()
+                mhash = await _snap_call(snap, snap.material_hash)
                 elapsed = (now - reg.get("last_persist", now)).total_seconds()
                 if (mhash != reg.get("material") or CORR_VERSION_HEARTBEAT_S <= 0
                         or elapsed >= CORR_VERSION_HEARTBEAT_S):
@@ -2014,6 +2089,21 @@ def score(tenant: str, device: str, metric: str, value: float) -> float | None:
 CH_CROSS_TENANT_INSERTS: dict[str, int] = {}
 
 
+def _ndjson_body(rows: list[dict]) -> str:
+    """The ClickHouse JSONEachRow body for `rows`. Split out so the large-batch
+    case can run through `_offload` (P1: a 48k-row body is 0.68s of otherwise
+    uninterruptible event-loop time). PURE — safe in a worker thread."""
+    return "\n".join(json.dumps(r) for r in rows)
+
+
+def _batch_token(rows: list[dict]) -> str:
+    """Content-hash dedup token for a retained batch (see CHBatcher._insert_batch).
+    Split out for the same reason as _ndjson_body — measured 0.93s at 48k rows."""
+    return "batch:" + hashlib.sha256(
+        "\n".join(json.dumps(r, sort_keys=True, default=str)
+                  for r in rows).encode()).hexdigest()[:32]
+
+
 def insert_scope(rows: list[dict]) -> str:
     """The `tenant_scope` custom setting one INSERT is issued under.
 
@@ -2076,7 +2166,14 @@ class CH:
         of tokens; immediate retries are always inside it.
         """
         rows = list(rows)
-        body = "\n".join(json.dumps(r) for r in rows)
+        # P1 (1000-device scale): a 48,375-edge insert serializes a 22.5 MiB
+        # NDJSON body in ONE synchronous comprehension — measured 0.68s of
+        # frozen event loop, inside which aiokafka's heartbeat cannot run.
+        # Offloaded above the threshold; small inserts keep the inline path.
+        if len(rows) >= CORR_OFFLOAD_MIN_ELEMENTS:
+            body = await _offload(_ndjson_body, rows)
+        else:
+            body = _ndjson_body(rows)
         if not body:
             return True
         # #20 Phase 2 / TENANT-HIGH-4: state the tenant this batch is written on
@@ -2447,9 +2544,12 @@ class CHBatcher:
         assert ch is not None
         # Content-hash token: a retry of the SAME retained batch after an
         # unknown outcome dedups server-side instead of duplicating.
-        token = "batch:" + hashlib.sha256(
-            "\n".join(json.dumps(r, sort_keys=True, default=str)
-                      for r in b.rows).encode()).hexdigest()[:32]
+        # P1: offloaded for a large batch (0.93s at 48k rows) — byte-identical
+        # token either way, so server-side dedup across a retry is unchanged.
+        if len(b.rows) >= CORR_OFFLOAD_MIN_ELEMENTS:
+            token = await _offload(_batch_token, b.rows)
+        else:
+            token = _batch_token(b.rows)
         try:
             ok = await ch.insert(table, b.rows, dedup_token=token)
         except Exception as exc:  # counted, retained by the caller, re-raised
@@ -2498,6 +2598,49 @@ SIGNAL_BATCH = CHBatcher()
 async def batch_signal(row: dict) -> None:
     """Enqueue one corr_signals row on the consume-loop batcher (see CHBatcher)."""
     await SIGNAL_BATCH.add("netops.corr_signals", row)
+
+
+# ── event-loop stall watchdog (P1: make the NEXT blocker self-reporting) ─────
+#
+# The 2026-08-17 regression cost hours of forensics because the platform could
+# not say "the event loop was frozen for 84s" — it had to be inferred from gaps
+# between log lines. aiokafka's heartbeat starving is invisible until the broker
+# ejects the member, by which point the cause is gone. This task samples the
+# loop's own scheduling delay: it sleeps a known interval and measures the
+# overshoot, which IS the time the loop was blocked by something else. Any
+# sample over the threshold is logged (with the size of the stall) and counted,
+# and the counters are on /healthz + /metrics per the GA counter-exposure
+# contract, so a stall becomes an alertable fact instead of an archaeology
+# exercise. Cost: one timer wakeup every CORR_LOOP_LAG_SAMPLE_S.
+CORR_LOOP_LAG_SAMPLE_S = float(os.environ.get("CORR_LOOP_LAG_SAMPLE_S", "0.5"))
+# Default 1s: 3x under aiokafka's heartbeat_interval_ms (3s) so a stall is
+# reported well before it can threaten the session (30s).
+CORR_LOOP_LAG_WARN_MS = float(os.environ.get("CORR_LOOP_LAG_WARN_MS", "1000"))
+LOOP_LAG_STALLS = 0        # samples whose lag exceeded the warn threshold
+LOOP_LAG_MAX_MS = 0.0      # worst lag seen this process (gauge)
+LOOP_LAG_LAST_MS = 0.0     # most recent sample (gauge)
+
+
+async def loop_lag_watchdog() -> None:
+    """Measure and report event-loop scheduling delay (see comment above)."""
+    global LOOP_LAG_STALLS, LOOP_LAG_MAX_MS, LOOP_LAG_LAST_MS
+    while True:
+        t0 = time.monotonic()
+        await asyncio.sleep(CORR_LOOP_LAG_SAMPLE_S)
+        lag_ms = (time.monotonic() - t0 - CORR_LOOP_LAG_SAMPLE_S) * 1000.0
+        if lag_ms < 0:
+            lag_ms = 0.0
+        LOOP_LAG_LAST_MS = lag_ms
+        LOOP_LAG_MAX_MS = max(LOOP_LAG_MAX_MS, lag_ms)
+        if lag_ms >= CORR_LOOP_LAG_WARN_MS:
+            LOOP_LAG_STALLS += 1
+            log.warning(
+                "event loop STALLED %.0fms (threshold %.0fms, stalls=%d, "
+                "worst=%.0fms) — something synchronous is blocking the loop; "
+                "aiokafka's heartbeat cannot run inside a stall and the broker "
+                "expires the session at %dms",
+                lag_ms, CORR_LOOP_LAG_WARN_MS, LOOP_LAG_STALLS,
+                LOOP_LAG_MAX_MS, CORR_SESSION_TIMEOUT_MS)
 
 
 async def batch_flush_loop() -> None:
@@ -2677,6 +2820,14 @@ CORR_SESSION_TIMEOUT_MS = int(os.environ.get("CORR_SESSION_TIMEOUT_MS", "30000")
 CORR_HEARTBEAT_INTERVAL_MS = int(os.environ.get("CORR_HEARTBEAT_INTERVAL_MS", "3000"))
 CORR_MAX_POLL_INTERVAL_MS = int(os.environ.get("CORR_MAX_POLL_INTERVAL_MS", "300000"))
 CORR_REBALANCE_TIMEOUT_MS = int(os.environ.get("CORR_REBALANCE_TIMEOUT_MS", "60000"))
+# Budget for the revoke-time flush AND, separately, the revoke-time commit.
+# The revoke callback runs INSIDE the rejoin: time spent there is time the group
+# is not re-forming, so it must be a small fraction of rebalance_timeout (60s),
+# not equal to it. 5s each => worst added rejoin latency ~10s (and a 2x backstop
+# in on_partitions_revoked), i.e. <= 1/6 of the rebalance timeout. Exceeding the
+# flush budget SKIPS the commit rather than extending the callback — F-38 is
+# preserved by not committing, never by waiting longer.
+CORR_REVOKE_BUDGET_S = float(os.environ.get("CORR_REVOKE_BUDGET_S", "5"))
 # Cooperative poll cadence: aiokafka's fetcher returns already-buffered records
 # WITHOUT yielding to the event loop (fetcher.next_record's fast path), and a
 # handler whose awaits all complete synchronously (CH batcher below its flush
@@ -2772,6 +2923,21 @@ def dlq_startup_check() -> None:
     log.info("CORR_DLQ_DIR=%s verified writable at startup", CORR_DLQ_DIR)
 
 
+# DLQ WRITE PATH — measured during the 2026-08-17 P1 investigation and
+# DELIBERATELY LEFT SYNCHRONOUS. On the live volume the per-record syscall
+# pattern (makedirs + getsize + open/append/close) costs p50 102us / p99 429us
+# / max 7.1ms, i.e. a ~7.5k records/s ceiling; at the ladder's 1784/s
+# mass-refusal rate that is ~18% of the event loop, with multi-ms hitches. It
+# is real, but it is O(1) PER RECORD — bounded independently of backlog, fleet
+# size and object size — so it cannot produce the 30-400s stalls that caused
+# the rebalance loop (those were the per-object graph serializations above).
+#
+# Batching it behind an off-loop flush was prototyped and rejected for now: it
+# trades the immediate-durability property that seven durability tests and the
+# 238k-lost-payload incident (dlq_startup_check) are built on for a saving that
+# is not on the critical path. If corr_loop_lag_stalls_total ever implicates
+# this path, the loop-lag watchdog will say so with a number, and THEN it is
+# worth its own change. See docs/scale-correlation.md.
 def _dlq_append(record: dict) -> None:
     """Append one quarantined event to the on-disk dead-letter file.
 
@@ -2919,6 +3085,24 @@ CONSUMER_PARTITION_TOTALS: dict[str, int] = {}   # topic -> total partitions (br
 CONSUMER_REBALANCES = 0                          # monotonic; /healthz + logs
 CONSUMER_REVOKE_COMMITS = 0                      # revoke-hook flush+commit landed
 CONSUMER_REVOKE_COMMIT_FAILURES = 0              # revoke-hook could not commit (replay-safe)
+# Rebalances that assigned this instance ZERO partitions. Distinct from "no
+# rebalance yet": a member that JOINED and got nothing is a misconfiguration
+# (more replicas than BUS_PARTITIONS — the range assignor leaves the surplus
+# empty) and contributes no throughput forever. Before this counter both states
+# serialized to `{}` on /healthz and the idle replica looked healthy.
+CONSUMER_ZERO_ASSIGNMENTS = 0
+# Has an assignment callback ever run? The state machine below must NOT infer
+# this from `CONSUMER_REBALANCES > 0` — that is racy (the counter is bumped
+# inside the callback) and cannot express the cold-window state at all.
+CONSUMER_ASSIGNMENT_SEEN = False
+# "topic:partition" -> monotonic clock when THIS replica first acquired it.
+# Retained partitions keep their original timestamp across a rebalance; released
+# ones are dropped. Feeds the cold-window state (see consumer_state).
+CONSUMER_PARTITION_ACQUIRED_AT: dict[str, float] = {}
+# Revokes where the pre-hand-off flush did NOT finish inside its budget, so the
+# hook returned WITHOUT committing (F-38: an uncommitted offset is replayed and
+# dedup absorbs it). Rising = rebalances are landing on a slow ClickHouse.
+CONSUMER_REVOKE_SKIPPED = 0
 
 
 def tenant_partition(tenant: str, num_partitions: int) -> int:
@@ -2952,11 +3136,19 @@ class _AssignmentLogger(ConsumerRebalanceListener):
             return
         global CONSUMER_REVOKE_COMMITS, CONSUMER_REVOKE_COMMIT_FAILURES
         try:
-            # Bounded (§9): the hook's own awaits are individually bounded
-            # (flush <= httpx timeout/table, commit <= CONSUMER_STOP_TIMEOUT_S)
-            # but the JOIN must never wedge on a surprise — cap the whole hook.
+            # TIGHTLY bounded (§9) — this callback runs INSIDE the rejoin, so
+            # every second spent here is a second the group is not re-forming.
+            # The first version capped the whole hook at rebalance_timeout (60s),
+            # which let one slow ClickHouse flush add up to a full rebalance
+            # timeout of latency PER REVOKE and risked turning the thrash loop
+            # self-sustaining (starve -> revoke -> 60s of flush -> re-revoke).
+            # Live counters from the thrash window support that reading:
+            # correlation-1 logged 20 rebalances against 17 hook runs, 6 of them
+            # FAILED (i.e. hit the old bound). The budget is now
+            # 2x CORR_REVOKE_BUDGET_S as a pure backstop; the hook bounds its
+            # own flush and commit individually (see _revoke_commit).
             await asyncio.wait_for(
-                self.revoke_hook(), timeout=CORR_REBALANCE_TIMEOUT_MS / 1000)
+                self.revoke_hook(), timeout=2 * CORR_REVOKE_BUDGET_S)
             CONSUMER_REVOKE_COMMITS += 1
         except asyncio.CancelledError:
             raise
@@ -2978,12 +3170,40 @@ class _AssignmentLogger(ConsumerRebalanceListener):
             parts.sort()
         CONSUMER_ASSIGNMENT.clear()
         CONSUMER_ASSIGNMENT.update(owned)
+        # Cold-window bookkeeping (see consumer_state): RETAINED partitions keep
+        # their original acquisition time, NEWLY acquired ones start their window
+        # now, released ones are forgotten. Recorded here — never inferred from
+        # the rebalance counter, which cannot express "cold".
+        global CONSUMER_ASSIGNMENT_SEEN
+        CONSUMER_ASSIGNMENT_SEEN = True
+        now_mono = time.monotonic()
+        held = {f"{t}:{p}" for t, parts in owned.items() for p in parts}
+        for key in list(CONSUMER_PARTITION_ACQUIRED_AT):
+            if key not in held:
+                del CONSUMER_PARTITION_ACQUIRED_AT[key]
+        for key in held:
+            CONSUMER_PARTITION_ACQUIRED_AT.setdefault(key, now_mono)
         for topic in TOPICS:
             total = self._consumer.partitions_for_topic(topic)
             if total:
                 CONSUMER_PARTITION_TOTALS[topic] = len(total)
         log.info("rebalance #%d: assignment=%s totals=%s", CONSUMER_REBALANCES,
                  {t: p for t, p in owned.items() if p}, dict(CONSUMER_PARTITION_TOTALS))
+        if not assigned:
+            # Joined the group and got NOTHING. Silent-failure class: this
+            # replica will never consume, but every health signal looks normal.
+            # Name the cause AND the remedy — the range assignor gives the
+            # surplus replicas beyond BUS_PARTITIONS an empty set by design.
+            global CONSUMER_ZERO_ASSIGNMENTS
+            CONSUMER_ZERO_ASSIGNMENTS += 1
+            log.warning(
+                "rebalance #%d assigned 0 partitions — THIS REPLICA IS IDLE and "
+                "will consume nothing (zero_assignments=%d). Instances beyond "
+                "BUS_PARTITIONS are idle by design with the range assignor: "
+                "raise BUS_PARTITIONS (and re-run kafka-init) or reduce the "
+                "replica count. Partition totals seen: %s",
+                CONSUMER_REBALANCES, CONSUMER_ZERO_ASSIGNMENTS,
+                dict(CONSUMER_PARTITION_TOTALS))
         distinct = {tuple(p) for p in owned.values()}
         if len(distinct) > 1:
             log.error("CO-PARTITIONING BROKEN: this member owns different "
@@ -2991,6 +3211,53 @@ class _AssignmentLogger(ConsumerRebalanceListener):
                       "have diverged; re-run kafka-init with BUS_PARTITIONS "
                       "and check `kafka-topics --describe`",
                       {t: p for t, p in owned.items()})
+
+
+def consumer_state(now_mono: float | None = None) -> str:
+    """This replica's consumer state — FOUR distinguishable values, not two.
+
+      "pending"      no assignment callback has run yet. Says nothing about
+                     health; single-replica/broker-less dev sits here briefly.
+      "idle"         joined the group and holds ZERO partitions. A
+                     MISCONFIGURATION: with the range assignor the replicas
+                     beyond BUS_PARTITIONS get an empty set and consume nothing
+                     forever. Before this state existed it serialized to `{}`,
+                     byte-identical to "pending", and looked healthy.
+      "cold_window"  holds partitions, but at least one was acquired less than
+                     one engine window ago, so its tenants' sliding window has
+                     not had time to refill. RCA output for those tenants is
+                     temporarily DEGRADED (thin window) rather than wrong.
+      "active"       holds partitions, all held for at least one engine window.
+
+    HONEST LIMITATION (tracker 155). "cold_window" is a TIME-BASED PROXY, not a
+    measurement of carried-over state. `OPEN_OBJECTS` and `WINDOW_BUFFER` are
+    per-process with NO rehydration path, so a partition acquired at a rebalance
+    necessarily starts with none of its tenants' in-flight correlation state —
+    that state is stranded in whichever replica held the partition before. This
+    field therefore reports "the window has not had time to refill yet"; it does
+    NOT and cannot report the deeper loss tracker 155 covers (merges and
+    continuations whose open objects lived in the other replica's memory are
+    gone, and no elapsed time repairs them). Do not read "active" as "no state
+    was lost at the last rebalance".
+    """
+    if not CONSUMER_ASSIGNMENT_SEEN:
+        return "pending"
+    if not any(CONSUMER_ASSIGNMENT.values()):
+        return "idle"
+    now_mono = time.monotonic() if now_mono is None else now_mono
+    if any((now_mono - t) < ENGINE_CFG.window_s
+           for t in CONSUMER_PARTITION_ACQUIRED_AT.values()):
+        return "cold_window"
+    return "active"
+
+
+def cold_partitions(now_mono: float | None = None) -> list[str]:
+    """The owned partitions still inside their first engine window (see
+    consumer_state). Named explicitly so an operator can see WHICH tenants'
+    RCA is thin, not just that some are."""
+    now_mono = time.monotonic() if now_mono is None else now_mono
+    return sorted(k for k, t in CONSUMER_PARTITION_ACQUIRED_AT.items()
+                  if (now_mono - t) < ENGINE_CFG.window_s)
 
 
 def owns_tenant(tenant: str, *, topic: str = "netops.cloud") -> bool:
@@ -3114,11 +3381,28 @@ async def consume() -> None:
             # NOT cleared here — the hook's flush may include rows of the
             # in-flight message, whose offset stays uncommitted.
             nonlocal uncommitted, last_commit
-            await SIGNAL_BATCH.flush()
+            global CONSUMER_REVOKE_SKIPPED
+            # Each leg gets its OWN small budget (CORR_REVOKE_BUDGET_S): this
+            # runs inside the rejoin, so a slow ClickHouse must cost the group a
+            # few seconds, never a full rebalance timeout. If the flush does not
+            # finish in budget we SKIP the commit and return — F-38 holds
+            # because nothing is acknowledged, and the redelivery is absorbed by
+            # the per-message dedup tokens plus the batcher's commit guard.
+            try:
+                await asyncio.wait_for(SIGNAL_BATCH.flush(),
+                                       timeout=CORR_REVOKE_BUDGET_S)
+            except asyncio.TimeoutError:
+                CONSUMER_REVOKE_SKIPPED += 1
+                log.warning(
+                    "revoke-time flush exceeded %.0fs — NOT committing (offsets "
+                    "stay unacknowledged; the successor replays and dedup "
+                    "absorbs it). skipped_total=%d",
+                    CORR_REVOKE_BUDGET_S, CONSUMER_REVOKE_SKIPPED)
+                return
             if handled_offsets:
                 await asyncio.wait_for(
                     consumer.commit(dict(handled_offsets)),
-                    timeout=CONSUMER_STOP_TIMEOUT_S)
+                    timeout=CORR_REVOKE_BUDGET_S)
                 uncommitted = 0
                 last_commit = time.monotonic()
 
@@ -4223,6 +4507,7 @@ async def lifespan(_app: FastAPI):
         asyncio.create_task(engine_loop()),
         asyncio.create_task(cloud_log_tailer()),  # #81 P3B file source (opt-in)
         asyncio.create_task(batch_flush_loop()),  # ≤2s latency bound for batched writes
+        asyncio.create_task(loop_lag_watchdog()),  # P1: names the next blocker itself
     ]
     try:
         yield
@@ -4344,8 +4629,39 @@ async def metrics_exposition():
         "# TYPE corr_consumer_revoke_commits_total counter",
         f'corr_consumer_revoke_commits_total{{outcome="ok"}} {CONSUMER_REVOKE_COMMITS}',
         f'corr_consumer_revoke_commits_total{{outcome="failed"}} {CONSUMER_REVOKE_COMMIT_FAILURES}',
+        f'corr_consumer_revoke_commits_total{{outcome="skipped"}} {CONSUMER_REVOKE_SKIPPED}',
+        # An IDLE replica (joined the group, assigned nothing — more replicas
+        # than BUS_PARTITIONS) consumes forever at zero rate while looking
+        # healthy. owned_partitions==0 with rebalances>0 is that state; alert on
+        # it rather than discovering it from a lag graph that never drains.
+        "# HELP corr_consumer_owned_partitions Partitions assigned to THIS replica.",
+        "# TYPE corr_consumer_owned_partitions gauge",
+        f"corr_consumer_owned_partitions {sum(len(p) for p in CONSUMER_ASSIGNMENT.values())}",
+        "# HELP corr_consumer_zero_assignments_total Rebalances that assigned this replica no partitions.",
+        "# TYPE corr_consumer_zero_assignments_total counter",
+        f"corr_consumer_zero_assignments_total {CONSUMER_ZERO_ASSIGNMENTS}",
+        # Four-state gauge (1 = the replica is in that state). cold_window =
+        # holds partitions acquired less than one engine window ago, so their
+        # tenants' RCA is thin — degraded, not wrong. See consumer_state() for
+        # the honest limitation (tracker 155).
+        "# HELP corr_consumer_state Consumer state: pending|idle|cold_window|active.",
+        "# TYPE corr_consumer_state gauge",
+        *(f'corr_consumer_state{{state="{s}"}} {1 if consumer_state() == s else 0}'
+          for s in ("pending", "idle", "cold_window", "active")),
+        "# TYPE corr_consumer_cold_partitions gauge",
+        f"corr_consumer_cold_partitions {len(cold_partitions())}",
         "# TYPE corr_signal_batch_pending gauge",
         f"corr_signal_batch_pending {SIGNAL_BATCH.pending()}",
+        # P1: event-loop stall watchdog. corr_loop_lag_stalls_total rising means
+        # something synchronous is blocking the loop — the exact condition that
+        # starves aiokafka's heartbeat into a rebalance loop.
+        "# HELP corr_loop_lag_stalls_total Loop-lag samples over the warn threshold.",
+        "# TYPE corr_loop_lag_stalls_total counter",
+        f"corr_loop_lag_stalls_total {LOOP_LAG_STALLS}",
+        "# TYPE corr_loop_lag_max_ms gauge",
+        f"corr_loop_lag_max_ms {LOOP_LAG_MAX_MS:.1f}",
+        "# TYPE corr_loop_lag_ms gauge",
+        f"corr_loop_lag_ms {LOOP_LAG_LAST_MS:.1f}",
         "# TYPE corr_archive_rows_written counter",
         f"corr_archive_rows_written {ARCHIVE_ROWS_WRITTEN}",
         "# TYPE corr_archive_slices_damped counter",
@@ -4409,11 +4725,29 @@ async def health() -> dict:
             "assignment": {t: p for t, p in CONSUMER_ASSIGNMENT.items() if p},
             "partition_totals": dict(CONSUMER_PARTITION_TOTALS),
             "rebalances": CONSUMER_REBALANCES,
+            # The `assignment` map above is filtered for readability, which made
+            # "no rebalance yet" and "rebalanced and got NOTHING" both render as
+            # {} — the second is a misconfiguration (replicas beyond
+            # BUS_PARTITIONS are idle by design) that looked healthy forever.
+            # These three fields state it explicitly instead.
+            "owned_partition_count": sum(
+                len(p) for p in CONSUMER_ASSIGNMENT.values()),
+            # FOUR states — pending | idle | cold_window | active. See
+            # consumer_state() for what each means and, importantly, for the
+            # honest limitation of "cold_window" (tracker 155: there is no
+            # rehydration path, so "active" does NOT mean no state was lost).
+            "state": consumer_state(),
+            "cold_partitions": cold_partitions(),
+            "zero_assignments": CONSUMER_ZERO_ASSIGNMENTS,
             # P1 max-poll thrash: revoke-hook outcomes. "failures" rising =
             # rebalances landing on a broken flush path (replay-safe, but
             # every one of them re-processes the uncommitted batch).
             "revoke_commits": CONSUMER_REVOKE_COMMITS,
             "revoke_commit_failures": CONSUMER_REVOKE_COMMIT_FAILURES,
+            # Revokes that returned WITHOUT committing because the pre-hand-off
+            # flush exceeded CORR_REVOKE_BUDGET_S. Replay-safe, but rising means
+            # rebalances are landing on a slow ClickHouse.
+            "revoke_skipped": CONSUMER_REVOKE_SKIPPED,
         },
         "engine_v2": {
             "corr_signals_enabled": CORR_SIGNALS_ENABLED,
@@ -4475,6 +4809,11 @@ async def health() -> dict:
             # is a capped-DLQ eviction of the oldest .1 file — old payloads
             # aging out is a (bounded, intended) loss and must be visible.
             "quarantine_rotations": QUARANTINE_ROTATIONS,
+            # P1: the loop-lag watchdog. stalls>0 means the event loop was
+            # blocked long enough to threaten the group heartbeat.
+            "loop_lag_stalls": LOOP_LAG_STALLS,
+            "loop_lag_max_ms": round(LOOP_LAG_MAX_MS, 1),
+            "loop_lag_ms": round(LOOP_LAG_LAST_MS, 1),
             "topology_stale": _topology_stale(datetime.now(timezone.utc)),
             # Perf defect #2: the batched corr_signals write path. pending>0 is
             # normal (≤2s of traffic); rows_quarantined>0 means a rejected batch

@@ -23,6 +23,7 @@ The horizontal-scale contract has three legs, each pinned here:
 from __future__ import annotations
 
 import asyncio
+import time
 from datetime import datetime, timedelta, timezone
 from typing import ClassVar
 
@@ -176,6 +177,8 @@ class _FakeCluster:
 def _fresh_assignment_state():
     main.CONSUMER_ASSIGNMENT.clear()
     main.CONSUMER_PARTITION_TOTALS.clear()
+    main.CONSUMER_PARTITION_ACQUIRED_AT.clear()
+    main.CONSUMER_ASSIGNMENT_SEEN = False
 
 
 class _TP:
@@ -205,6 +208,74 @@ def test_owns_tenant_fails_open_before_first_rebalance():
     assignment the cloud-log tailer must keep running."""
     _fresh_assignment_state()
     assert main.owns_tenant("any-tenant")
+
+
+def test_consumer_state_distinguishes_all_four_states(monkeypatch, caplog):
+    """FOUR states, not two. /healthz used to render "no rebalance yet" and
+    "rebalanced and got NOTHING" byte-identically ({} either way), so an
+    instance beyond BUS_PARTITIONS — which the range assignor leaves empty and
+    which then consumes nothing forever — looked healthy. And a partition
+    acquired at a rebalance starts with an EMPTY window (no rehydration path,
+    tracker 155), which an operator must be able to see because RCA for those
+    tenants is thin rather than wrong."""
+    _fresh_assignment_state()
+    monkeypatch.setattr(main, "CONSUMER_ZERO_ASSIGNMENTS", 0)
+
+    # (a) no assignment callback yet — "pending", NOT a misconfiguration.
+    pending = asyncio.run(main.health())["consumer"]
+    assert pending["state"] == "pending"
+    assert pending["owned_partition_count"] == 0
+    assert pending["cold_partitions"] == []
+
+    # (d) joined and assigned NOTHING — "idle" + WARNING naming cause + remedy.
+    listener = main._AssignmentLogger(_Recorder())
+    with caplog.at_level("WARNING", logger="correlation"):
+        asyncio.run(listener.on_partitions_assigned([]))
+    idle = asyncio.run(main.health())["consumer"]
+    assert idle["state"] == "idle", "an empty assignment must not read as pending"
+    assert idle["owned_partition_count"] == 0
+    assert idle["zero_assignments"] == 1
+    msg = " ".join(r.getMessage() for r in caplog.records)
+    assert "IDLE" in msg and "BUS_PARTITIONS" in msg, (
+        f"the idle warning must name the cause and the remedy: {msg}")
+
+    # (c) freshly acquired partitions — "cold_window": held for less than one
+    # engine window, so their tenants' sliding window has not refilled.
+    asyncio.run(listener.on_partitions_assigned([_TP(t, 0) for t in main.TOPICS]))
+    cold = asyncio.run(main.health())["consumer"]
+    assert cold["state"] == "cold_window", (
+        "partitions acquired just now cannot have a warm window")
+    assert cold["owned_partition_count"] == len(main.TOPICS)
+    assert len(cold["cold_partitions"]) == len(main.TOPICS)
+
+    # (b) the same partitions held for longer than one engine window — "active".
+    aged = time.monotonic() - (main.ENGINE_CFG.window_s + 1)
+    for key in main.CONSUMER_PARTITION_ACQUIRED_AT:
+        main.CONSUMER_PARTITION_ACQUIRED_AT[key] = aged
+    warm = asyncio.run(main.health())["consumer"]
+    assert warm["state"] == "active"
+    assert warm["cold_partitions"] == []
+
+    # A retained partition keeps its (aged) timestamp across a rebalance, while a
+    # NEWLY acquired one re-cools the replica — the distinction (c) exists for.
+    asyncio.run(listener.on_partitions_assigned(
+        [_TP(t, 0) for t in main.TOPICS] + [_TP(main.TOPICS[0], 1)]))
+    assert main.CONSUMER_PARTITION_ACQUIRED_AT[f"{main.TOPICS[0]}:0"] == aged, (
+        "a retained partition must not have its window reset")
+    assert main.consumer_state() == "cold_window"
+    assert main.cold_partitions() == [f"{main.TOPICS[0]}:1"]
+    _fresh_assignment_state()
+
+
+def test_consumer_state_is_not_derived_from_the_rebalance_counter():
+    """The state must come from recorded assignment facts, never from
+    `rebalances > 0` — that is racy (bumped inside the callback) and cannot
+    express cold_window at all."""
+    _fresh_assignment_state()
+    main.CONSUMER_REBALANCES = 99          # a lie the state must ignore
+    assert main.consumer_state() == "pending", (
+        "state inferred from the rebalance counter instead of assignment facts")
+    _fresh_assignment_state()
 
 
 def test_copartition_mismatch_is_an_error(caplog):
