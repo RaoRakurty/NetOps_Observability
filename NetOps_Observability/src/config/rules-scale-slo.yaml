@@ -205,7 +205,18 @@ groups:
             sufficient. Do NOT respond by raising session/heartbeat/max-poll
             timeouts: that hides the stall rather than fixing it. Find the
             blocking work (CPU-bound serialization, synchronous IO) and move it
-            off the loop.
+            off the loop. KNOWN RESIDUAL (tracker 156): on the current build,
+            giant correlation objects still drive stalls of roughly 1.0-1.3 s
+            via _archive_slice/slice_hash, which run on the loop and are sized
+            by the whole window rather than by the object. Measured live at
+            1,171 nodes / 54,999 edges. That is BOUNDED, not benign — 1,256 ms
+            is 4.2% of the 30 s session timeout and under the 3 s heartbeat
+            interval, which is why membership survived with zero involuntary
+            rebalances. So a firing of this alert may be that known cause: check
+            corr_loop_lag_max_ms against ~1.3 s. Anything materially larger, or
+            any involuntary rebalance alongside it, is NOT tracker 156 and means
+            a new on-loop blocker. Do not silence or raise this threshold to
+            accommodate 156 — when 156 is fixed the correct result is zero.
           runbook: "docs/ops/OBSERVABILITY_AUDIT.md#runbook-correlation-queues"
 
       # Revoke-hook outcomes other than "ok". "skipped" means the flush missed
