@@ -54,13 +54,19 @@ ignores them.
   `docs/design/research/wireless-lab-setup.md` (hybrid 9800-CL VMs + 2 physical
   APs, ~$150–350; no virtual CAPWAP AP exists, OpenWrt APs cannot join a Cisco
   WLC).
-- **O9 · Push `feat/observability-platform`** (~19 commits ahead) so CI executes
-  the gates that cannot run locally (`-race`, staticcheck, gosec, govulncheck,
-  pg-integration, the new `tls-install-boot` and pgintegration-vet legs). The
-  TLS programme (#151, four steps) completed 2026-08-12 — record of what shipped:
-  `docs/security/TLS_ASSURANCE_REPORT_2026_08.md` (findings F-1…F-12 all fixed,
-  F-11 seal-or-quarantine verdict PASS) + `docs/adr/ADR-SEC-009`. Until the push,
-  every CI-only gate is honestly marked NOT EXECUTED in the corpus.
+- ~~**O9 · Push `feat/observability-platform`**~~ — **RESOLVED 2026-08-17.** The
+  branch is pushed and level with origin, and the CI-only gates have executed:
+  `backend-ci` (go vet / test / **-race** / staticcheck / gosec / govulncheck)
+  last ran GREEN at `b2352987`, and no `src/backend/**` change has landed since,
+  so that result is current for HEAD — the workflow is path-filtered on push, so
+  its absence from recent runs is correct, not a gap. Also green on the branch:
+  `correlation-ci`, `ingest-contract-ci`, `fresh-install-integrity`,
+  `tracker-ci`, `telemetry-catalog-ci`, `frontend-ci`, `supply-chain`,
+  `fuzz-nightly`, `perf-nightly`. The TLS programme record stands where it was:
+  `docs/security/TLS_ASSURANCE_REPORT_2026_08.md` + `docs/adr/ADR-SEC-009`.
+  **Delete this row at the next tracker pass** (rule 1) — it is kept for one
+  cycle only because the corpus still carries "NOT EXECUTED" markings that were
+  written under the old state and need re-checking against this.
 - **O10 · Two transport decisions recorded in inventory rows, awaiting owner
   review:** api→gotenberg (tenant RCA PDFs over plaintext — convert via a TLS
   proxy, or accept with a dated exception; row `api-gotenberg`, priority P1) and
