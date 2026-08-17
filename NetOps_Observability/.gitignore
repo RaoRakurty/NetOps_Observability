@@ -41,6 +41,9 @@ scripts/.host-hygiene.heartbeat
 
 # Lab-local compose overrides (site config — never product defaults)
 deployment/docker/docker-compose.override.yml
+# Written by install.py --offline (per-host: rewrites the digest-pinned images
+# to the tags `docker load` actually restores). Generated, never authored.
+deployment/docker/compose.offline-images.yml
 # TLS certs/keys for the nginx front (gen-dev-cert.sh output or operator-mounted)
 deployment/docker/nginx/certs/
 dist/
