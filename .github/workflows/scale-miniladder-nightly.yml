@@ -86,9 +86,19 @@ jobs:
         # harness reads credentials from .env and drives docker. eps 500 keeps
         # the burst ~60k events — above the engine's ~1k/s drain rate (the
         # drain proof stays meaningful) without flooding a shared runner.
+        #
+        # --consumer-settle-seconds 300: bring-up on a COLD SHARED RUNNER is
+        # far slower than on the lab host — kafka-init spends a JVM per topic
+        # and in the first scheduled run (31991056443) the last of the 16
+        # topics was created ~7 min after the broker came up, so the engine's
+        # final rebalance lands minutes after compose returns. This buys
+        # PATIENCE ONLY: the preflight assertion is unchanged (a live member
+        # must be there), and a genuinely dead/authorization-dead consumer
+        # still FAILS the run — see tests/test_scale_miniladder_group_parse.py.
         run: |
           sudo -E python3 scripts/scale-miniladder.py \
             --devices 200 --burst-minutes 2 --eps 500 \
+            --consumer-settle-seconds 300 \
             --run-dir "$RUNNER_TEMP/miniladder-run"
 
       - name: failure diagnostics
@@ -96,6 +106,16 @@ jobs:
         working-directory: NetOps_Observability/deployment/docker
         run: |
           echo "=== docker compose ps -a ==="; sudo docker compose ps -a || true
+          # The RAW membership table the preflight verdict is parsed FROM.
+          # Absent in run 31991056443, which cost a whole diagnosis cycle: the
+          # harness reported "no active consumer" and nothing in the job showed
+          # what the broker had actually printed (live members whose LAG read
+          # `-`). Never let the verdict ship without its input again.
+          echo "=== kafka consumer groups (--describe --all-groups) ==="
+          sudo docker compose exec -T kafka /opt/kafka/bin/kafka-consumer-groups.sh \
+            --bootstrap-server kafka:9094 \
+            --command-config /tmp/kafka-tls/admin.properties \
+            --describe --all-groups || true
           echo "=== correlation log ==="; sudo docker compose logs correlation --tail 80 || true
           echo "=== vector-router log ==="; sudo docker compose logs vector-router --tail 60 || true
           echo "=== kafka log ==="; sudo docker compose logs kafka --tail 40 || true
