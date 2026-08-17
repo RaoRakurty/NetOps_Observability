@@ -171,6 +171,18 @@ netops-correlation netops.cloud             0          0               0        
 ...
 ```
 
+**READING THE TABLE — `-` is not zero and not dead.** A partition a **live**
+member holds but has **never committed** prints `-` in BOTH `CURRENT-OFFSET`
+and `LAG`, with a real `CONSUMER-ID` (verified live 2026-08-17 on
+apache/kafka 4.1.1). That is the normal state of a freshly installed stack
+before any traffic — correlation commits manually (N=100/T=5 s) and Vector
+commits on consume, so neither has committed yet. **Membership is the
+`CONSUMER-ID` column, never the offset columns**: `CONSUMER-ID = -` is the
+dead-consumer signature (committed offsets frozen, lag growing, nobody
+attached — the 2026-08-16 wiped-ACL shape). Misreading `-` LAG as "no
+consumer" is exactly what failed nightly CI run 31991056443 against a
+perfectly healthy stack.
+
 | Signal | Healthy | Investigate (from measured ceilings) |
 |---|---|---|
 | `netops-correlation` total lag | 0–100 | > 60k ≈ 1 min RCA staleness (warning), > 300k ≈ 5 min (critical) — drain rate is ~1k evt/s |
