@@ -45,23 +45,22 @@ import install  # noqa: E402  — path set above
 def _load_harness():
     """Import the hyphen-named harness by path.
 
-    PATH is saved/restored across the import: the harness pins a cron-proof
-    PATH at module scope (§16.2), and letting that leak into the pytest process
-    hid the developer's ~/.local/bin — which made the shellcheck-based suites
-    (test_backup_ship, test_perf_signing_ship) fail with
-    'No such file or directory: shellcheck' whenever this file was collected
-    first. A test may never mutate the environment other tests read.
+    PATH is asserted unchanged across the import: the harness's cron-proof PATH
+    (§16.2) is applied in main(), NOT at module scope, because as module-scope
+    code it leaked into the pytest process and hid the developer's
+    ~/.local/bin — the shellcheck-based suites then failed with 'No such file
+    or directory: shellcheck' whenever a harness test shared their run. This
+    assertion keeps the import side-effect-free.
     """
     path = ROOT / "scripts" / "scale-miniladder.py"
     spec = importlib.util.spec_from_file_location("scale_miniladder", path)
     assert spec and spec.loader
     mod = importlib.util.module_from_spec(spec)
-    saved_path = os.environ.get("PATH", "")
-    try:
-        sys.modules["scale_miniladder"] = mod
-        spec.loader.exec_module(mod)
-    finally:
-        os.environ["PATH"] = saved_path
+    before = os.environ.get("PATH", "")
+    sys.modules["scale_miniladder"] = mod
+    spec.loader.exec_module(mod)
+    assert os.environ.get("PATH", "") == before, (
+        "importing the harness must not mutate PATH — pin it in main() instead")
     return mod
 
 
@@ -204,6 +203,100 @@ def test_preflight_settle_default_and_flag():
     assert ml.parse_args([]).consumer_settle_seconds == 180
     assert ml.parse_args(
         ["--consumer-settle-seconds", "300"]).consumer_settle_seconds == 300
+
+
+# ── memflat: warm-anchored leak slope + cap headroom ────────────────────────
+#
+# Second false negative from the same validation run (32040415877): the phase
+# FAILED on clickhouse x2.84 and correlation x3.15 measured from a COLD
+# baseline, while both sat at ~25% of their own caps and every other container
+# moved <=x1.15. Those are first-touch cache/window materialization, bounded by
+# design; a cold->end ratio cannot tell them from a leak.
+
+MIB = 1024 ** 2
+
+
+def _memflat_harness(tmp_path, cold, warm, end_stats, **flags):
+    argv = ["--run-dir", str(tmp_path)]
+    for k, v in flags.items():
+        argv += [f"--{k.replace('_', '-')}", str(v)]
+    args = ml.parse_args(argv)
+    args.project, args.base_url = "netops", "http://localhost:8000"
+    args.env_file = str(tmp_path / "nonexistent.env")
+    h = ml.Harness(args)
+    h.baseline["mem"] = cold
+    h.warm_mem = warm
+    h.stack.mem_stats = lambda: end_stats            # type: ignore[assignment]
+    return h
+
+
+def _named(d):
+    return {f"netops-{k}-1": v for k, v in d.items()}
+
+
+# The measured CI shape: big cold->warm step, flat afterwards, far from caps.
+CI_COLD = _named({"clickhouse": 474 * MIB, "correlation": 59 * MIB})
+CI_WARM = _named({"clickhouse": 1300 * MIB, "correlation": 180 * MIB})
+CI_END = _named({
+    "clickhouse": {"used": 1349 * MIB, "limit": 5326 * MIB},
+    "correlation": {"used": 187 * MIB, "limit": 789 * MIB},
+})
+
+
+def test_cold_start_cache_materialization_is_not_a_leak(tmp_path, monkeypatch):
+    monkeypatch.setattr(ml, "MEM_SERVICES", ["clickhouse", "correlation"])
+    h = _memflat_harness(tmp_path, CI_COLD, CI_WARM, CI_END)
+    assert h.memflat() is True, "the run-32040415877 numbers must PASS"
+    ev = h.phases[-1]["evidence"]
+    assert ev["anchor"].startswith("warm")
+    ch = next(r for r in ev["containers"] if r["container"] == "netops-clickhouse-1")
+    # The cold->end step is still REPORTED, just not judged.
+    assert ch["ratio_cold_to_end"] == 2.846 or ch["ratio_cold_to_end"] > 2.8
+    assert ch["pct_of_limit"] == 25.3
+
+
+def test_leak_after_input_stops_still_fails(tmp_path, monkeypatch):
+    """The invariant the phase exists for: growth once nothing is arriving."""
+    monkeypatch.setattr(ml, "MEM_SERVICES", ["correlation"])
+    end = _named({"correlation": {"used": 400 * MIB, "limit": 789 * MIB}})
+    h = _memflat_harness(tmp_path, _named({"correlation": 59 * MIB}),
+                         _named({"correlation": 180 * MIB}), end)
+    assert h.memflat() is False
+    assert "LEAK SLOPE" in h.phases[-1]["notes"]
+
+
+def test_container_near_its_own_cap_fails_even_when_flat(tmp_path, monkeypatch):
+    """The OOM path: flat but at 95% of cap is one burst from a kill."""
+    monkeypatch.setattr(ml, "MEM_SERVICES", ["opensearch"])
+    end = _named({"opensearch": {"used": 3550 * MIB, "limit": 3690 * MIB}})
+    h = _memflat_harness(tmp_path, _named({"opensearch": 3500 * MIB}),
+                         _named({"opensearch": 3540 * MIB}), end)
+    assert h.memflat() is False
+    notes = h.phases[-1]["notes"]
+    assert "% of its" in notes and "OOM" in notes
+
+
+def test_missing_warm_sample_falls_back_loudly(tmp_path, monkeypatch):
+    """burst() never completed ⇒ say which anchor was used; never pass blind."""
+    monkeypatch.setattr(ml, "MEM_SERVICES", ["clickhouse"])
+    h = _memflat_harness(tmp_path, CI_COLD, {},
+                         _named({"clickhouse": {"used": 1349 * MIB, "limit": 5326 * MIB}}))
+    h.memflat()
+    assert "cold baseline" in h.phases[-1]["evidence"]["anchor"]
+
+
+def test_absent_sample_is_a_failure_not_a_pass(tmp_path, monkeypatch):
+    monkeypatch.setattr(ml, "MEM_SERVICES", ["clickhouse"])
+    h = _memflat_harness(tmp_path, {}, {}, {})
+    assert h.memflat() is False
+    assert "no memory sample" in h.phases[-1]["notes"]
+
+
+def test_mem_stats_parses_docker_usage_and_limit():
+    parse = ml.Stack._mem_bytes
+    assert parse("1.286GiB") == int(1.286 * 1024 ** 3)
+    assert parse("474.3MiB") == int(474.3 * 1024 ** 2)
+    assert parse("--") == -1
 
 
 def test_ci_workflow_allows_a_longer_settle_than_the_lab_default():

@@ -44,8 +44,13 @@ Phases (each emits PASS/FAIL + evidence into the run dir):
               Plus: every burst device appears in corr_signals (silent
               per-device eviction check) and quarantine WRITE failures must
               not move (the metric-less 238k-drop signal, healthz-only).
-  memflat     end-of-run RSS per key container <= baseline x --mem-factor
-              (with a 64 MiB absolute-jitter floor) — catches leak slopes.
+  memflat     leak slope: end-of-run RSS per key container <= its END-OF-BURST
+              (warm) RSS x --mem-factor, with a 64 MiB jitter floor — a leak
+              keeps climbing after input stops, a warmed cache does not. PLUS
+              the OOM path: no key container above --mem-headroom-percent of
+              its own plan-sized cap. The cold-baseline->warm step is recorded
+              as evidence only (a 2-min burst cannot separate first-touch cache
+              materialization from a slow leak — that is the lab run + soak).
   cleanup     ALWAYS runs (also on failure/^C): delete every created device
               and VERIFY zero remain; purge run-tagged telemetry from
               ClickHouse (corr_signals) and OpenSearch (syslog lane) so
@@ -109,8 +114,12 @@ import urllib.request
 from datetime import datetime, timezone
 
 # Cron-proof PATH (CLAUDE.md 16.2): docker lives in /usr/bin or /usr/local/bin
-# on supported hosts; never rely on an interactive profile.
-os.environ["PATH"] = "/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+# on supported hosts; never rely on an interactive profile. APPLIED IN main(),
+# not at import: as module-scope code it leaked into every process that merely
+# IMPORTED this file for its parsers — which hid the developer's ~/.local/bin
+# and made the shellcheck-based suites fail with "No such file or directory:
+# shellcheck" whenever a harness test was collected in the same pytest run.
+CRON_PATH = "/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 REPO_ROOT = os.path.dirname(SCRIPT_DIR)
@@ -233,25 +242,43 @@ class Stack:
                          "health": parts[1], "exit_code": parts[2]})
         return rows
 
-    def mem_sample(self) -> dict[str, int]:
-        """Per-container RSS-ish working set in bytes via docker stats."""
+    _MEM_UNITS = {"B": 1, "KiB": 1024, "MiB": 1024**2, "GiB": 1024**3,
+                  "TiB": 1024**4, "kB": 1000, "MB": 1000**2, "GB": 1000**3}
+
+    @classmethod
+    def _mem_bytes(cls, cell: str) -> int:
+        m = re.match(r"([0-9.]+)\s*([A-Za-z]+)", cell.strip())
+        if m and m.group(2) in cls._MEM_UNITS:
+            return int(float(m.group(1)) * cls._MEM_UNITS[m.group(2)])
+        return -1
+
+    def mem_stats(self) -> dict[str, dict]:
+        """Per-container {"used","limit"} bytes via docker stats.
+
+        The LIMIT matters as much as the usage: it is the only self-relative
+        yardstick for "is this container heading for an OOM kill" that holds on
+        any hardware — the resource plan sizes it per host (#102), so a fixed
+        MiB threshold would be a lie on the next box."""
         rc, out, err = run(
             ["docker", "stats", "--no-stream",
              "--format", "{{.Name}}\t{{.MemUsage}}"], 60)
         if rc != 0:
             warn(f"docker stats failed: {err.strip()}")
             return {}
-        units = {"B": 1, "KiB": 1024, "MiB": 1024**2, "GiB": 1024**3, "TiB": 1024**4,
-                 "kB": 1000, "MB": 1000**2, "GB": 1000**3}
-        sample: dict[str, int] = {}
+        stats: dict[str, dict] = {}
         for line in out.splitlines():
             if "\t" not in line:
                 continue
             name, mem = line.split("\t", 1)
-            m = re.match(r"([0-9.]+)\s*([A-Za-z]+)", mem.split("/")[0].strip())
-            if m and m.group(2) in units:
-                sample[name] = int(float(m.group(1)) * units[m.group(2)])
-        return sample
+            used, _, limit = mem.partition("/")
+            u = self._mem_bytes(used)
+            if u >= 0:
+                stats[name] = {"used": u, "limit": self._mem_bytes(limit)}
+        return stats
+
+    def mem_sample(self) -> dict[str, int]:
+        """Per-container RSS-ish working set in bytes (usage only)."""
+        return {n: v["used"] for n, v in self.mem_stats().items()}
 
     # -- API ----------------------------------------------------------------
     def login(self) -> None:
@@ -578,6 +605,10 @@ class Harness:
         self.acct_prefix = self.prefix
         self.acct_runid = self.runid
         self.twin_run: dict = {}   # twin mode: {runid, run_dir, devices}
+        # Per-container RSS at the END OF THE BURST — the leak anchor. Empty
+        # until burst() completes; memflat says so and falls back to the cold
+        # baseline rather than passing silently on a missing sample.
+        self.warm_mem: dict[str, int] = {}
 
     # -- plumbing -----------------------------------------------------------
     def phase(self, name: str, status: str, evidence: dict, notes: str = "") -> bool:
@@ -1161,26 +1192,76 @@ class Harness:
 
     # -- phase 6: memory flat ------------------------------------------------
     def memflat(self) -> bool:
-        end = self.stack.mem_sample()
-        base = self.baseline.get("mem", {})
+        """Two independent memory verdicts.
+
+        ####################################################################
+        # THE SLOPE IS ANCHORED ON THE **WARM** SAMPLE, NOT THE COLD BASELINE.
+        #
+        # The cold baseline is taken at preflight — seconds after a fresh
+        # install, when every cache is EMPTY. The first burst then materializes
+        # working state that is bounded BY DESIGN, and a cold->end ratio cannot
+        # tell that apart from a leak. Measured in CI run 32040415877
+        # (60,001 events, 200 devices):
+        #   clickhouse   474 -> 1349 MiB (x2.84)  = 25% of its 5326 MiB cap
+        #   correlation   59 ->  187 MiB (x3.15)  = 24% of its  789 MiB cap
+        #                 (CORR_WINDOW_BUFFER=50000 signals — a capped deque)
+        # Every other container moved <=x1.15, including OpenSearch, which
+        # indexed all 60k docs on an already-warm JVM. Nothing was leaking and
+        # nothing was near a cap, yet the phase FAILED — a red gate every night
+        # teaches operators to ignore it, which is worse than no gate.
+        #
+        # So: the LEAK slope is measured warm->end (caches already
+        # materialized, input stopped — a leak keeps climbing there, a cache
+        # does not), and the OOM path gets its own check against each
+        # container's own limit. The cold->warm step stays in the evidence,
+        # unjudged, because a 2-minute burst genuinely cannot separate
+        # first-touch materialization from a slow leak. The leak gate proper
+        # is the lab's 1000-device/5-minute run and the 72 h soak that
+        # docs/scale/CORRELIX_SCALE_TEST_REPORT.md §6 still lists as not run.
+        ####################################################################
+        """
+        end_stats = self.stack.mem_stats()
+        end = {n: v["used"] for n, v in end_stats.items()}
+        cold = self.baseline.get("mem", {})
+        warm = self.warm_mem or {}
+        anchor = "warm (end of burst)" if warm else "cold baseline (no warm sample — burst did not complete)"
+        ref = warm or cold
         rows, problems = [], []
         for svc in MEM_SERVICES:
             name = f"{self.args.project}-{svc}-1"
-            b, e = base.get(name, -1), end.get(name, -1)
-            grew = (e / b) if b > 0 and e > 0 else -1
-            rows.append({"container": name, "baseline_bytes": b, "end_bytes": e,
-                         "ratio": round(grew, 3) if grew > 0 else None})
-            if b <= 0 or e <= 0:
-                problems.append(f"{name}: no memory sample (baseline {b}, end {e})")
+            c, w, e = cold.get(name, -1), warm.get(name, -1), end.get(name, -1)
+            r = ref.get(name, -1)
+            limit = end_stats.get(name, {}).get("limit", -1)
+            grew = (e / r) if r > 0 and e > 0 else -1
+            pct_limit = round(100.0 * e / limit, 1) if limit > 0 and e > 0 else None
+            rows.append({"container": name, "cold_bytes": c, "warm_bytes": w,
+                         "end_bytes": e, "limit_bytes": limit,
+                         "pct_of_limit": pct_limit,
+                         "ratio_vs_anchor": round(grew, 3) if grew > 0 else None,
+                         "ratio_cold_to_end": round(e / c, 3) if c > 0 and e > 0 else None})
+            if r <= 0 or e <= 0:
+                problems.append(f"{name}: no memory sample (anchor {r}, end {e})")
+                continue
             # 64 MiB absolute floor: small containers jitter past any ratio.
-            elif grew > self.args.mem_factor and (e - b) > 64 * 1024**2:
-                problems.append(f"{name}: {b / 1024**2:.0f} -> {e / 1024**2:.0f} MiB "
-                                f"(x{grew:.2f} > x{self.args.mem_factor})")
-        ev = {"factor": self.args.mem_factor, "containers": rows}
+            if grew > self.args.mem_factor and (e - r) > 64 * 1024**2:
+                problems.append(
+                    f"{name}: LEAK SLOPE {r / 1024**2:.0f} -> {e / 1024**2:.0f} MiB "
+                    f"(x{grew:.2f} > x{self.args.mem_factor}) after input stopped")
+            # The OOM path, self-relative to the plan-sized cap (#102).
+            if pct_limit is not None and pct_limit > self.args.mem_headroom_percent:
+                problems.append(
+                    f"{name}: {e / 1024**2:.0f} MiB is {pct_limit}% of its "
+                    f"{limit / 1024**2:.0f} MiB cap (> {self.args.mem_headroom_percent}%) "
+                    f"— one burst from an OOM kill")
+        ev = {"factor": self.args.mem_factor, "anchor": anchor,
+              "headroom_percent": self.args.mem_headroom_percent,
+              "containers": rows}
         status = "PASS" if not problems else "FAIL"
         return self.phase("memflat", status, ev,
                           "; ".join(problems) if problems else
-                          f"all {len(rows)} key containers within x{self.args.mem_factor} of baseline")
+                          f"all {len(rows)} key containers within x{self.args.mem_factor} "
+                          f"of the {anchor} sample and under "
+                          f"{self.args.mem_headroom_percent}% of their caps")
 
     # -- phase 7: cleanup ----------------------------------------------------
     def cleanup(self) -> bool:
@@ -1374,6 +1455,10 @@ class Harness:
                 # through burst/drain/accounting whenever creation itself
                 # succeeded; the phase verdicts stay independent.
                 if self.created_ids and self.burst():
+                    # Leak anchor: sampled the instant injection stops, so the
+                    # workload's caches/buffers are materialized but nothing
+                    # new is arriving (see memflat's header).
+                    self.warm_mem = self.stack.mem_sample()
                     self.drain()
                     self.accounting()
                 self.memflat()
@@ -1416,7 +1501,15 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
                          "at preflight — the drain verdict needs a near-idle "
                          "baseline (default 5000)")
     ap.add_argument("--mem-factor", type=float, default=1.3,
-                    help="max end/baseline container memory ratio (default 1.3)")
+                    help="max end/WARM container memory ratio — the leak slope "
+                         "after injection stops (default 1.3). The cold->warm "
+                         "step is evidence, not a verdict: a short burst cannot "
+                         "separate first-touch cache materialization from a leak")
+    ap.add_argument("--mem-headroom-percent", type=float, default=85.0,
+                    help="fail when a key container ends above this percentage "
+                         "of ITS OWN plan-sized memory cap (#102) — the OOM "
+                         "path, self-relative so it holds on any host "
+                         "(default 85)")
     ap.add_argument("--consumer-settle-seconds", type=int, default=180,
                     help="bounded wait for the correlation + router consumer "
                          "groups to show a live member at preflight. Bring-up "
@@ -1466,6 +1559,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
 
 
 def main(argv: list[str]) -> int:
+    os.environ["PATH"] = CRON_PATH          # see CRON_PATH: process-entry only
     args = parse_args(argv)
     if not args.project:
         args.project = env_get(args.env_file, "COMPOSE_PROJECT_NAME") or "netops"
@@ -1491,7 +1585,9 @@ def main(argv: list[str]) -> int:
         print("  phase 5 account  : injected == OS-persisted + run DLQ + counted "
               "rejections (exact); per-device corr_signals coverage; zero "
               "quarantine-write-failure movement")
-        print(f"  phase 6 memflat  : {', '.join(MEM_SERVICES)} <= x{args.mem_factor} baseline")
+        print(f"  phase 6 memflat  : {', '.join(MEM_SERVICES)} <= x{args.mem_factor} "
+              f"of their END-OF-BURST RSS, and under "
+              f"{args.mem_headroom_percent}% of their own caps")
         print("  phase 7 cleanup  : delete+verify devices, purge CH/OS run telemetry")
         print("  report           : report.md + report.json + last-run.json heartbeat")
         return 0

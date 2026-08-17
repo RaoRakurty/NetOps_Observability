@@ -66,10 +66,10 @@ ALLOWLIST: dict[tuple[str, int], str] = {
     # Re-pinned 2026-08-17 (same four reviewed sites, shifted by the
     # group_lag/preflight consumer-membership fix — the line-keyed design
     # forcing this re-read is working as intended).
-    ("scale-miniladder.py", 179): "optional .env read; returns '' with a documented callers-decide contract",
-    ("scale-miniladder.py", 620): "preflight ingress probe; failure appended to `problems`, preflight fails on any problem",
-    ("scale-miniladder.py", 627): "preflight API-login probe; failure appended to `problems`, preflight fails on any problem",
-    ("scale-miniladder.py", 847): "twin-mode burst artifact read; failure returns an explicit burst-phase FAIL (tracker 152 §8.3)",
+    ("scale-miniladder.py", 188): "optional .env read; returns '' with a documented callers-decide contract",
+    ("scale-miniladder.py", 651): "preflight ingress probe; failure appended to `problems`, preflight fails on any problem",
+    ("scale-miniladder.py", 658): "preflight API-login probe; failure appended to `problems`, preflight fails on any problem",
+    ("scale-miniladder.py", 878): "twin-mode burst artifact read; failure returns an explicit burst-phase FAIL (tracker 152 §8.3)",
     # The four 2026-08-16 chown-swallow findings (enrichment seed, processors
     # seed, appid/cloud fixtures, vuln SUDO_UID dir) were RESOLVED the same
     # day: all now route through chown_tree (repair-or-refuse), and the vuln
