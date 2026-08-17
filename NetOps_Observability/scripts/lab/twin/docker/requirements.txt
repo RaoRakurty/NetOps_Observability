@@ -10,5 +10,5 @@
 snmpsim-lextudio==1.1.1
 pysnmp-lextudio==6.3.0
 pysnmpcrypto==0.0.4
-pyasn1==0.6.0
+pyasn1==0.6.4
 ply==3.11
