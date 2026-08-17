@@ -52,7 +52,14 @@ from signals import SIGNAL_NS, EntityType, Severity, Signal, Source
 from verdicts import Verdict as GateVerdict
 from verdicts import VerdictTier
 
-ENGINE_SEMVER = "3.0.0"  # 3.0.0: Service Path Graph v1 — token overlap DEMOTED to rank-7
+ENGINE_SEMVER = "3.1.0"  # 3.1.0: tracker 154 — (a) equal-confidence ranking ties break on
+# grounded-seam-type affinity (the hypothesis whose declared seam scope matches the
+# TYPE of the seam the object actually grounded on wins the tie; strictly-higher
+# confidence is NEVER overridden, no seam ⇒ order unchanged); (b) same-window
+# components whose entity sets are bridged THROUGH a shared grounded seam fold
+# into ONE object, and the same seam-bridge criterion (plus window overlap)
+# extends find_merges/find_continuation (cross-cycle) — both tenant-guarded.
+# 3.0.0: Service Path Graph v1 — token overlap DEMOTED to rank-7
 # candidate; edge admission is the ranked, evidence-bearing, tenant-scoped relationship
 # gate (contract §3). Major bump: the meaning of an edge changed (an edge now carries a
 # rank + an evidence block, and only ranks 1–5 may be authoritative).
@@ -1332,6 +1339,170 @@ def _cap_verdict(ranking: RankingResult, reason: str) -> RankingResult:
     )
 
 
+# ── grounded-seam evidence in ranking + object folding (tracker 154) ──────────
+#
+# The seam inventory's OWNER-FINAL seam_type vocabulary (docs/design/
+# cloud-ingestion.md §4.0: DX | VPN | SDWAN | DIA | CLOUD_BACKBONE) mapped onto
+# the v1 NOC catalog's template seam labels (catalog.Seam — the `seams` metadata
+# each signature declares). This is how a grounded seam's TYPE says which fault
+# families live on it: a DX seam is the carrier-mediated private interconnect
+# INTO the cloud (CARRIER_INTERCONNECT + CLOUD_APP); VPN is a WAN overlay whose
+# far end is the cloud edge; SDWAN is the WAN fabric; CLOUD_BACKBONE is inside
+# the provider. DIA maps to NOTHING on purpose: the NOC catalog has no ISP/DIA
+# seam label, and inventing one here would fabricate affinity — a DIA-grounded
+# tie stays in its existing deterministic order (honest no-op).
+SEAM_TYPE_AFFINITY: dict[str, frozenset[str]] = {
+    "DX": frozenset({"CARRIER_INTERCONNECT", "CLOUD_APP"}),
+    "VPN": frozenset({"WAN_SDWAN", "CLOUD_APP"}),
+    "SDWAN": frozenset({"WAN_SDWAN"}),
+    "DIA": frozenset(),
+    "CLOUD_BACKBONE": frozenset({"CLOUD_APP"}),
+}
+
+
+def _scoped_seams(seams: tuple[SeamView, ...], tenant: str) -> tuple[SeamView, ...]:
+    """§3a default-closed: only this tenant's seams (or platform-global,
+    untenanted ones) may influence ranking or folding — the inventory the
+    caller passes is all-tenant."""
+    return tuple(s for s in sorted(seams, key=lambda s: s.seam_id)
+                 if s.tenant_id in ("", tenant))
+
+
+def _grounded_seam_affine_labels(
+    comp_edges: tuple[Edge, ...], seams: tuple[SeamView, ...], tenant: str,
+) -> frozenset[str]:
+    """Catalog seam labels affine to the seam TYPES this component actually
+    GROUNDED on — authoritative (rank-2 structural membership) seam edges only;
+    a token-matched (rank-7) seam edge is a name coincidence and carries no
+    ranking evidence."""
+    ids = {e.grounding.ref for e in comp_edges
+           if e.grounding.kind == "seam" and e.grounding.authoritative}
+    if not ids:
+        return frozenset()
+    labels: set[str] = set()
+    for s in _scoped_seams(seams, tenant):
+        if s.seam_id in ids:
+            labels |= SEAM_TYPE_AFFINITY.get(s.seam_type.upper(), frozenset())
+    return frozenset(labels)
+
+
+def _break_ties_by_seam_affinity(
+    ranking: RankingResult, comp_edges: tuple[Edge, ...],
+    seams: tuple[SeamView, ...], tenant: str,
+) -> RankingResult:
+    """Grounded-seam evidence as a ranking TIE-BREAK (tracker 154a).
+
+    When the top hypotheses tie at EQUAL confidence, the one whose declared seam
+    scope (template `seams` metadata) best matches the TYPE of the seam the
+    object grounded on wins — seam-level ownership is the RCA product rule, and
+    the grounding edge is measured evidence the old (-confidence, -satisfied,
+    id) sort ignored. Honesty constraints, all structural:
+
+      * confidence numbers are NEVER touched — nothing is fabricated;
+      * ONLY the leading equal-confidence run is re-ordered (stable sort by
+        affinity, ties keep their existing specific-first order) — a
+        strictly-higher-confidence hypothesis can never be displaced;
+      * no grounded seam / no affine label / undetermined result ⇒ unchanged.
+
+    Pure + deterministic (sorted inputs, stable sort) — replay-safe."""
+    hyps = ranking.hypotheses
+    if ranking.top_hypothesis == "undetermined" or len(hyps) < 2:
+        return ranking
+    labels = _grounded_seam_affine_labels(comp_edges, seams, tenant)
+    if not labels:
+        return ranking
+    top_conf = hyps[0].confidence_rank
+    k = 1
+    while k < len(hyps) and hyps[k].confidence_rank == top_conf:
+        k += 1
+    if k < 2:
+        return ranking
+    tie = tuple(sorted(hyps[:k], key=lambda h: -len(labels & set(h.seams))))
+    if tie == hyps[:k]:
+        return ranking
+    new_top = tie[0]
+    # Mirror rank()'s top-specific evidence_missing for the new leader (the
+    # checklist must describe the hypothesis the object now names).
+    missing: tuple[str, ...] = ()
+    if new_top.verdict_gate.tier is not VerdictTier.CONFIRMED:
+        clause_gaps = tuple(f"{new_top.template_id}: needs {m}" for m in new_top.missing)
+        gate_gaps = tuple(f"{new_top.template_id}: {r}" for r in new_top.verdict_gate.reasons)
+        missing = tuple(dict.fromkeys(clause_gaps + gate_gaps))
+    return replace(
+        ranking,
+        top_hypothesis=new_top.template_id,
+        verdict_tier=new_top.verdict_gate.tier,  # rank ≠ verdict: tier still from the gate
+        hypotheses=tie + hyps[k:],
+        evidence_missing=missing,
+    )
+
+
+def _fold_seam_bridged_components(
+    comps: list[tuple[Node, ...]], edges: tuple[Edge, ...],
+    seams: tuple[SeamView, ...], tenant: str,
+) -> list[tuple[Node, ...]]:
+    """Fold components whose entity sets are connected THROUGH a shared grounded
+    seam (tracker 154b, in-window half).
+
+    Two components fold when a seam S exists such that (i) S is structurally
+    GROUNDED by an authoritative rank-2 seam edge inside at least one of them
+    (an OBSERVED seam membership, not a declared hope), and (ii) BOTH components
+    contain a node that is a structural member of S (identity_refs ∩ endpoint
+    values — the exact rank-2 membership test, never tokens). The time bound is
+    the evidence window itself (the caller buffers cfg.window_s): components
+    coexisting in ONE window whose halves sit on the same ownership handoff are
+    the §4.4 split-brain signature across a seam — the pairwise seam edge was
+    admissible and only temporal decay kept the halves apart (a cascade's cloud
+    half follows its circuit half by minutes; decay must not split one handoff's
+    incident in two). No edge is fabricated; the components' own edges are
+    carried as they are.
+
+    Tenant-guarded twice over: run_window windows are single-tenant by
+    construction, and only this tenant's (or untenanted platform) seam views
+    participate (_scoped_seams) — a foreign tenant's seam can never bridge.
+    Pure + deterministic: union-find over components in sorted order, output
+    groups re-sorted exactly like _components."""
+    if len(comps) < 2:
+        return comps
+    scoped = _scoped_seams(seams, tenant)
+    if not scoped:
+        return comps
+    evs = [s.endpoint_values() | {s.seam_id} for s in scoped]
+    memb: list[frozenset[int]] = []
+    grounded: list[frozenset[int]] = []
+    for comp in comps:
+        keys = {n.key for n in comp}
+        refs = frozenset(r for n in comp for r in n.identity_refs())
+        memb.append(frozenset(i for i, ev in enumerate(evs) if refs & ev))
+        seam_ids = {e.grounding.ref for e in edges
+                    if e.from_node in keys and e.grounding.kind == "seam"
+                    and e.grounding.authoritative}
+        grounded.append(frozenset(i for i, s in enumerate(scoped)
+                                  if s.seam_id in seam_ids))
+
+    parent = list(range(len(comps)))
+
+    def find(i: int) -> int:
+        while parent[i] != i:
+            parent[i] = parent[parent[i]]
+            i = parent[i]
+        return i
+
+    for i in range(len(comps)):
+        for j in range(i + 1, len(comps)):
+            if (grounded[i] | grounded[j]) & memb[i] & memb[j]:
+                ri, rj = find(i), find(j)
+                if ri != rj:
+                    parent[max(ri, rj)] = min(ri, rj)
+
+    groups: dict[int, list[Node]] = {}
+    for i, comp in enumerate(comps):
+        groups.setdefault(find(i), []).extend(comp)
+    return [tuple(sorted(g, key=lambda n: n.key))
+            for _, g in sorted(groups.items(),
+                               key=lambda kv: min(n.key for n in kv[1]))]
+
+
 def run_window(
     window: tuple[Signal, ...] | list[Signal],
     catalog: Catalog,
@@ -1398,13 +1569,20 @@ def run_window(
     eng_ver = engine_version(cfg)
 
     snapshots = []
-    for comp in _components(nodes, edges):
+    # Tracker 154b: seam-bridged components are ONE incident — fold before
+    # minting objects (the folded id derives from the union's earliest node, so
+    # a transient split re-derives the same identity it had before splitting).
+    comps = _fold_seam_bridged_components(_components(nodes, edges), edges,
+                                          seams, tenant)
+    for comp in comps:
         comp_keys = {n.key for n in comp}
         comp_edges = tuple(e for e in edges if e.from_node in comp_keys)
         if not comp_edges and _SEV_RANK[comp[0].peak_severity] < open_floor:
             continue  # singleton below the open floor: episode, not an object
         comp_sigs = tuple(s for n in comp for s in n.signals)
-        ranking = rank(catalog, comp_sigs)
+        # Tracker 154a: grounded-seam-type affinity breaks equal-confidence ties.
+        ranking = _break_ties_by_seam_affinity(
+            rank(catalog, comp_sigs), comp_edges, seams, tenant)
         # ── contract gates on the verdict (never on the edge's existence) ─────
         # §1: synthetic/replay/lab evidence may support, contradict or illustrate —
         # it can NEVER produce a customer-confirmed verdict.
@@ -1523,6 +1701,48 @@ def _windows_overlap(a: ObjectSnapshot, b: ObjectSnapshot) -> bool:
     return a.window_start <= b.window_end and b.window_start <= a.window_end
 
 
+def _snap_grounded_seam_ids(snap: ObjectSnapshot) -> frozenset[str]:
+    """Seam ids this object's graph GROUNDED on — authoritative rank-2 seam
+    edges only (a rank-7 token-matched seam edge is a name coincidence and may
+    never justify a fold)."""
+    return frozenset(e.grounding.ref for e in snap.edges
+                     if e.grounding.kind == "seam" and e.grounding.authoritative)
+
+
+def _snap_touches_seam(snap: ObjectSnapshot, view: SeamView) -> bool:
+    """Structural seam membership of the OBJECT: any node whose identity_refs
+    intersect the seam's endpoint values ∪ {seam_id} — the exact rank-2
+    membership test resolve_grounding trusts, never free-text tokens."""
+    ev = view.endpoint_values() | {view.seam_id}
+    return any(n.identity_refs() & ev for n in snap.nodes)
+
+
+def _seam_bridged(a: ObjectSnapshot, b: ObjectSnapshot) -> bool:
+    """Tracker 154b (cross-cycle half): True when a shared GROUNDED seam bridges
+    the two objects' entity sets — a seam that at least one of them holds an
+    authoritative seam-grounded edge on, whose declared endpoints structurally
+    contain a member of BOTH objects. Entity-set Jaccard is blind to this shape
+    (a cloud half and a network half of one interconnect incident share ZERO
+    entities — they share the seam), so the merge criterion admits it explicitly.
+
+    Tenant-guarded (§3a default-closed): different tenants never bridge, and a
+    seam view is consulted only when untenanted (platform) or owned by the
+    objects' tenant — a foreign tenant's seam can never weld two objects. Seam
+    views come from the snapshots' own embedded grounding context, so the test
+    is replay-safe and needs no live inventory."""
+    if a.tenant_id != b.tenant_id:
+        return False
+    grounded = _snap_grounded_seam_ids(a) | _snap_grounded_seam_ids(b)
+    if not grounded:
+        return False
+    views: dict[str, SeamView] = {}
+    for v in (*a.seams, *b.seams):
+        if v.seam_id in grounded and v.tenant_id in ("", a.tenant_id):
+            views.setdefault(v.seam_id, v)
+    return any(_snap_touches_seam(a, views[sid]) and _snap_touches_seam(b, views[sid])
+               for sid in sorted(views))
+
+
 def find_merges(
     survivors: list[ObjectSnapshot] | tuple[ObjectSnapshot, ...],
     candidates: list[ObjectSnapshot] | tuple[ObjectSnapshot, ...],
@@ -1534,7 +1754,12 @@ def find_merges(
     Jaccard ≥ min_overlap AND their time windows overlap — the signature of one
     incident re-identified across windowing (NOT two unrelated incidents: an
     entity-set overlap IS same-device containment, the §4.2 grounding the gate
-    already trusts). Each candidate merges into at most ONE survivor — the
+    already trusts). Tracker 154b widens the SAME-incident test to the seam
+    shape Jaccard is blind to: overlapping windows + entity sets bridged
+    through a shared GROUNDED seam (_seam_bridged — rank-2 structural
+    membership on both sides, authoritative seam edge on at least one) also
+    merge; the tenant guard and every other guard below are unchanged.
+    Each candidate merges into at most ONE survivor — the
     strongest overlap, tie-broken by earliest window_start then cid (deterministic;
     never depends on input order). Survivors are the live objects this cycle and are
     never merged away. Returns (merged_cid, survivor_cid) pairs, sorted.
@@ -1564,7 +1789,10 @@ def find_merges(
             se = _entity_ids(s)
             union = ce | se
             jac = len(ce & se) / len(union) if union else 0.0
-            if jac < min_overlap:
+            # Tracker 154b: a shared grounded seam bridging the two entity sets
+            # is the same-incident signature Jaccard can't see (disjoint halves
+            # of one seam incident) — admit it alongside the overlap criterion.
+            if jac < min_overlap and not _seam_bridged(cand, s):
                 continue
             key = (jac, s.window_start, s.correlation_id)
             # Higher overlap wins; tie → earliest window_start, then lexical cid.
@@ -1591,7 +1819,8 @@ def find_continuation(
     caller instead ADOPTS the existing open object's identity and versions it.
 
     Same criterion as find_merges — entity-set Jaccard >= min_overlap AND time-
-    window overlap IS one incident re-identified across windowing — and the same
+    window overlap IS one incident re-identified across windowing (or, tracker
+    154b, entity sets bridged through a shared grounded seam) — and the same
     deterministic choice: strongest overlap, tie -> earliest window_start, then
     lexical cid. Tenant-guarded (§3a default-closed): a snapshot can never adopt
     another tenant's object, whatever the entity overlap. Returns the open
@@ -1614,7 +1843,9 @@ def find_continuation(
         se = _entity_ids(s)
         union = ce | se
         jac = len(ce & se) / len(union) if union else 0.0
-        if jac < min_overlap:
+        # Tracker 154b: same seam-bridge admission as find_merges — a re-keyed
+        # seam-far half continues the incident it is bridged to, never a clone.
+        if jac < min_overlap and not _seam_bridged(snap, s):
             continue
         # Strongest overlap wins; tie -> earliest window_start, then lexical cid.
         if (best is None or jac > best[0]
