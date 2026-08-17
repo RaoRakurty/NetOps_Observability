@@ -60,6 +60,55 @@ inventory / onboarding").
 | `test_durability.py::test_rejected_insert_is_counted_per_table` / `::test_rejected_critical_write_raises_so_the_offset_is_not_advanced` / `::test_malformed_payload_is_written_to_the_durable_dlq` / `::test_dead_letter_file_is_size_capped` | G1 correlation-ci | No ClickHouse write or poison event is lost silently (F-38/F-40 counters + durable, size-capped DLQ) |
 | `tests/test_install_data_dirs.py::test_ensure_data_dirs_covers_tls_and_deadletter` | G1 ingest-contract-ci | The installer hands `data/correlation/deadletter` (and `data/tls`) to the service uid — the root cause of the 238k loss cannot recur at install time |
 
+## Defect class 2b — a GREEN signal that proves nothing
+
+The sibling of class 2, and the harder half: not a failure nobody surfaced, but a
+CHECK that passes vacuously. Two live instances, both found after the artifacts
+they covered had already been reported as validated:
+
+* **Alert rules were never behaviourally tested.** `preflight-configs.sh` ran
+  `promtool check rules` on `rules.yaml` only, and mounted only that file for unit
+  tests — so a `*.test.yaml` naming a `rules-scale-slo.yaml` alert resolved ZERO
+  rules, and **promtool reports an empty result set as SUCCESS**. A test asserting
+  on a nonexistent alert was green.
+* **"Validated" meant "parses".** `rules-scale-slo.yaml` was reported as
+  "vmalert `-dryRun` validated". True — and much weaker than it sounds: a dry run
+  proves the file LOADS, never that a rule fires. Syntax-loads vs
+  behaviourally-covered reads identically in a status report, which is how it
+  survived. Keep this distinction in every future validation claim.
+
+| Guarding test | Gate | GA criterion evidenced |
+|---|---|---|
+| `tests/test_alert_rule_coverage.py::test_every_rule_file_is_promtool_checked` | G1 ingest-contract-ci | Every `rules*.yaml` is named in the preflight check — a NEW rule file cannot repeat the unvalidated-for-its-whole-life story |
+| `tests/test_alert_rule_coverage.py::test_every_rule_file_is_mounted_for_unit_tests` | G1 ingest-contract-ci | Every rule file is mounted for the promtool TEST run (checked-but-unmounted is the exact original defect; mutation-verified by deleting the mount) |
+| `tests/test_alert_rule_coverage.py::test_referenced_alerts_all_exist` | G1 ingest-contract-ci | Every asserted `alertname` exists — promtool's empty-set-is-success semantics can no longer hide a typo or a rename |
+| `tests/test_alert_rule_coverage.py::test_each_test_file_names_at_least_one_alert` | G1 ingest-contract-ci | A test file that asserts on nothing fails instead of passing |
+| `tests/test_alert_rule_coverage.py::test_rule_files_exist` | G1 ingest-contract-ci | The discovery globs cannot go empty — **the four guards above cannot themselves become vacuous** (the same trap, one level up) |
+| `src/config/rules-tests/correlation-consumer-state.test.yaml` (11 promtool cases) | G1 fresh-install-integrity | The scale-SLO rules fire when they should AND stay SILENT when they should (startup ≠ idle; an 8-minute rebalance blip ≠ a 15-minute idle alert; one replica at zero partitions ≠ a parallelism ceiling) |
+
+## Defect class 2c — event-loop starvation (P1 thrash, twice)
+
+A uniform fault signature across ~1000 devices folds the access layer into a few
+GIANT correlation objects (measured **750 nodes / 48,375 edges**); per-object
+pure-CPU serialization cost ~7.5 s EACH on the event loop, 10–15 per cycle =
+75–110 s of starvation, which **cumulatively** expired the consumer heartbeat (no
+single call exceeded 1.60 s — the first diagnosis, "one >30 s block", was wrong).
+The revoke hook then amplified it by running up to 60 s of ClickHouse I/O inside
+the rejoin. Natural drain fell to **9.5 events/s**; post-fix **~3,680/s**.
+
+Refuted hypothesis, recorded so nobody re-runs the experiment: **not DLQ fsync.**
+p50 102 µs; a burst driving ~2.3k synchronous DLQ writes/s per replica produced
+633 ms max loop drift and ZERO stalls. A batching prototype was built and
+**reverted** — it broke the immediate-durability invariant of class 2 for a saving
+measurably off the critical path.
+
+| Guarding test | Gate | GA criterion evidenced |
+|---|---|---|
+| `src/correlation/test_loop_blocking.py` (6 cases) | G1 correlation-ci | Size-unbounded pure-CPU work is OFF the loop (inline 2.40 s → offloaded 0.39 s worst latency), with wire bytes and dedup tokens byte-identical |
+| `src/correlation/test_consume_poll_cadence.py` (7 cases) | G1 correlation-ci | Poll cadence survives heavy processing; membership tuning pinned; revoke commits flush-before-commit and never advance past unpersisted work (F-38) |
+| revoke-budget bounds + arithmetic cases | G1 correlation-ci | Each revoke leg is bounded (5 s, 2× backstop ≤ ⅙ of `rebalance_timeout`); a flush that misses budget **skips the commit** rather than waiting — F-38 preserved by not acknowledging |
+| `corr_loop_lag_stalls_total` + `CorrelationEventLoopStalling` alert | G2 nightly / runtime | **The standing regression guard for this entire class**: any nonzero increase means the loop is being starved again, whatever the new cause |
+
 ## Defect class 3 — warn-and-continue error swallows (§16.1; installer P0)
 
 `ensure_data_dirs` printed `[info] Fix: sudo chown -R ...` and continued —
