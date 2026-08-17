@@ -71,6 +71,15 @@ they covered had already been reported as validated:
   tests — so a `*.test.yaml` naming a `rules-scale-slo.yaml` alert resolved ZERO
   rules, and **promtool reports an empty result set as SUCCESS**. A test asserting
   on a nonexistent alert was green.
+* **A measurement tool that MANUFACTURES failures.** The twin's accuracy scorer
+  issued one blob-carrying ClickHouse scan per entity (390 queries, ~21 min);
+  under a giant object **13 queries were lost to `Code: 241` and each lost query
+  was reported as a MISS** — a failure that never happened. This is the worst
+  member of the class: promtool and `-dryRun` merely fail to DETECT a problem,
+  whereas this INVENTS one, and every accuracy number computed from it is wrong
+  in an unknown direction. Fixed to two lean phases: 8 queries, 103 s, 0 lost.
+  The general rule: **a lost measurement must never be recorded as a negative
+  result** — it is a THIRD outcome, and the tool must say so.
 * **"Validated" meant "parses".** `rules-scale-slo.yaml` was reported as
   "vmalert `-dryRun` validated". True — and much weaker than it sounds: a dry run
   proves the file LOADS, never that a rule fires. Syntax-loads vs
