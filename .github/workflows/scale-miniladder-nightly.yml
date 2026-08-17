@@ -111,6 +111,10 @@ jobs:
           # harness reported "no active consumer" and nothing in the job showed
           # what the broker had actually printed (live members whose LAG read
           # `-`). Never let the verdict ship without its input again.
+          # `|| true` throughout this step ON PURPOSE (§16.1 exception): it is
+          # post-failure evidence collection — a broker too dead to answer must
+          # not stop the remaining dumps. The RUN has already failed; nothing
+          # here can report success.
           echo "=== kafka consumer groups (--describe --all-groups) ==="
           sudo docker compose exec -T kafka /opt/kafka/bin/kafka-consumer-groups.sh \
             --bootstrap-server kafka:9094 \
