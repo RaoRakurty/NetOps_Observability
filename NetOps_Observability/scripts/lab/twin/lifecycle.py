@@ -489,6 +489,43 @@ def teardown(stack: Stack, state: dict, enrichment_dir: str) -> list[str]:
     else:
         log("teardown: corr_signals purged + verified zero")
 
+    # 4b. Fidelity-wave telemetry (only when the run emitted those lanes —
+    # zero teardown-surface change for T1-core runs): netops.flows rows are
+    # keyed by the run's tenant ids (sampler addresses are REUSED across
+    # runs, tenant ids never are), netops-snmptrap-* docs by device prefix.
+    run_tenants = sorted(t["tenant_id"]
+                         for t in (state.get("tenants") or {}).values())
+    if run_tenants and (state.get("fidelity") == "source_ip"):
+        tlist = ", ".join(f"'{t}'" for t in run_tenants)
+        ok, out = stack.ch_mutation(
+            f"ALTER TABLE netops.flows DELETE WHERE tenant_id IN ({tlist})")
+        if not ok:
+            problems.append(f"ClickHouse flows purge failed: {out}")
+        okc, cnt = stack.ch(
+            f"SELECT count() FROM netops.flows WHERE tenant_id IN ({tlist})")
+        left = int(cnt) if okc and cnt.isdigit() else -1
+        if left != 0:
+            problems.append(f"{left} run rows left in netops.flows")
+        else:
+            log("teardown: netops.flows rows purged + verified zero")
+    okd, res = stack.os_req(
+        "OS_BOOTSTRAP_PASSWORD", "svc_bootstrap",
+        "/netops-snmptrap-*/_delete_by_query?refresh=true",
+        {"query": {"prefix": {"device.keyword": prefix}}}, timeout=300)
+    # index may not exist when the run never emitted traps — only a REPORTED
+    # failure counts (delete_by_query on a missing index 404s → okd False
+    # with a 'index_not_found' body; treat that as nothing-to-purge).
+    if isinstance(res, dict) and res.get("failures"):
+        problems.append(f"OpenSearch snmptrap purge failures: "
+                        f"{str(res['failures'])[:200]}")
+    elif okd:
+        trap_left = stack.os_count("netops-snmptrap-*", "device.keyword",
+                                   prefix)
+        if trap_left > 0:
+            problems.append(f"{trap_left} run docs left in netops-snmptrap-*")
+        else:
+            log("teardown: OpenSearch snmptrap docs purged + verified zero")
+
     # 5. OpenSearch syslog lane purge + verify.
     okd, res = stack.os_req(
         "OS_BOOTSTRAP_PASSWORD", "svc_bootstrap",

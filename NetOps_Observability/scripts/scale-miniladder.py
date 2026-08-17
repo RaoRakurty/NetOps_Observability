@@ -529,6 +529,13 @@ class Harness:
         self.injected_total = 0
         self.burst_seconds = 0.0
         self.produce_failures: list[str] = []
+        # Accounting identity (tracker 152 §8.3): the internal generator
+        # accounts under this harness's own mlx- namespace; `--load-generator
+        # twin` swaps these to the delegated twin run's twx- namespace so the
+        # balance equation counts the events that were ACTUALLY injected.
+        self.acct_prefix = self.prefix
+        self.acct_runid = self.runid
+        self.twin_run: dict = {}   # twin mode: {runid, run_dir, devices}
 
     # -- plumbing -----------------------------------------------------------
     def phase(self, name: str, status: str, evidence: dict, notes: str = "") -> bool:
@@ -726,6 +733,82 @@ class Harness:
         })
 
     def burst(self) -> bool:
+        # tracker 152 §8.3 composition: the twin generates realistic load,
+        # this harness keeps judging. Default path is the internal generator,
+        # untouched.
+        if getattr(self.args, "load_generator", "internal") == "twin":
+            return self._burst_twin()
+        return self._burst_internal()
+
+    def _burst_twin(self) -> bool:
+        """Delegate the burst to `twin.py run` (kept standing with --keep so
+        accounting can count its telemetry; cleanup() tears the twin run down
+        after the verdicts). The twin's per-lane emitted counts in
+        twin-report.json become the injected side of the balance equation."""
+        ev: dict = {}
+        twin_py = os.path.join(REPO_ROOT, "scripts", "lab", "twin", "twin.py")
+        cmd = [sys.executable, twin_py,
+               "--env-file", self.args.env_file,
+               "--project", self.args.project,
+               "--base-url", self.args.base_url,
+               "run", "--scenario", self.args.twin_scenario,
+               "--duration-minutes", str(self.args.twin_duration_minutes),
+               "--fidelity", self.args.twin_fidelity,
+               "--keep"]
+        budget = int(self.args.twin_duration_minutes * 60 + 1800)
+        t0 = time.monotonic()
+        rc, out, err = run(cmd, budget)
+        self.burst_seconds = time.monotonic() - t0
+        ev["twin_rc"] = rc
+        self.evidence_file("twin-stdout.log", out)
+        self.evidence_file("twin-stderr.log", err)
+        try:
+            with open(os.path.join(REPO_ROOT, "data", "twin",
+                                   "last-run.json"), encoding="utf-8") as f:
+                last = json.load(f)
+            with open(os.path.join(last["run_dir"], "twin-report.json"),
+                      encoding="utf-8") as f:
+                report = json.load(f)
+            with open(os.path.join(last["run_dir"], "state.json"),
+                      encoding="utf-8") as f:
+                state = json.load(f)
+        except (OSError, json.JSONDecodeError, KeyError) as exc:
+            return self.phase("burst", "FAIL", ev,
+                              f"twin run artifacts unreadable ({exc}) — "
+                              f"cannot account honestly (twin rc={rc})")
+        self.twin_run = {"runid": last.get("runid", ""),
+                         "run_dir": last.get("run_dir", ""),
+                         "devices": len(state.get("devices") or [])}
+        self.acct_prefix = str(state.get("prefix") or "")
+        self.acct_runid = str(last.get("runid") or "")
+        by_lane = report.get("emitted_by_lane") or {}
+        # +1: the twin's canary syslog event rides the same prefix but is not
+        # in the schedule counts (lifecycle.canary).
+        self.injected_total = int(by_lane.get("syslog") or 0) + 1
+        ev.update({
+            "twin_runid": self.acct_runid,
+            "twin_emitted_by_lane": by_lane,
+            "twin_skipped_by_lane": report.get("skipped_by_lane") or {},
+            "twin_produce_failures": report.get("produce_failures") or [],
+            "twin_accuracy": report.get("accuracy") or {},
+            "twin_spread": report.get("spread") or {},
+            "injected_total_syslog_lane": self.injected_total,
+            "canary_included": True,
+        })
+        if rc != 0 or not self.acct_prefix or not self.acct_runid:
+            return self.phase("burst", "FAIL", ev,
+                              f"twin run rc={rc} (see twin-stderr.log)")
+        if report.get("produce_failures"):
+            return self.phase("burst", "FAIL", ev,
+                              "twin reported produce failures — accounting "
+                              "would be dishonest")
+        return self.phase(
+            "burst", "PASS", ev,
+            f"twin {self.acct_runid} injected {self.injected_total} syslog-"
+            f"lane events (+{sum(v for k, v in by_lane.items() if k != 'syslog')} "
+            f"on other lanes) in {self.burst_seconds:.0f}s")
+
+    def _burst_internal(self) -> bool:
         ev: dict = {}
         # Gate 1: registry propagation. The Go API rewrites device_tenant.csv
         # every ~60s; the engine reloads it on mtime change. Without this gate
@@ -887,13 +970,13 @@ class Harness:
         os_docs = -1
         deadline = time.monotonic() + 240
         while time.monotonic() < deadline:
-            os_docs = self.stack.os_count("netops-syslog-*", "hostname.keyword", self.prefix)
+            os_docs = self.stack.os_count("netops-syslog-*", "hostname.keyword", self.acct_prefix)
             if os_docs >= 0 and os_docs == prev:
                 break
             prev = os_docs
             time.sleep(15)
 
-        dlq_run = self.stack.dlq_run_lines(self.runid)
+        dlq_run = self.stack.dlq_run_lines(self.acct_runid)
         discards = self.stack.vm_query(
             'sum(vector_component_discarded_events_total{intentional="false"})')
         dl_sent = self.stack.vm_query(
@@ -910,12 +993,22 @@ class Harness:
         d_qwf = qwf_now - qwf_base if qwf_now >= 0 and qwf_base >= 0 else -1
         ch_fail = dur.get("ch_insert_failures", {})
 
-        okq, out = self.stack.ch(
-            "SELECT uniqExact(extract(entity_id, 'mlx-[a-z0-9]+-[0-9]+')) "
-            f"FROM netops.corr_signals WHERE entity_id LIKE '%{self.prefix}%'")
+        twin_mode = getattr(self.args, "load_generator", "internal") == "twin"
+        if twin_mode:
+            # twin device names are not numeric — count devices by stripping
+            # the entity's :interface suffix under the twin prefix.
+            okq, out = self.stack.ch(
+                "SELECT uniqExact(extract(entity_id, "
+                f"'{self.acct_prefix}[A-Za-z0-9_.-]+')) "
+                f"FROM netops.corr_signals WHERE entity_id LIKE "
+                f"'%{self.acct_prefix}%'")
+        else:
+            okq, out = self.stack.ch(
+                "SELECT uniqExact(extract(entity_id, 'mlx-[a-z0-9]+-[0-9]+')) "
+                f"FROM netops.corr_signals WHERE entity_id LIKE '%{self.prefix}%'")
         entities = int(out) if okq and out.isdigit() else -1
         okq2, out2 = self.stack.ch(
-            f"SELECT count() FROM netops.corr_signals WHERE entity_id LIKE '%{self.prefix}%'")
+            f"SELECT count() FROM netops.corr_signals WHERE entity_id LIKE '%{self.acct_prefix}%'")
         signal_rows = int(out2) if okq2 and out2.isdigit() else -1
 
         # The equation. Each term and what it honestly counts:
@@ -958,7 +1051,12 @@ class Harness:
                 f"DLQ copy (the 238k-drop class; check /data/deadletter ownership)")
         if any(v for v in ch_fail.values()) if isinstance(ch_fail, dict) else False:
             problems.append(f"correlation ClickHouse insert failures: {ch_fail}")
-        if entities != len(self.created_ids):
+        if twin_mode:
+            # Per-device coverage is the TWIN's verdict (its accuracy scorer
+            # judges signal presence per story/device); the ladder judges the
+            # balance equation. Coverage rides as evidence, not a gate.
+            ev["twin_devices"] = self.twin_run.get("devices", -1)
+        elif entities != len(self.created_ids):
             problems.append(
                 f"corr_signals covers {entities}/{len(self.created_ids)} burst devices — "
                 f"silent per-device signal loss (window eviction?)")
@@ -1018,6 +1116,23 @@ class Harness:
         problems: list[str] = []
         if self.args.dry_run:
             return True
+
+        # 7·twin: the delegated twin run was kept standing for accounting —
+        # tear it down through ITS verified-teardown path now (tracker 152
+        # §8.3; twin.py exits non-zero on any teardown residue).
+        if self.twin_run.get("runid"):
+            twin_py = os.path.join(REPO_ROOT, "scripts", "lab", "twin",
+                                   "twin.py")
+            rc, out, err = run([sys.executable, twin_py,
+                                "--env-file", self.args.env_file,
+                                "--project", self.args.project,
+                                "--base-url", self.args.base_url,
+                                "teardown", "--runid",
+                                self.twin_run["runid"]], 1800)
+            ev["twin_teardown_rc"] = rc
+            if rc != 0:
+                problems.append(
+                    f"twin teardown rc={rc}: {(err or out).strip()[:200]}")
 
         # 7a. Delete every created device; 404 = already gone (fine).
         del_fail = []
@@ -1241,7 +1356,26 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
                     help="compose project name (default COMPOSE_PROJECT_NAME or netops)")
     ap.add_argument("--dry-run", action="store_true",
                     help="print the full plan and exit; touches nothing")
+    # tracker 152 §8.3 — twin composition. Default is the internal generator,
+    # byte-identical to the pre-flag behavior.
+    ap.add_argument("--load-generator", choices=("internal", "twin"),
+                    default="internal", dest="load_generator",
+                    help="burst-phase load source: internal (default; the "
+                         "built-in syslog loop) or twin (delegate to "
+                         "scripts/lab/twin/twin.py run — the ladder keeps "
+                         "judging; the twin's twin-report.json counts feed "
+                         "accounting)")
+    ap.add_argument("--twin-scenario", default="",
+                    help="scenario file for --load-generator twin")
+    ap.add_argument("--twin-duration-minutes", type=float, default=10.0,
+                    help="twin run duration (twin mode only; default 10)")
+    ap.add_argument("--twin-fidelity", choices=("hostname", "source_ip"),
+                    default="hostname",
+                    help="fidelity mode passed through to twin.py (default "
+                         "hostname)")
     args = ap.parse_args(argv)
+    if args.load_generator == "twin" and not args.twin_scenario:
+        ap.error("--load-generator twin requires --twin-scenario FILE")
     if args.devices < 10 or args.devices > 20000:
         ap.error("--devices must be between 10 and 20000")
     if args.burst_minutes < 1 or args.burst_minutes > 60:

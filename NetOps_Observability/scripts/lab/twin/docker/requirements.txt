@@ -1,0 +1,14 @@
+# Twin container dependencies (tracker 152 fidelity wave, design §4.1/§4.3).
+#
+# These exist ONLY inside the twin lab image — never in the product dependency
+# graph (go.mod untouched, no product image includes them, the overlay is
+# never in a default compose profile). Everything is version-pinned, including
+# the full transitive closure, so the build is reproducible; for a fully
+# offline rig build, `pip download -r requirements.txt -d wheels/` on a
+# connected host and add `--no-index --find-links wheels/` (design §4.1
+# offline posture).
+snmpsim-lextudio==1.1.1
+pysnmp-lextudio==6.3.0
+pysnmpcrypto==0.0.4
+pyasn1==0.6.0
+ply==3.11

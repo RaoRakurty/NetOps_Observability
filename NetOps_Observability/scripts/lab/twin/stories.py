@@ -23,7 +23,7 @@ from __future__ import annotations
 import random
 from typing import Any
 
-from scenario import parse_offset_s
+from scenario import baseline_flow_fps, parse_offset_s
 
 # Benign baseline chatter: mnemonics that match NO recognized control-plane
 # signature (they must never fabricate link/bgp evidence). warning/err lines
@@ -94,6 +94,31 @@ def _cloud(t: float, kind: str, tenant: str, resource_id: str, account: str,
             "device": resource_id, "story_id": story_id, "kind": kind,
             "resource_id": resource_id, "account": account, "region": region,
             "severity": severity, "value": value, "metric_name": metric_name}
+
+
+def _trap(t: float, device: str, tenant: str, trap: str,
+          story_id: str | None = None, ifindex: int | None = None,
+          ifname: str = "", ifdescr: str = "", peer_ip: str = "") -> dict:
+    """Fidelity-wave trap lane (design §4.4): `trap` is one of linkDown /
+    linkUp / coldStart / warmStart / bgpBackwardTransition / bgpEstablished —
+    exactly the §4.0 trap rows `producers.trap_control_signal` classifies.
+    The emitter adds the mandatory sysUpTime/snmpTrapOID bindings plus a
+    sysName.0 varbind (hostname-mode attribution rescue)."""
+    return {"t": round(t, 3), "lane": "trap", "tenant": tenant,
+            "device": device, "story_id": story_id, "trap": trap,
+            "ifindex": ifindex, "ifname": ifname, "ifdescr": ifdescr,
+            "peer_ip": peer_ip}
+
+
+def _flow(t: float, device: str, tenant: str, count: int, flow_seed: str,
+          story_id: str | None = None) -> dict:
+    """One second's worth of flow records from `device`'s exporter (design
+    §4.5). `count` records are expanded at emission time deterministically
+    from `flow_seed` — the plan stays compact, the content stays a pure
+    function of (scenario, seed)."""
+    return {"t": round(t, 3), "lane": "flows", "tenant": tenant,
+            "device": device, "story_id": story_id, "count": int(count),
+            "flow_seed": flow_seed}
 
 
 def _dev(sc: dict, name: str) -> dict:
@@ -186,6 +211,7 @@ def _tpl_bgp_flap(story: dict, sc: dict, rng: random.Random) -> list[dict]:
     flaps = int(p.get("flap_count", 3))
     hold = float(p.get("hold_s", 30))
     loss = float(p.get("probe_loss_pct", 40))
+    with_trap = bool(p.get("with_trap"))
     sid = story["id"]
     items: list[dict] = []
     t = 0.0
@@ -197,20 +223,89 @@ def _tpl_bgp_flap(story: dict, sc: dict, rng: random.Random) -> list[dict]:
                 t, dn, dev["tenant"], "BGP-5-ADJCHANGE",
                 f"%BGP-5-ADJCHANGE: neighbor {peer} Down Hold timer expired",
                 "notice", sid))
+            if with_trap:
+                items.append(_trap(t + 0.5, dn, dev["tenant"],
+                                   "bgpBackwardTransition", sid,
+                                   peer_ip=peer))
             t += hold
             items.append(_syslog(
                 t, dn, dev["tenant"], "BGP-5-ADJCHANGE",
                 f"%BGP-5-ADJCHANGE: neighbor {peer} Up", "notice", sid))
+            if with_trap:
+                items.append(_trap(t + 0.5, dn, dev["tenant"],
+                                   "bgpEstablished", sid, peer_ip=peer))
             t += hold
         items.append(_probe(5.0, dn, dev["tenant"], "vantage-1", loss,
                             "customer_path", "public_cloud_agent", sid))
     return items
 
 
+def _tpl_device_restart(story: dict, sc: dict,
+                        rng: random.Random) -> list[dict]:
+    """§5.7: coldStart trap + reboot-window silence + interface-up storm on
+    return. Expect: device_restart-rooted single incident; forbid:
+    per-interface incident spray."""
+    p = story.get("params") or {}
+    reboot_s = float(p.get("reboot_s", 60))
+    sid = story["id"]
+    items: list[dict] = []
+    for dn in story["affected"].get("devices") or []:
+        dev = _dev(sc, dn)
+        items.append(_trap(0.0, dn, dev["tenant"], "coldStart", sid))
+        # (baseline chatter keeps flowing — the reboot "silence" is the story
+        # window itself; suppressing per-device baseline is not modeled in T1)
+        for i, itf in enumerate(dev["interfaces"], start=1):
+            up_t = reboot_s + i * 1.0
+            items.append(_syslog(
+                up_t, dn, dev["tenant"], "LINK-3-UPDOWN",
+                f"%LINK-3-UPDOWN: Interface {itf['name']}, changed state "
+                f"to up", "notice", sid))
+            items.append(_trap(up_t + 0.5, dn, dev["tenant"], "linkUp", sid,
+                               ifindex=i, ifname=str(itf["name"]),
+                               ifdescr=str(itf["name"])))
+    return items
+
+
+def _tpl_traffic_drop(story: dict, sc: dict,
+                      rng: random.Random) -> tuple[list[dict], list[dict]]:
+    """Fidelity wave: the affected exporters' flow volume collapses to
+    (100-drop_pct)% for `duration_s`. Returns (items, suppressions) — the
+    plan builder removes the devices' BASELINE flow items inside the window
+    and these residual-rate items stand in. Optional probe loss makes the
+    story §4.0-detectable (flows alone are evidence, not a signal)."""
+    p = story.get("params") or {}
+    drop_pct = float(p.get("drop_pct", 90))
+    dur = float(p.get("duration_s", 120))
+    loss = p.get("probe_loss_pct")
+    sid = story["id"]
+    fps_by_dev = baseline_flow_fps(sc)
+    items: list[dict] = []
+    suppressions: list[dict] = []
+    for dn in story["affected"].get("devices") or []:
+        dev = _dev(sc, dn)
+        base_fps = fps_by_dev.get(dn, 0.0)
+        residual = round(base_fps * (1.0 - drop_pct / 100.0))
+        suppressions.append({"lane": "flows", "device": dn,
+                             "from": 0.0, "to": dur})
+        sec = 0
+        while sec < dur:
+            if residual > 0:
+                items.append(_flow(float(sec), dn, dev["tenant"], residual,
+                                   f"{sid}:{dn}:{sec}", sid))
+            if loss is not None and sec % 20 == 0:
+                items.append(_probe(float(sec), dn, dev["tenant"],
+                                    "vantage-1", float(loss),
+                                    "customer_path", "public_cloud_agent",
+                                    sid))
+            sec += 1
+    return items, suppressions
+
+
 def _tpl_link_down_cascade(story: dict, sc: dict,
                            rng: random.Random) -> list[dict]:
     p = story.get("params") or {}
     loss = float(p.get("probe_loss_pct", 85))
+    with_trap = bool(p.get("with_trap"))
     sid = story["id"]
     items: list[dict] = []
     for dn in story["affected"].get("devices") or []:
@@ -220,6 +315,11 @@ def _tpl_link_down_cascade(story: dict, sc: dict,
             0.0, dn, dev["tenant"], "LINK-3-UPDOWN",
             f"%LINK-3-UPDOWN: Interface {ifname}, changed state to down",
             "err", sid))
+        if with_trap:
+            # the device also pushes the standard linkDown notification with
+            # ifIndex/ifName/ifDescr varbinds (§4.0 trap row)
+            items.append(_trap(0.5, dn, dev["tenant"], "linkDown", sid,
+                               ifindex=1, ifname=ifname, ifdescr=ifname))
         items.append(_syslog(
             1.0, dn, dev["tenant"], "LINEPROTO-5-UPDOWN",
             f"%LINEPROTO-5-UPDOWN: Line protocol on Interface {ifname}, "
@@ -382,8 +482,8 @@ _TEMPLATE_FNS = {
     "vpn_tunnel_down": _tpl_vpn_tunnel_down,
     "negative_debug_probe": _tpl_negative_debug_probe,
     "negative_unrelated_concurrency": _tpl_negative_unrelated_concurrency,
-    # device_restart intentionally absent: validation refuses it in T1 core
-    # (needs the trap lane).
+    "device_restart": _tpl_device_restart,       # fidelity wave (trap lane)
+    "traffic_drop": _tpl_traffic_drop,           # fidelity wave (flows lane)
 }
 
 
@@ -430,18 +530,36 @@ def build_run_plan(sc: dict, duration_s: float) -> dict[str, Any]:
                 0.0, str(pr.get("intent") or "customer_path"),
                 str(pr.get("vantage") or "public_cloud_agent"), rtt=11.0))
             t += iv
-    # NOTE (T1-core): baseline `flows` and `metrics` lanes are declared in the
-    # DSL for T2 compatibility but not emitted in this wave (IPFIX + snmpsim
-    # are a later wave). The loader accepts them; the plan simply carries none.
+    # Fidelity wave: baseline `flows` now EMITS (design §4.5) — one compact
+    # per-device-per-second item carrying the record count + a deterministic
+    # flow_seed. (`baseline.metrics: snmp_poll: passive` stays passive on
+    # purpose: those metrics come from the REAL Go pollers hitting the twin's
+    # snmpsim agents, never from bus injection.)
+    for dn, fps in sorted(baseline_flow_fps(sc).items()):
+        dev = _dev(sc, dn)
+        count = max(1, round(fps))
+        sec = 0
+        while sec < int(duration_s):
+            baseline.append(_flow(float(sec) + 0.5, dn, dev["tenant"], count,
+                                  f"base:{seed}:{dn}:{sec}"))
+            sec += 1
     baseline.sort(key=lambda e: (e["t"], e["lane"], e["device"]))
 
     stories_out: list[dict] = []
+    suppressions: list[dict] = []
     for st in sc.get("stories") or []:
         t0 = parse_offset_s(st["trigger"]["at"], f"story {st['id']} trigger")
         fn = _TEMPLATE_FNS[st["template"]]
         # str seeds hash via SHA-512 in random.seed(version=2) — deterministic
         # across processes (a tuple/str __hash__ would NOT be, PYTHONHASHSEED).
-        items = fn(st, sc, random.Random(f"{seed}:{st['id']}"))
+        expanded = fn(st, sc, random.Random(f"{seed}:{st['id']}"))
+        if isinstance(expanded, tuple):
+            items, sup = expanded
+            for s in sup:
+                suppressions.append({**s, "from": round(s["from"] + t0, 3),
+                                     "to": round(s["to"] + t0, 3)})
+        else:
+            items = expanded
         for it in items:
             it["t"] = round(it["t"] + t0, 3)
         items.sort(key=lambda e: (e["t"], e["lane"], e["device"]))
@@ -453,6 +571,12 @@ def build_run_plan(sc: dict, duration_s: float) -> dict[str, Any]:
             "affected": st["affected"],
             "expect": st["expect"],
         })
+    if suppressions:
+        def _suppressed(it: dict) -> bool:
+            return any(s["lane"] == it["lane"] and s["device"] == it["device"]
+                       and s["from"] <= it["t"] < s["to"]
+                       for s in suppressions)
+        baseline = [it for it in baseline if not _suppressed(it)]
     return {"baseline": baseline, "stories": stories_out}
 
 

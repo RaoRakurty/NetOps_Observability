@@ -38,20 +38,21 @@ STORY_KEYS = ("id", "template", "trigger", "affected", "params", "expect")
 REQUIRED_STORY_KEYS = ("id", "template", "trigger", "affected", "expect")
 
 # ── story template registry (design §5.1–§5.10) ─────────────────────────────
-# T1-CORE lanes are syslog / probes / cloud / metrics — all bus-direct or via
-# the syslog console-producer path, per the task's T1-core scope. Templates
-# that REQUIRE the trap lane (out of scope for T1 core: SNMP/snmpsim, traps,
-# IPFIX, gNMI are a later wave) are validation-refused with an actionable
-# error rather than silently emitting a story the engine cannot detect.
+# Lanes: syslog / probes / cloud / metrics are bus-direct (T1 core); the
+# FIDELITY WAVE added `trap` (UDP → api:1162 trap receiver) and `flows`
+# (NetFlow v5 / IPFIX UDP → goflow2). A template that requires a lane the
+# runtime cannot deliver is refused at EMIT setup with an actionable error
+# (e.g. FEATURE_SNMP_TRAPS off, or flows without --fidelity source_ip) —
+# validation here only refuses lanes NO wave implements.
 #
 # Each entry: allowed param keys (unknown = hard error) and required lanes.
 STORY_TEMPLATES: dict[str, dict[str, Any]] = {
     "link_down_cascade": {
-        "params": {"probe_loss_pct"},
+        "params": {"probe_loss_pct", "with_trap"},
         "lanes": {"syslog", "probes"},
     },
     "bgp_flap": {
-        "params": {"flap_count", "hold_s", "probe_loss_pct"},
+        "params": {"flap_count", "hold_s", "probe_loss_pct", "with_trap"},
         "lanes": {"syslog", "probes"},
     },
     "dx_circuit_flap_cloud_withdrawal": {
@@ -71,11 +72,20 @@ STORY_TEMPLATES: dict[str, dict[str, Any]] = {
         "params": {"interface"},
         "lanes": {"syslog"},
     },
-    # §5.7 needs a coldStart TRAP to seed the device_restart signal — the trap
-    # lane is a later wave (T1-core exclusion), so this template refuses.
+    # §5.7 — coldStart trap + reboot silence + interface-up storm on return.
+    # Requires the trap lane (fidelity wave); refused at emit setup when the
+    # trap intake is off (FEATURE_SNMP_TRAPS).
     "device_restart": {
-        "params": set(),
-        "lanes": {"trap"},
+        "params": {"reboot_s"},
+        "lanes": {"trap", "syslog"},
+    },
+    # Fidelity wave: NetFlow/IPFIX volume drop on the affected devices'
+    # exporters (suppresses their baseline flows for the window, emits the
+    # residual rate) + optional customer-path probe loss so the story is
+    # detectable by a §4.0 signature (flows are evidence, not a signal lane).
+    "traffic_drop": {
+        "params": {"drop_pct", "duration_s", "probe_loss_pct"},
+        "lanes": {"flows"},
     },
     "vpn_tunnel_down": {
         "params": {"cloud", "probe_loss_pct"},
@@ -91,8 +101,11 @@ STORY_TEMPLATES: dict[str, dict[str, Any]] = {
     },
 }
 
-# Lanes the T1-core emitters actually implement.
-T1_CORE_LANES = {"syslog", "probes", "cloud", "metrics"}
+# Lanes the emitters implement (fidelity wave added trap + flows; gNMI is
+# still a stretch item — no template claims it).
+T1_CORE_LANES = {"syslog", "probes", "cloud", "metrics", "trap", "flows"}
+
+FLOW_PROTOCOLS = ("ipfix", "netflow5")
 
 
 class ScenarioError(ValueError):
@@ -300,6 +313,25 @@ def validate_scenario(raw: Any, name: str = "<scenario>") -> dict:
     bad = sorted(set(baseline) - {"syslog", "flows", "metrics", "probes"})
     if bad:
         raise _err(f"{name}.baseline", f"unknown baseline key(s) {bad}")
+    flows_cfg = baseline.get("flows")
+    if flows_cfg is not None:
+        _require_type(flows_cfg, dict, f"{name}.baseline.flows", "flows")
+        bad = sorted(set(flows_cfg) - {"per_edge_device_fps",
+                                       "per_device_fps", "protocol"})
+        if bad:
+            raise _err(f"{name}.baseline.flows",
+                       f"unknown flows key(s) {bad}")
+        proto = str(flows_cfg.get("protocol") or "netflow5")
+        if proto not in FLOW_PROTOCOLS:
+            raise _err(f"{name}.baseline.flows",
+                       f"protocol {proto!r} invalid — one of "
+                       f"{list(FLOW_PROTOCOLS)}")
+        for k in ("per_edge_device_fps", "per_device_fps"):
+            v = flows_cfg.get(k)
+            if v is not None and (not isinstance(v, (int, float))
+                                  or isinstance(v, bool) or v < 0):
+                raise _err(f"{name}.baseline.flows",
+                           f"{k} must be a non-negative number, got {v!r}")
     for i, pr in enumerate(baseline.get("probes") or []):
         p = f"{name}.baseline.probes[{i}]"
         _require_type(pr, dict, p, "probe entry")
@@ -432,10 +464,25 @@ def parse_offset_s(raw: Any, path: str) -> float:
                      f"{raw!r}")
 
 
+def baseline_flow_fps(sc: dict) -> dict[str, float]:
+    """Per-device steady flow-records/second from `baseline.flows`
+    (`per_device_fps` on every device; `per_edge_device_fps` on role=edge —
+    both may combine). Empty dict when no flows baseline is declared."""
+    cfg = (sc.get("baseline") or {}).get("flows") or {}
+    per_dev = float(cfg.get("per_device_fps") or 0.0)
+    per_edge = float(cfg.get("per_edge_device_fps") or 0.0)
+    out: dict[str, float] = {}
+    for d in sc["devices"]:
+        fps = per_dev + (per_edge if d["role"] == "edge" else 0.0)
+        if fps > 0:
+            out[d["name"]] = fps
+    return out
+
+
 def steady_eps(sc: dict) -> float:
-    """Computed steady-state EPS of the T1-core lanes (syslog chatter +
-    baseline probes). Flow/metric baselines are later-wave lanes and add 0
-    here (they are refused at emit time anyway)."""
+    """Computed steady-state events/records per second across ALL steady
+    lanes (syslog chatter + baseline probes + baseline flow records — flows
+    count against the ingest budget too; design §9.1)."""
     base = sc.get("baseline") or {}
     syslog = base.get("syslog") or {}
     eps = float(syslog.get("per_device_eps") or 0.0) * len(sc["devices"])
@@ -443,6 +490,7 @@ def steady_eps(sc: dict) -> float:
         iv = float(pr.get("interval_s") or 30.0)
         if iv > 0:
             eps += 1.0 / iv
+    eps += sum(baseline_flow_fps(sc).values())
     return eps
 
 

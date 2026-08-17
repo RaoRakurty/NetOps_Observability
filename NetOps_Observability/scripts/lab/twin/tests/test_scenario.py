@@ -32,7 +32,9 @@ def test_shipped_example_loads_and_validates(example):
 
 def test_shipped_example_fits_t1_budget(example):
     line = check_budget(example)
-    assert steady_eps(example) < 10  # 11 devices at 0.2 eps + 2 probes
+    # 11 devices × 0.2 syslog eps + 2 probes + 6 edge devices × 5 flow fps
+    # (the fidelity wave counts flow records against the ingest budget too)
+    assert 30 < steady_eps(example) < 40
     assert "budget" in line
 
 
@@ -56,10 +58,17 @@ def _mutate(example: dict, fn) -> dict:
      "the five FINAL types"),
     (lambda sc: sc["stories"][0].update(template="alien_invasion"),
      "template 'alien_invasion' unknown"),
-    (lambda sc: sc["stories"][0].update(
-        template="device_restart", params={}), "OUT of T1-core scope"),
     (lambda sc: sc["stories"][0]["params"].update(warp_factor=9),
      "unknown param(s) ['warp_factor']"),
+    # fidelity wave: the new baseline.flows block is schema-checked too
+    (lambda sc: sc["baseline"]["flows"].update(protocol="sflow"),
+     "protocol 'sflow' invalid"),
+    (lambda sc: sc["baseline"]["flows"].update(per_edge_device_fps=-1),
+     "non-negative number"),
+    (lambda sc: sc["baseline"]["flows"].update(burst=2),
+     "unknown flows key(s)"),
+    (lambda sc: sc["stories"][1]["params"].update(with_trap=True),
+     "unknown param(s) ['with_trap']"),  # only link/bgp templates take it
     (lambda sc: sc["stories"][0]["affected"]["devices"].append("phantom"),
      "unknown device 'phantom'"),
     (lambda sc: sc["stories"][0]["expect"]["rca"].update(
@@ -86,6 +95,37 @@ def test_seam_type_contradiction_between_expect_and_declaration(example):
     with pytest.raises(ScenarioError) as exc:
         validate_scenario(sc, name="broken")
     assert "contradicts the declared type" in str(exc.value)
+
+
+def test_device_restart_now_validates(example):
+    """Fidelity wave: the trap lane exists, so §5.7 device_restart is a legal
+    template (it was refused in T1 core)."""
+    sc = copy.deepcopy(example)
+    sc["stories"].append({
+        "id": "restart-1", "template": "device_restart",
+        "trigger": {"at": "+60s"},
+        "affected": {"devices": ["core-a1"], "tenants": ["acme"]},
+        "params": {"reboot_s": 45},
+        "expect": {"rca": {"affected_includes": ["core-a1"]},
+                   "forbid": {"cross_tenant_merge": True}},
+    })
+    validate_scenario(sc, name="restart")
+
+
+def test_traffic_drop_validates_and_refuses_bad_params(example):
+    sc = copy.deepcopy(example)
+    sc["stories"].append({
+        "id": "drop-1", "template": "traffic_drop",
+        "trigger": {"at": "+90s"},
+        "affected": {"devices": ["edge-a1"], "tenants": ["acme"]},
+        "params": {"drop_pct": 95, "duration_s": 60, "probe_loss_pct": 40},
+        "expect": {"forbid": {"cross_tenant_merge": True}},
+    })
+    validate_scenario(sc, name="drop")
+    sc["stories"][-1]["params"]["ramp"] = 1
+    with pytest.raises(ScenarioError) as exc:
+        validate_scenario(sc, name="drop")
+    assert "unknown param(s) ['ramp']" in str(exc.value)
 
 
 def test_budget_refusal_is_actionable(example):

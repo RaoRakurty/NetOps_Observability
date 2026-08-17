@@ -1,34 +1,60 @@
-"""Wire-payload builders + bus injector (tracker 152, design §4 — T1 core).
+"""Wire-payload builders + bus injector (tracker 152, design §4).
 
-T1-CORE lanes only: syslog, probes, cloud, metrics — all injected bus-direct
-via the broker's console producer over the TLS listener (the PROVEN
-`correlation_e2e.py` / mini-ladder path). SNMP agents, traps-over-UDP, IPFIX
-and gNMI are a LATER wave; attribution here rides the per-NAME registry rows
-(`hostname` fallback mode, design §3.4) — every hostname / probe target /
-metric device / cloud resource carries the `twx-<runid>-` prefixed name, which
-is also what makes verified teardown (purge by entity LIKE) possible.
+Bus lanes (T1 core): syslog, probes, cloud, metrics — injected bus-direct via
+the broker's console producer over the TLS listener (the PROVEN
+`correlation_e2e.py` / mini-ladder path), byte-shaped after the live-proven
+builders there and keyed by tenant id (Java-murmur2 partitioner contract,
+design §6).
 
-Every payload is byte-shaped after the live-proven builders in
-`src/correlation/correlation_e2e.py` (syslog / probe / metric) and the
-`cloud_producers.cloud_signal_from_event` wire contract (cloud). The injector
-KEYS every record by the owning tenant's opaque id so the Java-murmur2
-partitioner contract holds (design §6 — unkeyed injection would void the
-partition-spread proof).
+UDP lanes (FIDELITY WAVE, design §4.4/§4.5): `trap` (SNMPv2c → the api trap
+receiver) and `flows` (NetFlow v5 / IPFIX → goflow2), encoded by `wire.py`
+and carried by a `UdpLanes` transport —
+
+  * hostname fidelity: traps go from the twin HOST to the published :162
+    (attribution = community + sysName varbind, `trapIdentityTrusted`);
+    flows are SKIPPED LOUDLY (a host-sourced flow's `sampler_address` could
+    never match a registered device — design §3.4);
+  * source_ip fidelity: both lanes send from inside the twin container,
+    per-device source addresses (198.19.x.y aliases), straight to the
+    intake's twinnet address — trap source-IP attribution and flow
+    `sampler_address` → registry rekey are then genuinely per-device.
+
+Every hostname / target / device / sysName field carries the `twx-<runid>-`
+prefixed name, which is what makes verified teardown (purge by entity LIKE)
+possible.
 """
 from __future__ import annotations
 
 import hashlib
 import json
+import random
+import socket
 import time
 from datetime import datetime, timedelta, timezone
 
-from stack import Stack, log
+import wire
+from stack import Stack, log, warn
 
 LANE_TOPIC = {
     "syslog": "netops.syslog",
     "probes": "netops.probes",
     "metrics": "netops.metrics",
     "cloud": "netops.cloud",
+    # UDP lanes: the value is the topic the intake eventually produces to —
+    # journal/report vocabulary only, the twin never writes these topics.
+    "trap": "netops.snmptrap",
+    "flows": "netops.flows.raw",
+}
+
+UDP_LANES = ("trap", "flows")
+
+TRAP_NAME_TO_OID = {
+    "coldStart": wire.TRAP_COLDSTART,
+    "warmStart": wire.TRAP_WARMSTART,
+    "linkDown": wire.TRAP_LINKDOWN,
+    "linkUp": wire.TRAP_LINKUP,
+    "bgpEstablished": wire.TRAP_BGP_ESTABLISHED,
+    "bgpBackwardTransition": wire.TRAP_BGP_BACKWARD,
 }
 
 
@@ -86,8 +112,181 @@ def build_payload(item: dict, prefix: str, tenant_ids: dict[str, str]) -> str:
             "metric_name": item.get("metric_name") or "",
             "ts": iso(),
         })
-    raise ValueError(f"unknown lane {lane!r} — T1 core supports "
-                     f"{sorted(LANE_TOPIC)}")
+    raise ValueError(f"unknown bus lane {lane!r} — bus lanes are "
+                     f"{sorted(set(LANE_TOPIC) - set(UDP_LANES))} "
+                     f"(trap/flows are UDP lanes, built by build_trap_bytes/"
+                     f"build_flow_packets)")
+
+
+# ── UDP lane payload builders (pure functions — unit-tested sans sockets) ──
+
+def build_trap_bytes(item: dict, prefix: str, community: str,
+                     uptime_ticks: int) -> bytes:
+    """One schedule trap item → the SNMPv2c datagram. Always carries a
+    sysName.0 varbind (= prefixed device name) so hostname-mode attribution
+    can rescue identity via `trapIdentityTrusted` (community + sysName)."""
+    trap = item["trap"]
+    oid = TRAP_NAME_TO_OID.get(trap)
+    if oid is None:
+        raise ValueError(f"unknown trap {trap!r} — one of "
+                         f"{sorted(TRAP_NAME_TO_OID)}")
+    varbinds: list[tuple[str, int, object]] = []
+    ifindex = item.get("ifindex")
+    if trap in ("linkDown", "linkUp"):
+        idx = int(ifindex or 1)
+        varbinds.append((f"{wire.VB_IFINDEX}.{idx}", wire.TAG_INT, idx))
+        if item.get("ifdescr"):
+            varbinds.append((f"{wire.VB_IFDESCR}.{idx}", wire.TAG_OCTETSTR,
+                             item["ifdescr"]))
+        if item.get("ifname"):
+            varbinds.append((f"{wire.VB_IFNAME}.{idx}", wire.TAG_OCTETSTR,
+                             item["ifname"]))
+    if trap in ("bgpEstablished", "bgpBackwardTransition"):
+        peer = str(item.get("peer_ip") or "")
+        if not peer:
+            raise ValueError(f"bgp trap item without peer_ip: {item}")
+        varbinds.append((f"{wire.VB_BGP_PEER_ADDR}.{peer}", wire.TAG_IPADDR,
+                         peer))
+    varbinds.append((wire.SYSNAME_OID, wire.TAG_OCTETSTR,
+                     prefix + item["device"]))
+    return wire.encode_trap_v2c(community, uptime_ticks, oid, varbinds)
+
+
+# Flow conversation palette (deterministic draw per flow_seed; internal nets
+# use the twin's own benchmark space so synthetic flows are self-evidently
+# lab traffic).
+_FLOW_NETS = ["198.19.100.", "198.19.101.", "10.60.10.", "10.60.20."]
+_FLOW_EXTERNAL = ["8.8.8.8", "1.1.1.1", "52.94.236.248", "13.107.42.14"]
+_FLOW_PROTOS = [(6, [443, 22, 8080, 5432]), (17, [53, 123, 514]), (1, [0])]
+
+
+def flows_from_seed(flow_seed: str, count: int) -> list[dict]:
+    """Expand a compact flow item into `count` deterministic flow tuples."""
+    rng = random.Random(flow_seed)
+    out = []
+    for _ in range(count):
+        proto, ports = rng.choice(_FLOW_PROTOS)
+        pkts = rng.randint(1, 4000)
+        avg = {6: 800, 17: 300, 1: 84}[proto]
+        out.append({
+            "src": rng.choice(_FLOW_NETS) + str(rng.randint(2, 250)),
+            "dst": (rng.choice(_FLOW_EXTERNAL) if rng.random() < 0.4
+                    else rng.choice(_FLOW_NETS) + str(rng.randint(2, 250))),
+            "sport": rng.randint(1024, 65535) if proto != 1 else 0,
+            "dport": rng.choice(ports) if proto != 1 else 0,
+            "proto": proto, "pkts": pkts,
+            "octets": pkts * rng.randint(int(avg * 0.5), int(avg * 1.5)),
+            "in_if": rng.randint(1, 8), "out_if": rng.randint(1, 8),
+            "tcp_flags": rng.choice([0x02, 0x10, 0x18]) if proto == 6 else 0,
+        })
+    return out
+
+
+def build_flow_packets(item: dict, protocol: str, seq: int, domain: int,
+                       uptime_ms: int) -> tuple[list[bytes], int]:
+    """One schedule flow item → wire packets (chunked to ≤30 records for v5,
+    ≤20 for IPFIX). Returns (packets, records_encoded); the caller advances
+    the exporter's sequence by records (v5) / packets (IPFIX counts records
+    too per RFC 7011 §3.1 for data records)."""
+    flows = flows_from_seed(item["flow_seed"], int(item["count"]))
+    if not flows:
+        return [], 0
+    packets: list[bytes] = []
+    if protocol == "netflow5":
+        for i in range(0, len(flows), 30):
+            chunk = flows[i:i + 30]
+            packets.append(wire.encode_netflow_v5(chunk, uptime_ms, seq))
+            seq += len(chunk)
+    elif protocol == "ipfix":
+        for i in range(0, len(flows), 20):
+            chunk = flows[i:i + 20]
+            # template rides in EVERY packet — goflow2 keeps templates per
+            # (exporter, domain) in memory only; always-inline is the
+            # restart-proof choice at twin rates.
+            packets.append(wire.encode_ipfix(chunk, seq, domain,
+                                             with_template=True))
+            seq += len(chunk)
+    else:
+        raise ValueError(f"unknown flow protocol {protocol!r}")
+    return packets, len(flows)
+
+
+class UdpLanes:
+    """Transport for the trap/flows lanes. `container_send` (from
+    fidelity.send_batch, curried with the twin cid) routes datagrams through
+    the twin container with per-device source binds; without it, datagrams
+    leave a plain host socket (hostname fidelity — traps only)."""
+
+    NETFLOW5_PORT = 2055
+    IPFIX_PORT = 4739
+
+    def __init__(self, trap_target: tuple[str, int] | None = None,
+                 flow_host: str | None = None,
+                 flow_protocol: str = "netflow5",
+                 community: str = "public",
+                 src_ips: dict[str, str] | None = None,
+                 container_send=None):
+        self.trap_target = trap_target
+        self.flow_host = flow_host
+        self.flow_protocol = flow_protocol
+        self.community = community
+        self.src_ips = src_ips or {}
+        self.container_send = container_send
+        self._sock: socket.socket | None = None
+        self._t0 = time.monotonic()
+        self._flow_seq: dict[str, int] = {}
+        self._flow_domain: dict[str, int] = {}
+
+    def uptime_ticks(self) -> int:
+        return int((time.monotonic() - self._t0) * 100)
+
+    def _domain(self, device: str) -> int:
+        if device not in self._flow_domain:
+            self._flow_domain[device] = 1 + len(self._flow_domain)
+        return self._flow_domain[device]
+
+    def build_item(self, it: dict, prefix: str
+                   ) -> tuple[list[tuple[str | None, str, int, bytes]], int] | None:
+        """One UDP-lane item → ([(src, host, port, payload)], record_count),
+        or None when this fidelity mode cannot deliver the lane (the caller
+        counts + warns the skip)."""
+        src = self.src_ips.get(it["device"])
+        if it["lane"] == "trap":
+            if self.trap_target is None:
+                return None
+            pkt = build_trap_bytes(it, prefix, self.community,
+                                   self.uptime_ticks())
+            return [(src, self.trap_target[0], self.trap_target[1], pkt)], 1
+        if it["lane"] == "flows":
+            if self.flow_host is None or src is None:
+                return None
+            dev = it["device"]
+            seq = self._flow_seq.get(dev, 0)
+            pkts, n = build_flow_packets(
+                it, self.flow_protocol, seq, self._domain(dev),
+                uptime_ms=int((time.monotonic() - self._t0) * 1000))
+            self._flow_seq[dev] = seq + n
+            port = (self.NETFLOW5_PORT if self.flow_protocol == "netflow5"
+                    else self.IPFIX_PORT)
+            return [(src, self.flow_host, port, p) for p in pkts], n
+        raise ValueError(f"not a UDP lane: {it['lane']!r}")
+
+    def send(self, datagrams: list[tuple[str | None, str, int, bytes]]
+             ) -> tuple[bool, str]:
+        if not datagrams:
+            return True, ""
+        if self.container_send is not None:
+            return self.container_send(datagrams)
+        if self._sock is None:
+            self._sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        try:
+            for src, host, port, payload in datagrams:
+                # host mode cannot source-bind 198.19 addresses; src is
+                # ignored by design (hostname fidelity).
+                self._sock.sendto(payload, (host, port))
+            return True, ""
+        except OSError as exc:
+            return False, f"host UDP send failed: {exc}"
 
 
 class Injector:
@@ -100,15 +299,19 @@ class Injector:
     tolerance — a run that cannot inject honestly has no verdict."""
 
     def __init__(self, stack: Stack, prefix: str, tenant_ids: dict[str, str],
-                 journal_path: str, tick_s: float = 5.0):
+                 journal_path: str, tick_s: float = 5.0,
+                 udp: UdpLanes | None = None):
         self.stack = stack
         self.prefix = prefix
         self.tenant_ids = tenant_ids
         self.journal_path = journal_path
         self.tick_s = tick_s
+        self.udp = udp
         self.emitted: dict[str, int] = {}          # lane -> count
         self.emitted_by_tenant: dict[str, dict[str, int]] = {}  # lane->tenant->n
         self.emitted_by_story: dict[str, dict[str, int]] = {}   # story->lane->n
+        self.skipped: dict[str, int] = {}          # lane -> undeliverable count
+        self._skip_warned: set[str] = set()
         self.produce_failures: list[str] = []
 
     def _journal(self, fh, item: dict, payload: str) -> None:
@@ -122,11 +325,62 @@ class Injector:
             "payload_digest": hashlib.sha256(payload.encode()).hexdigest()[:16],
         }) + "\n")
 
+    def _count(self, it: dict, n: int = 1) -> None:
+        self.emitted[it["lane"]] = self.emitted.get(it["lane"], 0) + n
+        lt = self.emitted_by_tenant.setdefault(it["lane"], {})
+        lt[it["tenant"]] = lt.get(it["tenant"], 0) + n
+        sid = it.get("story_id")
+        if sid:
+            ls = self.emitted_by_story.setdefault(sid, {})
+            ls[it["lane"]] = ls.get(it["lane"], 0) + n
+
+    def _emit_udp(self, items: list[dict], fh) -> bool:
+        """The trap/flows half of a batch. An unconfigured lane SKIPS LOUDLY
+        (counted + warned once — design §3.4 hostname-mode contract); a
+        configured lane that fails to SEND is a produce failure like any
+        other."""
+        def skip(it: dict) -> None:
+            lane = it["lane"]
+            self.skipped[lane] = self.skipped.get(lane, 0) \
+                + int(it.get("count") or 1)
+            if lane not in self._skip_warned:
+                self._skip_warned.add(lane)
+                warn(f"{lane} lane undeliverable in this run configuration — "
+                     f"SKIPPED (counted in the report); trap needs the "
+                     f"FEATURE_SNMP_TRAPS intake, flows need --fidelity "
+                     f"source_ip")
+
+        datagrams: list[tuple[str | None, str, int, bytes]] = []
+        built: list[tuple[dict, int]] = []
+        for it in items:
+            res = self.udp.build_item(it, self.prefix) if self.udp else None
+            if res is None:
+                skip(it)
+                continue
+            dgs, n = res
+            datagrams += dgs
+            built.append((it, n))
+        if self.udp is not None:
+            ok, err = self.udp.send(datagrams)
+            if not ok:
+                self.produce_failures.append(f"udp: {err}")
+                return len(self.produce_failures) < 3
+        for it, n in built:
+            self._count(it, n)
+            self._journal(fh, it,
+                          f"{it['lane']}:{it.get('trap') or it.get('flow_seed')}")
+        return True
+
     def emit_batch(self, items: list[dict], fh) -> bool:
         """Produce one due batch. Returns False when failures exceed
         tolerance (caller aborts the emission loop loudly)."""
+        udp_items = [it for it in items if it["lane"] in UDP_LANES]
+        if udp_items and not self._emit_udp(udp_items, fh):
+            return False
         by_topic: dict[str, list[tuple[str, str, dict]]] = {}
         for it in items:
+            if it["lane"] in UDP_LANES:
+                continue
             payload = build_payload(it, self.prefix, self.tenant_ids)
             key = self.tenant_ids[it["tenant"]]
             by_topic.setdefault(LANE_TOPIC[it["lane"]], []).append(
@@ -140,13 +394,7 @@ class Injector:
                     return False
                 continue
             for _k, payload, it in rows:
-                self.emitted[it["lane"]] = self.emitted.get(it["lane"], 0) + 1
-                lt = self.emitted_by_tenant.setdefault(it["lane"], {})
-                lt[it["tenant"]] = lt.get(it["tenant"], 0) + 1
-                sid = it.get("story_id")
-                if sid:
-                    ls = self.emitted_by_story.setdefault(sid, {})
-                    ls[it["lane"]] = ls.get(it["lane"], 0) + 1
+                self._count(it)
                 self._journal(fh, it, payload)
         return True
 

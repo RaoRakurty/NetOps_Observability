@@ -1,0 +1,69 @@
+# CORRELIX network digital twin — fidelity-wave overlay (tracker 152,
+# docs/design/network-digital-twin.md §3.4 / §4.1 / R-4).
+#
+# Adds the `twinnet` source-IP overlay network (198.19.0.0/16 — RFC 2544
+# benchmark space, DISJOINT from the mini-ladder's 198.18.x.y allocations so
+# both harnesses can run on one stack) and ONE lab container that serves the
+# twin's protocol-fidelity roles:
+#
+#   * snmpsim agent fleet (PID 1: scripts/lab/twin/snmpsim_supervisor.py) —
+#     one pinned snmpsim-command-responder per simulated device, each bound
+#     to its 198.19.x.y device address (agent identity == address, what the
+#     product's SNMP discovery scanner and pollers key on);
+#   * UDP emitter agent (docker exec → scripts/lab/twin/udp_agent.py) — sends
+#     SNMPv2c traps and NetFlow v5/IPFIX from per-device source addresses in
+#     `twin.py run --fidelity source_ip` mode.
+#
+# NO product service is touched by this file: only the twin service attaches
+# to twinnet here. Source-IP-faithful INTAKE (api trap receiver, goflow2)
+# is established at RUN TIME by `twin.py`, which hot-attaches the running
+# containers with `docker network connect <project>_twinnet <container>` —
+# restart-free, fully reversible, reversed at teardown (design R-4). The
+# hostname-fidelity fallback needs neither this overlay nor any attach.
+#
+# IPAM: docker auto-assignment is confined to 198.19.255.0/24 so the twin's
+# device address plan (198.19.0.x, 198.19.1.x, …) can never collide with an
+# address docker hands to an attached container.
+#
+# Start:  docker compose -f docker-compose.yml -f docker-compose.twin.yml up -d --build twin
+#         (TLS stacks: keep COMPOSE_FILE from .env and append this file:
+#          docker compose -f docker-compose.yml -f compose.tls.yml -f docker-compose.twin.yml up -d twin)
+# Stop:   docker compose -f docker-compose.yml -f docker-compose.twin.yml stop twin
+#         docker compose -f docker-compose.yml -f docker-compose.twin.yml rm -f twin
+#         docker network rm <project>_twinnet   # after any run-time attaches are detached
+# Logs:   docker logs -f netops-twin-1
+#
+# Budget (design §9.1): mem/cpu limits below cover supervisor + ~a dozen
+# per-device responders at demo scale; T2 shards responders (R-3 note in
+# snmpsim_gen.py) before raising them.
+
+services:
+  twin:
+    build: ../../scripts/lab/twin/docker
+    image: netops-twin-tools:t1
+    container_name: netops-twin-1
+    restart: unless-stopped
+    mem_limit: ${TWIN_MEM_LIMIT:-768m}
+    cpus: ${TWIN_CPU_LIMIT:-1}
+    # CAP_NET_ADMIN: per-device /32 aliases on the twinnet leg — granted to
+    # this lab container ONLY, never to a product service.
+    cap_add: [NET_ADMIN]
+    volumes:
+      - ../../scripts/lab/twin:/twin:ro
+      - ../../data/twin:/data/twin
+    command: ["python3", "/twin/snmpsim_supervisor.py",
+              "--manifest", "/data/twin/agents/manifest.json",
+              "--subnet", "198.19.0.0/16"]
+    networks: [netops, twinnet]
+
+networks:
+  twinnet:
+    driver: bridge
+    # internal: no NAT/egress — twinnet exists only for lab-local, per-device
+    # source addressing between the twin and hot-attached intake containers.
+    internal: true
+    ipam:
+      config:
+        - subnet: 198.19.0.0/16
+          ip_range: 198.19.255.0/24
+          gateway: 198.19.255.1

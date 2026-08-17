@@ -10,10 +10,16 @@ sustained load, and G-2 RCA ACCURACY against machine-readable ground truth.
     twin.py score    --runid X            # re-score an existing run dir
     twin.py teardown --runid X            # verified teardown, always runnable
 
-T1-CORE lanes: syslog (console producer → netops.syslog over the TLS
-listener), probes + cloud + metrics bus-direct. SNMP/snmpsim, traps-over-UDP,
-IPFIX, gNMI and the `twinnet` source-ip overlay are a LATER wave — attribution
-rides the per-NAME registry rows (`hostname` fallback, design §3.4).
+Lanes: syslog (console producer → netops.syslog over the TLS listener),
+probes + cloud + metrics bus-direct (T1 core); traps-over-UDP + NetFlow/IPFIX
++ snmpsim agents are the FIDELITY WAVE — `--fidelity hostname` (default)
+attributes via the per-NAME registry rows + trap sysName (no overlay needed;
+flows are skipped loudly), `--fidelity source_ip` sends from per-device
+198.19.x addresses through the twin container on the `twinnet` overlay
+(docker-compose.twin.yml) with the api/goflow2 intakes hot-attached via
+`docker network connect` (design §3.4/R-4 — no product service definition is
+touched, the attach is live and reversed at teardown). gNMI remains a stretch
+item (design §4.6).
 
 Exit codes: 0 = the run executed and (unless --keep) tore down verified-clean
 — story accuracy is MEASUREMENT OUTPUT (accuracy-report.md), not a tool
@@ -47,10 +53,12 @@ sys.path.insert(0, SCRIPT_DIR)
 
 # twin-local modules (flat, self-contained package — nothing enters
 # src/backend or src/correlation).
+import fidelity as fidelity_mod
 import lifecycle
 import scorer as scorer_mod
+import snmpsim_gen
 import spread as spread_mod
-from emitters import Injector
+from emitters import Injector, UdpLanes
 from scenario import (
     ScenarioError,
     check_budget,
@@ -76,6 +84,30 @@ def die(msg: str, code: int = 2) -> None:
 
 def run_root(args: argparse.Namespace) -> str:
     return args.run_root or os.path.join(REPO_ROOT, "data", "twin")
+
+
+def fidelity_teardown(stack: Stack, state: dict, root: str) -> list[str]:
+    """Reverse the fidelity wave's runtime footprint: stop snmpsim agents
+    (idle manifest → supervisor kills responders + drops their aliases) and
+    detach exactly the product containers THIS run hot-attached to twinnet.
+    Returns problems; never raises (teardown must report, not abort)."""
+    problems: list[str] = []
+    if state.get("agents_generated"):
+        agents_dir = os.path.join(root, "agents")
+        try:
+            fidelity_mod.idle_manifest(agents_dir)
+            problems += fidelity_mod.wait_agents_idle(agents_dir)
+        except OSError as exc:
+            problems.append(f"agent idle manifest: {exc}")
+    net = fidelity_mod.twinnet_name(stack.project)
+    for att in state.get("twinnet_attached") or []:
+        try:
+            err = fidelity_mod.detach(net, att["cid"])
+        except fidelity_mod.FidelityError as exc:
+            err = str(exc)
+        if err:
+            problems.append(f"twinnet detach {att['service']}: {err}")
+    return problems
 
 
 def enrichment_dir(env_file: str) -> str:
@@ -166,11 +198,110 @@ class Run:
                                for s in self.sc.get("seams") or []]
         self.save_state()
 
+        self.hb("agents")
+        self.state["device_addresses"] = {
+            d["name"]: lifecycle.device_address(i)
+            for i, d in enumerate(self.sc["devices"])}
+        self.state["fidelity"] = self.args.fidelity
+        self.save_state()
+        self.setup_snmp_agents()
+
         self.hb("canary")
         first_dev = self.sc["devices"][0]
         lifecycle.canary(self.stack, self.prefix, first_dev["name"],
                          tenants[first_dev["tenant"]]["tenant_id"])
         self.gates["canary"] = "ok"
+
+    def setup_snmp_agents(self) -> None:
+        """Generate + start snmpsim agents (design §4.3) when the twin
+        overlay container is up. Best-effort by design: SNMP polling is the
+        PRODUCT's active side (discovery/pollers hit the agents), so an
+        absent overlay reduces fidelity, never the run verdict — but the
+        skip is loud and recorded."""
+        twin_cid = self.stack.cid("twin")
+        if not twin_cid:
+            log("snmpsim agents: twin overlay container not running — "
+                "SKIPPED (bring it up with docker compose -f "
+                "docker-compose.yml -f docker-compose.twin.yml up -d twin)")
+            self.gates["snmp_agents"] = "skipped: no twin container"
+            return
+        agents_dir = os.path.join(self.root, "agents")
+        os.makedirs(agents_dir, exist_ok=True)
+        manifest = snmpsim_gen.generate_agents(
+            self.sc, self.prefix, self.state["device_addresses"],
+            agents_dir, generation=self.runid)
+        self.state["agents_generated"] = True
+        self.save_state()
+        st = fidelity_mod.wait_agents_ready(agents_dir, self.runid,
+                                            want=len(manifest["agents"]))
+        self.gates["snmp_agents"] = f"{st.get('running')} agents up " \
+                                    f"(generation {self.runid})"
+        log(f"snmpsim agents: {self.gates['snmp_agents']}")
+
+    def _udp_lanes(self, plan: dict) -> UdpLanes | None:
+        """Build the trap/flows transport for this run's fidelity mode, or
+        None when the plan carries no UDP-lane items."""
+        lanes_needed = {it["lane"]
+                        for stx in plan["stories"] for it in stx["items"]}
+        lanes_needed |= {it["lane"] for it in plan["baseline"]}
+        need_trap = "trap" in lanes_needed
+        need_flows = "flows" in lanes_needed
+        if not (need_trap or need_flows):
+            return None
+        community = env_get(self.args.env_file, "SNMP_COMMUNITY") or "public"
+        flow_proto = str(((self.sc.get("baseline") or {}).get("flows") or {})
+                         .get("protocol") or "netflow5")
+        if self.args.fidelity == "hostname":
+            trap_target = None
+            if need_trap:
+                port = int(env_get(self.args.env_file, "SNMP_TRAP_PORT")
+                           or "162")
+                trap_target = ("127.0.0.1", port)
+            # flow_host stays None: hostname-mode flows are undeliverable by
+            # design (sampler_address could never match a device) — the
+            # injector skips them loudly and the report carries the count.
+            return UdpLanes(trap_target=trap_target, flow_host=None,
+                            flow_protocol=flow_proto, community=community)
+
+        # source_ip mode (design §3.4 / R-4)
+        twin_cid = self.stack.cid("twin")
+        if not twin_cid:
+            raise lifecycle.LifecycleError(
+                "--fidelity source_ip needs the twin overlay container: "
+                "docker compose -f docker-compose.yml -f "
+                "docker-compose.twin.yml up -d twin")
+        net = fidelity_mod.twinnet_name(self.args.project)
+        if not fidelity_mod.network_exists(net):
+            raise lifecycle.LifecycleError(
+                f"twinnet network {net!r} not found — bring the twin overlay "
+                f"up first")
+        attached: list[dict] = []
+        trap_target = None
+        flow_host = None
+        try:
+            if need_trap:
+                api_cid = self.stack.cid("api")
+                if fidelity_mod.ensure_attached(net, api_cid):
+                    attached.append({"service": "api", "cid": api_cid})
+                trap_target = (fidelity_mod.net_ip(api_cid, net), 1162)
+            if need_flows:
+                gf_cid = self.stack.cid("goflow2")
+                if fidelity_mod.ensure_attached(net, gf_cid):
+                    attached.append({"service": "goflow2", "cid": gf_cid})
+                flow_host = fidelity_mod.net_ip(gf_cid, net)
+            src_ips = dict(self.state["device_addresses"])
+            fidelity_mod.add_aliases(twin_cid, sorted(src_ips.values()))
+        finally:
+            # attachments made so far must be reversible even on a failure
+            # between attach and emit — teardown reads state.json.
+            self.state["twinnet_attached"] = attached
+            self.save_state()
+        log(f"source_ip fidelity: trap→{trap_target} flows→{flow_host} "
+            f"({len(self.state['device_addresses'])} device aliases)")
+        return UdpLanes(
+            trap_target=trap_target, flow_host=flow_host,
+            flow_protocol=flow_proto, community=community, src_ips=src_ips,
+            container_send=lambda dgs: fidelity_mod.send_batch(twin_cid, dgs))
 
     def emit(self) -> tuple[Injector, spread_mod.SpreadSampler, list[dict]]:
         duration_s = self.args.duration_minutes * 60.0
@@ -192,7 +323,8 @@ class Run:
                       for a, t in self.state["tenants"].items()}
         injector = Injector(
             self.stack, self.prefix, tenant_ids,
-            os.path.join(self.run_dir, "events.jsonl"))
+            os.path.join(self.run_dir, "events.jsonl"),
+            udp=self._udp_lanes(plan))
         sampler = spread_mod.SpreadSampler(
             self.stack, os.path.join(self.run_dir, "spread-samples.jsonl"))
 
@@ -298,12 +430,14 @@ class Run:
             f"stories PASS (specificity {acc['specificity']:.2f})")
 
         self.report = {
-            "harness": "twin-t1-core",
+            "harness": "twin-t1",
             "runid": self.runid,
             "generated": utcnow(),
             "scenario": self.args.scenario,
+            "fidelity": self.args.fidelity,
             "gates": self.gates,
             "emitted_by_lane": injector.emitted,
+            "skipped_by_lane": injector.skipped,
             "emitted_by_tenant": injector.emitted_by_tenant,
             "emitted_by_story": injector.emitted_by_story,
             "produce_failures": injector.produce_failures,
@@ -338,7 +472,9 @@ class Run:
             else:
                 try:
                     self.hb("teardown")
-                    teardown_problems = lifecycle.teardown(
+                    teardown_problems = fidelity_teardown(
+                        self.stack, self.state, self.root)
+                    teardown_problems += lifecycle.teardown(
                         self.stack, self.state,
                         enrichment_dir(self.args.env_file))
                     for p in teardown_problems:
@@ -417,8 +553,9 @@ def cmd_teardown(args: argparse.Namespace) -> int:
         die(f"cannot read {state_path}: {exc}")
     stack = Stack(args.env_file, args.base_url, args.project)
     stack.login()
-    problems = lifecycle.teardown(stack, state,
-                                  enrichment_dir(args.env_file))
+    problems = fidelity_teardown(stack, state, run_root(args))
+    problems += lifecycle.teardown(stack, state,
+                                   enrichment_dir(args.env_file))
     for p in problems:
         warn(f"teardown: {p}")
     return 1 if problems else 0
@@ -451,7 +588,15 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     rp.add_argument("--keep", action="store_true",
                     help="skip teardown (inspect entities afterwards)")
     rp.add_argument("--force", action="store_true",
-                    help="run past the T1 steady-EPS budget refusal")
+                    help="run past the T1 steady-EPS budget refusal and the "
+                         "trap-intake-off refusal")
+    rp.add_argument("--fidelity", choices=("hostname", "source_ip"),
+                    default="hostname",
+                    help="attribution fidelity (design §3.4): hostname = "
+                         "per-NAME registry rows + trap sysName, no overlay "
+                         "needed (flows skipped loudly); source_ip = "
+                         "per-device 198.19.x source addresses via the twin "
+                         "overlay container (traps + flows fully attributed)")
 
     spp = sub.add_parser("score", help="re-score an existing run")
     spp.add_argument("--runid", required=True)
@@ -491,6 +636,23 @@ def main(argv: list[str]) -> int:
         die(str(exc))
         return 2  # unreachable; keeps type-checkers honest
 
+    # Trap-lane preflight (fidelity wave): a trap story against a stack whose
+    # trap intake is off would silently produce zero signals — dishonest
+    # accuracy. Refuse before touching anything (exit 2) unless forced.
+    uses_traps = any(st["template"] in ("device_restart",)
+                     or (st.get("params") or {}).get("with_trap")
+                     for st in sc.get("stories") or [])
+    if uses_traps and env_get(args.env_file, "FEATURE_SNMP_TRAPS") != "true" \
+            and not args.dry_run:
+        if not args.force:
+            die("scenario emits SNMP traps but FEATURE_SNMP_TRAPS is not "
+                "'true' in the stack .env — the api trap receiver (:1162) is "
+                "dormant and every trap would vanish. Enable it (set "
+                "FEATURE_SNMP_TRAPS=true + `docker compose up -d api`) or "
+                "pass --force to run anyway")
+        warn("FEATURE_SNMP_TRAPS is off — trap emissions will not be "
+             "received (forced)")
+
     if args.dry_run:
         plan = build_run_plan(sc, args.duration_minutes * 60.0)
         n_items = len(plan["baseline"]) + sum(len(s["items"])
@@ -503,6 +665,7 @@ def main(argv: list[str]) -> int:
         print(f"  devices    : {len(sc['devices'])} (twx-<runid>- prefixed, "
               f"addresses 198.19.0.0/16)")
         print(f"  seams      : {[s['seam_id'] for s in sc.get('seams') or []]}")
+        print(f"  fidelity   : {args.fidelity}")
         print(f"  {budget_line}")
         print(f"  plan       : {n_items} events over "
               f"{plan_end_s(plan):.0f}s; stories: "
