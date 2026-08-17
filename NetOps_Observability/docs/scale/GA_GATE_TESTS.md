@@ -147,10 +147,36 @@ two broken deployments in one week.
 
 ## Defect class 4 — state that does not follow ownership (tracker 155)
 
-**⚠ THIS GATE IS DECLARED BUT NOT YET SATISFIED.** Unlike classes 1–3 above,
-the tests in this section **do not exist yet**. The class is recorded here
+**⚠ THIS GATE IS DECLARED AND NOT YET SATISFIED.** The class is recorded here
 because it is a *hard GA correctness gate* (owner, 2026-08-17), and a gate that
 is only written down in a tracker row is not a gate.
+
+**Status 2026-08-17: the harness exists, the live runs do not.** The decision
+logic is built and unit-proven (`scripts/lab/twin/ownership.py`,
+`tests/test_ownership.py`, 21 tests) — but that proves only that the harness can
+correctly JUDGE a run, not that any run happened. **No scenario below has been
+executed against a live stack.** Do not read the harness landing as coverage;
+the Status column is still the truth.
+
+The harness reports **three** outcomes, not two — `PASS` / `FAIL` / `INVALID` —
+because a run that moves partitions while the in-flight window is EMPTY proves
+nothing: there is no carried-over state to lose, accuracy trivially matches, and
+a two-outcome harness would report PASS for a defect it never exercised. That is
+defect class 2b applied to this gate's own instrument, and it has already bitten
+this programme once (the P1 giant-object burst proved nothing about its own
+hypothesis because the ladder cleanup had emptied the tenant registry). All five
+guards are mutation-verified: removing the anti-vacuity check, the
+ownership-moved check, the regression check, the isolation check, or the
+partial-coverage check each fails the suite.
+
+Live execution is **blocked until ~2026-08-19 23:14 UTC**, deliberately: the 72h
+appliance soak baselined correlation RSS at 2026-08-16T23:14, and these
+scenarios are *deliberate replica restarts*. Restarting those containers resets
+the RSS and uptime the soak exists to measure, so running this gate now would
+destroy the soak's central evidence for the one service whose memory behaviour
+is least proven. A parallel stack is not an option either — 15 GiB host, ~8 GiB
+free, OpenSearch alone idles 2.4 GiB, and the added memory pressure would itself
+perturb the soak's readings.
 
 Correlation window state (`OPEN_OBJECTS`, `main.py:910`) is a plain in-process
 dict with **no rehydration path** — no restore, no checkpoint, no transfer.
@@ -169,12 +195,17 @@ one.**
 
 | Required test | Gate | GA criterion it must evidence | Status |
 |---|---|---|---|
-| RCA ground-truth accuracy unchanged across an **ordinary replica restart** under `--scale N>1` | G3 | The common case. A deploy or crash must not silently degrade RCA | ❌ not built |
-| …across a **scale-up** (`N` → `N+1`) and a **scale-down** (`N` → `N-1`) | G3 | Ownership movement without a partition-count change is the frequent path | ❌ not built |
-| …across a **rolling restart** and a **rapid repeated rebalance** | G3 | Rebalance storms must not compound the loss | ❌ not built |
-| …across a **partition increase** (2 → 4) with the documented drain | G3 | The migration procedure in `scale-correlation.md` is actually safe | ❌ not built |
-| No tenant observes another tenant's state after any of the above | G3 | §3a isolation survives ownership movement | ❌ not built |
-| Consumer state enum reports **cold-window** distinctly from **zero-partitions** and **never-joined** | G1 | The gap is operator-visible rather than silent (Phase 1, in flight) | ❌ not built |
+| RCA ground-truth accuracy unchanged across an **ordinary replica restart** under `--scale N>1` (`restart_one`) | G3 | The common case. A deploy or crash must not silently degrade RCA | 🟡 harness ready · **NOT RUN** |
+| …across a **scale-up** (`N` → `N+1`) and a **scale-down** (`N` → `N-1`) (`scale_up`, `scale_down`) | G3 | Ownership movement without a partition-count change is the frequent path | 🟡 harness ready · **NOT RUN** |
+| …across a **rolling restart** and a **rapid repeated rebalance** (`rolling_restart`, `rapid_rebalance`) | G3 | Rebalance storms must not compound the loss | 🟡 harness ready · **NOT RUN** |
+| …across a **partition increase** (2 → 4) with the documented drain (`partition_raise`) | G3 | The migration procedure in `scale-correlation.md` is actually safe | 🟡 harness ready · **NOT RUN** |
+| No tenant observes another tenant's state after any of the above | G3 | §3a isolation survives ownership movement — checked BEFORE accuracy, since a leak is not tradeable against a score | 🟡 harness ready · **NOT RUN** |
+| Consumer state enum reports **cold-window** distinctly from **zero-partitions** and **never-joined** | G1 | The gap is operator-visible rather than silent | ✅ shipped (`94e8561d`); asserted by `rules-tests/correlation-consumer-state.test.yaml` |
+
+🟡 means the judging logic is proven and the scenario is defined — it does
+**not** mean the scenario has been exercised. Five of these six rows still
+evidence nothing. `summarize()` enforces that reading: the gate returns
+`INVALID`, never `PASS`, while any move is un-run or vacuous.
 
 **The assertion that decides the gate** is RCA ground-truth accuracy against the
 digital twin, compared before and after ownership movement — *not* "lag drained"
