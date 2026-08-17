@@ -1,0 +1,201 @@
+# promtool unit tests for the correlation consumer-state + event-loop alerts
+# (scale-slo group, Phase 1 contract).
+#
+# Acceptance criterion, same as the sibling test files: each rule must FIRE on a
+# synthetic condition AND stay SILENT on the all-clear. The specific silence
+# these tests buy is the one that makes an operator ignore the alert entirely:
+#   * startup (state="pending") must never look like an idle misconfiguration;
+#   * a transient rebalance blip must never raise a persistent alert;
+#   * a genuinely idle replica must NOT be reported as a partition ceiling.
+#
+# Before this file, rules-scale-slo.yaml had NO promtool coverage at all — the
+# harness mounted only rules.yaml, so a test naming a scale-slo alert resolved
+# no rules and promtool reported the empty result as a PASS.
+rule_files:
+  - /etc/prometheus/rules-scale-slo.yaml
+
+evaluation_interval: 1m
+
+tests:
+  # 1) CorrelationReplicaIdle — joined, holds zero partitions, stays that way.
+  - interval: 1m
+    input_series:
+      - series: 'corr_consumer_state{state="idle",instance="correlation-3:8000"}'
+        values: "1x30"
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: CorrelationReplicaIdle
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              layer: correlation
+              slo: scale
+              state: idle
+              instance: "correlation-3:8000"
+            exp_annotations:
+              summary: "Correlation replica correlation-3:8000 is alive and joined but holds ZERO partitions — it is consuming nothing"
+              description: "The replica is healthy as a process; it simply has no work. With the range assignor, replicas beyond BUS_PARTITIONS are assigned an empty set and consume nothing for as long as they run. Compare the correlation replica count against BUS_PARTITIONS. EITHER action can be the right one: scaling the surplus replicas down costs nothing and is often correct. Raising BUS_PARTITIONS is raise-only, needs a controlled drain, and is currently gated — see docs/scale-correlation.md and tracker 155 before choosing it."
+              runbook: "docs/ops/OBSERVABILITY_AUDIT.md#runbook-correlation-consumer-lag"
+
+  # 1a) STARTUP MUST NOT ALERT. A replica that has not completed its first
+  #     assignment reports state="pending"; idle is explicitly 0. Before the
+  #     four-state enum both serialized to `{}` and were indistinguishable.
+  - interval: 1m
+    input_series:
+      - series: 'corr_consumer_state{state="pending",instance="correlation-1:8000"}'
+        values: "1x30"
+      - series: 'corr_consumer_state{state="idle",instance="correlation-1:8000"}'
+        values: "0x30"
+    alert_rule_test:
+      - eval_time: 25m
+        alertname: CorrelationReplicaIdle
+        exp_alerts: []
+
+  # 1b) TRANSIENT REBALANCE MUST NOT ALERT. Zero assignment for 8m during a
+  #     rebalance, then partitions arrive. Well inside the 15m `for`.
+  - interval: 1m
+    input_series:
+      - series: 'corr_consumer_state{state="idle",instance="correlation-2:8000"}'
+        values: "1x8 0x25"
+    alert_rule_test:
+      - eval_time: 25m
+        alertname: CorrelationReplicaIdle
+        exp_alerts: []
+
+  # 2) CorrelationLagWhileFullyAssigned — lag past budget while EVERY reporting
+  #    replica holds partitions.
+  - interval: 1m
+    input_series:
+      - series: 'kafka_consumergroup_lag_sum{consumergroup="netops-correlation"}'
+        values: "100000x40"
+      - series: 'corr_consumer_owned_partitions{instance="correlation-1:8000"}'
+        values: "2x40"
+      - series: 'corr_consumer_owned_partitions{instance="correlation-2:8000"}'
+        values: "2x40"
+    alert_rule_test:
+      - eval_time: 25m
+        alertname: CorrelationLagWhileFullyAssigned
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              layer: correlation
+              slo: scale
+            exp_annotations:
+              summary: "Correlation is 100000 events behind while every reporting replica holds partitions — adding replicas alone cannot add parallelism"
+              description: "This says only that consumer parallelism is capped: a group cannot have more active members than partitions, and every replica that is REPORTING already owns at least one. It does NOT establish that the partition count is the bottleneck, and raising partitions may fix nothing. Investigate in this order BEFORE changing topology — corr_loop_lag_stalls_total and corr_loop_lag_max_ms (event-loop starvation), per-partition lag skew (a hot tenant pins one partition and more partitions will not move it), downstream persistence latency (ClickHouse/OpenSearch insert path), corr_consumer_revoke_commits_total{outcome!=\"ok\"} (rebalance churn), CPU saturation, and broker health. Also confirm no replica is DOWN: a stopped replica reports no series at all, which this expression cannot see."
+              runbook: "docs/ops/OBSERVABILITY_AUDIT.md#runbook-correlation-consumer-lag"
+
+  # 2a) SAME LAG, but one replica holds nothing — min()==0, so this is an idle
+  #     misconfiguration and NOT a parallelism ceiling. Reporting it as the
+  #     latter would send the operator to raise partitions when scaling the
+  #     surplus replica down is the correct action.
+  - interval: 1m
+    input_series:
+      - series: 'kafka_consumergroup_lag_sum{consumergroup="netops-correlation"}'
+        values: "100000x40"
+      - series: 'corr_consumer_owned_partitions{instance="correlation-1:8000"}'
+        values: "4x40"
+      - series: 'corr_consumer_owned_partitions{instance="correlation-2:8000"}'
+        values: "0x40"
+    alert_rule_test:
+      - eval_time: 25m
+        alertname: CorrelationLagWhileFullyAssigned
+        exp_alerts: []
+
+  # 3) CorrelationEventLoopStalling — the P1 regression guard. One stall per
+  #    minute is enough; the threshold is "any".
+  - interval: 1m
+    input_series:
+      - series: 'corr_loop_lag_stalls_total{instance="correlation-1:8000"}'
+        values: "0+1x40"
+    alert_rule_test:
+      - eval_time: 25m
+        alertname: CorrelationEventLoopStalling
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              layer: correlation
+              slo: scale
+              instance: "correlation-1:8000"
+            exp_annotations:
+              summary: "Correlation event loop stalled 15 time(s) in 15m on correlation-1:8000 — check corr_loop_lag_max_ms for the worst drift"
+              description: "Loop-lag samples exceeded the warn threshold, meaning coroutines were not scheduled on time. aiokafka runs heartbeat and coordinator work as background asyncio tasks, so sustained starvation expires group membership WITHOUT any single long call — cumulative delay is sufficient. Do NOT respond by raising session/heartbeat/max-poll timeouts: that hides the stall rather than fixing it. Find the blocking work (CPU-bound serialization, synchronous IO) and move it off the loop."
+              runbook: "docs/ops/OBSERVABILITY_AUDIT.md#runbook-correlation-queues"
+
+  # 3a) A healthy loop never increments the counter.
+  - interval: 1m
+    input_series:
+      - series: 'corr_loop_lag_stalls_total{instance="correlation-1:8000"}'
+        values: "7x40"
+    alert_rule_test:
+      - eval_time: 25m
+        alertname: CorrelationEventLoopStalling
+        exp_alerts: []
+
+  # 4) CorrelationRebalanceChurn — sustained non-ok revoke outcomes. "skipped"
+  #    means the flush missed its budget so offsets were deliberately not
+  #    committed (replay-safe individually, churn in aggregate).
+  - interval: 1m
+    input_series:
+      - series: 'corr_consumer_revoke_commits_total{outcome="skipped",instance="correlation-1:8000"}'
+        values: "0+1x50"
+    alert_rule_test:
+      - eval_time: 45m
+        alertname: CorrelationRebalanceChurn
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              layer: correlation
+              slo: scale
+              outcome: skipped
+              instance: "correlation-1:8000"
+            exp_annotations:
+              summary: "Correlation rebalance churn on correlation-1:8000: 30 revoke-hook skipped outcomes in 30m"
+              description: "Each of these is individually safe — uncommitted offsets are redelivered and dedup absorbs the replay — but repetition means the group is not settling. Every rebalance also moves partitions, and per tracker 155 the acquiring replica starts with none of those tenants' in-flight correlation state, so churn carries a silent accuracy cost beyond the redelivery. Check corr_loop_lag_stalls_total first: loop starvation causes churn far more often than the reverse."
+              runbook: "docs/ops/OBSERVABILITY_AUDIT.md#runbook-correlation-queues"
+
+  # 4a) A settled group commits cleanly on every revoke: outcome="ok" rises and
+  #     must not match the failed|skipped selector.
+  - interval: 1m
+    input_series:
+      - series: 'corr_consumer_revoke_commits_total{outcome="ok",instance="correlation-1:8000"}'
+        values: "0+1x50"
+    alert_rule_test:
+      - eval_time: 45m
+        alertname: CorrelationRebalanceChurn
+        exp_alerts: []
+
+  # 5) CorrelationWindowStaysCold — cold_window should clear within one engine
+  #    window; staying there for 30m means partitions keep moving.
+  - interval: 1m
+    input_series:
+      - series: 'corr_consumer_state{state="cold_window",instance="correlation-2:8000"}'
+        values: "1x50"
+    alert_rule_test:
+      - eval_time: 40m
+        alertname: CorrelationWindowStaysCold
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              layer: correlation
+              slo: scale
+              state: cold_window
+              instance: "correlation-2:8000"
+            exp_annotations:
+              summary: "Correlation replica correlation-2:8000 has stayed in cold_window for 30m — RCA for its tenants is persistently thin"
+              description: "cold_window is a TIME-BASED PROXY: at least one owned partition was acquired less than one engine window ago, so its tenants' sliding window has not refilled. RCA for those tenants is DEGRADED (thin evidence), not wrong. Normally this clears by itself within one window, so persistence means partitions keep moving — investigate rebalance churn. Note the honest limit (tracker 155): this metric reports only that the window has not refilled. It cannot report the deeper loss — merges and continuations whose open objects lived in the previous owner's memory are gone, and elapsed time does not repair them. Reaching \"active\" is therefore NOT evidence that no state was lost."
+              runbook: "docs/ops/OBSERVABILITY_AUDIT.md#runbook-correlation-queues"
+
+  # 5a) THE NORMAL PATH MUST BE SILENT: a replica acquires partitions, sits
+  #     cold for one window, then goes active. This is expected after any
+  #     rebalance and must not page anyone.
+  - interval: 1m
+    input_series:
+      - series: 'corr_consumer_state{state="cold_window",instance="correlation-2:8000"}'
+        values: "1x15 0x40"
+      - series: 'corr_consumer_state{state="active",instance="correlation-2:8000"}'
+        values: "0x15 1x40"
+    alert_rule_test:
+      - eval_time: 45m
+        alertname: CorrelationWindowStaysCold
+        exp_alerts: []

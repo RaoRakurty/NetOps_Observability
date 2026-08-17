@@ -119,6 +119,140 @@ groups:
           runbook: "docs/ops/OBSERVABILITY_AUDIT.md#runbook-correlation-dlq"
 
       # ------------------------------------------------------------------
+      # Consumer-group membership + event-loop health (Phase 1 contract,
+      # main.py:4628-4663). All five metric names were read from that
+      # exposition code on this branch — none is inferred from a design doc.
+      #
+      # corr_consumer_state is a FOUR-valued gauge carrying 1 for the current
+      # state and 0 for the other three, so match on the label and compare to
+      # 1 — never string-compare the value.
+      #
+      # TWO SEMANTICS THESE RULES MUST NOT VIOLATE (engine docstring):
+      #   * "cold_window" is a TIME-BASED PROXY for "the sliding window has not
+      #     had time to refill". It is NOT a measurement of carried-over state,
+      #     so it means RCA is temporarily DEGRADED (thin), never WRONG.
+      #   * "active" does NOT mean "no state was lost". Tracker 155 is open:
+      #     OPEN_OBJECTS has no rehydration path, so merges and continuations
+      #     whose open objects lived in another replica's memory are simply
+      #     gone, and no elapsed time repairs them. No rule or annotation here
+      #     may imply active ⇒ correct.
+      # ------------------------------------------------------------------
+
+      # A replica that joined the group and holds nothing. Before this state
+      # existed it serialized to `{}` — byte-identical to "pending" — and read
+      # as healthy. 15m is deliberately well past any rebalance transient.
+      - alert: CorrelationReplicaIdle
+        expr: corr_consumer_state{state="idle"} == 1
+        for: 15m
+        labels: { severity: warning, layer: correlation, slo: scale }
+        annotations:
+          summary: "Correlation replica {{ $labels.instance }} is alive and joined but holds ZERO partitions — it is consuming nothing"
+          description: >-
+            The replica is healthy as a process; it simply has no work. With the
+            range assignor, replicas beyond BUS_PARTITIONS are assigned an empty
+            set and consume nothing for as long as they run. Compare the
+            correlation replica count against BUS_PARTITIONS. EITHER action can
+            be the right one: scaling the surplus replicas down costs nothing
+            and is often correct. Raising BUS_PARTITIONS is raise-only, needs a
+            controlled drain, and is currently gated — see
+            docs/scale-correlation.md and tracker 155 before choosing it.
+          runbook: "docs/ops/OBSERVABILITY_AUDIT.md#runbook-correlation-consumer-lag"
+
+      # Lag past the RCA budget while EVERY reporting replica already holds
+      # work. This bounds what more replicas could achieve; it does NOT
+      # diagnose the cause. The 2026-08-17 P1 was exactly this shape — full
+      # assignment, high lag — and the cause was event-loop blocking on giant
+      # object serialization, not partition count.
+      - alert: CorrelationLagWhileFullyAssigned
+        expr: |
+          sum(kafka_consumergroup_lag_sum{consumergroup="netops-correlation"}) > 60000
+          and on() (min(corr_consumer_owned_partitions) > 0)
+        for: 15m
+        labels: { severity: warning, layer: correlation, slo: scale }
+        annotations:
+          summary: "Correlation is {{ $value }} events behind while every reporting replica holds partitions — adding replicas alone cannot add parallelism"
+          description: >-
+            This says only that consumer parallelism is capped: a group cannot
+            have more active members than partitions, and every replica that is
+            REPORTING already owns at least one. It does NOT establish that the
+            partition count is the bottleneck, and raising partitions may fix
+            nothing. Investigate in this order BEFORE changing topology —
+            corr_loop_lag_stalls_total and corr_loop_lag_max_ms (event-loop
+            starvation), per-partition lag skew (a hot tenant pins one
+            partition and more partitions will not move it), downstream
+            persistence latency (ClickHouse/OpenSearch insert path),
+            corr_consumer_revoke_commits_total{outcome!="ok"} (rebalance churn),
+            CPU saturation, and broker health. Also confirm no replica is DOWN:
+            a stopped replica reports no series at all, which this expression
+            cannot see.
+          runbook: "docs/ops/OBSERVABILITY_AUDIT.md#runbook-correlation-consumer-lag"
+
+      # The leading indicator for the whole thrash class, and the regression
+      # guard for the 2026-08-17 P1 fix (giant-object serialization offloaded
+      # off the loop). If this rises, the loop is being starved again — expect
+      # heartbeat/commit failures to follow rather than precede it.
+      - alert: CorrelationEventLoopStalling
+        expr: increase(corr_loop_lag_stalls_total[15m]) > 0
+        for: 5m
+        labels: { severity: warning, layer: correlation, slo: scale }
+        annotations:
+          summary: "Correlation event loop stalled {{ $value }} time(s) in 15m on {{ $labels.instance }} — check corr_loop_lag_max_ms for the worst drift"
+          description: >-
+            Loop-lag samples exceeded the warn threshold, meaning coroutines
+            were not scheduled on time. aiokafka runs heartbeat and coordinator
+            work as background asyncio tasks, so sustained starvation expires
+            group membership WITHOUT any single long call — cumulative delay is
+            sufficient. Do NOT respond by raising session/heartbeat/max-poll
+            timeouts: that hides the stall rather than fixing it. Find the
+            blocking work (CPU-bound serialization, synchronous IO) and move it
+            off the loop.
+          runbook: "docs/ops/OBSERVABILITY_AUDIT.md#runbook-correlation-queues"
+
+      # Revoke-hook outcomes other than "ok". "skipped" means the flush missed
+      # its 5s budget so the offsets were deliberately NOT committed
+      # (replay-safe by design); "failed" means the flush or commit errored.
+      # Either, sustained, means the group is rebalancing repeatedly.
+      - alert: CorrelationRebalanceChurn
+        expr: increase(corr_consumer_revoke_commits_total{outcome=~"failed|skipped"}[30m]) > 3
+        for: 10m
+        labels: { severity: warning, layer: correlation, slo: scale }
+        annotations:
+          summary: "Correlation rebalance churn on {{ $labels.instance }}: {{ $value }} revoke-hook {{ $labels.outcome }} outcomes in 30m"
+          description: >-
+            Each of these is individually safe — uncommitted offsets are
+            redelivered and dedup absorbs the replay — but repetition means the
+            group is not settling. Every rebalance also moves partitions, and
+            per tracker 155 the acquiring replica starts with none of those
+            tenants' in-flight correlation state, so churn carries a silent
+            accuracy cost beyond the redelivery. Check
+            corr_loop_lag_stalls_total first: loop starvation causes churn far
+            more often than the reverse.
+          runbook: "docs/ops/OBSERVABILITY_AUDIT.md#runbook-correlation-queues"
+
+      # A replica should leave cold_window after one engine window. Staying
+      # there means it keeps re-acquiring partitions, i.e. churn seen from the
+      # RCA-quality side rather than the offset side.
+      - alert: CorrelationWindowStaysCold
+        expr: corr_consumer_state{state="cold_window"} == 1
+        for: 30m
+        labels: { severity: warning, layer: correlation, slo: scale }
+        annotations:
+          summary: "Correlation replica {{ $labels.instance }} has stayed in cold_window for 30m — RCA for its tenants is persistently thin"
+          description: >-
+            cold_window is a TIME-BASED PROXY: at least one owned partition was
+            acquired less than one engine window ago, so its tenants' sliding
+            window has not refilled. RCA for those tenants is DEGRADED (thin
+            evidence), not wrong. Normally this clears by itself within one
+            window, so persistence means partitions keep moving — investigate
+            rebalance churn. Note the honest limit (tracker 155): this metric
+            reports only that the window has not refilled. It cannot report the
+            deeper loss — merges and continuations whose open objects lived in
+            the previous owner's memory are gone, and elapsed time does not
+            repair them. Reaching "active" is therefore NOT evidence that no
+            state was lost.
+          runbook: "docs/ops/OBSERVABILITY_AUDIT.md#runbook-correlation-queues"
+
+      # ------------------------------------------------------------------
       # OpenSearch RED (or unreachable/unparsable health). Vector's health
       # poll maps green/yellow/red/unknown → 0/1/2/3 (vector.yaml
       # opensearch_health_vm). Yellow is already alerted at warning by

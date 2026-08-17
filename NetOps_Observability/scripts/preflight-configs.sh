@@ -194,6 +194,17 @@ check_metrics_configs(){
   else
     red "rules.yaml — $(grep -iE 'FAILED|error' <<<"$out" | head -1)"
   fi
+  # rules-scale-slo.yaml is loaded by vmalert via a SECOND -rule= flag and was
+  # never validated here — it could ship malformed or with an expression that
+  # can never fire, and nothing would say so. Same bar as rules.yaml.
+  out="$(docker run --rm --entrypoint promtool \
+      -v "$ROOT/src/config/rules-scale-slo.yaml:/etc/prometheus/rules-scale-slo.yaml:ro" \
+      "$PROM_IMG" check rules /etc/prometheus/rules-scale-slo.yaml 2>&1)"; rc=$?
+  if [ "$rc" -eq 0 ]; then
+    green "rules-scale-slo.yaml (promtool check rules)"
+  else
+    red "rules-scale-slo.yaml — $(grep -iE 'FAILED|error' <<<"$out" | head -1)"
+  fi
   # Alert-rule UNIT tests (SEC-020.2): synthetic series must make each
   # security rule fire (and the all-clear must not). `check rules` only
   # proves the file parses — an expression that drifted off the emitted
@@ -201,8 +212,13 @@ check_metrics_configs(){
   local tf
   for tf in "$ROOT"/src/config/rules-tests/*.test.yaml; do
     [ -f "$tf" ] || { skip "rule unit tests (no rules-tests/*.test.yaml)"; break; }
+    # BOTH rule files are mounted for every test file, so a *.test.yaml may
+    # target either via its own `rule_files:` list. Mounting only rules.yaml
+    # silently made scale-slo rules untestable: promtool resolves no rules for
+    # the alertname and reports "no alerts found" as a PASS.
     out="$(docker run --rm --entrypoint promtool \
         -v "$ROOT/src/config/rules.yaml:/etc/prometheus/rules.yaml:ro" \
+        -v "$ROOT/src/config/rules-scale-slo.yaml:/etc/prometheus/rules-scale-slo.yaml:ro" \
         -v "$tf:/etc/prometheus/tests.yaml:ro" \
         "$PROM_IMG" test rules /etc/prometheus/tests.yaml 2>&1)"; rc=$?
     if [ "$rc" -eq 0 ]; then
