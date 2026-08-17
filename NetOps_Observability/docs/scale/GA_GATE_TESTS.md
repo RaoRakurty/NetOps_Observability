@@ -3,8 +3,13 @@
 Single index of the tests that make the 2026-08 scale-test defect classes
 structurally impossible to reintroduce, and where each runs. The defect classes
 and P0s are from `CORRELIX_SCALE_TEST_REPORT.md` §8 and
-`SCALE_TEST_FINDINGS.md`; every test listed exists and passes on
-`feat/observability-platform`.
+`SCALE_TEST_FINDINGS.md`; every test listed in classes **1–3** exists and passes
+on `feat/observability-platform`.
+
+**Class 4 is the exception and is marked as such:** it is a declared GA
+correctness gate whose tests are NOT yet built. It is listed because a gate
+recorded only in a tracker row is not a gate — but do not read its rows as
+existing coverage.
 
 **Gates**
 - **G1 (per-PR, blocking)** — `.github/workflows/backend-ci.yml`
@@ -70,6 +75,51 @@ two broken deployments in one week.
 
 ---
 
+## Defect class 4 — state that does not follow ownership (tracker 155)
+
+**⚠ THIS GATE IS DECLARED BUT NOT YET SATISFIED.** Unlike classes 1–3 above,
+the tests in this section **do not exist yet**. The class is recorded here
+because it is a *hard GA correctness gate* (owner, 2026-08-17), and a gate that
+is only written down in a tracker row is not a gate.
+
+Correlation window state (`OPEN_OBJECTS`, `main.py:910`) is a plain in-process
+dict with **no rehydration path** — no restore, no checkpoint, no transfer.
+`on_partitions_revoked` flushes and commits durable output but evicts no window
+state; `on_partitions_assigned` records ownership and reconstructs nothing. So
+whenever partitions move between members, the acquiring replica begins with an
+empty window for those tenants and the previous owner holds orphaned state.
+Evidence accumulated across the move is lost **silently** — nothing errors, and
+lag returns to zero exactly as it would on a healthy transition.
+
+Provenance matters for prioritising it: `fa69894b` (tenant-keyed
+co-partitioning, scale P0) introduced the range assignor and multi-replica
+consumption together. Before it, correlation was a single consumer and this was
+a rare restart-only edge. **A scale fix converted a restart edge into a routine
+one.**
+
+| Required test | Gate | GA criterion it must evidence | Status |
+|---|---|---|---|
+| RCA ground-truth accuracy unchanged across an **ordinary replica restart** under `--scale N>1` | G3 | The common case. A deploy or crash must not silently degrade RCA | ❌ not built |
+| …across a **scale-up** (`N` → `N+1`) and a **scale-down** (`N` → `N-1`) | G3 | Ownership movement without a partition-count change is the frequent path | ❌ not built |
+| …across a **rolling restart** and a **rapid repeated rebalance** | G3 | Rebalance storms must not compound the loss | ❌ not built |
+| …across a **partition increase** (2 → 4) with the documented drain | G3 | The migration procedure in `scale-correlation.md` is actually safe | ❌ not built |
+| No tenant observes another tenant's state after any of the above | G3 | §3a isolation survives ownership movement | ❌ not built |
+| Consumer state enum reports **cold-window** distinctly from **zero-partitions** and **never-joined** | G1 | The gap is operator-visible rather than silent (Phase 1, in flight) | ❌ not built |
+
+**The assertion that decides the gate** is RCA ground-truth accuracy against the
+digital twin, compared before and after ownership movement — *not* "lag drained"
+and *not* "containers healthy". Lag measures offsets, not window continuity;
+both stay green while evidence is being lost. The twin already records ground
+truth and already scores accuracy (`scripts/lab/twin/`), so the instrument
+exists; only the scenarios are missing.
+
+**Consequence while this gate is unsatisfied:** automatic EPS→`BUS_PARTITIONS`
+sizing stays **frozen** (`docs/RESOURCE_SIZING.md`). Auto-sizing a knob that
+moves ownership would multiply an unmeasured correctness surface — and that
+freeze holds regardless of how good the throughput calibration turns out.
+
+---
+
 ## What this map does NOT claim
 
 The G1/G2 suites prove the defect **classes** cannot silently return; they are
@@ -77,6 +127,12 @@ not scale certification. The `CORRELIX_SCALE_TEST_REPORT.md` §8 verdict stands:
 GA **scale** sign-off additionally needs the L2+ rig runs (throughput at
 target EPS, HA/replica, soak — G3 territory, `scripts/soak-go-no-go.sh`)
 now that both P0 fixes have landed.
+
+It also does not claim class 4 is covered. Classes 1–3 are guarded; **class 4 is
+an open GA correctness gate with no tests behind it** (tracker 155). Until it
+passes, "the scale P0s landed and CI is green" is true but insufficient — the
+P0 that unlocked horizontal scale is the same change that made ownership
+movement routine, and nothing yet proves correctness survives it.
 
 Known allowlisted §16.1 residue (reviewed 2026-08-16, tracked in
 `tests/test_error_swallow_guard.py` `ALLOWLIST`): four secondary chown

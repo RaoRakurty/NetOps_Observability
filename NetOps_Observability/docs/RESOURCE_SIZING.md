@@ -110,6 +110,19 @@ independent reasons — either alone is sufficient:
    action whose correctness cost is unmeasured. This freeze holds *regardless of
    how good the throughput numbers turn out to be.*
 
+**Unfreeze condition** (both required, in order):
+
+1. Defect class 4 in `docs/scale/GA_GATE_TESTS.md` passes — RCA ground-truth
+   accuracy unchanged across ordinary restart, scale up/down, rolling restart,
+   rapid rebalance **and** a partition increase. Lag returning to zero does not
+   count as evidence; lag measures offsets, not window continuity.
+2. The P1 correlation thrash is structurally fixed and throughput re-calibrated
+   on the *same* hardware — not by adding partitions, replicas, CPU, RAM or host
+   size.
+
+Only then does a measured capacity constant become admissible, and it must carry
+a `measured` provenance class earned after both.
+
 Resolution order is **override → existing install → `1`** (today's compose
 default, unchanged — generating a plan never resizes a running broker):
 
