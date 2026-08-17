@@ -329,31 +329,73 @@ class Stack:
         return -1
 
     def group_lag(self, group: str) -> dict:
-        """{topic: {current,end,lag}}, plus _total lag and _members count.
+        """{topic: {current,end,lag}}, plus `_total` lag, `_members` count,
+        `_rows` (describe rows seen) and `_uncommitted` (partitions a member
+        holds but has never committed).
+
         A group with committed offsets but zero MEMBERS is a dead consumer —
-        exactly the wiped-ACL failure shape."""
+        exactly the wiped-ACL failure shape.
+
+        ####################################################################
+        # MEMBERSHIP IS PARSED INDEPENDENTLY OF LAG. DO NOT RE-COUPLE THEM.
+        #
+        # `kafka-consumer-groups.sh --describe` prints `-` in CURRENT-OFFSET
+        # AND LAG for a partition a LIVE member has been assigned but has not
+        # committed yet, while CONSUMER-ID carries a real id. Captured live
+        # (2026-08-17, apache/kafka 4.1.1):
+        #   GROUP  TOPIC  PARTITION CURRENT-OFFSET LOG-END-OFFSET LAG CONSUMER-ID …
+        #   probe… netops.verification 0  -   0   -   console-consumer-c3be… …
+        #
+        # The first version of this parser did `int(f[5])` FIRST and
+        # `continue`d on ValueError, so every such row was dropped before the
+        # member count — the group read as `{_total: 0, _members: 0}`, which
+        # is byte-identical to the dead-consumer verdict. On the lab host that
+        # never showed: traffic had always committed offsets by run time. In
+        # CI it is the NORMAL state of a fresh install (nothing produced yet,
+        # correlation commits manually at N=100/T=5s, Vector commits on
+        # consume) — it failed run 31991056443's preflight with
+        # "netops-correlation has NO active consumer" while every container
+        # was Up+healthy and install.py's own gate had just PASSED on the
+        # same broker 27s earlier.
+        ####################################################################
+        """
         rc, out, err = self.kafka_tool(
             "kafka-consumer-groups.sh", ["--describe", "--group", group])
         if rc != 0:
-            return {"_error": err.strip()[:300], "_total": -1, "_members": 0}
+            return {"_error": err.strip()[:300], "_total": -1, "_members": 0,
+                    "_rows": 0, "_uncommitted": 0}
+
+        def num(cell: str) -> int | None:
+            """Numeric cell, or None for Kafka's `-` (no committed offset)."""
+            return int(cell) if cell.isdigit() else None
+
         topics: dict[str, dict] = {}
-        total, members = 0, 0
+        total = members = rows = uncommitted = 0
         for line in out.splitlines():
             f = line.split()
-            if len(f) >= 6 and f[0] == group:
-                topic = f[1]
-                try:
-                    lag = int(f[5])
-                except ValueError:
-                    continue
-                cur = int(f[3]) if f[3].isdigit() else -1
-                end = int(f[4]) if f[4].isdigit() else -1
-                topics[topic] = {"current": cur, "end": end, "lag": lag}
+            if len(f) < 7 or f[0] != group:
+                continue
+            rows += 1
+            # MEMBERSHIP FIRST — it does not depend on any offset being set.
+            if f[6] != "-":
+                members += 1
+            cur, end, lag = num(f[3]), num(f[4]), num(f[5])
+            if lag is None:
+                uncommitted += 1
+            # Aggregate across partitions of the same topic (single-partition
+            # today, but a repartitioned topic must not silently lose lag).
+            t = topics.setdefault(f[1], {"current": -1, "end": -1, "lag": 0})
+            if cur is not None:
+                t["current"] = cur if t["current"] < 0 else min(t["current"], cur)
+            if end is not None:
+                t["end"] = max(t["end"], end)
+            if lag is not None:
+                t["lag"] += max(lag, 0)
                 total += max(lag, 0)
-                if len(f) >= 7 and f[6] != "-":
-                    members += 1
         topics["_total"] = total
         topics["_members"] = members
+        topics["_rows"] = rows
+        topics["_uncommitted"] = uncommitted
         return topics
 
     def produce(self, topic: str, lines: list[str]) -> tuple[bool, str]:
@@ -593,26 +635,56 @@ class Harness:
         # kafka-exporter), and a consumer mid-rebalance is memberless between
         # kicks — poll over a bounded window before believing "no consumer".
         # A DEAD consumer (the wiped-ACL shape) never shows a member at all.
+        #
+        # The wait is BOUNDED and configurable because bring-up cost is
+        # hardware-dependent, not invariant: on a cold shared CI runner
+        # kafka-init spends a JVM per topic and the last topic of the 16
+        # appeared ~7 min after the broker came up (run 31991056443:
+        # netops.wireless_events log created 03:34:23), so the engine's final
+        # rebalance lands minutes after `docker compose up` returns. Waiting
+        # longer never weakens the assertion — the verdict is still "a member
+        # must be there", only the patience is tuned (--consumer-settle-seconds).
+        settle = self.args.consumer_settle_seconds
+
         def settled_group(group: str) -> dict:
-            last: dict = {}
-            deadline = time.monotonic() + 60
-            while time.monotonic() < deadline:
+            last: dict = {"_members": 0, "_rows": 0}
+            deadline = time.monotonic() + settle
+            waited = 0.0
+            while True:
                 last = self.stack.group_lag(group)
                 if last.get("_members", 0) >= 1:
+                    if waited:
+                        log(f"preflight: {group} showed a member after {waited:.0f}s")
+                    return last
+                if time.monotonic() >= deadline:
                     return last
                 time.sleep(10)
-            return last
+                waited += 10
+
+        def consumer_problem(group: str, g: dict, role: str) -> str:
+            """Name the SHAPE of the absence — the three causes need different
+            first moves, and 'no active consumer' alone hid that."""
+            if g.get("_error"):
+                return (f"{group} could not be described after {settle}s — the "
+                        f"membership check is BLIND, not passing: {g['_error']}")
+            if g.get("_rows", 0) == 0:
+                return (f"{group} is UNKNOWN to the broker after {settle}s — the "
+                        f"{role} never joined (consumer down, topics never created, "
+                        f"or authorization-dead: check `docker compose logs "
+                        f"correlation vector-router` and `logs kafka | grep -i denied`)")
+            return (f"{group} has rows but NO active member after {settle}s — "
+                    f"committed offsets with zero members is the dead-{role} "
+                    f"signature (2026-08-16 wiped-ACL incident)")
 
         corr_lag = settled_group("netops-correlation")
         router_lag = settled_group("netops-router-syslog")
         ev["corr_group"] = corr_lag
         ev["router_syslog_group"] = router_lag
+        ev["consumer_settle_seconds"] = settle
         if corr_lag.get("_members", 0) < 1:
-            problems.append(
-                "netops-correlation has NO active consumer (dead engine or "
-                "bus authorization failure — see the 2026-08-16 wiped-ACL incident)")
+            problems.append(consumer_problem("netops-correlation", corr_lag, "engine"))
         if router_lag.get("_members", 0) < 1:
-            problems.append("netops-router-syslog has NO active consumer (ingest router dead)")
+            problems.append(consumer_problem("netops-router-syslog", router_lag, "router"))
         # A stack still digesting an earlier backlog cannot produce a valid
         # drain verdict — the baseline must be near-idle.
         if corr_lag.get("_total", -1) > self.args.max_baseline_lag:
@@ -1345,6 +1417,14 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
                          "baseline (default 5000)")
     ap.add_argument("--mem-factor", type=float, default=1.3,
                     help="max end/baseline container memory ratio (default 1.3)")
+    ap.add_argument("--consumer-settle-seconds", type=int, default=180,
+                    help="bounded wait for the correlation + router consumer "
+                         "groups to show a live member at preflight. Bring-up "
+                         "cost is hardware-dependent (a cold CI runner spends a "
+                         "JVM per topic in kafka-init, so the engine's final "
+                         "rebalance can land minutes after compose returns); "
+                         "patience is tuned here, the assertion never is "
+                         "(default 180)")
     ap.add_argument("--run-dir", default="",
                     help="run directory (default <repo>/data/miniladder/<ts>-<runid>)")
     ap.add_argument("--env-file",
@@ -1399,7 +1479,8 @@ def main(argv: list[str]) -> int:
         print(f"  stack           : {args.base_url} (project {args.project}, "
               f"env {args.env_file})")
         print(f"  phase 1 preflight: {len(REQUIRED_SERVICES)} required services, "
-              f"active bus consumers, baselines (RSS/offsets/lag/CH/VM/durability)")
+              f"active bus consumers (bounded wait {args.consumer_settle_seconds}s), "
+              f"baselines (RSS/offsets/lag/CH/VM/durability)")
         print(f"  phase 2 onboard  : create {args.devices} devices "
               f"(mlx-<runid>-NNNNN @ 198.18/15); last/first window rate floor "
               f"{args.linearity_floor}")
