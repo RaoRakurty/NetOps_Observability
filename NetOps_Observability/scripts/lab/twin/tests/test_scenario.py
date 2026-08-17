@@ -136,3 +136,75 @@ def test_budget_refusal_is_actionable(example):
     assert "over budget" in str(exc.value)
     # forced runs are allowed but still reported
     assert "budget" in check_budget(sc, force=True)
+
+
+# ── link_down_cascade `interfaces`: the multi-port fault that folds a whole
+# access layer into ONE giant correlation object (giant-object scenario) ──────
+
+GIANT = os.path.join(REPO_ROOT, "docs", "design", "examples",
+                     "twin-scenario-giant-object.yaml")
+
+
+@pytest.fixture()
+def giant() -> dict:
+    return load_scenario(GIANT)
+
+
+def test_giant_object_scenario_loads_and_fits_budget(giant):
+    assert giant["meta"]["name"] == "giant-object-offload"
+    # 130 folding switches + 3 control tenants x 2 devices
+    assert len(giant["devices"]) == 136
+    folding = [d for d in giant["devices"] if d["tenant"] == "bigfold"]
+    assert len(folding) == 130
+    # Identical port naming across every switch is what makes the shared-token
+    # clique quadratic — if this drifts the object stops being giant.
+    ports = {tuple(i["name"] for i in d["interfaces"]) for d in folding}
+    assert len(ports) == 1
+    assert len(ports.pop()) == 6
+    assert steady_eps(giant) < 20
+    assert "budget" in check_budget(giant)
+
+
+def _fold_story(devices: list[str], ifaces) -> dict:
+    return {
+        "id": "fold-1", "template": "link_down_cascade",
+        "trigger": {"at": "+60s"},
+        "affected": {"devices": devices, "tenants": ["acme"]},
+        "params": {"interfaces": ifaces},
+        "expect": {"forbid": {"cross_tenant_merge": True}},
+    }
+
+
+def test_interfaces_param_accepts_declared_ports(example):
+    sc = copy.deepcopy(example)
+    sc["stories"][0] = _fold_story(["edge-a1"], ["Ethernet1", "Ethernet2"])
+    validate_scenario(sc, name="fold")
+
+
+@pytest.mark.parametrize("ifaces,fragment", [
+    ([], "at least one interface name"),
+    (["Ethernet1", "Ethernet1"], "duplicate interface name"),
+    (["Ethernet1", "Ethernet99"], "has no interface(s) ['Ethernet99']"),
+    (["Ethernet1", ""], "must be a non-empty string"),
+    ("Ethernet1", "params.interfaces must be list"),
+])
+def test_interfaces_param_refuses_bad_values(example, ifaces, fragment):
+    sc = copy.deepcopy(example)
+    sc["stories"][0] = _fold_story(["edge-a1"], ifaces)
+    with pytest.raises(ScenarioError) as exc:
+        validate_scenario(sc, name="fold")
+    assert fragment in str(exc.value)
+
+
+def test_interfaces_param_checks_every_affected_device(example):
+    """A port present on the first device but not the second must still be
+    refused — otherwise the plan silently under-emits and the object never
+    reaches the size the scenario was written to produce."""
+    sc = copy.deepcopy(example)
+    # edge-a1 declares Management0; edge-a2 does not.
+    sc["stories"][0] = _fold_story(["edge-a1", "edge-a2"],
+                                   ["Ethernet1", "Management0"])
+    with pytest.raises(ScenarioError) as exc:
+        validate_scenario(sc, name="fold")
+    assert "'edge-a2'" in str(exc.value)
+    assert "Management0" in str(exc.value)

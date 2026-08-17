@@ -33,17 +33,54 @@ def _lit(s: str) -> str:
 
 
 def _objects_for(stack: Stack, names: list[str]) -> list[dict]:
-    """Distinct latest objects whose affected JSON names ANY of `names`."""
+    """Distinct latest objects whose affected JSON names ANY of `names`.
+
+    TWO lean queries for the whole name set, not one blob-carrying query per
+    name. `affected` and `hypotheses` are unbounded String columns — on a GIANT
+    object they are megabytes each — so the query shape decides whether the
+    scorer works at all. Measured live 2026-08-17 against the giant-object
+    scenario (stories with 130 affected devices, a 1,171-node / 54,999-edge
+    object):
+
+      * one `position(affected, name)` scan PER NAME selecting both blobs:
+        390 scans, ~21 min, ClickHouse driven to ~3 GiB and 13 queries LOST to
+        `Code: 241 Memory limit (total) exceeded`;
+      * one `multiSearchAny` scan per story against `corr_objects_latest`
+        (a `LIMIT 1 BY` view, so it SORTS every object row with its blobs
+        attached): ~100 s, but still lost a story to the 2 GiB per-query cap;
+      * the shape below: the membership scan never selects `hypotheses` and
+        never sorts, and only the handful of MATCHING ids then carry the blobs.
+
+    A lost query is not a cosmetic slowdown: it silently costs the scorer the
+    very objects it exists to judge, and reports a miss that never happened.
+
+    Every embedded literal still goes through `_lit`, so the zero-trust
+    SQL-embed rule is unchanged.
+    """
+    if not names:
+        return []
+    # dict.fromkeys de-dups while keeping order, so the SQL is deterministic.
+    needles = ", ".join(f"'{_lit(n)}'" for n in dict.fromkeys(names))
+    # Phase 1 — membership only. Base table, no blob in the projection, no sort.
+    ids = [r["id"] for r in stack.ch_json(
+        "SELECT DISTINCT toString(correlation_id) AS id "
+        "FROM netops.corr_objects "
+        f"WHERE multiSearchAny(affected, [{needles}])")]
+    if not ids:
+        return []
+    # Phase 2 — newest version of just those objects; the LIMIT 1 BY sort now
+    # carries only matching rows instead of the whole table.
+    id_list = ", ".join(f"'{_lit(i)}'" for i in dict.fromkeys(ids))
+    rows = stack.ch_json(
+        "SELECT toString(correlation_id) AS id, toString(state) AS state, "
+        "toString(verdict_tier) AS verdict_tier, top_hypothesis, "
+        "round(top_confidence,3) AS conf, node_count, affected, hypotheses "
+        "FROM netops.corr_objects "
+        f"WHERE toString(correlation_id) IN ({id_list}) "
+        "ORDER BY version DESC LIMIT 1 BY correlation_id")
     seen: dict[str, dict] = {}
-    for name in names:
-        rows = stack.ch_json(
-            "SELECT toString(correlation_id) AS id, toString(state) AS state, "
-            "toString(verdict_tier) AS verdict_tier, top_hypothesis, "
-            "round(top_confidence,3) AS conf, node_count, affected, hypotheses "
-            "FROM netops.corr_objects_latest "
-            f"WHERE position(affected, '{_lit(name)}') > 0")
-        for r in rows:
-            seen[r["id"]] = r
+    for r in rows:
+        seen[r["id"]] = r
     return list(seen.values())
 
 

@@ -160,3 +160,89 @@ def test_scenario_deepcopy_safety():
     before = copy.deepcopy(sc)
     build_run_plan(sc, 60.0)
     assert sc == before
+
+
+# ── link_down_cascade multi-port fault (giant-object scenario) ───────────────
+
+GIANT = os.path.join(REPO_ROOT, "docs", "design", "examples",
+                     "twin-scenario-giant-object.yaml")
+
+
+def test_link_down_cascade_without_interfaces_param_is_unchanged():
+    """BACK-COMPAT: absent `interfaces`, the plan must be byte-identical to the
+    pre-existing single-port expansion (interfaces[0] only)."""
+    sc = _example()
+    plan = build_run_plan(sc, 600.0)
+    sc2 = _example()
+    sc2["stories"][0]["params"].pop("interfaces", None)
+    assert json.dumps(plan, sort_keys=True, default=str) == json.dumps(
+        build_run_plan(sc2, 600.0), sort_keys=True, default=str)
+
+
+def test_interfaces_param_faults_every_named_port_on_every_device():
+    sc = _example()
+    sc["stories"] = [{
+        "id": "fold-1", "template": "link_down_cascade",
+        "trigger": {"at": "+60s"},
+        "affected": {"devices": ["edge-a1", "core-a1"], "tenants": ["acme"]},
+        "params": {"interfaces": ["Ethernet1", "Ethernet2"],
+                   "probe_loss_pct": 90},
+        "expect": {"forbid": {"cross_tenant_merge": True}},
+    }]
+    validate_scenario(sc, name="fold")
+    items = build_run_plan(sc, 600.0)["stories"][0]["items"]
+    syslog = [i for i in items if i["lane"] == "syslog"]
+    # per device per port: LINK-3-UPDOWN + LINEPROTO-5-UPDOWN. edge-a1 also has
+    # 2 bgp_neighbors and core-a1 has 2 -> 4 BGP lines, once per device (the
+    # sessions ride the device, not a single port).
+    link = [i for i in syslog if i["appname"] == "LINK-3-UPDOWN"]
+    proto = [i for i in syslog if i["appname"] == "LINEPROTO-5-UPDOWN"]
+    bgp = [i for i in syslog if i["appname"] == "BGP-5-ADJCHANGE"]
+    assert len(link) == 4      # 2 devices x 2 ports
+    assert len(proto) == 4
+    assert len(bgp) == 4
+    for port in ("Ethernet1", "Ethernet2"):
+        for dev in ("edge-a1", "core-a1"):
+            assert any(i["device"] == dev and port in i["message"]
+                       for i in link)
+    # one probe per device regardless of port count
+    assert len([i for i in items if i["lane"] == "probes"]) == 2
+
+
+def test_giant_object_plan_yields_the_intended_graph_arithmetic():
+    """The scenario's whole purpose is a specific object SIZE. Pin the event
+    arithmetic that produces it, so a regression in the expander cannot quietly
+    shrink the object the live proof depends on.
+
+    nodes = H hosts x I ports (LINK and LINEPROTO both classify to
+    kind='link_state_change' on '<device>:<port>', so a (device, port) pair is
+    one node); edges = I*C(H,2) + H*C(I,2).
+    """
+    sc = load_scenario(GIANT)
+    plan = build_run_plan(sc, 700.0)
+    folds = [s for s in plan["stories"] if s["id"].startswith("fold-")]
+    assert len(folds) == 3, "three firings drive re-serialization past damping"
+
+    hosts = {d["name"] for d in sc["devices"] if d["tenant"] == "bigfold"}
+    ports = [i["name"] for i in next(d for d in sc["devices"]
+                                     if d["name"] in hosts)["interfaces"]]
+    h, i = len(hosts), len(ports)
+    assert (h, i) == (130, 6)
+
+    for stx in folds:
+        syslog = [x for x in stx["items"] if x["lane"] == "syslog"]
+        probes = [x for x in stx["items"] if x["lane"] == "probes"]
+        # 2 lines per (host, port); no bgp_neighbors on the folding switches
+        assert len(syslog) == h * i * 2
+        assert len(probes) == h
+        # every (host, port) pair actually faulted — the node set of the object
+        faulted = {(x["device"], p) for x in syslog for p in ports
+                   if p in x["message"]}
+        assert len(faulted) == h * i
+
+    nodes = h * i
+    edges = i * (h * (h - 1) // 2) + h * (i * (i - 1) // 2)
+    assert (nodes, edges) == (780, 52260)
+    # elements = nodes + edges must dominate CORR_OFFLOAD_MIN_ELEMENTS (2000),
+    # or the object would take the inline path and prove nothing.
+    assert nodes + edges > 25 * 2000

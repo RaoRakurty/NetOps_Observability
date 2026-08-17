@@ -69,11 +69,26 @@ class FakeStack:
         self.objects = list(objects)
         self.edges = edges or {}
         self.signals = signals or {}
+        self.object_queries = 0
 
     def ch_json(self, query):
-        if "corr_objects_latest" in query:
-            name = query.split("position(affected, '")[1].split("'")[0]
-            return [dict(o) for o in self.objects if name in o["affected"]]
+        if "multiSearchAny(affected" in query:
+            # Phase 1: membership only, one pass over the whole name set (the
+            # per-name form exhausted ClickHouse memory on a giant object).
+            needles = query.split("multiSearchAny(affected, [")[1]
+            needles = needles.split("])")[0]
+            names = [n.strip().strip("'") for n in needles.split(",")]
+            self.object_queries += 1
+            assert "hypotheses" not in query, \
+                "the membership scan must not carry the unbounded blob columns"
+            return [{"id": o["id"]} for o in self.objects
+                    if any(n in o["affected"] for n in names)]
+        if "LIMIT 1 BY correlation_id" in query:
+            # Phase 2: full rows for the matching ids only.
+            id_list = query.split("IN (")[1].split(")")[0]
+            ids = {i.strip().strip("'") for i in id_list.split(",")}
+            self.object_queries += 1
+            return [dict(o) for o in self.objects if o["id"] in ids]
         if "corr_edges" in query:
             oid = query.split("toString(correlation_id) = '")[1].split("'")[0]
             return [{"grounding_ref": r} for r in self.edges.get(oid, [])]
@@ -202,3 +217,41 @@ def test_score_run_records_a_crashing_story_loudly():
     assert all(r["status"] == "FAIL" for r in rep["stories"])
     assert all(r["clauses"][0]["clause"] == "scorer_error"
                for r in rep["stories"])
+
+
+def test_object_lookup_is_one_query_per_story_regardless_of_entity_count():
+    """`affected` and `hypotheses` are unbounded String columns. A story with
+    many affected devices (the giant-object scenario has 130) must NOT issue one
+    scan per device: measured live 2026-08-17, the per-name form drove
+    ClickHouse to ~3 GiB and started losing queries to `Code: 241 Memory limit
+    (total) exceeded`, silently costing the scorer the objects it must judge."""
+    devices = [f"acc-{i:04d}" for i in range(1, 131)]
+    gt = {
+        "story_id": "access-layer-fold", "template": "link_down_cascade",
+        "fired_at": "2026-08-17T00:00:00Z",
+        "affected": {"devices": devices, "tenants": ["bigfold"]},
+        "extra_entities": [],
+        "expect": {"rca": {"verdict_tier_at_least": "suspected",
+                           "affected_includes": ["acc-0001", "acc-0130"],
+                           "single_incident": True}},
+    }
+    stack = FakeStack(objects=[
+        _obj("giant", "suspected", "sig.ent.access.local-link-fault",
+             [PREFIX + d for d in devices], nodes=780)])
+    r = scorer.score_story(stack, gt, PREFIX,
+                           {d: "bigfold" for d in devices}, {})
+    # two lean phases (membership, then blobs for matches) — NOT one per entity
+    assert stack.object_queries == 2, "batched two-phase, not one per entity"
+    assert r["status"] == "PASS", r["clauses"]
+    assert [o["id"] for o in r["objects"]] == ["giant"]
+
+
+def test_object_lookup_still_refuses_unsafe_identifiers():
+    """Batching must not weaken the zero-trust SQL-embed rule."""
+    gt = dict(DX_GT)
+    gt["affected"] = {"devices": ["ok-1", "bad' OR 1=1 --"],
+                      "tenants": ["acme"]}
+    gt["extra_entities"] = []
+    rep = scorer.score_run(FakeStack(), [gt], STATE, {})
+    assert rep["stories"][0]["status"] == "FAIL"
+    assert rep["stories"][0]["clauses"][0]["clause"] == "scorer_error"

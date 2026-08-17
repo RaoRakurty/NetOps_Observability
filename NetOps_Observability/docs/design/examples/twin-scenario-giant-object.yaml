@@ -1,0 +1,1133 @@
+# CORRELIX Network Digital Twin — GIANT-OBJECT scenario (tracker 152/154).
+#
+# WHY THIS FILE EXISTS. The P1 event-loop fix (commit 94e8561d) offloads the
+# size-unbounded pure-CPU per-object work (content_hash, to_object_row,
+# to_edge_rows, to_typed_edge_rows, to_evidence_rows, material_hash, the CH
+# NDJSON body build, the batcher token) to a thread pool above
+# CORR_OFFLOAD_MIN_ELEMENTS (2000 elements = nodes + edges). It shipped with
+# ONE stated caveat: the live 550k/200k burst validations ran against an EMPTY
+# tenant registry, so every event was tenant-refused (identity_unattributable)
+# and NO correlation object ever formed. The giant-object path — the actual
+# root cause — was therefore proven only by measurement plus the in-process
+# unit test (src/correlation/test_loop_blocking.py). This scenario closes that
+# caveat: it forms a real giant object on REGISTERED, tenant-attributed
+# devices, live.
+#
+# THE SHAPE, AND WHY IT IS THIS SHAPE. Measured from the engine, not guessed:
+#   * %LINK-3-UPDOWN and %LINEPROTO-5-UPDOWN both classify to
+#     kind='link_state_change' on entity '<device>:<port>'
+#     (src/correlation/producers.py), and a graph node is keyed
+#     '<entity_type>:<entity_id>:<kind>' (engine.py build_nodes) — so a
+#     (device, port) pair is exactly ONE node no matter how many lines it
+#     emits. nodes = H hosts x I ports.
+#   * engine.py _candidate_pairs builds a CLIQUE over every shared token, and
+#     Node.tokens() keeps the bare PORT NAME. Every switch here carries the
+#     same six port names, so all H nodes for 'GigabitEthernet0/1' mesh:
+#     that is the quadratic term, and it is the real-world reason a uniform
+#     access-layer fault folds a whole layer into one object rather than into
+#     H small ones. resolve_grounding admits those pairs at rank 7
+#     ('shared:<token>', w_topo 0.5, NON-authoritative) and the same-device
+#     pairs at rank 1 ('shared:<device>', w_topo 0.9).
+#   * edges = I*C(H,2) + H*C(I,2) = (H*I/2)*(H+I-2)
+#   * H=130, I=6  =>  780 nodes, 52260 edges, 53040 elements
+#     (the measured pre-fix object was 750 / 48,375 = H=125, I=6; this
+#      scenario deliberately EXCEEDS it on both axes.) 53040 elements is
+#      ~25x CORR_OFFLOAD_MIN_ELEMENTS, so every offloaded call site fires.
+#
+# There is no node or edge cap in the engine (deliberately — that unbounded
+# growth IS the P1), so the numbers above are what actually gets serialized.
+#
+# The fold fires THREE times. One firing produces one object version and then
+# version damping (CORR_VERSION_HEARTBEAT_S=900) suppresses re-persists, so a
+# single firing would prove only one giant serialization. Re-firing adds
+# signals to the same nodes, moves material_hash, and forces the engine to
+# re-serialize the giant snapshot on successive CORR_ENGINE_INTERVAL_S (30s)
+# cycles — which is the sustained per-cycle cost that expired the heartbeat.
+#
+# All 130 switches sit in ONE tenant, so the fold is intra-tenant and
+# legitimate. Three control tenants spread tenant keys over BUS_PARTITIONS
+# and assert the giant object never reaches across a tenant boundary.
+#
+# Budget: 136 devices x 0.1 EPS = 13.6 EPS steady (T1 budget is 200), and
+# each firing is 1690 events inside a ~6s window (~281 EPS burst,
+# inside the T1 <=1k burst budget). Lanes: syslog + probes only — no trap
+# lane (needs FEATURE_SNMP_TRAPS) and no flows lane (needs the twin overlay
+# container), so this runs on a stock T1 host.
+
+twin: 1
+
+meta:
+  name: giant-object-offload
+  description: >
+    One uniform access-layer link fault across 130 registered switches in a
+    single tenant, folding into one correlation object of 780 nodes /
+    ~52260 edges — the shape that owned the event loop for ~7.5s per
+    object per cycle before the CORR_OFFLOAD_MIN_ELEMENTS thread-pool
+    offload. Fired three times so the giant snapshot is re-serialized.
+  seed: 20260817
+
+tenants:
+  # `bigfold` owns the whole access layer that folds into one object. The
+  # three controls exist to (a) spread tenant keys across BUS_PARTITIONS and
+  # (b) assert the fold does not reach across a tenant boundary.
+  - alias: bigfold
+    org: bigfold-corp
+  - alias: ctl-a
+    org: ctl-a-inc
+  - alias: ctl-b
+    org: ctl-b-inc
+  - alias: ctl-c
+    org: ctl-c-inc
+
+sites:
+  - { id: fold1, name: "Fold DC access layer" }
+  - { id: ctl1,  name: "Control site" }
+
+devices:
+  # ── bigfold: the access layer. IDENTICAL port naming across all 130 is
+  # what makes the rank-7 term quadratic — and is how access layers are
+  # actually built. No bgp_neighbors: a BGP node would add a second kind per
+  # device and blur the node arithmetic this scenario is asserting.
+  - name: acc-0001
+    tenant: bigfold
+    site: fold1
+    role: leaf
+    snmp: { version: v2c, community: twin-public }
+    interfaces: [ { name: GigabitEthernet0/1, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/2, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/3, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/4, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/5, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/6, speed_mbps: 1000, description: "access port" } ]
+  - name: acc-0002
+    tenant: bigfold
+    site: fold1
+    role: leaf
+    snmp: { version: v2c, community: twin-public }
+    interfaces: [ { name: GigabitEthernet0/1, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/2, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/3, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/4, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/5, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/6, speed_mbps: 1000, description: "access port" } ]
+  - name: acc-0003
+    tenant: bigfold
+    site: fold1
+    role: leaf
+    snmp: { version: v2c, community: twin-public }
+    interfaces: [ { name: GigabitEthernet0/1, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/2, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/3, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/4, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/5, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/6, speed_mbps: 1000, description: "access port" } ]
+  - name: acc-0004
+    tenant: bigfold
+    site: fold1
+    role: leaf
+    snmp: { version: v2c, community: twin-public }
+    interfaces: [ { name: GigabitEthernet0/1, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/2, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/3, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/4, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/5, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/6, speed_mbps: 1000, description: "access port" } ]
+  - name: acc-0005
+    tenant: bigfold
+    site: fold1
+    role: leaf
+    snmp: { version: v2c, community: twin-public }
+    interfaces: [ { name: GigabitEthernet0/1, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/2, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/3, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/4, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/5, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/6, speed_mbps: 1000, description: "access port" } ]
+  - name: acc-0006
+    tenant: bigfold
+    site: fold1
+    role: leaf
+    snmp: { version: v2c, community: twin-public }
+    interfaces: [ { name: GigabitEthernet0/1, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/2, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/3, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/4, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/5, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/6, speed_mbps: 1000, description: "access port" } ]
+  - name: acc-0007
+    tenant: bigfold
+    site: fold1
+    role: leaf
+    snmp: { version: v2c, community: twin-public }
+    interfaces: [ { name: GigabitEthernet0/1, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/2, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/3, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/4, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/5, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/6, speed_mbps: 1000, description: "access port" } ]
+  - name: acc-0008
+    tenant: bigfold
+    site: fold1
+    role: leaf
+    snmp: { version: v2c, community: twin-public }
+    interfaces: [ { name: GigabitEthernet0/1, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/2, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/3, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/4, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/5, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/6, speed_mbps: 1000, description: "access port" } ]
+  - name: acc-0009
+    tenant: bigfold
+    site: fold1
+    role: leaf
+    snmp: { version: v2c, community: twin-public }
+    interfaces: [ { name: GigabitEthernet0/1, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/2, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/3, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/4, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/5, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/6, speed_mbps: 1000, description: "access port" } ]
+  - name: acc-0010
+    tenant: bigfold
+    site: fold1
+    role: leaf
+    snmp: { version: v2c, community: twin-public }
+    interfaces: [ { name: GigabitEthernet0/1, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/2, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/3, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/4, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/5, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/6, speed_mbps: 1000, description: "access port" } ]
+  - name: acc-0011
+    tenant: bigfold
+    site: fold1
+    role: leaf
+    snmp: { version: v2c, community: twin-public }
+    interfaces: [ { name: GigabitEthernet0/1, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/2, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/3, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/4, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/5, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/6, speed_mbps: 1000, description: "access port" } ]
+  - name: acc-0012
+    tenant: bigfold
+    site: fold1
+    role: leaf
+    snmp: { version: v2c, community: twin-public }
+    interfaces: [ { name: GigabitEthernet0/1, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/2, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/3, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/4, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/5, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/6, speed_mbps: 1000, description: "access port" } ]
+  - name: acc-0013
+    tenant: bigfold
+    site: fold1
+    role: leaf
+    snmp: { version: v2c, community: twin-public }
+    interfaces: [ { name: GigabitEthernet0/1, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/2, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/3, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/4, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/5, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/6, speed_mbps: 1000, description: "access port" } ]
+  - name: acc-0014
+    tenant: bigfold
+    site: fold1
+    role: leaf
+    snmp: { version: v2c, community: twin-public }
+    interfaces: [ { name: GigabitEthernet0/1, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/2, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/3, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/4, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/5, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/6, speed_mbps: 1000, description: "access port" } ]
+  - name: acc-0015
+    tenant: bigfold
+    site: fold1
+    role: leaf
+    snmp: { version: v2c, community: twin-public }
+    interfaces: [ { name: GigabitEthernet0/1, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/2, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/3, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/4, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/5, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/6, speed_mbps: 1000, description: "access port" } ]
+  - name: acc-0016
+    tenant: bigfold
+    site: fold1
+    role: leaf
+    snmp: { version: v2c, community: twin-public }
+    interfaces: [ { name: GigabitEthernet0/1, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/2, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/3, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/4, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/5, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/6, speed_mbps: 1000, description: "access port" } ]
+  - name: acc-0017
+    tenant: bigfold
+    site: fold1
+    role: leaf
+    snmp: { version: v2c, community: twin-public }
+    interfaces: [ { name: GigabitEthernet0/1, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/2, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/3, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/4, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/5, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/6, speed_mbps: 1000, description: "access port" } ]
+  - name: acc-0018
+    tenant: bigfold
+    site: fold1
+    role: leaf
+    snmp: { version: v2c, community: twin-public }
+    interfaces: [ { name: GigabitEthernet0/1, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/2, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/3, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/4, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/5, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/6, speed_mbps: 1000, description: "access port" } ]
+  - name: acc-0019
+    tenant: bigfold
+    site: fold1
+    role: leaf
+    snmp: { version: v2c, community: twin-public }
+    interfaces: [ { name: GigabitEthernet0/1, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/2, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/3, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/4, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/5, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/6, speed_mbps: 1000, description: "access port" } ]
+  - name: acc-0020
+    tenant: bigfold
+    site: fold1
+    role: leaf
+    snmp: { version: v2c, community: twin-public }
+    interfaces: [ { name: GigabitEthernet0/1, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/2, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/3, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/4, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/5, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/6, speed_mbps: 1000, description: "access port" } ]
+  - name: acc-0021
+    tenant: bigfold
+    site: fold1
+    role: leaf
+    snmp: { version: v2c, community: twin-public }
+    interfaces: [ { name: GigabitEthernet0/1, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/2, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/3, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/4, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/5, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/6, speed_mbps: 1000, description: "access port" } ]
+  - name: acc-0022
+    tenant: bigfold
+    site: fold1
+    role: leaf
+    snmp: { version: v2c, community: twin-public }
+    interfaces: [ { name: GigabitEthernet0/1, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/2, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/3, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/4, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/5, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/6, speed_mbps: 1000, description: "access port" } ]
+  - name: acc-0023
+    tenant: bigfold
+    site: fold1
+    role: leaf
+    snmp: { version: v2c, community: twin-public }
+    interfaces: [ { name: GigabitEthernet0/1, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/2, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/3, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/4, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/5, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/6, speed_mbps: 1000, description: "access port" } ]
+  - name: acc-0024
+    tenant: bigfold
+    site: fold1
+    role: leaf
+    snmp: { version: v2c, community: twin-public }
+    interfaces: [ { name: GigabitEthernet0/1, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/2, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/3, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/4, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/5, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/6, speed_mbps: 1000, description: "access port" } ]
+  - name: acc-0025
+    tenant: bigfold
+    site: fold1
+    role: leaf
+    snmp: { version: v2c, community: twin-public }
+    interfaces: [ { name: GigabitEthernet0/1, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/2, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/3, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/4, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/5, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/6, speed_mbps: 1000, description: "access port" } ]
+  - name: acc-0026
+    tenant: bigfold
+    site: fold1
+    role: leaf
+    snmp: { version: v2c, community: twin-public }
+    interfaces: [ { name: GigabitEthernet0/1, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/2, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/3, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/4, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/5, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/6, speed_mbps: 1000, description: "access port" } ]
+  - name: acc-0027
+    tenant: bigfold
+    site: fold1
+    role: leaf
+    snmp: { version: v2c, community: twin-public }
+    interfaces: [ { name: GigabitEthernet0/1, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/2, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/3, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/4, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/5, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/6, speed_mbps: 1000, description: "access port" } ]
+  - name: acc-0028
+    tenant: bigfold
+    site: fold1
+    role: leaf
+    snmp: { version: v2c, community: twin-public }
+    interfaces: [ { name: GigabitEthernet0/1, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/2, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/3, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/4, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/5, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/6, speed_mbps: 1000, description: "access port" } ]
+  - name: acc-0029
+    tenant: bigfold
+    site: fold1
+    role: leaf
+    snmp: { version: v2c, community: twin-public }
+    interfaces: [ { name: GigabitEthernet0/1, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/2, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/3, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/4, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/5, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/6, speed_mbps: 1000, description: "access port" } ]
+  - name: acc-0030
+    tenant: bigfold
+    site: fold1
+    role: leaf
+    snmp: { version: v2c, community: twin-public }
+    interfaces: [ { name: GigabitEthernet0/1, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/2, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/3, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/4, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/5, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/6, speed_mbps: 1000, description: "access port" } ]
+  - name: acc-0031
+    tenant: bigfold
+    site: fold1
+    role: leaf
+    snmp: { version: v2c, community: twin-public }
+    interfaces: [ { name: GigabitEthernet0/1, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/2, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/3, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/4, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/5, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/6, speed_mbps: 1000, description: "access port" } ]
+  - name: acc-0032
+    tenant: bigfold
+    site: fold1
+    role: leaf
+    snmp: { version: v2c, community: twin-public }
+    interfaces: [ { name: GigabitEthernet0/1, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/2, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/3, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/4, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/5, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/6, speed_mbps: 1000, description: "access port" } ]
+  - name: acc-0033
+    tenant: bigfold
+    site: fold1
+    role: leaf
+    snmp: { version: v2c, community: twin-public }
+    interfaces: [ { name: GigabitEthernet0/1, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/2, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/3, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/4, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/5, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/6, speed_mbps: 1000, description: "access port" } ]
+  - name: acc-0034
+    tenant: bigfold
+    site: fold1
+    role: leaf
+    snmp: { version: v2c, community: twin-public }
+    interfaces: [ { name: GigabitEthernet0/1, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/2, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/3, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/4, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/5, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/6, speed_mbps: 1000, description: "access port" } ]
+  - name: acc-0035
+    tenant: bigfold
+    site: fold1
+    role: leaf
+    snmp: { version: v2c, community: twin-public }
+    interfaces: [ { name: GigabitEthernet0/1, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/2, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/3, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/4, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/5, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/6, speed_mbps: 1000, description: "access port" } ]
+  - name: acc-0036
+    tenant: bigfold
+    site: fold1
+    role: leaf
+    snmp: { version: v2c, community: twin-public }
+    interfaces: [ { name: GigabitEthernet0/1, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/2, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/3, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/4, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/5, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/6, speed_mbps: 1000, description: "access port" } ]
+  - name: acc-0037
+    tenant: bigfold
+    site: fold1
+    role: leaf
+    snmp: { version: v2c, community: twin-public }
+    interfaces: [ { name: GigabitEthernet0/1, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/2, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/3, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/4, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/5, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/6, speed_mbps: 1000, description: "access port" } ]
+  - name: acc-0038
+    tenant: bigfold
+    site: fold1
+    role: leaf
+    snmp: { version: v2c, community: twin-public }
+    interfaces: [ { name: GigabitEthernet0/1, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/2, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/3, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/4, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/5, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/6, speed_mbps: 1000, description: "access port" } ]
+  - name: acc-0039
+    tenant: bigfold
+    site: fold1
+    role: leaf
+    snmp: { version: v2c, community: twin-public }
+    interfaces: [ { name: GigabitEthernet0/1, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/2, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/3, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/4, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/5, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/6, speed_mbps: 1000, description: "access port" } ]
+  - name: acc-0040
+    tenant: bigfold
+    site: fold1
+    role: leaf
+    snmp: { version: v2c, community: twin-public }
+    interfaces: [ { name: GigabitEthernet0/1, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/2, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/3, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/4, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/5, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/6, speed_mbps: 1000, description: "access port" } ]
+  - name: acc-0041
+    tenant: bigfold
+    site: fold1
+    role: leaf
+    snmp: { version: v2c, community: twin-public }
+    interfaces: [ { name: GigabitEthernet0/1, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/2, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/3, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/4, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/5, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/6, speed_mbps: 1000, description: "access port" } ]
+  - name: acc-0042
+    tenant: bigfold
+    site: fold1
+    role: leaf
+    snmp: { version: v2c, community: twin-public }
+    interfaces: [ { name: GigabitEthernet0/1, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/2, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/3, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/4, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/5, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/6, speed_mbps: 1000, description: "access port" } ]
+  - name: acc-0043
+    tenant: bigfold
+    site: fold1
+    role: leaf
+    snmp: { version: v2c, community: twin-public }
+    interfaces: [ { name: GigabitEthernet0/1, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/2, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/3, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/4, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/5, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/6, speed_mbps: 1000, description: "access port" } ]
+  - name: acc-0044
+    tenant: bigfold
+    site: fold1
+    role: leaf
+    snmp: { version: v2c, community: twin-public }
+    interfaces: [ { name: GigabitEthernet0/1, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/2, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/3, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/4, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/5, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/6, speed_mbps: 1000, description: "access port" } ]
+  - name: acc-0045
+    tenant: bigfold
+    site: fold1
+    role: leaf
+    snmp: { version: v2c, community: twin-public }
+    interfaces: [ { name: GigabitEthernet0/1, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/2, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/3, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/4, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/5, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/6, speed_mbps: 1000, description: "access port" } ]
+  - name: acc-0046
+    tenant: bigfold
+    site: fold1
+    role: leaf
+    snmp: { version: v2c, community: twin-public }
+    interfaces: [ { name: GigabitEthernet0/1, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/2, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/3, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/4, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/5, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/6, speed_mbps: 1000, description: "access port" } ]
+  - name: acc-0047
+    tenant: bigfold
+    site: fold1
+    role: leaf
+    snmp: { version: v2c, community: twin-public }
+    interfaces: [ { name: GigabitEthernet0/1, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/2, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/3, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/4, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/5, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/6, speed_mbps: 1000, description: "access port" } ]
+  - name: acc-0048
+    tenant: bigfold
+    site: fold1
+    role: leaf
+    snmp: { version: v2c, community: twin-public }
+    interfaces: [ { name: GigabitEthernet0/1, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/2, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/3, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/4, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/5, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/6, speed_mbps: 1000, description: "access port" } ]
+  - name: acc-0049
+    tenant: bigfold
+    site: fold1
+    role: leaf
+    snmp: { version: v2c, community: twin-public }
+    interfaces: [ { name: GigabitEthernet0/1, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/2, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/3, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/4, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/5, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/6, speed_mbps: 1000, description: "access port" } ]
+  - name: acc-0050
+    tenant: bigfold
+    site: fold1
+    role: leaf
+    snmp: { version: v2c, community: twin-public }
+    interfaces: [ { name: GigabitEthernet0/1, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/2, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/3, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/4, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/5, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/6, speed_mbps: 1000, description: "access port" } ]
+  - name: acc-0051
+    tenant: bigfold
+    site: fold1
+    role: leaf
+    snmp: { version: v2c, community: twin-public }
+    interfaces: [ { name: GigabitEthernet0/1, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/2, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/3, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/4, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/5, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/6, speed_mbps: 1000, description: "access port" } ]
+  - name: acc-0052
+    tenant: bigfold
+    site: fold1
+    role: leaf
+    snmp: { version: v2c, community: twin-public }
+    interfaces: [ { name: GigabitEthernet0/1, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/2, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/3, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/4, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/5, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/6, speed_mbps: 1000, description: "access port" } ]
+  - name: acc-0053
+    tenant: bigfold
+    site: fold1
+    role: leaf
+    snmp: { version: v2c, community: twin-public }
+    interfaces: [ { name: GigabitEthernet0/1, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/2, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/3, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/4, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/5, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/6, speed_mbps: 1000, description: "access port" } ]
+  - name: acc-0054
+    tenant: bigfold
+    site: fold1
+    role: leaf
+    snmp: { version: v2c, community: twin-public }
+    interfaces: [ { name: GigabitEthernet0/1, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/2, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/3, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/4, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/5, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/6, speed_mbps: 1000, description: "access port" } ]
+  - name: acc-0055
+    tenant: bigfold
+    site: fold1
+    role: leaf
+    snmp: { version: v2c, community: twin-public }
+    interfaces: [ { name: GigabitEthernet0/1, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/2, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/3, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/4, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/5, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/6, speed_mbps: 1000, description: "access port" } ]
+  - name: acc-0056
+    tenant: bigfold
+    site: fold1
+    role: leaf
+    snmp: { version: v2c, community: twin-public }
+    interfaces: [ { name: GigabitEthernet0/1, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/2, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/3, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/4, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/5, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/6, speed_mbps: 1000, description: "access port" } ]
+  - name: acc-0057
+    tenant: bigfold
+    site: fold1
+    role: leaf
+    snmp: { version: v2c, community: twin-public }
+    interfaces: [ { name: GigabitEthernet0/1, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/2, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/3, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/4, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/5, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/6, speed_mbps: 1000, description: "access port" } ]
+  - name: acc-0058
+    tenant: bigfold
+    site: fold1
+    role: leaf
+    snmp: { version: v2c, community: twin-public }
+    interfaces: [ { name: GigabitEthernet0/1, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/2, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/3, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/4, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/5, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/6, speed_mbps: 1000, description: "access port" } ]
+  - name: acc-0059
+    tenant: bigfold
+    site: fold1
+    role: leaf
+    snmp: { version: v2c, community: twin-public }
+    interfaces: [ { name: GigabitEthernet0/1, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/2, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/3, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/4, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/5, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/6, speed_mbps: 1000, description: "access port" } ]
+  - name: acc-0060
+    tenant: bigfold
+    site: fold1
+    role: leaf
+    snmp: { version: v2c, community: twin-public }
+    interfaces: [ { name: GigabitEthernet0/1, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/2, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/3, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/4, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/5, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/6, speed_mbps: 1000, description: "access port" } ]
+  - name: acc-0061
+    tenant: bigfold
+    site: fold1
+    role: leaf
+    snmp: { version: v2c, community: twin-public }
+    interfaces: [ { name: GigabitEthernet0/1, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/2, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/3, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/4, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/5, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/6, speed_mbps: 1000, description: "access port" } ]
+  - name: acc-0062
+    tenant: bigfold
+    site: fold1
+    role: leaf
+    snmp: { version: v2c, community: twin-public }
+    interfaces: [ { name: GigabitEthernet0/1, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/2, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/3, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/4, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/5, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/6, speed_mbps: 1000, description: "access port" } ]
+  - name: acc-0063
+    tenant: bigfold
+    site: fold1
+    role: leaf
+    snmp: { version: v2c, community: twin-public }
+    interfaces: [ { name: GigabitEthernet0/1, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/2, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/3, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/4, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/5, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/6, speed_mbps: 1000, description: "access port" } ]
+  - name: acc-0064
+    tenant: bigfold
+    site: fold1
+    role: leaf
+    snmp: { version: v2c, community: twin-public }
+    interfaces: [ { name: GigabitEthernet0/1, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/2, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/3, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/4, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/5, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/6, speed_mbps: 1000, description: "access port" } ]
+  - name: acc-0065
+    tenant: bigfold
+    site: fold1
+    role: leaf
+    snmp: { version: v2c, community: twin-public }
+    interfaces: [ { name: GigabitEthernet0/1, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/2, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/3, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/4, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/5, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/6, speed_mbps: 1000, description: "access port" } ]
+  - name: acc-0066
+    tenant: bigfold
+    site: fold1
+    role: leaf
+    snmp: { version: v2c, community: twin-public }
+    interfaces: [ { name: GigabitEthernet0/1, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/2, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/3, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/4, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/5, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/6, speed_mbps: 1000, description: "access port" } ]
+  - name: acc-0067
+    tenant: bigfold
+    site: fold1
+    role: leaf
+    snmp: { version: v2c, community: twin-public }
+    interfaces: [ { name: GigabitEthernet0/1, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/2, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/3, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/4, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/5, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/6, speed_mbps: 1000, description: "access port" } ]
+  - name: acc-0068
+    tenant: bigfold
+    site: fold1
+    role: leaf
+    snmp: { version: v2c, community: twin-public }
+    interfaces: [ { name: GigabitEthernet0/1, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/2, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/3, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/4, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/5, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/6, speed_mbps: 1000, description: "access port" } ]
+  - name: acc-0069
+    tenant: bigfold
+    site: fold1
+    role: leaf
+    snmp: { version: v2c, community: twin-public }
+    interfaces: [ { name: GigabitEthernet0/1, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/2, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/3, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/4, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/5, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/6, speed_mbps: 1000, description: "access port" } ]
+  - name: acc-0070
+    tenant: bigfold
+    site: fold1
+    role: leaf
+    snmp: { version: v2c, community: twin-public }
+    interfaces: [ { name: GigabitEthernet0/1, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/2, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/3, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/4, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/5, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/6, speed_mbps: 1000, description: "access port" } ]
+  - name: acc-0071
+    tenant: bigfold
+    site: fold1
+    role: leaf
+    snmp: { version: v2c, community: twin-public }
+    interfaces: [ { name: GigabitEthernet0/1, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/2, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/3, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/4, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/5, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/6, speed_mbps: 1000, description: "access port" } ]
+  - name: acc-0072
+    tenant: bigfold
+    site: fold1
+    role: leaf
+    snmp: { version: v2c, community: twin-public }
+    interfaces: [ { name: GigabitEthernet0/1, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/2, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/3, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/4, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/5, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/6, speed_mbps: 1000, description: "access port" } ]
+  - name: acc-0073
+    tenant: bigfold
+    site: fold1
+    role: leaf
+    snmp: { version: v2c, community: twin-public }
+    interfaces: [ { name: GigabitEthernet0/1, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/2, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/3, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/4, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/5, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/6, speed_mbps: 1000, description: "access port" } ]
+  - name: acc-0074
+    tenant: bigfold
+    site: fold1
+    role: leaf
+    snmp: { version: v2c, community: twin-public }
+    interfaces: [ { name: GigabitEthernet0/1, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/2, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/3, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/4, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/5, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/6, speed_mbps: 1000, description: "access port" } ]
+  - name: acc-0075
+    tenant: bigfold
+    site: fold1
+    role: leaf
+    snmp: { version: v2c, community: twin-public }
+    interfaces: [ { name: GigabitEthernet0/1, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/2, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/3, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/4, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/5, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/6, speed_mbps: 1000, description: "access port" } ]
+  - name: acc-0076
+    tenant: bigfold
+    site: fold1
+    role: leaf
+    snmp: { version: v2c, community: twin-public }
+    interfaces: [ { name: GigabitEthernet0/1, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/2, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/3, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/4, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/5, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/6, speed_mbps: 1000, description: "access port" } ]
+  - name: acc-0077
+    tenant: bigfold
+    site: fold1
+    role: leaf
+    snmp: { version: v2c, community: twin-public }
+    interfaces: [ { name: GigabitEthernet0/1, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/2, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/3, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/4, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/5, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/6, speed_mbps: 1000, description: "access port" } ]
+  - name: acc-0078
+    tenant: bigfold
+    site: fold1
+    role: leaf
+    snmp: { version: v2c, community: twin-public }
+    interfaces: [ { name: GigabitEthernet0/1, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/2, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/3, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/4, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/5, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/6, speed_mbps: 1000, description: "access port" } ]
+  - name: acc-0079
+    tenant: bigfold
+    site: fold1
+    role: leaf
+    snmp: { version: v2c, community: twin-public }
+    interfaces: [ { name: GigabitEthernet0/1, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/2, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/3, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/4, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/5, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/6, speed_mbps: 1000, description: "access port" } ]
+  - name: acc-0080
+    tenant: bigfold
+    site: fold1
+    role: leaf
+    snmp: { version: v2c, community: twin-public }
+    interfaces: [ { name: GigabitEthernet0/1, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/2, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/3, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/4, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/5, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/6, speed_mbps: 1000, description: "access port" } ]
+  - name: acc-0081
+    tenant: bigfold
+    site: fold1
+    role: leaf
+    snmp: { version: v2c, community: twin-public }
+    interfaces: [ { name: GigabitEthernet0/1, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/2, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/3, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/4, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/5, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/6, speed_mbps: 1000, description: "access port" } ]
+  - name: acc-0082
+    tenant: bigfold
+    site: fold1
+    role: leaf
+    snmp: { version: v2c, community: twin-public }
+    interfaces: [ { name: GigabitEthernet0/1, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/2, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/3, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/4, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/5, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/6, speed_mbps: 1000, description: "access port" } ]
+  - name: acc-0083
+    tenant: bigfold
+    site: fold1
+    role: leaf
+    snmp: { version: v2c, community: twin-public }
+    interfaces: [ { name: GigabitEthernet0/1, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/2, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/3, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/4, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/5, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/6, speed_mbps: 1000, description: "access port" } ]
+  - name: acc-0084
+    tenant: bigfold
+    site: fold1
+    role: leaf
+    snmp: { version: v2c, community: twin-public }
+    interfaces: [ { name: GigabitEthernet0/1, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/2, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/3, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/4, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/5, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/6, speed_mbps: 1000, description: "access port" } ]
+  - name: acc-0085
+    tenant: bigfold
+    site: fold1
+    role: leaf
+    snmp: { version: v2c, community: twin-public }
+    interfaces: [ { name: GigabitEthernet0/1, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/2, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/3, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/4, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/5, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/6, speed_mbps: 1000, description: "access port" } ]
+  - name: acc-0086
+    tenant: bigfold
+    site: fold1
+    role: leaf
+    snmp: { version: v2c, community: twin-public }
+    interfaces: [ { name: GigabitEthernet0/1, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/2, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/3, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/4, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/5, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/6, speed_mbps: 1000, description: "access port" } ]
+  - name: acc-0087
+    tenant: bigfold
+    site: fold1
+    role: leaf
+    snmp: { version: v2c, community: twin-public }
+    interfaces: [ { name: GigabitEthernet0/1, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/2, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/3, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/4, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/5, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/6, speed_mbps: 1000, description: "access port" } ]
+  - name: acc-0088
+    tenant: bigfold
+    site: fold1
+    role: leaf
+    snmp: { version: v2c, community: twin-public }
+    interfaces: [ { name: GigabitEthernet0/1, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/2, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/3, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/4, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/5, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/6, speed_mbps: 1000, description: "access port" } ]
+  - name: acc-0089
+    tenant: bigfold
+    site: fold1
+    role: leaf
+    snmp: { version: v2c, community: twin-public }
+    interfaces: [ { name: GigabitEthernet0/1, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/2, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/3, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/4, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/5, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/6, speed_mbps: 1000, description: "access port" } ]
+  - name: acc-0090
+    tenant: bigfold
+    site: fold1
+    role: leaf
+    snmp: { version: v2c, community: twin-public }
+    interfaces: [ { name: GigabitEthernet0/1, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/2, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/3, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/4, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/5, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/6, speed_mbps: 1000, description: "access port" } ]
+  - name: acc-0091
+    tenant: bigfold
+    site: fold1
+    role: leaf
+    snmp: { version: v2c, community: twin-public }
+    interfaces: [ { name: GigabitEthernet0/1, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/2, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/3, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/4, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/5, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/6, speed_mbps: 1000, description: "access port" } ]
+  - name: acc-0092
+    tenant: bigfold
+    site: fold1
+    role: leaf
+    snmp: { version: v2c, community: twin-public }
+    interfaces: [ { name: GigabitEthernet0/1, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/2, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/3, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/4, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/5, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/6, speed_mbps: 1000, description: "access port" } ]
+  - name: acc-0093
+    tenant: bigfold
+    site: fold1
+    role: leaf
+    snmp: { version: v2c, community: twin-public }
+    interfaces: [ { name: GigabitEthernet0/1, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/2, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/3, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/4, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/5, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/6, speed_mbps: 1000, description: "access port" } ]
+  - name: acc-0094
+    tenant: bigfold
+    site: fold1
+    role: leaf
+    snmp: { version: v2c, community: twin-public }
+    interfaces: [ { name: GigabitEthernet0/1, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/2, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/3, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/4, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/5, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/6, speed_mbps: 1000, description: "access port" } ]
+  - name: acc-0095
+    tenant: bigfold
+    site: fold1
+    role: leaf
+    snmp: { version: v2c, community: twin-public }
+    interfaces: [ { name: GigabitEthernet0/1, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/2, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/3, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/4, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/5, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/6, speed_mbps: 1000, description: "access port" } ]
+  - name: acc-0096
+    tenant: bigfold
+    site: fold1
+    role: leaf
+    snmp: { version: v2c, community: twin-public }
+    interfaces: [ { name: GigabitEthernet0/1, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/2, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/3, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/4, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/5, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/6, speed_mbps: 1000, description: "access port" } ]
+  - name: acc-0097
+    tenant: bigfold
+    site: fold1
+    role: leaf
+    snmp: { version: v2c, community: twin-public }
+    interfaces: [ { name: GigabitEthernet0/1, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/2, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/3, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/4, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/5, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/6, speed_mbps: 1000, description: "access port" } ]
+  - name: acc-0098
+    tenant: bigfold
+    site: fold1
+    role: leaf
+    snmp: { version: v2c, community: twin-public }
+    interfaces: [ { name: GigabitEthernet0/1, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/2, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/3, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/4, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/5, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/6, speed_mbps: 1000, description: "access port" } ]
+  - name: acc-0099
+    tenant: bigfold
+    site: fold1
+    role: leaf
+    snmp: { version: v2c, community: twin-public }
+    interfaces: [ { name: GigabitEthernet0/1, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/2, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/3, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/4, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/5, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/6, speed_mbps: 1000, description: "access port" } ]
+  - name: acc-0100
+    tenant: bigfold
+    site: fold1
+    role: leaf
+    snmp: { version: v2c, community: twin-public }
+    interfaces: [ { name: GigabitEthernet0/1, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/2, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/3, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/4, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/5, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/6, speed_mbps: 1000, description: "access port" } ]
+  - name: acc-0101
+    tenant: bigfold
+    site: fold1
+    role: leaf
+    snmp: { version: v2c, community: twin-public }
+    interfaces: [ { name: GigabitEthernet0/1, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/2, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/3, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/4, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/5, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/6, speed_mbps: 1000, description: "access port" } ]
+  - name: acc-0102
+    tenant: bigfold
+    site: fold1
+    role: leaf
+    snmp: { version: v2c, community: twin-public }
+    interfaces: [ { name: GigabitEthernet0/1, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/2, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/3, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/4, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/5, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/6, speed_mbps: 1000, description: "access port" } ]
+  - name: acc-0103
+    tenant: bigfold
+    site: fold1
+    role: leaf
+    snmp: { version: v2c, community: twin-public }
+    interfaces: [ { name: GigabitEthernet0/1, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/2, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/3, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/4, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/5, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/6, speed_mbps: 1000, description: "access port" } ]
+  - name: acc-0104
+    tenant: bigfold
+    site: fold1
+    role: leaf
+    snmp: { version: v2c, community: twin-public }
+    interfaces: [ { name: GigabitEthernet0/1, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/2, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/3, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/4, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/5, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/6, speed_mbps: 1000, description: "access port" } ]
+  - name: acc-0105
+    tenant: bigfold
+    site: fold1
+    role: leaf
+    snmp: { version: v2c, community: twin-public }
+    interfaces: [ { name: GigabitEthernet0/1, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/2, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/3, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/4, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/5, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/6, speed_mbps: 1000, description: "access port" } ]
+  - name: acc-0106
+    tenant: bigfold
+    site: fold1
+    role: leaf
+    snmp: { version: v2c, community: twin-public }
+    interfaces: [ { name: GigabitEthernet0/1, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/2, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/3, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/4, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/5, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/6, speed_mbps: 1000, description: "access port" } ]
+  - name: acc-0107
+    tenant: bigfold
+    site: fold1
+    role: leaf
+    snmp: { version: v2c, community: twin-public }
+    interfaces: [ { name: GigabitEthernet0/1, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/2, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/3, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/4, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/5, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/6, speed_mbps: 1000, description: "access port" } ]
+  - name: acc-0108
+    tenant: bigfold
+    site: fold1
+    role: leaf
+    snmp: { version: v2c, community: twin-public }
+    interfaces: [ { name: GigabitEthernet0/1, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/2, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/3, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/4, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/5, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/6, speed_mbps: 1000, description: "access port" } ]
+  - name: acc-0109
+    tenant: bigfold
+    site: fold1
+    role: leaf
+    snmp: { version: v2c, community: twin-public }
+    interfaces: [ { name: GigabitEthernet0/1, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/2, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/3, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/4, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/5, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/6, speed_mbps: 1000, description: "access port" } ]
+  - name: acc-0110
+    tenant: bigfold
+    site: fold1
+    role: leaf
+    snmp: { version: v2c, community: twin-public }
+    interfaces: [ { name: GigabitEthernet0/1, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/2, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/3, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/4, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/5, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/6, speed_mbps: 1000, description: "access port" } ]
+  - name: acc-0111
+    tenant: bigfold
+    site: fold1
+    role: leaf
+    snmp: { version: v2c, community: twin-public }
+    interfaces: [ { name: GigabitEthernet0/1, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/2, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/3, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/4, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/5, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/6, speed_mbps: 1000, description: "access port" } ]
+  - name: acc-0112
+    tenant: bigfold
+    site: fold1
+    role: leaf
+    snmp: { version: v2c, community: twin-public }
+    interfaces: [ { name: GigabitEthernet0/1, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/2, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/3, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/4, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/5, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/6, speed_mbps: 1000, description: "access port" } ]
+  - name: acc-0113
+    tenant: bigfold
+    site: fold1
+    role: leaf
+    snmp: { version: v2c, community: twin-public }
+    interfaces: [ { name: GigabitEthernet0/1, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/2, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/3, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/4, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/5, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/6, speed_mbps: 1000, description: "access port" } ]
+  - name: acc-0114
+    tenant: bigfold
+    site: fold1
+    role: leaf
+    snmp: { version: v2c, community: twin-public }
+    interfaces: [ { name: GigabitEthernet0/1, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/2, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/3, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/4, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/5, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/6, speed_mbps: 1000, description: "access port" } ]
+  - name: acc-0115
+    tenant: bigfold
+    site: fold1
+    role: leaf
+    snmp: { version: v2c, community: twin-public }
+    interfaces: [ { name: GigabitEthernet0/1, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/2, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/3, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/4, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/5, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/6, speed_mbps: 1000, description: "access port" } ]
+  - name: acc-0116
+    tenant: bigfold
+    site: fold1
+    role: leaf
+    snmp: { version: v2c, community: twin-public }
+    interfaces: [ { name: GigabitEthernet0/1, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/2, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/3, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/4, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/5, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/6, speed_mbps: 1000, description: "access port" } ]
+  - name: acc-0117
+    tenant: bigfold
+    site: fold1
+    role: leaf
+    snmp: { version: v2c, community: twin-public }
+    interfaces: [ { name: GigabitEthernet0/1, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/2, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/3, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/4, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/5, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/6, speed_mbps: 1000, description: "access port" } ]
+  - name: acc-0118
+    tenant: bigfold
+    site: fold1
+    role: leaf
+    snmp: { version: v2c, community: twin-public }
+    interfaces: [ { name: GigabitEthernet0/1, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/2, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/3, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/4, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/5, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/6, speed_mbps: 1000, description: "access port" } ]
+  - name: acc-0119
+    tenant: bigfold
+    site: fold1
+    role: leaf
+    snmp: { version: v2c, community: twin-public }
+    interfaces: [ { name: GigabitEthernet0/1, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/2, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/3, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/4, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/5, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/6, speed_mbps: 1000, description: "access port" } ]
+  - name: acc-0120
+    tenant: bigfold
+    site: fold1
+    role: leaf
+    snmp: { version: v2c, community: twin-public }
+    interfaces: [ { name: GigabitEthernet0/1, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/2, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/3, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/4, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/5, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/6, speed_mbps: 1000, description: "access port" } ]
+  - name: acc-0121
+    tenant: bigfold
+    site: fold1
+    role: leaf
+    snmp: { version: v2c, community: twin-public }
+    interfaces: [ { name: GigabitEthernet0/1, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/2, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/3, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/4, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/5, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/6, speed_mbps: 1000, description: "access port" } ]
+  - name: acc-0122
+    tenant: bigfold
+    site: fold1
+    role: leaf
+    snmp: { version: v2c, community: twin-public }
+    interfaces: [ { name: GigabitEthernet0/1, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/2, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/3, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/4, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/5, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/6, speed_mbps: 1000, description: "access port" } ]
+  - name: acc-0123
+    tenant: bigfold
+    site: fold1
+    role: leaf
+    snmp: { version: v2c, community: twin-public }
+    interfaces: [ { name: GigabitEthernet0/1, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/2, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/3, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/4, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/5, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/6, speed_mbps: 1000, description: "access port" } ]
+  - name: acc-0124
+    tenant: bigfold
+    site: fold1
+    role: leaf
+    snmp: { version: v2c, community: twin-public }
+    interfaces: [ { name: GigabitEthernet0/1, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/2, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/3, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/4, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/5, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/6, speed_mbps: 1000, description: "access port" } ]
+  - name: acc-0125
+    tenant: bigfold
+    site: fold1
+    role: leaf
+    snmp: { version: v2c, community: twin-public }
+    interfaces: [ { name: GigabitEthernet0/1, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/2, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/3, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/4, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/5, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/6, speed_mbps: 1000, description: "access port" } ]
+  - name: acc-0126
+    tenant: bigfold
+    site: fold1
+    role: leaf
+    snmp: { version: v2c, community: twin-public }
+    interfaces: [ { name: GigabitEthernet0/1, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/2, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/3, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/4, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/5, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/6, speed_mbps: 1000, description: "access port" } ]
+  - name: acc-0127
+    tenant: bigfold
+    site: fold1
+    role: leaf
+    snmp: { version: v2c, community: twin-public }
+    interfaces: [ { name: GigabitEthernet0/1, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/2, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/3, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/4, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/5, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/6, speed_mbps: 1000, description: "access port" } ]
+  - name: acc-0128
+    tenant: bigfold
+    site: fold1
+    role: leaf
+    snmp: { version: v2c, community: twin-public }
+    interfaces: [ { name: GigabitEthernet0/1, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/2, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/3, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/4, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/5, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/6, speed_mbps: 1000, description: "access port" } ]
+  - name: acc-0129
+    tenant: bigfold
+    site: fold1
+    role: leaf
+    snmp: { version: v2c, community: twin-public }
+    interfaces: [ { name: GigabitEthernet0/1, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/2, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/3, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/4, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/5, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/6, speed_mbps: 1000, description: "access port" } ]
+  - name: acc-0130
+    tenant: bigfold
+    site: fold1
+    role: leaf
+    snmp: { version: v2c, community: twin-public }
+    interfaces: [ { name: GigabitEthernet0/1, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/2, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/3, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/4, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/5, speed_mbps: 1000, description: "access port" }, { name: GigabitEthernet0/6, speed_mbps: 1000, description: "access port" } ]
+
+  # ── control tenants: two devices each, untouched by the fold ────────────
+  - name: ctl-a-1
+    tenant: ctl-a
+    site: ctl1
+    role: wan
+    snmp: { version: v2c, community: twin-public }
+    interfaces: [ { name: Ethernet1, speed_mbps: 1000 } ]
+    bgp_neighbors:
+      - { peer_ip: 192.0.2.11, asn: 65101 }
+  - name: ctl-a-2
+    tenant: ctl-a
+    site: ctl1
+    role: wan
+    snmp: { version: v2c, community: twin-public }
+    interfaces: [ { name: Ethernet1, speed_mbps: 1000 } ]
+    bgp_neighbors:
+      - { peer_ip: 192.0.2.12, asn: 65102 }
+  - name: ctl-b-1
+    tenant: ctl-b
+    site: ctl1
+    role: wan
+    snmp: { version: v2c, community: twin-public }
+    interfaces: [ { name: Ethernet1, speed_mbps: 1000 } ]
+    bgp_neighbors:
+      - { peer_ip: 192.0.2.11, asn: 65101 }
+  - name: ctl-b-2
+    tenant: ctl-b
+    site: ctl1
+    role: wan
+    snmp: { version: v2c, community: twin-public }
+    interfaces: [ { name: Ethernet1, speed_mbps: 1000 } ]
+    bgp_neighbors:
+      - { peer_ip: 192.0.2.12, asn: 65102 }
+  - name: ctl-c-1
+    tenant: ctl-c
+    site: ctl1
+    role: wan
+    snmp: { version: v2c, community: twin-public }
+    interfaces: [ { name: Ethernet1, speed_mbps: 1000 } ]
+    bgp_neighbors:
+      - { peer_ip: 192.0.2.11, asn: 65101 }
+  - name: ctl-c-2
+    tenant: ctl-c
+    site: ctl1
+    role: wan
+    snmp: { version: v2c, community: twin-public }
+    interfaces: [ { name: Ethernet1, speed_mbps: 1000 } ]
+    bgp_neighbors:
+      - { peer_ip: 192.0.2.12, asn: 65102 }
+
+baseline:
+  syslog:  { per_device_eps: 0.1, severity_mix: { notice: 0.8, warning: 0.15, err: 0.05 } }
+  metrics: { snmp_poll: passive }
+  probes:
+    - { prober: twin-vantage-1, target: acc-0001, interval_s: 30,
+        intent: customer_path, vantage: public_cloud_agent }
+    - { prober: twin-vantage-1, target: ctl-a-1, interval_s: 30,
+        intent: customer_path, vantage: public_cloud_agent }
+
+stories:
+  # ── fold firing 1/3: ONE uniform signature, all 130 switches,
+  # all 6 ports. 1690 events in a ~6s window.
+  - id: fold-t1
+    template: link_down_cascade
+    trigger: { at: "+120s" }
+    affected:
+      devices: [
+        acc-0001, acc-0002, acc-0003, acc-0004, acc-0005, acc-0006, acc-0007, acc-0008,
+        acc-0009, acc-0010, acc-0011, acc-0012, acc-0013, acc-0014, acc-0015, acc-0016,
+        acc-0017, acc-0018, acc-0019, acc-0020, acc-0021, acc-0022, acc-0023, acc-0024,
+        acc-0025, acc-0026, acc-0027, acc-0028, acc-0029, acc-0030, acc-0031, acc-0032,
+        acc-0033, acc-0034, acc-0035, acc-0036, acc-0037, acc-0038, acc-0039, acc-0040,
+        acc-0041, acc-0042, acc-0043, acc-0044, acc-0045, acc-0046, acc-0047, acc-0048,
+        acc-0049, acc-0050, acc-0051, acc-0052, acc-0053, acc-0054, acc-0055, acc-0056,
+        acc-0057, acc-0058, acc-0059, acc-0060, acc-0061, acc-0062, acc-0063, acc-0064,
+        acc-0065, acc-0066, acc-0067, acc-0068, acc-0069, acc-0070, acc-0071, acc-0072,
+        acc-0073, acc-0074, acc-0075, acc-0076, acc-0077, acc-0078, acc-0079, acc-0080,
+        acc-0081, acc-0082, acc-0083, acc-0084, acc-0085, acc-0086, acc-0087, acc-0088,
+        acc-0089, acc-0090, acc-0091, acc-0092, acc-0093, acc-0094, acc-0095, acc-0096,
+        acc-0097, acc-0098, acc-0099, acc-0100, acc-0101, acc-0102, acc-0103, acc-0104,
+        acc-0105, acc-0106, acc-0107, acc-0108, acc-0109, acc-0110, acc-0111, acc-0112,
+        acc-0113, acc-0114, acc-0115, acc-0116, acc-0117, acc-0118, acc-0119, acc-0120,
+        acc-0121, acc-0122, acc-0123, acc-0124, acc-0125, acc-0126, acc-0127, acc-0128,
+        acc-0129, acc-0130
+      ]
+      tenants: [bigfold]
+    params:
+      # THE multi-port fault: every switch drops all six access ports at
+      # once. Without this the plan faults interfaces[0] only, each device
+      # contributes a single node, no device has two ports to weld the
+      # per-port cliques together, and you get 6 objects of 130 nodes
+      # instead of one giant one.
+      interfaces: [GigabitEthernet0/1, GigabitEthernet0/2, GigabitEthernet0/3, GigabitEthernet0/4, GigabitEthernet0/5, GigabitEthernet0/6]
+      probe_loss_pct: 90
+    expect:
+      rca:
+        # rank-7 shared-token groundings are NON-authoritative by design
+        # (engine.py: 'a coincidence detector'), and the verdict gate
+        # refuses to confirm on them — so 'suspected' is the honest
+        # ceiling here and 'confirmed' would be the wrong assertion.
+        verdict_tier_at_least: suspected
+        # MEASURED, not predicted. This scenario was first written
+        # expecting 'local-link-fault|access|link' — the shape is a
+        # uniform LOCAL PORT fault on 130 role=leaf switches and the
+        # topology contains no spine at all. The live run (2026-08-17,
+        # both giant objects, all 12 versions each) instead ranked
+        # sig.ent.fabric.spine-leaf-path-degradation at confidence 1.0.
+        # That is recorded here as fact and filed as an engine RANKING
+        # question (tracker 154) — it is NOT what this scenario proves,
+        # so the pattern accepts either rather than failing every run on
+        # an open ranking gap.
+        hypothesis_matches: "spine-leaf-path-degradation|local-link-fault"
+        affected_includes: [acc-0001, acc-0065, acc-0130]
+        # NOTE: `single_incident` is deliberately NOT asserted. The fold
+        # DOES produce one giant object (measured: 2 objects of 1,167 and
+        # 1,171 nodes, one per 900s window generation), but the clause
+        # counts EVERY non-merged object touching any story entity — and
+        # the baseline chatter lane contributes 101 unrelated 1-node
+        # 'undetermined' device_alarm objects, one per switch. Asserting
+        # it here would measure the chatter, not the fold.
+      forbid:
+        cross_tenant_merge: true
+
+  # ── fold firing 2/3: ONE uniform signature, all 130 switches,
+  # all 6 ports. 1690 events in a ~6s window.
+  - id: fold-t2
+    template: link_down_cascade
+    trigger: { at: "+300s" }
+    affected:
+      devices: [
+        acc-0001, acc-0002, acc-0003, acc-0004, acc-0005, acc-0006, acc-0007, acc-0008,
+        acc-0009, acc-0010, acc-0011, acc-0012, acc-0013, acc-0014, acc-0015, acc-0016,
+        acc-0017, acc-0018, acc-0019, acc-0020, acc-0021, acc-0022, acc-0023, acc-0024,
+        acc-0025, acc-0026, acc-0027, acc-0028, acc-0029, acc-0030, acc-0031, acc-0032,
+        acc-0033, acc-0034, acc-0035, acc-0036, acc-0037, acc-0038, acc-0039, acc-0040,
+        acc-0041, acc-0042, acc-0043, acc-0044, acc-0045, acc-0046, acc-0047, acc-0048,
+        acc-0049, acc-0050, acc-0051, acc-0052, acc-0053, acc-0054, acc-0055, acc-0056,
+        acc-0057, acc-0058, acc-0059, acc-0060, acc-0061, acc-0062, acc-0063, acc-0064,
+        acc-0065, acc-0066, acc-0067, acc-0068, acc-0069, acc-0070, acc-0071, acc-0072,
+        acc-0073, acc-0074, acc-0075, acc-0076, acc-0077, acc-0078, acc-0079, acc-0080,
+        acc-0081, acc-0082, acc-0083, acc-0084, acc-0085, acc-0086, acc-0087, acc-0088,
+        acc-0089, acc-0090, acc-0091, acc-0092, acc-0093, acc-0094, acc-0095, acc-0096,
+        acc-0097, acc-0098, acc-0099, acc-0100, acc-0101, acc-0102, acc-0103, acc-0104,
+        acc-0105, acc-0106, acc-0107, acc-0108, acc-0109, acc-0110, acc-0111, acc-0112,
+        acc-0113, acc-0114, acc-0115, acc-0116, acc-0117, acc-0118, acc-0119, acc-0120,
+        acc-0121, acc-0122, acc-0123, acc-0124, acc-0125, acc-0126, acc-0127, acc-0128,
+        acc-0129, acc-0130
+      ]
+      tenants: [bigfold]
+    params:
+      # THE multi-port fault: every switch drops all six access ports at
+      # once. Without this the plan faults interfaces[0] only, each device
+      # contributes a single node, no device has two ports to weld the
+      # per-port cliques together, and you get 6 objects of 130 nodes
+      # instead of one giant one.
+      interfaces: [GigabitEthernet0/1, GigabitEthernet0/2, GigabitEthernet0/3, GigabitEthernet0/4, GigabitEthernet0/5, GigabitEthernet0/6]
+      probe_loss_pct: 90
+    expect:
+      rca:
+        # rank-7 shared-token groundings are NON-authoritative by design
+        # (engine.py: 'a coincidence detector'), and the verdict gate
+        # refuses to confirm on them — so 'suspected' is the honest
+        # ceiling here and 'confirmed' would be the wrong assertion.
+        verdict_tier_at_least: suspected
+        # MEASURED, not predicted. This scenario was first written
+        # expecting 'local-link-fault|access|link' — the shape is a
+        # uniform LOCAL PORT fault on 130 role=leaf switches and the
+        # topology contains no spine at all. The live run (2026-08-17,
+        # both giant objects, all 12 versions each) instead ranked
+        # sig.ent.fabric.spine-leaf-path-degradation at confidence 1.0.
+        # That is recorded here as fact and filed as an engine RANKING
+        # question (tracker 154) — it is NOT what this scenario proves,
+        # so the pattern accepts either rather than failing every run on
+        # an open ranking gap.
+        hypothesis_matches: "spine-leaf-path-degradation|local-link-fault"
+        affected_includes: [acc-0001, acc-0065, acc-0130]
+        # NOTE: `single_incident` is deliberately NOT asserted. The fold
+        # DOES produce one giant object (measured: 2 objects of 1,167 and
+        # 1,171 nodes, one per 900s window generation), but the clause
+        # counts EVERY non-merged object touching any story entity — and
+        # the baseline chatter lane contributes 101 unrelated 1-node
+        # 'undetermined' device_alarm objects, one per switch. Asserting
+        # it here would measure the chatter, not the fold.
+      forbid:
+        cross_tenant_merge: true
+
+  # ── fold firing 3/3: ONE uniform signature, all 130 switches,
+  # all 6 ports. 1690 events in a ~6s window.
+  - id: fold-t3
+    template: link_down_cascade
+    trigger: { at: "+480s" }
+    affected:
+      devices: [
+        acc-0001, acc-0002, acc-0003, acc-0004, acc-0005, acc-0006, acc-0007, acc-0008,
+        acc-0009, acc-0010, acc-0011, acc-0012, acc-0013, acc-0014, acc-0015, acc-0016,
+        acc-0017, acc-0018, acc-0019, acc-0020, acc-0021, acc-0022, acc-0023, acc-0024,
+        acc-0025, acc-0026, acc-0027, acc-0028, acc-0029, acc-0030, acc-0031, acc-0032,
+        acc-0033, acc-0034, acc-0035, acc-0036, acc-0037, acc-0038, acc-0039, acc-0040,
+        acc-0041, acc-0042, acc-0043, acc-0044, acc-0045, acc-0046, acc-0047, acc-0048,
+        acc-0049, acc-0050, acc-0051, acc-0052, acc-0053, acc-0054, acc-0055, acc-0056,
+        acc-0057, acc-0058, acc-0059, acc-0060, acc-0061, acc-0062, acc-0063, acc-0064,
+        acc-0065, acc-0066, acc-0067, acc-0068, acc-0069, acc-0070, acc-0071, acc-0072,
+        acc-0073, acc-0074, acc-0075, acc-0076, acc-0077, acc-0078, acc-0079, acc-0080,
+        acc-0081, acc-0082, acc-0083, acc-0084, acc-0085, acc-0086, acc-0087, acc-0088,
+        acc-0089, acc-0090, acc-0091, acc-0092, acc-0093, acc-0094, acc-0095, acc-0096,
+        acc-0097, acc-0098, acc-0099, acc-0100, acc-0101, acc-0102, acc-0103, acc-0104,
+        acc-0105, acc-0106, acc-0107, acc-0108, acc-0109, acc-0110, acc-0111, acc-0112,
+        acc-0113, acc-0114, acc-0115, acc-0116, acc-0117, acc-0118, acc-0119, acc-0120,
+        acc-0121, acc-0122, acc-0123, acc-0124, acc-0125, acc-0126, acc-0127, acc-0128,
+        acc-0129, acc-0130
+      ]
+      tenants: [bigfold]
+    params:
+      # THE multi-port fault: every switch drops all six access ports at
+      # once. Without this the plan faults interfaces[0] only, each device
+      # contributes a single node, no device has two ports to weld the
+      # per-port cliques together, and you get 6 objects of 130 nodes
+      # instead of one giant one.
+      interfaces: [GigabitEthernet0/1, GigabitEthernet0/2, GigabitEthernet0/3, GigabitEthernet0/4, GigabitEthernet0/5, GigabitEthernet0/6]
+      probe_loss_pct: 90
+    expect:
+      rca:
+        # rank-7 shared-token groundings are NON-authoritative by design
+        # (engine.py: 'a coincidence detector'), and the verdict gate
+        # refuses to confirm on them — so 'suspected' is the honest
+        # ceiling here and 'confirmed' would be the wrong assertion.
+        verdict_tier_at_least: suspected
+        # MEASURED, not predicted. This scenario was first written
+        # expecting 'local-link-fault|access|link' — the shape is a
+        # uniform LOCAL PORT fault on 130 role=leaf switches and the
+        # topology contains no spine at all. The live run (2026-08-17,
+        # both giant objects, all 12 versions each) instead ranked
+        # sig.ent.fabric.spine-leaf-path-degradation at confidence 1.0.
+        # That is recorded here as fact and filed as an engine RANKING
+        # question (tracker 154) — it is NOT what this scenario proves,
+        # so the pattern accepts either rather than failing every run on
+        # an open ranking gap.
+        hypothesis_matches: "spine-leaf-path-degradation|local-link-fault"
+        affected_includes: [acc-0001, acc-0065, acc-0130]
+        # NOTE: `single_incident` is deliberately NOT asserted. The fold
+        # DOES produce one giant object (measured: 2 objects of 1,167 and
+        # 1,171 nodes, one per 900s window generation), but the clause
+        # counts EVERY non-merged object touching any story entity — and
+        # the baseline chatter lane contributes 101 unrelated 1-node
+        # 'undetermined' device_alarm objects, one per switch. Asserting
+        # it here would measure the chatter, not the fold.
+      forbid:
+        cross_tenant_merge: true
+
+  # ── negative control: concurrent, unrelated, other tenants ──────────────
+  - id: ctl-noise
+    template: negative_debug_probe
+    trigger: { at: "+135s" }   # deliberately inside the fold's window
+    affected:
+      devices: [ctl-a-1, ctl-b-1, ctl-c-1]
+      tenants: [ctl-a, ctl-b, ctl-c]
+    params: { probe_loss_pct: 90, count: 4 }
+    expect:
+      rca: {}            # empty ⇒ scored as a negative control
+      forbid:
+        cross_tenant_merge: true
+        confirmed: true

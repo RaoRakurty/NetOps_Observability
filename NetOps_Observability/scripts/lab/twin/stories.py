@@ -307,23 +307,30 @@ def _tpl_link_down_cascade(story: dict, sc: dict,
     loss = float(p.get("probe_loss_pct", 85))
     with_trap = bool(p.get("with_trap"))
     sid = story["id"]
+    # `interfaces` (optional) faults several ports per device — the uniform
+    # access-layer signature. Absent ⇒ interfaces[0] only, so an existing
+    # scenario's plan is unchanged byte-for-byte.
+    want_ifaces = p.get("interfaces")
     items: list[dict] = []
     for dn in story["affected"].get("devices") or []:
         dev = _dev(sc, dn)
-        ifname = _first_interface(dev)
-        items.append(_syslog(
-            0.0, dn, dev["tenant"], "LINK-3-UPDOWN",
-            f"%LINK-3-UPDOWN: Interface {ifname}, changed state to down",
-            "err", sid))
-        if with_trap:
-            # the device also pushes the standard linkDown notification with
-            # ifIndex/ifName/ifDescr varbinds (§4.0 trap row)
-            items.append(_trap(0.5, dn, dev["tenant"], "linkDown", sid,
-                               ifindex=1, ifname=ifname, ifdescr=ifname))
-        items.append(_syslog(
-            1.0, dn, dev["tenant"], "LINEPROTO-5-UPDOWN",
-            f"%LINEPROTO-5-UPDOWN: Line protocol on Interface {ifname}, "
-            f"changed state to down", "notice", sid))
+        ifnames = ([str(x) for x in want_ifaces] if want_ifaces
+                   else [_first_interface(dev)])
+        for k, ifname in enumerate(ifnames):
+            items.append(_syslog(
+                0.0, dn, dev["tenant"], "LINK-3-UPDOWN",
+                f"%LINK-3-UPDOWN: Interface {ifname}, changed state to down",
+                "err", sid))
+            if with_trap:
+                # the device also pushes the standard linkDown notification with
+                # ifIndex/ifName/ifDescr varbinds (§4.0 trap row)
+                items.append(_trap(0.5, dn, dev["tenant"], "linkDown", sid,
+                                   ifindex=k + 1, ifname=ifname,
+                                   ifdescr=ifname))
+            items.append(_syslog(
+                1.0, dn, dev["tenant"], "LINEPROTO-5-UPDOWN",
+                f"%LINEPROTO-5-UPDOWN: Line protocol on Interface {ifname}, "
+                f"changed state to down", "notice", sid))
         # downstream BGP sessions riding the link drop too
         for nb in dev.get("bgp_neighbors") or []:
             items.append(_syslog(

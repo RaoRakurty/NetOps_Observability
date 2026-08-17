@@ -241,3 +241,132 @@ inventory. Mini-ladder runs archived under `data/miniladder/` (gitignored).
 
 **Still unproven (needs the rig — tracker 152/153):** multi-tenant partition
 spread under sustained load, capacity at L2+, sizing-table validation.
+
+---
+
+## 2026-08-17 — P1 event-loop offload: LIVE giant-object proof (closes the caveat)
+
+The P1 offload (commit `94e8561d`) shipped with one stated caveat: the 550k/200k
+burst validations ran against an **empty tenant registry**, so every event was
+tenant-refused (`identity_unattributable`) and **no correlation object ever
+formed** — the giant-object path that was the actual root cause was proven by
+measurement + the in-process unit test only, never live. This run closes it.
+
+**Scenario** — `docs/design/examples/twin-scenario-giant-object.yaml`, run through
+the digital twin so the devices are REGISTERED through the real API and events are
+tenant-attributed. 130 `role=leaf` switches in ONE tenant, every switch carrying the
+**same six port names**; one `link_down_cascade` firing all six ports on all 130
+switches, fired **three times** (+120s/+300s/+480s) so the giant snapshot is
+re-serialized instead of being version-damped. Plus 3 control tenants (2 devices each)
+and a `negative_debug_probe` control. 136 devices, 13.67 EPS steady, 1,690 events per
+firing (~280 EPS burst), 13,282 events total. TLS stack, project `netops`,
+`BUS_PARTITIONS=4`, 2 correlation replicas. Run `08171648up9h`.
+
+**Why that shape is giant** (measured from `src/correlation/engine.py`, not guessed):
+`%LINK-3-UPDOWN` and `%LINEPROTO-5-UPDOWN` both classify to kind `link_state_change`
+on entity `<device>:<port>` (`producers.py`), and a node is keyed
+`<entity_type>:<entity_id>:<kind>` — so a (device, port) pair is exactly one node.
+`_candidate_pairs` then builds a **clique over every shared token**, and
+`Node.tokens()` keeps the bare PORT NAME, so all N switches sharing `GigabitEthernet0/1`
+mesh at rank 7 (`shared:<token>`, non-authoritative "coincidence detector", w_topo 0.5),
+while same-device nodes mesh at rank 1 (`shared:<device>`, w_topo 0.9):
+
+    nodes = H·I        edges = I·C(H,2) + H·C(I,2) = (H·I/2)·(H+I−2)
+
+That reproduces the pre-fix live object exactly: H=125, I=6 → **750 / 48,375**. There
+is **no node or edge cap anywhere in the engine** — that unbounded growth IS the P1.
+
+### Object sizes ACHIEVED (target was the measured 750 nodes / 48,375 edges)
+
+| | target | achieved | |
+|---|---|---|---|
+| nodes | 750 | **1,171** and **1,170** | 2 giant objects, one per 900s window generation |
+| edges | 48,375 | **54,999** and **54,990** | `netops.corr_edges`, all `grounding_kind='topo'` |
+| elements (nodes+edges) | 49,125 | **56,170** | **28× `CORR_OFFLOAD_MIN_ELEMENTS` (2000)** |
+| giant persists | — | **24** (12 versions each) | 1,319,733 edge rows serialized + inserted |
+| signals | — | 7,014 / 7,013 | |
+
+Both exceed the target on both axes. The 136 grounding refs decompose exactly as the
+formula predicts: **130 `shared:<device>` + 6 `shared:<port-name>`**. Live objects came
+in larger than the offline prediction (780/52,260) because the twin's baseline and probe
+lanes contribute further nodes into the same component.
+
+### Verdict criteria — measured, not tuned
+
+| Criterion | Result |
+|---|---|
+| Giant objects formed on REGISTERED devices | ✅ registry gate passed with **272 identities** on both replicas (was **0** — the caveat's exact condition); **zero** `twx-` events refused (all 113 refusals in the window are the pre-existing unregistered lab devices spine1/2 + 172.40.40.51/52) |
+| `corr_loop_lag_stalls_total` | ⚠ **6, not 0** — all on replica 1, 16:59:23→17:13:23, **1,055 / 1,130 / 1,162 / 1,170 / 1,198 / 1,256 ms** |
+| `corr_loop_lag_max_ms` | replica 1 **29.2 → 1,256.1**; replica 2 **19.7 → 19.7** (unchanged) |
+| Involuntary rebalances | ✅ **zero** — `rebalances` 2→2, `revoke_commits{ok}` 1→1, `failed` 0, `skipped` 0, `zero_assignments` 0; **no** UnknownMemberId / CommitFailed / IllegalGeneration / heartbeat-expired in either replica's logs |
+| Consumer state | ✅ `active` on both replicas for all 36 samples; `cold_partitions` empty |
+| Lag drained | ✅ peak **279** (during firing 2/3) → **5–12** and flat; baseline was ~105, so it finished BELOW where it started |
+| Memory | ✅ correlation-1 peaked **326 MiB / 789 MiB** while holding a 56k-element object (the mini-ladder's 600k-event run hit 733 MiB) |
+| Teardown | ✅ devices/tenants/orgs deleted + verified zero, `corr_signals` purged + verified zero, OpenSearch syslog+snmptrap purged + verified zero; API shows **0** `twx-` devices/tenants/orgs; exit 0; both replicas still `Up`, never restarted |
+| Twin scoring | completed: **1/4 stories PASS, specificity 1.00** — see the two clause notes below |
+
+**The 6 stalls are the honest headline.** They are real but bounded: worst **1,256 ms**
+against a **30,000 ms** session timeout (4.2%) and **below** the 3,000 ms heartbeat
+interval, so no heartbeat was actually missed and no rebalance followed. Compare the
+pre-fix root cause: ~7.5 s per object × 10–15 objects per cycle = **75–110 s** of
+starvation per cycle, which cumulatively expired the session.
+
+### Counterfactual (the live control was SKIPPED — deliberately)
+
+A throwaway replica with `CORR_OFFLOAD_MIN_ELEMENTS` huge is **not safe here**:
+`group_id="netops-correlation"` is **hardcoded** in `main.py` (not env-configurable),
+so any extra consumer joins the LIVE group and forces a rebalance of the two healthy
+replicas — precisely the disturbance to avoid with a soak baseline on the box. Instead
+the counterfactual was measured **in-process on the real fold snapshot** (780 nodes /
+52,260 edges — a conservative under-estimate of the live 1,171/54,999), replaying
+`test_loop_blocking.py`'s heartbeat race at live size:
+
+| | serialization | worst loop latency |
+|---|---|---|
+| INLINE (pre-fix path) | 3.68 s | **3,683 ms** |
+| OFFLOADED (shipped path) | 3.94 s | **399 ms** |
+
+**9.2× reduction in loop latency**, and inline's 3,683 ms already exceeds the 3,000 ms
+heartbeat interval — one object is enough to skip a heartbeat pre-fix. Per-persist
+pure-CPU cost of the offloaded serializers on this 4-CPU box totals **5,288 ms**:
+`content_hash` 2,082 ms · `_batch_token` 900 ms · `to_object_row` 678 ms ·
+`to_typed_edge_rows` 565 ms · `_ndjson_body` 471 ms · `to_evidence_rows` 315 ms ·
+`to_edge_rows` 139 ms · `material_hash` 138 ms.
+
+### New findings this run surfaced
+
+1. **Residual INLINE hot path in the persist cycle — `_archive_slice` (`main.py`).** 🔴
+   The P1 fix offloads the per-object SNAPSHOT serializers, but `_archive_slice(snap,
+   window)` and its `slice_hash` still run **on the loop**. That pass is sized by the
+   whole tenant WINDOW (`CORR_WINDOW_BUFFER`, 50k floor), not by the object, and it
+   rebuilds a `by_node` dict + sorts on every version. All 6 stalls land inside a
+   persist cycle immediately before the `corr_signals_archive` insert; this tenant wrote
+   **43,457** archive rows across 12 versions. This is the most likely next offload
+   target and explains why the stall count is 6 rather than 0.
+2. **Engine RANKING observation (tracker 154).** A uniform LOCAL PORT fault on 130
+   `role=leaf` switches, in a topology containing **no spine device at all**, is ranked
+   `sig.ent.fabric.spine-leaf-path-degradation` at **confidence 1.0** — stably, on both
+   giant objects and all 12 versions each. The scenario originally asserted
+   `local-link-fault|access|link`; the assertion was corrected to record measured fact
+   and the mis-rank filed, rather than the measurement being bent to the prediction.
+3. **`single_incident` measures the wrong thing at this scale.** The fold DID produce
+   one giant object per window generation, but the clause counts every non-merged object
+   touching any story entity — and the baseline chatter lane produced **101 unrelated
+   1-node `undetermined` `device_alarm` objects**, one per switch. The clause is
+   therefore not asserted in this scenario (documented inline).
+4. **Twin scorer could not survive a giant object (FIXED in this commit).** `_objects_for`
+   issued one `position(affected, name)` scan **per entity**, each selecting the
+   unbounded `affected` + `hypotheses` blobs: 390 scans per run, **~21 minutes**,
+   ClickHouse driven to ~3 GiB with **13 queries LOST** to `Code: 241 Memory limit
+   exceeded` — a lost query silently reports a miss that never happened. Batching to one
+   `multiSearchAny` scan against the `LIMIT 1 BY` view fixed the count but still lost a
+   story to the 2 GiB per-query cap (the view sorts every row with its blobs attached).
+   The shipped shape is **two lean phases** — membership scan (no blobs, no sort) then
+   full rows for matching ids only: **8 queries, 103 s, 0 lost**.
+5. **Partition-spread gate is not meaningful for a single-tenant fold.** Reported FAIL,
+   but by construction: the folding tenant keys to ONE partition, so partition 2 took
+   12,480 of 12,840 events. The LOADED replica was **within** tolerance (observed share
+   0.974 vs expected 0.981); the FAIL is the idle replica overshooting on a 240-event
+   base (0.026 vs 0.019). Same documented per-tenant ceiling as the 2026-08-16 note.
+
+Twin run artifacts under `data/twin/20260817T164850Z-08171648up9h/` (gitignored).

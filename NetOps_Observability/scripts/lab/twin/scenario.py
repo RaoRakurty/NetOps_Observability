@@ -48,7 +48,12 @@ REQUIRED_STORY_KEYS = ("id", "template", "trigger", "affected", "expect")
 # Each entry: allowed param keys (unknown = hard error) and required lanes.
 STORY_TEMPLATES: dict[str, dict[str, Any]] = {
     "link_down_cascade": {
-        "params": {"probe_loss_pct", "with_trap"},
+        # `interfaces` (optional) faults SEVERAL ports per device instead of
+        # just interfaces[0] — the uniform access-layer signature that folds a
+        # whole layer into one giant correlation object (rank-1 same-device +
+        # rank-7 shared-interface-name groundings). Omitted ⇒ interfaces[0]
+        # only, byte-identical to the pre-existing plan.
+        "params": {"probe_loss_pct", "with_trap", "interfaces"},
         "lanes": {"syslog", "probes"},
     },
     "bgp_flap": {
@@ -405,6 +410,33 @@ def validate_scenario(raw: Any, name: str = "<scenario>") -> dict:
             if key in params and params[key] not in dev_names:
                 raise _err(f"{p}.params", f"{key} {params[key]!r} is not a "
                                           f"declared device")
+        # A multi-port fault must name ports that actually exist on EVERY device
+        # it claims to fault — otherwise the plan silently under-emits and the
+        # object it was written to produce never reaches the intended size.
+        if "interfaces" in params:
+            want = params["interfaces"]
+            _require_type(want, list, f"{p}.params.interfaces",
+                          "params.interfaces")
+            if not want:
+                raise _err(f"{p}.params.interfaces",
+                           "at least one interface name is required "
+                           "(omit the param to fault interfaces[0] only)")
+            for j, ifn in enumerate(want):
+                if not ifn or not isinstance(ifn, str):
+                    raise _err(f"{p}.params.interfaces[{j}]",
+                               "interface name must be a non-empty string")
+            if len(set(want)) != len(want):
+                raise _err(f"{p}.params.interfaces",
+                           "duplicate interface name(s) would double-count "
+                           "nodes")
+            for dn in st["affected"].get("devices") or []:
+                have = {str(itf.get("name"))
+                        for itf in dev_by_name[dn].get("interfaces") or []}
+                missing = sorted(set(want) - have)
+                if missing:
+                    raise _err(f"{p}.params.interfaces",
+                               f"device {dn!r} has no interface(s) {missing} — "
+                               f"declared: {sorted(have)}")
 
         exp = _require_type(st["expect"], dict, f"{p}.expect", "expect")
         bad = sorted(set(exp) - {"rca", "seam", "forbid"})
