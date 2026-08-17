@@ -50,7 +50,10 @@ ALLOWLIST: dict[tuple[str, int], str] = {
     ("install.py", 173): "git rev-parse for build provenance; falls back to 'unknown', which drift check FAILS on",
     ("install.py", 1146): "uid/gid from a .env that may not exist yet (--no-start dry paths); compose default",
     ("refresh_provider_ranges.py", 111): "first-run bootstrap: no previous snapshot file => empty baseline",
-    ("resource_planner.py", 285): "optional cgroup limit file; absent => host os.cpu_count/meminfo defaults",
+    # Re-pinned 2026-08-17: shifted by the BUS_PARTITIONS planner work
+    # (constants + derive_bus_partitions inserted above it). Handler re-read,
+    # unchanged, justification holds.
+    ("resource_planner.py", 304): "optional cgroup limit file; absent => host os.cpu_count/meminfo defaults",
     ("regression_correlation_smoke.py", 70): "optional .env read; returns '' and the caller reports missing config",
     ("smoke-test.py", 291): "optional .env admin-credential read; falls back to prompting defaults",
     ("snmp_fidelity_harness.py", 170): "optional .env read; returns None, caller handles absence",
@@ -63,13 +66,15 @@ ALLOWLIST: dict[tuple[str, int], str] = {
     ("secret_rotation.py", 251): "service-owned marker unreadable from operator uid; commented, rotation proceeds",
     ("secret_rotation.py", 266): "service-owned marker dir unreadable from operator uid; commented fallback",
     ("install.py", 2308): "external-broker reachability preflight; warn states services retry from inside the network",
-    # Re-pinned 2026-08-17 (same four reviewed sites, shifted by the
-    # group_lag/preflight consumer-membership fix — the line-keyed design
-    # forcing this re-read is working as intended).
-    ("scale-miniladder.py", 188): "optional .env read; returns '' with a documented callers-decide contract",
-    ("scale-miniladder.py", 651): "preflight ingress probe; failure appended to `problems`, preflight fails on any problem",
-    ("scale-miniladder.py", 658): "preflight API-login probe; failure appended to `problems`, preflight fails on any problem",
-    ("scale-miniladder.py", 878): "twin-mode burst artifact read; failure returns an explicit burst-phase FAIL (tracker 152 §8.3)",
+    # Re-pinned 2026-08-17 (same four reviewed sites, shifted twice in one day:
+    # first by the group_lag/preflight consumer-membership fix, then by the
+    # RUF012 move of _MEM_UNITS to module scope + the ruff I001 import re-sort.
+    # All four handlers re-read at the new lines and unchanged — the line-keyed
+    # design forcing this re-read is working as intended).
+    ("scale-miniladder.py", 195): "optional .env read; returns '' with a documented callers-decide contract",
+    ("scale-miniladder.py", 655): "preflight ingress probe; failure appended to `problems`, preflight fails on any problem",
+    ("scale-miniladder.py", 662): "preflight API-login probe; failure appended to `problems`, preflight fails on any problem",
+    ("scale-miniladder.py", 882): "twin-mode burst artifact read; failure returns an explicit burst-phase FAIL (tracker 152 §8.3)",
     # The four 2026-08-16 chown-swallow findings (enrichment seed, processors
     # seed, appid/cloud fixtures, vuln SUDO_UID dir) were RESOLVED the same
     # day: all now route through chown_tree (repair-or-refuse), and the vuln
