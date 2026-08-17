@@ -80,6 +80,18 @@ they covered had already been reported as validated:
   in an unknown direction. Fixed to two lean phases: 8 queries, 103 s, 0 lost.
   The general rule: **a lost measurement must never be recorded as a negative
   result** — it is a THIRD outcome, and the tool must say so.
+* **Counting a codebase with grep instead of loading it.** Filing tracker 157 we
+  reported "74 templates, 6 mention `role`". Both numbers were artifacts: `Clause`
+  has a FIELD named `role`, so the word appears in every clause's source and repr
+  whether or not a predicate is set, and the `"sig."` regex missed the compact
+  backlog lists entirely. Loading the catalog gives **146 templates, 100 enabled,
+  exactly 2 with a real `role` predicate, 79 enabled templates with a declared
+  seam context and no structural predicate** — a denominator off by 2× and an
+  exception count off by 3×, in the safer-sounding direction. Two independent
+  sessions made the same mistake before either caught it. The rule: **when a
+  number will scope a fix, derive it from the loaded object model, not from text
+  matching** — a grep over a field NAME can never distinguish a set predicate
+  from an unset one.
 * **"Validated" meant "parses".** `rules-scale-slo.yaml` was reported as
   "vmalert `-dryRun` validated". True — and much weaker than it sounds: a dry run
   proves the file LOADS, never that a rule fires. Syntax-loads vs
