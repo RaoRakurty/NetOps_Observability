@@ -6,6 +6,7 @@ Run: python3 -m unittest scripts.tests.test_resource_planner  (from repo root)
 """
 import json
 import os
+import re
 import sys
 import tempfile
 import unittest
@@ -348,6 +349,165 @@ workload:
         self.assertEqual(rp.normalize_workload(jdoc), w)
         with self.assertRaises(ValueError):
             rp.parse_sizing_file("workload:\n  - a list\n")
+
+
+REPO = os.path.join(os.path.dirname(__file__), "..", "..")
+
+
+class TestBusPartitions(unittest.TestCase):
+    """BUS_PARTITIONS as first-class config (GA scale programme, Phase 2).
+
+    Automatic EPS-based sizing is deliberately absent — these tests exist to
+    prove the setting is VISIBLE and PROTECTED, and that generating a plan
+    never resizes anyone's broker.
+    """
+
+    H = {"memory_bytes": 64 * GIB, "cpus": 16.0, "disk_free_bytes": 4000 * GIB}
+
+    def bus(self, **kw):
+        return rp.compute_plan(self.H, "medium", **kw)["bus"]
+
+    # --- the approval gate: the default must not move -----------------------
+
+    def test_default_is_unchanged_on_every_profile(self):
+        """The installer approval gate has not been passed, so a fresh plan
+        must still produce today's compose default of 1 — on every profile."""
+        for prof, h in (("demo", host(16, 4, 500)), ("small", host(32, 8, 1000)),
+                        ("medium", self.H), ("large", host(128, 32, 8000))):
+            with self.subTest(profile=prof):
+                plan = rp.compute_plan(h, prof)
+                self.assertEqual(plan["bus"]["value"], 1)
+                self.assertEqual(plan["bus"]["source"], "default")
+                self.assertEqual(plan["internal"]["BUS_PARTITIONS"], "1")
+                self.assertFalse(plan["bus"]["auto_sizing"])
+
+    # --- existing-install detection -----------------------------------------
+
+    def test_existing_env_value_is_detected(self):
+        b = self.bus(legacy={"BUS_PARTITIONS": "4"})
+        self.assertEqual((b["value"], b["source"], b["existing"]),
+                         (4, "existing-install", 4))
+
+    def test_malformed_existing_value_warns_and_falls_back(self):
+        plan = rp.compute_plan(self.H, "medium", legacy={"BUS_PARTITIONS": "abc"})
+        self.assertEqual(plan["bus"]["value"], 1)
+        self.assertIsNone(plan["bus"]["existing"])
+        self.assertTrue(any("not a positive integer" in w
+                            for w in plan["warnings"]))
+
+    # --- the raise-only invariant -------------------------------------------
+
+    def test_override_below_existing_is_refused_and_explained(self):
+        """Kafka cannot shrink partitions; a plan claiming fewer than the
+        broker has is the silent divergence this guard exists to prevent."""
+        plan = rp.compute_plan(self.H, "medium",
+                               legacy={"BUS_PARTITIONS": "6"},
+                               overrides={"bus_partitions": 2})
+        self.assertEqual(plan["bus"]["value"], 6)
+        self.assertEqual(plan["bus"]["source"], "existing-install")
+        self.assertEqual(plan["internal"]["BUS_PARTITIONS"], "6")
+        self.assertTrue(any("BELOW the existing" in w for w in plan["warnings"]))
+
+    def test_override_above_existing_applies_and_flags_the_stale_pin(self):
+        plan = rp.compute_plan(self.H, "medium",
+                               legacy={"BUS_PARTITIONS": "4"},
+                               overrides={"bus_partitions": 8})
+        self.assertEqual((plan["bus"]["value"], plan["bus"]["source"]),
+                         (8, "override"))
+        self.assertTrue(any("OUTSIDE the managed block" in w
+                            for w in plan["warnings"]))
+
+    def test_override_on_fresh_install_applies(self):
+        b = self.bus(overrides={"bus_partitions": 8})
+        self.assertEqual((b["value"], b["source"]), (8, "override"))
+
+    def test_invalid_overrides_are_refused(self):
+        for bad in (0, -3, "four", []):
+            with self.subTest(value=bad):
+                with self.assertRaises(rp.SizingError):
+                    rp.compute_plan(self.H, "medium",
+                                    overrides={"bus_partitions": bad})
+
+    # --- replica / partition mismatch ---------------------------------------
+
+    def test_more_replicas_than_partitions_warns_with_the_idle_count(self):
+        plan = rp.compute_plan(self.H, "medium",
+                               legacy={"BUS_PARTITIONS": "2"},
+                               workload={"correlation_replicas": 5})
+        self.assertEqual(plan["bus"]["idle_replicas"], 3)
+        self.assertEqual(plan["bus"]["max_useful_replicas"], 2)
+        self.assertTrue(any("process no events" in w for w in plan["warnings"]))
+
+    def test_replicas_within_partitions_is_silent(self):
+        plan = rp.compute_plan(self.H, "medium",
+                               legacy={"BUS_PARTITIONS": "4"},
+                               workload={"correlation_replicas": 4})
+        self.assertEqual(plan["bus"]["idle_replicas"], 0)
+        self.assertFalse(any("process no events" in w for w in plan["warnings"]))
+
+    # --- emitters ------------------------------------------------------------
+
+    def test_env_block_does_not_duplicate_an_out_of_block_pin(self):
+        """Two definitions of one key in .env resolve by file order — a coin
+        toss the operator cannot see. Defer to the pin instead."""
+        plan = rp.compute_plan(self.H, "medium", legacy={"BUS_PARTITIONS": "4"})
+        emitted = [ln for ln in rp.env_block(plan).splitlines()
+                   if ln.startswith("BUS_PARTITIONS=")]
+        self.assertEqual(emitted, [])
+        self.assertIn("# BUS_PARTITIONS=4 pinned outside this block",
+                      rp.env_block(plan))
+
+    def test_env_block_emits_the_key_when_not_pinned(self):
+        plan = rp.compute_plan(self.H, "medium", overrides={"bus_partitions": 4})
+        self.assertIn("BUS_PARTITIONS=4", rp.env_block(plan).splitlines())
+
+    def test_plan_txt_surfaces_every_operator_fact(self):
+        """These facts must be in the generated plan, not buried in docs."""
+        plan = rp.compute_plan(self.H, "medium",
+                               legacy={"BUS_PARTITIONS": "4"},
+                               workload={"correlation_replicas": 6})
+        txt = rp.plan_txt(plan)
+        for needle in ("BUS_PARTITIONS", "topics created by kafka-init",
+                       "topics correlation consumes", "total broker partitions",
+                       "correlation replicas", "max useful replicas",
+                       "EXPECTED IDLE REPLICAS", "never reduced",
+                       "not redistributed", "controlled migration",
+                       "kafka-topics.sh --describe"):
+            with self.subTest(fact=needle):
+                self.assertIn(needle, txt)
+
+    # --- the constants must stay true of the repo ---------------------------
+
+    def test_bus_topic_counts_match_sources(self):
+        """BUS_TOPICS_CREATED/CONSUMED are facts about other files. If those
+        files change, fail here rather than let the plan lie to an operator."""
+        compose = os.path.join(REPO, "deployment", "docker", "docker-compose.yml")
+        with open(compose) as f:
+            body = f.read()
+        init = body.split("for t in netops.", 1)
+        self.assertEqual(len(init), 2, "kafka-init topic loop not found")
+        loop = "netops." + init[1].split("; do", 1)[0]
+        created = set(re.findall(r"netops\.[A-Za-z0-9_.]+", loop))
+        self.assertEqual(
+            len(created), rp.BUS_TOPICS_CREATED,
+            "kafka-init now creates %d topics, BUS_TOPICS_CREATED says %d — "
+            "update the constant AND re-check the broker partition maths"
+            % (len(created), rp.BUS_TOPICS_CREATED))
+
+        main = os.path.join(REPO, "src", "correlation", "main.py")
+        with open(main) as f:
+            src = f.read()
+        decl = src.split("TOPICS = [", 1)[1].split("]", 1)[0]
+        consumed = set(re.findall(r"netops\.[A-Za-z0-9_.]+", decl))
+        self.assertEqual(
+            len(consumed), rp.BUS_TOPICS_CONSUMED,
+            "correlation now subscribes to %d topics, BUS_TOPICS_CONSUMED says "
+            "%d — max_useful_replicas depends on this"
+            % (len(consumed), rp.BUS_TOPICS_CONSUMED))
+        self.assertTrue(
+            consumed <= created,
+            "correlation subscribes to topics kafka-init never creates: %s"
+            % sorted(consumed - created))
 
 
 class TestGolden(unittest.TestCase):

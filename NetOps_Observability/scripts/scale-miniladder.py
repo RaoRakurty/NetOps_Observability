@@ -113,6 +113,13 @@ import urllib.parse
 import urllib.request
 from datetime import datetime, timezone
 
+# docker stats MemUsage units. Module scope (a pure constant table): as a class
+# attribute ruff RUF012 flags the mutable default, and scripts/ is under the
+# pinned-ruff blocking gate (fresh-install-integrity `scripts-lint`).
+_MEM_UNITS: dict[str, int] = {"B": 1, "KiB": 1024, "MiB": 1024**2, "GiB": 1024**3,
+                              "TiB": 1024**4, "kB": 1000, "MB": 1000**2, "GB": 1000**3}
+
+
 # Cron-proof PATH (CLAUDE.md 16.2): docker lives in /usr/bin or /usr/local/bin
 # on supported hosts; never rely on an interactive profile. APPLIED IN main(),
 # not at import: as module-scope code it leaked into every process that merely
@@ -242,14 +249,11 @@ class Stack:
                          "health": parts[1], "exit_code": parts[2]})
         return rows
 
-    _MEM_UNITS = {"B": 1, "KiB": 1024, "MiB": 1024**2, "GiB": 1024**3,
-                  "TiB": 1024**4, "kB": 1000, "MB": 1000**2, "GB": 1000**3}
-
-    @classmethod
-    def _mem_bytes(cls, cell: str) -> int:
+    @staticmethod
+    def _mem_bytes(cell: str) -> int:
         m = re.match(r"([0-9.]+)\s*([A-Za-z]+)", cell.strip())
-        if m and m.group(2) in cls._MEM_UNITS:
-            return int(float(m.group(1)) * cls._MEM_UNITS[m.group(2)])
+        if m and m.group(2) in _MEM_UNITS:
+            return int(float(m.group(1)) * _MEM_UNITS[m.group(2)])
         return -1
 
     def mem_stats(self) -> dict[str, dict]:

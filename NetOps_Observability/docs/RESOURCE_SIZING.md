@@ -90,9 +90,55 @@ Apply with `cd deployment/docker && docker compose up -d`.
 | Valkey | `--maxmemory` (`REDIS_MAXMEMORY`) | 75%, `noeviction` (app state — never silently evict). Redis units: value emitted as binary `mb`. `REDIS_MAXMEMORY` is the backward-compatible configuration name for the deployed Valkey service (service name `redis` likewise) — deliberate, do not rename. |
 | Go services (api, prober, goflow2) | `GOMEMLIMIT` | 90% (soft GC target; GOMAXPROCS is cgroup-native in Go ≥1.25) |
 | correlation | `CORR_WINDOW_BUFFER` | EPS-scaled, floor 50k |
+| correlation (bus) | `BUS_PARTITIONS` | **Not sized from the workload.** Resolved as override → existing install → `1`. Raise-only: an override below the existing value is refused. See below. |
 
 Compose `:-` defaults equal the pre-#102 lab constants, so an install without
 a plan behaves exactly as before.
+
+### `BUS_PARTITIONS` — visible and protected, deliberately not auto-sized
+
+The planner emits `BUS_PARTITIONS` so the setting is *visible* in the plan, not
+because it sizes it. **Automatic EPS-based sizing is switched off**, for two
+independent reasons — either alone is sufficient:
+
+1. **The throughput number is not trustworthy.** The only figure we have
+   (~850–1,050 evt/s) was measured while the P1 correlation-thrash defect was
+   still active, making it a lower bound on a degraded system.
+2. **Partition ownership changes are not yet proven correctness-safe.**
+   Correlation window state is in-process and does not follow partitions
+   (tracker 155) — so sizing a knob that moves ownership would be automating an
+   action whose correctness cost is unmeasured. This freeze holds *regardless of
+   how good the throughput numbers turn out to be.*
+
+Resolution order is **override → existing install → `1`** (today's compose
+default, unchanged — generating a plan never resizes a running broker):
+
+```yaml
+overrides:
+  bus_partitions: 4        # explicit, validated, subject to raise-only
+```
+
+Three properties matter more than the number:
+
+1. **Raise-only.** Kafka partitions can be increased but never reduced, and
+   `kafka-init` only ALTERs topics upward. An override *below* the existing
+   value is refused with an explanation, because writing a lower number would
+   make the generated plan disagree with the live broker.
+2. **It is a multiplier, not a count.** `kafka-init` applies it to **17** bus
+   topics on a single-node broker, so `BUS_PARTITIONS=4` is ~68 broker
+   partitions. Correlation only subscribes to **12** of those topics, so five
+   topics carry partitions no consumer reads — real cost, no parallelism gain.
+   Both counts are guarded by a test that fails if either source drifts.
+3. **It caps correlation replicas.** A consumer group cannot have more active
+   members than partitions, so replicas beyond `BUS_PARTITIONS` join, receive
+   nothing and process nothing. The plan warns with the exact idle count.
+
+`resource-plan.txt` prints all of this, including the keyed-data implication and
+the drain requirement for an increase (procedure: `docs/scale-correlation.md`).
+
+**Limitation, stated rather than hidden:** the planner reads `.env`, not the
+broker. If `BUS_PARTITIONS` was ever set outside the installer, confirm the real
+topology with `kafka-topics.sh --describe` before replanning.
 
 The ClickHouse 0.9 ratio is a **policy, not a universal truth**: vendor-
 recommended, lab-validated (one observed graze with zero query kills),

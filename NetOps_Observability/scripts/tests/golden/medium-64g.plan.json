@@ -1,4 +1,16 @@
 {
+  "bus": {
+    "auto_sizing": false,
+    "broker_partitions": 17,
+    "existing": null,
+    "idle_replicas": 0,
+    "max_useful_replicas": 1,
+    "replicas": null,
+    "source": "default",
+    "topics_consumed": 12,
+    "topics_created": 17,
+    "value": 1
+  },
   "cpus": {
     "api": 2.0,
     "cadvisor": 1.0,
@@ -28,6 +40,7 @@
   },
   "internal": {
     "API_GOMEMLIMIT": "1180MiB",
+    "BUS_PARTITIONS": "1",
     "CH_BG_MEM": "5167382528",
     "CH_HOT_UI_MEM": "1240171806",
     "CH_MAX_CONCURRENT_QUERIES": "110",

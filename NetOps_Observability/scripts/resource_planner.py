@@ -192,8 +192,27 @@ LEGACY_VARS = sorted(
      "PG_EFFECTIVE_CACHE_SIZE", "PG_MAINTENANCE_WORK_MEM", "PG_MAX_CONNECTIONS",
      "API_GOMEMLIMIT", "PROBER_GOMEMLIMIT", "GOFLOW2_GOMEMLIMIT",
      "CH_MEM_RATIO", "CH_HOT_UI_MEM", "CH_BG_MEM", "CH_SPILL_BYTES",
-     "CH_MAX_CONCURRENT_QUERIES", "CORR_WINDOW_BUFFER", "REPORT_WORKERS"}
+     "CH_MAX_CONCURRENT_QUERIES", "CORR_WINDOW_BUFFER", "REPORT_WORKERS",
+     "BUS_PARTITIONS"}
 )
+
+
+# --------------------------------------------------------------------------
+# Bus partitions (GA scale programme, tracker 152/153).
+#
+# BUS_PARTITIONS is applied by kafka-init to EVERY bus topic it creates, so it
+# is a MULTIPLIER on broker cost, not a single count — and correlation
+# subscribes to fewer topics than kafka-init creates, so the two numbers are
+# not interchangeable.  Both are facts about other files; they are cross-checked
+# by scripts/tests/test_resource_planner.py::test_bus_topic_counts_match_sources
+# so a change to kafka-init or to the correlation subscription list fails a test
+# rather than making this plan quietly lie to an operator.
+BUS_TOPICS_CREATED = 17     # deployment/docker/docker-compose.yml, kafka-init
+BUS_TOPICS_CONSUMED = 12    # src/correlation/main.py TOPICS
+# Today's compose default (${BUS_PARTITIONS:-1}).  DELIBERATELY UNCHANGED: the
+# installer approval gate has not been passed, so this generation makes the
+# setting visible and protected, it does not resize anyone's broker.
+BUS_PARTITIONS_DEFAULT = 1
 
 
 # --------------------------------------------------------------------------
@@ -509,6 +528,117 @@ def derive_internal(limits, w):
     return env
 
 
+def derive_bus_partitions(w, legacy, overrides, warnings):
+    """Resolve BUS_PARTITIONS and the facts an operator needs to reason about it.
+
+    Automatic EPS-based sizing is deliberately NOT implemented here.  The only
+    correlation throughput figure we have (~850-1,050 evt/s) was measured while
+    the P1 correlation-thrash defect was still active, which makes it a lower
+    bound on a degraded system, not a production sizing constant.  Until the
+    scale checkpoints qualify a real number, this function only makes the
+    EXISTING setting first-class — visible in the plan, overridable through the
+    normal convention, and protected against a silent decrease.  The default is
+    unchanged, so generating a plan never resizes a running broker.
+
+    Returns (value, facts).  Appends operator-facing text to `warnings`.
+    """
+    facts = {
+        "topics_created": BUS_TOPICS_CREATED,
+        "topics_consumed": BUS_TOPICS_CONSUMED,
+        "source": "default",
+        "auto_sizing": False,
+    }
+
+    # --- existing install: what the .env already claims ---------------------
+    existing = None
+    raw = legacy.get("BUS_PARTITIONS")
+    if raw is not None:
+        try:
+            existing = int(str(raw).strip())
+        except ValueError:
+            existing = None
+        if existing is None or existing < 1:
+            warnings.append(
+                f"BUS_PARTITIONS={raw!r} in .env is not a positive integer; "
+                "ignored and treated as unset. Check the live topics with "
+                "'kafka-topics.sh --describe' before replanning.")
+            existing = None
+
+    value = BUS_PARTITIONS_DEFAULT
+    if existing is not None:
+        value = existing
+        facts["source"] = "existing-install"
+
+    # --- explicit override, subject to the raise-only invariant -------------
+    ov = overrides.get("bus_partitions")
+    if ov is not None:
+        try:
+            requested = int(ov)
+        except (TypeError, ValueError):
+            raise SizingError(
+                f"override bus_partitions={ov!r} must be a positive integer")
+        if requested < 1:
+            raise SizingError(
+                f"override bus_partitions={requested} must be >= 1")
+        if existing is not None and requested < existing:
+            # Raise-only: kafka-init only ALTERs topics upward, so writing a
+            # lower number would make the generated plan disagree with the live
+            # broker — the exact silent divergence this guard exists to prevent.
+            warnings.append(
+                f"bus_partitions override {requested} is BELOW the existing "
+                f"{existing} and was NOT applied. Kafka partitions cannot be "
+                "reduced: kafka-init only alters topics upward, so a lower "
+                "value would make this plan disagree with the live broker. "
+                f"BUS_PARTITIONS stays {existing}. To genuinely shrink the bus "
+                "you must rebuild the topics, which is a destructive migration "
+                "and is not supported by the installer.")
+        else:
+            value = requested
+            facts["source"] = "override"
+            if existing is not None and requested != existing:
+                # The out-of-block pin would otherwise sit alongside the managed
+                # value as a duplicate .env key, and duplicate keys resolve by
+                # file order — a coin toss the operator cannot see.
+                warnings.append(
+                    f"bus_partitions override {requested} supersedes the "
+                    f"BUS_PARTITIONS={existing} pinned in .env OUTSIDE the "
+                    "managed block. Remove that line so the file defines the "
+                    "setting once, then re-run kafka-init to alter the topics "
+                    "up. Until it is removed the pin may win over the plan.")
+
+    facts["value"] = value
+    facts["existing"] = existing
+    facts["broker_partitions"] = value * BUS_TOPICS_CREATED
+    # A consumer group cannot have more ACTIVE members than partitions, and
+    # correlation co-partitions across every topic it subscribes to, so the
+    # ceiling is the partition count itself.
+    facts["max_useful_replicas"] = value
+
+    # --- replica / partition mismatch --------------------------------------
+    replicas = w.get("correlation_replicas")
+    facts["replicas"] = replicas
+    if replicas:
+        try:
+            replicas = int(replicas)
+        except (TypeError, ValueError):
+            warnings.append(
+                f"correlation_replicas={replicas!r} is not an integer; ignored")
+            replicas = None
+    if replicas and replicas > value:
+        facts["idle_replicas"] = replicas - value
+        warnings.append(
+            f"correlation_replicas={replicas} exceeds BUS_PARTITIONS={value}: "
+            f"{replicas - value} replica(s) will join the consumer group, be "
+            f"assigned no partitions and process no events. Either scale "
+            f"correlation down to {value}, or raise BUS_PARTITIONS (raise-only, "
+            f"and an increase needs a controlled drain — see "
+            f"docs/scale-correlation.md).")
+    else:
+        facts["idle_replicas"] = 0
+
+    return value, facts
+
+
 # --------------------------------------------------------------------------
 # The plan
 # --------------------------------------------------------------------------
@@ -677,6 +807,11 @@ def compute_plan(host, profile_name, workload=None, overrides=None,
             warnings.append(f"legacy override {var}={legacy[var]} preserved (generated "
                             "recommendation differed)")
 
+    # BUS_PARTITIONS is resolved AFTER the generic legacy loop on purpose: the
+    # raise-only invariant must be authoritative over a blind legacy copy.
+    bus_value, bus = derive_bus_partitions(w, legacy, overrides, warnings)
+    internal["BUS_PARTITIONS"] = str(bus_value)
+
     # #102-signoff: pinned/override PG values can silently oversubscribe the
     # postgres container. Generation identity is SB + 3*conns*wm == limit;
     # maintenance is occasional, so 10% slack before flagging.
@@ -714,6 +849,7 @@ def compute_plan(host, profile_name, workload=None, overrides=None,
         "reservations_bytes": {k: reservations[k] for k in sorted(reservations)},
         "cpus": {k: cpu[k] for k in sorted(cpu)},
         "internal": {k: internal[k] for k in sorted(internal)},
+        "bus": bus,
         "pinned": {k: pinned[k] for k in sorted(pinned)},
         "storage_estimate": {k: fmt_human(v) for k, v in sorted(store.items())},
         "totals": {"limits": fmt_human(total(limits)),
@@ -771,6 +907,12 @@ def env_block(plan):
         if env_cpu.get(name):
             lines.append("{}={}".format(env_cpu[name], ("{:g}".format(plan["cpus"][name]))))
     for var in sorted(plan["internal"]):
+        if var == "BUS_PARTITIONS" and plan["bus"]["source"] == "existing-install":
+            # Already pinned outside this block by the operator; emitting it
+            # here too would define the same key twice in .env.
+            lines.append("# BUS_PARTITIONS={} pinned outside this block".format(
+                plan["internal"][var]))
+            continue
         lines.append("{}={}".format(var, plan["internal"][var]))
     lines.append(BLOCK_END)
     return "\n".join(lines) + "\n"
@@ -795,6 +937,39 @@ def plan_txt(plan):
     out.append("internal limits (derived from each component's limit):")
     for var in sorted(plan["internal"]):
         out.append("  {}={}".format(var, plan["internal"][var]))
+    out.append("")
+    b = plan["bus"]
+    replicas = b["replicas"] if b["replicas"] else "not specified"
+    out.append("correlation bus partitions (raise-only — read before changing):")
+    out.append(f"  BUS_PARTITIONS                {b['value']}  (source: {b['source']})")
+    out.append(f"  topics created by kafka-init  {b['topics_created']}")
+    out.append(f"  topics correlation consumes   {b['topics_consumed']}"
+               f"   ({b['topics_created'] - b['topics_consumed']} carry partitions no "
+               "correlation replica reads)")
+    out.append(f"  total broker partitions       ~{b['broker_partitions']} "
+               f"({b['value']} x {b['topics_created']} topics, single-node broker)")
+    out.append(f"  correlation replicas          {replicas}")
+    out.append(f"  max useful replicas           {b['max_useful_replicas']} "
+               "(a consumer group cannot have more active members than partitions)")
+    if b["idle_replicas"]:
+        out.append(f"  EXPECTED IDLE REPLICAS        {b['idle_replicas']} "
+                   "— alive, joined, consuming nothing")
+    if not b["auto_sizing"]:
+        out.append("  automatic EPS-based sizing    DISABLED (pending scale "
+                   "qualification; the default is unchanged)")
+    out.append("  raising it later              partitions can be increased but never "
+               "reduced; kafka-init only alters upward")
+    out.append("  keyed-data implication        events are tenant-keyed, so an increase "
+               "changes which partition a tenant maps to;")
+    out.append("                                records produced BEFORE the raise stay "
+               "where they are and are not redistributed")
+    out.append("  therefore                     an increase is a controlled migration: "
+               "drain to a safe lag, then raise")
+    out.append("                                (procedure: docs/scale-correlation.md)")
+    out.append("  NOTE                          this reflects .env, not the live broker. "
+               "Confirm with 'kafka-topics.sh --describe'")
+    out.append("                                if BUS_PARTITIONS was ever set outside "
+               "the installer.")
     out.append("")
     out.append("storage estimate: {}".format(", ".join(
         f"{k} {v}" for k, v in sorted(plan["storage_estimate"].items()))))

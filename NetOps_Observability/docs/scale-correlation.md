@@ -62,6 +62,53 @@ same transient applies for ~60s whenever a device moves tenants in
 `device_tenant.csv` (producer keying and consumer attribution refresh the
 registry independently).
 
+### ⚠ In-memory state does not follow partition ownership (tracker 155)
+
+The drain note above scopes window splitting to a partition **increase**. That
+understates it. `OPEN_OBJECTS` is a plain in-process dict initialised empty
+(`main.py:910`) and **nothing rehydrates it** — there is no restore, no
+checkpoint and no transfer between members. `on_partitions_revoked` flushes and
+commits durable output but evicts no window state; `on_partitions_assigned`
+records ownership and reconstructs nothing.
+
+So on **any** ownership movement — replica restart, scale up or down, crash,
+deployment, broker disturbance, not only a partition raise — the new owner
+begins with an empty window for the tenants it just acquired, and the previous
+owner holds state for tenants it no longer serves. Evidence accumulated in a
+window that spans the move is lost. Nothing errors; the loss is silent and shows
+up only as RCA that is missing, split, or under-evidenced.
+
+Practical consequences until tracker 155 is resolved:
+
+* Treat a correlation restart under `--scale N>1` as an event with a
+  **correctness cost**, not merely a availability blip. Prefer quiet windows.
+* Do not read "lag returned to zero" as "correlation recovered" — lag measures
+  offsets, not window continuity.
+* **Automatic `BUS_PARTITIONS` sizing is frozen** until state reconstruction or
+  transfer is proven correct, however good the throughput numbers look.
+
+### Partition budget: one setting, 17 topics, 12 of them consumed
+
+`BUS_PARTITIONS` is a **multiplier on broker cost, not a single count**.
+`kafka-init` applies it to all **17** bus topics it creates, against a
+single-node KRaft broker — so `BUS_PARTITIONS=4` is ~68 broker partitions and
+`=16` is ~272. Budget the broker, not just the consumer, before raising it.
+
+Correlation subscribes to **12** of those 17 (`main.py` `TOPICS`). The other
+five — `netops.applogs`, `netops.flows.raw`, `netops.cloudlogs`,
+`netops.cloudcosts`, `netops.deadletter` — carry the same partition count for
+no correlation benefit: roughly 29% of the partition cost buys no parallelism.
+
+Whether one global partition control should keep applying to every bus topic,
+or split by workload class (high-volume telemetry / correlation-critical /
+low-volume control), is an open architecture question. **Do not re-partition
+topics individually as a side effect of scale work** — it needs its own design
+review and its own correctness qualification.
+
+`python3 scripts/install.py --replan` prints the resulting broker partition
+total, the max useful replica count, and the expected idle-replica count; see
+`docs/RESOURCE_SIZING.md` for the resolution order and the raise-only rule.
+
 ## Producer / keying matrix (after this change)
 
 | Topic | Producer(s) | Kafka client | Key (before → after) | Partitioner |
