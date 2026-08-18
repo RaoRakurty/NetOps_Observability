@@ -169,3 +169,99 @@ def test_gate_passes_only_on_full_green():
     out = summarize(res)
     assert out["gate"] == PASS
     assert out["not_run"] == [] and out["invalid"] == [] and out["failed"] == []
+
+
+# ==========================================================================
+# §3/§4 — the tracked-story contract. open_objects>0 is not enough.
+# ==========================================================================
+
+from ownership import StoryProbe, story_preconditions
+
+
+def good_story(**kw) -> StoryProbe:
+    base = {
+        "story_id": "twin-story-7", "tenant": "acme", "partition": 3,
+        "owner_before": "cid-a", "owner_after": "cid-b",
+        "open_object_id": "corr-abc", "resolved_before": False,
+        "expected_rca": "sig.ent.wan.dx-circuit-flap",
+        "final_rca": "sig.ent.wan.dx-circuit-flap",
+        "evidence_a": 5, "evidence_b": 4, "evidence_b_consumed": 4,
+        "evidence_query_ok": True, "tenant_proven": True, "executed": True,
+        "duplicate_rca": 0,
+    }
+    base.update(kw)
+    return StoryProbe(**base)
+
+
+@pytest.mark.parametrize("field,value,needle", [
+    ("executed", False, "was not executed"),
+    ("evidence_query_ok", False, "evidence query FAILED"),
+    ("tenant_proven", False, "tenant ownership"),
+    ("open_object_id", "", "no OPEN_OBJECT"),
+    ("resolved_before", True, "ALREADY RESOLVED"),
+    ("expected_rca", "", "no recorded ground truth"),
+    ("evidence_a", 0, "no pre-move evidence"),
+    ("evidence_b", 0, "no post-move evidence"),
+    ("evidence_b_consumed", 0, "NONE was consumed"),
+    ("partition", -1, "never identified"),
+])
+def test_every_anti_vacuity_condition_yields_invalid(field, value, needle):
+    """§4: each of these must be INVALID — never PASS, never FAIL."""
+    v = verdict("restart_one", pre(), scores(), story=good_story(**{field: value}))
+    assert v.outcome == INVALID, f"{field}={value!r} did not invalidate"
+    assert needle in " ".join(v.reasons)
+
+
+def test_story_partition_must_actually_change_owner():
+    v = verdict("scale_up", pre(),
+                scores(), story=good_story(owner_after="cid-a"))
+    assert v.outcome == INVALID
+    assert "did not change owner" in " ".join(v.reasons)
+
+
+def test_unfinished_story_that_completes_correctly_passes():
+    v = verdict("restart_one", pre(), scores(), story=good_story())
+    assert v.outcome == PASS
+
+
+def test_rca_changing_across_the_move_is_a_fail():
+    """The whole gate: the story must survive ownership movement intact."""
+    v = verdict("scale_down", pre(), scores(),
+                story=good_story(final_rca="sig.ent.access.fhrp-failover"))
+    assert v.outcome == FAIL
+    assert "changed across" in v.reasons[0]
+
+
+def test_duplicate_rca_from_ownership_movement_is_a_fail():
+    v = verdict("rolling_restart", pre(), scores(),
+                story=good_story(duplicate_rca=1))
+    assert v.outcome == FAIL
+    assert "duplicate RCA" in v.reasons[0]
+
+
+def test_story_precondition_outranks_a_healthy_accuracy_number():
+    """A perfect score must not rescue a vacuous run."""
+    v = verdict("restart_one", pre(open_objects=99),
+                scores(before=(4, 4), after=(4, 4)),
+                story=good_story(resolved_before=True))
+    assert v.outcome == INVALID
+
+
+def test_isolation_still_outranks_the_story_contract():
+    v = verdict("restart_one", pre(), scores(), story=good_story(),
+                isolation_violations=("tenant-b saw tenant-a evidence",))
+    assert v.outcome == FAIL
+    assert "cross-tenant" in v.reasons[0]
+
+
+def test_story_preconditions_reports_every_problem_not_just_the_first():
+    ok, reasons = story_preconditions(
+        good_story(open_object_id="", expected_rca="", evidence_b=0))
+    assert ok is False
+    assert len(reasons) >= 3
+
+
+def test_legacy_callers_without_a_story_still_work():
+    """Backward compatibility: the coarse precondition remains the floor."""
+    assert verdict("restart_one", pre(), scores()).outcome == PASS
+    assert verdict("restart_one", pre(open_objects=0), scores()).outcome == INVALID

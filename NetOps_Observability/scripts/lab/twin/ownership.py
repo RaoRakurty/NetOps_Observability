@@ -87,6 +87,92 @@ class Preconditions:
 
 
 @dataclass(frozen=True)
+class StoryProbe:
+    """One unfinished, tenant-scoped RCA story tracked ACROSS an ownership move.
+
+    `open_objects > 0` was too weak a precondition. It proves the engine held
+    *something*, not that anything whose correctness depends on continuity was
+    in flight. A partition can move while every open object is already resolved,
+    and the run would look identical to a real test while exercising nothing.
+
+    The assertion this type exists to support is:
+
+        an unfinished RCA story remains semantically correct when the partition
+        carrying its evidence changes ownership between replicas.
+
+    So a valid probe needs evidence on BOTH sides of the move, the second set
+    NECESSARY to reach the expected outcome, and it must be the SAME story —
+    otherwise two unrelated healthy objects either side of a rebalance would
+    pass a test that never exercised continuity.
+
+    `partition` is computed from `tenant_partition()` (murmur2 on the UTF-8
+    tenant key, positive-masked, mod N) — the engine's own single source of
+    truth for which instance owns a tenant — so the harness proves THAT
+    partition moved, not merely that some partition somewhere did.
+    """
+    story_id: str = ""
+    tenant: str = ""
+    partition: int = -1                 # partition carrying this story's key
+    owner_before: str = ""              # replica id owning `partition` before
+    owner_after: str = ""               # ... and after
+    open_object_id: str = ""            # the unfinished OPEN_OBJECT
+    resolved_before: bool = True        # must be False: unfinished on purpose
+    expected_rca: str = ""              # twin ground truth
+    final_rca: str = ""                 # what the engine concluded
+    evidence_a: int = 0                 # produced before the move
+    evidence_b: int = 0                 # produced after the move
+    evidence_b_consumed: int = 0        # ... and actually processed
+    evidence_query_ok: bool = True      # False if a lookup failed
+    tenant_proven: bool = True          # False if ownership could not be shown
+    executed: bool = False              # False if the scenario never ran
+    duplicate_rca: int = 0
+
+    @property
+    def owner_moved(self) -> bool:
+        return bool(self.owner_before) and self.owner_before != self.owner_after
+
+
+def story_preconditions(probe: StoryProbe,
+                        movement_required: bool = True) -> tuple[bool, tuple]:
+    """§4 anti-vacuity gate. (ok, reasons). Every failure here is INVALID.
+
+    INVALID is not a soft PASS and not a FAIL: it means the run measured
+    nothing and must be repeated. Keeping that distinct is what stops a
+    green-looking gate from resting on a scenario that never exercised the
+    defect.
+    """
+    bad: list[str] = []
+    if not probe.executed:
+        bad.append("scenario was not executed")
+    if not probe.evidence_query_ok:
+        bad.append("an evidence query FAILED — a lost measurement is not a "
+                   "negative result, it is no result")
+    if not probe.tenant_proven:
+        bad.append("tenant ownership of the story could not be proven")
+    if not probe.open_object_id:
+        bad.append("no OPEN_OBJECT existed before movement — nothing whose "
+                   "correctness depends on continuity was in flight")
+    if probe.resolved_before:
+        bad.append("the pre-move object was ALREADY RESOLVED — a finished "
+                   "story cannot demonstrate continuity across a move")
+    if not probe.expected_rca:
+        bad.append("no recorded ground truth to compare the final RCA against")
+    if probe.evidence_a <= 0:
+        bad.append("no pre-move evidence (set A) was produced")
+    if probe.evidence_b <= 0:
+        bad.append("no post-move evidence (set B) was produced")
+    if probe.evidence_b_consumed <= 0:
+        bad.append("post-move evidence was produced but NONE was consumed")
+    if movement_required and not probe.owner_moved:
+        bad.append(f"partition {probe.partition} carrying this story did not "
+                   f"change owner ({probe.owner_before!r} -> "
+                   f"{probe.owner_after!r})")
+    if probe.partition < 0:
+        bad.append("the partition carrying the story was never identified")
+    return (not bad), tuple(bad)
+
+
+@dataclass(frozen=True)
 class Scores:
     """Twin ground-truth scoring, before and after the move.
 
@@ -125,7 +211,8 @@ class Verdict:
 
 def verdict(move: str, pre: Preconditions, scores: Scores,
             isolation_violations: tuple[str, ...] = (),
-            tolerance: float = 0.0) -> Verdict:
+            tolerance: float = 0.0,
+            story: StoryProbe | None = None) -> Verdict:
     """Decide PASS / FAIL / INVALID. Pure — no I/O, no clock, no stack.
 
     `tolerance` is the permitted accuracy DROP as a ratio (0.0 = none). It
@@ -146,6 +233,38 @@ def verdict(move: str, pre: Preconditions, scores: Scores,
             [f"§3a cross-tenant state observed after {move}"]
             + [f"  {v}" for v in isolation_violations]),
             {"delta": scores.delta})
+
+    # §3/§4: when a tracked story is supplied it is the AUTHORITATIVE
+    # precondition — `open_objects > 0` only shows the engine held something,
+    # not that an unfinished story was in flight. The coarse checks below stay
+    # as a floor for callers that have no probe yet.
+    if story is not None:
+        # Movement is required for EVERY scenario in MOVES: each one exists to
+        # make the tracked story's partition change hands. A run where it did
+        # not move is INVALID, never PASS.
+        ok, reasons = story_preconditions(story, movement_required=True)
+        if not ok:
+            return Verdict(INVALID, reasons, {
+                "story_id": story.story_id, "tenant": story.tenant,
+                "partition": story.partition,
+                "owner_before": story.owner_before,
+                "owner_after": story.owner_after,
+            })
+        if story.duplicate_rca:
+            return Verdict(FAIL, (
+                (f"{story.duplicate_rca} duplicate RCA object(s) for story "
+                 f"{story.story_id} after {move} — ownership movement must not "
+                 f"fork an incident"),), {"story_id": story.story_id})
+        if story.final_rca != story.expected_rca:
+            return Verdict(FAIL, (
+                (f"RCA for story {story.story_id} changed across {move}: "
+                 f"expected {story.expected_rca!r}, got {story.final_rca!r}"),
+                (f"tenant {story.tenant} on partition {story.partition}, "
+                 f"owner {story.owner_before} -> {story.owner_after}"),
+                (f"evidence A={story.evidence_a} B={story.evidence_b} "
+                 f"(consumed {story.evidence_b_consumed})"),
+            ), {"story_id": story.story_id, "expected": story.expected_rca,
+                "actual": story.final_rca})
 
     problems: list[str] = []
     if not pre.had_state:
