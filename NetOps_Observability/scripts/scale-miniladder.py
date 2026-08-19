@@ -99,6 +99,7 @@ Exit codes: 0 = all phases PASS; 1 = any phase FAILED (report still written);
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import random
@@ -562,7 +563,7 @@ class Stack:
         except (json.JSONDecodeError, KeyError, IndexError, ValueError):
             return -1.0
 
-    def dlq_run_reasons(self, runid: str) -> dict:
+    def dlq_run_reasons(self, runid: str, identity_shas: dict | None = None) -> dict:
         """Run-attributable DLQ lines BROKEN DOWN BY REASON (tracker 159).
 
         A bare count cannot distinguish "the pipeline dropped something" from
@@ -573,26 +574,54 @@ class Stack:
 
         Returns {} on ANY failure — the caller treats an unreadable DLQ as
         unknown and FAILS, never as clean.
+
+        IDENTITY-AWARE (2026-08-19). Grepping for the runid CANNOT see the most
+        important category. A tenant-refusal record deliberately withholds the
+        payload and the plaintext hostname (F-11 / INV-F11-10) and keeps only
+        `identity_sha` = sha256(identity) — so a run's own refusals contain the
+        runid nowhere and matched nothing. Measured on ladder 08191832j027:
+        **133,349 refused events from this run's devices, and the gate reported
+        95.** Passing `identity_shas` (sha256 of every device name -> index)
+        makes that category visible without weakening F-11: the ladder knows its
+        own device names, so it can compute the same digest the router does.
         """
         cc = self.cid("correlation")
         if not cc:
             return {}
         rc, out, err = run(
             ["docker", "exec", cc, "sh", "-c",
-             f"cat /data/deadletter/* 2>/dev/null | grep -- '{runid}' || true"],
+             "cat /data/deadletter/* 2>/dev/null || true"],
             DOCKER_TIMEOUT)
         if rc != 0:
             warn(f"DLQ reason read failed: {err.strip()[:200]}")
             return {}
+        shas = identity_shas or {}
         reasons: dict = {}
         for line in out.splitlines():
             line = line.strip()
             if not line:
                 continue
             try:
-                reason = str(json.loads(line).get("reason") or "(no reason field)")
-            except (ValueError, TypeError):
-                reason = "(unparseable DLQ line)"
+                rec = json.loads(line)
+            except ValueError:
+                # Only attribute an unparseable line to this run if the runid is
+                # literally in it — otherwise a neighbour's corruption would be
+                # charged to us.
+                if runid in line:
+                    reasons["(unparseable DLQ line)"] = (
+                        reasons.get("(unparseable DLQ line)", 0) + 1)
+                continue
+            if not isinstance(rec, dict):
+                if runid in line:
+                    reasons["(non-object DLQ line)"] = (
+                        reasons.get("(non-object DLQ line)", 0) + 1)
+                continue
+            # Attributable to THIS run either by the runid appearing in the
+            # record, or by the sealed identity digest of one of our devices.
+            mine = (runid in line) or (rec.get("identity_sha") in shas)
+            if not mine:
+                continue
+            reason = str(rec.get("reason") or "(no reason field)")
             reasons[reason] = reasons.get(reason, 0) + 1
         return reasons
 
@@ -621,6 +650,11 @@ class Stack:
 # event whose identity it cannot attribute: the event is counted, its payload is
 # sealed in the router quarantine (F-11), and nothing is silently dropped.
 # Anything NOT listed here fails the accounting gate at a single occurrence.
+# How long cleanup waits for the consumer backlog before deleting devices.
+# Deleting them earlier turns every in-flight event into a refusal (see
+# cleanup()). Bounded: teardown must always happen, drained or not.
+CLEANUP_DRAIN_WAIT_S = float(os.environ.get("MLX_CLEANUP_DRAIN_WAIT_S", "300"))
+
 DLQ_EXPECTED_REASONS = frozenset({"identity_unattributable"})
 
 # ...and even an expected reason fails above this share of injected events.
@@ -824,6 +858,18 @@ class Harness:
         return self.phase("preflight", status, ev,
                           "; ".join(problems) if problems else
                           f"{len(states)} services checked, consumers live, baselines captured")
+
+    def device_identity_shas(self) -> dict:
+        """sha256(device name) -> device index, for every device this run created.
+
+        The refusal dead-letter record keeps only this digest (F-11 withholds
+        the plaintext hostname), so without it a run cannot see its OWN refused
+        events. Computing it here uses only names the ladder already owns — it
+        reveals nothing the harness did not already know, and it does not weaken
+        the sealed-quarantine invariant for anyone else.
+        """
+        return {hashlib.sha256(name.encode("utf-8", "replace")).hexdigest(): i
+                for i, name in enumerate(self.created_ids)}
 
     # -- phase 2: onboarding linearity --------------------------------------
     def onboard(self) -> bool:
@@ -1207,7 +1253,8 @@ class Harness:
         # envelope on the expected ones so a real regression still fails. This
         # is not muting the check: an unreadable DLQ fails, an unexpected reason
         # fails at a single line, and expected reasons fail above the envelope.
-        dlq_reasons = self.stack.dlq_run_reasons(self.acct_runid)
+        dlq_reasons = self.stack.dlq_run_reasons(
+            self.acct_runid, self.device_identity_shas())
         ev["dlq_run_reasons"] = dlq_reasons
         if dlq_run > 0 and not dlq_reasons:
             problems.append(
@@ -1366,6 +1413,37 @@ class Harness:
             if rc != 0:
                 problems.append(
                     f"twin teardown rc={rc}: {(err or out).strip()[:200]}")
+
+        # BACKLOG DRAIN GATE (2026-08-19). Deleting the devices while their
+        # events are still in flight makes correlation refuse every one of them
+        # as identity_unattributable — the registry no longer knows the
+        # hostname. Measured on ladder 08191832j027: cleanup began with ~385k
+        # events still unconsumed and manufactured **133,349 refusals in two
+        # minutes**, all charged to this run's devices. They were invisible
+        # because the refusal record withholds the hostname (F-11), and they
+        # inflate the lab's standing identity_unattributable rate that tracker
+        # 159 is trying to explain.
+        #
+        # So: wait for the backlog before deleting, and if it will not drain,
+        # SAY SO and record how much residue we are about to convert into
+        # refusals. This never blocks teardown — an undrained lab must still be
+        # cleaned — but it stops the harness quietly polluting its own evidence.
+        lag_at_cleanup = self.stack.group_lag("netops-correlation").get("_total", -1)
+        if lag_at_cleanup > 0:
+            deadline = time.monotonic() + CLEANUP_DRAIN_WAIT_S
+            while time.monotonic() < deadline:
+                lag_at_cleanup = self.stack.group_lag(
+                    "netops-correlation").get("_total", -1)
+                if lag_at_cleanup <= 0:
+                    break
+                time.sleep(15)
+        ev["consumer_lag_at_cleanup"] = lag_at_cleanup
+        if lag_at_cleanup > 0:
+            ev["cleanup_refusals_expected"] = lag_at_cleanup
+            warn(f"cleanup starting with {lag_at_cleanup} events still "
+                 f"unconsumed — deleting the devices now will refuse them as "
+                 f"identity_unattributable; this is harness-induced DLQ traffic, "
+                 f"not a product defect, and it is recorded as evidence")
 
         # 7a. Delete every created device; 404 = already gone (fine).
         del_fail = []
