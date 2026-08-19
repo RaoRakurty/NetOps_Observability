@@ -1055,6 +1055,19 @@ services:
 
   clickhouse:
     image: clickhouse/clickhouse-server:24.8-alpine@sha256:b002e56ed5c16e224c312527f6fcba7e77216fec5d7a88a7828f59efc614feb5
+    # PID-1 REAPING (incident 2026-08-19). This container's PID 1 is
+    # clickhouse-server, which is an application, not an init — it never reaps
+    # orphaned children. The TLS-wave healthcheck (`wget https://...`, added
+    # 2026-08-09) makes BusyBox wget fork an `ssl_client` helper for the
+    # handshake; wget exits first, so ssl_client is orphaned onto PID 1 and
+    # becomes a zombie that nothing reaps. Each zombie still holds a PID charge
+    # against the cgroup, so the container accumulated ONE leaked PID EVERY 10
+    # SECONDS and hit systemd's DefaultTasksMax=19046 after ~52h — at which
+    # point NOTHING in the container could fork, including the healthcheck
+    # itself ("procReady not received"). `init: true` puts tini at PID 1, which
+    # reaps orphans. Do not remove this in favour of raising the PID ceiling:
+    # a ceiling only changes how long the leak takes to kill the service.
+    init: true
     # Server memory = CH_MEM_RATIO x the cgroup limit, ASSERTED in
     # clickhouse/memory.xml (#102) — no longer riding the stock-image default.
     # Re-tuned 2560m→4g (host had ~8.7Gi headroom): high-fps flow ingest (lab
@@ -1129,6 +1142,10 @@ services:
   #   * replicas > partitions sit idle (range assignor leaves them empty).
   correlation:
     # SC-008: runs as non-root appuser (see Dockerfile); lock down escalation+caps.
+    # Same PID-1 reaping class as clickhouse (incident 2026-08-19): PID 1 here
+    # is the correlation app, and 12 orphaned `python` zombies had accumulated
+    # in 22.7h. Far below the ceiling, but the same defect — fix the class.
+    init: true
     security_opt: ["no-new-privileges:true"]
     cap_drop: [ALL]
     build:
