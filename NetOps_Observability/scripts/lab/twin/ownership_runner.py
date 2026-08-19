@@ -9,12 +9,22 @@ SAFETY MODEL (three independent interlocks, all default-closed)
 ---------------------------------------------------------------
 1. DRY RUN IS THE DEFAULT. `execute()` performs nothing unless explicitly told
    `dry_run=False`. A caller that forgets the flag gets a plan, not a restart.
-2. SOAK INTERLOCK. The 72h appliance soak baselined correlation RSS at
-   2026-08-16T23:14; these scenarios are deliberate replica restarts, which
-   reset the RSS and uptime the soak exists to measure. `soak_interlock()`
-   reads the baseline and REFUSES every mutating action until 72h have elapsed.
-   This is a hard guard in code, not a note in a runbook, because a convention
-   that depends on remembering is not an interlock.
+2. SOAK INTERLOCK. These scenarios are deliberate replica restarts, which
+   reset the RSS and uptime an appliance soak exists to measure.
+   `soak_interlock()` REFUSES every mutating action until the window has
+   elapsed AND the soak's subject is provably the same set of containers it
+   started with. This is a hard guard in code, not a note in a runbook,
+   because a convention that depends on remembering is not an interlock.
+
+   It checks IDENTITY, not just the clock (tracker 158). The first version
+   compared wall time to start+72h and nothing else. On 2026-08-19 that proved
+   insufficient in the worst way: both correlation replicas had been recreated
+   16h35m into the window (deploying 94e8561d), the soak had been measuring
+   nothing since, and the interlock would still have opened on schedule and
+   called it "soak complete". Elapsed time cannot tell you the subject
+   survived. A gate that cannot go red for the failure that actually occurred
+   is not a gate — it is defect class 2b wearing a gate's clothes, which is
+   exactly what this module was built to prevent elsewhere.
 3. LAB PREFLIGHT. `preflight()` proves the target is the lab stack before
    anything mutates: compose project, loopback base URL, expected services, and
    an explicit refusal on any non-loopback host.
@@ -37,6 +47,7 @@ from __future__ import annotations
 import datetime as _dt
 import json
 import os
+import sys as _sys
 from dataclasses import dataclass, field
 
 from ownership import MOVES
@@ -158,35 +169,190 @@ def in_flight_ready(snap: Snapshot) -> tuple[bool, str]:
 # Interlocks
 # --------------------------------------------------------------------------
 
-def soak_interlock(now: _dt.datetime, baseline_path: str,
-                   soak_hours: float = SOAK_HOURS) -> tuple[bool, str]:
-    """(allowed, reason). Default-CLOSED on every ambiguity.
+SOAK_NONE = "NO_SOAK"        # no baseline on disk — nothing to protect
+SOAK_RUNNING = "RUNNING"     # inside the 72h window
+SOAK_COMPLETE = "COMPLETE"   # window elapsed AND the subject is provably intact
+SOAK_INVALID = "INVALID"     # subject replaced, or continuity unprovable
 
-    An unreadable or malformed baseline BLOCKS rather than allows: "I could not
-    tell whether the soak is running" must never resolve to "go ahead". That is
-    the same rule the twin scorer learned the hard way — a lost measurement is
-    not a negative result.
+# Only these two permit mutation. INVALID does NOT — an invalid soak has
+# already lost its evidence, but silently proceeding would let the next report
+# inherit the word "complete" for a measurement that never happened.
+_MUTATION_OK = (SOAK_NONE, SOAK_COMPLETE)
+
+_IDENTITY_TIMEOUT = 30
+
+
+def _sh(cmd: tuple[str, ...], timeout: int = _IDENTITY_TIMEOUT):
+    """Bounded subprocess -> (rc, out, err). Never raises; never swallows."""
+    import subprocess
+    try:
+        p = subprocess.run(list(cmd), capture_output=True, text=True,
+                           timeout=timeout, check=False)
+        return p.returncode, p.stdout, p.stderr
+    except subprocess.TimeoutExpired:
+        return 124, "", f"timeout after {timeout}s: {' '.join(cmd[:4])} ..."
+    except (OSError, ValueError) as exc:
+        return 127, "", str(exc)
+
+
+def subject_identity(project: str = "netops", service: str = CORR,
+                     runner=None) -> list[dict]:
+    """Live identity of the soak subject: id + started_at + image per replica.
+
+    Returns [] on ANY failure. This function never decides what that means —
+    the caller treats an empty probe as *unverifiable*, which is INVALID, not
+    "fine". A probe that cannot see the subject must never read as intact.
+    """
+    run = runner or _sh
+    rc, out, err = run(("docker", "ps", "-q",
+                        "--filter", f"label=com.docker.compose.project={project}",
+                        "--filter", f"label=com.docker.compose.service={service}"))
+    if rc != 0:
+        print(f"twin: WARNING: subject probe (docker ps) failed rc={rc}: "
+              f"{(err or out).strip()}", file=_sys.stderr, flush=True)
+        return []
+    ids = out.split()
+    if not ids:
+        return []
+    rc, out, err = run(("docker", "inspect", "-f",
+                        "{{.Id}}\t{{.State.StartedAt}}\t{{.Image}}\t{{.Name}}",
+                        *ids))
+    if rc != 0:
+        print(f"twin: WARNING: subject probe (docker inspect) failed rc={rc}: "
+              f"{(err or out).strip()}", file=_sys.stderr, flush=True)
+        return []
+    found = []
+    for line in out.splitlines():
+        parts = line.strip().split("\t")
+        if len(parts) != 4:
+            continue
+        cid, started, image, name = parts
+        found.append({"id": cid[:12], "started_at": started,
+                      "image": image[:19], "name": name.lstrip("/")})
+    return sorted(found, key=lambda c: c["id"])
+
+
+def _identity_map(entries) -> dict:
+    """{short id: (started_at, image)} — the tuple that must not drift."""
+    out = {}
+    for c in entries or ():
+        if not isinstance(c, dict):
+            continue
+        cid = str(c.get("id", ""))[:12]
+        if cid:
+            out[cid] = (c.get("started_at"), c.get("image"))
+    return out
+
+
+def soak_state(now: _dt.datetime, baseline_path: str,
+               soak_hours: float = SOAK_HOURS,
+               identity_probe=None) -> tuple[str, str]:
+    """(state, reason) — the tri-state the clock alone cannot produce.
+
+    THE BUG THIS EXISTS TO CLOSE (tracker 158, found 2026-08-19): the previous
+    version compared wall clock to start+72h and nothing else, so it returned
+    "soak complete" for a soak whose two correlation replicas had been
+    RECREATED 16h35m into the window (deploying 94e8561d). The window elapsing
+    says nothing about whether the thing being measured survived it. A gate
+    that cannot go red for the failure that actually happened is not a gate.
     """
     if not os.path.exists(baseline_path):
-        return True, ("no soak baseline found — no soak in progress "
-                      f"({baseline_path})")
+        return SOAK_NONE, (
+            f"no soak baseline found — no soak in progress ({baseline_path}). "
+            "DELIBERATE (tracker 158): absence means there is no soak to "
+            "protect, so this opens the gate. The consequence is accepted "
+            "with eyes open — deleting the baseline opens it too — because "
+            "the alternative blocks the harness forever on any host that "
+            "never ran a soak. The baseline is a generated artifact of "
+            "soak_baseline.py, never a hand-edit.")
     try:
         with open(baseline_path) as fh:
             data = json.load(fh)
         start = _dt.datetime.fromisoformat(data["soak_start_utc"])
     except (OSError, ValueError, KeyError, TypeError) as exc:
-        return False, (f"soak baseline unreadable ({type(exc).__name__}) — "
-                       "REFUSING to mutate. Cannot prove the soak is finished, "
-                       "and 'unknown' is not 'clear'.")
+        return SOAK_INVALID, (
+            f"soak baseline unreadable ({type(exc).__name__}) — REFUSING to "
+            "mutate. Cannot prove the soak is finished, and 'unknown' is not "
+            "'clear'.")
+
     end = start + _dt.timedelta(hours=soak_hours)
     if now < end:
         left = (end - now).total_seconds() / 3600.0
-        return False, (
+        return SOAK_RUNNING, (
             f"72h soak in progress: started {start.isoformat()}, ends "
             f"{end.isoformat()} ({left:.1f}h remaining). These scenarios "
             "restart correlation, which resets the RSS and uptime the soak "
             "measures. REFUSING.")
-    return True, (f"soak complete (ended {end.isoformat()})")
+
+    # The window has elapsed. Everything above here the old clock could do;
+    # everything below is the half it could not.
+    recorded = data.get("subject")
+    if not recorded:
+        return SOAK_INVALID, (
+            f"72h elapsed (ended {end.isoformat()}) but this baseline records "
+            "NO subject identity, so nothing in it can prove the measured "
+            "containers survived the window. Unverifiable is INVALID, not "
+            "complete — re-baseline with soak_baseline.py. REFUSING. (Every "
+            "baseline written before 2026-08-19 is in this state, including "
+            "the one whose subject was in fact replaced 16h35m in.)")
+
+    if isinstance(recorded, dict):
+        recorded = recorded.get("containers")
+    if not recorded:
+        return SOAK_INVALID, (
+            "72h elapsed but the baseline's subject block records no "
+            "containers. Unverifiable is INVALID — REFUSING.")
+
+    live = (identity_probe or subject_identity)()
+    if not live:
+        return SOAK_INVALID, (
+            "72h elapsed but the live subject could not be identified (probe "
+            "returned nothing). Unverified is not intact — REFUSING.")
+
+    want, have = _identity_map(recorded), _identity_map(live)
+    if not want:
+        return SOAK_INVALID, (
+            "72h elapsed but the recorded subject identity is malformed (no "
+            "usable container ids). REFUSING.")
+    if want.keys() != have.keys():
+        gone = sorted(set(want) - set(have))
+        added = sorted(set(have) - set(want))
+        return SOAK_INVALID, (
+            f"SUBJECT REPLACED: {len(want)} container(s) baselined, "
+            f"{len(have)} live. Gone: {gone or 'none'}; new: {added or 'none'}. "
+            "The soak stopped measuring its subject at that point — its RSS "
+            "arm is void regardless of what the clock says. REFUSING; "
+            "re-baseline from a known-green build.")
+    drift = sorted(cid for cid in want if want[cid] != have[cid])
+    if drift:
+        detail = "; ".join(
+            f"{cid}: baselined started={want[cid][0]} image={want[cid][1]} "
+            f"-> live started={have[cid][0]} image={have[cid][1]}"
+            for cid in drift)
+        return SOAK_INVALID, (
+            f"SUBJECT RESTARTED OR REBUILT: {detail}. A container that kept "
+            "its id but restarted has still reset the RSS the soak measures. "
+            "REFUSING; re-baseline from a known-green build.")
+
+    return SOAK_COMPLETE, (
+        f"soak complete (ended {end.isoformat()}) and all {len(want)} subject "
+        "container(s) are the ones baselined, same start time and same image "
+        "— the measurement covers the whole window.")
+
+
+def soak_interlock(now: _dt.datetime, baseline_path: str,
+                   soak_hours: float = SOAK_HOURS,
+                   identity_probe=None) -> tuple[bool, str]:
+    """(allowed, reason). Default-CLOSED on every ambiguity.
+
+    Thin policy layer over `soak_state()`: mutation is permitted only when
+    there is no soak, or when the soak both finished AND provably measured the
+    same containers throughout. INVALID never reads as PASS — it blocks, and
+    it says why.
+    """
+    state, reason = soak_state(now, baseline_path, soak_hours=soak_hours,
+                               identity_probe=identity_probe)
+    return state in _MUTATION_OK, f"[{state}] {reason}"
 
 
 def preflight(stack, expect_project: str = "netops") -> tuple[bool, list[str]]:

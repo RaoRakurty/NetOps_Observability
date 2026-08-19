@@ -27,6 +27,10 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from ownership import MOVES
 from ownership_runner import (
+    SOAK_COMPLETE,
+    SOAK_INVALID,
+    SOAK_NONE,
+    SOAK_RUNNING,
     Action,
     capture,
     execute,
@@ -35,16 +39,38 @@ from ownership_runner import (
     preflight,
     restore_plan,
     soak_interlock,
+    soak_state,
+    subject_identity,
 )
 
 SOAK_START = "2026-08-16T23:14:13.530740+00:00"
 OPEN = (True, "soak complete")
 
 
-def _baseline(tmp_path, start=SOAK_START):
-    p = tmp_path / "soak-baseline.json"
-    p.write_text(json.dumps({"soak_start_utc": start, "rss": {}}))
+SUBJECT = [
+    {"id": "aaaaaaaaaaaa", "started_at": "2026-08-16T23:00:00Z",
+     "image": "sha256:deadbeef01", "name": "netops-correlation-1"},
+    {"id": "bbbbbbbbbbbb", "started_at": "2026-08-16T23:00:01Z",
+     "image": "sha256:deadbeef01", "name": "netops-correlation-2"},
+]
+
+
+def _baseline(tmp_path, start=SOAK_START, subject=SUBJECT, name="soak-baseline.json"):
+    p = tmp_path / name
+    doc = {"soak_start_utc": start, "rss": {}}
+    if subject is not None:
+        doc["subject"] = {"service": "correlation", "containers": subject}
+    p.write_text(json.dumps(doc))
     return str(p)
+
+
+def _probe(entries):
+    """An identity probe returning exactly `entries`."""
+    return lambda: [dict(e) for e in entries]
+
+
+def _after(hours=72.1):
+    return _dt.datetime.fromisoformat(SOAK_START) + _dt.timedelta(hours=hours)
 
 
 class FakeStack:
@@ -76,10 +102,12 @@ def test_soak_interlock_blocks_while_running(tmp_path):
     assert "REFUSING" in reason and "remaining" in reason
 
 
-def test_soak_interlock_opens_after_72h(tmp_path):
-    now = _dt.datetime.fromisoformat(SOAK_START) + _dt.timedelta(hours=72.1)
-    ok, reason = soak_interlock(now, _baseline(tmp_path))
+def test_soak_interlock_opens_after_72h_when_subject_is_intact(tmp_path):
+    """The ONLY path to open: window elapsed AND the same containers throughout."""
+    ok, reason = soak_interlock(_after(), _baseline(tmp_path),
+                                identity_probe=_probe(SUBJECT))
     assert ok is True and "soak complete" in reason
+    assert SOAK_COMPLETE in reason
 
 
 def test_soak_interlock_blocks_on_unreadable_baseline(tmp_path):
@@ -102,6 +130,135 @@ def test_absent_baseline_means_no_soak_and_is_allowed(tmp_path):
     ok, reason = soak_interlock(_dt.datetime.now(_dt.timezone.utc),
                                 str(tmp_path / "nope.json"))
     assert ok is True and "no soak" in reason
+
+
+# --- soak interlock: subject identity (tracker 158) ------------------------
+
+def test_the_2026_08_19_defect_subject_replaced_mid_soak_is_invalid(tmp_path):
+    """THE REGRESSION TEST. This exact run returned 'soak complete'.
+
+    Both correlation replicas were recreated 16h35m into the 72h window
+    (deploying 94e8561d). The clock-only interlock opened on schedule. The soak
+    had measured nothing for 46 hours.
+    """
+    replaced = [
+        {"id": "cccccccccccc", "started_at": "2026-08-17T15:49:51Z",
+         "image": "sha256:cafe000002", "name": "netops-correlation-1"},
+        {"id": "dddddddddddd", "started_at": "2026-08-17T15:49:53Z",
+         "image": "sha256:cafe000002", "name": "netops-correlation-2"},
+    ]
+    state, reason = soak_state(_after(), _baseline(tmp_path),
+                               identity_probe=_probe(replaced))
+    assert state == SOAK_INVALID
+    assert "SUBJECT REPLACED" in reason
+    ok, _ = soak_interlock(_after(), _baseline(tmp_path),
+                           identity_probe=_probe(replaced))
+    assert ok is False
+
+
+def test_baseline_without_subject_is_invalid_not_complete(tmp_path):
+    """Every pre-158 baseline is unverifiable. Unverifiable is not complete."""
+    state, reason = soak_state(_after(), _baseline(tmp_path, subject=None),
+                               identity_probe=_probe(SUBJECT))
+    assert state == SOAK_INVALID
+    assert "NO subject identity" in reason
+
+
+def test_same_id_but_restarted_in_place_is_invalid(tmp_path):
+    """A container that kept its id still reset its RSS when it restarted."""
+    restarted = [dict(SUBJECT[0]),
+                 dict(SUBJECT[1], started_at="2026-08-18T04:00:00Z")]
+    state, reason = soak_state(_after(), _baseline(tmp_path),
+                               identity_probe=_probe(restarted))
+    assert state == SOAK_INVALID
+    assert "SUBJECT RESTARTED OR REBUILT" in reason
+
+
+def test_same_id_but_rebuilt_image_is_invalid(tmp_path):
+    """A redeploy under the same id is still a different thing being measured."""
+    rebuilt = [dict(SUBJECT[0]), dict(SUBJECT[1], image="sha256:0000newbld")]
+    state, reason = soak_state(_after(), _baseline(tmp_path),
+                               identity_probe=_probe(rebuilt))
+    assert state == SOAK_INVALID
+    assert "SUBJECT RESTARTED OR REBUILT" in reason
+
+
+def test_scaled_subject_is_invalid(tmp_path):
+    """Losing or gaining a replica changes what the aggregate RSS means."""
+    state, reason = soak_state(_after(), _baseline(tmp_path),
+                               identity_probe=_probe(SUBJECT[:1]))
+    assert state == SOAK_INVALID
+    assert "SUBJECT REPLACED" in reason
+
+
+def test_unprobeable_subject_is_invalid_never_complete(tmp_path):
+    """Class 2b: a probe that sees nothing must not read as 'nothing changed'."""
+    state, reason = soak_state(_after(), _baseline(tmp_path),
+                               identity_probe=_probe([]))
+    assert state == SOAK_INVALID
+    assert "could not be identified" in reason
+
+
+def test_malformed_subject_record_is_invalid(tmp_path):
+    state, _ = soak_state(_after(), _baseline(tmp_path, subject=[{"nope": 1}]),
+                          identity_probe=_probe(SUBJECT))
+    assert state == SOAK_INVALID
+
+
+def test_identity_is_irrelevant_while_the_window_is_still_open(tmp_path):
+    """Running blocks on time alone — identity cannot rescue an unfinished soak."""
+    state, _ = soak_state(_after(hours=23), _baseline(tmp_path),
+                          identity_probe=_probe(SUBJECT))
+    assert state == SOAK_RUNNING
+
+
+def test_absent_baseline_state_is_no_soak(tmp_path):
+    state, reason = soak_state(_after(), str(tmp_path / "nope.json"))
+    assert state == SOAK_NONE
+    assert "DELIBERATE" in reason
+
+
+def test_full_length_ids_match_short_recorded_ids(tmp_path):
+    """docker ps gives 12 chars, inspect gives 64 — normalisation must hold."""
+    longform = [dict(c, id=c["id"] * 6) for c in SUBJECT]
+    state, _ = soak_state(_after(), _baseline(tmp_path),
+                          identity_probe=_probe(longform))
+    assert state == SOAK_COMPLETE
+
+
+# --- subject_identity() probe ---------------------------------------------
+
+def test_subject_identity_parses_docker_output():
+    calls = []
+
+    def runner(cmd):
+        calls.append(cmd)
+        if cmd[1] == "ps":
+            return 0, "aaaaaaaaaaaa\nbbbbbbbbbbbb\n", ""
+        return 0, ("a" * 64 + "\t2026-08-16T23:00:00Z\tsha256:deadbeef0123456789\t/netops-correlation-1\n"
+                   + "b" * 64 + "\t2026-08-16T23:00:01Z\tsha256:deadbeef0123456789\t/netops-correlation-2\n"), ""
+
+    got = subject_identity(runner=runner)
+    assert [c["id"] for c in got] == ["a" * 12, "b" * 12]
+    assert got[0]["name"] == "netops-correlation-1"
+    assert got[0]["started_at"] == "2026-08-16T23:00:00Z"
+
+
+def test_subject_identity_returns_empty_on_docker_failure():
+    """Never invent a subject. Empty means 'unknown', which the caller blocks on."""
+    assert subject_identity(runner=lambda cmd: (1, "", "docker daemon down")) == []
+
+
+def test_subject_identity_returns_empty_when_no_containers():
+    assert subject_identity(runner=lambda cmd: (0, "", "")) == []
+
+
+def test_subject_identity_survives_a_malformed_inspect_line():
+    def runner(cmd):
+        if cmd[1] == "ps":
+            return 0, "aaaaaaaaaaaa\n", ""
+        return 0, "garbage-with-no-tabs\n", ""
+    assert subject_identity(runner=runner) == []
 
 
 # --- preflight -------------------------------------------------------------
