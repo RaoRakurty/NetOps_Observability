@@ -16,8 +16,10 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
 import uuid
+from collections import OrderedDict
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
@@ -450,6 +452,51 @@ class Observer:
             capped = cap_label(v, where="observer", field_name=f)
             if capped != v:
                 object.__setattr__(self, f, capped)
+
+
+# TRACKER 156. Observers are per-DEVICE facts that repeat on every event from
+# that device: one syslog line built a fresh Observer, and at the GA burst rate
+# that is thousands of identical immutable objects per second, each also
+# retained for as long as its Signal sits in the evidence window. Observer is a
+# frozen dataclass of hashable scalars, so instances are interchangeable by
+# value and one per (device, type, path, ...) is enough.
+#
+# Bounded on purpose (§9): a hostile or misconfigured source that varies
+# observer_id per message must not turn this into an unbounded map. On overflow
+# the oldest entry is evicted and construction simply falls back to a fresh
+# object — the cache is an allocation optimisation, never a correctness input.
+OBSERVER_CACHE_MAX = int(os.environ.get("CORR_OBSERVER_CACHE_MAX", "20000"))
+_OBSERVER_CACHE: OrderedDict[tuple, Observer] = OrderedDict()
+OBSERVER_CACHE_EVICTED = 0
+
+
+def observer_of(observer_id: str, observer_type: ObserverType, *,
+                location: str = "", trust_domain: str = "",
+                collection_path: str = "direct",
+                clock_quality: str = "unknown") -> Observer:
+    """An Observer, reusing an identical one when we have already built it.
+
+    Value-identical to `Observer(...)`: same fields, same capping (the cached
+    instance was itself produced by the constructor, so __post_init__ ran). The
+    key is the RAW arguments, so two callers that differ only in something
+    __post_init__ would cap to the same value get separate entries — correct,
+    just marginally less effective.
+    """
+    global OBSERVER_CACHE_EVICTED
+    key = (observer_id, observer_type, location, trust_domain,
+           collection_path, clock_quality)
+    got = _OBSERVER_CACHE.get(key)
+    if got is not None:
+        _OBSERVER_CACHE.move_to_end(key)
+        return got
+    obs = Observer(observer_id=observer_id, observer_type=observer_type,
+                   location=location, trust_domain=trust_domain,
+                   collection_path=collection_path, clock_quality=clock_quality)
+    _OBSERVER_CACHE[key] = obs
+    if len(_OBSERVER_CACHE) > OBSERVER_CACHE_MAX:
+        _OBSERVER_CACHE.popitem(last=False)
+        OBSERVER_CACHE_EVICTED += 1
+    return obs
 
 
 @dataclass(frozen=True)

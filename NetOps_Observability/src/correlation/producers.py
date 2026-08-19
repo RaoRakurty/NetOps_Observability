@@ -32,6 +32,7 @@ from signals import (
     Severity,
     Signal,
     Source,
+    observer_of,
 )
 from timenorm import parse_any_timestamp
 
@@ -444,9 +445,11 @@ def syslog_control_signal(ev: dict, tenant: str, ingest_ts: datetime) -> Signal 
     ctoken = (tag + " " + str(ev.get("facility") or "") + " " + str(ev.get("event_type") or "")).upper()
     ts = parse_event_ts(ev.get("timestamp"), reference=ingest_ts) or ingest_ts
     ts_ms = int(ts.timestamp() * 1000)
-    observer = Observer(
-        observer_id=host,
-        observer_type=ObserverType.DEVICE,
+    # Interned (tracker 156): this is a per-DEVICE fact rebuilt on every syslog
+    # line. See signals.observer_of — bounded, value-identical.
+    observer = observer_of(
+        host,
+        ObserverType.DEVICE,
         collection_path="direct",   # the device itself emitted the event
         clock_quality="unknown",
     )
@@ -1007,6 +1010,23 @@ _PORT_EVENT_RULES: list[tuple[re.Pattern, str, bool, Severity]] = [
 # rides the signal (attrs.message, its own 240-char cap) and OpenSearch.
 _PORT_EVENT_TEXT_CAP = 2000
 
+# TRACKER 156. Every syslog line used to run all of _PORT_EVENT_RULES — measured
+# at 12 of the 16.5 regex searches per event, and for ordinary traffic
+# (%LINK-3-UPDOWN, BGP adjacency, …) all 12 miss. This is the UNION of exactly
+# those patterns, so it is a sound pre-filter: a union matches if and only if at
+# least one alternative matches, therefore a message the union rejects cannot
+# match any individual rule. It is built FROM the rules rather than hand-written,
+# so it cannot drift out of sync when a rule is added.
+#
+# IGNORECASE is applied to the whole union even though a few rules are
+# case-sensitive. That can only make the pre-filter MORE permissive — it may let
+# a line through to the real chain that then matches nothing, which costs a few
+# microseconds and changes no outcome. The direction that would be a bug
+# (rejecting a line a rule would have matched) is impossible by construction.
+_PORT_EVENT_PREFILTER = re.compile(
+    "|".join(f"(?:{pat.pattern})" for pat, _k, _i, _s in _PORT_EVENT_RULES),
+    re.IGNORECASE)
+
 
 def _port_of(ev: dict) -> str:
     """Best-effort port/interface name from the parsed envelope."""
@@ -1035,10 +1055,17 @@ def port_event_signal(ev: dict, tenant: str, ingest_ts: datetime) -> Signal | No
         str(ev.get("event_type") or "")[:256],
         str(ev.get("appname") or "")[:256],
     ))
+    # One union search instead of twelve (tracker 156). Placed BEFORE the
+    # timestamp parse and the Observer construction, because for a non-port line
+    # those were pure waste too — an allocation and a date parse per event that
+    # nothing ever read.
+    if not _PORT_EVENT_PREFILTER.search(ctoken):
+        return None
     ts = parse_event_ts(ev.get("timestamp"), reference=ingest_ts) or ingest_ts
     ts_ms = int(ts.timestamp() * 1000)
-    observer = Observer(
-        observer_id=host, observer_type=ObserverType.DEVICE,
+    # Interned (tracker 156): identical per-device Observer built on every event.
+    observer = observer_of(
+        host, ObserverType.DEVICE,
         collection_path="direct", clock_quality="unknown",
     )
     for pat, kind, iface_scoped, sev in _PORT_EVENT_RULES:

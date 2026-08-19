@@ -216,6 +216,11 @@ _cloud_topo_mtimes: dict[str, float] = {}        # filename → last-seen mtime
 TENANT_ENRICHMENT_FILE = os.environ.get("TENANT_ENRICHMENT_FILE", "/data/enrichment/device_tenant.csv")
 _tenant_map: dict[str, str] = {}
 _tenant_mtime: float = -1.0
+# How often the device->tenant registry file may be re-stat'ed (tracker 156).
+# The exporter rewrites it every 60s; 1s keeps pickup effectively immediate
+# while taking the syscall off the per-event path.
+TENANT_STAT_EVERY_S = float(os.environ.get("CORR_TENANT_STAT_EVERY_S", "1.0"))
+_tenant_stat_at: float = -1e9
 
 
 def canon_tenant(t: str) -> str:
@@ -243,7 +248,22 @@ def _tenant_registry() -> dict[str, str]:
     here is unambiguous by construction.
 
     Cheap: re-reads the CSV only when its mtime changes."""
-    global _tenant_map, _tenant_mtime
+    global _tenant_map, _tenant_mtime, _tenant_stat_at
+    # Tracker 156: this ran os.path.getmtime on EVERY event — one syscall per
+    # syslog line, 40,000 in a 40,000-event profile. The writer refreshes the
+    # CSV every 60s, so restatting more often than TENANT_STAT_EVERY_S buys
+    # nothing. The mtime comparison below is unchanged; only how often we ask
+    # the filesystem is.
+    nowm = time.monotonic()
+    # Only throttle once a map has actually been loaded: a first call, or a
+    # caller that reset _tenant_mtime to force a reload, must still stat
+    # immediately. Otherwise the throttle would delay the FIRST registry read,
+    # which is exactly when events are most likely to be refused as
+    # unattributable (tracker 159's registry-propagation edge).
+    loaded = isinstance(_tenant_mtime, (int, float)) and _tenant_mtime >= 0
+    if loaded and nowm - _tenant_stat_at < TENANT_STAT_EVERY_S:
+        return _tenant_map
+    _tenant_stat_at = nowm
     try:
         mt = os.path.getmtime(TENANT_ENRICHMENT_FILE)
     except OSError:
@@ -4381,8 +4401,13 @@ async def handle_syslog(ev: dict) -> None:
         keep_deadletter_payload("syslog", ev, exc)
         return
     if CORR_SIGNALS_ENABLED and ch is not None:
+        # One clock read per event (tracker 156): datetime.now was called five
+        # times per syslog line, and both producers want the SAME receive time
+        # anyway — two reads could straddle a second boundary and stamp two
+        # signals from one line with different receive clocks.
+        recv_now = datetime.now(timezone.utc)
         try:
-            cp_sig = syslog_control_signal(ev, cp_tenant, datetime.now(timezone.utc))
+            cp_sig = syslog_control_signal(ev, cp_tenant, recv_now)
         except DeadLetter as exc:
             DEADLETTER_COUNT += 1
             keep_deadletter_payload("syslog", ev, exc)
@@ -4392,13 +4417,20 @@ async def handle_syslog(ev: dict) -> None:
             await batch_signal(cp_sig.to_ch_row())  # batched: lane=syslog
             SYSLOG_SIGNALS += 1
             buffer_signal(cp_sig)
-            log.info("control-plane signal %s: %s %s",
-                     cp_sig.kind, cp_sig.entity_id, cp_sig.attrs.get("state", ""))
+            # DEBUG, not INFO (tracker 156). This fired once per accepted
+            # signal — two lines per syslog event, ~4,000 lines/s at the GA
+            # burst rate — and every one was formatted, written to stdout, and
+            # then shipped through Vector into OpenSearch. The rate it was
+            # reporting is already exposed as SYSLOG_SIGNALS / corr metrics, so
+            # nothing observable is lost; the per-signal detail is still there
+            # at debug level when someone is actually chasing one event.
+            log.debug("control-plane signal %s: %s %s",
+                      cp_sig.kind, cp_sig.entity_id, cp_sig.attrs.get("state", ""))
         # Port Intelligence physical-layer event (#94 P3b): transceiver/optics/
         # DOM/FEC syslog → sig.ent.spdc evidence kinds. Independent of the
         # control-plane classifier (a line can be one or the other, rarely both).
         try:
-            pe_sig = port_event_signal(ev, cp_tenant, datetime.now(timezone.utc))
+            pe_sig = port_event_signal(ev, cp_tenant, recv_now)
         except DeadLetter as exc:
             DEADLETTER_COUNT += 1
             keep_deadletter_payload("port_event", ev, exc)
@@ -4408,7 +4440,7 @@ async def handle_syslog(ev: dict) -> None:
             await batch_signal(pe_sig.to_ch_row())  # batched: lane=syslog
             SYSLOG_SIGNALS += 1
             buffer_signal(pe_sig)
-            log.info("port-event signal %s: %s", pe_sig.kind, pe_sig.entity_id)
+            log.debug("port-event signal %s: %s", pe_sig.kind, pe_sig.entity_id)
         # Clock-skew meta-finding (log-time standard S5/R5): Vector stamps
         # clock_skew_s on the event when the origin timestamp disagrees with the
         # receive clock beyond tolerance; here it becomes a per-device signal.
