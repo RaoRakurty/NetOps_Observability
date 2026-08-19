@@ -1625,7 +1625,18 @@ class Harness:
             self.phase("interrupted", "FAIL", {}, "run interrupted by signal")
         finally:
             try:
-                self.cleanup()
+                if getattr(self.args, "skip_cleanup", False):
+                    self.phase(
+                        "cleanup", "SKIPPED",
+                        {"reason": "--skip-cleanup (diagnostic run)",
+                         "residue_warning": (
+                             "devices, corr_signals, corr_objects and OpenSearch "
+                             "docs are STILL PRESENT and will be counted by the "
+                             "next run's baselines")},
+                        "cleanup deliberately skipped for investigation — this "
+                        "run is NOT qualification evidence")
+                else:
+                    self.cleanup()
             except Exception as exc:  # noqa: BLE001 — cleanup must never mask the run error silently
                 warn(f"cleanup raised: {exc!r}")
                 self.phase("cleanup", "FAIL", {}, f"cleanup crashed: {exc!r}")
@@ -1685,6 +1696,13 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
                     help="API base URL (default http://localhost:<BASE_PORT from .env>)")
     ap.add_argument("--project", default="",
                     help="compose project name (default COMPOSE_PROJECT_NAME or netops)")
+    ap.add_argument(
+        "--skip-cleanup", action="store_true",
+        help="DIAGNOSTIC ONLY. Leave devices, ClickHouse rows and OpenSearch "
+             "docs in place so the run can be investigated afterwards. The "
+             "2026-08-19 927/1000 coverage gap could not be diagnosed because "
+             "cleanup purges the run's rows before anything can query them. "
+             "Never use for qualification: the next run inherits the residue.")
     ap.add_argument("--dry-run", action="store_true",
                     help="print the full plan and exit; touches nothing")
     # tracker 152 §8.3 — twin composition. Default is the internal generator,
