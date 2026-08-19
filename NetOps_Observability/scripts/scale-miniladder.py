@@ -524,6 +524,32 @@ class Stack:
             return False, err.strip()[:400]
         return True, out
 
+    def registry_missing(self, identities: list[str]) -> list[str]:
+        """Which of `identities` the correlation engine's registry does NOT hold.
+
+        TRACKER 161. Reads the enrichment CSV the engine actually loads, rather
+        than trusting a count from /healthz — the count is a fleet-wide total
+        and cannot say whether THESE devices are attributable. Returns [] when
+        the file cannot be read, and the caller keeps its count check as the
+        backstop, so an unreadable file never reads as "all present".
+        """
+        cc = self.cid("correlation")
+        if not cc or not identities:
+            return []
+        rc, out, err = run(["docker", "exec", cc, "sh", "-c",
+                            "cat /data/enrichment/device_tenant.csv 2>/dev/null || true"],
+                           DOCKER_TIMEOUT)
+        if rc != 0 or not out.strip():
+            warn(f"registry read failed ({err.strip()[:120]}) — falling back to the "
+                 f"count check, which cannot see per-identity gaps")
+            return []
+        present = set()
+        for line in out.splitlines()[1:]:
+            ident = line.split(",", 1)[0].strip()
+            if ident:
+                present.add(ident)
+        return [i for i in identities if i not in present]
+
     def corr_healthz(self) -> dict:
         ok, out = self.corr_get("/healthz")
         if not ok:
@@ -681,6 +707,8 @@ class Harness:
         self.phases: list[dict] = []
         self.baseline: dict = {}
         self.created_ids: list[str] = []
+        # requested name -> canonical id, when dedupe absorbed the create
+        self.absorbed: dict[str, str] = {}
         self.injected_total = 0
         self.burst_seconds = 0.0
         self.produce_failures: list[str] = []
@@ -891,17 +919,42 @@ class Harness:
             t = time.monotonic()
             st, resp = self.stack.api("POST", "/api/devices", body)
             durations.append(time.monotonic() - t)
-            if st == 201:
+            # TRACKER 161: a 201 is not proof the requested identity exists.
+            # Cross-source dedupe can absorb a create into an existing device
+            # that shares an identity token (management IP), and the API used to
+            # answer 201 while echoing the caller's object back. 73 devices were
+            # onboarded that way on 2026-08-19 and every event they emitted was
+            # unattributable. Trust the CANONICAL identity the API reports, not
+            # the status code.
+            canonical = ""
+            if isinstance(resp, dict):
+                canonical = str(resp.get("id") or "")
+            if st == 201 and canonical == name:
                 self.created_ids.append(name)
+            elif st in (200, 201) and canonical and canonical != name:
+                # Absorbed into an existing device — record the mapping and do
+                # NOT count it as this run's device; nothing downstream will key
+                # on the name we asked for.
+                self.absorbed[name] = canonical
             else:
-                failures.append(f"{name}: HTTP {st} {str(resp)[:120]}")
+                failures.append(f"{name}: HTTP {st} canonical={canonical or '-'} "
+                                f"{str(resp)[:100]}")
                 if len(failures) >= 10:
                     break
         total_wall = time.monotonic() - t0
 
         ev: dict = {"devices_requested": n, "devices_created": len(self.created_ids),
+                    "devices_absorbed_by_dedupe": len(self.absorbed),
+                    "absorbed_mappings": dict(list(self.absorbed.items())[:20]),
                     "window": k, "total_wall_s": round(total_wall, 2),
                     "failures": failures[:10]}
+        if self.absorbed:
+            return self.phase(
+                "onboard", "FAIL", ev,
+                f"{len(self.absorbed)} of {n} requested devices were ABSORBED by "
+                f"dedupe into an existing device (stale residue on the same "
+                f"address?). Their telemetry would be unattributable, so this "
+                f"run cannot prove 1000/1000 — clear the residue and re-run")
         if failures:
             return self.phase("onboard", "FAIL", ev,
                               f"{len(failures)}+ create failures (first: {failures[0]})")
@@ -1015,17 +1068,32 @@ class Harness:
         # every ~60s; the engine reloads it on mtime change. Without this gate
         # every injected event is tenant-refused (identity_unattributable)
         # straight into the DLQ — proven live 2026-08-16.
+        # TRACKER 161: a COUNT cannot prove the right identities are present.
+        # On 2026-08-19 this gate passed at 2000 total identities while 73 of
+        # THIS run's devices were absent from the registry, and every event they
+        # produced was refused. Verify the identities we actually need.
         want = self.baseline.get("registry_identities", 0) + len(self.created_ids)
         deadline = time.monotonic() + 240
         current = -1
+        missing: list[str] = []
         while time.monotonic() < deadline:
             hz = self.stack.corr_healthz()
             current = (hz.get("tenant_verification", {}).get("registry_identities", -1)
                        if isinstance(hz, dict) else -1)
-            if current >= want:
+            missing = self.stack.registry_missing(self.created_ids)
+            if not missing and current >= want:
                 break
             time.sleep(10)
-        ev["registry_identities"] = {"want_at_least": want, "observed": current}
+        ev["registry_identities"] = {"want_at_least": want, "observed": current,
+                                     "missing_identities": len(missing),
+                                     "missing_sample": missing[:20]}
+        if missing:
+            return self.phase("burst", "FAIL", ev,
+                              f"{len(missing)} of this run's {len(self.created_ids)} device "
+                              f"identities are ABSENT from the correlation engine's registry "
+                              f"after 240s (total identities {current}, which is why a "
+                              f"count-only gate passed) — their events would be "
+                              f"tenant-refused; aborting the burst")
         if current < want:
             return self.phase("burst", "FAIL", ev,
                               f"device registry never propagated to the correlation engine "

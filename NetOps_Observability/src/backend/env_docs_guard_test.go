@@ -30,6 +30,13 @@ import (
 // envDocsExempt lists documented UPPER_SNAKE tokens that are not switches this
 // stack consumes, with the reason they are documented anyway.
 var envDocsExempt = map[string]string{
+	// Documented in TRACKER.md as MEASURED AND REJECTED: correlation's RSS
+	// growth is pymalloc arena residency, not glibc arena fragmentation, so the
+	// glibc knob cannot reach it (293.0 MB at default, 293.3 at 2, 293.0 at 1 —
+	// 2026-08-19). It is named so nobody spends another afternoon on it, and
+	// nothing consumes it ON PURPOSE. If that ever changes, wire it and delete
+	// this entry.
+	"MALLOC_ARENA_MAX": "documented as measured-and-rejected (tracker 156); deliberately not consumed",
 	// A copy-paste PLACEHOLDER in device syslog/flow config instructions
 	// ("Replace MONITOR_HOST with the host running the stack") — the operator
 	// substitutes it on the device CLI; nothing in this stack reads it.
@@ -38,7 +45,29 @@ var envDocsExempt = map[string]string{
 
 var upperSnakeRe = regexp.MustCompile(`[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+`)
 
-// backtickSpans extracts the content of `...` spans and fenced code blocks.
+// pathLikeSpan reports whether a backticked span is a file path rather than a
+// switch. Evidence documents are named like TRACKER156_EVIDENCE_2026-08-19.md,
+// and the UPPER_SNAKE regex happily extracts "TRACKER156_EVIDENCE_2026" out of
+// one — which the guard then reports as an env switch nothing consumes. That is
+// a false positive that every future dated evidence doc would reproduce, and a
+// guard that cries wolf gets exempted into uselessness. A span containing a
+// path separator or ending in a document/code extension is a filename.
+func pathLikeSpan(span string) bool {
+	inner := strings.Trim(span, "`")
+	inner = strings.TrimSpace(inner)
+	if strings.Contains(inner, "/") {
+		return true
+	}
+	for _, ext := range []string{".md", ".go", ".py", ".yaml", ".yml", ".json", ".sh", ".sql"} {
+		if strings.HasSuffix(inner, ext) {
+			return true
+		}
+	}
+	return false
+}
+
+// backtickSpans extracts the content of `...` spans and fenced code blocks,
+// skipping spans that are file paths (see pathLikeSpan).
 func backtickSpans(md string) []string {
 	// fenced blocks
 	fence := regexp.MustCompile("(?s)```.*?```")
@@ -46,7 +75,32 @@ func backtickSpans(md string) []string {
 	md = fence.ReplaceAllString(md, "")
 	inline := regexp.MustCompile("`[^`\n]+`")
 	spans = append(spans, inline.FindAllString(md, -1)...)
-	return spans
+	out := make([]string, 0, len(spans))
+	for _, sp := range spans {
+		if !pathLikeSpan(sp) {
+			out = append(out, sp)
+		}
+	}
+	return out
+}
+
+// TestPathLikeSpansAreNotEnvSwitches is the negative control for the filter
+// above: it must skip filenames and must NOT skip real switches.
+func TestPathLikeSpansAreNotEnvSwitches(t *testing.T) {
+	for _, sp := range []string{
+		"`docs/scale/TRACKER156_EVIDENCE_2026-08-19.md`",
+		"`TRACKER156_EVIDENCE_2026-08-19.md`",
+		"`scripts/lab/twin/ownership_runner.py`",
+	} {
+		if !pathLikeSpan(sp) {
+			t.Errorf("%s should be treated as a path, not an env switch", sp)
+		}
+	}
+	for _, sp := range []string{"`BUS_PARTITIONS`", "`CORR_WINDOW_BUFFER`", "`LOG_LEVEL=info`"} {
+		if pathLikeSpan(sp) {
+			t.Errorf("%s is a real switch and must still be checked", sp)
+		}
+	}
 }
 
 // collectDocumentedEnvTokens scans the operator docs (docs/*.md non-recursive —

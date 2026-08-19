@@ -265,7 +265,38 @@ func (a *DiscoveryAggregator) RefreshNow() {
 func (a *DiscoveryAggregator) Devices() []models.Device {
 	a.mu.RLock()
 	defer a.mu.RUnlock()
-	return dedupeDevices(a.cache)
+	devices, _ := dedupeWithOwners(a.cache)
+	return devices
+}
+
+// ResolveIdentity reports what became of the record stored under cacheID once
+// cross-source identity merging has run.
+//
+// TRACKER 161. A create can be absorbed: two records that share an identity
+// token (management IP, serial, or normalized name) are the same physical
+// device, so one of them stops existing as its own row. The caller of
+// POST /api/devices must be told when that happened to ITS device, because
+// nothing downstream will ever key on the name it chose — the tenant-enrichment
+// export writes the SURVIVOR's name, so telemetry bearing the absorbed name is
+// unattributable forever.
+//
+// Returns the surviving record, whether it kept cacheID's own identity, and
+// whether the record was found at all. The answer is derived from the same
+// dedupe the read path uses, so it cannot drift from what /api/devices shows.
+func (a *DiscoveryAggregator) ResolveIdentity(cacheID string) (models.Device, bool, bool) {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	devices, owners := dedupeWithOwners(a.cache)
+	ownerID, ok := owners[cacheID]
+	if !ok {
+		return models.Device{}, false, false
+	}
+	for _, d := range devices {
+		if d.ID == ownerID {
+			return d, ownerID == cacheID, true
+		}
+	}
+	return models.Device{}, false, false
 }
 
 // dedupeDevices collapses per-source records of the same physical device into
@@ -278,6 +309,15 @@ func (a *DiscoveryAggregator) Devices() []models.Device {
 // here is what stops the Infrastructure inventory from showing each synced device
 // twice. Pure (operates on the passed map) so it is unit-testable.
 func dedupeDevices(cache map[string]models.Device) []models.Device {
+	out, _ := dedupeWithOwners(cache)
+	return out
+}
+
+// dedupeWithOwners is dedupeDevices plus the mapping every input cache id ->
+// the id of the merged record that now represents it. ResolveIdentity needs
+// that mapping, and deriving it here rather than reimplementing the union-find
+// is what stops the two answers drifting apart (tracker 161).
+func dedupeWithOwners(cache map[string]models.Device) ([]models.Device, map[string]string) {
 	// Stable iteration: sort the source-prefixed IDs so the merge result and
 	// ordering are deterministic regardless of Go's map iteration order.
 	ids := make([]string, 0, len(cache))
@@ -328,7 +368,11 @@ func dedupeDevices(cache map[string]models.Device) []models.Device {
 	for _, root := range order {
 		out = append(out, merged[root])
 	}
-	return out
+	owners := make(map[string]string, len(ids))
+	for i, id := range ids {
+		owners[id] = merged[find(i)].ID
+	}
+	return out, owners
 }
 
 // RawDevices returns the per-source records BEFORE cross-source merging — the

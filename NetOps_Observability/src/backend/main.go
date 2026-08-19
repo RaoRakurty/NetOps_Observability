@@ -2339,7 +2339,40 @@ func (s *server) handleDevices(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusInternalServerError, errors.New("device was not saved"))
 			return
 		}
-		writeJSON(w, http.StatusCreated, d)
+		// TRACKER 161: 201 must also mean the REQUESTED identity actually
+		// exists. Cross-source dedupe merges records that share an identity
+		// token (management IP, serial, or normalized name), so a create can be
+		// absorbed into an existing device and stop existing as its own row.
+		// This handler used to answer 201 and echo the caller's own object back
+		// regardless, which is a false success: the device is not retrievable
+		// under the name the caller chose, and — because the tenant-enrichment
+		// export writes the SURVIVOR's name — every event bearing the absorbed
+		// name is unattributable forever. Measured 2026-08-19: 73 devices
+		// re-provisioned onto addresses held by stale records lost the merge,
+		// and 22% of a qualification burst went unattributed while the API had
+		// reported 1000 successful creates.
+		//
+		// The merge itself is right (same IP usually is the same device). What
+		// changes is that the caller is TOLD, and always receives the identity
+		// that actually survived.
+		canonical, kept, found := s.discovery.ResolveIdentity(d.ID)
+		if !found {
+			// Stored but not projected: report the store's own view rather than
+			// inventing a verdict.
+			writeJSON(w, http.StatusCreated, d)
+			return
+		}
+		if !kept {
+			log.Printf("device create absorbed by dedupe: requested=%s canonical=%s "+
+				"(shared identity token) — caller told 200, not 201", d.ID, canonical.ID)
+			w.Header().Set("X-Device-Requested-Id", d.ID)
+			w.Header().Set("X-Device-Canonical-Id", canonical.ID)
+			// 200, not 201: nothing was created under the requested identity.
+			writeJSON(w, http.StatusOK, canonical)
+			return
+		}
+		w.Header().Set("X-Device-Canonical-Id", canonical.ID)
+		writeJSON(w, http.StatusCreated, canonical)
 	default:
 		w.Header().Set("Allow", "GET, POST")
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
