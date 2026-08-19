@@ -2263,6 +2263,94 @@ def insert_scope(rows: list[dict]) -> str:
     return "__all__"
 
 
+@dataclass(frozen=True)
+class InsertOutcome:
+    """What actually happened to one ClickHouse insert (tracker 160).
+
+    `committed` is the only thing most callers need. The rest exists so the
+    batcher can tell a TRANSIENT failure (retry it) from a PERMANENT one
+    (quarantine immediately — retrying a schema error just delays the same
+    loss while the backlog grows), and so the dead-letter record can say WHY
+    rather than being an unclassifiable blob.
+    """
+    committed: bool
+    kind: str = ""            # committed | rejected | transport | empty
+    status: int = 0
+    ch_code: int = 0
+    query_id: str = ""
+    error: str = ""
+    rows: int = 0
+    nbytes: int = 0
+
+    def as_evidence(self) -> dict:
+        return {"kind": self.kind, "status": self.status, "ch_code": self.ch_code,
+                "query_id": self.query_id, "error": self.error,
+                "rows": self.rows, "bytes": self.nbytes}
+
+
+# ClickHouse exception codes worth retrying: the server was momentarily unable,
+# not permanently unwilling. Deliberately a SMALL allowlist — anything not named
+# here is treated as permanent and quarantined at once, because retrying a
+# schema or parse error cannot succeed and only delays the loss.
+#   241 MEMORY_LIMIT_EXCEEDED        — the one observed live on 2026-08-19
+#   202 TOO_MANY_SIMULTANEOUS_QUERIES
+#   203 NO_FREE_CONNECTION
+#   209 SOCKET_TIMEOUT / 210 NETWORK_ERROR
+#   252 TOO_MANY_PARTS               — merge backlog; drains on its own
+#   159 TIMEOUT_EXCEEDED
+#   173 CANNOT_ALLOCATE_MEMORY
+CH_RETRYABLE_CODES = frozenset({241, 202, 203, 209, 210, 252, 159, 173})
+
+CORR_CH_RETRY_ATTEMPTS = int(os.environ.get("CORR_CH_RETRY_ATTEMPTS", "4"))
+CORR_CH_RETRY_BASE_S = float(os.environ.get("CORR_CH_RETRY_BASE_S", "0.5"))
+CORR_CH_RETRY_MAX_S = float(os.environ.get("CORR_CH_RETRY_MAX_S", "8.0"))
+CH_RETRIES_ATTEMPTED = 0
+CH_RETRIES_RECOVERED = 0
+CH_RETRIES_EXHAUSTED = 0
+
+
+async def _insert_with_outcome(table: str, rows: list, token: str) -> InsertOutcome:
+    """`ch.insert_detailed` when the sink offers it, else a bool-only fallback.
+
+    A sink that can only answer true/false (every test double, and any future
+    alternative implementation) yields an outcome with no ClickHouse code, which
+    `ch_retryable` treats as PERMANENT. That is the safe default: we retry only
+    when something told us the failure was transient, never on an unexplained
+    one.
+    """
+    assert ch is not None
+    detailed = getattr(ch, "insert_detailed", None)
+    if detailed is not None:
+        return await detailed(table, rows, dedup_token=token)
+    ok = await ch.insert(table, rows, dedup_token=token)
+    if ok is False:
+        return InsertOutcome(committed=False, kind="rejected", rows=len(rows))
+    return InsertOutcome(committed=True, kind="committed", rows=len(rows))
+
+
+def ch_retryable(outcome: InsertOutcome) -> bool:
+    """Transport failures and a named set of server-busy codes are retryable."""
+    if outcome.committed:
+        return False
+    if outcome.kind == "transport":
+        return True
+    return outcome.ch_code in CH_RETRYABLE_CODES
+
+
+def ch_retry_delay(attempt: int, rnd=None) -> float:
+    """Exponential backoff with full jitter, capped. attempt is 1-based.
+
+    Full jitter (uniform in [0, backoff]) rather than fixed backoff: every
+    correlation replica retries the same rejected batch shape at the same
+    moment otherwise, which is how a memory-limit rejection turns into a
+    synchronised retry storm against the server that just said it was short of
+    memory.
+    """
+    import random as _random
+    backoff = min(CORR_CH_RETRY_BASE_S * (2 ** (attempt - 1)), CORR_CH_RETRY_MAX_S)
+    return (rnd or _random.random)() * backoff
+
+
 class CH:
     def __init__(self, base_url: str, user: str, password: str) -> None:
         self.base = base_url.rstrip("/")
@@ -2274,8 +2362,21 @@ class CH:
         verify = os.environ.get("CORRELATION_CA_FILE") or True
         self.client = httpx.AsyncClient(timeout=10.0, verify=verify)
 
-    async def insert(self, table: str, rows: Iterable[dict], dedup_token: str = "") -> bool:
+    async def insert(self, table: str, rows: Iterable[dict],
+                     dedup_token: str = "") -> bool:
         """True on a POSITIVELY COMMITTED insert, False otherwise.
+
+        Thin bool wrapper over `insert_detailed` so the 20 call sites that only
+        care whether it landed are unchanged. Anything that must DECIDE what to
+        do about a failure — retry or quarantine — needs the outcome, because
+        "false" cannot distinguish a transient memory-limit rejection from a
+        schema error that will fail identically forever (tracker 160).
+        """
+        return (await self.insert_detailed(table, rows, dedup_token)).committed
+
+    async def insert_detailed(self, table: str, rows: Iterable[dict],
+                              dedup_token: str = "") -> InsertOutcome:
+        """The insert, with the verdict DETAIL the caller needs to act on.
 
         Ports the wire-level correctness the Go chhttp package proved against the
         pinned ClickHouse 24.8.14.39 (see src/backend/chhttp). A status check
@@ -2299,6 +2400,7 @@ class CH:
         of tokens; immediate retries are always inside it.
         """
         rows = list(rows)
+        nbytes = 0
         # P1 (1000-device scale): a 48,375-edge insert serializes a 22.5 MiB
         # NDJSON body in ONE synchronous comprehension — measured 0.68s of
         # frozen event loop, inside which aiokafka's heartbeat cannot run.
@@ -2307,8 +2409,9 @@ class CH:
             body = await _offload(_ndjson_body, rows)
         else:
             body = _ndjson_body(rows)
+        nbytes = len(body.encode()) if isinstance(body, str) else len(body)
         if not body:
-            return True
+            return InsertOutcome(committed=True, kind="empty", rows=0, nbytes=0)
         # #20 Phase 2 / TENANT-HIGH-4: state the tenant this batch is written on
         # behalf of instead of leaving the setting unset (or wildcarding it on
         # the read side and hoping). See insert_scope().
@@ -2340,7 +2443,9 @@ class CH:
             # the exception detail, which can echo the request body.
             log.error("clickhouse insert transport failure table=%s err=%s",
                       table, type(exc).__name__)
-            return False
+            return InsertOutcome(committed=False, kind="transport",
+                                 error=type(exc).__name__,
+                                 rows=len(rows), nbytes=nbytes)
         code = r.headers.get("X-ClickHouse-Exception-Code")
         qid = r.headers.get("X-ClickHouse-Query-Id", "")
         # A 200 can still be a failure: the exception header, or the exception
@@ -2350,8 +2455,12 @@ class CH:
             # r.text deliberately absent — it can contain customer rows.
             log.error("clickhouse insert failed table=%s status=%s ch_code=%s query_id=%s",
                       table, r.status_code, code or "-", qid or "-")
-            return False
-        return True
+            return InsertOutcome(committed=False, kind="rejected",
+                                 status=r.status_code,
+                                 ch_code=int(code) if (code or "").lstrip("-").isdigit() else 0,
+                                 query_id=qid, rows=len(rows), nbytes=nbytes)
+        return InsertOutcome(committed=True, kind="committed", status=r.status_code,
+                             query_id=qid, rows=len(rows), nbytes=nbytes)
 
     async def query(self, sql: str) -> list[dict]:
         # #20 Phase 2: trusted internal reader — pass tenant_scope=__all__ so the
@@ -2683,15 +2792,55 @@ class CHBatcher:
             token = await _offload(_batch_token, b.rows)
         else:
             token = _batch_token(b.rows)
-        try:
-            ok = await ch.insert(table, b.rows, dedup_token=token)
-        except Exception as exc:  # counted, retained by the caller, re-raised
-            _note_ch_failure(table, type(exc).__name__,
-                             {"batched_rows": len(b.rows)})
-            raise
-        if ok is False:
-            _note_ch_failure(table, "rejected", {"batched_rows": len(b.rows)})
-            self._quarantine_rows(table, b.rows)
+        global CH_RETRIES_ATTEMPTED, CH_RETRIES_RECOVERED, CH_RETRIES_EXHAUSTED
+        # TRACKER 160 — the delivery contract for one batch:
+        #   committed  -> offsets may advance
+        #   retryable  -> bounded retries with exponential backoff + full jitter,
+        #                 re-sent under the SAME content-hash token so a retry
+        #                 after an unknown outcome dedups server-side instead of
+        #                 duplicating
+        #   permanent, or retries exhausted
+        #              -> every row durably spooled to the dead-letter file WITH
+        #                 the reason, ClickHouse code and query id, and only then
+        #                 may offsets advance
+        #
+        # Before this, a positively-rejected batch was quarantined and the method
+        # RETURNED, so flush() succeeded and the consumer committed. There was no
+        # retry of any kind, and CH.insert folded transport failures into the
+        # same `False`, so a momentary ClickHouse blip permanently removed rows
+        # from corr_signals. Code 241 (MEMORY_LIMIT_EXCEEDED) — the one measured
+        # live on 2026-08-19 — is exactly the transient case that should have
+        # been retried.
+        outcome = None
+        for attempt in range(1, CORR_CH_RETRY_ATTEMPTS + 1):
+            try:
+                outcome = await _insert_with_outcome(table, b.rows, token)
+            except Exception as exc:  # counted, retained by the caller, re-raised
+                _note_ch_failure(table, type(exc).__name__,
+                                 {"batched_rows": len(b.rows)})
+                raise
+            if outcome.committed:
+                if attempt > 1:
+                    CH_RETRIES_RECOVERED += 1
+                    log.warning(
+                        "clickhouse insert RECOVERED table=%s attempt=%d rows=%d",
+                        table, attempt, len(b.rows))
+                break
+            if attempt >= CORR_CH_RETRY_ATTEMPTS or not ch_retryable(outcome):
+                break
+            CH_RETRIES_ATTEMPTED += 1
+            delay = ch_retry_delay(attempt)
+            log.warning("clickhouse insert retry table=%s attempt=%d/%d "
+                        "ch_code=%s kind=%s rows=%d backoff=%.2fs",
+                        table, attempt, CORR_CH_RETRY_ATTEMPTS,
+                        outcome.ch_code or "-", outcome.kind, len(b.rows), delay)
+            await asyncio.sleep(delay)
+        if outcome is not None and not outcome.committed:
+            if ch_retryable(outcome):
+                CH_RETRIES_EXHAUSTED += 1
+            _note_ch_failure(table, "rejected", {"batched_rows": len(b.rows),
+                                                 **outcome.as_evidence()})
+            self._quarantine_rows(table, b.rows, outcome)
             BATCH_ROWS_QUARANTINED += len(b.rows)
             return
         BATCH_FLUSHES += 1
@@ -2704,17 +2853,37 @@ class CHBatcher:
             guard.popitem(last=False)
 
     @staticmethod
-    def _quarantine_rows(table: str, rows: list[dict]) -> None:
-        """Durably preserve every row of a positively-rejected batch: one DLQ
-        record per row (replayable), ONE ring summary (the 200-slot ring must
-        not be wiped by a single 500-row batch)."""
+    def _quarantine_rows(table: str, rows: list[dict],
+                         outcome: InsertOutcome | None = None) -> None:
+        """Durably preserve every row of a rejected batch: one DLQ record per
+        row (replayable), ONE ring summary (the 200-slot ring must not be wiped
+        by a single 500-row batch).
+
+        Each record now carries a `reason` and the ClickHouse verdict (tracker
+        160). Without a reason these records were unclassifiable: the mini-ladder
+        accounting gate could only lump them in with benign tenant refusals, so
+        95 genuinely lost signals read as background noise. `payload_truncated`
+        is stated explicitly rather than left to be discovered — a silently
+        truncated payload is not replayable, and a record that claims
+        recoverability it does not have is worse than one that admits the gap.
+        """
         ts = datetime.now(timezone.utc).isoformat()
+        ev = outcome.as_evidence() if outcome is not None else {}
+        reason = ("ch_insert_rejected" if (outcome is None or outcome.kind == "rejected")
+                  else f"ch_insert_{outcome.kind}")
         for r in rows:
+            full = json.dumps(r, default=str)
+            payload = full[:CORR_QUARANTINE_PAYLOAD_CHARS]
             _dlq_append({
                 "ts": ts,
                 "topic": f"chbatch:{table}",
+                "reason": reason,
+                "table": table,
+                "ch": ev,
+                "retries_exhausted": bool(outcome is not None and ch_retryable(outcome)),
+                "payload_truncated": len(full) > CORR_QUARANTINE_PAYLOAD_CHARS,
                 "error": "clickhouse rejected the batched insert",
-                "payload": json.dumps(r, default=str)[:CORR_QUARANTINE_PAYLOAD_CHARS],
+                "payload": payload,
             })
         QUARANTINE.append({
             "ts": ts,
