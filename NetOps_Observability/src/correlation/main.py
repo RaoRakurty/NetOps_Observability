@@ -49,9 +49,6 @@ from aiokafka import AIOKafkaConsumer, TopicPartition
 from aiokafka.abc import ConsumerRebalanceListener
 from aiokafka.coordinator.assignors.range import RangePartitionAssignor
 from aiokafka.partitioner import murmur2
-from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel
-
 from app_producers import app_identity_from_event
 from catalog import builtin_catalog
 from cloud_dependency import build_from_records, merge_path_views
@@ -80,6 +77,7 @@ from engine import (
 )
 from entity_resolver import EntityResolver
 from episodes import EpisodeDetector
+from fastapi import FastAPI, HTTPException
 from flow_app_attribution import AppIdentityIndex, resolve_flow_app
 from flow_direction import flow_direction_sample, netflow_direction_source
 from lb_normalize import normalize_lb_event
@@ -106,6 +104,7 @@ from producers import (
     trap_control_signal,
     ts_invalid_count,
 )
+from pydantic import BaseModel
 from replay import replay_object
 from routing_direction import forwarding_pairs, routing_direction_source
 from series_budget import derive_max_series
@@ -1572,6 +1571,103 @@ ARCHIVE_SLICES_DAMPED = 0    # re-persists whose slice membership was unchanged
 _ARCHIVE_SLICE_HASH: dict[str, str] = {}  # cid → last successfully archived slice id-hash
 
 
+@dataclass(frozen=True)
+class _WindowIndex:
+    """The window grouping every object version of one cycle shares.
+
+    TRACKER 156. `_archive_slice` used to rebuild this per OBJECT: it walked the
+    whole tenant window, bucketed every signal by node key, and recomputed each
+    bucket's min/max ts — so the work was O(objects x window) and, as the tracker
+    put it, "sized by the whole 50k-floor WINDOW rather than by the object". The
+    grouping depends only on the window, so it is built ONCE per cycle here and
+    the per-object step is reduced to the overlap test that actually varies.
+
+    `nodes` is pre-sorted by key so `keep` is assembled in the same order the
+    per-object build produced; the final sort is unchanged. Slices therefore stay
+    byte-identical — pinned by test_replay_archive_slice.py.
+    """
+    nodes: tuple[tuple[str, list[Signal], object, object], ...]
+    loose: tuple[tuple[Signal, str], ...]
+    # id(signal) -> str(signal_id), and id(signal) -> position in the window's
+    # canonical (ts, signal_id) order. Both are computed ONCE per cycle here
+    # instead of once per object: stringifying a UUID and re-sorting the slice
+    # were 1.08M calls and 120 full sorts in one profiled cycle. Keying by id()
+    # is safe because the window list holds a strong reference to every signal
+    # for the whole life of the index, and the index dies with the cycle.
+    sid: dict[int, str]
+    ordinal: dict[int, int]
+
+
+_WINDOW_INDEX_CACHE: dict[int, tuple[int, _WindowIndex]] = {}
+
+# Per-CYCLE archive row cache, keyed by signal id (tracker 156). The archive
+# converts the same window signal to a row once per OPEN OBJECT — 360,000
+# to_ch_row calls in one profiled cycle, each re-running json.dumps over attrs.
+# Caching on the Signal itself was measured and rejected: a Signal lives in
+# WINDOW_BUFFER, so a memo there is retained for the whole window lifetime and
+# costs RSS, which is the resource correlation actually runs out of. This cache
+# is cleared at the top of every engine_cycle, so it is transient by
+# construction — it exists only while the cycle that populated it is running.
+_CYCLE_ROW_CACHE: dict[int, dict] = {}
+
+
+def _sid_of(window: list[Signal], sig: Signal) -> str:
+    """This cycle's cached str(signal_id), falling back to computing it."""
+    got = _window_index(window).sid.get(id(sig))
+    return got if got is not None else sig.signal_id_str
+
+
+def _archive_row(sig: Signal, corr_id: str, version: int) -> dict:
+    """One archive row, reusing this cycle's base row for `sig` if we built one.
+
+    Always returns a FRESH dict (and a fresh entity_tokens list), because the
+    caller stamps archived_for/archived_version onto it and every object needs
+    its own stamps.
+    """
+    key = id(sig)
+    base = _CYCLE_ROW_CACHE.get(key)
+    if base is None:
+        base = sig.to_ch_row()
+        _CYCLE_ROW_CACHE[key] = base
+    row = dict(base)
+    row["entity_tokens"] = list(base["entity_tokens"])
+    row["archived_for"] = corr_id
+    row["archived_version"] = version
+    return row
+
+
+def _window_index(window: list[Signal]) -> _WindowIndex:
+    """Build (or reuse) the per-cycle index for `window`.
+
+    Keyed by id() AND length: engine_cycle hands the same list object to every
+    object version of one tenant within a cycle, and the list is rebuilt each
+    cycle. The length guard means a recycled id() cannot serve a stale index for
+    a different window; the cache is cleared per cycle regardless (see
+    engine_cycle) so this is belt-and-braces, not the correctness argument.
+    """
+    key = id(window)
+    hit = _WINDOW_INDEX_CACHE.get(key)
+    if hit is not None and hit[0] == len(window):
+        return hit[1]
+    sid = {id(s): s.signal_id_str for s in window}
+    ordinal = {id(s): i for i, s in enumerate(
+        sorted(window, key=lambda s: (s.ts, sid[id(s)])))}
+    by_node: dict[str, list[Signal]] = {}
+    loose: list[tuple[Signal, str]] = []
+    for s in window:
+        if s.kind.endswith("_clear") or s.source is Source.APP_IDENTITY:
+            loose.append((s, sid[id(s)]))
+            continue
+        by_node.setdefault(f"{s.entity_type.value}:{s.entity_id}:{s.kind}", []).append(s)
+    nodes = []
+    for k in sorted(by_node):
+        sigs = by_node[k]
+        nodes.append((k, sigs, min(s.ts for s in sigs), max(s.ts for s in sigs)))
+    idx = _WindowIndex(nodes=tuple(nodes), loose=tuple(loose), sid=sid, ordinal=ordinal)
+    _WINDOW_INDEX_CACHE[key] = (len(window), idx)
+    return idx
+
+
 def _archive_slice(snap: ObjectSnapshot, window: list[Signal]) -> list[Signal]:
     """The BOUNDED, replay-exact archive slice for one object version.
 
@@ -1599,23 +1695,20 @@ def _archive_slice(snap: ObjectSnapshot, window: list[Signal]) -> list[Signal]:
     the stored row set) — the trade for not re-writing the full tenant window
     per object version.
     """
+    idx = _window_index(window)
     ws, we = snap.window_start, snap.window_end
-    matched_identities = {str(s.signal_id) for s in snap.identity_signals}
+    matched_identities = {s.signal_id_str for s in snap.identity_signals}
+    order = idx.ordinal
     keep: list[Signal] = []
-    by_node: dict[str, list[Signal]] = {}
-    for s in window:
-        if s.kind.endswith("_clear") or s.source is Source.APP_IDENTITY:
-            if (ws <= s.ts <= we) or str(s.signal_id) in matched_identities:
-                keep.append(s)
-            continue
-        by_node.setdefault(f"{s.entity_type.value}:{s.entity_id}:{s.kind}", []).append(s)
-    for key in sorted(by_node):
-        sigs = by_node[key]
-        lo = min(s.ts for s in sigs)
-        hi = max(s.ts for s in sigs)
+    for s, sid in idx.loose:
+        if (ws <= s.ts <= we) or sid in matched_identities:
+            keep.append(s)
+    for _key, sigs, lo, hi in idx.nodes:
         if lo <= we and ws <= hi:
             keep.extend(sigs)
-    keep.sort(key=lambda s: (s.ts, str(s.signal_id)))
+    # Same order as sorting by (ts, signal_id) — the ordinal IS that order,
+    # computed once per cycle rather than once per object.
+    keep.sort(key=lambda s: order[id(s)])
     return keep
 
 
@@ -1697,26 +1790,26 @@ async def _persist_snapshot(snap: ObjectSnapshot, version: int, state: str,
     slice_sigs = _archive_slice(snap, window)
     if slice_sigs:
         slice_hash = hashlib.sha256(
-            "|".join(str(s.signal_id) for s in slice_sigs).encode()).hexdigest()[:16]
+            "|".join(_sid_of(window, s) for s in slice_sigs).encode()).hexdigest()[:16]
         if _ARCHIVE_SLICE_HASH.get(snap.correlation_id) == slice_hash:
             # Same membership as the last archived version of this object —
             # skip the re-write. Readers (replay._select_slice, the Go timeline
             # archived_version fallback) resolve to the newest slice ≤ version.
             ARCHIVE_SLICES_DAMPED += 1
         else:
-            archive_rows = []
-            for s in slice_sigs:
-                row = s.to_ch_row()
-                row["archived_for"] = snap.correlation_id
-                row["archived_version"] = version
-                archive_rows.append(row)
-            # Chunked: one 50k-row batch built a tens-of-MB NDJSON string in a
-            # single event-loop step; chunks bound the body AND yield between
-            # inserts. All chunks must land before the slice hash is recorded —
-            # a partial slice must be retried whole on the next persist.
+            # Chunked, and BUILT per chunk (tracker 156). Chunking only the
+            # INSERT still materialised the whole slice as row dicts first, so
+            # peak transient memory was slice_size x ~1 KB — tens of MB per
+            # object version, per cycle, in the container that runs closest to
+            # its cgroup cap. Building inside the loop bounds that peak to
+            # CORR_ARCHIVE_CHUNK_ROWS rows regardless of slice size, while the
+            # insert bodies and the loop yields are unchanged. All chunks must
+            # land before the slice hash is recorded — a partial slice must be
+            # retried whole on the next persist.
             all_ok = True
-            for start in range(0, len(archive_rows), CORR_ARCHIVE_CHUNK_ROWS):
-                chunk = archive_rows[start:start + CORR_ARCHIVE_CHUNK_ROWS]
+            for start in range(0, len(slice_sigs), CORR_ARCHIVE_CHUNK_ROWS):
+                chunk = [_archive_row(sig, snap.correlation_id, version)
+                         for sig in slice_sigs[start:start + CORR_ARCHIVE_CHUNK_ROWS]]
                 ok = await ch_insert(
                     "netops.corr_signals_archive", chunk,
                     corr_id=snap.correlation_id, version=version, row_count=len(chunk))
@@ -1780,6 +1873,26 @@ def _topology_stale(now: datetime) -> bool:
 
 
 async def engine_cycle() -> None:
+    """One evaluation, with the per-cycle caches guaranteed to die with it.
+
+    Tracker 156: `_WINDOW_INDEX_CACHE` and `_CYCLE_ROW_CACHE` make one cycle's
+    repeated work cheap, and both are scoped to THIS cycle. They are cleared on
+    the way IN (so no early return or exception can leave a previous cycle's
+    window retained) and again on the way OUT (so nothing is held while the
+    engine is idle between cycles — holding a 50k-row base-row cache between
+    cycles would trade the on-loop win for exactly the RSS this tracker exists
+    to reduce).
+    """
+    _WINDOW_INDEX_CACHE.clear()
+    _CYCLE_ROW_CACHE.clear()
+    try:
+        await _engine_cycle_inner()
+    finally:
+        _WINDOW_INDEX_CACHE.clear()
+        _CYCLE_ROW_CACHE.clear()
+
+
+async def _engine_cycle_inner() -> None:
     """One evaluation: prune window, partition by tenant, run the pure core,
     persist version increments, close quiesced objects."""
     global LAST_GAP_HINTS, VERSIONS_PERSISTED, VERSIONS_DAMPED

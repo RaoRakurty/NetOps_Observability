@@ -542,14 +542,46 @@ class Signal:
     @property
     def signal_id(self) -> uuid.UUID:
         """Deterministic: same (source, native_id, event time) ⇒ same id.
-        Rehydrated signals return their stored id (identity round-trip)."""
+        Rehydrated signals return their stored id (identity round-trip).
+
+        NOT memoised on the instance, deliberately (tracker 156). Caching here
+        looks free and is not: Signal is a dataclass with ~25 fields, so its
+        instances use a key-sharing dict, and writing a second non-field key
+        into __dict__ converts that to a standalone dict — MEASURED at +944
+        bytes per signal, which across the 50k-signal window is ~47 MB of RSS
+        bought for nothing. The archive path's repeated lookups are memoised
+        per CYCLE in main._window_index instead, where they cost nothing once
+        the cycle ends.
+        """
         if self.stored_signal_id:
             return uuid.UUID(self.stored_signal_id)
         ts_ms = int(self.ts.timestamp() * 1000)
         return uuid.uuid5(SIGNAL_NS, f"{self.source.value}|{self.native_id}|{ts_ms}")
 
+    @property
+    def signal_id_str(self) -> str:
+        """`str(signal_id)`. Convenience only — see signal_id on why neither is
+        memoised on the instance."""
+        return str(self.signal_id)
+
     def to_ch_row(self) -> dict:
-        """JSONEachRow shape for netops.corr_signals (frozen schema)."""
+        """JSONEachRow shape for netops.corr_signals (frozen schema).
+
+        DELIBERATELY NOT MEMOISED (tracker 156), unlike signal_id. Two variants
+        were measured against a 20,000-signal window and both REJECTED, because
+        anything cached here is retained for as long as the Signal sits in
+        WINDOW_BUFFER — i.e. it trades the resource that is scarce for the one
+        that is not:
+
+            variant                RSS      live objs   cycle CPU
+            no memo (this)         185 MB   ...         (see below)
+            attrs-json memo        185 MB    59 MB      2x faster
+            whole-row memo         228 MB    85 MB      no further gain
+
+        The row is rebuilt per call and callers may mutate what they get back
+        (the archive stamps archived_for / archived_version onto it). The
+        per-CYCLE row cache in main.py gets the same CPU saving with transient
+        memory that is freed when the cycle ends."""
         # Additive observer-kind hint (evidence-accounting Phase B). Stamped into
         # attrs — no schema change — so NEW signals carry their default kind while
         # legacy rows classify at read. Never overrides a value a producer already
@@ -564,9 +596,9 @@ class Signal:
         attrs_json = json.dumps(attrs, separators=(",", ":"), sort_keys=True)
         if len(attrs_json.encode()) > ATTRS_MAX_BYTES:
             attrs, attrs_json = _shrink_attrs(attrs, self.kind)
-        return {
+        row = {
             "tenant_id": self.tenant_id,
-            "signal_id": str(self.signal_id),
+            "signal_id": self.signal_id_str,
             "ts": _ch_dt(self.ts),
             "source": self.source.value,
             "kind": self.kind,
@@ -590,6 +622,7 @@ class Signal:
             "deviation": self.deviation,
             "attrs": attrs_json,
         }
+        return row
 
 
     @classmethod
