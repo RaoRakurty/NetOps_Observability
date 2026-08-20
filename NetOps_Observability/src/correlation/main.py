@@ -917,6 +917,26 @@ WINDOW_BUFFER: deque[Signal] = deque(
 # signal_count 14 vs 10 unique). The buffer therefore dedupes by signal id;
 # the set is pruned alongside the buffer so memory stays bounded.
 _BUFFERED_IDS: set[str] = set()
+# The SAME ids, in window order, so eviction never recomputes one.
+#
+# TRACKER 156 (2026-08-20). `_prune_buffer` and the maxlen-eviction branch of
+# `buffer_signal` both did `str(WINDOW_BUFFER[0].signal_id)` — a uuid5, i.e. a
+# SHA-1 — for EVERY signal they evicted, inline on the event loop. buffer_signal
+# had already computed that exact id at insert time to key the dedup set, so the
+# work was pure recomputation, and it is unbounded: a 50,000-signal window aging
+# out in one prune is 50,000 SHA-1s with no await in between. Captured live on
+# 2026-08-20 as the top frame of a 30,989 ms stall — past the 30 s Kafka session
+# timeout — while the container had ~800 MB of FREE memory, so it is a stall
+# source entirely independent of memory pressure.
+#
+# Holding a second reference to a string that already lives in _BUFFERED_IDS
+# costs a pointer per entry, not a string: ~400 KB at the 50k floor.
+_BUFFERED_ID_ORDER: deque[str] = deque(
+    maxlen=max(50_000, int(os.environ.get("CORR_WINDOW_BUFFER", "50000"))))
+# Times the id deque had to be rebuilt because it drifted from the window.
+# Should be 0 in production; non-zero means something mutated one without the
+# other, which the self-heal makes SLOW and VISIBLE rather than WRONG.
+WINDOW_ID_ORDER_RESYNCS = 0
 
 # H14: event timestamps entering the LIVE window are bounded (see
 # buffer_signal). Clamped-future / stale-past counts, exposed on /healthz —
@@ -1465,19 +1485,44 @@ def buffer_signal(sig: Signal) -> None:
     # OLDEST signal. Drop that signal's id from the dedup set in lockstep — else the
     # set leaks unboundedly under a flood AND a later redelivery of an evicted signal
     # would be wrongly deduped (dropped) because its stale id lingers in the set.
+    _sync_buffered_id_order()
     if len(WINDOW_BUFFER) == WINDOW_BUFFER.maxlen:
-        _BUFFERED_IDS.discard(str(WINDOW_BUFFER[0].signal_id))
+        _BUFFERED_IDS.discard(_BUFFERED_ID_ORDER[0])
     _BUFFERED_IDS.add(sid)
+    # Appended in lockstep, and both deques carry the SAME maxlen, so a full
+    # deque drops its head from both at once and the two stay aligned.
     WINDOW_BUFFER.append(sig)
+    _BUFFERED_ID_ORDER.append(sid)
     # #101 write-amp accounting: raw lane pressure per tenant (post-dedup, so a
     # redelivered signal never double-counts).
     _wa_note_raw(sig)
 
 
+def _sync_buffered_id_order() -> None:
+    """Rebuild the id deque if it has drifted from the window.
+
+    Drift is impossible on the production paths — both deques are appended and
+    popped together in this module — but a test that clears one and not the
+    other, or a future edit that touches only one, must degrade to
+    CORRECT-and-slow rather than to silently wrong. The rebuild is the old
+    expensive behaviour, done once and counted, instead of the old expensive
+    behaviour done forever and unnoticed.
+    """
+    global WINDOW_ID_ORDER_RESYNCS
+    if len(_BUFFERED_ID_ORDER) == len(WINDOW_BUFFER):
+        return
+    WINDOW_ID_ORDER_RESYNCS += 1
+    _BUFFERED_ID_ORDER.clear()
+    _BUFFERED_ID_ORDER.extend(str(sig.signal_id) for sig in WINDOW_BUFFER)
+
+
 def _prune_buffer(now: datetime) -> None:
     horizon = now.timestamp() - ENGINE_CFG.window_s
+    _sync_buffered_id_order()
     while WINDOW_BUFFER and WINDOW_BUFFER[0].ts.timestamp() < horizon:
-        _BUFFERED_IDS.discard(str(WINDOW_BUFFER[0].signal_id))
+        # The id was computed once, at insert. Popping it is O(1); recomputing
+        # it was a SHA-1 per evicted signal (tracker 156).
+        _BUFFERED_IDS.discard(_BUFFERED_ID_ORDER.popleft())
         WINDOW_BUFFER.popleft()
 
 
