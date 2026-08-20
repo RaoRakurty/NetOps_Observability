@@ -7,6 +7,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
+import asyncio
 import main
 from signals import (
     EntityType,
@@ -17,6 +18,10 @@ from signals import (
     Signal,
     Source,
 )
+
+def run(coro):
+    return asyncio.run(coro)
+
 
 T0 = datetime(2026, 6, 22, 9, 0, 0, tzinfo=timezone.utc)
 
@@ -81,7 +86,7 @@ def test_prune_ages_out_old_signals_and_their_ids():
     fresh = mk(2, ts=fresh_ts)
     main.buffer_signal(old)
     main.buffer_signal(fresh)
-    main._prune_buffer(fresh_ts)
+    run(main._prune_buffer(fresh_ts))
     ids = {str(s.signal_id) for s in main.WINDOW_BUFFER}
     assert str(old.signal_id) not in ids, "aged-out signal pruned from buffer"
     assert str(old.signal_id) not in main._BUFFERED_IDS, "aged-out id pruned from dedup set"
@@ -110,7 +115,7 @@ def test_h14_far_future_ts_cannot_freeze_pruning_for_everyone():
     assert str(head.signal_id) == str(mk(1, ts=future_ts).signal_id)
     for i in range(2, 7):
         main.buffer_signal(mk(i, ts=now))
-    main._prune_buffer(now + timedelta(hours=2))  # > window_s past every arrival
+    run(main._prune_buffer(now + timedelta(hours=2)))  # > window_s past every arrival
     assert len(main.WINDOW_BUFFER) == 0, \
         "a clamped head must age out — pre-fix the +5y head froze pruning here"
     assert len(main._BUFFERED_IDS) == 0
@@ -127,7 +132,7 @@ def test_h14_past_stale_ts_is_counted_but_never_restamped():
     main.buffer_signal(stale)
     assert main.EVENT_TS_PAST_STALE == before + 1
     assert main.WINDOW_BUFFER[0].ts == stale.ts, "honest event time is kept"
-    main._prune_buffer(now)
+    run(main._prune_buffer(now))
     assert len(main.WINDOW_BUFFER) == 0, "stale signal ages out naturally"
 
 

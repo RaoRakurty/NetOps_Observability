@@ -938,6 +938,17 @@ _BUFFERED_ID_ORDER: deque[str] = deque(
 # other, which the self-heal makes SLOW and VISIBLE rather than WRONG.
 WINDOW_ID_ORDER_RESYNCS = 0
 
+# Housekeeping observability (tracker 156 architecture review, 2026-08-20).
+# The 30,989 ms prune stall was findable ONLY because a bespoke forensic build
+# captured stacks; the service itself exposed nothing about its own maintenance
+# work. These are the minimum that make a prune regression visible in
+# production: how often it runs, how much it evicts, and how long it holds the
+# loop. Deliberately low-cardinality — no per-tenant labels.
+PRUNE_CALLS = 0             # prune invocations (monotonic)
+PRUNE_EVICTED = 0           # signals evicted by age (monotonic)
+PRUNE_SECONDS_LAST = 0.0    # duration of the most recent prune (gauge)
+PRUNE_SECONDS_MAX = 0.0     # worst prune this process has done (gauge)
+
 # H14: event timestamps entering the LIVE window are bounded (see
 # buffer_signal). Clamped-future / stale-past counts, exposed on /healthz —
 # a device with a broken clock must be visible, never a silent re-stamp (§10).
@@ -1487,6 +1498,13 @@ def buffer_signal(sig: Signal) -> None:
     # would be wrongly deduped (dropped) because its stale id lingers in the set.
     _sync_buffered_id_order()
     if len(WINDOW_BUFFER) == WINDOW_BUFFER.maxlen:
+        # The window is FULL and about to drop its oldest signal to make room.
+        # Not data loss — the signal is already in corr_signals — but it IS a
+        # silent narrowing of the correlation horizon, which the 2026-08-20
+        # review flagged as the one place state is shed with no counter. Now it
+        # is countable, so "RCA got thinner under storm" is a visible fact.
+        global WINDOW_OVERFLOW_DROPPED
+        WINDOW_OVERFLOW_DROPPED += 1
         _BUFFERED_IDS.discard(_BUFFERED_ID_ORDER[0])
     _BUFFERED_IDS.add(sid)
     # Appended in lockstep, and both deques carry the SAME maxlen, so a full
@@ -1516,14 +1534,58 @@ def _sync_buffered_id_order() -> None:
     _BUFFERED_ID_ORDER.extend(str(sig.signal_id) for sig in WINDOW_BUFFER)
 
 
-def _prune_buffer(now: datetime) -> None:
+# Maximum signals evicted between yields. The ARCHITECTURAL INVARIANT this
+# serves (2026-08-20 review): no maintenance operation may perform unbounded
+# synchronous work on the correlation event loop.
+#
+# The prune still completes fully in one call — partial pruning would leave
+# expired signals in the window that `by_tenant` then feeds to run_window,
+# silently changing RCA semantics. What is bounded is the CONTIGUOUS block: the
+# work is the same, the loop gets it back every chunk. This is the same shape as
+# Flink's incremental state cleanup — bound the slice, not the job.
+#
+# 5,000 measured at ~6 ms per chunk (60.3 ms for a full 50k eviction), so a
+# worst-case full-window prune yields ten times and never holds the loop for
+# more than single-digit milliseconds.
+CORR_PRUNE_CHUNK = int(os.environ.get("CORR_PRUNE_CHUNK", "5000"))
+PRUNE_YIELDS = 0            # loop hand-backs during pruning (monotonic)
+# Signals dropped because the window was FULL, not because they aged out. The
+# name ends in _DROPPED so the counter-exposure contract discovers it
+# automatically and fails if it is ever left off /healthz.
+WINDOW_OVERFLOW_DROPPED = 0
+
+
+async def _prune_buffer(now: datetime) -> None:
+    global PRUNE_CALLS, PRUNE_EVICTED, PRUNE_SECONDS_LAST, PRUNE_SECONDS_MAX
+    global PRUNE_YIELDS
+    started = time.monotonic()
     horizon = now.timestamp() - ENGINE_CFG.window_s
     _sync_buffered_id_order()
-    while WINDOW_BUFFER and WINDOW_BUFFER[0].ts.timestamp() < horizon:
-        # The id was computed once, at insert. Popping it is O(1); recomputing
-        # it was a SHA-1 per evicted signal (tracker 156).
-        _BUFFERED_IDS.discard(_BUFFERED_ID_ORDER.popleft())
-        WINDOW_BUFFER.popleft()
+    evicted = 0
+    worst_block = 0.0
+    while True:
+        block_started = time.monotonic()
+        chunk = 0
+        while (WINDOW_BUFFER and WINDOW_BUFFER[0].ts.timestamp() < horizon
+               and chunk < CORR_PRUNE_CHUNK):
+            # The id was computed once, at insert. Popping it is O(1);
+            # recomputing it was a SHA-1 per evicted signal (tracker 156).
+            _BUFFERED_IDS.discard(_BUFFERED_ID_ORDER.popleft())
+            WINDOW_BUFFER.popleft()
+            chunk += 1
+        worst_block = max(worst_block, time.monotonic() - block_started)
+        evicted += chunk
+        if chunk < CORR_PRUNE_CHUNK:
+            break          # nothing left to expire
+        PRUNE_YIELDS += 1
+        await asyncio.sleep(0)   # hand the loop back: heartbeat, fetch, commit
+    PRUNE_CALLS += 1
+    PRUNE_EVICTED += evicted
+    # The gauge reports the worst CONTIGUOUS block, not total elapsed — blocking
+    # is what threatens Kafka membership, and total elapsed across yields does
+    # not.
+    PRUNE_SECONDS_LAST = worst_block
+    PRUNE_SECONDS_MAX = max(PRUNE_SECONDS_MAX, worst_block)
 
 
 # Column subset of to_object_row that feeds the HOT current-state projection
@@ -1967,7 +2029,7 @@ async def _engine_cycle_inner() -> None:
     if ch is None:
         return
     now = datetime.now(timezone.utc)
-    _prune_buffer(now)
+    await _prune_buffer(now)
     # C6: flush this cycle's accumulated flow volume → passive_flow episodes BEFORE
     # partitioning, so the new flow signals join the same window they were measured in.
     await _flush_flow_aggregator(now)
@@ -5109,6 +5171,39 @@ async def metrics_exposition():
         f"corr_archive_rows_written {ARCHIVE_ROWS_WRITTEN}",
         "# TYPE corr_archive_slices_damped counter",
         f"corr_archive_slices_damped {ARCHIVE_SLICES_DAMPED}",
+        # Housekeeping: the window-prune path. The 2026-08-20 review found the
+        # service exposed NOTHING about its own maintenance work, so a 30,989 ms
+        # prune stall was only findable with a bespoke forensic build. Low
+        # cardinality on purpose — counts and durations, no per-tenant labels.
+        "# HELP corr_prune_calls_total Window-prune invocations.",
+        "# TYPE corr_prune_calls_total counter",
+        f"corr_prune_calls_total {PRUNE_CALLS}",
+        "# HELP corr_prune_evicted_total Signals evicted from the window by age.",
+        "# TYPE corr_prune_evicted_total counter",
+        f"corr_prune_evicted_total {PRUNE_EVICTED}",
+        "# HELP corr_prune_seconds_last Duration of the most recent prune.",
+        "# TYPE corr_prune_seconds_last gauge",
+        f"corr_prune_seconds_last {PRUNE_SECONDS_LAST:.6f}",
+        # The alertable one: a prune is synchronous, so this IS event-loop
+        # blocking time. Rising toward the session timeout means membership is
+        # at risk.
+        "# HELP corr_prune_seconds_max Worst prune duration this process (loop-blocking).",
+        "# TYPE corr_prune_seconds_max gauge",
+        f"corr_prune_seconds_max {PRUNE_SECONDS_MAX:.6f}",
+        # Non-zero means the window and its id index drifted and had to be
+        # rebuilt — correct but slow, and it should never happen in production.
+        "# HELP corr_window_id_order_resyncs_total Window/id-index drift rebuilds.",
+        "# TYPE corr_window_id_order_resyncs_total counter",
+        f"corr_window_id_order_resyncs_total {WINDOW_ID_ORDER_RESYNCS}",
+        "# HELP corr_prune_yields_total Loop hand-backs during pruning (chunk boundaries).",
+        "# TYPE corr_prune_yields_total counter",
+        f"corr_prune_yields_total {PRUNE_YIELDS}",
+        # Rising means the evidence window is FULL and shedding its oldest
+        # signals to make room — RCA is getting thinner, which used to be
+        # invisible.
+        "# HELP corr_window_overflow_dropped_total Signals dropped because the window was full.",
+        "# TYPE corr_window_overflow_dropped_total counter",
+        f"corr_window_overflow_dropped_total {WINDOW_OVERFLOW_DROPPED}",
     ]
     lines += [
         # F-40: events lost to a handler exception. Non-zero means a producer is
@@ -5207,6 +5302,16 @@ async def health() -> dict:
             "chaos_fixtures": sorted(CHAOS_FIXTURES.values()),
             "tenant_write_amp_topk": TENANT_WA_LAST,
             "window_signals": len(WINDOW_BUFFER),
+            # Housekeeping visibility (tracker 156 review): a prune that starts
+            # holding the loop must be observable from /healthz, not only from a
+            # forensic build.
+            "prune_calls": PRUNE_CALLS,
+            "prune_evicted": PRUNE_EVICTED,
+            "prune_seconds_last": round(PRUNE_SECONDS_LAST, 4),
+            "prune_seconds_max": round(PRUNE_SECONDS_MAX, 4),
+            "window_id_order_resyncs": WINDOW_ID_ORDER_RESYNCS,
+            "prune_yields": PRUNE_YIELDS,
+            "window_overflow_dropped": WINDOW_OVERFLOW_DROPPED,
             # M29a: legacy z-score series budget — evicted rising means
             # cardinality churn is recycling warm baselines (never silent).
             "series_len": len(SERIES),

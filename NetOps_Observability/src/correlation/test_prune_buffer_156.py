@@ -25,8 +25,14 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
+import asyncio
+import time
 import main
 import signals as S
+
+def run(coro):
+    return asyncio.run(coro)
+
 
 T0 = datetime(2026, 8, 20, 12, 0, 0, tzinfo=timezone.utc)
 
@@ -86,13 +92,13 @@ def test_prune_is_byte_identical_to_the_old_implementation(ahead):
     reference_prune(now)
     want = snapshot()
     load(400)
-    main._prune_buffer(now)
+    run(main._prune_buffer(now))
     assert snapshot() == want
 
 
 def test_prune_preserves_arrival_order():
     load(200)
-    main._prune_buffer(T0 + timedelta(seconds=main.ENGINE_CFG.window_s + 50))
+    run(main._prune_buffer(T0 + timedelta(seconds=main.ENGINE_CFG.window_s + 50)))
     remaining = [str(s.signal_id) for s in main.WINDOW_BUFFER]
     assert remaining == sorted(remaining, key=lambda x: remaining.index(x))
     assert list(main._BUFFERED_ID_ORDER) == remaining, "id deque drifted from the window"
@@ -100,7 +106,7 @@ def test_prune_preserves_arrival_order():
 
 def test_dedup_set_and_window_stay_the_same_size():
     load(300)
-    main._prune_buffer(T0 + timedelta(seconds=main.ENGINE_CFG.window_s + 100))
+    run(main._prune_buffer(T0 + timedelta(seconds=main.ENGINE_CFG.window_s + 100)))
     assert len(main._BUFFERED_IDS) == len(main.WINDOW_BUFFER) == len(main._BUFFERED_ID_ORDER)
 
 
@@ -118,7 +124,7 @@ def test_prune_computes_no_uuid5(monkeypatch):
 
     monkeypatch.setattr(S.uuid, "uuid5", counting)
     monkeypatch.setattr(uuid, "uuid5", counting)
-    main._prune_buffer(T0 + timedelta(seconds=main.ENGINE_CFG.window_s + 100_000))
+    run(main._prune_buffer(T0 + timedelta(seconds=main.ENGINE_CFG.window_s + 100_000)))
     assert len(main.WINDOW_BUFFER) == 0, "the whole window should have aged out"
     assert calls["n"] == 0, f"prune still computed {calls['n']} uuid5s"
 
@@ -130,7 +136,7 @@ def test_a_full_window_prune_is_fast_enough_not_to_threaten_membership():
     import time
     load(20_000)
     t0 = time.perf_counter()
-    main._prune_buffer(T0 + timedelta(seconds=main.ENGINE_CFG.window_s + 100_000))
+    run(main._prune_buffer(T0 + timedelta(seconds=main.ENGINE_CFG.window_s + 100_000)))
     elapsed = time.perf_counter() - t0
     assert len(main.WINDOW_BUFFER) == 0
     assert elapsed < 2.0, (
@@ -145,7 +151,7 @@ def test_desync_self_heals_and_is_counted():
     load(100)
     main._BUFFERED_ID_ORDER.clear()          # simulate drift
     before = main.WINDOW_ID_ORDER_RESYNCS
-    main._prune_buffer(T0 + timedelta(seconds=main.ENGINE_CFG.window_s + 50))
+    run(main._prune_buffer(T0 + timedelta(seconds=main.ENGINE_CFG.window_s + 50)))
     assert main.WINDOW_ID_ORDER_RESYNCS == before + 1, "a resync must be counted"
     assert len(main._BUFFERED_IDS) == len(main.WINDOW_BUFFER)
     assert list(main._BUFFERED_ID_ORDER) == [str(s.signal_id) for s in main.WINDOW_BUFFER]
@@ -158,7 +164,7 @@ def test_desync_still_produces_the_right_answer():
     want = snapshot()
     load(300)
     main._BUFFERED_ID_ORDER.clear()          # drift before pruning
-    main._prune_buffer(now)
+    run(main._prune_buffer(now))
     assert snapshot() == want
 
 
@@ -167,7 +173,7 @@ def test_a_test_that_clears_only_the_window_does_not_corrupt_state():
     load(50)
     main.WINDOW_BUFFER.clear()
     main._BUFFERED_IDS.clear()
-    main._prune_buffer(T0 + timedelta(seconds=main.ENGINE_CFG.window_s + 10))
+    run(main._prune_buffer(T0 + timedelta(seconds=main.ENGINE_CFG.window_s + 10)))
     assert len(main._BUFFERED_ID_ORDER) == 0
 
 
@@ -216,3 +222,147 @@ def test_redelivery_inside_the_window_is_still_deduped(monkeypatch):
     main.buffer_signal(sig)
     assert len(main.WINDOW_BUFFER) == 1, "at-least-once redelivery was not deduped"
     assert len(main._BUFFERED_ID_ORDER) == 1
+
+
+# --- the architectural invariant: bounded work per loop slice --------------
+#
+# "No maintenance operation may perform unbounded synchronous work on the
+# correlation event loop." The prune still COMPLETES in one call — partial
+# pruning would leave expired signals for run_window and silently change RCA
+# semantics — but the contiguous block is bounded and the loop is handed back
+# between chunks. Same total work, bounded slice: Flink's incremental-cleanup
+# shape.
+
+def test_prune_actually_hands_the_loop_back():
+    """THE INVARIANT, proven by a CONCURRENT TASK making progress — not by a
+    counter.
+
+    Counting yields proves only that a counter was incremented. What matters is
+    whether another coroutine (aiokafka's heartbeat, in production) got
+    scheduled while the prune was running. So run a ticker alongside it and
+    require the ticker to have advanced.
+    """
+    async def scenario():
+        load(4 * main.CORR_PRUNE_CHUNK)
+        ticks = {"n": 0}
+
+        async def ticker():
+            while True:
+                ticks["n"] += 1
+                await asyncio.sleep(0)
+
+        t = asyncio.ensure_future(ticker())
+        await asyncio.sleep(0)
+        start = ticks["n"]
+        await main._prune_buffer(
+            T0 + timedelta(seconds=main.ENGINE_CFG.window_s + 100_000))
+        progressed = ticks["n"] - start
+        t.cancel()
+        return progressed, len(main.WINDOW_BUFFER)
+
+    progressed, left = asyncio.run(scenario())
+    assert left == 0, "the prune must still finish the job"
+    assert progressed >= 3, (
+        f"a concurrent task advanced only {progressed} times across 4 chunks — "
+        "the prune is monopolising the event loop again, which is exactly the "
+        "condition that costs Kafka membership")
+
+
+def test_prune_yield_counter_tracks_the_chunking():
+    load(3 * main.CORR_PRUNE_CHUNK + 17)
+    before = main.PRUNE_YIELDS
+    run(main._prune_buffer(T0 + timedelta(seconds=main.ENGINE_CFG.window_s + 100_000)))
+    assert main.PRUNE_YIELDS - before >= 3
+
+
+def test_a_small_prune_does_not_yield_at_all():
+    """Bounded does not mean gratuitous: under one chunk there is nothing to
+    hand back for."""
+    load(10)
+    before = main.PRUNE_YIELDS
+    run(main._prune_buffer(T0 + timedelta(seconds=main.ENGINE_CFG.window_s + 100_000)))
+    assert main.PRUNE_YIELDS == before
+
+
+def test_the_gauge_reports_worst_block_not_total_elapsed():
+    """Blocking time is what threatens Kafka membership. A gauge reporting TOTAL
+    elapsed would overstate the risk and, worse, hide a single long block inside
+    a long total.
+
+    Discriminated by making total and worst-block genuinely diverge: a
+    concurrent task sleeps a real 5 ms at every yield point, so wall-clock total
+    grows with the number of chunks while no single chunk does. A gauge
+    reporting elapsed then reads ~20x the gauge reporting worst-block.
+    """
+    async def scenario():
+        main.CORR_PRUNE_CHUNK = 200
+        load(20 * 200)
+        stop = {"v": False}
+
+        async def burner():
+            # A READY task that consumes real time each turn. A sleeping task
+            # would not do: the prune yields with asyncio.sleep(0), which hands
+            # control to tasks that are already runnable and does NOT wait for a
+            # timer — correct behaviour, and it means only a ready task can
+            # inflate the wall clock here.
+            while not stop["v"]:
+                spin = time.monotonic() + 0.004
+                while time.monotonic() < spin:
+                    pass
+                await asyncio.sleep(0)
+
+        t = asyncio.ensure_future(burner())
+        began = time.monotonic()
+        await main._prune_buffer(
+            T0 + timedelta(seconds=main.ENGINE_CFG.window_s + 100_000))
+        total = time.monotonic() - began
+        stop["v"] = True
+        t.cancel()
+        return total
+
+    try:
+        total = asyncio.run(scenario())
+        assert total > 0.05, (
+            f"the concurrent sleeper did not inflate the total ({total:.4f}s) — "
+            "the prune never yielded, so this test cannot discriminate")
+        assert main.PRUNE_SECONDS_LAST < total / 5, (
+            f"gauge {main.PRUNE_SECONDS_LAST:.4f}s vs total {total:.4f}s across "
+            "20 chunks — it is reporting elapsed, not the worst contiguous block")
+    finally:
+        main.CORR_PRUNE_CHUNK = 5000
+
+
+# --- housekeeping observability -------------------------------------------
+
+def test_prune_counters_move():
+    load(200)
+    calls, evicted = main.PRUNE_CALLS, main.PRUNE_EVICTED
+    run(main._prune_buffer(T0 + timedelta(seconds=main.ENGINE_CFG.window_s + 100)))
+    assert main.PRUNE_CALLS == calls + 1
+    assert main.PRUNE_EVICTED > evicted, "evicted signals must be counted"
+
+
+def test_window_overflow_drop_is_counted(monkeypatch):
+    """The silent horizon-narrowing the review flagged: a full window sheds its
+    oldest signal, which is not data loss but IS thinner RCA, and used to be
+    invisible."""
+    from collections import deque
+    monkeypatch.setattr(main, "WINDOW_BUFFER", deque(maxlen=5))
+    monkeypatch.setattr(main, "_BUFFERED_ID_ORDER", deque(maxlen=5))
+    monkeypatch.setattr(main, "_BUFFERED_IDS", set())
+    before = main.WINDOW_OVERFLOW_DROPPED
+    for i in range(12):
+        main.buffer_signal(mk(i))
+    assert main.WINDOW_OVERFLOW_DROPPED == before + 7, (
+        "7 signals were shed to make room and the counter must say so")
+
+
+def test_no_overflow_drop_when_the_window_has_room(monkeypatch):
+    from collections import deque
+    monkeypatch.setattr(main, "WINDOW_BUFFER", deque(maxlen=100))
+    monkeypatch.setattr(main, "_BUFFERED_ID_ORDER", deque(maxlen=100))
+    monkeypatch.setattr(main, "_BUFFERED_IDS", set())
+    before = main.WINDOW_OVERFLOW_DROPPED
+    for i in range(20):
+        main.buffer_signal(mk(i))
+    assert main.WINDOW_OVERFLOW_DROPPED == before

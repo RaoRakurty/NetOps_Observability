@@ -359,7 +359,7 @@ def test_burst_drains_to_steady_state_memory(monkeypatch, registry):
     # the engine cycle runs (run_window → _prune_buffer).
     later = datetime.now(timezone.utc) + timedelta(
         seconds=main.ENGINE_CFG.window_s + main.METRIC_FUTURE_SKEW_S + 60)
-    main._prune_buffer(later)
+    run(main._prune_buffer(later))
     assert len(main.WINDOW_BUFFER) == 0, "window buffer did not drain past the horizon"
     assert len(main._BUFFERED_IDS) == 0, "dedup id set leaked after the buffer drained"
 
