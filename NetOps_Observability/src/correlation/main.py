@@ -2049,8 +2049,16 @@ def _offload_max_workers() -> tuple[int, str]:
     there is nothing to read. Report the source rather than presenting a
     computed guess as a measurement.
     """
+    # Both lookups are best-effort and must NEVER raise: this runs inside
+    # /metrics and /healthz, and instrumentation that can break the health probe
+    # is worse than instrumentation that reports "unknown".
+    #   * RuntimeError  — called outside a running loop (no executor exists yet)
+    #   * AttributeError — uvloop, which is what actually runs in the container:
+    #     its Loop has no `_default_executor` at all. The stdlib loop does, so
+    #     unit tests on the default policy never saw this; the container did,
+    #     immediately, in the metrics path, and never went healthy.
     try:
-        ex = asyncio.get_running_loop()._default_executor
+        ex = getattr(asyncio.get_running_loop(), "_default_executor", None)
     except RuntimeError:
         ex = None
     workers = getattr(ex, "_max_workers", None)
@@ -5925,6 +5933,16 @@ async def health() -> dict:
             "chaos_fixtures": sorted(CHAOS_FIXTURES.values()),
             "tenant_write_amp_topk": TENANT_WA_LAST,
             "window_signals": len(WINDOW_BUFFER),
+            # tracker 165: the retention CONTRACT and whether this replica is
+            # currently honouring it. On /healthz, not only /metrics — the
+            # question "how much useful event-time history do I actually hold?"
+            # is a health question, and a scrape gap must not be the only way to
+            # notice that RCA context has narrowed.
+            "retention": retention_state(),
+            "event_time_lag_s": round(_event_time_lag_s(), 3),
+            # tracker 164 (passive): the offload queue, so saturation is a fact
+            # rather than an architectural suspicion.
+            "offload": offload_stats(),
             # Housekeeping visibility (tracker 156 review): a prune that starts
             # holding the loop must be observable from /healthz, not only from a
             # forensic build.

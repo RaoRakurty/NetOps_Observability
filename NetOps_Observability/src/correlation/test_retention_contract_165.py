@@ -179,7 +179,21 @@ def test_the_state_is_exported(window):
         assert f'corr_offload_exec_seconds{{quantile="{q}"}} ' in body
 
 
-def test_healthz_carries_the_retention_and_offload_blocks():
+def test_the_public_healthz_carries_the_retention_and_offload_blocks():
+    """The FIRST build of this put the retention block only in the diagnostic
+    snapshot, so the live container's /healthz had none of it — caught by
+    querying the running stack, not by a test. Pin the public endpoint."""
+    hz = asyncio.run(main.health())
+    corr = hz["engine_v2"]
+    assert "retention" in corr, "/healthz must carry the retention contract"
+    assert "offload" in corr, "/healthz must carry the offload queue state"
+    assert "event_time_lag_s" in corr
+    assert set(corr["retention"]) >= {
+        "effective_horizon_s", "required_horizon_s", "engine_reach_s",
+        "rca_evidence_degraded", "rca_degradation_reason", "window_utilization"}
+
+
+def test_diag_snapshot_also_carries_them():
     async def _grab():
         return main.diag_app_state()
     state = asyncio.run(_grab())

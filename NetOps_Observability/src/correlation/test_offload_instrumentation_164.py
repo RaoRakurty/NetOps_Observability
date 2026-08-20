@@ -214,3 +214,33 @@ def test_max_workers_reports_where_the_number_came_from():
         return main._offload_max_workers()
     w, src = _run(inside, workers=3)
     assert (w, src) == (3, "executor")
+
+
+def test_max_workers_survives_a_loop_without_a_default_executor():
+    """uvloop — which is what actually runs in the container — has no
+    `_default_executor` attribute at all. The first build of this metric only
+    guarded RuntimeError, so /metrics and /healthz raised AttributeError on
+    startup and the container never went healthy. Unit tests missed it because
+    pytest drives the stdlib loop, which does have the attribute.
+
+    This test removes the attribute the way uvloop does and asserts the whole
+    exposition still renders: an instrumentation change must never be able to
+    break the health probe it reports through.
+    """
+    class _NoExecutorLoop:
+        def __getattr__(self, name):
+            if name == "_default_executor":
+                raise AttributeError(name)
+            raise AttributeError(name)
+
+    from unittest import mock
+    with mock.patch.object(asyncio, "get_running_loop",
+                           return_value=_NoExecutorLoop()):
+        workers, source = main._offload_max_workers()
+    assert workers > 0
+    assert source == "cpython_default"
+
+    with mock.patch.object(asyncio, "get_running_loop",
+                           return_value=_NoExecutorLoop()):
+        stats = main.offload_stats()
+    assert stats["max_workers"] > 0
