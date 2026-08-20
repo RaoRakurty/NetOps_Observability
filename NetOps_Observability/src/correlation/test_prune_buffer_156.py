@@ -21,6 +21,7 @@ correct-and-slow rather than to wrong.
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import time
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -367,3 +368,83 @@ def test_no_overflow_drop_when_the_window_has_room(monkeypatch):
     for i in range(20):
         main.buffer_signal(mk(i))
     assert main.WINDOW_OVERFLOW_DROPPED == before
+
+
+# --- capacity shedding vs age pruning (2026-08-20) -------------------------
+#
+# The window is bounded by COUNT (50,000) and the RCA horizon is a TIME
+# (ENGINE_CFG.window_s). A count bound cannot express a time horizon: the window
+# holds 50,000 / signal_rate seconds, so above ~55.6 signals/s it physically
+# cannot cover 900 s. When that happens the evicted signal is still INSIDE the
+# horizon the engine is about to correlate over — evidence degradation, not
+# housekeeping. These pin the distinction.
+
+def _at(i, when):
+    """Signal i stamped at `when` — fresh, so any eviction is capacity-driven."""
+    return dataclasses.replace(mk(i), ts=when)
+
+
+def test_capacity_drop_inside_the_horizon_is_counted_separately(monkeypatch):
+    """A signal shed while still younger than window_s was eligible evidence."""
+    from collections import deque
+    monkeypatch.setattr(main, "WINDOW_BUFFER", deque(maxlen=5))
+    monkeypatch.setattr(main, "_BUFFERED_ID_ORDER", deque(maxlen=5))
+    monkeypatch.setattr(main, "_BUFFERED_IDS", set())
+    before_all = main.WINDOW_OVERFLOW_DROPPED
+    before_horizon = main.WINDOW_OVERFLOW_IN_HORIZON
+    # All fresh: every victim is far younger than the 900 s horizon.
+    now = datetime.now(timezone.utc)
+    for i in range(12):
+        main.buffer_signal(_at(i, now))
+    assert main.WINDOW_OVERFLOW_DROPPED == before_all + 7
+    assert main.WINDOW_OVERFLOW_IN_HORIZON == before_horizon + 7, (
+        "signals shed by capacity while inside the RCA horizon must be counted "
+        "as degradation, not folded in with age-based pruning")
+
+
+def test_a_capacity_drop_of_an_ALREADY_EXPIRED_signal_is_not_degradation(monkeypatch):
+    """The negative control for the counter above.
+
+    A signal shed by capacity that was ALREADY past the RCA horizon would have
+    been pruned by age anyway — losing it costs nothing. Counting it as
+    degradation would inflate the one number this wave turns on, so the
+    in-horizon counter must stay flat while the overflow counter moves.
+    """
+    from collections import deque
+    monkeypatch.setattr(main, "WINDOW_BUFFER", deque(maxlen=5))
+    monkeypatch.setattr(main, "_BUFFERED_ID_ORDER", deque(maxlen=5))
+    monkeypatch.setattr(main, "_BUFFERED_IDS", set())
+    stale = datetime.now(timezone.utc) - timedelta(
+        seconds=main.ENGINE_CFG.window_s * 3)
+    before_all = main.WINDOW_OVERFLOW_DROPPED
+    before_horizon = main.WINDOW_OVERFLOW_IN_HORIZON
+    for i in range(12):
+        main.buffer_signal(_at(i, stale))
+    assert main.WINDOW_OVERFLOW_DROPPED == before_all + 7, "capacity drops still counted"
+    assert main.WINDOW_OVERFLOW_IN_HORIZON == before_horizon, (
+        "signals already past the horizon were shed — that is ordinary loss, "
+        "not RCA evidence degradation, and must not inflate the degradation count")
+
+
+def test_window_span_reports_the_time_actually_held():
+    """Below the configured horizon means the COUNT bound is deciding what the
+    engine sees, not the TIME bound."""
+    load(0)
+    assert main._window_span_s() == 0.0
+    load(100, secs=lambda i: i)          # 100 signals, 1 s apart
+    span = main._window_span_s()
+    assert 98 <= span <= 100, f"span {span}s should be ~99s for 100 signals 1s apart"
+
+
+def test_window_span_is_zero_for_a_trivial_window():
+    load(1)
+    assert main._window_span_s() == 0.0
+
+
+def test_a_full_window_holding_less_than_the_horizon_is_detectable():
+    """The diagnostic the whole wave turns on: capacity < horizon."""
+    load(200, secs=lambda i: i * 0.5)    # 200 signals over 100s
+    span = main._window_span_s()
+    assert span < main.ENGINE_CFG.window_s, (
+        "this fixture is meant to represent a window holding less than the "
+        "configured horizon")

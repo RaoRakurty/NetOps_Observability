@@ -1503,8 +1503,18 @@ def buffer_signal(sig: Signal) -> None:
         # silent narrowing of the correlation horizon, which the 2026-08-20
         # review flagged as the one place state is shed with no counter. Now it
         # is countable, so "RCA got thinner under storm" is a visible fact.
-        global WINDOW_OVERFLOW_DROPPED
+        global WINDOW_OVERFLOW_DROPPED, WINDOW_OVERFLOW_IN_HORIZON
+        global WINDOW_OVERFLOW_AGE_MIN_S, WINDOW_OVERFLOW_AGE_MAX_S
         WINDOW_OVERFLOW_DROPPED += 1
+        # How old was the signal we are shedding? If it is younger than the RCA
+        # horizon it was still eligible evidence — the distinction between
+        # "aged out" and "pushed out" is the whole question.
+        victim_age = (arrival - WINDOW_BUFFER[0].ts).total_seconds()
+        if victim_age < ENGINE_CFG.window_s:
+            WINDOW_OVERFLOW_IN_HORIZON += 1
+        if WINDOW_OVERFLOW_AGE_MIN_S == 0.0 or victim_age < WINDOW_OVERFLOW_AGE_MIN_S:
+            WINDOW_OVERFLOW_AGE_MIN_S = victim_age
+        WINDOW_OVERFLOW_AGE_MAX_S = max(WINDOW_OVERFLOW_AGE_MAX_S, victim_age)
         _BUFFERED_IDS.discard(_BUFFERED_ID_ORDER[0])
     _BUFFERED_IDS.add(sid)
     # Appended in lockstep, and both deques carry the SAME maxlen, so a full
@@ -1514,6 +1524,18 @@ def buffer_signal(sig: Signal) -> None:
     # #101 write-amp accounting: raw lane pressure per tenant (post-dedup, so a
     # redelivered signal never double-counts).
     _wa_note_raw(sig)
+
+
+def _window_span_s() -> float:
+    """Seconds of history the evidence window currently holds.
+
+    O(1) — the deque is arrival-ordered, so the ends are the extremes. Compared
+    against ENGINE_CFG.window_s this says whether the COUNT bound or the TIME
+    bound is the one actually deciding what the engine gets to correlate over.
+    """
+    if len(WINDOW_BUFFER) < 2:
+        return 0.0
+    return (WINDOW_BUFFER[-1].ts - WINDOW_BUFFER[0].ts).total_seconds()
 
 
 def _sync_buffered_id_order() -> None:
@@ -1553,6 +1575,19 @@ PRUNE_YIELDS = 0            # loop hand-backs during pruning (monotonic)
 # name ends in _DROPPED so the counter-exposure contract discovers it
 # automatically and fails if it is ever left off /healthz.
 WINDOW_OVERFLOW_DROPPED = 0
+# THE CORRECTNESS QUESTION, made measurable (2026-08-20). The window is bounded
+# by COUNT (50,000) but the RCA horizon is a TIME (ENGINE_CFG.window_s, 900 s).
+# A count bound cannot express a time horizon: the window holds
+# 50,000 / signal_rate seconds of history, so any sustained rate above
+# 50,000/900 = ~55.6 signals/s makes it physically unable to hold the configured
+# horizon, regardless of how fast anything drains.
+#
+# When that happens the victim is evicted while STILL INSIDE the horizon the
+# engine is about to correlate over — that is RCA evidence degradation, not
+# ordinary pruning, and the two were indistinguishable until now.
+WINDOW_OVERFLOW_IN_HORIZON = 0   # overflow drops of signals still inside window_s
+WINDOW_OVERFLOW_AGE_MIN_S = 0.0  # youngest signal ever shed by capacity
+WINDOW_OVERFLOW_AGE_MAX_S = 0.0  # oldest signal shed by capacity
 
 
 async def _prune_buffer(now: datetime) -> None:
@@ -5224,6 +5259,19 @@ async def metrics_exposition():
         "# HELP corr_window_overflow_dropped_total Signals dropped because the window was full.",
         "# TYPE corr_window_overflow_dropped_total counter",
         f"corr_window_overflow_dropped_total {WINDOW_OVERFLOW_DROPPED}",
+        # The one that separates degradation from housekeeping: a signal shed by
+        # CAPACITY while still inside the RCA horizon was eligible evidence.
+        "# HELP corr_window_overflow_in_horizon_total Capacity drops of signals still inside the RCA horizon.",
+        "# TYPE corr_window_overflow_in_horizon_total counter",
+        f"corr_window_overflow_in_horizon_total {WINDOW_OVERFLOW_IN_HORIZON}",
+        # Time actually represented by the window. Below window_horizon_s means
+        # the count bound, not the time bound, is deciding what the engine sees.
+        "# HELP corr_window_span_seconds Time span currently held in the evidence window.",
+        "# TYPE corr_window_span_seconds gauge",
+        f"corr_window_span_seconds {_window_span_s():.1f}",
+        "# HELP corr_window_horizon_seconds Configured RCA evidence horizon.",
+        "# TYPE corr_window_horizon_seconds gauge",
+        f"corr_window_horizon_seconds {ENGINE_CFG.window_s:.1f}",
     ]
     lines += [
         # F-40: events lost to a handler exception. Non-zero means a producer is
@@ -5332,6 +5380,11 @@ async def health() -> dict:
             "window_id_order_resyncs": WINDOW_ID_ORDER_RESYNCS,
             "prune_yields": PRUNE_YIELDS,
             "window_overflow_dropped": WINDOW_OVERFLOW_DROPPED,
+            "window_overflow_in_horizon": WINDOW_OVERFLOW_IN_HORIZON,
+            "window_overflow_age_min_s": round(WINDOW_OVERFLOW_AGE_MIN_S, 1),
+            "window_overflow_age_max_s": round(WINDOW_OVERFLOW_AGE_MAX_S, 1),
+            "window_span_s": round(_window_span_s(), 1),
+            "window_horizon_s": ENGINE_CFG.window_s,
             # M29a: legacy z-score series budget — evicted rising means
             # cardinality churn is recycling warm baselines (never silent).
             "series_len": len(SERIES),
