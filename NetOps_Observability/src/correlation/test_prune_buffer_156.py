@@ -384,46 +384,68 @@ def _at(i, when):
     return dataclasses.replace(mk(i), ts=when)
 
 
-def test_capacity_drop_inside_the_horizon_is_counted_separately(monkeypatch):
-    """A signal shed while still younger than window_s was eligible evidence."""
-    from collections import deque
-    monkeypatch.setattr(main, "WINDOW_BUFFER", deque(maxlen=5))
-    monkeypatch.setattr(main, "_BUFFERED_ID_ORDER", deque(maxlen=5))
-    monkeypatch.setattr(main, "_BUFFERED_IDS", set())
-    before_all = main.WINDOW_OVERFLOW_DROPPED
-    before_horizon = main.WINDOW_OVERFLOW_IN_HORIZON
-    # All fresh: every victim is far younger than the 900 s horizon.
-    now = datetime.now(timezone.utc)
-    for i in range(12):
-        main.buffer_signal(_at(i, now))
-    assert main.WINDOW_OVERFLOW_DROPPED == before_all + 7
-    assert main.WINDOW_OVERFLOW_IN_HORIZON == before_horizon + 7, (
-        "signals shed by capacity while inside the RCA horizon must be counted "
-        "as degradation, not folded in with age-based pruning")
+def _fill(monkeypatch, *, spacing_s: float, n: int = 12, maxlen: int = 5):
+    """Push `n` signals `spacing_s` apart in EVENT time through a `maxlen`
+    window, returning (overflow_delta, in_horizon_delta).
 
-
-def test_a_capacity_drop_of_an_ALREADY_EXPIRED_signal_is_not_degradation(monkeypatch):
-    """The negative control for the counter above.
-
-    A signal shed by capacity that was ALREADY past the RCA horizon would have
-    been pruned by age anyway — losing it costs nothing. Counting it as
-    degradation would inflate the one number this wave turns on, so the
-    in-horizon counter must stay flat while the overflow counter moves.
+    With maxlen=5 the incoming signal is always 5 slots ahead of the victim, so
+    the event-time gap each eviction is judged on is exactly 5 * spacing_s.
     """
     from collections import deque
-    monkeypatch.setattr(main, "WINDOW_BUFFER", deque(maxlen=5))
-    monkeypatch.setattr(main, "_BUFFERED_ID_ORDER", deque(maxlen=5))
+    monkeypatch.setattr(main, "WINDOW_BUFFER", deque(maxlen=maxlen))
+    monkeypatch.setattr(main, "_BUFFERED_ID_ORDER", deque(maxlen=maxlen))
     monkeypatch.setattr(main, "_BUFFERED_IDS", set())
-    stale = datetime.now(timezone.utc) - timedelta(
-        seconds=main.ENGINE_CFG.window_s * 3)
     before_all = main.WINDOW_OVERFLOW_DROPPED
     before_horizon = main.WINDOW_OVERFLOW_IN_HORIZON
-    for i in range(12):
-        main.buffer_signal(_at(i, stale))
-    assert main.WINDOW_OVERFLOW_DROPPED == before_all + 7, "capacity drops still counted"
-    assert main.WINDOW_OVERFLOW_IN_HORIZON == before_horizon, (
-        "signals already past the horizon were shed — that is ordinary loss, "
-        "not RCA evidence degradation, and must not inflate the degradation count")
+    # Anchored so the NEWEST signal lands at wall-clock now and the rest run
+    # into the past: a future-stamped signal is clamped to arrival by the H14
+    # clock bound, which would collapse the event-time spread this fixture is
+    # built on.
+    base = datetime.now(timezone.utc) - timedelta(seconds=(n - 1) * spacing_s)
+    for i in range(n):
+        main.buffer_signal(_at(i, base + timedelta(seconds=i * spacing_s)))
+    return (main.WINDOW_OVERFLOW_DROPPED - before_all,
+            main.WINDOW_OVERFLOW_IN_HORIZON - before_horizon)
+
+
+def test_capacity_drop_inside_the_horizon_is_counted_separately(monkeypatch):
+    """A signal shed by capacity while the engine could still have attached it
+    was eligible evidence — degradation, not housekeeping.
+
+    tracker 165: eligibility is judged in EVENT time against ENGINE_REACH_S (the
+    gap at which an edge can still clear attach_threshold), not against the
+    window_s buffering constant and not against wall-clock arrival.
+    """
+    dropped, in_horizon = _fill(monkeypatch, spacing_s=1.0)   # gaps of 5 s
+    assert dropped == 7
+    assert in_horizon == 7, (
+        "signals shed by capacity while still attachable must be counted as "
+        "degradation, not folded in with age-based pruning")
+
+
+def test_a_capacity_drop_beyond_the_ENGINE_REACH_is_not_degradation(monkeypatch):
+    """The negative control for the counter above.
+
+    A victim further from the incoming evidence than ENGINE_REACH_S could never
+    have formed an edge with it — no RCA context is lost by shedding it.
+    Counting it would inflate the one number this wave turns on.
+    """
+    spacing = (main.ENGINE_REACH_S / 5.0) + 20.0      # gaps of reach + 100 s
+    dropped, in_horizon = _fill(monkeypatch, spacing_s=spacing)
+    assert dropped == 7, "capacity drops still counted"
+    assert in_horizon == 0, (
+        "victims beyond the engine's temporal reach were shed — that is "
+        "ordinary loss, not RCA evidence degradation")
+
+
+def test_the_eligibility_boundary_is_the_derived_reach_not_window_s(monkeypatch):
+    """Straddle ENGINE_REACH_S. A yardstick of window_s (900 s) would call BOTH
+    of these degradation; the engine's own reach separates them."""
+    just_inside = (main.ENGINE_REACH_S - 25.0) / 5.0
+    just_outside = (main.ENGINE_REACH_S + 25.0) / 5.0
+    assert main.ENGINE_REACH_S < main.ENGINE_CFG.window_s, "premise of the test"
+    assert _fill(monkeypatch, spacing_s=just_inside)[1] == 7
+    assert _fill(monkeypatch, spacing_s=just_outside)[1] == 0
 
 
 def test_window_span_reports_the_time_actually_held():

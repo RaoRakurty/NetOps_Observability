@@ -111,6 +111,119 @@ def engine_version(cfg: EngineConfig) -> str:
     return f"{ENGINE_SEMVER}+cfg.{cfg.config_hash()}"
 
 
+# ── temporal reach: what the SCORING semantics say is still useful ────────────
+#
+# tracker 165. Three mechanisms used to describe one temporal concept and none
+# was derived from any other: `tau_s` (decay), `window_s` (a retention hint the
+# engine never reads) and `CORR_WINDOW_BUFFER` (a record COUNT). A count bound
+# cannot express a time horizon, so under load the record cap silently became
+# the RCA horizon — 54.5 s of retained evidence against an engine that can still
+# attach across several hundred seconds.
+#
+# The authority is the scoring rule itself (see `score_edges`):
+#
+#     w_t    = exp(-gap / tau_s)
+#     weight = min(w_t * w_topo * w_r, 1.0)
+#     admitted  iff  weight >= attach_threshold
+#
+# The `min(..., 1.0)` clamp cannot decide admission: it only ever binds when the
+# product already exceeds 1.0, which is far above attach_threshold. So the
+# admission boundary is exactly
+#
+#     exp(-gap / tau_s) * w_topo * w_r = attach_threshold
+#
+# and solving for gap gives the closed form below. Nothing here is a tunable —
+# it is a consequence of the weights, so it cannot drift out of sync with them.
+
+NEVER_ATTACHABLE = -1.0
+
+
+def max_attachable_gap_s(cfg: EngineConfig, w_topo: float, *,
+                         cross_modality: bool = False) -> float:
+    """Largest event-time gap (seconds) at which a pair grounded at `w_topo`
+    can still clear `attach_threshold`.
+
+    Returns NEVER_ATTACHABLE when the grounding is too weak to admit at ANY
+    gap — that is a real answer, not an error: it means retaining evidence for
+    that grounding class buys nothing.
+    """
+    w_r = cfg.reinforce_cross_modality if cross_modality else 1.0
+    product = w_topo * w_r
+    if product < cfg.attach_threshold:
+        return NEVER_ATTACHABLE          # weight < threshold even at gap 0
+    return cfg.tau_s * math.log(product / cfg.attach_threshold)
+
+
+def _grounding_weights(cfg: EngineConfig, *, topology_stale: bool = False
+                       ) -> tuple[tuple[str, float], ...]:
+    """The w_topo each grounding class contributes, in the same order and under
+    the same §8 stale cap that `score_edges` applies."""
+    weights = (
+        ("containment", cfg.w_topo_containment),
+        ("path", cfg.w_topo_path),
+        ("seam", cfg.w_topo_seam),
+        ("adjacency", cfg.w_topo_adjacency),
+        ("inferred", cfg.w_topo_inferred),
+        ("candidate", cfg.w_topo_candidate),
+    )
+    if topology_stale:
+        return tuple((k, min(w, cfg.w_topo_stale_cap)) for k, w in weights)
+    return weights
+
+
+def temporal_reach_table(cfg: EngineConfig, *, topology_stale: bool = False
+                         ) -> tuple[dict[str, object], ...]:
+    """Every (grounding, modality) combination with its maximum attachable gap.
+
+    This is the reporting form of `max_attachable_gap_s` — the operator-facing
+    answer to "how far back can evidence still matter?"
+    """
+    rows: list[dict[str, object]] = []
+    for name, w_topo in _grounding_weights(cfg, topology_stale=topology_stale):
+        for cross in (False, True):
+            rows.append({
+                "grounding": name,
+                "w_topo": w_topo,
+                "cross_modality": cross,
+                "w_r": cfg.reinforce_cross_modality if cross else 1.0,
+                "max_gap_s": max_attachable_gap_s(cfg, w_topo, cross_modality=cross),
+            })
+    return tuple(rows)
+
+
+def engine_temporal_reach_s(cfg: EngineConfig, *, topology_stale: bool = False) -> float:
+    """The single number tracker 165 turns on: the largest event-time gap ANY
+    admissible pair can span under `cfg`.
+
+    Evidence older than this, relative to the newest signal, can no longer form
+    an edge with anything — so this, not a record count and not `window_s`, is
+    the floor for how much history the caller must retain. It is the ATTACH
+    floor; evidence COMPLETENESS of an already-open episode is a separate and
+    longer concern (an episode's own duration), which is why retention adds a
+    lateness allowance on top rather than stopping here.
+    """
+    reaches = [max_attachable_gap_s(cfg, w, cross_modality=cross)
+               for _name, w in _grounding_weights(cfg, topology_stale=topology_stale)
+               for cross in (False, True)]
+    return max(reaches)
+
+
+def required_retention_s(cfg: EngineConfig, *, permitted_lateness_s: float = 0.0,
+                         topology_stale: bool = False) -> float:
+    """The retention horizon the evidence buffer must cover to preserve the
+    engine's own semantics:
+
+        retention = engine_temporal_reach + permitted_lateness
+
+    `permitted_lateness_s` is the caller's measured allowance for evidence that
+    arrives after its event time (ingestion delay, batching, replay) — it is a
+    DEPLOYMENT fact, so it is supplied by the caller and never guessed here.
+    """
+    if permitted_lateness_s < 0:
+        raise ValueError("permitted_lateness_s must be >= 0")
+    return engine_temporal_reach_s(cfg, topology_stale=topology_stale) + permitted_lateness_s
+
+
 # ── seam views (grounding context) ────────────────────────────────────────────
 
 

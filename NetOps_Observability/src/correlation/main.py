@@ -34,7 +34,9 @@ import glob
 import hashlib
 import json
 import logging
+import math
 import os
+import threading
 import time
 import uuid
 from collections import Counter, OrderedDict, deque
@@ -76,8 +78,10 @@ from engine import (
     ObjectSnapshot,
     SeamView,
     TopologyAdjacency,
+    engine_temporal_reach_s,
     find_continuation,
     find_merges,
+    required_retention_s,
     run_window,
 )
 from entity_resolver import EntityResolver
@@ -1509,8 +1513,13 @@ def buffer_signal(sig: Signal) -> None:
         # How old was the signal we are shedding? If it is younger than the RCA
         # horizon it was still eligible evidence — the distinction between
         # "aged out" and "pushed out" is the whole question.
-        victim_age = (arrival - WINDOW_BUFFER[0].ts).total_seconds()
-        if victim_age < ENGINE_CFG.window_s:
+        # Eligibility is an EVENT-time question and the engine answers it: could
+        # the victim still have formed an edge with the newest evidence? That is
+        # exactly `ENGINE_REACH_S` (tracker 165). Measuring the victim's age
+        # against wall-clock arrival, or against the window_s buffering
+        # constant, answered a different question and over-counted.
+        victim_age = (sig.ts - WINDOW_BUFFER[0].ts).total_seconds()
+        if victim_age < ENGINE_REACH_S:
             WINDOW_OVERFLOW_IN_HORIZON += 1
         if WINDOW_OVERFLOW_AGE_MIN_S == 0.0 or victim_age < WINDOW_OVERFLOW_AGE_MIN_S:
             WINDOW_OVERFLOW_AGE_MIN_S = victim_age
@@ -1536,6 +1545,107 @@ def _window_span_s() -> float:
     if len(WINDOW_BUFFER) < 2:
         return 0.0
     return (WINDOW_BUFFER[-1].ts - WINDOW_BUFFER[0].ts).total_seconds()
+
+
+# ── tracker 165: the retention contract, derived from engine semantics ────────
+#
+# `ENGINE_CFG.window_s` (900 s) was never an RCA contract. It entered in the
+# first engine commit (c5de198c, 2026-06-12) with the comment "evidence window
+# the caller buffers", was never changed, has no env override, and no doc, test,
+# API schema or customer surface references a 15-minute horizon. It is a
+# buffering constant, and a count cap (CORR_WINDOW_BUFFER) silently overrode it
+# anyway: on the 1K rig the window held 54.5 s of evidence while full.
+#
+# The authority is the SCORING rule, so the requirement is derived from it:
+#
+#     required_retention = engine_temporal_reach + permitted_lateness
+#
+# engine_temporal_reach comes from engine.py and moves automatically if anyone
+# retunes tau_s / attach_threshold / the grounding weights.
+#
+# permitted_lateness is a DEPLOYMENT fact and is therefore not guessed here. Its
+# floor is one engine evaluation interval: a signal that survives to the horizon
+# but not through the next cycle is never actually scored against, so retaining
+# less than one cycle beyond the reach cannot preserve the semantics. Anything
+# above that floor must come from the MEASURED event-time lag of the deployment
+# (see corr_event_time_lag_seconds), not from a chosen number. The intake layer
+# separately tolerates event ages up to METRIC_MAX_AGE_S (3600 s) before
+# counting a signal stale, which bounds how late evidence can legitimately be.
+CORR_PERMITTED_LATENESS_S = max(
+    CORR_ENGINE_INTERVAL_S,
+    float(os.environ.get("CORR_PERMITTED_LATENESS_S", str(CORR_ENGINE_INTERVAL_S))))
+
+# The largest event-time gap ANY admissible pair can span under ENGINE_CFG.
+# Evidence older than this, relative to the newest signal, can no longer edge to
+# anything — so this is the floor for retention, and the yardstick for deciding
+# whether a capacity eviction shed still-usable evidence.
+ENGINE_REACH_S = engine_temporal_reach_s(ENGINE_CFG)
+RETENTION_REQUIRED_S = required_retention_s(
+    ENGINE_CFG, permitted_lateness_s=CORR_PERMITTED_LATENESS_S)
+
+
+def rca_evidence_degraded() -> bool:
+    """Is Correlix currently unable to hold the evidence its own scoring rule
+    says is still usable?
+
+    TRUE when the retained event-time span has fallen below the engine's reach
+    while the window is at its capacity bound — i.e. the record cap, not age, is
+    deciding the RCA horizon. That is the condition tracker 165 exists to stop
+    being silent: RCA still produces objects, but from a materially shorter
+    history than the engine was configured to reason over, and the output must
+    not be presented as if full context was available.
+
+    A window that is simply not full yet (a quiet tenant, a cold start) is NOT
+    degraded — there is no evidence being shed, there is just less of it.
+    """
+    if WINDOW_BUFFER.maxlen is None or len(WINDOW_BUFFER) < WINDOW_BUFFER.maxlen:
+        return False
+    return _window_span_s() < ENGINE_REACH_S
+
+
+def retention_state() -> dict[str, object]:
+    """The operator-facing answer to 'how much RCA history do I actually have,
+    and is it enough?' — reported together so the two numbers can never drift
+    apart in a dashboard."""
+    span = _window_span_s()
+    maxlen = WINDOW_BUFFER.maxlen or 0
+    return {
+        "effective_horizon_s": round(span, 3),
+        "required_horizon_s": round(RETENTION_REQUIRED_S, 3),
+        "engine_reach_s": round(ENGINE_REACH_S, 3),
+        "permitted_lateness_s": round(CORR_PERMITTED_LATENESS_S, 3),
+        "horizon_satisfied": span >= ENGINE_REACH_S or len(WINDOW_BUFFER) < maxlen,
+        "window_utilization": round(len(WINDOW_BUFFER) / maxlen, 4) if maxlen else 0.0,
+        "capacity_dropped_total": WINDOW_OVERFLOW_DROPPED,
+        "capacity_dropped_still_eligible": WINDOW_OVERFLOW_IN_HORIZON,
+        "capacity_dropped_already_stale": max(
+            0, WINDOW_OVERFLOW_DROPPED - WINDOW_OVERFLOW_IN_HORIZON),
+        "rca_evidence_degraded": rca_evidence_degraded(),
+        # window_s is retained ONLY as the wall-clock prune bound it always was.
+        # It is reported so the mismatch stays visible, not as a contract.
+        "prune_bound_s": ENGINE_CFG.window_s,
+    }
+
+
+def _event_time_lag_s() -> float:
+    """How far the newest EVENT in the window is behind the wall clock.
+
+    tracker 165 phase 9 — one of three distinct lags that were previously
+    reported as a single "lag" number:
+
+      * Kafka backlog lag   — records not yet consumed (broker-side, exported by
+        kafka-exporter and surfaced as corr_consumer_lag).
+      * processing lag      — how far behind the consumer is in wall-clock time.
+      * event-time lag      — THIS: the age of the freshest thing the engine can
+        currently see.
+
+    It matters here because pruning ages EVENT timestamps against WALL-CLOCK
+    now, so the retained event-time span is (window_s - event_time_lag). At an
+    event-time lag above window_s the window cannot retain anything at all.
+    """
+    if not WINDOW_BUFFER:
+        return 0.0
+    return max(0.0, (datetime.now(timezone.utc) - WINDOW_BUFFER[-1].ts).total_seconds())
 
 
 def _sync_buffered_id_order() -> None:
@@ -1703,6 +1813,110 @@ CORR_ARCHIVE_CHUNK_ROWS = int(os.environ.get("CORR_ARCHIVE_CHUNK_ROWS", "10000")
 CORR_OFFLOAD_MIN_ELEMENTS = int(os.environ.get("CORR_OFFLOAD_MIN_ELEMENTS", "2000"))
 
 
+# ── tracker 164: PASSIVE offload accounting (measurement only) ────────────────
+#
+# `_offload` hands work to asyncio's DEFAULT executor. That executor's queue is
+# an unbounded `SimpleQueue`: submission never blocks and never fails, so a
+# producer that outruns the workers builds an invisible backlog whose only
+# symptom is latency somewhere else. The architecture review flagged that as a
+# suspected contributor to the 12-19 minute drain lag — a suspicion with no
+# measurement behind it.
+#
+# This block adds the measurement and NOTHING else. Admission is unchanged, the
+# executor is unchanged, no work is rejected or delayed. The question it exists
+# to answer is single: does the offload queue actually grow, and does its wait
+# time track the observed lag? Bounded admission (if the evidence justifies it)
+# is a separate change.
+#
+# Worker callbacks run on executor threads, so every counter below is updated
+# under one lock: `x += 1` is load/add/store and would lose counts across eight
+# workers, and instrumentation that undercounts is worse than none.
+CORR_OFFLOAD_SAMPLES = max(64, int(os.environ.get("CORR_OFFLOAD_SAMPLES", "1024")))
+
+_OFFLOAD_LOCK = threading.Lock()
+_OFFLOAD_SEQ = 0
+_OFFLOAD_PENDING: dict[int, float] = {}    # seq -> enqueue monotonic, while QUEUED
+_OFFLOAD_RUNNING: dict[int, float] = {}    # seq -> start monotonic, while EXECUTING
+_OFFLOAD_WAIT_S: deque[float] = deque(maxlen=CORR_OFFLOAD_SAMPLES)
+_OFFLOAD_EXEC_S: deque[float] = deque(maxlen=CORR_OFFLOAD_SAMPLES)
+OFFLOAD_SUBMITTED = 0
+OFFLOAD_STARTED = 0
+OFFLOAD_COMPLETED = 0
+OFFLOAD_FAILED = 0
+OFFLOAD_DEPTH_PEAK = 0
+OFFLOAD_ACTIVE_PEAK = 0
+OFFLOAD_WAIT_MAX_S = 0.0
+OFFLOAD_EXEC_MAX_S = 0.0
+
+
+def _offload_max_workers() -> tuple[int, str]:
+    """How many threads the default executor may use, and where that came from.
+
+    asyncio creates the default executor lazily, so before the first offload
+    there is nothing to read. Report the source rather than presenting a
+    computed guess as a measurement.
+    """
+    try:
+        ex = asyncio.get_running_loop()._default_executor
+    except RuntimeError:
+        ex = None
+    workers = getattr(ex, "_max_workers", None)
+    if isinstance(workers, int) and workers > 0:
+        return workers, "executor"
+    # CPython's documented default when max_workers is unset.
+    return min(32, (os.cpu_count() or 1) + 4), "cpython_default"
+
+
+def _quantile(sorted_vals: list[float], q: float) -> float:
+    """Nearest-rank quantile over an already-sorted list; 0.0 when empty."""
+    if not sorted_vals:
+        return 0.0
+    idx = min(len(sorted_vals) - 1, max(0, math.ceil(q * len(sorted_vals)) - 1))
+    return sorted_vals[idx]
+
+
+def offload_stats() -> dict[str, object]:
+    """A consistent snapshot of the offload queue. Read-only."""
+    now = time.monotonic()
+    with _OFFLOAD_LOCK:
+        pending = list(_OFFLOAD_PENDING.values())
+        running = len(_OFFLOAD_RUNNING)
+        waits = sorted(_OFFLOAD_WAIT_S)
+        execs = sorted(_OFFLOAD_EXEC_S)
+        submitted, started = OFFLOAD_SUBMITTED, OFFLOAD_STARTED
+        completed, failed = OFFLOAD_COMPLETED, OFFLOAD_FAILED
+        depth_peak, active_peak = OFFLOAD_DEPTH_PEAK, OFFLOAD_ACTIVE_PEAK
+        wait_max, exec_max = OFFLOAD_WAIT_MAX_S, OFFLOAD_EXEC_MAX_S
+    workers, workers_src = _offload_max_workers()
+    return {
+        "queue_depth": len(pending),
+        "queue_depth_peak": depth_peak,
+        "active_workers": running,
+        "active_workers_peak": active_peak,
+        "max_workers": workers,
+        "max_workers_source": workers_src,
+        # The default executor's queue is unbounded, so nothing is ever refused.
+        # Reported as a constant 0 so the absence of rejection is an explicit
+        # fact rather than a missing metric.
+        "rejected": 0,
+        "queue_bounded": False,
+        "oldest_queued_age_s": round(now - min(pending), 6) if pending else 0.0,
+        "submitted_total": submitted,
+        "started_total": started,
+        "completed_total": completed,
+        "failed_total": failed,
+        "wait_p50_s": round(_quantile(waits, 0.50), 6),
+        "wait_p95_s": round(_quantile(waits, 0.95), 6),
+        "wait_p99_s": round(_quantile(waits, 0.99), 6),
+        "wait_max_s": round(wait_max, 6),
+        "exec_p50_s": round(_quantile(execs, 0.50), 6),
+        "exec_p95_s": round(_quantile(execs, 0.95), 6),
+        "exec_p99_s": round(_quantile(execs, 0.99), 6),
+        "exec_max_s": round(exec_max, 6),
+        "samples": len(waits),
+    }
+
+
 async def _offload(fn, /, *args, **kwargs):
     """Run a size-unbounded PURE-CPU call off the event loop.
 
@@ -1712,9 +1926,50 @@ async def _offload(fn, /, *args, **kwargs):
     interpreter's switch interval instead of waiting out the whole call.
     Only for PURE functions (no shared mutable state, no IO): everything
     routed here is a serializer/hasher over an immutable snapshot.
+
+    Instrumented per tracker 164 — timings only, admission unchanged.
     """
-    return await asyncio.get_running_loop().run_in_executor(
-        None, functools.partial(fn, *args, **kwargs))
+    global _OFFLOAD_SEQ, OFFLOAD_SUBMITTED, OFFLOAD_DEPTH_PEAK
+    enqueued = time.monotonic()
+    with _OFFLOAD_LOCK:
+        _OFFLOAD_SEQ += 1
+        seq = _OFFLOAD_SEQ
+        _OFFLOAD_PENDING[seq] = enqueued
+        OFFLOAD_SUBMITTED += 1
+        OFFLOAD_DEPTH_PEAK = max(OFFLOAD_DEPTH_PEAK, len(_OFFLOAD_PENDING))
+    call = functools.partial(fn, *args, **kwargs)
+
+    def _timed():
+        # Runs on an executor thread: the gap between `enqueued` and here IS the
+        # queue wait, which is the whole point of the exercise.
+        global OFFLOAD_STARTED, OFFLOAD_ACTIVE_PEAK, OFFLOAD_WAIT_MAX_S
+        global OFFLOAD_COMPLETED, OFFLOAD_FAILED, OFFLOAD_EXEC_MAX_S
+        started = time.monotonic()
+        wait = started - enqueued
+        with _OFFLOAD_LOCK:
+            _OFFLOAD_PENDING.pop(seq, None)
+            _OFFLOAD_RUNNING[seq] = started
+            OFFLOAD_STARTED += 1
+            OFFLOAD_ACTIVE_PEAK = max(OFFLOAD_ACTIVE_PEAK, len(_OFFLOAD_RUNNING))
+            _OFFLOAD_WAIT_S.append(wait)
+            OFFLOAD_WAIT_MAX_S = max(OFFLOAD_WAIT_MAX_S, wait)
+        ok = False
+        try:
+            result = call()
+            ok = True
+            return result
+        finally:
+            elapsed = time.monotonic() - started
+            with _OFFLOAD_LOCK:
+                _OFFLOAD_RUNNING.pop(seq, None)
+                _OFFLOAD_EXEC_S.append(elapsed)
+                OFFLOAD_EXEC_MAX_S = max(OFFLOAD_EXEC_MAX_S, elapsed)
+                if ok:
+                    OFFLOAD_COMPLETED += 1
+                else:
+                    OFFLOAD_FAILED += 1
+
+    return await asyncio.get_running_loop().run_in_executor(None, _timed)
 
 
 def _snap_elements(snap: ObjectSnapshot) -> int:
@@ -3122,6 +3377,9 @@ def diag_app_state() -> dict:
         "open_objects": len(OPEN_OBJECTS),
         "window_signals": len(WINDOW_BUFFER),
         "window_maxlen": WINDOW_BUFFER.maxlen,
+        "retention": retention_state(),
+        "offload": offload_stats(),
+        "event_time_lag_s": round(_event_time_lag_s(), 3),
         "buffered_ids": len(_BUFFERED_IDS),
         "pending_batch_rows": SIGNAL_BATCH.pending(),
         "archive_slice_hashes": len(_ARCHIVE_SLICE_HASH),
@@ -5269,9 +5527,85 @@ async def metrics_exposition():
         "# HELP corr_window_span_seconds Time span currently held in the evidence window.",
         "# TYPE corr_window_span_seconds gauge",
         f"corr_window_span_seconds {_window_span_s():.1f}",
-        "# HELP corr_window_horizon_seconds Configured RCA evidence horizon.",
+        "# HELP corr_window_horizon_seconds Wall-clock prune bound (window_s). NOT the RCA contract.",
         "# TYPE corr_window_horizon_seconds gauge",
         f"corr_window_horizon_seconds {ENGINE_CFG.window_s:.1f}",
+        # tracker 165: the horizon that actually matters, derived from the
+        # scoring rule (exp(-gap/tau_s) * w_topo * w_r >= attach_threshold), and
+        # the retention it implies. If reach > span while the window is full,
+        # the record cap is deciding RCA semantics.
+        "# HELP corr_engine_reach_seconds Largest event-time gap the engine can still attach across.",
+        "# TYPE corr_engine_reach_seconds gauge",
+        f"corr_engine_reach_seconds {ENGINE_REACH_S:.3f}",
+        "# HELP corr_retention_required_seconds Engine reach plus permitted lateness.",
+        "# TYPE corr_retention_required_seconds gauge",
+        f"corr_retention_required_seconds {RETENTION_REQUIRED_S:.3f}",
+        "# HELP corr_permitted_lateness_seconds Declared allowance for late-arriving evidence.",
+        "# TYPE corr_permitted_lateness_seconds gauge",
+        f"corr_permitted_lateness_seconds {CORR_PERMITTED_LATENESS_S:.3f}",
+        "# HELP corr_window_utilization Fraction of the evidence window's record cap in use.",
+        "# TYPE corr_window_utilization gauge",
+        f"corr_window_utilization {(len(WINDOW_BUFFER) / WINDOW_BUFFER.maxlen) if WINDOW_BUFFER.maxlen else 0.0:.4f}",
+        # The state an operator alerts on: RCA is still emitting objects, but
+        # from less history than the engine can use. Not per-signal — a level.
+        "# HELP corr_rca_evidence_degraded 1 when capacity is shedding still-attachable evidence.",
+        "# TYPE corr_rca_evidence_degraded gauge",
+        f"corr_rca_evidence_degraded {1 if rca_evidence_degraded() else 0}",
+        # tracker 165 phase 9: three different lags, reported separately.
+        # Event-time lag is how far the newest EVENT in the window is behind the
+        # wall clock — the quantity that shortens the retained span, because
+        # pruning ages event timestamps against wall-clock now.
+        "# HELP corr_event_time_lag_seconds Wall clock minus the newest buffered event timestamp.",
+        "# TYPE corr_event_time_lag_seconds gauge",
+        f"corr_event_time_lag_seconds {_event_time_lag_s():.3f}",
+    ]
+    off = offload_stats()
+    lines += [
+        # tracker 164 — PASSIVE. The default executor's queue is unbounded, so
+        # depth and wait are the only evidence that it is a bottleneck at all.
+        "# HELP corr_offload_queue_depth Work submitted to the offload executor and not yet started.",
+        "# TYPE corr_offload_queue_depth gauge",
+        f"corr_offload_queue_depth {off['queue_depth']}",
+        "# HELP corr_offload_queue_depth_peak Highest offload queue depth observed.",
+        "# TYPE corr_offload_queue_depth_peak gauge",
+        f"corr_offload_queue_depth_peak {off['queue_depth_peak']}",
+        "# HELP corr_offload_active_workers Offload calls currently executing.",
+        "# TYPE corr_offload_active_workers gauge",
+        f"corr_offload_active_workers {off['active_workers']}",
+        "# HELP corr_offload_max_workers Executor thread ceiling.",
+        "# TYPE corr_offload_max_workers gauge",
+        f"corr_offload_max_workers {off['max_workers']}",
+        "# HELP corr_offload_oldest_queued_age_seconds Age of the longest-waiting queued call.",
+        "# TYPE corr_offload_oldest_queued_age_seconds gauge",
+        f"corr_offload_oldest_queued_age_seconds {off['oldest_queued_age_s']:.6f}",
+        "# HELP corr_offload_submitted_total Calls handed to the offload executor.",
+        "# TYPE corr_offload_submitted_total counter",
+        f"corr_offload_submitted_total {off['submitted_total']}",
+        "# HELP corr_offload_completed_total Offload calls that returned normally.",
+        "# TYPE corr_offload_completed_total counter",
+        f"corr_offload_completed_total {off['completed_total']}",
+        "# HELP corr_offload_failed_total Offload calls that raised.",
+        "# TYPE corr_offload_failed_total counter",
+        f"corr_offload_failed_total {off['failed_total']}",
+        "# HELP corr_offload_rejected_total Offload submissions refused (always 0: the queue is unbounded).",
+        "# TYPE corr_offload_rejected_total counter",
+        f"corr_offload_rejected_total {off['rejected']}",
+        "# HELP corr_offload_wait_seconds Time between submission and start of execution.",
+        "# TYPE corr_offload_wait_seconds summary",
+        f'corr_offload_wait_seconds{{quantile="0.5"}} {off["wait_p50_s"]:.6f}',
+        f'corr_offload_wait_seconds{{quantile="0.95"}} {off["wait_p95_s"]:.6f}',
+        f'corr_offload_wait_seconds{{quantile="0.99"}} {off["wait_p99_s"]:.6f}',
+        "# HELP corr_offload_wait_max_seconds Worst offload queue wait observed.",
+        "# TYPE corr_offload_wait_max_seconds gauge",
+        f"corr_offload_wait_max_seconds {off['wait_max_s']:.6f}",
+        "# HELP corr_offload_exec_seconds Time spent executing an offloaded call.",
+        "# TYPE corr_offload_exec_seconds summary",
+        f'corr_offload_exec_seconds{{quantile="0.5"}} {off["exec_p50_s"]:.6f}',
+        f'corr_offload_exec_seconds{{quantile="0.95"}} {off["exec_p95_s"]:.6f}',
+        f'corr_offload_exec_seconds{{quantile="0.99"}} {off["exec_p99_s"]:.6f}',
+        "# HELP corr_offload_exec_max_seconds Worst offload execution time observed.",
+        "# TYPE corr_offload_exec_max_seconds gauge",
+        f"corr_offload_exec_max_seconds {off['exec_max_s']:.6f}",
     ]
     lines += [
         # F-40: events lost to a handler exception. Non-zero means a producer is
