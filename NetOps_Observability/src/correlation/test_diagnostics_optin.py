@@ -12,9 +12,30 @@ Two properties matter equally:
 from __future__ import annotations
 
 import importlib
-import os
 
 import pytest
+
+
+@pytest.fixture(autouse=True)
+def _isolate_global_state():
+    """Restore tracemalloc and the diagnostics module after every test.
+
+    These tests reload `diagnostics` and start/stop tracemalloc, both of which
+    are PROCESS-global. Without this the suite went intermittently red in
+    unrelated tests (test_fixtures, test_resilience) depending on ordering —
+    flakiness introduced by the diagnostics tests themselves, which is not an
+    acceptable price for the coverage.
+    """
+    import tracemalloc
+    was_tracing = tracemalloc.is_tracing()
+    yield
+    if tracemalloc.is_tracing() and not was_tracing:
+        tracemalloc.stop()
+    elif was_tracing and not tracemalloc.is_tracing():
+        tracemalloc.start()
+    # Leave the module as the rest of the suite expects to find it.
+    import diagnostics
+    importlib.reload(diagnostics)
 
 
 def _fresh(monkeypatch, **env):
@@ -65,9 +86,6 @@ def test_disabled_heartbeat_is_a_noop(monkeypatch):
 def diag(monkeypatch, tmp_path):
     d = _fresh(monkeypatch, CORR_DIAG_MEMORY="true", CORR_DIAG_DIR=str(tmp_path))
     yield d, tmp_path
-    import tracemalloc
-    if tracemalloc.is_tracing():
-        tracemalloc.stop()
 
 
 def test_enabled_snapshot_carries_all_three_planes(diag):

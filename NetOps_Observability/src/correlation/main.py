@@ -40,13 +40,13 @@ import uuid
 from collections import Counter, OrderedDict, deque
 from collections.abc import Awaitable, Callable, Iterable
 from contextlib import asynccontextmanager
-import diagnostics
-import signals
 from dataclasses import dataclass, field
 from dataclasses import replace as dc_replace
 from datetime import datetime, timezone
 
+import diagnostics
 import httpx
+import signals
 from aiokafka import AIOKafkaConsumer, TopicPartition
 from aiokafka.abc import ConsumerRebalanceListener
 from aiokafka.coordinator.assignors.range import RangePartitionAssignor
