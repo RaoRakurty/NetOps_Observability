@@ -37,6 +37,8 @@ object grounded against is embedded in its snapshot, exactly like SeamView.
 from __future__ import annotations
 
 import json
+import os
+from collections import OrderedDict
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from enum import Enum
@@ -668,15 +670,47 @@ class Relation:
         }
 
 
+# TRACKER 156 memory forensics (2026-08-20). These relations are pure functions
+# of their key and are built once per CANDIDATE PAIR, which is quadratic in the
+# window. At the 85%-of-cap crossing on a 1k run, `shared_token_relation` and the
+# Relation objects it returns accounted for 61.9 MB across ~800,000 blocks, and
+# engine.py + path_graph.py together held 157.8 MB in 2,593,452 blocks — 85% of
+# the traced heap. Relation is a frozen dataclass of scalars, so two calls with
+# the same key are interchangeable by value and one instance is enough.
+#
+# Bounded per §9: the key derives from device-supplied tokens, so an unbounded
+# map would be a memory amplifier reachable from untrusted input. On overflow the
+# oldest entry is evicted and a fresh object is built — the cache is an
+# allocation optimisation, never a correctness input.
+RELATION_CACHE_MAX = int(os.environ.get("CORR_RELATION_CACHE_MAX", "50000"))
+_SHARED_TOKEN_RELATIONS: "OrderedDict[str, Relation]" = OrderedDict()
+_SEAM_RELATIONS: "OrderedDict[tuple, Relation]" = OrderedDict()
+RELATION_CACHE_EVICTED = 0
+
+
+def _cache_get(cache: OrderedDict, key, build):
+    global RELATION_CACHE_EVICTED
+    got = cache.get(key)
+    if got is not None:
+        cache.move_to_end(key)
+        return got
+    val = build()
+    cache[key] = val
+    if len(cache) > RELATION_CACHE_MAX:
+        cache.popitem(last=False)
+        RELATION_CACHE_EVICTED += 1
+    return val
+
+
 # The rank-7 relation the old gate used to treat as authoritative. Kept (an edge
 # still forms, so an object is not lost) but DEMOTED and LABELLED: candidate,
 # never authoritative, can never confirm a verdict.
 def shared_token_relation(token: str) -> Relation:
-    return Relation(
+    return _cache_get(_SHARED_TOKEN_RELATIONS, token, lambda: Relation(
         edge_type="", method=ResolutionMethod.SHARED_TOKEN.value,
         confidence=Confidence.CANDIDATE.value, evidence_ref=f"token:{token}",
         observation_method="name_similarity", observed_at="", ref=f"shared:{token}",
-    )
+    ))
 
 
 def resource_identity_relation(ref: str) -> Relation:
@@ -704,20 +738,28 @@ def seam_relation(seam_id: str, structural: bool) -> Relation:
     """A declared seam instance. Rank 2 when BOTH nodes match the seam's endpoints
     by their structural identity (a real, declared binding); rank 7 CANDIDATE when
     the only thing matching is a free-text token — a name coincidence is not a
-    seam membership."""
-    if structural:
+    seam membership.
+
+    Interned by (seam_id, structural) — same reason as shared_token_relation: it
+    is a pure function of its key, called once per candidate pair.
+    """
+    def build() -> Relation:
+        if structural:
+            return Relation(
+                edge_type=EdgeType.CROSSES_SEAM.value,
+                method=ResolutionMethod.SEAM_MEMBERSHIP.value,
+                confidence=Confidence.STRONG.value, evidence_ref=f"seam:{seam_id}",
+                observation_method="seam_inventory", observed_at="", ref=seam_id,
+                seam_id=seam_id,
+            )
         return Relation(
-            edge_type=EdgeType.CROSSES_SEAM.value,
-            method=ResolutionMethod.SEAM_MEMBERSHIP.value,
-            confidence=Confidence.STRONG.value, evidence_ref=f"seam:{seam_id}",
-            observation_method="seam_inventory", observed_at="", ref=seam_id,
+            edge_type="", method=ResolutionMethod.SHARED_TOKEN.value,
+            confidence=Confidence.CANDIDATE.value, evidence_ref=f"seam_token:{seam_id}",
+            observation_method="name_similarity", observed_at="", ref=seam_id,
             seam_id=seam_id,
         )
-    return Relation(
-        edge_type="", method=ResolutionMethod.SHARED_TOKEN.value,
-        confidence=Confidence.CANDIDATE.value, evidence_ref=f"seam_token:{seam_id}",
-        observation_method="name_similarity", observed_at="", ref=seam_id, seam_id=seam_id,
-    )
+
+    return _cache_get(_SEAM_RELATIONS, (seam_id, structural), build)
 
 
 # ── the view + the index ─────────────────────────────────────────────────────

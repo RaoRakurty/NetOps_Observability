@@ -21,6 +21,8 @@ import hashlib
 import json
 import math
 import uuid
+import os
+from collections import OrderedDict
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 
@@ -342,6 +344,7 @@ class Grounding:
     ref: str    # seam_id | 'shared:<token>' (containment) | 'adj:<a>--<b>' | 'path:<obs>'
     relation: Relation | None = None
 
+
     @property
     def authoritative(self) -> bool:
         """No relation ⇒ NOT authoritative (fail-closed). Rank 6 (inferred) and
@@ -360,6 +363,50 @@ class Grounding:
     @property
     def data_class(self) -> str:
         return self.relation.data_class if self.relation else DataClass.LIVE.value
+
+
+# TRACKER 156 (2026-08-20). These two Groundings are pure functions of a token or
+# seam id and were constructed once per CANDIDATE PAIR — quadratic in the window.
+# At the 85%-of-cap crossing on a 1k run, engine.py:745 (the Grounding) and
+# path_graph.py:675-678 (the Relation inside it) held 92.9 MB across ~1,600,000
+# blocks; engine.py + path_graph.py together were 157.8 MB, 85% of the traced
+# heap. Grounding is frozen and the Relation it wraps is interned too, so one
+# instance per key is enough.
+#
+# Bounded per §9: the keys derive from device-supplied tokens, so an unbounded
+# map would be a memory amplifier reachable from untrusted input. On overflow the
+# oldest entry is evicted and a fresh object is built — an allocation
+# optimisation, never a correctness input.
+GROUNDING_CACHE_MAX = int(os.environ.get("CORR_GROUNDING_CACHE_MAX", "50000"))
+_SHARED_TOKEN_GROUNDINGS: "OrderedDict[str, Grounding]" = OrderedDict()
+_SEAM_TOKEN_GROUNDINGS: "OrderedDict[str, Grounding]" = OrderedDict()
+GROUNDING_CACHE_EVICTED = 0
+
+
+def _grounding_cached(cache: OrderedDict, key: str, build) -> Grounding:
+    global GROUNDING_CACHE_EVICTED
+    got = cache.get(key)
+    if got is not None:
+        cache.move_to_end(key)
+        return got
+    val = build()
+    cache[key] = val
+    if len(cache) > GROUNDING_CACHE_MAX:
+        cache.popitem(last=False)
+        GROUNDING_CACHE_EVICTED += 1
+    return val
+
+
+def _shared_token_grounding(tok: str) -> Grounding:
+    return _grounding_cached(
+        _SHARED_TOKEN_GROUNDINGS, tok,
+        lambda: Grounding("topo", "shared:" + tok, shared_token_relation(tok)))
+
+
+def _seam_token_grounding(seam_id: str) -> Grounding:
+    return _grounding_cached(
+        _SEAM_TOKEN_GROUNDINGS, seam_id,
+        lambda: Grounding("seam", seam_id, seam_relation(seam_id, False)))
 
 
 @dataclass(frozen=True)
@@ -738,11 +785,11 @@ def build_edges(
         token_both = seam_token[ai] & seam_token[bi]
         if token_both:
             seam = seams_sorted[min(token_both)]
-            return Grounding("seam", seam.seam_id, seam_relation(seam.seam_id, False))
+            return _seam_token_grounding(seam.seam_id)
         shared = toks[ai] & toks[bi]
         if shared:
             tok = min(sorted(shared))
-            return Grounding("topo", "shared:" + tok, shared_token_relation(tok))
+            return _shared_token_grounding(tok)
         return None
 
     edges: list[Edge] = []
