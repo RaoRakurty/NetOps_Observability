@@ -1493,6 +1493,19 @@ def buffer_signal(sig: Signal) -> None:
             sig = dc_replace(sig, ts=arrival, stored_signal_id=str(sig.signal_id))
         else:
             EVENT_TS_PAST_STALE += 1
+    # tracker 165 phase 6: share the two IMMUTABLE identity fields across the
+    # retained set. Done HERE, at the single window-entry chokepoint, so only
+    # signals that are actually retained pay for it and the transient ones do
+    # not. Both fields are immutable by type (str, tuple-of-str), so a shared
+    # reference cannot be written through and `to_ch_row()` stays byte-identical
+    # — equal strings serialise the same whatever their identity.
+    # `attrs` is NOT shared: it is a mutable dict and the probe path stamps into
+    # it after construction, so sharing it would let one signal's enrichment
+    # rewrite another's evidence.
+    shared_id = signals.shared_entity_id(sig.entity_id)
+    shared_toks = signals.shared_entity_tokens(sig.entity_tokens)
+    if shared_id is not sig.entity_id or shared_toks is not sig.entity_tokens:
+        sig = dc_replace(sig, entity_id=shared_id, entity_tokens=shared_toks)
     sid = str(sig.signal_id)
     if sid in _BUFFERED_IDS:
         return  # at-least-once redelivery — the window already holds it
@@ -1907,6 +1920,9 @@ def retention_state() -> dict[str, object]:
         # holding evidence it might otherwise reclaim — a memory risk, and a
         # silent one until it is on /healthz.
         "consumer_lag_probe_failures": CONSUMER_LAG_PROBE_FAILURES,
+        # tracker 165 phase 7: the sharing cache must not become "every unique
+        # network value, forever". Population + evictions, always visible.
+        "entity_cache": signals.entity_cache_stats(),
         "stream_time_evictions": STREAM_TIME_EVICTIONS,
         "idle_tenant_evictions": IDLE_TENANT_EVICTIONS,
         "watermark_regressions": WATERMARK_REGRESSIONS,
@@ -5971,6 +5987,13 @@ async def metrics_exposition():
         "# HELP corr_consumer_lag_total In-process backlog; the idle backstop may only run at 0.",
         "# TYPE corr_consumer_lag_total gauge",
         f"corr_consumer_lag_total {CONSUMER_LAG_TOTAL if CONSUMER_LAG_TOTAL is not None else -1}",
+        "# HELP corr_entity_cache_entries Shared identity strings held (bounded).",
+        "# TYPE corr_entity_cache_entries gauge",
+        f'corr_entity_cache_entries{{kind="entity_id"}} {len(signals._ENTITY_ID_CACHE)}',
+        f'corr_entity_cache_entries{{kind="tokens"}} {len(signals._ENTITY_TOKENS_CACHE)}',
+        "# HELP corr_entity_cache_evicted_total Shared-string cache evictions.",
+        "# TYPE corr_entity_cache_evicted_total counter",
+        f"corr_entity_cache_evicted_total {signals.ENTITY_CACHE_EVICTED}",
         "# HELP corr_consumer_lag_probe_failures_total Backlog probe unusable; backstop holds evidence.",
         "# TYPE corr_consumer_lag_probe_failures_total counter",
         f"corr_consumer_lag_probe_failures_total {CONSUMER_LAG_PROBE_FAILURES}",

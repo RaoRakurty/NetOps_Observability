@@ -470,6 +470,80 @@ _OBSERVER_CACHE: OrderedDict[tuple, Observer] = OrderedDict()
 OBSERVER_CACHE_EVICTED = 0
 
 
+# ── tracker 165 phase 6/7: shared identity strings on the retained path ──────
+#
+# A retained Signal costs ~1,012 B live, and ~18% of that is two fields whose
+# VALUES repeat massively across a window: `entity_id` ("leaf17:Gi0/3") and
+# `entity_tokens` (("leaf17", "Gi0/3")). At 1000 devices the window holds tens
+# of thousands of signals drawn from a few tens of thousands of distinct
+# entities, so most of those strings are duplicates of one another.
+#
+# Sharing them is SAFE because both are immutable by type: a str cannot be
+# mutated, and entity_tokens is a tuple of str. Nothing can write through a
+# shared reference, so two Signals holding the same object can never affect
+# each other. `to_ch_row()` output is byte-identical — equal strings serialise
+# identically regardless of identity.
+#
+# `attrs` is DELIBERATELY NOT SHARED, and that is an evidence-based refusal
+# rather than caution: it is a plain dict and it IS mutated after Signal
+# construction (main.py stamps probe_intent / vantage_type / probe_authority /
+# probe_scope / execution_id / seam_id into `sig.attrs` on the probe path).
+# Sharing a mutable dict between Signals would let one signal's enrichment
+# silently rewrite another's evidence. The measured extra saving was real
+# (~549 B/signal instead of ~819) but it is not available without first making
+# attrs immutable, which is a separate change with its own risk.
+#
+# The caches are BOUNDED on the same pattern as _OBSERVER_CACHE above: an LRU
+# ceiling with counted eviction. Eviction is safe by construction — a miss just
+# means a fresh equal object, never a different value — so this can never
+# become "every unique network value, forever".
+ENTITY_CACHE_MAX = int(os.environ.get("CORR_ENTITY_CACHE_MAX", "50000"))
+_ENTITY_ID_CACHE: OrderedDict[str, str] = OrderedDict()
+_ENTITY_TOKENS_CACHE: OrderedDict[tuple, tuple] = OrderedDict()
+ENTITY_CACHE_EVICTED = 0
+
+
+def shared_entity_id(entity_id: str) -> str:
+    """The canonical instance of this entity_id string."""
+    global ENTITY_CACHE_EVICTED
+    got = _ENTITY_ID_CACHE.get(entity_id)
+    if got is not None:
+        _ENTITY_ID_CACHE.move_to_end(entity_id)
+        return got
+    _ENTITY_ID_CACHE[entity_id] = entity_id
+    if len(_ENTITY_ID_CACHE) > ENTITY_CACHE_MAX:
+        _ENTITY_ID_CACHE.popitem(last=False)
+        ENTITY_CACHE_EVICTED += 1
+    return entity_id
+
+
+def shared_entity_tokens(tokens: tuple) -> tuple:
+    """The canonical instance of this entity_tokens tuple, with its member
+    strings shared too — the tuple is usually small but its strings repeat as
+    hard as entity_id does."""
+    global ENTITY_CACHE_EVICTED
+    got = _ENTITY_TOKENS_CACHE.get(tokens)
+    if got is not None:
+        _ENTITY_TOKENS_CACHE.move_to_end(tokens)
+        return got
+    canon = tuple(shared_entity_id(t) if isinstance(t, str) else t for t in tokens)
+    _ENTITY_TOKENS_CACHE[tokens] = canon
+    if len(_ENTITY_TOKENS_CACHE) > ENTITY_CACHE_MAX:
+        _ENTITY_TOKENS_CACHE.popitem(last=False)
+        ENTITY_CACHE_EVICTED += 1
+    return canon
+
+
+def entity_cache_stats() -> dict:
+    """Population and eviction, so the cache cannot grow unobserved (§10)."""
+    return {
+        "entity_ids": len(_ENTITY_ID_CACHE),
+        "entity_token_tuples": len(_ENTITY_TOKENS_CACHE),
+        "max": ENTITY_CACHE_MAX,
+        "evicted": ENTITY_CACHE_EVICTED,
+    }
+
+
 def observer_of(observer_id: str, observer_type: ObserverType, *,
                 location: str = "", trust_domain: str = "",
                 collection_path: str = "direct",
