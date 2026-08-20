@@ -40,6 +40,8 @@ import uuid
 from collections import Counter, OrderedDict, deque
 from collections.abc import Awaitable, Callable, Iterable
 from contextlib import asynccontextmanager
+import diagnostics
+import signals
 from dataclasses import dataclass, field
 from dataclasses import replace as dc_replace
 from datetime import datetime, timezone
@@ -2934,6 +2936,10 @@ async def loop_lag_watchdog() -> None:
             lag_ms = 0.0
         LOOP_LAG_LAST_MS = lag_ms
         LOOP_LAG_MAX_MS = max(LOOP_LAG_MAX_MS, lag_ms)
+        # Diagnostic heartbeat (no-op unless CORR_DIAG_MEMORY). The stall
+        # detector runs on a plain thread and watches this value: a task cannot
+        # observe the stall that is stopping it from being scheduled.
+        diagnostics.heartbeat()
         if lag_ms >= CORR_LOOP_LAG_WARN_MS:
             LOOP_LAG_STALLS += 1
             log.warning(
@@ -2943,6 +2949,73 @@ async def loop_lag_watchdog() -> None:
                 "expires the session at %dms",
                 lag_ms, CORR_LOOP_LAG_WARN_MS, LOOP_LAG_STALLS,
                 LOOP_LAG_MAX_MS, CORR_SESSION_TIMEOUT_MS)
+
+
+def diag_app_state() -> dict:
+    """The application-side half of a memory snapshot: what correlation is
+    actually holding, so retained bytes can be attributed to a structure rather
+    than guessed at."""
+    return {
+        "open_objects": len(OPEN_OBJECTS),
+        "window_signals": len(WINDOW_BUFFER),
+        "window_maxlen": WINDOW_BUFFER.maxlen,
+        "buffered_ids": len(_BUFFERED_IDS),
+        "pending_batch_rows": SIGNAL_BATCH.pending(),
+        "archive_slice_hashes": len(_ARCHIVE_SLICE_HASH),
+        "series": len(SERIES),
+        "quarantine_ring": len(QUARANTINE),
+        "flow_agg": len(_FLOW_AGG),
+        "syslog_buckets": len(SYSLOG_BUCKET),
+        "observer_cache": len(signals._OBSERVER_CACHE),
+        "cycle_row_cache": len(_CYCLE_ROW_CACHE),
+        "asyncio_tasks": len(asyncio.all_tasks()),
+        "consumer_state": consumer_state(),
+        "assigned_partitions": sum(len(v) for v in CONSUMER_ASSIGNMENT.values()),
+        "loop_lag_last_ms": round(LOOP_LAG_LAST_MS, 1),
+        "loop_lag_max_ms": round(LOOP_LAG_MAX_MS, 1),
+        "loop_lag_stalls": LOOP_LAG_STALLS,
+    }
+
+
+async def diag_snapshot_loop() -> None:
+    """Periodic synchronized snapshots, plus threshold-triggered ones as RSS
+    climbs toward the cgroup cap — the interesting samples are the crossings,
+    not the round-numbered intervals.
+
+    Only scheduled when diagnostics are enabled.
+    """
+    every = float(os.environ.get("CORR_DIAG_SNAPSHOT_EVERY_S", "30"))
+    crossed: set[int] = set()
+    cap = _cgroup_mem_max()
+    diagnostics.snapshot("pre-load-baseline", diag_app_state())
+    while True:
+        await asyncio.sleep(every)
+        state = diag_app_state()
+        label = "periodic"
+        if cap:
+            rss = diagnostics._proc_memory().get("rss_bytes", 0)
+            pct = int(rss * 100 / cap) if cap else 0
+            for mark in (85, 90, 95, 99):
+                if pct >= mark and mark not in crossed:
+                    crossed.add(mark)
+                    label = f"rss-crossed-{mark}pct"
+                    break
+            state["rss_pct_of_cap"] = pct
+            state["cgroup_max_bytes"] = cap
+        diagnostics.snapshot(label, state)
+
+
+def _cgroup_mem_max() -> int:
+    """The container's memory ceiling, or 0 when it cannot be read."""
+    for path in ("/sys/fs/cgroup/memory.max",
+                 "/sys/fs/cgroup/memory/memory.limit_in_bytes"):
+        try:
+            with open(path) as fh:
+                raw = fh.read().strip()
+            return 0 if raw == "max" else int(raw)
+        except (OSError, ValueError):
+            continue
+    return 0
 
 
 async def batch_flush_loop() -> None:
@@ -4815,6 +4888,9 @@ async def lifespan(_app: FastAPI):
     # (raising here aborts uvicorn's lifespan startup → non-zero exit → the
     # container restarts loudly instead of silently losing evidence).
     dlq_startup_check()
+    # Opt-in forensics (CORR_DIAG_MEMORY). Dormant by default: returns before
+    # starting tracemalloc, creating a thread, or touching the filesystem.
+    diagnostics.start()
     ch = CH(CLICKHOUSE_URL, CLICKHOUSE_USER, CLICKHOUSE_PASS)
     tasks = [
         asyncio.create_task(consume()),
@@ -4823,6 +4899,8 @@ async def lifespan(_app: FastAPI):
         asyncio.create_task(batch_flush_loop()),  # ≤2s latency bound for batched writes
         asyncio.create_task(loop_lag_watchdog()),  # P1: names the next blocker itself
     ]
+    if diagnostics.enabled():
+        tasks.append(asyncio.create_task(diag_snapshot_loop()))
     try:
         yield
     finally:
