@@ -7,7 +7,6 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-import asyncio
 import main
 from signals import (
     EntityType,
@@ -18,6 +17,7 @@ from signals import (
     Signal,
     Source,
 )
+
 
 def run(coro):
     return asyncio.run(coro)

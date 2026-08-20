@@ -1558,7 +1558,6 @@ WINDOW_OVERFLOW_DROPPED = 0
 async def _prune_buffer(now: datetime) -> None:
     global PRUNE_CALLS, PRUNE_EVICTED, PRUNE_SECONDS_LAST, PRUNE_SECONDS_MAX
     global PRUNE_YIELDS
-    started = time.monotonic()
     horizon = now.timestamp() - ENGINE_CFG.window_s
     _sync_buffered_id_order()
     evicted = 0

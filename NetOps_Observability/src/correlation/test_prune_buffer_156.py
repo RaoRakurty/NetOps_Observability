@@ -20,15 +20,16 @@ correct-and-slow rather than to wrong.
 """
 from __future__ import annotations
 
+import asyncio
+import time
 import uuid
 from datetime import datetime, timedelta, timezone
 
 import pytest
 
-import asyncio
-import time
 import main
 import signals as S
+
 
 def run(coro):
     return asyncio.run(coro)
