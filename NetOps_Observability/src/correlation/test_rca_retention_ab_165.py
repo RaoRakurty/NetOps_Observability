@@ -16,6 +16,7 @@ degradation state has to be reported explicitly.
 """
 from __future__ import annotations
 
+import asyncio
 from collections import deque
 from datetime import datetime, timedelta, timezone
 
@@ -75,16 +76,23 @@ def _noise(n, off_base):
             for i in range(n)]
 
 
-def _run(maxlen: int) -> dict:
+def _run(maxlen: int, *, lag_s: float = 0.0, prune: bool = False) -> dict:
     main.WINDOW_BUFFER = deque(maxlen=maxlen)
     main._BUFFERED_ID_ORDER = deque(maxlen=maxlen)
     main._BUFFERED_IDS = set()
+    main.TENANT_WATERMARK.clear()
     before_drop = main.WINDOW_OVERFLOW_DROPPED
     before_elig = main.WINDOW_OVERFLOW_IN_HORIZON
     for s in STORY:
         main.buffer_signal(s)
         for n in _noise(NOISE_PER_BEAT, (s.ts - T0).total_seconds() + 1):
             main.buffer_signal(n)
+    if prune:
+        # The real product path: the engine prunes before every evaluation.
+        # `lag_s` is WALL-CLOCK processing delay, which since tracker 165 must
+        # have no effect on what survives.
+        asyncio.run(main._prune_buffer(
+            datetime.now(timezone.utc) + timedelta(seconds=lag_s)))
     held = tuple(s for s in main.WINDOW_BUFFER if s.tenant_id == TENANT)
     snaps = run_window(held, CAT, SEAMS)
     obj = snaps[0] if snaps else None
@@ -93,6 +101,7 @@ def _run(maxlen: int) -> dict:
         "eligible_drops": main.WINDOW_OVERFLOW_IN_HORIZON - before_elig,
         "total_drops": main.WINDOW_OVERFLOW_DROPPED - before_drop,
         "degraded": main.rca_evidence_degraded(),
+        "reason": main.rca_degradation_reason(),
         "story_kept": sorted(s.kind for s in held if s.kind in STORY_KINDS),
         "objects": len(snaps),
         "tier": obj.ranking.verdict_tier.value if obj else None,
@@ -172,3 +181,60 @@ def test_every_shed_story_signal_was_counted_as_still_eligible(runs):
         r = runs[ml]
         assert r["eligible_drops"] > 0, ml
         assert r["eligible_drops"] <= r["total_drops"]
+
+
+# ── Phase 13: the NEW normal implementation vs the reference ─────────────────
+
+@pytest.fixture(scope="module")
+def shipped():
+    """The product as it now ships: a record cap that is a safety ceiling
+    rather than the horizon, stream-time expiry, and the engine's real prune
+    running before evaluation — at four wall-clock processing delays."""
+    return {lag: _run(20000, lag_s=lag, prune=True)
+            for lag in (0, 900, 3600, 86400)}
+
+
+def test_the_shipped_path_matches_the_reference_at_every_lag(runs, shipped):
+    """The acceptance test for tracker 165.
+
+    Reference (no pressure, no pruning) gave 4 nodes / 6 edges / suspected.
+    The shipped path must reproduce that EXACTLY — including after a full day
+    of wall-clock backlog, which under the old wall-clock horizon erased the
+    story entirely.
+    """
+    ref = runs[20000]
+    for lag, got in shipped.items():
+        assert got["objects"] == ref["objects"] == 1, lag
+        assert got["tier"] == ref["tier"], lag
+        assert got["top"] == ref["top"], lag
+        assert got["story_nodes"] == ref["story_nodes"], (
+            f"evidence membership differs at lag={lag}s")
+        assert got["edges"] == ref["edges"] == 6, (
+            f"causal graph differs at lag={lag}s: {got['edges']} vs 6")
+
+
+def test_the_shipped_path_is_not_degraded(shipped):
+    """No resource ceiling binds at the reference size, so nothing is shed and
+    the degradation state stays clean — the flag must not cry wolf either."""
+    for lag, got in shipped.items():
+        assert got["degraded"] is False, lag
+        assert got["reason"] == "none", lag
+        assert got["eligible_drops"] == 0, lag
+
+
+def test_a_day_of_backlog_no_longer_hollows_the_graph(shipped):
+    """The headline: 4 nodes / 6 edges at 24 h of processing delay. The prior
+    wave measured 1 node / 0 edges under a fraction of that."""
+    day = shipped[86400]
+    assert len(day["story_nodes"]) == 4
+    assert day["edges"] == 6
+
+
+def test_when_the_ceiling_DOES_bind_the_reason_is_resource_capacity():
+    """The ceiling still exists and still protects the process — but it now
+    announces itself, with a reason, instead of silently redefining the
+    horizon."""
+    got = _run(200, prune=True)
+    assert got["degraded"] is True
+    assert got["reason"] == "resource_capacity"
+    assert got["eligible_drops"] > 0

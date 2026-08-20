@@ -47,3 +47,21 @@ def _hermetic_signal_batch():
     main.SIGNAL_BATCH.drop_pending()
     yield
     main.SIGNAL_BATCH.drop_pending()
+
+
+@pytest.fixture(autouse=True)
+def _hermetic_stream_clock():
+    """Tracker 165: retention now runs on per-tenant STREAM watermarks, which
+    are module-level state like the window itself.
+
+    A suite that clears WINDOW_BUFFER but leaves TENANT_WATERMARK behind hands
+    the next test a stream clock that is already far ahead of the signals it
+    loads — so its evidence is expired the moment it prunes, and the failure
+    surfaces somewhere unrelated. That is exactly the cross-test contamination
+    the batcher fixture above exists to prevent, so it gets the same treatment:
+    cleared on entry AND exit, for every test, whether or not it touches
+    retention.
+    """
+    main.TENANT_WATERMARK.clear()
+    yield
+    main.TENANT_WATERMARK.clear()

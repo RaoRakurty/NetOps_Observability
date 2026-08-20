@@ -97,7 +97,18 @@ class EngineConfig:
     reinforce_cross_modality: float = 1.25
     direction_conf: float = 0.8           # claimed only on 2-of-3 agreement
     severity_open_floor: str = "high"     # singleton episodes ≥ this open an object
-    window_s: float = 900.0               # evidence window the caller buffers
+    # NOTE (tracker 165): `window_s = 900.0` used to live here. It was never an
+    # engine parameter — the core never read it, and its only other appearance
+    # was a comment saying the CALLER buffers it. Keeping a second temporal
+    # constant next to `tau_s` invited exactly the drift that shipped: a record
+    # cap silently became the RCA horizon while a 900 that nothing enforced sat
+    # in the config looking authoritative. Retention is the caller's concern and
+    # now derives from `engine_temporal_reach_s()` below, so the two cannot
+    # disagree. Removing the field changes `config_hash()` and therefore
+    # `engine_version` — that is intended and visible: objects scored under the
+    # old retention semantics are genuinely not equivalent to new ones, and
+    # `replay.py` REPORTS the pin mismatch (`engine_pin_match`) rather than
+    # failing, so historical replay still runs and says what changed.
 
     def config_hash(self) -> str:
         blob = json.dumps(

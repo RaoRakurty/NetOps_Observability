@@ -163,9 +163,12 @@ def test_lateness_must_be_supplied_never_negative():
         required_retention_s(CFG, permitted_lateness_s=-1.0)
 
 
-def test_retention_is_not_window_s():
-    """The whole point of 165: the buffering constant and the real requirement
-    are unrelated numbers, and 900 is the larger by ~2.3x."""
-    assert CFG.window_s == 900.0
-    assert required_retention_s(CFG, permitted_lateness_s=0.0) < CFG.window_s
-    assert CFG.window_s / engine_temporal_reach_s(CFG) > 2.0
+def test_window_s_is_gone_from_the_engine_config():
+    """The whole point of 165: a second temporal constant sat next to tau_s
+    describing the same concept and nothing related them, so it drifted. It is
+    removed outright — the retention requirement derives from the scoring rule
+    and cannot disagree with it."""
+    assert not hasattr(CFG, "window_s")
+    assert "window_s" not in CFG.__dataclass_fields__
+    # the retired constant was 900 s: ~2.3x more than can ever attach
+    assert 900.0 / engine_temporal_reach_s(CFG) > 2.0

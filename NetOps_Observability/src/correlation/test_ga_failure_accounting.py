@@ -26,7 +26,7 @@ from __future__ import annotations
 import ast
 import asyncio
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
@@ -354,12 +354,20 @@ def test_burst_drains_to_steady_state_memory(monkeypatch, registry):
     assert len(main._FLOW_AGG) == flow_agg_before
     assert len(main.SERIES) == series_before  # syslog lane never touches z-score baselines
 
-    # And the burst DRAINS: once the engine's window horizon passes, the live
-    # window releases every buffered signal and its dedup id — the exact prune
-    # the engine cycle runs (run_window → _prune_buffer).
-    later = datetime.now(timezone.utc) + timedelta(
-        seconds=main.ENGINE_CFG.window_s + main.METRIC_FUTURE_SKEW_S + 60)
-    run(main._prune_buffer(later))
+    # And the burst DRAINS: once the tenant's STREAM has moved past the
+    # retention horizon, the live window releases every buffered signal and its
+    # dedup id — the exact prune the engine cycle runs.
+    #
+    # tracker 165: advancing the WALL CLOCK here would (correctly) do nothing.
+    # Retention is stream-relative now, so a burst sitting in a backlog keeps
+    # its evidence however late it is processed; it is the stream moving on
+    # that expires it.
+    import time as _time
+    for tenant in list(main.TENANT_WATERMARK):
+        wm_ts, _ = main.TENANT_WATERMARK[tenant]
+        main.TENANT_WATERMARK[tenant] = (
+            wm_ts + main.RETENTION_REQUIRED_S + 60, _time.monotonic())
+    run(main._prune_buffer(datetime.now(timezone.utc)))
     assert len(main.WINDOW_BUFFER) == 0, "window buffer did not drain past the horizon"
     assert len(main._BUFFERED_IDS) == 0, "dedup id set leaked after the buffer drained"
 

@@ -1530,6 +1530,11 @@ def buffer_signal(sig: Signal) -> None:
     # deque drops its head from both at once and the two stay aligned.
     WINDOW_BUFFER.append(sig)
     _BUFFERED_ID_ORDER.append(sid)
+    # tracker 165: this is the ONE place the stream clock advances, and it is
+    # the same chokepoint that already canonicalises the tenant and bounds the
+    # device clock — so the watermark can never be advanced by a signal the
+    # window rejected, nor by a tenant spelling the engine will not use.
+    _advance_watermark(sig, time.monotonic())
     # #101 write-amp accounting: raw lane pressure per tenant (post-dedup, so a
     # redelivered signal never double-counts).
     _wa_note_raw(sig)
@@ -1539,7 +1544,7 @@ def _window_span_s() -> float:
     """Seconds of history the evidence window currently holds.
 
     O(1) — the deque is arrival-ordered, so the ends are the extremes. Compared
-    against ENGINE_CFG.window_s this says whether the COUNT bound or the TIME
+    against RETENTION_REQUIRED_S this says whether the COUNT bound or the TIME
     bound is the one actually deciding what the engine gets to correlate over.
     """
     if len(WINDOW_BUFFER) < 2:
@@ -1584,6 +1589,97 @@ RETENTION_REQUIRED_S = required_retention_s(
     ENGINE_CFG, permitted_lateness_s=CORR_PERMITTED_LATENESS_S)
 
 
+# ── tracker 165 phase 3/4: retention runs on STREAM time, not wall clock ─────
+#
+# Pruning used to age EVENT timestamps against wall-clock `now()`, which made the
+# retained event-time span `window_s - processing_lag`. A backlog therefore
+# destroyed evidence the engine was still entitled to use: proven with A at
+# 12:00 and B at 12:05 (300 s apart, inside the 396.5 s reach) — processed
+# promptly the edge forms, processed 15 minutes late the CAUSE is evicted and
+# the edge is gone. Nothing about the story changed; only when it was processed.
+#
+# The clock is now the stream's own progress: each tenant's watermark is the
+# newest EVENT timestamp seen for that tenant, and its evidence expires relative
+# to that. Backlog no longer shortens the horizon — replaying an hour-old burst
+# retains exactly the same evidence it would have retained live.
+#
+# WHY PER TENANT, and why a single global watermark would be WRONG.
+# The co-partitioning contract (test_scale_copartition.py) is: every producer
+# keys by tenant with the Java-compatible murmur2 partitioner, so a tenant hashes
+# to the same partition NUMBER on all 12 topics; the RANGE assignor then keeps
+# partition k of every topic on one member. A tenant therefore lives entirely on
+# one instance, across every lane. The engine partitions the window by tenant and
+# `run_window` REFUSES a mixed-tenant window, so no edge can ever span tenants.
+# Consequences:
+#   * a fast tenant's stream time must never expire a slow tenant's evidence —
+#     a global watermark would do exactly that, silently;
+#   * a slow partition can never hold evidence a fast partition needs, because
+#     the two carry different tenants and cross-tenant edges do not exist;
+#   * per-tenant is therefore both the safe scope AND the tightest one.
+# This stays compatible with tracker 155: watermarks are per-process state with
+# no rehydration path, exactly like OPEN_OBJECTS and the window itself, so a
+# partition acquired at a rebalance starts with a cold watermark and refills.
+#
+# BACKSTOP. A tenant that goes silent freezes its watermark, so its evidence
+# would never expire. That is semantically defensible (more evidence may still
+# arrive) but it is a memory leak across tenant churn, so a wall-clock backstop
+# evicts a tenant whose stream has not advanced in CORR_TENANT_IDLE_EVICT_S.
+# That is a RESOURCE control, deliberately far above any plausible lag, and it
+# is counted separately so it can never be mistaken for semantic expiry.
+CORR_TENANT_IDLE_EVICT_S = float(
+    os.environ.get("CORR_TENANT_IDLE_EVICT_S", "3600"))
+# Bound the map itself (§9): tenants are evicted with their last signal, but a
+# hard ceiling means tenant churn cannot grow it without limit either.
+CORR_TENANT_WATERMARK_MAX = int(
+    os.environ.get("CORR_TENANT_WATERMARK_MAX", "10000"))
+
+_SENTINEL = object()   # 'not computed yet' — None means 'no watermark'
+
+# tenant -> (newest event ts seen, monotonic when that advanced)
+TENANT_WATERMARK: dict[str, tuple[float, float]] = {}
+WATERMARK_REGRESSIONS = 0     # out-of-order arrivals (normal; watermark holds)
+IDLE_TENANT_EVICTIONS = 0     # signals shed by the wall-clock backstop
+STREAM_TIME_EVICTIONS = 0     # signals expired by their tenant's stream time
+
+
+def _advance_watermark(sig: Signal, now_mono: float) -> None:
+    """Advance the tenant's stream clock. Watermarks are MONOTONIC: an
+    out-of-order arrival is counted, never allowed to move the clock backwards
+    (that would resurrect an already-expired horizon and make eviction
+    non-deterministic)."""
+    global WATERMARK_REGRESSIONS
+    ts = sig.ts.timestamp()
+    cur = TENANT_WATERMARK.get(sig.tenant_id)
+    if cur is None:
+        if len(TENANT_WATERMARK) >= CORR_TENANT_WATERMARK_MAX:
+            # Drop the least recently advanced tenant rather than grow forever.
+            stale = min(TENANT_WATERMARK.items(), key=lambda kv: kv[1][1])[0]
+            TENANT_WATERMARK.pop(stale, None)
+        TENANT_WATERMARK[sig.tenant_id] = (ts, now_mono)
+        return
+    if ts > cur[0]:
+        TENANT_WATERMARK[sig.tenant_id] = (ts, now_mono)
+    else:
+        WATERMARK_REGRESSIONS += 1
+
+
+def _tenant_horizon(tenant: str) -> float | None:
+    """The event-time cutoff for `tenant`: evidence older than this can no
+    longer attach to anything this tenant will produce. None when the tenant has
+    no watermark yet (nothing is expired by a clock that has not started)."""
+    wm = TENANT_WATERMARK.get(tenant)
+    if wm is None:
+        return None
+    return wm[0] - RETENTION_REQUIRED_S
+
+
+def _tenant_idle(tenant: str, now_mono: float) -> bool:
+    """Has this tenant's stream stopped advancing long enough for the resource
+    backstop to apply? Not a semantic statement — a memory one."""
+    wm = TENANT_WATERMARK.get(tenant)
+    return wm is not None and (now_mono - wm[1]) >= CORR_TENANT_IDLE_EVICT_S
+
+
 def rca_evidence_degraded() -> bool:
     """Is Correlix currently unable to hold the evidence its own scoring rule
     says is still usable?
@@ -1598,9 +1694,36 @@ def rca_evidence_degraded() -> bool:
     A window that is simply not full yet (a quiet tenant, a cold start) is NOT
     degraded — there is no evidence being shed, there is just less of it.
     """
+    return rca_degradation_reason() != DEGRADED_NONE
+
+
+# Reasons are a CLOSED set, low-cardinality, safe as a metric label.
+DEGRADED_NONE = "none"
+DEGRADED_RESOURCE_CAPACITY = "resource_capacity"
+
+
+def rca_degradation_reason() -> str:
+    """WHY RCA context is short, not just that it is.
+
+    Since tracker 165 there is exactly one way still-usable evidence can be
+    lost: a RESOURCE ceiling binding before the semantic horizon is reached.
+    Age-based expiry can no longer cause it — evidence now expires against its
+    own tenant's stream clock at the horizon the engine's scoring rule implies,
+    so anything expired is by construction beyond what could attach.
+
+    `resource_capacity` therefore means: the record cap is full AND the window
+    holds less event-time history than the engine can still use. RCA keeps
+    emitting objects, but from a materially shorter history than it was
+    configured to reason over, and that must never be presented as full context.
+
+    A window that is simply not full yet (a quiet tenant, a cold start) is NOT
+    degraded — nothing is being shed, there is just less of it.
+    """
     if WINDOW_BUFFER.maxlen is None or len(WINDOW_BUFFER) < WINDOW_BUFFER.maxlen:
-        return False
-    return _window_span_s() < ENGINE_REACH_S
+        return DEGRADED_NONE
+    if _window_span_s() < ENGINE_REACH_S:
+        return DEGRADED_RESOURCE_CAPACITY
+    return DEGRADED_NONE
 
 
 def retention_state() -> dict[str, object]:
@@ -1621,10 +1744,30 @@ def retention_state() -> dict[str, object]:
         "capacity_dropped_already_stale": max(
             0, WINDOW_OVERFLOW_DROPPED - WINDOW_OVERFLOW_IN_HORIZON),
         "rca_evidence_degraded": rca_evidence_degraded(),
-        # window_s is retained ONLY as the wall-clock prune bound it always was.
-        # It is reported so the mismatch stays visible, not as a contract.
-        "prune_bound_s": ENGINE_CFG.window_s,
+        "rca_degradation_reason": rca_degradation_reason(),
+        # Stream-time facts (tracker 165 phase 3): retention no longer depends
+        # on the wall clock, so these are what an operator reads to see whether
+        # the clock is actually advancing.
+        "tenants_tracked": len(TENANT_WATERMARK),
+        "stream_time_evictions": STREAM_TIME_EVICTIONS,
+        "idle_tenant_evictions": IDLE_TENANT_EVICTIONS,
+        "watermark_regressions": WATERMARK_REGRESSIONS,
+        "oldest_retained_age_vs_stream_s": round(_oldest_retained_stream_age_s(), 3),
     }
+
+
+def _oldest_retained_stream_age_s() -> float:
+    """How far behind its own tenant's stream clock the oldest retained signal
+    is. This — not wall-clock age — is the number that must stay under
+    RETENTION_REQUIRED_S, and it answers the operator's real question: how much
+    useful event-time history does this replica hold right now?"""
+    worst = 0.0
+    for sig in WINDOW_BUFFER:
+        wm = TENANT_WATERMARK.get(sig.tenant_id)
+        if wm is None:
+            continue
+        worst = max(worst, wm[0] - sig.ts.timestamp())
+    return worst
 
 
 def _event_time_lag_s() -> float:
@@ -1686,7 +1829,7 @@ PRUNE_YIELDS = 0            # loop hand-backs during pruning (monotonic)
 # automatically and fails if it is ever left off /healthz.
 WINDOW_OVERFLOW_DROPPED = 0
 # THE CORRECTNESS QUESTION, made measurable (2026-08-20). The window is bounded
-# by COUNT (50,000) but the RCA horizon is a TIME (ENGINE_CFG.window_s, 900 s).
+# by COUNT (50,000) but the RCA horizon is a TIME (RETENTION_REQUIRED_S).
 # A count bound cannot express a time horizon: the window holds
 # 50,000 / signal_rate seconds of history, so any sustained rate above
 # 50,000/900 = ~55.6 signals/s makes it physically unable to hold the configured
@@ -1695,36 +1838,86 @@ WINDOW_OVERFLOW_DROPPED = 0
 # When that happens the victim is evicted while STILL INSIDE the horizon the
 # engine is about to correlate over — that is RCA evidence degradation, not
 # ordinary pruning, and the two were indistinguishable until now.
-WINDOW_OVERFLOW_IN_HORIZON = 0   # overflow drops of signals still inside window_s
+WINDOW_OVERFLOW_IN_HORIZON = 0   # overflow drops still inside the engine's reach
 WINDOW_OVERFLOW_AGE_MIN_S = 0.0  # youngest signal ever shed by capacity
 WINDOW_OVERFLOW_AGE_MAX_S = 0.0  # oldest signal shed by capacity
 
 
 async def _prune_buffer(now: datetime) -> None:
+    """Expire evidence on STREAM time, per tenant (tracker 165).
+
+    A signal leaves the window when its own tenant's stream has moved more than
+    `RETENTION_REQUIRED_S` past it — not when the wall clock has. Processing
+    backlog therefore cannot shorten the RCA horizon any more.
+
+    `now` is still taken (wall clock) because the IDLE BACKSTOP needs it: a
+    tenant whose stream stopped advancing has a frozen watermark and would
+    otherwise retain forever. That path is a resource control and is counted
+    separately from stream-time expiry, so the two can never be confused.
+
+    Implementation note: the deque is ARRIVAL-ordered, and with per-tenant
+    horizons the head is no longer guaranteed to be the first thing to expire —
+    a stalled tenant's old signal can sit in front of newer, already-expired
+    signals from a faster tenant. Left-popping would therefore under-evict
+    behind a head-of-line block and quietly hand the job back to the capacity
+    cap, which is the defect this wave exists to remove. So survivors are
+    rebuilt in chunks, with the same yield discipline the pop loop had.
+    """
     global PRUNE_CALLS, PRUNE_EVICTED, PRUNE_SECONDS_LAST, PRUNE_SECONDS_MAX
-    global PRUNE_YIELDS
-    horizon = now.timestamp() - ENGINE_CFG.window_s
+    global PRUNE_YIELDS, STREAM_TIME_EVICTIONS, IDLE_TENANT_EVICTIONS
     _sync_buffered_id_order()
-    evicted = 0
+    if not WINDOW_BUFFER:
+        PRUNE_CALLS += 1
+        PRUNE_SECONDS_LAST = 0.0
+        return
+    now_mono = time.monotonic()
+    horizons: dict[str, float | None] = {}
+    idle: dict[str, bool] = {}
+    wall_cut = now.timestamp() - CORR_TENANT_IDLE_EVICT_S
+
+    keep_sig: deque[Signal] = deque(maxlen=WINDOW_BUFFER.maxlen)
+    keep_id: deque[str] = deque(maxlen=_BUFFERED_ID_ORDER.maxlen)
+    evicted = stream_evicted = idle_evicted = 0
     worst_block = 0.0
-    while True:
+    src_sig = list(WINDOW_BUFFER)
+    src_id = list(_BUFFERED_ID_ORDER)
+
+    for start in range(0, len(src_sig), CORR_PRUNE_CHUNK):
         block_started = time.monotonic()
-        chunk = 0
-        while (WINDOW_BUFFER and WINDOW_BUFFER[0].ts.timestamp() < horizon
-               and chunk < CORR_PRUNE_CHUNK):
-            # The id was computed once, at insert. Popping it is O(1);
-            # recomputing it was a SHA-1 per evicted signal (tracker 156).
-            _BUFFERED_IDS.discard(_BUFFERED_ID_ORDER.popleft())
-            WINDOW_BUFFER.popleft()
-            chunk += 1
+        for sig, sid in zip(src_sig[start:start + CORR_PRUNE_CHUNK],
+                            src_id[start:start + CORR_PRUNE_CHUNK]):
+            tenant = sig.tenant_id
+            cut = horizons.get(tenant, _SENTINEL)
+            if cut is _SENTINEL:
+                cut = _tenant_horizon(tenant)
+                horizons[tenant] = cut
+                idle[tenant] = _tenant_idle(tenant, now_mono)
+            ts = sig.ts.timestamp()
+            if cut is not None and ts < cut:
+                stream_evicted += 1
+            elif idle[tenant] and ts < wall_cut:
+                # Resource backstop, NOT semantic expiry.
+                idle_evicted += 1
+            else:
+                keep_sig.append(sig)
+                keep_id.append(sid)
+                continue
+            _BUFFERED_IDS.discard(sid)
+            evicted += 1
         worst_block = max(worst_block, time.monotonic() - block_started)
-        evicted += chunk
-        if chunk < CORR_PRUNE_CHUNK:
-            break          # nothing left to expire
-        PRUNE_YIELDS += 1
-        await asyncio.sleep(0)   # hand the loop back: heartbeat, fetch, commit
+        if start + CORR_PRUNE_CHUNK < len(src_sig):
+            PRUNE_YIELDS += 1
+            await asyncio.sleep(0)   # hand the loop back: heartbeat, fetch, commit
+
+    if evicted:
+        WINDOW_BUFFER.clear()
+        WINDOW_BUFFER.extend(keep_sig)
+        _BUFFERED_ID_ORDER.clear()
+        _BUFFERED_ID_ORDER.extend(keep_id)
     PRUNE_CALLS += 1
     PRUNE_EVICTED += evicted
+    STREAM_TIME_EVICTIONS += stream_evicted
+    IDLE_TENANT_EVICTIONS += idle_evicted
     # The gauge reports the worst CONTIGUOUS block, not total elapsed — blocking
     # is what threatens Kafka membership, and total elapsed across yields does
     # not.
@@ -2523,8 +2716,10 @@ async def engine_loop() -> None:
     if not (CORR_SIGNALS_ENABLED and CORR_ENGINE_ENABLED):
         log.info("engine v2 object loop disabled")
         return
-    log.info("engine v2 object loop: interval=%.0fs window=%.0fs quiesce=%.0fs",
-             CORR_ENGINE_INTERVAL_S, ENGINE_CFG.window_s, CORR_QUIESCE_S)
+    log.info("engine v2 object loop: interval=%.0fs retention=%.1fs "
+             "(reach %.1fs + lateness %.0fs, STREAM time) quiesce=%.0fs",
+             CORR_ENGINE_INTERVAL_S, RETENTION_REQUIRED_S, ENGINE_REACH_S,
+             CORR_PERMITTED_LATENESS_S, CORR_QUIESCE_S)
     while True:
         try:
             await engine_cycle()
@@ -4046,7 +4241,7 @@ def consumer_state(now_mono: float | None = None) -> str:
     if not any(CONSUMER_ASSIGNMENT.values()):
         return "idle"
     now_mono = time.monotonic() if now_mono is None else now_mono
-    if any((now_mono - t) < ENGINE_CFG.window_s
+    if any((now_mono - t) < RETENTION_REQUIRED_S
            for t in CONSUMER_PARTITION_ACQUIRED_AT.values()):
         return "cold_window"
     return "active"
@@ -4058,7 +4253,7 @@ def cold_partitions(now_mono: float | None = None) -> list[str]:
     RCA is thin, not just that some are."""
     now_mono = time.monotonic() if now_mono is None else now_mono
     return sorted(k for k, t in CONSUMER_PARTITION_ACQUIRED_AT.items()
-                  if (now_mono - t) < ENGINE_CFG.window_s)
+                  if (now_mono - t) < RETENTION_REQUIRED_S)
 
 
 def owns_tenant(tenant: str, *, topic: str = "netops.cloud") -> bool:
@@ -5527,9 +5722,27 @@ async def metrics_exposition():
         "# HELP corr_window_span_seconds Time span currently held in the evidence window.",
         "# TYPE corr_window_span_seconds gauge",
         f"corr_window_span_seconds {_window_span_s():.1f}",
-        "# HELP corr_window_horizon_seconds Wall-clock prune bound (window_s). NOT the RCA contract.",
+        # Kept under its original name so existing dashboards/alerts keep
+        # resolving, but it now reports the DERIVED retention horizon rather
+        # than the removed window_s constant (tracker 165).
+        "# HELP corr_window_horizon_seconds Required retention horizon (derived: reach + lateness).",
         "# TYPE corr_window_horizon_seconds gauge",
-        f"corr_window_horizon_seconds {ENGINE_CFG.window_s:.1f}",
+        f"corr_window_horizon_seconds {RETENTION_REQUIRED_S:.1f}",
+        "# HELP corr_oldest_retained_stream_age_seconds Oldest retained signal's age against its own tenant's stream clock.",
+        "# TYPE corr_oldest_retained_stream_age_seconds gauge",
+        f"corr_oldest_retained_stream_age_seconds {_oldest_retained_stream_age_s():.3f}",
+        "# HELP corr_stream_time_evictions_total Signals expired by their tenant's stream clock.",
+        "# TYPE corr_stream_time_evictions_total counter",
+        f"corr_stream_time_evictions_total {STREAM_TIME_EVICTIONS}",
+        "# HELP corr_idle_tenant_evictions_total Signals shed by the wall-clock idle backstop (resource control).",
+        "# TYPE corr_idle_tenant_evictions_total counter",
+        f"corr_idle_tenant_evictions_total {IDLE_TENANT_EVICTIONS}",
+        "# HELP corr_watermark_regressions_total Out-of-order arrivals that did not move a tenant's stream clock.",
+        "# TYPE corr_watermark_regressions_total counter",
+        f"corr_watermark_regressions_total {WATERMARK_REGRESSIONS}",
+        "# HELP corr_tenants_tracked Tenants with a live stream watermark.",
+        "# TYPE corr_tenants_tracked gauge",
+        f"corr_tenants_tracked {len(TENANT_WATERMARK)}",
         # tracker 165: the horizon that actually matters, derived from the
         # scoring rule (exp(-gap/tau_s) * w_topo * w_r >= attach_threshold), and
         # the retention it implies. If reach > span while the window is full,
@@ -5551,6 +5764,14 @@ async def metrics_exposition():
         "# HELP corr_rca_evidence_degraded 1 when capacity is shedding still-attachable evidence.",
         "# TYPE corr_rca_evidence_degraded gauge",
         f"corr_rca_evidence_degraded {1 if rca_evidence_degraded() else 0}",
+        # The reason, as a CLOSED low-cardinality label set — an operator must
+        # be able to tell a resource ceiling from ordinary event-time expiry
+        # without reading two other metrics and inferring it.
+        "# HELP corr_rca_degradation_reason Why RCA context is short (closed label set).",
+        "# TYPE corr_rca_degradation_reason gauge",
+        *(f'corr_rca_degradation_reason{{reason="{r}"}} '
+          f'{1 if rca_degradation_reason() == r else 0}'
+          for r in (DEGRADED_NONE, DEGRADED_RESOURCE_CAPACITY)),
         # tracker 165 phase 9: three different lags, reported separately.
         # Event-time lag is how far the newest EVENT in the window is behind the
         # wall clock — the quantity that shortens the retained span, because
@@ -5718,7 +5939,7 @@ async def health() -> dict:
             "window_overflow_age_min_s": round(WINDOW_OVERFLOW_AGE_MIN_S, 1),
             "window_overflow_age_max_s": round(WINDOW_OVERFLOW_AGE_MAX_S, 1),
             "window_span_s": round(_window_span_s(), 1),
-            "window_horizon_s": ENGINE_CFG.window_s,
+            "window_horizon_s": round(RETENTION_REQUIRED_S, 1),
             # M29a: legacy z-score series budget — evicted rising means
             # cardinality churn is recycling warm baselines (never silent).
             "series_len": len(SERIES),

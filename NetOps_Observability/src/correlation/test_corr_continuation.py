@@ -117,19 +117,36 @@ def _pair(dev: str, base: datetime, off: float) -> list:
     ]
 
 
+def _h(fraction: float) -> float:
+    """An offset expressed as a FRACTION of the derived retention horizon.
+
+    These fixtures used to hard-code offsets against the retired 900 s
+    `window_s` (-880 = "just inside the back of the window", +480 = "far enough
+    that the onset has aged out"). Retention is now derived from the engine's
+    scoring reach, so the geometry is expressed relative to
+    RETENTION_REQUIRED_S and follows it automatically — pinning fresh constants
+    here would just recreate the drift tracker 165 removed.
+    """
+    return round(fraction * main.RETENTION_REQUIRED_S, 3)
+
+
 def test_ongoing_condition_is_one_object_zero_tombstones(monkeypatch):
     """The #111 storm shape: a condition that keeps emitting while its onset
-    ages out of the 900s window. Pre-fix: new object + merged tombstone per
-    sweep. Post-fix: ONE object, version bumps, zero tombstones."""
+    ages out of the retention horizon. Pre-fix: new object + merged tombstone
+    per sweep. Post-fix: ONE object, version bumps, zero tombstones."""
     base = datetime.now(timezone.utc).replace(microsecond=0)
     sweeps = [
-        # sweep 1: onset near the back of the window + a mid-window refresh.
-        (base, _pair("churn-dev-1", base, -880) + _pair("churn-dev-1", base, -390)),
-        # sweep 2 (+500s): the onset signals are pruned (900s window) — the SAME
-        # condition re-keys under a new windowed id. It must adopt, not merge.
-        (base + timedelta(seconds=500), _pair("churn-dev-1", base, 480)),
-        # sweep 3 (+800s): still ongoing.
-        (base + timedelta(seconds=800), _pair("churn-dev-1", base, 780)),
+        # sweep 1: onset near the back of the horizon + a mid-window refresh.
+        (base, _pair("churn-dev-1", base, -_h(0.978))
+         + _pair("churn-dev-1", base, -_h(0.433))),
+        # sweep 2: the stream has moved far enough that the onset signals are
+        # expired — the SAME condition re-keys under a new windowed id. It must
+        # adopt, not merge.
+        (base + timedelta(seconds=_h(0.556)),
+         _pair("churn-dev-1", base, _h(0.533))),
+        # sweep 3: still ongoing.
+        (base + timedelta(seconds=_h(0.889)),
+         _pair("churn-dev-1", base, _h(0.867))),
     ]
     stub, open_objects = _run_sweeps(monkeypatch, sweeps)
     rows = stub.rows["netops.corr_objects"]
@@ -151,10 +168,10 @@ def test_distinct_conditions_keep_distinct_objects(monkeypatch):
     base = datetime.now(timezone.utc).replace(microsecond=0)
     sweeps = [
         (base,
-         _pair("churn-dev-a", base, -880) + _pair("churn-dev-a", base, -390)
-         + _pair("churn-dev-b", base, -876) + _pair("churn-dev-b", base, -386)),
-        (base + timedelta(seconds=500),
-         _pair("churn-dev-a", base, 480) + _pair("churn-dev-b", base, 484)),
+         _pair("churn-dev-a", base, -_h(0.978)) + _pair("churn-dev-a", base, -_h(0.433))
+         + _pair("churn-dev-b", base, -_h(0.973)) + _pair("churn-dev-b", base, -_h(0.429))),
+        (base + timedelta(seconds=_h(0.556)),
+         _pair("churn-dev-a", base, _h(0.533)) + _pair("churn-dev-b", base, _h(0.538))),
     ]
     stub, open_objects = _run_sweeps(monkeypatch, sweeps)
     rows = stub.rows["netops.corr_objects"]
@@ -173,7 +190,7 @@ def test_new_incident_after_quiet_gap_is_a_new_object(monkeypatch):
     """No window overlap ⇒ no continuation: a recurrence after a real gap is a
     NEW incident (the old object quiesce-closes), not an adoption."""
     base = datetime.now(timezone.utc).replace(microsecond=0)
-    gap = 2000  # > window_s (900) and > CORR_QUIESCE_S (900)
+    gap = 2000  # > RETENTION_REQUIRED_S (~427) and > CORR_QUIESCE_S (900)
     sweeps = [
         (base, _pair("churn-dev-q", base, -60)),
         (base + timedelta(seconds=gap), _pair("churn-dev-q", base, gap - 60)),

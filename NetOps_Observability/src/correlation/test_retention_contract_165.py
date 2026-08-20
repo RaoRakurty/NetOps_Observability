@@ -42,7 +42,11 @@ def test_required_retention_is_reach_plus_lateness_not_window_s():
     assert main.ENGINE_REACH_S == pytest.approx(396.5267, abs=1e-3)
     assert main.RETENTION_REQUIRED_S == pytest.approx(
         main.ENGINE_REACH_S + main.CORR_PERMITTED_LATENESS_S)
-    assert main.RETENTION_REQUIRED_S < main.ENGINE_CFG.window_s
+    # The retired window_s was 900 s — the requirement is 2.1x smaller, which
+    # is why sizing to 900 would have over-retained ~2.5x beyond what attaches.
+    assert main.RETENTION_REQUIRED_S < 900.0
+    assert not hasattr(main.ENGINE_CFG, "window_s"), (
+        "window_s must not come back as an independent temporal knob")
 
 
 def test_lateness_floor_is_one_engine_cycle():
@@ -105,7 +109,7 @@ def test_the_yardstick_is_the_reach_not_window_s(window):
     _fill(400, spacing_s=3.0)              # 200 signals spanning ~597 s
     span = main._window_span_s()
     assert len(main.WINDOW_BUFFER) == main.WINDOW_BUFFER.maxlen
-    assert main.ENGINE_REACH_S < span < main.ENGINE_CFG.window_s, (
+    assert main.ENGINE_REACH_S < span < 900.0, (
         f"fixture must land between the two yardsticks, span={span:.1f}s")
     assert main.rca_evidence_degraded() is False
 
@@ -167,7 +171,7 @@ def test_the_state_is_exported(window):
         main.RETENTION_REQUIRED_S, abs=1e-3)
     assert float(samples["corr_permitted_lateness_seconds"]) == pytest.approx(
         main.CORR_PERMITTED_LATENESS_S, abs=1e-3)
-    assert float(samples["corr_engine_reach_seconds"]) != main.ENGINE_CFG.window_s
+    assert float(samples["corr_engine_reach_seconds"]) != 900.0
     assert float(samples["corr_offload_max_workers"]) == main.offload_stats()["max_workers"]
     # the summaries carry quantile labels, so they are matched separately
     for q in ("0.5", "0.95", "0.99"):
@@ -187,9 +191,15 @@ def test_healthz_carries_the_retention_and_offload_blocks():
     assert "event_time_lag_s" in state
 
 
-def test_window_s_is_reported_as_the_prune_bound_not_as_the_contract():
-    """It still exists and still drives pruning — but it is labelled for what it
-    is, so nobody reads 900 as the RCA horizon again."""
+def test_window_s_is_gone_and_the_horizon_metric_reports_the_derived_value():
+    """window_s is removed outright, and the metric that used to carry it now
+    carries the derived requirement — so a dashboard reading
+    corr_window_horizon_seconds gets the number that is actually enforced."""
+    assert not hasattr(main.ENGINE_CFG, "window_s")
     st = main.retention_state()
-    assert st["prune_bound_s"] == main.ENGINE_CFG.window_s
-    assert st["required_horizon_s"] != st["prune_bound_s"]
+    assert "prune_bound_s" not in st, "the wall-clock prune bound no longer exists"
+    resp = asyncio.run(main.metrics_exposition())
+    body = resp.body.decode() if hasattr(resp, "body") else str(resp)
+    line = next(ln for ln in body.splitlines()
+                if ln.startswith("corr_window_horizon_seconds "))
+    assert float(line.split()[1]) == pytest.approx(main.RETENTION_REQUIRED_S, abs=0.1)

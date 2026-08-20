@@ -3,6 +3,7 @@ working memory must stay bounded and correct under a signal flood and at-least-o
 Kafka redelivery — no unbounded growth, no silently-dropped fresh signals."""
 
 import asyncio
+import time
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -82,7 +83,7 @@ def test_an_evicted_signal_is_not_falsely_deduped_after_overflow():
 
 def test_prune_ages_out_old_signals_and_their_ids():
     old = mk(1, ts=T0)
-    fresh_ts = T0 + timedelta(seconds=main.ENGINE_CFG.window_s + 10_000)
+    fresh_ts = T0 + timedelta(seconds=main.RETENTION_REQUIRED_S + 10_000)
     fresh = mk(2, ts=fresh_ts)
     main.buffer_signal(old)
     main.buffer_signal(fresh)
@@ -97,11 +98,19 @@ def test_prune_ages_out_old_signals_and_their_ids():
 
 # ── H14: a device clock years ahead must not freeze window pruning ────────────
 def test_h14_far_future_ts_cannot_freeze_pruning_for_everyone():
-    """_prune_buffer pops from the LEFT of the arrival-ordered deque while
-    ts < horizon — pre-fix, ONE +5y device timestamp at the head stopped
-    pruning for EVERY tenant until restart. buffer_signal now clamps a
-    future-out-of-bounds event ts to arrival time (counted, identity
-    preserved), so the head always ages out."""
+    """A +5y device timestamp must not be able to distort retention.
+
+    The failure mode CHANGED with tracker 165 and got sharper, so this test now
+    guards the new one as well as the old:
+
+      * pre-165 (wall-clock left-pop): one far-future ts at the HEAD stopped
+        pruning for every tenant until restart — head-of-line freeze.
+      * post-165 (stream-time): the head cannot block anything (survivors are
+        filtered, not popped), but an unclamped +5y ts would POISON THE TENANT
+        WATERMARK and instantly expire every legitimate signal behind it. That
+        is the worse failure: silent mass eviction instead of no eviction.
+
+    The H14 clamp is what prevents both, so it is asserted first."""
     now = datetime.now(timezone.utc)
     future_ts = now + timedelta(days=5 * 365)
     before = main.EVENT_TS_FUTURE_CLAMPED
@@ -115,9 +124,25 @@ def test_h14_far_future_ts_cannot_freeze_pruning_for_everyone():
     assert str(head.signal_id) == str(mk(1, ts=future_ts).signal_id)
     for i in range(2, 7):
         main.buffer_signal(mk(i, ts=now))
-    run(main._prune_buffer(now + timedelta(hours=2)))  # > window_s past every arrival
+
+    # (a) the watermark was NOT poisoned: it sits at ~now, not five years out.
+    wm_ts, _ = main.TENANT_WATERMARK[head.tenant_id]
+    assert wm_ts <= now.timestamp() + main.METRIC_FUTURE_SKEW_S + 60, \
+        "a clamped signal must not push the tenant's stream clock into the future"
+
+    # (b) so nothing is expired yet — every signal is current in stream time,
+    # and wall-clock age is now irrelevant to retention by design.
+    run(main._prune_buffer(now + timedelta(hours=2)))
+    assert len(main.WINDOW_BUFFER) == 6, \
+        "stream time has not advanced, so nothing may be evicted by wall clock"
+
+    # (c) and when the STREAM really does move on, the clamped head ages out
+    # with everything else — no head-of-line freeze.
+    main.TENANT_WATERMARK[head.tenant_id] = (
+        now.timestamp() + main.RETENTION_REQUIRED_S + 60, time.monotonic())
+    run(main._prune_buffer(now))
     assert len(main.WINDOW_BUFFER) == 0, \
-        "a clamped head must age out — pre-fix the +5y head froze pruning here"
+        "a clamped head must age out once the stream passes it"
     assert len(main._BUFFERED_IDS) == 0
 
 
@@ -132,8 +157,16 @@ def test_h14_past_stale_ts_is_counted_but_never_restamped():
     main.buffer_signal(stale)
     assert main.EVENT_TS_PAST_STALE == before + 1
     assert main.WINDOW_BUFFER[0].ts == stale.ts, "honest event time is kept"
+    # A device stuck 3 hours in the past does not advance the stream clock past
+    # itself, so on its own it is not expired — correct: with no other traffic
+    # for that tenant there is nothing to say its evidence is obsolete. The
+    # moment any CURRENT signal arrives the stream moves and the stale one goes.
     run(main._prune_buffer(now))
-    assert len(main.WINDOW_BUFFER) == 0, "stale signal ages out naturally"
+    assert len(main.WINDOW_BUFFER) == 1
+    main.buffer_signal(mk(2, ts=now))
+    run(main._prune_buffer(now))
+    assert [s.native_id for s in main.WINDOW_BUFFER] == [mk(2, ts=now).native_id], \
+        "a stale signal ages out as soon as the tenant's stream moves past it"
 
 
 # ── C2: #76 — debug_only / platform-self-check probes never form objects ──────

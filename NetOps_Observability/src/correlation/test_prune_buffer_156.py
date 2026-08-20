@@ -55,20 +55,50 @@ def load(n: int, secs=None):
     main.WINDOW_BUFFER.clear()
     main._BUFFERED_IDS.clear()
     main._BUFFERED_ID_ORDER.clear()
+    main.TENANT_WATERMARK.clear()
     for i in range(n):
         sig = mk(i, secs(i) if secs else None)
         sid = str(sig.signal_id)
         main._BUFFERED_IDS.add(sid)
         main.WINDOW_BUFFER.append(sig)
         main._BUFFERED_ID_ORDER.append(sid)
+        # tracker 165: retention now runs on the tenant's STREAM clock, so the
+        # fixture must advance it exactly as buffer_signal does. Loading the
+        # window without a watermark would test a clock that never started.
+        main._advance_watermark(sig, time.monotonic())
 
 
-def reference_prune(now):
-    """The pre-fix implementation, verbatim — the equivalence oracle."""
-    horizon = now.timestamp() - main.ENGINE_CFG.window_s
-    while main.WINDOW_BUFFER and main.WINDOW_BUFFER[0].ts.timestamp() < horizon:
-        main._BUFFERED_IDS.discard(str(main.WINDOW_BUFFER[0].signal_id))
-        main.WINDOW_BUFFER.popleft()
+def stream_at(offset_s: float) -> None:
+    """Push every loaded tenant's stream clock to T0 + offset_s.
+
+    The prune horizon is `watermark - RETENTION_REQUIRED_S`, so this — not the
+    wall clock passed to _prune_buffer — is what decides what expires."""
+    ts = (T0 + timedelta(seconds=offset_s)).timestamp()
+    now_mono = time.monotonic()
+    for tenant in list(main.TENANT_WATERMARK) or ["acme"]:
+        main.TENANT_WATERMARK[tenant] = (ts, now_mono)
+
+
+def prune_at_stream(offset_s: float):
+    """Advance the stream clock to T0 + offset_s and prune."""
+    stream_at(offset_s)
+    return run(main._prune_buffer(datetime.now(timezone.utc)))
+
+
+def reference_prune(offset_s):
+    """Independent stream-time oracle: keep exactly the signals within
+    RETENTION_REQUIRED_S of the tenant's watermark. Written as a naive filter so
+    it shares no code with the chunked implementation under test."""
+    horizon = ((T0 + timedelta(seconds=offset_s)).timestamp()
+               - main.RETENTION_REQUIRED_S)
+    keep = [s for s in main.WINDOW_BUFFER if s.ts.timestamp() >= horizon]
+    dropped = {str(s.signal_id) for s in main.WINDOW_BUFFER
+               if s.ts.timestamp() < horizon}
+    main.WINDOW_BUFFER.clear()
+    main.WINDOW_BUFFER.extend(keep)
+    main._BUFFERED_ID_ORDER.clear()
+    main._BUFFERED_ID_ORDER.extend(str(s.signal_id) for s in keep)
+    main._BUFFERED_IDS.difference_update(dropped)
 
 
 def snapshot():
@@ -86,21 +116,25 @@ def _clean():
 # --- output equivalence ----------------------------------------------------
 
 @pytest.mark.parametrize("ahead", [0, 1, 50, 300, 5000, 100_000])
-def test_prune_is_byte_identical_to_the_old_implementation(ahead):
+def test_prune_matches_an_independent_stream_time_oracle(ahead):
     """Same evicted set, same remaining window, same dedup set — at every depth
-    from 'evict nothing' to 'evict everything'."""
-    now = T0 + timedelta(seconds=main.ENGINE_CFG.window_s + ahead)
+    from 'evict nothing' to 'evict everything'.
+
+    tracker 165: the oracle changed. It used to be the pre-fix WALL-CLOCK
+    implementation; retention is now stream-time, and reproducing the old
+    behaviour would mean reproducing the defect."""
+    offset = main.RETENTION_REQUIRED_S + ahead
     load(400)
-    reference_prune(now)
+    reference_prune(offset)
     want = snapshot()
     load(400)
-    run(main._prune_buffer(now))
+    prune_at_stream(offset)
     assert snapshot() == want
 
 
 def test_prune_preserves_arrival_order():
     load(200)
-    run(main._prune_buffer(T0 + timedelta(seconds=main.ENGINE_CFG.window_s + 50)))
+    prune_at_stream(main.RETENTION_REQUIRED_S + 50)
     remaining = [str(s.signal_id) for s in main.WINDOW_BUFFER]
     assert remaining == sorted(remaining, key=lambda x: remaining.index(x))
     assert list(main._BUFFERED_ID_ORDER) == remaining, "id deque drifted from the window"
@@ -108,7 +142,7 @@ def test_prune_preserves_arrival_order():
 
 def test_dedup_set_and_window_stay_the_same_size():
     load(300)
-    run(main._prune_buffer(T0 + timedelta(seconds=main.ENGINE_CFG.window_s + 100)))
+    prune_at_stream(main.RETENTION_REQUIRED_S + 100)
     assert len(main._BUFFERED_IDS) == len(main.WINDOW_BUFFER) == len(main._BUFFERED_ID_ORDER)
 
 
@@ -126,7 +160,7 @@ def test_prune_computes_no_uuid5(monkeypatch):
 
     monkeypatch.setattr(S.uuid, "uuid5", counting)
     monkeypatch.setattr(uuid, "uuid5", counting)
-    run(main._prune_buffer(T0 + timedelta(seconds=main.ENGINE_CFG.window_s + 100_000)))
+    prune_at_stream(main.RETENTION_REQUIRED_S + 100_000)
     assert len(main.WINDOW_BUFFER) == 0, "the whole window should have aged out"
     assert calls["n"] == 0, f"prune still computed {calls['n']} uuid5s"
 
@@ -138,7 +172,7 @@ def test_a_full_window_prune_is_fast_enough_not_to_threaten_membership():
     import time
     load(20_000)
     t0 = time.perf_counter()
-    run(main._prune_buffer(T0 + timedelta(seconds=main.ENGINE_CFG.window_s + 100_000)))
+    prune_at_stream(main.RETENTION_REQUIRED_S + 100_000)
     elapsed = time.perf_counter() - t0
     assert len(main.WINDOW_BUFFER) == 0
     assert elapsed < 2.0, (
@@ -153,20 +187,20 @@ def test_desync_self_heals_and_is_counted():
     load(100)
     main._BUFFERED_ID_ORDER.clear()          # simulate drift
     before = main.WINDOW_ID_ORDER_RESYNCS
-    run(main._prune_buffer(T0 + timedelta(seconds=main.ENGINE_CFG.window_s + 50)))
+    prune_at_stream(main.RETENTION_REQUIRED_S + 50)
     assert main.WINDOW_ID_ORDER_RESYNCS == before + 1, "a resync must be counted"
     assert len(main._BUFFERED_IDS) == len(main.WINDOW_BUFFER)
     assert list(main._BUFFERED_ID_ORDER) == [str(s.signal_id) for s in main.WINDOW_BUFFER]
 
 
 def test_desync_still_produces_the_right_answer():
-    now = T0 + timedelta(seconds=main.ENGINE_CFG.window_s + 120)
+    offset = main.RETENTION_REQUIRED_S + 120
     load(300)
-    reference_prune(now)
+    reference_prune(offset)
     want = snapshot()
     load(300)
     main._BUFFERED_ID_ORDER.clear()          # drift before pruning
-    run(main._prune_buffer(now))
+    prune_at_stream(offset)
     assert snapshot() == want
 
 
@@ -175,7 +209,7 @@ def test_a_test_that_clears_only_the_window_does_not_corrupt_state():
     load(50)
     main.WINDOW_BUFFER.clear()
     main._BUFFERED_IDS.clear()
-    run(main._prune_buffer(T0 + timedelta(seconds=main.ENGINE_CFG.window_s + 10)))
+    prune_at_stream(main.RETENTION_REQUIRED_S + 10)
     assert len(main._BUFFERED_ID_ORDER) == 0
 
 
@@ -256,8 +290,8 @@ def test_prune_actually_hands_the_loop_back():
         t = asyncio.ensure_future(ticker())
         await asyncio.sleep(0)
         start = ticks["n"]
-        await main._prune_buffer(
-            T0 + timedelta(seconds=main.ENGINE_CFG.window_s + 100_000))
+        stream_at(main.RETENTION_REQUIRED_S + 100_000)
+        await main._prune_buffer(datetime.now(timezone.utc))
         progressed = ticks["n"] - start
         t.cancel()
         return progressed, len(main.WINDOW_BUFFER)
@@ -273,7 +307,7 @@ def test_prune_actually_hands_the_loop_back():
 def test_prune_yield_counter_tracks_the_chunking():
     load(3 * main.CORR_PRUNE_CHUNK + 17)
     before = main.PRUNE_YIELDS
-    run(main._prune_buffer(T0 + timedelta(seconds=main.ENGINE_CFG.window_s + 100_000)))
+    prune_at_stream(main.RETENTION_REQUIRED_S + 100_000)
     assert main.PRUNE_YIELDS - before >= 3
 
 
@@ -282,7 +316,7 @@ def test_a_small_prune_does_not_yield_at_all():
     hand back for."""
     load(10)
     before = main.PRUNE_YIELDS
-    run(main._prune_buffer(T0 + timedelta(seconds=main.ENGINE_CFG.window_s + 100_000)))
+    prune_at_stream(main.RETENTION_REQUIRED_S + 100_000)
     assert main.PRUNE_YIELDS == before
 
 
@@ -315,8 +349,8 @@ def test_the_gauge_reports_worst_block_not_total_elapsed():
 
         t = asyncio.ensure_future(burner())
         began = time.monotonic()
-        await main._prune_buffer(
-            T0 + timedelta(seconds=main.ENGINE_CFG.window_s + 100_000))
+        stream_at(main.RETENTION_REQUIRED_S + 100_000)
+        await main._prune_buffer(datetime.now(timezone.utc))
         total = time.monotonic() - began
         stop["v"] = True
         t.cancel()
@@ -339,7 +373,7 @@ def test_the_gauge_reports_worst_block_not_total_elapsed():
 def test_prune_counters_move():
     load(200)
     calls, evicted = main.PRUNE_CALLS, main.PRUNE_EVICTED
-    run(main._prune_buffer(T0 + timedelta(seconds=main.ENGINE_CFG.window_s + 100)))
+    prune_at_stream(main.RETENTION_REQUIRED_S + 100)
     assert main.PRUNE_CALLS == calls + 1
     assert main.PRUNE_EVICTED > evicted, "evicted signals must be counted"
 
@@ -373,7 +407,7 @@ def test_no_overflow_drop_when_the_window_has_room(monkeypatch):
 # --- capacity shedding vs age pruning (2026-08-20) -------------------------
 #
 # The window is bounded by COUNT (50,000) and the RCA horizon is a TIME
-# (ENGINE_CFG.window_s). A count bound cannot express a time horizon: the window
+# (RETENTION_REQUIRED_S). A count bound cannot express a time horizon: the window
 # holds 50,000 / signal_rate seconds, so above ~55.6 signals/s it physically
 # cannot cover 900 s. When that happens the evicted signal is still INSIDE the
 # horizon the engine is about to correlate over — evidence degradation, not
@@ -439,11 +473,11 @@ def test_a_capacity_drop_beyond_the_ENGINE_REACH_is_not_degradation(monkeypatch)
 
 
 def test_the_eligibility_boundary_is_the_derived_reach_not_window_s(monkeypatch):
-    """Straddle ENGINE_REACH_S. A yardstick of window_s (900 s) would call BOTH
-    of these degradation; the engine's own reach separates them."""
+    """Straddle ENGINE_REACH_S. The retired 900 s yardstick would have called
+    BOTH of these degradation; the engine's own reach separates them."""
     just_inside = (main.ENGINE_REACH_S - 25.0) / 5.0
     just_outside = (main.ENGINE_REACH_S + 25.0) / 5.0
-    assert main.ENGINE_REACH_S < main.ENGINE_CFG.window_s, "premise of the test"
+    assert main.ENGINE_REACH_S < main.RETENTION_REQUIRED_S, "premise of the test"
     assert _fill(monkeypatch, spacing_s=just_inside)[1] == 7
     assert _fill(monkeypatch, spacing_s=just_outside)[1] == 0
 
@@ -467,6 +501,6 @@ def test_a_full_window_holding_less_than_the_horizon_is_detectable():
     """The diagnostic the whole wave turns on: capacity < horizon."""
     load(200, secs=lambda i: i * 0.5)    # 200 signals over 100s
     span = main._window_span_s()
-    assert span < main.ENGINE_CFG.window_s, (
+    assert span < main.RETENTION_REQUIRED_S, (
         "this fixture is meant to represent a window holding less than the "
-        "configured horizon")
+        "required retention horizon")

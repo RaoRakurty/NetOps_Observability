@@ -249,7 +249,7 @@ def test_consumer_state_distinguishes_all_four_states(monkeypatch, caplog):
     assert len(cold["cold_partitions"]) == len(main.TOPICS)
 
     # (b) the same partitions held for longer than one engine window — "active".
-    aged = time.monotonic() - (main.ENGINE_CFG.window_s + 1)
+    aged = time.monotonic() - (main.RETENTION_REQUIRED_S + 1)
     for key in main.CONSUMER_PARTITION_ACQUIRED_AT:
         main.CONSUMER_PARTITION_ACQUIRED_AT[key] = aged
     warm = asyncio.run(main.health())["consumer"]

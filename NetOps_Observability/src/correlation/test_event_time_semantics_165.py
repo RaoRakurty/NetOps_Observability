@@ -9,22 +9,25 @@ Three different clocks are in play and they were never reconciled:
   * `consumer_state` / `cold_partitions` — MONOTONIC clock, also against
     `window_s`.
 
-Mixing the first two means the retained event-time span is not `window_s` but
+Mixing the first two meant the retained event-time span was not `window_s` but
 
     window_s - processing_lag
 
-so processing delay alone silently shortens the RCA horizon, and past
-`window_s` of lag it drives it to zero. Measured lag on the 1K rig was
+so processing delay alone silently shortened the RCA horizon, and past
+`window_s` of lag it drove the horizon to zero. Measured lag on the 1K rig was
 12-19 minutes against a 900 s window — inside the failure zone.
 
-These tests state that behaviour as a fact rather than a suspicion: the SAME
-event-time story, with an unchanged event-to-event gap well inside the engine's
-396.5 s reach, produces different RCA evidence depending only on WHEN it was
-processed.
+FIXED in this wave: retention runs on each tenant's STREAM clock (the newest
+event timestamp seen for that tenant), so wall-clock backlog cannot shorten the
+horizon. These tests were originally written to DOCUMENT the defect; they are
+now inverted, and they are the regression proof. The same event-time story, with
+an unchanged gap inside the engine's 396.5 s reach, must produce the SAME RCA
+evidence no matter when it was processed.
 """
 from __future__ import annotations
 
-from datetime import timedelta
+import time
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -87,62 +90,131 @@ def test_processed_promptly_both_signals_survive_and_rca_forms():
     assert len(edges) == 1
 
 
-def test_processed_late_the_cause_is_evicted_and_the_edge_disappears():
-    """15 minutes of processing lag — nothing about the story changed."""
-    surv = _survivors(delay_s=15 * 60)
-    assert len(surv) == 1, "the older signal should have been pruned"
-    assert surv[0].kind == "if_util_high", "the CAUSE is the one that was lost"
+@pytest.mark.parametrize("delay_min", [15, 30, 120])
+def test_processing_lag_no_longer_destroys_the_story(delay_min):
+    """THE regression test for tracker 165.
+
+    Before the fix, 15 minutes of processing lag evicted the CAUSE and the edge
+    disappeared. Retention is now stream-relative, so an arbitrarily late
+    replay of the same events keeps exactly the same evidence.
+    """
+    surv = _survivors(delay_s=delay_min * 60)
+    assert len(surv) == 2, (
+        f"{delay_min} min of wall-clock lag must not evict event-time-valid "
+        f"evidence; kept {[s.kind for s in surv]}")
     edges, _ = build_edges(build_nodes(surv), (), CFG)
-    assert edges == (), "same event-time story, no RCA edge — decided by lag alone"
+    assert len(edges) == 1, "the RCA edge must survive processing delay"
 
 
-def test_the_whole_story_is_gone_past_a_full_window_of_lag():
-    """Lag > window_s means signals are pruned as fast as they arrive."""
-    assert _survivors(delay_s=CFG.window_s + 60) == ()
+def test_a_full_day_of_backlog_still_correlates():
+    """The strong form: retention no longer references the wall clock at all
+    for semantic expiry, so backlog depth is irrelevant to what is retained."""
+    surv = _survivors(delay_s=24 * 3600)
+    assert len(surv) == 2
+    edges, _ = build_edges(build_nodes(surv), (), CFG)
+    assert len(edges) == 1
 
 
-def test_retained_event_span_is_window_minus_lag():
-    """The quantitative statement: retention is not window_s, it is
-    window_s - lag. This is the formula that turns a 900 s configuration into a
-    180 s horizon at 12 minutes of lag."""
-    for lag in (0, 300, 600):
+def test_the_retained_span_no_longer_shrinks_with_lag():
+    """The old formula was `retained = window_s - lag`. There is no lag term
+    any more: the same stream produces the same span at every delay."""
+    spans = []
+    for lag in (0, 300, 600, 3600):
         main.WINDOW_BUFFER.clear()
         main._BUFFERED_IDS.clear()
         main._BUFFERED_ID_ORDER.clear()
-        # one signal per second across a full window
-        sigs = [mk(i % 50, i) for i in range(int(CFG.window_s))]
+        main.TENANT_WATERMARK.clear()
+        sigs = [mk(i % 50, i) for i in range(400)]
         _load(*sigs)
-        newest = int(CFG.window_s) - 1
+        newest = 399
+        main.TENANT_WATERMARK["acme"] = (
+            (T0 + timedelta(seconds=newest)).timestamp(), time.monotonic())
         run(main._prune_buffer(T0 + timedelta(seconds=newest + lag)))
-        span = main._window_span_s()
-        expected = max(0.0, CFG.window_s - lag)
-        assert span == pytest.approx(expected, abs=2.0), (
-            f"lag={lag}s: retained {span:.0f}s, expected ~{expected:.0f}s")
+        spans.append(round(main._window_span_s()))
+    assert len(set(spans)) == 1, f"span varied with lag: {spans}"
+    assert spans[0] == 399
 
 
-def test_prune_is_the_only_place_the_two_clocks_meet():
-    """A guard on the mixing point itself: the horizon is built from the
-    caller's wall-clock `now` and compared to an EVENT timestamp. If someone
-    changes the comparison to be event-time-relative (e.g. newest buffered ts),
-    this test must be revisited deliberately, not silently."""
-    a, b = _story()
-    _load(a, b)
-    # A wall clock far in the future prunes everything, regardless of the
-    # signals' own relative timing — proof the decision is not event-relative.
-    run(main._prune_buffer(T0 + timedelta(days=1)))
-    assert len(main.WINDOW_BUFFER) == 0
+# ── stream time still expires what it should ─────────────────────────────────
 
-
-# ── negative control: pruning must still work on genuinely old evidence ──────
-
-def test_genuinely_aged_evidence_is_still_pruned():
-    """The fix must not become 'never prune'. Evidence older than the retention
-    horizon, with NO lag, still ages out."""
+def test_evidence_beyond_the_retention_horizon_is_still_expired():
+    """The fix must not become 'never prune'. Once the tenant's OWN stream has
+    moved past the horizon, old evidence goes — that is semantic expiry."""
     main.WINDOW_BUFFER.clear()
     main._BUFFERED_IDS.clear()
     main._BUFFERED_ID_ORDER.clear()
-    old = mk(2, -int(CFG.window_s) - 100)
-    fresh = mk(3, 0)
+    main.TENANT_WATERMARK.clear()
+    old = mk(2, 0)
+    fresh = mk(3, int(main.RETENTION_REQUIRED_S) + 100)
     _load(old, fresh)
-    run(main._prune_buffer(T0))
+    main._advance_watermark(fresh, time.monotonic())
+    run(main._prune_buffer(datetime.now(timezone.utc)))
     assert [s.native_id for s in main.WINDOW_BUFFER] == ["nat-3"]
+    assert main.STREAM_TIME_EVICTIONS > 0
+
+
+def test_a_stalled_tenant_does_not_expire_a_moving_one(monkeypatch):
+    """Per-tenant watermarks, not one global clock. Tenant B streaming far
+    ahead must not evict tenant A's evidence — a global watermark would, and
+    the loss would be invisible."""
+    main.WINDOW_BUFFER.clear()
+    main._BUFFERED_IDS.clear()
+    main._BUFFERED_ID_ORDER.clear()
+    main.TENANT_WATERMARK.clear()
+    a = main.dc_replace(mk(1, 0), tenant_id="slow")
+    b_old = main.dc_replace(mk(2, 0), tenant_id="fast")
+    b_new = main.dc_replace(mk(3, int(main.RETENTION_REQUIRED_S) + 100),
+                            tenant_id="fast")
+    _load(a, b_old, b_new)
+    for s in (a, b_old, b_new):
+        main._advance_watermark(s, time.monotonic())
+    run(main._prune_buffer(datetime.now(timezone.utc)))
+    kept = {s.tenant_id for s in main.WINDOW_BUFFER}
+    assert "slow" in kept, "a fast tenant's stream must not expire a slow one"
+    assert [s.native_id for s in main.WINDOW_BUFFER
+            if s.tenant_id == "fast"] == ["nat-3"], (
+        "the fast tenant's own old evidence SHOULD expire")
+
+
+def test_the_idle_backstop_is_a_resource_control_not_semantic_expiry(monkeypatch):
+    """A tenant whose stream stops would retain forever. The wall-clock
+    backstop bounds that — and is counted separately so it can never be read as
+    ordinary expiry."""
+    main.WINDOW_BUFFER.clear()
+    main._BUFFERED_IDS.clear()
+    main._BUFFERED_ID_ORDER.clear()
+    main.TENANT_WATERMARK.clear()
+    monkeypatch.setattr(main, "CORR_TENANT_IDLE_EVICT_S", 60.0)
+    s = mk(4, 0)
+    _load(s)
+    # watermark frozen well in the past (monotonic), i.e. the stream stalled
+    main.TENANT_WATERMARK["acme"] = (s.ts.timestamp(), time.monotonic() - 600)
+    before = main.IDLE_TENANT_EVICTIONS
+    before_stream = main.STREAM_TIME_EVICTIONS
+    run(main._prune_buffer(T0 + timedelta(seconds=10_000)))
+    assert len(main.WINDOW_BUFFER) == 0
+    assert main.IDLE_TENANT_EVICTIONS == before + 1
+    assert main.STREAM_TIME_EVICTIONS == before_stream, (
+        "a backstop eviction must not be counted as stream-time expiry")
+
+
+def test_watermarks_are_monotonic():
+    """An out-of-order arrival must not drag the clock backwards — that would
+    resurrect an expired horizon and make eviction non-deterministic."""
+    main.TENANT_WATERMARK.clear()
+    newer, older = mk(1, 500), mk(2, 100)
+    main._advance_watermark(newer, time.monotonic())
+    before = main.WATERMARK_REGRESSIONS
+    main._advance_watermark(older, time.monotonic())
+    assert main.TENANT_WATERMARK["acme"][0] == newer.ts.timestamp()
+    assert main.WATERMARK_REGRESSIONS == before + 1, "regressions must be counted"
+
+
+def test_the_watermark_map_is_bounded(monkeypatch):
+    """§9: tenant churn cannot grow the map without limit."""
+    main.TENANT_WATERMARK.clear()
+    monkeypatch.setattr(main, "CORR_TENANT_WATERMARK_MAX", 5)
+    for i in range(50):
+        main._advance_watermark(
+            main.dc_replace(mk(1, i), tenant_id=f"t{i}"), time.monotonic() + i)
+    assert len(main.TENANT_WATERMARK) <= 5
