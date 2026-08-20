@@ -23,8 +23,9 @@ from __future__ import annotations
 import uuid
 from datetime import datetime, timedelta, timezone
 
-import main
 import pytest
+
+import main
 import signals as S
 
 T0 = datetime(2026, 8, 20, 12, 0, 0, tzinfo=timezone.utc)
