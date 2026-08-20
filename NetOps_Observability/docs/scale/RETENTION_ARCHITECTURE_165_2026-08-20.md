@@ -135,7 +135,8 @@ built: there is no compact tier to promote into.
 | drain | **FAIL** | lag never returned to baseline in 1090 s (final 286,439) |
 | **accounting** | **PASS** | **600,001 injected == 600,001 persisted + 0 DLQ + 0 rejections; 1000/1000 devices covered** |
 | memflat | **FAIL** | correlation-1 at 725 MiB = 91.9% of its 789 MiB cap |
-| stability | **PASS** | 0 CommitFailed, 0 UnknownMember, 0 restarts |
+| stability | **PASS** | full 2,414 s lifecycle: 0 CommitFailed, 0 UnknownMember, 0 restarts; worst loop stall **9,316 ms** |
+| cleanup | **FAIL** | `TimeoutError` while deleting devices (harness robustness; same failure as the 2026-08-18 cron run). 703/1000 removed before it gave up; the remaining 297 were cleared by hand and the registry drained to 0. |
 
 ### Retention behaviour under load
 
@@ -214,9 +215,12 @@ Excluded by measurement:
   unbounded dict are both operating on a trivial N.
 
 Remaining candidates, in order of evidence:
-* **event-loop stalls** — 41 / 39 stalls, worst 2,692 ms / 2,535 ms. Below the
-  30 s session timeout (membership was clean) but 2.7 s of frozen loop per stall
-  is real throughput loss.
+* **event-loop stalls** — 41 / 39 stalls. My external sampler saw a worst of
+  2,692 ms / 2,535 ms, but the harness, which watches the whole lifecycle,
+  recorded **9,316 ms** — the worst stall happened during the post-burst drain,
+  after I had stopped sampling. Take 9,316 ms as the figure. Still below the
+  30 s session timeout (membership stayed clean), but 9.3 s of frozen loop is
+  substantial throughput loss and is now the leading drain suspect.
 * **per-event handling and the engine cycle over a 50,000-signal window.**
 
 Pinpointing needs the opt-in profiler, and profiling contaminated a previous run,
