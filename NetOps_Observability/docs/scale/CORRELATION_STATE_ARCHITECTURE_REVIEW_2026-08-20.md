@@ -179,28 +179,37 @@ programme. Minimum viable, all low-cardinality: `corr_prune_calls_total`,
 |---|---|---|---|
 | bounded foreground work | prune/partition bounded by window; `find_continuation` quadratic | `main.py:1520/1981/2063` | ⚠ |
 | compute identity once | now yes on every hot path | 770→60 ms, 50,000→0 uuid5 | ✅ |
-| incremental cleanup | not chunked; one prune may evict 50k with no yield | `main.py:1520` | ⚠ |
+| incremental cleanup | chunked with yields; completes fully, bounded slice | `main.py:1556`, 6/6 mutants | ✅ |
 | structural/time-window expiration | ordered-deque expiration already in place | `main.py:1520` | ✅ |
 | bounded in-memory state | all bounded except `OPEN_OBJECTS` | table §5 | ⚠ |
 | Kafka holds backlog | 50 MiB prefetch cap, one-at-a-time, 433k left in broker | `main.py:3707/3845` | ✅ |
-| explicit backpressure | implicit lag growth; silent horizon drop | `main.py:1489` | ⚠ |
+| explicit backpressure | implicit lag growth; horizon drop now COUNTED, still not signalled | `corr_window_overflow_dropped_total` | ⚠ |
 | partition-owned state | global, no rehydration | `main.py:910`, tracker 155 | ❌ |
 | background housekeeping | offloaded but unbounded queue | `main.py:1610` | ⚠ |
 | state-store readiness | ~170 MB live at a full window; Level 1 fine | A/B measurement | ✅ |
-| cleanup observability | none | no prune metrics | ❌ |
+| cleanup observability | 7 low-cardinality counters/gauges on /healthz + /metrics | `bbb6592a` | ✅ |
 
 ## Recommendations, separated
 
-### MUST FIX before 1K GA
+### MUST FIX before 1K GA — BOTH DONE
 1. **`_prune_buffer` uuid5** — done (`febcef18`), 770→60 ms, byte-identical, 7/7 mutants.
-2. **Prune/housekeeping metrics** — a stall must be visible without a bespoke forensic build.
+2. **Prune/housekeeping metrics** — done (`bbb6592a`). `corr_prune_calls_total`,
+   `corr_prune_evicted_total`, `corr_prune_seconds_last`,
+   `corr_prune_seconds_max` (worst CONTIGUOUS block, the alertable one),
+   `corr_prune_yields_total`, `corr_window_id_order_resyncs_total`,
+   `corr_window_overflow_dropped_total`.
+3. **Bounded-slice pruning** — done (`bbb6592a`). The invariant below is now
+   enforced in code: eviction happens in `CORR_PRUNE_CHUNK` slices with a yield
+   between them, so the prune completes fully while never holding the loop for
+   more than a chunk. 6/6 mutants killed.
 
 ### MUST FIX before 10K
-3. **Bound `OPEN_OBJECTS` by count**, with defined behaviour at the bound (degrade + counter, never silent).
-4. **`find_continuation` quadratic** — index candidates by tenant/entity instead of scanning all open objects.
-5. **Bounded executor** for `_offload` — explicit workers + bounded queue.
-6. **Counter on the maxlen head-drop**, so horizon loss under storm stops being silent.
-7. **Tracker 155** — partition-owned state.
+4. **Bound `OPEN_OBJECTS` by count** — filed as **tracker 163**.
+5. **`find_continuation` quadratic** — filed as **tracker 162**.
+6. **Bounded executor** for `_offload` — filed as **tracker 164**.
+7. ~~Counter on the maxlen head-drop~~ — done (`bbb6592a`),
+   `corr_window_overflow_dropped_total`.
+8. **Tracker 155** — partition-owned state.
 
 ### FUTURE 100K
 8. Time-bucketed window state — only if the sliding event-time semantics are revisited; today it would risk RCA identity.
