@@ -174,7 +174,7 @@ def test_the_window_spans_from_burst_start_not_from_drain_end(monkeypatch):
     calls = []
     h = _harness_with(monkeypatch, ["c1"], calls)
     # 1800s of wall clock have passed since the burst began.
-    blobs, since = h.collect_stability_blobs(now=1000.0 + 1800.0)
+    _blobs, since = h.collect_stability_blobs(now=1000.0 + 1800.0)
     assert since >= 1800, (
         f"observation window is only {since}s — it must reach back to the start "
         "of the burst, or late failures fall outside it")
