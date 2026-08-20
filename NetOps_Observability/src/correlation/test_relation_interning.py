@@ -12,9 +12,10 @@ bounding it is that the keys come from device-supplied tokens.
 """
 from __future__ import annotations
 
+import pytest
+
 import engine
 import path_graph as pg
-import pytest
 
 
 @pytest.fixture(autouse=True)

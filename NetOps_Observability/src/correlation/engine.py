@@ -20,8 +20,8 @@ from __future__ import annotations
 import hashlib
 import json
 import math
-import uuid
 import os
+import uuid
 from collections import OrderedDict
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
@@ -378,8 +378,8 @@ class Grounding:
 # oldest entry is evicted and a fresh object is built — an allocation
 # optimisation, never a correctness input.
 GROUNDING_CACHE_MAX = int(os.environ.get("CORR_GROUNDING_CACHE_MAX", "50000"))
-_SHARED_TOKEN_GROUNDINGS: "OrderedDict[str, Grounding]" = OrderedDict()
-_SEAM_TOKEN_GROUNDINGS: "OrderedDict[str, Grounding]" = OrderedDict()
+_SHARED_TOKEN_GROUNDINGS: OrderedDict[str, Grounding] = OrderedDict()
+_SEAM_TOKEN_GROUNDINGS: OrderedDict[str, Grounding] = OrderedDict()
 GROUNDING_CACHE_EVICTED = 0
 
 

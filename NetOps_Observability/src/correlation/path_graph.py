@@ -683,8 +683,8 @@ class Relation:
 # oldest entry is evicted and a fresh object is built — the cache is an
 # allocation optimisation, never a correctness input.
 RELATION_CACHE_MAX = int(os.environ.get("CORR_RELATION_CACHE_MAX", "50000"))
-_SHARED_TOKEN_RELATIONS: "OrderedDict[str, Relation]" = OrderedDict()
-_SEAM_RELATIONS: "OrderedDict[tuple, Relation]" = OrderedDict()
+_SHARED_TOKEN_RELATIONS: OrderedDict[str, Relation] = OrderedDict()
+_SEAM_RELATIONS: OrderedDict[tuple, Relation] = OrderedDict()
 RELATION_CACHE_EVICTED = 0
 
 
