@@ -109,6 +109,7 @@ import string
 import subprocess
 import sys
 import time
+import typing
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -223,6 +224,23 @@ class Stack:
                 warn(f"docker ps for {service} failed: {err.strip()}")
             self._cids[service] = out.split()[0] if out.split() else ""
         return self._cids[service]
+
+    def cids(self, service: str) -> list[str]:
+        """EVERY running container id of a compose service.
+
+        `cid()` returns only the first. The stability diagnosis used it, so with
+        `--scale correlation=2` it inspected ONE replica and reported the other
+        as clean by never looking at it (2026-08-20).
+        """
+        rc, out, err = run(
+            ["docker", "ps", "-q",
+             "--filter", f"label=com.docker.compose.project={self.project}",
+             "--filter", f"label=com.docker.compose.service={service}"],
+            DOCKER_TIMEOUT)
+        if rc != 0:
+            warn(f"docker ps for {service} failed: {err.strip()}")
+            return []
+        return out.split()
 
     def service_states(self) -> list[dict]:
         rc, out, err = run(
@@ -681,6 +699,14 @@ class Stack:
 # cleanup()). Bounded: teardown must always happen, drained or not.
 CLEANUP_DRAIN_WAIT_S = float(os.environ.get("MLX_CLEANUP_DRAIN_WAIT_S", "300"))
 
+# Stability observation (2026-08-20). The previous window ended with the drain
+# phase and missed three CommitFailedError events that followed it.
+STABILITY_SETTLE_MAX_S = float(os.environ.get("MLX_STABILITY_SETTLE_MAX_S", "600"))
+STABILITY_GRACE_S = float(os.environ.get("MLX_STABILITY_GRACE_S", "180"))
+# aiokafka session timeout the correlation consumer runs with; a loop stall at
+# or beyond this can cost the member its partitions.
+KAFKA_SESSION_TIMEOUT_MS = int(os.environ.get("MLX_KAFKA_SESSION_TIMEOUT_MS", "30000"))
+
 DLQ_EXPECTED_REASONS = frozenset({"identity_unattributable"})
 
 # ...and even an expected reason fails above this share of injected events.
@@ -709,6 +735,7 @@ class Harness:
         self.created_ids: list[str] = []
         # requested name -> canonical id, when dedupe absorbed the create
         self.absorbed: dict[str, str] = {}
+        self.stability_t0 = time.monotonic()
         self.injected_total = 0
         self.burst_seconds = 0.0
         self.produce_failures: list[str] = []
@@ -1219,6 +1246,141 @@ class Harness:
                           f"lag drained to baseline+eps in {drained_at:.0f}s "
                           f"(budget {budget:.0f}s, peak {ev['peak_lag']})")
 
+    # -- phase 6: consumer stability (whole lifecycle) -----------------------
+    #
+    # THE FALSE-GREEN THIS REPLACES (2026-08-20). Stability was diagnosed only
+    # inside `if drained_at is None:` — so a PASSING drain collected no evidence
+    # at all — from `docker logs --since <burst+drain>` on a SINGLE replica.
+    # Run 08192339borh reported commit_failed=0 while three CommitFailedError
+    # events occurred at 00:01:34, 00:04:42 and 00:08:15, after the window
+    # closed. A gate whose observation ends before the failure mode appears is
+    # not a gate.
+    #
+    # Stability is now observed across burst -> drain -> settlement -> a
+    # post-settlement grace period, over EVERY replica, and it is collected
+    # whether or not drain passed.
+
+    # Regexes matched per LINE, not substring counts. One aiokafka traceback
+    # contains "CommitFailedError" twice (`raise Errors.CommitFailedError(` and
+    # `aiokafka.errors.CommitFailedError: ...`), so substring counting reported
+    # two events for one. Each pattern therefore anchors on the single line that
+    # REPORTS the event. Over-counting fails safe but makes the number useless
+    # for tracking whether a fix worked.
+    STABILITY_PATTERNS: typing.ClassVar[dict] = {
+        "commit_failed": r"aiokafka\.errors\.CommitFailedError",
+        "unknown_member": r"aiokafka\.errors\.UnknownMemberIdError|UnknownMemberIdError:",
+        "consumer_restarts": r"consumer failed; restarting",
+        "rebalances": r"rebalance #\d+",
+        "loop_stalls": r"event loop STALLED",
+    }
+
+    @staticmethod
+    def stability_counters(blobs: dict) -> dict:
+        """Count instability markers across every replica's log blob.
+
+        Pure so it can be unit-tested and mutation-tested without a stack.
+        `blobs` is {container_id: log text}. A container whose logs could not be
+        read must arrive as None, and is reported as UNREADABLE rather than
+        silently counted as zero — missing evidence is not a clean result.
+        """
+        out = {k: 0 for k in Harness.STABILITY_PATTERNS}
+        out["worst_loop_lag_ms"] = 0
+        out["replicas_observed"] = 0
+        out["replicas_unreadable"] = 0
+        for _cid, blob in sorted(blobs.items()):
+            if blob is None:
+                out["replicas_unreadable"] += 1
+                continue
+            out["replicas_observed"] += 1
+            for key, pattern in Harness.STABILITY_PATTERNS.items():
+                rx = re.compile(pattern)
+                out[key] += sum(1 for line in blob.splitlines() if rx.search(line))
+            for m in re.finditer(r"worst=(\d+)ms", blob):
+                out["worst_loop_lag_ms"] = max(out["worst_loop_lag_ms"], int(m.group(1)))
+        return out
+
+    @staticmethod
+    def stability_verdict(counters: dict, session_timeout_ms: int) -> list:
+        """Which counters are disqualifying. Pure; returns a list of problems."""
+        problems = []
+        if counters.get("replicas_observed", 0) == 0:
+            problems.append("no replica logs could be read — stability is UNKNOWN, "
+                            "which is not PASS")
+        if counters.get("replicas_unreadable", 0):
+            problems.append(f"{counters['replicas_unreadable']} replica log(s) "
+                            f"unreadable — incomplete evidence, not a clean run")
+        for key, label in (("commit_failed", "CommitFailedError"),
+                           ("unknown_member", "UnknownMemberIdError"),
+                           ("consumer_restarts", "consumer restarts")):
+            if counters.get(key, 0):
+                problems.append(f"{counters[key]} {label} event(s) across the full "
+                                f"lifecycle")
+        worst = counters.get("worst_loop_lag_ms", 0)
+        if worst >= session_timeout_ms:
+            problems.append(
+                f"worst event-loop stall {worst}ms EXCEEDS the {session_timeout_ms}ms "
+                f"Kafka session timeout — the member can be ejected mid-stall")
+        return problems
+
+    def collect_stability_blobs(self, now: float | None = None) -> tuple:
+        """(blobs, since_s) — one log blob per correlation replica.
+
+        Two properties this exists to make testable, because both were the
+        original defect and neither is visible from the pure counters:
+          * the window spans from `stability_t0` (burst start), not from the
+            end of drain, so a failure that appears late is inside it;
+          * EVERY replica is read, not `cid()`'s first one.
+        A replica whose logs cannot be read maps to None so the counters can
+        report it unreadable rather than silently clean.
+        """
+        now = time.monotonic() if now is None else now
+        since = int(now - self.stability_t0) + 60
+        blobs = {}
+        for cc in self.stack.cids("correlation"):
+            rc, out, err2 = run(["docker", "logs", "--since", f"{since}s", cc], 120)
+            blobs[cc] = (out + err2) if rc == 0 else None
+        return blobs, since
+
+    def stability(self) -> bool:
+        """Observe consumer stability across the WHOLE lifecycle."""
+        ev: dict = {}
+        grace = STABILITY_GRACE_S
+        # Settle first: wait for lag to stop moving, then observe the grace
+        # window, so a failure that only appears after settlement is inside the
+        # observation rather than after it.
+        deadline = time.monotonic() + STABILITY_SETTLE_MAX_S
+        last = None
+        stable_for = 0.0
+        while time.monotonic() < deadline:
+            total = self.stack.group_lag("netops-correlation").get("_total", -1)
+            if last is not None and abs(total - last) <= self.args.lag_epsilon:
+                stable_for += 15.0
+            else:
+                stable_for = 0.0
+            last = total
+            if stable_for >= 45.0:
+                break
+            time.sleep(15)
+        ev["lag_at_settlement"] = last
+        ev["settled"] = stable_for >= 45.0
+        log(f"stability: settled={ev['settled']} lag={last}; observing {grace:.0f}s grace")
+        time.sleep(grace)
+
+        blobs, since = self.collect_stability_blobs()
+        counters = self.stability_counters(blobs)
+        ev.update(counters)
+        ev["observation_window_s"] = since
+        ev["grace_s"] = grace
+        ev["session_timeout_ms"] = KAFKA_SESSION_TIMEOUT_MS
+        problems = self.stability_verdict(counters, KAFKA_SESSION_TIMEOUT_MS)
+        status = "PASS" if not problems else "FAIL"
+        return self.phase("stability", status, ev,
+                          "; ".join(problems) if problems else
+                          f"clean across the full lifecycle ({since}s, "
+                          f"{counters['replicas_observed']} replica(s)): 0 CommitFailed, "
+                          f"0 UnknownMember, 0 restarts, worst loop stall "
+                          f"{counters['worst_loop_lag_ms']}ms")
+
     # -- phase 5: accounting -------------------------------------------------
     def accounting(self) -> bool:
         ev: dict = {}
@@ -1680,6 +1842,7 @@ class Harness:
                 # A linearity FAIL still leaves N devices standing — carry on
                 # through burst/drain/accounting whenever creation itself
                 # succeeded; the phase verdicts stay independent.
+                self.stability_t0 = time.monotonic()
                 if self.created_ids and self.burst():
                     # Leak anchor: sampled the instant injection stops, so the
                     # workload's caches/buffers are materialized but nothing
@@ -1688,6 +1851,9 @@ class Harness:
                     self.drain()
                     self.accounting()
                 self.memflat()
+                # AFTER everything else: instability that appears late is the
+                # whole reason this phase exists.
+                self.stability()
         except KeyboardInterrupt:
             warn("interrupted — running cleanup before exit")
             self.phase("interrupted", "FAIL", {}, "run interrupted by signal")
