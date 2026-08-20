@@ -189,6 +189,11 @@ def test_the_idle_backstop_is_a_resource_control_not_semantic_expiry(monkeypatch
     _load(s)
     # watermark frozen well in the past (monotonic), i.e. the stream stalled
     main.TENANT_WATERMARK["acme"] = (s.ts.timestamp(), time.monotonic() - 600)
+    # The backstop now also requires PROVEN level-with-the-broker (phase 3):
+    # a stalled watermark during a backlog means "not reached yet", not "no more
+    # events". See test_watermark_safety_165 for the adversarial coverage.
+    main.CONSUMER_LAG_TOTAL = 0
+    main.CONSUMER_LAG_AT = time.monotonic()
     before = main.IDLE_TENANT_EVICTIONS
     before_stream = main.STREAM_TIME_EVICTIONS
     run(main._prune_buffer(T0 + timedelta(seconds=10_000)))

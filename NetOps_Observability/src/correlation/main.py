@@ -1576,9 +1576,27 @@ def _window_span_s() -> float:
 # (see corr_event_time_lag_seconds), not from a chosen number. The intake layer
 # separately tolerates event ages up to METRIC_MAX_AGE_S (3600 s) before
 # counting a signal stale, which bounds how late evidence can legitimately be.
+# The floor has TWO terms, and the second was missing until the tracker 165
+# clock-skew review (phase 5):
+#
+#   * one engine evaluation interval — evidence that survives to the horizon but
+#     not through the next cycle is never actually scored against.
+#   * the permitted FUTURE clock skew. H14 accepts a device timestamp up to
+#     METRIC_FUTURE_SKEW_S ahead of arrival without clamping it, and that
+#     timestamp advances the tenant watermark. So a device running 120 s fast
+#     drags the whole tenant's expiry cutoff 120 s into the future. Evidence
+#     then expires at (true_stream_time + skew) - retention, i.e. the effective
+#     horizon is retention - skew. For the full reach to survive a legitimately
+#     skewed device, retention must be at least reach + skew.
+#
+# With a 30 s lateness the old margin was 90 s SHORT of the skew the intake
+# layer already permits: a two-minute-fast device could silently expire
+# still-attachable evidence. The floor now covers it.
+CORR_PERMITTED_LATENESS_FLOOR_S = max(CORR_ENGINE_INTERVAL_S, METRIC_FUTURE_SKEW_S)
 CORR_PERMITTED_LATENESS_S = max(
-    CORR_ENGINE_INTERVAL_S,
-    float(os.environ.get("CORR_PERMITTED_LATENESS_S", str(CORR_ENGINE_INTERVAL_S))))
+    CORR_PERMITTED_LATENESS_FLOOR_S,
+    float(os.environ.get("CORR_PERMITTED_LATENESS_S",
+                         str(CORR_PERMITTED_LATENESS_FLOOR_S))))
 
 # The largest event-time gap ANY admissible pair can span under ENGINE_CFG.
 # Evidence older than this, relative to the newest signal, can no longer edge to
@@ -1633,6 +1651,34 @@ CORR_TENANT_IDLE_EVICT_S = float(
 CORR_TENANT_WATERMARK_MAX = int(
     os.environ.get("CORR_TENANT_WATERMARK_MAX", "10000"))
 
+# ── tracker 165 phase 2: the co-partitioning invariant is now SAFETY-CRITICAL ─
+#
+# The per-tenant watermark is only sound because a tenant lives entirely on one
+# member: tenant-keyed murmur2 puts it on the same partition NUMBER of every
+# correlation topic, and the RANGE assignor keeps that number on one member.
+#
+# If topic partition counts diverge, that breaks — and it breaks WORSE than it
+# used to. Before tracker 165 a split tenant meant each member correlated over
+# its own half (degraded RCA, no data destroyed). Now each member also runs its
+# own watermark over its own half of the stream, and each will EXPIRE evidence
+# based on a stream it can only partly see. That is silent evidence destruction,
+# not merely thin context.
+#
+# So the check is no longer a log line. When the invariant is violated the
+# watermark stops being trusted for expiry: stream-time eviction is SUSPENDED
+# and evidence is retained instead, bounded by the record cap and the idle
+# backstop. Retaining too much is recoverable; deleting evidence on a wrong
+# clock is not. The condition is counted, exposed and alertable.
+COPARTITION_OK = True                 # last assignment satisfied the invariant
+COPARTITION_VIOLATIONS = 0            # rebalances that did not
+COPARTITION_LAST_DETAIL = ""          # bounded, operator-facing
+
+
+def copartition_healthy() -> bool:
+    """Is per-tenant watermark expiry safe to apply right now?"""
+    return COPARTITION_OK
+
+
 _SENTINEL = object()   # 'not computed yet' — None means 'no watermark'
 
 # tenant -> (newest event ts seen, monotonic when that advanced)
@@ -1673,11 +1719,107 @@ def _tenant_horizon(tenant: str) -> float | None:
     return wm[0] - RETENTION_REQUIRED_S
 
 
+# In-process consumer backlog, sampled from the consume loop (see
+# _note_consumed / consumer_lag_total). The idle backstop needs it, and the
+# broker-side kafka-exporter figure is not available in-process.
+CORR_LAG_SAMPLE_S = float(os.environ.get("CORR_LAG_SAMPLE_S", "5"))
+CORR_LAG_FRESH_S = float(os.environ.get("CORR_LAG_FRESH_S", "30"))
+_LAST_OFFSET: dict[tuple[str, int], int] = {}
+CONSUMER_LAG_TOTAL: int | None = None   # None = never measured
+CONSUMER_LAG_AT = 0.0                   # monotonic of the last measurement
+CONSUMER_LAG_PROBE_FAILURES = 0         # consumer lacked assignment()/highwater()
+_LAG_SAMPLED_AT = 0.0
+
+
+def _note_consumed(topic: str, partition: int, offset: int) -> None:
+    """Record the newest offset this process has actually handled."""
+    _LAST_OFFSET[(topic, partition)] = offset
+
+
+def _refresh_consumer_lag(consumer, now_mono: float) -> None:
+    """Sample how far behind the broker this process is, cheaply.
+
+    `highwater()` is a local read of what the last fetch reported, so this
+    costs nothing on the wire. Rate-limited to CORR_LAG_SAMPLE_S because it is
+    called from the per-message path.
+    """
+    global CONSUMER_LAG_TOTAL, CONSUMER_LAG_AT, _LAG_SAMPLED_AT
+    global CONSUMER_LAG_PROBE_FAILURES
+    if (now_mono - _LAG_SAMPLED_AT) < CORR_LAG_SAMPLE_S:
+        return
+    _LAG_SAMPLED_AT = now_mono
+    total = 0
+    seen_any = False
+    try:
+        for tp in consumer.assignment():
+            hw = consumer.highwater(tp)
+            if hw is None:
+                continue      # not fetched yet — cannot judge this partition
+            seen_any = True
+            last = _LAST_OFFSET.get((tp.topic, tp.partition))
+            consumed_through = (last + 1) if last is not None else 0
+            total += max(0, hw - consumed_through)
+    except Exception as exc:  # noqa: BLE001 — observable, never fatal (§10)
+        # A consumer without assignment()/highwater() (a stand-in, a driver
+        # change) must degrade to "lag unknown", which _consumer_caught_up
+        # already treats as "assume backlog" — i.e. retain. It must NEVER
+        # interrupt consumption or be mistaken for a bad payload.
+        CONSUMER_LAG_PROBE_FAILURES += 1
+        if CONSUMER_LAG_PROBE_FAILURES == 1:
+            log.warning("consumer lag probe unavailable (%s) — the idle "
+                        "backstop will hold evidence rather than shed it",
+                        type(exc).__name__)
+        return
+    if seen_any:
+        CONSUMER_LAG_TOTAL = total
+        CONSUMER_LAG_AT = now_mono
+
+
+def _consumer_caught_up(now_mono: float) -> bool:
+    """Is this process demonstrably level with the broker RIGHT NOW?
+
+    Fail-SAFE: unknown or stale ⇒ False (assume there is backlog), because the
+    only caller uses this to decide whether it may DELETE evidence.
+    """
+    if CONSUMER_LAG_TOTAL is None:
+        return False
+    if (now_mono - CONSUMER_LAG_AT) > CORR_LAG_FRESH_S:
+        return False
+    return CONSUMER_LAG_TOTAL == 0
+
+
 def _tenant_idle(tenant: str, now_mono: float) -> bool:
-    """Has this tenant's stream stopped advancing long enough for the resource
-    backstop to apply? Not a semantic statement — a memory one."""
+    """May the wall-clock resource backstop shed this tenant's evidence?
+
+    TWO conditions, and the second one was missing in the first implementation
+    of this backstop — a defect that quietly recreated the very bug tracker 165
+    exists to remove:
+
+      1. the tenant's stream clock has not advanced for CORR_TENANT_IDLE_EVICT_S
+         of WALL time, and
+      2. this process is level with the broker.
+
+    Condition 1 alone conflates two very different situations. During a backlog,
+    "the watermark has not advanced" does NOT mean "no more events are coming"
+    — it means "we have not reached them yet". Evidence A at T would be shed an
+    hour later while B at T+300 sat unprocessed in the log, and B would then
+    arrive with nothing left to correlate against: wall-clock delay destroying
+    event-time-valid evidence, which is exactly the original defect wearing a
+    different hat.
+
+    Condition 2 is what makes idleness PROVABLE rather than assumed: if the
+    consumer has consumed every offset the broker has, then no unprocessed
+    record exists anywhere, so nothing can still advance this tenant's clock.
+
+    Deliberately GLOBAL rather than per-partition. It is strictly more
+    conservative (one busy tenant defers the backstop for all of them), it is
+    provable from one number, and the backstop is a last-resort memory control
+    — being slow to reclaim is the safe direction to be wrong in.
+    """
     wm = TENANT_WATERMARK.get(tenant)
-    return wm is not None and (now_mono - wm[1]) >= CORR_TENANT_IDLE_EVICT_S
+    if wm is None or (now_mono - wm[1]) < CORR_TENANT_IDLE_EVICT_S:
+        return False
+    return _consumer_caught_up(now_mono)
 
 
 def rca_evidence_degraded() -> bool:
@@ -1700,6 +1842,10 @@ def rca_evidence_degraded() -> bool:
 # Reasons are a CLOSED set, low-cardinality, safe as a metric label.
 DEGRADED_NONE = "none"
 DEGRADED_RESOURCE_CAPACITY = "resource_capacity"
+# The watermark's safety precondition is broken: this member cannot see a whole
+# tenant's stream, so expiry is suspended and RCA context is not trustworthy.
+# Ranked ABOVE resource_capacity — a wrong clock is worse than a full buffer.
+DEGRADED_PARTITION_TOPOLOGY = "partition_topology"
 
 
 def rca_degradation_reason() -> str:
@@ -1719,6 +1865,8 @@ def rca_degradation_reason() -> str:
     A window that is simply not full yet (a quiet tenant, a cold start) is NOT
     degraded — nothing is being shed, there is just less of it.
     """
+    if not copartition_healthy():
+        return DEGRADED_PARTITION_TOPOLOGY
     if WINDOW_BUFFER.maxlen is None or len(WINDOW_BUFFER) < WINDOW_BUFFER.maxlen:
         return DEGRADED_NONE
     if _window_span_s() < ENGINE_REACH_S:
@@ -1749,6 +1897,16 @@ def retention_state() -> dict[str, object]:
         # on the wall clock, so these are what an operator reads to see whether
         # the clock is actually advancing.
         "tenants_tracked": len(TENANT_WATERMARK),
+        "copartition_ok": COPARTITION_OK,
+        "copartition_violations": COPARTITION_VIOLATIONS,
+        "copartition_detail": COPARTITION_LAST_DETAIL,
+        "stream_expiry_suspended": not COPARTITION_OK,
+        "consumer_lag_total": CONSUMER_LAG_TOTAL,
+        "consumer_caught_up": _consumer_caught_up(time.monotonic()),
+        # Non-zero means the backlog probe is unusable, so the idle backstop is
+        # holding evidence it might otherwise reclaim — a memory risk, and a
+        # silent one until it is on /healthz.
+        "consumer_lag_probe_failures": CONSUMER_LAG_PROBE_FAILURES,
         "stream_time_evictions": STREAM_TIME_EVICTIONS,
         "idle_tenant_evictions": IDLE_TENANT_EVICTIONS,
         "watermark_regressions": WATERMARK_REGRESSIONS,
@@ -1874,6 +2032,10 @@ async def _prune_buffer(now: datetime) -> None:
     horizons: dict[str, float | None] = {}
     idle: dict[str, bool] = {}
     wall_cut = now.timestamp() - CORR_TENANT_IDLE_EVICT_S
+    # Broken co-partitioning ⇒ this member sees only part of some tenant's
+    # stream, so its watermark is not a sound expiry clock. Retain instead
+    # (the record cap and the idle backstop still bound memory).
+    stream_expiry_ok = copartition_healthy()
 
     keep_sig: deque[Signal] = deque(maxlen=WINDOW_BUFFER.maxlen)
     keep_id: deque[str] = deque(maxlen=_BUFFERED_ID_ORDER.maxlen)
@@ -1893,7 +2055,7 @@ async def _prune_buffer(now: datetime) -> None:
                 horizons[tenant] = cut
                 idle[tenant] = _tenant_idle(tenant, now_mono)
             ts = sig.ts.timestamp()
-            if cut is not None and ts < cut:
+            if cut is not None and stream_expiry_ok and ts < cut:
                 stream_evicted += 1
             elif idle[tenant] and ts < wall_cut:
                 # Resource backstop, NOT semantic expiry.
@@ -4209,6 +4371,16 @@ class _AssignmentLogger(ConsumerRebalanceListener):
                 CONSUMER_REBALANCES, CONSUMER_ZERO_ASSIGNMENTS,
                 dict(CONSUMER_PARTITION_TOTALS))
         distinct = {tuple(p) for p in owned.values()}
+        global COPARTITION_OK, COPARTITION_VIOLATIONS, COPARTITION_LAST_DETAIL
+        # Only judge topics this member actually holds: with the range assignor
+        # a member legitimately owns nothing on a topic it was not given, and
+        # an empty assignment (handled above) is a different condition.
+        held_sets = {t: tuple(p) for t, p in owned.items() if p}
+        COPARTITION_OK = len(set(held_sets.values())) <= 1
+        if not COPARTITION_OK:
+            COPARTITION_VIOLATIONS += 1
+            COPARTITION_LAST_DETAIL = "; ".join(
+                f"{t}={list(p)}" for t, p in sorted(held_sets.items()))[:400]
         if len(distinct) > 1:
             log.error("CO-PARTITIONING BROKEN: this member owns different "
                       "partition sets per topic (%s) — topic partition counts "
@@ -4424,6 +4596,14 @@ async def consume() -> None:
                 # Per-EVENT isolation: one bad record must cost one record, not
                 # the whole ten-topic consumer (see quarantine_event above).
                 event = None
+                # tracker 165 phase 3: the idle backstop may only shed evidence
+                # when this process is level with the broker, so it needs to know
+                # what we have actually consumed. Deliberately OUTSIDE the payload
+                # try-block below: the first version ran inside it, and when the
+                # lag probe raised, the EVENT was quarantined as if its payload
+                # were poison. Bookkeeping must never be able to blame the data.
+                _note_consumed(msg.topic, msg.partition, msg.offset)
+                _refresh_consumer_lag(consumer, time.monotonic())
                 try:
                     # Phase 3: establish this message's dedup coordinate so every
                     # critical-table insert it drives carries a stable token — a
@@ -5779,7 +5959,21 @@ async def metrics_exposition():
         "# TYPE corr_rca_degradation_reason gauge",
         *(f'corr_rca_degradation_reason{{reason="{r}"}} '
           f'{1 if rca_degradation_reason() == r else 0}'
-          for r in (DEGRADED_NONE, DEGRADED_RESOURCE_CAPACITY)),
+          for r in (DEGRADED_NONE, DEGRADED_RESOURCE_CAPACITY,
+                    DEGRADED_PARTITION_TOPOLOGY)),
+        # The watermark's safety precondition, as its own alertable series.
+        "# HELP corr_copartition_ok 1 when this member owns one partition set across all topics.",
+        "# TYPE corr_copartition_ok gauge",
+        f"corr_copartition_ok {1 if COPARTITION_OK else 0}",
+        "# HELP corr_copartition_violations_total Rebalances that broke the co-partitioning invariant.",
+        "# TYPE corr_copartition_violations_total counter",
+        f"corr_copartition_violations_total {COPARTITION_VIOLATIONS}",
+        "# HELP corr_consumer_lag_total In-process backlog; the idle backstop may only run at 0.",
+        "# TYPE corr_consumer_lag_total gauge",
+        f"corr_consumer_lag_total {CONSUMER_LAG_TOTAL if CONSUMER_LAG_TOTAL is not None else -1}",
+        "# HELP corr_consumer_lag_probe_failures_total Backlog probe unusable; backstop holds evidence.",
+        "# TYPE corr_consumer_lag_probe_failures_total counter",
+        f"corr_consumer_lag_probe_failures_total {CONSUMER_LAG_PROBE_FAILURES}",
         # tracker 165 phase 9: three different lags, reported separately.
         # Event-time lag is how far the newest EVENT in the window is behind the
         # wall clock — the quantity that shortens the retained span, because
