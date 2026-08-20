@@ -211,9 +211,10 @@ def test_stall_dump_takes_only_a_light_snapshot(diag):
     d.start()
     d._dump_stacks("unit-test")
     last = None
-    for line in open(os.path.join(d.DIAG_DIR, "memory-snapshots.jsonl")):
-        if line.strip():
-            last = json.loads(line)
+    with open(os.path.join(d.DIAG_DIR, "memory-snapshots.jsonl")) as fh:
+        for line in fh:
+            if line.strip():
+                last = json.loads(line)
     assert last is not None and last["label"].startswith("during-")
     assert last["python"]["heavy"] is False
 

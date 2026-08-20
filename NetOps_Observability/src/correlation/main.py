@@ -44,13 +44,16 @@ from dataclasses import dataclass, field
 from dataclasses import replace as dc_replace
 from datetime import datetime, timezone
 
-import diagnostics
 import httpx
-import signals
 from aiokafka import AIOKafkaConsumer, TopicPartition
 from aiokafka.abc import ConsumerRebalanceListener
 from aiokafka.coordinator.assignors.range import RangePartitionAssignor
 from aiokafka.partitioner import murmur2
+from fastapi import FastAPI, HTTPException
+from pydantic import BaseModel
+
+import diagnostics
+import signals
 from app_producers import app_identity_from_event
 from catalog import builtin_catalog
 from cloud_dependency import build_from_records, merge_path_views
@@ -79,7 +82,6 @@ from engine import (
 )
 from entity_resolver import EntityResolver
 from episodes import EpisodeDetector
-from fastapi import FastAPI, HTTPException
 from flow_app_attribution import AppIdentityIndex, resolve_flow_app
 from flow_direction import flow_direction_sample, netflow_direction_source
 from lb_normalize import normalize_lb_event
@@ -106,7 +108,6 @@ from producers import (
     trap_control_signal,
     ts_invalid_count,
 )
-from pydantic import BaseModel
 from replay import replay_object
 from routing_direction import forwarding_pairs, routing_direction_source
 from series_budget import derive_max_series
