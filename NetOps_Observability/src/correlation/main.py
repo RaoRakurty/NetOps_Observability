@@ -2987,22 +2987,27 @@ async def diag_snapshot_loop() -> None:
     every = float(os.environ.get("CORR_DIAG_SNAPSHOT_EVERY_S", "30"))
     crossed: set[int] = set()
     cap = _cgroup_mem_max()
-    diagnostics.snapshot("pre-load-baseline", diag_app_state())
+    await asyncio.to_thread(diagnostics.snapshot, "pre-load-baseline",
+                            diag_app_state(), True)
     while True:
         await asyncio.sleep(every)
         state = diag_app_state()
-        label = "periodic"
+        label, heavy = "periodic", False
         if cap:
             rss = diagnostics._proc_memory().get("rss_bytes", 0)
             pct = int(rss * 100 / cap) if cap else 0
             for mark in (85, 90, 95, 99):
                 if pct >= mark and mark not in crossed:
                     crossed.add(mark)
-                    label = f"rss-crossed-{mark}pct"
+                    label, heavy = f"rss-crossed-{mark}pct", True
                     break
             state["rss_pct_of_cap"] = pct
             state["cgroup_max_bytes"] = cap
-        diagnostics.snapshot(label, state)
+        # OFF THE LOOP, always. Even the light path touches /proc and the GC;
+        # the heavy path walks every tracemalloc traceback and was measured at
+        # 39-96s, which is what made the profiler itself the stall in the first
+        # forensic run. Heavy analysis is reserved for threshold crossings.
+        await asyncio.to_thread(diagnostics.snapshot, label, state, heavy)
 
 
 def _cgroup_mem_max() -> int:

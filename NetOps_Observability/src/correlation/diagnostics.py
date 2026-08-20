@@ -39,7 +39,12 @@ from datetime import datetime, timezone
 DIAG_ENABLED = os.environ.get("CORR_DIAG_MEMORY", "").lower() in ("1", "true", "yes")
 DIAG_DIR = os.environ.get("CORR_DIAG_DIR", "/data/diagnostics")
 # tracemalloc frame depth: deeper is more useful and more expensive.
-DIAG_TM_FRAMES = int(os.environ.get("CORR_DIAG_TM_FRAMES", "12"))
+# tracemalloc frame depth. Cost scales with the number of DISTINCT tracebacks,
+# and statistics()/compare_to() walk all of them: at 12 frames those calls took
+# 39-96 SECONDS on this workload and were themselves the event-loop stalls the
+# first forensic run recorded (2026-08-20). 4 is deep enough to attribute an
+# allocation to its call site without making the profiler the top suspect.
+DIAG_TM_FRAMES = int(os.environ.get("CORR_DIAG_TM_FRAMES", "4"))
 # Heartbeat staleness that triggers a stack dump, in seconds. Two tiers so a
 # long stall yields more than one sample and the progression is visible.
 DIAG_STALL_WARN_S = float(os.environ.get("CORR_DIAG_STALL_WARN_S", "5"))
@@ -111,7 +116,14 @@ def _gc_stats() -> dict:
     }
 
 
-def _tracemalloc_stats(top_n: int = 15) -> dict:
+def _tracemalloc_stats(top_n: int = 15, heavy: bool = True) -> dict:
+    """Traced-heap numbers. `heavy` controls the EXPENSIVE half.
+
+    get_traced_memory() is O(1). take_snapshot() + statistics() + compare_to()
+    walk every distinct traceback and were measured at 39-96s on this workload,
+    which is why they are opt-in per call and must never run on the event loop
+    (see the note in `snapshot`).
+    """
     import tracemalloc
     if not tracemalloc.is_tracing():
         return {"tracing": False}
@@ -123,7 +135,10 @@ def _tracemalloc_stats(top_n: int = 15) -> dict:
         # tracemalloc's own overhead, so it can be SUBTRACTED rather than
         # mistaken for the subject's growth.
         "tracemalloc_overhead_bytes": tracemalloc.get_tracemalloc_memory(),
+        "heavy": heavy,
     }
+    if not heavy:
+        return out
     snap = tracemalloc.take_snapshot()
     by_size = snap.statistics("lineno")[:top_n]
     out["top_by_bytes"] = [
@@ -158,8 +173,18 @@ def set_baseline() -> None:
         _baseline[0] = tracemalloc.take_snapshot()
 
 
-def snapshot(label: str, app_state: dict | None = None) -> dict:
-    """One synchronized sample. Returns {} when diagnostics are disabled."""
+def snapshot(label: str, app_state: dict | None = None,
+             heavy: bool = False) -> dict:
+    """One synchronized sample. Returns {} when diagnostics are disabled.
+
+    MUST NOT BE CALLED INLINE ON THE EVENT LOOP when `heavy` is set. The first
+    forensic run (2026-08-20) recorded six event-loop stalls of 5-96 seconds and
+    every single captured stack showed the loop inside
+    tracemalloc.statistics()/compare_to() — called from this function by the
+    snapshot task. The profiler was the stall. Callers on the loop offload via
+    asyncio.to_thread; `heavy` is reserved for the samples that justify the cost
+    (threshold crossings), not every periodic tick.
+    """
     if not DIAG_ENABLED:
         return {}
     snap = {
@@ -169,7 +194,7 @@ def snapshot(label: str, app_state: dict | None = None) -> dict:
         "pid": os.getpid(),
         "process": _proc_memory(),
         "gc": _gc_stats(),
-        "python": _tracemalloc_stats(),
+        "python": _tracemalloc_stats(heavy=heavy),
         "app": app_state or {},
         "threads": threading.active_count(),
     }
@@ -222,9 +247,11 @@ def _dump_stacks(reason: str) -> None:
             fh.flush()
             faulthandler.dump_traceback(file=fh, all_threads=True)
             fh.flush()
-        # A snapshot alongside the stack: what the heap looked like at the
-        # moment the loop was blocked is half the evidence.
-        snapshot(f"during-{reason}")
+        # A LIGHT snapshot alongside the stack: what the heap looked like when
+        # the loop was blocked is half the evidence, but a heavy tracemalloc
+        # walk here would hold the GIL and prolong the very stall we are
+        # measuring.
+        snapshot(f"during-{reason}", heavy=False)
     except OSError as exc:
         print(f"diag: stack dump failed: {type(exc).__name__}", file=sys.stderr)
 
@@ -263,5 +290,5 @@ def start() -> None:
           f"frames={DIAG_TM_FRAMES}, stall warn/deep = "
           f"{DIAG_STALL_WARN_S}/{DIAG_STALL_DEEP_S}s) — this run is diagnostic, "
           f"not qualification evidence", file=sys.stderr)
-    snapshot("cold-start")
+    snapshot("cold-start", heavy=True)
     set_baseline()

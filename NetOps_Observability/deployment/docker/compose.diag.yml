@@ -1,0 +1,17 @@
+# DIAGNOSTIC-ONLY overlay. Never part of a qualification run.
+#
+# Enables correlation's opt-in memory/stall forensics (CORR_DIAG_MEMORY).
+# tracemalloc and the stall-stack thread cost real CPU and memory, and the
+# module reports its own overhead in every snapshot so it can be subtracted —
+# but a run made with this overlay is diagnostic evidence, not a PASS.
+#
+# Evidence is written inside the container (no bind mount, so the normal
+# service definition is untouched) and copied out with `docker cp` afterwards.
+services:
+  correlation:
+    environment:
+      CORR_DIAG_MEMORY: "true"
+      CORR_DIAG_DIR: "/tmp/diagnostics"
+      CORR_DIAG_SNAPSHOT_EVERY_S: "20"
+      CORR_DIAG_STALL_WARN_S: "5"
+      CORR_DIAG_STALL_DEEP_S: "15"

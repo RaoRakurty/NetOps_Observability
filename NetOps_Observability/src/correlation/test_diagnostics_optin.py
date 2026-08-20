@@ -12,6 +12,8 @@ Two properties matter equally:
 from __future__ import annotations
 
 import importlib
+import json
+import os
 
 import pytest
 
@@ -143,7 +145,7 @@ def test_baseline_enables_growth_attribution(diag):
     d.start()
     d.set_baseline()
     held = [bytearray(50_000) for _ in range(40)]
-    snap = d.snapshot("after-allocation")
+    snap = d.snapshot("after-allocation", heavy=True)
     assert "growth_since_baseline" in snap["python"], (
         "without a baseline diff there is no way to attribute GROWTH, only "
         "total size")
@@ -172,3 +174,55 @@ def test_stall_detector_runs_off_the_event_loop(diag):
     assert "diag-stall-watch" in names
     watcher = next(t for t in threading.enumerate() if t.name == "diag-stall-watch")
     assert watcher.daemon, "the watchdog must not hold the process open"
+
+
+# --- the profiler must not be the stall (2026-08-20) -----------------------
+#
+# The first forensic run recorded six event-loop stalls of 5-96 seconds, and
+# EVERY captured stack showed the loop inside tracemalloc.statistics() or
+# compare_to(), called from snapshot(). The instrument was the finding. These
+# pin the properties that stop it recurring.
+
+def test_light_snapshot_does_no_traceback_walking(diag):
+    """The periodic path must be O(1) in the number of tracked allocations."""
+    d, _ = diag
+    d.start()
+    snap = d.snapshot("periodic", {}, heavy=False)
+    py = snap["python"]
+    assert py["heavy"] is False
+    assert py["traced_current_bytes"] >= 0, "cheap counters must still be present"
+    for expensive in ("top_by_bytes", "top_by_count", "growth_since_baseline"):
+        assert expensive not in py, (
+            f"{expensive} requires walking every traceback — it must not appear "
+            "in a light snapshot")
+
+
+def test_heavy_snapshot_is_opt_in(diag):
+    d, _ = diag
+    d.start()
+    assert "top_by_bytes" not in d.snapshot("a", {})["python"], "heavy must default OFF"
+    assert "top_by_bytes" in d.snapshot("b", {}, heavy=True)["python"]
+
+
+def test_stall_dump_takes_only_a_light_snapshot(diag):
+    """A heavy walk while the loop is blocked would prolong the stall it is
+    measuring."""
+    d, _ = diag
+    d.start()
+    d._dump_stacks("unit-test")
+    last = None
+    for line in open(os.path.join(d.DIAG_DIR, "memory-snapshots.jsonl")):
+        if line.strip():
+            last = json.loads(line)
+    assert last is not None and last["label"].startswith("during-")
+    assert last["python"]["heavy"] is False
+
+
+def test_frame_depth_is_bounded(monkeypatch, tmp_path):
+    """statistics() cost scales with distinct tracebacks, which scales with
+    frame depth. 12 frames produced 39-96s calls on the real workload."""
+    monkeypatch.delenv("CORR_DIAG_TM_FRAMES", raising=False)
+    d = _fresh(monkeypatch, CORR_DIAG_MEMORY="true", CORR_DIAG_DIR=str(tmp_path))
+    assert d.DIAG_TM_FRAMES <= 6, (
+        f"default frame depth {d.DIAG_TM_FRAMES} is deep enough to make the "
+        "profiler the top suspect again")
