@@ -2111,6 +2111,17 @@ async def _engine_cycle_inner() -> None:
     # cycle — two live components can never collapse into one identity.
     materialized = {s.correlation_id for _, _, snaps in evaluated for s in snaps}
     seen_this_cycle: set[str] = set()
+    # Per-cycle continuation index (tracker 162): open objects bucketed by
+    # tenant, built ONCE, with a shared entity-set cache. `materialized` is
+    # fixed for the cycle so it is filtered here; `seen_this_cycle` grows as we
+    # go, so it is passed through as an exclusion instead.
+    cont_index: dict[str, list] = {}
+    for _cid, _reg in OPEN_OBJECTS.items():
+        if _cid in materialized:
+            continue
+        _snap = _reg["snapshot"]
+        cont_index.setdefault(_snap.tenant_id, []).append(_snap)
+    cont_entities: dict[str, frozenset] = {}
     for tenant, window, snapshots in evaluated:
         # P1 max-poll thrash: a damped-heavy cycle walks every snapshot with
         # no awaits (content_hash is sync CPU) — yield per tenant so the
@@ -2120,10 +2131,20 @@ async def _engine_cycle_inner() -> None:
             gap_hints += snap.gap_hints
             reg = OPEN_OBJECTS.get(snap.correlation_id)
             if reg is None:
-                cont = find_continuation(snap, [
-                    r["snapshot"] for c, r in OPEN_OBJECTS.items()
-                    if c not in materialized and c not in seen_this_cycle
-                ])
+                # TRACKER 162. This used to rebuild the whole candidate list
+                # inside the loop — O(open_objects) per snapshot, so
+                # O(snapshots x open_objects) of pure list-building per cycle,
+                # on the event loop, before find_continuation even started
+                # recomputing every candidate's entity set.
+                #
+                # The tenant bucket is an EXACT index, not a heuristic: the very
+                # first thing find_continuation does is skip any candidate whose
+                # tenant differs (§3a, default-closed), so a cross-tenant object
+                # could never have won. Excluding it earlier removes work the
+                # contract already forbade using.
+                cont = find_continuation(
+                    snap, cont_index.get(snap.tenant_id, ()),
+                    exclude=seen_this_cycle, entity_cache=cont_entities)
                 if cont:
                     snap = dc_replace(snap, correlation_id=cont)
                     reg = OPEN_OBJECTS[cont]

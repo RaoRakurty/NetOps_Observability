@@ -1854,6 +1854,9 @@ def find_continuation(
     snap: ObjectSnapshot,
     open_snaps: list[ObjectSnapshot] | tuple[ObjectSnapshot, ...],
     min_overlap: float = 0.4,
+    *,
+    exclude: frozenset[str] | set[str] | tuple[str, ...] = (),
+    entity_cache: dict | None = None,
 ) -> str:
     """Which existing OPEN object `snap` CONTINUES, if any (#111 churn fix).
 
@@ -1883,11 +1886,25 @@ def find_continuation(
     best: tuple[float, datetime, str] | None = None
     best_cid = ""
     for s in open_snaps:
+        # TRACKER 162: `exclude` and `entity_cache` are pure PERFORMANCE inputs —
+        # they change which candidates are *examined*, never which one wins. The
+        # caller previously rebuilt the candidate list per snapshot (O(open) per
+        # snapshot, so O(snapshots x open) per cycle) and this loop recomputed
+        # every candidate's entity set on every call. Excluding a cid here is
+        # exactly what filtering it out of the list did; the cache holds the same
+        # frozenset `_entity_ids` would return.
+        if s.correlation_id in exclude:
+            continue
         if (s.tenant_id != snap.tenant_id
                 or s.correlation_id == snap.correlation_id
                 or not _windows_overlap(snap, s)):
             continue
-        se = _entity_ids(s)
+        if entity_cache is None:
+            se = _entity_ids(s)
+        else:
+            se = entity_cache.get(s.correlation_id)
+            if se is None:
+                se = entity_cache[s.correlation_id] = _entity_ids(s)
         union = ce | se
         jac = len(ce & se) / len(union) if union else 0.0
         # Tracker 154b: same seam-bridge admission as find_merges — a re-keyed
