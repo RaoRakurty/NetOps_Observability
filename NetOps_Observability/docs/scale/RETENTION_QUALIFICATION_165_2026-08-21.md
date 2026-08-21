@@ -201,7 +201,14 @@ sized to the horizon.
 | drain | **FAIL** — lag never returned to baseline (pre-existing class) |
 | **accounting** | **PASS — 600,001 == 600,001 + 0 DLQ + 0 rejections; 1000/1000 devices covered** |
 | memflat | **FAIL** — see below |
-| stability (before-sharing run) | PASS — 2,185 s lifecycle, 0 CommitFailed/UnknownMember/restarts |
+| stability | PASS — 3,331 s lifecycle, 0 CommitFailed / 0 UnknownMember / 0 restarts, worst loop stall **5,873 ms** |
+| cleanup | see below |
+
+Sampler-vs-harness note, for the second time this programme: my external sampler
+reported worst stalls of 3,414 / 4,144 ms, but it stops when I stop it and the
+harness watches the whole lifecycle — the real worst was **5,873 ms**, during the
+post-burst drain. Take the harness figure. The lesson generalises: a sampler that
+does not outlive the run under-reports the tail.
 
 **The memflat failure is the gate's assumption, not a leak.** It reads
 `484 → 711 MiB after input stopped` as a leak slope, but with stream-time
@@ -296,7 +303,7 @@ synchronous O(N) pass over the whole buffer. Measured the opposite —
 |---:|---:|
 | 50,000 | **9,316 ms** |
 | 900,000 (162k held) | **3,504 ms** |
-| 900,000 (270k held) | 3,414 / 4,144 ms |
+| 900,000 (270k held) | **5,873 ms** |
 
 The 50k configuration was *worse* despite holding 5× less. The likely reason is
 constant capacity-eviction churn at a full deque; that is a hypothesis, not a
