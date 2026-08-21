@@ -839,6 +839,9 @@ def build_edges(
     topology_stale: bool = False,
     directed: Oracle | None = None,
     paths: PathIndex | None = None,
+    *,
+    since_ts: float | None = None,
+    work_sink: dict | None = None,
 ) -> tuple[tuple[Edge, ...], int]:
     """Returns (admitted edges, topology_gap_hints). Pairs are evaluated in
     deterministic node order; the earlier-onset node is always from_node.
@@ -919,8 +922,43 @@ def build_edges(
     edges: list[Edge] = []
     total_pairs = n * (n - 1) // 2
     grounded_pairs = 0
-    for i, j in sorted(_candidate_pairs(n, toks, refs, seam_evs, devs, adjacency,
-                                        memb, route_hits)):
+    candidates = sorted(_candidate_pairs(n, toks, refs, seam_evs, devs, adjacency,
+                                         memb, route_hits))
+    # tracker 166 phase 2 — WORK ACCOUNTING, not a behaviour change.
+    #
+    # The question the incremental design turns on is how much of each cycle
+    # re-derives relationships whose inputs did not move. `_candidate_pairs` is
+    # already a sound inverted-index superset, so the waste is not naive O(N^2)
+    # over the window — it is that the SAME candidate pairs are re-grounded and
+    # re-scored every cycle for signals that have not changed since the last one.
+    #
+    # A node counts as NEW when any of its signals arrived after `since_ts`; a
+    # pair is then old x old (pure recomputation), new x old (genuinely required
+    # — a new signal may legitimately attach to retained evidence) or new x new.
+    # Recorded via a caller-supplied sink so the pure core stays pure.
+    if work_sink is not None:
+        fresh = [False] * n
+        if since_ts is not None:
+            for idx, nd in enumerate(nodes):
+                fresh[idx] = any(s.ts.timestamp() > since_ts for s in nd.signals)
+        old_old = new_old = new_new = 0
+        for i, j in candidates:
+            if fresh[i] and fresh[j]:
+                new_new += 1
+            elif fresh[i] or fresh[j]:
+                new_old += 1
+            else:
+                old_old += 1
+        work_sink.update({
+            "nodes": n,
+            "nodes_new": sum(fresh),
+            "pairs_naive": total_pairs,
+            "pairs_candidate": len(candidates),
+            "pairs_old_old": old_old,
+            "pairs_new_old": new_old,
+            "pairs_new_new": new_new,
+        })
+    for i, j in candidates:
         a, b = nodes[i], nodes[j]
         ai, bi = i, j
         if b.onset < a.onset or (b.onset == a.onset and b.key < a.key):
@@ -1685,6 +1723,9 @@ def run_window(
     directed: Oracle | None = None,
     paths: PathGraphView | None = None,
     discovery: tuple[AssembledPath, ...] = (),
+    *,
+    since_ts: float | None = None,
+    work_sink: dict | None = None,
 ) -> list[ObjectSnapshot]:
     """THE pure engine function. One evaluation of one tenant's window.
 
@@ -1734,7 +1775,7 @@ def run_window(
     # attribution re-scopes again; this is the structural first gate.
     disc = tuple(p for p in discovery if p.tenant_id and p.tenant_id == tenant)
     edges, gap_hints = build_edges(nodes, seams, cfg, adjacency, topology_stale, rec,
-                                   path_index)
+                                   path_index, since_ts=since_ts, work_sink=work_sink)
     open_floor = _SEV_RANK[Severity(cfg.severity_open_floor)]
     topo_ver = seams_hash(seams)
     eng_ver = engine_version(cfg)

@@ -1946,6 +1946,7 @@ def retention_state() -> dict[str, object]:
         # network value, forever". Population + evictions, always visible.
         "entity_cache": signals.entity_cache_stats(),
         "stage_profile": stage_profile(),
+        "cycle_work": cycle_work_profile(),
         "stream_time_evictions": STREAM_TIME_EVICTIONS,
         "idle_tenant_evictions": IDLE_TENANT_EVICTIONS,
         "watermark_regressions": WATERMARK_REGRESSIONS,
@@ -2205,6 +2206,46 @@ CORR_ARCHIVE_CHUNK_ROWS = int(os.environ.get("CORR_ARCHIVE_CHUNK_ROWS", "10000")
 # at ~0.1s — 30x under the 3s heartbeat interval, so the inline branch is
 # provably bounded too.
 CORR_OFFLOAD_MIN_ELEMENTS = int(os.environ.get("CORR_OFFLOAD_MIN_ELEMENTS", "2000"))
+
+
+# ── tracker 166 phase 2: how much of each cycle is re-derivation? ────────────
+#
+# The incremental design turns on one number: what fraction of the candidate
+# pairs a cycle grounds and scores involve only signals that were already
+# present, and unchanged, last cycle. Those are pure recomputation — the same
+# inputs producing the same edge. `new x old` pairs are NOT waste: a new signal
+# may legitimately attach to retained evidence anywhere inside the engine's
+# temporal reach, and tracker 165 exists to keep that evidence available.
+#
+# LAST_CYCLE_MAX_TS is the newest EVENT timestamp the previous cycle saw, so
+# "new" means "arrived since the last evaluation" in the same event-time frame
+# the engine reasons in — not wall clock, which after tracker 165 is not a
+# retention concept at all.
+LAST_CYCLE_MAX_TS: float | None = None
+CYCLE_WORK: dict[str, int] = {}
+CYCLE_WORK_CYCLES = 0
+
+
+def _record_cycle_work(tenant: str, work: dict) -> None:
+    """Accumulate one tenant-cycle's work accounting."""
+    global CYCLE_WORK_CYCLES
+    CYCLE_WORK_CYCLES += 1
+    for k, v in work.items():
+        CYCLE_WORK[k] = CYCLE_WORK.get(k, 0) + int(v)
+
+
+def cycle_work_profile() -> dict[str, object]:
+    """Totals plus the ratios tracker 166 is judged on."""
+    cand = CYCLE_WORK.get("pairs_candidate", 0)
+    nodes = CYCLE_WORK.get("nodes", 0)
+    out: dict[str, object] = {"cycles": CYCLE_WORK_CYCLES, **CYCLE_WORK}
+    if cand:
+        out["redundant_pair_fraction"] = round(CYCLE_WORK.get("pairs_old_old", 0) / cand, 4)
+        out["required_pair_fraction"] = round(
+            (CYCLE_WORK.get("pairs_new_old", 0) + CYCLE_WORK.get("pairs_new_new", 0)) / cand, 4)
+    if nodes:
+        out["new_node_fraction"] = round(CYCLE_WORK.get("nodes_new", 0) / nodes, 4)
+    return out
 
 
 # ── tracker 165 Part B: stage profiling (OPT-IN, off by default) ──────────────
@@ -2813,6 +2854,7 @@ async def _engine_cycle_inner() -> None:
     """One evaluation: prune window, partition by tenant, run the pure core,
     persist version increments, close quiesced objects."""
     global LAST_GAP_HINTS, VERSIONS_PERSISTED, VERSIONS_DAMPED
+    global LAST_CYCLE_MAX_TS
     if ch is None:
         return
     now = datetime.now(timezone.utc)
@@ -2831,6 +2873,10 @@ async def _engine_cycle_inner() -> None:
     with stage("engine.partition_by_tenant"):
         for s in WINDOW_BUFFER:
             by_tenant.setdefault(s.tenant_id, []).append(s)
+    # Marker for the NEXT cycle's work accounting: the newest event this cycle
+    # can see. Captured before the per-tenant work so a long cycle does not
+    # mis-attribute signals that arrived while it ran.
+    _cycle_max_ts = max((s.ts.timestamp() for s in WINDOW_BUFFER), default=None)
     # P1 max-poll thrash: the prune + partition pass above is pure sync over a
     # buffer that can hold 50k signals in a storm — hand the loop back to the
     # consumer/heartbeat tasks before the per-tenant work starts.
@@ -2883,11 +2929,18 @@ async def _engine_cycle_inner() -> None:
             # default executor, same semantics, now counted — the queue-depth
             # and wait figures finally describe the whole pool rather than one
             # caller.
+            # tracker 166 phase 2: ask the engine how much of this cycle is
+            # re-derivation. Only when profiling is on — `work_sink=None` makes
+            # the accounting a single branch inside build_edges.
+            work: dict | None = {} if CORR_PROFILE_STAGES else None
             with stage("engine.run_window"):
                 snapshots = await _offload(
                     run_window, tuple(window), CATALOG, seams, ENGINE_CFG,
                     adjacency=adjacency, topology_stale=topo_stale, storm_mode=storm,
-                    directed=directed, paths=pgv, discovery=discovery)
+                    directed=directed, paths=pgv, discovery=discovery,
+                    since_ts=LAST_CYCLE_MAX_TS, work_sink=work)
+            if work:
+                _record_cycle_work(tenant, work)
         except ValueError as exc:
             log.error("engine window rejected: %s", exc)
             continue
@@ -3020,6 +3073,11 @@ async def _engine_cycle_inner() -> None:
             del OPEN_OBJECTS[cid]
             _ARCHIVE_SLICE_HASH.pop(cid, None)
     LAST_GAP_HINTS = gap_hints
+    # tracker 166: advance the "new since last cycle" marker only after the
+    # cycle actually completed, so a cycle that raised does not cause the next
+    # one to treat its unprocessed signals as already-seen.
+    if _cycle_max_ts is not None:
+        LAST_CYCLE_MAX_TS = _cycle_max_ts
     # #101: flush the per-tenant write-amplification window (no-op until
     # CORR_WA_FLUSH_S has elapsed; resets even when the insert fails).
     await _flush_tenant_write_amp(now)
