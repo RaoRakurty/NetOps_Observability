@@ -1,0 +1,10 @@
+# Tracker 165 Part B — profiling overlay. Diagnostic only.
+# Same 1.25 GiB / 150k configuration that Part A qualified, plus the opt-in
+# stage profiler, so the profiled run differs from the qualified one in exactly
+# one variable.
+services:
+  correlation:
+    mem_limit: 1280m
+    environment:
+      CORR_WINDOW_BUFFER: "150000"
+      CORR_PROFILE_STAGES: "true"
