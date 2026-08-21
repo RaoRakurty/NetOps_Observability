@@ -63,7 +63,7 @@
     "api": 1006632960,
     "cadvisor": 268435456,
     "clickhouse": 17448304640,
-    "correlation": 1207959552,
+    "correlation": 1744830464,
     "frontend": 134217728,
     "gnmic": 704643072,
     "goflow2": 939524096,
@@ -87,7 +87,7 @@
     "api": 536870912,
     "cadvisor": 268435456,
     "clickhouse": 4294967296,
-    "correlation": 805306368,
+    "correlation": 1342177280,
     "frontend": 134217728,
     "gnmic": 536870912,
     "goflow2": 536870912,
@@ -121,9 +121,9 @@
   "totals": {
     "budget": "58.9 GiB",
     "budget_bytes": 63221918598,
-    "limits": "38.6 GiB",
-    "limits_bytes": 41448066252,
-    "reservations": "16.1 GiB"
+    "limits": "39.1 GiB",
+    "limits_bytes": 41984937164,
+    "reservations": "16.6 GiB"
   },
   "warnings": [
     "CPU allocations (30.0) exceed cores x 1.5 (24.0) \u2014 CPU is compressible but expect contention under load",

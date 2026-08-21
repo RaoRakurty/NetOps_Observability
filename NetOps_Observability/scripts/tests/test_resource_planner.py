@@ -510,6 +510,199 @@ class TestBusPartitions(unittest.TestCase):
             % sorted(consumed - created))
 
 
+class TestCorrelationQualifiedMemory(unittest.TestCase, Invariants):
+    """Tracker 165 qualified correlation at 1.25 GiB on 2026-08-21.
+
+    The planner's job here is not to allocate a nice number — it is to refuse
+    to pretend. The old 768 MiB floor is DISPROVEN for the corrected ~516.5 s
+    retention horizon (measured peak 668-775 MiB, settled 624-733 MiB), so a
+    host that can only supply 768 MiB cannot run the qualified profile, and the
+    planner must say so rather than emitting a smaller limit under the same
+    support claim.
+    """
+
+    QUALIFIED = 1280 * MIB          # 1.25 GiB, exactly 1,342,177,280 bytes
+
+    def test_1_sufficient_host_gets_the_qualified_allocation(self):
+        for profile in ("small", "medium", "large"):
+            with self.subTest(profile=profile):
+                plan = rp.compute_plan(host(128, cpus=32, disk_gib=8000), profile)
+                self.assertGreaterEqual(
+                    plan["limits_bytes"]["correlation"], self.QUALIFIED,
+                    f"{profile}: correlation below the qualified 1.25 GiB")
+                self.assertGreaterEqual(
+                    plan["reservations_bytes"]["correlation"], self.QUALIFIED,
+                    f"{profile}: the RESERVATION is what is guaranteed, and it "
+                    "must not sit below the qualified requirement")
+
+    def test_2_a_host_that_cannot_supply_it_is_refused_not_shrunk(self):
+        """The whole point: no silent downgrade. Either the qualified figure is
+        met, or the planner refuses — never a quiet 768 MiB under the same
+        support claim."""
+        refused = met = 0
+        for gib in (4, 6, 8, 12, 16, 24, 32, 48, 64):
+            try:
+                plan = rp.compute_plan(host(gib, disk_gib=8000), "medium")
+            except rp.SizingError:
+                refused += 1
+                continue
+            met += 1
+            self.assertGreaterEqual(
+                plan["limits_bytes"]["correlation"], self.QUALIFIED,
+                f"{gib}GiB host produced a plan with correlation BELOW the "
+                "qualified requirement instead of refusing")
+        self.assertTrue(refused, "no host was small enough to exercise refusal")
+        self.assertTrue(met, "no host was large enough to exercise success")
+
+    def test_3_a_large_host_does_not_over_allocate_beyond_the_workload(self):
+        """The floor is a minimum, not a target. Growing the host must not keep
+        inflating correlation — above the workload term it should plateau."""
+        big = rp.compute_plan(host(128, cpus=32, disk_gib=8000), "small")
+        huge = rp.compute_plan(host(512, cpus=64, disk_gib=8000), "small")
+        self.assertEqual(big["limits_bytes"]["correlation"],
+                         huge["limits_bytes"]["correlation"],
+                         "correlation kept growing with the host rather than "
+                         "with the workload")
+
+    def test_4_total_allocation_never_exceeds_the_planner_budget(self):
+        """Raising one floor must not push the sum past the budget on any host
+        the planner still accepts."""
+        for gib in (16, 32, 64, 128):
+            for profile in ("demo", "small", "medium"):
+                with self.subTest(host=gib, profile=profile):
+                    try:
+                        plan = rp.compute_plan(host(gib, cpus=16, disk_gib=8000), profile)
+                    except rp.SizingError:
+                        continue
+                    self.check(plan)
+
+    def test_5_the_disproven_768_MiB_floor_cannot_silently_return(self):
+        """A regression guard on the constant itself. 768 MiB was not merely
+        conservative — it cannot hold the evidence the engine is contractually
+        required to retain, so its return is a correctness regression, not a
+        tuning choice."""
+        floor = next(s[3] for s in rp.SERVICES if s[0] == "correlation")
+        self.assertEqual(floor, self.QUALIFIED,
+                         "correlation's floor changed; it must track the last "
+                         "QUALIFIED measurement, not drift back to 768 MiB")
+        self.assertGreater(floor, 768 * MIB)
+
+    def test_6_the_generated_env_block_matches_the_planned_limit(self):
+        """A plan nobody emits is not an allocation. The rendered
+        CORRELATION_MEM_LIMIT must equal what the planner decided."""
+        plan = rp.compute_plan(host(64, cpus=16, disk_gib=8000), "medium")
+        block = rp.env_block(plan)
+        planned = plan["limits_bytes"]["correlation"]
+        # Match the EXACT assignment: "CORRELATION_MEM_LIMIT" is a prefix of
+        # "CORRELATION_MEM_LIMIT_X", so a substring check happily accepted a
+        # renamed variable that compose would never read.
+        lines = [ln for ln in block.splitlines()
+                 if ln.split("=", 1)[0].strip() == "CORRELATION_MEM_LIMIT"]
+        self.assertEqual(len(lines), 1,
+                         "exactly one CORRELATION_MEM_LIMIT assignment expected; "
+                         f"found {len(lines)} in the emitted block")
+        rendered = lines[0].split("=", 1)[1].strip()
+        self.assertEqual(rp.parse_size(rendered), planned,
+                         f"emitted {rendered} but planned {planned} bytes")
+        self.assertGreaterEqual(rp.parse_size(rendered), self.QUALIFIED)
+
+    def test_an_oversubscribed_host_refuses_rather_than_emitting_a_plan(self):
+        """Directly exercises the refusal branch. Deleting the raise let the
+        planner sail past an oversubscribed host and emit limits whose SUM
+        exceeded the budget — a plan that cannot be honoured, issued under the
+        same support claim. Being refused is the feature."""
+        tiny = host(8, cpus=4, disk_gib=8000)
+        with self.assertRaises(rp.SizingError):
+            rp.compute_plan(tiny, "medium")
+        with self.assertRaises(rp.SizingError):
+            rp.compute_plan(host(16, cpus=8, disk_gib=8000), "large")
+
+    def test_floors_alone_over_budget_refuse_via_the_floors_path(self):
+        """Distinguishes the FIRST refusal (floors alone exceed the budget)
+        from the second one (elastic trimmed too hard).
+
+        `custom` with an empty workload has no workload terms, so desires ==
+        floors and there is no elastic portion to trim. On a host too small for
+        the floors, the elastic-trim honesty check therefore cannot fire and
+        the floors check is the only thing standing between the operator and a
+        plan that cannot be honoured. Removing it survived every other test
+        here precisely because the second path masked it on realistic hosts.
+        """
+        with self.assertRaises(rp.SizingError) as ctx:
+            rp.compute_plan(host(8, cpus=4, disk_gib=8000), "custom", workload={})
+        msg = str(ctx.exception)
+        self.assertIn("minimum memory", msg,
+                      "the refusal must state the required minimum, not just decline")
+        # and the required minimum must account for the QUALIFIED correlation
+        # floor rather than the retired 768 MiB
+        floors = sum(s[3] * rp.DOUBLE_COUNTED.get(s[0], 1) for s in rp.SERVICES
+                     if s[5] is None)
+        self.assertGreaterEqual(floors, self.QUALIFIED)
+
+    def test_every_accepted_STRICT_plan_fits_its_own_budget(self):
+        """Whatever a strict profile accepts must sum to within the budget it
+        computed, on every host.
+
+        `demo` is deliberately excluded: it is the relaxed evaluation profile
+        and oversubscribes on purpose (mem_limit is a cap, not a reservation —
+        the 8 GB eval floor only works that way). It did so before this change
+        too, so asserting the invariant there would be testing a decision the
+        planner makes knowingly, not a regression."""
+        self.assertTrue(rp.PROFILES["demo"].get("relaxed"),
+                        "demo stopped being the relaxed profile; revisit this test")
+        checked = 0
+        for gib in (8, 16, 24, 32, 48, 64, 128):
+            for profile in ("small", "medium", "large"):
+                self.assertFalse(rp.PROFILES[profile].get("relaxed"), profile)
+                try:
+                    plan = rp.compute_plan(host(gib, cpus=16, disk_gib=8000), profile)
+                except rp.SizingError:
+                    continue
+                self.assertLessEqual(plan["totals"]["limits_bytes"],
+                                     plan["totals"]["budget_bytes"],
+                                     f"{profile}@{gib}GiB emitted a plan over budget")
+                checked += 1
+        self.assertGreater(checked, 5, "too few accepted plans to be meaningful")
+
+    def test_the_relaxed_profile_oversubscribes_LOUDLY(self):
+        """It is allowed to oversubscribe; it is not allowed to do so quietly."""
+        plan = rp.compute_plan(host(8, cpus=4, disk_gib=8000), "demo")
+        self.assertTrue(plan["warnings"], "relaxed oversubscription emitted no warning")
+        self.assertTrue(
+            any("oversubscribe" in w or "NOT production sizing" in w
+                for w in plan["warnings"]),
+            f"the warning must name the condition: {plan['warnings']}")
+
+    def test_the_correlation_mirrors_agree(self):
+        """The qualified figure lives in three places that cannot import each
+        other: the planner floor (source of truth), the compose fallback, and
+        correlation's series-budget fallback. 768 MiB survived in exactly those
+        three spots by drifting independently, so they are pinned together
+        here — the one place that can see all three."""
+        import pathlib
+        import re
+        root = pathlib.Path(__file__).resolve().parents[2]
+        floor = next(s[3] for s in rp.SERVICES if s[0] == "correlation")
+
+        compose = (root / "deployment/docker/docker-compose.yml").read_text(encoding="utf-8")
+        m = re.search(r"mem_limit:\s*\$\{CORRELATION_MEM_LIMIT:-(\d+)m\}", compose)
+        self.assertIsNotNone(m, "compose default for CORRELATION_MEM_LIMIT not found")
+        self.assertEqual(int(m.group(1)) * MIB, floor,
+                         "compose fallback drifted from the planner floor")
+
+        budget = (root / "src/correlation/series_budget.py").read_text(encoding="utf-8")
+        m2 = re.search(r"DEFAULT_MEM_BUDGET_BYTES\s*=\s*(\d+)\s*\*\s*MIB", budget)
+        self.assertIsNotNone(m2, "series-budget fallback not found")
+        self.assertEqual(int(m2.group(1)) * MIB, floor,
+                         "series-budget fallback drifted from the planner floor")
+
+    def test_no_second_independent_correlation_memory_constant(self):
+        """The qualified figure must have exactly one home. A duplicate that
+        drifts is how 768 MiB survived in three places to begin with."""
+        floors = [s[3] for s in rp.SERVICES if s[0] == "correlation"]
+        self.assertEqual(len(floors), 1, "correlation appears twice in SERVICES")
+
+
 class TestGolden(unittest.TestCase):
     """Golden plans: regenerate and compare (design §11)."""
     GOLDEN = os.path.join(os.path.dirname(__file__), "golden")

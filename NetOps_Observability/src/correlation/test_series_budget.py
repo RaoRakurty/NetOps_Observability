@@ -2,7 +2,7 @@
 
 Verified defect (2026-08-14): CORR_MAX_SERIES defaulted to a flat 200 000 for
 BOTH bounded series stores (main.SERIES and episodes.EpisodeDetector._state)
-while the container defaults to 768 MiB (CORRELATION_MEM_LIMIT / the
+while the container defaults to 1280 MiB (CORRELATION_MEM_LIMIT / the
 resource_planner floor). Measured with tracemalloc on the real structures:
 ~7.5 KiB per full-window entry each → ~2.9 GiB at cap, i.e. the process OOMs
 at roughly a quarter of the cap and the bound never bounds. These tests pin:
@@ -147,9 +147,26 @@ def test_cap_floor_keeps_the_detector_useful():
 
 
 def test_default_budget_matches_the_shipped_container_limit():
-    # deployment/docker/docker-compose.yml: mem_limit ${CORRELATION_MEM_LIMIT:-768m};
-    # scripts/resource_planner.py: correlation floor 768 MiB.
-    assert sb.DEFAULT_MEM_BUDGET_BYTES == 768 * MIB
+    """The fallback budget must equal the shipped compose default.
+
+    This used to assert both sides against a literal, which meant the guard was
+    satisfied by editing the number in two places — precisely the drift it
+    exists to prevent (768 MiB survived in three independent spots that way).
+    It now READS the compose default, so the two can only agree by actually
+    agreeing.
+    """
+    import pathlib
+    import re
+    compose = pathlib.Path(__file__).resolve().parents[2] / "deployment/docker/docker-compose.yml"
+    text = compose.read_text(encoding="utf-8")
+    m = re.search(r"mem_limit:\s*\$\{CORRELATION_MEM_LIMIT:-(\d+)m\}", text)
+    assert m, "could not find the CORRELATION_MEM_LIMIT compose default"
+    shipped = int(m.group(1)) * MIB
+    assert sb.DEFAULT_MEM_BUDGET_BYTES == shipped, (
+        f"series-budget fallback {sb.DEFAULT_MEM_BUDGET_BYTES // MIB} MiB != "
+        f"compose default {shipped // MIB} MiB")
+    assert shipped > 768 * MIB, (
+        "the retired 768 MiB default cannot hold the ~516.5 s evidence horizon")
 
 
 # ---------------------------------------------------------------------------

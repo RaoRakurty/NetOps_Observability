@@ -1151,7 +1151,11 @@ services:
     build:
       context: ../..
       dockerfile: deployment/docker/Dockerfile.correlation
-    mem_limit: ${CORRELATION_MEM_LIMIT:-768m}
+    # 1280m = 1.25 GiB, the tracker-165 QUALIFIED limit (2026-08-21). This is
+    # only the fallback for when the planner has not written .env; the planner
+    # floor in scripts/resource_planner.py is the source of truth and the two
+    # are pinned together by scripts/tests/test_resource_planner.py.
+    mem_limit: ${CORRELATION_MEM_LIMIT:-1280m}
     cpus: ${CORRELATION_CPU_LIMIT:-2}
     environment:
       # F-38/durability: RCA-critical evidence whose ClickHouse write is

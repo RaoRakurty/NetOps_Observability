@@ -166,7 +166,14 @@ SERVICES = [
     ("node-exporter", "NODE_EXPORTER_MEM_LIMIT", "NODE_EXPORTER_CPU_LIMIT", 128 * MIB, 0.5, "self-monitoring", False),
     ("grafana",      "GRAFANA_MEM_LIMIT",     "GRAFANA_CPU_LIMIT",     512 * MIB, 1.5, "self-monitoring", False),
     ("clickhouse",   "CLICKHOUSE_MEM_LIMIT",  "CLICKHOUSE_CPU_LIMIT",  4 * GIB,   3.0, None,              True),
-    ("correlation",  "CORRELATION_MEM_LIMIT", "CORRELATION_CPU_LIMIT", 768 * MIB, 2.0, None,              True),
+    # 1280 MiB = 1.25 GiB, the limit QUALIFIED for the 1K/p90 profile on
+    # 2026-08-21 (tracker 165). The previous 768 MiB floor is disproven, not
+    # merely conservative: at the corrected ~516.5 s retention horizon the
+    # container peaked at 668-775 MiB and settled at 624-733 MiB, so 768 MiB
+    # leaves no room for the evidence the engine is contractually required to
+    # retain. The floor is the quantity the planner REFUSES to go below rather
+    # than silently trimming, which is exactly the guarantee this number needs.
+    ("correlation",  "CORRELATION_MEM_LIMIT", "CORRELATION_CPU_LIMIT", 1280 * MIB, 2.0, None,             True),
     ("api",          "API_MEM_LIMIT",         "API_CPU_LIMIT",         512 * MIB, 2.0, None,              True),
     ("prober",       "PROBER_MEM_LIMIT",      None,                    128 * MIB, 0.5, "prober",          True),
     ("frontend",     "FRONTEND_MEM_LIMIT",    None,                    128 * MIB, 0.5, None,              False),

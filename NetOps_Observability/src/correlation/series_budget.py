@@ -26,7 +26,7 @@ the budget. Resolution order:
   3. the cgroup memory limit    — inside the container this IS the compose
                                   ``mem_limit``, so operator resizes are picked
                                   up with no second knob to forget.
-  4. 768 MiB                    — the shipped default limit.
+  4. 1280 MiB                   — the shipped default limit (1.25 GiB, qualified).
 
 ``test_series_budget.py`` re-measures the real structures and fails if a field
 addition pushes an entry past the model constant below — change the constant
@@ -63,7 +63,15 @@ MIN_SERIES_FLOOR = 5_000
 
 # CORRELATION_MEM_LIMIT compose default / resource_planner floor for this
 # service (deployment/docker/docker-compose.yml, scripts/resource_planner.py).
-DEFAULT_MEM_BUDGET_BYTES = 768 * MIB
+# 1280 MiB = 1.25 GiB, QUALIFIED 2026-08-21 (tracker 165); the retired 768 MiB
+# cannot hold the ~516.5 s evidence horizon the engine now contracts for.
+#
+# This is a MIRROR, used only when the real cgroup limit cannot be read (see
+# _cgroup_memory_limit_bytes below, which is the normal path). Correlation must
+# not import the planner — that would be a cross-domain dependency (§2) — so the
+# two constants are kept honest by a test instead:
+# scripts/tests/test_resource_planner.py::test_the_correlation_mirrors_agree.
+DEFAULT_MEM_BUDGET_BYTES = 1280 * MIB
 
 _CGROUP_V2_LIMIT = "/sys/fs/cgroup/memory.max"
 _CGROUP_V1_LIMIT = "/sys/fs/cgroup/memory/memory.limit_in_bytes"
