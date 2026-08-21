@@ -318,3 +318,54 @@ def test_a_freshly_scored_edge_wins_over_a_carried_one():
         if (e.from_node, e.to_node) in got:
             assert got[(e.from_node, e.to_node)] == e.weight, (
                 "a stale carried edge shadowed a freshly scored one")
+
+
+def test_candidate_GENERATION_is_bounded_not_just_scoring():
+    """The bound has to be inside `_candidate_pairs`, not applied to its output.
+
+    The first implementation generated every pair in the window and filtered
+    afterwards. Scoring was bounded, generation was not, and live transactions
+    still grew 12s -> 25s -> 54s as the window filled. `_link` is O(bucket^2)
+    per index bucket, so the cost tracked the window regardless of the cohort.
+
+    This test pins the work at the point it is created: one cohort member in a
+    large bucket must produce a number of candidates proportional to the bucket,
+    not to its square.
+    """
+    from engine import _candidate_pairs
+
+    n = 200
+    toks = [frozenset({"shared"}) for _ in range(n)]
+    refs = [frozenset() for _ in range(n)]
+    from engine import NO_ADJACENCY
+    unbounded = _candidate_pairs(n, toks, refs, [], [None] * n, NO_ADJACENCY,
+                                 None, None)
+    assert len(unbounded) == n * (n - 1) // 2, "fixture must be fully connected"
+
+    one = _candidate_pairs(n, toks, refs, [], [None] * n, NO_ADJACENCY,
+                           None, None, frozenset({0}))
+    assert len(one) == n - 1, (
+        f"a single cohort member should generate {n - 1} candidates, got {len(one)}")
+
+    ten = _candidate_pairs(n, toks, refs, [], [None] * n, NO_ADJACENCY,
+                           None, None, frozenset(range(10)))
+    # 10 members x 199 others, minus the 45 pairs counted twice within the cohort
+    assert len(ten) == 10 * (n - 1) - 45
+    assert len(ten) < len(unbounded) / 2, "generation must actually be bounded"
+
+
+def test_cohort_generation_still_covers_every_pair_across_a_partition():
+    """Bounding generation must not lose pairs: the union over a partition is
+    still the full candidate set."""
+    from engine import NO_ADJACENCY, _candidate_pairs
+
+    n = 60
+    toks = [frozenset({f"g{i % 5}"}) for i in range(n)]
+    refs = [frozenset() for _ in range(n)]
+    full = _candidate_pairs(n, toks, refs, [], [None] * n, NO_ADJACENCY, None, None)
+    union: set = set()
+    for start in range(0, n, 12):
+        cohort = frozenset(range(start, min(start + 12, n)))
+        union |= _candidate_pairs(n, toks, refs, [], [None] * n, NO_ADJACENCY,
+                                  None, None, cohort)
+    assert union == full, "partitioned generation lost candidate pairs"

@@ -763,6 +763,7 @@ def _candidate_pairs(
     adjacency: TopologyAdjacency,
     memb: list[dict] | None,
     route_hits: list[bool] | None,
+    cohort: frozenset[int] | None = None,
 ) -> set[tuple[int, int]]:
     """The SOUND candidate superset for resolve_grounding: every pair NOT in this
     set is guaranteed to ground to None (each grounding rung requires one of the
@@ -785,10 +786,25 @@ def _candidate_pairs(
     reads; the returned pair set is order-independent."""
     cand: set[tuple[int, int]] = set()
 
+    # tracker 166: when a cohort is supplied, a bucket only needs the pairs that
+    # TOUCH it. The unrestricted form is O(bucket^2) and runs over every index
+    # bucket in the window, so filtering its output afterwards left candidate
+    # GENERATION unbounded — which is why bounding only the scoring phase still
+    # produced transactions growing 12s -> 25s -> 54s. Pairing each cohort member
+    # against the bucket is O(|bucket ∩ cohort| x |bucket|) instead.
     def _link(members: list[int]) -> None:
-        for x in range(len(members)):
-            for y in range(x + 1, len(members)):
-                a, b = members[x], members[y]
+        if cohort is None:
+            for x in range(len(members)):
+                for y in range(x + 1, len(members)):
+                    a, b = members[x], members[y]
+                    if a != b:
+                        cand.add((a, b) if a < b else (b, a))
+            return
+        hot = [m for m in members if m in cohort]
+        if not hot:
+            return
+        for a in hot:
+            for b in members:
                 if a != b:
                     cand.add((a, b) if a < b else (b, a))
 
@@ -816,7 +832,7 @@ def _candidate_pairs(
             continue
         for i in dev_index.get(ends[0], ()):
             for j in dev_index.get(ends[1], ()):
-                if i != j:
+                if i != j and (cohort is None or i in cohort or j in cohort):
                     cand.add((i, j) if i < j else (j, i))
     # path relations: shared observation membership; route-touching nodes
     if memb is not None:
@@ -924,7 +940,7 @@ def build_edges(
     total_pairs = n * (n - 1) // 2
     grounded_pairs = 0
     candidates = sorted(_candidate_pairs(n, toks, refs, seam_evs, devs, adjacency,
-                                         memb, route_hits))
+                                         memb, route_hits, cohort))
     # tracker 166 — BOUNDED COHORT EVALUATION.
     #
     # `cohort` is the set of node indices that are NEW in this engine
@@ -947,9 +963,8 @@ def build_edges(
     # omitting it would silently undo that work. The saving is that `new x new`
     # is quadratic in COHORT size rather than in however many signals happened
     # to pile up while the previous transaction was running.
-    if cohort is not None:
-        candidates = [(i, j) for (i, j) in candidates
-                      if i in cohort or j in cohort]
+    # (the cohort restriction is applied INSIDE _candidate_pairs above, so
+    # generation is bounded too — filtering here would have been too late)
     # tracker 166 phase 2 — WORK ACCOUNTING, not a behaviour change.
     #
     # The question the incremental design turns on is how much of each cycle
