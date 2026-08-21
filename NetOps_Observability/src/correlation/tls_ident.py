@@ -41,6 +41,14 @@ from uvicorn.protocols.http.h11_impl import H11Protocol
 # peer certificate carries no URI SAN). Single event loop — no locking needed.
 _PEERS: dict[tuple[str, int], str] = {}
 
+
+def _peer_key(client) -> tuple[str, int]:
+    """(host, port) for the peer map. `transport.client` is loosely typed, so
+    the coercion is named once here rather than being an untyped `tuple()` at
+    each call site."""
+    host, port = client[0], client[1]
+    return (str(host), int(port))
+
 # Paths a monitor-scoped identity may reach: the scrape surface and liveness.
 MONITOR_PATHS = ("/metrics", "/healthz")
 
@@ -66,11 +74,11 @@ class IdentityH11Protocol(H11Protocol):
     def connection_made(self, transport) -> None:  # type: ignore[override]
         super().connection_made(transport)
         if self.client is not None:
-            _PEERS[tuple(self.client)] = _peer_spiffe_uri(transport)
+            _PEERS[_peer_key(self.client)] = _peer_spiffe_uri(transport)
 
     def connection_lost(self, exc) -> None:
         if self.client is not None:
-            _PEERS.pop(tuple(self.client), None)
+            _PEERS.pop(_peer_key(self.client), None)
         super().connection_lost(exc)
 
 

@@ -16,8 +16,9 @@ import dataclasses
 import sys
 from datetime import datetime, timedelta, timezone
 
-import main
 import pytest
+
+import main
 from signals import (
     EntityType,
     ModalityClass,

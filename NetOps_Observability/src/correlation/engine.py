@@ -2138,9 +2138,12 @@ def find_continuation(
         if entity_cache is None:
             se = _entity_ids(s)
         else:
-            se = entity_cache.get(s.correlation_id)
-            if se is None:
-                se = entity_cache[s.correlation_id] = _entity_ids(s)
+            # `.get()` widens to Optional, which the narrowing below resolves —
+            # spell it as a lookup-or-fill so the type is frozenset throughout.
+            cached = entity_cache.get(s.correlation_id)
+            if cached is None:
+                cached = entity_cache[s.correlation_id] = _entity_ids(s)
+            se = cached
         union = ce | se
         jac = len(ce & se) / len(union) if union else 0.0
         # Tracker 154b: same seam-bridge admission as find_merges — a re-keyed

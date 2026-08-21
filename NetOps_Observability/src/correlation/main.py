@@ -1693,8 +1693,6 @@ def copartition_healthy() -> bool:
     return COPARTITION_OK
 
 
-_SENTINEL = object()   # 'not computed yet' — None means 'no watermark'
-
 # tenant -> (newest event ts seen, monotonic when that advanced)
 TENANT_WATERMARK: dict[str, tuple[float, float]] = {}
 WATERMARK_REGRESSIONS = 0     # out-of-order arrivals (normal; watermark holds)
@@ -2092,11 +2090,14 @@ async def _prune_buffer(now: datetime) -> None:
         for sig, sid in zip(src_sig[start:start + CORR_PRUNE_CHUNK],
                             src_id[start:start + CORR_PRUNE_CHUNK]):
             tenant = sig.tenant_id
-            cut = horizons.get(tenant, _SENTINEL)
-            if cut is _SENTINEL:
-                cut = _tenant_horizon(tenant)
-                horizons[tenant] = cut
+            # Membership, not a sentinel VALUE: `None` is a meaningful horizon
+            # ("this tenant has no watermark yet, so nothing is expired"), so a
+            # sentinel object would have to share the variable's type with a
+            # float and defeat the type checker for no benefit.
+            if tenant not in horizons:
+                horizons[tenant] = _tenant_horizon(tenant)
                 idle[tenant] = _tenant_idle(tenant, now_mono)
+            cut = horizons[tenant]
             ts = sig.ts.timestamp()
             if cut is not None and stream_expiry_ok and ts < cut:
                 stream_evicted += 1
@@ -2730,7 +2731,9 @@ class _WindowIndex:
     per-object build produced; the final sort is unchanged. Slices therefore stay
     byte-identical — pinned by test_replay_archive_slice.py.
     """
-    nodes: tuple[tuple[str, list[Signal], object, object], ...]
+    # (node key, its signals, earliest ts, latest ts). The two timestamps were
+    # typed `object`, which cost the overlap test below its type checking.
+    nodes: tuple[tuple[str, list[Signal], datetime, datetime], ...]
     loose: tuple[tuple[Signal, str], ...]
     # id(signal) -> str(signal_id), and id(signal) -> position in the window's
     # canonical (ts, signal_id) order. Both are computed ONCE per cycle here

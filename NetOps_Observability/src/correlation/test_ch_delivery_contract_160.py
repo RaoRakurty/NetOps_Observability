@@ -19,8 +19,9 @@ from __future__ import annotations
 
 import asyncio
 
-import main
 import pytest
+
+import main
 
 
 def run(coro):

@@ -34,6 +34,7 @@ import sys
 import threading
 import time
 from datetime import datetime, timezone
+from typing import Any
 
 # ── configuration (all dormant by default) ──────────────────────────────────
 DIAG_ENABLED = os.environ.get("CORR_DIAG_MEMORY", "").lower() in ("1", "true", "yes")
@@ -55,7 +56,11 @@ _started = False
 _heartbeat = [0.0]          # mutable cell written by the loop, read by the thread
 _stack_dumps = [0]
 _snapshots = [0]
-_baseline = [None]          # tracemalloc baseline snapshot for diffs
+# One-slot mutable cell for the tracemalloc baseline. Annotated because the
+# bare `[None]` inferred list[None] and rejected every assignment into it.
+# `Any` rather than `tracemalloc.Snapshot` so the module keeps its import of
+# tracemalloc local to the functions that opt into it (see DIAG_ENABLED).
+_baseline: list[Any] = [None]   # tracemalloc baseline snapshot for diffs
 
 
 def enabled() -> bool:

@@ -16,8 +16,9 @@ from __future__ import annotations
 import re
 from datetime import datetime, timezone
 
-import producers as P
 import pytest
+
+import producers as P
 
 # Vendor-shaped lines, one or more per rule family.
 CORPUS = [
