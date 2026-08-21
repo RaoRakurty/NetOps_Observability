@@ -458,3 +458,48 @@ def test_the_lag_probe_is_rate_limited():
     for _ in range(50):
         main._refresh_consumer_lag(c, now)
     assert _CountingConsumer.calls == 1, "the probe must sample, not poll per event"
+
+
+def test_a_never_read_partition_is_unknown_not_full_history_backlog():
+    """Regression from the 1.25 GiB qualification run.
+
+    The first probe charged a partition we have consumed nothing from with its
+    ENTIRE history as backlog (`consumed_through = 0`). On a stack with old
+    topics that reported ~2,806 records of permanent lag that did not exist —
+    and because the idle backstop requires lag 0, the backstop was inert
+    forever. A memory control that silently never runs is worse than one that
+    runs too eagerly, because nothing tells you.
+
+    Unknown must read as UNKNOWN: not counted in the total, and enough on its
+    own to keep `_consumer_caught_up` false.
+    """
+    class _TP:
+        def __init__(self, t, p): self.topic, self.partition = t, p
+        def __hash__(self): return hash((self.topic, self.partition))
+        def __eq__(self, o): return (self.topic, self.partition) == (o.topic, o.partition)
+
+    class _Consumer:
+        def __init__(self, hw): self._hw = hw
+        def assignment(self): return set(self._hw)
+        def highwater(self, tp): return self._hw[tp]
+
+    read = _TP("netops.syslog", 0)
+    never = _TP("netops.wireless_events", 3)
+    main._LAST_OFFSET.clear()
+    main._LAST_OFFSET[("netops.syslog", 0)] = 99
+
+    main._LAG_SAMPLED_AT = 0.0
+    main._refresh_consumer_lag(_Consumer({read: 100, never: 50_000}), time.monotonic())
+    assert main.CONSUMER_LAG_TOTAL == 0, (
+        "the never-read partition's history must not be charged as backlog")
+    assert main.CONSUMER_LAG_UNKNOWN_PARTITIONS == 1
+    assert main._consumer_caught_up(time.monotonic()) is False, (
+        "an unread partition means 'level with the broker' is unproven")
+
+    # once every assigned partition has been read, the answer becomes provable
+    main._LAST_OFFSET[("netops.wireless_events", 3)] = 49_999
+    main._LAG_SAMPLED_AT = 0.0
+    main._refresh_consumer_lag(_Consumer({read: 100, never: 50_000}), time.monotonic())
+    assert main.CONSUMER_LAG_UNKNOWN_PARTITIONS == 0
+    assert main.CONSUMER_LAG_TOTAL == 0
+    assert main._consumer_caught_up(time.monotonic()) is True

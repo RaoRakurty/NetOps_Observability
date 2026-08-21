@@ -1,0 +1,18 @@
+# Tracker 165 Part A — CANDIDATE production sizing, under qualification.
+#
+# 1.25 GiB (1280 MiB) is the limit derived from the previous wave's measurement:
+# marginal cost 2,845 B/signal of RSS (not the 832 B heap figure — the
+# allocator/native gap is 3.42x), against a ~550-600 MiB base process.
+#
+# CORR_WINDOW_BUFFER is a RESOURCE CEILING, not the horizon. It is sized so it
+# does NOT bind at the workload this container is qualified for: the measured
+# p90 active rate is 182 signals/s, and 516.527 s of horizon at that rate is
+# ~94k signals. 150,000 gives ~1.6x headroom over p90 while still leaving the
+# memory budget intact (~406 MiB of window at the cap). If the cap ever does
+# bind, the degradation state says so — it can no longer silently redefine the
+# RCA horizon.
+services:
+  correlation:
+    mem_limit: 1280m
+    environment:
+      CORR_WINDOW_BUFFER: "150000"

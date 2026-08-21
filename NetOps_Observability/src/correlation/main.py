@@ -1763,15 +1763,27 @@ def _refresh_consumer_lag(consumer, now_mono: float) -> None:
     _LAG_SAMPLED_AT = now_mono
     total = 0
     seen_any = False
+    unknown = 0
     try:
         for tp in consumer.assignment():
             hw = consumer.highwater(tp)
             if hw is None:
                 continue      # not fetched yet — cannot judge this partition
-            seen_any = True
             last = _LAST_OFFSET.get((tp.topic, tp.partition))
-            consumed_through = (last + 1) if last is not None else 0
-            total += max(0, hw - consumed_through)
+            if last is None:
+                # We have consumed nothing from this partition THIS process, so
+                # we do not know where the committed position is. The first
+                # version treated that as "consumed through 0" and charged the
+                # partition's ENTIRE history as backlog — which on a lab stack
+                # with old topics reported ~2,806 records of permanent lag that
+                # did not exist, and (because the idle backstop requires lag 0)
+                # left the backstop inert forever. Silent inertness in a memory
+                # control is exactly the kind of thing that looks fine until it
+                # matters, so count it as UNKNOWN and say so.
+                unknown += 1
+                continue
+            seen_any = True
+            total += max(0, hw - (last + 1))
     except Exception as exc:  # noqa: BLE001 — observable, never fatal (§10)
         # A consumer without assignment()/highwater() (a stand-in, a driver
         # change) must degrade to "lag unknown", which _consumer_caught_up
@@ -1783,9 +1795,14 @@ def _refresh_consumer_lag(consumer, now_mono: float) -> None:
                         "backstop will hold evidence rather than shed it",
                         type(exc).__name__)
         return
+    global CONSUMER_LAG_UNKNOWN_PARTITIONS
+    CONSUMER_LAG_UNKNOWN_PARTITIONS = unknown
     if seen_any:
         CONSUMER_LAG_TOTAL = total
         CONSUMER_LAG_AT = now_mono
+
+
+CONSUMER_LAG_UNKNOWN_PARTITIONS = 0   # assigned but never read by this process
 
 
 def _consumer_caught_up(now_mono: float) -> bool:
@@ -1797,6 +1814,10 @@ def _consumer_caught_up(now_mono: float) -> bool:
     if CONSUMER_LAG_TOTAL is None:
         return False
     if (now_mono - CONSUMER_LAG_AT) > CORR_LAG_FRESH_S:
+        return False
+    if CONSUMER_LAG_UNKNOWN_PARTITIONS:
+        # Some assigned partition has never been read here, so "level with the
+        # broker" is unproven for it. Fail-safe: retain.
         return False
     return CONSUMER_LAG_TOTAL == 0
 
@@ -1920,9 +1941,11 @@ def retention_state() -> dict[str, object]:
         # holding evidence it might otherwise reclaim — a memory risk, and a
         # silent one until it is on /healthz.
         "consumer_lag_probe_failures": CONSUMER_LAG_PROBE_FAILURES,
+        "consumer_lag_unknown_partitions": CONSUMER_LAG_UNKNOWN_PARTITIONS,
         # tracker 165 phase 7: the sharing cache must not become "every unique
         # network value, forever". Population + evictions, always visible.
         "entity_cache": signals.entity_cache_stats(),
+        "stage_profile": stage_profile(),
         "stream_time_evictions": STREAM_TIME_EVICTIONS,
         "idle_tenant_evictions": IDLE_TENANT_EVICTIONS,
         "watermark_regressions": WATERMARK_REGRESSIONS,
@@ -2182,6 +2205,102 @@ CORR_ARCHIVE_CHUNK_ROWS = int(os.environ.get("CORR_ARCHIVE_CHUNK_ROWS", "10000")
 # at ~0.1s — 30x under the 3s heartbeat interval, so the inline branch is
 # provably bounded too.
 CORR_OFFLOAD_MIN_ELEMENTS = int(os.environ.get("CORR_OFFLOAD_MIN_ELEMENTS", "2000"))
+
+
+# ── tracker 165 Part B: stage profiling (OPT-IN, off by default) ──────────────
+#
+# Previous profiler work proved the instrument can destroy the measurement: a
+# tracemalloc.statistics() call on the event loop turned into six stalls of
+# 5-96 s and the whole run had to be discarded as CONTAMINATED. So this is
+# deliberately the cheapest thing that can answer "where does the time go":
+#
+#   * two perf_counter() reads and a dict update per stage — no stack walking,
+#     no allocation profiling, no object-graph traversal, nothing that scales
+#     with heap size;
+#   * gated on a module-level bool so the cost when disabled is one attribute
+#     load and a branch;
+#   * accumulators only — percentiles are computed from a bounded reservoir at
+#     SCRAPE time, off the hot path.
+#
+# It is opt-in via CORR_PROFILE_STAGES because an always-on profiler is a
+# permanent tax on the thing it measures, and because a contaminated/clean
+# comparison is only possible if it can be turned off.
+CORR_PROFILE_STAGES = os.environ.get("CORR_PROFILE_STAGES", "").lower() in ("1", "true", "yes")
+CORR_PROFILE_SAMPLES = max(64, int(os.environ.get("CORR_PROFILE_SAMPLES", "512")))
+
+_STAGE_LOCK = threading.Lock()
+# stage -> [count, total_s, max_s]
+_STAGE_STATS: dict[str, list] = {}
+_STAGE_SAMPLES: dict[str, deque] = {}
+
+
+def stage_record(stage: str, elapsed: float) -> None:
+    """Accumulate one stage timing. Cheap enough for the per-event path."""
+    with _STAGE_LOCK:
+        row = _STAGE_STATS.get(stage)
+        if row is None:
+            _STAGE_STATS[stage] = [1, elapsed, elapsed]
+            _STAGE_SAMPLES[stage] = deque([elapsed], maxlen=CORR_PROFILE_SAMPLES)
+            return
+        row[0] += 1
+        row[1] += elapsed
+        row[2] = max(row[2], elapsed)
+        _STAGE_SAMPLES[stage].append(elapsed)
+
+
+class stage:
+    """Context manager timing one stage. A no-op when profiling is disabled.
+
+    Written as a class rather than @contextmanager because the generator-based
+    form allocates a generator per use, which on a per-event path is exactly
+    the kind of overhead that makes a profiler measure itself.
+    """
+
+    __slots__ = ("_name", "_t0")
+
+    def __init__(self, name: str) -> None:
+        self._name = name
+        self._t0 = 0.0
+
+    def __enter__(self):
+        if CORR_PROFILE_STAGES:
+            self._t0 = time.perf_counter()
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        if CORR_PROFILE_STAGES and self._t0:
+            stage_record(self._name, time.perf_counter() - self._t0)
+        return False
+
+
+def _pct(vals: list[float], q: float) -> float:
+    if not vals:
+        return 0.0
+    idx = min(len(vals) - 1, max(0, math.ceil(q * len(vals)) - 1))
+    return vals[idx]
+
+
+def stage_profile() -> dict[str, object]:
+    """Snapshot of every recorded stage, with percentiles computed here rather
+    than on the hot path."""
+    with _STAGE_LOCK:
+        rows = {k: list(v) for k, v in _STAGE_STATS.items()}
+        samples = {k: sorted(v) for k, v in _STAGE_SAMPLES.items()}
+    total = sum(r[1] for r in rows.values()) or 1.0
+    out = {}
+    for name, (count, tot, mx) in sorted(rows.items(), key=lambda kv: -kv[1][1]):
+        s = samples.get(name, [])
+        out[name] = {
+            "calls": count,
+            "total_s": round(tot, 6),
+            "share": round(tot / total, 4),
+            "mean_ms": round(1000 * tot / count, 4) if count else 0.0,
+            "p50_ms": round(1000 * _pct(s, 0.50), 4),
+            "p95_ms": round(1000 * _pct(s, 0.95), 4),
+            "p99_ms": round(1000 * _pct(s, 0.99), 4),
+            "max_ms": round(1000 * mx, 4),
+        }
+    return {"enabled": CORR_PROFILE_STAGES, "stages": out}
 
 
 # ── tracker 164: PASSIVE offload accounting (measurement only) ────────────────
@@ -2697,7 +2816,8 @@ async def _engine_cycle_inner() -> None:
     if ch is None:
         return
     now = datetime.now(timezone.utc)
-    await _prune_buffer(now)
+    with stage("engine.prune"):
+        await _prune_buffer(now)
     # C6: flush this cycle's accumulated flow volume → passive_flow episodes BEFORE
     # partitioning, so the new flow signals join the same window they were measured in.
     await _flush_flow_aggregator(now)
@@ -2708,8 +2828,9 @@ async def _engine_cycle_inner() -> None:
         log.warning("engine degradation: topology_stale=%s storm_mode=%s (buffer=%d/%s)",
                     topo_stale, storm, len(WINDOW_BUFFER), WINDOW_BUFFER.maxlen)
     by_tenant: dict[str, list[Signal]] = {}
-    for s in WINDOW_BUFFER:
-        by_tenant.setdefault(s.tenant_id, []).append(s)
+    with stage("engine.partition_by_tenant"):
+        for s in WINDOW_BUFFER:
+            by_tenant.setdefault(s.tenant_id, []).append(s)
     # P1 max-poll thrash: the prune + partition pass above is pure sync over a
     # buffer that can hold 50k signals in a storm — hand the loop back to the
     # consumer/heartbeat tasks before the per-tenant work starts.
@@ -2755,12 +2876,18 @@ async def _engine_cycle_inner() -> None:
             # pure/deterministic (no IO/clock/randomness inside run_window); the
             # executor is strictly a main.py call-site concern, and the inputs are
             # snapshotted (tuple) so concurrent buffer appends can never leak in.
-            snapshots = await asyncio.get_running_loop().run_in_executor(
-                None,
-                functools.partial(
+            # tracker 164 coverage gap, closed: this used to call
+            # run_in_executor(None, ...) DIRECTLY, so the single largest CPU
+            # consumer in the process was invisible to the offload metrics that
+            # were being used to argue the executor was not saturated. Same
+            # default executor, same semantics, now counted — the queue-depth
+            # and wait figures finally describe the whole pool rather than one
+            # caller.
+            with stage("engine.run_window"):
+                snapshots = await _offload(
                     run_window, tuple(window), CATALOG, seams, ENGINE_CFG,
                     adjacency=adjacency, topology_stale=topo_stale, storm_mode=storm,
-                    directed=directed, paths=pgv, discovery=discovery))
+                    directed=directed, paths=pgv, discovery=discovery)
         except ValueError as exc:
             log.error("engine window rejected: %s", exc)
             continue
@@ -4684,7 +4811,16 @@ async def consume() -> None:
 async def handle(topic: str, event: dict | None) -> None:
     if not event or ch is None:
         return
+    # Per-LANE timing rather than per-stage-within-lane: the lanes are the
+    # coarse split that actually distinguishes cost (syslog parsing vs metric
+    # identity vs flow aggregation), and one timer per event is affordable where
+    # a dozen would start measuring the profiler. Finer breakdown is added
+    # inside whichever lane this run shows to dominate.
+    with stage(f"handle.{topic.rsplit('.', 1)[-1]}"):
+        await _handle_lane(topic, event)
 
+
+async def _handle_lane(topic: str, event: dict) -> None:
     if topic == "netops.metrics":
         await handle_metric(event)
     elif topic == "netops.syslog":
@@ -5994,6 +6130,9 @@ async def metrics_exposition():
         "# HELP corr_entity_cache_evicted_total Shared-string cache evictions.",
         "# TYPE corr_entity_cache_evicted_total counter",
         f"corr_entity_cache_evicted_total {signals.ENTITY_CACHE_EVICTED}",
+        "# HELP corr_consumer_lag_unknown_partitions Assigned partitions never read here; backstop stays inert while non-zero.",
+        "# TYPE corr_consumer_lag_unknown_partitions gauge",
+        f"corr_consumer_lag_unknown_partitions {CONSUMER_LAG_UNKNOWN_PARTITIONS}",
         "# HELP corr_consumer_lag_probe_failures_total Backlog probe unusable; backstop holds evidence.",
         "# TYPE corr_consumer_lag_probe_failures_total counter",
         f"corr_consumer_lag_probe_failures_total {CONSUMER_LAG_PROBE_FAILURES}",
