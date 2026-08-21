@@ -1,0 +1,16 @@
+# Tracker 165 phase 9 — DIAGNOSTIC ONLY. Not a proposed configuration.
+#
+# Sizes the evidence window to hold the FULL derived semantic horizon
+# (516.527 s = 396.527 s engine reach + 120 s lateness) at the mini-ladder's
+# burst rate of ~1651 signals/s, i.e. ~853k signals, and gives the container
+# enough headroom that the measurement is of RETENTION rather than of the cap.
+#
+# The point is to find out what the correct semantic working set actually costs.
+# Neither number below is a recommendation: per the operational principle, the
+# production limit is derived from what this run measures, not chosen first and
+# squeezed into afterwards.
+services:
+  correlation:
+    mem_limit: 3g
+    environment:
+      CORR_WINDOW_BUFFER: "900000"
