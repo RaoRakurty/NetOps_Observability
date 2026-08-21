@@ -2263,7 +2263,13 @@ PENDING_PEAK = 0
 # tracker 165 horizon has already released. That direction matters — a stale
 # edge resurrecting an expired node would quietly undo retention.
 _TENANT_EDGES: dict[str, dict[tuple[str, str], object]] = {}
-EDGE_CACHE_DROPPED = 0
+EDGE_CACHE_DROPPED = 0      # edges released because an endpoint left the window
+EDGE_CACHE_ADDED = 0        # edges recorded from completed transactions
+EDGE_CACHE_PEAK = 0         # high-water mark across all tenants
+# Rough per-entry cost for the bytes estimate: the dict entry plus the tuple key
+# plus the Edge's own slots. Deliberately an ESTIMATE and labelled as one — a
+# real sizeof walk per entry would cost more than the number is worth.
+EDGE_CACHE_BYTES_PER_ENTRY = 320
 
 
 def _carried_edges_for(tenant: str, window: list[Signal]) -> tuple:
@@ -2286,17 +2292,31 @@ def _carried_edges_for(tenant: str, window: list[Signal]) -> tuple:
 def _remember_edges(tenant: str, snapshots: list) -> None:
     """Record the edges this transaction produced, for the next one's
     component formation."""
+    global EDGE_CACHE_ADDED, EDGE_CACHE_PEAK
     cache = _TENANT_EDGES.setdefault(tenant, {})
     for snap in snapshots:
         for e in snap.edges:
-            cache[(e.from_node, e.to_node)] = e
+            key = (e.from_node, e.to_node)
+            if key not in cache:
+                EDGE_CACHE_ADDED += 1
+            cache[key] = e
+    EDGE_CACHE_PEAK = max(EDGE_CACHE_PEAK,
+                          sum(len(v) for v in _TENANT_EDGES.values()))
 
 
 def edge_cache_state() -> dict[str, int]:
+    """166A: the cache must PLATEAU once the retained node set does. It is
+    bounded by distinct (entity_type, entity_id, kind) keys — the estate — not
+    by signal count, so `edges` rising while `window_signals` is flat is the
+    failure shape to watch for."""
+    edges = sum(len(v) for v in _TENANT_EDGES.values())
     return {
         "tenants": len(_TENANT_EDGES),
-        "edges": sum(len(v) for v in _TENANT_EDGES.values()),
+        "edges": edges,
+        "peak": EDGE_CACHE_PEAK,
+        "added_total": EDGE_CACHE_ADDED,
         "dropped_total": EDGE_CACHE_DROPPED,
+        "est_bytes": edges * EDGE_CACHE_BYTES_PER_ENTRY,
     }
 
 
@@ -6423,9 +6443,27 @@ async def metrics_exposition():
         "# HELP corr_engine_oldest_pending_age_seconds Event-time age of the oldest unevaluated signal.",
         "# TYPE corr_engine_oldest_pending_age_seconds gauge",
         f"corr_engine_oldest_pending_age_seconds {scheduler_state()['oldest_pending_event_age_s']}",
+        # 166A: carried-edge state is NEW memory that did not exist when the
+        # 1.25 GiB envelope was qualified. Growth while the window is flat is
+        # the failure shape.
         "# HELP corr_edge_cache_entries Settled edges carried for component formation (window-bounded).",
         "# TYPE corr_edge_cache_entries gauge",
         f"corr_edge_cache_entries {edge_cache_state()['edges']}",
+        "# HELP corr_edge_cache_peak Highest carried-edge count observed.",
+        "# TYPE corr_edge_cache_peak gauge",
+        f"corr_edge_cache_peak {EDGE_CACHE_PEAK}",
+        "# HELP corr_edge_cache_added_total Carried edges recorded.",
+        "# TYPE corr_edge_cache_added_total counter",
+        f"corr_edge_cache_added_total {EDGE_CACHE_ADDED}",
+        "# HELP corr_edge_cache_dropped_total Carried edges released with their nodes.",
+        "# TYPE corr_edge_cache_dropped_total counter",
+        f"corr_edge_cache_dropped_total {EDGE_CACHE_DROPPED}",
+        "# HELP corr_edge_cache_est_bytes Estimated carried-edge memory.",
+        "# TYPE corr_edge_cache_est_bytes gauge",
+        f"corr_edge_cache_est_bytes {edge_cache_state()['est_bytes']}",
+        "# HELP corr_processed_frontier Signal ids tracked as processed (window-bounded).",
+        "# TYPE corr_processed_frontier gauge",
+        f"corr_processed_frontier {len(_PROCESSED_IDS)}",
         "# HELP corr_entity_cache_entries Shared identity strings held (bounded).",
         "# TYPE corr_entity_cache_entries gauge",
         f'corr_entity_cache_entries{{kind="entity_id"}} {len(signals._ENTITY_ID_CACHE)}',
