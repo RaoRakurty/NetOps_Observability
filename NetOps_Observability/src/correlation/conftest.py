@@ -62,6 +62,28 @@ def _hermetic_stream_clock():
     cleared on entry AND exit, for every test, whether or not it touches
     retention.
     """
+    # Some suites REPLACE the window deques outright (direct assignment rather
+    # than monkeypatch) to get a small maxlen. That leaks a 200-entry window
+    # into every later test, which then cannot load enough signals to exercise
+    # anything. Snapshot the objects and put them back.
+    _orig = (main.WINDOW_BUFFER, main._BUFFERED_ID_ORDER, main._BUFFERED_IDS)
     main.TENANT_WATERMARK.clear()
+    # tracker 166 adds two more window-scoped structures with the same hazard:
+    # the processed frontier and the carried-edge cache. A suite that clears the
+    # window but leaves these behind hands the next test signals that are
+    # already "processed" and edges for nodes it never loaded.
+    main._PROCESSED_IDS.clear()
+    main._TENANT_EDGES.clear()
+    # Co-partitioning health gates stream-time expiry (tracker 165 phase 2):
+    # a suite that drives a divergent rebalance and leaves the flag false makes
+    # every later test's retention silently stop expiring.
+    main.COPARTITION_OK = True
     yield
+    main.WINDOW_BUFFER, main._BUFFERED_ID_ORDER, main._BUFFERED_IDS = _orig
+    main.WINDOW_BUFFER.clear()
+    main._BUFFERED_ID_ORDER.clear()
+    main._BUFFERED_IDS.clear()
     main.TENANT_WATERMARK.clear()
+    main._PROCESSED_IDS.clear()
+    main._TENANT_EDGES.clear()
+    main.COPARTITION_OK = True

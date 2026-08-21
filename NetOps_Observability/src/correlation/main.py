@@ -1537,6 +1537,7 @@ def buffer_signal(sig: Signal) -> None:
         if WINDOW_OVERFLOW_AGE_MIN_S == 0.0 or victim_age < WINDOW_OVERFLOW_AGE_MIN_S:
             WINDOW_OVERFLOW_AGE_MIN_S = victim_age
         WINDOW_OVERFLOW_AGE_MAX_S = max(WINDOW_OVERFLOW_AGE_MAX_S, victim_age)
+        _PROCESSED_IDS.discard(_BUFFERED_ID_ORDER[0])
         _BUFFERED_IDS.discard(_BUFFERED_ID_ORDER[0])
     _BUFFERED_IDS.add(sid)
     # Appended in lockstep, and both deques carry the SAME maxlen, so a full
@@ -1946,6 +1947,8 @@ def retention_state() -> dict[str, object]:
         # network value, forever". Population + evictions, always visible.
         "entity_cache": signals.entity_cache_stats(),
         "stage_profile": stage_profile(),
+        "scheduler": scheduler_state(),
+        "edge_cache": edge_cache_state(),
         "cycle_work": cycle_work_profile(),
         "stream_time_evictions": STREAM_TIME_EVICTIONS,
         "idle_tenant_evictions": IDLE_TENANT_EVICTIONS,
@@ -2105,6 +2108,11 @@ async def _prune_buffer(now: datetime) -> None:
                 keep_id.append(sid)
                 continue
             _BUFFERED_IDS.discard(sid)
+            # tracker 166: the processed frontier is a property of the window,
+            # so it is released with the signal. Without this the id set grows
+            # for the life of the process while the window it describes turns
+            # over — an unbounded structure hiding inside a bounded one.
+            _PROCESSED_IDS.discard(sid)
             evicted += 1
         worst_block = max(worst_block, time.monotonic() - block_started)
         if start + CORR_PRUNE_CHUNK < len(src_sig):
@@ -2206,6 +2214,164 @@ CORR_ARCHIVE_CHUNK_ROWS = int(os.environ.get("CORR_ARCHIVE_CHUNK_ROWS", "10000")
 # at ~0.1s — 30x under the 3s heartbeat interval, so the inline branch is
 # provably bounded too.
 CORR_OFFLOAD_MIN_ELEMENTS = int(os.environ.get("CORR_OFFLOAD_MIN_ELEMENTS", "2000"))
+
+
+# ── tracker 166: bounded correlation transactions ────────────────────────────
+#
+# THE DEFECT. The engine loop is already single-flight — `await engine_cycle();
+# await sleep(interval)` — so cycles can neither overlap nor queue. But that
+# makes the effective period `cycle_duration + interval`, and the next
+# transaction admits everything that arrived during it. A slow transaction
+# therefore SIZES the next one: an 84 s cycle plus a 30 s sleep at 400 eps
+# accumulates ~45,600 new signals, whose pairing is quadratic, which makes the
+# next cycle slower again.
+#
+# THE FIX. Bound the NEW WORK admitted per transaction. What is explicitly NOT
+# bounded is the retained history: tracker 165's ~516.5 s horizon is a
+# correctness contract, and every cohort is still scored against the whole of it
+# (`new x old`). Total pair work is unchanged by this — verified arithmetically,
+# N(N-1)/2 either way — so this buys bounded latency and overload control, not
+# throughput. Throughput is tracker 167.
+CORR_ENGINE_COHORT_SIZE = max(1, int(os.environ.get("CORR_ENGINE_COHORT_SIZE", "5000")))
+# Upper bound on cohorts drained back-to-back before the loop yields to its
+# normal interval. Stops a large backlog from monopolising the process while
+# still letting it drain far faster than one cohort per interval.
+CORR_ENGINE_DRAIN_COHORTS = max(1, int(os.environ.get("CORR_ENGINE_DRAIN_COHORTS", "20")))
+
+# The PROCESSED FRONTIER. Membership means: this signal has been through a
+# correlation transaction that completed its persistence boundary. It is a set
+# of signal ids rather than a timestamp because arrival is not monotonic in
+# event time — out-of-order and replayed signals are ordinary here, and a
+# timestamp frontier would silently skip anything landing behind it.
+#
+# Bounded by construction: ids are added only for signals in the window and
+# discarded in lockstep with `_BUFFERED_IDS` when the window releases them, so
+# it can never outgrow the window it describes.
+_PROCESSED_IDS: set[str] = set()
+COHORTS_PROCESSED = 0
+COHORT_SIGNALS_TOTAL = 0
+PENDING_PEAK = 0
+
+
+# Per-tenant cache of edges this process has already admitted, so a bounded
+# transaction can build components from the whole settled edge set rather than
+# only from the pairs it just scored. Without it, objects would fragment every
+# time a cohort boundary fell inside one.
+#
+# BOUNDED BY THE WINDOW, not by time: entries whose endpoints are no longer
+# present are dropped on every read, so the cache can never retain evidence the
+# tracker 165 horizon has already released. That direction matters — a stale
+# edge resurrecting an expired node would quietly undo retention.
+_TENANT_EDGES: dict[str, dict[tuple[str, str], object]] = {}
+EDGE_CACHE_DROPPED = 0
+
+
+def _carried_edges_for(tenant: str, window: list[Signal]) -> tuple:
+    """This tenant's settled edges, filtered to nodes still in the window."""
+    global EDGE_CACHE_DROPPED
+    cache = _TENANT_EDGES.get(tenant)
+    if not cache:
+        return ()
+    live = {f"{s.entity_type.value}:{s.entity_id}:{s.kind}" for s in window}
+    stale = [k for k in cache if k[0] not in live or k[1] not in live]
+    for k in stale:
+        del cache[k]
+    EDGE_CACHE_DROPPED += len(stale)
+    if not cache:
+        _TENANT_EDGES.pop(tenant, None)
+        return ()
+    return tuple(cache.values())
+
+
+def _remember_edges(tenant: str, snapshots: list) -> None:
+    """Record the edges this transaction produced, for the next one's
+    component formation."""
+    cache = _TENANT_EDGES.setdefault(tenant, {})
+    for snap in snapshots:
+        for e in snap.edges:
+            cache[(e.from_node, e.to_node)] = e
+
+
+def edge_cache_state() -> dict[str, int]:
+    return {
+        "tenants": len(_TENANT_EDGES),
+        "edges": sum(len(v) for v in _TENANT_EDGES.values()),
+        "dropped_total": EDGE_CACHE_DROPPED,
+    }
+
+
+def pending_signals() -> list[Signal]:
+    """Retained signals that have not yet been through a completed transaction."""
+    return [s for s in WINDOW_BUFFER if str(s.signal_id) not in _PROCESSED_IDS]
+
+
+def _select_cohort(pending: list[Signal], limit: int) -> list[Signal]:
+    """Bounded, tenant-fair admission.
+
+    Round-robin across tenants in arrival order so a hot tenant cannot consume
+    the whole cohort while a quiet one waits indefinitely. Within a tenant,
+    arrival order is preserved — the engine's identity and continuation rules
+    depend on onset ordering, and reordering inside a tenant would change which
+    node seeds an object.
+    """
+    if len(pending) <= limit:
+        return list(pending)
+    by_tenant: dict[str, list[Signal]] = {}
+    for s in pending:
+        by_tenant.setdefault(s.tenant_id, []).append(s)
+    cohort: list[Signal] = []
+    queues = [iter(v) for _k, v in sorted(by_tenant.items())]
+    exhausted = 0
+    while len(cohort) < limit and exhausted < len(queues):
+        exhausted = 0
+        for q in queues:
+            if len(cohort) >= limit:
+                break
+            nxt = next(q, None)
+            if nxt is None:
+                exhausted += 1
+            else:
+                cohort.append(nxt)
+    # Restore arrival order across the selected set: the round-robin is an
+    # ADMISSION policy, not a reordering of the stream.
+    order = {id(s): i for i, s in enumerate(pending)}
+    cohort.sort(key=lambda s: order[id(s)])
+    return cohort
+
+
+def _mark_processed(cohort: list[Signal]) -> None:
+    """Advance the frontier. Called ONLY after the transaction's persistence
+    boundary has completed — a failed transaction leaves its cohort pending and
+    fully replayable, which is what tracker 160's durability contract expects."""
+    for s in cohort:
+        _PROCESSED_IDS.add(str(s.signal_id))
+
+
+def scheduler_state() -> dict[str, object]:
+    pending = pending_signals()
+    oldest = 0.0
+    if pending:
+        newest = max(s.ts.timestamp() for s in WINDOW_BUFFER)
+        oldest = round(newest - min(s.ts.timestamp() for s in pending), 3)
+    per_tenant: dict[str, int] = {}
+    for s in pending:
+        per_tenant[s.tenant_id] = per_tenant.get(s.tenant_id, 0) + 1
+    return {
+        "cohort_size": CORR_ENGINE_COHORT_SIZE,
+        "cohorts_processed": COHORTS_PROCESSED,
+        "cohort_signals_total": COHORT_SIGNALS_TOTAL,
+        "pending": len(pending),
+        "pending_peak": PENDING_PEAK,
+        "processed_tracked": len(_PROCESSED_IDS),
+        # Event-time age of the oldest thing still waiting, against the newest
+        # thing retained. This is the number that says whether the scheduler is
+        # about to let evidence expire before it was ever evaluated (phase 7).
+        "oldest_pending_event_age_s": oldest,
+        "oldest_pending_horizon_fraction": (
+            round(oldest / RETENTION_REQUIRED_S, 4) if RETENTION_REQUIRED_S else 0.0),
+        "pending_tenants": len(per_tenant),
+        "pending_max_tenant": max(per_tenant.values(), default=0),
+    }
 
 
 # ── tracker 166 phase 2: how much of each cycle is re-derivation? ────────────
@@ -2877,6 +3043,21 @@ async def _engine_cycle_inner() -> None:
     # can see. Captured before the per-tenant work so a long cycle does not
     # mis-attribute signals that arrived while it ran.
     _cycle_max_ts = max((s.ts.timestamp() for s in WINDOW_BUFFER), default=None)
+    # tracker 166: bound the NEW work this transaction admits. Retained history
+    # is untouched — every cohort is still scored against the whole window.
+    global COHORTS_PROCESSED, COHORT_SIGNALS_TOTAL, PENDING_PEAK
+    _pending = pending_signals()
+    PENDING_PEAK = max(PENDING_PEAK, len(_pending))
+    _cohort = _select_cohort(_pending, CORR_ENGINE_COHORT_SIZE)
+    # A node is NEW to this transaction when ANY of its signals is in the cohort:
+    # its activity interval changed, so its pairs must be re-scored. Grouped by
+    # tenant up front — the first version rebuilt this per tenant with a nested
+    # scan over the whole window, which is O(cohort x window) and would itself
+    # have become a cost worth measuring.
+    _cohort_keys: dict[str, set[str]] = {}
+    for s in _cohort:
+        _cohort_keys.setdefault(s.tenant_id, set()).add(
+            f"{s.entity_type.value}:{s.entity_id}:{s.kind}")
     # P1 max-poll thrash: the prune + partition pass above is pure sync over a
     # buffer that can hold 50k signals in a storm — hand the loop back to the
     # consumer/heartbeat tasks before the per-tenant work starts.
@@ -2933,12 +3114,25 @@ async def _engine_cycle_inner() -> None:
             # re-derivation. Only when profiling is on — `work_sink=None` makes
             # the accounting a single branch inside build_edges.
             work: dict | None = {} if CORR_PROFILE_STAGES else None
+            # Nodes of THIS tenant that the cohort touches, plus the edges this
+            # tenant settled in earlier transactions so component formation is
+            # still whole. Empty cohort ⇒ nothing new for this tenant ⇒ skip.
+            # A tenant with nothing new is NOT skipped. Its correlation state is
+            # unchanged, so re-running it with an empty cohort and its carried
+            # edges reproduces exactly the same objects — which is what keeps
+            # continuation, version bumps and the object lifecycle intact. The
+            # first version skipped such tenants and a victim tenant under a
+            # neighbour storm silently stopped producing objects.
+            t_keys = frozenset(_cohort_keys.get(tenant, ()))
+            carried = _carried_edges_for(tenant, window)
             with stage("engine.run_window"):
                 snapshots = await _offload(
                     run_window, tuple(window), CATALOG, seams, ENGINE_CFG,
                     adjacency=adjacency, topology_stale=topo_stale, storm_mode=storm,
                     directed=directed, paths=pgv, discovery=discovery,
-                    since_ts=LAST_CYCLE_MAX_TS, work_sink=work)
+                    since_ts=LAST_CYCLE_MAX_TS, work_sink=work,
+                    cohort_keys=t_keys, carried_edges=carried)
+            _remember_edges(tenant, snapshots)
             if work:
                 _record_cycle_work(tenant, work)
         except ValueError as exc:
@@ -3078,6 +3272,14 @@ async def _engine_cycle_inner() -> None:
     # one to treat its unprocessed signals as already-seen.
     if _cycle_max_ts is not None:
         LAST_CYCLE_MAX_TS = _cycle_max_ts
+    # tracker 166 phase 1: the frontier advances HERE and nowhere else — after
+    # every tenant's snapshots have been through _persist_snapshot, i.e. past
+    # the tracker 160 durability boundary. A transaction that raised never
+    # reaches this line, so its cohort stays pending and is retried whole.
+    if _cohort:
+        _mark_processed(_cohort)
+        COHORTS_PROCESSED += 1
+        COHORT_SIGNALS_TOTAL += len(_cohort)
     # #101: flush the per-tenant write-amplification window (no-op until
     # CORR_WA_FLUSH_S has elapsed; resets even when the insert fails).
     await _flush_tenant_write_amp(now)
@@ -3092,10 +3294,33 @@ async def engine_loop() -> None:
              CORR_ENGINE_INTERVAL_S, RETENTION_REQUIRED_S, ENGINE_REACH_S,
              CORR_PERMITTED_LATENESS_S, CORR_QUIESCE_S)
     while True:
+        drained = 0
         try:
-            await engine_cycle()
+            # tracker 166 phase 3: WORK-CONSERVING DRAIN.
+            #
+            # The old shape was `cycle(); sleep(interval)` unconditionally, which
+            # meant a backlog could only ever drain one cohort per interval — and
+            # since the cohort was unbounded, the way it "kept up" was by making
+            # each transaction bigger. Now that transactions are bounded, waiting
+            # a full interval between them would cap throughput at
+            # cohort_size/interval for no reason.
+            #
+            # So: keep taking cohorts while work remains, up to a bound, yielding
+            # between each so the consumer, heartbeat, persistence and health
+            # tasks all get scheduled. The bound stops a large backlog from
+            # monopolising the process indefinitely — the loop still returns to
+            # its normal interval, and pending depth (not transaction size) is
+            # what grows under genuine overload.
+            while drained < CORR_ENGINE_DRAIN_COHORTS:
+                await engine_cycle()
+                drained += 1
+                await asyncio.sleep(0)      # fairness point, not a delay
+                if not pending_signals():
+                    break
         except Exception:
             log.exception("engine cycle failed (observable, §10; loop continues)")
+        # Idle (or drain-bounded): fall back to the normal interval. It still
+        # drives low-volume flush, expiry and finalisation.
         await asyncio.sleep(CORR_ENGINE_INTERVAL_S)
 
 
@@ -6181,6 +6406,26 @@ async def metrics_exposition():
         "# HELP corr_consumer_lag_total In-process backlog; the idle backstop may only run at 0.",
         "# TYPE corr_consumer_lag_total gauge",
         f"corr_consumer_lag_total {CONSUMER_LAG_TOTAL if CONSUMER_LAG_TOTAL is not None else -1}",
+        # tracker 166 scheduler: pending depth may grow under overload; the
+        # TRANSACTION must not. Both are exported so the distinction is visible.
+        "# HELP corr_engine_cohort_size Max new signals admitted to one transaction.",
+        "# TYPE corr_engine_cohort_size gauge",
+        f"corr_engine_cohort_size {CORR_ENGINE_COHORT_SIZE}",
+        "# HELP corr_engine_cohorts_total Correlation transactions completed.",
+        "# TYPE corr_engine_cohorts_total counter",
+        f"corr_engine_cohorts_total {COHORTS_PROCESSED}",
+        "# HELP corr_engine_pending Signals retained but not yet correlated.",
+        "# TYPE corr_engine_pending gauge",
+        f"corr_engine_pending {len(pending_signals())}",
+        "# HELP corr_engine_pending_peak Highest pending depth observed.",
+        "# TYPE corr_engine_pending_peak gauge",
+        f"corr_engine_pending_peak {PENDING_PEAK}",
+        "# HELP corr_engine_oldest_pending_age_seconds Event-time age of the oldest unevaluated signal.",
+        "# TYPE corr_engine_oldest_pending_age_seconds gauge",
+        f"corr_engine_oldest_pending_age_seconds {scheduler_state()['oldest_pending_event_age_s']}",
+        "# HELP corr_edge_cache_entries Settled edges carried for component formation (window-bounded).",
+        "# TYPE corr_edge_cache_entries gauge",
+        f"corr_edge_cache_entries {edge_cache_state()['edges']}",
         "# HELP corr_entity_cache_entries Shared identity strings held (bounded).",
         "# TYPE corr_entity_cache_entries gauge",
         f'corr_entity_cache_entries{{kind="entity_id"}} {len(signals._ENTITY_ID_CACHE)}',
