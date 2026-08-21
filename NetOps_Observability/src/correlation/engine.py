@@ -842,6 +842,7 @@ def build_edges(
     *,
     since_ts: float | None = None,
     work_sink: dict | None = None,
+    cohort: frozenset[int] | None = None,
 ) -> tuple[tuple[Edge, ...], int]:
     """Returns (admitted edges, topology_gap_hints). Pairs are evaluated in
     deterministic node order; the earlier-onset node is always from_node.
@@ -924,6 +925,31 @@ def build_edges(
     grounded_pairs = 0
     candidates = sorted(_candidate_pairs(n, toks, refs, seam_evs, devs, adjacency,
                                          memb, route_hits))
+    # tracker 166 — BOUNDED COHORT EVALUATION.
+    #
+    # `cohort` is the set of node indices that are NEW in this engine
+    # transaction. When supplied, only pairs with at least one endpoint in the
+    # cohort are evaluated; pairs where BOTH endpoints predate this transaction
+    # were already evaluated when the later of them was itself new.
+    #
+    # WHY THIS IS SOUND, and why it is not the refuted old x old optimisation:
+    # edge admission is PAIR-LOCAL (resolve_grounding reads only the two nodes
+    # plus the embedded seam/adjacency/path context — see build_edges' contract
+    # above), so a pair's verdict does not depend on which other pairs were
+    # scored alongside it. Process cohorts in arrival order and every candidate
+    # pair is evaluated exactly once: a pair spanning cohorts A and B (A before
+    # B) is evaluated with cohort B, because at cohort A the other endpoint did
+    # not exist yet.
+    #
+    # What it does NOT do is skip `new x old`. A new signal is still scored
+    # against every eligible retained node inside the engine's temporal reach —
+    # that is precisely the evidence tracker 165 exists to keep available, and
+    # omitting it would silently undo that work. The saving is that `new x new`
+    # is quadratic in COHORT size rather than in however many signals happened
+    # to pile up while the previous transaction was running.
+    if cohort is not None:
+        candidates = [(i, j) for (i, j) in candidates
+                      if i in cohort or j in cohort]
     # tracker 166 phase 2 — WORK ACCOUNTING, not a behaviour change.
     #
     # The question the incremental design turns on is how much of each cycle
@@ -1017,7 +1043,19 @@ def build_edges(
         edges.append(Edge(a.key, b.key, grounding, weight, w_t, w_topo, w_r, conf, basis))
     # gap hints = pairs with NO grounding at all. Non-candidate pairs are
     # guaranteed-None (soundness above), so the count is exactly the naive loop's.
-    gap_hints = total_pairs - grounded_pairs
+    #
+    # tracker 166: under a bounded cohort only part of the window is scored, so
+    # `grounded_pairs` covers this transaction alone and the window-global figure
+    # is not computable without doing the very work the cohort exists to avoid.
+    # The count is therefore reported over the pairs this transaction actually
+    # evaluated. That is a real change of meaning and it is confined to a
+    # DIAGNOSTIC: the archive-slice contract already records the window-global
+    # gap-hint count as the one thing that legitimately differs on replay, and it
+    # is neither diffed nor part of the stored row set.
+    if cohort is not None:
+        gap_hints = len(candidates) - grounded_pairs
+    else:
+        gap_hints = total_pairs - grounded_pairs
     return tuple(sorted(edges, key=lambda e: (e.from_node, e.to_node))), gap_hints
 
 
@@ -1726,6 +1764,8 @@ def run_window(
     *,
     since_ts: float | None = None,
     work_sink: dict | None = None,
+    cohort_keys: frozenset[str] | None = None,
+    carried_edges: tuple[Edge, ...] = (),
 ) -> list[ObjectSnapshot]:
     """THE pure engine function. One evaluation of one tenant's window.
 
@@ -1774,8 +1814,24 @@ def run_window(
     # a path with a mismatched/empty tenant can never seed an attribution). object_
     # attribution re-scopes again; this is the structural first gate.
     disc = tuple(p for p in discovery if p.tenant_id and p.tenant_id == tenant)
+    # tracker 166: `cohort_keys` names the nodes that are new in this
+    # transaction; `carried_edges` are the edges admitted for pairs that were
+    # already evaluated in an earlier one. Components are built from the UNION,
+    # so object formation sees the same edge set a full-window run would — the
+    # bound is on what gets SCORED, never on what the engine gets to reason over.
+    cohort_idx = (frozenset(i for i, nd in enumerate(nodes) if nd.key in cohort_keys)
+                  if cohort_keys is not None else None)
     edges, gap_hints = build_edges(nodes, seams, cfg, adjacency, topology_stale, rec,
-                                   path_index, since_ts=since_ts, work_sink=work_sink)
+                                   path_index, since_ts=since_ts, work_sink=work_sink,
+                                   cohort=cohort_idx)
+    if carried_edges:
+        live = {n.key for n in nodes}
+        fresh = {(e.from_node, e.to_node) for e in edges}
+        edges = tuple(sorted(
+            list(edges) + [e for e in carried_edges
+                           if (e.from_node, e.to_node) not in fresh
+                           and e.from_node in live and e.to_node in live],
+            key=lambda e: (e.from_node, e.to_node)))
     open_floor = _SEV_RANK[Severity(cfg.severity_open_floor)]
     topo_ver = seams_hash(seams)
     eng_ver = engine_version(cfg)
