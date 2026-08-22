@@ -25,9 +25,10 @@ unsatisfied clauses — no forced root cause, ever.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from functools import lru_cache
 
 from catalog import Catalog, Clause, Template
-from signals import ProbeAuthority, Signal, probe_authority_of
+from signals import ModalityClass, ProbeAuthority, Signal, probe_authority_of
 from verdicts import Verdict as GateVerdict
 from verdicts import VerdictTier, assess
 
@@ -329,11 +330,175 @@ class RankingResult:
         }
 
 
+# ── tracker 167: the provably-inapplicable fast path ─────────────────────────
+#
+# THE MEASUREMENT. Post-168 the engine produces correct DEVICE-LOCAL objects
+# instead of one estate-wide weld, so object count went from ~1 to ~1,000 per
+# replica. `rank()` scores EVERY enabled template against EVERY object, and the
+# catalog holds 100 of them. Profiled on the live shape (6,000 nodes → 1,111
+# objects): `score_template` 17.98 s cumulative over 111,100 calls — 1,111
+# objects x 100 templates — while `build_edges` was 4.11 s of a 29.71 s cycle.
+# The dominant cost is O(objects x catalog).
+#
+# WHY THIS IS NOT A SKIP. `rank()` does not discard low scorers. It derives
+# `evidence_missing` from `sorted(scores, key=-coverage)[:2]`, keeps forced
+# competitors and contradicted look-alikes visible from `scores[TOP_K:]`, and
+# `evidence_missing` is persisted and hashed. Omitting a template would change
+# RCA output. So nothing is skipped — instead, a template that CANNOT match is
+# scored ANALYTICALLY, because its result is fully determined:
+#
+#   satisfied ()  ·  missing = every required clause  ·  coverage 0.0
+#   no contradictions (a discriminator needs a matching kind too)
+#   no notes (the role note is only emitted on a hit)
+#   confidence 0.0  ·  gate = assess((), required_modalities)
+#
+# The expensive part — `_satisfying` over every clause x every signal — is what
+# gets skipped, not the template.
+#
+# SOUNDNESS. The index keys on `kind` alone. `entity_type` and `min_deviation`
+# only make a clause STRICTER, so kind-intersection is a sound SUPERSET: a
+# template that survives the filter falls through to the real scorer, which
+# remains the sole semantic authority. False positives cost CPU; false
+# negatives are impossible by construction.
+#
+# The effective kind set includes what an `active_verification_result` signal
+# CORROBORATES (`_verification_corroborates` matches on attrs, not on the
+# signal's own kind), so a verification witness can never be indexed away.
+
+
+def _template_kinds(template: Template) -> frozenset[str]:
+    """Every kind this template could possibly react to — required clauses,
+    optional clauses, discriminator absences and causal-chain witnesses."""
+    ks: set[str] = set()
+    for clause in template.requires:
+        ks |= clause.kinds()
+    for disc in template.discriminators:
+        ks |= disc.absent.kinds()
+    for stage in template.causal_chain:
+        ks |= Clause(kind=stage.witness).kinds()
+    return frozenset(ks)
+
+
+# Keyed by IDENTITY, not by value. `lru_cache` on the Catalog/Template objects
+# looked right and profiled badly: hashing a frozen pydantic model walks every
+# field, so a 43,065-object cycle burned 88 M `hash_func` calls (58.75 s)
+# computing cache KEYS. The dict holds a strong reference to the cached Catalog
+# so its id() cannot be recycled onto a different object while the entry lives;
+# it is bounded, and a reloaded catalog is simply a new entry — there is still
+# no stale-index path.
+_CATALOG_PLAN_CACHE: dict[int, tuple[Catalog, dict, dict]] = {}
+_CATALOG_PLAN_CACHE_MAX = 4
+
+
+def _catalog_plan(catalog: Catalog) -> tuple[dict[str, frozenset[str]],
+                                             dict[str, HypothesisScore]]:
+    """Everything derived from a catalog that every RCA object needs: the
+    kind index, and the analytic score of each template for the case where it
+    cannot match. Both are pure functions of the catalog, so both are built
+    once and shared."""
+    hit = _CATALOG_PLAN_CACHE.get(id(catalog))
+    if hit is not None and hit[0] is catalog:
+        return hit[1], hit[2]
+    templates = catalog.enabled_templates()
+    index = {t.id: _template_kinds(t) for t in templates}
+    inapplicable = {t.id: _build_inapplicable_score(t) for t in templates}
+    if len(_CATALOG_PLAN_CACHE) >= _CATALOG_PLAN_CACHE_MAX:
+        _CATALOG_PLAN_CACHE.clear()
+    _CATALOG_PLAN_CACHE[id(catalog)] = (catalog, index, inapplicable)
+    return index, inapplicable
+
+
+def _catalog_kind_index(catalog: Catalog) -> dict[str, frozenset[str]]:
+    """template id → the kinds it can react to."""
+    return _catalog_plan(catalog)[0]
+
+
+@lru_cache(maxsize=64)
+def _empty_gate(required_modalities: frozenset[ModalityClass] | None) -> GateVerdict:
+    """`assess` over no matched signals — identical for every inapplicable
+    template with the same modality requirement, and measured at 2.30 s across
+    111,100 calls before it was memoized."""
+    return assess([], required_modalities=required_modalities or None)
+
+
+def _build_inapplicable_score(template: Template) -> HypothesisScore:
+    """The fully-determined score of a template no signal can satisfy.
+
+    Mirrors `score_template` exactly for that case; `test_template_index_167.py`
+    pins the two against each other over the whole catalog.
+
+    Built ONCE PER CATALOG (2026-08-22): the result depends on the TEMPLATE
+    ALONE — no evidence, no object — so it is the same value for every RCA
+    object in the cycle. Profiled on the live 1K shape it was 3,359,070 calls
+    (43,065 objects x ~78 elided templates) costing 47.31 s. `HypothesisScore`
+    is a frozen dataclass, so sharing one instance across objects is safe —
+    nothing can mutate it."""
+    required = [c for c in template.requires if not c.optional]
+    return HypothesisScore(
+        template_id=template.id,
+        title=template.title,
+        coverage=0.0,
+        confidence_rank=0.0,
+        contradicted=False,
+        verdict_gate=_empty_gate(frozenset(template.required_modalities) or None),
+        satisfied=(),
+        missing=tuple(c.kind for c in required),
+        contradictions=(),
+        forced_competitors=(),
+        notes=(),
+        owner=template.verdict.owner,
+        first_steps=template.verdict.first_steps,
+        supporting_hit=False,
+        seams=tuple(template.seams),
+        deployment_scope=template.deployment_scope,
+        operator_phrase=template.operator_phrase,
+        manager_phrase=template.manager_phrase,
+        blast_radius=template.blast_radius,
+        false_positives=tuple(template.false_positives),
+        causal_chain=tuple(
+            {"stage": st.stage, "root": st.root, "witnessed": False,
+             "kinds": [], "note": st.unobserved_note}
+            for st in template.causal_chain),
+    )
+
+
+def _inapplicable_score(template: Template) -> HypothesisScore:
+    """The analytic score for a template that cannot match. Retained as the
+    direct entry point the equivalence oracle pins against `score_template`."""
+    return _build_inapplicable_score(template)
+
+
+def evidence_kinds(evidence: tuple[Signal, ...]) -> frozenset[str]:
+    """The kinds this evidence pool can satisfy a clause with.
+
+    Includes the kinds an active-verification RESULT corroborates: that path
+    matches on `attrs.corroborates_kinds`, not on the signal's own kind, so a
+    kind-only view of the pool would index the witness away (false negative —
+    the one failure mode this design forbids). DEBUG_ONLY probes are excluded
+    exactly as `_satisfying` excludes them."""
+    ks: set[str] = set()
+    for s in evidence:
+        if probe_authority_of(s) is ProbeAuthority.DEBUG_ONLY:
+            continue
+        ks.add(s.kind)
+        if s.kind == VERIFICATION_RESULT_KIND:
+            ks |= _attr_kinds(s, "corroborates_kinds")
+    return frozenset(ks)
+
+
 def rank(catalog: Catalog, evidence: tuple[Signal, ...] | list[Signal]) -> RankingResult:
     """Score every enabled template; rank by confidence with deterministic
     tie-break (template id) so equal scores never flap between runs."""
     ev = tuple(evidence)
-    scores = [score_template(t, ev) for t in catalog.enabled_templates()]
+    # tracker 167: score only the templates the evidence could possibly reach;
+    # the rest get their fully-determined zero score analytically. Same list,
+    # same order, same values — see the module note above.
+    present = evidence_kinds(ev)
+    index, inapplicable = _catalog_plan(catalog)
+    scores = [
+        score_template(t, ev) if index[t.id] & present else inapplicable[t.id]
+        for t in catalog.enabled_templates()
+    ]
     # Equal confidence → prefer the MORE SPECIFIC explanation (more matched
     # clauses = more of the evidence explained); template id only as the final
     # deterministic tie-break. Keeps a broad single-clause look-alike from

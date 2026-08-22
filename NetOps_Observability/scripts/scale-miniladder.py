@@ -577,6 +577,104 @@ class Stack:
         except json.JSONDecodeError:
             return {"_error": out[:300]}
 
+    def corr_replicas(self) -> list[dict]:
+        """Per-replica engine metrics, read from EACH replica deterministically.
+
+        TRACKER 170. `corr_get`/`corr_metric` reach the service through the
+        compose DNS name `correlation`, which Docker ROUND-ROBINS across
+        replicas — so a "the engine is idle" reading was whichever replica
+        answered, and with --scale correlation=2 that is a coin toss. Global
+        completion cannot be established from one arbitrary replica.
+
+        Each entry carries the container id and its start time so a mid-run
+        RESTART is detectable: a restarted engine reports pending=0 and reset
+        counters, which is indistinguishable from "finished" unless identity is
+        pinned (mutant 7).
+
+        Connects to the replica's OWN address while still verifying the server
+        certificate against its real SPIFFE name — the IP is the routing
+        target, `correlation` remains the verified identity. Never disables
+        certificate or hostname verification.
+        """
+        out: list[dict] = []
+        for cc in self.cids("correlation"):
+            rc, insp, err = run(
+                ["docker", "inspect", cc, "--format",
+                 "{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}|{{.State.StartedAt}}"],
+                DOCKER_TIMEOUT)
+            if rc != 0 or "|" not in insp:
+                out.append({"container": cc[:12], "error":
+                            f"inspect failed: {err.strip()[:160]}"})
+                continue
+            ip, _, started = insp.strip().partition("|")
+            if not ip:
+                out.append({"container": cc[:12], "error": "no container IP"})
+                continue
+            probe = (
+                "import socket,ssl,sys\n"
+                "ctx=ssl.create_default_context(cafile='/certs/ca.pem')\n"
+                "ctx.load_cert_chain('/certs/svid/correlation.crt','/certs/svid/correlation.key')\n"
+                f"s=ctx.wrap_socket(socket.create_connection(('{ip}',8443),timeout=8),"
+                "server_hostname='correlation')\n"
+                "s.sendall(b'GET /metrics HTTP/1.1\\r\\nHost: correlation\\r\\n"
+                "Connection: close\\r\\n\\r\\n')\n"
+                "b=b''\n"
+                "while True:\n"
+                "    d=s.recv(65536)\n"
+                "    if not d: break\n"
+                "    b+=d\n"
+                "sys.stdout.write(b.split(b'\\r\\n\\r\\n',1)[1].decode('utf-8','replace'))\n")
+            rc, body, err = run(["docker", "exec", cc, "python", "-c", probe], 40)
+            if rc != 0:
+                out.append({"container": cc[:12], "ip": ip, "started_at": started,
+                            "error": f"metrics probe failed: {err.strip()[:160]}"})
+                continue
+            m: dict[str, float] = {}
+            for line in body.splitlines():
+                if line.startswith("#") or " " not in line:
+                    continue
+                name, _, val = line.partition(" ")
+                try:
+                    m[name.split("{")[0]] = float(val)
+                except ValueError:
+                    pass
+            out.append({"container": cc[:12], "ip": ip, "started_at": started,
+                        "metrics": m})
+        return out
+
+    def corr_completion_state(self) -> dict:
+        """The three engine-completion facts, aggregated across replicas.
+
+        Aggregation is deliberate (tracker 170 phase 4): pending SUMS (any
+        replica still holding work means the workload is not evaluated),
+        oldest-pending-age takes the MAX (the worst replica bounds the claim),
+        and cohorts SUM as a progress counter. `readable` is reported so an
+        unreadable replica can never be silently treated as idle.
+        """
+        reps = self.corr_replicas()
+        readable = [r for r in reps if "metrics" in r]
+        g = lambda r, k: r["metrics"].get(k, -1.0)
+        return {
+            "replicas": len(reps),
+            "readable": len(readable),
+            "unreadable": [r.get("container") for r in reps if "metrics" not in r],
+            "errors": [r.get("error") for r in reps if "error" in r],
+            "pending_sum": sum(max(g(r, "corr_engine_pending"), 0.0) for r in readable),
+            "oldest_pending_age_max": max(
+                (g(r, "corr_engine_oldest_pending_age_seconds") for r in readable),
+                default=-1.0),
+            "cohorts_sum": sum(max(g(r, "corr_engine_cohorts_total"), 0.0) for r in readable),
+            "per_replica": {
+                r["container"]: {
+                    "started_at": r.get("started_at"),
+                    "pending": g(r, "corr_engine_pending"),
+                    "cohorts_total": g(r, "corr_engine_cohorts_total"),
+                    "oldest_pending_age_s": g(r, "corr_engine_oldest_pending_age_seconds"),
+                    "epochs_total": g(r, "corr_engine_epochs_total"),
+                    "window_signals": g(r, "corr_window_signals"),
+                } for r in readable},
+        }
+
     def corr_metric(self, name_with_labels: str) -> float:
         ok, out = self.corr_get("/metrics")
         if not ok:
@@ -698,6 +796,10 @@ class Stack:
 # Deleting them earlier turns every in-flight event into a refusal (see
 # cleanup()). Bounded: teardown must always happen, drained or not.
 CLEANUP_DRAIN_WAIT_S = float(os.environ.get("MLX_CLEANUP_DRAIN_WAIT_S", "300"))
+# TRACKER 170: how close to zero the worst replica's oldest-pending age must
+# be to call the engine idle. Not zero: the gauge is computed against the
+# newest retained event, so a just-drained engine can read a few seconds.
+CORR_IDLE_AGE_S = float(os.environ.get("MLX_CORR_IDLE_AGE_S", "30"))
 
 # Stability observation (2026-08-20). The previous window ended with the drain
 # phase and missed three CommitFailedError events that followed it.
@@ -888,6 +990,10 @@ class Harness:
             hz.get("tenant_verification", {}).get("registry_identities", -1)
             if isinstance(hz, dict) else -1)
         self.baseline["corr_deadletters"] = self.stack.corr_metric("corr_deadletters")
+        # TRACKER 170: the engine-completion baseline. Completion is a
+        # statement about PROGRESS across the run, so the counters and the
+        # process identity must both be pinned before any workload exists.
+        self.baseline["corr_completion"] = self.stack.corr_completion_state()
         self.baseline["os_run_docs"] = self.stack.os_count(
             "netops-syslog-*", "hostname.keyword", self.prefix)
         if "_error" in hz:
@@ -1242,9 +1348,139 @@ class Harness:
                               f"{budget:.0f}s (final {ev['final_lag']}) — the "
                               f"'lag never drains' defect class "
                               f"(rebalance diagnosis in evidence)")
+        # TRACKER 170: this phase proves TRANSPORT drain only — the consumer has
+        # read the backlog off Kafka and committed. It says nothing about whether
+        # the correlation engine has EVALUATED any of it: the consumer buffers
+        # into the engine's window and commits, so lag returns to baseline while
+        # the RCA workload is still entirely pending. Run 082120173zup drained in
+        # 56s of a 2160s budget with 127,247 of 131,041 signals unevaluated.
+        # Correlation completion is a separate, later gate.
+        ev["proves"] = "kafka_transport_drain_only"
         return self.phase("drain", "PASS", ev,
-                          f"lag drained to baseline+eps in {drained_at:.0f}s "
-                          f"(budget {budget:.0f}s, peak {ev['peak_lag']})")
+                          f"KAFKA TRANSPORT lag drained to baseline+eps in "
+                          f"{drained_at:.0f}s (budget {budget:.0f}s, peak "
+                          f"{ev['peak_lag']}) — transport only; correlation "
+                          f"evaluation is gated separately")
+
+    # -- phase 5b: CORRELATION COMPLETION (tracker 170) ----------------------
+    #
+    # THE FALSE-GREEN THIS EXISTS TO KILL (run 082120173zup, 2026-08-21). The
+    # harness returned PASS on all eight phases while the correlation engine had
+    # evaluated 3% of the workload:
+    #
+    #   drain      PASS — Kafka consumer lag drained in 56s. TRUE, and irrelevant:
+    #                     the consumer buffers into the engine's window and
+    #                     commits. Transport drain is not evaluation.
+    #   accounting PASS — 131,041 == 131,041 corr_signals rows + 0 DLQ. TRUE, and
+    #                     irrelevant: those rows are written by handle_syslog on
+    #                     the INGEST path, before the engine ever sees them.
+    #
+    #   reality    1 and 2 cohorts completed on the two replicas, 127,247 signals
+    #              never evaluated, pending frozen at 66,179/61,068, oldest
+    #              pending 700s against a 516.527s horizon.
+    #
+    # Neither existing gate is wrong about what it measures. Both were being read
+    # as something they never claimed. This phase makes the missing claim.
+    #
+    # WHAT COMPLETION MEANS HERE, and why each clause is load-bearing:
+    #   pending_sum == 0        across ALL replicas — one idle replica proves
+    #                           nothing when its partner holds the backlog.
+    #   cohorts advanced        strictly, versus the preflight baseline — proves
+    #                           the engine did work FOR THIS RUN rather than
+    #                           being idle throughout (an engine that never
+    #                           started also reports pending 0).
+    #   oldest age at idle      the worst replica, back near zero — pending can
+    #                           read 0 for an instant mid-drain.
+    #   identity unchanged      same containers, same start times — a restarted
+    #                           engine reports pending 0 with reset counters,
+    #                           which is indistinguishable from "finished".
+    #   every replica readable  an unreadable replica is UNKNOWN, never idle.
+    def correlation_completion(self) -> bool:
+        base = self.baseline.get("corr_completion") or {}
+        budget = max(self.args.drain_factor * self.burst_seconds, 120.0)
+        idle_age = CORR_IDLE_AGE_S
+        t0 = time.monotonic()
+        state: dict = {}
+        curve: list[dict] = []
+        completed_at = None
+        while True:
+            state = self.stack.corr_completion_state()
+            curve.append({"t_s": round(time.monotonic() - t0, 1),
+                          "pending": state["pending_sum"],
+                          "cohorts": state["cohorts_sum"],
+                          "oldest_age_s": state["oldest_pending_age_max"]})
+            advanced = state["cohorts_sum"] - float(base.get("cohorts_sum", 0) or 0)
+            if (state["readable"] == state["replicas"] and state["replicas"] > 0
+                    and state["pending_sum"] == 0
+                    and 0 <= state["oldest_pending_age_max"] <= idle_age
+                    and advanced > 0):
+                completed_at = time.monotonic() - t0
+                break
+            if time.monotonic() - t0 >= budget:
+                break
+            time.sleep(10)
+
+        self.evidence_file("correlation-completion.json", json.dumps(curve, indent=1))
+        advanced = state["cohorts_sum"] - float(base.get("cohorts_sum", 0) or 0)
+        ev = {
+            "budget_s": round(budget, 0),
+            "completed_at_s": round(completed_at, 1) if completed_at is not None else None,
+            "idle_age_threshold_s": idle_age,
+            "baseline": {k: base.get(k) for k in
+                         ("pending_sum", "cohorts_sum", "replicas", "readable")},
+            "baseline_per_replica": base.get("per_replica", {}),
+            "final": state,
+            "cohorts_advanced": advanced,
+            "samples": len(curve),
+            "curve_file": "correlation-completion.json",
+            "proves": "correlation_engine_evaluated_the_workload",
+        }
+
+        problems: list[str] = []
+        if state["replicas"] == 0:
+            problems.append("no correlation replicas found — completion unknowable")
+        if state["unreadable"]:
+            problems.append(
+                f"{len(state['unreadable'])} replica(s) unreadable "
+                f"({', '.join(str(u) for u in state['unreadable'])}) — an "
+                f"unreadable engine is UNKNOWN, never idle: {state['errors']}")
+        # Restart/reset detection (mutant 7): a restarted engine reports pending 0
+        # and reset counters, which reads exactly like a finished one.
+        base_ids = set(base.get("per_replica") or {})
+        now_ids = set(state.get("per_replica") or {})
+        if base_ids and base_ids != now_ids:
+            problems.append(
+                f"correlation replica set changed during the run "
+                f"({sorted(base_ids)} -> {sorted(now_ids)}) — completion cannot "
+                f"be established across a restart")
+        else:
+            for cid_, b in (base.get("per_replica") or {}).items():
+                n = (state.get("per_replica") or {}).get(cid_)
+                if n and b.get("started_at") and n.get("started_at") != b.get("started_at"):
+                    problems.append(
+                        f"replica {cid_} RESTARTED mid-run "
+                        f"({b['started_at']} -> {n['started_at']}) — its zeroed "
+                        f"counters are not evidence of completion")
+        if advanced <= 0:
+            problems.append(
+                f"correlation cohorts did not advance (baseline "
+                f"{base.get('cohorts_sum')}, final {state['cohorts_sum']}) — the "
+                f"engine did no work attributable to this run")
+        if completed_at is None:
+            problems.append(
+                f"correlation engine INCOMPLETE after {budget:.0f}s: "
+                f"pending={state['pending_sum']:.0f} "
+                f"oldest_pending_age={state['oldest_pending_age_max']:.1f}s "
+                f"cohorts_delta={advanced:.0f}")
+
+        if problems:
+            return self.phase("correlation_completion", "FAIL", ev, "; ".join(problems))
+        return self.phase(
+            "correlation_completion", "PASS", ev,
+            f"engine evaluated the workload in {completed_at:.0f}s "
+            f"(budget {budget:.0f}s): pending 0 across {state['replicas']} "
+            f"replica(s), cohorts +{advanced:.0f}, oldest pending age "
+            f"{state['oldest_pending_age_max']:.1f}s")
 
     # -- phase 6: consumer stability (whole lifecycle) -----------------------
     #
@@ -1849,6 +2085,11 @@ class Harness:
                     # new is arriving (see memflat's header).
                     self.warm_mem = self.stack.mem_sample()
                     self.drain()
+                    # TRACKER 170: transport drain and ingest accounting both
+                    # pass while the engine has evaluated nothing. The
+                    # correlation-completion gate runs here, and the overall
+                    # verdict depends on it like any other phase.
+                    self.correlation_completion()
                     self.accounting()
                 self.memflat()
                 # AFTER everything else: instability that appears late is the

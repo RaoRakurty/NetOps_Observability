@@ -250,7 +250,7 @@ def test_caches_are_cleared_even_when_the_cycle_raises():
     """finally, not a happy-path clear."""
     import asyncio
 
-    async def boom():
+    async def boom(epoch=None):
         main._CYCLE_ROW_CACHE[777] = {"x": 1}
         main._WINDOW_INDEX_CACHE[999] = (1, main._WindowIndex(
             nodes=(), loose=(), sid={}, ordinal={}))

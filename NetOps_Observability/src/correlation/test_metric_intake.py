@@ -63,7 +63,12 @@ class MetricIdentityTest(unittest.TestCase):
         self.assertEqual(entity_id, "leaf1:Ethernet1")
         self.assertEqual(etype, EntityType.INTERFACE)
         self.assertIn("leaf1", tokens)
-        self.assertIn("Ethernet1", tokens)
+        # tracker 168 (INTENTIONAL DELTA): the bare interface name is
+        # device-LOCAL and is no longer a global grounding token — every
+        # device with an "Ethernet1" used to become a rank-7 candidate of
+        # every other. entity_id already carries the qualified identity.
+        self.assertNotIn("Ethernet1", tokens)
+        self.assertEqual(entity_id, "leaf1:Ethernet1")
 
     def test_interface_falls_back_to_index(self):
         out = main.metric_identity(iface_event(if_name="", index="7"))

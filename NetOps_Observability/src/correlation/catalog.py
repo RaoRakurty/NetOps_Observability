@@ -225,13 +225,52 @@ class Catalog(BaseModel):
     def version_hash(self) -> str:
         """Canonical content hash → ``corr_objects.catalog_version``. Stable
         across process restarts and dict ordering; changes iff an enabled
-        template's content changes (replay contract)."""
-        canon = json.dumps(
-            [t.model_dump(mode="json") for t in sorted(self.enabled_templates(), key=lambda t: t.id)],
-            sort_keys=True, separators=(",", ":"),
-        )
-        digest = hashlib.sha256(f"v{CATALOG_SCHEMA_VERSION}|{canon}".encode()).hexdigest()
-        return f"cat-{digest[:12]}"
+        template's content changes (replay contract).
+
+        MEMOISED (tracker 167, 2026-08-22). This is a CONSTANT for a given
+        catalog — the docstring above says so — but it was recomputed on every
+        call, and `rank()` calls it once per RCA object. Profiled on the live 1K
+        shape (48,000 nodes, 43,065 objects): **241.09 s of a 495.86 s
+        `run_window`, 48.6 % of the whole cycle**, spent re-serialising 100
+        templates through pydantic (4.3 M `to_python` calls), re-encoding them to
+        JSON (100 s in `iterencode`) and re-hashing (43,067 SHA-256s) to return
+        the same twelve characters every time.
+
+        The value is unchanged; only the number of times it is computed is."""
+        return _catalog_version_hash(self)
+
+
+# Keyed by IDENTITY, not by value. `lru_cache` on the Catalog itself looked
+# right and was measurably wrong: hashing a frozen pydantic model walks every
+# field of every template, so a 43,065-object cycle spent 88 M `hash_func` calls
+# (58.75 s) computing cache KEYS for a value it already had. The dict below
+# holds a strong reference to each cached Catalog, so its id() cannot be
+# recycled onto a different object while the entry lives; it is bounded, and a
+# reloaded catalog is simply a new entry. A changed catalog therefore still
+# produces a changed hash — the replay contract is untouched.
+_VERSION_HASH_CACHE: dict[int, tuple[Catalog, str]] = {}
+_VERSION_HASH_CACHE_MAX = 4
+
+
+def _catalog_version_hash(catalog: Catalog) -> str:
+    hit = _VERSION_HASH_CACHE.get(id(catalog))
+    if hit is not None and hit[0] is catalog:
+        return hit[1]
+    value = _compute_version_hash(catalog)
+    if len(_VERSION_HASH_CACHE) >= _VERSION_HASH_CACHE_MAX:
+        _VERSION_HASH_CACHE.clear()
+    _VERSION_HASH_CACHE[id(catalog)] = (catalog, value)
+    return value
+
+
+def _compute_version_hash(catalog: Catalog) -> str:
+    """The real computation, once per distinct catalog."""
+    canon = json.dumps(
+        [t.model_dump(mode="json") for t in sorted(catalog.enabled_templates(), key=lambda t: t.id)],
+        sort_keys=True, separators=(",", ":"),
+    )
+    digest = hashlib.sha256(f"v{CATALOG_SCHEMA_VERSION}|{canon}".encode()).hexdigest()
+    return f"cat-{digest[:12]}"
 
 
 def load_catalog(raw: list[dict]) -> Catalog:

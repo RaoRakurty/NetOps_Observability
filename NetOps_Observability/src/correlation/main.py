@@ -40,7 +40,7 @@ import threading
 import time
 import uuid
 from collections import Counter, OrderedDict, deque
-from collections.abc import Awaitable, Callable, Iterable
+from collections.abc import Awaitable, Callable, Iterable, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from dataclasses import replace as dc_replace
@@ -78,9 +78,11 @@ from engine import (
     ObjectSnapshot,
     SeamView,
     TopologyAdjacency,
+    WindowPrep,
     engine_temporal_reach_s,
     find_continuation,
     find_merges,
+    prepare_run_window,
     required_retention_s,
     run_window,
 )
@@ -1946,6 +1948,7 @@ def retention_state() -> dict[str, object]:
         "entity_cache": signals.entity_cache_stats(),
         "stage_profile": stage_profile(),
         "scheduler": scheduler_state(),
+        "epoch": epoch_state(),
         "edge_cache": edge_cache_state(),
         "cycle_work": cycle_work_profile(),
         "stream_time_evictions": STREAM_TIME_EVICTIONS,
@@ -2273,13 +2276,23 @@ EDGE_CACHE_PEAK = 0         # high-water mark across all tenants
 EDGE_CACHE_BYTES_PER_ENTRY = 320
 
 
-def _carried_edges_for(tenant: str, window: list[Signal]) -> tuple:
-    """This tenant's settled edges, filtered to nodes still in the window."""
+def live_node_keys(window: Iterable[Signal]) -> set[str]:
+    """The node keys a window still contains. Pure function of the snapshot, so
+    a drain epoch computes it once and every cohort reuses it."""
+    return {f"{s.entity_type.value}:{s.entity_id}:{s.kind}" for s in window}
+
+
+def _carried_edges_for(tenant: str, live: set[str]) -> tuple:
+    """This tenant's settled edges, filtered to nodes still in the window.
+
+    tracker 166: `live` — the O(window) key set — is a pure function of the
+    frozen snapshot and is computed ONCE per epoch. Only the O(edges) cache
+    filter below is genuinely per cohort, because cohort n must see the edges
+    cohort n-1 settled."""
     global EDGE_CACHE_DROPPED
     cache = _TENANT_EDGES.get(tenant)
     if not cache:
         return ()
-    live = {f"{s.entity_type.value}:{s.entity_id}:{s.kind}" for s in window}
     stale = [k for k in cache if k[0] not in live or k[1] not in live]
     for k in stale:
         del cache[k]
@@ -2321,9 +2334,225 @@ def edge_cache_state() -> dict[str, int]:
     }
 
 
-def pending_signals() -> list[Signal]:
-    """Retained signals that have not yet been through a completed transaction."""
-    return [s for s in WINDOW_BUFFER if str(s.signal_id) not in _PROCESSED_IDS]
+def pending_signals(source: Iterable[Signal] | None = None) -> list[Signal]:
+    """Retained signals that have not yet been through a completed transaction.
+
+    tracker 166: a drain epoch passes its FROZEN snapshot here. Reading the live
+    buffer inside an epoch would let a cohort admit a signal the epoch never
+    prepared a node for — it would be silently absent from the prepared node set
+    and then marked processed by `_mark_processed`, i.e. never-evaluated
+    evidence. The default (live buffer) is for metrics and for callers outside
+    an epoch."""
+    src = WINDOW_BUFFER if source is None else source
+    return [s for s in src if str(s.signal_id) not in _PROCESSED_IDS]
+
+
+# ── tracker 166 Phase 2: the SNAPSHOT / DRAIN EPOCH ──────────────────────────
+#
+# THE DEFECT the epoch exists for. Bounding the cohort bounded pair EMISSION but
+# not the per-transaction FIXED cost: run_window re-sorted the window, rebuilt
+# every node, re-derived toks/refs/seam+path memberships for ALL n retained
+# nodes and rebuilt the candidate inverted index — on EVERY cohort. Pre-166 that
+# was paid once per cycle; splitting a cycle into ~8 cohorts paid it ~8x.
+# Measured offline: 5.99 s per transaction at 50,000 retained nodes, ~48 s
+# across 8 cohorts. Live, the engine cycle stayed ~150 s even with a
+# 5,000-signal cohort and pending grew monotonically to 37,292.
+#
+# THE LIFECYCLE, and it is deliberately short:
+#
+#   one immutable snapshot -> one prepared state -> many bounded cohorts -> discard
+#
+# The epoch is a LOCAL owned by one drain sweep, never a module-level cache. It
+# holds a reference to the whole retained node set, so an epoch outliving its
+# snapshot would pin evidence the 165 horizon has already released.
+#
+# WHAT IS FROZEN and what is not (docs/scale/SNAPSHOT_EPOCH_166.md §Phase 3):
+#   frozen  — the retained signals, the per-tenant windows, nodes, node
+#             metadata, candidate index, seams, adjacency, path graph,
+#             discovery paths, topology-stale and storm declarations
+#   NOT frozen — carried edges and the processed frontier. Both advance WITH the
+#             cohorts by design: cohort n must see the edges cohort n-1 settled.
+#
+# Signals that arrive while an epoch runs stay pending and are admitted by the
+# NEXT epoch. That is exactly the pre-166 behaviour for arrivals (they waited
+# for the next cycle) and it is what makes the snapshot immutable.
+EPOCHS_TOTAL = 0
+EPOCH_PREPARATIONS = 0          # tenant preparations built (the once-per-epoch proof)
+EPOCH_PREP_SECONDS_TOTAL = 0.0
+EPOCH_PREP_SECONDS_LAST = 0.0
+EPOCH_PREP_SECONDS_MAX = 0.0
+EPOCH_SECONDS_LAST = 0.0
+EPOCH_SECONDS_MAX = 0.0
+EPOCH_COHORTS_LAST = 0
+EPOCH_COHORTS_MAX = 0
+EPOCH_PREP_NODES = 0            # nodes held by the last epoch's prepared state
+
+
+class _EngineEpoch:
+    """One immutable retained snapshot plus everything derived purely from it."""
+
+    __slots__ = (
+        "by_tenant",
+        "cohorts",
+        "ctx",
+        "cycle_max_ts",
+        "live_keys",
+        "now",
+        "prep_seconds",
+        "preps",
+        "snapshot",
+        "started",
+        "storm",
+        "topo_stale",
+    )
+
+    def __init__(self, now: datetime) -> None:
+        self.now = now
+        self.snapshot: tuple = ()
+        self.by_tenant: dict[str, tuple] = {}
+        self.cycle_max_ts: float | None = None
+        self.topo_stale = False
+        self.storm = False
+        # tenant -> (seams, adjacency, directed, pgv, discovery)
+        self.ctx: dict[str, tuple] = {}
+        self.preps: dict[str, WindowPrep | None] = {}
+        # tenant -> node keys still in the snapshot (for the carried-edge filter)
+        self.live_keys: dict[str, set[str]] = {}
+        self.cohorts = 0
+        self.prep_seconds = 0.0
+        self.started = time.monotonic()
+
+    def pending(self) -> list[Signal]:
+        """Pending within THIS epoch — from the frozen snapshot, never the live
+        buffer (see pending_signals)."""
+        return pending_signals(self.snapshot)
+
+
+async def _begin_epoch(now: datetime) -> _EngineEpoch:
+    """Prune, freeze, and prepare. Everything a cohort would otherwise re-derive.
+
+    Preparation is real CPU (seconds on a large window) and is therefore
+    OFFLOADED, exactly like run_window: doing it on the loop would hand back the
+    stall that tracker 164 removed."""
+    global EPOCHS_TOTAL, EPOCH_PREPARATIONS, EPOCH_PREP_NODES
+    global EPOCH_PREP_SECONDS_TOTAL, EPOCH_PREP_SECONDS_LAST, EPOCH_PREP_SECONDS_MAX
+    ep = _EngineEpoch(now)
+    # The ONLY mutation point in the epoch: retention runs at the boundary, so
+    # no signal can expire out from under a cohort mid-drain.
+    with stage("engine.prune"):
+        await _prune_buffer(now)
+    # C6: flush this cycle's accumulated flow volume → passive_flow episodes BEFORE
+    # partitioning, so the new flow signals join the same window they were measured in.
+    await _flush_flow_aggregator(now)
+    # §8 degradation, declared on every snapshot scored under it (never silent).
+    # Evaluated ONCE per epoch: every cohort in the epoch is scored against the
+    # same inputs, so declaring the same verdict on all of them is the honest
+    # reading, not a staleness.
+    ep.topo_stale = _topology_stale(now)
+    ep.storm = len(WINDOW_BUFFER) >= STORM_BUFFER_FRACTION * (WINDOW_BUFFER.maxlen or 1)
+    if ep.topo_stale or ep.storm:
+        log.warning("engine degradation: topology_stale=%s storm_mode=%s (buffer=%d/%s)",
+                    ep.topo_stale, ep.storm, len(WINDOW_BUFFER), WINDOW_BUFFER.maxlen)
+    # FREEZE. From here the epoch reads its own tuple, never WINDOW_BUFFER.
+    ep.snapshot = tuple(WINDOW_BUFFER)
+    grouped: dict[str, list[Signal]] = {}
+    with stage("engine.partition_by_tenant"):
+        for s in ep.snapshot:
+            grouped.setdefault(s.tenant_id, []).append(s)
+    # Tuples, and the SAME tuple object every cohort: the prep's reuse guard is
+    # object identity, so handing run_window a fresh tuple per cohort would
+    # invalidate the prep on every transaction and reinstate the defect.
+    ep.by_tenant = {t: tuple(v) for t, v in grouped.items()}
+    # Marker for the NEXT epoch's work accounting: the newest event this epoch
+    # can see. Captured before the per-tenant work so a long epoch does not
+    # mis-attribute signals that arrived while it ran.
+    ep.cycle_max_ts = max((s.ts.timestamp() for s in ep.snapshot), default=None)
+    adj_by_tenant = topology_links_by_tenant()  # L2/L3 links for the adjacency rung (G1)
+    pgv = path_graph_inventory()
+    t0 = time.monotonic()
+    with stage("engine.epoch_prepare"):
+        for tenant in sorted(ep.by_tenant):
+            window = ep.by_tenant[tenant]
+            seams = tuple(s for s in seam_inventory() if s.tenant_id in (tenant, ""))
+            # Tenant-scoped adjacency: this tenant's links ∪ global — never cross-tenant.
+            adjacency = TopologyAdjacency.from_links(
+                adj_by_tenant.get(tenant, []) + adj_by_tenant.get("", []))
+            # The directed-topology oracle for this tenant, sources in PRECEDENCE order
+            # (measured > observed > computed): C7.4 active-path-trace FIRST, then C7.3
+            # NetFlow volume, then C7.5 routing (BGP-LS/IGP SPF). Each resolves through
+            # this tenant's resolver / device entities → zero-leak. None when none covers
+            # → vote #2 abstains (no-op).
+            tenant_resolver = cached_entity_resolver_for(tenant)
+            before = resolve_path_order(probe_paths(), tenant_resolver)
+            vol = {**_FLOW_DIR.get("", {}), **_FLOW_DIR.get(tenant, {})}
+            forward = forwarding_pairs(routing_direction())
+            sources = []
+            if before:
+                sources.append(("traceroute", traceroute_direction_source(before)))
+            if vol:
+                sources.append(("netflow", netflow_direction_source(vol, FLOW_DIRECTION_DOMINANCE)))
+            if forward:
+                sources.append(("routing", routing_direction_source(forward)))
+            directed = DirectedTopology(sources=tuple(sources)) if sources else None
+            # Path-causality RCA P2: the tenant's typed causal paths for the on-path
+            # attribution enrichment, fusing measured + flow + inventory + DNS discovery
+            # (window carries this tenant's cloud_dns_log heads). Empty ⇒ no-op, objects
+            # byte-identical to pre-P2.
+            discovery = discovery_paths_for(tenant, pgv, list(window))
+            ep.ctx[tenant] = (seams, adjacency, directed, pgv, discovery)
+            ep.live_keys[tenant] = live_node_keys(window)
+            try:
+                prep = await _offload(prepare_run_window, window, seams, ENGINE_CFG,
+                                      adjacency, pgv, discovery)
+            except ValueError as exc:
+                # A mixed-tenant window is a partitioning bug, not a data error;
+                # it is observable (§10) and costs this tenant the epoch, not the
+                # process. Cohorts skip a tenant with no prep.
+                log.error("engine epoch rejected tenant window: %s", exc)
+                prep = None
+            ep.preps[tenant] = prep
+            if prep is not None:
+                EPOCH_PREPARATIONS += 1
+    ep.prep_seconds = time.monotonic() - t0
+    EPOCHS_TOTAL += 1
+    EPOCH_PREP_SECONDS_TOTAL += ep.prep_seconds
+    EPOCH_PREP_SECONDS_LAST = ep.prep_seconds
+    EPOCH_PREP_SECONDS_MAX = max(EPOCH_PREP_SECONDS_MAX, ep.prep_seconds)
+    EPOCH_PREP_NODES = sum(len(p.nodes) for p in ep.preps.values() if p is not None)
+    return ep
+
+
+def _close_epoch(ep: _EngineEpoch) -> None:
+    """Discard the prepared state. Called on every path, including failure —
+    prepared state must never outlive the snapshot it describes."""
+    global EPOCH_SECONDS_LAST, EPOCH_SECONDS_MAX, EPOCH_COHORTS_LAST, EPOCH_COHORTS_MAX
+    EPOCH_SECONDS_LAST = time.monotonic() - ep.started
+    EPOCH_SECONDS_MAX = max(EPOCH_SECONDS_MAX, EPOCH_SECONDS_LAST)
+    EPOCH_COHORTS_LAST = ep.cohorts
+    EPOCH_COHORTS_MAX = max(EPOCH_COHORTS_MAX, ep.cohorts)
+    ep.preps.clear()
+    ep.ctx.clear()
+    ep.live_keys.clear()
+    ep.by_tenant = {}
+    ep.snapshot = ()
+
+
+def epoch_state() -> dict[str, object]:
+    """Phase 8 observability. THE invariant this exists to expose: for K cohorts
+    over one unchanged snapshot, `preparations` advances by the tenant count
+    ONCE, not K times. `preparations / epochs` must stay at the tenant count."""
+    return {
+        "epochs": EPOCHS_TOTAL,
+        "preparations": EPOCH_PREPARATIONS,
+        "prep_seconds_last": round(EPOCH_PREP_SECONDS_LAST, 3),
+        "prep_seconds_max": round(EPOCH_PREP_SECONDS_MAX, 3),
+        "prep_seconds_total": round(EPOCH_PREP_SECONDS_TOTAL, 3),
+        "prep_nodes": EPOCH_PREP_NODES,
+        "epoch_seconds_last": round(EPOCH_SECONDS_LAST, 3),
+        "epoch_seconds_max": round(EPOCH_SECONDS_MAX, 3),
+        "cohorts_last": EPOCH_COHORTS_LAST,
+        "cohorts_max": EPOCH_COHORTS_MAX,
+    }
 
 
 def _select_cohort(pending: list[Signal], limit: int) -> list[Signal]:
@@ -2758,7 +2987,7 @@ _WINDOW_INDEX_CACHE: dict[int, tuple[int, _WindowIndex]] = {}
 _CYCLE_ROW_CACHE: dict[int, dict] = {}
 
 
-def _sid_of(window: list[Signal], sig: Signal) -> str:
+def _sid_of(window: Sequence[Signal], sig: Signal) -> str:
     """This cycle's cached str(signal_id), falling back to computing it."""
     got = _window_index(window).sid.get(id(sig))
     return got if got is not None else sig.signal_id_str
@@ -2783,7 +3012,7 @@ def _archive_row(sig: Signal, corr_id: str, version: int) -> dict:
     return row
 
 
-def _window_index(window: list[Signal]) -> _WindowIndex:
+def _window_index(window: Sequence[Signal]) -> _WindowIndex:
     """Build (or reuse) the per-cycle index for `window`.
 
     Keyed by id() AND length: engine_cycle hands the same list object to every
@@ -2815,7 +3044,7 @@ def _window_index(window: list[Signal]) -> _WindowIndex:
     return idx
 
 
-def _archive_slice(snap: ObjectSnapshot, window: list[Signal]) -> list[Signal]:
+def _archive_slice(snap: ObjectSnapshot, window: Sequence[Signal]) -> list[Signal]:
     """The BOUNDED, replay-exact archive slice for one object version.
 
     Contents:
@@ -2860,7 +3089,7 @@ def _archive_slice(snap: ObjectSnapshot, window: list[Signal]) -> list[Signal]:
 
 
 async def _persist_snapshot(snap: ObjectSnapshot, version: int, state: str,
-                            window: list[Signal], merged_into: str = "") -> None:
+                            window: Sequence[Signal], merged_into: str = "") -> None:
     assert ch is not None
     # P1 (1000-device scale): every serializer below is offloaded for a large
     # graph — see _offload. On the live 48,375-edge object these four calls plus
@@ -3019,7 +3248,7 @@ def _topology_stale(now: datetime) -> bool:
     return stale
 
 
-async def engine_cycle() -> None:
+async def engine_cycle(epoch: _EngineEpoch | None = None) -> None:
     """One evaluation, with the per-cycle caches guaranteed to die with it.
 
     Tracker 156: `_WINDOW_INDEX_CACHE` and `_CYCLE_ROW_CACHE` make one cycle's
@@ -3032,45 +3261,52 @@ async def engine_cycle() -> None:
     """
     _WINDOW_INDEX_CACHE.clear()
     _CYCLE_ROW_CACHE.clear()
+    own_epoch = epoch is None
     try:
-        await _engine_cycle_inner()
+        if own_epoch and ch is not None:
+            # A caller outside a drain sweep (tests, a single manual cycle) gets
+            # an epoch of its own. There is exactly ONE code path inside the
+            # cycle: the epoch is never optional there. `ch is None` stays
+            # _engine_cycle_inner's own guard, which returns before it reads the
+            # epoch at all.
+            epoch = await _begin_epoch(datetime.now(timezone.utc))
+        await _engine_cycle_inner(epoch)
     finally:
+        if own_epoch and epoch is not None:
+            _close_epoch(epoch)
         _WINDOW_INDEX_CACHE.clear()
         _CYCLE_ROW_CACHE.clear()
 
 
-async def _engine_cycle_inner() -> None:
-    """One evaluation: prune window, partition by tenant, run the pure core,
-    persist version increments, close quiesced objects."""
+async def _engine_cycle_inner(epoch: _EngineEpoch | None) -> None:
+    """One COHORT over an already-prepared epoch: admit a bounded cohort, run
+    the pure core against the epoch's frozen snapshot, persist version
+    increments, close quiesced objects.
+
+    tracker 166: everything that is a pure function of the snapshot — pruning,
+    partitioning, node construction, per-node metadata, the candidate index —
+    now happens in `_begin_epoch`, ONCE, however many cohorts drain against it.
+    """
     global LAST_GAP_HINTS, VERSIONS_PERSISTED, VERSIONS_DAMPED
     global LAST_CYCLE_MAX_TS
-    if ch is None:
+    # `epoch is None` happens only when the caller had no ClickHouse to prepare
+    # against — the two conditions are the same condition, stated explicitly so
+    # the invariant is checked rather than assumed.
+    if ch is None or epoch is None:
         return
-    now = datetime.now(timezone.utc)
-    with stage("engine.prune"):
-        await _prune_buffer(now)
-    # C6: flush this cycle's accumulated flow volume → passive_flow episodes BEFORE
-    # partitioning, so the new flow signals join the same window they were measured in.
-    await _flush_flow_aggregator(now)
-    # §8 degradation, declared on every snapshot scored under it (never silent):
-    topo_stale = _topology_stale(now)
-    storm = len(WINDOW_BUFFER) >= STORM_BUFFER_FRACTION * (WINDOW_BUFFER.maxlen or 1)
-    if topo_stale or storm:
-        log.warning("engine degradation: topology_stale=%s storm_mode=%s (buffer=%d/%s)",
-                    topo_stale, storm, len(WINDOW_BUFFER), WINDOW_BUFFER.maxlen)
-    by_tenant: dict[str, list[Signal]] = {}
-    with stage("engine.partition_by_tenant"):
-        for s in WINDOW_BUFFER:
-            by_tenant.setdefault(s.tenant_id, []).append(s)
-    # Marker for the NEXT cycle's work accounting: the newest event this cycle
-    # can see. Captured before the per-tenant work so a long cycle does not
-    # mis-attribute signals that arrived while it ran.
-    _cycle_max_ts = max((s.ts.timestamp() for s in WINDOW_BUFFER), default=None)
+    now = epoch.now
+    topo_stale = epoch.topo_stale
+    storm = epoch.storm
+    by_tenant = epoch.by_tenant
+    _cycle_max_ts = epoch.cycle_max_ts
     # tracker 166: bound the NEW work this transaction admits. Retained history
     # is untouched — every cohort is still scored against the whole window.
     global COHORTS_PROCESSED, COHORT_SIGNALS_TOTAL, PENDING_PEAK
-    _pending = pending_signals()
-    PENDING_PEAK = max(PENDING_PEAK, len(_pending))
+    # From the epoch's FROZEN snapshot: a cohort must never admit a signal the
+    # epoch has no prepared node for (it would be dropped from the cohort index
+    # and then marked processed — never-evaluated evidence).
+    _pending = epoch.pending()
+    PENDING_PEAK = max(PENDING_PEAK, len(pending_signals()))
     _cohort = _select_cohort(_pending, CORR_ENGINE_COHORT_SIZE)
     # A node is NEW to this transaction when ANY of its signals is in the cohort:
     # its activity interval changed, so its pairs must be re-scored. Grouped by
@@ -3087,36 +3323,18 @@ async def _engine_cycle_inner() -> None:
     await asyncio.sleep(0)
 
     gap_hints = 0
-    adj_by_tenant = topology_links_by_tenant()  # L2/L3 links for the adjacency rung (G1)
-    evaluated: list[tuple[str, list[Signal], list[ObjectSnapshot]]] = []
+    evaluated: list[tuple[str, tuple, list[ObjectSnapshot]]] = []
     for tenant in sorted(by_tenant):
         window = by_tenant[tenant]
-        seams = tuple(s for s in seam_inventory() if s.tenant_id in (tenant, ""))
-        # Tenant-scoped adjacency: this tenant's links ∪ global — never cross-tenant.
-        adjacency = TopologyAdjacency.from_links(adj_by_tenant.get(tenant, []) + adj_by_tenant.get("", []))
-        # The directed-topology oracle for this tenant, sources in PRECEDENCE order
-        # (measured > observed > computed): C7.4 active-path-trace FIRST, then C7.3
-        # NetFlow volume, then C7.5 routing (BGP-LS/IGP SPF). Each resolves through
-        # this tenant's resolver / device entities → zero-leak. None when none covers
-        # → vote #2 abstains (no-op).
-        tenant_resolver = cached_entity_resolver_for(tenant)
-        before = resolve_path_order(probe_paths(), tenant_resolver)
-        vol = {**_FLOW_DIR.get("", {}), **_FLOW_DIR.get(tenant, {})}
-        forward = forwarding_pairs(routing_direction())
-        sources = []
-        if before:
-            sources.append(("traceroute", traceroute_direction_source(before)))
-        if vol:
-            sources.append(("netflow", netflow_direction_source(vol, FLOW_DIRECTION_DOMINANCE)))
-        if forward:
-            sources.append(("routing", routing_direction_source(forward)))
-        directed = DirectedTopology(sources=tuple(sources)) if sources else None
-        pgv = path_graph_inventory()
-        # Path-causality RCA P2: the tenant's typed causal paths for the on-path
-        # attribution enrichment, fusing measured + flow + inventory + DNS discovery
-        # (window carries this tenant's cloud_dns_log heads). Empty ⇒ no-op, objects
-        # byte-identical to pre-P2.
-        discovery = discovery_paths_for(tenant, pgv, window)
+        # tracker 166: the tenant's static context and its prepared snapshot were
+        # built ONCE for this epoch. Rebuilding them here is the defect. The
+        # SAME objects must be handed to run_window every cohort — the prep's
+        # reuse guard is object identity, so a freshly-built equal-valued seam
+        # tuple would silently invalidate it and reinstate the per-cohort cost.
+        prep = epoch.preps.get(tenant)
+        if prep is None:
+            continue     # a tenant whose window the epoch could not prepare
+        seams, adjacency, directed, pgv, discovery = epoch.ctx[tenant]
         try:
             # Perf defect #1c: run_window is pure CPU work (seconds-to-minutes on a
             # storm window) and used to run SYNCHRONOUSLY on the loop hosting the
@@ -3147,14 +3365,17 @@ async def _engine_cycle_inner() -> None:
             # first version skipped such tenants and a victim tenant under a
             # neighbour storm silently stopped producing objects.
             t_keys = frozenset(_cohort_keys.get(tenant, ()))
-            carried = _carried_edges_for(tenant, window)
+            # Carried edges are deliberately NOT part of the epoch: cohort n
+            # must see the edges cohort n-1 settled, so this is re-read per
+            # transaction (docs/scale/SNAPSHOT_EPOCH_166.md §Phase 3).
+            carried = _carried_edges_for(tenant, epoch.live_keys[tenant])
             with stage("engine.run_window"):
                 snapshots = await _offload(
-                    run_window, tuple(window), CATALOG, seams, ENGINE_CFG,
+                    run_window, window, CATALOG, seams, ENGINE_CFG,
                     adjacency=adjacency, topology_stale=topo_stale, storm_mode=storm,
                     directed=directed, paths=pgv, discovery=discovery,
                     since_ts=LAST_CYCLE_MAX_TS, work_sink=work,
-                    cohort_keys=t_keys, carried_edges=carried)
+                    cohort_keys=t_keys, carried_edges=carried, prep=prep)
             _remember_edges(tenant, snapshots)
             if work:
                 _record_cycle_work(tenant, work)
@@ -3334,12 +3555,31 @@ async def engine_loop() -> None:
             # monopolising the process indefinitely — the loop still returns to
             # its normal interval, and pending depth (not transaction size) is
             # what grows under genuine overload.
-            while drained < CORR_ENGINE_DRAIN_COHORTS:
-                await engine_cycle()
-                drained += 1
-                await asyncio.sleep(0)      # fairness point, not a delay
-                if not pending_signals():
-                    break
+            # tracker 166 Phase 2: ONE epoch per sweep. Prune + freeze + prepare
+            # once, then drain bounded cohorts against that prepared state,
+            # then discard it. Preparation used to be paid per cohort — ~6 s at
+            # 50k retained nodes, ~48 s across 8 cohorts of pure re-derivation.
+            #
+            # Signals arriving mid-sweep stay pending for the NEXT epoch. That
+            # is the pre-166 behaviour for arrivals and it is what lets the
+            # snapshot be immutable for the whole sweep.
+            epoch = None
+            if ch is not None:
+                epoch = await _begin_epoch(datetime.now(timezone.utc))
+            try:
+                while drained < CORR_ENGINE_DRAIN_COHORTS:
+                    await engine_cycle(epoch)
+                    drained += 1
+                    if epoch is not None:
+                        epoch.cohorts = drained
+                    await asyncio.sleep(0)      # fairness point, not a delay
+                    # Pending WITHIN the epoch: a sweep drains the snapshot it
+                    # froze, never signals it has no prepared node for.
+                    if epoch is None or not epoch.pending():
+                        break
+            finally:
+                if epoch is not None:
+                    _close_epoch(epoch)
         except Exception:
             log.exception("engine cycle failed (observable, §10; loop continues)")
         # Idle (or drain-bounded): fall back to the normal interval. It still
@@ -5166,7 +5406,10 @@ def metric_identity(ev: dict) -> tuple[str, EntityType, str, tuple[str, ...]] | 
         iface = str(ev.get("if_name") or ev.get("index") or "")
         if not iface:
             return None
-        return f"{device}:{iface}", EntityType.INTERFACE, "if_metric_anomaly", (device, iface)
+        # tracker 168: the bare interface name is device-LOCAL and must not be a
+        # global grounding subject — entity_id is already `device:iface`, from
+        # which Node.tokens() derives both the full id and the device part.
+        return f"{device}:{iface}", EntityType.INTERFACE, "if_metric_anomaly", (device,)
     if family == "bgp":
         peer = str(ev.get("peer") or ev.get("index") or "")
         if not peer:
@@ -6446,6 +6689,33 @@ async def metrics_exposition():
         "# HELP corr_engine_oldest_pending_age_seconds Event-time age of the oldest unevaluated signal.",
         "# TYPE corr_engine_oldest_pending_age_seconds gauge",
         f"corr_engine_oldest_pending_age_seconds {scheduler_state()['oldest_pending_event_age_s']}",
+        # tracker 166 Phase 8: the once-per-epoch invariant, exposed.
+        # corr_engine_preparations_total must advance by the TENANT COUNT per
+        # epoch — never by tenants x cohorts. A ratio that tracks
+        # corr_engine_cohorts_total instead of corr_engine_epochs_total means
+        # the prepared state is being rebuilt per transaction, which is the
+        # exact defect that failed the first live 1K qualification.
+        "# HELP corr_engine_epochs_total Snapshot/drain epochs begun.",
+        "# TYPE corr_engine_epochs_total counter",
+        f"corr_engine_epochs_total {EPOCHS_TOTAL}",
+        "# HELP corr_engine_preparations_total Per-tenant snapshot preparations (node metadata + candidate index).",
+        "# TYPE corr_engine_preparations_total counter",
+        f"corr_engine_preparations_total {EPOCH_PREPARATIONS}",
+        "# HELP corr_engine_prep_seconds_total Time spent preparing snapshots.",
+        "# TYPE corr_engine_prep_seconds_total counter",
+        f"corr_engine_prep_seconds_total {EPOCH_PREP_SECONDS_TOTAL:.3f}",
+        "# HELP corr_engine_prep_seconds_max Slowest single epoch preparation.",
+        "# TYPE corr_engine_prep_seconds_max gauge",
+        f"corr_engine_prep_seconds_max {EPOCH_PREP_SECONDS_MAX:.3f}",
+        "# HELP corr_engine_prep_nodes Nodes held by the last epoch's prepared state.",
+        "# TYPE corr_engine_prep_nodes gauge",
+        f"corr_engine_prep_nodes {EPOCH_PREP_NODES}",
+        "# HELP corr_engine_epoch_seconds_max Longest drain epoch (bounds how long retention is deferred).",
+        "# TYPE corr_engine_epoch_seconds_max gauge",
+        f"corr_engine_epoch_seconds_max {EPOCH_SECONDS_MAX:.3f}",
+        "# HELP corr_engine_epoch_cohorts_max Most cohorts drained in one epoch.",
+        "# TYPE corr_engine_epoch_cohorts_max gauge",
+        f"corr_engine_epoch_cohorts_max {EPOCH_COHORTS_MAX}",
         # 166A: carried-edge state is NEW memory that did not exist when the
         # 1.25 GiB envelope was qualified. Growth while the window is flat is
         # the failure shape.

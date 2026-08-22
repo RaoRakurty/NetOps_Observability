@@ -279,7 +279,13 @@ def test_hsrp_statechange_to_active_is_failover():
     assert s.attrs["interface"] == "Vlan10"
     assert s.attrs["state"] == "active"
     assert s.severity is Severity.HIGH        # takeover
-    assert "Vlan10" in s.entity_tokens and "grp1" in s.entity_tokens
+    # tracker 168 (INTENTIONAL DELTA): the interface and the FHRP group number
+    # are both DEVICE-LOCAL — "grp1" and "Vlan10" exist on nearly every router,
+    # so bare they welded the whole estate. Qualified, they still bind this
+    # event to THIS device's own interface; two routers in one real FHRP group
+    # must relate through topology, not through a shared group number.
+    assert "dist-sw1:Vlan10" in s.entity_tokens and "dist-sw1:grp1" in s.entity_tokens
+    assert "Vlan10" not in s.entity_tokens and "grp1" not in s.entity_tokens
 
 
 def test_vrrp_statechange_to_backup_is_warn():
@@ -307,7 +313,14 @@ def test_macflap_notif_ios():
     assert s.attrs["vlan"] == "10"
     assert s.attrs["port_a"] == "Gi1/0/1" and s.attrs["port_b"] == "Gi1/0/2"
     assert s.severity is Severity.HIGH
-    assert "0011.2233.4455" in s.entity_tokens and "vlan10" in s.entity_tokens
+    # tracker 168 (INTENTIONAL DELTA): the MAC stays BARE — it is genuinely
+    # global, and two switches seeing the same MAC flap really are related,
+    # which is what this signal is about. The VLAN id and the port names are
+    # device-local and are qualified.
+    assert "0011.2233.4455" in s.entity_tokens
+    assert "acc-sw2:vlan10" in s.entity_tokens
+    assert "vlan10" not in s.entity_tokens
+    assert "acc-sw2:Gi1/0/1" in s.entity_tokens and "Gi1/0/1" not in s.entity_tokens
 
 
 def test_nxos_l2fm_mac_move():
@@ -463,7 +476,11 @@ def test_generic_alarm_interface_scoped_when_named():
     assert s.entity_type is EntityType.INTERFACE
     assert s.entity_id == "leaf1:Ethernet5"
     assert s.severity is Severity.HIGH
-    assert "Ethernet5" in s.entity_tokens
+    # tracker 168 (INTENTIONAL DELTA): interface-scoped alarm — entity_id is
+    # already "leaf1:Ethernet5", so the bare local name is redundant AND unsafe.
+    assert s.entity_id == "leaf1:Ethernet5"
+    assert "Ethernet5" not in s.entity_tokens
+    assert "leaf1" in s.entity_tokens
 
 
 def test_generic_alarm_below_floor_is_no_signal():

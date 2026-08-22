@@ -53,7 +53,7 @@ ALLOWLIST: dict[tuple[str, int], str] = {
     # Re-pinned 2026-08-17: shifted by the BUS_PARTITIONS planner work
     # (constants + derive_bus_partitions inserted above it). Handler re-read,
     # unchanged, justification holds.
-    ("resource_planner.py", 304): "optional cgroup limit file; absent => host os.cpu_count/meminfo defaults",
+    ("resource_planner.py", 311): "optional cgroup limit file; absent => host os.cpu_count/meminfo defaults",
     ("regression_correlation_smoke.py", 70): "optional .env read; returns '' and the caller reports missing config",
     ("smoke-test.py", 291): "optional .env admin-credential read; falls back to prompting defaults",
     ("snmp_fidelity_harness.py", 170): "optional .env read; returns None, caller handles absence",
@@ -71,10 +71,31 @@ ALLOWLIST: dict[tuple[str, int], str] = {
     # RUF012 move of _MEM_UNITS to module scope + the ruff I001 import re-sort.
     # All four handlers re-read at the new lines and unchanged — the line-keyed
     # design forcing this re-read is working as intended).
-    ("scale-miniladder.py", 195): "optional .env read; returns '' with a documented callers-decide contract",
-    ("scale-miniladder.py", 655): "preflight ingress probe; failure appended to `problems`, preflight fails on any problem",
-    ("scale-miniladder.py", 662): "preflight API-login probe; failure appended to `problems`, preflight fails on any problem",
-    ("scale-miniladder.py", 882): "twin-mode burst artifact read; failure returns an explicit burst-phase FAIL (tracker 152 §8.3)",
+    #
+    # Re-pinned again 2026-08-22 (tracker 170): the correlation-completion gate
+    # inserted `corr_replicas` / `corr_completion_state` (~100 lines) above the
+    # preflight probes and the completion phase (~110 lines) above the twin
+    # read, shifting all four. The `resource_planner.py` cgroup entry had also
+    # drifted 304 -> 311 in an earlier wave and was red on the clean tree before
+    # this one. ALL FIVE handlers were re-read at their new lines and are
+    # behaviourally UNCHANGED:
+    #   scale-miniladder.py:197  `env_get` — still `except OSError: pass` with the
+    #                            documented "callers decide whether empty is fatal"
+    #                            contract; every caller checks the empty string.
+    #   scale-miniladder.py:894  ingress probe — still `problems.append(...)`, and
+    #                            preflight fails on any non-empty `problems`.
+    #   scale-miniladder.py:901  API-login probe — same escalation path.
+    #   scale-miniladder.py:1162 twin artifact read — still returns an explicit
+    #                            `self.phase("burst", "FAIL", ...)`.
+    #   resource_planner.py:311  optional cgroup file — absent is the normal v1/v2
+    #                            case; host defaults are used and reported.
+    # This is a RE-PIN of reviewed sites after line drift, which is the workflow
+    # this line-keyed allowlist exists to force. It is NOT a new exemption: no
+    # handler's behaviour was weakened and no new site was added.
+    ("scale-miniladder.py", 197): "optional .env read; returns '' with a documented callers-decide contract",
+    ("scale-miniladder.py", 894): "preflight ingress probe; failure appended to `problems`, preflight fails on any problem",
+    ("scale-miniladder.py", 901): "preflight API-login probe; failure appended to `problems`, preflight fails on any problem",
+    ("scale-miniladder.py", 1162): "twin-mode burst artifact read; failure returns an explicit burst-phase FAIL (tracker 152 §8.3)",
     # The four 2026-08-16 chown-swallow findings (enrichment seed, processors
     # seed, appid/cloud fixtures, vuln SUDO_UID dir) were RESOLVED the same
     # day: all now route through chown_tree (repair-or-refuse), and the vuln

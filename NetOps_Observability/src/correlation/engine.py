@@ -321,16 +321,36 @@ class Node:
         address). A cloud app/resource/service node therefore excludes `site`; it
         reaches its real edge devices through the dependency graph (routes/paths on
         its structural identity), never through 'same region'. Network nodes keep
-        `site` (a physical site is a legitimate locality subject)."""
+        `site` (a physical site is a legitimate locality subject).
+
+        TRACKER 168 — the same weld class, third instance: a node's OWN
+        device-local component name. An interface name is unique only within its
+        device, so a bare `GigabitEthernet0/5` token made every device in the
+        estate that owns one a rank-7 candidate of every other (measured at 1K:
+        48 index groups of 1,000 nodes, ~25.1M candidate pairs; reproduced as two
+        unrelated devices fusing into one RCA object at weight 0.452). Producers
+        no longer emit it — they qualify a device-local name as `device:name`, or
+        drop it where `entity_id` already carries it. This filter is the
+        STRUCTURAL backstop for that: on a device-scoped id (`device:component`)
+        the bare `component` can never be a grounding subject, whatever a
+        producer emits. The full id and the device part remain subjects, so
+        same-interface cross-modality correlation is untouched — that relation
+        runs through `device:component`, which IS globally unique."""
         observers = {s.observer.observer_id for s in self.signals if s.observer.observer_id}
         # Cloud-plane nodes: region/site is a coarse locality, not a topology subject.
         site_is_subject = self.entity_type not in (
             EntityType.APP, EntityType.CLOUD_RESOURCE, EntityType.SERVICE)
+        # tracker 168: this node's own device-local component name. Never a
+        # subject on its own — see the docstring. A path/segment id ('a->b') has
+        # no single owning device, so it has no local component either.
+        local = (self.entity_id.split(":", 1)[1]
+                 if ":" in self.entity_id and "->" not in self.entity_id else None)
         toks = {self.entity_id}
         for s in self.signals:
             # entity_tokens can carry the measuring vantage (a probe's (prober, host));
             # the vantage is not a topology subject, the destination is.
-            toks.update(t for t in s.entity_tokens if t not in observers)
+            toks.update(t for t in s.entity_tokens
+                        if t not in observers and t != local)
             if s.site and site_is_subject:
                 toks.add(s.site)
         if ":" in self.entity_id:
@@ -754,21 +774,105 @@ def _direction(a: Node, b: Node, cfg: EngineConfig,
     return 0.0, "none"
 
 
-def _candidate_pairs(
-    n: int,
-    toks: list[frozenset[str]],
-    refs: list[frozenset[str]],
-    seam_evs: list[frozenset[str]],
-    devs: list[str | None],
-    adjacency: TopologyAdjacency,
-    memb: list[dict] | None,
-    route_hits: list[bool] | None,
-    cohort: frozenset[int] | None = None,
+class _CandidateIndex:
+    """The linkable GROUPS of a retained node set, plus the reverse map from a
+    node to the groups it sits in (tracker 166 Phase 4).
+
+    `_candidate_pairs` used to build this on every transaction. It is a pure
+    function of the node set, the seams, the adjacency inventory and the path
+    index — none of which change inside a snapshot epoch — so it is built once
+    per epoch and every cohort emits from it.
+
+    The reverse map is what makes emission cohort-bounded rather than
+    window-bounded. Without it a cohort still has to sweep every bucket in the
+    window just to discover which ones it touches, which is O(retained nodes)
+    however small the cohort is.
+
+    `groups` are the sound superset's link sets in a FIXED order (token/identity
+    buckets, then seam groups, then observation buckets, then the routed set) so
+    emission is order-independent and replay-stable. `adj_by_node` carries the
+    L2/L3 adjacency rung, which is pair-shaped rather than group-shaped."""
+
+    __slots__ = ("adj_by_node", "adj_pairs", "groups", "node_groups")
+
+    def __init__(
+        self,
+        n: int,
+        toks: list[frozenset[str]],
+        refs: list[frozenset[str]],
+        seam_evs: list[frozenset[str]],
+        devs: list[str | None],
+        adjacency: TopologyAdjacency,
+        memb: list[dict] | None,
+        route_hits: list[bool] | None,
+    ) -> None:
+        # tokens ∪ identity refs (covers ranks 1, 7 and feeds the seam groups)
+        index: dict[str, list[int]] = {}
+        for i in range(n):
+            for t in toks[i] | refs[i]:
+                index.setdefault(t, []).append(i)
+        groups: list[tuple[int, ...]] = [
+            tuple(members) for members in index.values() if len(members) > 1]
+        # seam groups: all nodes matching one seam's endpoint values / seam_id
+        for ev in seam_evs:
+            group = sorted({m for v in ev for m in index.get(v, ())})
+            if len(group) > 1:
+                groups.append(tuple(group))
+        # path relations: shared observation membership
+        if memb is not None:
+            obs_index: dict[str, list[int]] = {}
+            for i, m in enumerate(memb):
+                for oid in m:
+                    obs_index.setdefault(oid, []).append(i)
+            for members in obs_index.values():
+                if len(members) > 1:
+                    groups.append(tuple(members))
+        # route-touching nodes are ONE group (the unrestricted form linked them
+        # all against each other, so they behave exactly like a bucket)
+        if route_hits is not None:
+            groups.append(tuple(i for i in range(n) if route_hits[i]))
+        self.groups: tuple[tuple[int, ...], ...] = tuple(groups)
+
+        node_groups: list[list[int]] = [[] for _ in range(n)]
+        for g, grp in enumerate(self.groups):
+            for i in grp:
+                node_groups[i].append(g)
+        self.node_groups: tuple[tuple[int, ...], ...] = tuple(
+            tuple(g) for g in node_groups)
+
+        # L2/L3 adjacency: nodes on the two ends of an inventoried link. Resolved
+        # to node-index pairs once; a cohort reaches them through adj_by_node so
+        # it never sweeps the whole link inventory.
+        dev_index: dict[str, list[int]] = {}
+        for i, d in enumerate(devs):
+            if d:
+                dev_index.setdefault(d, []).append(i)
+        adj: set[tuple[int, int]] = set()
+        for pair in adjacency.pairs:
+            ends = sorted(pair)
+            if len(ends) != 2:
+                continue
+            for i in dev_index.get(ends[0], ()):
+                for j in dev_index.get(ends[1], ()):
+                    if i != j:
+                        adj.add((i, j) if i < j else (j, i))
+        self.adj_pairs: frozenset[tuple[int, int]] = frozenset(adj)
+        by_node: dict[int, list[int]] = {}
+        for i, j in adj:
+            by_node.setdefault(i, []).append(j)
+            by_node.setdefault(j, []).append(i)
+        self.adj_by_node: dict[int, tuple[int, ...]] = {
+            k: tuple(v) for k, v in by_node.items()}
+
+
+def _emit_candidates(
+    idx: _CandidateIndex, cohort: frozenset[int] | None = None,
 ) -> set[tuple[int, int]]:
-    """The SOUND candidate superset for resolve_grounding: every pair NOT in this
-    set is guaranteed to ground to None (each grounding rung requires one of the
-    overlaps indexed here), so pruning changes operation count only — never the
-    admitted edges or the gap-hint total. Derivation, rung by rung:
+    """The SOUND candidate superset for resolve_grounding, emitted from a
+    prebuilt index: every pair NOT in this set is guaranteed to ground to None
+    (each grounding rung requires one of the overlaps indexed here), so pruning
+    changes operation count only — never the admitted edges or the gap-hint
+    total. Derivation, rung by rung:
 
       ranks 1–6 via PathIndex.relate  → shared observation membership, or both
                                         sides touching an evidence-bearing route ref
@@ -782,17 +886,19 @@ def _candidate_pairs(
       rank 3 L2/L3 adjacency          → device pair in the adjacency inventory
       rank 7 shared token             → tokens overlap
 
+    tracker 166: when a cohort is supplied, a group only needs the pairs that
+    TOUCH it. The unrestricted form is O(group²) over every group in the window,
+    so filtering its output afterwards left candidate GENERATION unbounded —
+    which is why bounding only the scoring phase still produced transactions
+    growing 12s -> 25s -> 54s. Pairing each cohort member against the group is
+    O(|group ∩ cohort| x |group|) instead, and the reverse map means only the
+    groups the cohort actually sits in are visited at all.
+
     Pure + deterministic: derived only from the same inputs resolve_grounding
     reads; the returned pair set is order-independent."""
     cand: set[tuple[int, int]] = set()
 
-    # tracker 166: when a cohort is supplied, a bucket only needs the pairs that
-    # TOUCH it. The unrestricted form is O(bucket^2) and runs over every index
-    # bucket in the window, so filtering its output afterwards left candidate
-    # GENERATION unbounded — which is why bounding only the scoring phase still
-    # produced transactions growing 12s -> 25s -> 54s. Pairing each cohort member
-    # against the bucket is O(|bucket ∩ cohort| x |bucket|) instead.
-    def _link(members: list[int]) -> None:
+    def _link(members: tuple[int, ...]) -> None:
         if cohort is None:
             for x in range(len(members)):
                 for y in range(x + 1, len(members)):
@@ -808,73 +914,133 @@ def _candidate_pairs(
                 if a != b:
                     cand.add((a, b) if a < b else (b, a))
 
-    # tokens ∪ identity refs (covers ranks 1, 7 and feeds the seam groups)
-    index: dict[str, list[int]] = {}
-    for i in range(n):
-        for t in toks[i] | refs[i]:
-            index.setdefault(t, []).append(i)
-    for members in index.values():
-        if len(members) > 1:
+    if cohort is None:
+        for members in idx.groups:
             _link(members)
-    # seam groups: all nodes matching one seam's endpoint values / seam_id
-    for ev in seam_evs:
-        group = sorted({m for v in ev for m in index.get(v, ())})
-        if len(group) > 1:
-            _link(group)
-    # L2/L3 adjacency: nodes on the two ends of an inventoried link
-    dev_index: dict[str, list[int]] = {}
-    for i, d in enumerate(devs):
-        if d:
-            dev_index.setdefault(d, []).append(i)
-    for pair in adjacency.pairs:
-        ends = sorted(pair)
-        if len(ends) != 2:
-            continue
-        for i in dev_index.get(ends[0], ()):
-            for j in dev_index.get(ends[1], ()):
-                if i != j and (cohort is None or i in cohort or j in cohort):
-                    cand.add((i, j) if i < j else (j, i))
-    # path relations: shared observation membership; route-touching nodes
-    if memb is not None:
-        obs_index: dict[str, list[int]] = {}
-        for i, m in enumerate(memb):
-            for oid in m:
-                obs_index.setdefault(oid, []).append(i)
-        for members in obs_index.values():
-            if len(members) > 1:
-                _link(members)
-    if route_hits is not None:
-        routed = [i for i in range(n) if route_hits[i]]
-        _link(routed)
+        cand |= idx.adj_pairs
+        return cand
+
+    # Only the groups the cohort actually sits in can contribute a pair that
+    # touches the cohort — that is what the reverse map is for. Sorted so the
+    # visit order is deterministic (the result is a set either way; this keeps
+    # the traversal reproducible for anyone reading a profile).
+    touched = sorted({g for i in cohort for g in idx.node_groups[i]})
+    for g in touched:
+        _link(idx.groups[g])
+    for i in cohort:
+        for j in idx.adj_by_node.get(i, ()):
+            cand.add((i, j) if i < j else (j, i))
     return cand
 
 
-def build_edges(
+def _candidate_pairs(
+    n: int,
+    toks: list[frozenset[str]],
+    refs: list[frozenset[str]],
+    seam_evs: list[frozenset[str]],
+    devs: list[str | None],
+    adjacency: TopologyAdjacency,
+    memb: list[dict] | None,
+    route_hits: list[bool] | None,
+    cohort: frozenset[int] | None = None,
+) -> set[tuple[int, int]]:
+    """Build-then-emit in one call. Retained as the direct entry point (and the
+    reference the complexity tests pin); the engine itself goes through
+    _CandidateIndex so the build is paid once per snapshot epoch."""
+    return _emit_candidates(
+        _CandidateIndex(n, toks, refs, seam_evs, devs, adjacency, memb, route_hits),
+        cohort)
+
+
+@dataclass(frozen=True)
+class WindowPrep:
+    """Everything about one retained-node snapshot that is a PURE FUNCTION of
+    that snapshot (tracker 166 Phase 2/5).
+
+    THE DEFECT THIS EXISTS FOR. Bounding the cohort bounded pair emission but
+    not the per-transaction FIXED cost: build_edges prepared toks/refs/seam
+    memberships/path memberships for ALL n retained nodes and _candidate_pairs
+    built its inverted index over all of them, on EVERY transaction. Pre-166
+    that was paid once per cycle; splitting a cycle into ~8 cohorts paid it ~8x.
+    Measured offline at 50,000 retained nodes: 5.99 s per transaction, ~48 s
+    across 8 cohorts.
+
+    LIFECYCLE — one immutable snapshot, one prep, many bounded cohorts, discard:
+    the caller builds this once at the start of a drain epoch and passes it to
+    every cohort in that epoch. It is NOT a process-lifetime cache and must
+    never become one; it holds a reference to the whole node set, so an epoch
+    that outlives its snapshot would pin released evidence in memory.
+
+    INVALIDATION is by OBJECT IDENTITY, deliberately. `matches` compares the
+    five inputs the preparation is derived from with `is`, so a prep can never
+    be silently reused for a different snapshot: two distinct tuples are never
+    the same object. A false negative (equal-but-distinct inputs) rebuilds,
+    which is correct and merely slower — the conservative direction."""
+
+    nodes: tuple[Node, ...]
+    seams: tuple[SeamView, ...]
+    cfg: EngineConfig
+    adjacency: TopologyAdjacency
+    paths: PathIndex | None
+    toks: list[frozenset[str]]
+    refs: list[frozenset[str]]
+    declared: list
+    windows: list
+    devs: list[str | None]
+    seams_sorted: tuple[SeamView, ...]
+    seam_evs: list[frozenset[str]]
+    seam_ident: list[frozenset[int]]
+    seam_token: list[frozenset[int]]
+    memb: list[dict] | None
+    route_hits: list[bool] | None
+    index: _CandidateIndex
+    key_index: dict[str, int]
+    # run_window-level snapshot. Empty/None when the prep was built by
+    # prepare_window() for build_edges alone (the internal fallback path).
+    window: tuple[Signal, ...] | list[Signal] | None = None
+    sigs: tuple[Signal, ...] = ()
+    tenant: str = ""
+    identity_sigs: tuple[Signal, ...] = ()
+    path_view: PathGraphView | None = None
+    scoped_view: PathGraphView | None = None
+    discovery: tuple = ()
+    disc: tuple = ()
+
+    def matches(
+        self, nodes: tuple[Node, ...], seams: tuple[SeamView, ...],
+        cfg: EngineConfig, adjacency: TopologyAdjacency, paths: PathIndex | None,
+    ) -> bool:
+        """Identity guard — see the class docstring. O(1) and incapable of a
+        false positive."""
+        return (self.nodes is nodes and self.seams is seams and self.cfg is cfg
+                and self.adjacency is adjacency and self.paths is paths)
+
+    def matches_window(
+        self, window, seams: tuple[SeamView, ...], cfg: EngineConfig,
+        adjacency: TopologyAdjacency, paths, discovery,
+    ) -> bool:
+        """The run_window-level guard. Same identity discipline as `matches`,
+        over the inputs the whole prologue (sort, build_nodes, PathIndex,
+        discovery scoping) is derived from."""
+        return (self.window is window and self.seams is seams and self.cfg is cfg
+                and self.adjacency is adjacency and self.path_view is paths
+                and self.discovery is discovery)
+
+    def cohort_indices(self, cohort_keys: frozenset[str]) -> frozenset[int]:
+        """Node keys → node indices in O(cohort), not O(retained nodes)."""
+        ki = self.key_index
+        return frozenset(ki[k] for k in cohort_keys if k in ki)
+
+
+def prepare_window(
     nodes: tuple[Node, ...], seams: tuple[SeamView, ...], cfg: EngineConfig,
     adjacency: TopologyAdjacency = NO_ADJACENCY,
-    topology_stale: bool = False,
-    directed: Oracle | None = None,
     paths: PathIndex | None = None,
-    *,
-    since_ts: float | None = None,
-    work_sink: dict | None = None,
-    cohort: frozenset[int] | None = None,
-) -> tuple[tuple[Edge, ...], int]:
-    """Returns (admitted edges, topology_gap_hints). Pairs are evaluated in
-    deterministic node order; the earlier-onset node is always from_node.
-
-    PERFORMANCE SHAPE (the #151-adjacent perf fix): the naive form recomputed
-    tokens()/identity_refs()/path memberships and re-sorted the seams for every
-    PAIR (~100µs/pair ⇒ ~48s synchronous at 1k nodes). Everything node-local is
-    now precomputed ONCE per node, the seams are sorted once, and only pairs the
-    inverted token/identity/seam/adjacency/observation index says are plausibly
-    relatable are scored at all (_candidate_pairs is a sound superset, so the
-    admitted edges and the gap-hint count are byte-identical to the naive loop —
-    pinned by test_engine_complexity.py against a brute-force reference).
-    Purity is untouched: no IO, no clock, no dict-order dependence."""
+) -> WindowPrep:
+    """Snapshot-wide preparation. Pure: no IO, no clock, no randomness, no
+    dict-order dependence. Safe to call once per epoch and reuse across every
+    bounded cohort in it."""
     n = len(nodes)
-    if n < 2:
-        return (), 0
     # ── per-node precomputation (node-local, pure) ────────────────────────────
     toks = [nd.tokens() for nd in nodes]
     refs = [nd.identity_refs() for nd in nodes]
@@ -895,6 +1061,113 @@ def build_edges(
                 for i in range(n)]
         rrefs = paths.route_refs()
         route_hits = [bool(refs[i] & rrefs) for i in range(n)]
+    return WindowPrep(
+        nodes=nodes, seams=seams, cfg=cfg, adjacency=adjacency, paths=paths,
+        toks=toks, refs=refs, declared=declared, windows=windows, devs=devs,
+        seams_sorted=seams_sorted, seam_evs=seam_evs, seam_ident=seam_ident,
+        seam_token=seam_token, memb=memb, route_hits=route_hits,
+        index=_CandidateIndex(n, toks, refs, seam_evs, devs, adjacency, memb,
+                              route_hits),
+        key_index={nd.key: i for i, nd in enumerate(nodes)},
+    )
+
+
+def prepare_run_window(
+    window: tuple[Signal, ...] | list[Signal],
+    seams: tuple[SeamView, ...],
+    cfg: EngineConfig | None = None,
+    adjacency: TopologyAdjacency = NO_ADJACENCY,
+    paths: PathGraphView | None = None,
+    discovery: tuple = (),
+) -> WindowPrep | None:
+    """Build the snapshot epoch for ONE tenant's retained window.
+
+    This is run_window's entire prologue, lifted so a drain epoch pays it once
+    and every bounded cohort in that epoch reuses it. Returns None when the
+    window yields nothing to correlate (empty, or no nodes) — exactly the two
+    cases run_window returns [] for.
+
+    Raises ValueError on a mixed-tenant window, at the same point and with the
+    same message run_window always did: episodes never correlate across tenants
+    (§7) and the caller partitions. Raising HERE means a caller that builds
+    epochs up front learns about it before any cohort runs.
+
+    Pure: no IO, no clock, no randomness. The direction oracle is deliberately
+    NOT part of it — RecordingOracle is stateful and belongs to a transaction."""
+    cfg = cfg or EngineConfig()
+    sigs = tuple(sorted(window, key=lambda s: (s.ts, str(s.signal_id))))
+    if not sigs:
+        return None
+    tenants = {s.tenant_id for s in sigs}
+    if len(tenants) != 1:
+        # Episodes never correlate across tenants (§7) — the caller partitions.
+        raise ValueError(f"run_window requires a single-tenant window, got {sorted(tenants)}")
+    tenant = sigs[0].tenant_id
+    nodes = build_nodes(sigs)
+    if not nodes:
+        return None
+    # #81 P5: the app-identity ENRICHMENT pool — excluded from build_nodes (so it can
+    # never seed/extend an object), matched per-object below into an app-impact
+    # projection. An identity-only window has no nodes → returns above → no object.
+    identity_sigs = tuple(s for s in sigs if s.source is Source.APP_IDENTITY)
+    # §6 rule 1 / §9 — the ONLY door to the path objects, tenant-scoped at construction.
+    view = (paths or PathGraphView()).for_tenant(tenant)
+    path_index = PathIndex(view, tenant) if not view.is_empty() else None
+    # Path-causality P2: keep ONLY this tenant's discovery paths (§3a default-closed —
+    # a path with a mismatched/empty tenant can never seed an attribution). object_
+    # attribution re-scopes again; this is the structural first gate.
+    disc = tuple(p for p in discovery if p.tenant_id and p.tenant_id == tenant)
+    prep = prepare_window(nodes, seams, cfg, adjacency, path_index)
+    return replace(
+        prep, window=window, sigs=sigs, tenant=tenant,
+        identity_sigs=identity_sigs, path_view=paths, scoped_view=view,
+        discovery=discovery, disc=disc)
+
+
+def build_edges(
+    nodes: tuple[Node, ...], seams: tuple[SeamView, ...], cfg: EngineConfig,
+    adjacency: TopologyAdjacency = NO_ADJACENCY,
+    topology_stale: bool = False,
+    directed: Oracle | None = None,
+    paths: PathIndex | None = None,
+    *,
+    since_ts: float | None = None,
+    work_sink: dict | None = None,
+    cohort: frozenset[int] | None = None,
+    prep: WindowPrep | None = None,
+) -> tuple[tuple[Edge, ...], int]:
+    """Returns (admitted edges, topology_gap_hints). Pairs are evaluated in
+    deterministic node order; the earlier-onset node is always from_node.
+
+    PERFORMANCE SHAPE (the #151-adjacent perf fix): the naive form recomputed
+    tokens()/identity_refs()/path memberships and re-sorted the seams for every
+    PAIR (~100µs/pair ⇒ ~48s synchronous at 1k nodes). Everything node-local is
+    now precomputed ONCE per node, the seams are sorted once, and only pairs the
+    inverted token/identity/seam/adjacency/observation index says are plausibly
+    relatable are scored at all (_emit_candidates yields a sound superset, so the
+    admitted edges and the gap-hint count are byte-identical to the naive loop —
+    pinned by test_engine_complexity.py against a brute-force reference).
+    Purity is untouched: no IO, no clock, no dict-order dependence.
+
+    tracker 166 Phase 5 — `prep` is a WindowPrep for THIS node set, built once
+    per snapshot epoch and reused by every cohort in it. There is exactly ONE
+    implementation of the preparation (`prepare_window`): supplying a prep skips
+    the rebuild, it does not take a different code path, so a prepped and an
+    unprepped transaction cannot drift apart. A prep that does not match these
+    inputs is rebuilt rather than trusted — see WindowPrep.matches."""
+    n = len(nodes)
+    if n < 2:
+        return (), 0
+    if prep is None or not prep.matches(nodes, seams, cfg, adjacency, paths):
+        prep = prepare_window(nodes, seams, cfg, adjacency, paths)
+    toks = prep.toks
+    refs = prep.refs
+    devs = prep.devs
+    seams_sorted = prep.seams_sorted
+    seam_ident = prep.seam_ident
+    seam_token = prep.seam_token
+    memb = prep.memb
+    windows = prep.windows
 
     def _grounded(ai: int, bi: int) -> Grounding | None:
         """resolve_grounding over the precomputed per-node views — same rungs,
@@ -939,8 +1212,7 @@ def build_edges(
     edges: list[Edge] = []
     total_pairs = n * (n - 1) // 2
     grounded_pairs = 0
-    candidates = sorted(_candidate_pairs(n, toks, refs, seam_evs, devs, adjacency,
-                                         memb, route_hits, cohort))
+    candidates = sorted(_emit_candidates(prep.index, cohort))
     # tracker 166 — BOUNDED COHORT EVALUATION.
     #
     # `cohort` is the set of node indices that are NEW in this engine
@@ -1730,17 +2002,26 @@ def _fold_seam_bridged_components(
     if not scoped:
         return comps
     evs = [s.endpoint_values() | {s.seam_id} for s in scoped]
+    # tracker 166: the authoritative seam refs, bucketed by from_node in ONE
+    # pass. This used to be a set-comprehension over the WHOLE edge set inside
+    # the per-component loop — O(components x edges), and the carried-edge cache
+    # plateaus around 384k entries live, so it was 4.5 s of a profiled 125 s
+    # transaction and it ran once per cohort. Same refs, one sweep.
+    seam_refs_by_from: dict[str, set[str]] = {}
+    for e in edges:
+        if e.grounding.kind == "seam" and e.grounding.authoritative:
+            seam_refs_by_from.setdefault(e.from_node, set()).add(e.grounding.ref)
+    seam_ordinal = {s.seam_id: i for i, s in enumerate(scoped)}
     memb: list[frozenset[int]] = []
     grounded: list[frozenset[int]] = []
     for comp in comps:
-        keys = {n.key for n in comp}
         refs = frozenset(r for n in comp for r in n.identity_refs())
         memb.append(frozenset(i for i, ev in enumerate(evs) if refs & ev))
-        seam_ids = {e.grounding.ref for e in edges
-                    if e.from_node in keys and e.grounding.kind == "seam"
-                    and e.grounding.authoritative}
-        grounded.append(frozenset(i for i, s in enumerate(scoped)
-                                  if s.seam_id in seam_ids))
+        seam_ids: set[str] = set()
+        for n in comp:
+            seam_ids.update(seam_refs_by_from.get(n.key, ()))
+        grounded.append(frozenset(seam_ordinal[r] for r in seam_ids
+                                  if r in seam_ordinal))
 
     parent = list(range(len(comps)))
 
@@ -1750,12 +2031,26 @@ def _fold_seam_bridged_components(
             i = parent[i]
         return i
 
-    for i in range(len(comps)):
-        for j in range(i + 1, len(comps)):
-            if (grounded[i] | grounded[j]) & memb[i] & memb[j]:
-                ri, rj = find(i), find(j)
-                if ri != rj:
-                    parent[max(ri, rj)] = min(ri, rj)
+    # tracker 166: fold BY SEAM, not by component pair. The pairwise form was
+    # O(components^2 x seams). Two components fold via seam k exactly when both
+    # are members of k and at least one of them GROUNDS k — so for each seam,
+    # if any member also grounds it, every member of that seam joins one set.
+    # Identical result: union-find always keeps the MINIMUM index as the root
+    # (`parent[max] = min`), so the outcome does not depend on union order.
+    members_of: list[list[int]] = [[] for _ in scoped]
+    for i, ms in enumerate(memb):
+        for k in ms:
+            members_of[k].append(i)
+    for k, member_comps in enumerate(members_of):
+        if len(member_comps) < 2:
+            continue
+        if not any(k in grounded[i] for i in member_comps):
+            continue
+        base = member_comps[0]
+        for other in member_comps[1:]:
+            ri, rj = find(base), find(other)
+            if ri != rj:
+                parent[max(ri, rj)] = min(ri, rj)
 
     groups: dict[int, list[Node]] = {}
     for i, comp in enumerate(comps):
@@ -1781,6 +2076,7 @@ def run_window(
     work_sink: dict | None = None,
     cohort_keys: frozenset[str] | None = None,
     carried_edges: tuple[Edge, ...] = (),
+    prep: WindowPrep | None = None,
 ) -> list[ObjectSnapshot]:
     """THE pure engine function. One evaluation of one tenant's window.
 
@@ -1804,41 +2100,40 @@ def run_window(
     discovery) and the golden fixtures are untouched. Empty default = no enrichment.
     """
     cfg = cfg or EngineConfig()
-    sigs = tuple(sorted(window, key=lambda s: (s.ts, str(s.signal_id))))
-    if not sigs:
+    # tracker 166 Phase 2/5 — the whole prologue below (sort, tenant check,
+    # build_nodes, identity pool, PathIndex, discovery scoping, per-node
+    # preparation, candidate index) is a pure function of the retained snapshot
+    # and was being paid ONCE PER COHORT. `prep` is that work, done once per
+    # drain epoch by the caller. One implementation either way: an unmatched or
+    # absent prep is rebuilt here, never worked around.
+    if prep is None or not prep.matches_window(window, seams, cfg, adjacency,
+                                               paths, discovery):
+        prep = prepare_run_window(window, seams, cfg, adjacency, paths, discovery)
+    if prep is None:
         return []
-    tenants = {s.tenant_id for s in sigs}
-    if len(tenants) != 1:
-        # Episodes never correlate across tenants (§7) — the caller partitions.
-        raise ValueError(f"run_window requires a single-tenant window, got {sorted(tenants)}")
-    tenant = sigs[0].tenant_id
-    nodes = build_nodes(sigs)
-    if not nodes:
-        return []
-    # #81 P5: the app-identity ENRICHMENT pool — excluded from build_nodes (so it can
-    # never seed/extend an object), matched per-object below into an app-impact
-    # projection. An identity-only window has no nodes → returns above → no object.
-    identity_sigs = tuple(s for s in sigs if s.source is Source.APP_IDENTITY)
+    tenant = prep.tenant
+    nodes = prep.nodes
+    identity_sigs = prep.identity_sigs
+    path_index = prep.paths
+    # A prep built by prepare_run_window always carries the tenant-scoped view;
+    # the bare prepare_window form (build_edges' internal fallback) does not,
+    # and an absent path graph is an EMPTY one, never a missing snapshot field.
+    view = prep.scoped_view if prep.scoped_view is not None else PathGraphView()
+    disc = prep.disc
     # Wrap the direction oracle so we capture exactly the orientations the edges were
     # built on — embedded per snapshot for deterministic replay (C7), like seams.
+    # NOT part of the prep: RecordingOracle is stateful and per-transaction.
     rec = RecordingOracle(directed) if directed is not None else None
-    # §6 rule 1 / §9 — the ONLY door to the path objects, tenant-scoped at construction.
-    view = (paths or PathGraphView()).for_tenant(tenant)
-    path_index = PathIndex(view, tenant) if not view.is_empty() else None
-    # Path-causality P2: keep ONLY this tenant's discovery paths (§3a default-closed —
-    # a path with a mismatched/empty tenant can never seed an attribution). object_
-    # attribution re-scopes again; this is the structural first gate.
-    disc = tuple(p for p in discovery if p.tenant_id and p.tenant_id == tenant)
     # tracker 166: `cohort_keys` names the nodes that are new in this
     # transaction; `carried_edges` are the edges admitted for pairs that were
     # already evaluated in an earlier one. Components are built from the UNION,
     # so object formation sees the same edge set a full-window run would — the
     # bound is on what gets SCORED, never on what the engine gets to reason over.
-    cohort_idx = (frozenset(i for i, nd in enumerate(nodes) if nd.key in cohort_keys)
+    cohort_idx = (prep.cohort_indices(cohort_keys)
                   if cohort_keys is not None else None)
     edges, gap_hints = build_edges(nodes, seams, cfg, adjacency, topology_stale, rec,
                                    path_index, since_ts=since_ts, work_sink=work_sink,
-                                   cohort=cohort_idx)
+                                   cohort=cohort_idx, prep=prep)
     if carried_edges:
         live = {n.key for n in nodes}
         fresh = {(e.from_node, e.to_node) for e in edges}
@@ -1857,9 +2152,20 @@ def run_window(
     # a transient split re-derives the same identity it had before splitting).
     comps = _fold_seam_bridged_components(_components(nodes, edges), edges,
                                           seams, tenant)
+    # tracker 166: bucket the edges by from_node ONCE. This filter used to run
+    # inside the loop below — O(components x edges) — which the profiler caught
+    # as 2,077,943 generator steps (4.1 s) in a single transaction, repeated for
+    # every cohort. `edges` is sorted by (from_node, to_node) at every call site
+    # (build_edges sorts, and the carried-edge union re-sorts by the same key),
+    # so concatenating the buckets in sorted-key order reproduces the filtered
+    # order exactly.
+    edges_by_from: dict[str, list[Edge]] = {}
+    for e in edges:
+        edges_by_from.setdefault(e.from_node, []).append(e)
     for comp in comps:
         comp_keys = {n.key for n in comp}
-        comp_edges = tuple(e for e in edges if e.from_node in comp_keys)
+        comp_edges = tuple(e for k in sorted(comp_keys)
+                           for e in edges_by_from.get(k, ()))
         if not comp_edges and _SEV_RANK[comp[0].peak_severity] < open_floor:
             continue  # singleton below the open floor: episode, not an object
         comp_sigs = tuple(s for n in comp for s in n.signals)

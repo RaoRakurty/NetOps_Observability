@@ -68,7 +68,7 @@ def test_an_edge_is_dropped_when_its_endpoint_leaves_the_window():
     assert main.edge_cache_state()["edges"] == 1
 
     # window now holds only `live`
-    carried = main._carried_edges_for("acme", [live])
+    carried = main._carried_edges_for("acme", main.live_node_keys([live]))
     assert carried == (), "an edge to a released node was carried forward"
     assert main.edge_cache_state()["edges"] == 0
     assert main.EDGE_CACHE_DROPPED == 1
@@ -78,7 +78,7 @@ def test_an_edge_survives_while_BOTH_endpoints_remain():
     a = _sig_for(1, "link_state_change", 0)
     b = _sig_for(1, "if_util_high", 5)
     main._remember_edges("acme", [_Snap([_Edge(_key(a), _key(b))])])
-    carried = main._carried_edges_for("acme", [a, b])
+    carried = main._carried_edges_for("acme", main.live_node_keys([a, b]))
     assert len(carried) == 1
     assert main.EDGE_CACHE_DROPPED == 0
 
@@ -91,7 +91,7 @@ def test_the_cache_converges_to_empty_after_a_full_window_turnover():
     main._remember_edges("acme", [_Snap(edges)])
     assert main.edge_cache_state()["edges"] == 19
 
-    main._carried_edges_for("acme", [])        # window fully released
+    main._carried_edges_for("acme", main.live_node_keys([]))        # window fully released
     assert main.edge_cache_state()["edges"] == 0, "cache did not converge"
     assert main.edge_cache_state()["tenants"] == 0, "empty tenant entry lingers"
 
@@ -107,7 +107,7 @@ def test_the_cache_plateaus_when_the_node_SET_plateaus():
         edges = [_Edge(_key(nodes[i]), _key(nodes[j]))
                  for i in range(10) for j in range(i + 1, 10)]
         main._remember_edges("acme", [_Snap(edges)])
-        main._carried_edges_for("acme", nodes)
+        main._carried_edges_for("acme", main.live_node_keys(nodes))
         sizes.append(main.edge_cache_state()["edges"])
     assert sizes[0] == sizes[-1] == 45, f"cache grew past its node set: {sizes}"
 
@@ -116,8 +116,8 @@ def test_a_tenants_cache_cannot_leak_into_another():
     a = _sig_for(1, "link_state_change", 0, tenant="t1")
     b = _sig_for(1, "if_util_high", 5, tenant="t1")
     main._remember_edges("t1", [_Snap([_Edge(_key(a), _key(b))])])
-    assert main._carried_edges_for("t2", [a, b]) == ()
-    assert len(main._carried_edges_for("t1", [a, b])) == 1
+    assert main._carried_edges_for("t2", main.live_node_keys([a, b])) == ()
+    assert len(main._carried_edges_for("t1", main.live_node_keys([a, b]))) == 1
 
 
 # ── 166C: the processed frontier is bounded by retained state ────────────────

@@ -3,190 +3,174 @@
 **Read this first when picking the work back up.** One page of orientation, then
 the paste-ready prompt at the bottom.
 
-Last updated: 2026-08-21 · commit `de33b6e2` · branch `feat/observability-platform`
+Last updated: 2026-08-22 · branch `feat/observability-platform`
 
 ---
 
 ## The 30-second version
 
-Correctness work is largely done and frozen. **Tracker 165 (RCA retention
-semantics) is PASS** and the resource planner carries the qualified 1.25 GiB
-correlation allocation. **Tracker 166 (bounded correlation transactions) FAILED
-its live qualification** on a throughput regression whose cause is already
-diagnosed to one function. Fixing that is the immediate task; nothing downstream
-of it should start until it passes.
+Two correctness defects were found and fixed and are **live-qualified**: tracker
+**168** (a device-local interface name acting as a global correlation identity,
+which welded the entire estate into one RCA object) and tracker **170** (the
+qualification harness reporting PASS while the engine had evaluated 3 % of the
+workload). The harness now tells the truth, and the truth is that **tracker 166
+still FAILs**: the engine cannot evaluate the 1K workload inside the
+qualification budget.
+
+The bottleneck has moved **four times**, each time to a per-object cost that was
+invisible when 168's weld produced a single object. The current one is measured
+and specific: **`_archive_slice` writes a ~8,500-row, window-sized slice per RCA
+object — 98.6 % of all correlation persistence time, 0.47 objects/sec.**
 
 ## Where the bodies are buried
 
-| Thing | State | Notes |
+| Tracker | State | Notes |
 |---|---|---|
-| 165 retention | **PASS — frozen** | 516.527 s horizon is a correctness contract, not a tunable |
-| resource planner | **PASS** | correlation floor 1280 MiB, three mirrors pinned together |
-| 166 scheduler | **FAIL** | state gates passed, throughput regressed — see below |
-| 167 throughput | defined, not started | blocked behind 166 |
-| 162 continuation | PARTIAL | do not touch `_seam_bridged` |
-| 163 OPEN_OBJECTS | deferred | measured 7–8, no action justified |
-| 164 executor | open, de-prioritised | ruled out as bottleneck on complete evidence |
-| 155 ownership | not run | after the soak |
-| 72h soak | **BLOCKED** | see the blocker list in the prompt |
+| 165 retention | **PASS — frozen** | 516.527 s is a correctness contract, not a tunable |
+| 168 identity scope | **PASS — live-qualified** | 2,586 objects audited, 0 multi-device welds. Do not weaken either defence layer |
+| 170 completion gate | **PASS — validated live twice** | it failed both post-168 runs correctly |
+| 167 template index | **PASS offline**, live-deployed | live selectivity **NOT** validated — the harness is single-kind |
+| **166 scheduler** | **FAIL** | *cannot complete one cohort in budget*; blocked on archive persistence |
+| 171 maintenance | OPEN, non-blocking | worst prune gap 1,363 s vs ~180 s intended; catch-up always succeeded |
+| 169 CI | **OPEN — merge blocker** | see below; re-pinned 2026-08-22, currently green |
+| 156 archive slice | **now the blocker** | its own row predicted this: "sized by the whole WINDOW rather than by the object" |
+| 72h soak | **BLOCKED** | |
 
-## Why 166 failed, in one paragraph
+## The one thing to understand before touching anything
 
-Bounding the cohort bounded pair *emission* but not the per-transaction *fixed
-cost*. `build_edges` prepares `toks/refs/seam_evs/devs/memb` for **all** n nodes
-and `_candidate_pairs` builds its inverted index over all of them — both
-O(retained nodes), both on every transaction. Pre-166 that was paid once per
-cycle; splitting a cycle into ~8 cohorts pays it ~8×. Live result: 6 cohorts in
-13 minutes at 182 eps, pending growing to 37,292, oldest-pending at **82.8 % of
-the retention horizon**. The same workload drained in 25 s before the change.
+Every bottleneck so far has been the same defect in a different place: **work
+performed per RCA object whose size is set by something global — the catalog,
+the window — rather than by the object.**
 
-**Fix**: hoist the per-node preparation and the candidate index out of the
-per-transaction path — build once per cycle, reuse across that cycle's cohorts.
-The index is a pure function of the node set, so every proven equivalence
-survives. Do **not** enlarge the cohort back toward unbounded.
+1. `build_edges` candidate explosion → fixed by **168**
+2. 100 templates scored per object → fixed by **167**
+3. `Catalog.version_hash` re-serialising the catalog per object (48.6 % of a
+   cycle) → fixed 2026-08-22
+4. **`_archive_slice` writing a window-sized slice per object → CURRENT**
 
-## What went right and must not be undone
+Pre-168 there was one object, so all four were harmless. 168 corrected the
+identity model, the real shape is ~1,000 small objects, and each of these became
+O(objects × global) in turn.
 
-The scheduler design itself held. The carried-edge cache — the biggest open risk
-going in — **plateaued at ~384k entries** and stayed flat while the window grew
-25k→53k. The processed frontier stayed bounded. Memory sat at 56–58 % of the
-1.25 GiB envelope with zero swap and zero cap hits. Those are the gates that
-would have been expensive to discover during a 72-hour soak.
+**Do not point-fix #4 and re-run.** An architectural review was recommended and
+not yet done — see the next section. Three waves have been spent discovering the
+next bottleneck by running an hour-long qualification.
 
-## The question that is blocking three decisions
+## Recommended next action: a narrow architectural review (3 questions)
 
-**What syslog/telemetry rate should a 1,000-device GA deployment be qualified
-at?** The lab p90 says 182/s; `scripts/resource_planner.py`'s own `medium`
-profile says 5,000/s for the same device count. That 27× spread decides whether
-167 is on the critical path, what rate the soak runs at, and whether the memory
-sizing is right. It needs an answer from the owner, not another measurement.
+1. **State and enforce the invariant** — "per-object work must be sized by the
+   object, not the window or the catalog" — then audit every per-object path
+   (object construction, content hashing, continuation, merge detection,
+   attribution, archive slice) and table its true sizing. This says whether a
+   fifth bottleneck is already waiting.
+2. **Bounded cohorts × object formation.** Nodes not yet scored have no edges and
+   can form singleton objects that are persisted, then merged later. Live it
+   looks contained (~800 objects vs 1,000 devices, the severity open-floor
+   filters most) but 166 and 156 were designed independently and their
+   interaction has never been reviewed.
+3. **Persistence model vs the new object shape.** ~8 ClickHouse inserts per
+   object, serialised, on the event loop, at 0.47 objects/sec. Reasonable for a
+   handful of large objects; never examined for a thousand small ones. Batching
+   / offload / one archive write per cohort are all plausible — choosing is an
+   architecture call, not an optimisation.
 
-## Small lab debt worth clearing before the soak
+Then fix, then re-run. Not before.
 
-* The `memflat` gate reads post-ingress memory growth as a leak, but under
-  stream-time retention the window legitimately keeps filling while backlog
-  drains — it produces false failures.
-* Harness cleanup fails intermittently with `TimeoutError`, leaving device
-  residue that aborts the *next* run's preflight. It has been cleared by hand
-  each time; nobody will be doing that at 3 a.m. on soak night two.
+## Measured numbers you will want
+
+Latest run `082201589waa` (2026-08-22, 1000 devices / 12 min / 182 eps):
+
+* Kafka transport drain **24 s** · devices **1000/1000** · injected **131,041**
+* **cohorts advanced 2**, pending **129,220 and completely flat for all 2,160 s**
+* `corr_signals_archive`: 1,130 inserts, p50 **152 ms**, **222.4 s of 232.4 s**
+  total correlation insert time (**98.6 %**); every other corr table ~2.5 s
+* object persistence **0.47/sec**; slice sizes observed **8,461** and **8,904** rows
+* `epoch_seconds_max` **221 / 230 s** (was 3,956 s pre-167)
+* RSS **338 / 328 MiB of 1280** · 0 CommitFailed / UnknownMember / restarts / rebalances
+* offline `run_window` **495.86 → 186.63 s (2.66×)** from the cache fixes — and
+  the run still got *worse* on the gate, because the bottleneck had moved
+
+Secondary defect, real but not dominant (1 abort/replica): a ClickHouse
+`ReadTimeout` raises `CHInsertRejected` out of `_persist_snapshot` past
+`_mark_processed`, so the whole cohort is discarded and retried.
+`P(cohort commits) = (1 − p)^objects`; CH-side insert latency reached 14,395 ms.
+
+## Two things that are still unratified
+
+* **The GA workload contract.** 182 eps at ~100 % promotion is a synthetic
+  figure. The planner says 5,000 raw syslog EPS for 1,000 devices; the harness's
+  own help text implies ~200. All current points are `CHARACTERIZATION ONLY`.
+  See `docs/scale/GA_WORKLOAD_CONTRACT_1K.md`. **166's remaining PASS criteria
+  are throughput criteria, so the target being unratified is a real blocker.**
+* **166 mechanism vs 166 capacity.** Everything 166 built is proven live
+  (preparation 3 per 17 epochs, cohorts bounded, frontier and edges bounded,
+  memory flat). It stays FAIL only on throughput, which is 167's territory. The
+  owner may want to split the row; it has been offered and not decided.
+
+## Tracker 169 — read this before assuming CI is clean
+
+`ingest-contract-ci` runs all of `tests/`. `test_error_swallow_guard.py` is
+**line-keyed by design**, so inserting code above a reviewed handler makes it go
+red until the handler is re-read and re-pinned. That happened on 2026-08-22
+(tracker 170 inserted ~210 lines) and all five sites were re-read, confirmed
+behaviourally unchanged, and re-pinned with a written justification. **That is
+the intended workflow, not an exemption.** Never allowlist a NEW site to get
+green, and never weaken the guard.
+
+## Lab state
+
+Stack is up on `compose.mem125.yml` (1280 MiB/replica, 2 replicas, BUS_PARTITIONS
+4). Correlation image carries 166+167+168 plus the cache fixes. Last run's
+cleanup deleted 1000 devices and purged CH+OS. A standing **~2 EPS** external
+UDP/514 source is refused as `identity_unattributable`; it cannot contaminate
+run-scoped accounting (DLQ is counted by runid grep and refusals withhold the
+hostname).
 
 ---
 
 ## Paste-ready resume prompt
 
 ```
-Continue CORRELIX GA qualification from the current clean branch state.
+Continue CORRELIX GA qualification from the current branch.
 
-# WHERE WE ARE
+DO NOT start the mini-ladder or the 72-hour soak.
+DO NOT point-fix the archive slice and immediately re-run.
 
-Branch `feat/observability-platform`, last commit `de33b6e2`, tree clean.
-Correlation suite: 1346 passed / 9 skipped. Planner suite: 55 passed. ruff clean.
+STATE
+  165 PASS/frozen · 168 PASS live · 170 PASS live · 167 PASS offline (live
+  selectivity unvalidated) · 166 FAIL · 171 OPEN non-blocking · 169 OPEN
+  (re-pinned, currently green) · 1280 MiB floor unchanged · soak BLOCKED.
 
-Lab is CLEAN and on the production config: 0 devices, Kafka backlog drained,
-`compose.mem125.yml` (1.25 GiB, CORR_WINDOW_BUFFER=150000), profiler OFF.
-Bus is Apache Kafka 4.1.1 KRaft over mTLS (`kafka:9094`) — never Redpanda,
-Redis or Prometheus.
+WHY 166 FAILS NOW
+  Not throughput-in-general. The engine cannot complete a SINGLE cohort inside
+  the 2,160 s budget. Measured: `corr_signals_archive` is 98.6% of correlation
+  persistence time (1,130 inserts, p50 152 ms, 222.4 s of 232.4 s), object
+  persistence 0.47/sec, ~8,500-row window-sized archive slice PER OBJECT. This
+  is tracker 156's residual `_archive_slice`, which its own row predicted.
 
-# FROZEN — DO NOT REOPEN WITHOUT REGRESSION EVIDENCE
+THE PATTERN THAT MATTERS
+  Four bottlenecks, all the same defect: per-object work sized by something
+  GLOBAL (catalog, window) rather than by the object. Harmless pre-168 when
+  there was one object; O(objects x global) now that there are ~1,000.
 
-* Tracker 165 = PASS. Retention contract is authoritative:
-  max_attachable_gap = tau_s * ln((w_topo*w_r)/attach_threshold) = 396.527 s
-  reach, + 120 s lateness floor (one engine interval OR permitted future clock
-  skew, whichever is larger) = 516.527 s required retention. Per-tenant
-  stream-time watermarks, co-partitioning safety gate, backlog-proven idle
-  backstop, future-skew clamp, explicit RCA degradation. Do not shorten the
-  horizon for performance.
-* Resource planner = PASS. Correlation floor 1280 MiB flowing through the
-  planner; three mirrors (planner floor, compose fallback, series-budget
-  fallback) pinned together by a test that reads the others.
-* Engine-side 166 foundation is proven and must not be redesigned:
-  build_edges(cohort=...), run_window(carried_edges=...), pair-local soundness,
-  new×old and B2×B1 preservation, replay content_hash equivalence.
+FIRST TASK — the architectural review, before any more code
+  1. State the invariant "per-object work is sized by the object" and audit
+     every per-object path against it; produce a sizing table. Is a fifth
+     bottleneck already waiting?
+  2. Review the bounded-cohort x object-formation interaction (singleton
+     objects for not-yet-scored nodes, persisted then merged). 166 and 156 were
+     designed independently.
+  3. Review the persistence model for ~1,000 small objects rather than a few
+     large ones: ~8 CH inserts/object, serialised, on the loop.
+  No code changes in that step. Then fix, then re-run one clean 1K.
 
-# TRACKER 166 = FAIL — THIS IS THE IMMEDIATE TASK
+ALSO FIX (real, not dominant)
+  A ClickHouse ReadTimeout raises CHInsertRejected out of _persist_snapshot
+  past _mark_processed, discarding a whole cohort. P(commit) = (1-p)^objects.
 
-Live 1K qualification ran on a verified clean baseline and FAILED.
-
-STATE gates PASSED: carried-edge cache plateaued at ~384k entries (flat from
-t+7min while the window grew 25k→53k), processed frontier bounded at
-15,702/16,369, memory 750–784 MiB (56–58% of 1.25 GiB), swap 0, zero cap hits,
-zero useful-evidence drops, zero RCA degradation, loop stall 5.4–5.8 s.
-
-THROUGHPUT gate FAILED: only 6 cohorts in ~13 minutes at 182 eps, pending grew
-monotonically to 37,292, and oldest_pending_event_age reached 427.6 s = 82.8%
-of the 516.527 s horizon — evidence ~89 s from expiring before ever being
-evaluated. The same p90 workload drained in 25 s before this change.
-
-ROOT CAUSE (already diagnosed from source, do not re-derive): bounding the
-cohort bounded pair EMISSION but not the per-transaction FIXED cost.
-build_edges prepares toks/refs/seam_evs/devs/memb for ALL n nodes, and
-_candidate_pairs builds its inverted index with
-`for i in range(n): for t in toks[i] | refs[i]`. Both are O(retained nodes) and
-both run on EVERY transaction. Pre-166 that was paid once per cycle; splitting
-a cycle into ~8 cohorts pays it ~8x. engine_cycle measured ~150 s even with a
-5,000-signal cohort.
-
-FIX DIRECTION: hoist the per-node preparation and the candidate index OUT of
-the per-transaction path — build once per cycle, reuse across that cycle's
-cohorts. The index is a pure function of the node set, so every proven
-equivalence survives. Do NOT respond by enlarging the cohort back toward
-unbounded; that reinstates the runaway 166 exists to remove.
-
-Then re-run the live 1K qualification and collect what the failed run never
-reached: device accounting, signal accounting, DLQ, ClickHouse durability,
-duplicates, UnknownMember, CommitFailedError, restarts/rebalances, RCA
-reference equivalence.
-
-166 PASSES when: reference equivalence intact, cohort admission bounded,
-candidate generation bounded at source, transaction size bounded as backlog
-grows, carried-edge and processed-frontier state plateau, no tenant starvation,
-no never-evaluated evidence, clean live 1K passes, 165 stays PASS, Kafka
-membership stable, memory inside the planner allocation.
-Do NOT require a sustainable-EPS improvement — that is 167.
-
-# AFTER 166 PASSES
-
-167 throughput → formal capacity calibration → 162/163/164 disposition →
-clean mini-ladder → 72h soak → 155 ownership → BUS_PARTITIONS 4→8 →
-2.5K → 5K → 10K → chaos/recovery → upgrade/rollback → canary/pilot →
-GA readiness review. Do not skip stages because the suite is green.
-
-167 owns per-pair cost (~28–71 µs/candidate offline), sound prefilters (false
-positives OK, false negatives NEVER — must not break _seam_bridged), hoisting
-repeated computation, allocation, and only then GIL escape. Do not reach for
-multiprocessing first: 0.66–0.69 cores of 2 with zero throttling does not prove
-more processes are the lever.
-
-# OPEN TRACKERS
-
-162 PARTIAL (don't touch _seam_bridged) · 163 deferred (OPEN_OBJECTS 7–8) ·
-164 open, de-prioritised (executor ruled out: queue peak 1, wait p99 20 ms
-while one call ran 196 s) · 155 not run · 72h soak BLOCKED.
-
-# KNOWN LAB DEBT (small, worth fixing before the soak)
-
-* memflat gate reads post-ingress memory growth as a leak, but under
-  stream-time retention the window legitimately keeps filling while backlog
-  drains. It produces false failures.
-* Harness cleanup fails intermittently with TimeoutError, leaving device
-  residue that aborts the NEXT run's preflight.
-
-# UNRESOLVED PREMISE — I still need an answer from you
-
-What syslog/telemetry rate should a 1,000-device GA deployment be qualified at?
-Lab p90 says 182/s; resource_planner.py's own `medium` profile says 5,000/s for
-the same device count — a 27x spread. At 182/s we are close to done; at 5,000/s
-the measured ~800–1,000/s ceiling is 5x short and 167 becomes the critical
-path. This gates 167, the soak rate, and the memory sizing.
-
-# HOUSE RULES
-
-Mutation-test every guard you add; a check that cannot go red is not a check,
-and a build failure is never a behavioural mutant kill. INVALID is a real
-outcome — never fold it into PASS, never convert "not run" into PASS. Do not
-mask problems by raising Kafka timeouts, memory, executor size, partitions or
-thresholds unless measurement proves it is genuinely sizing. Evidence over
-assertion: cite source, config or measured runtime behaviour. If a live run
-fails, report it — do not move to the next tracker to bury it. Skip anything
-repetitive.
+HOUSE RULES
+  Measure before optimising — the bottleneck has moved every single time.
+  Mutation-test every guard; a check that cannot go red is not a check.
+  Never weaken 165 retention, 168 identity scoping, or the 170 completion gate.
+  Report FAIL as FAIL; do not bank partial evidence from an invalid run.
 ```

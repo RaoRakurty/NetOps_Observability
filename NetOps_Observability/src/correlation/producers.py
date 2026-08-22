@@ -415,6 +415,39 @@ def probe_signals(
 # syslog source; the text after the colon arrives in .message.
 
 _IP_RE = re.compile(r"\b(\d{1,3}(?:\.\d{1,3}){3})\b")
+# ── tracker 168: device-LOCAL names are not global correlation subjects ──────
+#
+# THE DEFECT. An interface name is unique only WITHIN its device. Emitting a bare
+# `GigabitEthernet0/5` as an entity_token made it a GLOBAL grounding subject, so
+# every device in the estate that owns a `GigabitEthernet0/5` became a rank-7
+# shared-token candidate of every other. Reproduced end to end: `dc1-switch-a` and
+# `branch-77-rtr` each flapping their Gi0/5 within the temporal reach fused into
+# ONE RCA object on `grounding=topo:shared:GigabitEthernet0/5 rank=7 weight=0.452`.
+# The §3/§4 gate caps such an object at `suspected` so it can never be a false
+# CONFIRMED RCA, but the evidence graph is still wrong — unrelated devices, an
+# inflated affected() set, and (measured at 1K) 48 index groups of 1,000 nodes
+# each, ~25.1M candidate pairs, which was the throughput wall as well.
+#
+# THE RULE. Identity establishes SAMENESS; topology establishes RELATIONSHIPS
+# between different entities. Accidental string equality is not topology.
+#
+#   * On an INTERFACE-scoped signal the bare name is redundant: `entity_id` is
+#     already `device:ifname` and Node.tokens() derives both it and the device
+#     part. So the local name is simply dropped from entity_tokens.
+#   * On a DEVICE-scoped signal that legitimately points AT an interface/port/
+#     group (FHRP, MAC-flap), the local name is QUALIFIED with its device via
+#     `_device_local`, which preserves the intended binding to that device's own
+#     interface node and removes the cross-device weld.
+#
+# Genuinely global identifiers — MAC addresses, peer/VTEP IPs — stay bare: two
+# devices seeing the same MAC really are related.
+#
+# `attrs` keeps the raw local name either way, so search and the UI are unchanged.
+def _device_local(device: str, *names: str) -> tuple[str, ...]:
+    """Qualify device-local names (`Gi0/5`, `grp1`, `vlan10`) as `device:name`."""
+    return tuple(f"{device}:{n}" for n in names if n and n != "unknown")
+
+
 _IF_RE = re.compile(r"[Ii]nterface\s+([A-Za-z][\w/.\-]*)")
 _DOWN_RE = re.compile(r"\b(?:down|idle|init|backward|failed)\b", re.IGNORECASE)
 _UP_RE = re.compile(r"\b(?:up|established|full)\b", re.IGNORECASE)
@@ -517,7 +550,7 @@ def syslog_control_signal(ev: dict, tenant: str, ingest_ts: datetime) -> Signal 
             entity_id=f"{host}:{ifname}",
             severity=Severity.HIGH if state == "down" else Severity.WARN,
             native_id=f"{host}|link|{ifname}|{state}|{ts_ms}",
-            entity_tokens=(host, ifname),
+            entity_tokens=(host,),   # tracker 168: entity_id is already host:ifname
             metric_name="link_state",
             attrs={"interface": ifname, "state": state, "tag": tag},
         )
@@ -545,7 +578,7 @@ def syslog_control_signal(ev: dict, tenant: str, ingest_ts: datetime) -> Signal 
             entity_id=f"{host}:{ifname}",
             severity=Severity.HIGH if state == "down" else Severity.WARN,
             native_id=f"{host}|lldp|{ifname}|{state}|{ts_ms}",
-            entity_tokens=(host, ifname),
+            entity_tokens=(host,),   # tracker 168: entity_id is already host:ifname
             metric_name="lldp_neighbor",
             attrs={"interface": ifname, "state": state, "tag": tag or "remotePeer"},
         )
@@ -575,7 +608,7 @@ def syslog_control_signal(ev: dict, tenant: str, ingest_ts: datetime) -> Signal 
             entity_id=f"{host}:{ifname}",
             severity=Severity.HIGH if state == "down" else Severity.WARN,
             native_id=f"{host}|stp|{ifname}|{state}|{ts_ms}",
-            entity_tokens=(host, ifname),
+            entity_tokens=(host,),   # tracker 168: entity_id is already host:ifname
             metric_name="stp_state",
             attrs={"interface": ifname, "state": state, "tag": tag},
         )
@@ -648,8 +681,13 @@ def syslog_control_signal(ev: dict, tenant: str, ingest_ts: datetime) -> Signal 
         tgt_m = re.search(r"->\s*(\w+)", msg) or re.search(r"\bstate\s+(\w+)\s*$", msg, re.IGNORECASE)
         role = (tgt_m.group(1) if tgt_m else "").lower()
         takeover = role in ("active", "master")
-        tokens = tuple(t for t in (host, ifname, f"grp{group}" if group else "")
-                       if t and t != "unknown")
+        # tracker 168: the interface and the FHRP group number are both
+        # DEVICE-LOCAL. Qualified, they still bind this event to THIS device's
+        # own interface node (the stated intent); bare, `grp1` and `Gi0/5` welded
+        # every HSRP-speaking device in the estate together. Two routers in one
+        # FHRP group must relate through topology, not through a group number.
+        tokens = (host,) + _device_local(host, ifname,
+                                         f"grp{group}" if group else "")
         return Signal(
             tenant_id=tenant,
             ts=ts,
@@ -681,7 +719,13 @@ def syslog_control_signal(ev: dict, tenant: str, ingest_ts: datetime) -> Signal 
         vlan = vlan_m.group(1) if vlan_m else ""
         ports = re.findall(
             r"\b(?:Gi|Te|Fa|Po|Port-channel|Eth\w*|GigabitEthernet|TenGigE)[\d][\w/.\-]*", msg)
-        tokens = tuple(t for t in (host, mac, f"vlan{vlan}" if vlan else "", *ports[:2]) if t)
+        # tracker 168: the MAC is genuinely global — two devices seeing the same
+        # MAC flap ARE related, and that is the relation this signal is about.
+        # The VLAN id and the port names are device-local (`vlan10` and `Gi0/1`
+        # exist on almost every switch), so they are qualified: the binding to
+        # THIS device's port metrics is preserved, the estate-wide weld is not.
+        tokens = ((host,) + ((mac,) if mac else ())
+                  + _device_local(host, f"vlan{vlan}" if vlan else "", *ports[:2]))
         return Signal(
             tenant_id=tenant,
             ts=ts,
@@ -714,7 +758,7 @@ def syslog_control_signal(ev: dict, tenant: str, ingest_ts: datetime) -> Signal 
         mnem = tag.rsplit("-", 1)[-1] if "-" in tag else str(ev.get("event_type") or "")
         toks_: tuple[str, ...]
         if ifname:
-            etype_, eid_, toks_ = EntityType.INTERFACE, f"{host}:{ifname}", (host, ifname)
+            etype_, eid_, toks_ = EntityType.INTERFACE, f"{host}:{ifname}", (host,)   # tracker 168
         else:
             etype_, eid_, toks_ = EntityType.DEVICE, host, (host,)
         return Signal(
@@ -842,7 +886,7 @@ def trap_control_signal(ev: dict, tenant: str, ingest_ts: datetime) -> Signal | 
             entity_type=EntityType.INTERFACE, entity_id=f"{device}:{iface}",
             severity=Severity.HIGH if state == "down" else Severity.WARN,
             native_id=f"{device}|trap_link|{iface}|{state}|{ts_ms}",
-            entity_tokens=(device, iface), metric_name="link_state",
+            entity_tokens=(device,), metric_name="link_state",   # tracker 168
             attrs={"interface": iface, "state": state, "trap_oid": oid,
                    "authenticated": authed},
         )
@@ -909,7 +953,7 @@ def trap_control_signal(ev: dict, tenant: str, ingest_ts: datetime) -> Signal | 
             entity_type=EntityType.INTERFACE, entity_id=f"{device}:{iface}",
             severity=Severity.HIGH if state == "down" else Severity.WARN,
             native_id=f"{device}|trap_link|{iface}|{state}|{ts_ms}",
-            entity_tokens=(device, iface), metric_name="link_state",
+            entity_tokens=(device,), metric_name="link_state",   # tracker 168
             attrs={"interface": iface, "state": state, "trap_oid": oid, "event_type": etype, "authenticated": authed},
         )
     if "start" in etype and ("cold" in etype or "warm" in etype):
@@ -933,7 +977,7 @@ def trap_control_signal(ev: dict, tenant: str, ingest_ts: datetime) -> Signal | 
         iface = _trap_interface(ev)
         toks_: tuple[str, ...]
         if iface and iface != "unknown":
-            etype_, eid_, toks_ = EntityType.INTERFACE, f"{device}:{iface}", (device, iface)
+            etype_, eid_, toks_ = EntityType.INTERFACE, f"{device}:{iface}", (device,)   # tracker 168
         else:
             etype_, eid_, toks_ = EntityType.DEVICE, device, (device,)
         return Signal(
@@ -1074,7 +1118,7 @@ def port_event_signal(ev: dict, tenant: str, ingest_ts: datetime) -> Signal | No
         port = _port_of(ev)
         toks_: tuple[str, ...]
         if iface_scoped and port:
-            etype_, eid_, toks_ = EntityType.INTERFACE, f"{host}:{port}", (host, port)
+            etype_, eid_, toks_ = EntityType.INTERFACE, f"{host}:{port}", (host,)   # tracker 168
         else:
             etype_, eid_, toks_ = EntityType.DEVICE, host, (host,)
         return Signal(
