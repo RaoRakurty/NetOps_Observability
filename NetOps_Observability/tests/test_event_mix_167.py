@@ -80,8 +80,10 @@ def _generator(mix: str):
     network, no run directory."""
     cls = _ladder_class()
     inst = cls.__new__(cls)
-    inst.args = argparse.Namespace(event_mix=mix)
+    inst.args = argparse.Namespace(event_mix=mix, profile="legacy")
     inst._mix = cls._mix_table(cls.EVENT_MIX_REALISTIC)
+    inst._tables = cls._composed_tables()
+    inst.profile = ml.WORKLOAD_PROFILES["legacy"]
     return inst
 
 

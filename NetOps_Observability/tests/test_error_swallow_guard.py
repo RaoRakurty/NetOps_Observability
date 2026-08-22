@@ -114,10 +114,16 @@ ALLOWLIST: dict[tuple[str, int], str] = {
     # at 201 is above the insertion and did not move). All three re-read at
     # their new lines, behaviourally unchanged: ingress/login probes still
     # `problems.append(...)`, twin read still returns an explicit burst FAIL.
+    #
+    # Re-pinned 2026-08-22 (ratified workload profiles): WORKLOAD_PROFILES +
+    # noise/composed mix tables + the multi-lane burst path added ~140 lines
+    # above the three lower sites (947->1020, 954->1027, 1299->1420); env_get
+    # at 201 is above every insertion. All three re-read at their new lines,
+    # behaviourally unchanged.
     ("scale-miniladder.py", 201): "optional .env read; returns '' with a documented callers-decide contract",
-    ("scale-miniladder.py", 947): "preflight ingress probe; failure appended to `problems`, preflight fails on any problem",
-    ("scale-miniladder.py", 954): "preflight API-login probe; failure appended to `problems`, preflight fails on any problem",
-    ("scale-miniladder.py", 1299): "twin-mode burst artifact read; failure returns an explicit burst-phase FAIL (tracker 152 §8.3)",
+    ("scale-miniladder.py", 1020): "preflight ingress probe; failure appended to `problems`, preflight fails on any problem",
+    ("scale-miniladder.py", 1027): "preflight API-login probe; failure appended to `problems`, preflight fails on any problem",
+    ("scale-miniladder.py", 1420): "twin-mode burst artifact read; failure returns an explicit burst-phase FAIL (tracker 152 §8.3)",
     # The four 2026-08-16 chown-swallow findings (enrichment seed, processors
     # seed, appid/cloud fixtures, vuln SUDO_UID dir) were RESOLVED the same
     # day: all now route through chown_tree (repair-or-refuse), and the vuln

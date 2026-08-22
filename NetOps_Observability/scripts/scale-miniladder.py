@@ -870,6 +870,75 @@ DLQ_EXPECTED_MAX_FRACTION = 0.01
 # Harness
 # ---------------------------------------------------------------------------
 
+# ── Ratified workload profiles (STRESS_GATE_REDEFINITION_2026-08-22 §5/§6) ──
+#
+# A profile OVERRIDES eps/burst-minutes/event-mix and, for storm profiles,
+# defines LANES: (name, device-share, mix, eps or a rate function of elapsed
+# seconds). `--devices` is never overridden. "legacy" applies nothing and keeps
+# the historical single-lane loop byte-identical for continuity with the
+# evidence trail. All rates compose with the RATIFIED 1K bands
+# (EPS_BASELINE_PROPOSAL §5): nominal 400 raw fleet, S1 = 10 % blast radius at
+# storm amplitude + background nominal ≈ 4,000 raw / ~1,200 admitted.
+WORKLOAD_PROFILES: dict = {
+    "legacy": {"workload_class": "LEGACY_ARGS"},
+    "t-nominal": {
+        "workload_class": "T_NOMINAL",
+        "eps": 400, "burst_minutes": 15, "event_mix": "production",
+    },
+    "t-p95": {
+        "workload_class": "T_P95",
+        "eps": 800, "burst_minutes": 15, "event_mix": "production",
+    },
+    "s1": {
+        "workload_class": "S1_DESIGN_STORM",
+        "burst_minutes": 15,
+        "lanes": [
+            # (lane, device_share, mix, eps): 10 % of devices carry the storm
+            # at control-plane-heavy mix; the rest stay at nominal production.
+            ("storm", 0.10, "storm", 3640.0),
+            ("background", 0.90, "production", 360.0),
+        ],
+    },
+    "s1-long": {
+        "workload_class": "S1_LONG_STORM",
+        "burst_minutes": 60,
+        "lanes": [
+            ("storm", 0.10, "storm", 3640.0),
+            ("background", 0.90, "production", 360.0),
+        ],
+    },
+    "s2-ramp": {
+        "workload_class": "S2_ESCALATION_RAMP",
+        "burst_minutes": 75,   # 60 min ramp + 15 min hold
+        "lanes": [
+            # Storm lane RAMPS 40 -> 3,640 eps over 3,600 s then holds — the
+            # slow-escalation storm class (field log: 5k -> 741k pps over ~5 h).
+            ("storm", 0.10, "storm",
+             lambda t: 40.0 + (3600.0 * min(1.0, t / 3600.0))),
+            ("background", 0.90, "production", 360.0),
+        ],
+    },
+    "s3-stress": {
+        # Today's saturation probe, relabelled: estate-wide, 100 % promotion,
+        # ~20-200x measured reality. CHARACTERIZATION/defect-finding ONLY —
+        # graded on invariants + throughput trend, never absolute completion.
+        "workload_class": "S3_SATURATION_PROBE",
+        "eps": 2000, "burst_minutes": 5, "event_mix": "single",
+    },
+    "s4-chatter": {
+        "workload_class": "S4_CHATTER_PROBE",
+        "burst_minutes": 60,
+        "lanes": [
+            # 0.5 % of devices in chronic sub-10s flap loops (the 250/hr
+            # device class) riding on a nominal estate: correlation-tier
+            # impact must be ~zero (suppression/dedup absorbs it).
+            ("chatter", 0.005, "single", 0.35),   # ~250 events/hr/device — the measured chronic-flap class
+            ("background", 0.995, "production", 400.0),
+        ],
+    },
+}
+
+
 class Harness:
     def __init__(self, args: argparse.Namespace):
         self.args = args
@@ -879,6 +948,10 @@ class Harness:
         self.stack = Stack(args.env_file, args.base_url, args.project)
         # Expanded once, not per event — see _syslog_event.
         self._mix = self._mix_table(self.EVENT_MIX_REALISTIC)
+        self._tables = self._composed_tables()
+        # Ratified workload profile (STRESS_GATE_REDEFINITION §5/§6): resolves
+        # to rate/duration/mix/lane overrides applied in main() after parsing.
+        self.profile = WORKLOAD_PROFILES[args.profile]
         # Resolved at burst Gate 1 (registry propagation): the tenant key every
         # injected record carries, or None for the legacy null-key shape.
         self.producer_key: str | None = None
@@ -1060,7 +1133,7 @@ class Harness:
         # > 100k as "bus never reset". Warn (not fail) when this run would
         # push past it — the operator loses that verify signal until the next
         # reset. Platform-safe either way.
-        planned = self.args.eps * 60 * self.args.burst_minutes
+        planned = self._planned_total()
         endoff = self.baseline["kafka_syslog_end"]
         if endoff >= 0 and endoff + planned > 100_000:
             warn(f"planned injection ({planned}) + current netops.syslog end offset "
@@ -1216,6 +1289,28 @@ class Harness:
          "%ENVMON-4-FAN_FAILED: Fan {if_n} failed", "warning"),  # device_alarm
     )
 
+    # Promotion-realistic NOISE: operational lines the correlation classifier
+    # provably yields NO signal for (info/notice severity, no control-plane
+    # tokens — each arm is pinned against the REAL classifier by
+    # tests/test_event_mix_167.py::test_noise_lines_never_classify). This is
+    # what makes the ratified promotion ratio (~5 % plan / ~30 % storm,
+    # EPS_BASELINE_PROPOSAL §6) injectable instead of assumed: real syslog is
+    # overwhelmingly informational (measured control-plane share 0.49 %).
+    EVENT_MIX_NOISE = (
+        (35, "SYS-5-CONFIG_I",
+         "%SYS-5-CONFIG_I: Configured from console by admin on vty0", "info"),
+        (25, "SEC_LOGIN-5-LOGIN_SUCCESS",
+         ("%SEC_LOGIN-5-LOGIN_SUCCESS: Login Success [user: ops] [Source: "
+          "10.{oct2}.{oct3}.50] at 12:00:00 UTC"), "notice"),
+        (20, "SSH-5-SSH2_SESSION",
+         ("%SSH-5-SSH2_SESSION: SSH2 Session request from 10.{oct2}.{oct3}.9 "
+          "(tty = 0) succeeded"), "notice"),
+        (12, "SYS-6-LOGGINGHOST_STARTSTOP",
+         "%SYS-6-LOGGINGHOST_STARTSTOP: Logging to host 10.0.0.2 port 514 started", "info"),
+        (8, "SNMP-5-COLDSTART",
+         "%SNMP-5-COLDSTART: SNMP agent on host reconfigured", "notice"),
+    )
+
     @staticmethod
     def _mix_table(mix: tuple) -> tuple:
         """Expand the weighted mix into a flat lookup indexed by `seq`.
@@ -1228,16 +1323,42 @@ class Harness:
             table.extend([(appname, template, severity)] * weight)
         return tuple(table)
 
-    def _syslog_event(self, device: str, seq: int) -> str:
+    @classmethod
+    def _composed_tables(cls) -> dict:
+        """The named mix tables (built once per run):
+          realistic  — six classifying kinds, ~100 % promotion (167 validation)
+          production — ~5 % promotion: one full realistic table (100 slots)
+                       diluted with 1,900 noise slots (EPS baseline §6 plan)
+          storm      — ~33 % promotion: storm content IS control-plane
+                       (100 realistic + 200 noise slots; gate spec S1)
+        """
+        realistic = cls._mix_table(cls.EVENT_MIX_REALISTIC)
+        noise = cls._mix_table(cls.EVENT_MIX_NOISE)          # len 100
+        production = realistic + tuple(noise[i % len(noise)] for i in range(1900))
+        storm = realistic + tuple(noise[i % len(noise)] for i in range(200))
+        return {"realistic": realistic, "production": production, "storm": storm}
+
+    def _syslog_event(self, device: str, seq: int, mix_name: str | None = None,
+                      mix_seq: int | None = None) -> str:
+        """One injected syslog line. `mix_name` overrides the run-level mix
+        (profiles inject different mixes per LANE); `mix_seq` decorrelates mix
+        selection from device selection — `seq % n_devices` (device pick) and
+        `seq % len(table)` (mix pick) share factors, so without it a
+        noise-bearing mix would starve FIXED devices of classifying events
+        forever (the per-device corr_signals accounting check would fail, and
+        promotion would be per-device-degenerate rather than uniform)."""
         state = "down" if seq % 2 == 0 else "up"
         ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
-        if self.args.event_mix == "single":
+        mix_name = mix_name or self.args.event_mix
+        if mix_name == "single":
             appname = "LINK-3-UPDOWN"
             message = (f"%LINK-3-UPDOWN: Interface GigabitEthernet0/{seq % 48}, "
                        f"changed state to {state} [mlx seq {seq}]")
             severity = "err"
         else:
-            appname, template, severity = self._mix[seq % len(self._mix)]
+            table = self._tables.get(mix_name, self._mix)
+            idx = (mix_seq if mix_seq is not None else seq) % len(table)
+            appname, template, severity = table[idx]
             message = template.format(
                 if_n=seq % 48,
                 state=state,
@@ -1332,6 +1453,117 @@ class Harness:
             f"lane events (+{sum(v for k, v in by_lane.items() if k != 'syslog')} "
             f"on other lanes) in {self.burst_seconds:.0f}s")
 
+    def _planned_total(self) -> int:
+        """Events this run intends to inject — lane-integrated for storm
+        profiles, args-derived otherwise."""
+        lanes = self.profile.get("lanes")
+        duration = self.args.burst_minutes * 60
+        if not lanes:
+            return self.args.eps * duration
+        total = 0.0
+        for _name, _share, _mix, rate in lanes:
+            if callable(rate):
+                total += sum(rate(t) for t in range(duration))
+            else:
+                total += rate * duration
+        return int(total)
+
+    def _lane_states(self) -> list[dict]:
+        """Split this run's devices into the profile's lane pools (contiguous
+        by creation order, deterministic; the last lane absorbs remainder)."""
+        lanes = []
+        n = len(self.created_ids)
+        start = 0
+        spec = self.profile["lanes"]
+        for i, (name, share, mix, rate) in enumerate(spec):
+            cnt = n - start if i == len(spec) - 1 else max(1, round(share * n))
+            lanes.append({"name": name, "mix": mix, "rate": rate,
+                          "pool": self.created_ids[start:start + cnt],
+                          "acc": 0.0, "seq": 0, "sent": 0})
+            start += cnt
+        return lanes
+
+    def _burst_lanes(self, ev: dict) -> bool:
+        """Multi-lane scheduled injection for the ratified storm profiles
+        (S1 / S1-long / S2-ramp / S4-chatter): each lane owns a device pool, a
+        mix and a rate (constant or a function of elapsed seconds — the ramp).
+        Wall-clock paced in 10 s chunks like the legacy loop; per-lane
+        fractional-rate accumulators keep long-run rates exact."""
+        chunk_secs = 10
+        duration = self.args.burst_minutes * 60
+        lanes = self._lane_states()
+        t0 = time.monotonic()
+        seq_global = 0
+        chunks: list[dict] = []
+        while True:
+            elapsed = time.monotonic() - t0
+            if elapsed >= duration:
+                break
+            lines: list[str] = []
+            detail: dict = {}
+            for ln in lanes:
+                r = ln["rate"](elapsed) if callable(ln["rate"]) else ln["rate"]
+                ln["acc"] += r * chunk_secs
+                k = int(ln["acc"])
+                ln["acc"] -= k
+                pool = ln["pool"]
+                for _ in range(k):
+                    dev_i = ln["seq"] % len(pool)
+                    dev = pool[dev_i]
+                    # Decorrelated mix index — see _syslog_event's docstring.
+                    # Stride 31 is coprime to every table length (100/300/2000),
+                    # so EVERY device cycles the WHOLE mix table with period
+                    # len(table) regardless of pool size — a device reaches the
+                    # classifying block within at most ~len(table)/31 rounds.
+                    mix_seq = dev_i + 31 * (ln["seq"] // len(pool))
+                    lines.append(self._syslog_event(dev, seq_global,
+                                                    mix_name=ln["mix"],
+                                                    mix_seq=mix_seq))
+                    ln["seq"] += 1
+                    seq_global += 1
+                ln["sent"] += k
+                detail[ln["name"]] = k
+            tp = time.monotonic()
+            if lines:
+                ok, err = self.stack.produce("netops.syslog", lines,
+                                             key=self.producer_key)
+                if not ok:
+                    self.produce_failures.append(err)
+                    if len(self.produce_failures) >= 3:
+                        break
+                else:
+                    self.injected_total += len(lines)
+            chunks.append({"t": round(elapsed, 1), "lanes": detail,
+                           "n": len(lines),
+                           "produce_s": round(time.monotonic() - tp, 2)})
+            ahead = (len(chunks) * chunk_secs) - (time.monotonic() - t0)
+            if ahead > 0:
+                time.sleep(ahead)
+        self.burst_seconds = time.monotonic() - t0
+        actual_eps = self.injected_total / max(self.burst_seconds, 1e-9)
+        ev.update({
+            "workload_class": self.profile["workload_class"],
+            "target_events": self._planned_total(),
+            "injected_total": self.injected_total,
+            "burst_seconds": round(self.burst_seconds, 1),
+            "actual_eps": round(actual_eps, 1),
+            "producer_key_mode": self.args.producer_key,
+            "chunks": len(chunks),
+            "lanes": {ln["name"]: {"devices": len(ln["pool"]), "mix": ln["mix"],
+                                   "sent": ln["sent"]} for ln in lanes},
+            "produce_failures": self.produce_failures,
+        })
+        self.evidence_file("burst-chunks.json", json.dumps(chunks, indent=1))
+        if self.produce_failures:
+            return self.phase("burst", "FAIL", ev,
+                              f"{len(self.produce_failures)} produce failures — accounting "
+                              f"would be dishonest (first: {self.produce_failures[0][:160]})")
+        lane_txt = ", ".join(f"{ln['name']}={ln['sent']}" for ln in lanes)
+        return self.phase("burst", "PASS", ev,
+                          f"[{self.profile['workload_class']}] injected "
+                          f"{self.injected_total} events in {self.burst_seconds:.0f}s "
+                          f"(~{actual_eps:.0f}/s; {lane_txt})")
+
     def _burst_internal(self) -> bool:
         ev: dict = {}
         # Gate 1: registry propagation. The Go API rewrites device_tenant.csv
@@ -1403,6 +1635,12 @@ class Harness:
                               "pipeline broken between the bus and ClickHouse "
                               "(durability/DLQ evidence attached)")
 
+        # Storm profiles take the multi-lane scheduled path; everything else
+        # (legacy, T-family, S3) keeps the historical single-lane loop below,
+        # byte-identical, for continuity with the evidence trail.
+        if self.profile.get("lanes"):
+            return self._burst_lanes(ev)
+
         # The burst proper: eps x 60 x minutes events, paced in chunks.
         chunk_secs = 10
         target = self.args.eps * 60 * self.args.burst_minutes
@@ -1438,6 +1676,7 @@ class Harness:
             "actual_eps": round(actual_eps, 1),
             "target_eps": self.args.eps,
             "event_mix": self.args.event_mix,
+            "workload_class": self.profile["workload_class"],
             "producer_key_mode": self.args.producer_key,
             "chunks": len(chunks),
             "produce_failures": self.produce_failures,
@@ -2159,6 +2398,8 @@ class Harness:
                 "burst_minutes": self.args.burst_minutes,
                 "eps": self.args.eps,
                 "event_mix": self.args.event_mix,
+                "profile": self.args.profile,
+                "workload_class": self.profile["workload_class"],
                 "producer_key": self.args.producer_key,
                 "load_generator": self.args.load_generator,
                 "linearity_floor": self.args.linearity_floor,
@@ -2334,6 +2575,15 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
                     help="print the full plan and exit; touches nothing")
     # tracker 152 §8.3 — twin composition. Default is the internal generator,
     # byte-identical to the pre-flag behavior.
+    ap.add_argument("--profile", choices=tuple(sorted(WORKLOAD_PROFILES)),
+                    default="legacy",
+                    help="Ratified workload profile (gate spec §5/§6): overrides "
+                         "eps / burst-minutes / event-mix (and defines lanes for "
+                         "storm profiles). 'legacy' keeps raw args and the "
+                         "historical single-lane injection loop, byte-identical. "
+                         "T-family = provisioning gates (must fully complete); "
+                         "S-family = storm gates (invariants + recovery). "
+                         "--devices is never overridden.")
     ap.add_argument("--producer-key", choices=("tenant", "none"), default="tenant",
                     help="Kafka message key for injected events. 'tenant' "
                          "(default) keys every record by the created devices' "
@@ -2383,6 +2633,12 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
 def main(argv: list[str]) -> int:
     os.environ["PATH"] = CRON_PATH          # see CRON_PATH: process-entry only
     args = parse_args(argv)
+    # Ratified profile overrides (gate spec §5): a profile is authoritative for
+    # rate/duration/mix. --devices and every judging knob stay the user's.
+    _prof = WORKLOAD_PROFILES[args.profile]
+    for _k in ("eps", "burst_minutes", "event_mix"):
+        if _k in _prof:
+            setattr(args, _k, _prof[_k])
     if not args.project:
         args.project = env_get(args.env_file, "COMPOSE_PROJECT_NAME") or "netops"
     if not args.base_url:
