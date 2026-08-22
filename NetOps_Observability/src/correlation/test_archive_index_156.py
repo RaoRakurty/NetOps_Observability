@@ -3,8 +3,10 @@
 The fix removed work, not behaviour:
   * `Signal.signal_id` / `signal_id_str` / `to_ch_row` are memoised on a frozen
     dataclass (pure functions of frozen fields).
-  * `_archive_slice` no longer rebuilds the window's node grouping per object;
-    `_window_index` builds it once per cycle and every object shares it.
+  * `_archive_slice` no longer rebuilds the window's loose-signal grouping and
+    sort ordinals per object; `_window_index` builds them once per cycle and
+    every object shares them. (v2, 2026-08-22: membership is the COMPONENT'S
+    nodes — the reference below implements the v2 rule naively.)
 
 Both are only safe if the OUTPUT is identical, so every test here compares
 against a reference that does the work the old way. `test_archive_slice.py`
@@ -46,30 +48,48 @@ def _sig(i: int, *, kind: str = "if_errors", ent: str = "", src: Source = Source
 
 
 def _reference_slice(snap, window):
-    """The pre-156 implementation, verbatim: group per object, every time."""
+    """The v2 membership rule, implemented the naive way: component signals +
+    in-bounds loose (+ matched identities), no shared index, sorted fresh."""
     ws, we = snap.window_start, snap.window_end
     matched = {str(s.signal_id) for s in snap.identity_signals}
-    keep, by_node = [], {}
+    keep = []
     for s in window:
-        if s.kind.endswith("_clear") or s.source is Source.APP_IDENTITY:
-            if (ws <= s.ts <= we) or str(s.signal_id) in matched:
-                keep.append(s)
-            continue
-        by_node.setdefault(f"{s.entity_type.value}:{s.entity_id}:{s.kind}", []).append(s)
-    for key in sorted(by_node):
-        sigs = by_node[key]
-        lo, hi = min(s.ts for s in sigs), max(s.ts for s in sigs)
-        if lo <= we and ws <= hi:
-            keep.extend(sigs)
+        if ((s.kind.endswith("_clear") or s.source is Source.APP_IDENTITY)
+                and ((ws <= s.ts <= we) or str(s.signal_id) in matched)):
+            keep.append(s)
+    for node in snap.nodes:
+        keep.extend(node.signals)
     keep.sort(key=lambda s: (s.ts, str(s.signal_id)))
     return keep
 
 
+class _Node:
+    """Minimal engine.Node stand-in — _archive_slice reads only .signals."""
+    def __init__(self, signals):
+        self.signals = tuple(signals)
+
+
+def _nodes_for(window, keep_keys):
+    """Group `window` exactly as engine.build_nodes keys nodes, keep a subset."""
+    by_node = {}
+    for s in window:
+        if s.kind.endswith("_clear") or s.source is Source.APP_IDENTITY:
+            continue
+        by_node.setdefault(f"{s.entity_type.value}:{s.entity_id}:{s.kind}", []).append(s)
+    return [_Node(by_node[k]) for k in sorted(by_node) if k in keep_keys]
+
+
+def _node_keys(window):
+    return sorted({f"{s.entity_type.value}:{s.entity_id}:{s.kind}" for s in window
+                   if not s.kind.endswith("_clear") and s.source is not Source.APP_IDENTITY})
+
+
 class _Snap:
     """Minimal ObjectSnapshot stand-in — _archive_slice reads only these."""
-    def __init__(self, ws, we, ident=()):
+    def __init__(self, ws, we, ident=(), nodes=()):
         self.window_start, self.window_end = ws, we
         self.identity_signals = list(ident)
+        self.nodes = tuple(nodes)
         self.correlation_id = "cid-test"
 
 
@@ -181,7 +201,9 @@ def test_to_ch_row_memo_survives_many_mutating_consumers():
 def test_archive_slice_matches_the_reference_for_every_object(n_objects):
     window = [_sig(i) for i in range(240)]
     window += [_sig(500 + i, kind="if_errors_clear", secs=10 + i) for i in range(12)]
-    snaps = [_Snap(T0 + timedelta(seconds=k * 7), T0 + timedelta(seconds=40 + k * 11))
+    keys = _node_keys(window)
+    snaps = [_Snap(T0 + timedelta(seconds=k * 7), T0 + timedelta(seconds=40 + k * 11),
+                   nodes=_nodes_for(window, set(keys[k::max(1, n_objects)])))
              for k in range(n_objects)]
     for snap in snaps:
         got = main._archive_slice(snap, window)
@@ -206,17 +228,21 @@ def test_index_is_built_once_and_shared_across_objects():
 def test_a_different_window_gets_a_different_index():
     w1 = [_sig(i) for i in range(30)]
     w2 = [_sig(i, ent="other:Gi9/9") for i in range(40)]
-    snap = _Snap(T0, T0 + timedelta(seconds=500))
-    s1 = main._archive_slice(snap, w1)
-    s2 = main._archive_slice(snap, w2)
+    span = (T0, T0 + timedelta(seconds=500))
+    snap1 = _Snap(*span, nodes=_nodes_for(w1, set(_node_keys(w1))))
+    snap2 = _Snap(*span, nodes=_nodes_for(w2, set(_node_keys(w2))))
+    s1 = main._archive_slice(snap1, w1)
+    s2 = main._archive_slice(snap2, w2)
     assert [s.signal_id_str for s in s1] != [s.signal_id_str for s in s2]
-    assert s2 == _reference_slice(snap, w2)
+    assert s2 == _reference_slice(snap2, w2)
+    assert len(main._WINDOW_INDEX_CACHE) == 2
 
 
 def test_index_length_guard_rejects_a_recycled_id():
     """id() reuse must not serve a stale index for a different window."""
     window = [_sig(i) for i in range(20)]
-    snap = _Snap(T0, T0 + timedelta(seconds=500))
+    snap = _Snap(T0, T0 + timedelta(seconds=500),
+                 nodes=_nodes_for(window, set(_node_keys(window))))
     main._archive_slice(snap, window)
     key = id(window)
     stale_len, idx = main._WINDOW_INDEX_CACHE[key]

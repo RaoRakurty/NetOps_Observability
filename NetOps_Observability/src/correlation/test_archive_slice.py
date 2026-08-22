@@ -1,17 +1,23 @@
-"""Bounded archive slices (perf defect #3 — main._archive_slice).
+"""Component-sized archive slices (tracker 156 v2 — main._archive_slice).
 
-Every persisted version used to archive the ENTIRE tenant window (50k floor)
-per object — N spray objects/cycle × full window ≈ 1M rows/30s. The slice is
-now NODE-COMPLETE and bounded to the object's own span, re-archiving an
-unchanged slice is damped, and the insert is chunked. These tests pin:
+History, because both steps matter: every persisted version ORIGINALLY archived
+the ENTIRE tenant window per object (~1M rows/30s under spray); 156 bounded it
+to nodes overlapping the object's span — which was still window-shaped under
+estate-wide activity and became 98.6% of persistence time once tracker 168
+multiplied objects (~1 → ~1,500; run `082201589waa`). v2 (two adversarial
+reviews, 2026-08-22 — docs/scale/ARCHIVE_REDESIGN_156_2026-08-22.md) restricts
+membership to the COMPONENT. These tests pin:
 
-  * membership — nodes overlapping [window_start, window_end] are included
-    WHOLE (never clipped); out-of-span nodes are excluded; in-bounds clears and
-    the object's MATCHED identity signals ride along
-  * replay correctness — replay.replay() over the slice reproduces the stored
-    object CLEAN (node/signal/edge/verdict/confidence identical): edge
-    admission is pair-local, so a node-complete slice containing the whole
-    component reproduces exactly the live component
+  * membership — every signal of every COMPONENT node is included WHOLE (never
+    clipped); non-component nodes are excluded EVEN WHEN their activity
+    interval overlaps the object's span (the write-amplification pin: restore
+    the old overlap rule and the membership test goes red); in-bounds clears
+    and the object's MATCHED identity signals ride along
+  * replay correctness — replay.replay() over the component slice reproduces
+    the stored object CLEAN (edge admission is pair-local, so a node-complete
+    slice containing the whole component reproduces exactly the live
+    component); terminal (closed, window=[]) versions replay through the
+    newest-archived_version-≤-v fallback
   * damping — an identical slice membership is not re-written; readers resolve
     through the existing newest-archived_version-≤-v fallback
   * chunking — a large slice lands as multiple bounded inserts
@@ -96,21 +102,40 @@ def _dallas_snapshot(window):
     return next(s for s in snaps if "dallas-edge" in s.affected().get("devices", []))
 
 
-def test_slice_membership_is_node_complete_and_bounded():
+def test_slice_membership_is_component_only():
+    """The v2 membership pin AND the write-amplification regression test: a
+    non-component node whose interval overlaps the object's span (`boundary_a`)
+    was included by the old rule and MUST NOT be included now — restoring the
+    overlap rule turns this red."""
     window, parts = _window()
     snap = _dallas_snapshot(window)
     assert snap.window_start == parts["comp"][0].ts
     assert snap.window_end == parts["comp"][1].ts
     got = {str(s.signal_id) for s in main._archive_slice(snap, window)}
     expected = {str(s.signal_id) for s in (
-        *parts["comp"],
-        *parts["boundary"],      # interval overlaps the span → node included WHOLE
-        parts["clear_in"],       # in-bounds clear: Inspector context, engine-inert
+        *parts["comp"],          # every signal of every COMPONENT node
+        parts["clear_in"],       # in-bounds clear rides along (engine-inert)
         parts["identity"],       # matched identity rides along (app-impact replay)
     )}
     assert got == expected
-    assert str(parts["far"].signal_id) not in got, "out-of-span node must be excluded"
+    for b in parts["boundary"]:
+        assert str(b.signal_id) not in got, (
+            "non-component node included — the old window-shaped overlap rule "
+            "is back (write amplification, tracker 156 v2)")
+    assert str(parts["far"].signal_id) not in got
     assert str(parts["clear_out"].signal_id) not in got
+
+
+def test_slice_is_bounded_by_component_not_window():
+    """Write-amp bound stated as a ratio: heavy ambient context must not grow
+    the slice. 40 non-component boundary signals, slice size unchanged."""
+    window, _ = _window()
+    noise = [sig("metric_anomaly", EntityType.DEVICE, f"noise-{i}", offset_s=8 + i % 10)
+             for i in range(40)]                      # all overlap the span
+    grown = window + noise
+    snap = _dallas_snapshot(grown)
+    slice_len = len(main._archive_slice(snap, grown))
+    assert slice_len == 4, f"slice grew with ambient context: {slice_len}"
 
 
 def test_replay_over_the_slice_is_clean():
@@ -186,16 +211,38 @@ def test_unchanged_slice_is_damped_on_reversion(monkeypatch):
 
 
 def test_changed_slice_membership_re_archives(monkeypatch):
+    """v2: only a COMPONENT change re-archives. Growing the window with a
+    signal that joins the dallas component (same node key) changes membership;
+    the rebuilt snapshot's persist must write a fresh slice."""
     window, _ = _window()
     snap = _dallas_snapshot(window)
     ch = FakeCH()
     monkeypatch.setattr(main, "ch", ch)
     run(main._persist_snapshot(snap, 1, "open", window))
     grown = window + [sig("if_errors", EntityType.INTERFACE, "dallas-edge:Gi0/1",
-                          offset_s=15)]
+                          offset_s=15)]              # joins the component's node
+    snap2 = _dallas_snapshot(grown)
+    assert len(main._archive_slice(snap2, grown)) > len(main._archive_slice(snap, window))
+    n_v1 = len(_archive_calls(ch))
+    run(main._persist_snapshot(snap2, 2, "open", grown))
+    assert len(_archive_calls(ch)) > n_v1, "a grown COMPONENT slice must re-archive"
+
+
+def test_window_growth_outside_the_component_is_damped(monkeypatch):
+    """The v2 dividend: ambient window growth no longer re-archives. Under the
+    old rule this exact scenario rewrote a window-sized slice every version."""
+    window, _ = _window()
+    snap = _dallas_snapshot(window)
+    ch = FakeCH()
+    monkeypatch.setattr(main, "ch", ch)
+    before = main.ARCHIVE_SLICES_DAMPED
+    run(main._persist_snapshot(snap, 1, "open", window))
+    grown = window + [sig("metric_anomaly", EntityType.DEVICE, "elsewhere-dev",
+                          offset_s=12)]              # overlaps span, NOT component
     n_v1 = len(_archive_calls(ch))
     run(main._persist_snapshot(snap, 2, "open", grown))
-    assert len(_archive_calls(ch)) > n_v1, "a grown window slice must re-archive"
+    assert len(_archive_calls(ch)) == n_v1, "ambient growth must damp, not re-archive"
+    assert main.ARCHIVE_SLICES_DAMPED == before + 1
 
 
 def test_archive_insert_is_chunked(monkeypatch):
@@ -232,3 +279,82 @@ def test_failed_archive_write_is_retried_not_damped(monkeypatch):
     n_v1 = len(_archive_calls(ch))
     run(main._persist_snapshot(snap, 2, "open", window))     # retried, not damped
     assert len(_archive_calls(ch)) == 2 * n_v1
+
+
+# ── replay through the STORED rows: terminal versions, fallback, clipping ────
+#
+# The tests above call replay() over in-memory Signal lists. These three go
+# through the actual persisted representation — FakeCH rows → Signal.from_ch_row
+# → _select_slice — because the failure modes the 2026-08-22 reviews named
+# (terminal versions, damped-version resolution, clipped nodes) live in that
+# path, and no test exercised it end to end before.
+
+from replay import _select_slice  # late import: section-local helper
+from signals import Signal as _Sig  # late import: section-local helper
+
+
+def _stored_rows(ch):
+    """FakeCH archive rows, shaped as the ClickHouse reader would return them."""
+    return [{k: v for k, v in r.items() if k != "_table"}
+            for r in ch.rows if r["_table"] == "netops.corr_signals_archive"]
+
+
+def _replay_stored(snap, version, state, ch):
+    stored = StoredObject.from_rows(snap.to_object_row(version, state),
+                                    snap.to_edge_rows(version))
+    rows = _select_slice(_stored_rows(ch), version)
+    return replay(stored, [_Sig.from_ch_row(r) for r in rows])
+
+
+def test_terminal_version_replays_via_the_fallback(monkeypatch):
+    """Both 2026-08-22 reviews flagged this as untested: a closed version
+    persists with window=[] and NO slice of its own; replay must resolve the
+    newest slice ≤ version and come back clean."""
+    window, _ = _window()
+    snap = _dallas_snapshot(window)
+    ch = FakeCH()
+    monkeypatch.setattr(main, "ch", ch)
+    run(main._persist_snapshot(snap, 1, "open", window))
+    n_open = len(_archive_calls(ch))
+    run(main._persist_snapshot(snap, 2, "closed", []))       # terminal: no window
+    assert len(_archive_calls(ch)) == n_open, "a terminal persist must archive nothing"
+    report = _replay_stored(snap, 2, "closed", ch)
+    assert report.engine_pin_match and report.catalog_pin_match
+    assert report.clean, f"terminal-version replay drifted: {report.differences}"
+
+
+def test_damped_version_replays_via_the_fallback(monkeypatch):
+    """Rollback/fallback pin: v2 damped (same membership, no rows at v2) must
+    resolve v1's slice and replay clean — the property old code relies on when
+    reading new-format slices."""
+    window, _ = _window()
+    snap = _dallas_snapshot(window)
+    ch = FakeCH()
+    monkeypatch.setattr(main, "ch", ch)
+    run(main._persist_snapshot(snap, 1, "open", window))
+    run(main._persist_snapshot(snap, 2, "open", window))     # damped: no v2 rows
+    assert not [r for r in _stored_rows(ch) if r["archived_version"] == 2]
+    report = _replay_stored(snap, 2, "open", ch)
+    assert report.clean, f"damped-version replay drifted: {report.differences}"
+
+
+def test_clipping_a_component_node_is_replay_visible(monkeypatch):
+    """Node-completeness mutation pin (storage review finding 15): an archive
+    that stores only 'the signals attached to the object' instead of EVERY
+    signal of every component node must not replay clean. Drop one signal of a
+    two-signal component node and the drift report must say so."""
+    window, _ = _window()
+    grown = window + [sig("if_errors", EntityType.INTERFACE, "dallas-edge:Gi0/1",
+                          offset_s=15)]              # node now holds two signals
+    snap = _dallas_snapshot(grown)
+    full = main._archive_slice(snap, grown)
+    two_sig_node = [n for n in snap.nodes if len(n.signals) > 1]
+    assert two_sig_node, "fixture must contain a multi-signal component node"
+    victim = two_sig_node[0].signals[-1]
+    clipped = [s for s in full if s.signal_id != victim.signal_id]
+    stored = StoredObject.from_rows(snap.to_object_row(1, "open"),
+                                    snap.to_edge_rows(1))
+    report = replay(stored, clipped)
+    assert not report.clean, (
+        "a clipped component node replayed clean — node-completeness is no "
+        "longer enforced by the replay contract")

@@ -2942,6 +2942,12 @@ async def _snap_call(snap: ObjectSnapshot, fn, /, *args, **kwargs):
 
 ARCHIVE_ROWS_WRITTEN = 0     # archive rows actually inserted (monotonic)
 ARCHIVE_SLICES_DAMPED = 0    # re-persists whose slice membership was unchanged
+# Tracker 156 v2 observability: rows per archived slice. Settles the open
+# 8.5k-vs-38k measurement question from the redesign doc §1, and is the
+# write-amplification regression signal — component-sized slices must track
+# component size, never window size.
+ARCHIVE_SLICE_ROWS_LAST = 0
+ARCHIVE_SLICE_ROWS_MAX = 0
 _ARCHIVE_SLICE_HASH: dict[str, str] = {}  # cid → last successfully archived slice id-hash
 
 
@@ -3045,32 +3051,40 @@ def _window_index(window: Sequence[Signal]) -> _WindowIndex:
 
 
 def _archive_slice(snap: ObjectSnapshot, window: Sequence[Signal]) -> list[Signal]:
-    """The BOUNDED, replay-exact archive slice for one object version.
+    """The COMPONENT-SIZED, replay-exact archive slice for one object version.
 
-    Contents:
-      * every signal of every evidence NODE (same (entity_type, entity_id, kind)
-        grouping as engine.build_nodes) whose activity interval [first ts, last
-        ts] overlaps the object's [window_start, window_end] — nodes are never
-        CLIPPED, so each included node is byte-identical to its live twin;
+    Contents (tracker 156 v2 — see docs/scale/ARCHIVE_REDESIGN_156_2026-08-22.md):
+      * every signal of every COMPONENT node (snap.nodes) — node-complete,
+        nodes are never CLIPPED, so each archived node is byte-identical to its
+        live twin. This is the membership change: the old rule included every
+        window node whose activity interval merely OVERLAPPED the object's
+        span, which under estate-wide activity approached the whole retained
+        window (~the 98.6%-of-persistence-time defect, run `082201589waa`);
       * every non-node signal (kind *_clear, source=app_identity — both excluded
         from build_nodes) inside the object's bounds, plus the identity signals
-        this object actually matched (snap.identity_signals), so the Inspector
-        timeline and the app-impact enrichment reproduce.
+        this object actually matched (snap.identity_signals), so the app-impact
+        enrichment reproduces. (Ambient window context for the Inspector
+        timeline is re-sourced from corr_signals at display time — owner
+        decision 2026-08-22, design §5 option (a) — not from this slice.)
 
-    Replay exactness argument (pinned by test_replay_archive_slice.py):
-    edge admission is PAIR-LOCAL (resolve_grounding reads only the two nodes +
-    the embedded seams/adjacency/paths context), so restricting the window to a
-    node-complete subset that contains the whole component reproduces the SAME
-    component — every component node overlaps [window_start, window_end] by
-    construction (those bounds ARE the component's min/max ts), included nodes
-    carry all their signals (identical tokens/onset/intervals ⇒ identical pair
-    verdicts), and an excluded node could only have joined through an edge the
-    live run would also have admitted — contradiction with it not being in the
-    component. Ranking/verdict/confidence are component-local. What legitimately
-    differs on replay: the window-global gap-hint COUNT (not diffed, not part of
-    the stored row set) — the trade for not re-writing the full tenant window
-    per object version.
+    Replay exactness argument (pinned by test_archive_slice.py, corpus-gated by
+    test_archive_corpus_replay_156.py): edge admission is PAIR-LOCAL
+    (resolve_grounding reads only the two nodes + the embedded seams/adjacency/
+    paths context), so a node-complete subset that contains the whole component
+    reproduces the SAME component — included nodes carry all their signals
+    (identical tokens/onset/intervals ⇒ identical pair verdicts), and an
+    excluded node could only have joined through an edge the live run would
+    also have admitted — contradiction with it not being in the component.
+    Ranking/verdict/confidence are component-local. Two adversarial reviews
+    (2026-08-22) confirmed the ambient-context rows the old rule archived are
+    not load-bearing for this argument, and the pinned replay diff proves it
+    empirically. What legitimately differs on replay: the window-global
+    gap-hint COUNT (not diffed, not part of the stored row set).
     """
+    # Terminal persists (merged/closed) pass window=[]: nothing to archive, and
+    # the ordinal lookup below has no entries — same [] the old rule returned.
+    if not window:
+        return []
     idx = _window_index(window)
     ws, we = snap.window_start, snap.window_end
     matched_identities = {s.signal_id_str for s in snap.identity_signals}
@@ -3079,9 +3093,14 @@ def _archive_slice(snap: ObjectSnapshot, window: Sequence[Signal]) -> list[Signa
     for s, sid in idx.loose:
         if (ws <= s.ts <= we) or sid in matched_identities:
             keep.append(s)
-    for _key, sigs, lo, hi in idx.nodes:
-        if lo <= we and ws <= hi:
-            keep.extend(sigs)
+    # COMPONENT nodes only — every signal of every node this object is made of.
+    # snap.nodes are built from this same window's Signal objects (build_nodes
+    # over the epoch's frozen tuple), so the ordinal lookup is total; a missing
+    # id would mean the snapshot and window diverged, which must fail LOUDLY
+    # (KeyError -> engine cycle failed, observable) rather than shrink a replay
+    # slice silently.
+    for node in snap.nodes:
+        keep.extend(node.signals)
     # Same order as sorting by (ts, signal_id) — the ordinal IS that order,
     # computed once per cycle rather than once per object.
     keep.sort(key=lambda s: order[id(s)])
@@ -3163,8 +3182,11 @@ async def _persist_snapshot(snap: ObjectSnapshot, version: int, state: str,
     # 50k-floor tenant window per object version). Slices stay version-scoped:
     # replay re-runs exactly the window slice THIS version was computed from.
     global ARCHIVE_ROWS_WRITTEN, ARCHIVE_SLICES_DAMPED
+    global ARCHIVE_SLICE_ROWS_LAST, ARCHIVE_SLICE_ROWS_MAX
     slice_sigs = _archive_slice(snap, window)
     if slice_sigs:
+        ARCHIVE_SLICE_ROWS_LAST = len(slice_sigs)
+        ARCHIVE_SLICE_ROWS_MAX = max(ARCHIVE_SLICE_ROWS_MAX, len(slice_sigs))
         slice_hash = hashlib.sha256(
             "|".join(_sid_of(window, s) for s in slice_sigs).encode()).hexdigest()[:16]
         if _ARCHIVE_SLICE_HASH.get(snap.correlation_id) == slice_hash:
@@ -3775,12 +3797,47 @@ class InsertOutcome:
 #   173 CANNOT_ALLOCATE_MEMORY
 CH_RETRYABLE_CODES = frozenset({241, 202, 203, 209, 210, 252, 159, 173})
 
-CORR_CH_RETRY_ATTEMPTS = int(os.environ.get("CORR_CH_RETRY_ATTEMPTS", "4"))
+# At least one ATTEMPT is always made — 0 would mean "never insert", not
+# "never retry", and would leave both this and the batcher's retry loop with
+# no outcome to act on (the `assert` that documents that invariant is stripped
+# under `python -O`, so the guarantee has to live here, not there).
+CORR_CH_RETRY_ATTEMPTS = max(1, int(os.environ.get("CORR_CH_RETRY_ATTEMPTS", "4")))
 CORR_CH_RETRY_BASE_S = float(os.environ.get("CORR_CH_RETRY_BASE_S", "0.5"))
 CORR_CH_RETRY_MAX_S = float(os.environ.get("CORR_CH_RETRY_MAX_S", "8.0"))
 CH_RETRIES_ATTEMPTED = 0
 CH_RETRIES_RECOVERED = 0
 CH_RETRIES_EXHAUSTED = 0
+
+# The HTTP client timeout for every ClickHouse call. This was a hard-coded 10.0s
+# while a MEASURED archive insert on the 1000-device workload took 14,395 ms
+# server-side (docs/scale/ARCHIVE_PERSISTENCE_BOTTLENECK_2026-08-22.md), i.e. the
+# client hung up on inserts ClickHouse was still committing. A read timeout is
+# indistinguishable from a rejection at that point, so the write was counted lost
+# and — on an RCA-critical table — raised CHInsertRejected out of the engine
+# cycle, discarding a whole cohort's frontier advance. Waiting for a slow commit
+# is strictly better than abandoning it: the await does not block the loop.
+CORR_CH_TIMEOUT_S = float(os.environ.get("CORR_CH_TIMEOUT_S", "30.0"))
+
+# Tables where re-sending an insert after an UNKNOWN outcome cannot duplicate a
+# row, so a retry is safe. Every entry is justified by its DDL in
+# deployment/docker/clickhouse/init.sql — this set is not a guess, and a table
+# must not be added to it without the corresponding DDL guarantee:
+#   corr_objects/corr_edges/corr_evidence — non_replicated_deduplication_window
+#       = 1000, so a re-sent block carrying a token the server already saw is
+#       dropped server-side.
+#   corr_current — ReplacingMergeTree(created_at) keyed by
+#       (tenant, correlation_id), so a duplicate collapses on merge by design.
+# Deliberately ABSENT: corr_signals and corr_signals_archive are plain MergeTree
+# with no dedup window, so retrying them would duplicate causal/replay rows.
+# corr_signals is retried by the batcher instead (_flush_table), which resends
+# under a content-hash token; corr_signals_archive never raises (it is not an
+# RCA-critical table) and is retried whole on the next persist.
+CH_DEDUP_SAFE_TABLES = frozenset({
+    "netops.corr_objects",
+    "netops.corr_edges",
+    "netops.corr_evidence",
+    "netops.corr_current",
+})
 
 
 async def _insert_with_outcome(table: str, rows: list, token: str) -> InsertOutcome:
@@ -3834,7 +3891,7 @@ class CH:
         # Plain http keeps the default (verify is irrelevant there), so the
         # fresh-install baseline is byte-identical.
         verify = os.environ.get("CORRELATION_CA_FILE") or True
-        self.client = httpx.AsyncClient(timeout=10.0, verify=verify)
+        self.client = httpx.AsyncClient(timeout=CORR_CH_TIMEOUT_S, verify=verify)
 
     async def insert(self, table: str, rows: Iterable[dict],
                      dedup_token: str = "") -> bool:
@@ -4064,18 +4121,55 @@ async def ch_insert(table: str, rows, *, dedup_token: str | None = None, **ctx) 
         token = dedup_token
     else:
         token = _next_dedup_token(table) if table in CH_CRITICAL_TABLES else ""
-    try:
-        ok = await ch.insert(table, rows, dedup_token=token)
-    except Exception as exc:  # blanket on purpose: counted, then re-raised
-        _note_ch_failure(table, type(exc).__name__, ctx)
-        raise
-    # `is False` exactly: CH.insert's contract is a bool, and a test double that
-    # returns None must not be miscounted as a lost write.
-    if ok is False:
-        _note_ch_failure(table, "rejected", ctx)
+    rows = list(rows)
+    # A retry may only be attempted where re-sending cannot duplicate: the table
+    # must carry a server-side dedup guarantee AND we must have a stable token to
+    # resend under. Without both, one unknown outcome would turn into two rows.
+    idempotent = bool(token) and table in CH_DEDUP_SAFE_TABLES
+    global CH_RETRIES_ATTEMPTED, CH_RETRIES_RECOVERED, CH_RETRIES_EXHAUSTED
+    # At least one ATTEMPT, always: a budget of 0 would mean "never insert",
+    # not "never retry", and would leave `outcome` unset. Clamped HERE and not
+    # only at the env read, so the invariant survives any path that sets the
+    # module global — the `assert` below documents it but is stripped under
+    # `python -O`.
+    attempts = max(1, CORR_CH_RETRY_ATTEMPTS)
+    outcome: InsertOutcome | None = None
+    for attempt in range(1, attempts + 1):
+        try:
+            outcome = await _insert_with_outcome(table, rows, token)
+        except Exception as exc:  # blanket on purpose: counted, then re-raised
+            _note_ch_failure(table, type(exc).__name__, ctx)
+            raise
+        if outcome.committed:
+            if attempt > 1:
+                CH_RETRIES_RECOVERED += 1
+                log.warning("clickhouse insert RECOVERED table=%s attempt=%d rows=%d",
+                            table, attempt, len(rows))
+            break
+        if attempt >= attempts or not idempotent or not ch_retryable(outcome):
+            break
+        CH_RETRIES_ATTEMPTED += 1
+        delay = ch_retry_delay(attempt)
+        log.warning("clickhouse insert retry table=%s attempt=%d/%d ch_code=%s "
+                    "kind=%s rows=%d backoff=%.2fs",
+                    table, attempt, attempts, outcome.ch_code or "-",
+                    outcome.kind, len(rows), delay)
+        await asyncio.sleep(delay)
+    assert outcome is not None
+    if not outcome.committed:
+        if idempotent and ch_retryable(outcome):
+            CH_RETRIES_EXHAUSTED += 1
+        # The KIND, not a hard-coded "rejected". A read timeout on an insert
+        # ClickHouse was still committing is an UNKNOWN outcome, not a refusal,
+        # and the two want different operator responses.
+        _note_ch_failure(table, outcome.kind or "rejected", {**ctx, **outcome.as_evidence()})
         if table in CH_CRITICAL_TABLES:
-            raise CHInsertRejected(f"{table} rejected the insert")
-    return ok
+            raise CHInsertRejected(
+                f"{table} insert did not commit (kind={outcome.kind or 'rejected'})")
+    # `is False` exactly: CH.insert's contract is a bool, and a test double that
+    # returns None must not be miscounted as a lost write — _insert_with_outcome
+    # preserves that by treating only an explicit False as uncommitted.
+    return outcome.committed
 
 
 # ---------------------------------------------------------------------------
@@ -6568,6 +6662,10 @@ async def metrics_exposition():
         f"corr_archive_rows_written {ARCHIVE_ROWS_WRITTEN}",
         "# TYPE corr_archive_slices_damped counter",
         f"corr_archive_slices_damped {ARCHIVE_SLICES_DAMPED}",
+        "# TYPE corr_archive_slice_rows_last gauge",
+        f"corr_archive_slice_rows_last {ARCHIVE_SLICE_ROWS_LAST}",
+        "# TYPE corr_archive_slice_rows_max gauge",
+        f"corr_archive_slice_rows_max {ARCHIVE_SLICE_ROWS_MAX}",
         # Housekeeping: the window-prune path. The 2026-08-20 review found the
         # service exposed NOTHING about its own maintenance work, so a 30,989 ms
         # prune stall was only findable with a bespoke forensic build. Low
