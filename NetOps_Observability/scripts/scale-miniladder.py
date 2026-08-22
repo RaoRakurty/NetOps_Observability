@@ -36,7 +36,11 @@ Phases (each emits PASS/FAIL + evidence into the run dir):
               one canary event, then inject syslog at --eps for
               --burst-minutes via the broker's console producer (mTLS
               listener on the TLS variant), keyed to the created devices with
-              real mnemonics (%LINK-3-UPDOWN).
+              real mnemonics. `--event-mix single` (default) emits only
+              %LINK-3-UPDOWN — ONE correlation signal kind, the workload every
+              recorded capacity number was measured on. `--event-mix realistic`
+              emits a weighted mix yielding six distinct kinds, which is what
+              tracker 167's signal-kind template index must be judged against.
   drain       consumer lag must return to <= baseline + epsilon within
               --drain-factor x burst duration; the lag curve is recorded.
   accounting  injected == OpenSearch-persisted (exact, hostname-prefix count)
@@ -829,6 +833,8 @@ class Harness:
                       "".join(random.choices(string.ascii_lowercase + string.digits, k=4)))
         self.prefix = f"mlx-{self.runid}-"
         self.stack = Stack(args.env_file, args.base_url, args.project)
+        # Expanded once, not per event — see _syslog_event.
+        self._mix = self._mix_table(self.EVENT_MIX_REALISTIC)
         self.run_dir = args.run_dir or os.path.join(
             REPO_ROOT, "data", "miniladder",
             datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ") + "-" + self.runid)
@@ -1107,15 +1113,99 @@ class Harness:
             + ("linear enough" if ok else "SUPER-LINEAR SLOWDOWN (O(N^2) class)"))
 
     # -- phase 3: burst ------------------------------------------------------
+    #
+    # WORKLOAD SHAPE. `--event-mix single` emits one mnemonic (%LINK-3-UPDOWN),
+    # which the correlation engine classifies into exactly one signal kind
+    # (`link_state_change`). That is the historical workload and stays the
+    # DEFAULT: every capacity number recorded against this harness — the whole
+    # of tracker 166's evidence trail — was measured on it, and silently
+    # changing the workload would invalidate the comparison rather than extend
+    # it.
+    #
+    # It is also, as `docs/scale/TEMPLATE_APPLICABILITY_167.md` says in its own
+    # generality caveat, the FRIENDLY case for tracker 167's signal-kind
+    # template index: a single-kind window is the easiest possible thing to be
+    # selective about, so the measured "22 candidate templates per object of
+    # 100" is a property of this workload and not of the platform. 167 is
+    # therefore PASS offline with its live selectivity UNVALIDATED — the
+    # harness could not produce a workload capable of testing it.
+    #
+    # `--event-mix realistic` closes that gap: a weighted mnemonic mix chosen so
+    # the engine's syslog classifier (`producers.syslog_control_signal`) yields
+    # SIX distinct kinds across two entity scopes (device, interface).
+    # Selection is deterministic in `seq` — no RNG — so the
+    # injected/persisted balance equation the
+    # accounting phase depends on stays exactly reproducible, and two runs of
+    # the same parameters remain comparable.
+    #
+    # Weights are per-mnemonic shares of a realistic edge/aggregation estate,
+    # not equal thirds: link flaps dominate real syslog, adjacency churn
+    # follows, and a tail of unclassified lines becomes canonical
+    # `device_alarm` — which is itself worth injecting, because it is the
+    # branch every unrecognized vendor mnemonic in the field lands on.
+    EVENT_MIX_REALISTIC = (
+        # (weight, appname, message template, syslog severity) -> engine kind
+        (46, "LINK-3-UPDOWN",
+         ("%LINK-3-UPDOWN: Interface GigabitEthernet0/{if_n}, "
+          "changed state to {state}"), "err"),                  # link_state_change
+        (18, "BGP-5-ADJCHANGE",
+         ("%BGP-5-ADJCHANGE: neighbor 10.{oct2}.{oct3}.1 {State} "
+          "Interface flap"), "notice"),                         # bgp_adjacency_change
+        (12, "OSPF-5-ADJCHG",
+         ("%OSPF-5-ADJCHG: Process 1, Nbr 10.{oct2}.{oct3}.2 on "
+          "GigabitEthernet0/{if_n} from FULL to {STATE}"), "notice"),  # ospf_adjacency_change
+        (9, "LLDP-5-NEIGHBOR",
+         ("%LLDP-5-NEIGHBOR: neighbor {verb} on interface "
+          "GigabitEthernet0/{if_n}"), "notice"),                # lldp_neighbor_change
+        (8, "SPANTREE-6-INTERFACE",
+         ("%SPANTREE-6-INTERFACE: GigabitEthernet0/{if_n} moved to "
+          "{stp_state}"), "info"),                              # stp_topology_change
+        # Deliberately an UNRECOGNIZED mnemonic at warning severity: it must fall
+        # through every branch above to the generic device-alarm safety net. The
+        # severity matters — that net has a floor and ignores notice/info, so an
+        # info-level line here would produce no signal at all and quietly make
+        # this a five-kind mix (verified, not assumed: test_event_mix_167.py).
+        (7, "ENVMON-4-FAN_FAILED",
+         "%ENVMON-4-FAN_FAILED: Fan {if_n} failed", "warning"),  # device_alarm
+    )
+
+    @staticmethod
+    def _mix_table(mix: tuple) -> tuple:
+        """Expand the weighted mix into a flat lookup indexed by `seq`.
+
+        Built once per run, not per event: at 2,000 eps for 5 minutes this is on
+        the hot path 600,000 times.
+        """
+        table = []
+        for weight, appname, template, severity in mix:
+            table.extend([(appname, template, severity)] * weight)
+        return tuple(table)
+
     def _syslog_event(self, device: str, seq: int) -> str:
         state = "down" if seq % 2 == 0 else "up"
         ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
+        if self.args.event_mix == "single":
+            appname = "LINK-3-UPDOWN"
+            message = (f"%LINK-3-UPDOWN: Interface GigabitEthernet0/{seq % 48}, "
+                       f"changed state to {state} [mlx seq {seq}]")
+            severity = "err"
+        else:
+            appname, template, severity = self._mix[seq % len(self._mix)]
+            message = template.format(
+                if_n=seq % 48,
+                state=state,
+                State=state.capitalize(),
+                STATE=state.upper(),
+                oct2=(seq // 251) % 251,
+                oct3=seq % 251,
+                verb="removed" if state == "down" else "added",
+                stp_state="discarding" if state == "down" else "forwarding",
+            ) + f" [mlx seq {seq}]"
         return json.dumps({
             "hostname": device,
-            "appname": "LINK-3-UPDOWN",
-            "message": (f"%LINK-3-UPDOWN: Interface GigabitEthernet0/{seq % 48}, "
-                        f"changed state to {state} [mlx seq {seq}]"),
-            "severity": "err",
+            "appname": appname,
+            "message": message,
+            "severity": severity,
             "timestamp": ts,
         })
 
@@ -1291,6 +1381,7 @@ class Harness:
             "burst_seconds": round(self.burst_seconds, 1),
             "actual_eps": round(actual_eps, 1),
             "target_eps": self.args.eps,
+            "event_mix": self.args.event_mix,
             "chunks": len(chunks),
             "produce_failures": self.produce_failures,
         })
@@ -2010,6 +2101,8 @@ class Harness:
                 "devices": self.args.devices,
                 "burst_minutes": self.args.burst_minutes,
                 "eps": self.args.eps,
+                "event_mix": self.args.event_mix,
+                "load_generator": self.args.load_generator,
                 "linearity_floor": self.args.linearity_floor,
                 "drain_factor": self.args.drain_factor,
                 "lag_epsilon": self.args.lag_epsilon,
@@ -2031,6 +2124,7 @@ class Harness:
              f"project `{self.args.project}`)"),
             (f"- Parameters: {self.args.devices} devices, "
              f"{self.args.burst_minutes} min burst @ {self.args.eps} eps target, "
+             f"event mix `{self.args.event_mix}`, "
              f"linearity floor {self.args.linearity_floor}, "
              f"drain budget {self.args.drain_factor}x burst, "
              f"lag epsilon {self.args.lag_epsilon}, mem factor {self.args.mem_factor}"),
@@ -2182,6 +2276,16 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
                     help="print the full plan and exit; touches nothing")
     # tracker 152 §8.3 — twin composition. Default is the internal generator,
     # byte-identical to the pre-flag behavior.
+    ap.add_argument("--event-mix", choices=("single", "realistic"), default="single",
+                    help="internal generator workload shape. 'single' (default) "
+                         "emits only %%LINK-3-UPDOWN, i.e. ONE correlation signal "
+                         "kind — the historical workload every recorded capacity "
+                         "number was measured on. 'realistic' emits a weighted "
+                         "mnemonic mix yielding six distinct kinds across two "
+                         "entity scopes, which is what tracker 167's signal-kind "
+                         "template index has to be judged against; a single-kind "
+                         "window is its friendly case. Deterministic in sequence "
+                         "number either way, so accounting stays exact.")
     ap.add_argument("--load-generator", choices=("internal", "twin"),
                     default="internal", dest="load_generator",
                     help="burst-phase load source: internal (default; the "
