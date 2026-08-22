@@ -1453,6 +1453,11 @@ class Harness:
             f"lane events (+{sum(v for k, v in by_lane.items() if k != 'syslog')} "
             f"on other lanes) in {self.burst_seconds:.0f}s")
 
+    def _canary_event(self) -> str:
+        """The pipeline-proof event: always %LINK-3-UPDOWN (classifies under
+        every catalog), always the first created device, fixed seq marker."""
+        return self._syslog_event(self.created_ids[0], 999_999, mix_name="single")
+
     def _planned_total(self) -> int:
         """Events this run intends to inject — lane-integrated for storm
         profiles, args-derived otherwise."""
@@ -1611,7 +1616,13 @@ class Harness:
         ev["producer_key"] = self.producer_key or ""
 
         # Gate 2: one canary through the whole pipe (topic -> engine -> CH).
-        canary = self._syslog_event(self.created_ids[0], 999_999)
+        # The canary proves the PIPE, never the mix: it is ALWAYS the single
+        # always-classifying %LINK-3-UPDOWN event, independent of the run's
+        # profile. Under a promotion-realistic mix the run-mix event at the
+        # fixed canary seq can land on a NOISE slot (999,999 % 2000 = 1999 —
+        # exactly what failed the first T-nominal run, 08221806kefm): a canary
+        # that classifies by luck of the modulus is not a gate.
+        canary = self._canary_event()
         ok, err = self.stack.produce("netops.syslog", [canary], key=self.producer_key)
         if not ok:
             return self.phase("burst", "FAIL", ev, f"canary produce failed: {err}")

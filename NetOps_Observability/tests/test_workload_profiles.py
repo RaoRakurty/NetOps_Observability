@@ -217,3 +217,33 @@ def test_planned_total_flat_profiles_match_eps_times_duration():
     gen = _gen(profile="t-nominal")
     gen.args.eps, gen.args.burst_minutes = 400, 15
     assert gen._planned_total() == 400 * 900
+
+
+# ── the canary must prove the pipe, never the mix ────────────────────────────
+
+def test_canary_always_classifies_under_every_profile():
+    """Run 08221806kefm's failure, pinned: the canary at fixed seq 999,999
+    under the production mix landed on a NOISE slot (999,999 % 2000 = 1999)
+    and could never produce a corr_signal — a false pipeline-broken verdict.
+    The canary is now mix-independent and must classify under EVERY profile."""
+    now = datetime.now(timezone.utc)
+    for profile in ml.WORKLOAD_PROFILES:
+        gen = _gen(profile=profile,
+                   event_mix=ml.WORKLOAD_PROFILES[profile].get("event_mix", "single"))
+        ev = json.loads(gen._canary_event())
+        sig = producers.syslog_control_signal(ev, "t1", now)
+        assert sig is not None, f"canary does not classify under profile {profile!r}"
+        assert sig.kind == "link_state_change"
+        assert "[mlx seq 999999]" in ev["message"], "canary lost its trace marker"
+
+
+def test_mutation_run_mix_canary_is_noise_at_the_fixed_seq():
+    """The regression direction: build the canary with the RUN mix (the old
+    code) under t-nominal and it must NOT classify — proving the mix-pinned
+    canary is load-bearing, not decorative."""
+    gen = _gen(profile="t-nominal", event_mix="production")
+    ev = json.loads(gen._syslog_event(gen.created_ids[0], 999_999))  # old behaviour
+    sig = producers.syslog_control_signal(ev, "t1", datetime.now(timezone.utc))
+    assert sig is None, (
+        "seq 999,999 now classifies under the production mix — if the table "
+        "reshaped, this mutation pin needs a new fixed-seq noise witness")
