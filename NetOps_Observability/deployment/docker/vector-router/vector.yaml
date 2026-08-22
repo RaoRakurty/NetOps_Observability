@@ -320,6 +320,23 @@ transforms:
       if !((to_string(.cx_restored_from) ?? "") == "quarantine" && match(to_string(.cx_event_id) ?? "", r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$')) {
         del(.cx_event_id)
       }
+      # ── F-18 idempotent indexing (2026-08-22, run 08221846o1fo) ─────────
+      # A slow OpenSearch made a bulk request time out CLIENT-side after the
+      # server had applied it; the sink retried and 24,063 docs (one ~60s
+      # window) were indexed twice — same Kafka partition+offset, two auto
+      # _ids, measured live. Every OS log sink already routes `id_key:
+      # cx_event_id` (the F-11 upsert mechanism), so stamping the record's
+      # KAFKA COORDINATE as the id makes retries collapse into upserts for
+      # the whole lane. Safety, in order: the strip above already ran, so a
+      # producer cannot smuggle an id; `offset`/`partition` are CONSUMER-side
+      # source metadata that overwrite any payload-forged value (probed live:
+      # forged 424242/99 → stored 3381593/1), so the id is unforgeable; the
+      # restore path's uuid ids survive (exists-guard); and an event somehow
+      # missing coordinates keeps an auto id rather than collapsing into a
+      # shared fallback id — duplication is recoverable, collapse is not.
+      if !exists(.cx_event_id) && exists(.offset) && exists(.partition) {
+        .cx_event_id = join!(["cxk", to_string(.topic) ?? "t", to_string!(.partition), to_string!(.offset)], ":")
+      }
       seg = downcase(to_string(.tenant_id) ?? "")
       if seg == "" { seg = "untagged" } else { seg = replace(seg, r'[^a-z0-9_-]', "-") }
       .tenant_seg = seg
@@ -760,6 +777,23 @@ transforms:
           # away from the lane it actually describes).
           topic: "{{ topic }}"
 
+  # F-18: the DLQ lane bypasses the log_lane anchor, so it gets its own
+  # coordinate stamp. Deliberately UNCONDITIONAL here (unlike the anchor's
+  # exists-guard on cx_event_id): a dead-letter record may CARRY the original
+  # event's id in its envelope, and two dead-letters about one event must
+  # never collapse into one DLQ document — the DLQ doc's identity is the DLQ
+  # RECORD (its own Kafka coordinate), never the event it describes. Records
+  # minted in-pipeline (deadletter_encoded) have no coordinate and keep auto
+  # ids.
+  deadletter_id_stamped:
+    type: remap
+    inputs: [deadletter_encoded, kafka_deadletter]
+    source: |
+      del(.cx_event_id)
+      if exists(.offset) && exists(.partition) {
+        .cx_event_id = join!(["cxk", to_string(.topic) ?? "t", to_string!(.partition), to_string!(.offset)], ":")
+      }
+
 sinks:
   prometheus_internal:
     type: prometheus_exporter
@@ -797,8 +831,10 @@ sinks:
     mode: bulk
     # F-11 (INV-F11-08): restored quarantine events carry cx_event_id and must
     # UPSERT on replay — without this, a re-run of the operator restore
-    # duplicated the tenant document (caught live 2026-08-12). Normal events
-    # don't carry the field and keep auto ids (verified empirically below).
+    # duplicated the tenant document (caught live 2026-08-12). F-18
+    # (2026-08-22): normal events now ALSO carry it — the log_lane anchor
+    # stamps the record's Kafka coordinate — so a bulk retry after a
+    # timed-out-but-applied request upserts instead of duplicating.
     id_key: cx_event_id
     bulk:
       # log_index_base is "applogs" for application services and "platformlogs"
@@ -838,7 +874,7 @@ sinks:
 
   opensearch_deadletter:
     type: elasticsearch
-    inputs: [deadletter_encoded, kafka_deadletter]
+    inputs: [deadletter_id_stamped]
     endpoints: ["${OPENSEARCH_ENDPOINT:-http://opensearch:9200}"]  # SEC-008: TLS deployments point this at https
     auth:
       strategy: basic
@@ -851,6 +887,7 @@ sinks:
     # F-17), never a probe, and never "no errors in the log".
     healthcheck: false
     mode: bulk
+    id_key: cx_event_id
     bulk:
       index: "netops-deadletter-%Y.%m.%d"
       action: index
@@ -874,8 +911,10 @@ sinks:
     mode: bulk
     # F-11 (INV-F11-08): restored quarantine events carry cx_event_id and must
     # UPSERT on replay — without this, a re-run of the operator restore
-    # duplicated the tenant document (caught live 2026-08-12). Normal events
-    # don't carry the field and keep auto ids (verified empirically below).
+    # duplicated the tenant document (caught live 2026-08-12). F-18
+    # (2026-08-22): normal events now ALSO carry it — the log_lane anchor
+    # stamps the record's Kafka coordinate — so a bulk retry after a
+    # timed-out-but-applied request upserts instead of duplicating.
     id_key: cx_event_id
     bulk:
       index: "netops-syslog-{{ tenant_seg }}-%Y.%m.%d"
@@ -900,8 +939,10 @@ sinks:
     mode: bulk
     # F-11 (INV-F11-08): restored quarantine events carry cx_event_id and must
     # UPSERT on replay — without this, a re-run of the operator restore
-    # duplicated the tenant document (caught live 2026-08-12). Normal events
-    # don't carry the field and keep auto ids (verified empirically below).
+    # duplicated the tenant document (caught live 2026-08-12). F-18
+    # (2026-08-22): normal events now ALSO carry it — the log_lane anchor
+    # stamps the record's Kafka coordinate — so a bulk retry after a
+    # timed-out-but-applied request upserts instead of duplicating.
     id_key: cx_event_id
     bulk:
       index: "netops-snmptrap-{{ tenant_seg }}-%Y.%m.%d"
@@ -926,8 +967,10 @@ sinks:
     mode: bulk
     # F-11 (INV-F11-08): restored quarantine events carry cx_event_id and must
     # UPSERT on replay — without this, a re-run of the operator restore
-    # duplicated the tenant document (caught live 2026-08-12). Normal events
-    # don't carry the field and keep auto ids (verified empirically below).
+    # duplicated the tenant document (caught live 2026-08-12). F-18
+    # (2026-08-22): normal events now ALSO carry it — the log_lane anchor
+    # stamps the record's Kafka coordinate — so a bulk retry after a
+    # timed-out-but-applied request upserts instead of duplicating.
     id_key: cx_event_id
     bulk:
       index: "netops-cloudlogs-{{ tenant_seg }}-%Y.%m.%d"
@@ -954,8 +997,10 @@ sinks:
     mode: bulk
     # F-11 (INV-F11-08): restored quarantine events carry cx_event_id and must
     # UPSERT on replay — without this, a re-run of the operator restore
-    # duplicated the tenant document (caught live 2026-08-12). Normal events
-    # don't carry the field and keep auto ids (verified empirically below).
+    # duplicated the tenant document (caught live 2026-08-12). F-18
+    # (2026-08-22): normal events now ALSO carry it — the log_lane anchor
+    # stamps the record's Kafka coordinate — so a bulk retry after a
+    # timed-out-but-applied request upserts instead of duplicating.
     id_key: cx_event_id
     bulk:
       index: "netops-flows-{{ tenant_seg }}-%Y.%m.%d"
