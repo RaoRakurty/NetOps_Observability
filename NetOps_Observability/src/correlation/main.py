@@ -2262,6 +2262,54 @@ CORR_ENGINE_COHORT_SIZE = max(1, int(os.environ.get("CORR_ENGINE_COHORT_SIZE", "
 # still letting it drain far faster than one cohort per interval.
 CORR_ENGINE_DRAIN_COHORTS = max(1, int(os.environ.get("CORR_ENGINE_DRAIN_COHORTS", "20")))
 
+# ── Tracker 172: ingest-priority scheduling (gate spec §4.3 subset contract) ─
+#
+# THE MEASURED DEFECT (S1 design storm, run 082220005r1a): the engine's
+# storm-sized cycles produced event-loop stalls up to 49.3 s — past the 30 s
+# Kafka session timeout — so the broker EJECTED the consumer mid-stall
+# (8 restarts, 117 UnknownMember), collapsing ingest to ~150-250 eps while
+# 3.2 M events sat in the broker. Losing group membership is strictly worse
+# than deferring evaluation: the ratified degradation contract is "evaluate
+# less during a storm, DECLARED" — it is never "stop ingesting".
+#
+# THE RULE: when the consumer is measurably behind (fresh lag above
+# CORR_INGEST_PRIORITY_LAG), the engine DEFERS its sweep so the consumer keeps
+# wire speed — bounded by CORR_INGEST_PRIORITY_MAX_DEFER_S, after which one
+# sweep runs REGARDLESS (deferral, never starvation: the alarm-management
+# literature's deadline-override, and it also bounds how long retention
+# maintenance can be deferred, tracker 171's cadence concern). While storm
+# mode is declared, admitted sweeps also use the smaller
+# CORR_STORM_COHORT_SIZE so each GIL-heavy stretch is shorter.
+CORR_INGEST_PRIORITY_LAG = max(0, int(os.environ.get("CORR_INGEST_PRIORITY_LAG", "10000")))
+CORR_INGEST_PRIORITY_MAX_DEFER_S = float(os.environ.get("CORR_INGEST_PRIORITY_MAX_DEFER_S", "300"))
+CORR_STORM_COHORT_SIZE = max(1, int(os.environ.get("CORR_STORM_COHORT_SIZE", "1000")))
+INGEST_PRIORITY_DEFERRALS = 0     # sweeps deferred to protect ingest (monotonic)
+INGEST_PRIORITY_ACTIVE = False    # gauge: is the engine currently deferring?
+ENGINE_LAST_SWEEP_MONO = 0.0      # when the last non-deferred sweep STARTED
+
+
+def _ingest_priority_decision(now_mono: float) -> tuple[bool, str]:
+    """Should this sweep be DEFERRED to keep the consumer at wire speed?
+
+    Pure decision over module state; returns (defer, reason). Fail-OPEN in
+    every uncertain case: deferral is an optimisation, so unknown/stale lag
+    runs the sweep normally — the opposite polarity from _consumer_caught_up,
+    whose caller deletes evidence and must fail SAFE. A deferral chain is
+    always broken by the deadline, so a stuck lag probe can cost at most
+    CORR_INGEST_PRIORITY_MAX_DEFER_S of extra latency, never a stalled engine.
+    """
+    if (now_mono - ENGINE_LAST_SWEEP_MONO) >= CORR_INGEST_PRIORITY_MAX_DEFER_S:
+        return False, "deadline"          # bounded deferral — run regardless
+    if CONSUMER_LAG_TOTAL is None:
+        return False, "lag-never-measured"
+    if (now_mono - CONSUMER_LAG_AT) > CORR_LAG_FRESH_S:
+        return False, "lag-stale"
+    if CONSUMER_LAG_UNKNOWN_PARTITIONS:
+        return False, "lag-partitions-unknown"
+    if CONSUMER_LAG_TOTAL > CORR_INGEST_PRIORITY_LAG:
+        return True, "ingest-behind"
+    return False, "caught-up"
+
 # The PROCESSED FRONTIER. Membership means: this signal has been through a
 # correlation transaction that completed its persistence boundary. It is a set
 # of signal ids rather than a timestamp because arrival is not monotonic in
@@ -3349,7 +3397,12 @@ async def _engine_cycle_inner(epoch: _EngineEpoch | None) -> None:
     # and then marked processed — never-evaluated evidence).
     _pending = epoch.pending()
     PENDING_PEAK = max(PENDING_PEAK, len(pending_signals()))
-    _cohort = _select_cohort(_pending, CORR_ENGINE_COHORT_SIZE)
+    # Tracker 172: while storm mode is DECLARED, admit smaller cohorts so each
+    # GIL-heavy stretch is shorter and the consumer keeps breathing between
+    # transactions. Retained history is still scored whole (166's contract);
+    # only the per-transaction admission shrinks.
+    _size = CORR_STORM_COHORT_SIZE if epoch.storm else CORR_ENGINE_COHORT_SIZE
+    _cohort = _select_cohort(_pending, _size)
     # A node is NEW to this transaction when ANY of its signals is in the cohort:
     # its activity interval changed, so its pairs must be re-scored. Grouped by
     # tenant up front — the first version rebuilt this per tenant with a nested
@@ -3579,7 +3632,33 @@ async def engine_loop() -> None:
              "(reach %.1fs + lateness %.0fs, STREAM time) quiesce=%.0fs",
              CORR_ENGINE_INTERVAL_S, RETENTION_REQUIRED_S, ENGINE_REACH_S,
              CORR_PERMITTED_LATENESS_S, CORR_QUIESCE_S)
+    global ENGINE_LAST_SWEEP_MONO
+    ENGINE_LAST_SWEEP_MONO = time.monotonic()
     while True:
+        # Tracker 172: ingest priority. A sweep is skipped while the consumer
+        # is measurably behind — bounded by the deadline inside the decision —
+        # so storm backlogs are drained by the CONSUMER first and evaluated
+        # (declared, subset contract) at a reduced cadence, instead of the
+        # engine's cycles stalling the loop past the Kafka session timeout and
+        # ejecting the member (the S1 failure mechanism).
+        global INGEST_PRIORITY_DEFERRALS, INGEST_PRIORITY_ACTIVE
+        defer, reason = _ingest_priority_decision(time.monotonic())
+        if defer:
+            INGEST_PRIORITY_DEFERRALS += 1
+            if not INGEST_PRIORITY_ACTIVE:
+                log.warning(
+                    "engine sweep DEFERRED for ingest priority (tracker 172): "
+                    "consumer lag %s > %d — correlation continues at the bounded "
+                    "%.0fs cadence; deferrals are counted and declared",
+                    CONSUMER_LAG_TOTAL, CORR_INGEST_PRIORITY_LAG,
+                    CORR_INGEST_PRIORITY_MAX_DEFER_S)
+            INGEST_PRIORITY_ACTIVE = True
+            await asyncio.sleep(CORR_ENGINE_INTERVAL_S)
+            continue
+        if INGEST_PRIORITY_ACTIVE:
+            log.info("engine sweep resumed (ingest priority released: %s)", reason)
+        INGEST_PRIORITY_ACTIVE = False
+        ENGINE_LAST_SWEEP_MONO = time.monotonic()
         drained = 0
         try:
             # tracker 166 phase 3: WORK-CONSERVING DRAIN.
@@ -6686,6 +6765,10 @@ async def metrics_exposition():
         f"corr_archive_slice_rows_last {ARCHIVE_SLICE_ROWS_LAST}",
         "# TYPE corr_archive_slice_rows_max gauge",
         f"corr_archive_slice_rows_max {ARCHIVE_SLICE_ROWS_MAX}",
+        "# TYPE corr_ingest_priority_deferrals_total counter",
+        f"corr_ingest_priority_deferrals_total {INGEST_PRIORITY_DEFERRALS}",
+        "# TYPE corr_ingest_priority_active gauge",
+        f"corr_ingest_priority_active {int(INGEST_PRIORITY_ACTIVE)}",
         # Housekeeping: the window-prune path. The 2026-08-20 review found the
         # service exposed NOTHING about its own maintenance work, so a 30,989 ms
         # prune stall was only findable with a bespoke forensic build. Low
