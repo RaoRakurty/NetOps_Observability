@@ -265,3 +265,16 @@ def test_mutation_run_mix_canary_is_noise_at_the_fixed_seq():
     assert sig is None, (
         "seq 999,999 now classifies under the production mix — if the table "
         "reshaped, this mutation pin needs a new fixed-seq noise witness")
+
+
+def test_soak_profile_matches_the_launch_decision():
+    """72h soak (owner go, 2026-08-22): 100 raw eps background (0.1/device,
+    inside the measured production band) + the chronic-chatter lane, 4,320
+    minutes, promotion-realistic. Rate is a DISK-sized decision — changing it
+    changes the claim on every soak artifact, so it is pinned."""
+    prof = ml.WORKLOAD_PROFILES["soak-72h"]
+    assert prof["burst_minutes"] == 4320
+    chatter, bg = prof["lanes"]
+    assert bg == ("background", 0.995, "production", 100.0)
+    assert chatter == ("chatter", 0.005, "single", 0.35)
+    assert prof["workload_class"] == "SOAK_72H_100EPS"

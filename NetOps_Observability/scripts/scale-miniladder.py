@@ -935,6 +935,21 @@ WORKLOAD_PROFILES: dict = {
         "burst_minutes": 5,
         "lanes": [("fleet", 1.0, "single", 2000.0)],
     },
+    "soak-72h": {
+        # The 72h soak (owner-launched 2026-08-22): continuous background at
+        # 100 raw eps (0.1 eps/device — inside the MEASURED production band of
+        # 0.05-0.26 eps/device; the 400-eps planning nominal is proven
+        # separately by T-nominal) + the S4 chronic-chatter lane throughout.
+        # Rate sized to lab disk (~500 B/event end-to-end footprint; 25.9M
+        # events over 72h). The embedded S1 exercise is EXCLUDED until
+        # tracker 172 lands (SOAK_READINESS_VERDICT §recommendation).
+        "workload_class": "SOAK_72H_100EPS",
+        "burst_minutes": 4320,
+        "lanes": [
+            ("chatter", 0.005, "single", 0.35),
+            ("background", 0.995, "production", 100.0),
+        ],
+    },
     "s4-chatter": {
         "workload_class": "S4_CHATTER_PROBE",
         "burst_minutes": 60,
