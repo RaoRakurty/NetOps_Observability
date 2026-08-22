@@ -452,16 +452,60 @@ class Stack:
         topics["_uncommitted"] = uncommitted
         return topics
 
-    def produce(self, topic: str, lines: list[str]) -> tuple[bool, str]:
-        payload = "\n".join(lines) + "\n"
+    def produce(self, topic: str, lines: list[str],
+                key: str | None = None) -> tuple[bool, str]:
+        """Produce lines; when `key` is given, every record carries it as the
+        Kafka MESSAGE KEY (parse.key + tab separator — JSON payloads cannot
+        contain a raw tab, json.dumps escapes them).
+
+        WHY THE KEY MATTERS (2026-08-22 architecture review, qualification-
+        validity finding): the production pipeline (Vector) keys every topic by
+        TENANT (`__key = tenant_id`), so one tenant's stream lands on ONE
+        partition and one correlation replica owns it whole. This harness used
+        to inject with NULL keys — round-robin across all partitions — which
+        split one tenant 50/50 across both replicas (measured: pending
+        64,740/64,480 in run `082201589waa`), a topology production cannot
+        produce. Every per-replica capacity figure from null-keyed runs is a
+        per-HALF-tenant figure. Keyed injection is therefore the default; the
+        legacy shape survives only behind an explicit `--producer-key none`.
+        """
+        if key is not None:
+            if "\t" in key:
+                return False, f"producer key may not contain a tab: {key!r}"
+            payload = "\n".join(f"{key}\t{line}" for line in lines) + "\n"
+            extra = ["--property", "parse.key=true",
+                     "--property", "key.separator=\t"]
+        else:
+            payload = "\n".join(lines) + "\n"
+            extra = []
         # Producer time scales with payload; bound generously but finitely.
         rc, _, err = self.kafka_tool(
-            "kafka-console-producer.sh", ["--topic", topic],
+            "kafka-console-producer.sh", ["--topic", topic] + extra,
             input_text=payload, timeout=max(KAFKA_TOOL_TIMEOUT, 30 + len(lines) // 500),
             config_flag="--producer.config")
         if rc != 0:
             return False, err.strip()[:400]
         return True, ""
+
+    def registry_tenant(self, identity: str) -> str:
+        """The tenant the correlation engine's registry maps `identity` to —
+        the SAME source Vector keys production records from. Empty/unreadable
+        registry or unknown identity resolves to "global" (canon_tenant's
+        default), never to a guess: keying with the wrong tenant would split
+        the stream exactly like the null-key defect this exists to fix."""
+        cc = self.cid("correlation")
+        if not cc:
+            return "global"
+        rc, out, _err = run(["docker", "exec", cc, "sh", "-c",
+                             "cat /data/enrichment/device_tenant.csv 2>/dev/null || true"],
+                            DOCKER_TIMEOUT)
+        if rc != 0 or not out.strip():
+            return "global"
+        for line in out.splitlines()[1:]:
+            parts = line.split(",", 1)
+            if len(parts) == 2 and parts[0].strip() == identity:
+                return parts[1].strip() or "global"
+        return "global"
 
     # -- ClickHouse ---------------------------------------------------------
     def ch(self, query: str, timeout: int = 60) -> tuple[bool, str]:
@@ -835,6 +879,9 @@ class Harness:
         self.stack = Stack(args.env_file, args.base_url, args.project)
         # Expanded once, not per event — see _syslog_event.
         self._mix = self._mix_table(self.EVENT_MIX_REALISTIC)
+        # Resolved at burst Gate 1 (registry propagation): the tenant key every
+        # injected record carries, or None for the legacy null-key shape.
+        self.producer_key: str | None = None
         self.run_dir = args.run_dir or os.path.join(
             REPO_ROOT, "data", "miniladder",
             datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ") + "-" + self.runid)
@@ -1323,9 +1370,17 @@ class Harness:
                               f"({current} < {want} after 240s) — injected events would be "
                               f"tenant-refused; aborting the burst")
 
+        # Production-faithful keying (2026-08-22): resolve the tenant key from
+        # the SAME registry the engine and Vector use, now that Gate 1 proved
+        # this run's devices are in it. All of a run's devices share a tenant.
+        self.producer_key = (None if self.args.producer_key == "none"
+                             else self.stack.registry_tenant(self.created_ids[0]))
+        ev["producer_key_mode"] = self.args.producer_key
+        ev["producer_key"] = self.producer_key or ""
+
         # Gate 2: one canary through the whole pipe (topic -> engine -> CH).
         canary = self._syslog_event(self.created_ids[0], 999_999)
-        ok, err = self.stack.produce("netops.syslog", [canary])
+        ok, err = self.stack.produce("netops.syslog", [canary], key=self.producer_key)
         if not ok:
             return self.phase("burst", "FAIL", ev, f"canary produce failed: {err}")
         self.injected_total += 1
@@ -1360,7 +1415,8 @@ class Harness:
                                         seq + j)
                      for j in range(chunk_n)]
             tp = time.monotonic()
-            ok, err = self.stack.produce("netops.syslog", lines)
+            ok, err = self.stack.produce("netops.syslog", lines,
+                                         key=self.producer_key)
             if not ok:
                 self.produce_failures.append(err)
                 if len(self.produce_failures) >= 3:
@@ -1382,6 +1438,7 @@ class Harness:
             "actual_eps": round(actual_eps, 1),
             "target_eps": self.args.eps,
             "event_mix": self.args.event_mix,
+            "producer_key_mode": self.args.producer_key,
             "chunks": len(chunks),
             "produce_failures": self.produce_failures,
         })
@@ -2102,6 +2159,7 @@ class Harness:
                 "burst_minutes": self.args.burst_minutes,
                 "eps": self.args.eps,
                 "event_mix": self.args.event_mix,
+                "producer_key": self.args.producer_key,
                 "load_generator": self.args.load_generator,
                 "linearity_floor": self.args.linearity_floor,
                 "drain_factor": self.args.drain_factor,
@@ -2276,6 +2334,15 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
                     help="print the full plan and exit; touches nothing")
     # tracker 152 §8.3 — twin composition. Default is the internal generator,
     # byte-identical to the pre-flag behavior.
+    ap.add_argument("--producer-key", choices=("tenant", "none"), default="tenant",
+                    help="Kafka message key for injected events. 'tenant' "
+                         "(default) keys every record by the created devices' "
+                         "registry tenant — the PRODUCTION topology (Vector keys "
+                         "by tenant, so one replica owns the whole tenant). "
+                         "'none' is the legacy null-key shape, which round-robins "
+                         "one tenant across all partitions/replicas — kept ONLY "
+                         "for explicit comparison runs; its per-replica numbers "
+                         "are per-half-tenant and must be labelled as such.")
     ap.add_argument("--event-mix", choices=("single", "realistic"), default="single",
                     help="internal generator workload shape. 'single' (default) "
                          "emits only %%LINK-3-UPDOWN, i.e. ONE correlation signal "
