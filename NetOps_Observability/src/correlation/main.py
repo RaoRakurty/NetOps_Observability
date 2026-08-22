@@ -2283,6 +2283,21 @@ CORR_ENGINE_DRAIN_COHORTS = max(1, int(os.environ.get("CORR_ENGINE_DRAIN_COHORTS
 CORR_INGEST_PRIORITY_LAG = max(0, int(os.environ.get("CORR_INGEST_PRIORITY_LAG", "10000")))
 CORR_INGEST_PRIORITY_MAX_DEFER_S = float(os.environ.get("CORR_INGEST_PRIORITY_MAX_DEFER_S", "300"))
 CORR_STORM_COHORT_SIZE = max(1, int(os.environ.get("CORR_STORM_COHORT_SIZE", "1000")))
+
+# ── Tracker 163: OPEN_OBJECTS count cap ─────────────────────────────────────
+# Every other major structure is bounded by count or LRU; OPEN_OBJECTS was
+# bounded only by TIME (quiesce), i.e. by the network's behaviour. The
+# deferral premise ("0-8 observed") died when tracker 168 corrected the
+# identity model: the live population is ~1,500 at 1K stress and a broad
+# storm makes it a function of blast radius. Behaviour AT the bound is
+# DEFINED, never silent: the least-recently-seen objects are FORCE-CLOSED to
+# a terminal persisted version (exactly the quiesce path — append-only,
+# replayable via the newest-<=-v archive fallback), counted, and logged —
+# exceeding the cap degrades RCA breadth VISIBLY instead of exhausting RAM.
+# <=0 disables the cap (not recommended; documented for lab characterization).
+CORR_OPEN_OBJECTS_MAX = int(os.environ.get("CORR_OPEN_OBJECTS_MAX", "5000"))
+OPEN_OBJECTS_FORCE_CLOSED = 0     # objects closed by the cap (monotonic)
+_FORCE_CLOSE_LOG_LAST = 0.0
 INGEST_PRIORITY_DEFERRALS = 0     # sweeps deferred to protect ingest (monotonic)
 INGEST_PRIORITY_ACTIVE = False    # gauge: is the engine currently deferring?
 ENGINE_LAST_SWEEP_MONO = 0.0      # when the last non-deferred sweep STARTED
@@ -3605,6 +3620,39 @@ async def _engine_cycle_inner(epoch: _EngineEpoch | None) -> None:
             await _persist_snapshot(reg["snapshot"], reg["version"], "closed", [])
             del OPEN_OBJECTS[cid]
             _ARCHIVE_SLICE_HASH.pop(cid, None)
+
+    # Tracker 163: the count cap. Runs AFTER quiesce (time-based closes may
+    # already have brought us under). Eviction order is least-recently-SEEN,
+    # tie-broken by correlation_id for determinism — the same staleness order
+    # quiesce uses, applied by count instead of age. Force-closed objects get
+    # the SAME terminal persisted version as a quiesce close: append-only,
+    # replayable, visible in the UI as closed — never a silent drop. An
+    # object seen THIS cycle can still be evicted when the cap demands it (a
+    # bound that yields to activity is not a bound); the counter and warning
+    # make that breadth loss an operator-visible fact.
+    global OPEN_OBJECTS_FORCE_CLOSED, _FORCE_CLOSE_LOG_LAST
+    if CORR_OPEN_OBJECTS_MAX > 0 and len(OPEN_OBJECTS) > CORR_OPEN_OBJECTS_MAX:
+        excess = len(OPEN_OBJECTS) - CORR_OPEN_OBJECTS_MAX
+        victims = sorted(OPEN_OBJECTS,
+                         key=lambda c: (OPEN_OBJECTS[c]["last_seen"], c))[:excess]
+        for cid in victims:
+            reg = OPEN_OBJECTS[cid]
+            reg["version"] += 1
+            VERSIONS_PERSISTED += 1
+            OPEN_OBJECTS_FORCE_CLOSED += 1
+            _wa_note_outcome(reg["snapshot"].tenant_id, "persisted")
+            await _persist_snapshot(reg["snapshot"], reg["version"], "closed", [])
+            del OPEN_OBJECTS[cid]
+            _ARCHIVE_SLICE_HASH.pop(cid, None)
+        mono = time.monotonic()
+        if (mono - _FORCE_CLOSE_LOG_LAST) >= 30.0:
+            _FORCE_CLOSE_LOG_LAST = mono
+            log.warning(
+                "OPEN_OBJECTS cap enforced (tracker 163): force-closed %d "
+                "least-recently-seen objects to hold the %d bound "
+                "(force_closed_total=%d) — RCA breadth is degraded and "
+                "DECLARED, not silent",
+                excess, CORR_OPEN_OBJECTS_MAX, OPEN_OBJECTS_FORCE_CLOSED)
     LAST_GAP_HINTS = gap_hints
     # tracker 166: advance the "new since last cycle" marker only after the
     # cycle actually completed, so a cycle that raised does not cause the next
@@ -6769,6 +6817,8 @@ async def metrics_exposition():
         f"corr_ingest_priority_deferrals_total {INGEST_PRIORITY_DEFERRALS}",
         "# TYPE corr_ingest_priority_active gauge",
         f"corr_ingest_priority_active {int(INGEST_PRIORITY_ACTIVE)}",
+        "# TYPE corr_open_objects_force_closed_total counter",
+        f"corr_open_objects_force_closed_total {OPEN_OBJECTS_FORCE_CLOSED}",
         # Housekeeping: the window-prune path. The 2026-08-20 review found the
         # service exposed NOTHING about its own maintenance work, so a 30,989 ms
         # prune stall was only findable with a bespoke forensic build. Low
