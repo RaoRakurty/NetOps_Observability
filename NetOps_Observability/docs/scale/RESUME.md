@@ -29,7 +29,7 @@ object — 98.6 % of all correlation persistence time, 0.47 objects/sec.**
 | 165 retention | **PASS — frozen** | 516.527 s is a correctness contract, not a tunable |
 | 168 identity scope | **PASS — live-qualified** | 2,586 objects audited, 0 multi-device welds. Do not weaken either defence layer |
 | 170 completion gate | **PASS — validated live twice** | it failed both post-168 runs correctly |
-| 167 template index | **PASS offline**, live-deployed | live selectivity **NOT** validated — the harness is single-kind |
+| 167 template index | **PASS offline**, live-deployed | live selectivity still unvalidated, but the BLOCKER is gone: the harness now has `--event-mix realistic` (six kinds). A 1K run at that mix is what converts it to PASS-live |
 | **166 scheduler** | **FAIL** | *cannot complete one cohort in budget*; blocked on archive persistence |
 | 171 maintenance | OPEN, non-blocking | worst prune gap 1,363 s vs ~180 s intended; catch-up always succeeded |
 | 169 CI | **OPEN — merge blocker** | see below; re-pinned 2026-08-22, currently green |
@@ -56,7 +56,41 @@ O(objects × global) in turn.
 not yet done — see the next section. Three waves have been spent discovering the
 next bottleneck by running an hour-long qualification.
 
-## Recommended next action: a narrow architectural review (3 questions)
+## The architecture review is DONE — read it first
+
+`docs/scale/PREGA_ARCHITECTURE_REVIEW_2026-08-22.md` (charter:
+`/var/tmp/Re-architect.md`). Verdict: **KEEP CURRENT ARCHITECTURE WITH ONE
+TARGETED STRUCTURAL CHANGE** — re-shape the archive persistence model (156
+residual) for the many-small-objects regime; everything else survives
+falsification. The targeted change now has a full design:
+`ARCHIVE_REDESIGN_156_2026-08-22.md` — **v2 after two adversarial peer
+reviews (both REJECTED v1's Layer 2; L1 approved with changes)**: the shipped
+design is the component-only slice — one membership-rule change, no schema
+change, no migration, ~48× storage win, replay proven clean on the fixture
+and gated on a corpus-wide falsification test. One owner decision pends:
+Inspector ambient-context sourcing (§5 of the doc). New finding in the review: the harness's null-keyed injection splits
+one tenant 50/50 across both replicas (measured 64,740/64,480), so every
+per-replica capacity figure is a per-HALF-tenant figure and production
+single-tenant capacity is ~2× overstated — fix harness keying before grading
+the next run. The three questions below are answered in §§7, 11–12, 18 of the
+review.
+
+## Gates are redefined (proposal) — 2026-08-22
+
+`STRESS_GATE_REDEFINITION_2026-08-22.md`: two test families (T = provisioning,
+graded on sustainable throughput at 90 %; S = storm, graded on invariants +
+DEBS-style recovery, never real-time keep-up). Storm profiles externally
+anchored: S1 design storm (10 % blast radius, ~10× aggregate, 15 min, drain
+≤3×), S1-long (60 min), S2 escalation ramp (NEW — the slow-escalation failure
+class), S3 = today's stress relabelled engineering probe (invariants + trend
+only), S4 chatter probe (NEW — sub-10 s flap noise). Nightly cron should move
+from S3 to Family-T nominal once ratified. Evidence: ~60-source research
+corpus (ISA-18.2/EEMUA-191, IMC/SIGCOMM/ToN measurements, streaming-benchmark
+methodology). Notably: IBM Netcool/Impact is sized at 350–500 eps sustained —
+our measured single-owner ceiling is industry-typical for correlators.
+Awaiting owner ratification (§8 of the doc).
+
+## Superseded: the originally recommended review (3 questions)
 
 1. **State and enforce the invariant** — "per-object work must be sized by the
    object, not the window or the catalog" — then audit every per-object path
@@ -97,7 +131,11 @@ Secondary defect, real but not dominant (1 abort/replica): a ClickHouse
 
 ## Two things that are still unratified
 
-* **The GA workload contract.** 182 eps at ~100 % promotion is a synthetic
+* **The GA workload contract.** → PARTIALLY RESOLVED 2026-08-22: see
+  `EPS_BASELINE_PROPOSAL_2026-08-22.md` (externally-grounded bands, promotion
+  ratio 5/15/30 %, 1K→10K ladder; owner ratified 1K-in-one-tenant as the
+  starting envelope). Original text kept below for context.
+   182 eps at ~100 % promotion is a synthetic
   figure. The planner says 5,000 raw syslog EPS for 1,000 devices; the harness's
   own help text implies ~200. All current points are `CHARACTERIZATION ONLY`.
   See `docs/scale/GA_WORKLOAD_CONTRACT_1K.md`. **166's remaining PASS criteria
@@ -118,6 +156,22 @@ the intended workflow, not an exemption.** Never allowlist a NEW site to get
 green, and never weaken the guard.
 
 ## Lab state
+
+**Re-check before trusting the baseline below.** The `scale-miniladder-nightly`
+cron fired on this branch at 03:17 on 2026-08-22 (run `08220317gmp4`) and ran
+~45 min. It FAILED on drain / correlation_completion / accounting / memflat, and
+it is confounded — **both correlation replicas restarted mid-run** (the harness
+correctly refuses to call an unreadable engine idle), so its verdicts are not
+usable as 166 evidence. Two things in it are worth reading anyway, because they
+independently reproduce the defect fixed this session on the PRE-FIX image:
+`netops.corr_objects` insert failures **3** (the un-retried engine-cycle path —
+each one discarded a cohort) and **71** rows dead-lettered `ch_insert_transport`
+(the batcher exhausting all four retries against the 10 s client timeout — which
+is why the timeout bump matters to both paths, not just the engine's). It also
+flagged a fresh **memory leak slope** on `netops-correlation-1`, 474 → 639 MiB
+(×1.35 against a ×1.3 gate) after input stopped — new, not previously tracked,
+and worth a look before the next qualification run.
+
 
 Stack is up on `compose.mem125.yml` (1280 MiB/replica, 2 replicas, BUS_PARTITIONS
 4). Correlation image carries 166+167+168 plus the cache fixes. Last run's
@@ -164,9 +218,20 @@ FIRST TASK — the architectural review, before any more code
      large ones: ~8 CH inserts/object, serialised, on the loop.
   No code changes in that step. Then fix, then re-run one clean 1K.
 
-ALSO FIX (real, not dominant)
-  A ClickHouse ReadTimeout raises CHInsertRejected out of _persist_snapshot
-  past _mark_processed, discarding a whole cohort. P(commit) = (1-p)^objects.
+ALREADY FIXED 2026-08-22 (do not redo)
+  * The ClickHouse-timeout cohort discard. `ch_insert` had NO retry at all --
+    tracker 160's retry machinery was wired only into the batcher -- and the
+    httpx timeout was hard-coded 10.0s against a measured 14,395ms commit, so
+    an UNKNOWN outcome was reported as a positive refusal. ch_insert now honours
+    the same bounded-retry contract as the batcher, gated on provable
+    idempotence (CH_DEDUP_SAFE_TABLES, justified per-table from init.sql;
+    corr_signals and corr_signals_archive deliberately excluded), and
+    CORR_CH_TIMEOUT_S defaults to 30s. 15 tests, both-direction mutation proofs.
+    NOT deployed -- the running image predates it.
+  * The 167 harness gap. scale-miniladder.py gained --event-mix realistic (six
+    distinct kinds, verified through the real classifier, deterministic in seq).
+    `single` stays the default and is byte-identical to before over 3,000
+    events, so every 166 capacity number stays comparable. 11 tests.
 
 HOUSE RULES
   Measure before optimising — the bottleneck has moved every single time.

@@ -200,6 +200,21 @@ and must not be guessed.** The 167 classification stays open until that run.
 
 ---
 
+## 2026-08-22 update — external evidence and first ratification
+
+`docs/scale/EPS_BASELINE_PROPOSAL_2026-08-22.md` now answers questions 1–3
+below with externally-grounded numbers (two market-research sweeps: SIEM
+per-device EPS standards + NMS/telemetry benchmarks): proposed nominal
+**400 raw EPS / 1K devices**, p95 800, design storm S1 4,000 (10×), promotion
+**plan 5 % / bound 15 % / storm 30 %** (grounded: 0.49 % measured control-plane
+share, ~4 % causal-engine input share, <5 % NOC-actionable), and a per-rung
+ladder to 10K with `D_total` vs `D_tenant_max` separated. The 182-vs-5,000
+conflict is resolved there (nominal band vs storm-headroom sizing — both
+retained). **Owner decision recorded 2026-08-22: the starting envelope is 1K
+devices IN ONE TENANT (`D_tenant_max` = 1,000); scale-up rungs are decided
+after 1K is green.** Questions 1–2 below otherwise remain open until the
+proposal's §10 defaults are confirmed or amended.
+
 ## What the owner has to decide (nothing below can be answered from the code)
 
 1. **What is the supported sustained raw syslog rate for a 1,000-device GA
