@@ -881,13 +881,22 @@ DLQ_EXPECTED_MAX_FRACTION = 0.01
 # storm amplitude + background nominal ≈ 4,000 raw / ~1,200 admitted.
 WORKLOAD_PROFILES: dict = {
     "legacy": {"workload_class": "LEGACY_ARGS"},
+    # T-family and S3 run through the LANES path too (a single fleet-wide
+    # lane): the legacy single-lane loop keeps its historical correlated
+    # modulus (device = seq % N, mix = seq % L), which under a noise-bearing
+    # mix starves fixed devices of classifying events FOREVER — the second
+    # T-nominal run's accounting caught exactly 100/1000 devices covered.
+    # Only --profile legacy may use the legacy loop, and only with the
+    # fully-classifying mixes it always had.
     "t-nominal": {
         "workload_class": "T_NOMINAL",
-        "eps": 400, "burst_minutes": 15, "event_mix": "production",
+        "burst_minutes": 15,
+        "lanes": [("fleet", 1.0, "production", 400.0)],
     },
     "t-p95": {
         "workload_class": "T_P95",
-        "eps": 800, "burst_minutes": 15, "event_mix": "production",
+        "burst_minutes": 15,
+        "lanes": [("fleet", 1.0, "production", 800.0)],
     },
     "s1": {
         "workload_class": "S1_DESIGN_STORM",
@@ -923,7 +932,8 @@ WORKLOAD_PROFILES: dict = {
         # ~20-200x measured reality. CHARACTERIZATION/defect-finding ONLY —
         # graded on invariants + throughput trend, never absolute completion.
         "workload_class": "S3_SATURATION_PROBE",
-        "eps": 2000, "burst_minutes": 5, "event_mix": "single",
+        "burst_minutes": 5,
+        "lanes": [("fleet", 1.0, "single", 2000.0)],
     },
     "s4-chatter": {
         "workload_class": "S4_CHATTER_PROBE",

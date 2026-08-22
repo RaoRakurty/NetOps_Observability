@@ -154,13 +154,31 @@ def test_profiles_are_closed_and_legacy_is_default():
 
 
 @pytest.mark.parametrize("profile,eps,minutes,mix", [
-    ("t-nominal", 400, 15, "production"),
-    ("t-p95", 800, 15, "production"),
-    ("s3-stress", 2000, 5, "single"),
+    ("t-nominal", 400.0, 15, "production"),
+    ("t-p95", 800.0, 15, "production"),
+    ("s3-stress", 2000.0, 5, "single"),
 ])
-def test_single_lane_profiles_override_args(profile, eps, minutes, mix):
+def test_single_lane_profiles_carry_the_ratified_rates(profile, eps, minutes, mix):
     prof = ml.WORKLOAD_PROFILES[profile]
-    assert (prof["eps"], prof["burst_minutes"], prof["event_mix"]) == (eps, minutes, mix)
+    assert prof["burst_minutes"] == minutes
+    lanes = prof["lanes"]
+    assert len(lanes) == 1 and lanes[0][1] == 1.0
+    assert lanes[0][2] == mix and lanes[0][3] == eps
+
+
+def test_every_non_legacy_profile_routes_through_the_lanes_path():
+    """THE 100/1000 regression pin (second T-nominal run): the legacy loop's
+    correlated modulus starves 90 % of devices under a noise-bearing mix, so
+    NO profile may route through it — every profile except 'legacy' must
+    define lanes, and legacy must never carry a noise-bearing mix key."""
+    for name, prof in ml.WORKLOAD_PROFILES.items():
+        if name == "legacy":
+            assert "lanes" not in prof
+            assert prof.get("event_mix") not in ("production", "storm")
+            continue
+        assert prof.get("lanes"), (
+            f"profile {name!r} has no lanes — it would take the legacy "
+            f"correlated-modulus loop")
 
 
 def test_s1_composes_to_the_ratified_fleet_rate():
