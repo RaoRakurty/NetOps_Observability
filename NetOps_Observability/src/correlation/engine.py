@@ -2392,6 +2392,90 @@ def find_merges(
     return sorted(pairs)
 
 
+class ContinuationIndex:
+    """Tracker 162 — sub-linear candidate retrieval for `find_continuation`.
+
+    THE PROBLEM: the caller examined EVERY open object per new snapshot —
+    O(new × open) per cycle. The population premise that deferred this
+    ("0-8 open objects") died at tracker 168: ~1,500 live at 1K stress, and a
+    storm makes both factors large together.
+
+    WHY ENTITY-ONLY INDEXING WAS UNSOUND (the blocker recorded on the tracker
+    row): admission is `jac ≥ min_overlap OR _seam_bridged`, and the seam
+    bridge admits candidates with ZERO shared entities (the cloud half and the
+    network half of one interconnect incident share only the seam).
+
+    THE SOUND SUPERSET, from the admission algebra:
+      * jac ≥ 0.4 ⟹ a shared entity_id            → by_entity
+      * _seam_bridged(snap, s) needs a view v from EITHER side's embedded
+        seams with REFS(snap)∩ev(v) ≠ ∅ AND REFS(s)∩ev(v) ≠ ∅, where
+        ev(v) = endpoint_values ∪ {seam_id}:
+          - v from snap's side ⟹ ev(v) ⊆ EV(snap) ⟹ REFS(s)∩EV(snap) ≠ ∅
+                                                     → by_ref  ∩ EV(snap)
+          - v from s's side    ⟹ ev(v) ⊆ EV(s)    ⟹ REFS(snap)∩EV(s) ≠ ∅
+                                                     → by_ev   ∩ REFS(snap)
+    Candidates = the union of the three lookups — a PROVEN superset of every
+    admissible object, so running the unchanged exact predicate over it
+    preserves winner identity by construction (pinned by the equivalence
+    oracle in test_continuation_index_162.py).
+
+    HONEST LOOSENESS: snapshots embed the whole seam inventory, so the two
+    seam clauses admit every object structurally touching ANY inventory seam
+    endpoint — a weaker filter in seam-dense estates than in entity-sparse
+    ones, but always a filter, and never unsound. Determinism: candidates are
+    returned in the original open-object order.
+
+    Pure and cycle-scoped: build once per (tenant, cycle) over that cycle's
+    open snapshots, discard with the cycle.
+    """
+
+    __slots__ = ("_by_entity", "_by_ev", "_by_ref", "_snaps")
+
+    def __init__(self, open_snaps) -> None:
+        self._snaps = tuple(open_snaps)
+        self._by_entity: dict[str, list[int]] = {}
+        self._by_ref: dict[str, list[int]] = {}
+        self._by_ev: dict[str, list[int]] = {}
+        for i, s in enumerate(self._snaps):
+            for e in _entity_ids(s):
+                self._by_entity.setdefault(e, []).append(i)
+            for r in self._refs(s):
+                self._by_ref.setdefault(r, []).append(i)
+            for x in self._ev(s):
+                self._by_ev.setdefault(x, []).append(i)
+
+    @staticmethod
+    def _refs(snap: ObjectSnapshot) -> frozenset[str]:
+        """The union of node identity_refs — the exact values
+        `_snap_touches_seam` tests against a view's endpoint set."""
+        out: set[str] = set()
+        for n in snap.nodes:
+            out |= n.identity_refs()
+        return frozenset(out)
+
+    @staticmethod
+    def _ev(snap: ObjectSnapshot) -> frozenset[str]:
+        """Endpoint values ∪ seam ids of every view this snapshot embeds."""
+        out: set[str] = set()
+        for v in snap.seams:
+            out |= v.endpoint_values()
+            out.add(v.seam_id)
+        return frozenset(out)
+
+    def candidates(self, snap: ObjectSnapshot) -> tuple[ObjectSnapshot, ...]:
+        hits: set[int] = set()
+        for e in _entity_ids(snap):
+            hits.update(self._by_entity.get(e, ()))
+        for x in self._ev(snap):
+            hits.update(self._by_ref.get(x, ()))
+        for r in self._refs(snap):
+            hits.update(self._by_ev.get(r, ()))
+        return tuple(self._snaps[i] for i in sorted(hits))
+
+    def __len__(self) -> int:
+        return len(self._snaps)
+
+
 def find_continuation(
     snap: ObjectSnapshot,
     open_snaps: list[ObjectSnapshot] | tuple[ObjectSnapshot, ...],

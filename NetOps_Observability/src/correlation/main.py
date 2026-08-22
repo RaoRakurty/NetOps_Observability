@@ -74,6 +74,7 @@ from cloud_producers import cloud_signal_from_event
 from controller_events import controller_event_to_signal
 from directed_topology import DirectedTopology
 from engine import (
+    ContinuationIndex,
     EngineConfig,
     ObjectSnapshot,
     SeamView,
@@ -3512,12 +3513,20 @@ async def _engine_cycle_inner(epoch: _EngineEpoch | None) -> None:
     # tenant, built ONCE, with a shared entity-set cache. `materialized` is
     # fixed for the cycle so it is filtered here; `seen_this_cycle` grows as we
     # go, so it is passed through as an exclusion instead.
-    cont_index: dict[str, list] = {}
+    # Tracker 162 (completed): the tenant bucket is now a ContinuationIndex —
+    # entity + seam-bridge inverted maps built ONCE per cycle, so each new
+    # snapshot examines only its PROVEN candidate superset instead of every
+    # open object (O(new x open) -> O(new x matched)). Selection is untouched:
+    # find_continuation runs its exact predicate over the candidates, and the
+    # index docstring carries the superset proof; equivalence is pinned by
+    # test_continuation_index_162.py's oracle.
+    _cont_buckets: dict[str, list] = {}
     for _cid, _reg in OPEN_OBJECTS.items():
         if _cid in materialized:
             continue
         _snap = _reg["snapshot"]
-        cont_index.setdefault(_snap.tenant_id, []).append(_snap)
+        _cont_buckets.setdefault(_snap.tenant_id, []).append(_snap)
+    cont_index = {t: ContinuationIndex(v) for t, v in _cont_buckets.items()}
     cont_entities: dict[str, frozenset] = {}
     for tenant, window, snapshots in evaluated:
         # P1 max-poll thrash: a damped-heavy cycle walks every snapshot with
@@ -3539,8 +3548,9 @@ async def _engine_cycle_inner(epoch: _EngineEpoch | None) -> None:
                 # tenant differs (§3a, default-closed), so a cross-tenant object
                 # could never have won. Excluding it earlier removes work the
                 # contract already forbade using.
+                _ci = cont_index.get(snap.tenant_id)
                 cont = find_continuation(
-                    snap, cont_index.get(snap.tenant_id, ()),
+                    snap, _ci.candidates(snap) if _ci is not None else (),
                     exclude=seen_this_cycle, entity_cache=cont_entities)
                 if cont:
                     snap = dc_replace(snap, correlation_id=cont)
