@@ -822,6 +822,26 @@ async def _flush_tenant_write_amp(now: datetime) -> None:
 # seam/links files (mtime older than ~2-3 export intervals; export runs every 60s).
 CORR_TOPO_STALE_S = float(os.environ.get("CORR_TOPO_STALE_S", "180"))
 STORM_BUFFER_FRACTION = float(os.environ.get("CORR_STORM_FRACTION", "0.9"))
+# Storm-mode EXIT threshold (gate spec §7a, 2026-08-22): every formal alarm
+# standard defines storms with HYSTERESIS (ISA-18.2: flood enters >10/10min,
+# exits <5/10min — a 2:1 band). A single threshold flaps the declaration at
+# the boundary, and the declaration is a per-snapshot honesty stamp — it must
+# describe a STATE, not the last sample. Enter at STORM_BUFFER_FRACTION, exit
+# only below CORR_STORM_EXIT_FRACTION (default half the entry, mirroring the
+# standards' band).
+STORM_EXIT_FRACTION = float(os.environ.get("CORR_STORM_EXIT_FRACTION", "0.45"))
+_STORM_ACTIVE = False
+
+
+def _storm_state(buffered: int, maxlen: int) -> bool:
+    """Hysteretic storm-mode state machine; called once per epoch."""
+    global _STORM_ACTIVE
+    frac = buffered / (maxlen or 1)
+    if _STORM_ACTIVE:
+        _STORM_ACTIVE = frac > STORM_EXIT_FRACTION
+    else:
+        _STORM_ACTIVE = frac >= STORM_BUFFER_FRACTION
+    return _STORM_ACTIVE
 # Path-causality RCA P2 (design §2.4): assemble the tenant's typed causal paths from
 # the LIVE measured path observations and hand them to run_window for the on-path
 # attribution enrichment. Additive + killable; a pure no-op when no path is observed.
@@ -2449,7 +2469,7 @@ async def _begin_epoch(now: datetime) -> _EngineEpoch:
     # same inputs, so declaring the same verdict on all of them is the honest
     # reading, not a staleness.
     ep.topo_stale = _topology_stale(now)
-    ep.storm = len(WINDOW_BUFFER) >= STORM_BUFFER_FRACTION * (WINDOW_BUFFER.maxlen or 1)
+    ep.storm = _storm_state(len(WINDOW_BUFFER), WINDOW_BUFFER.maxlen or 1)
     if ep.topo_stale or ep.storm:
         log.warning("engine degradation: topology_stale=%s storm_mode=%s (buffer=%d/%s)",
                     ep.topo_stale, ep.storm, len(WINDOW_BUFFER), WINDOW_BUFFER.maxlen)
