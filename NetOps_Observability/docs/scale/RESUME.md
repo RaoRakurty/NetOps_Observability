@@ -7,6 +7,21 @@ Last updated: 2026-08-22 · branch `feat/observability-platform`
 
 ---
 
+## READ FIRST — 2026-08-22 evening: the ratified bar is GREEN
+
+`SOAK_READINESS_VERDICT_2026-08-22.md` is the current truth. **T-nominal
+(ratified workload) = FULL PASS — tracker 166's bar is MET** (completion 340s,
+accounting exact, 1000/1000 devices). **S1 storm = FAIL on a measured
+single-owner ingest wall** (49s loop stalls → Kafka ejection churn → ~150–250
+eps effective; invariants held, zero loss) → new trackers **172** (storm-
+priority scheduling — the next implementation item), **173** (refusal-stream
+livelock), **174** (loop-independent health/metrics). **Nominal 72h soak =
+START-ELIGIBLE**; storm-inclusive soak gated on 172. Nightly cron = T-nominal;
+weekly S1 stays on deliberately (it fails honestly until 172). Much of the
+older material below is superseded by the 2026-08-22 docs
+(PREGA_ARCHITECTURE_REVIEW, EPS_BASELINE_PROPOSAL, STRESS_GATE_REDEFINITION,
+ARCHIVE_REDESIGN v2 — all ratified/implemented).
+
 ## The 30-second version
 
 Two correctness defects were found and fixed and are **live-qualified**: tracker
