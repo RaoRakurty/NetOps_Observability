@@ -15,8 +15,13 @@ accounting exact, 1000/1000 devices). **S1 storm = FAIL on a measured
 single-owner ingest wall** (49s loop stalls → Kafka ejection churn → ~150–250
 eps effective; invariants held, zero loss) → new trackers **172** (storm-
 priority scheduling — the next implementation item), **173** (refusal-stream
-livelock), **174** (loop-independent health/metrics). **Nominal 72h soak =
-START-ELIGIBLE**; storm-inclusive soak gated on 172. Nightly cron = T-nominal;
+livelock), **174** (loop-independent health/metrics). **Nominal 72h soak = RUNNING** (launched 2026-08-22 ~23:30Z, ends ~08-25
+late evening; SOAK_72H_100EPS — disk-sized rate, test-pinned; cron suspended
+with #SOAK-SUSPENDED markers; sampler → soak-metrics-2026-08-22.csv).
+**Pre-2.5K engine work COMPLETE IN CODE, awaiting post-soak deploy:** 172
+ingest-priority (`eb609b45`), 163 OPEN_OBJECTS cap (`97b2600c`), 162
+continuation index (`dd3f2154`) — one deploy after the soak report, then S1
+re-qualification, then the first 2.5K characterization. Nightly cron = T-nominal;
 weekly S1 stays on deliberately (it fails honestly until 172). Much of the
 older material below is superseded by the 2026-08-22 docs
 (PREGA_ARCHITECTURE_REVIEW, EPS_BASELINE_PROPOSAL, STRESS_GATE_REDEFINITION,
