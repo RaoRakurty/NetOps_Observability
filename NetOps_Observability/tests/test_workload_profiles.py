@@ -278,3 +278,16 @@ def test_soak_profile_matches_the_launch_decision():
     assert bg == ("background", 0.995, "production", 100.0)
     assert chatter == ("chatter", 0.005, "single", 0.35)
     assert prof["workload_class"] == "SOAK_72H_100EPS"
+
+
+def test_2k5_rung_profiles_match_the_ratified_ladder():
+    """Pre-staged 2.5K rung (run after the 1K rung closes): nominal 0.4
+    eps/device x 2,500 = 1,000 raw; S1 composes to 10,000 raw at 10 % radius
+    (storm 9,100 + background 900) — the ladder's 10x aggregate."""
+    tn = ml.WORKLOAD_PROFILES["t-nominal-2.5k"]
+    assert tn["lanes"] == [("fleet", 1.0, "production", 1000.0)]
+    s1 = ml.WORKLOAD_PROFILES["s1-2.5k"]
+    (storm, bg) = s1["lanes"]
+    assert storm[1] == 0.10 and storm[2] == "storm"
+    assert storm[3] + bg[3] == pytest.approx(10_000.0)
+    assert (storm[3] + bg[3]) / (2500 * 0.4) == pytest.approx(10.0),         "S1-2.5K aggregate is not the ratified 10x nominal"

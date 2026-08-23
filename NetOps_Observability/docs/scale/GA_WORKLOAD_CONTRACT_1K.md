@@ -130,10 +130,29 @@ target; the Confidence column says what each one actually is.
 
 ---
 
-## 14K — provisional characterization matrix (**CHARACTERIZATION ONLY**)
+## 14K — the RATIFIED workload matrix (2026-08-22) and the historical characterization
 
-No approved customer rate exists, so this is *engineering characterization*, not
-a GA product envelope. **None of these rows is a supported rate.**
+**The contract is no longer unratified.** The owner approved the externally-
+grounded bands (`EPS_BASELINE_PROPOSAL_2026-08-22.md`, "approve all") and the
+two-family gate structure (`STRESS_GATE_REDEFINITION_2026-08-22.md`). The
+supported 1K envelope — 1,000 devices IN ONE TENANT, tenant-keyed:
+
+| Band | Raw EPS | Promotion | Admitted sig/s | Gate family | First result |
+|---|---:|---:|---:|---|---|
+| **Nominal** | **400** | 5 % | ~20 | T (must fully complete) | **PASS 2026-08-22** (completion 340 s, accounting exact) |
+| p95 | 800 | 5 % | ~40 | T | pending |
+| **S1 design storm** | **4,000** (10 % radius) | 30 % | ~1,200 | S (invariants + recovery) | **FAIL 2026-08-22** — single-owner ingest wall, tracker 172 (fix implemented, awaiting post-soak deploy + re-qual) |
+| S3 stress | 2,000 @ 100 % | 100 % | 2,000 | probe only (invariants + trend) | retained as the defect-finder |
+
+The 72 h soak runs at the measured-band SOAK_72H_100EPS profile (running as of
+2026-08-22 ~23:30 Z). Promotion ratio MUST be re-measured on first customer
+traffic (`signals admitted / raw received` — both counted).
+
+### Historical: the pre-ratification characterization matrix (kept for the record)
+
+No approved customer rate existed when the rows below were measured, so they
+are *engineering characterization*, not a GA product envelope. **None of these
+rows is a supported rate**, and every one is `PRE-168 CHARACTERIZATION`.
 
 > ⚠ **Every row below is `PRE-168 CHARACTERIZATION`.** All of it was measured
 > with the interface-name weld active, i.e. at ~971 candidates/signal instead of

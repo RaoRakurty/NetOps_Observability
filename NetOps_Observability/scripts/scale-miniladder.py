@@ -935,6 +935,23 @@ WORKLOAD_PROFILES: dict = {
         "burst_minutes": 5,
         "lanes": [("fleet", 1.0, "single", 2000.0)],
     },
+    # ── 2.5K rung (EPS ladder, pre-staged; run with --devices 2500) ──────
+    # Rates per the ratified ladder: nominal 0.4 eps/device; S1 = 10 % blast
+    # radius at storm amplitude over a nominal estate (10x fleet aggregate).
+    # First characterization runs AFTER the 1K rung closes (soak + S1 pass).
+    "t-nominal-2.5k": {
+        "workload_class": "T_NOMINAL_2K5",
+        "burst_minutes": 15,
+        "lanes": [("fleet", 1.0, "production", 1000.0)],
+    },
+    "s1-2.5k": {
+        "workload_class": "S1_DESIGN_STORM_2K5",
+        "burst_minutes": 15,
+        "lanes": [
+            ("storm", 0.10, "storm", 9100.0),
+            ("background", 0.90, "production", 900.0),
+        ],
+    },
     "soak-72h": {
         # The 72h soak (owner-launched 2026-08-22): continuous background at
         # 100 raw eps (0.1 eps/device — inside the MEASURED production band of
