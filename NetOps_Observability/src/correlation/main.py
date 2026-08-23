@@ -6642,6 +6642,121 @@ async def emit(**kwargs) -> None:
 # ---------------------------------------------------------------------------
 
 
+# ── Tracker 174: loop-independent health/metrics sidecar ────────────────────
+#
+# THE MEASURED DEFECT (S1 run 082220005r1a): /healthz and /metrics are served
+# by the same event loop as the consumer and the engine; under storm-sized
+# stalls (worst 49.3s) the 4s probes timed out — Docker health flapped on a
+# HEALTHY process and the completion gate read a replica as unreadable. In an
+# orchestrator that ACTS on liveness, that is a self-inflicted restart in the
+# middle of a storm.
+#
+# THE FIX SHAPE: saturation may degrade FRESHNESS, never REACHABILITY. A
+# publisher task ON the main loop snapshots both bodies every
+# CORR_HEALTH_SNAPSHOT_S; a plain daemon-THREAD HTTP server serves the latest
+# snapshot on CORR_HEALTH_SIDECAR_PORT, stamping its age — so under a stalled
+# loop the sidecar keeps answering with an honestly-aged snapshot, and the
+# AGE ITSELF becomes the storm signal (corr_health_snapshot_age_s). The
+# in-app routes are unchanged; probes migrate to the sidecar at deploy time.
+# TLS: reuses the service SVID when the env provides it, else plaintext —
+# matching the main server's deployment split. Port 0 disables the sidecar.
+CORR_HEALTH_SIDECAR_PORT = int(os.environ.get("CORR_HEALTH_SIDECAR_PORT", "8094"))
+CORR_HEALTH_SNAPSHOT_S = float(os.environ.get("CORR_HEALTH_SNAPSHOT_S", "2.0"))
+CORR_HEALTH_STALE_AFTER_S = float(os.environ.get("CORR_HEALTH_STALE_AFTER_S", "10.0"))
+_HEALTH_SNAPSHOT: dict | None = None    # {"health": dict, "metrics": str, "built_mono": float}
+HEALTH_SNAPSHOTS_BUILT = 0
+HEALTH_SIDECAR_ERRORS = 0
+
+
+def _publish_health_snapshot() -> None:
+    """Build both bodies ON the main loop (cheap, race-free reads of module
+    state) and swap the whole holder atomically (GIL object swap)."""
+    global _HEALTH_SNAPSHOT, HEALTH_SNAPSHOTS_BUILT
+    _HEALTH_SNAPSHOT = {
+        "health": _health_payload(),
+        "metrics": _metrics_text(),
+        "built_mono": time.monotonic(),
+    }
+    HEALTH_SNAPSHOTS_BUILT += 1
+
+
+async def health_snapshot_loop() -> None:
+    while True:
+        try:
+            _publish_health_snapshot()
+        except Exception:            # §10: observable, loop continues
+            log.exception("health snapshot build failed (sidecar serves the previous one)")
+        await asyncio.sleep(CORR_HEALTH_SNAPSHOT_S)
+
+
+def _sidecar_response(path: str) -> tuple[int, str, bytes]:
+    """(status, content_type, body) for one sidecar request — PURE over the
+    current snapshot, so it is directly testable with no server at all."""
+    snap = _HEALTH_SNAPSHOT
+    if snap is None:
+        return 503, "application/json", b'{"status":"starting","detail":"no health snapshot built yet"}'
+    age = time.monotonic() - snap["built_mono"]
+    stale = age > CORR_HEALTH_STALE_AFTER_S
+    if path == "/healthz":
+        body = dict(snap["health"])
+        body["snapshot_age_s"] = round(age, 3)
+        # Reachability is preserved BY DESIGN under a stalled loop; the age is
+        # the honest signal. status stays "ok" — a starving loop is a storm
+        # symptom the STALE flag names, not a dead process.
+        body["snapshot_stale"] = stale
+        return 200, "application/json", json.dumps(body).encode()
+    if path == "/metrics":
+        text = (snap["metrics"]
+                + "# TYPE corr_health_snapshot_age_s gauge\n"
+                + f"corr_health_snapshot_age_s {age:.3f}\n"
+                + "# TYPE corr_health_snapshot_stale gauge\n"
+                + f"corr_health_snapshot_stale {int(stale)}\n")
+        return 200, "text/plain; version=0.0.4", text.encode()
+    return 404, "application/json", b'{"detail":"sidecar serves /healthz and /metrics only"}'
+
+
+def _start_health_sidecar() -> object | None:
+    """Start the daemon-thread server; returns it (tests) or None (disabled)."""
+    if CORR_HEALTH_SIDECAR_PORT <= 0:
+        return None
+    import http.server
+    import ssl as _ssl
+    import threading
+
+    class _Handler(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):
+            try:
+                status, ctype, body = _sidecar_response(self.path.split("?")[0])
+                self.send_response(status)
+                self.send_header("Content-Type", ctype)
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+            except Exception as exc:  # noqa: BLE001 — a probe handler must
+                # never kill the sidecar thread (reachability IS the feature);
+                # counted + logged so failures are observable (§10), never silent.
+                global HEALTH_SIDECAR_ERRORS
+                HEALTH_SIDECAR_ERRORS += 1
+                log.warning("health sidecar request failed (%s): %s — total=%d",
+                            type(exc).__name__, exc, HEALTH_SIDECAR_ERRORS)
+
+        def log_message(self, *_a):                        # probes are not access-log noise
+            return
+
+    srv = http.server.ThreadingHTTPServer(("0.0.0.0", CORR_HEALTH_SIDECAR_PORT), _Handler)
+    crt = os.environ.get("CORRELATION_TLS_CRT", "")
+    key = os.environ.get("CORRELATION_TLS_KEY", "")
+    if crt and key:
+        ctx = _ssl.SSLContext(_ssl.PROTOCOL_TLS_SERVER)
+        ctx.load_cert_chain(crt, key)
+        srv.socket = ctx.wrap_socket(srv.socket, server_side=True)
+    t = threading.Thread(target=srv.serve_forever, name="health-sidecar", daemon=True)
+    t.start()
+    log.info("health sidecar serving /healthz + /metrics on :%d (%s) — tracker 174",
+             CORR_HEALTH_SIDECAR_PORT, "tls" if crt and key else "plaintext")
+    return srv
+
+
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     global ch
@@ -6659,6 +6774,7 @@ async def lifespan(_app: FastAPI):
         asyncio.create_task(cloud_log_tailer()),  # #81 P3B file source (opt-in)
         asyncio.create_task(batch_flush_loop()),  # ≤2s latency bound for batched writes
         asyncio.create_task(loop_lag_watchdog()),  # P1: names the next blocker itself
+        asyncio.create_task(health_snapshot_loop()),  # tracker 174 sidecar feed
     ]
     if diagnostics.enabled():
         tasks.append(asyncio.create_task(diag_snapshot_loop()))
@@ -6727,7 +6843,13 @@ async def metrics_exposition():
     ingestion failures (received flat-lined, dropped rising, dead-letters)
     become alerts instead of archaeology."""
     from fastapi.responses import PlainTextResponse
-    h = await health()
+    return PlainTextResponse(_metrics_text())
+
+
+def _metrics_text() -> str:
+    """The /metrics body, extracted SYNC (tracker 174) — served by both the
+    route and the loop-independent sidecar; see _health_payload."""
+    h = _health_payload()
     lines = [
         "# HELP corr_ingest_events Correlation intake counters by lane (monotonic since process start).",
         "# TYPE corr_ingest_events counter",
@@ -7110,11 +7232,21 @@ async def metrics_exposition():
             for outcome in ("raw_seen", "persisted", "damped"):
                 lines.append(
                     f'corr_tenant_writes_window{{tenant_id="{t}",outcome="{outcome}"}} {row[outcome]}')
-    return PlainTextResponse("\n".join(lines) + "\n")
+    return "\n".join(lines) + "\n"
 
 
 @app.get("/healthz")
 async def health() -> dict:
+    return _health_payload()
+
+
+def _health_payload() -> dict:
+    """The /healthz body, extracted SYNC (tracker 174) so the loop-independent
+    sidecar can serve a snapshot of it while the event loop is saturated —
+    the S1 storm showed probes timing out against a GIL-starved loop, which
+    in an orchestrator that acts on health is a self-inflicted restart. The
+    route above and the snapshot publisher both call THIS, so the two
+    surfaces can never drift."""
     return {
         "status": "ok",
         # Scale P0: per-instance partition ownership (co-partitioned tenant
