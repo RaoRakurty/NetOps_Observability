@@ -128,6 +128,30 @@ attribute via ch-query-budget-check.sh); `rotate-tls-services.sh` has a
 compose-invocation path bug (looks for docker-compose.yml in CWD — run from
 deployment/docker or fix `dc()` to pass -f files explicitly).
 
+Soak hour-15 checkpoint (2026-08-23 ~14:00Z, session watch):
+  * Green: lag 9-19 all samples, disk 14-15G free, replicas restarts=0,
+    accounting lanes clean. Old-session stray sampler (61MB ndjson) killed.
+  * RSS slope is REAL and time-driven, not volume-driven: corr-1 (owner)
+    ~8.7 MiB/h AND corr-2 (standby, syslog_received=0) ~7.5 MiB/h — the
+    standby leaks with ZERO events, so suspect per-cycle/per-scrape growth,
+    not per-event state. Projection at soak end: ~866 MiB (69% of cap) /
+    ~625 MiB — survivable, no intervention. Hour-15 /metrics baselines saved
+    (scratchpad metrics-baseline-h15-*.txt) for the hour-24 diff.
+  * corr_deadletters 2.85M explained and BENIGN for the soak: the real lab
+    spines (spine1/spine2, SR Linux) stream syslog into the collector;
+    unregistered -> F-11 identity_unattributable refusal + sealed quarantine
+    (live-fire zero-trust validation with real devices). Flood was ~63 eps
+    of sr_grpc_server DEBUG "BuildAndStart" churn (gnmic gRPC redial loop,
+    seq ~1.6M) until ~10:53Z, now ~2 eps. DLQ file cap-rotated (40MB total),
+    quarantine ring bounded (200), accounting is mlx-prefix-scoped: soak
+    validity untouched. SWEEP: register-or-silence spine1/2 (gnmic target
+    auth/TLS churn? debug level shipped to collector), and consider a
+    refusal-rate alert (63 eps of sealed refusals for 12h was invisible).
+  * SWEEP (observability defect): VM scrape of correlation is REPLICA-BLIND —
+    service-DNS round-robin, no instance label; VM recorded the standby's
+    zeros while the owner held 2.85M deadletters. Per-replica scrape targets
+    (or 174's sidecar as the scrape endpoint, per-container) post-soak.
+
 ## Superseded: the originally recommended review (3 questions)
 
 1. **State and enforce the invariant** — "per-object work must be sized by the
