@@ -110,6 +110,24 @@ methodology). Notably: IBM Netcool/Impact is sized at 350–500 eps sustained �
 our measured single-owner ceiling is industry-typical for correlators.
 Awaiting owner ratification (§8 of the doc).
 
+## Watchdog + TLS rotation (2026-08-23, during soak)
+
+Stack-watchdog installed as user cron (1-min cadence, ntfy phone alerts —
+it was NEVER previously installed despite CLAUDE.md describing it). Its first
+cycle caught served TLS certs on kafka/opensearch/postgres/vector-aggregator
+expiring at soak hour ~18 (17:26-17:28Z). Rotated 02:50-03:00Z with ZERO soak
+impact: kafka via dynamic keystore reload (all 3 listeners, no broker
+downtime), postgres/clickhouse/nginx via config reload, restart-class
+services restarted (correlation NOT touched — already fresh). All wire certs
+verified to Aug 26. Maintenance event recorded in the soak log. Session-
+independent soak-completion ntfy notifier armed. KNOWN-OPEN observations for
+the post-soak sweep: `CorrProbeLaneFlatlined` critical is CHRONIC since
+08-19 (probe lane → engine intake dead — investigate); one
+`CHMemoryLimitExceeded` at 02:40Z (likely the OS-purge merge churn —
+attribute via ch-query-budget-check.sh); `rotate-tls-services.sh` has a
+compose-invocation path bug (looks for docker-compose.yml in CWD — run from
+deployment/docker or fix `dc()` to pass -f files explicitly).
+
 ## Superseded: the originally recommended review (3 questions)
 
 1. **State and enforce the invariant** — "per-object work must be sized by the
