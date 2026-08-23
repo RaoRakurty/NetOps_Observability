@@ -28,6 +28,17 @@ plugins.security.ssl.http.pemcert_filepath: tls/opensearch.crt
 plugins.security.ssl.http.pemkey_filepath: tls/opensearch.key
 plugins.security.ssl.http.pemtrustedcas_filepath: tls/ca.pem
 
+# SEC-019.1 part 4 (staged 2026-08-23, takes effect at the next opensearch restart):
+# enable the security plugin's on-demand certificate reload API
+# (PUT /_plugins/_security/api/ssl/{http|transport}/reloadcerts, superadmin
+# cert required) so SVID rotation stops needing an opensearch RESTART — the
+# only store still in the rotate-tls-services.sh restart class. Re-minted
+# SVIDs keep the same Subject/Issuer DN and SANs, so the plugin's default
+# reload DN verification passes unmodified. The 2.19+ file-watcher hot
+# reload (certificates_hot_reload.enabled) is the successor once the image
+# moves past 2.16; this API is the mechanism available today.
+plugins.security.ssl_cert_reload_enabled: true
+
 # The ONLY admin is the cert DN (internalca sets Subject CN = the SPIFFE ID).
 # No human password holds admin; the demo certificates are refused outright.
 plugins.security.allow_unsafe_democertificates: false

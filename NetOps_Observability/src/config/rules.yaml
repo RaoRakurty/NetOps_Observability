@@ -641,6 +641,23 @@ groups:
         annotations:
           summary: "the api's own served certificate expires in under 24h — the in-process reloader should have rotated it; investigate the reissue loop"
 
+      # Renewal-loop dead-man (TLS benchmark 2026-08-23, delta #3 — the
+      # cert-manager-mixin pattern: place a threshold PAST the expected
+      # renewal point so crossing it can only mean the loop is dead, hours
+      # to days before the expiry alerts above start counting down).
+      # The api's own cert is minted by the in-process TTL/2 loop and
+      # hot-swapped with no propagation dependency, so with the deployed
+      # TLS_SVID_TTL=168h it must always show >= 84h remaining; under 72h
+      # (12h slack) means the re-issue loop has missed at least one full
+      # period. ADJUST WITH TLS_SVID_TTL: threshold ~= TTL/2 - slack.
+      - alert: TLSReissueLoopSuspect
+        expr: netops_tls_cert_expiry_seconds < 259200
+        for: 1h
+        labels:
+          severity: warning
+        annotations:
+          summary: "the api's own cert shows under 72h left, below the TTL/2=84h floor the re-issue loop maintains — the mint loop is dead or wedged; every service's SVID stops refreshing from here (check api logs for 'SVID re-issue')"
+
   # ----------------------------------------------------------------------------
   # Security posture (SEC-020.2) — alerts over the SEC-020.1 vocabulary.
   # Signals that exist today only; a rule on a reserved (not-yet-emitted)

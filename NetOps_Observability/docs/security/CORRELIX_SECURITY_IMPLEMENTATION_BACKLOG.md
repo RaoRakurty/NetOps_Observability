@@ -2223,6 +2223,18 @@ does so without dropping data, not to build rotation.)*
 - **Rollback:** lengthen TTLs (a configuration change).
 - **Security impact:** makes short TTLs (the chosen substitute for revocation)
   operationally safe.
+
+> **2026-08-23 hardening wave (vendor benchmark):** part 2's sweep upgraded to
+> v2 — DAILY cron, need-based restart class (restart only when the held cert
+> drops under 72h; wire-probed or recorded loaded-mint), qualification-run
+> guard, floor-based verification; `dc()` compose-path bug fixed. Re-issue
+> loop gained ±10% jitter (`jitteredInterval`, unit-tested; live at next api
+> restart). New `TLSReissueLoopSuspect` dead-man rule (api served cert <72h =
+> loop missed a period). Watchdog now alerts on sweep DEGRADED / stale
+> heartbeats. **Part 4 staged:** `plugins.security.ssl_cert_reload_enabled`
+> in `opensearch-security.yml` (inert until restart) to move opensearch out of
+> the restart class via the reload API. Full analysis:
+> `docs/security/TLS_ROTATION_BENCHMARK_2026-08-23.md`.
 - **Telemetry impact:** **the whole point of the item** — an unproven rotation is
   a scheduled outage.
 - **Tenant impact:** none.

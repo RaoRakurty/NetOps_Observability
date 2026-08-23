@@ -2,8 +2,10 @@ package backend
 
 import (
 	"context"
+	crand "crypto/rand"
 	"errors"
 	"fmt"
+	"math/big"
 	"netops/backend/internal/platformdb"
 	"netops/backend/internal/vault"
 	"netops/backend/internal/workloadid"
@@ -314,15 +316,44 @@ func (m *caManager) provisionFromEnv() error {
 	return nil
 }
 
-// startReissueLoop re-issues the SVIDs at ~half the TTL (a generous renewal
-// margin) until ctx is done. The API's CertReloader hot-swaps its new cert with
-// no restart; nginx needs a reload to pick up its file (see the runbook).
-func (m *caManager) startReissueLoop(ctx context.Context) {
-	every := m.ttl / 2
-	if every < time.Minute {
-		every = time.Minute
+// reissueJitterFrac spreads each re-issue interval by a uniform ±10%. Every
+// mesh vendor staggers renewals (Istio SECRET_GRACE_PERIOD_RATIO_JITTER,
+// step-ca's built-in daemon jitter, Vault Agent's ± jitter at its renewal
+// threshold) so that a fleet whose loops started together cannot thundering-
+// herd the CA nor trigger synchronized reload waves across the stack
+// (TLS benchmark 2026-08-23, delta #1).
+const reissueJitterFrac = 0.10
+
+// jitteredInterval returns base shifted by a uniform random offset within
+// ±(frac·base). crypto/rand because gosec forbids math/rand and the call rate
+// (twice per TTL) makes the cost irrelevant; on any rand failure the plain
+// base is returned — jitter is best-effort, the schedule must never fail.
+func jitteredInterval(base time.Duration, frac float64) time.Duration {
+	if base <= 0 || frac <= 0 {
+		return base
 	}
-	t := time.NewTicker(every)
+	span := int64(float64(base) * frac * 2)
+	if span <= 0 {
+		return base
+	}
+	n, err := crand.Int(crand.Reader, big.NewInt(span))
+	if err != nil {
+		return base
+	}
+	return base - time.Duration(int64(float64(base)*frac)) + time.Duration(n.Int64())
+}
+
+// startReissueLoop re-issues the SVIDs at ~half the TTL (a generous renewal
+// margin, the SPIRE/Istio default rotation point) until ctx is done, each
+// interval independently jittered by reissueJitterFrac. The API's CertReloader
+// hot-swaps its new cert with no restart; nginx needs a reload to pick up its
+// file (see the runbook).
+func (m *caManager) startReissueLoop(ctx context.Context) {
+	base := m.ttl / 2
+	if base < time.Minute {
+		base = time.Minute
+	}
+	t := time.NewTimer(jitteredInterval(base, reissueJitterFrac))
 	defer t.Stop()
 	for {
 		select {
@@ -331,9 +362,10 @@ func (m *caManager) startReissueLoop(ctx context.Context) {
 		case <-t.C:
 			if err := m.provisionFromEnv(); err != nil {
 				logError("tls", "SVID re-issue", errf(err))
-				continue
+			} else {
+				logInfo("tls", "SVIDs re-issued", map[string]any{"svid_ttl": m.ttl.String()})
 			}
-			logInfo("tls", "SVIDs re-issued", map[string]any{"svid_ttl": m.ttl.String()})
+			t.Reset(jitteredInterval(base, reissueJitterFrac))
 		}
 	}
 }

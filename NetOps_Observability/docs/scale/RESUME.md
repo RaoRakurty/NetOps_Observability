@@ -152,6 +152,32 @@ Soak hour-15 checkpoint (2026-08-23 ~14:00Z, session watch):
     zeros while the owner held 2.85M deadletters. Per-replica scrape targets
     (or 174's sidecar as the scrape endpoint, per-container) post-soak.
 
+TLS rotation hardening wave (2026-08-23 afternoon, owner-directed; benchmark
+doc = docs/security/TLS_ROTATION_BENCHMARK_2026-08-23.md):
+  * rotate-tls-services.sh v2: dc() compose-path fix; DAILY cron (05:07);
+    NEED-BASED restart class (restart only when held cert < 72h, wire-probed
+    or recorded via scripts/.rotate-tls.loaded); qualification guard (hot
+    legs run, restarts defer during live miniladder runs); floor-based
+    verification (48h) for not-due/deferred endpoints. Proven live twice
+    against the running soak (hot class now on the Aug-30 mint, zero
+    restarts, soak untouched).
+  * stack-watchdog.sh: TLS heartbeat checks (DEGRADED / 26h check-stale /
+    10d act-stale) AND a REAL bug fixed live: scaled services (correlation
+    x2) broke docker inspect (newline-joined cids) -> false "state=" DOWN
+    every minute since the second replica existed; now probes every replica
+    and keys restart/OOM tracking per container.
+  * tls_ca.go: re-issue loop jittered +-10% (crypto/rand, unit-tested) —
+    effective at next api restart (post-soak batch).
+  * rules.yaml: TLSReissueLoopSuspect dead-man (api served cert < 72h =
+    mint loop dead; vmalert -dryRun-validated, hot-reloaded live).
+  * STAGED for post-soak restart: opensearch-security.yml
+    ssl_cert_reload_enabled (SEC-019.1 part 4) — then move opensearch from the
+    sweep's restart class to a reload leg.
+  * Watchdog fix exposed + fixed a LOST CRON: host-hygiene (10-min disk
+    sweeper) vanished from the crontab during 2026-08-22's cron surgery
+    (heartbeat frozen at Aug 22 18:00) — reinstalled 2026-08-23; disk-full
+    protection active again during the disk-sensitive soak.
+
 ## Superseded: the originally recommended review (3 questions)
 
 1. **State and enforce the invariant** — "per-object work must be sized by the
