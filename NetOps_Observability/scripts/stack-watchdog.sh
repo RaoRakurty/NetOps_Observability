@@ -397,24 +397,34 @@ check_clickhouse_health() {  # tel_stale_min
 }
 
 for svc in $EXPECTED_SERVICES; do
-  cid=$(dkr ps -q \
+  # A scaled service (docker compose --scale correlation=2) returns MULTIPLE
+  # cids here. Passing them as one newline-joined string to `docker inspect`
+  # fails ("no such container") and produced a permanent false "state=" DOWN
+  # from the moment the second replica existed (found live 2026-08-23).
+  # Probe EVERY replica: one sick replica of a scaled service is a problem
+  # even while its sibling is healthy.
+  cids=$(dkr ps -q \
     --filter "label=com.docker.compose.project=$PROJECT" \
     --filter "label=com.docker.compose.service=$svc" 2>/dev/null)
-  if [ -z "$cid" ]; then
+  if [ -z "$cids" ]; then
     problems+=("$svc: not running")
     continue
   fi
-  state=$(dkr inspect -f '{{.State.Status}}' "$cid" 2>/dev/null)
-  if [ "$state" != "running" ]; then
-    problems+=("$svc: state=$state")
-    continue
-  fi
-  health=$(dkr inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{end}}' "$cid" 2>/dev/null)
-  if [ -n "$health" ] && [ "$health" != "healthy" ]; then
-    problems+=("$svc: health=$health")
-  fi
+  for cid in $cids; do
+    name=$(dkr inspect -f '{{.Name}}' "$cid" 2>/dev/null | tr -d /)
+    label="${name:-$svc/${cid:0:12}}"
+    state=$(dkr inspect -f '{{.State.Status}}' "$cid" 2>/dev/null)
+    if [ "$state" != "running" ]; then
+      problems+=("$label: state=${state:-unreadable}")
+      continue
+    fi
+    health=$(dkr inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{end}}' "$cid" 2>/dev/null)
+    if [ -n "$health" ] && [ "$health" != "healthy" ]; then
+      problems+=("$label: health=$health")
+    fi
 
-  check_pid_capacity "$svc" "$cid"
+    check_pid_capacity "$label" "$cid"
+  done
 done
 
 # Container OOM / restart detection (#102 signoff): cadvisor's per-container
@@ -428,17 +438,21 @@ touch "$RESTART_STATE" 2>/dev/null || true
 oom_events=()
 new_restart_state=""
 for svc in $EXPECTED_SERVICES; do
-  cid=$(dkr ps -aq \
+  # Same scaled-service rule as the state loop above: `head -1` watched only
+  # ONE replica of a scaled service, so an OOM-kill of the other was invisible.
+  # Track restart counts per CONTAINER (keyed by name), not per service.
+  for cid in $(dkr ps -aq \
     --filter "label=com.docker.compose.project=$PROJECT" \
-    --filter "label=com.docker.compose.service=$svc" 2>/dev/null | head -1)
-  [ -n "$cid" ] || continue
+    --filter "label=com.docker.compose.service=$svc" 2>/dev/null); do
   read -r rcount oomed exitcode <<<"$(dkr inspect -f '{{.RestartCount}} {{.State.OOMKilled}} {{.State.ExitCode}}' "$cid" 2>/dev/null)"
   [ -n "${rcount:-}" ] || continue
-  prev=$(awk -v s="$svc" '$1==s{print $2}' "$RESTART_STATE" 2>/dev/null)
-  new_restart_state+="$svc ${rcount}"$'\n'
+  cname=$(dkr inspect -f '{{.Name}}' "$cid" 2>/dev/null | tr -d /)
+  cname="${cname:-$svc/${cid:0:12}}"
+  prev=$(awk -v s="$cname" '$1==s{print $2}' "$RESTART_STATE" 2>/dev/null)
+  new_restart_state+="$cname ${rcount}"$'\n'
   if [ -n "$prev" ] && [ "$rcount" -gt "$prev" ] 2>/dev/null; then
     if [ "$oomed" = "true" ] || [ "${exitcode:-0}" = "137" ]; then
-      oom_events+=("$svc: OOM-KILLED by its cgroup limit (restarts $prev->$rcount) — compare its resource-plan limit vs usage, then --replan")
+      oom_events+=("$cname: OOM-KILLED by its cgroup limit (restarts $prev->$rcount) — compare its resource-plan limit vs usage, then --replan")
     else
       # Not an OOM (that's the branch above) — say what the container itself
       # said instead of speculating. The last log line is the diagnostic that
@@ -447,11 +461,12 @@ for svc in $EXPECTED_SERVICES; do
       # || true: the log fetch is diagnostic garnish; the restart event must
       # still be reported even if docker logs itself errors.
       lastlog=$(dkr logs --tail 1 "$cid" 2>&1 | tr -d '\r' | cut -c1-200 || true)
-      oom_events+=("$svc: restarted (${prev}->${rcount}, exit ${exitcode:-?}) — last log: ${lastlog:-<no output>}")
+      oom_events+=("$cname: restarted (${prev}->${rcount}, exit ${exitcode:-?}) — last log: ${lastlog:-<no output>}")
     fi
   elif [ "$oomed" = "true" ] && [ -z "$prev" ]; then
-    oom_events+=("$svc: sitting OOM-killed (exit ${exitcode:-?})")
+    oom_events+=("$cname: sitting OOM-killed (exit ${exitcode:-?})")
   fi
+  done
 done
 printf '%s' "$new_restart_state" > "$RESTART_STATE" 2>/dev/null || true
 if [ "${#oom_events[@]}" -gt 0 ]; then
@@ -605,6 +620,33 @@ if [ -f "$hh_beat" ]; then
   hh_age_min=$(( ($(date +%s) - $(stat -c %Y "$hh_beat" 2>/dev/null || echo 0)) / 60 ))
   [ "$hh_age_min" -gt "${HOST_HYGIENE_MAX_AGE_MIN:-45}" ] &&
     problems+=("host-hygiene cron stale: heartbeat ${hh_age_min}m old (10-min cron dead? disk-full protection is OFF)")
+fi
+
+# TLS rotation sweep health (SEC-019.1 part 2): certificates age invisibly, so
+# a dead or failing rotation cron is a FUTURE store outage (the 2026-08-05
+# class: fresh disk mints, expired certs on the wire). Three signals, same
+# transition-only problems machine as the hygiene checks above:
+#   1. last run DEGRADED  — the sweep itself says the wire may be stale;
+#   2. heartbeat age      — the daily --check cron stopped running at all;
+#   3. act-heartbeat age  — the weekly FULL rotation stopped landing (a daily
+#      check refreshing signal 2 must not mask this; soak-time deferrals
+#      legitimately widen the gap, hence a floor above one deferred week).
+# An absent heartbeat is quiet: pre-first-run, or a deployment without the
+# TLS mesh — same convention as the hygiene blocks.
+tls_beat="$(dirname "${BASH_SOURCE[0]}")/rotate-tls.heartbeat"
+if [ -f "$tls_beat" ]; then
+  if grep -q 'status=DEGRADED' "$tls_beat" 2>/dev/null; then
+    problems+=("rotate-tls sweep DEGRADED: $(head -c 120 "$tls_beat") — wire may serve stale certs; see scripts/rotate-tls.log and re-run scripts/rotate-tls-services.sh")
+  fi
+  tls_age_h=$(( ($(date +%s) - $(stat -c %Y "$tls_beat" 2>/dev/null || echo 0)) / 3600 ))
+  [ "$tls_age_h" -gt "${TLS_CHECK_MAX_AGE_H:-26}" ] &&
+    problems+=("rotate-tls daily check stale: heartbeat ${tls_age_h}h old (cron dead? served-cert drift is unwatched)")
+fi
+tls_act_beat="$(dirname "${BASH_SOURCE[0]}")/rotate-tls.act.heartbeat"
+if [ -f "$tls_act_beat" ]; then
+  tls_act_days=$(( ($(date +%s) - $(stat -c %Y "$tls_act_beat" 2>/dev/null || echo 0)) / 86400 ))
+  [ "$tls_act_days" -gt "${TLS_ACT_MAX_AGE_DAYS:-10}" ] &&
+    problems+=("rotate-tls ACT sweep stale: last successful full rotation ${tls_act_days}d ago (weekly cron dead or perpetually deferred) — restart-class services drift toward the 2026-08-05 expiry outage")
 fi
 
 # -----------------------------------------------------------------------------
