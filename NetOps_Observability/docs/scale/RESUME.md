@@ -216,6 +216,25 @@ SOAK ABORTED AT HOUR 26 (2026-08-24 ~00:41Z) — harness vehicle, not platform:
     (data/miniladder/gate-smoke-2026-08-24.log). PASS -> start the fresh
     72h soak (soak-72h profile) with sampler/notifier re-armed at the new
     container names. The nightly/weekly cron stays #SOAK-SUSPENDED.
+  * GATE HISTORY (2026-08-24 night): run 1 red on two one-liners (archive
+    slice lost to a DEFINITE CH code-241 rejection the retry contract
+    wrongly excluded — fixed in aae727b5 with a definite-rejection retry
+    lane on all tables; memflat judged a hardcoded '-1' replica name after
+    the scale-recreate renamed replicas — now pattern-discovers and judges
+    EVERY replica). Run 2 green everywhere except stability: 2 consumer
+    restarts caused by the BROKER briefly fencing itself (own KRaft
+    heartbeat socket timeout 9.7s at 05:32) — evidence CONTAMINATED by this
+    session running the full pytest suite + builds on the same host
+    mid-run; accounting still balanced exactly through the blip. Run 3 on
+    a QUIET host: ALL PHASES PASS (burst 400/s exact, drain 75s,
+    completion 389s, accounting exact, memflat 9 containers, stability 0
+    restarts, cleanup verified).
+  * 72h SOAK #2 LIVE: started 2026-08-24T06:27:55Z on the GA-candidate
+    build, ends ~2026-08-27T06:30Z. Log data/miniladder/
+    soak-72h-2026-08-24.log; sampler soak-metrics-2026-08-24.csv (replica-
+    name agnostic, 30-min cadence); session monitor + every-minute
+    watchdog + daily rotate-tls (self-defers restarts) + 10-min host-
+    hygiene all armed. Replicas: netops-correlation-2/-3.
 
 ## Superseded: the originally recommended review (3 questions)
 
