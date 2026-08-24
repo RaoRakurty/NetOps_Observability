@@ -199,6 +199,23 @@ SOAK ABORTED AT HOUR 26 (2026-08-24 ~00:41Z) — harness vehicle, not platform:
     the queued deploy batch FIRST (172+163+162+174 + tls jitter + OS
     reload flag + F-18 image) and soak the GA-candidate build — saves a
     whole 72h cycle later; recommended.
+  * OWNER RATIFIED (2026-08-24): deploy batch FIRST, then soak the
+    GA-candidate. EXECUTED same night: kafka recreated at 1536m; correlation
+    x2 on the new image (172 ingest-priority + 163 open-objects cap + 162
+    ContinuationIndex + 174 sidecar + archive v2 + ch-retry); api rebuilt
+    (TLS jitter live); opensearch recreated (ssl_cert_reload flag ACTIVE —
+    single-file bind mounts need recreate, not restart, after an inode-
+    replacing edit); F-18 confirmed already live in the router's mounted
+    config; healthchecks (base+tls) migrated to the :8094 sidecar. TWO
+    deploy-caught 174 defects fixed (6a644bac): lifespan never CALLED
+    _start_health_sidecar (nothing listened), and the sidecar read TLS env
+    names no deployment sets (would have served plaintext) — both now
+    pinned by tests. Replicas are named correlation-2/-3 after the scale
+    recreate (update any tooling that assumes correlation-1).
+  * Gate in progress: T-nominal smoke on the new build
+    (data/miniladder/gate-smoke-2026-08-24.log). PASS -> start the fresh
+    72h soak (soak-72h profile) with sampler/notifier re-armed at the new
+    container names. The nightly/weekly cron stays #SOAK-SUSPENDED.
 
 ## Superseded: the originally recommended review (3 questions)
 
