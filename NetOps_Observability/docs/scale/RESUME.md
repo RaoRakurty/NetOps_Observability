@@ -178,6 +178,28 @@ doc = docs/security/TLS_ROTATION_BENCHMARK_2026-08-23.md):
     (heartbeat frozen at Aug 22 18:00) — reinstalled 2026-08-23; disk-full
     protection active again during the disk-sensitive soak.
 
+SOAK ABORTED AT HOUR 26 (2026-08-24 ~00:41Z) — harness vehicle, not platform:
+  * Cause (proven): each produce chunk execs a console-producer JVM (512M
+    default heap) INSIDE kafka's ~1.08 GiB cgroup, ~88% full after 26h of
+    page-cache accrual -> direct-reclaim stalls (memory.events max=43,521;
+    tool-JVM start 7.8s at idle) -> 3 chunks crossed the 90s timeout ->
+    burst aborted honestly. Broker: 0 restarts, 0 OOM kills, consumers fine.
+  * Fixes SHIPPED (34ffc3ab): kafka_tool pins tool heap -Xmx192m; lab .env
+    KAFKA_MEM_LIMIT 1109m->1536m (applies at kafka recreate, pending).
+  * Secondary finds: redis/valkey served an EXPIRED cert for 7h (missing
+    from the rotation sweep entirely) — hot-reload leg added + executed,
+    healthy again; grading also flagged memflat (corr-1 71->379 MiB is
+    restart-baseline vs plateau — sampler shows FLAT h16-26; CH 1298->2020
+    of 5.2G — attribute post-mortem) and stability (4 consumer restarts =
+    the operator-approved TLS-rotation window; 1 replica log unreadable).
+  * First 26h were CLEAN at ~102 eps: lag 9-19 throughout, zero loss,
+    RSS plateaued, disk stable. The run FAILS as a 72h soak; the evidence
+    from its first 26h stands as characterization, not qualification.
+  * DECISION PENDING (owner): restart soak on the current build, or take
+    the queued deploy batch FIRST (172+163+162+174 + tls jitter + OS
+    reload flag + F-18 image) and soak the GA-candidate build — saves a
+    whole 72h cycle later; recommended.
+
 ## Superseded: the originally recommended review (3 questions)
 
 1. **State and enforce the invariant** — "per-object work must be sized by the
