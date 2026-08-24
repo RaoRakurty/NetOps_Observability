@@ -342,3 +342,59 @@ def test_the_retry_budget_can_never_be_zero(monkeypatch):
 def test_the_env_read_clamps_too():
     """Belt and braces: the module-level budget is never below one."""
     assert main.CORR_CH_RETRY_ATTEMPTS >= 1
+
+
+# ── definite-rejection retries on NON-dedup-safe tables (2026-08-24) ─────────
+# Live one-off during the post-deploy T-nominal gate: a 7-row
+# corr_signals_archive slice was lost to a transient ClickHouse code-241
+# memory rejection. The archive's retry exclusion protects against UNKNOWN
+# outcomes (transport — the server may have committed); a DEFINITE rejection
+# with a CH error code did not commit (single-block inserts are atomic), so
+# one retry recovers it with no duplication risk.
+
+def test_archive_definite_rejection_retries_and_recovers(monkeypatch):
+    sink = ScriptedCH([_rejected(241), _ok()])
+    monkeypatch.setattr(main, "ch", sink)
+    monkeypatch.setattr(main, "CORR_CH_RETRY_ATTEMPTS", 3)
+    monkeypatch.setattr(main, "ch_retry_delay", lambda a, rnd=None: 0.0)
+    ok = run(main.ch_insert("netops.corr_signals_archive", [{"r": 1}]))
+    assert ok is True
+    assert len(sink.attempts("netops.corr_signals_archive")) == 2
+
+
+def test_archive_transport_failure_still_never_retries(monkeypatch):
+    """The duplication guard stands: an UNKNOWN outcome on a non-dedup-safe
+    table must not be re-sent — the original exclusion, still load-bearing."""
+    sink = ScriptedCH([_transport(), _ok()])
+    monkeypatch.setattr(main, "ch", sink)
+    monkeypatch.setattr(main, "CORR_CH_RETRY_ATTEMPTS", 3)
+    monkeypatch.setattr(main, "ch_retry_delay", lambda a, rnd=None: 0.0)
+    ok = run(main.ch_insert("netops.corr_signals_archive", [{"r": 1}]))
+    assert ok is False
+    assert len(sink.attempts("netops.corr_signals_archive")) == 1
+
+
+def test_rejection_without_a_ch_code_stays_permanent(monkeypatch):
+    """A bare False from a bool-only sink (no code) proves nothing about
+    whether the server committed — it must not be retried on an unsafe table."""
+    outcome = main.InsertOutcome(committed=False, kind="rejected", rows=1)
+    sink = ScriptedCH([outcome, _ok()])
+    monkeypatch.setattr(main, "ch", sink)
+    monkeypatch.setattr(main, "CORR_CH_RETRY_ATTEMPTS", 3)
+    monkeypatch.setattr(main, "ch_retry_delay", lambda a, rnd=None: 0.0)
+    ok = run(main.ch_insert("netops.corr_signals_archive", [{"r": 1}]))
+    assert ok is False
+    assert len(sink.attempts("netops.corr_signals_archive")) == 1
+
+
+def test_mutation_reverting_to_idempotent_only_loses_the_archive_slice(monkeypatch):
+    """Both-direction proof: force the OLD gate (idempotent-only) and the
+    definite-rejection recovery disappears — the new lane is load-bearing."""
+    sink = ScriptedCH([_rejected(241), _ok()])
+    monkeypatch.setattr(main, "ch", sink)
+    monkeypatch.setattr(main, "CORR_CH_RETRY_ATTEMPTS", 3)
+    monkeypatch.setattr(main, "ch_retry_delay", lambda a, rnd=None: 0.0)
+    monkeypatch.setattr(main, "CH_RETRYABLE_CODES", frozenset())  # kills code-based retry
+    ok = run(main.ch_insert("netops.corr_signals_archive", [{"r": 1}]))
+    assert ok is False
+    assert len(sink.attempts("netops.corr_signals_archive")) == 1

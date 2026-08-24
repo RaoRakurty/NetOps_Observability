@@ -4279,10 +4279,26 @@ async def ch_insert(table: str, rows, *, dedup_token: str | None = None, **ctx) 
     else:
         token = _next_dedup_token(table) if table in CH_CRITICAL_TABLES else ""
     rows = list(rows)
-    # A retry may only be attempted where re-sending cannot duplicate: the table
-    # must carry a server-side dedup guarantee AND we must have a stable token to
-    # resend under. Without both, one unknown outcome would turn into two rows.
+    # A retry may only be attempted where re-sending cannot duplicate. Two
+    # independent proofs exist, one per failure class:
+    #   * UNKNOWN outcome (kind="transport" — timeout mid-flight, the server
+    #     may have committed): needs a server-side dedup guarantee AND a
+    #     stable token to resend under (CH_DEDUP_SAFE_TABLES). Without both,
+    #     one unknown outcome could turn into two rows.
+    #   * DEFINITE rejection (kind="rejected" WITH a ClickHouse error code —
+    #     the server answered and refused; our batches are single-block, and
+    #     single-block inserts are atomic, so nothing committed): a re-send
+    #     cannot duplicate on ANY table, dedup-safe or not. Added 2026-08-24
+    #     after a live one-off: a 7-row corr_signals_archive slice lost to a
+    #     transient code-241 memory rejection that one retry would have
+    #     recovered — the table's transport-retry exclusion had been wrongly
+    #     covering definite rejections too, red-gating a green run.
     idempotent = bool(token) and table in CH_DEDUP_SAFE_TABLES
+
+    def _retry_safe(o: InsertOutcome) -> bool:
+        if o.kind == "rejected" and o.ch_code is not None:
+            return True
+        return idempotent
     global CH_RETRIES_ATTEMPTED, CH_RETRIES_RECOVERED, CH_RETRIES_EXHAUSTED
     # At least one ATTEMPT, always: a budget of 0 would mean "never insert",
     # not "never retry", and would leave `outcome` unset. Clamped HERE and not
@@ -4303,7 +4319,7 @@ async def ch_insert(table: str, rows, *, dedup_token: str | None = None, **ctx) 
                 log.warning("clickhouse insert RECOVERED table=%s attempt=%d rows=%d",
                             table, attempt, len(rows))
             break
-        if attempt >= attempts or not idempotent or not ch_retryable(outcome):
+        if attempt >= attempts or not _retry_safe(outcome) or not ch_retryable(outcome):
             break
         CH_RETRIES_ATTEMPTED += 1
         delay = ch_retry_delay(attempt)
@@ -4314,7 +4330,7 @@ async def ch_insert(table: str, rows, *, dedup_token: str | None = None, **ctx) 
         await asyncio.sleep(delay)
     assert outcome is not None
     if not outcome.committed:
-        if idempotent and ch_retryable(outcome):
+        if _retry_safe(outcome) and ch_retryable(outcome):
             CH_RETRIES_EXHAUSTED += 1
         # The KIND, not a hard-coded "rejected". A read timeout on an insert
         # ClickHouse was still committing is an UNKNOWN outcome, not a refusal,

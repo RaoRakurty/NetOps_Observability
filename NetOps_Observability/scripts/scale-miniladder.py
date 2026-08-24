@@ -2271,32 +2271,23 @@ class Harness:
         anchor = "warm (end of burst)" if warm else "cold baseline (no warm sample — burst did not complete)"
         ref = warm or cold
         rows, problems = [], []
+        # Replica discovery by NAME PATTERN, not a hardcoded -1 index: after a
+        # `--force-recreate --scale correlation=2` compose numbers replicas
+        # -2/-3 and the old form judged a container that no longer existed
+        # ("no memory sample", gate red on a rename — 2026-08-24). Every
+        # replica present in ANY sample is judged; one that appears without an
+        # anchor (scaled up mid-run) still fails honestly as missing evidence.
+        seen = set(cold) | set(warm) | set(end)
         for svc in MEM_SERVICES:
-            name = f"{self.args.project}-{svc}-1"
-            c, w, e = cold.get(name, -1), warm.get(name, -1), end.get(name, -1)
-            r = ref.get(name, -1)
-            limit = end_stats.get(name, {}).get("limit", -1)
-            grew = (e / r) if r > 0 and e > 0 else -1
-            pct_limit = round(100.0 * e / limit, 1) if limit > 0 and e > 0 else None
-            rows.append({"container": name, "cold_bytes": c, "warm_bytes": w,
-                         "end_bytes": e, "limit_bytes": limit,
-                         "pct_of_limit": pct_limit,
-                         "ratio_vs_anchor": round(grew, 3) if grew > 0 else None,
-                         "ratio_cold_to_end": round(e / c, 3) if c > 0 and e > 0 else None})
-            if r <= 0 or e <= 0:
-                problems.append(f"{name}: no memory sample (anchor {r}, end {e})")
+            pref = f"{self.args.project}-{svc}-"
+            names = sorted(n for n in seen
+                           if n.startswith(pref) and n[len(pref):].isdigit())
+            if not names:
+                problems.append(f"{pref}N: no replica seen in any memory sample")
                 continue
-            # 64 MiB absolute floor: small containers jitter past any ratio.
-            if grew > self.args.mem_factor and (e - r) > 64 * 1024**2:
-                problems.append(
-                    f"{name}: LEAK SLOPE {r / 1024**2:.0f} -> {e / 1024**2:.0f} MiB "
-                    f"(x{grew:.2f} > x{self.args.mem_factor}) after input stopped")
-            # The OOM path, self-relative to the plan-sized cap (#102).
-            if pct_limit is not None and pct_limit > self.args.mem_headroom_percent:
-                problems.append(
-                    f"{name}: {e / 1024**2:.0f} MiB is {pct_limit}% of its "
-                    f"{limit / 1024**2:.0f} MiB cap (> {self.args.mem_headroom_percent}%) "
-                    f"— one burst from an OOM kill")
+            for name in names:
+                self._memflat_judge(name, cold, warm, end, end_stats, ref,
+                                    rows, problems)
         ev = {"factor": self.args.mem_factor, "anchor": anchor,
               "headroom_percent": self.args.mem_headroom_percent,
               "containers": rows}
@@ -2306,6 +2297,36 @@ class Harness:
                           f"all {len(rows)} key containers within x{self.args.mem_factor} "
                           f"of the {anchor} sample and under "
                           f"{self.args.mem_headroom_percent}% of their caps")
+
+    def _memflat_judge(self, name: str, cold: dict, warm: dict, end: dict,
+                       end_stats: dict, ref: dict,
+                       rows: list, problems: list) -> None:
+        """Judge ONE container against the memflat contract (extracted 2026-08-24
+        so scaled services judge every replica; body unchanged)."""
+        c, w, e = cold.get(name, -1), warm.get(name, -1), end.get(name, -1)
+        r = ref.get(name, -1)
+        limit = end_stats.get(name, {}).get("limit", -1)
+        grew = (e / r) if r > 0 and e > 0 else -1
+        pct_limit = round(100.0 * e / limit, 1) if limit > 0 and e > 0 else None
+        rows.append({"container": name, "cold_bytes": c, "warm_bytes": w,
+                     "end_bytes": e, "limit_bytes": limit,
+                     "pct_of_limit": pct_limit,
+                     "ratio_vs_anchor": round(grew, 3) if grew > 0 else None,
+                     "ratio_cold_to_end": round(e / c, 3) if c > 0 and e > 0 else None})
+        if r <= 0 or e <= 0:
+            problems.append(f"{name}: no memory sample (anchor {r}, end {e})")
+            return
+        # 64 MiB absolute floor: small containers jitter past any ratio.
+        if grew > self.args.mem_factor and (e - r) > 64 * 1024**2:
+            problems.append(
+                f"{name}: LEAK SLOPE {r / 1024**2:.0f} -> {e / 1024**2:.0f} MiB "
+                f"(x{grew:.2f} > x{self.args.mem_factor}) after input stopped")
+        # The OOM path, self-relative to the plan-sized cap (#102).
+        if pct_limit is not None and pct_limit > self.args.mem_headroom_percent:
+            problems.append(
+                f"{name}: {e / 1024**2:.0f} MiB is {pct_limit}% of its "
+                f"{limit / 1024**2:.0f} MiB cap (> {self.args.mem_headroom_percent}%) "
+                f"— one burst from an OOM kill")
 
     # -- phase 7: cleanup ----------------------------------------------------
     def cleanup(self) -> bool:
