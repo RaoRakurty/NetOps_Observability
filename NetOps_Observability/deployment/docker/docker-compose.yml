@@ -1231,11 +1231,17 @@ services:
     # F-47: the correlation service had NO healthcheck, so a dead or wedged
     # consumer was indistinguishable from a healthy one — `docker compose ps`
     # said "Up", the watchdog's per-service check passed, and findings simply
-    # stopped being produced. /metrics is the right probe: it is served by the
-    # same FastAPI app that hosts /findings, so it goes unhealthy if the app
-    # dies, and (unlike a bare TCP check) it fails if the event loop is wedged.
+    # stopped being produced. REVERSED by tracker 174 (2026-08-24): probing
+    # the loop-served /metrics meant a BUSY loop read as a DEAD service — S1
+    # measured 49s engine stalls making health flap, and an orchestrator
+    # acting on that restarts a replica mid-storm (self-inflicted outage at
+    # peak load). The sidecar on :8094 is served from a daemon thread: it
+    # dies with the PROCESS (the condition a restart actually fixes) and
+    # stays up through loop stalls, which it reports as snapshot_age_s for
+    # alerting instead of restarting. Loop-wedge detection now belongs to
+    # vmalert (CorrProbeLaneFlatlined / staleness rules), not Docker health.
     healthcheck:
-      test: ["CMD-SHELL", "python -c \"import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/metrics', timeout=4).status==200 else 1)\""]
+      test: ["CMD-SHELL", "python -c \"import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8094/healthz', timeout=4).status==200 else 1)\""]
       interval: 30s
       timeout: 8s
       retries: 5

@@ -173,10 +173,16 @@ services:
       KAFKA_SSL_CERT: /certs/svid/correlation.crt
       KAFKA_SSL_KEY: /certs/svid/correlation.key
     healthcheck:
-      # Same probe philosophy as the base (F-47: /metrics proves the app that
-      # hosts /findings is alive), now over mTLS presenting the service's own
-      # SVID — which the identity middleware scopes to exactly this surface.
-      test: ["CMD-SHELL", "python -c \"import urllib.request,ssl,sys; ctx=ssl.create_default_context(cafile='/certs/ca.pem'); ctx.load_cert_chain('/certs/svid/correlation.crt','/certs/svid/correlation.key'); sys.exit(0 if urllib.request.urlopen('https://correlation:8443/metrics', timeout=4, context=ctx).status==200 else 1)\""]
+      # Tracker 174 (deployed 2026-08-24): probe the LOOP-INDEPENDENT health
+      # sidecar on :8094, not the asyncio app on :8443. S1 measured the
+      # loop-served /metrics going unanswerable during storm stalls — Docker
+      # health flapped, and an orchestrator acting on that restarts a replica
+      # that was merely busy (a self-inflicted outage at the worst moment).
+      # The sidecar thread answers regardless of loop state and stamps
+      # snapshot_age_s, so a stalled loop is a VISIBLE condition upstream,
+      # never a restart trigger. localhost probe: the SVID's SANs don't cover
+      # 'localhost', so hostname check is off; the CA still verifies the cert.
+      test: ["CMD-SHELL", "python -c \"import urllib.request,ssl,sys; ctx=ssl.create_default_context(cafile='/certs/ca.pem'); ctx.check_hostname=False; sys.exit(0 if urllib.request.urlopen('https://localhost:8094/healthz', timeout=4, context=ctx).status==200 else 1)\""]
       interval: 30s
       timeout: 8s
       retries: 5

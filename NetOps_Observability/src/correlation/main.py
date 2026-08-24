@@ -6744,8 +6744,13 @@ def _start_health_sidecar() -> object | None:
             return
 
     srv = http.server.ThreadingHTTPServer(("0.0.0.0", CORR_HEALTH_SIDECAR_PORT), _Handler)
-    crt = os.environ.get("CORRELATION_TLS_CRT", "")
-    key = os.environ.get("CORRELATION_TLS_KEY", "")
+    # Deploy-convention fix (2026-08-24, caught in pre-deploy review): the
+    # stack sets CORR_TLS_CERT/CORR_TLS_KEY (compose.tls.yml, same pair
+    # tls_serve.py uses); the original CORRELATION_TLS_CRT names matched
+    # nothing and would have served the sidecar PLAINTEXT in production.
+    # Old names kept as fallback for any standalone harness that used them.
+    crt = os.environ.get("CORR_TLS_CERT", "") or os.environ.get("CORRELATION_TLS_CRT", "")
+    key = os.environ.get("CORR_TLS_KEY", "") or os.environ.get("CORRELATION_TLS_KEY", "")
     if crt and key:
         ctx = _ssl.SSLContext(_ssl.PROTOCOL_TLS_SERVER)
         ctx.load_cert_chain(crt, key)
@@ -6768,6 +6773,12 @@ async def lifespan(_app: FastAPI):
     # starting tracemalloc, creating a thread, or touching the filesystem.
     diagnostics.start()
     ch = CH(CLICKHOUSE_URL, CLICKHOUSE_USER, CLICKHOUSE_PASS)
+    # Tracker 174: the loop-INDEPENDENT health server (daemon thread). Found
+    # unwired at first deploy (2026-08-24): the snapshot feed task below ran
+    # but nothing ever served :8094, so the new Docker healthcheck failed on
+    # connection-refused. Started before the loop tasks so /healthz answers
+    # (503 "starting") from the first moment of life.
+    _start_health_sidecar()
     tasks = [
         asyncio.create_task(consume()),
         asyncio.create_task(engine_loop()),

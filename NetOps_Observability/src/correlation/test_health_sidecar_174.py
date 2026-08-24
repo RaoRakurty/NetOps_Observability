@@ -122,3 +122,14 @@ def test_publisher_failure_keeps_the_previous_snapshot(monkeypatch):
     assert main._HEALTH_SNAPSHOT is before, (
         "a failed rebuild clobbered the last good snapshot")
     assert main._sidecar_response("/healthz")[0] == 200
+
+
+def test_lifespan_starts_the_sidecar_wiring_pin():
+    """The 2026-08-24 first-deploy defect: every sidecar piece existed and the
+    snapshot feed task ran, but lifespan never called _start_health_sidecar()
+    — nothing listened on :8094 and the new healthcheck failed on refused
+    connections. Pin the wiring, not just the parts."""
+    import inspect
+    src = inspect.getsource(main.lifespan)
+    assert "_start_health_sidecar()" in src
+    assert "health_snapshot_loop()" in src
