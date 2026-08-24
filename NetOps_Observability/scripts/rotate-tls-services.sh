@@ -14,6 +14,7 @@
 #   postgres    re-stage + pg_reload_conf() (ssl_* are reload-safe)
 #   clickhouse  re-stage + SYSTEM RELOAD CONFIG (cert reloader re-reads)
 #   nginx       nginx -s reload
+#   redis       valkey CONFIG SET tls-cert-file+tls-key-file (hot re-read)
 #   vmauth      nothing — VictoriaMetrics re-reads cert files automatically
 #   the rest    docker compose restart, one at a time, health-gated
 #               (opensearch stays restart-class until the security plugin's
@@ -213,6 +214,31 @@ if [ "$CHECK_ONLY" -eq 0 ]; then
     log "nginx: reload (re-reads server cert + proxy client SVID)"
     dc exec -T nginx nginx -s reload || flag "nginx reload"
 
+    # redis (valkey): COVERAGE GAP found 2026-08-24 — this service was in NO
+    # class, so its serving cert silently EXPIRED at the old mint's notAfter
+    # (7h of api/prober cache TLS failures, healthcheck failing streak 2601).
+    # Valkey re-reads both files on CONFIG SET (single command so cert+key
+    # stay a matched pair). Password rides stdin -> REDISCLI_AUTH: never argv
+    # (§8 — argv is visible to ps on host and container).
+    # --insecure on the reload connection is deliberate: it is a LOOPBACK
+    # exec inside the redis container (127.0.0.1), and the very failure this
+    # leg must recover from — an EXPIRED serving cert — makes a verifying
+    # client refuse to connect at all (2026-08-24: 7h expired, only a restart
+    # could have fixed it otherwise). Verification of the wire happens right
+    # after, in phase 3, from a verifying client.
+    log "redis (valkey): hot cert reload via CONFIG SET"
+    rpw=$(grep -E '^REDIS_PASSWORD=' "$COMPOSE_DIR/.env" | cut -d= -f2-) || rpw=""
+    if [ -n "$rpw" ]; then
+        # shellcheck disable=SC2016  # $(cat) must expand inside the container shell
+        if ! printf '%s' "$rpw" | dc exec -T redis sh -c \
+            'REDISCLI_AUTH=$(cat) valkey-cli --tls --insecure --cacert /tls/ca.pem -p 6380 CONFIG SET tls-cert-file /tls/svid/redis.crt tls-key-file /tls/svid/redis.key' \
+            | grep -q OK; then
+            flag "redis CONFIG SET cert reload"
+        fi
+    else
+        flag "redis: REDIS_PASSWORD missing from $COMPOSE_DIR/.env — cannot hot-reload its certs"
+    fi
+
     # ── phase 2: restart class — NEED-BASED, one at a time, health-gated ────
     # 2026-08-23 redesign (vendor benchmark): a fixed weekly restart cadence
     # with TTL=7d / reissue-at-TTL/2 can catch a mint with only TTL/2 left and
@@ -343,6 +369,7 @@ verify kafka:9095 kafka
 verify postgres:5432 postgres postgres
 verify clickhouse:8443 clickhouse
 verify clickhouse:9440 clickhouse
+verify redis:6380 redis
 verify vmauth:8427 vmauth
 # Restart class: expiry-floor check while deferred, strict otherwise.
 verify_r opensearch:9200 opensearch

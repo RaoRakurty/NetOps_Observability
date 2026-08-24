@@ -367,6 +367,17 @@ class Stack:
         cmd = ["docker", "exec"]
         if input_text is not None:
             cmd.append("-i")
+        # SOAK_72H abort post-mortem (2026-08-24, hour 26): every tool call
+        # starts a JVM INSIDE the broker's cgroup, whose default heap is 512M
+        # (bin/kafka-run-class.sh) against a ~1.08 GiB container limit already
+        # ~88% occupied by the broker + page cache. Each start forced direct
+        # reclaim (memory.events max=43,521); three produce chunks crossed the
+        # 90 s timeout and the burst aborted honestly. Cap the TOOL heap —
+        # 192M is ample for console-producer/consumer-groups piping ~1k lines
+        # — so the injection vehicle stops fighting the broker for its cgroup.
+        # The broker's own KAFKA_HEAP_OPTS is set by its entrypoint at boot
+        # and is NOT affected by this per-exec env.
+        cmd += ["-e", "KAFKA_HEAP_OPTS=-Xmx192m -Xms64m"]
         cmd += [kc, f"/opt/kafka/bin/{tool}"] + self._kafka_conn(config_flag) + args
         return run(cmd, timeout, input_text)
 
