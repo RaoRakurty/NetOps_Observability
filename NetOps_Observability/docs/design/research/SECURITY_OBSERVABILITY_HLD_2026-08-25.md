@@ -14,6 +14,21 @@ proposes and marks open questions. No implementation follows it (per owner:
 
 ---
 
+## RATIFIED DECISIONS (owner)
+
+**2026-08-25 — SCOPE: network-first, security-in-correlation, NOT a SIEM.**
+The biggest open question (§9.3) is ANSWERED. Correlix's security scope is the
+NETWORK ESTATE — routers, switches, firewalls, and the seams between them.
+Server / container / cloud / host / app security detection is EXPLICITLY OUT
+OF SCOPE and routed to the customer's existing SIEM (emit OCSF/normalized
+findings TO Splunk/Sentinel/Elastic — a partner integration, a selling point,
+never a competitor stance). Correlix does NOT try to out-SIEM Splunk on their
+turf. Security is added as a FOURTH EVIDENCE CLASS to the EXISTING correlation
+engine — security incidents become seam-attributed RCA/exposure objects, not a
+parallel security product. This closes §9.3 and constrains every design choice
+below: if a proposed capability pulls toward general-purpose log SIEM, it is
+out; if it deepens network-security-in-the-causality-graph, it is in.
+
 ## 0. The single most important finding (both streams, decisive)
 
 **The Security section is not greenfield — it partially exists in code.** The
@@ -137,6 +152,73 @@ seam lens as a facet — it is not primarily a security surface.
 Every surface §3a tenant-scoped (per-tenant feeds state, RLS on new PG tables,
 `chTenantScope` on new ClickHouse queries, isolation test shipped per feature).
 
+## 5b. Hardening / configuration audit (owner request 2026-08-25)
+
+Owner wants **auditing tools** — proving servers, routers, switches are
+hardened to industry standards (CIS benchmarks, e.g. "as simple as CIS for
+Linux"). This is the COMPLIANCE pillar deepened, and it does NOT violate the
+network-first / not-a-SIEM decision: **auditing reads config/state and checks
+a benchmark; it is posture, not log-based threat detection.** A hardening
+finding is one more evidence object ("SSHv1 enabled on core-01",
+"root login permitted on app-server-3") that can feed exposure stories.
+
+### The scope nuance to confirm
+
+- **Network devices (routers/switches/firewalls)** — squarely IN. CIS
+  benchmarks exist for IOS/IOS-XE 17.x, JunOS v2.1.0, Arista EOS v1.0.0,
+  PAN/Fortinet/etc.; DISA STIGs split into NDM/RTR/L2S guides. This is the
+  natural extension of the 9 existing checks and is already the Tier-2
+  "benchmark engine" item. No new decision needed — build it.
+- **Servers / Linux (CIS for Linux)** — a DEFENSIBLE ADJACENCY, not a scope
+  break, precisely because it is compliance/posture and NOT SIEM. But it
+  crosses from "network estate" to "servers," and it needs a NEW collection
+  surface (an agent or SSH + a scanner). **Recommended line to hold:** we
+  AUDIT server posture (read config, check a benchmark), we do NOT ingest
+  server logs for threat detection — that stays the customer's SIEM's job.
+  With that line, Linux/server hardening audit is a legitimate Phase-2
+  capability. **Owner to confirm** whether server-scope audit is in.
+
+### Architecture principle: integrate the benchmark engine, author the correlation
+
+The benchmark CONTENT is a maintenance treadmill (CIS versions, quarterly
+STIG revisions) — do NOT author it from scratch. Integrate the standard
+engines and turn their output into Correlix evidence objects:
+
+- **Network devices:** capture running config over SSH (the Tier-2 config-
+  capture feature — feeds compliance + threat + RCA at once), parse with a
+  ciscoconfparse2-style hierarchy parser, evaluate a curated CIS/STIG NDM
+  rule subset. Own the rules here (small, high-value, network-specific).
+- **Linux/servers (if in scope):** do NOT reimplement CIS-for-Linux. INGEST
+  the output of the established scanners the customer likely already runs —
+  **OpenSCAP/SCAP (OVAL/XCCDF, the open standard), CIS-CAT, or Lynis** — via
+  an agent or a results-upload API, and normalize their findings into the
+  same ComplianceState/finding model. Build-vs-integrate: integrate the
+  scanner, own the normalization + correlation + evidence-story.
+  (Deep research on OpenSCAP vs CIS-CAT vs Lynis — licensing, output formats,
+  agent footprint — recommended before committing; that is Fable's lane.)
+
+### What it produces (the useful part)
+
+- Per-device / per-host **hardening score** with per-rule pass/fail EVIDENCE
+  (the exact config line / OVAL result), framework-tagged (CIS/STIG/PCI/
+  DORA/NIS2 — the `Framework` field already models this).
+- **Drift-in-minutes** on network devices (syslog-triggered re-audit — the
+  differentiator competitors lack) and scheduled re-audit on servers.
+- **Planned-vs-unplanned** classification (join against maintenance windows +
+  audit log) — a hardening regression outside a change window is itself a
+  signal, and can promote into an exposure story.
+- **Auditor evidence packs** (the regulatory clock — CRA Sept 2026, DORA,
+  NIS2 — makes exportable evidence a sales feature).
+
+### Risk (unchanged, restated for this scope)
+
+Content maintenance is the largest recurring cost. Mitigation: own only the
+small network-device rule set; INTEGRATE server benchmark engines rather than
+maintain SCAP content; ship "audit-ready evidence," not "certified
+compliance," until the certification budget exists. And close Correlix's own
+scaffold-grade defaults before selling a hardening product — a hardening tool
+that isn't hardened is an embarrassing demo.
+
 ## 6. Build order (agent's telemetry-grounded version, owner's phasing intent)
 
 **Tier 0 — harden what's shipped:** EPSS + EoL columns in the feed-prepare
@@ -211,9 +293,10 @@ directional one; same conclusions, dated)
 2. **Packet NDR** — Tier-3 "validate demand" (agent) or an earlier pillar
    (your Security-Deep)? Recommendation: Tier-3; the flow+syslog v1 is where
    the differentiated wedge is.
-3. **Scope discipline** — accept the network-first boundary and route
-   server/cloud/host detection to partner SIEMs, or pursue general SIEM
-   (against Splunk/Datadog economics)? Recommendation: hold the boundary.
+3. **Scope discipline** — ✅ **RATIFIED 2026-08-25: network-first, hold the
+   boundary.** Server/cloud/host detection routes to partner SIEMs (emit
+   OCSF); Correlix does not pursue general SIEM. Security is a fourth
+   evidence class in the correlation engine. (See RATIFIED DECISIONS above.)
 4. **Compliance content budget** — is there appetite for the recurring
    benchmark-maintenance cost, or ship "drift + golden-config" only and defer
    framework certification?
