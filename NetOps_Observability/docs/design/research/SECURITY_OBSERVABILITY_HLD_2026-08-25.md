@@ -493,6 +493,39 @@ constraint). The starter catalog is ~20-30 rules — small, high-value, and the
 seam-aware exposure check is the wedge no incumbent can copy without a topology/
 seam model.
 
+## 5f. Image-size & soak impact (owner asked before building, 2026-08-25)
+
+**Image size: single-digit MB on the base — the designs protect it.**
+Current: api 41.8 MB, frontend 107 MB (served dist 7 MB), correlation 300 MB.
+- Backend Go code compiles into the existing static binary (+~few MB); NO new
+  heavy base deps because we INGEST scanner results (not bundle OpenSCAP/
+  CIS-CAT) and make Batfish/ciscoconfparse2 OPT-IN SIDECARS. api ~42 → ~45 MB.
+- Frontend pages are lazy chunks (+0.5–2 MB total dist, first-load flat). An
+  in-browser PCAP analyzer, if ever added, is a large OPTIONAL lazy chunk.
+- Opt-in sidecars (Batfish ~1–2 GB Java, ciscoconfparse2 ~100–200 MB) are
+  separate feature-flagged containers, never in the base stack.
+- Backups + PCAPs are DATA VOLUMES (quota/retention-governed), not image.
+
+**Soak: NO full redo — a direct payoff of the removable-module constraint.**
+1. The current 72h soak validates the CORE correlation engine at 1K on the
+   GA-candidate; the new modules are DORMANT by default and the engine has
+   ZERO security-specific code (producer, not embedded), so the shipping
+   default is behaviorally identical to what is soaking. The 72h investment is
+   not wasted and does not restart.
+2. Compiling the security code in with flags OFF owes a ~45-min T-nominal
+   SMOKE gate (confirm the larger binary regressed nothing), NOT a 72h soak.
+3. A full incremental soak is needed ONLY for a configuration where a heavy
+   feature is ENABLED — security evidence lane active (more signals into the
+   engine = heavier workload to re-characterize) or continuous packet capture
+   (disk-heavy; disk is the binding resource per the soak). Even then it is an
+   INCREMENTAL soak of THAT configuration, characterizing the delta on the
+   known baseline, never starting core validation over.
+
+Sequencing: let the current soak close the core-product GA gate; security/
+backup/capture is a SEPARATE increment that earns its own incremental
+qualification when built + enabled. The modular design is what buys this
+separation.
+
 ## 6. Build order (agent's telemetry-grounded version, owner's phasing intent)
 
 **Tier 0 — harden what's shipped:** EPSS + EoL columns in the feed-prepare
