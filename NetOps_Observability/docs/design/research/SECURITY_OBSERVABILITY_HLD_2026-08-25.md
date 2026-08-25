@@ -224,6 +224,83 @@ compliance," until the certification budget exists. And close Correlix's own
 scaffold-grade defaults before selling a hardening product — a hardening tool
 that isn't hardened is an embarrassing demo.
 
+## 5c. Rule evaluation architecture — local-store + local-eval, NOT per-check API (owner decision 2026-08-25)
+
+Owner question: "how are we going to match against the company's rules — will
+that be imported into a local DB, or run API calls and ensure? Think optimized
+and efficient." **Recommendation: import rules into a LOCAL, VERSION-PINNED
+store and evaluate LOCALLY against captured device/host state. The network is
+touched ONLY by a background content-sync, never by a per-check API call.**
+
+Separate two things the question conflates:
+- **Rule CONTENT** (the benchmark/company-policy DEFINITIONS): local store,
+  version-pinned, synced in the background.
+- **EVALUATION** (matching a device's captured state against the rules): a
+  pure local function (captured_state, ruleset_version) → findings. No network.
+
+### Why local-store + local-eval (five reasons, all decisive)
+
+1. **Determinism & audit.** A compliance verdict must be reproducible: "was
+   device X compliant at time T, under which rule version?" If rules come from
+   a live API, a past verdict can't be reproduced — auditors (PCI/DORA/NIS2)
+   require exactly this. Version-pinned local rules make every verdict
+   replayable.
+2. **Air-gap / offline.** Compliance in banks/utilities/gov often runs
+   air-gapped. Per-check external API calls are a non-starter there. Correlix's
+   ethos is already offline-first (the vuln feed is an offline CSV) — stay
+   consistent.
+3. **Scale.** 1,000 devices × hundreds of rules per cycle cannot make an
+   external call per rule — that is latency and rate-limit death. Local
+   evaluation is the only path that scales (and the 1K soak proves the local
+   compute budget exists).
+4. **Availability.** External API down = compliance blind. Local rules =
+   compliance always works. A monitoring product must not have a monitoring
+   blind spot when a third party has an outage.
+5. **Cost.** API-per-check has no viable economics at fleet scale.
+
+### The ONE thing that is a network call: background content sync
+
+New benchmark versions (CIS releases, DISA STIG quarterly revisions,
+ComplianceAsCode/CIS-CAT content updates) sync in the BACKGROUND into the
+local store, version-pinned, on a slow cadence (weekly). Evaluation NEVER
+blocks on a sync. This mirrors `scripts/vuln-feed-prepare.py` exactly — the
+vuln lane already does offline-prepared, hot-reloaded, version-pinned content.
+Same pattern, one more feed. Air-gapped installs get an operator-provisioned
+bundle instead of a live sync (the vuln feed's air-gap path, reused).
+
+### Company/custom rules are ALWAYS local + per-tenant
+
+A customer's own hardening standard / golden config / policy overlay is their
+IP — stored per-tenant under FORCE-RLS, never external. This reuses the EXISTING
+managed-rules pattern (migration 0033 pipeline-processors): rule DEFINITIONS
+live version-pinned (in code / synced store), per-tenant ENABLEMENT + cloned
+customizations live in the tenant DB. Do not invent a new mechanism.
+
+### Efficiency architecture (the "optimized" the owner asked for)
+
+1. **Evaluate ON CHANGE, not on a timer** — the biggest win. Config capture is
+   syslog-triggered (drift-in-minutes); re-evaluate ONLY the device that
+   changed, and only the rules whose inputs changed. Event-driven beats
+   poll-driven, and it's the same lesson the correlation engine already
+   learned (incremental over new arrivals, not full rescans — trackers
+   166/167).
+2. **Rule → input index** — map each rule to the config sections it reads, so a
+   config delta re-runs only affected rules, not the whole benchmark.
+3. **Compile once per version** — parse/compile the benchmark ruleset into an
+   efficient in-memory form ONCE per version, reused across all devices (the
+   snapshot-epoch lesson from 166: build the expensive structure once, reuse
+   across the cohort). Never re-parse per device.
+4. **Cache verdicts by (config_hash, ruleset_version)** — unchanged config +
+   unchanged rules = cached verdict, zero recompute. Content-addressed, so it
+   doubles as the audit trail (the pinned ruleset version is part of the key).
+5. **Tiered sync** — content updates weekly in the background, version-pinned;
+   evaluation always runs against the pinned version, never a moving target.
+
+Net: the fleet is evaluated continuously for near-zero steady-state cost
+(only changed devices recompute only affected rules), verdicts are
+reproducible and auditable, and it works air-gapped. This is strictly better
+than the incumbents' scheduled full re-scan model.
+
 ## 6. Build order (agent's telemetry-grounded version, owner's phasing intent)
 
 **Tier 0 — harden what's shipped:** EPSS + EoL columns in the feed-prepare
