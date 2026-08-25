@@ -45,9 +45,15 @@ it touches the engine — spec'd not to add security branches.
 (§5g); keep the offline feed, add the EPSS/KEV columns to the prepare script.
 Emits onto the T2 bus seam.
 
-**T4 — Evolve compliance lane onto the foundation.** `internal/compliance`
-findings become `Finding`s; add the 800-53-hub crosswalk model (§5d:
-Check→Control→Mapping→Crosswalk); framework coverage % + honest claim captions.
+**T4 — Evolve compliance lane onto the foundation (SCOPE-TIGHTENED by Q4).**
+`internal/compliance` findings become `Finding`s. Per Q4 (do NOT fund broad
+benchmark maintenance yet): v1 = drift + golden-config + the existing
+framework TAGS on the small check set; INGEST OpenSCAP/SSG for Linux (community
+maintains content). The broad 800-53↔PCI/HIPAA/CSF/ISO crosswalk DATA
+(§5d full realization) is DEFERRED — keep the Check→Control tag on our own
+rules (cheap, ours) but do not import/maintain the full framework crosswalk
+until there is demand. Claim "hardening findings"/control evidence on the
+tagged set, not broad "framework compliance".
 
 **T5 — Network hardening rule engine (§5e).** Concept catalog (~20-30 rules) +
 per-vendor detect/remediate bindings; the SEAM-AWARE exposure check (the

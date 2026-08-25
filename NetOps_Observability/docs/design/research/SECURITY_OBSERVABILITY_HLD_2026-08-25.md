@@ -668,30 +668,31 @@ directional one; same conclusions, dated)
   becomes a sales feature; PQC crypto-agility ("where is RSA-2048 on my
   devices") becomes a compliance query by 2030/2035.
 
-## 9. Open questions for the owner — STATUS as of 2026-08-25 (build started)
+## 9. Open questions — ALL ANSWERED 2026-08-25 (build started)
 
-1. **Evolution framing** — ✅ ANSWERED. Owner said build on the foundation;
-   the assessment (evolve the aligned vuln/compliance seeds, rebuild the thin
-   threat lane, build the new foundation fresh) IS the evolution framing. See
-   SECURITY_BUILD_PLAN_2026-08-25.md.
-2. **Packet NDR** — ⚠️ OPEN (recommendation pending owner yes). Full always-on
-   packet inspection as a DETECTION engine = Tier-3 "validate demand first"
-   (rec); the flow+syslog v1 is the wedge. NOTE: distinct from the per-
-   interface on-demand Wireshark capture module (PACKET_CAPTURE_DESIGN), which
-   is IN.
-3. **Scope discipline** — ✅ RATIFIED: network-first, emit OCSF to partner
-   SIEMs, security as a 4th evidence class.
-4. **Compliance content budget** — ⚠️ OPEN (business call). (a) Full framework
-   compliance with the recurring content cost — but SCOPED: integrate OpenSCAP
-   for Linux (they maintain the content), hand-author only the ~20-30
-   network-device rules, tag to the 800-53 hub so framework views come via
-   crosswalk (rec); vs (b) drift + golden-config + hardening findings only,
-   deferring the framework-mapping treadmill (cheaper, weaker compliance
-   story).
-5. **Timeline** — ✅ ANSWERED by starting the build on the existing foundation
-   (de-facto re-baselined off the 36-month plan; Year-1 was already shipped).
+1. **Evolution framing** — ✅ Start from Year-2 / evolve the existing
+   foundation (don't scratch the aligned vuln+compliance seeds).
+2. **Packet NDR** — ✅ Tier-3, validate demand first. Always-on packet
+   inspection as a detection engine is deferred; flow+syslog v1 is the wedge.
+   (The per-interface on-demand Wireshark capture module stays IN.)
+3. **Scope** — ✅ Network-first; integrate/export to SIEM (emit OCSF), never
+   pursue general SIEM. Security = 4th evidence class in correlation.
+4. **Compliance content** — ✅ **DO NOT fund broad benchmark maintenance yet.**
+   This tightens the compliance v1 scope decisively:
+   - **IN (cheap, high-value, no content treadmill for us):** config
+     backup + drift/golden-config, the ~20-30 hand-authored NETWORK-device
+     hardening rules (the differentiator, small + slow-moving), and INGEST
+     OpenSCAP/SSG for Linux (the COMMUNITY maintains that content — not us).
+     Claim "hardening findings" + control evidence on the small set.
+   - **DEFERRED until demand/budget:** the broad framework-crosswalk
+     realization (§5d — importing/maintaining the full 800-53↔PCI/HIPAA/CSF/
+     ISO mapping data), broad CIS/STIG benchmark coverage, any "framework
+     compliance" claim beyond the small tagged set. §5d stays the TARGET
+     architecture; its full data-maintenance is not funded now.
+5. **Timeline** — ✅ Re-baseline the roadmap from the current shipped state
+   (Year-1 already shipped; build the foundation now).
 
-**Also decided this session (beyond the original 5):** server/Linux hardening
+**Also decided this session**Also decided this session (beyond the original 5):** server/Linux hardening
 IN scope (§5b); OpenSCAP-first tooling (§5b); local-store + local-eval,
 periodic audit (§5c); 800-53-hub framework crosswalk (§5d); network hardening
 checks + seam-aware exposure + remediation (§5e); CVE-by-vendor-advisory +
