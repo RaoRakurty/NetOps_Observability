@@ -129,7 +129,7 @@ func TestBGPFetcher404IsTerminalNotRetried(t *testing.T) {
 func TestBGPFetcherCacheCapEvicts(t *testing.T) {
 	f := testFetcher("http://unused.invalid")
 	for i := 0; i < bgpCacheCap+10; i++ {
-		f.store(fmt.Sprintf("k%d", i), time.Minute, []byte("x"))
+		f.cachePut(fmt.Sprintf("k%d", i), time.Minute, []byte("x"))
 	}
 	f.mu.Lock()
 	n := len(f.cache)

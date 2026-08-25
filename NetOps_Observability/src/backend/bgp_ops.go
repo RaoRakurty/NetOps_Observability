@@ -202,7 +202,7 @@ func (f *bgpFetcher) cached(key string) ([]byte, bool) {
 	return e.body, true
 }
 
-func (f *bgpFetcher) store(key string, ttl time.Duration, body []byte) {
+func (f *bgpFetcher) cachePut(key string, ttl time.Duration, body []byte) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if len(f.cache) >= bgpCacheCap {
@@ -253,7 +253,7 @@ func (f *bgpFetcher) getLive(ctx context.Context, key, rawURL string, ttl time.D
 		if resp.StatusCode != http.StatusOK {
 			return nil, fmt.Errorf("upstream answered %d", resp.StatusCode)
 		}
-		f.store(key, ttl, body)
+		f.cachePut(key, ttl, body)
 		return body, nil
 	}
 	return nil, fmt.Errorf("upstream unreachable after retry: %w", lastErr)
