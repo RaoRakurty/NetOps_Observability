@@ -600,6 +600,57 @@ no connector, or whose feed is stale, shows "unassessed" — NEVER a false
 "no CVEs / all clear." Plus a feed-staleness banner. Correlix prefers the
 vendor's word over NVD's broken CPE, and says so when it can't assess.
 
+## 5h. Provider architecture — Correlix owns the model, everything external is a swappable provider (owner, 2026-08-25)
+
+Owner direction, and the load-bearing architecture principle for the whole
+compliance/security-evidence domain:
+
+> "Keep controls, framework mappings, evidence collection, and assessment
+> engines SEPARATE. Correlix owns the normalized compliance/evidence model;
+> OpenSCAP, CIS-CAT, vendor APIs and framework feeds should just be
+> interchangeable providers."
+
+### Four separate concerns (never entangled)
+
+1. **Normalized model — OWNED by Correlix (the stable core):** the
+   OCSF-aligned `ComplianceFinding`, the canonical `Control` node, the
+   `ControlMapping` (check→control), and the assessment orchestration. This is
+   Correlix's IP and it never depends on any external tool's shape.
+2. **Evidence collection / assessment — PROVIDERS (swappable, §4):**
+   an `AssessmentProvider` interface; impls produce NORMALIZED findings:
+   - OpenSCAP/SSG — the INITIAL implementation (open standards).
+   - the Correlix network-rule engine (§5e) — our own, the differentiator.
+   - Lynis, vendor APIs — additional.
+   - **CIS-CAT — OPTIONAL, NO architectural dependency** (owner). It is one
+     more provider, wired only if a customer licenses it; nothing in the core
+     depends on it.
+3. **CVE advisories — PROVIDERS:** the `VendorAdvisoryProvider` (T3) —
+   offline/mock first, Cisco openVuln (OAuth2/CSAF) later.
+4. **Framework catalogs + crosswalks — PROVIDERS (abstract, versioned):**
+   a `FrameworkProvider`/`ControlCatalogProvider` interface. Framework
+   definitions and VERSIONING are kept ABSTRACT so PCI, CIS, ISO and others
+   are added INDEPENDENTLY. NIST/OSCAL public machine-readable data is
+   APPROVED for use at the mapping step. **Do not embed or redistribute
+   licensed framework content without checking its terms** (owner) — the
+   provider fetches/references, the core stores only what the license permits.
+
+### Why this matters
+
+- **No lock-in:** any scanner, CVE source, or framework feed is swap-in/swap-out
+  behind an interface. OpenSCAP today, add/replace tomorrow, zero core change.
+- **Independent evolution:** framework mappings grow without touching evidence
+  collection; a new scanner lands without touching the framework layer.
+- **Licensing safety:** the provider boundary is where license terms are
+  enforced — the owned core is clean, licensed content stays behind its
+  provider and is never redistributed by the core.
+- It is §4 plug-and-play applied to the entire compliance domain, and it is
+  what makes the Q4 "defer broad framework maintenance" decision cheap to
+  reverse later — you just add a `FrameworkProvider`, no refactor.
+
+The flow: evidence-collection PROVIDERS → normalized findings (OWNED model) →
+canonical CONTROLS (owned) → framework mappings from FrameworkPROVIDERS →
+per-framework views. Four layers, four seams, all independently testable.
+
 ## 6. Build order (agent's telemetry-grounded version, owner's phasing intent)
 
 **Tier 0 — harden what's shipped:** EPSS + EoL columns in the feed-prepare
