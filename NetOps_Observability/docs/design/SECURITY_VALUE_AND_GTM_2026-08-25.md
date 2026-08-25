@@ -123,6 +123,27 @@ speak for what a competitor doesn't. NEVER assert a competitor is "insecure" or
 credible rebuttal and makes us look ignorant). Every "—" in a table must be TRUE
 and verifiable. Comparison tables convert technical buyers; adjectives don't.
 
+### THE headline differentiator — the cross-seam correlation engine (owner 2026-08-25)
+
+Lead with this above every feature comparison, because none of the three have
+it: **Correlix has a correlation engine that correlates issues across ALL
+OWNERSHIP SEAMS — LAN, ISP, cloud provider, SaaS, app team — into ONE
+seam-attributed causality graph that names the root cause AND its owner.**
+- Datadog and Dynatrace correlate WITHIN their own telemetry (cloud/app/APM);
+  Zabbix doesn't correlate across ownership boundaries at all. None produce a
+  seam-attributed root cause ("the loss is in ISP-X's segment, not yours").
+- And now SECURITY folds into that SAME engine: a security incident becomes a
+  seam-owned exposure story on the same causality graph — CVE + config change +
+  anomalous flow + degraded experience, correlated across seams, with the owner
+  named. That is the exposure story, and it is architecturally impossible for a
+  tool that has no cross-seam causality graph to produce.
+- One line: **"They monitor. We correlate across every seam — and now that
+  engine secures the network too."** The empty column below shows the features;
+  THIS is why they can't just add them.
+
+Add a **"Cross-seam correlation → root cause + owner"** row to every comparison
+table below — it is a "—" for all three.
+
 ### vs Zabbix
 
 - **Do NOT attack their lack of RLS as "insecure."** Not using RLS on a
@@ -177,5 +198,6 @@ Datadog and Dynatrace are OBSERVABILITY-first and both left the network estate
 out of their security story; Zabbix has no security story at all. Correlix is
 NETWORK-first with security fused into the correlation engine. We do NOT
 out-cloud Datadog or out-APM Dynatrace — we own the asset class all three
-under-serve, and we integrate/export to whatever they run. The empty column is
-the pitch.
+under-serve, we CORRELATE it across every seam (the engine none of them have),
+and we integrate/export to whatever they run. The empty column shows the
+features; the correlation engine is why they can't simply bolt them on.
