@@ -29,6 +29,38 @@ parallel security product. This closes §9.3 and constrains every design choice
 below: if a proposed capability pulls toward general-purpose log SIEM, it is
 out; if it deepens network-security-in-the-causality-graph, it is in.
 
+## ARCHITECTURE CONSTRAINT — security is a REMOVABLE module (owner, 2026-08-25)
+
+**"Keep the security module modular — remove it from correlation if needed."**
+This is a HARD design constraint, not a preference. Security must be a clean,
+detachable component; the correlation engine must NOT hard-depend on it.
+
+Mechanism (this is what makes it satisfiable):
+- Security lanes are **PRODUCERS** onto the event bus — they emit generic
+  evidence objects (SecuritySignal / ExposureFinding / ComplianceState) that
+  carry `entity + seam + timestamp + evidence-refs`, the SAME shape every other
+  evidence source uses. Security is added as a fourth evidence class by
+  EMITTING, not by editing the engine.
+- The correlation engine consumes ANY evidence object through its EXISTING
+  generic grounding path. It has **zero security-specific code**. It does not
+  import the security packages. It grounds "an evidence object with entity+seam"
+  — it neither knows nor cares that a given one came from the security lane.
+- Therefore **removing security = removing its producers** (feature flag off /
+  packages absent). The engine keeps working, just with one fewer evidence
+  source. No surgery, no engine dependency to unwind. This is exactly §4
+  plug-and-play: isolated, no cross-domain imports, replaceable without system
+  change.
+- Packaging: security lives in its own packages (`internal/vuln`,
+  `internal/compliance`, a new `internal/threat` / `internal/audit`), gated by
+  a `FEATURE_SECURITY`-class flag, dormant by default (like every other opt-in
+  feature — traceroute, device-ssh, copilot). Its nav section, its bus topics,
+  and its stores are all droppable as a unit.
+
+Design test: if a proposed integration would put security-specific logic INSIDE
+the correlation engine, it is wrong — re-shape it as an evidence object the
+generic engine grounds. The engine's contract is "I ground evidence"; security
+is one supplier of evidence, never a dependency.
+
 ## 0. The single most important finding (both streams, decisive)
 
 **The Security section is not greenfield — it partially exists in code.** The
@@ -315,6 +347,23 @@ continuous engine:
 Net: a simple, complete, on-demand/scheduled batch audit that is reproducible,
 auditable, and air-gap-capable — with continuous drift as an optional
 correlation-feeding layer added only when its exposure-story value is wanted.
+
+### Frequency is a BILLING dimension (owner, 2026-08-25)
+
+"If it needs to run more frequently, that cost goes to the customer depending
+on resources used — storage / RAM / CPU." Audit frequency is a resource-
+consumption lever, so it is METERED, consistent with the capacity/pricing
+model (price per device, retention as an upsell, burst as SLO):
+- **Baseline tier:** periodic audit (monthly/quarterly) + on-demand runs.
+  Included with the security module — light, cheap.
+- **Upsell tier:** high-frequency / continuous drift. It consumes more —
+  more config snapshots (STORAGE), more evaluations (CPU), larger working set
+  (RAM) — so it is a priced tier, charged on the resources it burns. The
+  cache-by-(config_hash, ruleset_version) design means an idle fleet costs
+  little even at high frequency; the cost tracks actual change volume, which
+  is the fair thing to bill on.
+This makes "how often do you want to be audited" a customer knob with a
+resource-honest price, not a fixed platform cost the vendor eats.
 
 ## 6. Build order (agent's telemetry-grounded version, owner's phasing intent)
 
