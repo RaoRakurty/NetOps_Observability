@@ -10,7 +10,7 @@ deploy, no docker, targeted builds only). Legend: ✅ done · 🚀 deployed/live
 |---|---|---|
 | 72h soak #2 (GA-candidate build, 1K) | 🔵 | hour ~35, lag 0, healthy; ends **~Aug 27 06:28Z** |
 | Post-soak deploy batch | ⏳ | api rebuild (BGP routes + outbound-CA), gnmic wildcard, healthcheck migration — one smoke-gated batch after soak |
-| Disk watch | 🔵 | ~8G free; fine to finish; watchdog alerts if it tightens |
+| Disk watch | 🔵 | ~6-7G free, 93% used — OpenSearch PLATEAUED (steady-state, not declining); ~2G to flood-stage; soak survives; build paused to protect margin |
 
 ## B. Frontend wave (all DEPLOYED this session)
 | Item | Status |
@@ -53,11 +53,15 @@ deploy, no docker, targeted builds only). Legend: ✅ done · 🚀 deployed/live
 | Build plan (`SECURITY_BUILD_PLAN`) | ✅ |
 
 ## F. Security Track — BUILD (Opus subagents, soak-safe)
+**⏸ PAUSED until soak finishes (~Aug 27 06:28Z):** disk is steady-state but
+tight (~2G to the OpenSearch 95% flood-stage). T1/T3/T4 done + committed;
+T5–T9 resume post-soak to protect the GA soak's disk headroom. Design is
+complete, nothing blocked.
 | Task | Status | Notes |
 |---|---|---|
 | **T1** finding foundation (`internal/secfindings`) | ✅ | built + Fable-verified; commit d86b4bbc; 9 tests, gate clean |
 | **T3** VendorAdvisoryProvider + evolve vuln lane | ✅ | built + verified; commit 5410fc5f; internal/advisory, offline/mock/cisco-stub, FindingsFor→exposure |
-| **T4** evolve compliance lane onto foundation | 🔵 | building (scope-tightened per Q4: drift+golden+tags, OpenSCAP-Linux, defer broad crosswalk) |
+| **T4** evolve compliance lane onto foundation | ✅ | built + verified; commit 444c180d; internal/compliancemodel, Control/Mapping/FrameworkProvider, HIPAA-vs-PCI independence test |
 | **T2/T2b** producer bus seam + engine grounding | ⏳ | T2b touches the Python engine — careful, spec'd to add zero security branches |
 | **T5** network hardening rule engine (seam-aware) | ⏳ | the differentiator |
 | **T6** threat-detection lane rebuild | ⏳ | |
