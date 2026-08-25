@@ -668,21 +668,40 @@ directional one; same conclusions, dated)
   becomes a sales feature; PQC crypto-agility ("where is RSA-2048 on my
   devices") becomes a compliance query by 2030/2035.
 
-## 9. Open questions for the owner
+## 9. Open questions for the owner — STATUS as of 2026-08-25 (build started)
 
-1. **Ratify the evolution framing** (start at your Year-2; Year-1 is shipped)?
-2. **Packet NDR** — Tier-3 "validate demand" (agent) or an earlier pillar
-   (your Security-Deep)? Recommendation: Tier-3; the flow+syslog v1 is where
-   the differentiated wedge is.
-3. **Scope discipline** — ✅ **RATIFIED 2026-08-25: network-first, hold the
-   boundary.** Server/cloud/host detection routes to partner SIEMs (emit
-   OCSF); Correlix does not pursue general SIEM. Security is a fourth
-   evidence class in the correlation engine. (See RATIFIED DECISIONS above.)
-4. **Compliance content budget** — is there appetite for the recurring
-   benchmark-maintenance cost, or ship "drift + golden-config" only and defer
-   framework certification?
-5. **Timeline** — the agent's Tier-0/1 is weeks-scale on existing telemetry;
-   your 36-month plan front-loaded telemetry that's already built. Re-baseline?
+1. **Evolution framing** — ✅ ANSWERED. Owner said build on the foundation;
+   the assessment (evolve the aligned vuln/compliance seeds, rebuild the thin
+   threat lane, build the new foundation fresh) IS the evolution framing. See
+   SECURITY_BUILD_PLAN_2026-08-25.md.
+2. **Packet NDR** — ⚠️ OPEN (recommendation pending owner yes). Full always-on
+   packet inspection as a DETECTION engine = Tier-3 "validate demand first"
+   (rec); the flow+syslog v1 is the wedge. NOTE: distinct from the per-
+   interface on-demand Wireshark capture module (PACKET_CAPTURE_DESIGN), which
+   is IN.
+3. **Scope discipline** — ✅ RATIFIED: network-first, emit OCSF to partner
+   SIEMs, security as a 4th evidence class.
+4. **Compliance content budget** — ⚠️ OPEN (business call). (a) Full framework
+   compliance with the recurring content cost — but SCOPED: integrate OpenSCAP
+   for Linux (they maintain the content), hand-author only the ~20-30
+   network-device rules, tag to the 800-53 hub so framework views come via
+   crosswalk (rec); vs (b) drift + golden-config + hardening findings only,
+   deferring the framework-mapping treadmill (cheaper, weaker compliance
+   story).
+5. **Timeline** — ✅ ANSWERED by starting the build on the existing foundation
+   (de-facto re-baselined off the 36-month plan; Year-1 was already shipped).
+
+**Also decided this session (beyond the original 5):** server/Linux hardening
+IN scope (§5b); OpenSCAP-first tooling (§5b); local-store + local-eval,
+periodic audit (§5c); 800-53-hub framework crosswalk (§5d); network hardening
+checks + seam-aware exposure + remediation (§5e); CVE-by-vendor-advisory +
+PSIRT connectors + background sync (§5g); security is a REMOVABLE module +
+audit frequency = billing (ARCHITECTURE CONSTRAINT + §5c); config backup +
+drift/sync + packet capture modules designed; vendor extensibility via one
+declarative Vendor Profile.
+
+**Net: 2 questions still need the owner — Q2 (packet-NDR timing, rec Tier-3)
+and Q4 (compliance-content budget, rec scoped-(a)).**
 
 Sources: both research streams (this doc's siblings in docs/design/research/
 and /var/tmp/Security-Deep.md); every price/prediction/rule-count/campaign
