@@ -235,6 +235,16 @@ SOAK ABORTED AT HOUR 26 (2026-08-24 ~00:41Z) — harness vehicle, not platform:
     name agnostic, 30-min cadence); session monitor + every-minute
     watchdog + daily rotate-tls (self-defers restarts) + 10-min host-
     hygiene all armed. Replicas: netops-correlation-2/-3.
+  * HOUR-20 CATCH (2026-08-25 02:30Z): the recreate had silently DOWNGRADED
+    correlation to the planner's stale 789m .env value — the qualified
+    1280m + CORR_WINDOW_BUFFER=150000 lived only in compose.mem125.yml,
+    which COMPOSE_FILE never included. Memory cap restored LIVE via
+    `docker update --memory 1280m` (zero restarts, soak evidence intact);
+    .env now sets CORRELATION_MEM_LIMIT=1280m AND appends compose.mem125.yml
+    to COMPOSE_FILE so every future `up` carries the qualified values.
+    CORR_WINDOW_BUFFER stays 50000 until the post-soak recreate (does not
+    bind at soak amplitude: window ~3.4k signals; all three gate runs
+    passed on 50000) — restore-by-recreate is the first post-soak step.
 
 ## Superseded: the originally recommended review (3 questions)
 
