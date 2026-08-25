@@ -62,7 +62,7 @@ function fitPadding(showInventory: boolean): Padding {
 import { detectArchetype, archetypeLayout, ARCHETYPES, type Archetype } from "../../utils/topologyArchetype";
 import { TopologyInventoryPanel } from "../../components/TopologyInventoryPanel";
 import type { LayoutResult } from "../../layout/layoutTypes";
-import { loadSavedLayout, saveNodePosition, clearSavedLayout } from "../../layout/savedLayoutStore";
+import { loadSavedLayout, saveNodePosition, clearSavedLayoutsMatching } from "../../layout/savedLayoutStore";
 import { topologyToReactFlow } from "./topologyToReactFlow";
 import type { RFNodeData, RFEdgeData, RFGroupData } from "./rfTypes";
 
@@ -446,11 +446,15 @@ function CanvasInner({
   );
 
   const onResetLayout = useCallback(() => {
-    if (layoutKey) clearSavedLayout(layoutKey);
+    // Sweep EVERY pin-set for this view, not just the current content-keyed
+    // one: topology refreshes re-key the store (signature includes node/edge
+    // ids), so pins routinely live under stale keys the old single-key clear
+    // never touched — which is why Reset "stopped working" (2026-08-25).
+    if (view) clearSavedLayoutsMatching(`${view.view_id}:`);
     setPositions({ ...elkPositions.current });
     setLayoutPinned(false);
     setTimeout(() => rf.fitView({ padding: fitPadding(showInventory), duration: 300 }), 40);
-  }, [layoutKey, rf]);
+  }, [view, rf, showInventory]);
 
   // Reset transient selection when the workflow changes. Capacity opens on the
   // utilization overlay (its whole point); other modes default to health.

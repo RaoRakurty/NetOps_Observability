@@ -5822,3 +5822,12 @@ button.cc-kpi-btn.on::after { content: "filtered"; display: block; margin-top: 5
   font-family: var(--font-mono, monospace);
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
+
+/* Route-chunk cold-load placeholder (perf wave 2026-08-25). With route
+   transitions the previous page normally stays visible; this shows only on a
+   cold deep link. A quiet shimmer beats a "Loading…" text flash. */
+.page-skeleton { min-height: 60vh; border-radius: 12px; margin: 24px;
+  background: linear-gradient(100deg, transparent 30%, color-mix(in srgb, var(--muted, #8a94a6) 8%, transparent) 50%, transparent 70%),
+    color-mix(in srgb, var(--muted, #8a94a6) 5%, transparent);
+  background-size: 240% 100%; animation: pageSkeletonSweep 1.1s ease-in-out infinite; }
+@keyframes pageSkeletonSweep { from { background-position: 130% 0; } to { background-position: -110% 0; } }

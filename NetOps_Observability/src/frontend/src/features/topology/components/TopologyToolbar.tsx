@@ -109,8 +109,7 @@ export default function TopologyToolbar({
           <button
             type="button"
             onClick={onResetLayout}
-            disabled={!layoutPinned}
-            title={layoutPinned ? "Reset to automatic (ELK) layout" : "No pinned positions"}
+            title="Reset to automatic layout and re-fit"
             style={{
               border: "1px solid var(--border)",
               background: "var(--surface)",
@@ -119,8 +118,7 @@ export default function TopologyToolbar({
               padding: "5px 10px",
               fontSize: 11,
               fontWeight: 600,
-              cursor: layoutPinned ? "pointer" : "default",
-              opacity: layoutPinned ? 1 : 0.55,
+              cursor: "pointer",
             }}
           >
             Reset layout

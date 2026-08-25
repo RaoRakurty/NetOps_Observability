@@ -1,4 +1,4 @@
-import { lazy } from "react";
+import React, { lazy } from "react";
 import { SectionCtx } from "./context/shell";
 import { AI_NAME } from "./brand";
 
@@ -7,49 +7,108 @@ import { AI_NAME } from "./brand";
 // active leaf inside ONE <Suspense> boundary in App.tsx, so only the visited
 // page's chunk is fetched. nav.tsx itself stays in the initial bundle (it is
 // the route table), which is why nothing here may import a page eagerly.
-const Dashboard = lazy(() => import("./pages/Dashboard"));
-const DemoShowcase = lazy(() => import("./pages/DemoShowcase"));
-const FrontPage = lazy(() => import("./pages/FrontPage"));
-const Devices = lazy(() => import("./pages/Devices"));
-const DeviceMonitoring = lazy(() => import("./pages/DeviceMonitoring"));
-const InterfacePerformance = lazy(() => import("./pages/InterfacePerformance"));
-const PortsWorkbench = lazy(() => import("./pages/PortsWorkbench"));
-const Wireless = lazy(() => import("./pages/Wireless"));
-const BgpOspf = lazy(() => import("./pages/BgpOspf"));
-const Troubleshooting = lazy(() => import("./pages/Troubleshooting"));
-const ThreatDetection = lazy(() => import("./pages/ThreatDetection"));
-const Events = lazy(() => import("./pages/Events"));
-const Correlations = lazy(() => import("./tabs/Correlations"));
-const RcaReports = lazy(() => import("./pages/RcaReports"));
-const AppObservability = lazy(() => import("./pages/AppObservability"));
-const ReliabilityScorecard = lazy(() => import("./pages/ReliabilityScorecard"));
-const Quality = lazy(() => import("./pages/Quality"));
-const DataSources = lazy(() => import("./pages/DataSources"));
-const NetworkPath = lazy(() => import("./pages/NetworkPath"));
-const Reports = lazy(() => import("./pages/Reports"));
-const TopologyCanvas = lazy(() => import("./features/topology/renderers/react-flow/TopologyCanvas"));
-const Collectors = lazy(() => import("./tabs/Collectors"));
-const SnmpProfileManager = lazy(() => import("./tabs/SnmpProfileManager"));
-const Alerts = lazy(() => import("./tabs/Alerts"));
-const MaintenanceWindows = lazy(() => import("./tabs/MaintenanceWindows"));
-const ProcessorsAdmin = lazy(() => import("./tabs/ProcessorsAdmin"));
-const SensitiveDataAccess = lazy(() => import("./tabs/SensitiveDataAccess"));
-const Rules = lazy(() => import("./tabs/Rules"));
-const Findings = lazy(() => import("./tabs/Findings"));
-const Incidents = lazy(() => import("./tabs/Incidents"));
-const SavedSearches = lazy(() => import("./tabs/SavedSearches"));
-const Flows = lazy(() => import("./tabs/Flows"));
-const Tunnels = lazy(() => import("./tabs/Tunnels"));
-const WanCircuits = lazy(() => import("./pages/WanCircuits"));
-const MetricsExplorer = lazy(() => import("./tabs/MetricsExplorer"));
-const GrafanaTab = lazy(() => import("./tabs/Grafana"));
-const SearchDashboardsTab = lazy(() => import("./tabs/SearchDashboards"));
-const Settings = lazy(() => import("./tabs/Settings"));
-const SourceOfTruth = lazy(() => import("./tabs/SourceOfTruth"));
-const StackHealth = lazy(() => import("./tabs/StackHealth"));
-const AuditLog = lazy(() => import("./tabs/AuditLog"));
-const TransportSecurity = lazy(() => import("./tabs/TransportSecurity"));
-const AccessExplorer = lazy(() => import("./tabs/AccessExplorer"));
+// Route-chunk registry (perf wave 2026-08-25): every page's import thunk,
+// addressable OUTSIDE React.lazy so the shell can PREFETCH chunks (idle
+// warm-up in App.tsx). lazy() below consumes the same thunk, so each page
+// still code-splits exactly as before — one chunk, fetched once, shared
+// between prefetch and first render.
+export const ROUTE_CHUNKS: Record<string, () => Promise<unknown>> = {
+  Dashboard: () => import("./pages/Dashboard"),
+  DemoShowcase: () => import("./pages/DemoShowcase"),
+  FrontPage: () => import("./pages/FrontPage"),
+  Devices: () => import("./pages/Devices"),
+  DeviceMonitoring: () => import("./pages/DeviceMonitoring"),
+  InterfacePerformance: () => import("./pages/InterfacePerformance"),
+  PortsWorkbench: () => import("./pages/PortsWorkbench"),
+  Wireless: () => import("./pages/Wireless"),
+  BgpOspf: () => import("./pages/BgpOspf"),
+  Troubleshooting: () => import("./pages/Troubleshooting"),
+  ThreatDetection: () => import("./pages/ThreatDetection"),
+  Events: () => import("./pages/Events"),
+  Correlations: () => import("./tabs/Correlations"),
+  RcaReports: () => import("./pages/RcaReports"),
+  AppObservability: () => import("./pages/AppObservability"),
+  ReliabilityScorecard: () => import("./pages/ReliabilityScorecard"),
+  Quality: () => import("./pages/Quality"),
+  DataSources: () => import("./pages/DataSources"),
+  NetworkPath: () => import("./pages/NetworkPath"),
+  Reports: () => import("./pages/Reports"),
+  TopologyCanvas: () => import("./features/topology/renderers/react-flow/TopologyCanvas"),
+  Collectors: () => import("./tabs/Collectors"),
+  SnmpProfileManager: () => import("./tabs/SnmpProfileManager"),
+  Alerts: () => import("./tabs/Alerts"),
+  MaintenanceWindows: () => import("./tabs/MaintenanceWindows"),
+  ProcessorsAdmin: () => import("./tabs/ProcessorsAdmin"),
+  SensitiveDataAccess: () => import("./tabs/SensitiveDataAccess"),
+  Rules: () => import("./tabs/Rules"),
+  Findings: () => import("./tabs/Findings"),
+  Incidents: () => import("./tabs/Incidents"),
+  SavedSearches: () => import("./tabs/SavedSearches"),
+  Flows: () => import("./tabs/Flows"),
+  Tunnels: () => import("./tabs/Tunnels"),
+  WanCircuits: () => import("./pages/WanCircuits"),
+  MetricsExplorer: () => import("./tabs/MetricsExplorer"),
+  GrafanaTab: () => import("./tabs/Grafana"),
+  SearchDashboardsTab: () => import("./tabs/SearchDashboards"),
+  Settings: () => import("./tabs/Settings"),
+  SourceOfTruth: () => import("./tabs/SourceOfTruth"),
+  StackHealth: () => import("./tabs/StackHealth"),
+  AuditLog: () => import("./tabs/AuditLog"),
+  TransportSecurity: () => import("./tabs/TransportSecurity"),
+  AccessExplorer: () => import("./tabs/AccessExplorer"),
+  VulnerabilityManagement: () => import("./pages/VulnerabilityManagement"),
+  ComplianceMonitoring: () => import("./pages/ComplianceMonitoring"),
+  NewMonitor: () => import("./pages/NewMonitor"),
+  CommandCenter: () => import("./pages/CommandCenter"),
+  ActionQueue: () => import("./pages/ActionQueue"),
+  Sites: () => import("./pages/Sites"),
+  Discovery: () => import("./pages/Discovery"),
+  LogsExplore: () => import("./pages/LogsExplore"),
+};
+
+const Dashboard = lazy(ROUTE_CHUNKS["Dashboard"] as () => Promise<{ default: React.ComponentType<any> }>);
+const DemoShowcase = lazy(ROUTE_CHUNKS["DemoShowcase"] as () => Promise<{ default: React.ComponentType<any> }>);
+const FrontPage = lazy(ROUTE_CHUNKS["FrontPage"] as () => Promise<{ default: React.ComponentType<any> }>);
+const Devices = lazy(ROUTE_CHUNKS["Devices"] as () => Promise<{ default: React.ComponentType<any> }>);
+const DeviceMonitoring = lazy(ROUTE_CHUNKS["DeviceMonitoring"] as () => Promise<{ default: React.ComponentType<any> }>);
+const InterfacePerformance = lazy(ROUTE_CHUNKS["InterfacePerformance"] as () => Promise<{ default: React.ComponentType<any> }>);
+const PortsWorkbench = lazy(ROUTE_CHUNKS["PortsWorkbench"] as () => Promise<{ default: React.ComponentType<any> }>);
+const Wireless = lazy(ROUTE_CHUNKS["Wireless"] as () => Promise<{ default: React.ComponentType<any> }>);
+const BgpOspf = lazy(ROUTE_CHUNKS["BgpOspf"] as () => Promise<{ default: React.ComponentType<any> }>);
+const Troubleshooting = lazy(ROUTE_CHUNKS["Troubleshooting"] as () => Promise<{ default: React.ComponentType<any> }>);
+const ThreatDetection = lazy(ROUTE_CHUNKS["ThreatDetection"] as () => Promise<{ default: React.ComponentType<any> }>);
+const Events = lazy(ROUTE_CHUNKS["Events"] as () => Promise<{ default: React.ComponentType<any> }>);
+const Correlations = lazy(ROUTE_CHUNKS["Correlations"] as () => Promise<{ default: React.ComponentType<any> }>);
+const RcaReports = lazy(ROUTE_CHUNKS["RcaReports"] as () => Promise<{ default: React.ComponentType<any> }>);
+const AppObservability = lazy(ROUTE_CHUNKS["AppObservability"] as () => Promise<{ default: React.ComponentType<any> }>);
+const ReliabilityScorecard = lazy(ROUTE_CHUNKS["ReliabilityScorecard"] as () => Promise<{ default: React.ComponentType<any> }>);
+const Quality = lazy(ROUTE_CHUNKS["Quality"] as () => Promise<{ default: React.ComponentType<any> }>);
+const DataSources = lazy(ROUTE_CHUNKS["DataSources"] as () => Promise<{ default: React.ComponentType<any> }>);
+const NetworkPath = lazy(ROUTE_CHUNKS["NetworkPath"] as () => Promise<{ default: React.ComponentType<any> }>);
+const Reports = lazy(ROUTE_CHUNKS["Reports"] as () => Promise<{ default: React.ComponentType<any> }>);
+const TopologyCanvas = lazy(ROUTE_CHUNKS["TopologyCanvas"] as () => Promise<{ default: React.ComponentType<any> }>);
+const Collectors = lazy(ROUTE_CHUNKS["Collectors"] as () => Promise<{ default: React.ComponentType<any> }>);
+const SnmpProfileManager = lazy(ROUTE_CHUNKS["SnmpProfileManager"] as () => Promise<{ default: React.ComponentType<any> }>);
+const Alerts = lazy(ROUTE_CHUNKS["Alerts"] as () => Promise<{ default: React.ComponentType<any> }>);
+const MaintenanceWindows = lazy(ROUTE_CHUNKS["MaintenanceWindows"] as () => Promise<{ default: React.ComponentType<any> }>);
+const ProcessorsAdmin = lazy(ROUTE_CHUNKS["ProcessorsAdmin"] as () => Promise<{ default: React.ComponentType<any> }>);
+const SensitiveDataAccess = lazy(ROUTE_CHUNKS["SensitiveDataAccess"] as () => Promise<{ default: React.ComponentType<any> }>);
+const Rules = lazy(ROUTE_CHUNKS["Rules"] as () => Promise<{ default: React.ComponentType<any> }>);
+const Findings = lazy(ROUTE_CHUNKS["Findings"] as () => Promise<{ default: React.ComponentType<any> }>);
+const Incidents = lazy(ROUTE_CHUNKS["Incidents"] as () => Promise<{ default: React.ComponentType<any> }>);
+const SavedSearches = lazy(ROUTE_CHUNKS["SavedSearches"] as () => Promise<{ default: React.ComponentType<any> }>);
+const Flows = lazy(ROUTE_CHUNKS["Flows"] as () => Promise<{ default: React.ComponentType<any> }>);
+const Tunnels = lazy(ROUTE_CHUNKS["Tunnels"] as () => Promise<{ default: React.ComponentType<any> }>);
+const WanCircuits = lazy(ROUTE_CHUNKS["WanCircuits"] as () => Promise<{ default: React.ComponentType<any> }>);
+const MetricsExplorer = lazy(ROUTE_CHUNKS["MetricsExplorer"] as () => Promise<{ default: React.ComponentType<any> }>);
+const GrafanaTab = lazy(ROUTE_CHUNKS["GrafanaTab"] as () => Promise<{ default: React.ComponentType<any> }>);
+const SearchDashboardsTab = lazy(ROUTE_CHUNKS["SearchDashboardsTab"] as () => Promise<{ default: React.ComponentType<any> }>);
+const Settings = lazy(ROUTE_CHUNKS["Settings"] as () => Promise<{ default: React.ComponentType<any> }>);
+const SourceOfTruth = lazy(ROUTE_CHUNKS["SourceOfTruth"] as () => Promise<{ default: React.ComponentType<any> }>);
+const StackHealth = lazy(ROUTE_CHUNKS["StackHealth"] as () => Promise<{ default: React.ComponentType<any> }>);
+const AuditLog = lazy(ROUTE_CHUNKS["AuditLog"] as () => Promise<{ default: React.ComponentType<any> }>);
+const TransportSecurity = lazy(ROUTE_CHUNKS["TransportSecurity"] as () => Promise<{ default: React.ComponentType<any> }>);
+const AccessExplorer = lazy(ROUTE_CHUNKS["AccessExplorer"] as () => Promise<{ default: React.ComponentType<any> }>);
 // tabs/admin exports its 9 views by name; lazy() needs a default, so each
 // wrapper re-shapes the named export. They all share the one admin chunk.
 const IdentityAccess = lazy(() => import("./tabs/admin").then((m) => ({ default: m.IdentityAccess })));
@@ -62,17 +121,17 @@ const NotificationsAdmin = lazy(() => import("./tabs/admin").then((m) => ({ defa
 const IncidentPoliciesAdmin = lazy(() => import("./tabs/admin").then((m) => ({ default: m.IncidentPoliciesAdmin })));
 const GraphQLExplorer = lazy(() => import("./tabs/admin").then((m) => ({ default: m.GraphQLExplorer })));
 const DashboardList = lazy(() => import("./pages/Placeholders").then((m) => ({ default: m.DashboardList })));
-const VulnerabilityManagement = lazy(() => import("./pages/VulnerabilityManagement"));
-const ComplianceMonitoring = lazy(() => import("./pages/ComplianceMonitoring"));
-const NewMonitor = lazy(() => import("./pages/NewMonitor"));
-const CommandCenter = lazy(() => import("./pages/CommandCenter"));
+const VulnerabilityManagement = lazy(ROUTE_CHUNKS["VulnerabilityManagement"] as () => Promise<{ default: React.ComponentType<any> }>);
+const ComplianceMonitoring = lazy(ROUTE_CHUNKS["ComplianceMonitoring"] as () => Promise<{ default: React.ComponentType<any> }>);
+const NewMonitor = lazy(ROUTE_CHUNKS["NewMonitor"] as () => Promise<{ default: React.ComponentType<any> }>);
+const CommandCenter = lazy(ROUTE_CHUNKS["CommandCenter"] as () => Promise<{ default: React.ComponentType<any> }>);
 // Nav-redesign promotions (2026-08, owner tree): the extracted Action Queue
 // page, the Sites page (Device Geomap folded in as its Map tab), the
 // Discovery & NMS composite, and the Logs explorer (Log Search + Cloud Logs).
-const ActionQueue = lazy(() => import("./pages/ActionQueue"));
-const Sites = lazy(() => import("./pages/Sites"));
-const Discovery = lazy(() => import("./pages/Discovery"));
-const LogsExplore = lazy(() => import("./pages/LogsExplore"));
+const ActionQueue = lazy(ROUTE_CHUNKS["ActionQueue"] as () => Promise<{ default: React.ComponentType<any> }>);
+const Sites = lazy(ROUTE_CHUNKS["Sites"] as () => Promise<{ default: React.ComponentType<any> }>);
+const Discovery = lazy(ROUTE_CHUNKS["Discovery"] as () => Promise<{ default: React.ComponentType<any> }>);
+const LogsExplore = lazy(ROUTE_CHUNKS["LogsExplore"] as () => Promise<{ default: React.ComponentType<any> }>);
 
 // A leaf is one rendered view. Sections with multiple leaves get a SubNav.
 export type NavLeaf = {
@@ -289,27 +348,25 @@ export const NAV: NavSection[] = [
       { id: "notifications", label: "Notifications", group: "Incident Response", render: () => <NotificationsAdmin /> },
       { id: "ticketing", label: "Ticketing & Automation", group: "Incident Response", render: () => <IncidentPoliciesAdmin /> },
       // Data Collection — the sources + the poller plumbing that feed telemetry.
+      // Data Collection order (owner, 2026-08-25): discovery pair first
+      // (SNMP profiles beside the Sensors/subnet-discovery controls), then the
+      // shaping/handling pair (Processors beside Sensitive Data Access).
       { id: "datasources", label: "Data Sources", group: "Data Collection", render: () => <DataSources /> },
-      // Item 121: per-tenant processor editor (redact/drop/set shaping compiled
-      // into the ingest router). Admin-gated server-side.
-      { id: "processors", label: "Processors", group: "Data Collection", render: () => <ProcessorsAdmin /> },
+      { id: "snmp", label: "SNMP Profiles", group: "Data Collection", render: () => <SnmpProfileManager /> },
       // The collector/poller controls ("Sensors" in the owner tree) — platform
       // plumbing; its subnet-discovery card also surfaces under
       // Infrastructure → Discovery & NMS for the same platform principals.
       { id: "sensors", label: "Sensors", group: "Data Collection", platformOnly: true, render: () => <Collectors /> },
-      { id: "snmp", label: "SNMP Profiles", group: "Data Collection", render: () => <SnmpProfileManager /> },
+      // Item 121: per-tenant processor editor (redact/drop/set shaping compiled
+      // into the ingest router). Admin-gated server-side.
+      { id: "processors", label: "Processors", group: "Data Collection", render: () => <ProcessorsAdmin /> },
       // Sealed Fields (#129): who revealed protected data, when, and why.
       // Server-gated on sensitive_data:admin.
       { id: "sensitive-data-access", label: "Sensitive Data Access", group: "Data Collection", render: () => <SensitiveDataAccess /> },
       // Identity & Access — consolidates Users · Roles · Security Settings.
       // Sub-items deep-link its internal views via the #/admin/identity/<sub>
       // suffix (read by IdentityAccess, same mechanism as admin/api).
-      { id: "identity", label: "Identity & Access", render: () => <IdentityAccess />, subItems: [
-        { id: "users", label: "Users" },
-        { id: "roles", label: "Roles" },
-        { id: "sso", label: "SSO" },
-        { id: "orgs", label: "Organizations" },
-      ] },
+      { id: "identity", label: "Identity & Access", render: () => <IdentityAccess /> },
       // Platform Security — authentication providers, access reasoning, live
       // sessions, the audit trail and the TLS posture inventory.
       // Authentication providers (OIDC/LDAP/TACACS) are platform-GLOBAL config:

@@ -1,11 +1,11 @@
-import { Suspense, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { Suspense, startTransition, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { api, Health, LANDING_PENDING_KEY } from "./services/api";
 import { useAuth } from "./hooks/useAuth";
 import { ShellContext, ShellState, TimeRange, SectionCtx } from "./context/shell";
 import { rangeForSection, rememberSectionRange } from "./theme/timeprefs";
 import { useTzMode, setTzMode } from "./lib/time";
 import { lazy } from "react";
-import { resolveRoute, resolveResourceRoute, filteredNav, landingResolves, routeFor, canonicalHash } from "./nav";
+import { resolveRoute, resolveResourceRoute, filteredNav, landingResolves, routeFor, canonicalHash, ROUTE_CHUNKS } from "./nav";
 // Route-level page like the nav leaves (#/resource/{kind}/{id}) — lazy for the
 // same reason: it pulls the appobs metric panels (ECharts) into its own chunk.
 // It renders inside the same <Suspense> boundary as the nav pages below.
@@ -140,7 +140,11 @@ export default function App() {
           /* resolveRoute still aliases the legacy hash */
         }
       }
-      setHash(canon ?? h);
+      // Perf wave 2026-08-25: route switches are React TRANSITIONS. The
+      // outgoing page stays on screen while the incoming lazy chunk loads,
+      // so navigation never blanks to the Suspense fallback mid-click —
+      // the fallback is reserved for cold first paint.
+      startTransition(() => setHash(canon ?? h));
     };
     window.addEventListener("hashchange", onHash);
     return () => window.removeEventListener("hashchange", onHash);
@@ -171,6 +175,34 @@ export default function App() {
     }
     sessionStorage.removeItem(LANDING_PENDING_KEY);
   }, [user, loading, nav]);
+
+  // Idle warm-up of every route chunk (perf wave 2026-08-25). This is an
+  // on-prem NOC console on a LAN: after first paint settles, fetching the
+  // remaining page chunks one at a time makes every later click render from
+  // cache — the "slick even at high EPS" requirement is mostly this. One
+  // chunk in flight at a time (never competes with real traffic bursts),
+  // starts 3.5s after mount, honors Save-Data, and any failure is silently
+  // skipped (the route still lazy-loads on demand exactly as before).
+  useEffect(() => {
+    type NetInfo = { saveData?: boolean };
+    const conn = (navigator as unknown as { connection?: NetInfo }).connection;
+    if (conn?.saveData) return;
+    let cancelled = false;
+    const timer = setTimeout(() => {
+      const thunks = Object.values(ROUTE_CHUNKS);
+      let i = 0;
+      const next = () => {
+        if (cancelled || i >= thunks.length) return;
+        thunks[i++]().catch(() => undefined).then(() => {
+          if (cancelled) return;
+          const ric = (window as unknown as { requestIdleCallback?: (cb: () => void) => number }).requestIdleCallback;
+          if (ric) ric(next); else setTimeout(next, 250);
+        });
+      };
+      next();
+    }, 3500);
+    return () => { cancelled = true; clearTimeout(timer); };
+  }, []);
 
   // Poll backend health for the top-bar indicator.
   useEffect(() => {
@@ -289,7 +321,10 @@ export default function App() {
                 </>
               )}
             </div>
-            {!resourceRoute && <SubNav section={section} activeLeaf={leaf?.id} />}
+            {/* Administration hides the horizontal leaf strip (owner, 2026-08-25):
+                its 20+ leaves made the strip a second, noisier nav; the hover
+                flyout's grouped list is the one Administration menu. */}
+            {!resourceRoute && section.id !== "admin" && <SubNav section={section} activeLeaf={leaf?.id} />}
           </div>
           {/* Topology is a CANVAS, not a document: it gets the whole viewport
               rather than the reading-width page box. Without this the map sits
@@ -312,7 +347,7 @@ export default function App() {
               {/* Single Suspense boundary for the route-level code-split pages
                   (nav.tsx wraps every leaf in React.lazy). Same affordance as
                   the app-boot loading state above. */}
-              <Suspense fallback={<div style={{ padding: 40, color: "var(--muted)" }}>Loading…</div>}>
+              <Suspense fallback={<div className="page-skeleton" aria-busy="true" />}>
                 {view}
               </Suspense>
             </TenantGate>

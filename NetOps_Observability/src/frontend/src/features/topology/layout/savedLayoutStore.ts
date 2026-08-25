@@ -74,3 +74,32 @@ export function clearSavedLayout(viewId: string): void {
     // ignore
   }
 }
+
+/** Clear EVERY saved layout whose key starts with the given view prefix.
+ *
+ * The renderer's layout key embeds a content signature (node+edge ids), so a
+ * topology refresh that adds or drops a single adjacency re-keys the store and
+ * ORPHANS the operator's pins under the old key (found 2026-08-25: "Reset
+ * doesn't work any more" — the button gated itself on pins under the current
+ * key only, while stale pin-sets accumulated invisibly). Reset now sweeps the
+ * whole family for the view. Same failure tolerance as the rest of the store.
+ */
+export function clearSavedLayoutsMatching(viewIdPrefix: string): number {
+  const ls = storage();
+  if (!ls) return 0;
+  let removed = 0;
+  try {
+    const doomed: string[] = [];
+    for (let i = 0; i < ls.length; i++) {
+      const k = ls.key(i);
+      if (k && k.startsWith(KEY_PREFIX + viewIdPrefix)) doomed.push(k);
+    }
+    for (const k of doomed) {
+      ls.removeItem(k);
+      removed++;
+    }
+  } catch {
+    // ignore — worst case some stale pins survive; they are inert overlays
+  }
+  return removed;
+}
