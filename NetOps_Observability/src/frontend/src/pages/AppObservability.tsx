@@ -549,7 +549,7 @@ function Overview({ goTab, summary, openInvestigation, ctl }: {
       <div className="ao-panel">
         <div className="ao-panel-h">Open investigations
           <span className="ao-panel-meta">
-            grounded on cloud signals · click a row to open it here
+            grounded on cloud signals
             {objectsTruncated && openRca.length < openCount &&
               ` · showing ${openRca.length} of ${openCount} open`}
           </span></div>

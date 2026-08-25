@@ -103,7 +103,7 @@ export default function Findings() {
       <div className="cc-panel">
         <div className="cc-panel-h">
           <h3 className="cc-panel-t">Findings</h3>
-          <span className="cc-panel-meta">{items.length} · click a row for context</span>
+          <span className="cc-panel-meta">{items.length}</span>
         </div>
         <div style={{ padding: "11px 13px" }}>
           <div style={{ marginBottom: 10 }}>

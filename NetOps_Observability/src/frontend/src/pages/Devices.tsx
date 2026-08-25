@@ -313,7 +313,7 @@ export default function Devices() {
     <div className="dm-board">
       <NocHeader
         title="Inventory & Devices"
-        subtitle="Every discovered and declared device, with live reachability health, type and source — click any row to drill into its telemetry."
+        subtitle="Every discovered and declared device, with live reachability health, type and source."
         chips={<><Chip label={`${devices.length} devices`} /><LiveChip detail="30s poll" /></>}
       >
         <NocKpis cols={4}>
@@ -341,7 +341,6 @@ export default function Devices() {
       <div className="cc-panel">
         <div className="cc-panel-h">
           <h3 className="cc-panel-t">Device inventory</h3>
-          <span className="cc-panel-meta">{rows.length} shown · click a row for the device workspace</span>
         </div>
         <div style={{ padding: "11px 13px" }}>
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, flexWrap: "wrap", marginBottom: 11 }}>

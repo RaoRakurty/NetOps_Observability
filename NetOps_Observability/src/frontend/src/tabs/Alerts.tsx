@@ -196,7 +196,7 @@ export default function Alerts() {
               ? "feed unavailable"
               : truncated
                 ? `showing ${items.length} of ${total} episodes (most recent)`
-                : `${items.length} episode${items.length === 1 ? "" : "s"} · click a row to triage`}
+                : `${items.length} episode${items.length === 1 ? "" : "s"}`}
           </span>
         </div>
         <div style={{ padding: "11px 13px" }}>

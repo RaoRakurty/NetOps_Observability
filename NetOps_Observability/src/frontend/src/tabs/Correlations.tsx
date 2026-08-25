@@ -449,8 +449,8 @@ export default function Correlations() {
           <h3 className="cc-panel-t">Candidate queue</h3>
           <span className="cc-panel-meta">
             {truncated
-              ? `showing ${visible.length} of ${tierTotal} in 24h · click a row for the RCA workspace`
-              : `${visible.length} · click a row for the RCA workspace`}
+              ? `showing ${visible.length} of ${tierTotal} in 24h`
+              : `${visible.length}`}
           </span>
         </div>
         <div style={{ padding: "11px 13px" }}>

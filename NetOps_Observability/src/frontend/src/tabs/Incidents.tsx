@@ -160,7 +160,7 @@ export default function Incidents() {
       <div className="cc-panel">
         <div className="cc-panel-h">
           <h3 className="cc-panel-t">Incident queue</h3>
-          <span className="cc-panel-meta">{items.length} · {status || "all statuses"} · click a row for lifecycle</span>
+          <span className="cc-panel-meta">{items.length} · {status || "all statuses"}</span>
         </div>
         <div style={{ padding: "11px 13px" }}>
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", marginBottom: 10 }}>

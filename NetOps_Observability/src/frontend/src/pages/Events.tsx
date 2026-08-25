@@ -194,8 +194,8 @@ export default function Events({ sinceSeconds }: { sinceSeconds?: number } = {})
           <h3 className="cc-panel-t">Signal stream</h3>
           <span className="cc-panel-meta">
             {trueTotal > events.length
-              ? `showing ${filtered.length.toLocaleString()} of ${trueTotal.toLocaleString()} in window · click a row for detail`
-              : `${filtered.length.toLocaleString()} shown · click a row for detail`}
+              ? `showing ${filtered.length.toLocaleString()} of ${trueTotal.toLocaleString()} in window`
+              : `${filtered.length.toLocaleString()}`}
           </span>
         </div>
         <div style={{ padding: "11px 13px" }}>
