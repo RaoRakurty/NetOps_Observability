@@ -380,6 +380,41 @@ model (price per device, retention as an upsell, burst as SLO):
 This makes "how often do you want to be audited" a customer knob with a
 resource-honest price, not a fixed platform cost the vendor eats.
 
+## 5d. Framework strategy — one check, many frameworks (research 2026-08-25)
+
+Owner: build compliance rules for NIST, OWASP, PCI-DSS, HIPAA, GDPR. Full
+analysis: COMPLIANCE_FRAMEWORKS_RESEARCH_2026-08-25.md. The decisive framing:
+
+**Do NOT author a rule set per framework.** Author/import the technical check
+ONCE, tag it with the NIST 800-53 controls it evidences, and derive every
+framework view by transitive crosswalk through 800-53 as the HUB. This is the
+proven ComplianceAsCode/OSCAL pattern — 800-53 is the rosetta stone every
+other framework maps TO, so one control tag inherits PCI/HIPAA/CIS/ISO/CSF
+mappings for free (no N² maps).
+
+**The frameworks live at two levels — critical for honest scope:**
+- **Technical catalogs (map to device checks):** CIS, DISA STIG, NIST
+  800-53/171, CSF 2.0, ISO 27001 Annex A.
+- **Legal/regulatory (mostly DON'T map):** PCI-DSS (only Req 1/2/4/8/10
+  technical sub-reqs), HIPAA (only §164.312 Technical Safeguards), **GDPR
+  (near-zero — do NOT ship "GDPR rules for a device"; only Art. 32
+  encryption-in-transit as a CONTRIBUTING control, "supports not
+  demonstrates")**, **OWASP (app-security — Correlix's OWN platform, per §15,
+  not a device-audit framework)**.
+
+**Defensible claim (enforce in UI + marketing):** "audit-ready control
+EVIDENCE mapped to framework controls" — NEVER "certified PCI/HIPAA/GDPR
+compliance." Show a coverage % per framework so the tool visibly admits it
+covers only the technical slice (e.g. HIPAA §164.312, not §164.308/.310).
+Standard caption attaches to every regulatory view.
+
+**Schema (OSCAL-aligned, not full OSCAL in v1):** Check → Control (800-53 hub)
+→ Mapping (check→controls, OUR IP, per-rule) → Crosswalk (control→framework
+req, IMPORTED from official sources — NIST 800-53↔CSF/ISO, PCI SSC, 800-66r2
+for HIPAA, CIS Controls Navigator, never hand-maintained). Version-pin
+everything; §3a tenant-scope findings, crosswalk data is global read-only
+reference. Export OSCAL (Component-Definition + Assessment-Results) later.
+
 ## 6. Build order (agent's telemetry-grounded version, owner's phasing intent)
 
 **Tier 0 — harden what's shipped:** EPSS + EoL columns in the feed-prepare
