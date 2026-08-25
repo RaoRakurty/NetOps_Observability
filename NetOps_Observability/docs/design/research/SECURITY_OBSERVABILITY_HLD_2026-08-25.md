@@ -415,6 +415,84 @@ for HIPAA, CIS Controls Navigator, never hand-maintained). Version-pin
 everything; §3a tenant-scope findings, crosswalk data is global read-only
 reference. Export OSCAL (Component-Definition + Assessment-Results) later.
 
+## 5e. Network-device hardening — check catalog + remediation + the seam-aware exposure check (owner 2026-08-25)
+
+Owner requirement: check vendor config for insecure exposures — reachable from
+public networks, Telnet open, FTP open, and "all kinds of insecure options" —
+and for each, **tell the operator what to configure to harden.** This defines
+the network rule engine (§5b's "own-rules-over-captured-config") concretely.
+
+### Every rule carries a REMEDIATION (the "what to configure")
+
+A finding is not "Telnet is on" — it is "Telnet is on → to harden, apply THIS."
+Each rule holds a per-vendor detection pattern AND a per-vendor remediation
+snippet, both dialect-aware via the netconcepts abstraction (item 4 — a rule
+reasons about the CONCEPT, renders in the device's dialect). The
+ComplianceFinding already has a `Remediation` field (§5b OCSF schema). Example
+finding body: *"core-01 (Cisco IOS-XE): Telnet enabled on VTY, reachable from
+the ISP seam with no access-class. Harden: `line vty 0 4 / transport input ssh
+/ access-class MGMT-IN in`."*
+
+### The differentiator — SEAM-AWARE exposure, not a flag check
+
+The highest-value check is "reachable from a public network," and it is where
+Correlix beats every config scanner. CIS-CAT/OpenSCAP can only say a service
+is ON. Correlix knows the **seam model** — which interfaces face the ISP /
+internet / untrusted seam — so it evaluates the REAL exposure:
+
+  service enabled  AND  bound to / reachable via an interface on an untrusted
+  seam  AND  no ACL restricting it  →  EXPOSED (critical)
+
+vs the same service on a mgmt-only interface behind an ACL → informational.
+This turns a generic hardening flag into a contextual exposure verdict, and it
+feeds the exposure story ("mgmt plane of R1 reachable from the internet" is a
+first-class security signal). Batfish (§5b opt-in tier) sharpens this from
+"interface-level" to "does a packet from the internet actually reach the
+service" (ACL reachability proof) for the deep tier.
+
+### Starter check catalog (v1 — high-value, low-FP, hand-authored)
+
+Insecure MANAGEMENT services (should be off/secured):
+- **Telnet** enabled → `transport input ssh` only.
+- **FTP / TFTP** server enabled → disable; use SCP/SFTP.
+- **HTTP** (non-TLS) server enabled → `no ip http server` / `ip http secure-server`.
+- **SSHv1** (not v2) → `ip ssh version 2`.
+- **SNMP v1/v2c** communities → SNMPv3 authPriv (already partly in the 9 checks).
+- Legacy small services (finger, BOOTP, PAD, tcp/udp-small-servers, CDP on edge)
+  → `no service ...`.
+
+PUBLIC-EXPOSURE / access-control (the seam-aware set):
+- VTY / mgmt lines with **no access-class ACL** → apply mgmt-subnet ACL.
+- Any mgmt service (SSH/SNMP/HTTP/NETCONF) **reachable from an untrusted seam
+  with no ACL** → the seam-aware critical above.
+- SNMP/HTTP without source restriction.
+
+CREDENTIAL / crypto hygiene:
+- No `service password-encryption` → enable it.
+- Type-7/plaintext `enable password` instead of `enable secret` → `enable secret`.
+- Default SNMP communities (public/private) → remove.
+- No AAA / local-only auth on a device that should use TACACS+/RADIUS → configure AAA.
+
+PLANE hardening:
+- No central logging target → configure syslog forwarding.
+- No NTP auth; no CoPP / control-plane protection on capable platforms.
+
+Each catalog entry = {concept, per-vendor detect pattern, per-vendor
+remediation, severity, 800-53/CIS/PCI control tags (§5d), seam-aware? flag}.
+Hand-authored (no machine-readable CIS content exists for network gear, §5b),
+independently worded (CIS PDF text is non-commercial-licensed, §5b landmine),
+version-pinned in the local store (§5c).
+
+### Why this is buildable now
+
+It reuses: config capture over the existing SSH gateway (§5b), the netconcepts
+vendor-dialect abstraction (item 4), the seam model (already the core of RCA),
+the ComplianceFinding/OCSF schema with its Remediation field (§5b), and the
+correlation engine as the consumer (modular producer, per the removable-module
+constraint). The starter catalog is ~20-30 rules — small, high-value, and the
+seam-aware exposure check is the wedge no incumbent can copy without a topology/
+seam model.
+
 ## 6. Build order (agent's telemetry-grounded version, owner's phasing intent)
 
 **Tier 0 — harden what's shipped:** EPSS + EoL columns in the feed-prepare
