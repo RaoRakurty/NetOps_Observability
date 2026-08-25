@@ -144,6 +144,30 @@ seam-attributed causality graph that names the root cause AND its owner.**
 Add a **"Cross-seam correlation → root cause + owner"** row to every comparison
 table below — it is a "—" for all three.
 
+### Consolidated comparison table (honest; ✅ shipped · 🔨 in build)
+
+| Capability | Zabbix | Datadog | Dynatrace | Correlix |
+|---|---|---|---|---|
+| **Cross-seam correlation → root cause + owner** | — | within own telemetry (cloud/app) | within own telemetry (APM) | ✅ all seams (LAN/ISP/cloud/SaaS/app) |
+| Infrastructure & network monitoring | ✅ | ✅ (NDM young) | partial (SNMP only) | ✅ |
+| Deep network-device telemetry (syslog/SNMP/gNMI/flow/config) | SNMP-centric | metrics + capped flow | SNMP only | ✅ |
+| Self-hosted / air-gap deployment | ✅ | — (SaaS only) | limited | ✅ |
+| DB-enforced tenant isolation (self-hosted multi-tenant) | app-layer | n/a (their SaaS) | n/a (their SaaS) | ✅ FORCE-RLS |
+| Network-device CVE / exposure | — | — (no SKU touches net devices) | — (agent can't reach net gear) | 🔨 |
+| Config backup + drift / golden-config | — | capture-only (no compliance) | — | 🔨 |
+| Device hardening audit (CIS/STIG) | — | — | — | 🔨 |
+| Threat detection from network telemetry | — | cloud SIEM (firewalls, not routers) | — | 🔨 |
+| Security folded into the causality graph (exposure stories) | — | — | — | 🔨 |
+| Agent required on the network device | agentless (SNMP) | — (can't) | OneAgent (can't on net gear) | agentless |
+| Pricing model | free / open | per-host + per-event | per-host consumption | per-device (predictable) |
+
+**✅ shipped today · 🔨 in active build.** PUBLISHING RULE: only ✅ rows are
+true today — do NOT publish 🔨 (security) rows as live until they ship. The
+"tenant isolation" row is scoped to SELF-HOSTED multi-tenant on purpose
+(Datadog/Dynatrace SaaS have their own isolation — claiming they "lack it"
+would be false); the honest, MSP-relevant claim is DB-enforced isolation for a
+self-hosted deployment.
+
 ### vs Zabbix
 
 - **Do NOT attack their lack of RLS as "insecure."** Not using RLS on a
