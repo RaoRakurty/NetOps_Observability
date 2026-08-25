@@ -54,6 +54,14 @@ var routeIsolationLedger = map[string]string{
 	"/api/ai/commands/suggestions": "selfScoped",
 	"/api/ai/feedback":             "scoped", // POST own rating (tenant-stamped); GET tenant-scoped aggregate (store RLS)
 	"/api/alerts":                  "scoped",
+	// BGP Operations (item 10): the watchlist is per-tenant DATA (the prefixes/
+	// ASNs a tenant watches), owner stamped from the RLS GUC, cross-org
+	// isolation proven by TestBGPWatchlistTenantIsolationPG. The resource proxy
+	// returns PUBLIC internet routing facts (RIPEstat/RDAP) identical for every
+	// tenant — global reference, gated by requirePerm(infrastructure), no tenant
+	// data crosses it (same shape as /api/cloud/providers, /api/snmp/profiles).
+	"/api/bgp/watchlist":            "scoped",
+	"/api/bgp/resource":             "globalRef",
 	// Alert episodes (Wave 2 #6): list mirrors the /api/alerts visibility rule
 	// (own tenant + device-less platform rows); triage is own-tenant-only with
 	// cross-tenant ids → 404. Proven by alert_episodes_isolation_test.go.

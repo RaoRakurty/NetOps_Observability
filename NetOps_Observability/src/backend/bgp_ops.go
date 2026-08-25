@@ -121,8 +121,11 @@ func bgpNormalizeResource(raw string) (resource, kind string) {
 	r := strings.TrimSpace(raw)
 	if m := bgpASNRe.FindStringSubmatch(r); m != nil {
 		n, err := strconv.ParseUint(m[1], 10, 32)
-		if err != nil || n == 0 {
-			return "", ""
+		if err != nil {
+			return "", "" // ASN digits out of range (> 32-bit)
+		}
+		if n == 0 {
+			return "", "" // AS0 is reserved (RFC 7607) — never a real resource
 		}
 		return "AS" + strconv.FormatUint(n, 10), "asn"
 	}

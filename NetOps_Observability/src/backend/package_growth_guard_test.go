@@ -312,7 +312,14 @@ import (
 //	                  precisely what the root package is for; it was living
 //	                  under telemetry_enrichment.go's device→tenant-CSV header,
 //	                  where nobody would find it. Net effect on §2: better.
-const rootPackageCeiling = 201
+//	2026-08-25  202  +1: bgp_ops.go (BGP Operations, item 10). A pure I/O
+//	                  boundary — HTTP handlers on *server + a tenant watchlist
+//	                  store + an outbound RIPEstat/RDAP fetcher. Handlers need
+//	                  the *server receiver so they belong in main like every
+//	                  other handler; the reusable BGP domain (there is little —
+//	                  it is mostly remote-API glue) has no subpackage worth
+//	                  extracting yet. Revisit if a RIS Live consumer lands.
+const rootPackageCeiling = 202
 
 func TestFlatPackageMainDoesNotGrow(t *testing.T) {
 	entries, err := os.ReadDir(".")
