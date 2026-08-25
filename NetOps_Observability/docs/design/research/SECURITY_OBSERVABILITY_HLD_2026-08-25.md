@@ -229,10 +229,25 @@ engines and turn their output into Correlix evidence objects:
 
   **✅ OWNER CONFIRMED 2026-08-25: server/Linux hardening audit IS in scope**
   (posture, not SIEM — the line holds: audit config, don't ingest logs).
-  Deep research on OpenSCAP vs CIS-CAT vs Lynis (licensing, output formats,
-  agent footprint, commercial-ingestion terms) commissioned same day —
-  results will land in a sibling research doc and pick the first engine to
-  integrate.
+  Tooling research DONE (HARDENING_AUDIT_TOOLING_RESEARCH_2026-08-25.md).
+  Headline decisions:
+  - **Linux: integrate OpenSCAP/SSG FIRST** (LGPL+BSD-3, ARF/XCCDF, remediation
+    codegen, commercially clean). Lynis second (GPLv3). **CIS-CAT is BLOCKED**
+    for a commercial product without a negotiated CIS OEM license — the
+    licensing, not the tooling, is the gate. Never claim "CIS-certified";
+    OpenSCAP output is "CIS-aligned".
+  - **Network devices: own-rules-over-captured-config is primary** — there is
+    NO machine-readable CIS content for network gear (all PDF prose); only DISA
+    SCAP/OVAL for Cisco IOS/IOS-XE is automated (ingest that via OpenSCAP).
+    Batfish (Apache-2.0) as an opt-in deep semantic tier. ciscoconfparse2 is
+    GPLv3 → RPC-sidecar only, never linked in.
+  - **Normalize to OCSF compliance_finding (class 2003, Apache-2.0)** — posture-
+    purpose-built, superset of the existing internal/compliance Finding, and it
+    IS the "emit OCSF to partner SIEMs" scope decision realized. evidence_class
+    "posture" makes it the 4th correlation lane.
+  - **Integration: results-upload API first** (customer runs scanner, uploads
+    ARF/JSON — least invasive, sidesteps CIS-CAT licensing); SSH-and-run
+    secondary via the existing gateway; no phone-home agent.
 
 ### What it produces (the useful part)
 
