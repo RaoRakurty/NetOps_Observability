@@ -176,7 +176,7 @@ finding is one more evidence object ("SSHv1 enabled on core-01",
   AUDIT server posture (read config, check a benchmark), we do NOT ingest
   server logs for threat detection — that stays the customer's SIEM's job.
   With that line, Linux/server hardening audit is a legitimate Phase-2
-  capability. **Owner to confirm** whether server-scope audit is in.
+  capability. **✅ OWNER CONFIRMED 2026-08-25: in scope.**
 
 ### Architecture principle: integrate the benchmark engine, author the correlation
 
@@ -194,8 +194,13 @@ engines and turn their output into Correlix evidence objects:
   an agent or a results-upload API, and normalize their findings into the
   same ComplianceState/finding model. Build-vs-integrate: integrate the
   scanner, own the normalization + correlation + evidence-story.
-  (Deep research on OpenSCAP vs CIS-CAT vs Lynis — licensing, output formats,
-  agent footprint — recommended before committing; that is Fable's lane.)
+
+  **✅ OWNER CONFIRMED 2026-08-25: server/Linux hardening audit IS in scope**
+  (posture, not SIEM — the line holds: audit config, don't ingest logs).
+  Deep research on OpenSCAP vs CIS-CAT vs Lynis (licensing, output formats,
+  agent footprint, commercial-ingestion terms) commissioned same day —
+  results will land in a sibling research doc and pick the first engine to
+  integrate.
 
 ### What it produces (the useful part)
 
