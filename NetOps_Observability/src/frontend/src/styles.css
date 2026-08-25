@@ -3184,6 +3184,13 @@ button:disabled { opacity: 0.55; cursor: not-allowed; }
   opacity: 0.92; pointer-events: none; user-select: none; -webkit-user-drag: none;
   filter: drop-shadow(0 0 90px rgba(59, 91, 219, 0.35));
 }
+/* Dark scene: push the eye to the BACK as a subdued background layer too, so
+   the glass card reads in front of it rather than against a dominant mark —
+   mirroring the Light scene's treatment (owner, 2026-08-25). Same mechanism as
+   `.login-light .login-bg-eye` below: drop the forward glow (filter: none) and
+   dim the artwork; the value is nudged up from Light's 0.42 so the eye stays
+   legible against the deep-space background. */
+.login-scene:not(.login-light) .login-bg-eye { opacity: 0.5; filter: none; }
 
 .login-stage {
   position: relative; z-index: 1;
