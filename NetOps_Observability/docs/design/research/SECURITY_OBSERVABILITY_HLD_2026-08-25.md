@@ -276,30 +276,45 @@ managed-rules pattern (migration 0033 pipeline-processors): rule DEFINITIONS
 live version-pinned (in code / synced store), per-tenant ENABLEMENT + cloned
 customizations live in the tenant DB. Do not invent a new mechanism.
 
-### Efficiency architecture (the "optimized" the owner asked for)
+### Audit is PERIODIC, not continuous (owner refinement 2026-08-25)
 
-1. **Evaluate ON CHANGE, not on a timer** — the biggest win. Config capture is
-   syslog-triggered (drift-in-minutes); re-evaluate ONLY the device that
-   changed, and only the rules whose inputs changed. Event-driven beats
-   poll-driven, and it's the same lesson the correlation engine already
-   learned (incremental over new arrivals, not full rescans — trackers
-   166/167).
-2. **Rule → input index** — map each rule to the config sections it reads, so a
-   config delta re-runs only affected rules, not the whole benchmark.
-3. **Compile once per version** — parse/compile the benchmark ruleset into an
-   efficient in-memory form ONCE per version, reused across all devices (the
-   snapshot-epoch lesson from 166: build the expensive structure once, reuse
-   across the cohort). Never re-parse per device.
-4. **Cache verdicts by (config_hash, ruleset_version)** — unchanged config +
-   unchanged rules = cached verdict, zero recompute. Content-addressed, so it
-   doubles as the audit trail (the pinned ruleset version is part of the key).
-5. **Tiered sync** — content updates weekly in the background, version-pinned;
-   evaluation always runs against the pinned version, never a moving target.
+Owner: "audit is not required every day — it can be done once in a while."
+Correct, and it SIMPLIFIES the build. The primary mode is a batch audit, not a
+continuous engine:
 
-Net: the fleet is evaluated continuously for near-zero steady-state cost
-(only changed devices recompute only affected rules), verdicts are
-reproducible and auditable, and it works air-gapped. This is strictly better
-than the incumbents' scheduled full re-scan model.
+- **PRIMARY — scheduled + on-demand batch audit.** Operator clicks "Run audit"
+  (before a real audit / a change) or it runs on a schedule (monthly /
+  quarterly, configurable). A full fleet scan of 1K devices is a trivial batch
+  job — the soak proves the compute budget — so the heavy incremental
+  machinery (rule→input indexing, per-change recompute) is UNNECESSARY for the
+  core audit function. Don't build it for v1. A batch that walks every device ×
+  its benchmark, produces per-device scores + evidence + the exportable
+  auditor pack, and stamps the pinned ruleset version. Simple and complete.
+- **Periodic audit REINFORCES the local-store decision.** If you audit
+  quarterly, you MUST be able to say "this was CIS v8.1 as of the audit date" —
+  the rules cannot silently shift between audits. Version-pinning matters MORE
+  when audits are infrequent, not less. This kills any per-check-API idea
+  outright.
+- **OPTIONAL later layer — continuous drift.** Event-driven re-check on a
+  syslog-signalled config change is a VALUE-ADD (a hardening regression that
+  feeds an exposure story: "SSHv1 got re-enabled on core-01 the night before
+  the incident"), NOT part of the core audit product. Defer it; it only earns
+  its keep once the correlation tie-in is being built, and it can reuse the
+  166/167 incremental lessons THEN.
+
+### The only efficiency rules that still apply to the batch
+
+1. **Compile the ruleset once per version, reuse across all devices** (the
+   snapshot-epoch lesson — build the expensive structure once, not per device).
+2. **Cache a device's verdict by (config_hash, ruleset_version)** so a
+   scheduled re-audit skips devices that didn't change since the last run —
+   and the key doubles as the audit trail.
+3. **Background content sync stays weekly + version-pinned** — evaluation
+   always runs against a pinned version, never a moving target.
+
+Net: a simple, complete, on-demand/scheduled batch audit that is reproducible,
+auditable, and air-gap-capable — with continuous drift as an optional
+correlation-feeding layer added only when its exposure-story value is wanted.
 
 ## 6. Build order (agent's telemetry-grounded version, owner's phasing intent)
 
