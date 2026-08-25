@@ -12,7 +12,11 @@ external is a swappable provider.
 
   FRAMEWORK LAYER   ── providers: NIST/OSCAL · PCI · CIS · ISO · STIG ──
                        abstract + versioned; added INDEPENDENTLY; licensed
-                       content stays behind its provider (never redistributed)
+                       content stays behind its provider (never redistributed).
+                       PER-TENANT SELECTABLE: a customer enables only the
+                       framework(s) it cares about (HIPAA-only / PCI-only /
+                       both); each is scored + reported SEPARATELY from shared
+                       checks (run once, project onto each enabled framework).
         NIST 800-53        PCI-DSS         CIS/STIG        ISO 27001
              ▲                ▲               ▲               ▲
              └────── crosswalk (M:N, via the 800-53 hub) ─────┘
@@ -64,9 +68,24 @@ external is a swappable provider.
    CIS, ISO are abstract, versioned, added independently; the crosswalk goes
    through the **800-53 hub** (one control tag → many frameworks, no N² maps).
    Licensed content stays behind its provider.
-2. **Cardinality made explicit** — Check↔Control and Control↔Framework are both
-   **M:N**. A check satisfies several controls; a control needs several checks;
-   the same finding rolls into PCI *and* HIPAA *and* CIS at once.
+2. **Cardinality made explicit + PER-FRAMEWORK INDEPENDENCE (owner 2026-08-25).**
+   Check↔Control and Control↔Framework are both **M:N**, so one check satisfies
+   several controls. BUT each framework is scored and reported SEPARATELY,
+   because customers care about DIFFERENT ones — a HIPAA-only shop must see
+   HIPAA, a PCI-only shop must see PCI, neither bothered by the other:
+   - **Framework is a per-tenant SELECTABLE scope.** A tenant ENABLES the
+     framework(s) it cares about (HIPAA only / PCI only / both / …), reusing
+     the existing per-tenant managed-rule-enablement pattern (migration 0033),
+     §3a-scoped. Nobody is forced to see all frameworks.
+   - **Run the check ONCE, PROJECT onto each enabled framework independently.**
+     Enabling both HIPAA and PCI does NOT re-run checks — the shared finding is
+     projected onto each enabled framework's controls via the crosswalk. So
+     each framework gets its OWN coverage %, its OWN pass/fail rollup, its OWN
+     evidence/report pack — computed independently, from shared evidence.
+   - **The UI is per-framework:** a framework filter/selector; the posture
+     score, findings, and auditor pack are always scoped to the selected
+     framework(s). A customer never sees a control that belongs only to a
+     framework they didn't enable.
 3. **Coverage % honesty** — not every control is check-verifiable (admin/
    physical/process controls aren't); the model shows what fraction a config
    audit can actually evidence, so no overclaim (§5d).
