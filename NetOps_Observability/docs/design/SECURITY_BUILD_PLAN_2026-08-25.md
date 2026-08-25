@@ -40,10 +40,26 @@ by which the correlation engine grounds it with ZERO security-specific code
 Python engine consume-and-ground side is a separate, careful step (T2b) since
 it touches the engine — spec'd not to add security branches.
 
-**T3 — Evolve vuln lane onto the foundation.** `internal/vuln` emits `Finding`s
-(exposure class) with EPSS + EoL fields; the vendor-advisory-by-version model
-(§5g); keep the offline feed, add the EPSS/KEV columns to the prepare script.
-Emits onto the T2 bus seam.
+**T3 — Evolve vuln lane + `VendorAdvisoryProvider` interface (owner direction
+2026-08-25).** `internal/vuln` emits `Finding`s (exposure class) with EPSS +
+EoL enrichment; the vendor-advisory-by-version model (§5g); emits onto the T2
+bus seam. Connector architecture per owner:
+- Define a **generic `VendorAdvisoryProvider` interface** (§4 plugin seam):
+  the vendor-agnostic contract for "advisories affecting (vendor, platform,
+  version)" / a vendor feed sync. This is the seam the Vendor Profile's
+  `cve.psirt_connector` field (T9) selects.
+- **Build the OFFLINE/MOCK provider FIRST** — the existing CSV feed becomes one
+  provider impl; a mock provider for tests. Works with ZERO credentials, keeps
+  the air-gap path canonical.
+- **Cisco openVuln provider: DESIGN now, IMPLEMENT later.** Cisco's current
+  openVuln API requires a registered application using **OAuth 2.0 client
+  credentials** (confirmed correct). Build it interface-conformant now; wire
+  live creds later. Credentials go in **Correlix's secrets mechanism
+  (sealing/vault) — NEVER source code or config files** (§8).
+- **Data model = CSAF**, not the older CVRF: Cisco recommends CSAF, so the
+  Cisco provider parses the CSAF advisory format (also aligns with the CSAF
+  discovery pattern for other vendors, VENDOR_EXTENSIBILITY_DESIGN).
+- EPSS/KEV columns added to the offline prepare script as enrichment.
 
 **T4 — Evolve compliance lane onto the foundation (SCOPE-TIGHTENED by Q4).**
 `internal/compliance` findings become `Finding`s. Per Q4 (do NOT fund broad
