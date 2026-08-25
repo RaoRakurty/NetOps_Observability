@@ -526,6 +526,80 @@ backup/capture is a SEPARATE increment that earns its own incremental
 qualification when built + enabled. The modular design is what buys this
 separation.
 
+## 5g. CVE awareness — how Correlix stays current per vendor (design)
+
+Question: CVEs drop every day — how does Correlix know which affect which
+vendor's devices? The answer inverts the naive model.
+
+### Work from vendor ADVISORIES by version, NOT the raw CVE firehose by CPE
+
+The naive approach — match every NVD CVE against every device by CPE — is both
+INACCURATE and high-volume for network gear: NVD CPE matching is broken for
+network OSes (60-80% of 2024 CVEs uncped; Cisco IOS train / IOS-XE rebuild
+naming defeats CPE version ranges — §2). Instead:
+
+- Match by **vendor + platform + EXACT build** against the VENDOR's own
+  advisories (which name affected versions precisely). This inverts the server
+  model (there you match a package list against NVD; here you ask the vendor
+  "what affects THIS version").
+- This is also **far less volume**: a vendor publishes tens-to-hundreds of
+  advisories/year per platform (a tractable, curated, version-precise set) vs
+  the ~40k/yr raw CVE firehose (Gartner: 1M cumulative by 2030). You never try
+  to reason about a CVE that doesn't name a version you run.
+
+The existing `internal/vuln` already does version-constraint matching
+(CVE × vendor/product × version-range); the evolution is the SOURCE of those
+rows and their refresh.
+
+### Per-vendor sources (PSIRT connectors — the authoritative tier)
+
+The only reliable way to know "what affects Cisco IOS-XE 17.9.4a" is the
+VENDOR's PSIRT feed. Add per-vendor connectors (plugins, §4), each normalizing
+its feed into the local advisory store keyed by (vendor, platform,
+version-range):
+- **Cisco openVuln API** — OS-version endpoints (`OSType/iosxe?version=17.9.4a`
+  → all advisories for that build); CSAF format. The exemplar.
+- **Palo Alto** per-version API; **Arista** CSAF feed; **Fortinet** RSS;
+  **Juniper** portal import. ~4-5 bespoke connectors, not one loop.
+- **NVD** stays as a broad SUPPLEMENT/cross-check (the current CSV base), never
+  the primary for network OS.
+- **Cisco EoX API** (+ operator EoL table for others) — "does this version even
+  get fixes" (VulnCheck: 42.5% of exploited edge CVEs are on EoL gear — EoL is
+  a first-class exposure field).
+
+### Staying current with daily CVEs — background sync, local re-match
+
+The refresh architecture is the §5c pattern (local store + local eval, only the
+sync touches the network):
+1. A **background sync** pulls new advisories (PSIRT, on-publish/scheduled) +
+   **EPSS daily** + **CISA KEV daily** into the LOCAL, version-pinned advisory
+   store — NOT a per-device API call.
+2. On sync update (or on device-inventory change), **re-match** every device's
+   version against the updated store LOCALLY — fast, no rate-limit, reproducible
+   ("was this device exposed to CVE-X as of date D, under advisory feed version
+   V"). New matches surface as new ExposureFindings; a device's exposure score
+   updates.
+3. **Air-gapped installs** get an operator-provisioned bundle (the existing
+   offline CSV path — `vuln-feed-prepare.py`), refreshed on the operator's
+   cadence. The sovereignty/offline story is preserved.
+
+So "a CVE every day" is handled by a daily sync + local re-match, never by
+hammering an API at check time.
+
+### Triage the flood (prioritization overlay)
+
+The daily flood is triaged, not listed: KEV membership (actively exploited),
+EPSS band (exploitation probability), EoL state, and the seam-sourced exposure
+(is the vulnerable device internet-facing, is its mgmt plane reachable — §5e).
+An operator sees "3 KEV-listed, internet-facing, EoL" first, not 400 CVEs.
+
+### Honesty (already built, keep it)
+
+The `unassessed devices` list stays front and center: a device whose vendor has
+no connector, or whose feed is stale, shows "unassessed" — NEVER a false
+"no CVEs / all clear." Plus a feed-staleness banner. Correlix prefers the
+vendor's word over NVD's broken CPE, and says so when it can't assess.
+
 ## 6. Build order (agent's telemetry-grounded version, owner's phasing intent)
 
 **Tier 0 — harden what's shipped:** EPSS + EoL columns in the feed-prepare
