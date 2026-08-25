@@ -112,3 +112,70 @@ out of policy — we just correlate it into seam-owned exposure stories and
 audit-ready evidence, so you get CTEM-grade security and compliance from the
 monitoring data you already pay for, without a single new sensor, and we hand
 the findings to the SIEM you already run."**
+
+---
+
+## Competitive positioning — honest, no-FUD (owner 2026-08-25)
+
+**The one rule for all of it:** claim what Correlix HAS; let the empty column
+speak for what a competitor doesn't. NEVER assert a competitor is "insecure" or
+"bad" — attack the GAP, not their strengths (attacking a real strength invites a
+credible rebuttal and makes us look ignorant). Every "—" in a table must be TRUE
+and verifiable. Comparison tables convert technical buyers; adjectives don't.
+
+### vs Zabbix
+
+- **Do NOT attack their lack of RLS as "insecure."** Not using RLS on a
+  high-throughput monitoring backend is a legitimate engineering choice; a
+  technical evaluator rebuts the attack in one paragraph. It's a trap.
+- **Honest angle 1 (positive framing):** Correlix enforces tenant isolation at
+  the DATABASE layer (FORCE row-level security) as defense-in-depth — an app
+  bug still can't leak one customer's data to another. Real differentiator for
+  MSP/multi-tenant. A claim about US, not a negative about them.
+- **Honest angle 2 (the real gap):** Zabbix has NO security product — no vuln
+  mgmt, no threat detection, no compliance/hardening, no config drift (its own
+  roadmap puts even NetFlow at 2027). Correlix adds a network security layer.
+- Copy: **"Zabbix tells you a device is *up*. Correlix tells you it's
+  *exposed*."**
+
+### vs Datadog
+
+- **Do NOT attack their cloud-native breadth / integration ecosystem** — genuinely
+  best-in-class; attacking it is futile.
+- **The real gap (verifiable):** Datadog ships ~15 security SKUs and NONE touch
+  network devices. NDM is young — ~$7/device of metrics + capture-only config,
+  ZERO CVE/security features. Cloud SIEM's "network" content is firewalls/
+  security appliances, not routers/switches. **"The security product for the
+  asset class Datadog forgot."**
+- **Supporting angles:** per-DEVICE predictable pricing vs their per-EVENT
+  bills (the #1 stated SIEM-pricing resentment); on-prem/air-gap vs SaaS-only;
+  network-FIRST vs cloud-first.
+- **Coexist, don't rip-replace:** for a Datadog shop, Correlix is the
+  network-device security layer they lack — and can emit OCSF findings to their
+  stack.
+- Copy: **"Datadog secures your cloud. Correlix secures the network under it."**
+
+### vs Dynatrace
+
+- **Do NOT attack Davis AI / APM causal analysis** — genuinely strong.
+- **The real gap (verifiable):** Dynatrace barely monitors network devices at
+  all — SNMP via ActiveGate extensions only, no NDM product, no flow, no
+  config. Its Runtime Vulnerability Analytics is OneAgent PROCESS-level
+  (Java/.NET/Node/…) — it needs an agent ON the workload, and **network gear
+  cannot run an agent**. So its whole security model structurally can't reach
+  routers/switches/firewalls.
+- **Honest angle:** agentless network-device security — we score exposure from
+  the seam position and management-plane reachability Dynatrace has no way to
+  see (no network inventory to score). Steal their best mechanism
+  (context-adjusted severity) and apply it where they structurally can't.
+- Copy: **"Dynatrace watches your applications. Correlix watches — and secures —
+  the network they run on."**
+
+### The shared truth (the wedge)
+
+Datadog and Dynatrace are OBSERVABILITY-first and both left the network estate
+out of their security story; Zabbix has no security story at all. Correlix is
+NETWORK-first with security fused into the correlation engine. We do NOT
+out-cloud Datadog or out-APM Dynatrace — we own the asset class all three
+under-serve, and we integrate/export to whatever they run. The empty column is
+the pitch.
