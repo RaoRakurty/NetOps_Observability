@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { vrfTerm } from "../lib/vendorTerms";
 import { api, Device, TopoLink, PromInstantSeries } from "../services/api";
 
 // DeviceNeighbors — the Routing & neighbors tab of the device page. Three live
@@ -69,7 +70,7 @@ export default function DeviceNeighbors({ device }: { device: Device }) {
       <Section title="BGP neighbors" sub={bgp ? `${bgp.length} peer${bgp.length === 1 ? "" : "s"}` : "loading…"}>
         {bgp === null ? <div className="empty">Loading…</div> : bgp.length === 0 ? <p className="mini-meta" style={{ padding: "0 12px" }}>No BGP peers in telemetry (device_bgp_peer_state) for this device.</p> : (
           <table style={{ width: "100%", borderCollapse: "collapse" }}>
-            <thead><tr><th style={th}>Peer</th><th style={th}>State</th><th style={th}>AS / VRF</th></tr></thead>
+            <thead><tr><th style={th}>Peer</th><th style={th}>State</th><th style={th}>AS / {vrfTerm(device.vendor)}</th></tr></thead>
             <tbody>
               {bgp.map((s, i) => {
                 const v = String(Math.round(Number(s.value?.[1])));

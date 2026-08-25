@@ -17,7 +17,12 @@ targets:
   172.40.40.11:57400:
     name: spine1
     password: ${SRL_GNMI_PASS}
-    subscriptions: [srl-interfaces, srl-cpu, srl-bgp, srl-isis]
+    # Item 4 (staged 2026-08-25, applies at the next gnmic restart): BGP/protocol
+# subscriptions widened from network-instance[name=default] to [name=*] so
+# per-VRF / routing-instance / VPRN state flows. OpenConfig network-instances
+# IS the vendor-neutral VRF model; the instance name arrives as a tag and
+# surfaces as the `vrf` metric label the UI already reads.
+subscriptions: [srl-interfaces, srl-cpu, srl-bgp, srl-isis]
   172.40.40.12:57400:
     name: spine2
     password: ${SRL_GNMI_PASS}
@@ -76,12 +81,12 @@ subscriptions:
   # timestamps don't get rejected by VictoriaMetrics (see outputs + issue file).
   oc-bgp:
     paths:
-      - "/network-instances/network-instance[name=default]/protocols/protocol[identifier=BGP][name=BGP]/bgp/neighbors/neighbor/state/session-state"
+      - "/network-instances/network-instance[name=*]/protocols/protocol[identifier=BGP][name=BGP]/bgp/neighbors/neighbor/state/session-state"
       # Flap counter (established-transitions) + per-AFI prefixes received —
       # both gNMI-owned (BGP4-MIB is v4-only / barely on cEOS). Same cEOS
       # stale-ts class as session-state; canon-override-ts handles it.
-      - "/network-instances/network-instance[name=default]/protocols/protocol[identifier=BGP][name=BGP]/bgp/neighbors/neighbor/state/established-transitions"
-      - "/network-instances/network-instance[name=default]/protocols/protocol[identifier=BGP][name=BGP]/bgp/neighbors/neighbor/afi-safis/afi-safi/state/prefixes/received"
+      - "/network-instances/network-instance[name=*]/protocols/protocol[identifier=BGP][name=BGP]/bgp/neighbors/neighbor/state/established-transitions"
+      - "/network-instances/network-instance[name=*]/protocols/protocol[identifier=BGP][name=BGP]/bgp/neighbors/neighbor/afi-safis/afi-safi/state/prefixes/received"
     mode: stream
     # on-change: emit the instant a session flaps. sample@30s ALIASED short flaps —
     # a leaf-spine bounce tore down + reformed a session inside one sample window,
@@ -91,7 +96,7 @@ subscriptions:
     heartbeat-interval: 30s
   srl-bgp:
     paths:
-      - "/network-instance[name=default]/protocols/bgp/neighbor[peer-address=*]/session-state"
+      - "/network-instance[name=*]/protocols/bgp/neighbor[peer-address=*]/session-state"
     mode: stream
     stream-mode: on-change
     heartbeat-interval: 30s
@@ -104,7 +109,7 @@ subscriptions:
   # SRL "last transition" timestamps showed the flap the metric never recorded).
   srl-isis:
     paths:
-      - "/network-instance[name=default]/protocols/isis/instance[name=*]/interface[interface-name=*]/adjacency[neighbor-system-id=*]/state"
+      - "/network-instance[name=*]/protocols/isis/instance[name=*]/interface[interface-name=*]/adjacency[neighbor-system-id=*]/state"
     mode: stream
     stream-mode: on-change
     heartbeat-interval: 30s
