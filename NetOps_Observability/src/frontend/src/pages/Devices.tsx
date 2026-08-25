@@ -228,13 +228,13 @@ export default function Devices() {
         <>
           <StatusDot health={health.get(d.id) ?? "up"} />
           <a className="dtv-link" title="View device details"
-            onClick={(e) => { e.stopPropagation(); openDevice(d); }}>{d.id}</a>
+            onClick={(e) => { e.stopPropagation(); openDevice(d); }}><span className="device-name">{d.id}</span></a>
         </>
       ),
     },
     {
       key: "name", header: "Name", width: "14%", sortable: true,
-      text: (d) => d.name ?? "", render: (d) => <span title={d.name || ""}>{d.name || "—"}</span>,
+      text: (d) => d.name ?? "", render: (d) => <span className="device-name" title={d.name || ""}>{d.name || "—"}</span>,
     },
     {
       key: "address", header: "IP address", width: "12%",

@@ -40,7 +40,7 @@ export default function DeviceDetailPage({ device, onClose }: { device: Device; 
           <button className="ddp-x" onClick={onClose} aria-label="Close">×</button>
           <div className="ddp-title">
             <span className="ddp-typedot" style={{ background: t.color }} />
-            <h2>{d.name || d.id}</h2>
+            <h2 className="device-name">{d.name || d.id}</h2>
             <span className={`badge ${down ? "" : "good"}`} style={down ? { background: "var(--bad)", color: "#fff" } : undefined}>
               {down ? "Down" : "Up"}
             </span>

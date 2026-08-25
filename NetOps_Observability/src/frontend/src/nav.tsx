@@ -22,6 +22,7 @@ export const ROUTE_CHUNKS: Record<string, () => Promise<unknown>> = {
   PortsWorkbench: () => import("./pages/PortsWorkbench"),
   Wireless: () => import("./pages/Wireless"),
   BgpOspf: () => import("./pages/BgpOspf"),
+  BgpOps: () => import("./pages/BgpOps"),
   Troubleshooting: () => import("./pages/Troubleshooting"),
   ThreatDetection: () => import("./pages/ThreatDetection"),
   Events: () => import("./pages/Events"),
@@ -75,6 +76,7 @@ const InterfacePerformance = lazy(ROUTE_CHUNKS["InterfacePerformance"] as () => 
 const PortsWorkbench = lazy(ROUTE_CHUNKS["PortsWorkbench"] as () => Promise<{ default: React.ComponentType<any> }>);
 const Wireless = lazy(ROUTE_CHUNKS["Wireless"] as () => Promise<{ default: React.ComponentType<any> }>);
 const BgpOspf = lazy(ROUTE_CHUNKS["BgpOspf"] as () => Promise<{ default: React.ComponentType<any> }>);
+const BgpOps = lazy(ROUTE_CHUNKS["BgpOps"] as () => Promise<{ default: React.ComponentType<any> }>);
 const Troubleshooting = lazy(ROUTE_CHUNKS["Troubleshooting"] as () => Promise<{ default: React.ComponentType<any> }>);
 const ThreatDetection = lazy(ROUTE_CHUNKS["ThreatDetection"] as () => Promise<{ default: React.ComponentType<any> }>);
 const Events = lazy(ROUTE_CHUNKS["Events"] as () => Promise<{ default: React.ComponentType<any> }>);
@@ -320,6 +322,9 @@ export const NAV: NavSection[] = [
       { id: "device-monitoring", label: "Device Monitoring", group: "Metric Dashboards", render: (c) => <DeviceMonitoring rangeMinutes={c.rangeMinutes} /> },
       { id: "interface-performance", label: "Interface Performance", group: "Metric Dashboards", render: (c) => <InterfacePerformance rangeMinutes={c.rangeMinutes} /> },
       { id: "protocols", label: "Protocol Monitoring", group: "Metric Dashboards", render: (c) => <BgpOspf rangeMinutes={c.rangeMinutes} /> },
+      // Item 10 (2026-08-25): the consolidated BGP outage screen — routing
+      // status, RPKI, AS-paths, churn, RDAP ownership in one place.
+      { id: "bgp-ops", label: "BGP Operations", group: "Metric Dashboards", render: () => <BgpOps /> },
       { id: "reports", label: "Reports", render: () => <Reports /> },
       // #113: the management library — ONLY promoted real outages + documents.
       { id: "rca-reports", label: "RCA Reports", render: () => <RcaReports /> },

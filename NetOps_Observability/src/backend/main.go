@@ -100,6 +100,8 @@ type server struct {
 	selfHeal         *selfheal.Healer
 	users            usersRepo
 	roles            *roleStore
+	bgpWatch         *bgpWatchStore // BGP ops watchlist (item 10, PG FORCE-RLS; nil on file backend)
+	bgpFetch         *bgpFetcher    // outbound RIPEstat/RDAP fetcher with TTL cache
 	tenants          tenantRepo
 	orgs             *tenant.OrgStore
 	bindings         *bindingStore
@@ -745,6 +747,12 @@ func newServer() *server {
 		srv.wireless = wireless.NewMemStore()
 	}
 	srv.wirelessActions = newWirelessActionStore()
+	// BGP Operations (item 10): watchlist needs the relational store; the
+	// fetcher is store-independent and always available.
+	if ps, ok := platformdb.ActivePG(); ok {
+		srv.bgpWatch = newBGPWatchStore(ps.DB())
+	}
+	srv.bgpFetch = newBGPFetcher()
 	// NMS vendor-controller framework (#95 P3b): dormant unless
 	// FEATURE_NMS_INTEGRATIONS=true. PG-backed on postgres (migration 0020,
 	// FORCE-RLS); in-memory store on the file backend (dev).
@@ -1665,6 +1673,9 @@ func (s *server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/snmp/profiles", s.handleSNMPProfiles)
 	mux.HandleFunc("/api/snmp/profiles/", s.handleSNMPProfileByID)
 	mux.HandleFunc("/api/devices", s.handleDevices)
+	// BGP Operations (item 10): tenant watchlist + remote-API data spine.
+	mux.HandleFunc("/api/bgp/watchlist", s.handleBGPWatchlist)
+	mux.HandleFunc("/api/bgp/resource", s.handleBGPResource)
 	// Port Intelligence (#94 P5) — enhances the Infrastructure surface (no new nav).
 	mux.HandleFunc("/api/infrastructure/interfaces", s.handlePortInterfaces)
 	mux.HandleFunc("/api/infrastructure/interfaces/", s.handlePortInterfaceDetail)

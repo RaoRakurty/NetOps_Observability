@@ -71,3 +71,4 @@ scripts/rotate-tls.heartbeat
 scripts/rotate-tls.log
 scripts/rotate-tls.act.heartbeat
 scripts/.rotate-tls.loaded
+deployment/docker/compose.lab.yml

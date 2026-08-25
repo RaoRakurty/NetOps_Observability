@@ -1903,7 +1903,47 @@ export interface CloudAuthInput {
 const ccnPath = (id: string, action = ""): string =>
   `/api/cloud/connectors/${encodeURIComponent(id)}${action ? "/" + action : ""}`;
 
+
+// ---- BGP Operations (item 10, 2026-08-25) ----------------------------------
+export type BgpWatchEntry = { resource: string; kind: "prefix" | "asn"; note: string; added_by: string; created_at: string };
+export type BgpRoutingStatus = {
+  announced?: boolean;
+  last_seen?: { origin?: string; prefix?: string; time?: string };
+  visibility?: {
+    v4?: { total_ris_peers?: number; ris_peers_seeing?: number };
+    v6?: { total_ris_peers?: number; ris_peers_seeing?: number };
+  };
+  observed_neighbours?: number;
+};
+export type BgpRpki = { status?: string; validating_roas?: { origin?: string; prefix?: string; max_length?: number; validity?: string }[] };
+export type BgpPaths = { rrcs?: { rrc?: string; location?: string; peers?: { asn_origin?: string; as_path?: string; last_updated?: string }[] }[] };
+export type BgpStatusResp = {
+  resource: string; kind: "prefix" | "asn";
+  routing_status?: BgpRoutingStatus; routing_status_error?: string;
+  rpki?: BgpRpki; rpki_origin?: string; rpki_error?: string;
+  paths?: BgpPaths; paths_error?: string;
+};
+export type BgpUpdatesResp = {
+  resource: string;
+  updates: { updates?: { type?: string; timestamp?: string; attrs?: { path?: number[]; source_id?: string } }[]; nr_updates?: number };
+};
+
 export const api = {
+  // ---- BGP Operations (item 10) ----
+  bgpWatchlist: () => request<{ watchlist: BgpWatchEntry[] }>("/api/bgp/watchlist"),
+  bgpWatchAdd: (resource: string, note = "") =>
+    request<{ ok: boolean; resource: string; kind: string }>("/api/bgp/watchlist", {
+      method: "POST", body: JSON.stringify({ resource, note }),
+    }),
+  bgpWatchDelete: (resource: string) =>
+    request<{ ok: boolean }>(`/api/bgp/watchlist?resource=${encodeURIComponent(resource)}`, { method: "DELETE" }),
+  bgpStatus: (resource: string) =>
+    request<BgpStatusResp>(`/api/bgp/resource?resource=${encodeURIComponent(resource)}&view=status`),
+  bgpUpdates: (resource: string, hours = 8) =>
+    request<BgpUpdatesResp>(`/api/bgp/resource?resource=${encodeURIComponent(resource)}&view=updates&hours=${hours}`),
+  bgpWhois: (resource: string) =>
+    request<{ resource: string; rdap: unknown }>(`/api/bgp/resource?resource=${encodeURIComponent(resource)}&view=whois`),
+
   // ---- tenant display preferences (Wave 4 #11: time display, per-tenant) ----
   getDisplaySettings: () =>
     request<{ tenant_id: string; time_display: "local" | "utc" }>("/api/settings/display"),

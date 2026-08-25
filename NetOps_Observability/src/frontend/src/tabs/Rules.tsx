@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { api, Rule } from "../services/api";
 import Icon from "../components/Icon";
+import DataTable, { type Column } from "../components/DataTable";
 import { NocHeader, Chip, LiveChip } from "../components/noc";
 import Wizard from "../components/Wizard";
 import { Modal } from "../components/ui";
@@ -103,46 +104,12 @@ export default function Rules() {
         ) : rules.length === 0 ? (
           <div className="empty">No rules configured.</div>
         ) : (
-          <table>
-            <thead>
-              <tr>
-                <th>Name</th>
-                <th>Source</th>
-                <th>Severity</th>
-                <th>Expression</th>
-                <th>For</th>
-                <th></th>
-              </tr>
-            </thead>
-            <tbody>
-              {rules.map((r) => {
-                const custom = r.labels?.origin === "ui";
-                return (
-                  <tr key={r.name}>
-                    <td>{r.name}</td>
-                    <td><span className={`badge ${custom ? "accent-badge" : ""}`}>{custom ? "custom" : "built-in"}</span></td>
-                    <td>{r.severity}</td>
-                    <td>
-                      <code>{r.expr}</code>
-                    </td>
-                    <td>{r.for}s</td>
-                    <td>
-                      {custom && (
-                        <button
-                          className="btn-ghost"
-                          style={{ fontSize: 11, padding: "2px 8px", color: "var(--bad)" }}
-                          title="Delete this monitor"
-                          onClick={() => remove(r.name)}
-                        >
-                          Delete
-                        </button>
-                      )}
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
+          <DataTable<Rule>
+            rows={rules}
+            rowKey={(r) => r.name}
+            initialSort={{ key: "name", dir: "asc" }}
+            columns={ruleColumns(remove)}
+          />
         )}
       </div>
 
@@ -209,4 +176,30 @@ export default function Rules() {
       )}
     </div>
   );
+}
+
+// Column set for the rules DataTable (item 5, 2026-08-25): the raw <table>
+// neither sorted nor matched the site's listing idiom. Delete stays scoped to
+// custom monitors — built-ins ship with the platform.
+function ruleColumns(remove: (name: string) => void): Column<Rule>[] {
+  return [
+    { key: "name", header: "Name", sortable: true, width: "26%", text: (r) => r.name, render: (r) => <strong>{r.name}</strong> },
+    {
+      key: "source", header: "Source", sortable: true, width: 110,
+      sortValue: (r) => (r.labels?.origin === "ui" ? 0 : 1), text: (r) => (r.labels?.origin === "ui" ? "custom" : "built-in"),
+      render: (r) => <span className={`badge ${r.labels?.origin === "ui" ? "accent-badge" : ""}`}>{r.labels?.origin === "ui" ? "custom" : "built-in"}</span>,
+    },
+    { key: "severity", header: "Severity", sortable: true, width: 110, text: (r) => r.severity, render: (r) => r.severity },
+    { key: "expr", header: "Expression", text: (r) => r.expr, render: (r) => <code>{r.expr}</code> },
+    { key: "for", header: "For", sortable: true, width: 80, align: "right", sortValue: (r) => Number(r.for) || 0, text: (r) => `${r.for}s`, render: (r) => `${r.for}s` },
+    {
+      key: "actions", header: "", width: 90, align: "right",
+      render: (r) => r.labels?.origin === "ui" ? (
+        <button className="btn-ghost" style={{ fontSize: 11, padding: "2px 8px", color: "var(--bad)" }}
+          title="Delete this monitor" onClick={() => remove(r.name)}>
+          Delete
+        </button>
+      ) : null,
+    },
+  ];
 }
