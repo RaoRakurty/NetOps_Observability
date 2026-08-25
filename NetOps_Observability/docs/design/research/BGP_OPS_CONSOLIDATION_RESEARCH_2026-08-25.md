@@ -136,3 +136,30 @@ exists). All under CLAUDE.md §15 copilot guardrails.
 OpenBGPD-backed with a real JSON API; NTTCOM+LEVEL3 IRRs alive; PeeringDB not
 CC0; Cloudflare Radar hijack API non-commercial; ASPA still IETF-draft
 (display, don't alert); Catchpoint BGP monitoring now inside LogicMonitor.
+
+---
+
+## Visualization enhancements (owner asked 2026-08-25 — graphs)
+
+All reuse EXISTING infra (ECharts bar/line/gauge/heatmap + the topology
+react-flow/sigma/elk stack) — ZERO new dependencies, keeps the image lean.
+
+**Flagship — AS-path graph.** Replace the text path-pills with a node-link
+graph: vantage points → converging AS hops → origin; link width = collector
+peer count; changed/broken segments in RCA RED (brand-consistent with the
+causality-path rendering). Reuses the topology renderer. Highest value — the
+ThousandEyes-grade viz that makes an outage legible at a glance.
+
+**v1 (data we already fetch, ECharts already registered):**
+- Visibility GAUGE — "seen by N% of RIS peers" as a green→amber→red dial.
+- Update-churn TIME-SERIES — upgrade the simple bars to a zoomable
+  announce-vs-withdraw chart; a withdrawal spike LOOKS like the outage.
+- AS-path-length HISTOGRAM — distribution across peers; shorter = hijack tell,
+  longer = leak tell.
+
+**v1.5 (RIPEstat routing-history):** visibility-OVER-TIME line — WHEN did it
+drop. **v2 (RIS Live buffer):** real-time visibility line, live update stream,
+origin/upstream-change timeline.
+
+Build: post-soak, Opus; register ECharts GraphChart/SankeyChart (tiny) or reuse
+react-flow for the path graph. Lazy-loaded like every route (first-load flat).
