@@ -56,8 +56,8 @@ deploy, no docker, targeted builds only). Legend: ✅ done · 🚀 deployed/live
 | Task | Status | Notes |
 |---|---|---|
 | **T1** finding foundation (`internal/secfindings`) | ✅ | built + Fable-verified; commit d86b4bbc; 9 tests, gate clean |
-| **T3** VendorAdvisoryProvider + evolve vuln lane | 🔵 | building next (offline/mock first; Cisco openVuln designed-not-live) |
-| **T4** evolve compliance lane onto foundation | ⏳ | scope-tightened per Q4 |
+| **T3** VendorAdvisoryProvider + evolve vuln lane | ✅ | built + verified; commit 5410fc5f; internal/advisory, offline/mock/cisco-stub, FindingsFor→exposure |
+| **T4** evolve compliance lane onto foundation | 🔵 | building (scope-tightened per Q4: drift+golden+tags, OpenSCAP-Linux, defer broad crosswalk) |
 | **T2/T2b** producer bus seam + engine grounding | ⏳ | T2b touches the Python engine — careful, spec'd to add zero security branches |
 | **T5** network hardening rule engine (seam-aware) | ⏳ | the differentiator |
 | **T6** threat-detection lane rebuild | ⏳ | |
