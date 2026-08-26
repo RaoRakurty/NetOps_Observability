@@ -6,6 +6,15 @@ deploy, no docker, targeted builds only). Legend: ✅ done · 🚀 deployed/live
 🔵 in progress · ⏳ queued · 📐 design-only (not built) · ⛔ blocked.
 
 ## A. Soak / core GA
+**▶ OWNER AUTHORIZED autonomous continuation 2026-08-26 ("don't wait for my
+confirmation"):** at soak completion (~Aug 27 06:27Z), Fable proceeds WITHOUT
+waiting — (1) verify the soak's final gates (accounting/memflat/stability/
+completion) and write the verdict; (2) run the post-soak deploy batch
+[api rebuild w/ BGP routes + outbound-CA, gnmic per-VRF wildcard, healthcheck
+→ :8094 migration, revert Kafka retention to normal], smoke-gated (T-nominal)
+before it counts; (3) resume the security build T5→T9 (Opus). Judgment still
+applied to anything genuinely destructive/irreversible.
+
 | Item | Status | Notes |
 |---|---|---|
 | 72h soak #2 (GA-candidate build, 1K) | 🔵 | hour ~35, lag 0, healthy; ends **~Aug 27 06:28Z** |
