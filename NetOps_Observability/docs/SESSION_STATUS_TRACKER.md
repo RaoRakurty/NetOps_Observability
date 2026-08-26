@@ -9,8 +9,8 @@ deploy, no docker, targeted builds only). Legend: ✅ done · 🚀 deployed/live
 | Item | Status | Notes |
 |---|---|---|
 | 72h soak #2 (GA-candidate build, 1K) | 🔵 | hour ~35, lag 0, healthy; ends **~Aug 27 06:28Z** |
-| Post-soak deploy batch | ⏳ | api rebuild (BGP routes + outbound-CA), gnmic wildcard, healthcheck migration — one smoke-gated batch after soak |
-| Disk watch | 🔵 | ~6-7G free, 93% used — OpenSearch PLATEAUED (steady-state, not declining); ~2G to flood-stage; soak survives; build paused to protect margin |
+| Post-soak deploy batch | ⏳ | api rebuild (BGP routes + outbound-CA), gnmic wildcard, healthcheck migration; **also revert Kafka retention** (set to 5min during disk crisis — restore normal) — one smoke-gated batch after soak |
+| Disk watch | ✅ | RESOLVED — was 2.7G/97% (danger); cleared 4.4G stale OpenSearch snapshots (were OFF, leftover Aug17-25) + capped Kafka retention → 12G free/85%. Soak untouched throughout. |
 
 ## B. Frontend wave (all DEPLOYED this session)
 | Item | Status |
