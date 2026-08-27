@@ -338,17 +338,23 @@ def test_candidate_GENERATION_is_bounded_not_just_scoring():
     toks = [frozenset({"shared"}) for _ in range(n)]
     refs = [frozenset() for _ in range(n)]
     from engine import NO_ADJACENCY
+    # This fixture exercises COHORT bounding (tracker 166), which is orthogonal to
+    # the #168 rank-7 hub cap. A single token shared by all 200 nodes is exactly a
+    # hub, so the cap would (correctly) drop the whole mesh and defeat the fixture;
+    # pass token_hub_cap=n to disable the cap here and keep the bucket fully
+    # connected. The hub cap itself is covered in test_engine_complexity /
+    # test_hub_token_cap_stage2.
     unbounded = _candidate_pairs(n, toks, refs, [], [None] * n, NO_ADJACENCY,
-                                 None, None)
+                                 None, None, token_hub_cap=n)
     assert len(unbounded) == n * (n - 1) // 2, "fixture must be fully connected"
 
     one = _candidate_pairs(n, toks, refs, [], [None] * n, NO_ADJACENCY,
-                           None, None, frozenset({0}))
+                           None, None, frozenset({0}), token_hub_cap=n)
     assert len(one) == n - 1, (
         f"a single cohort member should generate {n - 1} candidates, got {len(one)}")
 
     ten = _candidate_pairs(n, toks, refs, [], [None] * n, NO_ADJACENCY,
-                           None, None, frozenset(range(10)))
+                           None, None, frozenset(range(10)), token_hub_cap=n)
     # 10 members x 199 others, minus the 45 pairs counted twice within the cohort
     assert len(ten) == 10 * (n - 1) - 45
     assert len(ten) < len(unbounded) / 2, "generation must actually be bounded"

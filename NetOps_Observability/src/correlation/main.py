@@ -74,6 +74,8 @@ from cloud_producers import cloud_signal_from_event
 from controller_events import controller_event_to_signal
 from directed_topology import DirectedTopology
 from engine import (
+    CORR_CANDIDATE_CEILING,
+    CORR_TOKEN_HUB_CAP,
     ContinuationIndex,
     EngineConfig,
     ObjectSnapshot,
@@ -2483,6 +2485,16 @@ EPOCH_SECONDS_MAX = 0.0
 EPOCH_COHORTS_LAST = 0
 EPOCH_COHORTS_MAX = 0
 EPOCH_PREP_NODES = 0            # nodes held by the last epoch's prepared state
+# #168 Stage-2 Lever 1 (correlation quality + robustness). Monotonic counters,
+# exposed on /metrics + /healthz via epoch_state(), so an operator can SEE the
+# rank-7 hub-token cap working and tune CORR_TOKEN_HUB_CAP — and is alerted if
+# the general candidate-ceiling backstop ever fires (a pathological AUTHORITATIVE
+# group, which the hub cap does not touch). Accumulated once per epoch from the
+# prepared index, which is a pure function of the snapshot.
+CORR_HUB_TOKENS_CAPPED_TOTAL = 0       # rank-7 hub tokens dropped (Σ over epochs)
+CORR_CANDIDATE_PAIRS_SKIPPED_TOTAL = 0  # all-pairs candidates the hub cap kept out
+CORR_CANDIDATE_CEILING_HITS_TOTAL = 0   # epochs whose potential candidates > ceiling
+CORR_CANDIDATE_CEILING_LAST_DIM = ""    # the offending dimension the last hit named
 
 
 class _EngineEpoch:
@@ -2523,6 +2535,35 @@ class _EngineEpoch:
         """Pending within THIS epoch — from the frozen snapshot, never the live
         buffer (see pending_signals)."""
         return pending_signals(self.snapshot)
+
+
+def _account_candidate_generation(tenant: str, prep: WindowPrep) -> None:
+    """#168 Stage-2 Lever 1 — the always-on candidate-generation accounting (§10).
+
+    Reads the prepared candidate index (a pure function of the snapshot) once per
+    tenant per epoch: it advances the rank-7 hub-cap counters, and — the general
+    robustness backstop — checks whether ANY dimension's full-window all-pairs
+    potential would exceed CORR_CANDIDATE_CEILING. The hub cap already removed the
+    weak-token quadratic, so this can only trip on a pathological AUTHORITATIVE
+    group (identity/seam/observation/route), which is NEVER dropped. When it does,
+    we WARN LOUDLY naming the offending dimension/group and count it (§16.1 /
+    §9 bounded — the engine's emission is clamped in build_edges, never stalled),
+    so a pathological shape is SEEN, not silent. Off the hot pair loop entirely."""
+    global CORR_HUB_TOKENS_CAPPED_TOTAL, CORR_CANDIDATE_PAIRS_SKIPPED_TOTAL
+    global CORR_CANDIDATE_CEILING_HITS_TOTAL, CORR_CANDIDATE_CEILING_LAST_DIM
+    idx = prep.index
+    CORR_HUB_TOKENS_CAPPED_TOTAL += len(idx.hub_tokens)
+    CORR_CANDIDATE_PAIRS_SKIPPED_TOTAL += idx.hub_pairs_skipped
+    if idx.potential_pairs > CORR_CANDIDATE_CEILING:
+        CORR_CANDIDATE_CEILING_HITS_TOTAL += 1
+        CORR_CANDIDATE_CEILING_LAST_DIM = idx.largest_dim
+        log.warning(
+            "correlation candidate ceiling exceeded (tenant=%s dimension=%s "
+            "largest_group=%d potential_pairs=%d ceiling=%d hub_cap=%d): candidate "
+            "generation is bounded this cycle — a non-token dimension formed a "
+            "pathological all-pairs group; investigate the shape",
+            tenant, idx.largest_dim, idx.largest_size, idx.potential_pairs,
+            CORR_CANDIDATE_CEILING, CORR_TOKEN_HUB_CAP)
 
 
 async def _begin_epoch(now: datetime) -> _EngineEpoch:
@@ -2610,6 +2651,7 @@ async def _begin_epoch(now: datetime) -> _EngineEpoch:
             ep.preps[tenant] = prep
             if prep is not None:
                 EPOCH_PREPARATIONS += 1
+                _account_candidate_generation(tenant, prep)
     ep.prep_seconds = time.monotonic() - t0
     EPOCHS_TOTAL += 1
     EPOCH_PREP_SECONDS_TOTAL += ep.prep_seconds
@@ -2649,6 +2691,14 @@ def epoch_state() -> dict[str, object]:
         "epoch_seconds_max": round(EPOCH_SECONDS_MAX, 3),
         "cohorts_last": EPOCH_COHORTS_LAST,
         "cohorts_max": EPOCH_COHORTS_MAX,
+        # #168 Stage-2 Lever 1: rank-7 hub-token cap activity + the general
+        # candidate-ceiling backstop (§10 observable).
+        "hub_tokens_capped_total": CORR_HUB_TOKENS_CAPPED_TOTAL,
+        "candidate_pairs_skipped_total": CORR_CANDIDATE_PAIRS_SKIPPED_TOTAL,
+        "candidate_ceiling_hits_total": CORR_CANDIDATE_CEILING_HITS_TOTAL,
+        "candidate_ceiling_last_dimension": CORR_CANDIDATE_CEILING_LAST_DIM,
+        "token_hub_cap": CORR_TOKEN_HUB_CAP,
+        "candidate_ceiling": CORR_CANDIDATE_CEILING,
     }
 
 

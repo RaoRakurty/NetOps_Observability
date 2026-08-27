@@ -25,6 +25,7 @@ import math
 from datetime import datetime, timedelta, timezone
 
 from engine import (
+    CORR_TOKEN_HUB_CAP,
     NO_ADJACENCY,
     Edge,
     EngineConfig,
@@ -74,18 +75,37 @@ def sig(kind: str, entity_type: EntityType, entity_id: str, *, offset_s: float =
     )
 
 
+def _hub_tokens(nodes, cap=None):
+    """The window's rank-7 HUB tokens — shared by > cap nodes (#168 Stage-2
+    Lever 1). The brute-force reference applies the SAME cap the engine does: a
+    hub token no longer grounds, so the naive loop must also skip it, or the
+    fast path (which drops the hub mesh at generation) would not match. A pure
+    function of the node set, exactly like the engine's index."""
+    if cap is None:
+        cap = CORR_TOKEN_HUB_CAP
+    counts: dict[str, int] = {}
+    for nd in nodes:
+        for t in nd.tokens():
+            counts[t] = counts.get(t, 0) + 1
+    return frozenset(t for t, c in counts.items() if c > cap)
+
+
 def brute_force_edges(nodes, seams, cfg, adjacency=NO_ADJACENCY,
                       topology_stale=False, directed=None, paths=None):
     """The ORIGINAL O(n²) loop, kept verbatim as the behavioral reference —
-    every pair through the public resolve_grounding, same weight/direction math."""
+    every pair through the public resolve_grounding, same weight/direction math.
+    Updated for #168 Stage-2 Lever 1: it applies the SAME hub-token cap the
+    engine's candidate index does (hub tokens do not ground), so the pruned fast
+    path still matches the reference byte-for-byte at every window shape."""
     edges: list[Edge] = []
     gap_hints = 0
+    hub = _hub_tokens(nodes)
     for i in range(len(nodes)):
         for j in range(i + 1, len(nodes)):
             a, b = nodes[i], nodes[j]
             if b.onset < a.onset or (b.onset == a.onset and b.key < a.key):
                 a, b = b, a
-            grounding = resolve_grounding(a, b, seams, adjacency, paths)
+            grounding = resolve_grounding(a, b, seams, adjacency, paths, hub)
             if grounding is None:
                 gap_hints += 1
                 continue
@@ -247,6 +267,50 @@ def test_clustered_window_scores_exactly_sum_of_cluster_pairs():
     # and the scored result still matches brute force exactly
     cfg = EngineConfig()
     assert build_edges(nodes, (), cfg) == brute_force_edges(nodes, (), cfg)
+
+
+def test_concentrated_hub_token_storm_collapses_to_zero_candidates():
+    """#168 Stage-2 Lever 1 — the concentrated storm shape. One token shared by
+    1_000 nodes is a non-specific HUB: its C(1000,2) == 499_500 all-pairs mesh is
+    pure rank-7 noise and is EXCLUDED from candidate generation, collapsing the
+    quadratic to zero. build_edges still matches the (capped) brute-force
+    reference byte-for-byte, and the honest gap count stays C(n,2)."""
+    sigs = [sig("metric_anomaly", EntityType.SERVICE, f"hub-m{k:04d}",
+                offset_s=float(k % 300), tokens=("everyones-token",))
+            for k in range(1000)]
+    nodes = build_nodes(tuple(sigs))
+    assert len(nodes) == 1000
+    toks = [nd.tokens() for nd in nodes]
+    refs = [nd.identity_refs() for nd in nodes]
+    devs = [nd.device_part() for nd in nodes]
+    # "everyones-token" is shared by 1000 > CORR_TOKEN_HUB_CAP nodes → hub → no mesh.
+    cand = _candidate_pairs(len(nodes), toks, refs, [], devs, NO_ADJACENCY, None, None)
+    assert cand == set(), "a hub-token group must generate ZERO candidate pairs"
+    cfg = EngineConfig()
+    edges, gap_hints = build_edges(nodes, (), cfg)
+    assert edges == ()
+    assert gap_hints == 1000 * 999 // 2
+    assert build_edges(nodes, (), cfg) == brute_force_edges(nodes, (), cfg)
+
+
+def test_at_cap_token_group_fully_meshes_but_above_cap_drops():
+    """The cap boundary is exact: a token shared by EXACTLY cap nodes keeps its
+    full C(cap,2) mesh; one more node makes it a hub and the mesh vanishes. Proves
+    the cut is `> cap`, not `>= cap`, and that realistic small groups are intact."""
+    cap = CORR_TOKEN_HUB_CAP
+
+    def _cand_for(count):
+        sigs = [sig("metric_anomaly", EntityType.SERVICE, f"g-m{k:04d}",
+                    offset_s=float(k), tokens=("grp",)) for k in range(count)]
+        nodes = build_nodes(tuple(sigs))
+        toks = [nd.tokens() for nd in nodes]
+        refs = [nd.identity_refs() for nd in nodes]
+        devs = [nd.device_part() for nd in nodes]
+        return _candidate_pairs(len(nodes), toks, refs, [], devs, NO_ADJACENCY,
+                                None, None)
+
+    assert len(_cand_for(cap)) == cap * (cap - 1) // 2      # at cap: full mesh
+    assert _cand_for(cap + 1) == set()                       # above cap: dropped
 
 
 def test_per_node_views_computed_once_not_per_pair(monkeypatch):
