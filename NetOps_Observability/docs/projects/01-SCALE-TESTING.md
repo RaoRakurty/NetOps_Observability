@@ -26,7 +26,6 @@ was a STALE tracker note. No redeploy needed; storm-VALIDATION is what remains.)
 - [x] **#162 `find_continuation` O(open_objects)** (`dd3f2154`).
 - [x] **#163 `OPEN_OBJECTS` count bound** (`97b2600c`).
 - [ ] **#164 `_offload` executor queue** — verify after A; flagged non-bottleneck.
-- Redeploy correlation, smoke-gate (T-nominal) before it counts.
 
 ### B. Unblock CI
 - [ ] **#169 `ingest-contract-ci` RED** (pre-existing, blocks merge) → green.
@@ -55,8 +54,8 @@ was a STALE tracker note. No redeploy needed; storm-VALIDATION is what remains.)
 - [ ] Owner runs **`/code-review ultra`** on the branch.
 
 ## Status snapshot (2026-08-27)
-1k steady-state PROVEN (soak accepted). 1k storm UNPROVEN (last S1 failed on real
-engine defects; fixes #172/#174 coded, not deployed). 2.5k nominal grading.
-Group A is DEPLOYED (verified). The storm ladder can run NOW against the
+1k steady-state PROVEN (soak accepted). 1k storm UNPROVEN (last S1 failed Aug-22
+on real engine defects; the fixes #172/#174/#162/#163 are now DEPLOYED — verified
+live Aug-27 — so the S1 ladder retests the FIXED engine). 2.5k nominal grading. The storm ladder can run NOW against the
 fixed engine — **1k S1 is the first real test of whether the storm fixes hold.**
 #169 (ingest-contract-ci RED) blocks MERGE, not the test runs.
