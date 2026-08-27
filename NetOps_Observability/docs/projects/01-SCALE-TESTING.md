@@ -61,6 +61,21 @@ was a STALE tracker note. No redeploy needed; storm-VALIDATION is what remains.)
 - [ ] Owner runs **`/code-review ultra`** on the branch.
 
 
+
+## ENGINE FIX PROGRESS (2026-08-27)
+- **Root cause CORRECTED** (profiling refuted GIL-convoy; engine's own loop-lag
+  watchdog: worst stall 130,561ms): reconciliation loop yielded per-TENANT only;
+  inner per-snapshot damped-path loop ground synchronously → single-tenant storm
+  stalls 130s → ejection → livelock. See CORRELATION_ENGINE_RESILIENCE_DESIGN.
+- [x] **Stage 1 (resilience)** — `8d624fd7`, Fable-verified. Intra-loop time-
+  budgeted yields (CORR_LOOP_YIELD_MS=50). Worst loop-hold 1.7s→0.1s in test;
+  determinism byte-identical (SHA-256 proof + golden-wire/replay/166/162 green);
+  full suite 1523 passed. **Determinism-safe (sleep(0) changes scheduling only).**
+- [ ] Deploy fixed correlation → drain the stuck 3M backlog gracefully (itself a
+  validation) → re-run 1k S1 storm → confirm no ejection + lag drains.
+- [ ] **Stage 2 (throughput)** — build_edges per-pair cost + concentrated-storm
+  quadratic (find_merges O(survivors×stale) too) → toward ~1,000 eps/core.
+
 ## TARGET (industry-benchmarked 2026-08-27 — see CORRELATION_THROUGHPUT_TARGET)
 Causal correlation ≠ shallow dedup/NVPS; the honest comparator is Flink
 stateful joins (~1k–10k eps/core). We are at ~100–250 eps/core = **5–20× below
