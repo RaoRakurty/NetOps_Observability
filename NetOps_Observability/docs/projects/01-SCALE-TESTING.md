@@ -60,6 +60,15 @@ was a STALE tracker note. No redeploy needed; storm-VALIDATION is what remains.)
 ### F. Finish
 - [ ] Owner runs **`/code-review ultra`** on the branch.
 
+
+## TARGET (industry-benchmarked 2026-08-27 — see CORRELATION_THROUGHPUT_TARGET)
+Causal correlation ≠ shallow dedup/NVPS; the honest comparator is Flink
+stateful joins (~1k–10k eps/core). We are at ~100–250 eps/core = **5–20× below
+the ceiling** → ENHANCE. **Target: ~1,000 eps/core (≈4,000 eps on 4 cores)** so
+the 3,700-eps storm is absorbed within sustained capacity. Floor 500/core,
+stretch ~3,000/core. Resilience (never eject past the 30s session timeout) is the
+non-negotiable minimum.
+
 ## FINDING: the binding constraint is correlation-engine throughput under burst
 
 Measured engine behaviour on 4 cores (event rate matters more than device count):
