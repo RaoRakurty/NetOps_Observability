@@ -80,8 +80,15 @@ was a STALE tracker note. No redeploy needed; storm-VALIDATION is what remains.)
   offset reset, and the engine's slow throughput can't drain to idle against live
   ingestion on 4 cores. **That difficulty IS the Stage-2 throughput symptom** — a
   faster engine keeps up AND lets the stack settle to idle. Re-run after Stage 2.
-- [ ] **Stage 2 (throughput)** — build_edges per-pair cost + concentrated-storm
-  quadratic (find_merges O(survivors×stale) too) → toward ~1,000 eps/core.
+- Stage 2 (throughput) — toward ~1,000 eps/core:
+  - [x] **Lever 2** find_merges index (`595c7a16`, Fable-verified) — results
+    byte-identical (oracle proof), 200x fewer predicate evals at storm shape.
+  - [ ] **Lever 1 (PRIMARY, the quadratic-killer) — AWAITING OWNER NOD.** Cap
+    rank-7 shared-token hub groups (#168-class): kills concentrated-storm O(N^2)
+    + quality win, but a SEMANTIC change (drops weak hub-token candidate edges;
+    ranks 1-6 authoritative correlations untouched). Flagged 2026-08-27.
+  - [ ] Lever 3 per-pair micro-opt — only if profiling shows headroom after 1+2.
+  - [ ] Then the deferred formal storm-gate re-run (faster engine settles the stack).
 
 ## TARGET (industry-benchmarked 2026-08-27 — see CORRELATION_THROUGHPUT_TARGET)
 Causal correlation ≠ shallow dedup/NVPS; the honest comparator is Flink
