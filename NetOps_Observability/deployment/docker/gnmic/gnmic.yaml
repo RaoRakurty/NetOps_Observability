@@ -17,12 +17,10 @@ targets:
   172.40.40.11:57400:
     name: spine1
     password: ${SRL_GNMI_PASS}
-    # Item 4 (staged 2026-08-25, applies at the next gnmic restart): BGP/protocol
-# subscriptions widened from network-instance[name=default] to [name=*] so
-# per-VRF / routing-instance / VPRN state flows. OpenConfig network-instances
-# IS the vendor-neutral VRF model; the instance name arrives as a tag and
-# surfaces as the `vrf` metric label the UI already reads.
-subscriptions: [srl-interfaces, srl-cpu, srl-bgp, srl-isis]
+    # Item 4: BGP/protocol subscriptions widened to network-instance[name=*] so
+    # per-VRF / routing-instance / VPRN state flows (the widening lives in the
+    # srl-bgp path definitions below; this target just lists subscription names).
+    subscriptions: [srl-interfaces, srl-cpu, srl-bgp, srl-isis]
   172.40.40.12:57400:
     name: spine2
     password: ${SRL_GNMI_PASS}
