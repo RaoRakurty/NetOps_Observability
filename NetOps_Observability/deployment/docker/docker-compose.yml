@@ -287,7 +287,8 @@ services:
         netops.probes netops.metrics netops.cloud netops.app.identities.v1
         netops.controller_events netops.app.edge netops.verification
         netops.cloudlogs netops.cloudcosts netops.deadletter
-        netops.wireless_sessions netops.wireless_events; do
+        netops.wireless_sessions netops.wireless_events
+        netops.security; do
         /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9092
         --create --if-not-exists --topic "$$t"
         --partitions "$$p" --replication-factor 1 || exit 1;
