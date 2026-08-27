@@ -2363,6 +2363,20 @@ def find_merges(
     entity overlap.
     """
     surv = sorted(survivors, key=lambda s: (s.window_start, s.correlation_id))
+    # TRACKER 162 PATTERN (Stage-2 Lever 2, results-preserving): index the
+    # survivors so each stale candidate probes only the plausible merge targets
+    # instead of the full survivor list — killing the O(survivors × stale)
+    # cross-product under a storm. `find_merges`'s admission predicate is the
+    # SAME (and symmetric) criterion `find_continuation` uses — entity-set
+    # Jaccard ≥ min_overlap OR a shared grounded seam bridge — so the
+    # ContinuationIndex superset PROVEN sound for continuation is sound here
+    # too, built over the survivors and probed by the candidate. The unchanged
+    # predicate then runs over the superset; the winner is a total order on
+    # (jac desc, window_start asc, cid asc) with unique survivor cids, so it is
+    # independent of which candidates are examined or in what order. Output is
+    # byte-identical (pinned by the equivalence oracle in
+    # test_find_merges_index_stage2.py).
+    surv_index = ContinuationIndex(surv)
     pairs: list[tuple[str, str]] = []
     for cand in sorted(candidates, key=lambda s: (s.window_start, s.correlation_id)):
         ce = _entity_ids(cand)
@@ -2370,7 +2384,7 @@ def find_merges(
             continue
         best: tuple[float, datetime, str] | None = None
         best_cid = ""
-        for s in surv:
+        for s in surv_index.candidates(cand):
             if (s.tenant_id != cand.tenant_id
                     or s.correlation_id == cand.correlation_id
                     or not _windows_overlap(cand, s)):
