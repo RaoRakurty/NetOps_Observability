@@ -72,8 +72,9 @@ complete, nothing blocked.
 | **T1** finding foundation (`internal/secfindings`) | ✅ | built + Fable-verified; commit d86b4bbc; 9 tests, gate clean |
 | **T3** VendorAdvisoryProvider + evolve vuln lane | ✅ | built + verified; commit 5410fc5f; internal/advisory, offline/mock/cisco-stub, FindingsFor→exposure |
 | **T4** evolve compliance lane onto foundation | ✅ | built + verified; commit 444c180d; internal/compliancemodel, Control/Mapping/FrameworkProvider, HIPAA-vs-PCI independence test |
-| **T2/T2b** producer bus seam + engine grounding | ⏳ | T2b touches the Python engine — careful, spec'd to add zero security branches |
-| **T5** network hardening rule engine (seam-aware) | ⏳ | the differentiator |
+| **T2** producer bus seam (Go side + evidence object) | 🔵 | building now (Opus); code-only, no live topic/deploy |
+| **T2b** engine grounding (Python) | ⏸ HELD | touches the just-qualified engine — lands with the deploy cycle, not speculatively |
+| **T5** network hardening rule engine (seam-aware) | ✅ | built + Fable-verified; commit c273216d; internal/hardening, 26 checks (22 posture + 4 seam-aware), Cisco full + Juniper/Nokia declarative, fail-closed, 16 tests, gate clean |
 | **T6** threat-detection lane rebuild | ⏳ | |
 | **T7** exposure story (flagship) | ⏳ | depends on T2b |
 | **T8** security UI | ⏳ | |
