@@ -125,9 +125,24 @@ ALLOWLIST: dict[tuple[str, int], str] = {
     # WORKLOAD_PROFILES; all three re-read, unchanged.)
     # (+15-line drift 2026-08-22: soak-72h profile; +17 more 2026-08-23: the
     # 2.5K rung profiles — all three handlers re-read at each pin, unchanged.)
-    ("scale-miniladder.py", 1062): "preflight ingress probe; failure appended to `problems`, preflight fails on any problem",
-    ("scale-miniladder.py", 1069): "preflight API-login probe; failure appended to `problems`, preflight fails on any problem",
-    ("scale-miniladder.py", 1462): "twin-mode burst artifact read; failure returns an explicit burst-phase FAIL (tracker 152 §8.3)",
+    #
+    # Re-pinned 2026-08-27 (tracker #169): the ACTIVE-consumer membership
+    # preflight block (group-lag settle loop + ClickHouse/healthz probes) and
+    # the correlation-completion evidence added lines above these three sites,
+    # shifting them 1062->1073, 1069->1080, 1462->1473. ALL THREE re-read at
+    # their new lines and are behaviourally UNCHANGED — no handler body touched:
+    #   scale-miniladder.py:1073 ingress probe — still `problems.append(...)`;
+    #                            preflight returns FAIL on any non-empty
+    #                            `problems` (status line: PASS iff not problems).
+    #   scale-miniladder.py:1080 API-login probe — same `problems.append(...)`
+    #                            escalation path through the preflight verdict.
+    #   scale-miniladder.py:1473 twin artifact read — still returns an explicit
+    #                            `self.phase("burst", "FAIL", ...)` (hard FAIL).
+    # RE-PIN of reviewed sites after line drift, per the workflow this
+    # line-keyed allowlist exists to force. No behaviour weakened, no new site.
+    ("scale-miniladder.py", 1073): "preflight ingress probe; failure appended to `problems`, preflight fails on any problem",
+    ("scale-miniladder.py", 1080): "preflight API-login probe; failure appended to `problems`, preflight fails on any problem",
+    ("scale-miniladder.py", 1473): "twin-mode burst artifact read; failure returns an explicit burst-phase FAIL (tracker 152 §8.3)",
     # The four 2026-08-16 chown-swallow findings (enrichment seed, processors
     # seed, appid/cloud fixtures, vuln SUDO_UID dir) were RESOLVED the same
     # day: all now route through chown_tree (repair-or-refuse), and the vuln
