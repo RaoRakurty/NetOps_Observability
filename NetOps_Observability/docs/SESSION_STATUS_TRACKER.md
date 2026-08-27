@@ -17,7 +17,8 @@ applied to anything genuinely destructive/irreversible.
 
 | Item | Status | Notes |
 |---|---|---|
-| 72h soak #2 (GA-candidate build, 1K) | 🔵 | hour ~35, lag 0, healthy; ends **~Aug 27 06:28Z** |
+| 72h soak #2 (GA-candidate build, 1K) | ⚠️ | **COMPLETED full 72h (no abort — a first).** Core gates PASS (completion 0-pending/4260 cohorts, drain peak-lag-4, **memflat clean = leak resolved**). **accounting FAILED** — 6.3M events not persisted, CAUSED BY Fable's disk-crisis Kafka-retention cap (self-inflicted, not a product defect; retention reverted). Verdict: SOAK2_VERDICT_2026-08-27.md |
+| ⚠️ DECISION NEEDED (Fable HOLDING deploy+build) | ⏸ | (A) accept core proof + document accounting artifact [Fable rec], or (B) re-run clean 72h. Autonomous continuation PAUSED on this failing gate per the reserved rule. |
 | Post-soak deploy batch | ⏳ | api rebuild (BGP routes + outbound-CA), gnmic wildcard, healthcheck migration; **also revert Kafka retention** (set to 5min during disk crisis — restore normal) — one smoke-gated batch after soak |
 | Disk watch | ✅ | RESOLVED — was 2.7G/97% (danger); cleared 4.4G stale OpenSearch snapshots (were OFF, leftover Aug17-25) + capped Kafka retention → 12G free/85%. Soak untouched throughout. |
 
