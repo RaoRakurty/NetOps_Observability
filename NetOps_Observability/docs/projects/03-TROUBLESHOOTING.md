@@ -16,13 +16,12 @@ co-pilot → seam-owned handoff. (Live page today is the old June board.)
 
 ## B. Protocol diagnostics — collect → analyze — 📐 designed, NOT built
 Design: `TROUBLESHOOTING_PROTOCOL_DIAGNOSTICS_2026-08-27.md` (owner spec).
-- [ ] BGP/OSPF/ISIS tabs; **Collect** button runs the curated read-only
-  show-command bundle for each of the **5 top issues** per protocol (15-issue
-  matrix in the design doc); over the SSH gateway / gNMI; vendor-dialect via
-  `netconcepts`.
-- [ ] **Analyze** button — rules-as-code failure signatures → verdict +
-  remediation (mirrors hardening/threatlane catalogs).
-- [ ] Redacted **TAC export** of the raw bundle + verdict; audited; §3a-scoped.
+- [x] **Backend foundation built + Fable-verified** (`9a0a4e2e`, internal/protocoldiag,
+  89% cov, gate-clean). 15-issue matrix (5 BGP/5 OSPF/5 ISIS), Cisco full +
+  Juniper/Nokia declarative via netconcepts; Collect w/ read-only guard
+  (fail-closed) + CommandRunner iface (SSH/gNMI wiring = TODO deploy); Analyze
+  signatures (fail-closed, no invented cause); redaction + TAC export.
+- [ ] Wire protocoldiag → HTTP API (handlers, §3a) + the frontend tabs/buttons UI.
 
 ## C. IRIS enhancement (item 8) — ❌ roadmap NOT produced
 - [ ] Roadmap: auto-troubleshoot, guide engineers, human-in-the-loop
