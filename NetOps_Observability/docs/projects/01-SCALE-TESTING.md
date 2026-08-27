@@ -28,7 +28,7 @@ was a STALE tracker note. No redeploy needed; storm-VALIDATION is what remains.)
 - [ ] **#164 `_offload` executor queue** — verify after A; flagged non-bottleneck.
 
 ### B. Unblock CI
-- [ ] **#169 `ingest-contract-ci` RED** (pre-existing, blocks merge) → green.
+- [x] **#169** guard test GREEN (`a71bdcda`, verified 2026-08-27 — legit re-pin of drifted reviewed handlers, not a mask). Confirm full CI green on next push.
 
 ### C. The storm ladder (nominal + S1 at each rung)
 - [ ] **1k S1 storm** — re-run; prove #172 fixed the ingest wall (soak SKIPPED S1).
