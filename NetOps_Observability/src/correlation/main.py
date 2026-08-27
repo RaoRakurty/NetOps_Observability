@@ -668,6 +668,19 @@ METRIC_MAX_AGE_S = 3600.0
 CORR_ENGINE_ENABLED = os.environ.get("CORR_ENGINE_ENABLED", "true").lower() != "false"
 CORR_ENGINE_INTERVAL_S = float(os.environ.get("CORR_ENGINE_INTERVAL_S", "30"))
 CORR_QUIESCE_S = float(os.environ.get("CORR_QUIESCE_S", "900"))
+# Resilience (loop-lag root cause — production loop-lag watchdog: worst stall
+# 130,561 ms). The per-snapshot reconciliation loop yields PER TENANT only, so
+# an S1 storm concentrated on ONE tenant fires that yield once and then grinds
+# thousands of snapshots on the DAMPED/unchanged path (find_continuation +
+# inline content_hash, no I/O await) with no heartbeat → aiokafka session
+# expiry → consumer ejection → "lag never drains" livelock. The loop now yields
+# cooperatively whenever it has held the event-loop thread longer than this
+# budget (well under the 1000 ms loop-lag warn and the 30 s Kafka session
+# timeout), so aiokafka's heartbeat/commit coroutines run mid-cycle. Purely a
+# scheduling interleave: it changes WHEN the loop yields, never which objects
+# are processed, their order, OPEN_OBJECTS mutation, the persist decision, or
+# any cohort output — replay/determinism are byte-for-byte unchanged.
+CORR_LOOP_YIELD_MS = float(os.environ.get("CORR_LOOP_YIELD_MS", "50"))
 # #100 write-side damping: a persisting incident whose window merely refreshes
 # (new instances of the SAME evidence) re-persisted a full snapshot + archive
 # slice every cycle — 2 versions/min/object for as long as a storm lasted. A new
@@ -3528,11 +3541,35 @@ async def _engine_cycle_inner(epoch: _EngineEpoch | None) -> None:
         _cont_buckets.setdefault(_snap.tenant_id, []).append(_snap)
     cont_index = {t: ContinuationIndex(v) for t, v in _cont_buckets.items()}
     cont_entities: dict[str, frozenset] = {}
+
+    # Loop-lag resilience (worst production stall 130,561 ms). The per-object
+    # stretches below (the damped/unchanged snapshot path, the find_merges
+    # result loop, quiesce, the count cap) all scale with a SINGLE tenant's open
+    # object count and take no I/O await on their hot path, so a concentrated
+    # storm can hold the event-loop thread past the Kafka session timeout. This
+    # cooperative yield is a no-op until the cycle has held the thread longer
+    # than CORR_LOOP_YIELD_MS, then `await asyncio.sleep(0)` reschedules the
+    # loop (aiokafka's heartbeat/commit coroutines run) and the budget resets.
+    # It only interleaves scheduling — never a computation, order, or result —
+    # so it is determinism-/replay-safe (proved by the golden-wire + replay
+    # suite passing unchanged).
+    _loop_yield_budget_s = CORR_LOOP_YIELD_MS / 1000.0
+    _loop_yield_at = time.monotonic() + _loop_yield_budget_s
+
+    async def _loop_yield() -> None:
+        nonlocal _loop_yield_at
+        if time.monotonic() >= _loop_yield_at:
+            await asyncio.sleep(0)
+            _loop_yield_at = time.monotonic() + _loop_yield_budget_s
+
     for tenant, window, snapshots in evaluated:
         # P1 max-poll thrash: a damped-heavy cycle walks every snapshot with
         # no awaits (content_hash is sync CPU) — yield per tenant so the
-        # consumer's poll cadence survives a storm cycle.
+        # consumer's poll cadence survives a storm cycle. The per-snapshot
+        # `_loop_yield()` below bounds the concentrated case this per-tenant
+        # yield cannot (one tenant, thousands of snapshots).
         await asyncio.sleep(0)
+        _loop_yield_at = time.monotonic() + _loop_yield_budget_s
         for snap in snapshots:
             gap_hints += snap.gap_hints
             reg = OPEN_OBJECTS.get(snap.correlation_id)
@@ -3595,6 +3632,10 @@ async def _engine_cycle_inner(epoch: _EngineEpoch | None) -> None:
                 reg["snapshot"] = snap
             else:
                 reg["last_seen"] = now
+            # Bound the concentrated single-tenant grind: the damped/unchanged
+            # branches above take no I/O await, so without this a storm on one
+            # tenant would hold the loop for thousands of snapshots.
+            await _loop_yield()
 
     # Merge (§4.4): de-split a cross-cycle identity drift. A stale open object that
     # overlaps a live one this cycle (entity-set + window) is the same incident
@@ -3604,7 +3645,15 @@ async def _engine_cycle_inner(epoch: _EngineEpoch | None) -> None:
     # re-key/re-rank. Done BEFORE quiesce so a merged object never also quiesce-closes.
     survivors = [OPEN_OBJECTS[c]["snapshot"] for c in seen_this_cycle if c in OPEN_OBJECTS]
     stale_snaps = [OPEN_OBJECTS[c]["snapshot"] for c in OPEN_OBJECTS if c not in seen_this_cycle]
+    # NOTE (Stage-2, tracker follow-up): find_merges itself is a synchronous
+    # O(survivors × stale) cross-product inside the pure engine (engine.py) with
+    # no internal yield point — for a concentrated single-tenant storm that call
+    # can be a blocker on its own. Yielding around its RESULT loop (below) bounds
+    # the post-processing but not the call; cutting the call's cost needs the
+    # Stage-2 restructuring (cap group reach / grounding cost) and is out of
+    # scope for this resilience-only change.
     for merged_cid, survivor_cid in find_merges(survivors, stale_snaps):
+        await _loop_yield()
         reg = OPEN_OBJECTS.get(merged_cid)
         if reg is None:
             continue
@@ -3620,6 +3669,7 @@ async def _engine_cycle_inner(epoch: _EngineEpoch | None) -> None:
     # Quiesce: an object whose component no longer materializes (episodes aged
     # out / cleared) closes after CORR_QUIESCE_S — terminal version, append-only.
     for cid in list(OPEN_OBJECTS):
+        await _loop_yield()  # this loop is O(open objects) — bound the grind
         reg = OPEN_OBJECTS[cid]
         if cid in seen_this_cycle:
             continue
@@ -3646,6 +3696,7 @@ async def _engine_cycle_inner(epoch: _EngineEpoch | None) -> None:
         victims = sorted(OPEN_OBJECTS,
                          key=lambda c: (OPEN_OBJECTS[c]["last_seen"], c))[:excess]
         for cid in victims:
+            await _loop_yield()  # eviction can span thousands under a storm
             reg = OPEN_OBJECTS[cid]
             reg["version"] += 1
             VERSIONS_PERSISTED += 1
