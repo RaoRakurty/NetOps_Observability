@@ -75,11 +75,18 @@ complete, nothing blocked.
 | **T2** producer bus seam (Go side + evidence object) | ✅ | built + Fable-verified + gate-clean (gosec G404 jitter annotated); commits 8673acda,238ef789; internal/secbus, EvidenceEvent→Signal 1:1, topic netops.security declared (not created), removable-module proven |
 | **T2b** engine grounding (Python) | ⏸ HELD | touches the just-qualified engine — lands with the deploy cycle, not speculatively |
 | **T5** network hardening rule engine (seam-aware) | ✅ | built + Fable-verified; commit c273216d; internal/hardening, 26 checks (22 posture + 4 seam-aware), Cisco full + Juniper/Nokia declarative, fail-closed, 16 tests, gate clean |
-| **T6** threat-detection lane rebuild | 🔵 | building now (Opus); rules-as-code over mock-fed syslog/flows, emits via secbus, input behind interface |
-| **T7** exposure story (flagship) | ⏳ | depends on T2b |
-| **T8** security UI | ⏳ | |
-| **T9** vendor profile registry | ⏳ | |
-| Then: config backup → sync/drift → packet capture | ⏳ | owner order |
+| **T6** threat-detection lane rebuild | ✅ | built + Fable-verified + gate-clean; commit e9577f3f; internal/threatlane, 8 device-log + 3 flow-behavioral rules (11 MITRE techniques), fail-closed, 12 tests. Old flow/threat code (flows.go, cloud_security.go, ThreatDetection.tsx) identified for a SEPARATE retirement follow-up |
+| **T7** exposure story (flagship) | ⏸ HELD | depends on T2b (engine) → deploy cycle |
+| **T8** security UI | 📐 needs decision | requires a findings STORE + tenant-scoped read API — storage schema (PG+RLS vs per-tenant OS index) is an ARCHITECTURE call reserved for owner+Fable |
+| **T9** vendor profile registry | 📐 needs review | migrates EXISTING vendor code (regression risk) — deliberate reviewed change, not autonomous-overnight |
+| Then: config backup → sync/drift → packet capture | 📐 | owner order; storage-heavy (sealed store) → architecture review |
+
+**▶ MILESTONE (2026-08-27 ~08:00Z): security PRODUCER side COMPLETE + gate-clean.**
+All three lanes (T3 exposure, T5 posture, T6 signal) emit generic evidence through
+the T2 bus seam; removable-module proven; qualified soak build untouched. Autonomous
+build PAUSED here on purpose — every remaining task is gated on the owner's soak/deploy
+decision (T2b/T7) or on an architecture decision the rules reserve for owner+Fable
+(T8 store/API, T9 vendor migration, infra modules). Clean handoff point.
 
 ## G. Earlier this session (done)
 | Item | Status |
