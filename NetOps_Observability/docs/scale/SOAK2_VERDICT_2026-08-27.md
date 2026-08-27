@@ -16,7 +16,7 @@ Run `08240627tbn0`, started 2026-08-24T06:27:55Z, **completed the full 72h**
 | **accounting** | ❌ **FAIL** | **6,331,142 events not persisted to OpenSearch** (discards 17.56M, DLQ 0, deadletter 0) — loss VISIBLE + counted, but lossless is the bar |
 | memflat | ✅ PASS | all 9 containers within x1.3 of warm, under 85% of caps — **the RSS-leak concern from soak #1 is RESOLVED** |
 | stability | ⚠️ SERVICE PASS / grader FAIL | **Both replicas restarts=0, up 72h, healthy** (real stability signal = clean). Grader emitted FAIL — "1 replica log unreadable": evidence-collection artifact (docker logs hung on the 3-day log; grader expected pre-scale-recreate name `-1`, replicas were renamed `-2`/`-3`). NOT a stability breach. |
-| cleanup | — | n/a to the verdict |
+| cleanup | ⚠️ purge TIMED OUT (operational, being remediated) | `os_deleted:-1` — the scoped delete-by-query (hostname prefix `mlx-08240627tbn0-`, **only this run's synthetic docs**) exceeded its 300s budget over 19.2M docs. Read path fine (count worked). Re-running async now; not a product defect. |
 
 ## The accounting failure — self-inflicted, root-caused honestly
 
@@ -53,13 +53,24 @@ completion with zero pending across 4,260 cohorts, drain with peak lag 4, and
 **memflat clean (the RSS-drift worry from soak #1 is gone)**. The GA-candidate
 build ran the full distance without abort, crash, or memory runaway.
 
+## Final tally (report.md, overall FAIL)
+
+6 PASS (preflight, onboard, burst, drain, correlation_completion, memflat) ·
+3 FAIL — **all three are non-product artifacts, none a pipeline defect:**
+
+| FAIL | Real cause | Product risk? |
+|---|---|---|
+| accounting | Fable's disk-crisis Kafka retention cap (reverted) | No — loss was visible/counted |
+| stability | Grader couldn't read 1 of 2 replica 3-day logs; service clean (0 restarts) | No — evidence gap, not instability |
+| cleanup | Scoped soak-doc purge timed out (300s budget vs 19.2M docs); re-running async | No — harness housekeeping, not the product |
+
 ## Decision needed from the owner (Fable is HOLDING autonomous continuation)
 
 **Both gate FAILs are non-product artifacts, from different causes:**
 - **accounting** — self-inflicted disk-crisis Kafka retention cap (reverted).
 - **stability** — brittle grader evidence collection (unreadable 3-day log /
   pre-rename replica name). The real stability signal is CLEAN: both replicas
-  ran the full 72h with **zero restarts**, healthy throughout.
+  ran the full 72h with **zero restarts** (`consumer_restarts:0, commit_failed:0, unknown_member:0, settled:true`), healthy throughout — the FAIL is `replicas_unreadable:1` only.
 
 Neither indicates a product defect. Still, two gates are red on the card, so
 Fable did NOT auto-proceed with the post-soak deploy (per the reserved "flag a
