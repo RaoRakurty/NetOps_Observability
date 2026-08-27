@@ -7,7 +7,9 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -89,6 +91,15 @@ func Delete(key string) error {
 // The walk and every read are ROOT-SCOPED (os.OpenRoot): a symlink planted
 // inside the subtree cannot pull the scan outside it (TOCTOU traversal,
 // gosec G122).
+//
+// The per-file READS run on a BOUNDED WORKER POOL. A directory's blocking
+// fs.ReadFile syscalls are the cost here; done one-at-a-time a lab subtree of
+// 38,666 deletion tombstones took >6 min of uninterruptible disk I/O and
+// wedged boot before the api ever reached its listener. A single walk
+// goroutine still enumerates paths (preserving the exact skip/prefix
+// semantics); each qualifying file's read is handed to the pool, and results
+// merge into `out` under a mutex. Correctness is unchanged: keys are unique
+// per path, so no read can overwrite or drop another's entry.
 func (f FileKV) LoadPrefix(prefix string) (map[string][]byte, error) {
 	resolved := f.resolve(prefix)
 	// resolve() joins relative keys under the root via filepath.Join, which
@@ -111,26 +122,84 @@ func (f FileKV) LoadPrefix(prefix string) (map[string][]byte, error) {
 	}
 	defer func() { _ = root.Close() }() // read-only handle; Close cannot lose data
 	rfs := root.FS()
-	out := map[string][]byte{}
-	err = fs.WalkDir(rfs, ".", func(p string, d fs.DirEntry, walkErr error) error {
+
+	// Bound concurrency: enough to overlap disk I/O without spawning one
+	// goroutine per (potentially tens of thousands of) files.
+	bound := runtime.GOMAXPROCS(0) * 4
+	if bound > 32 {
+		bound = 32
+	}
+	if bound < 1 {
+		bound = 1
+	}
+	sem := make(chan struct{}, bound) // bounded pool of read slots
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	var (
+		wg       sync.WaitGroup
+		mu       sync.Mutex // guards out and firstErr
+		out      = map[string][]byte{}
+		firstErr error
+	)
+	// fail records the FIRST read/walk error and cancels the context so the
+	// walk stops enumerating and any slot-blocked dispatch unblocks promptly.
+	fail := func(e error) {
+		mu.Lock()
+		if firstErr == nil {
+			firstErr = e
+			cancel()
+		}
+		mu.Unlock()
+	}
+
+	walkErr := fs.WalkDir(rfs, ".", func(p string, d fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
+		}
+		if ctx.Err() != nil {
+			return fs.SkipAll // a read already failed; stop enumerating
 		}
 		full := filepath.Join(dir, p)
 		if d.IsDir() || strings.HasSuffix(full, ".tmp") || !strings.HasPrefix(full, resolved) {
 			return nil
 		}
-		b, err := fs.ReadFile(rfs, p) // root-scoped: cannot follow a link out of dir
-		if err != nil {
-			return err
-		}
 		// resolve() only prepends fileRoot, so full == resolved + suffix and
-		// the original (unresolved) key reconstructs as prefix + suffix.
-		out[prefix+strings.TrimPrefix(full, resolved)] = b
+		// the original (unresolved) key reconstructs as prefix + suffix. This
+		// is a pure string op on walk-local values — safe to compute here.
+		key := prefix + strings.TrimPrefix(full, resolved)
+		// Acquire a pool slot, honouring cancellation so a failed read cannot
+		// leave the walk blocked on a full semaphore.
+		select {
+		case sem <- struct{}{}:
+		case <-ctx.Done():
+			return fs.SkipAll
+		}
+		wg.Add(1)
+		go func(p, key string) {
+			defer wg.Done()
+			defer func() { <-sem }()
+			b, err := fs.ReadFile(rfs, p) // root-scoped: cannot follow a link out of dir
+			if err != nil {
+				fail(err)
+				return
+			}
+			mu.Lock()
+			out[key] = b
+			mu.Unlock()
+		}(p, key)
 		return nil
 	})
-	if err != nil {
-		return nil, fmt.Errorf("scan prefix %s: %w", prefix, err)
+	wg.Wait() // all in-flight reads have finished; out/firstErr now stable
+
+	// A directory-enumeration error is a scan failure just like a read error.
+	// SkipAll is our own cancellation signal (WalkDir maps it to a nil return),
+	// not a real error.
+	if walkErr != nil && !errors.Is(walkErr, fs.SkipAll) {
+		fail(walkErr)
+	}
+	if firstErr != nil {
+		return nil, fmt.Errorf("scan prefix %s: %w", prefix, firstErr)
 	}
 	return out, nil
 }
