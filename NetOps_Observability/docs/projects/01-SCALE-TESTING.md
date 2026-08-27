@@ -71,8 +71,15 @@ was a STALE tracker note. No redeploy needed; storm-VALIDATION is what remains.)
   budgeted yields (CORR_LOOP_YIELD_MS=50). Worst loop-hold 1.7s→0.1s in test;
   determinism byte-identical (SHA-256 proof + golden-wire/replay/166/162 green);
   full suite 1523 passed. **Determinism-safe (sleep(0) changes scheduling only).**
-- [ ] Deploy fixed correlation → drain the stuck 3M backlog gracefully (itself a
-  validation) → re-run 1k S1 storm → confirm no ejection + lag drains.
+- [x] Deploy fixed correlation (rebuilt image, 2 replicas) → **VALIDATED: the
+  fixed engine drained a multi-million-event storm backlog with 0 stalls / 0
+  ejections** — the exact backlog that livelocked the pre-fix engine 1h53m.
+  Stage-1 resilience is proven (unit + real-world).
+- [ ] **Formal storm-gate re-run DEFERRED → gated on Stage 2.** The re-run needs
+  an idle baseline; the overloaded single-node broker's admin API won't allow an
+  offset reset, and the engine's slow throughput can't drain to idle against live
+  ingestion on 4 cores. **That difficulty IS the Stage-2 throughput symptom** — a
+  faster engine keeps up AND lets the stack settle to idle. Re-run after Stage 2.
 - [ ] **Stage 2 (throughput)** — build_edges per-pair cost + concentrated-storm
   quadratic (find_merges O(survivors×stale) too) → toward ~1,000 eps/core.
 
