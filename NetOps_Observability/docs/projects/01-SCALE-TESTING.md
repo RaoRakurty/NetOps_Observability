@@ -14,17 +14,17 @@ itself a deliverable.
 
 ## Execution order
 
-### A. Deploy the correlation-engine fixes that are CODED BUT NOT LIVE
-(Written during the 72h soak, which owned the stack. My Aug-27 deploy was
-api+gnmic only — the `correlation` containers still run the **Aug-24 soak
-build**, so these are NOT running. Storm testing is meaningless until they are.)
-- [ ] **#172 Storm-priority scheduling** (`eb609b45`) — the fix for the S1
+### A. Correlation-engine storm/scale fixes — ✅ ALREADY DEPLOYED (corrected 2026-08-27)
+(Committed Aug-22/23; the Aug-24 soak build was cut AFTER them and is what runs
+now — VERIFIED live in the correlation container. The earlier "not deployed" read
+was a STALE tracker note. No redeploy needed; storm-VALIDATION is what remains.)
+- [x] **#172 Storm-priority scheduling** (`eb609b45`) — the fix for the S1
   single-owner ingest wall. THE storm fix.
-- [ ] **#174 Observability under saturation** (`60bd796b`) — /healthz + /metrics
+- [x] **#174 Observability under saturation** (`60bd796b`) — /healthz + /metrics
   stop starving when the engine saturates (why the Aug-22 completion gate read
   the replica as "unreadable").
-- [ ] **#162 `find_continuation` O(open_objects)** (`dd3f2154`).
-- [ ] **#163 `OPEN_OBJECTS` count bound** (`97b2600c`).
+- [x] **#162 `find_continuation` O(open_objects)** (`dd3f2154`).
+- [x] **#163 `OPEN_OBJECTS` count bound** (`97b2600c`).
 - [ ] **#164 `_offload` executor queue** — verify after A; flagged non-bottleneck.
 - Redeploy correlation, smoke-gate (T-nominal) before it counts.
 
@@ -57,4 +57,6 @@ build**, so these are NOT running. Storm testing is meaningless until they are.)
 ## Status snapshot (2026-08-27)
 1k steady-state PROVEN (soak accepted). 1k storm UNPROVEN (last S1 failed on real
 engine defects; fixes #172/#174 coded, not deployed). 2.5k nominal grading.
-Everything storm-related is gated on **Group A being deployed first.**
+Group A is DEPLOYED (verified). The storm ladder can run NOW against the
+fixed engine — **1k S1 is the first real test of whether the storm fixes hold.**
+#169 (ingest-contract-ci RED) blocks MERGE, not the test runs.
