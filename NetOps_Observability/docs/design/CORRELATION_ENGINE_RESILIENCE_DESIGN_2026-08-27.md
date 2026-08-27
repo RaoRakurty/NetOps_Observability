@@ -89,3 +89,47 @@ Only after stage 1 proves resilient. Options, decided by measurement:
   the resilience & correctness tests. Verify storm no longer ejects.
 - **C. Re-run the storm ladder** (1k S1) against the fixed engine.
 - **D. Stage 2** (ProcessPool/shard) gated on measuring stage-1 eps vs target.
+
+---
+
+## CORRECTION (2026-08-27, after profiling + production loop-lag evidence)
+
+**My original mechanism was WRONG. Profiling refuted it; the engine's own
+loop-lag watchdog gave the true cause.** Recorded honestly:
+
+- **REFUTED:** offloaded `run_window` GIL-convoy starving the heartbeat. Measured:
+  a 45s offloaded call delays the heartbeat only 2.5s; 8 concurrent offloads
+  (110s wall) keep it under 3s. CPython's 5ms switch-interval means one CPU-bound
+  worker thread cannot starve the loop thread. The `_offload` docstring was right.
+- **REFUTED:** "bound the window." That BREAKS determinism (a pair never
+  co-visible in a bounded slice is never scored). Correct rule: **bound the
+  COHORT (already exists, `_select_cohort`), keep the window whole** (tracker-165
+  horizon). The 50k-SHA prune is already fixed (tracker-156).
+- **REFUTED:** ProcessPool for `run_window` as-is — its 100–224 MB `ObjectSnapshot`
+  RESULT unpickles in the parent GIL thread → a 15.9s heartbeat gap, worse than
+  ThreadPool. Only viable with a COMPACT return type.
+
+### TRUE CAUSE (production loop-lag watchdog: worst stall 130,561 ms, 3,100+ stalls)
+The reconciliation loop (`main.py:~3531`) yields **per tenant** only. Its inner
+`for snap in snapshots` loop does NOT yield between snapshots, and on the
+**damped path** (content moved, material didn't → no persist → no I/O await) it
+runs `find_continuation` + inline `content_hash` (objects < `CORR_OFFLOAD_MIN_
+ELEMENTS=2000`) synchronously. An **S1 storm concentrates on ONE tenant** →
+the per-tenant yield fires once, then thousands of damped snapshots grind ~130s
+with no heartbeat → session expiry → ejection → "lag never drains" livelock.
+`find_merges(survivors, stale_snaps)` (line ~3607) is a second synchronous
+cross-product with no yield.
+
+### CORRECTED FIX
+**Stage 1 (resilience, surgical, determinism-safe):** add **intra-loop yields**
+in the per-snapshot reconciliation loop — `await asyncio.sleep(0)` every N
+snapshots (or time-budgeted, e.g. yield when the cycle has held the loop >X ms)
+— and yield/bound `find_merges`. Yields don't change results (same objects, same
+order), so replay/determinism are untouched. This alone ends the ejection/
+livelock: the loop heartbeats through a single-tenant storm.
+**Stage 2 (throughput, real bottleneck = `build_edges`, engine.py:1127):** ~35µs
+per candidate pair; LINEAR diffuse (108s at ~25k nodes), **QUADRATIC concentrated**
+(one giant shared-token group: 2k nodes → 80s, immune to cohort-bounding). Levers:
+cut per-pair grounding cost (`_grounded`/`resource_identity_relation`/`_direction`,
+#166/#167) + **cap group reach** for the concentrated case. ProcessPool only with
+a compact return type. This raises eps/core toward the ~1,000 target.
