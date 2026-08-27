@@ -15,8 +15,8 @@ Run `08240627tbn0`, started 2026-08-24T06:27:55Z, **completed the full 72h**
 | correlation_completion | ✅ PASS | 117s, **pending 0** across 2 replicas, **4,260 cohorts**, oldest-pending 0.0s |
 | **accounting** | ❌ **FAIL** | **6,331,142 events not persisted to OpenSearch** (discards 17.56M, DLQ 0, deadletter 0) — loss VISIBLE + counted, but lossless is the bar |
 | memflat | ✅ PASS | all 9 containers within x1.3 of warm, under 85% of caps — **the RSS-leak concern from soak #1 is RESOLVED** |
-| stability | (finalizing) | settled=True, lag 8, in 180s grace at write time |
-| cleanup | (pending) | |
+| stability | ⚠️ SERVICE PASS / grader FAIL | **Both replicas restarts=0, up 72h, healthy** (real stability signal = clean). Grader emitted FAIL — "1 replica log unreadable": evidence-collection artifact (docker logs hung on the 3-day log; grader expected pre-scale-recreate name `-1`, replicas were renamed `-2`/`-3`). NOT a stability breach. |
+| cleanup | — | n/a to the verdict |
 
 ## The accounting failure — self-inflicted, root-caused honestly
 
@@ -55,9 +55,15 @@ build ran the full distance without abort, crash, or memory runaway.
 
 ## Decision needed from the owner (Fable is HOLDING autonomous continuation)
 
-The accounting FAIL is a real gate failure, so Fable did NOT auto-proceed with
-the post-soak deploy (per the reserved "flag a failing gate for the owner"
-rule). Two paths:
+**Both gate FAILs are non-product artifacts, from different causes:**
+- **accounting** — self-inflicted disk-crisis Kafka retention cap (reverted).
+- **stability** — brittle grader evidence collection (unreadable 3-day log /
+  pre-rename replica name). The real stability signal is CLEAN: both replicas
+  ran the full 72h with **zero restarts**, healthy throughout.
+
+Neither indicates a product defect. Still, two gates are red on the card, so
+Fable did NOT auto-proceed with the post-soak deploy (per the reserved "flag a
+failing gate for the owner" rule). Two paths:
 
 - **(A) Accept the core proof + document the accounting artifact.** The GA-
   relevant gates passed; the accounting failure is attributed to a self-
