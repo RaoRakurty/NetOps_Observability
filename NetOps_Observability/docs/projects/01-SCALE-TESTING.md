@@ -32,7 +32,11 @@ was a STALE tracker note. No redeploy needed; storm-VALIDATION is what remains.)
 
 ### C. The storm ladder (nominal + S1 at each rung)
 - [ ] **1k S1 storm** — re-run; prove #172 fixed the ingest wall (soak SKIPPED S1).
-- [x] 2.5k nominal (run `08271432rnic`) — grading; onboard of 2,500 ✅ (boot-fix validated).
+- [x] 2.5k nominal (run `08271432rnic`) — **Overall FAIL.** accounting PASS
+  (lossless 900,001==900,001, 2500/2500 devices) + drain PASS, but
+  correlation_completion / stability / **memflat FAIL**: 108s event-loop stall
+  ejected a replica; correlation-2 leaked 496→691 MiB. **CEILING is 1k–2.5k;
+  binding constraint = correlation-engine loop-stall under CPU, not disk/loss.**
 - [ ] **2.5k S1 storm** (profile `s1-2.5k`, ~10k eps storm lane) — the real tolerance test.
 - [ ] Add **5k** profiles (t-nominal-5k, s1-5k) → run nominal + S1.
 - [ ] Add **10k** profiles (t-nominal-10k, s1-10k) → run nominal + S1 (GA target).
