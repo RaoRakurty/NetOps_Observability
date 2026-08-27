@@ -31,7 +31,10 @@ was a STALE tracker note. No redeploy needed; storm-VALIDATION is what remains.)
 - [x] **#169** guard test GREEN (`a71bdcda`, verified 2026-08-27 — legit re-pin of drifted reviewed handlers, not a mask). Confirm full CI green on next push.
 
 ### C. The storm ladder (nominal + S1 at each rung)
-- [ ] **1k S1 storm** — re-run; prove #172 fixed the ingest wall (soak SKIPPED S1).
+- [x] **1k S1 storm** (run `08271606ymyb`) — **FAIL. drain: lag NEVER drained
+  (final 3,060,740) at ~3,710 eps** — the SAME "lag never drains" defect as
+  Aug-22, reproduced WITH #172/#174 live. The storm fixes are INSUFFICIENT.
+  Storm tolerance NOT achieved even at the proven 1k device count.
 - [x] 2.5k nominal (run `08271432rnic`) — **Overall FAIL.** accounting PASS
   (lossless 900,001==900,001, 2500/2500 devices) + drain PASS, but
   correlation_completion / stability / **memflat FAIL**: 108s event-loop stall
@@ -56,6 +59,26 @@ was a STALE tracker note. No redeploy needed; storm-VALIDATION is what remains.)
 
 ### F. Finish
 - [ ] Owner runs **`/code-review ultra`** on the branch.
+
+## FINDING: the binding constraint is correlation-engine throughput under burst
+
+Measured engine behaviour on 4 cores (event rate matters more than device count):
+| Load | eps | Result |
+|---|---|---|
+| 1k soak (steady) | ~100 | STABLE ✅ |
+| 1k t-nominal | ~400 | qualified (#168/#170) |
+| **2.5k nominal** | ~1,000 | **FAIL** — 108s loop stall, memflat leak |
+| **1k S1 storm** | ~3,710 | **FAIL** — lag never drains (3M backlog) |
+
+**The ceiling is correlation-engine EVENT THROUGHPUT (~400–1,000 eps sustained on
+4 cores), NOT device count, disk, or data loss** (accounting passed lossless at
+2.5k). Above ~1k eps the event loop stalls past the 30s Kafka session timeout →
+consumer ejected → lag runs away permanently. A storm spikes eps, so it breaks
+the engine regardless of device count. #172/#174 are deployed but insufficient —
+a 108s single-loop stall is an ENGINE per-cycle-cost problem (see #166 run_window,
+#167 per-pair throughput), deeper than storm-priority scheduling. **Storm
+tolerance is an OPEN GA BLOCKER, and it is an engine-efficiency problem, not a
+hardware-count problem alone.**
 
 ## Status snapshot (2026-08-27)
 1k steady-state PROVEN (soak accepted). 1k storm UNPROVEN (last S1 failed Aug-22
