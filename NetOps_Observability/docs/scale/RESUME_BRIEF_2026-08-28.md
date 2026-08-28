@@ -93,9 +93,60 @@ component/rank/materialize loop (2603-2760), `content_hash` (1999),
   --no-deps --scale correlation=2 correlation`; verify a code marker in BOTH
   replicas (`grep -c` a new symbol in /app/*.py). Current live = fa4857a5+51575407.
 
+## UPDATE (2026-08-28 evening) — P0 measured, P1 built, 2.5K A/B running
+- Owner memo `/var/tmp/Correlix-Bottleneck-Modified.md` is now the programme
+  authority: planes are **Aggregation / Decision / Evidence** (never "data plane"),
+  "priority-aware materialization" (never "shedding"), P0-measure-first order.
+- **P0 DONE:** `scripts/scale-rca-latency.py` → `docs/scale/RCA_LATENCY_BASELINE_2026-08-28.md`.
+  TTUR on run `08281519gjez` is ~100 % queueing latency (T1 p95 5,135 s; T3−T1 = 0 s),
+  churn healthy (max 2), versions→material changes 30.6:1. Tracker 177.
+- **P1 BUILT + Fable-verified, NOT committed:** spec `docs/design/COHORT_TOUCH_GATE_P1_2026-08-28.md`
+  (§10 = implementation notes). engine.py/main.py + `test_cohort_touch_gate_p1.py`
+  (18 tests) + `bench_cohort_touch_gate.py`; `test_loop_blocking.py` hardened; mypy
+  narrowing in storm-aggregate block. Suite 1591 green, ruff+mypy clean. Tracker 176.
+- **2.5K A/B:** `docs/scale/RUN_PLAN_P1_2P5K_AB_2026-08-28.md` executed by an Opus
+  operator (correlation-only rebuild/redeploy, flags default ON) → verdict
+  `docs/scale/P1_2P5K_VERDICT_2026-08-28.md`. Compare to OLD leg `08281519gjez`.
+- New gap: replay `_diff` ignores edge direction (tracker 178).
+- **OWNER DECISION (2026-08-28): no more hardware.** Success = engine efficiency +
+  TTUR SLOs on the existing 4-core box. The 8-core/2-node scale-out proof (P4/P5
+  in the plans above and in the research synthesis) is DROPPED — do not propose it.
+- Next after the verdict: owner verifies → commit P1 → P2 Decision/Evidence split
+  spec (versioned RCA Verdict Record; ONE computation, two completeness levels).
+
 ## Standing rules (unchanged)
 Fable = architecture/design/research/grading + delegates ALL coding/testing to
 Opus subagents. Verify subagent work (read-then-verify, full gate incl. -race/
 staticcheck/gosec — gate tools in /home/rao/go/bin, NOT on subagent PATH).
 Exceed industry baselines. Three-project priority: 1) Scale (HIGH), 2) Security
 CTEM, 3) Troubleshooting. `/code-review ultra` is owner-triggered.
+
+## UPDATE (2026-08-28 late) — P1 verdict in, P2 spec'd, harness hardened
+- **P1 A/B leg `p1-on-08281911` was signal-interrupted after `drain`** (no gate
+  verdict, 2,500 `mlx-08281911zaz6-*` devices left). Engine still converged on
+  its own (pending 0 ≈21:15, closes until 21:27). Verdict reconstructed from
+  `corr_objects` with the clean-scope SQL (per-incident `min(window_start)` in
+  the leg's burst window, **storm-aggregate cid `bb1e46d6…` excluded — it is
+  tenant-constant and shared by both legs**): `docs/scale/P1_2P5K_VERDICT_2026-08-28.md`
+  + `P1_2P5K_EQUIVALENCE_2026-08-28.md`. Result: versions −30 %, T1 p99 −32 %,
+  T6 p95 −29 %, churn preserved, equivalence 100 % on owner/tier/confidence;
+  merges 11→378 all predicate-valid. Completion still ~106 min (budget 45).
+  Residue: undetermined +112 unexplained; storm-mode activation 100 % vs 93.5 %.
+- **P2 spec: `docs/design/DECISION_EVIDENCE_SPLIT_P2_2026-08-28.md`** (tracker 179).
+  Key measured lead: in the 65-min load epoch 61 % of component evaluations were
+  untouched first-sight components ranked anyway (memo is intra-epoch) →
+  cross-epoch content-addressed decision memo + epoch wall-time budget are steps
+  1–2; VVR table, async Evidence queue, priority ordering are 3–5. `rank()` takes
+  no clock, so the cross-epoch key is sound.
+- **Tracker 178 shipped** (`replay.EDGE_COMPARISON_SCHEMA=2`, direction drift
+  compared; `test_replay_direction_178.py`). Row deleted.
+- **Harness hardened** (`scripts/scale-miniladder.py`): `InterruptGuard`
+  (SIGINT/SIGTERM/SIGHUP; signals during cleanup ignored with a message, 3rd
+  aborts loudly with `RESIDUE LEFT`), durable `purge_devices` (page-loop +
+  re-list until verified zero), `--cleanup-only [mlx-prefix]` (refuses other
+  prefixes / unreachable stack, `--dry-run`), preflight drain ETA. Root cause of
+  the residue: `except Exception` around cleanup couldn't catch the second
+  `KeyboardInterrupt`; SIGHUP unhandled. 31 tests.
+- **To do before the next scale run:** `python3 scripts/scale-miniladder.py
+  --cleanup-only mlx-` (bulk delete → owner approval in-session), then re-run the
+  A/B to the completion gate with `CORR_PROFILE_STAGES=1` on the correlation env.
