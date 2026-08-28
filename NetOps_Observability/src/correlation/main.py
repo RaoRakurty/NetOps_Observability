@@ -123,6 +123,7 @@ from producers import (
     trap_control_signal,
     ts_invalid_count,
 )
+from rank_memo import RankMemo
 from replay import replay_object
 from routing_direction import forwarding_pairs, routing_direction_source
 from series_budget import derive_max_series
@@ -2429,6 +2430,38 @@ CORR_LIFECYCLE_EPOCH_CADENCE = os.environ.get(
 CORR_ENGINE_EPOCH_BUDGET_S = max(0.0, float(
     os.environ.get("CORR_ENGINE_EPOCH_BUDGET_S", "300")))
 
+# ── P2 step 2: the LEVEL-1 cross-epoch rank memo ─────────────────────────────
+# docs/design/DECISION_EVIDENCE_SPLIT_P2_2026-08-28.md §3, §9 item 2. The P1
+# memo (level 2) is intra-epoch and keyed on the node-key set, so every
+# component's FIRST sighting in an epoch pays a full rank() over the catalog —
+# 61 % of the load epoch's component evaluations, and rank is 31.8 % of cohort
+# wall. Level 1 is keyed on the evidence PROJECTION rank actually reads
+# (rank_memo.py enumerates it with file:line refs) and therefore survives the
+# epoch, the prune and the catalog reload.
+#
+# Two knobs, read once at startup like every other CORR_* knob so an A/B runs on
+# ONE image:
+#   CORR_RANK_MEMO=0        -> rank_memo=None: every component ranks in full.
+#   CORR_RANK_MEMO_MAX=N    -> LRU bound (default 50,000 RankingResults; no
+#                              snapshot/window reference — tracker 156).
+# CORR_COHORT_TOUCH_GATE=0 disables BOTH levels (spec §3 last bullet).
+CORR_RANK_MEMO = os.environ.get("CORR_RANK_MEMO", "1").lower() in ("1", "true", "yes")
+CORR_RANK_MEMO_MAX = max(1, int(os.environ.get("CORR_RANK_MEMO_MAX", "50000")))
+# Process-lifetime by construction: it is NOT on _EngineEpoch and _close_epoch
+# never touches it — that is the whole difference from level 2.
+RANK_MEMO: RankMemo | None = (
+    RankMemo(CORR_RANK_MEMO_MAX)
+    if (CORR_COHORT_TOUCH_GATE and CORR_RANK_MEMO) else None)
+
+
+def rank_memo_stats() -> dict[str, int]:
+    """§10 observable for the level-1 memo. Zeros (not an absent key) when the
+    memo is off, so a dashboard never has to distinguish 'off' from 'missing'."""
+    if RANK_MEMO is None:
+        return {"entries": 0, "max_entries": 0, "hits": 0, "misses": 0,
+                "evicted": 0, "unkeyable": 0}
+    return RANK_MEMO.stats()
+
 # ── Tracker 172: ingest-priority scheduling (gate spec §4.3 subset contract) ─
 #
 # THE MEASURED DEFECT (S1 design storm, run 082220005r1a): the engine's
@@ -2917,6 +2950,16 @@ def epoch_state() -> dict[str, object]:
         # epoch; 0 with a large epoch_seconds_max means the budget is off.
         "epoch_budget_s": CORR_ENGINE_EPOCH_BUDGET_S,
         "epoch_budget_exits_total": EPOCH_BUDGET_EXITS_TOTAL,
+        # ── P2 step 2: the level-1 rank memo (spec §3). THE invariant: level-1
+        # hits keep accruing ACROSS epochs (a process-lifetime cache), where
+        # level-2 hits reset with every epoch. `unkeyable` must stay ~0 — a
+        # rising count means producers are stamping colliding signal_ids.
+        "rank_memo_enabled": CORR_RANK_MEMO and CORR_COHORT_TOUCH_GATE,
+        "rank_memo": rank_memo_stats(),
+        # Hits by memo LEVEL, the two-level picture in one place: level 1 skips
+        # rank only, level 2 skips the whole snapshot.
+        "decision_memo_level1_hits_total": rank_memo_stats()["hits"],
+        "decision_memo_level2_hits_total": COHORT_MEMO_HITS_TOTAL,
         "snapshot_digest": digest_cache_stats(),
     }
 
@@ -3992,6 +4035,13 @@ async def _engine_cycle_inner(epoch: _EngineEpoch | None) -> None:
             # epoch (ComponentMemo carries the proof), so it is served from here
             # instead of being re-ranked and re-materialized. Per TENANT (§3a);
             # dropped with the epoch. CORR_COHORT_TOUCH_GATE=0 ⇒ None ⇒ pre-P1.
+            #
+            # P2 step 2 adds the LEVEL-1 memo alongside it: RANK_MEMO is
+            # process-lifetime and content-keyed, so a component this epoch is
+            # seeing for the FIRST time — the 61 % the level-2 memo cannot
+            # help — still skips rank() if an earlier epoch already scored the
+            # same evidence projection. It is passed, not looked up per tenant:
+            # the tenant is inside the key (§3a).
             memo = (epoch.memos.setdefault(tenant, ComponentMemo())
                     if CORR_COHORT_TOUCH_GATE else None)
             _memo_before = ((memo.components, memo.touched, memo.hits, memo.misses)
@@ -4004,7 +4054,7 @@ async def _engine_cycle_inner(epoch: _EngineEpoch | None) -> None:
                     directed=directed, paths=pgv, discovery=discovery,
                     since_ts=LAST_CYCLE_MAX_TS, work_sink=work,
                     cohort_keys=t_keys, carried_edges=carried, prep=prep,
-                    memo=memo)
+                    memo=memo, rank_memo=RANK_MEMO)
             if memo is not None and _memo_before is not None:
                 # Deltas, not totals: the memo counts for the whole epoch, these
                 # counters are monotonic per replica (spec §5).
@@ -7715,6 +7765,25 @@ def _metrics_text() -> str:
         "# HELP corr_cohort_components_ranked_total Components actually ranked + materialized.",
         "# TYPE corr_cohort_components_ranked_total counter",
         f"corr_cohort_components_ranked_total {COHORT_COMPONENTS_RANKED_TOTAL}",
+        # ── P2 step 2: the level-1 cross-epoch rank memo (spec §3). hit+miss is
+        # the population that reached the memo; `evicted` climbing means
+        # CORR_RANK_MEMO_MAX is smaller than the live component population, and
+        # `unkeyable` above 0 means some producer stamps colliding signal_ids
+        # (the memo fails closed there and ranks in full — never silently).
+        "# HELP corr_rank_memo Level-1 rank memo lookups by outcome.",
+        "# TYPE corr_rank_memo counter",
+        *(f'corr_rank_memo{{result="{r}"}} {rank_memo_stats()[k]}'
+          for r, k in (("hit", "hits"), ("miss", "misses"),
+                       ("evicted", "evicted"), ("unkeyable", "unkeyable"))),
+        "# HELP corr_rank_memo_entries Level-1 rank memo entries held (bound: CORR_RANK_MEMO_MAX).",
+        "# TYPE corr_rank_memo_entries gauge",
+        f"corr_rank_memo_entries {rank_memo_stats()['entries']}",
+        # The two-level decision memo in one series: level 1 skips rank(), level
+        # 2 skips the whole snapshot. Level 2 resets every epoch; level 1 does not.
+        "# HELP corr_decision_memo_level Decision-memo hits by completeness level.",
+        "# TYPE corr_decision_memo_level counter",
+        f'corr_decision_memo_level{{level="1"}} {rank_memo_stats()["hits"]}',
+        f'corr_decision_memo_level{{level="2"}} {COHORT_MEMO_HITS_TOTAL}',
         "# HELP corr_snapshot_digest Snapshot digests computed vs served from the per-instance cache.",
         "# TYPE corr_snapshot_digest counter",
         # ONE call, four series: the keys are exactly <kind>_<result>.

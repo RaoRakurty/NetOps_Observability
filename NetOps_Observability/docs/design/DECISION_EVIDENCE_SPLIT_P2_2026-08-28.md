@@ -292,3 +292,181 @@ per-table row counts, per-table BYTE counts and insert-call counts are
 (including `rank_key` hit shares) — the caches changed how often work happens
 and nothing else. The epoch budget is not exercised by this offline bench (it
 drives its own cohort loop); it is measured by the live P0 script in §8.
+
+---
+
+## 11. Implementation notes — step 2, the level-1 rank memo (builder, 2026-08-28)
+
+Delivered: §9 item 2 (`CORR_RANK_MEMO`). Items 3–5 are untouched. New module
+`src/correlation/rank_memo.py` (key derivation + bounded LRU), wired into
+`engine.run_window` and `main._engine_cycle_inner`; tests in
+`src/correlation/test_p2_rank_memo.py`. Knobs read once at import like the P1
+flags, so the A/B runs on ONE image.
+
+### 11.1 The key is NOT the one §3 sketched — it is `rank`'s true input set
+§3 proposed `(node.key, kind, severity, entity_id, deviation-bucket)`. Following
+what `rank` → `score_template` → `_satisfying`/`clause_matches`/
+`_verification_corroborates` → `verdicts.assess` → `coverage` → `witness_of`
+actually READ (enumerated with file:line refs in the module docstring) gives a
+different set, and the differences matter in both directions:
+
+* **DROPPED** — `node.key` (`rank` never sees a Node; it takes the flat evidence
+  tuple) and `severity` (nothing in `scoring.py` or `verdicts.py` reads it — the
+  severity floor is `engine.py`'s, applied BEFORE `rank`). Both were sound to
+  include but strictly narrowed equality for no reason; dropping them is what
+  lets two structurally different components with the same evidence share a
+  result.
+* **ADDED, and this is the correctness-critical half** — `entity_tokens` (the
+  verification co-identity test), and the ENTIRE verdict-gate projection:
+  `modality_class`, `observer.observer_id`, `observer.collection_path`, and the
+  `attrs` keys `probe_authority`, `probe_scope`, `verify_method`, `agent_host`/
+  `agent_id`/`host_id`, `source_egress`/`egress_ip`, `seam_id`, `schedule_id`,
+  `target`. A key without these would serve a CONFIRMED verdict to evidence that
+  cannot confirm — the bench's "0 collisions over 13,562 keys" would not have
+  caught it, because that fixture varies observers barely at all.
+  The projection **calls `verdicts.witness_of` itself** rather than re-listing
+  its fields, so it cannot drift from the function it describes.
+* **EXACT, not bucketed** — `abs(sig.deviation)`. A "deviation bucket" is only
+  sound if every bucket edge coincides with every catalog `min_deviation`;
+  `abs()` is the exact comparand (`scoring.py:78`), and taking the absolute
+  value legitimately WIDENS equality (±d are one class).
+* **NOT in the key** — `storm_mode` / `topology_stale`. §3 listed them as "the
+  only epoch-context inputs rank/_cap_verdict read"; in fact `rank` takes
+  neither, and `_cap_verdict`'s gates read `worst_data_class` and edge grounding.
+  Only `rank` is memoized, so the tie-break, both caps, the unknown-hop
+  amendment and the whole snapshot build still run on every hit — per §3's own
+  rule, they stay out of the key.
+* **`tenant` IS in the key**, though `rank` does not read it. CLAUDE.md §3a: a
+  cached verdict must be structurally unable to cross a tenant boundary, even
+  when the result would be equal by value.
+
+### 11.2 `signal_id` really is a rank input — twice — and both fail CLOSED
+`rank` is otherwise order- and instance-independent, but two places read
+`str(signal_id)`, and pretending otherwise would have been the unsound shortcut:
+
+1. `scoring.py:232` iterates the `active_verification_healthy` witnesses in
+   `signal_id` order and appends to an ORDER-SENSITIVE `contradictions` tuple.
+2. `verdicts.py:242` de-duplicates by `signal_id`, FIRST-wins — observable when
+   two signals share an id but project differently (`signal_id` =
+   `uuid5(NS, source|native_id|ts_ms)` is NOT a superset of the projected
+   fields, so a mis-stamping producer can do it).
+
+The first design put an ordered sub-key in the hash; the property test caught it
+immediately as the WRONG fix — it made the key move on a pure `signal_id`
+perturbation that `rank` ignores, i.e. it reintroduced exactly the id-sensitivity
+that measures 0 % cross-epoch. The shipped answer refuses a key in both cases
+(≥2 DISTINCT refuting healthy witnesses; any colliding-id pair), counts it as
+`unkeyable`, and ranks in full. The key is then a pure SET, so shuffling the
+evidence or rebuilding it from `dataclasses.replace` copies cannot move it. On
+the bench leg `unkeyable` is 0.
+
+### 11.3 Gating and immutability
+* Consulted only when `rank_memo is not None AND cohort_keys is not None` —
+  **exactly the level-2 gate**. Golden-wire / replay / direct-test full-window
+  runs (`cohort_keys=None`) never reach it, so §6's byte-identity claim holds
+  structurally rather than by argument. The property test proves equality would
+  hold there too; the gate is kept anyway because the full-window paths are the
+  replay contract and are not on the hot path — there is nothing to win and a
+  contract to lose. `test_T5b` pins it (and goes red if the gate is widened).
+* The stored value is shared BY REFERENCE across components. That is safe for
+  the same reason `scoring._build_inapplicable_score` has been sharing one
+  `HypothesisScore` catalog-wide since 2026-08-22: `RankingResult`,
+  `HypothesisScore`, `Verdict` and `EvidenceCoverage` are frozen dataclasses, and
+  every downstream amendment (`_cap_verdict`, `_break_ties_by_seam_affinity`, the
+  unknown-hop `replace`) builds a NEW object. The one mutable interior is
+  `HypothesisScore.causal_chain`'s dicts; no production path writes to them
+  (`to_dict` copies), and `test_T7b` re-checks each held entry against a freshly
+  computed ranking after three cohorts of downstream work.
+* Bound: `CORR_RANK_MEMO_MAX` (default 50,000), LRU. The value graph is walked by
+  `test_T7` and asserted to contain no `Signal`, `Node` or `ObjectSnapshot` —
+  the tracker-156 rule.
+
+### 11.4 Measured (offline, `bench_profile_p2.py` leg A, one image)
+`--devices 500 --signals 7000 --arrivals 3500 --cohorts 20 --epochs 2 --burst 1`;
+BEFORE = `CORR_RANK_MEMO=0`, AFTER = defaults (steps 0/1 caches ON in both).
+
+| | before | after | Δ |
+|---|--:|--:|--:|
+| total wall | 97.64 s | 72.11 s | **−26.1 %** |
+| `P.cohort(total)` | 93.39 s | 68.36 s | −26.8 % |
+| `P.run_window(total)` (incl) | 41.61 s | 18.01 s | −56.7 % |
+| `4.rank(scoring)` | 29.76 s / 7,375 calls | **4.39 s / 1,686 calls** | −85.2 % / −77.1 % |
+| `P.persist(total)` | 24.07 s | 23.74 s | −1.4 % |
+| `P.run_window` residual (excl) | 6.77 s | 8.68 s | **+28.2 %** — the key derivation |
+
+The residual line is the honest cost: deriving 7,375 keys costs ≈1.9 s to avoid
+≈25.4 s of scoring, i.e. the memo pays for itself ~13:1 on this fixture. Every
+other stage moves ≤ a few percent (run-to-run noise; `1.prepare_run_window` and
+`9.find_merges` have 2-call absolutes).
+
+Level-1 hit rate per epoch (new bench output):
+
+| epoch | lookups | hits | hit share | entries | evicted | unkeyable |
+|---|--:|--:|--:|--:|--:|--:|
+| 1 | 4,193 | 2,647 | 63.1 % | 1,546 | 0 | 0 |
+| 2 | 3,182 | 3,042 | **95.6 %** | 1,686 | 0 | 0 |
+
+Epoch 2 is the design's whole claim: 95.6 % of the components that reach `rank`
+in a LATER epoch have already been scored, where the DecisionKey (signal ids)
+would have hit 17.6 % and the P1 intra-epoch memo cannot help at all on a
+component's first sighting in the epoch.
+
+**Byte neutrality at scale:** versions persisted (5,509), versions damped (39),
+per-table row counts, per-table BYTE counts, insert-call counts and the whole
+`cross_epoch_reuse` block are **identical** between the legs. The memo changed
+how often `rank` runs and nothing else.
+
+### 11.5 Observability
+`/metrics`: `corr_rank_memo{result="hit"|"miss"|"evicted"|"unkeyable"}` (the
+fourth series is additive — a fail-closed refusal must never be silent),
+`corr_rank_memo_entries`, and `corr_decision_memo_level{level="1"|"2"}` (level 2
+= the P1 `COHORT_MEMO_HITS_TOTAL`). `epoch_state()` carries the same figures plus
+`rank_memo_enabled`. THE invariant to read them by: level-2 hits reset with every
+epoch, level-1 hits keep accruing across them; `unkeyable` climbing means
+producers are stamping colliding `signal_id`s.
+
+### 11.6 Set vs multiset — the multiplicity audit (reviewer question, 2026-08-28)
+The key reduces the evidence to a **SET** of projections, so N signals sharing a
+projection collapse to one. Sound only if nothing up to the `RankingResult`
+counts, sums or thresholds over evidence multiplicity. Audited line by line:
+
+| place | reads | multiplicity-blind? |
+|---|---|---|
+| `_satisfying` hit tuple | truthiness `scoring.py:196, 208, 244, 258, 260`; `.extend` `:197, :210`; `{s.kind for s in hits}` `:259`; `any(...)` `:244` | **yes** — `len(hits)` appears nowhere |
+| clause coverage | `(len(required) - len(missing)) / len(required)` `:214` | yes — counts CLAUSES |
+| optional bonus | `min(CAP, bonus + PER_CLAUSE)` `:212` | yes — per clause, capped |
+| rank sort specificity | `-len(s.satisfied)` `:506` | yes — clause kinds |
+| discriminators / forced | per `template.discriminators` `:219-222` | yes — per template |
+| healthy-verification tags | `if tag not in contradictions` `:247-248` | yes — de-duplicated |
+| causal chain | `bool(hits)`, `sorted({s.kind …})` `:258-259` | yes |
+| `verdicts.coverage` | `set(seen.values())` `verdicts.py:243-246` | **yes — the crux**: a set of frozen `Witness` VALUES, i.e. exactly this projection |
+| gate thresholds | `modality_count`/`observer_count` `verdicts.py:210-215` vs `MIN_MODALITIES`/`MIN_OBSERVERS` `:371-376`; `independent_pair` `:268-275`; `fate_groups` `:279-308` | yes — all over the de-duplicated witness list / frozensets |
+
+**Answer: no.** Adding a duplicate-projection signal (same kind/entity/observer/
+collection_path/attrs, fresh `signal_id` and `ts`) cannot change the
+`RankingResult` or the hypotheses blob. `coverage` is the only step where
+multiplicity could enter, and it de-duplicates by `Witness` value — which is
+precisely what the projection is. `test_T1d` pins that equivalence field-for-field
+against `Witness` and `ProbeFate`, so a NEW field on either goes red instead of
+silently widening equality.
+
+Pinned by **`test_T1c`** (40 seeds: duplicate 1–3 random signals under fresh ids
+⇒ identical ranking, identical blob bytes, identical key) and **`test_T1d`**.
+
+**Mutant, run both ways.** Switching the key to a multiset
+(`sorted(Counter(projections).items())`) fails **46 tests — and only the two
+key-STABILITY tests**: `T1c` (29) and `T1b` (17), every one of them on the
+`rank_key(a) == rank_key(b)` line, *after* that same test's
+`rank(a) == rank(b)` and `blob(a) == blob(b)` assertions passed. **Zero**
+byte-identity tests (T4/T4b/T4c/T5) move. That is the expected result and it
+proves both directions: the multiset is also sound (strictly narrower), and the
+set's extra equality is exactly the duplicate-instance case.
+
+**Measured cost of the multiset** on the same leg A: epoch-2 hit share
+95.35 % vs **95.60 %** (148 misses vs 140), entries 1,694 vs 1,686, total wall
+72.48 s vs 72.11 s. Small here — this synthetic fixture re-touches devices with
+*new* evidence rather than re-reporting the *same* evidence, so it
+under-represents the population the set protects. The set is kept because it is
+proven sound, costs nothing, and the case it covers (a sustained incident
+re-reporting evidence it already carries — the #100 damping population, which
+the live 2.5K storm has in abundance) is the one the whole memo exists for.

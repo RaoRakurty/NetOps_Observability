@@ -150,3 +150,20 @@ CTEM, 3) Troubleshooting. `/code-review ultra` is owner-triggered.
 - **To do before the next scale run:** `python3 scripts/scale-miniladder.py
   --cleanup-only mlx-` (bulk delete → owner approval in-session), then re-run the
   A/B to the completion gate with `CORR_PROFILE_STAGES=1` on the correlation env.
+
+## UPDATE (2026-08-29 early) — P2 steps 0–2 committed, residue cleared
+- P2 steps 0–1 `d78971ef` (caches + epoch budget, bench −35.7 %), step 2 (rank
+  memo, bench a further −26 %; offline rank calls −77 %, hit rate 63 %/95.6 % by
+  epoch). All byte-neutral, mutant-verified, suite 1828 green. **NOT deployed** —
+  live replicas still run the P1-only image from 2026-08-28 19:11.
+- Residue: devices 0 (verified), OpenSearch `mlx-` docs 0 (10.2 M purged via
+  async task; harness OS purge now async+count-verified `42d04cc0`).
+- NEXT (needs owner in-session for the deploy): rebuild `correlation` image →
+  `up -d --no-deps --scale correlation=2 correlation` with
+  `CORR_PROFILE_STAGES=1` → verify `rank_memo` marker in BOTH replicas → run
+  `scale-miniladder.py --profile t-nominal-2.5k --devices 2500 --eps 1000` TO THE
+  COMPLETION GATE (do not interrupt; harness now survives SIGHUP) → clean-scope
+  TTUR compare vs OLD `08281519gjez` and P1 `p1-on-08281911` (exclude aggregate
+  cid `bb1e46d6…`). Then decide step 3 (VVR) / step 4 (Evidence queue).
+- `test_loop_yield_resilience::test_reconciliation_loop_yields_under_single_tenant_storm`
+  is CPU-contention-flaky when another suite runs on the box (passes 3/3 alone).

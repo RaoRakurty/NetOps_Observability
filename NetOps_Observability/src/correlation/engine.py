@@ -49,6 +49,7 @@ from path_graph import (
     topology_link_relation,
     worst_data_class,
 )
+from rank_memo import RankMemo, rank_key
 from scoring import RankingResult, rank
 from signals import SIGNAL_NS, EntityType, Severity, Signal, Source
 from verdicts import Verdict as GateVerdict
@@ -2703,6 +2704,7 @@ def run_window(
     carried_edges: tuple[Edge, ...] = (),
     prep: WindowPrep | None = None,
     memo: ComponentMemo | None = None,
+    rank_memo: RankMemo | None = None,
 ) -> list[ObjectSnapshot]:
     """THE pure engine function. One evaluation of one tenant's window.
 
@@ -2732,6 +2734,17 @@ def run_window(
     EVERY component is touched, so the memo is never consulted and those paths are
     byte-for-byte unchanged. `memo=None` (the default, and CORR_COHORT_TOUCH_GATE=0)
     is exact pre-P1 behaviour.
+
+    `rank_memo` is the caller-owned, PROCESS-lifetime level-1 memo (P2 step 2,
+    `rank_memo.py`): a component whose evidence PROJECTION matches one already
+    ranked — in this cohort, an earlier cohort, or an earlier epoch — skips
+    `rank` and reuses its `RankingResult`. Everything else still runs: the
+    snapshot is materialized for THIS epoch, and the tie-break / verdict caps /
+    unknown-hop amendment are applied to the reused result exactly as they are
+    to a fresh one. Gated exactly like the level-2 memo: `cohort_keys is None`
+    (golden wire, replay, tests) never consults it, so those paths stay
+    byte-for-byte unchanged. `rank_memo=None` (the default, CORR_RANK_MEMO=0 and
+    CORR_COHORT_TOUCH_GATE=0) is exact pre-P2 behaviour.
     """
     cfg = cfg or EngineConfig()
     # tracker 166 Phase 2/5 — the whole prologue below (sort, tenant check,
@@ -2860,9 +2873,30 @@ def run_window(
                     continue
             memo.misses += 1
         comp_sigs = tuple(s for n in comp for s in n.signals)
+        # ── P2 step 2: the level-1 cross-epoch rank memo (spec §3) ────────────
+        # `rank` is 31.8 % of cohort wall and is a pure function of the
+        # evidence's kinds/entities/authorities and the catalog — never of the
+        # signal INSTANCES. `rank_memo.rank_key` is exactly those inputs
+        # (enumerated, with file:line refs, in that module's docstring), so a
+        # component that re-appears in a later cohort or a later EPOCH with the
+        # same evidence projection reuses its RankingResult instead of
+        # re-scoring the whole catalog. The snapshot below is still built from
+        # THIS epoch's nodes and edges; only the scoring is skipped.
+        base_ranking: RankingResult | None = None
+        rkey: str | None = None
+        if rank_memo is not None and cohort_keys is not None:
+            rkey = rank_key(tenant, catalog.version_hash(), comp_sigs)
+            if rkey is None:
+                rank_memo.unkeyable += 1     # fail-closed, never silent
+            else:
+                base_ranking = rank_memo.get(rkey)
+        if base_ranking is None:
+            base_ranking = rank(catalog, comp_sigs)
+            if rank_memo is not None and rkey is not None:
+                rank_memo.put(rkey, base_ranking)
         # Tracker 154a: grounded-seam-type affinity breaks equal-confidence ties.
         ranking = _break_ties_by_seam_affinity(
-            rank(catalog, comp_sigs), comp_edges, seams, tenant)
+            base_ranking, comp_edges, seams, tenant)
         # ── contract gates on the verdict (never on the edge's existence) ─────
         # §1: synthetic/replay/lab evidence may support, contradict or illustrate —
         # it can NEVER produce a customer-confirmed verdict.

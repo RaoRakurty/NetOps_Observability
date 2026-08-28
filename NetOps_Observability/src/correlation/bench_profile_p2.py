@@ -440,6 +440,10 @@ async def sweep(args) -> dict:
             load(extra)
             seq += args.arrivals
         t_epoch = time.perf_counter()
+        # P2 step 2: the LEVEL-1 rank memo is process-lifetime, so its counters
+        # are read as per-epoch DELTAS (the level-2 ComponentMemo's are already
+        # per-epoch by construction).
+        rm_before = dict(main.rank_memo_stats())
         t0 = time.perf_counter()
         epoch = await main._begin_epoch(now + timedelta(seconds=60 * e))
         prep_s = time.perf_counter() - t0
@@ -498,8 +502,19 @@ async def sweep(args) -> dict:
         await main._epoch_lifecycle(epoch, main._make_loop_yield()[0])
         life_s = time.perf_counter() - t0
         memo = epoch.memos.get("global")
+        rm_after = main.rank_memo_stats()
+        rm_d = {k: rm_after[k] - rm_before.get(k, 0)
+                for k in ("hits", "misses", "evicted", "unkeyable")}
+        rm_lookups = rm_d["hits"] + rm_d["misses"]
         per_epoch.append({
             "epoch": e + 1,
+            # ── level-1 (rank) memo, this epoch ─────────────────────────────
+            "rank_memo_hits": rm_d["hits"],
+            "rank_memo_misses": rm_d["misses"],
+            "rank_memo_evicted": rm_d["evicted"],
+            "rank_memo_unkeyable": rm_d["unkeyable"],
+            "rank_memo_entries": rm_after["entries"],
+            "rank_memo_hit_share": round(rm_d["hits"] / max(1, rm_lookups), 4),
             "prep_s": round(prep_s, 3),
             "lifecycle_s": round(life_s, 3),
             "epoch_wall_s": round(time.perf_counter() - t_epoch, 3),
@@ -724,6 +739,12 @@ def main_cli() -> int:
               f"nodes={e['nodes']} components={e['components_total']} "
               f"touched={e['touched_total']} hits={e['memo_hits_total']} "
               f"ranked={e['ranked_total']} open={e['open_objects']}")
+        print(f"          level-1 rank memo: hits={e['rank_memo_hits']} "
+              f"misses={e['rank_memo_misses']} "
+              f"hit_share={e['rank_memo_hit_share']} "
+              f"entries={e['rank_memo_entries']} "
+              f"evicted={e['rank_memo_evicted']} "
+              f"unkeyable={e['rank_memo_unkeyable']}")
 
     if args.cprofile:
         print("\n" + _cprofile_run_window(args))
