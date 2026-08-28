@@ -21,7 +21,17 @@ Design: `TROUBLESHOOTING_PROTOCOL_DIAGNOSTICS_2026-08-27.md` (owner spec).
   Juniper/Nokia declarative via netconcepts; Collect w/ read-only guard
   (fail-closed) + CommandRunner iface (SSH/gNMI wiring = TODO deploy); Analyze
   signatures (fail-closed, no invented cause); redaction + TAC export.
-- [ ] Wire protocoldiag → HTTP API (handlers, §3a) + the frontend tabs/buttons UI.
+- [x] **HTTP API wired + Fable-verified** (`e520a0b7`, 2026-08-28) — 3 handlers
+  under `/api/troubleshoot/protocol-diagnostics/{catalog,analyze,collect}`;
+  catalog/analyze `requirePerm(infrastructure,Read)`, collect `…Write`. §3a:
+  collect resolves device via `canSeeDevice` → cross-tenant/unknown = 404, tenant
+  stamped from device not body; analyze request-scoped, tenant from token.
+  Fail-closed: collect w/o CommandRunner → 503 (no fake capture), analyze bounds
+  body (MaxBytesReader) + honest "no signature matched". 11 tests incl. cross-org
+  isolation all pass; build/vet/staticcheck/gosec/govulncheck clean (−race is
+  CI-only — no C compiler locally; handlers race-safe by construction).
+- [ ] **Frontend tabs/buttons UI** — the protocol tabs (BGP/OSPF/IS-IS) + the
+  collect/analyze/send-to-TAC buttons against the API above. (Needs deploy to verify.)
 
 ## C. IRIS enhancement (item 8) — 📐 roadmap PRODUCED 2026-08-28
 `docs/design/IRIS_ENHANCEMENT_ROADMAP_2026-08-28.md` — extends the existing HLD
