@@ -1880,6 +1880,18 @@ class ObjectSnapshot:
         return [e.to_typed_row(self.tenant_id, self.correlation_id, version)
                 for e in self.edges]
 
+    def typed_edge_row_page(self, version: int, start: int, stop: int) -> list[dict]:
+        """A bounded [start:stop) page of to_typed_edge_rows, in the SAME order.
+
+        The P0 boundedness pass (docs/scale/ENGINE_DECISION_2026-08-28.md #1/#2)
+        emits the child rows of a storm object in bounded pages so no single
+        synchronous serialize step scales with the whole (up to ~180k-edge)
+        object. Concatenating every page reproduces to_typed_edge_rows exactly —
+        this is a pure slice of the SAME per-edge builder, not a second one, so
+        row bytes and order are identical (pinned by test_bounded_object_paging)."""
+        return [e.to_typed_row(self.tenant_id, self.correlation_id, version)
+                for e in self.edges[start:stop]]
+
     def hypotheses_blob(self) -> str:
         """The corr_objects.hypotheses JSON: the ranking PLUS the grounding
         context — replay rehydrates seams from here, never from live state."""
@@ -2046,40 +2058,78 @@ class ObjectSnapshot:
     def to_edge_rows(self, version: int) -> list[dict]:
         return [e.to_ch_row(self.tenant_id, self.correlation_id, version) for e in self.edges]
 
+    def edge_row_page(self, version: int, start: int, stop: int) -> list[dict]:
+        """A bounded [start:stop) page of to_edge_rows, same order (P0 boundedness
+        pass — see typed_edge_row_page). Concatenating every page reproduces
+        to_edge_rows byte-for-byte (same per-edge builder, just sliced)."""
+        return [e.to_ch_row(self.tenant_id, self.correlation_id, version)
+                for e in self.edges[start:stop]]
+
+    def _edge_evidence_row(self, e: Edge, version: int) -> dict:
+        """The single corr_evidence row for one edge. Factored out (from
+        to_evidence_rows) so the monolithic builder and the paged builder
+        (evidence_row_page) share ONE source of truth — the paged path cannot
+        drift from the byte-exact row the replay/golden suites pin."""
+        return {
+            "tenant_id": self.tenant_id,
+            "correlation_id": self.correlation_id,
+            "version": version,
+            "subject_kind": "edge",
+            "subject_id": f"{e.from_node}->{e.to_node}",
+            "signal_id": str(uuid.UUID(int=0)),
+            "role": "supports",
+            "note": (f"grounded {e.grounding.kind}:{e.grounding.ref} "
+                     f"w={e.weight:.2f} (t={e.w_temporal:.2f} topo={e.w_topo:.2f} "
+                     f"r={e.w_reinforce:.2f}) dir={e.direction_basis}"),
+        }
+
+    def _identity_evidence_row(self, s: Signal, version: int) -> dict:
+        """The single corr_evidence row for one fused app-identity (#81 P5).
+        Factored out alongside _edge_evidence_row — same single-source rationale."""
+        attrs = s.attrs if isinstance(s.attrs, dict) else {}
+        srcs = ",".join(str(x) for x in (attrs.get("sources") or [])) or "n/a"
+        return {
+            "tenant_id": self.tenant_id,
+            "correlation_id": self.correlation_id,
+            "version": version,
+            "subject_kind": "app",
+            "subject_id": s.entity_id,
+            "signal_id": str(s.signal_id),
+            "role": "supports",
+            "note": (f"application identity: {s.entity_id} "
+                     f"band={attrs.get('band', '')} state={attrs.get('state', '')} "
+                     f"via {srcs}"),
+        }
+
+    def evidence_row_count(self) -> int:
+        """Total corr_evidence rows this snapshot emits — the paging bound for
+        evidence_row_page (one row per edge, then one per fused app-identity)."""
+        return len(self.edges) + len(self.identity_signals)
+
     def to_evidence_rows(self, version: int) -> list[dict]:
-        rows = []
-        for e in self.edges:
-            rows.append({
-                "tenant_id": self.tenant_id,
-                "correlation_id": self.correlation_id,
-                "version": version,
-                "subject_kind": "edge",
-                "subject_id": f"{e.from_node}->{e.to_node}",
-                "signal_id": str(uuid.UUID(int=0)),
-                "role": "supports",
-                "note": (f"grounded {e.grounding.kind}:{e.grounding.ref} "
-                         f"w={e.weight:.2f} (t={e.w_temporal:.2f} topo={e.w_topo:.2f} "
-                         f"r={e.w_reinforce:.2f}) dir={e.direction_basis}"),
-            })
+        rows = [self._edge_evidence_row(e, version) for e in self.edges]
         # #81 P5: one explainable supporting-evidence row per fused identity that
         # named an affected app — carrying the REAL identity signal_id (provenance)
         # and its band/state/sources. role=supports: it supports the app-impact claim.
-        for s in self.identity_signals:
-            attrs = s.attrs if isinstance(s.attrs, dict) else {}
-            srcs = ",".join(str(x) for x in (attrs.get("sources") or [])) or "n/a"
-            rows.append({
-                "tenant_id": self.tenant_id,
-                "correlation_id": self.correlation_id,
-                "version": version,
-                "subject_kind": "app",
-                "subject_id": s.entity_id,
-                "signal_id": str(s.signal_id),
-                "role": "supports",
-                "note": (f"application identity: {s.entity_id} "
-                         f"band={attrs.get('band', '')} state={attrs.get('state', '')} "
-                         f"via {srcs}"),
-            })
+        rows.extend(self._identity_evidence_row(s, version)
+                    for s in self.identity_signals)
         return rows
+
+    def evidence_row_page(self, version: int, start: int, stop: int) -> list[dict]:
+        """A bounded [start:stop) page over the logical evidence sequence — every
+        edge row (indices [0, len(edges))) then every app-identity row — in the
+        SAME order as to_evidence_rows. Concatenating every page reproduces
+        to_evidence_rows byte-for-byte (P0 boundedness pass, single-source
+        builders). `stop` is clamped to evidence_row_count() by the caller."""
+        ne = len(self.edges)
+        out: list[dict] = []
+        for i in range(start, stop):
+            if i < ne:
+                out.append(self._edge_evidence_row(self.edges[i], version))
+            else:
+                out.append(self._identity_evidence_row(
+                    self.identity_signals[i - ne], version))
+        return out
 
 
 def _ch_dt(dt: datetime) -> int:

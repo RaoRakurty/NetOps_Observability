@@ -2256,6 +2256,38 @@ CORR_ARCHIVE_CHUNK_ROWS = int(os.environ.get("CORR_ARCHIVE_CHUNK_ROWS", "10000")
 CORR_OFFLOAD_MIN_ELEMENTS = int(os.environ.get("CORR_OFFLOAD_MIN_ELEMENTS", "2000"))
 
 
+# ── P0 boundedness pass (docs/scale/ENGINE_DECISION_2026-08-28.md #1/#2) ──────
+#
+# Even OFFLOADED, building a storm object's child rows (typed/untyped edges +
+# evidence) as ONE list and issuing ONE insert made a single synchronous work
+# unit whose C serialize tracked the whole object — an object's EDGE count can
+# reach ~180k, and the C json encoder holds the GIL through long stretches, so
+# the executor thread frees the loop thread yet the heartbeat still starves for
+# a slice proportional to the call. That is the residual hot-shard stall (the
+# 17.7s / 6.2s-class number in the profiling doc). content_hash/material_hash
+# (the replay pin) were already made GIL-yielding via _streaming_json_digest16
+# (Lever 3) and are NOT touched here — this bounds only ROW EMISSION.
+#
+# The child rows now emit in BOUNDED PAGES (_emit_child_rows): each page builds
+# at most CORR_ROW_PAGE_SIZE rows (offloaded for a big object → no page's
+# C-serialize holds the GIL long), the loop is yielded between pages, and pages
+# accumulate into DB batches of at least CORR_ROW_BATCH_ROWS so ClickHouse still
+# receives healthy multi-thousand-row inserts (constraint: never tiny per-row
+# writes; batch >= 1000). "Bounded synchronous serialize" and "efficient DB
+# batch" are DELIBERATELY separate knobs — pages feed the batch, they do not
+# replace it. The parent row (corr_objects) already carries only the bounded
+# decision/summary/counts + the top-K representative hypotheses; the full
+# evidence/edges live in these paged child rows, keyed exactly as the parent by
+# (tenant_id, correlation_id, version) — tenant scope (§3a) is unchanged.
+CORR_ROW_PAGE_SIZE = max(1, int(os.environ.get("CORR_ROW_PAGE_SIZE", "2000")))
+# DB batch floor: pages accumulate up to this before a flush, so the writer
+# still batches (>= the 1000-row floor, default 20k → ~0.3s offloaded body, well
+# under the 500ms work-unit target and inside the "ideally 10k-100k" band).
+# Clamped to be >= the page size so a batch is always at least one whole page.
+CORR_ROW_BATCH_ROWS = max(
+    CORR_ROW_PAGE_SIZE, int(os.environ.get("CORR_ROW_BATCH_ROWS", "20000")))
+
+
 # ── tracker 166: bounded correlation transactions ────────────────────────────
 #
 # THE DEFECT. The engine loop is already single-flight — `await engine_cycle();
@@ -3254,8 +3286,64 @@ def _archive_slice(snap: ObjectSnapshot, window: Sequence[Signal]) -> list[Signa
     return keep
 
 
+async def _noop_yield() -> None:
+    """Default loop-yield for _persist_snapshot callers outside engine_cycle's
+    per-cycle budget (e.g. tests). engine_cycle passes its real `_loop_yield`."""
+    return
+
+
+async def _emit_child_rows(table: str, snap: ObjectSnapshot, build_page,
+                           total_rows: int, version: int, token: str,
+                           loop_yield=_noop_yield) -> None:
+    """Emit a size-unbounded child-row stream (edges / typed edges / evidence) in
+    BOUNDED pages (P0 boundedness pass — ENGINE_DECISION_2026-08-28 #1/#2).
+
+    `build_page(version, start, stop) -> list[dict]` returns the [start:stop) page
+    in the object's canonical order; concatenating every page reproduces the old
+    monolithic to_*_rows() output byte-for-byte (pinned by test_bounded_object_
+    paging). Each page is built OFF the event loop for a big object (so no page's
+    C serialize holds the GIL across the whole storm), the loop is yielded between
+    pages, and pages accumulate into DB batches of >= CORR_ROW_BATCH_ROWS so
+    ClickHouse keeps receiving healthy multi-thousand-row inserts rather than tiny
+    per-row writes. Every batch carries its OWN dedup token (…:<seq>) so a retry
+    cannot duplicate a row and ClickHouse's per-token dedup never collapses two
+    distinct batches into one (§H13 idempotency, extended to the paged path — the
+    seq is deterministic in page order, hence stable across a replay of the same
+    (cid, version, state, content)). Tenant scope (§3a) is unchanged: every row
+    is stamped from `snap` by the builder, exactly as the parent row is."""
+    if total_rows <= 0:
+        return
+    big = _snap_elements(snap) >= CORR_OFFLOAD_MIN_ELEMENTS
+    batch: list[dict] = []
+    seq = 0
+    start = 0
+
+    async def _flush() -> None:
+        nonlocal batch, seq
+        await ch_insert(table, batch, dedup_token=f"{token}:{seq}",
+                        corr_id=snap.correlation_id, version=version,
+                        tenant=snap.tenant_id, row_count=len(batch))
+        seq += 1
+        batch = []
+
+    while start < total_rows:
+        stop = min(start + CORR_ROW_PAGE_SIZE, total_rows)
+        # Bounded synchronous serialize: one page's worth of rows, offloaded for a
+        # big object so the C encoder's GIL hold is a page, never the whole object.
+        page = (await _offload(build_page, version, start, stop)
+                if big else build_page(version, start, stop))
+        batch.extend(page)
+        start = stop
+        if len(batch) >= CORR_ROW_BATCH_ROWS:
+            await _flush()
+        await loop_yield()
+    if batch:
+        await _flush()
+
+
 async def _persist_snapshot(snap: ObjectSnapshot, version: int, state: str,
-                            window: Sequence[Signal], merged_into: str = "") -> None:
+                            window: Sequence[Signal], merged_into: str = "",
+                            loop_yield=_noop_yield) -> None:
     assert ch is not None
     # P1 (1000-device scale): every serializer below is offloaded for a large
     # graph — see _offload. On the live 48,375-edge object these four calls plus
@@ -3304,26 +3392,25 @@ async def _persist_snapshot(snap: ObjectSnapshot, version: int, state: str,
             snap.tenant_id, snap.correlation_id, version,
             await _snap_call(snap, snap.material_hash), retryable, err,
         )
-    edge_rows = await _snap_call(snap, snap.to_edge_rows, version)
-    if edge_rows:
-        await ch_insert("netops.corr_edges", edge_rows,
-                        dedup_token=f"{tok}:edges",
-                        corr_id=snap.correlation_id, version=version)
-        # Contract §5: the typed edge + its evidence block (edge_type, method, rank,
-        # evidence_class, evidence_ref, observation_method, confidence, observed_at,
-        # data_class). corr_edges' frozen Enum8 grounding_kind cannot express these and
-        # grounding_ref is NOT overloaded to smuggle them — they go to their own table
-        # once the backend migration lands (CORR_EDGES_V2). Until then they are still
-        # emitted: embedded in the snapshot's grounding context (replay-safe) and served
-        # from there.
-        if CORR_EDGES_V2:
-            await ch_insert(CORR_PATH_EDGES_TABLE,
-                            await _snap_call(snap, snap.to_typed_edge_rows, version))
-    ev_rows = await _snap_call(snap, snap.to_evidence_rows, version)
-    if ev_rows:
-        await ch_insert("netops.corr_evidence", ev_rows,
-                        dedup_token=f"{tok}:evidence",
-                        corr_id=snap.correlation_id, version=version)
+    # P0 boundedness pass: the edge/evidence child rows scale with the storm's
+    # edge count (~180k worst case), so they are emitted in bounded pages (see
+    # _emit_child_rows) — no single synchronous serialize+insert step tracks the
+    # whole object, and the loop is yielded between pages.
+    await _emit_child_rows("netops.corr_edges", snap, snap.edge_row_page,
+                           len(snap.edges), version, f"{tok}:edges", loop_yield)
+    # Contract §5: the typed edge + its evidence block (edge_type, method, rank,
+    # evidence_class, evidence_ref, observation_method, confidence, observed_at,
+    # data_class). corr_edges' frozen Enum8 grounding_kind cannot express these and
+    # grounding_ref is NOT overloaded to smuggle them — they go to their own table
+    # once the backend migration lands (CORR_EDGES_V2). Until then they are still
+    # emitted: embedded in the snapshot's grounding context (replay-safe) and served
+    # from there.
+    if CORR_EDGES_V2:
+        await _emit_child_rows(CORR_PATH_EDGES_TABLE, snap, snap.typed_edge_row_page,
+                               len(snap.edges), version, f"{tok}:typed_edges", loop_yield)
+    await _emit_child_rows("netops.corr_evidence", snap, snap.evidence_row_page,
+                           snap.evidence_row_count(), version, f"{tok}:evidence",
+                           loop_yield)
     # Stage [8] archive: a BOUNDED, node-complete slice of the tenant window
     # (see _archive_slice — replay-exact for THIS object, no longer the whole
     # 50k-floor tenant window per object version). Slices stay version-scoped:
@@ -3655,7 +3742,7 @@ async def _engine_cycle_inner(epoch: _EngineEpoch | None) -> None:
                     "last_seen": now, "last_persist": now, "snapshot": snap,
                     "opened_at": now,  # #101: max_incident_age in the write-amp rollup
                 }
-                await _persist_snapshot(snap, 1, "open", window)
+                await _persist_snapshot(snap, 1, "open", window, loop_yield=_loop_yield)
                 VERSIONS_PERSISTED += 1
                 _wa_note_outcome(tenant, "persisted")
             elif reg["hash"] != chash:
@@ -3670,7 +3757,7 @@ async def _engine_cycle_inner(epoch: _EngineEpoch | None) -> None:
                         or elapsed >= CORR_VERSION_HEARTBEAT_S):
                     reg["version"] += 1
                     reg["last_persist"] = now
-                    await _persist_snapshot(snap, reg["version"], "open", window)
+                    await _persist_snapshot(snap, reg["version"], "open", window, loop_yield=_loop_yield)
                     VERSIONS_PERSISTED += 1
                     _wa_note_outcome(tenant, "persisted")
                 else:
@@ -3710,7 +3797,7 @@ async def _engine_cycle_inner(epoch: _EngineEpoch | None) -> None:
         reg["version"] += 1
         VERSIONS_PERSISTED += 1
         _wa_note_outcome(reg["snapshot"].tenant_id, "persisted")
-        await _persist_snapshot(reg["snapshot"], reg["version"], "merged", [], merged_into=survivor_cid)
+        await _persist_snapshot(reg["snapshot"], reg["version"], "merged", [], merged_into=survivor_cid, loop_yield=_loop_yield)
         log.info("corr-object %s merged into %s (split-brain de-duplicated)",
                  merged_cid[:8], survivor_cid[:8])
         del OPEN_OBJECTS[merged_cid]
@@ -3727,7 +3814,7 @@ async def _engine_cycle_inner(epoch: _EngineEpoch | None) -> None:
             reg["version"] += 1
             VERSIONS_PERSISTED += 1
             _wa_note_outcome(reg["snapshot"].tenant_id, "persisted")
-            await _persist_snapshot(reg["snapshot"], reg["version"], "closed", [])
+            await _persist_snapshot(reg["snapshot"], reg["version"], "closed", [], loop_yield=_loop_yield)
             del OPEN_OBJECTS[cid]
             _ARCHIVE_SLICE_HASH.pop(cid, None)
 
@@ -3752,7 +3839,7 @@ async def _engine_cycle_inner(epoch: _EngineEpoch | None) -> None:
             VERSIONS_PERSISTED += 1
             OPEN_OBJECTS_FORCE_CLOSED += 1
             _wa_note_outcome(reg["snapshot"].tenant_id, "persisted")
-            await _persist_snapshot(reg["snapshot"], reg["version"], "closed", [])
+            await _persist_snapshot(reg["snapshot"], reg["version"], "closed", [], loop_yield=_loop_yield)
             del OPEN_OBJECTS[cid]
             _ARCHIVE_SLICE_HASH.pop(cid, None)
         mono = time.monotonic()
