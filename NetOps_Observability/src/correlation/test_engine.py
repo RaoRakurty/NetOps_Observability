@@ -529,3 +529,87 @@ def test_degradation_changes_content_hash_so_a_transition_versions():
     healthy = run_window(golden_window(), builtin_catalog(), (DALLAS_SEAM,))[0]
     degraded = run_window(golden_window(), builtin_catalog(), (DALLAS_SEAM,), topology_stale=True)[0]
     assert healthy.content_hash() != degraded.content_hash()  # a real state change → new version
+
+
+# ── Lever 3 (2026-08-28): content_hash/material_hash chunk-serialize the storm
+# object so the C json encoder never holds the GIL across the whole 180k-edge
+# graph (the offloaded-but-still-starves-the-heartbeat stall). The digest is the
+# replay pin AND the damping change-detector, so it MUST stay byte-for-byte
+# identical to the old monolithic json.dumps + sha256[:16]. These tests pin that
+# against an INLINE reference computed the old way, independently of engine.py.
+# ─────────────────────────────────────────────────────────────────────────────
+
+import hashlib as _hashlib
+import json as _json
+
+from engine import _streaming_json_digest16
+
+
+def _monolithic_digest16(blob: dict) -> str:
+    """The pre-change digest, recomputed inline so the pin is independent."""
+    return _hashlib.sha256(
+        _json.dumps(blob, separators=(",", ":"), sort_keys=True).encode()
+    ).hexdigest()[:16]
+
+
+def test_streaming_digest_byte_identical_across_shapes():
+    """The helper reproduces json.dumps' exact byte stream for every shape the
+    two hashers feed it: empty, list-of-str, list-of-dict (content_hash edges),
+    list-of-list with bool/int (material_hash edges/ranking), unicode, and
+    non-ascii keys/values (ensure_ascii escaping)."""
+    blobs = [
+        {},
+        {"engine": "corr-1.2.3"},
+        {"a": [], "b": [], "z": "end"},                       # empty lists
+        {"nodes": [f"dev-{i}:eth{i % 48}" for i in range(2000)],  # big str list
+         "engine": "v1"},
+        {"edges": [{"to_node": f"d{i}", "from_node": f"s{i}", "weight": round(i * 0.1, 4),
+                    "grounding_kind": "adjacency", "direction_basis": "topology"}
+                   for i in range(3000)],                     # content_hash shape
+         "hypotheses": '{"ranking":{"top":"x"}}', "engine": "v1"},
+        {"edges": sorted([[f"s{i}", f"d{i}", "seam", "topology"] for i in range(1500)]),
+         "ranking": [["tmpl-a", "high", True, "net-eng"],     # list-of-list + bool
+                     ["tmpl-b", "low", False, "app-eng"]],
+         "verdict": ["tmpl-a", "confirmed"], "engine": "v1"},
+        {"unicode": ["café", "naïve", "日本語", "emoji-😀", "quote\"back\\slash"],
+         "keys-café": ["x"], "engine": "v1"},                 # non-ascii keys + values
+        # Exactly a chunk-boundary-sized list (512) and one past it.
+        {"e": list(range(512)), "f": list(range(513)), "g": ["last"]},
+    ]
+    for blob in blobs:
+        got = _streaming_json_digest16(blob)
+        want = _monolithic_digest16(blob)
+        assert got == want, f"digest moved for {list(blob)}: {got} != {want}"
+
+
+def test_content_hash_material_hash_byte_identical_to_monolithic():
+    """On a REAL grounded snapshot, content_hash and material_hash equal the
+    old monolithic-json.dumps digest byte-for-byte — the replay pin and the
+    damping gate did not move."""
+    snap = run_window(golden_window(), builtin_catalog(), (DALLAS_SEAM,))[0]
+    assert snap.edges, "fixture must have edges or it proves nothing"
+
+    # Reconstruct the content_hash blob exactly as engine.py builds it, hash it
+    # the OLD way, and require the live method to match.
+    content_blob = {
+        "nodes": [n.key for n in snap.nodes],
+        "signals": sorted(str(s.signal_id) for n in snap.nodes for s in n.signals),
+        "edges": [e.to_ch_row("", "", 0) for e in snap.edges],
+        "hypotheses": snap.hypotheses_blob(),
+        "engine": snap.engine_ver,
+    }
+    assert snap.content_hash() == _monolithic_digest16(content_blob)
+
+    r = snap.ranking
+    material_blob = {
+        "nodes": [n.key for n in snap.nodes],
+        "evidence": sorted({f"{n.key}|{s.kind}|{s.severity.value}"
+                            for n in snap.nodes for s in n.signals}),
+        "edges": sorted([e.from_node, e.to_node, e.grounding.kind, e.direction_basis]
+                        for e in snap.edges),
+        "ranking": [[h.template_id, h.confidence_label(), h.contradicted, h.owner]
+                    for h in r.hypotheses],
+        "verdict": [r.top_hypothesis, r.verdict_tier.value],
+        "engine": snap.engine_ver,
+    }
+    assert snap.material_hash() == _monolithic_digest16(material_blob)

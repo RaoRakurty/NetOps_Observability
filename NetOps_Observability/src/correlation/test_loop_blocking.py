@@ -257,3 +257,86 @@ def test_watchdog_counters_are_on_healthz():
     d = payload["durability"]
     for key in ("loop_lag_stalls", "loop_lag_max_ms", "loop_lag_ms"):
         assert key in d, f"/healthz must expose {key}"
+
+
+# ── Lever 3 (2026-08-28): the C json.dumps GIL-hold ───────────────────────────
+#
+# The prior fix routed content_hash/material_hash through main._offload, freeing
+# the LOOP THREAD. But a single monolithic json.dumps over a 180k-edge object
+# holds the GIL through its C loop for the whole ~1.4s encode, so the offloaded
+# thread starves the loop's heartbeat coroutine ANYWAY (measured gap ~1.4s). The
+# fix chunk-serializes the big lists in a Python loop, handing the GIL back at
+# the interpreter's switch interval between chunks. This test proves the loop
+# stays alive at storm scale — it FAILS against the old monolithic digest.
+
+import hashlib as _hashlib
+import json as _json
+
+from engine import _streaming_json_digest16
+
+_HB_EDGES = 120_000
+
+
+def _storm_content_blob() -> dict:
+    """The exact shape ObjectSnapshot.content_hash() feeds the digest, at a
+    storm edge count — synthetic so the test stays fast, but byte-for-byte the
+    same encode path (dicts with sorted keys, rounded floats, str lists)."""
+    return {
+        "nodes": [f"dev-{i}:eth{i % 48}" for i in range(600)],
+        "signals": sorted(f"sig-{i:08x}" for i in range(600 * 20)),
+        "edges": [{
+            "tenant_id": "", "correlation_id": "", "version": 0,
+            "from_node": f"dev-{i % 600}:eth{i % 48}",
+            "to_node": f"dev-{(i * 7) % 600}:eth{(i * 3) % 48}",
+            "grounding_kind": "adjacency", "grounding_ref": f"link-{i % 9000}",
+            "weight": round(0.1234 + (i % 10) * 0.01, 4), "w_temporal": round(0.5, 4),
+            "w_topo": round(0.25, 4), "w_reinforce": round(0.125, 4),
+            "direction_conf": round(0.9, 4), "direction_basis": "topology",
+        } for i in range(_HB_EDGES)],
+        "hypotheses": '{"ranking":{"top":"x"},"ctx":{"seams":["a","b"]}}',
+        "engine": "corr-1.2.3",
+    }
+
+
+def _monolithic_digest16(blob: dict) -> str:
+    return _hashlib.sha256(
+        _json.dumps(blob, separators=(",", ":"), sort_keys=True).encode()
+    ).hexdigest()[:16]
+
+
+def test_object_hash_chunking_keeps_the_heartbeat_alive_under_a_storm():
+    """The whole point of Lever 3: hashing a 120k-edge object off the loop must
+    NOT starve the heartbeat, even though the C json encoder holds the GIL. The
+    chunked digest keeps the loop scheduling gap a small fraction of the work;
+    the monolithic encoder (the defect) freezes it for essentially the whole
+    call. Asserted as a RATIO so it holds on a slow CI runner."""
+    blob = _storm_content_blob()
+
+    # Byte-identity guard travels WITH the liveness claim: a fix that broke the
+    # digest to go fast would be worthless.
+    assert _streaming_json_digest16(blob) == _monolithic_digest16(blob), \
+        "chunked digest is not byte-identical to the monolithic reference"
+
+    async def chunked():
+        await asyncio.get_running_loop().run_in_executor(
+            None, _streaming_json_digest16, blob)
+
+    async def monolithic():
+        await asyncio.get_running_loop().run_in_executor(
+            None, _monolithic_digest16, blob)
+
+    worst_mono, dur_mono = asyncio.run(_worst_lag_while(monolithic))
+    worst_chunk, dur_chunk = asyncio.run(_worst_lag_while(chunked))
+
+    # The monolithic C encoder holds the GIL through the whole encode: the loop
+    # is frozen for most of the call (this is the regression the fix removes).
+    assert worst_mono > dur_mono * 0.4, (
+        f"the monolithic baseline should freeze the loop (stall={worst_mono:.2f}s "
+        f"of {dur_mono:.2f}s) — if it does not, _HB_EDGES is too small to measure")
+    # Chunked: the loop keeps running — a small fraction of the work overlaps.
+    assert worst_chunk < dur_chunk * 0.15, (
+        f"chunked hashing still froze the loop for {worst_chunk:.2f}s of "
+        f"{dur_chunk:.2f}s — the GIL is still held across the encode")
+    # And strictly, dramatically better than the monolithic path it replaces.
+    assert worst_chunk < worst_mono, (
+        f"chunking did not reduce the stall: {worst_chunk:.2f}s vs {worst_mono:.2f}s")

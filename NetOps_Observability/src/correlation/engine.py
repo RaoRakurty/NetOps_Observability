@@ -1534,6 +1534,90 @@ def build_edges(
 # ── snapshots ─────────────────────────────────────────────────────────────────
 
 
+# Serialize-and-hash the big top-level lists a CHUNK at a time so the C json
+# encoder never holds the GIL across the whole (100k+ edge) storm object.
+#
+# WHY (profiled 2026-08-28, Lever 3): content_hash/material_hash are OFFLOADED to
+# a worker thread, but a single monolithic `json.dumps` over a 180k-edge object
+# holds the GIL through its C loop for the entire ~1.4s encode — so the loop
+# thread's aiokafka heartbeat coroutine cannot be scheduled and the broker
+# expires the session (measured heartbeat gap ~1.4s inline; several concurrent →
+# the 15.7s worst-case loop stall). Encoding each list in Python-level chunks
+# hands the GIL back at the interpreter's switch interval between chunks, so the
+# heartbeat runs (measured gap ~16ms at chunk=512, wall unchanged vs the
+# monolithic path). A ProcessPool alternative was rejected: its INPUT pickle of
+# the large object holds the GIL on the loop thread just as long (measured gap
+# ~611ms).
+#
+# BYTE-IDENTITY (NON-NEGOTIABLE — this is the replay pin AND the damping
+# change-detector): the output MUST equal
+#     sha256(json.dumps(blob, separators=(",",":"), sort_keys=True).encode())
+#             .hexdigest()[:16]
+# byte-for-byte, or replay drifts and every open object re-versions once on
+# deploy. It does: every element is encoded by the SAME C `json.dumps` with the
+# same separators/sort_keys, and a chunk of a list is that list's own
+# `json.dumps` with its outer `[`/`]` stripped — so the reproduced stream (outer
+# braces, sorted `"key":` pairs, `,` element separators, `[`/`]`, each element's
+# own encoding) is identical to the monolithic encoder's. Pinned by the
+# byte-identical digest tests in test_engine.py against an inline reference.
+_DIGEST_CHUNK = 512
+
+
+def _streaming_json_digest16(blob: dict) -> str:
+    h = hashlib.sha256()
+    buf = bytearray()
+    _FLUSH = 1 << 16  # flush at 64 KiB — above hashlib's GIL-release threshold,
+    #                   so the C digest update yields too, and amortizes update().
+
+    def emit(s: str) -> None:
+        buf.extend(s.encode())
+        if len(buf) >= _FLUSH:
+            h.update(buf)
+            buf.clear()
+
+    def emit_bytes(b: bytes) -> None:
+        buf.extend(b)
+        if len(buf) >= _FLUSH:
+            h.update(buf)
+            buf.clear()
+
+    first_key = True
+    emit("{")
+    for key in sorted(blob):
+        if first_key:
+            first_key = False
+        else:
+            emit(",")
+        # str keys escape identically to the monolithic encoder's key emission.
+        emit(json.dumps(key, separators=(",", ":")))
+        emit(":")
+        value = blob[key]
+        if isinstance(value, list):
+            if not value:
+                emit("[]")
+                continue
+            emit("[")
+            first_chunk = True
+            for i in range(0, len(value), _DIGEST_CHUNK):
+                sub = value[i:i + _DIGEST_CHUNK]
+                # json.dumps(sub) == "[" + <elems joined by ","> + "]"; strip the
+                # brackets and re-join chunks with "," to rebuild the full array's
+                # exact byte stream. The Python-level loop yields the GIL here.
+                enc = json.dumps(sub, separators=(",", ":"),
+                                 sort_keys=True).encode()
+                if first_chunk:
+                    first_chunk = False
+                else:
+                    emit(",")
+                emit_bytes(enc[1:-1])
+            emit("]")
+        else:
+            emit(json.dumps(value, separators=(",", ":"), sort_keys=True))
+    emit("}")
+    h.update(buf)
+    return h.hexdigest()[:16]
+
+
 @dataclass(frozen=True)
 class ObjectSnapshot:
     """One correlation object at one engine evaluation — everything that
@@ -1868,14 +1952,17 @@ class ObjectSnapshot:
     def content_hash(self) -> str:
         """Change detector for versioning: hashes everything EXCEPT version/
         timestamps-of-persistence. Same evidence ⇒ same hash ⇒ no new version."""
-        blob = json.dumps({
+        # Byte-identical to json.dumps(...,separators=(",",":"),sort_keys=True)
+        # + sha256[:16], but chunk-serialized so the C encoder never holds the
+        # GIL across the whole storm object (see _streaming_json_digest16). This
+        # is the replay pin — its output MUST NOT move.
+        return _streaming_json_digest16({
             "nodes": [n.key for n in self.nodes],
             "signals": sorted(str(s.signal_id) for n in self.nodes for s in n.signals),
             "edges": [e.to_ch_row("", "", 0) for e in self.edges],
             "hypotheses": self.hypotheses_blob(),
             "engine": self.engine_ver,
-        }, separators=(",", ":"), sort_keys=True)
-        return hashlib.sha256(blob.encode()).hexdigest()[:16]
+        })
 
     def material_hash(self) -> str:
         """Damping detector (#100 write-side): the operator-meaningful identity of
@@ -1889,7 +1976,11 @@ class ObjectSnapshot:
         persistence gate in main.engine_cycle only writes a new version when THIS
         moves, on a heartbeat, or on a lifecycle transition."""
         r = self.ranking
-        blob = json.dumps({
+        # Byte-identical to the monolithic json.dumps + sha256[:16] digest, but
+        # chunk-serialized so the C encoder never holds the GIL across the whole
+        # storm object (see _streaming_json_digest16). This is the damping
+        # change-detector — its output MUST NOT move.
+        return _streaming_json_digest16({
             "nodes": [n.key for n in self.nodes],
             # Evidence kind AND severity per entity: a WARN→CRIT escalation of
             # the same evidence is operator-meaningful and must re-version.
@@ -1902,8 +1993,7 @@ class ObjectSnapshot:
                         for h in r.hypotheses],
             "verdict": [r.top_hypothesis, r.verdict_tier.value],
             "engine": self.engine_ver,
-        }, separators=(",", ":"), sort_keys=True)
-        return hashlib.sha256(blob.encode()).hexdigest()[:16]
+        })
 
     def top_confidence(self) -> float:
         r = self.ranking
