@@ -84,6 +84,9 @@ from engine import (
     SeamView,
     TopologyAdjacency,
     WindowPrep,
+    blob_cycle_begin,
+    blob_cycle_end,
+    cycle_hypotheses_blob,
     digest_cache_stats,
     engine_temporal_reach_s,
     find_continuation,
@@ -2396,6 +2399,36 @@ CORR_COHORT_TOUCH_GATE = os.environ.get(
 CORR_LIFECYCLE_EPOCH_CADENCE = os.environ.get(
     "CORR_LIFECYCLE_EPOCH_CADENCE", "1").lower() in ("1", "true", "yes")
 
+# ── P2 step 1: the EPOCH BUDGET ──────────────────────────────────────────────
+# docs/design/DECISION_EVIDENCE_SPLIT_P2_2026-08-28.md §4 "Epoch budget", §9.1.
+#
+# WHY. CORR_ENGINE_DRAIN_COHORTS bounds a sweep in COHORTS, and a cohort's cost
+# is not bounded. Measured on the live 2,500-device leg p1-on-08281911: one epoch
+# = 20 cohorts x ~190 s = **65 minutes**. Everything that only happens at an
+# epoch BOUNDARY waits that long — retention prune, the merge/quiesce/cap
+# lifecycle pass, the 163 cap, and the operator-visible "settled" state — and
+# `oldest_pending_age` sat at 710 s (past the 516 s retention horizon) for the
+# whole of it. The sweep was not stuck; it was simply never finishing.
+#
+# WHAT IT DOES. End the drain sweep when the epoch's wall time exceeds the
+# budget, checked BETWEEN cohorts only. The lifecycle pass still runs at epoch
+# end, exactly as it does when the cohort bound is hit or the epoch runs dry —
+# an early exit is the SAME exit, it just happens sooner.
+#
+# WHAT IT DOES NOT DO. It never interrupts a cohort, so no object's outputs
+# change: cohort formation is arrival-ordered and per-object replay is pinned by
+# the version's archive slice, so this changes only HOW MANY cohorts one epoch
+# drains — never what any one of them computes. Signals not drained stay pending
+# for the next epoch, which is already the behaviour when the cohort bound is
+# hit. This is a SCHEDULING knob (memo §21: runtime conditions may decide WHEN
+# work happens, never WHAT it contains).
+#
+# 0 = unbounded (the pre-P2 behaviour, for the A/B on ONE image). Read once at
+# startup like every other CORR_* knob; wall time is read only to decide
+# scheduling, never as an input to a hash, a verdict or an ordering.
+CORR_ENGINE_EPOCH_BUDGET_S = max(0.0, float(
+    os.environ.get("CORR_ENGINE_EPOCH_BUDGET_S", "300")))
+
 # ── Tracker 172: ingest-priority scheduling (gate spec §4.3 subset contract) ─
 #
 # THE MEASURED DEFECT (S1 design storm, run 082220005r1a): the engine's
@@ -2628,6 +2661,12 @@ LIFECYCLE_PASSES_TOTAL = 0           # merge/quiesce/cap passes actually run
 # exceed it WITHIN an epoch by the objects that epoch opened. That overshoot is a
 # declared, measured fact — this is its high-water mark (§10, never silent).
 OPEN_OBJECTS_EPOCH_PEAK = 0
+# ── P2 step 1: drain sweeps ended by the epoch wall-clock budget (spec §4
+# "Epoch budget"). Monotonic per replica. A number that stays at 0 while
+# `epoch_seconds_max` climbs means the budget is not in effect; a number that
+# tracks `epochs` means every sweep is budget-bound and CORR_ENGINE_DRAIN_COHORTS
+# is no longer the binding constraint.
+EPOCH_BUDGET_EXITS_TOTAL = 0
 
 
 class _EngineEpoch:
@@ -2873,6 +2912,11 @@ def epoch_state() -> dict[str, object]:
         "cohort_touched": COHORT_TOUCHED_LAST,
         "lifecycle_passes_total": LIFECYCLE_PASSES_TOTAL,
         "open_objects_epoch_peak": OPEN_OBJECTS_EPOCH_PEAK,
+        # ── P2 step 1: the epoch budget (spec §4). `budget_exits` counts sweeps
+        # that ended on wall time rather than on the cohort bound or an empty
+        # epoch; 0 with a large epoch_seconds_max means the budget is off.
+        "epoch_budget_s": CORR_ENGINE_EPOCH_BUDGET_S,
+        "epoch_budget_exits_total": EPOCH_BUDGET_EXITS_TOTAL,
         "snapshot_digest": digest_cache_stats(),
     }
 
@@ -3496,7 +3540,12 @@ async def _persist_snapshot(snap: ObjectSnapshot, version: int, state: str,
     # to build it 3-4x (row + content_hash, each re-serializing). It is
     # deliberately NOT cached on the snapshot — 15-25K open objects x 5.7 KB-MBs
     # is the RSS tracker 156 fought for — so the saving is scoped to this call.
-    hypotheses = await _snap_call(snap, snap.hypotheses_blob)
+    # P2 step 0a: served from the cycle cache when the reconciliation loop's
+    # content_hash already built this snapshot's blob a few statements ago —
+    # the SAME string, so the row bytes are unchanged; only the second
+    # serialize is gone. Outside a cycle (a lifecycle merge/close run at epoch
+    # cadence) there is no cache and this is the plain build it always was.
+    hypotheses = await _snap_call(snap, cycle_hypotheses_blob, snap)
     obj_row = await _snap_call(snap, snap.to_object_row, version, state, merged_into,
                                hypotheses=hypotheses)
     # H13: these engine-cycle writes run OUTSIDE any consumer message, so they
@@ -3806,9 +3855,16 @@ async def engine_cycle(epoch: _EngineEpoch | None = None) -> None:
     engine is idle between cycles — holding a 50k-row base-row cache between
     cycles would trade the on-loop win for exactly the RSS this tracker exists
     to reduce).
+
+    P2 step 0a adds the hypotheses-blob cache to that same discipline
+    (engine.blob_cycle_begin/end): a version's blob is built once and reused by
+    `content_hash` and the corr_objects row, and the cache dies with the cycle
+    in the `finally` below — a blob held past its cycle is the tracker-156 RSS
+    shape, which is why it is NOT cached on the snapshot.
     """
     _WINDOW_INDEX_CACHE.clear()
     _CYCLE_ROW_CACHE.clear()
+    blob_cycle_begin()
     own_epoch = epoch is None
     try:
         if own_epoch and ch is not None:
@@ -3832,6 +3888,7 @@ async def engine_cycle(epoch: _EngineEpoch | None = None) -> None:
             _close_epoch(epoch)
         _WINDOW_INDEX_CACHE.clear()
         _CYCLE_ROW_CACHE.clear()
+        blob_cycle_end()
 
 
 async def _engine_cycle_inner(epoch: _EngineEpoch | None) -> None:
@@ -4134,6 +4191,93 @@ async def _engine_cycle_inner(epoch: _EngineEpoch | None) -> None:
     await _flush_tenant_write_amp(now)
 
 
+async def _drain_epoch_sweep() -> int:
+    """ONE drain sweep: freeze an epoch, drain bounded cohorts against it, run
+    the epoch's lifecycle pass, discard it. Returns the cohorts drained.
+
+    tracker 166 phase 3: WORK-CONSERVING DRAIN.
+
+    The old shape was `cycle(); sleep(interval)` unconditionally, which meant a
+    backlog could only ever drain one cohort per interval — and since the cohort
+    was unbounded, the way it "kept up" was by making each transaction bigger.
+    Now that transactions are bounded, waiting a full interval between them
+    would cap throughput at cohort_size/interval for no reason.
+
+    So: keep taking cohorts while work remains, up to a bound, yielding between
+    each so the consumer, heartbeat, persistence and health tasks all get
+    scheduled. The bound stops a large backlog from monopolising the process
+    indefinitely — the loop still returns to its normal interval, and pending
+    depth (not transaction size) is what grows under genuine overload.
+
+    tracker 166 Phase 2: ONE epoch per sweep. Prune + freeze + prepare once,
+    then drain bounded cohorts against that prepared state, then discard it.
+    Preparation used to be paid per cohort — ~6 s at 50k retained nodes, ~48 s
+    across 8 cohorts of pure re-derivation.
+
+    Signals arriving mid-sweep stay pending for the NEXT epoch. That is the
+    pre-166 behaviour for arrivals and it is what lets the snapshot be immutable
+    for the whole sweep.
+
+    P2 step 1 adds the SECOND bound — CORR_ENGINE_EPOCH_BUDGET_S — for the
+    reason recorded at that constant: 20 cohorts x ~190 s made a 65-minute epoch
+    at 2.5K, and everything that only happens at an epoch boundary (prune,
+    lifecycle, the 163 cap, `oldest_pending_age`) waited for it. Extracted from
+    engine_loop so the sweep — and therefore the budget — is directly testable.
+    """
+    global EPOCH_BUDGET_EXITS_TOTAL
+    drained = 0
+    epoch = None
+    if ch is not None:
+        epoch = await _begin_epoch(datetime.now(timezone.utc))
+    try:
+        while drained < CORR_ENGINE_DRAIN_COHORTS:
+            await engine_cycle(epoch)
+            drained += 1
+            if epoch is not None:
+                epoch.cohorts = drained
+            await asyncio.sleep(0)      # fairness point, not a delay
+            # Pending WITHIN the epoch: a sweep drains the snapshot it
+            # froze, never signals it has no prepared node for. Computed ONCE
+            # per cohort — it walks the frozen snapshot, so the budget check
+            # below reuses this list rather than re-deriving it.
+            if epoch is None:
+                break
+            pending = epoch.pending()
+            if not pending:
+                break
+            # P2 step 1: the epoch budget, checked BETWEEN cohorts and nowhere
+            # else — a cohort that has started always runs to completion, so an
+            # object's outputs never depend on how much wall time was left. The
+            # sweep then falls through to the SAME lifecycle pass and the SAME
+            # epoch close as any other exit; the undrained cohorts stay pending
+            # for the next epoch, exactly as they do when the cohort bound is
+            # hit. epoch.started is monotonic (never the wall clock).
+            if (CORR_ENGINE_EPOCH_BUDGET_S > 0
+                    and time.monotonic() - epoch.started >= CORR_ENGINE_EPOCH_BUDGET_S):
+                EPOCH_BUDGET_EXITS_TOTAL += 1
+                log.info(
+                    "engine epoch ended on its %.0fs budget after %d/%d cohorts "
+                    "(%.1fs elapsed): prune, lifecycle and oldest_pending_age "
+                    "recover on a bounded cadence; %d signals stay pending for "
+                    "the next epoch",
+                    CORR_ENGINE_EPOCH_BUDGET_S, drained, CORR_ENGINE_DRAIN_COHORTS,
+                    time.monotonic() - epoch.started, len(pending))
+                break
+        # P1 change H: the epoch's ONE merge/quiesce/cap pass, after the
+        # drain loop exits NORMALLY and before the epoch is closed. A
+        # cohort that raised skips it (the exception propagates past this
+        # line to the sweep's handler) — earlier cohorts' lifecycle
+        # decisions are re-derivable on the next epoch, and their
+        # persisted versions stand. A budget exit is a NORMAL exit: the pass
+        # runs, which is the whole point of bounding the epoch.
+        if epoch is not None and CORR_LIFECYCLE_EPOCH_CADENCE:
+            await _epoch_lifecycle(epoch, _make_loop_yield()[0])
+    finally:
+        if epoch is not None:
+            _close_epoch(epoch)
+    return drained
+
+
 async def engine_loop() -> None:
     if not (CORR_SIGNALS_ENABLED and CORR_ENGINE_ENABLED):
         log.info("engine v2 object loop disabled")
@@ -4169,56 +4313,8 @@ async def engine_loop() -> None:
             log.info("engine sweep resumed (ingest priority released: %s)", reason)
         INGEST_PRIORITY_ACTIVE = False
         ENGINE_LAST_SWEEP_MONO = time.monotonic()
-        drained = 0
         try:
-            # tracker 166 phase 3: WORK-CONSERVING DRAIN.
-            #
-            # The old shape was `cycle(); sleep(interval)` unconditionally, which
-            # meant a backlog could only ever drain one cohort per interval — and
-            # since the cohort was unbounded, the way it "kept up" was by making
-            # each transaction bigger. Now that transactions are bounded, waiting
-            # a full interval between them would cap throughput at
-            # cohort_size/interval for no reason.
-            #
-            # So: keep taking cohorts while work remains, up to a bound, yielding
-            # between each so the consumer, heartbeat, persistence and health
-            # tasks all get scheduled. The bound stops a large backlog from
-            # monopolising the process indefinitely — the loop still returns to
-            # its normal interval, and pending depth (not transaction size) is
-            # what grows under genuine overload.
-            # tracker 166 Phase 2: ONE epoch per sweep. Prune + freeze + prepare
-            # once, then drain bounded cohorts against that prepared state,
-            # then discard it. Preparation used to be paid per cohort — ~6 s at
-            # 50k retained nodes, ~48 s across 8 cohorts of pure re-derivation.
-            #
-            # Signals arriving mid-sweep stay pending for the NEXT epoch. That
-            # is the pre-166 behaviour for arrivals and it is what lets the
-            # snapshot be immutable for the whole sweep.
-            epoch = None
-            if ch is not None:
-                epoch = await _begin_epoch(datetime.now(timezone.utc))
-            try:
-                while drained < CORR_ENGINE_DRAIN_COHORTS:
-                    await engine_cycle(epoch)
-                    drained += 1
-                    if epoch is not None:
-                        epoch.cohorts = drained
-                    await asyncio.sleep(0)      # fairness point, not a delay
-                    # Pending WITHIN the epoch: a sweep drains the snapshot it
-                    # froze, never signals it has no prepared node for.
-                    if epoch is None or not epoch.pending():
-                        break
-                # P1 change H: the epoch's ONE merge/quiesce/cap pass, after the
-                # drain loop exits NORMALLY and before the epoch is closed. A
-                # cohort that raised skips it (the exception propagates past this
-                # line to the sweep's handler) — earlier cohorts' lifecycle
-                # decisions are re-derivable on the next epoch, and their
-                # persisted versions stand.
-                if epoch is not None and CORR_LIFECYCLE_EPOCH_CADENCE:
-                    await _epoch_lifecycle(epoch, _make_loop_yield()[0])
-            finally:
-                if epoch is not None:
-                    _close_epoch(epoch)
+            await _drain_epoch_sweep()
         except Exception:
             log.exception("engine cycle failed (observable, §10; loop continues)")
         # Idle (or drain-bounded): fall back to the normal interval. It still
@@ -7631,6 +7727,13 @@ def _metrics_text() -> str:
         "# HELP corr_lifecycle_passes_total Merge/quiesce/cap passes run (epoch cadence).",
         "# TYPE corr_lifecycle_passes_total counter",
         f"corr_lifecycle_passes_total {LIFECYCLE_PASSES_TOTAL}",
+        # P2 step 1: sweeps that ended on the epoch wall-clock budget rather
+        # than on the cohort bound or an empty epoch. Read it against
+        # corr_engine_epoch_seconds_max: 0 exits with a large max means the
+        # 65-minute epoch is back.
+        "# HELP corr_engine_epoch_budget_exits_total Drain sweeps ended by CORR_ENGINE_EPOCH_BUDGET_S.",
+        "# TYPE corr_engine_epoch_budget_exits_total counter",
+        f"corr_engine_epoch_budget_exits_total {EPOCH_BUDGET_EXITS_TOTAL}",
         # The declared cost of enforcing the 163 cap once per epoch: the
         # population may transiently exceed it within an epoch. Measured, not
         # assumed — if this runs far above CORR_OPEN_OBJECTS_MAX, the epoch is

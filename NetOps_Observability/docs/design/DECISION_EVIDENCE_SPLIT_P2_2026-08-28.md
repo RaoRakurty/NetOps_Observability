@@ -214,3 +214,81 @@ pending 0 within the 2,700 s budget.
 3. §2 VVR table + writer + `corr_current` rebuilt from it — `CORR_VERDICT_RECORD`.
 4. §4 Evidence queue + startup reconciler — `CORR_EVIDENCE_ASYNC`.
 5. §5 priority ordering. Then §8 re-measure (P4). P3 Aggregation plane follows.
+
+---
+
+## 10. Implementation notes — steps 0 and 1 (builder, 2026-08-28)
+
+Delivered: §9 item 0 (the three byte-neutral caches) and item 1 (the epoch
+budget). Items 2–5 are untouched. Every knob is read once at import, like the P1
+flags, so an A/B runs on ONE image. What differs from the letter of §3/§4, and
+why:
+
+1. **`Signal.signal_id` — the tracker-156 ruling was REVERSED on a fresh
+   measurement, and that is the one surprising thing in this step.** The
+   docstring in `signals.py` did not merely omit an instance cache, it forbade
+   one, on a recorded measurement: "+944 bytes per signal … ~47 MB of RSS bought
+   for nothing". That figure **does not reproduce**. Re-measured on today's
+   `Signal` (20 dataclass fields, CPython 3.10) with tracemalloc and with RSS
+   over 200,000 signals, the cache costs **~128 bytes per signal** — the `UUID`
+   object plus one dict slot; the instance dict does **not** resize, because 20
+   fields + 1 cache key still fit its table. Across the 50k-signal window cap
+   that is ~6.4 MB, not 47 MB. The old note is superseded in place, with the new
+   numbers and the caveat that **adding fields to `Signal` could put the resize
+   back**. `CORR_SIGNAL_ID_CACHE=0` reverts it on one image. The same ruling
+   still stands unchanged for `Signal.to_ch_row`, which is the large object the
+   tracker actually fought over.
+2. **`Clause.kinds()` uses the identity-keyed bounded dict, NOT a pydantic
+   private/instance attribute.** `Clause` is `frozen=True` with
+   `extra="forbid"`; anything written onto the model risks reaching
+   `model_dump`, and `model_dump` is what `Catalog.version_hash` — the replay
+   pin in every `corr_objects` row — is computed from. The repo's existing
+   pattern (`catalog._VERSION_HASH_CACHE`, `scoring._CATALOG_PLAN_CACHE`) keeps
+   the value entirely off the model, so the pin cannot move. Pinned by
+   `test_B4_the_catalog_version_hash_is_unaffected`.
+3. **The blob cycle cache is HARD BOUNDED (`CORR_BLOB_CYCLE_CACHE_MAX`, default
+   64), not merely cycle-scoped.** §9.0 asks for "a cycle-scoped dict keyed by
+   `id(snapshot)` with a strong ref … cleared in a finally", which is what it
+   is — but an *unbounded* cycle dict over a storm cohort would retain one blob
+   per open object (15–25K × 5.7 KB–MBs), i.e. it would reintroduce the exact
+   tracker-156 RSS shape inside the cycle. The access pattern is
+   build-then-immediately-reuse (reconciliation computes `content_hash`,
+   `_persist_snapshot` writes the row a few statements later), so a small bound
+   loses no hits: measured on leg A, blob builds fell from 12,924 to 7,415 =
+   exactly one per persisted version (5,509 saved), which is the theoretical
+   maximum.
+4. **`_drain_epoch_sweep()` was extracted from `engine_loop`** (body verbatim
+   plus the budget check). The drain loop lived inside an infinite `while True`
+   and had no test surface at all; the budget is a scheduling rule and needed
+   one. `engine_loop` now calls it inside the same `try/except`.
+5. **The budget check reuses the pending list** the loop condition already
+   computed, so it costs no extra walk of the frozen snapshot.
+6. **Counters.** `corr_snapshot_digest` gains `kind="blob"` (the blob is not a
+   digest, but it is built by `content_hash` and by the row builder, so it
+   belongs on the same surface); `corr_engine_epoch_budget_exits_total` and
+   `epoch_state()["epoch_budget_s"] / ["epoch_budget_exits_total"]` are new.
+   `catalog.clause_kinds_cache_stats()` is exposed for the tests/bench but is
+   deliberately NOT on `/metrics` — it is a micro-cache, not an operator signal.
+
+### Measured (offline, `bench_profile_p2.py` leg A, same fixture, one image)
+`--devices 500 --signals 7000 --arrivals 3500 --cohorts 20 --epochs 2 --burst 1`,
+BEFORE = all three caches off via env, AFTER = defaults:
+
+| | before | after | Δ |
+|---|--:|--:|--:|
+| total wall | 145.92 s | 93.84 s | **−35.7 %** |
+| `P.cohort(total)` | 136.90 s | 89.87 s | −34.4 % |
+| `P.run_window(total)` | 63.23 s | 40.50 s | −35.9 % |
+| `P.persist(total)` | 37.54 s | 22.83 s | −39.2 % |
+| `4.rank(scoring)` | 45.54 s | 28.91 s | −36.5 % |
+| `6.hypotheses_blob` | 19.88 s / 12,924 calls | 10.34 s / **7,415 calls** | −48.0 % |
+| `6.content_hash` (excl) | 12.25 s | 9.73 s | −20.6 % |
+| `7.archive_slice` | 7.10 s | 3.35 s | −52.8 % |
+| `1.prepare_run_window` | 1.33 s | 0.48 s | −63.8 % |
+
+**Byte neutrality at scale:** versions persisted (5,509), versions damped (39),
+per-table row counts, per-table BYTE counts and insert-call counts are
+**identical** between the two legs, as is the whole `cross_epoch_reuse` block
+(including `rank_key` hit shares) — the caches changed how often work happens
+and nothing else. The epoch budget is not exercised by this offline bench (it
+drives its own cohort loop); it is measured by the live P0 script in §8.

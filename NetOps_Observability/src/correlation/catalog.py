@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
@@ -55,7 +56,62 @@ class Clause(BaseModel):
         return v
 
     def kinds(self) -> frozenset[str]:
-        return frozenset(t.strip() for t in self.kind.split("|"))
+        """The alternation tokens of ``kind``, as a set.
+
+        MEMOISED per Clause INSTANCE (P2 step 0b, 2026-08-28). The value is a
+        pure function of one immutable string on a frozen model, but it was
+        recomputed on every call: the cProfile of one first-sight `run_window`
+        at 2.5K shape (docs/scale/P2_COHORT_PROFILE_2026-08-28.md §8) shows
+        **248,508 calls, 1.415 s cumulative of a 9.36 s run_window (~15 %)** —
+        the same split+frozenset over the same ~400 clause objects, once per
+        (template x object) pair. The value is unchanged; only how often it is
+        built is."""
+        return _clause_kinds(self)
+
+
+# Keyed by IDENTITY, not by value — the same pattern (and for the same measured
+# reason) as _VERSION_HASH_CACHE below and scoring._CATALOG_PLAN_CACHE: hashing a
+# frozen pydantic model walks every field, so a value-keyed lru_cache would spend
+# more building cache KEYS than the split it avoids. The dict holds a strong
+# reference to each cached Clause, so its id() cannot be recycled onto a
+# different object while the entry lives.
+#
+# Bounded (§9): a catalog is ~100 templates x ~4 clauses, and clauses are
+# immutable for the life of the catalog that owns them, so the working set is a
+# few hundred entries; a reloaded catalog is simply new entries. On overflow the
+# whole map is cleared and refills — an allocation optimisation, never a
+# correctness input, and the returned SET is identical either way.
+CORR_CLAUSE_KINDS_CACHE = os.environ.get(
+    "CORR_CLAUSE_KINDS_CACHE", "1").lower() in ("1", "true", "yes")
+_CLAUSE_KINDS_CACHE: dict[int, tuple[Clause, frozenset[str]]] = {}
+_CLAUSE_KINDS_CACHE_MAX = max(1, int(os.environ.get("CORR_CLAUSE_KINDS_CACHE_MAX", "4096")))
+_CLAUSE_KINDS_STATS: dict[str, int] = {"computed": 0, "cached": 0}
+
+
+def clause_kinds_cache_stats() -> dict[str, int]:
+    """Clause.kinds computed vs served from the identity cache (§10)."""
+    return dict(_CLAUSE_KINDS_STATS)
+
+
+def _compute_clause_kinds(clause: Clause) -> frozenset[str]:
+    """The real computation, byte-for-byte the pre-P2 body of Clause.kinds."""
+    return frozenset(t.strip() for t in clause.kind.split("|"))
+
+
+def _clause_kinds(clause: Clause) -> frozenset[str]:
+    if not CORR_CLAUSE_KINDS_CACHE:
+        _CLAUSE_KINDS_STATS["computed"] += 1
+        return _compute_clause_kinds(clause)
+    hit = _CLAUSE_KINDS_CACHE.get(id(clause))
+    if hit is not None and hit[0] is clause:
+        _CLAUSE_KINDS_STATS["cached"] += 1
+        return hit[1]
+    _CLAUSE_KINDS_STATS["computed"] += 1
+    value = _compute_clause_kinds(clause)
+    if len(_CLAUSE_KINDS_CACHE) >= _CLAUSE_KINDS_CACHE_MAX:
+        _CLAUSE_KINDS_CACHE.clear()
+    _CLAUSE_KINDS_CACHE[id(clause)] = (clause, value)
+    return value
 
 
 class Discriminator(BaseModel):

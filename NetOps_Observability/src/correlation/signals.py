@@ -573,6 +573,14 @@ def observer_of(observer_id: str, observer_type: ObserverType, *,
     return obs
 
 
+# ── P2 step 0c: the per-instance signal_id cache (see Signal.signal_id) ──────
+# Default ON. `CORR_SIGNAL_ID_CACHE=0` restores the pre-P2 recompute-every-call
+# behaviour so the RSS/CPU trade can be A/B'd on ONE image. Read once at import,
+# like every other CORR_* knob.
+CORR_SIGNAL_ID_CACHE = os.environ.get(
+    "CORR_SIGNAL_ID_CACHE", "1").lower() in ("1", "true", "yes")
+
+
 @dataclass(frozen=True)
 class Signal:
     tenant_id: str
@@ -665,19 +673,51 @@ class Signal:
         """Deterministic: same (source, native_id, event time) ⇒ same id.
         Rehydrated signals return their stored id (identity round-trip).
 
-        NOT memoised on the instance, deliberately (tracker 156). Caching here
-        looks free and is not: Signal is a dataclass with ~25 fields, so its
-        instances use a key-sharing dict, and writing a second non-field key
-        into __dict__ converts that to a standalone dict — MEASURED at +944
-        bytes per signal, which across the 50k-signal window is ~47 MB of RSS
-        bought for nothing. The archive path's repeated lookups are memoised
-        per CYCLE in main._window_index instead, where they cost nothing once
-        the cycle ends.
+        MEMOISED per instance (P2 step 0c, 2026-08-28), reversing the earlier
+        tracker-156 "never memoise here" ruling on a fresh measurement — the
+        ruling is kept in force for `to_ch_row` below, which is a different and
+        far larger object.
+
+        WHY IT IS WORTH CACHING. `signal_id` is a uuid5 (a SHA-1 over the
+        formatted key), and it is re-derived on every ordering comparison: the
+        cProfile of one first-sight `run_window` at 2.5K shape
+        (docs/scale/P2_COHORT_PROFILE_2026-08-28.md §8) shows **66,769 calls,
+        1.707 s cumulative of a 9.36 s run_window (~18 %)**, all of them
+        `sorted(..., key=lambda s: (s.ts, str(s.signal_id)))` and
+        `min(comp_sigs, ...)` over the SAME signal objects.
+
+        WHY THE RSS OBJECTION NO LONGER HOLDS. The old note claimed +944 bytes
+        per signal (a key-sharing instance dict being converted to a standalone
+        one). Re-measured on this Signal (20 dataclass fields, CPython 3.10)
+        with both tracemalloc and RSS over 200,000 signals: the cache costs
+        **~128 bytes per signal** — the UUID object itself plus one dict slot;
+        the instance dict does NOT resize, because 20 fields + 1 cache key still
+        fits its table. Across the 50k-signal window cap that is ~6.4 MB, not
+        47 MB. The old figure does not reproduce and is superseded by this
+        measurement. `CORR_SIGNAL_ID_CACHE=0` reverts to the pre-P2 behaviour on
+        ONE image if the trade ever needs revisiting; keep the field count in
+        mind when adding to this dataclass — crossing the dict's table boundary
+        would put the resize back.
+
+        RECOMPUTE-ON-COPY, exactly like the P1 digest cache: the cache is stored
+        via object.__setattr__ and is deliberately NOT a dataclass field, so it
+        never enters __eq__/__hash__ and `dataclasses.replace` produces a fresh,
+        uncached instance that re-derives from ITS OWN fields. That is the
+        conservative reading and it is what makes a re-keyed or rehydrated copy
+        safe. Thread-safe by idempotence — a race recomputes the same uuid.
         """
+        cached = self.__dict__.get("_signal_id_c")
+        if cached is not None:
+            return cached
         if self.stored_signal_id:
-            return uuid.UUID(self.stored_signal_id)
-        ts_ms = int(self.ts.timestamp() * 1000)
-        return uuid.uuid5(SIGNAL_NS, f"{self.source.value}|{self.native_id}|{ts_ms}")
+            value = uuid.UUID(self.stored_signal_id)
+        else:
+            ts_ms = int(self.ts.timestamp() * 1000)
+            value = uuid.uuid5(SIGNAL_NS,
+                               f"{self.source.value}|{self.native_id}|{ts_ms}")
+        if CORR_SIGNAL_ID_CACHE:
+            object.__setattr__(self, "_signal_id_c", value)
+        return value
 
     @property
     def signal_id_str(self) -> str:

@@ -1577,15 +1577,99 @@ _DIGEST_CHUNK = 512
 # both execute on the executor; a lost += undercounts, it can never change a
 # digest), and read-only for the engine itself: nothing here is an input to any
 # hash, verdict or ordering.
+#
+# P2 step 0 adds a THIRD kind, "blob": the hypotheses blob is not a digest, but
+# it is the most expensive serialize a version pays and it is built by BOTH
+# content_hash and to_object_row, so it is counted on the same surface
+# (corr_snapshot_digest{kind="blob",result=computed|cached}).
 _DIGEST_CACHE_STATS: dict[str, int] = {
     "content_computed": 0, "content_cached": 0,
     "material_computed": 0, "material_cached": 0,
+    "blob_computed": 0, "blob_cached": 0,
 }
 
 
 def digest_cache_stats() -> dict[str, int]:
     """Snapshot of the digest computed/cached counters (§10 observable)."""
     return dict(_DIGEST_CACHE_STATS)
+
+
+# ── P2 step 0a: the hypotheses-blob CYCLE cache ──────────────────────────────
+#
+# docs/design/DECISION_EVIDENCE_SPLIT_P2_2026-08-28.md §3/§9.0, measured in
+# docs/scale/P2_COHORT_PROFILE_2026-08-28.md: `hypotheses_blob` is 16.4 % of
+# cohort wall and it is built TWICE per persisted version — once inside
+# `content_hash` (which embeds the blob) and once by `_persist_snapshot` for the
+# corr_objects row. The two builds are the SAME pure function of the SAME frozen
+# snapshot, so the second one is pure waste (~7 % of cohort wall, for free).
+#
+# WHY NOT ON THE INSTANCE. Tracker 156: 15-25K open snapshots x 5.7 KB-MBs of
+# blob is exactly the RSS that tracker fought for, and P1 §3 explicitly forbids
+# caching it there. So the cache is CYCLE-SCOPED: main.engine_cycle opens it on
+# the way in and drops it in a `finally` on the way out, exactly like
+# _WINDOW_INDEX_CACHE / _CYCLE_ROW_CACHE. Outside a cycle the cache is None and
+# every call is a plain build — nothing is retained while the engine is idle.
+#
+# It holds a STRONG reference to each cached snapshot alongside its blob, so
+# id() cannot be recycled onto a different object while the entry lives (the
+# same identity-keyed pattern as catalog._VERSION_HASH_CACHE), and it is HARD
+# BOUNDED: the access pattern is build-then-immediately-reuse (reconciliation
+# computes content_hash, `_persist_snapshot` writes the row a few statements
+# later), so a handful of entries is all the win there is, while an unbounded
+# cycle cache over a storm cohort would retain a blob per open object — the very
+# RSS shape this must not reintroduce. On overflow the OLDEST entry is dropped.
+#
+# Bytes: identical by construction. The cache returns what `hypotheses_blob()`
+# returned; the function itself is untouched.
+CORR_BLOB_CYCLE_CACHE = os.environ.get(
+    "CORR_BLOB_CYCLE_CACHE", "1").lower() in ("1", "true", "yes")
+_BLOB_CYCLE_CACHE_MAX = max(1, int(os.environ.get("CORR_BLOB_CYCLE_CACHE_MAX", "64")))
+_BLOB_CYCLE_CACHE: dict[int, tuple[ObjectSnapshot, str]] | None = None
+
+
+def blob_cycle_begin() -> None:
+    """Open a cycle-scoped blob cache. Idempotent; a nested call resets it."""
+    global _BLOB_CYCLE_CACHE
+    _BLOB_CYCLE_CACHE = {} if CORR_BLOB_CYCLE_CACHE else None
+
+
+def blob_cycle_end() -> None:
+    """Drop the cycle-scoped blob cache. MUST run in a `finally` — a blob held
+    past its cycle is retained RSS (tracker 156)."""
+    global _BLOB_CYCLE_CACHE
+    _BLOB_CYCLE_CACHE = None
+
+
+def blob_cycle_size() -> int:
+    """Entries currently held (0 when no cycle is open). Test/observability."""
+    return 0 if _BLOB_CYCLE_CACHE is None else len(_BLOB_CYCLE_CACHE)
+
+
+def cycle_hypotheses_blob(snap: ObjectSnapshot) -> str:
+    """`snap.hypotheses_blob()`, served from the open cycle's cache if there is
+    one. Byte-identical to calling the method directly — this only decides how
+    many times it runs, never what it returns.
+
+    Advisory under thread races exactly like the digest cache: `_snap_call`
+    offloads big objects to the executor, so two threads can build the same
+    blob concurrently. Both build the same bytes; a lost counter increment
+    undercounts and can never change a hash, a row or an ordering."""
+    cache = _BLOB_CYCLE_CACHE
+    if cache is None:
+        _DIGEST_CACHE_STATS["blob_computed"] += 1
+        return snap.hypotheses_blob()
+    hit = cache.get(id(snap))
+    if hit is not None and hit[0] is snap:
+        _DIGEST_CACHE_STATS["blob_cached"] += 1
+        return hit[1]
+    _DIGEST_CACHE_STATS["blob_computed"] += 1
+    value = snap.hypotheses_blob()
+    if len(cache) >= _BLOB_CYCLE_CACHE_MAX:
+        # FIFO by insertion order: the oldest entry is the one whose
+        # build-then-reuse pair is already spent.
+        del cache[next(iter(cache))]
+    cache[id(snap)] = (snap, value)
+    return value
 
 
 def _streaming_json_digest16(blob: dict) -> str:
@@ -2046,7 +2130,11 @@ class ObjectSnapshot:
             "nodes": [n.key for n in self.nodes],
             "signals": sorted(str(s.signal_id) for n in self.nodes for s in n.signals),
             "edges": [e.to_ch_row("", "", 0) for e in self.edges],
-            "hypotheses": self.hypotheses_blob(),
+            # P2 step 0a: the SAME hypotheses_blob(), served from the cycle
+            # cache when main has one open so this version's second build (the
+            # corr_objects row) is free. Bytes unchanged — the cache returns
+            # what the method returned.
+            "hypotheses": cycle_hypotheses_blob(self),
             "engine": self.engine_ver,
         })
 
