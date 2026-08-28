@@ -93,7 +93,15 @@ class FakeStack:
         self.os_paths: list[str] = []
         self.logins = 0
         self.ch_signals_left = 0
+        # OpenSearch purge model: the delete is ASYNC, so `os_count` answers a
+        # scripted drain sequence (`os_counts`) and falls back to
+        # `os_docs_left` once that runs out.
         self.os_docs_left = 0
+        self.os_counts: list[int] = []
+        self.os_task = "abc123:456"
+        self.os_submit_ok = True
+        self.os_refresh_ok = True
+        self.os_refreshes = 0
 
     # -- API ----------------------------------------------------------------
     def login(self):
@@ -144,9 +152,22 @@ class FakeStack:
 
     def os_req(self, role_env, user, url_path, body=None, timeout=25):
         self.os_paths.append(url_path)
-        return True, {"deleted": 7, "failures": []}
+        if "_delete_by_query" in url_path:
+            if not self.os_submit_ok:
+                return False, ("curl exit 28 (TIMED OUT after 60s (curl "
+                               "max-time)) on " + url_path + " [no output from curl]")
+            return True, {"task": self.os_task}
+        if url_path.endswith("_refresh"):
+            self.os_refreshes += 1
+            if not self.os_refresh_ok:
+                return False, "curl exit 7 (failed to connect) on " + url_path
+            return True, {"_shards": {"failed": 0}}
+        return True, {}
 
     def os_count(self, index, field, prefix):
+        self.os_paths.append(f"{index}/_count")
+        if self.os_counts:
+            return self.os_counts.pop(0)
         return self.os_docs_left
 
     def mem_sample(self):
@@ -465,7 +486,7 @@ def test_keyboardinterrupt_inside_cleanup_never_escapes_execute(tmp_path, noslee
         "an unverified purge must never print as zero residue")
 
 
-def test_cleanup_problems_are_printed_not_only_filed(tmp_path, nosleep, capsys):
+def test_cleanup_problems_are_printed_not_only_filed(tmp_path, clock, capsys):
     """16.1: a degraded teardown is loud, with counts."""
     ids = _ids("mlx-run-", 6)
     stack = FakeStack(ids, page_cap=2500)
@@ -481,7 +502,7 @@ def test_cleanup_problems_are_printed_not_only_filed(tmp_path, nosleep, capsys):
     out = capsys.readouterr()
     assert "device purge NOT verified to zero" in out.err
     assert "12 run rows left in corr_signals" in out.err
-    assert "3 run docs left in netops-syslog-*" in out.err
+    assert "3 docs left in netops-syslog-*" in out.err
     assert "residue: 1 devices matching mlx-run-" in out.out
 
 
@@ -606,7 +627,181 @@ def test_cleanup_only_dry_run_touches_nothing(tmp_path, monkeypatch, capsys):
     assert "DRY RUN (--cleanup-only)" in capsys.readouterr().out
 
 
-# ── 5. preflight drain ETA ──────────────────────────────────────────────────
+# ── 5. curl failures name their exit code ───────────────────────────────────
+#
+# LIVE DEFECT (2026-08-28, first real `--cleanup-only mlx-`): the synchronous
+# `_delete_by_query?refresh=true` over 10,311,858 syslog docs blew through
+# curl's `max-time = 300`. curl exits 28 with NOTHING on stdout or stderr, and
+# `os_req` returned `(err or out).strip()` — so the operator was told:
+#
+#     WARNING: cleanup-only: OpenSearch syslog purge failed:
+#
+# An empty reason for a 10.3 M-document residue. The exit code WAS the
+# diagnosis and it was thrown away (§16.1).
+
+
+def _stack_with_curl_rc(monkeypatch, rc, out="", err=""):
+    stack = ml.Stack("/nonexistent.env", "http://stack.test", "netops")
+    monkeypatch.setattr(stack, "cid", lambda _svc: "oscid")
+    monkeypatch.setattr(ml, "run", lambda *_a, **_k: (rc, out, err))
+    return stack
+
+
+def test_os_req_timeout_names_the_curl_exit_code(monkeypatch):
+    """rc=28 with empty stdout AND stderr — the exact live shape."""
+    stack = _stack_with_curl_rc(monkeypatch, 28)
+    ok, msg = stack.os_req("OS_BOOTSTRAP_PASSWORD", "svc_bootstrap",
+                           "/netops-syslog-*/_delete_by_query", {"q": 1},
+                           timeout=300)
+    assert ok is False
+    assert "28" in msg
+    assert "timed out" in msg.lower(), msg
+    assert "300s" in msg, "the bound that was hit must be in the message"
+    assert "_delete_by_query" in msg
+    assert msg.strip() != "", "an empty failure message is never acceptable"
+
+
+@pytest.mark.parametrize(("rc", "needle"), [
+    (7, "failed to connect"),
+    (6, "could not resolve host"),
+    (52, "empty reply"),
+    (60, "certificate"),
+    (124, "subprocess bound"),
+    (127, "binary not found"),
+    (999, "unknown curl exit code"),
+])
+def test_os_req_every_failure_carries_a_meaning(monkeypatch, rc, needle):
+    stack = _stack_with_curl_rc(monkeypatch, rc)
+    ok, msg = stack.os_req("OS_BOOTSTRAP_PASSWORD", "svc_bootstrap", "/x", None)
+    assert ok is False
+    assert str(rc) in msg and needle in msg
+
+
+def test_os_req_keeps_curl_stderr_when_there_is_some(monkeypatch):
+    stack = _stack_with_curl_rc(monkeypatch, 7, err="curl: (7) Connection refused")
+    ok, msg = stack.os_req("OS_BOOTSTRAP_PASSWORD", "svc_bootstrap", "/x", None)
+    assert ok is False
+    assert "Connection refused" in msg and "curl exit 7" in msg
+
+
+# ── 6. the async OpenSearch purge ───────────────────────────────────────────
+
+def test_os_purge_submits_async_and_verifies_zero_by_recount(clock, capsys):
+    stack = FakeStack([], page_cap=2500)
+    stack.os_counts = [10_000_000,          # pre-count
+                       6_000_000, 2_000_000, 0,   # drain
+                       0]                   # post-refresh confirmation
+    ev, problems = ml.os_purge_syslog(stack, "mlx-run-")
+    out = capsys.readouterr().out
+
+    assert problems == []
+    assert ev["os_docs_left"] == 0
+    assert ev["os_task"] == "abc123:456"
+    assert ev["os_deleted"] == 10_000_000
+    submit = next(p for p in stack.os_paths if "_delete_by_query" in p)
+    assert "wait_for_completion=false" in submit, (
+        "a synchronous delete cannot survive 10 M docs — that was the defect")
+    assert "conflicts=proceed" in submit and "slices=auto" in submit
+    assert "_tasks" not in " ".join(stack.os_paths), (
+        "svc_bootstrap holds no cluster:monitor/tasks/lists — never poll _tasks")
+    assert stack.os_refreshes == 1, "the final count must be refreshed first"
+    assert "docs/s" in out and "docs left" in out, "progress must be printed"
+
+
+def test_os_purge_budget_scales_with_the_starting_count(clock):
+    stack = FakeStack([], page_cap=2500)
+    stack.os_counts = [10_000_000] + [10_000_000] * 400
+    ev, problems = ml.os_purge_syslog(stack, "mlx-run-")
+    assert ev["os_purge_budget_s"] == pytest.approx(
+        ml.OS_PURGE_BUDGET_BASE_S + 10_000_000 * ml.OS_PURGE_SECONDS_PER_DOC)
+    assert problems, "a purge that never drained must fail"
+
+
+def test_os_purge_stall_fails_loudly_with_the_task_id(clock, capsys):
+    stack = FakeStack([], page_cap=2500)
+    stack.os_docs_left = 4_000                    # never drains
+    ev, problems = ml.os_purge_syslog(stack, "mlx-run-", budget_s=90, poll_s=30)
+    assert ev["os_docs_left"] == 4_000
+    assert len(problems) == 1
+    assert "4000 docs left in netops-syslog-*" in problems[0]
+    assert "abc123:456" in problems[0], "name the task still running server-side"
+    assert "--cleanup-only mlx-run-" in problems[0]
+
+
+def test_os_purge_never_reads_an_unreadable_count_as_clean(clock, capsys):
+    """A count endpoint that fails is NOT evidence of an empty index."""
+    stack = FakeStack([], page_cap=2500)
+    stack.os_docs_left = -1                       # every count fails
+    ev, problems = ml.os_purge_syslog(stack, "mlx-run-", budget_s=60, poll_s=30)
+    assert ev["os_docs_left"] == -1
+    assert ev["os_deleted"] == -1
+    assert any("UNKNOWN docs left" in p for p in problems), problems
+    assert "progress UNKNOWN" in capsys.readouterr().err
+
+
+def test_os_purge_reports_a_failed_submit_instead_of_polling_forever(clock, capsys):
+    stack = FakeStack([], page_cap=2500)
+    stack.os_counts = [5_000]
+    stack.os_docs_left = 5_000
+    stack.os_submit_ok = False
+    ev, problems = ml.os_purge_syslog(stack, "mlx-run-", budget_s=60, poll_s=30)
+    assert ev["os_task"] == ""
+    assert any("submit FAILED" in p for p in problems), problems
+    assert any("curl exit 28" in p for p in problems), (
+        "the curl exit code must survive into the purge's own message")
+    assert any("5000 run docs left" in p for p in problems), problems
+
+
+def test_os_purge_skips_the_delete_when_nothing_matches(clock):
+    stack = FakeStack([], page_cap=2500)
+    stack.os_docs_left = 0
+    ev, problems = ml.os_purge_syslog(stack, "mlx-run-")
+    assert problems == []
+    assert ev["os_docs_left"] == 0 and ev["os_task"] == ""
+    assert not any("_delete_by_query" in p for p in stack.os_paths), (
+        "idempotent: an already-clean index is not re-deleted")
+
+
+def test_os_purge_survives_a_failed_refresh_but_says_so(clock, capsys):
+    stack = FakeStack([], page_cap=2500)
+    stack.os_counts = [1_000, 0, 0]
+    stack.os_refresh_ok = False
+    ev, problems = ml.os_purge_syslog(stack, "mlx-run-", budget_s=120, poll_s=30)
+    assert ev["os_docs_left"] == 0
+    assert problems == []
+    assert "_refresh before the final count failed" in capsys.readouterr().err
+
+
+def test_os_purge_blind_pre_count_still_purges_and_reports(clock, capsys):
+    stack = FakeStack([], page_cap=2500)
+    stack.os_counts = [-1, 500, 0, 0]
+    ev, problems = ml.os_purge_syslog(stack, "mlx-run-", budget_s=120, poll_s=30)
+    assert ev["os_task"] == "abc123:456", "a blind count must not skip the purge"
+    assert any("pre-count" in p for p in problems), problems
+    assert ev["os_docs_left"] == 0
+
+
+def test_cleanup_only_reports_an_os_residue_as_a_failure(tmp_path, monkeypatch,
+                                                         clock, capsys):
+    """End to end: devices verified zero, OpenSearch NOT — exit 1, loudly.
+    This is exactly the live run that produced the empty-message defect."""
+    stack = FakeStack(_ids("mlx-", 10), page_cap=2500)
+    stack.os_docs_left = 10_311_858
+    monkeypatch.setattr(ml, "Stack", lambda *a, **k: stack)
+    monkeypatch.setattr(ml, "OS_PURGE_BUDGET_MAX_S", 90.0)
+    _patch_ingress(monkeypatch)
+    args = _args(tmp_path)
+    args.cleanup_only = "mlx-"
+
+    rc = ml.cleanup_only(args)
+    err = capsys.readouterr().err
+    assert rc == 1
+    assert stack.devices == [], "devices still get purged and verified"
+    assert "10311858 docs left in netops-syslog-*" in err
+    assert "abc123:456" in err
+
+
+# ── 7. preflight drain ETA ──────────────────────────────────────────────────
 
 def test_preflight_lag_eta_reports_rate_and_eta(tmp_path, clock):
     stack = FakeStack([], page_cap=2500)

@@ -195,6 +195,42 @@ def run(cmd: list[str], timeout: int, input_text: str | None = None) -> tuple[in
         return 127, "", str(exc)
 
 
+# curl exit codes we can actually hit through `docker exec … curl --config -`,
+# plus the two `run()` synthesises. An empty error message is not a diagnosis:
+# every failure names its code AND what the code means (16.1).
+CURL_EXIT_MEANINGS: dict[int, str] = {
+    1: "unsupported protocol",
+    2: "curl failed to initialise",
+    3: "malformed URL",
+    6: "could not resolve host",
+    7: "failed to connect — is OpenSearch listening?",
+    18: "partial transfer (connection closed early)",
+    22: "HTTP error >= 400 returned to curl --fail",
+    26: "read error on the request body",
+    28: "TIMED OUT",
+    35: "TLS handshake failed",
+    47: "too many redirects",
+    52: "empty reply from server",
+    55: "send failed",
+    56: "receive failed (connection reset)",
+    58: "problem with the local client certificate",
+    60: "peer certificate not verifiable with the given CA",
+    77: "CA cert file unreadable",
+    124: "the harness's own subprocess bound expired",
+    127: "binary not found in the container (curl / docker)",
+}
+
+
+def curl_exit_meaning(rc: int, timeout: float = 0) -> str:
+    """Human meaning for a curl/run exit code — never an empty string."""
+    if rc == 28:
+        return (f"TIMED OUT after {timeout:.0f}s (curl max-time)" if timeout
+                else "TIMED OUT (curl max-time)")
+    if rc == 124:
+        return f"the harness's own subprocess bound expired ({timeout:.0f}s + 35s)"
+    return CURL_EXIT_MEANINGS.get(rc, "unknown curl exit code — see `man curl`")
+
+
 def env_get(env_file: str, key: str) -> str:
     """First KEY= value from the compose .env. Missing file/key -> '' (callers
     decide whether empty is fatal)."""
@@ -573,7 +609,16 @@ class Stack:
         rc, out, err = run(["docker", "exec", "-i", oc, "curl", "--config", "-"],
                            timeout + 35, cfg)
         if rc != 0:
-            return False, (err or out).strip()[:400]
+            # 2026-08-28: a `curl --silent` that hits `max-time` exits 28 with
+            # NOTHING on stdout or stderr, and this line used to return
+            # `(err or out).strip()` — i.e. the EMPTY STRING. The live
+            # `--cleanup-only` run reported "OpenSearch syslog purge failed: "
+            # with no reason at all while 10.3 M docs stayed behind. The exit
+            # code is the whole diagnosis; it is never dropped again (16.1).
+            detail = (err or out).strip()[:400]
+            return False, (f"curl exit {rc} ({curl_exit_meaning(rc, timeout)}) "
+                           f"on {url_path}" + (f": {detail}" if detail else
+                                               " [no output from curl]"))
         try:
             return True, json.loads(out)
         except json.JSONDecodeError:
@@ -887,6 +932,26 @@ DEVICE_PREFIX_ROOT = "mlx-"
 # (the 2026-08-28 defect: 900 s of bounded waits with no output at all, so the
 # operator could not tell a working cleanup from a hung one).
 PURGE_PROGRESS_EVERY = int(os.environ.get("MLX_PURGE_PROGRESS_EVERY", "250"))
+
+# OpenSearch residue purge (2026-08-28, first live `--cleanup-only mlx-`).
+# A SYNCHRONOUS `_delete_by_query?refresh=true` over 10.3 M syslog docs cannot
+# finish inside any sane HTTP bound: curl hit `max-time = 300`, exited 28 with
+# an EMPTY body, and the harness reported "OpenSearch syslog purge failed: "
+# with no reason while every document stayed behind. The delete is now
+# submitted ASYNC (`wait_for_completion=false`) and progress is measured by
+# RE-COUNTING the prefix — deliberately NOT by polling `_tasks`, because
+# `netops_bootstrap` (deployment/docker/opensearch/security/roles.yml) holds no
+# `cluster:monitor/tasks/lists` permission and must not gain one to clean a lab.
+# It DOES hold `indices_all` on `netops-*`, so the final `_refresh` below is
+# within its rights.
+OS_PURGE_SUBMIT_TIMEOUT_S = int(os.environ.get("MLX_OS_PURGE_SUBMIT_TIMEOUT_S", "60"))
+OS_PURGE_BUDGET_BASE_S = float(os.environ.get("MLX_OS_PURGE_BUDGET_BASE_S", "60"))
+# Measured floor to plan against: ~2,000 docs/s deleted on the lab box.
+OS_PURGE_SECONDS_PER_DOC = float(
+    os.environ.get("MLX_OS_PURGE_SECONDS_PER_DOC", "0.0005"))
+OS_PURGE_BUDGET_MAX_S = float(os.environ.get("MLX_OS_PURGE_BUDGET_MAX_S", "10800"))
+OS_PURGE_POLL_S = float(os.environ.get("MLX_OS_PURGE_POLL_S", "30"))
+OS_SYSLOG_INDEX = "netops-syslog-*"
 
 # Preflight drain ETA (resume brief 2026-08-28 gap): when the baseline lag
 # refusal fires, observe the backlog briefly so the refusal carries a number
@@ -1297,23 +1362,119 @@ def purge_telemetry(stack: Stack, prefix: str) -> tuple[dict, list[str]]:
     elif ev["ch_signals_left"] != 0:
         problems.append(f"{ev['ch_signals_left']} run rows left in corr_signals")
 
-    okd, res = stack.os_req(
+    os_ev, os_problems = os_purge_syslog(stack, prefix)
+    ev.update(os_ev)
+    problems.extend(os_problems)
+    return ev, problems
+
+
+def os_purge_syslog(stack: Stack, prefix: str, budget_s: float | None = None,
+                    poll_s: float = OS_PURGE_POLL_S) -> tuple[dict, list[str]]:
+    """Delete every `netops-syslog-*` doc whose hostname carries `prefix`, and
+    verify to zero by COUNTING.
+
+    Submitted async: at lab scale (10.3 M docs) a synchronous delete outlives
+    every HTTP bound. Progress is the count itself — `svc_bootstrap` cannot
+    read `_tasks` (and is not being given that permission for a lab teardown),
+    so the task id is carried only so a failure can name what is still running
+    server-side.
+    """
+    ev: dict = {"os_task": "", "os_deleted": -1, "os_docs_left": -1}
+    problems: list[str] = []
+    before = stack.os_count(OS_SYSLOG_INDEX, "hostname.keyword", prefix)
+    ev["os_docs_before"] = before
+    if before == 0:
+        ev["os_docs_left"] = 0
+        ev["os_deleted"] = 0
+        log(f"cleanup: no {OS_SYSLOG_INDEX} docs match {prefix} — nothing to purge")
+        return ev, problems
+    if before < 0:
+        # A blind pre-count must NOT stop the purge — residue has to go either
+        # way — but it is reported, and the budget falls back to the base.
+        problems.append(
+            f"OpenSearch pre-count for {prefix} failed — purge runs blind, "
+            f"progress and ETA are unavailable")
+    if budget_s is None:
+        budget_s = min(OS_PURGE_BUDGET_MAX_S,
+                       OS_PURGE_BUDGET_BASE_S +
+                       max(before, 0) * OS_PURGE_SECONDS_PER_DOC)
+
+    ok, res = stack.os_req(
         "OS_BOOTSTRAP_PASSWORD", "svc_bootstrap",
-        "/netops-syslog-*/_delete_by_query?refresh=true",
+        f"/{OS_SYSLOG_INDEX}/_delete_by_query"
+        f"?wait_for_completion=false&conflicts=proceed&slices=auto",
         {"query": {"prefix": {"hostname.keyword": prefix}}},
-        timeout=300)
-    if not okd or not isinstance(res, dict):
-        problems.append(f"OpenSearch syslog purge failed: {res}")
-        ev["os_deleted"] = -1
-    else:
-        ev["os_deleted"] = res.get("deleted", -1)
-        if res.get("failures"):
+        timeout=OS_PURGE_SUBMIT_TIMEOUT_S)
+    task = str(res.get("task", "")) if ok and isinstance(res, dict) else ""
+    ev["os_task"] = task
+    if not task:
+        problems.append(
+            f"OpenSearch delete_by_query submit FAILED (no task id): {res}")
+        ev["os_docs_left"] = stack.os_count(OS_SYSLOG_INDEX, "hostname.keyword",
+                                            prefix)
+        if ev["os_docs_left"] != 0:
             problems.append(
-                f"OpenSearch purge reported failures: {str(res['failures'])[:200]}")
-    left = stack.os_count("netops-syslog-*", "hostname.keyword", prefix)
+                f"{ev['os_docs_left']} run docs left in {OS_SYSLOG_INDEX}")
+        return ev, problems
+    log(f"cleanup: OpenSearch delete_by_query submitted as task {task} "
+        f"({before} docs matching {prefix}); budget {budget_s / 60:.0f} min, "
+        f"progress measured by re-count every {poll_s:.0f}s. NOTE: if a delete "
+        f"for this prefix is already running server-side (an earlier run, or a "
+        f"manual submit), this one overlaps it — harmless with "
+        f"conflicts=proceed, but it doubles the load, so prefer letting the "
+        f"first one finish and re-running this to VERIFY")
+
+    t0 = time.monotonic()
+    deadline = t0 + max(1.0, budget_s)
+    left, elapsed = before, 0.0
+    while True:
+        nap = min(poll_s, max(0.0, deadline - time.monotonic()))
+        if nap > 0:
+            time.sleep(nap)
+        left = stack.os_count(OS_SYSLOG_INDEX, "hostname.keyword", prefix)
+        elapsed = time.monotonic() - t0
+        if left < 0:
+            # A count we could not read is NOT progress and NEVER "clean".
+            warn(f"cleanup: OpenSearch count failed {elapsed:.0f}s into the "
+                 f"purge — progress UNKNOWN, task {task} still running")
+        else:
+            done = (before - left) if before >= 0 else -1
+            rate = (done / elapsed) if done > 0 and elapsed > 0 else 0.0
+            eta = (f"~{left / rate / 60:.1f} min" if rate > 0 else "no ETA yet")
+            log(f"cleanup: OpenSearch purge — {left} docs left "
+                f"({rate:.0f} docs/s, {eta}), {elapsed:.0f}s of "
+                f"{budget_s:.0f}s, task {task}")
+            if left == 0:
+                # Confirm through an explicit refresh: _count reads the
+                # searchable view, which lags the delete by the index's
+                # refresh_interval. `indices_all` on netops-* covers this.
+                okr, rres = stack.os_req(
+                    "OS_BOOTSTRAP_PASSWORD", "svc_bootstrap",
+                    f"/{OS_SYSLOG_INDEX}/_refresh", None, timeout=120)
+                if not okr:
+                    warn(f"cleanup: {OS_SYSLOG_INDEX} _refresh before the final "
+                         f"count failed ({rres}) — the zero below is unrefreshed")
+                left = stack.os_count(OS_SYSLOG_INDEX, "hostname.keyword", prefix)
+                if left == 0:
+                    log(f"cleanup: OpenSearch purge verified zero after "
+                        f"{elapsed:.0f}s (task {task})")
+                    break
+                warn(f"cleanup: post-refresh count is {left}, not 0 — the purge "
+                     f"is not finished; continuing within budget")
+        if time.monotonic() >= deadline:
+            break
+
     ev["os_docs_left"] = left
+    ev["os_deleted"] = (before - left) if before >= 0 and left >= 0 else -1
+    ev["os_purge_seconds"] = round(elapsed, 1)
+    ev["os_purge_budget_s"] = round(budget_s, 1)
     if left != 0:
-        problems.append(f"{left} run docs left in netops-syslog-*")
+        shown = left if left >= 0 else "UNKNOWN"
+        problems.append(
+            f"{shown} docs left in {OS_SYSLOG_INDEX} after {elapsed:.0f}s of a "
+            f"{budget_s:.0f}s budget — task {task} may still be running "
+            f"server-side; re-run `--cleanup-only {prefix}` to re-verify "
+            f"(it is idempotent and will resubmit only what is left)")
     return ev, problems
 
 
@@ -2742,7 +2903,10 @@ class Harness:
         log(f"cleanup: starting — budget up to {total_budget / 60:.0f} min "
             f"(drain wait {CLEANUP_DRAIN_WAIT_S:.0f}s + device purge "
             f"{device_budget:.0f}s + pre-purge wait "
-            f"{CLEANUP_PREPURGE_WAIT_S:.0f}s), then CH/OS purge. "
+            f"{CLEANUP_PREPURGE_WAIT_S:.0f}s), then the ClickHouse purge and "
+            f"an ASYNC OpenSearch purge whose own budget scales with the doc "
+            f"count ({OS_PURGE_BUDGET_BASE_S:.0f}s + 1s per "
+            f"{1 / OS_PURGE_SECONDS_PER_DOC:.0f} docs). "
             f"Signals during cleanup are ignored — let it finish.")
 
         # 7·twin: the delegated twin run was kept standing for accounting —
