@@ -23,9 +23,20 @@ Design: `TROUBLESHOOTING_PROTOCOL_DIAGNOSTICS_2026-08-27.md` (owner spec).
   signatures (fail-closed, no invented cause); redaction + TAC export.
 - [ ] Wire protocoldiag → HTTP API (handlers, §3a) + the frontend tabs/buttons UI.
 
-## C. IRIS enhancement (item 8) — ❌ roadmap NOT produced
-- [ ] Roadmap: auto-troubleshoot, guide engineers, human-in-the-loop
-  auto-actions, auto vendor-case opening. Then build in phases.
+## C. IRIS enhancement (item 8) — 📐 roadmap PRODUCED 2026-08-28
+`docs/design/IRIS_ENHANCEMENT_ROADMAP_2026-08-28.md` — extends the existing HLD
+§10 phase plan (does not reinvent it). Four asks mapped to phases:
+- **A. Auto-troubleshoot reach** (near-term, read-only, no new trust boundary):
+  add Iris read-only tools `run_protocol_diagnostic` (Proj 3 B), `get_security_
+  findings` (Proj 2), `get_topology_context`; **fix the routing inversion** so
+  free-form text hits the grounded/cited engine. Highest leverage.
+- **B. Guide the engineer** (P5 advisory, no executor): guided checklist +
+  escalation/TAC draft notes + handoff.
+- **C. Human-in-the-loop controlled actions** (P6, separate subsystem the model
+  CANNOT call): ITSM/Slack/owner → **auto vendor-case opening (human-approved)**
+  → gated device change. Mirrors the built Wireless five-gate pattern.
+- **D. Reach/interop** (P7): MCP, ChatOps, memory.
+- [ ] Build Phase A first (unlocks the payoff of Projects 2 & 3). Then B, C, D.
 
 ## D. Frontend-wave items (owner's original 13-item list)
 Full audit: `docs/FRONTEND_WAVE_TRACKER.md`.
