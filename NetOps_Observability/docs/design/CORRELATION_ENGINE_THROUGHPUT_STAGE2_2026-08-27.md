@@ -70,3 +70,37 @@ first; only optimize if there's real headroom. Results-preserving.
   blocks the target.
 - Then the deferred **formal storm-gate re-run** (the faster engine settles the
   stack to idle, unblocking the clean baseline).
+
+---
+
+## Lever 3 — TRUE cause (profiled 2026-08-28): C `json.dumps` GIL-hold in object hashing
+
+Profiling REFUTED the finding/insert hypothesis (single-row `netops.findings`
+writes are ~12µs, always yield). The real stall: **`ObjectSnapshot.content_hash()`
+(engine.py:1868)** and the object serializers (`material_hash`, `to_object_row`,
+`to_evidence_rows`, `to_typed_edge_rows`) — all `json.dumps`-heavy over large
+storm objects. Measured: 300n/45k-edge object → content_hash 1.54s; 600n/180k →
+6.2s. Scales with EDGE count.
+
+**The GIL subtlety:** these are OFFLOADED, but the C `json.dumps`/`iterencode`
+holds the GIL through long C stretches, so `run_in_executor` frees the loop
+thread yet the heartbeat coroutine still starves — measured heartbeat gap = 20–25%
+of the call (6.5s call → 1.7s gap; several concurrent → the 15.7s worst-case).
+Pure-Python offload releases the GIL at the switch interval (1% gap); the C json
+encoder does NOT. This is what the 2026-08-27 CORRECTION got half-right.
+
+### Fix (Opus measures & picks; determinism is NON-NEGOTIABLE)
+`content_hash`/`material_hash` are the **replay pin + damping detector** — output
+MUST stay BYTE-IDENTICAL to `json.dumps(..., separators=(",",":"), sort_keys=True)`
+or (a) replay drifts and (b) every open object re-versions once on deploy.
+- **Option A — chunked in-process serialization:** serialize the big `edges`/
+  `signals` lists element-by-element (each element via C `json.dumps`, fast) in a
+  PYTHON loop that yields the GIL periodically, feeding `hashlib.update()` per
+  chunk. Byte-identical (match json.dumps' `[e1,e2,…]` separators/brackets exactly).
+  No pickle. Delicate byte-exact boundary reproduction.
+- **Option B — ProcessPool for the hash:** compute in a subprocess (own GIL → main
+  heartbeat free); RESULT is a tiny hash string (no big-object unpickle, unlike the
+  refuted run_window ProcessPool). Trivially byte-identical (same json.dumps in the
+  child). Cost = INPUT pickle of the large object — MEASURE it vs the serialize cost.
+- Pin against the golden-wire/replay/damping suite; a known object's content_hash
+  MUST equal its pre-change value.
