@@ -40,8 +40,15 @@ was a STALE tracker note. No redeploy needed; storm-VALIDATION is what remains.)
   in Kafka. Deterministic, replay-safe, GATED (non-storm byte-identical,
   content_hash c26e3ff905b8adc3 unchanged). Suite 1573 passed. Targets the 2.5k
   correlation_completion FAIL. Design: `docs/design/CORRELATION_STORM_MODE_DESIGN_2026-08-28.md`.
-  **All 6 benchmark P0s now done. 2.5k re-run WITH storm mode IN PROGRESS** —
-  does correlation_completion pass in budget? Then the 2-worker scale-out proof.
+  **All 6 benchmark P0s DONE.** 2.5k re-run WITH storm mode (`082815…`): storm
+  barely fired (2×) — `correlation_completion` STILL FAIL (throughput). **Finding
+  (`docs/scale/STORM_MODE_2P5K_VERDICT_2026-08-28.md`): the completion limit is
+  single-shard object-reconciliation THROUGHPUT, not signal pressure; the storm
+  detector structurally can't watch the object queue (its flag must stay a pure
+  window-content function for replay determinism). 2.5k completion → scale-out.**
+  Storm mode remains the correct resilience layer (proven on sheddable load at
+  unit level). True ≥1.6× 2-worker proof HARDWARE-BLOCKED (4 cores; needs 8c/2-node).
+  Sharding architecture correct (12 co-partition tests pass).
 
 ### B. Unblock CI
 - [x] **#169** guard test GREEN (`a71bdcda`, verified 2026-08-27 — legit re-pin of drifted reviewed handlers, not a mask). Confirm full CI green on next push.
