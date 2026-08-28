@@ -26,6 +26,14 @@ was a STALE tracker note. No redeploy needed; storm-VALIDATION is what remains.)
 - [x] **#162 `find_continuation` O(open_objects)** (`dd3f2154`).
 - [x] **#163 `OPEN_OBJECTS` count bound** (`97b2600c`).
 - [ ] **#164 `_offload` executor queue** — verify after A; flagged non-bottleneck.
+- [x] **P0 boundedness pass** (`fa4857a5`, 2026-08-28) — the ROOT fix for the
+  108s/17.7s loop-stall in C below. The storm object's edge/evidence child rows
+  now emit in bounded, loop-yielding pages (`_emit_child_rows`); worst
+  uninterruptible work unit **1.78s → 0.30s @ 180k-edge shape** (micro-bench,
+  under the 500ms target). Determinism preserved (content_hash byte-identical);
+  ClickHouse still batches. Suite 1565 passed. Decision: `docs/scale/ENGINE_DECISION_2026-08-28.md`.
+  **NEXT: full-stack re-run of the 2.5k rung (was memflat/stability FAIL on this
+  exact stall) + the 2-worker ≥1.6× scale-out proof, then publish the tiered envelope.**
 
 ### B. Unblock CI
 - [x] **#169** guard test GREEN (`a71bdcda`, verified 2026-08-27 — legit re-pin of drifted reviewed handlers, not a mask). Confirm full CI green on next push.
