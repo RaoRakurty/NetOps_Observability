@@ -48,6 +48,16 @@ was a STALE tracker note. No redeploy needed; storm-VALIDATION is what remains.)
   correlation_completion / stability / **memflat FAIL**: 108s event-loop stall
   ejected a replica; correlation-2 leaked 496→691 MiB. **CEILING is 1k–2.5k;
   binding constraint = correlation-engine loop-stall under CPU, not disk/loss.**
+- [x] **2.5k nominal RE-RUN post boundedness-pass** (run `082812437a77`, WITH
+  `fa4857a5` live) — **Overall FAIL (6P/3F), but the collapse is FIXED.**
+  `docs/scale/SCALE_2P5K_POSTFIX_VERDICT_2026-08-28.md`. **stability FAIL→PASS:
+  worst loop stall 108,000ms→10,669ms (10×), replica ejection→0 restarts.**
+  accounting PASS (lossless), drain PASS (549s). Remaining FAILs are NOT the
+  stall: correlation_completion = throughput (pending 15,638 after budget — the
+  "2.5k Conditional, needs scale-out" limit); memflat = confounded by 15k-object
+  working set (needs longer-settle re-measure); cleanup = non-product OS-purge
+  artifact. **2.5k moved from "collapses" → "survives losslessly." Path to
+  Validated = the 2-worker ≥1.6× scale-out proof, not more single-shard tuning.**
 - [ ] **2.5k S1 storm** (profile `s1-2.5k`, ~10k eps storm lane) — the real tolerance test.
 - [ ] Add **5k** profiles (t-nominal-5k, s1-5k) → run nominal + S1.
 - [ ] Add **10k** profiles (t-nominal-10k, s1-10k) → run nominal + S1 (GA target).
