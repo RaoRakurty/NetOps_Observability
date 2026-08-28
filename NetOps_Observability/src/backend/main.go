@@ -29,6 +29,7 @@ import (
 	"netops/backend/internal/loginguard"
 	"netops/backend/internal/metricval"
 	"netops/backend/internal/platformdb"
+	"netops/backend/internal/protocoldiag"
 	"netops/backend/internal/quarantine"
 	"netops/backend/internal/ratelimit"
 	"netops/backend/internal/saved"
@@ -88,43 +89,50 @@ const version = "0.1.0-scaffold"
 // (discovery aggregator, collector pool, alert engine, notifier, user
 // store for auth, and the live-events WebSocket hub).
 type server struct {
-	startedAt        time.Time
-	discovery        *discovery.DiscoveryAggregator
-	collectors       *collectors.Pool
-	alerts           *alerts.Engine
-	alertEpisodes    *alertEpisodeStore
-	maintWindows     maintenance.Store // declared planned-work windows (item 121): pause notifications + stamp timeintel
-	processors       processors.Store  // per-tenant pipeline processor rules (item 121): compiled into the router config
-	userRules        *userRulesStore
-	notifier         *notify.Dispatcher
-	selfHeal         *selfheal.Healer
-	users            usersRepo
-	roles            *roleStore
-	bgpWatch         *bgpWatchStore // BGP ops watchlist (item 10, PG FORCE-RLS; nil on file backend)
-	bgpFetch         *bgpFetcher    // outbound RIPEstat/RDAP fetcher with TTL cache
-	tenants          tenantRepo
-	orgs             *tenant.OrgStore
-	bindings         *bindingStore
-	securitySettings *securitySettingsStore
-	loginThrottle    *loginguard.Throttle // in-memory failed-login lockout (best-effort)
-	sessions         *session.Store       // server-side session lifecycle (idle/absolute/revocation)
-	apiKeys          *apikey.Store
-	refresh          *session.RefreshStore
-	snmpCreds        *snmpcred.Store
-	credOverrides    *credOverrideStore // learned SNMP credential bindings (credential sentinel)
-	credSentinel     *credSentinel      // self-healing credential resolution loop
-	sshHosts         *sshHostStore      // #20/device-ssh: TOFU host-key store for the SSH gateway
-	snmpProfiles     *snmpProfileStore
-	saved            saved.Repo
-	audit            auditRepo
-	notifyCfg        *notifyConfigStore
-	contactPoints    *contactPointStore
-	deviceLocations  *deviceLocationStore
-	sites            *sitesStore        // internal SoT sites (default provider)
-	deviceSites      *deviceSiteStore   // operator device→site bindings (intent)
-	wanPolicy        *wanPolicyStore    // WAN measurement policy (operator intent) #wan-path-metrics
-	systemNet        *systemNetStore    // platform DNS + NTP system settings (clock sync + URL resolution)
-	backupCfg        *backupConfigStore // platform data-protection settings + DR status
+	startedAt     time.Time
+	discovery     *discovery.DiscoveryAggregator
+	collectors    *collectors.Pool
+	alerts        *alerts.Engine
+	alertEpisodes *alertEpisodeStore
+	maintWindows  maintenance.Store // declared planned-work windows (item 121): pause notifications + stamp timeintel
+	processors    processors.Store  // per-tenant pipeline processor rules (item 121): compiled into the router config
+	userRules     *userRulesStore
+	notifier      *notify.Dispatcher
+	selfHeal      *selfheal.Healer
+	users         usersRepo
+	roles         *roleStore
+	bgpWatch      *bgpWatchStore // BGP ops watchlist (item 10, PG FORCE-RLS; nil on file backend)
+	bgpFetch      *bgpFetcher    // outbound RIPEstat/RDAP fetcher with TTL cache
+	// Routing-protocol diagnostics (Troubleshooting item 7). Catalog + analyzer
+	// are pure/immutable and always built; the collector stays nil until a real
+	// CommandRunner (SSH/gNMI) is wired at deploy time (TODO(deploy) in
+	// internal/protocoldiag/collect.go) — the collect endpoint 503s until then.
+	protocolCatalog   *protocoldiag.Catalog
+	protocolAnalyzer  *protocoldiag.Analyzer
+	protocolCollector *protocoldiag.Collector
+	tenants           tenantRepo
+	orgs              *tenant.OrgStore
+	bindings          *bindingStore
+	securitySettings  *securitySettingsStore
+	loginThrottle     *loginguard.Throttle // in-memory failed-login lockout (best-effort)
+	sessions          *session.Store       // server-side session lifecycle (idle/absolute/revocation)
+	apiKeys           *apikey.Store
+	refresh           *session.RefreshStore
+	snmpCreds         *snmpcred.Store
+	credOverrides     *credOverrideStore // learned SNMP credential bindings (credential sentinel)
+	credSentinel      *credSentinel      // self-healing credential resolution loop
+	sshHosts          *sshHostStore      // #20/device-ssh: TOFU host-key store for the SSH gateway
+	snmpProfiles      *snmpProfileStore
+	saved             saved.Repo
+	audit             auditRepo
+	notifyCfg         *notifyConfigStore
+	contactPoints     *contactPointStore
+	deviceLocations   *deviceLocationStore
+	sites             *sitesStore        // internal SoT sites (default provider)
+	deviceSites       *deviceSiteStore   // operator device→site bindings (intent)
+	wanPolicy         *wanPolicyStore    // WAN measurement policy (operator intent) #wan-path-metrics
+	systemNet         *systemNetStore    // platform DNS + NTP system settings (clock sync + URL resolution)
+	backupCfg         *backupConfigStore // platform data-protection settings + DR status
 	// wanIfAddr is the interface-IP registry source (deviceID → ip → ifName) for
 	// the WAN endpoint projector. Defaults to collectors.FetchIfAddrMap; a DI seam
 	// so the projector's tenant-filter is unit-testable without Redis (§5).
@@ -753,6 +761,13 @@ func newServer() *server {
 		srv.bgpWatch = newBGPWatchStore(ps.DB())
 	}
 	srv.bgpFetch = newBGPFetcher()
+	// Routing-protocol diagnostics (Troubleshooting item 7): the catalog +
+	// signatures are a pure, always-available library. The collector is left nil
+	// until the read-only SSH/gNMI CommandRunner is wired at deploy time
+	// (TODO(deploy)); the collect endpoint returns 503 rather than fabricating a
+	// capture while the transport is dormant.
+	srv.protocolCatalog = protocoldiag.DefaultCatalog()
+	srv.protocolAnalyzer = protocoldiag.DefaultAnalyzer()
 	// NMS vendor-controller framework (#95 P3b): dormant unless
 	// FEATURE_NMS_INTEGRATIONS=true. PG-backed on postgres (migration 0020,
 	// FORCE-RLS); in-memory store on the file backend (dev).
@@ -1676,6 +1691,10 @@ func (s *server) routes(mux *http.ServeMux) {
 	// BGP Operations (item 10): tenant watchlist + remote-API data spine.
 	mux.HandleFunc("/api/bgp/watchlist", s.handleBGPWatchlist)
 	mux.HandleFunc("/api/bgp/resource", s.handleBGPResource)
+	// Routing-protocol diagnostics (Troubleshooting item 7).
+	mux.HandleFunc("/api/troubleshoot/protocol-diagnostics/catalog", s.handleProtocolDiagCatalog)
+	mux.HandleFunc("/api/troubleshoot/protocol-diagnostics/analyze", s.handleProtocolDiagAnalyze)
+	mux.HandleFunc("/api/troubleshoot/protocol-diagnostics/collect", s.handleProtocolDiagCollect)
 	// Port Intelligence (#94 P5) — enhances the Infrastructure surface (no new nav).
 	mux.HandleFunc("/api/infrastructure/interfaces", s.handlePortInterfaces)
 	mux.HandleFunc("/api/infrastructure/interfaces/", s.handlePortInterfaceDetail)
