@@ -34,6 +34,14 @@ was a STALE tracker note. No redeploy needed; storm-VALIDATION is what remains.)
   ClickHouse still batches. Suite 1565 passed. Decision: `docs/scale/ENGINE_DECISION_2026-08-28.md`.
   **NEXT: full-stack re-run of the 2.5k rung (was memflat/stability FAIL on this
   exact stall) + the 2-worker ≥1.6× scale-out proof, then publish the tiered envelope.**
+- [x] **Storm mode — the LAST benchmark P0** (`51575407`, deployed 2026-08-28) —
+  detect overload (buffer-frac + backlog-age arms) → dedup repeats / prioritize
+  critical / aggregate low-value into a per-tenant counter object / preserve raw
+  in Kafka. Deterministic, replay-safe, GATED (non-storm byte-identical,
+  content_hash c26e3ff905b8adc3 unchanged). Suite 1573 passed. Targets the 2.5k
+  correlation_completion FAIL. Design: `docs/design/CORRELATION_STORM_MODE_DESIGN_2026-08-28.md`.
+  **All 6 benchmark P0s now done. 2.5k re-run WITH storm mode IN PROGRESS** —
+  does correlation_completion pass in budget? Then the 2-worker scale-out proof.
 
 ### B. Unblock CI
 - [x] **#169** guard test GREEN (`a71bdcda`, verified 2026-08-27 — legit re-pin of drifted reviewed handlers, not a mask). Confirm full CI green on next push.
