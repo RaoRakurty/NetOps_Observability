@@ -89,8 +89,12 @@ was a STALE tracker note. No redeploy needed; storm-VALIDATION is what remains.)
     1-6 byte-identical (10-test proof + reference updated). Robustness added:
     per-dimension audit, CORR_CANDIDATE_CEILING=3M deterministic backstop (logs
     offending dim), observability metrics. Route-dim compact-rep = flagged follow-up.
-  - [ ] Lever 3 per-pair micro-opt — only if profiling shows headroom after 1+2.
-  - [ ] Then the deferred formal storm-gate re-run (faster engine settles the stack).
+  - [x] **Lever 3** chunk-serialize object hashes (`6de251b4`, Fable-verified) —
+    content_hash/material_hash C json.dumps held the GIL through offload → heartbeat
+    gap 1398ms→16ms (~85x), BYTE-IDENTICAL digest (replay pin preserved, 208 det.
+    tests unchanged). The last multi-second stall, bounded.
+  - **STAGE 2 COMPLETE** — all synchronous stalls bounded (recon loop, quadratic,
+    find_merges, object-hash). Next: deploy → measure single-shard ceiling.
 
 ## TARGET (industry-benchmarked 2026-08-27 — see CORRELATION_THROUGHPUT_TARGET)
 Causal correlation ≠ shallow dedup/NVPS; the honest comparator is Flink
