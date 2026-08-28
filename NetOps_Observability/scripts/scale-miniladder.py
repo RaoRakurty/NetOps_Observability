@@ -96,8 +96,13 @@ GH runners are 4-vCPU/16 GiB shared VMs whose absolute numbers are
 meaningless and whose 6-hour cap the L1-scale run can approach — the CI leg
 guards the invariants at small scale, the lab leg is the GA evidence.
 
-Exit codes: 0 = all phases PASS; 1 = any phase FAILED (report still written);
+Exit codes: 0 = all phases PASS (and cleanup verified zero device residue);
+1 = any phase FAILED, or device residue was left behind (report still written);
 2 = aborted before touching the stack (usage / preflight refusal).
+
+Residue purge: `--cleanup-only [PREFIX]` deletes every `mlx-`-prefixed device
+left by an interrupted run, verifies to zero and purges its telemetry. It runs
+no workload and refuses an unreachable stack.
 """
 
 from __future__ import annotations
@@ -855,6 +860,45 @@ class Stack:
 # Deleting them earlier turns every in-flight event into a refusal (see
 # cleanup()). Bounded: teardown must always happen, drained or not.
 CLEANUP_DRAIN_WAIT_S = float(os.environ.get("MLX_CLEANUP_DRAIN_WAIT_S", "300"))
+# Pre-purge settle wait (was an inline 600 inside cleanup()): how long cleanup
+# waits for the consumer to finish its last inserts before purging telemetry.
+CLEANUP_PREPURGE_WAIT_S = float(os.environ.get("MLX_CLEANUP_PREPURGE_WAIT_S", "600"))
+# EXPLICIT, GENEROUS budget for the device purge (2026-08-28 residue defect,
+# run p1-on-08281911: an interrupted 2,500-device run left every device
+# standing). One DELETE is a bounded HTTP_TIMEOUT call, so 2,500 devices need
+# minutes, not seconds — and the purge RE-LISTS between passes. The budget is
+# a floor plus per-device time so it scales with --devices instead of silently
+# truncating a large fleet's teardown.
+CLEANUP_DEVICE_BUDGET_BASE_S = float(
+    os.environ.get("MLX_CLEANUP_DEVICE_BUDGET_BASE_S", "600"))
+CLEANUP_DEVICE_BUDGET_PER_DEVICE_S = float(
+    os.environ.get("MLX_CLEANUP_DEVICE_BUDGET_PER_DEVICE_S", "1.5"))
+# Delete/verify passes before the purge gives up and reports residue LOUDLY.
+DEVICE_PURGE_MAX_PASSES = int(os.environ.get("MLX_DEVICE_PURGE_MAX_PASSES", "12"))
+# Page size asked of /api/devices. The endpoint may CAP the page BELOW this
+# (2,500 observed), so the pager follows what came back, never what was asked.
+DEVICE_PAGE_LIMIT = int(os.environ.get("MLX_DEVICE_PAGE_LIMIT", "5000"))
+# Guard against a list endpoint that never says "complete".
+DEVICE_PAGE_MAX_PAGES = int(os.environ.get("MLX_DEVICE_PAGE_MAX_PAGES", "200"))
+# Every device this harness has EVER created carries this id prefix; nothing
+# else may be purged by --cleanup-only (blast-radius guard, 16.3 dry-run rule).
+DEVICE_PREFIX_ROOT = "mlx-"
+# Progress cadence for the purge — cleanup must never be silent for minutes
+# (the 2026-08-28 defect: 900 s of bounded waits with no output at all, so the
+# operator could not tell a working cleanup from a hung one).
+PURGE_PROGRESS_EVERY = int(os.environ.get("MLX_PURGE_PROGRESS_EVERY", "250"))
+
+# Preflight drain ETA (resume brief 2026-08-28 gap): when the baseline lag
+# refusal fires, observe the backlog briefly so the refusal carries a number
+# the operator can plan against. HARD-BOUNDED — preflight must not become a
+# waiting room.
+LAG_ETA_BUDGET_S = float(os.environ.get("MLX_LAG_ETA_BUDGET_S", "60"))
+LAG_ETA_INTERVAL_S = float(os.environ.get("MLX_LAG_ETA_INTERVAL_S", "15"))
+LAG_ETA_SAMPLES = int(os.environ.get("MLX_LAG_ETA_SAMPLES", "3"))
+# Signals during cleanup are IGNORED with a message; this many of them means
+# the operator really wants out, and we abort — loudly, naming the residue.
+CLEANUP_ABORT_AFTER_SIGNALS = int(
+    os.environ.get("MLX_CLEANUP_ABORT_AFTER_SIGNALS", "3"))
 # TRACKER 170: how close to zero the worst replica's oldest-pending age must
 # be to call the engine idle. Not zero: the gauge is computed against the
 # newest retained event, so a just-drained engine can read a few seconds.
@@ -992,6 +1036,287 @@ WORKLOAD_PROFILES: dict = {
 }
 
 
+# ---------------------------------------------------------------------------
+# Interrupt discipline and residue purge
+#
+# THE DEFECT THIS SECTION EXISTS FOR (2026-08-28, run p1-on-08281911). The run
+# was signalled after the drain phase. The console printed
+#
+#     WARNING: interrupted — running cleanup before exit
+#     [FAIL] interrupted — run interrupted by signal
+#
+# ...and then NOTHING: no cleanup verdict, no report.json, and all 2,500
+# `mlx-08281911zaz6-*` devices still standing in the device store. Three code
+# facts produced that outcome, and each is fixed here:
+#
+#   1. A SECOND signal during cleanup killed the purge. SIGINT raises
+#      KeyboardInterrupt, and the old SIGTERM handler raised it too — from ANY
+#      point, including the middle of cleanup. `except Exception` around the
+#      cleanup call cannot catch it (KeyboardInterrupt is a BaseException), so
+#      it unwound straight out of execute(), skipping both the rest of the
+#      purge and report(). SIGHUP was not handled at all: a closing terminal
+#      killed the process outright.
+#   2. Cleanup was SILENT for up to ~900 s before the first DELETE was even
+#      issued (a bounded drain wait, then the deletes, then a 600 s pre-purge
+#      wait), so that window looked exactly like a hang — and got signalled.
+#   3. The purge deleted only the ids the run happened to hold in memory and
+#      verified ONCE. A partial pass left residue nobody re-attempted.
+#
+# So: cleanup owns its signals, announces every step with counts, deletes by
+# LISTED PREFIX (page-loop) and re-verifies to zero (F-69: never trust a 204).
+# ---------------------------------------------------------------------------
+
+
+class CleanupAborted(Exception):
+    """The operator insisted (Nth signal) while cleanup was running.
+
+    Deliberate, never silent: the caller names the residue it is leaving and
+    the exact command that finishes the job.
+    """
+
+
+class InterruptGuard:
+    """Signal policy for a run whose teardown deletes thousands of devices.
+
+    Before cleanup a signal unwinds the run INTO cleanup (KeyboardInterrupt).
+    During cleanup signals are IGNORED with a message, because the alternative
+    is exactly the 2026-08-28 residue defect — until `abort_after` of them,
+    which is the operator plainly saying "leave it"; that aborts loudly.
+    """
+
+    def __init__(self, abort_after: int = CLEANUP_ABORT_AFTER_SIGNALS) -> None:
+        self.abort_after = max(1, abort_after)
+        self.signals_seen = 0
+        self.cleanup_signals = 0
+        self.in_cleanup = False
+        self.installed: list[str] = []
+
+    def install(self) -> None:
+        """Own SIGINT/SIGTERM/SIGHUP. An uninstallable handler is REPORTED
+        (16.1), never assumed harmless — it means residue on interrupt."""
+        for signame in ("SIGINT", "SIGTERM", "SIGHUP"):
+            sig = getattr(signal, signame, None)
+            if sig is None:
+                continue
+            try:
+                signal.signal(sig, self.handle)
+            except (ValueError, RuntimeError) as exc:
+                # ValueError = not the main thread / signal unknown to this
+                # platform: the other handlers still install, so report by
+                # name and carry on. An OSError here is a kernel-level refusal
+                # and is deliberately NOT caught — it raises before any device
+                # exists, which is the safe failure (16.1: never continue past
+                # an error we cannot characterize).
+                warn(f"could not install a {signame} handler ({exc}) — that "
+                     f"signal will kill this run WITHOUT cleanup, leaving "
+                     f"device residue")
+                continue
+            self.installed.append(signame)
+
+    def handle(self, signum: int, _frame: object) -> None:
+        try:
+            name = signal.Signals(signum).name
+        except ValueError:                       # pragma: no cover - platform
+            name = f"signal {signum}"
+        self.signals_seen += 1
+        if not self.in_cleanup:
+            warn(f"{name} received — unwinding into CLEANUP. This run's "
+                 f"devices are still in the stack; let cleanup finish.")
+            raise KeyboardInterrupt(name)
+        self.cleanup_signals += 1
+        if self.cleanup_signals >= self.abort_after:
+            warn(f"{name} #{self.cleanup_signals} during cleanup — ABORTING "
+                 f"cleanup as instructed")
+            raise CleanupAborted(name)
+        left = self.abort_after - self.cleanup_signals
+        warn(f"{name} IGNORED — cleanup is running (deleting this run's devices "
+             f"and purging its telemetry). Send it {left} more time(s) to abort "
+             f"and LEAVE RESIDUE behind.")
+
+    def enter_cleanup(self) -> None:
+        self.in_cleanup = True
+        self.cleanup_signals = 0
+
+    def leave_cleanup(self) -> None:
+        self.in_cleanup = False
+
+
+def devices_with_prefix(stack: Stack, prefix: str,
+                        page_limit: int = DEVICE_PAGE_LIMIT,
+                        max_pages: int = DEVICE_PAGE_MAX_PAGES,
+                        ) -> tuple[list[str], str]:
+    """Every device id starting with `prefix`, following the endpoint's OWN
+    page size. Returns (ids, error) — error non-empty means the answer is
+    INCOMPLETE and must never be read as "nothing left" (F-69).
+
+    /api/devices caps a page (2,500 observed against a 5,000 ask), so paging
+    advances by the rows that came BACK, not by the limit that was requested,
+    and only stops when the envelope says the page covered the fleet.
+    """
+    seen: dict[str, None] = {}
+    offset, pages = 0, 0
+    while True:
+        st, resp = stack.api(
+            "GET", f"/api/devices?envelope=1&limit={page_limit}&offset={offset}")
+        if st != 200 or not isinstance(resp, dict):
+            return list(seen), (f"device list failed at offset {offset}: "
+                                f"HTTP {st} {str(resp)[:120]}")
+        rows = resp.get("devices")
+        if not isinstance(rows, list):
+            return list(seen), (f"device list at offset {offset} has no "
+                                f"`devices` array (envelope contract changed?)")
+        for d in rows:
+            did = str(d.get("id", "")) if isinstance(d, dict) else ""
+            if did.startswith(prefix):
+                seen[did] = None
+        pages += 1
+        offset += len(rows)
+        if not rows:
+            return list(seen), ""
+        total = resp.get("total")
+        if isinstance(total, int) and offset >= total:
+            return list(seen), ""
+        if resp.get("complete") is True and not isinstance(total, int):
+            return list(seen), ""
+        if pages >= max_pages:
+            return list(seen), (f"device list did not terminate after "
+                                f"{max_pages} pages ({offset} rows read) — "
+                                f"paging contract broken; residue unknown")
+
+
+def delete_devices(stack: Stack, ids: list[str], deadline: float,
+                   ) -> tuple[int, list[str], bool]:
+    """DELETE each id. 404 counts as gone. Returns (deleted, failures,
+    out_of_budget); failures are STRINGS the caller must print (16.1)."""
+    deleted, failures = 0, []
+    for i, did in enumerate(ids, 1):
+        if time.monotonic() >= deadline:
+            return deleted, failures, True
+        st, resp = stack.api("DELETE", f"/api/devices/{did}")
+        if st in (200, 202, 204, 404):
+            deleted += 1
+        else:
+            failures.append(f"{did}: HTTP {st} {str(resp)[:80]}")
+        if PURGE_PROGRESS_EVERY > 0 and i % PURGE_PROGRESS_EVERY == 0:
+            log(f"cleanup: deleted {i}/{len(ids)} devices "
+                f"({len(failures)} failures so far)")
+    return deleted, failures, False
+
+
+def purge_devices(stack: Stack, prefix: str, budget_s: float,
+                  seed_ids: typing.Sequence[str] = (),
+                  max_passes: int = DEVICE_PURGE_MAX_PASSES) -> dict:
+    """Delete every device under `prefix` and RE-VERIFY to zero.
+
+    Idempotent and re-entrant: each pass LISTS what is actually there, deletes
+    it, then lists again. `verified_zero` is only true when a successful list
+    came back empty — a 204 is not evidence (F-69), and a list that errored is
+    not evidence of absence either.
+    """
+    t0 = time.monotonic()
+    deadline = t0 + max(1.0, budget_s)
+    ev: dict = {"prefix": prefix, "budget_s": budget_s, "passes": 0,
+                "deleted": 0, "delete_failed": 0, "first_delete_error": "",
+                "list_error": "", "remaining": -1, "verified_zero": False,
+                "out_of_budget": False}
+    targets = list(dict.fromkeys(str(i) for i in seed_ids))
+    # A stack that cannot answer at all (the preflight-refusal case: nothing was
+    # ever created) must not burn the whole budget retrying. Once we have seen
+    # real devices, transient list failures are worth retrying for longer.
+    saw_devices = bool(targets)
+    list_failures_in_a_row = 0
+    while True:
+        ev["passes"] += 1
+        if targets:
+            log(f"cleanup: purge pass {ev['passes']} — deleting "
+                f"{len(targets)} devices matching {prefix}")
+            deleted, failures, out = delete_devices(stack, targets, deadline)
+            ev["deleted"] += deleted
+            ev["delete_failed"] += len(failures)
+            if failures:
+                if not ev["first_delete_error"]:
+                    ev["first_delete_error"] = failures[0]
+                warn(f"{len(failures)} device deletes FAILED on pass "
+                     f"{ev['passes']} (first: {failures[0]})")
+            if out:
+                ev["out_of_budget"] = True
+        # RE-VERIFY by listing. Never trust the delete responses (F-69).
+        found, err = devices_with_prefix(stack, prefix)
+        ev["list_error"] = err
+        if err:
+            list_failures_in_a_row += 1
+            warn(f"cleanup: device re-verify list failed "
+                 f"({list_failures_in_a_row}x) — {err}")
+            allowed = max_passes if saw_devices else 3
+            if list_failures_in_a_row >= allowed:
+                warn(f"cleanup: device list unreadable {list_failures_in_a_row} "
+                     f"times in a row — giving up; residue under {prefix} is "
+                     f"UNKNOWN, not zero")
+                return ev
+        else:
+            list_failures_in_a_row = 0
+            saw_devices = saw_devices or bool(found)
+            ev["remaining"] = len(found)
+            log(f"cleanup: {len(found)} devices matching {prefix} remain "
+                f"after pass {ev['passes']}")
+            if not found:
+                ev["verified_zero"] = True
+                return ev
+        if ev["out_of_budget"] or time.monotonic() >= deadline:
+            ev["out_of_budget"] = True
+            warn(f"cleanup: device purge ran out of its {budget_s:.0f}s budget "
+                 f"after {ev['passes']} pass(es) — residue is NOT purged")
+            return ev
+        if ev["passes"] >= max_passes:
+            warn(f"cleanup: device purge gave up after {max_passes} passes — "
+                 f"residue is NOT purged")
+            return ev
+        if err:
+            # Transient list failure: retry inside the budget rather than
+            # declaring a clean stack we could not see.
+            targets = []
+            time.sleep(min(5.0, max(0.0, deadline - time.monotonic())))
+        else:
+            targets = found
+
+
+def purge_telemetry(stack: Stack, prefix: str) -> tuple[dict, list[str]]:
+    """ClickHouse corr_signals + OpenSearch syslog rows for `prefix`, verified.
+    Returns (evidence, problems) — problems are printed by the caller."""
+    ev: dict = {}
+    problems: list[str] = []
+    ok, out = stack.ch_mutation(
+        f"ALTER TABLE netops.corr_signals DELETE WHERE entity_id LIKE '%{prefix}%'")
+    if not ok:
+        problems.append(f"ClickHouse corr_signals purge failed: {out}")
+    okc, cnt = stack.ch(
+        f"SELECT count() FROM netops.corr_signals WHERE entity_id LIKE '%{prefix}%'")
+    ev["ch_signals_left"] = int(cnt) if okc and cnt.isdigit() else -1
+    if not okc:
+        problems.append(f"ClickHouse corr_signals re-count failed: {cnt}")
+    elif ev["ch_signals_left"] != 0:
+        problems.append(f"{ev['ch_signals_left']} run rows left in corr_signals")
+
+    okd, res = stack.os_req(
+        "OS_BOOTSTRAP_PASSWORD", "svc_bootstrap",
+        "/netops-syslog-*/_delete_by_query?refresh=true",
+        {"query": {"prefix": {"hostname.keyword": prefix}}},
+        timeout=300)
+    if not okd or not isinstance(res, dict):
+        problems.append(f"OpenSearch syslog purge failed: {res}")
+        ev["os_deleted"] = -1
+    else:
+        ev["os_deleted"] = res.get("deleted", -1)
+        if res.get("failures"):
+            problems.append(
+                f"OpenSearch purge reported failures: {str(res['failures'])[:200]}")
+    left = stack.os_count("netops-syslog-*", "hostname.keyword", prefix)
+    ev["os_docs_left"] = left
+    if left != 0:
+        problems.append(f"{left} run docs left in netops-syslog-*")
+    return ev, problems
+
+
 class Harness:
     def __init__(self, args: argparse.Namespace):
         self.args = args
@@ -1031,6 +1356,13 @@ class Harness:
         # until burst() completes; memflat says so and falls back to the cold
         # baseline rather than passing silently on a missing sample.
         self.warm_mem: dict[str, int] = {}
+        # Signal policy (see InterruptGuard): installed by main() so a run
+        # started from a closing terminal (SIGHUP) or a `kill` (SIGTERM) still
+        # unwinds into cleanup instead of leaving 2,500 devices standing.
+        self.interrupts = InterruptGuard()
+        # Devices still matching this run's prefix after cleanup. -1 = never
+        # verified (cleanup did not finish) — reported as UNKNOWN, never as 0.
+        self.residue_devices = -1
 
     # -- plumbing -----------------------------------------------------------
     def phase(self, name: str, status: str, evidence: dict, notes: str = "") -> bool:
@@ -1139,12 +1471,20 @@ class Harness:
         if router_lag.get("_members", 0) < 1:
             problems.append(consumer_problem("netops-router-syslog", router_lag, "router"))
         # A stack still digesting an earlier backlog cannot produce a valid
-        # drain verdict — the baseline must be near-idle.
+        # drain verdict — the baseline must be near-idle. A bare refusal sent
+        # the operator away with no idea whether to wait 2 minutes or 2 hours
+        # (resume brief 2026-08-28: "preflight gives no drain-ETA"), so the
+        # refusal now carries a measured rate and an ETA.
         if corr_lag.get("_total", -1) > self.args.max_baseline_lag:
+            eta = self.lag_drain_eta("netops-correlation",
+                                     self.args.max_baseline_lag,
+                                     first=corr_lag.get("_total", -1))
+            ev["baseline_lag_eta"] = eta
             problems.append(
                 f"correlation lag already {corr_lag['_total']} at baseline "
                 f"(> {self.args.max_baseline_lag}) — stack is not idle; a drain "
-                f"verdict on top of an existing backlog would be meaningless")
+                f"verdict on top of an existing backlog would be meaningless. "
+                f"{eta['summary']}")
 
         # Baselines.
         self.baseline["mem"] = self.stack.mem_sample()
@@ -1198,6 +1538,63 @@ class Harness:
         return self.phase("preflight", status, ev,
                           "; ".join(problems) if problems else
                           f"{len(states)} services checked, consumers live, baselines captured")
+
+    def lag_drain_eta(self, group: str, target: int, first: int = -1) -> dict:
+        """Sample a backlog briefly and turn it into an ETA the operator can
+        plan against.
+
+        HARD-BOUNDED by LAG_ETA_BUDGET_S (60 s default): preflight refuses
+        fast, it does not become a waiting room. A backlog that is NOT
+        shrinking is said so plainly — an ETA invented from a flat or rising
+        curve would be worse than none.
+        """
+        t0 = time.monotonic()
+        deadline = t0 + LAG_ETA_BUDGET_S
+        samples: list[tuple[float, int]] = []
+        if first >= 0:
+            samples.append((0.0, first))
+        while len(samples) < max(2, LAG_ETA_SAMPLES):
+            nap = min(LAG_ETA_INTERVAL_S, max(0.0, deadline - time.monotonic()))
+            if nap <= 0:
+                break
+            time.sleep(nap)
+            lag = self.stack.group_lag(group).get("_total", -1)
+            if lag < 0:
+                warn(f"drain ETA: {group} lag unreadable at "
+                     f"{time.monotonic() - t0:.0f}s — ETA is incomplete")
+                break
+            samples.append((time.monotonic() - t0, lag))
+            if time.monotonic() >= deadline:
+                break
+        ev: dict = {"group": group, "target": target,
+                    "samples": [[round(t, 1), v] for t, v in samples],
+                    "observed_s": round(samples[-1][0], 1) if samples else 0.0,
+                    "rate_per_s": None, "eta_seconds": None}
+        if len(samples) < 2 or samples[-1][0] <= 0:
+            ev["summary"] = (f"drain ETA: not measurable (only {len(samples)} "
+                             f"lag sample(s) in {LAG_ETA_BUDGET_S:.0f}s)")
+            log(f"preflight: {ev['summary']}")
+            return ev
+        (t_a, l_a), (t_b, l_b) = samples[0], samples[-1]
+        rate = (l_a - l_b) / (t_b - t_a)          # events/s of BACKLOG REMOVAL
+        ev["rate_per_s"] = round(rate, 1)
+        if rate <= 0:
+            ev["summary"] = (f"drain ETA: NOT draining — lag {l_a} -> {l_b} over "
+                             f"{t_b - t_a:.0f}s ({rate:+.0f}/s); it is not "
+                             f"shrinking, so there is no ETA (stop the load, or "
+                             f"check the correlation consumer)")
+        elif l_b <= target:
+            ev["eta_seconds"] = 0
+            ev["summary"] = (f"drain ETA: already at {l_b} (<= {target}) after "
+                             f"{t_b - t_a:.0f}s of observation — retry now")
+        else:
+            eta = (l_b - target) / rate
+            ev["eta_seconds"] = round(eta, 1)
+            ev["summary"] = (f"drain ETA: lag {l_a} -> {l_b} over {t_b - t_a:.0f}s "
+                             f"({rate:.0f}/s) — ~{eta / 60:.1f} min to reach "
+                             f"{target} (retry after that)")
+        log(f"preflight: {ev['summary']}")
+        return ev
 
     def device_identity_shas(self) -> dict:
         """sha256(device name) -> device index, for every device this run created.
@@ -2334,6 +2731,19 @@ class Harness:
         problems: list[str] = []
         if self.args.dry_run:
             return True
+        # EXPLICIT time budget, announced up front. Cleanup used to be silent
+        # for up to ~15 minutes of bounded waits before the first DELETE, which
+        # is indistinguishable from a hang — and got signalled (2026-08-28).
+        device_budget = (CLEANUP_DEVICE_BUDGET_BASE_S +
+                         CLEANUP_DEVICE_BUDGET_PER_DEVICE_S *
+                         max(len(self.created_ids), self.args.devices))
+        total_budget = (CLEANUP_DRAIN_WAIT_S + device_budget +
+                        CLEANUP_PREPURGE_WAIT_S)
+        log(f"cleanup: starting — budget up to {total_budget / 60:.0f} min "
+            f"(drain wait {CLEANUP_DRAIN_WAIT_S:.0f}s + device purge "
+            f"{device_budget:.0f}s + pre-purge wait "
+            f"{CLEANUP_PREPURGE_WAIT_S:.0f}s), then CH/OS purge. "
+            f"Signals during cleanup are ignored — let it finish.")
 
         # 7·twin: the delegated twin run was kept standing for accounting —
         # tear it down through ITS verified-teardown path now (tracker 152
@@ -2368,6 +2778,9 @@ class Harness:
         # cleaned — but it stops the harness quietly polluting its own evidence.
         lag_at_cleanup = self.stack.group_lag("netops-correlation").get("_total", -1)
         if lag_at_cleanup > 0:
+            log(f"cleanup: waiting up to {CLEANUP_DRAIN_WAIT_S:.0f}s for the "
+                f"correlation backlog ({lag_at_cleanup} events) before deleting "
+                f"devices")
             deadline = time.monotonic() + CLEANUP_DRAIN_WAIT_S
             while time.monotonic() < deadline:
                 lag_at_cleanup = self.stack.group_lag(
@@ -2383,34 +2796,28 @@ class Harness:
                  f"identity_unattributable; this is harness-induced DLQ traffic, "
                  f"not a product defect, and it is recorded as evidence")
 
-        # 7a. Delete every created device; 404 = already gone (fine).
-        del_fail = []
-        for did in self.created_ids:
-            st, resp = self.stack.api("DELETE", f"/api/devices/{did}")
-            if st not in (204, 404):
-                del_fail.append(f"{did}: HTTP {st} {str(resp)[:80]}")
-        ev["devices_deleted"] = len(self.created_ids) - len(del_fail)
-        if del_fail:
-            problems.append(f"{len(del_fail)} device deletes failed (first: {del_fail[0]})")
-
-        # 7b. VERIFY zero remain (paged; deletion durability is a past defect,
-        # F-69 — never trust the 204).
-        remaining, offset = 0, 0
-        while True:
-            st, resp = self.stack.api(
-                "GET", f"/api/devices?envelope=1&limit=5000&offset={offset}")
-            if st != 200 or not isinstance(resp, dict):
-                problems.append(f"device list for verify failed: HTTP {st}")
-                remaining = -1
-                break
-            rows = resp.get("devices") or []
-            remaining += sum(1 for d in rows if str(d.get("id", "")).startswith(self.prefix))
-            if resp.get("complete", True) or not rows:
-                break
-            offset += len(rows)
-        ev["devices_remaining"] = remaining
-        if remaining != 0:
-            problems.append(f"{remaining} run devices still present after delete")
+        # 7a+7b. Delete every device under this run's prefix and RE-VERIFY to
+        # zero. The purge lists what is ACTUALLY there each pass — the ids this
+        # process happens to remember are only a seed, because an interrupt
+        # mid-onboard (or a create whose response was lost) leaves devices the
+        # run never recorded. Budget is explicit and scales with fleet size.
+        log(f"cleanup: purging devices under {self.prefix} "
+            f"({len(self.created_ids)} created this run; budget "
+            f"{device_budget:.0f}s)")
+        purge = purge_devices(self.stack, self.prefix, device_budget,
+                              self.created_ids)
+        ev["device_purge"] = purge
+        ev["devices_deleted"] = purge["deleted"]
+        ev["devices_remaining"] = purge["remaining"]
+        self.residue_devices = purge["remaining"]   # -1 = could not verify
+        if not purge["verified_zero"]:
+            problems.append(
+                f"device purge NOT verified to zero: {purge['remaining']} "
+                f"devices still match {self.prefix} after {purge['passes']} "
+                f"pass(es), {purge['delete_failed']} delete failures "
+                f"(first: {purge['first_delete_error'] or purge['list_error'] or 'n/a'})"
+                f" — run: python3 scripts/scale-miniladder.py --cleanup-only "
+                f"{self.prefix}")
 
         # 7c. Wait (bounded) for the consumer to finish draining before purging:
         # a purge issued while lag is still draining races the engine's late
@@ -2418,7 +2825,9 @@ class Harness:
         # proven live 2026-08-16 (run 08162031su88 left exactly its 100
         # coverage rows behind this way). A drain-phase FAIL does not skip
         # this wait: the whole point is to purge after the last insert.
-        drain_deadline = time.monotonic() + 600
+        log(f"cleanup: waiting up to {CLEANUP_PREPURGE_WAIT_S:.0f}s for the "
+            f"consumer to finish its last inserts before purging telemetry")
+        drain_deadline = time.monotonic() + CLEANUP_PREPURGE_WAIT_S
         lag = -1
         while time.monotonic() < drain_deadline:
             lag = self.stack.group_lag("netops-correlation").get("_total", -1)
@@ -2427,48 +2836,31 @@ class Harness:
             time.sleep(15)
         else:
             problems.append(
-                f"consumer lag still {lag} after 600s pre-purge wait — purge may race late inserts")
+                f"consumer lag still {lag} after {CLEANUP_PREPURGE_WAIT_S:.0f}s "
+                f"pre-purge wait — purge may race late inserts")
         ev["pre_purge_lag"] = lag
 
         # Purge run telemetry so the stack (and clean-slate.sh --verify)
         # is left as found. corr_objects/evidence TTL out on their own and are
         # not part of --verify; noted honestly rather than silently skipped.
-        ok, out = self.stack.ch_mutation(
-            f"ALTER TABLE netops.corr_signals DELETE WHERE entity_id LIKE '%{self.prefix}%'")
-        if not ok:
-            problems.append(f"ClickHouse corr_signals purge failed: {out}")
-        okc, cnt = self.stack.ch(
-            f"SELECT count() FROM netops.corr_signals WHERE entity_id LIKE '%{self.prefix}%'")
-        ev["ch_signals_left"] = int(cnt) if okc and cnt.isdigit() else -1
-        if ev["ch_signals_left"] != 0:
-            problems.append(f"{ev['ch_signals_left']} run rows left in corr_signals")
-
-        okd, res = self.stack.os_req(
-            "OS_BOOTSTRAP_PASSWORD", "svc_bootstrap",
-            "/netops-syslog-*/_delete_by_query?refresh=true",
-            {"query": {"prefix": {"hostname.keyword": self.prefix}}},
-            timeout=300)
-        if not okd or not isinstance(res, dict):
-            problems.append(f"OpenSearch syslog purge failed: {res}")
-            ev["os_deleted"] = -1
-        else:
-            ev["os_deleted"] = res.get("deleted", -1)
-            if res.get("failures"):
-                problems.append(f"OpenSearch purge reported failures: {str(res['failures'])[:200]}")
-        left = self.stack.os_count("netops-syslog-*", "hostname.keyword", self.prefix)
-        ev["os_docs_left"] = left
-        if left != 0:
-            problems.append(f"{left} run docs left in netops-syslog-*")
+        log(f"cleanup: purging ClickHouse + OpenSearch rows for {self.prefix}")
+        tel_ev, tel_problems = purge_telemetry(self.stack, self.prefix)
+        ev.update(tel_ev)
+        problems.extend(tel_problems)
         ev["residuals_note"] = (
             "corr_objects/evidence and correlation DLQ entries tagged with this "
             "run TTL/rotate out on their own; VictoriaMetrics holds no run "
             "series (devices were never polled successfully)")
 
         status = "PASS" if not problems else "FAIL"
+        # 16.1: a degraded teardown is LOUD, line by line, with counts — not a
+        # single collapsed notes string nobody reads until the report.
+        for prob in problems:
+            warn(f"cleanup: {prob}")
         return self.phase("cleanup", status, ev,
                           "; ".join(problems) if problems else
-                          f"{ev['devices_deleted']} devices deleted+verified, "
-                          f"telemetry purged (CH+OS)")
+                          f"{ev['devices_deleted']} devices deleted+verified "
+                          f"(0 remain), telemetry purged (CH+OS)")
 
     # -- report --------------------------------------------------------------
     def report(self) -> bool:
@@ -2574,29 +2966,103 @@ class Harness:
                 # whole reason this phase exists.
                 self.stability()
         except KeyboardInterrupt:
-            warn("interrupted — running cleanup before exit")
+            warn("interrupted — running the FULL cleanup before exit "
+                 "(device purge + telemetry purge); further signals are "
+                 "ignored while it runs")
             self.phase("interrupted", "FAIL", {}, "run interrupted by signal")
         finally:
-            try:
-                if getattr(self.args, "skip_cleanup", False):
-                    self.phase(
-                        "cleanup", "SKIPPED",
-                        {"reason": "--skip-cleanup (diagnostic run)",
-                         "residue_warning": (
-                             "devices, corr_signals, corr_objects and OpenSearch "
-                             "docs are STILL PRESENT and will be counted by the "
-                             "next run's baselines")},
-                        "cleanup deliberately skipped for investigation — this "
-                        "run is NOT qualification evidence")
-                else:
-                    self.cleanup()
-            except Exception as exc:  # noqa: BLE001 — cleanup must never mask the run error silently
-                warn(f"cleanup raised: {exc!r}")
-                self.phase("cleanup", "FAIL", {}, f"cleanup crashed: {exc!r}")
-        overall = self.report()
+            self.run_cleanup()
+        # The guard stays armed through report(): a signal that lands between
+        # the purge and the evidence would otherwise cost the run its report,
+        # which is exactly the 2026-08-28 shape one step later.
+        overall = False
+        try:
+            overall = self.report()
+        except (CleanupAborted, KeyboardInterrupt) as exc:
+            warn(f"report interrupted ({exc!r}) — the run's evidence is "
+                 f"incomplete; the stack was already cleaned above")
+        finally:
+            self.interrupts.leave_cleanup()
+        self.verdict(overall)
         if aborted_early:
             return 2
+        if self.residue_devices != 0 and not getattr(self.args, "skip_cleanup", False):
+            # Residue is a run outcome, not a footnote: the next run's onboard
+            # collides with it. (--skip-cleanup leaves it ON PURPOSE and keeps
+            # its historical exit code.)
+            return 1
         return 0 if overall else 1
+
+    def run_cleanup(self) -> None:
+        """Cleanup, with the signal policy that makes it survivable.
+
+        Everything below is failure handling that USED to be missing: a second
+        signal aborted the purge through `except Exception` (KeyboardInterrupt
+        is a BaseException), report() never ran, and the residue was never
+        named. Now cleanup owns the signals while it runs, and every exit path
+        states the residue and the command that finishes the job.
+        """
+        # Armed for the whole teardown INCLUDING report(); execute() disarms.
+        self.interrupts.enter_cleanup()
+        if getattr(self.args, "skip_cleanup", False):
+            self.residue_devices = len(self.created_ids)
+            self.phase(
+                "cleanup", "SKIPPED",
+                {"reason": "--skip-cleanup (diagnostic run)",
+                 "residue_devices": self.residue_devices,
+                 "residue_warning": (
+                     "devices, corr_signals, corr_objects and OpenSearch "
+                     "docs are STILL PRESENT and will be counted by the "
+                     "next run's baselines")},
+                "cleanup deliberately skipped for investigation — this "
+                "run is NOT qualification evidence")
+            return
+        try:
+            self.cleanup()
+        except CleanupAborted as exc:
+            self.residue_left(f"cleanup aborted on repeated {exc} during teardown")
+            self.phase("cleanup", "FAIL",
+                       {"aborted_by_signal": str(exc),
+                        "residue_devices": self.residue_devices},
+                       f"cleanup ABORTED by repeated {exc} — residue left")
+        except KeyboardInterrupt as exc:
+            # Belt and braces: a KeyboardInterrupt can still arrive from a
+            # handler this process does not own (e.g. one installed by an
+            # embedding runner). It must NOT escape past report().
+            self.residue_left(f"cleanup interrupted ({exc!r})")
+            self.phase("cleanup", "FAIL",
+                       {"aborted_by_signal": repr(exc),
+                        "residue_devices": self.residue_devices},
+                       f"cleanup interrupted: {exc!r} — residue left")
+        except Exception as exc:  # noqa: BLE001 — cleanup must never mask the run error silently
+            warn(f"cleanup raised: {exc!r}")
+            self.residue_left(f"cleanup crashed: {exc!r}")
+            self.phase("cleanup", "FAIL",
+                       {"error": repr(exc),
+                        "residue_devices": self.residue_devices},
+                       f"cleanup crashed: {exc!r}")
+
+    def residue_left(self, why: str) -> None:
+        """Name the residue and the exact command that clears it (16.1)."""
+        left = self.residue_devices
+        shown = "UNKNOWN (never verified)" if left < 0 else str(left)
+        warn(f"RESIDUE LEFT: {shown} devices matching {self.prefix} — {why}. "
+             f"Purge with: python3 scripts/scale-miniladder.py --cleanup-only "
+             f"{self.prefix}")
+
+    def verdict(self, overall: bool) -> None:
+        """The last line of a run always states the residue count — a clean
+        stack is a claim, and an unverified one must never look like zero."""
+        left = self.residue_devices
+        if left == 0:
+            residue = "residue: 0 devices (verified)"
+        elif left > 0:
+            residue = (f"residue: {left} devices matching {self.prefix} — run "
+                       f"--cleanup-only {self.prefix}")
+        else:
+            residue = (f"residue: UNKNOWN (device purge never verified) — run "
+                       f"--cleanup-only {self.prefix}")
+        log(f"VERDICT {'PASS' if overall else 'FAIL'} run {self.runid}: {residue}")
 
 
 def parse_args(argv: list[str]) -> argparse.Namespace:
@@ -2658,6 +3124,17 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
              "Never use for qualification: the next run inherits the residue.")
     ap.add_argument("--dry-run", action="store_true",
                     help="print the full plan and exit; touches nothing")
+    ap.add_argument(
+        "--cleanup-only", nargs="?", const=DEVICE_PREFIX_ROOT, default=None,
+        metavar="PREFIX", dest="cleanup_only",
+        help="RESIDUE PURGE, no run. Deletes every device whose id starts with "
+             f"PREFIX (default '{DEVICE_PREFIX_ROOT}' — the harness namespace, "
+             "and the ONLY namespace this mode will touch), re-verifies to "
+             "zero, then purges the matching ClickHouse/OpenSearch rows. "
+             "Idempotent: safe to run twice, and on an already-clean stack. "
+             "Refuses to run if the stack is unreachable. Exit 0 only when "
+             "zero devices remain. Use it after an interrupted run says "
+             "RESIDUE LEFT.")
     # tracker 152 §8.3 — twin composition. Default is the internal generator,
     # byte-identical to the pre-flag behavior.
     ap.add_argument("--profile", choices=tuple(sorted(WORKLOAD_PROFILES)),
@@ -2704,6 +3181,13 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
                     help="fidelity mode passed through to twin.py (default "
                          "hostname)")
     args = ap.parse_args(argv)
+    if (args.cleanup_only is not None and
+            not args.cleanup_only.startswith(DEVICE_PREFIX_ROOT)):
+        # Blast-radius guard (16.3): this mode deletes devices. It may only
+        # ever address the harness's own namespace.
+        ap.error(f"--cleanup-only prefix must start with '{DEVICE_PREFIX_ROOT}' "
+                 f"(got {args.cleanup_only!r}) — this mode never deletes "
+                 f"anything outside the harness namespace")
     if args.load_generator == "twin" and not args.twin_scenario:
         ap.error("--load-generator twin requires --twin-scenario FILE")
     if args.devices < 10 or args.devices > 20000:
@@ -2730,6 +3214,15 @@ def main(argv: list[str]) -> int:
         port = env_get(args.env_file, "BASE_PORT") or "8000"
         args.base_url = f"http://localhost:{port}"
 
+    if args.dry_run and args.cleanup_only is not None:
+        # 16.3 dry-run-before-destructive: say exactly what would be deleted.
+        print("scale-miniladder DRY RUN (--cleanup-only) — nothing will be touched")
+        print(f"  stack   : {args.base_url} (project {args.project})")
+        print(f"  would delete EVERY device whose id starts with "
+              f"{args.cleanup_only!r}, re-verify to zero (page-loop), then "
+              f"purge netops.corr_signals rows and netops-syslog-* docs "
+              f"matching it")
+        return 0
     if args.dry_run:
         planned = args.eps * 60 * args.burst_minutes
         print("scale-miniladder DRY RUN — nothing will be touched")
@@ -2751,17 +3244,87 @@ def main(argv: list[str]) -> int:
         print(f"  phase 6 memflat  : {', '.join(MEM_SERVICES)} <= x{args.mem_factor} "
               f"of their END-OF-BURST RSS, and under "
               f"{args.mem_headroom_percent}% of their own caps")
-        print("  phase 7 cleanup  : delete+verify devices, purge CH/OS run telemetry")
+        cbudget = (CLEANUP_DEVICE_BUDGET_BASE_S +
+                   CLEANUP_DEVICE_BUDGET_PER_DEVICE_S * args.devices)
+        print(f"  phase 7 cleanup  : delete EVERY mlx-<runid>- device (page-loop "
+              f"list, budget {cbudget:.0f}s) and re-verify to zero, then purge "
+              f"CH/OS run telemetry; runs on interrupt too, and signals during "
+              f"it are ignored")
         print("  report           : report.md + report.json + last-run.json heartbeat")
         return 0
 
     if not os.path.isfile(args.env_file):
         die(f"env file not found: {args.env_file} (use --env-file)")
 
-    # Make ^C hit the KeyboardInterrupt path (cleanup in finally) on SIGTERM too.
-    signal.signal(signal.SIGTERM, lambda *_: (_ for _ in ()).throw(KeyboardInterrupt()))
+    if args.cleanup_only is not None:
+        return cleanup_only(args)
 
-    return Harness(args).execute()
+    harness = Harness(args)
+    # SIGINT/SIGTERM/SIGHUP all unwind into cleanup; signals arriving DURING
+    # cleanup are ignored with a message so the device purge cannot be killed
+    # halfway (2026-08-28 residue defect — see InterruptGuard).
+    harness.interrupts.install()
+    return harness.execute()
+
+
+def cleanup_only(args: argparse.Namespace) -> int:
+    """Residue purge with no run: delete every `PREFIX*` device, verify to
+    zero, purge the matching telemetry. Exit 0 ONLY on verified zero."""
+    prefix = args.cleanup_only
+    stack = Stack(args.env_file, args.base_url, args.project)
+    interrupts = InterruptGuard()
+    interrupts.install()
+    log(f"cleanup-only: purging residue under {prefix} on {stack.base_url}")
+
+    # Refuse on an unreachable stack. "0 devices remain" from a stack we cannot
+    # talk to is the same false green this harness exists to kill.
+    try:
+        req = urllib.request.Request(stack.base_url + "/")
+        with urllib.request.urlopen(req, timeout=HTTP_TIMEOUT) as r:
+            log(f"cleanup-only: ingress {stack.base_url}/ -> HTTP {r.status}")
+    except (urllib.error.URLError, OSError) as exc:
+        die(f"--cleanup-only: stack unreachable at {stack.base_url} ({exc}) — "
+            f"refusing to report a clean stack we cannot see")
+    try:
+        stack.login()
+    except (RuntimeError, urllib.error.URLError, OSError) as exc:
+        die(f"--cleanup-only: API login failed ({exc}) — cannot purge")
+
+    # Purge under the same policy as a run's teardown: signals are ignored
+    # while it runs, and the Nth aborts loudly with the residue named.
+    interrupts.enter_cleanup()
+    budget = (CLEANUP_DEVICE_BUDGET_BASE_S +
+              CLEANUP_DEVICE_BUDGET_PER_DEVICE_S * max(args.devices, 1))
+    problems: list[str] = []
+    try:
+        purge = purge_devices(stack, prefix, budget)
+        if not purge["verified_zero"]:
+            problems.append(
+                f"{purge['remaining']} devices still match {prefix} after "
+                f"{purge['passes']} pass(es) "
+                f"({purge['delete_failed']} delete failures; first: "
+                f"{purge['first_delete_error'] or purge['list_error'] or 'n/a'})")
+        tel_ev, tel_problems = purge_telemetry(stack, prefix)
+        problems.extend(tel_problems)
+    except CleanupAborted as exc:
+        warn(f"RESIDUE LEFT: cleanup-only aborted on repeated {exc} — rerun "
+             f"python3 scripts/scale-miniladder.py --cleanup-only {prefix}")
+        return 1
+    finally:
+        interrupts.leave_cleanup()
+
+    for prob in problems:
+        warn(f"cleanup-only: {prob}")
+    log(f"cleanup-only: {purge['deleted']} device deletes issued, "
+        f"{purge['remaining']} remain; ClickHouse rows left "
+        f"{tel_ev.get('ch_signals_left')}, OpenSearch docs left "
+        f"{tel_ev.get('os_docs_left')}")
+    if problems:
+        warn(f"cleanup-only FAILED for {prefix} — {len(problems)} problem(s) above")
+        return 1
+    log(f"cleanup-only: residue: 0 devices matching {prefix} (verified), "
+        f"telemetry purged")
+    return 0
 
 
 if __name__ == "__main__":

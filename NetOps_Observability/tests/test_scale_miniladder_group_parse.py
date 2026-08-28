@@ -289,7 +289,13 @@ def test_absent_sample_is_a_failure_not_a_pass(tmp_path, monkeypatch):
     monkeypatch.setattr(ml, "MEM_SERVICES", ["clickhouse"])
     h = _memflat_harness(tmp_path, {}, {}, {})
     assert h.memflat() is False
-    assert "no memory sample" in h.phases[-1]["notes"]
+    # Wording pinned to the CURRENT contract: the 2026-08-24 replica-discovery
+    # fix (judge every `<project>-<svc>-N` seen in any sample, instead of a
+    # hardcoded -1 index) renamed this problem from "no memory sample" to name
+    # the replica pattern that was not found. The old substring was left behind
+    # by that change; the phase's behaviour — absent sample is a FAIL, asserted
+    # on the line above — never changed.
+    assert "no replica seen in any memory sample" in h.phases[-1]["notes"]
 
 
 def test_mem_stats_parses_docker_usage_and_limit():

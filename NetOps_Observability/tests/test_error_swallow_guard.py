@@ -120,7 +120,21 @@ ALLOWLIST: dict[tuple[str, int], str] = {
     # above the three lower sites (947->1020, 954->1027, 1299->1420); env_get
     # at 201 is above every insertion. All three re-read at their new lines,
     # behaviourally unchanged.
-    ("scale-miniladder.py", 201): "optional .env read; returns '' with a documented callers-decide contract",
+    #
+    # Re-pinned 2026-08-28 (interrupt-cleanup fix): the InterruptGuard /
+    # residue-purge section and the drain-ETA helper added lines above all four
+    # sites (201->206, 1073->1405, 1080->1412, 1473->1870). ALL FOUR re-read at
+    # their new lines and behaviourally UNCHANGED — no handler body was
+    # touched:
+    #   scale-miniladder.py:206  `env_get` — still `except OSError: pass`
+    #                            returning "", callers-decide contract intact.
+    #   scale-miniladder.py:1405 ingress probe — still `problems.append(...)`.
+    #   scale-miniladder.py:1412 API-login probe — still `problems.append(...)`.
+    #   scale-miniladder.py:1870 twin artifact read — still an explicit burst
+    #                            FAIL.
+    # The new `--cleanup-only` ingress/login probes are NOT allowlisted: both
+    # call die(), which is a real escalation.
+    ("scale-miniladder.py", 206): "optional .env read; returns '' with a documented callers-decide contract",
     # (+10-line drift 2026-08-22: the lanes-routing comment block in
     # WORKLOAD_PROFILES; all three re-read, unchanged.)
     # (+15-line drift 2026-08-22: soak-72h profile; +17 more 2026-08-23: the
@@ -140,9 +154,9 @@ ALLOWLIST: dict[tuple[str, int], str] = {
     #                            `self.phase("burst", "FAIL", ...)` (hard FAIL).
     # RE-PIN of reviewed sites after line drift, per the workflow this
     # line-keyed allowlist exists to force. No behaviour weakened, no new site.
-    ("scale-miniladder.py", 1073): "preflight ingress probe; failure appended to `problems`, preflight fails on any problem",
-    ("scale-miniladder.py", 1080): "preflight API-login probe; failure appended to `problems`, preflight fails on any problem",
-    ("scale-miniladder.py", 1473): "twin-mode burst artifact read; failure returns an explicit burst-phase FAIL (tracker 152 §8.3)",
+    ("scale-miniladder.py", 1405): "preflight ingress probe; failure appended to `problems`, preflight fails on any problem",
+    ("scale-miniladder.py", 1412): "preflight API-login probe; failure appended to `problems`, preflight fails on any problem",
+    ("scale-miniladder.py", 1870): "twin-mode burst artifact read; failure returns an explicit burst-phase FAIL (tracker 152 §8.3)",
     # The four 2026-08-16 chown-swallow findings (enrichment seed, processors
     # seed, appid/cloud fixtures, vuln SUDO_UID dir) were RESOLVED the same
     # day: all now route through chown_tree (repair-or-refuse), and the vuln
