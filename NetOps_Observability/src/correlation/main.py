@@ -77,12 +77,14 @@ from engine import (
     _SEV_RANK,
     CORR_CANDIDATE_CEILING,
     CORR_TOKEN_HUB_CAP,
+    ComponentMemo,
     ContinuationIndex,
     EngineConfig,
     ObjectSnapshot,
     SeamView,
     TopologyAdjacency,
     WindowPrep,
+    digest_cache_stats,
     engine_temporal_reach_s,
     find_continuation,
     find_merges,
@@ -2379,6 +2381,21 @@ CORR_ENGINE_COHORT_SIZE = max(1, int(os.environ.get("CORR_ENGINE_COHORT_SIZE", "
 # still letting it drain far faster than one cohort per interval.
 CORR_ENGINE_DRAIN_COHORTS = max(1, int(os.environ.get("CORR_ENGINE_DRAIN_COHORTS", "20")))
 
+# ── P1: cohort-touch gate + epoch-cadence lifecycle ──────────────────────────
+# docs/design/COHORT_TOUCH_GATE_P1_2026-08-28.md. One sweep freezes an epoch once
+# and drains up to CORR_ENGINE_DRAIN_COHORTS cohorts against it, but every cohort
+# still re-formed, re-ranked, re-materialized and re-hashed EVERY open incident —
+# though only the components a cohort's keys touch can have changed. Two knobs,
+# both DEFAULT ON, read once at startup like every other CORR_* knob:
+#   CORR_COHORT_TOUCH_GATE=0        -> memo=None everywhere: exact pre-P1 work.
+#   CORR_LIFECYCLE_EPOCH_CADENCE=0  -> merge/quiesce/cap after EVERY cohort again.
+# They exist so the owner's A/B (the same storm, OLD vs NEW) runs on ONE image —
+# not as a runtime/load-driven decision. Nothing here is wall-clock derived.
+CORR_COHORT_TOUCH_GATE = os.environ.get(
+    "CORR_COHORT_TOUCH_GATE", "1").lower() in ("1", "true", "yes")
+CORR_LIFECYCLE_EPOCH_CADENCE = os.environ.get(
+    "CORR_LIFECYCLE_EPOCH_CADENCE", "1").lower() in ("1", "true", "yes")
+
 # ── Tracker 172: ingest-priority scheduling (gate spec §4.3 subset contract) ─
 #
 # THE MEASURED DEFECT (S1 design storm, run 082220005r1a): the engine's
@@ -2596,6 +2613,21 @@ CORR_HUB_TOKENS_CAPPED_TOTAL = 0       # rank-7 hub tokens dropped (Σ over epoc
 CORR_CANDIDATE_PAIRS_SKIPPED_TOTAL = 0  # all-pairs candidates the hub cap kept out
 CORR_CANDIDATE_CEILING_HITS_TOTAL = 0   # epochs whose potential candidates > ceiling
 CORR_CANDIDATE_CEILING_LAST_DIM = ""    # the offending dimension the last hit named
+# ── P1 (cohort-touch gate) accounting — the proof is these numbers, not a
+# feeling (spec §5). Monotonic per replica; the last two are last-cohort gauges.
+# Derived ratios (touch ratio, eval-waste ratio) are computed by the report /
+# bench harness FROM these — never in the engine.
+COHORT_COMPONENTS_TOTAL = 0          # components considered, summed over cohorts
+COHORT_COMPONENTS_TOUCHED_TOTAL = 0  # of those, ones a cohort key touched
+COHORT_MEMO_HITS_TOTAL = 0           # served from the intra-epoch memo
+COHORT_COMPONENTS_RANKED_TOTAL = 0   # actually ranked + materialized ("built")
+COHORT_OPEN_OBJECTS_LAST = 0         # gauge: open objects after the last cohort
+COHORT_TOUCHED_LAST = 0              # gauge: components touched by the last cohort
+LIFECYCLE_PASSES_TOTAL = 0           # merge/quiesce/cap passes actually run
+# The 163 cap is enforced once per EPOCH now, so the population may transiently
+# exceed it WITHIN an epoch by the objects that epoch opened. That overshoot is a
+# declared, measured fact — this is its high-water mark (§10, never silent).
+OPEN_OBJECTS_EPOCH_PEAK = 0
 
 
 class _EngineEpoch:
@@ -2607,9 +2639,11 @@ class _EngineEpoch:
         "ctx",
         "cycle_max_ts",
         "live_keys",
+        "memos",
         "now",
         "prep_seconds",
         "preps",
+        "seen",
         "snapshot",
         "started",
         "storm",
@@ -2628,6 +2662,15 @@ class _EngineEpoch:
         self.preps: dict[str, WindowPrep | None] = {}
         # tenant -> node keys still in the snapshot (for the carried-edge filter)
         self.live_keys: dict[str, set[str]] = {}
+        # P1 change G: tenant -> intra-epoch ComponentMemo. Per TENANT (§3a: node
+        # keys are not tenant-qualified, so one shared memo would collide), and
+        # per EPOCH — _close_epoch drops it, because after a prune the nodes are
+        # rebuilt and the key would no longer describe the same evidence.
+        self.memos: dict[str, ComponentMemo] = {}
+        # P1 change H: the UNION of every cohort's seen_this_cycle. The
+        # merge/quiesce/cap passes run once per epoch against this set; the
+        # per-cohort set stays the `exclude=` for find_continuation.
+        self.seen: set[str] = set()
         self.cohorts = 0
         self.prep_seconds = 0.0
         self.started = time.monotonic()
@@ -2782,6 +2825,12 @@ def _close_epoch(ep: _EngineEpoch) -> None:
     ep.preps.clear()
     ep.ctx.clear()
     ep.live_keys.clear()
+    # P1: the component memo and the epoch's seen-set die WITH the epoch. The
+    # memo holds materialized ObjectSnapshots (nodes, edges, evidence) — keeping
+    # it past the snapshot it describes would pin evidence the 165 horizon has
+    # already released, exactly what the prepared state must not do.
+    ep.memos.clear()
+    ep.seen.clear()
     ep.by_tenant = {}
     ep.snapshot = ()
 
@@ -2809,6 +2858,22 @@ def epoch_state() -> dict[str, object]:
         "candidate_ceiling_last_dimension": CORR_CANDIDATE_CEILING_LAST_DIM,
         "token_hub_cap": CORR_TOKEN_HUB_CAP,
         "candidate_ceiling": CORR_CANDIDATE_CEILING,
+        # ── P1 cohort-touch gate (spec §5). THE invariant these expose: on
+        # cohorts >= 2 of one epoch, memo_hits ~= (1 - touch_ratio) x components.
+        # components == ranked with the gate off; components == ranked while the
+        # gate is on means the memo is never hitting and the P1 saving is absent.
+        # Ratios are derived by the report/harness, never here.
+        "cohort_touch_gate": CORR_COHORT_TOUCH_GATE,
+        "lifecycle_epoch_cadence": CORR_LIFECYCLE_EPOCH_CADENCE,
+        "cohort_components_total": COHORT_COMPONENTS_TOTAL,
+        "cohort_components_touched_total": COHORT_COMPONENTS_TOUCHED_TOTAL,
+        "cohort_components_memo_hits_total": COHORT_MEMO_HITS_TOTAL,
+        "cohort_components_ranked_total": COHORT_COMPONENTS_RANKED_TOTAL,
+        "cohort_open_objects": COHORT_OPEN_OBJECTS_LAST,
+        "cohort_touched": COHORT_TOUCHED_LAST,
+        "lifecycle_passes_total": LIFECYCLE_PASSES_TOTAL,
+        "open_objects_epoch_peak": OPEN_OBJECTS_EPOCH_PEAK,
+        "snapshot_digest": digest_cache_stats(),
     }
 
 
@@ -3426,7 +3491,14 @@ async def _persist_snapshot(snap: ObjectSnapshot, version: int, state: str,
     # P1 (1000-device scale): every serializer below is offloaded for a large
     # graph — see _offload. On the live 48,375-edge object these four calls plus
     # the token hash were ~3.2s of frozen loop; the heartbeat task died in them.
-    obj_row = await _snap_call(snap, snap.to_object_row, version, state, merged_into)
+    # P1 §3: build the hypotheses blob ONCE and hand it to the row builder. It is
+    # the single most expensive serialize on a storm object and one persist used
+    # to build it 3-4x (row + content_hash, each re-serializing). It is
+    # deliberately NOT cached on the snapshot — 15-25K open objects x 5.7 KB-MBs
+    # is the RSS tracker 156 fought for — so the saving is scoped to this call.
+    hypotheses = await _snap_call(snap, snap.hypotheses_blob)
+    obj_row = await _snap_call(snap, snap.to_object_row, version, state, merged_into,
+                               hypotheses=hypotheses)
     # H13: these engine-cycle writes run OUTSIDE any consumer message, so they
     # must not draw tokens from the consumer's Kafka coordinate (a redelivery
     # resets that seq, colliding a NEW object version's token with a spent one
@@ -3582,6 +3654,148 @@ def _topology_stale(now: datetime) -> bool:
     return stale
 
 
+async def _epoch_lifecycle(epoch: _EngineEpoch, loop_yield,
+                           seen: set[str] | None = None) -> None:
+    """Merge, quiesce and the 163 count cap — ONE pass per drain epoch.
+
+    P1 change H (docs/design/COHORT_TOUCH_GATE_P1_2026-08-28.md §4). These three
+    passes are O(survivors x stale), O(open) and O(open log open); they used to
+    run after EVERY cohort. Their inputs at cohort cadence are OPEN_OBJECTS, the
+    seen set, and `now` — and `now` is already the EPOCH's timestamp, so nothing
+    they decide depends on WHICH cohort runs them. Hoisting them to epoch cadence
+    therefore changes when the work happens, not what it decides, with two
+    DOCUMENTED and flag-revertible deltas:
+      1. CORR_OPEN_OBJECTS_MAX is enforced once per epoch, so the population may
+         transiently exceed the cap WITHIN an epoch by the objects that epoch
+         opened (measured: OPEN_OBJECTS_EPOCH_PEAK).
+      2. An object that cohort k would have quiesce-closed and cohort k+1 would
+         have continued now survives to be continued — one incident instead of a
+         close followed by a new object. That is the correct direction.
+
+    Called on the SUCCESS path only: a cohort that raises means no lifecycle pass
+    this epoch (today a failing cohort also skipped its own pass, and an earlier
+    cohort's pass is re-derivable on the next epoch). `seen` defaults to the
+    epoch's UNION of every cohort's seen ids; the per-cohort form
+    (CORR_LIFECYCLE_EPOCH_CADENCE=0) passes that cohort's set instead, which is
+    exact pre-P1 behaviour.
+    """
+    global LIFECYCLE_PASSES_TOTAL, VERSIONS_PERSISTED
+    LIFECYCLE_PASSES_TOTAL += 1
+    now = epoch.now
+    seen = epoch.seen if seen is None else seen
+    # Merge (§4.4): de-split a cross-cycle identity drift. A stale open object that
+    # overlaps a live one this cycle (entity-set + window) is the same incident
+    # re-identified after its earliest signal aged out of the window — tombstone it
+    # into the survivor (terminal state='merged' + merged_into) so the queue shows
+    # ONE incident, not two. Replay-safe: only a lifecycle state + backlink, no
+    # re-key/re-rank. Done BEFORE quiesce so a merged object never also quiesce-closes.
+    survivors = [OPEN_OBJECTS[c]["snapshot"] for c in seen if c in OPEN_OBJECTS]
+    stale_snaps = [OPEN_OBJECTS[c]["snapshot"] for c in OPEN_OBJECTS if c not in seen]
+    # NOTE (Stage-2, tracker follow-up): find_merges itself is a synchronous
+    # O(survivors × stale) cross-product inside the pure engine (engine.py) with
+    # no internal yield point — for a concentrated single-tenant storm that call
+    # can be a blocker on its own. Yielding around its RESULT loop (below) bounds
+    # the post-processing but not the call; cutting the call's cost needs the
+    # Stage-2 restructuring (cap group reach / grounding cost) and is out of
+    # scope for this resilience-only change.
+    for merged_cid, survivor_cid in find_merges(survivors, stale_snaps):
+        await loop_yield()
+        reg = OPEN_OBJECTS.get(merged_cid)
+        if reg is None:
+            continue
+        reg["version"] += 1
+        VERSIONS_PERSISTED += 1
+        _wa_note_outcome(reg["snapshot"].tenant_id, "persisted")
+        await _persist_snapshot(reg["snapshot"], reg["version"], "merged", [], merged_into=survivor_cid, loop_yield=loop_yield)
+        log.info("corr-object %s merged into %s (split-brain de-duplicated)",
+                 merged_cid[:8], survivor_cid[:8])
+        del OPEN_OBJECTS[merged_cid]
+        _ARCHIVE_SLICE_HASH.pop(merged_cid, None)
+
+    # Quiesce: an object whose component no longer materializes (episodes aged
+    # out / cleared) closes after CORR_QUIESCE_S — terminal version, append-only.
+    for cid in list(OPEN_OBJECTS):
+        await loop_yield()  # this loop is O(open objects) — bound the grind
+        reg = OPEN_OBJECTS[cid]
+        if cid in seen:
+            continue
+        if (now - reg["last_seen"]).total_seconds() >= CORR_QUIESCE_S:
+            reg["version"] += 1
+            VERSIONS_PERSISTED += 1
+            _wa_note_outcome(reg["snapshot"].tenant_id, "persisted")
+            await _persist_snapshot(reg["snapshot"], reg["version"], "closed", [], loop_yield=loop_yield)
+            del OPEN_OBJECTS[cid]
+            _ARCHIVE_SLICE_HASH.pop(cid, None)
+
+    # Tracker 163: the count cap. Runs AFTER quiesce (time-based closes may
+    # already have brought us under). Eviction order is least-recently-SEEN,
+    # tie-broken by correlation_id for determinism — the same staleness order
+    # quiesce uses, applied by count instead of age. Force-closed objects get
+    # the SAME terminal persisted version as a quiesce close: append-only,
+    # replayable, visible in the UI as closed — never a silent drop. An
+    # object seen THIS cycle can still be evicted when the cap demands it (a
+    # bound that yields to activity is not a bound); the counter and warning
+    # make that breadth loss an operator-visible fact.
+    global OPEN_OBJECTS_FORCE_CLOSED, _FORCE_CLOSE_LOG_LAST
+    if CORR_OPEN_OBJECTS_MAX > 0 and len(OPEN_OBJECTS) > CORR_OPEN_OBJECTS_MAX:
+        excess = len(OPEN_OBJECTS) - CORR_OPEN_OBJECTS_MAX
+        victims = sorted(OPEN_OBJECTS,
+                         key=lambda c: (OPEN_OBJECTS[c]["last_seen"], c))[:excess]
+        for cid in victims:
+            await loop_yield()  # eviction can span thousands under a storm
+            reg = OPEN_OBJECTS[cid]
+            reg["version"] += 1
+            VERSIONS_PERSISTED += 1
+            OPEN_OBJECTS_FORCE_CLOSED += 1
+            _wa_note_outcome(reg["snapshot"].tenant_id, "persisted")
+            await _persist_snapshot(reg["snapshot"], reg["version"], "closed", [], loop_yield=loop_yield)
+            del OPEN_OBJECTS[cid]
+            _ARCHIVE_SLICE_HASH.pop(cid, None)
+        mono = time.monotonic()
+        if (mono - _FORCE_CLOSE_LOG_LAST) >= 30.0:
+            _FORCE_CLOSE_LOG_LAST = mono
+            log.warning(
+                "OPEN_OBJECTS cap enforced (tracker 163): force-closed %d "
+                "least-recently-seen objects to hold the %d bound "
+                "(force_closed_total=%d) — RCA breadth is degraded and "
+                "DECLARED, not silent",
+                excess, CORR_OPEN_OBJECTS_MAX, OPEN_OBJECTS_FORCE_CLOSED)
+
+
+def _make_loop_yield():
+    """The cooperative loop-yield gate, as a factory.
+
+    Loop-lag resilience (worst production stall 130,561 ms). The per-object
+    stretches it guards (the damped/unchanged snapshot path, the find_merges
+    result loop, quiesce, the count cap) all scale with a SINGLE tenant's open
+    object count and take no I/O await on their hot path, so a concentrated storm
+    can hold the event-loop thread past the Kafka session timeout. The returned
+    yield is a no-op until the caller has held the thread longer than
+    CORR_LOOP_YIELD_MS, then `await asyncio.sleep(0)` reschedules the loop
+    (aiokafka's heartbeat/commit coroutines run) and the budget resets. It only
+    interleaves SCHEDULING — never a computation, order, or result — so it is
+    determinism-/replay-safe.
+
+    Factored out of _engine_cycle_inner for P1 change H: the merge/quiesce/cap
+    passes now run at EPOCH cadence, outside any cohort, and must keep exactly
+    the same bounded-grind protection they had inside one.
+    """
+    budget = CORR_LOOP_YIELD_MS / 1000.0
+    deadline = time.monotonic() + budget
+
+    async def _loop_yield() -> None:
+        nonlocal deadline
+        if time.monotonic() >= deadline:
+            await asyncio.sleep(0)
+            deadline = time.monotonic() + budget
+
+    def _reset() -> None:
+        nonlocal deadline
+        deadline = time.monotonic() + budget
+
+    return _loop_yield, _reset
+
+
 async def engine_cycle(epoch: _EngineEpoch | None = None) -> None:
     """One evaluation, with the per-cycle caches guaranteed to die with it.
 
@@ -3605,6 +3819,14 @@ async def engine_cycle(epoch: _EngineEpoch | None = None) -> None:
             # epoch at all.
             epoch = await _begin_epoch(datetime.now(timezone.utc))
         await _engine_cycle_inner(epoch)
+        # P1 change H: this caller OWNS its epoch, so the epoch ends here — run
+        # the merge/quiesce/cap pass on the way out, on the SUCCESS path only
+        # (an _engine_cycle_inner that raised never reaches this line, exactly
+        # as a raising cohort skipped its own pass before P1). A caller that was
+        # handed an epoch is one cohort of a drain sweep: the sweep runs the
+        # pass once, after the last cohort.
+        if own_epoch and epoch is not None and CORR_LIFECYCLE_EPOCH_CADENCE:
+            await _epoch_lifecycle(epoch, _make_loop_yield()[0])
     finally:
         if own_epoch and epoch is not None:
             _close_epoch(epoch)
@@ -3708,6 +3930,15 @@ async def _engine_cycle_inner(epoch: _EngineEpoch | None) -> None:
             # must see the edges cohort n-1 settled, so this is re-read per
             # transaction (docs/scale/SNAPSHOT_EPOCH_166.md §Phase 3).
             carried = _carried_edges_for(tenant, epoch.live_keys[tenant])
+            # P1 change G: the tenant's intra-epoch component memo. A component
+            # this cohort's keys do not touch cannot have changed within the
+            # epoch (ComponentMemo carries the proof), so it is served from here
+            # instead of being re-ranked and re-materialized. Per TENANT (§3a);
+            # dropped with the epoch. CORR_COHORT_TOUCH_GATE=0 ⇒ None ⇒ pre-P1.
+            memo = (epoch.memos.setdefault(tenant, ComponentMemo())
+                    if CORR_COHORT_TOUCH_GATE else None)
+            _memo_before = ((memo.components, memo.touched, memo.hits, memo.misses)
+                            if memo is not None else None)
             with stage("engine.run_window"):
                 snapshots = await _offload(
                     run_window, window, CATALOG, seams, ENGINE_CFG,
@@ -3715,7 +3946,19 @@ async def _engine_cycle_inner(epoch: _EngineEpoch | None) -> None:
                     storm_agg_floor=(CORR_STORM_AGG_FLOOR or None),
                     directed=directed, paths=pgv, discovery=discovery,
                     since_ts=LAST_CYCLE_MAX_TS, work_sink=work,
-                    cohort_keys=t_keys, carried_edges=carried, prep=prep)
+                    cohort_keys=t_keys, carried_edges=carried, prep=prep,
+                    memo=memo)
+            if memo is not None and _memo_before is not None:
+                # Deltas, not totals: the memo counts for the whole epoch, these
+                # counters are monotonic per replica (spec §5).
+                global COHORT_COMPONENTS_TOTAL, COHORT_COMPONENTS_TOUCHED_TOTAL
+                global COHORT_MEMO_HITS_TOTAL, COHORT_COMPONENTS_RANKED_TOTAL
+                global COHORT_TOUCHED_LAST
+                COHORT_COMPONENTS_TOTAL += memo.components - _memo_before[0]
+                COHORT_COMPONENTS_TOUCHED_TOTAL += memo.touched - _memo_before[1]
+                COHORT_MEMO_HITS_TOTAL += memo.hits - _memo_before[2]
+                COHORT_COMPONENTS_RANKED_TOTAL += memo.misses - _memo_before[3]
+                COHORT_TOUCHED_LAST = memo.touched - _memo_before[1]
             _remember_edges(tenant, snapshots)
             if work:
                 _record_cycle_work(tenant, work)
@@ -3758,25 +4001,10 @@ async def _engine_cycle_inner(epoch: _EngineEpoch | None) -> None:
     cont_index = {t: ContinuationIndex(v) for t, v in _cont_buckets.items()}
     cont_entities: dict[str, frozenset] = {}
 
-    # Loop-lag resilience (worst production stall 130,561 ms). The per-object
-    # stretches below (the damped/unchanged snapshot path, the find_merges
-    # result loop, quiesce, the count cap) all scale with a SINGLE tenant's open
-    # object count and take no I/O await on their hot path, so a concentrated
-    # storm can hold the event-loop thread past the Kafka session timeout. This
-    # cooperative yield is a no-op until the cycle has held the thread longer
-    # than CORR_LOOP_YIELD_MS, then `await asyncio.sleep(0)` reschedules the
-    # loop (aiokafka's heartbeat/commit coroutines run) and the budget resets.
-    # It only interleaves scheduling — never a computation, order, or result —
-    # so it is determinism-/replay-safe (proved by the golden-wire + replay
-    # suite passing unchanged).
-    _loop_yield_budget_s = CORR_LOOP_YIELD_MS / 1000.0
-    _loop_yield_at = time.monotonic() + _loop_yield_budget_s
-
-    async def _loop_yield() -> None:
-        nonlocal _loop_yield_at
-        if time.monotonic() >= _loop_yield_at:
-            await asyncio.sleep(0)
-            _loop_yield_at = time.monotonic() + _loop_yield_budget_s
+    # Loop-lag resilience: see _make_loop_yield (same gate, same budget — it moved
+    # to module level for P1 change H so the epoch-cadence lifecycle pass, which
+    # runs outside any cohort, is bounded by exactly the same rule).
+    _loop_yield, _reset_loop_yield = _make_loop_yield()
 
     for tenant, window, snapshots in evaluated:
         # P1 max-poll thrash: a damped-heavy cycle walks every snapshot with
@@ -3785,7 +4013,7 @@ async def _engine_cycle_inner(epoch: _EngineEpoch | None) -> None:
         # `_loop_yield()` below bounds the concentrated case this per-tenant
         # yield cannot (one tenant, thousands of snapshots).
         await asyncio.sleep(0)
-        _loop_yield_at = time.monotonic() + _loop_yield_budget_s
+        _reset_loop_yield()
         # §2 prioritize: under a DECLARED storm, persist objects severity-DESCENDING
         # (peak node severity), tie-broken by correlation_id for determinism, so
         # critical/major RCA is built and persisted FIRST and can never be deferred
@@ -3871,83 +4099,22 @@ async def _engine_cycle_inner(epoch: _EngineEpoch | None) -> None:
             # tenant would hold the loop for thousands of snapshots.
             await _loop_yield()
 
-    # Merge (§4.4): de-split a cross-cycle identity drift. A stale open object that
-    # overlaps a live one this cycle (entity-set + window) is the same incident
-    # re-identified after its earliest signal aged out of the window — tombstone it
-    # into the survivor (terminal state='merged' + merged_into) so the queue shows
-    # ONE incident, not two. Replay-safe: only a lifecycle state + backlink, no
-    # re-key/re-rank. Done BEFORE quiesce so a merged object never also quiesce-closes.
-    survivors = [OPEN_OBJECTS[c]["snapshot"] for c in seen_this_cycle if c in OPEN_OBJECTS]
-    stale_snaps = [OPEN_OBJECTS[c]["snapshot"] for c in OPEN_OBJECTS if c not in seen_this_cycle]
-    # NOTE (Stage-2, tracker follow-up): find_merges itself is a synchronous
-    # O(survivors × stale) cross-product inside the pure engine (engine.py) with
-    # no internal yield point — for a concentrated single-tenant storm that call
-    # can be a blocker on its own. Yielding around its RESULT loop (below) bounds
-    # the post-processing but not the call; cutting the call's cost needs the
-    # Stage-2 restructuring (cap group reach / grounding cost) and is out of
-    # scope for this resilience-only change.
-    for merged_cid, survivor_cid in find_merges(survivors, stale_snaps):
-        await _loop_yield()
-        reg = OPEN_OBJECTS.get(merged_cid)
-        if reg is None:
-            continue
-        reg["version"] += 1
-        VERSIONS_PERSISTED += 1
-        _wa_note_outcome(reg["snapshot"].tenant_id, "persisted")
-        await _persist_snapshot(reg["snapshot"], reg["version"], "merged", [], merged_into=survivor_cid, loop_yield=_loop_yield)
-        log.info("corr-object %s merged into %s (split-brain de-duplicated)",
-                 merged_cid[:8], survivor_cid[:8])
-        del OPEN_OBJECTS[merged_cid]
-        _ARCHIVE_SLICE_HASH.pop(merged_cid, None)
+    # P1 change H: the epoch accumulates every cohort's seen ids — the
+    # merge/quiesce/cap passes run ONCE per epoch against the union (see
+    # _epoch_lifecycle). `seen_this_cycle` stays per cohort: it is still the
+    # `exclude=` find_continuation needs, and `materialized` is per cohort too.
+    epoch.seen |= seen_this_cycle
+    global COHORT_OPEN_OBJECTS_LAST, OPEN_OBJECTS_EPOCH_PEAK
+    COHORT_OPEN_OBJECTS_LAST = len(OPEN_OBJECTS)
+    # The transient overshoot the once-per-epoch cap allows, measured rather
+    # than assumed (spec §4 delta 1). Sampled here — before any lifecycle pass —
+    # so it is the true within-epoch peak.
+    OPEN_OBJECTS_EPOCH_PEAK = max(OPEN_OBJECTS_EPOCH_PEAK, len(OPEN_OBJECTS))
+    if not CORR_LIFECYCLE_EPOCH_CADENCE:
+        # A/B knob: the pre-P1 shape — merge/quiesce/cap after EVERY cohort,
+        # against THIS cohort's seen set.
+        await _epoch_lifecycle(epoch, _loop_yield, seen=seen_this_cycle)
 
-    # Quiesce: an object whose component no longer materializes (episodes aged
-    # out / cleared) closes after CORR_QUIESCE_S — terminal version, append-only.
-    for cid in list(OPEN_OBJECTS):
-        await _loop_yield()  # this loop is O(open objects) — bound the grind
-        reg = OPEN_OBJECTS[cid]
-        if cid in seen_this_cycle:
-            continue
-        if (now - reg["last_seen"]).total_seconds() >= CORR_QUIESCE_S:
-            reg["version"] += 1
-            VERSIONS_PERSISTED += 1
-            _wa_note_outcome(reg["snapshot"].tenant_id, "persisted")
-            await _persist_snapshot(reg["snapshot"], reg["version"], "closed", [], loop_yield=_loop_yield)
-            del OPEN_OBJECTS[cid]
-            _ARCHIVE_SLICE_HASH.pop(cid, None)
-
-    # Tracker 163: the count cap. Runs AFTER quiesce (time-based closes may
-    # already have brought us under). Eviction order is least-recently-SEEN,
-    # tie-broken by correlation_id for determinism — the same staleness order
-    # quiesce uses, applied by count instead of age. Force-closed objects get
-    # the SAME terminal persisted version as a quiesce close: append-only,
-    # replayable, visible in the UI as closed — never a silent drop. An
-    # object seen THIS cycle can still be evicted when the cap demands it (a
-    # bound that yields to activity is not a bound); the counter and warning
-    # make that breadth loss an operator-visible fact.
-    global OPEN_OBJECTS_FORCE_CLOSED, _FORCE_CLOSE_LOG_LAST
-    if CORR_OPEN_OBJECTS_MAX > 0 and len(OPEN_OBJECTS) > CORR_OPEN_OBJECTS_MAX:
-        excess = len(OPEN_OBJECTS) - CORR_OPEN_OBJECTS_MAX
-        victims = sorted(OPEN_OBJECTS,
-                         key=lambda c: (OPEN_OBJECTS[c]["last_seen"], c))[:excess]
-        for cid in victims:
-            await _loop_yield()  # eviction can span thousands under a storm
-            reg = OPEN_OBJECTS[cid]
-            reg["version"] += 1
-            VERSIONS_PERSISTED += 1
-            OPEN_OBJECTS_FORCE_CLOSED += 1
-            _wa_note_outcome(reg["snapshot"].tenant_id, "persisted")
-            await _persist_snapshot(reg["snapshot"], reg["version"], "closed", [], loop_yield=_loop_yield)
-            del OPEN_OBJECTS[cid]
-            _ARCHIVE_SLICE_HASH.pop(cid, None)
-        mono = time.monotonic()
-        if (mono - _FORCE_CLOSE_LOG_LAST) >= 30.0:
-            _FORCE_CLOSE_LOG_LAST = mono
-            log.warning(
-                "OPEN_OBJECTS cap enforced (tracker 163): force-closed %d "
-                "least-recently-seen objects to hold the %d bound "
-                "(force_closed_total=%d) — RCA breadth is degraded and "
-                "DECLARED, not silent",
-                excess, CORR_OPEN_OBJECTS_MAX, OPEN_OBJECTS_FORCE_CLOSED)
     LAST_GAP_HINTS = gap_hints
     # tracker 166: advance the "new since last cycle" marker only after the
     # cycle actually completed, so a cycle that raised does not cause the next
@@ -4041,6 +4208,14 @@ async def engine_loop() -> None:
                     # froze, never signals it has no prepared node for.
                     if epoch is None or not epoch.pending():
                         break
+                # P1 change H: the epoch's ONE merge/quiesce/cap pass, after the
+                # drain loop exits NORMALLY and before the epoch is closed. A
+                # cohort that raised skips it (the exception propagates past this
+                # line to the sweep's handler) — earlier cohorts' lifecycle
+                # decisions are re-derivable on the next epoch, and their
+                # persisted versions stand.
+                if epoch is not None and CORR_LIFECYCLE_EPOCH_CADENCE:
+                    await _epoch_lifecycle(epoch, _make_loop_yield()[0])
             finally:
                 if epoch is not None:
                     _close_epoch(epoch)
@@ -7427,6 +7602,48 @@ def _metrics_text() -> str:
         "# HELP corr_engine_epoch_cohorts_max Most cohorts drained in one epoch.",
         "# TYPE corr_engine_epoch_cohorts_max gauge",
         f"corr_engine_epoch_cohorts_max {EPOCH_COHORTS_MAX}",
+        # ── P1 cohort-touch gate (docs/design/COHORT_TOUCH_GATE_P1_2026-08-28.md
+        # §5). The gate's whole claim is "only the components a cohort touched can
+        # have changed" — these are how an operator sees it holding: on cohorts
+        # >= 2, memo_hits should be (components - touched). ranked == components
+        # while the gate is on means the memo is never hitting.
+        "# HELP corr_cohort_components_total Components considered per cohort (summed).",
+        "# TYPE corr_cohort_components_total counter",
+        f"corr_cohort_components_total {COHORT_COMPONENTS_TOTAL}",
+        "# HELP corr_cohort_components_touched_total Components a cohort's new keys touched.",
+        "# TYPE corr_cohort_components_touched_total counter",
+        f"corr_cohort_components_touched_total {COHORT_COMPONENTS_TOUCHED_TOTAL}",
+        "# HELP corr_cohort_components_memo_hits_total Untouched components served from the intra-epoch memo.",
+        "# TYPE corr_cohort_components_memo_hits_total counter",
+        f"corr_cohort_components_memo_hits_total {COHORT_MEMO_HITS_TOTAL}",
+        "# HELP corr_cohort_components_ranked_total Components actually ranked + materialized.",
+        "# TYPE corr_cohort_components_ranked_total counter",
+        f"corr_cohort_components_ranked_total {COHORT_COMPONENTS_RANKED_TOTAL}",
+        "# HELP corr_snapshot_digest Snapshot digests computed vs served from the per-instance cache.",
+        "# TYPE corr_snapshot_digest counter",
+        # ONE call, four series: the keys are exactly <kind>_<result>.
+        *(f'corr_snapshot_digest{{kind="{k.split("_")[0]}",'
+          f'result="{k.split("_", 1)[1]}"}} {v}'
+          for k, v in sorted(digest_cache_stats().items())),
+        # P1 change H: merge/quiesce/cap now run once per EPOCH, not per cohort.
+        # passes/epochs must stay at 1 — tracking cohorts instead means the hoist
+        # is not in effect.
+        "# HELP corr_lifecycle_passes_total Merge/quiesce/cap passes run (epoch cadence).",
+        "# TYPE corr_lifecycle_passes_total counter",
+        f"corr_lifecycle_passes_total {LIFECYCLE_PASSES_TOTAL}",
+        # The declared cost of enforcing the 163 cap once per epoch: the
+        # population may transiently exceed it within an epoch. Measured, not
+        # assumed — if this runs far above CORR_OPEN_OBJECTS_MAX, the epoch is
+        # opening more objects than the cap allows and the cadence needs review.
+        "# HELP corr_open_objects_epoch_peak Highest open-object count observed inside an epoch (pre-lifecycle).",
+        "# TYPE corr_open_objects_epoch_peak gauge",
+        f"corr_open_objects_epoch_peak {OPEN_OBJECTS_EPOCH_PEAK}",
+        "# HELP corr_cohort_open_objects Open objects after the last cohort.",
+        "# TYPE corr_cohort_open_objects gauge",
+        f"corr_cohort_open_objects {COHORT_OPEN_OBJECTS_LAST}",
+        "# HELP corr_cohort_touched Components the last cohort touched.",
+        "# TYPE corr_cohort_touched gauge",
+        f"corr_cohort_touched {COHORT_TOUCHED_LAST}",
         # 166A: carried-edge state is NEW memory that did not exist when the
         # 1.25 GiB envelope was qualified. Growth while the window is flat is
         # the failure shape.

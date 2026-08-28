@@ -116,13 +116,21 @@ def test_snap_call_offloads_large_objects_and_keeps_the_loop_alive(giant):
     assert main._snap_elements(giant) >= main.CORR_OFFLOAD_MIN_ELEMENTS, (
         "fixture must exceed the offload threshold or the test proves nothing")
 
+    # P1 §3 (docs/design/COHORT_TOUCH_GATE_P1_2026-08-28.md): content_hash caches
+    # its digest on the instance, and `giant` is a module-scoped fixture — so
+    # whichever leg ran first would leave the other measuring a cache hit instead
+    # of a serialize, and this test's whole point is that BOTH legs do the same
+    # work. Both therefore call the uncached body directly; _snap_call's offload
+    # decision (what is actually under test) is unchanged by which callable it is
+    # handed, and test_small_objects_keep_the_inline_path still drives the real
+    # content_hash through it.
     async def offloaded():
-        await main._snap_call(giant, giant.content_hash)
+        await main._snap_call(giant, giant._content_hash_uncached)
         await main._snap_call(giant, giant.to_object_row, 1, "open", "")
         await main._snap_call(giant, giant.to_edge_rows, 1)
 
     async def inline():
-        giant.content_hash()
+        giant._content_hash_uncached()
         giant.to_object_row(1, "open", "")
         giant.to_edge_rows(1)
 

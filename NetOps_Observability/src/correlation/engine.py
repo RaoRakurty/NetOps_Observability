@@ -1569,6 +1569,24 @@ def build_edges(
 # byte-identical digest tests in test_engine.py against an inline reference.
 _DIGEST_CHUNK = 512
 
+# P1 cohort-touch gate (docs/design/COHORT_TOUCH_GATE_P1_2026-08-28.md §3/§5):
+# how often a snapshot's two digests were actually computed vs served from the
+# per-instance cache below. The P1 proof is these numbers, not a feeling — a
+# `cached` count that stays at zero means the memoization is not reaching the
+# reconciliation path. Advisory under thread races (run_window and _snap_call
+# both execute on the executor; a lost += undercounts, it can never change a
+# digest), and read-only for the engine itself: nothing here is an input to any
+# hash, verdict or ordering.
+_DIGEST_CACHE_STATS: dict[str, int] = {
+    "content_computed": 0, "content_cached": 0,
+    "material_computed": 0, "material_cached": 0,
+}
+
+
+def digest_cache_stats() -> dict[str, int]:
+    """Snapshot of the digest computed/cached counters (§10 observable)."""
+    return dict(_DIGEST_CACHE_STATS)
+
 
 def _streaming_json_digest16(blob: dict) -> str:
     h = hashlib.sha256()
@@ -1998,7 +2016,28 @@ class ObjectSnapshot:
 
     def content_hash(self) -> str:
         """Change detector for versioning: hashes everything EXCEPT version/
-        timestamps-of-persistence. Same evidence ⇒ same hash ⇒ no new version."""
+        timestamps-of-persistence. Same evidence ⇒ same hash ⇒ no new version.
+
+        P1 §3 (docs/design/COHORT_TOUCH_GATE_P1_2026-08-28.md): the digest is a
+        pure function of a FROZEN dataclass, so it has exactly one value for the
+        life of the instance — compute it once. The cache is stored via
+        object.__setattr__ and is deliberately NOT a dataclass field, so it never
+        enters __eq__/__hash__/replace(): a dc_replace copy (the continuation
+        re-key) is a fresh, uncached object and recomputes, which is the
+        conservative reading. Thread-safe by idempotence — a race recomputes the
+        same 16 characters, it can never produce different ones."""
+        cached = getattr(self, "_content_hash_c", None)
+        if cached is not None:
+            _DIGEST_CACHE_STATS["content_cached"] += 1
+            return cached
+        _DIGEST_CACHE_STATS["content_computed"] += 1
+        value = self._content_hash_uncached()
+        object.__setattr__(self, "_content_hash_c", value)
+        return value
+
+    def _content_hash_uncached(self) -> str:
+        """content_hash's BODY, byte-for-byte unchanged (P1 §9.2). The wrapper
+        above only caches what this returns — the replay pin never moves."""
         # Byte-identical to json.dumps(...,separators=(",",":"),sort_keys=True)
         # + sha256[:16], but chunk-serialized so the C encoder never holds the
         # GIL across the whole storm object (see _streaming_json_digest16). This
@@ -2021,7 +2060,23 @@ class ObjectSnapshot:
         structure (weights drift with timing), and confidence to its customer
         bucket (confidence_label), so decay drift alone never re-versions. The
         persistence gate in main.engine_cycle only writes a new version when THIS
-        moves, on a heartbeat, or on a lifecycle transition."""
+        moves, on a heartbeat, or on a lifecycle transition.
+
+        P1 §3: cached per instance exactly like content_hash — same frozen-object
+        argument, same object.__setattr__ storage, same recompute-on-copy rule.
+        The damping change-detector's BYTES are untouched (the body moved into
+        _material_hash_uncached verbatim)."""
+        cached = getattr(self, "_material_hash_c", None)
+        if cached is not None:
+            _DIGEST_CACHE_STATS["material_cached"] += 1
+            return cached
+        _DIGEST_CACHE_STATS["material_computed"] += 1
+        value = self._material_hash_uncached()
+        object.__setattr__(self, "_material_hash_c", value)
+        return value
+
+    def _material_hash_uncached(self) -> str:
+        """material_hash's BODY, byte-for-byte unchanged (P1 §9.2)."""
         r = self.ranking
         # Byte-identical to the monolithic json.dumps + sha256[:16] digest, but
         # chunk-serialized so the C encoder never holds the GIL across the whole
@@ -2051,7 +2106,15 @@ class ObjectSnapshot:
                 return h.confidence_rank
         return 0.0
 
-    def to_object_row(self, version: int, state: str = "open", merged_into: str = "") -> dict:
+    def to_object_row(self, version: int, state: str = "open", merged_into: str = "",
+                      *, hypotheses: str | None = None) -> dict:
+        """The corr_objects row. `hypotheses` is a PASS-THROUGH of an already-built
+        hypotheses_blob() (P1 §3): one persist needs the blob for the row and the
+        caller has usually just built it for the content hash, and the blob is the
+        single most expensive serialize on a storm object. Deliberately NOT cached
+        on the instance — 15–25K open snapshots x 5.7 KB–MBs is exactly the RSS
+        tracker 156 fought for. None (the default, and every existing call site)
+        rebuilds it here, so the row is byte-for-byte what it always was."""
         r = self.ranking
         row = {
             "tenant_id": self.tenant_id,
@@ -2064,7 +2127,7 @@ class ObjectSnapshot:
             "top_hypothesis": r.top_hypothesis,
             "top_confidence": round(self.top_confidence(), 4),
             "verdict_tier": r.verdict_tier.value,
-            "hypotheses": self.hypotheses_blob(),
+            "hypotheses": self.hypotheses_blob() if hypotheses is None else hypotheses,
             "evidence_missing": json.dumps(list(r.evidence_missing), separators=(",", ":")),
             "affected": json.dumps(self.affected(), separators=(",", ":"), sort_keys=True),
             "signal_count": self.signal_count(),
@@ -2481,6 +2544,58 @@ def _storm_dedup_comp(comp: tuple[Node, ...]) -> tuple[tuple[Node, ...], int]:
     return tuple(out), total
 
 
+class ComponentMemo:
+    """Per-tenant, EPOCH-scoped cache of materialized objects, keyed by the
+    component's node-key SET (P1 change G — docs/design/COHORT_TOUCH_GATE_P1_
+    2026-08-28.md §2).
+
+    WHY IT IS SOUND (§1 of that spec, verified against this file): within one
+    drain epoch the nodes are frozen, `build_edges(cohort=…)` only ever scores
+    pairs with an endpoint in the cohort, carried edges are filtered by a
+    constant live-key set, and everything else a snapshot is built from (catalog,
+    seams, cfg, adjacency, discovery, view, storm/stale declarations, versions) is
+    per-epoch constant. So the edge set is MONOTONE inside an epoch and every
+    new/replaced edge has a cohort endpoint — a component with no node key in
+    `cohort_keys` therefore re-derives, bit for bit, the object the last cohort
+    that touched it derived. Re-running rank + materialization for it is pure
+    waste (the VERSIONS_DAMPED counter is the proof).
+
+    KEYED ON THE NODE-KEY SET, NEVER THE CID: a component that MERGED with
+    another has a different key, so it misses and is rebuilt — and it contains a
+    touched node anyway, so it would not have been served from memo regardless.
+
+    PURE DATA, caller-owned. It lives on `_EngineEpoch.memos` and is dropped in
+    `_close_epoch`; cross-epoch reuse is P2 material (nodes are rebuilt after a
+    prune, so the key would have to be content-addressed over signal ids) and is
+    explicitly out of scope here.
+
+    CONCURRENCY: run_window executes on the thread-pool executor, so this object
+    is mutated off the loop — but access is strictly SEQUENTIAL (one awaited
+    run_window per tenant per cohort, and the memo is per tenant), so no lock is
+    needed. That invariant is a property of the caller; do not hand one memo to
+    two concurrent run_window calls.
+
+    §3a: one memo per TENANT. Node keys are not tenant-qualified, so two tenants
+    with identically-named entities would collide in a shared memo — the caller
+    keys the dict by tenant and this class never sees another tenant's data.
+    """
+
+    __slots__ = ("_by_key", "components", "hits", "misses", "touched")
+
+    def __init__(self) -> None:
+        self._by_key: dict[frozenset[str], ObjectSnapshot] = {}
+        self.hits = 0          # components served from the memo
+        self.misses = 0        # components MATERIALIZED (== "ranked")
+        self.touched = 0       # components a cohort key actually touched
+        self.components = 0    # components considered (above the open floor)
+
+    def get(self, comp_key: frozenset[str]) -> ObjectSnapshot | None:
+        return self._by_key.get(comp_key)
+
+    def put(self, comp_key: frozenset[str], snap: ObjectSnapshot) -> None:
+        self._by_key[comp_key] = snap
+
+
 def run_window(
     window: tuple[Signal, ...] | list[Signal],
     catalog: Catalog,
@@ -2499,6 +2614,7 @@ def run_window(
     cohort_keys: frozenset[str] | None = None,
     carried_edges: tuple[Edge, ...] = (),
     prep: WindowPrep | None = None,
+    memo: ComponentMemo | None = None,
 ) -> list[ObjectSnapshot]:
     """THE pure engine function. One evaluation of one tenant's window.
 
@@ -2520,6 +2636,14 @@ def run_window(
     verdict/ranking/edges/content_hash — an object with no discoverable path or no
     on-path fault is byte-for-byte what it was pre-P2, so replay (which passes no
     discovery) and the golden fixtures are untouched. Empty default = no enrichment.
+
+    `memo` is the caller-owned intra-epoch ComponentMemo (P1 change G). When it is
+    present, a component NO cohort key touches is served from it instead of being
+    re-ranked and re-materialized — see ComponentMemo for the soundness argument.
+    `cohort_keys is None` (a full-window run: golden wire, replay, the tests) means
+    EVERY component is touched, so the memo is never consulted and those paths are
+    byte-for-byte unchanged. `memo=None` (the default, and CORR_COHORT_TOUCH_GATE=0)
+    is exact pre-P1 behaviour.
     """
     cfg = cfg or EngineConfig()
     # tracker 166 Phase 2/5 — the whole prologue below (sort, tenant check,
@@ -2622,6 +2746,31 @@ def run_window(
                     _deduped_total += c
                     _agg_nodes.append(dn)
             continue  # singleton below the open floor: episode, not an object
+        # ── P1 change G: the cohort-touch gate (spec §2) ──────────────────────
+        # Everything ABOVE this point still runs every cohort: the storm-aggregate
+        # branch rebuilds its counter object from ALL below-floor nodes, is O(nodes)
+        # with no rank(), and must stay exactly where it is.
+        #
+        # From here down is the expensive part — rank() over the catalog, the
+        # verdict gates, orientation/adjacency embedding, attribution, dedup and
+        # the ObjectSnapshot materialization. A component no cohort key touches
+        # would re-derive precisely the object the memo already holds, so it is
+        # served from the memo instead. Emission ORDER is unchanged (same `comps`
+        # iteration, the hit is appended in place), so the storm severity sort and
+        # the non-storm order are the order they always were.
+        comp_key = frozenset(comp_keys)
+        touched = cohort_keys is None or not cohort_keys.isdisjoint(comp_key)
+        if memo is not None:
+            memo.components += 1
+            if touched:
+                memo.touched += 1
+            else:
+                hit = memo.get(comp_key)
+                if hit is not None:
+                    snapshots.append(hit)
+                    memo.hits += 1
+                    continue
+            memo.misses += 1
         comp_sigs = tuple(s for n in comp for s in n.signals)
         # Tracker 154a: grounded-seam-type affinity breaks equal-confidence ties.
         ranking = _break_ties_by_seam_affinity(
@@ -2691,7 +2840,7 @@ def run_window(
         if storm_mode:
             store_nodes, obj_dedup = _storm_dedup_comp(comp)
             _deduped_total += obj_dedup
-        snapshots.append(ObjectSnapshot(
+        snapshot = ObjectSnapshot(
             correlation_id=cid,
             tenant_id=tenant,
             window_start=min(s.ts for s in comp_sigs),
@@ -2718,7 +2867,13 @@ def run_window(
             paths=view,
             attribution=attribution,
             attribution_path=attribution_path,
-        ))
+        )
+        snapshots.append(snapshot)
+        # P1 change G: remember it for the cohorts in this epoch that do not
+        # touch this component. Touched components are cached too — the next
+        # cohort may well leave them alone.
+        if memo is not None:
+            memo.put(comp_key, snapshot)
     # §3/§5: emit the single per-tenant storm-noise aggregate for this window's
     # below-floor singleton flood. One bounded object with occurrences/distinct/span
     # replaces N weak singletons; it is marked storm_mode + storm_aggregate so replay
@@ -2728,6 +2883,14 @@ def run_window(
         agg_nodes = tuple(_agg_nodes)
         first = min(agg_nodes, key=lambda n: (n.onset, n.key))
         agg_sigs = tuple(s for n in agg_nodes for s in n.signals)
+        # The event-time bounds are set by the SAME fold loop that fills
+        # _agg_nodes, so a non-empty _agg_nodes always has both. Narrowed
+        # EXPLICITLY (not cast): if the two ever diverge, the aggregate falls back
+        # to the bounds of the nodes it actually folded rather than claiming a
+        # None window — a wrong-but-declared span beats an unhandled None, and the
+        # fallback is unreachable today so no emitted object's bytes move.
+        agg_lo = _agg_ts_lo if _agg_ts_lo is not None else min(s.ts for s in agg_sigs)
+        agg_hi = _agg_ts_hi if _agg_ts_hi is not None else max(s.ts for s in agg_sigs)
         span = ((_agg_ts_hi - _agg_ts_lo).total_seconds()
                 if _agg_ts_lo is not None and _agg_ts_hi is not None else 0.0)
         agg_dc = worst_data_class([n.data_class() for n in agg_nodes])
@@ -2748,8 +2911,8 @@ def run_window(
         snapshots.append(ObjectSnapshot(
             correlation_id=agg_cid,
             tenant_id=tenant,
-            window_start=_agg_ts_lo,
-            window_end=_agg_ts_hi,
+            window_start=agg_lo,
+            window_end=agg_hi,
             trigger_signal=str(min(agg_sigs, key=lambda s: (s.ts, str(s.signal_id))).signal_id),
             nodes=agg_nodes,
             edges=(),
