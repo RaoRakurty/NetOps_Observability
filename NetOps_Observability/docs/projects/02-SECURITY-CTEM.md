@@ -21,13 +21,28 @@ approved the page 2026-08-27**. This is the T8 build target.
 emits, engine doesn't ground them, no UI — compile + pass tests only.
 
 ## Execution order (build)
-### Blocking decision (owner + Fable)
-- [ ] **Findings store + read API — storage schema:** PostgreSQL FORCE-RLS vs.
-  per-tenant OpenSearch index. Unblocks T8 (the UI needs somewhere to read from).
+### Blocking decision (Fable) — ✅ DECIDED 2026-08-28
+`docs/design/SECURITY_FINDINGS_STORE_DECISION_2026-08-28.md`. **Findings store =
+per-tenant OpenSearch index `netops-secfindings-<seg>-*`** (written from
+`netops.security` via vector-router, exactly like syslog/flows; read via
+`TenantIndexPattern`+`TenantFilter`). **PG FORCE-RLS** holds only the small
+mutable control-plane state (feed/rule enablement, saved views). ClickHouse
+unchanged (flow detections ground into `corr_*` Exposure Stories). Rationale:
+`Finding` is immutable, time-stamped, append-heavy with full-text/facet/trend
+access + consumer-side dedup — the telemetry-to-OpenSearch precedent, not
+mutable PG rows. Unblocks T8.
 
 ### Build
 - [ ] **Wire the producers to emit** — call hardening/threatlane/advisory →
   `secbus.FromFinding` → `netops.security` (behind a feature flag).
+- [ ] **Persist the lane** — vector-router route `netops.security →
+  netops-secfindings-<seg>-*` + index mapping (facet keyword fields + full-text
+  narrative fields + `Time`/`ScanID`); doc `_id = hash(native_id|scan_id)`
+  (keeps trend AND a query-time dedup'd current view). Guard dotted keys.
+- [ ] **Findings read API** — list+facet+trend+search, cursor pagination,
+  `requirePerm` + `TenantIndexPattern`/`TenantFilter`, §3a isolation test.
+- [ ] **PG control-plane state** — FORCE-RLS migration for feed/rule enablement
+  + saved views + `withTenant` + isolation test.
 - [ ] **T2b — engine grounding** (Python): consume `netops.security`, ground with
   ZERO security-specific code (the removable-module constraint). *Touches the
   correlation engine → sequence AFTER Project 1's engine deploy settles.*
