@@ -81,6 +81,7 @@ const GeoTopologyMap = lazy(() => import("../geo/GeoTopologyMap"));
 import { EMPTY_SPOTLIGHT } from "../../workflows/workflowTypes";
 import { availableOverlays } from "../../utils/topologyOverlays";
 import { regroupView, GROUP_DIMENSIONS, type GroupDimension } from "../../utils/topologyRegroup";
+import { renderedNodeCount, allGroupIds, canAggregateUnderCeiling, expansionWouldExceed } from "../../utils/topologyScale";
 import { focusSummary, focusView } from "../../utils/topologyFocus";
 import { excludeInternalNodes } from "../../utils/topologyFilters";
 import { filterViewByDomain, DOMAINS, type NetworkDomain } from "../../utils/topologyDomains";
@@ -220,6 +221,14 @@ function CanvasInner({
   // the opposite long after the behaviour changed; corrected 2026-08-01.)
   const [source, setSource] = useState<"live" | "persisted">("live");
   const [fetched, setFetched] = useState<TopologyView | null>(null);
+  // Load-flash guard: true until the FIRST fetch for the current request identity
+  // (mode/source/incident/path — NOT a background refresh) resolves. While loading
+  // the stage shows a placeholder, never the previous network or the bundled
+  // workflow sample — that stale fallback (fetched ?? workflow.view) was the flash.
+  const [loading, setLoading] = useState(true);
+  // A drill-down expansion the scale guard refused (a single group too large to
+  // draw inline) — surfaces the WebGL-overview / search escape hatch for it.
+  const [expandBlocked, setExpandBlocked] = useState<string | null>(null);
   const [coverage, setCoverage] = useState<TopologyCoverage | null>(null);
   // Why the persistent graph is empty: nothing reconciled yet vs the read failed.
   // The two must never render as the same state (a failed read used to render a
@@ -290,6 +299,7 @@ function CanvasInner({
           setFetched(rca.view);
           setIncidentOverlay(rca.overlay);
           setCoverage(null);
+          setLoading(false);
           return;
         }
       }
@@ -312,11 +322,22 @@ function CanvasInner({
         // empty path (no route) from one still in flight.
         setTracedKey(mode === "path_trace" && pathSrc && pathDst ? `${pathSrc}>${pathDst}` : "");
       }
+      setLoading(false);
     })();
     return () => {
       alive = false;
     };
   }, [mode, source, incidentId, pathSrc, pathDst, refreshTick]);
+
+  // Re-enter the loading state whenever the REQUEST IDENTITY changes (a new mode,
+  // source, pinned incident or path endpoints) — but NOT on the 60s background
+  // refresh (refreshTick is deliberately absent), so a wallboard keeps its current
+  // view during a refetch instead of blinking a placeholder. This is what stops the
+  // stage from flashing the prior network (or the bundled sample) on load/switch.
+  useEffect(() => {
+    setLoading(true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mode, source, incidentId, pathSrc, pathDst]);
 
   // Periodic refetch (audit S5). 60s matches the backend reconciler cadence;
   // paused while the tab is hidden so a background wallboard doesn't hammer the
@@ -343,7 +364,11 @@ function CanvasInner({
   // Decision #76: the customer topology canvas shows the CUSTOMER's network — drop the
   // platform's own stack (api/correlation/prober/etc.) so it never pollutes the map.
   const baseView = useMemo(() => {
-    const v = fetched ?? workflow?.view;
+    // The render source is the FETCHED view only — never `workflow?.view`. That
+    // bundled per-mode sample used to fill in before the first fetch resolved,
+    // which is exactly the previous-network flash on load; the stage shows a
+    // loading placeholder during that window instead (see `loading`).
+    const v = fetched;
     if (!v) return v;
     // LAN + carrier-off is the IDENTITY path — the default canvas is byte-for-byte
     // unchanged. SD-WAN / DC apply a client-side domain slice; the carrier overlay
@@ -352,7 +377,7 @@ function CanvasInner({
     if (domain !== "lan") out = filterViewByDomain(out, domain);
     if (carrier) out = withCarrierOverlay(out);
     return out;
-  }, [fetched, workflow?.view, domain, carrier]);
+  }, [fetched, domain, carrier]);
   // Tag-dimension regrouping: re-bucket the canvas by site/role/vendor/owner (or none)
   // — the operator's lens, not just the backend's fixed site hierarchy.
   const groupedView = useMemo(
@@ -376,13 +401,25 @@ function CanvasInner({
   // draw it. "auto" applies the detected shape only when the structure matches
   // cleanly (confidence ≥ 0.8); the operator can force any shape.
   const [arrange, setArrange] = useState<"auto" | Archetype>("auto");
-  // A5: the >1000-node ceiling gates RENDER; it must gate COMPUTE too, or a
-  // large tenant pays a main-thread ELK run + full RF-array build every refetch
-  // just to show the "too many nodes" card.
-  const overCeiling = !!view && view.nodes.length > MAX_CANVAS_NODES;
+  // Scale policy. The ceiling that matters is NOT the raw node count but the
+  // number of nodes React Flow RENDERS: when a large fabric is auto-collapsed to
+  // its groups (below), the canvas draws a few dozen aggregate cards and is fully
+  // interactive. `rawOverCeiling` = the raw fabric is too big to draw node-by-node;
+  // `aggregateAtScale` = it CAN be shown as a sub-ceiling aggregate (has groups
+  // that collapse under budget) — the default at scale; `overCeiling` = the ACTUAL
+  // rendered count is over budget (gates the heavy ELK/RF-array compute, and — only
+  // when aggregation is impossible — the last-resort "too many nodes" card).
+  const rawOverCeiling = !!view && view.nodes.length > MAX_CANVAS_NODES;
+  const aggregateAtScale = !!view && rawOverCeiling && canAggregateUnderCeiling(view, MAX_CANVAS_NODES);
+  const renderCount = view ? renderedNodeCount(view, collapsedGroups) : 0;
+  const overCeiling = !!view && renderCount > MAX_CANVAS_NODES;
+  // A5: the ceiling gates COMPUTE too — a large tenant must not pay a main-thread
+  // ELK run + full RF-array build every refetch just to show the fallback card.
+  // Archetype detection is skipped on the RAW over-ceiling fabric (analysing
+  // thousands of nodes is pointless once we aggregate — groups get default layout).
   const detected = useMemo(
-    () => (view && !overCeiling ? detectArchetype(view) : null),
-    [view, overCeiling],
+    () => (view && !rawOverCeiling ? detectArchetype(view) : null),
+    [view, rawOverCeiling],
   );
   const effectiveArchetype: Archetype | null =
     arrange !== "auto"
@@ -469,7 +506,21 @@ function CanvasInner({
     setPathSrc("");
     setPathDst("");
     setTracedKey("");
+    setExpandBlocked(null);
   }, [mode]);
+
+  // Aggregate-by-default at scale. When the raw fabric is over the interactive
+  // ceiling but CAN be shown as its groups (default lens = site), auto-collapse
+  // every group: the canvas draws a few dozen aggregate cards — interactive and
+  // under the ceiling — instead of the dead-end "too many nodes" card. The
+  // operator drills in by expanding a group (guarded by onToggleGroup). Declared
+  // AFTER the group-by / mode reset effects so it wins the commit-phase ordering,
+  // and keyed on the view IDENTITY + lens (not the object) so a 60s background
+  // refetch doesn't undo the operator's manual expands.
+  useEffect(() => {
+    if (aggregateAtScale && view) setCollapsedGroups(allGroupIds(view));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [aggregateAtScale, view?.view_id, groupBy]);
 
   // Endpoint options for the Path Trace picker: every node, by label, sorted.
   const endpointOptions = useMemo(
@@ -488,13 +539,24 @@ function CanvasInner({
   }, [view]);
 
   const onToggleGroup = useCallback((groupId: string) => {
-    setCollapsedGroups((prev) => {
-      const next = new Set(prev);
-      if (next.has(groupId)) next.delete(groupId);
-      else next.add(groupId);
-      return next;
-    });
-  }, []);
+    if (collapsedGroups.has(groupId)) {
+      // Expanding (drill-down). Guard the interactive ceiling: if revealing this
+      // group's devices would push the rendered count over budget — a single huge
+      // group — keep it collapsed and surface the overview/search escape hatch.
+      if (view && expansionWouldExceed(view, collapsedGroups, groupId, MAX_CANVAS_NODES)) {
+        setExpandBlocked(groupId);
+        return;
+      }
+      setExpandBlocked(null);
+      const next = new Set(collapsedGroups);
+      next.delete(groupId);
+      setCollapsedGroups(next);
+    } else {
+      const next = new Set(collapsedGroups);
+      next.add(groupId);
+      setCollapsedGroups(next);
+    }
+  }, [collapsedGroups, view]);
 
   // Search-to-expand: if a matched node sits inside a collapsed group, reveal it.
   useEffect(() => {
@@ -888,6 +950,13 @@ function CanvasInner({
           <Suspense fallback={<div className="topo-geo-loading">Loading geographic map…</div>}>
             <GeoTopologyMap view={geoWanTopology} />
           </Suspense>
+        ) : loading ? (
+          // Load-flash guard: while the live view for this request is still
+          // resolving, show a placeholder — NEVER the previous network or the
+          // bundled workflow sample. (Matches the sigma/geo loading patterns.)
+          <div className="topo-canvas-loading" role="status" aria-live="polite">
+            Loading topology…
+          </div>
         ) : !view ? (
           <PlaceholderWorkflow blurb={workflow?.blurb ?? "This workflow arrives in a later phase."} label={workflow?.label ?? ""} />
         ) : mode === "path_trace" && !(pathSrc && pathDst) ? (
@@ -914,18 +983,21 @@ function CanvasInner({
           // Dedicated source→destination view (#77): the resolved path as a clean
           // L→R ribbon, NOT the full topology with the path merely highlighted.
           <NetworkPathView view={view} />
-        ) : overCeiling ? (
-          // Scale policy (skill: 1000+ nodes must not render as full React Flow
-          // cards — audit S10). The WebGL overview handles this size; the canvas
-          // stays for scoped subsets (search, groups, domains).
+        ) : overCeiling && !aggregateAtScale ? (
+          // Last-resort scale fallback (audit S10). We only reach here when the raw
+          // fabric is over the ceiling AND cannot be aggregated under it — no
+          // grouping dimension (Group = None), or even fully collapsed the group +
+          // ungrouped count is still over budget. Otherwise the canvas shows the
+          // auto-collapsed AGGREGATE (group cards) — see aggregateAtScale.
           <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center" }}>
             <div style={{ maxWidth: 520, textAlign: "center", padding: "18px 22px", border: "1px dashed var(--border)", borderRadius: 10, background: "var(--panel)" }}>
               <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 6 }}>
                 {view.nodes.length.toLocaleString()} nodes — too many for the interactive canvas
               </div>
               <div style={{ fontSize: 12, color: "var(--fg-muted)", lineHeight: 1.5, marginBottom: 10 }}>
-                Search for the part you care about and focus the canvas on it, or open the
-                WebGL overview for the whole fabric.
+                Pick a grouping dimension to aggregate the fabric into sites/regions,
+                search for the part you care about and focus the canvas on it, or open
+                the WebGL overview for the whole fabric.
               </div>
               {/* The search dock lives in the OTHER branch, so an over-ceiling
                   tenant previously had no way to act on the advice above. Mount
@@ -979,7 +1051,35 @@ function CanvasInner({
                 </button>
               </div>
             )}
-            {showInventory && (
+            {/* Aggregated at scale: the canvas shows sites/regions (auto-collapsed)
+                so the fabric is interactive. A hint + the escape hatches; drill in
+                by expanding a group. */}
+            {aggregateAtScale && !focusOn && (
+              <div className="topo-focus-banner">
+                <span>
+                  {view.nodes.length.toLocaleString()} devices — showing {view.groups.length} groups. Expand a group to drill in.
+                </span>
+                <button className="btn btn-xs" onClick={() => setRenderer("overview")}>
+                  WebGL overview
+                </button>
+              </div>
+            )}
+            {/* A group too large to expand inline (audit S10 drill-down guard):
+                keep it collapsed, steer to the overview / search. */}
+            {expandBlocked && (
+              <div className="topo-focus-banner" role="status">
+                <span>That group is too large to expand on the canvas — use the overview or search.</span>
+                <button className="btn btn-xs" onClick={() => { setExpandBlocked(null); setRenderer("overview"); }}>
+                  WebGL overview
+                </button>
+                <button className="btn btn-xs" onClick={() => setExpandBlocked(null)}>
+                  Dismiss
+                </button>
+              </div>
+            )}
+            {/* The flat device inventory is suppressed while aggregated at scale —
+                a 2,500-row list is not the tool; use search to reach a device. */}
+            {showInventory && !aggregateAtScale && (
               <TopologyInventoryPanel view={view} selection={selection} onPick={onPick} />
             )}
 

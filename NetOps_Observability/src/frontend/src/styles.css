@@ -1105,6 +1105,9 @@ code, kbd, pre, .mono, td.mono {
 .topo-sigma-canvas { position: absolute; inset: 0; background:
   radial-gradient(circle at 50% 40%, color-mix(in srgb, var(--accent) 5%, var(--bg)) 0%, var(--bg) 70%); }
 .topo-sigma-loading { display: grid; place-items: center; height: 100%; color: var(--fg-muted); font-size: 13px; }
+/* Load-flash guard: shown while the live view is still resolving, in place of the
+   previous network / bundled sample. Matches the sigma/geo loading treatment. */
+.topo-canvas-loading { display: grid; place-items: center; height: 100%; color: var(--fg-muted); font-size: 13px; }
 /* Phase 5 geographic / WAN renderer */
 .topo-geo-loading { display: grid; place-items: center; height: 100%; color: var(--fg-muted); font-size: 13px; }
 .topo-geo-wrap { position: relative; height: 100%; width: 100%; }
