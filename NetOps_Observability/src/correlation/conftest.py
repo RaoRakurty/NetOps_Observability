@@ -78,6 +78,12 @@ def _hermetic_stream_clock():
     # a suite that drives a divergent rebalance and leaves the flag false makes
     # every later test's retention silently stop expiring.
     main.COPARTITION_OK = True
+    # Explicit storm mode (design 2026-08-28): _storm_state is a HYSTERETIC latch
+    # in module state, and a test that fills a storm-sized window flips it True.
+    # Under a DECLARED storm, window eviction is severity-aware (§4), so a leaked
+    # latch would silently change a later test's FIFO-eviction premise. Same class
+    # as the window/watermark leaks above — reset on entry AND exit, every test.
+    main._STORM_ACTIVE = False
     yield
     main.WINDOW_BUFFER, main._BUFFERED_ID_ORDER, main._BUFFERED_IDS = _orig
     main.WINDOW_BUFFER.clear()
@@ -87,3 +93,4 @@ def _hermetic_stream_clock():
     main._PROCESSED_IDS.clear()
     main._TENANT_EDGES.clear()
     main.COPARTITION_OK = True
+    main._STORM_ACTIVE = False

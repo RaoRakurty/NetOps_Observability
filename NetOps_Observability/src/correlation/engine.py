@@ -298,6 +298,13 @@ class Node:
     onset: datetime
     onset_uncertainty_s: float
     peak_severity: Severity
+    # Storm-mode dedup (design 2026-08-28 §1): how many raw signal INSTANCES this
+    # node represents. 1 in normal operation and default for every non-storm node,
+    # so a healthy node is byte-identical to pre-storm. Under a declared storm the
+    # node's repeated signals are collapsed to one representative per grounding
+    # identity and this carries the original count — the "occurrences" the operator
+    # sees. Deterministic (a pure function of the window), so replay reproduces it.
+    occurrences: int = 1
 
     def tokens(self) -> frozenset[str]:
         """Identity tokens for grounding: entity id, declared tokens, and the
@@ -1638,6 +1645,20 @@ class ObjectSnapshot:
     gap_hints: int
     topology_stale: bool = False   # §8: scored against a stale topology view (w_topo capped)
     storm_mode: bool = False       # §8: scored under window-flood (maxlen eviction active)
+    # ── explicit storm mode (design 2026-08-28) — ALL default-inert so a non-storm
+    # object (and a storm=False replay) is byte-identical to pre-change ────────────
+    # This object IS the per-tenant "storm-noise" aggregate (§3): one bounded counter
+    # object that stands in for a flood of low-value, below-floor singleton episodes
+    # that would otherwise be silently skipped. False for every real correlation.
+    storm_aggregate: bool = False
+    # For a real storm object: the number of duplicate signal INSTANCES dedup (§1)
+    # collapsed out of this object. For the aggregate object: the TOTAL occurrences
+    # (raw signal instances) it counts. 0 otherwise. Embedded present-only.
+    storm_occurrences: int = 0
+    # Aggregate object only: how many distinct entities the noise spanned, and the
+    # event-time span it covered. 0 for real objects.
+    storm_distinct_entities: int = 0
+    storm_window_span_s: float = 0.0
     # C7: the directed-topology orientations this object's edges were built on —
     # (from_dev, to_dev, verdict, source). EMBEDDED in the snapshot so a directed
     # edge replays deterministically (reconstructed via frozen_oracle), exactly like
@@ -1904,7 +1925,21 @@ class ObjectSnapshot:
         # thus its content_hash + replay pin) is byte-identical to pre-C3, so the
         # common case never churns a version or drifts on replay.
         if self.topology_stale or self.storm_mode:
-            ctx["degradation"] = {"topology_stale": self.topology_stale, "storm_mode": self.storm_mode}
+            deg: dict = {"topology_stale": self.topology_stale, "storm_mode": self.storm_mode}
+            # Storm dedup/aggregate counts live INSIDE the degradation block and only
+            # when non-zero, so a healthy or merely topology-stale object's blob (hence
+            # content_hash + replay pin) is byte-identical to pre-storm-mode — the
+            # counts appear exclusively on objects a declared storm actually degraded
+            # (design §"Hash contract": present-only, degradation-scoped).
+            if self.storm_aggregate:
+                deg["storm_aggregate"] = {
+                    "occurrences": self.storm_occurrences,
+                    "distinct_entities": self.storm_distinct_entities,
+                    "window_span_s": round(self.storm_window_span_s, 3),
+                }
+            elif self.storm_occurrences:
+                deg["deduped"] = self.storm_occurrences
+            ctx["degradation"] = deg
         # C7: embed the directed-topology orientations ONLY when present, so an
         # undirected object's blob (hence content_hash + replay pin) is byte-identical
         # to pre-C7. A directed object embeds (from,to,verdict,source) → replay
@@ -2385,6 +2420,67 @@ def _fold_seam_bridged_components(
                                key=lambda kv: min(n.key for n in kv[1]))]
 
 
+# ── explicit storm mode (design 2026-08-28) — deterministic, replay-safe, gated ──
+#
+# Everything below activates ONLY when run_window is called with storm_mode=True
+# (the caller's _storm_state fired, or replay rehydrated a storm object). With
+# storm_mode=False every path here is skipped and output is byte-identical to
+# pre-change — pinned by the golden-wire/replay/166/162/168 suites. Each decision
+# is a PURE function of the window content + the storm_mode flag: no wall-clock, no
+# random, no dict-order. Replaying a storm object (replay passes the recorded flag)
+# reproduces it byte-for-byte; re-running the SAME raw window with storm_mode=False
+# reconstructs the full, non-degraded correlation (nothing was lost — the raw stays
+# in the durable bus).
+
+
+def _band_of(sig: Signal) -> str:
+    """The app-identity band a signal carries in attrs (design §1 dedup key), '' when
+    absent — pure, no default beyond the empty string."""
+    return str(sig.attrs.get("band", "")) if isinstance(sig.attrs, dict) else ""
+
+
+def _storm_dedup_node(node: Node) -> tuple[Node, int]:
+    """§1 dedup: collapse a node's repeated signals to ONE representative per grounding
+    identity + an occurrences count. Returns (possibly-rewritten node, collapsed count).
+
+    The design's dedup identity is (entity_id, kind, severity, band); entity_id+kind
+    are fixed within a node, so the intra-node key is (severity, band). We EXTEND it
+    with the grounding-relevant fields (entity_tokens, site, path_id, data_class) so
+    the representative is guaranteed identical in everything grounding reads — tokens(),
+    identity_refs(), data_class(), peak_severity and onset are therefore byte-for-byte
+    what the full node produced, and only the stored signal INSTANCE list shrinks.
+    Deterministic: signals arrive sorted by (ts, signal_id), we keep the first per
+    group (earliest), so the kept tuple is the same on every run and on replay."""
+    if len(node.signals) <= 1:
+        return node, 0
+    rep: dict = {}
+    for s in node.signals:  # sorted by (ts, signal_id) — first seen is the earliest
+        attrs = s.attrs if isinstance(s.attrs, dict) else {}
+        key = (s.severity, _band_of(s), s.entity_tokens, s.site, s.path_id,
+               str(attrs.get("data_class", DataClass.LIVE.value)))
+        if key not in rep:
+            rep[key] = s
+    kept = tuple(rep.values())  # insertion order == (ts, signal_id) order (dicts ordered)
+    collapsed = len(node.signals) - len(kept)
+    if collapsed == 0:
+        return node, 0
+    return replace(node, signals=kept, occurrences=len(node.signals)), collapsed
+
+
+def _storm_dedup_comp(comp: tuple[Node, ...]) -> tuple[tuple[Node, ...], int]:
+    """Dedup every node of a component. Grounding identity is preserved per node, so
+    edges/ranking (computed from the ORIGINAL comp) never move — only the stored
+    node.signals shrink, which cuts content_hash / evidence-row / serialization cost
+    (the measured storm stall) without changing the verdict."""
+    out = []
+    total = 0
+    for n in comp:
+        dn, c = _storm_dedup_node(n)
+        out.append(dn)
+        total += c
+    return tuple(out), total
+
+
 def run_window(
     window: tuple[Signal, ...] | list[Signal],
     catalog: Catalog,
@@ -2393,6 +2489,7 @@ def run_window(
     adjacency: TopologyAdjacency = NO_ADJACENCY,
     topology_stale: bool = False,
     storm_mode: bool = False,
+    storm_agg_floor: str | None = None,
     directed: Oracle | None = None,
     paths: PathGraphView | None = None,
     discovery: tuple[AssembledPath, ...] = (),
@@ -2468,10 +2565,26 @@ def run_window(
                            and e.from_node in live and e.to_node in live],
             key=lambda e: (e.from_node, e.to_node)))
     open_floor = _SEV_RANK[Severity(cfg.severity_open_floor)]
+    # §3/§5 aggregation floor: a below-`agg_floor` singleton episode (one that would
+    # otherwise be silently skipped just below) is folded into the per-tenant storm
+    # aggregate instead. Defaults to the open floor, so by default the aggregate
+    # captures EXACTLY the below-open-floor singletons the engine already dropped —
+    # never anything the severity_open_floor lets open a real object. Never above the
+    # open floor: aggregation only ever touches BELOW what opens an object (§5).
+    agg_floor = _SEV_RANK[Severity(storm_agg_floor)] if storm_agg_floor else open_floor
+    agg_floor = min(agg_floor, open_floor)
     topo_ver = seams_hash(seams)
     eng_ver = engine_version(cfg)
 
     snapshots = []
+    # §3 storm-noise aggregate accumulators (storm only) — the deduped low-value
+    # nodes, their raw occurrence total, distinct entities and event-time span.
+    _agg_nodes: list[Node] = []
+    _agg_occurrences = 0
+    _agg_entities: set[str] = set()
+    _agg_ts_lo: datetime | None = None
+    _agg_ts_hi: datetime | None = None
+    _deduped_total = 0
     # Tracker 154b: seam-bridged components are ONE incident — fold before
     # minting objects (the folded id derives from the union's earliest node, so
     # a transient split re-derives the same identity it had before splitting).
@@ -2492,6 +2605,22 @@ def run_window(
         comp_edges = tuple(e for k in sorted(comp_keys)
                            for e in edges_by_from.get(k, ()))
         if not comp_edges and _SEV_RANK[comp[0].peak_severity] < open_floor:
+            if storm_mode and _SEV_RANK[comp[0].peak_severity] < agg_floor:
+                # §3: a below-agg-floor singleton episode. Non-storm it is silently
+                # skipped (next line); under a declared storm it is folded into the
+                # per-tenant storm-noise aggregate — ONE bounded counter object stands
+                # in for the whole flood, so the noise is COUNTED and visible, never a
+                # silent drop, and the O(objects×catalog) rank() cost of a flood of
+                # weak singletons collapses to a single undetermined aggregate.
+                for n in comp:  # a no-edge component is a single node
+                    _agg_occurrences += len(n.signals)
+                    _agg_entities.add(n.entity_id)
+                    lo, hi = n.signals[0].ts, n.signals[-1].ts
+                    _agg_ts_lo = lo if _agg_ts_lo is None else min(_agg_ts_lo, lo)
+                    _agg_ts_hi = hi if _agg_ts_hi is None else max(_agg_ts_hi, hi)
+                    dn, c = _storm_dedup_node(n)
+                    _deduped_total += c
+                    _agg_nodes.append(dn)
             continue  # singleton below the open floor: episode, not an object
         comp_sigs = tuple(s for n in comp for s in n.signals)
         # Tracker 154a: grounded-seam-type affinity breaks equal-confidence ties.
@@ -2552,6 +2681,16 @@ def run_window(
         # on-path cause) ⇒ the object is byte-for-byte pre-P2.
         attr_result = object_attribution(tenant, comp_sigs, disc) if disc else None
         attribution, attribution_path = attr_result if attr_result is not None else (None, None)
+        # §1 dedup: under a declared storm, store one representative per grounding
+        # identity (edges/ranking above were computed from the FULL comp, so the
+        # verdict never moves — only the stored instance list, hence content_hash /
+        # evidence rows / serialization cost, shrinks). window_start/end/trigger stay
+        # derived from the full comp_sigs so the incident's temporal extent is honest.
+        store_nodes = comp
+        obj_dedup = 0
+        if storm_mode:
+            store_nodes, obj_dedup = _storm_dedup_comp(comp)
+            _deduped_total += obj_dedup
         snapshots.append(ObjectSnapshot(
             correlation_id=cid,
             tenant_id=tenant,
@@ -2559,7 +2698,8 @@ def run_window(
             window_end=max(s.ts for s in comp_sigs),
             trigger_signal=str(min((s for s in comp_sigs),
                                    key=lambda s: (s.ts, str(s.signal_id))).signal_id),
-            nodes=comp,
+            nodes=store_nodes,
+            storm_occurrences=obj_dedup,
             edges=comp_edges,
             ranking=ranking,
             seams=seams,
@@ -2578,6 +2718,54 @@ def run_window(
             paths=view,
             attribution=attribution,
             attribution_path=attribution_path,
+        ))
+    # §3/§5: emit the single per-tenant storm-noise aggregate for this window's
+    # below-floor singleton flood. One bounded object with occurrences/distinct/span
+    # replaces N weak singletons; it is marked storm_mode + storm_aggregate so replay
+    # rebuilds it identically, and a storm=False re-run over the same raw window skips
+    # this branch and reconstructs every underlying episode in full (nothing lost).
+    if storm_mode and _agg_nodes:
+        agg_nodes = tuple(_agg_nodes)
+        first = min(agg_nodes, key=lambda n: (n.onset, n.key))
+        agg_sigs = tuple(s for n in agg_nodes for s in n.signals)
+        span = ((_agg_ts_hi - _agg_ts_lo).total_seconds()
+                if _agg_ts_lo is not None and _agg_ts_hi is not None else 0.0)
+        agg_dc = worst_data_class([n.data_class() for n in agg_nodes])
+        # A noise counter is never a scored hypothesis — a fixed, O(1) undetermined
+        # ranking (no rank() over the catalog), which is the point: the flood no
+        # longer pays O(objects×catalog) scoring. Deterministic by construction.
+        agg_ranking = RankingResult(
+            top_hypothesis="undetermined",
+            verdict_tier=VerdictTier.UNDETERMINED,
+            hypotheses=(),
+            evidence_missing=(),
+            catalog_version=catalog.version_hash(),
+        )
+        # Tenant-constant id: ONE aggregate per tenant that VERSIONS across the storm
+        # (find/merge/quiesce handle it like any open object) instead of churning a new
+        # id each cycle. Replay recomputes the same id (pure function of tenant).
+        agg_cid = str(uuid.uuid5(SIGNAL_NS, f"corrobj|{tenant}|storm-noise"))
+        snapshots.append(ObjectSnapshot(
+            correlation_id=agg_cid,
+            tenant_id=tenant,
+            window_start=_agg_ts_lo,
+            window_end=_agg_ts_hi,
+            trigger_signal=str(min(agg_sigs, key=lambda s: (s.ts, str(s.signal_id))).signal_id),
+            nodes=agg_nodes,
+            edges=(),
+            ranking=agg_ranking,
+            seams=seams,
+            engine_ver=eng_ver,
+            topology_version=topo_ver,
+            gap_hints=0,
+            topology_stale=topology_stale,
+            storm_mode=True,
+            storm_aggregate=True,
+            storm_occurrences=_agg_occurrences,
+            storm_distinct_entities=len(_agg_entities),
+            storm_window_span_s=span,
+            data_class=agg_dc,
+            paths=view,
         ))
     return snapshots
 

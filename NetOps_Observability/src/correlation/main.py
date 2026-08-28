@@ -74,6 +74,7 @@ from cloud_producers import cloud_signal_from_event
 from controller_events import controller_event_to_signal
 from directed_topology import DirectedTopology
 from engine import (
+    _SEV_RANK,
     CORR_CANDIDATE_CEILING,
     CORR_TOKEN_HUB_CAP,
     ContinuationIndex,
@@ -846,17 +847,46 @@ STORM_BUFFER_FRACTION = float(os.environ.get("CORR_STORM_FRACTION", "0.9"))
 # only below CORR_STORM_EXIT_FRACTION (default half the entry, mirroring the
 # standards' band).
 STORM_EXIT_FRACTION = float(os.environ.get("CORR_STORM_EXIT_FRACTION", "0.45"))
+# Explicit storm mode (design 2026-08-28) — the BACKLOG-AGE arm of detection. The
+# 2.5k failure (SCALE_2P5K_POSTFIX_VERDICT) survived losslessly but oldest_pending
+# reached 310s: the buffer-fraction arm can be BELOW its threshold while the engine
+# is still current-limited (the backlog is event-time old, not count-full). So storm
+# is ALSO declared when the oldest unevaluated signal's event-time age exceeds this.
+# Event-time (pure function of window content + processed set) → no wall-clock, so
+# the recorded storm_mode flag stays deterministic/replay-safe. <=0 disables the arm.
+CORR_STORM_BACKLOG_AGE_S = float(os.environ.get("CORR_STORM_BACKLOG_AGE_S", "120"))
+# §3 aggregation floor: severity BELOW which a would-be-skipped singleton episode is
+# folded into the per-tenant storm-noise aggregate. Empty ⇒ the engine defaults it to
+# severity_open_floor (aggregate exactly the below-open-floor episodes). Never applied
+# above the open floor — aggregation only touches what never opens a real object (§5).
+CORR_STORM_AGG_FLOOR = os.environ.get("CORR_STORM_AGG_FLOOR", "").strip()
+# §4 severity-aware eviction: when the window is FULL under a declared storm, the
+# victim is the lowest-severity signal among the oldest CORR_STORM_EVICT_SCAN — so a
+# critical is never shed while a low-value signal sits in that scan window (raw always
+# stays in Kafka regardless). Bounded (O(scan)) so it can never reintroduce the
+# tracker-156 prune stall; the guarantee is "no critical dropped while a low-value is
+# within the scan bound", which the overload path can hold at wire speed.
+CORR_STORM_EVICT_SCAN = max(1, int(os.environ.get("CORR_STORM_EVICT_SCAN", "512")))
 _STORM_ACTIVE = False
 
 
-def _storm_state(buffered: int, maxlen: int) -> bool:
-    """Hysteretic storm-mode state machine; called once per epoch."""
+def _storm_state(buffered: int, maxlen: int, oldest_pending_age_s: float = 0.0) -> bool:
+    """Hysteretic storm-mode state machine; called once per epoch.
+
+    Two arms, OR'd into one declared state (design §"Detection tuning"): the
+    hysteretic buffer-fraction arm (ISA-18.2 entry/exit band, unchanged) and the
+    backlog-age arm (oldest unevaluated signal older than CORR_STORM_BACKLOG_AGE_S).
+    Both are pure functions of window state; the default oldest_pending_age_s=0.0
+    keeps every existing caller/test on the buffer arm alone."""
     global _STORM_ACTIVE
     frac = buffered / (maxlen or 1)
+    backlog_arm = (CORR_STORM_BACKLOG_AGE_S > 0.0
+                   and oldest_pending_age_s >= CORR_STORM_BACKLOG_AGE_S)
     if _STORM_ACTIVE:
-        _STORM_ACTIVE = frac > STORM_EXIT_FRACTION
+        buffer_arm = frac > STORM_EXIT_FRACTION
     else:
-        _STORM_ACTIVE = frac >= STORM_BUFFER_FRACTION
+        buffer_arm = frac >= STORM_BUFFER_FRACTION
+    _STORM_ACTIVE = buffer_arm or backlog_arm
     return _STORM_ACTIVE
 # Path-causality RCA P2 (design §2.4): assemble the tenant's typed causal paths from
 # the LIVE measured path observations and hand them to run_window for the on-path
@@ -1553,30 +1583,61 @@ def buffer_signal(sig: Signal) -> None:
     # would be wrongly deduped (dropped) because its stale id lingers in the set.
     _sync_buffered_id_order()
     if len(WINDOW_BUFFER) == WINDOW_BUFFER.maxlen:
-        # The window is FULL and about to drop its oldest signal to make room.
-        # Not data loss — the signal is already in corr_signals — but it IS a
-        # silent narrowing of the correlation horizon, which the 2026-08-20
-        # review flagged as the one place state is shed with no counter. Now it
-        # is countable, so "RCA got thinner under storm" is a visible fact.
+        # The window is FULL and about to drop a signal to make room. Not data loss
+        # — the signal is already in corr_signals AND stays in Kafka at bus retention
+        # (design §4: storm mode NEVER drops from the durable bus) — but it IS a
+        # silent narrowing of the correlation horizon, which the 2026-08-20 review
+        # flagged as the one place state is shed with no counter.
         global WINDOW_OVERFLOW_DROPPED, WINDOW_OVERFLOW_IN_HORIZON
         global WINDOW_OVERFLOW_AGE_MIN_S, WINDOW_OVERFLOW_AGE_MAX_S
+        global STORM_SHED_LOWVALUE, STORM_SHED_CRITICAL_SPARED, STORM_AGGREGATED_TOTAL
+        # §4 severity-aware eviction: the plain deque sheds its OLDEST (head) — which
+        # is severity-BLIND and can drop a critical while low-value noise sits behind
+        # it. Under a DECLARED storm, choose the victim by lowest severity among the
+        # oldest CORR_STORM_EVICT_SCAN instead, so a critical is spared while any
+        # lower-value signal is within that (bounded, O(scan)) window. Non-storm and
+        # a scan of all-equal severity fall through to head eviction — byte-identical
+        # to before. Deterministic (a pure function of the buffer's severities).
+        victim_idx = 0
+        if _STORM_ACTIVE and len(WINDOW_BUFFER) > 1:
+            scan = min(CORR_STORM_EVICT_SCAN, len(WINDOW_BUFFER))
+            head_rank = _SEV_RANK[WINDOW_BUFFER[0].severity]
+            best_rank = head_rank
+            for i in range(1, scan):
+                r = _SEV_RANK[WINDOW_BUFFER[i].severity]
+                if r < best_rank:            # strictly lower ⇒ prefer the OLDEST such
+                    best_rank = r
+                    victim_idx = i
+            if victim_idx != 0 and head_rank > best_rank:
+                STORM_SHED_CRITICAL_SPARED += 1  # we spared a higher-severity head
+        victim = WINDOW_BUFFER[victim_idx]
+        victim_id = _BUFFERED_ID_ORDER[victim_idx]
         WINDOW_OVERFLOW_DROPPED += 1
-        # How old was the signal we are shedding? If it is younger than the RCA
-        # horizon it was still eligible evidence — the distinction between
-        # "aged out" and "pushed out" is the whole question.
-        # Eligibility is an EVENT-time question and the engine answers it: could
-        # the victim still have formed an edge with the newest evidence? That is
-        # exactly `ENGINE_REACH_S` (tracker 165). Measuring the victim's age
-        # against wall-clock arrival, or against the window_s buffering
-        # constant, answered a different question and over-counted.
-        victim_age = (sig.ts - WINDOW_BUFFER[0].ts).total_seconds()
+        if _STORM_ACTIVE:
+            STORM_SHED_LOWVALUE += 1
+            STORM_AGGREGATED_TOTAL += 1  # counted, not a silent drop (§4/§10)
+        # How old was the signal we are shedding, measured against the newest evidence
+        # (the incoming signal)? Younger than ENGINE_REACH_S ⇒ it was still eligible.
+        victim_age = (sig.ts - victim.ts).total_seconds()
         if victim_age < ENGINE_REACH_S:
             WINDOW_OVERFLOW_IN_HORIZON += 1
         if WINDOW_OVERFLOW_AGE_MIN_S == 0.0 or victim_age < WINDOW_OVERFLOW_AGE_MIN_S:
             WINDOW_OVERFLOW_AGE_MIN_S = victim_age
         WINDOW_OVERFLOW_AGE_MAX_S = max(WINDOW_OVERFLOW_AGE_MAX_S, victim_age)
-        _PROCESSED_IDS.discard(_BUFFERED_ID_ORDER[0])
-        _BUFFERED_IDS.discard(_BUFFERED_ID_ORDER[0])
+        _PROCESSED_IDS.discard(victim_id)
+        _BUFFERED_IDS.discard(victim_id)
+        if victim_idx != 0:
+            # Remove the chosen non-head victim from BOTH deques in lockstep (rotate
+            # the victim to the front, popleft, rotate back) so the append below does
+            # NOT also evict the head. O(scan)-bounded — never a full-window walk.
+            WINDOW_BUFFER.rotate(-victim_idx)
+            _BUFFERED_ID_ORDER.rotate(-victim_idx)
+            WINDOW_BUFFER.popleft()
+            _BUFFERED_ID_ORDER.popleft()
+            WINDOW_BUFFER.rotate(victim_idx)
+            _BUFFERED_ID_ORDER.rotate(victim_idx)
+        # else: the deque is still full and the append below evicts the head (victim),
+        # exactly as before — both deques drop their head in lockstep.
     _BUFFERED_IDS.add(sid)
     # Appended in lockstep, and both deques carry the SAME maxlen, so a full
     # deque drops its head from both at once and the two stay aligned.
@@ -2079,6 +2140,14 @@ WINDOW_OVERFLOW_DROPPED = 0
 WINDOW_OVERFLOW_IN_HORIZON = 0   # overflow drops still inside the engine's reach
 WINDOW_OVERFLOW_AGE_MIN_S = 0.0  # youngest signal ever shed by capacity
 WINDOW_OVERFLOW_AGE_MAX_S = 0.0  # oldest signal shed by capacity
+# ── explicit storm mode (design 2026-08-28) observability (§10, no silent failure) ──
+# Counters that count storm ACTIVITY (per-cycle work / per-event sheds), monotonic —
+# the same semantic as corr_window_overflow_dropped_total. deduped/aggregated are
+# summed from each cycle's snapshots in the persist loop; shed is per eviction.
+STORM_DEDUPED_TOTAL = 0      # signal instances collapsed by §1 dedup (per-cycle work)
+STORM_AGGREGATED_TOTAL = 0   # occurrences folded into §3 aggregates + §4 sheds
+STORM_SHED_LOWVALUE = 0      # §4 severity-aware evictions (low-value shed, never silent)
+STORM_SHED_CRITICAL_SPARED = 0  # times eviction chose a low-value over an older critical
 
 
 async def _prune_buffer(now: datetime) -> None:
@@ -2619,7 +2688,16 @@ async def _begin_epoch(now: datetime) -> _EngineEpoch:
     # same inputs, so declaring the same verdict on all of them is the honest
     # reading, not a staleness.
     ep.topo_stale = _topology_stale(now)
-    ep.storm = _storm_state(len(WINDOW_BUFFER), WINDOW_BUFFER.maxlen or 1)
+    # Backlog-age arm (design §"Detection tuning"): the event-time age of the oldest
+    # still-unevaluated signal, measured against the newest retained event — pure
+    # event-time, no wall-clock, so the recorded storm flag stays replay-deterministic.
+    _pend = pending_signals()
+    _oldest_pending_age_s = 0.0
+    if _pend and WINDOW_BUFFER:
+        _newest_ts = max(s.ts.timestamp() for s in WINDOW_BUFFER)
+        _oldest_pending_age_s = max(0.0, _newest_ts - min(s.ts.timestamp() for s in _pend))
+    ep.storm = _storm_state(len(WINDOW_BUFFER), WINDOW_BUFFER.maxlen or 1,
+                            _oldest_pending_age_s)
     if ep.topo_stale or ep.storm:
         log.warning("engine degradation: topology_stale=%s storm_mode=%s (buffer=%d/%s)",
                     ep.topo_stale, ep.storm, len(WINDOW_BUFFER), WINDOW_BUFFER.maxlen)
@@ -3634,6 +3712,7 @@ async def _engine_cycle_inner(epoch: _EngineEpoch | None) -> None:
                 snapshots = await _offload(
                     run_window, window, CATALOG, seams, ENGINE_CFG,
                     adjacency=adjacency, topology_stale=topo_stale, storm_mode=storm,
+                    storm_agg_floor=(CORR_STORM_AGG_FLOOR or None),
                     directed=directed, paths=pgv, discovery=discovery,
                     since_ts=LAST_CYCLE_MAX_TS, work_sink=work,
                     cohort_keys=t_keys, carried_edges=carried, prep=prep)
@@ -3707,6 +3786,24 @@ async def _engine_cycle_inner(epoch: _EngineEpoch | None) -> None:
         # yield cannot (one tenant, thousands of snapshots).
         await asyncio.sleep(0)
         _loop_yield_at = time.monotonic() + _loop_yield_budget_s
+        # §2 prioritize: under a DECLARED storm, persist objects severity-DESCENDING
+        # (peak node severity), tie-broken by correlation_id for determinism, so
+        # critical/major RCA is built and persisted FIRST and can never be deferred
+        # behind low-severity work when the per-cycle budget bites. The storm-noise
+        # aggregate (undetermined, no nodes above the floor) naturally sorts LAST.
+        # Gated: non-storm order is the engine's original emission order, byte-for-byte.
+        if storm:
+            snapshots = sorted(
+                snapshots,
+                key=lambda s: (-max((_SEV_RANK[n.peak_severity] for n in s.nodes),
+                                    default=0),
+                               s.correlation_id))
+            global STORM_DEDUPED_TOTAL, STORM_AGGREGATED_TOTAL
+            for _s in snapshots:
+                if _s.storm_aggregate:
+                    STORM_AGGREGATED_TOTAL += _s.storm_occurrences
+                elif _s.storm_occurrences:
+                    STORM_DEDUPED_TOTAL += _s.storm_occurrences
         for snap in snapshots:
             gap_hints += snap.gap_hints
             reg = OPEN_OBJECTS.get(snap.correlation_id)
@@ -7204,6 +7301,22 @@ def _metrics_text() -> str:
         "# HELP corr_window_overflow_in_horizon_total Capacity drops of signals still inside the RCA horizon.",
         "# TYPE corr_window_overflow_in_horizon_total counter",
         f"corr_window_overflow_in_horizon_total {WINDOW_OVERFLOW_IN_HORIZON}",
+        # ── explicit storm mode (design 2026-08-28) — §10 no silent failure ──────
+        "# HELP corr_storm_mode_active 1 while the engine has DECLARED storm mode.",
+        "# TYPE corr_storm_mode_active gauge",
+        f"corr_storm_mode_active {1 if _STORM_ACTIVE else 0}",
+        "# HELP corr_storm_deduped_total Signal instances collapsed by storm dedup (per-cycle work).",
+        "# TYPE corr_storm_deduped_total counter",
+        f"corr_storm_deduped_total {STORM_DEDUPED_TOTAL}",
+        "# HELP corr_storm_aggregated_total Low-value occurrences folded into storm aggregates + severity-aware sheds.",
+        "# TYPE corr_storm_aggregated_total counter",
+        f"corr_storm_aggregated_total {STORM_AGGREGATED_TOTAL}",
+        "# HELP corr_storm_lowvalue_shed_total Severity-aware evictions of low-value signals under storm (raw kept in Kafka).",
+        "# TYPE corr_storm_lowvalue_shed_total counter",
+        f"corr_storm_lowvalue_shed_total {STORM_SHED_LOWVALUE}",
+        "# HELP corr_storm_critical_spared_total Evictions that spared a higher-severity head for a low-value victim.",
+        "# TYPE corr_storm_critical_spared_total counter",
+        f"corr_storm_critical_spared_total {STORM_SHED_CRITICAL_SPARED}",
         # Time actually represented by the window. Below window_horizon_s means
         # the count bound, not the time bound, is deciding what the engine sees.
         "# HELP corr_window_span_seconds Time span currently held in the evidence window.",
