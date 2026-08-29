@@ -222,3 +222,19 @@ insert outside the retry contract, fix in build), memflat FAIL on ClickHouse
 injector 870k/900k. Committed but NOT deployed: e318ace2 (queue 2000 / 64 MiB,
 calibrated estimator). NEXT: land both fixes → redeploy → one run for a clean
 all-phase PASS → damping.
+
+## UPDATE (2026-08-29 12:00) — committed, NOT deployed; deploy recipe for the clean-pass run
+Committed since the PASS run: `e318ace2` (Evidence queue 2000 / 64 MiB, calibrated
+estimator), `c4b11690` (ClickHouse merge/memory budget: server settings need a
+**ClickHouse restart**; per-table ALTERs run at **api boot** — rebuild api),
+`8e623e38` (harness: producer hardening = the 901-event accounting FAIL was the
+harness's own producer; burst shortfall FAILs; ClickHouse memflat clauses;
+end_offset all partitions). In build: Evidence write batching + Decision-write
+offload (`main.py`/`evidence_plane.py`).
+Deploy order for the next run (owner approval in-session): build api +
+correlation → `up -d --no-deps api` → restart clickhouse (verify
+`system.server_settings` background_pool_size=6, max_server_memory_usage
+4,096 MiB, part_log exists) → `up -d --no-deps --force-recreate --scale
+correlation=2 correlation` with `compose.profile.yml` → verify 0 rejections
+→ `scale-miniladder.py --profile t-nominal-2.5k --devices 2500 --eps 1000
+--run-dir /var/tmp/scale-runs/p2-s05-…` → expect ALL phases PASS.
