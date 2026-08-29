@@ -21,7 +21,19 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 from typing import Any
+
+# The ENTERPRISE OUTAGE chain, for the `shape` param's knob validation. The
+# module is stdlib-only and imports nothing from either harness, so this
+# cannot create a cycle; the guarded insert adds only `scripts/`, whose module
+# names are disjoint from the twin's flat ones (same discipline as
+# `stories.py`, which imports it for the vocabulary itself).
+_SCRIPTS_DIR = os.path.dirname(os.path.dirname(os.path.dirname(
+    os.path.abspath(__file__))))
+if _SCRIPTS_DIR not in sys.path:
+    sys.path.insert(0, _SCRIPTS_DIR)
+import enterprise_outage_chain as chain  # the shared chain (path set above)
 
 # T1 budget (design §9.1): refuse scenarios whose computed steady EPS exceeds
 # this unless --force. Story bursts are separately capped by review, not here.
@@ -106,11 +118,16 @@ STORY_TEMPLATES: dict[str, dict[str, Any]] = {
     # `with_trap` adds the §4.0 linkDown/linkUp + BGP4-MIB trap rows for the
     # same two faults — corroboration across MODALITIES, not just devices.
     "enterprise_outage": {
+        # `shape` is a `chain.StormShape` knob set — the SAME parameter
+        # object the mini-ladder's storm profiles carry — so an accuracy run
+        # and a scale run can be given identical repetition/dynamics. See
+        # `stories._tpl_enterprise_outage` for which knobs a declared topology
+        # can express; the fleet-allocation ones are refused, not ignored.
         "params": {"core_device", "dist_device", "uplink_interface",
                    "flap_interface", "flap_cycles", "churn_eps",
                    "churn_duration_s", "stp_share", "mac_share", "vlan",
                    "with_trap", "probe_loss_pct", "recover",
-                   "recovery_after_s"},
+                   "recovery_after_s", "shape"},
         "lanes": {"syslog", "probes"},
     },
     "negative_debug_probe": {
@@ -451,6 +468,15 @@ def validate_scenario(raw: Any, name: str = "<scenario>") -> dict:
                            f"core_device and dist_device are both "
                            f"{params['core_device']!r} — the chain's second "
                            f"vantage would be the first one again")
+            if "shape" in params:
+                # Validated HERE so a bad knob fails at scenario-load time
+                # with the story named, not deep inside the expander.
+                try:
+                    chain.shape_from_params(
+                        params["shape"], chain.TOPOLOGY_SHAPE_KNOBS,
+                        where=f"{p}.params.shape")
+                except (ValueError, TypeError) as exc:
+                    raise _err(f"{p}.params.shape", str(exc)) from exc
             for key, lo, hi in (("stp_share", 0.0, 1.0),
                                 ("mac_share", 0.0, 1.0)):
                 if key in params and not (

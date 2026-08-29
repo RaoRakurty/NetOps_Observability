@@ -504,6 +504,32 @@ def _tpl_enterprise_outage(story: dict, sc: dict,
                  `mac_share` as hosts re-home
       +150–300 s recovery (unless `recover: false` — a hard outage)
 
+    DECLARING A SHAPE (P3, 2026-08-29). `params.shape` is a
+    `chain.StormShape` knob set — the SAME object the mini-ladder's storm
+    profiles carry — so an accuracy run and a scale run can be given the
+    identical repetition/dynamics instead of two hand-tuned approximations.
+    Declaring it turns on the knobs a DECLARED TOPOLOGY can express:
+
+      repeat_factor / repeat_distribution / repeat_window_s
+                          re-reports of a symptom inside the window (memo §18
+                          "repeated confirmation" — the mass an Aggregation
+                          Plane may collapse). WITHOUT `shape` the story emits
+                          NO repeats, exactly as before, so every existing
+                          scenario file and golden fixture is unchanged.
+      flap_cycles         drawn per story instead of the fixed `flap_cycles`
+      churn_density / churn_duration_s / churn_max_events   the route-churn phase
+      recovery_ratio      the chance this site recovers at all
+      contradiction_ratio a contradictory HEALTHY observation on the flapping
+                          core port while the fault is still open (memo §17)
+
+    An explicit legacy param (`flap_cycles`, `churn_eps`, `churn_duration_s`,
+    `recover`) still WINS over the shape, so a file can pin one phase and
+    shape the rest. Fleet-allocation knobs (`storm_share_of_raw`,
+    `incident_density`, `device_budget`, `onset_span`, `blast_radius_waves`,
+    `vantages_per_cause`) have nothing to act on in a declared topology and are
+    REFUSED by `chain.shape_from_params(..., chain.TOPOLOGY_SHAPE_KNOBS)`
+    rather than silently ignored.
+
     Corroboration across MODALITIES, not just devices: with `with_trap` the
     core also pushes the standard linkDown/linkUp and BGP4-MIB
     backward/established notifications for the same two faults (§4.0 trap
@@ -547,14 +573,41 @@ def _tpl_enterprise_outage(story: dict, sc: dict,
     peer_dist = _ospf_router_id(sc, dist, 1)     # the dist router, from core
     peer_core = _ospf_router_id(sc, core, 2)     # the core router, from dist
     vlan = int(p.get("vlan", 200))
-    cycles = int(p.get("flap_cycles", 3))
-    churn_eps = float(p.get("churn_eps", 10.0))
-    churn_dur = float(p.get("churn_duration_s", 30.0))
+    # The declared SHAPE, or None for "behave exactly as this template always
+    # has". Validation (unknown knob, wrong type, out of range) already ran in
+    # `scenario.py`; it runs again here so the template is safe to call
+    # directly from a test (§3: never trust an upstream caller).
+    shape = (chain.shape_from_params(p["shape"], chain.TOPOLOGY_SHAPE_KNOBS,
+                                     where=f"story {sid!r} params.shape")
+             if p.get("shape") is not None else None)
+    if "flap_cycles" in p:
+        cycles = int(p["flap_cycles"])
+    elif shape is not None:
+        cycles = rng.randint(*shape.flap_cycle_range())
+    else:
+        cycles = 3
+    if "churn_eps" in p:
+        churn_eps = float(p["churn_eps"])
+    elif shape is not None:
+        churn_eps = round(rng.uniform(*shape.churn_eps_range()), 3)
+    else:
+        churn_eps = 10.0
+    if "churn_duration_s" in p:
+        churn_dur = float(p["churn_duration_s"])
+    elif shape is not None:
+        churn_dur = round(rng.uniform(*shape.churn_duration_range()), 2)
+    else:
+        churn_dur = 30.0
     stp_share = float(p.get("stp_share", 0.5))
     mac_share = float(p.get("mac_share", 0.25))
     with_trap = bool(p.get("with_trap"))
     loss = float(p.get("probe_loss_pct", 85))
-    recover = bool(p.get("recover", True))
+    if "recover" in p:
+        recover = bool(p["recover"])
+    elif shape is not None:
+        recover = rng.random() >= shape.no_recovery_share()
+    else:
+        recover = True
     recover_after = float(p.get("recovery_after_s", 180.0))
 
     ct, dt = core_dev["tenant"], dist_dev["tenant"]
@@ -562,6 +615,26 @@ def _tpl_enterprise_outage(story: dict, sc: dict,
 
     def line(t: float, dn: str, tenant: str, ln: tuple) -> None:
         items.append(_syslog(t, dn, tenant, ln[0], ln[1], ln[2], sid))
+
+    def repeats(t: float, dn: str, tenant: str, ln: tuple) -> int:
+        """Re-report a symptom `shape.repeat_factor` times on average, spread
+        inside `shape.repeat_window_s` so every copy still counts as a repeat
+        of the same identity in the same event-time bucket.
+
+        No shape ⇒ no repeats: the template's original behaviour.
+        """
+        if shape is None:
+            return 0
+        n = shape.draw_repeats(rng, chain.REPEAT_RANGE)
+        if n <= 0:
+            return 0
+        # Two thirds of the window, so the last copy is still comfortably
+        # inside it once the emitter's own scheduling jitter is added.
+        span = float(shape.repeat_window_s) * (2.0 / 3.0)
+        step = span / n
+        for k in range(n):
+            line(t + 3.0 + step * k, dn, tenant, ln)
+        return n
 
     # ── the phase clock: seeded, jittered, monotonically causal ───────────
     t_ospf = _jit(rng, chain.PHASE_BAND["ospf_neighbor_down"])
@@ -572,6 +645,7 @@ def _tpl_enterprise_outage(story: dict, sc: dict,
     # phase 1 — the cause
     line(0.0, core, ct, chain.link(upif, "down"))
     line(1.0, core, ct, chain.lineproto(upif, "down"))
+    n_repeats = repeats(0.0, core, ct, chain.link(upif, "down"))
     if with_trap:
         items.append(_trap(0.5, core, ct, "linkDown", sid,
                            ifindex=core_ifs.index(upif) + 1, ifname=upif,
@@ -579,6 +653,8 @@ def _tpl_enterprise_outage(story: dict, sc: dict,
 
     # phase 2 — the IGP notices
     line(t_ospf, core, ct, chain.ospf_adj(peer_ospf, upif, "down"))
+    n_repeats += repeats(t_ospf, core, ct,
+                         chain.ospf_adj(peer_ospf, upif, "down"))
 
     # phase 3 — a second core port flaps, logged from BOTH ends
     tc = t_flap
@@ -598,6 +674,7 @@ def _tpl_enterprise_outage(story: dict, sc: dict,
 
     # phase 4 — the transit session flaps Down → Up → Down
     line(t_bgp, core, ct, chain.bgp_adj(peer_transit, "down"))
+    n_repeats += repeats(t_bgp, core, ct, chain.bgp_adj(peer_transit, "down"))
     if with_trap:
         items.append(_trap(t_bgp + 0.5, core, ct, "bgpBackwardTransition",
                            sid, peer_ip=peer_transit))
@@ -615,7 +692,13 @@ def _tpl_enterprise_outage(story: dict, sc: dict,
     # phase 5 — route churn + the router-update burst
     t_churn = max(b_down2 + 0.5, _jit(rng, chain.PHASE_BAND["route_churn"]))
     n_churn = max(1, round(churn_eps * churn_dur))
-    step = churn_dur / n_churn
+    n_churn_planned = n_churn
+    if shape is not None and shape.churn_max_events > 0:
+        # The same throughput budget the mini-ladder applies: the phase keeps
+        # its RATE and stops early when the budget is spent, and BOTH numbers
+        # ride into the labels so a truncated phase is never silent.
+        n_churn = min(n_churn, int(shape.churn_max_events))
+    step = churn_dur / max(1, n_churn_planned)
     for k in range(n_churn):
         at = t_churn + k * step
         if k % 5 == 4:
@@ -647,6 +730,8 @@ def _tpl_enterprise_outage(story: dict, sc: dict,
         stp_ifs[dn] = pif
         line(t_acc + 1.0 + 0.3 * j, dn, d["tenant"],
              chain.stp_port(pif, "down"))
+        n_repeats += repeats(t_acc + 1.0 + 0.3 * j, dn, d["tenant"],
+                             chain.stp_port(pif, "down"))
     for j, dn in enumerate(order[:n_mac]):
         d = _dev(sc, dn)
         ifs = [str(i["name"]) for i in d["interfaces"]]
@@ -659,6 +744,16 @@ def _tpl_enterprise_outage(story: dict, sc: dict,
         mac = chain.mac_address((sum(ord(c) for c in sid) % 1000) * 4096 + j)
         line(t_acc + 2.0 + 0.3 * j, dn, d["tenant"],
              chain.mac_flap(mac, vlan, pa, pb))
+
+    # a CONTRADICTORY healthy observation while the fault is still open
+    # (memo §17/§18): the flapping core port reports up, then down again.
+    contradictions: list[dict] = []
+    if shape is not None and shape.contradiction_devices(len(order) + 2) > 0:
+        ct_at = round(t_acc + 4.0, 2)
+        line(ct_at, core, ct, chain.link(flapif, "up"))
+        line(ct_at + 5.0, core, ct, chain.link(flapif, "down"))
+        contradictions.append({"device": core, "at": ct_at,
+                               "entity_id": f"{core}:{flapif}"})
 
     # phase 7 — recovery, or a hard outage
     last_fault = max(it["t"] for it in items)
@@ -699,7 +794,9 @@ def _tpl_enterprise_outage(story: dict, sc: dict,
                          {"at": round(b_down2, 1), "state": "down"}]},
         {"phase": "route_churn", "offset_s": round(t_churn, 1),
          "rate_eps": churn_eps, "duration_s": churn_dur,
+         "events_planned": n_churn_planned + burst_n + 1,
          "events": n_churn + burst_n + 1,
+         "truncated_by_throughput_budget": n_churn < n_churn_planned,
          "update_burst_at": round(burst_at, 1),
          "update_burst_events": burst_n},
         {"phase": "access_layer", "offset_s": round(t_acc, 1),
@@ -727,6 +824,14 @@ def _tpl_enterprise_outage(story: dict, sc: dict,
                  "stp_port_devices": sorted(order[:n_stp]),
                  "mac_move_devices": sorted(order[:n_mac])},
         "timeline": timeline,
+        "contradictions": contradictions,
+        # WHAT THIS STORY WAS ASKED FOR (P3). `null` means no shape was
+        # declared and the template ran its historical defaults; otherwise the
+        # full knob set plus its content digest, so an accuracy run and a
+        # mini-ladder rung can be compared on the shape they share.
+        "shape": None if shape is None else shape.as_dict(),
+        "shape_digest": None if shape is None else shape.digest(),
+        "repeat_events": n_repeats,
         "parser_coverage": chain.parser_coverage(),
         "not_promoted": list(chain.not_promoted_types()),
     }

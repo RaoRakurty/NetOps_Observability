@@ -419,3 +419,169 @@ def test_the_example_scenarios_still_validate():
                  "twin-scenario-giant-object.yaml"):
         path = os.path.join(REPO_ROOT, "docs", "design", "examples", name)
         validate_scenario(copy.deepcopy(load_scenario(path)), name=name)
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# THE DECLARED STORM SHAPE (P3, 2026-08-29)
+#
+# `params.shape` is a `chain.StormShape` knob set — the SAME parameter object
+# `scripts/scale-miniladder.py`'s storm profiles carry — so an accuracy run
+# and a scale run can be given the identical repetition/dynamics instead of
+# two hand-tuned approximations of "a repetitive storm". What these hold:
+#   * declaring no shape leaves the template EXACTLY as it was (every existing
+#     scenario file and golden fixture is unchanged);
+#   * a declared shape round-trips: knobs in ⇒ the same knobs, and their
+#     content digest, out in the story's ground-truth labels;
+#   * the knobs a declared topology cannot express are REFUSED, not ignored;
+#   * the plan stays a pure function of (scenario, seed) with a shape on it.
+# ══════════════════════════════════════════════════════════════════════════
+
+SHAPE_KNOBS = {"repeat_factor": 12.0, "repeat_window_s": 60.0,
+               "flap_cycles": [2, 5], "churn_density": 20.0,
+               "churn_duration_s": [30.0, 45.0], "churn_max_events": 400,
+               "recovery_ratio": 1.0, "contradiction_ratio": 0.25}
+
+
+def _shaped(**over) -> dict:
+    knobs = dict(SHAPE_KNOBS)
+    knobs.update(over)
+    story = _story(shape=knobs)
+    # the shape owns these phases now — drop the explicit pins so it can
+    del story["params"]["flap_cycles"]
+    del story["params"]["churn_eps"]
+    del story["params"]["churn_duration_s"]
+    return story
+
+
+def test_shape_is_a_dsl_param_and_its_knobs_are_validated():
+    from scenario import STORY_TEMPLATES
+    assert "shape" in STORY_TEMPLATES["enterprise_outage"]["params"]
+    for bad in ({"nope": 1},
+                {"repeat_factor": "many"},
+                {"recovery_ratio": 2.0},
+                {"flap_cycles": [6, 2]},
+                {"churn_duration_s": [90, 30]},
+                {"repeat_distribution": "poisson"},
+                # fleet-allocation knobs have nothing to act on in a declared
+                # topology: refused, never silently ignored
+                {"incident_density": 3.0},
+                {"storm_share_of_raw": 0.5},
+                {"device_budget": 0.9}):
+        with pytest.raises(ScenarioError, match="params.shape"):
+            _scenario_with(_story(shape=bad))
+
+
+def test_no_shape_means_the_template_is_exactly_what_it_always_was(stx):
+    """The default path must not move: every scenario file in the repo, and
+    every golden fixture, was recorded without a shape."""
+    assert stx["labels"]["shape"] is None
+    assert stx["labels"]["shape_digest"] is None
+    assert stx["labels"]["repeat_events"] == 0
+    # The unshaped story still re-reports through its FLAP CYCLES (that is the
+    # physics, not a repeat knob); what it has none of is the memo §18
+    # "repeated confirmation" mass — and a shaped story has strictly more.
+    plain = len([i for i in stx["items"] if i["lane"] == "syslog"])
+    shaped = _plan(_shaped())
+    assert len([i for i in shaped["items"] if i["lane"] == "syslog"]) > plain
+    assert shaped["labels"]["repeat_events"] > 0
+
+
+def test_a_declared_shape_round_trips_into_ground_truth():
+    stx = _plan(_shaped())
+    got = stx["labels"]["shape"]
+    assert got is not None
+    shape = chain.shape_from_params(SHAPE_KNOBS, chain.TOPOLOGY_SHAPE_KNOBS)
+    assert got == shape.as_dict()
+    assert stx["labels"]["shape_digest"] == shape.digest()
+    assert len(stx["labels"]["shape_digest"]) == 64
+    # the knobs the twin CAN express actually acted
+    assert stx["labels"]["repeat_events"] > 0
+    assert stx["labels"]["contradictions"]
+    cycles = next(p for p in stx["labels"]["timeline"]
+                  if p["phase"] == "ospf_interface_flap")["cycles"]
+    assert 2 <= len(cycles) <= 5
+    churn = next(p for p in stx["labels"]["timeline"]
+                 if p["phase"] == "route_churn")
+    assert churn["rate_eps"] >= chain.DEFAULT_SHAPE.churn_eps_range()[0]
+    assert "truncated_by_throughput_budget" in churn
+
+
+def test_a_declared_shape_really_makes_the_stream_repetitive():
+    """The whole point: the same identity, re-reported inside the repeat
+    window, is the mass an Aggregation Plane may collapse. Without a shape the
+    twin's chain contains none of it."""
+    plain = _plan(_story())
+    shaped = _plan(_shaped(repeat_factor=20.0))
+    obs_plain = _observations(plain)
+    obs_shaped = _observations(shaped)
+    m_plain = chain.measure_stream(obs_plain, 600.0)
+    m_shaped = chain.measure_stream(obs_shaped, 600.0)
+    assert m_plain["classes"]["repeat"] < m_shaped["classes"]["repeat"]
+    assert m_plain["reduction_pct"]["K3"] < m_shaped["reduction_pct"]["K3"]
+    assert m_shaped["classes"]["recovery"] > 0
+
+
+def _observations(stx: dict) -> list:
+    """The story's syslog lines as `chain.Observation`s, keyed exactly as the
+    REAL producer keys them (the classifier runs — this is the accuracy
+    harness, where the topology is small enough to parse for real)."""
+    out = []
+    for it in stx["items"]:
+        if it["lane"] != "syslog":
+            continue
+        sig = _classify(it)
+        out.append(chain.Observation(
+            t=float(it["t"]), device=it["device"],
+            entity_id="" if sig is None else sig.entity_id,
+            kind="" if sig is None else sig.kind,
+            severity=str(it.get("severity") or ""),
+            state="" if sig is None else str(sig.attrs.get("state", "")),
+            promoted=sig is not None))
+    return out
+
+
+def test_a_shaped_plan_is_still_a_pure_function_of_scenario_and_seed():
+    a, b = _plan(_shaped()), _plan(_shaped())
+    assert json.dumps(a["items"], sort_keys=True) == json.dumps(
+        b["items"], sort_keys=True)
+    assert a["labels"]["shape_digest"] == b["labels"]["shape_digest"]
+
+
+def test_an_explicit_param_still_wins_over_the_shape():
+    """A file must be able to pin one phase and shape the rest."""
+    story = _shaped()
+    story["params"]["flap_cycles"] = 2
+    stx = _plan(story)
+    cycles = next(p for p in stx["labels"]["timeline"]
+                  if p["phase"] == "ospf_interface_flap")["cycles"]
+    assert len(cycles) == 2
+
+
+def test_a_recovery_ratio_of_zero_is_a_hard_outage():
+    stx = _plan(_shaped(recovery_ratio=0.0))
+    assert stx["labels"]["recovery_offset_s"] is None
+    assert stx["labels"]["hard_outage"] is True
+
+
+def test_shaped_lines_still_match_the_coverage_table():
+    """A shape adds MASS, never a new message: every line a shaped story emits
+    — repeats and contradictions included — must still promote exactly as
+    `parser_coverage` claims, or the twin would be scoring the engine against
+    a network that does not exist."""
+    stx = _plan(_shaped())
+    by_app = {row.exemplar[0]: row.coverage for row in chain.CHAIN_SIGNATURES
+              if row.exemplar is not None}
+    seen_unpromoted = 0
+    for it in stx["items"]:
+        if it["lane"] != "syslog":
+            continue
+        assert it["appname"] in by_app, (
+            f"{it['appname']} is not in the shared chain vocabulary — a shape "
+            f"invented a message the two harnesses do not share")
+        sig = _classify(it)
+        if by_app[it["appname"]] == chain.NOT_PROMOTED:
+            assert sig is None
+            seen_unpromoted += 1
+        else:
+            assert sig is not None, f"line never promotes: {it['message']!r}"
+    assert seen_unpromoted > 0

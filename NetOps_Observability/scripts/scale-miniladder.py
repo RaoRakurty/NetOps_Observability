@@ -141,6 +141,7 @@ import argparse
 import errno
 import hashlib
 import json
+import math
 import os
 import random
 import re
@@ -1972,6 +1973,11 @@ SCENARIO_SEED_DEFAULT = 20260829
 # `test_all_four_cause_kinds_are_instantiated` exists to catch. 0.65 = 1,625
 # leaves 115 devices of headroom and still leaves 990 devices (39.6 %) in the
 # noise pool, which is what the disjointness clause rests on.
+# THE DEFAULT ONLY. The budget is a `chain.StormShape` knob now
+# (`shape.device_budget`), because the storm-share ladder needs a bigger
+# scenario population than 0.65 at its higher rungs; this constant is the
+# DEFAULT shape's value and is pinned equal to it by
+# tests/test_storm_scenario_profile.py.
 SCENARIO_DEVICE_BUDGET = 0.65
 # Interface indices 0..47 belong to the background mix (`if_n = seq % 48`);
 # scenario faults take 48..95, so an incident entity_id (`host:ifname`) can
@@ -1990,6 +1996,35 @@ SCENARIO_PEER_HOST_SPAN = 50
 # must STILL be inside 60 s of it.
 SCENARIO_REPEAT_WINDOW_S = 60.0
 SCENARIO_REPEAT_MAX_OFFSET_S = 40.0
+# THE PER-CHUNK QUOTA GUARD (redesigned for the P3 storm-share ladder).
+#
+# The old guard refused a scenario only when a 10 s chunk's planned scenario
+# events EXCEEDED that chunk's whole ratified quota. That was enough while the
+# scenario was ~2 % of the fleet, and it is not enough at 50 %: a chunk filled
+# to the brim by the scenario leaves the background nothing to inject, so the
+# noise devices fall silent, per-device `corr_signals` coverage fails forty
+# minutes later, and the "background never carries a cause entity" clause
+# stops being observable because there is no background.
+#
+# So the guard now reserves HEADROOM: every chunk keeps at least this share of
+# its ratified quota for the background, whatever the storm share. It is a
+# SPREAD requirement, not a volume one — a scenario that plans its mass evenly
+# across the window passes it at 50 % (measured peak 7,192 of a 10,000 quota),
+# and one that piles a site's route churn into six chunks fails it however
+# small its total is.
+SCENARIO_CHUNK_HEADROOM = 0.10
+# A storm whose peak chunk is many times its mean chunk is a SPIKE, not a
+# storm: its mass lands in a handful of chunks and the run measures a burst
+# the ratified plan never ratified. MEASURED at the default seed on 2,500
+# devices over 900 s: `storm-2.5k` 4.67x (833 peak / 178 mean — the small
+# scenario is the lumpiest, because a single site's route-churn phase is a
+# large share of its total), `storm-10-2.5k` 2.24x, `storm-25-2.5k` 1.95x,
+# `storm-50-2.5k` 1.53x — the ladder gets SMOOTHER as it grows, because it
+# grows by overlapping more incidents rather than by deepening any one of
+# them. The bound leaves room for a seed to be unluckier than this one and
+# still refuses a genuine spike; the per-chunk headroom rule above is the
+# hard constraint, this is the shape constraint.
+SCENARIO_CHUNK_PEAK_OVER_MEAN_MAX = 8.0
 GROUND_TRUTH_FILE = "ground-truth.json"
 GROUND_TRUTH_SCHEMA = "correlix.scale.ground-truth/1"
 # The SAME incidents in the network digital twin's record shape, so
@@ -2034,6 +2069,12 @@ TWIN_STATE_FILE = "state.json"
 # them as informational (stated in the ground-truth contract).
 STORM_SCENARIO_2K5: dict = {
     "name": "storm-2.5k",
+    # The DECLARED repetition/dynamics of this workload. `chain.DEFAULT_SHAPE`
+    # reproduces the plan exactly as it was before the shape existed — every
+    # accessor returns the constant it replaced, so the RNG call sequence and
+    # therefore the scenario digest are unchanged (pinned by
+    # tests/test_storm_scenario_profile.py::test_the_default_shape_is_todays_plan).
+    "shape": chain.DEFAULT_SHAPE,
     "description": ("seeded fault-injection scenario for the 2.5K rung: "
                     "upstream link failures with blast-radius waves, local "
                     "link faults, BGP peer flaps with recovery, and 3x-cycling "
@@ -2123,6 +2164,13 @@ STORM_SCENARIO_2K5: dict = {
             "reassert_every_s": 0.0,             # the chain re-reports on its
             #                                      own schedule (phases), not
             #                                      on a flat period
+            # THESE FOUR ARE THE SHAPE'S, not the template's: the values
+            # below are the DEFAULT SHAPE's and are kept here so the template
+            # still reads as a complete story, but `StormScenario` takes them
+            # from `spec["shape"]` (`chain.StormShape`) so a ladder rung can
+            # declare a different repetition/dynamics without a second
+            # template. `tests/test_storm_scenario_profile.py` pins that the
+            # default shape reproduces exactly these numbers.
             "no_recovery_share": chain.NO_RECOVERY_SHARE,
             "flap_cycles_range": chain.FLAP_CYCLE_RANGE,
             "churn_eps_range": chain.CHURN_EPS_RANGE,
@@ -2138,7 +2186,88 @@ STORM_SCENARIO_2K5: dict = {
     ),
 }
 
+# ── the storm-share LADDER (P3, 2026-08-29) ─────────────────────────────────
+#
+# WHY A LADDER. `t-storm-2.5k` fixed the DYNAMICS of the 2.5K workload but not
+# its MASS: its scenario is 1.78 % of the raw fleet plan, so 98.2 % of what the
+# engine sees is still the repeat-free production background (measured:
+# `docs/scale/P3_AGGREGATION_OPPORTUNITY_2026-08-29.md` — 0 % collapse under a
+# 60 s event-time bucket, 0 transitions, 0 recoveries). An Aggregation Plane
+# A/B run against that can only ever touch ~2 % of the stream, so it cannot
+# decide anything.
+#
+# The rungs below hold the RATIFIED THROUGHPUT EXACTLY — the same 2,500
+# devices, 900 s, 1,000 raw eps, the same 90 × 10,000 chunk plan — and vary
+# ONLY the share of that plan the seeded scenario carries. The background
+# shrinks to make room, event for event, so completion / TTUR / accounting
+# stay comparable across the whole ladder and against `t-nominal-2.5k`.
+#
+# Devices, per rung (`--devices 2500`, measured at plan time and written into
+# ground truth as `devices.scenario` / `devices.noise_pool`):
+#
+#   rung                target share   scenario devices   noise devices
+#   t-storm-2.5k              1.78 %              1,510             990
+#   t-storm-10-2.5k          10 %                 ~2,270            ~230
+#   t-storm-25-2.5k          25 %                 ~2,290            ~210
+#   t-storm-50-2.5k          50 %                 ~2,300            ~200
+#
+# The higher rungs reach their share by running MANY OVERLAPPING INCIDENTS
+# (`shape.incident_density` allocation rounds — a device carrying two faults
+# inside fifteen minutes is ordinary) rather than by making any one site
+# bursty: the route-churn phase gets LONGER as well as denser, onsets spread
+# further across the window, and the per-chunk guard below checks the result
+# fits the ratified quota with headroom for the background.
+SCENARIO_STORM_LADDER: tuple = ((0.10, "storm-10-2.5k"),
+                                (0.25, "storm-25-2.5k"),
+                                (0.50, "storm-50-2.5k"))
+
+
+def storm_spec_for_share(share: float, name: str) -> dict:
+    """`STORM_SCENARIO_2K5` re-shaped to carry `share` of the raw fleet plan.
+
+    The TEMPLATES are untouched — same five cause kinds, same causal story,
+    same vocabulary. Only the SHAPE changes, and every knob the templates read
+    goes through it (`StormScenario._shape_*`), so a rung is a pure function of
+    its target share: `storm_spec_for_share(x, n)` always yields the same spec.
+    """
+    shape = chain.StormShape.for_share(share, name=name)
+    spec = dict(STORM_SCENARIO_2K5)
+    spec["name"] = name
+    spec["shape"] = shape
+    spec["description"] = (
+        f"{STORM_SCENARIO_2K5['description']} — shaped to carry "
+        f"{share:.0%} of the ratified raw fleet plan "
+        f"(incident density {shape.incident_density}x, repeat factor "
+        f"{shape.repeat_factor}, churn {shape.churn_density} eps/site)")
+    return spec
+
+
 SCENARIO_SPECS: dict = {"storm-2.5k": STORM_SCENARIO_2K5}
+SCENARIO_SPECS.update({name: storm_spec_for_share(share, name)
+                       for share, name in SCENARIO_STORM_LADDER})
+
+# Rotation applied to the scenario device population between allocation rounds
+# (`shape.incident_density` > 1). A round-0 rotation of ZERO is what keeps the
+# default plan byte-identical; the stride is a prime well clear of every
+# template's slice width, so the DEVICE-scoped cause of `ospf_adjacency_flap`
+# lands on a different device each round. `_build` refuses a duplicate cause
+# entity outright (16.1) rather than letting two incidents weld into one.
+SCENARIO_ROUND_ROTATION = 977
+
+# THE BACKGROUND, MEASURED (docs/scale/P3_AGGREGATION_OPPORTUNITY_2026-08-29.md
+# §1/§2, two independent sources — an offline re-instantiation of the ratified
+# generator and the live Kafka window — agreeing to ±1 event on 900,001 raw
+# events of the `production` mix). These two numbers are what let the harness
+# state, at PLAN time and without a stack, how many signals the WHOLE stream
+# puts in front of the engine:
+#   * 4.92 % of raw production-mix lines promote to a Signal at all;
+#   * of those, a 60 s event-time bucket key removes 0.0 % — the background is
+#     a FAN-OUT stream (31,955 distinct identities in 15 min), so it offers an
+#     Aggregation Plane nothing. Every reachable repeat is in the scenario.
+# They are constants of the MIX, not of a run, and a change to
+# EVENT_MIX_REALISTIC / EVENT_MIX_NOISE invalidates them.
+PRODUCTION_MIX_PROMOTION_PCT = 4.92
+PRODUCTION_MIX_K3_REDUCTION_PCT = 0.0
 
 
 # ── Ratified workload profiles (STRESS_GATE_REDEFINITION_2026-08-22 §5/§6) ──
@@ -2228,6 +2357,30 @@ WORKLOAD_PROFILES: dict = {
         "burst_minutes": 15,
         "lanes": [("fleet", 1.0, "production", 1000.0)],
         "scenario": "storm-2.5k",
+    },
+    # ── the P3 storm-share ladder ────────────────────────────────────────
+    # Identical lanes, identical burst_minutes, therefore the identical
+    # 90 x 10,000 chunk plan as t-nominal-2.5k and t-storm-2.5k. The ONLY
+    # difference between the rungs is how much of that plan the seeded
+    # scenario carries; the background fills the rest from the (shrinking)
+    # noise pool. See SCENARIO_STORM_LADDER for the device split per rung.
+    "t-storm-10-2.5k": {
+        "workload_class": "T_STORM_10_2K5",
+        "burst_minutes": 15,
+        "lanes": [("fleet", 1.0, "production", 1000.0)],
+        "scenario": "storm-10-2.5k",
+    },
+    "t-storm-25-2.5k": {
+        "workload_class": "T_STORM_25_2K5",
+        "burst_minutes": 15,
+        "lanes": [("fleet", 1.0, "production", 1000.0)],
+        "scenario": "storm-25-2.5k",
+    },
+    "t-storm-50-2.5k": {
+        "workload_class": "T_STORM_50_2K5",
+        "burst_minutes": 15,
+        "lanes": [("fleet", 1.0, "production", 1000.0)],
+        "scenario": "storm-50-2.5k",
     },
     "s1-2.5k": {
         "workload_class": "S1_DESIGN_STORM_2K5",
@@ -2356,6 +2509,16 @@ class StormScenario:
         if not devices:
             raise ValueError("scenario needs a non-empty device list")
         self.spec = spec
+        # The DECLARED repetition/dynamics of this workload (P3). Every knob
+        # the templates read goes through it, so "how repetitive is this
+        # stream" is a parameter of the profile rather than a by-product of
+        # how five templates happened to be sized. `chain.DEFAULT_SHAPE` is
+        # today's plan exactly — same bands, same draws, same digest.
+        self.shape: chain.StormShape = spec.get("shape") or chain.DEFAULT_SHAPE
+        if not isinstance(self.shape, chain.StormShape):   # 16.1: never guess
+            raise TypeError(
+                f"scenario spec {spec.get('name')!r} carries a 'shape' that is "
+                f"not a chain.StormShape ({type(self.shape).__name__})")
         self.devices = list(devices)
         self.seed = int(seed)
         self.window_s = float(window_s)
@@ -2366,6 +2529,12 @@ class StormScenario:
         self.events: list[ScenarioEvent] = []
         self.noise_pool: list[str] = []
         self.template_counts: dict[str, dict] = {}
+        # The allocation round currently being built. It is what keeps a
+        # REUSED device's fault names distinct (`_ifname`), and it is 0 for
+        # every shape whose incident density is 1.0 — i.e. for today's plan.
+        self._round = 0
+        self._cause_entities: set = set()
+        self.rounds_built = 1
         self._build()
         self.events.sort(key=lambda e: (e.t, e.device, e.appname, e.message,
                                         e.role))
@@ -2426,9 +2595,17 @@ class StormScenario:
                 "warning")
 
     # -- naming: outside every range the background mix can produce ---------
-    @staticmethod
-    def _ifname(n: int) -> str:
-        return f"GigabitEthernet0/{SCENARIO_IF_BASE + (n % SCENARIO_IF_SPAN)}"
+    def _ifname(self, n: int) -> str:
+        """The fault interface for instance `n` in the CURRENT allocation
+        round.
+
+        Round 0 is exactly `GigabitEthernet0/48..95` — outside the 0..47 the
+        background mix can emit — and every later round takes the next
+        48-wide block. That is what lets two incidents share a device without
+        sharing a cause entity: the interface carries the round.
+        """
+        return (f"GigabitEthernet0/"
+                f"{SCENARIO_IF_BASE + (n % SCENARIO_IF_SPAN) + SCENARIO_IF_SPAN * self._round}")
 
     @staticmethod
     def _peer_ip(n: int) -> str:
@@ -2498,7 +2675,10 @@ class StormScenario:
 
     # -- timing helpers -----------------------------------------------------
     def _onset(self, tpl: dict, rng: random.Random) -> float:
-        lo, hi = tpl["onset_window"]
+        # A bigger storm must SPREAD, not pile up: `shape.onset_span` widens
+        # every template's onset band toward the whole window so the extra
+        # incidents overlap instead of stacking into the same chunks.
+        lo, hi = self.shape.onset_window(tpl["onset_window"], self.window_s)
         hi = min(float(hi), self.window_s - 10.0)
         lo = min(float(lo), hi)
         return round(rng.uniform(lo, hi), 1)
@@ -2539,8 +2719,7 @@ class StormScenario:
         confirmation'). Bounded by SCENARIO_REPEAT_MAX_OFFSET_S so the emitted
         spread survives the 10 s chunk quantization and still counts as a
         repeat inside SCENARIO_REPEAT_WINDOW_S."""
-        lo, hi = tpl["repeats"]
-        n = rng.randint(int(lo), int(hi))
+        n = self.shape.draw_repeats(rng, tpl["repeats"])
         if n <= 0:
             return []
         step = SCENARIO_REPEAT_MAX_OFFSET_S / n
@@ -2551,7 +2730,7 @@ class StormScenario:
         """A fault nobody fixed keeps being logged. These are the low-causal-
         information repeats memo §19 puts in P3 — the mass an Aggregation Plane
         is allowed to collapse, and which t-nominal-2.5k does not contain."""
-        period = float(tpl.get("reassert_every_s") or 0.0)
+        period = self.shape.reassert_every_s(tpl.get("reassert_every_s"))
         if period <= 0.0:
             return []
         end = min(self.window_s if until is None else until, self.window_s)
@@ -2564,45 +2743,92 @@ class StormScenario:
 
     # -- construction -------------------------------------------------------
     def _build(self) -> None:
+        """Allocate devices to incidents and build every one of them.
+
+        ONE ROUND, OR SEVERAL. At `shape.incident_density == 1.0` this is the
+        original single pass: a shuffled device order, a cursor that advances
+        template by template, and everything past the cursor becomes the noise
+        pool. That path is byte-identical to the plan before the shape existed.
+
+        Above 1.0 the scenario needs more incidents than one pass over the
+        fleet can carry, so it makes SEVERAL passes over the SAME scenario
+        population — which is what a real estate does: a device can be caught
+        by two faults inside fifteen minutes. Each round rotates the
+        population by `SCENARIO_ROUND_ROTATION` (round 0 rotates by zero) and
+        takes the next 48-wide block of fault interfaces, so a reused device
+        never re-uses a cause entity. The noise pool is every device NO round
+        ever claimed, which keeps the background-disjointness clause exactly
+        as strong as it was.
+        """
         order = list(self.devices)
         self._rng("layout").shuffle(order)
-        budget = int(len(order) * SCENARIO_DEVICE_BUDGET)
-        cursor = 0
+        budget = int(len(order) * self.shape.device_budget)
+        # The scenario POPULATION: rounds rotate inside it, so the devices the
+        # background may speak for can never be eaten by a later round.
+        population = order[:budget]
+        rounds = max(1, math.ceil(float(self.shape.incident_density) - 1e-9))
+        self.rounds_built = rounds
+        claimed: set = set()
         idx = 0
-        for tpl in self.spec["templates"]:
-            kind = str(tpl["cause_kind"])
-            builder = getattr(self, f"_build_{kind}", None)
-            if builder is None:                     # 16.1: never silently skip
-                raise ValueError(f"scenario template {kind!r} has no builder")
-            want = round(float(tpl["instances_per_1k_devices"])
-                         * len(order) / 1000.0)
-            per = int(tpl["devices_per_instance"])
-            built = 0
-            for inst in range(want):
-                if cursor + per > budget:
-                    break                            # device budget exhausted
-                devs = order[cursor:cursor + per]
-                cursor += per
-                idx += 1
-                builder(f"I{idx:04d}", idx, tpl, devs,
-                        self._rng(f"{kind}:{inst}"))
-                built += 1
-            self.template_counts[kind] = {
-                "instances_planned": want, "instances_built": built,
-                "devices_per_instance": per, "devices": built * per,
-                "truncated_by_device_budget": built < want,
-            }
-        self.noise_pool = order[cursor:]
+        per_kind_inst: dict = {}
+        counts: dict = {}
+        for rnd in range(rounds):
+            self._round = rnd
+            k = (rnd * SCENARIO_ROUND_ROTATION) % max(1, len(population))
+            ring = population[k:] + population[:k]
+            cursor = 0
+            for tpl in self.spec["templates"]:
+                kind = str(tpl["cause_kind"])
+                builder = getattr(self, f"_build_{kind}", None)
+                if builder is None:                 # 16.1: never silently skip
+                    raise ValueError(
+                        f"scenario template {kind!r} has no builder")
+                want_total = round(
+                    self.shape.instances_per_1k(tpl["instances_per_1k_devices"])
+                    * len(order) / 1000.0)
+                # Spread this template's instances evenly over the rounds, so
+                # every round is about the size of one fleet pass and no round
+                # can overrun the device budget on its own.
+                want = want_total // rounds + (1 if rnd < want_total % rounds
+                                               else 0)
+                per = int(tpl["devices_per_instance"])
+                row = counts.setdefault(kind, {
+                    "instances_planned": want_total, "instances_built": 0,
+                    "devices_per_instance": per, "devices": 0,
+                    "truncated_by_device_budget": False})
+                for _inst in range(want):
+                    if cursor + per > len(ring):
+                        row["truncated_by_device_budget"] = True
+                        break                        # device budget exhausted
+                    devs = ring[cursor:cursor + per]
+                    cursor += per
+                    idx += 1
+                    inst_global = per_kind_inst.get(kind, 0)
+                    per_kind_inst[kind] = inst_global + 1
+                    builder(f"I{idx:04d}", idx, tpl, devs,
+                            self._rng(f"{kind}:{inst_global}"))
+                    row["instances_built"] += 1
+                    row["devices"] += per
+                    claimed.update(devs)
+        self._round = 0
+        for kind, row in counts.items():
+            row["truncated_by_device_budget"] = (
+                row["truncated_by_device_budget"]
+                or row["instances_built"] < row["instances_planned"])
+            self.template_counts[kind] = row
+        self.noise_pool = [d for d in order if d not in claimed]
         if not self.noise_pool:
-            # Unreachable while SCENARIO_DEVICE_BUDGET < 1.0 (the cursor can
-            # never pass the budget), and kept anyway: the disjointness clause
-            # rests entirely on this pool existing, so the day someone widens
-            # the budget the scenario must refuse rather than quietly let the
-            # background start emitting from incident devices.
+            # Unreachable while `shape.device_budget` < 1.0 — every round
+            # allocates inside `population = order[:budget]`, so the devices
+            # past the budget are never claimed however many rounds run — and
+            # kept anyway: the disjointness clause rests entirely on this pool
+            # existing, so the day someone widens the budget the scenario must
+            # refuse rather than quietly let the background start emitting
+            # from incident devices.
             raise ValueError(
                 f"scenario claimed every one of {len(order)} devices — no "
                 f"background pool left to fill the chunk plan from "
-                f"(device budget {SCENARIO_DEVICE_BUDGET:.0%})")
+                f"(device budget {self.shape.device_budget:.0%})")
 
     def _record(self, iid: str, tpl: dict, cause_entity: dict, onset: float,
                 recovery: float | None, blast: list[str], vantages: list[str],
@@ -2620,11 +2846,28 @@ class StormScenario:
             "expected_seam_class": str(tpl["expected_seam_class"]),
         }
         inc.update(extra)
+        # A cause entity claimed twice would weld two incidents into one — a
+        # FALSE MERGE (memo §25) no scorer could tell from an engine defect.
+        # Device reuse across allocation rounds makes that reachable, so it is
+        # refused here rather than discovered in the scoring.
+        eid = str(cause_entity.get("entity_id") or "")
+        if eid in self._cause_entities:
+            raise ValueError(
+                f"scenario {self.spec.get('name')!r}: cause entity {eid!r} is "
+                f"claimed by two incidents ({iid} and an earlier one) — two "
+                f"faults would weld into one object; widen "
+                f"SCENARIO_ROUND_ROTATION or lower shape.incident_density")
+        self._cause_entities.add(eid)
         self.incidents.append(inc)
 
     # ---- template: an upstream link fails and takes access devices with it -
     def _build_upstream_link_failure(self, iid, idx, tpl, devs, rng) -> None:
-        cause_dev, affected = devs[0], list(devs[1:])
+        # `shape.vantages_per_cause` bounds how many devices independently
+        # observe ONE cause: every affected device reports its adjacency loss
+        # toward the shared upstream address, so the affected set IS the
+        # vantage count and the shape clamps it.
+        cause_dev = devs[0]
+        affected = list(devs[1:self.shape.vantage_devices(len(devs))])
         upif = self._ifname(idx)
         peer = self._peer_ip(idx)
         onset = self._onset(tpl, rng)
@@ -2642,7 +2885,7 @@ class StormScenario:
 
         # Blast radius arrives in WAVES — memo §17's "blast-radius expansion",
         # the class the engine is supposed to treat as high causal information.
-        shares = tuple(tpl["blast_waves"])
+        shares = self.shape.blast_waves()
         groups: list[list[str]] = []
         start = 0
         for w, share in enumerate(shares):
@@ -2653,7 +2896,10 @@ class StormScenario:
         waves: list[dict] = []
         seen: list[str] = [cause_dev]
         contradictions: list[dict] = []
-        n_contra = int(tpl.get("contradiction_devices") or 0)
+        # Memo §17/§18's contradictory healthy observation, as a SHARE of the
+        # affected set rather than a fixed device count, so it scales with the
+        # blast radius the shape asks for.
+        n_contra = self.shape.contradiction_devices(len(affected))
         for w, group in enumerate(groups):
             at = onset + w * float(tpl["wave_gap_s"])
             if at >= self.window_s or not group:
@@ -2875,7 +3121,7 @@ class StormScenario:
                         chain.ospf_adj(peer_ospf, upif, "down"), "repeat")
 
         # ── phase 3: a second core port flaps, seen from BOTH ends ────────
-        cycles = rng.randint(*tpl["flap_cycles_range"])
+        cycles = rng.randint(*self.shape.flap_cycle_range())
         cycle_log: list[dict] = []
         tc = t_flap
         for c in range(cycles):
@@ -2917,14 +3163,14 @@ class StormScenario:
         # ── phase 5: route churn + the router-update burst ────────────────
         t_churn = max(b_down2 + 0.5,
                       t0 + self._jit(rng, chain.PHASE_BAND["route_churn"]))
-        rate = rng.uniform(*tpl["churn_eps_range"])
-        dur = rng.uniform(*tpl["churn_duration_range"])
+        rate = rng.uniform(*self.shape.churn_eps_range())
+        dur = rng.uniform(*self.shape.churn_duration_range())
         n_planned = max(1, round(rate * dur))
         # The throughput budget (see chain.CHURN_MAX_EVENTS_SCALE): the phase
         # keeps its RATE — the arrival shape the aggregation plane is measured
         # against — and stops early when the budget is spent. Both numbers ride
         # into the timeline, so a truncated churn phase is never silent.
-        cap = int(tpl.get("churn_max_events") or 0)
+        cap = int(self.shape.churn_max_events or 0)
         n_churn = min(n_planned, cap) if cap > 0 else n_planned
         step = 1.0 / rate
         dur_emitted = round(n_churn * step, 1)
@@ -2989,7 +3235,7 @@ class StormScenario:
                             chain.mac_flap(mac, vlan, pa, pb), "repeat")
 
         # ── phase 7: recovery, or a hard outage ───────────────────────────
-        hard = rng.random() < float(tpl.get("no_recovery_share") or 0.0)
+        hard = rng.random() < self.shape.no_recovery_share()
         last_fault = max((self.events[i].t
                           for i in range(first, len(self.events))), default=t0)
         recovery: float | None = None
@@ -3153,6 +3399,54 @@ class StormScenario:
             "events_per_s": round(len(self.events) / max(self.window_s, 1e-9), 3),
         }
 
+    def observations(self) -> list:
+        """The plan as `chain.Observation`s — the input to the step-0
+        aggregation measurement.
+
+        NO PARSER RUNS HERE, and none needs to: every scenario event already
+        carries the kind, the entity and the state the REAL classifier derives
+        for it (`chain.signal_kind` / `chain.entity_of`, pinned against
+        `producers.syslog_control_signal` by
+        `test_scenario_lines_classify_as_planned`). A line the parser drops
+        carries an empty symptom and rides in as `promoted=False`, so it counts
+        as raw mass and never as an identity, a transition or a recovery.
+        """
+        return [chain.Observation(t=e.t, device=e.device, entity_id=e.entity,
+                                  kind=e.symptom, severity=e.severity,
+                                  state=e.state, promoted=bool(e.symptom))
+                for e in self.events]
+
+    def measured(self, planned_total: int = 0) -> dict:
+        """Owner memo §5/§6 metrics for the SCENARIO plane of this plan.
+
+        Pure, offline, and cheap enough to run at plan time: the harness
+        writes the numbers into ground truth beside the shape that asked for
+        them, so "what did this workload actually contain" is answered before
+        a single event reaches the bus.
+        """
+        raw = int(planned_total) if planned_total else len(self.events)
+        return chain.measure_stream(self.observations(), self.window_s,
+                                    raw_events=raw)
+
+    def chunk_load(self) -> dict:
+        """How the scenario's mass is spread over the ratified chunk plan.
+
+        A storm that is 50 % of the fleet but lands in six chunks is not a
+        storm, it is a spike: the background could not be injected, the noise
+        devices would go silent and accounting would fail. `peak_over_mean` is
+        the number that says which one this is.
+        """
+        occ = [len(b) for b in self.buckets]
+        carrying = [n for n in occ if n]
+        mean = sum(occ) / max(1, len(occ))
+        return {
+            "chunks": len(occ),
+            "chunks_carrying_scenario": len(carrying),
+            "peak": max(occ, default=0),
+            "mean": round(mean, 2),
+            "peak_over_mean": round(max(occ, default=0) / max(mean, 1e-9), 3),
+        }
+
     def silent_devices(self) -> list[str]:
         """Scenario devices the window left with no event at all."""
         spoke = {e.device for e in self.events}
@@ -3178,6 +3472,93 @@ class StormScenario:
                           sort_keys=True, separators=(",", ":"))
         return hashlib.sha256(blob.encode()).hexdigest()
 
+    def shape_record(self, planned_total: int = 0) -> dict:
+        """What this workload was ASKED for, and what it actually contains.
+
+        TARGET is the declared `chain.StormShape` — every knob, plus its
+        content digest, so two runs can be compared on the shape they meant to
+        have rather than on prose. ACHIEVED is the owner memo §5/§6 metric set
+        MEASURED on the plan (`measured()`), plus the storm share that came
+        out and the chunk spread it came out with. A rung whose achieved share
+        drifts from its target is a mis-sized scenario, and it is visible here
+        before the run rather than inferred from the completion number
+        afterwards.
+        """
+        achieved = self.measured(planned_total)
+        share = (len(self.events) / planned_total) if planned_total > 0 else 0.0
+        target = float(self.shape.storm_share_of_raw)
+        achieved["storm_share_of_raw"] = round(share, 6)
+        achieved["storm_share_error_pct"] = (
+            round(100.0 * (share - target) / target, 3) if target > 0 else 0.0)
+        achieved["incidents"] = len(self.incidents)
+        achieved["allocation_rounds"] = self.rounds_built
+        achieved["scenario_devices"] = len(self.devices) - len(self.noise_pool)
+        achieved["noise_devices"] = len(self.noise_pool)
+        achieved["incidents_with_recovery"] = sum(
+            1 for i in self.incidents if i["recovery_ts"] is not None)
+        achieved["recovery_ratio"] = round(
+            achieved["incidents_with_recovery"] / max(1, len(self.incidents)), 4)
+        achieved["chunk_load"] = self.chunk_load()
+        # `promotion_pct` above is scenario signals over the WHOLE raw fleet
+        # plan (background included); this is the scenario plane's own rate.
+        achieved["scenario_events"] = len(self.events)
+        achieved["scenario_promotion_pct"] = round(
+            100.0 * achieved["signals"] / max(1, len(self.events)), 4)
+        # VANTAGES. `vantages_per_identity` above is 1 by construction and
+        # says so honestly: the classifier stamps every signal's observer as
+        # the EMITTING DEVICE, so two vantages on one `entity_id` is not
+        # expressible in a syslog-only harness. What IS expressible — and what
+        # the engine welds on — is several devices independently observing one
+        # CAUSE through a shared token, which is this:
+        counts_v = [len(i["vantages"]) for i in self.incidents] or [0]
+        achieved["vantages_per_cause"] = {
+            "mean": round(sum(counts_v) / len(counts_v), 3),
+            "max": max(counts_v),
+            "multi_vantage_incidents": sum(1 for v in counts_v if v >= 2),
+        }
+        # THE WHOLE STREAM, not just the scenario plane. The background is the
+        # `production` mix, whose promotion rate and (zero) bucket-key
+        # collapse are MEASURED constants — see PRODUCTION_MIX_PROMOTION_PCT.
+        # This is the number that decides P3: how many signals reach the
+        # engine today, and how many would with an ideal 60 s aggregation key.
+        bg_raw = max(0, int(planned_total) - len(self.events))
+        bg_sig = round(bg_raw * PRODUCTION_MIX_PROMOTION_PCT / 100.0)
+        bg_agg = round(bg_sig * (1.0 - PRODUCTION_MIX_K3_REDUCTION_PCT / 100.0))
+        total_today = achieved["signals"] + bg_sig
+        total_agg = achieved["projection"]["signals_with_K3_aggregation"] + bg_agg
+        achieved["stream_projection"] = {
+            "raw_events": int(planned_total),
+            "background_raw": bg_raw,
+            "background_signals": bg_sig,
+            "background_promotion_pct": PRODUCTION_MIX_PROMOTION_PCT,
+            "background_signals_with_K3_aggregation": bg_agg,
+            "scenario_signals": achieved["signals"],
+            "signals_today": total_today,
+            "signals_with_K3_aggregation": total_agg,
+            "signals_removed": total_today - total_agg,
+            "reduction_pct": round(
+                100.0 * (total_today - total_agg) / max(1, total_today), 3),
+            "raw_to_engine_ratio_today": round(
+                int(planned_total) / max(1, total_today), 3),
+            "raw_to_engine_ratio_aggregated": round(
+                int(planned_total) / max(1, total_agg), 3),
+        }
+        return {
+            "target": self.shape.as_dict(),
+            "target_digest": self.shape.digest(),
+            "achieved": achieved,
+            "note": (
+                "TARGET is the declared StormShape; ACHIEVED is owner-memo "
+                "§5/§6 measured on the PLAN (scenario plane only — the "
+                "background is the production mix, whose promotion rate and "
+                "zero-repeat structure are measured in "
+                "docs/scale/P3_AGGREGATION_OPPORTUNITY_2026-08-29.md). "
+                "`projection.signals_with_K3_aggregation` is the ideal "
+                "60 s-bucket collapse WITH every state transition and "
+                "recovery still forwarded synchronously (memo §17) — an "
+                "upper bound on what an Aggregation Plane can remove."),
+        }
+
     def ground_truth(self, planned_total: int = 0) -> dict:
         counts = self.dynamics()
         if planned_total > 0:
@@ -3198,9 +3579,12 @@ class StormScenario:
                 "total": len(self.devices),
                 "scenario": len(self.devices) - len(self.noise_pool),
                 "noise_pool": len(self.noise_pool),
-                "budget_share": SCENARIO_DEVICE_BUDGET,
+                "budget_share": self.shape.device_budget,
+                "allocation_rounds": self.rounds_built,
             },
             "templates": self.template_counts,
+            # WHAT THIS WORKLOAD WAS ASKED FOR, AND WHAT IT CONTAINS (P3).
+            "shape": self.shape_record(planned_total),
             "counts": counts,
             # WHAT THE ENGINE COULD SEE. Per requested outage symptom: does
             # `producers.syslog_control_signal` promote the vendor-standard
@@ -4889,20 +5273,36 @@ class Harness:
                     f"whole fleet's composition and cannot be split across "
                     f"lanes; the workload would be ambiguous")
             scen_lane = self.profile["lanes"][0][0]
-            # A chunk whose scenario events exceed its ratified quota would
-            # force the loop to either overshoot the fleet or drop planned
-            # ground-truth events. Neither is acceptable, and both are silent
-            # — so refuse BEFORE injecting anything.
+            # A chunk whose scenario events crowd out its ratified quota
+            # would force the loop to either overshoot the fleet or drop
+            # planned ground-truth events, and would starve the background of
+            # the room it needs to keep the noise devices audible. Neither is
+            # acceptable, and both are silent — so refuse BEFORE injecting
+            # anything. See SCENARIO_CHUNK_HEADROOM for why a bare
+            # "fits the quota" test is not enough at a 50 % storm share.
             over = [(i, len(b), plan[i].get(scen_lane, 0))
                     for i, b in enumerate(scen.buckets)
-                    if i < len(plan) and len(b) > plan[i].get(scen_lane, 0)]
+                    if i < len(plan)
+                    and len(b) > plan[i].get(scen_lane, 0)
+                    * (1.0 - SCENARIO_CHUNK_HEADROOM)]
             if over:
                 return self.phase(
                     "burst", "FAIL", ev,
-                    f"scenario {scen.spec['name']!r} plans more events than the "
-                    f"ratified chunk quota in {len(over)} chunk(s) (worst: chunk "
+                    f"scenario {scen.spec['name']!r} leaves the background less "
+                    f"than {SCENARIO_CHUNK_HEADROOM:.0%} of the ratified chunk "
+                    f"quota in {len(over)} chunk(s) (worst: chunk "
                     f"{over[0][0]} wants {over[0][1]} of a {over[0][2]}-event "
                     f"quota) — the scenario is mis-sized for this profile")
+            load = scen.chunk_load()
+            if load["peak_over_mean"] > SCENARIO_CHUNK_PEAK_OVER_MEAN_MAX:
+                return self.phase(
+                    "burst", "FAIL", ev,
+                    f"scenario {scen.spec['name']!r} is a SPIKE, not a storm: "
+                    f"its peak chunk carries {load['peak']} events against a "
+                    f"{load['mean']} mean ({load['peak_over_mean']}x, bound "
+                    f"{SCENARIO_CHUNK_PEAK_OVER_MEAN_MAX}x) — spread the "
+                    f"incidents (shape.onset_span / incident_density) instead "
+                    f"of deepening them")
             gt = scen.ground_truth(planned_total=fleet_planned)
             gt_path = self.evidence_file(GROUND_TRUTH_FILE,
                                          json.dumps(gt, indent=1, sort_keys=True))
@@ -4920,6 +5320,7 @@ class Harness:
                 "digest": gt["digest"], "incidents": len(gt["incidents"]),
                 "templates": gt["templates"], "devices": gt["devices"],
                 "counts": gt["counts"],
+                "shape": gt["shape"],
                 "parser_coverage": gt["parser_coverage"],
                 "not_promoted": gt["not_promoted"],
                 # The twin-scorable projection of the same incidents.
@@ -4937,6 +5338,18 @@ class Harness:
                 f"{gt['counts']['recoveries']} recoveries) over "
                 f"{gt['devices']['scenario']} devices; "
                 f"{gt['devices']['noise_pool']} devices carry background")
+            sh = gt["shape"]
+            log(f"scenario shape {scen.shape.name!r} "
+                f"digest={sh['target_digest'][:16]}: target storm share "
+                f"{scen.shape.storm_share_of_raw:.2%}, achieved "
+                f"{sh['achieved']['storm_share_of_raw']:.2%} "
+                f"({sh['achieved']['storm_share_error_pct']:+.1f}%); "
+                f"{sh['achieved']['signals']} promoted / "
+                f"{sh['achieved']['unpromoted_events']} unpromotable; "
+                f"K3 unique {sh['achieved']['unique']['K3']} "
+                f"({sh['achieved']['reduction_pct']['K3']:.1f}% collapse); "
+                f"chunk peak/mean {load['peak']}/{load['mean']} "
+                f"({load['peak_over_mean']}x)")
             # 16.1: the symptoms the engine CANNOT see are stated up front,
             # not discovered in the scoring. A run whose T4 number ignores this
             # line is charging the engine for evidence it never received.
@@ -5074,6 +5487,12 @@ class Harness:
                 "twin_ground_truth_file": TWIN_GROUND_TRUTH_FILE,
                 "unpromotable_injected": sum(
                     1 for b in scen.buckets for e in b if not e.symptom),
+                "shape_name": scen.shape.name,
+                "shape_digest": scen.shape.digest(),
+                "storm_share_target": scen.shape.storm_share_of_raw,
+                "storm_share_achieved": round(
+                    len(scen.events) / max(1, fleet_planned), 6),
+                "chunk_load": scen.chunk_load(),
             }
         self.evidence_file("burst-chunks.json", json.dumps(chunks, indent=1))
         if self.produce_failures:

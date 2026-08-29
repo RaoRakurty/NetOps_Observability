@@ -450,7 +450,8 @@ def test_ground_truth_schema(scen):
     assert gt["devices"] == {"total": DEVICES,
                              "scenario": DEVICES - len(scen.noise_pool),
                              "noise_pool": len(scen.noise_pool),
-                             "budget_share": ml.SCENARIO_DEVICE_BUDGET}
+                             "budget_share": ml.SCENARIO_DEVICE_BUDGET,
+                             "allocation_rounds": 1}
     assert 0 < gt["counts"]["scenario_event_share_of_plan"] < 0.05, (
         "the scenario has stopped being a structural change to a nominal "
         "stream and become a different workload")
@@ -663,7 +664,7 @@ def test_an_oversized_scenario_fails_the_burst_before_injecting(
     ok = h._burst_lanes({})
     notes = h.phases[-1]["notes"]
     assert not ok
-    assert "more events than the ratified chunk quota" in notes
+    assert "of the ratified chunk quota" in notes
     assert stack.batches == [], "it injected before refusing"
 
 
@@ -698,6 +699,7 @@ def test_the_device_budget_always_leaves_a_background_pool(n):
     """The disjointness clause rests on a non-empty noise pool, and the budget
     is what guarantees one even for a scenario that asks for every device."""
     assert ml.SCENARIO_DEVICE_BUDGET < 1.0
+    assert chain.DEFAULT_SHAPE.device_budget == ml.SCENARIO_DEVICE_BUDGET
     scen = ml.StormScenario(GREEDY_SPEC, _devices(n), seed=1, window_s=120,
                             chunk_secs=10)
     assert scen.noise_pool
@@ -709,10 +711,12 @@ def test_a_scenario_that_claims_every_device_is_refused(monkeypatch):
     disjoint pool, so disjointness would silently stop being true. Unreachable
     at the ratified budget, which is exactly why the guard is pinned: widening
     the budget to 1.0 must FAIL, not quietly mix incident devices into the
-    background."""
-    monkeypatch.setattr(ml, "SCENARIO_DEVICE_BUDGET", 1.0)
+    background. The budget moved into `chain.StormShape` (P3), so the guard is
+    exercised through a shape rather than through the module constant."""
+    spec = dict(GREEDY_SPEC)
+    spec["shape"] = chain.DEFAULT_SHAPE._replace(device_budget=1.0)
     with pytest.raises(ValueError, match="no background pool"):
-        ml.StormScenario(GREEDY_SPEC, _devices(10), seed=1, window_s=120,
+        ml.StormScenario(spec, _devices(10), seed=1, window_s=120,
                          chunk_secs=10)
 
 
@@ -1143,3 +1147,436 @@ def test_the_run_dir_gets_both_ground_truths(tmp_path, monkeypatch):
     assert ev["ground_truth"]["not_promoted"] == list(
         chain.not_promoted_types())
     assert "twin.py score" in ev["ground_truth"]["twin_score_cmd"]
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# THE STORM SHAPE AND THE STORM-SHARE LADDER (P3, 2026-08-29)
+#
+# `docs/scale/P3_AGGREGATION_OPPORTUNITY_2026-08-29.md` measured the ratified
+# workload and found essentially NO aggregation opportunity: 0 % collapse
+# under a 60 s event-time bucket, 0 transitions, 0 recoveries. `t-storm-2.5k`
+# gave the stream DYNAMICS but only 1.78 % of its MASS, so an Aggregation
+# Plane A/B against it can touch ~2 % of what the engine sees and therefore
+# cannot decide anything.
+#
+# `chain.StormShape` makes the repetition and the dynamics a DECLARED
+# PARAMETER of the profile, and the ladder rungs vary that parameter alone —
+# the throughput, the chunk plan, the device count and the causal story are
+# identical across the whole ladder. What these tests hold:
+#
+#   * the DEFAULT shape is today's plan, to the byte (the digest pin — every
+#     recorded 2.5K number stays about the workload it was measured on);
+#   * a shape is a pure function of its knobs: same knobs ⇒ same digest ⇒ same
+#     stream, and a knob taken from the clock or an unseeded RNG turns the
+#     determinism pin RED (the mutant);
+#   * each rung ACHIEVES the share it declares, within ±10 %;
+#   * at 50 % the fleet contract still holds: the chunk plan is met, the
+#     background keeps its headroom, no device is silent, no cause entity is
+#     shared, and the noise pool is still disjoint;
+#   * ground truth records BOTH the target shape and the achieved memo §5/§6
+#     metrics, so the number that decides P3 is in the run dir.
+# ══════════════════════════════════════════════════════════════════════════
+
+LADDER = ("storm-2.5k", "storm-10-2.5k", "storm-25-2.5k", "storm-50-2.5k")
+# The ratified `t-storm-2.5k` plan — seed 20260829, this file's 2,500
+# `mlx-storm-*` device names, 900 s window, 10 s chunks. VERIFIED against the
+# pre-shape implementation at commit f943af36: the same 16,060 events, 345
+# incidents and 990-device noise pool hash to this digest before and after
+# `chain.StormShape` existed. It is the number that says the shape refactor
+# changed NOTHING about the workload every recorded 2.5K figure was measured
+# on. (The digest is a function of the DEVICE NAMES too, so a run with real
+# `mlx-<runid>-*` ids hashes differently — what is pinned is that this fixture
+# does not move.)
+DEFAULT_SCENARIO_DIGEST = (
+    "f9d126d41c3fdf209dcba5b37c402a7f0ba19352f420e95289948972c36c33be")
+
+
+def _rung(name: str, devices: int = DEVICES, window_s: int = WINDOW_S,
+          seed: int = ml.SCENARIO_SEED_DEFAULT):
+    return ml.StormScenario(ml.SCENARIO_SPECS[name], _devices(devices),
+                            seed=seed, window_s=window_s,
+                            chunk_secs=ml.BURST_CHUNK_SECS,
+                            profile=f"t-{name}", runid="testrun")
+
+
+@pytest.fixture(scope="module")
+def rungs():
+    """Every rung, planned once. The 50 % rung is ~424,000 events, so this is
+    deliberately module-scoped rather than rebuilt per test."""
+    return {name: _rung(name) for name in LADDER}
+
+
+# ── the default shape IS today's plan ───────────────────────────────────────
+
+def test_the_default_shape_is_todays_plan(scen):
+    """THE PIN. Every knob of `chain.DEFAULT_SHAPE` must return exactly the
+    module constant it replaced, and the resulting plan must hash to the
+    digest recorded before the shape existed. A default that drifts silently
+    re-bases `t-storm-2.5k` — and with it every 2.5K completion, TTUR and
+    accuracy number already recorded against that workload."""
+    d = chain.DEFAULT_SHAPE
+    assert d.repeats_range(chain.REPEAT_RANGE) == chain.REPEAT_RANGE
+    assert d.churn_eps_range() == chain.CHURN_EPS_RANGE
+    assert d.churn_duration_range() == chain.CHURN_DURATION_RANGE_SCALE
+    assert d.churn_max_events == chain.CHURN_MAX_EVENTS_SCALE
+    assert d.flap_cycle_range() == chain.FLAP_CYCLE_RANGE
+    assert d.no_recovery_share() == chain.NO_RECOVERY_SHARE
+    assert d.contradiction_devices(24) == 2
+    assert d.blast_waves() == (0.5, 0.3, 0.2)
+    assert d.reassert_every_s(120.0) == 120.0
+    assert d.instances_per_1k(8.0) == 8.0
+    assert d.onset_window((30.0, 520.0), 900.0) == (30.0, 520.0)
+    assert d.vantage_devices(25) == 25 and d.vantage_devices(2) == 2
+    assert d.incident_density == 1.0 and d.device_budget == ml.SCENARIO_DEVICE_BUDGET
+    assert d.repeat_window_s == ml.SCENARIO_REPEAT_WINDOW_S
+
+    assert ml.STORM_SCENARIO_2K5["shape"] is chain.DEFAULT_SHAPE
+    assert scen.shape is chain.DEFAULT_SHAPE
+    assert scen.rounds_built == 1
+    assert scen.digest() == DEFAULT_SCENARIO_DIGEST, (
+        "the ratified t-storm-2.5k plan changed — every recorded 2.5K number "
+        "is now about a different workload")
+
+
+def test_a_shape_is_a_pure_function_of_its_knobs():
+    """Same knobs ⇒ same digest ⇒ same stream. Nothing may enter a shape from
+    the clock, the process or the environment (memo §21)."""
+    a = chain.StormShape.for_share(0.25, name="x")
+    b = chain.StormShape.for_share(0.25, name="x")
+    assert a == b and a.digest() == b.digest()
+    assert a.digest() != chain.StormShape.for_share(0.24, name="x").digest()
+    # and a knob nobody moved keeps its digest across processes: the digest is
+    # a SHA-256 of the canonical knob set, never `hash()` (salted per process).
+    assert a.digest() == __import__("hashlib").sha256(
+        __import__("json").dumps(a.as_dict(), sort_keys=True,
+                                 separators=(",", ":")).encode()).hexdigest()
+
+
+def test_the_same_shape_and_seed_plan_a_byte_identical_stream():
+    for name in ("storm-10-2.5k", "storm-50-2.5k"):
+        a, b = _rung(name, devices=400), _rung(name, devices=400)
+        assert a.digest() == b.digest()
+        assert a.events == b.events and a.incidents == b.incidents
+
+
+def test_a_knob_drawn_from_the_clock_or_an_unseeded_rng_is_caught(monkeypatch):
+    """THE MUTANT. Derive any knob from wall-clock time or the global,
+    unseeded `random` stream and the determinism pin must go RED — otherwise
+    an A/B of the Aggregation Plane compares two different workloads and calls
+    the difference an improvement."""
+    import random as _random
+    import time as _time
+
+    def clock_shape(*_a, **_k):
+        return chain.DEFAULT_SHAPE._replace(
+            name="mutant", repeat_factor=1.0 + (_time.time() % 7.0))
+
+    def rng_shape(*_a, **_k):
+        return chain.DEFAULT_SHAPE._replace(
+            name="mutant", churn_density=10.0 + _random.random() * 10.0)
+
+    for mutant in (clock_shape, rng_shape):
+        monkeypatch.setattr(chain.StormShape, "for_share", mutant)
+        first = chain.StormShape.for_share(0.25).digest()
+        _time.sleep(0.01)
+        second = chain.StormShape.for_share(0.25).digest()
+        assert first != second, (
+            "a knob derived from the clock/global RNG went UNDETECTED — the "
+            "shape digest is no longer proof that two runs shared a workload")
+        monkeypatch.undo()
+    # ...and the real implementation is stable across the same interval.
+    first = chain.StormShape.for_share(0.25).digest()
+    _time.sleep(0.01)
+    assert chain.StormShape.for_share(0.25).digest() == first
+
+
+def test_an_unknown_or_malformed_shape_is_refused_not_ignored():
+    for bad, exc in (({"nope": 1}, ValueError),
+                     ({"repeat_factor": "many"}, TypeError),
+                     ({"recovery_ratio": 2.0}, ValueError),
+                     ({"flap_cycles": [6, 2]}, ValueError),
+                     ({"churn_duration_s": [90, 30]}, ValueError),
+                     ({"repeat_distribution": "poisson"}, ValueError),
+                     # a fleet-allocation knob has nothing to act on in a
+                     # declared topology and must be refused there
+                     ({"incident_density": 3.0}, ValueError)):
+        with pytest.raises(exc):
+            chain.shape_from_params(bad, chain.TOPOLOGY_SHAPE_KNOBS)
+    with pytest.raises(TypeError):
+        ml.StormScenario({"name": "x", "shape": {"repeat_factor": 3},
+                          "templates": ()}, _devices(10), seed=1, window_s=60)
+
+
+def test_the_repeat_distributions_have_the_mean_they_declare():
+    """`repeat_factor` is a MEAN, and both distributions must honour it — the
+    geometric arm exists so a few identities chatter far harder than the mean,
+    not so the mean moves."""
+    import random as _random
+    for dist in ("bounded", "geometric"):
+        shape = chain.DEFAULT_SHAPE._replace(repeat_factor=20.0,
+                                             repeat_distribution=dist)
+        rng = _random.Random(4242)
+        draws = [shape.draw_repeats(rng, chain.REPEAT_RANGE)
+                 for _ in range(20000)]
+        mean = sum(draws) / len(draws)
+        assert 15.0 <= mean <= 25.0, f"{dist} mean {mean}"
+        assert max(draws) <= shape.repeat_cap
+    # the geometric arm must actually have a heavier tail than the bounded one
+    rng = _random.Random(7)
+    g = [chain.DEFAULT_SHAPE._replace(
+        repeat_factor=20.0, repeat_distribution="geometric").draw_repeats(
+            rng, chain.REPEAT_RANGE) for _ in range(20000)]
+    rng = _random.Random(7)
+    b = [chain.DEFAULT_SHAPE._replace(
+        repeat_factor=20.0).draw_repeats(rng, chain.REPEAT_RANGE)
+        for _ in range(20000)]
+    assert max(g) > max(b)
+
+
+# ── the ladder ──────────────────────────────────────────────────────────────
+
+def test_every_ladder_rung_keeps_the_ratified_throughput():
+    """The ladder varies the storm SHARE and nothing else: same lanes, same
+    window, therefore the same 90 x 10,000 chunk plan as t-nominal-2.5k. If a
+    rung changed the throughput its completion number would not be comparable
+    with any other rung's, and the ladder would measure two things at once."""
+    nominal = ml.WORKLOAD_PROFILES["t-nominal-2.5k"]
+    for profile in ("t-storm-2.5k", "t-storm-10-2.5k", "t-storm-25-2.5k",
+                    "t-storm-50-2.5k"):
+        prof = ml.WORKLOAD_PROFILES[profile]
+        assert prof["lanes"] == nominal["lanes"]
+        assert prof["burst_minutes"] == nominal["burst_minutes"] == 15
+        assert prof["scenario"] in ml.SCENARIO_SPECS
+
+
+@pytest.mark.parametrize("name", LADDER)
+def test_each_rung_achieves_the_share_it_declares(name, rungs):
+    """±10 % of target. The share is the ONLY thing that differs between the
+    rungs, so a rung that misses it is measuring an amount of repetition
+    nobody asked for — and the P3 verdict would be read off the wrong x-axis."""
+    scen = rungs[name]
+    target = scen.shape.storm_share_of_raw
+    achieved = len(scen.events) / 900_000
+    err = abs(achieved - target) / target
+    assert err <= 0.10, (
+        f"{name}: target {target:.2%}, achieved {achieved:.2%} "
+        f"({100 * (achieved - target) / target:+.1f} %) — outside the ±10 % "
+        f"band; re-derive chain.StormShape.for_share's mass model")
+
+
+@pytest.mark.parametrize("name", LADDER)
+def test_every_rung_holds_the_fleet_and_quota_contract(name, rungs):
+    """The clauses the whole harness rests on, at EVERY share — including
+    50 %, where the background has only ~200 devices left to speak from."""
+    scen = rungs[name]
+    quota = 10_000
+    load = scen.chunk_load()
+    # 1. no chunk crowds the background out of its ratified quota
+    assert load["peak"] <= quota * (1.0 - ml.SCENARIO_CHUNK_HEADROOM), (
+        f"{name}: peak chunk {load['peak']} leaves the background less than "
+        f"{ml.SCENARIO_CHUNK_HEADROOM:.0%} of a {quota}-event quota")
+    # 2. the mass is SPREAD, not spiked
+    assert load["peak_over_mean"] <= ml.SCENARIO_CHUNK_PEAK_OVER_MEAN_MAX
+    assert load["chunks_carrying_scenario"] >= 0.8 * load["chunks"]
+    # 3. a background pool still exists and is disjoint from every incident
+    assert scen.noise_pool
+    incident_devices = {e.device for e in scen.events}
+    assert not (set(scen.noise_pool) & incident_devices)
+    # 4. no scenario device is left silent (accounting fails the run if one is)
+    assert scen.silent_devices() == []
+    # 5. no two incidents claim one cause entity (a false merge by construction)
+    ids = [i["cause_entity"]["entity_id"] for i in scen.incidents]
+    assert len(ids) == len(set(ids))
+    peers = [i["cause_entity"]["peer"] for i in scen.incidents
+             if i["cause_entity"].get("peer")]
+    assert len(peers) == len(set(peers))
+    # 6. fault interfaces stay outside every range the background can emit
+    for e in scen.events:
+        m = re.search(r"GigabitEthernet0/(\d+)", e.message)
+        if m:
+            assert int(m.group(1)) >= ml.SCENARIO_IF_BASE
+
+
+def test_the_ladder_actually_climbs(rungs):
+    """Each rung must carry strictly more mass, more repeats and more collapse
+    opportunity than the one below it — otherwise the ladder has rungs that
+    measure the same thing twice."""
+    shares, repeats, k3 = [], [], []
+    for name in LADDER:
+        scen = rungs[name]
+        d = scen.dynamics()
+        shares.append(len(scen.events))
+        repeats.append(d["repeats_within_60s"])
+        k3.append(scen.measured(900_000)["reduction_pct"]["K3"])
+    assert shares == sorted(shares) and len(set(shares)) == len(shares)
+    assert repeats == sorted(repeats) and len(set(repeats)) == len(repeats)
+    assert k3 == sorted(k3), f"K3 collapse did not grow with the share: {k3}"
+    # the point of the whole exercise: the 2 % rung offers an Aggregation
+    # Plane almost nothing, the 50 % rung offers it most of the stream
+    assert k3[0] < 65.0 < k3[-1]
+
+
+def test_the_higher_rungs_reach_their_share_by_overlapping_incidents(rungs):
+    """Not by deepening one site. A rung that grew by making a single site
+    emit tens of thousands of events would be a spike the ratified plan never
+    ratified — the per-chunk guard is what refuses it, and this is the
+    structural reason it passes."""
+    base = rungs["storm-2.5k"]
+    top = rungs["storm-50-2.5k"]
+    assert top.rounds_built > base.rounds_built == 1
+    assert len(top.incidents) > 4 * len(base.incidents)
+    per_incident = {n: len(rungs[n].events) / len(rungs[n].incidents)
+                    for n in LADDER}
+    # per-incident mass grows, but far more slowly than the total
+    assert per_incident["storm-50-2.5k"] < 8 * per_incident["storm-2.5k"]
+    assert top.chunk_load()["peak_over_mean"] < base.chunk_load()["peak_over_mean"]
+
+
+# ── ground truth: the target shape and the achieved metrics ─────────────────
+
+@pytest.mark.parametrize("name", LADDER)
+def test_ground_truth_records_the_target_shape_and_the_achieved_metrics(
+        name, rungs):
+    """The run dir must answer, before a single event reaches the bus: what
+    repetition was this workload ASKED for, and what does it actually
+    contain? Without both halves a P3 A/B cannot say what it varied."""
+    gt = rungs[name].ground_truth(planned_total=900_000)
+    assert "shape" in gt, "ground truth lost the shape block"
+    block = gt["shape"]
+    assert set(block) == {"target", "achieved", "target_digest", "note"}
+    target = block["target"]
+    assert set(target) == set(chain.StormShape._fields)
+    assert target["storm_share_of_raw"] == rungs[name].shape.storm_share_of_raw
+    assert len(block["target_digest"]) == 64
+    a = block["achieved"]
+    # owner memo §5 — event / aggregation metrics
+    for key in ("raw_events", "signals", "unpromoted_events", "promotion_pct",
+                "scenario_promotion_pct", "unique", "reduction_pct", "classes",
+                "class_share_pct", "per_kind", "repeats_per_identity",
+                "vantages_per_identity", "vantages_per_cause", "rates"):
+        assert key in a, f"achieved lost {key!r}"
+    assert set(a["unique"]) == {"K1", "K2", "K3", "K4", "K5"}
+    assert set(a["classes"]) == {"first", "transition", "recovery", "repeat"}
+    assert sum(a["classes"].values()) == a["signals"]
+    assert a["signals"] + a["unpromoted_events"] == a["scenario_events"]
+    for key in ("raw_eps", "signal_eps", "unique_semantic_eps_K3",
+                "duplicates_eps", "state_changing_eps", "transitions_eps",
+                "recoveries_eps"):
+        assert key in a["rates"]
+    # owner memo §6 — causal amplification / the P3 decision number
+    for block_name in ("projection", "stream_projection"):
+        pr = a[block_name]
+        assert pr["signals_with_K3_aggregation"] <= pr["signals_today"]
+        assert pr["raw_to_engine_ratio_aggregated"] >= \
+            pr["raw_to_engine_ratio_today"]
+    assert a["stream_projection"]["raw_events"] == 900_000
+    assert (a["stream_projection"]["background_raw"]
+            + a["scenario_events"] == 900_000)
+    # the achieved share, and the error against the declared target
+    assert abs(a["storm_share_error_pct"]) <= 10.0
+    assert a["allocation_rounds"] == rungs[name].rounds_built
+    assert json.dumps(block)          # the whole block must be serializable
+
+
+def test_the_achieved_metrics_never_claim_dynamics_the_engine_cannot_see(rungs):
+    """A line the classifier PROVABLY drops is raw mass and nothing else: it
+    may never become an identity, a transition or a recovery. Ground truth
+    that claimed otherwise would charge the engine for evidence it was never
+    given."""
+    for name in LADDER:
+        scen = rungs[name]
+        obs = scen.observations()
+        assert len(obs) == len(scen.events)
+        unpromoted = [o for o in obs if not o.promoted]
+        assert unpromoted, f"{name} lost its not-promoted lines"
+        assert all(not o.kind for o in unpromoted)
+        m = scen.measured(900_000)
+        assert m["unpromoted_events"] == len(unpromoted)
+        assert m["signals"] == len(scen.events) - len(unpromoted)
+
+
+def test_the_measurement_is_pure(rungs):
+    """`chain.measure_stream` is what the harness runs at PLAN time and what a
+    scorer re-runs afterwards; if it were not a pure function of its input the
+    two would disagree and neither would be evidence."""
+    scen = rungs["storm-10-2.5k"]
+    obs = scen.observations()
+    first = chain.measure_stream(obs, 900.0, raw_events=900_000)
+    shuffled = list(reversed(obs))
+    second = chain.measure_stream(shuffled, 900.0, raw_events=900_000)
+    assert json.dumps(first, sort_keys=True) == json.dumps(second,
+                                                           sort_keys=True)
+
+
+def test_the_rungs_exercise_what_t_nominal_could_not(rungs):
+    """The whole reason the ladder exists (P3_AGGREGATION_OPPORTUNITY §4/§6):
+    the ratified workload has ZERO transitions, ZERO recoveries and no identity
+    repeating inside 120 s. Every rung must have all three."""
+    for name in LADDER:
+        m = rungs[name].measured(900_000)
+        assert m["classes"]["transition"] > 0
+        assert m["classes"]["recovery"] > 0
+        assert m["classes"]["repeat"] > 0
+        assert m["rates"]["recoveries_eps"] > 0.0
+        assert m["repeats_per_identity"]["max"] >= 2
+
+
+# ── the burst path, at the top of the ladder ────────────────────────────────
+
+@pytest.mark.parametrize("profile,expected_class",
+                         [("t-storm-10-2.5k", "T_STORM_10_2K5"),
+                          ("t-storm-50-2.5k", "T_STORM_50_2K5")])
+def test_a_ladder_rung_injects_the_ratified_fleet_whole(profile, expected_class,
+                                                        tmp_path, monkeypatch):
+    """THE REAL BURST PATH at 10 % and 50 %, not just the plan.
+
+    At 50 % the background has ~200 devices left to speak for it and the
+    scenario owns nearly half of every chunk. The fleet contract must be
+    exactly as strong as it is at 1.78 %: 900,000 events planned, 900,000
+    injected, scenario and background accounted separately and summing to the
+    plan, every chunk exactly the ratified quota, and every scenario line
+    traceable to its incident."""
+    ok, ev, notes, stack = _run_burst(tmp_path, monkeypatch, profile=profile)
+    assert ok, notes
+    assert ev["workload_class"] == expected_class
+    assert ev["fleet_planned"] == ev["fleet_injected"] == 900_000
+    assert ev["fleet_shortfall"] == 0
+    assert len(stack.lines) == 900_000
+    assert all(len(b) == 10_000 for b in stack.batches)
+    sc = ev["scenario"]
+    assert sc["injected"] == sc["planned"] > 0
+    assert sc["shortfall"] == 0
+    assert sc["planned"] + sc["background_injected"] == 900_000
+    assert sc["background_injected"] > 0, (
+        "the scenario crowded the background out entirely — the noise devices "
+        "would fall silent and accounting would fail the run")
+    assert len([ln for ln in stack.lines if " inc I" in ln]) == sc["planned"]
+    # the shape rides into the evidence, so a run's own report says what
+    # repetition it was asked for and what it got
+    assert sc["shape_name"] and len(sc["shape_digest"]) == 64
+    assert abs(sc["storm_share_achieved"] - sc["storm_share_target"]) \
+        <= 0.10 * sc["storm_share_target"]
+    assert ev["ground_truth"]["shape"]["target_digest"] == sc["shape_digest"]
+
+
+def test_a_rung_that_crowds_out_the_background_is_refused(tmp_path, monkeypatch):
+    """The redesigned per-chunk guard. A chunk that leaves the background less
+    than its headroom must FAIL BEFORE anything is injected — at 1.78 % the old
+    'does it fit the quota at all' test would have let this through."""
+    clock = FakeClock()
+    stack = FakeStack(clock)
+    h = _harness(tmp_path, clock, stack, profile="t-storm-50-2.5k", minutes=15)
+    monkeypatch.setattr(ml, "time", clock)
+    real = h._build_scenario
+
+    def greedy():
+        scen = real()
+        # fill one chunk to 95 % of the ratified quota: it FITS, and it still
+        # starves the background
+        scen.buckets[3] = (scen.events * 20)[:9_500]
+        return scen
+
+    h._build_scenario = greedy
+    assert not h._burst_lanes({})
+    assert "of the ratified chunk quota" in h.phases[-1]["notes"]
+    assert stack.batches == [], "it injected before refusing"
