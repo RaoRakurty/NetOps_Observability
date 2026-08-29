@@ -115,6 +115,24 @@ This is a deliberate new representation (delta signals with aggregation fields):
 - Golden-wire fixtures gain an aggregated twin; the un-aggregated path stays
   byte-identical under the flag OFF.
 
+### 5a. Step 3 built (2026-08-29 night, `scratchpad/p3_step3.patch` → commit pending)
+Representation: `aggregation_block` embedded in `grounding_context.aggregation`
+(NOT `degradation` — that block feeds replay's topology/storm flags), byte-
+identical for un-aggregated objects; archive rows keep `agg_*` attrs; replay
+compares the aggregation block per field and pins `AGG_POLICY_VERSION`; a
+second level (`rederive_deltas`) re-runs the plane over RAW `corr_signals` in
+event-time order. **Correction to memo §24 as literally written:** Σ `agg_count`
+over an object's deltas double-counts (cumulative snapshots) and misses repeats
+after a key's last delta — raw coverage is exact only per KEY; the suite asserts
+it there and exposes `raw_signal_count` (MAX-per-key) as a lower bound in the
+blob. `signal_count` stays forwarded deltas (consistent with node_count, archive
+rows and replay). Equivalence suite: 15 fixtures (golden ×9, 166/162/168, storm,
+storm-repeats-x3 at 21.6 % suppression, enterprise-outage chain ×2 tenants)
+— root cause, seam, owner, blast radius, tenant isolation, false merge/split,
+replay: all equal flag OFF vs ON; only blob bytes and `signal_count` differ, as
+designed. Mutation-tested (tenant-blind key, swallowed classes, stripped attrs,
+wrong slice, policy change → red).
+
 ## 6. Expected effect (to be replaced by step-0 numbers)
 If the ratified mix's repeat share is R, signals reaching the engine fall by
 ~R, cohorts/versions/Decision writes fall proportionally, and T1 for the
