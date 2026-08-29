@@ -218,10 +218,15 @@ def _emit(level: str, msg: str) -> None:
         with open(_LOG_PATH, "a", encoding="utf-8") as fh:
             fh.write(line + "\n")
     except OSError as exc:
-        # Never silent, and never fatal: losing the log file must not lose the
-        # run, but it must be visible on stderr that it happened.
+        # Never silent, and never fatal: losing the LOG must not lose the run
+        # (the durable record is the state file, which escalates on failure),
+        # but it must be visible on stderr, with the errno and the path, that
+        # the narration channel is broken. Escalating here would also recurse:
+        # the reporting channel cannot report its own death through itself.
         print(f"{utcnow()} ab-driver: WARNING: cannot append to {_LOG_PATH} "
-              f"({exc.strerror or exc})", file=sys.stderr, flush=True)
+              f"(errno {exc.errno}: {exc.strerror or exc}) — the run continues "
+              f"and stdout/stderr still carry every line",
+              file=sys.stderr, flush=True)
 
 
 def log(msg: str) -> None:
@@ -640,7 +645,11 @@ class Driver:
             return False
         except PermissionError:
             return True          # someone else's process: alive, not ours
-        except OSError:
+        except OSError as exc:
+            warn(f"pid liveness probe for {pid} failed (errno {exc.errno}: "
+                 f"{exc.strerror or exc}) — answering UNKNOWN, which the lock "
+                 f"reader turns into 'unknown' and the idle gate refuses on; a "
+                 f"lock is never stolen on an unprobeable pid")
             return None
 
     def harness_processes(self) -> list[str]:
@@ -663,7 +672,8 @@ class Driver:
         except FileNotFoundError:
             return "free", "no lock file"
         except OSError as exc:
-            return "unknown", f"cannot read {self.lock_path}: {exc}"
+            return "unknown", (f"cannot read {self.lock_path} (errno "
+                               f"{exc.errno}: {exc.strerror or exc})")
         alive: bool | None = None
         try:
             pid = int(json.loads(text).get("pid"))
@@ -1013,14 +1023,28 @@ class Driver:
         except FileNotFoundError:
             return "", ""
         except OSError as exc:
-            warn(f"cannot read {log_path} ({exc})")
+            warn(f"cannot read {log_path} (errno {exc.errno}: "
+                 f"{exc.strerror or exc}) — this poll reports NO verdict, which "
+                 f"is the safe direction: the leg is only declared finished when "
+                 f"a verdict is READ and the process is gone")
         return "", ""
 
     def tail(self, path: str, lines: int) -> str:
+        """Last `lines` non-empty lines of a log, for quoting in a message.
+
+        Diagnostic narration only — never a verdict input. An unreadable file is
+        REPORTED by name (it used to return "" silently) and quoted as nothing;
+        the caller's own gate still fails on its own evidence.
+        """
         try:
             with open(path, encoding="utf-8", errors="replace") as fh:
                 kept = [ln.rstrip() for ln in fh if ln.strip()]
-        except OSError:
+        except FileNotFoundError:
+            return ""            # not written yet: the caller prints its own "(no output yet)"
+        except OSError as exc:
+            warn(f"cannot read {path} for its last {lines} line(s) (errno "
+                 f"{exc.errno}: {exc.strerror or exc}) — the quote below is "
+                 f"empty; the verdict does not depend on it")
             return ""
         return "\n".join(kept[-lines:])
 
@@ -1372,7 +1396,9 @@ def env_get(path: str, key: str) -> str:
     except FileNotFoundError:
         return ""
     except OSError as exc:
-        warn(f"cannot read {path} ({exc}) — falling back to defaults")
+        warn(f"cannot read {path} (errno {exc.errno}: {exc.strerror or exc}) — "
+             f"falling back to the documented default; pass --project/--env-file "
+             f"explicitly if that default is wrong for this host")
     return ""
 
 

@@ -320,6 +320,36 @@ ALLOWLIST: dict[tuple[str, int], str] = {
     # Escalating either one would fail a run over a directory listing.
     ("scale-miniladder.py", 7070): "tombstone-count scandir; warns by name and returns reachable=False with the reason — the debt reads UNKNOWN, never 0",
     ("scale-miniladder.py", 7576): "previous last-run.json read for the onboard-rate trend; warns by name and restarts the history at this run rather than costing the run its report",
+    # -- NEW 2026-08-29: scripts/scale-ab-driver.py (the P3 aggregation-plane
+    # A/B driver, committed dd051f53) ---------------------------------------
+    # Eight rule-2 sites, each read at its own line and judged separately. TWO
+    # WERE FIXED RATHER THAN PINNED, because they really were silent:
+    #   * `pid_alive`'s OSError arm returned None with no output. It now warns
+    #     by name with the pid and errno before answering UNKNOWN.
+    #   * `tail()` returned "" for any OSError. It now separates
+    #     FileNotFoundError (the log simply is not written yet — the caller
+    #     prints its own "(no output yet)") from a real read failure, which
+    #     warns with the path and errno.
+    # The remaining six already reported; every one of the eight now names the
+    # errno and the path. NONE of them may escalate, and the reason is the same
+    # in each case: this driver's job is to run a six-leg wave in which each leg
+    # costs ~1 h of lab time and a 2500-device fleet, so a failure that does not
+    # threaten the ATTRIBUTABILITY of a leg's numbers must not tear the wave
+    # down. Everything that does threaten it — the arm verification, the residue
+    # gate, ClickHouse, the replica count, the launch, and every collection step
+    # — raises DriverAbort and is covered by the ESCALATES arm of this rule
+    # (7 sites in the same file: the state file, the run-dir creation, the
+    # symlink, the metrics/TTUR/report reads and the evidence writes).
+    # Line numbers re-derived by importing this module's own caught_names /
+    # escalates / violation_key over the file's AST — not hand-counted.
+    ("scale-ab-driver.py", 220): "log-file append: prints path+errno to stderr and continues; the DURABLE record is the state file (which escalates), and the reporting channel cannot report its own death through itself",
+    ("scale-ab-driver.py", 263): "bounded subprocess shim: returns (127, '', 'cannot execute <cmd>: <exc>') — the error is the return value, and every caller checks rc and reports it (same shape as install.py:934)",
+    ("scale-ab-driver.py", 646): "pid liveness probe: PermissionError means a LIVE process owned by another uid; True IS the answer, and the driver then waits for that run instead of stealing its lock",
+    ("scale-ab-driver.py", 648): "pid liveness probe fallback: warns by name with pid+errno and answers UNKNOWN, which the idle gate refuses on — a lock is never stolen on an unprobeable pid",
+    ("scale-ab-driver.py", 674): "run-lock read: returns ('unknown', 'cannot read <path> (errno N: ...)'); 'unknown' is NOT free, so the idle gate keeps waiting and then aborts with that reason",
+    ("scale-ab-driver.py", 1025): "launcher.log read while a leg runs: warns with path+errno and reports NO verdict — the safe direction, since a leg is only finished when a verdict is READ and the process is gone",
+    ("scale-ab-driver.py", 1044): "log tail quoted inside a message: warns with path+errno and quotes nothing; narration only, never a verdict input",
+    ("scale-ab-driver.py", 1398): "compose .env read for COMPOSE_PROJECT_NAME: warns with path+errno and falls back to the documented default, which --project overrides (same contract as scale-miniladder.py's env_get)",
     # The four 2026-08-16 chown-swallow findings (enrichment seed, processors
     # seed, appid/cloud fixtures, vuln SUDO_UID dir) were RESOLVED the same
     # day: all now route through chown_tree (repair-or-refuse), and the vuln

@@ -590,7 +590,7 @@ def test_residue_check_only_ever_names_the_mlx_prefix(tmp_path):
     host = FakeHost()
     driver = make_driver(tmp_path, host)
     driver.residue_check(drv.leg_by_id("L1"))
-    cleanup = [cmd for cmd in host.calls if "--cleanup-only" in cmd][0]
+    cleanup = next(cmd for cmd in host.calls if "--cleanup-only" in cmd)
     assert cleanup[cleanup.index("--cleanup-only") + 1] == "mlx-"
 
 
@@ -989,8 +989,8 @@ def test_only_real_harness_processes_count_as_busy(tmp_path):
     driver = make_driver(tmp_path, host)
     assert driver.harness_processes() == [], "mentions are not processes"
     host.procs = [
-        "4055876 python3 scripts/scale-miniladder.py --profile t-storm-2.5k "
-        "--run-dir /var/tmp/scale-runs/storm-s03-08292148",
+        ("4055876 python3 scripts/scale-miniladder.py --profile t-storm-2.5k "
+         "--run-dir /var/tmp/scale-runs/storm-s03-08292148"),
         "17 /usr/bin/python3 /repo/scripts/scale-miniladder.py --devices 1000",
     ]
     assert len(driver.harness_processes()) == 2, "both real invocations count"
@@ -1039,8 +1039,8 @@ def test_a_probe_failure_reports_the_exception_not_the_frame_noise(tmp_path):
 
 @pytest.mark.parametrize("text,expected", [
     (ECONNRESET_TRACEBACK,
-     "ConnectionResetError: [Errno 104] Connection reset by peer "
-     "[+4 earlier traceback line(s)]"),
+     ("ConnectionResetError: [Errno 104] Connection reset by peer "
+      "[+4 earlier traceback line(s)]")),
     ("one line only", "one line only"),
     ("", "(no stderr)"),
     ("   \n  \n", "(no stderr)"),
@@ -1076,3 +1076,62 @@ def test_a_previous_stops_diagnosis_is_cleared_when_the_wave_restarts(tmp_path):
     assert driver.run() == 0
     final = json.loads((tmp_path / "ab-state.json").read_text(encoding="utf-8"))
     assert "stop_reason" not in final and "stack_state" not in final
+
+
+# ---------------------------------------------------------------------------
+# no silent swallows (§16.1 — tests/test_error_swallow_guard.py rule 2)
+# ---------------------------------------------------------------------------
+def test_pid_probe_failure_is_reported_and_never_reads_as_free(tmp_path, capsys,
+                                                               monkeypatch):
+    """An unprobeable pid used to return None with NO output, and the lock then
+    read as 'unknown' for a reason nobody could see. It must name the pid and
+    the errno — and 'unknown' must still never count as a free lock."""
+    host = FakeHost()
+    lock = tmp_path / ".lock"
+    lock.write_text(json.dumps({"pid": 4055876, "runid": "storm-s03"}),
+                    encoding="utf-8")
+
+    def exploding_kill(_pid, _sig):
+        raise OSError(5, "Input/output error")
+
+    monkeypatch.setattr(drv.os, "kill", exploding_kill)
+    driver = make_driver(tmp_path, host, wait_lock_seconds=0)
+    assert driver.pid_alive(4055876) is None
+    err = capsys.readouterr().err
+    assert "4055876" in err and "errno 5" in err and "Input/output error" in err
+    assert driver.read_lock()[0] == "unknown"
+    with pytest.raises(drv.DriverAbort) as exc:
+        driver.wait_for_idle(drv.leg_by_id("L1"))
+    assert "NOT forcing" in str(exc.value)
+
+
+def test_an_unreadable_log_tail_is_reported_not_silently_empty(tmp_path, capsys):
+    """`tail()` used to swallow every OSError. A log that is merely not written
+    yet is normal and stays quiet; one that cannot be READ is named."""
+    driver = make_driver(tmp_path, FakeHost())
+    assert driver.tail(str(tmp_path / "never-written.log"), 5) == ""
+    assert "cannot read" not in capsys.readouterr().err
+    a_directory = tmp_path / "launcher.log"
+    a_directory.mkdir()
+    assert driver.tail(str(a_directory), 5) == ""
+    err = capsys.readouterr().err
+    assert "cannot read" in err and str(a_directory) in err and "errno" in err
+
+
+def test_a_broken_log_file_does_not_stop_the_wave(tmp_path, capsys):
+    """The narration channel failing must not cost a leg: it reports to stderr
+    (path + errno) and the run continues — the durable record is the state file,
+    whose own write failures DO escalate."""
+    drv.set_log_path(str(tmp_path / "no-such-dir" / "ab-driver.log"))
+    try:
+        drv.log("a line that cannot be persisted")
+    finally:
+        drv.set_log_path("")
+    err = capsys.readouterr().err
+    assert "cannot append to" in err and "errno" in err
+    blocker = tmp_path / "a-file-not-a-dir"
+    blocker.write_text("", encoding="utf-8")
+    with pytest.raises(drv.DriverAbort) as exc:
+        drv.save_state(str(blocker / "s.json"),
+                       {"schema": drv.STATE_SCHEMA, "legs": {}})
+    assert "not resumable" in str(exc.value)
