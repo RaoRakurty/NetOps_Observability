@@ -346,3 +346,12 @@ scoring contract) → P4 write-up.
   t-storm-25 OFF, redeploy +compose.agg.yml, L3/L4 ON, L5 t-storm-2.5k ON,
   redeploy back). Driver `scripts/scale-ab-driver.sh` in build (resumable,
   refuses the 03:10–04:40 UTC window). Decision rule in the plan §6.
+
+## UPDATE (2026-08-29 22:50) — A/B wave running unattended
+`scripts/scale-ab-driver.py` started (detached; log `/var/tmp/scale-runs/
+ab-driver.log`, state `ab-state.json`, resumable with `--from Lx`). It waits for
+storm-s03's lock, then runs L1..L5 with the arm switch and restore. Expect the
+wave to take ~8–9 h (5 legs × ~1.5 h + redeploys). Read each leg's `ab-leg.json`,
+`ttur.tsv`, `accuracy-report.md`, `metrics-final.txt`; fill the comparison table
+in `RUN_PLAN_P3_AB_2026-08-29.md` §5 and apply the §6 decision rule; then
+update `P4_PROGRAMME_WRITEUP_2026-08-29.md` tables.
