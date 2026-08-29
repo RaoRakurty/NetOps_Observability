@@ -289,3 +289,14 @@ scoring contract) → P4 write-up.
 - Scoring a miniladder run: `ln -s <run-dir> /var/tmp/scale-runs/x-<runid>`
   then `twin.py --run-root /var/tmp/scale-runs score --runid <runid>` (global
   option before the subcommand; takes >10 min at 345 stories — run detached).
+
+## UPDATE (2026-08-29 19:00) — storm stall fixed (not deployed), backfill worker fixed (deployed)
+- `675966cd`: offload gates sized by signal count (storm aggregate = 922 nodes /
+  0 edges / 95k signals); row-capped Evidence blocks. Residuals (batcher lock,
+  GC policy) in build. Correlation NOT yet redeployed with it.
+- `0af9c896` (api, DEPLOYED with GIT_SHA): time-intel backfill bounded — it had
+  been failing every pass; tracker 186 for the watermark redesign.
+- Storm run storm-s01 scored by `twin.py` (result in `twin-score.log`, pending).
+- NEXT: residuals land → rebuild/redeploy correlation → clean `t-storm-2.5k`
+  (stability + memflat PASS expected) → P3 build (spec §7 steps 1–4) → A/B on
+  t-storm-10/25 → P4 write-up.
