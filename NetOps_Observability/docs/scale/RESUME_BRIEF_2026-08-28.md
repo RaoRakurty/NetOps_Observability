@@ -167,3 +167,21 @@ CTEM, 3) Troubleshooting. `/code-review ultra` is owner-triggered.
   cid `bb1e46d6…`). Then decide step 3 (VVR) / step 4 (Evidence queue).
 - `test_loop_yield_resilience::test_reconciliation_loop_yields_under_single_tenant_storm`
   is CPU-contention-flaky when another suite runs on the box (passes 3/3 alone).
+
+## UPDATE (2026-08-29 03:xx) — first P2 live run was HOLLOW; two harness blind spots fixed
+- Run `p2-s012-08290116` (P2 steps 0–2 + `compose.profile.yml`) reported
+  `correlation_completion PASS in 14 s` — FALSE: with `CORR_PROFILE_STAGES=1`
+  every window was rejected (`int('')` on the str field `dea93c20` added to the
+  profiler work_sink), all cohorts discarded, 0 objects persisted. Fixed (commit
+  after a077ab07): accounting never raises, observability moved out of the
+  reject path (counted `corr_engine_profiler_errors_total`), real rejections
+  counted `corr_engine_windows_rejected_total` + `corr_signals_dropped_total{reason=window_rejected}`
+  with traceback; harness gate FAILs on rejections and on HOLLOW completion
+  (cohorts advanced, `corr_versions{persisted}` did not); harness metric parser
+  no longer collapses labelled series (it had been reading `damped` as `persisted`).
+- Second attempt `p2-s012b-08290322` collided with the host CRON 1K run
+  (daily 03:17 UTC `t-nominal`, Sun 04:17 `s1`; `data/miniladder/cron.log`) —
+  onboard FAIL (devices absorbed by dedupe). Interrupted cleanly, residue 0.
+  Do not start a manual run that overlaps 03:17–~04:30 UTC.
+- NEXT: redeploy the fixed image (profiler overlay is safe again) after the cron
+  run finishes, then the 2.5K run to the gate.

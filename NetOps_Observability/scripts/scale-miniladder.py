@@ -244,6 +244,31 @@ def env_get(env_file: str, key: str) -> str:
     return ""
 
 
+def parse_prom_metrics(body: str) -> dict[str, float]:
+    """Prometheus text -> {series: value}, keeping LABELLED series apart.
+
+    Both forms are stored: the bare name (so unlabelled series read as before)
+    and, for a labelled sample, its full `name{labels}` key. Storing only the
+    bare name silently collapses every multi-series counter onto its LAST
+    sample — `corr_versions{outcome="persisted"}` and `{outcome="damped"}` both
+    wrote to "corr_versions", so a completion check reading "persisted" was in
+    fact reading "damped". A malformed value is skipped, never guessed at.
+    """
+    m: dict[str, float] = {}
+    for line in body.splitlines():
+        if line.startswith("#") or " " not in line:
+            continue
+        name, _, val = line.partition(" ")
+        try:
+            v = float(val)
+        except ValueError:
+            continue
+        m[name.split("{")[0]] = v
+        if "{" in name:
+            m[name] = v
+    return m
+
+
 class Stack:
     """Access layer for the live stack: API, broker, stores, metrics.
     Every call is bounded; every failure carries its stderr."""
@@ -738,17 +763,8 @@ class Stack:
                 out.append({"container": cc[:12], "ip": ip, "started_at": started,
                             "error": f"metrics probe failed: {err.strip()[:160]}"})
                 continue
-            m: dict[str, float] = {}
-            for line in body.splitlines():
-                if line.startswith("#") or " " not in line:
-                    continue
-                name, _, val = line.partition(" ")
-                try:
-                    m[name.split("{")[0]] = float(val)
-                except ValueError:
-                    pass
             out.append({"container": cc[:12], "ip": ip, "started_at": started,
-                        "metrics": m})
+                        "metrics": parse_prom_metrics(body)})
         return out
 
     def corr_completion_state(self) -> dict:
@@ -781,6 +797,20 @@ class Stack:
                     "oldest_pending_age_s": g(r, "corr_engine_oldest_pending_age_seconds"),
                     "epochs_total": g(r, "corr_engine_epochs_total"),
                     "window_signals": g(r, "corr_window_signals"),
+                    # ── 2026-08-29 (run p2-s012-08290116). Pending 0 + cohorts
+                    # advancing is NOT completion if the cohorts produced
+                    # nothing: a bookkeeping ValueError inside the engine's
+                    # cohort loop discarded every tenant's snapshots while the
+                    # frontier still advanced, and this gate passed in 14 s on a
+                    # run with zero incidents. These are read PER REPLICA (a
+                    # sum would let a healthy replica mask a broken partner) and
+                    # a missing counter stays -1.0 == UNKNOWN, never 0.
+                    "windows_rejected": g(r, "corr_engine_windows_rejected_total"),
+                    "profiler_errors": g(r, "corr_engine_profiler_errors_total"),
+                    "versions_persisted": g(r, 'corr_versions{outcome="persisted"}'),
+                    "versions_damped": g(r, 'corr_versions{outcome="damped"}'),
+                    "signals_dropped_window_rejected": g(
+                        r, 'corr_signals_dropped_total{reason="window_rejected"}'),
                 } for r in readable},
         }
 
@@ -2482,14 +2512,96 @@ class Harness:
                 f"oldest_pending_age={state['oldest_pending_age_max']:.1f}s "
                 f"cohorts_delta={advanced:.0f}")
 
+        # ── 2026-08-29 (run p2-s012-08290116): "the engine went idle" is not
+        # "the engine evaluated the workload". A ValueError raised by the
+        # engine's own WORK ACCOUNTING, inside the cohort loop's
+        # `except ValueError: continue`, discarded every tenant's snapshots
+        # while `_mark_processed` still advanced the frontier. Pending drained
+        # to 0, cohorts advanced, and this gate PASSED in 14 s on a run that
+        # produced zero incidents. Both clauses below read PER REPLICA — a
+        # cross-replica sum would let a healthy replica mask a broken partner —
+        # and an unreadable counter is UNKNOWN, which is never PASS.
+        base_per: dict = base.get("per_replica") or {}
+        final_per: dict = state.get("per_replica") or {}
+        counter_deltas: dict[str, dict[str, float]] = {}
+        # CLAUSE 1: an engine that rejected a window, or faulted inside its own
+        # accounting, did not evaluate everything it was handed.
+        for cid_ in sorted(final_per):
+            n, b = final_per[cid_], (base_per.get(cid_) or {})
+            row: dict[str, float] = {}
+            for key, series, cost in (
+                    ("windows_rejected", "corr_engine_windows_rejected_total",
+                     "tenant window(s) rejected — that evidence was discarded"),
+                    ("profiler_errors", "corr_engine_profiler_errors_total",
+                     ("profiler/accounting fault(s) — this run's own numbers "
+                      "are incomplete"))):
+                nv, bv = float(n.get(key, -1.0)), float(b.get(key, -1.0))
+                if nv < 0 or bv < 0:
+                    problems.append(
+                        f"replica {cid_} does not export {series} "
+                        f"(baseline={bv:.0f}, final={nv:.0f}) — whether the "
+                        f"engine discarded evidence is UNKNOWN, and UNKNOWN is "
+                        f"never PASS (engine image too old for this gate?)")
+                    continue
+                row[key] = nv - bv
+                if nv > bv:
+                    dropped = float(n.get("signals_dropped_window_rejected", -1.0))
+                    problems.append(
+                        f"replica {cid_} {series} rose {bv:.0f} -> {nv:.0f} "
+                        f"during the run: {nv - bv:.0f} {cost} "
+                        f"(signals_dropped{{reason=window_rejected}}="
+                        f"{dropped:.0f}) — completion here is not evaluation")
+            counter_deltas[cid_] = row
+        # CLAUSE 2: HOLLOW COMPLETION. Cohorts advanced but nothing was
+        # persisted on the replica that drained them — the exact signature of
+        # snapshots computed and then thrown away.
+        for cid_ in sorted(final_per):
+            n, b = final_per[cid_], (base_per.get(cid_) or {})
+            cohorts_delta = float(n.get("cohorts_total", -1.0)) - \
+                float(b.get("cohorts_total", 0.0) or 0.0)
+            if cohorts_delta <= 0:
+                continue            # this replica drained nothing to judge
+            nv, bv = (float(n.get("versions_persisted", -1.0)),
+                      float(b.get("versions_persisted", -1.0)))
+            counter_deltas.setdefault(cid_, {})["cohorts"] = cohorts_delta
+            if nv < 0 or bv < 0:
+                problems.append(
+                    f"replica {cid_} drained {cohorts_delta:.0f} cohort(s) but "
+                    f'corr_versions{{outcome="persisted"}} is unreadable '
+                    f"(baseline={bv:.0f}, final={nv:.0f}) — whether anything "
+                    f"was produced is UNKNOWN, and UNKNOWN is never PASS")
+                continue
+            counter_deltas[cid_]["versions_persisted"] = nv - bv
+            if nv <= bv:
+                damped = (float(n.get("versions_damped", -1.0))
+                          - float(b.get("versions_damped", -1.0)))
+                problems.append(
+                    f"HOLLOW COMPLETION: replica {cid_} drained "
+                    f"{cohorts_delta:.0f} cohort(s) and persisted NOTHING "
+                    f'(corr_versions{{outcome="persisted"}} {bv:.0f} -> '
+                    f"{nv:.0f}, damped delta {damped:.0f}) — the frontier "
+                    f"advanced over evidence that produced no object")
+        ev["counter_deltas"] = counter_deltas
+        # `proves` is the phase's original claim and stays exactly what it was;
+        # this is the second, independent claim the 2026-08-29 clauses add.
+        ev["also_proves"] = ("no_window_was_rejected_and_the_cohorts_that_"
+                             "drained_persisted_objects")
+
+        def _sum(field: str) -> float:
+            return sum(r.get(field, 0.0) for r in counter_deltas.values())
+
+        counters = (f"windows_rejected +{_sum('windows_rejected'):.0f}, "
+                    f"profiler_errors +{_sum('profiler_errors'):.0f}, "
+                    f"versions_persisted +{_sum('versions_persisted'):.0f}")
         if problems:
-            return self.phase("correlation_completion", "FAIL", ev, "; ".join(problems))
+            return self.phase("correlation_completion", "FAIL", ev,
+                              "; ".join(problems) + f" [{counters}]")
         return self.phase(
             "correlation_completion", "PASS", ev,
             f"engine evaluated the workload in {completed_at:.0f}s "
             f"(budget {budget:.0f}s): pending 0 across {state['replicas']} "
             f"replica(s), cohorts +{advanced:.0f}, oldest pending age "
-            f"{state['oldest_pending_age_max']:.1f}s")
+            f"{state['oldest_pending_age_max']:.1f}s, {counters}")
 
     # -- phase 6: consumer stability (whole lifecycle) -----------------------
     #

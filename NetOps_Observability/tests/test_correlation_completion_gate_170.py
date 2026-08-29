@@ -66,15 +66,27 @@ R1, R2 = "02f0c701526a", "182088270d24"
 START1, START2 = "2026-08-21T20:11:53.781594769Z", "2026-08-21T20:12:48.879187508Z"
 
 
+# 2026-08-29: the completion state carries four more per-replica facts (see
+# the HOLLOW COMPLETION clauses in the gate). They are HEALTHY here — no window
+# rejected, no profiler fault, objects persisted in step with the cohorts — so
+# every fixture in this file keeps testing exactly the clause it was written
+# for. tests/test_completion_hollow_20260829.py drives the unhealthy shapes.
+def _healthy(cohorts):
+    """Per-replica counters for an engine that produced what it drained."""
+    return {"windows_rejected": 0.0, "profiler_errors": 0.0,
+            "versions_persisted": float(cohorts) * 10.0,
+            "versions_damped": 0.0, "signals_dropped_window_rejected": 0.0}
+
+
 def _state(pending1, pending2, cohorts1, cohorts2, age1, age2,
            start1=START1, start2=START2, unreadable=(), replicas=2):
     readable = {
         R1: {"started_at": start1, "pending": pending1, "cohorts_total": cohorts1,
              "oldest_pending_age_s": age1, "epochs_total": 17.0,
-             "window_signals": 67115.0},
+             "window_signals": 67115.0, **_healthy(cohorts1)},
         R2: {"started_at": start2, "pending": pending2, "cohorts_total": cohorts2,
              "oldest_pending_age_s": age2, "epochs_total": 15.0,
-             "window_signals": 63926.0},
+             "window_signals": 63926.0, **_healthy(cohorts2)},
     }
     for u in unreadable:
         readable.pop(u, None)
@@ -364,7 +376,12 @@ def _rep(cid, pending, cohorts, age, started="2026-08-21T20:00:00Z"):
                         "corr_engine_cohorts_total": cohorts,
                         "corr_engine_oldest_pending_age_seconds": age,
                         "corr_engine_epochs_total": 10.0,
-                        "corr_window_signals": 1000.0}}
+                        "corr_window_signals": 1000.0,
+                        "corr_engine_windows_rejected_total": 0.0,
+                        "corr_engine_profiler_errors_total": 0.0,
+                        'corr_versions{outcome="persisted"}': cohorts * 10.0,
+                        'corr_versions{outcome="damped"}': 0.0,
+                        'corr_signals_dropped_total{reason="window_rejected"}': 0.0}}
 
 
 def test_AGGREGATION_pending_SUMS_across_replicas():

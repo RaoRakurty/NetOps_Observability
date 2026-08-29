@@ -2539,6 +2539,58 @@ COHORTS_PROCESSED = 0
 COHORT_SIGNALS_TOTAL = 0
 PENDING_PEAK = 0
 
+# ── OBSERVABILITY MUST NOT BE ABLE TO REJECT A WINDOW (2026-08-29) ───────────
+#
+# THE DEFECT THESE EXIST TO MAKE IMPOSSIBLE (run p2-s012-08290116). With the
+# opt-in stage profiler on, `_record_cycle_work` summed the engine's work sink
+# with int(v). #168 had added two NON-numeric fields to that sink
+# (candidate_ceiling_dimension: str, candidate_ceiling_hit: bool), so every
+# cycle raised ValueError from a BOOKKEEPING line that sat inside the cohort
+# loop's `except ValueError: continue`. Every tenant's snapshots were discarded,
+# `_mark_processed` still advanced the frontier, pending went to 0, and the
+# scale harness called the run COMPLETE in 14 s with zero incidents produced.
+#
+# Three rules follow, and these counters are how each is observable:
+#   1. accounting/profiler code is wrapped and COUNTED (PROFILER_ERRORS_TOTAL),
+#      never able to reject a window;
+#   2. a genuine engine input error still rejects that tenant's window, but it
+#      is COUNTED (ENGINE_WINDOWS_REJECTED_TOTAL) and logged with a traceback,
+#      never a one-line log that scrolls past;
+#   3. evidence that is marked processed without being evaluated is COUNTED
+#      (SIGNALS_DROPPED_TOTAL) — a silent drop is the thing that made a 14 s
+#      "PASS" look like a fast run instead of an empty one.
+ENGINE_WINDOWS_REJECTED_TOTAL = 0   # tenant-windows a real ValueError rejected
+PROFILER_ERRORS_TOTAL = 0           # faults inside accounting/profiling code
+# Signals that were marked processed WITHOUT being evaluated, by reason. Seeded
+# with the reason the engine can produce so the series is always readable: an
+# absent counter and a zero counter must never look alike to the harness.
+SIGNALS_DROPPED_TOTAL: dict[str, int] = {"window_rejected": 0}
+_PROFILER_ERROR_LOGGED = False
+
+
+def _note_profiler_error(where: str, exc: BaseException | None = None) -> None:
+    """Count a fault raised by observability code, and log the FIRST one with
+    its traceback.
+
+    Deliberately swallowing: this is the fallback for code whose entire job is
+    to DESCRIBE the run. It must never be able to end one. The counter is the
+    alertable signal (/metrics corr_engine_profiler_errors_total) — the run is
+    not silently fine, it is loudly instrumented-and-degraded."""
+    global PROFILER_ERRORS_TOTAL, _PROFILER_ERROR_LOGGED
+    PROFILER_ERRORS_TOTAL += 1
+    if not _PROFILER_ERROR_LOGGED:
+        _PROFILER_ERROR_LOGGED = True
+        log.error("profiler/accounting fault in %s — the engine continues and "
+                  "corr_engine_profiler_errors_total now carries this "
+                  "(further occurrences are counted, not logged)",
+                  where, exc_info=exc)
+
+
+def _record_signals_dropped(reason: str, n: int) -> None:
+    """Account evidence that will be marked processed without being evaluated."""
+    if n > 0:
+        SIGNALS_DROPPED_TOTAL[reason] = SIGNALS_DROPPED_TOTAL.get(reason, 0) + n
+
 
 # Per-tenant cache of edges this process has already admitted, so a bounded
 # transaction can build components from the whole settled edge set rather than
@@ -2961,6 +3013,14 @@ def epoch_state() -> dict[str, object]:
         "decision_memo_level1_hits_total": rank_memo_stats()["hits"],
         "decision_memo_level2_hits_total": COHORT_MEMO_HITS_TOTAL,
         "snapshot_digest": digest_cache_stats(),
+        # ── 2026-08-29: the two counters that must both stay 0, and the
+        # evidence ledger that says what a non-zero one cost. A rejected window
+        # discards a whole tenant's snapshots for that cohort while the frontier
+        # still advances, so `signals_dropped_total` is the honest measure of
+        # what a "completed" run never actually evaluated.
+        "windows_rejected_total": ENGINE_WINDOWS_REJECTED_TOTAL,
+        "profiler_errors_total": PROFILER_ERRORS_TOTAL,
+        "signals_dropped_total": dict(SIGNALS_DROPPED_TOTAL),
     }
 
 
@@ -3048,22 +3108,42 @@ def scheduler_state() -> dict[str, object]:
 # retention concept at all.
 LAST_CYCLE_MAX_TS: float | None = None
 CYCLE_WORK: dict[str, int] = {}
+# Non-numeric fields of the work sink (e.g. #168's candidate_ceiling_dimension,
+# which names WHICH grouping hit the candidate ceiling). A sum is meaningless
+# for them, so the LAST value is kept — and, critically, keeping them here is
+# what stops a new descriptive field from turning `int(v)` into a ValueError
+# that rejects the window (see ENGINE_WINDOWS_REJECTED_TOTAL above).
+CYCLE_WORK_LABELS: dict[str, str] = {}
 CYCLE_WORK_CYCLES = 0
 
 
 def _record_cycle_work(tenant: str, work: dict) -> None:
-    """Accumulate one tenant-cycle's work accounting."""
+    """Accumulate one tenant-cycle's work accounting.
+
+    CONTRACT: this never raises on a value. Numeric fields (int/float/bool) sum;
+    anything else — including a non-finite float, which int() rejects — is kept
+    as a LABEL. The engine is free to add a descriptive field to its work sink
+    without that being able to break a correlation cycle.
+    """
     global CYCLE_WORK_CYCLES
     CYCLE_WORK_CYCLES += 1
     for k, v in work.items():
-        CYCLE_WORK[k] = CYCLE_WORK.get(k, 0) + int(v)
+        if isinstance(v, bool):
+            CYCLE_WORK[k] = CYCLE_WORK.get(k, 0) + int(v)
+        elif isinstance(v, int):
+            CYCLE_WORK[k] = CYCLE_WORK.get(k, 0) + v
+        elif isinstance(v, float) and math.isfinite(v):
+            CYCLE_WORK[k] = CYCLE_WORK.get(k, 0) + int(v)
+        else:
+            CYCLE_WORK_LABELS[k] = str(v)[:120]
 
 
 def cycle_work_profile() -> dict[str, object]:
     """Totals plus the ratios tracker 166 is judged on."""
     cand = CYCLE_WORK.get("pairs_candidate", 0)
     nodes = CYCLE_WORK.get("nodes", 0)
-    out: dict[str, object] = {"cycles": CYCLE_WORK_CYCLES, **CYCLE_WORK}
+    out: dict[str, object] = {"cycles": CYCLE_WORK_CYCLES, **CYCLE_WORK,
+                              **CYCLE_WORK_LABELS}
     if cand:
         out["redundant_pair_fraction"] = round(CYCLE_WORK.get("pairs_old_old", 0) / cand, 4)
         out["required_pair_fraction"] = round(
@@ -3101,17 +3181,26 @@ _STAGE_SAMPLES: dict[str, deque] = {}
 
 
 def stage_record(stage: str, elapsed: float) -> None:
-    """Accumulate one stage timing. Cheap enough for the per-event path."""
-    with _STAGE_LOCK:
-        row = _STAGE_STATS.get(stage)
-        if row is None:
-            _STAGE_STATS[stage] = [1, elapsed, elapsed]
-            _STAGE_SAMPLES[stage] = deque([elapsed], maxlen=CORR_PROFILE_SAMPLES)
-            return
-        row[0] += 1
-        row[1] += elapsed
-        row[2] = max(row[2], elapsed)
-        _STAGE_SAMPLES[stage].append(elapsed)
+    """Accumulate one stage timing. Cheap enough for the per-event path.
+
+    Isolated from the correctness path (2026-08-29): `stage(...)` wraps
+    `run_window` itself, so a fault in the timer's own bookkeeping would
+    propagate out of the engine call it is only supposed to be measuring. A
+    zero-exception `try` costs nothing on the hot path and a counted profiler
+    fault costs a metric, not a cohort."""
+    try:
+        with _STAGE_LOCK:
+            row = _STAGE_STATS.get(stage)
+            if row is None:
+                _STAGE_STATS[stage] = [1, elapsed, elapsed]
+                _STAGE_SAMPLES[stage] = deque([elapsed], maxlen=CORR_PROFILE_SAMPLES)
+                return
+            row[0] += 1
+            row[1] += elapsed
+            row[2] = max(row[2], elapsed)
+            _STAGE_SAMPLES[stage].append(elapsed)
+    except Exception as exc:  # noqa: BLE001 — a profiler may not raise into the engine
+        _note_profiler_error(f"stage_record({stage})", exc)
 
 
 class stage:
@@ -3945,6 +4034,7 @@ async def _engine_cycle_inner(epoch: _EngineEpoch | None) -> None:
     """
     global LAST_GAP_HINTS, VERSIONS_PERSISTED, VERSIONS_DAMPED
     global LAST_CYCLE_MAX_TS
+    global ENGINE_WINDOWS_REJECTED_TOTAL
     # `epoch is None` happens only when the caller had no ClickHouse to prepare
     # against — the two conditions are the same condition, stated explicitly so
     # the invariant is checked rather than assumed.
@@ -4067,12 +4157,49 @@ async def _engine_cycle_inner(epoch: _EngineEpoch | None) -> None:
                 COHORT_COMPONENTS_RANKED_TOTAL += memo.misses - _memo_before[3]
                 COHORT_TOUCHED_LAST = memo.touched - _memo_before[1]
             _remember_edges(tenant, snapshots)
-            if work:
-                _record_cycle_work(tenant, work)
-        except ValueError as exc:
-            log.error("engine window rejected: %s", exc)
+        except ValueError:
+            # A GENUINE engine input error for this tenant. Still a rejection —
+            # but now a loud, counted, traceable one.
+            #
+            # DECISION (2026-08-29), stated because it costs evidence: the
+            # rejected tenant's cohort signals ARE still marked processed at the
+            # end of this cycle. The frontier is per-COHORT, not per-tenant, and
+            # a deterministic input error is a poison pill: leaving those
+            # signals pending would replay the same failing window every epoch
+            # forever, so the tenant would never progress AND every other
+            # tenant's drain would be dragged behind a permanently non-empty
+            # backlog. We take the drop — and make it impossible to take it
+            # silently: the signals are counted into
+            # corr_signals_dropped_total{reason="window_rejected"}, the
+            # rejection into corr_engine_windows_rejected_total, and the log
+            # line carries the tenant, the count and the traceback. The scale
+            # harness FAILS any run in which either counter moved, so a run can
+            # no longer be called complete on evidence it threw away.
+            ENGINE_WINDOWS_REJECTED_TOTAL += 1
+            lost = sum(1 for s in _cohort if s.tenant_id == tenant)
+            _record_signals_dropped("window_rejected", lost)
+            # log.exception, not log.error: the traceback is the point. The
+            # one-line "engine window rejected: %s" it replaces gave no way to
+            # tell an engine input error from a bookkeeping bug in the caller.
+            log.exception(
+                "engine window REJECTED for tenant=%s — %d cohort signal(s) "
+                "will be marked processed and never evaluated "
+                "(windows_rejected_total=%d, signals_dropped_total"
+                "{reason=window_rejected}=%d)",
+                tenant, lost, ENGINE_WINDOWS_REJECTED_TOTAL,
+                SIGNALS_DROPPED_TOTAL["window_rejected"])
             continue
+        # The snapshots are safe FIRST. Work accounting used to run inside the
+        # try above and BEFORE this line, so a bookkeeping fault discarded a
+        # whole tenant's evaluated snapshots (run p2-s012-08290116). Order and
+        # isolation are both load-bearing: the list is appended before any
+        # observability runs, and the observability cannot raise past itself.
         evaluated.append((tenant, window, snapshots))
+        if work:
+            try:
+                _record_cycle_work(tenant, work)
+            except Exception as exc:  # noqa: BLE001 — accounting may not reject a window
+                _note_profiler_error("_record_cycle_work", exc)
 
     # #111 churn fix — know every id that MATERIALIZED this cycle before deciding
     # whether an unknown id is a genuinely new incident or an ongoing one re-keyed
@@ -7748,6 +7875,24 @@ def _metrics_text() -> str:
         "# HELP corr_engine_epoch_cohorts_max Most cohorts drained in one epoch.",
         "# TYPE corr_engine_epoch_cohorts_max gauge",
         f"corr_engine_epoch_cohorts_max {EPOCH_COHORTS_MAX}",
+        # ── 2026-08-29 (run p2-s012-08290116). A window rejection drops a whole
+        # tenant's snapshots for that cohort while the frontier still advances:
+        # cohorts climb, pending falls, and NOTHING is persisted. Any completion
+        # claim made while this counter moved is a hollow one — the scale
+        # harness gates on exactly that.
+        "# HELP corr_engine_windows_rejected_total Tenant windows rejected on engine input error (their evidence is discarded).",
+        "# TYPE corr_engine_windows_rejected_total counter",
+        f"corr_engine_windows_rejected_total {ENGINE_WINDOWS_REJECTED_TOTAL}",
+        # Faults inside profiling/accounting code, which is now isolated from
+        # the correctness path. Non-zero means the numbers below are incomplete
+        # — it must never again mean a cycle was lost.
+        "# HELP corr_engine_profiler_errors_total Faults inside profiler/accounting code (isolated from correctness).",
+        "# TYPE corr_engine_profiler_errors_total counter",
+        f"corr_engine_profiler_errors_total {PROFILER_ERRORS_TOTAL}",
+        "# HELP corr_signals_dropped_total Signals marked processed without being evaluated, by reason.",
+        "# TYPE corr_signals_dropped_total counter",
+        *(f'corr_signals_dropped_total{{reason="{r}"}} {n}'
+          for r, n in sorted(SIGNALS_DROPPED_TOTAL.items())),
         # ── P1 cohort-touch gate (docs/design/COHORT_TOUCH_GATE_P1_2026-08-28.md
         # §5). The gate's whole claim is "only the components a cohort touched can
         # have changed" — these are how an operator sees it holding: on cohorts

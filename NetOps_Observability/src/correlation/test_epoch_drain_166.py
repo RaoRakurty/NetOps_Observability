@@ -77,6 +77,46 @@ def test_K_cohorts_in_one_epoch_prepare_ONCE(_stack, k):
     assert main.COHORTS_PROCESSED == k
 
 
+@pytest.mark.parametrize("k", [1, 4])
+def test_K_cohorts_with_the_STAGE_PROFILER_ON(_stack, k):
+    """The profiler-on path must be exercised by the suite that drains cohorts.
+
+    2026-08-29: `CORR_PROFILE_STAGES=1` was a code path no test ever entered, so
+    when #168 added a string field to the engine's work sink, the accounting
+    `int(v)` raised ValueError inside the cohort loop's `except ValueError` and
+    EVERY cohort silently discarded its snapshots — in production, on a scale
+    run that then reported completion. The behavioural claim here is simply that
+    turning the profiler on changes nothing except the numbers it collects.
+    (Isolation and the counters themselves live in
+    test_observability_never_rejects_a_window.py.)"""
+    _stack.setattr(main, "CORR_PROFILE_STAGES", True)
+    _stack.setattr(main, "ENGINE_WINDOWS_REJECTED_TOTAL", 0)
+    _stack.setattr(main, "PROFILER_ERRORS_TOTAL", 0)
+    # module-global and monotonic: reset, or a previous test satisfies the
+    # "the profiler collected something" assertion below.
+    _stack.setattr(main, "CYCLE_WORK", {})
+    _stack.setattr(main, "CYCLE_WORK_LABELS", {})
+    _stack.setattr(main, "CORR_ENGINE_COHORT_SIZE", max(1, 40 // k))
+    _load(40)
+
+    async def drive():
+        epoch = await main._begin_epoch(main.datetime.now(main.timezone.utc))
+        try:
+            for _ in range(k):
+                await main.engine_cycle(epoch)
+        finally:
+            main._close_epoch(epoch)
+
+    asyncio.run(drive())
+    assert main.COHORTS_PROCESSED == k
+    assert main.EPOCH_PREPARATIONS == 1
+    assert main.ENGINE_WINDOWS_REJECTED_TOTAL == 0, (
+        "the profiler rejected a window — an observability fault reached the "
+        "correctness path again")
+    assert main.PROFILER_ERRORS_TOTAL == 0
+    assert main.CYCLE_WORK["nodes"] > 0, "the profiler collected nothing"
+
+
 def test_a_cohort_WITHOUT_an_epoch_still_prepares_its_own(_stack):
     """The control. `engine_cycle()` with no epoch must build one — otherwise
     the invariant test above is measuring nothing."""
