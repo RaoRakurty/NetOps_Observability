@@ -99,15 +99,29 @@ def test_key_may_not_contain_the_separator():
 # ── legacy mode is byte-identical ────────────────────────────────────────────
 
 def test_null_key_payload_and_args_are_the_legacy_shape():
-    """`--producer-key none` must reproduce the pre-fix producer exactly —
-    it exists precisely so comparison runs against the historical evidence
-    trail remain possible."""
+    """`--producer-key none` must reproduce the pre-fix producer's KEYING
+    exactly — it exists precisely so comparison runs against the historical
+    evidence trail remain possible.
+
+    2026-08-29: this used to pin the WHOLE argv (`== ["--topic", …]`), which
+    is a wider claim than the invariant it guards. Delivery settings are
+    orthogonal to keying, and the run that forced this change proved they are
+    not optional in either mode: kafka-console-producer's 1.5 s ack deadline
+    dropped 901 records under load and exited 0. A legacy-key run that
+    silently loses records is not a comparable experiment, it is a broken one
+    — so the hardening applies to both modes and is asserted here too."""
     st = _stack()
     st.produce("netops.syslog", LINES)              # key omitted = legacy
     call = st.calls[0]
     assert call["input"] == "\n".join(LINES) + "\n"
+    # The legacy shape, stated as what it IS: the topic, and NO key plumbing.
+    assert call["args"][:2] == ["--topic", "netops.syslog"]
     assert "parse.key=true" not in call["args"]
-    assert call["args"] == ["--topic", "netops.syslog"]
+    assert "key.separator" not in " ".join(call["args"])
+    assert "--property" not in call["args"]
+    # …and the injection-integrity settings ride in this mode too.
+    assert int(call["args"][call["args"].index("--request-timeout-ms") + 1]) >= 30000
+    assert "enable.idempotence=true" in call["args"]
     assert call["config_flag"] == "--producer.config"
 
 

@@ -216,7 +216,33 @@ def test_preflight_settle_default_and_flag():
 MIB = 1024 ** 2
 
 
-def _memflat_harness(tmp_path, cold, warm, end_stats, **flags):
+def _healthy_ch(query, timeout=60):
+    """ClickHouse answering memflat's clause-2/3 probes healthily (2026-08-29).
+
+    These tests are about the SLOPE, not about ClickHouse's own accounting;
+    stubbing keeps them hermetic (nothing here may touch a live stack) and
+    leaves the ClickHouse clauses green so the slope verdict is what is being
+    asserted. Their own tests live in tests/test_miniladder_memflat_clickhouse.py.
+    """
+    answers = {
+        "toString(now())": "2026-08-29 07:00:00",
+        "'max_server_memory_usage'": "0",
+        "'max_server_memory_usage_to_ram_ratio'": "0.9",
+        "'CGroupMemoryTotal'": "5584715776",
+        "'OSMemoryTotal'": "16764780544",
+        "system.metric_log": f"{1000 * MIB}\t{500 * MIB}",
+        "system.metrics": (f"MemoryTracking\t{900 * MIB}\n"
+                           f"MergesMutationsMemoryTracking\t{400 * MIB}"),
+        "'MaxPartCountForPartition'": "180",
+        "'parts_to_delay_insert'": "1000",
+    }
+    for key, value in answers.items():
+        if key in query:
+            return True, value
+    return False, f"unstubbed probe: {query[:120]}"
+
+
+def _memflat_harness(tmp_path, cold, warm, end_stats, anon=None, **flags):
     argv = ["--run-dir", str(tmp_path)]
     for k, v in flags.items():
         argv += [f"--{k.replace('_', '-')}", str(v)]
@@ -226,7 +252,19 @@ def _memflat_harness(tmp_path, cold, warm, end_stats, **flags):
     h = ml.Harness(args)
     h.baseline["mem"] = cold
     h.warm_mem = warm
+    # Stateful services are judged on cgroup anon since 2026-08-29 (docker
+    # stats is ~68% page cache). These fixtures predate that split and mean
+    # "the container's memory", so anon mirrors them unless a test says
+    # otherwise — the numbers under test are unchanged.
+    cold_anon, warm_anon, end_anon = anon or (
+        cold, warm, {n: v["used"] for n, v in end_stats.items()})
+    h.baseline["mem_anon"] = cold_anon
+    h.warm_anon = warm_anon
+    h.baseline["ch_window_start"] = "2026-08-29 07:00:00"
+    h.baseline["ch_max_part_count"] = 180
     h.stack.mem_stats = lambda: end_stats            # type: ignore[assignment]
+    h.stack.anon_sample = lambda services: dict(end_anon)  # type: ignore[assignment]
+    h.stack.ch = _healthy_ch                         # type: ignore[assignment]
     return h
 
 

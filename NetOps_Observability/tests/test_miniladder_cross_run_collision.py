@@ -163,6 +163,14 @@ class FakeApi:
     def mem_sample(self):
         return {}
 
+    def anon_sample(self, _services):
+        """cgroup-anon sampling (2026-08-29): memflat's instrument for every
+        service that holds page cache. Nothing here judges memory."""
+        return {}
+
+    def ch_now(self):
+        return "2026-08-29 07:00:00"
+
     def end_offset(self, _topic):
         return 0
 

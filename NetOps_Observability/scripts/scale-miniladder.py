@@ -61,13 +61,22 @@ Phases (each emits PASS/FAIL + evidence into the run dir):
               Plus: every burst device appears in corr_signals (silent
               per-device eviction check) and quarantine WRITE failures must
               not move (the metric-less 238k-drop signal, healthz-only).
-  memflat     leak slope: end-of-run RSS per key container <= its END-OF-BURST
-              (warm) RSS x --mem-factor, with a 64 MiB jitter floor — a leak
-              keeps climbing after input stops, a warmed cache does not. PLUS
-              the OOM path: no key container above --mem-headroom-percent of
-              its own plan-sized cap. The cold-baseline->warm step is recorded
-              as evidence only (a 2-min burst cannot separate first-touch cache
-              materialization from a slow leak — that is the lab run + soak).
+  memflat     leak slope: end-of-run memory per key container <= its
+              END-OF-BURST (warm) figure x --mem-factor, with a 64 MiB jitter
+              floor — a leak keeps climbing after input stops, a warmed cache
+              does not. The INSTRUMENT is docker stats only for the stateless
+              services (api, correlation); everything that caches is judged on
+              its cgroup ANONYMOUS memory, because docker stats' MemUsage
+              carries page cache + slab (~68% of it, measured) and made the
+              verdict a coin toss on cache state. PLUS the OOM path: no key
+              container above --mem-headroom-percent of its own plan-sized cap,
+              and for ClickHouse two clauses of its OWN accounting — peak
+              MemoryTracking < 85% and peak merge memory < 50% of the effective
+              max_server_memory_usage, and MaxPartCountForPartition back within
+              +20% of preflight and under parts_to_delay_insert/2. The
+              cold-baseline->warm step is recorded as evidence only (a 2-min
+              burst cannot separate first-touch cache materialization from a
+              slow leak — that is the lab run + soak).
   cleanup     ALWAYS runs (also on failure/^C): delete every created device —
               INCLUDING the rows dedupe absorbed, which no list can see — plus
               the devices that absorbed them, then VERIFY the whole `mlx-`
@@ -165,6 +174,72 @@ KAFKA_TOOL_TIMEOUT = 90      # JVM tools (console producer, consumer-groups)
 HTTP_TIMEOUT = 15
 MUTATION_TIMEOUT = 180       # ClickHouse ALTER DELETE settle bound
 
+# ---------------------------------------------------------------------------
+# INJECTION INTEGRITY — the producer must never lose a record quietly
+# (defect 2026-08-29, run p2-s04b-08290858: "901 events UNEXPLAINED").
+#
+# ROOT CAUSE. `kafka-console-producer.sh` is an ASYNCHRONOUS producer whose
+# per-record failures reach an `ErrorLoggingCallback` that only LOGS them; the
+# process still exits 0. Worse, its own defaults are a demo toy rather than an
+# injection vehicle — measured on the broker we run (apache/kafka 4.1.1,
+# `kafka-console-producer.sh --help`):
+#
+#     --request-timeout-ms          default 1500     (ack deadline!)
+#     --message-send-max-retries    default 3
+#
+# A 1.5 s ack deadline cannot survive a loaded broker. During that run the
+# broker was saturated enough that its OWN internal 2 s BROKER_HEARTBEAT
+# requests to itself were timing out continuously for the whole 15 min burst
+# (`docker logs netops-kafka-1`, 08:55–09:15). On the chunk whose produce call
+# took 22.73 s, 901 of 10,000 records exhausted their 3 retries, were expired
+# and dropped — and `produce()` below returned `(True, "")` because rc was 0
+# and threw the stderr away, which is exactly the §16.1 accept-and-ignore
+# defect. The accounting gate (which balances INJECTED against OpenSearch docs)
+# then reported a platform "silent drop" that had never happened: measured,
+# the topic gained exactly the 869,100 records OpenSearch held, and Vector
+# delivered every one of them.
+#
+# THE FIX, in two independent halves — both are required:
+#   1. Settings that turn a busy broker into BACKPRESSURE, never expiry: a 30 s
+#      ack deadline, retries bounded only by a 180 s delivery deadline, and
+#      idempotent produce so those retries cannot duplicate a record (a
+#      duplicate is just as dishonest as a loss — it inflates the balance).
+#      `--request-timeout-ms` / `--message-send-max-retries` MUST be passed as
+#      the dedicated flags: ConsoleProducer writes its own option defaults into
+#      the producer properties, so a `--producer-property request.timeout.ms=…`
+#      is not guaranteed to survive them.
+#   2. Never trust the exit code alone: the console producer's record failures
+#      exist ONLY on stderr, so stderr is read and any send error fails the
+#      produce loudly with the reason attached.
+# ---------------------------------------------------------------------------
+PRODUCER_ACK_TIMEOUT_MS = 30000      # was ConsoleProducer's 1500 ms default
+PRODUCER_DELIVERY_TIMEOUT_MS = 180000  # total per-record deadline (bounds §9)
+PRODUCER_MAX_BLOCK_MS = 120000       # buffer-full ⇒ BLOCK the send, never drop
+PRODUCER_RETRY_BACKOFF_MS = 250
+PRODUCER_MAX_RETRIES = 2147483647    # bounded in TIME by delivery.timeout.ms
+PRODUCER_HARDENING_ARGS = [
+    "--request-required-acks", "-1",
+    "--request-timeout-ms", str(PRODUCER_ACK_TIMEOUT_MS),
+    "--message-send-max-retries", str(PRODUCER_MAX_RETRIES),
+    "--retry-backoff-ms", str(PRODUCER_RETRY_BACKOFF_MS),
+    "--producer-property", f"delivery.timeout.ms={PRODUCER_DELIVERY_TIMEOUT_MS}",
+    "--producer-property", f"max.block.ms={PRODUCER_MAX_BLOCK_MS}",
+    # acks=all + retries>0 + max.in.flight<=5 ⇒ idempotence is accepted; it
+    # makes the now-unbounded retries safe (no duplicate on an ambiguous ack).
+    "--producer-property", "enable.idempotence=true",
+    "--producer-property", "max.in.flight.requests.per.connection=5",
+]
+# A clean console-producer run prints NOTHING on stderr (verified live against
+# apache/kafka 4.1.1 with an empty stdin: no banner, no SLF4J notice). So any
+# stderr at all is a finding. These two patterns name the two shapes that mean
+# "records were dropped"; everything else is reported as an anomaly rather than
+# guessed at.
+PRODUCER_SEND_ERROR_RE = re.compile(
+    r"Error when sending message|"
+    r"org\.apache\.kafka\.common\.errors\.\w*(Timeout|Retriable|"
+    r"NotEnoughReplicas|RecordTooLarge)\w*Exception")
+PRODUCER_STDERR_ANOMALY_RE = re.compile(r"\bERROR\b|\bException\b|\bFATAL\b")
+
 # TRANSIENT-FAILURE RETRY (defect 2026-08-29, run p2-s012d-08290411). Under
 # load — the correlation engine draining a 21k backlog, ClickHouse busy — the
 # platform API's socket read timed out and a raw `TimeoutError('timed out')`
@@ -203,6 +278,48 @@ MEM_SERVICES = [
     "vector-aggregator", "vector-router", "victoria",
 ]
 
+# ── memflat instruments (2026-08-29) ───────────────────────────────────────
+#
+# THE DEFECT THIS EXISTS FOR. `docker stats` MemUsage is cgroup
+# `memory.current - inactive_file`: it INCLUDES page cache and reclaimable
+# slab. Measured on the ClickHouse container that failed the gate:
+#
+#     anon 984 MiB + active_file 1,516 MiB + slab_reclaimable 621 MiB
+#       = 3.14 GiB reported by docker stats
+#     ...against ClickHouse's own MemoryResident of 994 MiB.
+#
+# ~68 % of what memflat called ClickHouse "RSS" was reclaimable kernel cache,
+# so the x1.3 slope was decided by where the page cache happened to sit at the
+# warm sample: run p2-s04-08290653 sampled warm 4,314 -> end 3,281 MiB (x0.76,
+# PASS) and run p2-s04b-08290858 warm 2,246 -> end 3,854 MiB (x1.72, FAIL) —
+# THE SAME CODE, the difference being that s04b's warm sample landed just after
+# the previous run's cleanup dropped the cache. Meanwhile the real memory risk
+# in both runs went unreported: peak MemoryTracking 4,566 MiB = 95.2 % of the
+# 4,794 MiB server cap, with merges alone at 3,978 MiB (83 %).
+#
+# So: page-cache-bearing (stateful) services are judged on cgroup ANONYMOUS
+# memory — the pages that cannot be reclaimed and therefore the ones that OOM
+# the container — and ClickHouse additionally answers to its OWN accounting
+# (MemoryTracking / merge memory vs max_server_memory_usage) and to the parts
+# it leaves behind. The docker-stats ratio survives only where nothing caches:
+# see docs/scale/P2_CLICKHOUSE_MEMFLAT_2026-08-29.md §(c).
+MEM_STATELESS_SERVICES = ("api", "correlation")
+# ClickHouse's own caps, as fractions of the effective max_server_memory_usage.
+CH_MEMORY_TRACKING_MAX_PCT = float(
+    os.environ.get("MLX_CH_MEMORY_TRACKING_MAX_PCT", "85"))
+CH_MERGE_MEMORY_MAX_PCT = float(
+    os.environ.get("MLX_CH_MERGE_MEMORY_MAX_PCT", "50"))
+# Parts must come back down after input stops: within +20 % of the preflight
+# MaxPartCountForPartition (or +8 parts, whichever is the larger envelope — a
+# baseline of 3 parts must not fail on a 4th), and never within a factor of two
+# of parts_to_delay_insert, where inserts start being throttled.
+CH_PART_COUNT_GROWTH_MAX = float(
+    os.environ.get("MLX_CH_PART_COUNT_GROWTH_MAX", "1.2"))
+CH_PART_COUNT_FLOOR = int(os.environ.get("MLX_CH_PART_COUNT_FLOOR", "8"))
+CH_PART_SETTLE_MAX_S = float(os.environ.get("MLX_CH_PART_SETTLE_MAX_S", "600"))
+CH_PART_SETTLE_INTERVAL_S = float(
+    os.environ.get("MLX_CH_PART_SETTLE_INTERVAL_S", "15"))
+
 # Services that must be running (and healthy where a healthcheck exists) for
 # the run to mean anything. Subset of the watchdog's list: only what the
 # harness actually exercises — optional profiles (grafana, osd, exporters)
@@ -211,6 +328,25 @@ REQUIRED_SERVICES = [
     "api", "clickhouse", "correlation", "kafka", "nginx", "opensearch",
     "postgres", "vector-aggregator", "vector-router", "victoria",
 ]
+
+
+def _ch_counter(raw: str) -> int:
+    """A ClickHouse memory counter as a non-negative int.
+
+    `MergesMutationsMemoryTracking` legitimately reads a small NEGATIVE value
+    when no merge is running (the tracker is a signed delta), and reading it as
+    UInt64 wraps that to ~1.8e19 — which arrives as "17,592,186,044,416 MiB =
+    367,008,512,659 % of the cap" and fails the gate on an idle server. Signed
+    parse, floored at 0: no merge running is 0 bytes of merge memory."""
+    return max(0, int(float(raw.strip())))
+
+
+def mib(value: float | None) -> str:
+    """Bytes as MiB for a verdict line. A negative/absent number is printed as
+    `unmeasured`, never as 0 MiB — an unread probe must never look flat."""
+    if value is None or value < 0:
+        return "unmeasured"
+    return f"{value / 1024**2:.0f} MiB"
 
 
 def log(msg: str) -> None:
@@ -545,8 +681,69 @@ class Stack:
         return stats
 
     def mem_sample(self) -> dict[str, int]:
-        """Per-container RSS-ish working set in bytes (usage only)."""
+        """Per-container RSS-ish working set in bytes (usage only).
+
+        NOT RSS: this is docker stats' `memory.current - inactive_file`, which
+        carries page cache and reclaimable slab (see the MEM_STATELESS_SERVICES
+        header). Honest for a container that caches nothing; for anything that
+        touches disk use `anon_sample()`."""
         return {n: v["used"] for n, v in self.mem_stats().items()}
+
+    def container_names(self, services: tuple | list) -> dict[str, list[str]]:
+        """{compose service -> [container names]} for this project, one call."""
+        rc, out, err = run(
+            ["docker", "ps",
+             "--filter", f"label=com.docker.compose.project={self.project}",
+             "--format", "{{.Label \"com.docker.compose.service\"}}\t{{.Names}}"],
+            DOCKER_TIMEOUT)
+        if rc != 0:
+            warn(f"docker ps for container names failed: {err.strip()}")
+            return {}
+        wanted = set(services)
+        found: dict[str, list[str]] = {}
+        for line in out.splitlines():
+            if "\t" not in line:
+                continue
+            svc, name = line.split("\t", 1)
+            if svc in wanted and name.strip():
+                found.setdefault(svc, []).append(name.strip())
+        return {k: sorted(v) for k, v in found.items()}
+
+    def cgroup_anon(self, container: str) -> int:
+        """ANONYMOUS bytes of one container's cgroup — the memory that cannot
+        be reclaimed and therefore the memory that OOM-kills it.
+
+        Read from the container's own `memory.stat` (v2 `anon`; v1 falls back
+        to `total_rss`). -1 means UNREADABLE, never 0: a gate must not read a
+        failed probe as a flat container."""
+        rc, out, err = run(
+            ["docker", "exec", container, "cat", "/sys/fs/cgroup/memory.stat"],
+            DOCKER_TIMEOUT)
+        if rc != 0:
+            rc, out, err = run(
+                ["docker", "exec", container, "cat",
+                 "/sys/fs/cgroup/memory/memory.stat"], DOCKER_TIMEOUT)
+        if rc != 0:
+            warn(f"cgroup memory.stat unreadable in {container}: {err.strip()[:200]}")
+            return -1
+        fields: dict[str, int] = {}
+        for line in out.splitlines():
+            parts = line.split()
+            if len(parts) == 2 and parts[1].lstrip("-").isdigit():
+                fields[parts[0]] = int(parts[1])
+        for key in ("anon", "total_rss", "rss"):   # v2, then v1
+            if key in fields:
+                return fields[key]
+        warn(f"no anon/rss field in {container}'s memory.stat")
+        return -1
+
+    def anon_sample(self, services: tuple | list) -> dict[str, int]:
+        """{container name -> anonymous bytes} for the given compose services."""
+        sample: dict[str, int] = {}
+        for names in self.container_names(services).values():
+            for name in names:
+                sample[name] = self.cgroup_anon(name)
+        return sample
 
     # -- API ----------------------------------------------------------------
     def login(self) -> None:
@@ -662,16 +859,37 @@ class Stack:
         return run(cmd, timeout, input_text)
 
     def end_offset(self, topic: str) -> int:
+        """Sum of the LOG-END-OFFSETs across EVERY partition of `topic`.
+
+        THE DEFECT THIS FIXES (2026-08-29). This asked for `<topic>:0` and
+        returned partition 0 alone, while keyed injection deliberately puts a
+        whole tenant on ONE partition — measured: the harness's traffic lands
+        on partition 3. So the preflight offset heuristic and the accounting
+        baseline both looked at a partition the run never wrote to, and read a
+        900,000-event injection as "nothing happened". A topic-wide number is
+        the only one either caller can mean."""
         rc, out, err = self.kafka_tool(
-            "kafka-get-offsets.sh", ["--topic-partitions", f"{topic}:0"])
+            "kafka-get-offsets.sh", ["--topic", topic])
         if rc != 0:
             warn(f"kafka-get-offsets {topic} failed: {err.strip()[:200]}")
             return -1
+        total, seen = 0, 0
         for line in out.splitlines():
-            parts = line.strip().split(":")
-            if len(parts) == 3 and parts[0] == topic:
-                return int(parts[2])
-        return -1
+            # `topic:partition:offset`; a partition with no leader prints an
+            # empty offset, which is missing evidence, not a zero.
+            parts = line.strip().rsplit(":", 2)
+            if len(parts) != 3 or parts[0] != topic:
+                continue
+            try:
+                total += int(parts[2])
+            except ValueError:
+                warn(f"kafka-get-offsets {topic}: unreadable offset in {line.strip()!r}")
+                return -1
+            seen += 1
+        if not seen:
+            warn(f"kafka-get-offsets {topic}: no partition rows in output")
+            return -1
+        return total
 
     def group_lag(self, group: str) -> dict:
         """{topic: {current,end,lag}}, plus `_total` lag, `_members` count,
@@ -759,6 +977,10 @@ class Stack:
         produce. Every per-replica capacity figure from null-keyed runs is a
         per-HALF-tenant figure. Keyed injection is therefore the default; the
         legacy shape survives only behind an explicit `--producer-key none`.
+
+        RETURNS (ok, reason). `ok` means EVERY line reached the broker — not
+        merely that the tool exited 0. See PRODUCER_HARDENING_ARGS above for
+        why those are two different claims and what it cost to learn that.
         """
         if key is not None:
             if "\t" in key:
@@ -770,12 +992,41 @@ class Stack:
             payload = "\n".join(lines) + "\n"
             extra = []
         # Producer time scales with payload; bound generously but finitely.
+        # The tool bound must outlive delivery.timeout.ms, or a batch still
+        # legitimately retrying is killed by `docker exec` — trading a silent
+        # drop for a loud one, but a needless one.
+        tool_timeout = max(KAFKA_TOOL_TIMEOUT,
+                           PRODUCER_DELIVERY_TIMEOUT_MS // 1000 + 60,
+                           30 + len(lines) // 500)
         rc, _, err = self.kafka_tool(
-            "kafka-console-producer.sh", ["--topic", topic] + extra,
-            input_text=payload, timeout=max(KAFKA_TOOL_TIMEOUT, 30 + len(lines) // 500),
+            "kafka-console-producer.sh",
+            ["--topic", topic] + PRODUCER_HARDENING_ARGS + extra,
+            input_text=payload, timeout=tool_timeout,
             config_flag="--producer.config")
+        stderr = err.strip()
         if rc != 0:
-            return False, err.strip()[:400]
+            return False, (f"kafka-console-producer exit {rc}: "
+                           f"{stderr[:400] or '[no output]'}")
+        # rc == 0 IS NOT SUCCESS (16.1). The async send callback logs a dropped
+        # record and leaves the exit code alone, so the stderr is the only
+        # evidence that a record was lost — read it, count it, and fail.
+        if not stderr:
+            return True, ""
+        dropped = [ln for ln in stderr.splitlines()
+                   if PRODUCER_SEND_ERROR_RE.search(ln)]
+        if dropped:
+            return False, (
+                f"kafka-console-producer exited 0 but LOGGED {len(dropped)} "
+                f"send failure(s) of {len(lines)} records on {topic} — records "
+                f"were dropped, not delivered (first: {dropped[0].strip()[:240]})")
+        if PRODUCER_STDERR_ANOMALY_RE.search(stderr):
+            return False, (
+                f"kafka-console-producer exited 0 with unrecognised stderr on "
+                f"{topic} — unknown is not clean: {stderr[:400]}")
+        # Stderr with no error/exception marker: not a known loss shape, so it
+        # does not fail the produce — but it is never discarded either. It goes
+        # to the launcher log where the operator sees it (16.1).
+        warn(f"kafka-console-producer stderr on {topic}: {stderr[:400]}")
         return True, ""
 
     def registry_tenant(self, identity: str) -> str:
@@ -822,6 +1073,13 @@ class Stack:
         if rc != 0:
             return False, err.strip()[:400]
         return True, out.strip()
+
+    def ch_now(self) -> str:
+        """ClickHouse's own wall clock, as a DateTime literal. The metric_log
+        window must be bounded on the SERVER's clock, not the harness host's —
+        a few seconds of drift silently changes which run's peak is judged."""
+        ok, out = self.ch("SELECT toString(now())")
+        return out.strip() if ok else ""
 
     # -- OpenSearch ---------------------------------------------------------
     def os_req(self, role_env: str, user: str, url_path: str,
@@ -1251,6 +1509,40 @@ DLQ_EXPECTED_REASONS = frozenset({"identity_unattributable"})
 # which is the registry-propagation edge at the start of a burst. 1% leaves that
 # headroom while still failing a ~10x regression.
 DLQ_EXPECTED_MAX_FRACTION = 0.01
+
+# ── The burst is WORK-boxed, never TIME-boxed (2026-08-29) ─────────────────
+#
+# THE DEFECT THIS EXISTS FOR. The two 2.5K T-nominal runs of 2026-08-29 were
+# supposed to be the same ratified workload; they were not:
+#
+#   p2-s04-08290653   injected 900001 events in 900s (~1000/s; fleet=900000)
+#   p2-s04b-08290858  injected 870001 events in 904s  (~963/s; fleet=870000)
+#                     ...and still printed [PASS] burst.
+#
+# The lane loop was bounded by the WALL CLOCK (`while elapsed < duration`) and
+# generated each chunk's quota from the rate sampled at that moment. When the
+# producer ran slow (run b: median chunk produce 7.95 s, 22 chunks over 10 s,
+# peak 31.65 s) the loop fell behind its own pacing, three of the ninety 10 s
+# chunks never came around, and 30,000 events were NEVER GENERATED. The fleet
+# had silently become a function of the achieved send rate — and every
+# downstream TTUR/completion number is a comparison that assumes an identical
+# workload. So:
+#
+#   * the plan is a pure function of the PROFILE (rate x duration on a nominal
+#     chunk clock) — `_lane_schedule()`; two runs of one profile plan the same
+#     events to the event, whatever the box is doing that day;
+#   * a slow injector EXTENDS the window (up to BURST_WINDOW_MAX_FACTOR x the
+#     profile window) instead of shrinking the workload;
+#   * a fleet not injected whole inside that bound FAILS burst, naming the
+#     shortfall, the achieved rate and the elapsed time. A truncated workload
+#     is not a slower run of the same experiment — it is a different one.
+BURST_CHUNK_SECS = 10
+# How far the window may stretch to absorb a slow injector before the run is
+# called: 1.5x the profile window (a 15 min burst may take up to 22.5 min).
+# Past that the box is not merely slow, and a burst that long has stopped
+# being the profile's arrival shape anyway.
+BURST_WINDOW_MAX_FACTOR = float(
+    os.environ.get("MLX_BURST_WINDOW_MAX_FACTOR", "1.5"))
 
 
 # ---------------------------------------------------------------------------
@@ -2101,6 +2393,16 @@ class Harness:
         # until burst() completes; memflat says so and falls back to the cold
         # baseline rather than passing silently on a missing sample.
         self.warm_mem: dict[str, int] = {}
+        # The same anchor measured on cgroup ANONYMOUS memory, for the services
+        # whose docker-stats figure is mostly page cache (MEM_STATELESS_SERVICES
+        # header). Empty for the same reason and reported the same way.
+        self.warm_anon: dict[str, int] = {}
+        # Running peak of ClickHouse's OWN memory accounting, sampled by this
+        # harness at preflight / end of burst / memflat. Used when
+        # system.metric_log cannot answer for the run window; -1 = never
+        # sampled, which memflat reports rather than reading as zero.
+        self.ch_mem_peak: dict[str, int] = {"MemoryTracking": -1,
+                                            "MergesMutationsMemoryTracking": -1}
         # Signal policy (see InterruptGuard): installed by main() so a run
         # started from a closing terminal (SIGHUP) or a `kill` (SIGTERM) still
         # unwinds into cleanup instead of leaving 2,500 devices standing.
@@ -2289,6 +2591,16 @@ class Harness:
 
         # Baselines.
         self.baseline["mem"] = self.stack.mem_sample()
+        # The page-cache-free anchor for the stateful services, plus the two
+        # ClickHouse baselines memflat's §(c) clauses are judged against: the
+        # window start on CH's OWN clock (metric_log is queried by event_time)
+        # and the part count an idle store carries before this run's inserts.
+        self.baseline["mem_anon"] = self.stack.anon_sample(self._anon_services())
+        self.baseline["ch_window_start"] = self.stack.ch_now()
+        self.baseline["ch_max_part_count"] = self._ch_number(
+            "SELECT value FROM system.asynchronous_metrics "
+            "WHERE metric = 'MaxPartCountForPartition'")
+        self._ch_sample_metrics()
         self.baseline["kafka_syslog_end"] = self.stack.end_offset("netops.syslog")
         self.baseline["corr_lag_total"] = corr_lag.get("_total", -1)
         self.baseline["router_lag_total"] = router_lag.get("_total", -1)
@@ -2754,20 +3066,46 @@ class Harness:
         every catalog), always the first created device, fixed seq marker."""
         return self._syslog_event(self.created_ids[0], 999_999, mix_name="single")
 
+    def _lane_schedule(self) -> list[dict]:
+        """The RATIFIED CHUNK PLAN: how many events each lane injects in each
+        10 s chunk of the profile's window.
+
+        Derived from the PROFILE ALONE — rate x duration on a NOMINAL chunk
+        clock (chunk i covers seconds [i*10, i*10+10)), never from the wall
+        clock and never from the achieved send rate. Two runs of the same
+        profile therefore plan the identical fleet, event for event, however
+        fast or slow the box injects it; the loop's only freedom is HOW LONG
+        it takes (see BURST_WINDOW_MAX_FACTOR).
+
+        Fractional rates carry per lane, so a 0.35 eps lane still integrates
+        exactly over the window rather than truncating every chunk to zero.
+        """
+        lanes = self.profile.get("lanes") or []
+        duration = int(self.args.burst_minutes * 60)
+        accs = [0.0] * len(lanes)
+        plan: list[dict] = []
+        for start in range(0, duration, BURST_CHUNK_SECS):
+            end = min(start + BURST_CHUNK_SECS, duration)
+            row: dict = {}
+            for i, (name, _share, _mix, rate) in enumerate(lanes):
+                # Integrate the rate over the chunk's seconds — exact for the
+                # ramp profiles, identical to rate*chunk_secs for flat ones.
+                inc = (sum(rate(t) for t in range(start, end)) if callable(rate)
+                       else float(rate) * (end - start))
+                accs[i] += inc
+                k = int(accs[i])
+                accs[i] -= k
+                row[name] = k
+            plan.append(row)
+        return plan
+
     def _planned_total(self) -> int:
-        """Events this run intends to inject — lane-integrated for storm
-        profiles, args-derived otherwise."""
-        lanes = self.profile.get("lanes")
-        duration = self.args.burst_minutes * 60
-        if not lanes:
-            return self.args.eps * duration
-        total = 0.0
-        for _name, _share, _mix, rate in lanes:
-            if callable(rate):
-                total += sum(rate(t) for t in range(duration))
-            else:
-                total += rate * duration
-        return int(total)
+        """Events this run intends to inject — the sum of the ratified chunk
+        plan for lane profiles, args-derived otherwise. A fixed function of
+        the profile in both cases."""
+        if not self.profile.get("lanes"):
+            return self.args.eps * int(self.args.burst_minutes * 60)
+        return sum(sum(row.values()) for row in self._lane_schedule())
 
     def _lane_states(self) -> list[dict]:
         """Split this run's devices into the profile's lane pools (contiguous
@@ -2786,27 +3124,41 @@ class Harness:
 
     def _burst_lanes(self, ev: dict) -> bool:
         """Multi-lane scheduled injection for the ratified storm profiles
-        (S1 / S1-long / S2-ramp / S4-chatter): each lane owns a device pool, a
-        mix and a rate (constant or a function of elapsed seconds — the ramp).
-        Wall-clock paced in 10 s chunks like the legacy loop; per-lane
-        fractional-rate accumulators keep long-run rates exact."""
-        chunk_secs = 10
-        duration = self.args.burst_minutes * 60
+        (S1 / S1-long / S2-ramp / S4-chatter / the T-family): each lane owns a
+        device pool, a mix and a rate (constant or a function of elapsed
+        seconds — the ramp).
+
+        WORK-BOXED, NOT TIME-BOXED. The chunk plan comes from
+        `_lane_schedule()` (profile-fixed), and this loop's job is to inject
+        ALL of it: a slow producer stretches the window up to
+        BURST_WINDOW_MAX_FACTOR x the profile window, and a fleet still not
+        whole at that bound FAILS the phase with the shortfall. Pacing is
+        unchanged for a healthy run — chunk i is released at t0 + i*10 s.
+        """
+        chunk_secs = BURST_CHUNK_SECS
+        duration = int(self.args.burst_minutes * 60)
+        factor = max(1.0, float(getattr(self.args, "burst_window_factor",
+                                        BURST_WINDOW_MAX_FACTOR)))
+        window_bound = duration * factor
+        plan = self._lane_schedule()
+        fleet_planned = sum(sum(row.values()) for row in plan)
+        fleet_injected = 0
         lanes = self._lane_states()
         t0 = time.monotonic()
         seq_global = 0
         chunks: list[dict] = []
-        while True:
+        bound_hit = False
+        for idx, row in enumerate(plan):
             elapsed = time.monotonic() - t0
-            if elapsed >= duration:
+            if elapsed >= window_bound:
+                # Out of window with chunks still unsent. Do NOT quietly
+                # shrink the fleet — stop and report the shortfall.
+                bound_hit = True
                 break
             lines: list[str] = []
             detail: dict = {}
             for ln in lanes:
-                r = ln["rate"](elapsed) if callable(ln["rate"]) else ln["rate"]
-                ln["acc"] += r * chunk_secs
-                k = int(ln["acc"])
-                ln["acc"] -= k
+                k = row[ln["name"]]
                 pool = ln["pool"]
                 for _ in range(k):
                     dev_i = ln["seq"] % len(pool)
@@ -2822,34 +3174,56 @@ class Harness:
                                                     mix_seq=mix_seq))
                     ln["seq"] += 1
                     seq_global += 1
-                ln["sent"] += k
                 detail[ln["name"]] = k
             tp = time.monotonic()
+            ok = True
             if lines:
                 ok, err = self.stack.produce("netops.syslog", lines,
                                              key=self.producer_key)
                 if not ok:
                     self.produce_failures.append(err)
                     if len(self.produce_failures) >= 3:
+                        chunks.append({"i": idx, "t": round(elapsed, 1),
+                                       "lanes": detail, "n": len(lines),
+                                       "ok": False,
+                                       "produce_s": round(time.monotonic() - tp, 2)})
                         break
                 else:
+                    # Only a chunk that reached the bus counts — towards the
+                    # fleet, the lane tallies and the balance equation alike.
                     self.injected_total += len(lines)
-            chunks.append({"t": round(elapsed, 1), "lanes": detail,
-                           "n": len(lines),
+                    fleet_injected += len(lines)
+                    for ln in lanes:
+                        ln["sent"] += detail[ln["name"]]
+            chunks.append({"i": idx, "t": round(elapsed, 1), "lanes": detail,
+                           "n": len(lines), "ok": ok,
                            "produce_s": round(time.monotonic() - tp, 2)})
-            ahead = (len(chunks) * chunk_secs) - (time.monotonic() - t0)
+            ahead = ((idx + 1) * chunk_secs) - (time.monotonic() - t0)
             if ahead > 0:
                 time.sleep(ahead)
         self.burst_seconds = time.monotonic() - t0
+        rate_achieved = fleet_injected / max(self.burst_seconds, 1e-9)
         actual_eps = self.injected_total / max(self.burst_seconds, 1e-9)
+        shortfall = fleet_planned - fleet_injected
         ev.update({
             "workload_class": self.profile["workload_class"],
-            "target_events": self._planned_total(),
+            "target_events": fleet_planned,
+            # The workload contract, stated in three numbers: what the profile
+            # ratified, what reached the bus, and how fast it got there.
+            "fleet_planned": fleet_planned,
+            "fleet_injected": fleet_injected,
+            "fleet_shortfall": shortfall,
+            "rate_achieved": round(rate_achieved, 1),
             "injected_total": self.injected_total,
             "burst_seconds": round(self.burst_seconds, 1),
+            "window_s": duration,
+            "window_bound_s": round(window_bound, 1),
+            "window_extended": self.burst_seconds > duration + chunk_secs,
+            "window_bound_exceeded": bound_hit,
             "actual_eps": round(actual_eps, 1),
             "producer_key_mode": self.args.producer_key,
             "chunks": len(chunks),
+            "chunks_planned": len(plan),
             "lanes": {ln["name"]: {"devices": len(ln["pool"]), "mix": ln["mix"],
                                    "sent": ln["sent"]} for ln in lanes},
             "produce_failures": self.produce_failures,
@@ -2859,11 +3233,27 @@ class Harness:
             return self.phase("burst", "FAIL", ev,
                               f"{len(self.produce_failures)} produce failures — accounting "
                               f"would be dishonest (first: {self.produce_failures[0][:160]})")
+        if shortfall > 0:
+            return self.phase(
+                "burst", "FAIL", ev,
+                f"[{self.profile['workload_class']}] WORKLOAD TRUNCATED: injected "
+                f"{fleet_injected} of the profile's ratified {fleet_planned} events "
+                f"(shortfall {shortfall}; {len(chunks)} of {len(plan)} chunks) — the "
+                f"injector sustained only ~{rate_achieved:.0f}/s over "
+                f"{self.burst_seconds:.0f}s against a {duration}s window extended to a "
+                f"{window_bound:.0f}s bound. A short fleet is a DIFFERENT experiment: "
+                f"every TTUR/completion comparison downstream assumes this run's "
+                f"workload is identical to the last one's")
         lane_txt = ", ".join(f"{ln['name']}={ln['sent']}" for ln in lanes)
+        extended = ("" if not ev["window_extended"] else
+                    f" [window extended {duration}s -> {self.burst_seconds:.0f}s, "
+                    f"bound {window_bound:.0f}s]")
         return self.phase("burst", "PASS", ev,
                           f"[{self.profile['workload_class']}] injected "
-                          f"{self.injected_total} events in {self.burst_seconds:.0f}s "
-                          f"(~{actual_eps:.0f}/s; {lane_txt})")
+                          f"fleet_injected={fleet_injected} of "
+                          f"fleet_planned={fleet_planned} events in "
+                          f"{self.burst_seconds:.0f}s (rate_achieved="
+                          f"{rate_achieved:.0f}/s; {lane_txt}){extended}")
 
     def _burst_internal(self) -> bool:
         ev: dict = {}
@@ -2943,18 +3333,36 @@ class Harness:
                               "(durability/DLQ evidence attached)")
 
         # Storm profiles take the multi-lane scheduled path; everything else
-        # (legacy, T-family, S3) keeps the historical single-lane loop below,
-        # byte-identical, for continuity with the evidence trail.
+        # (legacy) keeps the historical single-lane loop below — the same
+        # events in the same order, for continuity with the evidence trail.
         if self.profile.get("lanes"):
             return self._burst_lanes(ev)
+        return self._burst_single_lane(ev)
 
-        # The burst proper: eps x 60 x minutes events, paced in chunks.
-        chunk_secs = 10
-        target = self.args.eps * 60 * self.args.burst_minutes
+    def _burst_single_lane(self, ev: dict) -> bool:
+        """The historical single-lane loop (`--profile legacy`), under the same
+        workload contract as the lane path: the fleet is eps x duration, a slow
+        producer stretches the window up to the bound, and a fleet that is not
+        whole FAILS rather than silently redefining the experiment."""
+        # The burst proper: eps x 60 x minutes events, paced in chunks. Like
+        # the lane path this is WORK-boxed — the fleet is eps x duration, a
+        # fixed function of the args, and a slow producer stretches the window
+        # (bounded) rather than shrinking the workload.
+        chunk_secs = BURST_CHUNK_SECS
+        duration = int(self.args.burst_minutes * 60)
+        factor = max(1.0, float(getattr(self.args, "burst_window_factor",
+                                        BURST_WINDOW_MAX_FACTOR)))
+        window_bound = duration * factor
+        target = self.args.eps * duration
+        fleet_injected = 0
         seq = 0
         t0 = time.monotonic()
         chunks = []
+        bound_hit = False
         while seq < target:
+            if time.monotonic() - t0 >= window_bound:
+                bound_hit = True
+                break
             chunk_n = min(self.args.eps * chunk_secs, target - seq)
             lines = [self._syslog_event(self.created_ids[(seq + j) % len(self.created_ids)],
                                         seq + j)
@@ -2968,6 +3376,7 @@ class Harness:
                     break
             else:
                 self.injected_total += chunk_n
+                fleet_injected += chunk_n
             chunks.append({"n": chunk_n, "ok": ok, "produce_s": round(time.monotonic() - tp, 2)})
             seq += chunk_n
             # Pace to the wall clock; if production is slower than the target
@@ -2976,10 +3385,20 @@ class Harness:
             if ahead > 0:
                 time.sleep(ahead)
         self.burst_seconds = time.monotonic() - t0
+        rate_achieved = fleet_injected / max(self.burst_seconds, 1e-9)
         actual_eps = self.injected_total / max(self.burst_seconds, 1e-9)
+        shortfall = target - fleet_injected
         ev.update({
             "target_events": target, "injected_total": self.injected_total,
+            "fleet_planned": target,
+            "fleet_injected": fleet_injected,
+            "fleet_shortfall": shortfall,
+            "rate_achieved": round(rate_achieved, 1),
             "burst_seconds": round(self.burst_seconds, 1),
+            "window_s": duration,
+            "window_bound_s": round(window_bound, 1),
+            "window_extended": self.burst_seconds > duration + chunk_secs,
+            "window_bound_exceeded": bound_hit,
             "actual_eps": round(actual_eps, 1),
             "target_eps": self.args.eps,
             "event_mix": self.args.event_mix,
@@ -2993,9 +3412,23 @@ class Harness:
             return self.phase("burst", "FAIL", ev,
                               f"{len(self.produce_failures)} produce failures — accounting "
                               f"would be dishonest (first: {self.produce_failures[0][:160]})")
+        if shortfall > 0:
+            return self.phase(
+                "burst", "FAIL", ev,
+                f"WORKLOAD TRUNCATED: injected {fleet_injected} of the planned "
+                f"{target} events (shortfall {shortfall}) — the injector sustained "
+                f"only ~{rate_achieved:.0f}/s against a target {self.args.eps}/s over "
+                f"{self.burst_seconds:.0f}s, past the {window_bound:.0f}s bound on a "
+                f"{duration}s window. A short fleet is a DIFFERENT experiment: every "
+                f"comparison downstream assumes an identical workload")
+        extended = ("" if not ev["window_extended"] else
+                    f" [window extended {duration}s -> {self.burst_seconds:.0f}s, "
+                    f"bound {window_bound:.0f}s]")
         return self.phase("burst", "PASS", ev,
-                          f"injected {self.injected_total} events in {self.burst_seconds:.0f}s "
-                          f"(~{actual_eps:.0f}/s, target {self.args.eps}/s)")
+                          f"injected fleet_injected={fleet_injected} of "
+                          f"fleet_planned={target} events in {self.burst_seconds:.0f}s "
+                          f"(rate_achieved={rate_achieved:.0f}/s, target "
+                          f"{self.args.eps}/s){extended}")
 
     # -- phase 4: drain ------------------------------------------------------
     def drain(self) -> bool:
@@ -3591,10 +4024,17 @@ class Harness:
         """
         end_stats = self.stack.mem_stats()
         end = {n: v["used"] for n, v in end_stats.items()}
+        end_anon = self.stack.anon_sample(self._anon_services())
         cold = self.baseline.get("mem", {})
         warm = self.warm_mem or {}
+        cold_anon = self.baseline.get("mem_anon", {}) or {}
+        warm_anon = self.warm_anon or {}
         anchor = "warm (end of burst)" if warm else "cold baseline (no warm sample — burst did not complete)"
         ref = warm or cold
+        ref_anon = warm_anon or cold_anon
+        samples = {"cold": cold, "warm": warm, "end": end, "ref": ref,
+                   "cold_anon": cold_anon, "warm_anon": warm_anon,
+                   "end_anon": end_anon, "ref_anon": ref_anon}
         rows, problems = [], []
         # Replica discovery by NAME PATTERN, not a hardcoded -1 index: after a
         # `--force-recreate --scale correlation=2` compose numbers replicas
@@ -3602,7 +4042,8 @@ class Harness:
         # ("no memory sample", gate red on a rename — 2026-08-24). Every
         # replica present in ANY sample is judged; one that appears without an
         # anchor (scaled up mid-run) still fails honestly as missing evidence.
-        seen = set(cold) | set(warm) | set(end)
+        seen = (set(cold) | set(warm) | set(end)
+                | set(cold_anon) | set(warm_anon) | set(end_anon))
         for svc in MEM_SERVICES:
             pref = f"{self.args.project}-{svc}-"
             names = sorted(n for n in seen
@@ -3611,47 +4052,317 @@ class Harness:
                 problems.append(f"{pref}N: no replica seen in any memory sample")
                 continue
             for name in names:
-                self._memflat_judge(name, cold, warm, end, end_stats, ref,
+                self._memflat_judge(name, svc, samples, end_stats,
                                     rows, problems)
+        ch_ev, ch_problems, ch_summary = self._clickhouse_memory_verdict(rows)
+        problems += ch_problems
         ev = {"factor": self.args.mem_factor, "anchor": anchor,
               "headroom_percent": self.args.mem_headroom_percent,
-              "containers": rows}
+              "stateless_services": list(MEM_STATELESS_SERVICES),
+              "containers": rows, "clickhouse": ch_ev}
         status = "PASS" if not problems else "FAIL"
+        tail = f" | {ch_summary}" if ch_summary else ""
         return self.phase("memflat", status, ev,
-                          "; ".join(problems) if problems else
+                          ("; ".join(problems) + tail) if problems else
                           f"all {len(rows)} key containers within x{self.args.mem_factor} "
                           f"of the {anchor} sample and under "
-                          f"{self.args.mem_headroom_percent}% of their caps")
+                          f"{self.args.mem_headroom_percent}% of their caps{tail}")
 
-    def _memflat_judge(self, name: str, cold: dict, warm: dict, end: dict,
-                       end_stats: dict, ref: dict,
-                       rows: list, problems: list) -> None:
-        """Judge ONE container against the memflat contract (extracted 2026-08-24
-        so scaled services judge every replica; body unchanged)."""
-        c, w, e = cold.get(name, -1), warm.get(name, -1), end.get(name, -1)
-        r = ref.get(name, -1)
+    def _anon_services(self) -> tuple:
+        """The services judged on cgroup anonymous memory — everything that
+        caches, i.e. everything but MEM_STATELESS_SERVICES."""
+        return tuple(s for s in MEM_SERVICES if s not in MEM_STATELESS_SERVICES)
+
+    def _memflat_judge(self, name: str, svc: str, samples: dict,
+                       end_stats: dict, rows: list, problems: list) -> None:
+        """Judge ONE container against the memflat contract.
+
+        The INSTRUMENT depends on the service (2026-08-29): a stateless one is
+        judged on docker stats, everything that holds page cache on its cgroup
+        `anon`. The docker-stats numbers stay in the row either way — reported,
+        not judged, exactly like the cold->warm step above."""
+        stateless = svc in MEM_STATELESS_SERVICES
+        instrument = "docker_stats" if stateless else "cgroup_anon"
+        keys = (("cold", "warm", "end", "ref") if stateless else
+                ("cold_anon", "warm_anon", "end_anon", "ref_anon"))
+        c, w, e, r = (samples[k].get(name, -1) for k in keys)
         limit = end_stats.get(name, {}).get("limit", -1)
         grew = (e / r) if r > 0 and e > 0 else -1
         pct_limit = round(100.0 * e / limit, 1) if limit > 0 and e > 0 else None
-        rows.append({"container": name, "cold_bytes": c, "warm_bytes": w,
+        rows.append({"container": name, "service": svc,
+                     "instrument": instrument,
+                     "cold_bytes": c, "warm_bytes": w,
                      "end_bytes": e, "limit_bytes": limit,
                      "pct_of_limit": pct_limit,
                      "ratio_vs_anchor": round(grew, 3) if grew > 0 else None,
-                     "ratio_cold_to_end": round(e / c, 3) if c > 0 and e > 0 else None})
+                     "ratio_cold_to_end": round(e / c, 3) if c > 0 and e > 0 else None,
+                     # Unjudged for a stateful service: page cache and slab put
+                     # this figure ~3x above the container's real footprint.
+                     "docker_stats_end_bytes": samples["end"].get(name, -1),
+                     "docker_stats_ratio_unjudged": (
+                         None if stateless else
+                         self._ratio(samples["end"].get(name, -1),
+                                     samples["ref"].get(name, -1)))})
         if r <= 0 or e <= 0:
-            problems.append(f"{name}: no memory sample (anchor {r}, end {e})")
+            problems.append(
+                f"{name}: no {instrument} sample (anchor {r}, end {e})"
+                + ("" if stateless else
+                   " — cgroup memory.stat unreadable, and docker stats cannot "
+                   "substitute for it (it is mostly page cache)"))
             return
         # 64 MiB absolute floor: small containers jitter past any ratio.
         if grew > self.args.mem_factor and (e - r) > 64 * 1024**2:
             problems.append(
-                f"{name}: LEAK SLOPE {r / 1024**2:.0f} -> {e / 1024**2:.0f} MiB "
-                f"(x{grew:.2f} > x{self.args.mem_factor}) after input stopped")
+                f"{name}: LEAK SLOPE ({instrument}) {r / 1024**2:.0f} -> "
+                f"{e / 1024**2:.0f} MiB (x{grew:.2f} > x{self.args.mem_factor}) "
+                f"after input stopped")
         # The OOM path, self-relative to the plan-sized cap (#102).
         if pct_limit is not None and pct_limit > self.args.mem_headroom_percent:
             problems.append(
-                f"{name}: {e / 1024**2:.0f} MiB is {pct_limit}% of its "
+                f"{name}: {e / 1024**2:.0f} MiB ({instrument}) is {pct_limit}% of its "
                 f"{limit / 1024**2:.0f} MiB cap (> {self.args.mem_headroom_percent}%) "
                 f"— one burst from an OOM kill")
+
+    @staticmethod
+    def _ratio(value: float, anchor: float) -> float | None:
+        return round(value / anchor, 3) if value > 0 and anchor > 0 else None
+
+    # -- memflat, ClickHouse clauses (2) and (3) -----------------------------
+    #
+    # docs/scale/P2_CLICKHOUSE_MEMFLAT_2026-08-29.md §(c). A store that writes
+    # 50 GiB per run does not answer to an RSS ratio; it answers to its OWN
+    # memory accounting and to the parts it leaves behind:
+    #
+    #   (2) peak MemoryTracking < 85 % of the effective max_server_memory_usage
+    #       AND peak MergesMutationsMemoryTracking < 50 % of it. On the run that
+    #       failed this gate for the wrong reason, these read 95.2 % and 83.0 %:
+    #       the finding worth gating on, and the one nobody was told about.
+    #   (3) MaxPartCountForPartition returns to within +20 % of its preflight
+    #       value once input stops, and stays under parts_to_delay_insert / 2.
+    #       That is what a stateful store legitimately owes after a burst.
+    def _ch_number(self, query: str) -> float:
+        """One numeric ClickHouse scalar. -1.0 means UNANSWERED — never 0, so a
+        failed probe can never read as a healthy measurement."""
+        ok, out = self.stack.ch(query)
+        if not ok:
+            warn(f"ClickHouse probe failed ({out[:160]}) for: {query[:90]}")
+            return -1.0
+        head = out.strip().splitlines()[0].split("\t")[0] if out.strip() else ""
+        try:
+            return float(head)
+        except ValueError:
+            return -1.0
+
+    def _ch_sample_metrics(self) -> None:
+        """Fold a live `system.metrics` reading into the running peak. Cheap,
+        and it is the only peak available if `system.metric_log` is disabled."""
+        ok, out = self.stack.ch(
+            "SELECT metric, toInt64(value) FROM system.metrics WHERE metric IN "
+            "('MemoryTracking', 'MergesMutationsMemoryTracking')")
+        if not ok:
+            warn(f"ClickHouse system.metrics sample failed: {out[:160]}")
+            return
+        for line in out.splitlines():
+            if "\t" not in line:
+                continue
+            metric, raw = line.split("\t", 1)
+            try:
+                value = _ch_counter(raw)
+            except ValueError:
+                continue
+            if metric in self.ch_mem_peak and value > self.ch_mem_peak[metric]:
+                self.ch_mem_peak[metric] = value
+
+    def _ch_memory_cap(self) -> tuple[float, str]:
+        """The effective `max_server_memory_usage` in bytes, and where it came
+        from. Ours is configured 0 = "derive from the ratio", so the cap is
+        `max_server_memory_usage_to_ram_ratio x CGroupMemoryTotal`. If the
+        cgroup total is invisible the cap is HOST-derived — the very trap that
+        makes `merges_mutations_memory_usage_soft_limit` inert here — so the
+        source is reported with the number."""
+        configured = self._ch_number(
+            "SELECT toFloat64(value) FROM system.server_settings "
+            "WHERE name = 'max_server_memory_usage'")
+        if configured > 0:
+            return configured, "server_settings.max_server_memory_usage"
+        ratio = self._ch_number(
+            "SELECT toFloat64(value) FROM system.server_settings "
+            "WHERE name = 'max_server_memory_usage_to_ram_ratio'")
+        total = self._ch_number(
+            "SELECT value FROM system.asynchronous_metrics "
+            "WHERE metric = 'CGroupMemoryTotal'")
+        source = "ratio x CGroupMemoryTotal"
+        if total <= 0:
+            total = self._ch_number(
+                "SELECT value FROM system.asynchronous_metrics "
+                "WHERE metric = 'OSMemoryTotal'")
+            source = ("ratio x OSMemoryTotal (CGroupMemoryTotal unseen — this "
+                      "cap is HOST-derived and larger than the container)")
+        if ratio > 0 and total > 0:
+            return ratio * total, source
+        return -1.0, "unreadable"
+
+    def _ch_memory_peaks(self) -> tuple[dict, str]:
+        """Peak MemoryTracking / merge memory over THIS RUN's window.
+
+        `system.metric_log` is the instrument; the harness's own
+        `system.metrics` samples are folded in as a floor, so a disabled
+        metric_log degrades the resolution instead of blinding the gate."""
+        peaks = {"MemoryTracking": -1, "MergesMutationsMemoryTracking": -1}
+        sources: list[str] = []
+        start = str(self.baseline.get("ch_window_start") or "")
+        # Zero trust even on our own server's clock: this string is spliced
+        # into SQL, so it must match a DateTime literal exactly or be dropped.
+        if re.fullmatch(r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}", start):
+            ok, out = self.stack.ch(
+                "SELECT max(CurrentMetric_MemoryTracking), "
+                "max(CurrentMetric_MergesMutationsMemoryTracking) "
+                "FROM system.metric_log "
+                f"WHERE event_time >= toDateTime('{start}')")
+            if ok and out.strip():
+                cells = out.strip().splitlines()[0].split("\t")
+                for i, key in enumerate(("MemoryTracking",
+                                         "MergesMutationsMemoryTracking")):
+                    try:
+                        peaks[key] = _ch_counter(cells[i])
+                    except (IndexError, ValueError):
+                        peaks[key] = -1
+                if peaks["MemoryTracking"] > 0:
+                    sources.append(f"system.metric_log since {start}")
+            elif not ok:
+                warn(f"ClickHouse metric_log peak query failed: {out[:160]}")
+        self._ch_sample_metrics()
+        for key, sampled in self.ch_mem_peak.items():
+            if sampled > peaks.get(key, -1):
+                peaks[key] = sampled
+                if "harness system.metrics samples" not in sources:
+                    sources.append("harness system.metrics samples")
+        return peaks, " + ".join(sources) if sources else "none"
+
+    def _ch_parts_settled(self) -> dict:
+        """Clause (3): parts come back down after input stops.
+
+        Bounded settle wait — merges that are still folding the burst's parts
+        are legitimate work, a part count that never returns is not."""
+        base = int(self.baseline.get("ch_max_part_count", -1) or -1)
+        delay_at = self._ch_number(
+            "SELECT toFloat64(value) FROM system.merge_tree_settings "
+            "WHERE name = 'parts_to_delay_insert'")
+        envelope = (max(base * CH_PART_COUNT_GROWTH_MAX,
+                        base + CH_PART_COUNT_FLOOR) if base >= 0 else -1.0)
+        budget = min(max(self.args.drain_factor * self.burst_seconds,
+                         CH_PART_SETTLE_INTERVAL_S), CH_PART_SETTLE_MAX_S)
+        deadline = time.monotonic() + budget
+        t0 = time.monotonic()
+        current = -1.0
+        while True:
+            current = self._ch_number(
+                "SELECT value FROM system.asynchronous_metrics "
+                "WHERE metric = 'MaxPartCountForPartition'")
+            if current < 0 or envelope < 0 or current <= envelope:
+                break
+            if time.monotonic() >= deadline:
+                break
+            time.sleep(CH_PART_SETTLE_INTERVAL_S)
+        waited = time.monotonic() - t0
+        out = {"baseline": base, "current": int(current) if current >= 0 else -1,
+               "envelope": round(envelope, 1) if envelope >= 0 else -1,
+               "parts_to_delay_insert": int(delay_at) if delay_at > 0 else -1,
+               "settle_budget_s": round(budget, 1),
+               "settle_waited_s": round(waited, 1),
+               "problems": []}
+        if base < 0 or current < 0:
+            out["problems"].append(
+                f"ClickHouse MaxPartCountForPartition unmeasurable (preflight "
+                f"{base}, now {int(current)}) — clause (3) cannot be judged")
+            return out
+        if current > envelope:
+            out["problems"].append(
+                f"clickhouse: parts NEVER SETTLED — MaxPartCountForPartition "
+                f"{int(current)} still above the +"
+                f"{(CH_PART_COUNT_GROWTH_MAX - 1) * 100:.0f}% envelope "
+                f"{envelope:.0f} (preflight {base}) after {waited:.0f}s of a "
+                f"{budget:.0f}s settle budget — merges are not keeping up with "
+                f"the parts this run created")
+        if delay_at > 0 and current >= delay_at / 2:
+            out["problems"].append(
+                f"clickhouse: MaxPartCountForPartition {int(current)} is at or "
+                f"past HALF of parts_to_delay_insert ({int(delay_at)}) — the "
+                f"next run starts inside the insert-throttling band")
+        return out
+
+    def _clickhouse_memory_verdict(self, rows: list) -> tuple[dict, list, str]:
+        """Clauses (2) and (3), plus the one-line summary of all three."""
+        if "clickhouse" not in MEM_SERVICES:
+            return {}, [], ""
+        problems: list[str] = []
+        cap, cap_source = self._ch_memory_cap()
+        peaks, peak_source = self._ch_memory_peaks()
+        ev = {"cap_bytes": int(cap) if cap > 0 else -1,
+              "cap_source": cap_source,
+              "peak_source": peak_source,
+              "peak_memory_tracking_bytes": peaks["MemoryTracking"],
+              "peak_merges_memory_bytes": peaks["MergesMutationsMemoryTracking"],
+              "memory_tracking_max_pct": CH_MEMORY_TRACKING_MAX_PCT,
+              "merges_memory_max_pct": CH_MERGE_MEMORY_MAX_PCT}
+        track_pct = merge_pct = None
+        if cap <= 0:
+            problems.append(
+                "clickhouse: effective max_server_memory_usage unreadable "
+                f"({cap_source}) — the OOM clause cannot be judged, and a "
+                "memory gate must not pass blind")
+        elif peaks["MemoryTracking"] < 0:
+            problems.append(
+                "clickhouse: MemoryTracking peak unmeasurable (system.metric_log "
+                "returned nothing for this run's window and no live sample "
+                "succeeded) — the OOM clause cannot be judged")
+        else:
+            track_pct = round(100.0 * peaks["MemoryTracking"] / cap, 1)
+            if track_pct > CH_MEMORY_TRACKING_MAX_PCT:
+                problems.append(
+                    f"clickhouse: peak MemoryTracking "
+                    f"{peaks['MemoryTracking'] / 1024**2:.0f} MiB is {track_pct}% "
+                    f"of its {cap / 1024**2:.0f} MiB server cap "
+                    f"(> {CH_MEMORY_TRACKING_MAX_PCT}%) — this run came that "
+                    f"close to MEMORY_LIMIT_EXCEEDED")
+            if peaks["MergesMutationsMemoryTracking"] < 0:
+                problems.append(
+                    "clickhouse: merge memory peak unmeasurable "
+                    "(MergesMutationsMemoryTracking absent) — clause (2) is "
+                    "only half judged")
+            else:
+                merge_pct = round(
+                    100.0 * peaks["MergesMutationsMemoryTracking"] / cap, 1)
+                if merge_pct > CH_MERGE_MEMORY_MAX_PCT:
+                    problems.append(
+                        f"clickhouse: peak MERGE memory "
+                        f"{peaks['MergesMutationsMemoryTracking'] / 1024**2:.0f} MiB "
+                        f"is {merge_pct}% of the {cap / 1024**2:.0f} MiB server cap "
+                        f"(> {CH_MERGE_MEMORY_MAX_PCT}%) — background merges alone "
+                        f"can starve the query/insert path")
+        ev["memory_tracking_pct"] = track_pct
+        ev["merges_memory_pct"] = merge_pct
+        parts = self._ch_parts_settled()
+        problems += parts.pop("problems")
+        ev["parts"] = parts
+        ch_row = next((r for r in rows if r.get("service") == "clickhouse"), None)
+        slope = "anon unmeasured"
+        if ch_row and ch_row.get("ratio_vs_anchor"):
+            slope = (f"anon {mib(ch_row['end_bytes'])} "
+                     f"(x{ch_row['ratio_vs_anchor']} vs anchor)")
+        # All three clauses in one line, always — a number the operator can
+        # read is the difference between "the gate is green" and "the store is
+        # at 95 % of its own cap and nobody said so".
+        summary = (
+            f"clickhouse {slope}; peak MemoryTracking "
+            f"{mib(peaks['MemoryTracking'])} = "
+            f"{'?' if track_pct is None else track_pct}% of cap {mib(cap)} "
+            f"(merges {mib(peaks['MergesMutationsMemoryTracking'])} = "
+            f"{'?' if merge_pct is None else merge_pct}%); "
+            f"MaxPartCountForPartition {parts['current']} "
+            f"(preflight {parts['baseline']}, envelope {parts['envelope']}, "
+            f"delay at {parts['parts_to_delay_insert']})")
+        return ev, problems, summary
 
     # -- phase 7: cleanup ----------------------------------------------------
     def cleanup(self) -> bool:
@@ -4126,6 +4837,9 @@ class Harness:
                         # the workload's caches/buffers are materialized but
                         # nothing new is arriving (see memflat's header).
                         self.warm_mem = self.stack.mem_sample()
+                        self.warm_anon = self.stack.anon_sample(
+                            self._anon_services())
+                        self._ch_sample_metrics()
                         self.drain()
                         # TRACKER 170: transport drain and ingest accounting
                         # both pass while the engine has evaluated nothing. The
@@ -4252,6 +4966,12 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
                     help="devices to create for the onboarding probe (default 1000)")
     ap.add_argument("--burst-minutes", type=int, default=5,
                     help="ingest burst duration in minutes (default 5)")
+    ap.add_argument("--burst-window-factor", type=float,
+                    default=BURST_WINDOW_MAX_FACTOR,
+                    help="how far the burst window may stretch to absorb a slow "
+                         "injector before the phase FAILS, as a multiple of the "
+                         f"profile window (default {BURST_WINDOW_MAX_FACTOR}). The "
+                         "fleet size is NEVER reduced to fit the window")
     ap.add_argument("--eps", type=int, default=2000,
                     help="target injected events/second — pick ~10x your nominal "
                          "syslog rate and ABOVE the ~1k/s correlation drain ceiling "
@@ -4424,8 +5144,12 @@ def main(argv: list[str]) -> int:
               "rejections (exact); per-device corr_signals coverage; zero "
               "quarantine-write-failure movement")
         print(f"  phase 6 memflat  : {', '.join(MEM_SERVICES)} <= x{args.mem_factor} "
-              f"of their END-OF-BURST RSS, and under "
-              f"{args.mem_headroom_percent}% of their own caps")
+              f"of their END-OF-BURST figure (cgroup anon, except "
+              f"{'/'.join(MEM_STATELESS_SERVICES)} on docker stats), under "
+              f"{args.mem_headroom_percent}% of their own caps; clickhouse also "
+              f"< {CH_MEMORY_TRACKING_MAX_PCT}% / {CH_MERGE_MEMORY_MAX_PCT}% of "
+              f"max_server_memory_usage and parts back within "
+              f"+{(CH_PART_COUNT_GROWTH_MAX - 1) * 100:.0f}% of preflight")
         cbudget = (CLEANUP_DEVICE_BUDGET_BASE_S +
                    CLEANUP_DEVICE_BUDGET_PER_DEVICE_S * args.devices)
         print(f"  phase 7 cleanup  : delete EVERY mlx-<runid>- device (page-loop "
