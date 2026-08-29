@@ -960,12 +960,26 @@ groups:
           summary: "ClickHouse failing {{ $value }} queries/15m — check system.query_log exceptions (read paths or ingest)"
 
       - alert: CorrVersionChurnUndamped
-        # Sustained persists with ZERO damping means the material-hash gate
-        # stopped suppressing storm churn (regression or heartbeat misconfig) —
-        # corr_objects growth is heading back to the pre-#100 30x rate.
+        # Sustained persists with ZERO suppression of ANY kind means the
+        # material-hash gate stopped suppressing storm churn (regression or
+        # heartbeat misconfig) — corr_objects growth is heading back to the
+        # pre-#100 30x rate.
+        # Suppression is TWO outcomes since P3 change A (46934f3f): `damped`
+        # (re-persist skipped entirely) and `heartbeat_touch` (the 900 s
+        # heartbeat wrote the corr_current freshness row and NO corr_objects
+        # version). The engine's own damping_ratio counts both as suppressed
+        # (_flush_tenant_write_amp), so this rule must too — otherwise an engine
+        # whose unchanged re-persists all land on heartbeats reads as a
+        # regression. Both collapse to 0 together when the gate really breaks: a
+        # touch requires an unchanged material_hash.
+        # `ignoring(outcome)` is REQUIRED — the two sides are the same metric
+        # with different `outcome` label values, and a bare `and` matches only on
+        # identical label sets, so it could never pair them (the pre-P3 expr
+        # could not fire).
         expr: >
           increase(corr_versions{outcome="persisted"}[30m]) > 60
-          and increase(corr_versions{outcome="damped"}[30m]) == 0
+          and ignoring(outcome)
+          sum without (outcome) (increase(corr_versions{outcome=~"damped|heartbeat_touch"}[30m])) == 0
         for: 15m
         labels: { severity: warning, layer: correlation }
         annotations:
@@ -985,18 +999,71 @@ groups:
           summary: "corr_current projection lost {{ $value }} write(s)/10m — Command Center may be serving STALE incidents; check correlation logs (corr_current projection write FAILED) and ClickHouse health"
 
       - alert: CorrTenantWriteAmpOverBudget
-        # #101 tenant storm budget: >120 persisted versions inside one 5-minute
-        # write-amp window (~24/min sustained) means one tenant's lane is
-        # writing far beyond the damped steady-state (heartbeat-paced storms
-        # persist ~1 version/object/15min). Bounded cardinality by design: the
-        # metric only carries the top-K noisiest tenants. Attribution + full
-        # history: SELECT from netops.corr_tenant_write_amp (correlation-storm
-        # runbook).
-        expr: max by (tenant_id) (corr_tenant_writes_window{outcome="persisted"}) > 120
+        # #101 tenant storm budget, RE-DERIVED for P3 change A (46934f3f).
+        #
+        # WHAT STILL PERSISTS a corr_objects version: the first version, a
+        # material change (evidence growth / verdict change), a terminal
+        # transition (close/merge), and the CORR_VERSION_KEEPALIVE_S=21600 s
+        # floor for a never-moving open object. An unchanged 900 s heartbeat no
+        # longer persists — it writes one corr_current row and counts as
+        # suppressed (outcome=heartbeat_touch, folded into the rollup's `damped`
+        # column). So `persisted` is now MATERIAL churn only, and the old
+        # "heartbeat-paced ~1 version/object/15min" floor this budget was set
+        # against is gone.
+        #
+        # ARITHMETIC (version anatomy, run p2-s05 — 39,388 versions over ~65 min
+        # for ~10.7k incidents; docs/scale/P2_STEP5_2P5K_VERDICT_2026-08-29.md §5
+        # + docs/design/AGGREGATION_PLANE_P3_2026-08-29.md §0): first 32 %,
+        # terminal 32 %, evidence growth 17 %, verdict change 7 %, unchanged
+        # heartbeat 15 % (shares rounded, sum 103 %).
+        #   * the 15 % heartbeat share stops persisting, so the SAME workload now
+        #     writes 0.85x the versions: like-for-like 120 x 0.85 = 102 -> 100.
+        #   * keepalive floor is negligible: a never-moving open object mints
+        #     300/21,600 = 1/72 version per 5-min window, so even 1,000 open
+        #     objects add ~14 — inside that rounding. Pacing no longer sets the
+        #     budget; material churn does.
+        #   * what 100 MEANS at the post-heartbeat mix (first 36 %, terminal
+        #     36 %, evidence 19 %, verdict 8 % of persists): ~36 incidents opened
+        #     + ~36 closed + ~27 material changes in ONE 5-min window, for ONE
+        #     tenant, sustained 15 min.
+        #   * headroom: the ratified 2.5k storm persists 39,388 x 0.85 / 13
+        #     windows ~= 2,575 per window — 26x over budget, so a real storm
+        #     still trips immediately.
+        #
+        # Bounded cardinality by design: the metric only carries the top-K
+        # noisiest tenants. Attribution + full history: SELECT from
+        # netops.corr_tenant_write_amp (correlation-storm runbook).
+        expr: max by (tenant_id) (corr_tenant_writes_window{outcome="persisted"}) > 100
         for: 15m
         labels: { severity: warning, layer: correlation }
         annotations:
           summary: "Tenant {{ $labels.tenant_id }} persisted {{ $value }} correlation versions in one write-amp window — storm exceeding write budget; see correlation-storm runbook (chaos fixture? damping regression? real multi-entity incident?)"
+
+      - alert: CorrHeartbeatTouchNotEngaging
+        # P3 change A (46934f3f) made an unchanged 900 s heartbeat write ONE
+        # corr_current row instead of a full corr_objects version (2.35 ->
+        # 0.11 ms per heartbeat; the heartbeat share was 15 % of versions on the
+        # ratified 2.5k storm). If CORR_HEARTBEAT_TOUCH_ONLY is flipped off, or
+        # the touch path stops being reached, NOTHING looks broken — history is
+        # still written, damping still damps — so the regression is invisible
+        # except on this counter, while corr_objects growth and the
+        # persist.decision cost silently return to the pre-P3 rate. That is the
+        # "the component knew and the knowledge stopped there" shape the
+        # storage-loss group below exists to break.
+        # Guarded for small/quiet deployments: damped > 0 proves objects ARE
+        # being re-evaluated with an unchanged material_hash, and 6 h is 24
+        # heartbeat periods — at least one such object must have crossed a
+        # heartbeat and touched. Zero touches while damping is alive = the touch
+        # path is off or unreachable. (Not a keepalive check: the 21,600 s
+        # keepalive persists a real version and shows up as `persisted`.)
+        expr: >
+          increase(corr_versions{outcome="damped"}[6h]) > 0
+          and ignoring(outcome)
+          increase(corr_versions{outcome="heartbeat_touch"}[6h]) == 0
+        for: 1h
+        labels: { severity: warning, layer: correlation }
+        annotations:
+          summary: "Correlation heartbeat-touch path not engaging — zero heartbeat_touch outcomes in 6h while damping is active; corr_objects version growth is back at the pre-P3 rate (check CORR_HEARTBEAT_TOUCH_ONLY)"
 
   # Counters come from the correlation /metrics exposition (vmscrape job
   # 'correlation'); they are monotonic per process, so increase()/rate() are safe

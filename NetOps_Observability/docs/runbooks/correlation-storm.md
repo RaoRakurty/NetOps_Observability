@@ -1,8 +1,9 @@
 # Runbook — Correlation storm (write amplification / noisy source)
 
-**Symptoms:** `CorrTenantWriteAmpOverBudget` or `CorrVersionChurnUndamped`
-firing; `corr_objects`/`corr_signals_archive` growing fast; one incident
-re-versioning continuously; Command Center dominated by one source.
+**Symptoms:** `CorrTenantWriteAmpOverBudget`, `CorrVersionChurnUndamped` or
+`CorrHeartbeatTouchNotEngaging` firing; `corr_objects`/`corr_signals_archive`
+growing fast; one incident re-versioning continuously; Command Center dominated
+by one source.
 
 ## 1. Who is storming?
 
@@ -16,6 +17,10 @@ SELECT tenant_id, window_start, raw_seen, persisted, damped, damping_ratio,
 ```
 `top_entity` + `top_signal_kind` name the source. Cross-check the live top-K:
 `curl -s correlation:8000/healthz | jq .engine_v2.tenant_write_amp_topk`.
+`persisted` counts `corr_objects` versions only; the `damped` column (and
+`damping_ratio`) is the SUPPRESSED total — skipped re-persists **plus**
+heartbeat touches (§3). The `CorrTenantWriteAmpOverBudget` budget (100 per
+5-min window) is derived from that split in `src/config/rules.yaml`.
 
 ## 2. Real incident, or a chaos fixture?
 
@@ -35,11 +40,32 @@ curl -s correlation:8000/healthz | jq .engine_v2.chaos_fixtures
 ```bash
 curl -s correlation:8000/metrics | grep corr_versions
 ```
-Under a storm, `damped` must climb much faster than `persisted`
-(steady-state: ~1 persist/object/15 min heartbeat + material changes; the
-release-gate SLO is ratio ≥ 0.9). Ratio ≈ 0 under sustained load = damper
-regression: check `CORR_VERSION_HEARTBEAT_S` (0 disables damping!) and recent
-changes to `ObjectSnapshot.material_hash()`.
+Three DISJOINT outcomes since P3 change A:
+- `persisted` — a `corr_objects` version was written: first version, material
+  change (evidence growth / verdict change), terminal transition (close/merge),
+  or the `CORR_VERSION_KEEPALIVE_S` (6 h) floor for a never-moving open object.
+- `damped` — the re-persist was skipped entirely (`material_hash` unchanged,
+  inside the heartbeat). Wrote nothing.
+- `heartbeat_touch` — the 900 s heartbeat fell due on an object whose
+  `material_hash` had not moved: ONE `corr_current` freshness row, **version
+  number unchanged**, no `corr_objects` version, no edges/evidence/archive.
+
+`damped + heartbeat_touch` is the SUPPRESSED side — what the engine's
+`damping_ratio` and the rollup table's `damped` column both count, and what the
+release-gate SLO (ratio ≥ 0.9) is measured against. Under a storm the suppressed
+side must climb much faster than `persisted`. Steady state for an open object
+that is not moving materially is now **one version per 6 h keepalive** plus its
+material changes (pre-P3: one per 15 min heartbeat — 24× more).
+
+- Ratio ≈ 0 under sustained load = damper regression: check
+  `CORR_VERSION_HEARTBEAT_S` (0 disables damping!) and recent changes to
+  `ObjectSnapshot.material_hash()`. Alert: `CorrVersionChurnUndamped`.
+- `heartbeat_touch` flat at 0 while `damped` climbs = the touch path is off or
+  unreachable (`CORR_HEARTBEAT_TOUCH_ONLY`); `corr_objects` growth and the
+  `persist.decision` cost are back at the pre-P3 rate. Alert:
+  `CorrHeartbeatTouchNotEngaging`. Not a correctness bug — `corr_current` is
+  still fresh and history is still written — but the §1 write budget was
+  re-derived assuming touches, so expect `CorrTenantWriteAmpOverBudget` next.
 
 ## 4. Blast radius + read side
 
@@ -53,7 +79,10 @@ changes to `ObjectSnapshot.material_hash()`.
 1. Fix the source (device/probe/exporter) — the storm ends at quiesce
    (`CORR_QUIESCE_S`, default 15 min after signals stop).
 2. Source will stay broken a while (lab outage, vendor ticket)? Either accept
-   the damped storm (it is bounded: heartbeat-paced versions + TTL'd tables),
+   the damped storm (it is bounded: an unchanged heartbeat mints NO version, so
+   `corr_objects` grows only with material changes, terminal transitions and the
+   6 h keepalive — 4 versions/day for a stuck-open object; `corr_current` is one
+   replacing row per object; every table is TTL'd),
    or — if it is *deliberately* kept broken — register it as a fixture:
    set `CORR_CHAOS_FIXTURES=<name>=<entity-substring>` on the correlation
    service (site override / `.env`), restart it, verify the badge appears and

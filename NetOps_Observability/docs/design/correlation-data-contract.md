@@ -29,14 +29,58 @@ and are banned from `corr_current` by schema and by test
 - **Heartbeat** (`CORR_VERSION_HEARTBEAT_S`, default 900 s) bounds staleness:
   an unchanged incident re-persists at most once per heartbeat, proving
   liveness without per-cycle churn. `0` = damping off (legacy, tests only).
-- **Lifecycle always persists**: open v1, merge, close are never damped.
+  Since P3 change A (`CORR_HEARTBEAT_TOUCH_ONLY`, default on) that re-persist is
+  a **touch, not a version**: an incident whose `material_hash` did not move
+  writes ONE `corr_current` row — fresh `created_at`, fresh
+  `window_start`/`window_end`/`signal_count`/`top_confidence`, **version number
+  unchanged** — and nothing else. No `corr_objects` version, no
+  `corr_edges`/`corr_evidence` rows, no `corr_signals_archive` slice, no
+  Evidence item. Counted `corr_versions{outcome="heartbeat_touch"}` and folded
+  into the SUPPRESSED side of `damping_ratio` (it wrote a projection row, so it
+  is not `damped`, which has always meant "wrote nothing").
+- **Keepalive** (`CORR_VERSION_KEEPALIVE_S`, default 21 600 s = 6 h): an open
+  object that never moves materially is still forced to persist a **real
+  version** once per keepalive, because history has consumers that read
+  `corr_objects.created_at` rather than the version series —
+  `corr_objects`/`corr_edges`/`corr_evidence` TTL on their own `created_at`
+  (`corr_retention.go`), the Command Center list's `app_impact` decorate joins
+  history under a 24 h `created_at` window (`correlations.go`), and the drift
+  reconciler scans 7 days back. The keepalive MUST stay below the shortest of
+  those horizons (today the 24 h decorate window is binding). A never-moving
+  open object therefore costs 4 versions/day, not 96.
+- **`corr_current` is NOT 1:1 with `corr_objects`** (it was, pre-P3). Exactly
+  what holds now:
+  - `corr_current` may be **newer by `created_at`** than the newest
+    `corr_objects` row for the same object — by at most one keepalive.
+  - The **version number is shared**: a touch reuses the current version, never
+    mints one. So every `(correlation_id, version)` join taken FROM
+    `corr_current` INTO `corr_objects`/`corr_edges`/`corr_evidence` — list
+    decorate, `health_score.go` grounding/edge counts, Inspector — still
+    resolves to real history rows. A projection version with no history row
+    would render `edge_count=0` / `grounding='none'` on a live incident; that is
+    why the number must not move.
+  - **Freshness readers take `corr_current`** and see the touch: Command Center
+    list/sort, the sweeper pre-filter, the orphan-close sweep, the drift
+    reconciler (`CorrDriftSelect`, `created_at`-based), closed-row TTL.
+  - **Material-content readers take history** and correctly see the last
+    MATERIAL version: Inspector, audit, calibration. Replay is unaffected —
+    `replay._select_slice` and the Go timeline resolve the newest archive slice
+    with `archived_version <= requested`, and a touch mints no version to
+    resolve.
+  - Therefore: `corr_objects` version count is bounded by **material changes +
+    lifecycle + keepalive**, NOT by heartbeats.
+- **Lifecycle always persists**: open v1, merge, close are never damped and
+  never touched.
 - **Dual-write**: `_persist_snapshot` writes history (truth) then the
   `corr_current` projection. Projection failure never blocks truth, but is
   counted (`corr_current_projection_write_failures_total`), structured-logged
   (tenant_id/corr_id/version_id/material_hash/retryable/error), alerted
   (`CorrCurrentProjectionFailing`), and repaired (Go
   `corr-current-reconcile` worker: missing + drifted rows re-seeded from
-  history hourly; boot backfill covers cold starts).
+  history hourly; boot backfill covers cold starts). A heartbeat touch
+  (`_touch_current`) writes the projection half ALONE and counts its failures on
+  the same counter — a lost touch is a stale Command Center row, healed by the
+  next write and force-repaired by the same reconciler.
 - **Per-tenant write accounting**: every raw/persisted/damped outcome rolls up
   per tenant and flushes to `corr_tenant_write_amp` each `CORR_WA_FLUSH_S`
   (300 s). Metrics carry only the top-K noisiest tenants
@@ -97,7 +141,10 @@ the export cron is honored (dry-run shows coverage).
 Every NEW signal lane MUST, before shipping (`make release-gate`):
 
 1. Pass the broken-source soak with its own signals (`test_lane_soak.py`
-   harness): damping ratio ≥ 0.9 over a 20-cycle storm, O(heartbeats) versions.
+   harness): damping ratio ≥ 0.9 over a 20-cycle storm (heartbeat touches count
+   on the suppressed side), and `corr_objects` versions bounded by MATERIAL
+   changes + lifecycle + keepalive — an unchanged heartbeat must mint no
+   version.
 2. Pass tenant blast-radius + RCA-integrity SLOs (`test_storm_release_gate.py`).
 3. Keep the Command Center list blob-free (Go bounded-IO SQL-shape tests).
 4. On a live stack: stay inside per-endpoint read budgets
