@@ -246,3 +246,15 @@ thresholds — server crash-looped on sanityCheck), harness 8e623e38. T1 p95
 1,947 s (−66 % vs OLD); T7−T1 p95 4 s. memflat FAIL = harness bugs (CH clause
 query; correlation anchor) — fix in build. P2 is functionally complete. NEXT:
 damping → rank-memo compact form → P3.
+
+## UPDATE (2026-08-29 15:00) — post-P2 lever wave deployed; run p2-s06 in flight
+Deployed (image 46934f3f + api c703db56): compact rank memo (bd6ff86c, 1.2 KiB/
+entry), heartbeat touch-only + 6 h keepalive and ingest prefilter (46934f3f),
+corr_objects ZSTD(3) codec (applied; daily-partition migration parked —
+corr_edges copy timed out fire-and-forget, fix in build; corr_objects over the
+4 GiB gate). Harness: memflat clauses honest (67f359a8), t-storm-2.5k profile
+with ground truth (a8bb6077, tracker 183). P3 step 0 showed t-nominal has ~0 %
+aggregation opportunity — P3 deferred behind damping/prefilter; size it on
+t-storm. Docs/alerts re-derived (616cd7b6). NEXT: verdict for p2-s06 (all
+phases expected PASS with honest memflat) → first t-storm-2.5k run (TTUR + T4
+scoring contract) → P4 write-up.
