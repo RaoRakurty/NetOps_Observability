@@ -309,3 +309,17 @@ scoring contract) → P4 write-up.
   live A/B on t-storm-10/25) follow.
 - Twin scorer: unbounded per-story SELECTs (329 in an hour) — being bounded;
   storm-s01 accuracy not yet scored.
+
+## UPDATE (2026-08-29 20:30) — storm re-run 8/9 PASS; P3 steps 1–2 built
+- `storm-s02-08291929` (`STORM_S02_2P5K_VERDICT_2026-08-29.md`): completion
+  118 s, accounting exact, memflat PASS 9/9, stability FAIL on ONE 35 s stall
+  (epoch lifecycle pass: find_merges over the 20-cohort survivor window on the
+  loop thread; instrumentation + token index + offload in build). s01's counts
+  were inflated by Kafka redelivery after its ejections — s02 is the honest
+  storm baseline (2,754 incidents, T1 p95 1,054 s, confirmed 0).
+- P3 steps 1–2 built, uncommitted (waiting for the concurrent main.py lifecycle
+  fix): `aggregation.py` (AggKey ≡ K3, all memo-§17 classes, lateness rule),
+  `agg_admit` wiring behind the default-OFF flag, `--agg-ab` bench: engine
+  forwarded == plan K3 exactly at 2/10/25 %. Steps 3–4 next (archive/replay
+  fields + equivalence suite + live A/B on t-storm-10/25).
+- Twin scorer bounding in build; storm-s01/s02 accuracy not yet scored.
