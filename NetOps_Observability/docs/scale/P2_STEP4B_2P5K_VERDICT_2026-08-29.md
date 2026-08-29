@@ -5,11 +5,16 @@
 persisted, 0 rejections (hollow/rejection clauses satisfied).** TTUR T1 p95
 2,208 s (−8 % vs the step-4 leg, **−57 % vs OLD**), T7 p95 1,055 → 403 s, merges
 back (346), incident count back to 15,335. Two NEW failures the run's own gates
-caught, both under investigation: **accounting FAIL — 901 signals silently
-dropped** (first ever; 1 counted loss vs 901 rows — a `corr_signals` batch
-insert suspected, that table is outside the retry contract), and **memflat FAIL
-on ClickHouse** (2,246 → 3,854 MiB after input stopped — part merges from
-~150k small Evidence inserts). Correlation's own memflat PASSED. Caveat: the
+caught, both under investigation: **accounting FAIL — 901 events short**
+(ROOT-CAUSED: the HARNESS's `kafka-console-producer` dropped 901 records of
+chunk 79 under broker saturation — 1.5 s ack timeout × 3 retries, exit 0, failure
+only logged, stderr discarded by `Stack.produce()`; Kafka delta == OpenSearch
+docs == 869,100, correlation counters clean — the platform was lossless; producer
+hardened + stderr judged, fix in build), and **memflat FAIL on ClickHouse**
+(docker-stats counts ~68 % reclaimable page cache/slab; the REAL finding is peak
+`MemoryTracking` at 95 % of `max_server_memory_usage` from merge work: 241× write
+amplification off ~170k tiny inserts; settings + Evidence batching in build,
+harness clause being replaced). Correlation's own memflat PASSED. Caveat: the
 injector produced 870,001 events (~963/s), 3.3 % short of the ratified 900,001.
 
 Image `7ba42389` (+ estimator `a75b73f8`; queue bounds `e318ace2` NOT yet
@@ -62,10 +67,11 @@ Stage profile: `persist.decision` 47,365 calls **3,249 s** (p50 31 ms, **max 64 
   treatment the archive chunk got.
 
 ## 5. Open (in flight)
-1. 901 silently dropped signals — root cause + fix (rows counted, dedup-token
-   retry for `corr_signals`, DLQ on rejection).
-2. ClickHouse memflat — parts/merges attribution; Evidence-plane write batching
-   (per-table flush every N items / T ms) + CH insert settings; harness gate
-   definition for a stateful store.
+1. 901 events — harness producer (see above); fix in build. Platform-side
+   row counting / dedup-token retry / DLQ already exist (tracker 160).
+2. ClickHouse — `P2_CLICKHOUSE_MEMFLAT_2026-08-29.md`: settings (merge size cap,
+   pool 6, soft limit 1.5 GiB, mark cache 512 MiB, part_log on), Evidence write
+   batching (200 items / 8 MiB / 2 s per table, block dedup token), harness
+   clause = anon-only slope + MemoryTracking < 85 % + parts recover.
 3. Deploy `e318ace2` (queue 2,000 / 64 MiB, calibrated estimator) — not in this leg.
 4. Injector shortfall 870k vs 900k — explain (harness).
