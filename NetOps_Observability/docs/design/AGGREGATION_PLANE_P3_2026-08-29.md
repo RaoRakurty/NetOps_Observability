@@ -122,6 +122,19 @@ first occurrence of an identity is no longer queued behind its own repeats.
 The memo's §6 ratios (raw→verdict, evaluation waste) become the acceptance
 metrics; TTUR SLOs are re-measured with `scale-rca-latency.py`.
 
+## 6a. Controlled storm shape (owner direction, 2026-08-29 evening)
+The benchmark's storm share is now a KNOB, not an accident: `StormShape`
+(`scripts/enterprise_outage_chain.py`) parameterizes storm share of raw, repeat
+factor and window, vantages per cause, recovery ratio, flap cycles, churn
+density, contradictions, blast-radius waves — all seeded/content-derived. A
+profile ladder `t-storm-2.5k` (2 %) → `t-storm-10-2.5k` → `t-storm-25-2.5k` →
+`t-storm-50-2.5k` at the same 900k/1,000 eps plan lets P3 be A/B'd at
+controlled repeat shares; ground truth records target vs achieved memo-§5/§6
+metrics and the projected raw→engine ratio under ideal K3 aggregation. P3 is
+built only if the ladder shows (a) a TTUR/T4 gain on storm incidents and (b) a
+throughput gain at a realistic share (≈25 %). The twin's `_tpl_enterprise_outage`
+takes the same shape so accuracy runs use identical streams.
+
 ## 7. Delivery (each flagged, A/B on one image; Opus builds, Fable grades)
 0. Step-0 measurement (in flight) → choose AggKey + delta classes.
 1. Aggregation state + delta classifier as a pure module (`aggregation.py`),
