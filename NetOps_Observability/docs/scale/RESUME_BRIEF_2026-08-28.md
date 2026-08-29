@@ -199,3 +199,15 @@ API-retry + measured OS-purge budget (in build). Cron 1K canary DISABLED
 shadow-row defect. NEXT: step 4 (async Evidence queue, verdict row first) + 4a
 (lifecycle cadence over last K cohorts) → redeploy → 2.5K run → TTUR re-measure
 against 2,980 s.
+
+## UPDATE (2026-08-29 09:00) — P2 step 4 measured live; 3 gauge-found defects in build
+`docs/scale/P2_STEP4_2P5K_VERDICT_2026-08-29.md` + `P2_STEP4_EQUIVALENCE_…`: T1 p95
+2,401 s (−19 % vs steps 0–2, −58 % vs OLD), completion FAIL but pending 4,055
+(from 21.6K), T7 measurable (p95 1,055 s). Defects: Evidence consumer hold leak
+(`held` True at idle → consumer ran only when the queue was full), 4a regression
+(stale set emptied → merges 0; fix = widen survivors only), rank-memo estimator
+1.62× over-charge (fixed `a75b73f8`, 96 MiB ≈ 2.9–5k entries). memflat ×1.45
+attribution with the Evidence plane on in progress. NEXT: land the hold/4a/stall
+fix → rebuild → redeploy (profiler overlay) → `scale-miniladder.py --profile
+t-nominal-2.5k --devices 2500 --eps 1000 --run-dir /var/tmp/scale-runs/p2-s04b-…`
+→ clean-scope TTUR vs 2,401 s; then damping.
