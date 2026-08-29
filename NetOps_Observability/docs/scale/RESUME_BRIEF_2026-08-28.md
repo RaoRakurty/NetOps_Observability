@@ -211,3 +211,14 @@ attribution with the Evidence plane on in progress. NEXT: land the hold/4a/stall
 fix → rebuild → redeploy (profiler overlay) → `scale-miniladder.py --profile
 t-nominal-2.5k --devices 2500 --eps 1000 --run-dir /var/tmp/scale-runs/p2-s04b-…`
 → clean-scope TTUR vs 2,401 s; then damping.
+
+## UPDATE (2026-08-29 10:30) — FIRST 2.5K COMPLETION PASS
+Run `p2-s04b-08290858` (image 7ba42389: generational Evidence hold, 4a fixed,
+archive offload): correlation_completion PASS 2,515 s / 2,711, T1 p95 2,208 s
+(−57 % vs OLD). Verdict `docs/scale/P2_STEP4B_2P5K_VERDICT_2026-08-29.md`.
+NOT clean: accounting FAIL (901 signals silently dropped — corr_signals batch
+insert outside the retry contract, fix in build), memflat FAIL on ClickHouse
+(part churn from per-version Evidence inserts — batching design in progress),
+injector 870k/900k. Committed but NOT deployed: e318ace2 (queue 2000 / 64 MiB,
+calibrated estimator). NEXT: land both fixes → redeploy → one run for a clean
+all-phase PASS → damping.
