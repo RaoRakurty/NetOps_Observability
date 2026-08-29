@@ -350,6 +350,12 @@ class Run:
                              for d in stx["affected"].get("devices") or []],
                 "extra_entities": extra,
                 "expect": stx["expect"],
+                # Template-published labels (cause entity, per-phase timeline,
+                # parser-coverage table). The scorer ignores them; they exist
+                # so a story's ground truth carries what it KNOWS instead of
+                # leaving it to be re-derived from the event stream. Empty for
+                # every template that publishes none.
+                "labels": stx.get("labels") or {},
             }
             ground_truth.append(rec)
             with open(gt_path, "a", encoding="utf-8") as f:

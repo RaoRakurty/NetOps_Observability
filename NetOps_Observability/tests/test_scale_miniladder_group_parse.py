@@ -231,11 +231,18 @@ def _healthy_ch(query, timeout=60):
         "'max_server_memory_usage_to_ram_ratio'": "0.9",
         "'CGroupMemoryTotal'": "5584715776",
         "'OSMemoryTotal'": "16764780544",
-        # peaks + the sample census (plausible, total) — see
-        # tests/test_miniladder_memflat_clickhouse.py for the census's own tests.
-        "system.metric_log": f"{1000 * MIB}\t{500 * MIB}\t3600\t3600",
+        # peak, p99, merge peak, sample count and the earliest in-window
+        # sample — see tests/test_miniladder_memflat_clickhouse.py for the
+        # ClickHouse clauses' own tests.
+        "system.metric_log": (f"{1000 * MIB}\t{800 * MIB}\t{500 * MIB}"
+                              f"\t3600\t2026-08-29 07:00:00"),
         "system.metrics": (f"MemoryTracking\t{900 * MIB}\n"
                            f"MergesMutationsMemoryTracking\t{400 * MIB}"),
+        # The MEMORY_LIMIT_EXCEEDED clause (2026-08-29): the lifetime counter,
+        # and the error_log timeline as (in-window count, total rows, earliest
+        # row) — a clean server that has never raised one.
+        "system.errors": "0",
+        "system.error_log": "0\t0\t1970-01-01 00:00:00",
         "'MaxPartCountForPartition'": "180",
         "'parts_to_delay_insert'": "1000",
     }
@@ -283,6 +290,7 @@ def _memflat_harness(tmp_path, cold, warm, end_stats, anon=None,
     h.warm_anon = warm_anon
     h.baseline["ch_window_start"] = "2026-08-29 07:00:00"
     h.baseline["ch_max_part_count"] = 180
+    h.baseline["ch_mem_errors"] = 0
     h.stack.mem_stats = lambda: end_stats            # type: ignore[assignment]
     h.stack.anon_sample = lambda services: dict(end_anon)  # type: ignore[assignment]
     h.stack.ch = _healthy_ch                         # type: ignore[assignment]

@@ -146,12 +146,21 @@ def test_traffic_drop_full_stop_emits_no_flows():
 
 def test_ground_truth_record_shape_is_unchanged(tmp_path):
     """The fidelity wave must not change ground-truth record shape: the
-    stories carry the same {id, template, t0, affected, expect} envelope."""
+    stories carry the same {id, template, t0, affected, expect} envelope.
+
+    §5.12 (enterprise_outage) ADDED one key, `labels` — the labelled return
+    form, through which a template publishes its cause entity, per-phase
+    timeline and parser-coverage table. It is additive and always present: a
+    template that publishes nothing carries `{}`, which is asserted here so a
+    story cannot start depending on the key's absence."""
     sc = _example()
     plan = build_run_plan(sc, 600.0)
     for stx in plan["stories"]:
         assert set(stx) == {"id", "template", "t0", "items", "affected",
-                            "expect"}
+                            "expect", "labels"}
+        assert stx["labels"] == {}, (
+            "no template in the example scenario publishes labels — a "
+            "non-empty dict here means one grew them silently")
 
 
 def test_scenario_deepcopy_safety():

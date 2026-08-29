@@ -70,9 +70,13 @@ Phases (each emits PASS/FAIL + evidence into the run dir):
               carries page cache + slab (~68% of it, measured) and made the
               verdict a coin toss on cache state. PLUS the OOM path: no key
               container above --mem-headroom-percent of its own plan-sized cap,
-              and for ClickHouse two clauses of its OWN accounting — peak
-              MemoryTracking < 85% and peak merge memory < 50% of the effective
-              max_server_memory_usage, and MaxPartCountForPartition back within
+              and for ClickHouse its OWN accounting: ZERO new
+              MEMORY_LIMIT_EXCEEDED (system.errors delta — query_log sees only
+              the statement raises, background threads raise the rest), p99
+              MemoryTracking < 85% of the effective max_server_memory_usage
+              (peak reported, and warned about at/above the cap: the peak is
+              one-second RSS transients, p99 is the level the store actually
+              runs at), and MaxPartCountForPartition back within
               +20% of preflight and under parts_to_delay_insert/2. The
               cold-baseline->warm step is recorded as evidence only (a 2-min
               burst cannot separate first-touch cache materialization from a
@@ -168,6 +172,15 @@ CRON_PATH = "/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 REPO_ROOT = os.path.dirname(SCRIPT_DIR)
+
+# The enterprise-outage chain's WIRE VOCABULARY and PHASE TIMELINE are shared
+# with the network digital twin (`scripts/lab/twin/stories.py`) so one fault
+# story cannot exist as two drifting copies. Stdlib-only, no back-import — see
+# the module docstring. The path insert is guarded because this file is also
+# imported (never run) by the test suites, which set sys.path themselves.
+if SCRIPT_DIR not in sys.path:
+    sys.path.insert(0, SCRIPT_DIR)
+import enterprise_outage_chain as chain  # the shared chain (path set above)
 
 DOCKER_TIMEOUT = 30          # bound EVERY docker call (16.3) — a wedged dockerd
 KAFKA_TOOL_TIMEOUT = 90      # JVM tools (console producer, consumer-groups)
@@ -305,10 +318,12 @@ MEM_SERVICES = [
 # see docs/scale/P2_CLICKHOUSE_MEMFLAT_2026-08-29.md §(c).
 MEM_STATELESS_SERVICES = ("api", "correlation")
 # ClickHouse's own caps, as fractions of the effective max_server_memory_usage.
+# THE BOUND IS ON p99, NOT ON THE PEAK — see the CH_MEM_ERROR header below for
+# why. The peak is always REPORTED, and warned about once it reaches the cap.
 CH_MEMORY_TRACKING_MAX_PCT = float(
     os.environ.get("MLX_CH_MEMORY_TRACKING_MAX_PCT", "85"))
-CH_MERGE_MEMORY_MAX_PCT = float(
-    os.environ.get("MLX_CH_MERGE_MEMORY_MAX_PCT", "50"))
+CH_MEMORY_TRACKING_PEAK_WARN_PCT = float(
+    os.environ.get("MLX_CH_MEMORY_TRACKING_PEAK_WARN_PCT", "100"))
 
 # `clean-slate.sh --verify` fails a stack whose max consumer-group
 # CURRENT-OFFSET exceeds this ("the bus data dir was not reset",
@@ -320,35 +335,77 @@ ONBOARD_RATE_HISTORY = int(os.environ.get("MLX_ONBOARD_RATE_HISTORY", "30"))
 CLEAN_SLATE_OFFSET_BOUND = int(
     os.environ.get("MLX_CLEAN_SLATE_OFFSET_BOUND", "100000"))
 
-# ── ClickHouse memory samples: the PLAUSIBILITY predicate (2026-08-29) ──────
+# ── ClickHouse memory: what MemoryTracking IS, and what the gate judges ────
 #
-# THE DEFECT THIS EXISTS FOR (run p2-s05-08291138).
-# `CurrentMetric_MergesMutationsMemoryTracking` is a SIGNED, cross-thread
-# delta. It does not merely dip slightly below zero on an idle server —
-# `_ch_counter` already floors that case — it also UNDERFLOWS into huge
-# positive readings that persist for whole seconds. Straight from that run's
-# `system.metric_log`, one row, one second apart from its neighbours:
+# THE FALSE PREMISE THIS REPLACES (docs/scale/P2_CLICKHOUSE_PEAK_S06_2026-08-29.md,
+# runs p2-s05-08291138 and p2-s06-08291421).
+# The gate used to DISCARD every `system.metric_log` sample whose
+# `CurrentMetric_MergesMutationsMemoryTracking` read above its own
+# `CurrentMetric_MemoryTracking`, on the reasoning that merge memory is a
+# subset of the tracked total, and to answer UNKNOWN whenever the two printed
+# peaks came out that way. On ClickHouse 24.8 the reasoning is wrong. Live, on
+# an idle server:
 #
-#   11:43:06  MemoryTracking 2,952 MiB   MergesMutations 3,071 MiB
-#   11:43:07  MemoryTracking 1,086 MiB   MergesMutations 3,966 MiB   <- impossible
-#   ...
-#   11:43:52  MemoryTracking 1,278 MiB   MergesMutations 4,084 MiB   <- the "peak"
+#   system.metrics   MemoryTracking = 692.12 MiB
+#   async_metrics    MemoryResident = 692.10 MiB     <- identical to 2 dp
 #
-# Merge memory is a SUBSET of the total the server tracks, so a sample whose
-# merge figure exceeds its own MemoryTracking is not a measurement. The gate
-# took `max()` of each column INDEPENDENTLY over the window with no such
-# check, and reported "peak MERGE memory 4,084 MiB is 99.7% of the 4,096 MiB
-# server cap" — failing memflat on a run whose real peaks over the same window
-# were 1,950 MiB and 421 MiB (max merge 421 MiB at 12:17:53, MemoryTracking
-# 1,361 MiB on that row). 50 of the window's 3,711 samples were impossible;
-# those 50 decided the verdict.
+# `CurrentMetric_MemoryTracking` is the global tracker HARD-SET TO PROCESS RSS
+# once per second by AsynchronousMetrics (`MemoryTracker::setRSS`). It is NOT a
+# sum of per-query/per-merge allocations, so a child tracker such as
+# MergesMutationsMemoryTracking is not bounded by it and legitimately reads
+# ABOVE it — 34 of hour-14's 3,600 samples on s06, 50 of hour-11's on s05, one
+# stretch holding for 48 consecutive seconds. The filter was discarding exactly
+# the diagnostic samples, and the invariant was refusing to judge readings that
+# were never impossible. Both are gone.
 #
-# So every sample is filtered by the ONE invariant that must hold in any real
-# reading, and the number of samples REJECTED is carried in the evidence — a
-# filter that hides how much it threw away is its own defect (§10).
-CH_PLAUSIBLE_SAMPLE = (
-    "CurrentMetric_MemoryTracking >= 0 AND "
-    "CurrentMetric_MergesMutationsMemoryTracking <= CurrentMetric_MemoryTracking")
+# WHAT THE GATE JUDGES INSTEAD:
+#
+#   (a) THE CUSTOMER-VISIBLE FACT — the `system.errors` delta for
+#       MEMORY_LIMIT_EXCEEDED across the run. ANY increase is a FAIL. It must
+#       be read from `system.errors` / `system.error_log`, never from
+#       `system.query_log`: run s06 raised 17 and query_log recorded 2, because
+#       the other 15 were raised in BACKGROUND threads (metric_log merges),
+#       which query_log never observes. A query_log-only count under-reports 8x.
+#   (b) p99 of MemoryTracking below CH_MEMORY_TRACKING_MAX_PCT of the cap.
+#       p99, NOT max: s05 (clean) and s06 (17 errors) have the same median
+#       (1.25-1.40 GiB) and near-identical p99 (~1.57 vs ~1.60 GiB). What
+#       separates them is 13 one-second RSS transients. A max-based gate cannot
+#       tell a sustained regression from a transient — and did not: it failed
+#       s05 on a transient it should only have reported.
+#   (c) The PEAK, always reported, and WARNED about at/above the cap when no
+#       error fired: a transient that touched the ceiling and cost nobody any
+#       work is a warning, not a verdict.
+#
+# `MergesMutationsMemoryTracking` is reported as INFORMATIONAL ONLY and carries
+# NO verdict, because in 24.8 it is not bounded by the total and there is no
+# honest fraction-of-cap to assert on. If a merge-memory assertion is ever
+# wanted it belongs on `part_log.peak_memory_usage` — which has never logged a
+# single `database='system'` row, i.e. it is blind to precisely the merges that
+# drove s06's peak, so it would need pairing with (a) regardless.
+CH_MEM_ERROR = "MEMORY_LIMIT_EXCEEDED"
+CH_MEM_ERROR_CODE = 241
+CH_MEM_ERROR_TOTAL_SQL = (
+    f"SELECT toInt64(sum(value)) FROM system.errors "
+    f"WHERE name = '{CH_MEM_ERROR}'")
+# The metric_log aggregate, as ONE source text the live gate and the offline
+# `--rescore-memflat` both use: peak, p99 and the informational merge peak.
+# UNFILTERED — see the header above for why there is nothing to filter out.
+# Callers append the window predicate (ch_window_bound).
+CH_PEAK_SELECT = (
+    "SELECT toInt64(max(greatest(CurrentMetric_MemoryTracking, 0))), "
+    "toInt64(quantileExact(0.99)(greatest(CurrentMetric_MemoryTracking, 0))), "
+    "toInt64(max(greatest(CurrentMetric_MergesMutationsMemoryTracking, 0))), "
+    # count() AND the earliest sample IN the window. The second one exists
+    # because a table can be RECREATED: ClickHouse renames metric_log on an
+    # <engine> change, and a builder can drop it outright — on 2026-08-29 both
+    # metric_log and error_log were recreated mid-afternoon and every earlier
+    # run's history went with them. A window whose first sample lands long
+    # after the window opened was only partly instrumented, and the gate says
+    # so instead of quoting a p99 over the tail it happens to have.
+    "count(), toString(min(event_time)) FROM system.metric_log WHERE ")
+# How far the first in-window sample may sit past the window start before the
+# instrument is called partial. One flush interval of slack, not more.
+CH_WINDOW_COVERAGE_SLACK_S = 120.0
 
 # ── correlation memory anchor: settle after the backlog reaches zero ────────
 #
@@ -438,6 +495,128 @@ def ch_memory_cap(stack) -> tuple[float, str]:
     if ratio > 0 and total > 0:
         return ratio * total, source
     return -1.0, "unreadable"
+
+
+def ch_ts(value: str | None) -> str:
+    """A ClickHouse DateTime literal, or "" if it is not exactly one.
+
+    Zero trust on our own server's clock (§3): these strings are spliced into
+    SQL, so a value that does not match the literal shape is DROPPED rather
+    than quoted and hoped for."""
+    text = (value or "").strip()
+    return text if re.fullmatch(r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}",
+                                text) else ""
+
+
+def ch_window_bound(start: str, end: str) -> str:
+    """`event_time` predicate for a run window. "" when there is no window —
+    the caller must then refuse to answer, never widen to all of history."""
+    start, end = ch_ts(start), ch_ts(end)
+    if not start:
+        return ""
+    bound = f"event_time >= toDateTime('{start}')"
+    if end:
+        bound += f" AND event_time <= toDateTime('{end}')"
+    return bound
+
+
+def ch_memory_error_window(stack, start: str, end: str) -> tuple[int, str, str]:
+    """MEMORY_LIMIT_EXCEEDED raised in [start, end], from `system.error_log`.
+
+    error_log is the only table that sees them all — see the CH_MEM_ERROR
+    header. Returns (count, source, state); the count is -1 for every state but
+    "ok", because a table that cannot answer must NEVER answer 0:
+
+      ok         the table demonstrably spans the window; the count is real.
+      empty      the table holds no row at all. Consistent with a spotless
+                 server AND with a table recreated since the run, and nothing
+                 in it can tell those apart.
+      uncovered  the table's earliest row is AFTER the window opened — it was
+                 recreated or TTL-pruned and simply does not hold the run.
+                 This is not hypothetical: on 2026-08-29 a config change
+                 recreated error_log and metric_log mid-afternoon, and a naive
+                 count then reported "0 errors" for a run that raised 17.
+      error      the probe failed.
+    """
+    bound = ch_window_bound(start, end)
+    if not bound:
+        return -1, "no run window on ClickHouse's clock", "error"
+    ok, out = stack.ch(
+        f"SELECT toInt64(sumIf(value, code = {CH_MEM_ERROR_CODE} AND {bound})), "
+        f"toInt64(count()), toString(min(event_time)) FROM system.error_log")
+    if not ok:
+        return -1, f"system.error_log unreadable ({out[:120]})", "error"
+    cells = out.strip().splitlines()[0].split("\t") if out.strip() else []
+    if len(cells) < 3:
+        return (-1, f"system.error_log answer unparseable ({out.strip()[:80]!r})",
+                "error")
+    try:
+        count, rows, earliest = int(float(cells[0])), int(cells[1]), cells[2]
+    except ValueError:
+        return (-1, f"system.error_log answer unparseable ({out.strip()[:80]!r})",
+                "error")
+    if rows <= 0:
+        return -1, ("system.error_log holds no row at all — it cannot tell "
+                    "'no error has ever been raised' from a table recreated "
+                    "since the run"), "empty"
+    # Fixed-width DateTime literals compare lexicographically as instants.
+    if ch_ts(earliest) and ch_ts(earliest) > ch_ts(start):
+        return -1, (f"system.error_log only goes back to {earliest}, after this "
+                    f"window opened at {ch_ts(start)} — the table was recreated "
+                    f"or TTL-pruned and does not hold this run"), "uncovered"
+    return count, (f"system.error_log over {ch_ts(start)} -> "
+                   f"{ch_ts(end) or '(now)'}"), "ok"
+
+
+def ch_window_gap_s(start: str, first_sample: str) -> float:
+    """Seconds between a window opening and its first sample. -1.0 = unknown."""
+    start, first_sample = ch_ts(start), ch_ts(first_sample)
+    if not start or not first_sample:
+        return -1.0
+    fmt = "%Y-%m-%d %H:%M:%S"
+    # Both stamps come from the SAME clock (ClickHouse's `now()`), so only
+    # their difference is meaningful. The tzinfo is stamped on both purely to
+    # keep them aware — it cancels in the subtraction and is never displayed.
+    def _at(text: str) -> datetime:
+        return datetime.strptime(text, fmt).replace(tzinfo=timezone.utc)
+
+    return (_at(first_sample) - _at(start)).total_seconds()
+
+
+def ch_memory_error_victims(stack, start: str, end: str, total: int) -> str:
+    """Who paid, as far as `system.query_log` can say — and how many it cannot.
+
+    query_log only ever sees statements. The background raises (the
+    `system.metric_log` merges that drove run s06's peak) are invisible to it,
+    so the shortfall is STATED rather than left as a silent under-count."""
+    bound = ch_window_bound(start, end)
+    if not bound:
+        return "victims unnamed (no run window)"
+    ok, out = stack.ch(
+        f"SELECT query_kind, arrayStringConcat(tables, ','), count() "
+        f"FROM system.query_log WHERE exception_code = {CH_MEM_ERROR_CODE} "
+        f"AND {bound} GROUP BY 1, 2 ORDER BY 3 DESC LIMIT 5")
+    if not ok:
+        return f"victims unnamed (system.query_log unreadable: {out[:100]})"
+    named, parts = 0, []
+    for line in out.strip().splitlines():
+        cells = line.split("\t")
+        if len(cells) < 3:
+            continue
+        try:
+            count = int(cells[2])
+        except ValueError:
+            continue
+        named += count
+        parts.append(f"{count}x {cells[0] or 'unknown-kind'} on "
+                     f"{cells[1] or '(no table)'}")
+    if not parts:
+        return ("NO victim in system.query_log — every raise was in a "
+                "BACKGROUND thread (merges/flushes), which query_log never sees")
+    if total > named:
+        parts.append(f"the other {total - named} were raised in BACKGROUND "
+                     f"threads and query_log cannot name them")
+    return "; ".join(parts)
 
 
 def clean_slate_offset_note(bus_max_current: int, planned: int) -> tuple[str, str]:
@@ -1785,7 +1964,15 @@ SCENARIO_SEED_DEFAULT = 20260829
 # NOISE POOL. The two sets are DISJOINT by construction, which is what makes
 # the "noise never shares a cause entity with an incident" clause checkable
 # rather than hopeful.
-SCENARIO_DEVICE_BUDGET = 0.60
+#
+# 0.60 -> 0.65 (2026-08-29, enterprise_outage): the four original templates
+# claim 910 of 2,500 devices; the site-scale outage template adds 15 sites x 40
+# devices = 600, for 1,510. At 0.60 the budget is 1,500 and `_build` would have
+# silently truncated the LAST template rather than failing — the failure mode
+# `test_all_four_cause_kinds_are_instantiated` exists to catch. 0.65 = 1,625
+# leaves 115 devices of headroom and still leaves 990 devices (39.6 %) in the
+# noise pool, which is what the disjointness clause rests on.
+SCENARIO_DEVICE_BUDGET = 0.65
 # Interface indices 0..47 belong to the background mix (`if_n = seq % 48`);
 # scenario faults take 48..95, so an incident entity_id (`host:ifname`) can
 # never collide with a background one even if the pools were ever to overlap.
@@ -1805,6 +1992,14 @@ SCENARIO_REPEAT_WINDOW_S = 60.0
 SCENARIO_REPEAT_MAX_OFFSET_S = 40.0
 GROUND_TRUTH_FILE = "ground-truth.json"
 GROUND_TRUTH_SCHEMA = "correlix.scale.ground-truth/1"
+# The SAME incidents in the network digital twin's record shape, so
+# `scripts/lab/twin/twin.py score --runid <id> --run-root data/miniladder`
+# scores a mini-ladder run with the twin's existing scorer instead of a second
+# one. The run dir is already named `<UTC>-<runid>`, which is exactly the
+# `*-<runid>` glob `twin.find_run_dir` uses. See `StormScenario.twin_records`
+# for why this is a projection, not a rival schema.
+TWIN_GROUND_TRUTH_FILE = "ground_truth.jsonl"
+TWIN_STATE_FILE = "state.json"
 
 # ── The scenario itself ─────────────────────────────────────────────────────
 #
@@ -1905,6 +2100,40 @@ STORM_SCENARIO_2K5: dict = {
             "cycle_gap_s": 90.0,
             "expected_owner_class": "igp_internal",
             "expected_seam_class": "lan_core",
+        },
+        {
+            # THE ENTERPRISE SITE OUTAGE — one causally ordered chain, at
+            # scale. A site's core uplink fails and the whole site degrades in
+            # a fixed causal order: uplink down -> IGP adjacency loss -> a
+            # second core port flapping -> the eBGP session to transit
+            # flapping -> route churn and an update burst -> the access layer
+            # reconverging (STP) and re-homing hosts (MAC moves) -> recovery,
+            # or not.
+            #
+            # The vocabulary and the phase bands are NOT defined here: they
+            # come from `scripts/enterprise_outage_chain.py`, which the network
+            # digital twin's `_tpl_enterprise_outage` imports too. One story,
+            # one definition; this template is its 2,500-device replication.
+            "cause_kind": "enterprise_outage",
+            "instances_per_1k_devices": 6.0,     # 15 sites at 2,500 devices
+            "devices_per_instance": 40,          # 2 core/dist + 38 access
+            "onset_window": (30.0, 520.0),
+            "recovery_after_s": chain.PHASE_BAND["recovery"],
+            "repeats": chain.REPEAT_RANGE,
+            "reassert_every_s": 0.0,             # the chain re-reports on its
+            #                                      own schedule (phases), not
+            #                                      on a flat period
+            "no_recovery_share": chain.NO_RECOVERY_SHARE,
+            "flap_cycles_range": chain.FLAP_CYCLE_RANGE,
+            "churn_eps_range": chain.CHURN_EPS_RANGE,
+            # The throughput-bounded duration band + event budget — see the
+            # module constants for the measured arithmetic behind them.
+            "churn_duration_range": chain.CHURN_DURATION_RANGE_SCALE,
+            "churn_max_events": chain.CHURN_MAX_EVENTS_SCALE,
+            "stp_share_range": chain.STP_SHARE_RANGE,
+            "mac_share_range": chain.MAC_SHARE_RANGE,
+            "expected_owner_class": "upstream_transport",
+            "expected_seam_class": "wan_transport",
         },
     ),
 }
@@ -2050,6 +2279,14 @@ class ScenarioEvent(typing.NamedTuple):
     line (`host:ifname` for interface-scoped kinds, `host` for device-scoped
     ones) — kept here so the harness can measure identity-level dynamics
     without re-implementing the parser.
+
+    An EMPTY `symptom` means the line PROVABLY does NOT promote — the
+    classifier returns None for it. Such lines are emitted on purpose: a real
+    enterprise outage produces symptoms this engine cannot see (BGP route
+    churn), and a scenario that quietly substituted a message that DOES
+    classify would be scoring the engine against a network that does not
+    exist. They are counted separately by `dynamics()` and named in ground
+    truth's `parser_coverage` (`scripts/enterprise_outage_chain.py`).
     """
 
     t: float
@@ -2058,13 +2295,20 @@ class ScenarioEvent(typing.NamedTuple):
     message: str
     severity: str
     incident_id: str
-    symptom: str      # the correlation `kind` this line classifies to
+    symptom: str      # the correlation `kind` this line classifies to, or ""
+    #                   when the line provably does not promote at all
     state: str        # "down" | "up"
-    role: str         # onset|expansion|flap|repeat|reassert|recovery|
-    #                   contradiction. ANCHOR roles (onset/expansion/flap) open
-    #                   a fresh symptom; a `repeat` is always within
-    #                   SCENARIO_REPEAT_MAX_OFFSET_S of its anchor.
+    role: str         # onset|expansion|flap|flap_up|churn|repeat|reassert|
+    #                   recovery|contradiction. ANCHOR roles (onset/expansion/
+    #                   flap) open a fresh symptom; a `repeat` is always within
+    #                   SCENARIO_REPEAT_MAX_OFFSET_S of its anchor. `flap_up`
+    #                   is the UP half of a flap cycle (the fault is still
+    #                   open); `recovery` is reserved for the incident really
+    #                   ending, so "recovery follows every fault" stays a
+    #                   checkable invariant.
     entity: str       # the entity_id the classifier derives
+    etype: str = ""   # enterprise_outage only: the chain event type this line
+    #                   realizes, the key into `chain.parser_coverage()`
 
 
 class StormScenario:
@@ -2199,7 +2443,8 @@ class StormScenario:
 
     # -- emission -----------------------------------------------------------
     def _emit(self, iid: str, t: float, device: str, line: tuple[str, str, str],
-              symptom: str, state: str, role: str, entity: str) -> bool:
+              symptom: str, state: str, role: str, entity: str,
+              etype: str = "") -> bool:
         """Append one planned line. Anything outside [0, window) is DROPPED —
         it would never be injected, and ground truth that claims an event the
         stream does not contain is worse than no ground truth."""
@@ -2208,8 +2453,25 @@ class StormScenario:
         appname, message, severity = line
         self.events.append(ScenarioEvent(
             round(float(t), 3), device, appname, message, severity, iid,
-            symptom, state, role, entity))
+            symptom, state, role, entity, etype))
         return True
+
+    # -- the shared enterprise-outage chain ---------------------------------
+    def _chain(self, iid: str, t: float, dev: str, etype: str,
+               line: tuple[str, str, str], role: str, ifname: str = "") -> bool:
+        """Emit one line of the shared chain vocabulary.
+
+        The symptom, the state and the entity are all read from
+        `enterprise_outage_chain`, which derives them from the REAL producer's
+        behaviour — the harness never restates the parser in its own words, so
+        it cannot describe a signal the engine does not create.
+        """
+        return self._emit(iid, t, dev, line,
+                          chain.signal_kind(etype),
+                          chain.CHAIN_BY_TYPE[etype].state,
+                          role,
+                          chain.entity_of(etype, dev, ifname),
+                          etype)
 
     def _link(self, iid, t, dev, ifname, state, role) -> bool:
         return self._emit(iid, t, dev, self._link_line(ifname, state),
@@ -2240,6 +2502,22 @@ class StormScenario:
         hi = min(float(hi), self.window_s - 10.0)
         lo = min(float(lo), hi)
         return round(rng.uniform(lo, hi), 1)
+
+    @staticmethod
+    def _jit(rng: random.Random, band: tuple) -> float:
+        """A seeded draw from `band`, jittered by ±`chain.JITTER_FRACTION`.
+
+        The jitter is applied AFTER the draw and deliberately NOT clamped back
+        into the band: fifteen sites of one template must not fire their phases
+        on the same clock, or the stream carries a periodicity no real estate
+        has and the aggregation plane is measured against an artefact. Phase
+        ORDER is never left to the draw — `_build_enterprise_outage` clamps
+        each phase monotonically after the phase that causes it.
+        """
+        lo, hi = float(band[0]), float(band[1])
+        v = rng.uniform(lo, hi) if hi > lo else lo
+        return round(v * rng.uniform(1.0 - chain.JITTER_FRACTION,
+                                     1.0 + chain.JITTER_FRACTION), 2)
 
     def _recovery(self, tpl: dict, rng: random.Random, onset: float,
                   span: tuple | None = None) -> float | None:
@@ -2514,6 +2792,285 @@ class StormScenario:
             contradictions=[], flap_cycles=len(cycle_log),
             cycles=cycle_log)
 
+    # ---- template: an enterprise SITE outage, one causal chain ------------
+    def _build_enterprise_outage(self, iid, idx, tpl, devs, rng) -> None:
+        """A whole site degrades in ONE causally ordered chain (2026-08-29).
+
+        The site is 2 core/distribution routers + 38 access switches. Its core
+        uplink fails and everything that follows, follows FROM that, in this
+        order (bands and vocabulary from `scripts/enterprise_outage_chain.py`,
+        shared with the network digital twin's `_tpl_enterprise_outage`):
+
+          t0        %LINK / %LINEPROTO down on the core's uplink  ← THE CAUSE
+          +1–3 s    %OSPF-5-ADJCHG FULL→DOWN toward the upstream neighbour
+          +2–10 s   a SECOND core port flaps 2–4 × (LINK/LINEPROTO + the
+                    adjacency to the distribution router, logged from BOTH
+                    ends — two independent vantages on one cause)
+          +5–15 s   the eBGP session to transit flaps Down → Up → Down
+          +10–60 s  route churn at 5–20 eps for 30–45 s, plus a dense
+                    router-update burst and a %BGP-3-NOTIFICATION
+          +20–90 s  the access layer: a TCN on EVERY switch in the STP domain,
+                    a real port transition on 20–60 % of them, MAC moves on
+                    10–30 % as hosts re-home
+          +150–300 s recovery — LINK/LINEPROTO up, adjacency up, session up,
+                    STP back to forwarding — for all but the `no_recovery_share`
+                    of sites, which are HARD OUTAGES and never come back.
+
+        WHAT THE ENGINE CANNOT SEE. The route-churn phase is deliberately built
+        from the vendor-standard `%BGP-5-NBR_RESET`, which the classifier
+        PROVABLY drops, and `%BGP-4-MAXPFX`, which promotes only through the
+        generic device-alarm net. Substituting a message that classifies would
+        have made the stream look like something a real router does not emit;
+        instead the outcome is recorded per event type in ground truth's
+        `parser_coverage`, so a scorer never charges the engine for a symptom
+        it was never given.
+
+        ORDERING. Every phase offset is a seeded draw with ±20 % jitter, then
+        clamped to at least 0.5 s after the phase that causes it, and recovery
+        is clamped to at least 5 s after the LAST fault event of the incident.
+        Causal order therefore holds for every seed, not just this one.
+        """
+        if len(devs) < 3:                        # 16.1: never build it wrong
+            raise ValueError(
+                f"enterprise_outage needs at least 3 devices per site (core + "
+                f"distribution + access), got {len(devs)} — fix "
+                f"devices_per_instance")
+        core, dist = devs[0], devs[1]
+        access = list(devs[2:])
+        upif = self._ifname(idx)                    # the CAUSE entity
+        flapif = self._ifname(idx + 1)
+        # Four distinct off-fleet addresses, all host octet ≥ 200 and unique
+        # across incidents (`_peer_ip` is injective well past these strides), so
+        # no two sites can weld through a shared peer token.
+        peer_ospf = self._peer_ip(idx + 5000)       # nbr across the dead uplink
+        peer_transit = self._peer_ip(idx + 10000)   # upstream eBGP peer
+        peer_dist = self._peer_ip(idx + 15000)      # the dist router, from core
+        peer_core = self._peer_ip(idx + 20000)      # the core router, from dist
+        vlan = 200 + (idx % 100)
+        first = len(self.events)
+
+        # ── the phase clock: seeded, jittered, monotonically causal ────────
+        t0 = self._onset(tpl, rng)
+        t_ospf = t0 + self._jit(rng, chain.PHASE_BAND["ospf_neighbor_down"])
+        t_flap = max(t_ospf + 0.5,
+                     t0 + self._jit(rng,
+                                    chain.PHASE_BAND["ospf_interface_flap"]))
+        t_bgp = max(t_flap + 0.5,
+                    t0 + self._jit(rng, chain.PHASE_BAND["bgp_session_flap"]))
+
+        # ── phase 1: the cause ────────────────────────────────────────────
+        self._chain(iid, t0, core, "link_down", chain.link(upif, "down"),
+                    "onset", upif)
+        self._chain(iid, t0 + 1.0, core, "lineproto_down",
+                    chain.lineproto(upif, "down"), "onset", upif)
+        for off in self._repeat_offsets(tpl, rng):
+            self._chain(iid, t0 + off, core, "link_down",
+                        chain.link(upif, "down"), "repeat", upif)
+
+        # ── phase 2: the IGP notices ──────────────────────────────────────
+        self._chain(iid, t_ospf, core, "ospf_neighbor_down",
+                    chain.ospf_adj(peer_ospf, upif, "down"), "onset")
+        for off in self._repeat_offsets(tpl, rng):
+            self._chain(iid, t_ospf + off, core, "ospf_neighbor_down",
+                        chain.ospf_adj(peer_ospf, upif, "down"), "repeat")
+
+        # ── phase 3: a second core port flaps, seen from BOTH ends ────────
+        cycles = rng.randint(*tpl["flap_cycles_range"])
+        cycle_log: list[dict] = []
+        tc = t_flap
+        for c in range(cycles):
+            role = "onset" if c == 0 else "flap"
+            self._chain(iid, tc, core, "link_down", chain.link(flapif, "down"),
+                        role, flapif)
+            self._chain(iid, tc + 0.5, core, "lineproto_down",
+                        chain.lineproto(flapif, "down"), role, flapif)
+            self._chain(iid, tc + 1.0, core, "ospf_neighbor_down",
+                        chain.ospf_adj(peer_dist, flapif, "down"), role)
+            self._chain(iid, tc + 1.4, dist, "ospf_neighbor_down",
+                        chain.ospf_adj(peer_core, flapif, "down"), role)
+            up = tc + self._jit(rng, (4.0, 12.0))
+            self._chain(iid, up, core, "link_up", chain.link(flapif, "up"),
+                        "flap_up", flapif)
+            self._chain(iid, up + 0.5, core, "lineproto_up",
+                        chain.lineproto(flapif, "up"), "flap_up", flapif)
+            self._chain(iid, up + 1.0, core, "ospf_neighbor_up",
+                        chain.ospf_adj(peer_dist, flapif, "up"), "flap_up")
+            self._chain(iid, up + 1.4, dist, "ospf_neighbor_up",
+                        chain.ospf_adj(peer_core, flapif, "up"), "flap_up")
+            cycle_log.append({"down_at": round(tc, 1),
+                              "up_at": round(up + 1.4, 1)})
+            tc = up + self._jit(rng, (6.0, 18.0))
+
+        # ── phase 4: the transit session flaps Down → Up → Down ───────────
+        self._chain(iid, t_bgp, core, "bgp_session_down",
+                    chain.bgp_adj(peer_transit, "down"), "onset")
+        for off in self._repeat_offsets(tpl, rng):
+            self._chain(iid, t_bgp + off, core, "bgp_session_down",
+                        chain.bgp_adj(peer_transit, "down"), "repeat")
+        b_up = t_bgp + self._jit(rng, (8.0, 20.0))
+        self._chain(iid, b_up, core, "bgp_session_up",
+                    chain.bgp_adj(peer_transit, "up"), "flap_up")
+        b_down2 = b_up + self._jit(rng, (6.0, 18.0))
+        self._chain(iid, b_down2, core, "bgp_session_down",
+                    chain.bgp_adj(peer_transit, "down"), "flap")
+
+        # ── phase 5: route churn + the router-update burst ────────────────
+        t_churn = max(b_down2 + 0.5,
+                      t0 + self._jit(rng, chain.PHASE_BAND["route_churn"]))
+        rate = rng.uniform(*tpl["churn_eps_range"])
+        dur = rng.uniform(*tpl["churn_duration_range"])
+        n_planned = max(1, round(rate * dur))
+        # The throughput budget (see chain.CHURN_MAX_EVENTS_SCALE): the phase
+        # keeps its RATE — the arrival shape the aggregation plane is measured
+        # against — and stops early when the budget is spent. Both numbers ride
+        # into the timeline, so a truncated churn phase is never silent.
+        cap = int(tpl.get("churn_max_events") or 0)
+        n_churn = min(n_planned, cap) if cap > 0 else n_planned
+        step = 1.0 / rate
+        dur_emitted = round(n_churn * step, 1)
+        for k in range(n_churn):
+            at = t_churn + k * step
+            if k % 5 == 4:
+                # the prefix count crossing its threshold as the table churns
+                self._chain(iid, at, core, "bgp_maxprefix",
+                            chain.bgp_maxpfx(peer_transit, 12000 + k * 7),
+                            "churn")
+            else:
+                self._chain(iid, at, core, "bgp_route_churn",
+                            chain.bgp_nbr_reset(peer_transit), "churn")
+        burst_at = t_churn + dur_emitted * 0.55
+        burst_n = max(3, round(rate * 3.0))
+        for k in range(burst_n):
+            self._chain(iid, burst_at + k * (3.0 / burst_n), core,
+                        "bgp_router_update_burst",
+                        chain.bgp_nbr_reset(peer_transit), "churn")
+        self._chain(iid, burst_at + 3.0, core, "bgp_notification",
+                    chain.bgp_notification(peer_transit), "churn")
+
+        # ── phase 6: the access layer reconverges ─────────────────────────
+        t_acc = max(t_churn + 0.5,
+                    t0 + self._jit(rng, chain.PHASE_BAND["access_layer"]))
+        order = list(access)
+        rng.shuffle(order)
+        n_stp = max(1, round(rng.uniform(*tpl["stp_share_range"])
+                             * len(order)))
+        n_mac = max(1, round(rng.uniform(*tpl["mac_share_range"])
+                             * len(order)))
+        stp_devs = order[:n_stp]
+        mac_devs = order[:n_mac]
+        stp_ifs: dict[str, str] = {}
+        # The TCN floods the WHOLE STP domain — every switch in the site logs
+        # it. That is both the physics and what keeps every scenario device
+        # audible: a site device with no event at all would fail accounting's
+        # per-device `corr_signals` coverage forty minutes later.
+        for j, dev in enumerate(order):
+            self._chain(iid, t_acc + 0.2 * j, dev, "stp_topology_change",
+                        chain.stp_tcn(), "expansion")
+        for j, dev in enumerate(stp_devs):
+            pif = self._ifname(idx + 2 + j)
+            stp_ifs[dev] = pif
+            at = t_acc + 1.0 + 0.3 * j
+            self._chain(iid, at, dev, "stp_port_block",
+                        chain.stp_port(pif, "down"), "expansion", pif)
+            for off in self._repeat_offsets(tpl, rng):
+                self._chain(iid, at + off, dev, "stp_port_block",
+                            chain.stp_port(pif, "down"), "repeat", pif)
+        for j, dev in enumerate(mac_devs):
+            pa, pb = self._ifname(idx + 2 + j), self._ifname(idx + 3 + j)
+            # Unique per (site, device): the bare MAC is a GLOBAL entity token
+            # by design, so a reused address would weld two sites into one
+            # false correlation object.
+            mac = chain.mac_address(idx * 4096 + j)
+            at = t_acc + 2.0 + 0.3 * j
+            self._chain(iid, at, dev, "mac_move",
+                        chain.mac_flap(mac, vlan, pa, pb), "expansion")
+            for off in self._repeat_offsets(tpl, rng):
+                self._chain(iid, at + off, dev, "mac_move",
+                            chain.mac_flap(mac, vlan, pa, pb), "repeat")
+
+        # ── phase 7: recovery, or a hard outage ───────────────────────────
+        hard = rng.random() < float(tpl.get("no_recovery_share") or 0.0)
+        last_fault = max((self.events[i].t
+                          for i in range(first, len(self.events))), default=t0)
+        recovery: float | None = None
+        if not hard:
+            drawn = t0 + self._jit(rng, chain.PHASE_BAND["recovery"])
+            # Recovery is never allowed to precede a fault, whatever the draw.
+            # The 20 s tail is the STP restore fan-out below: a recovery whose
+            # own events fall outside the window would be ground truth naming
+            # events the stream does not contain.
+            rec = max(drawn, last_fault + 5.0)
+            if rec < self.window_s - 20.0:
+                recovery = round(rec, 1)
+        if recovery is not None:
+            self._chain(iid, recovery, core, "link_up", chain.link(upif, "up"),
+                        "recovery", upif)
+            self._chain(iid, recovery + 1.0, core, "lineproto_up",
+                        chain.lineproto(upif, "up"), "recovery", upif)
+            self._chain(iid, recovery + 2.0, core, "ospf_neighbor_up",
+                        chain.ospf_adj(peer_ospf, upif, "up"), "recovery")
+            self._chain(iid, recovery + 3.0, core, "bgp_session_up",
+                        chain.bgp_adj(peer_transit, "up"), "recovery")
+            for j, dev in enumerate(stp_devs):
+                self._chain(iid, recovery + 4.0 + 0.3 * j, dev,
+                            "stp_port_forward",
+                            chain.stp_port(stp_ifs[dev], "up"), "recovery",
+                            stp_ifs[dev])
+
+        mine = self.events[first:]
+        kinds = sorted({e.symptom for e in mine if e.symptom})
+        timeline = [
+            {"phase": "uplink_down", "at": round(t0, 1), "offset_s": 0.0},
+            {"phase": "ospf_neighbor_down", "at": round(t_ospf, 1),
+             "offset_s": round(t_ospf - t0, 1)},
+            {"phase": "ospf_interface_flap", "at": round(t_flap, 1),
+             "offset_s": round(t_flap - t0, 1), "cycles": cycle_log},
+            {"phase": "bgp_session_flap", "at": round(t_bgp, 1),
+             "offset_s": round(t_bgp - t0, 1),
+             "transitions": [{"at": round(t_bgp, 1), "state": "down"},
+                             {"at": round(b_up, 1), "state": "up"},
+                             {"at": round(b_down2, 1), "state": "down"}]},
+            {"phase": "route_churn", "at": round(t_churn, 1),
+             "offset_s": round(t_churn - t0, 1),
+             "rate_eps": round(rate, 2),
+             "duration_planned_s": round(dur, 1),
+             "duration_emitted_s": dur_emitted,
+             "events_planned": n_planned + burst_n + 1,
+             "events": n_churn + burst_n + 1,
+             "truncated_by_throughput_budget": n_churn < n_planned,
+             "update_burst_at": round(burst_at, 1),
+             "update_burst_events": burst_n},
+            {"phase": "access_layer", "at": round(t_acc, 1),
+             "offset_s": round(t_acc - t0, 1),
+             "tcn_devices": len(order), "stp_port_devices": n_stp,
+             "mac_move_devices": n_mac},
+        ]
+        if recovery is not None:
+            timeline.append({"phase": "recovery", "at": recovery,
+                             "offset_s": round(recovery - t0, 1)})
+        self._record(
+            iid, tpl,
+            {"entity_type": "interface", "device": core, "interface": upif,
+             "entity_id": f"{core}:{upif}", "peer": peer_transit},
+            t0, recovery, blast=devs,
+            # The two devices that observed the CAUSE (the core its own port,
+            # the distribution router the adjacency it lost). The access layer
+            # observed CONSEQUENCES, which is a blast radius, not a vantage.
+            vantages=[core, dist],
+            symptom_kinds=kinds,
+            blast_radius_waves=[
+                {"at": round(t_flap, 1), "devices": [dist]},
+                {"at": round(t_acc, 1), "devices": sorted(order)}],
+            contradictions=[], flap_cycles=len(cycle_log),
+            timeline=timeline,
+            hard_outage=hard,
+            site={"core": core, "distribution": dist,
+                  "access_devices": len(access),
+                  "stp_port_devices": sorted(stp_devs),
+                  "mac_move_devices": sorted(mac_devs)},
+            unpromotable_events=sum(1 for e in mine if not e.symptom),
+            event_types=sorted({e.etype for e in mine if e.etype}))
+
     # -- measurement + ground truth -----------------------------------------
     def dynamics(self) -> dict:
         """The properties this profile exists to create, MEASURED on the plan.
@@ -2522,8 +3079,14 @@ class StormScenario:
         §4) except the raw counts — which is why they are computed and written
         out rather than asserted in a comment.
         """
+        # Only PROMOTED lines can form an identity: a line the classifier
+        # drops (empty symptom) contributes no signal, so counting it as an
+        # identity — or worse, as a state transition — would report dynamics
+        # the engine cannot possibly observe. They get their own counter.
         by_identity: dict[tuple, list[ScenarioEvent]] = {}
         for e in self.events:
+            if not e.symptom:
+                continue
             by_identity.setdefault((e.entity, e.symptom), []).append(e)
         transitions = recoveries = repeats = 0
         repeating_identities = 0
@@ -2544,10 +3107,21 @@ class StormScenario:
         observers: dict[str, set] = {}
         for inc in self.incidents:
             observers[inc["incident_id"]] = set(inc["vantages"])
+        etypes: dict[str, int] = {}
+        for e in self.events:
+            if e.etype:
+                etypes[e.etype] = etypes.get(e.etype, 0) + 1
+        unpromotable = sum(1 for e in self.events if not e.symptom)
         return {
             "scenario_events": len(self.events),
             "incidents": len(self.incidents),
             "identities": len(by_identity),
+            # Lines the classifier PROVABLY drops — the symptoms a real
+            # enterprise outage emits and this engine cannot see. Named per
+            # type in `parser_coverage`; a backlog item, not a harness bug.
+            "unpromotable_events": unpromotable,
+            "promoted_events": len(self.events) - unpromotable,
+            "chain_events_by_type": dict(sorted(etypes.items())),
             "state_transitions": transitions,
             "recoveries": recoveries,
             "repeats_within_60s": repeats,
@@ -2628,14 +3202,97 @@ class StormScenario:
             },
             "templates": self.template_counts,
             "counts": counts,
+            # WHAT THE ENGINE COULD SEE. Per requested outage symptom: does
+            # `producers.syslog_control_signal` promote the vendor-standard
+            # line this scenario emits for it? A scorer MUST read this before
+            # charging the engine with a miss — a `not_promoted` symptom is a
+            # product backlog item, and the run's TTUR/T4 numbers can only be
+            # about the symptoms marked `promoted`.
+            "parser_coverage": chain.parser_coverage(),
+            "parser_coverage_detail": chain.parser_coverage_detail(),
+            "not_promoted": list(chain.not_promoted_types()),
+            "phase_timeline": [
+                {"phase": name, "offset_band_s": list(band)}
+                for name, band in chain.PHASE_BANDS],
             "incidents": self.incidents,
             "contract": (
                 "Scoring contract: scripts/scale-rca-latency.py, section "
                 "'GROUND TRUTH (t-storm profiles)'. Match a persisted incident "
                 "to a ground-truth incident by cause entity + onset; "
                 "expected_owner_class / expected_seam_class are scenario "
-                "labels, informational until the harness provisions seams."),
+                "labels, informational until the harness provisions seams. "
+                "The SAME incidents are also written in the network digital "
+                "twin's record shape to ground_truth.jsonl (+ state.json), so "
+                "`scripts/lab/twin/twin.py score --runid <id> --run-root "
+                "data/miniladder` scores this run with no second scorer."),
         }
+
+    # ── the twin's record shape ────────────────────────────────────────────
+    #
+    # THE CONVERGENCE. `scripts/lab/twin/scorer.py` already joins labels
+    # against the engine's `corr_objects` and emits an accuracy report. It
+    # reads a `ground_truth.jsonl` of per-story records and a `state.json` for
+    # {runid, prefix, device_tenants}. Everything it needs, this scenario has —
+    # the ONE mismatch is that the twin prefixes device names from
+    # `state["prefix"]` because its scenario files name devices abstractly,
+    # while the mini-ladder's ids are already fully qualified. That is closed
+    # by writing `prefix: ""`, not by changing either schema.
+    #
+    # The two ground truths are therefore NOT rival schemas: `ground-truth.json`
+    # stays the mini-ladder's own contract (per-run, plan-level, digest,
+    # dynamics, chunk accounting — none of which the twin models), and
+    # `ground_truth.jsonl` is the SAME incidents projected into the twin's
+    # per-story record so its scorer runs unchanged. Everything the twin's
+    # record has no place for rides in `labels`, which the scorer ignores.
+    def twin_records(self) -> list[dict]:
+        """Every incident as one `ground_truth.jsonl` record (twin shape)."""
+        out: list[dict] = []
+        for inc in self.incidents:
+            ce = inc["cause_entity"]
+            devices = list(inc["blast_radius"])
+            out.append({
+                "story_id": inc["incident_id"],
+                "template": inc["cause_kind"],
+                "t0_offset_s": inc["onset_ts"],
+                # The mini-ladder plans an incident; it does not "fire" it at a
+                # wall-clock instant (the chunk clock does). Null, not a lie.
+                "fired_at": None,
+                "affected": {"devices": devices, "tenants": []},
+                "entities": devices,
+                "extra_entities": [str(ce["peer"])] if ce.get("peer") else [],
+                # Only clauses this workload can honestly be held to: the lab
+                # provisions no seams, so no seam/owner clause is asserted (see
+                # expected_*_class in `labels`, informational until it does).
+                "expect": {"rca": {
+                    "verdict_tier_at_least": "suspected",
+                    "affected_includes": [str(ce["device"])],
+                }},
+                "labels": {
+                    "source": "scale-miniladder",
+                    "scenario": self.spec["name"],
+                    "seed": self.seed,
+                    "cause_entity": ce,
+                    "onset_offset_s": inc["onset_ts"],
+                    "recovery_offset_s": inc["recovery_ts"],
+                    "blast_radius": devices,
+                    "vantages": inc["vantages"],
+                    "symptom_kinds": inc["symptom_kinds"],
+                    "expected_owner_class": inc["expected_owner_class"],
+                    "expected_seam_class": inc["expected_seam_class"],
+                    "timeline": inc.get("timeline") or [],
+                    "hard_outage": inc.get("hard_outage"),
+                    "parser_coverage": chain.parser_coverage(),
+                },
+            })
+        return out
+
+    def twin_state(self) -> dict:
+        """The minimal `state.json` `twin.py score` reads. `prefix` is empty
+        because mini-ladder device ids are already fully qualified; an empty
+        `device_tenants` is honest — this harness onboards one tenant, so no
+        cross-tenant-merge clause can be asserted, and none is."""
+        return {"runid": self.runid, "prefix": "", "device_tenants": {},
+                "source": "scale-miniladder", "scenario": self.spec["name"]}
 
 
 
@@ -3383,10 +4040,11 @@ class Harness:
         # sampled, which memflat reports rather than reading as zero.
         self.ch_mem_peak: dict[str, int] = {"MemoryTracking": -1,
                                             "MergesMutationsMemoryTracking": -1}
-        # Live `system.metrics` readings discarded as physically impossible
-        # (CH_PLAUSIBLE_SAMPLE). Counted, never hidden: a filter that does not
-        # say how much it threw away is its own defect.
-        self.ch_mem_implausible = 0
+        # How many live `system.metrics` samples the harness folded in. It is
+        # a FLOOR under the metric_log peaks and the whole instrument when
+        # metric_log is gone, so the count rides in the evidence: "degraded to
+        # N point samples" is a different statement from "measured at 1 Hz".
+        self.ch_mem_samples = 0
         # Per-correlation-replica {pending, RSS} track, filled by the
         # correlation-completion poll loop and consumed by memflat's
         # pending-zero anchor. Container name -> the derived anchor row; empty
@@ -3595,6 +4253,11 @@ class Harness:
         self.baseline["ch_max_part_count"] = self._ch_number(
             "SELECT value FROM system.asynchronous_metrics "
             "WHERE metric = 'MaxPartCountForPartition'")
+        # The customer-visible fact memflat clause (2a) is a DELTA of: how many
+        # times the server had already refused work for want of memory before
+        # this run put a byte on it. -1 = unread, which memflat reports as
+        # UNKNOWN rather than treating as a clean baseline of 0.
+        self.baseline["ch_mem_errors"] = self._ch_number(CH_MEM_ERROR_TOTAL_SQL)
         self._ch_sample_metrics()
         self.baseline["kafka_syslog_end"] = self.stack.end_offset("netops.syslog")
         self.baseline["corr_lag_total"] = corr_lag.get("_total", -1)
@@ -4243,12 +4906,29 @@ class Harness:
             gt = scen.ground_truth(planned_total=fleet_planned)
             gt_path = self.evidence_file(GROUND_TRUTH_FILE,
                                          json.dumps(gt, indent=1, sort_keys=True))
+            twin_recs = scen.twin_records()
+            twin_gt_path = self.evidence_file(
+                TWIN_GROUND_TRUTH_FILE,
+                "".join(json.dumps(r, sort_keys=True) + "\n"
+                        for r in twin_recs))
+            twin_state_path = self.evidence_file(
+                TWIN_STATE_FILE,
+                json.dumps(scen.twin_state(), indent=1, sort_keys=True))
             ev["ground_truth"] = {
                 "path": gt_path, "schema": gt["schema"],
                 "scenario": gt["scenario"], "seed": gt["seed"],
                 "digest": gt["digest"], "incidents": len(gt["incidents"]),
                 "templates": gt["templates"], "devices": gt["devices"],
                 "counts": gt["counts"],
+                "parser_coverage": gt["parser_coverage"],
+                "not_promoted": gt["not_promoted"],
+                # The twin-scorable projection of the same incidents.
+                "twin_ground_truth_path": twin_gt_path,
+                "twin_state_path": twin_state_path,
+                "twin_records": len(twin_recs),
+                "twin_score_cmd": (
+                    f"python3 scripts/lab/twin/twin.py score --runid "
+                    f"{self.runid} --run-root data/miniladder"),
             }
             log(f"scenario {gt['scenario']} seed={gt['seed']} "
                 f"digest={gt['digest'][:16]} — {len(gt['incidents'])} incidents, "
@@ -4257,6 +4937,17 @@ class Harness:
                 f"{gt['counts']['recoveries']} recoveries) over "
                 f"{gt['devices']['scenario']} devices; "
                 f"{gt['devices']['noise_pool']} devices carry background")
+            # 16.1: the symptoms the engine CANNOT see are stated up front,
+            # not discovered in the scoring. A run whose T4 number ignores this
+            # line is charging the engine for evidence it never received.
+            if gt["not_promoted"]:
+                log(f"scenario parser coverage: "
+                    f"{gt['counts']['unpromotable_events']} of "
+                    f"{gt['counts']['scenario_events']} planned lines PROVABLY "
+                    f"do not promote (vendor-standard messages the classifier "
+                    f"drops): {', '.join(gt['not_promoted'])} — product "
+                    f"backlog, not a harness defect; TTUR/T4 may only be "
+                    f"scored on the promoted symptoms")
             silent = scen.silent_devices()
             if silent:
                 # Never silent about a silence (16.1): the run will still go
@@ -4380,6 +5071,9 @@ class Harness:
                 "shortfall": len(scen.events) - scenario_injected,
                 "background_injected": fleet_injected - scenario_injected,
                 "ground_truth_file": GROUND_TRUTH_FILE,
+                "twin_ground_truth_file": TWIN_GROUND_TRUTH_FILE,
+                "unpromotable_injected": sum(
+                    1 for b in scen.buckets for e in b if not e.symptom),
             }
         self.evidence_file("burst-chunks.json", json.dumps(chunks, indent=1))
         if self.produce_failures:
@@ -5510,14 +6204,19 @@ class Harness:
 
     # -- memflat, ClickHouse clauses (2) and (3) -----------------------------
     #
-    # docs/scale/P2_CLICKHOUSE_MEMFLAT_2026-08-29.md §(c). A store that writes
+    # docs/scale/P2_CLICKHOUSE_MEMFLAT_2026-08-29.md §(c), corrected by
+    # docs/scale/P2_CLICKHOUSE_PEAK_S06_2026-08-29.md. A store that writes
     # 50 GiB per run does not answer to an RSS ratio; it answers to its OWN
     # memory accounting and to the parts it leaves behind:
     #
-    #   (2) peak MemoryTracking < 85 % of the effective max_server_memory_usage
-    #       AND peak MergesMutationsMemoryTracking < 50 % of it. On the run that
-    #       failed this gate for the wrong reason, these read 95.2 % and 83.0 %:
-    #       the finding worth gating on, and the one nobody was told about.
+    #   (2a) ZERO new MEMORY_LIMIT_EXCEEDED across the run (`system.errors`
+    #        delta, preflight -> memflat). Any increase is a FAIL, named with
+    #        the count and with whatever victims query_log can attribute.
+    #   (2b) p99 MemoryTracking < CH_MEMORY_TRACKING_MAX_PCT of the effective
+    #        max_server_memory_usage. The PEAK is reported beside it, and a
+    #        peak at/above the cap with no error behind it is a WARN, not a
+    #        FAIL — see the CH_MEM_ERROR header for why p99 and not max.
+    #        MergesMutationsMemoryTracking is INFORMATIONAL: no verdict.
     #   (3) MaxPartCountForPartition returns to within +20 % of its preflight
     #       value once input stops, and stays under parts_to_delay_insert / 2.
     #       That is what a stateful store legitimately owes after a burst.
@@ -5526,101 +6225,90 @@ class Harness:
 
     def _ch_sample_metrics(self) -> None:
         """Fold a live `system.metrics` reading into the running peak. Cheap,
-        and it is the only peak available if `system.metric_log` is disabled.
+        and it is the only instrument left if `system.metric_log` is gone.
 
-        The PAIR is judged, never the two counters separately: a reading whose
-        merge memory exceeds its own MemoryTracking is physically impossible
-        (CH_PLAUSIBLE_SAMPLE) and is discarded whole — folding half of a
-        corrupt sample into the peak is how the metric_log defect reached the
-        verdict through the fallback path as well."""
+        The two counters are folded INDEPENDENTLY. On 24.8 MemoryTracking is
+        process RSS and MergesMutationsMemoryTracking is a tracker sum, so
+        neither bounds the other: a sample where the merge figure is the larger
+        is a real reading, and the old code threw the pair away (see the
+        CH_MEM_ERROR header)."""
         ok, out = self.stack.ch(
             "SELECT metric, toInt64(value) FROM system.metrics WHERE metric IN "
             "('MemoryTracking', 'MergesMutationsMemoryTracking')")
         if not ok:
             warn(f"ClickHouse system.metrics sample failed: {out[:160]}")
             return
-        raw_values: dict[str, int] = {}
+        folded = False
         for line in out.splitlines():
             if "\t" not in line:
                 continue
             metric, raw = line.split("\t", 1)
             if metric not in self.ch_mem_peak:
                 continue
-            try:                        # SIGNED: the plausibility test needs it
-                raw_values[metric] = int(float(raw.strip()))
+            try:
+                # A negative merge delta is 0 bytes of merge memory, never a
+                # UInt64 wrap — _ch_counter is the signed parse plus that floor.
+                value = _ch_counter(raw)
             except ValueError:
                 continue
-        track = raw_values.get("MemoryTracking")
-        merges = raw_values.get("MergesMutationsMemoryTracking")
-        if track is None:
-            warn("ClickHouse system.metrics sample carried no MemoryTracking "
-                 "row — nothing folded into the peak")
+            folded = True
+            self.ch_mem_peak[metric] = max(self.ch_mem_peak[metric], value)
+        if not folded:
+            warn("ClickHouse system.metrics sample carried neither memory "
+                 "counter — nothing folded into the peak")
             return
-        if track < 0 or (merges is not None and merges > track):
-            self.ch_mem_implausible += 1
-            warn(f"ClickHouse system.metrics sample DISCARDED as physically "
-                 f"impossible: MergesMutationsMemoryTracking {mib(merges)} vs "
-                 f"MemoryTracking {mib(track)} (merge memory is a subset of the "
-                 f"tracked total) — the counter underflowed; not folded into "
-                 f"the peak")
-            return
-        for metric, value in (("MemoryTracking", track),
-                              ("MergesMutationsMemoryTracking", merges)):
-            if value is None:
-                continue
-            # A negative merge delta is 0 bytes of merge memory, never a wrap.
-            self.ch_mem_peak[metric] = max(self.ch_mem_peak[metric], 0, value)
+        self.ch_mem_samples += 1
 
     def _ch_memory_cap(self) -> tuple[float, str]:
         return ch_memory_cap(self.stack)
 
     def _ch_memory_peaks(self) -> tuple[dict, str, dict]:
-        """Peak MemoryTracking / merge memory over THIS RUN's window.
+        """Peak AND p99 MemoryTracking, plus the merge peak, over THIS RUN.
 
-        `system.metric_log` is the instrument; the harness's own
-        `system.metrics` samples are folded in as a floor, so a disabled
-        metric_log degrades the resolution instead of blinding the gate.
+        `system.metric_log` is the instrument, unfiltered: on 24.8 there is no
+        sample shape that is "impossible" (CH_MEM_ERROR header), so nothing is
+        discarded and nothing needs a rejected-sample census any more.
 
-        Only PLAUSIBLE samples are aggregated (CH_PLAUSIBLE_SAMPLE) — a row
-        whose merge memory exceeds its own MemoryTracking is a counter
-        underflow, not a measurement, and taking `max()` across the raw column
-        let 50 such rows decide run p2-s05-08291138's verdict. The rejected
-        count rides in the returned census so the filtering is never silent.
+        metric_log is OPTIONAL, and deliberately so — a builder may lower its
+        cadence, and changing its `<engine>` makes ClickHouse rename the table
+        on restart. So the harness's own `system.metrics` samples are folded in
+        as a FLOOR under the peak. They are a floor and nothing else: a handful
+        of point samples cannot carry a p99, so a degraded run reports p99
+        UNMEASURED and the verdict says so — it never passes blind.
         """
-        peaks = {"MemoryTracking": -1, "MergesMutationsMemoryTracking": -1}
+        peaks = {"MemoryTracking": -1, "MemoryTrackingP99": -1,
+                 "MergesMutationsMemoryTracking": -1}
         census = {"window_start": "", "metric_log_samples": -1,
-                  "metric_log_plausible": -1, "metric_log_rejected": -1,
-                  "live_samples_rejected": self.ch_mem_implausible}
+                  "metric_log": "not queried (no run window)",
+                  "metric_log_first_sample": "", "metric_log_gap_s": -1.0,
+                  "harness_samples": self.ch_mem_samples}
         sources: list[str] = []
-        start = str(self.baseline.get("ch_window_start") or "")
-        # Zero trust even on our own server's clock: this string is spliced
-        # into SQL, so it must match a DateTime literal exactly or be dropped.
-        if re.fullmatch(r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}", start):
+        start = ch_ts(self.baseline.get("ch_window_start"))
+        if start:
             census["window_start"] = start
+            census["metric_log"] = "queried"
             ok, out = self.stack.ch(
-                "SELECT "
-                f"maxIf(greatest(CurrentMetric_MemoryTracking, 0), "
-                f"{CH_PLAUSIBLE_SAMPLE}), "
-                f"maxIf(greatest(CurrentMetric_MergesMutationsMemoryTracking, 0), "
-                f"{CH_PLAUSIBLE_SAMPLE}), "
-                f"countIf({CH_PLAUSIBLE_SAMPLE}), count() "
-                "FROM system.metric_log "
-                f"WHERE event_time >= toDateTime('{start}')")
-            if ok and out.strip():
+                CH_PEAK_SELECT + f"event_time >= toDateTime('{start}')")
+            if not ok:
+                census["metric_log"] = f"UNAVAILABLE ({out[:120]})"
+                warn(f"ClickHouse metric_log peak query failed: {out[:160]} — "
+                     f"the peaks degrade to the harness's own samples and the "
+                     f"p99 clause cannot be judged")
+            elif out.strip():
                 cells = out.strip().splitlines()[0].split("\t")
                 try:
-                    plausible, total = int(cells[2]), int(cells[3])
+                    total = int(cells[3])
                 except (IndexError, ValueError):
-                    plausible, total = -1, -1
+                    total = -1
+                    census["metric_log"] = (
+                        f"answer unreadable ({out.strip()[:120]!r})")
                     warn(f"ClickHouse metric_log peak query returned an "
-                         f"unreadable sample census ({out.strip()[:120]!r}) — "
-                         f"the peaks it carries are not trusted")
+                         f"unreadable row ({out.strip()[:120]!r}) — the peaks "
+                         f"it carries are not trusted")
                 census["metric_log_samples"] = total
-                census["metric_log_plausible"] = plausible
-                census["metric_log_rejected"] = (
-                    total - plausible if total >= 0 and plausible >= 0 else -1)
-                if plausible > 0:
+                if total > 0:
                     for i, key in enumerate(("MemoryTracking",
+                                             "MemoryTrackingP99",
                                              "MergesMutationsMemoryTracking")):
                         try:
                             peaks[key] = _ch_counter(cells[i])
@@ -5628,20 +6316,28 @@ class Harness:
                             peaks[key] = -1
                     if peaks["MemoryTracking"] > 0:
                         sources.append(f"system.metric_log since {start}")
-                    if census["metric_log_rejected"] > 0:
-                        warn(f"ClickHouse metric_log: "
-                             f"{census['metric_log_rejected']} of {total} samples "
-                             f"in this run's window were physically impossible "
-                             f"(merge memory above MemoryTracking) and were "
-                             f"excluded from the peaks")
-                elif total >= 0:
-                    warn(f"ClickHouse metric_log held {total} sample(s) for this "
-                         f"run's window and NONE was plausible — the peaks fall "
-                         f"back to the harness's own samples")
-            elif not ok:
-                warn(f"ClickHouse metric_log peak query failed: {out[:160]}")
+                    first = cells[4] if len(cells) > 4 else ""
+                    gap = ch_window_gap_s(start, first)
+                    census["metric_log_first_sample"] = ch_ts(first)
+                    census["metric_log_gap_s"] = round(gap, 1)
+                    if gap > CH_WINDOW_COVERAGE_SLACK_S:
+                        census["metric_log"] = (
+                            f"PARTIAL — {total} sample(s), the first at {first}, "
+                            f"{gap:.0f}s after the window opened at {start}")
+                    else:
+                        census["metric_log"] = f"{total} sample(s) in the window"
+                elif total == 0:
+                    census["metric_log"] = (
+                        "present but held 0 samples for this run's window")
+                    warn("ClickHouse metric_log held 0 samples for this run's "
+                         "window — the peaks degrade to the harness's own "
+                         "samples and the p99 clause cannot be judged")
+            else:
+                census["metric_log"] = "returned an empty answer"
+                warn("ClickHouse metric_log peak query returned nothing — the "
+                     "peaks degrade to the harness's own samples")
         self._ch_sample_metrics()
-        census["live_samples_rejected"] = self.ch_mem_implausible
+        census["harness_samples"] = self.ch_mem_samples
         for key, sampled in self.ch_mem_peak.items():
             if sampled > peaks.get(key, -1):
                 peaks[key] = sampled
@@ -5649,12 +6345,79 @@ class Harness:
                     sources.append("harness system.metrics samples")
         return peaks, " + ".join(sources) if sources else "none", census
 
+    def _ch_memory_errors(self) -> tuple[dict, list]:
+        """Clause (2a): the MEMORY_LIMIT_EXCEEDED delta across this run.
+
+        `system.errors` is the counter (server-lifetime, and it RESETS on a
+        restart — a backwards delta is therefore UNKNOWN, never zero);
+        `system.error_log` is the timeline over the run window and the only
+        table that sees background-thread raises."""
+        start = ch_ts(self.baseline.get("ch_window_start"))
+        end = ch_ts(self.stack.ch_now())
+        # `or -1` would be a defect here: a baseline of 0 errors is the
+        # HEALTHY case and must not read as unmeasured.
+        raw_base = self.baseline.get("ch_mem_errors", -1)
+        base = int(raw_base) if raw_base is not None else -1
+        now = ch_number(self.stack, CH_MEM_ERROR_TOTAL_SQL)
+        window, window_source, window_state = ch_memory_error_window(
+            self.stack, start, end)
+        ev = {"baseline": base, "current": int(now) if now >= 0 else -1,
+              "delta": -1, "window_count": window,
+              "window_source": window_source, "window_state": window_state,
+              "window_start": start, "window_end": end, "victims": ""}
+        problems: list = []
+        if base < 0 or now < 0:
+            problems.append(
+                f"clickhouse: the {CH_MEM_ERROR} counter is UNREADABLE "
+                f"(preflight {base}, now {int(now)}) — the clause that carries "
+                f"the customer-visible fact cannot be judged, and a memory "
+                f"gate must not pass blind"
+                + (f" (system.error_log meanwhile counted {window} over the run "
+                   f"window)" if window > 0 else ""))
+            return ev, problems
+        delta = int(now) - base
+        ev["delta"] = delta
+        if delta < 0:
+            problems.append(
+                f"clickhouse: the {CH_MEM_ERROR} counter went BACKWARDS "
+                f"(preflight {base} -> {int(now)}) — system.errors resets at "
+                f"server start, so ClickHouse RESTARTED during this run: the "
+                f"error clause is UNKNOWN and the run is not comparable"
+                + (f" (system.error_log counted {window} over the window)"
+                   if window > 0 else ""))
+            return ev, problems
+        # The delta and the error_log window are two views of the same fact and
+        # either one alone is enough to condemn the run: take the LARGER, never
+        # the more convenient.
+        raised = max(delta, max(0, window))
+        if raised > 0:
+            ev["victims"] = ch_memory_error_victims(
+                self.stack, start, end, raised)
+            problems.append(
+                f"clickhouse: {raised} {CH_MEM_ERROR} during this run "
+                f"(system.errors delta {delta}"
+                + (f", {window_source} counted {window}" if window >= 0
+                   else f", {window_source}")
+                + f") — the store refused work for want of its own memory "
+                  f"budget. Victims: {ev['victims']}")
+        return ev, problems
+
     def _ch_parts_settled(self) -> dict:
         """Clause (3): parts come back down after input stops.
 
         Bounded settle wait — merges that are still folding the burst's parts
         are legitimate work, a part count that never returns is not."""
-        base = int(self.baseline.get("ch_max_part_count", -1) or -1)
+        # `or -1` would be a defect here, exactly as it was for ch_mem_errors:
+        # a preflight of ZERO parts is the CLEANEST baseline there is (an idle,
+        # freshly-merged store), and reading it as "unmeasurable" abandons
+        # clause (3) on precisely the runs whose part growth is most legible.
+        # Only a MISSING or unparsable value is unmeasurable; `_ch_number`
+        # already returns -1 when the probe itself could not answer.
+        raw_base = self.baseline.get("ch_max_part_count")
+        try:
+            base = -1 if raw_base is None else int(raw_base)
+        except (TypeError, ValueError):
+            base = -1
         delay_at = self._ch_number(
             "SELECT toFloat64(value) FROM system.merge_tree_settings "
             "WHERE name = 'parts_to_delay_insert'")
@@ -5702,33 +6465,53 @@ class Harness:
         return out
 
     def _clickhouse_memory_verdict(self, rows: list) -> tuple[dict, list, str]:
-        """Clauses (2) and (3), plus the one-line summary of all three."""
+        """Clauses (2a), (2b) and (3), plus the one-line summary of all three.
+
+        The order is deliberate: the ERROR clause first, because it is the
+        customer-visible fact and the memory levels are only a proxy for it.
+        """
         if "clickhouse" not in MEM_SERVICES:
             return {}, [], ""
         problems: list[str] = []
+        warnings: list[str] = []
         cap, cap_source = self._ch_memory_cap()
         peaks, peak_source, census = self._ch_memory_peaks()
-        # THE LAST NET. Whatever the instrument said, the two numbers this
-        # phase is about to PRINT must satisfy the physical invariant — merge
-        # memory is part of the tracked total. If they do not, the instrument
-        # is corrupt in a way the plausibility filter did not catch, and the
-        # only honest verdict is UNKNOWN: never a FAIL on an impossible number
-        # (which is exactly what run p2-s05-08291138 got), and never a PASS on
-        # one either.
-        impossible = (peaks["MemoryTracking"] >= 0
-                      and peaks["MergesMutationsMemoryTracking"] >= 0
-                      and peaks["MergesMutationsMemoryTracking"]
-                      > peaks["MemoryTracking"])
+        err_ev, err_problems = self._ch_memory_errors()
+        problems += err_problems
+        # An EMPTY error_log beside a zero delta is two instruments agreeing,
+        # not a broken cross-check — the common clean run, and warning on it
+        # every night is how a gate teaches operators to ignore it. Every other
+        # unusable state IS reported.
+        if (err_ev["window_state"] not in ("ok", "empty")
+                or (err_ev["window_state"] == "empty" and err_ev["delta"] > 0)):
+            warnings.append(
+                f"clickhouse: system.error_log cannot answer for this run "
+                f"({err_ev['window_source']}) — the {CH_MEM_ERROR} count rests "
+                f"on the system.errors delta alone, which is a lifetime "
+                f"counter and cannot say WHEN inside the run they fired")
+        if census.get("metric_log", "").startswith("PARTIAL"):
+            warnings.append(
+                f"clickhouse: system.metric_log covers only part of this run "
+                f"({census['metric_log']}) — the p99 below is over the covered "
+                f"tail, not the whole window")
         ev = {"cap_bytes": int(cap) if cap > 0 else -1,
               "cap_source": cap_source,
               "peak_source": peak_source,
               "peak_memory_tracking_bytes": peaks["MemoryTracking"],
+              "p99_memory_tracking_bytes": peaks["MemoryTrackingP99"],
+              # INFORMATIONAL ONLY. On 24.8 MemoryTracking is process RSS and
+              # this is a tracker sum, so it is not bounded by the total and
+              # there is no honest fraction-of-cap to assert on. Reported so a
+              # reader can see it; never judged.
               "peak_merges_memory_bytes": peaks["MergesMutationsMemoryTracking"],
-              "peaks_self_consistent": not impossible,
+              "merges_memory_verdict": "INFORMATIONAL — not bounded by the "
+                                       "tracked total in ClickHouse 24.8",
+              "memory_limit_exceeded": err_ev,
               "sample_census": census,
               "memory_tracking_max_pct": CH_MEMORY_TRACKING_MAX_PCT,
-              "merges_memory_max_pct": CH_MERGE_MEMORY_MAX_PCT}
-        track_pct = merge_pct = None
+              "memory_tracking_peak_warn_pct": CH_MEMORY_TRACKING_PEAK_WARN_PCT}
+        track_pct = p99_pct = None
+        degraded = peaks["MemoryTrackingP99"] < 0
         if cap <= 0:
             problems.append(
                 "clickhouse: effective max_server_memory_usage unreadable "
@@ -5736,72 +6519,82 @@ class Harness:
                 "memory gate must not pass blind")
         elif peaks["MemoryTracking"] < 0:
             problems.append(
-                "clickhouse: MemoryTracking peak unmeasurable (system.metric_log "
-                "returned nothing for this run's window and no live sample "
-                "succeeded) — the OOM clause cannot be judged")
-        elif impossible:
-            problems.append(
-                f"clickhouse: memory peaks UNKNOWN — peak MERGE memory "
-                f"{mib(peaks['MergesMutationsMemoryTracking'])} EXCEEDS peak "
-                f"MemoryTracking {mib(peaks['MemoryTracking'])}, which is "
-                f"physically impossible (merge memory is a subset of the "
-                f"server's tracked total): the instrument is corrupt "
-                f"({census['metric_log_rejected']} of "
-                f"{census['metric_log_samples']} metric_log samples already "
-                f"rejected as impossible) — clause (2) is NOT judged either way")
+                "clickhouse: MemoryTracking unmeasurable (system.metric_log "
+                f"answered nothing for this run's window [{census['metric_log']}] "
+                "and no live sample succeeded) — the OOM clause cannot be judged")
         else:
             track_pct = round(100.0 * peaks["MemoryTracking"] / cap, 1)
-            if track_pct > CH_MEMORY_TRACKING_MAX_PCT:
-                problems.append(
-                    f"clickhouse: peak MemoryTracking "
-                    f"{peaks['MemoryTracking'] / 1024**2:.0f} MiB is {track_pct}% "
-                    f"of its {cap / 1024**2:.0f} MiB server cap "
-                    f"(> {CH_MEMORY_TRACKING_MAX_PCT}%) — this run came that "
-                    f"close to MEMORY_LIMIT_EXCEEDED")
-            if peaks["MergesMutationsMemoryTracking"] < 0:
-                problems.append(
-                    "clickhouse: merge memory peak unmeasurable "
-                    "(MergesMutationsMemoryTracking absent) — clause (2) is "
-                    "only half judged")
-            else:
-                merge_pct = round(
-                    100.0 * peaks["MergesMutationsMemoryTracking"] / cap, 1)
-                if merge_pct > CH_MERGE_MEMORY_MAX_PCT:
+            if degraded:
+                # metric_log is gone, so there is no p99 to judge. The PEAK is
+                # judged in its place at the same bound — a STRICTER test than
+                # the clause, which is the honest direction to err in, and it
+                # is said out loud rather than passed off as the real one.
+                warnings.append(
+                    f"clickhouse: p99 MemoryTracking UNMEASURED "
+                    f"({census['metric_log']}) — DEGRADED to "
+                    f"{census['harness_samples']} harness system.metrics "
+                    f"sample(s), and the PEAK was judged in the p99's place at "
+                    f"the same {CH_MEMORY_TRACKING_MAX_PCT}% bound. That is "
+                    f"stricter than the clause: one transient can fail it")
+                if track_pct > CH_MEMORY_TRACKING_MAX_PCT:
                     problems.append(
-                        f"clickhouse: peak MERGE memory "
-                        f"{peaks['MergesMutationsMemoryTracking'] / 1024**2:.0f} MiB "
-                        f"is {merge_pct}% of the {cap / 1024**2:.0f} MiB server cap "
-                        f"(> {CH_MERGE_MEMORY_MAX_PCT}%) — background merges alone "
-                        f"can starve the query/insert path")
+                        f"clickhouse: peak MemoryTracking "
+                        f"{peaks['MemoryTracking'] / 1024**2:.0f} MiB is "
+                        f"{track_pct}% of its {cap / 1024**2:.0f} MiB server "
+                        f"cap (> {CH_MEMORY_TRACKING_MAX_PCT}%), judged in the "
+                        f"p99's place because system.metric_log could not "
+                        f"answer for this run's window")
+            else:
+                p99_pct = round(100.0 * peaks["MemoryTrackingP99"] / cap, 1)
+                if p99_pct > CH_MEMORY_TRACKING_MAX_PCT:
+                    problems.append(
+                        f"clickhouse: p99 MemoryTracking "
+                        f"{peaks['MemoryTrackingP99'] / 1024**2:.0f} MiB is "
+                        f"{p99_pct}% of its {cap / 1024**2:.0f} MiB server cap "
+                        f"(> {CH_MEMORY_TRACKING_MAX_PCT}%) — this is the level "
+                        f"the store RUNS at, not a transient: it spent 1% of "
+                        f"the run at or above it")
+                if (track_pct >= CH_MEMORY_TRACKING_PEAK_WARN_PCT
+                        and not err_problems):
+                    warnings.append(
+                        f"clickhouse: peak MemoryTracking "
+                        f"{peaks['MemoryTracking'] / 1024**2:.0f} MiB reached "
+                        f"{track_pct}% of the {cap / 1024**2:.0f} MiB cap while "
+                        f"p99 stayed at {p99_pct}% and NO {CH_MEM_ERROR} "
+                        f"fired — a transient that touched the ceiling and cost "
+                        f"no work. Reported, not failed")
         ev["memory_tracking_pct"] = track_pct
-        ev["merges_memory_pct"] = merge_pct
+        ev["p99_memory_tracking_pct"] = p99_pct
+        ev["degraded"] = degraded
         parts = self._ch_parts_settled()
         problems += parts.pop("problems")
         ev["parts"] = parts
+        ev["warnings"] = warnings
+        for line in warnings:
+            warn(line)
         ch_row = next((r for r in rows if r.get("service") == "clickhouse"), None)
         slope = "anon unmeasured"
         if ch_row and ch_row.get("ratio_vs_anchor"):
             slope = (f"anon {mib(ch_row['end_bytes'])} "
                      f"(x{ch_row['ratio_vs_anchor']} vs anchor)")
-        # All three clauses in one line, always — a number the operator can
-        # read is the difference between "the gate is green" and "the store is
-        # at 95 % of its own cap and nobody said so".
-        caveat = ""
-        if impossible:
-            caveat += ", UNKNOWN — merge peak above the tracked total"
-        if census["metric_log_rejected"] > 0:
-            caveat += (f", {census['metric_log_rejected']}/"
-                       f"{census['metric_log_samples']} impossible samples "
-                       f"excluded")
+        # All the clauses in one line, always — a number the operator can read
+        # is the difference between "the gate is green" and "the store refused
+        # 17 pieces of work and nobody said so".
+        errs = err_ev["delta"] if err_ev["delta"] >= 0 else "UNKNOWN"
+        if err_ev["window_count"] > 0 and err_ev["window_count"] != err_ev["delta"]:
+            errs = f"{errs} (error_log {err_ev['window_count']})"
         summary = (
-            f"clickhouse {slope}; peak MemoryTracking "
-            f"{mib(peaks['MemoryTracking'])} = "
-            f"{'?' if track_pct is None else track_pct}% of cap {mib(cap)} "
-            f"(merges {mib(peaks['MergesMutationsMemoryTracking'])} = "
-            f"{'?' if merge_pct is None else merge_pct}%{caveat}); "
-            f"MaxPartCountForPartition {parts['current']} "
+            f"clickhouse {slope}; {CH_MEM_ERROR} +{errs}; "
+            f"p99 MemoryTracking {mib(peaks['MemoryTrackingP99'])} = "
+            f"{'?' if p99_pct is None else p99_pct}% of cap {mib(cap)} "
+            f"(peak {mib(peaks['MemoryTracking'])} = "
+            f"{'?' if track_pct is None else track_pct}%; merges "
+            f"{mib(peaks['MergesMutationsMemoryTracking'])} INFORMATIONAL, no "
+            f"verdict); MaxPartCountForPartition {parts['current']} "
             f"(preflight {parts['baseline']}, envelope {parts['envelope']}, "
             f"delay at {parts['parts_to_delay_insert']})")
+        if warnings:
+            summary += " | WARN: " + "; ".join(warnings)
         return ev, problems, summary
 
     # -- phase 7: cleanup ----------------------------------------------------
@@ -6773,9 +7566,12 @@ def main(argv: list[str]) -> int:
               f"anchored instead on the first sample where each replica reports "
               f"corr_engine_pending==0, judged {CORR_MEM_SETTLE_S:.0f}s later "
               f"(no such sample = UNKNOWN, never a leak verdict); clickhouse also "
-              f"< {CH_MEMORY_TRACKING_MAX_PCT}% / {CH_MERGE_MEMORY_MAX_PCT}% of "
-              f"max_server_memory_usage (physically impossible metric_log "
-              f"samples excluded) and parts back within "
+              f"zero new {CH_MEM_ERROR} (system.errors delta, cross-checked "
+              f"against system.error_log — query_log misses background raises) "
+              f"and p99 MemoryTracking < {CH_MEMORY_TRACKING_MAX_PCT}% of "
+              f"max_server_memory_usage (peak reported, warned at "
+              f"{CH_MEMORY_TRACKING_PEAK_WARN_PCT}%; merge memory "
+              f"informational only) and parts back within "
               f"+{(CH_PART_COUNT_GROWTH_MAX - 1) * 100:.0f}% of preflight")
         cbudget = (CLEANUP_DEVICE_BUDGET_BASE_S +
                    CLEANUP_DEVICE_BUDGET_PER_DEVICE_S * args.devices)
@@ -6836,7 +7632,12 @@ def main(argv: list[str]) -> int:
 # It NEVER writes to the run's own report files — the original verdict is the
 # record of what the gate said at the time — only `memflat-rescore.md` beside
 # them. It touches nothing else: no devices, no purge, no run lock needed.
-RESCORE_FILE = "memflat-rescore.md"
+# VERSIONED ON PURPOSE. The v1 file was written by the plausibility-filter
+# clause; this one is written by the clause that replaced it (error delta +
+# p99, docs/scale/P2_CLICKHOUSE_PEAK_S06_2026-08-29.md). Two files that say
+# different things about the same run must not share a name — a v2 re-score
+# silently overwriting a v1 one would destroy the record of what changed.
+RESCORE_FILE = "memflat-rescore-v2.md"
 # `--mem-factor`'s default, restated for the offline path: a re-score judges a
 # FINISHED run, so it must use the threshold that run was judged by, not
 # whatever this invocation happens to pass on the command line.
@@ -6844,66 +7645,120 @@ MEM_FACTOR_RESCORE = 1.3
 
 
 def _rescore_clickhouse(stack, start: str, end: str) -> tuple[dict, list[str]]:
-    """Clause (2) again, over the same window, with the corrected filter."""
-    ev: dict = {"window_start": start, "window_end": end or "(now)"}
+    """Clauses (2a) and (2b) again, over the same window, with the corrected
+    instrument: the MEMORY_LIMIT_EXCEEDED count first, then p99 with the peak
+    beside it, and the merge peak as INFORMATION with no verdict.
+
+    A finished run has no preflight `system.errors` baseline to subtract, so
+    the error input here is the `system.error_log` count over the window — the
+    same table the live clause cross-checks against, and the only one that sees
+    background-thread raises. If error_log cannot answer, the clause says so
+    and refuses; it never reads silence as zero.
+    """
+    ev: dict = {"window_start": ch_ts(start), "window_end": ch_ts(end) or "(now)"}
     problems: list[str] = []
     cap, cap_source = ch_memory_cap(stack)
     ev["cap_bytes"], ev["cap_source"] = cap, cap_source
-    bound = f"WHERE event_time >= toDateTime('{start}')"
-    if end:
-        bound += f" AND event_time <= toDateTime('{end}')"
-    ok, out = stack.ch(
-        "SELECT "
-        f"maxIf(greatest(CurrentMetric_MemoryTracking, 0), {CH_PLAUSIBLE_SAMPLE}), "
-        f"maxIf(greatest(CurrentMetric_MergesMutationsMemoryTracking, 0), "
-        f"{CH_PLAUSIBLE_SAMPLE}), "
-        f"countIf({CH_PLAUSIBLE_SAMPLE}), count(), "
-        "max(CurrentMetric_MemoryTracking), "
-        "max(CurrentMetric_MergesMutationsMemoryTracking) "
-        f"FROM system.metric_log {bound}")
+
+    # -- (2a) the customer-visible fact ------------------------------------
+    # A FINISHED run has no preflight `system.errors` baseline to subtract, so
+    # error_log is the whole clause here — and it only answers when it
+    # demonstrably spans the window. "0 rows in a window the table does not
+    # cover" is the exact shape of a false all-clear.
+    count, source, state = ch_memory_error_window(stack, start, end)
+    ev["memory_limit_exceeded"] = count
+    ev["memory_limit_exceeded_source"] = source
+    ev["memory_limit_exceeded_state"] = state
+    ev["victims"] = ""
+    if count < 0:
+        problems.append(
+            f"{CH_MEM_ERROR} count UNAVAILABLE ({source}) — clause (2a) is "
+            f"UNKNOWN, and system.query_log cannot stand in for it: it sees "
+            f"only statement raises")
+    elif count > 0:
+        ev["victims"] = ch_memory_error_victims(stack, start, end, count)
+        problems.append(
+            f"{count} {CH_MEM_ERROR} in the window ({source}) — the store "
+            f"refused work for want of its own memory budget. "
+            f"Victims: {ev['victims']}")
+
+    # -- (2b) the levels ----------------------------------------------------
+    bound = ch_window_bound(start, end)
+    if not bound:
+        problems.append("no run window on ClickHouse's clock — the memory "
+                        "levels cannot be re-scored")
+        return ev, problems
+    ok, out = stack.ch(CH_PEAK_SELECT + bound)
     if not ok:
-        problems.append(f"system.metric_log unreadable for the window: {out[:200]}")
+        ev["metric_log"] = f"UNAVAILABLE ({out[:160]})"
+        problems.append(
+            f"system.metric_log unreadable for the window ({out[:160]}) — no "
+            f"p99 and no peak: clause (2b) is UNKNOWN. This is the degraded "
+            f"path, not a PASS")
         return ev, problems
     cells = out.strip().splitlines()[0].split("\t") if out.strip() else []
-    if len(cells) < 6:
+    if len(cells) < 5:
+        ev["metric_log"] = f"answer unreadable ({out.strip()[:120]!r})"
         problems.append(f"system.metric_log returned {len(cells)} column(s), "
-                        f"expected 6 — the window cannot be re-scored")
+                        f"expected 5 — the window cannot be re-scored")
         return ev, problems
     try:
-        ev["peak_memory_tracking_bytes"] = _ch_counter(cells[0])
-        ev["peak_merges_memory_bytes"] = _ch_counter(cells[1])
-        ev["plausible_samples"] = int(cells[2])
+        peak = _ch_counter(cells[0])
+        p99 = _ch_counter(cells[1])
+        merges = _ch_counter(cells[2])
         ev["total_samples"] = int(cells[3])
-        # What the OLD code would have printed, from the same rows — the
-        # difference IS the defect, so it is stated, not implied.
-        ev["unfiltered_memory_tracking_bytes"] = _ch_counter(cells[4])
-        ev["unfiltered_merges_memory_bytes"] = _ch_counter(cells[5])
     except (IndexError, ValueError):
+        ev["metric_log"] = f"answer unparseable ({out.strip()[:120]!r})"
         problems.append(f"system.metric_log answer unparseable: {out[:200]}")
         return ev, problems
-    ev["rejected_samples"] = ev["total_samples"] - ev["plausible_samples"]
-    if ev["plausible_samples"] <= 0:
-        problems.append("no plausible metric_log sample in the window — "
-                        "clause (2) is UNKNOWN")
+    # The three numbers are published ONLY once the window is known to hold
+    # samples: `max()`/`quantileExact()` over an empty set are 0 in ClickHouse,
+    # and 0 MiB printed as a peak would read as the flattest server on earth.
+    if ev["total_samples"] <= 0:
+        ev["metric_log"] = ("0 samples in the window — the table does not hold "
+                            "this run (recreated, dropped or TTL-pruned)")
+        problems.append("system.metric_log held 0 samples for the window — "
+                        "clause (2b) is UNKNOWN, never a PASS")
         return ev, problems
+    ev["peak_memory_tracking_bytes"] = peak
+    ev["p99_memory_tracking_bytes"] = p99
+    ev["peak_merges_memory_bytes"] = merges
+    ev["metric_log"] = f"{ev['total_samples']} sample(s) in the window"
+    ev["merges_memory_verdict"] = ("INFORMATIONAL — not bounded by the tracked "
+                                   "total in ClickHouse 24.8")
+    gap = ch_window_gap_s(start, cells[4])
+    ev["first_sample"] = ch_ts(cells[4])
+    if gap > CH_WINDOW_COVERAGE_SLACK_S:
+        ev["metric_log"] = (
+            f"PARTIAL — {ev['total_samples']} sample(s), the first at "
+            f"{ch_ts(cells[4])}, {gap:.0f}s after the window opened")
     if cap <= 0:
         problems.append(f"effective max_server_memory_usage unreadable "
-                        f"({cap_source}) — clause (2) is UNKNOWN")
+                        f"({cap_source}) — clause (2b) is UNKNOWN")
         return ev, problems
     ev["memory_tracking_pct"] = round(
         100.0 * ev["peak_memory_tracking_bytes"] / cap, 1)
-    ev["merges_memory_pct"] = round(
-        100.0 * ev["peak_merges_memory_bytes"] / cap, 1)
-    if ev["memory_tracking_pct"] > CH_MEMORY_TRACKING_MAX_PCT:
+    ev["p99_memory_tracking_pct"] = round(
+        100.0 * ev["p99_memory_tracking_bytes"] / cap, 1)
+    ev["warnings"] = []
+    if str(ev["metric_log"]).startswith("PARTIAL"):
+        ev["warnings"].append(
+            f"system.metric_log covers only part of the window "
+            f"({ev['metric_log']}) — the p99 is over the covered tail")
+    if ev["p99_memory_tracking_pct"] > CH_MEMORY_TRACKING_MAX_PCT:
         problems.append(
-            f"peak MemoryTracking {mib(ev['peak_memory_tracking_bytes'])} is "
-            f"{ev['memory_tracking_pct']}% of the {mib(cap)} cap "
-            f"(> {CH_MEMORY_TRACKING_MAX_PCT}%)")
-    if ev["merges_memory_pct"] > CH_MERGE_MEMORY_MAX_PCT:
-        problems.append(
-            f"peak MERGE memory {mib(ev['peak_merges_memory_bytes'])} is "
-            f"{ev['merges_memory_pct']}% of the {mib(cap)} cap "
-            f"(> {CH_MERGE_MEMORY_MAX_PCT}%)")
+            f"p99 MemoryTracking {mib(ev['p99_memory_tracking_bytes'])} is "
+            f"{ev['p99_memory_tracking_pct']}% of the {mib(cap)} cap "
+            f"(> {CH_MEMORY_TRACKING_MAX_PCT}%) — a sustained level, not a "
+            f"transient")
+    elif ev["memory_tracking_pct"] >= CH_MEMORY_TRACKING_PEAK_WARN_PCT:
+        ev["warnings"].append(
+            f"peak MemoryTracking {mib(ev['peak_memory_tracking_bytes'])} "
+            f"reached {ev['memory_tracking_pct']}% of the {mib(cap)} cap while "
+            f"p99 stayed at {ev['p99_memory_tracking_pct']}% — a transient. "
+            + ("It is reported, not failed: no MEMORY_LIMIT_EXCEEDED followed "
+               "it" if count == 0 else
+               "The FAIL above is the error clause, not this one"))
     return ev, problems
 
 
@@ -7056,24 +7911,37 @@ def rescore_memflat(args: argparse.Namespace) -> int:
         (f"* window: `{ch_ev['window_start']}` -> `{ch_ev['window_end']}` "
          f"(ClickHouse's clock)"),
         f"* cap: {mib(ch_ev.get('cap_bytes', -1))} ({ch_ev.get('cap_source')})",
+        (f"* **{CH_MEM_ERROR}: "
+         f"{ch_ev.get('memory_limit_exceeded', -1)}** "
+         f"({ch_ev.get('memory_limit_exceeded_source', 'no source')})"),
     ]
+    if ch_ev.get("victims"):
+        lines.append(f"* victims: {ch_ev['victims']}")
     if "peak_memory_tracking_bytes" in ch_ev:
         lines += [
-            (f"* samples: {ch_ev['total_samples']} in the window, "
-             f"{ch_ev['rejected_samples']} rejected as physically impossible "
-             f"(merge memory above the tracked total)"),
+            f"* samples: {ch_ev.get('metric_log', 'unknown')}",
+            (f"* p99 MemoryTracking: "
+             f"**{mib(ch_ev['p99_memory_tracking_bytes'])}** "
+             f"= {ch_ev.get('p99_memory_tracking_pct', '?')}% of cap "
+             f"(limit {CH_MEMORY_TRACKING_MAX_PCT}%) — THE JUDGED NUMBER"),
             (f"* peak MemoryTracking: "
              f"**{mib(ch_ev['peak_memory_tracking_bytes'])}** "
              f"= {ch_ev.get('memory_tracking_pct', '?')}% of cap "
-             f"(limit {CH_MEMORY_TRACKING_MAX_PCT}%)"),
-            (f"* peak MERGE memory: "
-             f"**{mib(ch_ev['peak_merges_memory_bytes'])}** "
-             f"= {ch_ev.get('merges_memory_pct', '?')}% of cap "
-             f"(limit {CH_MERGE_MEMORY_MAX_PCT}%)"),
-            (f"* what the UNFILTERED `max()` would have printed — the defect: "
-             f"MemoryTracking {mib(ch_ev['unfiltered_memory_tracking_bytes'])}, "
-             f"merges {mib(ch_ev['unfiltered_merges_memory_bytes'])}"),
+             f"(reported; warned at "
+             f"{CH_MEMORY_TRACKING_PEAK_WARN_PCT}%, never failed on its own)"),
+            (f"* peak MergesMutationsMemoryTracking: "
+             f"{mib(ch_ev['peak_merges_memory_bytes'])} — "
+             f"{ch_ev.get('merges_memory_verdict', 'INFORMATIONAL')}: on 24.8 "
+             f"`CurrentMetric_MemoryTracking` is process RSS set from the OS "
+             f"once a second, not a sum of child trackers, so a child may "
+             f"legitimately read above it and there is no honest "
+             f"fraction-of-cap to assert on"),
         ]
+    else:
+        lines.append(f"* memory levels: {ch_ev.get('metric_log', 'UNAVAILABLE')} "
+                     f"— DEGRADED, and reported as UNKNOWN rather than PASS")
+    for line in ch_ev.get("warnings", []):
+        lines.append(f"* WARN: {line}")
     lines += ["", "clause (2): " + ("PASS" if not ch_problems
                                     else "; ".join(ch_problems)), ""]
     lines += ["## clause (1) — correlation, anchored at corr_engine_pending == 0",

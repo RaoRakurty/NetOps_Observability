@@ -206,10 +206,11 @@ def test_a_window_too_short_for_the_scenario_is_reported_not_hidden(
     assert "mis-sized for this window" in out
 
 
-def test_all_four_cause_kinds_are_instantiated(scen):
+def test_all_cause_kinds_are_instantiated(scen):
     kinds = {i["cause_kind"] for i in scen.incidents}
     assert kinds == {"upstream_link_failure", "local_link_fault",
-                     "bgp_peer_flap", "ospf_adjacency_flap"}
+                     "bgp_peer_flap", "ospf_adjacency_flap",
+                     "enterprise_outage"}
     for tpl, counts in scen.template_counts.items():
         assert counts["instances_built"] == counts["instances_planned"], (
             f"{tpl} was truncated by the device budget at the RATIFIED size")
@@ -316,14 +317,28 @@ def test_scenario_lines_classify_as_planned(scen):
     scenario whose lines the engine reads differently is ground truth that
     lies."""
     now = datetime.now(timezone.utc)
+    unpromotable = 0
     for i, e in enumerate(scen.events):
         ev = json.loads(_line(e, i))
         sig = producers.syslog_control_signal(ev, "t1", now)
+        if not e.symptom:
+            # A line the ground truth declares UNPROMOTABLE must really not
+            # promote. The dangerous direction is the other one: a symptom
+            # marked invisible that quietly does classify would inflate every
+            # promoted-signal number with events no scorer is counting.
+            assert sig is None, (
+                f"{e.etype!r} is declared not_promoted but classified as "
+                f"{sig.kind!r}: {ev}")
+            unpromotable += 1
+            continue
         assert sig is not None, f"scenario line never promotes: {ev}"
         assert sig.kind == e.symptom, f"{sig.kind} != {e.symptom}: {ev}"
         assert sig.entity_id == e.entity, f"{sig.entity_id} != {e.entity}"
         if e.state:
             assert sig.attrs.get("state") == e.state, ev
+    assert unpromotable > 0, (
+        "no unpromotable lines at all — the enterprise chain is supposed to "
+        "emit the vendor-standard BGP churn messages the engine cannot see")
 
 
 def test_the_incident_marker_cannot_change_the_parse(scen):
@@ -730,3 +745,401 @@ def test_the_ratified_seed_is_pinned():
     """Changing the default seed silently changes the workload every t-storm
     number was measured on. It is a ratified constant, like the rates."""
     assert ml.SCENARIO_SEED_DEFAULT == 20260829
+
+
+# ── the enterprise outage chain (2026-08-29) ────────────────────────────────
+#
+# One causally ordered chain per SITE — uplink down → OSPF adjacency loss → a
+# second core port flapping → eBGP session flap → route churn + update burst →
+# STP reconvergence and MAC re-homing → recovery, or a hard outage. The
+# vocabulary and the phase bands live in `scripts/enterprise_outage_chain.py`
+# and are SHARED with the network digital twin's `_tpl_enterprise_outage`, so
+# these tests pin the SHARED definition, not a mini-ladder-local copy of it.
+
+import enterprise_outage_chain as chain  # ROOT/scripts is on sys.path
+
+CHAIN_PHASES = ("uplink_down", "ospf_neighbor_down", "ospf_interface_flap",
+                "bgp_session_flap", "route_churn", "access_layer")
+
+
+def _enterprise(scen) -> list[dict]:
+    return [i for i in scen.incidents if i["cause_kind"] == "enterprise_outage"]
+
+
+def test_the_chain_vocabulary_comes_from_the_shared_module(scen):
+    """Every enterprise line must be one the SHARED module built. Two harnesses
+    quietly emitting different messages for one symptom is the whole failure
+    this module exists to prevent, so the mnemonic set is pinned to it."""
+    shared = {row.exemplar[0] for row in chain.CHAIN_SIGNATURES
+              if row.exemplar is not None}
+    emitted = {e.appname for e in scen.events if e.etype}
+    assert emitted, "the enterprise template emitted nothing"
+    assert emitted <= shared, (
+        f"mnemonic(s) {sorted(emitted - shared)} are not in the shared chain "
+        f"vocabulary — the two harnesses have started to drift")
+    for e in scen.events:
+        if e.etype:
+            assert e.etype in chain.CHAIN_BY_TYPE, e.etype
+
+
+def test_the_enterprise_template_builds_fifteen_full_sites(scen):
+    """6 sites per 1,000 devices ⇒ 15 at the ratified 2,500, each a full
+    40-device site (2 core/dist + 38 access). A site truncated by the device
+    budget would ship ground truth for a blast radius the stream never had."""
+    counts = scen.template_counts["enterprise_outage"]
+    assert counts["instances_planned"] == counts["instances_built"] == 15
+    assert counts["devices_per_instance"] == 40
+    assert counts["truncated_by_device_budget"] is False
+    incs = _enterprise(scen)
+    assert len(incs) == 15
+    for inc in incs:
+        assert len(inc["blast_radius"]) == 40
+        assert inc["site"]["access_devices"] == 38
+        assert inc["cause_entity"]["entity_type"] == "interface"
+        assert inc["cause_entity"]["device"] == inc["site"]["core"]
+
+
+def test_every_phase_of_the_chain_fires_in_causal_order(scen):
+    """Offsets are seeded AND jittered ±20 %, so ordering can never be an
+    accident of the draw: each phase is clamped after the phase that causes
+    it. If a future edit removes a clamp, some seed makes this red."""
+    incs = _enterprise(scen)
+    assert incs
+    for inc in incs:
+        tl = {ph["phase"]: ph for ph in inc["timeline"]}
+        assert set(CHAIN_PHASES) <= set(tl), (
+            f"{inc['incident_id']}: missing phase(s) "
+            f"{sorted(set(CHAIN_PHASES) - set(tl))}")
+        ats = [tl[p]["at"] for p in CHAIN_PHASES]
+        assert ats == sorted(ats), (
+            f"{inc['incident_id']}: phases fired out of causal order: "
+            f"{list(zip(CHAIN_PHASES, ats))}")
+        assert tl["uplink_down"]["at"] == inc["onset_ts"]
+        # every phase offset is measured from the cause, not from the run
+        for name in CHAIN_PHASES:
+            assert tl[name]["offset_s"] == round(
+                tl[name]["at"] - inc["onset_ts"], 1)
+
+
+def test_the_chain_really_flaps_and_really_churns(scen):
+    for inc in _enterprise(scen):
+        tl = {ph["phase"]: ph for ph in inc["timeline"]}
+        cycles = tl["ospf_interface_flap"]["cycles"]
+        assert chain.FLAP_CYCLE_RANGE[0] <= len(cycles) <= chain.FLAP_CYCLE_RANGE[1]
+        for cyc in cycles:
+            assert cyc["up_at"] > cyc["down_at"], "a flap that never came back"
+        downs = [c["down_at"] for c in cycles]
+        assert downs == sorted(downs)
+        bgp = tl["bgp_session_flap"]["transitions"]
+        assert [x["state"] for x in bgp] == ["down", "up", "down"], (
+            "the transit session must flap Down → Up → Down, not just drop")
+        assert [x["at"] for x in bgp] == sorted(x["at"] for x in bgp)
+        churn = tl["route_churn"]
+        lo, hi = chain.CHURN_EPS_RANGE
+        assert lo <= churn["rate_eps"] <= hi
+        assert churn["events"] > 0 and churn["update_burst_events"] >= 3
+        acc = tl["access_layer"]
+        assert acc["tcn_devices"] == 38, (
+            "a TCN floods the WHOLE STP domain — every switch in the site logs "
+            "it, which is also what keeps every site device audible")
+        assert 1 <= acc["stp_port_devices"] <= 38
+        assert 1 <= acc["mac_move_devices"] <= 38
+
+
+def test_recovery_follows_every_fault_of_its_own_incident(scen):
+    """A recovery that lands before a fault it is supposed to end is ground
+    truth that contradicts its own stream. The builder clamps recovery to at
+    least 5 s after the incident's LAST fault event; this checks the events."""
+    by_inc: dict = {}
+    for e in scen.events:
+        by_inc.setdefault(e.incident_id, []).append(e)
+    recovered = hard = 0
+    for inc in _enterprise(scen):
+        evs = by_inc[inc["incident_id"]]
+        rec_ts = inc["recovery_ts"]
+        if rec_ts is None:
+            hard += 1
+            assert not [e for e in evs if e.role == "recovery"], (
+                "a hard outage emitted recovery events")
+            continue
+        recovered += 1
+        faults = [e.t for e in evs if e.role != "recovery"]
+        assert max(faults) < rec_ts, (
+            f"{inc['incident_id']}: a fault at t={max(faults)} lands at or "
+            f"after recovery_ts={rec_ts}")
+        recs = [e for e in evs if e.role == "recovery"]
+        assert recs, "a recovered incident with no recovery events"
+        assert min(e.t for e in recs) >= rec_ts
+        # …and the recovery really restores the cause identity
+        cause_entity = inc["cause_entity"]["entity_id"]
+        ups = [e for e in recs if e.entity == cause_entity and e.state == "up"]
+        assert ups, f"{inc['incident_id']}: the cause interface never came up"
+    assert recovered and hard, (
+        "the ratified plan must contain BOTH recovered sites and hard outages "
+        "— a scenario where everything recovers is as unrealistic as one where "
+        "nothing does")
+
+
+def test_the_access_layer_repeats_and_re_homes_inside_the_window(scen):
+    """The site symptoms must show repeated confirmation on ONE identity and
+    real MAC movement — the classes t-nominal-2.5k contains zero of."""
+    d = scen.dynamics()
+    assert d["chain_events_by_type"]["stp_topology_change"] > 0
+    assert d["chain_events_by_type"]["stp_port_block"] > 0
+    assert d["chain_events_by_type"]["mac_move"] > 0
+    assert d["chain_events_by_type"]["ospf_neighbor_down"] > 0
+    assert d["chain_events_by_type"]["bgp_session_up"] > 0
+    macs = {e.message.split("Host ")[1].split(" ")[0]
+            for e in scen.events if e.etype == "mac_move"}
+    total = sum(1 for e in scen.events if e.etype == "mac_move")
+    # A MAC is a GLOBAL entity token: reuse across sites would weld them into
+    # one false object. Every distinct (site, device) gets its own address.
+    per_identity = {(e.device, e.message.split("Host ")[1].split(" ")[0])
+                    for e in scen.events if e.etype == "mac_move"}
+    assert len(macs) == len(per_identity), (
+        "a MAC address is shared between two devices — that welds their "
+        "incidents together through entity_tokens")
+    assert total > len(macs), "no MAC move was ever re-reported"
+
+
+# ── parser coverage: what the engine could actually SEE ─────────────────────
+
+def _classify(appname: str, message: str, severity: str):
+    now = datetime.now(timezone.utc)
+    return producers.syslog_control_signal({
+        "hostname": "cov-dev-1", "appname": appname, "message": message,
+        "severity": severity,
+        "timestamp": now.strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z",
+    }, "t1", now)
+
+
+def _check_coverage(rows) -> None:
+    """Assert every row of a coverage table against the REAL producer.
+
+    Factored out so the mutant test below can run the IDENTICAL check on a
+    corrupted table and prove the assertions have teeth.
+    """
+    for row in rows:
+        if row.exemplar is None:               # composite: check its parts
+            assert row.components, f"{row.event_type}: composite with no parts"
+            for part in row.components:
+                assert part in chain.CHAIN_BY_TYPE, part
+            assert row.coverage == (
+                chain.PROMOTED
+                if all(chain.CHAIN_BY_TYPE[c].coverage == chain.PROMOTED
+                       for c in row.components) else chain.NOT_PROMOTED)
+            continue
+        sig = _classify(*row.exemplar)
+        if row.coverage == chain.NOT_PROMOTED:
+            assert sig is None, (
+                f"{row.event_type}: declared not_promoted but the classifier "
+                f"yields {sig.kind!r} — the backlog item has been CLOSED and "
+                f"this table is now lying about it")
+            continue
+        assert sig is not None, (
+            f"{row.event_type}: declared promoted but the classifier drops "
+            f"{row.exemplar[1]!r}")
+        assert sig.kind == row.kind, f"{row.event_type}: {sig.kind} != {row.kind}"
+        assert (sig.attrs.get("state") or "") == row.state, (
+            f"{row.event_type}: state {sig.attrs.get('state')!r} != "
+            f"{row.state!r}")
+        ifname = (chain.SAMPLE_IF if chain.SAMPLE_IF in row.exemplar[1]
+                  else chain.SAMPLE_IF_B)
+        assert sig.entity_id == chain.entity_of(
+            row.event_type, "cov-dev-1", ifname), (
+            f"{row.event_type}: entity {sig.entity_id!r} is not the "
+            f"{row.entity_shape!r} shape the table claims")
+
+
+def test_the_parser_coverage_table_is_pinned_against_the_real_parser():
+    """Every requested outage symptom → the message the chain emits → what
+    `producers.syslog_control_signal` ACTUALLY does with it. A table that
+    drifts from the parser is ground truth that lies about what the engine was
+    given, so it is checked against the producer itself, never restated."""
+    _check_coverage(chain.CHAIN_SIGNATURES)
+    cov = chain.parser_coverage()
+    assert set(cov) == {r.event_type for r in chain.CHAIN_SIGNATURES}
+    assert set(cov.values()) <= {chain.PROMOTED, chain.NOT_PROMOTED}
+    # the symptoms this engine cannot see — a product backlog item each
+    assert set(chain.not_promoted_types()) == {
+        "bgp_route_churn", "bgp_router_update_burst"}, (
+        "the not-promoted list changed — that is either an engine improvement "
+        "worth recording or a regression; either way it is not silent")
+
+
+def test_a_mutant_message_for_a_promoted_type_is_caught():
+    """Proof the check above has teeth: replace one PROMOTED row's message with
+    an unrecognized mnemonic and the very same checker must go red. Without
+    this, a coverage table that silently stopped matching the parser would
+    still pass."""
+    mutated = []
+    seen = False
+    for row in chain.CHAIN_SIGNATURES:
+        if (not seen and row.coverage == chain.PROMOTED
+                and row.exemplar is not None):
+            seen = True
+            mutated.append(row._replace(
+                exemplar=("WIDGET-6-NOTHING",
+                          "%WIDGET-6-NOTHING: nothing to see here", "info")))
+            continue
+        mutated.append(row)
+    assert seen, "no promoted row to mutate — the table is empty?"
+    with pytest.raises(AssertionError, match="declared promoted"):
+        _check_coverage(mutated)
+
+
+def test_a_mutant_that_makes_an_invisible_symptom_classify_is_caught():
+    """The other direction: a `not_promoted` row whose message DOES classify
+    would silently add signals no scorer counts."""
+    mutated = [row._replace(exemplar=chain.link(chain.SAMPLE_IF, "down"))
+               if row.coverage == chain.NOT_PROMOTED else row
+               for row in chain.CHAIN_SIGNATURES]
+    with pytest.raises(AssertionError, match="declared not_promoted"):
+        _check_coverage(mutated)
+
+
+def test_ground_truth_carries_the_coverage_table_and_the_backlog(scen):
+    gt = scen.ground_truth(planned_total=900_000)
+    assert gt["parser_coverage"] == chain.parser_coverage()
+    assert gt["not_promoted"] == list(chain.not_promoted_types())
+    detail = gt["parser_coverage_detail"]
+    for etype, verdict in gt["parser_coverage"].items():
+        assert detail[etype]["coverage"] == verdict
+        assert detail[etype]["note"] or verdict == chain.PROMOTED
+    assert [p["phase"] for p in gt["phase_timeline"]] == list(
+        chain.PHASE_ORDER)
+    assert gt["counts"]["unpromotable_events"] > 0
+    assert (gt["counts"]["promoted_events"]
+            + gt["counts"]["unpromotable_events"]
+            == gt["counts"]["scenario_events"])
+
+
+def test_unpromotable_lines_never_count_as_engine_visible_dynamics(scen):
+    """A dropped line contributes no signal, so it may not appear as an
+    identity, a transition or a repeat — counting it would report dynamics the
+    engine cannot possibly observe."""
+    d = scen.dynamics()
+    entities = {(e.entity, e.symptom) for e in scen.events if e.symptom}
+    assert d["identities"] == len(entities)
+    assert all(e.entity == "" for e in scen.events if not e.symptom), (
+        "an unpromotable line claims an entity_id the engine never creates")
+
+
+# ── the ratified throughput bound ───────────────────────────────────────────
+
+def test_the_scenario_stays_inside_the_ratified_two_percent(scen):
+    """The storm profile is a STRUCTURAL change to a nominal stream, not a
+    different workload: past ~2 % of the raw fleet its completion/TTUR numbers
+    stop being comparable with t-nominal-2.5k and the A/B is dishonest."""
+    d = scen.dynamics()
+    share = d["scenario_events"] / 900_000
+    assert share <= 0.02, (
+        f"the scenario is {share:.3%} of the ratified 900,000-event fleet — "
+        f"over the 2 % bound; trim the route-churn budget "
+        f"(chain.CHURN_MAX_EVENTS_SCALE), not the causal structure")
+    assert share > 0.005, "the scenario has become too small to measure"
+
+
+def test_the_chain_never_overruns_a_chunk_quota(scen):
+    """`_burst_lanes` REFUSES a scenario that plans more events into a 10 s
+    chunk than the ratified quota. The route-churn phase is the only one dense
+    enough to get near it, so the margin is pinned here rather than discovered
+    in a run."""
+    quota = 10_000
+    worst = max(len(b) for b in scen.buckets)
+    assert worst < quota, f"chunk plans {worst} events of a {quota} quota"
+    assert worst < quota // 2, (
+        f"worst chunk is {worst}/{quota} — the churn phase has grown close "
+        f"enough to the quota that a seed change could fail the burst")
+
+
+def test_no_site_device_is_left_silent(scen):
+    """Every one of a site's 40 devices must speak, or accounting fails the run
+    forty minutes later on per-device corr_signals coverage. The TCN flood is
+    what guarantees it for the access layer."""
+    spoke = {e.device for e in scen.events}
+    for inc in _enterprise(scen):
+        missing = sorted(set(inc["blast_radius"]) - spoke)
+        assert not missing, (
+            f"{inc['incident_id']}: {len(missing)} site device(s) emitted "
+            f"nothing at all (e.g. {missing[:3]})")
+
+
+def test_no_site_cause_entity_is_shared_with_the_noise_pool(scen):
+    """Restated for the site template specifically: a background line carrying
+    a site's cause token would make its blast radius unfalsifiable."""
+    noise = set(scen.noise_pool)
+    for inc in _enterprise(scen):
+        assert not (set(inc["blast_radius"]) & noise)
+        assert inc["cause_entity"]["device"] not in noise
+        assert inc["site"]["distribution"] not in noise
+    # peers are unique across ALL incidents, sites included
+    peers = [i["cause_entity"]["peer"] for i in scen.incidents
+             if i["cause_entity"].get("peer")]
+    assert len(peers) == len(set(peers))
+
+
+# ── the twin-scorable projection of the same ground truth ───────────────────
+
+def test_twin_records_carry_the_shape_the_twin_scorer_reads(scen):
+    """`scripts/lab/twin/scorer.py` scores a mini-ladder run unchanged — that
+    is the point of writing the same incidents in its record shape. These are
+    the exact keys `score_story` dereferences."""
+    recs = scen.twin_records()
+    assert len(recs) == len(scen.incidents)
+    ids = {r["story_id"] for r in recs}
+    assert ids == {i["incident_id"] for i in scen.incidents}
+    for rec in recs:
+        for key in ("story_id", "template", "affected", "entities",
+                    "extra_entities", "expect", "labels"):
+            assert key in rec, f"twin record lost {key!r}"
+        assert isinstance(rec["affected"].get("devices"), list)
+        assert rec["entities"] == rec["affected"]["devices"]
+        rca = rec["expect"]["rca"]
+        assert rca["verdict_tier_at_least"] in ("suspected", "confirmed")
+        # affected_includes is prefixed with state["prefix"] by the scorer, and
+        # the mini-ladder writes prefix "" — so the name must be the full id
+        assert rca["affected_includes"][0] in rec["entities"]
+        assert json.dumps(rec)                    # must be serializable
+    state = scen.twin_state()
+    assert state["prefix"] == "", (
+        "mini-ladder device ids are already fully qualified; a non-empty "
+        "prefix would make every scorer lookup miss")
+    assert state["runid"] == "testrun"
+    assert state["device_tenants"] == {}
+
+
+def test_twin_records_carry_the_labels_the_miniladder_schema_has_no_room_for(
+        scen):
+    by_id = {r["story_id"]: r for r in scen.twin_records()}
+    for inc in _enterprise(scen):
+        lab = by_id[inc["incident_id"]]["labels"]
+        assert lab["cause_entity"] == inc["cause_entity"]
+        assert lab["onset_offset_s"] == inc["onset_ts"]
+        assert lab["recovery_offset_s"] == inc["recovery_ts"]
+        assert lab["blast_radius"] == inc["blast_radius"]
+        assert lab["parser_coverage"] == chain.parser_coverage()
+        assert [p["phase"] for p in lab["timeline"]][:len(CHAIN_PHASES)] == \
+            list(CHAIN_PHASES)
+
+
+def test_the_run_dir_gets_both_ground_truths(tmp_path, monkeypatch):
+    """`ground-truth.json` stays the mini-ladder's own contract; the same
+    incidents also land in the twin's `ground_truth.jsonl` + `state.json`, so
+    `twin.py score --runid <id> --run-root data/miniladder` needs no second
+    scorer and no schema migration."""
+    ok, ev, notes, _stack = _run_burst(tmp_path, monkeypatch, minutes=2)
+    assert ok, notes
+    jl = tmp_path / ml.TWIN_GROUND_TRUTH_FILE
+    st = tmp_path / ml.TWIN_STATE_FILE
+    assert (tmp_path / ml.GROUND_TRUTH_FILE).exists()
+    assert jl.exists() and st.exists()
+    recs = [json.loads(ln) for ln in jl.read_text(encoding="utf-8").splitlines()
+            if ln.strip()]
+    assert recs and len(recs) == ev["ground_truth"]["twin_records"]
+    assert all("story_id" in r and "expect" in r for r in recs)
+    state = json.loads(st.read_text(encoding="utf-8"))
+    assert state["prefix"] == "" and state["runid"] == "testrun"
+    assert ev["ground_truth"]["not_promoted"] == list(
+        chain.not_promoted_types())
+    assert "twin.py score" in ev["ground_truth"]["twin_score_cmd"]

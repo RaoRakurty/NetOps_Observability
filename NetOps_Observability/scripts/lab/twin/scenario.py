@@ -96,6 +96,23 @@ STORY_TEMPLATES: dict[str, dict[str, Any]] = {
         "params": {"cloud", "probe_loss_pct"},
         "lanes": {"syslog", "probes", "cloud"},
     },
+    # §5.12 — the whole-site enterprise outage as ONE causally ordered chain
+    # (uplink down → OSPF adjacency loss → a second core port flapping →
+    # eBGP session flap → route churn + update burst → STP reconvergence and
+    # MAC re-homing across the access layer → recovery, or a hard outage).
+    # The vocabulary and phase bands are SHARED with the mini-ladder's
+    # `enterprise_outage` scenario template (`scripts/enterprise_outage_chain
+    # .py`), so the accuracy harness and the scale harness run one story.
+    # `with_trap` adds the §4.0 linkDown/linkUp + BGP4-MIB trap rows for the
+    # same two faults — corroboration across MODALITIES, not just devices.
+    "enterprise_outage": {
+        "params": {"core_device", "dist_device", "uplink_interface",
+                   "flap_interface", "flap_cycles", "churn_eps",
+                   "churn_duration_s", "stp_share", "mac_share", "vlan",
+                   "with_trap", "probe_loss_pct", "recover",
+                   "recovery_after_s"},
+        "lanes": {"syslog", "probes"},
+    },
     "negative_debug_probe": {
         "params": {"probe_loss_pct", "count"},
         "lanes": {"probes"},
@@ -406,10 +423,43 @@ def validate_scenario(raw: Any, name: str = "<scenario>") -> dict:
             raise _err(f"{p}.params", f"unknown param(s) {bad} for template "
                                       f"{tpl!r} — allowed: "
                                       f"{sorted(spec['params'])}")
-        for key in ("cpu_device", "bgp_device", "probe_device"):
+        for key in ("cpu_device", "bgp_device", "probe_device",
+                    "core_device", "dist_device"):
             if key in params and params[key] not in dev_names:
                 raise _err(f"{p}.params", f"{key} {params[key]!r} is not a "
                                           f"declared device")
+        # enterprise_outage names the two ROLE devices out of `affected`; a
+        # role device that is not in the blast radius would put ground truth
+        # (blast_radius, vantages) at odds with the events actually emitted.
+        if tpl == "enterprise_outage":
+            aff_devs = set(aff.get("devices") or [])
+            if len(aff_devs) < 2:
+                raise _err(f"{p}.affected", f"story {sid!r} template "
+                                            f"{tpl!r} needs at least 2 "
+                                            f"affected devices (a core and a "
+                                            f"distribution router)")
+            for key in ("core_device", "dist_device"):
+                if key in params and params[key] not in aff_devs:
+                    raise _err(f"{p}.params",
+                               f"{key} {params[key]!r} is not in "
+                               f"{sid!r}'s affected.devices — the chain's "
+                               f"cause would sit outside its own blast radius")
+            if (params.get("core_device")
+                    and params.get("core_device") == params.get(
+                        "dist_device")):
+                raise _err(f"{p}.params",
+                           f"core_device and dist_device are both "
+                           f"{params['core_device']!r} — the chain's second "
+                           f"vantage would be the first one again")
+            for key, lo, hi in (("stp_share", 0.0, 1.0),
+                                ("mac_share", 0.0, 1.0)):
+                if key in params and not (
+                        isinstance(params[key], (int, float))
+                        and not isinstance(params[key], bool)
+                        and lo <= float(params[key]) <= hi):
+                    raise _err(f"{p}.params", f"{key} must be a number in "
+                                              f"[{lo}, {hi}], got "
+                                              f"{params[key]!r}")
         # A multi-port fault must name ports that actually exist on EVERY device
         # it claims to fault — otherwise the plan silently under-emits and the
         # object it was written to produce never reaches the intended size.
