@@ -355,3 +355,12 @@ wave to take ~8–9 h (5 legs × ~1.5 h + redeploys). Read each leg's `ab-leg.js
 `ttur.tsv`, `accuracy-report.md`, `metrics-final.txt`; fill the comparison table
 in `RUN_PLAN_P3_AB_2026-08-29.md` §5 and apply the §6 decision rule; then
 update `P4_PROGRAMME_WRITEUP_2026-08-29.md` tables.
+
+## UPDATE (2026-08-29 23:00) — storm-s03 7/9; two fixes queued BEHIND the A/B wave
+- `STORM_S03_2P5K_VERDICT_2026-08-29.md`: completion 104 s, merge index fix
+  confirmed; remaining: quiesce/reconcile-tail ~26 s stall (tracker 185 part
+  3) and one `findings` row lost on a transport error (tracker 188). Both fixes
+  are in build; DO NOT deploy them until the A/B wave (L1–L5) has finished —
+  both arms must run on the same image (`12074157`).
+- After the wave: commit both fixes, rebuild/redeploy correlation, one more
+  `t-storm-2.5k` for 9/9, then finalise the P4 tables.
