@@ -337,3 +337,12 @@ scoring contract) → P4 write-up.
   `t-storm-10-2.5k` / `t-storm-25-2.5k` with `CORR_AGGREGATION_PLANE` OFF vs ON.
 - Accuracy scoring: 46 s per run now; storm-s01 93.0 %, storm-s02 93.3 %;
   misses = tracker 187 (blocked on parser gaps 184).
+
+## UPDATE (2026-08-29 22:30) — P3 A/B wave ready
+- Committed: `12074157` (P3 steps 1–3 + lifecycle index fix), `d4f6e345` +
+  `eeea904e` (compose.agg.yml, run plan with validated TTUR SQL). Correlation
+  redeployed at HEAD; `storm-s03-08292148` in flight (expect 9/9 → closes 185).
+- Run the wave per `RUN_PLAN_P3_AB_2026-08-29.md` (L1 t-storm-10 OFF, L2
+  t-storm-25 OFF, redeploy +compose.agg.yml, L3/L4 ON, L5 t-storm-2.5k ON,
+  redeploy back). Driver `scripts/scale-ab-driver.sh` in build (resumable,
+  refuses the 03:10–04:40 UTC window). Decision rule in the plan §6.
