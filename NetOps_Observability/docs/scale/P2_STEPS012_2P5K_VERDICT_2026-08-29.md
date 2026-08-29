@@ -77,11 +77,18 @@ its verdict within the first ~100 ms of the cohort; the operator waits ~1,000 s
 for the Evidence rows. This is precisely spec §4 (bounded, priority-ordered
 async Evidence queue; VVR/current row synchronous). Expected effect: cohort wall
 → verdict-row cost; Evidence lag becomes a measured T7/T8 instead of T1.
-### 4.4 memflat ×1.53 — attribution pending
-Engine still had 21k pending when input stopped (working set), but P2 added
-process-lifetime caches (rank memo 20,117 entries at convergence). Offline
-attribution (`p2_memflat_attribution.md`) decides cache vs working set vs leak
-before any RSS claim is made.
+### 4.4 memflat ×1.53 — ATTRIBUTED: rank-memo sizing, not a leak
+Offline attribution (`P2_MEMFLAT_ATTRIBUTION_2026-08-29.md`, `bench_memflat_p2.py`):
+post-input growth is 96 % named live objects (RankMemo 44 %, `Clause.kinds`
+cache 16 %, OPEN_OBJECTS 30 %), unexplained +0.4 MiB flat with drain length —
+no leak. The finding that matters: **a RankMemo entry costs ~10–13 KiB**, so
+`CORR_RANK_MEMO_MAX=50000` licenses ~500–650 MiB; the live replica held 20,117
+entries at convergence ≈ 200–260 MiB ≈ the observed +259 MiB. Fix: bound the
+memo in BYTES (default ~96 MiB) as well as entries. Secondary: `scoring.py:263`
+and `:378` build a fresh `Clause` per call, which the id-keyed kinds cache pins
+until it self-evicts (harmless, wasteful) — fix the call sites. Note: clearing
+caches frees heap but not RSS (arena retention), so the bound must be enforced
+up front, not reclaimed later.
 ### 4.5 Rank memo live hit rate 66 % (offline 63–96 %)
 Lower than the synthetic because live evidence keeps changing an entity's
 projection across epochs (new signals attach). Still: rank time is off the
