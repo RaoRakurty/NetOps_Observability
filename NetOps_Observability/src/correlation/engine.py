@@ -23,6 +23,7 @@ import math
 import os
 import uuid
 from collections import OrderedDict
+from collections.abc import Iterable
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 
@@ -1728,6 +1729,191 @@ def _streaming_json_digest16(blob: dict) -> str:
     return h.hexdigest()[:16]
 
 
+# ── P3 aggregation provenance (design AGGREGATION_PLANE_P3_2026-08-29 §5, step 3)
+#
+# The Aggregation plane (`aggregation.py`) forwards DELTA signals: one signal
+# that stands for N raw observations of the same `AggKey`, annotated in `attrs`
+# with what it collapsed. An object built from deltas must therefore be able to
+# say — from its OWN persisted bytes, with no live plane and no second store —
+# WHICH aggregation policy produced its evidence and HOW MUCH raw observation
+# that evidence covers. That is what this projection is.
+#
+# THREE properties it is built for, in the order they matter:
+#
+#  1. PRESENT-ONLY. An object whose signals carry no `agg_key` gets NO block, so
+#     its `hypotheses_blob` — hence its `content_hash`, hence its replay pin —
+#     is byte-identical to pre-P3. This is the `storm_occurrences` precedent
+#     (see hypotheses_blob's degradation branch) applied verbatim: a new
+#     representation may not churn the objects that do not use it.
+#  2. PURE PROJECTION OF THE OBJECT'S OWN SIGNALS. Nothing here reads the live
+#     plane, a clock, or module state — only `attrs` that travel with each
+#     Signal into `corr_signals_archive`. So `replay`, re-running `run_window`
+#     over the archived slice, re-derives the IDENTICAL block; a difference is
+#     real drift (a lost annotation, a truncated attrs blob, a changed policy)
+#     and `replay._diff` reports it loudly instead of swallowing it.
+#  3. BOUNDED. A storm object can hold ~180k signals; every field below is a
+#     counter, a min/max, or a set whose cardinality is fixed by the DeltaClass
+#     enum (8) or explicitly capped (partitions). Nothing grows with the object.
+#
+# WHY NOT INSIDE `degradation`. Storm dedup lives there because it IS
+# degradation — a load-dependent, lossy-looking collapse the reader must be
+# warned about. The Aggregation plane is normal, always-on, lossless operation
+# (the raw rows are all in `corr_signals`; §3 "Lossless"), so filing it under
+# "degradation" would misreport a healthy object as degraded and would make
+# `StoredObject.degradation()` — which feeds `topology_stale`/`storm_mode`
+# straight back into `run_window` — carry a flag it must not carry. It is a
+# sibling PROVENANCE key of `grounding_context` instead, next to `provenance`.
+
+# The attrs `aggregation.AggPlane._annotate` stamps. Named here rather than
+# imported so `engine` keeps ZERO dependency on the plane (§2 "no hidden
+# coupling"): the engine reads annotations off a Signal, it does not aggregate.
+AGG_ATTR_KEY = "agg_key"
+AGG_ATTR_POLICY = "agg_policy"
+AGG_ATTR_CLASS = "agg_class"
+AGG_ATTR_COUNT = "agg_count"
+AGG_ATTR_FIRST = "agg_first_ts"
+AGG_ATTR_LAST = "agg_last_ts"
+AGG_ATTR_OFFSETS = "agg_offset_range"
+# Partitions listed in the embedded offset range. One object's evidence comes
+# from the partitions its entities hash to; the cap is the bound that keeps the
+# blob's size independent of the estate, and an elision is DECLARED
+# (`offsets_truncated`), never silent.
+AGG_MAX_OFFSET_PARTITIONS = 16
+
+
+def aggregation_block(signals: Iterable[Signal]) -> dict:
+    """The `grounding_context.aggregation` provenance block, or `{}`.
+
+    `{}` — falsy, so the caller embeds nothing — whenever NO signal carries an
+    `agg_key`, which is every object on the un-aggregated path.
+
+    THE COUNTS, exactly (the memo-§24 question "do counts reflect forwarded
+    deltas or raw coverage?" answered in the bytes rather than in prose):
+
+      `deltas`  = signals in this object that carry aggregation annotation. This
+                  is the same population `ObjectSnapshot.signal_count()` counts,
+                  minus any un-annotated remainder — see `unaggregated`.
+      `keys`    = distinct `AggKey` tokens behind those deltas.
+      `raw_signal_count` = Σ over distinct key of MAX(`agg_count`) seen for that
+                  key. It is a LOWER BOUND on raw coverage, and the docstring
+                  says so because the arithmetic says so:
+                    * `agg_count` is the key's CUMULATIVE count at the moment
+                      that delta was emitted, so SUMMING the deltas of one key
+                      would count the same raw observations once per delta
+                      (a key emitting FIRST at 1 and COUNT_THRESHOLD at 10 has
+                      seen 10 raw events, not 11). MAX is the correct reducer.
+                    * repeats that arrive AFTER a key's last delta are absorbed
+                      into plane state and never re-announced, so the object
+                      cannot see them. The true count for such a key is ≥ the
+                      max it observed, with equality iff the last delta was the
+                      key's last observation.
+                  The EXACT raw ledger is the plane's own (`AggPlane.raw_count`
+                  / `corr_signals`, which still holds every raw row); this field
+                  is the object-local, replay-derivable share of it. The
+                  equivalence suite asserts exact coverage at the KEY level
+                  (test_p3_equivalence.py), which is exact, rather than
+                  pretending this sum is.
+      `classes` = DeltaClass histogram (≤ 8 entries, closed set).
+
+    Deterministic: sorted keys, sorted class names, ISO strings compared as
+    strings (they are UTC ISO-8601 from one formatter, so lexical order is
+    chronological order).
+    """
+    per_key: dict[str, int] = {}
+    classes: dict[str, int] = {}
+    policies: set[str] = set()
+    offsets: dict[int, tuple[int, int]] = {}
+    first_ts = ""
+    last_ts = ""
+    deltas = 0
+    unaggregated = 0
+    for s in signals:
+        attrs = s.attrs
+        if not isinstance(attrs, dict):
+            unaggregated += 1
+            continue
+        token = attrs.get(AGG_ATTR_KEY)
+        if not isinstance(token, str) or not token:
+            unaggregated += 1
+            continue
+        deltas += 1
+        count = attrs.get(AGG_ATTR_COUNT)
+        n = int(count) if isinstance(count, (int, float)) else 0
+        if n > per_key.get(token, 0):
+            per_key[token] = n
+        cls = attrs.get(AGG_ATTR_CLASS)
+        if isinstance(cls, str) and cls:
+            classes[cls] = classes.get(cls, 0) + 1
+        pol = attrs.get(AGG_ATTR_POLICY)
+        if isinstance(pol, str) and pol:
+            policies.add(pol)
+        ft = attrs.get(AGG_ATTR_FIRST)
+        if isinstance(ft, str) and ft and (not first_ts or ft < first_ts):
+            first_ts = ft
+        lt = attrs.get(AGG_ATTR_LAST)
+        if isinstance(lt, str) and lt and lt > last_ts:
+            last_ts = lt
+        rng = attrs.get(AGG_ATTR_OFFSETS)
+        if isinstance(rng, list):
+            for item in rng:
+                parsed = _parse_offset_range(item)
+                if parsed is None:
+                    continue
+                part, lo, hi = parsed
+                cur = offsets.get(part)
+                if cur is None:
+                    offsets[part] = (lo, hi)
+                else:
+                    offsets[part] = (min(cur[0], lo), max(cur[1], hi))
+    if not deltas:
+        return {}
+    block: dict = {
+        # One string, not a list: replay compares it against the running
+        # `aggregation.AGG_POLICY_VERSION` and a mixed-policy object (which can
+        # only happen across a policy rollout) must fail that comparison, which
+        # a joined token does and a set membership test would not.
+        "policy": "|".join(sorted(policies)),
+        "deltas": deltas,
+        "keys": len(per_key),
+        "raw_signal_count": sum(per_key.values()),
+        "classes": dict(sorted(classes.items())),
+    }
+    if first_ts:
+        block["first_ts"] = first_ts
+    if last_ts:
+        block["last_ts"] = last_ts
+    if offsets:
+        ordered = sorted(offsets.items())
+        block["offsets"] = [f"{p}:{lo}-{hi}"
+                            for p, (lo, hi) in ordered[:AGG_MAX_OFFSET_PARTITIONS]]
+        if len(ordered) > AGG_MAX_OFFSET_PARTITIONS:
+            block["offsets_truncated"] = len(ordered) - AGG_MAX_OFFSET_PARTITIONS
+    if unaggregated:
+        # An object whose evidence is PART aggregated (a flag flip mid-window,
+        # or a lane the plane does not sit on). Declared, so "deltas" is never
+        # mistaken for the object's whole signal count.
+        block["unaggregated"] = unaggregated
+    return block
+
+
+def _parse_offset_range(item: object) -> tuple[int, int, int] | None:
+    """`"3:100-990"` -> `(3, 100, 990)`; None for anything else.
+
+    Untrusted by construction (§3): the token comes off an archived attrs JSON
+    that a replay may have loaded from disk, so it is PARSED, never eval'd, and
+    a malformed one is skipped rather than raised — a corrupt provenance string
+    must not be able to fail an object's serialization.
+    """
+    if not isinstance(item, str) or ":" not in item:
+        return None
+    part_s, _, span = item.partition(":")
+    lo_s, _, hi_s = span.partition("-")
+    try:
+        return (int(part_s), int(lo_s), int(hi_s))
+    except ValueError:
+        return None
+
+
 @dataclass(frozen=True)
 class ObjectSnapshot:
     """One correlation object at one engine evaluation — everything that
@@ -1818,10 +2004,59 @@ class ObjectSnapshot:
             blob["path"] = self.attribution_path.to_dict()
         return json.dumps(blob, separators=(",", ":"), sort_keys=True)
 
+    def agg_provenance(self) -> dict:
+        """`aggregation_block` over this object's node signals, computed once.
+
+        Cached exactly like `content_hash`/`material_hash` — same frozen-object
+        argument, same `object.__setattr__` storage, same recompute-on-copy
+        rule. The reason is cost, not convenience: `hypotheses_blob` is 16.4 %
+        of the cohort profile (docs/scale/P2_COHORT_PROFILE_2026-08-28.md) and
+        is built more than once per persisted version, and this projection walks
+        every signal of an object that may hold ~180k of them. One walk per
+        snapshot, not one per blob.
+        """
+        cached = getattr(self, "_agg_provenance_c", None)
+        if cached is not None:
+            return cached
+        value = aggregation_block(s for n in self.nodes for s in n.signals)
+        object.__setattr__(self, "_agg_provenance_c", value)
+        return value
+
     def signal_count(self) -> int:
+        """Signals attached to this object's nodes — i.e. what the ENGINE WINDOW
+        held for it, which is `corr_objects.signal_count`.
+
+        P3 DECISION (memo §24, design §5). With the Aggregation plane ON this
+        counts FORWARDED DELTAS, not raw observations, and that is deliberate:
+          * the column's meaning is "how much evidence this object reasoned
+            over". Node/edge/rank consume deltas, so deltas is the honest
+            answer; redefining it as raw coverage would make it disagree with
+            `node_count`, with the archived slice's row count, and with
+            `replay`'s own `fresh.signal_count()` recomputation — the drift
+            check would then fire on every aggregated object.
+          * raw coverage is a DIFFERENT question with a different answer, and it
+            is published separately as `grounding_context.aggregation
+            .raw_signal_count` in the hypotheses blob (see `aggregation_block`).
+            It goes in the blob rather than in a new `raw_signal_count` COLUMN
+            because a column needs a ClickHouse migration for a number only
+            aggregated objects have, and the blob is already the present-only
+            home for exactly this kind of representation provenance.
+          * `corr_signals` still holds every raw row, so the accounting gate
+            (raw received == raw persisted) is untouched by either choice.
+        """
         return sum(len(n.signals) for n in self.nodes)
 
     def affected(self) -> dict:
+        """The blast radius: the ENTITIES this object touches, per bucket.
+
+        P3: unchanged by the Aggregation plane and unchanged ON PURPOSE. It is a
+        projection of node IDENTITY, never of signal volume, and the plane emits
+        at least one delta (the FIRST) for every `AggKey` it creates — so every
+        entity that produced any observation still produces at least one signal
+        the engine sees. Collapsing repeats therefore cannot remove an entity
+        from a blast radius; `test_p3_equivalence.py` pins that as set equality
+        between the flag-OFF and flag-ON legs of the same stream.
+        """
         out: dict[str, list[str]] = {
             "devices": [], "interfaces": [], "sites": [], "paths": [],
             "segments": [], "services": [], "prefixes": [],
@@ -2043,6 +2278,18 @@ class ObjectSnapshot:
             elif self.storm_occurrences:
                 deg["deduped"] = self.storm_occurrences
             ctx["degradation"] = deg
+        # ── P3 step 3: aggregation provenance, PRESENT-ONLY ─────────────────
+        # Embedded exactly like `degradation` above and for the same reason: an
+        # object built from DELTA signals must carry, in its own bytes, which
+        # aggregation policy produced its evidence and how much raw observation
+        # that evidence stands for — otherwise a stored object is unreadable
+        # without the live plane, and `replay` has nothing to check the policy
+        # pin against. Absent for every un-aggregated object, so the blob (hence
+        # content_hash, hence the replay pin) does not move on the flag-OFF path.
+        # See `aggregation_block` for why it is NOT inside `degradation`.
+        agg = self.agg_provenance()
+        if agg:
+            ctx["aggregation"] = agg
         # C7: embed the directed-topology orientations ONLY when present, so an
         # undirected object's blob (hence content_hash + replay pin) is byte-identical
         # to pre-C7. A directed object embeds (from,to,verdict,source) → replay
@@ -3134,6 +3381,9 @@ def find_merges(
     survivors: list[ObjectSnapshot] | tuple[ObjectSnapshot, ...],
     candidates: list[ObjectSnapshot] | tuple[ObjectSnapshot, ...],
     min_overlap: float = 0.4,
+    *,
+    index: ContinuationIndex | None = None,
+    entity_cache: dict | None = None,
 ) -> list[tuple[str, str]]:
     """Which stale `candidates` should tombstone into a live `survivor`.
 
@@ -3159,6 +3409,15 @@ def find_merges(
     the other's, leaking a foreign correlation_id into its merged_into column.
     A candidate can never merge into another tenant's object, whatever the
     entity overlap.
+
+    `index` and `entity_cache` are PURE PERFORMANCE inputs, exactly as
+    find_continuation's are: they change which candidates are *examined* and how
+    often an entity set is recomputed, never which survivor wins. `index` must
+    be a ContinuationIndex built over the SAME survivor set (the winner is a
+    total order on (jac desc, window_start asc, cid asc) over unique survivor
+    cids, so the index's own ordering is irrelevant); it lets a caller build the
+    index once and probe it over several candidate chunks. `entity_cache` holds
+    the same frozensets `_entity_ids` would return, keyed by correlation_id.
     """
     surv = sorted(survivors, key=lambda s: (s.window_start, s.correlation_id))
     # TRACKER 162 PATTERN (Stage-2 Lever 2, results-preserving): index the
@@ -3174,7 +3433,7 @@ def find_merges(
     # independent of which candidates are examined or in what order. Output is
     # byte-identical (pinned by the equivalence oracle in
     # test_find_merges_index_stage2.py).
-    surv_index = ContinuationIndex(surv)
+    surv_index = ContinuationIndex(surv) if index is None else index
     pairs: list[tuple[str, str]] = []
     for cand in sorted(candidates, key=lambda s: (s.window_start, s.correlation_id)):
         ce = _entity_ids(cand)
@@ -3187,7 +3446,15 @@ def find_merges(
                     or s.correlation_id == cand.correlation_id
                     or not _windows_overlap(cand, s)):
                 continue
-            se = _entity_ids(s)
+            if entity_cache is None:
+                se = _entity_ids(s)
+            else:
+                # Same lookup-or-fill shape find_continuation uses, so the
+                # narrowing resolves to frozenset for mypy.
+                cached = entity_cache.get(s.correlation_id)
+                if cached is None:
+                    cached = entity_cache[s.correlation_id] = _entity_ids(s)
+                se = cached
             union = ce | se
             jac = len(ce & se) / len(union) if union else 0.0
             # Tracker 154b: a shared grounded seam bridging the two entity sets
@@ -3217,44 +3484,135 @@ class ContinuationIndex:
     bridge admits candidates with ZERO shared entities (the cloud half and the
     network half of one interconnect incident share only the seam).
 
-    THE SOUND SUPERSET, from the admission algebra:
-      * jac ≥ 0.4 ⟹ a shared entity_id            → by_entity
-      * _seam_bridged(snap, s) needs a view v from EITHER side's embedded
-        seams with REFS(snap)∩ev(v) ≠ ∅ AND REFS(s)∩ev(v) ≠ ∅, where
-        ev(v) = endpoint_values ∪ {seam_id}:
-          - v from snap's side ⟹ ev(v) ⊆ EV(snap) ⟹ REFS(s)∩EV(snap) ≠ ∅
-                                                     → by_ref  ∩ EV(snap)
-          - v from s's side    ⟹ ev(v) ⊆ EV(s)    ⟹ REFS(snap)∩EV(s) ≠ ∅
-                                                     → by_ev   ∩ REFS(snap)
-    Candidates = the union of the three lookups — a PROVEN superset of every
+    THE SOUND SUPERSET, from the admission algebra. Write
+    E(x) = entity ids, REFS(x) = ∪ node.identity_refs, G(x) = the seam ids x
+    holds an AUTHORITATIVE seam-grounded edge on (`_snap_grounded_seam_ids`),
+    ev(v) = v.endpoint_values ∪ {v.seam_id}, and for a snapshot x
+      GEV(x) = ∪ { ev(v) : v ∈ x.seams, v.seam_id ∈ G(x) }   ("grounded ev")
+      TCH(x) = { v.seam_id : v ∈ x.seams, REFS(x) ∩ ev(v) ≠ ∅ }  ("touched")
+
+      * jac ≥ 0.4 ⟹ E(P) ∩ E(S) ≠ ∅                        → by_entity  ∩ E(P)
+      * _seam_bridged(P, S) needs sid ∈ G(P) ∪ G(S) and a view v with
+        v.seam_id = sid, v ∈ P.seams ∪ S.seams, REFS(P)∩ev(v) ≠ ∅ AND
+        REFS(S)∩ev(v) ≠ ∅. Four sub-cases, each with its own exact lookup:
+          - sid ∈ G(P), v ∈ P.seams ⟹ ev(v) ⊆ GEV(P), REFS(S)∩GEV(P) ≠ ∅
+                                                     → by_ref      ∩ GEV(P)
+          - sid ∈ G(S), v ∈ S.seams ⟹ ev(v) ⊆ GEV(S), REFS(P)∩GEV(S) ≠ ∅
+                                                     → by_gev      ∩ REFS(P)
+          - sid ∈ G(P), v ∈ S.seams ⟹ sid ∈ TCH(S)   → by_touched  ∩ G(P)
+          - sid ∈ G(S), v ∈ P.seams ⟹ sid ∈ TCH(P)   → by_grounded ∩ TCH(P)
+    Candidates = the union of the five lookups — a PROVEN superset of every
     admissible object, so running the unchanged exact predicate over it
     preserves winner identity by construction (pinned by the equivalence
-    oracle in test_continuation_index_162.py).
+    oracles in test_continuation_index_162.py and
+    test_lifecycle_merge_storm_p1.py).
 
-    HONEST LOOSENESS: snapshots embed the whole seam inventory, so the two
-    seam clauses admit every object structurally touching ANY inventory seam
-    endpoint — a weaker filter in seam-dense estates than in entity-sparse
-    ones, but always a filter, and never unsound. Determinism: candidates are
-    returned in the original open-object order.
+    WHY THE GROUNDED RESTRICTION IS THE WHOLE POINT (2026-08-29, the 35,690 ms
+    storm-s02 loop stall). The first version keyed the two seam clauses on
+    EV(x) = every seam the snapshot EMBEDS. `run_window` stamps the WHOLE
+    tenant seam inventory into EVERY snapshot it emits (engine.py `seams=seams`
+    in both ObjectSnapshot constructions), so EV(x) is IDENTICAL for every
+    object of a tenant: `by_ev` mapped each inventory token to ALL indexed
+    objects and `candidates()` returned the ENTIRE population for every probe.
+    The index degenerated into the exact O(survivors × candidates) cross-product
+    it existed to remove, silently, in proportion to how many devices are seam
+    endpoints. Measured offline on the storm shape — 8,000 open objects, 5,000
+    survivors × 2,500 candidates, one seam per device (bench_lifecycle_merge_
+    storm.py, whose --legacy-index flag reproduces the defect on demand):
+
+        seams      pairs examined     on the loop thread
+            0              3,530                126 ms
+          200          2,351,375              5,190 ms
+        1,000          8,532,694             22,665 ms
+        2,500         12,500,000             45,120 ms  ← the full cross-product
+
+    The last two rows bracket the 35,690 ms live stall. With the grounded
+    keying below, every row is 3,530 pairs and ~140 ms.
+
+    `_seam_bridged` never consults a seam that is not in G(P) ∪ G(S), so
+    keying on GEV/TCH instead of EV is not a heuristic tightening — it is the
+    predicate's own precondition, and it collapses both seam clauses to nothing
+    for the overwhelmingly common object that grounded on no seam at all.
+
+    Determinism: candidates are returned in the original open-object order.
 
     Pure and cycle-scoped: build once per (tenant, cycle) over that cycle's
-    open snapshots, discard with the cycle.
+    open snapshots, discard with the cycle. `candidates_returned` counts the
+    pairs this index has handed the exact predicate — the observability that
+    makes a future degeneration loud instead of silent.
     """
 
-    __slots__ = ("_by_entity", "_by_ev", "_by_ref", "_snaps")
+    __slots__ = ("_by_entity", "_by_gev", "_by_grounded", "_by_ref",
+                 "_by_touched", "_seam_maps", "_snaps", "candidates_returned")
 
     def __init__(self, open_snaps) -> None:
         self._snaps = tuple(open_snaps)
         self._by_entity: dict[str, list[int]] = {}
         self._by_ref: dict[str, list[int]] = {}
-        self._by_ev: dict[str, list[int]] = {}
+        self._by_gev: dict[str, list[int]] = {}
+        self._by_touched: dict[str, list[int]] = {}
+        self._by_grounded: dict[str, list[int]] = {}
+        # seams-tuple identity -> (that tuple, token->seam ids, seam id->tokens).
+        self._seam_maps: dict[int, tuple] = {}
+        self.candidates_returned = 0
         for i, s in enumerate(self._snaps):
             for e in _entity_ids(s):
                 self._by_entity.setdefault(e, []).append(i)
-            for r in self._refs(s):
+            refs = self._refs(s)
+            for r in refs:
                 self._by_ref.setdefault(r, []).append(i)
-            for x in self._ev(s):
-                self._by_ev.setdefault(x, []).append(i)
+            # The seam half costs nothing for an object with no grounded seam
+            # edge — which is the normal object, storm or not.
+            grounded = _snap_grounded_seam_ids(s)
+            ev_sids, ev_of = self._seam_map(s.seams)
+            for sid in grounded:
+                self._by_grounded.setdefault(sid, []).append(i)
+            for t in self._gev(ev_of, grounded):
+                self._by_gev.setdefault(t, []).append(i)
+            for sid in self._touched(ev_sids, refs):
+                self._by_touched.setdefault(sid, []).append(i)
+
+    def _seam_map(self, seams: tuple) -> tuple[dict, dict]:
+        """(token -> seam ids, seam id -> tokens) for ONE embedded inventory.
+
+        Every snapshot of a tenant/cycle carries the SAME `seams` tuple object
+        (run_window hands its argument straight to each ObjectSnapshot), so this
+        is built once per distinct inventory rather than once per snapshot —
+        turning the O(open × inventory) index build into O(open + inventory).
+        Keyed by `id()` and VERIFIED by identity against the tuple held in the
+        cache, so a recycled id can never serve another inventory's map.
+        """
+        hit = self._seam_maps.get(id(seams))
+        if hit is not None and hit[0] is seams:
+            return hit[1], hit[2]
+        ev_sids: dict[str, set[str]] = {}
+        ev_of: dict[str, set[str]] = {}
+        for v in seams:
+            toks = v.endpoint_values() | {v.seam_id}
+            ev_of.setdefault(v.seam_id, set()).update(toks)
+            for t in toks:
+                ev_sids.setdefault(t, set()).add(v.seam_id)
+        self._seam_maps[id(seams)] = (seams, ev_sids, ev_of)
+        return ev_sids, ev_of
+
+    @staticmethod
+    def _gev(ev_of: dict, grounded: frozenset[str]) -> set[str]:
+        """GEV(x) — the ev tokens of the seams x actually GROUNDED on."""
+        out: set[str] = set()
+        for sid in grounded:
+            out |= ev_of.get(sid, frozenset())
+        return out
+
+    @staticmethod
+    def _touched(ev_sids: dict, refs: frozenset[str]) -> set[str]:
+        """TCH(x) — the ids of the embedded seams x structurally touches.
+
+        Derived through the inventory's inverted token map, so it costs
+        O(|REFS(x)|) per snapshot instead of a scan of the whole inventory."""
+        out: set[str] = set()
+        for r in refs:
+            out |= ev_sids.get(r, frozenset())
+        return out
 
     @staticmethod
     def _refs(snap: ObjectSnapshot) -> frozenset[str]:
@@ -3265,24 +3623,32 @@ class ContinuationIndex:
             out |= n.identity_refs()
         return frozenset(out)
 
-    @staticmethod
-    def _ev(snap: ObjectSnapshot) -> frozenset[str]:
-        """Endpoint values ∪ seam ids of every view this snapshot embeds."""
-        out: set[str] = set()
-        for v in snap.seams:
-            out |= v.endpoint_values()
-            out.add(v.seam_id)
-        return frozenset(out)
-
     def candidates(self, snap: ObjectSnapshot) -> tuple[ObjectSnapshot, ...]:
         hits: set[int] = set()
         for e in _entity_ids(snap):
             hits.update(self._by_entity.get(e, ()))
-        for x in self._ev(snap):
-            hits.update(self._by_ref.get(x, ()))
-        for r in self._refs(snap):
-            hits.update(self._by_ev.get(r, ()))
-        return tuple(self._snaps[i] for i in sorted(hits))
+        refs = self._refs(snap)
+        grounded = _snap_grounded_seam_ids(snap)
+        # The three `if` guards below are pure short-circuits over empty maps —
+        # every lookup they skip would have missed. They are what makes the
+        # seam half free when nothing in this population grounded on a seam.
+        if grounded:
+            ev_sids, ev_of = self._seam_map(snap.seams)
+            for t in self._gev(ev_of, grounded):
+                hits.update(self._by_ref.get(t, ()))
+            if self._by_touched:
+                for sid in grounded:
+                    hits.update(self._by_touched.get(sid, ()))
+        if self._by_gev:
+            for r in refs:
+                hits.update(self._by_gev.get(r, ()))
+        if self._by_grounded:
+            ev_sids, _ev_of = self._seam_map(snap.seams)
+            for sid in self._touched(ev_sids, refs):
+                hits.update(self._by_grounded.get(sid, ()))
+        out = tuple(self._snaps[i] for i in sorted(hits))
+        self.candidates_returned += len(out)
+        return out
 
     def __len__(self) -> int:
         return len(self._snaps)

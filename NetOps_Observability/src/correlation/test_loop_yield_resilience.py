@@ -110,6 +110,18 @@ def _quiet_and_isolated(monkeypatch):
     runs a determinism test compares start identical."""
     monkeypatch.setattr(main, "OPEN_OBJECTS", {})
     monkeypatch.setattr(main, "CORR_ENGINE_COHORT_SIZE", 40_000)
+    # …and a FROZEN topology-staleness verdict. `topology_stale` is stamped into
+    # every ObjectSnapshot, so it is part of the digest the determinism test
+    # compares — but its value is a function of WALL CLOCK, not of anything this
+    # file is testing: with the enrichment files absent (as they are in any test
+    # run) `_topology_stale` returns False for CORR_TOPO_STALE_S=180 s after the
+    # first call in the process and True forever after. A suite whose 180 s mark
+    # happens to fall BETWEEN the test's two legs therefore digests one leg as
+    # fresh and the other as stale and fails, with nothing wrong with the yield
+    # budget at all. Reproduce it on any revision with:
+    #     CORR_TOPO_STALE_S=3 pytest test_loop_yield_resilience.py
+    # Pinning it here keeps the comparison about the only variable under test.
+    monkeypatch.setattr(main, "_topology_stale", lambda _now: False)
     main._ARCHIVE_SLICE_HASH.clear()
     main.VERSIONS_PERSISTED = 0
     main.VERSIONS_DAMPED = 0

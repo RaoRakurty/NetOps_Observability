@@ -58,6 +58,7 @@ import threading
 import time
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 # main.py is imported for its REAL cycle/persist path; it must not think it has
 # a broker or a ClickHouse. Set before import — these are read at import time.
@@ -772,6 +773,17 @@ def main_cli() -> int:
                          "production mix, then exit")
     ap.add_argument("--ingest-lines", type=int, default=200_000,
                     help="lines per arm of --ingest-ab")
+    ap.add_argument("--agg-ab", action="store_true",
+                    help="P3 step 2: run a storm-shaped stream through the "
+                         "REAL aggregation plane and compare its collapse with "
+                         "the design's §6b plan-time projection, then exit")
+    ap.add_argument("--agg-lines", type=int, default=200_000,
+                    help="raw syslog lines per repeat-share rung of --agg-ab")
+    ap.add_argument("--agg-shares", default="0.02,0.10,0.25",
+                    help="repeat shares to walk (the §6b ladder rungs)")
+    ap.add_argument("--agg-transition-share", type=float, default=0.02,
+                    help="share of the stream that is a state transition — "
+                         "these are ALWAYS forwarded synchronously (memo §17)")
     ap.add_argument("--cprofile", action="store_true",
                     help="also cProfile ONE synchronous run_window (top 30)")
     ap.add_argument("--log-level", default="WARNING")
@@ -787,6 +799,8 @@ def main_cli() -> int:
         return _heartbeat_ab(args)
     if args.ingest_ab:
         return _ingest_ab(args)
+    if args.agg_ab:
+        return _agg_ab(args)
     if args.arrivals < 0:
         args.arrivals = args.signals // 2
     if args.cohort_size < 0:
@@ -1104,6 +1118,262 @@ def _heartbeat_ab(args) -> int:
         print(f"    {table:34s} {ch.rows[table]}")
     print("\n  (a touch writes netops.corr_current ONLY; the full version also "
           "writes\n   corr_objects + corr_edges + corr_evidence + the archive slice)")
+    return 0
+
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# P3 step 2 — AGGREGATION PLANE vs the plan-time projection
+# ═══════════════════════════════════════════════════════════════════════════
+#
+# WHAT IT COMPARES. `docs/design/AGGREGATION_PLANE_P3_2026-08-29.md` §6b sized
+# P3 OFFLINE, at plan time, with `scripts/enterprise_outage_chain.measure_stream`
+# — the K3 ideal `n_k3 + transitions + recoveries`. This arm runs the SAME
+# storm-shaped stream through the REAL `aggregation.AggPlane` and prints both
+# columns side by side. If the engine-side collapse and the plan-time projection
+# do not agree, one of the two is measuring a different key and the §6b ladder
+# cannot be used to decide anything.
+#
+# THE STREAM. Storm-shaped by construction and by the REAL producer: raw syslog
+# lines from the ratified realistic mix are parsed by
+# `producers.syslog_control_signal`, so every kind, entity, severity band and
+# parsed state is exactly what the engine would see. Repetition is arranged in
+# 60-SECOND ROUNDS — a symptom is re-reported inside the minute it appeared in,
+# which is what makes a repeat collapsible under a 60 s key and is what a real
+# chatter storm looks like. Deterministic: no RNG anywhere, so two runs of the
+# same parameters are comparable line for line.
+#
+# WHAT IT DOES NOT MODEL. Syslog derives the observer from the hostname and the
+# entity from the same hostname, so one identity cannot have two vantages on
+# this lane — exactly the step-0 finding for the ratified workload ("distinct
+# sources per identity: 1"). NEW_VANTAGE / NEW_MODALITY are therefore not
+# exercised here and the engine column is not inflated by them; a multi-modality
+# stream is step 3's equivalence-suite material.
+
+_AGG_ROUND_S = 60.0
+
+
+def _agg_events(n: int, devices: int, repeat_share: float, *,
+                t0: datetime, span_s: float,
+                transition_share: float) -> list[dict]:
+    """`n` raw syslog lines whose PROMOTED stream carries `repeat_share`
+    repeats and `transition_share` state transitions, arranged in 60 s rounds.
+
+    `t0` must be on a minute boundary so that "seconds from the stream start //
+    60" (what the plan-time measurement buckets on) and "absolute epoch seconds
+    // 60" (what the engine keys on) partition the stream identically.
+
+    ONE FRESH SYMPTOM PER DEVICE PER ROUND, and a device namespace per round.
+    Both are deliberate: they make every fresh symptom a distinct K1 identity,
+    so the ACHIEVED repeat share is the declared knob rather than a mixture of
+    the knob and incidental identity collisions. Fleet-shaped device reuse and
+    cross-bucket recurrence are what the ratified harness profiles model; this
+    arm is measuring whether the engine and the plan-time metric key the SAME
+    stream the same way, and a clean knob is what makes that readable.
+    """
+    del devices   # one fresh symptom == one device here; see the note below
+    rounds = max(1, int(span_s // _AGG_ROUND_S))
+    per_round = max(1, n // rounds)
+    n_rep = int(per_round * repeat_share)
+    n_trn = int(per_round * transition_share)
+    n_new = max(1, per_round - n_rep - n_trn)
+    out: list[dict] = []
+    seq = 0
+    for r in range(rounds):
+        base = t0 + timedelta(seconds=r * _AGG_ROUND_S)
+        # The round's fresh symptoms: (device, mix slot, if_n, state).
+        fresh = []
+        for j in range(n_new):
+            # A device namespace PER ROUND. Without it a device-scoped kind
+            # (bgp/ospf/alarm) recurs on the same K1 identity in a later minute,
+            # which `measure_stream` counts as a repeat but which no 60 s key
+            # can collapse — the achieved repeat share would then be dominated
+            # by cross-bucket recurrence instead of the declared knob. That
+            # cross-bucket mass is real (it is exactly the step-0 finding for
+            # the ratified workload) but it is not what this arm is measuring.
+            dev = f"mlx-r{r}-{j}"
+            app, tpl, sev = MIX[(seq * 7) % len(MIX)]
+            fresh.append((dev, app, tpl, sev, (seq // 3) % 48, "down"))
+            seq += 1
+        plan: list[tuple] = [(sym, "new") for sym in fresh]
+        for j in range(n_rep):
+            plan.append((fresh[j % len(fresh)], "repeat"))
+        for j in range(n_trn):
+            plan.append((fresh[j % len(fresh)], "flip"))
+        # Spread the round's lines evenly across its 60 s, so every one of them
+        # lands in the round's own bucket.
+        step = (_AGG_ROUND_S - 1.0) / max(1, len(plan))
+        for k, (sym, role) in enumerate(plan):
+            dev, app, tpl, sev, if_n, state = sym
+            if role == "flip":
+                state = "up"
+            msg = tpl.format(
+                if_n=if_n, state=state, State=state.capitalize(),
+                STATE=state.upper(), oct2=(if_n * 3) % 251, oct3=if_n % 251,
+                verb="removed" if state == "down" else "added",
+                stp_state="discarding" if state == "down" else "forwarding")
+            ts = base + timedelta(seconds=k * step)
+            out.append({"hostname": dev, "appname": app, "message": msg,
+                        "severity": sev, "tenant_id": "global",
+                        "timestamp": ts.isoformat()})
+    return out
+
+
+def _load_chain():
+    """`scripts/enterprise_outage_chain` — stdlib-only by contract, so it
+    imports cleanly with no harness dependencies. None when absent."""
+    import importlib.util
+    path = (Path(__file__).resolve().parents[2] / "scripts"
+            / "enterprise_outage_chain.py")
+    if not path.exists():
+        return None
+    spec = importlib.util.spec_from_file_location("_eoc_bench", path)
+    if spec is None or spec.loader is None:
+        return None
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def _agg_ab(args) -> int:
+    import aggregation
+
+    chain = _load_chain()
+    if chain is None:
+        print("scripts/enterprise_outage_chain.py not found — the plan-time "
+              "column cannot be computed; run this from a full checkout")
+        return 1
+    assert aggregation.RECOVERY_STATES == chain.RECOVERY_STATES, (
+        "the engine and the harness disagree about what a recovery IS — the "
+        "two columns below would not be the same metric")
+    assert aggregation.CORR_AGG_BUCKET_S == chain.AGG_BUCKET_S_K3
+
+    t0 = datetime(2026, 8, 29, 12, 0, 0, tzinfo=timezone.utc)
+    shares = [float(x) for x in args.agg_shares.split(",")]
+    print(f"P3 step 2 — Aggregation plane vs the §6b plan-time projection\n"
+          f"  {args.agg_lines:,} raw lines/rung, "
+          f"{args.span_s:.0f} s span, {aggregation.CORR_AGG_BUCKET_S} s K3 "
+          f"bucket, policy {aggregation.AGG_POLICY_VERSION}\n")
+    header = (f"  {'target':>7} {'promoted':>9} {'repeat':>8} "
+              f"{'plan n_k3':>10} {'engine fwd':>11} {'suppressed':>11} "
+              f"{'plan proj':>10} {'plan red':>9} {'engine red':>11}")
+    print(header)
+    print("  " + "-" * (len(header) - 2))
+    rows = []
+    for share in shares:
+        events = _agg_events(args.agg_lines, args.devices, share, t0=t0,
+                             span_s=args.span_s,
+                             transition_share=args.agg_transition_share)
+        # The parse is timed too, and reported BESIDE the plane: absolute
+        # microseconds on a loaded box say nothing (this one runs a 2.5K storm
+        # while the bench runs), but the RATIO of the plane to the ingest parse
+        # it sits next to is contention-immune and is the number that decides
+        # whether the plane is affordable on the lane.
+        sigs = []
+        t_parse = time.perf_counter()
+        for ev in events:
+            ts = datetime.fromisoformat(ev["timestamp"])
+            sig = producers.syslog_control_signal(ev, "global", ts)
+            if sig is not None:
+                sigs.append(sig)
+        parse_s = time.perf_counter() - t_parse
+        obs = [chain.Observation(
+            t=(s.ts - t0).total_seconds(), device=s.observer.observer_id,
+            entity_id=s.entity_id, kind=s.kind, severity=s.severity.value,
+            state=str(s.attrs.get("state", "")), promoted=True) for s in sigs]
+        plan = chain.measure_stream(obs, args.span_s, raw_events=len(events),
+                                    tenant="global")
+
+        plane = aggregation.AggPlane(horizon_s=main.RETENTION_REQUIRED_S,
+                                     lateness_s=main.CORR_PERMITTED_LATENESS_S)
+        # Warm the memoised signal_id exactly as production does: on the real
+        # lane `to_ch_row()` (the raw corr_signals row) runs BEFORE the plane, so
+        # the uuid5 is already paid by the time `observe` sees the signal.
+        # Timing it inside the plane would bill the plane for the ingest path's
+        # own cost and roughly double the figure.
+        for _s in sigs:
+            _ = _s.signal_id_str
+        t_start = time.perf_counter()
+        fwd = aggregation.observe_all(plane, sigs)
+        elapsed = time.perf_counter() - t_start
+
+        plan_sig = plan["projection"]["signals_with_K3_aggregation"]
+        n_k3 = plan["projection"]["ideal_k3_identities"]
+        eng_sig = len(fwd)
+        n = plan["signals"]
+        plan_red = 100.0 * (n - plan_sig) / max(1, n)
+        eng_red = 100.0 * (n - eng_sig) / max(1, n)
+        achieved = plan["class_share_pct"]["repeat"]
+        print(f"  {share * 100:6.0f}% {n:9,} {achieved:7.1f}% {n_k3:10,} "
+              f"{eng_sig:11,} {plane.suppressed:11,} {plan_sig:10,} "
+              f"{plan_red:8.1f}% {eng_red:10.1f}%")
+        rows.append({
+            "target_repeat_share": share,
+            "raw_events": len(events), "promoted_signals": n,
+            "achieved_repeat_share_pct": achieved,
+            "plan_ideal_k3_identities": n_k3,
+            "plan_signals_with_K3": plan_sig, "engine_forwarded": eng_sig,
+            "engine_suppressed": plane.suppressed,
+            "engine_observed": plane.observed,
+            "plan_reduction_pct": round(plan_red, 3),
+            "engine_reduction_pct": round(eng_red, 3),
+            "plan_transitions": plan["classes"]["transition"],
+            "plan_recoveries": plan["classes"]["recovery"],
+            "engine_state_transitions": plane.state_transitions,
+            "engine_recoveries": plane.recoveries,
+            "forwarded_by_class": dict(plane.forwarded_by_class),
+            "keys": plane.key_count(), "evicted": dict(plane.evicted),
+            "us_per_signal": round(elapsed / max(1, len(sigs)) * 1e6, 3),
+            "parse_us_per_line": round(parse_s / max(1, len(events)) * 1e6, 3),
+            "plane_share_of_parse": round(elapsed / max(1e-9, parse_s), 4),
+            "lossless": plane.raw_count("global") + sum(plane.evicted.values()) > 0
+            and plane.forwarded + plane.suppressed == plane.observed,
+        })
+
+    print("\n  plan n_k3  = distinct K3 identities "
+          "(enterprise_outage_chain.measure_stream)")
+    print("  engine fwd = aggregation.AggPlane forwarded deltas on the SAME "
+          "stream")
+    print("  plan proj  = the §6b column, min(signals, n_k3 + transitions + "
+          "recoveries)\n")
+    for row in rows:
+        assert row["lossless"], "the plane lost an observation"
+        assert row["engine_state_transitions"] == (
+            row["plan_transitions"] + row["plan_recoveries"]), (
+            f"transition accounting disagrees with the harness: "
+            f"{row['engine_state_transitions']} vs "
+            f"{row['plan_transitions'] + row['plan_recoveries']}")
+        assert row["engine_recoveries"] == row["plan_recoveries"]
+        extra = sum(v for k, v in row["forwarded_by_class"].items()
+                    if k in ("new_vantage", "new_modality", "contradiction",
+                             "count_threshold", "repeat"))
+        assert row["engine_forwarded"] == row["plan_ideal_k3_identities"] + extra, (
+            f"the engine and the harness are keying the stream differently: "
+            f"{row['engine_forwarded']} forwarded vs "
+            f"{row['plan_ideal_k3_identities']} K3 identities + {extra} "
+            f"extra-class deltas")
+    print("  EXACT AGREEMENT: engine forwarded == plan n_k3 (+ the extra causal\n"
+          "  classes the K3 formula does not model). `plan proj` is systematically\n"
+          "  HIGHER because it adds transitions and recoveries to n_k3 while a\n"
+          "  transition also changes severity — so it has already opened a new K3\n"
+          "  identity and the plan formula counts it twice. That double count,\n"
+          "  capped by its own min(), is the whole gap between the two reduction\n"
+          "  columns; it is an upper bound on engine load, never a disagreement\n"
+          "  about the key.\n")
+    print("  Losslessness (forwarded + suppressed == observed) and the "
+          "transition /\n  recovery counts agree with the harness on every "
+          "rung.\n")
+    print("  per-rung detail:")
+    print(json.dumps(rows, indent=2))
+    print(f"  cost at the densest rung: plane {rows[-1]['us_per_signal']:.2f} "
+          f"us/signal vs syslog parse\n  "
+          f"{rows[-1]['parse_us_per_line']:.2f} us/line — the plane is "
+          f"{rows[-1]['plane_share_of_parse'] * 100:.0f} % of the parse it "
+          f"sits beside.\n  Absolute microseconds on this box are contended "
+          f"(a live storm run); the RATIO is not.\n  On the ratified mix only "
+          f"4.9 % of raw lines promote, and the plane runs on promoted signals "
+          f"ONLY,\n  so its share of the raw syslog lane is ~1/20th of that "
+          f"ratio.")
     return 0
 
 

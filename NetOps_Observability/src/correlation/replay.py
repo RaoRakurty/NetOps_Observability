@@ -27,6 +27,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, field
 
+from aggregation import AGG_POLICY_VERSION, AggPlane
 from catalog import Catalog, builtin_catalog
 from directed_topology import DirectedTopology, frozen_oracle
 from engine import (
@@ -115,6 +116,18 @@ class StoredObject:
         deg = (blob.get("grounding_context") or {}).get("degradation") or {}
         return bool(deg.get("topology_stale")), bool(deg.get("storm_mode"))
 
+    def aggregation(self) -> dict:
+        """The P3 aggregation provenance embedded at persist time (design §5),
+        or `{}` for an object built on the un-aggregated path.
+
+        Read the same way as `degradation()`/`adjacency()`: out of the snapshot's
+        OWN blob, never from a live plane — a replay must be able to say which
+        aggregation policy produced this object's evidence years after the
+        process that ran it is gone."""
+        blob = json.loads(self.hypotheses_blob)
+        agg = (blob.get("grounding_context") or {}).get("aggregation") or {}
+        return dict(agg) if isinstance(agg, dict) else {}
+
     def adjacency(self) -> TopologyAdjacency:
         """The L2/L3 adjacency this object grounded on, embedded per snapshot (C7) so
         an adjacency-grounded (fabric) edge replays against the SAME links, not the
@@ -157,10 +170,27 @@ class DriftReport:
     # older than the columns): not comparable, so not drift — counted, never hidden.
     direction_unknown: int = 0
     comparison_schema: int = EDGE_COMPARISON_SCHEMA
+    # ── P3 step 3: the aggregation-policy pin ────────────────────────────────
+    # True for an un-aggregated object (nothing to pin) AND for an aggregated
+    # object whose embedded policy equals the running `AGG_POLICY_VERSION`.
+    # False is a LOUD finding, mirrored into `differences` exactly like the
+    # engine/catalog pins: a stored object's deltas were produced by an
+    # aggregation policy this process no longer implements, so its evidence
+    # cannot be re-derived from raw and any structural "clean" below is a
+    # statement about deltas, not about the raw stream they stand for.
+    agg_pin_match: bool = True
+    agg_drift: list[str] = field(default_factory=list)
 
     def note(self, msg: str) -> None:
         self.clean = False
         self.differences.append(msg)
+
+    def note_aggregation(self, msg: str) -> None:
+        """An aggregation-provenance finding: recorded in `agg_drift` AND in
+        `differences`, so `clean` and every existing reader keep their exact
+        meaning (the `note_direction` precedent)."""
+        self.agg_drift.append(msg)
+        self.note(msg)
 
     def note_direction(self, msg: str) -> None:
         """A direction finding: recorded in the schema-v2 list AND in `differences`
@@ -181,6 +211,11 @@ class DriftReport:
             "direction_drift": list(self.direction_drift),
             "direction_drift_count": len(self.direction_drift),
             "direction_unknown": self.direction_unknown,
+            # ── P3 step 3 additions (additive, like the v2 direction keys) ───
+            "agg_pin_match": self.agg_pin_match,
+            "agg_policy": AGG_POLICY_VERSION,
+            "agg_drift": list(self.agg_drift),
+            "agg_drift_count": len(self.agg_drift),
         }
 
 
@@ -245,6 +280,17 @@ def replay(
         report.note(f"engine pin: stored {stored.engine_version} vs current {engine_version(cfg)}")
     if not report.catalog_pin_match:
         report.note(f"catalog pin: stored {stored.catalog_version} vs current {catalog.version_hash()}")
+    # ── P3 step 3: the aggregation-policy pin, compared like the two above ───
+    # We cannot time-travel an aggregation policy any more than we can
+    # time-travel code (module docstring: "honesty over pretense"), so a policy
+    # mismatch is REPORTED, never silently substituted. An un-aggregated object
+    # embeds no policy and pins clean — pre-P3 objects must stay replayable.
+    stored_agg = stored.aggregation()
+    stored_policy = str(stored_agg.get("policy", ""))
+    if stored_policy and stored_policy != AGG_POLICY_VERSION:
+        report.agg_pin_match = False
+        report.note_aggregation(
+            f"aggregation policy pin: stored {stored_policy} vs current {AGG_POLICY_VERSION}")
 
     seams = stored.grounding_context()
     # The archive may hold the slice several times (one per persisted version);
@@ -298,6 +344,7 @@ def _diff(report: DriftReport, stored: StoredObject, fresh: ObjectSnapshot) -> N
         report.note(f"node_count: stored {stored.node_count} vs replay {len(fresh.nodes)}")
     if fresh.signal_count() != stored.signal_count:
         report.note(f"signal_count: stored {stored.signal_count} vs replay {fresh.signal_count()}")
+    _diff_aggregation(report, stored, fresh)
 
     stored_dir = _directions_by_key(stored.edges)
     fresh_dir = _directions_by_key(fresh.to_edge_rows(stored.version))
@@ -317,6 +364,115 @@ def _diff(report: DriftReport, stored: StoredObject, fresh: ObjectSnapshot) -> N
         if s_dirs != f_dirs:
             report.note_direction(
                 f"edge direction {key}: stored {_fmt_dirs(s_dirs)} vs replay {_fmt_dirs(f_dirs)}")
+
+
+def _diff_aggregation(report: DriftReport, stored: StoredObject,
+                      fresh: ObjectSnapshot) -> None:
+    """The P3 aggregation provenance must survive the archive round-trip.
+
+    `aggregation_block` is a PURE projection of the `agg_*` annotations that
+    travel in each Signal's `attrs` into `corr_signals_archive`, so re-running
+    `run_window` over the archived slice must re-derive the stored block
+    field-for-field. Anything else is a real, nameable defect and gets named:
+
+      * a block that vanished  -> the annotations did not survive persistence
+        (the likeliest cause is `signals._shrink_attrs` truncating an oversize
+        attrs blob, which is exactly the sort of silent evidence loss this
+        check exists to expose);
+      * a block that appeared  -> the stored object predates the representation;
+      * a field that moved     -> a different set of deltas was archived than
+        the object was built from (a sliced/merged archive), or `agg_count`
+        annotations were rewritten.
+
+    Every difference is reported per FIELD, not as one opaque "blocks differ",
+    because the field that moved is the diagnosis.
+    """
+    want = stored.aggregation()
+    got = fresh.agg_provenance()
+    if not want and not got:
+        return
+    if want and not got:
+        report.note_aggregation(
+            "aggregation block: stored "
+            f"{want.get('deltas', 0)} delta(s)/{want.get('keys', 0)} key(s), "
+            "replay recomputed none (agg_* annotations missing from the archive slice)")
+        return
+    if got and not want:
+        report.note_aggregation(
+            "aggregation block: none stored, replay recomputed "
+            f"{got.get('deltas', 0)} delta(s)/{got.get('keys', 0)} key(s)")
+        return
+    for field_name in sorted(set(want) | set(got)):
+        a, b = want.get(field_name), got.get(field_name)
+        if a != b:
+            report.note_aggregation(
+                f"aggregation.{field_name}: stored {a!r} vs replay {b!r}")
+
+
+def rederive_deltas(raw_window: list[Signal] | tuple[Signal, ...], *,
+                    horizon_s: float, lateness_s: float) -> list[Signal]:
+    """Run the SAME `AggPlane` over a RAW slice, in event-time order, and return
+    the deltas it forwards (design §3 "so `replay` can re-derive either level").
+
+    Two levels exist because two things are archived. `corr_signals_archive`
+    holds the DELTA signals an object was built from — that is what `replay()`
+    above re-runs, and it needs no plane. `corr_signals` holds every RAW row,
+    forever, and THIS is the function that turns those back into the delta
+    stream the engine saw. Together they close the loop: raw -> deltas -> object.
+
+    PURITY. A fresh plane per call (never a shared one — a plane carries state,
+    and a replay must not be able to see another replay's), fed strictly in
+    `(event_ts, signal_id)` order, which is the canonical order the plane's own
+    ordering rule is defined against. `horizon_s`/`lateness_s` are INJECTED for
+    the same reason `main` injects them: a re-derivation must age state on the
+    same clock the original run did, and guessing that clock here would make the
+    result depend on this module's defaults rather than on the run being
+    replayed.
+
+    NOT MUTATION-FREE FOR THE CALLER: `AggPlane.observe` stamps the annotation
+    onto the Signal it is handed (its documented contract), so pass COPIES when
+    the raw signals are needed un-annotated afterwards.
+    """
+    plane = AggPlane(horizon_s=horizon_s, lateness_s=lateness_s)
+    out: list[Signal] = []
+    for sig in sorted(raw_window, key=lambda s: (s.ts, str(s.signal_id))):
+        got = plane.observe(sig)
+        if got is not None:
+            out.append(got)
+    return out
+
+
+def check_rederivation(archived_deltas: list[Signal] | tuple[Signal, ...],
+                       raw_window: list[Signal] | tuple[Signal, ...], *,
+                       horizon_s: float, lateness_s: float) -> list[str]:
+    """Findings (empty == clean) from re-deriving `archived_deltas` out of
+    `raw_window` with `rederive_deltas`.
+
+    THE INVARIANT: the plane is a pure function of the event-time-ordered raw
+    stream per key, so the SET of forwarded signal ids is reproducible exactly.
+    A difference means one of: the raw slice is not the slice that produced
+    these deltas, the policy changed under us (which `replay()`'s pin catches
+    first), or the plane stopped being deterministic — all three are defects,
+    none of them may be silent (§10 "no silent failures").
+
+    Returned rather than raised, so a caller can fold them into a DriftReport
+    (`note_aggregation`) or print them, and so one mismatch does not hide the
+    rest.
+    """
+    want = {str(s.signal_id) for s in archived_deltas}
+    got = {str(s.signal_id) for s in rederive_deltas(
+        raw_window, horizon_s=horizon_s, lateness_s=lateness_s)}
+    findings: list[str] = []
+    missing, extra = sorted(want - got), sorted(got - want)
+    if missing:
+        findings.append(
+            f"re-derivation forwarded {len(missing)} fewer delta(s) than the archive "
+            f"holds (first: {missing[0]})")
+    if extra:
+        findings.append(
+            f"re-derivation forwarded {len(extra)} delta(s) the archive does not hold "
+            f"(first: {extra[0]})")
+    return findings
 
 
 # ── IO wrapper (ClickHouse) ───────────────────────────────────────────────────

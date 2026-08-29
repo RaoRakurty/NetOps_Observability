@@ -57,6 +57,7 @@ from pydantic import BaseModel
 
 import diagnostics
 import signals
+from aggregation import AGG_EVICT_REASONS, AggPlane, DeltaClass
 from app_producers import app_identity_from_event
 from catalog import builtin_catalog
 from cloud_dependency import build_from_records, merge_path_views
@@ -1832,6 +1833,82 @@ ENGINE_REACH_S = engine_temporal_reach_s(ENGINE_CFG)
 RETENTION_REQUIRED_S = required_retention_s(
     ENGINE_CFG, permitted_lateness_s=CORR_PERMITTED_LATENESS_S)
 
+# ── P3 AGGREGATION PLANE (design AGGREGATION_PLANE_P3_2026-08-29 §3/§7 step 2) ─
+#
+# DEFAULT OFF. The plane is a deliberately NEW versioned representation (delta
+# signals carrying agg_* fields), so objects built from deltas will not be
+# byte-identical to objects built from raw repeats — §5 of the design says the
+# flag stays off until the equivalence suite (step 3) passes. With the flag off
+# the ingest path is byte-identical to today: `agg_admit` returns its argument
+# unchanged and nothing is allocated, classified or counted.
+#
+# WHERE IT SITS. After the tenant claim is verified and after the ingest
+# pre-filter, and AFTER the raw `corr_signals` row has been batched — but BEFORE
+# `buffer_signal`. That order is what keeps the accounting gate EXACT: every raw
+# promoted line is still persisted and still counted in SYSLOG_RECEIVED /
+# SYSLOG_SIGNALS whether the plane forwards it or absorbs it; only the ENGINE
+# WINDOW sees fewer signals. (Verified against handle_syslog / handle_probe /
+# _emit_episode_signal: each builds `to_ch_row()` and awaits `batch_signal`
+# before it calls `buffer_signal`, and `to_ch_row` serialises attrs to a JSON
+# string at that moment — so the annotation the plane stamps afterwards cannot
+# reach the raw row.)
+CORR_AGGREGATION_PLANE = os.environ.get(
+    "CORR_AGGREGATION_PLANE", "0").lower() in ("1", "true", "yes")
+# Bounded, per tenant, expiring on the window's OWN horizon and tolerating the
+# window's OWN declared lateness — both injected rather than re-derived, so the
+# plane can never age state on a different clock than the window it feeds.
+AGG_PLANE = AggPlane(horizon_s=RETENTION_REQUIRED_S,
+                     lateness_s=CORR_PERMITTED_LATENESS_S)
+# Parsed form of the consumer's dedup coordinate ("topic:partition:offset"),
+# cached so the parse happens once per Kafka message rather than once per signal
+# it produces. Memo §16's "raw Kafka offset range" is not on the Signal (checked:
+# no offset field, no producer stamps one into attrs), so the ingest boundary is
+# the only place that knows it.
+_AGG_COORD_SRC = ""
+_AGG_COORD: tuple[int, int] | None = None
+
+
+def _agg_coord() -> tuple[int, int] | None:
+    """`(partition, offset)` of the message in flight, or None off the consumer
+    path (tests, replay, the verification producer). Never raises: a coordinate
+    is provenance, and provenance must not be able to fail an ingest."""
+    global _AGG_COORD_SRC, _AGG_COORD
+    coord = _dedup_coord
+    if coord == _AGG_COORD_SRC:
+        return _AGG_COORD
+    _AGG_COORD_SRC = coord
+    parsed: tuple[int, int] | None = None
+    if coord:
+        parts = coord.rsplit(":", 2)
+        if len(parts) == 3:
+            try:
+                parsed = (int(parts[1]), int(parts[2]))
+            except ValueError:
+                parsed = None
+    _AGG_COORD = parsed
+    return parsed
+
+
+def agg_admit(sig: Signal) -> Signal | None:
+    """The ingest boundary's aggregation gate.
+
+    Returns the signal the engine window should see — the argument itself when
+    the plane is off (byte-identical ingest), the annotated delta when the plane
+    forwards it, or None when the plane absorbed it as a pure repeat.
+    """
+    if not CORR_AGGREGATION_PLANE:
+        return sig
+    with stage("ingest.aggregate"):
+        return AGG_PLANE.observe(sig, _agg_coord())
+
+
+def agg_stats() -> dict:
+    """The plane's counters + ratios (memo §5). Always answerable, even with the
+    flag off — "off" must be readable as zeros, not as a missing section."""
+    out = AGG_PLANE.stats()
+    out["enabled"] = CORR_AGGREGATION_PLANE
+    return out
+
 
 # ── tracker 165 phase 3/4: retention runs on STREAM time, not wall clock ─────
 #
@@ -2875,6 +2952,41 @@ CORR_LIFECYCLE_COHORT_WINDOW = max(0, int(
     os.environ.get("CORR_LIFECYCLE_COHORT_WINDOW",
                    str(CORR_ENGINE_DRAIN_COHORTS))))
 
+# ── the lifecycle merge pass must never own the loop thread ──────────────────
+# LIVE EVIDENCE (run storm-s02, 2026-08-29 20:01:09→20:01:44Z, replica-4): a
+# 35,690 ms event-loop stall — past the 30 s Kafka session timeout, so the
+# consumer was ejected twice (106 UnknownMemberId, 2 CommitFailed). The stage
+# profile had NO span covering it: `engine.run_window` and `persist.*` are
+# executor/wall-clock, and `handle.syslog` max 34.5 s was the consumer STARVED
+# by the stall, not its cause. The stall began right after a cohort's
+# reconciliation lines — i.e. at the END of an epoch, in `_epoch_lifecycle`.
+#
+# The cause was `find_merges`'s survivor index degenerating into the full
+# O(survivors × candidates) cross-product in a seam-dense estate (the whole
+# derivation and the measured 50 s worst case are in ContinuationIndex's
+# docstring). That is fixed at the root in engine.py. These two bounds are the
+# BELT for the braces: whatever a future population does to the pair count, the
+# pass is handed to the executor and chunked so the loop thread keeps its
+# heartbeat.
+#
+# OFFLOAD_PAIRS: when survivors × candidates exceeds this, the (pure) merge
+# computation runs via `_offload` instead of on the loop. 250,000 pairs is
+# ~65 ms of predicate at the measured ~2.6 µs/pair — an order of magnitude
+# under the 500 ms bound, so the inline path is only ever taken by work that
+# provably cannot breach it.
+CORR_LIFECYCLE_MERGE_OFFLOAD_PAIRS = max(0, int(
+    os.environ.get("CORR_LIFECYCLE_MERGE_OFFLOAD_PAIRS", "250000")))
+# CHUNK: candidates per `find_merges` call. Splitting the candidate list is
+# output-identical BY CONSTRUCTION — each candidate independently selects its
+# own best survivor over the SAME survivor set, and the result is re-sorted —
+# so chunking only creates await points between groups. 0 disables chunking.
+CORR_LIFECYCLE_MERGE_CHUNK = max(0, int(
+    os.environ.get("CORR_LIFECYCLE_MERGE_CHUNK", "500")))
+# The continuation index is the same shape on the reconciliation path: one
+# build per cohort over every open object. Offload it past this many objects.
+CORR_CONTINUATION_INDEX_OFFLOAD = max(0, int(
+    os.environ.get("CORR_CONTINUATION_INDEX_OFFLOAD", "2000")))
+
 
 def rank_memo_stats() -> dict[str, int]:
     """§10 observable for the level-1 memo. Zeros (not an absent key) when the
@@ -3436,6 +3548,9 @@ def epoch_state() -> dict[str, object]:
         "lifecycle_merge_survivors": LIFECYCLE_MERGE_SURVIVORS_LAST,
         "lifecycle_merge_candidates": LIFECYCLE_MERGE_CANDIDATES_LAST,
         "lifecycle_merge_chains_skipped_total": LIFECYCLE_MERGE_CHAINS_SKIPPED_TOTAL,
+        "lifecycle_merge_pairs_evaluated_total": LIFECYCLE_MERGE_PAIRS_EVALUATED_TOTAL,
+        "lifecycle_merge_seconds_max": round(LIFECYCLE_MERGE_SECONDS_MAX, 6),
+        "lifecycle_merge_offloads_total": LIFECYCLE_MERGE_OFFLOADS_TOTAL,
         # ── P2 step 4: the Evidence plane. THE invariant: `depth` returns to 0
         # between storms (spec §2's T8) and `lag_seconds` is the operator's
         # T7 — the time from a verdict to its materialized graph. `failed_total`
@@ -3465,6 +3580,13 @@ def epoch_state() -> dict[str, object]:
         "windows_rejected_total": ENGINE_WINDOWS_REJECTED_TOTAL,
         "profiler_errors_total": PROFILER_ERRORS_TOTAL,
         "signals_dropped_total": dict(SIGNALS_DROPPED_TOTAL),
+        # ── P3 step 2: the Aggregation plane (memo §5's event/aggregation
+        # metrics). THE pair to read together: `suppressed_ratio` is the share
+        # of promoted signals the engine never had to see, and
+        # `state_transitions` + `recoveries` are what must NEVER be suppressed —
+        # a rising suppressed_ratio with those two flat is the plane working; a
+        # rising suppressed_ratio that moves them is a defect.
+        "aggregation": agg_stats(),
     }
 
 
@@ -4012,6 +4134,15 @@ def _archive_row(sig: Signal, corr_id: str, version: int, *,
     item's — the cache would then serve the WRONG row. The deferred path
     therefore builds fresh; `to_ch_row` is deterministic, so the bytes are
     identical either way.
+
+    P3 step 3 (verified, not assumed — test_p3_equivalence
+    .test_archive_row_preserves_every_agg_attr runs THIS function): the
+    Aggregation plane's `agg_*` annotations live in `sig.attrs`, and `to_ch_row`
+    serialises `attrs` whole into the row's JSON string, so an archived DELTA
+    carries its key, policy, class, count, first/last event time and Kafka
+    offset range verbatim. Nothing here needs to know about them, and nothing
+    here may strip them: `replay` re-derives the object's aggregation
+    provenance from exactly these rows and reports any loss as drift.
     """
     key = id(sig)
     base = _CYCLE_ROW_CACHE.get(key) if cache else None
@@ -5286,6 +5417,68 @@ LIFECYCLE_SEEN_WINDOW_IDS = 0        # ids in the union at the last pass (gauge)
 LIFECYCLE_MERGE_SURVIVORS_LAST = 0
 LIFECYCLE_MERGE_CANDIDATES_LAST = 0
 LIFECYCLE_MERGE_CHAINS_SKIPPED_TOTAL = 0
+# The two numbers that would have NAMED the storm-s02 stall on the first read:
+# how many (survivor, candidate) pairs the exact predicate was actually handed,
+# and how long the merge computation took. A pair count that tracks
+# survivors × candidates is the index having degenerated (see
+# ContinuationIndex) — the failure mode this pass has already had once.
+LIFECYCLE_MERGE_PAIRS_EVALUATED_TOTAL = 0
+LIFECYCLE_MERGE_SECONDS_MAX = 0.0
+LIFECYCLE_MERGE_OFFLOADS_TOTAL = 0
+
+
+async def _lifecycle_find_merges(survivors: list, candidates: list,
+                                 loop_yield) -> list[tuple[str, str]]:
+    """`find_merges` with a hard ceiling on how long it can own the loop thread.
+
+    THREE bounds, in order of how much they buy:
+      1. The survivor index is built ONCE and reused across chunks, so probing
+         is sub-linear (engine.ContinuationIndex carries the superset proof and
+         the measured degeneration this replaced).
+      2. Past CORR_LIFECYCLE_MERGE_OFFLOAD_PAIRS the index build AND every
+         chunk go to the executor via `_offload`. `find_merges` is a pure
+         function of two immutable snapshot lists, which is precisely what
+         `_offload` is for; the APPLY step (tombstones, OPEN_OBJECTS mutation,
+         persistence) stays on the loop in the caller, untouched.
+      3. Chunks are awaited one at a time with a `loop_yield` between, so even
+         the inline path has await points inside the pass.
+
+    OUTPUT-IDENTICAL, by construction rather than by hope: `find_merges` picks,
+    for each candidate independently, the survivor maximising a total order on
+    (jac desc, window_start asc, cid asc) over the SAME survivor set — no
+    candidate's result depends on any other candidate, and the final `sorted()`
+    restores the exact ordering a single call returns. Chunking and offloading
+    therefore change scheduling only. Serial awaits mean the shared
+    entity cache is never touched by two threads at once.
+    """
+    global LIFECYCLE_MERGE_PAIRS_EVALUATED_TOTAL, LIFECYCLE_MERGE_SECONDS_MAX
+    global LIFECYCLE_MERGE_OFFLOADS_TOTAL
+    if not survivors or not candidates:
+        return []
+    t0 = time.perf_counter()
+    big = (CORR_LIFECYCLE_MERGE_OFFLOAD_PAIRS > 0
+           and len(survivors) * len(candidates) >= CORR_LIFECYCLE_MERGE_OFFLOAD_PAIRS)
+    if big:
+        LIFECYCLE_MERGE_OFFLOADS_TOTAL += 1
+        index = await _offload(ContinuationIndex, survivors)
+    else:
+        index = ContinuationIndex(survivors)
+    chunk = CORR_LIFECYCLE_MERGE_CHUNK or len(candidates)
+    entity_cache: dict = {}
+    pairs: list[tuple[str, str]] = []
+    for i in range(0, len(candidates), chunk):
+        part = candidates[i:i + chunk]
+        if big:
+            pairs += await _offload(find_merges, survivors, part,
+                                    index=index, entity_cache=entity_cache)
+        else:
+            pairs += find_merges(survivors, part,
+                                 index=index, entity_cache=entity_cache)
+        await loop_yield()
+    LIFECYCLE_MERGE_PAIRS_EVALUATED_TOTAL += index.candidates_returned
+    LIFECYCLE_MERGE_SECONDS_MAX = max(LIFECYCLE_MERGE_SECONDS_MAX,
+                                      time.perf_counter() - t0)
+    return sorted(pairs)
 
 
 def _lifecycle_merge_seen(epoch: _EngineEpoch) -> set[str]:
@@ -5379,13 +5572,14 @@ async def _epoch_lifecycle(epoch: _EngineEpoch, loop_yield,
     global LIFECYCLE_MERGE_CANDIDATES_LAST, LIFECYCLE_MERGE_SURVIVORS_LAST
     LIFECYCLE_MERGE_CANDIDATES_LAST = len(stale_snaps)
     LIFECYCLE_MERGE_SURVIVORS_LAST = len(survivors)
-    # NOTE (Stage-2, tracker follow-up): find_merges itself is a synchronous
-    # O(survivors × stale) cross-product inside the pure engine (engine.py) with
-    # no internal yield point — for a concentrated single-tenant storm that call
-    # can be a blocker on its own. Yielding around its RESULT loop (below) bounds
-    # the post-processing but not the call; cutting the call's cost needs the
-    # Stage-2 restructuring (cap group reach / grounding cost) and is out of
-    # scope for this resilience-only change.
+    # RESOLVED 2026-08-29 (the storm-s02 35,690 ms stall). The note that used to
+    # stand here — "find_merges is a synchronous cross-product with no internal
+    # yield point and can be a blocker on its own; cutting its cost is out of
+    # scope" — described the exact defect that then took the loop past the Kafka
+    # session timeout in production. `_lifecycle_find_merges` now bounds it:
+    # sub-linear survivor index (root fix in engine.ContinuationIndex), executor
+    # offload past a pair threshold, and chunked awaits. The RESULT loop below is
+    # unchanged and still applies every merge on the loop thread.
     # Widening the survivor side alone makes the two lists OVERLAP for the first
     # time: an object seen in an earlier cohort of the window but not in this
     # epoch is both a target and a candidate. `find_merges` guards self-merges,
@@ -5400,7 +5594,10 @@ async def _epoch_lifecycle(epoch: _EngineEpoch, loop_yield,
     global LIFECYCLE_MERGE_CHAINS_SKIPPED_TOTAL
     _merged_away: set[str] = set()
     _adopted: set[str] = set()
-    for merged_cid, survivor_cid in find_merges(survivors, stale_snaps):
+    with stage("lifecycle.merge"):
+        _merge_pairs = await _lifecycle_find_merges(survivors, stale_snaps,
+                                                    loop_yield)
+    for merged_cid, survivor_cid in _merge_pairs:
         await loop_yield()
         if merged_cid in _adopted or survivor_cid in _merged_away:
             LIFECYCLE_MERGE_CHAINS_SKIPPED_TOTAL += 1
@@ -5423,6 +5620,11 @@ async def _epoch_lifecycle(epoch: _EngineEpoch, loop_yield,
 
     # Quiesce: an object whose component no longer materializes (episodes aged
     # out / cleared) closes after CORR_QUIESCE_S — terminal version, append-only.
+    # Timed as its own stage: every loop-thread stretch of this pass now has a
+    # span, so the profile can never again show a 35 s stall with nothing under
+    # it (storm-s02). Wall clock, like every other span here — a stage that
+    # awaits a persist is not claiming to have owned the loop for its duration.
+    _t_quiesce = time.perf_counter() if CORR_PROFILE_STAGES else 0.0
     for cid in list(OPEN_OBJECTS):
         await loop_yield()  # this loop is O(open objects) — bound the grind
         reg = OPEN_OBJECTS[cid]
@@ -5437,6 +5639,8 @@ async def _epoch_lifecycle(epoch: _EngineEpoch, loop_yield,
                                     priority_class=EVIDENCE_CLASS_TERMINAL)
             del OPEN_OBJECTS[cid]
             _ARCHIVE_SLICE_HASH.pop(cid, None)
+    if CORR_PROFILE_STAGES and _t_quiesce:
+        stage_record("lifecycle.quiesce", time.perf_counter() - _t_quiesce)
 
     # Tracker 163: the count cap. Runs AFTER quiesce (time-based closes may
     # already have brought us under). Eviction order is least-recently-SEEN,
@@ -5448,6 +5652,7 @@ async def _epoch_lifecycle(epoch: _EngineEpoch, loop_yield,
     # bound that yields to activity is not a bound); the counter and warning
     # make that breadth loss an operator-visible fact.
     global OPEN_OBJECTS_FORCE_CLOSED, _FORCE_CLOSE_LOG_LAST
+    _t_cap = time.perf_counter() if CORR_PROFILE_STAGES else 0.0
     if CORR_OPEN_OBJECTS_MAX > 0 and len(OPEN_OBJECTS) > CORR_OPEN_OBJECTS_MAX:
         excess = len(OPEN_OBJECTS) - CORR_OPEN_OBJECTS_MAX
         victims = sorted(OPEN_OBJECTS,
@@ -5473,6 +5678,8 @@ async def _epoch_lifecycle(epoch: _EngineEpoch, loop_yield,
                 "(force_closed_total=%d) — RCA breadth is degraded and "
                 "DECLARED, not silent",
                 excess, CORR_OPEN_OBJECTS_MAX, OPEN_OBJECTS_FORCE_CLOSED)
+    if CORR_PROFILE_STAGES and _t_cap:
+        stage_record("lifecycle.cap", time.perf_counter() - _t_cap)
 
 
 def _make_loop_yield():
@@ -5782,7 +5989,21 @@ async def _engine_cycle_inner(epoch: _EngineEpoch | None) -> None:
             continue
         _snap = _reg["snapshot"]
         _cont_buckets.setdefault(_snap.tenant_id, []).append(_snap)
-    cont_index = {t: ContinuationIndex(v) for t, v in _cont_buckets.items()}
+    # The index BUILD is O(open objects) on the loop thread, once per cohort —
+    # the same shape as the lifecycle merge pass, and it had no span either
+    # (storm-s02). It gets both: a span, and the executor once the population
+    # is big enough for the build to matter. Building it there is safe for the
+    # same reason find_merges is: ContinuationIndex is a pure function of an
+    # immutable snapshot list. Buckets are built one at a time, so the awaits
+    # interleave scheduling only — `cont_index` is complete before any probe.
+    with stage("reconcile.continuation_index"):
+        cont_index: dict[str, ContinuationIndex] = {}
+        for _t, _v in _cont_buckets.items():
+            cont_index[_t] = (
+                await _offload(ContinuationIndex, _v)
+                if (CORR_CONTINUATION_INDEX_OFFLOAD > 0
+                    and len(_v) >= CORR_CONTINUATION_INDEX_OFFLOAD)
+                else ContinuationIndex(_v))
     cont_entities: dict[str, frozenset] = {}
 
     # Loop-lag resilience: see _make_loop_yield (same gate, same budget — it moved
@@ -5790,6 +6011,11 @@ async def _engine_cycle_inner(epoch: _EngineEpoch | None) -> None:
     # runs outside any cohort, is bounded by exactly the same rule).
     _loop_yield, _reset_loop_yield = _make_loop_yield()
 
+    # The per-cohort snapshot loop, timed as one stage. It is the other
+    # loop-thread stretch that scales with the open population (continuation
+    # probes, content/material hashing, the damped path) and it had no span of
+    # its own — the storm-s02 stall could have lived here just as easily.
+    _t_reconcile = time.perf_counter() if CORR_PROFILE_STAGES else 0.0
     for tenant, window, snapshots in evaluated:
         # P1 max-poll thrash: a damped-heavy cycle walks every snapshot with
         # no awaits (content_hash is sync CPU) — yield per tenant so the
@@ -5925,6 +6151,8 @@ async def _engine_cycle_inner(epoch: _EngineEpoch | None) -> None:
             # branches above take no I/O await, so without this a storm on one
             # tenant would hold the loop for thousands of snapshots.
             await _loop_yield()
+    if CORR_PROFILE_STAGES and _t_reconcile:
+        stage_record("reconcile.loop", time.perf_counter() - _t_reconcile)
 
     # P1 change H: the epoch accumulates every cohort's seen ids — the
     # merge/quiesce/cap passes run ONCE per epoch against the union (see
@@ -6153,7 +6381,9 @@ async def feed_episode_detector(
     if modality is ModalityClass.DEVICE_TELEMETRY:
         DEVICE_TELEMETRY_SIGNALS += 1
     # Build ⑥: every spine signal also feeds the engine's evidence window.
-    buffer_signal(sig)
+    ep_fwd = agg_admit(sig)
+    if ep_fwd is not None:
+        buffer_signal(ep_fwd)
     log.info("episode %s: %s/%s peak=%.1fσ ±%.0fs", ev.phase, ev.key[1],
              ev.key[2], ev.peak_deviation, ev.onset_uncertainty_s)
     return True  # an episode signal was emitted this sample
@@ -8451,7 +8681,9 @@ async def handle_probe(ev: dict) -> None:
     for sig in sigs:
         classify_probe(ev, sig)
         await batch_signal(sig.to_ch_row())  # batched: lane=probes
-        buffer_signal(sig)
+        fwd = agg_admit(sig)
+        if fwd is not None:
+            buffer_signal(fwd)
         log.info("probe signal %s: %s sev=%s value=%.1f scope=%s auth=%s",
                  sig.kind, sig.entity_id, sig.severity.value, sig.value,
                  sig.attrs.get("probe_scope"), sig.attrs.get("probe_authority"))
@@ -8467,7 +8699,9 @@ async def handle_probe(ev: dict) -> None:
     if app_sig is not None:
         classify_probe(ev, app_sig)
         await batch_signal(app_sig.to_ch_row())  # batched: lane=probes
-        buffer_signal(app_sig)
+        app_fwd = agg_admit(app_sig)
+        if app_fwd is not None:
+            buffer_signal(app_fwd)
         log.info("synthetic app-experience signal %s: %s reason=%s app=%s",
                  app_sig.kind, app_sig.entity_id, app_sig.attrs.get("reason"),
                  app_sig.attrs.get("app_name"))
@@ -8907,7 +9141,12 @@ async def handle_syslog(ev: dict) -> None:
             if cp_sig is not None:
                 await batch_signal(cp_sig.to_ch_row())  # batched: lane=syslog
                 SYSLOG_SIGNALS += 1
-                buffer_signal(cp_sig)
+                # P3 step 2: the raw row is already batched and SYSLOG_SIGNALS
+                # is already advanced, so a signal the plane absorbs is exactly
+                # as persisted and as counted as one it forwards.
+                cp_fwd = agg_admit(cp_sig)
+                if cp_fwd is not None:
+                    buffer_signal(cp_fwd)
                 # DEBUG, not INFO (tracker 156). This fired once per accepted
                 # signal — two lines per syslog event, ~4,000 lines/s at the GA
                 # burst rate — and every one was formatted, written to stdout, and
@@ -8930,7 +9169,9 @@ async def handle_syslog(ev: dict) -> None:
             if pe_sig is not None:
                 await batch_signal(pe_sig.to_ch_row())  # batched: lane=syslog
                 SYSLOG_SIGNALS += 1
-                buffer_signal(pe_sig)
+                pe_fwd = agg_admit(pe_sig)
+                if pe_fwd is not None:
+                    buffer_signal(pe_fwd)
                 log.debug("port-event signal %s: %s", pe_sig.kind, pe_sig.entity_id)
         # Clock-skew meta-finding (log-time standard S5/R5): Vector stamps
         # clock_skew_s on the event when the origin timestamp disagrees with the
@@ -9601,6 +9842,45 @@ def _metrics_text() -> str:
         "# HELP corr_permitted_lateness_seconds Declared allowance for late-arriving evidence.",
         "# TYPE corr_permitted_lateness_seconds gauge",
         f"corr_permitted_lateness_seconds {CORR_PERMITTED_LATENESS_S:.3f}",
+        # ── P3 Aggregation plane (design §7 step 2 / memo §5). The counters are
+        # raw; every ratio an operator wants is derivable from them in PromQL,
+        # so none is precomputed into a second series.
+        "# HELP corr_agg_enabled 1 when the Aggregation plane is collapsing repeats at ingest.",
+        "# TYPE corr_agg_enabled gauge",
+        f"corr_agg_enabled {1 if CORR_AGGREGATION_PLANE else 0}",
+        "# HELP corr_agg_observed_total Promoted signals offered to the Aggregation plane.",
+        "# TYPE corr_agg_observed_total counter",
+        f"corr_agg_observed_total {AGG_PLANE.observed}",
+        "# HELP corr_agg_forwarded_total Deltas forwarded to the engine window, by causal class.",
+        "# TYPE corr_agg_forwarded_total counter",
+        *(f'corr_agg_forwarded_total{{class="{c.value}"}} '
+          f'{AGG_PLANE.forwarded_by_class.get(c.value, 0)}'
+          for c in DeltaClass),
+        "# HELP corr_agg_suppressed_total Pure repeats absorbed into aggregation state (never dropped: the raw row is persisted).",
+        "# TYPE corr_agg_suppressed_total counter",
+        f"corr_agg_suppressed_total {AGG_PLANE.suppressed}",
+        "# HELP corr_agg_keys Live aggregation keys across all tenants.",
+        "# TYPE corr_agg_keys gauge",
+        f"corr_agg_keys {AGG_PLANE.key_count()}",
+        "# HELP corr_agg_identities Live per-identity transition states across all tenants.",
+        "# TYPE corr_agg_identities gauge",
+        f"corr_agg_identities {AGG_PLANE.ident_count()}",
+        "# HELP corr_agg_evicted_total Aggregation state evicted, by reason (closed label set).",
+        "# TYPE corr_agg_evicted_total counter",
+        *(f'corr_agg_evicted_total{{reason="{r}"}} {AGG_PLANE.evicted.get(r, 0)}'
+          for r in AGG_EVICT_REASONS),
+        "# HELP corr_agg_state_transitions_total Identity state transitions seen (always forwarded synchronously).",
+        "# TYPE corr_agg_state_transitions_total counter",
+        f"corr_agg_state_transitions_total {AGG_PLANE.state_transitions}",
+        "# HELP corr_agg_recoveries_total Recovery transitions seen (always forwarded synchronously).",
+        "# TYPE corr_agg_recoveries_total counter",
+        f"corr_agg_recoveries_total {AGG_PLANE.recoveries}",
+        "# HELP corr_agg_late_forwarded_total Observations forwarded because the plane could not order them (never suppressed).",
+        "# TYPE corr_agg_late_forwarded_total counter",
+        f"corr_agg_late_forwarded_total {AGG_PLANE.late_forwarded}",
+        "# HELP corr_agg_beyond_lateness_total Observations that arrived outside the declared permitted lateness.",
+        "# TYPE corr_agg_beyond_lateness_total counter",
+        f"corr_agg_beyond_lateness_total {AGG_PLANE.beyond_lateness}",
         "# HELP corr_window_utilization Fraction of the evidence window's record cap in use.",
         "# TYPE corr_window_utilization gauge",
         f"corr_window_utilization {(len(WINDOW_BUFFER) / WINDOW_BUFFER.maxlen) if WINDOW_BUFFER.maxlen else 0.0:.4f}",
@@ -9776,6 +10056,19 @@ def _metrics_text() -> str:
         "# HELP corr_lifecycle_merge_chains_skipped_total Merge pairs refused to keep one merge per object per pass.",
         "# TYPE corr_lifecycle_merge_chains_skipped_total counter",
         f"corr_lifecycle_merge_chains_skipped_total {LIFECYCLE_MERGE_CHAINS_SKIPPED_TOTAL}",
+        # The degeneration alarm. This counts (survivor, candidate) pairs the
+        # EXACT predicate was handed, i.e. what the index let through. If it
+        # ever tracks survivors x candidates, the index has collapsed into the
+        # cross-product again and a loop stall is coming (storm-s02, 35,690 ms).
+        "# HELP corr_lifecycle_merge_pairs_evaluated_total Survivor/candidate pairs the merge predicate examined.",
+        "# TYPE corr_lifecycle_merge_pairs_evaluated_total counter",
+        f"corr_lifecycle_merge_pairs_evaluated_total {LIFECYCLE_MERGE_PAIRS_EVALUATED_TOTAL}",
+        "# HELP corr_lifecycle_merge_seconds_max Slowest merge computation (index build + predicate) this process.",
+        "# TYPE corr_lifecycle_merge_seconds_max gauge",
+        f"corr_lifecycle_merge_seconds_max {LIFECYCLE_MERGE_SECONDS_MAX:.6f}",
+        "# HELP corr_lifecycle_merge_offloads_total Merge passes handed to the executor instead of the loop thread.",
+        "# TYPE corr_lifecycle_merge_offloads_total counter",
+        f"corr_lifecycle_merge_offloads_total {LIFECYCLE_MERGE_OFFLOADS_TOTAL}",
         # ── P2 step 4: the Evidence plane (spec §1/§4). depth/bytes/oldest are
         # the queue; lag is T7 (verdict -> materialized graph); backpressure is
         # how often the Decision plane was slowed to keep the queue bounded —
@@ -10181,6 +10474,15 @@ def _health_payload() -> dict:
             # refused tenant claim or a disabled signal lane.
             "syslog_prefilter_passed": prefilter_counts()[0],
             "syslog_prefilter_rejected": prefilter_counts()[1],
+            # P3 step 2: promoted signals the Aggregation plane absorbed as pure
+            # repeats (never reached the engine window) vs forwarded as deltas.
+            # BELOW the raw counters by design — every raw line is still
+            # persisted and still counted above.
+            "agg_observed": AGG_PLANE.observed,
+            "agg_forwarded": AGG_PLANE.forwarded,
+            "agg_suppressed": AGG_PLANE.suppressed,
+            "agg_keys": AGG_PLANE.key_count(),
+            "agg_evicted": AGG_PLANE.evicted_total(),
             # H14: device event clocks out of bounds at the window chokepoint —
             # future clamped to arrival (a far-future head froze pruning for
             # every tenant), past counted and left to age out (see buffer_signal).
