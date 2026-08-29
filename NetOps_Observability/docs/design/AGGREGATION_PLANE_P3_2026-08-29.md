@@ -135,6 +135,20 @@ built only if the ladder shows (a) a TTUR/T4 gain on storm incidents and (b) a
 throughput gain at a realistic share (≈25 %). The twin's `_tpl_enterprise_outage`
 takes the same shape so accuracy runs use identical streams.
 
+### 6b. Ladder measured (offline step-0 at plan time, 2026-08-29 evening)
+| rung | storm share | promoted signals | repeat share | engine signals → with K3 agg | reduction |
+|---|--:|--:|--:|--:|--:|
+| t-storm-2.5k | 1.8 % | 54,766 | 35.5 % | 54,766 → 54,766 | **0 %** |
+| t-storm-10-2.5k | 10 % | 98,635 | 67.0 % | 98,635 → 63,382 | **−36 %** |
+| t-storm-25-2.5k | 25 % | 172,452 | 76.9 % | 172,452 → 76,819 | **−56 %** |
+| t-storm-50-2.5k | 50 % | 285,958 | 86.4 % | 285,958 → 73,523 | **−74 %** |
+Transitions/recoveries are still forwarded synchronously in every row. At the
+ratified rung the K3 collapse is consumed entirely by must-forward classes;
+from 10 % up, aggregation is the dominant lever, and absolute engine load
+with aggregation peaks at 25 % and falls at 50 % (the irreducible residual is
+the background's fan-out). **Decision: build P3 (steps 1–4 below), A/B on the
+10 % and 25 % rungs; the 2 % rung is the regression guard (must be neutral).**
+
 ## 7. Delivery (each flagged, A/B on one image; Opus builds, Fable grades)
 0. Step-0 measurement (in flight) → choose AggKey + delta classes.
 1. Aggregation state + delta classifier as a pure module (`aggregation.py`),
