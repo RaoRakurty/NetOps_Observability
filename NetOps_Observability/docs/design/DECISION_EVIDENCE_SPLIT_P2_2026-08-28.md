@@ -615,8 +615,10 @@ compare the OFF branch's key SET against the live memo's field for field.
 
 ### 12.6 Step 4a — and the ONE place these notes narrow the brief
 The brief (and §4.2) asked for merge/quiesce/cap over the union of the last K
-cohorts' `seen` sets. **Only the MERGE candidate space was widened.** Quiesce and
-the 163 count cap keep the epoch's own set, and `test_L4`/`test_L4b` pin that.
+cohorts' `seen` sets. **Only the MERGE pass was widened** — and, as §12.11
+records, only its SURVIVOR side; the first cut of this section said "candidate
+space", which is what the shipped defect turned out to be. Quiesce and the 163
+count cap keep the epoch's own set, and `test_L4`/`test_L4b` pin that.
 
 The reason: `seen` does two different jobs. For `find_merges` it means "this
 object is LIVE, so it may receive a merge" — and that is what the budget broke,
@@ -705,3 +707,154 @@ decision share), the new T7 (`corr_evidence_lag_seconds`) and T8
 (non-zero means the box cannot absorb the Evidence rate and the queue is doing
 its job), `failed`/`lost` (must be 0), and merges (11 → the P1 population, per
 step 4a).
+
+### 12.10 Live 2.5K findings on step 4 (run `p2-s04-08290653`, replica-3) — and the fixes
+
+The first live leg of step 4 produced 44,306 versions, **0 failed / 0 lost**
+Evidence items, and a clean split in the profile (`persist.decision` 2,901 s /
+40.9 % of engine wall, `persist.evidence` 2,552 s / 36.0 %). Three things were
+wrong, and two of them share one root cause.
+
+**(a) The queue sat pinned at its 5,000 bound for the whole drain
+(`backpressure_total` 8,767), and `held` read `true` at idle.**
+
+Root cause — and it is NOT a leaked hold. `_evidence_cohort_hold`
+(`main.py:4147`) is balanced on every exit including exceptions; an offline
+reproduction of a real `_drain_epoch_sweep` shows `_hold` at 0 before and after
+every cohort. The `held=true` sample is a scrape landing INSIDE a cohort's
+decision pass — on that run `engine.run_window` alone had a p50 of 8.1 s, so a
+cohort is many seconds wide and a 30 s scrape has a large chance of landing in
+one. `held` is a bare bool and was not interpretable; it now ships beside
+`held_since_seconds`.
+
+The real defect was that **the hold was strictly stronger than spec §1
+requires.** §1 says a cohort's Decision rows precede the Evidence rows *of the
+same cohort*; it says nothing about earlier cohorts. The first implementation
+blocked the consumer on ALL queued work. A drain sweep runs cohorts back to back
+with a single `asyncio.sleep(0)` between them (`_drain_epoch_sweep`), so the
+consumer got exactly one scheduling slot per cohort, drained ONE item, and was
+held again — the queue could only ever be drained by the bound lifting the hold,
+which is precisely the "pinned at 5,000 + 8,767 backpressure events" signature.
+Measured offline on the same shape: **8 cohorts produced 61 items and
+materialized 7.**
+
+Fix: the hold is now **generational** (`evidence_plane.EvidenceQueue`). `hold()`
+opens a generation, `put` routes into `_open` while one is open, `release()`
+closes it and merges `_open` into `_ready`, and the consumer always drains
+`_ready`. It touches `_open` only when nothing is held, when a bound demands it,
+or when the hold has expired. Same fixture, after: **35 materialized instead of
+7**, with the depth trending DOWN across cohorts instead of climbing.
+
+Defence in depth, because a stuck hold would starve the Evidence plane in
+silence: `CORR_EVIDENCE_HOLD_MAX_S` (default 5 s) expires a hold that outlives
+it — the consumer drains the open generation anyway and
+`corr_evidence_hold_expired_total` records the break. `test_E10d` pins it.
+
+**(b) `persist.decision` max 21,485 ms, `persist.evidence` max 39,147 ms,
+`corr_loop_lag_max_ms` 9,667 (was 3,826).**
+
+The backpressure wait was NOT inside either span — `persist.decision` was
+already closed before `queue.put` — it was simply **unmeasured**, which is why
+nothing in the profile explained the pinned queue. It is now its own stage,
+`persist.backpressure_wait`, recorded around the put and outside both persist
+spans (`test_E10e` pins that the worst decision write stays below the worst
+wait). The two maxima are genuine: a storm object's blob + digests + two inserts
+against a saturated executor, and its edge/evidence pages + archive chunks.
+
+The loop-lag regression has a concrete, step-4-introduced cause: **the deferred
+archive path cannot use `_archive_row`'s `id(sig)`-keyed per-cycle cache** (the
+consumer runs between cycles, where a freed `Signal`'s id can be recycled), so
+§12.1's `cache=False` made every row a fresh `to_ch_row()`. Measured: a
+`CORR_ARCHIVE_CHUNK_ROWS`-sized chunk (10,000 rows) costs **410 ms fresh vs
+27 ms cached — 15.4x** — and that was one uninterruptible synchronous stretch
+per chunk on the event-loop thread, competing with `run_window` for the GIL.
+Big chunks are now built through `_offload` (`_archive_chunk`, extracted so the
+build can be shipped to the executor whole); small ones stay inline rather than
+pay an executor hop. Byte-neutral — `to_ch_row` is deterministic.
+
+**(c) Offline A/B, re-measured after both fixes** (same fixture, seed and image
+as §12.7, `--insert-sleep-ms 7`):
+
+| | inline | async (§12.7) | async (now) |
+|---|--:|--:|--:|
+| cohort decision-complete, mean | 2.84 s | 1.94 s | **2.04 s** |
+| decision-complete, max | 18.96 s | 13.81 s | **14.37 s** |
+| evidence-complete, +mean | — | +0.95 s | **+0.41 s** |
+| **total sweep wall** | 36.11 s | 36.50 s | **31.56 s (−12.6 %)** |
+
+The total-wall line is the one that changed character. Under the global hold the
+Evidence writes could not overlap the Decision path's own I/O waits, so the step
+was purely a reordering (§12.7 measured +0.1 %). Generationally held, they
+pipeline: the same rows, the same bytes, **4.5 s less wall.** Per-table row
+counts, BYTE counts, insert calls, versions persisted/damped and the whole
+`cross_epoch_reuse` block remain identical between the legs.
+
+New/changed observables: `corr_evidence_hold_seconds`,
+`corr_evidence_hold_expired_total`, `corr_evidence_queue_depth_open`, and the
+`persist.backpressure_wait` stage. `evidence_stats()`'s key set is now identical
+with the plane on and off — `inflight` was missing from the OFF branch, which
+`test_E10g` caught (the same defect class as §12.5's rank-memo follow-up).
+
+### 12.11 Step 4a shipped a REGRESSION, proven from the live gauges — and its fix
+
+`docs/scale` equivalence report §4 on run `p2-s04-08290653`:
+
+```
+corr_lifecycle_seen_window_ids 2312    corr_open_objects 2312
+corr_lifecycle_passes_total      43    corr_engine_epochs_total 43
+```
+
+`_epoch_lifecycle` built **both** lists from one set:
+
+```python
+survivors   = [OPEN_OBJECTS[c] for c in merge_seen if c in OPEN_OBJECTS]
+stale_snaps = [OPEN_OBJECTS[c] for c in OPEN_OBJECTS if c not in merge_seen]  # ← the defect
+```
+
+Widening `merge_seen` widened the survivors and, **by the same set difference,
+emptied the candidates.** With `seen_window_ids == open_objects == 2312` every
+open object was a survivor, `find_merges` was handed `candidates = []` on every
+pass, and merges went **378 (P1) → 0**. That is not "no pair qualified" — the
+pass was given nothing to test. It is systematic rather than incidental: K = 20
+covered ~60 % of the run's 33 cohorts, and anything older has already been closed
+by quiesce (900 s) or the 163 cap, so the stale set is *always* empty. §12.6's
+cure for "378 → 11" overshot into "→ 0". The report's counterfactual on that
+run's final snapshots: **272 full-signature pairs** (shared entity, Jaccard ≥ 0.4,
+overlapping windows, same hypothesis, shared device) standing un-merged — a loose
+proxy, but the right order of magnitude for what the pass could not see.
+
+I had written this hazard down while designing §12.6 ("widening `merge_seen`
+moves objects from candidates to survivors, so it can REDUCE merges too") and
+then failed to act on it. `test_L1` passed only because its quiet twin is
+registered straight into `OPEN_OBJECTS` and never materializes, so it is never in
+the window — the live population is the opposite.
+
+**Fix (`main.py`, `_epoch_lifecycle`):** widen ONLY the survivor side. Candidates
+are `OPEN_OBJECTS \ seen` on the EPOCH's own set — exactly pre-4a, and exactly
+what quiesce and the 163 cap already use.
+
+**The new hazard that fix creates, handled:** the two lists now OVERLAP for the
+first time (an object seen in an earlier cohort of the window but not this epoch
+is both a target and a candidate). `find_merges` guards self-merges but can
+return both `(A,B)` and `(B,A)` for a mutually-overlapping pair — applying both
+would tombstone A into B and then B into a `correlation_id` that no longer
+exists, **losing the incident**. `_epoch_lifecycle` therefore allows one merge
+per object per pass, in the sorted order `find_merges` already guarantees: a cid
+merged away can no longer be a target, and a cid that received a merge can no
+longer be merged away. Refusals are counted
+(`corr_lifecycle_merge_chains_skipped_total`). Pre-4a this is an exact no-op
+because the lists were disjoint by construction — pinned by `test_L8b`.
+
+**The gauge that would have caught this before it shipped** is now there:
+`corr_lifecycle_merge_survivors` and `corr_lifecycle_merge_candidates`,
+separately, to be read next to `corr_open_objects`. The old single
+`seen_window_ids` gauge looked *healthy* at 2,312 precisely because it had
+swallowed the whole population. **Candidates at 0 with a large open population is
+the alarm.**
+
+Tests: `test_L7` reproduces the exact live shape (the window covers every open
+object; the candidate list must still be non-empty and the predicate-satisfying
+pair must fold), `test_L8` proves no object is lost to a mutual pair, `test_L8b`
+proves the guard is inert pre-4a, `test_L9` pins the gauges. **Mutant:**
+restoring `stale_snaps = OPEN_OBJECTS \ merge_seen` — the shipped defect — turns
+L7, L8 and L9 red.

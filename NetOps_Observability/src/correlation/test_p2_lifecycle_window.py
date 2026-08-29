@@ -150,6 +150,19 @@ def _stack(monkeypatch):
     monkeypatch.setattr(
         main, "_LIFECYCLE_SEEN_WINDOW",
         deque(maxlen=main.CORR_LIFECYCLE_COHORT_WINDOW or 1))
+    # Every module global these tests assign DIRECTLY (helpers do, for
+    # readability) is registered with monkeypatch at its current value first, so
+    # teardown restores it whatever the test did. Without this, `_sweep`'s
+    # CORR_ENGINE_EPOCH_BUDGET_S=0 and DRAIN_COHORTS=8 leaked into whatever ran
+    # next under pytest-randomly and turned unrelated scheduler tests red.
+    for _name in ("CORR_ENGINE_COHORT_SIZE", "CORR_ENGINE_DRAIN_COHORTS",
+                  "CORR_ENGINE_EPOCH_BUDGET_S", "CORR_STORM_COHORT_SIZE",
+                  "CORR_QUIESCE_S", "CORR_OPEN_OBJECTS_MAX",
+                  "CORR_LIFECYCLE_COHORT_WINDOW", "CORR_ARCHIVE_CHUNK_ROWS",
+                  "CORR_ROW_PAGE_SIZE", "CORR_PROFILE_STAGES",
+                  "CORR_EVIDENCE_QUEUE_MAX", "ch", "find_merges",
+                  "_persist_snapshot", "_offload", "_LIFECYCLE_SEEN_WINDOW"):
+        monkeypatch.setattr(main, _name, getattr(main, _name))
     yield monkeypatch
     _reset()
 
@@ -473,3 +486,146 @@ def test_L0_the_twin_really_is_a_mergeable_duplicate(_stack):
     twin = dc_replace(target, correlation_id=twin_cid)
     assert find_merges([target], [twin]) == [(twin_cid, target.correlation_id)]
     assert find_merges([], [twin]) == [], "no survivor, no merge"
+
+
+# ═══ L7/L8 — the live 4a regression (run p2-s04-08290653, equivalence §4) ════
+#
+# `corr_lifecycle_seen_window_ids 2312 == corr_open_objects 2312`. Both sides of
+# the merge pass derived from `merge_seen`, so widening it widened the survivors
+# AND emptied the candidates by the same set difference: `find_merges` was handed
+# `candidates=[]` on every pass and merges went 378 (P1) -> 0. The equivalence
+# report counts 272 full-signature pairs standing un-merged on that run's final
+# snapshots — the pass could not see one of them. Candidates now derive from the
+# EPOCH's `seen`, exactly as pre-4a and exactly as quiesce and the 163 cap do.
+
+def test_L7_a_window_covering_every_open_object_still_has_candidates(_stack):
+    """THE regression shape. Every open object is inside the K-cohort window —
+    which is what the live gauges showed — and the merge must STILL be found.
+
+    MUTANT: derive `stale_snaps` from `merge_seen` instead of `seen` and the
+    candidate list is empty, `find_merges` is handed nothing, and this goes red
+    on the very first assertion."""
+    seen_by_find_merges: list[tuple[int, int]] = []
+    real_find_merges = main.find_merges
+
+    def spy(survivors, candidates, *a, **kw):
+        seen_by_find_merges.append((len(survivors), len(candidates)))
+        return real_find_merges(survivors, candidates, *a, **kw)
+
+    async def go():
+        now = datetime.now(timezone.utc).replace(microsecond=0)
+        _load(component("merge-target", now=now))
+        await _one_cohort_epoch(now)
+        target_cid = next(iter(main.OPEN_OBJECTS))
+        target = main.OPEN_OBJECTS[target_cid]["snapshot"]
+        twin_cid = _register_twin(target, now)
+        # The live condition, stated exactly: the window covers EVERY open
+        # object (the twin materialized in some earlier cohort of the run).
+        main._LIFECYCLE_SEEN_WINDOW.append({twin_cid})
+        assert set(main.OPEN_OBJECTS) <= set().union(*main._LIFECYCLE_SEEN_WINDOW)
+
+        # A later cohort on an unrelated device: neither T nor its twin is in
+        # THIS epoch's seen set, so both are legitimately quiet candidates.
+        _clear_stream()
+        _load(component("other", now=now + timedelta(seconds=5)))
+        main.find_merges = spy
+        try:
+            await _one_cohort_epoch(now + timedelta(seconds=5))
+        finally:
+            main.find_merges = real_find_merges
+        return target_cid, twin_cid
+
+    _stack.setattr(main, "CORR_LIFECYCLE_COHORT_WINDOW", 20)
+    target_cid, twin_cid = asyncio.run(go())
+    assert seen_by_find_merges, "the lifecycle pass must have run"
+    survivors, candidates = seen_by_find_merges[-1]
+    assert candidates > 0, (
+        "the merge pass was handed an EMPTY candidate list — this is run "
+        "p2-s04-08290653's regression: both sides derived from merge_seen")
+    assert survivors >= candidates, (
+        "the survivor side is the one the window widens")
+    assert main.LIFECYCLE_MERGE_CANDIDATES_LAST == candidates
+    assert main.LIFECYCLE_MERGE_SURVIVORS_LAST == survivors
+    merged = main.ch.merges()
+    assert len(merged) == 1, f"the predicate-satisfying pair must fold: {merged}"
+    assert {merged[0][0], merged[0][1]} == {target_cid, twin_cid}
+    assert len(main.OPEN_OBJECTS) == 2, (
+        "one of the pair survives, plus the unrelated object — nothing is lost")
+
+
+def test_L8_overlapping_survivor_and_candidate_sets_never_lose_an_object(_stack):
+    """Widening the survivor side alone makes the two lists OVERLAP for the
+    first time, so `find_merges` can return BOTH (A,B) and (B,A). Applying both
+    would tombstone A into B and then B into a correlation_id that no longer
+    exists — the incident would vanish. One merge per object per pass, in the
+    sorted order find_merges already guarantees."""
+    async def go():
+        now = datetime.now(timezone.utc).replace(microsecond=0)
+        _load(component("mutual", now=now))
+        await _one_cohort_epoch(now)
+        a_cid = next(iter(main.OPEN_OBJECTS))
+        twin_cid = _register_twin(main.OPEN_OBJECTS[a_cid]["snapshot"], now)
+        main._LIFECYCLE_SEEN_WINDOW.append({twin_cid})
+        _clear_stream()
+        _load(component("bystander", now=now + timedelta(seconds=5)))
+        await _one_cohort_epoch(now + timedelta(seconds=5))
+        return a_cid, twin_cid
+
+    _stack.setattr(main, "CORR_LIFECYCLE_COHORT_WINDOW", 20)
+    _stack.setattr(main, "LIFECYCLE_MERGE_CHAINS_SKIPPED_TOTAL", 0)
+    a_cid, twin_cid = asyncio.run(go())
+    survivors = set(main.OPEN_OBJECTS)
+    assert len({a_cid, twin_cid} & survivors) == 1, (
+        "exactly ONE of a mutually-overlapping pair may be tombstoned")
+    assert main.LIFECYCLE_MERGE_CHAINS_SKIPPED_TOTAL == 1, (
+        "the refused reverse direction must be counted, not silent")
+    merged = main.ch.merges()
+    assert len(merged) == 1
+    assert merged[0][1] in survivors, (
+        "merged_into must name an object that still exists")
+
+
+def test_L8b_the_chain_guard_is_a_no_op_when_the_sets_are_disjoint(_stack):
+    """Pre-4a the survivor and candidate lists were disjoint by construction, so
+    neither guard condition could fire. `CORR_LIFECYCLE_COHORT_WINDOW=0` must
+    therefore skip nothing — if it ever does, the guard is refusing merges the
+    old cadence made."""
+    async def go():
+        now = datetime.now(timezone.utc).replace(microsecond=0)
+        _load(component("disjoint", now=now))
+        await _one_cohort_epoch(now)
+        cid = next(iter(main.OPEN_OBJECTS))
+        _register_twin(main.OPEN_OBJECTS[cid]["snapshot"], now)
+        _clear_stream()
+        _load(component("disjoint", now=now + timedelta(seconds=5)))
+        await _one_cohort_epoch(now + timedelta(seconds=5))
+
+    _stack.setattr(main, "CORR_LIFECYCLE_COHORT_WINDOW", 0)
+    _stack.setattr(main, "LIFECYCLE_MERGE_CHAINS_SKIPPED_TOTAL", 0)
+    asyncio.run(go())
+    assert main.LIFECYCLE_MERGE_CHAINS_SKIPPED_TOTAL == 0
+
+
+def test_L9_the_merge_gauges_reach_epoch_state_and_metrics(_stack):
+    """The gauge that would have caught this before it shipped: survivors and
+    candidates, separately, next to corr_open_objects."""
+    async def go():
+        now = datetime.now(timezone.utc).replace(microsecond=0)
+        _load(component("gauge-dev", now=now))
+        await _one_cohort_epoch(now)
+        _clear_stream()
+        _load(component("gauge-dev-2", now=now + timedelta(seconds=5)))
+        await _one_cohort_epoch(now + timedelta(seconds=5))
+
+    _stack.setattr(main, "CORR_LIFECYCLE_COHORT_WINDOW", 20)
+    asyncio.run(go())
+    st = main.epoch_state()
+    assert st["lifecycle_merge_candidates"] >= 1, (
+        "an object that went quiet must appear as a merge CANDIDATE")
+    assert st["lifecycle_merge_survivors"] >= 1
+    text = main._metrics_text()
+    for series in ("corr_lifecycle_merge_survivors",
+                   "corr_lifecycle_merge_candidates",
+                   "corr_lifecycle_merge_chains_skipped_total"):
+        assert f"# TYPE {series} " in text, f"{series} missing from /metrics"
+    assert f"corr_lifecycle_merge_candidates {st['lifecycle_merge_candidates']}" in text

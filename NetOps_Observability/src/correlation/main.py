@@ -2505,6 +2505,15 @@ CORR_EVIDENCE_QUEUE_BYTES_MAX = max(1, int(
 # must be a fact on the way out, never a silence.
 CORR_EVIDENCE_DRAIN_ON_STOP_S = max(0.0, float(
     os.environ.get("CORR_EVIDENCE_DRAIN_ON_STOP_S", "60")))
+# The cohort hold is an ORDERING PREFERENCE with a deadline. A hold that outlives
+# this stops being honoured: the consumer drains the open generation anyway and
+# `corr_evidence_hold_expired_total` records it. A hold that leaked would starve
+# the Evidence plane in total silence — which is the failure mode run
+# `p2-s04-08290653` was diagnosed for — and it is cheaper to make that
+# self-healing AND counted than to prove no path can ever leak one. 0 = no
+# deadline (the hold is honoured until released).
+CORR_EVIDENCE_HOLD_MAX_S = max(0.0, float(
+    os.environ.get("CORR_EVIDENCE_HOLD_MAX_S", "5")))
 
 # ── P2 step 4a: the LIFECYCLE COHORT WINDOW ──────────────────────────────────
 # docs/scale/P2_STEPS012_2P5K_VERDICT_2026-08-29.md §4.2 — the measured
@@ -3091,6 +3100,11 @@ def epoch_state() -> dict[str, object]:
         "lifecycle_cohort_window": CORR_LIFECYCLE_COHORT_WINDOW,
         "lifecycle_seen_window_cohorts": LIFECYCLE_SEEN_WINDOW_COHORTS,
         "lifecycle_seen_window_ids": LIFECYCLE_SEEN_WINDOW_IDS,
+        # THE pair to read together: `candidates` 0 while `open_objects` is
+        # large means the merge pass is being handed nothing to test.
+        "lifecycle_merge_survivors": LIFECYCLE_MERGE_SURVIVORS_LAST,
+        "lifecycle_merge_candidates": LIFECYCLE_MERGE_CANDIDATES_LAST,
+        "lifecycle_merge_chains_skipped_total": LIFECYCLE_MERGE_CHAINS_SKIPPED_TOTAL,
         # ── P2 step 4: the Evidence plane. THE invariant: `depth` returns to 0
         # between storms (spec §2's T8) and `lag_seconds` is the operator's
         # T7 — the time from a verdict to its materialized graph. `failed_total`
@@ -3626,6 +3640,15 @@ def _archive_row(sig: Signal, corr_id: str, version: int, *,
     return row
 
 
+def _archive_chunk(sigs: Sequence[Signal], corr_id: str, version: int) -> list[dict]:
+    """One archive INSERT's worth of rows, built with no per-cycle cache.
+
+    Extracted so the build can be handed to `_offload` whole (see
+    `_write_evidence_inner`): a comprehension inlined at the call site cannot be
+    offloaded without shipping a closure to the executor thread."""
+    return [_archive_row(sig, corr_id, version, cache=False) for sig in sigs]
+
+
 def _window_index(window: Sequence[Signal]) -> _WindowIndex:
     """Build (or reuse) the per-cycle index for `window`.
 
@@ -3912,7 +3935,15 @@ async def _persist_snapshot(snap: ObjectSnapshot, version: int, state: str,
     if queue is not None:
         # Bounded, blocking, never dropping (owner memo §22). A full queue slows
         # the Decision plane down; it never loses an Evidence row.
-        await queue.put(item)
+        #
+        # Timed as its OWN stage, deliberately OUTSIDE `persist.decision` (which
+        # was already closed above) and outside `persist.evidence`: a Decision
+        # write that took 200 ms and then waited 20 s for queue room is not a
+        # 20-second Decision write, and reading it as one would send the next
+        # investigation at the wrong function. `persist.backpressure_wait` is
+        # the Evidence plane's back-pressure on the Decision plane, named.
+        with stage("persist.backpressure_wait"):
+            await queue.put(item)
     else:
         await _write_evidence(item, loop_yield)
     log.info("corr-object %s v%d %s: top=%s tier=%s nodes=%d edges=%d",
@@ -3983,8 +4014,18 @@ async def _write_evidence_inner(item: EvidenceItem, loop_yield) -> bool:
         # Signal's id can be recycled by a later item's — so the deferred path
         # builds its rows fresh. Byte-identical (`to_ch_row` is deterministic);
         # what it costs is the cross-object row reuse, measured in the bench.
-        chunk = [_archive_row(sig, snap.correlation_id, version, cache=False)
-                 for sig in slice_sigs[start:start + CORR_ARCHIVE_CHUNK_ROWS]]
+        part = slice_sigs[start:start + CORR_ARCHIVE_CHUNK_ROWS]
+        # OFFLOADED for a big chunk (P2 step 4 follow-up, run p2-s04-08290653).
+        # `cache=False` above costs 15x what the per-cycle base-row cache cost
+        # (measured: a 10,000-row chunk is 410 ms fresh vs 27 ms cached), and
+        # CORR_ARCHIVE_CHUNK_ROWS is 10,000 — so on the loop thread this was a
+        # single uninterruptible ~0.4 s stretch per chunk, competing with the
+        # executor's run_window for the GIL. It is a PURE function of immutable
+        # signals, which is exactly what `_offload` is for; the rows are
+        # identical either way.
+        chunk = (await _offload(_archive_chunk, part, snap.correlation_id, version)
+                 if len(part) >= CORR_ROW_PAGE_SIZE
+                 else _archive_chunk(part, snap.correlation_id, version))
         ok = await ch_insert(
             "netops.corr_signals_archive", chunk,
             corr_id=snap.correlation_id, version=version, row_count=len(chunk))
@@ -4098,7 +4139,8 @@ def _evidence_ensure_consumer() -> EvidenceQueue | None:
             log.info("evidence LOST (stranded queue) corr_id=%s version=%d state=%s",
                      it.correlation_id, it.version, it.state)
     _EVIDENCE_QUEUE = EvidenceQueue(CORR_EVIDENCE_QUEUE_MAX,
-                                    CORR_EVIDENCE_QUEUE_BYTES_MAX)
+                                    CORR_EVIDENCE_QUEUE_BYTES_MAX,
+                                    hold_max_s=CORR_EVIDENCE_HOLD_MAX_S)
     _EVIDENCE_LOOP = loop
     _EVIDENCE_TASK = loop.create_task(_evidence_consumer(_EVIDENCE_QUEUE))
     log.info("evidence plane ASYNC: bound=%d items / %d bytes, drain-on-stop=%.0fs",
@@ -4233,7 +4275,9 @@ def evidence_stats() -> dict[str, object]:
         "backpressure_total": 0,
         "max_items": CORR_EVIDENCE_QUEUE_MAX,
         "max_bytes": CORR_EVIDENCE_QUEUE_BYTES_MAX,
-        "held": False,
+        "held": False, "held_since_seconds": 0.0, "hold_expired_total": 0,
+        "hold_max_s": CORR_EVIDENCE_HOLD_MAX_S,
+        "depth_ready": 0, "depth_open": 0, "inflight": 0,
         "materialized_total": EVIDENCE_ITEMS_MATERIALIZED,
         "failed_total": EVIDENCE_ITEMS_FAILED,
         "lost_total": EVIDENCE_ITEMS_LOST,
@@ -4301,6 +4345,13 @@ _LIFECYCLE_SEEN_WINDOW: deque[set[str]] = deque(
     maxlen=CORR_LIFECYCLE_COHORT_WINDOW or 1)
 LIFECYCLE_SEEN_WINDOW_COHORTS = 0    # cohorts currently in the window (gauge)
 LIFECYCLE_SEEN_WINDOW_IDS = 0        # ids in the union at the last pass (gauge)
+# The two sides of the merge pass, measured SEPARATELY. Reading only the window
+# size is what let run p2-s04-08290653 ship with an empty candidate list: the
+# window gauge looked healthy (2,312) precisely because it had swallowed every
+# open object. `candidates` at 0 with a non-zero open population is the alarm.
+LIFECYCLE_MERGE_SURVIVORS_LAST = 0
+LIFECYCLE_MERGE_CANDIDATES_LAST = 0
+LIFECYCLE_MERGE_CHAINS_SKIPPED_TOTAL = 0
 
 
 def _lifecycle_merge_seen(epoch: _EngineEpoch) -> set[str]:
@@ -4374,9 +4425,26 @@ async def _epoch_lifecycle(epoch: _EngineEpoch, loop_yield,
     # into the survivor (terminal state='merged' + merged_into) so the queue shows
     # ONE incident, not two. Replay-safe: only a lifecycle state + backlink, no
     # re-key/re-rank. Done BEFORE quiesce so a merged object never also quiesce-closes.
+    # P2 step 4a, CORRECTED after run p2-s04-08290653 (equivalence report §4).
+    # THE DEFECT: both lists used to derive from `merge_seen`, so widening it
+    # widened the survivors AND — by the same set difference — EMPTIED the
+    # candidates. The live gauges proved it exactly:
+    # `corr_lifecycle_seen_window_ids 2312 == corr_open_objects 2312`, i.e. every
+    # open object was a survivor, `find_merges` was handed `candidates=[]` on
+    # every pass, and merges went 378 (P1) -> 0. That is not "no pairs
+    # qualified"; the pass was given nothing to test. It is systematic, not
+    # incidental: K=20 cohorts covered ~60 % of the whole run, and anything
+    # older has already been closed by quiesce or the 163 cap.
+    #
+    # THE RULE: widen ONLY the survivor (merge TARGET) side. Candidates stay
+    # `OPEN_OBJECTS \ seen` on the EPOCH's own set — exactly pre-4a, and
+    # exactly what quiesce and the cap already use.
     survivors = [OPEN_OBJECTS[c]["snapshot"] for c in merge_seen if c in OPEN_OBJECTS]
     stale_snaps = [OPEN_OBJECTS[c]["snapshot"] for c in OPEN_OBJECTS
-                   if c not in merge_seen]
+                   if c not in seen]
+    global LIFECYCLE_MERGE_CANDIDATES_LAST, LIFECYCLE_MERGE_SURVIVORS_LAST
+    LIFECYCLE_MERGE_CANDIDATES_LAST = len(stale_snaps)
+    LIFECYCLE_MERGE_SURVIVORS_LAST = len(survivors)
     # NOTE (Stage-2, tracker follow-up): find_merges itself is a synchronous
     # O(survivors × stale) cross-product inside the pure engine (engine.py) with
     # no internal yield point — for a concentrated single-tenant storm that call
@@ -4384,8 +4452,25 @@ async def _epoch_lifecycle(epoch: _EngineEpoch, loop_yield,
     # the post-processing but not the call; cutting the call's cost needs the
     # Stage-2 restructuring (cap group reach / grounding cost) and is out of
     # scope for this resilience-only change.
+    # Widening the survivor side alone makes the two lists OVERLAP for the first
+    # time: an object seen in an earlier cohort of the window but not in this
+    # epoch is both a target and a candidate. `find_merges` guards self-merges,
+    # but it can now return BOTH (A,B) and (B,A) for a mutually-overlapping
+    # pair — and applying both would tombstone A into B, then B into a
+    # correlation_id that no longer exists, losing the incident entirely.
+    # So one merge per object per pass, in the sorted order find_merges already
+    # guarantees: a cid that has been merged away can no longer be a target, and
+    # a cid that has received a merge can no longer be merged away. Pre-4a this
+    # is an exact no-op — the two lists were disjoint by construction, so
+    # neither condition could ever fire.
+    global LIFECYCLE_MERGE_CHAINS_SKIPPED_TOTAL
+    _merged_away: set[str] = set()
+    _adopted: set[str] = set()
     for merged_cid, survivor_cid in find_merges(survivors, stale_snaps):
         await loop_yield()
+        if merged_cid in _adopted or survivor_cid in _merged_away:
+            LIFECYCLE_MERGE_CHAINS_SKIPPED_TOTAL += 1
+            continue
         reg = OPEN_OBJECTS.get(merged_cid)
         if reg is None:
             continue
@@ -4397,6 +4482,8 @@ async def _epoch_lifecycle(epoch: _EngineEpoch, loop_yield,
                                 priority_class=EVIDENCE_CLASS_TERMINAL)
         log.info("corr-object %s merged into %s (split-brain de-duplicated)",
                  merged_cid[:8], survivor_cid[:8])
+        _merged_away.add(merged_cid)
+        _adopted.add(survivor_cid)
         del OPEN_OBJECTS[merged_cid]
         _ARCHIVE_SLICE_HASH.pop(merged_cid, None)
 
@@ -8526,9 +8613,23 @@ def _metrics_text() -> str:
         "# HELP corr_lifecycle_seen_window_cohorts Cohorts in the lifecycle seen window.",
         "# TYPE corr_lifecycle_seen_window_cohorts gauge",
         f"corr_lifecycle_seen_window_cohorts {LIFECYCLE_SEEN_WINDOW_COHORTS}",
-        "# HELP corr_lifecycle_seen_window_ids Correlation ids in the last lifecycle pass's candidate set.",
+        "# HELP corr_lifecycle_seen_window_ids Correlation ids in the last lifecycle pass's SURVIVOR set.",
         "# TYPE corr_lifecycle_seen_window_ids gauge",
         f"corr_lifecycle_seen_window_ids {LIFECYCLE_SEEN_WINDOW_IDS}",
+        # Read these two TOGETHER, and against corr_open_objects. Run
+        # p2-s04-08290653 shipped with survivors == open_objects == 2312 and
+        # candidates == 0: find_merges was handed an empty candidate list on
+        # every pass and merges went to 0. A healthy pass has BOTH sides
+        # non-empty whenever objects have gone quiet.
+        "# HELP corr_lifecycle_merge_survivors Merge TARGETS offered to the last lifecycle pass.",
+        "# TYPE corr_lifecycle_merge_survivors gauge",
+        f"corr_lifecycle_merge_survivors {LIFECYCLE_MERGE_SURVIVORS_LAST}",
+        "# HELP corr_lifecycle_merge_candidates Merge CANDIDATES offered to the last lifecycle pass.",
+        "# TYPE corr_lifecycle_merge_candidates gauge",
+        f"corr_lifecycle_merge_candidates {LIFECYCLE_MERGE_CANDIDATES_LAST}",
+        "# HELP corr_lifecycle_merge_chains_skipped_total Merge pairs refused to keep one merge per object per pass.",
+        "# TYPE corr_lifecycle_merge_chains_skipped_total counter",
+        f"corr_lifecycle_merge_chains_skipped_total {LIFECYCLE_MERGE_CHAINS_SKIPPED_TOTAL}",
         # ── P2 step 4: the Evidence plane (spec §1/§4). depth/bytes/oldest are
         # the queue; lag is T7 (verdict -> materialized graph); backpressure is
         # how often the Decision plane was slowed to keep the queue bounded —
@@ -8548,6 +8649,20 @@ def _metrics_text() -> str:
         "# HELP corr_evidence_queue_backpressure_total Puts that BLOCKED the Decision plane on a full queue.",
         "# TYPE corr_evidence_queue_backpressure_total counter",
         f"corr_evidence_queue_backpressure_total {_ev['backpressure_total']}",
+        # The hold is an ORDERING PREFERENCE, not a lock: `held` alone is a bare
+        # bool a scrape can legitimately catch True inside a cohort's decision
+        # pass. `held_seconds` is what distinguishes that from a leak, and
+        # `hold_expired_total` above 0 means the deadline had to break one —
+        # a defect, loudly.
+        "# HELP corr_evidence_hold_seconds Age of the cohort hold currently open (0 = none).",
+        "# TYPE corr_evidence_hold_seconds gauge",
+        f"corr_evidence_hold_seconds {_ev['held_since_seconds']}",
+        "# HELP corr_evidence_hold_expired_total Cohort holds broken by CORR_EVIDENCE_HOLD_MAX_S.",
+        "# TYPE corr_evidence_hold_expired_total counter",
+        f"corr_evidence_hold_expired_total {_ev['hold_expired_total']}",
+        "# HELP corr_evidence_queue_depth_open Queued items whose cohort is still in its decision pass.",
+        "# TYPE corr_evidence_queue_depth_open gauge",
+        f"corr_evidence_queue_depth_open {_ev['depth_open']}",
         "# HELP corr_evidence_items_total Evidence items by terminal outcome.",
         "# TYPE corr_evidence_items_total counter",
         f'corr_evidence_items_total{{outcome="materialized"}} {_ev["materialized_total"]}',

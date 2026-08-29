@@ -113,12 +113,14 @@ class _RecCH:
         self.writes: list[tuple[str, list[dict], str]] = []
         self.reject = set(reject)
         self.delay_s = 0.0
+        self.slow_tables: dict[str, float] = {}
 
     async def insert(self, table, rows, dedup_token="", **kw):
         rows = [dict(r) for r in rows]
         self.writes.append((table, rows, dedup_token))
-        if self.delay_s:
-            await asyncio.sleep(self.delay_s)
+        delay = self.slow_tables.get(table, self.delay_s)
+        if delay:
+            await asyncio.sleep(delay)
         return table not in self.reject
 
     # ── views the tests read ────────────────────────────────────────────────
@@ -191,6 +193,19 @@ def _stack(monkeypatch):
     monkeypatch.setattr(main, "CORR_EVIDENCE_DRAIN_ON_STOP_S", 30.0)
     monkeypatch.setattr(main, "CORR_COHORT_TOUCH_GATE", True)
     monkeypatch.setattr(main, "CORR_LIFECYCLE_EPOCH_CADENCE", True)
+    # Every module global these tests assign DIRECTLY (helpers do, for
+    # readability) is registered with monkeypatch at its current value first, so
+    # teardown restores it whatever the test did. Without this, `_sweep`'s
+    # CORR_ENGINE_EPOCH_BUDGET_S=0 and DRAIN_COHORTS=8 leaked into whatever ran
+    # next under pytest-randomly and turned unrelated scheduler tests red.
+    for _name in ("CORR_ENGINE_COHORT_SIZE", "CORR_ENGINE_DRAIN_COHORTS",
+                  "CORR_ENGINE_EPOCH_BUDGET_S", "CORR_STORM_COHORT_SIZE",
+                  "CORR_QUIESCE_S", "CORR_OPEN_OBJECTS_MAX",
+                  "CORR_LIFECYCLE_COHORT_WINDOW", "CORR_ARCHIVE_CHUNK_ROWS",
+                  "CORR_ROW_PAGE_SIZE", "CORR_PROFILE_STAGES",
+                  "CORR_EVIDENCE_QUEUE_MAX", "ch", "find_merges",
+                  "_persist_snapshot", "_offload", "_LIFECYCLE_SEEN_WINDOW"):
+        monkeypatch.setattr(main, _name, getattr(main, _name))
     yield monkeypatch
     _reset_engine_state()
 
@@ -768,3 +783,257 @@ def test_E9b_the_byte_bound_reaches_metrics_and_epoch_state():
             f"{series} does not carry rank_memo_stats()['{key}']")
     assert rm["bytes_max"] > 0, "the byte bound must be a real number, not 0"
     assert set(main.epoch_state()["rank_memo"]) == RANK_MEMO_STAT_KEYS
+
+
+# ═══ E10 — the live 2.5K regressions (run p2-s04-08290653) ═══════════════════
+#
+# What that run showed: the queue pinned at its 5,000 bound for the whole drain,
+# backpressure_total 8,767, and `held=True` at idle. The root cause was NOT a
+# leaked hold — `_evidence_cohort_hold` is balanced on every exit, and E10b pins
+# that — but a hold that was STRICTLY STRONGER than spec §1 requires: it blocked
+# the consumer from draining EARLIER cohorts' Evidence too. A drain sweep runs
+# cohorts back to back with one `asyncio.sleep(0)` between them, so the consumer
+# got one scheduling slot per cohort, drained ONE item, and was held again.
+# The hold is now generational (evidence_plane's module docstring).
+
+class _SlowCH(_RecCH):
+    """A sink with latency, so the decision path actually has I/O waits for the
+    consumer to work inside — which is the whole mechanism under test."""
+
+    def __init__(self, delay_s: float = 0.002) -> None:
+        super().__init__()
+        self.delay_s = delay_s
+
+
+async def _sweep(components: int, cohorts: int, cohort_size: int) -> None:
+    main.CORR_ENGINE_COHORT_SIZE = cohort_size
+    main.CORR_ENGINE_DRAIN_COHORTS = cohorts
+    main.CORR_ENGINE_EPOCH_BUDGET_S = 0.0
+    _load(mixed_window(components))
+    await main._drain_epoch_sweep()
+
+
+def test_E10_the_consumer_drains_between_cohorts_without_the_queue_being_full(_stack):
+    """THE regression. Eight back-to-back cohorts, a queue bound far above the
+    workload (so a bound can never be what lets the consumer run) and a sink with
+    latency. The Evidence plane must make real progress from the decision path's
+    own I/O waits.
+
+    Before the generational hold this materialized 7 items out of 61 and the
+    depth climbed monotonically; the bound was the only thing that ever released
+    the consumer."""
+    _reset_engine_state()
+    _stack.setattr(main, "ch", _SlowCH())
+    _stack.setattr(main, "CORR_EVIDENCE_QUEUE_MAX", 100_000)
+    asyncio.run(_sweep(components=40, cohorts=8, cohort_size=8))
+    q = main._EVIDENCE_QUEUE
+    assert q is not None
+    assert q.backpressure_total == 0, (
+        "the bound must never be reached — otherwise this test proves only that "
+        "pressure lifts the hold, which was never in doubt")
+    produced = main.VERSIONS_PERSISTED
+    assert produced >= 40, "the fixture must actually produce Evidence items"
+    assert main.EVIDENCE_ITEMS_MATERIALIZED >= 4 * 8, (
+        f"the consumer drained only {main.EVIDENCE_ITEMS_MATERIALIZED} of "
+        f"{produced} items across 8 cohorts — that is the one-item-per-cohort "
+        f"starvation the generational hold exists to fix")
+    assert q.held is False and q.hold_expired_total == 0
+
+
+def test_E10b_the_hold_is_released_by_every_exit_including_a_raising_cohort(_stack):
+    """`held` must be False between cohorts on BOTH paths. The live `held=True`
+    was a scrape landing inside a cohort's decision pass (`engine.run_window`
+    p50 was 8 s on that run), not a leak — and `held_since_seconds` is what now
+    tells those two apart."""
+    async def go():
+        _stack.setattr(main, "ch", _RecCH())
+        _stack.setattr(main, "CORR_ENGINE_COHORT_SIZE", 12)
+        _load(mixed_window(4))
+        epoch = await main._begin_epoch(datetime.now(timezone.utc))
+        try:
+            await main.engine_cycle(epoch)
+            q = main._EVIDENCE_QUEUE
+            assert q is not None and q.held is False, "clean exit must release"
+            assert q.held_since_s() == 0.0
+
+        finally:
+            main._close_epoch(epoch)
+            await main.evidence_drain(30.0)
+
+        # A RAISING cohort, in its own epoch so its cohort is genuinely
+        # non-empty (an epoch is frozen at _begin_epoch, so signals loaded
+        # afterwards are not in it and nothing would persist — the test would
+        # then pass for the wrong reason).
+        _load(mixed_window(4, tenant="t2"))
+        epoch2 = await main._begin_epoch(datetime.now(timezone.utc))
+        real = main._persist_snapshot
+
+        async def boom(*a, **kw):
+            raise RuntimeError("persist exploded")
+
+        main._persist_snapshot = boom
+        try:
+            with pytest.raises(RuntimeError):
+                await main.engine_cycle(epoch2)
+        finally:
+            main._persist_snapshot = real
+            main._close_epoch(epoch2)
+        q = main._EVIDENCE_QUEUE
+        assert q is not None
+        assert q.held is False, "a cohort that RAISES must release the hold"
+        assert q.held_since_s() == 0.0
+    asyncio.run(go())
+
+
+def test_E10c_the_hold_is_generational_earlier_cohorts_still_drain(_stack):
+    """The correction, stated as an invariant. Items queued BEFORE a hold are
+    drainable during it (spec §1 says nothing about earlier cohorts); items
+    queued DURING it are not, which is what E3 depends on."""
+    async def go():
+        q = EvidenceQueue(1000, 1 << 40, hold_max_s=0.0)
+        got: list[EvidenceItem] = []
+
+        async def consumer():
+            while True:
+                got.append(await q.get())
+
+        task = asyncio.get_running_loop().create_task(consumer())
+        # Generation 1, closed immediately.
+        await q.put(_item(EVIDENCE_CLASS_DECISION, 1.0, "cid-old", 1))
+        q.hold()
+        # Generation 2, open: must NOT drain while the hold is up...
+        await q.put(_item(EVIDENCE_CLASS_DECISION, 2.0, "cid-new", 1))
+        for _ in range(40):
+            await asyncio.sleep(0)
+        assert [i.correlation_id for i in got] == ["cid-old"], (
+            "the earlier cohort's item must drain during a later cohort's hold")
+        assert q.stats()["depth_open"] == 1
+        await q.release()
+        for _ in range(40):
+            await asyncio.sleep(0)
+        assert [i.correlation_id for i in got] == ["cid-old", "cid-new"]
+        task.cancel()
+    asyncio.run(go())
+
+
+def test_E10d_a_hold_that_outlives_its_deadline_expires_and_is_counted(_stack):
+    """Defence in depth: a hold nobody releases must not starve the Evidence
+    plane in silence. It expires, the open generation drains, and the break is
+    counted — never a hang, never a silence."""
+    async def go():
+        q = EvidenceQueue(1000, 1 << 40, hold_max_s=0.05)
+        got: list[EvidenceItem] = []
+
+        async def consumer():
+            while True:
+                got.append(await q.get())
+
+        task = asyncio.get_running_loop().create_task(consumer())
+        q.hold()                       # deliberately never released
+        await q.put(_item(EVIDENCE_CLASS_DECISION, 1.0, "cid-stuck", 1))
+        for _ in range(10):
+            await asyncio.sleep(0)
+        assert got == [], "before the deadline the hold is honoured"
+        await asyncio.sleep(0.12)
+        assert [i.correlation_id for i in got] == ["cid-stuck"], (
+            "past the deadline the consumer must drain anyway")
+        assert q.hold_expired_total == 1, "and it must be COUNTED"
+        assert q.held is True and q.held_since_s() > 0.0, (
+            "held_since_seconds is what names a leak on /metrics")
+        task.cancel()
+    asyncio.run(go())
+
+
+def test_E10e_backpressure_wait_is_its_own_span_and_is_in_neither_persist_stage(_stack):
+    """A Decision write that took 200 ms and then waited 20 s for queue room is
+    not a 20-second Decision write. The wait is timed as
+    `persist.backpressure_wait`, outside both persist spans, so the live profile
+    sends the next investigation at the right function."""
+    _reset_engine_state()
+    ch = _RecCH()
+    ch.slow_tables = {t: 0.02 for t in EVIDENCE_TABLES}
+    _stack.setattr(main, "ch", ch)
+    _stack.setattr(main, "CORR_PROFILE_STAGES", True)
+    _stack.setattr(main, "CORR_EVIDENCE_QUEUE_MAX", 1)   # every put after the
+    _stack.setattr(main, "CORR_ENGINE_COHORT_SIZE", 24)  # first one blocks
+    for name in ("persist.decision", "persist.evidence", "persist.backpressure_wait"):
+        main._STAGE_STATS.pop(name, None)
+        main._STAGE_SAMPLES.pop(name, None)
+    asyncio.run(_sweep(components=8, cohorts=1, cohort_size=24))
+    bp = main._STAGE_STATS.get("persist.backpressure_wait")
+    dec = main._STAGE_STATS.get("persist.decision")
+    assert bp and dec, "both spans must have been recorded"
+    assert main._EVIDENCE_QUEUE is not None
+    assert main._EVIDENCE_QUEUE.backpressure_total > 0, (
+        "a queue of 1 must have blocked the Decision plane")
+    # [count, total_s, max_s]. The Evidence tables are the slow ones here, so a
+    # put into a queue bounded at 1 waits out a whole Evidence write while the
+    # Decision write is two instant inserts. If the wait had leaked into
+    # `persist.decision`, its max could not stay below the wait's.
+    assert bp[1] > 0.0, "the blocked time must be recorded"
+    assert dec[2] < bp[2], (
+        f"the worst DECISION write ({dec[2] * 1000:.1f} ms) must be shorter "
+        f"than the worst backpressure wait ({bp[2] * 1000:.1f} ms) — if it is "
+        f"not, the wait leaked into the decision span")
+    ev = main._STAGE_STATS.get("persist.evidence")
+    assert ev and ev[2] < bp[2] + ev[2], "sanity: the spans are distinct"
+
+
+def test_E10f_a_big_archive_chunk_is_built_off_the_event_loop(_stack):
+    """The other half of the loop-lag regression. `cache=False` (the deferred
+    path cannot use the id()-keyed per-cycle cache) costs ~15x the cached build:
+    measured, a 10,000-row chunk is ~410 ms fresh vs ~27 ms cached, and
+    CORR_ARCHIVE_CHUNK_ROWS is 10,000 — one uninterruptible stretch per chunk on
+    the loop thread, competing with run_window for the GIL. Big chunks now go
+    through `_offload`; small ones stay inline (an executor hop is not free)."""
+    async def go():
+        snap = run_window(mixed_window(2), CAT, (), CFG)[0]
+        offloaded: list[str] = []
+        real_offload = main._offload
+
+        async def spy(fn, /, *a, **kw):
+            offloaded.append(getattr(fn, "__name__", str(fn)))
+            return await real_offload(fn, *a, **kw)
+
+        _stack.setattr(main, "ch", _RecCH())
+        _stack.setattr(main, "_offload", spy)
+        _stack.setattr(main, "CORR_ARCHIVE_CHUNK_ROWS", 10_000)
+        _stack.setattr(main, "CORR_ROW_PAGE_SIZE", 4)
+
+        def item_with(n_sigs: int) -> EvidenceItem:
+            sigs = mixed_window(max(1, n_sigs // 2))
+            return EvidenceItem(
+                correlation_id=snap.correlation_id, tenant_id=snap.tenant_id,
+                version=1, state="open", tok="tok", snap=snap,
+                priority_class=EVIDENCE_CLASS_DECISION,
+                window_start_ts=snap.window_start.timestamp(),
+                slice_sigs=list(sigs))
+
+        offloaded.clear()
+        await main._write_evidence(item_with(2))
+        assert "_archive_chunk" not in offloaded, (
+            "a 2-row chunk must not pay an executor hop")
+        offloaded.clear()
+        await main._write_evidence(item_with(40))
+        assert "_archive_chunk" in offloaded, (
+            "a chunk at or above CORR_ROW_PAGE_SIZE must be built off the loop")
+    asyncio.run(go())
+
+
+def test_E10g_the_new_hold_fields_reach_metrics_and_survive_the_flag(_stack):
+    """Same key-set rule as E9: `held_since_seconds` / `hold_expired_total` /
+    `depth_open` must exist whether or not the plane is on."""
+    async def go():
+        _stack.setattr(main, "ch", _RecCH())
+        on_keys = set(main.evidence_stats())
+        q = main._evidence_ensure_consumer()
+        assert q is not None
+        assert set(main.evidence_stats()) == on_keys, (
+            "the stat key set must not change when the queue exists")
+        text = main._metrics_text()
+        for series in ("corr_evidence_hold_seconds",
+                       "corr_evidence_hold_expired_total",
+                       "corr_evidence_queue_depth_open"):
+            assert f"# TYPE {series} " in text, f"{series} missing from /metrics"
+        await main._evidence_stop()
+    asyncio.run(go())

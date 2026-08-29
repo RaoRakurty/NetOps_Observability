@@ -49,14 +49,38 @@ BOUNDS AND BACKPRESSURE (spec §4, owner memo §22 — lossless always)
     that degrades under pressure is latency, and it is counted
     (`backpressure_total`) and measured (`oldest_age_s`, `lag_s`).
 
-THE COHORT HOLD
-    Spec §1: the Decision plane emits "synchronously, per cohort, BEFORE any
-    Evidence write of the same cohort". `hold()` suspends the consumer for the
-    duration of a cohort's decision pass so the cohort's verdict rows are not
-    interleaved with — and therefore not queued behind — its own Evidence
-    inserts. The hold is LIFTED AUTOMATICALLY while the queue is at a bound, so
-    a cohort that produces more items than the queue can hold can never deadlock
-    against its own backpressure: pressure always wins over ordering preference.
+THE COHORT HOLD IS GENERATIONAL — and that is a correction, not a detail
+    Spec §1's rule is precise: a cohort's Decision rows land before the Evidence
+    rows OF THE SAME COHORT. It says nothing about EARLIER cohorts' Evidence.
+
+    The first implementation held the consumer globally for the duration of a
+    decision pass, which is strictly stronger than the rule — and on the live
+    2.5K leg (`p2-s04-08290653`) that difference was the whole story: a drain
+    sweep runs cohorts back to back with a single `asyncio.sleep(0)` between
+    them, so the consumer got one scheduling slot per cohort, drained ONE item,
+    and was held again. Measured offline on the same shape: 8 cohorts produced
+    61 items and materialized 7. The queue climbed to its 5,000 bound and stayed
+    there, and the only thing that ever let the consumer run was the bound
+    lifting the hold (backpressure_total 8,767).
+
+    So the hold is now per GENERATION. `hold()` opens a generation; everything
+    `put` during it lands in `_open`; `release()` closes it and merges `_open`
+    into `_ready`. The consumer always drains `_ready` — items from cohorts that
+    have finished their decision pass — and only touches `_open` when nothing is
+    held, when a bound demands it, or when the hold has expired. The ordering
+    guarantee is unchanged and the Evidence plane now uses the decision path's
+    own I/O waits instead of starving until the queue is full.
+
+    Two liveness escapes, both counted, because a stuck hold would silently
+    starve the Evidence plane:
+      * a bound always wins over the ordering preference (a cohort that produces
+        more items than the queue can hold cannot deadlock on its own
+        backpressure);
+      * a hold older than `hold_max_s` EXPIRES: the consumer drains the open
+        generation anyway and `hold_expired_total` records it. `held_since_s`
+        makes the bare `held` bool interpretable — a scrape that lands inside a
+        cohort's decision pass legitimately sees `held=True`, and only a
+        `held_since_s` that keeps growing is a defect.
 """
 from __future__ import annotations
 
@@ -89,6 +113,11 @@ _BYTES_PER_NODE = 2048
 _BYTES_PER_EDGE = 768
 _BYTES_PER_SLICE_SIGNAL = 1024
 _BYTES_ITEM_OVERHEAD = 512
+
+
+# One heap entry: (content key, monotonic tie-break, item). The tie-break exists
+# only so `EvidenceItem` instances are never compared with `<`.
+_Entry = tuple[tuple[int, float, str, int], int, "EvidenceItem"]
 
 
 @dataclass(slots=True)
@@ -154,18 +183,32 @@ class EvidenceQueue:
     and layering a second condition over a Queue is how deadlocks are written.
     """
 
-    __slots__ = ("_cond", "_heap", "_hold", "_inflight", "_seq",
-                 "backpressure_total", "bytes", "lag_s", "max_bytes", "max_items")
+    __slots__ = ("_cond", "_hold", "_hold_expired", "_hold_since", "_hold_timer",
+                 "_inflight", "_loop", "_open", "_ready", "_seq", "_wake_task",
+                 "backpressure_total", "bytes", "hold_expired_total", "hold_max_s",
+                 "lag_s", "max_bytes", "max_items")
 
-    def __init__(self, max_items: int, max_bytes: int) -> None:
+    def __init__(self, max_items: int, max_bytes: int,
+                 hold_max_s: float = 5.0) -> None:
         self.max_items = max(1, int(max_items))
         self.max_bytes = max(1, int(max_bytes))
-        self._heap: list[tuple[tuple[int, float, str, int], int, EvidenceItem]] = []
+        self.hold_max_s = max(0.0, float(hold_max_s))
+        # `_ready` = generations whose decision pass is over, drainable always.
+        # `_open` = the generation being produced right now. Both are heaps on
+        # the same content key; `release()` merges open into ready.
+        self._ready: list[_Entry] = []
+        self._open: list[_Entry] = []
         self._seq = 0
         self._hold = 0
+        self._hold_since = 0.0
+        self._hold_expired = False
+        self._hold_timer: asyncio.TimerHandle | None = None
+        self._loop: asyncio.AbstractEventLoop | None = None
+        self._wake_task: asyncio.Task | None = None
         self._inflight = 0
         self.bytes = 0
         self.backpressure_total = 0
+        self.hold_expired_total = 0
         self.lag_s = 0.0
         self._cond = asyncio.Condition()
 
@@ -173,33 +216,90 @@ class EvidenceQueue:
     def full(self) -> bool:
         """At a bound. Also the predicate that LIFTS the cohort hold: under
         pressure, draining beats ordering preference (see the module docstring)."""
-        return len(self._heap) >= self.max_items or self.bytes >= self.max_bytes
+        return self.qsize() >= self.max_items or self.bytes >= self.max_bytes
 
     def qsize(self) -> int:
-        return len(self._heap)
+        return len(self._ready) + len(self._open)
 
     def oldest_age_s(self, now: float | None = None) -> float:
-        """Age of the OLDEST queued item. The heap is ordered by the content key,
-        not by arrival, so this is a linear scan — bounded by `max_items` and
-        paid only at scrape time, never on the hot path."""
-        if not self._heap:
+        """Age of the OLDEST queued item. The heaps are ordered by the content
+        key, not by arrival, so this is a linear scan — bounded by `max_items`
+        and paid only at scrape time, never on the hot path."""
+        if not (self._ready or self._open):
             return 0.0
         now = time.monotonic() if now is None else now
-        return now - min(e[2].enqueued_mono for e in self._heap)
+        return now - min(e[2].enqueued_mono
+                         for e in (*self._ready, *self._open))
 
     # ── the cohort hold ──────────────────────────────────────────────────────
     def hold(self) -> None:
-        """Suspend the consumer (spec §1: the cohort's Decision rows land first).
-        Re-entrant by count so a nested/overlapping cohort cannot release early."""
+        """Open a generation: everything `put` from here until the matching
+        `release` belongs to the cohort now running its decision pass, and the
+        consumer will not touch it. Items ALREADY queued stay drainable — that
+        is the difference from the first implementation, and the reason the
+        Evidence plane no longer starves between back-to-back cohorts.
+
+        Re-entrant by count so a nested/overlapping cohort cannot release early.
+        """
         self._hold += 1
+        if self._hold != 1:
+            return
+        self._hold_since = time.monotonic()
+        self._hold_expired = False
+        if self.hold_max_s <= 0:
+            return
+        try:
+            self._loop = asyncio.get_running_loop()
+        except RuntimeError:            # no loop (direct construction in a test)
+            self._loop = None
+            return
+        self._hold_timer = self._loop.call_later(self.hold_max_s, self._expire_hold)
+
+    def _expire_hold(self) -> None:
+        """A hold older than `hold_max_s` stops being honoured.
+
+        A leaked hold would starve the Evidence plane in total silence — the
+        exact failure this class was just debugged for. It is cheaper to make it
+        self-healing AND counted than to prove no path can ever leak one."""
+        if not self._hold or self._hold_expired:
+            return
+        self._hold_expired = True
+        self.hold_expired_total += 1
+        if self._loop is not None:
+            self._wake_task = self._loop.create_task(self._wake())
+
+    def _cancel_hold_timer(self) -> None:
+        if self._hold_timer is not None:
+            self._hold_timer.cancel()
+            self._hold_timer = None
 
     async def release(self) -> None:
-        """Drop one hold and WAKE the consumer parked on the hold predicate.
+        """Close the generation and WAKE the consumer.
+
         Async because the wake-up needs the condition's lock — scheduling it as
         a detached task instead would leave the release racing the next cohort's
         hold, which is the one ordering this class exists to guarantee."""
         self._hold = max(0, self._hold - 1)
+        if self._hold == 0:
+            self._cancel_hold_timer()
+            self._hold_expired = False
+            self._hold_since = 0.0
+            # The generation is complete: its items become drainable in content
+            # order alongside everything else already waiting.
+            if self._open:
+                self._ready.extend(self._open)
+                heapq.heapify(self._ready)
+                self._open = []
         await self._wake()
+
+    def held_since_s(self, now: float | None = None) -> float:
+        """How long the current hold has been open. `held` alone is a bare bool
+        that a scrape can legitimately catch True mid-cohort; this is what tells
+        an operator whether it is a cohort or a leak."""
+        if not self._hold:
+            return 0.0
+        now = time.monotonic() if now is None else now
+        return max(0.0, now - self._hold_since)
 
     async def _wake(self) -> None:
         async with self._cond:
@@ -228,17 +328,31 @@ class EvidenceQueue:
                 self._cond.notify_all()
                 await self._cond.wait()
             self._seq += 1
-            heapq.heappush(self._heap, (item.key, self._seq, item))
+            entry = (item.key, self._seq, item)
+            # The OPEN generation only while a decision pass is running: those
+            # are the items spec §1 says must not precede their own cohort's
+            # Decision rows. Everything else is immediately drainable.
+            heapq.heappush(self._open if self._hold else self._ready, entry)
             self.bytes += item.est_bytes
             self._cond.notify_all()
 
+    def _open_is_drainable(self) -> bool:
+        """The open generation may be drained when nothing holds it, when a
+        bound demands it (pressure beats ordering preference), or when the hold
+        has outlived `hold_max_s`."""
+        return not self._hold or self._hold_expired or self.full()
+
     async def get(self) -> EvidenceItem:
-        """Take the highest-priority item, waiting for one to exist and for the
-        cohort hold to clear (or for a bound to lift it)."""
+        """Take the highest-priority DRAINABLE item.
+
+        `_ready` first — closed generations are always drainable, which is what
+        lets the consumer use the decision path's own I/O waits instead of
+        waiting for a bound."""
         async with self._cond:
-            while not self._heap or (self._hold and not self.full()):
+            while not (self._ready or (self._open and self._open_is_drainable())):
                 await self._cond.wait()
-            _key, _seq, item = heapq.heappop(self._heap)
+            heap = self._ready if self._ready else self._open
+            _key, _seq, item = heapq.heappop(heap)
             self.bytes = max(0, self.bytes - item.est_bytes)
             self._cond.notify_all()
             return item
@@ -247,16 +361,18 @@ class EvidenceQueue:
         """Take an item without waiting and WITHOUT honouring the hold — the
         shutdown drain's accessor, where ordering preference is irrelevant and a
         parked consumer would simply lose the item."""
-        if not self._heap:
+        heap = self._ready if self._ready else self._open
+        if not heap:
             return None
-        _key, _seq, item = heapq.heappop(self._heap)
+        _key, _seq, item = heapq.heappop(heap)
         self.bytes = max(0, self.bytes - item.est_bytes)
         return item
 
     def pending(self) -> list[EvidenceItem]:
         """Everything still queued, in DRAIN order — the shutdown "what was
         left" report. Non-destructive."""
-        return [e[2] for e in sorted(self._heap, key=lambda e: (e[0], e[1]))]
+        return [e[2] for e in sorted((*self._ready, *self._open),
+                                     key=lambda e: (e[0], e[1]))]
 
     def begin(self) -> None:
         """The consumer has taken an item and is writing it. `idle()` must stay
@@ -273,7 +389,7 @@ class EvidenceQueue:
 
     def idle(self) -> bool:
         """Nothing queued AND nothing being written."""
-        return not self._heap and self._inflight == 0
+        return not (self._ready or self._open) and self._inflight == 0
 
     def note_written(self, item: EvidenceItem, finished_mono: float) -> None:
         """Record the materialization lag of the item that just landed."""
@@ -285,7 +401,9 @@ class EvidenceQueue:
 
     def stats(self) -> dict[str, float | int | bool]:
         return {
-            "depth": len(self._heap),
+            "depth": self.qsize(),
+            "depth_ready": len(self._ready),
+            "depth_open": len(self._open),
             "inflight": self._inflight,
             "bytes": self.bytes,
             "oldest_age_seconds": round(self.oldest_age_s(), 3),
@@ -294,4 +412,7 @@ class EvidenceQueue:
             "max_items": self.max_items,
             "max_bytes": self.max_bytes,
             "held": self.held,
+            "held_since_seconds": round(self.held_since_s(), 3),
+            "hold_expired_total": self.hold_expired_total,
+            "hold_max_s": self.hold_max_s,
         }
