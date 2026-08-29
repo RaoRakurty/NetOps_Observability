@@ -258,3 +258,20 @@ aggregation opportunity — P3 deferred behind damping/prefilter; size it on
 t-storm. Docs/alerts re-derived (616cd7b6). NEXT: verdict for p2-s06 (all
 phases expected PASS with honest memflat) → first t-storm-2.5k run (TTUR + T4
 scoring contract) → P4 write-up.
+
+## UPDATE (2026-08-29 16:30) — s06 measured; ClickHouse system logs fixed; twin is the fault harness of record
+- Run p2-s06: completion PASS 2,439 s, accounting exact; compact memo works
+  (66 %/0 evictions); prefilter + heartbeat touch = no live gain on t-nominal;
+  TTUR within noise (+8 %, arrival-timing incident count). Verdict pending the
+  harness memflat rescore (v2 clause: error_log delta + p99).
+- ClickHouse: the 4.4 GiB peak was system.metric_log merging itself (997
+  columns, Wide+Horizontal band); `03995ecb` makes all six system logs
+  merge-safe via <settings>; ClickHouse restarted (21 s), tables recreated,
+  legacy `*_log_0` dropped. `CORR_REPARTITION` default is now `check` (api
+  logs one CHECK line per table; corr_objects 50 GiB and corr_signals_archive
+  172 GiB uncompressed are over the 4 GiB gate).
+- Digital twin (scripts/lab/twin, tracker 152, not running) is the labelled
+  fault harness of record; the enterprise-outage chain (link/OSPF/BGP churn/
+  STP/MAC-move) is being added there + t-storm ground truth made scorable by
+  `twin.py score`.
+- Next build of api: pass GIT_SHA=$(git rev-parse HEAD) (watchdog flags it).
