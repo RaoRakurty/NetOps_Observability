@@ -275,3 +275,17 @@ scoring contract) → P4 write-up.
   STP/MAC-move) is being added there + t-storm ground truth made scorable by
   `twin.py score`.
 - Next build of api: pass GIT_SHA=$(git rev-parse HEAD) (watchdog flags it).
+
+## UPDATE (2026-08-29 18:30) — storm profile live; P3 = GO
+- `t-storm-2.5k` run `storm-s01-08291633`: completion PASS 2,171 s, accounting
+  exact, BUT stability FAIL (115 s loop stall = Evidence batch flush of the storm
+  aggregate member, tracker 185 — consumer ejected, 65k evictions) and memflat
+  FAIL on 2 ClickHouse refusals (api `WITH picked` query reads 4M rows, fix in
+  build). T1 p95 1,376 s; 5,889 incidents; confirmed tier 0 (to read with the
+  twin scorer output `twin-score.log`).
+- StormShape ladder (`29686b0c`): offline step-0 says aggregation is worth
+  0/36/56/74 % of engine signals at 2/10/25/50 % storm share → **P3 GO** (spec
+  §6b, tracker 182). Build after 185 lands; A/B on t-storm-10/25.
+- Scoring a miniladder run: `ln -s <run-dir> /var/tmp/scale-runs/x-<runid>`
+  then `twin.py --run-root /var/tmp/scale-runs score --runid <runid>` (global
+  option before the subcommand; takes >10 min at 345 stories — run detached).
