@@ -26,6 +26,7 @@ partition-spread measurement.
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 import sys
 import urllib.error
@@ -35,6 +36,39 @@ DOCKER_TIMEOUT = 30
 KAFKA_TOOL_TIMEOUT = 90
 HTTP_TIMEOUT = 15
 MUTATION_TIMEOUT = 180
+
+# Every ClickHouse read this tool issues rides the ops-catalog scope idiom.
+CH_BASE_SETTINGS = "tenant_scope='__all__'"
+# Client-side slack over a server-side max_execution_time, so ClickHouse's own
+# TIMEOUT_EXCEEDED (which names the query) beats the subprocess kill (which
+# does not) — §9: bounded, and bounded so the reason survives.
+CH_CLIENT_SLACK_S = 30
+
+_CH_SETTING_NAME = re.compile(r"^[a-z][a-z0-9_]*$")
+# Setting VALUES are ours, never user data — but they are still validated
+# before they are pasted into SQL (§3 zero-trust applies to our own state too).
+_CH_SETTING_TEXT = re.compile(r"^[A-Za-z0-9_.:/=+ -]*$")
+
+
+def format_ch_settings(settings: dict[str, object] | None) -> str:
+    """`tenant_scope='__all__'` plus the caller's request settings, rendered as
+    a SETTINGS clause. Ints go bare, text is single-quoted; anything whose name
+    or value is not embed-safe RAISES rather than being silently dropped."""
+    parts = [CH_BASE_SETTINGS]
+    for key in sorted(settings or {}):
+        if not _CH_SETTING_NAME.match(key):
+            raise ValueError(f"unsafe ClickHouse setting name {key!r}")
+        val = settings[key]
+        if isinstance(val, bool):
+            val = int(val)
+        if isinstance(val, int):
+            parts.append(f"{key}={val}")
+            continue
+        text = str(val)
+        if not _CH_SETTING_TEXT.match(text):
+            raise ValueError(f"unsafe ClickHouse setting value {text!r}")
+        parts.append(f"{key}='{text}'")
+    return ", ".join(parts)
 
 
 def log(msg: str) -> None:
@@ -256,20 +290,48 @@ class Stack:
         return int(g.get("_total", -1)), int(g.get("_members", 0))
 
     # -- ClickHouse ---------------------------------------------------------
-    def ch(self, query: str, timeout: int = 60) -> tuple[bool, str]:
+    def ch(self, query: str, timeout: int = 60,
+           settings: dict[str, object] | None = None) -> tuple[bool, str]:
+        """Run a query with `tenant_scope='__all__'` plus any per-request
+        SETTINGS the caller asks for (`max_memory_usage`, `max_execution_time`,
+        `max_threads`, `max_block_size`, `log_comment`, ...).
+
+        §9 (all IO bounded): when the caller sets a server-side
+        `max_execution_time`, the CLIENT timeout is derived from it so the
+        classified server error is what surfaces instead of a subprocess kill
+        that loses the reason.
+        """
         cc = self.cid("clickhouse")
         if not cc:
             return False, "no running clickhouse container"
+        clause = format_ch_settings(settings)
+        if settings:
+            server_budget = settings.get("max_execution_time")
+            if isinstance(server_budget, (int, float)):
+                timeout = max(timeout, int(server_budget) + CH_CLIENT_SLACK_S)
         rc, out, err = run(
             ["docker", "exec", cc, "clickhouse-client", "--query",
-             query + " SETTINGS tenant_scope='__all__'"], timeout)
+             query + " SETTINGS " + clause], timeout)
         if rc != 0:
             return False, err.strip()[:400]
         return True, out.strip()
 
-    def ch_json(self, query: str, timeout: int = 60) -> list[dict]:
-        ok, out = self.ch(query + " FORMAT JSONEachRow", timeout)
+    def ch_json(self, query: str, timeout: int = 60,
+                settings: dict[str, object] | None = None,
+                strict: bool = False) -> list[dict]:
+        """Rows as dicts. `strict=True` RAISES StackError on a refused query
+        instead of returning `[]`.
+
+        A refused read and an empty result are the SAME value to a caller that
+        only looks at the list — that is how the 2026-08-29 scorer could have
+        reported "no object formed" for a query ClickHouse never finished. Any
+        caller whose verdict depends on emptiness meaning "nothing there" must
+        pass strict=True (CLAUDE.md §10: no silent failures).
+        """
+        ok, out = self.ch(query + " FORMAT JSONEachRow", timeout, settings)
         if not ok:
+            if strict:
+                raise StackError(f"clickhouse query failed: {out}")
             warn(f"clickhouse query failed: {out}")
             return []
         rows = []
@@ -278,6 +340,9 @@ class Stack:
                 try:
                     rows.append(json.loads(ln))
                 except json.JSONDecodeError:
+                    if strict:
+                        raise StackError(
+                            f"clickhouse returned unparseable row: {ln[:120]}")
                     warn(f"clickhouse returned unparseable row: {ln[:120]}")
         return rows
 
@@ -287,7 +352,7 @@ class Stack:
             return False, "no running clickhouse container"
         rc, out, err = run(
             ["docker", "exec", cc, "clickhouse-client", "--query",
-             query + " SETTINGS tenant_scope='__all__', mutations_sync=1"],
+             query + " SETTINGS " + CH_BASE_SETTINGS + ", mutations_sync=1"],
             MUTATION_TIMEOUT)
         if rc != 0:
             return False, err.strip()[:400]

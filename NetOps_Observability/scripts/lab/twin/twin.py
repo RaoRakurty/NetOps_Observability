@@ -65,7 +65,7 @@ from scenario import (
     load_scenario,
     steady_eps,
 )
-from stack import Stack, env_get, log, warn
+from stack import Stack, StackError, env_get, log, warn
 from stories import build_run_plan, plan_end_s
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(SCRIPT_DIR)))
@@ -427,7 +427,8 @@ class Run:
         # accuracy scorer (design §8.4)
         self.hb("scoring")
         acc = scorer_mod.score_run(self.stack, ground_truth, self.state,
-                                   injector.emitted_by_story)
+                                   injector.emitted_by_story,
+                                   run_dir=self.run_dir)
         write_json(os.path.join(self.run_dir, "accuracy-report.json"), acc)
         with open(os.path.join(self.run_dir, "accuracy-report.md"), "w",
                   encoding="utf-8") as f:
@@ -512,6 +513,47 @@ def find_run_dir(root: str, runid: str) -> str:
     return hits[-1]
 
 
+def read_emission_journal(rd: str,
+                          state: dict) -> tuple[dict[str, dict[str, int]],
+                                                list[str]]:
+    """Per-story journal counts from events.jsonl, so the evidence trail's
+    emission half survives a re-score (signals may have been purged by
+    teardown; the journal is the run's own record).
+
+    A MISSING journal is a documented MODE, not a fault, for a run this tool
+    did not emit: `scale-miniladder.py` writes ground truth + state and
+    produces through its own bus path, journaling no per-story emission. Those
+    runs are scored WITHOUT emission counts — one note line, carried into the
+    report, instead of a warning that reads like a defect. A journal that
+    exists but cannot be read IS a fault and stays loud.
+    """
+    path = os.path.join(rd, "events.jsonl")
+    journal_by_story: dict[str, dict[str, int]] = {}
+    notes: list[str] = []
+    if not os.path.exists(path):
+        source = str(state.get("source") or "")
+        mode = (f"{source} run" if source
+                else "run emitted outside this tool")
+        notes.append(
+            f"no events.jsonl ({mode}): evidence trails are scored WITHOUT "
+            f"emission counts — every clause verdict is unaffected")
+        log(f"emission journal: absent — {notes[0]}")
+        return journal_by_story, notes
+    try:
+        with open(path, encoding="utf-8") as f:
+            for ln in f:
+                ev = json.loads(ln)
+                sid = ev.get("story_id")
+                if sid:
+                    lane_counts = journal_by_story.setdefault(sid, {})
+                    lane_counts[ev["lane"]] = lane_counts.get(ev["lane"], 0) + 1
+    except (OSError, json.JSONDecodeError, KeyError) as exc:
+        warn(f"events.jsonl is PRESENT but unreadable ({exc!r}) — evidence "
+             f"trails will lack emission counts")
+        notes.append(f"events.jsonl present but unreadable: {exc!r}")
+    return journal_by_story, notes
+
+
 def cmd_score(args: argparse.Namespace) -> int:
     rd = find_run_dir(run_root(args), args.runid)
     with open(os.path.join(rd, "state.json"), encoding="utf-8") as f:
@@ -522,30 +564,25 @@ def cmd_score(args: argparse.Namespace) -> int:
             ground_truth = [json.loads(ln) for ln in f if ln.strip()]
     except OSError as exc:
         die(f"cannot read {gt_path}: {exc} — did the run reach emission?")
-    # Rebuild per-story journal counts from events.jsonl so the evidence
-    # trail's emission half survives a re-score (signals may have been purged
-    # by teardown; the journal is the run's own record).
-    journal_by_story: dict[str, dict[str, int]] = {}
-    try:
-        with open(os.path.join(rd, "events.jsonl"), encoding="utf-8") as f:
-            for ln in f:
-                ev = json.loads(ln)
-                sid = ev.get("story_id")
-                if sid:
-                    lane_counts = journal_by_story.setdefault(sid, {})
-                    lane_counts[ev["lane"]] = lane_counts.get(ev["lane"], 0) + 1
-    except OSError as exc:
-        warn(f"events.jsonl unreadable ({exc}) — evidence trails will lack "
-             f"emission counts")
+    journal_by_story, notes = read_emission_journal(rd, state)
     stack = Stack(args.env_file, args.base_url, args.project)
     stack.login()
-    acc = scorer_mod.score_run(stack, ground_truth, state, journal_by_story)
+    try:
+        acc = scorer_mod.score_run(stack, ground_truth, state,
+                                   journal_by_story, run_dir=rd, notes=notes)
+    except (scorer_mod.ScorerError, StackError) as exc:
+        # A refused or unbounded READ is not "the engine found nothing" — it
+        # must never render as an all-miss accuracy report (§10).
+        die(f"scoring aborted, NO report written: {exc}", 1)
     write_json(os.path.join(rd, "accuracy-report.json"), acc)
     with open(os.path.join(rd, "accuracy-report.md"), "w",
               encoding="utf-8") as f:
         f.write(scorer_mod.render_md(acc))
+    bounds = acc.get("read_bounds") or {}
     log(f"accuracy: {acc['stories_passed']}/{acc['stories_total']} — report "
-        f"in {rd}")
+        f"in {rd} ({bounds.get('clickhouse_queries')} ClickHouse queries over "
+        f"{(bounds.get('window') or {}).get('start')} .. "
+        f"{(bounds.get('window') or {}).get('end')})")
     return 0
 
 
