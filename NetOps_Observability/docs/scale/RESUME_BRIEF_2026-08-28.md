@@ -238,3 +238,11 @@ correlation → `up -d --no-deps api` → restart clickhouse (verify
 correlation=2 correlation` with `compose.profile.yml` → verify 0 rejections
 → `scale-miniladder.py --profile t-nominal-2.5k --devices 2500 --eps 1000
 --run-dir /var/tmp/scale-runs/p2-s05-…` → expect ALL phases PASS.
+
+## UPDATE (2026-08-29 13:00) — CLEAN-ish PASS: completion 1,986 s, accounting exact
+`docs/scale/P2_STEP5_2P5K_VERDICT_2026-08-29.md`. Deployed: fbb4a740 image
+(batching + offload), ClickHouse budget (needed a hotfix 865ef7dd: pool
+thresholds — server crash-looped on sanityCheck), harness 8e623e38. T1 p95
+1,947 s (−66 % vs OLD); T7−T1 p95 4 s. memflat FAIL = harness bugs (CH clause
+query; correlation anchor) — fix in build. P2 is functionally complete. NEXT:
+damping → rank-memo compact form → P3.
