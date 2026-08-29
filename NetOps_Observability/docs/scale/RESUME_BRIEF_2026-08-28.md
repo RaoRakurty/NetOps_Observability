@@ -323,3 +323,17 @@ scoring contract) → P4 write-up.
   forwarded == plan K3 exactly at 2/10/25 %. Steps 3–4 next (archive/replay
   fields + equivalence suite + live A/B on t-storm-10/25).
 - Twin scorer bounding in build; storm-s01/s02 accuracy not yet scored.
+
+## UPDATE (2026-08-29 21:30) — where to pick up
+- P4 draft: `docs/scale/P4_PROGRAMME_WRITEUP_2026-08-29.md` (tables + honest SLO
+  statement; §7 lists the two remaining steps).
+- Uncommitted in the main tree (two builders): P3 steps 1–2 (`aggregation.py`,
+  `test_aggregation_p3.py`, `main.py` ingest wiring, bench `--agg-ab`) and the
+  lifecycle-pass instrumentation/bound (main.py/engine.py, tracker 185 part 2).
+  Commit both when the lifecycle builder reports, then rebuild/redeploy
+  correlation and run `t-storm-2.5k` once more (expect 9/9).
+- P3 step 3 (representation + equivalence suite) being prepared in a worktree
+  as a patch (`scratchpad/p3_step3.patch`); step 4 = live A/B on
+  `t-storm-10-2.5k` / `t-storm-25-2.5k` with `CORR_AGGREGATION_PLANE` OFF vs ON.
+- Accuracy scoring: 46 s per run now; storm-s01 93.0 %, storm-s02 93.3 %;
+  misses = tracker 187 (blocked on parser gaps 184).
