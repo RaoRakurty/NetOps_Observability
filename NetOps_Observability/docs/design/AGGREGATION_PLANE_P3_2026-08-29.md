@@ -28,7 +28,24 @@ re-rank/re-version.** P3 moves the collapse to the ingest boundary, ALWAYS ON
 - Kafka retention + `corr_signals` (every raw event persisted; accounting gate) + `corr_signals_archive` slices (replay input).
 P3 generalizes the first two into an always-on, pre-correlation, content-addressed **aggregation state** and makes the engine consume **state deltas**.
 
-## 2. Step 0 — measure (in flight: `p3_aggregation_opportunity.md`)
+## 2. Step 0 — MEASURED (`docs/scale/P3_AGGREGATION_OPPORTUNITY_2026-08-29.md`)
+**Result: the ratified `t-nominal-2.5k` workload has almost no aggregation
+opportunity.** Offline re-instantiation and the live Kafka window agree to ±1
+event: 900,001 raw → 44,280 promoted signals (4.9 %); identities K1=K2=K5=31,955;
+K3 (60 s bucket) 44,280 → **0 % reduction**, K4 (300 s) 1.6 %, whole-run 27.8 %;
+per-kind repeat factor 1.00; **state transitions 0, recoveries 0** — the
+generator pins each device's state for life (`seq % 2`, 2,500 devices even) and
+gives every identity ONE source and ONE vantage, so memo §17/§18's causal
+classes are unexercised by this benchmark. Amplification: raw→verdict 308:1
+(a graph property, unchanged by aggregation); signal→verdict 15.2:1 → 11.0:1
+(ideal); **version→verdict 14.0:1, version→material 3.96:1**.
+Consequences: (1) P3 is NOT sized against t-nominal — re-measure on the storm
+profiles `s1-2.5k` / `s4-chatter` (the only ratified profiles with sub-bucket
+repetition) before choosing AggKey; (2) **version damping (14:1) and early
+rejection of non-promoted raw lines (95 % of `handle.syslog`'s ~790 s) move
+AHEAD of P3 in the lever order**; (3) the benchmark's lack of flap/recovery
+dynamics is a harness fidelity gap filed as tracker 183 — a storm benchmark
+with no recovery transitions cannot validate the product's storm behaviour.
 Per memo §5/§6 on the ratified workload: unique semantic events under key
 candidates K1..K5, repeat factor per kind, share of events that are first
 occurrence / state transition / recovery (must be synchronous) vs repeat (aggregatable),
