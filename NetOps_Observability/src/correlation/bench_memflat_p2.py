@@ -253,10 +253,16 @@ def _signal_id_cache_bytes() -> dict[str, int]:
 #     5,000 items ~ 101 MiB (its own `est_bytes` estimate) for the whole drain,
 #     and `memflat` failed 503 -> 728 MiB (x1.45) with the rank memo capped at
 #     ~100 MB. `est_bytes` is a BOUND-ONLY estimate built from three flat
-#     constants (evidence_plane.estimate_bytes: 2048 B/node, 768 B/edge,
-#     1024 B/slice signal) with no id-`seen` set and no model of what already
-#     holds the objects it charges for — i.e. exactly the shape
-#     `rank_memo.estimate_result_bytes` had before a75b73f8 calibrated it.
+#     constants (2048 B/node, 768 B/edge, 1024 B/slice signal) with no id-`seen`
+#     set and no model of what already holds the objects it charges for — i.e.
+#     exactly the shape `rank_memo.estimate_result_bytes` had before a75b73f8
+#     calibrated it. THAT MEASUREMENT IS WHAT THIS SECTION PRODUCED, and
+#     `evidence_plane.estimate_bytes` is now the calibrated walk it argued for
+#     (per-item snapshot payload, catalog-owned charged zero, OPEN_OBJECTS
+#     ownership deliberately NOT discounted, loose slice signals only); the
+#     composition report below still prints the ORIGINAL three constants beside
+#     the measured composition, because that is the comparison that justified
+#     replacing them.
 #
 #     A queued EvidenceItem holds a REFERENCE to the ObjectSnapshot the Decision
 #     plane just wrote from. While that object is open, `OPEN_OBJECTS[cid]
@@ -322,9 +328,15 @@ def make_pinning_consumer(pin: int, stats: dict):
         loop_yield, reset_yield = main._make_loop_yield()
         while True:
             async with queue._cond:
-                while len(queue._heap) <= pin:
+                # The queue is GENERATIONAL since 7ba42389: `_ready` holds the
+                # cohorts whose decision pass is over, `_open` the one being
+                # produced. The pin is a DEPTH over both — ordering is
+                # irrelevant here (the question is what a pinned queue RETAINS),
+                # and draining `_ready` first is the consumer's own preference.
+                while queue.qsize() <= pin:
                     await queue._cond.wait()
-                _key, _seq, item = heapq.heappop(queue._heap)
+                heap = queue._ready if queue._ready else queue._open
+                _key, _seq, item = heapq.heappop(heap)
                 queue.bytes = max(0, queue.bytes - item.est_bytes)
                 queue._cond.notify_all()
             queue.begin()
@@ -1178,11 +1190,13 @@ def evidence_report(res: dict) -> str:
         pct = 100.0 / sampled
         out += [
             f"composition, {sampled:,} items sampled of {comp['items']:,}:",
-            ("  nodes/item          {:>10.1f}   (estimator charges {:>8.1f} KiB)"
+            "  (the KiB column is what the ORIGINAL flat estimator charged — the",
+            "   comparison that replaced it; today's estimate is the row below)",
+            ("  nodes/item          {:>10.1f}   (flat estimate charged {:>8.1f} KiB)"
              .format(comp["nodes_per_item"], comp["nodes_per_item"] * 2048 / k)),
-            ("  edges/item          {:>10.1f}   (estimator charges {:>8.1f} KiB)"
+            ("  edges/item          {:>10.1f}   (flat estimate charged {:>8.1f} KiB)"
              .format(comp["edges_per_item"], comp["edges_per_item"] * 768 / k)),
-            ("  slice signals/item  {:>10.1f}   (estimator charges {:>8.1f} KiB)"
+            ("  slice signals/item  {:>10.1f}   (flat estimate charged {:>8.1f} KiB)"
              .format(comp["slice_sigs_per_item"],
                      comp["slice_sigs_per_item"] * 1024 / k)),
             ("  est_bytes over THESE items          {:>8.1f} KiB"

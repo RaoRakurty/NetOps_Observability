@@ -35,14 +35,18 @@ Every test below is one of five mutant checks:
 from __future__ import annotations
 
 import asyncio
+import gc
 import json
+import os
 import random
 import time
+import tracemalloc
 from datetime import datetime, timedelta, timezone
 
 import pytest
 
 import main
+import rank_memo as RM
 from catalog import builtin_catalog
 from engine import EngineConfig, run_window
 from evidence_plane import (
@@ -52,6 +56,7 @@ from evidence_plane import (
     EvidenceItem,
     EvidenceQueue,
     estimate_bytes,
+    loose_slice_signals,
 )
 from signals import (
     EntityType,
@@ -571,7 +576,7 @@ def test_E6_shutdown_drains_within_its_deadline(_stack):
                 version=v, state="open", tok=f"tok:{v}", snap=snap,
                 priority_class=EVIDENCE_CLASS_DECISION,
                 window_start_ts=snap.window_start.timestamp(),
-                est_bytes=estimate_bytes(len(snap.nodes), len(snap.edges), 0)))
+                est_bytes=estimate_bytes(snap)))
         await main._evidence_stop()
         assert main.EVIDENCE_ITEMS_MATERIALIZED == 5
         assert main.EVIDENCE_ITEMS_LOST == 0
@@ -1036,4 +1041,315 @@ def test_E10g_the_new_hold_fields_reach_metrics_and_survive_the_flag(_stack):
                        "corr_evidence_queue_depth_open"):
             assert f"# TYPE {series} " in text, f"{series} missing from /metrics"
         await main._evidence_stop()
+    asyncio.run(go())
+
+
+# ═══ E11 — the BYTE ESTIMATOR, calibrated against tracemalloc ════════════════
+#
+# WHY THIS SECTION EXISTS. The queue's second bound is denominated in
+# `EvidenceItem.est_bytes`, and the first version of that number was three flat
+# constants (2048 B/node + 768 B/edge + 1024 B/slice signal) with no id-`seen`
+# set and no model of ownership. Walked against the items it was charging
+# (`docs/scale/P2_MEMFLAT_EVIDENCE_QUEUE_2026-08-29.md` §4) it read **2.84x the
+# true marginal and 25 % UNDER the standalone worst case** — wrong in both
+# directions at once. A bound written against a meter like that is not a bound.
+#
+# THE REFERENCE is the same instrument that calibrated the rank memo
+# (`test_p2_memflat_bounds.py::test_B5`): start tracemalloc, mint N real
+# snapshots, read `current`, drop them, read `current` again. The difference IS
+# the memory the process gives back when nothing else holds them — the
+# STANDALONE figure §6a says the bound must be sized against, because whether an
+# item's snapshot is shared with a live `OPEN_OBJECTS` entry goes to zero
+# exactly when the bound has to hold.
+#
+# Every test below is a mutant check:
+#   * E11a is the band, and executes BOTH mutants — drop catalog ownership, or
+#     re-add the slice double count, and the same measurement leaves the band.
+#   * E11b pins the loose-slice arithmetic against the REAL `_archive_slice`.
+#   * E11c pins the inverted rule: `OPEN_OBJECTS` ownership is NOT discounted.
+#   * E11d/E11e pin determinism and cost; E11f pins the measured defaults.
+
+TEMPLATES = CAT.enabled_templates()
+CALIBRATION_MIN_ITEMS = 200
+
+
+def wide_component(i: int) -> list[Signal]:
+    """One component of several nodes with several signals each — the item shape
+    the offline bench measured (2.7-5.7 nodes, 5.5-6.1 node signals per item),
+    not the 2-node minimum the ordering tests use.
+
+    Every signal carries the SAME entity_id, so the nodes are identity-grounded
+    into one object; the KINDS come from a real template's clause vocabulary, so
+    consecutive components score against different templates and their
+    `RankingResult` payloads differ (which is what makes the estimator's spread
+    in E11 non-trivial)."""
+    tpl = TEMPLATES[i % len(TEMPLATES)]
+    kinds = [min(c.kinds()) for c in tpl.requires][:4] or ["if_util_high"]
+    mods = [ModalityClass.DEVICE_TELEMETRY, ModalityClass.CONTROL_PLANE,
+            ModalityClass.PASSIVE_FLOW, ModalityClass.ACTIVE_PROBE]
+    return [sig(k, f"cal{i}:Gi0/1", offset_s=i * 0.01 + j + 10 * r,
+                modality=mods[j % 4],
+                severity=Severity.HIGH if r == 0 else Severity.WARN)
+            for j, k in enumerate(kinds) for r in range(3)]
+
+
+def calibration_snapshots(n: int, base: int = 0) -> list:
+    """`n` components through the REAL engine — no fixture snapshots, because
+    the payload under measurement IS what `run_window` builds."""
+    out = []
+    for i in range(base, base + n):
+        out.extend(run_window(wide_component(i), CAT, (), CFG))
+    return out
+
+
+def _node_signals(snap) -> int:
+    return sum(len(nd.signals) for nd in snap.nodes)
+
+
+def test_E11_the_estimator_is_not_a_constant_and_reads_the_graph():
+    """PREMISE for everything below. An estimator that returned a constant, or
+    one that never reached the snapshot, would make the band vacuous."""
+    snaps = calibration_snapshots(6, base=9_000)
+    sizes = [estimate_bytes(s) for s in snaps]
+    assert len(snaps) >= 3, "the fixture must materialize objects"
+    assert all(sz > 4_000 for sz in sizes), sizes
+    assert len(set(sizes)) > 1, f"the estimator returns one number for all: {sizes}"
+    # …and it is the SNAPSHOT it reads: an item with no snapshot costs the
+    # overhead alone, which is what a synthetic test item is worth.
+    assert estimate_bytes(None) == 512, estimate_bytes(None)
+
+
+def test_E11a_the_estimator_is_calibrated_against_a_tracemalloc_standalone():
+    """THE CALIBRATION. `estimate_bytes` must read within **0.80x-1.30x** of the
+    memory the process gives back when N real snapshots are dropped and nothing
+    else holds them — the STANDALONE figure §6a sizes the bound against.
+
+    Measured here: **~1.10x** over 200+ engine-built objects. Both mutants are
+    EXECUTED, not described:
+
+      * charge catalog-owned objects (template titles, owner strings, the shared
+        `inapplicable` HypothesisScore objects) to every item and the same
+        measurement lands at ~1.49x — out of band;
+      * re-add the slice double count (charge every slice signal at 1 KiB, when
+        100 % of them are already held by the item's own snapshot nodes) and it
+        lands well above 1.30x too.
+
+    SKIPS CLEANLY when tracemalloc is unavailable or already tracing — its
+    counters are process-global, so a second instrument would be measuring this
+    one."""
+    if tracemalloc.is_tracing():
+        pytest.skip("tracemalloc is already tracing this process")
+    # Warm every lazily built structure a first call would allocate — the
+    # catalog plan, the clause-kinds cache, the estimator's per-type field table
+    # and its per-catalog ownership set — so none of it is charged to the items
+    # inside the traced window.
+    warm = calibration_snapshots(6, base=7_000)
+    estimate_bytes(warm[0])
+    RM.estimate_result_bytes(warm[0], frozenset())
+    del warm
+    gc.collect()
+
+    try:
+        tracemalloc.start(1)
+    except (RuntimeError, ValueError) as exc:   # pragma: no cover - exotic build
+        pytest.skip(f"tracemalloc unavailable: {exc}")
+    try:
+        gc.collect()
+        snaps = calibration_snapshots(CALIBRATION_MIN_ITEMS)
+        gc.collect()
+        held = tracemalloc.get_traced_memory()[0]
+        n = len(snaps)
+        estimated = sum(estimate_bytes(s) for s in snaps)
+        # MUTANT 1: no ownership rule — the catalog charged to every item.
+        no_ownership = sum(512 + RM.estimate_result_bytes(s, frozenset())
+                           for s in snaps)
+        # MUTANT 2: the slice double count restored. 100 % of a real archive
+        # slice is the signals of the item's own nodes (§5), so charging the
+        # whole slice at 1 KiB/signal is exactly this.
+        double_slice = estimated + sum(_node_signals(s) * 1024 for s in snaps)
+        nodes = sum(len(s.nodes) for s in snaps) / n
+        del snaps
+        gc.collect()
+        after = tracemalloc.get_traced_memory()[0]
+    finally:
+        tracemalloc.stop()
+
+    standalone = held - after
+    assert n >= CALIBRATION_MIN_ITEMS, f"only {n} items measured"
+    assert standalone > 0, "tracemalloc saw nothing freed — the reference is broken"
+    per_item = standalone / n
+    assert 2_000 <= per_item <= 200_000, f"{per_item:.0f} B/item is not an object"
+    assert nodes >= 2.0, f"{nodes:.1f} nodes/item — the fixture went trivial"
+    ratio = estimated / standalone
+    assert 0.80 <= ratio <= 1.30, (
+        f"estimator {estimated} vs tracemalloc standalone {standalone} = "
+        f"{ratio:.3f}x over {n} items ({per_item / 1024:.1f} KiB/item)")
+    assert no_ownership / standalone > 1.30, (
+        f"ownership-off ratio {no_ownership / standalone:.3f}x is inside the "
+        "band — the catalog-ownership rule is not what is doing the work")
+    assert double_slice / standalone > 1.30, (
+        f"slice-double-count ratio {double_slice / standalone:.3f}x is inside "
+        "the band — the loose-only slice rule is not what is doing the work")
+
+
+def test_E11b_only_the_LOOSE_slice_signals_are_charged():
+    """THE SLICE RULE, against the real `main._archive_slice`.
+
+    A slice is "every signal of every component node, PLUS the loose ones"
+    (`*_clear`, `source=app_identity`, matched identity signals). The node part
+    is a second reference to signals the snapshot already holds — measured at
+    100 % of the slice on the offline fixture — so only the loose remainder may
+    be charged.
+
+    MUTANT: charge `len(slice_sigs)` instead of the loose count and the second
+    assertion below goes red by 9 KiB on this fixture alone."""
+    main._WINDOW_INDEX_CACHE.clear()
+    window = wide_component(4_242)
+    snaps = run_window(window, CAT, (), CFG)
+    assert snaps, "fixture must materialize an object"
+    snap = snaps[0]
+    slice_sigs = main._archive_slice(snap, window)
+    assert slice_sigs, "the fixture must produce a real archive slice"
+    assert loose_slice_signals(snap, slice_sigs) == 0, (
+        "every signal of this slice is held by the object's own nodes")
+    assert estimate_bytes(snap, slice_sigs) == estimate_bytes(snap), (
+        "a fully node-owned slice must add nothing")
+    assert estimate_bytes(snap, slice_sigs) < estimate_bytes(snap) + (
+        len(slice_sigs) * 1024), "the double count is back"
+
+    # Now the LOOSE half, which is the part a live estate has and this fixture
+    # otherwise does not: a `*_clear` is excluded from build_nodes, so it lands
+    # in the slice held by nothing but the item.
+    main._WINDOW_INDEX_CACHE.clear()
+    # INSIDE the object's own span (`_archive_slice` keeps a loose signal only
+    # while `window_start <= ts <= window_end`), which for this component starts
+    # at `4_242 * 0.01`.
+    base = 4_242 * 0.01
+    clears = [sig("if_util_high_clear", "cal4242:Gi0/1", offset_s=base + 5),
+              sig("if_errors_high_clear", "cal4242:Gi0/1", offset_s=base + 6)]
+    window2 = window + clears
+    snaps2 = run_window(window2, CAT, (), CFG)
+    snap2 = snaps2[0]
+    slice2 = main._archive_slice(snap2, window2)
+    loose = loose_slice_signals(snap2, slice2)
+    assert loose == 2, f"the two clears must be loose, got {loose}"
+    assert (estimate_bytes(snap2, slice2)
+            == estimate_bytes(snap2, None) + 2 * 1024), (
+        "each loose signal is charged exactly one measured Signal (1 KiB)")
+    # …and the floor holds if the two lists ever disagree.
+    assert loose_slice_signals(snap2, slice2[:1]) == 0
+
+
+def test_E11c_OPEN_OBJECTS_ownership_is_NOT_discounted(_stack):
+    """THE INVERTED RULE (§6b item 3). The rank memo charges catalog-owned
+    objects zero because the catalog outlives every entry. A live open object
+    does NOT outlive its queued item — it closes, and the item becomes the sole
+    holder (measured: 45 % of a pinned 5,000-item queue shared its snapshot at
+    `drained`, 0 % once the objects closed).
+
+    So the estimate must be identical whether or not the object is open. MUTANT:
+    add an `OPEN_OBJECTS` ownership set to the walk and this goes red."""
+    snap = run_window(wide_component(11), CAT, (), CFG)[0]
+    before = estimate_bytes(snap)
+    main.OPEN_OBJECTS[snap.correlation_id] = {"snapshot": snap, "state": "open"}
+    try:
+        assert estimate_bytes(snap) == before, (
+            "an OPEN object must not make its queued item look cheaper")
+    finally:
+        main.OPEN_OBJECTS.pop(snap.correlation_id, None)
+    assert estimate_bytes(snap) == before
+
+
+def test_E11d_the_estimate_is_deterministic_and_content_derived():
+    """`sys.getsizeof`, `len` and `id` only — `id` as a membership token, never
+    in the sum. Two engine runs over the SAME evidence must estimate identically
+    (different objects, different addresses), and a repeat call must not drift."""
+    main._WINDOW_INDEX_CACHE.clear()
+    a = run_window(wide_component(77), CAT, (), CFG)[0]
+    b = run_window(wide_component(77), CAT, (), CFG)[0]
+    assert a is not b
+    assert estimate_bytes(a) == estimate_bytes(b) == estimate_bytes(a)
+    # A structurally BIGGER object must cost more — the walk reads the graph.
+    big = run_window(wide_component(78) + wide_component(79), CAT, (), CFG)
+    assert max(estimate_bytes(s) for s in big) > 0
+
+
+def test_E11e_the_estimate_costs_less_than_a_persist():
+    """COST. The walk runs on the DECISION path, once per persisted version, and
+    only when a queue is actually active. Measured 0.24-0.38 ms/item on a
+    15-27 KiB item — ~13-14 us per KiB walked, the same per-byte cost as
+    `rank_memo`'s calibrated walk — against a persist path of ~7 ms/version.
+
+    The ceiling asserted here is deliberately loose (2 ms/item, best of three) —
+    this runs on shared CI hardware and the number that matters is the one in
+    the docstring. It is a TRIPWIRE for an estimator that becomes quadratic, not
+    a benchmark."""
+    snaps = calibration_snapshots(40, base=3_000)
+    for s in snaps[:5]:                     # warm the ownership set + type table
+        estimate_bytes(s)
+    best = float("inf")
+    for _ in range(3):
+        t0 = time.perf_counter()
+        for s in snaps:
+            estimate_bytes(s)
+        best = min(best, (time.perf_counter() - t0) / len(snaps))
+    assert best < 2e-3, f"{best * 1000:.3f} ms/item — the estimator went quadratic"
+
+
+def test_E11f_the_measured_bounds_are_the_defaults():
+    """The two knobs are MEASURED numbers (§6a): 2,000 items = 55.2 MiB
+    standalone, 64 MiB = ~2,200 items at the measured 29 KiB/item, so the two
+    bounds agree and either can hold the line. A silent revert to 5,000 / 512
+    MiB would put the queue back at 142 MiB worst case on a 1.25 GiB container.
+
+    Skipped (not failed) when the environment overrides them — an operator's
+    knob is not a regression."""
+    for knob in ("CORR_EVIDENCE_QUEUE_MAX", "CORR_EVIDENCE_QUEUE_BYTES_MAX"):
+        if os.environ.get(knob):
+            pytest.skip(f"{knob} is set in the environment")
+    src = main.__dict__
+    assert src["CORR_EVIDENCE_QUEUE_MAX"] == 2000
+    assert src["CORR_EVIDENCE_QUEUE_BYTES_MAX"] == 64 * 1024 * 1024
+    # The byte bound must be able to BIND: at the measured ~29 KiB/item it has
+    # to sit near the item bound, not three orders of magnitude above it.
+    assert (src["CORR_EVIDENCE_QUEUE_BYTES_MAX"] / 29_850
+            < 2 * src["CORR_EVIDENCE_QUEUE_MAX"]), (
+        "the byte bound is inert again — it cannot bind before the item bound")
+
+
+def test_E11g_the_bounds_and_the_estimator_mean_are_readable(_stack):
+    """§10. A bound nobody can scrape is a bound nobody will notice failing, and
+    `est_bytes_mean` is the ONLY live view of the estimator outside the bench —
+    the number that says whether the measured 29.9 KiB/item still holds on a
+    real estate."""
+    async def go():
+        _stack.setattr(main, "ch", _RecCH())
+        q = main._evidence_ensure_consumer()
+        assert q is not None
+        snap = run_window(mixed_window(2), CAT, (), CFG)[0]
+        q.hold()
+        for v in range(1, 5):
+            await q.put(EvidenceItem(
+                correlation_id=f"cid-mean-{v}", tenant_id=snap.tenant_id,
+                version=v, state="open", tok=f"tok:{v}", snap=snap,
+                priority_class=EVIDENCE_CLASS_DECISION,
+                window_start_ts=snap.window_start.timestamp(), est_bytes=2000))
+        stats = main.evidence_stats()
+        assert stats["est_bytes_mean"] == 2000.0, stats["est_bytes_mean"]
+        assert stats["max_items"] == main.CORR_EVIDENCE_QUEUE_MAX
+        assert stats["max_bytes"] == main.CORR_EVIDENCE_QUEUE_BYTES_MAX
+        text = main._metrics_text()
+        for series, value in (
+                ("corr_evidence_queue_max_items", stats["max_items"]),
+                ("corr_evidence_queue_bytes_max", stats["max_bytes"]),
+                ("corr_evidence_queue_est_bytes_mean", stats["est_bytes_mean"])):
+            assert f"# TYPE {series} " in text, f"{series} missing from /metrics"
+            assert f"\n{series} {value}\n" in text + "\n", (
+                f"{series} does not carry evidence_stats()['{series}']")
+        assert main.epoch_state()["evidence"]["est_bytes_mean"] == 2000.0
+        # …and the key exists with the plane OFF, so a dashboard never reads a
+        # missing key as a zero (the E9 rule).
+        await q.release()
+        await main._evidence_stop()
+        assert "est_bytes_mean" in main.evidence_stats()
     asyncio.run(go())

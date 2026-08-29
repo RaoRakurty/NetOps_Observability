@@ -42,12 +42,19 @@ ORDERING
     whole 4-tuple (one (cid, version) is persisted once).
 
 BOUNDS AND BACKPRESSURE (spec §4, owner memo §22 — lossless always)
-    Two bounds, both hard: `max_items` and `max_bytes` (an ESTIMATE of the
-    snapshot/slice bytes an item keeps reachable — see `EvidenceItem.est_bytes`).
-    A `put` into a full queue BLOCKS the Decision plane until the consumer has
-    made room. Nothing is ever dropped, sampled or summarised; the only thing
-    that degrades under pressure is latency, and it is counted
+    Two bounds, both hard: `max_items` and `max_bytes` (a calibrated STANDALONE
+    estimate of the snapshot/slice bytes an item keeps reachable — see
+    `estimate_bytes`). A `put` into a full queue BLOCKS the Decision plane until
+    the consumer has made room. Nothing is ever dropped, sampled or summarised;
+    the only thing that degrades under pressure is latency, and it is counted
     (`backpressure_total`) and measured (`oldest_age_s`, `lag_s`).
+
+    Both bounds are MEASURED, not chosen: a pinned 5,000-item queue was walked
+    at **142.3 MiB standalone / 29.9 KiB per item**, so the defaults
+    `main.CORR_EVIDENCE_QUEUE_MAX` = 2,000 (measured 55.2 MiB) and
+    `CORR_EVIDENCE_QUEUE_BYTES_MAX` = 64 MiB agree with each other at ~2,200
+    items and either can hold the line
+    (`docs/scale/P2_MEMFLAT_EVIDENCE_QUEUE_2026-08-29.md` §6a).
 
 THE COHORT HOLD IS GENERATIONAL — and that is a correction, not a detail
     Spec §1's rule is precise: a cohort's Decision rows land before the Evidence
@@ -90,12 +97,29 @@ import time
 from dataclasses import dataclass, field
 from typing import Any
 
+# The byte estimator's two reusable pieces, imported rather than re-derived so
+# the Evidence plane and the rank memo can never drift into two different
+# answers to "what does holding this graph cost?":
+#   * `_owned_ids(catalog_version)` — the ids of everything the CATALOG owns
+#     (template titles, owner strings, first_steps tuples, the shared
+#     `inapplicable` HypothesisScore objects), cached per catalog version and
+#     revalidated in O(1);
+#   * `estimate_result_bytes(obj, owned)` — the id-`seen`, ownership-aware deep
+#     walk itself, which is generic over any value graph and is used here on an
+#     `ObjectSnapshot` instead of a `RankingResult`.
+# Neither is modified by this module; `rank_memo` imports nothing from here, so
+# there is no cycle.
+from rank_memo import _owned_ids as _catalog_owned_ids
+from rank_memo import estimate_result_bytes as _deep_bytes
+
 __all__ = [
     "EVIDENCE_CLASS_DECISION",
     "EVIDENCE_CLASS_HEARTBEAT",
     "EVIDENCE_CLASS_TERMINAL",
     "EvidenceItem",
     "EvidenceQueue",
+    "estimate_bytes",
+    "loose_slice_signals",
 ]
 
 # Priority classes. Content-derived: the class is a property of what the version
@@ -104,15 +128,20 @@ EVIDENCE_CLASS_DECISION = 0     # v1, or material_hash moved
 EVIDENCE_CLASS_TERMINAL = 1     # closed / merged terminal version
 EVIDENCE_CLASS_HEARTBEAT = 2    # unchanged re-persist (material_hash held)
 
-# Rough per-element byte weights for the RSS bound. These are an ESTIMATE used
-# ONLY to bound the queue — never an accounting figure, never persisted. The
-# constants are the orders of magnitude the code already records elsewhere: an
-# archive row is "~1 KB" (see main._archive_slice's chunking note), and a node /
-# edge carries its signals, tokens and grounding context.
-_BYTES_PER_NODE = 2048
-_BYTES_PER_EDGE = 768
-_BYTES_PER_SLICE_SIGNAL = 1024
+# ── the byte estimator's two constants (everything else is MEASURED) ─────────
+#
+# `_BYTES_ITEM_OVERHEAD` — the item dataclass, its heap entry tuple and the
+# small strings it owns outright (correlation_id, tok, slice_hash). Measured at
+# 0.4-0.6 KiB; kept at 512 B.
+#
+# `_BYTES_PER_LOOSE_SLICE_SIGNAL` — one `Signal` the item is the ONLY holder of.
+# MEASURED (tracemalloc, 2,000 real fixture signals dropped): 1,006 B standalone.
+# Kept at 1,024 B, which is also the "~1 KB per archive row" figure
+# `main._archive_slice`'s chunking note already records.
 _BYTES_ITEM_OVERHEAD = 512
+_BYTES_PER_LOOSE_SLICE_SIGNAL = 1024
+
+_EMPTY_OWNED: frozenset[int] = frozenset()
 
 
 # One heap entry: (content key, monotonic tie-break, item). The tie-break exists
@@ -136,8 +165,9 @@ class EvidenceItem:
     at `_close_epoch`, before this item can drain). It is a list of references
     to `Signal` objects the snapshot's own nodes already hold, PLUS the "loose"
     signals (kind `*_clear`, `source=app_identity`) and matched identity signals
-    that live only in the window — those are the item's genuine RSS cost, and
-    they are what `est_bytes` bounds. `None` means "this version writes no
+    that live only in the window — only the LOOSE ones are an RSS cost the
+    snapshot has not already paid, and only they are charged (see
+    `loose_slice_signals`). `None` means "this version writes no
     archive slice" (a terminal persist with an empty window, or a slice whose
     membership is unchanged since the last archived version — the damping
     decision, made by the Decision plane in version order, see the module
@@ -156,6 +186,9 @@ class EvidenceItem:
     slice_sigs: list | None = None
     slice_hash: str = ""
     enqueued_mono: float = field(default_factory=time.monotonic)
+    # The queue's byte bound, in the queue's own currency: what this item keeps
+    # reachable if NOTHING ELSE holds it (`estimate_bytes`). 0 on an item built
+    # while no queue is active — nothing reads it then.
     est_bytes: int = 0
 
     @property
@@ -165,11 +198,103 @@ class EvidenceItem:
                 self.correlation_id, self.version)
 
 
-def estimate_bytes(n_nodes: int, n_edges: int, n_slice: int) -> int:
-    """Bound-only estimate of the bytes an item keeps reachable. See the module
-    constants: this exists to make `max_bytes` meaningful, not to be accurate."""
-    return (_BYTES_ITEM_OVERHEAD + n_nodes * _BYTES_PER_NODE
-            + n_edges * _BYTES_PER_EDGE + n_slice * _BYTES_PER_SLICE_SIGNAL)
+def loose_slice_signals(snap: Any, slice_sigs: list | None) -> int:
+    """How many of an archive slice's signals the item alone would hold.
+
+    `main._archive_slice` builds the slice as "every signal of every COMPONENT
+    node, PLUS the loose ones" (`*_clear`, `source=app_identity`, and the
+    identity signals this object matched). The first part is a SECOND REFERENCE
+    to signals `snap.nodes` already holds, so charging it is a pure double
+    count — measured at 100 % of the slice on the offline 600-device fixture
+    (`docs/scale/P2_MEMFLAT_EVIDENCE_QUEUE_2026-08-29.md` §5), where the mix
+    emits no clears and no app-identity signals at all.
+
+    That is a property of the FIXTURE, not of the code: on a live estate with
+    clears and app-identity enrichment the loose term is > 0, and it is the one
+    part of the slice the queue genuinely retains once `_prune_buffer` drops the
+    window. So it is counted rather than assumed away — by ARITHMETIC, O(nodes),
+    with no second walk:
+
+        n_loose = len(slice_sigs) - Σ len(node.signals)   (floored at 0)
+
+    The floor matters: a snapshot whose nodes were built from a DIFFERENT window
+    object than the slice (never true on the persist path, but cheap to survive)
+    would otherwise produce a negative charge."""
+    if not slice_sigs:
+        return 0
+    held = 0
+    for node in getattr(snap, "nodes", ()) or ():
+        held += len(node.signals)
+    return max(0, len(slice_sigs) - held)
+
+
+def estimate_bytes(snap: Any, slice_sigs: list | None = None) -> int:
+    """The bytes one queued item keeps reachable, STANDALONE — measured, not
+    guessed (see `docs/scale/P2_MEMFLAT_EVIDENCE_QUEUE_2026-08-29.md` §4/§6b).
+
+    THE MODEL, and why it is a walk rather than three constants. The predecessor
+    charged `2048 B/node + 768 B/edge + 1024 B/slice signal`. Measured against
+    the same items that estimate read **2.84x the true marginal and 25 % UNDER
+    the standalone worst case** — wrong in both directions at once, because it
+    modelled neither: the dominant cost of an item is the per-VERSION snapshot
+    payload (its ranking, hypotheses and verdict), which is near-constant at
+    ~29 KiB/item across 3.1-5.7 nodes and 7.3-11.5 edges, while the three
+    constants swung 14.5 -> 22.5 KiB/item with component size.
+
+    So the payload is now CHARGED ONCE PER ITEM by the same id-`seen`,
+    ownership-aware walk `rank_memo` was calibrated to at `a75b73f8`, plus the
+    loose-slice term above.
+
+    THE THREE RULES, and the one that is deliberately INVERTED w.r.t. the memo:
+
+    1. **id-`seen` walk** — an object reachable twice from one item (a signal
+       held by a node and by the slice, a grounding shared by two edges) is
+       charged once.
+    2. **Catalog ownership -> ZERO.** Everything reachable from the `Catalog`
+       and from `scoring._catalog_plan`'s outputs outlives every item that
+       points at it, so evicting an item frees none of it. MEASURED WORTH:
+       dropping this rule moves the estimate from 1.07x to 1.41x of the
+       tracemalloc standalone on the calibration fixture (1.10x -> 1.49x on a
+       second, wider one) — straight out of the band either way.
+    3. **`OPEN_OBJECTS` ownership -> NOT discounted, on purpose.** This is where
+       an Evidence item differs from a memo entry. Whether the item's snapshot
+       is ALSO held by a live open object is a RUNTIME CONDITION that stops
+       being true exactly when it matters: input stops, objects quiesce and
+       close, and the queue becomes the sole holder. Measured: 45 % of a pinned
+       5,000-item queue shared its snapshot with `OPEN_OBJECTS` at `drained`,
+       0 % once those objects closed — the same 5,000 items costing 37.7 MiB
+       marginal and 142.2 MiB standalone. A bound sized on the marginal would be
+       correct right up to the moment it had to hold. `est_bytes` is therefore a
+       STANDALONE figure and `max_bytes` a conservative bound.
+
+    CALIBRATION (tracemalloc, ">= 200" real snapshots, the procedure pinned by
+    `test_p2_evidence_async.py::test_E11a`): **1.03x-1.10x** of the memory the
+    process gives back when the items are dropped and nothing else holds them,
+    over three fixture shapes (14.9 / 20.9 / 22.9 KiB per item). The two mutants
+    that test executes land at **1.41x** (ownership off) and **1.42x** (slice
+    double count restored). Cross-checked against the SECOND instrument — the
+    bench's `gc.get_referents` walker, `--evidence parked --evidence-probe-order
+    ws-first` — at **1.15x** of its inclusive (standalone) reading.
+
+    COST: **0.24-0.38 ms/item**, i.e. ~13-14 us per KiB walked — the SAME
+    per-byte cost as `rank_memo`'s calibrated walk (0.24-0.30 ms on a ~20 KiB
+    entry), and split evenly across the graph (ranking 40 %, nodes 38 %, edges
+    9 %), so there is no hotspot to prune. It is paid on the Decision path only
+    when the queue is actually active (`main._persist_snapshot`), against a
+    persist path measured at ~7 ms/version.
+
+    Takes the SNAPSHOT, not counts: the walk needs the graph. `snap=None` (a
+    synthetic item in a test) costs the overhead alone."""
+    owned = _EMPTY_OWNED
+    ranking = getattr(snap, "ranking", None)
+    version = getattr(ranking, "catalog_version", None)
+    if type(version) is str and version:
+        # Fails OPEN: an unresolvable catalog gives an EMPTY ownership set, and
+        # the walk then charges everything — the conservative direction for a
+        # memory bound (rank_memo._owned_ids, same rule).
+        owned = _catalog_owned_ids(version)
+    return (_BYTES_ITEM_OVERHEAD + _deep_bytes(snap, owned)
+            + loose_slice_signals(snap, slice_sigs) * _BYTES_PER_LOOSE_SLICE_SIGNAL)
 
 
 class EvidenceQueue:
@@ -406,6 +531,13 @@ class EvidenceQueue:
             "depth_open": len(self._open),
             "inflight": self._inflight,
             "bytes": self.bytes,
+            # The LIVE calibration readout: the estimator's per-item mean, next
+            # to the measured 29.9 KiB/item standalone the defaults were sized
+            # against. A mean that drifts far from it on a real estate is the
+            # signal to re-run the ws-first probe, and it is the only way to see
+            # the estimator without a bench.
+            "est_bytes_mean": (round(self.bytes / self.qsize(), 1)
+                               if self.qsize() else 0.0),
             "oldest_age_seconds": round(self.oldest_age_s(), 3),
             "lag_seconds": round(self.lag_s, 3),
             "backpressure_total": self.backpressure_total,

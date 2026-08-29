@@ -2492,13 +2492,41 @@ RANK_MEMO: RankMemo | None = (
 # where and when it happens today.
 CORR_EVIDENCE_ASYNC = os.environ.get(
     "CORR_EVIDENCE_ASYNC", "1").lower() in ("1", "true", "yes")
-# Item bound (spec §4 default 5,000) and the RSS bound. The byte figure is an
-# ESTIMATE of the snapshot/slice bytes the queued items keep reachable
-# (evidence_plane.estimate_bytes) — it exists to stop a storm cohort from
-# parking 25k open objects' graphs in a queue, not to be an accounting number.
-CORR_EVIDENCE_QUEUE_MAX = max(1, int(os.environ.get("CORR_EVIDENCE_QUEUE_MAX", "5000")))
+# The two bounds, both MEASURED (docs/scale/P2_MEMFLAT_EVIDENCE_QUEUE_2026-08-29.md
+# §6a — the offline walk of a pinned queue at the same item shape the live 2.5K
+# leg produced, 21.9 vs 21.2 KiB/item, 6 % apart).
+#
+# WHY 2,000 ITEMS, down from the spec's 5,000. A pinned 5,000-item queue was
+# walked at 142.3 MiB STANDALONE (29.9 KiB/item) — 2.2x a 64 MiB budget on the
+# 1.25 GiB (mem_limit: 1280m) container, and half of ALL post-input owner growth
+# on the leg that failed `memflat` at x1.45. 2,000 items were DIRECTLY MEASURED
+# (not extrapolated) at 55.2 MiB standalone / 9.65 MiB marginal: 4.3 % of the
+# container worst case, ~0.8 % typical.
+#
+# WHY IT IS SIZED AGAINST THE **STANDALONE** NUMBER and not the 7.9 KiB/item
+# marginal. Whether a queued item's snapshot is ALSO held by a live OPEN_OBJECTS
+# entry is a runtime condition, and it goes to ZERO exactly when the bound has
+# to hold: input stops, the objects quiesce and close, the queue becomes their
+# only holder — which is precisely the window `memflat` measures. The same 5,000
+# items measured 37.7 MiB marginal and 142.2 MiB once those objects closed. A
+# bound denominated in the marginal would be correct right up to the moment it
+# mattered.
+#
+# WHY 64 MiB, down from 512 MiB. The old byte bound was INERT: 512 MiB at the
+# old estimator's 22.5 KiB/item is ~23,900 items, so it could never bind before
+# the item bound — confirmed live (5,000 items / ~101 MiB, the byte bound never
+# approached). At the measured ~29 KiB/item, 64 MiB binds at ~2,200 items: the
+# two bounds now agree by design and either can hold the line. `est_bytes` is a
+# calibrated STANDALONE figure (evidence_plane.estimate_bytes, 1.03-1.15x of two
+# independent references), so the number means what it says.
+#
+# NAMED TRADE-OFF: a tighter bound converts memory pressure into Decision-plane
+# latency through blocking backpressure. With a healthy consumer the queue never
+# sits at the bound — it is a backstop, not a working depth. Watch
+# corr_evidence_queue_backpressure_total and corr_evidence_lag_seconds.
+CORR_EVIDENCE_QUEUE_MAX = max(1, int(os.environ.get("CORR_EVIDENCE_QUEUE_MAX", "2000")))
 CORR_EVIDENCE_QUEUE_BYTES_MAX = max(1, int(
-    os.environ.get("CORR_EVIDENCE_QUEUE_BYTES_MAX", str(512 * 1024 * 1024))))
+    os.environ.get("CORR_EVIDENCE_QUEUE_BYTES_MAX", str(64 * 1024 * 1024))))
 # Shutdown: how long the queue may keep draining after the producers stop.
 # Whatever is still queued when it expires is LOGGED PER ITEM and counted as
 # corr_evidence_items_total{outcome="lost"} — an Evidence row that never landed
@@ -3919,6 +3947,14 @@ async def _persist_snapshot(snap: ObjectSnapshot, version: int, state: str,
             # A FAILED evidence write reverts it (see _write_evidence), so the
             # next version re-writes the slice exactly as it does today.
             _ARCHIVE_SLICE_HASH[snap.correlation_id] = slice_hash
+    # The queue is resolved BEFORE the item is built because `est_bytes` is the
+    # queue's currency and nothing else reads it: the estimate is a walk of the
+    # snapshot's value graph (~0.24-0.38 ms/item, against a persist path
+    # measured at ~7 ms/version), and the inline path — CORR_EVIDENCE_ASYNC=0,
+    # a dead consumer, a foreign loop — must not pay for a bound it does not
+    # have. It is charged to `persist.decision`, where it happens, exactly as
+    # the flat-constant estimate was.
+    queue = _active_evidence_queue()
     item = EvidenceItem(
         correlation_id=snap.correlation_id, tenant_id=snap.tenant_id,
         version=version, state=state, tok=tok, snap=snap,
@@ -3926,12 +3962,10 @@ async def _persist_snapshot(snap: ObjectSnapshot, version: int, state: str,
         window_start_ts=snap.window_start.timestamp(),
         slice_sigs=list(slice_sigs) if slice_sigs else None,
         slice_hash=slice_hash,
-        est_bytes=estimate_bytes(len(snap.nodes), len(snap.edges),
-                                 len(slice_sigs) if slice_sigs else 0),
+        est_bytes=(estimate_bytes(snap, slice_sigs) if queue is not None else 0),
     )
     if CORR_PROFILE_STAGES and _t_decision:
         stage_record("persist.decision", time.perf_counter() - _t_decision)
-    queue = _active_evidence_queue()
     if queue is not None:
         # Bounded, blocking, never dropping (owner memo §22). A full queue slows
         # the Decision plane down; it never loses an Evidence row.
@@ -4271,7 +4305,8 @@ def evidence_stats() -> dict[str, object]:
     queue = _EVIDENCE_QUEUE
     base: dict[str, object] = {
         "enabled": CORR_EVIDENCE_ASYNC,
-        "depth": 0, "bytes": 0, "oldest_age_seconds": 0.0, "lag_seconds": 0.0,
+        "depth": 0, "bytes": 0, "est_bytes_mean": 0.0,
+        "oldest_age_seconds": 0.0, "lag_seconds": 0.0,
         "backpressure_total": 0,
         "max_items": CORR_EVIDENCE_QUEUE_MAX,
         "max_bytes": CORR_EVIDENCE_QUEUE_BYTES_MAX,
@@ -8640,6 +8675,21 @@ def _metrics_text() -> str:
         "# HELP corr_evidence_queue_bytes Estimated snapshot/slice bytes the queued items keep reachable.",
         "# TYPE corr_evidence_queue_bytes gauge",
         f"corr_evidence_queue_bytes {_ev['bytes']}",
+        # The two BOUNDS, exported so a scrape can compute headroom without
+        # knowing the defaults, and the estimator's live per-item mean beside
+        # them. Both bounds are measured numbers (see CORR_EVIDENCE_QUEUE_MAX):
+        # `est_bytes_mean` far from the ~29.9 KiB/item the sizing was done
+        # against is the readout that says re-measure — it is the only view of
+        # the estimator that exists outside the bench.
+        "# HELP corr_evidence_queue_max_items Hard bound on queued Evidence items.",
+        "# TYPE corr_evidence_queue_max_items gauge",
+        f"corr_evidence_queue_max_items {_ev['max_items']}",
+        "# HELP corr_evidence_queue_bytes_max Hard bound on the estimated bytes queued Evidence items keep reachable.",
+        "# TYPE corr_evidence_queue_bytes_max gauge",
+        f"corr_evidence_queue_bytes_max {_ev['max_bytes']}",
+        "# HELP corr_evidence_queue_est_bytes_mean Estimator's per-item mean over the queued items (0 when empty).",
+        "# TYPE corr_evidence_queue_est_bytes_mean gauge",
+        f"corr_evidence_queue_est_bytes_mean {_ev['est_bytes_mean']}",
         "# HELP corr_evidence_queue_oldest_age_seconds Age of the oldest queued Evidence item.",
         "# TYPE corr_evidence_queue_oldest_age_seconds gauge",
         f"corr_evidence_queue_oldest_age_seconds {_ev['oldest_age_seconds']}",
