@@ -19,7 +19,14 @@ defects — without asserting a single absolute-throughput number:
                                    unexplained delta FAILS the run).
 
 Phases (each emits PASS/FAIL + evidence into the run dir):
-  preflight   stack up + healthy (watchdog-style container checks, API login,
+  preflight   REFUSES the run outright if another harness process holds the
+              run lock (live pid), or if ANY `mlx-` device of ANY run id is
+              still in the device store — a leftover fleet sits on the same
+              198.18/15 addresses, so the API's dedupe absorbs this run's
+              creates into it and every number becomes unattributable
+              (2026-08-29; override MLX_ALLOW_FOREIGN_RESIDUE=1, logged
+              loudly). Then: stack up + healthy (watchdog-style container
+              checks, API login,
               ACTIVE bus consumers — a broker that authenticates but denies
               its consumers, as after the 2026-08-16 wiped-ACL incident, fails
               HERE, not 40 minutes in) and baseline capture: per-container
@@ -29,7 +36,13 @@ Phases (each emits PASS/FAIL + evidence into the run dir):
   onboard     create N devices via the API (names `mlx-<runid>-NNNNN`,
               addresses in 198.18/15 — RFC 2544 benchmark space, unroutable
               on purpose). Creation rate over the LAST window must be
-              >= linearity-floor x the FIRST window's rate.
+              >= linearity-floor x the FIRST window's rate. Records an
+              `onboard_stop_reason`: `absorbed` (dedupe folded creates into
+              other devices) or `shortfall` (fewer own devices than requested)
+              SKIP the workload and go straight to cleanup — the fleet the
+              burst would be judged on is not the one that was planned;
+              `none` carries on, so a pure LINEARITY-ratio FAIL still runs its
+              burst and stands as an independent verdict.
   burst       gate on registry propagation (created devices must reach the
               correlation engine's identity registry, else every injected
               event is tenant-refused into the DLQ), prove the pipeline with
@@ -55,8 +68,11 @@ Phases (each emits PASS/FAIL + evidence into the run dir):
               its own plan-sized cap. The cold-baseline->warm step is recorded
               as evidence only (a 2-min burst cannot separate first-touch cache
               materialization from a slow leak — that is the lab run + soak).
-  cleanup     ALWAYS runs (also on failure/^C): delete every created device
-              and VERIFY zero remain; purge run-tagged telemetry from
+  cleanup     ALWAYS runs (also on failure/^C): delete every created device —
+              INCLUDING the rows dedupe absorbed, which no list can see — plus
+              the devices that absorbed them, then VERIFY the whole `mlx-`
+              namespace is empty (a per-prefix "0 remain" is exactly what hid
+              the 2026-08-29 residue); purge run-tagged telemetry from
               ClickHouse (corr_signals) and OpenSearch (syslog lane) so
               `clean-slate.sh --verify` still passes after a run. The stack
               is left as found.
@@ -96,9 +112,10 @@ GH runners are 4-vCPU/16 GiB shared VMs whose absolute numbers are
 meaningless and whose 6-hour cap the L1-scale run can approach — the CI leg
 guards the invariants at small scale, the lab leg is the GA evidence.
 
-Exit codes: 0 = all phases PASS (and cleanup verified zero device residue);
-1 = any phase FAILED, or device residue was left behind (report still written);
-2 = aborted before touching the stack (usage / preflight refusal).
+Exit codes: 0 = all phases PASS (and cleanup verified zero device residue in
+the whole `mlx-` namespace); 1 = any phase FAILED, or device residue was left
+behind (report still written); 2 = aborted before touching the stack (usage /
+preflight refusal / another run holds the lock).
 
 Residue purge: `--cleanup-only [PREFIX]` deletes every `mlx-`-prefixed device
 left by an interrupted run, verifies to zero and purges its telemetry. It runs
@@ -178,6 +195,13 @@ def die(msg: str, code: int = 2) -> None:
 
 def utcnow() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def env_flag(name: str) -> bool:
+    """An opt-in env switch. Read at CALL time, never cached at import, so a
+    deliberate override is visible to the phase that honours it (and testable
+    without reimporting the module)."""
+    return os.environ.get(name, "").strip().lower() in ("1", "true", "yes", "on")
 
 
 def run(cmd: list[str], timeout: int, input_text: str | None = None) -> tuple[int, str, str]:
@@ -962,6 +986,16 @@ DEVICE_PREFIX_ROOT = "mlx-"
 # (the 2026-08-28 defect: 900 s of bounded waits with no output at all, so the
 # operator could not tell a working cleanup from a hung one).
 PURGE_PROGRESS_EVERY = int(os.environ.get("MLX_PURGE_PROGRESS_EVERY", "250"))
+# CROSS-RUN COLLISION GUARDS (2026-08-29 — see the section header below).
+# The single-writer lock over the harness's device namespace: one file holding
+# the owning pid + run id. A run refuses to start while a LIVE pid holds it;
+# a stale lock (dead pid) is reclaimed loudly.
+RUN_LOCK_PATH = os.environ.get("MLX_RUN_LOCK", "/var/tmp/scale-runs/.lock")
+# Deliberate-override switch for the foreign-residue refusal. Loud on use: it
+# is the operator saying "those mlx- devices are not mine and I accept them".
+ALLOW_FOREIGN_RESIDUE_ENV = "MLX_ALLOW_FOREIGN_RESIDUE"
+# How many distinct run ids a residue message names before it says "+N more".
+RESIDUE_RUN_IDS_SHOWN = int(os.environ.get("MLX_RESIDUE_RUN_IDS_SHOWN", "5"))
 
 # OpenSearch residue purge (2026-08-28, first live `--cleanup-only mlx-`).
 # A SYNCHRONOUS `_delete_by_query?refresh=true` over 10.3 M syslog docs cannot
@@ -1162,6 +1196,185 @@ WORKLOAD_PROFILES: dict = {
 # ---------------------------------------------------------------------------
 
 
+# ---------------------------------------------------------------------------
+# CROSS-RUN COLLISION (2026-08-29; manual run mlx-08290322msp1 vs cron run
+# mlx-08290317j7hy, both on the same 198.18/15 addresses)
+#
+# A cron ladder (1,000 devices) and a manual 2,500-device run overlapped. The
+# API's cross-source dedupe absorbed 1,000 of the manual run's creates into the
+# cron run's devices — POST /api/devices answers 200 with the CANONICAL id
+# (src/backend/main.go handleDevices) — but the absorbed record is STILL
+# PERSISTED under the id the caller asked for: `discovery.Upsert` stores by id
+# and only the READ projection (`Devices()` -> dedupeWithOwners) collapses the
+# pair. So the manual run's 1,000 shadow rows were invisible in /api/devices
+# for as long as the cron rows existed. BOTH runs then verified "0 remain"
+# truthfully against their OWN prefix, and the moment the cron run's devices
+# were deleted the manual run's shadow rows surfaced — with no process left
+# that knew about them. The next run's onboard collided with exactly those
+# 1,000 devices, and its preflight had passed with them standing.
+#
+# Three guards, all in this file:
+#   1. preflight REFUSES to start while any `mlx-` device of ANY run id exists,
+#      naming the count, the top run ids and the exact --cleanup-only command
+#      (override: MLX_ALLOW_FOREIGN_RESIDUE=1, logged loudly).
+#   2. A RUN LOCK (pid + run id) makes two concurrent harness processes
+#      impossible: a live holder refuses the start, a dead one is reclaimed.
+#      That kills the cron-collision class at the source.
+#   3. cleanup purges its own prefix SEEDED WITH THE ABSORBED SHADOW IDS (the
+#      rows a prefix LIST cannot see), then the absorbed canonical ids, then
+#      sweeps the whole `mlx-` namespace — safe precisely because the lock
+#      proves no other run owns anything in it — and verifies the NAMESPACE to
+#      zero. "0 remain" may never be printed while any mlx- device stands.
+# ---------------------------------------------------------------------------
+
+
+class RunLock:
+    """Single-writer lock over the harness's device namespace.
+
+    Two harness processes against one stack corrupt each other's evidence and
+    each other's teardown (2026-08-29). The lock is a file holding this
+    process's pid and run id; ownership is decided by PID LIVENESS, not by the
+    file's existence, so a killed run cannot block the lab forever.
+    """
+
+    def __init__(self, path: str = "", runid: str = "") -> None:
+        self.path = path or RUN_LOCK_PATH
+        self.runid = runid
+        self.held = False
+        self.holder: dict = {}
+
+    @staticmethod
+    def pid_alive(pid: int) -> bool:
+        """True unless the pid is provably gone. An UNKNOWN answer reads as
+        ALIVE: refusing a run costs minutes, stealing a live run's lock costs
+        the run (16.1 — the error is reported, never assumed harmless)."""
+        if pid <= 0:
+            return False
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return False
+        except PermissionError:
+            return True                  # live process owned by another user
+        except OSError as exc:           # pragma: no cover - platform
+            warn(f"run lock: could not probe pid {pid} ({exc}) — treating it "
+                 f"as ALIVE and refusing rather than stealing the lock")
+            return True
+        return True
+
+    def _read(self) -> dict:
+        try:
+            with open(self.path, encoding="utf-8") as f:
+                data = json.load(f)
+        except FileNotFoundError:
+            return {}
+        except (OSError, ValueError) as exc:
+            # Never silent: a corrupt lock is a real condition, and it names no
+            # owner we can defer to, so it is reclaimable — loudly.
+            warn(f"run lock: {self.path} is unreadable ({exc}) — it names no "
+                 f"live owner, so it will be treated as stale")
+            return {"unreadable": str(exc)}
+        return data if isinstance(data, dict) else {"unreadable": "not an object"}
+
+    @staticmethod
+    def _holder_pid(holder: dict) -> int:
+        try:
+            return int(holder.get("pid", 0))
+        except (TypeError, ValueError):
+            return 0
+
+    def _stamp(self, fd: int) -> None:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump({"pid": os.getpid(), "runid": self.runid,
+                       "started": utcnow(),
+                       "argv": " ".join(sys.argv[1:])[:400]}, f)
+            f.write("\n")
+
+    def acquire(self) -> tuple[bool, str]:
+        """(held, message). The message is ALWAYS printable — a refusal names
+        the holder and what to do about it."""
+        parent = os.path.dirname(self.path)
+        if parent:
+            try:
+                os.makedirs(parent, exist_ok=True)
+            except OSError as exc:
+                return False, (f"run lock: cannot create {parent} ({exc}) — "
+                               f"refusing to run unlocked; set MLX_RUN_LOCK to "
+                               f"a writable path")
+        for attempt in (1, 2):
+            try:
+                fd = os.open(self.path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
+            except FileExistsError:
+                holder = self._read()
+                self.holder = holder
+                pid = self._holder_pid(holder)
+                who = (f"pid {pid or 'unknown'} run "
+                       f"{holder.get('runid') or 'unknown'} started "
+                       f"{holder.get('started') or 'unknown'}")
+                if pid and self.pid_alive(pid):
+                    return False, (
+                        f"another scale-miniladder process holds {self.path} "
+                        f"({who}). Two runs on one stack absorb each other's "
+                        f"devices into one another and blind both teardowns "
+                        f"(2026-08-29 cron collision) — wait for it to finish, "
+                        f"or kill pid {pid} and re-run.")
+                if attempt == 1:
+                    warn(f"run lock: STALE lock at {self.path} ({who} is not "
+                         f"running) — reclaiming it")
+                    try:
+                        os.unlink(self.path)
+                    except FileNotFoundError:
+                        # Benign race, still SAID: another process reclaimed
+                        # the same stale lock a moment before we did.
+                        log(f"run lock: {self.path} was already reclaimed by "
+                            f"another process — retrying the create")
+                    except OSError as exc:
+                        return False, (f"run lock: stale lock {self.path} could "
+                                       f"not be removed ({exc})")
+                    continue
+                return False, (f"run lock: {self.path} was taken by another "
+                               f"process while a stale lock was being reclaimed "
+                               f"— refusing to race it")
+            except OSError as exc:
+                return False, f"run lock: cannot create {self.path} ({exc})"
+            else:
+                try:
+                    self._stamp(fd)
+                except OSError as exc:
+                    try:
+                        os.unlink(self.path)
+                    except OSError as rm_exc:
+                        warn(f"run lock: could not remove the half-written lock "
+                             f"{self.path} ({rm_exc})")
+                    return False, (f"run lock: could not stamp {self.path} "
+                                   f"({exc})")
+                self.held = True
+                return True, (f"run lock: acquired {self.path} "
+                              f"(pid {os.getpid()}, run {self.runid or 'n/a'})")
+        return False, f"run lock: could not acquire {self.path}"   # pragma: no cover
+
+    def release(self) -> None:
+        """Release on EVERY exit path (including interrupt/abort). A failure to
+        release is reported, not swallowed — the next run reclaims it as stale
+        because this pid will be gone."""
+        if not self.held:
+            return
+        self.held = False
+        holder = self._read()
+        pid = self._holder_pid(holder)
+        if pid and pid != os.getpid():
+            warn(f"run lock: {self.path} now names pid {pid}, not this process "
+                 f"({os.getpid()}) — leaving it alone")
+            return
+        try:
+            os.unlink(self.path)
+        except FileNotFoundError:
+            warn(f"run lock: {self.path} was already gone at release")
+        except OSError as exc:
+            warn(f"run lock: could not release {self.path} ({exc}) — the next "
+                 f"run will reclaim it as stale")
+
+
 class CleanupAborted(Exception):
     """The operator insisted (Nth signal) while cleanup was running.
 
@@ -1277,6 +1490,46 @@ def devices_with_prefix(stack: Stack, prefix: str,
             return list(seen), (f"device list did not terminate after "
                                 f"{max_pages} pages ({offset} rows read) — "
                                 f"paging contract broken; residue unknown")
+
+
+def run_id_of(device_id: str) -> str:
+    """The run id embedded in an `mlx-<runid>-NNNNN` device id ("" if the id is
+    not in the harness namespace). Residue is only actionable when the operator
+    can see WHICH run left it."""
+    if not device_id.startswith(DEVICE_PREFIX_ROOT):
+        return ""
+    return device_id[len(DEVICE_PREFIX_ROOT):].split("-", 1)[0]
+
+
+def residue_by_run(ids: typing.Iterable[str]) -> list[tuple[str, int]]:
+    """[(run_id, count)] worst-first — the shape a refusal message needs."""
+    counts: dict[str, int] = {}
+    for did in ids:
+        rid = run_id_of(did) or "unknown"
+        counts[rid] = counts.get(rid, 0) + 1
+    return sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))
+
+
+def residue_summary(ids: typing.Iterable[str],
+                    top: int = RESIDUE_RUN_IDS_SHOWN) -> str:
+    """"1000 device(s) from 1 run id(s): 08290317j7hy=1000"."""
+    ids = list(ids)
+    by_run = residue_by_run(ids)
+    shown = ", ".join(f"{rid}={n}" for rid, n in by_run[:top])
+    more = (f" (+{len(by_run) - top} more run id(s))"
+            if len(by_run) > top else "")
+    return (f"{len(ids)} device(s) from {len(by_run)} run id(s): "
+            f"{shown}{more}")
+
+
+def foreign_residue(stack: Stack, own_prefix: str) -> tuple[list[str], str]:
+    """Every `mlx-` device that is NOT this run's, plus a list error.
+
+    An error means the answer is INCOMPLETE and must never be read as "the
+    namespace is clean" (same F-69 rule the prefix pager follows).
+    """
+    ids, err = devices_with_prefix(stack, DEVICE_PREFIX_ROOT)
+    return sorted(d for d in ids if not d.startswith(own_prefix)), err
 
 
 def delete_devices(stack: Stack, ids: list[str], deadline: float,
@@ -1551,9 +1804,27 @@ class Harness:
         # started from a closing terminal (SIGHUP) or a `kill` (SIGTERM) still
         # unwinds into cleanup instead of leaving 2,500 devices standing.
         self.interrupts = InterruptGuard()
-        # Devices still matching this run's prefix after cleanup. -1 = never
-        # verified (cleanup did not finish) — reported as UNKNOWN, never as 0.
+        # Devices left in the mlx- NAMESPACE after cleanup (this run's and any
+        # other run id's — a foreign row is the next run's onboard collision
+        # just the same). -1 = never verified (cleanup did not finish) —
+        # reported as UNKNOWN, never as 0.
         self.residue_devices = -1
+        # Cross-run collision guards (2026-08-29). Set by main() once the run
+        # lock is actually held: only an exclusive process may sweep the whole
+        # namespace, because a device it does not recognize could otherwise
+        # belong to a run that is still standing.
+        self.owns_run_lock = False
+        # preflight passed -> a workload ran. A run REFUSED at preflight must
+        # not delete the residue it refused over: the operator is being sent to
+        # `--cleanup-only mlx-` and needs the evidence still there.
+        self.preflight_ok = False
+        # MLX_ALLOW_FOREIGN_RESIDUE=1 was honoured at preflight: foreign rows
+        # are deliberate, so cleanup neither sweeps nor charges them to us.
+        self.foreign_residue_allowed = False
+        # Why (if at all) the workload must not run after onboarding:
+        # "absorbed" | "shortfall" | "none". Set by onboard(); only a
+        # non-"none" reason skips burst — a linearity-ratio FAIL does not.
+        self.onboard_stop_reason = "none"
 
     # -- plumbing -----------------------------------------------------------
     def phase(self, name: str, status: str, evidence: dict, notes: str = "") -> bool:
@@ -1602,6 +1873,46 @@ class Harness:
             ev["api_login"] = "ok"
         except (RuntimeError, urllib.error.URLError, OSError) as exc:
             problems.append(f"API login failed: {exc}")
+
+        # FOREIGN RESIDUE GATE (2026-08-29). Any `mlx-` device of ANY run id is
+        # a refusal, not a warning: this harness onboards onto FIXED 198.18/15
+        # addresses, so a leftover fleet makes the API's cross-source dedupe
+        # absorb our creates into it (POST answers 200 + a canonical id). The
+        # absorbed rows still persist under OUR ids but are invisible to a
+        # prefix LIST until the absorber is deleted — which is how three runs in
+        # a row inherited the same 1,000 devices while every teardown truthfully
+        # reported "0 remain" for its own prefix. The old preflight passed with
+        # 1,000 mlx- devices standing. It refuses now, first — before the
+        # bounded consumer wait, so the refusal is fast.
+        if ev.get("api_login") == "ok":
+            left, list_err = foreign_residue(self.stack, self.prefix)
+            ev["namespace_residue_devices"] = len(left)
+            ev["namespace_residue_by_run"] = residue_by_run(left)[:RESIDUE_RUN_IDS_SHOWN]
+            ev["namespace_residue_sample"] = left[:10]
+            if list_err:
+                problems.append(
+                    f"the {DEVICE_PREFIX_ROOT} namespace could not be listed "
+                    f"({list_err}) — residue is UNKNOWN, and an unknown "
+                    f"namespace is not a clean one")
+            elif left and env_flag(ALLOW_FOREIGN_RESIDUE_ENV):
+                self.foreign_residue_allowed = True
+                ev["foreign_residue_allowed"] = True
+                warn(f"{ALLOW_FOREIGN_RESIDUE_ENV}=1 — PROCEEDING with "
+                     f"{residue_summary(left)} already in the "
+                     f"{DEVICE_PREFIX_ROOT} namespace. This run's creates may be "
+                     f"ABSORBED by them (200 + canonical id), its per-device "
+                     f"accounting is then unattributable, and cleanup will NOT "
+                     f"sweep them. This run is not qualification evidence.")
+            elif left:
+                problems.append(
+                    f"{len(left)} {DEVICE_PREFIX_ROOT} device(s) from a previous "
+                    f"run are still in the device store ({residue_summary(left)}) "
+                    f"— this run would onboard onto the SAME 198.18/15 addresses "
+                    f"and be absorbed into them, so its numbers would be "
+                    f"unattributable. Purge them first: python3 "
+                    f"scripts/scale-miniladder.py --cleanup-only "
+                    f"{DEVICE_PREFIX_ROOT}   (deliberate exception: "
+                    f"{ALLOW_FOREIGN_RESIDUE_ENV}=1)")
 
         # ACTIVE bus consumers — offsets alone lie (a dead consumer keeps its
         # committed offsets forever). Both the RCA engine and the ingest
@@ -1726,6 +2037,7 @@ class Harness:
         ev["baseline"] = self.baseline
 
         status = "PASS" if not problems else "FAIL"
+        self.preflight_ok = status == "PASS"
         return self.phase("preflight", status, ev,
                           "; ".join(problems) if problems else
                           f"{len(states)} services checked, consumers live, baselines captured")
@@ -1843,21 +2155,61 @@ class Harness:
                     break
         total_wall = time.monotonic() - t0
 
+        # The CANONICAL ids are teardown state, not just evidence: they are the
+        # devices that absorbed ours, and each one HIDES a shadow row persisted
+        # under the id we asked for (discovery.Upsert stores by id; only the
+        # read projection collapses the pair). Cleanup deletes both.
+        canonical_ids = sorted({c for c in self.absorbed.values() if c})
+        # STOP REASON (owner decision, 2026-08-29). An onboard FAIL is not one
+        # thing, and the two kinds must not be collapsed:
+        #
+        #   absorbed  — dedupe folded creates into somebody else's devices, so
+        #               the events this run injects are attributed elsewhere;
+        #   shortfall — fewer own devices than requested (create failures), so
+        #               the fleet the burst is judged against is not the fleet
+        #               that was planned;
+        #   none      — the fleet is WHOLE and attributable. A pure
+        #               linearity-ratio FAIL lands here: the O(N^2) verdict is
+        #               about creation SPEED, and the burst it carries is still
+        #               valid correlation evidence (the P1 verdict leg was
+        #               exactly that case), so the run continues and the phase
+        #               verdicts stay independent, as they always did.
+        #
+        # Only a non-"none" reason skips burst/drain/completion/accounting.
+        if self.absorbed:
+            self.onboard_stop_reason = "absorbed"
+        elif len(self.created_ids) < n:
+            self.onboard_stop_reason = "shortfall"
+        else:
+            self.onboard_stop_reason = "none"
         ev: dict = {"devices_requested": n, "devices_created": len(self.created_ids),
+                    "onboard_stop_reason": self.onboard_stop_reason,
                     "devices_absorbed_by_dedupe": len(self.absorbed),
                     "absorbed_mappings": dict(list(self.absorbed.items())[:20]),
+                    "absorbed_canonical_ids": canonical_ids[:20],
+                    "absorbed_canonical_count": len(canonical_ids),
+                    "absorbed_canonical_by_run":
+                        residue_by_run(canonical_ids)[:RESIDUE_RUN_IDS_SHOWN],
                     "window": k, "total_wall_s": round(total_wall, 2),
                     "failures": failures[:10]}
         if self.absorbed:
             return self.phase(
                 "onboard", "FAIL", ev,
                 f"{len(self.absorbed)} of {n} requested devices were ABSORBED by "
-                f"dedupe into an existing device (stale residue on the same "
-                f"address?). Their telemetry would be unattributable, so this "
-                f"run cannot prove 1000/1000 — clear the residue and re-run")
+                f"dedupe into {len(canonical_ids)} existing device(s) "
+                f"({residue_summary(canonical_ids)}) — stale residue on the same "
+                f"198.18/15 addresses. Their telemetry would be unattributable, "
+                f"so this run cannot prove {n}/{n}: stop={self.onboard_stop_reason} "
+                f"— the burst is SKIPPED and the run goes straight to cleanup. "
+                f"Clear the residue (--cleanup-only {DEVICE_PREFIX_ROOT}) and "
+                f"re-run")
         if failures:
-            return self.phase("onboard", "FAIL", ev,
-                              f"{len(failures)}+ create failures (first: {failures[0]})")
+            return self.phase(
+                "onboard", "FAIL", ev,
+                f"{len(failures)}+ create failures — only "
+                f"{len(self.created_ids)} of {n} devices exist "
+                f"(stop={self.onboard_stop_reason}): the burst is SKIPPED and "
+                f"the run goes straight to cleanup (first: {failures[0]})")
 
         first_rate = k / max(sum(durations[:k]), 1e-9)
         last_rate = k / max(sum(durations[-k:]), 1e-9)
@@ -1871,7 +2223,11 @@ class Harness:
             "onboard", "PASS" if ok else "FAIL", ev,
             f"create rate first {first_rate:.1f}/s -> last {last_rate:.1f}/s "
             f"(ratio {ratio:.2f}, floor {self.args.linearity_floor}) — "
-            + ("linear enough" if ok else "SUPER-LINEAR SLOWDOWN (O(N^2) class)"))
+            + ("linear enough" if ok else
+               f"SUPER-LINEAR SLOWDOWN (O(N^2) class) — all {n} devices exist "
+               f"and are attributable, so the workload still runs and this "
+               f"verdict stands on its own")
+            + f" [stop={self.onboard_stop_reason}]")
 
     # -- phase 3: burst ------------------------------------------------------
     #
@@ -3077,15 +3433,24 @@ class Harness:
         # process happens to remember are only a seed, because an interrupt
         # mid-onboard (or a create whose response was lost) leaves devices the
         # run never recorded. Budget is explicit and scales with fleet size.
+        #
+        # The SEED matters (2026-08-29): a create the API absorbed by dedupe is
+        # still PERSISTED under the id we asked for, but the read projection
+        # hides it behind the device that absorbed it — so a prefix LIST cannot
+        # see it and a list-driven purge cannot delete it. Those ids are exactly
+        # `self.absorbed`'s keys; seeding them makes the DELETE happen anyway
+        # (delete_devices treats 404 as gone, so an id that was never persisted
+        # costs one bounded call).
+        shadow_ids = sorted(self.absorbed)
+        seed = list(dict.fromkeys(list(self.created_ids) + shadow_ids))
         log(f"cleanup: purging devices under {self.prefix} "
-            f"({len(self.created_ids)} created this run; budget "
+            f"({len(self.created_ids)} created this run, {len(shadow_ids)} "
+            f"absorbed shadow row(s) invisible to a list; budget "
             f"{device_budget:.0f}s)")
-        purge = purge_devices(self.stack, self.prefix, device_budget,
-                              self.created_ids)
+        purge = purge_devices(self.stack, self.prefix, device_budget, seed)
         ev["device_purge"] = purge
         ev["devices_deleted"] = purge["deleted"]
-        ev["devices_remaining"] = purge["remaining"]
-        self.residue_devices = purge["remaining"]   # -1 = could not verify
+        ev["absorbed_shadow_ids_seeded"] = len(shadow_ids)
         if not purge["verified_zero"]:
             problems.append(
                 f"device purge NOT verified to zero: {purge['remaining']} "
@@ -3094,6 +3459,49 @@ class Harness:
                 f"(first: {purge['first_delete_error'] or purge['list_error'] or 'n/a'})"
                 f" — run: python3 scripts/scale-miniladder.py --cleanup-only "
                 f"{self.prefix}")
+
+        # 7b-i. The devices that ABSORBED this run's creates. They are the other
+        # half of the same residue: each one hides a shadow row of ours, and
+        # they are themselves a previous run's leftovers. Deleted ONLY inside
+        # the harness namespace — an absorber outside `mlx-` is somebody's real
+        # device and this harness never deletes one (blast-radius guard, 16.3).
+        if self.absorbed:
+            canonical = sorted({c for c in self.absorbed.values() if c})
+            mine = [c for c in canonical if c.startswith(DEVICE_PREFIX_ROOT)]
+            outside = [c for c in canonical if not c.startswith(DEVICE_PREFIX_ROOT)]
+            ev["absorbed_canonical_count"] = len(canonical)
+            ev["absorbed_canonical_ids"] = canonical[:50]
+            if outside:
+                ev["absorbed_canonical_outside_namespace"] = outside[:20]
+                warn(f"cleanup: {len(outside)} device(s) that absorbed this "
+                     f"run's creates are OUTSIDE the {DEVICE_PREFIX_ROOT} "
+                     f"namespace (first: {outside[0]}) — NOT deleting them; "
+                     f"they are not this harness's devices. Our shadow rows "
+                     f"behind them stay hidden: purge them by id if this "
+                     f"recurs.")
+            if mine:
+                log(f"cleanup: deleting {len(mine)} device(s) that absorbed "
+                    f"this run's creates (previous runs' residue)")
+                dele, dfail, dbudget = delete_devices(
+                    self.stack, mine, time.monotonic() + device_budget)
+                ev["absorbed_canonical_deleted"] = dele
+                ev["absorbed_canonical_delete_failed"] = len(dfail)
+                if dfail:
+                    problems.append(
+                        f"{len(dfail)} absorbed-canonical device delete(s) "
+                        f"FAILED (first: {dfail[0]})")
+                if dbudget:
+                    problems.append(
+                        "absorbed-canonical deletes ran out of their budget — "
+                        "residue is NOT purged")
+
+        # 7b-ii. NAMESPACE verify (and sweep). This is what makes "0 remain"
+        # mean the stack is actually clean rather than "clean under MY prefix".
+        ns_ev, ns_problems, ns_left = self.namespace_sweep(device_budget)
+        ev["namespace"] = ns_ev
+        problems.extend(ns_problems)
+        ev["devices_remaining"] = ns_left
+        self.residue_devices = ns_left              # -1 = could not verify
 
         # 7c. Wait (bounded) for the consumer to finish draining before purging:
         # a purge issued while lag is still draining races the engine's late
@@ -3133,10 +3541,104 @@ class Harness:
         # single collapsed notes string nobody reads until the report.
         for prob in problems:
             warn(f"cleanup: {prob}")
+        left_note = (f"0 {DEVICE_PREFIX_ROOT} devices of ANY run id remain"
+                     if not ev["namespace"].get("foreign_remaining")
+                     else (f"0 of this run's devices remain; "
+                           f"{ev['namespace']['foreign_remaining']} foreign "
+                           f"{DEVICE_PREFIX_ROOT} device(s) left standing on "
+                           f"purpose ({ALLOW_FOREIGN_RESIDUE_ENV}=1)"))
         return self.phase("cleanup", status, ev,
                           "; ".join(problems) if problems else
                           f"{ev['devices_deleted']} devices deleted+verified "
-                          f"(0 remain), telemetry purged (CH+OS)")
+                          f"({left_note}), telemetry purged (CH+OS)")
+
+    def namespace_sweep(self, budget_s: float) -> tuple[dict, list[str], int]:
+        """Verify — and, when this process is provably the only harness run,
+        PURGE — the WHOLE `mlx-` namespace, not just this run's prefix.
+
+        THE 2026-08-29 DEFECT. Two overlapping runs each verified their own
+        prefix to zero and both were telling the truth; 1,000 devices survived
+        anyway, because the absorbed shadow rows only became visible once the
+        OTHER run's devices were deleted. A per-prefix verdict therefore cannot
+        support the sentence "the stack is left as found" — only a
+        namespace-wide one can.
+
+        Sweeping is gated on OWNING THE RUN LOCK (nothing else can be standing
+        in the namespace) AND on this run having actually started (a run
+        refused at preflight must leave the residue it refused over in place —
+        the operator was sent to `--cleanup-only`, and deleting the evidence
+        under them would be the second surprise of the day). A deliberate
+        MLX_ALLOW_FOREIGN_RESIDUE=1 run never sweeps and is never charged for
+        the rows it was told to expect.
+
+        Returns (evidence, problems, remaining) where `remaining` is the number
+        of mlx- devices this run is answerable for; -1 means UNKNOWN.
+        """
+        ev: dict = {"root_prefix": DEVICE_PREFIX_ROOT,
+                    "owns_run_lock": self.owns_run_lock,
+                    "swept": False}
+        problems: list[str] = []
+        found, err = devices_with_prefix(self.stack, DEVICE_PREFIX_ROOT)
+        if err:
+            ev["list_error"] = err
+            problems.append(
+                f"the {DEVICE_PREFIX_ROOT} namespace could not be listed "
+                f"({err}) — residue is UNKNOWN, not zero")
+            return ev, problems, -1
+        own = [d for d in found if d.startswith(self.prefix)]
+        foreign = sorted(d for d in found if not d.startswith(self.prefix))
+        ev["own_remaining"] = len(own)
+        ev["foreign_remaining"] = len(foreign)
+        ev["foreign_by_run"] = residue_by_run(foreign)[:RESIDUE_RUN_IDS_SHOWN]
+        ev["foreign_sample"] = foreign[:10]
+        if not found:
+            return ev, problems, 0
+        if foreign:
+            warn(f"cleanup: FOREIGN RESIDUE in the harness namespace — "
+                 f"{residue_summary(foreign)}")
+        if self.foreign_residue_allowed:
+            ev["foreign_residue_allowed"] = True
+            warn(f"cleanup: leaving {len(foreign)} foreign "
+                 f"{DEVICE_PREFIX_ROOT} device(s) standing because this run was "
+                 f"started with {ALLOW_FOREIGN_RESIDUE_ENV}=1 — the NEXT run "
+                 f"will refuse on them unless they are purged: python3 "
+                 f"scripts/scale-miniladder.py --cleanup-only "
+                 f"{DEVICE_PREFIX_ROOT}")
+            return ev, problems, len(own)
+        if not (self.owns_run_lock and self.preflight_ok):
+            why = ("this process does not hold the run lock, so another "
+                   "harness run may own them"
+                   if not self.owns_run_lock else
+                   "this run was REFUSED at preflight over exactly this "
+                   "residue — it is left in place for the operator who was "
+                   "sent to --cleanup-only")
+            problems.append(
+                f"{len(found)} {DEVICE_PREFIX_ROOT} device(s) remain "
+                f"({residue_summary(found)}) and were NOT swept: {why}. Purge "
+                f"with: python3 scripts/scale-miniladder.py --cleanup-only "
+                f"{DEVICE_PREFIX_ROOT}")
+            return ev, problems, len(found)
+        log(f"cleanup: sweeping the whole {DEVICE_PREFIX_ROOT} namespace — "
+            f"{len(found)} device(s) left, {len(foreign)} of them from other "
+            f"run ids ({residue_summary(foreign) if foreign else 'none'}). This "
+            f"process holds the run lock, so no other harness run owns them.")
+        sweep = purge_devices(self.stack, DEVICE_PREFIX_ROOT, budget_s)
+        ev["sweep"] = sweep
+        ev["swept"] = True
+        if sweep["verified_zero"]:
+            ev["own_remaining"] = 0
+            ev["foreign_remaining"] = 0
+            return ev, problems, 0
+        left = sweep["remaining"]
+        shown = left if left >= 0 else "UNKNOWN"
+        problems.append(
+            f"the {DEVICE_PREFIX_ROOT} namespace is NOT verified empty: {shown} "
+            f"device(s) still standing after {sweep['passes']} sweep pass(es), "
+            f"{sweep['delete_failed']} delete failure(s) (first: "
+            f"{sweep['first_delete_error'] or sweep['list_error'] or 'n/a'}) — "
+            f"run: python3 scripts/scale-miniladder.py --cleanup-only "
+            f"{DEVICE_PREFIX_ROOT}")
+        return ev, problems, left
 
     # -- report --------------------------------------------------------------
     def report(self) -> bool:
@@ -3221,26 +3723,60 @@ class Harness:
                 aborted_early = True
             else:
                 self.onboard()
-                # A linearity FAIL still leaves N devices standing — carry on
-                # through burst/drain/accounting whenever creation itself
-                # succeeded; the phase verdicts stay independent.
                 self.stability_t0 = time.monotonic()
-                if self.created_ids and self.burst():
-                    # Leak anchor: sampled the instant injection stops, so the
-                    # workload's caches/buffers are materialized but nothing
-                    # new is arriving (see memflat's header).
-                    self.warm_mem = self.stack.mem_sample()
-                    self.drain()
-                    # TRACKER 170: transport drain and ingest accounting both
-                    # pass while the engine has evaluated nothing. The
-                    # correlation-completion gate runs here, and the overall
-                    # verdict depends on it like any other phase.
-                    self.correlation_completion()
-                    self.accounting()
-                self.memflat()
-                # AFTER everything else: instability that appears late is the
-                # whole reason this phase exists.
-                self.stability()
+                if self.onboard_stop_reason != "none":
+                    # 2026-08-29: run mlx-08290322msp1 FAILED onboard (1,000 of
+                    # 2,500 creates absorbed by dedupe into a concurrent run's
+                    # devices) and then injected its full burst anyway — 900k
+                    # events keyed to devices whose identity the engine
+                    # attributes to somebody else. A fleet the run cannot
+                    # attribute ("absorbed"), or a fleet smaller than the one
+                    # planned ("shortfall"), makes every downstream number
+                    # noise: the workload is SKIPPED and teardown runs
+                    # immediately. A linearity-ratio FAIL is NOT this case —
+                    # it reads "none" and carries on (owner decision).
+                    warn(f"onboard stop={self.onboard_stop_reason} — skipping "
+                         f"burst/drain/completion/accounting/memflat/stability "
+                         f"and going straight to cleanup: "
+                         + ("creates were absorbed into other devices, so this "
+                            "run's events would be attributed elsewhere"
+                            if self.onboard_stop_reason == "absorbed" else
+                            f"only {len(self.created_ids)} of "
+                            f"{self.args.devices} requested devices exist, so "
+                            f"the burst would be judged against a fleet that "
+                            f"was never built"))
+                    self.phase(
+                        "workload", "SKIPPED",
+                        {"onboard_stop_reason": self.onboard_stop_reason,
+                         "devices_requested": self.args.devices,
+                         "devices_created": len(self.created_ids),
+                         "devices_absorbed_by_dedupe": len(self.absorbed),
+                         "skipped_phases": ["burst", "drain",
+                                            "correlation_completion",
+                                            "accounting", "memflat",
+                                            "stability"]},
+                        f"burst and everything downstream skipped "
+                        f"(stop={self.onboard_stop_reason}) — the onboarded "
+                        f"fleet is not the one this run would be judged on")
+                elif self.created_ids:
+                    if self.burst():
+                        # Leak anchor: sampled the instant injection stops, so
+                        # the workload's caches/buffers are materialized but
+                        # nothing new is arriving (see memflat's header).
+                        self.warm_mem = self.stack.mem_sample()
+                        self.drain()
+                        # TRACKER 170: transport drain and ingest accounting
+                        # both pass while the engine has evaluated nothing. The
+                        # correlation-completion gate runs here, and the overall
+                        # verdict depends on it like any other phase.
+                        self.correlation_completion()
+                        self.accounting()
+                    # A burst FAIL still leaves a warmed stack worth judging —
+                    # unchanged behaviour; only an onboard FAIL skips these.
+                    self.memflat()
+                    # AFTER everything else: instability that appears late is
+                    # the whole reason this phase exists.
+                    self.stability()
         except KeyboardInterrupt:
             warn("interrupted — running the FULL cleanup before exit "
                  "(device purge + telemetry purge); further signals are "
@@ -3324,17 +3860,21 @@ class Harness:
         shown = "UNKNOWN (never verified)" if left < 0 else str(left)
         warn(f"RESIDUE LEFT: {shown} devices matching {self.prefix} — {why}. "
              f"Purge with: python3 scripts/scale-miniladder.py --cleanup-only "
-             f"{self.prefix}")
+             f"{self.prefix}  (or --cleanup-only {DEVICE_PREFIX_ROOT} to clear "
+             f"the whole harness namespace, which is what the NEXT run's "
+             f"preflight refuses on)")
 
     def verdict(self, overall: bool) -> None:
         """The last line of a run always states the residue count — a clean
         stack is a claim, and an unverified one must never look like zero."""
         left = self.residue_devices
         if left == 0:
-            residue = "residue: 0 devices (verified)"
+            residue = (f"residue: 0 devices (verified) in the "
+                       f"{DEVICE_PREFIX_ROOT} namespace")
         elif left > 0:
-            residue = (f"residue: {left} devices matching {self.prefix} — run "
-                       f"--cleanup-only {self.prefix}")
+            residue = (f"residue: {left} devices matching {self.prefix} or "
+                       f"another {DEVICE_PREFIX_ROOT} run id — run "
+                       f"--cleanup-only {DEVICE_PREFIX_ROOT}")
         else:
             residue = (f"residue: UNKNOWN (device purge never verified) — run "
                        f"--cleanup-only {self.prefix}")
@@ -3504,7 +4044,11 @@ def main(argv: list[str]) -> int:
         print("scale-miniladder DRY RUN — nothing will be touched")
         print(f"  stack           : {args.base_url} (project {args.project}, "
               f"env {args.env_file})")
-        print(f"  phase 1 preflight: {len(REQUIRED_SERVICES)} required services, "
+        print(f"  run lock         : {RUN_LOCK_PATH} (refuses to start while a "
+              f"live pid holds it; a stale lock is reclaimed)")
+        print(f"  phase 1 preflight: REFUSES on any leftover {DEVICE_PREFIX_ROOT} "
+              f"device of any run id ({ALLOW_FOREIGN_RESIDUE_ENV}=1 overrides), "
+              f"{len(REQUIRED_SERVICES)} required services, "
               f"active bus consumers (bounded wait {args.consumer_settle_seconds}s), "
               f"baselines (RSS/offsets/lag/CH/VM/durability)")
         print(f"  phase 2 onboard  : create {args.devices} devices "
@@ -3523,9 +4067,11 @@ def main(argv: list[str]) -> int:
         cbudget = (CLEANUP_DEVICE_BUDGET_BASE_S +
                    CLEANUP_DEVICE_BUDGET_PER_DEVICE_S * args.devices)
         print(f"  phase 7 cleanup  : delete EVERY mlx-<runid>- device (page-loop "
-              f"list, budget {cbudget:.0f}s) and re-verify to zero, then purge "
-              f"CH/OS run telemetry; runs on interrupt too, and signals during "
-              f"it are ignored")
+              f"list + the absorbed shadow ids, budget {cbudget:.0f}s), the "
+              f"devices that absorbed them, then sweep and re-verify the whole "
+              f"{DEVICE_PREFIX_ROOT} namespace to zero, then purge CH/OS run "
+              f"telemetry; runs on interrupt too, and signals during it are "
+              f"ignored")
         print("  report           : report.md + report.json + last-run.json heartbeat")
         return 0
 
@@ -3536,16 +4082,50 @@ def main(argv: list[str]) -> int:
         return cleanup_only(args)
 
     harness = Harness(args)
+    # RUN LOCK (2026-08-29). Two harness processes against one stack absorb each
+    # other's devices into one another and blind BOTH teardowns. Taken before a
+    # single device exists, so a refusal costs nothing and touches nothing.
+    lock = RunLock(runid=harness.runid)
+    held, msg = lock.acquire()
+    if not held:
+        die(msg)                          # exit 2: nothing was touched
+    log(msg)
+    harness.owns_run_lock = True
     # SIGINT/SIGTERM/SIGHUP all unwind into cleanup; signals arriving DURING
     # cleanup are ignored with a message so the device purge cannot be killed
     # halfway (2026-08-28 residue defect — see InterruptGuard).
     harness.interrupts.install()
-    return harness.execute()
+    try:
+        return harness.execute()
+    finally:
+        # EVERY exit path, including an interrupt that unwound through
+        # cleanup: a lock left behind would be reclaimed as stale later, but
+        # only after making the next operator read a scary message.
+        lock.release()
 
 
 def cleanup_only(args: argparse.Namespace) -> int:
-    """Residue purge with no run: delete every `PREFIX*` device, verify to
-    zero, purge the matching telemetry. Exit 0 ONLY on verified zero."""
+    """Residue purge with no run, UNDER THE RUN LOCK.
+
+    This mode DELETES devices: it must never run against a stack a live run
+    owns, or it deletes that run's fleet mid-flight (2026-08-29). The lock is
+    released on every exit path — including the `die()` refusals below, which
+    raise SystemExit through the finally.
+    """
+    lock = RunLock(runid="cleanup-only")
+    held, msg = lock.acquire()
+    if not held:
+        die(msg)
+    log(msg)
+    try:
+        return _cleanup_only_locked(args)
+    finally:
+        lock.release()
+
+
+def _cleanup_only_locked(args: argparse.Namespace) -> int:
+    """Delete every `PREFIX*` device, verify to zero, purge the matching
+    telemetry. Exit 0 ONLY on verified zero."""
     prefix = args.cleanup_only
     stack = Stack(args.env_file, args.base_url, args.project)
     interrupts = InterruptGuard()

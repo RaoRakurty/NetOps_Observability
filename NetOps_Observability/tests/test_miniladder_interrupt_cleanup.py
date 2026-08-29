@@ -190,6 +190,16 @@ class FakeClock:
         self.slept += seconds
 
 
+@pytest.fixture(autouse=True)
+def isolated_run_lock(tmp_path_factory, monkeypatch):
+    """The run lock is a REAL file on the lab host (/var/tmp/scale-runs/.lock)
+    and a live one gates a live run. No test may create, steal or delete it, so
+    every test in this file gets its own path."""
+    monkeypatch.setattr(
+        ml, "RUN_LOCK_PATH",
+        str(tmp_path_factory.mktemp("runlock") / ".lock"))
+
+
 @pytest.fixture
 def clock(monkeypatch):
     c = FakeClock()
