@@ -185,3 +185,17 @@ CTEM, 3) Troubleshooting. `/code-review ultra` is owner-triggered.
   Do not start a manual run that overlaps 03:17–~04:30 UTC.
 - NEXT: redeploy the fixed image (profiler overlay is safe again) after the cron
   run finishes, then the 2.5K run to the gate.
+
+## UPDATE (2026-08-29 06:00) — P2 steps 0–2 measured live (4th attempt)
+Verdict `docs/scale/P2_STEPS012_2P5K_VERDICT_2026-08-29.md`: T1 p95 −38 % vs P1
+(2,980 s), incidents +23 %, 0 rejections; completion FAIL (21.6K pending at the
+gate, 18.9K signals expired unevaluated); run_window is now 104 s TOTAL — the
+persist path is the whole cohort cost (~1,000 s per 5,000-signal cohort);
+epoch budget ⇒ 1 cohort/epoch ⇒ merges regressed 378→11. Harness hardening this
+night: `c19dcc7d` (profiler-safe accounting, rejection/hollow gate clauses,
+label-aware parser), `b29d34ea` (namespace preflight, run lock, shadow purge),
+API-retry + measured OS-purge budget (in build). Cron 1K canary DISABLED
+(crontab commented; backup in the session scratchpad). Tracker 181 = API
+shadow-row defect. NEXT: step 4 (async Evidence queue, verdict row first) + 4a
+(lifecycle cadence over last K cohorts) → redeploy → 2.5K run → TTUR re-measure
+against 2,980 s.
