@@ -667,6 +667,40 @@ class _Buffer:
     seq_by_member: dict = field(default_factory=dict)
 
 
+@dataclass(slots=True)
+class _TableGate:
+    """One table's WRITE ORDER and its in-flight bound.
+
+    THE DEFECT THIS EXISTS FOR (2026-08-29 storm regression). `_flush_locked`
+    awaited the INSERT while holding the batcher's single lock, so one slow
+    block stopped the whole plane: `persist.batch_flush` max 116,507 ms on the
+    live run is one `corr_signals_archive` block retrying behind a struggling
+    ClickHouse, and for those 116 seconds no producer could append a row and no
+    OTHER table could flush. The block is now taken out under the lock and
+    written outside it.
+
+    What still has to hold is per-table ORDER: concatenating a table's blocks
+    must reproduce the row sequence the unbatched path writes, so block N of a
+    table may not be inserted before block N-1. A ticket gate says exactly that
+    and nothing more — `next_seq` is handed out under the batcher lock (so the
+    order of tickets IS the order the blocks were taken out), `turn` is the
+    ticket allowed to insert, and a block waits on its own future rather than
+    on a shared condition, so a wakeup can never go to the wrong waiter.
+
+    Different tables hold different gates and never wait on each other.
+
+    `inflight` is the bound. Writes no longer block their producer, so without
+    one a stalled table would let the consumer build blocks forever with the
+    rows of every one of them resident. At the bound the producers OF THAT
+    TABLE wait — the honest backpressure — and every other table is untouched.
+    """
+    next_seq: int = 0
+    turn: int = 0
+    inflight: int = 0
+    turn_waiters: dict = field(default_factory=dict)   # seq -> Future
+    room_waiters: list = field(default_factory=list)   # Futures, FIFO
+
+
 class RowBatcher:
     """Per-table, cross-version INSERT accumulator.
 
@@ -677,9 +711,13 @@ class RowBatcher:
     row tally and the per-member failure bookkeeping, because those are facts
     about the engine, not about buffering.
 
-    One `asyncio.Lock` serializes `add` and every flush path, so a background
-    age-flusher can never interleave its INSERT with a producer's append and
-    split a block in an order no reader expects.
+    One `asyncio.Lock` serializes the BUFFER — `add`'s append and every path
+    that takes a block out — so a background age-flusher can never interleave
+    with a producer's append and split a block in an order no reader expects.
+    It is NOT held across the INSERT (see `_TableGate`): the block is taken out
+    under the lock, given a per-table ticket, and written by its own task, so a
+    slow or retrying block delays only its own table's LATER blocks — never a
+    producer, never another table.
 
     `max_rows` is the FOURTH bound and the only one a single producer cannot
     overshoot (2026-08-29 storm regression, `docs/scale/RCA_LATENCY_BASELINE`).
@@ -700,15 +738,16 @@ class RowBatcher:
     block re-derives the identical token and ClickHouse still dedups it.
     """
 
-    __slots__ = ("_bufs", "_default", "_insert", "_limits", "_lock", "_max_rows",
-                 "_on_flush", "_on_join", "age_max_s", "blocks_failed", "flushes",
-                 "rows_flushed")
+    __slots__ = ("_bufs", "_default", "_gates", "_insert", "_limits", "_lock",
+                 "_max_inflight", "_max_rows", "_on_flush", "_on_join", "_tasks",
+                 "age_max_s", "blocks_failed", "blocks_inflight_peak", "flushes",
+                 "rows_flushed", "writer_waits")
 
     def __init__(self, *, insert: _InsertFn, on_flush: _FlushCb | None = None,
                  on_join: Callable[[str, Any], None] | None = None,
                  default: BatchLimits = (200, 8 * 1024 * 1024, 2.0),
                  limits: dict[str, BatchLimits] | None = None,
-                 max_rows: int = 0) -> None:
+                 max_rows: int = 0, max_inflight: int = 4) -> None:
         self._insert = insert
         self._on_flush = on_flush
         # Called the FIRST time a member contributes rows to a table's buffer,
@@ -722,16 +761,28 @@ class RowBatcher:
         # 0 disables the cap (every pre-existing caller), exactly like a 0 in
         # any other trigger slot.
         self._max_rows = max(0, int(max_rows))
+        # Blocks taken out but not yet written, per table. At least 1 — a bound
+        # of 0 would mean "never write".
+        self._max_inflight = max(1, int(max_inflight))
         self._bufs: dict[str, _Buffer] = {}
+        self._gates: dict[str, _TableGate] = {}
+        self._tasks: set = set()
         self._lock = asyncio.Lock()
         self.flushes: dict[str, int] = {}
         self.rows_flushed: dict[str, int] = {}
         self.age_max_s = 0.0
         self.blocks_failed = 0
+        self.blocks_inflight_peak = 0
+        self.writer_waits = 0
 
     # ── configuration ────────────────────────────────────────────────────────
     def limits_for(self, table: str) -> BatchLimits:
         return self._limits.get(table, self._default)
+
+    def inflight_for(self, table: str) -> int:
+        """Blocks of `table` taken out and not yet written."""
+        g = self._gates.get(table)
+        return g.inflight if g is not None else 0
 
     def rows_for(self, table: str) -> int:
         """The hard ROW cap of one block (0 = uncapped). Table-independent
@@ -777,6 +828,12 @@ class RowBatcher:
         """
         if not rows:
             return
+        # BEFORE the lock, never inside it: a producer that has to wait for
+        # write room must not hold the buffer lock while it does, or a stalled
+        # table would freeze every other table's appends — the exact coupling
+        # this change exists to remove.
+        await self._await_room(table)
+        taken: list[tuple[_Buffer, int]] = []
         async with self._lock:
             cap = self.rows_for(table)
             max_members, max_bytes, _max_age = self.limits_for(table)
@@ -789,11 +846,14 @@ class RowBatcher:
                     buf = self._bufs[table] = _Buffer(oldest_mono=time.monotonic())
                 room = (cap - len(buf.rows)) if cap else (total - off)
                 if room <= 0:
-                    # The open block is already at the cap (a previous part
-                    # filled it, or a caller lowered the cap mid-flight): write
-                    # it and open a fresh one. `_flush_locked` pops the buffer,
-                    # so the next turn of the loop creates it.
-                    await self._flush_locked(table)
+                    # The open block is already at the cap (a caller lowered it
+                    # mid-flight; the trigger below normally takes a full block
+                    # the moment it fills): take it out and open a fresh one.
+                    # `_take_locked` pops the buffer, so the next turn of the
+                    # loop creates it.
+                    block = self._take_locked(table)
+                    if block is not None:
+                        taken.append(block)
                     continue
                 take = min(room, total - off)
                 # The whole list when nothing is split — same object, no copy,
@@ -813,24 +873,50 @@ class RowBatcher:
                 if ((cap and len(buf.rows) >= cap)
                         or (max_members and len(buf.members) >= max_members)
                         or (max_bytes and buf.est_bytes >= max_bytes)):
-                    await self._flush_locked(table)
+                    block = self._take_locked(table)
+                    if block is not None:
+                        taken.append(block)
+        # Outside the lock. One `add` that splits a giant chunk can take several
+        # blocks; their tickets are already in order, so scheduling them here
+        # writes them in that order however long any one of them takes.
+        for buf, seq in taken:
+            self._schedule(table, buf, seq)
 
     # ── flushing ─────────────────────────────────────────────────────────────
     async def flush(self, table: str) -> None:
+        """Write `table`'s pending block and WAIT for it (plus anything already
+        queued ahead of it, which is what its turn means)."""
         async with self._lock:
-            await self._flush_locked(table)
+            block = self._take_locked(table)
+        if block is not None:
+            self._schedule(table, *block)
+        await self.quiesce(table)
 
     async def flush_all(self) -> None:
-        """Flush every table. The shutdown/drain accessor — a partial block is
-        still a block, and leaving it buffered is the one way batching could
-        lose a row."""
+        """Flush every table AND wait for every in-flight block.
+
+        The shutdown/drain accessor. `evidence_drain` reads it as "the rows are
+        in ClickHouse", so it must quiesce the writers too — a partial block
+        left buffered, or a scheduled block left unawaited, is the one way
+        batching could lose a row. Tables are flushed CONCURRENTLY: a stalled
+        one must not hold up the drain of the others.
+        """
         async with self._lock:
-            for table in list(self._bufs):
-                await self._flush_locked(table)
+            taken = [(t, self._take_locked(t)) for t in list(self._bufs)]
+        for table, block in taken:
+            if block is not None:
+                self._schedule(table, *block)
+        await self.quiesce()
 
     async def flush_due(self, now: float | None = None) -> None:
-        """Flush every table whose OLDEST buffered row has aged out."""
+        """Flush every table whose OLDEST buffered row has aged out.
+
+        Schedules and returns. The flusher task must stay responsive: waiting
+        here for a retrying block would stop it ageing out every OTHER table,
+        which is precisely the trickle bound it exists to provide.
+        """
         now = time.monotonic() if now is None else now
+        taken: list[tuple[str, _Buffer, int]] = []
         async with self._lock:
             for table in list(self._bufs):
                 buf = self._bufs.get(table)
@@ -838,7 +924,21 @@ class RowBatcher:
                     continue
                 max_age = self.limits_for(table)[2]
                 if max_age and (now - buf.oldest_mono) >= max_age:
-                    await self._flush_locked(table, now=now)
+                    block = self._take_locked(table, now=now)
+                    if block is not None:
+                        taken.append((table, *block))
+        for table, buf, seq in taken:
+            self._schedule(table, buf, seq)
+
+    async def quiesce(self, table: str | None = None) -> None:
+        """Wait until every scheduled write has finished (never raises — a
+        write task reports its own failure through `on_flush`)."""
+        while True:
+            pending = [t for t in list(self._tasks)
+                       if table is None or getattr(t, "_batch_table", None) == table]
+            if not pending:
+                return
+            await asyncio.gather(*pending, return_exceptions=True)
 
     def due_in_s(self, now: float | None = None) -> float:
         """Seconds until the next age trigger fires (inf when nothing is
@@ -853,42 +953,122 @@ class RowBatcher:
                 best = min(best, max_age - (now - buf.oldest_mono))
         return best
 
-    async def _flush_locked(self, table: str, now: float | None = None) -> None:
-        """Issue ONE insert for `table`'s pending block. Never raises.
+    # ── take (under the lock) / schedule / write (outside it) ───────────────
+    def _take_locked(self, table: str, now: float | None = None
+                     ) -> tuple[_Buffer, int] | None:
+        """Take `table`'s pending block out and TICKET it. Synchronous, and it
+        must stay so: it runs under the batcher lock, and the whole point of
+        this design is that nothing awaits there."""
+        buf = self._bufs.pop(table, None)
+        if buf is None or not buf.rows:
+            return None
+        now = time.monotonic() if now is None else now
+        self.age_max_s = max(self.age_max_s, now - buf.oldest_mono)
+        g = self._gates.get(table)
+        if g is None:
+            g = self._gates[table] = _TableGate()
+        seq = g.next_seq
+        g.next_seq += 1
+        g.inflight += 1
+        self.blocks_inflight_peak = max(self.blocks_inflight_peak, g.inflight)
+        return buf, seq
+
+    def _schedule(self, table: str, buf: _Buffer, seq: int) -> asyncio.Task:
+        """Hand one ticketed block to its own task. Fire-and-forget by design —
+        the producer's job ended when the rows left the buffer."""
+        task = asyncio.get_running_loop().create_task(
+            self._write_block(table, buf, seq))
+        # Tagged so `quiesce(table)` can wait on one table without touching the
+        # others; an attribute rather than a per-table set because a task must
+        # be discoverable from the single set the done-callback prunes.
+        task._batch_table = table          # type: ignore[attr-defined]
+        self._tasks.add(task)
+        task.add_done_callback(self._tasks.discard)
+        return task
+
+    async def _write_block(self, table: str, buf: _Buffer, seq: int) -> None:
+        """Issue ONE insert for one ticketed block. Never raises.
 
         A flush can be triggered by a producer that has nothing to do with the
         block being written (that is the whole point of batching across
         versions), so an exception here must NOT surface as that producer's
-        failure. It is captured, handed to `on_flush` with the block's members,
-        and accounted there — which is also the only place that knows how many
-        ITEMS the failure cost.
+        failure — and it no longer could, because this runs in its own task. It
+        is captured, handed to `on_flush` with the block's members, and
+        accounted there, which is the only place that knows how many ITEMS the
+        failure cost.
+
+        CANCELLATION is reported like any other failure rather than requeued.
+        With the insert out from under the lock a requeue would have to merge
+        into a buffer a producer may already have opened — reordering its rows
+        and double-counting the members that joined both — so the block is
+        counted failed, named in the log by its member tokens, and settled. That
+        is the plane's documented durability model (step 4: lost and LOUD, never
+        silently replayed), applied to the one path that used to be exempt.
         """
-        buf = self._bufs.pop(table, None)
-        if buf is None or not buf.rows:
-            return
-        now = time.monotonic() if now is None else now
-        self.age_max_s = max(self.age_max_s, now - buf.oldest_mono)
-        token = batch_token(buf.keys)
-        ctx = {"row_count": len(buf.rows), "batch_members": len(buf.members)}
+        g = self._gates[table]
         ok: bool = False
         exc: BaseException | None = None
         try:
+            await self._await_turn(g, seq)
+            token = batch_token(buf.keys)
+            ctx = {"row_count": len(buf.rows), "batch_members": len(buf.members)}
             ok = await self._insert(table, buf.rows, token, ctx) is not False
-        except asyncio.CancelledError:
-            # Cancellation is the shutdown path, not a block failure: put the
-            # block back (the lock is held across the whole flush, so no
-            # producer can have created a replacement buffer meanwhile) so the
-            # drain can still write it, then propagate.
-            self._bufs.setdefault(table, buf)
-            raise
+        except asyncio.CancelledError as e:
+            exc = e
         except Exception as e:  # noqa: BLE001 — reported to on_flush, never swallowed
             exc = e
-        self.flushes[table] = self.flushes.get(table, 0) + 1
-        self.rows_flushed[table] = self.rows_flushed.get(table, 0) + len(buf.rows)
-        if not ok:
-            self.blocks_failed += 1
-        if self._on_flush is not None:
-            self._on_flush(table, buf.rows, buf.keys, buf.members, ok, exc)
+        finally:
+            self.flushes[table] = self.flushes.get(table, 0) + 1
+            self.rows_flushed[table] = (
+                self.rows_flushed.get(table, 0) + len(buf.rows))
+            if not ok:
+                self.blocks_failed += 1
+            if self._on_flush is not None:
+                # Inside the turn, so a table's blocks are ACCOUNTED in the same
+                # order they were written.
+                self._on_flush(table, buf.rows, buf.keys, buf.members, ok, exc)
+            self._end_turn(g, seq)
+            self._release_room(g)
+
+    # ── the per-table ticket gate ───────────────────────────────────────────
+    async def _await_turn(self, g: _TableGate, seq: int) -> None:
+        if g.turn == seq:
+            return
+        fut = asyncio.get_running_loop().create_future()
+        g.turn_waiters[seq] = fut
+        try:
+            await fut
+        finally:
+            g.turn_waiters.pop(seq, None)
+
+    @staticmethod
+    def _end_turn(g: _TableGate, seq: int) -> None:
+        """Advance past `seq` however it ended — a block that failed, raised or
+        was cancelled must still let its successors write, or one bad insert
+        wedges its table forever."""
+        if g.turn == seq:
+            g.turn = seq + 1
+            fut = g.turn_waiters.get(g.turn)
+            if fut is not None and not fut.done():
+                fut.set_result(None)
+
+    async def _await_room(self, table: str) -> None:
+        g = self._gates.get(table)
+        while g is not None and g.inflight >= self._max_inflight:
+            self.writer_waits += 1
+            fut = asyncio.get_running_loop().create_future()
+            g.room_waiters.append(fut)
+            await fut
+            g = self._gates.get(table)
+
+    @staticmethod
+    def _release_room(g: _TableGate) -> None:
+        g.inflight -= 1
+        while g.room_waiters:
+            fut = g.room_waiters.pop(0)
+            if not fut.done():
+                fut.set_result(None)
+                return
 
     # ── observability ────────────────────────────────────────────────────────
     def buffered(self) -> int:
@@ -911,5 +1091,9 @@ class RowBatcher:
             "buffered_rows": self.buffered(),
             "buffered_tables": len([t for t, b in self._bufs.items() if b.rows]),
             "block_rows_max": self._max_rows,
+            "blocks_inflight": sum(g.inflight for g in self._gates.values()),
+            "blocks_inflight_max": self._max_inflight,
+            "blocks_inflight_peak": self.blocks_inflight_peak,
+            "writer_waits_total": self.writer_waits,
             "blocks_failed_total": self.blocks_failed,
         }

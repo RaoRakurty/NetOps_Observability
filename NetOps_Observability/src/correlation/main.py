@@ -30,6 +30,7 @@ import asyncio
 import contextlib
 import csv
 import functools
+import gc
 import glob
 import hashlib
 import json
@@ -2778,6 +2779,17 @@ CORR_EVIDENCE_BATCH_MS = max(1.0, float(
 # so the cap can never make a flush bigger than what already ran in production.
 CORR_EVIDENCE_BATCH_ROWS = max(0, int(
     os.environ.get("CORR_EVIDENCE_BATCH_ROWS", "20000")))
+# How many blocks of ONE table may be taken out and not yet written.
+#
+# The INSERT no longer runs under the batcher lock (RowBatcher._TableGate), so a
+# flush no longer blocks its producer — which means nothing else does either,
+# and a table whose INSERTs are retrying would let the consumer build blocks
+# until the rows of every one of them exhausted the container. This is the
+# bound that stops it: at the limit, the producers OF THAT TABLE wait, and no
+# other table is affected. 4 x 20,000 rows is the worst-case resident set of one
+# stalled table — the same order as the queue's own byte bound.
+CORR_EVIDENCE_BATCH_INFLIGHT = max(1, int(
+    os.environ.get("CORR_EVIDENCE_BATCH_INFLIGHT", "4")))
 
 # ── The DECISION plane's own batching — DEFAULT OFF, and it stays off ────────
 # `corr_objects` + `corr_current` are 95,793 of the run's 162,087 corr_* inserts
@@ -4843,6 +4855,7 @@ def _make_row_batcher() -> RowBatcher:
     return RowBatcher(
         insert=_ch_insert_block, on_flush=_ev_block_done, on_join=_ev_join,
         max_rows=CORR_EVIDENCE_BATCH_ROWS,
+        max_inflight=CORR_EVIDENCE_BATCH_INFLIGHT,
         default=(CORR_EVIDENCE_BATCH_ITEMS, CORR_EVIDENCE_BATCH_BYTES, ms),
         limits={
             "netops.corr_objects": (CORR_EVIDENCE_BATCH_ITEMS,
@@ -5192,12 +5205,14 @@ def evidence_stats() -> dict[str, object]:
         "batch_items_max": CORR_EVIDENCE_BATCH_ITEMS,
         "batch_bytes_max": CORR_EVIDENCE_BATCH_BYTES,
         "batch_rows_max": CORR_EVIDENCE_BATCH_ROWS,
+        "batch_inflight_max": CORR_EVIDENCE_BATCH_INFLIGHT,
         "batch_age_max_ms": CORR_EVIDENCE_BATCH_MS,
         "decision_batch_enabled": CORR_DECISION_BATCH,
         "flushes_total": {}, "rows_flushed_total": {}, "flushes": 0,
         "rows_per_flush_mean": 0.0, "batch_age_seconds_max": 0.0,
         "buffered_rows": 0, "buffered_tables": 0, "blocks_failed_total": 0,
-        "block_rows_max": 0,
+        "block_rows_max": 0, "blocks_inflight": 0, "blocks_inflight_max": 0,
+        "blocks_inflight_peak": 0, "writer_waits_total": 0,
         "pending_items": len(_EVIDENCE_PENDING),
     }
     if queue is not None:
@@ -6972,6 +6987,136 @@ async def batch_signal(row: dict) -> None:
 # and the counters are on /healthz + /metrics per the GA counter-exposure
 # contract, so a stall becomes an alertable fact instead of an archaeology
 # exercise. Cost: one timer wakeup every CORR_LOOP_LAG_SAMPLE_S.
+# ═══════════════════════════════════════════════════════════════════════════
+# CYCLE-COLLECTOR POLICY (CORR_GC_TUNE, default ON)
+#
+# THE MEASUREMENT that put this here. Chasing the 2026-08-29 storm regression
+# (`corr_loop_lag_max_ms` 114,848) the sizing fix took the storm aggregate's
+# signal-sized serializes off the loop thread, and a residual multi-second
+# stall stayed. It is the CYCLE COLLECTOR, and no `_offload` can move it: a
+# gen-2 collection runs on whichever thread trips the allocation threshold,
+# holds the GIL for the whole sweep, and is sized by the PROCESS heap.
+#
+# Measured on the live-shaped aggregate fixture (950 nodes, 0 edges, 95k
+# signals — test_p2_evidence_batching.storm_aggregate), worst loop-lag sample
+# for one persist+drain:
+#     clean heap, collector on ............................  319 ms
+#     + 3,000,000 retained objects, collector on .......... 1,773 ms
+#     + 3,000,000 retained objects, collector OFF .........   185 ms
+# The engine's own work did not change between those three; the heap did.
+#
+# WHAT THIS DOES, and what it deliberately does not.
+#   * `gc.freeze()` ONCE after startup. Everything alive at that moment — the
+#     catalog, the templates, the config, the module and class objects, the
+#     import graph — is long-lived by construction and moved to the PERMANENT
+#     generation, which no collection scans again. That is the bulk of what a
+#     gen-2 sweep was walking, removed from every future sweep.
+#   * RAISE the thresholds so a full sweep is rare. gen-0 stays frequent and
+#     cheap (young garbage is exactly what reference counting misses least);
+#     the gen-1/gen-2 multipliers are what decide how often the whole heap is
+#     walked. CPython's defaults (700, 10, 10) put a full sweep every ~100
+#     gen-0 cycles, which under a storm building 50k+ row dicts per version is
+#     continuous.
+#   * It NEVER disables the collector. The engine holds real reference cycles
+#     (snapshots ↔ nodes ↔ signals, tasks, exception tracebacks); disabling
+#     collection would trade a bounded pause for an unbounded leak, which is
+#     the resource this process actually runs out of.
+#   * It is OBSERVABLE (§10). `corr_gc_pause_seconds_max` is what makes the
+#     next stall attributable instead of a mystery: a loop-lag spike with a
+#     matching gc pause is the collector, one without is our code.
+CORR_GC_TUNE = os.environ.get("CORR_GC_TUNE", "1").lower() in ("1", "true", "yes")
+# (gen0 allocations, gen1 multiplier, gen2 multiplier). gen-0 at 20,000 net
+# allocations rather than 700: a row-building storm allocates that in
+# milliseconds and each gen-0 sweep is bounded by the young set, not the heap.
+# 50 x 50 means a FULL sweep every 2,500 gen-0 cycles instead of every 100.
+CORR_GC_GEN0 = max(700, int(os.environ.get("CORR_GC_GEN0", "20000")))
+CORR_GC_GEN1 = max(1, int(os.environ.get("CORR_GC_GEN1", "50")))
+CORR_GC_GEN2 = max(1, int(os.environ.get("CORR_GC_GEN2", "50")))
+GC_COLLECTIONS = [0, 0, 0]     # completed collections per generation
+GC_PAUSE_MAX_S = 0.0           # worst single collection, this process
+GC_PAUSE_TOTAL_S = 0.0
+GC_FROZEN_OBJECTS = 0          # what `gc.freeze()` took out of the scan
+_GC_STARTED: dict[int, float] = {}
+_GC_TUNED = False
+
+
+def _gc_probe(phase: str, info: dict) -> None:
+    """Time one collection. Runs INSIDE the collector, on whatever thread
+    tripped it, so it does exactly two dict operations and an arithmetic
+    update — nothing that can allocate much, block, or raise.
+
+    Deliberately NOT locked. A lock taken inside a gc callback is a real
+    deadlock surface (the collecting thread holds the GIL while every other
+    thread is stopped at a bytecode boundary, possibly owning that lock), and
+    a counter that can drop one increment to a thread switch is the cheaper
+    wrong. Read these as "how much, roughly" — the MAX, which is what
+    attributes a stall, is a max of independent writes and cannot be corrupted
+    into a smaller number by a lost update.
+    """
+    global GC_PAUSE_MAX_S, GC_PAUSE_TOTAL_S
+    gen = info.get("generation", 0)
+    if phase == "start":
+        _GC_STARTED[gen] = time.perf_counter()
+        return
+    t0 = _GC_STARTED.pop(gen, None)
+    if t0 is None:
+        return
+    elapsed = time.perf_counter() - t0
+    if 0 <= gen < 3:
+        GC_COLLECTIONS[gen] += 1
+    GC_PAUSE_MAX_S = max(GC_PAUSE_MAX_S, elapsed)
+    GC_PAUSE_TOTAL_S += elapsed
+
+
+def gc_install_probe() -> None:
+    """Register the pause timer. Independent of the tuning: the measurement is
+    worth having even where the policy is off, because 'is the collector the
+    stall?' is the question, and a flag that hides the answer when it is off
+    would make the A/B unreadable."""
+    if _gc_probe not in gc.callbacks:
+        gc.callbacks.append(_gc_probe)
+
+
+def gc_tune_startup() -> None:
+    """Apply the policy ONCE, after warm-up. Idempotent and never fatal.
+
+    Called from `lifespan` after the catalog, config and long-lived state
+    exist — freezing before them would freeze nothing worth freezing, and
+    freezing twice would only re-walk what is already permanent.
+    """
+    global _GC_TUNED, GC_FROZEN_OBJECTS
+    gc_install_probe()
+    if not CORR_GC_TUNE or _GC_TUNED:
+        return
+    _GC_TUNED = True
+    try:
+        # Collect first: everything the boot path built and dropped goes now,
+        # so `freeze` promotes only what is actually still alive.
+        gc.collect()
+        gc.freeze()
+        GC_FROZEN_OBJECTS = gc.get_freeze_count()
+        gc.set_threshold(CORR_GC_GEN0, CORR_GC_GEN1, CORR_GC_GEN2)
+    except Exception:       # never fatal, always observable (§10)
+        log.exception("gc tuning failed — the collector keeps its defaults")
+        return
+    log.info("gc tuned: frozen=%d objects, thresholds=%s (was (700, 10, 10)); "
+             "collector stays ENABLED — see corr_gc_pause_seconds_max",
+             GC_FROZEN_OBJECTS, gc.get_threshold())
+
+
+def gc_stats() -> dict[str, object]:
+    """§10 observable. Zeros, never absent keys, when the policy is off."""
+    return {
+        "tuned": _GC_TUNED,
+        "enabled": gc.isenabled(),
+        "thresholds": list(gc.get_threshold()),
+        "frozen_objects": GC_FROZEN_OBJECTS,
+        "collections": list(GC_COLLECTIONS),
+        "pause_seconds_max": round(GC_PAUSE_MAX_S, 6),
+        "pause_seconds_total": round(GC_PAUSE_TOTAL_S, 6),
+    }
+
+
 CORR_LOOP_LAG_SAMPLE_S = float(os.environ.get("CORR_LOOP_LAG_SAMPLE_S", "0.5"))
 # Default 1s: 3x under aiokafka's heartbeat_interval_ms (3s) so a stall is
 # reported well before it can threaten the session (30s).
@@ -9115,6 +9260,10 @@ async def lifespan(_app: FastAPI):
     # Opt-in forensics (CORR_DIAG_MEMORY). Dormant by default: returns before
     # starting tracemalloc, creating a thread, or touching the filesystem.
     diagnostics.start()
+    # After the boot path has built everything long-lived (catalog, config,
+    # templates) and before the first storm allocates against it — see
+    # CORR_GC_TUNE for the measurement that put this here.
+    gc_tune_startup()
     ch = CH(CLICKHOUSE_URL, CLICKHOUSE_USER, CLICKHOUSE_PASS)
     # Tracker 174: the loop-INDEPENDENT health server (daemon thread). Found
     # unwired at first deploy (2026-08-24): the snapshot feed task below ran
@@ -9326,6 +9475,25 @@ def _metrics_text() -> str:
         f"corr_loop_lag_max_ms {LOOP_LAG_MAX_MS:.1f}",
         "# TYPE corr_loop_lag_ms gauge",
         f"corr_loop_lag_ms {LOOP_LAG_LAST_MS:.1f}",
+        # The collector, next to the stall gauge it explains: a loop-lag spike
+        # with a matching gc pause is the heap, one without is our code. See
+        # CORR_GC_TUNE.
+        "# HELP corr_gc_collections_total Completed cycle collections, per generation.",
+        "# TYPE corr_gc_collections_total counter",
+        *(f'corr_gc_collections_total{{generation="{g}"}} {GC_COLLECTIONS[g]}'
+          for g in (0, 1, 2)),
+        "# HELP corr_gc_pause_seconds_max Longest single cycle collection, this process.",
+        "# TYPE corr_gc_pause_seconds_max gauge",
+        f"corr_gc_pause_seconds_max {GC_PAUSE_MAX_S:.6f}",
+        "# HELP corr_gc_pause_seconds_total Time spent in cycle collections.",
+        "# TYPE corr_gc_pause_seconds_total counter",
+        f"corr_gc_pause_seconds_total {GC_PAUSE_TOTAL_S:.6f}",
+        "# HELP corr_gc_frozen_objects Objects moved to the permanent generation at startup.",
+        "# TYPE corr_gc_frozen_objects gauge",
+        f"corr_gc_frozen_objects {GC_FROZEN_OBJECTS}",
+        "# HELP corr_gc_tuned Whether the CORR_GC_TUNE policy was applied (1) or not (0).",
+        "# TYPE corr_gc_tuned gauge",
+        f"corr_gc_tuned {1 if _GC_TUNED else 0}",
         "# TYPE corr_archive_rows_written counter",
         f"corr_archive_rows_written {ARCHIVE_ROWS_WRITTEN}",
         "# TYPE corr_archive_slices_damped counter",

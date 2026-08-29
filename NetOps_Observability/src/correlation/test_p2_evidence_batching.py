@@ -56,6 +56,7 @@ import dataclasses
 import gc
 import json
 import logging
+import time
 from datetime import timedelta
 
 import pytest
@@ -313,6 +314,9 @@ def test_B2d_the_token_is_stable_under_a_resend_of_the_same_block(_stack):
         b = RowBatcher(insert=sink, default=(len(keys), 1 << 30, 1e9))
         for k in keys:
             await b.add(EDGES, [{"k": k}], member=_member(k), dedup_token=k)
+        # `add` no longer awaits the INSERT (the block is written by its own
+        # task, off the batcher lock), so the sink is read after a quiesce.
+        await b.quiesce()
         return got[0]
 
     keys = ["obj:a:v1:open:aa:edges:0", "obj:b:v1:open:bb:edges:0"]
@@ -370,6 +374,7 @@ def test_B3_the_member_count_trigger_flushes_and_not_before(_stack):
             await b.add(EDGES, [{"i": i}], member=_member(f"m{i}"))
         assert not sink.calls, "two members under a bound of three must not flush"
         await b.add(EDGES, [{"i": 2}], member=_member("m2"))
+        await b.quiesce()
         assert len(sink.calls) == 1, "the third member must flush the block"
         assert len(sink.calls[0][1]) == 3
 
@@ -386,6 +391,7 @@ def test_B3b_the_byte_trigger_flushes_independently_of_the_member_count(_stack):
         await b.add(EDGES, fat[:8], member=_member("m0"))
         assert not sink.calls, "32 KiB is under the 200 KiB bound"
         await b.add(EDGES, fat, member=_member("m0"))
+        await b.quiesce()
         assert len(sink.calls) == 1, "the byte bound must flush on its own"
 
     asyncio.run(go())
@@ -403,6 +409,7 @@ def test_B3c_the_age_trigger_flushes_a_trickle(_stack):
         assert not sink.calls, "a fresh block must not age out"
         await asyncio.sleep(0.08)
         await b.flush_due()
+        await b.quiesce()
         assert len(sink.calls) == 1, "the oldest row aged past the bound"
         assert b.stats()["batch_age_seconds_max"] >= 0.05
 
@@ -863,6 +870,7 @@ def test_B11b_a_raising_sink_is_reported_not_propagated(_stack):
                        on_flush=lambda t, r, k, m, ok, e: reports.append((t, ok, e)),
                        default=(1, 1 << 30, 1e9))
         await b.add(EDGES, [{"i": 0}], member=_member("a"))   # must not raise
+        await b.quiesce()
         assert b.stats()["blocks_failed_total"] == 1
 
     asyncio.run(go())
@@ -1180,7 +1188,380 @@ def test_B13c_the_evidence_batcher_is_built_with_the_row_cap(_stack):
     """The wiring: the shipped batcher carries the env-configured cap, and the
     Evidence plane reports it."""
     _stack.setattr(main, "CORR_EVIDENCE_BATCH_ROWS", 12_345)
+    _stack.setattr(main, "CORR_EVIDENCE_BATCH_INFLIGHT", 7)
     b = main._make_row_batcher()
     assert b.rows_for(ARCHIVE) == 12_345
     assert b.stats()["block_rows_max"] == 12_345
+    assert b.stats()["blocks_inflight_max"] == 7
     assert main.evidence_stats()["batch_rows_max"] == 12_345
+    assert main.evidence_stats()["batch_inflight_max"] == 7
+
+
+# ═══ B14 — the INSERT is not issued under the batcher lock ═══════════════════
+#
+# `persist.batch_flush` max 116,507 ms on run t-storm-2.5k was ONE block
+# retrying behind a struggling ClickHouse — and for those 116 seconds
+# `_flush_locked` held the batcher's single lock, so no producer could append a
+# row and no other table could flush. The block is now taken out under the lock
+# and written by its own task, ordered per TABLE by a ticket gate.
+
+EVIDENCE = "netops.corr_evidence"
+
+
+class _StallSink:
+    """A sink that hangs on one table until released, and records the ORDER in
+    which blocks started and finished."""
+
+    def __init__(self, stall_table: str) -> None:
+        self.stall_table = stall_table
+        self.gate = asyncio.Event()
+        self.started: list[tuple[str, str]] = []
+        self.done: list[tuple[str, str]] = []
+
+    async def __call__(self, table, rows, token, ctx):
+        self.started.append((table, token))
+        if table == self.stall_table:
+            await self.gate.wait()
+        self.done.append((table, token))
+        return True
+
+
+def test_B14_a_stalled_block_blocks_neither_producers_nor_other_tables():
+    """The claim, stated as the two things the old lock made false.
+
+    While a `corr_edges` INSERT is hung: a `corr_evidence` block still flushes
+    end to end, and a producer's `add` still returns. MUTANT: the shipped-before
+    shape is `add` awaiting the insert under the lock — modelled here by
+    awaiting the same sink directly, which never returns until the gate opens."""
+    sink = _StallSink(EDGES)
+
+    async def go():
+        b = RowBatcher(insert=sink, default=(1, 1 << 30, 1e9))
+        # Hangs inside its write task; `add` must come straight back.
+        await asyncio.wait_for(
+            b.add(EDGES, [{"i": 0}], member=_member("a"), dedup_token="a:edges:0"),
+            timeout=2.0)
+        await asyncio.sleep(0)          # let the write task reach the sink
+        assert sink.started == [(EDGES, batch_token(["a:edges:0"]))]
+        assert not sink.done, "the fixture must actually be stalled"
+
+        # A DIFFERENT table, start to finish, while corr_edges is hung.
+        await asyncio.wait_for(
+            b.add(EVIDENCE, [{"i": 1}], member=_member("a"),
+                  dedup_token="a:evidence:0"),
+            timeout=2.0)
+        await asyncio.wait_for(b.quiesce(EVIDENCE), timeout=2.0)
+        assert (EVIDENCE, batch_token(["a:evidence:0"])) in sink.done, (
+            "a stalled corr_edges block held up corr_evidence — the INSERT is "
+            "still being awaited under the shared lock")
+
+        # And more producing on the STALLED table still returns (under the
+        # in-flight bound), because only its WRITE is queued behind the stall.
+        for i in range(3):
+            await asyncio.wait_for(
+                b.add(EDGES, [{"i": 10 + i}], member=_member(f"b{i}"),
+                      dedup_token=f"b{i}:edges:0"),
+                timeout=2.0)
+        assert sink.done == [(EVIDENCE, batch_token(["a:evidence:0"]))], (
+            "no later corr_edges block may overtake the stalled one")
+        sink.gate.set()
+        await asyncio.wait_for(b.flush_all(), timeout=5.0)
+        return b
+
+    asyncio.run(go())
+
+    # MUTANT — the shipped-before shape, modelled exactly: ONE lock held across
+    # the insert. The corr_edges write takes the lock and hangs; a corr_evidence
+    # add can then never even reach its own table, which is the 116 seconds.
+    stuck = _StallSink(EDGES)
+
+    async def old_shape():
+        lock = asyncio.Lock()
+
+        async def old_add(table):
+            async with lock:                       # `_flush_locked`, pre-fix
+                await stuck(table, [{"i": 0}], "t", {})
+
+        hung = asyncio.create_task(old_add(EDGES))
+        await asyncio.sleep(0)
+        with pytest.raises(asyncio.TimeoutError):
+            await asyncio.wait_for(old_add(EVIDENCE), timeout=0.2)
+        hung.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await hung
+
+    asyncio.run(old_shape())
+
+
+def test_B14b_a_tables_blocks_are_written_in_the_order_they_were_taken():
+    """Per-table ORDER is the one thing the lock was buying, and the ticket gate
+    is what replaces it: concatenating a table's blocks must still reproduce the
+    row sequence the unbatched path writes, so block N may never be inserted
+    before block N-1 however long N-1 takes."""
+    order: list[str] = []
+
+    async def sink(table, rows, token, ctx):
+        # Every block sleeps a DIFFERENT time, longest first: without the gate
+        # the later, faster blocks would finish first and the rows would land
+        # out of order.
+        await asyncio.sleep(0.05 / (rows[0]["i"] + 1))
+        order.append(f"{table}#{rows[0]['i']}")
+        return True
+
+    async def go():
+        b = RowBatcher(insert=sink, default=(1, 1 << 30, 1e9), max_inflight=16)
+        for i in range(6):
+            table = EDGES if i % 2 == 0 else EVIDENCE
+            await b.add(table, [{"i": i}], member=_member(f"m{i}"),
+                        dedup_token=f"m{i}")
+        await b.flush_all()
+
+    asyncio.run(go())
+    assert [o for o in order if o.startswith(EDGES)] == [
+        f"{EDGES}#0", f"{EDGES}#2", f"{EDGES}#4"]
+    assert [o for o in order if o.startswith(EVIDENCE)] == [
+        f"{EVIDENCE}#1", f"{EVIDENCE}#3", f"{EVIDENCE}#5"]
+    # ...and the two tables INTERLEAVED, which is the proof they ran
+    # concurrently rather than one table draining before the other started.
+    assert order != [f"{EDGES}#0", f"{EDGES}#2", f"{EDGES}#4",
+                     f"{EVIDENCE}#1", f"{EVIDENCE}#3", f"{EVIDENCE}#5"]
+
+
+def test_B14c_the_in_flight_bound_is_what_stops_unbounded_buffering():
+    """Writes no longer block their producer, so something else has to stop a
+    stalled table from letting the consumer build blocks forever with every
+    one of their rows resident. At the bound the producers OF THAT TABLE wait;
+    B14 already pinned that no other table does."""
+    sink = _StallSink(EDGES)
+
+    async def go():
+        b = RowBatcher(insert=sink, default=(1, 1 << 30, 1e9), max_inflight=2)
+        for i in range(2):
+            await asyncio.wait_for(
+                b.add(EDGES, [{"i": i}], member=_member(f"m{i}")), timeout=2.0)
+        assert b.inflight_for(EDGES) == 2
+        with pytest.raises(asyncio.TimeoutError):
+            await asyncio.wait_for(
+                b.add(EDGES, [{"i": 2}], member=_member("m2")), timeout=0.2)
+        assert b.stats()["writer_waits_total"] >= 1
+        sink.gate.set()
+        await asyncio.wait_for(b.flush_all(), timeout=5.0)
+        assert b.inflight_for(EDGES) == 0
+
+    asyncio.run(go())
+
+
+def test_B14d_the_block_tokens_are_unchanged_by_the_writer_split():
+    """The token is a pure function of the member keys in flush order, and
+    moving the INSERT into a task moved neither. Same fixture as B2b."""
+    seen: list[tuple[str, list, str]] = []
+
+    async def sink(table, rows, token, ctx):
+        seen.append((table, list(rows), token))
+        return True
+
+    async def go():
+        b = RowBatcher(insert=sink, default=(2, 1 << 30, 1e9))
+        await b.add(EDGES, [{"r": 1}], member=_member("obj:a:v1:open:aa"),
+                    dedup_token="obj:a:v1:open:aa:edges:0")
+        await b.add(EDGES, [{"r": 2}], member=_member("obj:b:v1:open:bb"),
+                    dedup_token="obj:b:v1:open:bb:edges:0")
+        await b.quiesce()
+
+    asyncio.run(go())
+    assert len(seen) == 1
+    assert seen[0][1] == [{"r": 1}, {"r": 2}]
+    assert seen[0][2] == batch_token(["obj:a:v1:open:aa:edges:0",
+                                      "obj:b:v1:open:bb:edges:0"])
+
+
+def test_B14e_a_stalled_evidence_block_does_not_stall_the_queue_put(_stack):
+    """The end-to-end shape of B14, on the live wiring: with `corr_edges` hung,
+    the Decision plane's `put` into the Evidence queue still returns promptly.
+    That is the property the 116 s flush destroyed — `persist.backpressure_wait`
+    is supposed to measure a FULL QUEUE, never a slow INSERT."""
+    ch = _RecCH()
+    ch.slow_tables[EDGES] = 30.0            # a block that never comes back
+    _stack.setattr(main, "ch", ch)
+    _stack.setattr(main, "OPEN_OBJECTS", {})
+    _stack.setattr(main, "CORR_EVIDENCE_ASYNC", True)
+    _stack.setattr(main, "CORR_EVIDENCE_BATCH", True)
+    _stack.setattr(main, "CORR_EVIDENCE_BATCH_ITEMS", 1)
+    snap, window = _storm_fixture(nodes=2, edges=4, ambient=10)
+
+    async def go():
+        _reset_engine_state()
+        main._WINDOW_INDEX_CACHE.clear()
+        main._ARCHIVE_SLICE_HASH.clear()
+        assert main._evidence_ensure_consumer() is not None
+        t0 = time.monotonic()
+        for v in range(1, 4):
+            await asyncio.wait_for(
+                main._persist_snapshot(snap, v, "open", window), timeout=5.0)
+        elapsed = time.monotonic() - t0
+        # Let the consumer drain what it can while corr_edges is hung.
+        await asyncio.sleep(0.2)
+        got = {t for t, _rows, _tok in ch.writes}
+        with contextlib.suppress(asyncio.TimeoutError):
+            await asyncio.wait_for(main._evidence_stop(), timeout=1.0)
+        return elapsed, got
+
+    elapsed, got = asyncio.run(go())
+    assert elapsed < 3.0, (
+        f"the Decision writes waited {elapsed:.1f}s on a hung Evidence INSERT")
+    assert "netops.corr_objects" in got and EDGES in got
+    assert ARCHIVE in got or EVIDENCE in got, (
+        f"a hung {EDGES} block stopped every other Evidence table: {sorted(got)}")
+
+
+# ═══ B15 — the CYCLE COLLECTOR, the second residual ══════════════════════════
+#
+# B12 disables the collector inside its measured window on purpose: a gen-2
+# sweep runs on whichever thread trips the threshold, holds the GIL for its
+# whole duration and is sized by the PROCESS heap, so leaving it on would make
+# that test measure the heap the rest of the suite happens to hold. This is the
+# test for the collector itself — the flag ON, the collector ENABLED, and a
+# retained heap standing in for the 15-25k open objects the live replica holds.
+
+@pytest.fixture
+def _gc_restore():
+    """Every global this touches, put back — a leaked `gc.freeze()` or a raised
+    threshold would silently change every test that runs after it."""
+    thresholds = gc.get_threshold()
+    enabled = gc.isenabled()
+    tuned, frozen = main._GC_TUNED, main.GC_FROZEN_OBJECTS
+    pause_max, pause_total = main.GC_PAUSE_MAX_S, main.GC_PAUSE_TOTAL_S
+    counts = list(main.GC_COLLECTIONS)
+    yield
+    gc.unfreeze()
+    gc.set_threshold(*thresholds)
+    (gc.enable if enabled else gc.disable)()
+    main._GC_TUNED, main.GC_FROZEN_OBJECTS = tuned, frozen
+    main.GC_PAUSE_MAX_S, main.GC_PAUSE_TOTAL_S = pause_max, pause_total
+    main.GC_COLLECTIONS[:] = counts
+    if main._gc_probe in gc.callbacks:
+        gc.callbacks.remove(main._gc_probe)
+
+
+def _gc_leg(_stack, snap, window, *, tune: bool, ballast: list) -> tuple[float, list]:
+    """One persist+drain of the aggregate with the collector ENABLED."""
+    assert ballast, "the heap the collector has to walk must actually exist"
+    _aggregate_stack(_stack, batch=True)
+    _stack.setattr(main, "CORR_LOOP_LAG_SAMPLE_S", 0.02)
+    _stack.setattr(main, "CORR_LOOP_LAG_WARN_MS", 500.0)
+    _stack.setattr(main, "CORR_GC_TUNE", tune)
+    for attr in ("_content_hash_c", "_material_hash_c"):
+        with contextlib.suppress(AttributeError):
+            object.__delattr__(snap, attr)
+    # Both legs start from a fully collected, promoted heap so the A/B measures
+    # the RUN and not whoever paid for the first full sweep.
+    gc.set_threshold(700, 10, 10)
+    gc.unfreeze()
+    gc.enable()
+    gc.collect()
+    main._GC_TUNED = False
+    main.gc_tune_startup()
+    main.GC_PAUSE_MAX_S = 0.0
+    main.GC_COLLECTIONS[:] = [0, 0, 0]
+    assert gc.isenabled(), "the policy must NEVER disable the collector"
+
+    async def go():
+        async def work():
+            await _persist_and_drain(snap, window)
+        return await _watchdog_lag_while(work)
+
+    return asyncio.run(go()), list(main.GC_COLLECTIONS)
+
+
+def test_B15_the_aggregate_stays_inside_the_budget_with_the_collector_on(
+        _stack, storm_aggregate, _gc_restore):
+    """The §4 budget, with the collector RUNNING and a heap for it to walk.
+
+    MEASURED on this fixture with a 3,000,000-object retained heap (harness
+    `measure_gc.py`, two reps each): worst loop-lag sample 128 / 145 ms with
+    the policy off and 107 / 168 ms with it on, `corr_gc_pause_seconds_max`
+    29-31 ms off and 43-45 ms on. Both inside the budget — the multi-second
+    collector stall that motivated this policy does not survive the sizing fix
+    plus a settled heap. What the policy is worth is stated by B15c."""
+    snap, window = storm_aggregate
+    ballast = [{"a": i, "b": str(i)} for i in range(300_000)]
+    lag, _counts = _gc_leg(_stack, snap, window, tune=True, ballast=ballast)
+    assert gc.isenabled()
+    assert lag < 500.0, (
+        f"the aggregate held the loop for {lag:.0f} ms with the collector on "
+        f"(gc pause max {main.GC_PAUSE_MAX_S * 1000:.0f} ms) — read those two "
+        f"together: a stall with a matching gc pause is the heap, one without "
+        f"is our code")
+    del ballast
+
+
+def test_B15b_the_policy_cuts_the_collection_count_without_disabling_anything(
+        _stack, storm_aggregate, _gc_restore):
+    """What the tuning actually buys, measured rather than asserted by faith:
+    the same work, an order of magnitude fewer collections, and the collector
+    still enabled. Harness numbers over 3 persists on a 3M-object heap:
+    1,113-1,226 gen-0 + 101-111 gen-1 collections and 1,010-1,112 ms total in
+    the collector, against 39-40 gen-0 / 0 gen-1 and 709-755 ms with the
+    policy on."""
+    snap, window = storm_aggregate
+    ballast = [{"a": i, "b": str(i)} for i in range(300_000)]
+    _lag_off, off = _gc_leg(_stack, snap, window, tune=False, ballast=ballast)
+    _lag_on, on = _gc_leg(_stack, snap, window, tune=True, ballast=ballast)
+    assert gc.isenabled(), "never disabled, on either leg"
+    assert off[0] >= 50, f"the untuned leg must actually collect ({off})"
+    assert on[0] * 5 <= off[0], (
+        f"the policy cut gen-0 collections from {off[0]} to {on[0]} — under the "
+        f"order of magnitude the measured thresholds give")
+    assert on[1] <= off[1] and on[2] <= off[2]
+    del ballast
+
+
+def test_B15c_the_flag_off_leaves_the_collector_exactly_as_it_found_it(_gc_restore):
+    """`CORR_GC_TUNE=0` must touch nothing — no freeze, no thresholds — while
+    the PROBE stays installed, because 'is the collector the stall?' is the
+    question and a flag that hides the answer when it is off makes the A/B
+    unreadable."""
+    gc.set_threshold(700, 10, 10)
+    gc.unfreeze()
+    main._GC_TUNED = False
+    main.CORR_GC_TUNE = False
+    main.gc_tune_startup()
+    assert gc.get_threshold() == (700, 10, 10), "the flag-off leg tuned anyway"
+    assert gc.get_freeze_count() == 0, "the flag-off leg froze anyway"
+    assert main._GC_TUNED is False
+    assert main._gc_probe in gc.callbacks, "the measurement is not flag-gated"
+
+    main.CORR_GC_TUNE = True
+    main.gc_tune_startup()
+    assert gc.get_threshold() == (main.CORR_GC_GEN0, main.CORR_GC_GEN1,
+                                  main.CORR_GC_GEN2)
+    assert gc.get_freeze_count() > 0 and main._GC_TUNED is True
+    assert gc.isenabled(), "the policy must NEVER disable the collector"
+    # Idempotent: a second call must not re-freeze or re-walk.
+    before = gc.get_freeze_count()
+    main.gc_tune_startup()
+    assert gc.get_freeze_count() == before
+
+
+def test_B15d_the_gc_metrics_are_exposed(_gc_restore):
+    """§10: the residual stall has to be ATTRIBUTABLE on the next run, which
+    means the pause is a series next to `corr_loop_lag_max_ms`."""
+    main._GC_TUNED = False
+    main.CORR_GC_TUNE = True
+    main.gc_tune_startup()
+    gc.collect()                      # at least one timed collection
+    body = asyncio.run(main.metrics_exposition()).body.decode()
+    for series in ('corr_gc_collections_total{generation="0"}',
+                   'corr_gc_collections_total{generation="1"}',
+                   'corr_gc_collections_total{generation="2"}',
+                   "corr_gc_pause_seconds_max",
+                   "corr_gc_pause_seconds_total",
+                   "corr_gc_frozen_objects",
+                   "corr_gc_tuned"):
+        assert series in body, f"{series} is not exposed"
+    assert "corr_loop_lag_max_ms" in body, "the gauge it explains must be there too"
+    st = main.gc_stats()
+    assert st["enabled"] is True and st["tuned"] is True
+    assert st["collections"][2] >= 1 and st["pause_seconds_max"] > 0
+    assert list(st["thresholds"]) == [main.CORR_GC_GEN0, main.CORR_GC_GEN1,
+                                      main.CORR_GC_GEN2]
