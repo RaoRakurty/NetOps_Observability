@@ -97,6 +97,14 @@ from engine import (
 )
 from entity_resolver import EntityResolver
 from episodes import EpisodeDetector
+from evidence_plane import (
+    EVIDENCE_CLASS_DECISION,
+    EVIDENCE_CLASS_HEARTBEAT,
+    EVIDENCE_CLASS_TERMINAL,
+    EvidenceItem,
+    EvidenceQueue,
+    estimate_bytes,
+)
 from flow_app_attribution import AppIdentityIndex, resolve_flow_app
 from flow_direction import flow_direction_sample, netflow_direction_source
 from lb_normalize import normalize_lb_event
@@ -2453,13 +2461,92 @@ RANK_MEMO: RankMemo | None = (
     RankMemo(CORR_RANK_MEMO_MAX)
     if (CORR_COHORT_TOUCH_GATE and CORR_RANK_MEMO) else None)
 
+# ── P2 step 4: the ASYNC EVIDENCE PLANE ──────────────────────────────────────
+# docs/design/DECISION_EVIDENCE_SPLIT_P2_2026-08-28.md §1/§4, §9 item 4;
+# measured brief docs/scale/P2_STEPS012_2P5K_VERDICT_2026-08-29.md §4.3.
+#
+# WHY. Steps 0-2 removed the compute bottleneck (`run_window` is 104 s TOTAL
+# over the live 2.5K run's 33 cohorts, p50 34 ms) and the remaining ~4,800 s of
+# engine wall is the per-version PERSIST path: ~7,500 versions per cohort x
+# (corr_objects + corr_current + edges pages + evidence pages + archive slice),
+# each an awaited ClickHouse insert of ~7 ms plus its row building — 149,590
+# inserts / 1,840 s in the measured window. The operator's verdict (the
+# corr_objects + corr_current rows) EXISTS at the start of that ~1,000 s and is
+# written behind the Evidence rows of every earlier object in the cohort.
+#
+# WHAT IT DOES. _persist_snapshot splits in two. The DECISION write (object row
+# + current row, byte-for-byte today's rows, tokens and order) stays synchronous.
+# The EVIDENCE write (edges, typed edges, evidence, archive slice — the same
+# functions, the same dedup tokens, the same bytes) becomes an EvidenceItem on a
+# bounded, priority-ordered queue drained by one in-process consumer task.
+#
+# WHAT IT DOES NOT DO. It moves no byte and no token: an item is a pure function
+# of a frozen snapshot that already exists, and the archive-slice damping
+# decision is made SYNCHRONOUSLY in version order (see _persist_snapshot) so the
+# drain order cannot decide which slices exist. Nothing is ever dropped: a full
+# queue BLOCKS the Decision plane (counted as backpressure), which is the
+# lossless half of owner memo §22.
+#
+# Knobs read once at import like every other CORR_* flag, so the A/B runs on ONE
+# image. CORR_EVIDENCE_ASYNC=0 => the Evidence write happens inline, exactly
+# where and when it happens today.
+CORR_EVIDENCE_ASYNC = os.environ.get(
+    "CORR_EVIDENCE_ASYNC", "1").lower() in ("1", "true", "yes")
+# Item bound (spec §4 default 5,000) and the RSS bound. The byte figure is an
+# ESTIMATE of the snapshot/slice bytes the queued items keep reachable
+# (evidence_plane.estimate_bytes) — it exists to stop a storm cohort from
+# parking 25k open objects' graphs in a queue, not to be an accounting number.
+CORR_EVIDENCE_QUEUE_MAX = max(1, int(os.environ.get("CORR_EVIDENCE_QUEUE_MAX", "5000")))
+CORR_EVIDENCE_QUEUE_BYTES_MAX = max(1, int(
+    os.environ.get("CORR_EVIDENCE_QUEUE_BYTES_MAX", str(512 * 1024 * 1024))))
+# Shutdown: how long the queue may keep draining after the producers stop.
+# Whatever is still queued when it expires is LOGGED PER ITEM and counted as
+# corr_evidence_items_total{outcome="lost"} — an Evidence row that never landed
+# must be a fact on the way out, never a silence.
+CORR_EVIDENCE_DRAIN_ON_STOP_S = max(0.0, float(
+    os.environ.get("CORR_EVIDENCE_DRAIN_ON_STOP_S", "60")))
+
+# ── P2 step 4a: the LIFECYCLE COHORT WINDOW ──────────────────────────────────
+# docs/scale/P2_STEPS012_2P5K_VERDICT_2026-08-29.md §4.2 — the measured
+# regression this fixes. P1 change H hoisted merge/quiesce/cap to EPOCH cadence
+# over the epoch's UNION of seen ids, which found 378 predicate-valid merges.
+# P2 step 1's epoch budget then made every epoch exactly ONE cohort (a cohort
+# costs ~1,000 s against a 300 s budget), so the union collapsed back to a
+# single cohort's seen set — the per-cohort lifecycle P1 replaced — and merges
+# fell to 11, i.e. back to OLD.
+#
+# The fix decouples the MERGE candidate space from the epoch: the pass still
+# runs at epoch end, but `find_merges` sees the union of the last K cohorts'
+# seen sets, kept in a module-level deque ACROSS epochs. K = 20 =
+# CORR_ENGINE_DRAIN_COHORTS, the pre-budget drain bound, so the candidate space
+# is exactly the one P1 measured.
+#
+# SCOPE, and it is deliberately narrow: the window widens ONLY the survivor /
+# stale partition `find_merges` is given. QUIESCE and the 163 count cap keep the
+# EPOCH's seen set. Widening those too would be a real regression rather than a
+# fix — `seen` is how quiesce says "this object materialized, don't age it", and
+# a cohort can be ~1,000 s wide at 2.5K, so K cohorts of history would hold
+# objects open far past CORR_QUIESCE_S and push the population onto the 163 cap
+# instead of closing it. The measured regression (§4.2) is a MERGE regression;
+# this fixes that and nothing else.
+#
+# 0 = the P1 shape (epoch union for everything).
+CORR_LIFECYCLE_COHORT_WINDOW = max(0, int(
+    os.environ.get("CORR_LIFECYCLE_COHORT_WINDOW",
+                   str(CORR_ENGINE_DRAIN_COHORTS))))
+
 
 def rank_memo_stats() -> dict[str, int]:
     """§10 observable for the level-1 memo. Zeros (not an absent key) when the
     memo is off, so a dashboard never has to distinguish 'off' from 'missing'."""
     if RANK_MEMO is None:
+        # The key SET must not depend on the flag — a dashboard that has to
+        # distinguish "off" from "missing" is a dashboard that will read a
+        # missing key as a zero on the day it matters. `bytes`/`bytes_max`/
+        # `evicted_bytes` are the memflat byte bound (rank_memo.py, 2026-08-29).
         return {"entries": 0, "max_entries": 0, "hits": 0, "misses": 0,
-                "evicted": 0, "unkeyable": 0}
+                "evicted": 0, "unkeyable": 0,
+                "bytes": 0, "bytes_max": 0, "evicted_bytes": 0}
     return RANK_MEMO.stats()
 
 # ── Tracker 172: ingest-priority scheduling (gate spec §4.3 subset contract) ─
@@ -2997,6 +3084,18 @@ def epoch_state() -> dict[str, object]:
         "cohort_touched": COHORT_TOUCHED_LAST,
         "lifecycle_passes_total": LIFECYCLE_PASSES_TOTAL,
         "open_objects_epoch_peak": OPEN_OBJECTS_EPOCH_PEAK,
+        # ── P2 step 4a: the lifecycle candidate space. THE invariant: with a
+        # 300 s epoch budget `cohorts_last` is often 1, and
+        # `lifecycle_seen_window_cohorts` is what keeps the merge candidate
+        # space at the K cohorts P1 measured instead of collapsing with it.
+        "lifecycle_cohort_window": CORR_LIFECYCLE_COHORT_WINDOW,
+        "lifecycle_seen_window_cohorts": LIFECYCLE_SEEN_WINDOW_COHORTS,
+        "lifecycle_seen_window_ids": LIFECYCLE_SEEN_WINDOW_IDS,
+        # ── P2 step 4: the Evidence plane. THE invariant: `depth` returns to 0
+        # between storms (spec §2's T8) and `lag_seconds` is the operator's
+        # T7 — the time from a verdict to its materialized graph. `failed_total`
+        # and `lost_total` must both stay 0.
+        "evidence": evidence_stats(),
         # ── P2 step 1: the epoch budget (spec §4). `budget_exits` counts sweeps
         # that ended on wall time rather than on the cohort bound or an empty
         # epoch; 0 with a large epoch_seconds_max means the budget is off.
@@ -3497,18 +3596,29 @@ def _sid_of(window: Sequence[Signal], sig: Signal) -> str:
     return got if got is not None else sig.signal_id_str
 
 
-def _archive_row(sig: Signal, corr_id: str, version: int) -> dict:
+def _archive_row(sig: Signal, corr_id: str, version: int, *,
+                 cache: bool = True) -> dict:
     """One archive row, reusing this cycle's base row for `sig` if we built one.
 
     Always returns a FRESH dict (and a fresh entity_tokens list), because the
     caller stamps archived_for/archived_version onto it and every object needs
     its own stamps.
+
+    `cache=False` (P2 step 4) skips `_CYCLE_ROW_CACHE` entirely. That cache is
+    keyed by `id(sig)` and its whole safety argument is that every signal it
+    holds belongs to the ONE window the current cycle is keeping alive. The
+    Evidence consumer runs between cycles, over items drawn from several of
+    them, so a Signal freed with one item could have its id recycled by a later
+    item's — the cache would then serve the WRONG row. The deferred path
+    therefore builds fresh; `to_ch_row` is deterministic, so the bytes are
+    identical either way.
     """
     key = id(sig)
-    base = _CYCLE_ROW_CACHE.get(key)
+    base = _CYCLE_ROW_CACHE.get(key) if cache else None
     if base is None:
         base = sig.to_ch_row()
-        _CYCLE_ROW_CACHE[key] = base
+        if cache:
+            _CYCLE_ROW_CACHE[key] = base
     row = dict(base)
     row["entity_tokens"] = list(base["entity_tokens"])
     row["archived_for"] = corr_id
@@ -3662,8 +3772,27 @@ async def _emit_child_rows(table: str, snap: ObjectSnapshot, build_page,
 
 async def _persist_snapshot(snap: ObjectSnapshot, version: int, state: str,
                             window: Sequence[Signal], merged_into: str = "",
-                            loop_yield=_noop_yield) -> None:
+                            loop_yield=_noop_yield,
+                            priority_class: int = EVIDENCE_CLASS_DECISION) -> None:
+    """The Decision write, then the Evidence write (inline or deferred).
+
+    P2 step 4 (spec §1/§4): everything up to and including the `corr_current`
+    projection is the DECISION plane — the operator's verdict, unchanged in
+    bytes, tokens and order. Everything after it is the EVIDENCE plane, handed
+    to `_write_evidence` either inline (CORR_EVIDENCE_ASYNC=0) or through the
+    bounded priority queue.
+
+    `priority_class` is the caller's content-derived statement of what this
+    version IS (new incident / material change, terminal, unchanged re-persist);
+    see evidence_plane's module docstring. It affects the Evidence DRAIN ORDER
+    only — never a byte, never a token, never a verdict.
+    """
     assert ch is not None
+    # P2 step 4 observability: the profiler must show the SPLIT, so the two
+    # halves are timed separately — `persist.decision` is what the operator's
+    # verdict costs, `persist.evidence` (in _write_evidence) is what the graph
+    # costs. Read together they are today's single persist figure.
+    _t_decision = time.perf_counter() if CORR_PROFILE_STAGES else 0.0
     # P1 (1000-device scale): every serializer below is offloaded for a large
     # graph — see _offload. On the live 48,375-edge object these four calls plus
     # the token hash were ~3.2s of frozen loop; the heartbeat task died in them.
@@ -3723,6 +3852,99 @@ async def _persist_snapshot(snap: ObjectSnapshot, version: int, state: str,
             snap.tenant_id, snap.correlation_id, version,
             await _snap_call(snap, snap.material_hash), retryable, err,
         )
+    # ── P2 step 4: the Decision plane ends HERE ──────────────────────────────
+    # Everything above is the operator's verdict — the corr_objects row and the
+    # corr_current projection, byte-for-byte the rows, tokens and order they
+    # have always been. Everything below is the EVIDENCE plane: the same
+    # functions, the same dedup tokens, the same bytes, either written inline
+    # (CORR_EVIDENCE_ASYNC=0) or deferred onto the bounded priority queue.
+    #
+    # Stage [8] archive: a BOUNDED, node-complete slice of the tenant window
+    # (see _archive_slice — replay-exact for THIS object, no longer the whole
+    # 50k-floor tenant window per object version). Slices stay version-scoped:
+    # replay re-runs exactly the window slice THIS version was computed from.
+    #
+    # The slice MEMBERSHIP and its DAMPING DECISION are computed here, on the
+    # Decision path, for two independent reasons:
+    #   1. `_archive_slice` needs the epoch's `window` and this cycle's window
+    #      index, and both are dropped (`_close_epoch`, `_WINDOW_INDEX_CACHE`)
+    #      long before a deferred item could drain.
+    #   2. Determinism (spec §1): the damping rule is "same membership as the
+    #      LAST ARCHIVED version of this object". Evaluated in the consumer it
+    #      would be decided by the drain ORDER — a runtime condition deciding
+    #      WHAT is written, which §1 forbids. Evaluated here it is decided in
+    #      version order, exactly as today.
+    global ARCHIVE_SLICES_DAMPED
+    global ARCHIVE_SLICE_ROWS_LAST, ARCHIVE_SLICE_ROWS_MAX
+    slice_sigs = _archive_slice(snap, window)
+    slice_hash = ""
+    if slice_sigs:
+        ARCHIVE_SLICE_ROWS_LAST = len(slice_sigs)
+        ARCHIVE_SLICE_ROWS_MAX = max(ARCHIVE_SLICE_ROWS_MAX, len(slice_sigs))
+        slice_hash = hashlib.sha256(
+            "|".join(_sid_of(window, s) for s in slice_sigs).encode()).hexdigest()[:16]
+        if _ARCHIVE_SLICE_HASH.get(snap.correlation_id) == slice_hash:
+            # Same membership as the last archived version of this object —
+            # skip the re-write. Readers (replay._select_slice, the Go timeline
+            # archived_version fallback) resolve to the newest slice ≤ version.
+            ARCHIVE_SLICES_DAMPED += 1
+            slice_sigs = []
+        else:
+            # Recorded OPTIMISTICALLY, before the rows land, because the write
+            # may now be deferred: the next version must not re-archive an
+            # identical membership just because this one has not drained yet.
+            # A FAILED evidence write reverts it (see _write_evidence), so the
+            # next version re-writes the slice exactly as it does today.
+            _ARCHIVE_SLICE_HASH[snap.correlation_id] = slice_hash
+    item = EvidenceItem(
+        correlation_id=snap.correlation_id, tenant_id=snap.tenant_id,
+        version=version, state=state, tok=tok, snap=snap,
+        priority_class=priority_class,
+        window_start_ts=snap.window_start.timestamp(),
+        slice_sigs=list(slice_sigs) if slice_sigs else None,
+        slice_hash=slice_hash,
+        est_bytes=estimate_bytes(len(snap.nodes), len(snap.edges),
+                                 len(slice_sigs) if slice_sigs else 0),
+    )
+    if CORR_PROFILE_STAGES and _t_decision:
+        stage_record("persist.decision", time.perf_counter() - _t_decision)
+    queue = _active_evidence_queue()
+    if queue is not None:
+        # Bounded, blocking, never dropping (owner memo §22). A full queue slows
+        # the Decision plane down; it never loses an Evidence row.
+        await queue.put(item)
+    else:
+        await _write_evidence(item, loop_yield)
+    log.info("corr-object %s v%d %s: top=%s tier=%s nodes=%d edges=%d",
+             snap.correlation_id[:8], version, state, snap.ranking.top_hypothesis,
+             snap.ranking.verdict_tier.value, len(snap.nodes), len(snap.edges))
+
+
+async def _write_evidence(item: EvidenceItem, loop_yield=_noop_yield) -> bool:
+    """Materialize ONE EvidenceItem: edges -> typed edges -> evidence -> archive.
+
+    This is `_persist_snapshot`'s second half, moved verbatim — the same
+    functions, the same page sizes, the same dedup tokens, the same order. The
+    only thing that changed is WHEN it runs (spec §1). Called inline when
+    CORR_EVIDENCE_ASYNC=0 and from the Evidence consumer otherwise; both paths
+    run this one body, which is what makes the byte-identity tests meaningful.
+
+    Returns False when the archive slice did not land whole (the bool contract
+    `corr_signals_archive` has always had — it is not an RCA-critical table, so
+    `ch_insert` reports rather than raises). The RCA-critical child tables still
+    RAISE `CHInsertRejected`: inline that reaches the cohort exactly as it does
+    today; from the consumer it is caught, counted and logged there.
+    """
+    _t0 = time.perf_counter() if CORR_PROFILE_STAGES else 0.0
+    try:
+        return await _write_evidence_inner(item, loop_yield)
+    finally:
+        if CORR_PROFILE_STAGES and _t0:
+            stage_record("persist.evidence", time.perf_counter() - _t0)
+
+
+async def _write_evidence_inner(item: EvidenceItem, loop_yield) -> bool:
+    snap, version, tok = item.snap, item.version, item.tok
     # P0 boundedness pass: the edge/evidence child rows scale with the storm's
     # edge count (~180k worst case), so they are emitted in bounded pages (see
     # _emit_child_rows) — no single synchronous serialize+insert step tracks the
@@ -3742,49 +3964,284 @@ async def _persist_snapshot(snap: ObjectSnapshot, version: int, state: str,
     await _emit_child_rows("netops.corr_evidence", snap, snap.evidence_row_page,
                            snap.evidence_row_count(), version, f"{tok}:evidence",
                            loop_yield)
-    # Stage [8] archive: a BOUNDED, node-complete slice of the tenant window
-    # (see _archive_slice — replay-exact for THIS object, no longer the whole
-    # 50k-floor tenant window per object version). Slices stay version-scoped:
-    # replay re-runs exactly the window slice THIS version was computed from.
-    global ARCHIVE_ROWS_WRITTEN, ARCHIVE_SLICES_DAMPED
-    global ARCHIVE_SLICE_ROWS_LAST, ARCHIVE_SLICE_ROWS_MAX
-    slice_sigs = _archive_slice(snap, window)
-    if slice_sigs:
-        ARCHIVE_SLICE_ROWS_LAST = len(slice_sigs)
-        ARCHIVE_SLICE_ROWS_MAX = max(ARCHIVE_SLICE_ROWS_MAX, len(slice_sigs))
-        slice_hash = hashlib.sha256(
-            "|".join(_sid_of(window, s) for s in slice_sigs).encode()).hexdigest()[:16]
-        if _ARCHIVE_SLICE_HASH.get(snap.correlation_id) == slice_hash:
-            # Same membership as the last archived version of this object —
-            # skip the re-write. Readers (replay._select_slice, the Go timeline
-            # archived_version fallback) resolve to the newest slice ≤ version.
-            ARCHIVE_SLICES_DAMPED += 1
+    global ARCHIVE_ROWS_WRITTEN
+    slice_sigs = item.slice_sigs
+    if not slice_sigs:
+        return True
+    # Chunked, and BUILT per chunk (tracker 156). Chunking only the INSERT still
+    # materialised the whole slice as row dicts first, so peak transient memory
+    # was slice_size x ~1 KB — tens of MB per object version, per cycle, in the
+    # container that runs closest to its cgroup cap. Building inside the loop
+    # bounds that peak to CORR_ARCHIVE_CHUNK_ROWS rows regardless of slice size,
+    # while the insert bodies and the loop yields are unchanged.
+    all_ok = True
+    for start in range(0, len(slice_sigs), CORR_ARCHIVE_CHUNK_ROWS):
+        # cache=False: `_archive_row`'s per-cycle base-row cache is keyed by
+        # id(sig), and its safety argument is that every archived signal belongs
+        # to the ONE window the cycle is holding open. The Evidence consumer
+        # runs BETWEEN cycles over signals from several of them, where a freed
+        # Signal's id can be recycled by a later item's — so the deferred path
+        # builds its rows fresh. Byte-identical (`to_ch_row` is deterministic);
+        # what it costs is the cross-object row reuse, measured in the bench.
+        chunk = [_archive_row(sig, snap.correlation_id, version, cache=False)
+                 for sig in slice_sigs[start:start + CORR_ARCHIVE_CHUNK_ROWS]]
+        ok = await ch_insert(
+            "netops.corr_signals_archive", chunk,
+            corr_id=snap.correlation_id, version=version, row_count=len(chunk))
+        if ok is False:
+            all_ok = False
         else:
-            # Chunked, and BUILT per chunk (tracker 156). Chunking only the
-            # INSERT still materialised the whole slice as row dicts first, so
-            # peak transient memory was slice_size x ~1 KB — tens of MB per
-            # object version, per cycle, in the container that runs closest to
-            # its cgroup cap. Building inside the loop bounds that peak to
-            # CORR_ARCHIVE_CHUNK_ROWS rows regardless of slice size, while the
-            # insert bodies and the loop yields are unchanged. All chunks must
-            # land before the slice hash is recorded — a partial slice must be
-            # retried whole on the next persist.
-            all_ok = True
-            for start in range(0, len(slice_sigs), CORR_ARCHIVE_CHUNK_ROWS):
-                chunk = [_archive_row(sig, snap.correlation_id, version)
-                         for sig in slice_sigs[start:start + CORR_ARCHIVE_CHUNK_ROWS]]
-                ok = await ch_insert(
-                    "netops.corr_signals_archive", chunk,
-                    corr_id=snap.correlation_id, version=version, row_count=len(chunk))
-                if ok is False:
-                    all_ok = False
-                else:
-                    ARCHIVE_ROWS_WRITTEN += len(chunk)
-            if all_ok:
-                _ARCHIVE_SLICE_HASH[snap.correlation_id] = slice_hash
-    log.info("corr-object %s v%d %s: top=%s tier=%s nodes=%d edges=%d",
-             snap.correlation_id[:8], version, state, snap.ranking.top_hypothesis,
-             snap.ranking.verdict_tier.value, len(snap.nodes), len(snap.edges))
+            ARCHIVE_ROWS_WRITTEN += len(chunk)
+        await loop_yield()
+    # The slice did not land WHOLE, so it must be retried whole on the next
+    # persist of this object. Today that is expressed by not recording the
+    # membership hash; the record is now made optimistically on the Decision path
+    # (it has to be — the next version's damping decision cannot wait for this
+    # write), so the same rule is expressed as a REVERT. Guarded on identity so a
+    # later version's successful record is never clobbered by an earlier
+    # version's failure draining out of order.
+    if not all_ok and _ARCHIVE_SLICE_HASH.get(snap.correlation_id) == item.slice_hash:
+        _ARCHIVE_SLICE_HASH.pop(snap.correlation_id, None)
+    return all_ok
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# P2 step 4 — the Evidence plane's consumer, queue and lifecycle
+# docs/design/DECISION_EVIDENCE_SPLIT_P2_2026-08-28.md §1, §4, §9 item 4.
+#
+# ONE in-process task drains ONE bounded priority queue (evidence_plane.py) and
+# writes each item with `_write_evidence` — the same functions, tokens and bytes
+# the inline path uses. It exists so a cohort's verdict rows are not queued
+# behind that cohort's own Evidence rows (measured: ~1,000 s per cohort, of
+# which the verdict is the first ~100 ms — P2_STEPS012_2P5K_VERDICT §4.3).
+#
+# DURABILITY, stated plainly because it is a real change:
+#   * An Evidence write that FAILS after `ch_insert`'s bounded retries is
+#     counted (corr_evidence_items_total{outcome="failed"}) and logged with a
+#     traceback. Inline, a rejected RCA-critical child write raised out of the
+#     cohort and the whole cohort was retried; from the consumer there is no
+#     cohort to retry, so the item is lost and LOUD instead of silently
+#     replayed. The Decision row for that version stands (it landed first), so
+#     the incident is never invisible — only its graph is, until the next
+#     version of the object re-emits it.
+#   * Items still queued when the process stops are drained for at most
+#     CORR_EVIDENCE_DRAIN_ON_STOP_S, then logged ONE LINE EACH and counted as
+#     outcome="lost". Spec §2's VVR (`evidence_state`) is where this becomes
+#     detectable AFTER a restart; this step adds NO schema, so the shutdown log
+#     and the counter are the whole detection surface.
+# ═══════════════════════════════════════════════════════════════════════════
+_EVIDENCE_QUEUE: EvidenceQueue | None = None
+_EVIDENCE_TASK: asyncio.Task | None = None
+_EVIDENCE_LOOP: asyncio.AbstractEventLoop | None = None
+EVIDENCE_ITEMS_MATERIALIZED = 0
+EVIDENCE_ITEMS_FAILED = 0
+EVIDENCE_ITEMS_LOST = 0
+
+
+def _active_evidence_queue() -> EvidenceQueue | None:
+    """The Evidence queue, but ONLY if it can actually drain right now.
+
+    Three conditions, all load-bearing: the plane is enabled, its consumer task
+    is alive, and the caller is on the SAME event loop that consumer runs on.
+    The last one is not paranoia — a process runs many loops over its life (every
+    `asyncio.run` is one), and enqueueing onto a queue whose consumer belongs to
+    a dead loop would silently swallow the Evidence rows of every caller that
+    followed. Anything that fails these writes its Evidence INLINE, which is
+    always correct and never lossy.
+    """
+    if not CORR_EVIDENCE_ASYNC or _EVIDENCE_QUEUE is None:
+        return None
+    if _EVIDENCE_TASK is None or _EVIDENCE_TASK.done():
+        return None
+    try:
+        if asyncio.get_running_loop() is not _EVIDENCE_LOOP:
+            return None
+    except RuntimeError:
+        return None
+    return _EVIDENCE_QUEUE
+
+
+def _evidence_ensure_consumer() -> EvidenceQueue | None:
+    """Start (or adopt) the Evidence consumer for the RUNNING loop.
+
+    Called from `engine_cycle` and from `lifespan`, never from `_persist_snapshot`
+    itself: a direct `_persist_snapshot` call outside the engine (tests, the
+    replay tools) must keep writing its Evidence inline, because nothing there
+    would ever drain a queue.
+
+    The loop identity is checked because a process can run several loops over
+    its life (every `asyncio.run` in the test suite is one). A queue bound to a
+    dead loop can never drain, so its contents are counted as lost and reported
+    rather than carried silently into the new one.
+    """
+    global _EVIDENCE_QUEUE, _EVIDENCE_TASK, _EVIDENCE_LOOP, EVIDENCE_ITEMS_LOST
+    if not CORR_EVIDENCE_ASYNC:
+        return None
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:            # no loop: an inline caller, nothing to start
+        return None
+    if (_EVIDENCE_TASK is not None and _EVIDENCE_LOOP is loop
+            and not _EVIDENCE_TASK.done()):
+        return _EVIDENCE_QUEUE
+    if _EVIDENCE_QUEUE is not None and _EVIDENCE_QUEUE.qsize():
+        stranded = _EVIDENCE_QUEUE.pending()
+        EVIDENCE_ITEMS_LOST += len(stranded)
+        why = ("its consumer task ENDED"
+               if (_EVIDENCE_TASK is not None and _EVIDENCE_TASK.done())
+               else "its event loop is gone")
+        log.warning("evidence queue abandoned with %d item(s) — %s; counted as "
+                    "lost (outcome=lost) and replaced. A consumer that ended on "
+                    "its own is a DEFECT: read the traceback above it.",
+                    len(stranded), why)
+        for it in stranded:
+            log.info("evidence LOST (stranded queue) corr_id=%s version=%d state=%s",
+                     it.correlation_id, it.version, it.state)
+    _EVIDENCE_QUEUE = EvidenceQueue(CORR_EVIDENCE_QUEUE_MAX,
+                                    CORR_EVIDENCE_QUEUE_BYTES_MAX)
+    _EVIDENCE_LOOP = loop
+    _EVIDENCE_TASK = loop.create_task(_evidence_consumer(_EVIDENCE_QUEUE))
+    log.info("evidence plane ASYNC: bound=%d items / %d bytes, drain-on-stop=%.0fs",
+             CORR_EVIDENCE_QUEUE_MAX, CORR_EVIDENCE_QUEUE_BYTES_MAX,
+             CORR_EVIDENCE_DRAIN_ON_STOP_S)
+    return _EVIDENCE_QUEUE
+
+
+async def _evidence_consumer(queue: EvidenceQueue) -> None:
+    """Drain the Evidence queue forever, one item at a time.
+
+    Cooperative exactly like `_emit_child_rows`: the per-item write is handed
+    the same `_make_loop_yield()` gate the cohort uses, and the consumer yields
+    between items, so a 2,000-item backlog cannot hold the loop thread past the
+    Kafka session timeout (pinned by the loop-lag tests).
+    """
+    global EVIDENCE_ITEMS_MATERIALIZED, EVIDENCE_ITEMS_FAILED, EVIDENCE_ITEMS_LOST
+    loop_yield, reset_yield = _make_loop_yield()
+    while True:
+        item = await queue.get()
+        queue.begin()
+        reset_yield()
+        try:
+            ok = await _write_evidence(item, loop_yield)
+        except asyncio.CancelledError:
+            EVIDENCE_ITEMS_LOST += 1
+            log.info("evidence LOST (consumer cancelled mid-write) corr_id=%s "
+                     "version=%d state=%s", item.correlation_id, item.version,
+                     item.state)
+            queue.done()
+            raise
+        except Exception:           # counted + traced (§10), never silent
+            ok = False
+            log.exception(
+                "evidence write FAILED corr_id=%s version=%d state=%s tenant_id=%s "
+                "— the Decision row for this version already landed; its graph "
+                "will not be retried until the next version of this object "
+                "(evidence_items_failed_total=%d)",
+                item.correlation_id, item.version, item.state, item.tenant_id,
+                EVIDENCE_ITEMS_FAILED + 1)
+        queue.note_written(item, time.monotonic())
+        queue.done()
+        if ok:
+            EVIDENCE_ITEMS_MATERIALIZED += 1
+        else:
+            EVIDENCE_ITEMS_FAILED += 1
+        # The consumer is a task on the SAME loop as the reconciliation pass; a
+        # queue that never yields would starve it exactly as an unyielding
+        # cohort does.
+        await asyncio.sleep(0)
+
+
+@contextlib.asynccontextmanager
+async def _evidence_cohort_hold():
+    """Hold the Evidence consumer for the duration of a cohort's decision pass.
+
+    Spec §1: the Decision plane emits "before any Evidence write of the same
+    cohort". Without the hold the consumer interleaves its (4-5x more numerous)
+    inserts with the verdict rows and the cohort's verdicts land no sooner than
+    they do today. The hold is lifted automatically while the queue is at a
+    bound, so a cohort larger than the queue can never deadlock against its own
+    backpressure (evidence_plane.EvidenceQueue.get)."""
+    queue = _active_evidence_queue()
+    if queue is None:
+        yield None
+        return
+    queue.hold()
+    try:
+        yield queue
+    finally:
+        await queue.release()
+
+
+async def evidence_drain(timeout: float | None = None) -> int:
+    """Block until the Evidence queue is idle, or the timeout expires.
+
+    Returns the number of items STILL queued. Must be called outside a cohort
+    hold (the consumer is parked there by design). Used by the shutdown path and
+    by every test that asserts on Evidence rows.
+    """
+    queue = _EVIDENCE_QUEUE
+    if queue is None:
+        return 0
+    deadline = None if timeout is None else time.monotonic() + max(0.0, timeout)
+    await queue.wake()
+    while not queue.idle():
+        if deadline is not None and time.monotonic() >= deadline:
+            break
+        await asyncio.sleep(0.002)
+    return queue.qsize()
+
+
+async def _evidence_stop() -> None:
+    """Shutdown: drain on a bounded deadline, then account for what was left.
+
+    An Evidence row that never landed is a FACT on the way out, never a silence
+    (§10) — one INFO line per item plus corr_evidence_items_total{outcome=lost}.
+    """
+    global _EVIDENCE_QUEUE, _EVIDENCE_TASK, _EVIDENCE_LOOP, EVIDENCE_ITEMS_LOST
+    queue, task = _EVIDENCE_QUEUE, _EVIDENCE_TASK
+    if queue is None:
+        return
+    left = await evidence_drain(CORR_EVIDENCE_DRAIN_ON_STOP_S)
+    if left:
+        log.warning(
+            "evidence queue did NOT drain within %.0fs: %d item(s) left "
+            "(bound=%d, oldest=%.1fs) — each is logged and counted as lost",
+            CORR_EVIDENCE_DRAIN_ON_STOP_S, left, queue.max_items,
+            queue.oldest_age_s())
+    if task is not None:
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError, Exception):
+            await task
+    for item in queue.pending():
+        EVIDENCE_ITEMS_LOST += 1
+        log.info("evidence LOST at shutdown corr_id=%s version=%d state=%s "
+                 "tenant_id=%s queued_for=%.1fs",
+                 item.correlation_id, item.version, item.state, item.tenant_id,
+                 time.monotonic() - item.enqueued_mono)
+    _EVIDENCE_QUEUE = None
+    _EVIDENCE_TASK = None
+    _EVIDENCE_LOOP = None
+
+
+def evidence_stats() -> dict[str, object]:
+    """§10 observable for the Evidence plane. Zeros (not absent keys) when the
+    plane is inline, so a dashboard never distinguishes 'off' from 'missing'."""
+    queue = _EVIDENCE_QUEUE
+    base: dict[str, object] = {
+        "enabled": CORR_EVIDENCE_ASYNC,
+        "depth": 0, "bytes": 0, "oldest_age_seconds": 0.0, "lag_seconds": 0.0,
+        "backpressure_total": 0,
+        "max_items": CORR_EVIDENCE_QUEUE_MAX,
+        "max_bytes": CORR_EVIDENCE_QUEUE_BYTES_MAX,
+        "held": False,
+        "materialized_total": EVIDENCE_ITEMS_MATERIALIZED,
+        "failed_total": EVIDENCE_ITEMS_FAILED,
+        "lost_total": EVIDENCE_ITEMS_LOST,
+        "drain_on_stop_s": CORR_EVIDENCE_DRAIN_ON_STOP_S,
+    }
+    if queue is not None:
+        base.update(queue.stats())
+    return base
 
 
 # Wall-clock of the last time ANY topology enrichment file was readable. A
@@ -3835,6 +4292,43 @@ def _topology_stale(now: datetime) -> bool:
     return stale
 
 
+# P2 step 4a: the last K cohorts' `seen` sets, kept ACROSS epochs. See
+# CORR_LIFECYCLE_COHORT_WINDOW for the measured regression this exists to fix
+# (P2_STEPS012_2P5K_VERDICT §4.2: a 300 s budget yields ONE cohort per epoch, so
+# the epoch union collapsed to a single cohort's set and merges fell 378 -> 11).
+# maxlen is fixed at import, like every other bound in this file.
+_LIFECYCLE_SEEN_WINDOW: deque[set[str]] = deque(
+    maxlen=CORR_LIFECYCLE_COHORT_WINDOW or 1)
+LIFECYCLE_SEEN_WINDOW_COHORTS = 0    # cohorts currently in the window (gauge)
+LIFECYCLE_SEEN_WINDOW_IDS = 0        # ids in the union at the last pass (gauge)
+
+
+def _lifecycle_merge_seen(epoch: _EngineEpoch) -> set[str]:
+    """The MERGE candidate space for ONE lifecycle pass (P2 step 4a).
+
+    P1 used `epoch.seen` — the union of the cohorts of THIS epoch — for all
+    three passes. That is correct only while an epoch holds many cohorts; with
+    the P2 epoch budget an epoch is often ONE cohort, which silently restored
+    the per-cohort candidate space P1 had replaced (merges 378 -> 11,
+    P2_STEPS012_2P5K_VERDICT §4.2). K = CORR_LIFECYCLE_COHORT_WINDOW cohorts of
+    history restores it independently of where the epoch boundaries fall.
+
+    Used ONLY for the survivor / stale partition handed to `find_merges` — see
+    CORR_LIFECYCLE_COHORT_WINDOW for why quiesce and the count cap keep the
+    epoch's own set.
+
+    The epoch's own set is always included: a cohort that raised never appended
+    to the window, but its earlier siblings' persisted versions stand and their
+    ids are legitimately 'seen'.
+    """
+    if not CORR_LIFECYCLE_COHORT_WINDOW:
+        return epoch.seen
+    out: set[str] = set(epoch.seen)
+    for s in _LIFECYCLE_SEEN_WINDOW:
+        out |= s
+    return out
+
+
 async def _epoch_lifecycle(epoch: _EngineEpoch, loop_yield,
                            seen: set[str] | None = None) -> None:
     """Merge, quiesce and the 163 count cap — ONE pass per drain epoch.
@@ -3861,17 +4355,28 @@ async def _epoch_lifecycle(epoch: _EngineEpoch, loop_yield,
     exact pre-P1 behaviour.
     """
     global LIFECYCLE_PASSES_TOTAL, VERSIONS_PERSISTED
+    global LIFECYCLE_SEEN_WINDOW_COHORTS, LIFECYCLE_SEEN_WINDOW_IDS
     LIFECYCLE_PASSES_TOTAL += 1
     now = epoch.now
+    # `seen` — what quiesce and the 163 cap read — is the EPOCH's set, exactly
+    # as P1 left it. `merge_seen` is P2 step 4a's wider MERGE candidate space:
+    # the last K cohorts, so a budget-bounded one-cohort epoch still offers
+    # find_merges the population P1 measured. A caller that passes `seen`
+    # explicitly (the CORR_LIFECYCLE_EPOCH_CADENCE=0 A/B path) gets the exact
+    # pre-P1 shape for both.
+    merge_seen = _lifecycle_merge_seen(epoch) if seen is None else seen
     seen = epoch.seen if seen is None else seen
+    LIFECYCLE_SEEN_WINDOW_COHORTS = len(_LIFECYCLE_SEEN_WINDOW)
+    LIFECYCLE_SEEN_WINDOW_IDS = len(merge_seen)
     # Merge (§4.4): de-split a cross-cycle identity drift. A stale open object that
     # overlaps a live one this cycle (entity-set + window) is the same incident
     # re-identified after its earliest signal aged out of the window — tombstone it
     # into the survivor (terminal state='merged' + merged_into) so the queue shows
     # ONE incident, not two. Replay-safe: only a lifecycle state + backlink, no
     # re-key/re-rank. Done BEFORE quiesce so a merged object never also quiesce-closes.
-    survivors = [OPEN_OBJECTS[c]["snapshot"] for c in seen if c in OPEN_OBJECTS]
-    stale_snaps = [OPEN_OBJECTS[c]["snapshot"] for c in OPEN_OBJECTS if c not in seen]
+    survivors = [OPEN_OBJECTS[c]["snapshot"] for c in merge_seen if c in OPEN_OBJECTS]
+    stale_snaps = [OPEN_OBJECTS[c]["snapshot"] for c in OPEN_OBJECTS
+                   if c not in merge_seen]
     # NOTE (Stage-2, tracker follow-up): find_merges itself is a synchronous
     # O(survivors × stale) cross-product inside the pure engine (engine.py) with
     # no internal yield point — for a concentrated single-tenant storm that call
@@ -3887,7 +4392,9 @@ async def _epoch_lifecycle(epoch: _EngineEpoch, loop_yield,
         reg["version"] += 1
         VERSIONS_PERSISTED += 1
         _wa_note_outcome(reg["snapshot"].tenant_id, "persisted")
-        await _persist_snapshot(reg["snapshot"], reg["version"], "merged", [], merged_into=survivor_cid, loop_yield=loop_yield)
+        await _persist_snapshot(reg["snapshot"], reg["version"], "merged", [],
+                                merged_into=survivor_cid, loop_yield=loop_yield,
+                                priority_class=EVIDENCE_CLASS_TERMINAL)
         log.info("corr-object %s merged into %s (split-brain de-duplicated)",
                  merged_cid[:8], survivor_cid[:8])
         del OPEN_OBJECTS[merged_cid]
@@ -3904,7 +4411,9 @@ async def _epoch_lifecycle(epoch: _EngineEpoch, loop_yield,
             reg["version"] += 1
             VERSIONS_PERSISTED += 1
             _wa_note_outcome(reg["snapshot"].tenant_id, "persisted")
-            await _persist_snapshot(reg["snapshot"], reg["version"], "closed", [], loop_yield=loop_yield)
+            await _persist_snapshot(reg["snapshot"], reg["version"], "closed", [],
+                                    loop_yield=loop_yield,
+                                    priority_class=EVIDENCE_CLASS_TERMINAL)
             del OPEN_OBJECTS[cid]
             _ARCHIVE_SLICE_HASH.pop(cid, None)
 
@@ -3929,7 +4438,9 @@ async def _epoch_lifecycle(epoch: _EngineEpoch, loop_yield,
             VERSIONS_PERSISTED += 1
             OPEN_OBJECTS_FORCE_CLOSED += 1
             _wa_note_outcome(reg["snapshot"].tenant_id, "persisted")
-            await _persist_snapshot(reg["snapshot"], reg["version"], "closed", [], loop_yield=loop_yield)
+            await _persist_snapshot(reg["snapshot"], reg["version"], "closed", [],
+                                    loop_yield=loop_yield,
+                                    priority_class=EVIDENCE_CLASS_TERMINAL)
             del OPEN_OBJECTS[cid]
             _ARCHIVE_SLICE_HASH.pop(cid, None)
         mono = time.monotonic()
@@ -4006,7 +4517,15 @@ async def engine_cycle(epoch: _EngineEpoch | None = None) -> None:
             # _engine_cycle_inner's own guard, which returns before it reads the
             # epoch at all.
             epoch = await _begin_epoch(datetime.now(timezone.utc))
-        await _engine_cycle_inner(epoch)
+        # P2 step 4: the Evidence consumer belongs to the ENGINE, not to
+        # `_persist_snapshot` — a direct persist call outside the engine (tests,
+        # replay tooling) must keep writing its Evidence inline because nothing
+        # there would drain a queue. Started here, held for the duration of this
+        # cohort's decision pass so the cohort's verdict rows are not interleaved
+        # with its own Evidence inserts (spec §1).
+        _evidence_ensure_consumer()
+        async with _evidence_cohort_hold():
+            await _engine_cycle_inner(epoch)
         # P1 change H: this caller OWNS its epoch, so the epoch ends here — run
         # the merge/quiesce/cap pass on the way out, on the SUCCESS path only
         # (an _engine_cycle_inner that raised never reaches this line, exactly
@@ -4016,6 +4535,15 @@ async def engine_cycle(epoch: _EngineEpoch | None = None) -> None:
         if own_epoch and epoch is not None and CORR_LIFECYCLE_EPOCH_CADENCE:
             await _epoch_lifecycle(epoch, _make_loop_yield()[0])
     finally:
+        if own_epoch:
+            # P2 step 4: a caller that OWNS its epoch is a one-shot cycle — a
+            # test, a manual sweep, a tool — with no surrounding drain loop and
+            # (in the `asyncio.run` case) no loop left alive after this returns.
+            # Leaving its Evidence queued would strand it, so the cycle is
+            # closed end-to-end here. The engine's own drain sweep passes an
+            # epoch in and is NOT drained here: keeping the queue across cohorts
+            # is the entire point of the step.
+            await evidence_drain(CORR_EVIDENCE_DRAIN_ON_STOP_S)
         if own_epoch and epoch is not None:
             _close_epoch(epoch)
         _WINDOW_INDEX_CACHE.clear()
@@ -4301,7 +4829,10 @@ async def _engine_cycle_inner(epoch: _EngineEpoch | None) -> None:
                     "last_seen": now, "last_persist": now, "snapshot": snap,
                     "opened_at": now,  # #101: max_incident_age in the write-amp rollup
                 }
-                await _persist_snapshot(snap, 1, "open", window, loop_yield=_loop_yield)
+                # A brand-new incident: the highest-value Evidence there is.
+                await _persist_snapshot(snap, 1, "open", window,
+                                        loop_yield=_loop_yield,
+                                        priority_class=EVIDENCE_CLASS_DECISION)
                 VERSIONS_PERSISTED += 1
                 _wa_note_outcome(tenant, "persisted")
             elif reg["hash"] != chash:
@@ -4316,7 +4847,17 @@ async def _engine_cycle_inner(epoch: _EngineEpoch | None) -> None:
                         or elapsed >= CORR_VERSION_HEARTBEAT_S):
                     reg["version"] += 1
                     reg["last_persist"] = now
-                    await _persist_snapshot(snap, reg["version"], "open", window, loop_yield=_loop_yield)
+                    # P2 step 4: the Evidence priority class is derived from the
+                    # CONTENT of the version — did the material verdict move? —
+                    # not from which timer fired. A heartbeat re-persist of an
+                    # unchanged verdict is the lowest-value Evidence in the
+                    # queue and drains last.
+                    _pclass = (EVIDENCE_CLASS_DECISION
+                               if mhash != reg.get("material")
+                               else EVIDENCE_CLASS_HEARTBEAT)
+                    await _persist_snapshot(snap, reg["version"], "open", window,
+                                            loop_yield=_loop_yield,
+                                            priority_class=_pclass)
                     VERSIONS_PERSISTED += 1
                     _wa_note_outcome(tenant, "persisted")
                 else:
@@ -4338,6 +4879,12 @@ async def _engine_cycle_inner(epoch: _EngineEpoch | None) -> None:
     # _epoch_lifecycle). `seen_this_cycle` stays per cohort: it is still the
     # `exclude=` find_continuation needs, and `materialized` is per cohort too.
     epoch.seen |= seen_this_cycle
+    # P2 step 4a: and the CROSS-EPOCH window of the last K cohorts, which is what
+    # the lifecycle pass's candidate space is built from (see _lifecycle_seen).
+    # Appended here — after the cohort has committed its versions — so a cohort
+    # that raised never widens a later pass with ids it did not persist.
+    if CORR_LIFECYCLE_COHORT_WINDOW:
+        _LIFECYCLE_SEEN_WINDOW.append(set(seen_this_cycle))
     global COHORT_OPEN_OBJECTS_LAST, OPEN_OBJECTS_EPOCH_PEAK
     COHORT_OPEN_OBJECTS_LAST = len(OPEN_OBJECTS)
     # The transient overshoot the once-per-epoch cap allows, measured rather
@@ -7528,6 +8075,10 @@ async def lifespan(_app: FastAPI):
     # connection-refused. Started before the loop tasks so /healthz answers
     # (503 "starting") from the first moment of life.
     _start_health_sidecar()
+    # P2 step 4: the Evidence consumer. Started before the producers so the very
+    # first cohort's Evidence is deferred rather than written inline, and NOT
+    # put in `tasks` — it must outlive them by the shutdown drain (below).
+    _evidence_ensure_consumer()
     tasks = [
         asyncio.create_task(consume()),
         asyncio.create_task(engine_loop()),
@@ -7548,6 +8099,12 @@ async def lifespan(_app: FastAPI):
                 await task
             except asyncio.CancelledError:
                 pass
+        # P2 step 4: the producers are stopped; give the Evidence plane a bounded
+        # deadline to land what it still holds, then LOG AND COUNT whatever is
+        # left (CORR_EVIDENCE_DRAIN_ON_STOP_S). An Evidence row that never landed
+        # is a fact on the way out, never a silence.
+        with contextlib.suppress(Exception):
+            await _evidence_stop()
         # Shutdown flush: rows still buffered (e.g. engine-cycle episode signals
         # with no Kafka offset to hold them) must not die with the process. A
         # failure here was already counted by _note_ch_failure inside flush.
@@ -7610,6 +8167,13 @@ def _metrics_text() -> str:
     """The /metrics body, extracted SYNC (tracker 174) — served by both the
     route and the loop-independent sidecar; see _health_payload."""
     h = _health_payload()
+    # P2 step 4: read the Evidence-plane figures ONCE — the queue's oldest-age
+    # scan is O(depth) and must not be paid per exposition line.
+    _ev = evidence_stats()
+    # Same rule for the level-1 memo: one call, several series. `stats()` walks
+    # the LRU for its byte figure, so paying it per line would make /metrics
+    # O(series x entries).
+    _rm = rank_memo_stats()
     lines = [
         "# HELP corr_ingest_events Correlation intake counters by lane (monotonic since process start).",
         "# TYPE corr_ingest_events counter",
@@ -7917,17 +8481,31 @@ def _metrics_text() -> str:
         # (the memo fails closed there and ranks in full — never silently).
         "# HELP corr_rank_memo Level-1 rank memo lookups by outcome.",
         "# TYPE corr_rank_memo counter",
-        *(f'corr_rank_memo{{result="{r}"}} {rank_memo_stats()[k]}'
+        *(f'corr_rank_memo{{result="{r}"}} {_rm[k]}'
           for r, k in (("hit", "hits"), ("miss", "misses"),
                        ("evicted", "evicted"), ("unkeyable", "unkeyable"))),
         "# HELP corr_rank_memo_entries Level-1 rank memo entries held (bound: CORR_RANK_MEMO_MAX).",
         "# TYPE corr_rank_memo_entries gauge",
-        f"corr_rank_memo_entries {rank_memo_stats()['entries']}",
+        f"corr_rank_memo_entries {_rm['entries']}",
+        # The memflat byte bound (2026-08-29): an entry costs ~10-13 KiB, so the
+        # ENTRY bound alone licensed ~500-650 MiB at CORR_RANK_MEMO_MAX=50,000 —
+        # which is what the live run's post-input RSS growth was. Read `bytes`
+        # against `bytes_max`; `evicted_bytes_total` climbing is the byte bound
+        # doing its job and the exact price it charges in hit rate.
+        "# HELP corr_rank_memo_bytes Estimated bytes held by the level-1 rank memo.",
+        "# TYPE corr_rank_memo_bytes gauge",
+        f"corr_rank_memo_bytes {_rm['bytes']}",
+        "# HELP corr_rank_memo_bytes_max Byte bound of the level-1 rank memo (CORR_RANK_MEMO_BYTES_MAX).",
+        "# TYPE corr_rank_memo_bytes_max gauge",
+        f"corr_rank_memo_bytes_max {_rm['bytes_max']}",
+        "# HELP corr_rank_memo_evicted_bytes_total Bytes evicted from the level-1 rank memo by either bound.",
+        "# TYPE corr_rank_memo_evicted_bytes_total counter",
+        f"corr_rank_memo_evicted_bytes_total {_rm['evicted_bytes']}",
         # The two-level decision memo in one series: level 1 skips rank(), level
         # 2 skips the whole snapshot. Level 2 resets every epoch; level 1 does not.
         "# HELP corr_decision_memo_level Decision-memo hits by completeness level.",
         "# TYPE corr_decision_memo_level counter",
-        f'corr_decision_memo_level{{level="1"}} {rank_memo_stats()["hits"]}',
+        f'corr_decision_memo_level{{level="1"}} {_rm["hits"]}',
         f'corr_decision_memo_level{{level="2"}} {COHORT_MEMO_HITS_TOTAL}',
         "# HELP corr_snapshot_digest Snapshot digests computed vs served from the per-instance cache.",
         "# TYPE corr_snapshot_digest counter",
@@ -7941,6 +8519,40 @@ def _metrics_text() -> str:
         "# HELP corr_lifecycle_passes_total Merge/quiesce/cap passes run (epoch cadence).",
         "# TYPE corr_lifecycle_passes_total counter",
         f"corr_lifecycle_passes_total {LIFECYCLE_PASSES_TOTAL}",
+        # P2 step 4a: the lifecycle's candidate space, decoupled from the epoch.
+        # Read against corr_engine_epoch_cohorts_last: a budget-bounded epoch of
+        # ONE cohort with a window of K still offers K cohorts of merge
+        # candidates. 1 here with a K > 1 knob means the window is not filling.
+        "# HELP corr_lifecycle_seen_window_cohorts Cohorts in the lifecycle seen window.",
+        "# TYPE corr_lifecycle_seen_window_cohorts gauge",
+        f"corr_lifecycle_seen_window_cohorts {LIFECYCLE_SEEN_WINDOW_COHORTS}",
+        "# HELP corr_lifecycle_seen_window_ids Correlation ids in the last lifecycle pass's candidate set.",
+        "# TYPE corr_lifecycle_seen_window_ids gauge",
+        f"corr_lifecycle_seen_window_ids {LIFECYCLE_SEEN_WINDOW_IDS}",
+        # ── P2 step 4: the Evidence plane (spec §1/§4). depth/bytes/oldest are
+        # the queue; lag is T7 (verdict -> materialized graph); backpressure is
+        # how often the Decision plane was slowed to keep the queue bounded —
+        # the LOSSLESS half of "never drop". failed and lost must stay 0.
+        "# HELP corr_evidence_queue_depth Evidence items queued for materialization.",
+        "# TYPE corr_evidence_queue_depth gauge",
+        f"corr_evidence_queue_depth {_ev['depth']}",
+        "# HELP corr_evidence_queue_bytes Estimated snapshot/slice bytes the queued items keep reachable.",
+        "# TYPE corr_evidence_queue_bytes gauge",
+        f"corr_evidence_queue_bytes {_ev['bytes']}",
+        "# HELP corr_evidence_queue_oldest_age_seconds Age of the oldest queued Evidence item.",
+        "# TYPE corr_evidence_queue_oldest_age_seconds gauge",
+        f"corr_evidence_queue_oldest_age_seconds {_ev['oldest_age_seconds']}",
+        "# HELP corr_evidence_lag_seconds Materialization lag of the last Evidence item written.",
+        "# TYPE corr_evidence_lag_seconds gauge",
+        f"corr_evidence_lag_seconds {_ev['lag_seconds']}",
+        "# HELP corr_evidence_queue_backpressure_total Puts that BLOCKED the Decision plane on a full queue.",
+        "# TYPE corr_evidence_queue_backpressure_total counter",
+        f"corr_evidence_queue_backpressure_total {_ev['backpressure_total']}",
+        "# HELP corr_evidence_items_total Evidence items by terminal outcome.",
+        "# TYPE corr_evidence_items_total counter",
+        f'corr_evidence_items_total{{outcome="materialized"}} {_ev["materialized_total"]}',
+        f'corr_evidence_items_total{{outcome="failed"}} {_ev["failed_total"]}',
+        f'corr_evidence_items_total{{outcome="lost"}} {_ev["lost_total"]}',
         # P2 step 1: sweeps that ended on the epoch wall-clock budget rather
         # than on the cohort bound or an empty epoch. Read it against
         # corr_engine_epoch_seconds_max: 0 exits with a large max means the

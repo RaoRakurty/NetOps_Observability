@@ -169,7 +169,8 @@ def _drive_cycle(monkeypatch, window, *, storm: bool):
         main._BUFFERED_IDS.add(str(s.signal_id))
     order: list[int] = []
 
-    async def _rec(snap, version, state, win, merged_into="", loop_yield=None):
+    async def _rec(snap, version, state, win, merged_into="", loop_yield=None,
+                   priority_class=0):
         if state == "open":
             order.append(max((_SEV_RANK[n.peak_severity] for n in snap.nodes), default=0))
 

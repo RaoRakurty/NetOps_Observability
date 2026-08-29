@@ -210,10 +210,16 @@ class MockCH:
     a different cost curve, and the measured live number (17.5 % of persist wall
     across all corr_* inserts) is already known from the A/B."""
 
-    def __init__(self) -> None:
+    def __init__(self, insert_sleep_s: float = 0.0) -> None:
         self.rows: dict[str, int] = defaultdict(int)
         self.bytes: dict[str, int] = defaultdict(int)
         self.calls: dict[str, int] = defaultdict(int)
+        # P2 step 4: the mocked sink can be given the LIVE per-insert latency
+        # (--insert-sleep-ms; the 2.5K run measured 149,590 inserts / 1,840 s,
+        # i.e. ~7 ms p50 sequential). Without it this bench measures Python CPU
+        # only, and the whole Decision/Evidence question — who WAITS behind
+        # whom on an awaited insert — is invisible.
+        self.insert_sleep_s = max(0.0, insert_sleep_s)
 
     async def insert(self, table, rows, **kw):
         rows = list(rows)
@@ -224,6 +230,10 @@ class MockCH:
             for r in rows:
                 n += len(json.dumps(r, default=str))
             self.bytes[table] += n
+        if self.insert_sleep_s:
+            # Outside the byte-accounting span on purpose: this is modelled I/O
+            # WAIT, not invented CPU, and it must land in the cohort wall.
+            await asyncio.sleep(self.insert_sleep_s)
         return True
 
 
@@ -415,7 +425,7 @@ async def sweep(args) -> dict:
     now = datetime(2026, 8, 28, 12, 0, 0, tzinfo=timezone.utc)
     per_epoch: list[dict] = []
     memo_by_epoch: list[dict] = []
-    ch = MockCH()
+    ch = MockCH(args.insert_sleep_ms / 1000.0)
     main.ch = ch
 
     base = make_signals(args.signals, args.devices, t_end=now, span_s=args.span_s,
@@ -461,6 +471,15 @@ async def sweep(args) -> dict:
             d_before = engine.digest_cache_stats()
             t0 = time.perf_counter()
             await main.engine_cycle(epoch)
+            # P2 step 4: the cohort returns when its DECISION rows are all
+            # written; the Evidence rows may still be queued. Both numbers are
+            # reported — decision wall is the operator's TTUR term, evidence
+            # wall is the T7 term. With CORR_EVIDENCE_ASYNC=0 they are equal by
+            # construction (the Evidence write is inline), which is what makes
+            # the A/B readable.
+            decision_s = time.perf_counter() - t0
+            ev_depth = main.evidence_stats()["depth"]
+            await main.evidence_drain(600.0)
             wall = time.perf_counter() - t0
             epoch.cohorts = k + 1
             memo = epoch.memos.get("global")
@@ -477,6 +496,9 @@ async def sweep(args) -> dict:
             cohorts.append({
                 "cohort": k + 1,
                 "wall_s": round(wall, 3),
+                "decision_s": round(decision_s, 3),
+                "evidence_s": round(wall - decision_s, 3),
+                "evidence_queued_at_decision": ev_depth,
                 "pending_before": pend0,
                 "components": ma[0] - mb[0],
                 "touched": ma[1] - mb[1],
@@ -490,7 +512,9 @@ async def sweep(args) -> dict:
                 "digest": {k2: d_after[k2] - d_before[k2] for k2 in d_after},
             })
             keys_prev = keys_now
-            print(f"  epoch {e + 1} cohort {k + 1}/{args.cohorts}: {wall:.2f}s "
+            print(f"  epoch {e + 1} cohort {k + 1}/{args.cohorts}: "
+                  f"decision={decision_s:.2f}s evidence=+{wall - decision_s:.2f}s "
+                  f"queued={ev_depth} total={wall:.2f}s "
                   f"components={ma[0] - mb[0]} touched={ma[1] - mb[1]} "
                   f"hits={ma[2] - mb[2]} ranked={ma[3] - mb[3]} keys={keys_now}",
                   file=sys.stderr, flush=True)
@@ -674,6 +698,17 @@ def main_cli() -> int:
     ap.add_argument("--gate", dest="gate", action="store_true", default=True,
                     help="P1 cohort-touch gate ON (default)")
     ap.add_argument("--no-gate", dest="gate", action="store_false")
+    ap.add_argument("--insert-sleep-ms", type=float, default=0.0,
+                    help="per-insert latency for the mocked ClickHouse sink "
+                         "(the live 2.5K p50 is ~7; 0 = CPU-only, the pre-step-4 "
+                         "default)")
+    ap.add_argument("--evidence-async", dest="evidence_async",
+                    action="store_true", default=True,
+                    help="P2 step 4: defer the Evidence write onto the bounded "
+                         "priority queue (the shipped default)")
+    ap.add_argument("--no-evidence-async", dest="evidence_async",
+                    action="store_false",
+                    help="write the Evidence rows inline, as before step 4")
     ap.add_argument("--cprofile", action="store_true",
                     help="also cProfile ONE synchronous run_window (top 30)")
     ap.add_argument("--log-level", default="WARNING")
@@ -695,6 +730,11 @@ def main_cli() -> int:
     main.CORR_ENGINE_DRAIN_COHORTS = args.cohorts
     main.CORR_COHORT_TOUCH_GATE = args.gate
     main.CORR_LIFECYCLE_EPOCH_CADENCE = True
+    main.CORR_EVIDENCE_ASYNC = args.evidence_async
+    main._EVIDENCE_QUEUE = None
+    main._EVIDENCE_TASK = None
+    main._EVIDENCE_LOOP = None
+    main._LIFECYCLE_SEEN_WINDOW.clear()
     main.OPEN_OBJECTS = {}
     main.VERSIONS_PERSISTED = 0
     main.VERSIONS_DAMPED = 0
@@ -728,9 +768,20 @@ def main_cli() -> int:
     print(report(res, prof, args, total))
 
     per = [c["wall_s"] for e in res["epochs"] for c in e["cohorts"]]
+    dec = [c["decision_s"] for e in res["epochs"] for c in e["cohorts"]]
+    evd = [c["evidence_s"] for e in res["epochs"] for c in e["cohorts"]]
     if per:
         print(f"cohort wall: n={len(per)} mean={statistics.mean(per):.2f}s "
               f"min={min(per):.2f}s max={max(per):.2f}s")
+        # P2 step 4's headline: how long the OPERATOR waits for the verdict rows
+        # of a cohort, versus how long the full graph takes to materialize.
+        print(f"  decision-complete : mean={statistics.mean(dec):.2f}s "
+              f"min={min(dec):.2f}s max={max(dec):.2f}s "
+              f"(share of cohort wall {100.0 * sum(dec) / max(1e-9, sum(per)):.1f} %)")
+        print(f"  evidence-complete : +mean={statistics.mean(evd):.2f}s "
+              f"max=+{max(evd):.2f}s  [evidence_async="
+              f"{args.evidence_async}, insert_sleep_ms={args.insert_sleep_ms}]")
+    print("\nevidence plane:", json.dumps(main.evidence_stats(), indent=2))
     print("\ncross-epoch reuse:", json.dumps(res["cross_epoch_reuse"], indent=2))
     print("\npersistence (mocked):", json.dumps(res["persistence"], indent=2))
     for e in res["epochs"]:

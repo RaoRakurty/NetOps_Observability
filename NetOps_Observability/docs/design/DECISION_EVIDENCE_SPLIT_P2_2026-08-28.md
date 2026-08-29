@@ -470,3 +470,238 @@ under-represents the population the set protects. The set is kept because it is
 proven sound, costs nothing, and the case it covers (a sustained incident
 re-reporting evidence it already carries — the #100 damping population, which
 the live 2.5K storm has in abundance) is the one the whole memo exists for.
+
+---
+
+## 12. Implementation notes — step 4 (async Evidence plane) + step 4a (lifecycle cohort window), builder 2026-08-29
+
+Delivered: §9 item 4, plus the step-4a merge-cadence fix the live verdict asked
+for (`docs/scale/P2_STEPS012_2P5K_VERDICT_2026-08-29.md` §4.2/§4.3). Item 3 (the
+full VVR table) and item 5 remain untouched — per that verdict's §6, step 3 is
+deferred until step 4 shows Evidence lag is the remaining term. New module
+`src/correlation/evidence_plane.py` (the pure `EvidenceItem` + `EvidenceQueue`);
+writer, consumer and lifecycle changes in `main.py`; tests in
+`test_p2_evidence_async.py` (32) and `test_p2_lifecycle_window.py` (12). Every
+knob is read once at import like the P1/P2 flags, so an A/B runs on ONE image:
+`CORR_EVIDENCE_ASYNC` (default 1), `CORR_EVIDENCE_QUEUE_MAX` (5,000),
+`CORR_EVIDENCE_QUEUE_BYTES_MAX` (512 MiB), `CORR_EVIDENCE_DRAIN_ON_STOP_S` (60),
+`CORR_LIFECYCLE_COHORT_WINDOW` (20 = `CORR_ENGINE_DRAIN_COHORTS`).
+
+### 12.1 The split, and where the line actually falls
+`_persist_snapshot` is now Decision then Evidence:
+
+* **Decision (synchronous, unchanged bytes/tokens/order):** hypotheses blob →
+  `to_object_row` → `corr_objects` insert → `corr_current` projection. Timed as
+  the `persist.decision` stage.
+* **Evidence (`_write_evidence`, inline or queued):** edges → typed edges →
+  evidence → archive slice, the same functions, page sizes and dedup tokens,
+  moved verbatim. Timed as `persist.evidence`. Both paths call the SAME body,
+  which is what makes the byte-identity test meaningful rather than a
+  comparison of two implementations.
+
+**The archive slice is the one thing that could NOT move wholesale**, and this
+is the design decision worth reading:
+
+1. `_archive_slice(snap, window)` needs the epoch's window and this cycle's
+   `_WINDOW_INDEX_CACHE`, and both are dropped (`_close_epoch`, `engine_cycle`'s
+   `finally`) long before a queued item can drain. So slice **membership** and
+   its id-hash are computed synchronously; only row building and the inserts are
+   deferred.
+2. More importantly, the **damping decision is a determinism question, not a
+   performance one**. `_ARCHIVE_SLICE_HASH` says "same membership as the LAST
+   ARCHIVED version of this object ⇒ skip". Evaluated in the consumer it would
+   be decided by the drain ORDER — a runtime condition deciding WHAT is
+   written, which §1 forbids outright. It is therefore decided on the Decision
+   path, in version order, exactly as today, and the item carries the verdict.
+   `test_E1c` pins it: the damped COUNT and the set of `(object, version)`
+   archived slices are identical flag-on vs flag-off.
+3. Consequence: the hash is recorded OPTIMISTICALLY, before the rows land. A
+   failed archive write therefore REVERTS it (guarded on identity so a later
+   version's successful record is never clobbered by an earlier version's
+   failure draining out of order) — the same rule as today's "record only when
+   all chunks landed", expressed the other way round. `test_E5b`.
+
+**RSS trade, verified rather than assumed.** An item holds (a) the
+`ObjectSnapshot` — already retained by `OPEN_OBJECTS[cid]["snapshot"]` while the
+object is open, so it is a second pointer, not a second graph; for a terminal
+version the item holds the LAST reference, which is precisely what lets a closed
+object's slice still be written after its registry entry is gone — and (b) the
+slice's `Signal` list. Most of that list is `node.signals`, which the snapshot
+already holds; the genuinely new retention is the "loose" signals (`*_clear`,
+`source=app_identity`) and matched identity signals, which live only in the
+window and would otherwise be freed at the next prune. That is why the queue has
+a **second, byte bound** (`CORR_EVIDENCE_QUEUE_BYTES_MAX`, 512 MiB) alongside the
+item bound: `estimate_bytes(nodes, edges, slice)` with documented per-element
+weights, an ESTIMATE for bounding only, never an accounting figure. `test_E4b`
+proves the byte bound blocks independently of the item bound.
+
+**One real cost, stated plainly.** `_archive_row`'s per-cycle base-row cache is
+keyed by `id(sig)`, and its safety argument is that every archived signal
+belongs to the ONE window the cycle is holding open. The consumer runs between
+cycles over items from several of them, where a freed `Signal`'s id can be
+recycled by a later item's — so the deferred path passes `cache=False` and
+builds each row fresh. Bytes are unchanged (`to_ch_row` is deterministic); what
+is lost is cross-object row reuse inside a cohort. Measured in the bench below
+(it does not show up as a wall regression at this fixture's slice sizes); if it
+ever does, the fix is a consumer-side cache keyed on something that cannot be
+recycled, not a re-enabled `id()` cache.
+
+### 12.2 The cohort HOLD — §1's "before any Evidence write of the same cohort"
+A queue drained by a task on the same loop interleaves with the Decision path by
+default, so the cohort's verdict rows would land no sooner than today. `hold()`
+parks the consumer for the duration of a cohort's decision pass
+(`engine_cycle` wraps `_engine_cycle_inner` in `_evidence_cohort_hold()`), and
+the hold is **lifted automatically while the queue is at a bound** — pressure
+always beats ordering preference, so a cohort larger than the queue can never
+deadlock against its own backpressure (`test_E4d`, `test_E4e`).
+
+`test_E3` asserts the resulting property from both sides: flag ON, every
+`corr_objects`/`corr_current` row of a cohort precedes its first Evidence row;
+flag OFF, Evidence necessarily interleaves. Without that second half the test
+would pass on an implementation that had quietly reverted to inline writes.
+
+### 12.3 Where the consumer is started, and why not in `_persist_snapshot`
+`_evidence_ensure_consumer()` is called by `engine_cycle` and by `lifespan` —
+never by `_persist_snapshot`. A direct persist outside the engine (tests, replay
+tooling, `_epoch_lifecycle` driven by hand) has no surrounding loop to drain a
+queue, so it must keep writing inline. `_active_evidence_queue()` enforces three
+conditions before ANY enqueue: the flag is on, the consumer task is alive, and
+the caller is on the same event loop the consumer runs on. The loop check is not
+paranoia — the first full-suite run enqueued onto a queue whose consumer belonged
+to a closed `asyncio.run` loop and silently swallowed every later test's Evidence
+rows. A queue that can never drain is now counted (`outcome="lost"`), named per
+item in the log, and replaced (`test_E6c`).
+
+For the same reason `engine_cycle` drains the queue in its `finally` **only when
+it owns its epoch** — a one-shot manual cycle. The engine's own drain sweep
+passes an epoch in and is deliberately NOT drained per cohort: keeping the queue
+across cohorts is the entire point.
+
+### 12.4 Durability — the honest delta
+* An Evidence write that fails after `ch_insert`'s bounded retries is counted
+  (`corr_evidence_items_total{outcome="failed"}`) and logged with a traceback.
+  **Inline, a rejected RCA-critical child write raised out of the cohort and the
+  whole cohort was retried; from the consumer there is no cohort to retry.** The
+  Decision row for that version stands (it landed first), so the incident is
+  never invisible — only its graph is, until the next version of the object
+  re-emits it. `test_E5` pins that the Decision rows all survive a systematic
+  `corr_edges` rejection.
+* Shutdown drains for at most `CORR_EVIDENCE_DRAIN_ON_STOP_S` (60 s), then logs
+  ONE LINE PER ITEM and counts `outcome="lost"` (`test_E6`, `test_E6b`). **No
+  schema changed in this step**, so the shutdown log and the counter are the
+  whole cross-restart detection surface; §2's VVR `evidence_state` is where this
+  becomes queryable after a restart, and the module docstring says so.
+
+### 12.5 Observability
+`/metrics`: `corr_evidence_queue_depth`, `_bytes`, `_oldest_age_seconds`,
+`corr_evidence_lag_seconds` (T7 — verdict → materialized graph),
+`corr_evidence_queue_backpressure_total` (how often the Decision plane was
+slowed to keep the queue bounded — the LOSSLESS half of "never drop"), and
+`corr_evidence_items_total{outcome=materialized|failed|lost}`. `epoch_state()`
+carries the same dict under `"evidence"`. Stage spans `persist.decision` /
+`persist.evidence` split the profiler's single persist figure in two
+(`test_E8b`). THE invariant to read them by: `depth` returns to 0 between storms
+(spec §2's T8), `lag_seconds` is T7, and `failed_total`/`lost_total` must both
+stay 0.
+
+Also folded in (coordinator, 2026-08-29) — the level-1 rank memo's new BYTE
+bound needed its two hand-written surfaces in main.py updated:
+`rank_memo_stats()`'s memo-OFF branch now returns `bytes`/`bytes_max`/
+`evicted_bytes` as zeros (a key that appears and disappears with a flag reads as
+a zero on the day it matters), and `_metrics_text()` gained
+`corr_rank_memo_bytes`, `corr_rank_memo_bytes_max` and
+`corr_rank_memo_evicted_bytes_total`. Pinned by `test_E9`/`test_E9b`, which
+compare the OFF branch's key SET against the live memo's field for field.
+
+### 12.6 Step 4a — and the ONE place these notes narrow the brief
+The brief (and §4.2) asked for merge/quiesce/cap over the union of the last K
+cohorts' `seen` sets. **Only the MERGE candidate space was widened.** Quiesce and
+the 163 count cap keep the epoch's own set, and `test_L4`/`test_L4b` pin that.
+
+The reason: `seen` does two different jobs. For `find_merges` it means "this
+object is LIVE, so it may receive a merge" — and that is what the budget broke,
+because a one-cohort epoch has almost no live targets. For quiesce it means
+"don't age this object", and that job is already done correctly, and in a
+TIME-BOUNDED way, by `last_seen` + `CORR_QUIESCE_S`. A cohort can be ~1,000 s
+wide at 2.5K, so K = 20 cohorts of history would suppress quiesce for hours and
+push the population onto the 163 cap instead of closing it. P1's own protection
+was not unbounded either — it was one epoch of a FROZEN `now`. Widening the
+merge partition restores exactly the candidate space P1 measured; widening
+quiesce would go further than P1 ever did, in the wrong direction.
+
+Mechanically: `_LIFECYCLE_SEEN_WINDOW` is a module-level `deque(maxlen=K)` of
+per-cohort `seen` sets, appended in `_engine_cycle_inner` AFTER the cohort has
+committed its versions (so a cohort that raised leaves nothing behind —
+`test_L5`), and never touched by `_close_epoch`. `_lifecycle_merge_seen(epoch)`
+returns the union plus the epoch's own set; `CORR_LIFECYCLE_COHORT_WINDOW=0`
+returns `epoch.seen` (the shipped P1 shape) and
+`CORR_LIFECYCLE_EPOCH_CADENCE=0` still passes an explicit per-cohort set, which
+bypasses the window entirely (`test_L6b`, `test_L6c`).
+
+`test_L1`/`test_L1b` are the regression shape end to end: five epochs of ONE
+cohort each; the merge target materializes in cohort 1, its evidence then leaves
+the window, and a quiet duplicate arrives later. With the window the twin folds
+into the target; with `CORR_LIFECYCLE_COHORT_WINDOW=0` it does not — which is
+run `p2-s012d`'s 378 → 11. `test_L2` proves the deque's `maxlen` is doing the
+bounding (the SAME fixture finds the merge under K=20 and loses it under K=2),
+and `test_L0` proves the twin is mergeable at all, so L1/L1b cannot both pass for
+the wrong reason.
+
+New counters: `corr_lifecycle_seen_window_cohorts`, `_ids`, plus
+`lifecycle_cohort_window` in `epoch_state()`. The invariant an operator reads:
+`cohorts_last` = 1 (a budget-bounded epoch) while `lifecycle_seen_window_cohorts`
+= K.
+
+### 12.7 Measured (offline, `bench_profile_p2.py`, one image, same seed)
+`bench_profile_p2.py` gained `--insert-sleep-ms` (the mocked sink now models the
+LIVE per-insert latency; the 2.5K run measured 149,590 inserts / 1,840 s ≈ 7 ms
+p50 sequential) and reports **decision-complete vs evidence-complete** per
+cohort. Without a modelled insert latency the bench measures Python CPU only and
+the entire question — who WAITS behind whom on an awaited insert — is invisible.
+
+`--devices 250 --signals 2500 --arrivals 1200 --cohorts 6 --epochs 2 --burst 6
+--insert-sleep-ms 7`, BEFORE = `--no-evidence-async`, AFTER = defaults:
+
+| | before | after | Δ |
+|---|--:|--:|--:|
+| cohort **decision-complete**, mean | 2.87 s | **1.94 s** | **−32 %** |
+| cohort **decision-complete**, max (the storm cohort) | 18.76 s | **13.81 s** | **−26 %** |
+| decision share of cohort wall | 100 % | **67 %** | — |
+| cohort wall (decision + evidence), mean | 2.87 s | 2.89 s | +0.7 % |
+| total sweep wall | 36.46 s | 36.50 s | +0.1 % |
+| `P.persist(total)` (inclusive) | 26.91 s | 16.57 s | −38 % |
+| `P.ch_insert(total)` | 24.87 s | 25.77 s | +3.6 % |
+
+Read it as: the same work, the same inserts, the same wall — **reordered so the
+verdict lands first.** The decision share (67 %) tracks this fixture's insert mix
+(3.3 inserts per version, of which 2 are Decision = 61 % — the extra points are
+the Evidence rows that drain while the next cohort is computing). The LIVE mix is
+4–5 inserts per version, so the same reordering should put the decision share
+near 40–50 % there, i.e. a larger TTUR win than this fixture can show. The
+storm-cohort max is the number that matters for T1: the first cohort of an epoch
+is where the operator's wait is minted.
+
+**Byte neutrality at scale:** versions persisted (1,004), versions damped (80),
+per-table row counts, per-table BYTE counts, insert-call counts and the whole
+`cross_epoch_reuse` block are **identical** between the legs. The queue changed
+when rows were written and nothing else.
+
+### 12.8 Gate
+`cd src/correlation && ruff check . && mypy main.py && python3 -m pytest . -q`
+→ **1,896 passed / 9 skipped** for this change's scope (1,852 baseline + 44 new),
+`ruff`/`mypy` clean on `main.py`, `evidence_plane.py`, `bench_profile_p2.py` and
+both new test files. The one pre-existing edit outside this change is
+`test_storm_mode_2026_08_28.py`, whose `_persist_snapshot` double needed the new
+`priority_class` keyword.
+
+### 12.9 What step 4 does NOT fix, and what to measure next
+The queue removes the Evidence rows from the operator's critical path; it does
+not remove them from the box. Total wall is unchanged by construction, so the
+completion gate (pending 0 within 2,700 s) is NOT expected to pass on this step
+alone — §4.3's other half, damping the 3.27 versions per incident, is still
+open. The live re-measure should read: T1 p95 (expected to fall with the
+decision share), the new T7 (`corr_evidence_lag_seconds`) and T8
+(`corr_evidence_queue_depth` returning to 0), `corr_evidence_queue_backpressure_total`
+(non-zero means the box cannot absorb the Evidence rate and the queue is doing
+its job), `failed`/`lost` (must be 0), and merges (11 → the P1 population, per
+step 4a).
