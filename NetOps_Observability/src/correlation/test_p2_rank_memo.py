@@ -659,10 +659,13 @@ def test_T6_the_memo_is_bounded_and_evicts_least_recently_used():
     for i in range(3):
         rm.put(f"k{i}", r)
     assert len(rm) == 3 and rm.evicted == 0
-    assert rm.get("k0") is r                     # promote k0 to most-recent
+    # `==`, not `is`: in compact mode (the default) a hit REBUILDS the value
+    # from the stored blob — see rank_memo.py, THE COMPACT CACHED FORM. T4/T4b
+    # pin that the rebuilt value produces identical bytes; T7 pins the store.
+    assert rm.get("k0") == r                     # promote k0 to most-recent
     rm.put("k3", r)                              # evicts k1, the LRU
     assert len(rm) == 3 and rm.evicted == 1
-    assert rm.get("k1") is None and rm.get("k0") is r and rm.get("k3") is r
+    assert rm.get("k1") is None and rm.get("k0") == r and rm.get("k3") == r
     for i in range(4, 40):
         rm.put(f"k{i}", r)
     assert len(rm) == 3, "the bound is not enforced"
@@ -703,7 +706,14 @@ def test_T7_the_memo_holds_no_evidence_objects():
             for f in dc_fields(o):
                 walk(getattr(o, f.name), f"{path}.{f.name}")
 
-    for key, value in rm._lru.items():
+    for key, held in rm._lru.items():
+        # COMPACT MODE (the default): the store holds an opaque `bytes` blob of
+        # builtin types only — no object graph at all, so the invariant is
+        # structural rather than walked. The DECODED value is walked too: it is
+        # what a hit hands back, and it must hold no evidence either.
+        if rm.compact:
+            assert type(held) is bytes, f"{key[:8]} is not the compact form"
+        value = rm.entry(key)
         assert isinstance(value, RankingResult)
         walk(value, key[:8])
 
@@ -728,7 +738,7 @@ def test_T7b_the_reused_result_is_immutable_and_never_mutated_downstream():
         ev = tuple(s for n in snap.nodes for s in n.signals)
         key = rank_key(snap.tenant_id, CATV, ev)
         if key is not None and key in rm._lru:
-            assert rm._lru[key] == rank(CAT, ev), "the shared result was mutated"
+            assert rm.entry(key) == rank(CAT, ev), "the shared result was mutated"
             checked += 1
     assert checked > 0, "no memo entry was checked"
 

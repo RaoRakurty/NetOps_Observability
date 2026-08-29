@@ -294,6 +294,20 @@ a hit-rate-vs-entries curve. What is known is that the rate CLIMBED (29 % early
 in the storm -> 66 %) "as evidence repeats", i.e. reuse is recency-clustered,
 which is the access pattern LRU is built to keep.
 
+SUPERSEDED, 2026-08-29 — THE COMPACT CACHED FORM
+------------------------------------------------
+Everything above describes the OBJECT store and its calibrated meter, which is
+still what `CORR_RANK_MEMO_COMPACT=0` gives you. By DEFAULT the memo now stores
+a ~0.9 KiB `bytes` blob per entry and rebuilds the `RankingResult` from the
+catalog on a hit: **1,191 B/entry in situ against 26,711 B — 22.4x**, measured
+with identical hits/misses in both arms. The attribution that made it possible
+(hint: none of the 24.5 KiB is catalog text — it is 34 Python objects and four
+216-byte set headers per hypothesis), the candidate A/B, the fail-closed
+refusals and the honest costs are in THE COMPACT CACHED FORM section below the
+estimator. At 1.2 KiB/entry the byte bound admits ~85,000 entries, so the ENTRY
+bound (50,000, ~59 MiB) binds first and the live run's 20,117-key population
+fits whole in ~24 MiB — the hit rate is no longer bound-limited.
+
 **`corr_rank_memo{result="evicted"}` is the readout.** It was 38,177 on the run
 that collapsed to 6 %; the same counter against `corr_rank_memo{result="hit"}`
 on the next run is the exact measurement of what the bound costs. Raise
@@ -307,9 +321,11 @@ from __future__ import annotations
 import gc
 import hashlib
 import json
+import marshal
 import os
 import sys
 import types
+import zlib
 from collections import OrderedDict
 from dataclasses import fields as dataclass_fields
 from dataclasses import is_dataclass
@@ -319,11 +335,20 @@ import scoring
 from scoring import (
     VERIFICATION_HEALTHY_KIND,
     VERIFICATION_RESULT_KIND,
+    HypothesisScore,
     RankingResult,
     _attr_kinds,
 )
 from signals import Signal, probe_authority_of
-from verdicts import Witness, witness_of
+from verdicts import (
+    EvidenceCoverage,
+    ModalityClass,
+    ProbeScope,
+    VerdictTier,
+    Witness,
+    witness_of,
+)
+from verdicts import Verdict as GateVerdict
 
 # Entry bound. Kept at the profile's reusable-component population; it is no
 # longer the bound that binds — see DEFAULT_MAX_BYTES and the docstring.
@@ -518,6 +543,332 @@ def estimate_result_bytes(obj: object,
     return _walk(obj, set(), owned)
 
 
+# ═══ THE COMPACT CACHED FORM (P2 follow-up, 2026-08-29) ══════════════════════
+#
+# MEASURED, over real rank-key-distinct storm-shaped results captured from a
+# drain sweep (`bench_memflat_p2._capture_evidence`, 400 dev / 3k sig / 3
+# epochs, storm on; 2,446 distinct keys, 11.3 hypotheses per result). WHERE THE
+# BYTES GO — per-field attribution over the first 800 of them (22,398 B/entry
+# mean; the 1,200-result set used for the candidate table below reads 24,561):
+#
+# | field                                    | B/entry | share |
+# |---|---|---|
+# | `HypothesisScore` object + `__dict__` (x11.3/entry) | 3,059 | 12 % |
+# | `EvidenceCoverage.observer_ids` frozenset           | 2,417 | 10 % |
+# | `.modality_classes` frozenset                       | 2,360 | 10 % |
+# | `.trusted_modalities` frozenset                     | 2,360 | 10 % |
+# | `.low_authority_probe_scopes` frozenset             | 2,360 | 10 % |
+# | `EvidenceCoverage` object + `__dict__`              | 2,097 |  9 % |
+# | `Verdict.reasons` strings                           | 1,886 |  8 % |
+# | `Verdict` object + `__dict__`                       | 1,660 |  7 % |
+# | `evidence_missing` + `missing` + `satisfied` + the other small tuples | 2,974 | 13 % |
+# | floats + bools (coverage, confidence, contradicted, supporting_hit) | 1,049 | 5 % |
+# | `causal_chain` + `fate_groups` + the `RankingResult` shell | 1,222 | 5 % |
+# | **catalog-derived text** (title/owner/first_steps/seams/phrases/…) | **0** | **0 %** |
+#
+# TWO FINDINGS DECIDE THE DESIGN:
+#
+# 1. **A "delta vs catalog" OBJECT form saves nothing.** Every catalog-derived
+#    field already costs zero marginal bytes: `score_template` copies the
+#    template's own tuples (`tuple(t.seams)` on a tuple IS that tuple) and
+#    strings by REFERENCE, and `estimate_result_bytes` charges catalog-owned
+#    ids 0 — a rule the tracemalloc reference confirms (24.56 KiB estimated vs
+#    25.04 KiB freed, 0.98x). The cost is not the words; it is the ~34 Python
+#    objects per entry that hold them, and CPython's fixed 216-byte set header
+#    charged four times per hypothesis for frozensets that mostly hold 0-4
+#    members.
+#
+# 2. **The only way to delete an object's overhead is to stop having the
+#    object.** So the memo stores a `bytes` BLOB and rebuilds the value graph on
+#    a hit — which makes the delta-vs-catalog rule pay after all, this time in
+#    SERIALIZED bytes, where the catalog text is 62 % of a naive dump.
+#
+# MEASURED CANDIDATES (same 1,200 results; bytes include the `bytes` header,
+# decode is best-of-3 warm, `rank()` on the same corpus is 2.47 ms):
+#
+# | form | B/entry | encode | decode | equal |
+# |---|---|---|---|---|
+# | object (today) | 24,561 | — | — | — |
+# | pickle(whole object) | 11,317 | 0.112 ms | 0.115 ms | 1200/1200 |
+# | pickle(whole object) + zlib-1 | 4,592 | 0.375 ms | 0.195 ms | 1200/1200 |
+# | **marshal(delta)** | 3,414 | 0.068 ms | 0.133 ms | 1200/1200 |
+# | **marshal(delta) + zlib-1** | **918** | 0.130 ms | 0.151 ms | 1200/1200 |
+# | marshal(delta) + zlib-3 | 894 | 0.129 ms | 0.161 ms | 1200/1200 |
+# | pickle(delta) + zlib-1 | 861 | 0.124 ms | 0.147 ms | 1200/1200 |
+#
+# `marshal` over `pickle` for a 6 % byte penalty: marshal can only build the
+# builtin types this codec writes — it cannot name a class, so it cannot
+# construct one (§8, no unsafe deserialization). Its format is interpreter-
+# version-locked, which is irrelevant for an in-PROCESS cache that never
+# outlives the interpreter that wrote it. zstd is not in the image (no
+# `zstandard`, no 3.14 `compression.zstd`), so zlib-1 is the level measured;
+# zlib-3 buys 2.5 % of bytes for 7 % of decode and is not taken.
+#
+# WITH THE PER-ENTRY BOOKKEEPING (`_ENTRY_OVERHEAD`, measured at 245 B: the
+# OrderedDict node + the `_sizes` entry + the 64-hex key the memo retains) the
+# compact entry is **~1.15 KiB against 24.8 KiB — 21x**. At the unchanged 96 MiB
+# bound that is **~85,000 entries**, so the ENTRY bound (50,000, ~59 MiB) binds
+# first and the live 2.5K run's **20,117 distinct keys fit in ~23 MiB**: the
+# memo holds 100 % of the key space and the hit rate returns to the 66 % the
+# UNBOUNDED run measured (p2-s05 read 34 % at 2,954 entries with 31,068
+# evictions).
+#
+# WHAT IT COSTS, HONESTLY:
+#
+# * **0.151 ms per HIT** where the object form cost 0. Against `rank()` at
+#   2.47 ms (live: 2.6-5.4 ms) a hit still avoids 94 % of the work it exists to
+#   avoid.
+# * **`put` gets CHEAPER**: 0.130 ms to encode, and the charge is `len(blob)` —
+#   EXACT, not estimated — replacing the 0.24-0.30 ms `estimate_result_bytes`
+#   graph walk. Net miss-path cost is negative.
+# * **Sharing with the live working set ends.** Today ~52 % of entries share
+#   their `RankingResult` with an open `ObjectSnapshot` and cost no marginal
+#   RSS; a decoded hit is a fresh graph the snapshot then owns. That moves at
+#   most `open_objects x 24.8 KiB` (~26 MiB at the 1,041 open objects this
+#   bench held) from the memo to the working set — where an unshared object
+#   would have been charged anyway once its sharer closed — against ~470 MiB
+#   returned to the memo's budget.
+#
+# IN SITU (`bench_rankmemo_insitu.py`, the same drain, one process per arm):
+# identical hits (499), misses (2,446) and entries (2,446) in both arms —
+# **memo bytes 2.91 MB vs 65.33 MB (22.4x), 1,191 B/entry vs 26,711 B/entry,
+# process RSS 158 vs 183 MiB (-25 MiB), wall 26.1 s vs 26.8 s** (the encode is
+# cheaper than the estimator walk it replaces, so the compact arm is not slower
+# even though every hit now decodes).
+#
+# EQUALITY IS PROVEN, NOT ASSUMED. `encode_result` REFUSES (returns None, and
+# the memo stores the object exactly as before) whenever anything it would drop
+# is not reconstructible: a template id the catalog does not carry, a catalog
+# version no live `Catalog` answers to, a `causal_chain` whose shape or
+# stage/root/note text does not match the template's, or ANY catalog-derived
+# field that does not compare equal to the template's own. So a drift in
+# `score_template` degrades to today's behaviour instead of minting a wrong
+# verdict. `test_C*` pins round-trip equality AND `hypotheses_blob()` byte
+# identity over the whole fixture corpus.
+#
+# INTERNING (candidate (d)) was measured and NOT taken: 13,600 hypothesis
+# instances over 1,200 entries carry only 4,094 distinct VALUES, and a
+# process-wide value table cuts the aggregate marginal from 24,458 to 3,794
+# B/entry (6.4x) at 0.23 ms/put — a real win with no decode cost, but 6.4x
+# against 21x, and the distinct-value population was still growing at n=1,200
+# (725 @ 100 -> 4,094 @ 1,200), so its ratio at 20,000 entries is an
+# extrapolation where the codec's is a constant. It stays in the report as the
+# fallback if decode-on-hit ever proves too expensive.
+
+# `CORR_RANK_MEMO_COMPACT=0` restores the object store (the kill switch; the
+# byte estimator below is then the meter, exactly as before).
+DEFAULT_COMPACT = os.environ.get(
+    "CORR_RANK_MEMO_COMPACT", "1").lower() in ("1", "true", "yes")
+# zlib level for the blob. 0 disables compression (3.4 KiB/entry instead of
+# 0.9 KiB, 0.018 ms faster per hit).
+ZLIB_LEVEL = max(0, min(9, int(os.environ.get("CORR_RANK_MEMO_ZLIB", "1"))))
+# Measured (tracemalloc, 20,000 entries): the OrderedDict node + the `_sizes`
+# entry cost 132 B, and the memo RETAINS the 64-hex key string (113 B).
+_ENTRY_OVERHEAD = 245
+
+_BLOB_RAW = 0
+_BLOB_ZLIB = 1
+_MARSHAL_VERSION = 4
+
+# value -> member, so an enum survives a builtin-types-only encoding. Built
+# once; enum iteration yields canonical members only, so the maps are total.
+_MODALITY_BY_VALUE = {m.value: m for m in ModalityClass}
+_PROBE_SCOPE_BY_VALUE = {p.value: p for p in ProbeScope}
+_TIER_BY_VALUE = {v.value: v for v in VerdictTier}
+_CHAIN_KEYS = frozenset(("stage", "root", "witnessed", "kinds", "note"))
+
+
+class _CatalogView:
+    """The per-template constants `score_template` copies into every
+    `HypothesisScore` — the half of the value the codec DROPS and rebuilds.
+
+    Holds the `Catalog` by STRONG reference: a blob is only decodable while the
+    templates it was encoded against are alive, and `scoring._CATALOG_PLAN_CACHE`
+    may evict them at any time."""
+
+    __slots__ = ("catalog", "const", "index", "templates")
+
+    def __init__(self, catalog) -> None:
+        self.catalog = catalog
+        self.templates = catalog.enabled_templates()
+        self.index: dict[str, int] = {t.id: i
+                                      for i, t in enumerate(self.templates)}
+        self.const: tuple[tuple, ...] = tuple(
+            ((t.title, t.verdict.owner, t.verdict.first_steps, tuple(t.seams),
+              t.deployment_scope, t.operator_phrase, t.manager_phrase,
+              t.blast_radius, tuple(t.false_positives)),
+             tuple((st.stage, st.root, st.unobserved_note)
+                   for st in t.causal_chain))
+            for t in self.templates)
+
+
+_VIEW_CACHE: dict[str, _CatalogView] = {}
+_VIEW_CACHE_MAX = 4
+
+
+def _catalog_view(version: str) -> _CatalogView | None:
+    """The view for `version`, or None when no live `Catalog` answers to it —
+    in which case nothing is encoded (put) and the entry is dropped (get).
+    Fail-closed in both directions: a value that cannot be rebuilt EXACTLY is
+    never handed back."""
+    view = _VIEW_CACHE.get(version)
+    if view is not None:
+        return view
+    for entry in scoring._CATALOG_PLAN_CACHE.values():
+        catalog = entry[0]
+        if catalog.version_hash() == version:
+            if len(_VIEW_CACHE) >= _VIEW_CACHE_MAX:
+                _VIEW_CACHE.clear()
+            view = _CatalogView(catalog)
+            _VIEW_CACHE[version] = view
+            return view
+    return None
+
+
+def encode_result(result: RankingResult) -> bytes | None:
+    """The compact cached form, or None when the value is not provably
+    rebuildable (then the memo stores the object, exactly as before).
+
+    Drops every field that is a function of the TEMPLATE alone — and verifies,
+    field for field, that it really is one before dropping it."""
+    view = _catalog_view(result.catalog_version)
+    if view is None:
+        return None
+    index = view.index
+    const = view.const
+    hyps: list[tuple] = []
+    for h in result.hypotheses:
+        i = index.get(h.template_id)
+        if i is None:
+            return None                    # the catalog cannot rebuild it
+        fixed, stages = const[i]
+        if (h.title, h.owner, h.first_steps, h.seams, h.deployment_scope,
+                h.operator_phrase, h.manager_phrase, h.blast_radius,
+                h.false_positives) != fixed:
+            return None                    # a "constant" field is not constant
+        chain = h.causal_chain
+        if len(chain) != len(stages):
+            return None
+        rungs: list[tuple] = []
+        for rung, stage in zip(chain, stages):
+            witnessed = rung.get("witnessed")
+            if (rung.keys() != _CHAIN_KEYS or rung.get("stage") != stage[0]
+                    or rung.get("root") != stage[1]
+                    or rung.get("note") != ("" if witnessed else stage[2])):
+                return None
+            rungs.append((bool(witnessed), tuple(rung["kinds"])))
+        gate = h.verdict_gate
+        cov = gate.coverage
+        hyps.append((
+            i, h.coverage, h.confidence_rank, h.contradicted, h.supporting_hit,
+            h.satisfied, h.missing, h.contradictions, h.forced_competitors,
+            h.notes, gate.tier.value, gate.reasons,
+            tuple(sorted(m.value for m in cov.modality_classes)),
+            tuple(sorted(cov.observer_ids)),
+            cov.independent_pair,
+            cov.fate_groups,
+            tuple(sorted(m.value for m in cov.trusted_modalities)),
+            tuple(sorted(p.value for p in cov.low_authority_probe_scopes)),
+            cov.excluded_debug,
+            tuple(rungs),
+        ))
+    body = marshal.dumps(
+        (result.catalog_version, result.top_hypothesis,
+         result.verdict_tier.value, result.evidence_missing, tuple(hyps)),
+        _MARSHAL_VERSION)
+    if ZLIB_LEVEL:
+        return bytes([_BLOB_ZLIB]) + zlib.compress(body, ZLIB_LEVEL)
+    return bytes([_BLOB_RAW]) + body
+
+
+def decode_result(blob: bytes) -> RankingResult | None:
+    """Rebuild the EXACT `RankingResult` `encode_result` was handed, or None if
+    the catalog that minted it is no longer resolvable."""
+    body = blob[1:]
+    if blob[0] == _BLOB_ZLIB:
+        body = zlib.decompress(body)
+    version, top, tier, missing, hyps = marshal.loads(body)
+    view = _catalog_view(version)
+    if view is None:
+        return None
+    const = view.const
+    templates = view.templates
+    scores: list[HypothesisScore] = []
+    for (i, coverage, confidence, contradicted, supporting, satisfied, gaps,
+         contradictions, forced, notes, gate_tier, reasons, modalities,
+         observers, pair, fate_groups, trusted, low_authority, excluded,
+         rungs) in hyps:
+        fixed, stages = const[i]
+        scores.append(HypothesisScore(
+            template_id=templates[i].id,
+            title=fixed[0],
+            coverage=coverage,
+            confidence_rank=confidence,
+            contradicted=contradicted,
+            verdict_gate=GateVerdict(
+                tier=_TIER_BY_VALUE[gate_tier],
+                coverage=EvidenceCoverage(
+                    modality_classes=frozenset(
+                        _MODALITY_BY_VALUE[m] for m in modalities),
+                    observer_ids=frozenset(observers),
+                    independent_pair=(None if pair is None else tuple(pair)),
+                    fate_groups=tuple(tuple(g) for g in fate_groups),
+                    trusted_modalities=frozenset(
+                        _MODALITY_BY_VALUE[m] for m in trusted),
+                    low_authority_probe_scopes=frozenset(
+                        _PROBE_SCOPE_BY_VALUE[p] for p in low_authority),
+                    excluded_debug=tuple(excluded),
+                ),
+                reasons=tuple(reasons)),
+            satisfied=tuple(satisfied),
+            missing=tuple(gaps),
+            contradictions=tuple(contradictions),
+            forced_competitors=tuple(forced),
+            notes=tuple(notes),
+            owner=fixed[1],
+            first_steps=fixed[2],
+            supporting_hit=supporting,
+            seams=fixed[3],
+            deployment_scope=fixed[4],
+            operator_phrase=fixed[5],
+            manager_phrase=fixed[6],
+            blast_radius=fixed[7],
+            false_positives=fixed[8],
+            causal_chain=tuple(
+                {"stage": stage[0], "root": stage[1], "witnessed": witnessed,
+                 "kinds": list(kinds),
+                 "note": "" if witnessed else stage[2]}
+                for stage, (witnessed, kinds) in zip(stages, rungs)),
+        ))
+    return RankingResult(
+        top_hypothesis=top,
+        verdict_tier=_TIER_BY_VALUE[tier],
+        hypotheses=tuple(scores),
+        evidence_missing=tuple(missing),
+        catalog_version=version)
+
+
+def _stored_bytes(stored: object) -> int:
+    """The charge for a value ALREADY in its stored form."""
+    return ((_getsizeof(stored) if type(stored) is bytes
+             else estimate_result_bytes(stored)) + _ENTRY_OVERHEAD)
+
+
+def entry_bytes(value: RankingResult, compact: bool | None = None) -> int:
+    """What ONE memo entry costs the process, in whichever form the memo would
+    store `value` in — the single authority the bound is denominated in, and
+    the unit the byte-bound tests count in.
+
+    Compact: the blob IS the value, so the charge is EXACT (`getsizeof`), never
+    estimated. Object: the calibrated walk below. Both add the per-entry
+    bookkeeping the memo itself retains (`_ENTRY_OVERHEAD`)."""
+    if DEFAULT_COMPACT if compact is None else compact:
+        blob = encode_result(value)
+        if blob is not None:
+            return _getsizeof(blob) + _ENTRY_OVERHEAD
+    return estimate_result_bytes(value) + _ENTRY_OVERHEAD
+
+
 def _witness_projection(w: Witness) -> tuple:
     """Every field of the Witness `coverage` may read. Enumerated here (rather
     than hashing the dataclass) so the canonical form is stable across
@@ -630,15 +981,24 @@ class RankMemo:
     `test_T7_the_memo_holds_no_evidence_objects`) reads it as. One int per entry
     against a 10-26 KiB value is noise."""
 
-    __slots__ = ("_lru", "_sizes", "bytes_max", "bytes_used", "evicted",
-                 "evicted_bytes", "hits", "max_entries", "misses", "unkeyable")
+    __slots__ = ("_lru", "_sizes", "bytes_max", "bytes_used", "compact",
+                 "evicted", "evicted_bytes", "hits", "max_entries", "misses",
+                 "unkeyable")
 
     def __init__(self, max_entries: int = DEFAULT_MAX_ENTRIES,
-                 max_bytes: int = DEFAULT_MAX_BYTES) -> None:
+                 max_bytes: int = DEFAULT_MAX_BYTES,
+                 compact: bool | None = None) -> None:
         self.max_entries = max(1, int(max_entries))
         self.bytes_max = max(1, int(max_bytes))
-        self._lru: OrderedDict[str, RankingResult] = OrderedDict()
-        self._sizes: dict[str, int] = {}   # key -> estimate_result_bytes(value)
+        # THE COMPACT CACHED FORM (see the section above): the store holds a
+        # ~1 KiB blob and rebuilds the value on a hit, 21x more entries per
+        # byte. `compact=False` (or CORR_RANK_MEMO_COMPACT=0) is the kill
+        # switch back to storing the object graph itself.
+        self.compact = DEFAULT_COMPACT if compact is None else bool(compact)
+        # RankingResult (object mode) or the compact blob (compact mode); a
+        # value the codec REFUSES is stored as the object either way.
+        self._lru: OrderedDict[str, object] = OrderedDict()
+        self._sizes: dict[str, int] = {}   # key -> entry_bytes(stored value)
         self.hits = 0            # keyed lookups served from the memo (rank skipped)
         self.misses = 0          # keyed lookups that had to rank
         self.evicted = 0         # entries dropped by either bound
@@ -651,15 +1011,44 @@ class RankMemo:
         if hit is None:
             self.misses += 1
             return None
+        if type(hit) is bytes:
+            value = decode_result(hit)
+            if value is None:
+                # The catalog that minted this blob is gone, so the value can
+                # no longer be rebuilt EXACTLY. Fail closed: drop the entry and
+                # report a miss — the caller ranks in full.
+                self._drop(key)
+                self.misses += 1
+                return None
+            self._lru.move_to_end(key)
+            self.hits += 1
+            return value
         self._lru.move_to_end(key)
         self.hits += 1
-        return hit
+        return hit                                   # type: ignore[return-value]
+
+    def entry(self, key: str) -> RankingResult | None:
+        """The held value, decoded, WITHOUT touching the counters or the LRU
+        order. For tests and diagnostics only."""
+        held = self._lru.get(key)
+        if type(held) is bytes:
+            return decode_result(held)
+        return held                                  # type: ignore[return-value]
+
+    def _drop(self, key: str) -> None:
+        self._lru.pop(key, None)
+        self.bytes_used -= self._sizes.pop(key, 0)
 
     def put(self, key: str, ranking: RankingResult) -> None:
-        size = estimate_result_bytes(ranking)
+        stored: object = ranking
+        if self.compact:
+            blob = encode_result(ranking)
+            if blob is not None:
+                stored = blob
+        size = _stored_bytes(stored)
         # Re-putting a key replaces its charge; it never double-counts.
         self.bytes_used -= self._sizes.get(key, 0)
-        self._lru[key] = ranking
+        self._lru[key] = stored
         self._lru.move_to_end(key)
         self._sizes[key] = size
         self.bytes_used += size

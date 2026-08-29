@@ -134,7 +134,12 @@ def test_B1_the_byte_bound_evicts_lru_until_it_holds():
     The entry bound is deliberately slack (10,000) so ONLY the byte bound can
     be doing the evicting."""
     result = ranking_of(THREE[0])
-    one = estimate_result_bytes(result)
+    # `entry_bytes` — NOT `estimate_result_bytes` — is the unit the bound is
+    # denominated in: the memo stores the COMPACT blob (rank_memo.py, THE
+    # COMPACT CACHED FORM) and charges its exact size plus the per-entry
+    # bookkeeping. `estimate_result_bytes` remains the meter of the OBJECT
+    # form, tested for its own sake in B5-B11 and used when the codec refuses.
+    one = RM.entry_bytes(result)
     memo = RankMemo(max_entries=10_000, max_bytes=one * 3 + one // 2)
     for i in range(50):
         memo.put(f"k{i:03d}", result)
@@ -154,7 +159,7 @@ def test_B2_the_entries_bound_is_still_enforced():
     for i in range(40):
         memo.put(f"k{i:03d}", result)
     assert len(memo) == 4 and memo.evicted == 36
-    assert memo.bytes_used == 4 * estimate_result_bytes(result)
+    assert memo.bytes_used == 4 * RM.entry_bytes(result)
     assert memo.stats()["max_entries"] == 4
 
 
@@ -163,16 +168,18 @@ def test_B3_lru_order_is_preserved_under_the_byte_bound():
     USED entry — not the oldest-inserted. MUTANT: make `put` evict `last=True`
     and this goes red."""
     result = ranking_of(THREE[0])
-    one = estimate_result_bytes(result)
+    one = RM.entry_bytes(result)
     memo = RankMemo(max_entries=10_000, max_bytes=one * 3)
     for key in ("a", "b", "c"):
         memo.put(key, result)
     assert len(memo) == 3
-    assert memo.get("a") is result          # promote 'a'; 'b' becomes the LRU
+    # `==`, not `is`: a compact-mode hit REBUILDS the value from the blob, and
+    # equality is exactly the contract (T4 pins the resulting bytes).
+    assert memo.get("a") == result          # promote 'a'; 'b' becomes the LRU
     memo.put("d", result)
     assert len(memo) == 3 and memo.evicted == 1
     assert memo.get("b") is None, "the byte bound evicted the wrong entry"
-    assert memo.get("a") is result and memo.get("c") is result and memo.get("d") is result
+    assert memo.get("a") == result and memo.get("c") == result and memo.get("d") == result
     assert list(memo._lru) == ["a", "c", "d"]
 
 
@@ -191,7 +198,7 @@ def test_B4_stats_exposes_the_byte_readout_and_it_balances():
         assert field in stats, f"stats() lost {field}"
     assert stats["bytes_max"] == 1 << 40
     assert stats["evicted_bytes"] == 0
-    assert stats["bytes"] == sum(estimate_result_bytes(v) for v in rankings.values())
+    assert stats["bytes"] == sum(RM.entry_bytes(v) for v in rankings.values())
     assert stats["bytes"] == memo.bytes_used == sum(memo._sizes.values())
 
     # now squeeze it and re-check both halves of the identity
@@ -410,11 +417,11 @@ def test_B7_one_oversized_entry_is_kept_rather_than_evicting_to_empty():
     result = ranking_of(THREE[0])
     memo = RankMemo(max_entries=10_000, max_bytes=1)
     memo.put("only", result)
-    assert len(memo) == 1 and memo.get("only") is result
+    assert len(memo) == 1 and memo.get("only") == result
     memo.put("second", result)
     assert len(memo) == 1 and memo.evicted == 1
-    assert memo.get("only") is None and memo.get("second") is result
-    assert memo.bytes_used == estimate_result_bytes(result) > memo.bytes_max
+    assert memo.get("only") is None and memo.get("second") == result
+    assert memo.bytes_used == RM.entry_bytes(result) > memo.bytes_max
 
 
 def test_B8_clear_resets_the_byte_accounting():
@@ -429,7 +436,7 @@ def test_B8_clear_resets_the_byte_accounting():
     assert len(memo) == 0 and memo.bytes_used == 0 and memo._sizes == {}
     assert memo.stats()["bytes"] == 0
     memo.put("again", ranking_of(THREE[0]))
-    assert memo.bytes_used == estimate_result_bytes(ranking_of(THREE[0]))
+    assert memo.bytes_used == RM.entry_bytes(ranking_of(THREE[0]))
 
 
 def test_B9_re_putting_a_key_replaces_its_charge():
@@ -440,11 +447,11 @@ def test_B9_re_putting_a_key_replaces_its_charge():
     memo = RankMemo(max_entries=10_000, max_bytes=1 << 40)
     for _ in range(20):
         memo.put("k", small)
-    assert len(memo) == 1 and memo.bytes_used == estimate_result_bytes(small)
+    assert len(memo) == 1 and memo.bytes_used == RM.entry_bytes(small)
     memo.put("k", large)
-    assert len(memo) == 1 and memo.bytes_used == estimate_result_bytes(large)
+    assert len(memo) == 1 and memo.bytes_used == RM.entry_bytes(large)
     assert memo.evicted == 0 and memo.evicted_bytes == 0
-    assert memo.get("k") is large
+    assert memo.get("k") == large
 
 
 def test_B10_the_estimator_is_deterministic_and_content_derived():
@@ -501,7 +508,7 @@ def test_B12_a_tight_byte_bound_is_still_byte_identical_to_memo_off():
     produce byte-for-byte the objects, digests, blobs and rows a memo-off run
     produces (the T4 contract, now under eviction pressure). MUTANT: return a
     stale entry after an eviction and this goes red."""
-    one = estimate_result_bytes(rank(CAT, tuple(RMT.component(1))))
+    one = RM.entry_bytes(rank(CAT, tuple(RMT.component(1))))
     memo = RankMemo(max_entries=10_000, max_bytes=one * 4)
 
     # Phase 1 — a working set that FITS: re-ranking the same 3 components over 3
@@ -686,3 +693,184 @@ def test_C5_the_catalog_plan_kind_index_is_unchanged_by_interning(monkeypatch):
     index, inapplicable = _catalog_plan(CAT)
     assert index == interned
     assert set(inapplicable) == set(interned)
+
+
+# ═══ C — THE COMPACT CACHED FORM (rank_memo.py, THE COMPACT CACHED FORM) ═════
+#
+# The memo stores a `bytes` blob of the per-EVIDENCE half of a `RankingResult`
+# and rebuilds the value from the catalog on a hit: 24.5 KiB/entry -> ~1.15 KiB
+# (21x), so the 96 MiB bound admits ~85,000 entries instead of ~2,900 and the
+# live run's 20,117-key population fits whole. These tests pin the ONE thing
+# that buys: that the rebuilt value is EQUAL, byte for byte, or is refused.
+
+def _all_rankings() -> list[RankingResult]:
+    return [ranking_of(p) for p in FIXTURES]
+
+
+def test_C0_the_compact_form_is_the_default_and_the_corpus_is_not_trivial():
+    """PREMISE. If the codec silently refused everything, every C test below
+    would pass vacuously on the object fallback."""
+    import os
+    knob = os.environ.get("CORR_RANK_MEMO_COMPACT", "1").lower()
+    assert RM.DEFAULT_COMPACT is (knob in ("1", "true", "yes"))
+    if knob in ("1", "true", "yes"):
+        assert RankMemo().compact is True, "the compact form is not the default"
+    assert RankMemo(compact=True).compact is True
+    encoded = [RM.encode_result(r) for r in _all_rankings()]
+    assert len(encoded) >= 25
+    assert all(b is not None for b in encoded), \
+        f"{sum(b is None for b in encoded)} of {len(encoded)} results refused"
+    assert len({bytes(b) for b in encoded}) > 5, "the codec returns one blob"
+
+
+def test_C1_the_round_trip_is_equal_and_byte_identical_over_the_whole_corpus():
+    """THE CONTRACT. A decoded entry must be `==` the value that was encoded AND
+    must produce the identical persisted `hypotheses_blob()` bytes — the T1/T4
+    oracles, applied to the codec instead of to the key.
+
+    MUTANT: drop `first_steps` from the rebuild (or restore `note` unconditionally
+    instead of only for an unwitnessed rung) and this goes red."""
+    checked = 0
+    for result in _all_rankings():
+        blob = RM.encode_result(result)
+        assert blob is not None
+        back = RM.decode_result(blob)
+        assert back == result, result.top_hypothesis
+        assert RMT.blob_of(back) == RMT.blob_of(result), result.top_hypothesis
+        assert back.to_dict() == result.to_dict()
+        checked += 1
+    assert checked >= 25
+
+
+def test_C2_the_compact_entry_is_an_order_of_magnitude_smaller_and_exact():
+    """The whole point, and the accounting: the charge is the blob's real size
+    plus the per-entry bookkeeping — measured, not estimated."""
+    ratios = []
+    for result in _all_rankings():
+        blob = RM.encode_result(result)
+        assert blob is not None
+        assert RM.entry_bytes(result, compact=True) == \
+            sys.getsizeof(blob) + RM._ENTRY_OVERHEAD
+        assert RM.entry_bytes(result, compact=False) == \
+            estimate_result_bytes(result) + RM._ENTRY_OVERHEAD
+        ratios.append(estimate_result_bytes(result) / sys.getsizeof(blob))
+    assert min(ratios) > 3.0, f"the compact form barely shrank: {min(ratios):.1f}x"
+    assert sum(ratios) / len(ratios) > 8.0, \
+        f"mean shrink {sum(ratios)/len(ratios):.1f}x, expected >8x"
+
+
+def test_C3_the_codec_is_deterministic_and_content_derived():
+    """No `hash()`, no clock, no address: the same value must encode to the same
+    bytes in this process and in any other, or the byte bound would wobble."""
+    result = ranking_of(THREE[0])
+    first = RM.encode_result(result)
+    assert all(RM.encode_result(result) == first for _ in range(5))
+    # a freshly ranked, structurally identical result -> identical bytes
+    assert RM.encode_result(ranking_of(THREE[0])) == first
+
+
+@pytest.mark.parametrize("field,value", [
+    ("title", "a title the template does not carry"),
+    ("owner", "someone-else"),
+    ("first_steps", ("a step the template does not declare",)),
+    ("seams", ("seam-not-in-template",)),
+    ("blast_radius", "wider than declared"),
+    ("template_id", "sig.no.such.template"),
+])
+def test_C4_a_field_the_catalog_cannot_rebuild_is_REFUSED(field, value):
+    """FAIL-CLOSED. Every field the codec drops is verified against the template
+    before it is dropped; a mismatch refuses the encoding and the memo stores the
+    object, exactly as it did before.
+
+    MUTANT: delete the `!= fixed` guard in `encode_result` and this goes red —
+    the codec would silently hand back the TEMPLATE's wording in place of the
+    scorer's."""
+    import dataclasses
+    result = ranking_of(THREE[0])
+    assert result.hypotheses, "fixture has no hypotheses to doctor"
+    doctored = dataclasses.replace(result.hypotheses[0], **{field: value})
+    forged = dataclasses.replace(result, hypotheses=(doctored,) + result.hypotheses[1:])
+    assert RM.encode_result(forged) is None, f"{field} was dropped unverified"
+    # …and the memo keeps working: it stores the object instead.
+    memo = RankMemo()
+    memo.put("forged", forged)
+    assert type(memo._lru["forged"]) is RankingResult
+    assert memo.get("forged") is forged
+
+
+def test_C4b_a_doctored_causal_chain_rung_is_REFUSED():
+    """The chain's stage/root/note come from the template and its
+    witnessed/kinds from the evidence; a rung that does not follow that rule is
+    not rebuildable, so it is refused rather than guessed."""
+    import dataclasses
+    chained = [r for r in _all_rankings()
+               if any(h.causal_chain for h in r.hypotheses)]
+    assert chained, "no fixture exercises the causal chain — C4b proves nothing"
+    result = chained[0]
+    i, hyp = next((i, h) for i, h in enumerate(result.hypotheses) if h.causal_chain)
+    assert RM.encode_result(result) is not None
+    rung = dict(hyp.causal_chain[0])
+    rung["note"] = "a note the template never declared"
+    rung["witnessed"] = True
+    doctored = dataclasses.replace(
+        hyp, causal_chain=(rung,) + hyp.causal_chain[1:])
+    forged = dataclasses.replace(
+        result, hypotheses=result.hypotheses[:i] + (doctored,)
+        + result.hypotheses[i + 1:])
+    assert RM.encode_result(forged) is None
+
+
+def test_C5_an_unresolvable_catalog_refuses_to_encode_and_fails_closed_on_get(
+        monkeypatch):
+    """A blob is only decodable while the templates it was encoded against are
+    alive. If they are not, `get` must report a MISS (the caller ranks in full),
+    never a partially rebuilt verdict.
+
+    MUTANT: return the raw blob from `get`, or rebuild from a DIFFERENT
+    catalog, and this goes red."""
+    import dataclasses
+    result = ranking_of(THREE[0])
+    memo = RankMemo(compact=True)
+    memo.put("k", result)
+    assert type(memo._lru["k"]) is bytes
+    monkeypatch.setattr(RM, "_VIEW_CACHE", {})
+    monkeypatch.setattr(scoring, "_CATALOG_PLAN_CACHE", {})
+    assert RM.encode_result(result) is None
+    assert memo.get("k") is None, "a value was rebuilt with no catalog"
+    assert len(memo) == 0 and memo.bytes_used == 0, "the dead entry was kept"
+    # an unknown version never resolves either
+    alien = dataclasses.replace(result, catalog_version="no-such-version")
+    assert RM.encode_result(alien) is None
+
+
+def test_C6_the_kill_switch_restores_the_object_store():
+    """`CORR_RANK_MEMO_COMPACT=0` / `compact=False` must give back exactly the
+    pre-change memo: the identical object, charged by the calibrated walk."""
+    result = ranking_of(THREE[0])
+    memo = RankMemo(compact=False)
+    memo.put("k", result)
+    assert type(memo._lru["k"]) is RankingResult
+    assert memo.get("k") is result, "the object store stopped sharing"
+    assert memo.bytes_used == estimate_result_bytes(result) + RM._ENTRY_OVERHEAD
+    src = Path(RM.__file__).read_text(encoding="utf-8")
+    assert 'os.environ.get(\n    "CORR_RANK_MEMO_COMPACT"' in src \
+        or 'os.environ.get(' in src and "CORR_RANK_MEMO_COMPACT" in src
+
+
+def test_C7_a_compact_memo_is_byte_identical_to_memo_off_end_to_end():
+    """The T4 contract against the CODEC: a drain served by a compact memo must
+    produce the same objects, digests and blobs a memo-off drain produces.
+
+    MUTANT: rebuild `notes` from the template instead of from the blob and this
+    goes red on the first role-clause hit."""
+    memo = RankMemo(compact=True)
+    win = RMT.mixed_window(6)
+    cohorts = [RMT.keys_of(win)] * 3
+    off = RMT.drain(win, cohorts, rank_memo=None)
+    on = RMT.drain(win, cohorts, rank_memo=memo)
+    assert memo.hits > 0, "the memo never hit — this proves nothing"
+    assert all(type(v) is bytes for v in memo._lru.values()), \
+        "the drain never exercised the compact form"
+    for expected, actual in zip(off, on):
+        assert expected == actual
+        assert RMT.fingerprint(expected) == RMT.fingerprint(actual)
