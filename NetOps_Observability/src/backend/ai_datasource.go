@@ -191,6 +191,19 @@ SELECT toString(correlation_id) AS correlation_id, tenant_id,
 	return out, nil
 }
 
+// corrPartitionSkewSlackSeconds widens a created_at bound that exists only to
+// let ClickHouse prune daily partitions (corr_objects is partitioned by
+// toYYYYMMDD(created_at), see chschema/corr_repartition.go).
+//
+// An object is persisted at or after its window opens, so `window_start >= X`
+// normally implies `created_at >= X` and the extra predicate is redundant — but
+// window_start is EVENT time off device clocks and created_at is now64() on the
+// engine host, so a device an hour into the future could otherwise make the
+// redundant bound drop a row the query is supposed to return. A full day of
+// slack costs one extra daily partition and makes the predicate provably
+// non-narrowing for any clock skew short of 24 h.
+const corrPartitionSkewSlackSeconds = 86400
+
 // ListProblemsInWindow implements the WindowDataSource seam: correlation problems
 // whose onset falls in the past window, tenant-scoped via the corr_objects row
 // policy. NOT filtered to open, so a time-range summary can distinguish still-open
@@ -205,10 +218,11 @@ SELECT toString(correlation_id) AS correlation_id, tenant_id,
        affected, signal_count, node_count
   FROM netops.corr_objects
  WHERE window_start >= now() - INTERVAL %d SECOND
+   AND created_at >= now() - INTERVAL %d SECOND
  ORDER BY window_start DESC
  LIMIT 1 BY correlation_id
  LIMIT 1000
- FORMAT JSON`, sinceSeconds)
+ FORMAT JSON`, sinceSeconds, sinceSeconds+corrPartitionSkewSlackSeconds)
 	rows, err := d.srv.chRowsScope(d.ctx, d.scope, sql)
 	if err != nil {
 		return nil, err

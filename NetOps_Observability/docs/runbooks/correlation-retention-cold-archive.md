@@ -23,14 +23,44 @@ by the API boot converge — change `.env`, `docker compose up -d api`, done.
 
 ```bash
 scripts/ch-retention-dry-run.sh    # what WOULD drop, when, and export coverage
-scripts/ch-cold-export.sh          # export closed months (idempotent; cron monthly)
+scripts/ch-cold-export.sh          # export closed DAYS (idempotent; cron DAILY)
 # suggested cron (lead the horizon by weeks):
-# 17 2 3 * * /opt/correlix/scripts/ch-cold-export.sh --quiet
+# 17 2 * * * /opt/correlix/scripts/ch-cold-export.sh --quiet
 ```
-Expiry is part-level (`ttl_only_drop_parts`): a month-partition drops only
-when its NEWEST row passes the horizon, so retention lags by up to a month —
-that lag is your export safety margin. **Run the dry-run after changing any
-knob** and before enabling a shorter profile on a long-lived deployment.
+Expiry is part-level (`ttl_only_drop_parts`): a part drops only when its
+NEWEST row passes the horizon. **The corr_* history tables are partitioned
+DAILY on the very column their TTL is keyed on**, so that lag is now at most
+ONE DAY and space comes back in ~1/30th increments instead of one month-sized
+cliff. It used to be up to a month (corr_objects was partitioned on
+`window_start` while its TTL was keyed on `created_at`), which is why the cron
+above is daily now: a monthly export would leave up to a month of days untiered
+ahead of the horizon. **Run the dry-run after changing any knob** and before
+enabling a shorter profile on a long-lived deployment.
+
+### Re-partitioning an existing deployment (one time, per table)
+
+A partition-key change is a full table REWRITE, so the API boot converge does
+NOT do it implicitly on a big table. `chschema/corr_repartition.go` runs after
+the converge list and, per table:
+
+| env | default | meaning |
+|---|---|---|
+| `CORR_REPARTITION` | `auto` | `auto` migrates below the size gate and SKIPS above it with a loud log line; `force` ignores the gate; `off` does nothing |
+| `CORR_REPARTITION_MAX_GIB` | `4` | the gate, in **uncompressed** GiB per table (the lab's `corr_objects` is 3.51 GiB on disk but 48.9 GiB uncompressed — the rewrite pays the uncompressed cost) |
+| `CORR_REPARTITION_BATCH_ROWS` | `500000` | a destination day-partition bigger than this is copied in hourly sub-batches |
+| `CORR_REPARTITION_CATCHUP_PASSES` | `3` | how many delta passes to try while the engine is still writing, before ABORTING without swapping |
+| `CORR_REPARTITION_DROP_OLD` | `false` | drop `netops.<table>__premigration` after a verified swap; leaving it false keeps your rollback |
+
+To run it deliberately: **stop the correlation engine** (so the source stops
+growing), set `CORR_REPARTITION=force` in `.env`, `docker compose up -d api`,
+and watch the `corr-repartition:` log lines. It is resumable — a crash or a
+restart continues from the last completed day-partition, and the live table is
+untouched until the copy is row-count verified. Afterwards, verify
+`netops.<table>__premigration` and `DROP TABLE` it to reclaim the space.
+
+Cold archives exported BEFORE the migration are one (tenant, month) per file;
+after it they are one (tenant, day). `ch-cold-restore.sh` handles both — use
+`--day YYYYMMDD` for the new vintage, `--month YYYYMM` for the old.
 
 ## Retrieving cold history — WITHOUT disturbing hot production
 
@@ -40,7 +70,8 @@ the insert + analyst queries would compete with Command Center's read
 budgets. `scripts/ch-cold-restore.sh` restores into the isolated
 `netops_restore` side database (schema cloned from live, TTL removed) —
 query it freely, `DROP TABLE` when done. Tenant granularity is native: cold
-files are one-(tenant, month)-per-file because the partitions are tenant-led.
+files are one-(tenant, day)-per-file because the partitions are tenant-led
+(one-(tenant, month) for archives exported before the daily re-partition).
 
 ### The four scenarios (all validated live 2026-07-09)
 
@@ -49,7 +80,9 @@ files are one-(tenant, month)-per-file because the partitions are tenant-led.
 scripts/ch-cold-restore.sh --table corr_objects --tenant acme
 scripts/ch-cold-restore.sh --table corr_signals_archive --tenant acme
 
-# 2. Single-month restore (incident-era investigation):
+# 2. Single-day restore (incident-era investigation, current daily partitions):
+scripts/ch-cold-restore.sh --table corr_objects --day 20260803
+#    ...or a whole month (also the unit of pre-migration archives):
 scripts/ch-cold-restore.sh --table corr_signals_archive --month 202606
 
 # 3. Calibration-only (no cluster involvement at ALL — preferred):

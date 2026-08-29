@@ -8,6 +8,17 @@ package chschema
 //
 // Freeze invariants (guarded by corr_schema_test.go):
 //   - every table is tenant-partitioned (tenant_id leads the PARTITION BY)
+//   - every corr_* HISTORY table is partitioned DAILY on the very column its
+//     TTL is keyed on (corr_repartition.go owns the live migration and the
+//     invariant): toYYYYMMDD(created_at) for corr_objects/corr_edges/
+//     corr_evidence/corr_path_edges, toYYYYMMDD(ts) for corr_signals and
+//     corr_signals_archive, toYYYYMMDD(window_start) for corr_tenant_write_amp.
+//     Monthly partitions are what let one part reach 1.86 GiB at merge level
+//     1,568 (a month-long partition is never "finished", so
+//     min_age_to_force_merge_on_partition_only can never fire) and made
+//     ttl_only_drop_parts = 1 overshoot the retention horizon by up to a month.
+//     corr_current is the ONE exception — partitioned by tenant_id alone
+//     because its ReplacingMergeTree dedup key may not span partitions.
 //   - corr_signals carries the MANDATORY observer block (observer_id/type/
 //     location/trust_domain, collection_path, modality_class,
 //     source_clock_quality) with CHECK observer_id != '' — the evidence-
@@ -89,7 +100,7 @@ SETTINGS index_granularity = 8192`,
     CONSTRAINT observer_required CHECK observer_id != ''
 )
 ENGINE = MergeTree
-PARTITION BY (tenant_id, toYYYYMM(ts))
+PARTITION BY (tenant_id, toYYYYMMDD(ts))
 ORDER BY (tenant_id, ts, signal_id)
 SETTINGS index_granularity = 8192`,
 
@@ -158,7 +169,7 @@ SETTINGS index_granularity = 8192`,
     top_hypothesis   String,
     top_confidence   Float32,
     verdict_tier     Enum8('undetermined'=0,'suspected'=1,'confirmed'=2),
-    hypotheses       String,
+    hypotheses       String CODEC(ZSTD(3)),
     evidence_missing String DEFAULT '[]',
     affected         String,
     signal_count     UInt32,
@@ -173,7 +184,7 @@ SETTINGS index_granularity = 8192`,
     created_at       DateTime64(3) DEFAULT now64(3)
 )
 ENGINE = MergeTree
-PARTITION BY (tenant_id, toYYYYMM(window_start))
+PARTITION BY (tenant_id, toYYYYMMDD(created_at))
 ORDER BY (tenant_id, correlation_id, version)`,
 
 		// C4: the causal-layer stack (engine ObjectSnapshot.layer_coverage) the RCA
@@ -195,6 +206,22 @@ ORDER BY (tenant_id, correlation_id, version)`,
 		// churns a version), consumed by the RCA report/render.
 		`ALTER TABLE netops.corr_objects
     ADD COLUMN IF NOT EXISTS attribution String DEFAULT '{}' AFTER app_impact`,
+
+		// P2 structural fix (docs/scale/P2_STEP5_2P5K_VERDICT_2026-08-29 §3):
+		// `hypotheses` is 46.01 of corr_objects' 48.9 GiB uncompressed (94 %), so
+		// it is what every re-merge rewrites. MEASURED on 3,000 live blobs through
+		// clickhouse-local: LZ4 (the stock default) 13.94x, ZSTD(1) 64.59x,
+		// ZSTD(3) 89.70x, ZSTD(6) 104.41x — ZSTD(3) is 6.4x better than LZ4 for
+		// the knee of the CPU curve on a 4-core box.
+		//
+		// MODIFY COLUMN carrying ONLY a codec change is METADATA-ONLY: ClickHouse
+		// rewrites no existing part and launches no mutation. New parts — and the
+		// parts background merges produce from old ones — are written with the new
+		// codec, so the table converges without a rewrite window. The type and any
+		// DEFAULT must be restated in full or MODIFY COLUMN drops them; `hypotheses`
+		// has no DEFAULT, which is why the statement is exactly this shape.
+		// Idempotent: re-applying the same codec on every boot is a no-op.
+		`ALTER TABLE netops.corr_objects MODIFY COLUMN hypotheses String CODEC(ZSTD(3))`,
 
 		// CREATE OR REPLACE (not IF NOT EXISTS): a SELECT * view freezes its column
 		// list at creation, so adding a base column (e.g. #81 P5 app_impact) would
@@ -296,7 +323,7 @@ ORDER BY (tenant_id, correlation_id)`,
     CONSTRAINT grounding_ref_nonempty CHECK grounding_ref != ''
 )
 ENGINE = MergeTree
-PARTITION BY (tenant_id, toYYYYMM(created_at))
+PARTITION BY (tenant_id, toYYYYMMDD(created_at))
 ORDER BY (tenant_id, correlation_id, version, from_node, to_node)`,
 
 		`CREATE TABLE IF NOT EXISTS netops.corr_evidence
@@ -312,7 +339,7 @@ ORDER BY (tenant_id, correlation_id, version, from_node, to_node)`,
     created_at      DateTime64(3) DEFAULT now64(3)
 )
 ENGINE = MergeTree
-PARTITION BY (tenant_id, toYYYYMM(created_at))
+PARTITION BY (tenant_id, toYYYYMMDD(created_at))
 ORDER BY (tenant_id, correlation_id, version, subject_kind, subject_id)`,
 
 		// #81 P5: subject_kind gains 'app'=3 — an app-impact supporting-evidence row
@@ -342,7 +369,7 @@ ORDER BY (tenant_id, correlation_id, version, subject_kind, subject_id)`,
     max_incident_age_s UInt32 DEFAULT 0
 )
 ENGINE = MergeTree
-PARTITION BY (tenant_id, toYYYYMM(window_start))
+PARTITION BY (tenant_id, toYYYYMMDD(window_start))
 ORDER BY (tenant_id, window_start)
 TTL toDateTime(window_start) + INTERVAL 30 DAY
 SETTINGS index_granularity = 8192, ttl_only_drop_parts = 1`,
@@ -396,7 +423,7 @@ SETTINGS index_granularity = 8192, ttl_only_drop_parts = 1`,
     created_at         DateTime64(3) DEFAULT now64(3)
 )
 ENGINE = MergeTree
-PARTITION BY (tenant_id, toYYYYMM(created_at))
+PARTITION BY (tenant_id, toYYYYMMDD(created_at))
 ORDER BY (tenant_id, correlation_id, version, from_node, to_node)
 TTL toDateTime(created_at) + INTERVAL 90 DAY
 SETTINGS index_granularity = 8192, ttl_only_drop_parts = 1`,

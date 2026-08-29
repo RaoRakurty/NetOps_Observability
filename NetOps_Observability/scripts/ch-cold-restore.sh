@@ -13,15 +13,19 @@
 #      writing to production history (append-only truth stays truthful).
 #
 # Tenant granularity is native: the corr tables are partitioned by
-# (tenant_id, month), so every cold Parquet file is ONE tenant's ONE month —
-# single-tenant restore is file selection, not row filtering.
+# (tenant_id, DAY) since the P2 storage-shape fix (toYYYYMMDD of each table's
+# TTL column — see init.sql "STORAGE SHAPE"), so every cold Parquet file is ONE
+# tenant's ONE day — single-tenant restore is file selection, not row filtering.
+# Archives exported before that migration are one tenant's one MONTH; both
+# vintages restore, which is why --month and --day both exist.
 #
 # Usage:
-#   ch-cold-restore.sh --table corr_signals_archive [--tenant acme] [--month 202606] [--drop]
+#   ch-cold-restore.sh --table corr_signals_archive [--tenant acme] [--day 20260803|--month 202606] [--drop]
 #   --tenant  restore only this tenant's partitions ('' = platform/untagged)
-#   --month   restore only this YYYYMM
+#   --day     restore only this YYYYMMDD (matches the current daily partitions)
+#   --month   restore only this YYYYMM   (whole month; also the pre-migration unit)
 #   --drop    drop + recreate the side table first (clean slate)
-#   Omitting both filters restores every exported partition of the table.
+#   Omitting the filters restores every exported partition of the table.
 #
 # The side table netops_restore.<table> is created LIKE the live table but
 # WITHOUT TTL (SET ttl = '') so restored history persists until you drop it.
@@ -29,6 +33,7 @@
 #
 # Scenarios (docs/runbooks/correlation-retention-cold-archive.md):
 #   single-tenant restore:   --table corr_objects --tenant acme
+#   single-day restore:      --table corr_objects --day 20260803
 #   single-month restore:    --table corr_signals_archive --month 202606
 #   calibration-only:        no restore needed — read the Parquet directly
 #                            (clickhouse-local/DuckDB); restore only if the
@@ -43,20 +48,27 @@ DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 COMPOSE_DIR="${COMPOSE_DIR:-$DIR/../deployment/docker}"
 COLD_DIR="${COLD_DIR:-$DIR/../data/clickhouse-cold}"
 
-TABLE="" TENANT="__any__" MONTH="" DROP=0
+TABLE="" TENANT="__any__" MONTH="" DAY="" DROP=0
 while [ $# -gt 0 ]; do
     case "$1" in
         --table)  TABLE="$2"; shift 2 ;;
         --tenant) TENANT="$2"; shift 2 ;;
         --month)  MONTH="$2"; shift 2 ;;
+        --day)    DAY="$2"; shift 2 ;;
         --drop)   DROP=1; shift ;;
-        *) echo "usage: $0 --table <corr_table> [--tenant t] [--month YYYYMM] [--drop]" >&2; exit 2 ;;
+        *) echo "usage: $0 --table <corr_table> [--tenant t] [--day YYYYMMDD|--month YYYYMM] [--drop]" >&2; exit 2 ;;
     esac
 done
 case "$TABLE" in
     corr_signals_archive|corr_objects|corr_edges|corr_evidence) ;;
     *) echo "[cold-restore] --table must be one of the exported corr tables" >&2; exit 2 ;;
 esac
+# Validate the date filters HERE, before they are interpolated into SQL: they
+# are the only operator-supplied values that reach a query as bare numbers.
+case "$MONTH" in "" ) ;; [0-9][0-9][0-9][0-9][0-1][0-9]) ;;
+    *) echo "[cold-restore] --month must be YYYYMM" >&2; exit 2 ;; esac
+case "$DAY" in "" ) ;; [0-9][0-9][0-9][0-9][0-1][0-9][0-3][0-9]) ;;
+    *) echo "[cold-restore] --day must be YYYYMMDD" >&2; exit 2 ;; esac
 
 ch() {
     docker compose --project-directory "$COMPOSE_DIR" exec -T clickhouse \
@@ -82,10 +94,15 @@ fi
 ch "CREATE TABLE IF NOT EXISTS netops_restore.${TABLE} AS netops.${TABLE}" || exit 1
 ch "ALTER TABLE netops_restore.${TABLE} REMOVE TTL" 2>/dev/null || true
 
-TS_COL="ts"; case "$TABLE" in corr_objects) TS_COL="window_start";; corr_edges|corr_evidence) TS_COL="created_at";; esac
+# The time column MUST be each table's PARTITION/TTL column, or a --day filter
+# selects rows the export never grouped that way. corr_objects moved from
+# window_start (event time) to created_at (persist time) with the daily
+# re-partition — filtering it by window_start silently returned a different set.
+TS_COL="ts"; case "$TABLE" in corr_objects|corr_edges|corr_evidence) TS_COL="created_at";; esac
 COND="1"
 [ "$TENANT" != "__any__" ] && COND="$COND AND tenant_id = '$(echo "$TENANT" | tr -d "'\\\\")'"
 [ -n "$MONTH" ] && COND="$COND AND toYYYYMM(${TS_COL}) = ${MONTH}"
+[ -n "$DAY" ] && COND="$COND AND toYYYYMMDD(${TS_COL}) = ${DAY}"
 
 docker compose --project-directory "$COMPOSE_DIR" exec -T clickhouse \
     mkdir -p /var/lib/clickhouse/user_files/coldrestore </dev/null

@@ -13,7 +13,9 @@ package chschema
 //
 // The cause is visible in the part LEVELS (level = how many merges a part has
 // already been through): ~170k one-row inserts were being folded again and
-// again into ONE accumulated part per month partition — corr_objects 1.86 GiB
+// again into ONE accumulated part per month partition (a month-long partition
+// is never "finished", so min_age_to_force_merge_on_partition_only can never
+// fire — the structural half of the fix is corr_repartition.go) — corr_objects 1.86 GiB
 // at level 1,568, corr_current 37.8 MiB at level 33,082, corr_edges 29.8 MiB
 // at level 11,848. corr_objects rows are 26,878 B uncompressed and its single
 // `hypotheses` String column is 45.01 of the table's 48.01 GiB (94 %), so every
@@ -24,11 +26,19 @@ package chschema
 //	max_bytes_to_merge_at_max_space_in_pool  150 GB (stock) -> 2 GiB / 1 GiB
 //	    Retires the accumulated part from merge selection once it crosses the
 //	    cap: it stops being rewritten, and merge cost becomes bounded by the
-//	    cap instead of by the table. At 2 GiB corr_objects settles at ~24 parts
-//	    per month partition — far under parts_to_delay_insert (1000) and
-//	    parts_to_throw_insert (3000), which stay at their DEFAULTS on purpose
-//	    (peak PartsActive was 927 and the run raised no TOO_MANY_PARTS: the
-//	    insert-side backpressure is not what needed changing).
+//	    cap instead of by the table. Measured under the MONTHLY partitioning of
+//	    the time, that was ~24 parts per partition for corr_objects — far under
+//	    parts_to_delay_insert (1000) and parts_to_throw_insert (3000), which
+//	    stay at their DEFAULTS on purpose (peak PartsActive was 927 and the run
+//	    raised no TOO_MANY_PARTS: the insert-side backpressure is not what
+//	    needed changing).
+//
+//	    SINCE corr_repartition.go moved the family to DAILY partitions the cap
+//	    is a backstop rather than the binding constraint: a day of 2.5K-scale
+//	    corr_objects is ~0.12 GiB, so no partition reaches 2 GiB and the idle
+//	    force-merge pass folds each finished day into ONE part. The cap is kept
+//	    at the measured value anyway — it is what bounds a storm day, and these
+//	    thresholds are per PARTITION, so finer partitions only add headroom.
 //	min_age_to_force_merge_seconds = 600 + ..._on_partition_only = 1
 //	    One bounded consolidation pass over a partition whose parts have ALL
 //	    been idle 10 minutes, so the small parts the cap leaves behind are

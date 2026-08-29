@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # ch-cold-export.sh (#101) — TTL-to-cold for the correlation history tables.
 #
-# Exports CLOSED month-partitions (strictly older than the current month) of
-# the correlation history tables to Parquet under data/clickhouse-cold/, so
+# Exports CLOSED partitions (strictly older than the current one) of the
+# correlation history tables to Parquet under data/clickhouse-cold/, so
 # hot ClickHouse retention (corr_retention.go TTLs) deletes nothing that has
 # not already been tiered. Idempotent: a partition already exported is skipped
 # (its Parquet file is only replaced with --force).
@@ -14,8 +14,12 @@
 #     SELECT * FROM file('cold/corr_signals_archive/<part>.parquet', Parquet)"
 # (see docs/runbooks/correlation-retention-cold-archive.md).
 #
-# Cron this AHEAD of the TTL horizon — monthly is enough for month-partitions:
-#   17 2 3 * * /path/to/scripts/ch-cold-export.sh --quiet
+# Cron this AHEAD of the TTL horizon. The corr_* tables are partitioned DAILY
+# (toYYYYMMDD of each table's TTL column — see init.sql "STORAGE SHAPE"), so run
+# it DAILY; a monthly cron would leave up to a month of days untiered:
+#   17 2 * * * /path/to/scripts/ch-cold-export.sh --quiet
+# The 6-digit month form is still handled, so a deployment that has not run the
+# corr_repartition boot migration yet keeps exporting correctly.
 #
 # Usage: ch-cold-export.sh [--quiet] [--force]
 # Env:   COMPOSE_DIR=… COLD_DIR=… TABLES="corr_signals_archive corr_objects corr_edges corr_evidence"
@@ -44,7 +48,14 @@ ch() {
 }
 
 fail=0
-current_month=$(date +%Y%m)
+# Two buckets, because a fleet mid-upgrade has both: DAILY partitions
+# (toYYYYMMDD, 8 digits) since the P2 storage-shape fix, and MONTHLY ones
+# (toYYYYMM, 6 digits) on tables the re-partition migration has not reached.
+# Comparing an 8-digit day against a 6-digit month would classify every day of
+# the current month as "closed" (20260803 >= 202608) and export a partition
+# that is still being written to.
+current_day=$(date -u +%Y%m%d)
+current_month=$(date -u +%Y%m)
 
 # ClickHouse 24.8 cannot write UUID columns to Parquet (Code 50 UNKNOWN_TYPE):
 # export them as strings. Restore round-trips — CH parses strings back into
@@ -61,19 +72,28 @@ uuid_replace() {
 
 for table in $TABLES; do
     mkdir -p "$COLD_DIR/$table" || { echo "[cold-export] cannot create $COLD_DIR/$table" >&2; exit 1; }
-    # Closed month-partitions only. NOTE: with a tuple PARTITION BY the
-    # partition_id is a HASH — the month must come from the human-readable
-    # `partition` tuple text (e.g. ('tenant', 202606)); the WHERE below still
-    # filters by _partition_id. Export per full partition so restore
-    # granularity matches drop granularity.
-    parts=$(ch "SELECT DISTINCT partition_id, extract(partition, '(\\\\d{6})') AS month
+    # Closed partitions only. NOTE: with a tuple PARTITION BY the partition_id
+    # is a HASH — the date bucket must come from the human-readable `partition`
+    # tuple text (e.g. ('tenant', 20260803) daily, ('tenant', 202606) monthly);
+    # the WHERE below still filters by _partition_id. Export per full partition
+    # so restore granularity matches drop granularity.
+    # The capture is ANCHORED after the tuple's comma on purpose: the naive
+    # '(\\d{6,8})' matched the FIRST run of digits anywhere in the tuple text, so a
+    # tenant id like 'tenant123456' exported under its own name's digits instead
+    # of its date (verified live: naive -> 123456, anchored -> 20260803).
+    parts=$(ch "SELECT DISTINCT partition_id, extract(partition, ',\\\\s*(\\\\d{6,8})\\\\)') AS bucket
                   FROM system.parts
                  WHERE database='netops' AND table='${table}' AND active
                  ORDER BY partition_id FORMAT TSV")
-    while IFS=$'\t' read -r pid month; do
+    while IFS=$'\t' read -r pid bucket; do
         [ -z "$pid" ] && continue
-        [ -z "$month" ] && continue                     # non-monthly partition: skip
-        [ "$month" -ge "$current_month" ] && continue   # still-open month: skip
+        [ -z "$bucket" ] && continue                    # undated partition: skip
+        case "${#bucket}" in
+            8) [ "$bucket" -ge "$current_day" ] && continue ;;    # still-open day
+            6) [ "$bucket" -ge "$current_month" ] && continue ;;  # still-open month
+            *) echo "[cold-export] SKIPPED ${table} partition ${pid}: unrecognised date bucket '${bucket}' (expected YYYYMMDD or YYYYMM)" >&2
+               fail=1; continue ;;
+        esac
         out="$COLD_DIR/$table/${pid}.parquet"
         if [ -s "$out" ] && [ "$FORCE" = "0" ]; then
             continue

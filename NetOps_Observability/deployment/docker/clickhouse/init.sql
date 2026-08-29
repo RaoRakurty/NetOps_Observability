@@ -195,8 +195,12 @@ SETTINGS ttl_only_drop_parts = 1;
 -- these tables will ever hold is too big to re-merge. Capping it at 2 GiB
 -- (corr_objects) / 1 GiB (the rest) retires the accumulated part from merge
 -- selection once it crosses the cap: it stops being rewritten, and the cost
--- becomes bounded by the cap instead of by the table. At 2 GiB that is ~24
--- parts per month partition for corr_objects — far below parts_to_delay_insert
+-- becomes bounded by the cap instead of by the table. Measured under the
+-- MONTHLY partitioning of the time that was ~24 parts per partition for
+-- corr_objects; since the daily re-partition below it is a backstop rather
+-- than the binding constraint (a day is ~0.12 GiB at 2.5K scale, so the idle
+-- force-merge pass folds each finished day into ONE part). Either way, far
+-- below parts_to_delay_insert
 -- (1000) and parts_to_throw_insert (3000), which are LEFT AT THEIR DEFAULTS on
 -- purpose: peak PartsActive was 927 and there was no insert-side TOO_MANY_PARTS
 -- in the run, so the insert-side backpressure is not what needs changing.
@@ -217,6 +221,77 @@ SETTINGS ttl_only_drop_parts = 1;
 -- never UPDATE/DELETE these rows; new state = new (correlation_id, version).
 -- NO materialized view may read these tables (row policies break MV inserts —
 -- see the flows_hourly note above).
+--
+-- STORAGE SHAPE (P2 structural fix, docs/scale/P2_STEP5_2P5K_VERDICT_2026-08-29
+-- §3 + P2_CLICKHOUSE_MEMFLAT_2026-08-29): the merge budget above BOUNDS the
+-- symptom; these two changes remove its cause.
+--
+-- (a) `hypotheses String CODEC(ZSTD(3))` — MEASURED, not guessed. 3,000 live
+--     corr_objects blobs (74.2 MB raw, 24.7 KB/row) were replayed through
+--     clickhouse-local into four MergeTree tables that differ only in the
+--     column codec:
+--
+--         LZ4 (the stock default) ....... 13.94x   (live column: 13.77x)
+--         ZSTD(1) ....................... 64.59x
+--         ZSTD(3) ....................... 89.70x   <- chosen
+--         ZSTD(6) ...................... 104.41x
+--
+--     6.4x less on disk than LZ4 for the column that is 46.01 of the table's
+--     48.9 GiB uncompressed (94 %), so every byte a merge reads and rewrites
+--     shrinks by the same factor. ZSTD(6) buys another 16 % for materially
+--     more CPU per merge on a 4-core box; ZSTD(3) is the knee. Write+read of
+--     the sample was not slower than LZ4 (0.71 s vs 0.81 s write, 0.56 s vs
+--     0.59 s read) — the extra compression CPU is paid back in I/O.
+--     corr_current deliberately carries NO hypotheses column (#100), so there
+--     is no second copy of this blob to codec.
+--
+-- (b) DAILY partitions on every corr_* history table, keyed on the SAME column
+--     its TTL is keyed on. Monthly partitioning is what let one accumulated
+--     part reach 1.86 GiB at merge level 1,568: a month-long partition is
+--     never finished, so its parts stay merge candidates for a month and
+--     min_age_to_force_merge_on_partition_only can never fire. With daily
+--     partitions yesterday's partition is complete, gets ONE forced
+--     consolidation after 600 s idle, and is then immutable.
+--
+--         corr_objects          toYYYYMMDD(created_at)   (was toYYYYMM(window_start))
+--         corr_edges            toYYYYMMDD(created_at)   (was toYYYYMM)
+--         corr_evidence         toYYYYMMDD(created_at)   (was toYYYYMM)
+--         corr_signals_archive  toYYYYMMDD(ts)           (was toYYYYMM)
+--         corr_path_edges       toYYYYMMDD(created_at)   (was toYYYYMM)
+--         corr_tenant_write_amp toYYYYMMDD(window_start) (was toYYYYMM)
+--         corr_signals          toYYYYMMDD(ts)           (already daily)
+--         corr_current          (tenant_id) ONLY — UNCHANGED ON PURPOSE: it is a
+--                               ReplacingMergeTree whose dedup key
+--                               (tenant_id, correlation_id) may not span
+--                               partitions or FINAL cannot collapse re-persists.
+--
+--     corr_objects moves from window_start to created_at because the TTL
+--     corr_retention.go applies is `toDateTime(created_at) + N DAY` with
+--     ttl_only_drop_parts = 1. A part is dropped whole only when EVERY row in
+--     it has expired, so a partition keyed on a different column than the TTL
+--     drops late: effective retention was the configured horizon plus up to a
+--     whole month. Keyed on created_at at day granularity the overshoot is
+--     <= 1 day, and space comes back in ~1/30th increments instead of one
+--     month-sized cliff. It is also the insert-ordered column (now64() at
+--     persist), so the active partition is exactly one day and older ones
+--     never re-open for merges — which window_start, being event time, cannot
+--     promise.
+--
+--     ttl_only_drop_parts = 1 semantics do NOT change — parts still only drop
+--     whole, never row-by-row; the unit they drop in gets 30x smaller and
+--     lines up with the TTL expression.
+--
+--     Part-count arithmetic: partitions = tenants x retention days (180 hot by
+--     the production profile), each settling at ~1 part after the idle
+--     consolidation pass. parts_to_delay_insert / parts_to_throw_insert are
+--     PER PARTITION, so the active day has far more headroom than the month
+--     did, and max_parts_in_total (100,000) bounds the rest.
+--
+--     Live deployments do NOT get re-partitioned implicitly: a partition-key
+--     change requires a table rewrite, so it is a gated, resumable boot
+--     migration (src/backend/internal/chschema/corr_repartition.go) that
+--     SKIPS LOUDLY above CORR_REPARTITION_MAX_GIB (default 4 GiB uncompressed
+--     per table) until an operator sets CORR_REPARTITION=force.
 -- ---------------------------------------------------------------------------
 
 -- 2.1 Normalized signal spine (shared with the #53/#69 unified event feed).
@@ -318,7 +393,7 @@ CREATE TABLE IF NOT EXISTS netops.corr_signals_archive
     CONSTRAINT observer_required CHECK observer_id != ''
 )
 ENGINE = MergeTree
-PARTITION BY (tenant_id, toYYYYMM(ts))
+PARTITION BY (tenant_id, toYYYYMMDD(ts))
 ORDER BY (tenant_id, ts, signal_id)
 SETTINGS index_granularity = 8192,
          max_bytes_to_merge_at_max_space_in_pool = 1073741824, min_age_to_force_merge_seconds = 600, min_age_to_force_merge_on_partition_only = 1;
@@ -339,7 +414,10 @@ CREATE TABLE IF NOT EXISTS netops.corr_objects
     top_hypothesis   String,                 -- template id, or 'undetermined'
     top_confidence   Float32,                -- heuristic rank, NOT probability
     verdict_tier     Enum8('undetermined'=0,'suspected'=1,'confirmed'=2),
-    hypotheses       String,                 -- JSON ranked top-K incl. modality/observer coverage
+    -- ZSTD(3), not the LZ4 default: MEASURED on 3,000 live rows through
+    -- clickhouse-local, LZ4 13.94x vs ZSTD(3) 89.70x on this exact column
+    -- (ZSTD(1) 64.59x, ZSTD(6) 104.41x). See the storage note above.
+    hypotheses       String CODEC(ZSTD(3)),  -- JSON ranked top-K incl. modality/observer coverage
     evidence_missing String DEFAULT '[]',    -- JSON: what would confirm (undetermined honesty)
     affected         String,                 -- JSON: {devices[],interfaces[],sites[],paths[],services[]}
     signal_count     UInt32,
@@ -363,7 +441,7 @@ CREATE TABLE IF NOT EXISTS netops.corr_objects
     created_at       DateTime64(3) DEFAULT now64(3)
 )
 ENGINE = MergeTree
-PARTITION BY (tenant_id, toYYYYMM(window_start))
+PARTITION BY (tenant_id, toYYYYMMDD(created_at))
 ORDER BY (tenant_id, correlation_id, version)
 SETTINGS non_replicated_deduplication_window = 1000,
          max_bytes_to_merge_at_max_space_in_pool = 2147483648, min_age_to_force_merge_seconds = 600, min_age_to_force_merge_on_partition_only = 1;
@@ -440,7 +518,7 @@ CREATE TABLE IF NOT EXISTS netops.corr_tenant_write_amp
     max_incident_age_s UInt32 DEFAULT 0
 )
 ENGINE = MergeTree
-PARTITION BY (tenant_id, toYYYYMM(window_start))
+PARTITION BY (tenant_id, toYYYYMMDD(window_start))
 ORDER BY (tenant_id, window_start)
 TTL toDateTime(window_start) + INTERVAL 30 DAY
 SETTINGS index_granularity = 8192, ttl_only_drop_parts = 1,
@@ -470,7 +548,7 @@ CREATE TABLE IF NOT EXISTS netops.corr_edges
     CONSTRAINT grounding_ref_nonempty CHECK grounding_ref != ''
 )
 ENGINE = MergeTree
-PARTITION BY (tenant_id, toYYYYMM(created_at))
+PARTITION BY (tenant_id, toYYYYMMDD(created_at))
 ORDER BY (tenant_id, correlation_id, version, from_node, to_node)
 SETTINGS non_replicated_deduplication_window = 1000,
          max_bytes_to_merge_at_max_space_in_pool = 1073741824, min_age_to_force_merge_seconds = 600, min_age_to_force_merge_on_partition_only = 1;
@@ -490,7 +568,7 @@ CREATE TABLE IF NOT EXISTS netops.corr_evidence
     created_at      DateTime64(3) DEFAULT now64(3)
 )
 ENGINE = MergeTree
-PARTITION BY (tenant_id, toYYYYMM(created_at))
+PARTITION BY (tenant_id, toYYYYMMDD(created_at))
 ORDER BY (tenant_id, correlation_id, version, subject_kind, subject_id)
 SETTINGS non_replicated_deduplication_window = 1000,
          max_bytes_to_merge_at_max_space_in_pool = 1073741824, min_age_to_force_merge_seconds = 600, min_age_to_force_merge_on_partition_only = 1;
@@ -603,7 +681,7 @@ CREATE TABLE IF NOT EXISTS netops.corr_path_edges
     created_at         DateTime64(3) DEFAULT now64(3)
 )
 ENGINE = MergeTree
-PARTITION BY (tenant_id, toYYYYMM(created_at))
+PARTITION BY (tenant_id, toYYYYMMDD(created_at))
 ORDER BY (tenant_id, correlation_id, version, from_node, to_node)
 TTL toDateTime(created_at) + INTERVAL 90 DAY
 SETTINGS index_granularity = 8192, ttl_only_drop_parts = 1,
