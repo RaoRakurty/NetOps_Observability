@@ -62,6 +62,12 @@ RUN
       CORR_SIGNAL_ID_CACHE=0 python3 bench_memflat_p2.py --label all_off
     python3 bench_memflat_p2.py --tracemalloc --label on_tm      # + line attribution
 
+    # P2 step 4 — the Evidence plane as an owner (see its own section below)
+    python3 bench_memflat_p2.py --evidence keepup --label ev_keepup
+    python3 bench_memflat_p2.py --evidence parked --evidence-pin 5000 --label ev_pinned
+    python3 bench_memflat_p2.py --evidence parked --evidence-pin 5000 \
+        --evidence-probe-order ws-first --label ev_pinned_standalone
+
     Every knob is read once at import (like the P1/P2 flags), so the A/B is env
     only — one image, one fixture, one seed.
 
@@ -81,6 +87,7 @@ import argparse
 import asyncio
 import dataclasses
 import gc
+import heapq
 import json
 import os
 import sys
@@ -238,6 +245,175 @@ def _signal_id_cache_bytes() -> dict[str, int]:
 
 
 # ═══════════════════════════════════════════════════════════════════════════
+# P2 step 4 — the EVIDENCE PLANE as a measured owner
+# ═══════════════════════════════════════════════════════════════════════════
+#
+# THE QUESTION THIS SECTION ANSWERS
+#     On the live 2.5K leg (p2-s04-08290653) the Evidence queue sat PINNED at
+#     5,000 items ~ 101 MiB (its own `est_bytes` estimate) for the whole drain,
+#     and `memflat` failed 503 -> 728 MiB (x1.45) with the rank memo capped at
+#     ~100 MB. `est_bytes` is a BOUND-ONLY estimate built from three flat
+#     constants (evidence_plane.estimate_bytes: 2048 B/node, 768 B/edge,
+#     1024 B/slice signal) with no id-`seen` set and no model of what already
+#     holds the objects it charges for — i.e. exactly the shape
+#     `rank_memo.estimate_result_bytes` had before a75b73f8 calibrated it.
+#
+#     A queued EvidenceItem holds a REFERENCE to the ObjectSnapshot the Decision
+#     plane just wrote from. While that object is open, `OPEN_OBJECTS[cid]
+#     ["snapshot"]` holds the SAME object — so the item's nodes/edges cost the
+#     process NOTHING extra. What an item can genuinely add is:
+#       * a SUPERSEDED snapshot (a later version of the same cid has replaced it
+#         in OPEN_OBJECTS, or the object has closed) — nothing else holds it;
+#       * the LOOSE archive-slice signals (kind *_clear, source=app_identity,
+#         matched identity signals) once `_prune_buffer` has dropped them from
+#         WINDOW_BUFFER.
+#     Everything else the estimator charges for is a double count.
+#
+# HOW IT IS MEASURED (two instruments, cross-checked)
+#     1. The deep walker, as an OWNER walked LAST: its EXCLUSIVE bytes are the
+#        queue's TRUE MARGINAL — what would come back if the queue were dropped
+#        while the working set stays live. Its INCLUSIVE bytes are the same
+#        queue's STANDALONE cost — what it would hold if nothing else did.
+#     2. A tracemalloc drop-test: the `evidence_dropped` probe empties the queue
+#        and `gc.collect()`s, so the traced delta across it is an independent
+#        reading of the same marginal. `--evidence-probe-order ws-first` drops
+#        the working set FIRST, which turns the same delta into the STANDALONE
+#        number — the two orders bracket the sharing.
+#
+# MODES (`--evidence`)
+#     keepup  — the real `main._evidence_consumer`, drained to idle before every
+#               measurement: the queue is at 0 items. This is the shape the
+#               Evidence plane is SUPPOSED to have.
+#     parked  — a PINNING consumer (below) that materializes an item only while
+#               the queue is deeper than `--evidence-pin`, so the queue sits at
+#               exactly that depth for the whole sweep. This is the live shape.
+#     inline  — CORR_EVIDENCE_ASYNC=0: no queue at all, the pre-step-4 baseline.
+
+
+# How many queued items the per-item composition walk samples. Set from
+# --evidence-sample; the est_bytes sum is always over ALL items.
+_EVIDENCE_SAMPLE = 400
+
+
+def _evidence_queue():
+    return main._EVIDENCE_QUEUE
+
+
+def _evidence_items() -> list:
+    q = _evidence_queue()
+    return q.pending() if q is not None else []
+
+
+def make_pinning_consumer(pin: int, stats: dict):
+    """A consumer that keeps the queue PINNED at `pin` items forever.
+
+    It reaches into `EvidenceQueue`'s heap and condition directly instead of
+    calling `get()`, because `get()` is the one accessor that cannot express
+    "take an item ONLY if the queue is deeper than N" — and the cohort hold it
+    honours would make the pin depend on cohort boundaries rather than on the
+    bound under test. Ordering is irrelevant to this bench: the question is what
+    a pinned queue RETAINS, not which item drains first.
+
+    The written items go through the real `main._write_evidence`, so the mocked
+    persistence sees the same rows the keep-up leg produces — only the last
+    `pin` items are never materialized.
+    """
+    async def _pinning_consumer(queue) -> None:
+        loop_yield, reset_yield = main._make_loop_yield()
+        while True:
+            async with queue._cond:
+                while len(queue._heap) <= pin:
+                    await queue._cond.wait()
+                _key, _seq, item = heapq.heappop(queue._heap)
+                queue.bytes = max(0, queue.bytes - item.est_bytes)
+                queue._cond.notify_all()
+            queue.begin()
+            reset_yield()
+            try:
+                ok = await main._write_evidence(item, loop_yield)
+            except asyncio.CancelledError:
+                queue.done()
+                raise
+            except Exception:  # noqa: BLE001 — counted, never silent (§10)
+                ok = False
+                print(f"  [evidence] pinning consumer write FAILED "
+                      f"{item.correlation_id[:8]} v{item.version}",
+                      file=sys.stderr)
+            queue.note_written(item, time.monotonic())
+            queue.done()
+            stats["written"] = stats.get("written", 0) + 1
+            if not ok:
+                stats["failed"] = stats.get("failed", 0) + 1
+            await asyncio.sleep(0)
+    return _pinning_consumer
+
+
+def evidence_composition(items: list, sample: int) -> dict:
+    """What a queued item actually keeps reachable, item by item.
+
+    Sampled (evenly, deterministically) because the per-item node-signal id set
+    is O(signals in the component) and 5,000 of them is the same walk the deep
+    sizer already does. `est_bytes` is summed over ALL items — it is a field
+    read, not a walk.
+    """
+    n = len(items)
+    out: dict = {"items": n, "sum_est_bytes": sum(i.est_bytes for i in items)}
+    if not n:
+        return out
+    live_snaps = {id(reg["snapshot"]) for reg in main.OPEN_OBJECTS.values()
+                  if isinstance(reg, dict) and "snapshot" in reg}
+    window_ids = {id(s) for s in main.WINDOW_BUFFER}
+    # `items` arrives in DRAIN order (the content key), so an even stride spans
+    # every priority class rather than sampling one end of the queue.
+    step = max(1, n // max(1, sample))
+    picked = items[::step][:sample]
+    tot_nodes = tot_edges = tot_slice = 0
+    slice_node_sig = slice_loose_held = slice_loose_new = 0
+    snaps_shared = snaps_superseded = 0
+    seen_snaps: set[int] = set()
+    dup_snaps = 0
+    for it in picked:
+        snap = it.snap
+        tot_nodes += len(snap.nodes)
+        tot_edges += len(snap.edges)
+        if id(snap) in live_snaps:
+            snaps_shared += 1
+        else:
+            snaps_superseded += 1
+        if id(snap) in seen_snaps:
+            dup_snaps += 1
+        seen_snaps.add(id(snap))
+        node_sig_ids = {id(s) for nd in snap.nodes for s in nd.signals}
+        for s in (it.slice_sigs or ()):
+            tot_slice += 1
+            if id(s) in node_sig_ids:
+                slice_node_sig += 1          # the snapshot already holds it
+            elif id(s) in window_ids:
+                slice_loose_held += 1        # WINDOW_BUFFER still holds it
+            else:
+                slice_loose_new += 1         # the item is the ONLY holder
+    m = len(picked)
+    out.update({
+        "sampled": m,
+        "nodes_per_item": tot_nodes / m,
+        "edges_per_item": tot_edges / m,
+        "slice_sigs_per_item": tot_slice / m,
+        "slice_sigs_node_owned_pct": 100.0 * slice_node_sig / max(1, tot_slice),
+        "slice_sigs_loose_window_held_pct": 100.0 * slice_loose_held / max(1, tot_slice),
+        "slice_sigs_loose_new_pct": 100.0 * slice_loose_new / max(1, tot_slice),
+        "snaps_shared_with_open_objects": snaps_shared,
+        "snaps_superseded_or_closed": snaps_superseded,
+        "duplicate_snap_refs": dup_snaps,
+        "est_bytes_per_item": out["sum_est_bytes"] / n,
+        # The SAMPLE's own est_bytes, so the node/edge/slice breakdown below it
+        # adds up to a number from the same items rather than to the whole
+        # queue's mean.
+        "sampled_est_bytes_per_item": sum(i.est_bytes for i in picked) / m,
+    })
+    return out
+
+
+# ═══════════════════════════════════════════════════════════════════════════
 # one measurement point
 # ═══════════════════════════════════════════════════════════════════════════
 
@@ -268,6 +444,7 @@ def measure(label: str, *, tm: bool, light: bool = False) -> dict:
 
     if light:
         memo = main.RANK_MEMO
+        q = _evidence_queue()
         point["owners"] = {
             "open_objects": {"count": len(main.OPEN_OBJECTS)},
             "window_buffer": {"count": len(main.WINDOW_BUFFER)},
@@ -275,6 +452,9 @@ def measure(label: str, *, tm: bool, light: bool = False) -> dict:
                           "stats": dict(memo.stats()) if memo is not None else {}},
             "clause_kinds_cache": {"entries": len(catalog_mod._CLAUSE_KINDS_CACHE),
                                    "stats": catalog_mod.clause_kinds_cache_stats()},
+            "evidence_queue": {"depth": q.qsize() if q is not None else 0,
+                               "est_bytes": q.bytes if q is not None else 0,
+                               "stats": main.evidence_stats()},
         }
         return point
 
@@ -356,6 +536,22 @@ def measure(label: str, *, tm: bool, light: bool = False) -> dict:
     sid["enabled"] = signals_mod.CORR_SIGNAL_ID_CACHE
     owners["signal_id_cache"] = sid
 
+    # ── P2 step 4: the Evidence queue, walked LAST ───────────────────────────
+    # Last is the whole point. Every snapshot a queued item shares with a live
+    # OPEN_OBJECTS entry has already been charged to the working set, so the
+    # queue's EXCLUSIVE number is its TRUE MARGINAL — the bytes the process
+    # would give back if the queue were emptied right now. `deep_bytes_inclusive`
+    # (a fresh `seen`) is the same queue's STANDALONE cost, which is what the
+    # `est_bytes` estimator is implicitly trying to approximate.
+    ev_items = _evidence_items()
+    ev_q = _evidence_queue()
+    owner("evidence_queue", [ev_items] if ev_items else [],
+          {"depth": len(ev_items),
+           "enabled": main.CORR_EVIDENCE_ASYNC,
+           "est_bytes": ev_q.bytes if ev_q is not None else 0,
+           "stats": main.evidence_stats(),
+           "composition": evidence_composition(ev_items, _EVIDENCE_SAMPLE)})
+
     owners["blob_cycle_cache"] = {
         "enabled": engine.CORR_BLOB_CYCLE_CACHE,
         "entries_now": engine.blob_cycle_size(),
@@ -414,6 +610,46 @@ async def sweep(args) -> dict:
     epochs: list[dict] = []
     seq = 0
     e = 0
+    pin_stats: dict = {}
+    max_depth = 0
+
+    # ── P2 step 4 mode wiring, done BEFORE the first engine_cycle ────────────
+    # `_evidence_ensure_consumer` reads these module globals when it creates the
+    # task, and resolves `_evidence_consumer` by NAME at that moment — so the
+    # pinning consumer is installed by rebinding the module attribute, not by
+    # forking the engine's own call site.
+    if args.evidence == "inline":
+        main.CORR_EVIDENCE_ASYNC = False
+    else:
+        main.CORR_EVIDENCE_ASYNC = True
+        main.CORR_EVIDENCE_QUEUE_BYTES_MAX = args.evidence_bytes_max
+        if args.evidence == "parked":
+            # The queue must be allowed to grow PAST the pin, or `put`'s
+            # blocking backpressure and the pinning consumer would deadlock
+            # against each other at exactly `pin` items (put blocks at
+            # `max_items`, the consumer only takes above `pin`). The slack is
+            # the oscillation band, not a change to the bound under test.
+            main.CORR_EVIDENCE_QUEUE_MAX = args.evidence_pin + args.evidence_slack
+            main._evidence_consumer = make_pinning_consumer(args.evidence_pin,
+                                                            pin_stats)
+        else:
+            main.CORR_EVIDENCE_QUEUE_MAX = args.evidence_items_max
+
+    async def settle() -> None:
+        """Bring the queue to the depth this mode claims to measure at."""
+        if args.evidence == "keepup":
+            left = await main.evidence_drain(60.0)
+            if left:
+                print(f"  [evidence] keepup drain left {left} item(s) queued",
+                      file=sys.stderr)
+        else:
+            # Let the pinning consumer catch up to its own pin before a
+            # measurement, so `depth` is the pin and not a mid-cohort transient.
+            for _ in range(200):
+                q = _evidence_queue()
+                if q is None or q.qsize() <= args.evidence_pin:
+                    break
+                await asyncio.sleep(0.002)
 
     async def run_epoch(tag: str, when: datetime) -> dict:
         t0 = time.perf_counter()
@@ -430,6 +666,10 @@ async def sweep(args) -> dict:
         await main._epoch_lifecycle(epoch, main._make_loop_yield()[0])
         pend_after = len(epoch.pending())
         main._close_epoch(epoch)
+        nonlocal max_depth
+        q = _evidence_queue()
+        depth = q.qsize() if q is not None else 0
+        max_depth = max(max_depth, depth)
         row = {
             "tag": tag, "wall_s": round(time.perf_counter() - t0, 2),
             "cohorts": cohorts, "pending_before": pend_before,
@@ -437,12 +677,16 @@ async def sweep(args) -> dict:
             "open_objects": len(main.OPEN_OBJECTS),
             "versions_persisted": main.VERSIONS_PERSISTED,
             "rank_memo_entries": main.rank_memo_stats()["entries"],
+            "evidence_depth": depth,
+            "evidence_est_bytes": q.bytes if q is not None else 0,
+            "evidence_backpressure": q.backpressure_total if q is not None else 0,
             "rss_kib": rss_kib()["VmRSS"],
         }
         epochs.append(row)
         print(f"  [{tag}] epoch wall={row['wall_s']}s cohorts={cohorts} "
               f"pending {pend_before}->{pend_after} window={row['window']} "
               f"open={row['open_objects']} memo={row['rank_memo_entries']} "
+              f"evq={depth}/{row['evidence_est_bytes'] // 1048576}MiB "
               f"rss={row['rss_kib'] // 1024} MiB", file=sys.stderr, flush=True)
         return row
 
@@ -460,6 +704,7 @@ async def sweep(args) -> dict:
                         now + timedelta(seconds=60 * e))
         e += 1
 
+    await settle()
     points.append(measure("input_stopped", tm=args.tracemalloc, light=args.light))
 
     # ── phase 2: input has STOPPED; drain the backlog to empty ───────────────
@@ -471,31 +716,89 @@ async def sweep(args) -> dict:
         if row["pending_after"] == 0:
             break
 
+    await settle()
     points.append(measure("drained", tm=args.tracemalloc, light=args.light))
 
-    # ── reclaimability probe 1: drop the P2 caches only ──────────────────────
-    if main.RANK_MEMO is not None:
-        main.RANK_MEMO.clear()
-    catalog_mod._CLAUSE_KINDS_CACHE.clear()
-    gc.collect()
-    points.append(measure("memo_cleared", tm=args.tracemalloc, light=args.light))
+    # ── the reclaimability probes ────────────────────────────────────────────
+    # ORDER IS THE INSTRUMENT. `queue-first` drops the Evidence queue while the
+    # working set is still live, so the delta across `evidence_dropped` is the
+    # queue's TRUE MARGINAL. `ws-first` drops the working set first, so the same
+    # delta becomes the queue's STANDALONE cost. Run both and the gap between
+    # them IS the sharing with OPEN_OBJECTS.
+    def drop_evidence_queue() -> int:
+        q = _evidence_queue()
+        if q is None:
+            return 0
+        n = 0
+        while q.get_nowait() is not None:
+            n += 1
+        return n
 
-    # ── reclaimability probe 2: drop the working set as well ─────────────────
-    main.OPEN_OBJECTS.clear()
-    main._ARCHIVE_SLICE_HASH.clear()
-    main.WINDOW_BUFFER.clear()
-    main._BUFFERED_IDS.clear()
-    main._BUFFERED_ID_ORDER.clear()
-    main._PROCESSED_IDS.clear()
-    main._TENANT_EDGES.clear()
-    gc.collect()
-    gc.collect()
-    points.append(measure("working_set_dropped", tm=args.tracemalloc, light=args.light))
+    def drop_caches() -> None:
+        if main.RANK_MEMO is not None:
+            main.RANK_MEMO.clear()
+        catalog_mod._CLAUSE_KINDS_CACHE.clear()
+
+    def drop_working_set() -> None:
+        main.OPEN_OBJECTS.clear()
+        main._ARCHIVE_SLICE_HASH.clear()
+        main.WINDOW_BUFFER.clear()
+        main._BUFFERED_IDS.clear()
+        main._BUFFERED_ID_ORDER.clear()
+        main._PROCESSED_IDS.clear()
+        main._TENANT_EDGES.clear()
+
+    # The consumer must stop BEFORE anything is dropped: a task that woke up
+    # mid-probe would write rows from a half-torn-down engine and put its own
+    # allocations into the delta being read.
+    task = main._EVIDENCE_TASK
+    if task is not None and not task.done():
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+        except Exception as exc:  # noqa: BLE001 — reported, never swallowed
+            print(f"  [evidence] consumer ended with {type(exc).__name__}: {exc}",
+                  file=sys.stderr)
+
+    dropped_items = 0
+    if args.evidence_probe_order == "ws-first":
+        drop_caches()
+        drop_working_set()
+        gc.collect()
+        gc.collect()
+        points.append(measure("working_set_dropped", tm=args.tracemalloc,
+                              light=args.light))
+        dropped_items = drop_evidence_queue()
+        gc.collect()
+        points.append(measure("evidence_dropped", tm=args.tracemalloc,
+                              light=args.light))
+    else:
+        dropped_items = drop_evidence_queue()
+        gc.collect()
+        points.append(measure("evidence_dropped", tm=args.tracemalloc,
+                              light=args.light))
+        drop_caches()
+        gc.collect()
+        points.append(measure("memo_cleared", tm=args.tracemalloc, light=args.light))
+        drop_working_set()
+        gc.collect()
+        gc.collect()
+        points.append(measure("working_set_dropped", tm=args.tracemalloc,
+                              light=args.light))
 
     return {"points": points, "epochs": epochs, "drain_epochs": drained,
             "rows": dict(ch.rows), "insert_calls": dict(ch.calls),
             "versions_persisted": main.VERSIONS_PERSISTED,
-            "versions_damped": main.VERSIONS_DAMPED}
+            "versions_damped": main.VERSIONS_DAMPED,
+            "evidence": {"mode": args.evidence,
+                         "pin": args.evidence_pin,
+                         "probe_order": args.evidence_probe_order,
+                         "max_depth_seen": max_depth,
+                         "items_dropped_at_probe": dropped_items,
+                         "pinning_consumer": dict(pin_stats),
+                         "stats": main.evidence_stats()}}
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -836,26 +1139,114 @@ def _mib(kib: int) -> str:
     return f"{kib / 1024:.1f}"
 
 
+def evidence_report(res: dict) -> str:
+    """Per-EvidenceItem truth vs `evidence_plane.estimate_bytes`.
+
+    Read at the DEEPEST measured point (the last point whose queue is non-empty),
+    which is the pinned queue's steady state — the shape the live run sat in.
+    """
+    pts = [p for p in res["points"]
+           if p["owners"].get("evidence_queue", {}).get("depth", 0) > 0]
+    # `drained` is the point the live gate reads and the only one where the
+    # working set is still whole, so it is preferred over a later probe point
+    # whose "shared with OPEN_OBJECTS" column has already been zeroed by the
+    # ws-first drop order.
+    pts = [p for p in pts if p["label"] == "drained"] or pts
+    if not pts:
+        return ("EVIDENCE PLANE: the queue was EMPTY at every measurement point "
+                "(consumer kept up) — no per-item marginal to report.")
+    p = pts[-1]
+    q = p["owners"]["evidence_queue"]
+    comp = q.get("composition", {})
+    n = max(1, q["depth"])
+    excl = q.get("deep_bytes_exclusive", 0)
+    incl = q.get("deep_bytes_inclusive", 0)
+    est = q.get("est_bytes", 0)
+    k = 1024.0
+    row = "{:<44}{:>15,}{:>12,.0f}{:>13.2f}x".format
+    out = [f"EVIDENCE PLANE per-item, at `{p['label']}` with {n:,} items queued",
+           "",
+           f"{'instrument':<44}{'total B':>15}{'B/item':>12}{'vs marginal':>14}",
+           row("true MARGINAL (excl. of working set)", excl, excl / n, 1.0),
+           row("STANDALONE (nothing else holding it)", incl, incl / n,
+               incl / max(1, excl)),
+           row("est_bytes (evidence_plane.estimate_bytes)", est, est / n,
+               est / max(1, excl)),
+           ""]
+    if comp.get("sampled"):
+        sampled = comp["sampled"]
+        pct = 100.0 / sampled
+        out += [
+            f"composition, {sampled:,} items sampled of {comp['items']:,}:",
+            ("  nodes/item          {:>10.1f}   (estimator charges {:>8.1f} KiB)"
+             .format(comp["nodes_per_item"], comp["nodes_per_item"] * 2048 / k)),
+            ("  edges/item          {:>10.1f}   (estimator charges {:>8.1f} KiB)"
+             .format(comp["edges_per_item"], comp["edges_per_item"] * 768 / k)),
+            ("  slice signals/item  {:>10.1f}   (estimator charges {:>8.1f} KiB)"
+             .format(comp["slice_sigs_per_item"],
+                     comp["slice_sigs_per_item"] * 1024 / k)),
+            ("  est_bytes over THESE items          {:>8.1f} KiB"
+             .format(comp["sampled_est_bytes_per_item"] / k)),
+            "",
+            "  where the slice signals actually live:",
+            ("    held by the item's OWN snapshot nodes {:>6.1f} %  "
+             "<- double charge".format(comp["slice_sigs_node_owned_pct"])),
+            ("    still in WINDOW_BUFFER               {:>6.1f} %  "
+             "<- charged, not new".format(
+                 comp["slice_sigs_loose_window_held_pct"])),
+            ("    LOOSE, the item is the only holder   {:>6.1f} %  "
+             "<- genuinely NEW".format(comp["slice_sigs_loose_new_pct"])),
+            "",
+            ("  snapshots shared with a live OPEN_OBJECTS entry {:>6} / {} "
+             "({:.1f} %)".format(comp["snaps_shared_with_open_objects"], sampled,
+                                 comp["snaps_shared_with_open_objects"] * pct)),
+            ("  snapshots SUPERSEDED or closed (item holds it)  {:>6} / {} "
+             "({:.1f} %)".format(comp["snaps_superseded_or_closed"], sampled,
+                                 comp["snaps_superseded_or_closed"] * pct)),
+            ("  duplicate snapshot refs inside the queue       {:>7}"
+             .format(comp["duplicate_snap_refs"])),
+        ]
+    ev = res.get("evidence", {})
+    st = q.get("stats", {})
+    out += ["",
+            ("queue: max depth seen {}, backpressure {}, materialized {}, "
+             "pinning consumer wrote {}".format(
+                 ev.get("max_depth_seen"), st.get("backpressure_total"),
+                 st.get("materialized_total"),
+                 ev.get("pinning_consumer", {}).get("written", 0)))]
+    return "\n".join(out)
+
+
 def report(res: dict) -> str:
     pts = res["points"]
     light = "census" not in pts[0]
+    ev = res.get("evidence", {})
     w = []
+    w.append(f"evidence mode={ev.get('mode')} pin={ev.get('pin')} "
+             f"probe_order={ev.get('probe_order')} "
+             f"max_depth_seen={ev.get('max_depth_seen')} "
+             f"items_dropped_at_probe={ev.get('items_dropped_at_probe')}")
+    w.append("")
     w.append(f"{'point':<24}{'RSS MiB':>10}{'HWM MiB':>10}"
-             f"{'open objs':>12}{'window':>10}{'memo':>10}")
+             f"{'open objs':>12}{'window':>10}{'memo':>10}"
+             f"{'ev depth':>10}{'ev estMiB':>11}")
     for p in pts:
         o = p["owners"]
+        q = o.get("evidence_queue", {})
         w.append(f"{p['label']:<24}{_mib(p['rss']['VmRSS']):>10}"
                  f"{_mib(p['rss']['VmHWM']):>10}"
                  f"{o['open_objects']['count']:>12}"
                  f"{o['window_buffer']['count']:>10}"
-                 f"{o['rank_memo']['entries']:>10}")
+                 f"{o['rank_memo']['entries']:>10}"
+                 f"{q.get('depth', 0):>10}"
+                 f"{q.get('est_bytes', 0) / 1048576:>11.1f}")
     if light:
         return "\n".join(w)
     w.append("")
     names = ["open_objects", "window_buffer", "processed_ids", "buffered_ids",
              "archive_slice_hash", "tenant_edges", "window_index_cache",
              "grounding_interns", "signal_interns", "catalog", "rank_memo",
-             "clause_kinds_cache"]
+             "clause_kinds_cache", "evidence_queue"]
     w.append("DEEP BYTES, EXCLUSIVE (each object charged once, working set walked first)")
     w.append(f"{'owner':<24}" + "".join(f"{p['label'][:14]:>18}" for p in pts))
     for n in names:
@@ -868,6 +1259,23 @@ def report(res: dict) -> str:
     for p in pts:
         row += f"{p['owners']['signal_id_cache']['uuid_bytes'] / 1048576:>17.2f}M"
     w.append(row)
+    w.append("")
+    w.append("EVIDENCE QUEUE — marginal (exclusive) vs standalone (inclusive) "
+             "vs the est_bytes bound, MiB")
+    w.append(f"{'':<24}" + "".join(f"{p['label'][:14]:>18}" for p in pts))
+    for lbl, key in (("true marginal (excl)", "deep_bytes_exclusive"),
+                     ("standalone (incl)", "deep_bytes_inclusive"),
+                     ("est_bytes (the bound)", "est_bytes")):
+        r = f"{lbl:<24}"
+        for p in pts:
+            r += f"{p['owners']['evidence_queue'].get(key, 0) / 1048576:>17.2f}M"
+        w.append(r)
+    r = f"{'depth (items)':<24}"
+    for p in pts:
+        r += f"{p['owners']['evidence_queue'].get('depth', 0):>18}"
+    w.append(r)
+    w.append("")
+    w.append(evidence_report(res))
     w.append("")
     w.append("LIVE OBJECT CENSUS (count / shallow MiB)")
     w.append(f"{'type':<20}" + "".join(f"{p['label'][:16]:>20}" for p in pts))
@@ -889,6 +1297,8 @@ def tm_report(res: dict, top: int = 20) -> str:
     by_label = {p["label"]: p for p in pts}
     out = []
     for a, b in (("input_stopped", "drained"),
+                 ("drained", "evidence_dropped"),
+                 ("working_set_dropped", "evidence_dropped"),
                  ("drained", "memo_cleared"),
                  ("drained", "working_set_dropped")):
         if a not in by_label or b not in by_label:
@@ -934,6 +1344,30 @@ def main_cli() -> int:
     ap.add_argument("--calib-results", type=int, default=400,
                     help="how many rank-key-distinct results to calibrate over "
                          "(the brief's floor is 200)")
+    # ── P2 step 4: the Evidence plane ────────────────────────────────────────
+    ap.add_argument("--evidence", choices=("keepup", "parked", "inline"),
+                    default="keepup",
+                    help="keepup: the real consumer, drained to idle before "
+                         "every measurement (queue at 0). parked: a pinning "
+                         "consumer holds the queue at --evidence-pin items "
+                         "(the live shape). inline: CORR_EVIDENCE_ASYNC=0.")
+    ap.add_argument("--evidence-pin", type=int, default=5000,
+                    help="queue depth held by the pinning consumer (live: 5000)")
+    ap.add_argument("--evidence-slack", type=int, default=64,
+                    help="items the queue may exceed the pin by, so blocking "
+                         "backpressure and the pinning consumer cannot deadlock")
+    ap.add_argument("--evidence-items-max", type=int,
+                    default=main.CORR_EVIDENCE_QUEUE_MAX)
+    ap.add_argument("--evidence-bytes-max", type=int,
+                    default=main.CORR_EVIDENCE_QUEUE_BYTES_MAX)
+    ap.add_argument("--evidence-sample", type=int, default=400,
+                    help="items sampled for the per-item composition walk")
+    ap.add_argument("--evidence-probe-order", choices=("queue-first", "ws-first"),
+                    default="queue-first",
+                    help="queue-first: drop the queue while the working set is "
+                         "live -> the delta is the queue's TRUE MARGINAL. "
+                         "ws-first: drop the working set first -> the delta is "
+                         "the queue's STANDALONE cost.")
     ap.add_argument("--label", default="run")
     ap.add_argument("--log-level", default="ERROR")
     ap.add_argument("--json", default="")
@@ -957,7 +1391,13 @@ def main_cli() -> int:
     main._TENANT_EDGES.clear()
     main._ARCHIVE_SLICE_HASH.clear()
 
+    global _EVIDENCE_SAMPLE
+    _EVIDENCE_SAMPLE = args.evidence_sample
+
     flags = {
+        "CORR_EVIDENCE_ASYNC": main.CORR_EVIDENCE_ASYNC,
+        "CORR_EVIDENCE_QUEUE_MAX": main.CORR_EVIDENCE_QUEUE_MAX,
+        "CORR_EVIDENCE_QUEUE_BYTES_MAX": main.CORR_EVIDENCE_QUEUE_BYTES_MAX,
         "CORR_RANK_MEMO": main.CORR_RANK_MEMO,
         "CORR_RANK_MEMO_MAX": main.CORR_RANK_MEMO_MAX,
         "CORR_COHORT_TOUCH_GATE": main.CORR_COHORT_TOUCH_GATE,
