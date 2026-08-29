@@ -1742,6 +1742,176 @@ BURST_WINDOW_MAX_FACTOR = float(
 # Harness
 # ---------------------------------------------------------------------------
 
+# ── Scenario-driven storm workload (tracker 183) ────────────────────────────
+#
+# THE DEFECT THIS EXISTS FOR. The ratified `t-nominal-2.5k` profile pins every
+# device's state FOR LIFE: `_syslog_event` sets `state = "down" if seq % 2 == 0
+# else "up"` and `_burst_lanes` sets `dev_i = ln["seq"] % 2500`; 2,500 is even,
+# so a device's parity — and therefore its state — never changes. Measured on
+# the ratified run (docs/scale/P3_AGGREGATION_OPPORTUNITY_2026-08-29.md §4,
+# two independent sources agreeing to +/-1 event): 900,001 raw events, 44,280
+# promoted signals, **0 state transitions, 0 recovery events**, exactly ONE
+# source / ONE vantage per identity, and no identity repeating inside 120 s.
+#
+# That workload therefore cannot exercise ANY of the causal-significance
+# dimensions the storm-plane work is being designed against (owner memo
+# §17/§18): recovery, contradiction, corroboration, independent vantage,
+# blast-radius expansion. It also carries no ground-truth cause label, which is
+# why `scripts/scale-rca-latency.py` has to state in its own docstring that T4
+# is a PROXY and causal correctness "CANNOT be scored from persisted data"
+# (tracker 177's gap).
+#
+# `t-storm-2.5k` keeps the ratified THROUGHPUT exactly — 2,500 devices, 900 s,
+# 1,000 raw eps, the same 90 x 10,000 chunk plan, so completion / TTUR /
+# accounting numbers stay comparable with `t-nominal-2.5k` — and changes only
+# the STRUCTURE of the stream:
+#
+#   * a SEEDED fault-injection SCENARIO supplies the causally-significant
+#     events (flap/recovery cycles, repeated confirmation, multi-vantage
+#     corroboration, contradictory healthy observations, blast-radius waves);
+#   * the existing production-mix generator fills the REST of every chunk with
+#     background noise, so the chunk plan is met to the event;
+#   * the scenario is a PURE FUNCTION of (profile, seed, device list) — two
+#     runs of one seed plan the identical stream, event for event;
+#   * the run dir gets a `ground-truth.json` naming each incident's cause
+#     entity, onset, recovery and affected set, so T4 correctness can be scored
+#     later (contract in `scripts/scale-rca-latency.py`, section GROUND TRUTH).
+#
+# `t-nominal-2.5k` is deliberately NOT touched: it remains the throughput floor
+# and the A/B baseline (memo §23 wants the exact same workload replayed).
+
+SCENARIO_SEED_DEFAULT = 20260829
+# Incidents may claim at most this share of the fleet; everything else is the
+# NOISE POOL. The two sets are DISJOINT by construction, which is what makes
+# the "noise never shares a cause entity with an incident" clause checkable
+# rather than hopeful.
+SCENARIO_DEVICE_BUDGET = 0.60
+# Interface indices 0..47 belong to the background mix (`if_n = seq % 48`);
+# scenario faults take 48..95, so an incident entity_id (`host:ifname`) can
+# never collide with a background one even if the pools were ever to overlap.
+SCENARIO_IF_BASE = 48
+SCENARIO_IF_SPAN = 48
+# Peer addresses. The background mix only ever emits host octets {1, 2, 9, 50}
+# (`10.{oct2}.{oct3}.1` and friends), so scenario peers take 200+ and can never
+# be mistaken for a background adjacency by the engine's shared-token welding.
+SCENARIO_PEER_HOST_BASE = 200
+SCENARIO_PEER_HOST_SPAN = 50
+# Memo §18 "repeated confirmation": a re-report counts as a repeat only inside
+# this window. PLAN offsets are capped well under it (MAX_OFFSET) because the
+# emitted timestamp is quantized by the 10 s chunk clock — a repeat planned at
+# +40 s can be emitted up to ~10 s later than a repeat planned at +0 s, and
+# must STILL be inside 60 s of it.
+SCENARIO_REPEAT_WINDOW_S = 60.0
+SCENARIO_REPEAT_MAX_OFFSET_S = 40.0
+GROUND_TRUTH_FILE = "ground-truth.json"
+GROUND_TRUTH_SCHEMA = "correlix.scale.ground-truth/1"
+
+# ── The scenario itself ─────────────────────────────────────────────────────
+#
+# Sized so the causal population is LARGE ENOUGH TO MEASURE without changing
+# the promoted-signal volume enough to make the A/B against t-nominal-2.5k
+# dishonest: the scenario contributes ~0.8 % of the raw fleet, against a
+# background whose measured promotion is 4.92 %. The storm profile changes the
+# SHAPE of the signal stream, not its scale — that is the whole point of
+# keeping the throughput floor.
+#
+# Template fields:
+#   cause_kind                what the ground truth calls the fault
+#   instances_per_1k_devices  instance count scales with --devices
+#   devices_per_instance      total devices the instance owns (cause + blast)
+#   onset_window              (lo, hi) seconds into the burst, uniform
+#   recovery_after_s          (lo, hi) seconds after onset; None = never
+#   repeats                   (lo, hi) EXTRA re-reports of a symptom, <= 40 s
+#   reassert_every_s          an unrecovered fault re-reports on this period
+#   blast_waves               shares of the affected set arriving per wave
+#   wave_gap_s                seconds between blast-radius waves
+#   contradiction_devices     affected devices that emit a healthy observation
+#                             while the fault is still active
+#   cycles / cycle_gap_s      flap templates only: down->up repeated N times
+#   expected_owner_class      the class the RCA verdict SHOULD attribute
+#   expected_seam_class       the seam class the RCA SHOULD land on
+#
+# expected_owner_class / expected_seam_class are SCENARIO LABELS, not values
+# the lab can currently produce: mlx- devices are onboarded with no seam
+# configuration, so the engine has nothing to attribute ownership to. They are
+# written into ground-truth.json so an owner-correctness dimension can be
+# scored the day the harness provisions seams — until then a scorer must treat
+# them as informational (stated in the ground-truth contract).
+STORM_SCENARIO_2K5: dict = {
+    "name": "storm-2.5k",
+    "description": ("seeded fault-injection scenario for the 2.5K rung: "
+                    "upstream link failures with blast-radius waves, local "
+                    "link faults, BGP peer flaps with recovery, and 3x-cycling "
+                    "OSPF adjacency flaps, over a disjoint background pool"),
+    "templates": (
+        {
+            # An aggregation uplink fails and takes a set of access devices
+            # with it. The access devices all peer with the SAME upstream
+            # address, so their BGP-down signals share an entity token — the
+            # multi-vantage / corroboration structure memo §18 asks for.
+            "cause_kind": "upstream_link_failure",
+            "instances_per_1k_devices": 8.0,
+            "devices_per_instance": 25,          # 1 cause + 24 affected
+            "onset_window": (30.0, 520.0),
+            "recovery_after_s": (150.0, 300.0),
+            "repeats": (2, 5),
+            "reassert_every_s": 120.0,
+            "blast_waves": (0.5, 0.3, 0.2),
+            "wave_gap_s": 60.0,
+            "contradiction_devices": 2,
+            "expected_owner_class": "upstream_transport",
+            "expected_seam_class": "wan_transport",
+        },
+        {
+            # A single device's own link dies and never comes back inside the
+            # window: the uncorroborated, unrecovered case. One vantage on
+            # purpose — not every fault is confirmed by a second observer.
+            "cause_kind": "local_link_fault",
+            "instances_per_1k_devices": 60.0,
+            "devices_per_instance": 1,
+            "onset_window": (30.0, 700.0),
+            "recovery_after_s": None,
+            "repeats": (2, 6),
+            "reassert_every_s": 150.0,
+            "expected_owner_class": "device_local",
+            "expected_seam_class": "lan_access",
+        },
+        {
+            # Two devices peering with the same off-fleet route reflector lose
+            # it together and get it back: two INDEPENDENT vantages on one
+            # cause, with a real recovery transition.
+            "cause_kind": "bgp_peer_flap",
+            "instances_per_1k_devices": 40.0,
+            "devices_per_instance": 2,
+            "onset_window": (40.0, 760.0),
+            "recovery_after_s": (45.0, 110.0),
+            "repeats": (1, 3),
+            "reassert_every_s": 0.0,             # short fault: no re-assertion
+            "expected_owner_class": "peer_transit",
+            "expected_seam_class": "wan_transport",
+        },
+        {
+            # The chronic flapper: down -> up, three times over. Six state
+            # transitions and three recoveries on ONE identity — the class
+            # t-nominal-2.5k contains exactly zero of.
+            "cause_kind": "ospf_adjacency_flap",
+            "instances_per_1k_devices": 24.0,
+            "devices_per_instance": 1,
+            "onset_window": (40.0, 560.0),
+            "recovery_after_s": (25.0, 45.0),    # per cycle: time to re-adjacency
+            "repeats": (1, 2),
+            "reassert_every_s": 0.0,
+            "cycles": 3,
+            "cycle_gap_s": 90.0,
+            "expected_owner_class": "igp_internal",
+            "expected_seam_class": "lan_core",
+        },
+    ),
+}
+
+SCENARIO_SPECS: dict = {"storm-2.5k": STORM_SCENARIO_2K5}
+
+
 # ── Ratified workload profiles (STRESS_GATE_REDEFINITION_2026-08-22 §5/§6) ──
 #
 # A profile OVERRIDES eps/burst-minutes/event-mix and, for storm profiles,
@@ -1816,6 +1986,20 @@ WORKLOAD_PROFILES: dict = {
         "burst_minutes": 15,
         "lanes": [("fleet", 1.0, "production", 1000.0)],
     },
+    # The SAME throughput as t-nominal-2.5k — identical lanes, identical
+    # burst_minutes, therefore the identical 90 x 10,000 chunk plan — with a
+    # SEEDED fault-injection scenario supplying the causally-significant events
+    # and the production mix filling the rest of every chunk. t-nominal-2.5k
+    # stays the throughput floor and the A/B baseline; this profile is the one
+    # that can exercise recovery / contradiction / corroboration /
+    # blast-radius expansion and carries ground truth for T4 correctness.
+    # See the SCENARIO_SEED_DEFAULT header above for why it had to exist.
+    "t-storm-2.5k": {
+        "workload_class": "T_STORM_2K5",
+        "burst_minutes": 15,
+        "lanes": [("fleet", 1.0, "production", 1000.0)],
+        "scenario": "storm-2.5k",
+    },
     "s1-2.5k": {
         "workload_class": "S1_DESIGN_STORM_2K5",
         "burst_minutes": 15,
@@ -1851,6 +2035,609 @@ WORKLOAD_PROFILES: dict = {
         ],
     },
 }
+
+
+class ScenarioEvent(typing.NamedTuple):
+    """One planned fault-injection line.
+
+    `t` is PLAN time (seconds from burst t0), which decides only WHICH 10 s
+    chunk the line is injected in — the wire timestamp is wall clock at produce
+    time, exactly like every background line (mixing generator event-time with
+    engine wall-clock is the skew caveat `scale-rca-latency.py` already carries;
+    this profile does not add a second clock to it).
+
+    `entity` is the entity_id the correlation classifier WILL derive from the
+    line (`host:ifname` for interface-scoped kinds, `host` for device-scoped
+    ones) — kept here so the harness can measure identity-level dynamics
+    without re-implementing the parser.
+    """
+
+    t: float
+    device: str
+    appname: str
+    message: str
+    severity: str
+    incident_id: str
+    symptom: str      # the correlation `kind` this line classifies to
+    state: str        # "down" | "up"
+    role: str         # onset|expansion|flap|repeat|reassert|recovery|
+    #                   contradiction. ANCHOR roles (onset/expansion/flap) open
+    #                   a fresh symptom; a `repeat` is always within
+    #                   SCENARIO_REPEAT_MAX_OFFSET_S of its anchor.
+    entity: str       # the entity_id the classifier derives
+
+
+class StormScenario:
+    """A SEEDED, DETERMINISTIC fault-injection scenario over a device fleet.
+
+    A scenario is a list of incidents carrying GROUND TRUTH — cause kind, cause
+    entity, onset, recovery, blast radius, expected owner/seam class — plus the
+    syslog lines that make those incidents observable. It exists because the
+    ratified `t-nominal-2.5k` stream has zero state transitions, zero
+    recoveries and one vantage per identity (see the header above
+    `SCENARIO_SEED_DEFAULT`), so nothing in memo §17/§18 can be exercised or
+    scored against it.
+
+    DETERMINISM CONTRACT. The whole plan — incidents, event list, chunk
+    buckets, noise pool — is a pure function of (spec, device list, seed,
+    window). No wall clock, no process entropy, no dict-ordering dependence:
+    every random draw comes from `_rng(label)`, a Mersenne Twister seeded with
+    a SHA-256 of `seed:label` (stable across interpreter versions and
+    platforms, which `hash()` is not). `digest()` is the one number that proves
+    it, and `tests/test_storm_scenario_profile.py` re-plans the same seed twice
+    and compares byte for byte.
+
+    NOISE DISJOINTNESS. `noise_pool` is the devices NO incident touches. The
+    burst fills the rest of each chunk's ratified quota from that pool alone,
+    so a background line can never carry an incident's cause entity — the
+    property `test_noise_never_shares_a_cause_entity` pins. Fault interfaces
+    (48..95) and peer host octets (200+) additionally sit outside every range
+    the background mix can generate, so the two populations cannot collide even
+    if the pools were ever allowed to overlap.
+
+    VANTAGE, IN A SYSLOG-ONLY HARNESS. The harness produces to `netops.syslog`
+    and nothing else, and the classifier stamps every signal's observer as the
+    EMITTING DEVICE — so two vantages on one *entity_id* is not expressible.
+    What is expressible, and what the engine actually welds on, is two vantages
+    on one CAUSE: several devices independently reporting an adjacency loss
+    toward the same peer address (a shared `entity_tokens` entry), plus the
+    cause device's own view of its failed interface. `vantages` in the ground
+    truth is therefore the set of DISTINCT DEVICES that observed the cause, and
+    a scorer must read it that way.
+    """
+
+    def __init__(self, spec: dict, devices: list[str], seed: int,
+                 window_s: float, chunk_secs: int = BURST_CHUNK_SECS,
+                 profile: str = "", runid: str = "") -> None:
+        if not devices:
+            raise ValueError("scenario needs a non-empty device list")
+        self.spec = spec
+        self.devices = list(devices)
+        self.seed = int(seed)
+        self.window_s = float(window_s)
+        self.chunk_secs = int(chunk_secs)
+        self.profile = profile
+        self.runid = runid
+        self.incidents: list[dict] = []
+        self.events: list[ScenarioEvent] = []
+        self.noise_pool: list[str] = []
+        self.template_counts: dict[str, dict] = {}
+        self._build()
+        self.events.sort(key=lambda e: (e.t, e.device, e.appname, e.message,
+                                        e.role))
+        n_chunks = max(1, int((self.window_s + self.chunk_secs - 1)
+                              // self.chunk_secs))
+        self.buckets: list[list[ScenarioEvent]] = [[] for _ in range(n_chunks)]
+        for e in self.events:
+            self.buckets[min(int(e.t // self.chunk_secs), n_chunks - 1)].append(e)
+
+    # -- deterministic randomness -------------------------------------------
+    def _rng(self, label: str) -> random.Random:
+        """A Mersenne Twister seeded from SHA-256(seed:label).
+
+        NOT `random.Random(f"{seed}:{label}")`: string seeding is documented but
+        goes through a version-dependent path, and NOT `hash()`, which is salted
+        per process. A digest keeps the plan reproducible across machines and
+        interpreter versions — which is the entire point of a seeded scenario.
+        """
+        digest = hashlib.sha256(f"{self.seed}:{label}".encode()).digest()
+        return random.Random(int.from_bytes(digest[:8], "big"))
+
+    # -- line shapes (each pinned against the REAL classifier in tests) ------
+    @staticmethod
+    def _link_line(ifname: str, state: str) -> tuple[str, str, str]:
+        return ("LINK-3-UPDOWN",
+                f"%LINK-3-UPDOWN: Interface {ifname}, changed state to {state}",
+                "err")
+
+    @staticmethod
+    def _bgp_line(peer: str, state: str) -> tuple[str, str, str]:
+        word = "Down" if state == "down" else "Up"
+        return ("BGP-5-ADJCHANGE",
+                f"%BGP-5-ADJCHANGE: neighbor {peer} {word}",
+                "notice")
+
+    @staticmethod
+    def _ospf_line(peer: str, ifname: str, state: str) -> tuple[str, str, str]:
+        # "down beats up" in `_state_of`, so the down arm may name FULL; the up
+        # arm must contain no down-token at all ("LOADING", never "INIT").
+        tail = "from FULL to DOWN" if state == "down" else "from LOADING to FULL"
+        return ("OSPF-5-ADJCHG",
+                f"%OSPF-5-ADJCHG: Process 1, Nbr {peer} on {ifname} {tail}",
+                "notice")
+
+    @staticmethod
+    def _lldp_line(ifname: str, state: str) -> tuple[str, str, str]:
+        verb = "removed" if state == "down" else "added"
+        return ("LLDP-5-NEIGHBOR",
+                f"%LLDP-5-NEIGHBOR: neighbor {verb} on interface {ifname}",
+                "notice")
+
+    @staticmethod
+    def _alarm_line(fan: int) -> tuple[str, str, str]:
+        # Deliberately an UNRECOGNIZED mnemonic at warning severity: it falls
+        # through to the classifier's generic device-alarm net (the same arm
+        # EVENT_MIX_REALISTIC uses, pinned by tests/test_event_mix_167.py).
+        return ("ENVMON-4-FAN_FAILED", f"%ENVMON-4-FAN_FAILED: Fan {fan} failed",
+                "warning")
+
+    # -- naming: outside every range the background mix can produce ---------
+    @staticmethod
+    def _ifname(n: int) -> str:
+        return f"GigabitEthernet0/{SCENARIO_IF_BASE + (n % SCENARIO_IF_SPAN)}"
+
+    @staticmethod
+    def _peer_ip(n: int) -> str:
+        """A unique peer address per instance, host octet >= 200.
+
+        Unique for n < 251*251*SCENARIO_PEER_HOST_SPAN by construction (a plain
+        positional decomposition) — a modular product would silently alias two
+        incidents onto one address and weld them into a false merge.
+        """
+        return (f"10.{n % 251}.{(n // 251) % 251}."
+                f"{SCENARIO_PEER_HOST_BASE + (n // (251 * 251)) % SCENARIO_PEER_HOST_SPAN}")
+
+    # -- emission -----------------------------------------------------------
+    def _emit(self, iid: str, t: float, device: str, line: tuple[str, str, str],
+              symptom: str, state: str, role: str, entity: str) -> bool:
+        """Append one planned line. Anything outside [0, window) is DROPPED —
+        it would never be injected, and ground truth that claims an event the
+        stream does not contain is worse than no ground truth."""
+        if t < 0.0 or t >= self.window_s:
+            return False
+        appname, message, severity = line
+        self.events.append(ScenarioEvent(
+            round(float(t), 3), device, appname, message, severity, iid,
+            symptom, state, role, entity))
+        return True
+
+    def _link(self, iid, t, dev, ifname, state, role) -> bool:
+        return self._emit(iid, t, dev, self._link_line(ifname, state),
+                          "link_state_change", state, role, f"{dev}:{ifname}")
+
+    def _bgp(self, iid, t, dev, peer, state, role) -> bool:
+        return self._emit(iid, t, dev, self._bgp_line(peer, state),
+                          "bgp_adjacency_change", state, role, dev)
+
+    def _ospf(self, iid, t, dev, peer, ifname, state, role) -> bool:
+        return self._emit(iid, t, dev, self._ospf_line(peer, ifname, state),
+                          "ospf_adjacency_change", state, role, dev)
+
+    def _lldp(self, iid, t, dev, ifname, state, role) -> bool:
+        return self._emit(iid, t, dev, self._lldp_line(ifname, state),
+                          "lldp_neighbor_change", state, role, f"{dev}:{ifname}")
+
+    def _alarm(self, iid, t, dev, fan, role) -> bool:
+        # State is deliberately EMPTY: the classifier's generic device-alarm net
+        # yields no `state` attribute, and claiming one here would let the
+        # dynamics counters report transitions the engine can never see.
+        return self._emit(iid, t, dev, self._alarm_line(fan),
+                          "device_alarm", "", role, dev)
+
+    # -- timing helpers -----------------------------------------------------
+    def _onset(self, tpl: dict, rng: random.Random) -> float:
+        lo, hi = tpl["onset_window"]
+        hi = min(float(hi), self.window_s - 10.0)
+        lo = min(float(lo), hi)
+        return round(rng.uniform(lo, hi), 1)
+
+    def _recovery(self, tpl: dict, rng: random.Random, onset: float,
+                  span: tuple | None = None) -> float | None:
+        """Recovery time, or None when the fault is still open at window close.
+
+        A scenario in which EVERY fault recovers is as unrealistic as one in
+        which none does; letting the window truncate some recoveries is
+        deliberate, and the ground truth records `recovery_ts: null` for them.
+        """
+        rng_span = span if span is not None else tpl.get("recovery_after_s")
+        if not rng_span:
+            return None
+        lo, hi = rng_span
+        t = onset + rng.uniform(float(lo), float(hi))
+        return None if t >= self.window_s - 5.0 else round(t, 1)
+
+    def _repeat_offsets(self, tpl: dict, rng: random.Random) -> list[float]:
+        """Offsets of the EXTRA re-reports of a symptom (memo §18 'repeated
+        confirmation'). Bounded by SCENARIO_REPEAT_MAX_OFFSET_S so the emitted
+        spread survives the 10 s chunk quantization and still counts as a
+        repeat inside SCENARIO_REPEAT_WINDOW_S."""
+        lo, hi = tpl["repeats"]
+        n = rng.randint(int(lo), int(hi))
+        if n <= 0:
+            return []
+        step = SCENARIO_REPEAT_MAX_OFFSET_S / n
+        return [round(3.0 + step * k, 1) for k in range(n)]
+
+    def _reassert_times(self, tpl: dict, t0: float,
+                        until: float | None) -> list[float]:
+        """A fault nobody fixed keeps being logged. These are the low-causal-
+        information repeats memo §19 puts in P3 — the mass an Aggregation Plane
+        is allowed to collapse, and which t-nominal-2.5k does not contain."""
+        period = float(tpl.get("reassert_every_s") or 0.0)
+        if period <= 0.0:
+            return []
+        end = min(self.window_s if until is None else until, self.window_s)
+        out: list[float] = []
+        t = t0 + period
+        while t < end:
+            out.append(round(t, 1))
+            t += period
+        return out
+
+    # -- construction -------------------------------------------------------
+    def _build(self) -> None:
+        order = list(self.devices)
+        self._rng("layout").shuffle(order)
+        budget = int(len(order) * SCENARIO_DEVICE_BUDGET)
+        cursor = 0
+        idx = 0
+        for tpl in self.spec["templates"]:
+            kind = str(tpl["cause_kind"])
+            builder = getattr(self, f"_build_{kind}", None)
+            if builder is None:                     # 16.1: never silently skip
+                raise ValueError(f"scenario template {kind!r} has no builder")
+            want = round(float(tpl["instances_per_1k_devices"])
+                         * len(order) / 1000.0)
+            per = int(tpl["devices_per_instance"])
+            built = 0
+            for inst in range(want):
+                if cursor + per > budget:
+                    break                            # device budget exhausted
+                devs = order[cursor:cursor + per]
+                cursor += per
+                idx += 1
+                builder(f"I{idx:04d}", idx, tpl, devs,
+                        self._rng(f"{kind}:{inst}"))
+                built += 1
+            self.template_counts[kind] = {
+                "instances_planned": want, "instances_built": built,
+                "devices_per_instance": per, "devices": built * per,
+                "truncated_by_device_budget": built < want,
+            }
+        self.noise_pool = order[cursor:]
+        if not self.noise_pool:
+            # Unreachable while SCENARIO_DEVICE_BUDGET < 1.0 (the cursor can
+            # never pass the budget), and kept anyway: the disjointness clause
+            # rests entirely on this pool existing, so the day someone widens
+            # the budget the scenario must refuse rather than quietly let the
+            # background start emitting from incident devices.
+            raise ValueError(
+                f"scenario claimed every one of {len(order)} devices — no "
+                f"background pool left to fill the chunk plan from "
+                f"(device budget {SCENARIO_DEVICE_BUDGET:.0%})")
+
+    def _record(self, iid: str, tpl: dict, cause_entity: dict, onset: float,
+                recovery: float | None, blast: list[str], vantages: list[str],
+                symptom_kinds: list[str], **extra) -> None:
+        inc = {
+            "incident_id": iid,
+            "cause_kind": str(tpl["cause_kind"]),
+            "cause_entity": cause_entity,
+            "onset_ts": round(onset, 1),
+            "recovery_ts": None if recovery is None else round(recovery, 1),
+            "blast_radius": sorted(set(blast)),
+            "vantages": sorted(set(vantages)),
+            "symptom_kinds": sorted(set(symptom_kinds)),
+            "expected_owner_class": str(tpl["expected_owner_class"]),
+            "expected_seam_class": str(tpl["expected_seam_class"]),
+        }
+        inc.update(extra)
+        self.incidents.append(inc)
+
+    # ---- template: an upstream link fails and takes access devices with it -
+    def _build_upstream_link_failure(self, iid, idx, tpl, devs, rng) -> None:
+        cause_dev, affected = devs[0], list(devs[1:])
+        upif = self._ifname(idx)
+        peer = self._peer_ip(idx)
+        onset = self._onset(tpl, rng)
+        recovery = self._recovery(tpl, rng, onset)
+
+        # The cause device's own view: its uplink went down, it keeps saying so
+        # until (if ever) it comes back.
+        self._link(iid, onset, cause_dev, upif, "down", "onset")
+        for off in self._repeat_offsets(tpl, rng):
+            self._link(iid, onset + off, cause_dev, upif, "down", "repeat")
+        for t in self._reassert_times(tpl, onset, recovery):
+            self._link(iid, t, cause_dev, upif, "down", "reassert")
+        if recovery is not None:
+            self._link(iid, recovery, cause_dev, upif, "up", "recovery")
+
+        # Blast radius arrives in WAVES — memo §17's "blast-radius expansion",
+        # the class the engine is supposed to treat as high causal information.
+        shares = tuple(tpl["blast_waves"])
+        groups: list[list[str]] = []
+        start = 0
+        for w, share in enumerate(shares):
+            n = (len(affected) - start if w == len(shares) - 1
+                 else round(float(share) * len(affected)))
+            groups.append(affected[start:start + n])
+            start += n
+        waves: list[dict] = []
+        seen: list[str] = [cause_dev]
+        contradictions: list[dict] = []
+        n_contra = int(tpl.get("contradiction_devices") or 0)
+        for w, group in enumerate(groups):
+            at = onset + w * float(tpl["wave_gap_s"])
+            if at >= self.window_s or not group:
+                continue
+            emitted: list[str] = []
+            for j, dev in enumerate(group):
+                t0 = at + 0.5 * j          # deterministic intra-wave stagger
+                acc_if = self._ifname(idx + j + 1)
+                role = "onset" if w == 0 else "expansion"
+                # The corroborating vantage: an adjacency loss toward the SAME
+                # upstream address, from a device that is not the cause.
+                ok = self._bgp(iid, t0, dev, peer, "down", role)
+                # ...and the device's own local symptom.
+                self._link(iid, t0 + 1.0, dev, acc_if, "down", role)
+                for off in self._repeat_offsets(tpl, rng):
+                    self._bgp(iid, t0 + off, dev, peer, "down", "repeat")
+                for t in self._reassert_times(tpl, t0, recovery):
+                    self._bgp(iid, t, dev, peer, "down", "reassert")
+                if recovery is not None:
+                    self._bgp(iid, recovery, dev, peer, "up", "recovery")
+                    self._link(iid, recovery + 1.0, dev, acc_if, "up", "recovery")
+                # A CONTRADICTORY healthy observation while the fault is open
+                # (memo §17/§18): the link reports up, then down again.
+                if w == 0 and j < n_contra:
+                    ct = t0 + 25.0
+                    if (recovery is None or ct + 10.0 < recovery) and \
+                            self._link(iid, ct, dev, acc_if, "up", "contradiction"):
+                        self._link(iid, ct + 5.0, dev, acc_if, "down", "reassert")
+                        contradictions.append({"device": dev,
+                                               "at": round(ct, 1),
+                                               "entity_id": f"{dev}:{acc_if}"})
+                if ok:
+                    emitted.append(dev)
+            if emitted:
+                waves.append({"at": round(at, 1), "devices": sorted(emitted)})
+                seen.extend(emitted)
+
+        affected_seen = [d for d in seen if d != cause_dev]
+        self._record(
+            iid, tpl,
+            {"entity_type": "interface", "device": cause_dev, "interface": upif,
+             "entity_id": f"{cause_dev}:{upif}", "peer": peer},
+            onset, recovery, blast=seen,
+            # Every affected device observed the cause through the shared peer
+            # address; the cause device observed its own interface.
+            vantages=[cause_dev] + affected_seen,
+            symptom_kinds=["link_state_change", "bgp_adjacency_change"],
+            blast_radius_waves=waves,
+            contradictions=contradictions,
+            flap_cycles=1)
+
+    # ---- template: one device, one link, no recovery -----------------------
+    def _build_local_link_fault(self, iid, idx, tpl, devs, rng) -> None:
+        dev = devs[0]
+        ifname = self._ifname(idx)
+        onset = self._onset(tpl, rng)
+        self._link(iid, onset, dev, ifname, "down", "onset")
+        for off in self._repeat_offsets(tpl, rng):
+            self._link(iid, onset + off, dev, ifname, "down", "repeat")
+        # Corroboration by MODALITY rather than by vantage: the same interface
+        # also loses its LLDP neighbor and raises a chassis alarm.
+        self._lldp(iid, onset + 2.0, dev, ifname, "down", "onset")
+        self._alarm(iid, onset + 8.0, dev, SCENARIO_IF_BASE + (idx % SCENARIO_IF_SPAN),
+                    "onset")
+        for t in self._reassert_times(tpl, onset, None):
+            self._link(iid, t, dev, ifname, "down", "reassert")
+        self._record(
+            iid, tpl,
+            {"entity_type": "interface", "device": dev, "interface": ifname,
+             "entity_id": f"{dev}:{ifname}", "peer": None},
+            onset, None, blast=[dev], vantages=[dev],
+            symptom_kinds=["link_state_change", "lldp_neighbor_change",
+                           "device_alarm"],
+            blast_radius_waves=[{"at": round(onset, 1), "devices": [dev]}],
+            contradictions=[], flap_cycles=1)
+
+    # ---- template: a shared BGP peer flaps, seen from two devices ----------
+    def _build_bgp_peer_flap(self, iid, idx, tpl, devs, rng) -> None:
+        peer = self._peer_ip(idx)
+        onset = self._onset(tpl, rng)
+        recovery = self._recovery(tpl, rng, onset)
+        vantages: list[str] = []
+        for j, dev in enumerate(devs):
+            t0 = onset + 0.4 * j
+            if self._bgp(iid, t0, dev, peer, "down", "onset"):
+                vantages.append(dev)
+            for off in self._repeat_offsets(tpl, rng):
+                self._bgp(iid, t0 + off, dev, peer, "down", "repeat")
+            if recovery is not None:
+                self._bgp(iid, recovery + 0.4 * j, dev, peer, "up", "recovery")
+        self._record(
+            iid, tpl,
+            {"entity_type": "peer", "device": devs[0], "interface": None,
+             # The cause is the PEER, not either device: `entity_id` is the
+             # shared token both devices' signals carry (`entity_tokens`), which
+             # is what the engine welds on.
+             "entity_id": peer, "peer": peer},
+            onset, recovery, blast=list(devs), vantages=vantages,
+            symptom_kinds=["bgp_adjacency_change"],
+            blast_radius_waves=[{"at": round(onset, 1),
+                                 "devices": sorted(devs)}],
+            contradictions=[], flap_cycles=1)
+
+    # ---- template: an OSPF adjacency that cycles down/up N times -----------
+    def _build_ospf_adjacency_flap(self, iid, idx, tpl, devs, rng) -> None:
+        dev = devs[0]
+        peer = self._peer_ip(idx)
+        ifname = self._ifname(idx)
+        onset = self._onset(tpl, rng)
+        cycles = int(tpl.get("cycles") or 1)
+        gap = float(tpl.get("cycle_gap_s") or 0.0)
+        last_up: float | None = None
+        cycle_log: list[dict] = []
+        for c in range(cycles):
+            down_at = onset + c * gap
+            if down_at >= self.window_s:
+                break
+            self._ospf(iid, down_at, dev, peer, ifname, "down",
+                       "onset" if c == 0 else "flap")
+            for off in self._repeat_offsets(tpl, rng):
+                self._ospf(iid, down_at + off, dev, peer, ifname, "down",
+                           "repeat")
+            up_at = self._recovery(tpl, rng, down_at)
+            if up_at is not None:
+                self._ospf(iid, up_at, dev, peer, ifname, "up", "recovery")
+                last_up = up_at
+            cycle_log.append({"down_at": round(down_at, 1),
+                              "up_at": None if up_at is None else round(up_at, 1)})
+        self._record(
+            iid, tpl,
+            {"entity_type": "device", "device": dev, "interface": ifname,
+             "entity_id": dev, "peer": peer},
+            onset, last_up, blast=[dev], vantages=[dev],
+            symptom_kinds=["ospf_adjacency_change"],
+            blast_radius_waves=[{"at": round(onset, 1), "devices": [dev]}],
+            contradictions=[], flap_cycles=len(cycle_log),
+            cycles=cycle_log)
+
+    # -- measurement + ground truth -----------------------------------------
+    def dynamics(self) -> dict:
+        """The properties this profile exists to create, MEASURED on the plan.
+
+        Every one of these is 0 on `t-nominal-2.5k` (P3_AGGREGATION_OPPORTUNITY
+        §4) except the raw counts — which is why they are computed and written
+        out rather than asserted in a comment.
+        """
+        by_identity: dict[tuple, list[ScenarioEvent]] = {}
+        for e in self.events:
+            by_identity.setdefault((e.entity, e.symptom), []).append(e)
+        transitions = recoveries = repeats = 0
+        repeating_identities = 0
+        for evs in by_identity.values():
+            prev_state = ""
+            repeated_here = False
+            for i, e in enumerate(evs):
+                if prev_state and e.state != prev_state:
+                    transitions += 1
+                    if e.state == "up":
+                        recoveries += 1
+                prev_state = e.state
+                if i and (e.t - evs[i - 1].t) <= SCENARIO_REPEAT_WINDOW_S:
+                    repeats += 1
+                    repeated_here = True
+            if repeated_here:
+                repeating_identities += 1
+        observers: dict[str, set] = {}
+        for inc in self.incidents:
+            observers[inc["incident_id"]] = set(inc["vantages"])
+        return {
+            "scenario_events": len(self.events),
+            "incidents": len(self.incidents),
+            "identities": len(by_identity),
+            "state_transitions": transitions,
+            "recoveries": recoveries,
+            "repeats_within_60s": repeats,
+            "identities_repeating_within_60s": repeating_identities,
+            "multi_vantage_incidents": sum(1 for v in observers.values()
+                                           if len(v) >= 2),
+            "max_vantages_on_one_cause": max((len(v) for v in observers.values()),
+                                             default=0),
+            "contradictions": sum(len(i.get("contradictions") or [])
+                                  for i in self.incidents),
+            "blast_radius_expansions": sum(
+                max(0, len(i.get("blast_radius_waves") or []) - 1)
+                for i in self.incidents),
+            "incidents_with_recovery": sum(1 for i in self.incidents
+                                           if i["recovery_ts"] is not None),
+            "flap_cycles_total": sum(int(i.get("flap_cycles") or 0)
+                                     for i in self.incidents),
+            "scenario_devices": len(self.devices) - len(self.noise_pool),
+            "noise_devices": len(self.noise_pool),
+            # A scenario device the window truncated into silence would be a
+            # guaranteed accounting FAIL 40 minutes later (`corr_signals covers
+            # N/M burst devices`), because the background never speaks for it.
+            # It cannot happen at the ratified 900 s window — every template's
+            # onset window is bounded well inside it — so this is the sentinel
+            # that says so out loud rather than an assumption.
+            "silent_scenario_devices": len(self.silent_devices()),
+            "max_events_in_one_chunk": max((len(b) for b in self.buckets),
+                                           default=0),
+            "events_per_s": round(len(self.events) / max(self.window_s, 1e-9), 3),
+        }
+
+    def silent_devices(self) -> list[str]:
+        """Scenario devices the window left with no event at all."""
+        spoke = {e.device for e in self.events}
+        return sorted(set(self.devices) - set(self.noise_pool) - spoke)
+
+    def cause_entities(self) -> set:
+        """Every token that identifies a cause: entity ids, cause devices and
+        peer addresses. The noise-disjointness check is stated against this."""
+        out: set = set()
+        for inc in self.incidents:
+            ce = inc["cause_entity"]
+            for key in ("entity_id", "device", "peer"):
+                if ce.get(key):
+                    out.add(str(ce[key]))
+        return out
+
+    def digest(self) -> str:
+        """SHA-256 over the canonical plan. Two runs of one seed on one device
+        list must print the same 64 hex characters, or the scenario is not
+        deterministic and no A/B built on it means anything."""
+        blob = json.dumps({"incidents": self.incidents,
+                           "events": [list(e) for e in self.events]},
+                          sort_keys=True, separators=(",", ":"))
+        return hashlib.sha256(blob.encode()).hexdigest()
+
+    def ground_truth(self, planned_total: int = 0) -> dict:
+        counts = self.dynamics()
+        if planned_total > 0:
+            counts["scenario_event_share_of_plan"] = round(
+                len(self.events) / planned_total, 6)
+        return {
+            "schema": GROUND_TRUTH_SCHEMA,
+            "profile": self.profile,
+            "scenario": self.spec["name"],
+            "description": self.spec["description"],
+            "seed": self.seed,
+            "runid": self.runid,
+            "window_s": self.window_s,
+            "chunk_secs": self.chunk_secs,
+            "planned_total_events": planned_total,
+            "digest": self.digest(),
+            "devices": {
+                "total": len(self.devices),
+                "scenario": len(self.devices) - len(self.noise_pool),
+                "noise_pool": len(self.noise_pool),
+                "budget_share": SCENARIO_DEVICE_BUDGET,
+            },
+            "templates": self.template_counts,
+            "counts": counts,
+            "incidents": self.incidents,
+            "contract": (
+                "Scoring contract: scripts/scale-rca-latency.py, section "
+                "'GROUND TRUTH (t-storm profiles)'. Match a persisted incident "
+                "to a ground-truth incident by cause entity + onset; "
+                "expected_owner_class / expected_seam_class are scenario "
+                "labels, informational until the harness provisions seams."),
+        }
+
+
 
 
 # ---------------------------------------------------------------------------
@@ -2631,6 +3418,11 @@ class Harness:
         # "absorbed" | "shortfall" | "none". Set by onboard(); only a
         # non-"none" reason skips burst — a linearity-ratio FAIL does not.
         self.onboard_stop_reason = "none"
+        # The seeded fault-injection scenario (`--profile t-storm-*`), built at
+        # the top of the burst once the device ids exist. None for every other
+        # profile — which is what keeps t-nominal-2.5k byte-for-byte the
+        # workload every recorded 2.5K number was measured on.
+        self.scenario: StormScenario | None = None
 
     # -- plumbing -----------------------------------------------------------
     def phase(self, name: str, status: str, evidence: dict, notes: str = "") -> bool:
@@ -3287,6 +4079,47 @@ class Harness:
         every catalog), always the first created device, fixed seq marker."""
         return self._syslog_event(self.created_ids[0], 999_999, mix_name="single")
 
+    def _build_scenario(self) -> StormScenario | None:
+        """Instantiate this profile's fault-injection scenario, or None.
+
+        Pure function of (profile spec, this run's device ids, seed, window) —
+        deliberately NOT of the run id, the clock or the box. The run id rides
+        into ground-truth.json as a label only.
+        """
+        name = self.profile.get("scenario")
+        if not name:
+            return None
+        spec = SCENARIO_SPECS.get(str(name))
+        if spec is None:                     # 16.1: an unknown spec is a defect
+            raise ValueError(f"profile {self.args.profile!r} names unknown "
+                             f"scenario {name!r}")
+        return StormScenario(
+            spec, self.created_ids,
+            seed=int(getattr(self.args, "scenario_seed", SCENARIO_SEED_DEFAULT)),
+            window_s=int(self.args.burst_minutes * 60),
+            chunk_secs=BURST_CHUNK_SECS,
+            profile=str(self.args.profile),
+            runid=str(getattr(self, "runid", "")))
+
+    def _scenario_line(self, ev: ScenarioEvent, seq: int) -> str:
+        """One scenario line, in the SAME envelope `_syslog_event` produces —
+        same keys, same order, same `[mlx seq N]` trace marker (plus the
+        incident id, so a raw line can be traced back to the ground truth
+        without re-running the planner).
+
+        The incident marker is inert to the classifier: it carries no
+        interface token, no IP and no state word, so it cannot change how the
+        line is parsed (pinned by test_scenario_lines_classify_as_planned).
+        """
+        ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
+        return json.dumps({
+            "hostname": ev.device,
+            "appname": ev.appname,
+            "message": f"{ev.message} [mlx seq {seq} inc {ev.incident_id}]",
+            "severity": ev.severity,
+            "timestamp": ts,
+        })
+
     def _lane_schedule(self) -> list[dict]:
         """The RATIFIED CHUNK PLAN: how many events each lane injects in each
         10 s chunk of the profile's window.
@@ -3330,16 +4163,26 @@ class Harness:
 
     def _lane_states(self) -> list[dict]:
         """Split this run's devices into the profile's lane pools (contiguous
-        by creation order, deterministic; the last lane absorbs remainder)."""
+        by creation order, deterministic; the last lane absorbs remainder).
+
+        Under a scenario profile the BACKGROUND pool is narrowed to the
+        scenario's noise devices — the ones no incident touches. That, and only
+        that, is what makes "a background line never carries an incident's
+        cause entity" a structural property instead of a hope.
+        """
         lanes = []
         n = len(self.created_ids)
         start = 0
         spec = self.profile["lanes"]
+        scen = getattr(self, "scenario", None)
         for i, (name, share, mix, rate) in enumerate(spec):
             cnt = n - start if i == len(spec) - 1 else max(1, round(share * n))
+            pool = self.created_ids[start:start + cnt]
+            if scen is not None:
+                in_lane = set(pool)
+                pool = [d for d in scen.noise_pool if d in in_lane]
             lanes.append({"name": name, "mix": mix, "rate": rate,
-                          "pool": self.created_ids[start:start + cnt],
-                          "acc": 0.0, "seq": 0, "sent": 0})
+                          "pool": pool, "acc": 0.0, "seq": 0, "sent": 0})
             start += cnt
         return lanes
 
@@ -3355,6 +4198,13 @@ class Harness:
         BURST_WINDOW_MAX_FACTOR x the profile window, and a fleet still not
         whole at that bound FAILS the phase with the shortfall. Pacing is
         unchanged for a healthy run — chunk i is released at t0 + i*10 s.
+
+        SCENARIO PROFILES (`--profile t-storm-*`) do not change ANY of that.
+        The chunk plan is the same profile-fixed quota; the scenario's planned
+        events are placed into the chunk their plan time falls in, and the
+        BACKGROUND generator fills the rest of that chunk's quota from the
+        disjoint noise pool. The fleet total, the pacing and every gate are
+        untouched — only the composition of each chunk changes.
         """
         chunk_secs = BURST_CHUNK_SECS
         duration = int(self.args.burst_minutes * 60)
@@ -3364,9 +4214,63 @@ class Harness:
         plan = self._lane_schedule()
         fleet_planned = sum(sum(row.values()) for row in plan)
         fleet_injected = 0
+        self.scenario = self._build_scenario()
+        scen = self.scenario
+        scen_lane = ""
+        if scen is not None:
+            if len(self.profile["lanes"]) != 1:
+                return self.phase(
+                    "burst", "FAIL", ev,
+                    f"profile {self.args.profile!r} carries a scenario AND "
+                    f"{len(self.profile['lanes'])} lanes — a scenario owns the "
+                    f"whole fleet's composition and cannot be split across "
+                    f"lanes; the workload would be ambiguous")
+            scen_lane = self.profile["lanes"][0][0]
+            # A chunk whose scenario events exceed its ratified quota would
+            # force the loop to either overshoot the fleet or drop planned
+            # ground-truth events. Neither is acceptable, and both are silent
+            # — so refuse BEFORE injecting anything.
+            over = [(i, len(b), plan[i].get(scen_lane, 0))
+                    for i, b in enumerate(scen.buckets)
+                    if i < len(plan) and len(b) > plan[i].get(scen_lane, 0)]
+            if over:
+                return self.phase(
+                    "burst", "FAIL", ev,
+                    f"scenario {scen.spec['name']!r} plans more events than the "
+                    f"ratified chunk quota in {len(over)} chunk(s) (worst: chunk "
+                    f"{over[0][0]} wants {over[0][1]} of a {over[0][2]}-event "
+                    f"quota) — the scenario is mis-sized for this profile")
+            gt = scen.ground_truth(planned_total=fleet_planned)
+            gt_path = self.evidence_file(GROUND_TRUTH_FILE,
+                                         json.dumps(gt, indent=1, sort_keys=True))
+            ev["ground_truth"] = {
+                "path": gt_path, "schema": gt["schema"],
+                "scenario": gt["scenario"], "seed": gt["seed"],
+                "digest": gt["digest"], "incidents": len(gt["incidents"]),
+                "templates": gt["templates"], "devices": gt["devices"],
+                "counts": gt["counts"],
+            }
+            log(f"scenario {gt['scenario']} seed={gt['seed']} "
+                f"digest={gt['digest'][:16]} — {len(gt['incidents'])} incidents, "
+                f"{gt['counts']['scenario_events']} planned events "
+                f"({gt['counts']['state_transitions']} transitions, "
+                f"{gt['counts']['recoveries']} recoveries) over "
+                f"{gt['devices']['scenario']} devices; "
+                f"{gt['devices']['noise_pool']} devices carry background")
+            silent = scen.silent_devices()
+            if silent:
+                # Never silent about a silence (16.1): the run will still go
+                # ahead, but the operator learns HERE why accounting is about
+                # to report short device coverage.
+                warn(f"scenario: {len(silent)} scenario device(s) got NO event "
+                     f"inside the {int(self.args.burst_minutes * 60)}s window "
+                     f"(e.g. {', '.join(silent[:5])}) — accounting's per-device "
+                     f"corr_signals coverage WILL be short by that many; the "
+                     f"scenario is mis-sized for this window")
         lanes = self._lane_states()
         t0 = time.monotonic()
         seq_global = 0
+        scenario_injected = 0
         chunks: list[dict] = []
         bound_hit = False
         for idx, row in enumerate(plan):
@@ -3378,9 +4282,22 @@ class Harness:
                 break
             lines: list[str] = []
             detail: dict = {}
+            sc_detail: dict = {}
             for ln in lanes:
                 k = row[ln["name"]]
                 pool = ln["pool"]
+                if scen is not None and ln["name"] == scen_lane:
+                    # The scenario's share of this chunk first, in its own
+                    # deterministic order; the background then fills the rest
+                    # of the ratified quota. Both halves are counted, so the
+                    # balance equation is unchanged.
+                    bucket = (scen.buckets[idx] if idx < len(scen.buckets)
+                              else [])
+                    for sev in bucket:
+                        lines.append(self._scenario_line(sev, seq_global))
+                        seq_global += 1
+                    sc_detail[ln["name"]] = len(bucket)
+                    k -= len(bucket)
                 for _ in range(k):
                     dev_i = ln["seq"] % len(pool)
                     dev = pool[dev_i]
@@ -3395,7 +4312,10 @@ class Harness:
                                                     mix_seq=mix_seq))
                     ln["seq"] += 1
                     seq_global += 1
-                detail[ln["name"]] = k
+                # The lane's tally is the RATIFIED quota, scenario + background
+                # together — the balance equation counts injected events, not
+                # where inside the chunk they came from.
+                detail[ln["name"]] = row[ln["name"]]
             tp = time.monotonic()
             ok = True
             if lines:
@@ -3416,8 +4336,9 @@ class Harness:
                     fleet_injected += len(lines)
                     for ln in lanes:
                         ln["sent"] += detail[ln["name"]]
+                    scenario_injected += sum(sc_detail.values())
             chunks.append({"i": idx, "t": round(elapsed, 1), "lanes": detail,
-                           "n": len(lines), "ok": ok,
+                           "scenario": sc_detail, "n": len(lines), "ok": ok,
                            "produce_s": round(time.monotonic() - tp, 2)})
             ahead = ((idx + 1) * chunk_secs) - (time.monotonic() - t0)
             if ahead > 0:
@@ -3449,6 +4370,17 @@ class Harness:
                                    "sent": ln["sent"]} for ln in lanes},
             "produce_failures": self.produce_failures,
         })
+        if scen is not None:
+            ev["scenario"] = {
+                "name": scen.spec["name"],
+                "seed": scen.seed,
+                "digest": scen.digest(),
+                "planned": len(scen.events),
+                "injected": scenario_injected,
+                "shortfall": len(scen.events) - scenario_injected,
+                "background_injected": fleet_injected - scenario_injected,
+                "ground_truth_file": GROUND_TRUTH_FILE,
+            }
         self.evidence_file("burst-chunks.json", json.dumps(chunks, indent=1))
         if self.produce_failures:
             return self.phase("burst", "FAIL", ev,
@@ -5717,8 +6649,24 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
                          "storm profiles). 'legacy' keeps raw args and the "
                          "historical single-lane injection loop, byte-identical. "
                          "T-family = provisioning gates (must fully complete); "
-                         "S-family = storm gates (invariants + recovery). "
+                         "S-family = storm gates (invariants + recovery); "
+                         "t-storm-* = a T-family throughput with a SEEDED "
+                         "fault-injection scenario (recovery / contradiction / "
+                         "corroboration / blast-radius expansion) and a "
+                         "ground-truth.json in the run dir. "
                          "--devices is never overridden.")
+    ap.add_argument("--scenario-seed", type=int, default=SCENARIO_SEED_DEFAULT,
+                    dest="scenario_seed",
+                    help="seed for the fault-injection SCENARIO of a scenario "
+                         "profile (--profile t-storm-*). The scenario is a pure "
+                         "function of (profile, seed, device list): the same "
+                         "seed plans the identical incidents and the identical "
+                         "event stream on any box, which is what makes an A/B "
+                         "across engine changes honest (memo section 23). "
+                         "Ignored by every non-scenario profile. Default "
+                         f"{SCENARIO_SEED_DEFAULT} — the RATIFIED seed; change "
+                         "it only for a deliberately different scenario, and "
+                         "say so on every number the run produces.")
     ap.add_argument("--producer-key", choices=("tenant", "none"), default="tenant",
                     help="Kafka message key for injected events. 'tenant' "
                          "(default) keys every record by the created devices' "

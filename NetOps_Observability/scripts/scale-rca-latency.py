@@ -46,6 +46,76 @@ persist order reconstructs the customer-visible incident lifecycle:
 T5 (corroborated), T7 (full evidence graph) and T8 (evidence backlog drained)
 are NOT derivable from `corr_objects` alone and are not reported.
 
+GROUND TRUTH (t-storm profiles) — THE T4-CORRECTNESS CONTRACT, NOT YET SCORED
+----------------------------------------------------------------------------
+The T4 caveat above ("the scale-harness runs carry no ground-truth cause label")
+is true of `t-nominal-2.5k` and of every profile that predates it. It is NOT
+true of a `--profile t-storm-*` run: `scale-miniladder.py` writes a
+`ground-truth.json` into the run dir naming exactly what it injected. THIS TOOL
+DOES NOT YET READ IT — the file and this contract exist so a correctness scorer
+can be written without re-deriving the interface, and so nobody scores T4
+against a file whose meaning they guessed.
+
+FILE. `<run_dir>/ground-truth.json`, `schema: "correlix.scale.ground-truth/1"`.
+Top level: `profile`, `scenario`, `seed`, `runid`, `window_s`, `chunk_secs`,
+`planned_total_events`, `digest` (SHA-256 of the plan — two runs of one seed on
+one device list MUST print the same digest, or the A/B is not an A/B),
+`devices {total, scenario, noise_pool}`, `templates {...}`, `counts {...}`
+(the measured dynamics: state_transitions, recoveries, repeats_within_60s,
+multi_vantage_incidents, contradictions, blast_radius_expansions), and
+`incidents[]`.
+
+INCIDENT. Each entry carries:
+  incident_id           "I0001" — also stamped into every raw line it caused,
+                        as the `[mlx seq N inc I0001]` marker
+  cause_kind            upstream_link_failure | local_link_fault |
+                        bgp_peer_flap | ospf_adjacency_flap
+  cause_entity          {entity_type: interface|device|peer, device, interface,
+                         entity_id, peer}. `entity_id` is the token the ENGINE
+                        keys on: `host:ifname` for an interface cause, `host`
+                        for a device cause, the peer ADDRESS for a peer cause
+                        (which is a shared `entity_tokens` entry, not an
+                        entity_id — a scorer must match it against the
+                        hypothesis' tokens, not against `corr_objects.entity`).
+  onset_ts / recovery_ts  SECONDS FROM BURST T0, not wall clock (the harness
+                        cannot know the engine's clock). `recovery_ts: null`
+                        means the fault was still open when the window closed.
+  blast_radius          every device that emitted a symptom of this incident
+  blast_radius_waves    [{at, devices}] — the expansion, in order
+  vantages              the DISTINCT DEVICES that observed the cause. In a
+                        syslog-only harness the observer is always the emitting
+                        device, so this is vantage on the CAUSE, never two
+                        observers of one entity_id.
+  contradictions        [{device, at, entity_id}] healthy observations emitted
+                        while the fault was open
+  symptom_kinds         the correlation kinds this incident generates
+  expected_owner_class / expected_seam_class
+                        SCENARIO LABELS. mlx- devices are onboarded with no
+                        seam configuration, so the engine has nothing to
+                        attribute ownership to; treat these as INFORMATIONAL
+                        until the harness provisions seams, and never report an
+                        owner-correctness score derived from them as if the
+                        engine had failed.
+
+MATCHING (the contract a scorer must implement). Convert `onset_ts` to wall
+clock with the burst t0 from the run's `report.json` (phase `burst`), then match
+a persisted incident to a ground-truth incident when BOTH hold:
+  1. the persisted incident's cause entity (top hypothesis) equals the
+     ground-truth `cause_entity.entity_id`, or contains it as a token; AND
+  2. its T0/window_start falls within a tolerance of the ground-truth onset —
+     the chunk clock quantizes injection to 10 s, so the tolerance can never be
+     tighter than `chunk_secs` and should be stated with every score.
+Then report, per memo section 25: matched (true positive), ground-truth
+incidents with no match (missed cause), persisted incidents matching no ground
+truth (false cause) — and, separately, FALSE MERGE (one persisted incident
+covering two ground-truth cause entities) and FALSE SPLIT (one ground-truth
+incident spread over several persisted incidents). Background events are
+generated ONLY from a device pool disjoint from every incident, so a persisted
+incident whose cause entity is a noise device is a false cause by construction.
+
+Nothing above is implemented here yet. When it is, T4's caveat gets a second
+line — "scored against ground truth on t-storm runs" — and not before.
+
 HOW IT QUERIES
 --------------
 Exactly the way `scale-miniladder.py` does: `docker exec <clickhouse container>
@@ -96,8 +166,10 @@ DEFAULT_CURVE_OFFSETS = "5,10,20,30,60,120,300"
 # JSON, the markdown and --help cannot drift apart.
 CAVEATS = [
     ("T4 is a PROXY (confident + owned + tiered verdict); causal CORRECTNESS is"
-     " NOT scored — the persisted data has no ground-truth cause label (owner"
-     " memo section 8)."),
+     " NOT scored here (owner memo section 8). Pre-t-storm runs have no"
+     " ground-truth cause label at all; a --profile t-storm-* run writes one"
+     " (ground-truth.json), but this tool does not yet read it — see the"
+     " GROUND TRUTH section of the module docstring."),
     ("T0 is EVENT time (window_start, generator/device assigned); T1..T6 are"
      " ENGINE persist wall-clock (created_at). Latencies straddle two clocks."),
     "Negative latencies are reported, not clamped: they are event/ingest skew.",

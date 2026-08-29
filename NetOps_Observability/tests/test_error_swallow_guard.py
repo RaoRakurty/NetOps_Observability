@@ -216,9 +216,24 @@ ALLOWLIST: dict[tuple[str, int], str] = {
     # its new line and is behaviourally UNCHANGED — no handler body was
     # touched. RE-PIN of reviewed sites after line drift, which is the workflow
     # this line-keyed allowlist exists to force.
-    ("scale-miniladder.py", 2671): "preflight ingress probe; failure appended to `problems`, preflight fails on any problem",
-    ("scale-miniladder.py", 2678): "preflight API-login probe; failure appended to `problems`, preflight fails on any problem",
-    ("scale-miniladder.py", 3249): "twin-mode burst artifact read; failure returns an explicit burst-phase FAIL (tracker 152 §8.3)",
+    # RE-PIN 2026-08-29 (tracker 183: the `t-storm-2.5k` scenario profile).
+    # PURE LINE DRIFT — every one of these fifteen sites moved because the
+    # seeded fault-injection scenario (the SCENARIO_* constants, the
+    # STORM_SCENARIO_2K5 spec and the StormScenario planner) was inserted ABOVE
+    # them, plus the smaller `_build_scenario`/`_scenario_line`/`_burst_lanes`
+    # additions. NOT ONE handler body was touched: the working file was diffed
+    # against HEAD and each site matched its old text and its following eleven
+    # lines exactly at the new line number. Shifts:
+    #   1945->2732 1947->2734 1959->2746 1988->2775 2019->2806 2026->2813
+    #   2031->2818 2034->2821 2061->2848 (RunLock group)
+    #   2671->3463 2678->3470 (preflight probes) 3249->4041 (twin artifacts)
+    #   4926->5858 5432->6364 5998->6946
+    # 682 (`env_get`) and 983 (`Stack.api` post-retry) are above the insertion
+    # and did not move. RE-PIN of reviewed sites after line drift, which is the
+    # workflow this line-keyed allowlist exists to force — not a new exemption.
+    ("scale-miniladder.py", 3463): "preflight ingress probe; failure appended to `problems`, preflight fails on any problem",
+    ("scale-miniladder.py", 3470): "preflight API-login probe; failure appended to `problems`, preflight fails on any problem",
+    ("scale-miniladder.py", 4041): "twin-mode burst artifact read; failure returns an explicit burst-phase FAIL (tracker 152 §8.3)",
     # -- NEW 2026-08-29: Stack.api's post-retry transport handler -------------
     # THE ONE NEW ENTRY IN THIS WAVE, and a deliberate one. `Stack.api` used to
     # let a socket read timeout escape as a raw `TimeoutError`; on the live run
@@ -244,15 +259,15 @@ ALLOWLIST: dict[tuple[str, int], str] = {
     # tests/test_miniladder_cross_run_collision.py pins that both callers do it.
     # The two `release()` handlers and the pid probe cannot escalate at all —
     # they run on the way out (or answer a question), and each REPORTS by name.
-    ("scale-miniladder.py", 1945): "pid liveness probe: PermissionError means a LIVE process owned by another user; the True is the answer, and it refuses rather than steals",
-    ("scale-miniladder.py", 1947): "pid liveness probe fallback: warns by name and answers ALIVE (never steals a lock on an unknown error)",
-    ("scale-miniladder.py", 1959): "lock-file read: warns that the file is unreadable and returns an owner-less holder, which the caller treats as stale — reported, not silent",
-    ("scale-miniladder.py", 1988): "lock dir creation: returns (False, reason); main()/cleanup_only() die() on it — refusing to run unlocked",
-    ("scale-miniladder.py", 2019): "stale-lock unlink: returns (False, reason); caller die()s rather than racing a lock it could not clear",
-    ("scale-miniladder.py", 2026): "lock O_EXCL create: returns (False, reason); caller die()s",
-    ("scale-miniladder.py", 2031): "lock stamp write: returns (False, reason) after removing the half-written lock; caller die()s",
-    ("scale-miniladder.py", 2034): "removal of a half-written lock: warns by name; the outer handler still refuses the run",
-    ("scale-miniladder.py", 2061): "lock release on the way out: warns by name and says the next run reclaims it as stale (this pid will be dead) — nothing left to escalate to",
+    ("scale-miniladder.py", 2732): "pid liveness probe: PermissionError means a LIVE process owned by another user; the True is the answer, and it refuses rather than steals",
+    ("scale-miniladder.py", 2734): "pid liveness probe fallback: warns by name and answers ALIVE (never steals a lock on an unknown error)",
+    ("scale-miniladder.py", 2746): "lock-file read: warns that the file is unreadable and returns an owner-less holder, which the caller treats as stale — reported, not silent",
+    ("scale-miniladder.py", 2775): "lock dir creation: returns (False, reason); main()/cleanup_only() die() on it — refusing to run unlocked",
+    ("scale-miniladder.py", 2806): "stale-lock unlink: returns (False, reason); caller die()s rather than racing a lock it could not clear",
+    ("scale-miniladder.py", 2813): "lock O_EXCL create: returns (False, reason); caller die()s",
+    ("scale-miniladder.py", 2818): "lock stamp write: returns (False, reason) after removing the half-written lock; caller die()s",
+    ("scale-miniladder.py", 2821): "removal of a half-written lock: warns by name; the outer handler still refuses the run",
+    ("scale-miniladder.py", 2848): "lock release on the way out: warns by name and says the next run reclaims it as stale (this pid will be dead) — nothing left to escalate to",
     # -- NEW 2026-08-29: --rescore-memflat's saved-curve read ---------------
     # The offline re-score reads a FINISHED run's correlation-completion.json.
     # An unreadable/corrupt curve is not fatal and must not be: the handler
@@ -260,7 +275,7 @@ ALLOWLIST: dict[tuple[str, int], str] = {
     # re-scored verdict FAIL/UNKNOWN, is printed in memflat-rescore.md, and
     # exits non-zero. Escalating instead would throw away the ClickHouse half
     # of the re-score, which is readable and is the half being asked about.
-    ("scale-miniladder.py", 5998): "--rescore-memflat curve read; failure becomes a `problems` entry -> the re-scored verdict is FAIL/UNKNOWN and the tool exits non-zero",
+    ("scale-miniladder.py", 6946): "--rescore-memflat curve read; failure becomes a `problems` entry -> the re-scored verdict is FAIL/UNKNOWN and the tool exits non-zero",
     # -- NEW 2026-08-29 (tracker 175: the device-store tombstone debt) -------
     # Both handlers answer a DIAGNOSTIC question — how many suppression
     # tombstones the device store carries, and how the onboard rate has moved
@@ -269,8 +284,8 @@ ALLOWLIST: dict[tuple[str, int], str] = {
     # tombstone step deliberately routes its failures to its own list so a
     # device store this harness cannot count never turns a clean teardown red.
     # Escalating either one would fail a run over a directory listing.
-    ("scale-miniladder.py", 4926): "tombstone-count scandir; warns by name and returns reachable=False with the reason — the debt reads UNKNOWN, never 0",
-    ("scale-miniladder.py", 5432): "previous last-run.json read for the onboard-rate trend; warns by name and restarts the history at this run rather than costing the run its report",
+    ("scale-miniladder.py", 5858): "tombstone-count scandir; warns by name and returns reachable=False with the reason — the debt reads UNKNOWN, never 0",
+    ("scale-miniladder.py", 6364): "previous last-run.json read for the onboard-rate trend; warns by name and restarts the history at this run rather than costing the run its report",
     # The four 2026-08-16 chown-swallow findings (enrichment seed, processors
     # seed, appid/cloud fixtures, vuln SUDO_UID dir) were RESOLVED the same
     # day: all now route through chown_tree (repair-or-refuse), and the vuln
