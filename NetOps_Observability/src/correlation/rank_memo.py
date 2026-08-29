@@ -182,69 +182,140 @@ minted** with nothing ever evicted. 20,117 x 12.8 KiB = **252 MiB** — against 
 brief predicted exactly this ("N ~ 20,000-26,000 would explain the failure
 outright"); the byte bound is the fix.
 
-THE BYTE ESTIMATOR
-------------------
-`estimate_result_bytes` walks the value graph once per `put` and sums
-`sys.getsizeof` over it. It is an ESTIMATE by construction, deliberately biased
-CONSERVATIVE (it may over-count, never wildly under-count):
+THE BYTE ESTIMATOR — CALIBRATED, NOT AN UPPER BOUND
+---------------------------------------------------
+`estimate_result_bytes` walks the value graph once per `put` and must answer ONE
+question: **how much memory does the process give back when this entry is
+evicted?** The first version (5c035667) answered a different one — it summed
+`sys.getsizeof` with no id-`seen` set and no model of what the catalog already
+owns, and was documented as a deliberate UPPER bound.
 
-* **No `seen` set.** The graph is a near-tree; an object reachable twice from
-  one entry is charged twice. Skipping the id-set is what makes it cheap.
-* **Enum members are charged 0** — `VerdictTier`, `ModalityClass`, `ProbeScope`
-  are module-level singletons shared by every entry, so the entry's marginal
-  cost is the pointer already counted in its container.
-* **Cross-entry sharing is NOT modelled.** Strings carried verbatim from the
-  catalog (`title`, `first_steps`, `operator_phrase`, ...) and the shared
-  `inapplicable` `HypothesisScore` objects (`scoring._catalog_plan`) are charged
-  to every entry that references them. So the total the memo reports is an
-  UPPER BOUND on the RSS it is actually responsible for — the direction a memory
-  bound must err in.
+THE LIVE RUN PROVED THAT WRONG (2.5K run p2-s04-08290653, replica-3, /metrics
+07:54 UTC). With `CORR_RANK_MEMO_BYTES_MAX` = 96 MiB the memo held **1,780
+entries** (`corr_rank_memo_bytes` ~ 100.6 MB, i.e. ~56 KiB/entry by that
+estimator), **evicted 38,177**, and the hit rate collapsed to **6 %** (2,510
+hits / 39,957 misses) against **66 %** on the previous, unbounded run. An
+inflated meter is not a conservative bound — it is a SMALLER CAP than the one
+the operator configured, and it cost the memo its entire reason to exist.
 
-Measured against a reference recursive `sys.getsizeof` deep-size walk (the same
-instrument the attribution brief used, with an id-`seen` set) over 400 real
-`rank()` outputs on the built-in catalog: **mean ratio 1.06x, range 0.94-1.33x**,
-at **0.13 ms/entry against a 3.0 ms `rank()`** (~4 % of the call it only runs on
-a MISS). The reference itself reads **18.3 KiB/entry inclusive / 9.2 KiB/entry
-when shared objects are charged once across all 400** — bracketing the brief's
-25.8 KiB inclusive / 9.9-12.8 KiB marginal on its own (larger, real-evidence)
-fixture. `test_p2_memflat_bounds.py::test_B5_*` pins the factor.
+The estimator now applies three rules, each measured in
+`bench_memflat_p2.py --calibrate` against a `tracemalloc` reference (start
+tracing, mint N real results, read `current`, drop them, read `current` again —
+the difference IS the aggregate marginal, with cross-entry sharing charged once
+exactly as RSS charges it):
 
-WHY 96 MiB
-----------
+1. **An id-`seen` walk.** An object reachable twice from one entry is charged
+   once. Worth **-5.5 KiB/entry** of 33.6.
+2. **Catalog ownership charged ZERO.** Everything reachable from the `Catalog`
+   and from `scoring._catalog_plan`'s outputs — template titles, owner strings,
+   `first_steps` tuples, seams, operator/manager phrasing, and the SHARED
+   `inapplicable` `HypothesisScore` objects every RCA object points at — lives
+   as long as the catalog does. Evicting an entry frees none of it. Worth
+   **-12.8 KiB/entry**, the dominant term and the defect that made 96 MiB behave
+   like a ~2,000-entry cap. `_owned_ids` builds the id set once per catalog
+   version (6,005 ids on the built-in catalog) and revalidates it in O(1)
+   against `scoring._CATALOG_PLAN_CACHE`.
+3. **The per-instance `__dict__` charged.** `getsizeof` on a non-slots frozen
+   dataclass does not include it, and one `RankingResult` graph holds hundreds.
+   Worth **+5.0 KiB/entry** — the estimator was under-charging here while
+   over-charging elsewhere.
+
+MEASURED (400 rank-key-distinct storm-shaped results from the real drain sweep,
+`bench_memflat_p2.py --calibrate`):
+
+| shape | tracemalloc marginal | calibrated | ratio | 5c035667 |
+|---|---|---|---|---|
+| 400 dev / 3k sig / 2 epochs | 20.27 KiB/entry | 19.83 | **0.978x** | 32.80 (1.618x) |
+| 250 dev / 5k sig / 4 epochs | 24.25 KiB/entry | 23.81 | **0.982x** | 39.22 (1.618x) |
+
+The `gc.get_referents` deep walk agrees with `tracemalloc` to 0.002 %
+(8,307,634 B walked vs 8,307,450 B freed), so the two instruments are
+independent and neither is measuring itself.
+
+COST: **0.24-0.30 ms/entry** (best of three warm passes, measured OUTSIDE the
+traced window — tracemalloc roughly triples a walk that allocates a `seen` set),
+against `rank()` at 2.6-5.4 ms: **5.5-9.2 %** of a call it only runs on a MISS,
+and FASTER than the 0.35-0.49 ms/entry the uncalibrated walk cost, because an
+owned subtree is pruned at its root instead of being summed.
+
+WHAT IT STILL DOES NOT MODEL, on purpose:
+
+* **Cross-entry sharing of non-catalog objects** — measured at 0.2 KiB/entry
+  (1 % ). Modelling it needs a process-wide id registry, i.e. an unbounded map
+  to save 1 %.
+* **Sharing with the LIVE WORKING SET.** In situ (3 arrival epochs, 400 devices,
+  4k signals) the memo held 2,681 entries: the estimator read 67.37 MB, the
+  reference INCLUSIVE deep walk 69.12 MB (**0.975x**) — but the EXCLUSIVE walk,
+  which charges the working set first, read only 35.47 MB, because **1,405 of
+  2,681 entries (52 %)** shared their `RankingResult` with a still-open
+  `ObjectSnapshot` and cost no marginal RSS at all. The live run measured the
+  same 52 %. The memo cannot see that — an open object closes and the sharing
+  ends — so it charges what it holds. This, not estimator error, is most of the
+  distance between "56 KiB/entry metered" and the attribution brief's "12.8
+  KiB/entry freed on clear".
+
+Enum members are still charged 0: `VerdictTier`, `ModalityClass` and
+`ProbeScope` are module-level singletons and the entry's marginal cost is the
+pointer its container already paid.
+
+DETERMINISM: `sys.getsizeof`, `len` and `id` only — no `hash()`, no clock. `id`
+is a membership token for "already charged / catalog-owned", never mixed into
+the number, so the SUM is a function of the graph's sharing structure — which
+`rank()` reproduces exactly — and not of any address. `test_B10` pins it.
+
+WHY 96 MiB, AND WHAT IT NOW ADMITS
+----------------------------------
 The 2.5K replica runs in a **1.25 GiB (1,280 MiB)** container and entered the
-`memflat` window at 494 MiB, so the whole post-input growth budget the ×1.3 gate
-allows is ~148 MiB. Sizing the memo:
+`memflat` window at 494 MiB, so the whole post-input growth budget the x1.3 gate
+allows is ~148 MiB. The default is UNCHANGED at 96 MiB (7.5 % of the container);
+what changed is that the number now means what it says.
 
-* 96 MiB of ESTIMATOR bytes ~ 90 MiB of reference-inclusive deep size (÷1.06),
-  which at the brief's 25.8 KiB/entry inclusive holds **~3,600 entries**, and at
-  this catalog's 18.3 KiB/entry holds **~5,100**. That is the same order as the
-  "5,000 entries ~ 50-65 MiB" the brief itself proposed — but expressed in the
-  unit that actually binds, so a fatter catalog cannot silently inflate it.
-* Its TRUE marginal RSS is lower still: 52 % of the live entries shared their
-  result with an open object, so ~43-96 MiB, i.e. **3.4-7.5 % of the container**
-  against the **40-52 %** the 50,000-entry bound licensed.
-* HIT-RATE COST — stated as an assumption, not a measurement. Neither brief
-  carries a hit-rate-vs-entries curve, so what the live 66 % would have become
-  while holding ~4,000 of its 20,117 distinct keys is NOT derivable here. What
-  IS known: the hit rate CLIMBED (29 % early in the storm → 66 %) "as evidence
-  repeats", i.e. reuse is recency-clustered, which is the access pattern LRU is
-  built to keep. The bound is therefore set where memory is safe and the cost is
-  MEASURED rather than assumed: `evicted` / `evicted_bytes` in `stats()` are 0
-  today and become the exact readout of what the bound costs on the next run.
-  Raise `CORR_RANK_MEMO_BYTES_MAX` if they climb while RSS has headroom.
+Entries admitted at 96 MiB, by measured shape:
+
+| shape | calibrated KiB/entry | entries admitted | was (5c035667) |
+|---|---|---|---|
+| 400 dev / 3k sig | 19.83 | **4,957** | 2,997 |
+| 250 dev / 5k sig x4 | 23.81 | **4,128** | 2,506 |
+| in-situ sweep (2,681 held) | 25.7 | **3,910** | 2,415 |
+| LIVE 2.5K (56.5 KiB metered / 1.618) | ~34.9 | **~2,880** | 1,780 |
+
+So the correction is **1.62x more entries for the same RSS**, uniformly across
+shapes — NOT the 4x a naive reading of "12.8 KiB TRUE marginal" would predict.
+That 12.8 KiB figure is the RSS freed by `RankMemo.clear()` divided by ALL
+entries, including the 52 % that shared their result with an open object and
+therefore freed nothing; per UNSHARED entry it is ~27 KiB, which is the band
+this estimator now reads.
+
+HIT RATE — STILL THE UNKNOWN, AND STILL MEASURED, NOT ASSUMED
+--------------------------------------------------------------
+The live run with an unbounded memo minted **20,117 entries** and reached 66 %.
+With ~2,900-5,000 LRU entries the hit rate is **unknown**: neither brief carries
+a hit-rate-vs-entries curve. What is known is that the rate CLIMBED (29 % early
+in the storm -> 66 %) "as evidence repeats", i.e. reuse is recency-clustered,
+which is the access pattern LRU is built to keep.
+
+**`corr_rank_memo{result="evicted"}` is the readout.** It was 38,177 on the run
+that collapsed to 6 %; the same counter against `corr_rank_memo{result="hit"}`
+on the next run is the exact measurement of what the bound costs. Raise
+`CORR_RANK_MEMO_BYTES_MAX` if evictions climb while `corr_rank_memo_bytes` sits
+far under the container's headroom — the knob now moves entries roughly
+linearly, which it did not before.
 """
 
 from __future__ import annotations
 
+import gc
 import hashlib
 import json
 import os
 import sys
+import types
 from collections import OrderedDict
 from dataclasses import fields as dataclass_fields
 from dataclasses import is_dataclass
 from enum import Enum
 
+import scoring
 from scoring import (
     VERIFICATION_HEALTHY_KIND,
     VERIFICATION_RESULT_KIND,
@@ -271,57 +342,180 @@ _STR_BASE = _getsizeof("")
 # One number for every float/int/bool in the graph. CPython's are 24-32 B and
 # small ints are interned; a single constant keeps the walk branch-free.
 _SCALAR_BYTES = 24
-# type -> the dataclass field names to walk, derived once. Bounded by the number
-# of distinct types in a RankingResult value graph (RankingResult,
-# HypothesisScore, Verdict, EvidenceCoverage) — it is a memo of the SCHEMA, not
-# of the data, so it cannot grow with traffic.
-_FIELD_NAMES: dict[type, tuple[str, ...]] = {}
+# type -> (the dataclass field names to walk, the per-instance `__dict__` bytes),
+# derived once. Bounded by the number of distinct types in a RankingResult value
+# graph (RankingResult, HypothesisScore, Verdict, EvidenceCoverage, Witness) —
+# it is a memo of the SCHEMA, not of the data, so it cannot grow with traffic.
+#
+# The `__dict__` size is cached PER TYPE because every instance of one of these
+# frozen dataclasses is built by the same generated `__init__`, in the same
+# field order, with no lazily-added attribute (verified: no `object.__setattr__`
+# and no `cached_property` anywhere in scoring.py / verdicts.py), so the dict's
+# key set — and therefore `getsizeof` — is a property of the type.
+_FIELD_NAMES: dict[type, tuple[tuple[str, ...], int]] = {}
+
+# ── catalog ownership (docstring: THE OWNERSHIP TEST) ────────────────────────
+# Traversing the catalog with `gc.get_referents` needs no per-type knowledge, so
+# a template field nobody remembered cannot be missed. Classes, modules and
+# functions are NOT followed: a type reference reaches the whole interpreter.
+_SKIP_TYPES: tuple[type, ...] = (
+    type, types.ModuleType, types.FunctionType, types.MethodType,
+    types.BuiltinFunctionType, types.GetSetDescriptorType,
+    types.MemberDescriptorType, types.WrapperDescriptorType,
+    types.MethodDescriptorType, types.ClassMethodDescriptorType,
+)
+# catalog version hash -> (the plan cache's key tuple, the plan TRIPLES that
+# matched, the ids of everything they own).
+#
+# The triples are held by STRONG reference on purpose: an id is only a valid
+# ownership token while the object behind it is alive, and CPython recycles
+# addresses.
+#
+# Revalidation is on the TRIPLE, not on the Catalog: `_catalog_plan` can be
+# evicted and rebuilt for the SAME Catalog object, minting fresh `inapplicable`
+# HypothesisScore objects that an older id set would no longer name.
+#
+# ALL matching triples are unioned. Two distinct `Catalog` objects can carry the
+# same version hash (`builtin_catalog()` called twice), and a `RankingResult`
+# carries only the hash — so which of them produced it is not knowable. Both are
+# process-lifetime, so charging an entry for neither is correct, and a union
+# cannot under-charge a live catalog's objects.
+_OWNED_CACHE: dict[str, tuple[tuple[int, ...], tuple[tuple, ...],
+                              frozenset[int]]] = {}
+_OWNED_CACHE_MAX = 4
+_EMPTY_OWNED: frozenset[int] = frozenset()
 
 
-def estimate_result_bytes(obj: object) -> int:
-    """Deterministic, cheap upper-ish bound on the bytes one memo value retains.
+def _owned_ids(version: str) -> frozenset[int]:
+    """Every object id reachable from the catalog(s) of `version` — the objects a
+    memo entry POINTS AT but does not own, so evicting it frees none of them.
 
-    Deliberately NOT exact: no id-`seen` set (the graph is a near-tree, and the
-    set is most of the cost), enum members charged 0 (module-level singletons),
-    cross-entry sharing not modelled (charged to every entry that references
-    it). Measured at 1.06x a reference deep-size walk, range 0.94-1.33x — see the
-    module docstring and `test_p2_memflat_bounds.py::test_B5_*`.
+    HOT PATH: a dict lookup, one int-tuple compare over the plan cache's (at
+    most 4) keys, and one identity check per matched triple. `version_hash()` is
+    called ONLY on a rebuild — it is itself cached behind a 4-entry map that
+    recomputes a sha256 over the whole template corpus when it overflows, so it
+    must never be on the per-`put` path. `_catalog_plan` is never CALLED here:
+    metering a value can neither build a plan nor evict one.
 
-    Deterministic: `sys.getsizeof` and `len` only. No `hash()`, no `id()`, no
-    clock — the same value graph gives the same number in any process."""
+    When no catalog resolves (a synthetic value, a cleared plan cache) the set is
+    EMPTY — the estimator falls back to charging everything, which is the
+    conservative direction for a memory bound."""
+    plan = scoring._CATALOG_PLAN_CACHE
+    keys = tuple(plan)
+    cached = _OWNED_CACHE.get(version)
+    if (cached is not None and cached[0] == keys
+            and all(plan.get(id(e[0])) is e for e in cached[1])):
+        return cached[2]
+    entries = tuple(e for e in plan.values() if e[0].version_hash() == version)
+    if not entries:
+        return _EMPTY_OWNED
+    seen: set[int] = set()
+    stack: list = []
+    for entry in entries:
+        stack.extend(entry)
+    while stack:
+        obj = stack.pop()
+        oid = id(obj)
+        if oid in seen or isinstance(obj, _SKIP_TYPES):
+            continue
+        seen.add(oid)
+        stack.extend(gc.get_referents(obj))
+    ids = frozenset(seen)
+    if len(_OWNED_CACHE) >= _OWNED_CACHE_MAX:
+        _OWNED_CACHE.clear()
+    _OWNED_CACHE[version] = (keys, entries, ids)
+    return ids
+
+
+def _walk(obj: object, seen: set[int], owned: frozenset[int]) -> int:
+    """Charge every object in the value graph ONCE, and only if the catalog does
+    not already own it."""
     t = type(obj)
     # `type(obj) is str`, NOT `isinstance`: a str-subclass Enum member
     # (`VerdictTier`, `ModalityClass`) must fall through to the Enum branch and
     # be charged 0, not charged as a fresh string on every entry.
     if t is str:
+        oid = id(obj)
+        if oid in owned or oid in seen:
+            return 0
+        seen.add(oid)
         return _STR_BASE + len(obj)          # type: ignore[arg-type]
     if t is float or t is int or t is bool:
+        # Not id-tracked: a float header is 24 B and small ints are interned, so
+        # the bookkeeping would cost more than the number it corrects.
         return _SCALAR_BYTES
     if obj is None:
         return 0
+    oid = id(obj)
+    if oid in owned or oid in seen:
+        return 0
+    seen.add(oid)
     if t is tuple or t is list or t is set or t is frozenset:
         total = _getsizeof(obj)
         for item in obj:                       # type: ignore[attr-defined]
-            total += estimate_result_bytes(item)
+            total += _walk(item, seen, owned)
         return total
     if t is dict:
         total = _getsizeof(obj)
         for key, value in obj.items():         # type: ignore[attr-defined]
-            total += estimate_result_bytes(key) + estimate_result_bytes(value)
+            total += _walk(key, seen, owned) + _walk(value, seen, owned)
         return total
-    names = _FIELD_NAMES.get(t)
-    if names is None:
-        names = (tuple(f.name for f in dataclass_fields(obj))
-                 if is_dataclass(obj) and not isinstance(obj, type) else ())
-        _FIELD_NAMES[t] = names
+    plan = _FIELD_NAMES.get(t)
+    if plan is None:
+        # A frozen dataclass without __slots__ carries a per-INSTANCE `__dict__`
+        # that `getsizeof(instance)` does not include — 104-296 B each, and one
+        # RankingResult graph holds hundreds of them. Omitting it under-charged
+        # the walk by 4.9 KiB/entry. Only the dict CONTAINER is charged: its
+        # keys are the type's interned attribute names, shared by every
+        # instance, and its values are the fields walked below.
+        inst = getattr(obj, "__dict__", None)
+        plan = ((tuple(f.name for f in dataclass_fields(obj))
+                 if is_dataclass(obj) and not isinstance(obj, type) else ()),
+                _getsizeof(inst) if type(inst) is dict else 0)
+        _FIELD_NAMES[t] = plan
+    names, dict_bytes = plan
     if not names:
         # An Enum member is one module-level singleton shared by every entry:
         # the entry's marginal cost is the pointer its container already paid.
         return 0 if isinstance(obj, Enum) else _getsizeof(obj)
-    total = _getsizeof(obj)
+    total = _getsizeof(obj) + dict_bytes
     for name in names:
-        total += estimate_result_bytes(getattr(obj, name))
+        total += _walk(getattr(obj, name), seen, owned)
     return total
+
+
+def estimate_result_bytes(obj: object,
+                          owned: frozenset[int] | None = None) -> int:
+    """The bytes one memo value MARGINALLY retains — calibrated, not an upper
+    bound (module docstring: THE BYTE ESTIMATOR).
+
+    Three rules, each measured in `bench_memflat_p2.py --calibrate`:
+
+    * **id-`seen` walk** — an object reachable twice from one entry is charged
+      once. Without it the walk over-charged 5.5 KiB/entry (16 %).
+    * **catalog ownership** — anything reachable from the `Catalog` (template
+      titles, owner strings, first-steps tuples, the shared `inapplicable`
+      `HypothesisScore` objects of `scoring._catalog_plan`) is charged 0: it
+      lives as long as the catalog does, and evicting the entry frees none of
+      it. Without it the walk over-charged 13.7 KiB/entry (46 %) — the defect
+      that made a 96 MiB budget behave like a ~2,000-entry cap on the live 2.5K
+      run.
+    * **per-instance `__dict__`** — charged (+4.9 KiB/entry), because
+      `getsizeof` on a non-slots dataclass instance does not include it.
+
+    `owned` overrides the ownership set (tests, and sub-objects that carry no
+    catalog version); the default resolves it from `RankingResult.catalog_version`
+    against `scoring._CATALOG_PLAN_CACHE`, which is a dict lookup after the
+    first call per catalog.
+
+    DETERMINISM: `sys.getsizeof`, `len` and `id` only — no `hash()`, no clock.
+    `id` is used ONLY as a set membership token for "already charged"; the SUM
+    depends on the value graph's sharing structure, not on any address, so two
+    `rank()` calls on the same evidence estimate identically in any process."""
+    if owned is None:
+        owned = (_owned_ids(obj.catalog_version)
+                 if type(obj) is RankingResult else _EMPTY_OWNED)
+    return _walk(obj, set(), owned)
 
 
 def _witness_projection(w: Witness) -> tuple:
@@ -492,18 +686,15 @@ class RankMemo:
         readout — `evicted_bytes` climbing is the byte bound doing its job, and
         the exact measurement of what it costs in hit rate.
 
-        NOTE (2026-08-29) — main.py is owned by another change and was NOT
-        edited here. `epoch_state()["rank_memo"]` passes this dict through, so
-        it picks the three new keys up for free; TWO places in main.py still
-        need a one-line follow-up:
-          1. `rank_memo_stats()`'s memo-OFF branch returns a hardcoded dict and
-             must gain `"bytes": 0, "bytes_max": 0, "evicted_bytes": 0` so a
-             dashboard never sees a key appear/disappear with the flag.
-          2. `_metrics_text()` enumerates the memo series by hand
-             (`corr_rank_memo{result=...}` + `corr_rank_memo_entries`); add
-             `corr_rank_memo_bytes` / `corr_rank_memo_bytes_max` gauges and an
-             `evicted_bytes` counter — the byte bound is invisible on /metrics
-             until then."""
+        WIRED (verified 2026-08-29 at 87973a36, no main.py change needed for
+        the calibration): `epoch_state()["rank_memo"]` passes this dict through
+        verbatim; `rank_memo_stats()`'s memo-OFF branch already returns
+        `bytes`/`bytes_max`/`evicted_bytes` as zeros so the key set does not
+        depend on the flag; and `_metrics_text()` already exports
+        `corr_rank_memo_bytes`, `corr_rank_memo_bytes_max` and
+        `corr_rank_memo_evicted_bytes_total` beside
+        `corr_rank_memo{result="evicted"}`. Nothing about the byte bound is
+        invisible on /metrics."""
         return {
             "entries": len(self._lru),
             "max_entries": self.max_entries,

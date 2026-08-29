@@ -11,6 +11,14 @@ TWO CLAIMS UNDER TEST
    1.25 GiB box; the live replica minted 20,117 entries and grew +259 MiB.
    `CORR_RANK_MEMO_BYTES_MAX` (default 96 MiB) now evicts LRU until BOTH bounds
    hold, and `estimate_result_bytes` is the meter. Tests B1-B13.
+
+   **The meter is CALIBRATED, not an upper bound** (2026-08-29). The live 2.5K
+   run p2-s04-08290653 (replica-3, /metrics 07:54 UTC) held only 1,780 entries
+   in 96 MiB — ~56 KiB/entry — evicted 38,177 and dropped the hit rate from
+   66 % to 6 %. `estimate_result_bytes` now runs an id-`seen` walk that charges
+   catalog-owned objects ZERO and the per-instance `__dict__` it used to miss;
+   measured at 0.978x / 0.982x of a tracemalloc marginal over 400 real
+   storm-shaped results (`bench_memflat_p2.py --calibrate`). Tests B5-B5e.
 2. **`scoring`'s causal-chain clauses are interned** (brief §5.2). The two call
    sites built a fresh `Clause(kind=...)` per call; the id-keyed `Clause.kinds`
    cache pinned each one until it self-evicted at 4,096 (2,292 pinned foreign
@@ -21,10 +29,11 @@ Every test is a mutant check — what turns it red is named in its docstring.
 """
 from __future__ import annotations
 
+import gc
 import json
 import sys
-from dataclasses import fields as dc_fields
-from dataclasses import is_dataclass
+import tracemalloc
+import types
 from pathlib import Path
 
 import pytest
@@ -46,33 +55,49 @@ from test_fixtures import fixture_files, signal_from_fixture
 CAT = builtin_catalog()
 
 
-# ── the REFERENCE instrument ─────────────────────────────────────────────────
+# ── the REFERENCE instruments ────────────────────────────────────────────────
 
-def reference_deep_bytes(obj: object, seen: set[int] | None = None) -> int:
-    """A recursive `sys.getsizeof` deep-size walk with an id-`seen` set — the
-    same instrument `bench_memflat_p2.py` used to produce the brief's 10-26
-    KiB/entry. Slower and more exact than the production estimator; it exists
-    here only to bound the estimator's error (B5)."""
+_SKIP_TYPES: tuple[type, ...] = (
+    type, types.ModuleType, types.FunctionType, types.MethodType,
+    types.BuiltinFunctionType, types.GetSetDescriptorType,
+    types.MemberDescriptorType, types.WrapperDescriptorType,
+    types.MethodDescriptorType, types.ClassMethodDescriptorType,
+)
+
+
+def reference_deep_bytes(obj: object, seen: set[int] | None = None,
+                         owned: frozenset[int] = frozenset()) -> int:
+    """Deep size by `gc.get_referents` — the instrument `bench_memflat_p2.py`
+    uses, and the one that needs NO per-type knowledge, so a container the
+    production walk forgot cannot be missed here too.
+
+    It is independently anchored: over 400 real storm-shaped results this walk
+    read 8,307,634 B against 8,307,450 B that `tracemalloc` saw freed when the
+    same results were dropped — 0.002 % apart. `owned` is the catalog's id set,
+    skipped for the same reason the estimator skips it.
+
+    Slower and more exact than the production estimator; it exists only to bound
+    the estimator's error (B5b) without paying for a tracemalloc run."""
     if seen is None:
         seen = set()
-    if id(obj) in seen:
-        return 0
-    seen.add(id(obj))
-    total = sys.getsizeof(obj)
-    if isinstance(obj, (str, bytes, int, float, bool)) or obj is None:
-        return total
-    if isinstance(obj, dict):
-        for key, value in obj.items():
-            total += reference_deep_bytes(key, seen) + reference_deep_bytes(value, seen)
-        return total
-    if isinstance(obj, (tuple, list, set, frozenset)):
-        for item in obj:
-            total += reference_deep_bytes(item, seen)
-        return total
-    if is_dataclass(obj) and not isinstance(obj, type):
-        for field in dc_fields(obj):
-            total += reference_deep_bytes(getattr(obj, field.name), seen)
+    total = 0
+    stack: list = [obj]
+    while stack:
+        item = stack.pop()
+        oid = id(item)
+        if oid in seen or oid in owned or isinstance(item, _SKIP_TYPES):
+            continue
+        seen.add(oid)
+        total += sys.getsizeof(item)
+        stack.extend(gc.get_referents(item))
     return total
+
+
+def catalog_owned() -> frozenset[int]:
+    """The estimator's own ownership set, resolved for the built-in catalog."""
+    owned = RM._owned_ids(CAT.version_hash())
+    assert owned, "the catalog ownership set did not resolve — B5* prove nothing"
+    return owned
 
 
 def ranking_of(path) -> RankingResult:
@@ -179,40 +204,188 @@ def test_B4_stats_exposes_the_byte_readout_and_it_balances():
     assert tight.evicted == len(held) - len(tight)
 
 
-@pytest.mark.parametrize("path", THREE, ids=lambda p: p.stem)
-def test_B5_the_estimator_tracks_the_reference_deep_size(path):
-    """THE STATED FACTOR: `estimate_result_bytes` is within **0.75x-1.50x** of a
-    reference recursive `sys.getsizeof` deep-size walk, and biased HIGH (a
-    memory bound may over-charge, never silently under-charge by much).
-
-    Measured over 400 real `rank()` outputs on the built-in catalog the ratio is
-    mean **1.06x**, range **0.94x-1.33x**; the band here is that range with
-    headroom for a catalog whose strings/enums shift the mix.
-
-    MUTANT: stop recursing into `hypotheses` (count only the RankingResult
-    header) and the ratio collapses to ~0.01 — red. Charge Enum members their
-    full `getsizeof` and it drifts high."""
-    result = ranking_of(path)
-    estimated = estimate_result_bytes(result)
-    reference = reference_deep_bytes(result)
-    ratio = estimated / reference
-    assert 0.75 <= ratio <= 1.50, (
-        f"{path.stem}: estimate {estimated} vs reference {reference} = {ratio:.3f}x")
-    # and the absolute scale must match the brief's order of magnitude
-    assert 1_000 <= reference <= 200_000, reference
+CALIBRATION_MIN_RESULTS = 200
 
 
-def test_B5b_the_estimator_is_biased_high_across_the_whole_fixture_corpus():
-    """The band in B5 is per-fixture; this pins the AGGREGATE bias over all 112
-    catalog fixtures, which is the number the 96 MiB default was sized against."""
-    pairs = [(estimate_result_bytes(r), reference_deep_bytes(r))
+def _corpus_evidence() -> list[list]:
+    """One evidence list per catalog fixture, freshly built each call."""
+    return [[signal_from_fixture(s, i)
+             for i, s in enumerate(json.loads(p.read_text())["signals"])]
+            for p in FIXTURES]
+
+
+def test_B5_the_estimator_is_calibrated_against_a_tracemalloc_marginal():
+    """THE CALIBRATION. `estimate_result_bytes` must read within **0.80x-1.30x**
+    of the memory the process actually gives back when N real `rank()` results
+    are dropped — the only definition of "what a memo entry costs" a byte bound
+    can be denominated in.
+
+    The reference is `tracemalloc`: start tracing, mint the results, read
+    `current`, drop them, read `current` again. Cross-entry sharing is charged
+    once by that instrument, exactly as RSS charges it.
+
+    Measured on the 2.5K-shaped bench fixture (`bench_memflat_p2.py
+    --calibrate`, 400 rank-key-distinct storm results): **0.978x** at
+    400 dev/3k sig and **0.982x** at 250 dev/5k sig x 4 epochs. This test runs
+    the same procedure over the 112-fixture catalog corpus, doubled to clear the
+    200-result floor.
+
+    MUTANT (asserted, not described): remove the ownership test from the walk —
+    the same measurement lands at ~1.59x and the band goes red. The assertion
+    below runs that mutant explicitly via the `owned` override.
+
+    SKIPS CLEANLY when tracemalloc is unavailable or already tracing (its
+    counters are process-global; a second instrument would be measuring this
+    one)."""
+    if tracemalloc.is_tracing():
+        pytest.skip("tracemalloc is already tracing this process")
+    evidence = _corpus_evidence() + _corpus_evidence()
+    assert len(evidence) >= CALIBRATION_MIN_RESULTS, len(evidence)
+    # Warm every lazily-built structure a first call would allocate — the
+    # catalog plan, the witness-clause intern, the estimator's per-type field
+    # table and its per-catalog ownership set — so none of it is charged to the
+    # results inside the traced window.
+    warm = [rank(CAT, ev) for ev in evidence[:5]]
+    estimate_result_bytes(warm[0])
+    estimate_result_bytes(warm[0], frozenset())
+    del warm
+    gc.collect()
+
+    try:
+        tracemalloc.start(1)
+    except (RuntimeError, ValueError) as exc:      # pragma: no cover - exotic build
+        pytest.skip(f"tracemalloc unavailable: {exc}")
+    try:
+        gc.collect()
+        results = [rank(CAT, ev) for ev in evidence]
+        gc.collect()
+        held = tracemalloc.get_traced_memory()[0]
+        n = len(results)
+        estimated = sum(estimate_result_bytes(r) for r in results)
+        no_ownership = sum(estimate_result_bytes(r, frozenset()) for r in results)
+        del results
+        gc.collect()
+        after = tracemalloc.get_traced_memory()[0]
+    finally:
+        tracemalloc.stop()
+
+    marginal = held - after
+    assert marginal > 0, "tracemalloc saw nothing freed — the reference is broken"
+    per_entry = marginal / n
+    assert 1_000 <= per_entry <= 200_000, f"{per_entry:.0f} B/entry is not a result"
+    ratio = estimated / marginal
+    assert 0.80 <= ratio <= 1.30, (
+        f"estimator {estimated} vs tracemalloc marginal {marginal} = {ratio:.3f}x "
+        f"over {n} results ({per_entry / 1024:.1f} KiB/entry)")
+    # THE MUTANT, executed: charging catalog-owned objects to every entry puts
+    # the same measurement outside the band.
+    assert no_ownership / marginal > 1.30, (
+        f"ownership-off ratio {no_ownership / marginal:.3f}x is inside the band — "
+        "the ownership test is not what is doing the work")
+
+
+def test_B5b_the_estimator_tracks_the_reference_walk_across_the_whole_corpus():
+    """The per-fixture and corpus-wide check that needs no tracemalloc: the
+    calibrated estimator against the `gc.get_referents` reference walk with the
+    SAME ownership set. Both must see the same graph, so the band is tight.
+
+    MUTANT: stop recursing into `hypotheses` and the ratio collapses to ~0.02;
+    charge Enum members their full `getsizeof` and it drifts high."""
+    owned = catalog_owned()
+    pairs = [(estimate_result_bytes(r), reference_deep_bytes(r, None, owned))
              for r in (ranking_of(p) for p in FIXTURES)]
+    for est, ref in pairs:
+        assert 0.75 <= est / ref <= 1.30, (est, ref)
     total_est = sum(e for e, _ in pairs)
     total_ref = sum(r for _, r in pairs)
-    assert 0.90 <= total_est / total_ref <= 1.35, (total_est, total_ref)
-    per_entry = total_ref / len(pairs)
-    assert 3_000 <= per_entry <= 40_000, (
-        f"per-entry deep size {per_entry:.0f} B left the brief's 10-26 KiB band")
+    assert 0.90 <= total_est / total_ref <= 1.15, (total_est, total_ref)
+
+
+def test_B5c_catalog_owned_objects_are_charged_zero():
+    """THE FIX. Everything reachable from the `Catalog` — template titles, owner
+    strings, first-steps tuples, and the shared `inapplicable` HypothesisScore
+    objects `scoring._catalog_plan` hands to every RCA object — lives as long as
+    the catalog does. Evicting a memo entry frees none of it, so charging it was
+    46 % of the old estimator's error (12.8 KiB of 33.6 KiB/entry).
+
+    MUTANT: drop the `oid in owned` test from `_walk` and every assertion here
+    goes red."""
+    owned = catalog_owned()
+    _, inapplicable = scoring._catalog_plan(CAT)
+    shared = next(iter(inapplicable.values()))
+    assert estimate_result_bytes(shared, owned) == 0, "a shared score was charged"
+    assert estimate_result_bytes(shared, frozenset()) > 1_000, "nothing to charge"
+
+    template = CAT.enabled_templates()[0]
+    assert estimate_result_bytes(template.title, owned) == 0
+    assert estimate_result_bytes(template.title, frozenset()) > 0
+    assert estimate_result_bytes(template.verdict.first_steps, owned) == 0
+
+    # A result whose whole hypothesis set is catalog-owned costs its own header
+    # and nothing else.
+    from dataclasses import replace as dc_replace
+    result = ranking_of(THREE[0])
+    hollow = dc_replace(result, hypotheses=tuple(inapplicable.values())[:5],
+                        evidence_missing=())
+    assert estimate_result_bytes(hollow) < 500, estimate_result_bytes(hollow)
+    assert estimate_result_bytes(hollow, frozenset()) > 10_000
+
+
+def test_B5d_a_substructure_reached_twice_is_charged_once():
+    """The id-`seen` walk. Without it the near-tree's repeats cost 5.5 KiB of
+    the old 33.6 KiB/entry.
+
+    MUTANT: delete the `oid in seen` guards and `(top, top)` costs twice
+    `(top,)` instead of one extra pointer."""
+    import copy
+    top = ranking_of(THREE[0]).hypotheses[0]
+    one = estimate_result_bytes((top,), frozenset())
+    twice = estimate_result_bytes((top, top), frozenset())
+    assert twice == one + (sys.getsizeof((None, None)) - sys.getsizeof((None,))), (
+        f"a repeat cost {twice - one} B, not one pointer slot")
+    # A deepcopy is NOT a second charge: `copy.deepcopy` returns the SAME object
+    # for every immutable leaf, so only the containers are new. Two structurally
+    # DIFFERENT hypotheses are the honest control.
+    other = ranking_of(THREE[0]).hypotheses[1]
+    assert other != top
+    distinct = estimate_result_bytes((top, other), frozenset())
+    assert distinct > twice * 1.5, "two DISTINCT hypotheses must cost roughly twice"
+    shallow = estimate_result_bytes((top, copy.deepcopy(top)), frozenset())
+    assert twice < shallow < distinct
+
+
+def test_B5e_the_ownership_set_is_cached_revalidated_and_fails_open():
+    """The ownership set is resolved from `RankingResult.catalog_version` against
+    `scoring._CATALOG_PLAN_CACHE`, cached per version, and revalidated by
+    IDENTITY so a catalog reload cannot leave a stale set behind. When no
+    catalog resolves it is EMPTY — the estimator falls back to charging
+    everything, which is the conservative direction for a memory bound.
+
+    MUTANT: return a stale set without the identity revalidation and the reload
+    branch here goes red."""
+    owned = RM._owned_ids(CAT.version_hash())
+    assert owned and RM._owned_ids(CAT.version_hash()) is owned, "not cached"
+    assert RM._owned_ids("cat-no-such-version") == frozenset()
+
+    # a cache wipe rebuilds the same set from the live catalog
+    RM._OWNED_CACHE.clear()
+    rebuilt = RM._owned_ids(CAT.version_hash())
+    assert rebuilt == owned and rebuilt is not owned
+
+    # ...and with no plan for the version, the estimate is the conservative one
+    result = ranking_of(THREE[0])
+    tight = estimate_result_bytes(result)
+    saved_plan = dict(scoring._CATALOG_PLAN_CACHE)
+    try:
+        scoring._CATALOG_PLAN_CACHE.clear()
+        RM._OWNED_CACHE.clear()
+        loose = estimate_result_bytes(result)
+    finally:
+        scoring._CATALOG_PLAN_CACHE.clear()
+        scoring._CATALOG_PLAN_CACHE.update(saved_plan)
+        RM._OWNED_CACHE.clear()
+    assert loose > tight * 1.4, (loose, tight)
+    assert estimate_result_bytes(result) == tight, "the set did not come back"
 
 
 def test_B6_the_byte_bound_default_and_its_knob():
@@ -275,19 +448,37 @@ def test_B9_re_putting_a_key_replaces_its_charge():
 
 
 def test_B10_the_estimator_is_deterministic_and_content_derived():
-    """No `hash()`, no `id()`, no clock: the same value graph must give the same
-    number every call, and two EQUAL results must estimate equal."""
+    """No `hash()`, no clock: the same value graph must give the same number
+    every call, and two results REBUILT from the same evidence must estimate
+    equal — in this process and in any other.
+
+    `id()` IS used, deliberately: it is the membership token of the id-`seen`
+    walk and of the catalog-ownership test. It is only ever asked "have I
+    charged this object already / does the catalog own it", never mixed into the
+    number, so the SUM is a function of the graph's sharing structure — which
+    `rank()` reproduces exactly — and not of any address.
+
+    A `deepcopy` is deliberately NOT asserted equal: a copy really does own the
+    catalog's strings instead of pointing at them, and costs more. That is the
+    estimator being right, not drifting."""
     import copy
     result = ranking_of(THREE[0])
     first = estimate_result_bytes(result)
     assert all(estimate_result_bytes(result) == first for _ in range(5))
+    # CONTENT determinism: rank the same evidence again -> a new graph with the
+    # same sharing structure -> the same number.
+    rebuilt = ranking_of(THREE[0])
+    assert rebuilt == result and rebuilt is not result
+    assert estimate_result_bytes(rebuilt) == first
+    # ...and a deepcopy costs MORE, because it no longer shares the catalog.
     clone = copy.deepcopy(result)
-    assert clone == result and clone is not result
-    assert estimate_result_bytes(clone) == first
+    assert clone == result
+    assert estimate_result_bytes(clone) > first
     # Inspect the CODE OBJECT, not the source text: the docstring names the very
     # things it forbids, so a substring scan would be self-defeating.
-    names = set(estimate_result_bytes.__code__.co_names)
-    assert not (names & {"id", "hash", "time", "random", "monotonic"}), names
+    names = set(RM._walk.__code__.co_names) | set(
+        estimate_result_bytes.__code__.co_names)
+    assert not (names & {"hash", "time", "random", "monotonic"}), names
     assert "_getsizeof" in names and "len" in names, names
 
 

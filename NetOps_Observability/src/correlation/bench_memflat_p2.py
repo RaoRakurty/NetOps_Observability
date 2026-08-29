@@ -79,6 +79,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import dataclasses
 import gc
 import json
 import os
@@ -87,6 +88,7 @@ import time
 import tracemalloc
 import types
 from datetime import datetime, timedelta, timezone
+from enum import Enum
 
 os.environ.setdefault("CORR_SIGNALS_ENABLED", "true")
 os.environ.setdefault("CORR_ENGINE_ENABLED", "true")
@@ -497,6 +499,336 @@ async def sweep(args) -> dict:
 
 
 # ═══════════════════════════════════════════════════════════════════════════
+# the ESTIMATOR CALIBRATION (--calibrate)
+# ═══════════════════════════════════════════════════════════════════════════
+#
+# THE QUESTION
+#     `RankMemo`'s byte bound is only as good as `estimate_result_bytes`. The
+#     live 2.5K run (p2-s04-08290653, replica-3, /metrics 07:54 UTC) showed the
+#     original estimator reading ~56 KiB per entry, so a 96 MiB budget held
+#     1,780 entries, evicted 38,177 and collapsed the hit rate from 66 % to 6 %.
+#     The estimator was an UPPER BOUND by construction (no id-`seen` set, no
+#     model of catalog-owned objects), and a memory bound sized off an upper
+#     bound is a smaller cap than it claims to be.
+#
+# THE REFERENCE
+#     `tracemalloc` is the only instrument that answers "how much memory would
+#     the process give back if these N results were dropped", which is exactly
+#     what a memo entry costs. The procedure:
+#
+#       1. capture REAL component evidence from a drain sweep (the same fixture
+#          `bench_profile_p2` profiles), deduplicated by `rank_key` so every
+#          result is a distinct memo entry;
+#       2. drop the whole engine working set, so nothing else holds a result;
+#       3. `tracemalloc.start()`, rank all N, `gc.collect()`, read `current`;
+#       4. drop the results, `gc.collect()`, read `current` again.
+#
+#     The difference IS the aggregate marginal: cross-entry sharing is charged
+#     once, exactly as RSS charges it. Divided by N it is the number the bound
+#     must be denominated in.
+#
+#     A `gc.get_referents` deep walk over the same result set matched this
+#     figure to 0.002 % (8,307,634 B walked vs 8,307,450 B freed), so the two
+#     instruments agree and neither is measuring itself.
+
+
+def _capture_evidence(args) -> list:
+    """REAL component evidence tuples from a drain sweep, deduplicated by
+    `rank_key` — one entry per distinct memo key, which is what the memo would
+    actually hold. `engine.rank` is wrapped for the duration and restored."""
+    import rank_memo as rank_memo_mod
+
+    captured: list = []
+    original = engine.rank
+
+    def capture(catalog, evidence):
+        captured.append(tuple(evidence))
+        return original(catalog, evidence)
+
+    async def drive() -> None:
+        now = datetime(2026, 8, 28, 12, 0, 0, tzinfo=timezone.utc)
+        main.ch = MockCH()
+        seq = 0
+        for i in range(args.arrival_epochs):
+            batch = make_signals(args.signals, args.devices,
+                                 t_end=now + timedelta(seconds=30 * i),
+                                 span_s=args.span_s, seq0=seq, burst=args.burst)
+            load(batch)
+            seq += args.signals
+            del batch
+            epoch = await main._begin_epoch(now + timedelta(seconds=60 * i))
+            if args.storm:
+                epoch.storm = True
+            cohorts = 0
+            for _ in range(args.cohorts):
+                await main.engine_cycle(epoch)
+                epoch.cohorts = cohorts = cohorts + 1
+                if not epoch.pending():
+                    break
+            await main._epoch_lifecycle(epoch, main._make_loop_yield()[0])
+            main._close_epoch(epoch)
+            print(f"  [calibrate] epoch {i + 1}/{args.arrival_epochs}: "
+                  f"{len(captured)} rank() calls, open={len(main.OPEN_OBJECTS)}, "
+                  f"rss={rss_kib()['VmRSS'] // 1024} MiB",
+                  file=sys.stderr, flush=True)
+
+    engine.rank = capture
+    try:
+        asyncio.run(drive())
+    finally:
+        engine.rank = original
+
+    version = main.CATALOG.version_hash()
+    seen_keys: set[str] = set()
+    distinct: list = []
+    for evidence in captured:
+        key = rank_memo_mod.rank_key("global", version, evidence)
+        if key is None or key in seen_keys:
+            continue
+        seen_keys.add(key)
+        distinct.append(evidence)
+    print(f"  [calibrate] {len(distinct)} distinct rank keys of "
+          f"{len(captured)} rank() calls", file=sys.stderr)
+    captured.clear()
+    return distinct[:args.calib_results]
+
+
+def _drop_working_set() -> None:
+    if main.RANK_MEMO is not None:
+        main.RANK_MEMO.clear()
+    main.OPEN_OBJECTS.clear()
+    main.WINDOW_BUFFER.clear()
+    main._BUFFERED_IDS.clear()
+    main._BUFFERED_ID_ORDER.clear()
+    main._PROCESSED_IDS.clear()
+    main._TENANT_EDGES.clear()
+    main._ARCHIVE_SLICE_HASH.clear()
+    gc.collect()
+
+
+def _estimator_at_5c035667(obj, _fields: dict | None = None) -> int:
+    """The estimator EXACTLY as it shipped at 5c035667 — no id-`seen` set, no
+    ownership test, no per-instance `__dict__`. Kept here (not imported) so the
+    A/B survives the fix: it is the baseline the over-count is measured against,
+    and it must not silently track a later edit to rank_memo.py."""
+    if _fields is None:
+        _fields = _OLD_FIELDS
+    t = type(obj)
+    if t is str:
+        return sys.getsizeof("") + len(obj)
+    if t is float or t is int or t is bool:
+        return 24
+    if obj is None:
+        return 0
+    if t is tuple or t is list or t is set or t is frozenset:
+        return sys.getsizeof(obj) + sum(_estimator_at_5c035667(i, _fields)
+                                        for i in obj)
+    if t is dict:
+        return sys.getsizeof(obj) + sum(
+            _estimator_at_5c035667(k, _fields) + _estimator_at_5c035667(v, _fields)
+            for k, v in obj.items())
+    names = _fields.get(t)
+    if names is None:
+        names = (tuple(f.name for f in dataclasses.fields(obj))
+                 if dataclasses.is_dataclass(obj) and not isinstance(obj, type)
+                 else ())
+        _fields[t] = names
+    if not names:
+        return 0 if isinstance(obj, Enum) else sys.getsizeof(obj)
+    return sys.getsizeof(obj) + sum(
+        _estimator_at_5c035667(getattr(obj, n), _fields) for n in names)
+
+
+_OLD_FIELDS: dict = {}
+
+
+def _variant_bytes(obj, *, id_seen: bool, ownership: bool, inst_dict: bool,
+                   owned: frozenset = frozenset(), seen=None) -> int:
+    """One term of the over-count decomposition: the SAME walk with each of the
+    three corrections switchable, so `estimate_result_bytes`'s improvement can
+    be attributed to a rule instead of asserted as a total."""
+    if seen is None:
+        seen = set() if id_seen else None
+    t = type(obj)
+    if t is str:
+        if seen is not None or ownership:
+            oid = id(obj)
+            if ownership and oid in owned:
+                return 0
+            if seen is not None:
+                if oid in seen:
+                    return 0
+                seen.add(oid)
+        return sys.getsizeof("") + len(obj)
+    if t is float or t is int or t is bool:
+        return 24
+    if obj is None:
+        return 0
+    oid = id(obj)
+    if ownership and oid in owned:
+        return 0
+    if seen is not None:
+        if oid in seen:
+            return 0
+        seen.add(oid)
+
+    def rec(child):
+        return _variant_bytes(child, id_seen=id_seen, ownership=ownership,
+                              inst_dict=inst_dict, owned=owned, seen=seen)
+
+    if t is tuple or t is list or t is set or t is frozenset:
+        return sys.getsizeof(obj) + sum(rec(i) for i in obj)
+    if t is dict:
+        return sys.getsizeof(obj) + sum(rec(k) + rec(v) for k, v in obj.items())
+    names = _OLD_FIELDS.get(t)
+    if names is None:
+        names = (tuple(f.name for f in dataclasses.fields(obj))
+                 if dataclasses.is_dataclass(obj) and not isinstance(obj, type)
+                 else ())
+        _OLD_FIELDS[t] = names
+    if not names:
+        return 0 if isinstance(obj, Enum) else sys.getsizeof(obj)
+    total = sys.getsizeof(obj)
+    if inst_dict:
+        d = getattr(obj, "__dict__", None)
+        if type(d) is dict:
+            total += sys.getsizeof(d)
+    return total + sum(rec(getattr(obj, n)) for n in names)
+
+
+def calibrate(args) -> dict:
+    """The estimator against the tracemalloc reference over N REAL results."""
+    import rank_memo as rank_memo_mod
+    from scoring import rank as scoring_rank
+
+    evidence_sets = _capture_evidence(args)
+    if len(evidence_sets) < 2:
+        raise SystemExit("calibration needs at least 2 distinct rank keys; "
+                         "raise --signals / --arrival-epochs")
+    _drop_working_set()
+
+    catalog = main.CATALOG
+    # Warm every lazily-built structure the FIRST rank()/estimate() would
+    # allocate — the catalog plan, the witness-clause intern, the estimator's
+    # field table and its per-catalog ownership set — so none of it lands in
+    # the traced window and gets charged to the results.
+    warm = [scoring_rank(catalog, ev) for ev in evidence_sets[:20]]
+    rank_memo_mod.estimate_result_bytes(warm[0])
+    _estimator_at_5c035667(warm[0])
+    del warm
+    gc.collect()
+
+    tracemalloc.start(1)
+    gc.collect()
+    before = tracemalloc.get_traced_memory()[0]
+    results = [scoring_rank(catalog, ev) for ev in evidence_sets]
+    gc.collect()
+    held = tracemalloc.get_traced_memory()[0]
+
+    n = len(results)
+    owned = rank_memo_mod._owned_ids(catalog.version_hash())
+    calibrated = sum(rank_memo_mod.estimate_result_bytes(r) for r in results)
+    no_ownership = sum(rank_memo_mod.estimate_result_bytes(r, frozenset())
+                       for r in results)
+    original = sum(_estimator_at_5c035667(r) for r in results)
+    # Each correction switched on ALONE, so the total is attributable per rule.
+    seen_only = sum(_variant_bytes(r, id_seen=True, ownership=False,
+                                   inst_dict=False) for r in results)
+    seen_dict = sum(_variant_bytes(r, id_seen=True, ownership=False,
+                                   inst_dict=True) for r in results)
+
+    del results
+    gc.collect()
+    after = tracemalloc.get_traced_memory()[0]
+    tracemalloc.stop()
+    marginal = held - after
+
+    # COST IS MEASURED OUTSIDE THE TRACED WINDOW. tracemalloc instruments every
+    # allocation, which roughly triples a walk that allocates a `seen` set per
+    # call; timing inside it would report a number the engine never pays.
+    timing_set = [scoring_rank(catalog, ev) for ev in evidence_sets]
+
+    def timed(fn, batch: list) -> float:
+        best = float("inf")
+        for _ in range(3):
+            t0 = time.perf_counter()
+            for r in batch:
+                fn(r)
+            best = min(best, (time.perf_counter() - t0) / n * 1000.0)
+        return best
+
+    ms_new = timed(rank_memo_mod.estimate_result_bytes, timing_set)
+    ms_old = timed(_estimator_at_5c035667, timing_set)
+    sample = evidence_sets[:100]
+    t0 = time.perf_counter()
+    for ev in sample:
+        scoring_rank(catalog, ev)
+    ms_rank = (time.perf_counter() - t0) / len(sample) * 1000.0
+    timing_set.clear()
+    gc.collect()
+
+    budget = rank_memo_mod.DEFAULT_MAX_BYTES
+    return {
+        "n": n, "before": before, "held": held, "after": after,
+        "marginal_bytes": marginal,
+        "calibrated_bytes": calibrated,
+        "no_ownership_bytes": no_ownership,
+        "seen_only_bytes": seen_only,
+        "seen_dict_bytes": seen_dict,
+        "original_bytes": original,
+        "catalog_owned_objects": len(owned),
+        "ms_new": ms_new, "ms_old": ms_old, "ms_rank": ms_rank,
+        "budget": budget,
+        "admits_calibrated": budget // max(1, calibrated // n),
+        "admits_original": budget // max(1, original // n),
+    }
+
+
+def calib_report(res: dict) -> str:
+    n = res["n"]
+    k = 1024.0
+    marginal = res["marginal_bytes"]
+
+    def row(label: str, total: int) -> str:
+        return (f"{label:<38}{total:>14,}{total / n / k:>12.2f}"
+                f"{total / marginal:>11.3f}x")
+
+    def step(label: str, total: int, prev: int | None) -> str:
+        delta = "" if prev is None else f"{(total - prev) / n:>+11,.0f}"
+        return f"  {label:<46}{total / n:>10,.0f}{delta}"
+
+    w = [f"CALIBRATION over {n} REAL, rank-key-distinct storm-shaped results",
+         "",
+         f"{'instrument':<38}{'total B':>14}{'KiB/entry':>12}{'vs true':>12}",
+         row("tracemalloc TRUE marginal (ref)", marginal),
+         row("estimate_result_bytes (calibrated)", res["calibrated_bytes"]),
+         row("  mutant: ownership test removed", res["no_ownership_bytes"]),
+         row("  estimator as shipped at 5c035667", res["original_bytes"]),
+         "",
+         "DECOMPOSITION, one correction at a time (B/entry, cumulative)",
+         step("5c035667", res["original_bytes"], None),
+         step("(a) + id-seen set (double charge removed)",
+              res["seen_only_bytes"], res["original_bytes"]),
+         step("(b) + per-instance __dict__ (was UNDER-charged)",
+              res["seen_dict_bytes"], res["seen_only_bytes"]),
+         step(f"(c) + catalog ownership ({res['catalog_owned_objects']:,} owned ids)",
+              res["calibrated_bytes"], res["seen_dict_bytes"]),
+         step("residual vs the tracemalloc reference",
+              marginal, res["calibrated_bytes"]),
+         "",
+         (f"cost: calibrated {res['ms_new']:.4f} ms/entry, "
+          f"5c035667 {res['ms_old']:.4f} ms/entry, "
+          f"rank() {res['ms_rank']:.3f} ms/call "
+          f"({100 * res['ms_new'] / res['ms_rank']:.1f} % of the call it only "
+          f"runs on a MISS)"),
+         "",
+         (f"CORR_RANK_MEMO_BYTES_MAX = {res['budget'] / 1048576:.0f} MiB admits "
+          f"{res['admits_calibrated']:,} entries at this shape "
+          f"(was {res['admits_original']:,} under the 5c035667 estimator)")]
+    return "\n".join(w)
+
+
+# ═══════════════════════════════════════════════════════════════════════════
 # reporting
 # ═══════════════════════════════════════════════════════════════════════════
 
@@ -596,6 +928,12 @@ def main_cli() -> int:
                     help="RSS + counts only: no deep walk, no census. THE RSS "
                          "CURVE MUST COME FROM A LIGHT RUN (see measure())")
     ap.add_argument("--tm-frames", type=int, default=1)
+    ap.add_argument("--calibrate", action="store_true",
+                    help="measure estimate_result_bytes against a tracemalloc "
+                         "marginal over --calib-results REAL results, and exit")
+    ap.add_argument("--calib-results", type=int, default=400,
+                    help="how many rank-key-distinct results to calibrate over "
+                         "(the brief's floor is 200)")
     ap.add_argument("--label", default="run")
     ap.add_argument("--log-level", default="ERROR")
     ap.add_argument("--json", default="")
@@ -629,6 +967,17 @@ def main_cli() -> int:
         "CORR_OPEN_OBJECTS_MAX": main.CORR_OPEN_OBJECTS_MAX,
     }
     print(f"label={args.label}  flags={json.dumps(flags)}", file=sys.stderr)
+
+    if args.calibrate:
+        print(f"label={args.label}  CALIBRATE", file=sys.stderr)
+        res = calibrate(args)
+        print()
+        print(calib_report(res))
+        if args.json:
+            with open(args.json, "w") as fh:
+                json.dump(res, fh, indent=2, default=str)
+            print(f"\nwrote {args.json}")
+        return 0
 
     if args.tracemalloc:
         tracemalloc.start(args.tm_frames)
