@@ -364,3 +364,5 @@ update `P4_PROGRAMME_WRITEUP_2026-08-29.md` tables.
   both arms must run on the same image (`12074157`).
 - After the wave: commit both fixes, rebuild/redeploy correlation, one more
   `t-storm-2.5k` for 9/9, then finalise the P4 tables.
+- 22:49 (driver clock): wave RUNNING from L1 after fixing the arm probe
+  (`dd051f53`: mTLS :8443, never :8094). Follow `/var/tmp/scale-runs/ab-driver.log`.
