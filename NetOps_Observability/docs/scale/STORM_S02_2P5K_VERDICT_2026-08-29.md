@@ -33,8 +33,11 @@ often — the P3 lever.
 ## 3. TTUR on storm incidents (clean scope)
 2,754 incidents · 13,317 versions (4.84/inc) · Σ signals 91,460 · T1 p50 453 s ·
 **p95 1,054 s** · p99 1,229 s · max 1,622 s · T-last p95 2,203 s · merged 162 ·
-undetermined 0 · **confirmed 0**. Twin scorer (bounded) result appended below
-when available.
+undetermined 0 · **confirmed 0**. **Twin scorer (bounded, 21 queries, 46 s):
+322/345 = 93.3 %** (s01: 321/345) — detection 100 %; every miss is the
+`affected_includes` clause on the chained templates (`enterprise_outage`,
+`upstream_link_failure`): the cause device is not in the site object's affected
+set — tracker 187 (blocked on parser gaps 184). `STORM_S02_ACCURACY_2026-08-29.md`.
 
 ## 4. The remaining defect (tracker 185, part 2)
 Stall at 20:01:09→20:01:44 begins right after a cohort's reconciliation lines;
