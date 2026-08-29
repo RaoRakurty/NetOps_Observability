@@ -262,7 +262,37 @@ def test_version_damping_suppresses_instance_refresh_persists(monkeypatch):
         "an instance refresh of unchanged evidence must NOT persist a new version"
     assert main.VERSIONS_DAMPED == damped_before + 1, "the damped persist is counted"
 
-    # heartbeat elapsed → the same unchanged-material object re-persists ONCE
+    # heartbeat elapsed → P3 change A: the object is TOUCHED, not re-versioned.
+    # `corr_current` (what bounds UI staleness) gets a fresh row at the SAME
+    # version; `corr_objects` gets nothing, because the material did not move.
+    (reg,) = main.OPEN_OBJECTS.values()
+    reg["last_persist"] = now - timedelta(seconds=1000)
+    touched_before = main.VERSIONS_HEARTBEAT_TOUCHED
+    current_before = len(stub.rows.get("netops.corr_current", []))
+    main.buffer_signal(_storm_sig("link_state_change", "core-1", offset_s=-10, now=now))
+    asyncio.run(main.engine_cycle())
+    assert len(stub.rows["netops.corr_objects"]) == 1, \
+        "an unchanged-material heartbeat must NOT write a corr_objects version"
+    assert len(stub.rows["netops.corr_current"]) == current_before + 1, \
+        "the heartbeat still refreshes the hot projection (UI staleness bound)"
+    assert stub.rows["netops.corr_current"][-1]["version"] == 1, \
+        "the touch keeps pointing at a version corr_edges/corr_objects HAVE"
+    assert main.VERSIONS_HEARTBEAT_TOUCHED == touched_before + 1
+
+
+def test_heartbeat_touch_off_restores_the_full_heartbeat_version(monkeypatch):
+    """CORR_HEARTBEAT_TOUCH_ONLY=0 must restore the pre-P3 behaviour exactly:
+    an elapsed heartbeat writes a whole new corr_objects version."""
+    stub = _StubCH()
+    monkeypatch.setattr(main, "ch", stub)
+    monkeypatch.setattr(main, "OPEN_OBJECTS", {})
+    monkeypatch.setattr(main, "CORR_VERSION_HEARTBEAT_S", 900.0)
+    monkeypatch.setattr(main, "CORR_HEARTBEAT_TOUCH_ONLY", False)
+    now = datetime.now(timezone.utc)
+    main.buffer_signal(_storm_sig("link_state_change", "core-1", offset_s=-60, now=now))
+    main.buffer_signal(_storm_sig("device_resource_anomaly", "core-1", offset_s=-55, now=now))
+    asyncio.run(main.engine_cycle())
+    assert len(stub.rows["netops.corr_objects"]) == 1
     (reg,) = main.OPEN_OBJECTS.values()
     reg["last_persist"] = now - timedelta(seconds=1000)
     main.buffer_signal(_storm_sig("link_state_change", "core-1", offset_s=-10, now=now))

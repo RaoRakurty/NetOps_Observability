@@ -20,10 +20,12 @@ reads, no IO. main.py owns tenancy resolution, persistence and buffering.
 
 from __future__ import annotations
 
+import logging
 import re
 from datetime import datetime, timezone
 
 from episodes import EpisodeDetector, EpisodeEvent
+from regex_screen import pattern_screen
 from signals import (
     EntityType,
     ModalityClass,
@@ -35,6 +37,8 @@ from signals import (
     observer_of,
 )
 from timenorm import parse_any_timestamp
+
+log = logging.getLogger("correlation")
 
 # Loss at/above this (percent) is a discrete probe_loss signal each cycle.
 PROBE_LOSS_PCT = 5.0
@@ -460,6 +464,150 @@ def _state_of(msg: str) -> str:
     if _UP_RE.search(msg):
         return "up"
     return "unknown"
+
+
+# -- P3 change B: the syslog INGEST PRE-FILTER --------------------------------
+#
+# MEASURED (docs/scale/P3_AGGREGATION_OPPORTUNITY_2026-08-29 SS1/SS6). On the
+# ratified `t-nominal-2.5k` workload 900,001 raw syslog lines yield 44,280
+# signals: 95.1 % of lines are fully parsed and then dropped, and `handle.syslog`
+# costs 789 s of engine time. Those lines are all distinct, from distinct
+# devices, so aggregation cannot touch them -- "only an early mnemonic reject
+# (not a key) can cut it".
+#
+# Per-line cost of the drop path, measured on the ratified noise mix:
+#     syslog_control_signal   35 us   (ts parse + Observer + ~15 regex/substring)
+#     port_event_signal       90 us   (its own union pre-filter, tracker 156)
+#     clock_skew_signal      0.3 us   (already short-circuits on a field test)
+# The port union is the single most expensive step and costs MORE than running
+# its twelve rules one by one -- Python's `re` cannot factor an alternation of
+# bounded-gap patterns. A literal-containment screen answers the same question
+# in ~2 us.
+#
+# THE CONTRACT. `syslog_promotable` is a NECESSARY condition for promotion by
+# `syslog_control_signal` OR `port_event_signal`. It may return True for a line
+# that then classifies as nothing (wasted microseconds, no behaviour change); it
+# must NEVER return False for a line either producer would have promoted. The
+# screen is therefore built as a UNION of per-gate necessary conditions, and it
+# fails OPEN whenever any part of it cannot be derived.
+#
+# DERIVED, NOT HAND-WRITTEN, on both halves:
+#   * the port-event half is extracted from `_PORT_EVENT_RULES` themselves by
+#     `regex_screen.pattern_screen` -- adding a rule updates the screen with it;
+#   * the control-plane half is the table below, and `test_ingest_prefilter_p3`
+#     re-derives it from `syslog_control_signal`'s OWN AST: every top-level `if`
+#     that can return a Signal must be covered (an OR needs every branch covered,
+#     an AND needs one), and an unrecognized guard shape fails the test. Adding a
+#     branch without registering its marker is RED in CI.
+#
+# ORDERING NOTE. The `device_alarm` safety net at the bottom of the chain fires
+# on SEVERITY alone, for any mnemonic. So the screen tests severity FIRST and
+# passes every warning-or-worse line unconditionally; only notice/info/debug
+# lines reach the literal scan.
+#
+# One MARKER per promotion gate of `syslog_control_signal`. Where a gate is a
+# conjunction ("LINK" in ctoken AND "UPDOWN" in ctoken) only ONE conjunct is
+# needed for soundness, and the more selective one is registered.
+_CP_GUARD_MARKERS: tuple[str, ...] = (
+    "ISISADJACENCYCHANGE", "CLNS",          # IS-IS adjacency  (CLNS ^ ADJ -> CLNS)
+    "ADJCHANGE", "ADJCHG",                  # BGP / OSPF / generic adjacency
+    "UPDOWN",                               # (LINK v LINEPROTO) ^ UPDOWN
+    "LLDP", "REMOTEPEER",                   # (LLDP ^ NEIGHBOR) v REMOTEPEER
+    "SPANTREE",                             # STP topology change
+    "NVE", "VTEP",                          # NVE v (VTEP ^ BFD)
+    "EVPN", "HMM", "DUP_HOST", "VXLAN_MAC_MOVE",   # EVPN MAC mobility
+    "HSRP", "VRRP", "STANDBY",              # FHRP state change
+    "MACFLAP", "MAC_MOVE",                  # local MAC flap / move
+)
+# The regexes those same gates test against the MESSAGE. Registered as source
+# text so the screen is derived from the identical string the gate compiles.
+_CP_GUARD_PATTERNS: tuple[str, ...] = (
+    r"\b(?:blacklisted|duplicate host|between NVE and)\b",
+    r"\b(?:is flapping between|has moved between|mac[\s_-]?move|mac[\s_-]?flap)\b",
+)
+
+
+def _build_syslog_screen() -> tuple[str, ...] | None:
+    """Every literal the screen tests, lower-cased. None = UNSCREENABLE, in
+    which case `syslog_promotable` fails open and the pre-filter is inert.
+
+    Failure is loud (SS10: no silent degradation) but never fatal: a rule whose
+    pattern this cannot read costs the optimization, not a signal.
+    """
+    lits: set[str] = {m.lower() for m in _CP_GUARD_MARKERS}
+    for source in _CP_GUARD_PATTERNS:
+        screen = pattern_screen(source)
+        if screen is None:
+            log.warning("syslog ingest pre-filter DISABLED: control-plane guard "
+                        "pattern %r cannot be screened soundly", source)
+            return None
+        lits |= screen
+    for pat, kind, _iface, _sev in _PORT_EVENT_RULES:
+        screen = pattern_screen(pat.pattern)
+        if screen is None:
+            log.warning("syslog ingest pre-filter DISABLED: port-event rule %r "
+                        "cannot be screened soundly", kind)
+            return None
+        lits |= screen
+    # Longest first: the most selective literals answer soonest, and `in` is a
+    # C substring search whose cost barely moves with the needle.
+    return tuple(sorted(lits, key=lambda x: (-len(x), x)))
+
+
+# Built at the bottom of this module, once `_PORT_EVENT_RULES` exists -- the
+# screen is derived from those rules, so it cannot be built before them.
+_SYSLOG_SCREEN_LITERALS: tuple[str, ...] | None = None
+
+PREFILTER_REJECTED = 0   # raw syslog lines the screen proved cannot promote
+PREFILTER_PASSED = 0     # raw syslog lines handed to the full classifiers
+
+
+def prefilter_counts() -> tuple[int, int]:
+    """(passed, rejected) -- exposed as corr_ingest_prefilter_total."""
+    return PREFILTER_PASSED, PREFILTER_REJECTED
+
+
+def reset_prefilter_counts() -> None:
+    """Test hook."""
+    global PREFILTER_PASSED, PREFILTER_REJECTED
+    PREFILTER_PASSED = PREFILTER_REJECTED = 0
+
+
+def syslog_promotable(ev: dict) -> bool:
+    """False only when NEITHER `syslog_control_signal` NOR `port_event_signal`
+    can possibly promote this raw line. Counted; see the contract above.
+
+    The haystack is a superset of both classifiers' own classification tokens:
+    `syslog_control_signal` reads `appname + " " + facility + " " + event_type`
+    (upper) and `message` (upper); `port_event_signal` reads the same four
+    fields joined by single spaces and capped at 2 KB. Joining with a space
+    means no marker can straddle a field boundary in either, so a marker present
+    in their token is present here -- and this one is uncapped, so truncation can
+    only make this screen MORE permissive.
+    """
+    global PREFILTER_PASSED, PREFILTER_REJECTED
+    lits = _SYSLOG_SCREEN_LITERALS
+    if lits is None:                        # fail open (see _build_syslog_screen)
+        PREFILTER_PASSED += 1
+        return True
+    tag = str(ev.get("appname") or "").upper()
+    # The generic device-alarm net (bottom of the chain) fires on severity alone.
+    sev_num = syslog_severity_num(ev, tag)
+    if sev_num is not None and sev_num <= ALARM_SEVERITY_FLOOR:
+        PREFILTER_PASSED += 1
+        return True
+    hay = " ".join((
+        str(ev.get("message") or ""),
+        tag,
+        str(ev.get("facility") or ""),
+        str(ev.get("event_type") or ""),
+    )).lower()
+    for lit in lits:
+        if lit in hay:
+            PREFILTER_PASSED += 1
+            return True
+    PREFILTER_REJECTED += 1
+    return False
 
 
 def syslog_control_signal(ev: dict, tenant: str, ingest_ts: datetime) -> Signal | None:
@@ -1070,6 +1218,11 @@ _PORT_EVENT_TEXT_CAP = 2000
 _PORT_EVENT_PREFILTER = re.compile(
     "|".join(f"(?:{pat.pattern})" for pat, _k, _i, _s in _PORT_EVENT_RULES),
     re.IGNORECASE)
+
+# P3 change B: the ingest screen is derived from BOTH classifiers' gates, so it
+# is built here -- the first point at which every input to it exists. See
+# `_build_syslog_screen` (above `syslog_control_signal`) for the contract.
+_SYSLOG_SCREEN_LITERALS = _build_syslog_screen()
 
 
 def _port_of(ev: dict) -> str:

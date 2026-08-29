@@ -84,6 +84,7 @@ from engine import (
     SeamView,
     TopologyAdjacency,
     WindowPrep,
+    _ch_dt,
     blob_cycle_begin,
     blob_cycle_end,
     cycle_hypotheses_blob,
@@ -127,8 +128,10 @@ from producers import (
     flow_sample,
     parse_event_ts,
     port_event_signal,
+    prefilter_counts,
     probe_signals,
     syslog_control_signal,
+    syslog_promotable,
     trap_control_signal,
     ts_invalid_count,
 )
@@ -706,9 +709,96 @@ CORR_LOOP_YIELD_MS = float(os.environ.get("CORR_LOOP_YIELD_MS", "50"))
 # kinds / entities / verdict / structure) or this heartbeat elapses (bounds how
 # stale signal_count/window_end may look while an incident persists unchanged).
 # 0 disables damping (legacy: persist on every content_hash change).
+# -- P3 change B: EARLY REJECTION on the syslog ingest path -------------------
+#
+# MEASURED (docs/scale/P3_AGGREGATION_OPPORTUNITY_2026-08-29 SS1/SS6): 95.1 % of
+# raw syslog lines on the ratified workload are fully parsed and then NOT
+# promoted -- 900,001 lines in, 44,280 signals out, `handle.syslog` 789 s. The
+# lines are all distinct and from distinct devices, so no aggregation key can
+# touch them; only an early reject can.
+#
+# `producers.syslog_promotable` is a NECESSARY condition for promotion by the
+# control-plane classifier or the port-event classifier, derived from those
+# classifiers' own gates (see its contract). It runs AFTER the tenant claim is
+# verified -- a forged tenant must still be refused and quarantined -- and it
+# gates ONLY those two classifiers. Everything else on the lane is untouched:
+#   * SYSLOG_RECEIVED still counts every arrival ("arrived from the bus");
+#   * `verified_tenant` still refuses + deadletters a forged claim;
+#   * `clock_skew_signal` still runs (its trigger is the `clock_skew_s` field,
+#     not the message text, and it already short-circuits in ~0.3 us);
+#   * the severity-weighted BURST detector below still sees every line, so
+#     `syslog burst` findings are bit-for-bit what they were.
+# A rejected line is therefore exactly as durable, as searchable and as
+# accounted-for as it is today -- it simply is not parsed twice to prove it
+# classifies as nothing.
+CORR_INGEST_PREFILTER = os.environ.get(
+    "CORR_INGEST_PREFILTER", "1").lower() in ("1", "true", "yes")
 CORR_VERSION_HEARTBEAT_S = float(os.environ.get("CORR_VERSION_HEARTBEAT_S", "900"))
+# -- P3 change A: HEARTBEAT TOUCH-ONLY (docs/scale/P2_STEP5_2P5K_VERDICT SS3/SS5) --
+#
+# MEASURED. On run p2-s05, `persist.decision` was 2,426 s of ~3,900 s of engine
+# time for 40,321 persisted versions, and the version anatomy of 39,388 of them
+# is: first 32 %, terminal (close/merge) 32 %, evidence growth 17 %, verdict
+# change 7 %, and 15 % UNCHANGED HEARTBEAT re-versions -- an open object
+# re-persisted whole every CORR_VERSION_HEARTBEAT_S with a material_hash that
+# did not move.
+#
+# WHAT A HEARTBEAT VERSION IS FOR (established from its consumers, not assumed):
+#   * CORR_VERSION_HEARTBEAT_S's own contract, stated just above: "bounds how
+#     stale signal_count/window_end may look while an incident persists
+#     unchanged" -- i.e. FRESHNESS of the hot projection Command Center reads.
+#   * The Go orphan-close sweep (internal/chschema/corr_reconcile.go,
+#     CorrOrphanClosePickSQL) picks `corr_current FINAL WHERE state='open' AND
+#     created_at < now() - CORR_ORPHAN_OPEN_CLOSE_HOURS` and force-closes it.
+#     Its own comment names this heartbeat as the liveness proof. That consumer
+#     reads corr_current.created_at ONLY -- drop the touch and every live
+#     incident auto-closes after 24 h.
+#   * The Command Center list, its "Updated" column and default sort, the health
+#     strip, unified search, the ticketing sweeper, verify, cloud overview --
+#     all read corr_current. None reads the version SERIES: there is no
+#     /versions route and every Go history read is ORDER BY version DESC LIMIT 1.
+#   * Replay is NOT pinned by a heartbeat. replay._select_slice and the Go
+#     timeline both resolve to the newest archive slice with
+#     `archived_version <= requested`, and a heartbeat carries -- by the
+#     definition of material_hash -- the same material content as the version
+#     before it, so there is nothing distinct to replay.
+# The operator-visible product of a heartbeat is therefore ONE fresh corr_current
+# row; the corr_objects/edges/evidence/archive half is re-derivation of content
+# whose material identity did not move.
+#
+# WHAT STILL REQUIRES A FULL VERSION (the reason KEEPALIVE exists below):
+#   * corr_objects / corr_edges / corr_evidence TTL on their OWN created_at
+#     (internal/chschema/corr_retention.go) and corr_signals_archive on the
+#     signal ts. Nothing in those TTLs consults `state`, so an open object that
+#     never re-persists eventually has NO history at all.
+#   * correlations.go's list decorate joins corr_objects for `app_impact` under a
+#     24 h created_at window, and the drift reconciler's scan has a 7-day
+#     corr_objects lookback.
+# So a heartbeat writes only corr_current, but a FULL version is still forced
+# once per CORR_VERSION_KEEPALIVE_S, which sits inside every one of those
+# horizons. On a 15-minute benchmark the keepalive never fires; on a real
+# long-open incident it turns 96 versions/day into 4.
+#
+# THE VERSION NUMBER DOES NOT MOVE on a touch. correlations.go and
+# health_score.go join corr_edges/corr_objects ON (correlation_id, version)
+# picked FROM corr_current; a projection version with no history row would
+# render edge_count=0 / grounding='none' on a live incident. Same version, fresh
+# created_at: every join stays resolvable, and the drift reconciler
+# (created_at-based, corr_reconcile.go CorrDriftSelect) stays quiet.
+CORR_HEARTBEAT_TOUCH_ONLY = os.environ.get(
+    "CORR_HEARTBEAT_TOUCH_ONLY", "1").lower() in ("1", "true", "yes")
+# The full-version floor for an object that never moves materially. Must stay
+# BELOW the shortest horizon that reads corr_objects.created_at -- the 24 h
+# app_impact decorate window in correlations.go is the binding one, then the
+# 7-day drift lookback, then the retention profile's History days.
+CORR_VERSION_KEEPALIVE_S = float(os.environ.get("CORR_VERSION_KEEPALIVE_S", "21600"))
 VERSIONS_PERSISTED = 0   # object versions written to ClickHouse (monotonic)
 VERSIONS_DAMPED = 0      # persists suppressed by the material-hash gate (monotonic)
+# P3 change A: heartbeats served by a corr_current-only touch (no corr_objects
+# version, no Evidence item, no archive slice). Disjoint from both counters
+# above -- persisted + damped + heartbeat_touch is the complete outcome set for
+# an object whose content_hash moved.
+VERSIONS_HEARTBEAT_TOUCHED = 0
 # #101: corr_current is the HOT-read source of truth (Command Center serves
 # from it), so a lost projection dual-write means a STALE incident list — that
 # must be alertable, not WARN-only. Monotonic; exposed on /metrics + /healthz,
@@ -778,6 +868,12 @@ def _wa_slot(tenant: str) -> dict:
     slot = TENANT_WA.get(tenant)
     if slot is None:
         slot = {"raw_seen": 0, "persisted": 0, "damped": 0,
+                # P3 change A: heartbeats served by a corr_current-only touch.
+                # They suppressed a corr_objects version exactly as `damped`
+                # does, so they count into the ratio below — but they are kept
+                # as their OWN key because they DID write (a projection row),
+                # and "damped" has always meant "wrote nothing".
+                "heartbeat_touch": 0,
                 "kinds": Counter(), "entities": Counter()}
         TENANT_WA[tenant] = slot
     return slot
@@ -825,7 +921,8 @@ async def _flush_tenant_write_amp(now: datetime) -> None:
         open_counts[t] = open_counts.get(t, 0) + 1
     rows = []
     for tenant, wa in TENANT_WA_ROWS.items():
-        total = wa["persisted"] + wa["damped"]
+        suppressed = wa["damped"] + wa.get("heartbeat_touch", 0)
+        total = wa["persisted"] + suppressed
         top_kind = wa["kinds"].most_common(1)
         top_entity = wa["entities"].most_common(1)
         rows.append({
@@ -835,8 +932,8 @@ async def _flush_tenant_write_amp(now: datetime) -> None:
             "window_s": int(elapsed),
             "raw_seen": wa["raw_seen"],
             "persisted": wa["persisted"],
-            "damped": wa["damped"],
-            "damping_ratio": round(wa["damped"] / total, 4) if total else 0.0,
+            "damped": suppressed,
+            "damping_ratio": round(suppressed / total, 4) if total else 0.0,
             "top_signal_kind": top_kind[0][0] if top_kind else "",
             "top_entity": top_entity[0][0] if top_entity else "",
             "open_objects": open_counts.get(tenant, 0),
@@ -2269,6 +2366,81 @@ CORR_CURRENT_FIELDS = (
     "evidence_missing", "affected", "signal_count", "node_count",
     "engine_version", "catalog_version", "merged_into",
 )
+
+
+def _current_row_fields(snap: ObjectSnapshot, version: int, state: str) -> dict:
+    """The CORR_CURRENT_FIELDS subset of `to_object_row`, built WITHOUT the row.
+
+    P3 change A. `_persist_snapshot` derives the projection row by slicing the
+    full `to_object_row(...)`, which builds the ~5.7 KB-MB `hypotheses` blob plus
+    `layer_coverage` / `app_impact` / `attribution` -- none of which corr_current
+    carries. A heartbeat touch needs only the narrow columns, so it builds only
+    those.
+
+    BYTE-IDENTICAL BY CONSTRUCTION: every expression below is copied from the
+    corresponding key of `ObjectSnapshot.to_object_row` (engine.py). That is not
+    a claim, it is a pinned test -- test_heartbeat_touch_p3.py asserts this dict
+    equals `{k: snap.to_object_row(v, s)[k] for k in CORR_CURRENT_FIELDS}` over
+    every golden snapshot fixture, so a drift in either builder is RED.
+
+    `merged_into` is deliberately absent: `to_object_row` sets it only on a
+    terminal 'merged' snapshot, and a terminal transition always takes the full
+    `_persist_snapshot` path.
+    """
+    r = snap.ranking
+    return {
+        "tenant_id": snap.tenant_id,
+        "correlation_id": snap.correlation_id,
+        "version": version,
+        "state": state,
+        "window_start": _ch_dt(snap.window_start),
+        "window_end": _ch_dt(snap.window_end),
+        "top_hypothesis": r.top_hypothesis,
+        "top_confidence": round(snap.top_confidence(), 4),
+        "verdict_tier": r.verdict_tier.value,
+        "evidence_missing": json.dumps(list(r.evidence_missing), separators=(",", ":")),
+        "affected": json.dumps(snap.affected(), separators=(",", ":"), sort_keys=True),
+        "signal_count": snap.signal_count(),
+        "node_count": len(snap.nodes),
+        "engine_version": snap.engine_ver,
+        "catalog_version": r.catalog_version,
+    }
+
+
+def _current_badges_from_snapshot(snap: ObjectSnapshot) -> dict:
+    """`_current_badges` computed off the snapshot instead of off the JSON.
+
+    P3 change A. `_current_badges` json.loads the whole hypotheses blob to read
+    four scalars off `ranking.hypotheses[0].verdict`; that blob is exactly what a
+    heartbeat touch exists to avoid building. The four scalars are plain
+    attributes of the same objects the blob is serialized FROM
+    (scoring.HypothesisScore.to_dict's "verdict" key = owner + first_steps +
+    verdict_gate.to_dict(), and verdicts.EvidenceCoverage.to_dict), so this reads
+    the source rather than the rendering:
+
+        owner          <- h.owner                        (== verdict["owner"])
+        plane_count    <- len(cov.modality_classes)      (== len(sorted(...)))
+        debug_excluded <- bool(cov.excluded_debug)       (== list(...) truthy)
+        low_authority  <- bool(cov.low_authority_probe_scopes)
+
+    `modality_coverage` is `sorted(m.value for m in modality_classes)` over a
+    frozenset, so its length is that set's cardinality -- the counts cannot
+    differ. Pinned against `_current_badges(snap.hypotheses_blob())` for every
+    golden fixture in test_heartbeat_touch_p3.py; the empty-ranking case degrades
+    to the same all-default dict `_current_badges` returns for a blob it cannot
+    parse.
+    """
+    hyps = snap.ranking.hypotheses
+    if not hyps:
+        return {"owner": "", "plane_count": 0, "debug_excluded": 0, "low_authority": 0}
+    top = hyps[0]
+    cov = top.verdict_gate.coverage
+    return {
+        "owner": str(top.owner or ""),
+        "plane_count": len(cov.modality_classes),
+        "debug_excluded": 1 if cov.excluded_debug else 0,
+        "low_authority": 1 if cov.low_authority_probe_scopes else 0,
+    }
 
 
 def _current_badges(hypotheses_blob: str) -> dict:
@@ -4010,6 +4182,82 @@ async def _emit_child_rows(table: str, snap: ObjectSnapshot, build_page,
         await _flush()
 
 
+async def _touch_current(snap: ObjectSnapshot, version: int, state: str,
+                         content_hash: str) -> None:
+    """P3 change A: the HEARTBEAT write -- the corr_current row and nothing else.
+
+    A heartbeat is, by definition, a re-persist whose `material_hash` did not
+    move: same nodes, same evidence kinds+severities per node, same edge
+    structure, same ranking labels, same owner, same verdict tier
+    (ObjectSnapshot._material_hash_uncached). What DID move is the window and its
+    instance counts -- window_start / window_end / signal_count, and
+    top_confidence within its unchanged confidence bucket. Every one of those is
+    a corr_current column, and corr_current is what every freshness consumer
+    reads (see CORR_HEARTBEAT_TOUCH_ONLY for the enumeration). So the heartbeat
+    writes exactly that row.
+
+    NOT WRITTEN, and why each is sound to omit:
+      * a corr_objects version -- its material content is unchanged and no reader
+        walks the version series (every Go history read is ORDER BY version DESC
+        LIMIT 1). The version NUMBER does not move either, so the list/health
+        joins on (correlation_id, version) still resolve to the last full
+        version's rows.
+      * corr_edges / corr_evidence -- keyed by (correlation_id, version); the
+        rows for THIS version already exist.
+      * the archive slice -- replay resolves the newest slice with
+        archived_version <= requested, and a touch mints no new version to
+        resolve.
+      * an EvidenceItem -- nothing downstream of the Decision plane is owed work.
+
+    The dedup token carries `content_hash` exactly as `_persist_snapshot`'s does,
+    so a retried touch of identical content dedups while a moved window mints a
+    fresh token. `created_at` is the server's now64(3) DEFAULT -- what
+    ReplacingMergeTree(created_at) folds on, and what the orphan-close sweep and
+    the drift reconciler read.
+
+    Failure is counted on the SAME #101 counter as the dual-write it replaces: a
+    lost touch is a stale Command Center row, self-healed by the next write and
+    force-repaired by the Go corr_current reconciler.
+    """
+    assert ch is not None
+    global PROJECTION_WRITE_FAILURES
+    _t0 = time.perf_counter() if CORR_PROFILE_STAGES else 0.0
+    tok = f"obj:{snap.correlation_id}:v{version}:{state}:{content_hash[:16]}"
+    failure: tuple[str, bool] | None = None
+    try:
+        current_row = _current_row_fields(snap, version, state)
+        # Same offload rule as the Decision write's badge build (P2 step 4d):
+        # inline for a small object, off the loop thread for a storm object.
+        current_row.update(await _decision_offload(
+            _snap_elements(snap), _current_badges_from_snapshot, snap))
+        current_row["chaos_fixture"] = _chaos_fixture_for(snap)
+        _dec_batcher = _active_decision_batcher()
+        if _dec_batcher is not None:
+            await _dec_batcher.add(
+                "netops.corr_current", [current_row],
+                member=_DecisionMember(tok=tok, correlation_id=snap.correlation_id,
+                                       version=version, tenant_id=snap.tenant_id),
+                dedup_token=f"{tok}:current")
+        elif not await ch_insert("netops.corr_current", [current_row],
+                                 dedup_token=f"{tok}:current"):
+            failure = ("clickhouse rejected insert (see preceding error log)", True)
+    except Exception as exc:  # noqa: BLE001 -- observable, non-fatal (SS10)
+        retryable = isinstance(exc, (httpx.TransportError, httpx.TimeoutException))
+        failure = (f"{type(exc).__name__}: {exc}", retryable)
+    if failure is not None:
+        PROJECTION_WRITE_FAILURES += 1
+        err, retryable = failure
+        log.warning(
+            "corr_current heartbeat touch FAILED tenant_id=%s corr_id=%s "
+            "version_id=%d retryable=%s error=%s",
+            snap.tenant_id, snap.correlation_id, version, retryable, err,
+        )
+    if CORR_PROFILE_STAGES and _t0:
+        stage_record("persist.heartbeat_touch", time.perf_counter() - _t0)
+    log.debug("corr-object %s v%d %s: heartbeat touch (material unchanged)",
+              snap.correlation_id[:8], version, state)
+
+
 async def _persist_snapshot(snap: ObjectSnapshot, version: int, state: str,
                             window: Sequence[Signal], merged_into: str = "",
                             loop_yield=_noop_yield,
@@ -5229,6 +5477,7 @@ async def _engine_cycle_inner(epoch: _EngineEpoch | None) -> None:
     now happens in `_begin_epoch`, ONCE, however many cohorts drain against it.
     """
     global LAST_GAP_HINTS, VERSIONS_PERSISTED, VERSIONS_DAMPED
+    global VERSIONS_HEARTBEAT_TOUCHED
     global LAST_CYCLE_MAX_TS
     global ENGINE_WINDOWS_REJECTED_TOTAL
     # `epoch is None` happens only when the caller had no ClickHouse to prepare
@@ -5496,6 +5745,12 @@ async def _engine_cycle_inner(epoch: _EngineEpoch | None) -> None:
                     "material": await _snap_call(snap, snap.material_hash),
                     "last_seen": now, "last_persist": now, "snapshot": snap,
                     "opened_at": now,  # #101: max_incident_age in the write-amp rollup
+                    # P3 change A: last time a FULL corr_objects version landed.
+                    # `last_persist` paces the heartbeat (touch or version);
+                    # this paces the KEEPALIVE, which is what keeps an open
+                    # object inside the history horizons (TTL, the 24 h
+                    # app_impact decorate, the 7-day drift lookback).
+                    "last_version": now,
                 }
                 # A brand-new incident: the highest-value Evidence there is.
                 await _persist_snapshot(snap, 1, "open", window,
@@ -5511,17 +5766,41 @@ async def _engine_cycle_inner(epoch: _EngineEpoch | None) -> None:
                 # freshest snapshot so merge/close always persist current truth.
                 mhash = await _snap_call(snap, snap.material_hash)
                 elapsed = (now - reg.get("last_persist", now)).total_seconds()
-                if (mhash != reg.get("material") or CORR_VERSION_HEARTBEAT_S <= 0
-                        or elapsed >= CORR_VERSION_HEARTBEAT_S):
+                material_moved = mhash != reg.get("material")
+                heartbeat_due = (CORR_VERSION_HEARTBEAT_S <= 0
+                                 or elapsed >= CORR_VERSION_HEARTBEAT_S)
+                # P3 change A: a heartbeat that is ONLY a heartbeat — material
+                # unchanged, damping on — writes the freshness row and no
+                # version. `keepalive_due` is the escape hatch that keeps a
+                # never-moving open object inside the corr_objects horizons; see
+                # CORR_HEARTBEAT_TOUCH_ONLY for the enumerated consumers.
+                keepalive_due = (
+                    (now - reg.get("last_version", reg.get("last_persist", now))
+                     ).total_seconds() >= CORR_VERSION_KEEPALIVE_S)
+                touch_only = (CORR_HEARTBEAT_TOUCH_ONLY and heartbeat_due
+                              and not material_moved
+                              and CORR_VERSION_HEARTBEAT_S > 0
+                              and not keepalive_due)
+                if touch_only:
+                    reg["last_persist"] = now
+                    # The version number does NOT move: the list/health joins
+                    # pick (correlation_id, version) from corr_current and look
+                    # the edges up in corr_edges, so the projection must keep
+                    # pointing at a version that HAS rows.
+                    await _touch_current(snap, reg["version"], "open", chash)
+                    VERSIONS_HEARTBEAT_TOUCHED += 1
+                    _wa_note_outcome(tenant, "heartbeat_touch")
+                elif material_moved or heartbeat_due:
                     reg["version"] += 1
                     reg["last_persist"] = now
+                    reg["last_version"] = now
                     # P2 step 4: the Evidence priority class is derived from the
                     # CONTENT of the version — did the material verdict move? —
                     # not from which timer fired. A heartbeat re-persist of an
                     # unchanged verdict is the lowest-value Evidence in the
                     # queue and drains last.
                     _pclass = (EVIDENCE_CLASS_DECISION
-                               if mhash != reg.get("material")
+                               if material_moved
                                else EVIDENCE_CLASS_HEARTBEAT)
                     await _persist_snapshot(snap, reg["version"], "open", window,
                                             loop_yield=_loop_yield,
@@ -8373,41 +8652,51 @@ async def handle_syslog(ev: dict) -> None:
         # anyway — two reads could straddle a second boundary and stamp two
         # signals from one line with different receive clocks.
         recv_now = datetime.now(timezone.utc)
-        try:
-            cp_sig = syslog_control_signal(ev, cp_tenant, recv_now)
-        except DeadLetter as exc:
-            DEADLETTER_COUNT += 1
-            keep_deadletter_payload("syslog", ev, exc)
-            log.warning("dead-letter (syslog): %s", exc)
-            cp_sig = None
-        if cp_sig is not None:
-            await batch_signal(cp_sig.to_ch_row())  # batched: lane=syslog
-            SYSLOG_SIGNALS += 1
-            buffer_signal(cp_sig)
-            # DEBUG, not INFO (tracker 156). This fired once per accepted
-            # signal — two lines per syslog event, ~4,000 lines/s at the GA
-            # burst rate — and every one was formatted, written to stdout, and
-            # then shipped through Vector into OpenSearch. The rate it was
-            # reporting is already exposed as SYSLOG_SIGNALS / corr metrics, so
-            # nothing observable is lost; the per-signal detail is still there
-            # at debug level when someone is actually chasing one event.
-            log.debug("control-plane signal %s: %s %s",
-                      cp_sig.kind, cp_sig.entity_id, cp_sig.attrs.get("state", ""))
-        # Port Intelligence physical-layer event (#94 P3b): transceiver/optics/
-        # DOM/FEC syslog → sig.ent.spdc evidence kinds. Independent of the
-        # control-plane classifier (a line can be one or the other, rarely both).
-        try:
-            pe_sig = port_event_signal(ev, cp_tenant, recv_now)
-        except DeadLetter as exc:
-            DEADLETTER_COUNT += 1
-            keep_deadletter_payload("port_event", ev, exc)
-            log.warning("dead-letter (port-event): %s", exc)
-            pe_sig = None
-        if pe_sig is not None:
-            await batch_signal(pe_sig.to_ch_row())  # batched: lane=syslog
-            SYSLOG_SIGNALS += 1
-            buffer_signal(pe_sig)
-            log.debug("port-event signal %s: %s", pe_sig.kind, pe_sig.entity_id)
+        # P3 change B. `syslog_promotable` is a necessary condition for BOTH
+        # classifiers below; when it is False neither can return a Signal, so
+        # neither is called. It cannot change what promotes (soundness is
+        # structural + property-tested over the ratified generator mix) and it
+        # cannot change the DeadLetter accounting either: DeadLetter is raised
+        # only from `Signal.__post_init__`, which a non-promoting line never
+        # reaches. Clock-skew and the burst detector are deliberately outside
+        # the gate.
+        promotable = (not CORR_INGEST_PREFILTER) or syslog_promotable(ev)
+        if promotable:
+            try:
+                cp_sig = syslog_control_signal(ev, cp_tenant, recv_now)
+            except DeadLetter as exc:
+                DEADLETTER_COUNT += 1
+                keep_deadletter_payload("syslog", ev, exc)
+                log.warning("dead-letter (syslog): %s", exc)
+                cp_sig = None
+            if cp_sig is not None:
+                await batch_signal(cp_sig.to_ch_row())  # batched: lane=syslog
+                SYSLOG_SIGNALS += 1
+                buffer_signal(cp_sig)
+                # DEBUG, not INFO (tracker 156). This fired once per accepted
+                # signal — two lines per syslog event, ~4,000 lines/s at the GA
+                # burst rate — and every one was formatted, written to stdout, and
+                # then shipped through Vector into OpenSearch. The rate it was
+                # reporting is already exposed as SYSLOG_SIGNALS / corr metrics, so
+                # nothing observable is lost; the per-signal detail is still there
+                # at debug level when someone is actually chasing one event.
+                log.debug("control-plane signal %s: %s %s",
+                          cp_sig.kind, cp_sig.entity_id, cp_sig.attrs.get("state", ""))
+            # Port Intelligence physical-layer event (#94 P3b): transceiver/optics/
+            # DOM/FEC syslog → sig.ent.spdc evidence kinds. Independent of the
+            # control-plane classifier (a line can be one or the other, rarely both).
+            try:
+                pe_sig = port_event_signal(ev, cp_tenant, recv_now)
+            except DeadLetter as exc:
+                DEADLETTER_COUNT += 1
+                keep_deadletter_payload("port_event", ev, exc)
+                log.warning("dead-letter (port-event): %s", exc)
+                pe_sig = None
+            if pe_sig is not None:
+                await batch_signal(pe_sig.to_ch_row())  # batched: lane=syslog
+                SYSLOG_SIGNALS += 1
+                buffer_signal(pe_sig)
+                log.debug("port-event signal %s: %s", pe_sig.kind, pe_sig.entity_id)
         # Clock-skew meta-finding (log-time standard S5/R5): Vector stamps
         # clock_skew_s on the event when the origin timestamp disagrees with the
         # receive clock beyond tolerance; here it becomes a per-device signal.
@@ -8854,6 +9143,7 @@ def _metrics_text() -> str:
         if isinstance(val, (int, float)) and not isinstance(val, bool):
             lines.append(f'corr_ingest_events{{counter="{key}"}} {val}')
     eng = h["engine_v2"]
+    ing = h["ingest"]
     lines += [
         "# TYPE corr_deadletters counter",
         f"corr_deadletters {eng['deadletter_count']}",
@@ -8873,6 +9163,19 @@ def _metrics_text() -> str:
         "# TYPE corr_versions counter",
         f'corr_versions{{outcome="persisted"}} {eng["versions_persisted"]}',
         f'corr_versions{{outcome="damped"}} {eng["versions_damped"]}',
+        # P3 change A: a heartbeat whose material_hash did not move writes the
+        # corr_current freshness row and NO corr_objects version. Disjoint from
+        # both series above; persisted+damped+heartbeat_touch is the full set of
+        # reconciliation outcomes for an object whose content_hash moved.
+        f'corr_versions{{outcome="heartbeat_touch"}} {eng["versions_heartbeat_touched"]}',
+        # P3 change B: the syslog ingest pre-filter's verdict split. A rejected
+        # share collapsing to 0 means the screen stopped screening (or the
+        # workload turned all-control-plane); a rejected share near 100 % with a
+        # flat corr_signals rate means the screen is rejecting too much.
+        "# HELP corr_ingest_prefilter_total Raw syslog lines by ingest pre-filter verdict.",
+        "# TYPE corr_ingest_prefilter_total counter",
+        f'corr_ingest_prefilter_total{{outcome="passed"}} {ing["syslog_prefilter_passed"]}',
+        f'corr_ingest_prefilter_total{{outcome="rejected"}} {ing["syslog_prefilter_rejected"]}',
         # #101: lost corr_current dual-writes = stale Command Center. Alerted
         # by CorrCurrentProjectionFailing; repaired by the Go reconciler.
         "# HELP corr_current_projection_write_failures_total corr_current projection writes lost (hot-read staleness risk).",
@@ -9500,6 +9803,8 @@ def _health_payload() -> dict:
             "open_objects": len(OPEN_OBJECTS),
             "versions_persisted": VERSIONS_PERSISTED,
             "versions_damped": VERSIONS_DAMPED,
+            # P3 change A: heartbeats served by a corr_current-only touch.
+            "versions_heartbeat_touched": VERSIONS_HEARTBEAT_TOUCHED,
             # #101: projection health + intentional-storm registry + top-K
             # write-amp of the last flushed window (bounded; full per-tenant
             # truth in netops.corr_tenant_write_amp).
@@ -9611,6 +9916,13 @@ def _health_payload() -> dict:
             "metrics_dropped_stale_ts": METRICS_DROPPED_STALE_TS,
             # Event timestamps that fell back to ingest time (producers.py).
             "event_ts_invalid": ts_invalid_count(),
+            # P3 change B: raw syslog lines the ingest pre-filter proved cannot
+            # promote (rejected) vs handed to the full classifiers (passed).
+            # passed + rejected == the lines that reached the classifier gate;
+            # it is BELOW syslog_received, which also counts lines dropped by a
+            # refused tenant claim or a disabled signal lane.
+            "syslog_prefilter_passed": prefilter_counts()[0],
+            "syslog_prefilter_rejected": prefilter_counts()[1],
             # H14: device event clocks out of bounds at the window chokepoint —
             # future clamped to arrival (a far-future head froze pruning for
             # every tenant), past counted and left to age out (see buffer_signal).

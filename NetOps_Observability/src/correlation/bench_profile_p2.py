@@ -763,6 +763,15 @@ def main_cli() -> int:
     ap.add_argument("--no-decision-offload", dest="decision_offload",
                     action="store_false",
                     help="build them on the loop thread, as before step 4d")
+    ap.add_argument("--heartbeat-ab", action="store_true",
+                    help="P3 change A: A/B one HEARTBEAT (full version vs "
+                         "corr_current touch) on real snapshots, then exit")
+    ap.add_argument("--ingest-ab", action="store_true",
+                    help="P3 change B: A/B the syslog INGEST lane (handle_syslog "
+                         "us/line, prefilter off vs on) over the ratified "
+                         "production mix, then exit")
+    ap.add_argument("--ingest-lines", type=int, default=200_000,
+                    help="lines per arm of --ingest-ab")
     ap.add_argument("--cprofile", action="store_true",
                     help="also cProfile ONE synchronous run_window (top 30)")
     ap.add_argument("--log-level", default="WARNING")
@@ -774,6 +783,10 @@ def main_cli() -> int:
     # silenced — and declared, because it IS real production cost.
     logging.getLogger("correlation").setLevel(getattr(logging, args.log_level))
     logging.getLogger().setLevel(getattr(logging, args.log_level))
+    if args.heartbeat_ab:
+        return _heartbeat_ab(args)
+    if args.ingest_ab:
+        return _ingest_ab(args)
     if args.arrivals < 0:
         args.arrivals = args.signals // 2
     if args.cohort_size < 0:
@@ -890,6 +903,208 @@ def _cprofile_run_window(args) -> str:
     s = io.StringIO()
     pstats.Stats(pr, stream=s).sort_stats("tottime").print_stats(30)
     return s.getvalue()
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# P3 change B — syslog INGEST lane A/B
+# ═══════════════════════════════════════════════════════════════════════════
+#
+# The engine profile above starts at `buffer_signal`. `handle.syslog` — 789 s of
+# the 2.5K run, 907,669 calls — is upstream of it, and on the ratified
+# `production` mix 95.1 % of those calls end in "classifies as nothing". This
+# arm measures exactly that lane: the REAL `main.handle_syslog`, over the
+# harness's own mix, with `CORR_INGEST_PREFILTER` off and on, and asserts the
+# promoted rows are byte-identical between the two arms before reporting any
+# saving. A speed-up that changed what promotes is not a speed-up.
+
+# The ratified generator mix (scripts/scale-miniladder.py `production`):
+# one full EVENT_MIX_REALISTIC table (100 slots) diluted with 1,900 noise slots.
+EVENT_MIX_NOISE = (
+    (35, "SYS-5-CONFIG_I",
+     "%SYS-5-CONFIG_I: Configured from console by admin on vty0", "info"),
+    (25, "SEC_LOGIN-5-LOGIN_SUCCESS",
+     ("%SEC_LOGIN-5-LOGIN_SUCCESS: Login Success [user: ops] [Source: "
+      "10.{oct2}.{oct3}.50] at 12:00:00 UTC"), "notice"),
+    (20, "SSH-5-SSH2_SESSION",
+     ("%SSH-5-SSH2_SESSION: SSH2 Session request from 10.{oct2}.{oct3}.9 "
+      "(tty = 0) succeeded"), "notice"),
+    (12, "SYS-6-LOGGINGHOST_STARTSTOP",
+     "%SYS-6-LOGGINGHOST_STARTSTOP: Logging to host 10.0.0.2 port 514 started", "info"),
+    (8, "SNMP-5-COLDSTART",
+     "%SNMP-5-COLDSTART: SNMP agent on host reconfigured", "notice"),
+)
+
+
+def _production_mix() -> tuple:
+    realistic = _mix_table()
+    noise = []
+    for weight, app, tpl, sev in EVENT_MIX_NOISE:
+        noise.extend([(app, tpl, sev)] * weight)
+    return realistic + tuple(noise[i % len(noise)] for i in range(1900))
+
+
+def _ingest_lines(n: int, devices: int = 2500) -> list[dict]:
+    table = _production_mix()
+    t0 = datetime(2026, 8, 29, 12, 0, 0, tzinfo=timezone.utc)
+    out = []
+    for seq in range(n):
+        app, tpl, sev = table[(seq * 7 + 1) % len(table)]
+        state = "down" if seq % 2 == 0 else "up"
+        msg = tpl.format(
+            if_n=seq % 48, state=state, State=state.capitalize(), STATE=state.upper(),
+            oct2=(seq // 251) % 251, oct3=seq % 251,
+            verb="removed" if state == "down" else "added",
+            stp_state="discarding" if state == "down" else "forwarding",
+        ) + f" [mlx seq {seq}]"
+        out.append({"hostname": f"mlx-{seq % devices}", "appname": app,
+                    "message": msg, "severity": sev, "tenant_id": "t1",
+                    "timestamp": (t0 + timedelta(milliseconds=seq)).isoformat()})
+    return out
+
+
+async def _ingest_arm(lines: list[dict], prefilter: bool) -> tuple[float, list, int]:
+    """Run every line through the REAL handle_syslog. Returns
+    (seconds, promoted rows in order, signals counted)."""
+    rows: list = []
+
+    async def _batch_signal(row, lane="syslog"):
+        rows.append(json.dumps(row, sort_keys=True, default=str))
+
+    async def _emit(**kw):
+        pass
+
+    saved = (main.CORR_INGEST_PREFILTER, main.batch_signal, main.emit,
+             main.verified_tenant, main.ch,
+             main.CORR_SIGNALS_ENABLED, main.SYSLOG_SIGNALS)
+    main.CORR_INGEST_PREFILTER = prefilter
+    main.batch_signal = _batch_signal
+    main.emit = _emit
+    # `buffer_signal` is left REAL: it is part of what a promoted line costs on
+    # this lane, and it runs in both arms for the same 10k signals, so including
+    # it keeps the baseline honest rather than flattering the delta.
+    main.verified_tenant = lambda claim, host, lane, **kw: "t1"
+    main.ch = _CHStub() if main.ch is None else main.ch
+    main.CORR_SIGNALS_ENABLED = True
+    main.SYSLOG_SIGNALS = 0
+    main.SYSLOG_BUCKET.clear()
+    try:
+        t0 = time.perf_counter()
+        for ev in lines:
+            await main.handle_syslog(ev)
+        elapsed = time.perf_counter() - t0
+        return elapsed, rows, main.SYSLOG_SIGNALS
+    finally:
+        (main.CORR_INGEST_PREFILTER, main.batch_signal, main.emit,
+         main.verified_tenant, main.ch,
+         main.CORR_SIGNALS_ENABLED, main.SYSLOG_SIGNALS) = saved
+        main.SYSLOG_BUCKET.clear()
+        main.WINDOW_BUFFER.clear()
+        main._BUFFERED_IDS.clear()
+        main._BUFFERED_ID_ORDER.clear()
+
+
+def _ingest_ab(args) -> int:
+    n = args.ingest_lines
+    lines = _ingest_lines(n)
+    print(f"P3 change B — syslog ingest A/B: {n:,} lines of the ratified "
+          f"`production` mix (2,500 devices)\n")
+    off_s, off_rows, off_sigs = asyncio.run(_ingest_arm(lines, prefilter=False))
+    on_s, on_rows, _on_sigs = asyncio.run(_ingest_arm(lines, prefilter=True))
+
+    identical = off_rows == on_rows
+    passed, rejected = producers.prefilter_counts()
+    promo = 100.0 * off_sigs / max(1, n)
+    print(f"  promoted signals      : {off_sigs:,} of {n:,} ({promo:.2f} %)")
+    print(f"  byte-identical output : {identical}  "
+          f"({len(off_rows):,} rows both arms)")
+    if not identical:
+        print("  !! THE ARMS DISAGREE — the pre-filter changed what promotes; "
+              "the timings below are meaningless")
+        return 1
+    print(f"  prefilter verdicts    : passed={passed:,} rejected={rejected:,} "
+          f"({100.0 * rejected / max(1, passed + rejected):.1f} % rejected)")
+    print()
+    print(f"  handle_syslog OFF     : {off_s:8.3f} s  "
+          f"{off_s / n * 1e6:7.2f} us/line")
+    print(f"  handle_syslog ON      : {on_s:8.3f} s  "
+          f"{on_s / n * 1e6:7.2f} us/line")
+    print(f"  saving                : {100.0 * (1 - on_s / off_s):5.1f} %  "
+          f"({(off_s - on_s) / n * 1e6:.2f} us/line)")
+    print(f"\n  extrapolated to the 2.5K run's 907,669 handle.syslog calls: "
+          f"{off_s / n * 907_669:.0f} s -> {on_s / n * 907_669:.0f} s")
+    if args.json:
+        with open(args.json, "w") as fh:
+            json.dump({"lines": n, "promoted": off_sigs,
+                       "byte_identical": identical,
+                       "prefilter_passed": passed, "prefilter_rejected": rejected,
+                       "off_s": off_s, "on_s": on_s,
+                       "off_us_per_line": off_s / n * 1e6,
+                       "on_us_per_line": on_s / n * 1e6}, fh, indent=2)
+        print(f"\nwrote {args.json}")
+    return 0
+
+
+class _CHStub:
+    async def insert(self, table, rows, dedup_token=""):
+        return None
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# P3 change A — HEARTBEAT write A/B
+# ═══════════════════════════════════════════════════════════════════════════
+#
+# 15 % of the 2.5K run's 39,388 versions were UNCHANGED heartbeat re-versions
+# (docs/scale/P2_STEP5_2P5K_VERDICT_2026-08-29 §3). This arm prices ONE such
+# heartbeat both ways on real snapshots built by the same generator the engine
+# profile uses: the full `_persist_snapshot` (blob + corr_objects + corr_current
+# + badges + archive slice + byte estimate + EvidenceItem) against
+# `_touch_current` (narrow row + badges + one insert).
+
+def _heartbeat_ab(args) -> int:
+    from catalog import builtin_catalog
+    now = datetime(2026, 8, 28, 12, 0, 0, tzinfo=timezone.utc)
+    sigs = make_signals(args.signals, args.devices, t_end=now,
+                        span_s=args.span_s, burst=args.burst)
+    snaps = engine.run_window(tuple(sigs), builtin_catalog(), (), main.ENGINE_CFG,
+                              memo=engine.ComponentMemo())
+    if not snaps:
+        print("no objects formed — raise --signals")
+        return 1
+    ch = MockCH(0.0)
+    main.ch = ch
+    main.CORR_EVIDENCE_ASYNC = False
+    main.CORR_DECISION_BATCH = False
+    main._ARCHIVE_SLICE_HASH.clear()
+
+    async def _run():
+        # Warm: the first persist of an object builds and caches its digests,
+        # exactly as the opening version does in the engine.
+        for snap in snaps:
+            await main._persist_snapshot(snap, 1, "open", tuple(sigs))
+        t0 = time.perf_counter()
+        for snap in snaps:
+            await main._persist_snapshot(snap, 2, "open", tuple(sigs))
+        full = time.perf_counter() - t0
+        t0 = time.perf_counter()
+        for snap in snaps:
+            await main._touch_current(snap, 2, "open", snap.content_hash())
+        touch = time.perf_counter() - t0
+        return full, touch
+
+    full_s, touch_s = asyncio.run(_run())
+    n = len(snaps)
+    print(f"P3 change A — heartbeat write A/B on {n} real snapshots "
+          f"({sum(len(s.nodes) for s in snaps)} nodes, "
+          f"{sum(len(s.edges) for s in snaps)} edges)\n")
+    print(f"  full version (_persist_snapshot) : {full_s / n * 1e3:8.3f} ms/heartbeat")
+    print(f"  touch        (_touch_current)    : {touch_s / n * 1e3:8.3f} ms/heartbeat")
+    print(f"  saving                           : {100.0 * (1 - touch_s / full_s):5.1f} %")
+    print("\n  rows written across the whole A/B, by table:")
+    for table in sorted(ch.rows):
+        print(f"    {table:34s} {ch.rows[table]}")
+    print("\n  (a touch writes netops.corr_current ONLY; the full version also "
+          "writes\n   corr_objects + corr_edges + corr_evidence + the archive slice)")
+    return 0
 
 
 if __name__ == "__main__":

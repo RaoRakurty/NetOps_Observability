@@ -87,13 +87,22 @@ class _Clock(datetime):
         return cls.current if tz is not None else cls.current.replace(tzinfo=None)
 
 
-def _run_sweeps(monkeypatch, sweeps, heartbeat_s: float = 60.0):
+def _run_sweeps(monkeypatch, sweeps, heartbeat_s: float = 60.0,
+                touch_only: bool | None = None):
     """Run one engine_cycle per (at, signals) sweep against a stub ClickHouse.
-    Returns (stub, final OPEN_OBJECTS registry)."""
+    Returns (stub, final OPEN_OBJECTS registry).
+
+    `touch_only` pins main.CORR_HEARTBEAT_TOUCH_ONLY (P3 change A) when given:
+    these fixtures replay an ONGOING condition, so whether an elapsed heartbeat
+    writes a corr_objects version or only a corr_current touch decides what
+    lands in the stub. Continuation/adoption itself is identical either way.
+    """
     stub = _StubCH()
     monkeypatch.setattr(main, "ch", stub)
     monkeypatch.setattr(main, "OPEN_OBJECTS", {})
     monkeypatch.setattr(main, "CORR_VERSION_HEARTBEAT_S", heartbeat_s)
+    if touch_only is not None:
+        monkeypatch.setattr(main, "CORR_HEARTBEAT_TOUCH_ONLY", touch_only)
     monkeypatch.setattr(main, "datetime", _Clock)
     main.WINDOW_BUFFER.clear()
     main._BUFFERED_IDS.clear()
@@ -148,7 +157,11 @@ def test_ongoing_condition_is_one_object_zero_tombstones(monkeypatch):
         (base + timedelta(seconds=_h(0.889)),
          _pair("churn-dev-1", base, _h(0.867))),
     ]
-    stub, open_objects = _run_sweeps(monkeypatch, sweeps)
+    # Pinned with the P3 heartbeat touch OFF: the invariant under test is that
+    # an adopted identity keeps VERSIONING one object rather than minting a
+    # tombstone, and only a full heartbeat version makes those versions visible
+    # in corr_objects at all.
+    stub, open_objects = _run_sweeps(monkeypatch, sweeps, touch_only=False)
     rows = stub.rows["netops.corr_objects"]
     assert all(r["state"] != "merged" for r in rows), \
         f"churn regression: merged tombstones persisted: {rows}"
@@ -159,6 +172,39 @@ def test_ongoing_condition_is_one_object_zero_tombstones(monkeypatch):
     assert versions == sorted(set(versions)), "versions must bump monotonically"
     assert versions[-1] >= 2, "continuation must version the SAME object"
     assert all(r["state"] == "open" for r in rows)
+
+
+def test_ongoing_condition_under_heartbeat_touch_keeps_one_identity(monkeypatch):
+    """P3 change A on the SAME #111 storm shape: adoption is unchanged, the
+    tombstone stays absent, and the ongoing condition's freshness is carried by
+    corr_current touches instead of whole corr_objects versions."""
+    base = datetime.now(timezone.utc).replace(microsecond=0)
+    sweeps = [
+        (base, _pair("churn-dev-1", base, -_h(0.978))
+         + _pair("churn-dev-1", base, -_h(0.433))),
+        (base + timedelta(seconds=_h(0.556)),
+         _pair("churn-dev-1", base, _h(0.533))),
+        (base + timedelta(seconds=_h(0.889)),
+         _pair("churn-dev-1", base, _h(0.867))),
+    ]
+    stub, open_objects = _run_sweeps(monkeypatch, sweeps, touch_only=True)
+    rows = stub.rows["netops.corr_objects"]
+    current = stub.rows["netops.corr_current"]
+    assert all(r["state"] != "merged" for r in rows), \
+        f"churn regression: merged tombstones persisted: {rows}"
+    assert len({r["correlation_id"] for r in rows}) == 1
+    assert len({r["correlation_id"] for r in current}) == 1, \
+        "the touches must land on the adopted identity, not a new one"
+    assert len(open_objects) == 1
+    assert all(r["state"] == "open" for r in rows)
+    # The material never moved (same device, same two evidence kinds), so no
+    # heartbeat version was owed — but the hot projection stayed fresh.
+    assert len(rows) == 1, "an unchanged-material sweep must not re-version"
+    assert len(current) > len(rows), "corr_current carries the freshness instead"
+    # Every projected version must exist in history: the joins in
+    # correlations.go / health_score.go pick (correlation_id, version) from
+    # corr_current and look the edges up by it.
+    assert {r["version"] for r in current} <= {r["version"] for r in rows}
 
 
 def test_distinct_conditions_keep_distinct_objects(monkeypatch):
