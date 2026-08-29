@@ -20,6 +20,15 @@ one. Changing any single value in memory.xml / system-logs.xml / init.sql /
 corr_merge_budget.go turns this file red — that is the point: these are
 measurements, not preferences, and a silent edit re-opens a 241x merge storm.
 
+A second class of assertion was added after the FIRST DEPLOY of this budget
+crash-looped ClickHouse (2026-08-29, exit 36): shrinking background_pool_size
+also shrinks `background_pool_size x background_merges_mutations_concurrency_ratio`,
+which MergeTreeSettings::sanityCheck compares every
+`number_of_free_entries_in_pool_to_*` threshold against as each table is
+attached at startup. The stock thresholds were sized for the default 32-slot
+pool and are illegal against a 12-slot one. See
+test_pool_thresholds_are_legal_against_the_configured_pool.
+
 Run:  PATH=/home/rao/.local/bin:$PATH python3 -m pytest tests/test_clickhouse_merge_budget.py -q
 """
 from __future__ import annotations
@@ -431,3 +440,162 @@ def test_no_system_log_is_enabled_without_a_ttl():
             f"system.{el.tag} is enabled with NO ttl — the #96a regression")
         assert el.tag in KEPT_LOG_TTL_DAYS, (
             f"system.{el.tag} was enabled without a pinned TTL in this test")
+
+
+# ── MergeTreeSettings::sanityCheck — the startup crash class ─────────────────
+#
+# Verified against the ClickHouse v24.8 source
+# (src/Storages/MergeTree/MergeTreeSettings.{h,cpp}):
+#
+#   * MergeTreeSettings.h declares EXACTLY THREE `number_of_free_entries_in_pool_to_*`
+#     settings — there is no fourth — with the defaults encoded below.
+#   * sanityCheck(background_pool_tasks) guards all three, each as
+#         if (threshold > background_pool_tasks) throw Exception(BAD_ARGUMENTS, ...)
+#     and runs as every MergeTree table is ATTACHED, i.e. at startup. It is a
+#     crash-loop, not a warning.
+#   * background_pool_tasks = background_pool_size
+#                             x background_merges_mutations_concurrency_ratio.
+#
+# The real operator is `>`, so a threshold exactly equal to the pool is legal.
+# These tests demand STRICTLY below: one slot of margin, and correct even if a
+# later version tightens the comparison to `>=`.
+CH_24_8_POOL_THRESHOLD_DEFAULTS = {
+    "number_of_free_entries_in_pool_to_lower_max_size_of_merge": 8,
+    "number_of_free_entries_in_pool_to_execute_mutation": 20,
+    "number_of_free_entries_in_pool_to_execute_optimize_entire_partition": 25,
+}
+
+
+def _pool_tasks() -> int:
+    """background_pool_size x background_merges_mutations_concurrency_ratio,
+    computed from memory.xml exactly as ClickHouse computes it."""
+    m = _xml("memory.xml")
+    size = int(_setting(m, "background_pool_size"))
+    ratio = int(_setting(m, "background_merges_mutations_concurrency_ratio"))
+    return size * ratio
+
+
+def _merge_tree_defaults() -> dict[str, int]:
+    """The server-wide <merge_tree> block, with the ClickHouse 24.8 default
+    filled in for any threshold the block does not override — which is the
+    whole point: an ABSENT threshold is not a safe threshold, it is the stock
+    one, and the stock ones are what crash-looped the server."""
+    block = _xml("memory.xml").find("merge_tree")
+    configured = {}
+    if block is not None:
+        for el in block:
+            assert el.text is not None, f"<{el.tag}> in <merge_tree> has no value"
+            configured[el.tag] = int(el.text.strip())
+    return {name: configured.get(name, default)
+            for name, default in CH_24_8_POOL_THRESHOLD_DEFAULTS.items()}
+
+
+@pytest.mark.parametrize("name", sorted(CH_24_8_POOL_THRESHOLD_DEFAULTS))
+def test_pool_thresholds_are_legal_against_the_configured_pool(name):
+    """THE TEST THAT WOULD HAVE CAUGHT THE 2026-08-29 CRASH-LOOP (exit 36).
+
+    Every number_of_free_entries_in_pool_to_* threshold — whether set in
+    <merge_tree> or left at its ClickHouse default — must be below
+    background_pool_size x background_merges_mutations_concurrency_ratio, or
+    MergeTreeSettings::sanityCheck throws BAD_ARGUMENTS while attaching tables
+    and the server never starts.
+
+    Lowering background_pool_size is therefore never a one-line change.
+    """
+    pool = _pool_tasks()
+    value = _merge_tree_defaults()[name]
+    default = CH_24_8_POOL_THRESHOLD_DEFAULTS[name]
+    assert value < pool, (
+        f"{name} = {value} is not below background_pool_tasks = {pool} "
+        f"(background_pool_size x background_merges_mutations_concurrency_ratio). "
+        f"ClickHouse refuses to START in this configuration "
+        f"(MergeTreeSettings::sanityCheck -> BAD_ARGUMENTS, exit 36). "
+        + (f"The value is the ClickHouse 24.8 DEFAULT ({default}) — <merge_tree> "
+           f"in memory.xml must override it for a {pool}-slot pool."
+           if value == default else
+           f"Raise the pool or lower the threshold (24.8 default is {default})."))
+
+
+def test_pool_thresholds_keep_their_relative_ordering():
+    """Each threshold is a floor on FREE pool entries, so a HIGHER number is
+    MORE conservative. The stock ordering (8 < 20 < 25) encodes the escalation
+    as the pool fills: shrink merge sizes first, then stop mutations, then stop
+    whole-partition optimizes. Scaling the values must not scramble that."""
+    v = _merge_tree_defaults()
+    lower = v["number_of_free_entries_in_pool_to_lower_max_size_of_merge"]
+    mutate = v["number_of_free_entries_in_pool_to_execute_mutation"]
+    optimize = v["number_of_free_entries_in_pool_to_execute_optimize_entire_partition"]
+    assert lower < mutate < optimize, (
+        f"pool thresholds are out of order (lower_max_size_of_merge={lower}, "
+        f"execute_mutation={mutate}, execute_optimize_entire_partition={optimize}); "
+        "expected shrink-merges < stop-mutations < stop-optimize")
+
+
+def test_pool_thresholds_are_the_ratified_values():
+    """The exact scaled values, so a drive-by edit is a deliberate one.
+    Rationale for each is in memory.xml's <merge_tree> comment."""
+    assert _pool_tasks() == 12
+    assert _merge_tree_defaults() == {
+        "number_of_free_entries_in_pool_to_lower_max_size_of_merge": 4,
+        "number_of_free_entries_in_pool_to_execute_mutation": 6,
+        "number_of_free_entries_in_pool_to_execute_optimize_entire_partition": 8,
+    }
+
+
+def test_idle_consolidation_pass_is_not_gated_shut():
+    """The per-table min_age_to_force_merge_seconds / _on_partition_only pair
+    IS the merge that number_of_free_entries_in_pool_to_execute_optimize_entire_partition
+    gates — the 24.8 setting description names that exact pair. Set the
+    threshold at or above the pool and the consolidation pass can never obtain
+    a slot, so the small parts the merge cap leaves behind are never folded:
+    the budget would be half-applied and silently so."""
+    pool = _pool_tasks()
+    thr = _merge_tree_defaults()[
+        "number_of_free_entries_in_pool_to_execute_optimize_entire_partition"]
+    assert thr < pool, "the idle consolidation pass can never be scheduled"
+    assert thr <= (pool * 3) // 4, (
+        f"execute_optimize_entire_partition={thr} demands more than 75 % of a "
+        f"{pool}-slot pool be free; the forced consolidation would rarely run")
+
+
+def test_no_table_overrides_a_pool_threshold_in_init_sql():
+    """sanityCheck runs on the EFFECTIVE per-table settings, so a per-table
+    override in a CREATE ... SETTINGS clause can crash-loop the server just as
+    a bad server default can — and it would bypass the <merge_tree> block this
+    file checks."""
+    sql = _init_sql_no_comments()
+    for name in CH_24_8_POOL_THRESHOLD_DEFAULTS:
+        assert name not in sql, (
+            f"{name} is overridden per-table in init.sql; keep pool thresholds "
+            f"in memory.xml's <merge_tree> block where they are checked against "
+            f"the configured pool")
+
+
+def test_merge_cap_does_not_trip_the_jbod_sanity_check():
+    """The other sanityCheck arm our merge cap can reach:
+
+        min_bytes_to_rebalance_partition_over_jbod > 0
+        && min_bytes_to_rebalance_partition_over_jbod
+             < max_bytes_to_merge_at_max_space_in_pool / 1024   -> throw
+
+    Its default is 0 (disabled), so capping max_bytes_to_merge_at_max_space_in_pool
+    is inert today — and the cap only LOWERS the bound versus the 150 GB stock.
+    Pinned so that enabling JBOD rebalancing later cannot silently crash-loop."""
+    jbod = "min_bytes_to_rebalance_partition_over_jbod"
+    sql = _init_sql_no_comments()
+    if jbod in sql or jbod in (CH / "memory.xml").read_text():
+        pytest.fail(
+            f"{jbod} is now configured; it must be >= "
+            f"max_bytes_to_merge_at_max_space_in_pool / 1024 for EVERY corr_* "
+            f"table (largest cap {max(MERGE_CAPS.values()) // 1024} B) or "
+            f"ClickHouse refuses to start")
+
+
+@pytest.mark.parametrize("table", sorted(MERGE_CAPS))
+def test_index_granularity_is_sane(table):
+    """sanityCheck also rejects index_granularity < 1. Cheap to assert while we
+    are pinning the rest of the startup-fatal surface."""
+    stmt = _create_stmt(table)
+    m = re.search(r"index_granularity\s*=\s*(\d+)", stmt)
+    if m:
+        assert int(m.group(1)) >= 1, f"netops.{table}: index_granularity < 1"

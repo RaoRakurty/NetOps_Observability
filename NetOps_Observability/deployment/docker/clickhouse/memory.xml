@@ -83,20 +83,80 @@
          changeable_without_restart = IncreaseOnly — a DECREASE (16 -> 6) needs
          a server restart, i.e. the next stack redeploy. -->
     <background_pool_size>6</background_pool_size>
-    <!-- ClickHouse's MergeTreeSettings::sanityCheck refuses to START when any
-         "number_of_free_entries_in_pool_to_*" threshold is >= background_pool_size
-         x background_merges_mutations_concurrency_ratio (6 x 2 = 12). The stock
-         defaults (mutation 20, optimize-entire-partition 25, lower-max-merge 8)
-         were sized for a pool of 16 and crash-looped the server on 2026-08-29
-         (exit 36). Scaled to the 12-slot pool: keep 1/2 of the pool free before a
-         mutation may run, 2/3 before an OPTIMIZE of a whole partition, and start
-         shrinking merge sizes when a third of the pool is left. -->
+    <background_merges_mutations_concurrency_ratio>2</background_merges_mutations_concurrency_ratio>
+
+    <!-- ===================================================================
+         SHRINKING THE POOL IS NOT A ONE-LINE CHANGE. READ THIS FIRST.
+
+         WHICH CHECK FIRES: MergeTreeSettings::sanityCheck(background_pool_tasks)
+         in src/Storages/MergeTree/MergeTreeSettings.cpp, called as every
+         MergeTree table is ATTACHED at startup. background_pool_tasks =
+         background_pool_size x background_merges_mutations_concurrency_ratio
+         = 6 x 2 = 12. It throws BAD_ARGUMENTS — the server never finishes
+         loading and crash-loops. THIS HAPPENED: 2026-08-29, exit 36, on the
+         first deploy of the P2 budget, because the pool went 16 -> 6 while the
+         thresholds below kept their stock values.
+
+         In v24.8 sanityCheck guards EXACTLY THREE of these (verified against
+         the 24.8 source; there is no fourth in MergeTreeSettings.h), each as
+         `if (threshold > background_pool_tasks) throw`:
+
+           setting                                    stock  here
+           number_of_free_entries_in_pool_to_lower_max_size_of_merge      8    4
+           number_of_free_entries_in_pool_to_execute_mutation            20    6
+           number_of_free_entries_in_pool_to_execute_optimize_entire_partition
+                                                                         25    8
+
+         The stock values were sized for the default 16 x 2 = 32 pool, so 20 and
+         25 both exceed a 12-slot pool. (8 did not — but it is scaled here too,
+         because leaving it alone would silently change its MEANING relative to
+         the pool.) The operator is `>`, so a threshold exactly equal to 12
+         would be legal; the contract test asserts STRICTLY below 12 anyway, to
+         keep a slot of margin and to stay correct if a future version tightens
+         the comparison.
+
+         SEMANTICS: each is a floor on FREE pool entries — "when fewer than N
+         entries are free, do NOT do X". So a HIGHER number is MORE conservative
+         (X is refused sooner as the pool fills), and the three must stay in
+         ascending order: shrink merge sizes first, then stop mutations, then
+         stop whole-partition optimizes.
+
+         WHY 4 / 6 / 8 on a 12-slot pool (stock proportions on 32 would scale to
+         3 / 7.5 / 9.4):
+
+         * lower_max_size_of_merge = 4 (33 % free) — one notch MORE conservative
+           than stock (25 % free): merges start shrinking once the pool is 2/3
+           busy. That is the direction this whole change exists to push, and it
+           is the second line of defence behind
+           max_bytes_to_merge_at_max_space_in_pool.
+         * execute_mutation = 6 (50 % free) — one notch MORE permissive than
+           stock (62.5 %). Mutations are RARE on this platform by design: the
+           retention contract is metadata-only (materialize_ttl_after_modify=0)
+           and expiry is part drops (ttl_only_drop_parts=1), so essentially the
+           only mutation is an operator-initiated one — e.g. the documented
+           `MATERIALIZE INDEX idx_archived_for` on corr_signals_archive. Those
+           must not be starved by a pool this small.
+         * execute_optimize_entire_partition = 8 (67 % free) — LOAD-BEARING for
+           the per-table half of this change, not incidental. Its own 24.8
+           description says the merge it gates "is created when set
+           min_age_to_force_merge_seconds > 0 and
+           min_age_to_force_merge_on_partition_only = true" — which is exactly
+           what init.sql now sets on all eight corr_* tables. Scaled strictly
+           from stock this would be 9; 8 is deliberately one notch lower so the
+           idle-consolidation pass can actually get a slot once a burst drains.
+           Set it too high and the small parts the merge cap leaves behind never
+           get folded at all.
+
+         Pinned by tests/test_clickhouse_merge_budget.py, which recomputes
+         pool x ratio from THIS file and re-checks every threshold — including
+         the ones left at their ClickHouse default. That test is the one that
+         would have caught the crash-loop.
+         =================================================================== -->
     <merge_tree>
+        <number_of_free_entries_in_pool_to_lower_max_size_of_merge>4</number_of_free_entries_in_pool_to_lower_max_size_of_merge>
         <number_of_free_entries_in_pool_to_execute_mutation>6</number_of_free_entries_in_pool_to_execute_mutation>
         <number_of_free_entries_in_pool_to_execute_optimize_entire_partition>8</number_of_free_entries_in_pool_to_execute_optimize_entire_partition>
-        <number_of_free_entries_in_pool_to_lower_max_size_of_merge>4</number_of_free_entries_in_pool_to_lower_max_size_of_merge>
     </merge_tree>
-    <background_merges_mutations_concurrency_ratio>2</background_merges_mutations_concurrency_ratio>
 
     <!-- MEASURED: the stock mark cache ceiling is 5,368,709,120 B = 5,120 MiB
          — larger than the ENTIRE 5,326 MiB container and 107 % of the old
