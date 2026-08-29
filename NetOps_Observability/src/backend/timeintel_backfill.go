@@ -52,7 +52,152 @@ func newIncidentTimeMetricsStore() incidentTimeMetricsStore {
 const (
 	// timeIntelBackfillLookback bounds how far back a single backfill pass scans.
 	timeIntelBackfillLookback = 30 * 24 * time.Hour
+
+	// timeIntelBackfillTag attributes this pass in system.query_log
+	// (log_comment) and routes it to the #101 `background` workload profile.
+	// It used to share `worker:cross-tenant` with the appid fusion store, which
+	// is why the 2026-08-29 storm incident took a query_log dig to pin on this
+	// worker rather than a one-line lookup.
+	timeIntelBackfillTag = "worker:timeintel-backfill"
+
+	// timeIntelBackfillBudget bounds ONE pass server-side (max_execution_time).
+	// Longer than the generic 20 s worker budget on purpose, and MEASURED rather
+	// than guessed: the repaired read still has to decompress the picked
+	// objects' hypotheses blobs, which took 17-80 s on the live storm table
+	// (2 M history rows / 757 k objects / a 48 GiB hypotheses column) depending
+	// on contention — so the inherited 20 s ceiling guaranteed a
+	// TIMEOUT_EXCEEDED every 15 minutes even after the shape was fixed.
+	//
+	// Why a long budget is acceptable HERE and nowhere near the UI: the pass is
+	// de-prioritized (#101 `background` profile, priority 2), runs every 15
+	// minutes, blocks no request, and is memory-capped at 1 GiB. It stays inside
+	// the caller's context (timeIntelBackfillPassTimeout, derived from this
+	// value rather than a hardcoded 2 minutes), and the transport timeout is
+	// derived from it too (chClientForBudget) so the classified server-side
+	// error is what surfaces instead of a Go-side "Client.Timeout exceeded".
+	//
+	// 120 s = the 79.9 s a full 20 000-row pass measured on the live storm
+	// table, plus headroom for contention. A breach is loud and self-healing: the pass
+	// is idempotent, so the next tick redoes it.
+	timeIntelBackfillBudget = 120 * time.Second
+
+	// timeIntelBackfillPassTimeout bounds the WHOLE pass (read + upserts).
+	// Derived from the read budget so the two can never invert the way the
+	// transport timeout and the read budget did before chClientForBudget.
+	timeIntelBackfillPassTimeout = timeIntelBackfillBudget + 60*time.Second
+
+	// timeIntelBackfillBlockRows / timeIntelBackfillThreads bound the WIDE part
+	// of the read. corr_objects.hypotheses is 48 GiB uncompressed / 26 KB per
+	// row average with 49 MiB outliers under a storm, so a default 8192-row
+	// block of that one column is ~256 MiB — per reading thread. Measured on
+	// the live table: default blocks/threads peaked at 1.8 GiB (and was refused
+	// at the 2 GiB cap); 1024 rows x 2 threads peaks at 447-484 MiB.
+	timeIntelBackfillBlockRows = 1024
+	timeIntelBackfillThreads   = 2
+
+	// timeIntelBackfillMaxResponseBytes bounds the JSON body this pass reads
+	// into the API process. The generic 8 MiB worker cap is a FULL PASS too
+	// small at storm size and would have turned the repaired query's first
+	// success into a truncation error — chhttp refuses a short body rather than
+	// handing back a prefix, which is right, but the answer is to size the
+	// bound, not to discover it in production.
+	//
+	// The arithmetic, measured on the live storm table over the picked set:
+	// affected 285 B + evidence_missing 376 B + top_hypothesis 31 B + ids,
+	// timestamps and JSON keys ~= 1.0 KB/row — a full 20 000-row page rendered
+	// 20,772,885 bytes (19.8 MiB) of FORMAT JSON. 64 MiB is that with ~3.2x
+	// headroom for fatter blast radii, and it is still a hard ceiling: exceed
+	// it and the pass fails loudly instead of returning a prefix.
+	timeIntelBackfillMaxResponseBytes = 64 << 20
 )
+
+// timeIntelBackfillSQL builds the backfill read. Pure so the regression test can
+// assert its bounds without a ClickHouse.
+//
+// ── 2026-08-29 storm incident (this query) ───────────────────────────────────
+//
+// The previous shape folded the ENTIRE corr_objects history to find each
+// object's latest version:
+//
+//	SELECT tenant_id, correlation_id, version, window_start
+//	  FROM netops.corr_objects
+//	 ORDER BY tenant_id, correlation_id, version DESC
+//	 LIMIT 1 BY tenant_id, correlation_id
+//
+// with the lookback applied OUTSIDE that subquery — so the fold's cost was the
+// whole table, not the window, and the outer wide read was keyed on
+// (correlation_id, version) without the leading tenant_id, i.e. off the primary
+// key prefix. At 2 M history rows every 15-minute pass read ~4 M rows / 45 GiB
+// and peaked at 1.8 GiB before ClickHouse refused an allocation that would have
+// taken it to 2.29 GiB, past the 2 GiB per-query cap: MEMORY_LIMIT_EXCEEDED or
+// TIMEOUT_EXCEEDED on EVERY pass, so incident_time_metrics simply stopped being
+// written for the duration of the storm.
+//
+// Three changes, none of which move the result set:
+//
+//  1. The latest version comes from netops.corr_current — the #100 hot
+//     projection, one narrow row per object, maintained by the engine's
+//     dual-write and repaired hourly by corr_current_reconcile.go. That is the
+//     same "latest version" the old fold computed, by the more correct key
+//     (ReplacingMergeTree(created_at): an engine restart resets the in-memory
+//     version counter, so max(version) is not reliably the newest write).
+//     Cost drops from O(history) to O(open objects), with no sort of a wide
+//     table at all.
+//  2. A non-narrowing `created_at` bound on the history read, matching
+//     ai_datasource.go's ListProblemsInWindow: corr_objects is partitioned on
+//     toYYYYMMDD(created_at) (chschema/corr_repartition.go), so this is what
+//     lets ClickHouse prune partitions instead of touching the whole table.
+//     It is widened by corrPartitionSkewSlackSeconds for exactly the reason
+//     documented there — window_start is device event time, created_at is
+//     engine wall time.
+//  3. The key tuple leads with tenant_id, so the IN-lookup can use the
+//     corr_objects primary key prefix (tenant_id, correlation_id, version).
+//
+// Residual, stated honestly rather than papered over: the picked objects are
+// scattered across the correlation_id (UUID) key space, so once the lookback is
+// wider than the retained history the wide `hypotheses` read still touches most
+// granules. That is why this call also carries max_block_size / max_threads /
+// max_memory_usage — containment for a read whose lower bound is set by the
+// blob column, not by the query shape.
+func timeIntelBackfillSQL(lookbackSeconds, rowCap int) string {
+	win := intToString(lookbackSeconds)
+	// Non-narrowing: an object is persisted at or after its window opens, so
+	// window_start >= X implies created_at >= X for any clock skew under a day.
+	created := intToString(lookbackSeconds + corrPartitionSkewSlackSeconds)
+	return `
+WITH picked AS (
+     SELECT tenant_id, correlation_id, version, window_start
+       FROM netops.corr_current FINAL
+      WHERE window_start >= now() - INTERVAL ` + win + ` SECOND
+      ORDER BY window_start ASC
+      LIMIT ` + intToString(rowCap) + `
+)
+SELECT toString(o.tenant_id)      AS tenant_id,
+       toString(o.correlation_id) AS correlation_id,
+       ` + chschema.ISO("o.window_start") + ` AS window_start,
+       ` + chschema.ISO("o.created_at") + `   AS created_at,
+       o.verdict_tier             AS verdict_tier,
+       o.top_confidence           AS top_confidence,
+       o.top_hypothesis           AS top_hypothesis,
+       o.evidence_missing         AS evidence_missing,
+       o.affected                 AS affected,
+       o.state                    AS state,
+       JSONExtractString(o.hypotheses,'ranking','hypotheses',1,'verdict','owner') AS owner,
+       JSONExtractString(o.hypotheses,'grounding_context','seams',1,'seam_type')  AS seam_type
+  FROM netops.corr_objects AS o
+ WHERE o.created_at >= now() - INTERVAL ` + created + ` SECOND
+   AND (o.tenant_id, o.correlation_id, o.version) IN (
+       SELECT tenant_id, correlation_id, version FROM picked)
+ FORMAT JSON`
+	// NO outer ORDER BY. The row LOOP below upserts each snapshot independently,
+	// keyed by (tenant, correlation, calc version), so iteration order cannot
+	// change what is stored — while sorting the result set forces the reader to
+	// hold blocks of the wide hypotheses column alive across the whole scan.
+	// Measured on the live storm table with identical settings: 971 MiB peak
+	// with the ORDER BY (and a MEMORY_LIMIT_EXCEEDED at the 1 GiB ceiling)
+	// versus 501 MiB without it. The selection is unaffected — the cap and its
+	// ordering live in `picked`, which is where the LIMIT is.
+}
 
 // backfillIncidentTimeMetrics scans corr objects across ALL tenants (worker scope)
 // and upserts one computed snapshot per object, each stamped + RLS-written under
@@ -70,40 +215,29 @@ func (s *server) backfillIncidentTimeMetrics(ctx context.Context, lookback time.
 	// the whole hypotheses blob per object — at scale the blobs would blow past the
 	// read cap and truncate. tenant_id leads so each row is written to its own scope.
 	//
-	// Bounded read (2026-07-09 incident, part 2): even JSONExtractString(o.hypotheses)
-	// through corr_objects_latest forces the ~5.7KB blob through the view's full-table
-	// LIMIT-1-BY sort on every ticker run. Fold narrow keys first; extract from the
-	// blob only for the ≤cap picked (id, version) pairs.
-	sql := `
-WITH picked AS (
-     SELECT correlation_id, version, window_start FROM (
-          SELECT tenant_id, correlation_id, version, window_start
-            FROM netops.corr_objects
-           ORDER BY tenant_id, correlation_id, version DESC
-           LIMIT 1 BY tenant_id, correlation_id
-     )
-      WHERE window_start >= now() - INTERVAL ` + intToString(secs) + ` SECOND
-      ORDER BY window_start ASC
-      LIMIT ` + intToString(timeIntelBackfillCap) + `
-)
-SELECT toString(o.tenant_id)      AS tenant_id,
-       toString(o.correlation_id) AS correlation_id,
-       ` + chschema.ISO("o.window_start") + ` AS window_start,
-       ` + chschema.ISO("o.created_at") + `   AS created_at,
-       o.verdict_tier             AS verdict_tier,
-       o.top_confidence           AS top_confidence,
-       o.top_hypothesis           AS top_hypothesis,
-       o.evidence_missing         AS evidence_missing,
-       o.affected                 AS affected,
-       o.state                    AS state,
-       JSONExtractString(o.hypotheses,'ranking','hypotheses',1,'verdict','owner') AS owner,
-       JSONExtractString(o.hypotheses,'grounding_context','seams',1,'seam_type')  AS seam_type
-  FROM netops.corr_objects AS o
- WHERE (o.correlation_id, o.version) IN (SELECT correlation_id, version FROM picked)
- ORDER BY o.window_start ASC
- FORMAT JSON`
-	rows, err := chWorkerQuery(ctx, sql)
+	// Bounded read: see timeIntelBackfillSQL for the shape and the two incidents
+	// (2026-07-09 #100, 2026-08-29 storm) that produced it.
+	rows, err := chWorkerQueryTuned(ctx, chWorkerRead{
+		SQL:      timeIntelBackfillSQL(secs, timeIntelBackfillCap),
+		Tag:      timeIntelBackfillTag,
+		Budget:   timeIntelBackfillBudget,
+		MaxBytes: timeIntelBackfillMaxResponseBytes,
+		Settings: map[string]string{
+			// Bound the WIDE half of the read: hypotheses is the only column
+			// whose per-block memory is measured in hundreds of MiB.
+			"max_block_size": intToString(timeIntelBackfillBlockRows),
+			"max_threads":    intToString(timeIntelBackfillThreads),
+		},
+	})
 	if err != nil {
+		// LOUD (CLAUDE.md §10): a refused read must never be indistinguishable
+		// from "no objects in the window". The caller propagates the error —
+		// the ticker logs it, the POST handler answers 502 — and NOTHING here
+		// returns an empty-but-successful pass.
+		logWarn("timeintel", "clickhouse read FAILED — no snapshots written this pass", map[string]any{
+			"lookback": lookback.String(), "cap": timeIntelBackfillCap,
+			"tag": timeIntelBackfillTag, "err": err.Error(),
+		})
 		return 0, err
 	}
 	now := time.Now().UTC()
@@ -191,7 +325,7 @@ func (s *server) startIncidentTimeMetricsBackfill(ctx context.Context) {
 			case <-ctx.Done():
 				return
 			case <-t.C:
-				cctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
+				cctx, cancel := context.WithTimeout(ctx, timeIntelBackfillPassTimeout)
 				if _, err := s.backfillIncidentTimeMetrics(cctx, timeIntelBackfillLookback); err != nil {
 					log.Printf("timeintel backfill: %v", err)
 				}

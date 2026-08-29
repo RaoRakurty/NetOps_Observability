@@ -35,15 +35,81 @@ const chDDLBudget = 10 * time.Second
 // more than any single-tenant read and is not blocking a user.
 const chWorkerBudget = 20 * time.Second
 
+// chWorkerReadMemoryBytes is the EXPLICIT per-query server-side memory ceiling
+// for a background worker read (log_comment `worker:*`).
+//
+// Why state it per query rather than lean on the server default (2026-08-29
+// storm incident): the default profile's max_memory_usage is 2 GiB and the
+// `background` settings profile is the same 2 GiB, so a worker read that grows
+// with table size — the timeintel backfill's corr_objects fold — was allowed to
+// climb to 1.8 GiB before ClickHouse refused it, on a box whose whole
+// per-server budget is 4 GiB. One worker could therefore price out every
+// interactive query beside it and still fail itself.
+//
+// The arithmetic, stated so it can be re-checked: server cap 4 GiB; at most two
+// worker lanes run concurrently (the reconciler ticker and the backfill
+// ticker), so 2 x 1 GiB = 2 GiB worst case, leaving 2 GiB for the hot UI lane
+// (whose own profile caps it at 1 GiB). Measured headroom: the heaviest healthy
+// worker read in 24 h of system.query_log peaked at 310 MiB
+// (worker:corr-current-reconcile), and the repaired backfill at 447-484 MiB.
+//
+// A breach is LOUD by construction: ClickHouse returns MEMORY_LIMIT_EXCEEDED,
+// chhttp classifies it, and every worker caller propagates the error instead of
+// returning an empty result set (CLAUDE.md §10 — no silent failures).
+const chWorkerReadMemoryBytes = 1 << 30 // 1 GiB
+
+// chWorkerReadGuards returns the per-query containment settings for a read
+// attributed to tag. Only `worker:*` reads are tightened: an interactive read
+// already runs under the hot_ui / default profiles, and silently shrinking an
+// operator-facing query's ceiling would trade one silent failure for another.
+func chWorkerReadGuards(tag string) map[string]string {
+	if !strings.HasPrefix(tag, "worker:") {
+		return nil
+	}
+	return map[string]string{"max_memory_usage": strconv.Itoa(chWorkerReadMemoryBytes)}
+}
+
+// chMergeSettings overlays extra onto base without mutating either. Nil-safe on
+// both sides; extra wins on a key collision so a caller can tighten (never
+// loosen silently — a loosening caller has to say so at its own call site).
+func chMergeSettings(base, extra map[string]string) map[string]string {
+	if len(base) == 0 && len(extra) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(base)+len(extra))
+	for k, v := range base {
+		out[k] = v
+	}
+	for k, v := range extra {
+		out[k] = v
+	}
+	return out
+}
+
 // chClientFor builds a client for an explicit endpoint. Credentials come from
 // the environment; the endpoint is a parameter because converge paths address
 // ClickHouse before the process-wide default is meaningful.
 func chClientFor(base string) *chhttp.Client {
+	return chClientForBudget(base, chDDLBudget)
+}
+
+// chClientForBudget is chClientFor with the transport timeout DERIVED from the
+// statement's server-side budget.
+//
+// The inversion this fixes (2026-08-29 storm incident, second defect): every
+// ClickHouse call shared one 12 s HTTP timeout (chDDLBudget + 2 s) while the
+// worker lane asked ClickHouse for up to 20 s of execution. A slow worker read
+// was therefore ALWAYS cut off by the Go client first — the caller logged
+// "Client.Timeout exceeded" and the real, classified server answer
+// (MEMORY_LIMIT_EXCEEDED, in the incident) arrived nowhere. The transport must
+// outlive the budget it is transporting, or the whole classification apparatus
+// in chhttp is unreachable for exactly the queries that need it.
+func chClientForBudget(base string, budget time.Duration) *chhttp.Client {
 	return &chhttp.Client{
 		Base:     base,
 		User:     envOr("CLICKHOUSE_USER", "netops"),
 		Password: os.Getenv("CLICKHOUSE_PASSWORD"),
-		HTTP:     backendHTTPClient(chDDLBudget + 2*time.Second),
+		HTTP:     backendHTTPClient(budget + 2*time.Second),
 	}
 }
 
@@ -248,13 +314,17 @@ func chSelect(ctx context.Context, scope, sql string, comment ...string) ([]map[
 	}
 	// F-27's execution guards are applied by chhttp for every caller now, rather
 	// than by each site remembering to call chApplyGuards.
-	body, err := chClientFor(envOr("CLICKHOUSE_URL", "http://clickhouse:8123")).Exec(ctx, chhttp.Request{
+	body, err := chClientForBudget(envOr("CLICKHOUSE_URL", "http://clickhouse:8123"), chWorkerBudget).Exec(ctx, chhttp.Request{
 		SQL:        sql,
 		Op:         "select " + tag,
 		Scope:      scope,
 		LogComment: tag,
 		// #101 workload fairness: same profile routing as proxyClickHouse.
-		Profile:  chWorkloadProfile(tag),
+		Profile: chWorkloadProfile(tag),
+		// #100 containment: a worker read also carries an EXPLICIT memory
+		// ceiling, so a read that grows with table size fails alone and loudly
+		// instead of consuming the server budget on its way to the same error.
+		Settings: chWorkerReadGuards(tag),
 		Budget:   chWorkerBudget,
 		MaxBytes: chMaxResponseBytes,
 	})
@@ -362,16 +432,64 @@ func chWorkerExec(ctx context.Context, body string) error {
 
 // chWorkerQuery POSTs a SELECT … FORMAT JSON and returns the data rows.
 func chWorkerQuery(ctx context.Context, sql string) ([]map[string]any, error) {
+	return chWorkerQueryTuned(ctx, chWorkerRead{SQL: sql, Tag: "worker:cross-tenant"})
+}
+
+// chWorkerRead is one cross-tenant worker SELECT plus the bounds it needs.
+// A struct rather than five positional arguments because every field here is a
+// BOUND, and a bound that is easy to pass in the wrong slot is not a bound.
+// Zero values fall back to the generic worker defaults.
+type chWorkerRead struct {
+	SQL string
+	// Tag stamps system.query_log.log_comment AND selects the #101 workload
+	// profile. Give each worker read its own — the storm incident cost a
+	// query_log dig because two unrelated workers shared one tag.
+	Tag string
+	// Budget is the server-side max_execution_time; it also derives the
+	// transport timeout, so the two can no longer invert.
+	Budget time.Duration
+	// MaxBytes bounds the response body read into this process. Raise it only
+	// with the row-cap arithmetic written down at the call site.
+	MaxBytes int64
+	// Settings are extra ClickHouse settings, merged over chWorkerReadGuards.
+	Settings map[string]string
+}
+
+// chWorkerQueryTuned is chWorkerQuery with per-call ATTRIBUTION, an explicit
+// execution budget and extra server settings — for the one worker read whose
+// cost is a function of a wide history column and therefore needs both a tighter
+// read shape (see timeIntelBackfillSQL) and read-side bounds the generic worker
+// lane has no business paying for.
+//
+// tag stamps system.query_log.log_comment (#100 read-budget attribution) AND
+// selects the #101 workload profile, so a new worker read is visible in the
+// budget survey under its own name instead of hiding inside `worker:cross-tenant`.
+//
+// The guards are NOT advisory: max_execution_time (from budget) and
+// max_memory_usage (from chWorkerReadGuards, overridable via extra) are applied
+// server-side by ClickHouse, and any breach comes back as a classified chhttp
+// error — never as a short or empty result set.
+func chWorkerQueryTuned(ctx context.Context, req chWorkerRead) ([]map[string]any, error) {
+	budget := req.Budget
+	if budget <= 0 {
+		budget = chWorkerBudget
+	}
+	maxBytes := req.MaxBytes
+	if maxBytes <= 0 {
+		maxBytes = chMaxResponseBytes
+	}
 	// F-27 (execution guards + a bounded body) is now structural: chhttp applies
 	// max_execution_time and the response cap to every call, so this path cannot
 	// drift from its sibling chWorkerExec the way it once did.
-	body, err := chClientFor(envOr("CLICKHOUSE_URL", "http://clickhouse:8123")).Exec(ctx, chhttp.Request{
-		SQL:        sql,
-		Op:         "worker query",
+	body, err := chClientForBudget(envOr("CLICKHOUSE_URL", "http://clickhouse:8123"), budget).Exec(ctx, chhttp.Request{
+		SQL:        req.SQL,
+		Op:         "worker query " + req.Tag,
 		Scope:      "__all__",
-		LogComment: "worker:cross-tenant", // #100 read-budget attribution
-		Budget:     chWorkerBudget,
-		MaxBytes:   chMaxResponseBytes,
+		LogComment: req.Tag, // #100 read-budget attribution
+		Profile:    chWorkloadProfile(req.Tag),
+		Settings:   chMergeSettings(chWorkerReadGuards(req.Tag), req.Settings),
+		Budget:     budget,
+		MaxBytes:   maxBytes,
 	})
 	if err != nil {
 		return nil, err
