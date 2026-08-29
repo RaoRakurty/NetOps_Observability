@@ -154,7 +154,7 @@ ALLOWLIST: dict[tuple[str, int], str] = {
     #   scale-miniladder.py:1864 API-login probe — still `problems.append(...)`.
     #   scale-miniladder.py:2375 twin artifact read — still an explicit
     #                            `self.phase("burst", "FAIL", ...)`.
-    ("scale-miniladder.py", 266): "optional .env read; returns '' with a documented callers-decide contract",
+    ("scale-miniladder.py", 413): "optional .env read; returns '' with a documented callers-decide contract",
     # (+10-line drift 2026-08-22: the lanes-routing comment block in
     # WORKLOAD_PROFILES; all three re-read, unchanged.)
     # (+15-line drift 2026-08-22: soak-72h profile; +17 more 2026-08-23: the
@@ -184,9 +184,35 @@ ALLOWLIST: dict[tuple[str, int], str] = {
     #   scale-miniladder.py:1603 API-login probe — still `problems.append(...)`.
     #   scale-miniladder.py:2061 twin artifact read — still an explicit
     #                            `self.phase("burst", "FAIL", ...)`.
-    ("scale-miniladder.py", 1867): "preflight ingress probe; failure appended to `problems`, preflight fails on any problem",
-    ("scale-miniladder.py", 1874): "preflight API-login probe; failure appended to `problems`, preflight fails on any problem",
-    ("scale-miniladder.py", 2417): "twin-mode burst artifact read; failure returns an explicit burst-phase FAIL (tracker 152 §8.3)",
+    #
+    # Re-pinned 2026-08-29 (transient-failure retry + adaptive OS purge budget):
+    # the one bounded HTTP retry policy (`_http_transient_reason`,
+    # `_annotate_exc`, `http_retry`, `http_ingress_status`), the
+    # `cleanup_step`/`empty_purge_ev` teardown guards and the OpenSearch
+    # re-estimation block added lines above every scale-miniladder site
+    # (266->413, 1257..1373 -> 1460..1576 uniformly +203, 1867->2166,
+    # 1874->2173, 2417->2716). EVERY site was re-read at its new line and is
+    # behaviourally UNCHANGED — no handler body was touched, only code above
+    # them. RE-PIN of reviewed sites after line drift, which is the workflow
+    # this line-keyed allowlist exists to force.
+    ("scale-miniladder.py", 2166): "preflight ingress probe; failure appended to `problems`, preflight fails on any problem",
+    ("scale-miniladder.py", 2173): "preflight API-login probe; failure appended to `problems`, preflight fails on any problem",
+    ("scale-miniladder.py", 2716): "twin-mode burst artifact read; failure returns an explicit burst-phase FAIL (tracker 152 §8.3)",
+    # -- NEW 2026-08-29: Stack.api's post-retry transport handler -------------
+    # THE ONE NEW ENTRY IN THIS WAVE, and a deliberate one. `Stack.api` used to
+    # let a socket read timeout escape as a raw `TimeoutError`; on the live run
+    # p2-s012d-08290411 that unwound cleanup() and ended the run
+    # `RESIDUE LEFT: UNKNOWN (never verified)` with the fleet still standing.
+    # The call is now retried under the shared bounded policy (5 attempts,
+    # exponential backoff + full jitter) and only reaches this handler when the
+    # whole budget is spent. It is NOT a swallow: the failure is counted
+    # (`http_transport_failures`, reported in the cleanup evidence), warned by
+    # name, and returned as `(0, "transport: <exc!r>")` — a status every caller
+    # in the file already treats as "this answer is not evidence"
+    # (`devices_with_prefix` -> list ERROR -> residue UNKNOWN, never zero;
+    # `delete_devices` -> a named failure string). Escalating here instead is
+    # exactly the defect: one unreachable call must not cost the teardown.
+    ("scale-miniladder.py", 622): "post-retry API transport failure; counted + warned + returned as HTTP 0 so every caller reports it as 'not evidence' (residue UNKNOWN, never zero)",
     # -- RunLock (NEW 2026-08-29, cross-run collision guard) -----------------
     # Reviewed as a group. The lock's contract is that EVERY failure becomes a
     # refusal the caller escalates: `acquire()` returns (False, message) and
@@ -197,15 +223,15 @@ ALLOWLIST: dict[tuple[str, int], str] = {
     # tests/test_miniladder_cross_run_collision.py pins that both callers do it.
     # The two `release()` handlers and the pid probe cannot escalate at all —
     # they run on the way out (or answer a question), and each REPORTS by name.
-    ("scale-miniladder.py", 1257): "pid liveness probe: PermissionError means a LIVE process owned by another user; the True is the answer, and it refuses rather than steals",
-    ("scale-miniladder.py", 1259): "pid liveness probe fallback: warns by name and answers ALIVE (never steals a lock on an unknown error)",
-    ("scale-miniladder.py", 1271): "lock-file read: warns that the file is unreadable and returns an owner-less holder, which the caller treats as stale — reported, not silent",
-    ("scale-miniladder.py", 1300): "lock dir creation: returns (False, reason); main()/cleanup_only() die() on it — refusing to run unlocked",
-    ("scale-miniladder.py", 1331): "stale-lock unlink: returns (False, reason); caller die()s rather than racing a lock it could not clear",
-    ("scale-miniladder.py", 1338): "lock O_EXCL create: returns (False, reason); caller die()s",
-    ("scale-miniladder.py", 1343): "lock stamp write: returns (False, reason) after removing the half-written lock; caller die()s",
-    ("scale-miniladder.py", 1346): "removal of a half-written lock: warns by name; the outer handler still refuses the run",
-    ("scale-miniladder.py", 1373): "lock release on the way out: warns by name and says the next run reclaims it as stale (this pid will be dead) — nothing left to escalate to",
+    ("scale-miniladder.py", 1460): "pid liveness probe: PermissionError means a LIVE process owned by another user; the True is the answer, and it refuses rather than steals",
+    ("scale-miniladder.py", 1462): "pid liveness probe fallback: warns by name and answers ALIVE (never steals a lock on an unknown error)",
+    ("scale-miniladder.py", 1474): "lock-file read: warns that the file is unreadable and returns an owner-less holder, which the caller treats as stale — reported, not silent",
+    ("scale-miniladder.py", 1503): "lock dir creation: returns (False, reason); main()/cleanup_only() die() on it — refusing to run unlocked",
+    ("scale-miniladder.py", 1534): "stale-lock unlink: returns (False, reason); caller die()s rather than racing a lock it could not clear",
+    ("scale-miniladder.py", 1541): "lock O_EXCL create: returns (False, reason); caller die()s",
+    ("scale-miniladder.py", 1546): "lock stamp write: returns (False, reason) after removing the half-written lock; caller die()s",
+    ("scale-miniladder.py", 1549): "removal of a half-written lock: warns by name; the outer handler still refuses the run",
+    ("scale-miniladder.py", 1576): "lock release on the way out: warns by name and says the next run reclaims it as stale (this pid will be dead) — nothing left to escalate to",
     # The four 2026-08-16 chown-swallow findings (enrichment seed, processors
     # seed, appid/cloud fixtures, vuln SUDO_UID dir) were RESOLVED the same
     # day: all now route through chown_tree (repair-or-refuse), and the vuln

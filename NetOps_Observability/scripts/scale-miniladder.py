@@ -125,6 +125,7 @@ no workload and refuses an unreachable stack.
 from __future__ import annotations
 
 import argparse
+import errno
 import hashlib
 import json
 import os
@@ -163,6 +164,38 @@ DOCKER_TIMEOUT = 30          # bound EVERY docker call (16.3) — a wedged docke
 KAFKA_TOOL_TIMEOUT = 90      # JVM tools (console producer, consumer-groups)
 HTTP_TIMEOUT = 15
 MUTATION_TIMEOUT = 180       # ClickHouse ALTER DELETE settle bound
+
+# TRANSIENT-FAILURE RETRY (defect 2026-08-29, run p2-s012d-08290411). Under
+# load — the correlation engine draining a 21k backlog, ClickHouse busy — the
+# platform API's socket read timed out and a raw `TimeoutError('timed out')`
+# unwound straight out of cleanup(). The run ended
+# `RESIDUE LEFT: UNKNOWN (never verified)` with the devices still standing,
+# and the same crash had already killed a concurrent `--cleanup-only`.
+#
+# CLAUDE.md §9 requires every network call to retry with backoff + jitter, so
+# there is ONE policy here and every urllib call site uses it: five attempts,
+# exponential backoff with FULL jitter (uniform 0..ceiling — the shape that
+# actually de-synchronises retries), a per-sleep cap and a total sleeping
+# budget. Nothing retries forever and nothing retries an answer the server
+# MEANT (see `_http_transient_reason`).
+HTTP_RETRY_ATTEMPTS = int(os.environ.get("MLX_HTTP_RETRY_ATTEMPTS", "5"))
+HTTP_RETRY_BASE_S = float(os.environ.get("MLX_HTTP_RETRY_BASE_S", "0.5"))
+HTTP_RETRY_CAP_S = float(os.environ.get("MLX_HTTP_RETRY_CAP_S", "8"))
+# Wall bound on the SLEEPING of one call site (the per-attempt HTTP_TIMEOUT is
+# bounded separately). 5 attempts of 0.5/1/2/4s ceilings sleep <= 7.5s, so 30s
+# is headroom, not a second policy.
+HTTP_RETRY_TOTAL_S = float(os.environ.get("MLX_HTTP_RETRY_TOTAL_S", "30"))
+# The only statuses worth repeating: the server is saying "not now", not "no".
+HTTP_RETRY_STATUSES = frozenset({429, 502, 503, 504})
+# Transport errnos that mean "the peer was busy/absent", never "the request was
+# wrong". ECONNREFUSED covers a container mid-restart; ECONNRESET/EPIPE a proxy
+# that dropped a busy connection; ETIMEDOUT the kernel-level version of the
+# read timeout that caused the defect.
+HTTP_RETRY_ERRNOS = frozenset({
+    errno.ECONNREFUSED, errno.ECONNRESET, errno.ECONNABORTED, errno.EPIPE,
+    errno.EHOSTUNREACH, errno.ENETUNREACH, errno.ENETRESET, errno.ETIMEDOUT,
+    errno.EAGAIN,
+})
 
 # Containers whose memory growth is asserted in memflat (compose service names).
 MEM_SERVICES = [
@@ -255,6 +288,120 @@ def curl_exit_meaning(rc: int, timeout: float = 0) -> str:
     return CURL_EXIT_MEANINGS.get(rc, "unknown curl exit code — see `man curl`")
 
 
+def _http_transient_reason(exc: BaseException) -> str:
+    """Non-empty reason when `exc` is a TRANSIENT transport failure.
+
+    Deliberately NARROW (16.1 — a retry that hides a real answer is a swallowed
+    error): socket read timeouts, connection refused/reset/aborted, the
+    unreachable-network errnos, and the four server-side "try again" statuses.
+    A 4xx other than 429 is the server's considered answer about the REQUEST and
+    is never retried — repeating it cannot change it, and repeating a 404 in the
+    device purge would turn "this device is already gone" into 5x the calls.
+    """
+    if isinstance(exc, urllib.error.HTTPError):
+        # HTTPError is a URLError is an OSError — it MUST be tested first, or
+        # the errno branch below would see a status-carrying exception.
+        return f"HTTP {exc.code}" if exc.code in HTTP_RETRY_STATUSES else ""
+    if isinstance(exc, urllib.error.URLError):
+        # urllib wraps the real socket error in `.reason`; that is where the
+        # `TimeoutError('timed out')` of the 2026-08-29 crash actually lives.
+        return (_http_transient_reason(exc.reason)
+                if isinstance(exc.reason, BaseException) else "")
+    if isinstance(exc, TimeoutError):        # socket.timeout since Python 3.10
+        return "socket timeout"
+    if isinstance(exc, ConnectionError):     # refused / reset / aborted / pipe
+        return type(exc).__name__
+    if isinstance(exc, OSError) and exc.errno in HTTP_RETRY_ERRNOS:
+        return errno.errorcode.get(exc.errno, f"errno {exc.errno}")
+    return ""
+
+
+def _annotate_exc(exc: BaseException, suffix: str) -> None:
+    """Fold `suffix` into the exception's OWN message, keeping its TYPE.
+
+    The caller's `except` clauses (and the operator's traceback) must still see
+    the original class — a wrapper exception would break every `except OSError`
+    in this file — but a bare `TimeoutError('timed out')` in a log tells nobody
+    that five attempts and 7s of backoff were already spent on it.
+    """
+    if isinstance(exc, urllib.error.HTTPError):
+        exc.msg = f"{exc.msg}{suffix}"          # str(HTTPError) reads .msg
+    elif isinstance(exc, urllib.error.URLError):
+        exc.reason = f"{exc.reason}{suffix}"    # str(URLError) reads .reason
+        exc.args = (exc.reason,)
+    elif exc.args:
+        exc.args = (f"{exc.args[0]}{suffix}",) + tuple(exc.args[1:])
+    else:
+        exc.args = (suffix.strip(),)
+
+
+def http_retry(what: str, call: typing.Callable[..., typing.Any], *args: object,
+               attempts: int = HTTP_RETRY_ATTEMPTS,
+               base_s: float = HTTP_RETRY_BASE_S,
+               cap_s: float = HTTP_RETRY_CAP_S,
+               total_s: float = HTTP_RETRY_TOTAL_S) -> typing.Any:
+    """Run `call(*args)` under the ONE bounded retry policy (§9).
+
+    Backoff is exponential with FULL jitter: sleep uniform(0, min(cap,
+    base * 2**(n-1))), clamped to whatever is left of the total sleeping
+    budget. Every retry is LOGGED with the attempt number, the exception and
+    the delay (16.1) — a silent retry is indistinguishable from a hang, which
+    is the failure mode this harness exists to make impossible.
+
+    Only `_http_transient_reason` failures are retried; everything else is
+    re-raised on the first attempt, untouched. Once the budget is spent the
+    ORIGINAL exception is re-raised, its message carrying the attempt count.
+
+    IDEMPOTENCE. Every call site routed through here is safe to repeat: GET and
+    the device DELETE by construction, and POST /api/devices because the
+    handler keys the write by the caller's id — `handleDevices` calls
+    `s.discovery.Upsert(d)` (src/backend/main.go:2368) and Upsert stores by
+    `d.ID` (src/backend/internal/discovery/discovery.go:569-590,
+    `store.Put(d)` + `a.cache[d.ID] = d`), so a repeated create OVERWRITES the
+    same row and can never manufacture a second device. Callers that are not
+    idempotent must not use this helper.
+    """
+    attempts = max(1, attempts)
+    slept = 0.0
+    for attempt in range(1, attempts + 1):
+        try:
+            return call(*args)
+        except Exception as exc:  # classified below; anything else re-raises
+            reason = _http_transient_reason(exc)
+            if not reason:
+                raise
+            left = total_s - slept
+            if attempt >= attempts or left <= 0:
+                _annotate_exc(
+                    exc, f" [{what}: gave up after {attempt} attempt(s), "
+                         f"{slept:.1f}s of backoff]")
+                warn(f"{what}: {reason} — GIVING UP after {attempt} "
+                     f"attempt(s) and {slept:.1f}s of backoff ({exc!r})")
+                raise
+            ceiling = min(cap_s, base_s * (2 ** (attempt - 1)))
+            delay = min(random.uniform(0.0, ceiling), left)
+            warn(f"{what}: {reason} on attempt {attempt}/{attempts} "
+                 f"({exc!r}) — retrying in {delay:.2f}s")
+            time.sleep(delay)
+            slept += delay
+    # Unreachable: the loop either returns or raises.
+    raise RuntimeError(f"{what}: retry loop fell through")
+
+
+def http_ingress_status(base_url: str) -> int:
+    """GET `base_url`/ under the retry policy. Raises on a FINAL failure — the
+    callers of this one (preflight, --cleanup-only) must refuse a stack they
+    cannot see, so an unreachable ingress stays an exception."""
+    url = base_url.rstrip("/") + "/"
+
+    def once() -> int:
+        req = urllib.request.Request(url)
+        with urllib.request.urlopen(req, timeout=HTTP_TIMEOUT) as r:
+            return int(r.status)
+
+    return int(http_retry(f"GET {url}", once))
+
+
 def env_get(env_file: str, key: str) -> str:
     """First KEY= value from the compose .env. Missing file/key -> '' (callers
     decide whether empty is fatal)."""
@@ -305,6 +452,10 @@ class Stack:
         self.tls = "compose.tls.yml" in compose_files
         self.token = ""
         self._cids: dict[str, str] = {}
+        # Every API call that exhausted its retries. Counted, not hidden: a run
+        # whose teardown fought the transport is a different run from one that
+        # did not, and the report says so.
+        self.http_transport_failures = 0
 
     # -- containers ---------------------------------------------------------
     def cid(self, service: str) -> str:
@@ -409,15 +560,52 @@ class Stack:
         req = urllib.request.Request(
             f"{self.base_url}/api/auth/login", data=body,
             headers={"Content-Type": "application/json"})
-        with urllib.request.urlopen(req, timeout=HTTP_TIMEOUT) as r:
-            tok = json.load(r).get("token", "")
+        # Retried like every other call (§9): a login that times out because
+        # the box is busy is not a credential problem, and it used to abort a
+        # whole teardown. It stays RAISING on a final failure — every caller
+        # (preflight, --cleanup-only, the 401 re-login) treats "cannot log in"
+        # as a refusal, not as data.
+        tok = http_retry("POST /api/auth/login", self._login_once, req)
         if not tok:
             raise RuntimeError("API login returned no token (password rotated since install?)")
         self.token = tok
 
+    @staticmethod
+    def _login_once(req: urllib.request.Request) -> str:
+        with urllib.request.urlopen(req, timeout=HTTP_TIMEOUT) as r:
+            return str(json.load(r).get("token", ""))
+
+    @staticmethod
+    def _api_once(req: urllib.request.Request) -> tuple[int, object]:
+        with urllib.request.urlopen(req, timeout=HTTP_TIMEOUT) as r:
+            raw = r.read()
+            try:
+                return r.status, json.loads(raw) if raw else {}
+            except json.JSONDecodeError:
+                return r.status, raw.decode(errors="replace")
+
     def api(self, method: str, path: str, body: dict | None = None) -> tuple[int, object]:
         """Authenticated API call; re-logins ONCE on 401 (1h token TTL vs
-        multi-phase runs). Returns (status, parsed-json-or-text)."""
+        multi-phase runs). Returns (status, parsed-json-or-text).
+
+        TRANSIENT FAILURES ARE RETRIED, then REPORTED — never raised (defect
+        2026-08-29). A socket read timeout used to escape this method as a raw
+        `TimeoutError`, unwind cleanup and end the run with
+        `RESIDUE LEFT: UNKNOWN (never verified)`. It now goes through the one
+        bounded policy (`http_retry`) and, if the budget is spent, comes back
+        as `(0, "transport: ...")`.
+
+        That status is not a swallow (16.1): every caller in this file already
+        reads a non-2xx as "this answer is not evidence" — `devices_with_prefix`
+        turns it into a list ERROR (residue UNKNOWN, never zero, F-69),
+        `delete_devices` into a named failure string — and the exception's own
+        repr rides in the body. What changes is that ONE unreachable call no
+        longer costs the whole teardown.
+
+        Retry safety: see `http_retry`'s IDEMPOTENCE note — POST /api/devices
+        upserts by the caller's id (src/backend/main.go:2368), so a repeated
+        create cannot make a second device.
+        """
         for attempt in (0, 1):
             data = json.dumps(body).encode() if body is not None else None
             req = urllib.request.Request(
@@ -425,17 +613,19 @@ class Stack:
                 headers={"Authorization": f"Bearer {self.token}",
                          "Content-Type": "application/json"})
             try:
-                with urllib.request.urlopen(req, timeout=HTTP_TIMEOUT) as r:
-                    raw = r.read()
-                    try:
-                        return r.status, json.loads(raw) if raw else {}
-                    except json.JSONDecodeError:
-                        return r.status, raw.decode(errors="replace")
+                return http_retry(f"{method} {path}", self._api_once, req)
             except urllib.error.HTTPError as e:
                 if e.code == 401 and attempt == 0:
                     self.login()
                     continue
                 return e.code, e.read().decode(errors="replace")[:300]
+            except (urllib.error.URLError, OSError) as exc:
+                # Reported, not swallowed: the caller sees status 0 and the
+                # exception, and every caller treats it as "not evidence".
+                self.http_transport_failures += 1
+                warn(f"{method} {path}: transport FAILED after retries "
+                     f"({exc!r}) — reported as HTTP 0, not raised")
+                return 0, f"transport: {exc!r}"
         return 0, "unreachable"
 
     # -- Kafka --------------------------------------------------------------
@@ -1014,6 +1204,19 @@ OS_PURGE_BUDGET_BASE_S = float(os.environ.get("MLX_OS_PURGE_BUDGET_BASE_S", "60"
 OS_PURGE_SECONDS_PER_DOC = float(
     os.environ.get("MLX_OS_PURGE_SECONDS_PER_DOC", "0.0005"))
 OS_PURGE_BUDGET_MAX_S = float(os.environ.get("MLX_OS_PURGE_BUDGET_MAX_S", "10800"))
+# ADAPTIVE BUDGET (defect 2026-08-29, /var/tmp/scale-runs/cleanup-only-08290543.log).
+# The estimate above assumes 2,000 docs/s (`OS_PURGE_SECONDS_PER_DOC`). On a
+# LOADED box — engine draining, ClickHouse busy — the same delete_by_query ran
+# at ~1,000 docs/s: the 198s budget expired with 81,001 of 276,001 docs still
+# there while the server-side task was working perfectly well, and the harness
+# reported residue it had merely stopped waiting for. So the deadline is now
+# re-estimated from the MEASURED rate once two counts exist, with a safety
+# factor, and only the HARD cap or a genuine STALL ends the wait.
+OS_PURGE_ETA_SAFETY = float(os.environ.get("MLX_OS_PURGE_ETA_SAFETY", "1.5"))
+# Consecutive polls whose count did NOT decrease before the purge is declared
+# stalled. Three (not one) because delete_by_query's progress is visible only
+# after a refresh interval, so a single flat poll is normal.
+OS_PURGE_STALL_POLLS = int(os.environ.get("MLX_OS_PURGE_STALL_POLLS", "3"))
 OS_PURGE_POLL_S = float(os.environ.get("MLX_OS_PURGE_POLL_S", "30"))
 OS_SYSLOG_INDEX = "netops-syslog-*"
 
@@ -1449,6 +1652,47 @@ class InterruptGuard:
         self.in_cleanup = False
 
 
+def cleanup_step(name: str, problems: list[str],
+                 fn: typing.Callable[..., typing.Any], *args: object,
+                 default: typing.Any = None, **kwargs: object) -> typing.Any:
+    """Run ONE teardown step so that its final failure is loud but not fatal.
+
+    Cleanup is a sequence of independent steps — devices, then ClickHouse, then
+    OpenSearch — and each one is worth attempting whatever happened to the
+    previous. On 2026-08-29 the first of them raised a `TimeoutError` from the
+    API client and took the whole teardown with it: no ClickHouse purge, no
+    OpenSearch purge, no re-verify, and a final line reading
+    `RESIDUE LEFT: UNKNOWN (never verified)`.
+
+    A step that fails here is RECORDED in `problems` and warned by name (16.1
+    — this is reporting, not `|| true`), the caller's phase goes FAIL on it,
+    and the next step still runs. `CleanupAborted` and `KeyboardInterrupt` are
+    the operator talking and always propagate.
+    """
+    try:
+        return fn(*args, **kwargs)
+    except (CleanupAborted, KeyboardInterrupt):
+        raise
+    except Exception as exc:  # noqa: BLE001 — recorded as a problem, never hidden
+        problems.append(
+            f"teardown step {name!r} FAILED after its retries ({exc!r}) — the "
+            f"remaining steps still ran; residue below is the RE-VERIFIED count")
+        warn(f"cleanup: step {name!r} raised {exc!r} — recorded as a problem; "
+             f"continuing with the next step")
+        return default
+
+
+def empty_purge_ev(prefix: str = "", budget_s: float = 0.0,
+                   list_error: str = "") -> dict:
+    """The purge evidence skeleton — also what a purge STEP that raised leaves
+    behind, so a failed step reads as "nothing verified" rather than KeyErrors
+    in the report."""
+    return {"prefix": prefix, "budget_s": budget_s, "passes": 0,
+            "deleted": 0, "delete_failed": 0, "first_delete_error": "",
+            "list_error": list_error, "remaining": -1, "verified_zero": False,
+            "out_of_budget": False}
+
+
 def devices_with_prefix(stack: Stack, prefix: str,
                         page_limit: int = DEVICE_PAGE_LIMIT,
                         max_pages: int = DEVICE_PAGE_MAX_PAGES,
@@ -1563,10 +1807,7 @@ def purge_devices(stack: Stack, prefix: str, budget_s: float,
     """
     t0 = time.monotonic()
     deadline = t0 + max(1.0, budget_s)
-    ev: dict = {"prefix": prefix, "budget_s": budget_s, "passes": 0,
-                "deleted": 0, "delete_failed": 0, "first_delete_error": "",
-                "list_error": "", "remaining": -1, "verified_zero": False,
-                "out_of_budget": False}
+    ev: dict = empty_purge_ev(prefix, budget_s)
     targets = list(dict.fromkeys(str(i) for i in seed_ids))
     # A stack that cannot answer at all (the preflight-refusal case: nothing was
     # ever created) must not burn the whole budget retrying. Once we have seen
@@ -1631,21 +1872,29 @@ def purge_devices(stack: Stack, prefix: str, budget_s: float,
 def purge_telemetry(stack: Stack, prefix: str) -> tuple[dict, list[str]]:
     """ClickHouse corr_signals + OpenSearch syslog rows for `prefix`, verified.
     Returns (evidence, problems) — problems are printed by the caller."""
-    ev: dict = {}
+    ev: dict = {"ch_signals_left": -1}
     problems: list[str] = []
-    ok, out = stack.ch_mutation(
-        f"ALTER TABLE netops.corr_signals DELETE WHERE entity_id LIKE '%{prefix}%'")
-    if not ok:
-        problems.append(f"ClickHouse corr_signals purge failed: {out}")
-    okc, cnt = stack.ch(
-        f"SELECT count() FROM netops.corr_signals WHERE entity_id LIKE '%{prefix}%'")
-    ev["ch_signals_left"] = int(cnt) if okc and cnt.isdigit() else -1
-    if not okc:
-        problems.append(f"ClickHouse corr_signals re-count failed: {cnt}")
-    elif ev["ch_signals_left"] != 0:
-        problems.append(f"{ev['ch_signals_left']} run rows left in corr_signals")
 
-    os_ev, os_problems = os_purge_syslog(stack, prefix)
+    # CH and OS are INDEPENDENT steps: a ClickHouse purge that dies must not
+    # cost the OpenSearch one (2026-08-29 — one transient failure took the
+    # whole teardown). Each is wrapped, each failure is recorded.
+    def clickhouse_step() -> None:
+        ok, out = stack.ch_mutation(
+            f"ALTER TABLE netops.corr_signals DELETE WHERE entity_id LIKE '%{prefix}%'")
+        if not ok:
+            problems.append(f"ClickHouse corr_signals purge failed: {out}")
+        okc, cnt = stack.ch(
+            f"SELECT count() FROM netops.corr_signals WHERE entity_id LIKE '%{prefix}%'")
+        ev["ch_signals_left"] = int(cnt) if okc and cnt.isdigit() else -1
+        if not okc:
+            problems.append(f"ClickHouse corr_signals re-count failed: {cnt}")
+        elif ev["ch_signals_left"] != 0:
+            problems.append(f"{ev['ch_signals_left']} run rows left in corr_signals")
+
+    cleanup_step("clickhouse corr_signals purge", problems, clickhouse_step)
+    os_ev, os_problems = cleanup_step(
+        "opensearch syslog purge", problems, os_purge_syslog, stack, prefix,
+        default=({"os_task": "", "os_deleted": -1, "os_docs_left": -1}, []))
     ev.update(os_ev)
     problems.extend(os_problems)
     return ev, problems
@@ -1708,8 +1957,15 @@ def os_purge_syslog(stack: Stack, prefix: str, budget_s: float | None = None,
         f"first one finish and re-running this to VERIFY")
 
     t0 = time.monotonic()
-    deadline = t0 + max(1.0, budget_s)
+    budget_initial_s = max(1.0, budget_s)
+    budget_s = budget_initial_s
+    deadline = t0 + budget_s
     left, elapsed = before, 0.0
+    # Stall detection replaces "the clock ran out" as the reason to stop: a
+    # purge that is still deleting gets more time, a purge that has stopped
+    # deleting is called out immediately instead of at the end of the budget.
+    stall_polls, prev_left, stalled = 0, before, False
+    readable_samples = 1 if before >= 0 else 0
     while True:
         nap = min(poll_s, max(0.0, deadline - time.monotonic()))
         if nap > 0:
@@ -1717,16 +1973,50 @@ def os_purge_syslog(stack: Stack, prefix: str, budget_s: float | None = None,
         left = stack.os_count(OS_SYSLOG_INDEX, "hostname.keyword", prefix)
         elapsed = time.monotonic() - t0
         if left < 0:
-            # A count we could not read is NOT progress and NEVER "clean".
+            # A count we could not read is NOT progress and NEVER "clean". It
+            # is not evidence of a stall either, so the stall counter is left
+            # alone — an unreadable index says nothing about the delete.
             warn(f"cleanup: OpenSearch count failed {elapsed:.0f}s into the "
                  f"purge — progress UNKNOWN, task {task} still running")
         else:
+            readable_samples += 1
+            if prev_left >= 0 and left >= prev_left:
+                stall_polls += 1
+            elif left < prev_left:
+                stall_polls = 0
+            prev_left = left
             done = (before - left) if before >= 0 else -1
             rate = (done / elapsed) if done > 0 and elapsed > 0 else 0.0
             eta = (f"~{left / rate / 60:.1f} min" if rate > 0 else "no ETA yet")
             log(f"cleanup: OpenSearch purge — {left} docs left "
                 f"({rate:.0f} docs/s, {eta}), {elapsed:.0f}s of "
                 f"{budget_s:.0f}s, task {task}")
+            # RE-ESTIMATE from the measured rate once two counts exist (the
+            # pre-count plus one poll). The budget only ever GROWS, never past
+            # the hard cap, and the new ETA is printed when it changes — an
+            # extension nobody can see is indistinguishable from a hang.
+            if readable_samples >= 2 and rate > 0 and left > 0:
+                needed = elapsed + (left / rate) * OS_PURGE_ETA_SAFETY
+                grown = min(OS_PURGE_BUDGET_MAX_S, needed)
+                if grown > budget_s + 1.0:
+                    log(f"cleanup: OpenSearch purge slower than the "
+                        f"{1 / OS_PURGE_SECONDS_PER_DOC:.0f} docs/s estimate "
+                        f"({rate:.0f} docs/s measured) — extending the budget "
+                        f"{budget_s:.0f}s -> {grown:.0f}s (ETA {eta}, hard cap "
+                        f"{OS_PURGE_BUDGET_MAX_S:.0f}s, task {task}). The "
+                        f"server-side delete is progressing; the harness "
+                        f"waits for it rather than reporting residue it "
+                        f"merely stopped watching.")
+                    budget_s = grown
+                    deadline = t0 + budget_s
+            if stall_polls >= OS_PURGE_STALL_POLLS:
+                stalled = True
+                warn(f"cleanup: OpenSearch purge STALLED — {left} docs left "
+                     f"and the count has not decreased for {stall_polls} "
+                     f"consecutive polls ({elapsed:.0f}s in); task {task} is "
+                     f"not making progress. Giving up now rather than burning "
+                     f"the rest of a {budget_s:.0f}s budget on it.")
+                break
             if left == 0:
                 # Confirm through an explicit refresh: _count reads the
                 # searchable view, which lags the delete by the index's
@@ -1742,6 +2032,10 @@ def os_purge_syslog(stack: Stack, prefix: str, budget_s: float | None = None,
                     log(f"cleanup: OpenSearch purge verified zero after "
                         f"{elapsed:.0f}s (task {task})")
                     break
+                # The refreshed count is the real one: carry it into the
+                # stall comparison, or the next poll would measure progress
+                # against the unrefreshed zero and read as a stall.
+                prev_left = left
                 warn(f"cleanup: post-refresh count is {left}, not 0 — the purge "
                      f"is not finished; continuing within budget")
         if time.monotonic() >= deadline:
@@ -1751,11 +2045,18 @@ def os_purge_syslog(stack: Stack, prefix: str, budget_s: float | None = None,
     ev["os_deleted"] = (before - left) if before >= 0 and left >= 0 else -1
     ev["os_purge_seconds"] = round(elapsed, 1)
     ev["os_purge_budget_s"] = round(budget_s, 1)
+    ev["os_purge_budget_initial_s"] = round(budget_initial_s, 1)
+    ev["os_purge_budget_extended"] = budget_s > budget_initial_s + 1.0
+    ev["os_purge_stalled"] = stalled
     if left != 0:
         shown = left if left >= 0 else "UNKNOWN"
+        why = (f"STALLED (the count stopped decreasing for {stall_polls} "
+               f"consecutive polls)" if stalled else
+               f"the {budget_s:.0f}s budget ran out (hard cap "
+               f"{OS_PURGE_BUDGET_MAX_S:.0f}s)")
         problems.append(
-            f"{shown} docs left in {OS_SYSLOG_INDEX} after {elapsed:.0f}s of a "
-            f"{budget_s:.0f}s budget — task {task} may still be running "
+            f"{shown} docs left in {OS_SYSLOG_INDEX} after {elapsed:.0f}s — "
+            f"{why} — task {task} may still be running "
             f"server-side; re-run `--cleanup-only {prefix}` to re-verify "
             f"(it is idempotent and will resubmit only what is left)")
     return ev, problems
@@ -1859,11 +2160,9 @@ class Harness:
             elif s["health"] == "unhealthy":
                 problems.append(f"{s['service']} is unhealthy")
 
-        # Ingress answers.
+        # Ingress answers (retried: a busy box is not an absent stack).
         try:
-            req = urllib.request.Request(self.stack.base_url + "/")
-            with urllib.request.urlopen(req, timeout=HTTP_TIMEOUT) as r:
-                ev["ingress_status"] = r.status
+            ev["ingress_status"] = http_ingress_status(self.stack.base_url)
         except (urllib.error.URLError, OSError) as exc:
             problems.append(f"ingress probe {self.stack.base_url}/ failed: {exc}")
 
@@ -3447,7 +3746,11 @@ class Harness:
             f"({len(self.created_ids)} created this run, {len(shadow_ids)} "
             f"absorbed shadow row(s) invisible to a list; budget "
             f"{device_budget:.0f}s)")
-        purge = purge_devices(self.stack, self.prefix, device_budget, seed)
+        purge = cleanup_step(
+            "device purge", problems, purge_devices, self.stack, self.prefix,
+            device_budget, seed,
+            default=empty_purge_ev(self.prefix, device_budget,
+                                   "device purge step raised"))
         ev["device_purge"] = purge
         ev["devices_deleted"] = purge["deleted"]
         ev["absorbed_shadow_ids_seeded"] = len(shadow_ids)
@@ -3482,8 +3785,10 @@ class Harness:
             if mine:
                 log(f"cleanup: deleting {len(mine)} device(s) that absorbed "
                     f"this run's creates (previous runs' residue)")
-                dele, dfail, dbudget = delete_devices(
-                    self.stack, mine, time.monotonic() + device_budget)
+                dele, dfail, dbudget = cleanup_step(
+                    "absorbed-canonical deletes", problems, delete_devices,
+                    self.stack, mine, time.monotonic() + device_budget,
+                    default=(0, ["step raised — deletes not attempted"], False))
                 ev["absorbed_canonical_deleted"] = dele
                 ev["absorbed_canonical_delete_failed"] = len(dfail)
                 if dfail:
@@ -3497,7 +3802,11 @@ class Harness:
 
         # 7b-ii. NAMESPACE verify (and sweep). This is what makes "0 remain"
         # mean the stack is actually clean rather than "clean under MY prefix".
-        ns_ev, ns_problems, ns_left = self.namespace_sweep(device_budget)
+        ns_ev, ns_problems, ns_left = cleanup_step(
+            "namespace verify/sweep", problems, self.namespace_sweep,
+            device_budget,
+            default=({"root_prefix": DEVICE_PREFIX_ROOT, "swept": False,
+                      "list_error": "namespace sweep step raised"}, [], -1))
         ev["namespace"] = ns_ev
         problems.extend(ns_problems)
         ev["devices_remaining"] = ns_left
@@ -3528,13 +3837,66 @@ class Harness:
         # is left as found. corr_objects/evidence TTL out on their own and are
         # not part of --verify; noted honestly rather than silently skipped.
         log(f"cleanup: purging ClickHouse + OpenSearch rows for {self.prefix}")
-        tel_ev, tel_problems = purge_telemetry(self.stack, self.prefix)
+        tel_ev, tel_problems = cleanup_step(
+            "telemetry purge", problems, purge_telemetry, self.stack,
+            self.prefix,
+            default=({"ch_signals_left": -1, "os_docs_left": -1}, []))
         ev.update(tel_ev)
         problems.extend(tel_problems)
         ev["residuals_note"] = (
             "corr_objects/evidence and correlation DLQ entries tagged with this "
             "run TTL/rotate out on their own; VictoriaMetrics holds no run "
             "series (devices were never polled successfully)")
+
+        # FINAL RE-VERIFY (defect 2026-08-29). Whatever happened above — a step
+        # that failed after its retries, a purge that ran out of budget, a
+        # sweep that was skipped — the LAST thing cleanup does is ask the stack
+        # what is actually left, and THAT answer is the residue this run
+        # reports. Never a step's optimism, and never a stale count from before
+        # the telemetry purge. A list that fails after its own retries is
+        # UNKNOWN (-1) and says so; it is not zero.
+        final_ids, final_err = cleanup_step(
+            "residue re-verify", problems, devices_with_prefix, self.stack,
+            DEVICE_PREFIX_ROOT,
+            default=([], "residue re-verify step raised"))
+        if final_err:
+            ev["final_verify_error"] = final_err
+            problems.append(
+                f"final residue re-verify FAILED ({final_err}) — residue under "
+                f"{DEVICE_PREFIX_ROOT} is UNKNOWN, not zero. Purge with: "
+                f"python3 scripts/scale-miniladder.py --cleanup-only "
+                f"{DEVICE_PREFIX_ROOT}")
+            self.residue_devices = -1
+        else:
+            # A run started with MLX_ALLOW_FOREIGN_RESIDUE=1 was TOLD to leave
+            # the other run ids standing, so it is answerable for its own
+            # prefix only — the same accounting namespace_sweep uses.
+            answerable = ([d for d in final_ids if d.startswith(self.prefix)]
+                          if self.foreign_residue_allowed else final_ids)
+            ev["final_residue_devices"] = len(answerable)
+            ev["final_namespace_devices"] = len(final_ids)
+            if len(answerable) != ns_left:
+                warn(f"cleanup: re-verified residue is {len(answerable)} "
+                     f"device(s), not the {ns_left} the purge steps reported — "
+                     f"the RE-VERIFIED count is the one this run stands behind")
+            self.residue_devices = len(answerable)
+            if answerable:
+                # A run that leaves devices behind is a FAILED teardown even if
+                # every individual step reported success — the re-verify is the
+                # only claim this harness makes about the stack it hands back.
+                problems.append(
+                    f"{len(answerable)} device(s) remain after teardown "
+                    f"(re-verified: {residue_summary(answerable)}) — run: "
+                    f"python3 scripts/scale-miniladder.py --cleanup-only "
+                    f"{DEVICE_PREFIX_ROOT}")
+                self.residue_left("verified after every teardown step ran")
+
+        ev["http_transport_failures"] = getattr(
+            self.stack, "http_transport_failures", 0)
+        if ev["http_transport_failures"]:
+            warn(f"cleanup: {ev['http_transport_failures']} API call(s) "
+                 f"exhausted the retry policy during this run — the box was "
+                 f"refusing/timing out under load; recorded as evidence")
 
         status = "PASS" if not problems else "FAIL"
         # 16.1: a degraded teardown is LOUD, line by line, with counts — not a
@@ -4135,9 +4497,8 @@ def _cleanup_only_locked(args: argparse.Namespace) -> int:
     # Refuse on an unreachable stack. "0 devices remain" from a stack we cannot
     # talk to is the same false green this harness exists to kill.
     try:
-        req = urllib.request.Request(stack.base_url + "/")
-        with urllib.request.urlopen(req, timeout=HTTP_TIMEOUT) as r:
-            log(f"cleanup-only: ingress {stack.base_url}/ -> HTTP {r.status}")
+        log(f"cleanup-only: ingress {stack.base_url}/ -> HTTP "
+            f"{http_ingress_status(stack.base_url)}")
     except (urllib.error.URLError, OSError) as exc:
         die(f"--cleanup-only: stack unreachable at {stack.base_url} ({exc}) — "
             f"refusing to report a clean stack we cannot see")
@@ -4152,16 +4513,36 @@ def _cleanup_only_locked(args: argparse.Namespace) -> int:
     budget = (CLEANUP_DEVICE_BUDGET_BASE_S +
               CLEANUP_DEVICE_BUDGET_PER_DEVICE_S * max(args.devices, 1))
     problems: list[str] = []
+    purge = empty_purge_ev(prefix, budget, "purge step never ran")
+    tel_ev: dict = {"ch_signals_left": -1, "os_docs_left": -1}
+    remaining = -1
     try:
-        purge = purge_devices(stack, prefix, budget)
+        # Same policy as a run's teardown (2026-08-29): each step is bounded
+        # and its FINAL failure is a recorded problem, not the end of the
+        # cleanup. A transient socket timeout killed this path too.
+        purge = cleanup_step(
+            "device purge", problems, purge_devices, stack, prefix, budget,
+            default=empty_purge_ev(prefix, budget, "device purge step raised"))
         if not purge["verified_zero"]:
             problems.append(
                 f"{purge['remaining']} devices still match {prefix} after "
                 f"{purge['passes']} pass(es) "
                 f"({purge['delete_failed']} delete failures; first: "
                 f"{purge['first_delete_error'] or purge['list_error'] or 'n/a'})")
-        tel_ev, tel_problems = purge_telemetry(stack, prefix)
+        tel_ev, tel_problems = cleanup_step(
+            "telemetry purge", problems, purge_telemetry, stack, prefix,
+            default=({"ch_signals_left": -1, "os_docs_left": -1}, []))
         problems.extend(tel_problems)
+        # RE-VERIFY last, after everything else has run: the number this mode
+        # exits on is what the stack says NOW, never a step's own optimism.
+        final_ids, final_err = cleanup_step(
+            "residue re-verify", problems, devices_with_prefix, stack, prefix,
+            default=([], "residue re-verify step raised"))
+        remaining = -1 if final_err else len(final_ids)
+        if final_err:
+            problems.append(
+                f"final residue re-verify FAILED ({final_err}) — residue under "
+                f"{prefix} is UNKNOWN, not zero")
     except CleanupAborted as exc:
         warn(f"RESIDUE LEFT: cleanup-only aborted on repeated {exc} — rerun "
              f"python3 scripts/scale-miniladder.py --cleanup-only {prefix}")
@@ -4172,11 +4553,14 @@ def _cleanup_only_locked(args: argparse.Namespace) -> int:
     for prob in problems:
         warn(f"cleanup-only: {prob}")
     log(f"cleanup-only: {purge['deleted']} device deletes issued, "
-        f"{purge['remaining']} remain; ClickHouse rows left "
-        f"{tel_ev.get('ch_signals_left')}, OpenSearch docs left "
-        f"{tel_ev.get('os_docs_left')}")
-    if problems:
-        warn(f"cleanup-only FAILED for {prefix} — {len(problems)} problem(s) above")
+        f"{'UNKNOWN' if remaining < 0 else remaining} remain (re-verified); "
+        f"ClickHouse rows left {tel_ev.get('ch_signals_left')}, "
+        f"OpenSearch docs left {tel_ev.get('os_docs_left')}")
+    if problems or remaining != 0:
+        shown = "UNKNOWN (never verified)" if remaining < 0 else str(remaining)
+        warn(f"RESIDUE LEFT: {shown} devices matching {prefix} — cleanup-only "
+             f"FAILED with {len(problems)} problem(s) above. Purge with: "
+             f"python3 scripts/scale-miniladder.py --cleanup-only {prefix}")
         return 1
     log(f"cleanup-only: residue: 0 devices matching {prefix} (verified), "
         f"telemetry purged")
