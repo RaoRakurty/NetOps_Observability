@@ -37,12 +37,23 @@ package chschema
 //
 // SAFETY CONTRACT (each property has a test in corr_repartition_test.go)
 //
+//   - REPORT-ONLY BY DEFAULT. CORR_REPARTITION defaults to `check`: every boot
+//     says what WOULD be migrated, with sizes and the exact command, and
+//     migrates NOTHING. `auto` is the old behaviour (migrate under-gate tables
+//     at boot), `force` migrates over the gate too. See the incident note on
+//     CorrRepartitionCheck — the gate alone was not enough, because "under the
+//     gate" is not the same question as "the box is idle enough to be rewritten
+//     right now", and only an operator can answer the second one.
 //   - GATED. A table whose uncompressed size exceeds CORR_REPARTITION_MAX_GIB
 //     (default 4 GiB) is SKIPPED with a loud, actionable log line naming the
 //     table, its size, the gate, and the exact env to run it deliberately.
 //     The lab's corr_objects (48.9 GiB) is therefore never silently rewritten.
 //   - DELIBERATE. CORR_REPARTITION=force ignores the size gate;
 //     CORR_REPARTITION=off does nothing at all.
+//   - NEVER ORPHANED. Every copy runs under a deterministic query_id and a
+//     server-side execution bound; if its client call fails anyway, the copy is
+//     polled in system.processes and KILLed before the partition is declared
+//     failed. See "the orphaned-copy guard" below.
 //   - BOUNDED. The copy runs one DESTINATION day-partition at a time, and a
 //     day holding more than CORR_REPARTITION_BATCH_ROWS rows is copied in
 //     hourly sub-batches. No statement ever reads the whole table.
@@ -76,8 +87,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"hash/fnv"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // ── the injected ClickHouse seam ────────────────────────────────────────────
@@ -87,10 +100,28 @@ import (
 // every external dependency is injected). src/backend/clickhouse_repartition.go
 // supplies the real implementation over the chhttp seam.
 type CHExec interface {
-	// Exec runs one statement that returns no rows.
+	// Exec runs one SHORT statement (DDL, DROP PARTITION, KILL) that returns no
+	// rows, under the adapter's own modest budget.
 	Exec(ctx context.Context, sql string) error
 	// Query runs one SELECT and returns its rows as decoded JSON objects.
 	Query(ctx context.Context, sql string) ([]map[string]any, error)
+	// ExecLong runs one LONG statement — a partition copy — under a caller-chosen
+	// query_id and deadline. It is a separate method, not a flag on Exec, because
+	// the two have genuinely different contracts: the caller of ExecLong must be
+	// able to FIND its statement on the server after the call has returned, and
+	// the transport must give the HTTP client a longer timeout than the
+	// server-side bound it asks for. See "the orphaned-copy guard".
+	ExecLong(ctx context.Context, sql string, opt CHLongOpts) error
+}
+
+// CHLongOpts parameterises one long statement.
+type CHLongOpts struct {
+	// QueryID is the server-side query_id to run under. It is the ONLY handle
+	// that can locate the statement in system.processes or address it to KILL.
+	QueryID string
+	// Budget is the server-side execution ceiling for this one statement. The
+	// transport must apply it as max_execution_time AND wait longer than it.
+	Budget time.Duration
 }
 
 // ── the tables this migration owns ──────────────────────────────────────────
@@ -185,10 +216,29 @@ func CorrDailyPartitionKeys() map[string]string {
 // ── configuration ───────────────────────────────────────────────────────────
 
 // Repartition modes.
+//
+// CorrRepartitionCheck is the DEFAULT, and that default is an incident finding,
+// not a preference.
+//
+// 2026-08-29 14:19, api boot after deploying c703db56: netops.corr_edges was
+// 3.74 GiB uncompressed — UNDER the 4 GiB gate — so `auto` started rewriting it
+// automatically, on a box that was in the middle of a scale run. The gate had
+// asked the right question about SIZE and no question at all about LOAD. The
+// copy's client call then timed out, the migration correctly refused to swap,
+// and the INSERT ... SELECT went on running server-side (below: the orphaned-copy
+// guard).
+//
+// The size gate cannot be made to answer "is this a good moment to rewrite a
+// table" — only an operator can. So the boot default became: SAY what you would
+// do, do nothing. `auto` is exactly the previous behaviour and is still the
+// right setting for a fresh or small install that migrates itself in seconds;
+// it is now an explicit choice rather than the thing that happens if nobody
+// thought about it.
 const (
-	CorrRepartitionOff   = "off"   // never run
-	CorrRepartitionAuto  = "auto"  // run below the size gate, skip loudly above it
-	CorrRepartitionForce = "force" // run regardless of size (operator's decision)
+	CorrRepartitionOff   = "off"   // never run, report nothing
+	CorrRepartitionCheck = "check" // DEFAULT: report what WOULD migrate, change nothing
+	CorrRepartitionAuto  = "auto"  // migrate below the size gate, skip loudly above it
+	CorrRepartitionForce = "force" // migrate regardless of size (operator's decision)
 )
 
 // CorrRepartitionSettings is the resolved, env-free configuration.
@@ -206,6 +256,26 @@ type CorrRepartitionSettings struct {
 	// DropOld drops netops.<table>__premigration immediately after a verified
 	// swap. Default false: keeping the pre-migration table is the rollback.
 	DropOld bool
+	// ReapPollInterval / ReapPollAttempts bound the orphaned-copy reaper: how
+	// often, and how many times, system.processes is polled for a copy whose
+	// client call failed before the copy is KILLed. Zero means the default; they
+	// are settings rather than constants so a test can drive the whole path
+	// without sleeping (CLAUDE.md §2: no hidden environment).
+	ReapPollInterval time.Duration
+	ReapPollAttempts int
+}
+
+// reapCadence resolves the reaper's cadence, defaulting a zero value rather than
+// polling in a tight loop or not at all.
+func (c CorrRepartitionSettings) reapCadence() (time.Duration, int) {
+	interval, attempts := c.ReapPollInterval, c.ReapPollAttempts
+	if interval <= 0 {
+		interval = corrReapPollInterval
+	}
+	if attempts <= 0 {
+		attempts = corrReapPollAttempts
+	}
+	return interval, attempts
 }
 
 // Defaults. corrRepartitionDefaultMaxGiB is deliberately BELOW the lab's
@@ -225,16 +295,20 @@ const (
 // larger blast radius.
 func CorrRepartitionConfig(logf func(string, ...any)) CorrRepartitionSettings {
 	cfg := CorrRepartitionSettings{
-		Mode:                 CorrRepartitionAuto,
+		Mode:                 CorrRepartitionCheck,
 		MaxUncompressedBytes: corrRepartitionDefaultMaxGiB * 1024 * 1024 * 1024,
 		BatchRows:            corrRepartitionDefaultBatchRows,
 		CatchUpPasses:        corrRepartitionDefaultCatchUp,
+		ReapPollInterval:     corrReapPollInterval,
+		ReapPollAttempts:     corrReapPollAttempts,
 	}
-	switch mode := strings.ToLower(strings.TrimSpace(envOr("CORR_REPARTITION", CorrRepartitionAuto))); mode {
-	case CorrRepartitionOff, CorrRepartitionAuto, CorrRepartitionForce:
+	switch mode := strings.ToLower(strings.TrimSpace(envOr("CORR_REPARTITION", CorrRepartitionCheck))); mode {
+	case CorrRepartitionOff, CorrRepartitionCheck, CorrRepartitionAuto, CorrRepartitionForce:
 		cfg.Mode = mode
 	default:
-		logf("corr-repartition: unknown CORR_REPARTITION=%q, using %q", mode, CorrRepartitionAuto)
+		// Never widen the blast radius on a typo: an unreadable mode falls back to
+		// the report-only default, not to the one that rewrites tables.
+		logf("corr-repartition: unknown CORR_REPARTITION=%q, using %q", mode, CorrRepartitionCheck)
 	}
 	if raw := envOr("CORR_REPARTITION_MAX_GIB", ""); raw != "" {
 		n, err := strconv.Atoi(raw)
@@ -449,15 +523,230 @@ func CorrTableExistsSQL(table string) string {
 		chQuote(table) + " FORMAT JSON"
 }
 
+// ── the orphaned-copy guard (incident 2026-08-29) ───────────────────────────
+//
+// WHAT HAPPENED. 14:19, api boot after deploying c703db56. netops.corr_edges
+// (3.74 GiB uncompressed, under the gate) was migrated automatically while the
+// stack was in use. The first partition copy, (global, 20260821), came back as
+//
+//	clickhouse repartition: transport: Post "https://clickhouse:8443?..."
+//
+// — the HTTP CLIENT's timeout, not the server's. The migration then did the
+// right thing at ITS level (stopped after corr_edges (failed), swapped nothing,
+// left the live table untouched) and the wrong thing at the server's: the
+// INSERT ... SELECT kept running. Minutes later it was still in
+// system.processes with 121,495 rows already written into corr_edges__daily,
+// and had to be killed by hand.
+//
+// THE LESSON. A statement whose client call has returned is not a statement
+// that has stopped. Nothing in "I got an error" says the server agreed. Three
+// consequences, all implemented here:
+//
+//  1. every copy carries an explicit, DETERMINISTIC query_id — the only handle
+//     that can find it in system.processes or address it to KILL;
+//  2. every copy carries a server-side execution bound DERIVED FROM ITS ROW
+//     COUNT (CorrCopyBudget), and the transport gives the HTTP client a longer
+//     timeout than that bound, so the ordinary case is simply "the client
+//     waits" (the incident's client timeout was 12 s against a 10-minute
+//     server budget — see chRepartitionSlack in clickhouse_repartition.go);
+//  3. when the client call fails anyway, the copy is REAPED before the
+//     partition is declared failed: poll system.processes for that query_id
+//     until it is gone or the poll budget is spent, then KILL ... SYNC. The
+//     outcome is logged either way (§10: no silent failures).
+//
+// The determinism of the id is a second net. If a previous boot's orphan for
+// the same (table, tenant, day, pass, batch) is somehow still running,
+// ClickHouse refuses the new statement with QUERY_WITH_SAME_ID_IS_ALREADY_RUNNING
+// instead of letting two writers append to one destination partition.
+
+const (
+	// corrCopyRowsPerSecFloor is a deliberately PESSIMISTIC floor for how fast a
+	// partition copy moves rows. It exists only to size a deadline, so it must be
+	// a LOWER bound on throughput, never an estimate of it. The incident is the
+	// one hard measurement available: more than 600 s of server time had produced
+	// 121,495 rows — under 205 rows/s — on a box simultaneously running the
+	// correlation engine at scale. Being wrong in the generous direction costs a
+	// longer wait; being wrong in the tight direction costs another orphan.
+	corrCopyRowsPerSecFloor = 200
+	// corrCopyBudgetMin/Max clamp the derived deadline. Max also bounds the
+	// server-side max_execution_time, so a wedged copy dies on its own.
+	corrCopyBudgetMin = 5 * time.Minute
+	corrCopyBudgetMax = 60 * time.Minute
+	// Reaper cadence: ~2 minutes of "is it still running?" before the KILL.
+	corrReapPollInterval = 5 * time.Second
+	corrReapPollAttempts = 24
+	// corrIDMaxTenantLen bounds the tenant component of a query_id.
+	corrIDMaxTenantLen = 48
+)
+
+// CorrCopyBudget derives the server-side deadline for a copy statement covering
+// rows rows, from the pessimistic throughput floor, clamped both ends. Exported
+// so the transport (which must wait longer than it) and the tests assert against
+// ONE definition.
+func CorrCopyBudget(rows int64) time.Duration {
+	if rows <= 0 {
+		return corrCopyBudgetMin
+	}
+	secs := rows / corrCopyRowsPerSecFloor
+	if rows%corrCopyRowsPerSecFloor != 0 {
+		secs++
+	}
+	// Clamp in SECONDS before converting: a huge row count would otherwise
+	// overflow the nanosecond Duration and come back negative.
+	if max := int64(corrCopyBudgetMax / time.Second); secs > max {
+		return corrCopyBudgetMax
+	}
+	if d := time.Duration(secs) * time.Second; d > corrCopyBudgetMin {
+		return d
+	}
+	return corrCopyBudgetMin
+}
+
+// CorrCopyQueryID renders the server-side query_id for one copy statement. It is
+// deterministic in (table, tenant, day, pass, batch) — the full identity of the
+// unit of work — so the same copy always has the same handle, whether it is
+// being polled for, killed, or grepped out of system.query_log after the fact.
+func CorrCopyQueryID(table, tenant string, day int64, pass, batch int) string {
+	return "corr-repartition." + table + "." + corrIDSafe(tenant) + "." +
+		strconv.FormatInt(day, 10) + ".p" + strconv.Itoa(pass) + ".b" + strconv.Itoa(batch)
+}
+
+// corrIDSafe renders an untrusted identifier into the small charset a query_id
+// stays greppable in. A tenant id is tenant-controlled data (§3), so it is
+// sanitised and length-bounded; when sanitising CHANGED it — or the bound cut it
+// — a short digest of the ORIGINAL is appended, so two different tenants can
+// never collapse onto one query_id and have their copies kill each other.
+func corrIDSafe(s string) string {
+	var b strings.Builder
+	changed := len(s) > corrIDMaxTenantLen
+	for i, r := range s {
+		if i >= corrIDMaxTenantLen {
+			break
+		}
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '_', r == '-':
+			b.WriteRune(r)
+		default:
+			b.WriteByte('_')
+			changed = true
+		}
+	}
+	out := b.String()
+	if out == "" {
+		changed = true
+	}
+	if !changed {
+		return out
+	}
+	h := fnv.New32a()
+	_, _ = h.Write([]byte(s)) // hash.Hash's Write never returns an error
+	return out + "-" + strconv.FormatUint(uint64(h.Sum32()), 16)
+}
+
+// CorrRunningCopySQL asks whether a query_id is STILL EXECUTING. system.processes
+// holds only running queries, so 0 means "finished, killed, or never started" —
+// exactly the question the reaper asks.
+func CorrRunningCopySQL(queryID string) string {
+	return "SELECT count() AS n FROM system.processes WHERE query_id = " +
+		chQuote(queryID) + " FORMAT JSON"
+}
+
+// CorrKillCopyStmt kills one orphaned copy. SYNC on purpose: an asynchronous
+// kill would let the caller declare the partition failed while the writer is
+// still appending to it, which is the same bug one step later.
+func CorrKillCopyStmt(queryID string) string {
+	return "KILL QUERY WHERE query_id = " + chQuote(queryID) + " SYNC"
+}
+
+// reapCopy resolves what happened to a copy statement whose CLIENT call returned
+// an error, and returns a short verdict for the caller's failure detail. It never
+// returns an error of its own: the partition is already failing, and the reap's
+// job is to make sure nothing is left running and to SAY what it found.
+func reapCopy(ctx context.Context, ex CHExec, cfg CorrRepartitionSettings,
+	queryID string, logf func(string, ...any)) string {
+
+	interval, attempts := cfg.reapCadence()
+	// The reap must survive the ctx that may itself be the reason the call
+	// failed: a cancelled or expired migration context would otherwise leave the
+	// orphan behind — precisely the failure this exists for. So it runs on a
+	// detached, separately bounded context (still bounded: §9).
+	rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx),
+		time.Duration(attempts+1)*interval+30*time.Second)
+	defer cancel()
+
+	for attempt := 1; attempt <= attempts; attempt++ {
+		running, err := copyIsRunning(rctx, ex, queryID)
+		if err != nil {
+			logf("corr-repartition: query_id=%s — system.processes unreadable (%v); "+
+				"issuing the KILL anyway rather than assuming the copy stopped", queryID, err)
+			break
+		}
+		if !running {
+			return fmt.Sprintf("query_id=%s left nothing running (poll %d/%d)", queryID, attempt, attempts)
+		}
+		logf("corr-repartition: query_id=%s is STILL RUNNING server-side after its client "+
+			"call failed (poll %d/%d) — waiting %s", queryID, attempt, attempts, interval)
+		if !sleepCtx(rctx, interval) {
+			break
+		}
+	}
+
+	// Still running, or unknowable. Kill it: leaving a writer appending to a
+	// destination partition we are about to declare failed is how the NEXT
+	// attempt double-copies rows (it drops the partition, and the orphan keeps
+	// filling it back in).
+	if err := ex.Exec(rctx, CorrKillCopyStmt(queryID)); err != nil {
+		logf("corr-repartition: KILL QUERY for query_id=%s FAILED: %v — the copy may still "+
+			"be running server-side. Check system.processes and kill it by hand before the "+
+			"next attempt, or the retry will copy on top of a live writer.", queryID, err)
+		return "orphan NOT confirmed killed (query_id=" + queryID + "): " + err.Error()
+	}
+	logf("corr-repartition: KILLed orphaned copy query_id=%s — it outlived its client call "+
+		"(the 2026-08-29 failure mode); the partition it was writing will be dropped and "+
+		"redone on the next attempt", queryID)
+	if running, err := copyIsRunning(rctx, ex, queryID); err == nil && running {
+		return "orphan STILL RUNNING after KILL (query_id=" + queryID + ")"
+	}
+	return "orphan killed (query_id=" + queryID + ")"
+}
+
+// copyIsRunning reports whether queryID is currently executing on the server.
+func copyIsRunning(ctx context.Context, ex CHExec, queryID string) (bool, error) {
+	rows, err := ex.Query(ctx, CorrRunningCopySQL(queryID))
+	if err != nil {
+		return false, err
+	}
+	if len(rows) == 0 {
+		return false, nil
+	}
+	n, err := chInt(rows[0]["n"])
+	if err != nil {
+		return false, err
+	}
+	return n > 0, nil
+}
+
+// sleepCtx waits d, or returns false as soon as ctx is done.
+func sleepCtx(ctx context.Context, d time.Duration) bool {
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-ctx.Done():
+		return false
+	case <-t.C:
+		return true
+	}
+}
+
 // ── result reporting ────────────────────────────────────────────────────────
 
 // CorrRepartitionOutcome is what happened to ONE table.
 type CorrRepartitionOutcome struct {
-	Table   string
-	Status  string // see the CorrRepartition* status constants
-	Rows    int64
-	Bytes   int64 // uncompressed
-	Detail  string
+	Table  string
+	Status string // see the CorrRepartition* status constants
+	Rows   int64
+	Bytes  int64 // uncompressed
+	Detail string
 }
 
 // Per-table outcomes.
@@ -470,7 +759,16 @@ const (
 	CorrRepartitionFailed     = "failed"
 	CorrRepartitionUnstable   = "aborted-source-still-writing"
 	CorrRepartitionBlocked    = "blocked-backup-exists"
+	// check-mode verdicts: what auto/force WOULD do. Nothing was touched.
+	CorrRepartitionWouldMigrate = "check-would-migrate"
+	CorrRepartitionWouldSkip    = "check-would-skip-too-big"
 )
+
+// CorrRepartitionIsCheck reports whether a status is a check-mode verdict
+// (nothing happened) rather than an outcome.
+func CorrRepartitionIsCheck(status string) bool {
+	return status == CorrRepartitionWouldMigrate || status == CorrRepartitionWouldSkip
+}
 
 // errSourceUnstable is returned when the source kept growing through every
 // catch-up pass — the one condition under which we refuse to swap.
@@ -491,8 +789,16 @@ func RunCorrRepartition(ctx context.Context, ex CHExec, cfg CorrRepartitionSetti
 
 	tables := corrRepartitionTables()
 	out := make([]CorrRepartitionOutcome, 0, len(tables))
+	// State the mode on every boot, before anything is read. A rewrite that
+	// surprised an operator (2026-08-29) is a rewrite whose mode was never in the
+	// log to be seen.
+	logf("corr-repartition: mode=%s (CORR_REPARTITION), gate %s uncompressed per table, "+
+		"batch %d rows, %d catch-up passes%s",
+		cfg.Mode, gib(cfg.MaxUncompressedBytes), cfg.BatchRows, cfg.CatchUpPasses,
+		corrModeNote(cfg.Mode))
 	if cfg.Mode == CorrRepartitionOff {
-		logf("corr-repartition: CORR_REPARTITION=off — daily partitioning not applied to live tables")
+		logf("corr-repartition: CORR_REPARTITION=off — daily partitioning not applied to live " +
+			"tables, and nothing is reported either; use 'check' to see what would migrate")
 		for _, t := range tables {
 			out = append(out, CorrRepartitionOutcome{Table: t.Name, Status: CorrRepartitionSkippedOff})
 		}
@@ -501,6 +807,7 @@ func RunCorrRepartition(ctx context.Context, ex CHExec, cfg CorrRepartitionSetti
 	for _, t := range tables {
 		o := migrateOne(ctx, ex, cfg, ret, t, logf)
 		out = append(out, o)
+		// A check-mode verdict is not an outcome: keep reporting the rest.
 		if o.Status == CorrRepartitionFailed || o.Status == CorrRepartitionUnstable {
 			// A failure here is data-shaped, not transient: stop rather than
 			// churn the remaining tables under the same broken condition.
@@ -510,6 +817,22 @@ func RunCorrRepartition(ctx context.Context, ex CHExec, cfg CorrRepartitionSetti
 		}
 	}
 	return out
+}
+
+// corrModeNote spells out, in the boot line itself, what this mode is about to
+// do to the operator's data. "mode=auto" is only meaningful to someone who has
+// read this file.
+func corrModeNote(mode string) string {
+	switch mode {
+	case CorrRepartitionCheck:
+		return " — CHECK ONLY: nothing will be migrated, this run just reports what would be"
+	case CorrRepartitionAuto:
+		return " — AUTO: under-gate tables WILL be rewritten now, on whatever load this box is under"
+	case CorrRepartitionForce:
+		return " — FORCE: every monthly table WILL be rewritten now, the size gate is ignored"
+	default:
+		return ""
+	}
 }
 
 func migrateOne(ctx context.Context, ex CHExec, cfg CorrRepartitionSettings,
@@ -542,6 +865,33 @@ func migrateOne(ctx context.Context, ex CHExec, cfg CorrRepartitionSettings,
 		return res
 	}
 	res.Rows, res.Bytes = n, unc
+
+	// CHECK — the default mode. Everything above this point is metadata reads;
+	// nothing below it is. Report the verdict and the exact command, touch
+	// nothing (see the incident note on CorrRepartitionCheck).
+	if cfg.Mode == CorrRepartitionCheck {
+		res.Detail = fmt.Sprintf("%d rows / %s uncompressed (%s on disk)", n, gib(unc), gib(cmp))
+		if unc > cfg.MaxUncompressedBytes {
+			res.Status = CorrRepartitionWouldSkip
+			logf("corr-repartition: CHECK netops.%s — still MONTHLY (%s), %s, OVER the "+
+				"CORR_REPARTITION_MAX_GIB gate of %s. Nothing was changed. Even "+
+				"CORR_REPARTITION=auto would skip it; migrating it is an explicit "+
+				"decision: stop the correlation engine, then run the API once with "+
+				"CORR_REPARTITION=force (or raise CORR_REPARTITION_MAX_GIB above %s).",
+				t.Name, chString(rows[0]["k"]), res.Detail, gib(cfg.MaxUncompressedBytes), gib(unc))
+			return res
+		}
+		res.Status = CorrRepartitionWouldMigrate
+		logf("corr-repartition: CHECK netops.%s — still MONTHLY (%s), %s, UNDER the "+
+			"CORR_REPARTITION_MAX_GIB gate of %s: it WOULD be migrated to %s. Nothing was "+
+			"changed — CORR_REPARTITION defaults to 'check' since 2026-08-29, when an "+
+			"under-gate table was rewritten automatically at boot while the stack was "+
+			"under load and left an orphaned INSERT ... SELECT running server-side. To "+
+			"migrate, pick a quiet window and run the API once with CORR_REPARTITION=auto.",
+			t.Name, chString(rows[0]["k"]), res.Detail, gib(cfg.MaxUncompressedBytes), want)
+		return res
+	}
+
 	if cfg.Mode != CorrRepartitionForce && unc > cfg.MaxUncompressedBytes {
 		res.Status = CorrRepartitionSkippedBig
 		res.Detail = fmt.Sprintf("%s uncompressed > gate %s", gib(unc), gib(cfg.MaxUncompressedBytes))
@@ -727,10 +1077,35 @@ func copyOnePass(ctx context.Context, ex CHExec, cfg CorrRepartitionSettings,
 			if err := ex.Exec(ctx, CorrDropShadowPartitionStmt(t, tenant, day)); err != nil {
 				return fmt.Errorf("drop partial partition (%s, %d): %w", tenant, day, err)
 			}
+			// CONFIRM the drop before copying on top of it. A destination partition
+			// that still holds rows after DROP PARTITION means something else is
+			// writing into it — an orphaned copy from an earlier attempt is exactly
+			// that shape (2026-08-29) — and re-copying would duplicate rows rather
+			// than redo them. Refusing is the only safe answer; the migration stops
+			// and says why.
+			left, err := partitionCount(ctx, ex, shadow, t, tenant, day)
+			if err != nil {
+				return fmt.Errorf("re-count dropped partition (%s, %d): %w", tenant, day, err)
+			}
+			if left != 0 {
+				return fmt.Errorf("partition (%s, %d) still holds %d rows after DROP PARTITION on "+
+					"netops.%s — something is still writing to it (an orphaned copy from an "+
+					"earlier attempt?); refusing to re-copy on top of a live writer", tenant, day, left, shadow)
+			}
+			logf("corr-repartition: netops.%s pass %d — partition (%s, %d) was %d/%d rows "+
+				"from an earlier attempt; dropped and redone", t.Name, pass, tenant, day, have, want)
 		}
-		for _, s := range CorrCopyPartitionStmts(t, tenant, day, want, cfg.BatchRows) {
-			if err := ex.Exec(ctx, s); err != nil {
-				return fmt.Errorf("copy partition (%s, %d): %w", tenant, day, err)
+		// One copy statement, one query_id, one row-count-derived server-side
+		// deadline. Both are what make an outlived copy findable and killable
+		// instead of orphaned — see "the orphaned-copy guard".
+		stmts := CorrCopyPartitionStmts(t, tenant, day, want, cfg.BatchRows)
+		budget := CorrCopyBudget(want)
+		for i, s := range stmts {
+			qid := CorrCopyQueryID(t.Name, tenant, day, pass, i)
+			if err := ex.ExecLong(ctx, s, CHLongOpts{QueryID: qid, Budget: budget}); err != nil {
+				verdict := reapCopy(ctx, ex, cfg, qid, logf)
+				return fmt.Errorf("copy partition (%s, %d) batch %d/%d: %w [%s]",
+					tenant, day, i+1, len(stmts), err, verdict)
 			}
 		}
 		done++

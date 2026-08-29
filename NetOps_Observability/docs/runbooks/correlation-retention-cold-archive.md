@@ -45,15 +45,28 @@ the converge list and, per table:
 
 | env | default | meaning |
 |---|---|---|
-| `CORR_REPARTITION` | `auto` | `auto` migrates below the size gate and SKIPS above it with a loud log line; `force` ignores the gate; `off` does nothing |
+| `CORR_REPARTITION` | `check` | `check` (default) REPORTS what would migrate — sizes, gate verdict, the exact command — and changes nothing; `auto` migrates below the size gate and SKIPS above it with a loud log line; `force` ignores the gate; `off` does nothing and reports nothing |
 | `CORR_REPARTITION_MAX_GIB` | `4` | the gate, in **uncompressed** GiB per table (the lab's `corr_objects` is 3.51 GiB on disk but 48.9 GiB uncompressed — the rewrite pays the uncompressed cost) |
 | `CORR_REPARTITION_BATCH_ROWS` | `500000` | a destination day-partition bigger than this is copied in hourly sub-batches |
 | `CORR_REPARTITION_CATCHUP_PASSES` | `3` | how many delta passes to try while the engine is still writing, before ABORTING without swapping |
 | `CORR_REPARTITION_DROP_OLD` | `false` | drop `netops.<table>__premigration` after a verified swap; leaving it false keeps your rollback |
 
+The default is `check` because of the 2026-08-29 incident: `netops.corr_edges`
+was 3.74 GiB uncompressed — UNDER the gate — so `auto` began rewriting it
+automatically at api boot, in the middle of a scale run. The size gate asks the
+right question about SIZE and no question at all about LOAD, and only an
+operator can answer the second one. Every boot now prints
+`corr-repartition: mode=check …` plus one `CHECK netops.<table> …` line per
+table that would move.
+
 To run it deliberately: **stop the correlation engine** (so the source stops
-growing), set `CORR_REPARTITION=force` in `.env`, `docker compose up -d api`,
-and watch the `corr-repartition:` log lines. It is resumable — a crash or a
+growing), set `CORR_REPARTITION=auto` (or `force` for an over-gate table) in
+`.env`, `docker compose up -d api`, and watch the `corr-repartition:` log
+lines. Each partition copy runs under its own `query_id`
+(`corr-repartition.<table>.<tenant>.<day>.p<pass>.b<batch>`) and a row-count
+derived `max_execution_time`; if its client call fails, the migration polls
+`system.processes` for that id and `KILL QUERY … SYNC`s it before declaring the
+partition failed, so no copy is ever left running unattended. It is resumable — a crash or a
 restart continues from the last completed day-partition, and the live table is
 untouched until the copy is row-count verified. Afterwards, verify
 `netops.<table>__premigration` and `DROP TABLE` it to reclaim the space.

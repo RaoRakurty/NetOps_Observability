@@ -19,11 +19,13 @@ package chschema
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"regexp"
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 )
 
 // ── helpers over the real DDL ───────────────────────────────────────────────
@@ -371,8 +373,13 @@ func TestRepartitionConfigDefaults(t *testing.T) {
 	t.Setenv("CORR_REPARTITION_CATCHUP_PASSES", "")
 	t.Setenv("CORR_REPARTITION_DROP_OLD", "")
 	cfg := CorrRepartitionConfig(func(string, ...any) {})
-	if cfg.Mode != CorrRepartitionAuto {
-		t.Errorf("default mode = %q, want %q", cfg.Mode, CorrRepartitionAuto)
+	// The default is CHECK, and that is an incident finding: on 2026-08-29 an
+	// UNDER-gate table (corr_edges, 3.74 GiB) was rewritten automatically at api
+	// boot while the stack was in use. The size gate cannot answer "is this a
+	// good moment to rewrite a table" — only an operator can.
+	if cfg.Mode != CorrRepartitionCheck {
+		t.Errorf("default mode = %q, want %q — an under-gate table must not be "+
+			"rewritten at boot without an operator asking for it", cfg.Mode, CorrRepartitionCheck)
 	}
 	if cfg.MaxUncompressedBytes != 4*1024*1024*1024 {
 		t.Errorf("default gate = %d, want 4 GiB", cfg.MaxUncompressedBytes)
@@ -388,6 +395,18 @@ func TestRepartitionConfigDefaults(t *testing.T) {
 	if cfg.DropOld {
 		t.Error("DropOld must default to false — the pre-migration table is the rollback")
 	}
+	if cfg.ReapPollInterval <= 0 || cfg.ReapPollAttempts <= 0 {
+		t.Errorf("the orphaned-copy reaper has no cadence: %+v", cfg)
+	}
+	// Every mode still parses, so the incident default did not remove the
+	// operator's ability to ask for the old behaviour.
+	for _, mode := range []string{CorrRepartitionOff, CorrRepartitionCheck,
+		CorrRepartitionAuto, CorrRepartitionForce} {
+		t.Setenv("CORR_REPARTITION", strings.ToUpper(mode)) // and case-insensitively
+		if got := CorrRepartitionConfig(func(string, ...any) {}).Mode; got != mode {
+			t.Errorf("CORR_REPARTITION=%q resolved to %q", mode, got)
+		}
+	}
 }
 
 func TestRepartitionConfigRejectsGarbageWithoutWidening(t *testing.T) {
@@ -397,8 +416,9 @@ func TestRepartitionConfigRejectsGarbageWithoutWidening(t *testing.T) {
 	t.Setenv("CORR_REPARTITION_CATCHUP_PASSES", "0")
 	var logged []string
 	cfg := CorrRepartitionConfig(func(f string, a ...any) { logged = append(logged, f) })
-	if cfg.Mode != CorrRepartitionAuto {
-		t.Errorf("an unknown mode must fall back to auto, got %q", cfg.Mode)
+	if cfg.Mode != CorrRepartitionCheck {
+		t.Errorf("an unknown mode must fall back to the REPORT-ONLY default, got %q — "+
+			"a typo must never be the thing that rewrites a table", cfg.Mode)
 	}
 	if cfg.MaxUncompressedBytes != 4*1024*1024*1024 || cfg.BatchRows != corrRepartitionDefaultBatchRows ||
 		cfg.CatchUpPasses != corrRepartitionDefaultCatchUp {
@@ -429,6 +449,24 @@ type fakeCH struct {
 	growBy  int64  // rows appended to the source after each full copy pass
 	growKey string // which (tenant|day) grows
 	grown   int
+
+	// ── the orphaned-copy guard (incident 2026-08-29) ──────────────────────────
+	// The fake models the ONE thing that made the incident possible: a copy whose
+	// CLIENT call has returned is not a copy that has stopped.
+	long        []fakeLong     // every ExecLong, in order
+	failLong    map[int]error  // 1-based ExecLong index -> client error to return
+	partialRows int64          // rows a failed copy has already written server-side
+	orphanPolls int            // how many system.processes polls it stays RUNNING for
+	running     map[string]int // query_id -> polls remaining before it is gone
+	killed      []string       // query_ids KILLed
+	dropLeaves  int64          // rows a DROP PARTITION leaves behind (a live writer)
+}
+
+// fakeLong is one recorded ExecLong call.
+type fakeLong struct {
+	sql     string
+	queryID string
+	budget  time.Duration
 }
 
 func newFakeCH() *fakeCH {
@@ -453,6 +491,7 @@ var (
 	reKeysQ   = regexp.MustCompile(`FROM netops\.(\S+) GROUP BY t, d`)
 	reNameQ   = regexp.MustCompile(`name = '([^']*)'`)
 	reHour    = regexp.MustCompile(`toHour\(\w+\) = (\d+)`)
+	reQueryID = regexp.MustCompile(`query_id = '([^']*)'`)
 )
 
 func (f *fakeCH) total(table string) int64 {
@@ -465,8 +504,37 @@ func (f *fakeCH) total(table string) int64 {
 
 func (f *fakeCH) Exec(_ context.Context, sql string) error {
 	f.stmts = append(f.stmts, sql)
+	f.apply(sql)
+	return nil
+}
+
+// ExecLong models the long-copy seam, including the failure that started all of
+// this: the client call returns an error, the server keeps writing, and the
+// statement stays in system.processes under its query_id until it is killed.
+func (f *fakeCH) ExecLong(ctx context.Context, sql string, opt CHLongOpts) error {
+	f.long = append(f.long, fakeLong{sql: sql, queryID: opt.QueryID, budget: opt.Budget})
+	if err, bad := f.failLong[len(f.long)]; bad {
+		f.stmts = append(f.stmts, sql)
+		one := strings.Join(strings.Fields(sql), " ")
+		if m := reInsert.FindStringSubmatch(one); m != nil && f.partialRows > 0 {
+			f.rows[m[1]][m[3]+"|"+m[4]] += f.partialRows // rows already written
+		}
+		if f.running == nil {
+			f.running = map[string]int{}
+		}
+		f.running[opt.QueryID] = f.orphanPolls
+		return err
+	}
+	return f.Exec(ctx, sql)
+}
+
+func (f *fakeCH) apply(sql string) {
 	one := strings.Join(strings.Fields(sql), " ")
 	switch {
+	case strings.HasPrefix(one, "KILL QUERY WHERE query_id = "):
+		qid := reQueryID.FindStringSubmatch(one)[1]
+		delete(f.running, qid)
+		f.killed = append(f.killed, qid)
 	case reCreate.MatchString(one):
 		m := reCreate.FindStringSubmatch(one)
 		if f.rows[m[1]] == nil {
@@ -481,6 +549,12 @@ func (f *fakeCH) Exec(_ context.Context, sql string) error {
 		delete(f.keys, name)
 	case reDropPar.MatchString(one):
 		m := reDropPar.FindStringSubmatch(one)
+		if f.dropLeaves > 0 {
+			// A live writer (an orphaned copy) refills the partition we just
+			// dropped: the migration must notice and refuse to copy on top of it.
+			f.rows[m[1]][m[2]+"|"+m[3]] = f.dropLeaves
+			return
+		}
 		delete(f.rows[m[1]], m[2]+"|"+m[3])
 	case reInsert.MatchString(one):
 		m := reInsert.FindStringSubmatch(one)
@@ -494,7 +568,7 @@ func (f *fakeCH) Exec(_ context.Context, sql string) error {
 				share += src % 24
 			}
 			f.rows[m[1]][key] += share
-			return nil
+			return
 		}
 		f.rows[m[1]][key] += src
 	case reExch.MatchString(one):
@@ -508,7 +582,6 @@ func (f *fakeCH) Exec(_ context.Context, sql string) error {
 		delete(f.cols, m[1])
 		delete(f.keys, m[1])
 	}
-	return nil
 }
 
 func (f *fakeCH) Query(_ context.Context, sql string) ([]map[string]any, error) {
@@ -528,6 +601,16 @@ func (f *fakeCH) Query(_ context.Context, sql string) ([]map[string]any, error) 
 			"n": strconv.FormatInt(f.total(tbl), 10), "unc": strconv.FormatInt(f.unc[tbl], 10),
 			"cmp": "1024",
 		}}, nil
+	case strings.HasPrefix(one, "SELECT count() AS n FROM system.processes"):
+		// system.processes holds only RUNNING queries. Each poll burns one of the
+		// orphan's remaining lives, so a copy can be modelled as "finishes on its
+		// own after N polls" or "never stops until killed".
+		qid := reQueryID.FindStringSubmatch(one)[1]
+		if n := f.running[qid]; n > 0 {
+			f.running[qid] = n - 1
+			return []map[string]any{{"n": "1"}}, nil
+		}
+		return []map[string]any{{"n": "0"}}, nil
 	case strings.HasPrefix(one, "SELECT count() AS n FROM system.tables"):
 		name := reNameQ.FindStringSubmatch(one)[1]
 		n := "0"
@@ -579,10 +662,14 @@ func (f *fakeCH) sawAny(sub string) bool {
 	return false
 }
 
+// testCfg is AUTO (the pre-2026-08-29 default) because most of these tests
+// assert what a migration DOES; the mode matrix below covers check/off/force.
+// The reaper cadence is compressed so the orphan path runs without sleeping.
 func testCfg() CorrRepartitionSettings {
 	return CorrRepartitionSettings{
 		Mode: CorrRepartitionAuto, MaxUncompressedBytes: 4 << 30,
 		BatchRows: 500000, CatchUpPasses: 3,
+		ReapPollInterval: time.Millisecond, ReapPollAttempts: 3,
 	}
 }
 
@@ -807,5 +894,392 @@ func TestOversizedPartitionCopiesEveryRowInSubBatches(t *testing.T) {
 	}
 	if got := f.total("corr_objects"); got != 1_000_001 {
 		t.Errorf("sub-batched copy holds %d rows, want 1000001", got)
+	}
+}
+
+// ── 5. the orphaned-copy guard (incident 2026-08-29) ────────────────────────
+//
+// The incident in one line: the copy's CLIENT call failed, the migration
+// correctly refused to swap, and the INSERT ... SELECT went on running
+// server-side with 121,495 rows already written — found minutes later in
+// system.processes and killed by hand. These tests pin the three properties
+// that make that unrepresentable.
+
+// TestCopyQueryIDIsDeterministic — the id is the only handle that can find a
+// copy in system.processes or address it to KILL, so it must be reproducible
+// from the unit of work alone, and different for every distinct unit.
+func TestCopyQueryIDIsDeterministic(t *testing.T) {
+	a := CorrCopyQueryID("corr_edges", "global", 20260821, 1, 0)
+	if b := CorrCopyQueryID("corr_edges", "global", 20260821, 1, 0); a != b {
+		t.Errorf("the same copy produced two ids: %q vs %q", a, b)
+	}
+	for _, want := range []string{"corr-repartition", "corr_edges", "global", "20260821", ".p1", ".b0"} {
+		if !strings.Contains(a, want) {
+			t.Errorf("query_id %q does not name %q — it is unusable in a log or a KILL", a, want)
+		}
+	}
+	// Every coordinate must move the id: two units of work sharing one id would
+	// let a reaper kill the wrong statement.
+	seen := map[string]string{}
+	for _, c := range []struct {
+		label         string
+		table, tenant string
+		day           int64
+		pass, batch   int
+	}{
+		{"base", "corr_edges", "global", 20260821, 1, 0},
+		{"table", "corr_objects", "global", 20260821, 1, 0},
+		{"tenant", "corr_edges", "acme", 20260821, 1, 0},
+		{"day", "corr_edges", "global", 20260822, 1, 0},
+		{"pass", "corr_edges", "global", 20260821, 2, 0},
+		{"batch", "corr_edges", "global", 20260821, 1, 1},
+	} {
+		id := CorrCopyQueryID(c.table, c.tenant, c.day, c.pass, c.batch)
+		if prev, dup := seen[id]; dup {
+			t.Errorf("%s and %s collide on query_id %q", c.label, prev, id)
+		}
+		seen[id] = c.label
+	}
+}
+
+// TestCopyQueryIDSanitisesTheTenant. A tenant id is tenant-controlled data (§3):
+// it must not be able to inject quotes into a KILL statement, blow up the id's
+// length, or collapse two tenants onto one id.
+func TestCopyQueryIDSanitisesTheTenant(t *testing.T) {
+	for _, tenant := range []string{"a'; KILL QUERY WHERE 1 --", strings.Repeat("x", 200), "tenant one", ""} {
+		id := CorrCopyQueryID("corr_edges", tenant, 20260821, 1, 0)
+		if strings.ContainsAny(id, "'\" \t\n;") {
+			t.Errorf("query_id %q for tenant %q carries quoting/whitespace", id, tenant)
+		}
+		if len(id) > 160 {
+			t.Errorf("query_id for tenant %q is %d chars", tenant, len(id))
+		}
+	}
+	// Two tenants that sanitise to the same text keep DIFFERENT ids.
+	if a, b := corrIDSafe("a b"), corrIDSafe("a-b"); a == b {
+		t.Errorf("distinct tenants collapsed onto one id component: %q", a)
+	}
+	// An already-safe tenant id is left alone — the id stays greppable.
+	if got := corrIDSafe("acme-1_2"); got != "acme-1_2" {
+		t.Errorf("corrIDSafe mangled a safe id: %q", got)
+	}
+}
+
+// TestCopyBudgetIsDerivedFromRowsAndClamped. The budget is what makes the
+// ordinary case "the client waits" instead of "the client gives up and the
+// server keeps going".
+func TestCopyBudgetIsDerivedFromRowsAndClamped(t *testing.T) {
+	if got := CorrCopyBudget(0); got != corrCopyBudgetMin {
+		t.Errorf("CorrCopyBudget(0) = %s, want the %s floor", got, corrCopyBudgetMin)
+	}
+	if got := CorrCopyBudget(1); got != corrCopyBudgetMin {
+		t.Errorf("CorrCopyBudget(1) = %s, want the %s floor", got, corrCopyBudgetMin)
+	}
+	if got, want := CorrCopyBudget(240_000), 20*time.Minute; got != want {
+		t.Errorf("CorrCopyBudget(240000) = %s, want %s (200 rows/s floor)", got, want)
+	}
+	if got := CorrCopyBudget(1 << 40); got != corrCopyBudgetMax {
+		t.Errorf("CorrCopyBudget(2^40) = %s, want the %s cap (and never a negative "+
+			"Duration from nanosecond overflow)", got, corrCopyBudgetMax)
+	}
+	// The incident's partition: >600 s of server time had produced 121,495 rows.
+	// A copy of that size must be given minutes, not the 12 s the client allowed.
+	if got := CorrCopyBudget(121_495); got < 10*time.Minute {
+		t.Errorf("the incident's partition would get only %s", got)
+	}
+}
+
+// TestEveryCopyCarriesItsQueryIDAndBudget — asserted on a real migration run,
+// not on the builder, so a copy issued through some other path fails here.
+func TestEveryCopyCarriesItsQueryIDAndBudget(t *testing.T) {
+	f := newFakeCH()
+	if out, _ := runOne(t, f, testCfg()); out.Status != CorrRepartitionDone {
+		t.Fatalf("status = %q (%s)", out.Status, out.Detail)
+	}
+	if len(f.long) != 3 {
+		t.Fatalf("expected 3 partition copies, got %d", len(f.long))
+	}
+	seen := map[string]bool{}
+	for _, l := range f.long {
+		if l.queryID == "" {
+			t.Errorf("a copy ran with no query_id — it could never be found or killed: %s", l.sql)
+		}
+		if seen[l.queryID] {
+			t.Errorf("two copies share query_id %q", l.queryID)
+		}
+		seen[l.queryID] = true
+		if l.budget <= 0 {
+			t.Errorf("copy %q ran with no server-side bound", l.queryID)
+		}
+		if l.budget != CorrCopyBudget(10) && l.budget != CorrCopyBudget(20) && l.budget != CorrCopyBudget(5) {
+			t.Errorf("copy %q budget %s is not derived from its row count", l.queryID, l.budget)
+		}
+	}
+	// The copies must go through ExecLong, never the plain Exec path.
+	for _, s := range f.stmts {
+		if strings.HasPrefix(strings.TrimSpace(s), "INSERT INTO") {
+			var viaLong bool
+			for _, l := range f.long {
+				if l.sql == s {
+					viaLong = true
+				}
+			}
+			if !viaLong {
+				t.Errorf("an INSERT ran outside the long-statement seam: %s", s)
+			}
+		}
+	}
+}
+
+// TestClientTimeoutPollsThenKillsTheOrphan — THE incident path. The client call
+// fails, the server keeps writing; the migration must poll for the query_id and
+// KILL it before it declares the partition failed.
+func TestClientTimeoutPollsThenKillsTheOrphan(t *testing.T) {
+	f := newFakeCH()
+	f.rows["corr_objects"] = map[string]int64{"global|20260821": 200_000}
+	f.failLong = map[int]error{1: errors.New(
+		`clickhouse repartition: transport: Post "https://clickhouse:8443?...": timeout`)}
+	f.partialRows = 121_495 // what the orphan had already written, as measured
+	f.orphanPolls = 99      // it never stops on its own
+	out, logs := runOne(t, f, testCfg())
+
+	if out.Status != CorrRepartitionFailed {
+		t.Fatalf("status = %q (%s), want %q", out.Status, out.Detail, CorrRepartitionFailed)
+	}
+	qid := CorrCopyQueryID("corr_objects", "global", 20260821, 1, 0)
+	if len(f.killed) != 1 || f.killed[0] != qid {
+		t.Fatalf("killed = %v, want exactly [%s] — the copy was left running server-side, "+
+			"which is the 2026-08-29 incident", f.killed, qid)
+	}
+	if _, still := f.running[qid]; still {
+		t.Error("the orphan is still in system.processes after the reap")
+	}
+	if !strings.Contains(out.Detail, "orphan killed") || !strings.Contains(out.Detail, qid) {
+		t.Errorf("the failure detail does not report the reap: %q", out.Detail)
+	}
+	joined := strings.Join(logs, " ")
+	for _, want := range []string{"STILL RUNNING", "poll 1/3", "KILLed orphaned copy", qid} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("the reap is not legible to an operator (missing %q):\n%s", want, joined)
+		}
+	}
+	// Nothing was swapped, and the partial rows are still there for the redo.
+	if f.sawAny("EXCHANGE TABLES") {
+		t.Error("a failed copy was swapped in")
+	}
+	if got := f.rows["corr_objects__daily"]["global|20260821"]; got != 121_495 {
+		t.Errorf("shadow partition holds %d rows, want the 121495 the orphan wrote", got)
+	}
+}
+
+// TestCopyThatStopsOnItsOwnIsNotKilled — the reaper must not fire a KILL at a
+// statement that already finished; polling is what tells the difference.
+func TestCopyThatStopsOnItsOwnIsNotKilled(t *testing.T) {
+	f := newFakeCH()
+	f.rows["corr_objects"] = map[string]int64{"global|20260821": 10}
+	f.failLong = map[int]error{1: errors.New("transport: connection reset")}
+	f.orphanPolls = 1 // running at the first poll, gone by the second
+	out, logs := runOne(t, f, testCfg())
+
+	if out.Status != CorrRepartitionFailed {
+		t.Fatalf("status = %q, want %q", out.Status, CorrRepartitionFailed)
+	}
+	if len(f.killed) != 0 {
+		t.Errorf("KILLed %v — the copy had already stopped", f.killed)
+	}
+	if !strings.Contains(out.Detail, "left nothing running") {
+		t.Errorf("the detail does not say the server was clean: %q", out.Detail)
+	}
+	if !strings.Contains(strings.Join(logs, " "), "STILL RUNNING") {
+		t.Error("the reaper did not poll before concluding")
+	}
+}
+
+// TestReapSurvivesACancelledMigrationContext. The ctx that failed the copy is
+// often the ctx that expired; reaping on it would skip the KILL and leave the
+// orphan — the exact failure the reaper exists for.
+func TestReapSurvivesACancelledMigrationContext(t *testing.T) {
+	f := newFakeCH()
+	qid := "corr-repartition.corr_objects.global.20260821.p1.b0"
+	f.running = map[string]int{qid: 99}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	verdict := reapCopy(ctx, f, testCfg(), qid, func(string, ...any) {})
+	if len(f.killed) != 1 || f.killed[0] != qid {
+		t.Fatalf("killed = %v on a cancelled context, want [%s]", f.killed, qid)
+	}
+	if !strings.Contains(verdict, "orphan killed") {
+		t.Errorf("verdict = %q", verdict)
+	}
+}
+
+// TestPartialPartitionIsDroppedBeforeItIsRecopied. The incident left 121,495
+// rows in the shadow's (global, 20260821); the next attempt must DROP that
+// partition BEFORE re-copying, or the redo doubles the rows.
+func TestPartialPartitionIsDroppedBeforeItIsRecopied(t *testing.T) {
+	f := newFakeCH()
+	f.rows["corr_objects"] = map[string]int64{"global|20260821": 200_000}
+	f.rows["corr_objects__daily"] = map[string]int64{"global|20260821": 121_495}
+	f.cols["corr_objects__daily"] = append([]string(nil), f.cols["corr_objects"]...)
+	f.keys["corr_objects__daily"] = CorrDailyPartitionExpr("created_at")
+
+	out, _ := runOne(t, f, testCfg())
+	if out.Status != CorrRepartitionDone {
+		t.Fatalf("status = %q (%s)", out.Status, out.Detail)
+	}
+	if got := f.total("corr_objects"); got != 200_000 {
+		t.Errorf("live table holds %d rows, want 200000 — the partial copy was appended to", got)
+	}
+	var dropAt, copyAt = -1, -1
+	for i, s := range f.stmts {
+		one := strings.Join(strings.Fields(s), " ")
+		if dropAt < 0 && strings.Contains(one, "DROP PARTITION ('global', 20260821)") {
+			dropAt = i
+		}
+		if copyAt < 0 && strings.HasPrefix(one, "INSERT INTO netops.corr_objects__daily") {
+			copyAt = i
+		}
+	}
+	if dropAt < 0 {
+		t.Fatal("the partial partition was never dropped")
+	}
+	if copyAt < 0 || dropAt > copyAt {
+		t.Errorf("DROP PARTITION at %d but the copy at %d — the redo copies on top of the "+
+			"partial rows", dropAt, copyAt)
+	}
+	// And the drop is CONFIRMED before the copy: a re-count of the destination
+	// partition has to sit between them.
+	var confirmed bool
+	for _, s := range f.stmts[dropAt+1 : copyAt] {
+		if reCount.MatchString(strings.Join(strings.Fields(s), " ")) {
+			confirmed = true
+		}
+	}
+	if !confirmed {
+		t.Error("the drop is not verified before the re-copy; an orphaned writer refilling " +
+			"the partition would go unnoticed")
+	}
+}
+
+// TestRefusesToCopyOverALiveWriter — if the destination partition still holds
+// rows after DROP PARTITION, something else is writing to it (an orphan). The
+// migration must stop, not copy on top of it.
+func TestRefusesToCopyOverALiveWriter(t *testing.T) {
+	f := newFakeCH()
+	f.rows["corr_objects"] = map[string]int64{"global|20260821": 200_000}
+	f.rows["corr_objects__daily"] = map[string]int64{"global|20260821": 121_495}
+	f.cols["corr_objects__daily"] = append([]string(nil), f.cols["corr_objects"]...)
+	f.keys["corr_objects__daily"] = CorrDailyPartitionExpr("created_at")
+	f.dropLeaves = 130_000 // the orphan keeps writing through our DROP
+
+	out, _ := runOne(t, f, testCfg())
+	if out.Status != CorrRepartitionFailed {
+		t.Fatalf("status = %q (%s), want %q", out.Status, out.Detail, CorrRepartitionFailed)
+	}
+	if !strings.Contains(out.Detail, "refusing to re-copy") {
+		t.Errorf("detail = %q, want the refusal to name itself", out.Detail)
+	}
+	if len(f.long) != 0 {
+		t.Errorf("%d copies ran on top of a live writer", len(f.long))
+	}
+	if f.sawAny("EXCHANGE TABLES") {
+		t.Error("the table was swapped despite the refusal")
+	}
+}
+
+// ── 6. the mode matrix ──────────────────────────────────────────────────────
+
+// TestModeMatrix pins what each CORR_REPARTITION mode does to an under-gate and
+// an over-gate table. `check` — the default since the incident — must touch
+// NOTHING in either case.
+func TestModeMatrix(t *testing.T) {
+	const small = 1 << 20
+	cases := []struct {
+		mode    string
+		unc     int64
+		want    string
+		touches bool
+	}{
+		{CorrRepartitionCheck, small, CorrRepartitionWouldMigrate, false},
+		{CorrRepartitionCheck, labUncompressedBytes, CorrRepartitionWouldSkip, false},
+		{CorrRepartitionAuto, small, CorrRepartitionDone, true},
+		{CorrRepartitionAuto, labUncompressedBytes, CorrRepartitionSkippedBig, false},
+		{CorrRepartitionForce, small, CorrRepartitionDone, true},
+		{CorrRepartitionForce, labUncompressedBytes, CorrRepartitionDone, true},
+	}
+	for _, c := range cases {
+		t.Run(c.mode+"/"+gib(c.unc), func(t *testing.T) {
+			f := newFakeCH()
+			f.unc["corr_objects"] = c.unc
+			cfg := testCfg()
+			cfg.Mode = c.mode
+			out, _ := runOne(t, f, cfg)
+			if out.Status != c.want {
+				t.Fatalf("status = %q (%s), want %q", out.Status, out.Detail, c.want)
+			}
+			if c.touches {
+				return
+			}
+			for _, forbidden := range []string{"CREATE TABLE", "INSERT INTO", "EXCHANGE TABLES",
+				"DROP", "ALTER TABLE"} {
+				if f.sawAny(forbidden) {
+					t.Errorf("mode %q ran %q on a table it was not supposed to touch", c.mode, forbidden)
+				}
+			}
+			if len(f.long) != 0 {
+				t.Errorf("mode %q issued %d copies", c.mode, len(f.long))
+			}
+		})
+	}
+}
+
+// TestCheckModeTellsTheOperatorExactlyWhatWouldHappen. A report nobody can act
+// on is not a report: the line must name the table, its size, the gate and the
+// mode that would migrate it.
+func TestCheckModeTellsTheOperatorExactlyWhatWouldHappen(t *testing.T) {
+	f := newFakeCH()
+	cfg := testCfg()
+	cfg.Mode = CorrRepartitionCheck
+	_, logs := runOne(t, f, cfg)
+	joined := strings.Join(logs, " ")
+	for _, want := range []string{"CHECK netops.corr_objects", "1.0 MiB", "gate of 4.00 GiB",
+		"CORR_REPARTITION=auto", "2026-08-29"} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("the check line does not mention %q:\n%s", want, joined)
+		}
+	}
+
+	// Over the gate, the actionable command is `force`, not `auto`.
+	f = newFakeCH()
+	f.unc["corr_objects"] = labUncompressedBytes
+	_, logs = runOne(t, f, cfg)
+	joined = strings.Join(logs, " ")
+	for _, want := range []string{"OVER the", "48.90 GiB", "CORR_REPARTITION=force"} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("the over-gate check line does not mention %q:\n%s", want, joined)
+		}
+	}
+}
+
+// TestBootLineNamesTheMode — the 2026-08-29 rewrite surprised an operator; the
+// mode it ran under was never in the log to be seen.
+func TestBootLineNamesTheMode(t *testing.T) {
+	for _, mode := range []string{CorrRepartitionOff, CorrRepartitionCheck,
+		CorrRepartitionAuto, CorrRepartitionForce} {
+		f := newFakeCH()
+		cfg := testCfg()
+		cfg.Mode = mode
+		var logs []string
+		RunCorrRepartition(context.Background(), f, cfg, corrRetentionProfiles["production"],
+			func(format string, args ...any) { logs = append(logs, fmt.Sprintf(format, args...)) })
+		if len(logs) == 0 {
+			t.Fatalf("mode %q logged nothing at boot", mode)
+		}
+		if !strings.Contains(logs[0], "mode="+mode) {
+			t.Errorf("the first boot line for mode %q does not name it: %q", mode, logs[0])
+		}
+		if mode != CorrRepartitionOff && !strings.Contains(logs[0], "gate 4.00 GiB") {
+			t.Errorf("the boot line for mode %q does not state the gate: %q", mode, logs[0])
+		}
 	}
 }
