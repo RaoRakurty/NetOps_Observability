@@ -146,22 +146,104 @@ The same evidence yields the same key in another process, on another day.
 
 BOUNDS AND RSS (tracker 156)
 ----------------------------
-`CORR_RANK_MEMO_MAX` entries (default 50,000), LRU eviction. A `RankingResult`
-holds only strings, floats, bools, enums and dicts of those — NO `Signal`, NO
-`Node`, NO `ObjectSnapshot`, NO window reference (pinned by
+TWO bounds, both enforced on every `put`, LRU eviction until BOTH hold:
+
+* `CORR_RANK_MEMO_MAX` **entries** (default 50,000, read in `main.py`).
+* `CORR_RANK_MEMO_BYTES_MAX` **bytes** (default 96 MiB, read HERE).
+
+A `RankingResult` holds only strings, floats, bools, enums and dicts of those —
+NO `Signal`, NO `Node`, NO `ObjectSnapshot`, NO window reference (pinned by
 `test_T7_the_memo_holds_no_evidence_objects`). The value is shared by reference
 across components: `RankingResult` and `HypothesisScore` are frozen dataclasses
 and every downstream amendment (`_cap_verdict`, `_break_ties_by_seam_affinity`,
 the unknown-hop `replace`) builds a NEW object — the same sharing invariant
 `scoring._build_inapplicable_score` (`scoring.py:424-435`) has relied on since
 2026-08-22.
+
+WHY THE ENTRY BOUND ALONE WAS WRONG
+-----------------------------------
+`docs/scale/P2_MEMFLAT_ATTRIBUTION_2026-08-29.md` measured what an entry
+actually costs, and it is not "a few KB":
+
+* **12.8 KiB/entry marginal** (clearing 3,663 entries freed 46.87 MiB); 9.9
+  KiB/entry on the deep-backlog leg; **25.8 KiB/entry inclusive** of the objects
+  an entry shares with a live `ObjectSnapshot` (1,903 of 3,663 entries shared
+  their `RankingResult` with an open object — those cost nothing extra).
+* The docstring above is still true — no evidence objects — and it *still*
+  leaves `hypotheses` → `HypothesisScore` → `Verdict` → `EvidenceCoverage`
+  frozensets, plus the freshly-built `causal_chain` dicts.
+* At 50,000 entries that licenses **500-650 MiB of RSS** on a box whose whole
+  container budget is 1.25 GiB.
+
+CONFIRMED ON THE LIVE RUN: `docs/scale/P2_STEPS012_2P5K_VERDICT_2026-08-29.md`
+§3 reports 38,936 hits / 59,053 lookups, i.e. **20,117 misses = 20,117 entries
+minted** with nothing ever evicted. 20,117 x 12.8 KiB = **252 MiB** — against the
++259 MiB post-input RSS growth that failed the `memflat` gate. The attribution
+brief predicted exactly this ("N ~ 20,000-26,000 would explain the failure
+outright"); the byte bound is the fix.
+
+THE BYTE ESTIMATOR
+------------------
+`estimate_result_bytes` walks the value graph once per `put` and sums
+`sys.getsizeof` over it. It is an ESTIMATE by construction, deliberately biased
+CONSERVATIVE (it may over-count, never wildly under-count):
+
+* **No `seen` set.** The graph is a near-tree; an object reachable twice from
+  one entry is charged twice. Skipping the id-set is what makes it cheap.
+* **Enum members are charged 0** — `VerdictTier`, `ModalityClass`, `ProbeScope`
+  are module-level singletons shared by every entry, so the entry's marginal
+  cost is the pointer already counted in its container.
+* **Cross-entry sharing is NOT modelled.** Strings carried verbatim from the
+  catalog (`title`, `first_steps`, `operator_phrase`, ...) and the shared
+  `inapplicable` `HypothesisScore` objects (`scoring._catalog_plan`) are charged
+  to every entry that references them. So the total the memo reports is an
+  UPPER BOUND on the RSS it is actually responsible for — the direction a memory
+  bound must err in.
+
+Measured against a reference recursive `sys.getsizeof` deep-size walk (the same
+instrument the attribution brief used, with an id-`seen` set) over 400 real
+`rank()` outputs on the built-in catalog: **mean ratio 1.06x, range 0.94-1.33x**,
+at **0.13 ms/entry against a 3.0 ms `rank()`** (~4 % of the call it only runs on
+a MISS). The reference itself reads **18.3 KiB/entry inclusive / 9.2 KiB/entry
+when shared objects are charged once across all 400** — bracketing the brief's
+25.8 KiB inclusive / 9.9-12.8 KiB marginal on its own (larger, real-evidence)
+fixture. `test_p2_memflat_bounds.py::test_B5_*` pins the factor.
+
+WHY 96 MiB
+----------
+The 2.5K replica runs in a **1.25 GiB (1,280 MiB)** container and entered the
+`memflat` window at 494 MiB, so the whole post-input growth budget the ×1.3 gate
+allows is ~148 MiB. Sizing the memo:
+
+* 96 MiB of ESTIMATOR bytes ~ 90 MiB of reference-inclusive deep size (÷1.06),
+  which at the brief's 25.8 KiB/entry inclusive holds **~3,600 entries**, and at
+  this catalog's 18.3 KiB/entry holds **~5,100**. That is the same order as the
+  "5,000 entries ~ 50-65 MiB" the brief itself proposed — but expressed in the
+  unit that actually binds, so a fatter catalog cannot silently inflate it.
+* Its TRUE marginal RSS is lower still: 52 % of the live entries shared their
+  result with an open object, so ~43-96 MiB, i.e. **3.4-7.5 % of the container**
+  against the **40-52 %** the 50,000-entry bound licensed.
+* HIT-RATE COST — stated as an assumption, not a measurement. Neither brief
+  carries a hit-rate-vs-entries curve, so what the live 66 % would have become
+  while holding ~4,000 of its 20,117 distinct keys is NOT derivable here. What
+  IS known: the hit rate CLIMBED (29 % early in the storm → 66 %) "as evidence
+  repeats", i.e. reuse is recency-clustered, which is the access pattern LRU is
+  built to keep. The bound is therefore set where memory is safe and the cost is
+  MEASURED rather than assumed: `evicted` / `evicted_bytes` in `stats()` are 0
+  today and become the exact readout of what the bound costs on the next run.
+  Raise `CORR_RANK_MEMO_BYTES_MAX` if they climb while RSS has headroom.
 """
 
 from __future__ import annotations
 
 import hashlib
 import json
+import os
+import sys
 from collections import OrderedDict
+from dataclasses import fields as dataclass_fields
+from dataclasses import is_dataclass
+from enum import Enum
 
 from scoring import (
     VERIFICATION_HEALTHY_KIND,
@@ -172,10 +254,74 @@ from scoring import (
 from signals import Signal, probe_authority_of
 from verdicts import Witness, witness_of
 
-# Default bound. A RankingResult is a few KB at most (top-K hypotheses of
-# strings), so 50,000 entries is the size of the reusable component population
-# the profile measured, not a memory gamble.
+# Entry bound. Kept at the profile's reusable-component population; it is no
+# longer the bound that binds — see DEFAULT_MAX_BYTES and the docstring.
 DEFAULT_MAX_ENTRIES = 50_000
+
+# Byte bound. 96 MiB — justified in the docstring (WHY 96 MiB) against the
+# 1.25 GiB container, the measured 10-26 KiB/entry, and the 20,117 entries the
+# live 2.5K replica minted unbounded.
+DEFAULT_MAX_BYTES = max(
+    1, int(os.environ.get("CORR_RANK_MEMO_BYTES_MAX", str(96 * 1024 * 1024))))
+
+
+# ── the byte estimator (docstring: THE BYTE ESTIMATOR) ───────────────────────
+_getsizeof = sys.getsizeof
+_STR_BASE = _getsizeof("")
+# One number for every float/int/bool in the graph. CPython's are 24-32 B and
+# small ints are interned; a single constant keeps the walk branch-free.
+_SCALAR_BYTES = 24
+# type -> the dataclass field names to walk, derived once. Bounded by the number
+# of distinct types in a RankingResult value graph (RankingResult,
+# HypothesisScore, Verdict, EvidenceCoverage) — it is a memo of the SCHEMA, not
+# of the data, so it cannot grow with traffic.
+_FIELD_NAMES: dict[type, tuple[str, ...]] = {}
+
+
+def estimate_result_bytes(obj: object) -> int:
+    """Deterministic, cheap upper-ish bound on the bytes one memo value retains.
+
+    Deliberately NOT exact: no id-`seen` set (the graph is a near-tree, and the
+    set is most of the cost), enum members charged 0 (module-level singletons),
+    cross-entry sharing not modelled (charged to every entry that references
+    it). Measured at 1.06x a reference deep-size walk, range 0.94-1.33x — see the
+    module docstring and `test_p2_memflat_bounds.py::test_B5_*`.
+
+    Deterministic: `sys.getsizeof` and `len` only. No `hash()`, no `id()`, no
+    clock — the same value graph gives the same number in any process."""
+    t = type(obj)
+    # `type(obj) is str`, NOT `isinstance`: a str-subclass Enum member
+    # (`VerdictTier`, `ModalityClass`) must fall through to the Enum branch and
+    # be charged 0, not charged as a fresh string on every entry.
+    if t is str:
+        return _STR_BASE + len(obj)          # type: ignore[arg-type]
+    if t is float or t is int or t is bool:
+        return _SCALAR_BYTES
+    if obj is None:
+        return 0
+    if t is tuple or t is list or t is set or t is frozenset:
+        total = _getsizeof(obj)
+        for item in obj:                       # type: ignore[attr-defined]
+            total += estimate_result_bytes(item)
+        return total
+    if t is dict:
+        total = _getsizeof(obj)
+        for key, value in obj.items():         # type: ignore[attr-defined]
+            total += estimate_result_bytes(key) + estimate_result_bytes(value)
+        return total
+    names = _FIELD_NAMES.get(t)
+    if names is None:
+        names = (tuple(f.name for f in dataclass_fields(obj))
+                 if is_dataclass(obj) and not isinstance(obj, type) else ())
+        _FIELD_NAMES[t] = names
+    if not names:
+        # An Enum member is one module-level singleton shared by every entry:
+        # the entry's marginal cost is the pointer its container already paid.
+        return 0 if isinstance(obj, Enum) else _getsizeof(obj)
+    total = _getsizeof(obj)
+    for name in names:
+        total += estimate_result_bytes(getattr(obj, name))
+    return total
 
 
 def _witness_projection(w: Witness) -> tuple:
@@ -276,17 +422,35 @@ class RankMemo:
     can never serve one tenant's verdict to another.
 
     RSS (tracker 156): the value is a `RankingResult` and nothing else — no
-    snapshot, no nodes, no signals, no window reference."""
+    snapshot, no nodes, no signals, no window reference. BOTH bounds hold after
+    every `put`: entries <= `max_entries` AND bytes <= `bytes_max` (the
+    docstring's WHY THE ENTRY BOUND ALONE WAS WRONG), with ONE documented
+    exception — a single entry larger than the whole byte budget is kept rather
+    than evicting the memo to empty, so `bytes` can exceed `bytes_max` by at
+    most the size of the newest entry.
 
-    __slots__ = ("_lru", "evicted", "hits", "max_entries", "misses", "unkeyable")
+    `_sizes` mirrors `_lru`'s keys with each entry's estimated size, so eviction
+    returns the bytes without re-walking a graph that is about to be dropped.
+    It is a SIDECAR rather than a `(value, size)` tuple in `_lru` on purpose:
+    `_lru`'s value stays exactly the `RankingResult` the module contract (and
+    `test_T7_the_memo_holds_no_evidence_objects`) reads it as. One int per entry
+    against a 10-26 KiB value is noise."""
 
-    def __init__(self, max_entries: int = DEFAULT_MAX_ENTRIES) -> None:
+    __slots__ = ("_lru", "_sizes", "bytes_max", "bytes_used", "evicted",
+                 "evicted_bytes", "hits", "max_entries", "misses", "unkeyable")
+
+    def __init__(self, max_entries: int = DEFAULT_MAX_ENTRIES,
+                 max_bytes: int = DEFAULT_MAX_BYTES) -> None:
         self.max_entries = max(1, int(max_entries))
+        self.bytes_max = max(1, int(max_bytes))
         self._lru: OrderedDict[str, RankingResult] = OrderedDict()
-        self.hits = 0        # keyed lookups served from the memo (rank skipped)
-        self.misses = 0      # keyed lookups that had to rank
-        self.evicted = 0     # entries dropped by the LRU bound
-        self.unkeyable = 0   # components whose evidence has no sound key
+        self._sizes: dict[str, int] = {}   # key -> estimate_result_bytes(value)
+        self.hits = 0            # keyed lookups served from the memo (rank skipped)
+        self.misses = 0          # keyed lookups that had to rank
+        self.evicted = 0         # entries dropped by either bound
+        self.evicted_bytes = 0   # estimated bytes those entries held
+        self.bytes_used = 0      # estimated bytes currently held
+        self.unkeyable = 0       # components whose evidence has no sound key
 
     def get(self, key: str) -> RankingResult | None:
         hit = self._lru.get(key)
@@ -298,26 +462,56 @@ class RankMemo:
         return hit
 
     def put(self, key: str, ranking: RankingResult) -> None:
+        size = estimate_result_bytes(ranking)
+        # Re-putting a key replaces its charge; it never double-counts.
+        self.bytes_used -= self._sizes.get(key, 0)
         self._lru[key] = ranking
         self._lru.move_to_end(key)
-        while len(self._lru) > self.max_entries:
-            self._lru.popitem(last=False)
+        self._sizes[key] = size
+        self.bytes_used += size
+        while (len(self._lru) > self.max_entries
+               or (self.bytes_used > self.bytes_max and len(self._lru) > 1)):
+            oldest, _ = self._lru.popitem(last=False)
+            dropped = self._sizes.pop(oldest, 0)
+            self.bytes_used -= dropped
             self.evicted += 1
+            self.evicted_bytes += dropped
 
     def clear(self) -> None:
         self._lru.clear()
+        self._sizes.clear()
+        self.bytes_used = 0
 
     def __len__(self) -> int:
         return len(self._lru)
 
     def stats(self) -> dict[str, int]:
         """§10 observable. `hits + misses` is the number of components that
-        reached the memo at all; `unkeyable` is the fail-closed population."""
+        reached the memo at all; `unkeyable` is the fail-closed population;
+        `bytes` / `bytes_max` / `evicted_bytes` are the tracker-156 memory
+        readout — `evicted_bytes` climbing is the byte bound doing its job, and
+        the exact measurement of what it costs in hit rate.
+
+        NOTE (2026-08-29) — main.py is owned by another change and was NOT
+        edited here. `epoch_state()["rank_memo"]` passes this dict through, so
+        it picks the three new keys up for free; TWO places in main.py still
+        need a one-line follow-up:
+          1. `rank_memo_stats()`'s memo-OFF branch returns a hardcoded dict and
+             must gain `"bytes": 0, "bytes_max": 0, "evicted_bytes": 0` so a
+             dashboard never sees a key appear/disappear with the flag.
+          2. `_metrics_text()` enumerates the memo series by hand
+             (`corr_rank_memo{result=...}` + `corr_rank_memo_entries`); add
+             `corr_rank_memo_bytes` / `corr_rank_memo_bytes_max` gauges and an
+             `evicted_bytes` counter — the byte bound is invisible on /metrics
+             until then."""
         return {
             "entries": len(self._lru),
             "max_entries": self.max_entries,
+            "bytes": self.bytes_used,
+            "bytes_max": self.bytes_max,
             "hits": self.hits,
             "misses": self.misses,
             "evicted": self.evicted,
+            "evicted_bytes": self.evicted_bytes,
             "unkeyable": self.unkeyable,
         }

@@ -93,6 +93,50 @@ def _verification_corroborates(clause: Clause, sig: Signal) -> bool:
     return bool(_attr_kinds(sig, "corroborates_kinds") & clause.kinds())
 
 
+# ── ephemeral causal-chain clauses: ONE object per witness kind ──────────────
+#
+# THE MEASURED DEFECT (docs/scale/P2_MEMFLAT_ATTRIBUTION_2026-08-29.md §5.2).
+# `score_template` and `_template_kinds` used to build a fresh
+# `Clause(kind=stage.witness)` on EVERY call. `Clause.kinds()` is memoised by
+# object IDENTITY (catalog.py, P2 step 0b), so each of those throwaway clauses
+# took a cache slot it could never serve again — and the cache holds a STRONG
+# reference, so it pinned them until the 4,096-entry bound cleared the whole
+# dict. Measured at the bench's `drained` point: 2,292 pinned Clause objects the
+# catalog does not own (2.56 MiB) against 426 the catalog does; the `memo_off`
+# leg filled the cache to 4,095 and self-cleared mid-drain. Pure waste — the
+# identity cache is excellent everywhere it applies (98.8 % served), so the fix
+# is at the CALL SITE, not the cache.
+#
+# The fix: intern the clause by its witness STRING. A `Clause` with only `kind`
+# set is a pure function of that string on a frozen model, so one shared
+# instance is VALUE-IDENTICAL to a fresh one — nothing the scorer computes can
+# move (pinned by the byte-identity tests in `test_p2_memflat_bounds.py`) — and
+# the identity cache now sees a stable id and actually serves it.
+#
+# Bounded (§9): the key space is the catalog's causal-chain witness vocabulary
+# (a few hundred strings, immutable for the life of the catalog). On overflow
+# the whole map is cleared and refills, exactly like `_CLAUSE_KINDS_CACHE` — an
+# allocation optimisation, never a correctness input.
+_WITNESS_CLAUSE_CACHE: dict[str, Clause] = {}
+_WITNESS_CLAUSE_CACHE_MAX = 4096
+
+
+def witness_clause(kind: str) -> Clause:
+    """The shared `Clause(kind=<causal-chain witness>)` for one witness kind.
+
+    Value-keyed (the string), unlike `Clause.kinds`'s identity cache — hashing a
+    short str is cheap where hashing a frozen pydantic model is not, and a
+    stable identity is precisely what makes that downstream cache hit."""
+    hit = _WITNESS_CLAUSE_CACHE.get(kind)
+    if hit is not None:
+        return hit
+    clause = Clause(kind=kind)
+    if len(_WITNESS_CLAUSE_CACHE) >= _WITNESS_CLAUSE_CACHE_MAX:
+        _WITNESS_CLAUSE_CACHE.clear()
+    _WITNESS_CLAUSE_CACHE[kind] = clause
+    return clause
+
+
 def _satisfying(clause: Clause, evidence: tuple[Signal, ...]) -> tuple[Signal, ...]:
     # Decision #1: a debug_only / lab probe can never satisfy a clause — it must
     # not attach as supporting evidence nor drive a customer-facing hypothesis.
@@ -260,7 +304,7 @@ def score_template(
             "note": "" if hits else st.unobserved_note,
         }
         for st in template.causal_chain
-        for hits in (_satisfying(Clause(kind=st.witness), evidence),)
+        for hits in (_satisfying(witness_clause(st.witness), evidence),)
     )
 
     confidence = coverage * graph_support * direction_agreement
@@ -375,7 +419,7 @@ def _template_kinds(template: Template) -> frozenset[str]:
     for disc in template.discriminators:
         ks |= disc.absent.kinds()
     for stage in template.causal_chain:
-        ks |= Clause(kind=stage.witness).kinds()
+        ks |= witness_clause(stage.witness).kinds()
     return frozenset(ks)
 
 
