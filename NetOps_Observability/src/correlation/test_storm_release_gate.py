@@ -7,8 +7,9 @@ which chains: this suite → Go SQL-shape tests → (live stacks only) the
 ch-query-budget-check + ch-retention-dry-run scripts.
 
 Asserted SLOs, from docs/design/correlation-data-contract.md §new-lane:
-  1. WRITE BUDGET   — a permanently-broken source persists O(heartbeats), not
-                      O(cycles): damping ratio ≥ 0.9 over a 20-cycle storm.
+  1. WRITE BUDGET   — a permanently-broken source persists O(material changes + lifecycle + keepalive), not
+                      O(cycles) — an unchanged heartbeat writes a corr_current
+                      touch, never a version (CORR_HEARTBEAT_TOUCH_ONLY): damping ratio ≥ 0.9 over a 20-cycle storm.
   2. BLAST RADIUS   — tenant A's storm never changes tenant B's write behavior
                       or RCA content.
   3. RCA INTEGRITY  — damping suppresses churn, never truth: the persisted
