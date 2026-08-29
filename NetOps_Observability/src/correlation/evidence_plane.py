@@ -680,16 +680,35 @@ class RowBatcher:
     One `asyncio.Lock` serializes `add` and every flush path, so a background
     age-flusher can never interleave its INSERT with a producer's append and
     split a block in an order no reader expects.
+
+    `max_rows` is the FOURTH bound and the only one a single producer cannot
+    overshoot (2026-08-29 storm regression, `docs/scale/RCA_LATENCY_BASELINE`).
+    The other three are checked AFTER the append, so one `add` of a
+    10,000-row archive chunk landed WHOLE in a buffer that was already near its
+    byte bound: the block ClickHouse then had to accept was tens of MB, and
+    every step that walks a block once — `insert_scope`, the NDJSON encode, the
+    HTTP send — was sized by the largest member instead of by the bound. With
+    `max_rows` the chunk is SPLIT across blocks, so a giant member is written in
+    bounded blocks of its own and no block is ever larger than the cap.
+
+    SPLIT AND THE BLOCK TOKEN. A block's dedup token is `batch_token(keys)`, so
+    two blocks may never present the same key list. The first part of a split
+    chunk keeps the key it would have had unsplit (so nothing moves when no
+    split happens); every later part appends `#p<n>`, `n` being its index within
+    THIS `add`. That is a pure function of the chunk, the cap and the buffer's
+    fill — the same inputs that decided the split — so a retry of the identical
+    block re-derives the identical token and ClickHouse still dedups it.
     """
 
-    __slots__ = ("_bufs", "_default", "_insert", "_limits", "_lock", "_on_flush",
-                 "_on_join", "age_max_s", "blocks_failed", "flushes",
+    __slots__ = ("_bufs", "_default", "_insert", "_limits", "_lock", "_max_rows",
+                 "_on_flush", "_on_join", "age_max_s", "blocks_failed", "flushes",
                  "rows_flushed")
 
     def __init__(self, *, insert: _InsertFn, on_flush: _FlushCb | None = None,
                  on_join: Callable[[str, Any], None] | None = None,
                  default: BatchLimits = (200, 8 * 1024 * 1024, 2.0),
-                 limits: dict[str, BatchLimits] | None = None) -> None:
+                 limits: dict[str, BatchLimits] | None = None,
+                 max_rows: int = 0) -> None:
         self._insert = insert
         self._on_flush = on_flush
         # Called the FIRST time a member contributes rows to a table's buffer,
@@ -700,6 +719,9 @@ class RowBatcher:
         self._on_join = on_join
         self._default = default
         self._limits = dict(limits or {})
+        # 0 disables the cap (every pre-existing caller), exactly like a 0 in
+        # any other trigger slot.
+        self._max_rows = max(0, int(max_rows))
         self._bufs: dict[str, _Buffer] = {}
         self._lock = asyncio.Lock()
         self.flushes: dict[str, int] = {}
@@ -710,6 +732,12 @@ class RowBatcher:
     # ── configuration ────────────────────────────────────────────────────────
     def limits_for(self, table: str) -> BatchLimits:
         return self._limits.get(table, self._default)
+
+    def rows_for(self, table: str) -> int:
+        """The hard ROW cap of one block (0 = uncapped). Table-independent
+        today; the accessor exists so a per-table cap is a one-line change and
+        every caller already reads it through one place."""
+        return self._max_rows
 
     @staticmethod
     def _member_key(buf: _Buffer, member: Any, table: str,
@@ -740,25 +768,52 @@ class RowBatcher:
         block failure to whichever version happened to open the buffer. The
         block's own shape is built at flush time instead, and the member tokens
         are what name the versions (`on_flush`).
+
+        A chunk larger than the row cap (or larger than the room left in the
+        open block) is SPLIT across consecutive blocks — see the class
+        docstring for the key/token rule. Rows are appended in the order they
+        arrive and never reordered, so concatenating a table's blocks still
+        reproduces exactly the sequence the unbatched path writes.
         """
         if not rows:
             return
         async with self._lock:
-            buf = self._bufs.get(table)
-            if buf is None:
-                buf = self._bufs[table] = _Buffer(oldest_mono=time.monotonic())
-            buf.rows.extend(rows)
-            buf.keys.append(self._member_key(buf, member, table, dedup_token))
-            if id(member) not in buf.member_ids:
-                buf.member_ids.add(id(member))
-                buf.members.append(member)
-                if self._on_join is not None:
-                    self._on_join(table, member)
-            buf.est_bytes += _row_bytes(rows)
+            cap = self.rows_for(table)
             max_members, max_bytes, _max_age = self.limits_for(table)
-            if ((max_members and len(buf.members) >= max_members)
-                    or (max_bytes and buf.est_bytes >= max_bytes)):
-                await self._flush_locked(table)
+            total = len(rows)
+            off = 0
+            part = 0
+            while off < total:
+                buf = self._bufs.get(table)
+                if buf is None:
+                    buf = self._bufs[table] = _Buffer(oldest_mono=time.monotonic())
+                room = (cap - len(buf.rows)) if cap else (total - off)
+                if room <= 0:
+                    # The open block is already at the cap (a previous part
+                    # filled it, or a caller lowered the cap mid-flight): write
+                    # it and open a fresh one. `_flush_locked` pops the buffer,
+                    # so the next turn of the loop creates it.
+                    await self._flush_locked(table)
+                    continue
+                take = min(room, total - off)
+                # The whole list when nothing is split — same object, no copy,
+                # so the un-split path is byte- and allocation-identical.
+                chunk = rows if (off == 0 and take == total) else rows[off:off + take]
+                buf.rows.extend(chunk)
+                key = self._member_key(buf, member, table, dedup_token)
+                buf.keys.append(key if part == 0 else f"{key}#p{part}")
+                if id(member) not in buf.member_ids:
+                    buf.member_ids.add(id(member))
+                    buf.members.append(member)
+                    if self._on_join is not None:
+                        self._on_join(table, member)
+                buf.est_bytes += _row_bytes(chunk)
+                off += take
+                part += 1
+                if ((cap and len(buf.rows) >= cap)
+                        or (max_members and len(buf.members) >= max_members)
+                        or (max_bytes and buf.est_bytes >= max_bytes)):
+                    await self._flush_locked(table)
 
     # ── flushing ─────────────────────────────────────────────────────────────
     async def flush(self, table: str) -> None:
@@ -855,5 +910,6 @@ class RowBatcher:
             "batch_age_seconds_max": round(self.age_max_s, 3),
             "buffered_rows": self.buffered(),
             "buffered_tables": len([t for t, b in self._bufs.items() if b.rows]),
+            "block_rows_max": self._max_rows,
             "blocks_failed_total": self.blocks_failed,
         }

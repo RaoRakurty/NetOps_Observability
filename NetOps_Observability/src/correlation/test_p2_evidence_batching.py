@@ -51,7 +51,9 @@ B9/B9b pin both halves of that: off by default, and correct when forced on.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import dataclasses
+import gc
 import json
 import logging
 from datetime import timedelta
@@ -866,3 +868,319 @@ def test_B11b_a_raising_sink_is_reported_not_propagated(_stack):
     asyncio.run(go())
     assert reports and reports[0][1] is False
     assert isinstance(reports[0][2], main.CHInsertRejected)
+
+
+# ═══ B12/B13 — the STORM AGGREGATE: the object every size gate under-read ════
+#
+# Live regression, run t-storm-2.5k (2026-08-29 17:17 UTC, replica
+# netops-correlation-4): `corr_loop_lag_max_ms` 114,848 — one 115-second
+# event-loop stall — with `persist.decision` max 23,655 ms and
+# `persist.batch_flush` max 116,507 ms, beginning immediately after the storm
+# aggregate `bb1e46d6` (tenant-constant cid, `storm_aggregate=True`) was
+# persisted as v9 with 922 nodes. On the nominal runs `persist.batch_flush` max
+# was 3.6-4.9 s.
+#
+# THE SHAPE, and why it defeated every threshold on the persist path: a
+# storm-noise aggregate is emitted with `edges=()` (engine.py:3040) and one node
+# per folded below-floor entity, so `_snap_elements` (nodes + edges) reads ~950
+# for the object that holds the entire below-floor flood — tens of thousands of
+# signals. Every gate keyed on it therefore said "small" and ran
+# `content_hash`, `material_hash`, `to_object_row` and `estimate_bytes` INLINE,
+# on the event-loop thread, over all of them. `_snap_cost` counts the signals;
+# the block ROW cap bounds what one member can hand a single INSERT.
+
+@pytest.fixture(scope="module")
+def storm_aggregate():
+    """A storm-NOISE aggregate: ~950 nodes, NO edges, ~85k signals — and the
+    window those signals came from, so the archive slice is the whole flood.
+
+    Deliberately built by hand rather than driven through `run_window`'s storm
+    branch: the fixture has to pin the SHAPE (edges=(), mass in node signals)
+    that the sizing defect turns on, and building it explicitly is what makes
+    that shape visible to the next reader."""
+    from catalog import builtin_catalog
+    from engine import run_window
+    cat = builtin_catalog()
+    base = run_window(
+        [engine_sig("link_state_change", EntityType.DEVICE, "dev0",
+                    severity=Severity.CRIT),
+         engine_sig("device_resource_anomaly", EntityType.DEVICE, "dev0",
+                    severity=Severity.CRIT, offset_s=1)], cat, ())[0]
+    proto = base.nodes[0]
+    nodes, window = [], []
+    for i in range(950):
+        sigs = tuple(engine_sig("link_state_change", EntityType.DEVICE, f"agg{i}",
+                                severity=Severity.WARN, offset_s=j * 0.25 + i * 0.001)
+                     for j in range(90))
+        nodes.append(dataclasses.replace(
+            proto, key=f"device:agg{i}:link_state_change", entity_id=f"agg{i}",
+            signals=sigs, onset=sigs[0].ts, peak_severity=Severity.WARN,
+            occurrences=90))
+        window.extend(sigs)
+    snap = dataclasses.replace(
+        base, correlation_id="a1b2c3d4-0000-0000-0000-00000000000f",
+        nodes=tuple(nodes), edges=(), storm_mode=True, storm_aggregate=True,
+        storm_occurrences=len(window), storm_distinct_entities=len(nodes),
+        window_start=ENGINE_T0 - timedelta(seconds=1),
+        window_end=ENGINE_T0 + timedelta(minutes=180))
+    return snap, window
+
+
+def _aggregate_stack(_stack, *, batch: bool = True) -> _RecCH:
+    """A clean engine + Evidence plane for one aggregate leg."""
+    _reset_engine_state()
+    ch = _RecCH()
+    _stack.setattr(main, "ch", ch)
+    _stack.setattr(main, "OPEN_OBJECTS", {})
+    _stack.setattr(main, "_EVIDENCE_QUEUE", None)
+    _stack.setattr(main, "_EVIDENCE_TASK", None)
+    _stack.setattr(main, "_EVIDENCE_LOOP", None)
+    _stack.setattr(main, "_EVIDENCE_BATCHER", None)
+    _stack.setattr(main, "_EVIDENCE_FLUSHER", None)
+    _stack.setattr(main, "CORR_EVIDENCE_ASYNC", True)
+    _stack.setattr(main, "CORR_EVIDENCE_BATCH", batch)
+    _stack.setattr(main, "CORR_DECISION_OFFLOAD", True)
+    main._WINDOW_INDEX_CACHE.clear()
+    main._ARCHIVE_SLICE_HASH.clear()
+    main._CYCLE_ROW_CACHE.clear()
+    return ch
+
+
+async def _persist_and_drain(snap, window) -> None:
+    q = main._evidence_ensure_consumer()
+    assert q is not None, "the aggregate legs must run through the CONSUMER"
+    await main._persist_snapshot(snap, 1, "open", window)
+    await main._evidence_stop()
+
+
+def _aggregate_lag(_stack, snap, window, *, cost_gate: bool) -> float:
+    """Worst loop-lag sample while the aggregate is persisted AND drained.
+
+    `cost_gate=False` restores the shipped-before sizer (`_snap_elements`) and
+    is the MUTANT: it is the one-line difference between "the largest object in
+    the process is protected by the offload threshold" and "it is not".
+
+    THE CYCLE COLLECTOR IS TURNED OFF INSIDE THE MEASURED WINDOW, and that is
+    not a convenience. A gen-2 collection runs on whatever thread trips the
+    allocation threshold, holds the GIL for the whole sweep, and is sized by the
+    PROCESS heap — nothing this module allocates and nothing `_offload` can
+    move. Measured on this fixture: 319 ms worst lag on a clean heap, 1,773 ms
+    with a 3M-object ballast retained, 185 ms with the same ballast and the
+    collector off. Left on, this test would be measuring the heap the rest of
+    the suite happens to be holding rather than the stretch it names — and the
+    GC stall is a REAL finding about the live 115 s stall, tracked separately;
+    it is simply not the thing this assertion is about.
+    """
+    _aggregate_stack(_stack, batch=True)
+    _stack.setattr(main, "CORR_LOOP_LAG_SAMPLE_S", 0.02)
+    _stack.setattr(main, "CORR_LOOP_LAG_WARN_MS", 500.0)
+    if not cost_gate:
+        _stack.setattr(main, "_snap_cost", main._snap_elements)
+    # The digests are memoized on the frozen snapshot, so a second leg over the
+    # same module-scoped fixture would measure a cache hit, not the serialize.
+    for attr in ("_content_hash_c", "_material_hash_c"):
+        with contextlib.suppress(AttributeError):
+            object.__delattr__(snap, attr)
+
+    async def go():
+        async def work():
+            await _persist_and_drain(snap, window)
+        return await _watchdog_lag_while(work)
+
+    gc.collect()
+    was_enabled = gc.isenabled()
+    gc.disable()
+    try:
+        return asyncio.run(go())
+    finally:
+        if was_enabled:
+            gc.enable()
+
+
+def test_B12_the_storm_aggregate_never_holds_the_loop_past_the_budget(
+        _stack, storm_aggregate):
+    """The regression, pinned by the watchdog that saw it live.
+
+    MUTANT (`_snap_cost` = `_snap_elements`, the shipped-before sizer): the
+    aggregate's ~85k signals are serialized and hashed on the loop thread and
+    the watchdog counts a stall above the 500 ms budget."""
+    snap, window = storm_aggregate
+    assert len(snap.nodes) >= 900 and not snap.edges, "fixture must be an aggregate"
+    assert snap.signal_count() >= 50_000, "fixture must carry the flood"
+    assert main._snap_elements(snap) < main.CORR_OFFLOAD_MIN_ELEMENTS, (
+        "the graph-sized reading must be BELOW the threshold — that is the defect")
+    assert main._snap_cost(snap) >= main.CORR_OFFLOAD_MIN_ELEMENTS
+
+    mutant = _aggregate_lag(_stack, snap, window, cost_gate=False)
+    assert mutant >= 500.0, (
+        f"the mutant must reproduce the defect (worst lag {mutant:.0f} ms) — if "
+        f"it does not, the fixture is too small to prove anything")
+    assert main.LOOP_LAG_STALLS >= 1, "the watchdog must count the mutant's stall"
+
+    fixed = _aggregate_lag(_stack, snap, window, cost_gate=True)
+    assert fixed < 500.0, (
+        f"a storm aggregate still froze the loop for {fixed:.0f} ms — its "
+        f"signal-sized work is back on the event loop")
+    assert main.LOOP_LAG_STALLS == 0
+    assert fixed < mutant / 2
+
+
+def test_B12b_the_aggregates_signal_sized_steps_go_to_the_executor(
+        _stack, storm_aggregate):
+    """The exact half of B12: WHICH calls are dispatched off the loop.
+
+    Timing alone cannot separate them (an offloaded serialize still holds the
+    GIL, so the ticker sees tens of ms whatever else happens — B10b's rule).
+    The dispatch is exact: on an aggregate every signal-sized step runs in the
+    executor under `_snap_cost`, and NONE of them does under `_snap_elements`."""
+    snap, window = storm_aggregate
+    seen: list[str] = []
+    real = main._offload
+    real_cost = main._snap_cost
+
+    async def spy(fn, /, *a, **k):
+        seen.append(getattr(fn, "__name__", repr(fn)))
+        return await real(fn, *a, **k)
+
+    def leg(*, cost_gate: bool) -> list[str]:
+        _aggregate_stack(_stack, batch=True)
+        _stack.setattr(main, "_offload", spy)
+        _stack.setattr(main, "_snap_cost",
+                       real_cost if cost_gate else main._snap_elements)
+        for attr in ("_content_hash_c", "_material_hash_c"):
+            with contextlib.suppress(AttributeError):
+                object.__delattr__(snap, attr)
+        seen.clear()
+
+        async def go():
+            assert main._evidence_ensure_consumer() is not None
+            # Held, so the consumer cannot interleave its own offloads into the
+            # spy while the Decision write is being measured (B10b's rule).
+            async with main._evidence_cohort_hold():
+                await main._persist_snapshot(snap, 1, "open", window)
+            got = list(seen)
+            await main._evidence_stop()
+            return got
+
+        return asyncio.run(go())
+
+    on = leg(cost_gate=True)
+    off = leg(cost_gate=False)
+    # `material_hash` takes the same route (`_snap_call`) but is computed by
+    # engine_cycle's damping gate, not by `_persist_snapshot`, so it is not
+    # observable here — B12's timing leg is what covers it.
+    for name in ("cycle_hypotheses_blob", "to_object_row", "content_hash"):
+        assert name in on, f"{name} still runs on the loop thread for an aggregate"
+        assert name not in off, (
+            f"{name} was offloaded by the SHIPPED-BEFORE sizer too — B12 would "
+            f"then be proving something other than this change")
+    # The byte estimate is charged by the object AND the slice hanging off the
+    # item, so it is offloaded on this shape either way — asserted so the
+    # widened sizing cannot silently regress to the object alone.
+    assert "estimate_bytes" in on
+
+
+def test_B12c_the_aggregate_writes_the_same_rows_and_bytes_batched_or_not(
+        _stack, storm_aggregate):
+    """B1's identity claim, on the shape that forced the fix: the same rows, the
+    same bytes and the SAME ORDER — one item, so nothing may be reordered at
+    all — with the block row cap splitting the slice into bounded INSERTs."""
+    snap, window = storm_aggregate
+
+    def leg(*, batch: bool) -> _RecCH:
+        ch = _aggregate_stack(_stack, batch=batch)
+        asyncio.run(_persist_and_drain(snap, window))
+        return ch
+
+    off = leg(batch=False)
+    on = leg(batch=True)
+    assert off.tables() == on.tables()
+    for table in off.tables():
+        assert _rows_json(off, table) == _rows_json(on, table), (
+            f"{table}: a row moved between the batched and unbatched aggregate")
+    assert len(off.rows_of(ARCHIVE)) >= 50_000, "the slice must be the flood"
+    # Every block is inside the cap, and the cap actually bit (>1 archive block).
+    blocks = [len(rows) for t, rows, _tok in on.writes if t == ARCHIVE]
+    assert len(blocks) > 1 and max(blocks) <= main.CORR_EVIDENCE_BATCH_ROWS, (
+        f"archive blocks {blocks} — one member must never exceed the row cap "
+        f"({main.CORR_EVIDENCE_BATCH_ROWS})")
+    toks = [tok for t, _rows, tok in on.writes if t == ARCHIVE]
+    assert all(t.startswith("batch:") for t in toks)
+    assert len(set(toks)) == len(toks), (
+        "two archive blocks of ONE member hashed to the same block token — "
+        "ClickHouse would drop the second the day the table gets a dedup window")
+
+
+# ═══ B13 — the ROW cap: a giant member is split, in order, distinctly ════════
+
+def test_B13_the_row_cap_splits_one_member_in_order_with_distinct_tokens():
+    """`add` checks members/bytes/age AFTER the append, so before the cap ONE
+    chunk landed whole however big it was. Split: same rows, same order, one
+    block per cap-worth, and a DIFFERENT token per block."""
+    seen: list[tuple[str, list, str]] = []
+    joins: list[str] = []
+
+    async def sink(table, rows, token, ctx):
+        seen.append((table, list(rows), token))
+        return True
+
+    def go(cap: int) -> list[tuple[str, list, str]]:
+        seen.clear()
+        joins.clear()
+
+        async def run():
+            b = RowBatcher(insert=sink, on_join=lambda t, m: joins.append(m.tok),
+                           default=(1000, 1 << 30, 1e9), max_rows=cap)
+            await b.add(ARCHIVE, [{"i": i} for i in range(10)],
+                        member=_member("obj:a:v1:open:aa"))
+            await b.flush_all()
+
+        asyncio.run(run())
+        return list(seen)
+
+    blocks = go(4)
+    assert [len(rows) for _t, rows, _k in blocks] == [4, 4, 2], (
+        "a 10-row chunk under a 4-row cap must be three bounded blocks")
+    assert [r for _t, rows, _k in blocks for r in rows] == [{"i": i} for i in range(10)], \
+        "splitting must preserve row order exactly"
+    toks = [k for _t, _r, k in blocks]
+    assert len(set(toks)) == 3 and all(t.startswith("batch:") for t in toks), (
+        "each part must present its own key list, or two blocks of the same "
+        "member hash to the same dedup token and ClickHouse drops one")
+    assert joins == ["obj:a:v1:open:aa"] * 3, (
+        "the member joined three blocks and must be counted waiting on three")
+    assert go(4) == blocks, "the split, its keys and its tokens must be deterministic"
+
+    # MUTANT: the pre-fix batcher (no cap) takes the whole member in one block.
+    uncapped = go(0)
+    assert len(uncapped) == 1 and len(uncapped[0][1]) == 10
+
+
+def test_B13b_the_cap_never_splits_a_chunk_that_fits():
+    """The un-split path must be untouched — same single key, same token as
+    before the cap existed, so B2b/B2d keep meaning what they meant."""
+    seen: list[tuple[str, list, str]] = []
+
+    async def sink(table, rows, token, ctx):
+        seen.append((table, list(rows), token))
+        return True
+
+    async def run():
+        b = RowBatcher(insert=sink, default=(1, 1 << 30, 1e9), max_rows=1000)
+        await b.add(EDGES, [{"i": 0}, {"i": 1}], member=_member("a"),
+                    dedup_token="obj:a:v1:open:aa:edges:0")
+
+    asyncio.run(run())
+    assert len(seen) == 1
+    assert seen[0][2] == batch_token(["obj:a:v1:open:aa:edges:0"]), (
+        "a chunk that fits must keep exactly the key it had before the cap")
+
+
+def test_B13c_the_evidence_batcher_is_built_with_the_row_cap(_stack):
+    """The wiring: the shipped batcher carries the env-configured cap, and the
+    Evidence plane reports it."""
+    _stack.setattr(main, "CORR_EVIDENCE_BATCH_ROWS", 12_345)
+    b = main._make_row_batcher()
+    assert b.rows_for(ARCHIVE) == 12_345
+    assert b.stats()["block_rows_max"] == 12_345
+    assert main.evidence_stats()["batch_rows_max"] == 12_345

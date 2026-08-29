@@ -2760,6 +2760,24 @@ CORR_EVIDENCE_BATCH_BYTES = max(1, int(
     os.environ.get("CORR_EVIDENCE_BATCH_BYTES", str(8 * 1024 * 1024))))
 CORR_EVIDENCE_BATCH_MS = max(1.0, float(
     os.environ.get("CORR_EVIDENCE_BATCH_MS", "2000")))
+# The FOURTH bound, and the only one a single producer cannot overshoot
+# (2026-08-29 storm regression — see `_snap_cost` for the run).
+#
+# Members, bytes and age are all checked AFTER the append, so ONE `add` of a
+# 10,000-row archive chunk landed whole in a block that could already be at its
+# byte bound. The block ClickHouse then had to swallow was tens of MB in one
+# statement, and every per-block step that walks it once — `insert_scope`, the
+# NDJSON encode, the HTTP body, ClickHouse's own part build — was sized by the
+# biggest MEMBER rather than by any bound the engine had declared. A storm
+# aggregate's 50k-signal slice is exactly that member.
+#
+# With the cap, a chunk is SPLIT across consecutive blocks (RowBatcher.add):
+# the rows, their bytes and their order do not move, only the statement they
+# travel in — the same contract batching itself keeps. 20,000 rows is
+# CORR_ROW_BATCH_ROWS, i.e. the biggest block the UNBATCHED path ever issued,
+# so the cap can never make a flush bigger than what already ran in production.
+CORR_EVIDENCE_BATCH_ROWS = max(0, int(
+    os.environ.get("CORR_EVIDENCE_BATCH_ROWS", "20000")))
 
 # ── The DECISION plane's own batching — DEFAULT OFF, and it stays off ────────
 # `corr_objects` + `corr_current` are 95,793 of the run's 162,087 corr_* inserts
@@ -3840,14 +3858,54 @@ async def _offload(fn, /, *args, **kwargs):
 
 
 def _snap_elements(snap: ObjectSnapshot) -> int:
-    """Graph size driving every per-object serialization cost above."""
+    """GRAPH size — the right sizer for the per-EDGE row builders, and only
+    those (`_emit_child_rows`, the corr_current badge parse)."""
     return len(snap.nodes) + len(snap.edges)
+
+
+def _snap_cost(snap: ObjectSnapshot) -> int:
+    """What a per-object SERIALIZE or WALK actually costs, in elements.
+
+    THE DEFECT THIS FIXES (live regression, t-storm-2.5k 2026-08-29 17:17 UTC,
+    replica netops-correlation-4: `corr_loop_lag_max_ms` 114,848 with
+    `persist.decision` max 23,655 ms, immediately after the storm aggregate
+    `bb1e46d6` was persisted as v9 with 922 nodes).
+
+    `_snap_elements` is `len(nodes) + len(edges)`. Every size gate on the
+    persist path was keyed on it, and for the object that costs the most in the
+    whole process it reads almost ZERO:
+
+      * a storm-noise aggregate is built with `edges=()` (engine.py:3040) and
+        one node per folded below-floor entity — 922 of them on the live run;
+      * its cost is not in the graph, it is in the SIGNALS those nodes hold.
+        `content_hash` sorts one `str(signal_id)` per signal
+        (engine.py:2132-2133), `material_hash` builds a set of one f-string per
+        signal (engine.py:2178-2180), `to_object_row` walks them through
+        `signal_count`/`affected`/`layer_coverage_blob`/`app_impact_blob`, and
+        `estimate_bytes` DEEP-WALKS every signal and its attrs dict.
+
+    So `_snap_elements(aggregate)` = 922 < CORR_OFFLOAD_MIN_ELEMENTS (2,000) and
+    every one of those ran INLINE, on the event-loop thread, over tens of
+    thousands of signals — the largest object in the process was the only one
+    the offload threshold never protected.
+
+    This counts the signals too. It is O(nodes), not O(signals) — `signal_count`
+    sums the per-node tuple lengths — so it is cheap enough to ask on every
+    persist of every object. Nothing about a row moves: `_offload` changes which
+    THREAD a pure function runs on and nothing else.
+    """
+    return len(snap.nodes) + len(snap.edges) + snap.signal_count()
 
 
 async def _snap_call(snap: ObjectSnapshot, fn, /, *args, **kwargs):
     """One per-object pure call, offloaded only when the object is big enough
-    for the sync cost to threaten the heartbeat (see CORR_OFFLOAD_MIN_ELEMENTS)."""
-    if _snap_elements(snap) >= CORR_OFFLOAD_MIN_ELEMENTS:
+    for the sync cost to threaten the heartbeat (see CORR_OFFLOAD_MIN_ELEMENTS).
+
+    Sized by `_snap_cost`, NOT by the graph: everything routed here
+    (`cycle_hypotheses_blob`, `to_object_row`, `content_hash`, `material_hash`)
+    walks the node signals, and a storm aggregate is all signals and no edges.
+    """
+    if _snap_cost(snap) >= CORR_OFFLOAD_MIN_ELEMENTS:
         return await _offload(fn, *args, **kwargs)
     return fn(*args, **kwargs)
 
@@ -4079,7 +4137,10 @@ def _archive_slice_cost(snap: ObjectSnapshot, window: Sequence[Signal]) -> int:
         return 0
     hit = _WINDOW_INDEX_CACHE.get(id(window))
     cached = hit is not None and hit[0] == len(window)
-    return max(_snap_elements(snap), 0 if cached else len(window))
+    # `_snap_cost`, not `_snap_elements`: the per-object half of this walk is
+    # `keep.extend(node.signals)` over every node, so it is sized by the
+    # SIGNALS — which is the whole of a storm aggregate and none of its graph.
+    return max(_snap_cost(snap), 0 if cached else len(window))
 
 
 def _archive_slice_and_hash(snap: ObjectSnapshot,
@@ -4154,7 +4215,12 @@ async def _emit_child_rows(table: str, snap: ObjectSnapshot, build_page,
     if total_rows <= 0:
         return
     emit = _ch_emit if emit is None else emit
-    big = _snap_elements(snap) >= CORR_OFFLOAD_MIN_ELEMENTS
+    # Sized by what THIS stream builds: `total_rows`. The graph size is the
+    # right proxy for the edge/typed-edge streams and a poor one for evidence
+    # (edges + identity signals), and neither is right when a caller pages a
+    # stream that is bigger than the graph. `max` keeps the old decision
+    # wherever it was already the larger of the two.
+    big = max(_snap_elements(snap), total_rows) >= CORR_OFFLOAD_MIN_ELEMENTS
     batch: list[dict] = []
     seq = 0
     start = 0
@@ -4437,8 +4503,13 @@ async def _persist_snapshot(snap: ObjectSnapshot, version: int, state: str,
         # snapshot's value graph — 317 ms on the 20-node/50k-edge storm shape,
         # on the loop thread, in one uninterruptible stretch. Deterministic, so
         # the bound it feeds is unchanged; only the thread moved.
+        # Sized by BOTH halves of the walk: the snapshot's own value graph
+        # (`_snap_cost` — signals included, see its docstring) and the archive
+        # slice hanging off the item, which on a storm aggregate is 50k+
+        # signals the snapshot itself does not account for.
         item.est_bytes = await _decision_offload(
-            _snap_elements(snap), estimate_bytes, snap, slice_sigs)
+            max(_snap_cost(snap), len(slice_sigs) if slice_sigs else 0),
+            estimate_bytes, snap, slice_sigs)
     if CORR_PROFILE_STAGES and _t_decision:
         stage_record("persist.decision", time.perf_counter() - _t_decision)
     if queue is not None:
@@ -4542,9 +4613,19 @@ async def _write_evidence_inner(item: EvidenceItem, loop_yield, emit) -> bool:
         # key from the item when it is batching. The row tally moved into the
         # sink (`_ch_emit`) — under batching the insert happens later, on behalf
         # of several versions at once, and only the sink knows when it landed.
+        # `member_key` (read only by the BATCHED sink; `_ch_emit` passes it
+        # through as failure context, so the unbatched INSERT itself — token,
+        # body, settings — is unchanged): a content-derived, chunk-numbered key
+        # for a write that carries no dedup token of its own. Without it the batcher fell back to a key scoped to
+        # the BUFFER, so two consecutive solo blocks of the same item both
+        # keyed `<tok>:<table>:0` and hashed to the SAME block token — inert
+        # today only because corr_signals_archive is the one Evidence table
+        # with no `non_replicated_deduplication_window` (init.sql:398-401), and
+        # a latent silent drop the moment one is added.
         ok = await emit("netops.corr_signals_archive", chunk, "",
                         {"corr_id": snap.correlation_id, "version": version,
-                         "row_count": len(chunk)})
+                         "row_count": len(chunk),
+                         "member_key": f"{tok}:archive:{start // CORR_ARCHIVE_CHUNK_ROWS}"})
         if ok is False:
             all_ok = False
         await loop_yield()
@@ -4761,6 +4842,7 @@ def _make_row_batcher() -> RowBatcher:
     ms = CORR_EVIDENCE_BATCH_MS / 1000.0
     return RowBatcher(
         insert=_ch_insert_block, on_flush=_ev_block_done, on_join=_ev_join,
+        max_rows=CORR_EVIDENCE_BATCH_ROWS,
         default=(CORR_EVIDENCE_BATCH_ITEMS, CORR_EVIDENCE_BATCH_BYTES, ms),
         limits={
             "netops.corr_objects": (CORR_EVIDENCE_BATCH_ITEMS,
@@ -4812,7 +4894,11 @@ def _evidence_emitter(batcher: RowBatcher, item: EvidenceItem):
     async def emit(table: str, rows: list, dedup_token: str, ctx: dict) -> bool:
         # `ctx` is the per-version failure context of the UNBATCHED sink; a block
         # spans versions, so the batcher builds its own (see RowBatcher.add).
-        await batcher.add(table, rows, member=item, dedup_token=dedup_token)
+        # The one thing taken from it is `member_key`: the caller's
+        # content-derived name for a chunk written WITHOUT a dedup token (the
+        # archive), which is what stops two blocks presenting the same key list.
+        await batcher.add(table, rows, member=item,
+                          dedup_token=dedup_token or str(ctx.get("member_key", "")))
         return True
     return emit
 
@@ -4916,11 +5002,13 @@ def _evidence_ensure_consumer() -> EvidenceQueue | None:
     _EVIDENCE_BATCHER = _make_row_batcher()
     _EVIDENCE_FLUSHER = loop.create_task(_evidence_flusher(_EVIDENCE_BATCHER))
     log.info("evidence plane ASYNC: bound=%d items / %d bytes, drain-on-stop=%.0fs; "
-             "batching=%s (%d items / %d bytes / %.0f ms), decision batching=%s",
+             "batching=%s (%d items / %d bytes / %d rows / %.0f ms), "
+             "decision batching=%s",
              CORR_EVIDENCE_QUEUE_MAX, CORR_EVIDENCE_QUEUE_BYTES_MAX,
              CORR_EVIDENCE_DRAIN_ON_STOP_S, CORR_EVIDENCE_BATCH,
              CORR_EVIDENCE_BATCH_ITEMS, CORR_EVIDENCE_BATCH_BYTES,
-             CORR_EVIDENCE_BATCH_MS, CORR_DECISION_BATCH)
+             CORR_EVIDENCE_BATCH_ROWS, CORR_EVIDENCE_BATCH_MS,
+             CORR_DECISION_BATCH)
     return _EVIDENCE_QUEUE
 
 
@@ -5103,11 +5191,13 @@ def evidence_stats() -> dict[str, object]:
         "batch_enabled": CORR_EVIDENCE_BATCH,
         "batch_items_max": CORR_EVIDENCE_BATCH_ITEMS,
         "batch_bytes_max": CORR_EVIDENCE_BATCH_BYTES,
+        "batch_rows_max": CORR_EVIDENCE_BATCH_ROWS,
         "batch_age_max_ms": CORR_EVIDENCE_BATCH_MS,
         "decision_batch_enabled": CORR_DECISION_BATCH,
         "flushes_total": {}, "rows_flushed_total": {}, "flushes": 0,
         "rows_per_flush_mean": 0.0, "batch_age_seconds_max": 0.0,
         "buffered_rows": 0, "buffered_tables": 0, "blocks_failed_total": 0,
+        "block_rows_max": 0,
         "pending_items": len(_EVIDENCE_PENDING),
     }
     if queue is not None:
