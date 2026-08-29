@@ -29,6 +29,7 @@ Run:  python3 -m pytest tests/test_miniladder_memflat_clickhouse.py -v
 from __future__ import annotations
 
 import importlib.util
+import json
 import os
 import sys
 from pathlib import Path
@@ -75,6 +76,15 @@ class FakeClock:
         self.t += seconds
 
 
+def _census(key, value):
+    """metric_log fixtures are written as the two PEAKS; the query also returns
+    the SAMPLE CENSUS (plausible, total) since 2026-08-29, so a two-cell
+    fixture means "every sample in the window was plausible"."""
+    if key != "system.metric_log" or not isinstance(value, str):
+        return value
+    return value if len(value.split("\t")) >= 4 else value + "\t3600\t3600"
+
+
 def _ch_stub(sequence=None, **overrides):
     """A ClickHouse that answers exactly memflat's probes — healthy defaults.
 
@@ -101,10 +111,12 @@ def _ch_stub(sequence=None, **overrides):
         calls.append(query)
         for key, values in queue.items():
             if key in query and values:
-                return True, values.pop(0)
+                return True, _census(key, values.pop(0))
         for key, value in answers.items():
             if key in query:
-                return (False, value[1]) if isinstance(value, tuple) else (True, value)
+                if isinstance(value, tuple):
+                    return False, value[1]
+                return True, _census(key, value)
         return False, f"unstubbed probe: {query[:120]}"
 
     ch.calls = calls          # type: ignore[attr-defined]
@@ -117,7 +129,7 @@ def _named(d):
 
 def _harness(tmp_path, monkeypatch, *, cold_anon, warm_anon, end_anon,
              docker_stats=None, ch=None, part_baseline=180, clock=None,
-             services=("clickhouse",), **flags):
+             services=("clickhouse",), corr_track=None, **flags):
     monkeypatch.setattr(ml, "MEM_SERVICES", list(services))
     argv = ["--run-dir", str(tmp_path)]
     for k, v in flags.items():
@@ -138,6 +150,7 @@ def _harness(tmp_path, monkeypatch, *, cold_anon, warm_anon, end_anon,
     h.warm_mem = {n: v["used"] for n, v in stats.items()}
     h.warm_anon = dict(warm_anon)
     h.burst_seconds = 900.0
+    h.corr_mem_track = dict(corr_track or {})
     if clock is not None:
         monkeypatch.setattr(ml, "time", clock)
     return h
@@ -186,12 +199,14 @@ def test_unreadable_cgroup_is_a_failure_not_a_docker_stats_fallback(
 
 
 def test_stateless_services_keep_the_docker_stats_ratio(tmp_path, monkeypatch):
-    """api/correlation cache nothing — their docker-stats figure IS their RSS."""
-    stats = _named({"correlation": {"used": 400 * MIB, "limit": 789 * MIB}})
-    h = _harness(tmp_path, monkeypatch, services=("correlation",),
+    """api caches nothing — its docker-stats figure IS its RSS, and it holds no
+    backlog, so it keeps the input-stop anchor (correlation does not: see
+    tests/test_scale_miniladder_group_parse.py's pending-zero anchor tests)."""
+    stats = _named({"api": {"used": 400 * MIB, "limit": 789 * MIB}})
+    h = _harness(tmp_path, monkeypatch, services=("api",),
                  cold_anon={}, warm_anon={}, end_anon={},
                  docker_stats=stats)
-    h.warm_mem = _named({"correlation": 180 * MIB})
+    h.warm_mem = _named({"api": 180 * MIB})
     assert h.memflat() is False, "a stateless leak must still be caught"
     row = h.phases[-1]["evidence"]["containers"][0]
     assert row["instrument"] == "docker_stats"
@@ -381,3 +396,304 @@ def test_phase_line_prints_all_three_clauses(tmp_path, monkeypatch):
     assert "merges 500 MiB = 10.4%" in notes
     assert "MaxPartCountForPartition 180 (preflight 180, envelope 216.0" in notes
     assert "delay at 1000)" in notes
+
+
+# ── clause 2, THE p2-s05 METRIC DEFECT (2026-08-29) ────────────────────────
+#
+# Run p2-s05-08291138 failed memflat with
+#
+#   clickhouse: peak MERGE memory 4084 MiB is 99.7% of the 4096 MiB server cap
+#   (> 50.0%) … peak MemoryTracking 2952 MiB = 72.1% of cap 4096 MiB
+#
+# Merge memory is a SUBSET of the server's tracked total, so 4,084 > 2,952 is
+# not a measurement — it is a `CurrentMetric_MergesMutationsMemoryTracking`
+# underflow, and `max()` taken independently over each raw column let 50 of
+# the window's 3,711 samples decide the verdict. Ground truth for the same
+# window, glitches excluded: 1,950 MiB and 421 MiB — a PASS.
+#
+# ROWS BELOW ARE VERBATIM from that server's system.metric_log (bytes).
+P2_S05_ROWS = [
+    (939723571, 56389553),        # 11:43:00  ordinary
+    (1004857728, 49353545),       # 11:43:03  ordinary
+    (1427111936, 441679413),      # 12:17:53  the run's TRUE merge peak (421 MiB)
+    (2044551720, 0),              # 12:33:49  the run's TRUE MemoryTracking peak
+    (1985249297, 100690621),      # 12:03:48  ordinary
+    (1117843990, -152276),        # a merge counter legitimately below zero
+    (3095901496, 3220538533),     # 11:43:06  IMPOSSIBLE: merges above the total
+    (1139407161, 4159233902),     # 11:43:07  IMPOSSIBLE
+    (1340034797, 4282450045),     # 11:43:52  IMPOSSIBLE — and the printed "peak"
+]
+# The exact predicate the fixture keys on. Kept as a LITERAL, never as
+# `ml.CH_PLAUSIBLE_SAMPLE`, so a test may blank the constant (the mutant) and
+# this ClickHouse stand-in answers like the real server would.
+PLAUSIBLE_SQL = ("CurrentMetric_MergesMutationsMemoryTracking <= "
+                 "CurrentMetric_MemoryTracking")
+S05_CAP_MIB = 4096
+
+
+def _metric_log_server(rows=P2_S05_ROWS, **overrides):
+    """A ClickHouse whose metric_log holds ROWS and answers either query shape.
+
+    It evaluates the harness's aggregate the way the server does: with the
+    plausibility predicate it maxes over self-consistent rows only, without it
+    over everything — which is precisely the difference between 1,950/421 and
+    2,952/4,084.
+    """
+    def answer(query):
+        good = [r for r in rows if r[0] >= 0 and r[1] <= r[0]]
+        used = good if PLAUSIBLE_SQL in query else list(rows)
+        track = max((max(r[0], 0) for r in used), default=0)
+        merges = max((max(r[1], 0) for r in used), default=0)
+        return f"{track}\t{merges}\t{len(used)}\t{len(rows)}"
+
+    base = {"'max_server_memory_usage'": str(S05_CAP_MIB * MIB),
+            # The live sample the harness itself took at the end of the burst.
+            "system.metrics": (f"MemoryTracking\t{1208 * MIB}\n"
+                               f"MergesMutationsMemoryTracking\t{23 * MIB}")}
+    base.update(overrides)
+    stub = _ch_stub(**base)
+
+    def ch(query, timeout=60):
+        if "system.metric_log" in query:
+            return True, answer(query)
+        return stub(query, timeout)
+    return ch
+
+
+def _s05(tmp_path, monkeypatch, ch):
+    return _harness(tmp_path, monkeypatch, ch=ch,
+                    cold_anon=_named({"clickhouse": 900 * MIB}),
+                    warm_anon=_named({"clickhouse": 1086 * MIB}),
+                    end_anon=_named({"clickhouse": 881 * MIB}))
+
+
+def test_p2_s05_impossible_merge_samples_no_longer_decide_the_verdict(
+        tmp_path, monkeypatch):
+    """The printed peaks ARE the metric_log maxima — 1,950 and 421 MiB — and
+    the clause PASSes, on the exact rows that produced the false FAIL."""
+    h = _s05(tmp_path, monkeypatch, _metric_log_server())
+    assert h.memflat() is True, h.phases[-1]["notes"]
+    ch_ev = h.phases[-1]["evidence"]["clickhouse"]
+    assert ch_ev["peak_memory_tracking_bytes"] == 2_044_551_720   # 1,950 MiB
+    assert ch_ev["peak_merges_memory_bytes"] == 441_679_413       # 421 MiB
+    assert ch_ev["memory_tracking_pct"] == pytest.approx(47.6, abs=0.1)
+    assert ch_ev["merges_memory_pct"] == pytest.approx(10.3, abs=0.1)
+    assert ch_ev["peaks_self_consistent"] is True
+    notes = h.phases[-1]["notes"]
+    assert f"peak MemoryTracking 1950 MiB = 47.6% of cap {S05_CAP_MIB} MiB" in notes
+    assert "merges 421 MiB = 10.3%" in notes
+    # The live 1,208 / 23 MiB sample is a FLOOR, never a ceiling: it is below
+    # both metric_log maxima, so it must not move them.
+    assert ch_ev["peak_source"].startswith("system.metric_log since")
+
+
+def test_the_excluded_samples_are_counted_not_hidden(tmp_path, monkeypatch):
+    """A filter that will not say how much it threw away is its own defect."""
+    h = _s05(tmp_path, monkeypatch, _metric_log_server())
+    assert h.memflat() is True, h.phases[-1]["notes"]
+    census = h.phases[-1]["evidence"]["clickhouse"]["sample_census"]
+    assert census["metric_log_samples"] == len(P2_S05_ROWS)
+    assert census["metric_log_plausible"] == len(P2_S05_ROWS) - 3
+    assert census["metric_log_rejected"] == 3
+    assert "3/9 impossible samples excluded" in h.phases[-1]["notes"]
+
+
+def test_MUTANT_dropping_the_plausibility_filter_is_never_a_false_FAIL(
+        tmp_path, monkeypatch):
+    """THE MUTANT: blank the predicate and the server answers 2,952 / 4,084
+    again — the shape that failed run p2-s05. The invariant net must catch it:
+    UNKNOWN, with neither the false '99.7% of cap' FAIL nor a PASS."""
+    monkeypatch.setattr(ml, "CH_PLAUSIBLE_SAMPLE", "1 = 1")
+    h = _s05(tmp_path, monkeypatch, _metric_log_server())
+    assert h.memflat() is False, "an impossible reading must never PASS"
+    notes = h.phases[-1]["notes"]
+    assert "memory peaks UNKNOWN" in notes
+    assert "physically impossible" in notes
+    assert "99.7%" not in notes, "the false cap-exceeded FAIL must not be made"
+    assert "can starve the query/insert path" not in notes
+    ch_ev = h.phases[-1]["evidence"]["clickhouse"]
+    assert ch_ev["peaks_self_consistent"] is False
+    assert ch_ev["memory_tracking_pct"] is None
+    assert ch_ev["merges_memory_pct"] is None
+
+
+def test_INVARIANT_a_merge_peak_above_the_tracked_total_is_UNKNOWN(
+        tmp_path, monkeypatch):
+    """Whatever the instrument says, the two numbers the phase PRINTS must
+    satisfy merge <= tracked total, or the clause refuses to judge."""
+    ch = _ch_stub(**{"system.metric_log":
+                     f"{1000 * MIB}\t{3000 * MIB}\t3600\t3600",
+                     "system.metrics": (f"MemoryTracking\t{10 * MIB}\n"
+                                        f"MergesMutationsMemoryTracking\t{1 * MIB}")})
+    h = _harness(tmp_path, monkeypatch, ch=ch,
+                 cold_anon=_named({"clickhouse": 900 * MIB}),
+                 warm_anon=_named({"clickhouse": 984 * MIB}),
+                 end_anon=_named({"clickhouse": 994 * MIB}))
+    assert h.memflat() is False
+    notes = h.phases[-1]["notes"]
+    assert "memory peaks UNKNOWN" in notes and "NOT judged either way" in notes
+    assert "> 50.0%" not in notes
+
+
+def test_an_impossible_live_sample_is_discarded_whole(tmp_path, monkeypatch):
+    """The fallback path gets the same guard: half a corrupt pair must never
+    be folded into the peak."""
+    ch = _ch_stub(**{
+        "system.metric_log": ("", "table system.metric_log doesn't exist"),
+        "system.metrics": (f"MemoryTracking\t{1000 * MIB}\n"
+                           f"MergesMutationsMemoryTracking\t{4084 * MIB}")})
+    h = _harness(tmp_path, monkeypatch, ch=ch,
+                 cold_anon=_named({"clickhouse": 900 * MIB}),
+                 warm_anon=_named({"clickhouse": 984 * MIB}),
+                 end_anon=_named({"clickhouse": 994 * MIB}))
+    assert h.memflat() is False, "no peak at all is UNKNOWN, never PASS"
+    ch_ev = h.phases[-1]["evidence"]["clickhouse"]
+    assert ch_ev["peak_memory_tracking_bytes"] == -1, "the pair was discarded"
+    assert ch_ev["peak_merges_memory_bytes"] == -1
+    assert ch_ev["sample_census"]["live_samples_rejected"] >= 1
+    assert "unmeasurable" in h.phases[-1]["notes"]
+
+
+def test_a_window_with_no_plausible_sample_does_not_read_as_zero(
+        tmp_path, monkeypatch):
+    """`maxIf` over an empty set is 0 in ClickHouse, and 0 MiB of memory would
+    read as the flattest possible server. Every metric_log sample corrupt =>
+    the peaks come from the harness's own (plausible) live sample instead."""
+    ch = _metric_log_server(rows=[(1139407161, 4159233902)])
+    h = _s05(tmp_path, monkeypatch, ch)
+    assert h.memflat() is True, h.phases[-1]["notes"]
+    ch_ev = h.phases[-1]["evidence"]["clickhouse"]
+    assert ch_ev["peak_memory_tracking_bytes"] == 1208 * MIB, "never 0"
+    assert ch_ev["peak_merges_memory_bytes"] == 23 * MIB
+    assert ch_ev["peak_source"] == "harness system.metrics samples"
+    assert ch_ev["sample_census"]["metric_log_plausible"] == 0
+
+
+# ── --rescore-memflat: what the corrected clauses say about a FINISHED run ──
+#
+# A run costs an hour. Re-running one to find out what a fixed clause says
+# about it is not the answer: the run's own evidence plus a read-only
+# metric_log query for its window is. It writes memflat-rescore.md and NEVER
+# touches the run's own report files.
+
+def _rescore_stack(rows=P2_S05_ROWS, **overrides):
+    """A Stack stand-in answering the re-score's read-only probes."""
+    inner = _metric_log_server(rows=rows, **overrides)
+
+    def ch(query, timeout=60):
+        if "system.metric_log" in query:
+            good = [r for r in rows if r[0] >= 0 and r[1] <= r[0]]
+            return True, "\t".join(str(v) for v in (
+                max((max(r[0], 0) for r in good), default=0),
+                max((max(r[1], 0) for r in good), default=0),
+                len(good), len(rows),
+                max((r[0] for r in rows), default=0),
+                max((r[1] for r in rows), default=0)))
+        return inner(query, timeout)
+    return type("S", (), {"ch": staticmethod(ch)})()
+
+
+def test_rescore_reproduces_the_ground_truth_for_p2_s05():
+    ev, problems = ml._rescore_clickhouse(
+        _rescore_stack(), "2026-08-29 11:39:00", "2026-08-29 12:37:00")
+    assert not problems, problems
+    assert ev["peak_memory_tracking_bytes"] == 2_044_551_720    # 1,950 MiB
+    assert ev["peak_merges_memory_bytes"] == 441_679_413        # 421 MiB
+    assert ev["memory_tracking_pct"] == pytest.approx(47.6, abs=0.1)
+    assert ev["merges_memory_pct"] == pytest.approx(10.3, abs=0.1)
+    assert ev["rejected_samples"] == 3
+    # ...and it states what the OLD, unfiltered max() printed, so the reader
+    # can see the defect rather than take the correction on trust.
+    assert ev["unfiltered_memory_tracking_bytes"] == 3_095_901_496   # 2,952 MiB
+    assert ev["unfiltered_merges_memory_bytes"] == 4_282_450_045     # 4,084 MiB
+
+
+def test_rescore_still_reports_a_genuine_cap_breach():
+    """The re-score is a correction, not an amnesty."""
+    ev, problems = ml._rescore_clickhouse(
+        _rescore_stack(rows=[(3900 * MIB, 3500 * MIB)]),
+        "2026-08-29 11:39:00", "")
+    assert any("peak MemoryTracking" in p for p in problems)
+    assert any("peak MERGE memory" in p for p in problems)
+    assert ev["rejected_samples"] == 0
+
+
+def test_rescore_of_a_run_without_the_rss_curve_is_UNKNOWN(tmp_path):
+    """Runs before 2026-08-29 recorded no per-replica RSS. The old input-stop
+    ratio must NOT be reused to invent a correlation verdict."""
+    (tmp_path / "correlation-completion.json").write_text(
+        json.dumps([{"t_s": 0.0, "pending": 22736, "cohorts": 3}]),
+        encoding="utf-8")
+    ev, problems = ml._rescore_correlation(str(tmp_path), {"containers": [
+        {"container": "netops-correlation-3", "service": "correlation",
+         "warm_bytes": 470 * MIB, "end_bytes": 647 * MIB,
+         "ratio_vs_anchor": 1.377}]})
+    assert ev["source"] == "none"
+    assert len(problems) == 1
+    assert "UNKNOWN" in problems[0] and "predates" in problems[0]
+
+
+def test_rescore_judges_correlation_from_a_saved_rss_curve(tmp_path):
+    curve = [
+        {"t_s": 0.0, "per_replica": {"netops-correlation-3":
+                                     {"pending": 22736.0, "rss": 470 * MIB}}},
+        {"t_s": 1986.0, "per_replica": {"netops-correlation-3":
+                                        {"pending": 0.0, "rss": 560 * MIB}}},
+    ]
+    (tmp_path / "correlation-completion.json").write_text(
+        json.dumps(curve), encoding="utf-8")
+    memflat = {"containers": [{"container": "netops-correlation-3",
+                               "service": "correlation",
+                               "end_bytes": 647 * MIB}]}
+    ev, problems = ml._rescore_correlation(str(tmp_path), memflat)
+    rec = ev["replicas"]["netops-correlation-3"]
+    assert rec["rss_at_pending_zero"] == 560 * MIB
+    assert rec["ratio_vs_anchor"] == pytest.approx(1.155, abs=0.005)
+    assert rec["verdict"] == "FLAT"
+    assert not problems
+
+
+def test_rescore_from_a_saved_curve_still_catches_a_real_leak(tmp_path):
+    curve = [
+        {"t_s": 0.0, "per_replica": {"netops-correlation-3":
+                                     {"pending": 22736.0, "rss": 470 * MIB}}},
+        {"t_s": 1986.0, "per_replica": {"netops-correlation-3":
+                                        {"pending": 0.0, "rss": 470 * MIB}}},
+    ]
+    (tmp_path / "correlation-completion.json").write_text(
+        json.dumps(curve), encoding="utf-8")
+    _, problems = ml._rescore_correlation(str(tmp_path), {"containers": [
+        {"container": "netops-correlation-3", "service": "correlation",
+         "end_bytes": 647 * MIB}]})
+    assert any("LEAK SLOPE at the pending-zero anchor" in p for p in problems)
+
+
+def test_rescore_never_writes_the_runs_own_report_files(tmp_path, monkeypatch):
+    """The original verdict is the record of what the gate said at the time."""
+    (tmp_path / "report.json").write_text(json.dumps({"phases": [
+        {"phase": "memflat", "status": "FAIL", "notes": "the original",
+         "evidence": {"containers": [], "clickhouse": {
+             "sample_census": {"window_start": "2026-08-29 11:39:00"}}}}]}),
+        encoding="utf-8")
+    (tmp_path / "report.md").write_text("original md", encoding="utf-8")
+    before = ((tmp_path / "report.json").read_text(),
+              (tmp_path / "report.md").read_text())
+    monkeypatch.setattr(ml, "Stack", lambda *a, **k: _rescore_stack())
+    args = ml.parse_args(["--rescore-memflat", str(tmp_path)])
+    args.project, args.base_url = "netops", "http://localhost:8000"
+    args.env_file = str(tmp_path / "nonexistent.env")
+    assert ml.rescore_memflat(args) == 1, "correlation is UNKNOWN => not PASS"
+    assert ((tmp_path / "report.json").read_text(),
+            (tmp_path / "report.md").read_text()) == before
+    doc = (tmp_path / ml.RESCORE_FILE).read_text()
+    assert "peak MemoryTracking: **1950 MiB**" in doc
+    assert "peak MERGE memory: **421 MiB**" in doc
+    assert "clause (2): PASS" in doc
+    assert "the original" in doc, "the original verdict is quoted, not erased"
+
+
+def test_rescore_refuses_without_a_window():
+    """No window => no re-score. Guessing one would judge another run."""
+    args = ml.parse_args(["--rescore-memflat", "/nonexistent-run-dir"])
+    with pytest.raises(SystemExit):
+        ml.rescore_memflat(args)

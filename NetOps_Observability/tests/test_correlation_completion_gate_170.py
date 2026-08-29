@@ -117,6 +117,11 @@ class _Runner:
         self.burst_seconds = burst_seconds
         self.run_dir = None
         self._states = list(states)
+        # memflat's pending-zero leak anchor is derived by this phase
+        # (2026-08-29): the real method runs over the real state dicts, and
+        # these fixtures carry no per-replica RSS, so it records UNKNOWN
+        # anchors — which is exactly what memflat must then report.
+        self.corr_mem_track: dict = {}
         self.args = type("A", (), {"drain_factor": 3.0})()
         self.stack = type("S", (), {
             "corr_completion_state": lambda _s: (
@@ -124,7 +129,9 @@ class _Runner:
         })()
         self.stack.__dict__["_owner"] = self
 
-    # the two harness collaborators the phase uses
+    # the harness collaborators the phase uses
+    _corr_mem_track = ml.Harness._corr_mem_track
+
     def phase(self, name, status, evidence, notes=""):
         self.phases.append({"phase": name, "status": status,
                             "evidence": evidence, "notes": notes})

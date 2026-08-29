@@ -309,6 +309,60 @@ CH_MEMORY_TRACKING_MAX_PCT = float(
     os.environ.get("MLX_CH_MEMORY_TRACKING_MAX_PCT", "85"))
 CH_MERGE_MEMORY_MAX_PCT = float(
     os.environ.get("MLX_CH_MERGE_MEMORY_MAX_PCT", "50"))
+
+# `clean-slate.sh --verify` fails a stack whose max consumer-group
+# CURRENT-OFFSET exceeds this ("the bus data dir was not reset",
+# clean-slate.sh:243). Pinned here so the harness warns about the SAME number
+# that script judges, not a different one that happens to share a threshold.
+# How many runs of onboard-rate history last-run.json carries (tracker 175).
+ONBOARD_RATE_HISTORY = int(os.environ.get("MLX_ONBOARD_RATE_HISTORY", "30"))
+
+CLEAN_SLATE_OFFSET_BOUND = int(
+    os.environ.get("MLX_CLEAN_SLATE_OFFSET_BOUND", "100000"))
+
+# ── ClickHouse memory samples: the PLAUSIBILITY predicate (2026-08-29) ──────
+#
+# THE DEFECT THIS EXISTS FOR (run p2-s05-08291138).
+# `CurrentMetric_MergesMutationsMemoryTracking` is a SIGNED, cross-thread
+# delta. It does not merely dip slightly below zero on an idle server —
+# `_ch_counter` already floors that case — it also UNDERFLOWS into huge
+# positive readings that persist for whole seconds. Straight from that run's
+# `system.metric_log`, one row, one second apart from its neighbours:
+#
+#   11:43:06  MemoryTracking 2,952 MiB   MergesMutations 3,071 MiB
+#   11:43:07  MemoryTracking 1,086 MiB   MergesMutations 3,966 MiB   <- impossible
+#   ...
+#   11:43:52  MemoryTracking 1,278 MiB   MergesMutations 4,084 MiB   <- the "peak"
+#
+# Merge memory is a SUBSET of the total the server tracks, so a sample whose
+# merge figure exceeds its own MemoryTracking is not a measurement. The gate
+# took `max()` of each column INDEPENDENTLY over the window with no such
+# check, and reported "peak MERGE memory 4,084 MiB is 99.7% of the 4,096 MiB
+# server cap" — failing memflat on a run whose real peaks over the same window
+# were 1,950 MiB and 421 MiB (max merge 421 MiB at 12:17:53, MemoryTracking
+# 1,361 MiB on that row). 50 of the window's 3,711 samples were impossible;
+# those 50 decided the verdict.
+#
+# So every sample is filtered by the ONE invariant that must hold in any real
+# reading, and the number of samples REJECTED is carried in the evidence — a
+# filter that hides how much it threw away is its own defect (§10).
+CH_PLAUSIBLE_SAMPLE = (
+    "CurrentMetric_MemoryTracking >= 0 AND "
+    "CurrentMetric_MergesMutationsMemoryTracking <= CurrentMetric_MemoryTracking")
+
+# ── correlation memory anchor: settle after the backlog reaches zero ────────
+#
+# THE DEFECT THIS EXISTS FOR (same run). memflat anchored correlation's slope
+# on the sample taken "the instant injection stops" — with 22,736 signals
+# still PENDING in the engine. The engine then legitimately builds objects for
+# that backlog for another ~33 minutes, so the phase read 470 -> 647 MiB
+# (x1.37) and called a backlog drain a leak. A growing working set while a
+# queue is draining is work, not a leak; the leak question can only be asked
+# once the queue is empty. Anchor = the first per-replica sample with
+# `corr_engine_pending == 0`, end = a sample at least CORR_MEM_SETTLE_S later.
+CORR_MEM_SETTLE_S = float(os.environ.get("MLX_CORR_MEM_SETTLE_S", "120"))
+CORR_MEM_SETTLE_MAX_S = float(
+    os.environ.get("MLX_CORR_MEM_SETTLE_MAX_S", "300"))
 # Parts must come back down after input stops: within +20 % of the preflight
 # MaxPartCountForPartition (or +8 parts, whichever is the larger envelope — a
 # baseline of 3 parts must not fail on a 4th), and never within a factor of two
@@ -339,6 +393,85 @@ def _ch_counter(raw: str) -> int:
     367,008,512,659 % of the cap" and fails the gate on an idle server. Signed
     parse, floored at 0: no merge running is 0 bytes of merge memory."""
     return max(0, int(float(raw.strip())))
+
+
+def ch_number(stack, query: str) -> float:
+    """One numeric ClickHouse scalar. -1.0 means UNANSWERED — never 0, so a
+    failed probe can never read as a healthy measurement.
+
+    Module level so the offline `--rescore-memflat` path asks the server the
+    SAME questions the gate asks, from the same source text."""
+    ok, out = stack.ch(query)
+    if not ok:
+        warn(f"ClickHouse probe failed ({out[:160]}) for: {query[:90]}")
+        return -1.0
+    head = out.strip().splitlines()[0].split("\t")[0] if out.strip() else ""
+    try:
+        return float(head)
+    except ValueError:
+        return -1.0
+
+
+def ch_memory_cap(stack) -> tuple[float, str]:
+    """The effective `max_server_memory_usage` in bytes, and where it came
+    from. Ours is configured 0 = "derive from the ratio", so the cap is
+    `max_server_memory_usage_to_ram_ratio x CGroupMemoryTotal`. If the cgroup
+    total is invisible the cap is HOST-derived — the very trap that makes
+    `merges_mutations_memory_usage_soft_limit` inert here — so the source is
+    reported with the number."""
+    configured = ch_number(
+        stack, "SELECT toFloat64(value) FROM system.server_settings "
+               "WHERE name = 'max_server_memory_usage'")
+    if configured > 0:
+        return configured, "server_settings.max_server_memory_usage"
+    ratio = ch_number(
+        stack, "SELECT toFloat64(value) FROM system.server_settings "
+               "WHERE name = 'max_server_memory_usage_to_ram_ratio'")
+    total = ch_number(stack, "SELECT value FROM system.asynchronous_metrics "
+                             "WHERE metric = 'CGroupMemoryTotal'")
+    source = "ratio x CGroupMemoryTotal"
+    if total <= 0:
+        total = ch_number(stack, "SELECT value FROM system.asynchronous_metrics "
+                                 "WHERE metric = 'OSMemoryTotal'")
+        source = ("ratio x OSMemoryTotal (CGroupMemoryTotal unseen — this "
+                  "cap is HOST-derived and larger than the container)")
+    if ratio > 0 and total > 0:
+        return ratio * total, source
+    return -1.0, "unreadable"
+
+
+def clean_slate_offset_note(bus_max_current: int, planned: int) -> tuple[str, str]:
+    """("" | "log" | "warn", message) about clean-slate.sh --verify's bound.
+
+    Three states, and only one of them is a WARNING:
+
+      already spent  the bus is ALREADY past the bound, so this run changes
+                     nothing about it — a fact to state, not a warning.
+      this run spends it  the signal is intact and this run's injection is
+                     what will cost it: the operator can still reset first.
+      intact         silence.
+
+    A -1 (unreadable describe) answers nothing: UNKNOWN is not "fine", and it
+    is not a warning about this run either — it is said once, quietly.
+    """
+    if bus_max_current < 0:
+        return "log", ("max consumer CURRENT-OFFSET unreadable — whether "
+                       "clean-slate.sh --verify still reads this bus as reset "
+                       "is UNKNOWN")
+    if bus_max_current > CLEAN_SLATE_OFFSET_BOUND:
+        return "log", (f"clean-slate.sh --verify already reads this bus as "
+                       f"not-reset (max consumer CURRENT-OFFSET "
+                       f"{bus_max_current} > {CLEAN_SLATE_OFFSET_BOUND}); this "
+                       f"run does not change that")
+    if bus_max_current + planned > CLEAN_SLATE_OFFSET_BOUND:
+        return "warn", (f"this run's planned injection ({planned}) will push "
+                        f"the max consumer CURRENT-OFFSET from "
+                        f"{bus_max_current} past clean-slate.sh --verify's "
+                        f"{CLEAN_SLATE_OFFSET_BOUND} bound "
+                        f"(clean-slate.sh:243) — that verify signal is intact "
+                        f"now and will not be after this run, until the next "
+                        f"bus reset")
+    return "", ""
 
 
 def mib(value: float | None) -> str:
@@ -656,6 +789,37 @@ class Stack:
             return int(float(m.group(1)) * _MEM_UNITS[m.group(2)])
         return -1
 
+    def api_data_dir(self) -> tuple[str, str]:
+        """(host path of the api's `/data`, reason). "" = NOT host-reachable.
+
+        The device store is `/data/devices.json` INSIDE the api container
+        (main.go:1152), with its per-record subtree at
+        `/data/devices.json.d/{manual,suppressed}/<sha256hex(id)>`. Whether
+        this harness can even SEE that subtree depends on how the deployment
+        mounts /data: a bind mount is a host path we can count; a named volume
+        or an image-internal directory is not reachable from here at all, and
+        the honest answer is then "unknown", never "zero".
+        """
+        ac = self.cid("api")
+        if not ac:
+            return "", "no running api container"
+        rc, out, err = run(
+            ["docker", "inspect", ac, "--format",
+             "{{range .Mounts}}{{.Type}}|{{.Source}}|{{.Destination}}\n{{end}}"],
+            DOCKER_TIMEOUT)
+        if rc != 0:
+            return "", f"docker inspect api failed: {err.strip()[:160]}"
+        for line in out.splitlines():
+            fields = line.strip().split("|")
+            if len(fields) != 3 or fields[2] != "/data":
+                continue
+            if fields[0] != "bind":
+                return "", (f"the api's /data is a {fields[0]} volume "
+                            f"({fields[1]}), not a host bind mount — the "
+                            f"device store is not reachable from this harness")
+            return fields[1], "api /data bind mount"
+        return "", "the api container has no /data mount"
+
     def mem_stats(self) -> dict[str, dict]:
         """Per-container {"used","limit"} bytes via docker stats.
 
@@ -926,7 +1090,7 @@ class Stack:
             "kafka-consumer-groups.sh", ["--describe", "--group", group])
         if rc != 0:
             return {"_error": err.strip()[:300], "_total": -1, "_members": 0,
-                    "_rows": 0, "_uncommitted": 0}
+                    "_rows": 0, "_uncommitted": 0, "_max_current": -1}
 
         def num(cell: str) -> int | None:
             """Numeric cell, or None for Kafka's `-` (no committed offset)."""
@@ -934,6 +1098,11 @@ class Stack:
 
         topics: dict[str, dict] = {}
         total = members = rows = uncommitted = 0
+        # The MAX committed CURRENT-OFFSET over this group's describe rows —
+        # the exact statistic `clean-slate.sh --verify` maxes over (its
+        # "<=100000 self-telemetry bound" check, clean-slate.sh:243). Kept
+        # beside the per-topic MIN, which lag needs and this does not.
+        max_current = -1
         for line in out.splitlines():
             f = line.split()
             if len(f) < 7 or f[0] != group:
@@ -945,6 +1114,8 @@ class Stack:
             cur, end, lag = num(f[3]), num(f[4]), num(f[5])
             if lag is None:
                 uncommitted += 1
+            if cur is not None:
+                max_current = max(max_current, cur)
             # Aggregate across partitions of the same topic (single-partition
             # today, but a repartitioned topic must not silently lose lag).
             t = topics.setdefault(f[1], {"current": -1, "end": -1, "lag": 0})
@@ -959,6 +1130,7 @@ class Stack:
         topics["_members"] = members
         topics["_rows"] = rows
         topics["_uncommitted"] = uncommitted
+        topics["_max_current"] = max_current
         return topics
 
     def produce(self, topic: str, lines: list[str],
@@ -1202,19 +1374,33 @@ class Stack:
         target, `correlation` remains the verified identity. Never disables
         certificate or hostname verification.
         """
+        # The compose NAME and the container's RSS ride along with the engine
+        # reading (2026-08-29): memflat's correlation slope is anchored on the
+        # first sample where THIS replica's `corr_engine_pending` is 0, which
+        # needs pending and memory read from the same replica at the same
+        # instant. One `docker stats` for the whole stack, not one per replica.
+        stats = self.mem_stats()
         out: list[dict] = []
         for cc in self.cids("correlation"):
             rc, insp, err = run(
                 ["docker", "inspect", cc, "--format",
-                 "{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}|{{.State.StartedAt}}"],
+                 ("{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}"
+                  "|{{.State.StartedAt}}|{{.Name}}")],
                 DOCKER_TIMEOUT)
             if rc != 0 or "|" not in insp:
                 out.append({"container": cc[:12], "error":
                             f"inspect failed: {err.strip()[:160]}"})
                 continue
-            ip, _, started = insp.strip().partition("|")
+            fields = insp.strip().split("|")
+            ip = fields[0]
+            started = fields[1] if len(fields) > 1 else ""
+            # `.Name` is "/netops-correlation-3"; docker stats keys by the
+            # bare name. -1 (never 0) when the container has no stats row.
+            name = fields[2].lstrip("/") if len(fields) > 2 else ""
+            rss = int(stats.get(name, {}).get("used", -1)) if name else -1
             if not ip:
-                out.append({"container": cc[:12], "error": "no container IP"})
+                out.append({"container": cc[:12], "name": name,
+                            "error": "no container IP"})
                 continue
             probe = (
                 "import socket,ssl,sys\n"
@@ -1232,10 +1418,12 @@ class Stack:
                 "sys.stdout.write(b.split(b'\\r\\n\\r\\n',1)[1].decode('utf-8','replace'))\n")
             rc, body, err = run(["docker", "exec", cc, "python", "-c", probe], 40)
             if rc != 0:
-                out.append({"container": cc[:12], "ip": ip, "started_at": started,
+                out.append({"container": cc[:12], "name": name, "ip": ip,
+                            "started_at": started, "rss": rss,
                             "error": f"metrics probe failed: {err.strip()[:160]}"})
                 continue
-            out.append({"container": cc[:12], "ip": ip, "started_at": started,
+            out.append({"container": cc[:12], "name": name, "ip": ip,
+                        "started_at": started, "rss": rss,
                         "metrics": parse_prom_metrics(body)})
         return out
 
@@ -1264,6 +1452,11 @@ class Stack:
             "per_replica": {
                 r["container"]: {
                     "started_at": r.get("started_at"),
+                    # Compose name + RSS at the same instant as `pending`:
+                    # memflat anchors this replica's leak slope on the sample
+                    # where its own pending first reads 0. "" / -1 = unknown.
+                    "name": r.get("name", ""),
+                    "rss": int(r.get("rss", -1)),
                     "pending": g(r, "corr_engine_pending"),
                     "cohorts_total": g(r, "corr_engine_cohorts_total"),
                     "oldest_pending_age_s": g(r, "corr_engine_oldest_pending_age_seconds"),
@@ -2403,6 +2596,16 @@ class Harness:
         # sampled, which memflat reports rather than reading as zero.
         self.ch_mem_peak: dict[str, int] = {"MemoryTracking": -1,
                                             "MergesMutationsMemoryTracking": -1}
+        # Live `system.metrics` readings discarded as physically impossible
+        # (CH_PLAUSIBLE_SAMPLE). Counted, never hidden: a filter that does not
+        # say how much it threw away is its own defect.
+        self.ch_mem_implausible = 0
+        # Per-correlation-replica {pending, RSS} track, filled by the
+        # correlation-completion poll loop and consumed by memflat's
+        # pending-zero anchor. Container name -> the derived anchor row; empty
+        # when that phase never ran, which memflat reports as UNKNOWN rather
+        # than judging a backlog drain as a leak.
+        self.corr_mem_track: dict[str, dict] = {}
         # Signal policy (see InterruptGuard): installed by main() so a run
         # started from a closing terminal (SIGHUP) or a `kill` (SIGTERM) still
         # unwinds into cleanup instead of leaving 2,500 devices standing.
@@ -2635,16 +2838,34 @@ class Harness:
                 f"OpenSearch already holds {self.baseline['os_run_docs']} docs "
                 f"for prefix {self.prefix} — runid collision?")
 
-        # The clean-slate --verify heuristic treats a max consumer offset
-        # > 100k as "bus never reset". Warn (not fail) when this run would
-        # push past it — the operator loses that verify signal until the next
-        # reset. Platform-safe either way.
+        # ── clean-slate --verify's offset bound, RE-BASELINED 2026-08-29 ──
+        #
+        # THE NOISE THIS REPLACES. The old form compared
+        # `kafka_syslog_end + planned` against 100,000. Since `end_offset` was
+        # fixed to SUM the LOG-END-OFFSETs of every partition of a topic that
+        # never resets, that number is the stack's lifetime syslog volume
+        # (73,132,772 on run p2-s05-08291138) — so the condition was true on
+        # every run, on every stack, forever. A warning that cannot be false
+        # carries no information and trains operators to skip the preflight
+        # output, which is worse than not warning at all.
+        #
+        # `clean-slate.sh --verify` (clean-slate.sh:243) does NOT measure that:
+        # it maxes the CURRENT-OFFSET column over the consumer-group describe
+        # rows and fails above 100,000 ("the bus data dir was not reset"). So
+        # the harness now measures the SAME statistic, from the describes it
+        # already ran. It sees two groups, not all of them, which makes its
+        # number a LOWER BOUND on clean-slate's — above the bound is proof,
+        # below it is inconclusive, and the message says which.
         planned = self._planned_total()
-        endoff = self.baseline["kafka_syslog_end"]
-        if endoff >= 0 and endoff + planned > 100_000:
-            warn(f"planned injection ({planned}) + current netops.syslog end offset "
-                 f"({endoff}) exceeds 100k — clean-slate.sh --verify's offset "
-                 f"heuristic will flag this stack until its next reset")
+        bus_max_current = max(corr_lag.get("_max_current", -1),
+                              router_lag.get("_max_current", -1))
+        self.baseline["bus_max_current_offset"] = bus_max_current
+        self.baseline["bus_verify_bound"] = CLEAN_SLATE_OFFSET_BOUND
+        level, message = clean_slate_offset_note(bus_max_current, planned)
+        if level == "warn":
+            warn(message)
+        elif level == "log":
+            log(message)
         ev["baseline"] = self.baseline
 
         status = "PASS" if not problems else "FAIL"
@@ -3522,6 +3743,52 @@ class Harness:
     #                           engine reports pending 0 with reset counters,
     #                           which is indistinguishable from "finished".
     #   every replica readable  an unreadable replica is UNKNOWN, never idle.
+    def _corr_mem_track(self, state: dict, t_s: float, now: float) -> None:
+        """Per-replica RSS beside per-replica pending, one row per poll.
+
+        memflat's correlation clause needs an anchor the ENGINE defines, not
+        the injector: the first sample at which THIS replica reports
+        `corr_engine_pending == 0`. Everything before that instant is backlog
+        drain — the engine is still building objects for work it accepted
+        before input stopped, and a working set that grows there is work, not a
+        leak (run p2-s05-08291138: 22,736 signals still pending when the old
+        anchor was taken, and memflat called the next 177 MiB a leak).
+
+        A pending that returns ABOVE zero after reaching it re-arms the anchor:
+        the completion gate itself notes that pending "can read 0 for an
+        instant mid-drain", and anchoring on such an instant would recreate the
+        very defect. The reset count rides in the evidence.
+        """
+        for cid_, r in (state.get("per_replica") or {}).items():
+            key = r.get("name") or cid_
+            pending = float(r.get("pending", -1.0))
+            rss = int(r.get("rss", -1))
+            row = self.corr_mem_track.setdefault(key, {
+                "container": key, "samples": 0, "pending_zero_resets": 0,
+                "pending_zero_t_s": None, "pending_zero_monotonic": None,
+                "rss_at_pending_zero": -1, "last_pending": -1.0,
+                "last_rss": -1, "last_t_s": 0.0,
+                # What the engine was still holding when the completion phase
+                # opened — i.e. how much of the "growth after input stopped"
+                # the old anchor was charging to a leak.
+                "first_pending": pending, "first_rss": rss})
+            row["samples"] += 1
+            row["last_pending"] = pending
+            row["last_rss"] = rss
+            row["last_t_s"] = round(t_s, 1)
+            if row["pending_zero_monotonic"] is None:
+                # -1.0 is UNREADABLE, never idle: only an exact 0 anchors, and
+                # only against an RSS reading that actually succeeded.
+                if pending == 0.0 and rss > 0:
+                    row["pending_zero_t_s"] = round(t_s, 1)
+                    row["pending_zero_monotonic"] = now
+                    row["rss_at_pending_zero"] = rss
+            elif pending > 0.0:
+                row["pending_zero_resets"] += 1
+                row["pending_zero_t_s"] = None
+                row["pending_zero_monotonic"] = None
+                row["rss_at_pending_zero"] = -1
+
     def correlation_completion(self) -> bool:
         base = self.baseline.get("corr_completion") or {}
         budget = max(self.args.drain_factor * self.burst_seconds, 120.0)
@@ -3532,10 +3799,19 @@ class Harness:
         completed_at = None
         while True:
             state = self.stack.corr_completion_state()
-            curve.append({"t_s": round(time.monotonic() - t0, 1),
+            now = time.monotonic()
+            self._corr_mem_track(state, now - t0, now)
+            curve.append({"t_s": round(now - t0, 1),
                           "pending": state["pending_sum"],
                           "cohorts": state["cohorts_sum"],
-                          "oldest_age_s": state["oldest_pending_age_max"]})
+                          "oldest_age_s": state["oldest_pending_age_max"],
+                          # memflat's leak anchor rides in the same curve, so a
+                          # finished run can be re-scored from its evidence.
+                          "per_replica": {
+                              (r.get("name") or c): {
+                                  "pending": r.get("pending", -1.0),
+                                  "rss": r.get("rss", -1)}
+                              for c, r in (state.get("per_replica") or {}).items()}})
             advanced = state["cohorts_sum"] - float(base.get("cohorts_sum", 0) or 0)
             if (state["readable"] == state["replicas"] and state["replicas"] > 0
                     and state["pending_sum"] == 0
@@ -3561,6 +3837,9 @@ class Harness:
             "samples": len(curve),
             "curve_file": "correlation-completion.json",
             "proves": "correlation_engine_evaluated_the_workload",
+            # memflat's leak anchor, derived here because this is the only
+            # phase that watches the engine drain (see _corr_mem_track).
+            "memory_anchor": {k: dict(v) for k, v in self.corr_mem_track.items()},
         }
 
         problems: list[str] = []
@@ -4022,6 +4301,7 @@ class Harness:
         # docs/scale/CORRELIX_SCALE_TEST_REPORT.md §6 still lists as not run.
         ####################################################################
         """
+        settle = self._corr_mem_settle()
         end_stats = self.stack.mem_stats()
         end = {n: v["used"] for n, v in end_stats.items()}
         end_anon = self.stack.anon_sample(self._anon_services())
@@ -4052,16 +4332,22 @@ class Harness:
                 problems.append(f"{pref}N: no replica seen in any memory sample")
                 continue
             for name in names:
-                self._memflat_judge(name, svc, samples, end_stats,
-                                    rows, problems)
+                if svc == "correlation":
+                    self._memflat_judge_correlation(
+                        name, svc, samples, end_stats, rows, problems)
+                else:
+                    self._memflat_judge(name, svc, samples, end_stats,
+                                        rows, problems)
         ch_ev, ch_problems, ch_summary = self._clickhouse_memory_verdict(rows)
         problems += ch_problems
+        corr_summary = self._correlation_memory_summary(rows)
         ev = {"factor": self.args.mem_factor, "anchor": anchor,
               "headroom_percent": self.args.mem_headroom_percent,
               "stateless_services": list(MEM_STATELESS_SERVICES),
+              "correlation_settle": settle,
               "containers": rows, "clickhouse": ch_ev}
         status = "PASS" if not problems else "FAIL"
-        tail = f" | {ch_summary}" if ch_summary else ""
+        tail = "".join(f" | {s}" for s in (corr_summary, ch_summary) if s)
         return self.phase("memflat", status, ev,
                           ("; ".join(problems) + tail) if problems else
                           f"all {len(rows)} key containers within x{self.args.mem_factor} "
@@ -4127,6 +4413,169 @@ class Harness:
     def _ratio(value: float, anchor: float) -> float | None:
         return round(value / anchor, 3) if value > 0 and anchor > 0 else None
 
+    # -- memflat, the correlation anchor -------------------------------------
+    #
+    # THE FALSE FAIL THIS REPLACES (run p2-s05-08291138, 2026-08-29).
+    #
+    #   [FAIL] memflat — netops-correlation-3: LEAK SLOPE (docker_stats)
+    #          470 -> 647 MiB (x1.37 > x1.3) after input stopped
+    #
+    # "after input stopped" was true and beside the point: 22,736 signals were
+    # still PENDING in that replica's engine at the anchor sample, and the
+    # engine kept building objects for them for another ~33 minutes (the
+    # correlation_completion phase timed the drain at 1,986 s). A working set
+    # that grows while a queue drains is the queue, not a leak. The injector
+    # does not get to define when the engine is idle — the engine does:
+    #
+    #   anchor  the FIRST sample where THIS replica reports
+    #           corr_engine_pending == 0 (re-armed if pending climbs again)
+    #   end     a sample at least CORR_MEM_SETTLE_S later, bounded
+    #   slope   unchanged: x{--mem-factor} with the same 64 MiB absolute floor
+    #
+    # No pending-zero sample => UNKNOWN, carrying rss_at_input_stop /
+    # rss_at_pending_zero / rss_end. UNKNOWN is never PASS (it stays a
+    # `problems` entry, like every other unmeasurable clause in this file) and
+    # it is never reported as a LEAK either — accusing the engine of leaking on
+    # evidence that cannot separate a leak from a drain is the defect itself.
+    # `api` keeps the input-stop anchor: it holds no backlog.
+    def _corr_mem_settle(self) -> dict:
+        """Bounded wait so the end sample is past the drain, not inside it.
+
+        Normally free: accounting runs between correlation_completion and
+        memflat and usually spends more than the settle on its own."""
+        zeros = [row["pending_zero_monotonic"]
+                 for row in self.corr_mem_track.values()
+                 if row.get("pending_zero_monotonic") is not None]
+        ev = {"settle_s": CORR_MEM_SETTLE_S,
+              "budget_s": CORR_MEM_SETTLE_MAX_S,
+              "waited_s": 0.0,
+              "replicas_tracked": len(self.corr_mem_track),
+              "replicas_at_pending_zero": len(zeros)}
+        if not zeros:
+            return ev
+        target = max(zeros) + CORR_MEM_SETTLE_S
+        t0 = time.monotonic()
+        announced = False
+        while True:
+            now = time.monotonic()
+            if now >= target or now - t0 >= CORR_MEM_SETTLE_MAX_S:
+                break
+            if not announced:           # never a silent wait (§16)
+                log(f"memflat: settling {target - now:.0f}s more before the end "
+                    f"sample — correlation reached pending 0 less than "
+                    f"{CORR_MEM_SETTLE_S:.0f}s ago (budget "
+                    f"{CORR_MEM_SETTLE_MAX_S:.0f}s)")
+                announced = True
+            time.sleep(min(5.0, max(0.5, target - now)))
+        ev["waited_s"] = round(time.monotonic() - t0, 1)
+        return ev
+
+    def _memflat_judge_correlation(self, name: str, svc: str, samples: dict,
+                                   end_stats: dict, rows: list,
+                                   problems: list) -> None:
+        """Judge ONE correlation replica against the pending-zero anchor."""
+        track = self.corr_mem_track.get(name) or {}
+        at_stop = samples["warm"].get(name, -1)
+        if at_stop <= 0:
+            at_stop = samples["cold"].get(name, -1)
+        at_zero = int(track.get("rss_at_pending_zero", -1))
+        end = samples["end"].get(name, -1)
+        limit = end_stats.get(name, {}).get("limit", -1)
+        pct_limit = round(100.0 * end / limit, 1) if limit > 0 and end > 0 else None
+        zero_at = track.get("pending_zero_monotonic")
+        settled_s = (round(time.monotonic() - zero_at, 1)
+                     if zero_at is not None else None)
+        ratio = self._ratio(end, at_zero)
+        row = {"container": name, "service": svc,
+               "instrument": "docker_stats",
+               "anchor": "corr_engine_pending==0",
+               "cold_bytes": samples["cold"].get(name, -1),
+               "warm_bytes": samples["warm"].get(name, -1),
+               "end_bytes": end, "limit_bytes": limit,
+               "pct_of_limit": pct_limit,
+               "rss_at_input_stop": at_stop,
+               "rss_at_pending_zero": at_zero,
+               "rss_end": end,
+               "pending_at_first_engine_sample": track.get("first_pending", -1.0),
+               "pending_zero_t_s": track.get("pending_zero_t_s"),
+               "pending_zero_resets": track.get("pending_zero_resets", 0),
+               "last_pending": track.get("last_pending", -1.0),
+               "engine_samples": track.get("samples", 0),
+               "seconds_from_pending_zero_to_end": settled_s,
+               "settle_required_s": CORR_MEM_SETTLE_S,
+               "ratio_vs_anchor": ratio,
+               # The old anchor, kept as evidence and never judged: on the run
+               # that motivated this it read x1.37 and meant "the backlog was
+               # still draining", not "the engine leaked".
+               "ratio_input_stop_to_end_unjudged": self._ratio(end, at_stop),
+               "ratio_cold_to_end": self._ratio(end, samples["cold"].get(name, -1)),
+               "verdict": "UNKNOWN"}
+        rows.append(row)
+        numbers = (f"rss_at_input_stop {mib(at_stop)} -> rss_at_pending_zero "
+                   f"{mib(at_zero)} -> rss_end {mib(end)}")
+        # The OOM clause is anchor-independent: a container at 90 % of its cap
+        # is one burst from a kill whether or not it is draining a backlog.
+        if pct_limit is not None and pct_limit > self.args.mem_headroom_percent:
+            problems.append(
+                f"{name}: {end / 1024**2:.0f} MiB (docker_stats) is {pct_limit}% "
+                f"of its {limit / 1024**2:.0f} MiB cap "
+                f"(> {self.args.mem_headroom_percent}%) — one burst from an "
+                f"OOM kill")
+        if end <= 0:
+            problems.append(
+                f"{name}: no docker_stats end sample (end {end}) — the leak "
+                f"clause has no measurement to judge")
+            return
+        if not track:
+            problems.append(
+                f"{name}: LEAK SLOPE UNKNOWN — no per-replica engine sample "
+                f"(correlation_completion never ran for this replica), so the "
+                f"pending-zero anchor does not exist; {numbers}")
+            return
+        if zero_at is None or at_zero <= 0:
+            problems.append(
+                f"{name}: LEAK SLOPE UNKNOWN — corr_engine_pending never "
+                f"reached 0 on this replica within the completion phase (last "
+                f"pending {track.get('last_pending', -1.0):.0f} at "
+                f"t+{track.get('last_t_s', -1.0):.0f}s over "
+                f"{track.get('samples', 0)} sample(s)); {numbers}. Growth while "
+                f"a backlog drains is work, not a leak — this is NOT judged")
+            return
+        if settled_s is not None and settled_s < CORR_MEM_SETTLE_S:
+            problems.append(
+                f"{name}: LEAK SLOPE UNKNOWN — the end sample is only "
+                f"{settled_s:.0f}s past pending 0 (needs "
+                f"{CORR_MEM_SETTLE_S:.0f}s); {numbers}")
+            return
+        row["verdict"] = "LEAK" if (
+            ratio is not None and ratio > self.args.mem_factor
+            and (end - at_zero) > 64 * 1024**2) else "FLAT"
+        if row["verdict"] == "LEAK":
+            problems.append(
+                f"{name}: LEAK SLOPE (docker_stats, anchored at "
+                f"corr_engine_pending==0) {at_zero / 1024**2:.0f} -> "
+                f"{end / 1024**2:.0f} MiB (x{ratio:.2f} > "
+                f"x{self.args.mem_factor}) over {settled_s:.0f}s AFTER the "
+                f"backlog drained — this is growth with nothing left to "
+                f"evaluate")
+
+    def _correlation_memory_summary(self, rows: list) -> str:
+        """The three RSS numbers, on the phase line, for every replica."""
+        parts = []
+        for r in rows:
+            if r.get("service") != "correlation":
+                continue
+            ratio = r.get("ratio_vs_anchor")
+            settled = r.get("seconds_from_pending_zero_to_end")
+            parts.append(
+                f"{r['container']} rss {mib(r['rss_at_input_stop'])} at input "
+                f"stop -> {mib(r['rss_at_pending_zero'])} at pending 0 -> "
+                f"{mib(r['rss_end'])} end "
+                f"(x{'?' if ratio is None else ratio} vs pending-0 anchor, "
+                f"settle {'?' if settled is None else f'{settled:.0f}'}s, "
+                f"{r.get('verdict', 'UNKNOWN')})")
+        return "correlation " + "; ".join(parts) if parts else ""
+
     # -- memflat, ClickHouse clauses (2) and (3) -----------------------------
     #
     # docs/scale/P2_CLICKHOUSE_MEMFLAT_2026-08-29.md §(c). A store that writes
@@ -4141,103 +4590,132 @@ class Harness:
     #       value once input stops, and stays under parts_to_delay_insert / 2.
     #       That is what a stateful store legitimately owes after a burst.
     def _ch_number(self, query: str) -> float:
-        """One numeric ClickHouse scalar. -1.0 means UNANSWERED — never 0, so a
-        failed probe can never read as a healthy measurement."""
-        ok, out = self.stack.ch(query)
-        if not ok:
-            warn(f"ClickHouse probe failed ({out[:160]}) for: {query[:90]}")
-            return -1.0
-        head = out.strip().splitlines()[0].split("\t")[0] if out.strip() else ""
-        try:
-            return float(head)
-        except ValueError:
-            return -1.0
+        return ch_number(self.stack, query)
 
     def _ch_sample_metrics(self) -> None:
         """Fold a live `system.metrics` reading into the running peak. Cheap,
-        and it is the only peak available if `system.metric_log` is disabled."""
+        and it is the only peak available if `system.metric_log` is disabled.
+
+        The PAIR is judged, never the two counters separately: a reading whose
+        merge memory exceeds its own MemoryTracking is physically impossible
+        (CH_PLAUSIBLE_SAMPLE) and is discarded whole — folding half of a
+        corrupt sample into the peak is how the metric_log defect reached the
+        verdict through the fallback path as well."""
         ok, out = self.stack.ch(
             "SELECT metric, toInt64(value) FROM system.metrics WHERE metric IN "
             "('MemoryTracking', 'MergesMutationsMemoryTracking')")
         if not ok:
             warn(f"ClickHouse system.metrics sample failed: {out[:160]}")
             return
+        raw_values: dict[str, int] = {}
         for line in out.splitlines():
             if "\t" not in line:
                 continue
             metric, raw = line.split("\t", 1)
-            try:
-                value = _ch_counter(raw)
+            if metric not in self.ch_mem_peak:
+                continue
+            try:                        # SIGNED: the plausibility test needs it
+                raw_values[metric] = int(float(raw.strip()))
             except ValueError:
                 continue
-            if metric in self.ch_mem_peak and value > self.ch_mem_peak[metric]:
-                self.ch_mem_peak[metric] = value
+        track = raw_values.get("MemoryTracking")
+        merges = raw_values.get("MergesMutationsMemoryTracking")
+        if track is None:
+            warn("ClickHouse system.metrics sample carried no MemoryTracking "
+                 "row — nothing folded into the peak")
+            return
+        if track < 0 or (merges is not None and merges > track):
+            self.ch_mem_implausible += 1
+            warn(f"ClickHouse system.metrics sample DISCARDED as physically "
+                 f"impossible: MergesMutationsMemoryTracking {mib(merges)} vs "
+                 f"MemoryTracking {mib(track)} (merge memory is a subset of the "
+                 f"tracked total) — the counter underflowed; not folded into "
+                 f"the peak")
+            return
+        for metric, value in (("MemoryTracking", track),
+                              ("MergesMutationsMemoryTracking", merges)):
+            if value is None:
+                continue
+            # A negative merge delta is 0 bytes of merge memory, never a wrap.
+            self.ch_mem_peak[metric] = max(self.ch_mem_peak[metric], 0, value)
 
     def _ch_memory_cap(self) -> tuple[float, str]:
-        """The effective `max_server_memory_usage` in bytes, and where it came
-        from. Ours is configured 0 = "derive from the ratio", so the cap is
-        `max_server_memory_usage_to_ram_ratio x CGroupMemoryTotal`. If the
-        cgroup total is invisible the cap is HOST-derived — the very trap that
-        makes `merges_mutations_memory_usage_soft_limit` inert here — so the
-        source is reported with the number."""
-        configured = self._ch_number(
-            "SELECT toFloat64(value) FROM system.server_settings "
-            "WHERE name = 'max_server_memory_usage'")
-        if configured > 0:
-            return configured, "server_settings.max_server_memory_usage"
-        ratio = self._ch_number(
-            "SELECT toFloat64(value) FROM system.server_settings "
-            "WHERE name = 'max_server_memory_usage_to_ram_ratio'")
-        total = self._ch_number(
-            "SELECT value FROM system.asynchronous_metrics "
-            "WHERE metric = 'CGroupMemoryTotal'")
-        source = "ratio x CGroupMemoryTotal"
-        if total <= 0:
-            total = self._ch_number(
-                "SELECT value FROM system.asynchronous_metrics "
-                "WHERE metric = 'OSMemoryTotal'")
-            source = ("ratio x OSMemoryTotal (CGroupMemoryTotal unseen — this "
-                      "cap is HOST-derived and larger than the container)")
-        if ratio > 0 and total > 0:
-            return ratio * total, source
-        return -1.0, "unreadable"
+        return ch_memory_cap(self.stack)
 
-    def _ch_memory_peaks(self) -> tuple[dict, str]:
+    def _ch_memory_peaks(self) -> tuple[dict, str, dict]:
         """Peak MemoryTracking / merge memory over THIS RUN's window.
 
         `system.metric_log` is the instrument; the harness's own
         `system.metrics` samples are folded in as a floor, so a disabled
-        metric_log degrades the resolution instead of blinding the gate."""
+        metric_log degrades the resolution instead of blinding the gate.
+
+        Only PLAUSIBLE samples are aggregated (CH_PLAUSIBLE_SAMPLE) — a row
+        whose merge memory exceeds its own MemoryTracking is a counter
+        underflow, not a measurement, and taking `max()` across the raw column
+        let 50 such rows decide run p2-s05-08291138's verdict. The rejected
+        count rides in the returned census so the filtering is never silent.
+        """
         peaks = {"MemoryTracking": -1, "MergesMutationsMemoryTracking": -1}
+        census = {"window_start": "", "metric_log_samples": -1,
+                  "metric_log_plausible": -1, "metric_log_rejected": -1,
+                  "live_samples_rejected": self.ch_mem_implausible}
         sources: list[str] = []
         start = str(self.baseline.get("ch_window_start") or "")
         # Zero trust even on our own server's clock: this string is spliced
         # into SQL, so it must match a DateTime literal exactly or be dropped.
         if re.fullmatch(r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}", start):
+            census["window_start"] = start
             ok, out = self.stack.ch(
-                "SELECT max(CurrentMetric_MemoryTracking), "
-                "max(CurrentMetric_MergesMutationsMemoryTracking) "
+                "SELECT "
+                f"maxIf(greatest(CurrentMetric_MemoryTracking, 0), "
+                f"{CH_PLAUSIBLE_SAMPLE}), "
+                f"maxIf(greatest(CurrentMetric_MergesMutationsMemoryTracking, 0), "
+                f"{CH_PLAUSIBLE_SAMPLE}), "
+                f"countIf({CH_PLAUSIBLE_SAMPLE}), count() "
                 "FROM system.metric_log "
                 f"WHERE event_time >= toDateTime('{start}')")
             if ok and out.strip():
                 cells = out.strip().splitlines()[0].split("\t")
-                for i, key in enumerate(("MemoryTracking",
-                                         "MergesMutationsMemoryTracking")):
-                    try:
-                        peaks[key] = _ch_counter(cells[i])
-                    except (IndexError, ValueError):
-                        peaks[key] = -1
-                if peaks["MemoryTracking"] > 0:
-                    sources.append(f"system.metric_log since {start}")
+                try:
+                    plausible, total = int(cells[2]), int(cells[3])
+                except (IndexError, ValueError):
+                    plausible, total = -1, -1
+                    warn(f"ClickHouse metric_log peak query returned an "
+                         f"unreadable sample census ({out.strip()[:120]!r}) — "
+                         f"the peaks it carries are not trusted")
+                census["metric_log_samples"] = total
+                census["metric_log_plausible"] = plausible
+                census["metric_log_rejected"] = (
+                    total - plausible if total >= 0 and plausible >= 0 else -1)
+                if plausible > 0:
+                    for i, key in enumerate(("MemoryTracking",
+                                             "MergesMutationsMemoryTracking")):
+                        try:
+                            peaks[key] = _ch_counter(cells[i])
+                        except (IndexError, ValueError):
+                            peaks[key] = -1
+                    if peaks["MemoryTracking"] > 0:
+                        sources.append(f"system.metric_log since {start}")
+                    if census["metric_log_rejected"] > 0:
+                        warn(f"ClickHouse metric_log: "
+                             f"{census['metric_log_rejected']} of {total} samples "
+                             f"in this run's window were physically impossible "
+                             f"(merge memory above MemoryTracking) and were "
+                             f"excluded from the peaks")
+                elif total >= 0:
+                    warn(f"ClickHouse metric_log held {total} sample(s) for this "
+                         f"run's window and NONE was plausible — the peaks fall "
+                         f"back to the harness's own samples")
             elif not ok:
                 warn(f"ClickHouse metric_log peak query failed: {out[:160]}")
         self._ch_sample_metrics()
+        census["live_samples_rejected"] = self.ch_mem_implausible
         for key, sampled in self.ch_mem_peak.items():
             if sampled > peaks.get(key, -1):
                 peaks[key] = sampled
                 if "harness system.metrics samples" not in sources:
                     sources.append("harness system.metrics samples")
-        return peaks, " + ".join(sources) if sources else "none"
+        return peaks, " + ".join(sources) if sources else "none", census
 
     def _ch_parts_settled(self) -> dict:
         """Clause (3): parts come back down after input stops.
@@ -4297,12 +4775,25 @@ class Harness:
             return {}, [], ""
         problems: list[str] = []
         cap, cap_source = self._ch_memory_cap()
-        peaks, peak_source = self._ch_memory_peaks()
+        peaks, peak_source, census = self._ch_memory_peaks()
+        # THE LAST NET. Whatever the instrument said, the two numbers this
+        # phase is about to PRINT must satisfy the physical invariant — merge
+        # memory is part of the tracked total. If they do not, the instrument
+        # is corrupt in a way the plausibility filter did not catch, and the
+        # only honest verdict is UNKNOWN: never a FAIL on an impossible number
+        # (which is exactly what run p2-s05-08291138 got), and never a PASS on
+        # one either.
+        impossible = (peaks["MemoryTracking"] >= 0
+                      and peaks["MergesMutationsMemoryTracking"] >= 0
+                      and peaks["MergesMutationsMemoryTracking"]
+                      > peaks["MemoryTracking"])
         ev = {"cap_bytes": int(cap) if cap > 0 else -1,
               "cap_source": cap_source,
               "peak_source": peak_source,
               "peak_memory_tracking_bytes": peaks["MemoryTracking"],
               "peak_merges_memory_bytes": peaks["MergesMutationsMemoryTracking"],
+              "peaks_self_consistent": not impossible,
+              "sample_census": census,
               "memory_tracking_max_pct": CH_MEMORY_TRACKING_MAX_PCT,
               "merges_memory_max_pct": CH_MERGE_MEMORY_MAX_PCT}
         track_pct = merge_pct = None
@@ -4316,6 +4807,16 @@ class Harness:
                 "clickhouse: MemoryTracking peak unmeasurable (system.metric_log "
                 "returned nothing for this run's window and no live sample "
                 "succeeded) — the OOM clause cannot be judged")
+        elif impossible:
+            problems.append(
+                f"clickhouse: memory peaks UNKNOWN — peak MERGE memory "
+                f"{mib(peaks['MergesMutationsMemoryTracking'])} EXCEEDS peak "
+                f"MemoryTracking {mib(peaks['MemoryTracking'])}, which is "
+                f"physically impossible (merge memory is a subset of the "
+                f"server's tracked total): the instrument is corrupt "
+                f"({census['metric_log_rejected']} of "
+                f"{census['metric_log_samples']} metric_log samples already "
+                f"rejected as impossible) — clause (2) is NOT judged either way")
         else:
             track_pct = round(100.0 * peaks["MemoryTracking"] / cap, 1)
             if track_pct > CH_MEMORY_TRACKING_MAX_PCT:
@@ -4353,18 +4854,100 @@ class Harness:
         # All three clauses in one line, always — a number the operator can
         # read is the difference between "the gate is green" and "the store is
         # at 95 % of its own cap and nobody said so".
+        caveat = ""
+        if impossible:
+            caveat += ", UNKNOWN — merge peak above the tracked total"
+        if census["metric_log_rejected"] > 0:
+            caveat += (f", {census['metric_log_rejected']}/"
+                       f"{census['metric_log_samples']} impossible samples "
+                       f"excluded")
         summary = (
             f"clickhouse {slope}; peak MemoryTracking "
             f"{mib(peaks['MemoryTracking'])} = "
             f"{'?' if track_pct is None else track_pct}% of cap {mib(cap)} "
             f"(merges {mib(peaks['MergesMutationsMemoryTracking'])} = "
-            f"{'?' if merge_pct is None else merge_pct}%); "
+            f"{'?' if merge_pct is None else merge_pct}%{caveat}); "
             f"MaxPartCountForPartition {parts['current']} "
             f"(preflight {parts['baseline']}, envelope {parts['envelope']}, "
             f"delay at {parts['parts_to_delay_insert']})")
         return ev, problems, summary
 
     # -- phase 7: cleanup ----------------------------------------------------
+    # ── TRACKER 175: the tombstone debt no run ever pays ───────────────
+    #
+    # WHAT WAS MEASURED. `DELETE /api/devices/{id}` writes a SUPPRESSION
+    # tombstone (`.d/suppressed/<sha256hex(id)>`) so a source-owned device
+    # stays deleted instead of being re-added by the next poll (audit F-69,
+    # devstore.go). It is never removed except by re-creating the same id.
+    # This harness creates and deletes 2,500 devices per run, so every run
+    # leaves 2,500 permanent files behind. Measured on the lab box on
+    # 2026-08-29 after a day of runs: 35,427 tombstones, 142 MB, against ZERO
+    # manual devices — and the onboard rate had fallen 30-43/s -> 15.4/s.
+    # devstore.go's own LoadPrefix comment records the endgame: "a lab subtree
+    # of 38,666 deletion tombstones took >6 min of uninterruptible disk I/O and
+    # wedged boot before the api ever reached its listener".
+    #
+    # WHAT THIS DOES, AND WHY IT DOES NOT DELETE THEM. There is no API and no
+    # CLI for forgetting a tombstone: `DevStore` exposes Put / Remove /
+    # Devices / IsSuppressed and nothing else, and no HTTP route reaches the
+    # suppression set at all. Deleting the files from under a RUNNING api
+    # would not be a purge — the api holds the suppression set in memory
+    # (`adoptRecords` reads it once at boot) — it would be an unsynchronised
+    # write into a live service's private state, which is precisely what
+    # §16.3 forbids. So the harness MEASURES the debt, names it, attributes
+    # this run's share of it, and records the onboard rate beside it so the
+    # correlation is visible run over run. The purge itself needs an API
+    # (tracker 175).
+    TOMBSTONE_DIR = "devices.json.d/suppressed"
+
+    def tombstone_debt(self) -> dict:
+        """Count the device store's suppression tombstones. Read-only."""
+        ev: dict = {"reachable": False, "reason": "", "path": "",
+                    "suppressed_entries": -1, "this_run": -1,
+                    "purge_api": "none — DevStore exposes no tombstone removal"}
+        root, reason = self.stack.api_data_dir()
+        ev["reason"] = reason
+        if not root:
+            warn(f"TOMBSTONE DEBT: UNKNOWN — {reason}. The device store's "
+                 f"suppression tombstones cannot be counted from here "
+                 f"(tracker 175)")
+            return ev
+        path = os.path.join(root, self.TOMBSTONE_DIR)
+        ev["path"] = path
+        if not os.path.isdir(path):
+            ev["reason"] = f"{path} does not exist (nothing has been deleted yet)"
+            ev["reachable"] = True
+            ev["suppressed_entries"] = 0
+            ev["this_run"] = 0
+            return ev
+        try:
+            with os.scandir(path) as entries:
+                total = sum(1 for e in entries if e.is_file())
+        except OSError as exc:
+            ev["reason"] = f"{path} unreadable: {exc!r}"
+            warn(f"TOMBSTONE DEBT: UNKNOWN — {ev['reason']} (tracker 175)")
+            return ev
+        ev["reachable"] = True
+        ev["suppressed_entries"] = total
+        # THIS run's share, computed EXACTLY rather than sampled: the record
+        # name is sha256hex(device id) (devstore.go), and this harness knows
+        # every id it created. No directory scan can attribute a hash-named
+        # file to a namespace; recomputing the names can.
+        mine = 0
+        for did in list(self.created_ids) + list(self.absorbed.values()):
+            name = hashlib.sha256(did.encode("utf-8")).hexdigest()
+            if os.path.exists(os.path.join(path, name)):
+                mine += 1
+        ev["this_run"] = mine
+        if total:
+            warn(f"TOMBSTONE DEBT: {total} suppressed entries in {path} "
+                 f"({mine} of them this run's, namespace {self.prefix}). They "
+                 f"are never removed except by re-creating the same device id, "
+                 f"the api reads ALL of them at boot, and the onboard rate "
+                 f"falls as they accumulate (tracker 175). No API exists to "
+                 f"purge them — do NOT delete them under a running api")
+        return ev
+
     def cleanup(self) -> bool:
         ev: dict = {}
         problems: list[str] = []
@@ -4602,6 +5185,23 @@ class Harness:
                     f"{DEVICE_PREFIX_ROOT}")
                 self.residue_left("verified after every teardown step ran")
 
+        # AFTER the namespace sweep: this run's share of the debt is only
+        # complete once every device it created has actually been deleted.
+        #
+        # Its failures go to their OWN list, not `problems`: the tombstone
+        # count is diagnostic evidence about a PLATFORM debt (tracker 175),
+        # not a teardown obligation. A device store this harness cannot count
+        # is not a teardown this run got wrong, and failing the phase on it
+        # would put a red cleanup on every deployment whose /data is not a
+        # host bind mount. cleanup_step still warns by name, and the reason is
+        # recorded in the evidence — reported, never silent.
+        debt_problems: list[str] = []
+        ev["tombstones"] = cleanup_step(
+            "tombstone debt", debt_problems, self.tombstone_debt,
+            default={"reachable": False, "reason": "tombstone count raised"})
+        if debt_problems:
+            ev["tombstones"]["error"] = "; ".join(debt_problems)
+
         ev["http_transport_failures"] = getattr(
             self.stack, "http_transport_failures", 0)
         if ev["http_transport_failures"]:
@@ -4776,13 +5376,71 @@ class Harness:
 
         # Heartbeat for the watchdog (16.2): a cron job that silently stops
         # running must itself be detectable.
+        #
+        # TRACKER 175: it also carries the ONBOARD-RATE TREND. The tombstone
+        # debt is invisible inside one run — every run sees a rate that looks
+        # merely slow — and only shows as a slope across runs (30-43/s ->
+        # 15.4/s over one day on the lab box). A per-run number nobody can
+        # compare is not evidence; the last ONBOARD_RATE_HISTORY runs' first-
+        # window create rate, beside the tombstone count that day, is.
+        hb_path = os.path.join(os.path.dirname(self.run_dir), "last-run.json")
         hb = {"ts": doc["generated"], "runid": self.runid,
-              "overall": doc["overall"], "run_dir": self.run_dir}
-        with open(os.path.join(os.path.dirname(self.run_dir), "last-run.json"),
-                  "w", encoding="utf-8") as f:
+              "overall": doc["overall"], "run_dir": self.run_dir,
+              "onboard_rate_first": self._phase_value(
+                  "onboard", "first_window_rate_per_s"),
+              "onboard_rate_last": self._phase_value(
+                  "onboard", "last_window_rate_per_s"),
+              "devices": self.args.devices,
+              "tombstones": (self._phase_value("cleanup", "tombstones") or {})
+              .get("suppressed_entries", -1)}
+        hb["onboard_rate_history"] = self._rate_history(hb_path, hb)
+        with open(hb_path, "w", encoding="utf-8") as f:
             json.dump(hb, f, indent=1)
+        trend = hb["onboard_rate_history"]
+        if len(trend) >= 2 and trend[0].get("rate") and trend[-1].get("rate"):
+            first, last = trend[0]["rate"], trend[-1]["rate"]
+            if first > 0:
+                log(f"onboard-rate trend over the last {len(trend)} run(s): "
+                    f"{first:.1f}/s -> {last:.1f}/s (x{last / first:.2f}); "
+                    f"device-store tombstones now {hb['tombstones']} "
+                    f"(tracker 175)")
         log(f"report written: {os.path.join(self.run_dir, 'report.md')}")
         return overall
+
+    def _phase_value(self, phase: str, key: str):
+        """One evidence value from a phase this run recorded, or None.
+
+        None means "this run did not record it" — never a substituted 0, which
+        would enter the trend as a real measurement."""
+        for entry in self.phases:
+            if entry.get("phase") == phase:
+                return (entry.get("evidence") or {}).get(key)
+        return None
+
+    def _rate_history(self, hb_path: str, hb: dict) -> list[dict]:
+        """This run appended to the previous heartbeat's trend, bounded.
+
+        A heartbeat that cannot be read starts the history at this run rather
+        than failing the report: the trend is diagnostic evidence, and losing
+        it must never cost the run its verdict. It is WARNED, not swallowed."""
+        history: list = []
+        try:
+            with open(hb_path, encoding="utf-8") as f:
+                history = (json.load(f) or {}).get("onboard_rate_history") or []
+        except FileNotFoundError:
+            history = []          # first run against this run-root
+        except (OSError, json.JSONDecodeError, AttributeError) as exc:
+            warn(f"previous {hb_path} unreadable ({exc!r}) — the onboard-rate "
+                 f"trend restarts at this run")
+            history = []
+        if not isinstance(history, list):
+            warn(f"{hb_path} carried a non-list onboard_rate_history — "
+                 f"the trend restarts at this run")
+            history = []
+        history.append({"ts": hb["ts"], "runid": hb["runid"],
+                        "devices": hb["devices"], "rate": hb["onboard_rate_first"],
+                        "tombstones": hb["tombstones"]})
+        return history[-ONBOARD_RATE_HISTORY:]
 
     # -- orchestration -------------------------------------------------------
     def execute(self) -> int:
@@ -5023,6 +5681,23 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     ap.add_argument("--dry-run", action="store_true",
                     help="print the full plan and exit; touches nothing")
     ap.add_argument(
+        "--rescore-memflat", default="", metavar="RUN_DIR",
+        help="OFFLINE RE-SCORE, no run. Re-judges a FINISHED run's memflat "
+             "verdict from its own report.json + correlation-completion.json "
+             "and a READ-ONLY system.metric_log query for that run's window, "
+             "using the current clauses. Writes "
+             f"{RESCORE_FILE} into RUN_DIR and NEVER touches the run's own "
+             "report files. Exit 0 = re-scored PASS, 1 = not PASS, 2 = could "
+             "not re-score.")
+    ap.add_argument("--rescore-window-start", default="", metavar="TS",
+                    help="ClickHouse window start for --rescore-memflat as "
+                         "'YYYY-MM-DD HH:MM:SS' (default: the window recorded "
+                         "in the run's memflat evidence; runs before "
+                         "2026-08-29 carry none, so it must be given)")
+    ap.add_argument("--rescore-window-end", default="", metavar="TS",
+                    help="ClickHouse window end for --rescore-memflat "
+                         "(default: open — everything since the start)")
+    ap.add_argument(
         "--cleanup-only", nargs="?", const=DEVICE_PREFIX_ROOT, default=None,
         metavar="PREFIX", dest="cleanup_only",
         help="RESIDUE PURGE, no run. Deletes every device whose id starts with "
@@ -5146,9 +5821,13 @@ def main(argv: list[str]) -> int:
         print(f"  phase 6 memflat  : {', '.join(MEM_SERVICES)} <= x{args.mem_factor} "
               f"of their END-OF-BURST figure (cgroup anon, except "
               f"{'/'.join(MEM_STATELESS_SERVICES)} on docker stats), under "
-              f"{args.mem_headroom_percent}% of their own caps; clickhouse also "
+              f"{args.mem_headroom_percent}% of their own caps; CORRELATION is "
+              f"anchored instead on the first sample where each replica reports "
+              f"corr_engine_pending==0, judged {CORR_MEM_SETTLE_S:.0f}s later "
+              f"(no such sample = UNKNOWN, never a leak verdict); clickhouse also "
               f"< {CH_MEMORY_TRACKING_MAX_PCT}% / {CH_MERGE_MEMORY_MAX_PCT}% of "
-              f"max_server_memory_usage and parts back within "
+              f"max_server_memory_usage (physically impossible metric_log "
+              f"samples excluded) and parts back within "
               f"+{(CH_PART_COUNT_GROWTH_MAX - 1) * 100:.0f}% of preflight")
         cbudget = (CLEANUP_DEVICE_BUDGET_BASE_S +
                    CLEANUP_DEVICE_BUDGET_PER_DEVICE_S * args.devices)
@@ -5160,6 +5839,13 @@ def main(argv: list[str]) -> int:
               f"ignored")
         print("  report           : report.md + report.json + last-run.json heartbeat")
         return 0
+
+    if args.rescore_memflat:
+        # Read-only and run-lock-free ON PURPOSE: it deletes nothing, writes
+        # only its own file, and must stay usable while a run holds the lock.
+        # Ahead of the env-file gate too: re-scoring a finished run needs the
+        # run's evidence and a ClickHouse container, not this stack's secrets.
+        return rescore_memflat(args)
 
     if not os.path.isfile(args.env_file):
         die(f"env file not found: {args.env_file} (use --env-file)")
@@ -5188,6 +5874,278 @@ def main(argv: list[str]) -> int:
         # cleanup: a lock left behind would be reclaimed as stale later, but
         # only after making the next operator read a scary message.
         lock.release()
+
+
+# ── offline re-score of a finished run's memflat verdict ───────────────────
+#
+# WHY THIS EXISTS. The two memflat defects fixed on 2026-08-29 (the ClickHouse
+# metric_log plausibility filter and correlation's pending-zero anchor) each
+# turned a live FAIL into what the evidence actually says. A run costs an hour;
+# re-running one to find out what the corrected clauses say about it is not the
+# answer. This re-scores a FINISHED run from its own saved evidence plus a
+# read-only `system.metric_log` query for that run's window.
+#
+# It NEVER writes to the run's own report files — the original verdict is the
+# record of what the gate said at the time — only `memflat-rescore.md` beside
+# them. It touches nothing else: no devices, no purge, no run lock needed.
+RESCORE_FILE = "memflat-rescore.md"
+# `--mem-factor`'s default, restated for the offline path: a re-score judges a
+# FINISHED run, so it must use the threshold that run was judged by, not
+# whatever this invocation happens to pass on the command line.
+MEM_FACTOR_RESCORE = 1.3
+
+
+def _rescore_clickhouse(stack, start: str, end: str) -> tuple[dict, list[str]]:
+    """Clause (2) again, over the same window, with the corrected filter."""
+    ev: dict = {"window_start": start, "window_end": end or "(now)"}
+    problems: list[str] = []
+    cap, cap_source = ch_memory_cap(stack)
+    ev["cap_bytes"], ev["cap_source"] = cap, cap_source
+    bound = f"WHERE event_time >= toDateTime('{start}')"
+    if end:
+        bound += f" AND event_time <= toDateTime('{end}')"
+    ok, out = stack.ch(
+        "SELECT "
+        f"maxIf(greatest(CurrentMetric_MemoryTracking, 0), {CH_PLAUSIBLE_SAMPLE}), "
+        f"maxIf(greatest(CurrentMetric_MergesMutationsMemoryTracking, 0), "
+        f"{CH_PLAUSIBLE_SAMPLE}), "
+        f"countIf({CH_PLAUSIBLE_SAMPLE}), count(), "
+        "max(CurrentMetric_MemoryTracking), "
+        "max(CurrentMetric_MergesMutationsMemoryTracking) "
+        f"FROM system.metric_log {bound}")
+    if not ok:
+        problems.append(f"system.metric_log unreadable for the window: {out[:200]}")
+        return ev, problems
+    cells = out.strip().splitlines()[0].split("\t") if out.strip() else []
+    if len(cells) < 6:
+        problems.append(f"system.metric_log returned {len(cells)} column(s), "
+                        f"expected 6 — the window cannot be re-scored")
+        return ev, problems
+    try:
+        ev["peak_memory_tracking_bytes"] = _ch_counter(cells[0])
+        ev["peak_merges_memory_bytes"] = _ch_counter(cells[1])
+        ev["plausible_samples"] = int(cells[2])
+        ev["total_samples"] = int(cells[3])
+        # What the OLD code would have printed, from the same rows — the
+        # difference IS the defect, so it is stated, not implied.
+        ev["unfiltered_memory_tracking_bytes"] = _ch_counter(cells[4])
+        ev["unfiltered_merges_memory_bytes"] = _ch_counter(cells[5])
+    except (IndexError, ValueError):
+        problems.append(f"system.metric_log answer unparseable: {out[:200]}")
+        return ev, problems
+    ev["rejected_samples"] = ev["total_samples"] - ev["plausible_samples"]
+    if ev["plausible_samples"] <= 0:
+        problems.append("no plausible metric_log sample in the window — "
+                        "clause (2) is UNKNOWN")
+        return ev, problems
+    if cap <= 0:
+        problems.append(f"effective max_server_memory_usage unreadable "
+                        f"({cap_source}) — clause (2) is UNKNOWN")
+        return ev, problems
+    ev["memory_tracking_pct"] = round(
+        100.0 * ev["peak_memory_tracking_bytes"] / cap, 1)
+    ev["merges_memory_pct"] = round(
+        100.0 * ev["peak_merges_memory_bytes"] / cap, 1)
+    if ev["memory_tracking_pct"] > CH_MEMORY_TRACKING_MAX_PCT:
+        problems.append(
+            f"peak MemoryTracking {mib(ev['peak_memory_tracking_bytes'])} is "
+            f"{ev['memory_tracking_pct']}% of the {mib(cap)} cap "
+            f"(> {CH_MEMORY_TRACKING_MAX_PCT}%)")
+    if ev["merges_memory_pct"] > CH_MERGE_MEMORY_MAX_PCT:
+        problems.append(
+            f"peak MERGE memory {mib(ev['peak_merges_memory_bytes'])} is "
+            f"{ev['merges_memory_pct']}% of the {mib(cap)} cap "
+            f"(> {CH_MERGE_MEMORY_MAX_PCT}%)")
+    return ev, problems
+
+
+def _rescore_correlation(run_dir: str, memflat_ev: dict) -> tuple[dict, list[str]]:
+    """Clause (1) for correlation, anchored at pending 0, from saved evidence.
+
+    Three sources, in order of fidelity: a memflat evidence row already scored
+    by the fixed harness; the completion curve's per-replica {pending, rss}
+    samples (recorded since 2026-08-29); nothing — which is UNKNOWN, and the
+    reason is printed rather than a verdict invented from the old anchor."""
+    rows = [r for r in (memflat_ev.get("containers") or [])
+            if r.get("service") == "correlation"
+            or "-correlation-" in str(r.get("container", ""))]
+    out: dict = {"replicas": {}}
+    problems: list[str] = []
+    scored = [r for r in rows if r.get("anchor") == "corr_engine_pending==0"]
+    if scored:
+        out["source"] = "memflat evidence (already scored at the pending-zero anchor)"
+        for r in scored:
+            out["replicas"][r["container"]] = {
+                "rss_at_input_stop": r.get("rss_at_input_stop", -1),
+                "rss_at_pending_zero": r.get("rss_at_pending_zero", -1),
+                "rss_end": r.get("rss_end", -1),
+                "ratio_vs_anchor": r.get("ratio_vs_anchor"),
+                "verdict": r.get("verdict", "UNKNOWN")}
+            if r.get("verdict") == "LEAK":
+                problems.append(f"{r['container']}: LEAK SLOPE at the "
+                                f"pending-zero anchor (x{r.get('ratio_vs_anchor')})")
+            elif r.get("verdict") != "FLAT":
+                problems.append(f"{r['container']}: UNKNOWN at the pending-zero "
+                                f"anchor")
+        return out, problems
+
+    curve_path = os.path.join(run_dir, "correlation-completion.json")
+    curve: list = []
+    if os.path.isfile(curve_path):
+        try:
+            with open(curve_path, encoding="utf-8") as f:
+                curve = json.load(f)
+        except (OSError, json.JSONDecodeError) as exc:
+            problems.append(f"{curve_path} unreadable ({exc!r}) — correlation "
+                            f"cannot be re-scored")
+            return out, problems
+    if not any(isinstance(e, dict) and e.get("per_replica") for e in curve):
+        out["source"] = "none"
+        problems.append(
+            "UNKNOWN: this run predates the per-replica {pending, rss} curve "
+            "(added 2026-08-29), so the first sample at which each replica "
+            "reported corr_engine_pending == 0 — and its RSS there — was never "
+            "recorded. The input-stop anchor in the run's own report cannot "
+            "separate a leak from a backlog drain, which is exactly why it is "
+            "not reused here. Re-run to get a judged correlation slope")
+        return out, problems
+
+    out["source"] = f"correlation-completion.json ({len(curve)} samples)"
+    ends = {r.get("container"): r.get("end_bytes", -1) for r in rows}
+    track: dict[str, dict] = {}
+    for entry in curve:
+        for name, rep in (entry.get("per_replica") or {}).items():
+            pending = float(rep.get("pending", -1.0))
+            rss = int(rep.get("rss", -1))
+            row = track.setdefault(name, {"pending_zero_t_s": None,
+                                          "rss_at_pending_zero": -1,
+                                          "last_pending": -1.0,
+                                          "last_t_s": entry.get("t_s", -1.0),
+                                          "first_pending": pending})
+            row["last_pending"] = pending
+            row["last_t_s"] = entry.get("t_s", -1.0)
+            if row["pending_zero_t_s"] is None:
+                if pending == 0.0 and rss > 0:
+                    row["pending_zero_t_s"] = entry.get("t_s", -1.0)
+                    row["rss_at_pending_zero"] = rss
+            elif pending > 0.0:
+                row["pending_zero_t_s"] = None
+                row["rss_at_pending_zero"] = -1
+    for name, row in sorted(track.items()):
+        end = int(ends.get(name, -1))
+        ratio = (round(end / row["rss_at_pending_zero"], 3)
+                 if row["rss_at_pending_zero"] > 0 and end > 0 else None)
+        rec = {"rss_at_pending_zero": row["rss_at_pending_zero"],
+               "rss_end": end, "pending_zero_t_s": row["pending_zero_t_s"],
+               "last_pending": row["last_pending"],
+               "ratio_vs_anchor": ratio, "verdict": "UNKNOWN"}
+        out["replicas"][name] = rec
+        if row["pending_zero_t_s"] is None:
+            problems.append(f"{name}: UNKNOWN — corr_engine_pending never "
+                            f"reached 0 (last {row['last_pending']:.0f} at "
+                            f"t+{row['last_t_s']}s)")
+        elif ratio is None:
+            problems.append(f"{name}: UNKNOWN — no end RSS in the report's "
+                            f"memflat evidence to compare against")
+        else:
+            leak = (ratio > MEM_FACTOR_RESCORE
+                    and (end - row["rss_at_pending_zero"]) > 64 * 1024**2)
+            rec["verdict"] = "LEAK" if leak else "FLAT"
+            if leak:
+                problems.append(f"{name}: LEAK SLOPE at the pending-zero anchor "
+                                f"({mib(row['rss_at_pending_zero'])} -> "
+                                f"{mib(end)}, x{ratio})")
+    return out, problems
+
+
+def rescore_memflat(args: argparse.Namespace) -> int:
+    """`--rescore-memflat DIR`. Read-only; exit 0 PASS, 1 not-PASS, 2 refused."""
+    run_dir = args.rescore_memflat
+    if not os.path.isdir(run_dir):
+        die(f"--rescore-memflat: {run_dir} is not a directory")
+    report_path = os.path.join(run_dir, "report.json")
+    memflat_ev: dict = {}
+    original = "(no report.json — the run had not written one)"
+    if os.path.isfile(report_path):
+        try:
+            with open(report_path, encoding="utf-8") as f:
+                report = json.load(f)
+        except (OSError, json.JSONDecodeError) as exc:
+            die(f"--rescore-memflat: {report_path} unreadable ({exc!r})")
+        for phase in report.get("phases", []):
+            if phase.get("phase") == "memflat":
+                memflat_ev = phase.get("evidence") or {}
+                original = f"{phase.get('status')} — {phase.get('notes', '')}"
+    start = args.rescore_window_start.strip()
+    if not start:
+        start = str((memflat_ev.get("clickhouse") or {})
+                    .get("sample_census", {}).get("window_start", "") or "")
+    if not re.fullmatch(r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}", start):
+        die("--rescore-memflat: no ClickHouse window start. This run's report "
+            "does not carry one (runs before 2026-08-29 do not), so pass "
+            "--rescore-window-start 'YYYY-MM-DD HH:MM:SS' — the preflight "
+            "instant of the run being re-scored")
+    end = args.rescore_window_end.strip()
+    if end and not re.fullmatch(r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}", end):
+        die("--rescore-memflat: --rescore-window-end must be "
+            "'YYYY-MM-DD HH:MM:SS'")
+    stack = Stack(args.env_file, args.base_url, args.project)
+    ch_ev, ch_problems = _rescore_clickhouse(stack, start, end)
+    corr_ev, corr_problems = _rescore_correlation(run_dir, memflat_ev)
+    verdict = "PASS" if not (ch_problems or corr_problems) else "FAIL/UNKNOWN"
+    lines = [
+        f"# memflat re-score — {os.path.basename(run_dir)}",
+        "",
+        f"Re-scored {utcnow()} by scale-miniladder.py --rescore-memflat.",
+        "READ-ONLY: the run's own report files are untouched; this is what the",
+        "corrected clauses (2026-08-29) say about the evidence that run left.",
+        "",
+        f"* original memflat verdict: {original}",
+        f"* re-scored verdict: **{verdict}**",
+        "",
+        "## clause (2) — ClickHouse's own memory accounting",
+        "",
+        (f"* window: `{ch_ev['window_start']}` -> `{ch_ev['window_end']}` "
+         f"(ClickHouse's clock)"),
+        f"* cap: {mib(ch_ev.get('cap_bytes', -1))} ({ch_ev.get('cap_source')})",
+    ]
+    if "peak_memory_tracking_bytes" in ch_ev:
+        lines += [
+            (f"* samples: {ch_ev['total_samples']} in the window, "
+             f"{ch_ev['rejected_samples']} rejected as physically impossible "
+             f"(merge memory above the tracked total)"),
+            (f"* peak MemoryTracking: "
+             f"**{mib(ch_ev['peak_memory_tracking_bytes'])}** "
+             f"= {ch_ev.get('memory_tracking_pct', '?')}% of cap "
+             f"(limit {CH_MEMORY_TRACKING_MAX_PCT}%)"),
+            (f"* peak MERGE memory: "
+             f"**{mib(ch_ev['peak_merges_memory_bytes'])}** "
+             f"= {ch_ev.get('merges_memory_pct', '?')}% of cap "
+             f"(limit {CH_MERGE_MEMORY_MAX_PCT}%)"),
+            (f"* what the UNFILTERED `max()` would have printed — the defect: "
+             f"MemoryTracking {mib(ch_ev['unfiltered_memory_tracking_bytes'])}, "
+             f"merges {mib(ch_ev['unfiltered_merges_memory_bytes'])}"),
+        ]
+    lines += ["", "clause (2): " + ("PASS" if not ch_problems
+                                    else "; ".join(ch_problems)), ""]
+    lines += ["## clause (1) — correlation, anchored at corr_engine_pending == 0",
+              "", f"* source: {corr_ev.get('source', 'none')}"]
+    for name, rec in sorted(corr_ev.get("replicas", {}).items()):
+        lines.append(
+            f"* {name}: rss_at_input_stop "
+            f"{mib(rec.get('rss_at_input_stop', -1))} -> rss_at_pending_zero "
+            f"{mib(rec.get('rss_at_pending_zero', -1))} -> rss_end "
+            f"{mib(rec.get('rss_end', -1))} "
+            f"(x{rec.get('ratio_vs_anchor')}, {rec.get('verdict')})")
+    lines += ["", "correlation: " + ("PASS" if not corr_problems
+                                     else "; ".join(corr_problems)), ""]
+    doc = "\n".join(lines)
+    out_path = os.path.join(run_dir, RESCORE_FILE)
+    with open(out_path, "w", encoding="utf-8") as f:
+        f.write(doc)
+    print(doc)
+    log(f"re-score written: {out_path} (the run's own report is untouched)")
+    return 0 if verdict == "PASS" else 1
 
 
 def cleanup_only(args: argparse.Namespace) -> int:
