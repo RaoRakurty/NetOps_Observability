@@ -1,0 +1,45 @@
+# P3 Aggregation plane — the ON arm of the step-4 live A/B (2026-08-29).
+#
+# Purpose: turn the ingest-boundary aggregation plane ON for one leg of the A/B
+# described in `docs/design/AGGREGATION_PLANE_P3_2026-08-29.md` §6a/§6b/§7 and
+# executed per `docs/scale/RUN_PLAN_P3_AB_2026-08-29.md`. `CORR_AGGREGATION_PLANE`
+# defaults to OFF in the image (src/correlation/main.py ~1855), so the OFF arm is
+# "deploy without this file" and the ON arm is "deploy with it" — the image, the
+# harness and every other overlay are byte-identical across the two arms. That is
+# the whole point: ONE variable.
+#
+# This overlay sets EXACTLY ONE environment key on EXACTLY ONE service. It must
+# never grow a second knob (mem_limit, buffer size, profiler, …) — a second
+# variable would make the A/B uninterpretable, and `tests/test_compose_agg_overlay.py`
+# fails the build if one appears.
+#
+# APPLY (ON arm) — append to the deployed overlay set, correlation only:
+#   cd deployment/docker
+#   docker compose -f docker-compose.yml -f compose.offline-images.yml \
+#     -f compose.tls.yml -f compose.mem125.yml -f compose.lab.yml \
+#     -f compose.profile.yml -f compose.agg.yml \
+#     up -d --no-deps --force-recreate --scale correlation=2 correlation
+#
+# VERIFY — in BOTH replicas (the engine runs two; a half-flagged pair silently
+# mixes arms and invalidates the leg):
+#   for c in $(docker compose ... ps -q correlation); do \
+#     echo "== $c"; docker exec "$c" env | grep CORR_AGGREGATION_PLANE; done
+#   # expect `CORR_AGGREGATION_PLANE=1` from BOTH containers (two lines).
+# And on each replica's own /metrics, `corr_agg_enabled 1` plus
+# `corr_agg_observed_total` ADVANCING between two samples once traffic flows.
+# The app port is mTLS-only under compose.tls.yml, so scrape the loop-independent
+# health sidecar (:8094, plaintext, container-local — tracker 174) from inside:
+#   docker exec "$c" python -c "import urllib.request;print(urllib.request.urlopen(\
+#     'http://127.0.0.1:8094/metrics',timeout=8).read().decode())" \
+#     | grep -E '^corr_agg_(enabled|observed_total|suppressed_total)'
+# A flat `corr_agg_observed_total` under load means the plane is not on the
+# ingest path — stop the leg, do not report it as an ON arm.
+#
+# REMOVE (OFF arm / back to the default) — redeploy WITHOUT this file, i.e. the
+# same command with `-f compose.agg.yml` dropped. Do not "unset" the variable by
+# editing this file; the OFF arm is defined by the file's absence so that the two
+# arms differ by a deployment argument and nothing else.
+services:
+  correlation:
+    environment:
+      CORR_AGGREGATION_PLANE: "1"
