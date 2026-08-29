@@ -83,6 +83,19 @@
          changeable_without_restart = IncreaseOnly — a DECREASE (16 -> 6) needs
          a server restart, i.e. the next stack redeploy. -->
     <background_pool_size>6</background_pool_size>
+    <!-- ClickHouse's MergeTreeSettings::sanityCheck refuses to START when any
+         "number_of_free_entries_in_pool_to_*" threshold is >= background_pool_size
+         x background_merges_mutations_concurrency_ratio (6 x 2 = 12). The stock
+         defaults (mutation 20, optimize-entire-partition 25, lower-max-merge 8)
+         were sized for a pool of 16 and crash-looped the server on 2026-08-29
+         (exit 36). Scaled to the 12-slot pool: keep 1/2 of the pool free before a
+         mutation may run, 2/3 before an OPTIMIZE of a whole partition, and start
+         shrinking merge sizes when a third of the pool is left. -->
+    <merge_tree>
+        <number_of_free_entries_in_pool_to_execute_mutation>6</number_of_free_entries_in_pool_to_execute_mutation>
+        <number_of_free_entries_in_pool_to_execute_optimize_entire_partition>8</number_of_free_entries_in_pool_to_execute_optimize_entire_partition>
+        <number_of_free_entries_in_pool_to_lower_max_size_of_merge>4</number_of_free_entries_in_pool_to_lower_max_size_of_merge>
+    </merge_tree>
     <background_merges_mutations_concurrency_ratio>2</background_merges_mutations_concurrency_ratio>
 
     <!-- MEASURED: the stock mark cache ceiling is 5,368,709,120 B = 5,120 MiB
