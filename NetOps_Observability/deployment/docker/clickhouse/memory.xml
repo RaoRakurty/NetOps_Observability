@@ -8,10 +8,98 @@
   environment; compose supplies defaults equal to today's behavior, so an
   unset plan changes nothing.
 
-  max_server_memory_usage stays 0 (= "use the ratio"): one knob, no conflict.
+  ==========================================================================
+  P2 MERGE-MEMORY BUDGET (docs/scale/P2_CLICKHOUSE_MEMFLAT_2026-08-29.md,
+  run p2-s04b-08290858). MEASURED, on the 2.5K leg:
+
+    * cgroup limit (CLICKHOUSE_MEM_LIMIT=5326m) ...... 5,584,715,776 B = 5,326 MiB
+      (CH agrees: asynchronous_metrics CGroupMemoryTotal = 5,584,715,776)
+    * max_server_memory_usage = 0.9 x cgroup ......... 5,026,244,198 B = 4,794 MiB
+    * peak CurrentMetric_MemoryTracking .............. 4,566 MiB = 95.2 % of that cap
+    * peak MergesMutationsMemoryTracking ............. 3,978 MiB (merges ALONE)
+    * merge write amplification ...................... ~241x (1.40 GiB inserted
+      -> 337.6 GiB merged in 75 min, 69,201 merges)
+
+  The server was running at 95 % of its own ceiling with 83 % of it held by
+  background merges. Nothing here changes what the engine writes; it bounds
+  what ClickHouse is allowed to spend re-merging it. The per-table half of the
+  fix (max_bytes_to_merge_at_max_space_in_pool, min_age_to_force_merge_seconds)
+  lives in init.sql + chschema/corr_merge_budget.go.
+
+  RESOLUTION SEMANTICS (CH 24.8, Server.cpp): for BOTH max_server_memory_usage
+  and merges_mutations_memory_usage_soft_limit, 0 means "derive from the ratio"
+  and a non-zero value is LOWERED to the ratio-derived value if it exceeds it —
+  i.e. the effective limit is min(explicit, ratio x cgroup). So the explicit
+  bytes below are a measured ABSOLUTE cap and the ratios stay live as the
+  relative safety net on a smaller box. Setting CH_MAX_SERVER_MEMORY=0 /
+  CH_MERGES_MEM=0 restores the pre-P2 ratio-only behavior exactly.
+  ==========================================================================
 -->
 <clickhouse>
-    <max_server_memory_usage>0</max_server_memory_usage>
+    <!-- ARITHMETIC (see the measured block above):
+           cgroup limit ............................ 5,326 MiB
+           - page-cache / slab / untracked headroom  1,230 MiB (23.1 %)
+           = max_server_memory_usage ............... 4,096 MiB = 4,294,967,296 B
+
+         Why 1,230 MiB of headroom and not the 532 MiB the 0.9 ratio left:
+         the cgroup holds reclaimable kernel memory the server does not
+         account for — measured at the s04b peak, active_file 1,516 MiB +
+         slab_reclaimable 621 MiB = 2,137 MiB, against anon 984 MiB. Held at
+         0.9 the server may reserve 4,794 MiB and leave the kernel 532 MiB to
+         cache a store that reads/writes ~50 GiB per run. Reserving >= 1 GiB
+         and rounding DOWN to the 4,096 MiB power of two gives 1,230 MiB.
+         MemoryTracking and RSS also couple loosely (peak 4,566 MiB tracked
+         vs 984 MiB anon), so the cap is a reservation ceiling, not an RSS
+         prediction — which is exactly why the memflat gate must read anon,
+         not `docker stats` (brief section (c)).
+
+         Cross-check against the proposed memflat clause: the OOM assertion is
+         peak MemoryTracking < 85 % of this cap = 3,482 MiB (s04b measured
+         4,566 -> would FAIL, which is the finding worth gating on). -->
+    <max_server_memory_usage from_env="CH_MAX_SERVER_MEMORY"/>
     <max_server_memory_usage_to_ram_ratio from_env="CH_MEM_RATIO"/>
+
+    <!-- MEASURED: merges alone peaked at 3,978 MiB. Left at 0 the soft limit
+         is derived as merges_mutations_memory_usage_to_ram_ratio (0.5) x
+         cgroup = 2,792,357,888 B = 2,663 MiB — which the run BLEW THROUGH by
+         49 %, because the limit is checked when a merge is SCHEDULED, not
+         while it runs: 32 already-running merges (background_pool_size 16 x
+         concurrency ratio 2) overshoot it together. So this value is one half
+         of the fix and background_pool_size below is the other.
+         1.5 GiB = 1,610,612,736 B = 37.5 % of the 4,096 MiB server cap, under
+         the memflat clause's proposed "merges < 50 % of the cap" assertion
+         (s04b: 3,978 / 4,794 = 83 % -> FAIL). -->
+    <merges_mutations_memory_usage_soft_limit from_env="CH_MERGES_MEM"/>
+
+    <!-- MEASURED: 32 concurrent merge tasks (16 x 2) on a box limited to
+         3 CPUs (CLICKHOUSE_CPU_LIMIT, host has 4 cores) is what let
+         MergesMutationsMemoryTracking reach 3,978 MiB — each concurrent merge
+         holds its own read/write buffers for a 26.9 KiB/row table. 6 x 2 = 12
+         concurrent merges: still 4x the CPU allowance, so merges are never
+         starved, but the memory a merge storm can hold is cut ~2.7x.
+         The concurrency ratio is pinned at its default so "12" is a contract
+         and not an inherited number.
+         NOTE: system.server_settings reports background_pool_size as
+         changeable_without_restart = IncreaseOnly — a DECREASE (16 -> 6) needs
+         a server restart, i.e. the next stack redeploy. -->
+    <background_pool_size>6</background_pool_size>
+    <background_merges_mutations_concurrency_ratio>2</background_merges_mutations_concurrency_ratio>
+
+    <!-- MEASURED: the stock mark cache ceiling is 5,368,709,120 B = 5,120 MiB
+         — larger than the ENTIRE 5,326 MiB container and 107 % of the old
+         server cap. Actual use during the run: MarkCacheBytes 2.01 MiB. A
+         ceiling that can never be honoured is not a cache policy, it is a
+         latent OOM. 512 MiB = 536,870,912 B is 250x the measured working set
+         and 12.5 % of the server cap. -->
+    <mark_cache_size>536870912</mark_cache_size>
+
+    <!-- MEASURED: UncompressedCacheBytes 0 B — the cache is OFF
+         (use_uncompressed_cache = 0, the ClickHouse default, and nothing here
+         turns it on), yet the image reserves 8,589,934,592 B = 8,192 MiB for
+         it. Zero the reservation so it cannot become live by accident.
+         Together with the mark cache this cuts the reservable cache ceiling
+         from 13,312 MiB to 512 MiB. -->
+    <uncompressed_cache_size>0</uncompressed_cache_size>
+
     <max_concurrent_queries from_env="CH_MAX_CONCURRENT_QUERIES"/>
 </clickhouse>

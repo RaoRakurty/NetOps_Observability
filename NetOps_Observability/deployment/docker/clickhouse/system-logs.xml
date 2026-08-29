@@ -8,10 +8,26 @@
     * DISABLED  — logs that only matter during a deep server-side investigation.
       Re-enable one temporarily by deleting its <remove> line here and
       `docker compose restart clickhouse`; it starts logging again immediately.
-    * KEPT+TTL  — query_log (slow-query debugging, 7d) and metric_log (ad-hoc
-      perf history, 3d). asynchronous_metric_log is disabled because the same
-      gauges are already exported on :9363 (prometheus.xml) into the stack's own
+    * KEPT+TTL  — query_log (slow-query debugging, 7d), metric_log (ad-hoc
+      perf history, 3d) and part_log (merge/part accounting, 3d).
+      asynchronous_metric_log is disabled because the same gauges are already
+      exported on :9363 (prometheus.xml) into the stack's own
       VictoriaMetrics/Grafana self-monitoring.
+
+  EVERY kept log carries a bounded <ttl>. A system log without one is the #96a
+  regression (5.84 GiB of self-logging vs 453 MiB of data); the contract test
+  tests/test_clickhouse_merge_budget.py fails if a kept log loses its TTL.
+
+  part_log RE-ENABLED 2026-08-29 (docs/scale/P2_CLICKHOUSE_MEMFLAT_2026-08-29.md
+  section 1). The P2 merge-storm investigation had to RECONSTRUCT the merge
+  counts from metric_log + query_log because part_log was off: 69,201 merges and
+  337.6 GiB merged in 75 min were ESTIMATED, not measured, and the per-table
+  merge write amplification (~241x) could only be inferred. part_log is the one
+  table that answers "which table, which part, how big, how long" directly, and
+  the merge-budget settings shipped alongside it (memory.xml,
+  init.sql/corr_merge_budget.go) can only be VERIFIED against it.
+  Cost control: 3-day TTL, and the merge volume it records is exactly what the
+  new budget bounds — at the pre-fix rate that is ~1.3M small rows/day.
 
   NOTE: the <ttl> applies when the table is CREATED. On an existing deployment,
   drop the old tables once after restart (they are recreated on next flush):
@@ -26,7 +42,6 @@
     <text_log remove="1"/>
     <trace_log remove="1"/>
     <processors_profile_log remove="1"/>
-    <part_log remove="1"/>
     <query_thread_log remove="1"/>
     <query_views_log remove="1"/>
     <asynchronous_metric_log remove="1"/>
@@ -39,4 +54,11 @@
     <metric_log>
         <ttl>event_date + INTERVAL 3 DAY DELETE</ttl>
     </metric_log>
+    <!-- P2: merge/part accounting, the instrument the merge-budget change is
+         measured with. Same 3-day horizon as metric_log — the two are read
+         together (metric_log gives the memory curve, part_log gives the merge
+         that caused it). -->
+    <part_log>
+        <ttl>event_date + INTERVAL 3 DAY DELETE</ttl>
+    </part_log>
 </clickhouse>

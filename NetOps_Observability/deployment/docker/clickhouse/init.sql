@@ -174,6 +174,44 @@ SETTINGS ttl_only_drop_parts = 1;
 -- ---------------------------------------------------------------------------
 -- Correlation Engine v2 (#67) — FROZEN schema (build step ①, 2026-06-11).
 -- docs/design/correlation-engine.md §2 is the authoritative spec; this DDL is
+-- MERGE BUDGET (P2, docs/scale/P2_CLICKHOUSE_MEMFLAT_2026-08-29.md, run
+-- p2-s04b-08290858). Every corr_* table below carries the same three settings:
+--
+--   max_bytes_to_merge_at_max_space_in_pool = 2 GiB (corr_objects) / 1 GiB (rest)
+--   min_age_to_force_merge_seconds          = 600
+--   min_age_to_force_merge_on_partition_only = 1
+--
+-- MEASURED, over a 75-minute 2.5K leg: 1.40 GiB of rows inserted produced
+-- 337.6 GiB of merged bytes across 69,201 merges — ~241x write amplification —
+-- and background merges alone peaked at 3,978 MiB, 83 % of the whole server's
+-- memory cap. The cause is visible in the part levels: ~170k one-row inserts
+-- were being folded over and over into ONE accumulated part per month
+-- partition — corr_objects 1.86 GiB at level 1,568, corr_current 37.8 MiB at
+-- level 33,082, corr_edges 29.8 MiB at level 11,848. corr_objects rows are
+-- 26,878 B uncompressed and the single `hypotheses` String column is 45.01 of
+-- the table's 48.01 GiB (94 %), so every re-merge rewrites that column again.
+--
+-- The stock max_bytes_to_merge_at_max_space_in_pool is 150 GB, i.e. no part
+-- these tables will ever hold is too big to re-merge. Capping it at 2 GiB
+-- (corr_objects) / 1 GiB (the rest) retires the accumulated part from merge
+-- selection once it crosses the cap: it stops being rewritten, and the cost
+-- becomes bounded by the cap instead of by the table. At 2 GiB that is ~24
+-- parts per month partition for corr_objects — far below parts_to_delay_insert
+-- (1000) and parts_to_throw_insert (3000), which are LEFT AT THEIR DEFAULTS on
+-- purpose: peak PartsActive was 927 and there was no insert-side TOO_MANY_PARTS
+-- in the run, so the insert-side backpressure is not what needs changing.
+--
+-- min_age_to_force_merge_seconds = 600 with ..._on_partition_only = 1 adds one
+-- bounded consolidation pass over a partition whose parts have ALL been idle
+-- for 10 minutes, so the small parts left behind by the cap are folded once
+-- when the write burst ends rather than continuously while it runs.
+--
+-- These are per-table MergeTree settings, so they apply to a FRESH install
+-- here; live deployments converge via ALTER TABLE ... MODIFY SETTING on API
+-- boot (src/backend/internal/chschema/corr_merge_budget.go — the same pattern
+-- corr_retention.go uses for ttl_only_drop_parts). Pinned by
+-- tests/test_clickhouse_merge_budget.py.
+--
 -- mirrored in src/backend/corr_schema.go (self-healing for live deployments)
 -- and guarded by src/backend/corr_schema_test.go. Append-only by design:
 -- never UPDATE/DELETE these rows; new state = new (correlation_id, version).
@@ -226,7 +264,8 @@ ENGINE = MergeTree
 PARTITION BY (tenant_id, toYYYYMMDD(ts))
 ORDER BY (tenant_id, ts, source, entity_type, entity_id)
 TTL toDateTime(ts) + INTERVAL 30 DAY
-SETTINGS index_granularity = 8192, ttl_only_drop_parts = 1;
+SETTINGS index_granularity = 8192, ttl_only_drop_parts = 1,
+         max_bytes_to_merge_at_max_space_in_pool = 1073741824, min_age_to_force_merge_seconds = 600, min_age_to_force_merge_on_partition_only = 1;
 
 -- 2.1b Replay input archive (owner review — closes the replay/TTL gap): the FULL
 -- window slice of every persisted object, written at pipeline stage [8] with the
@@ -281,7 +320,8 @@ CREATE TABLE IF NOT EXISTS netops.corr_signals_archive
 ENGINE = MergeTree
 PARTITION BY (tenant_id, toYYYYMM(ts))
 ORDER BY (tenant_id, ts, signal_id)
-SETTINGS index_granularity = 8192;
+SETTINGS index_granularity = 8192,
+         max_bytes_to_merge_at_max_space_in_pool = 1073741824, min_age_to_force_merge_seconds = 600, min_age_to_force_merge_on_partition_only = 1;
 
 -- 2.2 Correlation objects — versioned, append-only snapshots. Hot retention is
 -- bounded (#101): profile-driven TTL applied by the API boot converge
@@ -325,7 +365,8 @@ CREATE TABLE IF NOT EXISTS netops.corr_objects
 ENGINE = MergeTree
 PARTITION BY (tenant_id, toYYYYMM(window_start))
 ORDER BY (tenant_id, correlation_id, version)
-SETTINGS non_replicated_deduplication_window = 1000;
+SETTINGS non_replicated_deduplication_window = 1000,
+         max_bytes_to_merge_at_max_space_in_pool = 2147483648, min_age_to_force_merge_seconds = 600, min_age_to_force_merge_on_partition_only = 1;
 
 -- "latest snapshot per object" convenience view (plain view: row policies on the
 -- base table evaluate in the reader's context — safe, unlike an MV).
@@ -375,7 +416,8 @@ CREATE TABLE IF NOT EXISTS netops.corr_current
 )
 ENGINE = ReplacingMergeTree(created_at)
 PARTITION BY (tenant_id)
-ORDER BY (tenant_id, correlation_id);
+ORDER BY (tenant_id, correlation_id)
+SETTINGS max_bytes_to_merge_at_max_space_in_pool = 1073741824, min_age_to_force_merge_seconds = 600, min_age_to_force_merge_on_partition_only = 1;
 
 -- #101 tenant write-amplification rollup — bounded-cardinality storm
 -- attribution. One row per (tenant, window) flushed by the correlation engine
@@ -401,7 +443,8 @@ ENGINE = MergeTree
 PARTITION BY (tenant_id, toYYYYMM(window_start))
 ORDER BY (tenant_id, window_start)
 TTL toDateTime(window_start) + INTERVAL 30 DAY
-SETTINGS index_granularity = 8192, ttl_only_drop_parts = 1;
+SETTINGS index_granularity = 8192, ttl_only_drop_parts = 1,
+         max_bytes_to_merge_at_max_space_in_pool = 1073741824, min_age_to_force_merge_seconds = 600, min_age_to_force_merge_on_partition_only = 1;
 
 -- 2.3 Graph edges. The owner's grounded-edges hard constraint is enforced by the
 -- CHECK constraint, not by non-Nullability alone: ClickHouse silently coerces an
@@ -429,7 +472,8 @@ CREATE TABLE IF NOT EXISTS netops.corr_edges
 ENGINE = MergeTree
 PARTITION BY (tenant_id, toYYYYMM(created_at))
 ORDER BY (tenant_id, correlation_id, version, from_node, to_node)
-SETTINGS non_replicated_deduplication_window = 1000;
+SETTINGS non_replicated_deduplication_window = 1000,
+         max_bytes_to_merge_at_max_space_in_pool = 1073741824, min_age_to_force_merge_seconds = 600, min_age_to_force_merge_on_partition_only = 1;
 
 -- 2.3 Evidence log — human-readable "why" per edge/hypothesis, written in the
 -- same batch as the snapshot.
@@ -448,7 +492,8 @@ CREATE TABLE IF NOT EXISTS netops.corr_evidence
 ENGINE = MergeTree
 PARTITION BY (tenant_id, toYYYYMM(created_at))
 ORDER BY (tenant_id, correlation_id, version, subject_kind, subject_id)
-SETTINGS non_replicated_deduplication_window = 1000;
+SETTINGS non_replicated_deduplication_window = 1000,
+         max_bytes_to_merge_at_max_space_in_pool = 1073741824, min_age_to_force_merge_seconds = 600, min_age_to_force_merge_on_partition_only = 1;
 
 -- ---------------------------------------------------------------------------
 -- Service Path Graph (frozen contract v1, docs/design/service-path-graph-contract.md)
@@ -561,7 +606,8 @@ ENGINE = MergeTree
 PARTITION BY (tenant_id, toYYYYMM(created_at))
 ORDER BY (tenant_id, correlation_id, version, from_node, to_node)
 TTL toDateTime(created_at) + INTERVAL 90 DAY
-SETTINGS index_granularity = 8192, ttl_only_drop_parts = 1;
+SETTINGS index_granularity = 8192, ttl_only_drop_parts = 1,
+         max_bytes_to_merge_at_max_space_in_pool = 1073741824, min_age_to_force_merge_seconds = 600, min_age_to_force_merge_on_partition_only = 1;
 
 CREATE ROW POLICY IF NOT EXISTS tenant_iso_path_observations ON netops.path_observations
     USING tenant_id = getSetting('tenant_scope') OR getSetting('tenant_scope') = '__all__'

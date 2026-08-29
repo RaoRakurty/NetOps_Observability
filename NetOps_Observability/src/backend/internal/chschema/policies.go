@@ -57,6 +57,13 @@ func ConvergeStmts(extra ...[]string) []string {
 	// Correlation Engine v2 (#67) frozen schema — tables + view + row policies
 	// (corr_schema.go). Same converge-on-boot contract as everything above.
 	stmts = append(stmts, CorrSchemaDDL()...)
+	// P2 merge budget (corr_merge_budget.go): cap
+	// max_bytes_to_merge_at_max_space_in_pool per corr_* table so an accumulated
+	// part retires from merge selection instead of being rewritten forever
+	// (measured: ~241x merge write amplification, background merges holding
+	// 3,978 MiB). Metadata-only MODIFY SETTING, idempotent, must follow the
+	// CREATEs above — same ordering rule as the retention ALTERs below.
+	stmts = append(stmts, CorrMergeBudgetDDL()...)
 	// #101 retention contract: profile-driven hot TTLs for the correlation
 	// history tables (corr_retention.go). Metadata-only ALTERs; expiry happens
 	// as background part drops. Cold Parquet export runs ahead of the horizon.

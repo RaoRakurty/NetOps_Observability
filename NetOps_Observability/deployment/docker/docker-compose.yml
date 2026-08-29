@@ -1085,6 +1085,14 @@ services:
       # today's exact values (stock ratio 0.9 / 1g hot_ui / 2g bg / 1.5g spill
       # / stock 100 concurrent).
       CH_MEM_RATIO: ${CH_MEM_RATIO:-0.9}
+      # P2 merge-memory budget (docs/scale/P2_CLICKHOUSE_MEMFLAT_2026-08-29.md).
+      # ABSOLUTE caps measured against this container's cgroup; ClickHouse takes
+      # min(explicit, ratio x cgroup), so they stay safe on a smaller box and 0
+      # restores the ratio-only behavior. Arithmetic in clickhouse/memory.xml.
+      #   4 GiB  = 5,326 MiB cgroup - 1,230 MiB page-cache/slab headroom
+      #   1.5 GiB merge budget = 37.5 % of that (peak measured: 3,978 MiB)
+      CH_MAX_SERVER_MEMORY: ${CH_MAX_SERVER_MEMORY:-4294967296}
+      CH_MERGES_MEM: ${CH_MERGES_MEM:-1610612736}
       CH_HOT_UI_MEM: ${CH_HOT_UI_MEM:-1073741824}
       CH_BG_MEM: ${CH_BG_MEM:-2147483648}
       CH_SPILL_BYTES: ${CH_SPILL_BYTES:-1610612736}
