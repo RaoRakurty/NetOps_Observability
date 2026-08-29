@@ -670,6 +670,40 @@ def report(res: dict, prof: dict, args, total_wall: float) -> str:
             c, incl, _ = prof[name]
             w(f"phase {name:<34}{c:>10}{incl:>10.2f}"
               f"{'':>10}{100.0 * incl / net:>8.2f}\n")
+    w(_persistence_table(res))
+    return out.getvalue()
+
+
+# P2 step 4c: INSERT CALLS per table is the number ClickHouse actually feels —
+# every statement is a level-0 part, and the measured 241x merge write
+# amplification is a function of how many of them arrive, not of how many rows
+# they carry. Rows and BYTES sit beside it because they are what must NOT move
+# between an A/B's legs: same rows, same bytes, fewer calls.
+def _persistence_table(res: dict) -> str:
+    pers = res.get("persistence", {})
+    rows, byts, calls = (pers.get("rows", {}), pers.get("bytes", {}),
+                         pers.get("insert_calls", {}))
+    if not calls:
+        return ""
+    out = io.StringIO()
+    w = out.write
+    w(f"\n{'table':<34}{'rows':>10}{'bytes':>12}{'inserts':>10}"
+      f"{'rows/ins':>10}{'B/ins':>10}\n")
+    w("-" * 86 + "\n")
+    for table in sorted(calls):
+        n = calls[table]
+        r, b = rows.get(table, 0), byts.get(table, 0)
+        w(f"{table:<34}{r:>10}{b:>12}{n:>10}{r / max(1, n):>10.1f}"
+          f"{b / max(1, n):>10.0f}\n")
+    w("-" * 86 + "\n")
+    w(f"{'TOTAL insert calls':<34}{'':>10}{'':>12}{sum(calls.values()):>10}\n")
+    ev = sum(n for t, n in calls.items()
+             if t in ("netops.corr_edges", "netops.corr_evidence",
+                      "netops.corr_signals_archive", "netops.corr_path_edges"))
+    dec = sum(n for t, n in calls.items()
+              if t in ("netops.corr_objects", "netops.corr_current"))
+    w(f"{'  of which Evidence tables':<34}{'':>10}{'':>12}{ev:>10}\n")
+    w(f"{'  of which Decision tables':<34}{'':>10}{'':>12}{dec:>10}\n")
     return out.getvalue()
 
 
@@ -709,6 +743,26 @@ def main_cli() -> int:
     ap.add_argument("--no-evidence-async", dest="evidence_async",
                     action="store_false",
                     help="write the Evidence rows inline, as before step 4")
+    ap.add_argument("--evidence-batch", dest="evidence_batch",
+                    action="store_true", default=True,
+                    help="P2 step 4c: accumulate Evidence rows PER TABLE across "
+                         "versions and flush on items/bytes/age (the shipped "
+                         "default). The number it moves is INSERT CALLS per "
+                         "table — see the persistence table below.")
+    ap.add_argument("--no-evidence-batch", dest="evidence_batch",
+                    action="store_false",
+                    help="one INSERT per (version, table, page), as before 4c")
+    ap.add_argument("--decision-batch", dest="decision_batch",
+                    action="store_true", default=False,
+                    help="also batch corr_objects/corr_current (DEFAULT OFF — it "
+                         "buffers the operator's verdict and trades T1 TTUR)")
+    ap.add_argument("--decision-offload", dest="decision_offload",
+                    action="store_true", default=True,
+                    help="P2 step 4d: badges parse, archive slice+hash and byte "
+                         "estimate off the loop thread (the shipped default)")
+    ap.add_argument("--no-decision-offload", dest="decision_offload",
+                    action="store_false",
+                    help="build them on the loop thread, as before step 4d")
     ap.add_argument("--cprofile", action="store_true",
                     help="also cProfile ONE synchronous run_window (top 30)")
     ap.add_argument("--log-level", default="WARNING")
@@ -731,9 +785,14 @@ def main_cli() -> int:
     main.CORR_COHORT_TOUCH_GATE = args.gate
     main.CORR_LIFECYCLE_EPOCH_CADENCE = True
     main.CORR_EVIDENCE_ASYNC = args.evidence_async
+    main.CORR_EVIDENCE_BATCH = args.evidence_batch
+    main.CORR_DECISION_BATCH = args.decision_batch
+    main.CORR_DECISION_OFFLOAD = args.decision_offload
     main._EVIDENCE_QUEUE = None
     main._EVIDENCE_TASK = None
     main._EVIDENCE_LOOP = None
+    main._EVIDENCE_BATCHER = None
+    main._EVIDENCE_FLUSHER = None
     main._LIFECYCLE_SEEN_WINDOW.clear()
     main.OPEN_OBJECTS = {}
     main.VERSIONS_PERSISTED = 0
@@ -780,7 +839,10 @@ def main_cli() -> int:
               f"(share of cohort wall {100.0 * sum(dec) / max(1e-9, sum(per)):.1f} %)")
         print(f"  evidence-complete : +mean={statistics.mean(evd):.2f}s "
               f"max=+{max(evd):.2f}s  [evidence_async="
-              f"{args.evidence_async}, insert_sleep_ms={args.insert_sleep_ms}]")
+              f"{args.evidence_async}, evidence_batch={args.evidence_batch}, "
+              f"decision_batch={args.decision_batch}, "
+              f"decision_offload={args.decision_offload}, "
+              f"insert_sleep_ms={args.insert_sleep_ms}]")
     print("\nevidence plane:", json.dumps(main.evidence_stats(), indent=2))
     print("\ncross-epoch reuse:", json.dumps(res["cross_epoch_reuse"], indent=2))
     print("\npersistence (mocked):", json.dumps(res["persistence"], indent=2))

@@ -92,8 +92,11 @@ THE COHORT HOLD IS GENERATIONAL — and that is a correction, not a detail
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import heapq
+import json
 import time
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -118,6 +121,8 @@ __all__ = [
     "EVIDENCE_CLASS_TERMINAL",
     "EvidenceItem",
     "EvidenceQueue",
+    "RowBatcher",
+    "batch_token",
     "estimate_bytes",
     "loose_slice_signals",
 ]
@@ -547,4 +552,308 @@ class EvidenceQueue:
             "held_since_seconds": round(self.held_since_s(), 3),
             "hold_expired_total": self.hold_expired_total,
             "hold_max_s": self.hold_max_s,
+        }
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# CROSS-VERSION ROW BATCHING (P2 step 4c)
+# docs/scale/P2_CLICKHOUSE_MEMFLAT_2026-08-29.md §3(a) — the measured brief.
+#
+# THE MEASUREMENT. On run `p2-s04b-08290858` the Evidence tables issued 63,701
+# INSERT statements in 75 minutes at 16.9 / 16.9 / 4.8 rows each, because
+# `_emit_child_rows` batches only WITHIN one object version. Every one of those
+# statements is a level-0 part, and folding that trickle into ClickHouse's
+# accumulated part re-wrote the same bytes over and over: 1.40 GiB inserted
+# against **337.6 GiB merged (≈241x write amplification)**, with merge memory
+# peaking at 3,978 MiB — 83 % of `max_server_memory_usage` on its own.
+#
+# WHAT THIS CLASS IS. A per-table accumulator that spans VERSIONS: rows from
+# many `EvidenceItem`s land in one buffer and one INSERT. It flushes on the
+# FIRST of three triggers — member count, an estimated byte size, or the AGE of
+# the oldest buffered row — so a burst flushes on size and a trickle still
+# flushes on time. Nothing is ever dropped or reordered: rows are appended in
+# the consumer's drain order, which is the content order the queue guarantees,
+# and concatenating a table's blocks reproduces exactly the row sequence the
+# unbatched path writes.
+#
+# THE DEDUP TOKEN, and why it keeps `ch_insert`'s contract.
+# `insert_deduplication_token` is per BLOCK, so a batch needs exactly one:
+# `"batch:" + sha256("|".join(member_keys))[:32]`, members in flush order. Every
+# member key is content-derived (`obj:<cid>:v<n>:<state>:<hash16>:<part>`), so
+# the block token is a pure function of the block's content and ORDER. That is
+# precisely what `ch_insert`'s in-process bounded retry needs: a retry re-sends
+# the IDENTICAL list under the IDENTICAL token, so ClickHouse drops the
+# duplicate exactly as it does for a single-version insert today.
+#
+# What it does NOT preserve is cross-RESTART replay dedup, because the batch
+# composition depends on drain timing. The async Evidence plane already gave
+# that up in step 4 (a failed item is "lost and loud", never replayed), so this
+# takes nothing that still existed.
+#
+# WHY NOT ClickHouse's SERVER-SIDE asynchronous insert mode. It would cut
+# parts without any app change — but on 24.8 the deduplication token is NOT
+# honoured on that path for non-replicated MergeTree, so enabling it would
+# silently drop the idempotency `ch_insert`'s retry relies on. App-side batching
+# gives the same part cut and KEEPS the token, which is why the server setting
+# stays at 0 (and why `test_ch_exclusions_guard` still forbids naming it).
+#
+# FAILURE GRANULARITY — the one honest regression, stated plainly. Unbatched, a
+# rejected `corr_edges` insert raises out of `_write_evidence_inner` and that
+# item's later tables (evidence, archive) are never written. Batched, those rows
+# are already buffered when the edges block fails, so they may still land. The
+# direction is "more rows survive a failure, never fewer", every row is still
+# content-derived and idempotent within its own block, and the ITEM is still
+# counted failed once per member. Nothing about a SUCCESSFUL run moves.
+# ═══════════════════════════════════════════════════════════════════════════
+
+# The flush triggers of one table, as (max members, max estimated bytes,
+# max age in seconds). A trigger set to 0 is DISABLED (never fires), which is
+# how a table can be time-only or size-only without a second code path.
+BatchLimits = tuple[int, int, float]
+
+_InsertFn = Callable[[str, list, str, dict], Awaitable[bool]]
+_FlushCb = Callable[[str, list, list, list, bool, BaseException | None], None]
+
+
+def batch_token(member_keys: list[str]) -> str:
+    """The one dedup token a flushed block carries.
+
+    A pure function of the member keys AND their order, so the same block
+    re-sent by `ch_insert`'s retry hashes to the same token and ClickHouse
+    dedups it. An empty member list yields "" — no key, no token, and the
+    insert then behaves exactly as an untokened one does today.
+    """
+    if not member_keys:
+        return ""
+    return "batch:" + hashlib.sha256(
+        "|".join(member_keys).encode()).hexdigest()[:32]
+
+
+def _row_bytes(rows: list) -> int:
+    """A cheap ESTIMATE of a chunk's serialized size — for bounding only.
+
+    ONE row is serialized and multiplied by the chunk length. Every chunk handed
+    to `add` comes from a single table's single row builder, so its rows are
+    homogeneous by construction and the sample is representative; serializing
+    all of them would make the batcher pay the cost the sink is about to pay
+    again over HTTP. Same rule as `estimate_bytes`: a bound, never an accounting
+    figure.
+    """
+    if not rows:
+        return 0
+    try:
+        return len(json.dumps(rows[0], default=str)) * len(rows)
+    except (TypeError, ValueError):
+        # A row the sampler cannot serialize must not stop the write; charge a
+        # conservative constant so the byte trigger still moves.
+        return 1024 * len(rows)
+
+
+@dataclass(slots=True)
+class _Buffer:
+    """One table's pending block."""
+    rows: list = field(default_factory=list)
+    keys: list[str] = field(default_factory=list)
+    members: list = field(default_factory=list)
+    member_ids: set = field(default_factory=set)
+    est_bytes: int = 0
+    oldest_mono: float = 0.0
+    # How many chunks each member has already contributed TO THIS BLOCK, so an
+    # untokened chunk can be given a deterministic key. Scoped to the buffer on
+    # purpose: the buffer holds a strong reference to every member, so an id()
+    # cannot be recycled inside it, and the counter dies with the block instead
+    # of surviving as a process-lifetime map whose keys a freed member's id can
+    # collide with (which is exactly how a "deterministic" key stops being one).
+    seq_by_member: dict = field(default_factory=dict)
+
+
+class RowBatcher:
+    """Per-table, cross-version INSERT accumulator.
+
+    `insert(table, rows, dedup_token, ctx) -> bool` is injected so this class
+    stays free of ClickHouse and of `main` — the same reason `EvidenceQueue`
+    knows nothing about either. `on_flush(table, rows, keys, members, ok, exc)`
+    is where the CALLER does its accounting: it owns the counters, the archive
+    row tally and the per-member failure bookkeeping, because those are facts
+    about the engine, not about buffering.
+
+    One `asyncio.Lock` serializes `add` and every flush path, so a background
+    age-flusher can never interleave its INSERT with a producer's append and
+    split a block in an order no reader expects.
+    """
+
+    __slots__ = ("_bufs", "_default", "_insert", "_limits", "_lock", "_on_flush",
+                 "_on_join", "age_max_s", "blocks_failed", "flushes",
+                 "rows_flushed")
+
+    def __init__(self, *, insert: _InsertFn, on_flush: _FlushCb | None = None,
+                 on_join: Callable[[str, Any], None] | None = None,
+                 default: BatchLimits = (200, 8 * 1024 * 1024, 2.0),
+                 limits: dict[str, BatchLimits] | None = None) -> None:
+        self._insert = insert
+        self._on_flush = on_flush
+        # Called the FIRST time a member contributes rows to a table's buffer,
+        # BEFORE any flush that append may trigger. The caller uses it to count
+        # the blocks an item is still waiting on; doing it from the return value
+        # of `add` would be too late, because the flush that settles the block
+        # can happen inside that same call.
+        self._on_join = on_join
+        self._default = default
+        self._limits = dict(limits or {})
+        self._bufs: dict[str, _Buffer] = {}
+        self._lock = asyncio.Lock()
+        self.flushes: dict[str, int] = {}
+        self.rows_flushed: dict[str, int] = {}
+        self.age_max_s = 0.0
+        self.blocks_failed = 0
+
+    # ── configuration ────────────────────────────────────────────────────────
+    def limits_for(self, table: str) -> BatchLimits:
+        return self._limits.get(table, self._default)
+
+    @staticmethod
+    def _member_key(buf: _Buffer, member: Any, table: str,
+                    dedup_token: str) -> str:
+        """The key this chunk contributes to its block's token.
+
+        The caller's own dedup token when it has one (that token is already the
+        content-derived, page-numbered string `_emit_child_rows` mints). When it
+        has none — `corr_signals_archive` is written untokened today — a
+        deterministic one is derived from the member's own token plus the number
+        of chunks it has already put IN THIS BLOCK, so the block token stays a
+        pure function of the block's content and order and of nothing else.
+        """
+        if dedup_token:
+            return dedup_token
+        key = id(member)
+        seq = buf.seq_by_member.get(key, 0)
+        buf.seq_by_member[key] = seq + 1
+        return f"{getattr(member, 'tok', '')}:{table}:{seq}"
+
+    # ── producing ────────────────────────────────────────────────────────────
+    async def add(self, table: str, rows: list, *, member: Any,
+                  dedup_token: str = "") -> None:
+        """Buffer one chunk, flushing the table if a trigger fires.
+
+        No per-chunk context is carried: a block spans versions, so the caller's
+        `corr_id`/`version` describe one of its members and would MISATTRIBUTE a
+        block failure to whichever version happened to open the buffer. The
+        block's own shape is built at flush time instead, and the member tokens
+        are what name the versions (`on_flush`).
+        """
+        if not rows:
+            return
+        async with self._lock:
+            buf = self._bufs.get(table)
+            if buf is None:
+                buf = self._bufs[table] = _Buffer(oldest_mono=time.monotonic())
+            buf.rows.extend(rows)
+            buf.keys.append(self._member_key(buf, member, table, dedup_token))
+            if id(member) not in buf.member_ids:
+                buf.member_ids.add(id(member))
+                buf.members.append(member)
+                if self._on_join is not None:
+                    self._on_join(table, member)
+            buf.est_bytes += _row_bytes(rows)
+            max_members, max_bytes, _max_age = self.limits_for(table)
+            if ((max_members and len(buf.members) >= max_members)
+                    or (max_bytes and buf.est_bytes >= max_bytes)):
+                await self._flush_locked(table)
+
+    # ── flushing ─────────────────────────────────────────────────────────────
+    async def flush(self, table: str) -> None:
+        async with self._lock:
+            await self._flush_locked(table)
+
+    async def flush_all(self) -> None:
+        """Flush every table. The shutdown/drain accessor — a partial block is
+        still a block, and leaving it buffered is the one way batching could
+        lose a row."""
+        async with self._lock:
+            for table in list(self._bufs):
+                await self._flush_locked(table)
+
+    async def flush_due(self, now: float | None = None) -> None:
+        """Flush every table whose OLDEST buffered row has aged out."""
+        now = time.monotonic() if now is None else now
+        async with self._lock:
+            for table in list(self._bufs):
+                buf = self._bufs.get(table)
+                if buf is None or not buf.rows:
+                    continue
+                max_age = self.limits_for(table)[2]
+                if max_age and (now - buf.oldest_mono) >= max_age:
+                    await self._flush_locked(table, now=now)
+
+    def due_in_s(self, now: float | None = None) -> float:
+        """Seconds until the next age trigger fires (inf when nothing is
+        buffered) — so the flusher task can sleep instead of spinning."""
+        now = time.monotonic() if now is None else now
+        best = float("inf")
+        for table, buf in self._bufs.items():
+            if not buf.rows:
+                continue
+            max_age = self.limits_for(table)[2]
+            if max_age:
+                best = min(best, max_age - (now - buf.oldest_mono))
+        return best
+
+    async def _flush_locked(self, table: str, now: float | None = None) -> None:
+        """Issue ONE insert for `table`'s pending block. Never raises.
+
+        A flush can be triggered by a producer that has nothing to do with the
+        block being written (that is the whole point of batching across
+        versions), so an exception here must NOT surface as that producer's
+        failure. It is captured, handed to `on_flush` with the block's members,
+        and accounted there — which is also the only place that knows how many
+        ITEMS the failure cost.
+        """
+        buf = self._bufs.pop(table, None)
+        if buf is None or not buf.rows:
+            return
+        now = time.monotonic() if now is None else now
+        self.age_max_s = max(self.age_max_s, now - buf.oldest_mono)
+        token = batch_token(buf.keys)
+        ctx = {"row_count": len(buf.rows), "batch_members": len(buf.members)}
+        ok: bool = False
+        exc: BaseException | None = None
+        try:
+            ok = await self._insert(table, buf.rows, token, ctx) is not False
+        except asyncio.CancelledError:
+            # Cancellation is the shutdown path, not a block failure: put the
+            # block back (the lock is held across the whole flush, so no
+            # producer can have created a replacement buffer meanwhile) so the
+            # drain can still write it, then propagate.
+            self._bufs.setdefault(table, buf)
+            raise
+        except Exception as e:  # noqa: BLE001 — reported to on_flush, never swallowed
+            exc = e
+        self.flushes[table] = self.flushes.get(table, 0) + 1
+        self.rows_flushed[table] = self.rows_flushed.get(table, 0) + len(buf.rows)
+        if not ok:
+            self.blocks_failed += 1
+        if self._on_flush is not None:
+            self._on_flush(table, buf.rows, buf.keys, buf.members, ok, exc)
+
+    # ── observability ────────────────────────────────────────────────────────
+    def buffered(self) -> int:
+        return sum(len(b.rows) for b in self._bufs.values())
+
+    def oldest_age_s(self, now: float | None = None) -> float:
+        now = time.monotonic() if now is None else now
+        ages = [now - b.oldest_mono for b in self._bufs.values() if b.rows]
+        return max(ages) if ages else 0.0
+
+    def stats(self) -> dict[str, Any]:
+        flushes = sum(self.flushes.values())
+        rows = sum(self.rows_flushed.values())
+        return {
+            "flushes_total": dict(self.flushes),
+            "rows_flushed_total": dict(self.rows_flushed),
+            "flushes": flushes,
+            "rows_per_flush_mean": round(rows / flushes, 2) if flushes else 0.0,
+            "batch_age_seconds_max": round(self.age_max_s, 3),
+            "buffered_rows": self.buffered(),
+            "buffered_tables": len([t for t, b in self._bufs.items() if b.rows]),
+            "blocks_failed_total": self.blocks_failed,
         }

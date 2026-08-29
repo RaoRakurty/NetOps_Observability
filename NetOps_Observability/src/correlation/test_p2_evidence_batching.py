@@ -1,0 +1,868 @@
+"""P2 step 4c/4d — CROSS-VERSION EVIDENCE BATCHING and the DECISION-write offload.
+
+Measured briefs:
+  * `docs/scale/P2_CLICKHOUSE_MEMFLAT_2026-08-29.md` §3(a) — run `p2-s04b-08290858`
+    issued **63,701 Evidence-table INSERTs** in 75 minutes at 16.9 / 16.9 / 4.8
+    rows each because `_emit_child_rows` batches only WITHIN one object version.
+    Every one is a level-0 part; folding that trickle into the accumulated part
+    re-wrote the same bytes over and over — 1.40 GiB inserted against **337.6 GiB
+    merged (≈241x write amplification)**, merge memory peaking at 83 % of
+    `max_server_memory_usage` and the server at 95.2 % of it.
+  * `docs/scale/P2_STEP4B_2P5K_VERDICT_2026-08-29.md` §3/§4 — `persist.decision`
+    max **64 s** on a single storm object, "whose blob/rows are built on the loop
+    thread — the `_offload` threshold for the Decision write needs the same
+    treatment the archive chunk got".
+
+THE CLAIM UNDER TEST, in one sentence: batching changes WHICH INSERT a row
+travels in and nothing else — not the row, not its bytes, not its order within
+its table, not whether an item is counted — while the Decision write stops
+holding the loop thread for a storm-sized stretch.
+
+Every test below is one of six mutant checks:
+
+  * **row identity** (B1, B1b) — the same rows and the same bytes per table,
+    each VERSION's own rows in the same order and never interleaved with
+    another version's; only the grouping into INSERT statements differs, and it
+    differs by ≥5x. The cross-version SEQUENCE is compared as a multiset
+    (E1's rule) because the queue is a priority heap drained concurrently with
+    production, not a global sort — see B1's docstring.
+  * **the block token** (B2, B2b, B2c, B2d, B2e) — one token per block,
+    `"batch:" + sha256(member keys in flush order)`, a pure function of the
+    block's content and order, so `ch_insert`'s retry re-sends the identical
+    list under the identical token. MUTANT: `test_B2c` shows an
+    arrival-reordered key list produces a DIFFERENT token, so B2b/B2d cannot
+    pass vacuously.
+  * **the three triggers** (B3, B3b, B3c, B3d) — members, estimated bytes and
+    the age of the oldest buffered row each flush ON THEIR OWN, and nothing
+    flushes before its trigger. B3d drives the age trigger through the LIVE
+    flusher task, which is the only thing that bounds a trickle.
+  * **failure accounting** (B4, B4b) — a failed block counts every member item
+    once, names their tokens in the log, and reverts the optimistic
+    archive-slice hash exactly as the unbatched path does.
+  * **nothing is left buffered** (B5, B5b) — the shutdown drain and
+    `evidence_drain` flush partial blocks; an idle queue is not a written queue.
+  * **the Decision write is off the loop** (B10, B10b, B10c) — with a 50k-signal
+    window the loop-lag WATCHDOG sees no stall above 500 ms, and the mutant
+    (`CORR_DECISION_OFFLOAD=0`) sees a 1-second one.
+
+The Decision-plane batching flag (`CORR_DECISION_BATCH`) is DEFAULT OFF and
+B9/B9b pin both halves of that: off by default, and correct when forced on.
+"""
+from __future__ import annotations
+
+import asyncio
+import dataclasses
+import json
+import logging
+from datetime import timedelta
+
+import pytest
+
+import main
+from evidence_plane import EvidenceItem, RowBatcher, batch_token
+from signals import EntityType, Severity
+from test_engine import T0 as ENGINE_T0
+from test_engine import sig as engine_sig
+from test_p2_evidence_async import (
+    DECISION_TABLES,
+    EVIDENCE_TABLES,
+    _drain_cohorts,
+    _load,
+    _RecCH,
+    _reset_engine_state,
+    mixed_window,
+)
+
+ARCHIVE = "netops.corr_signals_archive"
+EDGES = "netops.corr_edges"
+
+
+# ── fixtures ─────────────────────────────────────────────────────────────────
+
+@pytest.fixture
+def _stack(monkeypatch):
+    """A clean engine + a clean Evidence plane with BATCHING ON (the default)."""
+    _reset_engine_state()
+    monkeypatch.setattr(main, "OPEN_OBJECTS", {})
+    monkeypatch.setattr(main, "_EVIDENCE_QUEUE", None)
+    monkeypatch.setattr(main, "_EVIDENCE_TASK", None)
+    monkeypatch.setattr(main, "_EVIDENCE_LOOP", None)
+    monkeypatch.setattr(main, "_EVIDENCE_BATCHER", None)
+    monkeypatch.setattr(main, "_EVIDENCE_FLUSHER", None)
+    monkeypatch.setattr(main, "EVIDENCE_ITEMS_MATERIALIZED", 0)
+    monkeypatch.setattr(main, "EVIDENCE_ITEMS_FAILED", 0)
+    monkeypatch.setattr(main, "EVIDENCE_ITEMS_LOST", 0)
+    monkeypatch.setattr(main, "CORR_EVIDENCE_ASYNC", True)
+    monkeypatch.setattr(main, "CORR_EVIDENCE_BATCH", True)
+    monkeypatch.setattr(main, "CORR_DECISION_BATCH", False)
+    monkeypatch.setattr(main, "CORR_EVIDENCE_QUEUE_MAX", 5000)
+    monkeypatch.setattr(main, "CORR_EVIDENCE_QUEUE_BYTES_MAX", 512 * 1024 * 1024)
+    monkeypatch.setattr(main, "CORR_EVIDENCE_DRAIN_ON_STOP_S", 30.0)
+    monkeypatch.setattr(main, "CORR_COHORT_TOUCH_GATE", True)
+    monkeypatch.setattr(main, "CORR_LIFECYCLE_EPOCH_CADENCE", True)
+    # Same discipline as test_p2_evidence_async's fixture: every module global a
+    # helper assigns directly is registered at its current value first, so
+    # teardown restores it whatever the test did.
+    for _name in ("CORR_ENGINE_COHORT_SIZE", "CORR_ENGINE_DRAIN_COHORTS",
+                  "CORR_ENGINE_EPOCH_BUDGET_S", "CORR_STORM_COHORT_SIZE",
+                  "CORR_QUIESCE_S", "CORR_OPEN_OBJECTS_MAX",
+                  "CORR_LIFECYCLE_COHORT_WINDOW", "CORR_ARCHIVE_CHUNK_ROWS",
+                  "CORR_ROW_PAGE_SIZE", "CORR_PROFILE_STAGES",
+                  "CORR_EVIDENCE_BATCH_ITEMS", "CORR_EVIDENCE_BATCH_BYTES",
+                  "CORR_EVIDENCE_BATCH_MS", "CORR_EVIDENCE_HOLD_MAX_S",
+                  "CORR_DECISION_OFFLOAD", "CORR_DECISION_BATCH_MS",
+                  "CORR_DECISION_CURRENT_BATCH_MS", "CORR_LOOP_LAG_SAMPLE_S",
+                  "CORR_LOOP_LAG_WARN_MS", "LOOP_LAG_STALLS", "LOOP_LAG_MAX_MS",
+                  "ch", "_persist_snapshot", "_offload", "_LIFECYCLE_SEEN_WINDOW"):
+        monkeypatch.setattr(main, _name, getattr(main, _name))
+    yield monkeypatch
+    _reset_engine_state()
+
+
+def _calls_of(ch: _RecCH, table: str) -> int:
+    """INSERT STATEMENTS issued for one table — the part-count currency."""
+    return sum(1 for t, _rows, _tok in ch.writes if t == table)
+
+
+def _run_leg(monkeypatch, *, batch: bool, components: int = 6, cohorts: int = 3,
+             cohort_size: int = 4, reject: tuple[str, ...] = (),
+             decision_batch: bool = False) -> _RecCH:
+    """One leg of the A/B: the SAME fixture and schedule, only the batching flag
+    differs. Everything a leg could carry over is reset first."""
+    _reset_engine_state()
+    ch = _RecCH(reject=reject)
+    monkeypatch.setattr(main, "ch", ch)
+    monkeypatch.setattr(main, "OPEN_OBJECTS", {})
+    monkeypatch.setattr(main, "_EVIDENCE_QUEUE", None)
+    monkeypatch.setattr(main, "_EVIDENCE_TASK", None)
+    monkeypatch.setattr(main, "_EVIDENCE_LOOP", None)
+    monkeypatch.setattr(main, "_EVIDENCE_BATCHER", None)
+    monkeypatch.setattr(main, "_EVIDENCE_FLUSHER", None)
+    monkeypatch.setattr(main, "CORR_EVIDENCE_ASYNC", True)
+    monkeypatch.setattr(main, "CORR_EVIDENCE_BATCH", batch)
+    monkeypatch.setattr(main, "CORR_DECISION_BATCH", decision_batch)
+    monkeypatch.setattr(main, "CORR_ENGINE_COHORT_SIZE", cohort_size)
+    main.EVIDENCE_ITEMS_MATERIALIZED = 0
+    main.EVIDENCE_ITEMS_FAILED = 0
+    main.EVIDENCE_ITEMS_LOST = 0
+    _load(mixed_window(components))
+    asyncio.run(_drain_cohorts(cohorts, cohort_size))
+    return ch
+
+
+def _rows_json(ch: _RecCH, table: str) -> list[str]:
+    return [json.dumps(r, sort_keys=True, default=str) for r in ch.rows_of(table)]
+
+
+# ═══ B1 — the rows do not move, only their grouping ══════════════════════════
+
+def _item_key(table: str, row: dict) -> tuple:
+    """Which persisted VERSION a row belongs to, per table's own column names."""
+    if table == ARCHIVE:
+        return (row["archived_for"], row["archived_version"])
+    return (row["correlation_id"], row["version"])
+
+
+def _by_item(ch: _RecCH, table: str) -> dict[tuple, list[str]]:
+    """A table's rows grouped by version, each group in write order."""
+    out: dict[tuple, list[str]] = {}
+    for row in ch.rows_of(table):
+        out.setdefault(_item_key(table, row), []).append(
+            json.dumps(row, sort_keys=True, default=str))
+    return out
+
+
+def _groups_are_contiguous(ch: _RecCH, table: str) -> bool:
+    """No version's rows are interleaved with another version's in this table."""
+    seen: set[tuple] = set()
+    last = None
+    for row in ch.rows_of(table):
+        key = _item_key(table, row)
+        if key != last:
+            if key in seen:
+                return False
+            seen.add(key)
+            last = key
+    return True
+
+
+def test_B1_batching_moves_no_row_only_its_grouping(_stack):
+    """THE test the step stands on.
+
+    Per table: the same rows with the same bytes, each VERSION's rows in the
+    same order and never interleaved with another version's — and strictly
+    fewer INSERT statements.
+
+    Why the cross-version sequence is compared as a MULTISET (E1's rule) and not
+    as a list: the Evidence queue is a bounded priority heap drained
+    concurrently with production, not a global sort, so which item is popped
+    next legitimately depends on what had arrived by then. Batching changes the
+    consumer's await pattern and therefore that interleaving. What may NOT move
+    is any row, any byte, or the order INSIDE a version — which is what the
+    per-item comparison below pins, and what a batcher that spliced two items'
+    pages together would break."""
+    off = _run_leg(_stack, batch=False)
+    on = _run_leg(_stack, batch=True)
+
+    assert off.writes, "the fixture must actually persist something"
+    assert off.tables() == on.tables(), (
+        f"a table appeared or vanished: {off.tables() ^ on.tables()}")
+    # The Decision plane is untouched: identical rows in identical ORDER.
+    for table in DECISION_TABLES:
+        assert _rows_json(off, table) == _rows_json(on, table), (
+            f"{table} rows moved under batching")
+    for table in EVIDENCE_TABLES:
+        assert sorted(_rows_json(off, table)) == sorted(_rows_json(on, table)), (
+            f"{table} rows moved under batching")
+        assert (sum(len(r) for r in _rows_json(off, table))
+                == sum(len(r) for r in _rows_json(on, table))), \
+            f"{table} bytes moved under batching"
+        assert _by_item(off, table) == _by_item(on, table), (
+            f"{table}: a version's own rows changed order under batching")
+        assert _groups_are_contiguous(on, table), (
+            f"{table}: two versions' rows were interleaved inside a block")
+
+
+def test_B1b_the_evidence_tables_take_at_least_5x_fewer_inserts(_stack):
+    """The point of the exercise, stated as the number ClickHouse feels: INSERT
+    STATEMENTS, which is level-0 PARTS. The Decision tables must NOT move — they
+    are not batched by default and this is where that is proven."""
+    off = _run_leg(_stack, batch=False)
+    on = _run_leg(_stack, batch=True)
+    for table in EVIDENCE_TABLES:
+        o, n = _calls_of(off, table), _calls_of(on, table)
+        assert o >= 5, f"{table} baseline too small to measure ({o} inserts)"
+        assert n * 5 <= o, (
+            f"{table}: batching cut {o} inserts to {n} — under the 5x the "
+            f"measured brief projects (63,701 -> ~5,900)")
+    for table in DECISION_TABLES:
+        assert _calls_of(off, table) == _calls_of(on, table), (
+            f"{table} is the operator's verdict and is NOT batched by default")
+
+
+# ═══ B2 — the block dedup token ══════════════════════════════════════════════
+
+def test_B2_the_block_token_is_a_pure_function_of_its_members(_stack):
+    """`ch_insert`'s in-process retry re-sends the IDENTICAL list, so the token
+    must be identical too — hence content- and order-derived, never timing- or
+    counter-derived."""
+    keys = ["obj:a:v1:open:aa:edges:0", "obj:b:v1:open:bb:edges:0"]
+    tok = batch_token(keys)
+    assert tok == batch_token(list(keys)), "the token must be deterministic"
+    assert tok.startswith("batch:") and len(tok) == len("batch:") + 32
+    assert batch_token([]) == "", (
+        "no members, no token — an empty block must behave like today's "
+        "untokened insert rather than inventing an identity")
+
+
+def test_B2b_a_flushed_block_carries_exactly_that_token(_stack):
+    """The wiring half: what reaches `ch_insert` is `batch_token` over the
+    member keys the block actually collected, in flush order."""
+    seen: list[tuple[str, list, str]] = []
+
+    async def sink(table, rows, token, ctx):
+        seen.append((table, list(rows), token))
+        return True
+
+    async def go():
+        b = RowBatcher(insert=sink, default=(2, 1 << 30, 1e9))
+        m1, m2 = _member("obj:a:v1:open:aa"), _member("obj:b:v1:open:bb")
+        await b.add(EDGES, [{"r": 1}], member=m1, dedup_token="obj:a:v1:open:aa:edges:0")
+        await b.add(EDGES, [{"r": 2}], member=m2, dedup_token="obj:b:v1:open:bb:edges:0")
+        return b
+
+    asyncio.run(go())
+    assert len(seen) == 1, "two members with a bound of 2 must be ONE block"
+    _table, rows, token = seen[0]
+    assert rows == [{"r": 1}, {"r": 2}], "rows must keep their arrival order"
+    assert token == batch_token(["obj:a:v1:open:aa:edges:0",
+                                 "obj:b:v1:open:bb:edges:0"])
+
+
+def test_B2c_MUTANT_an_arrival_ordered_key_would_change_the_token(_stack):
+    """B2b would pass vacuously if the token ignored order. It does not: the
+    same members in the other order hash differently, which is exactly why a
+    RETRY (same order) dedups and a re-composed block (different order) does
+    not pretend to be the same write."""
+    a, b = "obj:a:v1:open:aa:edges:0", "obj:b:v1:open:bb:edges:0"
+    assert batch_token([a, b]) != batch_token([b, a])
+
+
+def test_B2d_the_token_is_stable_under_a_resend_of_the_same_block(_stack):
+    """The retry contract, at the level where it is actually true.
+
+    `ch_insert` retries by re-sending the SAME list, so the token must be a pure
+    function of the block — re-running the identical adds must mint the
+    identical token, and changing the membership must change it.
+
+    What is deliberately NOT asserted: that two RUNS of the same fixture produce
+    the same block composition. They do not, and the measured brief says so — a
+    block is whatever the consumer had drained when a trigger fired, which is a
+    runtime condition. That is why cross-RESTART replay dedup is not preserved
+    (step 4 gave it up already: a failed Evidence item is lost and loud, never
+    replayed) and why in-process retry dedup is."""
+    async def block(keys: list[str]) -> str:
+        got: list[str] = []
+
+        async def sink(table, rows, token, ctx):
+            got.append(token)
+            return True
+
+        b = RowBatcher(insert=sink, default=(len(keys), 1 << 30, 1e9))
+        for k in keys:
+            await b.add(EDGES, [{"k": k}], member=_member(k), dedup_token=k)
+        return got[0]
+
+    keys = ["obj:a:v1:open:aa:edges:0", "obj:b:v1:open:bb:edges:0"]
+    first = asyncio.run(block(list(keys)))
+    assert first == asyncio.run(block(list(keys))), (
+        "the same block re-sent must carry the same token, or ClickHouse cannot "
+        "dedup `ch_insert`'s retry")
+    assert first != asyncio.run(block([*keys, "obj:c:v1:open:cc:edges:0"])), (
+        "a different membership must be a different write")
+
+
+def test_B2e_every_batched_evidence_insert_carries_a_batch_token(_stack):
+    """The wiring, end to end: no batched block may reach ClickHouse untokened —
+    including `corr_signals_archive`, which is written untokened today and gains
+    a content-derived block token here."""
+    ch = _run_leg(_stack, batch=True)
+    for table in EVIDENCE_TABLES:
+        toks = ch.tokens_of(table)
+        assert toks, f"{table} was never written"
+        assert all(t.startswith("batch:") for t in toks), (
+            f"{table} block(s) without a batch token: "
+            f"{[t for t in toks if not t.startswith('batch:')]}")
+        assert len(set(toks)) == len(toks), f"{table} reused a block token"
+
+
+# ═══ B3 — the three triggers, each on its own ════════════════════════════════
+
+class _Member:
+    __slots__ = ("tok",)
+
+    def __init__(self, tok: str) -> None:
+        self.tok = tok
+
+
+def _member(tok: str) -> _Member:
+    return _Member(tok)
+
+
+class _Sink:
+    def __init__(self, fail: tuple[str, ...] = ()) -> None:
+        self.calls: list[tuple[str, list, str, dict]] = []
+        self.fail = set(fail)
+
+    async def __call__(self, table, rows, token, ctx):
+        self.calls.append((table, list(rows), token, dict(ctx)))
+        return table not in self.fail
+
+
+def test_B3_the_member_count_trigger_flushes_and_not_before(_stack):
+    sink = _Sink()
+
+    async def go():
+        b = RowBatcher(insert=sink, default=(3, 1 << 30, 1e9))
+        for i in range(2):
+            await b.add(EDGES, [{"i": i}], member=_member(f"m{i}"))
+        assert not sink.calls, "two members under a bound of three must not flush"
+        await b.add(EDGES, [{"i": 2}], member=_member("m2"))
+        assert len(sink.calls) == 1, "the third member must flush the block"
+        assert len(sink.calls[0][1]) == 3
+
+    asyncio.run(go())
+
+
+def test_B3b_the_byte_trigger_flushes_independently_of_the_member_count(_stack):
+    """A single huge version must not sit in a buffer waiting for 199 friends."""
+    sink = _Sink()
+    fat = [{"blob": "x" * 4096} for _ in range(64)]     # ~256 KiB
+
+    async def go():
+        b = RowBatcher(insert=sink, default=(1 << 20, 200 * 1024, 1e9))
+        await b.add(EDGES, fat[:8], member=_member("m0"))
+        assert not sink.calls, "32 KiB is under the 200 KiB bound"
+        await b.add(EDGES, fat, member=_member("m0"))
+        assert len(sink.calls) == 1, "the byte bound must flush on its own"
+
+    asyncio.run(go())
+
+
+def test_B3c_the_age_trigger_flushes_a_trickle(_stack):
+    """The clause that binds live: at 11.6 versions/s neither size trigger is
+    reached, and without the age clause a trickle would never be written."""
+    sink = _Sink()
+
+    async def go():
+        b = RowBatcher(insert=sink, default=(1 << 20, 1 << 30, 0.05))
+        await b.add(EDGES, [{"i": 0}], member=_member("m0"))
+        await b.flush_due()
+        assert not sink.calls, "a fresh block must not age out"
+        await asyncio.sleep(0.08)
+        await b.flush_due()
+        assert len(sink.calls) == 1, "the oldest row aged past the bound"
+        assert b.stats()["batch_age_seconds_max"] >= 0.05
+
+    asyncio.run(go())
+
+
+def test_B3d_the_LIVE_flusher_task_ages_a_partial_block_out(_stack):
+    """B3c drives `flush_due` by hand; this proves something actually calls it.
+
+    A queued item is written by the consumer into a partial block and NOTHING
+    else happens — no drain, no shutdown, no second item. The rows must still
+    reach ClickHouse, because on a live trickle they always will be a partial
+    block."""
+    ch = _RecCH()
+    _stack.setattr(main, "ch", ch)
+    _stack.setattr(main, "CORR_EVIDENCE_BATCH_MS", 60.0)
+
+    async def go():
+        q = main._evidence_ensure_consumer()
+        assert q is not None
+        snap = _small_snapshot()
+        await q.put(EvidenceItem(
+            correlation_id="c1", tenant_id="t1", version=1, state="open",
+            tok="obj:c1:v1:open:aa", snap=snap, priority_class=0,
+            window_start_ts=ENGINE_T0.timestamp()))
+        for _ in range(400):            # bounded wait: the flusher, not a drain
+            await asyncio.sleep(0.01)
+            if ch.rows_of(EDGES):
+                break
+        await main._evidence_stop()
+
+    asyncio.run(go())
+    assert ch.rows_of(EDGES), (
+        "a partial block was never aged out — a trickle would sit in memory "
+        "until shutdown, which is the one way batching can lose a row")
+    assert main.EVIDENCE_ITEMS_MATERIALIZED == 1
+
+
+# ═══ B4 — failure accounting, per MEMBER ITEM ════════════════════════════════
+
+def test_B4_a_failed_block_counts_every_member_and_names_their_tokens(_stack,
+                                                                     caplog):
+    """From the consumer there is no cohort to retry (step 4's stated trade), so
+    the block's failure must be attributed to every VERSION it carried, with the
+    member tokens in the log — they are the only way to find which rows are
+    missing from the table."""
+    caplog.set_level(logging.ERROR, logger="correlation")
+    ch = _run_leg(_stack, batch=True, reject=(EDGES,), components=4, cohorts=1,
+                  cohort_size=8)
+    persisted = main.EVIDENCE_ITEMS_FAILED + main.EVIDENCE_ITEMS_MATERIALIZED
+    assert persisted >= 4, "the fixture must persist several versions"
+    assert main.EVIDENCE_ITEMS_MATERIALIZED == 0, (
+        "every version's edges were in the rejected block, so no item may be "
+        "counted materialized")
+    assert main.EVIDENCE_ITEMS_FAILED == persisted, (
+        "outcome=failed must be counted ONCE PER MEMBER ITEM, not once per block")
+    blocked = [r for r in caplog.records
+               if "evidence batch block FAILED" in r.getMessage()]
+    assert blocked, "a failed block must be logged"
+    assert "member_tokens=" in blocked[0].getMessage()
+    assert "obj:" in blocked[0].getMessage(), (
+        "the log must name the members, not just count them")
+    assert _calls_of(ch, EDGES) >= 1
+
+
+def test_B4b_a_failed_archive_block_reverts_its_optimistic_hash(_stack):
+    """The damping record is written before the rows land, so a failed archive
+    write must REVERT it — the same rule as the unbatched path (E5b), now
+    decided by the BLOCK's outcome rather than the item's return value."""
+    _run_leg(_stack, batch=True, reject=(ARCHIVE,), components=3, cohorts=1,
+             cohort_size=8)
+    assert main._ARCHIVE_SLICE_HASH == {}, (
+        "a slice that did not land whole must leave no damping record behind")
+    assert main.EVIDENCE_ITEMS_FAILED >= 3
+
+
+def test_B4c_a_successful_run_counts_every_item_exactly_once(_stack):
+    """The other half of B4: deferred settlement must not lose or double-count
+    an item. Batched and unbatched legs must agree exactly."""
+    _run_leg(_stack, batch=False)
+    off = (main.EVIDENCE_ITEMS_MATERIALIZED, main.EVIDENCE_ITEMS_FAILED,
+           main.EVIDENCE_ITEMS_LOST)
+    _run_leg(_stack, batch=True)
+    on = (main.EVIDENCE_ITEMS_MATERIALIZED, main.EVIDENCE_ITEMS_FAILED,
+          main.EVIDENCE_ITEMS_LOST)
+    assert off == on, f"item accounting moved under batching: {off} -> {on}"
+    assert off[0] > 0 and off[1] == 0 and off[2] == 0
+
+
+# ═══ B5 — nothing may be left buffered ═══════════════════════════════════════
+
+def _small_snapshot():
+    from catalog import builtin_catalog
+    from engine import EngineConfig, run_window
+    from test_p2_evidence_async import mixed_window as _mw
+    return run_window(_mw(2), builtin_catalog(), (), EngineConfig())[0]
+
+
+def test_B5_shutdown_flushes_a_partial_block(_stack):
+    """`_evidence_stop` must leave nothing in a buffer: a block nobody will ever
+    flush is indistinguishable from a lost row."""
+    ch = _RecCH()
+    _stack.setattr(main, "ch", ch)
+    _stack.setattr(main, "CORR_EVIDENCE_BATCH_MS", 1e6)   # the age clause cannot fire
+
+    async def go():
+        q = main._evidence_ensure_consumer()
+        assert q is not None
+        snap = _small_snapshot()
+        for v in range(1, 4):
+            await q.put(EvidenceItem(
+                correlation_id=f"c{v}", tenant_id="t1", version=v, state="open",
+                tok=f"obj:c{v}:v{v}:open:aa", snap=snap, priority_class=0,
+                window_start_ts=ENGINE_T0.timestamp()))
+        while not q.idle():
+            await asyncio.sleep(0.005)
+        assert main._EVIDENCE_BATCHER is not None
+        buffered_before = main._EVIDENCE_BATCHER.buffered()
+        await main._evidence_stop()
+        return buffered_before
+
+    buffered = asyncio.run(go())
+    assert buffered > 0, "the fixture must actually leave a partial block"
+    assert ch.rows_of(EDGES), "shutdown did not flush the partial block"
+    assert main.EVIDENCE_ITEMS_MATERIALIZED == 3
+    assert main.EVIDENCE_ITEMS_LOST == 0
+
+
+def test_B5b_evidence_drain_means_the_rows_are_written(_stack):
+    """Every caller of `evidence_drain` — the shutdown path, `engine_cycle`'s
+    one-shot finally, every test that asserts on Evidence rows — reads it as
+    "the rows are in ClickHouse". An idle QUEUE is not a written queue once a
+    buffer exists, so the drain flushes."""
+    ch = _RecCH()
+    _stack.setattr(main, "ch", ch)
+    _stack.setattr(main, "CORR_EVIDENCE_BATCH_MS", 1e6)
+
+    async def go():
+        q = main._evidence_ensure_consumer()
+        assert q is not None
+        await q.put(EvidenceItem(
+            correlation_id="c1", tenant_id="t1", version=1, state="open",
+            tok="obj:c1:v1:open:aa", snap=_small_snapshot(), priority_class=0,
+            window_start_ts=ENGINE_T0.timestamp()))
+        left = await main.evidence_drain(10.0)
+        assert left == 0
+        assert ch.rows_of(EDGES), "drain returned with rows still buffered"
+        assert main._EVIDENCE_BATCHER.buffered() == 0
+        await main._evidence_stop()
+
+    asyncio.run(go())
+
+
+# ═══ B6 — observability ══════════════════════════════════════════════════════
+
+def test_B6_the_batch_counters_reach_metrics_and_stats(_stack):
+    """§10: the number to read is rows_per_flush — it IS the part-count divisor."""
+    _run_leg(_stack, batch=True)
+    st = main.evidence_stats()
+    assert st["flushes"] > 0
+    assert st["rows_per_flush_mean"] > 1.0, (
+        "batching that produces one row per flush is not batching")
+    assert st["buffered_rows"] == 0, "the drain must leave nothing buffered"
+    text = main._metrics_text()
+    assert f'corr_evidence_flushes_total{{table="{EDGES}"}}' in text
+    assert "corr_evidence_rows_per_flush " in text
+    assert "corr_evidence_batch_age_seconds_max " in text
+    assert "corr_evidence_batch_blocks_failed_total 0" in text
+
+
+def test_B6c_the_flush_insert_is_its_own_profiler_stage(_stack):
+    """Batching moves the INSERT out of `persist.evidence` and into a flush a
+    different item may have triggered. Without its own span the profiler would
+    simply lose those seconds — the §12.10(b) mistake, which is why nothing in
+    that profile explained the pinned queue."""
+    _stack.setattr(main, "CORR_PROFILE_STAGES", True)
+    main._STAGE_STATS.pop("persist.batch_flush", None)
+    _run_leg(_stack, batch=True)
+    assert main._STAGE_STATS.get("persist.batch_flush"), (
+        "the batched INSERT is not timed anywhere")
+
+
+def test_B6b_the_stats_key_set_is_identical_with_batching_off(_stack):
+    """The rank-memo lesson (§12.5): a key that appears and disappears with a
+    flag reads as a zero on the day it matters."""
+    _run_leg(_stack, batch=True)
+    on = set(main.evidence_stats())
+    _stack.setattr(main, "CORR_EVIDENCE_BATCH", False)
+    _stack.setattr(main, "_EVIDENCE_BATCHER", None)
+    off = set(main.evidence_stats())
+    assert on == off, f"key set moved with the flag: {on ^ off}"
+
+
+# ═══ B9 — the DECISION plane's batching is OFF, and correct when forced on ═══
+
+def test_B9_decision_batching_is_off_by_default(_stack):
+    """It trades T1 TTUR directly, so it ships off. This is the pin that says
+    somebody has to mean it."""
+    import os
+    assert main.CORR_DECISION_BATCH is False
+    assert os.environ.get("CORR_DECISION_BATCH") is None
+    on = _run_leg(_stack, batch=True)
+    assert _calls_of(on, "netops.corr_objects") == len(on.rows_of("netops.corr_objects")), \
+        "corr_objects must still be one row per INSERT with the flag off"
+
+
+def test_B9b_forced_on_it_moves_no_row_and_keeps_the_token_construction(_stack):
+    """When somebody does mean it: the same verdict rows, in the same order,
+    and a block token that is the ordered hash of the members' own
+    content-derived `obj:<cid>:v<n>:<state>:<hash16>:objects` keys."""
+    off = _run_leg(_stack, batch=True, decision_batch=False)
+    on = _run_leg(_stack, batch=True, decision_batch=True)
+    for table in DECISION_TABLES:
+        assert _rows_json(off, table) == _rows_json(on, table), f"{table} rows moved"
+        assert _calls_of(on, table) < _calls_of(off, table), (
+            f"{table} was not actually batched")
+    for table, suffix in (("netops.corr_objects", "objects"),
+                          ("netops.corr_current", "current")):
+        for t, rows, tok in on.writes:
+            if t != table:
+                continue
+            assert tok == batch_token(
+                [f"obj:{r['correlation_id']}:v{r['version']}:{r['state']}:"
+                 f"{_hash16_of(off, r)}:{suffix}" for r in rows]), (
+                f"{table} block token is not the ordered hash of its members")
+
+
+def _hash16_of(ch: _RecCH, row: dict) -> str:
+    """Recover a row's content-hash suffix from the UNBATCHED leg's token, which
+    is `obj:<cid>:v<n>:<state>:<hash16>:objects` — so B9b compares the batched
+    token against keys built from tokens the other leg actually emitted, not
+    against a re-derivation of the hash."""
+    want = f"obj:{row['correlation_id']}:v{row['version']}:{row['state']}:"
+    for _t, _rows, tok in ch.writes:
+        if tok.startswith(want) and tok.endswith((":objects", ":current")):
+            return tok[len(want):].rsplit(":", 1)[0]
+    raise AssertionError(f"no unbatched token for {row['correlation_id']}")
+
+
+# ═══ B10 — the Decision write is off the loop thread (step 4d) ═══════════════
+
+def _storm_fixture(*, nodes: int, edges: int, ambient: int):
+    """A storm-shaped snapshot plus the window it was computed from.
+
+    Two knobs because the Decision write has two independent size drivers: the
+    OBJECT (its blob, its badges, its byte estimate) and the WINDOW (the archive
+    slice's `_window_index`, which the FIRST object of a cycle pays however small
+    that object is — that is the case a snapshot-sized threshold would miss).
+    """
+    from catalog import builtin_catalog
+    from engine import run_window
+
+    cat = builtin_catalog()
+
+    def one(d):
+        return run_window(
+            [engine_sig("link_state_change", EntityType.DEVICE, d,
+                        severity=Severity.CRIT),
+             engine_sig("device_resource_anomaly", EntityType.DEVICE, d,
+                        severity=Severity.CRIT, offset_s=1)], cat, ())[0]
+
+    base = one("dev0")
+    ns = tuple(n for i in range(nodes) for n in one(f"dev{i}").nodes)
+    proto = base.edges[0]
+    keys = [n.key for n in ns]
+    es: list = []
+    i = 0
+    while len(es) < edges:
+        a, b = keys[i % len(keys)], keys[(i * 7 + 3) % len(keys)]
+        i += 1
+        if a != b:
+            es.append(dataclasses.replace(proto, from_node=a, to_node=b))
+    snap = dataclasses.replace(
+        base, correlation_id="storm", nodes=ns, edges=tuple(es),
+        window_start=ENGINE_T0, window_end=ENGINE_T0 + timedelta(minutes=180))
+    window = [s for n in snap.nodes for s in n.signals]
+    window.extend(engine_sig("if_util_high", EntityType.DEVICE,
+                             f"amb{k % 2000}", offset_s=k * 0.01)
+                  for k in range(ambient))
+    return snap, window
+
+
+@pytest.fixture(scope="module")
+def wide_window():
+    """A TINY object against a live-sized 50k-signal window — the shape that
+    isolates the archive slice, because everything else in the Decision write is
+    proportional to the object and this object is two nodes."""
+    return _storm_fixture(nodes=1, edges=1, ambient=50_000)
+
+
+async def _watchdog_lag_while(work) -> float:
+    """Run `work()` under main's REAL loop-lag watchdog; return the worst lag."""
+    main.LOOP_LAG_STALLS = 0
+    main.LOOP_LAG_MAX_MS = 0.0
+    task = asyncio.create_task(main.loop_lag_watchdog())
+    await asyncio.sleep(main.CORR_LOOP_LAG_SAMPLE_S * 3)
+    await work()
+    await asyncio.sleep(main.CORR_LOOP_LAG_SAMPLE_S * 3)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    return main.LOOP_LAG_MAX_MS
+
+
+def _persist_under_watchdog(_stack, snap, window, *, offload: bool) -> float:
+    _stack.setattr(main, "CORR_DECISION_OFFLOAD", offload)
+    _stack.setattr(main, "CORR_LOOP_LAG_SAMPLE_S", 0.02)
+    _stack.setattr(main, "CORR_LOOP_LAG_WARN_MS", 500.0)
+    _stack.setattr(main, "ch", _RecCH())
+    main._WINDOW_INDEX_CACHE.clear()
+    main._ARCHIVE_SLICE_HASH.clear()
+
+    async def go():
+        async def work():
+            await main._persist_snapshot(snap, 1, "open", window)
+        return await _watchdog_lag_while(work)
+
+    return asyncio.run(go())
+
+
+def test_B10_the_decision_write_never_holds_the_loop_past_the_budget(_stack,
+                                                                    wide_window):
+    """The §4 target, pinned by the watchdog that would have to see it live:
+    no single loop-thread stretch above 500 ms inside the Decision write.
+
+    MUTANT (`CORR_DECISION_OFFLOAD=0`) — the shipped-before state: `_archive_slice`
+    builds `_window_index` over a 50,000-signal window on the loop thread, one
+    uninterruptible ~1 s stretch, and the watchdog counts a stall."""
+    snap, window = wide_window
+    assert len(window) >= 50_000
+    mutant = _persist_under_watchdog(_stack, snap, window, offload=False)
+    assert mutant >= 500.0, (
+        f"the mutant must reproduce the defect (worst lag {mutant:.0f} ms) — if "
+        f"it does not, the window is too small for this test to prove anything")
+    assert main.LOOP_LAG_STALLS >= 1, "the watchdog must count the mutant's stall"
+    fixed = _persist_under_watchdog(_stack, snap, window, offload=True)
+    assert fixed < 500.0, (
+        f"the Decision write still froze the loop for {fixed:.0f} ms — the "
+        f"window-sized work is back on the event loop")
+    assert main.LOOP_LAG_STALLS == 0
+    assert fixed < mutant / 2
+
+
+def test_B10b_every_size_unbounded_decision_step_goes_to_the_executor(_stack):
+    """The loop-lag instrument cannot separate the OBJECT-sized steps from each
+    other (an offloaded `content_hash` holds the GIL, so the ticker sees tens to
+    hundreds of ms whatever the other steps do). What CAN be asserted exactly is
+    the dispatch: on a storm-shaped object the badges parse, the slice+hash and
+    the byte estimate all run in the executor — and with the flag off they do
+    not. Measured on this shape: 489 ms, 1,267 ms and 317 ms respectively."""
+    snap, window = _storm_fixture(nodes=8, edges=4000, ambient=4000)
+    seen: list[str] = []
+    real = main._offload
+
+    async def spy(fn, /, *a, **k):
+        seen.append(getattr(fn, "__name__", repr(fn)))
+        return await real(fn, *a, **k)
+
+    _stack.setattr(main, "_offload", spy)
+    _stack.setattr(main, "ch", _RecCH())
+
+    async def go():
+        main._WINDOW_INDEX_CACHE.clear()
+        main._ARCHIVE_SLICE_HASH.clear()
+        q = main._evidence_ensure_consumer()
+        assert q is not None
+        # Held, so the Evidence consumer cannot interleave its own offloads into
+        # the spy while the Decision write is being measured.
+        async with main._evidence_cohort_hold():
+            await main._persist_snapshot(snap, 1, "open", window)
+        decision = list(seen)
+        await main._evidence_stop()
+        return decision
+
+    _stack.setattr(main, "CORR_DECISION_OFFLOAD", True)
+    on = asyncio.run(go())
+    seen.clear()
+    _stack.setattr(main, "CORR_DECISION_OFFLOAD", False)
+    off = asyncio.run(go())
+
+    for name in ("_current_badges", "_archive_slice_and_hash", "estimate_bytes"):
+        assert name in on, f"{name} still runs on the loop thread"
+        assert name not in off, (
+            f"{name} was offloaded with CORR_DECISION_OFFLOAD=0 — the A/B flag "
+            f"does not actually revert the change")
+    # The step-4 offloads are unchanged by this flag: it adds work to the
+    # executor, it never takes any away.
+    assert "cycle_hypotheses_blob" in on and "cycle_hypotheses_blob" in off
+
+
+def test_B10c_a_small_object_and_a_small_window_stay_inline(_stack):
+    """The threshold must not send every tiny object through a thread — a hop
+    costs more than the work below CORR_OFFLOAD_MIN_ELEMENTS, and that is as
+    true for the three new calls as for the six old ones."""
+    snap, window = _storm_fixture(nodes=1, edges=1, ambient=10)
+    assert main._snap_elements(snap) < main.CORR_OFFLOAD_MIN_ELEMENTS
+    assert len(window) < main.CORR_OFFLOAD_MIN_ELEMENTS
+    seen: list[str] = []
+    real = main._offload
+
+    async def spy(fn, /, *a, **k):
+        seen.append(getattr(fn, "__name__", repr(fn)))
+        return await real(fn, *a, **k)
+
+    _stack.setattr(main, "_offload", spy)
+    _stack.setattr(main, "ch", _RecCH())
+
+    async def go():
+        main._WINDOW_INDEX_CACHE.clear()
+        main._ARCHIVE_SLICE_HASH.clear()
+        await main._persist_snapshot(snap, 1, "open", window)
+
+    asyncio.run(go())
+    for name in ("_current_badges", "_archive_slice_and_hash", "estimate_bytes"):
+        assert name not in seen, f"{name} paid an executor hop it did not need"
+
+
+# ═══ B11 — the batcher's own bookkeeping ═════════════════════════════════════
+
+def test_B11_a_flush_reports_every_member_and_the_rows_in_order(_stack):
+    """The callback contract the accounting rests on."""
+    reports: list[tuple] = []
+    sink = _Sink()
+
+    def on_flush(table, rows, keys, members, ok, exc):
+        reports.append((table, [dict(r) for r in rows], list(keys),
+                        [m.tok for m in members], ok, exc))
+
+    async def go():
+        b = RowBatcher(insert=sink, on_flush=on_flush, default=(2, 1 << 30, 1e9))
+        m1, m2 = _member("a"), _member("b")
+        await b.add(EDGES, [{"i": 0}], member=m1)
+        await b.add(EDGES, [{"i": 1}], member=m1)   # same member, two chunks
+        assert not reports, "one member must not trip a bound of two"
+        await b.add(EDGES, [{"i": 2}], member=m2)
+
+    asyncio.run(go())
+    assert len(reports) == 1
+    table, rows, keys, toks, ok, exc = reports[0]
+    assert table == EDGES and ok is True and exc is None
+    assert rows == [{"i": 0}, {"i": 1}, {"i": 2}]
+    assert toks == ["a", "b"], "members are DISTINCT items, in arrival order"
+    assert keys == [f"a:{EDGES}:0", f"a:{EDGES}:1", f"b:{EDGES}:0"], (
+        "an untokened chunk must derive a deterministic key from its member")
+
+
+def test_B11b_a_raising_sink_is_reported_not_propagated(_stack):
+    """A flush can be triggered by a producer with nothing to do with the block
+    being written, so an exception must not surface as THAT producer's failure.
+    It is captured and handed to `on_flush` with the block's members."""
+    reports: list[tuple] = []
+
+    async def boom(table, rows, token, ctx):
+        raise main.CHInsertRejected("nope")
+
+    async def go():
+        b = RowBatcher(insert=boom,
+                       on_flush=lambda t, r, k, m, ok, e: reports.append((t, ok, e)),
+                       default=(1, 1 << 30, 1e9))
+        await b.add(EDGES, [{"i": 0}], member=_member("a"))   # must not raise
+        assert b.stats()["blocks_failed_total"] == 1
+
+    asyncio.run(go())
+    assert reports and reports[0][1] is False
+    assert isinstance(reports[0][2], main.CHInsertRejected)

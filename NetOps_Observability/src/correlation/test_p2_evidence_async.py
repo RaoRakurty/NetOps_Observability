@@ -196,6 +196,15 @@ def _stack(monkeypatch):
     monkeypatch.setattr(main, "CORR_EVIDENCE_QUEUE_MAX", 5000)
     monkeypatch.setattr(main, "CORR_EVIDENCE_QUEUE_BYTES_MAX", 512 * 1024 * 1024)
     monkeypatch.setattr(main, "CORR_EVIDENCE_DRAIN_ON_STOP_S", 30.0)
+    # P2 step 4c (cross-version batching) is ON in production and is pinned by
+    # test_p2_evidence_batching.py. It is OFF here on purpose: every test in
+    # THIS file pins step 4's contract — one INSERT per (item, table, page),
+    # its own dedup token, and an item counted the moment its write returns.
+    # Batching changes exactly those three things and nothing else, so leaving
+    # it on here would replace step 4's pins with step 4c's instead of adding
+    # to them.
+    monkeypatch.setattr(main, "CORR_EVIDENCE_BATCH", False)
+    monkeypatch.setattr(main, "CORR_DECISION_BATCH", False)
     monkeypatch.setattr(main, "CORR_COHORT_TOUCH_GATE", True)
     monkeypatch.setattr(main, "CORR_LIFECYCLE_EPOCH_CADENCE", True)
     # Every module global these tests assign DIRECTLY (helpers do, for
@@ -208,7 +217,8 @@ def _stack(monkeypatch):
                   "CORR_QUIESCE_S", "CORR_OPEN_OBJECTS_MAX",
                   "CORR_LIFECYCLE_COHORT_WINDOW", "CORR_ARCHIVE_CHUNK_ROWS",
                   "CORR_ROW_PAGE_SIZE", "CORR_PROFILE_STAGES",
-                  "CORR_EVIDENCE_QUEUE_MAX", "ch", "find_merges",
+                  "CORR_EVIDENCE_QUEUE_MAX", "CORR_EVIDENCE_BATCH_MS",
+                  "CORR_DECISION_OFFLOAD", "ch", "find_merges",
                   "_persist_snapshot", "_offload", "_LIFECYCLE_SEEN_WINDOW"):
         monkeypatch.setattr(main, _name, getattr(main, _name))
     yield monkeypatch

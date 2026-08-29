@@ -103,6 +103,7 @@ from evidence_plane import (
     EVIDENCE_CLASS_TERMINAL,
     EvidenceItem,
     EvidenceQueue,
+    RowBatcher,
     estimate_bytes,
 )
 from flow_app_attribution import AppIdentityIndex, resolve_flow_app
@@ -2543,6 +2544,106 @@ CORR_EVIDENCE_DRAIN_ON_STOP_S = max(0.0, float(
 CORR_EVIDENCE_HOLD_MAX_S = max(0.0, float(
     os.environ.get("CORR_EVIDENCE_HOLD_MAX_S", "5")))
 
+# ── P2 step 4c: CROSS-VERSION EVIDENCE BATCHING ──────────────────────────────
+# Measured brief: docs/scale/P2_CLICKHOUSE_MEMFLAT_2026-08-29.md §3(a).
+#
+# THE DEFECT IT FIXES. `_emit_child_rows` batches only WITHIN one object
+# version, so run `p2-s04b-08290858` issued 63,701 Evidence-table INSERTs in 75
+# minutes at 16.9 / 16.9 / 4.8 rows each. Each is a level-0 part; folding that
+# trickle into the accumulated part re-wrote the same bytes over and over —
+# **1.40 GiB inserted against 337.6 GiB merged (≈241x write amplification)**,
+# with merge memory peaking at 3,978 MiB = 83 % of `max_server_memory_usage`
+# and total server memory at 95.2 % of it. Neither is an engine cost; both are
+# a direct function of how many INSERT STATEMENTS the engine issues.
+#
+# WHAT IT DOES. The Evidence CONSUMER accumulates rows PER TABLE across items
+# and flushes on the first of: 200 members, 8 MiB of estimated row bytes, or
+# 2,000 ms since the oldest buffered row. At the measured drain rate of 11.6
+# versions/s the 2 s clause binds first (~23 versions per flush), which the
+# brief projects as 63,701 -> ~5,900 Evidence inserts (≈11x fewer parts).
+#
+# WHAT IT DOES NOT DO. It moves no ROW: the rows, their bytes and their order
+# within a table are exactly what the unbatched path writes — only the grouping
+# into INSERT statements changes. The BLOCK carries one content-derived dedup
+# token (evidence_plane.batch_token), which is what keeps `ch_insert`'s retry
+# contract: a retry re-sends the identical list under the identical token.
+# ClickHouse's server-side asynchronous insert mode is deliberately NOT used —
+# see evidence_plane's §4c header for why the token forbids it.
+#
+# Batching applies ONLY on the consumer path. An inline Evidence write
+# (CORR_EVIDENCE_ASYNC=0, a dead consumer, a foreign loop) has no flusher task
+# to age a partial block out, so it keeps writing exactly as it does today.
+#
+# SPEC §1 IS UNAFFECTED, and it is worth saying why: a block may be flushed
+# while a LATER cohort is in its decision pass, but everything in that block was
+# drained BEFORE that cohort's hold opened (the hold is generational — items put
+# during it land in `_open` and the consumer never touches them). So a cohort's
+# Decision rows still precede every Evidence row OF THAT COHORT; what changed is
+# only that earlier cohorts' rows now arrive in ~11x fewer statements.
+CORR_EVIDENCE_BATCH = os.environ.get(
+    "CORR_EVIDENCE_BATCH", "1").lower() in ("1", "true", "yes")
+CORR_EVIDENCE_BATCH_ITEMS = max(1, int(
+    os.environ.get("CORR_EVIDENCE_BATCH_ITEMS", "200")))
+CORR_EVIDENCE_BATCH_BYTES = max(1, int(
+    os.environ.get("CORR_EVIDENCE_BATCH_BYTES", str(8 * 1024 * 1024))))
+CORR_EVIDENCE_BATCH_MS = max(1.0, float(
+    os.environ.get("CORR_EVIDENCE_BATCH_MS", "2000")))
+
+# ── The DECISION plane's own batching — DEFAULT OFF, and it stays off ────────
+# `corr_objects` + `corr_current` are 95,793 of the run's 162,087 corr_* inserts
+# (59 %) and `corr_objects` alone is 86 % of the uncompressed bytes, so batching
+# them is the BIGGER storage prize: ~12x and ~3x fewer parts respectively.
+#
+# It is off because it trades the thing this whole step exists to protect. Those
+# two rows ARE the operator's verdict (spec §1), and buffering them delays it by
+# up to the flush age — directly against the T1 TTUR SLO. The Evidence rows have
+# no such reader on the TTUR path, which is why they batch by default and these
+# do not. Turn it on only with a TTUR budget that shows headroom, and read
+# corr_evidence_batch_age_seconds_max next to T1 when you do.
+#
+# Token semantics are UNCHANGED by construction: each member contributes its own
+# `obj:<cid>:v<n>:<state>:<hash16>:objects|current` key and the block token is
+# the ordered hash of those keys, so a retry of the identical block dedups
+# exactly as the single-row insert does today.
+CORR_DECISION_BATCH = os.environ.get(
+    "CORR_DECISION_BATCH", "0").lower() in ("1", "true", "yes")
+CORR_DECISION_BATCH_MS = max(1.0, float(
+    os.environ.get("CORR_DECISION_BATCH_MS", "1000")))
+# corr_current is what Command Center reads, so it keeps a tighter flush than
+# corr_objects (history, nothing reads it on the TTUR path).
+CORR_DECISION_CURRENT_BATCH_MS = max(1.0, float(
+    os.environ.get("CORR_DECISION_CURRENT_BATCH_MS", "250")))
+
+# ── P2 step 4d: OFFLOAD the rest of the Decision write ───────────────────────
+# Measured brief: docs/scale/P2_STEP4B_2P5K_VERDICT_2026-08-29.md §3/§4 —
+# `persist.decision` recorded max 64 s (and a 21 s neighbour) on single calls,
+# "a storm object whose blob/rows are built on the loop thread".
+#
+# MEASURED, on a 20-node / 50,000-edge storm-shaped snapshot (the shape §4
+# names), with everything step 4 already offloads accounted for:
+#
+#   cycle_hypotheses_blob   680 ms   ALREADY offloaded (_snap_call)
+#   content_hash          1,520 ms   ALREADY offloaded (_snap_call)
+#   to_object_row             0.3ms  ALREADY offloaded (_snap_call)
+#   _current_badges         489 ms   ON THE LOOP  <- json.loads of the whole blob
+#   estimate_bytes          317 ms   ON THE LOOP  <- the queue's byte walk
+#   _archive_slice        1,267 ms   ON THE LOOP  <- first object of a cycle,
+#                                    which pays _window_index over a 50k window
+#
+# So ~2.1 s of a ~3.0 s Decision write was still an uninterruptible loop-thread
+# stretch, in three pieces, every one of them a PURE function of frozen inputs —
+# exactly what `_offload` is for, and exactly the treatment §12.10(b) gave the
+# archive chunk. The rest of the 64 s span is NOT loop-thread blocking: the span
+# is wall-clock and encloses the awaits above, so on a saturated 4-core executor
+# it is dominated by offload QUEUE WAIT (read `corr_offload_wait_max_seconds`
+# beside it), which is a scheduling question, not a serialization one.
+#
+# Byte-neutral by construction: all three are deterministic pure functions, so
+# the badges dict, the slice membership, its id-hash and the byte estimate are
+# identical whichever thread computed them.
+CORR_DECISION_OFFLOAD = os.environ.get(
+    "CORR_DECISION_OFFLOAD", "1").lower() in ("1", "true", "yes")
+
 # ── P2 step 4a: the LIFECYCLE COHORT WINDOW ──────────────────────────────────
 # docs/scale/P2_STEPS012_2P5K_VERDICT_2026-08-29.md §4.2 — the measured
 # regression this fixes. P1 change H hoisted merge/quiesce/cap to EPOCH cadence
@@ -3579,6 +3680,21 @@ async def _snap_call(snap: ObjectSnapshot, fn, /, *args, **kwargs):
     return fn(*args, **kwargs)
 
 
+async def _decision_offload(size: int, fn, /, *args, **kwargs):
+    """`_snap_call` for a Decision-path call whose cost is NOT the object's size.
+
+    Same rule, same threshold, one difference: the caller states the size that
+    actually drives the work. `_archive_slice`'s cost is dominated by the WINDOW
+    (a 50k-signal window costs 1,267 ms through `_window_index`, and the first
+    object of a cycle pays all of it even when that object is tiny), so keying
+    its offload decision on `_snap_elements` would leave exactly the worst case
+    inline. Gated on CORR_DECISION_OFFLOAD so the A/B runs on one image.
+    """
+    if CORR_DECISION_OFFLOAD and size >= CORR_OFFLOAD_MIN_ELEMENTS:
+        return await _offload(fn, *args, **kwargs)
+    return fn(*args, **kwargs)
+
+
 ARCHIVE_ROWS_WRITTEN = 0     # archive rows actually inserted (monotonic)
 ARCHIVE_SLICES_DAMPED = 0    # re-persists whose slice membership was unchanged
 # Tracker 156 v2 observability: rows per archived slice. Settles the open
@@ -3766,15 +3882,87 @@ def _archive_slice(snap: ObjectSnapshot, window: Sequence[Signal]) -> list[Signa
     return keep
 
 
+def _archive_slice_cost(snap: ObjectSnapshot, window: Sequence[Signal]) -> int:
+    """The size that drives THIS `_archive_slice_and_hash` call (P2 step 4d).
+
+    `_archive_slice` has two cost regimes and they differ by three orders of
+    magnitude, so one size would be wrong for one of them:
+
+      * the FIRST object of a cycle also builds `_window_index` — O(window log
+        window), MEASURED at 1,267 ms over a 50,000-signal window. That must go
+        to the executor whatever the object's own size is, which is why a
+        snapshot-sized threshold (`_snap_call`) would have left exactly the worst
+        case inline;
+      * every LATER object of the same cycle reads the memoized index and does
+        O(loose + its own node signals) work — 0.4 ms on the same fixture. That
+        must stay inline, or the step pays ~1,000 executor hops per cycle to
+        protect a stretch that does not exist. Measured on the offline bench:
+        offloading it unconditionally cost 9 % of sweep wall for no loop-thread
+        benefit at all.
+
+    So the decision is made on the call's ACTUAL cost: the window when the index
+    still has to be built, the object when it does not.
+    """
+    if not window:
+        return 0
+    hit = _WINDOW_INDEX_CACHE.get(id(window))
+    cached = hit is not None and hit[0] == len(window)
+    return max(_snap_elements(snap), 0 if cached else len(window))
+
+
+def _archive_slice_and_hash(snap: ObjectSnapshot,
+                            window: Sequence[Signal]) -> tuple[list[Signal], str]:
+    """The archive slice AND its membership id-hash, as ONE pure call.
+
+    Extracted so both can be handed to `_offload` together (P2 step 4d): a
+    comprehension inlined at the call site cannot be offloaded without shipping
+    a closure to the executor thread, and splitting them would pay two hops for
+    two halves of the same walk. The DAMPING DECISION stays at the call site, on
+    the Decision path, in version order — this returns the facts, never the
+    verdict (spec §1).
+
+    Thread-safety of the one global it touches: `_window_index` may build and
+    memoize this cycle's `_WINDOW_INDEX_CACHE` entry from an executor thread.
+    The build is a pure function of `window`, so two concurrent misses produce
+    equal indexes and either may win the dict slot; a `dict.__setitem__` is
+    atomic under the GIL, so no reader can observe a half-built entry.
+    """
+    keep = _archive_slice(snap, window)
+    if not keep:
+        return [], ""
+    return keep, hashlib.sha256(
+        "|".join(_sid_of(window, s) for s in keep).encode()).hexdigest()[:16]
+
+
 async def _noop_yield() -> None:
     """Default loop-yield for _persist_snapshot callers outside engine_cycle's
     per-cycle budget (e.g. tests). engine_cycle passes its real `_loop_yield`."""
     return
 
 
+async def _ch_emit(table: str, rows: list, dedup_token: str, ctx: dict) -> bool:
+    """The DEFAULT row sink: one `ch_insert`, exactly as before.
+
+    Every Evidence write goes through a sink with this signature so the batched
+    path can substitute one that buffers instead (P2 step 4c) WITHOUT the write
+    body knowing which it has — which is what keeps `_write_evidence_inner` the
+    single implementation both legs run, and therefore what makes the
+    byte-identity tests meaningful.
+
+    The archive tally lives here rather than at the call site because "the rows
+    landed" is a property of the INSERT, and under batching the insert happens
+    later, in a different call, on behalf of several versions at once.
+    """
+    global ARCHIVE_ROWS_WRITTEN
+    ok = await ch_insert(table, rows, dedup_token=dedup_token, **ctx)
+    if ok is not False and table == "netops.corr_signals_archive":
+        ARCHIVE_ROWS_WRITTEN += len(rows)
+    return ok
+
+
 async def _emit_child_rows(table: str, snap: ObjectSnapshot, build_page,
                            total_rows: int, version: int, token: str,
-                           loop_yield=_noop_yield) -> None:
+                           loop_yield=_noop_yield, emit=None) -> None:
     """Emit a size-unbounded child-row stream (edges / typed edges / evidence) in
     BOUNDED pages (P0 boundedness pass — ENGINE_DECISION_2026-08-28 #1/#2).
 
@@ -3793,6 +3981,7 @@ async def _emit_child_rows(table: str, snap: ObjectSnapshot, build_page,
     is stamped from `snap` by the builder, exactly as the parent row is."""
     if total_rows <= 0:
         return
+    emit = _ch_emit if emit is None else emit
     big = _snap_elements(snap) >= CORR_OFFLOAD_MIN_ELEMENTS
     batch: list[dict] = []
     seq = 0
@@ -3800,9 +3989,9 @@ async def _emit_child_rows(table: str, snap: ObjectSnapshot, build_page,
 
     async def _flush() -> None:
         nonlocal batch, seq
-        await ch_insert(table, batch, dedup_token=f"{token}:{seq}",
-                        corr_id=snap.correlation_id, version=version,
-                        tenant=snap.tenant_id, row_count=len(batch))
+        await emit(table, batch, f"{token}:{seq}",
+                   {"corr_id": snap.correlation_id, "version": version,
+                    "tenant": snap.tenant_id, "row_count": len(batch)})
         seq += 1
         batch = []
 
@@ -3870,9 +4059,25 @@ async def _persist_snapshot(snap: ObjectSnapshot, version: int, state: str,
     # and version numbering restarts at 1 with different content.
     tok = (f"obj:{snap.correlation_id}:v{version}:{state}:"
            f"{(await _snap_call(snap, snap.content_hash))[:16]}")
-    await ch_insert("netops.corr_objects", [obj_row],
-                    dedup_token=f"{tok}:objects",
-                    corr_id=snap.correlation_id, version=version, tenant=snap.tenant_id)
+    # P2 step 4c, DEFAULT OFF (CORR_DECISION_BATCH): the verdict rows may also
+    # be accumulated across versions — 12x/3x fewer level-0 parts on the two
+    # tables that carry 59 % of the inserts and 86 % of the uncompressed bytes.
+    # It is off because buffering the verdict trades T1 TTUR directly, and
+    # because `corr_objects`' rejection stops raising out of the cohort. The
+    # dedup TOKEN semantics are unchanged either way: `tok` is content-derived,
+    # so a block's token is the ordered hash of content-derived member keys and
+    # a retry of the identical block dedups exactly as the single row does.
+    _dec_batcher = _active_decision_batcher()
+    _dec_member = _DecisionMember(tok=tok, correlation_id=snap.correlation_id,
+                                  version=version, tenant_id=snap.tenant_id)
+    if _dec_batcher is not None:
+        await _dec_batcher.add("netops.corr_objects", [obj_row],
+                               member=_dec_member, dedup_token=f"{tok}:objects")
+    else:
+        await ch_insert("netops.corr_objects", [obj_row],
+                        dedup_token=f"{tok}:objects",
+                        corr_id=snap.correlation_id, version=version,
+                        tenant=snap.tenant_id)
     # Dual-write the narrow current-state row (app-level, NOT an MV — row
     # policies break MV inserts). ReplacingMergeTree(created_at) keeps the
     # latest write per (tenant, correlation_id). Projection failure must never
@@ -3884,10 +4089,23 @@ async def _persist_snapshot(snap: ObjectSnapshot, version: int, state: str,
     failure: tuple[str, bool] | None = None  # (error, retryable)
     try:
         current_row = {k: obj_row[k] for k in CORR_CURRENT_FIELDS if k in obj_row}
-        current_row.update(_current_badges(obj_row.get("hypotheses", "")))
+        # P2 step 4d: `_current_badges` json.loads the WHOLE hypotheses blob to
+        # read four fields off `ranking.hypotheses[0].verdict` — measured at
+        # 489 ms on a 20-node/50k-edge storm object, the single largest
+        # remaining on-loop stretch of the Decision write. Same offload rule as
+        # every other per-object serializer; the dict is identical either way.
+        current_row.update(await _decision_offload(
+            _snap_elements(snap), _current_badges, obj_row.get("hypotheses", "")))
         current_row["chaos_fixture"] = _chaos_fixture_for(snap)
-        if not await ch_insert("netops.corr_current", [current_row],
-                               dedup_token=f"{tok}:current"):
+        if _dec_batcher is not None:
+            # A buffered projection row cannot report its own outcome here; a
+            # failed block counts PROJECTION_WRITE_FAILURES per member instead
+            # (`_ev_block_done`), which is the same counter #101 alerts on.
+            await _dec_batcher.add("netops.corr_current", [current_row],
+                                   member=_dec_member,
+                                   dedup_token=f"{tok}:current")
+        elif not await ch_insert("netops.corr_current", [current_row],
+                                 dedup_token=f"{tok}:current"):
             failure = ("clickhouse rejected insert (see preceding error log)", True)
     except Exception as exc:  # noqa: BLE001 — observable, non-fatal (§10)
         # Network/timeout errors are retryable; anything else (serialization,
@@ -3927,13 +4145,15 @@ async def _persist_snapshot(snap: ObjectSnapshot, version: int, state: str,
     #      version order, exactly as today.
     global ARCHIVE_SLICES_DAMPED
     global ARCHIVE_SLICE_ROWS_LAST, ARCHIVE_SLICE_ROWS_MAX
-    slice_sigs = _archive_slice(snap, window)
-    slice_hash = ""
+    # P2 step 4d: sized on what this CALL will actually cost — the window when
+    # the cycle's index still has to be built (1,267 ms over a 50k window, paid
+    # by the first object of the cycle however small it is), the object when the
+    # index is already memoized. See `_archive_slice_cost`.
+    slice_sigs, slice_hash = await _decision_offload(
+        _archive_slice_cost(snap, window), _archive_slice_and_hash, snap, window)
     if slice_sigs:
         ARCHIVE_SLICE_ROWS_LAST = len(slice_sigs)
         ARCHIVE_SLICE_ROWS_MAX = max(ARCHIVE_SLICE_ROWS_MAX, len(slice_sigs))
-        slice_hash = hashlib.sha256(
-            "|".join(_sid_of(window, s) for s in slice_sigs).encode()).hexdigest()[:16]
         if _ARCHIVE_SLICE_HASH.get(snap.correlation_id) == slice_hash:
             # Same membership as the last archived version of this object —
             # skip the re-write. Readers (replay._select_slice, the Go timeline
@@ -3962,8 +4182,15 @@ async def _persist_snapshot(snap: ObjectSnapshot, version: int, state: str,
         window_start_ts=snap.window_start.timestamp(),
         slice_sigs=list(slice_sigs) if slice_sigs else None,
         slice_hash=slice_hash,
-        est_bytes=(estimate_bytes(snap, slice_sigs) if queue is not None else 0),
+        est_bytes=0,
     )
+    if queue is not None:
+        # P2 step 4d: the byte estimate is an id-`seen` deep walk of the
+        # snapshot's value graph — 317 ms on the 20-node/50k-edge storm shape,
+        # on the loop thread, in one uninterruptible stretch. Deterministic, so
+        # the bound it feeds is unchanged; only the thread moved.
+        item.est_bytes = await _decision_offload(
+            _snap_elements(snap), estimate_bytes, snap, slice_sigs)
     if CORR_PROFILE_STAGES and _t_decision:
         stage_record("persist.decision", time.perf_counter() - _t_decision)
     if queue is not None:
@@ -3985,7 +4212,8 @@ async def _persist_snapshot(snap: ObjectSnapshot, version: int, state: str,
              snap.ranking.verdict_tier.value, len(snap.nodes), len(snap.edges))
 
 
-async def _write_evidence(item: EvidenceItem, loop_yield=_noop_yield) -> bool:
+async def _write_evidence(item: EvidenceItem, loop_yield=_noop_yield,
+                          emit=None) -> bool:
     """Materialize ONE EvidenceItem: edges -> typed edges -> evidence -> archive.
 
     This is `_persist_snapshot`'s second half, moved verbatim — the same
@@ -4002,20 +4230,21 @@ async def _write_evidence(item: EvidenceItem, loop_yield=_noop_yield) -> bool:
     """
     _t0 = time.perf_counter() if CORR_PROFILE_STAGES else 0.0
     try:
-        return await _write_evidence_inner(item, loop_yield)
+        return await _write_evidence_inner(item, loop_yield, emit or _ch_emit)
     finally:
         if CORR_PROFILE_STAGES and _t0:
             stage_record("persist.evidence", time.perf_counter() - _t0)
 
 
-async def _write_evidence_inner(item: EvidenceItem, loop_yield) -> bool:
+async def _write_evidence_inner(item: EvidenceItem, loop_yield, emit) -> bool:
     snap, version, tok = item.snap, item.version, item.tok
     # P0 boundedness pass: the edge/evidence child rows scale with the storm's
     # edge count (~180k worst case), so they are emitted in bounded pages (see
     # _emit_child_rows) — no single synchronous serialize+insert step tracks the
     # whole object, and the loop is yielded between pages.
     await _emit_child_rows("netops.corr_edges", snap, snap.edge_row_page,
-                           len(snap.edges), version, f"{tok}:edges", loop_yield)
+                           len(snap.edges), version, f"{tok}:edges", loop_yield,
+                           emit)
     # Contract §5: the typed edge + its evidence block (edge_type, method, rank,
     # evidence_class, evidence_ref, observation_method, confidence, observed_at,
     # data_class). corr_edges' frozen Enum8 grounding_kind cannot express these and
@@ -4025,11 +4254,11 @@ async def _write_evidence_inner(item: EvidenceItem, loop_yield) -> bool:
     # from there.
     if CORR_EDGES_V2:
         await _emit_child_rows(CORR_PATH_EDGES_TABLE, snap, snap.typed_edge_row_page,
-                               len(snap.edges), version, f"{tok}:typed_edges", loop_yield)
+                               len(snap.edges), version, f"{tok}:typed_edges",
+                               loop_yield, emit)
     await _emit_child_rows("netops.corr_evidence", snap, snap.evidence_row_page,
                            snap.evidence_row_count(), version, f"{tok}:evidence",
-                           loop_yield)
-    global ARCHIVE_ROWS_WRITTEN
+                           loop_yield, emit)
     slice_sigs = item.slice_sigs
     if not slice_sigs:
         return True
@@ -4060,13 +4289,16 @@ async def _write_evidence_inner(item: EvidenceItem, loop_yield) -> bool:
         chunk = (await _offload(_archive_chunk, part, snap.correlation_id, version)
                  if len(part) >= CORR_ROW_PAGE_SIZE
                  else _archive_chunk(part, snap.correlation_id, version))
-        ok = await ch_insert(
-            "netops.corr_signals_archive", chunk,
-            corr_id=snap.correlation_id, version=version, row_count=len(chunk))
+        # No dedup token today (corr_signals_archive is neither RCA-critical
+        # nor dedup-safe), so `emit` gets "" and derives a deterministic member
+        # key from the item when it is batching. The row tally moved into the
+        # sink (`_ch_emit`) — under batching the insert happens later, on behalf
+        # of several versions at once, and only the sink knows when it landed.
+        ok = await emit("netops.corr_signals_archive", chunk, "",
+                        {"corr_id": snap.correlation_id, "version": version,
+                         "row_count": len(chunk)})
         if ok is False:
             all_ok = False
-        else:
-            ARCHIVE_ROWS_WRITTEN += len(chunk)
         await loop_yield()
     # The slice did not land WHOLE, so it must be retried whole on the next
     # persist of this object. Today that is expressed by not recording the
@@ -4108,9 +4340,256 @@ async def _write_evidence_inner(item: EvidenceItem, loop_yield) -> bool:
 _EVIDENCE_QUEUE: EvidenceQueue | None = None
 _EVIDENCE_TASK: asyncio.Task | None = None
 _EVIDENCE_LOOP: asyncio.AbstractEventLoop | None = None
+_EVIDENCE_BATCHER: RowBatcher | None = None
+_EVIDENCE_FLUSHER: asyncio.Task | None = None
 EVIDENCE_ITEMS_MATERIALIZED = 0
 EVIDENCE_ITEMS_FAILED = 0
 EVIDENCE_ITEMS_LOST = 0
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# P2 step 4c — cross-version batching: WHO SETTLES AN ITEM, AND WHEN
+#
+# Unbatched, an item's outcome is known when `_write_evidence` returns: its
+# inserts have all been awaited. Batched, its rows are spread over one to four
+# BLOCKS that flush later, possibly on behalf of a producer that has nothing to
+# do with this item. So the outcome moves to the last block:
+#
+#   * `_ev_join(table, item)`  — the item joined a table's buffer: one more
+#     block it is waiting on. Called BEFORE the append can trigger a flush.
+#   * `_ev_block_done(...)`    — a block flushed: every member loses one
+#     outstanding block, and a FAILED block marks the table on every member.
+#   * `_ev_finished(item, ok)` — `_write_evidence` returned; nothing more will
+#     be buffered for this item.
+#
+# The item is counted exactly once, when it is finished AND owes no blocks —
+# `outcome="materialized"` if no block it was in failed, `outcome="failed"`
+# otherwise, with the member's own dedup tokens in the log so the operator can
+# find the rows that did not land. That is the same counting the unbatched
+# consumer does; only the moment moved.
+# ═══════════════════════════════════════════════════════════════════════════
+_ARCHIVE_TABLE = "netops.corr_signals_archive"
+
+
+@dataclass(slots=True)
+class _EvidencePending:
+    """One item's outstanding-block bookkeeping (batched path only)."""
+    item: EvidenceItem
+    blocks: int = 0
+    finished: bool = False
+    body_ok: bool = True
+    failed_tables: set = field(default_factory=set)
+    keys: list = field(default_factory=list)
+
+
+_EVIDENCE_PENDING: dict[int, _EvidencePending] = {}
+
+
+@dataclass(slots=True)
+class _DecisionMember:
+    """A Decision-plane block member (CORR_DECISION_BATCH only).
+
+    The Decision write has no `EvidenceItem` — its rows are built and issued
+    before one exists — so it contributes this instead: just enough identity to
+    mint the member key and to name the rows in a failure log.
+    """
+    tok: str
+    correlation_id: str
+    version: int
+    tenant_id: str
+
+
+def _ev_join(table: str, member: object) -> None:
+    """One more block this item is waiting on."""
+    pend = _EVIDENCE_PENDING.get(id(member))
+    if pend is not None:
+        pend.blocks += 1
+
+
+def _ev_finished(item: EvidenceItem, body_ok: bool) -> None:
+    """`_write_evidence` returned: nothing more will be buffered for this item."""
+    pend = _EVIDENCE_PENDING.get(id(item))
+    if pend is None:
+        return
+    pend.finished = True
+    pend.body_ok = pend.body_ok and body_ok
+    if pend.blocks <= 0:
+        _ev_settle(pend)
+
+
+def _ev_settle(pend: _EvidencePending) -> None:
+    """Count ONE item, exactly once, now that every block it was in has landed.
+
+    Same outcome rule the unbatched consumer applies — a failed archive block
+    also REVERTS the optimistic slice-membership hash, guarded on identity so a
+    later version's successful record is never clobbered by an earlier
+    version's failure flushing out of order (spec §12.1, unchanged).
+    """
+    global EVIDENCE_ITEMS_MATERIALIZED, EVIDENCE_ITEMS_FAILED
+    item = pend.item
+    _EVIDENCE_PENDING.pop(id(item), None)
+    if (_ARCHIVE_TABLE in pend.failed_tables
+            and _ARCHIVE_SLICE_HASH.get(item.correlation_id) == item.slice_hash):
+        _ARCHIVE_SLICE_HASH.pop(item.correlation_id, None)
+    queue = _EVIDENCE_QUEUE
+    if queue is not None:
+        # T7 is "verdict -> materialized graph", so it is measured when the rows
+        # actually landed, not when the consumer handed them to a buffer.
+        queue.note_written(item, time.monotonic())
+    if pend.body_ok and not pend.failed_tables:
+        EVIDENCE_ITEMS_MATERIALIZED += 1
+        return
+    EVIDENCE_ITEMS_FAILED += 1
+    log.error(
+        "evidence item FAILED (batched) corr_id=%s version=%d state=%s "
+        "tenant_id=%s tables=%s — the Decision row for this version already "
+        "landed; its graph will not be retried until the next version of this "
+        "object (evidence_items_failed_total=%d)",
+        item.correlation_id, item.version, item.state, item.tenant_id,
+        ",".join(sorted(pend.failed_tables)) or "-", EVIDENCE_ITEMS_FAILED)
+
+
+def _ev_block_done(table: str, rows: list, keys: list, members: list,
+                   ok: bool, exc: BaseException | None) -> None:
+    """One flushed block, accounted to every member it carried.
+
+    Called with the batcher's lock held, so it must stay synchronous and cheap:
+    counters, a log line, and the per-member bookkeeping above.
+    """
+    global ARCHIVE_ROWS_WRITTEN, PROJECTION_WRITE_FAILURES
+    if ok:
+        if table == _ARCHIVE_TABLE:
+            ARCHIVE_ROWS_WRITTEN += len(rows)
+    else:
+        # The member TOKENS, not just a count: they are the only way to find
+        # which versions' rows are missing from the table (§10, no silence).
+        log.error(
+            "evidence batch block FAILED table=%s rows=%d members=%d "
+            "error=%s member_tokens=%s",
+            table, len(rows), len(members),
+            f"{type(exc).__name__}: {exc}" if exc is not None else
+            "clickhouse rejected insert (see preceding error log)",
+            " ".join(keys))
+    for member in members:
+        pend = _EVIDENCE_PENDING.get(id(member))
+        if pend is None:
+            # #101: a lost corr_current dual-write is a stale Command Center
+            # and has always been counted. corr_objects is history and has no
+            # counter of its own — the block log above names it.
+            if (not ok and table == "netops.corr_current"
+                    and isinstance(member, _DecisionMember)):
+                PROJECTION_WRITE_FAILURES += 1
+            continue
+        pend.blocks -= 1
+        if not ok:
+            pend.failed_tables.add(table)
+        if pend.finished and pend.blocks <= 0:
+            _ev_settle(pend)
+
+
+async def _ch_insert_block(table: str, rows: list, dedup_token: str,
+                           ctx: dict) -> bool:
+    """The batcher's sink: one `ch_insert` per BLOCK, one token per block.
+
+    Deliberately NOT `_ch_emit` — the archive row tally belongs to the block
+    result (`_ev_block_done`), and routing it through both would count every
+    archived row twice.
+
+    Timed as its OWN stage. Batching moves the INSERT out of `persist.evidence`
+    (which now measures row BUILDING plus a buffer append) and into a flush that
+    may be triggered by a different item entirely, so without this span the
+    profiler would simply lose the seconds — the same mistake §12.10(b) made
+    with the backpressure wait, which is why nothing in that profile explained
+    the pinned queue.
+    """
+    with stage("persist.batch_flush"):
+        return await ch_insert(table, rows, dedup_token=dedup_token, **ctx)
+
+
+def _make_row_batcher() -> RowBatcher:
+    """The one accumulator both planes share (the Decision tables only when
+    CORR_DECISION_BATCH is on). One instance means one flusher task and one set
+    of counters; the per-table limits are what separate the two planes."""
+    ms = CORR_EVIDENCE_BATCH_MS / 1000.0
+    return RowBatcher(
+        insert=_ch_insert_block, on_flush=_ev_block_done, on_join=_ev_join,
+        default=(CORR_EVIDENCE_BATCH_ITEMS, CORR_EVIDENCE_BATCH_BYTES, ms),
+        limits={
+            "netops.corr_objects": (CORR_EVIDENCE_BATCH_ITEMS,
+                                    CORR_EVIDENCE_BATCH_BYTES,
+                                    CORR_DECISION_BATCH_MS / 1000.0),
+            "netops.corr_current": (CORR_EVIDENCE_BATCH_ITEMS,
+                                    CORR_EVIDENCE_BATCH_BYTES,
+                                    CORR_DECISION_CURRENT_BATCH_MS / 1000.0),
+        })
+
+
+def _active_row_batcher() -> RowBatcher | None:
+    """The batcher, but ONLY where a flusher can age a partial block out.
+
+    The flusher task is started with the Evidence consumer, so this carries the
+    same three conditions `_active_evidence_queue` does. Anything else writes
+    unbatched, which is always correct: a block that nothing will ever flush is
+    the one way batching could lose a row.
+    """
+    if not CORR_EVIDENCE_BATCH or _EVIDENCE_BATCHER is None:
+        return None
+    if _EVIDENCE_FLUSHER is None or _EVIDENCE_FLUSHER.done():
+        return None
+    try:
+        if asyncio.get_running_loop() is not _EVIDENCE_LOOP:
+            return None
+    except RuntimeError:
+        return None
+    return _EVIDENCE_BATCHER
+
+
+def _active_decision_batcher() -> RowBatcher | None:
+    """The Decision tables' batcher — DEFAULT OFF (CORR_DECISION_BATCH).
+
+    Off because it buffers the operator's verdict and therefore trades T1 TTUR
+    directly; see the flag's comment. It also changes the failure path for
+    `corr_objects`: unbatched, a rejected verdict row raises out of the cohort
+    and the cohort is retried, while a batched block fails later, with no cohort
+    left to retry — the same durability trade step 4 already made for the
+    Evidence rows, now applied to a row the operator reads.
+    """
+    if not CORR_DECISION_BATCH:
+        return None
+    return _active_row_batcher()
+
+
+def _evidence_emitter(batcher: RowBatcher, item: EvidenceItem):
+    """The row sink that buffers instead of inserting, bound to ONE item."""
+    async def emit(table: str, rows: list, dedup_token: str, ctx: dict) -> bool:
+        # `ctx` is the per-version failure context of the UNBATCHED sink; a block
+        # spans versions, so the batcher builds its own (see RowBatcher.add).
+        await batcher.add(table, rows, member=item, dedup_token=dedup_token)
+        return True
+    return emit
+
+
+async def _evidence_flusher(batcher: RowBatcher) -> None:
+    """Age partial blocks out. The trigger that makes a TRICKLE bounded.
+
+    Sleeps until the nearest age deadline rather than on a fixed tick. With
+    nothing buffered there is no deadline to sleep to, so it polls at a quarter
+    of the configured age bound (capped at 250 ms) — enough that the FIRST block
+    of a burst is still aged out on time, without a permanent high-frequency
+    timer in a process whose whole problem is loop-thread scheduling.
+    """
+    idle = min(0.25, max(0.01, CORR_EVIDENCE_BATCH_MS / 4000.0))
+    while True:
+        due = batcher.due_in_s()
+        await asyncio.sleep(idle if due == float("inf")
+                            else min(0.25, max(0.002, due)))
+        try:
+            await batcher.flush_due()
+        except asyncio.CancelledError:
+            raise
+        except Exception:       # counted + traced (§10), never silent
+            log.exception("evidence batch flusher raised — blocks stay buffered "
+                          "and will be retried on the next tick")
 
 
 def _active_evidence_queue() -> EvidenceQueue | None:
@@ -4150,6 +4629,7 @@ def _evidence_ensure_consumer() -> EvidenceQueue | None:
     rather than carried silently into the new one.
     """
     global _EVIDENCE_QUEUE, _EVIDENCE_TASK, _EVIDENCE_LOOP, EVIDENCE_ITEMS_LOST
+    global _EVIDENCE_BATCHER, _EVIDENCE_FLUSHER
     if not CORR_EVIDENCE_ASYNC:
         return None
     try:
@@ -4172,14 +4652,27 @@ def _evidence_ensure_consumer() -> EvidenceQueue | None:
         for it in stranded:
             log.info("evidence LOST (stranded queue) corr_id=%s version=%d state=%s",
                      it.correlation_id, it.version, it.state)
+    if _EVIDENCE_FLUSHER is not None and not _EVIDENCE_FLUSHER.done():
+        # Belongs to the loop we are replacing; it can never flush again.
+        with contextlib.suppress(Exception):
+            _EVIDENCE_FLUSHER.cancel()
     _EVIDENCE_QUEUE = EvidenceQueue(CORR_EVIDENCE_QUEUE_MAX,
                                     CORR_EVIDENCE_QUEUE_BYTES_MAX,
                                     hold_max_s=CORR_EVIDENCE_HOLD_MAX_S)
     _EVIDENCE_LOOP = loop
     _EVIDENCE_TASK = loop.create_task(_evidence_consumer(_EVIDENCE_QUEUE))
-    log.info("evidence plane ASYNC: bound=%d items / %d bytes, drain-on-stop=%.0fs",
+    # The batcher and its flusher are bound to the SAME loop for the same
+    # reason the queue is: a partial block whose flusher belongs to a dead loop
+    # would never be written. Rebuilt with the consumer, never carried over.
+    _EVIDENCE_PENDING.clear()
+    _EVIDENCE_BATCHER = _make_row_batcher()
+    _EVIDENCE_FLUSHER = loop.create_task(_evidence_flusher(_EVIDENCE_BATCHER))
+    log.info("evidence plane ASYNC: bound=%d items / %d bytes, drain-on-stop=%.0fs; "
+             "batching=%s (%d items / %d bytes / %.0f ms), decision batching=%s",
              CORR_EVIDENCE_QUEUE_MAX, CORR_EVIDENCE_QUEUE_BYTES_MAX,
-             CORR_EVIDENCE_DRAIN_ON_STOP_S)
+             CORR_EVIDENCE_DRAIN_ON_STOP_S, CORR_EVIDENCE_BATCH,
+             CORR_EVIDENCE_BATCH_ITEMS, CORR_EVIDENCE_BATCH_BYTES,
+             CORR_EVIDENCE_BATCH_MS, CORR_DECISION_BATCH)
     return _EVIDENCE_QUEUE
 
 
@@ -4197,10 +4690,22 @@ async def _evidence_consumer(queue: EvidenceQueue) -> None:
         item = await queue.get()
         queue.begin()
         reset_yield()
+        # P2 step 4c: with a batcher the item's rows go into per-table buffers
+        # shared with other versions, so its OUTCOME is settled by the last
+        # block it was in (`_ev_settle`), not here.
+        batcher = _active_row_batcher()
+        emit = None
+        if batcher is not None:
+            _EVIDENCE_PENDING[id(item)] = _EvidencePending(item=item)
+            emit = _evidence_emitter(batcher, item)
         try:
-            ok = await _write_evidence(item, loop_yield)
+            ok = await _write_evidence(item, loop_yield, emit)
         except asyncio.CancelledError:
             EVIDENCE_ITEMS_LOST += 1
+            # Whatever this item had already buffered stays in its block and
+            # will still be written; the ITEM is lost because its write did not
+            # complete, and it must not also be settled by that block.
+            _EVIDENCE_PENDING.pop(id(item), None)
             log.info("evidence LOST (consumer cancelled mid-write) corr_id=%s "
                      "version=%d state=%s", item.correlation_id, item.version,
                      item.state)
@@ -4215,12 +4720,16 @@ async def _evidence_consumer(queue: EvidenceQueue) -> None:
                 "(evidence_items_failed_total=%d)",
                 item.correlation_id, item.version, item.state, item.tenant_id,
                 EVIDENCE_ITEMS_FAILED + 1)
-        queue.note_written(item, time.monotonic())
-        queue.done()
-        if ok:
-            EVIDENCE_ITEMS_MATERIALIZED += 1
+        if batcher is not None:
+            _ev_finished(item, ok)
+            queue.done()
         else:
-            EVIDENCE_ITEMS_FAILED += 1
+            queue.note_written(item, time.monotonic())
+            queue.done()
+            if ok:
+                EVIDENCE_ITEMS_MATERIALIZED += 1
+            else:
+                EVIDENCE_ITEMS_FAILED += 1
         # The consumer is a task on the SAME loop as the reconciliation pass; a
         # queue that never yields would starve it exactly as an unyielding
         # cohort does.
@@ -4264,6 +4773,14 @@ async def evidence_drain(timeout: float | None = None) -> int:
         if deadline is not None and time.monotonic() >= deadline:
             break
         await asyncio.sleep(0.002)
+    # P2 step 4c: an idle queue is not a WRITTEN queue — a partial block is
+    # still buffered, waiting for its age trigger. Flush here so "drained" keeps
+    # meaning "the rows are in ClickHouse", which is what every caller (the
+    # shutdown path, engine_cycle's one-shot finally, every test that asserts on
+    # Evidence rows) already reads it as.
+    batcher = _EVIDENCE_BATCHER
+    if batcher is not None:
+        await batcher.flush_all()
     return queue.qsize()
 
 
@@ -4274,7 +4791,9 @@ async def _evidence_stop() -> None:
     (§10) — one INFO line per item plus corr_evidence_items_total{outcome=lost}.
     """
     global _EVIDENCE_QUEUE, _EVIDENCE_TASK, _EVIDENCE_LOOP, EVIDENCE_ITEMS_LOST
+    global _EVIDENCE_BATCHER, _EVIDENCE_FLUSHER
     queue, task = _EVIDENCE_QUEUE, _EVIDENCE_TASK
+    batcher, flusher = _EVIDENCE_BATCHER, _EVIDENCE_FLUSHER
     if queue is None:
         return
     left = await evidence_drain(CORR_EVIDENCE_DRAIN_ON_STOP_S)
@@ -4288,6 +4807,16 @@ async def _evidence_stop() -> None:
         task.cancel()
         with contextlib.suppress(asyncio.CancelledError, Exception):
             await task
+    if batcher is not None:
+        # The cancelled consumer may have left rows in a partial block. They are
+        # already built and already counted against their items; leaving them
+        # buffered would be the one silent loss in this design.
+        with contextlib.suppress(Exception):
+            await batcher.flush_all()
+    if flusher is not None:
+        flusher.cancel()
+        with contextlib.suppress(asyncio.CancelledError, Exception):
+            await flusher
     for item in queue.pending():
         EVIDENCE_ITEMS_LOST += 1
         log.info("evidence LOST at shutdown corr_id=%s version=%d state=%s "
@@ -4297,6 +4826,9 @@ async def _evidence_stop() -> None:
     _EVIDENCE_QUEUE = None
     _EVIDENCE_TASK = None
     _EVIDENCE_LOOP = None
+    _EVIDENCE_BATCHER = None
+    _EVIDENCE_FLUSHER = None
+    _EVIDENCE_PENDING.clear()
 
 
 def evidence_stats() -> dict[str, object]:
@@ -4317,9 +4849,23 @@ def evidence_stats() -> dict[str, object]:
         "failed_total": EVIDENCE_ITEMS_FAILED,
         "lost_total": EVIDENCE_ITEMS_LOST,
         "drain_on_stop_s": CORR_EVIDENCE_DRAIN_ON_STOP_S,
+        # P2 step 4c. Zeros (never absent keys) when batching is off, for the
+        # same reason as everything above it: a key that appears and disappears
+        # with a flag reads as a zero on the day it matters.
+        "batch_enabled": CORR_EVIDENCE_BATCH,
+        "batch_items_max": CORR_EVIDENCE_BATCH_ITEMS,
+        "batch_bytes_max": CORR_EVIDENCE_BATCH_BYTES,
+        "batch_age_max_ms": CORR_EVIDENCE_BATCH_MS,
+        "decision_batch_enabled": CORR_DECISION_BATCH,
+        "flushes_total": {}, "rows_flushed_total": {}, "flushes": 0,
+        "rows_per_flush_mean": 0.0, "batch_age_seconds_max": 0.0,
+        "buffered_rows": 0, "buffered_tables": 0, "blocks_failed_total": 0,
+        "pending_items": len(_EVIDENCE_PENDING),
     }
     if queue is not None:
         base.update(queue.stats())
+    if _EVIDENCE_BATCHER is not None:
+        base.update(_EVIDENCE_BATCHER.stats())
     return base
 
 
@@ -8292,6 +8838,10 @@ def _metrics_text() -> str:
     # P2 step 4: read the Evidence-plane figures ONCE — the queue's oldest-age
     # scan is O(depth) and must not be paid per exposition line.
     _ev = evidence_stats()
+    # Narrowed once, here, rather than at the exposition line: `evidence_stats`
+    # is a dict[str, object] by design (it carries bools, floats and this map).
+    _ev_flushes = _ev["flushes_total"]
+    _ev_flushes = _ev_flushes if isinstance(_ev_flushes, dict) else {}
     # Same rule for the level-1 memo: one call, several series. `stats()` walks
     # the LRU for its byte figure, so paying it per line would make /metrics
     # O(series x entries).
@@ -8718,6 +9268,28 @@ def _metrics_text() -> str:
         f'corr_evidence_items_total{{outcome="materialized"}} {_ev["materialized_total"]}',
         f'corr_evidence_items_total{{outcome="failed"}} {_ev["failed_total"]}',
         f'corr_evidence_items_total{{outcome="lost"}} {_ev["lost_total"]}',
+        # ── P2 step 4c: cross-version batching. The number to read is
+        # rows_per_flush: it IS the part-count divisor, and the whole point of
+        # the step is that ClickHouse receives ~11x fewer level-0 parts for the
+        # same rows. batch_age_seconds_max says which trigger is actually
+        # binding — at or near CORR_EVIDENCE_BATCH_MS means the time clause
+        # (a trickle), well under it means size (a burst).
+        "# HELP corr_evidence_flushes_total Batched INSERT blocks issued, per table.",
+        "# TYPE corr_evidence_flushes_total counter",
+        *(f'corr_evidence_flushes_total{{table="{_t}"}} {_n}'
+          for _t, _n in sorted(_ev_flushes.items())),
+        "# HELP corr_evidence_rows_per_flush Mean rows per batched INSERT block.",
+        "# TYPE corr_evidence_rows_per_flush gauge",
+        f"corr_evidence_rows_per_flush {_ev['rows_per_flush_mean']}",
+        "# HELP corr_evidence_batch_age_seconds_max Oldest row age at flush, worst seen.",
+        "# TYPE corr_evidence_batch_age_seconds_max gauge",
+        f"corr_evidence_batch_age_seconds_max {_ev['batch_age_seconds_max']}",
+        "# HELP corr_evidence_batch_buffered_rows Rows sitting in a partial block right now.",
+        "# TYPE corr_evidence_batch_buffered_rows gauge",
+        f"corr_evidence_batch_buffered_rows {_ev['buffered_rows']}",
+        "# HELP corr_evidence_batch_blocks_failed_total Batched blocks whose INSERT did not commit.",
+        "# TYPE corr_evidence_batch_blocks_failed_total counter",
+        f"corr_evidence_batch_blocks_failed_total {_ev['blocks_failed_total']}",
         # P2 step 1: sweeps that ended on the epoch wall-clock budget rather
         # than on the cohort bound or an empty epoch. Read it against
         # corr_engine_epoch_seconds_max: 0 exits with a large max means the
