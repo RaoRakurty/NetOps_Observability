@@ -300,3 +300,12 @@ scoring contract) → P4 write-up.
 - NEXT: residuals land → rebuild/redeploy correlation → clean `t-storm-2.5k`
   (stability + memflat PASS expected) → P3 build (spec §7 steps 1–4) → A/B on
   t-storm-10/25 → P4 write-up.
+
+## UPDATE (2026-08-29 19:35) — residuals landed + deployed; clean storm re-run; P3 build started
+- Correlation image = HEAD (675966cd + batcher-lock/GC residuals). Run
+  `storm-s02-08291929` (t-storm-2.5k) in flight — expect stability + memflat PASS.
+- P3 steps 1–2 (aggregation.py, ingest wiring behind the flag, default OFF)
+  in build; steps 3–4 (archive/replay representation, equivalence suite,
+  live A/B on t-storm-10/25) follow.
+- Twin scorer: unbounded per-story SELECTs (329 in an hour) — being bounded;
+  storm-s01 accuracy not yet scored.
