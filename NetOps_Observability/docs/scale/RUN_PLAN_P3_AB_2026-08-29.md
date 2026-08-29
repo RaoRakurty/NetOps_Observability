@@ -215,37 +215,32 @@ print(uuid.uuid5(NS,'corrobj|<tenant>|storm-noise'))"
 and substitute it, the leg's burst start/end and its convergence time:
 
 ```sql
-WITH leg AS (
+-- Clean-scope TTUR (the exact query used for every verdict since P1; placeholders in <>):
+-- window_start is the incident's own EVENT time (first symptom); created_at the engine's persist time.
+WITH inc AS (
   SELECT correlation_id,
-         min(window_start)                     AS t0,
-         min(created_at)                       AS t1,
-         max(created_at)                       AS tlast,
-         count()                               AS versions,
-         max(signal_count)                     AS sigs,
-         argMax(verdict_tier, version)         AS final_tier,
-         argMax(state, version)                AS final_state,
-         argMax(top_hypothesis, version)       AS final_hyp
+         min(window_start) t0, min(created_at) t1, max(created_at) tlast, count() nv,
+         argMax(state, (created_at, version)) fstate,
+         argMax(verdict_tier, (created_at, version)) ftier,
+         max(signal_count) ms
   FROM netops.corr_objects
-  WHERE created_at >= toDateTime64('<BURST_START>', 3)
-    AND created_at <= toDateTime64('<CONVERGED>', 3)
+  WHERE created_at < '<CONVERGED>'
     AND correlation_id != toUUID('<AGG_CID>')
   GROUP BY correlation_id
-  HAVING t0 >= toDateTime64('<BURST_START>', 3)
-     AND t0 <= toDateTime64('<BURST_END>', 3)
-)
-SELECT count()                                            AS incidents,
-       sum(versions)                                      AS versions,
-       round(sum(versions) / count(), 2)                  AS v_per_inc,
-       sum(sigs)                                          AS sum_signals,
-       round(quantile(0.50)(dateDiff('second', t0, t1)))  AS t1_p50,
-       round(quantile(0.95)(dateDiff('second', t0, t1)))  AS t1_p95,
-       round(quantile(0.99)(dateDiff('second', t0, t1)))  AS t1_p99,
-       max(dateDiff('second', t0, t1))                    AS t1_max,
-       round(quantile(0.95)(dateDiff('second', t0, tlast))) AS tlast_p95,
-       countIf(final_state = 'merged')                    AS merged,
-       countIf(final_hyp = 'undetermined')                AS undetermined,
-       countIf(final_tier = 'confirmed')                  AS confirmed
-FROM leg
+  HAVING t0 >= '<BURST_START>' AND t0 < '<BURST_END>')
+SELECT count() inc, sum(nv) versions, round(sum(nv)/count(),2) vpi, sum(ms) sigs,
+       round(quantile(0.5)(dateDiff('second',t0,t1)),0) t1p50,
+       round(quantile(0.95)(dateDiff('second',t0,t1)),0) t1p95,
+       round(quantile(0.99)(dateDiff('second',t0,t1)),0) t1p99,
+       max(dateDiff('second',t0,t1)) t1max,
+       round(quantile(0.95)(dateDiff('second',t0,tlast)),0) tlast95,
+       countIf(fstate='merged') merged, countIf(ftier='undetermined') undet,
+       countIf(ftier='confirmed') confirmed
+FROM inc
+SETTINGS tenant_scope='__all__'
+-- Validated 2026-08-29 against leg p2-s06 (BURST_START 14:25, BURST_END 14:46, CONVERGED 17:00):
+-- inc 13,528 · versions 49,654 (incl. closes after the verdict's tighter cutoff) · T1 p95 2,100 s
+-- (verdict doc: 2,105 s at a 16:xx cutoff) — reproduces.
 ```
 
 Issued read-only the way the tools do it:
