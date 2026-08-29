@@ -27,11 +27,29 @@
 #   # expect `CORR_AGGREGATION_PLANE=1` from BOTH containers (two lines).
 # And on each replica's own /metrics, `corr_agg_enabled 1` plus
 # `corr_agg_observed_total` ADVANCING between two samples once traffic flows.
-# The app port is mTLS-only under compose.tls.yml, so scrape the loop-independent
-# health sidecar (:8094, plaintext, container-local — tracker 174) from inside:
-#   docker exec "$c" python -c "import urllib.request;print(urllib.request.urlopen(\
-#     'http://127.0.0.1:8094/metrics',timeout=8).read().decode())" \
+# The app port is mTLS-only under compose.tls.yml, so scrape it the way the
+# harness and every collector do -- an mTLS client INSIDE the container, aimed at
+# that replica's OWN container ip:8443, still verifying the server against the
+# `correlation` SPIFFE name (the ip is the routing target, never a verification
+# bypass). Do NOT use the :8094 health sidecar for this: on the TLS deployment a
+# plaintext GET to it is reset (ECONNRESET on both replicas, 2026-08-29 22:43),
+# which reads as "arm unknown" and stops a wave for no reason.
+#   ip=$(docker inspect "$c" --format \
+#     '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}')
+#   docker exec "$c" python -c "import socket,ssl,sys
+#   ctx=ssl.create_default_context(cafile='/certs/ca.pem')
+#   ctx.load_cert_chain('/certs/svid/correlation.crt','/certs/svid/correlation.key')
+#   s=ctx.wrap_socket(socket.create_connection(('$ip',8443),timeout=8),
+#                     server_hostname='correlation')
+#   s.sendall(b'GET /metrics HTTP/1.1\r\nHost: correlation\r\nConnection: close\r\n\r\n')
+#   b=b''
+#   while True:
+#       d=s.recv(65536)
+#       if not d: break
+#       b+=d
+#   sys.stdout.write(b.split(b'\r\n\r\n',1)[1].decode())" \
 #     | grep -E '^corr_agg_(enabled|observed_total|suppressed_total)'
+# `scripts/scale-ab-driver.py` does exactly this, for both arms, on both replicas.
 # A flat `corr_agg_observed_total` under load means the plane is not on the
 # ingest path — stop the leg, do not report it as an ON arm.
 #

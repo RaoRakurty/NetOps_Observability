@@ -75,14 +75,26 @@ drv = _load_driver()
 CORR_IDS = ["c" * 64, "d" * 64]
 CH_ID = "e" * 64
 
-SIDECAR_METRICS = (
+# What /metrics returns on the MAIN mTLS port. There is no sidecar body here on
+# purpose: the driver reads the same endpoint for verification and collection.
+AGG_METRICS = (
     "# HELP corr_agg_enabled 1 when the Aggregation plane is collapsing repeats.\n"
     "# TYPE corr_agg_enabled gauge\n"
     "corr_agg_enabled {enabled}\n"
     "corr_agg_observed_total 12345\n"
     "corr_agg_suppressed_total 999\n"
 )
-APP_METRICS = SIDECAR_METRICS + "corr_engine_pending 0\ncorr_engine_cohorts_total 42\n"
+APP_METRICS = AGG_METRICS + "corr_engine_pending 0\ncorr_engine_cohorts_total 42\n"
+
+# The verbatim shape of the 2026-08-29 22:43 failure: a multi-line traceback
+# whose FIRST lines are frame noise and whose LAST line is the diagnosis.
+ECONNRESET_TRACEBACK = (
+    "Traceback (most recent call last):\n"
+    '  File "<string>", line 1, in <module>\n'
+    '  File "/usr/local/lib/python3.12/urllib/request.py", line 215, in urlopen\n'
+    "    return opener.open(url, data, timeout)\n"
+    "ConnectionResetError: [Errno 104] Connection reset by peer\n"
+)
 
 TTUR_TSV = ("inc\tversions\tvpi\tsigs\tt1p50\tt1p95\tt1p99\tt1max\ttlast95\t"
             "merged\tundet\tconfirmed\n"
@@ -135,6 +147,7 @@ class FakeHost:
         self.twin_rc = 0
         self.compose_ups: list[tuple[list[str], dict]] = []
         self.ttur_queries: list[str] = []
+        self.probes: list[str] = []
         self.mtls_fail = False
 
     def __call__(self, cmd, timeout, cwd=None, env=None):
@@ -187,10 +200,19 @@ class FakeHost:
         if cmd[3] == "python":
             probe = cmd[-1]
             enabled = 1 if self.arm == "on" else 0
-            if "8094" in probe:
-                return 0, SIDECAR_METRICS.format(enabled=enabled), ""
+            assert "8094" not in probe, (
+                "the :8094 health sidecar is NOT plain HTTP on the TLS "
+                "deployment — a plaintext GET is reset (ECONNRESET, 2026-08-29 "
+                "22:43). Nothing in the driver may probe it")
+            assert "/certs/svid/correlation.crt" in probe, (
+                "the metrics probe must present the correlation SVID")
+            assert "server_hostname='correlation'" in probe, (
+                "the container IP is the routing target, never a verification "
+                "bypass")
+            assert "8443" in probe
+            self.probes.append(probe)
             if self.mtls_fail:
-                return 1, "", "ssl handshake failed"
+                return 1, "", ECONNRESET_TRACEBACK
             return 0, APP_METRICS.format(enabled=enabled), ""
         raise AssertionError(f"unexpected docker exec: {cmd}")
 
@@ -351,8 +373,8 @@ def test_classify_arm(readings, expected):
 
 
 def test_prom_value_and_env_flag():
-    assert drv.prom_value(SIDECAR_METRICS.format(enabled=1), "corr_agg_enabled") == 1.0
-    assert drv.prom_value(SIDECAR_METRICS.format(enabled=0), "corr_agg_enabled") == 0.0
+    assert drv.prom_value(AGG_METRICS.format(enabled=1), "corr_agg_enabled") == 1.0
+    assert drv.prom_value(AGG_METRICS.format(enabled=0), "corr_agg_enabled") == 0.0
     assert drv.prom_value("# corr_agg_enabled 1\n", "corr_agg_enabled") is None
     assert drv.prom_value("corr_agg_enabled\n", "corr_agg_enabled") is None
     assert drv.env_flag("A=1\nCORR_AGGREGATION_PLANE=1\n",
@@ -397,7 +419,7 @@ def test_mixed_arm_aborts_and_never_redeploys(tmp_path):
         if cmd[2] == CORR_IDS[0] and cmd[3] == "env":
             return 0, "CORR_AGGREGATION_PLANE=1\n", ""
         if cmd[2] == CORR_IDS[0] and cmd[3] == "python":
-            return 0, SIDECAR_METRICS.format(enabled=1), ""
+            return 0, AGG_METRICS.format(enabled=1), ""
         return original(cmd)
 
     host._exec = half_flagged
@@ -778,33 +800,24 @@ def test_on_leg_switches_the_arm_once_then_runs(tmp_path):
     assert driver.state["legs"]["L3"]["collected"] is True
 
 
-def test_metrics_fall_back_to_the_sidecar_when_mtls_fails(tmp_path):
+def test_metrics_failure_stops_the_leg_with_the_real_diagnosis(tmp_path):
+    """No second transport to fall back to, and the message names the CAUSE.
+
+    There is no plaintext port to retry on (that assumption is what broke the
+    first L1 attempt), so an unreadable engine is a stop — and the operator must
+    read the exception, not two lines of frame noise per replica.
+    """
     host = FakeHost(arm="on")
     host.mtls_fail = True
     run_dir = tmp_path / "agg-10-on-08300030"
     run_dir.mkdir()
     driver = make_driver(tmp_path, host)
-    captured = driver.metrics_final(drv.leg_by_id("L3"), str(run_dir))
-    body = (run_dir / "metrics-final.txt").read_text(encoding="utf-8")
-    assert "FALLBACK" in body, "the source of a number is part of the evidence"
-    assert all(c["corr_agg_enabled"] == 1.0 for c in captured)
-
-
-def test_metrics_failure_on_both_ports_stops_the_leg(tmp_path):
-    host = FakeHost(arm="on")
-
-    def all_dead(cmd):
-        if cmd[3] == "python":
-            return 1, "", "no route to host"
-        return 0, "", ""
-
-    host._exec = all_dead
-    run_dir = tmp_path / "agg-10-on-08300030"
-    run_dir.mkdir()
-    driver = make_driver(tmp_path, host)
     with pytest.raises(drv.DriverAbort) as exc:
         driver.metrics_final(drv.leg_by_id("L3"), str(run_dir))
-    assert "either 8443 or 8094" in str(exc.value)
+    message = str(exc.value)
+    assert "ConnectionResetError: [Errno 104]" in message
+    assert "Traceback (most recent call last)" not in message
+    assert "8443" in message
 
 
 def test_a_harness_that_dies_without_a_verdict_stops_the_wave(tmp_path):
@@ -982,3 +995,84 @@ def test_only_real_harness_processes_count_as_busy(tmp_path):
     ]
     assert len(driver.harness_processes()) == 2, "both real invocations count"
     assert len(driver.leg_running("/var/tmp/scale-runs/storm-s03-08292148")) == 1
+
+
+# ---------------------------------------------------------------------------
+# the transport the arm is verified over (live defect, 2026-08-29 22:43)
+# ---------------------------------------------------------------------------
+def test_arm_verification_reads_the_main_mtls_endpoint_not_the_sidecar(tmp_path):
+    """L1 attempt 1 stopped with "UNVERIFIED arm" because the plan's :8094
+    health sidecar answers a plaintext GET with ECONNRESET on this TLS
+    deployment. Verification must use the transport the harness and every
+    collector already use: an in-container mTLS client to the replica's OWN
+    ip:8443, still verifying the `correlation` SPIFFE name.
+    """
+    host = FakeHost(arm="on")
+    driver = make_driver(tmp_path, host)
+    arm, readings = driver.read_arm()
+    assert arm == "on"
+    assert len(host.probes) == 2, "both replicas are probed, every time"
+    assert "172.18.0.9" in host.probes[0] and "172.18.0.10" in host.probes[1], (
+        "each replica is read on its OWN address, never through the round-robin "
+        "compose DNS name")
+    assert all("8443" in probe and "8094" not in probe for probe in host.probes)
+    # and the env half of the check is still made, on both replicas
+    assert sum(1 for cmd in host.calls if cmd[:2] == ["docker", "exec"]
+               and cmd[3] == "env") == 2
+    assert all(r["metric"] == 1.0 and r["env"] == "1" for r in readings)
+
+
+def test_a_probe_failure_reports_the_exception_not_the_frame_noise(tmp_path):
+    """The first attempt printed "Traceback (most recent call last): … return"
+    twice per replica and never named ECONNRESET. The diagnosis is the last
+    line of the traceback; that is what has to reach the log."""
+    host = FakeHost(arm="off")
+    host.mtls_fail = True
+    driver = make_driver(tmp_path, host)
+    arm, readings = driver.read_arm()
+    assert arm == "unknown", "an unreadable replica is never assumed to match"
+    described = driver.describe_readings(readings)
+    assert "ConnectionResetError: [Errno 104] Connection reset by peer" in described
+    assert "Traceback (most recent call last)" not in described
+    assert "urllib/request.py" not in described
+
+
+@pytest.mark.parametrize("text,expected", [
+    (ECONNRESET_TRACEBACK,
+     "ConnectionResetError: [Errno 104] Connection reset by peer "
+     "[+4 earlier traceback line(s)]"),
+    ("one line only", "one line only"),
+    ("", "(no stderr)"),
+    ("   \n  \n", "(no stderr)"),
+])
+def test_last_error_line(text, expected):
+    assert drv.last_error_line(text) == expected
+
+
+def test_last_error_line_is_bounded():
+    assert len(drv.last_error_line("x" * 5000)) == 220
+
+
+def test_a_previous_stops_diagnosis_is_cleared_when_the_wave_restarts(tmp_path):
+    """`--from L1` after a stop must not leave the old stop_reason standing in
+    the state file — the next reader would take a fixed condition for a live
+    one."""
+    host = FakeHost(arm="off")
+    state = {"schema": drv.STATE_SCHEMA, "created": "x", "legs": {},
+             "stop_reason": "L1: ... sidecar :8094 probe failed",
+             "stopped_at": "2026-08-29T22:43:43Z",
+             "stack_state": "correlation redeployed to arm OFF (unverified)"}
+    (tmp_path / "ab-state.json").write_text(json.dumps(state), encoding="utf-8")
+    launcher = FakeLauncher(host)
+    runids = iter(f"0830010{i}abcd" for i in range(1, 9))
+
+    def launch(argv, log_path, cwd):
+        launcher.runid = next(runids)
+        return launcher(argv, log_path, cwd)
+
+    driver = make_driver(tmp_path, host, launcher=launch, from_leg="L1",
+                         sleeper=lambda _s: setattr(host, "procs", []))
+    driver.state_path = str(tmp_path / "ab-state.json")
+    assert driver.run() == 0
+    final = json.loads((tmp_path / "ab-state.json").read_text(encoding="utf-8"))
+    assert "stop_reason" not in final and "stack_state" not in final

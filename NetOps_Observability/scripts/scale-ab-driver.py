@@ -42,10 +42,17 @@ PER LEG, IN ORDER (every step is a gate; the first failure stops the driver):
   5. replicas        exactly --replicas correlation containers, running and
                      (where a healthcheck exists) healthy.
   6. arm             both replicas' `env` and both replicas' `corr_agg_enabled`
-                     on the :8094 health sidecar must agree with the leg's arm.
-                     A half-flagged pair (MIXED ARM) aborts the driver: no
-                     metric in the run output reveals it, so the leg would be
-                     silently unusable.
+                     must agree with the leg's arm. `corr_agg_enabled` is read
+                     from the MAIN /metrics endpoint over mTLS — a `docker exec`
+                     python client to the replica's OWN container IP on 8443
+                     with /certs/svid/correlation.{crt,key}, verified against the
+                     `correlation` SPIFFE name — the same way the harness and
+                     every collector read this stack. (The :8094 health sidecar
+                     is NOT plain HTTP on this deployment: a plaintext GET is
+                     reset, ECONNRESET, 2026-08-29 22:43 — so the driver does not
+                     use it anywhere.) A half-flagged pair (MIXED ARM) aborts the
+                     driver: no metric in the run output reveals it, so the leg
+                     would be silently unusable.
   7. launch          `setsid nohup python3 scripts/scale-miniladder.py …`,
                      detached, output to <run-dir>/launcher.log. The driver then
                      waits for the VERDICT line AND for the harness process to
@@ -335,6 +342,25 @@ def save_state(path: str, state: dict) -> None:
         raise DriverAbort(f"cannot write state file {path} ({exc}) — a wave "
                           f"whose progress cannot be recorded is not resumable, "
                           f"so it does not start") from exc
+
+
+def last_error_line(text: str, limit: int = 220) -> str:
+    """The LAST non-empty line of a captured stderr, bounded.
+
+    A `docker exec python -c` failure returns a multi-line traceback whose FIRST
+    lines are frame noise ("Traceback (most recent call last):", the urllib
+    frame) and whose LAST line is the actual condition
+    ("ConnectionResetError: [Errno 104] Connection reset by peer"). Truncating
+    the head printed the noise twice per replica and hid the diagnosis
+    (2026-08-29 22:43). Report the diagnosis.
+    """
+    lines = [ln.strip() for ln in (text or "").splitlines() if ln.strip()]
+    if not lines:
+        return "(no stderr)"
+    last = lines[-1]
+    if len(lines) > 1:
+        last = f"{last} [+{len(lines) - 1} earlier traceback line(s)]"
+    return last[:limit]
 
 
 def prom_value(text: str, name: str) -> float | None:
@@ -753,7 +779,7 @@ class Driver:
                 DOCKER_TIMEOUT)
             if rc != 0 or "|" not in insp:
                 raise DriverAbort(f"docker inspect {cid[:12]} failed (rc={rc}): "
-                                  f"{err.strip()[:200]}")
+                                  f"{last_error_line(err)}")
             name, running, health, started, ip = (insp.strip().split("|") + [""] * 5)[:5]
             out.append({"container": cid, "short": cid[:12], "name": name.lstrip("/"),
                         "running": running == "true", "health": health,
@@ -780,14 +806,17 @@ class Driver:
         return reps
 
     # -- the arm ----------------------------------------------------------
-    SIDECAR_PROBE = (
-        "import urllib.request;"
-        "print(urllib.request.urlopen("
-        "'http://127.0.0.1:8094/metrics',timeout=8).read().decode())")
-
     def read_arm(self) -> tuple[str, list[dict]]:
         """(arm, per-replica readings). Reads BOTH the env and the engine's own
-        `corr_agg_enabled`, on EVERY replica (plan section 3.3)."""
+        `corr_agg_enabled`, on EVERY replica (plan section 3.3).
+
+        The metric comes from the MAIN mTLS endpoint (:8443) on the replica's own
+        address, exactly as `metrics_final()` collects it. The plan suggested the
+        :8094 health sidecar; on this deployment that port is not plain HTTP and
+        a plaintext GET is reset (ECONNRESET on both replicas, 2026-08-29 22:43),
+        which read as "arm UNKNOWN" and stopped the wave. One probe, one
+        transport, used for both verification and collection.
+        """
         readings = []
         for rep in self.replicas():
             reading = {"container": rep["short"], "name": rep["name"],
@@ -796,21 +825,22 @@ class Driver:
             rc, out, err = self.runner(
                 ["docker", "exec", rep["container"], "env"], DOCKER_TIMEOUT)
             if rc != 0:
-                reading["error"] = f"env failed (rc={rc}): {err.strip()[:160]}"
+                reading["error"] = f"env failed (rc={rc}): {last_error_line(err)}"
                 readings.append(reading)
                 continue
             reading["env"] = env_flag(out, "CORR_AGGREGATION_PLANE")
             rc, out, err = self.runner(
                 ["docker", "exec", rep["container"], "python", "-c",
-                 self.SIDECAR_PROBE], METRICS_TIMEOUT)
+                 self.METRICS_PROBE.format(ip=rep["ip"])], METRICS_TIMEOUT)
             if rc != 0:
-                reading["error"] = (f"sidecar :8094 probe failed (rc={rc}): "
-                                    f"{err.strip()[:160]}")
+                reading["error"] = (f"mTLS /metrics probe to {rep['ip']}:8443 "
+                                    f"failed (rc={rc}): {last_error_line(err)}")
                 readings.append(reading)
                 continue
             reading["metric"] = prom_value(out, "corr_agg_enabled")
             if reading["metric"] is None:
-                reading["error"] = "no corr_agg_enabled sample in :8094/metrics"
+                reading["error"] = (f"no corr_agg_enabled sample in "
+                                    f"{rep['ip']}:8443/metrics")
             readings.append(reading)
         return classify_arm(readings), readings
 
@@ -1073,11 +1103,12 @@ class Driver:
     def metrics_final(self, leg: Leg, run_dir: str) -> list[dict]:
         """Per-replica /metrics at convergence, into <run-dir>/metrics-final.txt.
 
-        Primary source is the replica's OWN address on the mTLS app port (8443,
+        The source is the replica's OWN address on the mTLS app port (8443),
         verified against the `correlation` SPIFFE name — the IP is the routing
-        target, never a verification bypass). If that fails the loop-independent
-        health sidecar (:8094) is used INSTEAD and the file says so on the
-        section header: which port a number came from is part of the evidence.
+        target, never a verification bypass. There is no second transport to
+        fall back to: :8094 is not plain HTTP on this deployment (ECONNRESET,
+        2026-08-29), and a leg whose engine evidence cannot be read is a leg
+        without evidence, which is a stop, not a degraded pass.
         """
         reps = self.replicas()
         chunks = [(f"# metrics-final for {leg.id} ({leg.profile}, arm "
@@ -1090,16 +1121,9 @@ class Driver:
                 METRICS_TIMEOUT)
             source = f"mtls https://{rep['ip']}:8443/metrics"
             if rc != 0:
-                warn(f"{leg.id}: mTLS /metrics on {rep['name']} failed (rc={rc}): "
-                     f"{err.strip()[:200]} — falling back to the :8094 sidecar")
-                rc, body, err = self.runner(
-                    ["docker", "exec", rep["container"], "python", "-c",
-                     self.SIDECAR_PROBE], METRICS_TIMEOUT)
-                source = "health sidecar http://127.0.0.1:8094/metrics (FALLBACK)"
-            if rc != 0:
                 raise DriverAbort(
-                    f"{leg.id}: could not scrape /metrics from {rep['name']} on "
-                    f"either 8443 or 8094 (rc={rc}): {err.strip()[:250]} — the "
+                    f"{leg.id}: could not scrape /metrics from {rep['name']} at "
+                    f"{rep['ip']}:8443 (rc={rc}): {last_error_line(err)} — the "
                     f"leg's engine evidence would be missing")
             chunks.append(
                 f"\n# ==== replica {rep['name']} ({rep['short']}) ip {rep['ip']} "
@@ -1245,6 +1269,9 @@ class Driver:
         self.state = load_state(self.state_path)
         self.state.setdefault("plan", "docs/scale/RUN_PLAN_P3_AB_2026-08-29.md")
         self.state.setdefault("created", utcnow())
+        for stale in ("stop_reason", "stopped_at", "stack_state"):
+            # A previous stop's diagnosis must never be mistaken for this run's.
+            self.state.pop(stale, None)
         todo = legs_to_run(self.state, self.args.from_leg)
         if not todo:
             log("every leg is complete and collected — nothing to do")
@@ -1314,7 +1341,8 @@ class Driver:
                 print(f"                 [cwd {COMPOSE_DIR}, GIT_SHA exported]")
                 arm = leg.arm
             print("       verify  : CORR_AGGREGATION_PLANE + corr_agg_enabled == "
-                  f"{1 if leg.arm == 'on' else 0} on BOTH replicas (:8094)")
+                  f"{1 if leg.arm == 'on' else 0} on BOTH replicas "
+                  f"(mTLS /metrics on each replica's own ip:8443)")
             residue = f"{self.args.python} {HARNESS} --cleanup-only mlx-"
             print(f"       residue : {residue}")
             launch = " ".join(self.harness_argv(leg, os.path.join(
