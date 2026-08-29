@@ -174,5 +174,36 @@
          from 13,312 MiB to 512 MiB. -->
     <uncompressed_cache_size>0</uncompressed_cache_size>
 
+    <!-- ===================================================================
+         SERVER-WIDE MEMORY PROFILER (P2/s06,
+         docs/scale/P2_CLICKHOUSE_PEAK_S06_2026-08-29.md section 0 and 6(d)).
+
+         Both values below are the ClickHouse 24.8 stock config.xml values.
+         They are pinned here, not changed, because the s06 investigation found
+         them "set" while producing NOTHING: system.trace_log did not exist, so
+         the profiler had no sink and ~2.4-2.9 GiB of the 4,406 MiB peak had to
+         be attributed by arithmetic instead of by a stack trace. trace_log is
+         now enabled with a 1-day TTL in system-logs.xml; these two settings are
+         the other half of that contract and must not drift silently.
+
+         total_memory_profiler_step = 4 MiB — MemoryTracker::allocImpl sends a
+         stack trace (trace_type = 'Memory', empty query_id) every time the
+         GLOBAL tracker grows past the next 4 MiB step, background merge threads
+         included. Cost is bounded BY CONSTRUCTION: one row per 4 MiB of growth,
+         so s06's 96 -> 3,895 MiB ramp is ~950 rows. This is what names the
+         allocator behind a merge-memory transient.
+
+         total_memory_tracker_sample_probability = 0 — DELIBERATELY OFF. Unlike
+         the step profiler this is a probability per allocation/free
+         (trace_type = 'MemorySample'), i.e. its row count scales with
+         allocation churn, not with memory growth: unbounded in principle. The
+         step profiler already answers the question. Raise it (and the
+         per-profile memory_profiler_sample_probability, users.d) to ~0.01 for a
+         single diagnostic run if a per-callsite histogram is needed, then put
+         it back.
+         =================================================================== -->
+    <total_memory_profiler_step>4194304</total_memory_profiler_step>
+    <total_memory_tracker_sample_probability>0</total_memory_tracker_sample_probability>
+
     <max_concurrent_queries from_env="CH_MAX_CONCURRENT_QUERIES"/>
 </clickhouse>

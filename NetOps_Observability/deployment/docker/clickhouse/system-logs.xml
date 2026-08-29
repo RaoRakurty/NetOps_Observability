@@ -8,15 +8,18 @@
     * DISABLED  — logs that only matter during a deep server-side investigation.
       Re-enable one temporarily by deleting its <remove> line here and
       `docker compose restart clickhouse`; it starts logging again immediately.
-    * KEPT+TTL  — query_log (slow-query debugging, 7d), metric_log (ad-hoc
-      perf history, 3d) and part_log (merge/part accounting, 3d).
-      asynchronous_metric_log is disabled because the same gauges are already
-      exported on :9363 (prometheus.xml) into the stack's own
-      VictoriaMetrics/Grafana self-monitoring.
+    * KEPT+TTL  — query_log (slow-query debugging, 7d), error_log (the only
+      record of background-thread errors, 7d), metric_log (ad-hoc perf
+      history, 3d), part_log (merge/part accounting, 3d),
+      asynchronous_metric_log (RSS / jemalloc / cache history, 3d) and
+      trace_log (memory profiler sink, 1d).
 
-  EVERY kept log carries a bounded <ttl>. A system log without one is the #96a
-  regression (5.84 GiB of self-logging vs 453 MiB of data); the contract test
-  tests/test_clickhouse_merge_budget.py fails if a kept log loses its TTL.
+  EVERY kept log carries a bounded <ttl> AND a merge-safe <settings> block. A
+  system log without a TTL is the #96a regression (5.84 GiB of self-logging vs
+  453 MiB of data); a system log without the merge settings is the P2/s06
+  regression documented below. The contract tests
+  tests/test_clickhouse_merge_budget.py and
+  tests/test_clickhouse_system_log_merges.py fail if either is lost.
 
   part_log RE-ENABLED 2026-08-29 (docs/scale/P2_CLICKHOUSE_MEMFLAT_2026-08-29.md
   section 1). The P2 merge-storm investigation had to RECONSTRUCT the merge
@@ -29,36 +32,282 @@
   Cost control: 3-day TTL, and the merge volume it records is exactly what the
   new budget bounds — at the pre-fix rate that is ~1.3M small rows/day.
 
-  NOTE: the <ttl> applies when the table is CREATED. On an existing deployment,
-  drop the old tables once after restart (they are recreated on next flush):
+  ==========================================================================
+  P2/s06 — WHY EVERY KEPT LOG NOW CARRIES <settings>
+  (docs/scale/P2_CLICKHOUSE_PEAK_S06_2026-08-29.md)
+
+  MEASURED, 14:35-14:50 on 2026-08-29: `system.metric_log` (997 columns,
+  1,015 B/row, enabled the same day with the 3-day TTL below) produced 13
+  one-second RSS transients up to 4,406 MiB = 107 % of max_server_memory_usage,
+  and 17 MEMORY_LIMIT_EXCEEDED refusals of unrelated inserts, on a ~46 s
+  cadence that matches `ProfileEvent_MergedColumns = 997` exactly — the
+  metric_log merge completing. Its own merges are INVISIBLE in part_log
+  (see "part_log cannot see this" below), which is why the incident first
+  read as a contradiction.
+
+  THE MECHANISM (verified against the ClickHouse v24.8.14.39-lts source, not
+  inferred):
+
+    * MergeTreeData::choosePartFormat  (MergeTreeData.cpp)
+        Compact  iff  bytes_uncompressed < min_bytes_for_wide_part
+                  OR  rows_count        < min_rows_for_wide_part
+      Stock: 10,485,760 B / 0 rows  ->  Wide above ~10,330 metric_log rows.
+    * MergeTask::chooseMergeAlgorithm  (MergeTask.cpp:1304)
+        Horizontal unless the OUTPUT part is Wide AND
+          rows    >= vertical_merge_algorithm_min_rows_to_activate    (stock 16*8192 = 131,072)
+          bytes   >= vertical_merge_algorithm_min_bytes_to_activate   (stock 0)
+          non-PK cols >= vertical_merge_algorithm_min_columns_to_activate (stock 11)
+      A Horizontal merge opens EVERY column stream at once.
+    * MergeTreeDataPartWriterOnDisk::Stream — one Wide column stream holds
+      2 x max_compress_block_size (plain file buffer + compressor buffer)
+      + ~68 KiB of mark buffers. At the stock 1 MiB block size that is
+      997 x (2 MiB + 68 KiB) ~= 2.06 GiB of writer buffers for ONE merge,
+      plus the read side per source part.
+    * MergeTreeDataPartWriterCompact — a Compact part writes ONE shared
+      plain file with one CompressedStream PER DISTINCT CODEC
+      (`streams_by_codec`), i.e. ~1 stream for a table whose columns all use
+      the default codec. 997 buffers become 1.
+
+  So the danger band is exactly {output is Wide} AND {merge is Horizontal}:
+  between ~10,330 rows (Wide) and 131,072 rows (Vertical activates). The live
+  table was measured INSIDE it — Wide, 13,693 rows, 13.31 MiB uncompressed.
+
+  HOW THE SETTINGS BELOW EMPTY THAT BAND (metric_log, 997 columns):
+
+    min_rows_for_wide_part  = 100,000,000
+    min_bytes_for_wide_part = 1,073,741,824 (1 GiB)
+        Wide now requires 1e8 rows AND 1 GiB uncompressed. At
+        collect_interval_milliseconds = 1000 the table holds at most
+        3 d x 86,400 = 259,200 rows and 259,200 x 1,015 B = 250.9 MiB
+        uncompressed under the 3-day TTL.
+          rows  margin: 100,000,000 / 259,200      = 385.8x
+          bytes margin: 1,073,741,824 / 263,088,000 =   4.1x
+        Either threshold alone forces Compact (the test is OR), so the
+        guarantee is doubly redundant. Every metric_log part is Compact =>
+        ~1 write stream => the 997-stream merge cannot exist.
+
+    vertical_merge_algorithm_min_rows_to_activate    = 1
+    vertical_merge_algorithm_min_columns_to_activate = 1
+    vertical_merge_algorithm_min_bytes_to_activate   = 0
+    enable_vertical_merge_algorithm                  = 1
+    allow_vertical_merges_from_compact_to_wide_parts = 1
+        The second line of defence, and the one that covers a table that is
+        ALREADY Wide (see the migration note): with these, Wide implies
+        rows >= 1 and non-PK columns >= 1, which every merge satisfies, so
+        Wide implies Vertical. Formally the band {Wide AND Horizontal} is the
+        set of merges with rows >= min_rows_for_wide_part (1e8) and
+        rows < vertical_..._min_rows_to_activate (1) — empty, for every part
+        size, independent of the TTL horizon.
+        `allow_vertical_merges_from_compact_to_wide_parts` is pinned because
+        it gates the Compact->Wide transition merge (MergeTask.cpp:1323) —
+        the exact merge that produced the measured 13,693-row Wide part. Its
+        24.8 default is already 1; pinned so it stays a contract.
+
+    max_compress_block_size = 65536, min_compress_block_size = 32768
+        Bounds the ONE path the vertical settings cannot cover: a TTL merge.
+        `need_remove_expired_values` forces Horizontal unconditionally
+        (MergeTask.cpp:1314), before the part-type and row-count tests. If a
+        legacy Wide part is still present when its rows expire, that merge is
+        Wide+Horizontal no matter what. At 64 KiB blocks its writer holds
+        997 x (2 x 64 KiB + 68 KiB) ~= 191 MiB instead of ~2.06 GiB — an 11x
+        cut that keeps it inside the merge budget rather than 107 % of the
+        server cap. Applied to every kept log, since every kept log has a TTL.
+
+    max_bytes_to_merge_at_max_space_in_pool = 134217728 (128 MiB)
+        Same clause the netops tables carry (init.sql, 1-2 GiB): the stock
+        150 GB means no part is ever too big to re-merge. 128 MiB is ~2x the
+        largest 3-day on-disk corpus of any table here, so it never blocks a
+        TTL delete merge (a single part can never exceed the cap that built
+        it), and it retires an accumulated part from merge selection instead
+        of rewriting it forever.
+
+  NOT CHANGED, deliberately:
+    * collect_interval_milliseconds stays 1000. 60 s would cut metric_log's
+      row rate 60x, but scripts/scale-miniladder.py's ONLY ClickHouse memory
+      instrument is max()/countIf() over CurrentMetric_MemoryTracking and
+      CurrentMetric_MergesMutationsMemoryTracking in system.metric_log over
+      the run window, and the thing it must catch is a ONE-SECOND transient
+      (13 of them in a 15-minute window, medians identical to a clean run).
+      At 60 s cadence the chance of sampling a given 1 s transient is 1/60:
+      the expected catch over s06's window would be 13/60 ~= 0.2 of them. The
+      gate would go blind to precisely the failure it exists to detect. The
+      cost of 1 s (1,015 B/s = 83.6 MiB/day uncompressed) is now paid by
+      Compact merges, which is what made the cadence expensive in the first
+      place.
+    * flush_interval_milliseconds stays 7500 on every log. Raising it to 30 s
+      would cut initial part creation 4x, but the harness reads metric_log
+      immediately after the run window WITHOUT issuing SYSTEM FLUSH LOGS
+      (verified: no FLUSH LOGS anywhere in scripts/), so a longer interval
+      silently drops up to that much of the tail — including a transient in
+      the last seconds of the run. Pinned explicitly so the trade-off is a
+      visible decision.
+    * asynchronous_metrics_update_period_s stays 1 (server default, not set
+      here). It is the tick that hard-sets CurrentMetric_MemoryTracking to
+      process RSS (MemoryTracker::setRSS); slowing it degrades the same
+      1-second peak signal the harness reads.
+
+  part_log CANNOT see any of this, and no setting changes that.
+  Context::getPartLog (24.8 Interpreters/Context.cpp) returns {} when
+  `part_database == DatabaseCatalog::SYSTEM_DATABASE`, hard-coded, to avoid an
+  infinite logging cycle. Every merge of a system.* table is therefore absent
+  from system.part_log — including moving part_log to another database, since
+  the test is on the SOURCE table's database. Attribution for system-table
+  merges comes from metric_log's ProfileEvent_MergedColumns / _MergedRows and
+  from trace_log (below), never from part_log. This is stated so the next
+  investigation does not re-derive it as a "contradiction".
+  ==========================================================================
+
+  trace_log + asynchronous_metric_log ADDED 2026-08-29 (same brief, section 0
+  and 6(d)). Both were missing, which is why the 2.4-2.9 GiB was attributed by
+  arithmetic instead of measured:
+    * asynchronous_metric_log — the ONLY history of MemoryResident, jemalloc.*
+      (retained was 21.65 GiB live), MarkCacheBytes, PrimaryKeyBytes and
+      TotalPartsOfMergeTreeTables. Without it, candidate 2 (jemalloc dirty-page
+      retention) is unquantifiable. Volume: N async metrics x 1 Hz; on 24.8
+      with cgroup + jemalloc + per-disk gauges N is ~300-500, i.e. 26-43 M
+      rows/day at ~20 B/row uncompressed, which LowCardinality metric names
+      and a Float64 value compress ~15-30x -> roughly 40-110 MB/day on disk,
+      ~120-330 MB under the 3-day TTL. That is the largest of the kept logs
+      and it is bounded and deliberate.
+    * trace_log — the sink the memory profiler never had. The stock image
+      already sets total_memory_profiler_step = 4194304 (see memory.xml,
+      where it is now pinned), which emits a stack trace with
+      trace_type = 'Memory' every 4 MiB the GLOBAL tracker grows, from
+      background threads too. The s06 peak ramp (96 -> 3,895 MiB in 4 s) is
+      ~950 such rows: bounded, and it names the allocator directly:
+        SELECT arrayStringConcat(arrayMap(x -> demangle(addressToSymbol(x)),
+                                          trace), '\n') AS stack, sum(size)
+        FROM system.trace_log
+        WHERE event_time BETWEEN ... AND trace_type IN ('Memory','MemoryPeak')
+        GROUP BY stack ORDER BY 2 DESC LIMIT 20
+      total_memory_tracker_sample_probability stays 0 (memory.xml): it is a
+      per-allocation probability, i.e. unbounded in principle, and the free
+      step profiler above already answers the question. Turn it (and the
+      per-profile memory_profiler_sample_probability) to 0.01 for ONE
+      diagnostic run only, in users.d, if a stack-level histogram is needed.
+      VOLUME WARNING: creating trace_log also switches ON the per-thread query
+      profiler (ThreadStatus only starts it when a trace collector exists), at
+      query_profiler_real_time_period_ns / _cpu_time_period_ns = 1e9, i.e.
+      ~1 row/s per active query thread. That, not the memory profiler, is
+      trace_log's dominant writer under load. It is bounded by the 1-day TTL;
+      to cut it further set both periods to 0 in a users.d profile.
+
+  ==========================================================================
+  WHAT TAKES EFFECT ONLY AFTER A CLICKHOUSE RESTART
+
+  <ttl>, <settings> and <collect_interval_milliseconds> are all applied when
+  the table is CREATED — nothing here is hot-reloadable, and an ALTER TABLE
+  MODIFY SETTING on system.metric_log would NOT be enough either (see "Wide is
+  sticky" below). Concretely, on the next `docker compose up -d clickhouse`:
+
+    1. SystemLog::prepareTable (24.8) renders the CREATE statement it would
+       issue and compares it to the live one. Every kept log below now differs
+       (new SETTINGS clause), so ClickHouse RENAMES each existing table to
+       `<name>_0` (`_1`, ... if taken) and creates a fresh one. This is
+       automatic; no operator action is needed for NEW rows to land in a
+       correctly-configured table.
+    2. The renamed tables keep their disk and their OLD engine definition.
+       Drop them — this history is DISPOSABLE: metric_log is a 3-day rolling
+       perf trace, part_log a 3-day merge trace, and the s06 run they cover is
+       already written up in docs/scale/. Nothing downstream reads them.
+    3. DROPPING system.metric_log IS REQUIRED, not cosmetic. The merged part
+       type is min(all source part types, choosePartFormat(...)) and Wide sorts
+       BEFORE Compact in MergeTreeDataPartType (FutureMergedMutatedPart::assign),
+       so WIDE IS STICKY: the live table already holds a Wide part (measured:
+       Wide, 13,693 rows), and every merge that touches it produces another
+       Wide part no matter what min_rows_for_wide_part says. Left in place, the
+       old table would keep its old engine anyway (it was renamed), so this is
+       really about not paying for it twice — but if an operator instead tries
+       to fix the LIVE table with ALTER ... MODIFY SETTING, the sticky-Wide rule
+       is why that does not work until the existing Wide parts age out under
+       the TTL. Recreate, do not patch.
+
+  Run once, after the restart:
     docker exec netops-clickhouse-1 clickhouse-client -q "
-      DROP TABLE IF EXISTS system.text_log; DROP TABLE IF EXISTS system.trace_log;
-      DROP TABLE IF EXISTS system.processors_profile_log; DROP TABLE IF EXISTS system.part_log;
-      DROP TABLE IF EXISTS system.query_views_log; DROP TABLE IF EXISTS system.asynchronous_metric_log;
-      DROP TABLE IF EXISTS system.query_log; DROP TABLE IF EXISTS system.metric_log;"
-  (documented in docs/runbooks/storage-and-volume-operations.md)
+      DROP TABLE IF EXISTS system.text_log; DROP TABLE IF EXISTS system.trace_log_0;
+      DROP TABLE IF EXISTS system.processors_profile_log;
+      DROP TABLE IF EXISTS system.query_views_log;
+      DROP TABLE IF EXISTS system.metric_log_0; DROP TABLE IF EXISTS system.query_log_0;
+      DROP TABLE IF EXISTS system.part_log_0;   DROP TABLE IF EXISTS system.error_log_0;
+      DROP TABLE IF EXISTS system.asynchronous_metric_log_0;"
+  then confirm the new engines actually carry the settings:
+    docker exec netops-clickhouse-1 clickhouse-client -q "
+      SELECT name, engine_full FROM system.tables
+       WHERE database='system' AND name IN
+             ('metric_log','query_log','part_log','error_log',
+              'asynchronous_metric_log','trace_log') FORMAT Vertical"
+  A table whose engine_full has no SETTINGS clause was created BEFORE this
+  file was mounted; a table that is MISSING entirely means its <settings>
+  string failed to parse and the CREATE was rejected — check the server log,
+  because that failure is otherwise silent.
+  (The same one-time drop is documented in
+  docs/runbooks/storage-and-volume-operations.md.)
+  ==========================================================================
 -->
 <clickhouse>
     <text_log remove="1"/>
-    <trace_log remove="1"/>
     <processors_profile_log remove="1"/>
     <query_thread_log remove="1"/>
     <query_views_log remove="1"/>
-    <asynchronous_metric_log remove="1"/>
     <opentelemetry_span_log remove="1"/>
     <session_log remove="1"/>
 
     <query_log>
         <ttl>event_date + INTERVAL 7 DAY DELETE</ttl>
+        <flush_interval_milliseconds>7500</flush_interval_milliseconds>
+        <settings>enable_vertical_merge_algorithm = 1, vertical_merge_algorithm_min_rows_to_activate = 1, vertical_merge_algorithm_min_bytes_to_activate = 0, vertical_merge_algorithm_min_columns_to_activate = 1, allow_vertical_merges_from_compact_to_wide_parts = 1, max_compress_block_size = 65536, min_compress_block_size = 32768, max_bytes_to_merge_at_max_space_in_pool = 134217728</settings>
     </query_log>
+
+    <!-- The 997-column table the P2/s06 brief is about. It carries the two
+         wide-part thresholds ON TOP of the shared block: those are what make
+         "Wide" unreachable, and the shared vertical settings are what make
+         "Wide implies Vertical" if it ever were reached. -->
     <metric_log>
         <ttl>event_date + INTERVAL 3 DAY DELETE</ttl>
+        <collect_interval_milliseconds>1000</collect_interval_milliseconds>
+        <flush_interval_milliseconds>7500</flush_interval_milliseconds>
+        <settings>min_rows_for_wide_part = 100000000, min_bytes_for_wide_part = 1073741824, enable_vertical_merge_algorithm = 1, vertical_merge_algorithm_min_rows_to_activate = 1, vertical_merge_algorithm_min_bytes_to_activate = 0, vertical_merge_algorithm_min_columns_to_activate = 1, allow_vertical_merges_from_compact_to_wide_parts = 1, max_compress_block_size = 65536, min_compress_block_size = 32768, max_bytes_to_merge_at_max_space_in_pool = 134217728</settings>
     </metric_log>
+
+    <!-- ENABLED BY THE STOCK 24.8 IMAGE, and until now unbounded here: the
+         #96a TTL rule only ever covered the logs this file names. system.error_log
+         is the ONLY place 15 of the 17 s06 MEMORY_LIMIT_EXCEEDED events were
+         recorded (query_log saw 2; the rest were raised on background threads),
+         so it is the customer-visible fact the harness is meant to gate on
+         (brief section 6(e)) — it is kept deliberately, with the same 7-day
+         horizon as query_log, not left to drift. -->
+    <error_log>
+        <ttl>event_date + INTERVAL 7 DAY DELETE</ttl>
+        <collect_interval_milliseconds>1000</collect_interval_milliseconds>
+        <flush_interval_milliseconds>7500</flush_interval_milliseconds>
+        <settings>enable_vertical_merge_algorithm = 1, vertical_merge_algorithm_min_rows_to_activate = 1, vertical_merge_algorithm_min_bytes_to_activate = 0, vertical_merge_algorithm_min_columns_to_activate = 1, allow_vertical_merges_from_compact_to_wide_parts = 1, max_compress_block_size = 65536, min_compress_block_size = 32768, max_bytes_to_merge_at_max_space_in_pool = 134217728</settings>
+    </error_log>
+
     <!-- P2: merge/part accounting, the instrument the merge-budget change is
          measured with. Same 3-day horizon as metric_log — the two are read
          together (metric_log gives the memory curve, part_log gives the merge
-         that caused it). -->
+         that caused it, for every database EXCEPT system). -->
     <part_log>
         <ttl>event_date + INTERVAL 3 DAY DELETE</ttl>
+        <flush_interval_milliseconds>7500</flush_interval_milliseconds>
+        <settings>enable_vertical_merge_algorithm = 1, vertical_merge_algorithm_min_rows_to_activate = 1, vertical_merge_algorithm_min_bytes_to_activate = 0, vertical_merge_algorithm_min_columns_to_activate = 1, allow_vertical_merges_from_compact_to_wide_parts = 1, max_compress_block_size = 65536, min_compress_block_size = 32768, max_bytes_to_merge_at_max_space_in_pool = 134217728</settings>
     </part_log>
+
+    <!-- P2/s06 section 0: absent, so no MemoryResident / jemalloc.* /
+         MarkCacheBytes / TotalParts* history existed to decompose the peak
+         with. 3 days, same horizon as metric_log so the two join. -->
+    <asynchronous_metric_log>
+        <ttl>event_date + INTERVAL 3 DAY DELETE</ttl>
+        <flush_interval_milliseconds>7500</flush_interval_milliseconds>
+        <settings>enable_vertical_merge_algorithm = 1, vertical_merge_algorithm_min_rows_to_activate = 1, vertical_merge_algorithm_min_bytes_to_activate = 0, vertical_merge_algorithm_min_columns_to_activate = 1, allow_vertical_merges_from_compact_to_wide_parts = 1, max_compress_block_size = 65536, min_compress_block_size = 32768, max_bytes_to_merge_at_max_space_in_pool = 134217728</settings>
+    </asynchronous_metric_log>
+
+    <!-- P2/s06 section 6(d): the memory profiler's missing sink. 1 day — the
+         shortest horizon here, because the per-thread query profiler that
+         switches on with it is trace_log's dominant writer under load. -->
+    <trace_log>
+        <ttl>event_date + INTERVAL 1 DAY DELETE</ttl>
+        <flush_interval_milliseconds>7500</flush_interval_milliseconds>
+        <settings>enable_vertical_merge_algorithm = 1, vertical_merge_algorithm_min_rows_to_activate = 1, vertical_merge_algorithm_min_bytes_to_activate = 0, vertical_merge_algorithm_min_columns_to_activate = 1, allow_vertical_merges_from_compact_to_wide_parts = 1, max_compress_block_size = 65536, min_compress_block_size = 32768, max_bytes_to_merge_at_max_space_in_pool = 134217728</settings>
+    </trace_log>
 </clickhouse>

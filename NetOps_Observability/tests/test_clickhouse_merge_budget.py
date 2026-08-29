@@ -402,7 +402,17 @@ def test_no_overlay_resizes_clickhouse_without_resizing_its_budget():
 
 # ── system.part_log and the self-logging TTLs ────────────────────────────────
 
-KEPT_LOG_TTL_DAYS = {"query_log": 7, "metric_log": 3, "part_log": 3}
+KEPT_LOG_TTL_DAYS = {"query_log": 7, "metric_log": 3, "part_log": 3,
+                     # P2/s06: added 2026-08-29 as the missing memory
+                     # instruments (asynchronous_metric_log = RSS/jemalloc
+                     # history, trace_log = the memory profiler's sink).
+                     # Merge-safety of both is pinned in
+                     # tests/test_clickhouse_system_log_merges.py.
+                     "asynchronous_metric_log": 3, "trace_log": 1,
+                     # Enabled by the stock image and unbounded here until
+                     # 2026-08-29; it is where 15 of the 17 s06
+                     # MEMORY_LIMIT_EXCEEDED events were recorded.
+                     "error_log": 7}
 
 
 def test_part_log_is_enabled_again():
