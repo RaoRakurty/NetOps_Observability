@@ -189,11 +189,25 @@ def test_no_token_means_no_retry(monkeypatch):
 
 def test_every_dedup_safe_table_is_rca_critical_or_replacing():
     """The set is a claim about DDL. Keep it honest: nothing may be added
-    without the guarantee, and each entry is a real corr table."""
+    without the guarantee.
+
+    netops.findings joined on 2026-08-29 and is the one member that is NOT
+    RCA-critical: it carries the same non_replicated_deduplication_window (see
+    tests/test_clickhouse_corr_storage.py, which asserts the DDL) and every
+    insert carries finding_dedup_token, so the DDL claim holds — but a
+    non-committing findings write must not raise CHInsertRejected, because
+    nothing upstream can replay it. It is durably spooled instead
+    (CH_DLQ_ON_LOSS_TABLES); see test_findings_dedup_retry.py.
+    """
     assert main.CH_DEDUP_SAFE_TABLES <= (
-        main.CH_CRITICAL_TABLES | {"netops.corr_current"})
+        main.CH_CRITICAL_TABLES | {"netops.corr_current", "netops.findings"})
     assert "netops.corr_signals" not in main.CH_DEDUP_SAFE_TABLES
     assert "netops.corr_signals_archive" not in main.CH_DEDUP_SAFE_TABLES
+    # A dedup-safe table that is neither RCA-critical nor a ReplacingMergeTree
+    # has no upstream replay, so it MUST have a durable fallback.
+    for t in main.CH_DEDUP_SAFE_TABLES - main.CH_CRITICAL_TABLES - {"netops.corr_current"}:
+        assert t in main.CH_DLQ_ON_LOSS_TABLES, (
+            f"{t} can neither raise nor be replayed — it needs a DLQ fallback")
 
 
 # ── the outcome is reported truthfully ───────────────────────────────────────

@@ -261,20 +261,30 @@ def test_polls_continue_while_engine_digests_backlog(monkeypatch):
 
 def test_build_consumer_sets_membership_tuning(monkeypatch):
     """The explicit group-membership contract (arithmetic in main.py at
-    CORR_SESSION_TIMEOUT_MS): session 30s absorbs loop stalls the 10s aiokafka
-    default could not (the measured 17s stall ejected the member), and the
-    values must come from the env-tunable constants, not silent defaults."""
+    CORR_SESSION_TIMEOUT_MS): the values must come from the env-tunable
+    constants, not silent defaults.
+
+    RAISED to 60s/5s 2026-08-29 after run storm-s03 ejected the member on two
+    ~26 s stalls under the 30 s session — a member that is SLOW (a 26 s quiesce
+    pass is hundreds of closes of wall clock, not one 26 s block; see
+    `main.sync_record`) was being treated as a member that is dead. This changes
+    WHEN a slow member is ejected and nothing else: no byte, token, row,
+    version or ordering decision depends on the group contract."""
     FakeConsumer.created = []
     monkeypatch.setattr(main, "AIOKafkaConsumer", FakeConsumer)
     consumer = main.build_consumer()
     kw = consumer.kwargs
-    assert kw["session_timeout_ms"] == main.CORR_SESSION_TIMEOUT_MS == 30000
-    assert kw["heartbeat_interval_ms"] == main.CORR_HEARTBEAT_INTERVAL_MS == 3000
+    assert kw["session_timeout_ms"] == main.CORR_SESSION_TIMEOUT_MS == 60000
+    assert kw["heartbeat_interval_ms"] == main.CORR_HEARTBEAT_INTERVAL_MS == 5000
     assert kw["max_poll_interval_ms"] == main.CORR_MAX_POLL_INTERVAL_MS == 300000
     assert kw["rebalance_timeout_ms"] == main.CORR_REBALANCE_TIMEOUT_MS == 60000
     # heartbeat <= session/3 (Kafka's own guidance) — a misconfigured override
     # must fail the suite, not eject members in production.
     assert kw["heartbeat_interval_ms"] * 3 <= kw["session_timeout_ms"]
+    # …and the session must stay INSIDE the poll interval: a member the broker
+    # has already expired must not keep polling as if it were still in the group.
+    assert kw["session_timeout_ms"] < kw["max_poll_interval_ms"]
+
     # the listener wiring point the revoke hook depends on
     assert consumer._corr_listener is consumer.subscribed[1]
 

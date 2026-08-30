@@ -53,6 +53,19 @@ func ConvergeStmts(extra ...[]string) []string {
 		RowPolicyDDL("flows"),
 		RowPolicyDDL("findings"),
 		RowPolicyDDL("tunnels"),
+		// netops.findings must be safe to RE-SEND after an ambiguous insert
+		// outcome. The correlation service retries such an insert under a
+		// deterministic insert_deduplication_token (finding_dedup_token: source
+		// coordinate + row content hash); without a dedup window on the table
+		// the server has nothing to compare that token against and the retry
+		// appends a second row, so the write was counted LOST instead — the
+		// storm-s03 defect (2026-08-29: one row lost to a bare ReadError).
+		// init.sql carries this on the CREATE for fresh installs; MODIFY
+		// SETTING is metadata-only (no part rewrite) and idempotent, so boot
+		// convergence brings existing installs up to the same state. 1000
+		// easily covers an immediate retry. Must follow the CREATE — findings
+		// is created by init.sql, like the row policy directly above it.
+		"ALTER TABLE netops.findings MODIFY SETTING non_replicated_deduplication_window = 1000",
 	}
 	// Correlation Engine v2 (#67) frozen schema — tables + view + row policies
 	// (corr_schema.go). Same converge-on-boot contract as everything above.

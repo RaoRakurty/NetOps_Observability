@@ -982,6 +982,14 @@ def _aggregate_lag(_stack, snap, window, *, cost_gate: bool) -> float:
     _aggregate_stack(_stack, batch=True)
     _stack.setattr(main, "CORR_LOOP_LAG_SAMPLE_S", 0.02)
     _stack.setattr(main, "CORR_LOOP_LAG_WARN_MS", 500.0)
+    # The SIZER is the variable here, so the OTHER offload gate is held off in
+    # BOTH legs: `_snap_call`'s projected-milliseconds rule (CORR_SYNC_OFFLOAD,
+    # 2026-08-29) would also route the aggregate to the executor — it is the
+    # belt to this sizer's braces and has its own witness in
+    # test_sync_stretch_bound_p1.py. Left on, it would rescue the mutant and
+    # this test would silently stop proving anything about `_snap_cost`.
+    _stack.setattr(main, "CORR_SYNC_OFFLOAD", False)
+    _stack.setattr(main, "_SYNC_RATE", {})
     if not cost_gate:
         _stack.setattr(main, "_snap_cost", main._snap_elements)
     # The digests are memoized on the frozen snapshot, so a second leg over the
@@ -1053,6 +1061,10 @@ def test_B12b_the_aggregates_signal_sized_steps_go_to_the_executor(
     def leg(*, cost_gate: bool) -> list[str]:
         _aggregate_stack(_stack, batch=True)
         _stack.setattr(main, "_offload", spy)
+        # See `_aggregate_lag`: the projected-milliseconds gate is held off in
+        # both legs so the DISPATCH being asserted is the sizer's, not its.
+        _stack.setattr(main, "CORR_SYNC_OFFLOAD", False)
+        _stack.setattr(main, "_SYNC_RATE", {})
         _stack.setattr(main, "_snap_cost",
                        real_cost if cost_gate else main._snap_elements)
         for attr in ("_content_hash_c", "_material_hash_c"):

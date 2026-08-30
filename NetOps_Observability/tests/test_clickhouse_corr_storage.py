@@ -451,3 +451,44 @@ def test_the_swap_is_atomic_and_keeps_the_view_and_policies_valid():
     assert "EXCHANGE TABLES" in body
     assert "StrictRowPolicyDDL(t.Name)" in body, (
         "the STRICT policy is not re-emitted on the live name after the swap")
+
+
+# ── (c) the findings dedup window (storm-s03, 2026-08-29) ───────────────────
+#
+# netops.findings is not a corr_* table, but it now depends on the SAME storage
+# guarantee the correlation family does, and the guarantee is stated in three
+# places that can drift apart independently: the fresh-install CREATE, the boot
+# ALTER that converges existing installs, and the retry set in the Python
+# service that is only safe because the other two hold.
+
+def test_findings_carries_the_dedup_window_in_init_sql():
+    """A findings insert that ends in an UNKNOWN outcome (transport read error
+    mid-flight — one row lost that way on storm-s03 replica-3) is re-sent under
+    a deterministic insert_deduplication_token. Without the window the server
+    has nothing to match the token against and the retry APPENDS a second row,
+    which is why the table was excluded from the retry set before this."""
+    stmt = _init_create("findings")
+    assert "non_replicated_deduplication_window = 1000" in stmt, (
+        "netops.findings has no dedup window on a fresh install — the retry "
+        "path would duplicate a finding instead of deduping it")
+
+
+def test_findings_dedup_window_is_converged_on_existing_installs():
+    """init.sql only ever runs on a virgin volume; every live install gets it
+    from the idempotent, metadata-only boot ALTER."""
+    policies = POLICIES_GO.read_text()
+    assert ("ALTER TABLE netops.findings MODIFY SETTING "
+            "non_replicated_deduplication_window = 1000") in policies, (
+        "nothing converges the findings dedup window — an upgraded install "
+        "would retry findings inserts with no server-side dedup behind them")
+
+
+def test_the_python_retry_set_matches_the_ddl_it_claims():
+    """CH_DEDUP_SAFE_TABLES is a claim ABOUT THIS DDL. If the table is in the
+    set without the window, an ambiguous outcome duplicates; if it has the
+    window but is not in the set, the row is thrown away for nothing."""
+    main_py = (ROOT / "src" / "correlation" / "main.py").read_text()
+    m = re.search(r"CH_DEDUP_SAFE_TABLES = frozenset\(\{(.*?)\}\)", main_py, re.S)
+    assert m, "CH_DEDUP_SAFE_TABLES is no longer a literal frozenset"
+    assert '"netops.findings"' in m.group(1), (
+        "netops.findings carries the dedup window but is not in the retry set")

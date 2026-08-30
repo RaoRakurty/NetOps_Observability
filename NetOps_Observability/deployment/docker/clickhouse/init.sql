@@ -153,7 +153,15 @@ ORDER BY (ts, severity, score)
 -- F-58: 30 -> 90 DAY, same reasoning as netops.tunnels above — the live value
 -- has always been 90 and ch_retention.go now enforces the declared one.
 TTL toDateTime(ts) + INTERVAL 90 DAY
-SETTINGS ttl_only_drop_parts = 1;
+-- non_replicated_deduplication_window (2026-08-29): a findings insert that ends
+-- in an UNKNOWN outcome (transport read error mid-flight — storm-s03 lost a row
+-- to exactly that) may or may not have committed, so the correlation service
+-- must be able to re-send it. It re-sends under a deterministic
+-- insert_deduplication_token (main.py finding_dedup_token: source coordinate +
+-- row content hash) and this window is what makes the server drop the duplicate
+-- block instead of appending it. Mirrored by an idempotent MODIFY SETTING in
+-- chschema.ConvergeStmts for installs that predate this line.
+SETTINGS ttl_only_drop_parts = 1, non_replicated_deduplication_window = 1000;
 
 -- ---------------------------------------------------------------------------
 -- #20 Phase 2 — DATABASE-ENFORCED per-tenant isolation (defense in depth under

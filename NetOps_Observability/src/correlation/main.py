@@ -698,8 +698,9 @@ CORR_QUIESCE_S = float(os.environ.get("CORR_QUIESCE_S", "900"))
 # inline content_hash, no I/O await) with no heartbeat → aiokafka session
 # expiry → consumer ejection → "lag never drains" livelock. The loop now yields
 # cooperatively whenever it has held the event-loop thread longer than this
-# budget (well under the 1000 ms loop-lag warn and the 30 s Kafka session
-# timeout), so aiokafka's heartbeat/commit coroutines run mid-cycle. Purely a
+# budget (well under the 1000 ms loop-lag warn and the configured Kafka session
+# timeout — CORR_SESSION_TIMEOUT_MS), so aiokafka's heartbeat/commit coroutines
+# run mid-cycle. Purely a
 # scheduling interleave: it changes WHEN the loop yields, never which objects
 # are processed, their order, OPEN_OBJECTS mutation, the persist decision, or
 # any cohort output — replay/determinism are byte-for-byte unchanged.
@@ -3551,6 +3552,10 @@ def epoch_state() -> dict[str, object]:
         "lifecycle_merge_pairs_evaluated_total": LIFECYCLE_MERGE_PAIRS_EVALUATED_TOTAL,
         "lifecycle_merge_seconds_max": round(LIFECYCLE_MERGE_SECONDS_MAX, 6),
         "lifecycle_merge_offloads_total": LIFECYCLE_MERGE_OFFLOADS_TOTAL,
+        # The loop-thread bound (storm-s03): SYNC time, next to the
+        # wall-clock lifecycle numbers above so the two can never be confused
+        # again. See `sync_record`.
+        "sync": sync_profile(),
         # ── P2 step 4: the Evidence plane. THE invariant: `depth` returns to 0
         # between storms (spec §2's T8) and `lag_seconds` is the operator's
         # T7 — the time from a verdict to its materialized graph. `failed_total`
@@ -3824,6 +3829,187 @@ def stage_profile() -> dict[str, object]:
     return {"enabled": CORR_PROFILE_STAGES, "stages": out}
 
 
+# ── SYNCHRONOUS-only spans: loop-thread occupancy, not wall clock ────────────
+#
+# WHY THIS EXISTS (run storm-s03, 2026-08-28/29, replica-3). The stage profile
+# reported `lifecycle.quiesce` max 26,024 ms next to two ~26 s consumer
+# ejections and the two numbers were read as the same event. They are not
+# comparable: every span above is WALL CLOCK and encloses awaits — a quiesce
+# pass that closes 400 objects and awaits a ClickHouse insert for each of them
+# is a 26-second PASS, not a 26-second stall, and the profile could not tell an
+# operator which one it was looking at. Measured offline on the storm shape
+# (1,400 open objects, 400 simultaneous closes, ~15k-signal window): the pass
+# takes 26 s of wall clock in that population and the WORST single synchronous
+# stretch inside it is ~70 ms.
+#
+# A sync span is the complement: it wraps a block with NO await in it, so its
+# duration is time the event-loop thread could not run anything else —
+# aiokafka's heartbeat included. `sync_record` is what the next investigation
+# reads to answer "was the loop held, or was the pass merely long", and
+# `corr_sync_stretch_max_ms` / `corr_sync_overruns_total` make an over-budget
+# stretch an alertable fact instead of an inference from a wall-clock span.
+#
+# The budget is the SAME 500 ms the merge pass is already held to
+# (test_lifecycle_merge_storm_p1): an order of magnitude under the loop-lag
+# warn threshold and two orders under the session timeout, so a breach is a
+# defect long before it is an ejection.
+CORR_SYNC_BUDGET_MS = float(os.environ.get("CORR_SYNC_BUDGET_MS", "500"))
+# The rate-projected offload (see `_snap_call`). 0 disables it, restoring the
+# pure element-threshold gate — the A/B knob for the change.
+CORR_SYNC_OFFLOAD = os.environ.get(
+    "CORR_SYNC_OFFLOAD", "1").lower() in ("1", "true", "yes")
+SYNC_STRETCH_MAX_MS = 0.0        # worst uninterrupted loop-thread block (gauge)
+SYNC_STRETCH_MAX_SITE = ""       # which site owned it
+SYNC_OVERRUNS_TOTAL = 0          # blocks that exceeded CORR_SYNC_BUDGET_MS
+SYNC_OVERRUN_LAST_SITE = ""
+_SYNC_OVERRUN_LOG_LAST = -1e9
+# builder -> the last N measured INLINE seconds-per-element. The projection
+# takes the MAX of the window (never an average): the bound has to hold for the
+# worst object the process has recently seen, not the typical one.
+#
+# A WINDOW, not a running maximum, and the first sample of each builder is
+# DISCARDED — both for the same measured reason. The first inline call of a
+# builder in a process is a cold one (module imports, first-touch caches, a
+# JSON encoder that has never run) and reads far above the steady state:
+# `estimate_bytes` measured 2.6 ms/element cold against ~0.01 ms/element warm,
+# a 260x over-read. A running maximum would have promoted that one anomaly into
+# a permanent "offload everything over 190 elements" rule for the life of the
+# process — the projection would then be describing the cold start rather than
+# the work, and the executor would carry traffic the loop could have run in
+# microseconds.
+#
+# The window is also TIME-BOUNDED, and that is not belt-and-braces either: once
+# the projection sends a builder to the executor it stops producing inline
+# samples, so a window that could only age out by being refilled would stay
+# exactly as it was at the moment it fired — permanently. A rate older than
+# _SYNC_RATE_TTL_S is therefore dropped, the next call is measured inline
+# again, and a builder whose cost has come back down comes back with it. The
+# cost of being wrong is bounded by the TTL, not by the process lifetime.
+_SYNC_RATE_WINDOW = 16
+_SYNC_RATE_TTL_S = float(os.environ.get("CORR_SYNC_RATE_TTL_S", "60"))
+# …and the projection is only ever consulted for an object big enough for the
+# answer to be about the OBJECT. Below this many elements a builder cannot
+# plausibly cost half a second: a rate that says otherwise is measuring
+# something the element count does not describe (a GC pause or executor
+# contention that landed inside the call), and acting on it would send work to
+# the executor that the loop runs in microseconds — pure overhead, and enough
+# of it to change the scheduling of everything else. The element threshold
+# (CORR_OFFLOAD_MIN_ELEMENTS, 2,000) still bounds the top; this bounds the
+# bottom, so the projection governs exactly the band between them.
+_SYNC_RATE_MIN_COST = 200
+# site name per builder, interned once: this is a per-object path and
+# `"builder." + name` on every call is an allocation that buys nothing.
+_SYNC_SITE: dict[str, str] = {}
+# builder -> deque of (monotonic, seconds-per-element)
+_SYNC_RATE: dict[str, deque] = {}
+# Below this, a measurement is timer noise rather than a rate: a 0.2 ms call on
+# a 3-element object would project 60 ms/1000 elements out of nothing.
+_SYNC_RATE_FLOOR_S = 0.001
+
+
+def sync_record(site: str, elapsed: float) -> None:
+    """Record ONE uninterrupted loop-thread block (a block with no await).
+
+    Always on, unlike `stage_record`: the max and the overrun counter are the
+    §10 safety observable for the loop-thread bound, and a safety observable
+    that is only collected when a profiler flag happens to be set is not one.
+    The per-site percentile reservoir still rides on the stage profiler, so the
+    detailed breakdown stays opt-in and free when CORR_PROFILE_STAGES is off.
+    """
+    global SYNC_STRETCH_MAX_MS, SYNC_STRETCH_MAX_SITE
+    global SYNC_OVERRUNS_TOTAL, SYNC_OVERRUN_LAST_SITE, _SYNC_OVERRUN_LOG_LAST
+    try:
+        ms = elapsed * 1000.0
+        if ms > SYNC_STRETCH_MAX_MS:
+            SYNC_STRETCH_MAX_MS = ms
+            SYNC_STRETCH_MAX_SITE = site
+        if ms >= CORR_SYNC_BUDGET_MS:
+            SYNC_OVERRUNS_TOTAL += 1
+            SYNC_OVERRUN_LAST_SITE = site
+            mono = time.monotonic()
+            if (mono - _SYNC_OVERRUN_LOG_LAST) >= 30.0:
+                _SYNC_OVERRUN_LOG_LAST = mono
+                log.warning(
+                    "loop-thread block %s held the event loop %.0f ms "
+                    "(budget %.0f ms, overruns=%d, worst=%.0f ms at %s) — this "
+                    "is SYNCHRONOUS time, no heartbeat can run inside it",
+                    site, ms, CORR_SYNC_BUDGET_MS, SYNC_OVERRUNS_TOTAL,
+                    SYNC_STRETCH_MAX_MS, SYNC_STRETCH_MAX_SITE)
+        if CORR_PROFILE_STAGES:
+            stage_record("sync." + site, elapsed)
+    except Exception as exc:  # noqa: BLE001 — a profiler may not raise into the engine
+        _note_profiler_error(f"sync_record({site})", exc)
+
+
+def _sync_projected_ms(name: str, cost: int) -> float:
+    """What running `name` INLINE on an object of this cost is expected to hold
+    the loop for, from the worst rate in this builder's recent window."""
+    if cost < _SYNC_RATE_MIN_COST:
+        return 0.0
+    window = _SYNC_RATE.get(name)
+    if not window:
+        return 0.0
+    cutoff = time.monotonic() - _SYNC_RATE_TTL_S
+    while window and window[0][0] < cutoff:   # appended in time order
+        window.popleft()
+    if not window:
+        return 0.0
+    return max(r for _, r in window) * max(cost, 0) * 1000.0
+
+
+def _sync_note_inline(name: str, cost: int, elapsed: float) -> None:
+    """One inline builder call: record the block and update its rate window."""
+    if cost > 0 and elapsed >= _SYNC_RATE_FLOOR_S:
+        window = _SYNC_RATE.get(name)
+        if window is None:
+            # First sample of this builder: cold, and therefore recorded as
+            # "seen" without being usable as a rate. See _SYNC_RATE.
+            _SYNC_RATE[name] = deque(maxlen=_SYNC_RATE_WINDOW)
+        else:
+            window.append((time.monotonic(), elapsed / cost))
+    site = _SYNC_SITE.get(name)
+    if site is None:
+        site = _SYNC_SITE[name] = "builder." + name
+    sync_record(site, elapsed)
+
+
+def sync_profile() -> dict[str, object]:
+    """The loop-thread bound, as numbers an operator can alert on."""
+    return {
+        "budget_ms": CORR_SYNC_BUDGET_MS,
+        "rate_offload": CORR_SYNC_OFFLOAD,
+        "stretch_max_ms": round(SYNC_STRETCH_MAX_MS, 3),
+        "stretch_max_site": SYNC_STRETCH_MAX_SITE,
+        "overruns_total": SYNC_OVERRUNS_TOTAL,
+        "overrun_last_site": SYNC_OVERRUN_LAST_SITE,
+        "rates_ms_per_element": {
+            k: round(max(r for _, r in v) * 1000.0, 6)
+            for k, v in sorted(_SYNC_RATE.items()) if v},
+    }
+
+
+class sync_span:
+    """Context manager for a block that contains NO await. Always on.
+
+    Written as a class for the same reason `stage` is: no generator allocation
+    on a per-object path.
+    """
+
+    __slots__ = ("_name", "_t0")
+
+    def __init__(self, name: str) -> None:
+        self._name = name
+        self._t0 = 0.0
+
+    def __enter__(self):
+        self._t0 = time.perf_counter()
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        sync_record(self._name, time.perf_counter() - self._t0)
+        return False
+
+
 # ── tracker 164: PASSIVE offload accounting (measurement only) ────────────────
 #
 # `_offload` hands work to asyncio's DEFAULT executor. That executor's queue is
@@ -4038,10 +4224,37 @@ async def _snap_call(snap: ObjectSnapshot, fn, /, *args, **kwargs):
     Sized by `_snap_cost`, NOT by the graph: everything routed here
     (`cycle_hypotheses_blob`, `to_object_row`, `content_hash`, `material_hash`)
     walks the node signals, and a storm aggregate is all signals and no edges.
+
+    TWO gates now, and the second is the one that makes the loop-thread bound
+    hold for a shape nobody has measured yet:
+
+      1. ELEMENTS — `_snap_cost` past CORR_OFFLOAD_MIN_ELEMENTS. A count, so it
+         is free, and it is what protects the objects whose cost is visible in
+         their size.
+      2. PROJECTED MILLISECONDS — the worst inline seconds-per-element this
+         process has actually measured for THIS builder, times this object's
+         cost. Elements are a proxy for time only while the per-element cost is
+         stable, and it is not: a signal carrying a 4 KB `attrs` blob costs many
+         times what a bare one does, so an object can sit under the element
+         threshold and still own the loop. The projection closes that gap
+         self-calibratingly — the first object that costs more than the budget
+         raises the rate, and every later object of that size is offloaded.
+
+    BYTE-NEUTRAL, like every other offload on this path: `_offload` changes
+    which THREAD a pure function of frozen inputs runs on and nothing else. The
+    rate table therefore affects SCHEDULING only — pinned by the identity tests
+    in test_sync_stretch_bound_p1.py.
     """
-    if _snap_cost(snap) >= CORR_OFFLOAD_MIN_ELEMENTS:
+    cost = _snap_cost(snap)
+    name = getattr(fn, "__name__", "snap_call")
+    if (cost >= CORR_OFFLOAD_MIN_ELEMENTS
+            or (CORR_SYNC_OFFLOAD
+                and _sync_projected_ms(name, cost) >= CORR_SYNC_BUDGET_MS)):
         return await _offload(fn, *args, **kwargs)
-    return fn(*args, **kwargs)
+    _t0 = time.perf_counter()
+    result = fn(*args, **kwargs)
+    _sync_note_inline(name, cost, time.perf_counter() - _t0)
+    return result
 
 
 async def _decision_offload(size: int, fn, /, *args, **kwargs):
@@ -4053,10 +4266,22 @@ async def _decision_offload(size: int, fn, /, *args, **kwargs):
     object of a cycle pays all of it even when that object is tiny), so keying
     its offload decision on `_snap_elements` would leave exactly the worst case
     inline. Gated on CORR_DECISION_OFFLOAD so the A/B runs on one image.
+
+    Carries `_snap_call`'s second gate too — the projected-milliseconds rule —
+    for the same reason: `_current_badges` is sized by `_snap_elements`, and a
+    storm aggregate reads ~950 elements while its hypotheses blob is built from
+    tens of thousands of signals.
     """
-    if CORR_DECISION_OFFLOAD and size >= CORR_OFFLOAD_MIN_ELEMENTS:
+    name = getattr(fn, "__name__", "decision_call")
+    if CORR_DECISION_OFFLOAD and (
+            size >= CORR_OFFLOAD_MIN_ELEMENTS
+            or (CORR_SYNC_OFFLOAD
+                and _sync_projected_ms(name, size) >= CORR_SYNC_BUDGET_MS)):
         return await _offload(fn, *args, **kwargs)
-    return fn(*args, **kwargs)
+    _t0 = time.perf_counter()
+    result = fn(*args, **kwargs)
+    _sync_note_inline(name, size, time.perf_counter() - _t0)
+    return result
 
 
 ARCHIVE_ROWS_WRITTEN = 0     # archive rows actually inserted (monotonic)
@@ -4506,6 +4731,15 @@ async def _persist_snapshot(snap: ObjectSnapshot, version: int, state: str,
     hypotheses = await _snap_call(snap, cycle_hypotheses_blob, snap)
     obj_row = await _snap_call(snap, snap.to_object_row, version, state, merged_into,
                                hypotheses=hypotheses)
+    # The callers' cooperative gate, consulted INSIDE the object as well as
+    # between objects (storm-s03). Quiesce, the count cap and the reconcile loop
+    # all yield per OBJECT, which bounds the batch — but one object's Decision
+    # half is four builders plus a byte walk, and when every one of them takes
+    # the inline path (a snapshot under the offload threshold) that whole
+    # sequence is a single uninterrupted stretch. A consult here caps it at one
+    # builder, whatever the population does. No-op for a caller that passes no
+    # yield (`_noop_yield`), and a scheduling interleave only — never a byte.
+    await loop_yield()
     # H13: these engine-cycle writes run OUTSIDE any consumer message, so they
     # must not draw tokens from the consumer's Kafka coordinate (a redelivery
     # resets that seq, colliding a NEW object version's token with a spent one
@@ -4551,6 +4785,7 @@ async def _persist_snapshot(snap: ObjectSnapshot, version: int, state: str,
         # 489 ms on a 20-node/50k-edge storm object, the single largest
         # remaining on-loop stretch of the Decision write. Same offload rule as
         # every other per-object serializer; the dict is identical either way.
+        await loop_yield()      # see the consult above: one builder per stretch
         current_row.update(await _decision_offload(
             _snap_elements(snap), _current_badges, obj_row.get("hypotheses", "")))
         current_row["chaos_fixture"] = _chaos_fixture_for(snap)
@@ -4606,6 +4841,7 @@ async def _persist_snapshot(snap: ObjectSnapshot, version: int, state: str,
     # the cycle's index still has to be built (1,267 ms over a 50k window, paid
     # by the first object of the cycle however small it is), the object when the
     # index is already memoized. See `_archive_slice_cost`.
+    await loop_yield()          # see the consult above: one builder per stretch
     slice_sigs, slice_hash = await _decision_offload(
         _archive_slice_cost(snap, window), _archive_slice_and_hash, snap, window)
     if slice_sigs:
@@ -5462,7 +5698,10 @@ async def _lifecycle_find_merges(survivors: list, candidates: list,
         LIFECYCLE_MERGE_OFFLOADS_TOTAL += 1
         index = await _offload(ContinuationIndex, survivors)
     else:
-        index = ContinuationIndex(survivors)
+        # SYNC span, not a stage: this build has no await in it, so its duration
+        # is time the heartbeat could not run (see `sync_record`).
+        with sync_span("lifecycle.merge_index"):
+            index = ContinuationIndex(survivors)
     chunk = CORR_LIFECYCLE_MERGE_CHUNK or len(candidates)
     entity_cache: dict = {}
     pairs: list[tuple[str, str]] = []
@@ -5472,8 +5711,9 @@ async def _lifecycle_find_merges(survivors: list, candidates: list,
             pairs += await _offload(find_merges, survivors, part,
                                     index=index, entity_cache=entity_cache)
         else:
-            pairs += find_merges(survivors, part,
-                                 index=index, entity_cache=entity_cache)
+            with sync_span("lifecycle.merge_chunk"):
+                pairs += find_merges(survivors, part,
+                                     index=index, entity_cache=entity_cache)
         await loop_yield()
     LIFECYCLE_MERGE_PAIRS_EVALUATED_TOTAL += index.candidates_returned
     LIFECYCLE_MERGE_SECONDS_MAX = max(LIFECYCLE_MERGE_SECONDS_MAX,
@@ -5542,8 +5782,13 @@ async def _epoch_lifecycle(epoch: _EngineEpoch, loop_yield,
     # find_merges the population P1 measured. A caller that passes `seen`
     # explicitly (the CORR_LIFECYCLE_EPOCH_CADENCE=0 A/B path) gets the exact
     # pre-P1 shape for both.
-    merge_seen = _lifecycle_merge_seen(epoch) if seen is None else seen
-    seen = epoch.seen if seen is None else seen
+    # SYNC span: the candidate-space union is O(K cohorts x cohort ids) and the
+    # two partitions below are O(open objects), all on the loop thread with no
+    # await between them — one block, so it is measured as one (see
+    # `sync_record`: a wall-clock stage cannot say whether the loop was held).
+    with sync_span("lifecycle.partition"):
+        merge_seen = _lifecycle_merge_seen(epoch) if seen is None else seen
+        seen = epoch.seen if seen is None else seen
     LIFECYCLE_SEEN_WINDOW_COHORTS = len(_LIFECYCLE_SEEN_WINDOW)
     LIFECYCLE_SEEN_WINDOW_IDS = len(merge_seen)
     # Merge (§4.4): de-split a cross-cycle identity drift. A stale open object that
@@ -5566,9 +5811,11 @@ async def _epoch_lifecycle(epoch: _EngineEpoch, loop_yield,
     # THE RULE: widen ONLY the survivor (merge TARGET) side. Candidates stay
     # `OPEN_OBJECTS \ seen` on the EPOCH's own set — exactly pre-4a, and
     # exactly what quiesce and the cap already use.
-    survivors = [OPEN_OBJECTS[c]["snapshot"] for c in merge_seen if c in OPEN_OBJECTS]
-    stale_snaps = [OPEN_OBJECTS[c]["snapshot"] for c in OPEN_OBJECTS
-                   if c not in seen]
+    with sync_span("lifecycle.partition"):
+        survivors = [OPEN_OBJECTS[c]["snapshot"]
+                     for c in merge_seen if c in OPEN_OBJECTS]
+        stale_snaps = [OPEN_OBJECTS[c]["snapshot"] for c in OPEN_OBJECTS
+                       if c not in seen]
     global LIFECYCLE_MERGE_CANDIDATES_LAST, LIFECYCLE_MERGE_SURVIVORS_LAST
     LIFECYCLE_MERGE_CANDIDATES_LAST = len(stale_snaps)
     LIFECYCLE_MERGE_SURVIVORS_LAST = len(survivors)
@@ -5624,6 +5871,17 @@ async def _epoch_lifecycle(epoch: _EngineEpoch, loop_yield,
     # span, so the profile can never again show a 35 s stall with nothing under
     # it (storm-s02). Wall clock, like every other span here — a stage that
     # awaits a persist is not claiming to have owned the loop for its duration.
+    #
+    # NOT CHUNKED ACROSS CYCLES, deliberately (2026-08-29). Deferring part of a
+    # close batch to the next pass was considered as a second bound and
+    # rejected on measurement: with the per-object yield consulted below, 400
+    # simultaneous closes hold the loop for ~52 ms at a time (worst measured
+    # single stretch; the pass itself is ~800 ms of WALL clock), so there is no
+    # stretch left for chunking to cut. What it would cost is real — a
+    # deferred close is a terminal version an operator does not see this cycle,
+    # against the T1 TTUR SLO, and a second place where "which objects closed"
+    # depends on where a boundary fell. If a future population ever does breach
+    # the budget here, `corr_sync_overruns_total` names it first.
     _t_quiesce = time.perf_counter() if CORR_PROFILE_STAGES else 0.0
     for cid in list(OPEN_OBJECTS):
         await loop_yield()  # this loop is O(open objects) — bound the grind
@@ -5655,8 +5913,11 @@ async def _epoch_lifecycle(epoch: _EngineEpoch, loop_yield,
     _t_cap = time.perf_counter() if CORR_PROFILE_STAGES else 0.0
     if CORR_OPEN_OBJECTS_MAX > 0 and len(OPEN_OBJECTS) > CORR_OPEN_OBJECTS_MAX:
         excess = len(OPEN_OBJECTS) - CORR_OPEN_OBJECTS_MAX
-        victims = sorted(OPEN_OBJECTS,
-                         key=lambda c: (OPEN_OBJECTS[c]["last_seen"], c))[:excess]
+        # SYNC span: an O(open log open) sort with no await in it.
+        with sync_span("lifecycle.cap_sort"):
+            victims = sorted(
+                OPEN_OBJECTS,
+                key=lambda c: (OPEN_OBJECTS[c]["last_seen"], c))[:excess]
         for cid in victims:
             await loop_yield()  # eviction can span thousands under a storm
             reg = OPEN_OBJECTS[cid]
@@ -5999,11 +6260,14 @@ async def _engine_cycle_inner(epoch: _EngineEpoch | None) -> None:
     with stage("reconcile.continuation_index"):
         cont_index: dict[str, ContinuationIndex] = {}
         for _t, _v in _cont_buckets.items():
-            cont_index[_t] = (
-                await _offload(ContinuationIndex, _v)
-                if (CORR_CONTINUATION_INDEX_OFFLOAD > 0
-                    and len(_v) >= CORR_CONTINUATION_INDEX_OFFLOAD)
-                else ContinuationIndex(_v))
+            if (CORR_CONTINUATION_INDEX_OFFLOAD > 0
+                    and len(_v) >= CORR_CONTINUATION_INDEX_OFFLOAD):
+                cont_index[_t] = await _offload(ContinuationIndex, _v)
+            else:
+                # SYNC span: the inline build owns the loop thread for its
+                # whole duration (see `sync_record`).
+                with sync_span("reconcile.continuation_index"):
+                    cont_index[_t] = ContinuationIndex(_v)
     cont_entities: dict[str, frozenset] = {}
 
     # Loop-lag resilience: see _make_loop_yield (same gate, same budget — it moved
@@ -6058,9 +6322,11 @@ async def _engine_cycle_inner(epoch: _EngineEpoch | None) -> None:
                 # could never have won. Excluding it earlier removes work the
                 # contract already forbade using.
                 _ci = cont_index.get(snap.tenant_id)
-                cont = find_continuation(
-                    snap, _ci.candidates(snap) if _ci is not None else (),
-                    exclude=seen_this_cycle, entity_cache=cont_entities)
+                # SYNC span: candidate probe + the exact predicate, no await.
+                with sync_span("reconcile.find_continuation"):
+                    cont = find_continuation(
+                        snap, _ci.candidates(snap) if _ci is not None else (),
+                        exclude=seen_this_cycle, entity_cache=cont_entities)
                 if cont:
                     snap = dc_replace(snap, correlation_id=cont)
                     reg = OPEN_OBJECTS[cont]
@@ -6546,6 +6812,15 @@ CORR_CH_TIMEOUT_S = float(os.environ.get("CORR_CH_TIMEOUT_S", "30.0"))
 #       dropped server-side.
 #   corr_current — ReplacingMergeTree(created_at) keyed by
 #       (tenant, correlation_id), so a duplicate collapses on merge by design.
+#   findings — non_replicated_deduplication_window = 1000 (on the CREATE in
+#       init.sql for fresh installs, converged on every boot by the
+#       ConvergeStmts ALTER for existing ones), and EVERY findings insert
+#       carries `finding_dedup_token(row)` — the source message coordinate plus
+#       a hash of the row's content — so a re-sent block is dropped server-side.
+#       Added 2026-08-29 after storm-s03 (replica-3, 22:17:43Z) lost one row to
+#       a bare `ReadError`: the table was outside this set, so an AMBIGUOUS
+#       transport outcome (the server may well have committed) was counted lost
+#       instead of retried, and the ladder's accounting phase failed on it.
 # Deliberately ABSENT: corr_signals and corr_signals_archive are plain MergeTree
 # with no dedup window, so retrying them would duplicate causal/replay rows.
 # corr_signals is retried by the batcher instead (_flush_table), which resends
@@ -6556,7 +6831,27 @@ CH_DEDUP_SAFE_TABLES = frozenset({
     "netops.corr_edges",
     "netops.corr_evidence",
     "netops.corr_current",
+    "netops.findings",
 })
+
+# Tables whose rows are DURABLY SPOOLED to the dead-letter file when an insert
+# is finally given up on (permanent rejection, or retries exhausted).
+#
+# `netops.findings` is the founding member because it sits in the one gap the
+# durability contract had left open: it is NOT an RCA-critical table, so nothing
+# raises CHInsertRejected and the consumer never quarantines the source event —
+# and it is NOT reconstructable either, because the state that produced the row
+# (the rolling z-score baseline sample, the syslog burst bucket, which `emit`
+# resets) is gone by the time the insert fails. Without a durable copy the row
+# is simply gone, which is the accept-and-ignore defect (F-38) the rest of this
+# module exists to prevent.
+#
+# A row preserved on disk is NOT a lost write: it is counted under
+# CH_ROWS_DLQ_SPOOLED and `lost_total` (CH_INSERT_FAILURES — what the ladder's
+# accounting phase gates on) stays reserved for the genuinely unrecoverable
+# case: no CORR_DLQ_DIR configured, or the dead-letter write itself failed.
+CH_DLQ_ON_LOSS_TABLES = frozenset({"netops.findings"})
+CH_ROWS_DLQ_SPOOLED: dict[str, int] = {}
 
 
 async def _insert_with_outcome(table: str, rows: list, token: str) -> InsertOutcome:
@@ -6897,7 +7192,27 @@ async def ch_insert(table: str, rows, *, dedup_token: str | None = None, **ctx) 
         # The KIND, not a hard-coded "rejected". A read timeout on an insert
         # ClickHouse was still committing is an UNKNOWN outcome, not a refusal,
         # and the two want different operator responses.
-        _note_ch_failure(table, outcome.kind or "rejected", {**ctx, **outcome.as_evidence()})
+        #
+        # A row this path can no longer retry is either DURABLY KEPT or LOST —
+        # never both, never neither. Spooling first means `lost_total` rises
+        # only for rows that have no durable copy anywhere (CH_DLQ_ON_LOSS_TABLES).
+        spooled = table in CH_DLQ_ON_LOSS_TABLES and _dlq_spool_rows(
+            f"chinsert:{table}", table, rows, outcome,
+            "clickhouse did not commit the insert")
+        if spooled:
+            # Rate-limited on the same clock as _note_ch_failure: a ClickHouse
+            # outage fails every write, and 10k identical lines bury the one
+            # that explains it. The COUNTER is always exact.
+            _now = time.monotonic()
+            if (_now - _CH_FAIL_LOG_LAST.get("dlq:" + table, -1e9)) >= CH_FAIL_LOG_EVERY_S:
+                _CH_FAIL_LOG_LAST["dlq:" + table] = _now
+                log.warning("clickhouse write SPOOLED to DLQ table=%s reason=%s "
+                            "rows=%d spooled_total=%d ch_code=%s",
+                            table, outcome.kind or "rejected", len(rows),
+                            CH_ROWS_DLQ_SPOOLED.get(table, 0),
+                            outcome.ch_code or "-")
+        else:
+            _note_ch_failure(table, outcome.kind or "rejected", {**ctx, **outcome.as_evidence()})
         if table in CH_CRITICAL_TABLES:
             raise CHInsertRejected(
                 f"{table} insert did not commit (kind={outcome.kind or 'rejected'})")
@@ -7158,43 +7473,16 @@ class CHBatcher:
     @staticmethod
     def _quarantine_rows(table: str, rows: list[dict],
                          outcome: InsertOutcome | None = None) -> None:
-        """Durably preserve every row of a rejected batch: one DLQ record per
-        row (replayable), ONE ring summary (the 200-slot ring must not be wiped
-        by a single 500-row batch).
+        """Durably preserve every row of a rejected batch.
 
-        Each record now carries a `reason` and the ClickHouse verdict (tracker
-        160). Without a reason these records were unclassifiable: the mini-ladder
-        accounting gate could only lump them in with benign tenant refusals, so
-        95 genuinely lost signals read as background noise. `payload_truncated`
-        is stated explicitly rather than left to be discovered — a silently
-        truncated payload is not replayable, and a record that claims
-        recoverability it does not have is worse than one that admits the gap.
+        One implementation, shared with the unbatched `ch_insert` give-up path
+        (`_dlq_spool_rows`) — the record shape IS the contract the accounting
+        gate reads, so the two paths must not be able to drift apart. The
+        durability verdict is ignored here only because the batch path already
+        counted the loss through `_note_ch_failure` before calling.
         """
-        ts = datetime.now(timezone.utc).isoformat()
-        ev = outcome.as_evidence() if outcome is not None else {}
-        reason = ("ch_insert_rejected" if (outcome is None or outcome.kind == "rejected")
-                  else f"ch_insert_{outcome.kind}")
-        for r in rows:
-            full = json.dumps(r, default=str)
-            payload = full[:CORR_QUARANTINE_PAYLOAD_CHARS]
-            _dlq_append({
-                "ts": ts,
-                "topic": f"chbatch:{table}",
-                "reason": reason,
-                "table": table,
-                "ch": ev,
-                "retries_exhausted": bool(outcome is not None and ch_retryable(outcome)),
-                "payload_truncated": len(full) > CORR_QUARANTINE_PAYLOAD_CHARS,
-                "error": "clickhouse rejected the batched insert",
-                "payload": payload,
-            })
-        QUARANTINE.append({
-            "ts": ts,
-            "topic": f"chbatch:{table}",
-            "error": f"clickhouse rejected a batched insert — {len(rows)} rows "
-                     f"preserved in the durable dead-letter file",
-            "payload": "",
-        })
+        _dlq_spool_rows(f"chbatch:{table}", table, rows, outcome,
+                        "clickhouse rejected the batched insert")
 
 
 SIGNAL_BATCH = CHBatcher()
@@ -7348,8 +7636,11 @@ def gc_stats() -> dict[str, object]:
 
 
 CORR_LOOP_LAG_SAMPLE_S = float(os.environ.get("CORR_LOOP_LAG_SAMPLE_S", "0.5"))
-# Default 1s: 3x under aiokafka's heartbeat_interval_ms (3s) so a stall is
-# reported well before it can threaten the session (30s).
+# Default 1s: well under aiokafka's heartbeat_interval_ms (CORR_HEARTBEAT_
+# INTERVAL_MS, 5s) so a stall is reported long before it can threaten the
+# session. The session figure is NOT written here — the warning below quotes
+# CORR_SESSION_TIMEOUT_MS, so raising the knob can never leave the operator
+# reading a stale number in the line that tells them what is at risk.
 CORR_LOOP_LAG_WARN_MS = float(os.environ.get("CORR_LOOP_LAG_WARN_MS", "1000"))
 LOOP_LAG_STALLS = 0        # samples whose lag exceeded the warn threshold
 LOOP_LAG_MAX_MS = 0.0      # worst lag seen this process (gauge)
@@ -7408,6 +7699,7 @@ def diag_app_state() -> dict:
         "loop_lag_last_ms": round(LOOP_LAG_LAST_MS, 1),
         "loop_lag_max_ms": round(LOOP_LAG_MAX_MS, 1),
         "loop_lag_stalls": LOOP_LAG_STALLS,
+        "sync": sync_profile(),
     }
 
 
@@ -7618,10 +7910,23 @@ CORR_COMMIT_EVERY_S = float(os.environ.get("CORR_COMMIT_EVERY_S", "5"))
 # batched CH writes, the explicit yield cadence below). These values make the
 # session contract honest on top of that fix, with the arithmetic:
 #
-#   * session_timeout 30s / heartbeat 3s: worst measured event-loop latency
-#     with the engine chewing a storm window in the executor is ~0.2s (GIL
-#     convoy, gil_probe 2026-08-16), so 30s tolerates a >100x regression plus
-#     GC/CPU-throttle pauses. 3s = session/10 (Kafka's recommended <= 1/3).
+#   * session_timeout 60s / heartbeat 5s (RAISED 2026-08-29 from 30s/3s — run
+#     storm-s03, replica-3): two stalls of 26.0s and 26.8s ejected the member
+#     under the 30s session, i.e. the EFFECTIVE budget was already under the
+#     nominal one — a heartbeat has to survive the round trip as well as the
+#     stall, and a member that is merely SLOW (a 26s quiesce pass is 400 closes
+#     x ~65ms of wall clock, not one 26s block — see `sync_record`) was being
+#     treated as a member that is DEAD. 60s doubles the margin over the worst
+#     measured pass; 5s = session/12, still inside Kafka's <= 1/3 guidance, and
+#     a shorter interval than 3s would only add requests to a loop that is
+#     already saturated when this matters.
+#
+#     THIS CHANGES WHEN A SLOW MEMBER IS EJECTED — NOTHING ELSE. Not one byte,
+#     token, row, version or ordering decision depends on it: the group
+#     contract is transport, the engine's outputs are pure functions of the
+#     frozen snapshot. It buys the engine time; it does not excuse a stall, and
+#     `corr_sync_overruns_total` / `corr_loop_lag_stalls_total` remain the
+#     things that must stay at zero.
 #   * max_poll_interval 300s (explicit, was implicit default): the worst
 #     legitimate gap between polls is one loop iteration = handle() with up to
 #     ~5 direct CH inserts x 10s httpx timeout (wireless lane) + a commit
@@ -7630,8 +7935,8 @@ CORR_COMMIT_EVERY_S = float(os.environ.get("CORR_COMMIT_EVERY_S", "5"))
 #   * rebalance_timeout 60s: the revoke hook flushes + commits before
 #     partitions move (see _AssignmentLogger); its bound is one batch flush
 #     (<= 10s) + one commit (<= 30s), so 60s covers it with margin.
-CORR_SESSION_TIMEOUT_MS = int(os.environ.get("CORR_SESSION_TIMEOUT_MS", "30000"))
-CORR_HEARTBEAT_INTERVAL_MS = int(os.environ.get("CORR_HEARTBEAT_INTERVAL_MS", "3000"))
+CORR_SESSION_TIMEOUT_MS = int(os.environ.get("CORR_SESSION_TIMEOUT_MS", "60000"))
+CORR_HEARTBEAT_INTERVAL_MS = int(os.environ.get("CORR_HEARTBEAT_INTERVAL_MS", "5000"))
 CORR_MAX_POLL_INTERVAL_MS = int(os.environ.get("CORR_MAX_POLL_INTERVAL_MS", "300000"))
 CORR_REBALANCE_TIMEOUT_MS = int(os.environ.get("CORR_REBALANCE_TIMEOUT_MS", "60000"))
 # Budget for the revoke-time flush AND, separately, the revoke-time commit.
@@ -7797,6 +8102,61 @@ def _dlq_append(record: dict) -> None:
         QUARANTINE_WRITE_FAILURES += 1
         log.error("dead-letter write failed (total=%d): %s",
                   QUARANTINE_WRITE_FAILURES, type(exc).__name__)
+
+
+def _dlq_spool_rows(topic: str, table: str, rows: list[dict],
+                    outcome: InsertOutcome | None, error: str) -> bool:
+    """Durably preserve every row of an insert that will not be attempted again.
+
+    ONE DLQ record per row (each independently replayable) plus ONE ring summary
+    — the 200-slot ring must not be wiped by a single 500-row batch.
+
+    Each record carries a `reason` and the ClickHouse verdict (tracker 160).
+    Without a reason these records were unclassifiable: the mini-ladder
+    accounting gate could only lump them in with benign tenant refusals, so 95
+    genuinely lost signals read as background noise. `payload_truncated` is
+    stated explicitly rather than left to be discovered — a silently truncated
+    payload is not replayable, and a record that claims recoverability it does
+    not have is worse than one that admits the gap.
+
+    Returns True only when a copy actually landed ON DISK: `_dlq_append` never
+    raises (quarantine must not become the failure that kills the consumer), so
+    the two ways it can quietly keep nothing — CORR_DLQ_DIR unset (memory-only
+    ring, gone at restart) and a write failure — are detected here and reported
+    to the caller, which then counts the rows as genuinely LOST instead. A
+    "durably kept" claim that is not true is exactly the 238k-lost-payload
+    incident dlq_startup_check exists for.
+    """
+    ts = datetime.now(timezone.utc).isoformat()
+    ev = outcome.as_evidence() if outcome is not None else {}
+    reason = ("ch_insert_rejected" if (outcome is None or outcome.kind == "rejected")
+              else f"ch_insert_{outcome.kind}")
+    before = QUARANTINE_WRITE_FAILURES
+    for r in rows:
+        full = json.dumps(r, default=str)
+        payload = full[:CORR_QUARANTINE_PAYLOAD_CHARS]
+        _dlq_append({
+            "ts": ts,
+            "topic": topic,
+            "reason": reason,
+            "table": table,
+            "ch": ev,
+            "retries_exhausted": bool(outcome is not None and ch_retryable(outcome)),
+            "payload_truncated": len(full) > CORR_QUARANTINE_PAYLOAD_CHARS,
+            "error": error,
+            "payload": payload,
+        })
+    QUARANTINE.append({
+        "ts": ts,
+        "topic": topic,
+        "error": f"{error} — {len(rows)} rows preserved in the durable "
+                 f"dead-letter file",
+        "payload": "",
+    })
+    durable = bool(CORR_DLQ_DIR) and QUARANTINE_WRITE_FAILURES == before
+    if durable:
+        CH_ROWS_DLQ_SPOOLED[table] = CH_ROWS_DLQ_SPOOLED.get(table, 0) + len(rows)
+    return durable
 
 
 def _quarantine_record(topic: str, event: object, exc: BaseException) -> dict:
@@ -9344,10 +9704,48 @@ async def _flush_flow_aggregator(now: datetime) -> None:
             PASSIVE_FLOW_SIGNALS += 1
 
 
+# Fixed namespace for the derived finding id (uuid5). A CONSTANT, never a
+# per-run value: the id has to be reproducible across processes and restarts,
+# which is the whole point of deriving it.
+FINDING_ID_NS = uuid.UUID("6b1a5a1e-1f6e-4c0a-9f3b-2f0d9c1a7e41")
+
+
+def finding_dedup_token(row: dict) -> str:
+    """The insert_deduplication_token for ONE netops.findings row.
+
+    netops.findings has no natural key COLUMN — `id` was a fresh uuid4 per emit
+    and `ts` is a server-side DEFAULT now64(3) — so the row's identity has to be
+    derived. It is built from the two things that together name the finding
+    exactly once:
+
+      * the SOURCE COORDINATE (`topic:partition:offset:table:seq`, the same
+        per-message coordinate the RCA-critical tables use). Stable across a
+        Kafka redelivery of the same message, distinct for every other message,
+        and — via the per-message sequence — distinct for a second finding
+        emitted from the same message.
+      * a SHA-256 of the row CONTENT (id excluded, since the id is derived from
+        this token). Two findings that differ in any field get different tokens
+        even if the coordinate machinery is ever wrong.
+
+    Both halves are needed. Content alone would silently DROP a legitimately
+    repeated finding (the same z-score summary on the same device an hour
+    later) as a "duplicate"; a coordinate alone would not distinguish two rows
+    from one message.
+
+    Outside a consumer message there is no coordinate and no redelivery to be
+    idempotent against, so a per-call nonce takes its place: the token is still
+    computed ONCE per emit and reused by every retry of that insert (which is
+    what makes the retry safe), and it can never collide with another finding.
+    """
+    body = json.dumps({k: v for k, v in row.items() if k != "id"},
+                      sort_keys=True, default=str)
+    coord = _next_dedup_token("netops.findings") or f"local:{uuid.uuid4().hex}"
+    return "finding:" + coord + ":" + hashlib.sha256(body.encode()).hexdigest()[:32]
+
+
 async def emit(**kwargs) -> None:
     device = kwargs.get("device", "")
     row = {
-        "id":          str(uuid.uuid4()),
         "kind":        kwargs["kind"],
         "severity":    kwargs["severity"],
         "score":       kwargs["score"],
@@ -9361,8 +9759,17 @@ async def emit(**kwargs) -> None:
         # registry lookup (#20: same tenant discriminator as flows/logs).
         "tenant_id":   kwargs.get("tenant_id") or tenant_for(device),
     }
+    token = finding_dedup_token(row)
+    # The id is DERIVED from that token rather than a fresh uuid4. Server-side
+    # dedup already drops the re-sent block, but a redelivered message used to
+    # mint a DIFFERENT id for the same logical finding — so the two copies were
+    # not even recognisable as one, and the UI keys its rows on `id`
+    # (Findings.tsx rowKey) while the reports count them. Derived, one finding
+    # has one id no matter how many times it is written.
+    row = {"id": str(uuid.uuid5(FINDING_ID_NS, token)), **row}
     assert ch is not None
-    await ch_insert("netops.findings", [row], kind=row["kind"], device=device)
+    await ch_insert("netops.findings", [row], dedup_token=token,
+                    kind=row["kind"], device=device)
     log.info("finding: %s %s %s", row["severity"], row["kind"], row["summary"])
 
 
@@ -9668,6 +10075,16 @@ def _metrics_text() -> str:
     ]
     for table, n in sorted(CH_INSERT_FAILURES.items()):
         lines.append(f'corr_ch_insert_failures_total{{table="{table}"}} {n}')
+    # The other half of the same accounting: a write that could not be retried
+    # any further but WAS kept on disk. It is not counted above (it is not
+    # lost), and it must not be invisible either — a rising series here means
+    # rows are living in the dead-letter file waiting to be replayed.
+    lines += [
+        "# HELP corr_ch_rows_dlq_spooled_total Rows of a given-up insert preserved in the dead-letter file, by table.",
+        "# TYPE corr_ch_rows_dlq_spooled_total counter",
+    ]
+    for table, n in sorted(CH_ROWS_DLQ_SPOOLED.items()):
+        lines.append(f'corr_ch_rows_dlq_spooled_total{{table="{table}"}} {n}')
     lines += [
         # Perf defect #2/#3: batched write path + bounded archive slices.
         "# HELP corr_signal_batch Batched corr_signals write-path events.",
@@ -9716,6 +10133,16 @@ def _metrics_text() -> str:
         f"corr_loop_lag_max_ms {LOOP_LAG_MAX_MS:.1f}",
         "# TYPE corr_loop_lag_ms gauge",
         f"corr_loop_lag_ms {LOOP_LAG_LAST_MS:.1f}",
+        # The loop-thread bound, SEPARATE from every wall-clock stage span: a
+        # stretch counted here is time nothing else on the loop could run.
+        # storm-s03 read a 26 s `lifecycle.quiesce` WALL span as a 26 s stall;
+        # these two say which it was. (see `sync_record`)
+        "# HELP corr_sync_stretch_max_ms Worst uninterrupted loop-thread block.",
+        "# TYPE corr_sync_stretch_max_ms gauge",
+        f"corr_sync_stretch_max_ms {SYNC_STRETCH_MAX_MS:.1f}",
+        "# HELP corr_sync_overruns_total Loop-thread blocks over the sync budget.",
+        "# TYPE corr_sync_overruns_total counter",
+        f"corr_sync_overruns_total {SYNC_OVERRUNS_TOTAL}",
         # The collector, next to the stall gauge it explains: a loop-lag spike
         # with a matching gc pause is the heap, one without is our code. See
         # CORR_GC_TUNE.
@@ -10425,6 +10852,7 @@ def _health_payload() -> dict:
         },
         "durability": {
             "ch_insert_failures": dict(sorted(CH_INSERT_FAILURES.items())),
+            "ch_rows_dlq_spooled": dict(sorted(CH_ROWS_DLQ_SPOOLED.items())),
             "handler_failures": dict(sorted(HANDLER_FAILURES.items())),
             "quarantined_events": len(QUARANTINE),
             "quarantine_write_failures": QUARANTINE_WRITE_FAILURES,
@@ -10436,6 +10864,9 @@ def _health_payload() -> dict:
             # P1: the loop-lag watchdog. stalls>0 means the event loop was
             # blocked long enough to threaten the group heartbeat.
             "loop_lag_stalls": LOOP_LAG_STALLS,
+            "sync_stretch_max_ms": round(SYNC_STRETCH_MAX_MS, 1),
+            "sync_stretch_max_site": SYNC_STRETCH_MAX_SITE,
+            "sync_overruns_total": SYNC_OVERRUNS_TOTAL,
             "loop_lag_max_ms": round(LOOP_LAG_MAX_MS, 1),
             "loop_lag_ms": round(LOOP_LAG_LAST_MS, 1),
             "topology_stale": _topology_stale(datetime.now(timezone.utc)),
