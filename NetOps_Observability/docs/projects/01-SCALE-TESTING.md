@@ -1,165 +1,106 @@
 # Project 1 — Scale Testing  🔴 HIGH PRIORITY
 
-**Goal:** establish the **host ceiling** on the owner's hardware — the max
-sustained devices at **nominal AND storm**, with all gates green — and the
-**binding resource** at that ceiling. Output feeds (a) **per-resource pricing
-standards** and (b) the **customer hosting-requirement spec**.
+**Rewritten 2026-08-30 against HEAD (`71adcfc6`).** Working checklist, not a
+history — the history is in `docs/scale/` and `git log`.
 
-**Hardware under test:** 4 cores (Xeon E5-2683 v4 @ 2.1GHz), 15 GiB RAM, 77 GB
-disk. Early signal: **CPU-bound** (ClickHouse + correlation); disk is the close
-second. This box likely tops out well below the 10k GA target — that finding is
-itself a deliverable.
+**Scope.** Establish the **host ceiling** on the owner's box — max sustained
+devices at nominal AND storm with all gates green — and the **binding resource**
+at that ceiling. Output feeds (a) per-resource pricing standards and (b) the
+customer hosting-requirement spec.
 
-**Model rule:** Fable specs + grades; Opus implements every code change below.
+**Hardware under test:** 4 cores (Xeon E5-2683 v4 @ 2.1 GHz), 15 GiB RAM, 77 GB
+disk. Owner constraint (2026-08-28): **no more hardware** — success is engine
+efficiency + TTUR on this box; the P5 scale-out proof is **dropped**
+(`docs/scale/P4_PROGRAMME_WRITEUP_2026-08-29.md` header).
 
-## Execution order
+**DONE means:** every rung of the ladder run to a graded verdict on this box,
+the ceiling and binding resource written down as a deliverable doc (§D below),
+and no open software defect that changes those numbers. Anything needing a
+second box, an 8-core node or a real rig is **out of scope** — see §Parked.
 
-### A. Correlation-engine storm/scale fixes — ✅ ALREADY DEPLOYED (corrected 2026-08-27)
-(Committed Aug-22/23; the Aug-24 soak build was cut AFTER them and is what runs
-now — VERIFIED live in the correlation container. The earlier "not deployed" read
-was a STALE tracker note. No redeploy needed; storm-VALIDATION is what remains.)
-- [x] **#172 Storm-priority scheduling** (`eb609b45`) — the fix for the S1
-  single-owner ingest wall. THE storm fix.
-- [x] **#174 Observability under saturation** (`60bd796b`) — /healthz + /metrics
-  stop starving when the engine saturates (why the Aug-22 completion gate read
-  the replica as "unreadable").
-- [x] **#162 `find_continuation` O(open_objects)** (`dd3f2154`).
-- [x] **#163 `OPEN_OBJECTS` count bound** (`97b2600c`).
-- [ ] **#164 `_offload` executor queue** — verify after A; flagged non-bottleneck.
-- [x] **P0 boundedness pass** (`fa4857a5`, 2026-08-28) — the ROOT fix for the
-  108s/17.7s loop-stall in C below. The storm object's edge/evidence child rows
-  now emit in bounded, loop-yielding pages (`_emit_child_rows`); worst
-  uninterruptible work unit **1.78s → 0.30s @ 180k-edge shape** (micro-bench,
-  under the 500ms target). Determinism preserved (content_hash byte-identical);
-  ClickHouse still batches. Suite 1565 passed. Decision: `docs/scale/ENGINE_DECISION_2026-08-28.md`.
-  **NEXT: full-stack re-run of the 2.5k rung (was memflat/stability FAIL on this
-  exact stall) + the 2-worker ≥1.6× scale-out proof, then publish the tiered envelope.**
-- [x] **Storm mode — the LAST benchmark P0** (`51575407`, deployed 2026-08-28) —
-  detect overload (buffer-frac + backlog-age arms) → dedup repeats / prioritize
-  critical / aggregate low-value into a per-tenant counter object / preserve raw
-  in Kafka. Deterministic, replay-safe, GATED (non-storm byte-identical,
-  content_hash c26e3ff905b8adc3 unchanged). Suite 1573 passed. Targets the 2.5k
-  correlation_completion FAIL. Design: `docs/design/CORRELATION_STORM_MODE_DESIGN_2026-08-28.md`.
-  **All 6 benchmark P0s DONE.** 2.5k re-run WITH storm mode (`082815…`): storm
-  barely fired (2×) — `correlation_completion` STILL FAIL (throughput). **Finding
-  (`docs/scale/STORM_MODE_2P5K_VERDICT_2026-08-28.md`): the completion limit is
-  single-shard object-reconciliation THROUGHPUT, not signal pressure; the storm
-  detector structurally can't watch the object queue (its flag must stay a pure
-  window-content function for replay determinism). 2.5k completion → scale-out.**
-  Storm mode remains the correct resilience layer (proven on sheddable load at
-  unit level). True ≥1.6× 2-worker proof HARDWARE-BLOCKED (4 cores; needs 8c/2-node).
-  Sharding architecture correct (12 co-partition tests pass).
+**Model rule:** Fable specs + grades; Opus implements every code change.
 
-### B. Unblock CI
-- [x] **#169** guard test GREEN (`a71bdcda`, verified 2026-08-27 — legit re-pin of drifted reviewed handlers, not a mask). Confirm full CI green on next push.
+---
 
-### C. The storm ladder (nominal + S1 at each rung)
-- [x] **1k S1 storm** (run `08271606ymyb`) — **FAIL. drain: lag NEVER drained
-  (final 3,060,740) at ~3,710 eps** — the SAME "lag never drains" defect as
-  Aug-22, reproduced WITH #172/#174 live. The storm fixes are INSUFFICIENT.
-  Storm tolerance NOT achieved even at the proven 1k device count.
-- [x] 2.5k nominal (run `08271432rnic`) — **Overall FAIL.** accounting PASS
-  (lossless 900,001==900,001, 2500/2500 devices) + drain PASS, but
-  correlation_completion / stability / **memflat FAIL**: 108s event-loop stall
-  ejected a replica; correlation-2 leaked 496→691 MiB. **CEILING is 1k–2.5k;
-  binding constraint = correlation-engine loop-stall under CPU, not disk/loss.**
-- [x] **2.5k nominal RE-RUN post boundedness-pass** (run `082812437a77`, WITH
-  `fa4857a5` live) — **Overall FAIL (6P/3F), but the collapse is FIXED.**
-  `docs/scale/SCALE_2P5K_POSTFIX_VERDICT_2026-08-28.md`. **stability FAIL→PASS:
-  worst loop stall 108,000ms→10,669ms (10×), replica ejection→0 restarts.**
-  accounting PASS (lossless), drain PASS (549s). Remaining FAILs are NOT the
-  stall: correlation_completion = throughput (pending 15,638 after budget — the
-  "2.5k Conditional, needs scale-out" limit); memflat = confounded by 15k-object
-  working set (needs longer-settle re-measure); cleanup = non-product OS-purge
-  artifact. **2.5k moved from "collapses" → "survives losslessly." Path to
-  Validated = the 2-worker ≥1.6× scale-out proof, not more single-shard tuning.**
-- [ ] **2.5k S1 storm** (profile `s1-2.5k`, ~10k eps storm lane) — the real tolerance test.
-- [ ] Add **5k** profiles (t-nominal-5k, s1-5k) → run nominal + S1.
-- [ ] Add **10k** profiles (t-nominal-10k, s1-10k) → run nominal + S1 (GA target).
+## Completed (evidence, not claims)
 
-### D. Grade + capture the ceiling
-- [ ] Per rung: drain / correlation_completion (pending→0, oldest-pending-age
-  bounded) / stability (no restarts, bounded loop-stalls) / memflat + accounting.
-- [ ] **Correlation quality under storm** — did the flood collapse into the
-  RIGHT incidents (not fragmented, not conflated)? Beyond the throughput gates.
-- [ ] Record: max devices (nominal & storm), binding resource, and the
-  per-device resource envelope → pricing + hosting spec.
+- **P0–P4 optimisation programme CLOSED**, measurement *and* execution —
+  `docs/scale/P4_PROGRAMME_WRITEUP_2026-08-29.md` §7 (final 2026-08-30).
+  T1 p95 fell 4,771 s → 1,947 s → 816 s across P1/P2/P3 (§2–§3 tables).
+- **Storm-time SLO ratified (Option A, owner 2026-08-30)** — complete within
+  45 min of burst end, lossless (injected == persisted, 0 DLQ), within memory
+  caps, RCA accuracy ≥ 93 %; T1 p95 published but not a gate. P4 §8; recorded as
+  an invariant in `docs/audit/INVARIANTS.md` §10; commit `237b1161`.
+  Option B not pursued; **Option C adopted**.
+- **Aggregation plane ON by default** — `a9d9a10c`
+  (`deployment/docker/docker-compose.yml:1201`, image default stays OFF,
+  `CORR_AGGREGATION_PLANE=0` in `.env` is the fallback). Decision trail:
+  `docs/scale/P3_PAIR_2P5K_VERDICT_2026-08-30.md` §8 + P4 §8.
+- **`t-storm-2.5k` 9/9 on both arms** — `storm-s05` (OFF control) and
+  `storm-s06` (ON, the shipped default), same image `c3f627581082` / `0bfdce1c`:
+  completion **95 s / 124 s** of a 2,700 s budget, accounting exact
+  900,001 == 900,001 + 0 DLQ, memflat 83.2 % → 82.7 % of cap FLAT, accuracy
+  **345/345** on scorer v2 both legs.
+  `docs/scale/STORM_S05_S06_CLOSEOUT_2026-08-30.md`, commit `71adcfc6`.
+- **Storm ladder A/B measured at 2 / 10 / 25 / 50 % storm share** — plane ON
+  turns the 25 % rung from INCOMPLETE into a 192 s completion.
+  `docs/scale/P3_AB_2P5K_VERDICT_2026-08-29.md`.
+- **Trackers closed today:** 185 + 191 (`0bfdce1c`, `06450430`, both evidenced in
+  the close-out) and the 17 shipped rows pruned from `docs/TRACKER.md` in this
+  commit — 156, 158, 159, 162, 163, 165, 166, 168, 169, 170, 172, 173, 174, 176,
+  177, 179, 182. Carry-forwards: 179's step-3 VVR descope → P4 §7; 172's
+  "unit-proven, dormant in production" → INVARIANTS §10.
 
-### E. Larger GA-scale programme (tracker, context)
-- #153 GA scale ladder L2–L6 + chaos-under-load (blocked on a real rig).
-- #152 network digital twin simulator · #155 partition-ownership correctness ·
-  #157 spine-leaf confidence-1.0-with-no-spine.
+---
 
-### F. Finish
+## Open software work (buildable on this box, in order)
+
+| # | Item | Why it is here |
+|---|------|----------------|
+| **190** | Harness `stability` gate hard-codes 30,000 ms while the engine runs a 60 s session timeout — read the live timeout, state the derivation. | Low; ~4 s stalls leave it no room to bite, but the gate is wrong. Close-out §6.3. |
+| **167** | Live selectivity of the template index is still UNVALIDATED — needs one 1K run at `--event-mix realistic` (the harness gap is closed; the run never happened). | The only thing between 167 PASS-offline and PASS-live. Expect worse than 22 %; that is the honest number. |
+| **171** | No gauge publishes the prune-starvation interval; the P2 epoch wall-time budget (`CORR_ENGINE_EPOCH_BUDGET_S`) plausibly bounds it but that is **unverified on the current build**. | Add the gauge, re-measure, then close or fix. |
+| **192** | Un-instrumented ~9–14 s loop block on the cleanup / re-key path (`corr_loop_lag_max_ms` 9,134.9 / 13,881.1 ms, outside the stability window, no `sync_span` attributed). | Distinct from 185. Add the span, bound it `0bfdce1c`-style, confirm on one `t-storm-2.5k`. |
+| **187** | An object's final `affected` shrinks below its own version history at CLOSE (3–5 `bgp_peer_flap` stories per 1,005-story leg, same ids on both arms). | The named residue behind "100.00 %". Decide: fix the close path, or read the accuracy clause over versions. |
+| **164** | `_offload` uses the default executor — bounded workers, **unbounded** queue. | §9 boundedness defect; not the bottleneck, but pre-GA hardening. |
+| **181** | Device create absorbed by dedupe persists a SHADOW row (`main.go:2368` Upsert before `ResolveIdentity`). | Left 1,000 shadow devices from overlapping runs; needs an isolation-aware fix + `org_isolation_test.go`-shaped test. |
+| **157** | `spine-leaf-path-degradation` ranks confidence 1.0 in a topology with no spine — token co-occurrence, not structure. | Accuracy class, measured + evidenced, not started. |
+
+### Then the ladder (the ceiling itself)
+
+1. **Run `s1-2.5k`** — the profile exists (`scripts/scale-miniladder.py:2385`);
+   the storm-tolerance rung at 2.5K has never been run to a graded verdict.
+2. **Author + run 5k and 10k profiles** (`t-nominal-5k` / `s1-5k`,
+   `t-nominal-10k` / `s1-10k`) — none exist in `SCALE_PROFILES` today.
+   **First** discharge tracker **175** (device-store tombstone growth, file
+   backend: 35,427 tombstones / 142 MB for 0 real devices; row status verified
+   today = `Med · ⏳ follow-up, not started`). At 5k/10k the per-run churn is
+   2–4× today's, so the tombstone debt is a run-blocker before it is a defect.
+3. **§D — grade and capture the ceiling** (the deliverable doc): per rung
+   drain / `correlation_completion` / stability / memflat / accounting, plus
+   correlation QUALITY under storm (did the flood collapse into the *right*
+   incidents), then record max devices nominal & storm, the binding resource,
+   and the per-device envelope → pricing + hosting spec.
+4. **155 — partition-ownership correctness programme.** Harness built
+   (`scripts/lab/twin/ownership.py`, 21 tests, PASS/FAIL/**INVALID**); the
+   ownership-move runs are buildable now. Its 72 h soak validation leg is parked
+   (below).
+5. **152 — gNMI stretch** (digital twin, design §4.6) — the software half of the
+   twin's remaining work.
+
+---
+
+## Parked — hardware / rig-gated (do not schedule)
+
+- **153 — GA scale ladder L2–L6 + chaos-under-load + 72 h soak.** Blocked on a
+  real rig, entirely. G1/G2 gates cover the hardware-independent half.
+- **152 — T2 rig scale.** The other half of 152; needs the rig.
+- **155 — the 72 h soak validation leg.** Preconditions are environmental
+  (a provably stable stack for 72 h on a 15 GiB host); the judging logic is
+  proven, the gate is not satisfiable here.
+- **P5 — scale-out proof (2-worker ≥ 1.6×, 8-core / 2-node).** DROPPED by the
+  owner 2026-08-28; success is defined on this single box.
+
+## Finish
+
 - [ ] Owner runs **`/code-review ultra`** on the branch.
-
-
-
-## ENGINE FIX PROGRESS (2026-08-27)
-- **Root cause CORRECTED** (profiling refuted GIL-convoy; engine's own loop-lag
-  watchdog: worst stall 130,561ms): reconciliation loop yielded per-TENANT only;
-  inner per-snapshot damped-path loop ground synchronously → single-tenant storm
-  stalls 130s → ejection → livelock. See CORRELATION_ENGINE_RESILIENCE_DESIGN.
-- [x] **Stage 1 (resilience)** — `8d624fd7`, Fable-verified. Intra-loop time-
-  budgeted yields (CORR_LOOP_YIELD_MS=50). Worst loop-hold 1.7s→0.1s in test;
-  determinism byte-identical (SHA-256 proof + golden-wire/replay/166/162 green);
-  full suite 1523 passed. **Determinism-safe (sleep(0) changes scheduling only).**
-- [x] Deploy fixed correlation (rebuilt image, 2 replicas) → **VALIDATED: the
-  fixed engine drained a multi-million-event storm backlog with 0 stalls / 0
-  ejections** — the exact backlog that livelocked the pre-fix engine 1h53m.
-  Stage-1 resilience is proven (unit + real-world).
-- [ ] **Formal storm-gate re-run DEFERRED → gated on Stage 2.** The re-run needs
-  an idle baseline; the overloaded single-node broker's admin API won't allow an
-  offset reset, and the engine's slow throughput can't drain to idle against live
-  ingestion on 4 cores. **That difficulty IS the Stage-2 throughput symptom** — a
-  faster engine keeps up AND lets the stack settle to idle. Re-run after Stage 2.
-- Stage 2 (throughput) — toward ~1,000 eps/core:
-  - [x] **Lever 2** find_merges index (`595c7a16`, Fable-verified) — results
-    byte-identical (oracle proof), 200x fewer predicate evals at storm shape.
-  - [x] **Lever 1** hub-token cap (`dea93c20`, Fable-verified, owner-approved).
-    Concentrated 1k-hub: 499,500 candidates→0, build_edges 7885ms→24.8ms (~318x).
-    SEMANTIC-SAFE: index split (tok_index capped, ref_index/rank-1 never); ranks
-    1-6 byte-identical (10-test proof + reference updated). Robustness added:
-    per-dimension audit, CORR_CANDIDATE_CEILING=3M deterministic backstop (logs
-    offending dim), observability metrics. Route-dim compact-rep = flagged follow-up.
-  - [x] **Lever 3** chunk-serialize object hashes (`6de251b4`, Fable-verified) —
-    content_hash/material_hash C json.dumps held the GIL through offload → heartbeat
-    gap 1398ms→16ms (~85x), BYTE-IDENTICAL digest (replay pin preserved, 208 det.
-    tests unchanged). The last multi-second stall, bounded.
-  - **STAGE 2 COMPLETE** — all synchronous stalls bounded (recon loop, quadratic,
-    find_merges, object-hash). Next: deploy → measure single-shard ceiling.
-
-## TARGET (industry-benchmarked 2026-08-27 — see CORRELATION_THROUGHPUT_TARGET)
-Causal correlation ≠ shallow dedup/NVPS; the honest comparator is Flink
-stateful joins (~1k–10k eps/core). We are at ~100–250 eps/core = **5–20× below
-the ceiling** → ENHANCE. **Target: ~1,000 eps/core (≈4,000 eps on 4 cores)** so
-the 3,700-eps storm is absorbed within sustained capacity. Floor 500/core,
-stretch ~3,000/core. Resilience (never eject past the 30s session timeout) is the
-non-negotiable minimum.
-
-## FINDING: the binding constraint is correlation-engine throughput under burst
-
-Measured engine behaviour on 4 cores (event rate matters more than device count):
-| Load | eps | Result |
-|---|---|---|
-| 1k soak (steady) | ~100 | STABLE ✅ |
-| 1k t-nominal | ~400 | qualified (#168/#170) |
-| **2.5k nominal** | ~1,000 | **FAIL** — 108s loop stall, memflat leak |
-| **1k S1 storm** | ~3,710 | **FAIL** — lag never drains (3M backlog) |
-
-**The ceiling is correlation-engine EVENT THROUGHPUT (~400–1,000 eps sustained on
-4 cores), NOT device count, disk, or data loss** (accounting passed lossless at
-2.5k). Above ~1k eps the event loop stalls past the 30s Kafka session timeout →
-consumer ejected → lag runs away permanently. A storm spikes eps, so it breaks
-the engine regardless of device count. #172/#174 are deployed but insufficient —
-a 108s single-loop stall is an ENGINE per-cycle-cost problem (see #166 run_window,
-#167 per-pair throughput), deeper than storm-priority scheduling. **Storm
-tolerance is an OPEN GA BLOCKER, and it is an engine-efficiency problem, not a
-hardware-count problem alone.**
-
-## Status snapshot (2026-08-27)
-1k steady-state PROVEN (soak accepted). 1k storm UNPROVEN (last S1 failed Aug-22
-on real engine defects; the fixes #172/#174/#162/#163 are now DEPLOYED — verified
-live Aug-27 — so the S1 ladder retests the FIXED engine). 2.5k nominal grading. The storm ladder can run NOW against the
-fixed engine — **1k S1 is the first real test of whether the storm fixes hold.**
-#169 (ingest-contract-ci RED) blocks MERGE, not the test runs.

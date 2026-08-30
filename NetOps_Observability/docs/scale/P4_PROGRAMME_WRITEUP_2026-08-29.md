@@ -157,6 +157,10 @@ aggregation plane was flipped to ON by default and confirmed on a live run.
    `P3_PAIR_2P5K_VERDICT_2026-08-30.md` §8. Confirmed by `storm-s06`
    (`t-storm-2.5k` **9/9** on the shipped default).
 
+**P2 step 3 — the versioned RCA Verdict Record (`corr_verdicts`) — is DESCOPED, not
+deferred:** it existed only to gate T7/T8 SLOs, and the SLO ratified in §8 (Option A)
+adopts no T7/T8 SLO, so nothing consumes it (tracker 179 step 3).
+
 **What is actually open, and none of it blocks P4:**
 
 | # | item | pri | why it is not a P4 blocker |
