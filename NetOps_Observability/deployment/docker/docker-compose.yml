@@ -1191,6 +1191,14 @@ services:
       # stops the engine deriving signals from flows, e.g. when goflow2 volume
       # is the dominant cost and only the metric/syslog lanes are wanted.
       ENABLE_FLOW_CORRELATION: ${ENABLE_FLOW_CORRELATION:-true}
+      # P3 ingest-boundary aggregation plane. DEFAULT ON since 2026-08-30 per
+      # the A/B decision rule (RUN_PLAN_P3_AB_2026-08-29.md §7; verdicts
+      # P3_AB_2P5K_VERDICT_2026-08-29.md + P3_PAIR_2P5K_VERDICT_2026-08-30.md,
+      # re-scored on twin scorer v2): −41 % engine signals / T1 p95 −28 % at
+      # 10 % storm share, INCOMPLETE→PASS at 25 %, neutral on the 2 % guard.
+      # Set =0 in .env to fall back. The IMAGE default stays OFF (main.py) so
+      # the A/B overlay contract (tests/test_compose_agg_overlay.py) holds.
+      CORR_AGGREGATION_PLANE: ${CORR_AGGREGATION_PLANE:-1}
       CORR_WINDOW_BUFFER: ${CORR_WINDOW_BUFFER:-50000}   # #102
       # #20: device→tenant map (exported by api) to stamp tenant_id on findings.
       TENANT_ENRICHMENT_FILE: /data/enrichment/device_tenant.csv
