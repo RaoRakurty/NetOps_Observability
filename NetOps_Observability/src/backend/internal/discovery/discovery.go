@@ -788,12 +788,34 @@ func (a *DiscoveryAggregator) Delete(id string) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	if a.store != nil {
-		if err := a.store.Remove(id); err != nil {
+		// §3a / tracker 175: the tombstone is stamped with the OWNING tenant so
+		// the store's cap-bounded compaction can never let one tenant's
+		// create/delete churn evict another tenant's suppressions. The tenant
+		// comes from the CACHED record (whose TenantID the create path stamped
+		// from the authenticated principal), never from a caller-supplied
+		// value; a source-owned device has no manual record for the store to
+		// read it from itself. An unknown id yields "" — the platform-scoped
+		// partition, which is what an untagged device means anyway.
+		var err error
+		if ts, ok := a.store.(tenantScopedRemover); ok {
+			err = ts.RemoveOwned(deviceTenantKey(a.cache[id]), id)
+		} else {
+			err = a.store.Remove(id)
+		}
+		if err != nil {
 			return err
 		}
 	}
 	delete(a.cache, id)
 	return nil
+}
+
+// tenantScopedRemover is the OPTIONAL tenant-aware delete on a DeviceStore.
+// Kept off the DeviceStore interface itself so a blob-only or test
+// implementation stays valid without it (§4: replaceable without system
+// change).
+type tenantScopedRemover interface {
+	RemoveOwned(tenant, id string) error
 }
 
 func (a *DiscoveryAggregator) Health() map[string]sourceStats {

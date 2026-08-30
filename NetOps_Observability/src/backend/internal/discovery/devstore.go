@@ -9,6 +9,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"netops/backend/models"
@@ -52,7 +53,7 @@ import (
 // each device and each tombstone is its own record:
 //
 //	<path>.d/manual/<sha256hex(id)>      — the models.Device JSON
-//	<path>.d/suppressed/<sha256hex(id)>  — {"id":..., "deleted_at":...}
+//	<path>.d/suppressed/<sha256hex(id)>  — {"id":…, "deleted_at":…, "tenant":…, "last_hit":…}
 //	<path>.d/migrated                    — legacy-blob migration marker
 //
 // The record NAME is the SHA-256 hex of the device id, because ids are
@@ -76,6 +77,12 @@ import (
 //
 // A backend WITHOUT the prefix capability (e.g. a plain test fake) keeps the
 // original whole-blob behaviour unchanged.
+//
+// TOMBSTONE RETENTION (tracker 175). Nothing removed a suppression record, so
+// the set grew without bound — 35,427 records / 142 MB for zero real devices in
+// a lab that had run the scale ladder. devstore_compact.go bounds it, and its
+// header is where the resurrection semantics that make ANY bound delicate are
+// worked out. Read it before touching tombstoneRecord, Remove or IsSuppressed.
 
 // KV abstracts where the store persists (the platform kv layer).
 type KV interface {
@@ -101,7 +108,16 @@ type DevStore struct {
 	mu         sync.RWMutex
 	path       string
 	manual     map[string]models.Device
-	suppressed map[string]time.Time
+	suppressed map[string]*tombstone
+	// lim is the injected tombstone-retention policy; bootAt/evictQ/evictScanAt
+	// and the evicted* counters are its incremental-compaction state
+	// (devstore_compact.go). All are guarded by mu.
+	lim            TombstoneLimits
+	bootAt         time.Time
+	evictQ         []string
+	evictScanAt    time.Time
+	evictedExpired int
+	evictedCap     int
 	// loadErr is set when the stored state could NOT be read at boot. An empty
 	// store then means "we do not know what was stored", NOT "no manual devices
 	// and no tombstones" — the two used to share a branch, so a boot read failure
@@ -120,23 +136,92 @@ type devPersistFile struct {
 
 // tombstoneRecord is the per-record shape of one suppression. The id is
 // inside the record (the record name is its hash — see the header).
+//
+// Tenant and LastHit were added for the retention bound (tracker 175,
+// devstore_compact.go). Both are omitempty and both decode as their zero value
+// from a pre-175 record: an untenanted tombstone lands in the platform-scoped
+// ("") partition, which is exactly what deviceTenantKey means by "", and a
+// never-hit tombstone is retained on its deleted_at until a source hits it.
 type tombstoneRecord struct {
 	ID        string    `json:"id"`
 	DeletedAt time.Time `json:"deleted_at"`
+	// Tenant is the owning tenant, stamped from the record the caller already
+	// owns (never from a request body) — §3a rule 2. It scopes cap-tier
+	// eviction so one tenant's churn cannot evict another's suppressions.
+	Tenant string `json:"tenant,omitempty"`
+	// LastHit is the last time this tombstone actually suppressed a
+	// source-reported device. Durable but rate-limited; see the compaction
+	// header for why retention is measured from it and not from DeletedAt.
+	LastHit time.Time `json:"last_hit,omitempty"`
+}
+
+// tombstone is one suppression in memory.
+//
+// lastHit is an atomic unix-nano so IsSuppressed can record a hit while holding
+// only the READ lock — the poll path calls it three times per reported device
+// and must not serialize on the store's write lock. Every other field is
+// immutable after construction except hitSaved, which only compaction touches
+// under the write lock. A re-Remove of the same id installs a NEW *tombstone
+// rather than mutating this one, so no field is ever written concurrently.
+type tombstone struct {
+	tenant    string
+	deletedAt time.Time
+	lastHit   atomic.Int64
+	// hitSaved is the lastHit value already durable in the record; the gap
+	// between them is what rate-limits the persist.
+	hitSaved int64
+}
+
+func newTombstone(tenant string, deletedAt, lastHit time.Time) *tombstone {
+	t := &tombstone{tenant: tenant, deletedAt: deletedAt}
+	if !lastHit.IsZero() {
+		t.lastHit.Store(lastHit.UnixNano())
+		t.hitSaved = lastHit.UnixNano()
+	}
+	return t
+}
+
+// lastActivity is "the last time this suppression was created or actually
+// needed" — the instant retention is measured from.
+func (t *tombstone) lastActivity() time.Time {
+	if h := t.lastHit.Load(); h != 0 {
+		if hs := time.Unix(0, h).UTC(); hs.After(t.deletedAt) {
+			return hs
+		}
+	}
+	return t.deletedAt
+}
+
+func (t *tombstone) record(id string) tombstoneRecord {
+	r := tombstoneRecord{ID: id, DeletedAt: t.deletedAt, Tenant: t.tenant}
+	if h := t.lastHit.Load(); h != 0 {
+		r.LastHit = time.Unix(0, h).UTC()
+	}
+	return r
 }
 
 // KV abstracts persistence (the platform kv layer); Errorf is the structured
 // error sink. Both required — this store fails loudly, never silently (F-69).
 func NewDevStore(path string, kv KV, errf func(component, msg string, fields map[string]any)) *DevStore {
+	return NewDevStoreWithLimits(path, kv, errf, TombstoneLimits{})
+}
+
+// NewDevStoreWithLimits is NewDevStore with an explicit tombstone-retention
+// policy (tracker 175). The zero TombstoneLimits is the production default;
+// tests inject tighter bounds and a fake clock so retention is deterministic.
+func NewDevStoreWithLimits(path string, kv KV, errf func(component, msg string, fields map[string]any), lim TombstoneLimits) *DevStore {
 	if errf == nil {
 		errf = func(string, string, map[string]any) {}
 	}
+	lim = lim.withDefaults()
 	s := &DevStore{
 		path:       path,
 		kv:         kv,
 		errf:       errf,
 		manual:     map[string]models.Device{},
-		suppressed: map[string]time.Time{},
+		suppressed: map[string]*tombstone{},
+		lim:        lim,
+		bootAt:     lim.Now(),
 	}
 	if pkv, ok := kv.(PrefixKV); ok && path != "" {
 		s.pkv = pkv
@@ -201,8 +286,12 @@ func (s *DevStore) load() error {
 	if f.Manual != nil {
 		s.manual = f.Manual
 	}
-	if f.Suppressed != nil {
-		s.suppressed = f.Suppressed
+	for id, at := range f.Suppressed {
+		// The blob shape carries no tenant and no last-hit: an id deleted
+		// before per-record persistence lands in the platform-scoped ("")
+		// retention partition on its deleted_at. The blob format is left
+		// byte-identical so a downgraded binary still reads it.
+		s.suppressed[id] = newTombstone("", at.UTC(), time.Time{})
 	}
 	return nil
 }
@@ -222,9 +311,24 @@ func (s *DevStore) loadRecords() error {
 		if err := s.load(); err != nil {
 			return err
 		}
+		// No compaction on the migration path: a one-time format change must
+		// not also garbage-collect, or a crash-rerun and a retention pass would
+		// be arguing about the same records. The very next boot takes the adopt
+		// path below and compacts there.
 		return s.migrate(recs)
 	}
-	return s.adoptRecords(recs)
+	if err := s.adoptRecords(recs); err != nil {
+		return err
+	}
+	// ONE bounded compaction pass at boot (tracker 175). Bounded on purpose:
+	// an accumulated residue drains over a few boots rather than turning the
+	// boot read into a 35k-unlink stall — the 6b79ea58 wedge must not come back
+	// through this door. The cap tier is inert here (zero uptime), so boot only
+	// ever evicts tombstones expired on their DURABLE deleted_at/last_hit.
+	// Constructor-only: the store is not yet shared, so the "caller holds mu"
+	// contract is satisfied vacuously.
+	s.compactLocked(s.lim.BootBudget)
+	return nil
 }
 
 // adoptRecords parses per-record state into the in-memory maps. Any
@@ -253,7 +357,7 @@ func (s *DevStore) adoptRecords(recs map[string][]byte) error {
 			if want := s.suppressedKey(ts.ID); want != key {
 				return fmt.Errorf("device tombstone %s carries id %q which names %s — record name and content disagree", key, ts.ID, want)
 			}
-			s.suppressed[ts.ID] = ts.DeletedAt
+			s.suppressed[ts.ID] = newTombstone(ts.Tenant, ts.DeletedAt.UTC(), ts.LastHit.UTC())
 		default:
 			// Unknown record class under our prefix: tolerate (forward
 			// compatibility with a newer schema) but say so.
@@ -306,7 +410,7 @@ func (s *DevStore) migrate(existing map[string][]byte) error {
 		delete(existing, key)
 	}
 	for id, ts := range s.suppressed {
-		b, err := json.Marshal(tombstoneRecord{ID: id, DeletedAt: ts})
+		b, err := json.Marshal(ts.record(id))
 		if err != nil {
 			return fmt.Errorf("encode device tombstone %q: %w", id, err)
 		}
@@ -367,7 +471,11 @@ func (s *DevStore) saveLocked() error {
 	if err := s.writeAllowedLocked(); err != nil {
 		return err
 	}
-	b, err := json.MarshalIndent(devPersistFile{Manual: s.manual, Suppressed: s.suppressed}, "", "  ")
+	sup := make(map[string]time.Time, len(s.suppressed))
+	for id, ts := range s.suppressed {
+		sup[id] = ts.deletedAt
+	}
+	b, err := json.MarshalIndent(devPersistFile{Manual: s.manual, Suppressed: sup}, "", "  ")
 	if err != nil {
 		return fmt.Errorf("encode device store: %w", err)
 	}
@@ -443,17 +551,35 @@ func (s *DevStore) Put(d models.Device) error {
 // once it is durable the delete is effective even if the shadowed record's
 // cleanup fails (load sweeps it).
 func (s *DevStore) Remove(id string) error {
+	return s.RemoveOwned("", id)
+}
+
+// RemoveOwned is Remove with the owning tenant supplied by a caller that
+// already knows it — the discovery aggregator knows a source-owned device's
+// tenant from its cache, where this store has no record to read it from.
+//
+// §3a rule 2: the tenant is stamped from a record the caller owns (the cached
+// device, whose TenantID the create path stamped from the authenticated
+// principal), NEVER from a request body. An empty tenant falls back to the
+// stored manual record's, then to "" — which is not a wildcard but the
+// platform-scoped partition (deviceTenantKey). The tenant scopes cap-tier
+// compaction only; it never widens or narrows what a suppression suppresses.
+func (s *DevStore) RemoveOwned(tenant, id string) error {
 	if s == nil {
 		return nil
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if tenant == "" {
+		tenant = deviceTenantKey(s.manual[id])
+	}
 	if s.pkv != nil {
 		if err := s.writeAllowedLocked(); err != nil {
 			return err
 		}
-		now := time.Now().UTC()
-		b, err := json.Marshal(tombstoneRecord{ID: id, DeletedAt: now})
+		now := s.lim.Now()
+		ts := newTombstone(tenant, now, time.Time{})
+		b, err := json.Marshal(ts.record(id))
 		if err != nil {
 			return fmt.Errorf("encode device tombstone: %w", err)
 		}
@@ -469,13 +595,18 @@ func (s *DevStore) Remove(id string) error {
 			}
 		}
 		delete(s.manual, id)
-		s.suppressed[id] = now
+		s.suppressed[id] = ts
+		// Growth is Remove-driven, so the bound is too: one bounded incremental
+		// pass per delete, AFTER the delete has been made durable (tracker 175).
+		// It cannot fail this call — see compactLocked.
+		s.compactLocked(s.lim.Budget)
 		return nil
 	}
-	// Legacy whole-blob fallback.
+	// Legacy whole-blob fallback (no compaction: this path rewrites the whole
+	// blob on every write and is not a scale path — see the compaction header).
 	prev, had := s.manual[id]
 	delete(s.manual, id)
-	s.suppressed[id] = time.Now().UTC()
+	s.suppressed[id] = newTombstone(tenant, s.lim.Now(), time.Time{})
 	if err := s.saveLocked(); err != nil {
 		if had {
 			s.manual[id] = prev
@@ -484,6 +615,16 @@ func (s *DevStore) Remove(id string) error {
 		return err
 	}
 	return nil
+}
+
+// saveTombstoneLocked re-persists one tombstone record (used by compaction to
+// make an in-memory last-hit durable). Caller holds s.mu (write).
+func (s *DevStore) saveTombstoneLocked(id string, ts *tombstone) error {
+	b, err := json.Marshal(ts.record(id))
+	if err != nil {
+		return fmt.Errorf("encode device tombstone: %w", err)
+	}
+	return s.kv.Save(s.suppressedKey(id), b)
 }
 
 // devices returns the persisted manual inventory, for the aggregator to seed
@@ -514,6 +655,15 @@ func (s *DevStore) IsSuppressed(id string) bool {
 	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	_, ok := s.suppressed[id]
-	return ok
+	ts, ok := s.suppressed[id]
+	if !ok {
+		return false
+	}
+	// A hit is the ONLY evidence that this suppression is still load-bearing:
+	// something tried to resurrect the id and was stopped. Retention is
+	// measured from it (tracker 175, devstore_compact.go). Recorded atomically
+	// under the READ lock — this is the poll path (three calls per reported
+	// device) and must not serialize on the write lock, and must not do IO.
+	ts.lastHit.Store(s.lim.Now().UnixNano())
+	return true
 }

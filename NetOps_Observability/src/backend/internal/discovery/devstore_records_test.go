@@ -157,8 +157,12 @@ func TestLegacyBlobMigratesToPerRecordStore(t *testing.T) {
 			"core-sw01": {ID: "core-sw01", Name: "core-sw01", Address: "10.0.0.1", TenantID: "t_a", Source: "manual"},
 			"core-sw02": {ID: "core-sw02", Name: "core-sw02", Address: "10.0.0.2", TenantID: "t_b", Source: "manual"},
 		},
+		// Recent on purpose: this test pins MIGRATION FIDELITY, not retention.
+		// Since tracker 175 a never-hit tombstone older than the retention
+		// horizon is compacted at the next (adopt-path) boot — that behaviour has
+		// its own tests in devstore_compact_test.go.
 		Suppressed: map[string]time.Time{
-			"deleted-fw": time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC),
+			"deleted-fw": time.Now().UTC().Add(-time.Hour),
 		},
 	}
 	blob, err := json.Marshal(legacy)
@@ -216,7 +220,8 @@ func TestMigrationCrashRerunsIdempotently(t *testing.T) {
 	kv := newRecKV()
 	legacy := devPersistFile{
 		Manual:     map[string]models.Device{"r1": {ID: "r1", Name: "r1", Source: "manual"}},
-		Suppressed: map[string]time.Time{"gone1": time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC)},
+		// Recent for the same reason as above (tracker 175 retention).
+		Suppressed: map[string]time.Time{"gone1": time.Now().UTC().Add(-time.Hour)},
 	}
 	blob, _ := json.Marshal(legacy)
 	kv.m["devices.json"] = blob
