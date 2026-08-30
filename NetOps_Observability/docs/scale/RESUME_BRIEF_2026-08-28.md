@@ -366,3 +366,8 @@ update `P4_PROGRAMME_WRITEUP_2026-08-29.md` tables.
   `t-storm-2.5k` for 9/9, then finalise the P4 tables.
 - 22:49 (driver clock): wave RUNNING from L1 after fixing the arm probe
   (`dd051f53`: mTLS :8443, never :8094). Follow `/var/tmp/scale-runs/ab-driver.log`.
+
+## UPDATE 2026-08-30 00:40Z — L1 collected; both engine fixes committed (not deployed)
+- L1 `t-storm-10-2.5k` OFF: PASS 9/9, 94,942 engine signals, T1 p95 2,763 s, accuracy 903/1005 — recorded in RUN_PLAN_P3_AB §1. L2 `t-storm-25-2.5k` OFF running since 00:14Z.
+- `2852ad6f` = tracker 188 (findings retry-safe) + 185 part 3 (26 s was wall time over ~400 closes, not a block; sync-only spans, per-object yield, 60 s session timeout). Gate 2496/79. **Do not deploy until the wave's restore step has run** — both arms on image `12074157`. Post-wave: rebuild correlation with GIT_SHA, apply the findings ALTER if api is not rebuilt, final `t-storm-2.5k`, fill §5, decide §6.
+- `fc0d8b23` driver OSError handlers reviewed; `d759836d` tracker 189 filed.
