@@ -21,7 +21,7 @@ A signal reduction that costs accuracy is a regression, not a lever.
 |---|---|---|---|---|
 | L0a | `storm-s02-08291929` (runid `08291929iqtm`) | `t-storm-2.5k` | **OFF** | ALREADY RUN — reuse, do not re-run |
 | L0b | `storm-s03-08292148` (runid `08292148kdz4`) | `t-storm-2.5k` | **OFF** | in flight at plan time — reuse when it lands |
-| L1 | `agg-10-off-<MMDDHHMM>` | `t-storm-10-2.5k` | OFF | to run |
+| L1 | `agg-10-off-08292249` (run `0829224959gv`) | `t-storm-10-2.5k` | OFF | **PASS 9/9**, 2026-08-30 00:13Z — both replicas verified OFF via mTLS; engine signals 94,942 (inc 1,274; versions 5,168; vpi 4.06); T1 p50/p95/p99 434/2,763/3,063 s; tlast95 3,273 s; converged 23:53:05 (burst end 23:07:41 → completion ≈ 2,724 s); twin accuracy 903/1005 (90 %); residue 0 |
 | L2 | `agg-25-off-<MMDDHHMM>` | `t-storm-25-2.5k` | OFF | to run |
 | L3 | `agg-10-on-<MMDDHHMM>` | `t-storm-10-2.5k` | **ON** | to run |
 | L4 | `agg-25-on-<MMDDHHMM>` | `t-storm-25-2.5k` | **ON** | to run |
