@@ -1871,9 +1871,29 @@ CORR_IDLE_AGE_S = float(os.environ.get("MLX_CORR_IDLE_AGE_S", "30"))
 # phase and missed three CommitFailedError events that followed it.
 STABILITY_SETTLE_MAX_S = float(os.environ.get("MLX_STABILITY_SETTLE_MAX_S", "600"))
 STABILITY_GRACE_S = float(os.environ.get("MLX_STABILITY_GRACE_S", "180"))
-# aiokafka session timeout the correlation consumer runs with; a loop stall at
-# or beyond this can cost the member its partitions.
-KAFKA_SESSION_TIMEOUT_MS = int(os.environ.get("MLX_KAFKA_SESSION_TIMEOUT_MS", "30000"))
+# ── TRACKER 190: the session timeout is READ, never assumed ────────────────
+#
+# THE DEFECT. The stability gate's one arithmetic clause — "did the worst
+# event-loop stall reach the point where the broker can eject this member?" —
+# compared against a constant 30000 ms hard-coded HERE, while the engine has run
+# CORR_SESSION_TIMEOUT_MS=60000 since the P1 max-poll-thrash work (main.py, see
+# the arithmetic comment above that constant). The gate was not measuring the
+# engine's group-membership contract; it was measuring a stale copy of it. The
+# drift happened to be conservative — it would fail a 45 s stall the broker
+# would have tolerated — but a gate whose threshold is a guess is not a gate,
+# and the next drift can just as easily run the other way.
+#
+# THE FIX. The engine publishes the contract (`corr_session_timeout_ms` on
+# /metrics); the harness READS it from every replica it already scrapes. If the
+# replicas disagree, or the gauge is absent (an engine image older than the
+# gauge), the clause is UNKNOWN and UNKNOWN IS NOT PASS — the same rule the
+# unreadable-replica clause has always followed. The env override survives, but
+# it is now an OVERRIDE with a stated derivation, not a silent default.
+SESSION_TIMEOUT_GAUGE = "corr_session_timeout_ms"
+_sto = os.environ.get("MLX_KAFKA_SESSION_TIMEOUT_MS", "").strip()
+# None (not 30000) when unset: "nobody told us" must be distinguishable from
+# "somebody said 30000", or the refusal path can never fire.
+KAFKA_SESSION_TIMEOUT_OVERRIDE_MS: int | None = int(_sto) if _sto else None
 
 DLQ_EXPECTED_REASONS = frozenset({"identity_unattributable"})
 
@@ -6069,7 +6089,73 @@ class Harness:
         return out
 
     @staticmethod
-    def stability_verdict(counters: dict, session_timeout_ms: int) -> list:
+    def session_timeout_from_replicas(reps: list,
+                                     override: int | None = None) -> tuple:
+        """(session_timeout_ms | None, derivation) — TRACKER 190.
+
+        The live Kafka session timeout the correlation members run with, taken
+        from `corr_session_timeout_ms` on EVERY readable replica's /metrics —
+        the same scrape `corr_completion_state` already performs, so this costs
+        no extra probe.
+
+        `None` is returned — and the caller must treat the loop-stall clause as
+        UNKNOWN, which is not PASS — whenever the value cannot be established:
+        no replica was read, the gauge is absent from any readable replica (an
+        engine image older than the gauge), or the replicas DISAGREE (a
+        half-rolled deploy: the group's real eviction point is then the SMALLEST
+        of them, and guessing which member the stall belonged to is exactly the
+        assumption this exists to remove).
+
+        An explicit `MLX_KAFKA_SESSION_TIMEOUT_MS` override always wins, but the
+        derivation string says so and still reports what the replicas showed —
+        an override that silently contradicts the running engine is the original
+        defect wearing a different hat.
+
+        Pure: `reps` is the list `Stack.corr_replicas()` returns, so every
+        branch is unit-testable without a stack.
+        """
+        readable = [r for r in reps if "metrics" in r]
+        seen: dict = {}
+        absent: list = []
+        for r in readable:
+            raw = r["metrics"].get(SESSION_TIMEOUT_GAUGE)
+            name = r.get("container") or r.get("name") or "?"
+            if raw is None:
+                absent.append(name)
+            else:
+                seen[name] = int(raw)
+        values = sorted(set(seen.values()))
+
+        if not reps:
+            observed = "no correlation replica was read"
+        elif not readable:
+            observed = f"none of {len(reps)} replica(s) could be scraped"
+        elif absent and not values:
+            observed = (f"{SESSION_TIMEOUT_GAUGE} absent from all "
+                        f"{len(readable)} readable replica(s) — engine image "
+                        f"predates the gauge")
+        elif absent:
+            observed = (f"{SESSION_TIMEOUT_GAUGE} absent from "
+                        f"{len(absent)} of {len(readable)} readable replica(s) "
+                        f"({', '.join(sorted(absent))}); the rest read "
+                        f"{'/'.join(str(v) for v in values)}ms")
+        elif len(values) > 1:
+            observed = ("replicas DISAGREE on " + SESSION_TIMEOUT_GAUGE + ": " +
+                        ", ".join(f"{k}={v}ms" for k, v in sorted(seen.items())))
+        else:
+            observed = (f"session timeout {values[0]}ms read from "
+                        f"{len(seen)} replica(s)")
+
+        if override is not None:
+            return override, (f"override MLX_KAFKA_SESSION_TIMEOUT_MS="
+                              f"{override}ms (replicas: {observed})")
+        if len(values) == 1 and not absent and readable:
+            return values[0], observed
+        return None, observed
+
+    @staticmethod
+    def stability_verdict(counters: dict, session_timeout_ms: int | None,
+                          derivation: str = "") -> list:
         """Which counters are disqualifying. Pure; returns a list of problems."""
         problems = []
         if counters.get("replicas_observed", 0) == 0:
@@ -6085,7 +6171,17 @@ class Harness:
                 problems.append(f"{counters[key]} {label} event(s) across the full "
                                 f"lifecycle")
         worst = counters.get("worst_loop_lag_ms", 0)
-        if worst >= session_timeout_ms:
+        if session_timeout_ms is None:
+            # UNKNOWN, and UNKNOWN IS NOT PASS — the same rule the unreadable-
+            # replica clause follows. Never fall back to a constant: a threshold
+            # nobody published is what tracker 190 exists to delete.
+            problems.append(
+                f"Kafka session timeout is UNKNOWN ({derivation}) — the "
+                f"worst-stall clause cannot be evaluated (worst observed "
+                f"{worst}ms); set MLX_KAFKA_SESSION_TIMEOUT_MS to state it "
+                f"explicitly, or run an engine that exports "
+                f"{SESSION_TIMEOUT_GAUGE}")
+        elif worst >= session_timeout_ms:
             problems.append(
                 f"worst event-loop stall {worst}ms EXCEEDS the {session_timeout_ms}ms "
                 f"Kafka session timeout — the member can be ejected mid-stall")
@@ -6140,15 +6236,36 @@ class Harness:
         ev.update(counters)
         ev["observation_window_s"] = since
         ev["grace_s"] = grace
-        ev["session_timeout_ms"] = KAFKA_SESSION_TIMEOUT_MS
-        problems = self.stability_verdict(counters, KAFKA_SESSION_TIMEOUT_MS)
+        # TRACKER 190: the threshold comes from the ENGINE, read off the same
+        # replicas the completion gate scrapes — never from a constant here.
+        reps = self.stack.corr_replicas()
+        timeout_ms, derivation = self.session_timeout_from_replicas(
+            reps, KAFKA_SESSION_TIMEOUT_OVERRIDE_MS)
+        ev["session_timeout_ms"] = timeout_ms if timeout_ms is not None else -1
+        ev["session_timeout_derivation"] = derivation
+        ev["session_timeout_override"] = KAFKA_SESSION_TIMEOUT_OVERRIDE_MS
+        ev["session_timeout_per_replica"] = {
+            (r.get("container") or "?"):
+                r.get("metrics", {}).get(SESSION_TIMEOUT_GAUGE, -1.0)
+            for r in reps}
+        problems = self.stability_verdict(counters, timeout_ms, derivation)
+        # INFORMATIONAL ONLY (never a gate): how much of the membership budget
+        # the worst stall actually ate. A run well inside the timeout can still
+        # be trending, and the number is worth carrying in the report — but the
+        # gate stays the ejection point, not a tighter budget somebody picked.
+        worst = counters["worst_loop_lag_ms"]
+        if timeout_ms:
+            ev["stall_budget_used_pct"] = round(100.0 * worst / timeout_ms, 1)
+            headroom = (f", worst loop stall {worst}ms = "
+                        f"{ev['stall_budget_used_pct']}% of the session timeout")
+        else:
+            headroom = f", worst loop stall {worst}ms"
         status = "PASS" if not problems else "FAIL"
         return self.phase("stability", status, ev,
-                          "; ".join(problems) if problems else
+                          ("; ".join(problems) + f" [{derivation}]") if problems else
                           f"clean across the full lifecycle ({since}s, "
                           f"{counters['replicas_observed']} replica(s)): 0 CommitFailed, "
-                          f"0 UnknownMember, 0 restarts, worst loop stall "
-                          f"{counters['worst_loop_lag_ms']}ms")
+                          f"0 UnknownMember, 0 restarts, {derivation}{headroom}")
 
     # -- phase 5: accounting -------------------------------------------------
     def accounting(self) -> bool:

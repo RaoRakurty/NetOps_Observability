@@ -1135,6 +1135,15 @@ PRUNE_CALLS = 0             # prune invocations (monotonic)
 PRUNE_EVICTED = 0           # signals evicted by age (monotonic)
 PRUNE_SECONDS_LAST = 0.0    # duration of the most recent prune (gauge)
 PRUNE_SECONDS_MAX = 0.0     # worst prune this process has done (gauge)
+# TRACKER 171 (residual, 2026-08-30). CORR_ENGINE_EPOCH_BUDGET_S bounds a drain
+# epoch only BETWEEN cohorts, so the honest worst-case maintenance starvation is
+# `budget + one cohort` — a claim nothing in the process measured. Maintenance
+# (retention prune) runs exactly ONCE per epoch, at its head (_begin_epoch), so
+# the wall gap between two successive prune passes IS the maintenance interval,
+# and its running maximum is the observed worst starvation. Monotonic clock, so
+# an NTP step cannot manufacture one. OBSERVATION ONLY: nothing schedules on it.
+PRUNE_GAP_MAX_S = 0.0       # widest gap ever left between prune passes (gauge)
+PRUNE_LAST_MONO: float | None = None   # None until the first pass; never a 0.0 sentinel
 
 # H14: event timestamps entering the LIVE window are bounded (see
 # buffer_signal). Clamped-future / stale-past counts, exposed on /healthz —
@@ -2363,6 +2372,17 @@ async def _prune_buffer(now: datetime) -> None:
     """
     global PRUNE_CALLS, PRUNE_EVICTED, PRUNE_SECONDS_LAST, PRUNE_SECONDS_MAX
     global PRUNE_YIELDS, STREAM_TIME_EVICTIONS, IDLE_TENANT_EVICTIONS
+    global PRUNE_GAP_MAX_S, PRUNE_LAST_MONO
+    # Tracker 171 residual: the starvation gauge. Taken FIRST — before the
+    # empty-window early return — because a pass that finds nothing to evict is
+    # still a maintenance pass, and an epoch that starves them all is exactly
+    # what this must show. The first pass sets the mark and reports no gap:
+    # there is no earlier pass to measure from, and inventing one from process
+    # start would report a startup interval as starvation.
+    _pass_started = time.monotonic()
+    if PRUNE_LAST_MONO is not None:
+        PRUNE_GAP_MAX_S = max(PRUNE_GAP_MAX_S, _pass_started - PRUNE_LAST_MONO)
+    PRUNE_LAST_MONO = _pass_started
     _sync_buffered_id_order()
     if not WINDOW_BUFFER:
         PRUNE_CALLS += 1
@@ -10195,6 +10215,12 @@ def _metrics_text() -> str:
         "# HELP corr_prune_seconds_max Worst prune duration this process (loop-blocking).",
         "# TYPE corr_prune_seconds_max gauge",
         f"corr_prune_seconds_max {PRUNE_SECONDS_MAX:.6f}",
+        # Tracker 171 residual: makes "starvation <= epoch budget + one cohort"
+        # a measured statement instead of an argued one. Prune runs once per
+        # epoch, so this is the worst epoch-to-epoch maintenance interval.
+        "# HELP corr_prune_gap_max_s Widest wall gap observed between successive prune (maintenance) passes.",
+        "# TYPE corr_prune_gap_max_s gauge",
+        f"corr_prune_gap_max_s {PRUNE_GAP_MAX_S:.3f}",
         # Non-zero means the window and its id index drifted and had to be
         # rebuilt — correct but slow, and it should never happen in production.
         "# HELP corr_window_id_order_resyncs_total Window/id-index drift rebuilds.",
@@ -10335,6 +10361,16 @@ def _metrics_text() -> str:
         "# HELP corr_consumer_lag_total In-process backlog; the idle backstop may only run at 0.",
         "# TYPE corr_consumer_lag_total gauge",
         f"corr_consumer_lag_total {CONSUMER_LAG_TOTAL if CONSUMER_LAG_TOTAL is not None else -1}",
+        # TRACKER 190. The scale harness's stability gate asks one question —
+        # "did the worst event-loop stall reach the point where the broker can
+        # eject this member?" — and answered it against a HARD-CODED 30000 ms
+        # while the engine ran 60000. The gate was not measuring the engine's
+        # contract; it was measuring a copy of it that had drifted. The contract
+        # is the engine's to publish, so it publishes it: one gauge, the live
+        # value of CORR_SESSION_TIMEOUT_MS, read straight off /metrics.
+        "# HELP corr_session_timeout_ms Kafka session timeout this consumer runs with (group-membership contract).",
+        "# TYPE corr_session_timeout_ms gauge",
+        f"corr_session_timeout_ms {CORR_SESSION_TIMEOUT_MS}",
         # tracker 166 scheduler: pending depth may grow under overload; the
         # TRANSACTION must not. Both are exported so the distinction is visible.
         "# HELP corr_engine_cohort_size Max new signals admitted to one transaction.",
@@ -10807,6 +10843,7 @@ def _health_payload() -> dict:
             "prune_evicted": PRUNE_EVICTED,
             "prune_seconds_last": round(PRUNE_SECONDS_LAST, 4),
             "prune_seconds_max": round(PRUNE_SECONDS_MAX, 4),
+            "prune_gap_max_s": round(PRUNE_GAP_MAX_S, 3),
             "window_id_order_resyncs": WINDOW_ID_ORDER_RESYNCS,
             "prune_yields": PRUNE_YIELDS,
             "window_overflow_dropped": WINDOW_OVERFLOW_DROPPED,
