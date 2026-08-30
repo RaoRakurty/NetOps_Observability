@@ -29,7 +29,7 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 import scoring
-from catalog import Catalog, Clause, builtin_catalog
+from catalog import Catalog, Clause, Template, builtin_catalog
 from scoring import (
     _inapplicable_score,
     evidence_kinds,
@@ -331,3 +331,172 @@ def test_MUTANT_G_ordering_is_preserved():
     fast, slow = assert_identical(ev, why="ordering")
     assert [s.template_id for s in fast] == [s.template_id for s in slow]
     assert [s.template_id for s in slow] == [t.id for t in ALL_TEMPLATES]
+
+
+# ── the SELECTIVITY COUNTERS (tracker 167, measurement) ──────────────────────
+#
+# The fast path above shipped unmeasured. `corr_template_scored_total` /
+# `corr_template_candidates_total` make its live selectivity computable:
+#
+#     selectivity = scored / candidates
+#
+# Measured offline on the LIVE corpus (netops.corr_signals_archive, 24 h of the
+# production-mix scale runs, 21,197 archived evidence pools reduced to their
+# distinct kind sets, replayed through `rank()` and read off these counters):
+# 419,339 / 2,119,700 = **19.78 %** — the index elides 80.2 % of template
+# scorings. The tests below pin what the counters MEAN, not that number.
+
+
+@pytest.fixture(autouse=False)
+def counters():
+    """Zeroed counters, and zeroed again afterwards so ordering never matters."""
+    scoring.reset_template_scoring_stats()
+    yield scoring.template_scoring_stats
+    scoring.reset_template_scoring_stats()
+
+
+def _fixture_catalog():
+    """A hand-computable catalog: five ENABLED templates with declared kinds
+    A · B · (A|C) · D · E, plus a DISABLED one on A.
+
+    Every number below is countable by eye — that is the point. Nothing here
+    depends on the builtin catalog's content."""
+    from catalog import Verdict as CatVerdict
+
+    def tmpl(name, kind, *, enabled=True):
+        return Template(
+            id=f"sig.ent.test.{name}", title=name, domain="ent.test",
+            enabled=enabled, requires=(Clause(kind=kind),),
+            verdict=CatVerdict(owner="netops", layer="L2",
+                               first_steps=("check the thing",)))
+
+    return Catalog(templates=(
+        tmpl("a", "kind_a"),
+        tmpl("b", "kind_b"),
+        tmpl("ac", "kind_a|kind_c"),
+        tmpl("d", "kind_d"),
+        tmpl("e", "kind_e"),
+        tmpl("disabled_a", "kind_a", enabled=False),
+    ))
+
+
+def test_counters_are_hand_computable(counters):
+    """Evidence {kind_a, kind_d} over the fixture catalog:
+         candidates = 5   (the ENABLED templates — the disabled one is not
+                           considered, so it is not a candidate either)
+         scored     = 3   (a on kind_a, ac via the alternation, d on kind_d;
+                           b and e are elided)"""
+    cat = _fixture_catalog()
+    rank(cat, (sig("kind_a"), sig("kind_d", offset_s=5)))
+    st = counters()
+    assert st == {"scored": 3, "candidates": 5}
+    assert st["scored"] / st["candidates"] == 0.6
+
+
+def test_candidates_counts_every_enabled_template_even_with_no_matches(counters):
+    """The denominator is what a pre-167 build WOULD have scored — so an object
+    that reaches nothing still contributes its full candidate count."""
+    cat = _fixture_catalog()
+    rank(cat, (sig("kind_nothing_declares"),))
+    assert counters() == {"scored": 0, "candidates": 5}
+
+
+def test_counters_accumulate_once_per_evaluation(counters):
+    """Two evaluations = two candidate charges and the sum of their scored
+    counts. A single `rank()` call can never charge a template twice."""
+    cat = _fixture_catalog()
+    rank(cat, (sig("kind_a"),))                      # scores a + ac
+    rank(cat, (sig("kind_b"),))                      # scores b
+    assert counters() == {"scored": 3, "candidates": 10}
+
+
+def test_only_rank_charges_the_counters(counters):
+    """`rank()` is the only writer, by design. The counters live INSIDE it, and
+    engine.py consults the rank memo BEFORE calling it (`if base_ranking is
+    None: rank(...)`), so a component served from the memo contributes to
+    NEITHER counter — this ratio measures the INDEX, and the memo has its own
+    `corr_rank_memo` series. Mixing the two would flatter both.
+
+    Equally, the scoring primitives are not the decision point: scoring a
+    template outside a `rank()` evaluation (the equivalence oracle, benches)
+    must not inflate the numerator."""
+    t = ALL_TEMPLATES[0]
+    ev = (sig(min(t.requires[0].kinds())),)
+    score_template(t, ev)
+    _inapplicable_score(t)
+    evidence_kinds(ev)
+    assert counters() == {"scored": 0, "candidates": 0}
+    rank(_fixture_catalog(), (sig("kind_a"),))
+    assert counters() == {"scored": 2, "candidates": 5}
+
+
+def test_the_snapshot_cannot_write_back_to_the_counters(counters):
+    cat = _fixture_catalog()
+    rank(cat, (sig("kind_a"),))
+    snap = counters()
+    snap["scored"] = 10_000
+    assert counters()["scored"] == 2
+
+
+def test_MUTANT_no_fast_path_drives_the_ratio_to_one(counters, monkeypatch):
+    """THE MUTANT. Drop the fast path — every template reaches `score_template`
+    — and the counters must say so: scored == candidates, a strictly larger
+    numerator than the indexed run over the same evidence. The RANKING must be
+    byte-identical either way (the fast path is invisible; only the ratio moves)."""
+    ev = (sig("link_state_change"), sig("bgp_adjacency_change", offset_s=5))
+
+    indexed = rank(CAT, ev)
+    st_indexed = counters()
+    assert st_indexed["candidates"] == len(ALL_TEMPLATES)
+    assert 0 < st_indexed["scored"] < st_indexed["candidates"], (
+        "the index elided nothing on real multi-kind evidence — vacuous mutant")
+
+    real_plan = scoring._catalog_plan
+
+    def no_index(catalog):
+        """Every template 'reachable' from any kind — i.e. no fast path."""
+        index, inapplicable = real_plan(catalog)
+        every = frozenset(k for ks in index.values() for k in ks)
+        return {tid: every | evidence_kinds(ev) for tid in index}, inapplicable
+
+    scoring.reset_template_scoring_stats()
+    monkeypatch.setattr(scoring, "_catalog_plan", no_index)
+    exhaustive = rank(CAT, ev)
+    st_mutant = counters()
+
+    assert st_mutant["scored"] == st_mutant["candidates"] == len(ALL_TEMPLATES)
+    assert st_mutant["scored"] > st_indexed["scored"], (
+        "dropping the fast path did not change the numerator — the counters are "
+        "not measuring the fast path")
+    def ratio(s: dict) -> float:
+        return s["scored"] / s["candidates"]
+
+    assert ratio(st_mutant) == 1.0 and ratio(st_indexed) < 1.0
+    assert indexed == exhaustive, "the fast path changed the ranking"
+
+
+def test_selectivity_on_the_production_mix_is_real(counters):
+    """The six classifying kinds of EVENT_MIX_REALISTIC
+    (scripts/scale-miniladder.py:4934-4957) in one object — the shape the live
+    measurement is dominated by. A loose band: this is a regression guard on the
+    index still paying for itself as the catalog grows, not a pin on 30 %."""
+    mix = ("link_state_change", "bgp_adjacency_change", "ospf_adjacency_change",
+           "lldp_neighbor_change", "stp_topology_change", "device_alarm")
+    rank(CAT, tuple(sig(k, offset_s=3 * i) for i, k in enumerate(mix)))
+    st = counters()
+    assert st["candidates"] == len(ALL_TEMPLATES)
+    assert 0 < st["scored"] / st["candidates"] < 0.6, (
+        f"selectivity {st} left the band the fast path was justified by")
+
+
+def test_the_exposition_lines_carry_both_counters(counters):
+    """The metric names live with the counters, so `_metrics_text()` needs one
+    `*template_scoring_metric_lines(),` and cannot drift from what it exports."""
+    rank(_fixture_catalog(), (sig("kind_a"), sig("kind_d", offset_s=5)))
+    lines = scoring.template_scoring_metric_lines()
+    assert "# TYPE corr_template_scored_total counter" in lines
+    assert "# TYPE corr_template_candidates_total counter" in lines
+    assert "corr_template_scored_total 3" in lines
+    assert "corr_template_candidates_total 5" in lines
+    for ln in lines:
+        assert "{" not in ln, "these are plain counters — no labels"

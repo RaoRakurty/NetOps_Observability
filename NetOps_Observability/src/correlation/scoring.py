@@ -530,19 +530,99 @@ def evidence_kinds(evidence: tuple[Signal, ...]) -> frozenset[str]:
     return frozenset(ks)
 
 
+# ── tracker 167: SELECTIVITY MEASUREMENT ─────────────────────────────────────
+#
+# The fast path above shipped unmeasured — nothing counted how many templates it
+# actually elides on live evidence, so its value was an argument, not a number.
+# Two plain counters (no labels) make the ratio computable from the exposition:
+#
+#     selectivity = corr_template_scored_total / corr_template_candidates_total
+#
+#   candidates — enabled templates CONSIDERED by a `rank()` call; exactly what a
+#                pre-167 build would have pushed through `score_template`.
+#   scored     — those that survived the kind index and were really scored.
+#
+# WHERE THEY COUNT, and why that is the honest decision point:
+#   • Incremented ONCE per `rank()` call, from loop-local ints — the counters are
+#     two module ints, so there is no per-template call and no allocation.
+#   • A rank-memo HIT never reaches `rank()` (engine.py consults the memo first),
+#     so a served-from-memo component contributes to NEITHER counter. That is
+#     deliberate: this ratio measures the INDEX, and the memo has its own
+#     `corr_rank_memo` series. Mixing them would flatter both.
+#   • A retry that re-ranks the same component is a genuine second evaluation and
+#     counts once per evaluation — there is no retry loop inside `rank()` itself,
+#     so a single call can never double-count a template.
+# Counters are monotonic process-lifetime totals; read them as a rate/ratio.
+#
+# MEASURED OFFLINE, 2026-08-30, before these counters ever ran live: the
+# archived evidence pools of the scale-run corpus (ClickHouse
+# netops.corr_signals_archive, last 24 h, 4.64 M signals grouped by
+# `archived_for` into 21,197 real objects → 55 distinct kind sets) replayed
+# through `rank()` and read off these counters: 419,339 / 2,119,700 =
+# **19.78 %** — the index elides 80.2 % of template scorings on the
+# production mix. The live counters are what keep that number honest as the
+# catalog and the traffic mix move.
+_TEMPLATE_SCORED_TOTAL = 0
+_TEMPLATE_CANDIDATES_TOTAL = 0
+
+
+def template_scoring_stats() -> dict[str, int]:
+    """Snapshot of the tracker-167 selectivity counters for the metrics
+    exposition: ``{"scored": …, "candidates": …}``. Read-only; a plain dict of
+    ints so the caller can never reach back into the counters."""
+    return {"scored": _TEMPLATE_SCORED_TOTAL,
+            "candidates": _TEMPLATE_CANDIDATES_TOTAL}
+
+
+def template_scoring_metric_lines() -> tuple[str, ...]:
+    """The two counters as Prometheus exposition lines, so the metric NAMES stay
+    owned by the module that counts and `_metrics_text()` needs a single
+    `*template_scoring_metric_lines(),`. Plain counters — no labels."""
+    st = template_scoring_stats()
+    return (
+        ("# HELP corr_template_scored_total Templates actually scored by rank() "
+         "(survived the tracker-167 kind index)."),
+        "# TYPE corr_template_scored_total counter",
+        f"corr_template_scored_total {st['scored']}",
+        ("# HELP corr_template_candidates_total Enabled templates considered per "
+         "rank() evaluation — what a pre-167 build would have scored. Selectivity "
+         "= corr_template_scored_total / corr_template_candidates_total."),
+        "# TYPE corr_template_candidates_total counter",
+        f"corr_template_candidates_total {st['candidates']}",
+    )
+
+
+def reset_template_scoring_stats() -> None:
+    """Zero the selectivity counters. Tests and offline measurement runs only —
+    the engine never calls this (a counter that resets in production would make
+    the ratio unreadable)."""
+    global _TEMPLATE_SCORED_TOTAL, _TEMPLATE_CANDIDATES_TOTAL
+    _TEMPLATE_SCORED_TOTAL = 0
+    _TEMPLATE_CANDIDATES_TOTAL = 0
+
+
 def rank(catalog: Catalog, evidence: tuple[Signal, ...] | list[Signal]) -> RankingResult:
     """Score every enabled template; rank by confidence with deterministic
     tie-break (template id) so equal scores never flap between runs."""
+    global _TEMPLATE_SCORED_TOTAL, _TEMPLATE_CANDIDATES_TOTAL
     ev = tuple(evidence)
     # tracker 167: score only the templates the evidence could possibly reach;
     # the rest get their fully-determined zero score analytically. Same list,
     # same order, same values — see the module note above.
     present = evidence_kinds(ev)
     index, inapplicable = _catalog_plan(catalog)
-    scores = [
-        score_template(t, ev) if index[t.id] & present else inapplicable[t.id]
-        for t in catalog.enabled_templates()
-    ]
+    templates = catalog.enabled_templates()
+    scores: list[HypothesisScore] = []
+    append = scores.append          # bound once: this loop runs catalog-sized
+    scored = 0                      # per rank(), and rank() runs per component
+    for t in templates:
+        if index[t.id] & present:
+            append(score_template(t, ev))
+            scored += 1
+        else:
+            append(inapplicable[t.id])
+    _TEMPLATE_SCORED_TOTAL += scored
+    _TEMPLATE_CANDIDATES_TOTAL += len(templates)
     # Equal confidence → prefer the MORE SPECIFIC explanation (more matched
     # clauses = more of the evidence explained); template id only as the final
     # deterministic tie-break. Keeps a broad single-clause look-alike from
