@@ -1135,3 +1135,230 @@ def test_a_broken_log_file_does_not_stop_the_wave(tmp_path, capsys):
         drv.save_state(str(blocker / "s.json"),
                        {"schema": drv.STATE_SCHEMA, "legs": {}})
     assert "not resumable" in str(exc.value)
+
+
+# ---------------------------------------------------------------------------
+# --legs / --fresh-containers / --state-file — the matched OFF/ON pair
+# (docs/scale/RUN_PLAN_P3_PAIR_2026-08-30.md, P3 verdict §3.6)
+#
+# The pair re-tests the §7 neutrality guard with every confound removed, so the
+# three things that make it a DIFFERENT wave from L1..L5 are the three things
+# tested here: an operator-supplied leg table, containers that are cold before
+# every leg (not only when the arm changes), and a state file that cannot be
+# confused with the six-leg wave's.
+# ---------------------------------------------------------------------------
+PAIR_SPEC = ("P1:t-storm-2.5k:off:pair-2p5k-off,"
+             "P2:t-storm-2.5k:on:pair-2p5k-on")
+FAKE_PROFILES = ("legacy", "t-nominal-2.5k", "t-storm-2.5k", "t-storm-10-2.5k")
+
+
+def test_parse_legs_accepts_the_pair_spec():
+    legs = drv.parse_legs(PAIR_SPEC, FAKE_PROFILES)
+    assert [(leg.id, leg.profile, leg.arm, leg.dir_prefix) for leg in legs] == [
+        ("P1", "t-storm-2.5k", "off", "pair-2p5k-off"),
+        ("P2", "t-storm-2.5k", "on", "pair-2p5k-on"),
+    ], "the order given IS the execution order"
+
+
+@pytest.mark.parametrize("spec,expected", [
+    # 1. an entry that is not four fields — a dropped dir prefix would otherwise
+    #    silently reuse another leg's directory name.
+    ("P1:t-storm-2.5k:off", "has 3 field(s), not 4"),
+    # 2. an arm that is neither on nor off. The arm is the whole experiment;
+    #    guessing it would label a leg with the wrong one.
+    ("P1:t-storm-2.5k:maybe:pair-2p5k-off", "is not one of off, on"),
+    # 3. a profile the harness does not have. Caught here, before the lock wait
+    #    and the fleet cleanup, instead of by the harness's argparse an hour in.
+    ("P1:t-storm-2p5k:off:pair-2p5k-off", "is not a harness workload profile"),
+])
+def test_parse_legs_refuses_a_bad_spec(spec, expected):
+    with pytest.raises(drv.DriverAbort) as exc:
+        drv.parse_legs(spec, FAKE_PROFILES)
+    assert expected in str(exc.value)
+
+
+@pytest.mark.parametrize("spec,expected", [
+    ("", "--legs is empty"),
+    ("P1:t-storm-2.5k:off:a,P1:t-storm-2.5k:on:b", "leg id 'P1' twice"),
+    ("P1:t-storm-2.5k:off:a,P2:t-storm-2.5k:on:a", "dir prefix 'a' twice"),
+    ("P 1:t-storm-2.5k:off:a", "leg id 'P 1' must match"),
+    ("P1:t-storm-2.5k:off:../../etc", "dir prefix '../../etc' must match"),
+])
+def test_parse_legs_refuses_ids_and_paths_that_are_not_labels(spec, expected):
+    """The id keys the state file and the dir prefix becomes a path under the
+    run root — neither may be arbitrary text."""
+    with pytest.raises(drv.DriverAbort) as exc:
+        drv.parse_legs(spec, FAKE_PROFILES)
+    assert expected in str(exc.value)
+
+
+def test_profiles_are_validated_against_the_harnesss_own_table():
+    """Not a hard-coded copy: the list comes from scale-miniladder.py itself, so
+    it cannot rot into accepting a profile the harness will reject."""
+    profiles = drv.harness_profiles()
+    assert "t-storm-2.5k" in profiles and "t-storm-10-2.5k" in profiles
+    assert "t-storm-2p5k" not in profiles
+    assert drv.resolve_legs("") == drv.LEGS, "no --legs = the built-in wave"
+    assert [leg.id for leg in drv.resolve_legs(PAIR_SPEC)] == ["P1", "P2"]
+
+
+def test_from_works_against_a_custom_leg_table():
+    legs = drv.parse_legs(PAIR_SPEC, FAKE_PROFILES)
+    state = {"legs": {"P1": {"status": "complete", "collected": True}}}
+    assert [leg.id for leg in drv.legs_to_run(state, "", legs)] == ["P2"]
+    assert [leg.id for leg in drv.legs_to_run(state, "P1", legs)] == ["P1", "P2"]
+    assert [leg.id for leg in drv.legs_to_run(state, "P2", legs)] == ["P2"]
+    with pytest.raises(drv.DriverAbort) as exc:
+        drv.legs_to_run(state, "L3", legs)          # a leg of the OTHER wave
+    assert "not a leg id" in str(exc.value) and "P1, P2" in str(exc.value)
+    assert drv.leg_by_id("P2", legs).arm == "on"
+
+
+def test_a_from_that_names_no_resolved_leg_is_refused_before_anything_runs(tmp_path):
+    host = FakeHost()
+    with pytest.raises(drv.DriverAbort) as exc:
+        make_driver(tmp_path, host, legs=PAIR_SPEC, from_leg="L3")
+    assert "not a leg id" in str(exc.value)
+    assert host.calls == []
+
+
+def test_state_file_defaults_unchanged_and_is_overridable(tmp_path):
+    host = FakeHost()
+    assert make_driver(tmp_path, host).state_path == \
+        str(tmp_path / drv.STATE_BASENAME)
+    pair = str(tmp_path / "ab-pair-state.json")
+    driver = make_driver(tmp_path, host, legs=PAIR_SPEC, state_file=pair)
+    assert driver.state_path == pair
+
+
+def test_a_custom_wave_never_resumes_the_other_waves_state(tmp_path):
+    """The separation is --state-file; this is the proof it was not forgotten.
+
+    A pair wave pointed at the six-leg wave's ab-state.json, with an id that
+    collides, would read L1's completed record as its own progress and skip a
+    leg that never ran.
+    """
+    state_path = tmp_path / "ab-state.json"
+    state_path.write_text(json.dumps({
+        "schema": drv.STATE_SCHEMA, "created": "x",
+        "legs": {"L1": {"leg": "L1", "profile": "t-storm-10-2.5k", "arm": "off",
+                        "status": "complete", "collected": True}}}),
+        encoding="utf-8")
+    before = state_path.read_text(encoding="utf-8")
+    driver = make_driver(tmp_path, FakeHost(),
+                         legs="L1:t-storm-2.5k:off:pair-2p5k-off")
+    assert driver.state_path == str(state_path)
+    with pytest.raises(drv.DriverAbort) as exc:
+        driver.run()
+    assert "belongs to a different wave" in str(exc.value)
+    assert state_path.read_text(encoding="utf-8") == before, (
+        "the refusal must not scribble a stop record into the OTHER wave's "
+        "state file")
+    # and with its own state file the same wave plans normally
+    own = make_driver(tmp_path, FakeHost(),
+                      legs="L1:t-storm-2.5k:off:pair-2p5k-off",
+                      state_file=str(tmp_path / "ab-pair-state.json"))
+    own.state = drv.load_state(own.state_path)
+    own.check_state_legs()
+    assert [leg.id for leg in drv.legs_to_run(own.state, "", own.legs)] == ["L1"]
+
+
+def test_fresh_containers_recreates_even_when_the_arm_is_unchanged(tmp_path):
+    """The OFF leg of the pair starts cold, though the stack is already OFF.
+
+    Without this the driver switches the arm only when the next leg needs the
+    other one, and the second leg inherits the first leg's resident set and
+    counters — the confound P3 verdict §3.6 exists to remove.
+    """
+    host = FakeHost(arm="off")
+    driver = make_driver(tmp_path, host, legs=PAIR_SPEC, fresh_containers=True)
+    driver.ensure_arm("off", "P1", fresh=True)
+    assert len(host.compose_ups) == 1, "a fresh leg recreates its containers"
+    cmd, env = host.compose_ups[0]
+    assert cmd[:2] == ["docker", "compose"]
+    assert drv.AGG_OVERLAY not in cmd, "OFF is the overlay's ABSENCE"
+    assert cmd[-6:] == ["up", "-d", "--no-deps", "--force-recreate",
+                        "--scale", "correlation=2"] or cmd[-1] == "correlation"
+    assert cmd[cmd.index("up"):] == ["up", "-d", "--no-deps", "--force-recreate",
+                                     "--scale", "correlation=2", "correlation"]
+    assert env.get("GIT_SHA") == "abc123def456", "the redeploy pins the image"
+    assert host.arm == "off", "the arm is verified again after the recreate"
+
+
+def test_without_fresh_containers_an_unchanged_arm_is_never_recreated(tmp_path):
+    host = FakeHost(arm="off")
+    driver = make_driver(tmp_path, host, legs=PAIR_SPEC, fresh_containers=False)
+    driver.ensure_arm("off", "P1", fresh=False)
+    assert host.compose_ups == []
+
+
+def test_the_pair_wave_recreates_before_every_leg_then_restores(tmp_path):
+    """The whole pair, as it will be launched: OFF(fresh) -> ON(fresh) -> restore."""
+    host = FakeHost(arm="off")
+    launcher = FakeLauncher(host)
+    runids = iter(["08300701pair", "08300802pair"])
+
+    def launch(argv, log_path, cwd):
+        launcher.runid = next(runids)
+        return launcher(argv, log_path, cwd)
+
+    driver = make_driver(tmp_path, host, launcher=launch,
+                         sleeper=lambda _s: setattr(host, "procs", []),
+                         legs=PAIR_SPEC, fresh_containers=True,
+                         state_file=str(tmp_path / "ab-pair-state.json"))
+    assert driver.run() == 0
+    state = json.loads((tmp_path / "ab-pair-state.json").read_text(encoding="utf-8"))
+    for leg_id, prefix in (("P1", "pair-2p5k-off-"), ("P2", "pair-2p5k-on-")):
+        assert os.path.basename(state["legs"][leg_id]["run_dir"]).startswith(prefix)
+    assert state["legs"]["P1"]["collected"] and state["legs"]["P2"]["collected"]
+    assert state["fresh_containers"] is True
+    assert state["legs"]["P1"]["fresh_containers"] is True
+    assert not (tmp_path / drv.STATE_BASENAME).exists(), \
+        "the six-leg wave's state file is untouched"
+    # THREE compose runs, in this order: P1 cold OFF, P2 cold ON, restore OFF.
+    # (Without --fresh-containers the first one would not happen at all.)
+    assert [drv.AGG_OVERLAY in cmd for cmd, _env in host.compose_ups] == \
+        [False, True, False]
+    for cmd, _env in host.compose_ups:
+        assert cmd[cmd.index("up"):] == ["up", "-d", "--no-deps",
+                                         "--force-recreate", "--scale",
+                                         "correlation=2", "correlation"]
+    assert host.arm == "off", "restore leaves the deployed default"
+
+
+def test_collection_says_the_counters_are_leg_scoped(tmp_path, capsys):
+    """With fresh containers metrics-final.txt needs no subtraction — and the
+    file itself cannot say so, so the driver says it at capture time."""
+    host = FakeHost(arm="off")
+    run_dir = tmp_path / "pair-2p5k-off-08300701"
+    run_dir.mkdir()
+    driver = make_driver(tmp_path, host, legs=PAIR_SPEC, fresh_containers=True)
+    driver.metrics_final(drv.leg_by_id("P1", driver.legs), str(run_dir))
+    out = capsys.readouterr().out
+    assert "counter scope" in out and "LEG-SCOPED" in out
+    assert "do NOT subtract" in out
+
+    host2 = FakeHost(arm="off")
+    driver2 = make_driver(tmp_path, host2, legs=PAIR_SPEC, fresh_containers=False)
+    run_dir2 = tmp_path / "pair-2p5k-off-08300702"
+    run_dir2.mkdir()
+    driver2.metrics_final(drv.leg_by_id("P1", driver2.legs), str(run_dir2))
+    out2 = capsys.readouterr().out
+    assert "CUMULATIVE" in out2 and "subtract the previous leg's file" in out2
+
+
+def test_dry_run_prints_the_resolved_pair_table_and_touches_nothing(tmp_path, capsys):
+    host = FakeHost()
+    driver = make_driver(tmp_path, host, legs=PAIR_SPEC, fresh_containers=True,
+                         state_file=str(tmp_path / "ab-pair-state.json"))
+    assert driver.dry_run() == 0
+    assert host.calls == [], "a dry run reads no host state at all"
+    out = capsys.readouterr().out
+    assert "resolved leg table (2 leg(s), source --legs, --fresh-containers)" in out
+    assert "P1     profile t-storm-2.5k" in out and "arm OFF" in out
+    assert "P2     profile t-storm-2.5k" in out and "arm ON" in out
+    assert str(tmp_path / "pair-2p5k-off") + "-<MMDDHHMM>" in out
+    assert "force-recreate ALWAYS (--fresh-containers)" in out
+    assert "LEG-SCOPED" in out
+    assert "L1" not in out and "L5" not in out, "the built-in wave is replaced"
+    assert not (tmp_path / "ab-pair-state.json").exists()

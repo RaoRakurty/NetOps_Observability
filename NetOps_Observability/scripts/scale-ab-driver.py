@@ -74,10 +74,22 @@ REFUSES TO GUESS. Everything it cannot prove is a refusal, not an assumption
 read from both replicas, a report.json without a burst phase, a ClickHouse that
 does not answer. None of those are "probably fine".
 
+NOT ONLY THIS WAVE. `--legs ID:PROFILE:ARM:DIR_PREFIX,...` replaces the table
+above for one invocation (the arm-switch, gate, launch and collection logic is
+identical), `--state-file` keeps that wave's progress out of the six-leg wave's
+`ab-state.json`, and `--fresh-containers` force-recreates the correlation
+replicas before EVERY leg — even when the arm does not change — so each leg
+starts on cold containers and its counters are leg-scoped. That combination is
+what the matched OFF/ON `t-storm-2.5k` pair of
+`docs/scale/RUN_PLAN_P3_PAIR_2026-08-30.md` needs (P3 verdict section 3.6).
+
 USAGE
   python3 scripts/scale-ab-driver.py --dry-run          # print the plan, touch nothing
   python3 scripts/scale-ab-driver.py                    # run the wave (L1..L5 + restore)
   python3 scripts/scale-ab-driver.py --from L3          # resume at L3
+  python3 scripts/scale-ab-driver.py \
+      --legs P1:t-storm-2.5k:off:pair-2p5k-off,P2:t-storm-2.5k:on:pair-2p5k-on \
+      --fresh-containers --state-file /var/tmp/scale-runs/ab-pair-state.json
 Logs to /var/tmp/scale-runs/ab-driver.log (and stdout).
 
 EXIT CODES
@@ -100,6 +112,7 @@ import sys
 import time
 import uuid
 from datetime import datetime, timedelta, timezone
+from typing import NoReturn
 
 # Cron-proof PATH (CLAUDE.md 16.2): docker lives in /usr/bin or /usr/local/bin
 # on supported hosts; an interactive profile is never sourced. Applied in
@@ -183,6 +196,16 @@ class Leg:
         return f"Leg({self.id}, {self.profile}, {self.arm})"
 
 
+# The `--legs` grammar. Every field is validated before anything is touched
+# (zero trust at the boundary, CLAUDE.md section 3): the id keys the state file,
+# the dir prefix becomes a directory name AND the leg's label in every later
+# document, and the profile is checked against the harness's OWN table rather
+# than trusted — an unknown profile would otherwise only be discovered by
+# argparse inside the harness, an hour of gates later.
+LEG_SPEC_ID_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_-]{0,15}$")
+LEG_SPEC_DIR_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{0,63}$")
+LEG_ARMS = ("off", "on")
+
 LEGS = (
     Leg("L1", "t-storm-10-2.5k", "off", "agg-10-off"),
     Leg("L2", "t-storm-25-2.5k", "off", "agg-25-off"),
@@ -241,7 +264,7 @@ def error(msg: str) -> None:
     _emit("ERROR: ", msg)
 
 
-def die(msg: str, code: int = 2) -> None:
+def die(msg: str, code: int = 2) -> NoReturn:
     error(msg)
     sys.exit(code)
 
@@ -282,14 +305,114 @@ def canary_enabled(crontab_text: str) -> bool:
     return any(CANARY_CRON_RE.match(line) for line in crontab_text.splitlines())
 
 
-def leg_by_id(leg_id: str) -> Leg:
-    for leg in LEGS:
+def leg_by_id(leg_id: str, legs: tuple = LEGS) -> Leg:
+    for leg in legs:
         if leg.id == leg_id:
             return leg
-    raise DriverAbort(f"unknown leg {leg_id!r} — legs are {', '.join(LEG_IDS)}")
+    raise DriverAbort(f"unknown leg {leg_id!r} — legs are "
+                      f"{', '.join(leg.id for leg in legs)}")
 
 
-def legs_to_run(state: dict, from_leg: str = "") -> list[Leg]:
+def harness_profiles() -> tuple[str, ...]:
+    """The workload profile names the HARNESS accepts, read from the harness.
+
+    Imported by path (the file is hyphen-named), exactly as the test suites
+    import it, and never guessed: a hard-coded copy of the list here would rot
+    silently and a leg would then die at the harness's own argparse, after the
+    driver had already waited for the lock and cleaned the fleet. Import failure
+    is a refusal, not a fallback — a profile we cannot prove exists is not a
+    profile we start an hour-long leg on.
+    """
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("scale_miniladder_profiles",
+                                                  HARNESS)
+    if spec is None or spec.loader is None:
+        raise DriverAbort(f"cannot load {HARNESS} to read its workload "
+                          f"profiles — refusing to validate --legs against a "
+                          f"guess")
+    module = importlib.util.module_from_spec(spec)
+    try:
+        spec.loader.exec_module(module)
+        profiles = tuple(sorted(module.WORKLOAD_PROFILES))
+    except (OSError, ImportError, AttributeError, SyntaxError, ValueError) as exc:
+        raise DriverAbort(
+            f"cannot read WORKLOAD_PROFILES from {HARNESS} ({type(exc).__name__}: "
+            f"{exc}) — refusing to accept a --legs profile the harness has not "
+            f"been shown to know") from exc
+    if not profiles:
+        raise DriverAbort(f"{HARNESS} declares no workload profiles — refusing")
+    return profiles
+
+
+def parse_legs(spec: str, profiles: tuple[str, ...]) -> tuple[Leg, ...]:
+    """`ID:PROFILE:ARM:DIR_PREFIX,...` -> the leg table for THIS invocation.
+
+    Order is the order given (it IS the execution order). Every refusal names
+    the offending entry: this string decides which workloads run for the next
+    several hours of lab time, so nothing about it is inferred.
+    """
+    entries = [part.strip() for part in (spec or "").split(",") if part.strip()]
+    if not entries:
+        raise DriverAbort("--legs is empty — give at least one "
+                          "ID:PROFILE:ARM:DIR_PREFIX entry")
+    legs: list[Leg] = []
+    seen_ids: set[str] = set()
+    seen_dirs: set[str] = set()
+    for entry in entries:
+        fields = entry.split(":")
+        if len(fields) != 4:
+            raise DriverAbort(
+                f"--legs entry {entry!r} has {len(fields)} field(s), not 4 — "
+                f"the form is ID:PROFILE:ARM:DIR_PREFIX")
+        leg_id, profile, arm, dir_prefix = (f.strip() for f in fields)
+        if not LEG_SPEC_ID_RE.match(leg_id):
+            raise DriverAbort(
+                f"--legs entry {entry!r}: leg id {leg_id!r} must match "
+                f"{LEG_SPEC_ID_RE.pattern} — it keys the state file")
+        if leg_id in seen_ids:
+            raise DriverAbort(
+                f"--legs names leg id {leg_id!r} twice — ids key the state "
+                f"file, so a duplicate would make two legs share one record")
+        arm_l = arm.lower()
+        if arm_l not in LEG_ARMS:
+            raise DriverAbort(
+                f"--legs entry {entry!r}: arm {arm!r} is not one of "
+                f"{', '.join(LEG_ARMS)}")
+        if profile not in profiles:
+            raise DriverAbort(
+                f"--legs entry {entry!r}: profile {profile!r} is not a harness "
+                f"workload profile ({', '.join(profiles)})")
+        if not LEG_SPEC_DIR_RE.match(dir_prefix):
+            raise DriverAbort(
+                f"--legs entry {entry!r}: dir prefix {dir_prefix!r} must match "
+                f"{LEG_SPEC_DIR_RE.pattern} — it becomes a directory name under "
+                f"the run root and the leg's label in every later document")
+        if dir_prefix in seen_dirs:
+            raise DriverAbort(
+                f"--legs names dir prefix {dir_prefix!r} twice — the directory "
+                f"name IS the leg label (plan section 4) and must be unique")
+        seen_ids.add(leg_id)
+        seen_dirs.add(dir_prefix)
+        legs.append(Leg(leg_id, profile, arm_l, dir_prefix))
+    return tuple(legs)
+
+
+def resolve_legs(spec: str) -> tuple[Leg, ...]:
+    """The built-in P3 wave when --legs is absent, the parsed table otherwise."""
+    if not (spec or "").strip():
+        return LEGS
+    return parse_legs(spec, harness_profiles())
+
+
+def describe_legs(legs: tuple[Leg, ...], run_root: str) -> list[str]:
+    """The resolved leg table, one line per leg, for the log and the dry run."""
+    return [f"  {leg.id:<6} profile {leg.profile:<18} arm {leg.arm.upper():<3} "
+            f"run dir {os.path.join(run_root, leg.dir_prefix)}-<MMDDHHMM>"
+            for leg in legs]
+
+
+def legs_to_run(state: dict, from_leg: str = "",
+                legs: tuple = LEGS) -> list[Leg]:
     """The legs this invocation must still act on, in plan order.
 
     A leg is skipped ONLY when it both ran and was collected. A leg that ran but
@@ -297,14 +420,15 @@ def legs_to_run(state: dict, from_leg: str = "") -> list[Leg]:
     `--from` overrides the state: it starts at that leg and drops everything
     before it, so an operator can deliberately redo a tail.
     """
+    leg_ids = tuple(leg.id for leg in legs)
     if from_leg:
-        if from_leg not in LEG_IDS:
+        if from_leg not in leg_ids:
             raise DriverAbort(f"--from {from_leg!r} is not a leg id "
-                              f"({', '.join(LEG_IDS)})")
-        start = LEG_IDS.index(from_leg)
-        return list(LEGS[start:])
+                              f"({', '.join(leg_ids)})")
+        start = leg_ids.index(from_leg)
+        return list(legs[start:])
     todo = []
-    for leg in LEGS:
+    for leg in legs:
         entry = (state.get("legs") or {}).get(leg.id) or {}
         if entry.get("status") == "complete" and entry.get("collected"):
             continue
@@ -597,7 +721,18 @@ class Driver:
         self.clock = clock or (lambda: datetime.now(timezone.utc))
         self.launcher = launcher
         self.run_root = args.run_root
-        self.state_path = os.path.join(self.run_root, STATE_BASENAME)
+        # The leg table for THIS invocation: the built-in P3 wave unless --legs
+        # replaced it. Resolved here (before any gate) so a bad spec is a
+        # refusal that has touched nothing.
+        self.legs = resolve_legs(args.legs)
+        self.leg_ids = tuple(leg.id for leg in self.legs)
+        if args.from_leg and args.from_leg not in self.leg_ids:
+            raise DriverAbort(f"--from {args.from_leg!r} is not a leg id "
+                              f"({', '.join(self.leg_ids)})")
+        # A custom wave keeps its own state file: reusing ab-state.json would
+        # read the SIX-leg wave's L1..L5 records as this wave's progress.
+        self.state_path = (args.state_file or
+                           os.path.join(self.run_root, STATE_BASENAME))
         self.lock_path = args.lock_file
         self.state: dict = {}
         self.stack_note = "untouched"
@@ -900,8 +1035,16 @@ class Driver:
                     f"appear within {REPLICA_SETTLE_TIMEOUT}s")
             self.sleep(min(POLL_SECONDS, 10))
 
-    def ensure_arm(self, arm: str, label: str) -> list[dict]:
-        """Verify the arm; redeploy once if it is the other one; abort on mixed."""
+    def ensure_arm(self, arm: str, label: str, fresh: bool = False) -> list[dict]:
+        """Verify the arm; redeploy once if it is the other one; abort on mixed.
+
+        `fresh` (per-leg, from --fresh-containers) forces the SAME redeploy even
+        when the arm already matches, so the leg starts on cold containers: the
+        P3 verdict section 3.6 confound is a leg inheriting a previous leg's
+        resident set and counters. The redeploy path, its post-recreate arm
+        verification and its settle wait are the ones below, unchanged — there
+        is no second way to recreate a replica in this driver.
+        """
         current, readings = self.read_arm()
         log(f"{label}: arm reads {current.upper()} — {self.describe_readings(readings)}")
         if current == "mixed":
@@ -910,10 +1053,15 @@ class Driver:
                 f"replica flagged and the other not is invisible in every run "
                 f"metric, so the leg would be unusable. Redeploy correlation "
                 f"deliberately and re-run the driver")
-        if current == arm:
+        if current == arm and not fresh:
             self.stack_note = f"arm {arm.upper()}, verified on both replicas"
             return readings
-        if current == "unknown":
+        if current == arm:
+            log(f"{label}: arm is already {arm.upper()}, but --fresh-containers "
+                f"was given — force-recreating the correlation replicas anyway "
+                f"so this leg starts cold (P3 verdict section 3.6: a leg must "
+                f"not inherit the previous leg's resident set or counters)")
+        elif current == "unknown":
             warn(f"{label}: the arm could not be read from every replica "
                  f"({self.describe_readings(readings)}) — redeploying to "
                  f"{arm.upper()} and re-verifying rather than guessing")
@@ -1166,6 +1314,21 @@ class Driver:
         log(f"{leg.id}: metrics-final.txt written ({len(reps)} replicas) — " +
             "; ".join(f"{c['name']} corr_agg_enabled={c['corr_agg_enabled']} "
                       f"observed={c['corr_agg_observed_total']}" for c in captured))
+        # Say, at the moment of capture, what the counters in that file MEAN.
+        # Every `*_total` is cumulative since the container started; whether the
+        # analyst must subtract the previous leg's file is decided by whether
+        # this leg got fresh containers, and that fact is not visible in the
+        # file itself.
+        if self.args.fresh_containers:
+            log(f"{leg.id}: counter scope — the correlation containers were "
+                f"force-recreated before this leg (--fresh-containers), so every "
+                f"*_total in metrics-final.txt is LEG-SCOPED: read it as-is, do "
+                f"NOT subtract a previous leg's file")
+        else:
+            log(f"{leg.id}: counter scope — the containers were NOT recreated for "
+                f"this leg, so every *_total in metrics-final.txt is CUMULATIVE "
+                f"since the replica started: subtract the previous leg's file to "
+                f"get this leg's counts")
         return captured
 
     def ttur(self, leg: Leg, run_dir: str, report: dict) -> dict:
@@ -1271,7 +1434,9 @@ class Driver:
         self.residue_check(leg)
         self.clickhouse_ok(leg)
         self.replicas_healthy(leg)
-        entry["arm_verification"] = self.ensure_arm(leg.arm, leg.id)
+        entry["arm_verification"] = self.ensure_arm(
+            leg.arm, leg.id, fresh=self.args.fresh_containers)
+        entry["fresh_containers"] = bool(self.args.fresh_containers)
         entry["status"] = "armed"
         self.save()
         # The arm is verified; from here the only thing between us and data is
@@ -1296,7 +1461,12 @@ class Driver:
         for stale in ("stop_reason", "stopped_at", "stack_state"):
             # A previous stop's diagnosis must never be mistaken for this run's.
             self.state.pop(stale, None)
-        todo = legs_to_run(self.state, self.args.from_leg)
+        self.check_state_legs()
+        self.state["leg_table"] = [{"leg": leg.id, "profile": leg.profile,
+                                    "arm": leg.arm, "dir_prefix": leg.dir_prefix}
+                                   for leg in self.legs]
+        self.state["fresh_containers"] = bool(self.args.fresh_containers)
+        todo = legs_to_run(self.state, self.args.from_leg, self.legs)
         if not todo:
             log("every leg is complete and collected — nothing to do")
         log(f"wave: {len(todo)} leg(s) to run: " +
@@ -1326,26 +1496,59 @@ class Driver:
                   f"re-run (add --from <LEG> to skip ahead deliberately)")
             return 1
         log(f"WAVE COMPLETE — state {self.state_path}")
-        for leg in LEGS:
+        for leg in self.legs:
             entry = (self.state.get("legs") or {}).get(leg.id) or {}
             log(f"  {leg.id} {leg.profile:<18} arm {leg.arm.upper():<3} "
                 f"{entry.get('status', 'not run'):<9} "
                 f"{entry.get('verdict', '-'):<5} {entry.get('run_dir', '-')}")
         return 0
 
+    # -- state vs leg table -----------------------------------------------
+    def check_state_legs(self) -> None:
+        """Refuse a state file recorded for a DIFFERENT leg table.
+
+        `--state-file` is the separation; this is the proof. A custom wave whose
+        ids collide with the six-leg wave's (L1..L5) would otherwise read that
+        wave's records as its own progress and skip a leg that never ran, or
+        judge one workload's numbers under another's label.
+        """
+        recorded = (self.state.get("legs") or {})
+        for leg in self.legs:
+            entry = recorded.get(leg.id) or {}
+            if not entry:
+                continue
+            was = (entry.get("profile"), entry.get("arm"))
+            if was == (None, None):
+                continue
+            if was != (leg.profile, leg.arm):
+                raise DriverAbort(
+                    f"state file {self.state_path} already records leg "
+                    f"{leg.id} as profile {entry.get('profile')!r} arm "
+                    f"{entry.get('arm')!r}, but this invocation defines it as "
+                    f"{leg.profile!r}/{leg.arm!r} — that state belongs to a "
+                    f"different wave. Point --state-file at a fresh path (or "
+                    f"move this one aside); the driver will not resume one "
+                    f"wave's progress into another's leg table")
+
     # -- dry run ----------------------------------------------------------
     def dry_run(self) -> int:
         self.state = load_state(self.state_path)
-        todo = legs_to_run(self.state, self.args.from_leg)
+        self.check_state_legs()
+        todo = legs_to_run(self.state, self.args.from_leg, self.legs)
         now = self.clock()
         print(f"PLAN — {len(todo)} leg(s), state {self.state_path}")
+        print(f"  resolved leg table ({len(self.legs)} leg(s), source "
+              f"{'--legs' if self.args.legs else 'built-in P3 wave'}"
+              f"{', --fresh-containers' if self.args.fresh_containers else ''}):")
+        for line in describe_legs(self.legs, self.run_root):
+            print(f"  {line}")
         print(f"  now {now.strftime('%Y-%m-%dT%H:%MZ')} — cron window "
               f"{CRON_WINDOW_START[0]:02d}:{CRON_WINDOW_START[1]:02d}-"
               f"{CRON_WINDOW_END[0]:02d}:{CRON_WINDOW_END[1]:02d} UTC: "
               f"{'INSIDE (a leg would refuse to start)' if in_cron_window(now) else 'outside'}"
               + (" [--ignore-cron-window given]" if self.args.ignore_cron_window else ""))
         arm = None
-        for leg in LEGS:
+        for leg in self.legs:
             entry = (self.state.get("legs") or {}).get(leg.id) or {}
             planned = leg in todo
             mark = "RUN " if planned else "skip"
@@ -1354,13 +1557,19 @@ class Driver:
                   f" collected={bool(entry.get('collected'))}")
             if not planned:
                 continue
-            if arm != leg.arm:
+            if arm != leg.arm or self.args.fresh_containers:
                 redeploy = " ".join(self.compose_argv(leg.arm, [
                     "up", "-d", "--no-deps", "--force-recreate",
                     "--scale", f"correlation={self.args.replicas}",
                     "correlation"]))
-                print(f"       arm     : ensure {leg.arm.upper()} — the live arm "
-                      f"is READ first and this redeploy runs only if it differs:")
+                if self.args.fresh_containers:
+                    print(f"       arm     : ensure {leg.arm.upper()} and "
+                          f"force-recreate ALWAYS (--fresh-containers), so this "
+                          f"leg starts on cold containers:")
+                else:
+                    print(f"       arm     : ensure {leg.arm.upper()} — the live "
+                          f"arm is READ first and this redeploy runs only if it "
+                          f"differs:")
                 print(f"                 {redeploy}")
                 print(f"                 [cwd {COMPOSE_DIR}, GIT_SHA exported]")
                 arm = leg.arm
@@ -1374,6 +1583,9 @@ class Driver:
             print(f"       run     : {launch}")
             print("       collect : x-<runid> symlink · twin score · "
                   "metrics-final.txt (mTLS :8443) · ttur.tsv (clean scope)")
+            if self.args.fresh_containers:
+                print("       counters: LEG-SCOPED (fresh containers) — "
+                      "metrics-final.txt needs no subtraction")
         if self.args.restore_arm and todo:
             print("\n[RUN ] restore: redeploy WITHOUT compose.agg.yml and verify "
                   "corr_agg_enabled 0 on both replicas")
@@ -1412,9 +1624,27 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     ap.add_argument("--dry-run", action="store_true",
                     help="print the plan (legs, arm switches, exact commands) "
                          "and exit; touches nothing")
+    ap.add_argument("--legs", default="", metavar="SPEC",
+                    help="replace the built-in L1..L5 table for THIS invocation "
+                         "with a comma-separated list of "
+                         "ID:PROFILE:ARM:DIR_PREFIX entries, run in the order "
+                         "given (e.g. "
+                         "P1:t-storm-2.5k:off:pair-2p5k-off,"
+                         "P2:t-storm-2.5k:on:pair-2p5k-on). Ids and dir "
+                         "prefixes must be unique, ARM is on|off, and PROFILE "
+                         "is checked against the harness's own WORKLOAD_PROFILES "
+                         "before anything is touched. Pair it with --state-file: "
+                         "the default state file holds the six-leg wave")
+    ap.add_argument("--fresh-containers", action="store_true",
+                    help="force-recreate the correlation replicas before EVERY "
+                         "leg, even when the arm is unchanged, so each leg "
+                         "starts on cold containers and its metrics-final.txt "
+                         "counters are leg-scoped (P3 verdict section 3.6). "
+                         "Without it the arm is switched only when the next leg "
+                         "needs the other one")
     ap.add_argument("--from", dest="from_leg", default="", metavar="LEG",
                     help=f"start at this leg regardless of recorded state "
-                         f"({', '.join(LEG_IDS)})")
+                         f"({', '.join(LEG_IDS)}, or an id from --legs)")
     ap.add_argument("--ignore-cron-window", action="store_true",
                     help="allow a leg to START inside the 03:10-04:40 UTC canary "
                          "window. The 1K canary is disabled as of 2026-08-29; "
@@ -1429,6 +1659,12 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
                          "harness honours MLX_RUN_LOCK the same way)")
     ap.add_argument("--log-file", default="",
                     help=f"driver log (default <run-root>/{LOG_BASENAME})")
+    ap.add_argument("--state-file", default="",
+                    help=f"resumable wave state (default "
+                         f"<run-root>/{STATE_BASENAME}). A wave run with --legs "
+                         f"MUST get its own path: the default file already "
+                         f"records another wave's legs, and a leg id that "
+                         f"collides with one of them is refused")
     ap.add_argument("--devices", type=int, default=2500,
                     help="devices per leg (default 2500 — the plan's fleet)")
     ap.add_argument("--eps", type=int, default=1000,
@@ -1476,8 +1712,6 @@ def main(argv: list[str]) -> int:
         args.lock_file = os.path.join(args.run_root, LOCK_BASENAME)
     if not args.log_file:
         args.log_file = os.path.join(args.run_root, LOG_BASENAME)
-    if args.from_leg and args.from_leg not in LEG_IDS:
-        die(f"--from {args.from_leg!r} is not a leg id ({', '.join(LEG_IDS)})")
     for path, what in ((HARNESS, "harness"), (TWIN, "twin scorer")):
         if not os.path.exists(path):
             die(f"{what} not found at {path}")
@@ -1488,7 +1722,12 @@ def main(argv: list[str]) -> int:
             die(f"compose file {name} missing from {COMPOSE_DIR} — the six-file "
                 f"overlay set and the ON-arm overlay must both exist before a "
                 f"wave starts")
-    driver = Driver(args)
+    # Constructing the Driver resolves --legs and validates --from against the
+    # resolved table. Both are refusals BEFORE anything is touched (exit 2).
+    try:
+        driver = Driver(args)
+    except DriverAbort as exc:
+        die(str(exc))
     if args.dry_run:
         try:
             return driver.dry_run()
@@ -1501,7 +1740,12 @@ def main(argv: list[str]) -> int:
     set_log_path(args.log_file)
     log(f"start: project={args.project} run_root={args.run_root} "
         f"from={args.from_leg or '(state)'} devices={args.devices} eps={args.eps} "
-        f"replicas={args.replicas} tenant={args.tenant}")
+        f"replicas={args.replicas} tenant={args.tenant} "
+        f"state={driver.state_path} fresh_containers={args.fresh_containers}")
+    log(f"resolved leg table ({len(driver.legs)} leg(s), source "
+        f"{'--legs' if args.legs else 'built-in P3 wave (L1..L5)'}):")
+    for line in describe_legs(driver.legs, args.run_root):
+        log(line)
     try:
         return driver.run()
     except DriverAbort as exc:

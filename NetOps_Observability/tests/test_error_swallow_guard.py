@@ -342,14 +342,27 @@ ALLOWLIST: dict[tuple[str, int], str] = {
     # symlink, the metrics/TTUR/report reads and the evidence writes).
     # Line numbers re-derived by importing this module's own caught_names /
     # escalates / violation_key over the file's AST — not hand-counted.
-    ("scale-ab-driver.py", 220): "log-file append: prints path+errno to stderr and continues; the DURABLE record is the state file (which escalates), and the reporting channel cannot report its own death through itself",
-    ("scale-ab-driver.py", 263): "bounded subprocess shim: returns (127, '', 'cannot execute <cmd>: <exc>') — the error is the return value, and every caller checks rc and reports it (same shape as install.py:934)",
-    ("scale-ab-driver.py", 646): "pid liveness probe: PermissionError means a LIVE process owned by another uid; True IS the answer, and the driver then waits for that run instead of stealing its lock",
-    ("scale-ab-driver.py", 648): "pid liveness probe fallback: warns by name with pid+errno and answers UNKNOWN, which the idle gate refuses on — a lock is never stolen on an unprobeable pid",
-    ("scale-ab-driver.py", 674): "run-lock read: returns ('unknown', 'cannot read <path> (errno N: ...)'); 'unknown' is NOT free, so the idle gate keeps waiting and then aborts with that reason",
-    ("scale-ab-driver.py", 1025): "launcher.log read while a leg runs: warns with path+errno and reports NO verdict — the safe direction, since a leg is only finished when a verdict is READ and the process is gone",
-    ("scale-ab-driver.py", 1044): "log tail quoted inside a message: warns with path+errno and quotes nothing; narration only, never a verdict input",
-    ("scale-ab-driver.py", 1398): "compose .env read for COMPOSE_PROJECT_NAME: warns with path+errno and falls back to the documented default, which --project overrides (same contract as scale-miniladder.py's env_get)",
+    #
+    # Re-pinned 2026-08-30 (the matched OFF/ON pair, RUN_PLAN_P3_PAIR): the
+    # driver gained `--legs` (leg-spec grammar + `harness_profiles` /
+    # `parse_legs` / `resolve_legs` / `describe_legs`, ~120 lines inserted above
+    # the logging block), `--fresh-containers`, `--state-file` and
+    # `check_state_legs`, shifting ALL EIGHT reviewed sites
+    # (220->243, 263->286, 646->781, 648->783, 674->809, 1025->1173,
+    # 1044->1192, 1398->1610). Every one was re-read at its new line and its
+    # `except` clause AND full handler body diffed against HEAD fc0d8b23 with
+    # ast.get_source_segment: all eight are byte-identical. RE-PIN of reviewed
+    # sites after line drift — no handler weakened, no new exemption. The new
+    # code adds one OSError/ImportError handler (`harness_profiles`) and it
+    # ESCALATES with DriverAbort, so it is covered by the rule's escalates arm.
+    ("scale-ab-driver.py", 243): "log-file append: prints path+errno to stderr and continues; the DURABLE record is the state file (which escalates), and the reporting channel cannot report its own death through itself",
+    ("scale-ab-driver.py", 286): "bounded subprocess shim: returns (127, '', 'cannot execute <cmd>: <exc>') — the error is the return value, and every caller checks rc and reports it (same shape as install.py:934)",
+    ("scale-ab-driver.py", 781): "pid liveness probe: PermissionError means a LIVE process owned by another uid; True IS the answer, and the driver then waits for that run instead of stealing its lock",
+    ("scale-ab-driver.py", 783): "pid liveness probe fallback: warns by name with pid+errno and answers UNKNOWN, which the idle gate refuses on — a lock is never stolen on an unprobeable pid",
+    ("scale-ab-driver.py", 809): "run-lock read: returns ('unknown', 'cannot read <path> (errno N: ...)'); 'unknown' is NOT free, so the idle gate keeps waiting and then aborts with that reason",
+    ("scale-ab-driver.py", 1173): "launcher.log read while a leg runs: warns with path+errno and reports NO verdict — the safe direction, since a leg is only finished when a verdict is READ and the process is gone",
+    ("scale-ab-driver.py", 1192): "log tail quoted inside a message: warns with path+errno and quotes nothing; narration only, never a verdict input",
+    ("scale-ab-driver.py", 1610): "compose .env read for COMPOSE_PROJECT_NAME: warns with path+errno and falls back to the documented default, which --project overrides (same contract as scale-miniladder.py's env_get)",
     # The four 2026-08-16 chown-swallow findings (enrichment seed, processors
     # seed, appid/cloud fixtures, vuln SUDO_UID dir) were RESOLVED the same
     # day: all now route through chown_tree (repair-or-refuse), and the vuln
