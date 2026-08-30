@@ -107,8 +107,9 @@ def test_storm_carries_the_same_ratified_throughput_as_t_nominal():
 def test_t_nominal_is_left_alone():
     """The A/B baseline (memo §23 replays the EXACT 2.5K storm): no T-nominal
     profile may grow a scenario, or every recorded 2.5K number changes meaning."""
-    for name in ("t-nominal", "t-p95", "t-nominal-2.5k", "s1-2.5k", "s4-chatter",
-                 "soak-72h", "legacy"):
+    for name in ("t-nominal", "t-p95", "t-nominal-2.5k", "t-nominal-5k",
+                 "t-nominal-10k", "s1-2.5k", "s4-chatter", "soak-72h",
+                 "legacy"):
         assert "scenario" not in ml.WORKLOAD_PROFILES[name], (
             f"profile {name!r} grew a scenario — it is no longer the workload "
             f"its recorded numbers were measured on")
@@ -1580,3 +1581,222 @@ def test_a_rung_that_crowds_out_the_background_is_refused(tmp_path, monkeypatch)
     assert not h._burst_lanes({})
     assert "of the ratified chunk quota" in h.phases[-1]["notes"]
     assert stack.batches == [], "it injected before refusing"
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# THE HOST-CEILING LADDER (5K / 10K fleets, 2026-08-30)
+#
+# The storm-share ladder above varies the STRUCTURE of a 2,500-device
+# workload. The host-ceiling programme (`docs/projects/01-SCALE-TESTING.md`
+# §ladder) varies the FLEET and holds the structure still: the same five cause
+# kinds, the same `chain.DEFAULT_SHAPE`, the same ~1.78 % storm share, at
+# 5,000 and 10,000 devices with the rate scaled to keep 0.4 eps/device.
+#
+# What these tests hold:
+#   * a fleet rung is the SAME STORY under its own name — on one device list
+#     it plans the ratified digest, byte for byte, so the name that lands in
+#     ground truth is the only thing that changed;
+#   * the storm SHARE is invariant under scale (the generator sizes instances
+#     per 1,000 devices while the profile's rate scales by the same factor);
+#   * every fleet/quota clause the harness rests on still holds at 10,000
+#     devices, against that rung's OWN quota — not the 2.5K rung's;
+#   * ground truth SCALES with the fleet and stays gradeable: the 5K run dir's
+#     `ground_truth.jsonl` + `state.json` are what
+#     `scripts/lab/twin/twin.py score` reads, and the twin's own entry points
+#     are used here to say so.
+# ══════════════════════════════════════════════════════════════════════════
+
+# (scenario spec, profile, devices, raw eps)
+FLEET_LADDER = (("storm-5k", "t-storm-5k", 5000, 2000),
+                ("storm-10k", "t-storm-10k", 10000, 4000))
+
+
+@pytest.fixture(scope="module")
+def fleets():
+    """Each fleet rung planned once, at its own device count and the ratified
+    900 s window (the 10K rung is ~64,000 events — module-scoped on purpose)."""
+    return {name: _rung(name, devices=devs)
+            for name, _prof, devs, _eps in FLEET_LADDER}
+
+
+def test_the_fleet_rungs_are_registered_and_run_the_ratified_story():
+    for spec_name, profile, devices, eps in FLEET_LADDER:
+        prof = ml.WORKLOAD_PROFILES[profile]
+        assert prof["scenario"] == spec_name
+        assert prof["lanes"] == [("fleet", 1.0, "production", float(eps))]
+        assert prof["burst_minutes"] == ml.WORKLOAD_PROFILES[
+            "t-nominal-2.5k"]["burst_minutes"] == 15
+        spec = ml.SCENARIO_SPECS[spec_name]
+        # the SAME story: same templates object, same shape, own name
+        assert spec["templates"] is ml.STORM_SCENARIO_2K5["templates"]
+        assert spec["shape"] is chain.DEFAULT_SHAPE
+        assert spec["name"] == spec_name != ml.STORM_SCENARIO_2K5["name"]
+        assert str(devices) in spec["description"]
+    assert ml.SCENARIO_FLEET_LADDER == ((5000, "storm-5k"),
+                                        (10000, "storm-10k"))
+
+
+def test_a_fleet_rung_plans_the_ratified_digest_on_the_ratified_fleet():
+    """THE NAME IS NOT PART OF THE PLAN. On the same 2,500 device names, seed
+    and window, `storm-5k` and `storm-10k` must hash to the digest recorded
+    for `t-storm-2.5k` — proof that the host-ceiling rungs changed the FLEET
+    and nothing about the story, and that the run's ground truth is the same
+    contract under a different label."""
+    for name in ("storm-5k", "storm-10k"):
+        assert _rung(name, devices=DEVICES).digest() == DEFAULT_SCENARIO_DIGEST
+
+
+@pytest.mark.parametrize("name,profile,devices,eps", FLEET_LADDER)
+def test_each_fleet_rung_holds_the_ratified_storm_share(name, profile, devices,
+                                                        eps, fleets):
+    """The share is what the ceiling hunt must NOT vary: past it, a rung's
+    completion number is about a different amount of repetition instead of a
+    different amount of fleet."""
+    scen = fleets[name]
+    planned = eps * WINDOW_S
+    target = chain.DEFAULT_SHAPE.storm_share_of_raw
+    achieved = len(scen.events) / planned
+    assert scen.shape.storm_share_of_raw == target, (
+        "a fleet rung declared its own share — the ceiling ladder varies "
+        "SCALE, and the storm-share ladder is the other axis")
+    assert abs(achieved - target) / target <= 0.10, (
+        f"{name}: target {target:.2%}, achieved {achieved:.2%} at "
+        f"{devices} devices / {eps} eps")
+    # ...and the ground truth records the share it actually planned
+    gt = scen.ground_truth(planned_total=planned)
+    assert gt["scenario"] == name
+    assert gt["devices"]["total"] == devices
+    assert gt["counts"]["scenario_events"] == len(scen.events)
+    # ground truth rounds the share to 6 dp (`ground_truth`)
+    assert gt["counts"]["scenario_event_share_of_plan"] == \
+        pytest.approx(achieved, abs=1e-6)
+
+
+@pytest.mark.parametrize("name,profile,devices,eps", FLEET_LADDER)
+def test_every_fleet_rung_holds_the_fleet_and_quota_contract(
+        name, profile, devices, eps, fleets):
+    """The same clauses the storm-share ladder is held to, against THIS
+    rung's own quota (eps x 10 s), because a 10K rung's chunk is 40,000
+    events and judging it against the 2.5K rung's 10,000 would be nonsense."""
+    scen = fleets[name]
+    quota = eps * ml.BURST_CHUNK_SECS
+    load = scen.chunk_load()
+    assert load["peak"] <= quota * (1.0 - ml.SCENARIO_CHUNK_HEADROOM)
+    assert load["peak_over_mean"] <= ml.SCENARIO_CHUNK_PEAK_OVER_MEAN_MAX
+    assert load["chunks_carrying_scenario"] >= 0.8 * load["chunks"]
+    assert scen.noise_pool
+    assert not (set(scen.noise_pool) & {e.device for e in scen.events})
+    assert scen.silent_devices() == []
+    ids = [i["cause_entity"]["entity_id"] for i in scen.incidents]
+    assert len(ids) == len(set(ids))
+    peers = [i["cause_entity"]["peer"] for i in scen.incidents
+             if i["cause_entity"].get("peer")]
+    assert len(peers) == len(set(peers))
+    for e in scen.events:
+        m = re.search(r"GigabitEthernet0/(\d+)", e.message)
+        if m:
+            assert int(m.group(1)) >= ml.SCENARIO_IF_BASE
+
+
+def test_the_fleet_rungs_are_deterministic():
+    """Same seed, same fleet ⇒ same plan; a different seed ⇒ a different one.
+    Without this an A/B across the ladder compares two workloads."""
+    a, b = _rung("storm-5k", devices=5000), _rung("storm-5k", devices=5000)
+    assert a.digest() == b.digest()
+    assert a.events == b.events and a.incidents == b.incidents
+    other = _rung("storm-5k", devices=5000, seed=ml.SCENARIO_SEED_DEFAULT + 1)
+    assert other.digest() != a.digest()
+
+
+def test_ground_truth_scales_with_the_fleet(scen, fleets):
+    """The twin-scorable story set GROWS with the estate — a 10K run graded
+    against a 2.5K story set would score a quarter of its own fleet. Each
+    causal dimension scales with the device count, because `_build` sizes
+    every template as `instances_per_1k_devices x devices / 1000`."""
+    base = scen.dynamics()
+    for name, _profile, devices, _eps in FLEET_LADDER:
+        got = fleets[name].dynamics()
+        factor = devices / DEVICES
+        assert len(fleets[name].twin_records()) == got["incidents"]
+        for key in ("incidents", "scenario_events", "state_transitions",
+                    "recoveries", "contradictions", "blast_radius_expansions",
+                    "flap_cycles_total", "incidents_with_recovery",
+                    "multi_vantage_incidents", "scenario_devices",
+                    "noise_devices"):
+            want = base[key] * factor
+            assert got[key] == pytest.approx(want, rel=0.10), (
+                f"{name}: {key} = {got[key]}, not ~{want:.0f} "
+                f"({factor:g}x the 2.5K rung)")
+            assert got[key] > 0
+
+
+# ── the 5K ground truth, through the twin scorer's own entry points ─────────
+
+def _twin_modules():
+    """`scripts/lab/twin` is a flat script dir (scorer.py does
+    `from stack import ...`), so it has to be on the path as itself."""
+    sys.path.insert(0, str(ROOT / "scripts" / "lab" / "twin"))
+    import scorer as scorer_mod
+    import twin as twin_mod
+    return twin_mod, scorer_mod
+
+
+def test_a_5k_run_dir_is_structurally_scorable_by_the_twin(tmp_path,
+                                                           monkeypatch):
+    """`twin.py score --runid <id> --run-root data/miniladder` must grade a 5K
+    mini-ladder run with no second scorer and no schema migration. Held
+    STRUCTURALLY (no stack, no ClickHouse): the run dir is discovered by the
+    twin's own `find_run_dir`, its `ground_truth.jsonl` parses the way
+    `cmd_score` parses it, `state.json` carries the fields the scorer reads,
+    and every record resolves through `scorer.story_entities` to entities the
+    scorer can look up — the failure mode being a story set that names
+    nothing, which renders as an all-miss accuracy report instead of an
+    error."""
+    twin_mod, scorer_mod = _twin_modules()
+    run_dir = tmp_path / "20260830T000000Z-testrun"
+    os.makedirs(run_dir, exist_ok=True)
+    clock = FakeClock()
+    stack = FakeStack(clock)
+    h = _harness(run_dir, clock, stack, profile="t-storm-5k", minutes=2,
+                 devices=5000)
+    monkeypatch.setattr(ml, "time", clock)
+    assert h._burst_lanes({}), h.phases[-1]["notes"]
+
+    assert twin_mod.find_run_dir(str(tmp_path), "testrun") == str(run_dir)
+    with open(run_dir / ml.TWIN_STATE_FILE, encoding="utf-8") as f:
+        state = json.load(f)
+    with open(run_dir / ml.TWIN_GROUND_TRUTH_FILE, encoding="utf-8") as f:
+        records = [json.loads(ln) for ln in f if ln.strip()]
+    journal, notes = twin_mod.read_emission_journal(str(run_dir), state)
+    assert journal == {} and notes, (
+        "a mini-ladder run journals no per-story emission — the twin must "
+        "say so as a MODE, not fail")
+
+    assert records, "the 5K run wrote no twin stories"
+    assert len(records) == len(h.scenario.incidents)
+    devices_seen: set = set()
+    for rec in records:
+        names = scorer_mod.story_entities(rec, state["prefix"])
+        assert names, f"story {rec['story_id']} names no entity to score"
+        assert names == list(dict.fromkeys(names)), "duplicate entity names"
+        devices_seen.update(rec["affected"]["devices"])
+        rca = rec["expect"]["rca"]
+        assert rca["verdict_tier_at_least"] in scorer_mod._TIER_RANK
+        for want in rca["affected_includes"]:
+            assert state["prefix"] + want in names, (
+                "affected_includes is prefixed by the scorer — an id it "
+                "cannot find scores as a miss the engine never made")
+    # the story set really is a 5K fleet's, not a 2.5K one's
+    assert all(d.startswith("mlx-storm-") for d in devices_seen)
+    assert len(devices_seen) > DEVICES, (
+        f"{len(devices_seen)} devices carry stories — a 5K run graded "
+        f"against a 2.5K story set scores half its fleet blind")
+
+    # and the mini-ladder's OWN ground truth agrees with the twin projection
+    with open(run_dir / ml.GROUND_TRUTH_FILE, encoding="utf-8") as f:
+        gt = json.load(f)
+    assert gt["scenario"] == "storm-5k" and gt["profile"] == "t-storm-5k"
+    assert gt["devices"]["total"] == 5000
+    assert len(gt["incidents"]) == len(records)
+    assert {i["incident_id"] for i in gt["incidents"]} == \
+        {r["story_id"] for r in records}

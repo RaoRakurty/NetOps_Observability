@@ -333,6 +333,56 @@ CH_MEMORY_TRACKING_PEAK_WARN_PCT = float(
 # How many runs of onboard-rate history last-run.json carries (tracker 175).
 ONBOARD_RATE_HISTORY = int(os.environ.get("MLX_ONBOARD_RATE_HISTORY", "30"))
 
+# ── THE ONBOARD WALL BUDGET (host-ceiling ladder, 2026-08-30) ──────────────
+#
+# WHAT ONBOARDING ACTUALLY COSTS, MEASURED — not assumed. `onboard()` has no
+# deadline of its own and must not grow one: it is one bounded, retried HTTP
+# create per device (`http_retry`), and a create that is merely SLOW is
+# evidence (the O(N^2) linearity verdict), never a reason to abandon a fleet
+# half-built. What the phase needs is an HONEST EXPECTATION, because a 10K
+# rung's onboard is minutes of apparent silence and whatever runs the harness
+# — `scripts/scale-ab-driver.py --leg-timeout`, cron, an operator — has to
+# budget for it.
+#
+# The measurement, from this harness's own run dirs (`data/miniladder`):
+#   * 2,500 devices in 79.7 s wall — 31.4/s aggregate, first-window 35.0/s
+#     decaying to 26.4/s inside the run (report 20260828T014955Z);
+#   * 1,000 devices in 29.6 s — 33.8/s (report 20260829T031701Z);
+#   * and 15.4/s once the device store carried 35,427 deletion tombstones
+#     (tracker 175, `tombstone_debt` below) — the SLOW case, which is the one
+#     a budget has to survive.
+# So the plan rate is ~30/s and the FLOOR is the tombstone-laden 15/s.
+#
+# A PLANNING FIGURE OF ~5,600 s FOR A 10K ONBOARD ("10,000 at ~30/s") was in
+# circulation when these rungs were authored. It does not survive its own
+# arithmetic — 10,000 / 30 = 333 s — nor the runs above, so it is recorded
+# here as rejected rather than silently averaged into the budget. The number
+# below is derived from the measured rates only.
+ONBOARD_RATE_PLAN_PER_S = float(
+    os.environ.get("MLX_ONBOARD_RATE_PLAN_PER_S", "30"))
+ONBOARD_RATE_FLOOR_PER_S = float(
+    os.environ.get("MLX_ONBOARD_RATE_FLOOR_PER_S", "15"))
+# Fixed cost before the first create returns (login, preflight residue list).
+ONBOARD_BUDGET_BASE_S = float(
+    os.environ.get("MLX_ONBOARD_BUDGET_BASE_S", "300"))
+
+
+def onboard_budget_s(devices: int) -> float:
+    """The wall time the onboard phase is EXPECTED to need for `devices`.
+
+    A floor plus per-device time at the measured SLOW rate, so it scales with
+    `--devices` instead of being a constant that quietly stops covering the
+    fleet: 1,000 -> 367 s, 2,500 -> 467 s, 5,000 -> 633 s, 10,000 -> 967 s.
+
+    INFORMATIONAL ONLY. Nothing aborts on it — it is reported in the phase
+    evidence, warned about when overrun, and printed by --dry-run so the run's
+    caller can size its own timeout. Overrunning it is a measurement (the
+    tombstone-debt correlation tracker 175 is about), never a verdict.
+    """
+    n = max(0, int(devices))
+    return ONBOARD_BUDGET_BASE_S + n / max(1e-9, ONBOARD_RATE_FLOOR_PER_S)
+
+
 CLEAN_SLATE_OFFSET_BOUND = int(
     os.environ.get("MLX_CLEAN_SLATE_OFFSET_BOUND", "100000"))
 
@@ -2266,6 +2316,66 @@ SCENARIO_SPECS: dict = {"storm-2.5k": STORM_SCENARIO_2K5}
 SCENARIO_SPECS.update({name: storm_spec_for_share(share, name)
                        for share, name in SCENARIO_STORM_LADDER})
 
+# ── the HOST-CEILING ladder (5K / 10K fleets, 2026-08-30) ───────────────────
+#
+# WHY THESE RUNGS. The storm-share ladder above varies the STRUCTURE of a
+# 2,500-device workload. The host-ceiling programme
+# (`docs/projects/01-SCALE-TESTING.md` §ladder) varies the FLEET instead, to
+# find the largest estate this box carries to a graded verdict — so these
+# rungs hold the storm share FIXED at the ratified `t-storm-2.5k` value
+# (`chain.DEFAULT_SHAPE`, target 1.78 %) and change nothing but scale. The two
+# axes are never varied at once, or a rung's verdict would be about both.
+#
+# NOTHING IN THE SCENARIO NEEDS RE-SIZING FOR THEM, and that is a property of
+# the generator rather than luck: `_build` derives each template's instance
+# count as `instances_per_1k_devices x len(devices) / 1000`, so the scenario
+# grows with the fleet, while the profile's rate grows with the fleet by the
+# same factor (the T-family's ratified 0.4 eps/device) — the SHARE is
+# therefore invariant. Measured on this generator, seed 20260829, 900 s:
+#
+#   fleet     raw plan    scenario events   share     peak chunk   peak/mean
+#    2,500      900,000            16,060   1.784 %   8.3 % quota      4.67x
+#    5,000    1,800,000            31,791   1.766 %   7.0 % quota      3.96x
+#   10,000    3,600,000            63,736   1.770 %   4.4 % quota      2.50x
+#
+# — every rung inside the ±10 % band the ladder tests hold against the 1.7844 %
+# target, and the plan gets SMOOTHER with scale (more incidents overlapping the
+# same window), so the per-chunk headroom and anti-spike guards get easier, not
+# tighter, as the fleet grows.
+#
+# WHY A NAMED SPEC PER RUNG rather than reusing `storm-2.5k`: the scenario name
+# is what `ground-truth.json`, `shape_record` and the twin records carry, and a
+# 10,000-device run must not report itself as `storm-2.5k`. The plan digest is
+# a function of the spec's CONTENT, the device list, the seed and the window —
+# never of the name — so on one device list all three names hash to the same
+# digest (pinned by tests/test_storm_scenario_profile.py): one story, three
+# fleets.
+SCENARIO_FLEET_LADDER: tuple = ((5000, "storm-5k"), (10000, "storm-10k"))
+
+
+def storm_spec_for_fleet(devices: int, name: str) -> dict:
+    """`STORM_SCENARIO_2K5` under its own NAME, for a larger fleet.
+
+    Same five templates, same `chain.DEFAULT_SHAPE`, therefore the same
+    declared storm share as `t-storm-2.5k`. `devices` sizes the DESCRIPTION
+    only — the instance counts come from the run's actual device list, so a
+    rung run at the wrong `--devices` still plans a consistent scenario (its
+    share is what moves, and ground truth records it).
+    """
+    spec = dict(STORM_SCENARIO_2K5)
+    spec["name"] = name
+    spec["description"] = (
+        f"the ratified t-storm-2.5k fault-injection story at {devices} "
+        f"devices — same five cause kinds, same DEFAULT_SHAPE (target "
+        f"{chain.DEFAULT_SHAPE.storm_share_of_raw:.2%} of the raw fleet plan), "
+        f"instance counts scaled by the fleet "
+        f"(instances_per_1k_devices x {devices} / 1000)")
+    return spec
+
+
+SCENARIO_SPECS.update({name: storm_spec_for_fleet(devices, name)
+                       for devices, name in SCENARIO_FLEET_LADDER})
+
 # Rotation applied to the scenario device population between allocation rounds
 # (`shape.incident_density` > 1). A round-0 rotation of ZERO is what keeps the
 # default plan byte-identical; the stride is a prime well clear of every
@@ -2410,6 +2520,57 @@ WORKLOAD_PROFILES: dict = {
             ("background", 0.90, "production", 900.0),
         ],
     },
+    # ── the HOST-CEILING ladder (5K / 10K rungs, 2026-08-30) ─────────────
+    #
+    # `docs/projects/01-SCALE-TESTING.md` §ladder — the largest fleet this box
+    # carries to a graded verdict. Run each rung with its OWN device count
+    # (`--devices 5000` / `--devices 10000`); `--devices` is never overridden
+    # by a profile, and a rung run at the wrong count measures a rate per
+    # device nobody ratified.
+    #
+    #   * EPS is CARRIED BY THE LANE, not derived from `--devices` — the
+    #     profile machinery only ever reads the lane's rate — so it is written
+    #     out here at the T-family's ratified 0.4 eps/device: 2,500 -> 1,000,
+    #     5,000 -> 2,000, 10,000 -> 4,000 raw. Per-device load is therefore
+    #     IDENTICAL across the ladder, which is what makes a completion or
+    #     TTUR difference between rungs a statement about the box.
+    #   * THE WINDOW stays 15 min, like every other T rung — and that is what
+    #     keeps the ratified 2,700 s budgets: both the drain and the
+    #     correlation-completion caps are `--drain-factor` (3.0) x
+    #     `burst_seconds` (900). An INCOMPLETE at 2,700 s is the MEASURED
+    #     finding for that rung (§ladder), never a reason to widen the cap.
+    #   * THE STORM SHARE is unchanged at the ratified ~1.78 %
+    #     (`chain.DEFAULT_SHAPE`): the ceiling hunt varies SCALE, and the
+    #     storm-share ladder above is the other axis (see
+    #     SCENARIO_FLEET_LADDER for the measured share at each fleet).
+    #   * ONBOARDING scales with the fleet and nothing else does: expect
+    #     `onboard_budget_s()` — ~633 s at 5,000 and ~967 s at 10,000 against
+    #     the measured 15-30 creates/s — and size the caller's timeout
+    #     (`scale-ab-driver.py --leg-timeout`) accordingly. Tracker 175
+    #     (device-store tombstone debt) is the thing that moves that number;
+    #     the phase reports the budget and the achieved rate beside it.
+    "t-nominal-5k": {
+        "workload_class": "T_NOMINAL_5K",
+        "burst_minutes": 15,
+        "lanes": [("fleet", 1.0, "production", 2000.0)],
+    },
+    "t-storm-5k": {
+        "workload_class": "T_STORM_5K",
+        "burst_minutes": 15,
+        "lanes": [("fleet", 1.0, "production", 2000.0)],
+        "scenario": "storm-5k",
+    },
+    "t-nominal-10k": {
+        "workload_class": "T_NOMINAL_10K",
+        "burst_minutes": 15,
+        "lanes": [("fleet", 1.0, "production", 4000.0)],
+    },
+    "t-storm-10k": {
+        "workload_class": "T_STORM_10K",
+        "burst_minutes": 15,
+        "lanes": [("fleet", 1.0, "production", 4000.0)],
+        "scenario": "storm-10k",
+    },
     "soak-72h": {
         # The 72h soak (owner-launched 2026-08-22): continuous background at
         # 100 raw eps (0.1 eps/device — inside the MEASURED production band of
@@ -2437,6 +2598,36 @@ WORKLOAD_PROFILES: dict = {
         ],
     },
 }
+
+
+def lane_chunk_plan(lanes: list, duration_s: int) -> list[dict]:
+    """The RATIFIED CHUNK PLAN of a lane profile: how many events each lane
+    injects in each `BURST_CHUNK_SECS` chunk of `duration_s`.
+
+    Module level so the BURST and `--dry-run` read ONE definition of what a
+    profile will send. A dry run that prints a different number from the one
+    the burst injects is not a dry run (16.3): it was printing `--eps` — a
+    value no lane profile ever uses — while the run planned the lane rates.
+
+    Fractional rates carry per lane, so a 0.35 eps lane still integrates
+    exactly over the window rather than truncating every chunk to zero.
+    """
+    accs = [0.0] * len(lanes)
+    plan: list[dict] = []
+    for start in range(0, duration_s, BURST_CHUNK_SECS):
+        end = min(start + BURST_CHUNK_SECS, duration_s)
+        row: dict = {}
+        for i, (name, _share, _mix, rate) in enumerate(lanes):
+            # Integrate the rate over the chunk's seconds — exact for the ramp
+            # profiles, identical to rate*chunk_secs for flat ones.
+            inc = (sum(rate(t) for t in range(start, end)) if callable(rate)
+                   else float(rate) * (end - start))
+            accs[i] += inc
+            k = int(accs[i])
+            accs[i] -= k
+            row[name] = k
+        plan.append(row)
+    return plan
 
 
 class ScenarioEvent(typing.NamedTuple):
@@ -4873,7 +5064,13 @@ class Harness:
             self.onboard_stop_reason = "shortfall"
         else:
             self.onboard_stop_reason = "none"
+        # The EXPECTED wall for this fleet (scales with --devices; see
+        # onboard_budget_s). Informational: an overrun is reported, never a
+        # verdict — a slow create is exactly what the linearity gate judges.
+        budget_s = onboard_budget_s(n)
         ev: dict = {"devices_requested": n, "devices_created": len(self.created_ids),
+                    "budget_s": round(budget_s, 0),
+                    "over_budget": total_wall > budget_s,
                     "onboard_stop_reason": self.onboard_stop_reason,
                     "devices_absorbed_by_dedupe": len(self.absorbed),
                     "absorbed_mappings": dict(list(self.absorbed.items())[:20]),
@@ -4883,6 +5080,13 @@ class Harness:
                         residue_by_run(canonical_ids)[:RESIDUE_RUN_IDS_SHOWN],
                     "window": k, "total_wall_s": round(total_wall, 2),
                     "failures": failures[:10]}
+        if total_wall > budget_s:
+            warn(f"onboard took {total_wall:.0f}s for {n} devices "
+                 f"({n / max(total_wall, 1e-9):.1f}/s) — over the "
+                 f"{budget_s:.0f}s this fleet is budgeted (floor "
+                 f"{ONBOARD_RATE_FLOOR_PER_S:.0f}/s). Not a verdict: check the "
+                 f"tombstone debt this run reports (tracker 175) and size the "
+                 f"caller's timeout from the measured rate")
         if self.absorbed:
             return self.phase(
                 "onboard", "FAIL", ev,
@@ -5201,24 +5405,8 @@ class Harness:
         Fractional rates carry per lane, so a 0.35 eps lane still integrates
         exactly over the window rather than truncating every chunk to zero.
         """
-        lanes = self.profile.get("lanes") or []
-        duration = int(self.args.burst_minutes * 60)
-        accs = [0.0] * len(lanes)
-        plan: list[dict] = []
-        for start in range(0, duration, BURST_CHUNK_SECS):
-            end = min(start + BURST_CHUNK_SECS, duration)
-            row: dict = {}
-            for i, (name, _share, _mix, rate) in enumerate(lanes):
-                # Integrate the rate over the chunk's seconds — exact for the
-                # ramp profiles, identical to rate*chunk_secs for flat ones.
-                inc = (sum(rate(t) for t in range(start, end)) if callable(rate)
-                       else float(rate) * (end - start))
-                accs[i] += inc
-                k = int(accs[i])
-                accs[i] -= k
-                row[name] = k
-            plan.append(row)
-        return plan
+        return lane_chunk_plan(self.profile.get("lanes") or [],
+                               int(self.args.burst_minutes * 60))
 
     def _planned_total(self) -> int:
         """Events this run intends to inject — the sum of the ratified chunk
@@ -8074,7 +8262,19 @@ def main(argv: list[str]) -> int:
               f"matching it")
         return 0
     if args.dry_run:
-        planned = args.eps * 60 * args.burst_minutes
+        # THE PROFILE'S plan, not --eps: a lane profile never reads --eps, and
+        # printing it told a 10K rung's operator 2,000/s while the run would
+        # inject 4,000/s. Same function the burst plans from.
+        _lanes = _prof.get("lanes") or []
+        _duration = int(args.burst_minutes * 60)
+        if _lanes:
+            _plan = lane_chunk_plan(_lanes, _duration)
+            planned = sum(sum(row.values()) for row in _plan)
+            rate_note = (f"{planned / max(1, _duration):.0f}/s across "
+                         f"{len(_lanes)} lane(s)")
+        else:
+            planned = args.eps * _duration
+            rate_note = f"{args.eps}/s"
         print("scale-miniladder DRY RUN — nothing will be touched")
         print(f"  stack           : {args.base_url} (project {args.project}, "
               f"env {args.env_file})")
@@ -8087,9 +8287,13 @@ def main(argv: list[str]) -> int:
               f"baselines (RSS/offsets/lag/CH/VM/durability)")
         print(f"  phase 2 onboard  : create {args.devices} devices "
               f"(mlx-<runid>-NNNNN @ 198.18/15); last/first window rate floor "
-              f"{args.linearity_floor}")
+              f"{args.linearity_floor}; expect ~"
+              f"{args.devices / ONBOARD_RATE_PLAN_PER_S:.0f}s at the measured "
+              f"{ONBOARD_RATE_PLAN_PER_S:.0f}/s, budget "
+              f"{onboard_budget_s(args.devices):.0f}s (informational)")
         print(f"  phase 3 burst    : registry gate + canary, then {planned} syslog "
-              f"events @ {args.eps}/s for {args.burst_minutes} min to netops.syslog")
+              f"events @ {rate_note} for {args.burst_minutes} min to "
+              f"netops.syslog")
         print(f"  phase 4 drain    : lag back to baseline+{args.lag_epsilon} within "
               f"{args.drain_factor}x burst")
         print("  phase 5 account  : injected == OS-persisted + run DLQ + counted "

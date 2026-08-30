@@ -291,3 +291,251 @@ def test_2k5_rung_profiles_match_the_ratified_ladder():
     assert storm[1] == 0.10 and storm[2] == "storm"
     assert storm[3] + bg[3] == pytest.approx(10_000.0)
     assert (storm[3] + bg[3]) / (2500 * 0.4) == pytest.approx(10.0),         "S1-2.5K aggregate is not the ratified 10x nominal"
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# THE HOST-CEILING LADDER (5K / 10K rungs, 2026-08-30)
+#
+# `docs/projects/01-SCALE-TESTING.md` §ladder hunts the largest fleet this box
+# carries to a graded verdict. The rungs vary SCALE and nothing else, so what
+# these tests hold is everything that must NOT move while it does:
+#
+#   * the per-device rate — the ratified 0.4 eps/device the whole T-family
+#     runs at, so a completion/TTUR difference between rungs is about the box
+#     and not about the load per device;
+#   * the 15-minute window, which is where the ratified 2,700 s drain and
+#     completion caps come from (`--drain-factor` 3.0 x 900 s). An INCOMPLETE
+#     at the cap is the MEASURED finding for that rung, never a reason to
+#     widen it;
+#   * the onboard budget, which is the ONE thing that must scale with the
+#     fleet — and does, from the harness's own measured create rates;
+#   * every profile that predates the ladder, byte for byte: the recorded 1K
+#     and 2.5K numbers are about those exact workloads.
+# ══════════════════════════════════════════════════════════════════════════
+
+# (profile, devices it is run with, raw eps, workload class, scenario)
+HOST_CEILING_RUNGS = (
+    ("t-nominal-5k", 5000, 2000.0, "T_NOMINAL_5K", None),
+    ("t-storm-5k", 5000, 2000.0, "T_STORM_5K", "storm-5k"),
+    ("t-nominal-10k", 10000, 4000.0, "T_NOMINAL_10K", None),
+    ("t-storm-10k", 10000, 4000.0, "T_STORM_10K", "storm-10k"),
+)
+RATIFIED_EPS_PER_DEVICE = 0.4
+
+
+@pytest.mark.parametrize("name,devices,eps,klass,scenario", HOST_CEILING_RUNGS)
+def test_host_ceiling_rungs_are_registered_at_the_ratified_per_device_rate(
+        name, devices, eps, klass, scenario):
+    """The registry entry itself. `--devices` is never overridden by a
+    profile, so the rate is written into the LANE and the rung has to be run
+    with the matching count — the pairing is pinned here because nothing at
+    run time can check it."""
+    assert name in ml.WORKLOAD_PROFILES, f"{name!r} is not registered"
+    prof = ml.WORKLOAD_PROFILES[name]
+    assert prof["workload_class"] == klass
+    assert prof["burst_minutes"] == 15
+    assert prof["lanes"] == [("fleet", 1.0, "production", eps)]
+    assert eps / devices == pytest.approx(RATIFIED_EPS_PER_DEVICE), (
+        f"{name}: {eps}/{devices} = {eps / devices} eps/device, not the "
+        f"ratified {RATIFIED_EPS_PER_DEVICE}")
+    assert prof.get("scenario") == scenario
+    if scenario:
+        assert scenario in ml.SCENARIO_SPECS
+
+
+@pytest.mark.parametrize("name,devices,eps,_k,_s", HOST_CEILING_RUNGS)
+def test_a_host_ceiling_rung_plans_eps_times_the_window(name, devices, eps,
+                                                        _k, _s):
+    """The chunk plan a rung actually injects: rate x 900 s, integrated the
+    same way every other lane profile's is."""
+    gen = _gen(profile=name, devices=devices)
+    gen.args.eps, gen.args.burst_minutes = int(eps), 15
+    assert gen._planned_total() == int(eps) * 900
+    lanes = gen._lane_states()
+    assert [len(ln["pool"]) for ln in lanes] == [devices], (
+        "the fleet lane must carry every device — a rung that splits the "
+        "fleet is not the T-family workload")
+
+
+def test_the_host_ceiling_rungs_keep_the_ratified_2700s_budgets():
+    """`drain()` and `correlation_completion()` both budget
+    `--drain-factor x burst_seconds`. Keeping the window at 15 min is what
+    keeps both caps at the ratified 2,700 s across the whole ladder — so an
+    INCOMPLETE at the cap compares directly with the 2.5K rung's."""
+    args = ml.parse_args([])
+    assert args.drain_factor == 3.0, (
+        "the drain factor moved — every recorded 2,700 s budget is now a "
+        "different number")
+    for name, _devices, _eps, _k, _s in HOST_CEILING_RUNGS:
+        burst_s = ml.WORKLOAD_PROFILES[name]["burst_minutes"] * 60
+        assert burst_s == 900
+        assert max(args.drain_factor * burst_s, 120.0) == 2700.0
+
+
+# ── the onboard budget: the one thing that DOES scale with the fleet ────────
+
+@pytest.mark.parametrize("devices,want_s", [(1000, 366.7), (2500, 466.7),
+                                            (5000, 633.3), (10000, 966.7)])
+def test_the_onboard_budget_scales_with_the_fleet(devices, want_s):
+    got = ml.onboard_budget_s(devices)
+    assert got == pytest.approx(
+        ml.ONBOARD_BUDGET_BASE_S + devices / ml.ONBOARD_RATE_FLOOR_PER_S)
+    assert got == pytest.approx(want_s, abs=0.5)
+
+
+def test_the_onboard_budget_is_per_device_not_a_constant():
+    """A constant budget silently stops covering the fleet exactly when the
+    fleet gets big enough to need it. Doubling the devices must add the
+    devices' own time at the measured floor rate."""
+    step = ml.onboard_budget_s(10000) - ml.onboard_budget_s(5000)
+    assert step == pytest.approx(5000 / ml.ONBOARD_RATE_FLOOR_PER_S)
+    budgets = [ml.onboard_budget_s(n) for n in (0, 1000, 2500, 5000, 10000)]
+    assert budgets == sorted(budgets) and len(set(budgets)) == len(budgets)
+
+
+def test_the_onboard_budget_covers_the_runs_it_was_derived_from():
+    """The measurements in the harness header, held against the budget:
+    2,500 devices took 79.68 s wall (report 20260828T014955Z, 31.4/s) and the
+    tombstone-laden store managed 15.4/s (tracker 175). A budget that does not
+    cover the SLOW case would fire on every healthy run and mean nothing."""
+    assert ml.onboard_budget_s(2500) > 79.68
+    for n in (1000, 2500, 5000, 10000):
+        assert ml.onboard_budget_s(n) > n / 15.4, (
+            f"the {n}-device budget does not cover the measured 15.4/s "
+            f"tombstone-laden rate the floor was derived from")
+    assert ml.ONBOARD_RATE_FLOOR_PER_S <= ml.ONBOARD_RATE_PLAN_PER_S
+
+
+def test_the_onboard_budget_is_reported_and_never_a_verdict():
+    """§16.1: the overrun must be VISIBLE (evidence + warning), and it must
+    not decide the phase — a slow create is what the linearity gate judges,
+    and abandoning a half-built fleet would destroy the run's evidence."""
+    src = (ROOT / "scripts" / "scale-miniladder.py").read_text(encoding="utf-8")
+    body = src.split("    def onboard(self) -> bool:", 1)[1].split(
+        "\n    # -- phase 3", 1)[0]
+    assert '"budget_s": round(budget_s, 0)' in body
+    assert '"over_budget": total_wall > budget_s' in body
+    assert "if total_wall > budget_s:" in body and "warn(" in body
+    guard = body.split("if total_wall > budget_s:", 1)[1].split(
+        "if self.absorbed", 1)[0]
+    assert "return" not in guard, (
+        "the onboard budget overrun grew a return — it became a verdict")
+
+
+# ── everything that predates the ladder is byte-unchanged ───────────────────
+
+# The 15 profiles as they stood at commit 2a4c66e5, canonicalised (rate
+# callables render as "<callable>" because a lambda's repr carries its
+# address). VERIFIED both ways: this digest was computed from
+# `git show 2a4c66e5:scripts/scale-miniladder.py` and from the working tree
+# after the 5K/10K rungs were added, and the two agreed — which is the claim
+# the pin makes. A rung ADDED to the registry does not move it; a rate,
+# window, mix, lane split or class CHANGED on any of these does, and that
+# would re-base every 1K/2.5K number already recorded against them.
+PRE_LADDER_PROFILES = (
+    "legacy", "s1", "s1-2.5k", "s1-long", "s2-ramp", "s3-stress", "s4-chatter",
+    "soak-72h", "t-nominal", "t-nominal-2.5k", "t-p95", "t-storm-10-2.5k",
+    "t-storm-2.5k", "t-storm-25-2.5k", "t-storm-50-2.5k",
+)
+PRE_LADDER_PROFILE_DIGEST = (
+    "5c634edce461d95d42991ec59ac9ef9cc8948827d3b7425d38c52609e60a5082")
+
+
+def _canonical_profile(prof: dict) -> dict:
+    out: dict = {}
+    for key, value in sorted(prof.items()):
+        if key == "lanes":
+            out[key] = [[n, share, mix,
+                         ("<callable>" if callable(rate) else rate)]
+                        for n, share, mix, rate in value]
+        else:
+            out[key] = value
+    return out
+
+
+def test_every_profile_that_predates_the_host_ceiling_ladder_is_unchanged():
+    import hashlib
+    assert set(PRE_LADDER_PROFILES) <= set(ml.WORKLOAD_PROFILES), (
+        "a pre-ladder profile was REMOVED — its recorded runs lost their "
+        "workload definition")
+    blob = json.dumps(
+        {n: _canonical_profile(ml.WORKLOAD_PROFILES[n])
+         for n in sorted(PRE_LADDER_PROFILES)},
+        sort_keys=True, separators=(",", ":"))
+    assert hashlib.sha256(blob.encode()).hexdigest() == \
+        PRE_LADDER_PROFILE_DIGEST, (
+            "a profile that predates the host-ceiling ladder changed — every "
+            "number recorded against it is now about a different workload")
+
+
+def test_the_pin_would_catch_a_moved_rate():
+    """THE MUTANT: the digest is only worth having if a one-rate change turns
+    it red."""
+    import hashlib
+    mutated = {n: _canonical_profile(ml.WORKLOAD_PROFILES[n])
+               for n in sorted(PRE_LADDER_PROFILES)}
+    mutated["t-nominal-2.5k"]["lanes"][0][3] = 1001.0
+    blob = json.dumps(mutated, sort_keys=True, separators=(",", ":"))
+    assert hashlib.sha256(blob.encode()).hexdigest() != \
+        PRE_LADDER_PROFILE_DIGEST
+
+
+# ── the dry run must print the plan the burst would inject (16.3) ───────────
+
+def test_the_chunk_plan_has_one_definition():
+    """`lane_chunk_plan` is what the burst plans from AND what --dry-run
+    prints; two integrations of the same profile could disagree, and the one
+    the operator reads is the one that would be wrong."""
+    for name in ("t-nominal-2.5k", "t-storm-5k", "t-storm-10k", "s2-ramp"):
+        prof = ml.WORKLOAD_PROFILES[name]
+        gen = _gen(profile=name, devices=100)
+        gen.args.burst_minutes = prof["burst_minutes"]
+        gen.args.eps = 2000
+        duration = prof["burst_minutes"] * 60
+        assert gen._lane_schedule() == ml.lane_chunk_plan(prof["lanes"],
+                                                          duration)
+
+
+@pytest.mark.parametrize("profile,devices,planned", [
+    ("t-nominal-2.5k", 2500, 900_000),
+    ("t-storm-5k", 5000, 1_800_000),
+    ("t-nominal-10k", 10000, 3_600_000),
+    ("t-storm-10k", 10000, 3_600_000),
+])
+def test_the_dry_run_prints_the_plan_the_burst_would_inject(
+        profile, devices, planned, capsys, monkeypatch):
+    """THE DEFECT: --dry-run printed `--eps`, which NO lane profile reads, so
+    a 10K rung's operator was told 2,000/s while the run would inject 4,000/s.
+    §16.3 says a dry run states exactly what would happen."""
+    monkeypatch.setenv("PATH", os.environ.get("PATH", ""))   # main() rewrites it
+    assert ml.main(["--dry-run", "--devices", str(devices),
+                    "--profile", profile]) == 0
+    out = capsys.readouterr().out
+    assert f"then {planned} syslog events" in out
+    eps = ml.WORKLOAD_PROFILES[profile]["lanes"][0][3]
+    assert f"@ {eps:.0f}/s across 1 lane(s)" in out
+    gen = _gen(profile=profile, devices=devices)
+    gen.args.burst_minutes, gen.args.eps = 15, 2000
+    assert gen._planned_total() == planned, (
+        "the printed plan and the burst's plan disagree")
+
+
+def test_the_dry_run_still_reports_eps_for_the_legacy_profile(capsys,
+                                                              monkeypatch):
+    """`legacy` is the one profile that genuinely runs off --eps; its dry-run
+    line must not start quoting a lane rate it does not have."""
+    monkeypatch.setenv("PATH", os.environ.get("PATH", ""))
+    assert ml.main(["--dry-run", "--devices", "1000", "--profile", "legacy",
+                    "--eps", "1234", "--burst-minutes", "5"]) == 0
+    out = capsys.readouterr().out
+    assert "then 370200 syslog events @ 1234/s" in out
+    assert "lane(s)" not in out.split("phase 3 burst")[1].split("\n")[0]
+
+
+def test_the_dry_run_prints_an_onboard_budget_that_tracks_the_fleet(
+        capsys, monkeypatch):
+    monkeypatch.setenv("PATH", os.environ.get("PATH", ""))
+    assert ml.main(["--dry-run", "--devices", "10000",
+                    "--profile", "t-storm-10k"]) == 0
+    out = capsys.readouterr().out
+    assert f"budget {ml.onboard_budget_s(10000):.0f}s (informational)" in out
