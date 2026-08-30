@@ -420,3 +420,19 @@ update `P4_PROGRAMME_WRITEUP_2026-08-29.md` tables.
   only one ON leg is needed, ~1.5 h, owner go-ahead required);
   (3) tracker 185 residual; (4) trackers 186 / 187 / 189, outside P4.
 - **Stack state:** idle, arm OFF, image `34d113a3a8bb`, residue 0, run lock free.
+
+## UPDATE 2026-08-30 16:18Z — SLO Option A ratified
+- **Decision (owner, in session):** storm-time SLO = **Option A** of
+  `P4_PROGRAMME_WRITEUP_2026-08-29.md` §8 — completion within 45 min of burst end,
+  lossless (0 DLQ), within memory caps, accuracy ≥ 93 %; T1 p95 published as a
+  tracked indicator, NOT a gate. **B not pursued** (its class classifier exists
+  only inside the aggregation plane; it becomes a refinement of C if C lands).
+  **C stays a candidate**, contingent on the matched fresh-container OFF/ON
+  `t-storm-2.5k` pair — **not yet approved to run**.
+- **P4 measurement side is CLOSED.** Nothing left to measure; what remains is
+  execution.
+- **Pickup order:** (1) matched pair — ONLY on owner approval (needs two
+  force-recreate arm switches; storm-s04 is the OFF half, so one ON leg);
+  (2) tracker 185 residual fix, then ONE confirming `t-storm-2.5k` after the pair;
+  (3) tracker 190 — raise/re-derive the harness stability gate, stale at
+  30,000 ms against the now-60 s session timeout (s04 PASSed by 26 ms).

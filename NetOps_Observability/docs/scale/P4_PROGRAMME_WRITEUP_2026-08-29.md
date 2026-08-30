@@ -4,8 +4,10 @@ Owner constraint (2026-08-28): no more hardware; success = engine efficiency +
 TTUR SLOs on the existing 4-core box. P5 (scale-out proof) dropped. Authority:
 owner memo `/var/tmp/Correlix-Bottleneck-Modified.md`; every number below is
 from a dated verdict doc in `docs/scale/` with the SQL/method stated there.
-**FINAL — 2026-08-30.** The lifecycle fix and the P3 A/B are both measured and
-recorded below; what remains is an owner decision, not a measurement (§7).
+**FINAL — 2026-08-30. Measurement side CLOSED.** The lifecycle fix and the P3
+A/B are both measured and recorded below, and the owner has ratified the
+storm-time SLO (§8, Option A). What remains is execution work, not measurement
+(§7).
 
 ## 1. The instrument (what "measured" means here)
 - Ratified workload `t-nominal-2.5k`: 2,500 devices, 900,001 events @ 1,000 eps
@@ -93,9 +95,13 @@ plane's or the rig's (`P3_AB_2P5K_VERDICT` §3.6). Half of that pair now exists:
 **storm-s04 is the fresh-container OFF baseline** (9/9, T1 p95 832 s, accuracy
 94.49 %, memflat 79.5 % of cap).
 
-A storm-time SLO should be stated per identity class (first occurrence vs
-repeat) and relative to burst end; that is a product decision, and §8 puts three
-concrete options to the owner.
+The SLO question this raises — whether to promise a latency number at all, and
+whether to state it per identity class (first occurrence vs repeat) relative to
+burst end — was a product decision, and it has now been taken: **the ratified
+storm-time SLO is the Option A statement in §8** (completion + losslessness +
+memory + accuracy as the gate; T1 p95 published as a tracked indicator, not a
+pass/fail contract). Read §8 for the statement itself and for why B was not
+pursued and C is held contingent.
 
 ## 6. Defects found by the programme's own gauges (all filed)
 177 T4 gap → closed by ground truth · 178 replay direction · 180 profiler
@@ -107,34 +113,77 @@ semantics, run lock/namespace residue.
 
 ## 7. Remaining to close P4
 
-Steps 1 and 2 of the original list are DONE: the lifecycle work reached storm
-9/9 (`storm-s04`, §3) and the P3 A/B ran all five legs with the rule applied
-(§5). What is actually left:
+**The measurement side of P4 is CLOSED.** Steps 1 and 2 of the original list are
+DONE — the lifecycle work reached storm 9/9 (`storm-s04`, §3) and the P3 A/B ran
+all five legs with the rule applied (§5) — and the owner SLO decision, which was
+the last true blocker, was taken on 2026-08-30 (§8: Option A ratified). Nothing
+in P4 is waiting on a measurement. What remains is execution:
 
-1. **Owner SLO decision** — the only true blocker. §8 puts three options with
-   the numbers behind each. Nothing further needs to be measured to choose.
-2. **Optional: the matched fresh-container P3 pair** (`P3_AB_2P5K_VERDICT` §3.6).
-   The OFF half is now in hand (storm-s04); one ON leg on fresh containers on
-   the `2852ad6f` image would complete it and settle criteria 1 and 3. Cost
-   ~1.5 h. Recommendation only — do not run it without the owner's go-ahead.
-3. **Residual defect: tracker 185.** `reconcile.find_continuation` still blocks
-   the event loop for 27.8 s (92.9 % of the worst stall). It no longer ejects
-   the consumer only because the session timeout was widened 30 s → 60 s. The
-   harness's own stability gate is a stale hard-coded 30,000 ms and storm-s04
-   PASSed it by **26 ms**. This does not block the SLO decision — completion,
-   accounting and accuracy are all unaffected — but it is not closed.
+1. **The matched fresh-container OFF/ON pair at `t-storm-2.5k`** — *pending owner
+   approval; not scheduled.* This is the only thing that can move Option C from
+   candidate to adoptable (`P3_AB_2P5K_VERDICT` §3.6). The OFF half already
+   exists (storm-s04, 9/9 on the post-`2852ad6f` image), so one ON leg on fresh
+   containers completes it and settles A/B criteria 1 and 3. Cost ~1.5 h, and it
+   requires **two force-recreate arm switches** (OFF → ON to run the leg, ON →
+   OFF to restore the shipping default). Do not run it without the owner's
+   go-ahead.
+2. **Tracker 185 residual, then one confirming `t-storm-2.5k`.**
+   `reconcile.find_continuation` still blocks the event loop for 27.8 s (92.9 %
+   of the worst stall); it no longer ejects the consumer only because the session
+   timeout was widened 30 s → 60 s. Chunk-and-yield or offload that site, then
+   run **one** `t-storm-2.5k` to confirm — sequenced **after** the matched pair
+   so the pair is measured on the same image as its storm-s04 OFF half. This does
+   not affect the ratified SLO: completion, accounting and accuracy are all
+   unaffected by the stall.
+3. **Tracker 190 — harness stability gate stale at 30,000 ms.** The gate was
+   derived from the old 30 s Kafka session timeout, which is now 60 s, so it no
+   longer measures what it names; storm-s04 PASSed it by **26 ms**, which is a
+   coin-flip, not a margin. Raise or re-derive the threshold against the 60 s
+   timeout (and state the derivation in the harness), independently of the 185
+   fix that reduces the stall itself.
 4. Trackers 186 (backfill watermark), 187 (chain attribution, blocked on 184)
    and 189 (retry contract for six more tables) remain open and out of P4's
    scope.
 
-## 8. Proposed SLO options for the owner (recommendation only)
+## 8. SLO decision (owner, 2026-08-30) — Option A adopted
 
-Three options, each derived from measurements in this document. **None is
-adopted here** — this section exists so the decision can be made against numbers
-rather than intuition. All three assume the ratified rig: one 4-core box, 2,500
-devices, 900k events in 15 minutes, single shard.
+### DECISION — RATIFIED 2026-08-30 (owner)
 
-### Option A — Completion-and-losslessness is the SLO; T1 p95 is a tracked indicator
+**The storm-time SLO is Option A, verbatim:**
+
+> *Under a 15-minute 1,000-eps storm on 2,500 devices, the platform MUST
+> evaluate the whole workload within 45 minutes of burst end, lose nothing
+> (injected == persisted, 0 DLQ), stay within memory caps, and keep RCA accuracy
+> ≥ 93 %. T1 p95 is measured and published every run but is not a pass/fail
+> gate.*
+
+This statement is **ratified** and is the SLO the product ships against. It is
+the one option every clause of which is already met and already gated on the
+current build (storm-s04: completion 144 s of a 2,700 s budget, accounting exact
+900,001 == 900,001 with 0 DLQ, memflat 79.5 % of cap, accuracy 94.49 %).
+
+**Option B is NOT pursued.** Its per-identity-class classifier (first occurrence
+vs repeat) exists only *inside* the aggregation plane
+(`corr_agg_forwarded_total{class}`), which is OFF by default — so on the shipping
+configuration there is nothing to key the SLO on, and adopting B would mean
+building an equivalent classifier on the OFF path. If Option C ever lands, that
+classifier arrives with the plane and B becomes a **refinement of C** rather than
+a project of its own; it is retired as an independent option.
+
+**Option C remains a candidate, contingent** on the matched fresh-container
+OFF/ON `t-storm-2.5k` pair (§7.1) clearing the 2 % neutrality guard. That pair is
+**not yet approved to run** — it needs owner approval and two force-recreate arm
+switches, and it is to be scheduled, not assumed. Until it clears, the
+aggregation plane stays OFF by default and C is not adoptable.
+
+### The options, kept for the record
+
+The three options below are retained as the reasoning behind the decision above,
+each derived from measurements in this document. **A is adopted; B is not
+pursued; C is contingent.** All three assume the ratified rig: one 4-core box,
+2,500 devices, 900k events in 15 minutes, single shard.
+
+### Option A — Completion-and-losslessness is the SLO; T1 p95 is a tracked indicator — **ADOPTED**
 
 **Statement.** *Under a 15-minute 1,000-eps storm on 2,500 devices, the platform
 MUST evaluate the whole workload within 45 minutes of burst end, lose nothing
@@ -153,9 +202,10 @@ what an operator actually feels (832–1,203 s at the 2 % rung, 1,985–2,763 s 
 10 %). Choosing A means saying openly that storm-time latency is a queueing
 property of one shard, not a contract.
 
-**Recommended** if the goal is a defensible SLO the product can ship today.
+**Recommended, and ADOPTED (owner, 2026-08-30)** — a defensible SLO the
+product can ship today.
 
-### Option B — Per-identity-class, relative to burst end
+### Option B — Per-identity-class, relative to burst end — **NOT PURSUED**
 
 **Statement.** *Relative to the end of the burst: the FIRST occurrence of each
 identity is correlated and persisted within 300 s p95; repeats within the same
@@ -177,7 +227,7 @@ the SLO on. Option B therefore implies either turning the plane on (see C) or
 building an equivalent classifier on the OFF path, plus harness and dashboard
 work. Budget it as a project, not a knob.
 
-### Option C — Option A or B, with the aggregation plane ON at storm rungs
+### Option C — Option A or B, with the aggregation plane ON at storm rungs — **CONTINGENT**
 
 **Statement.** *As A or B, but `CORR_AGGREGATION_PLANE=1` for tenants whose storm
 share exceeds ~10 %, with a tighter completion target (10 minutes after burst
@@ -205,3 +255,9 @@ option on the table.
 | **A** | completion + lossless + memory + accuracy ≥ 93 % | every clause met on storm-s04, and at the 25 % rung with the plane ON | none (already gated) | **yes** |
 | **B** | per-class latency relative to burst end | p50 68 s vs p95 832 s vs T-last p95 2,251 s — the split is real and measured | new classifier on the OFF path + harness/dashboard work | no |
 | **C** | A or B with a tighter target at storm rungs | −41 % signals / −28 % p95 at 10 %; INCOMPLETE → 192 s and 81 → 89 % at 25 % | one matched fresh-container pair, then per-tenant storm-share routing | not yet |
+
+**Decision recorded:** **A** adopted and ratified 2026-08-30 (statement verbatim
+at the top of this section). **B** not pursued — its classifier lives only inside
+the plane, so it becomes a refinement of C if C lands. **C** still a candidate,
+gated on the matched fresh-container pair of §7.1, which is not yet approved to
+run.
