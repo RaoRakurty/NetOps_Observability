@@ -22,7 +22,7 @@ A signal reduction that costs accuracy is a regression, not a lever.
 | L0a | `storm-s02-08291929` (runid `08291929iqtm`) | `t-storm-2.5k` | **OFF** | ALREADY RUN — reuse, do not re-run |
 | L0b | `storm-s03-08292148` (runid `08292148kdz4`) | `t-storm-2.5k` | **OFF** | in flight at plan time — reuse when it lands |
 | L1 | `agg-10-off-08292249` (run `0829224959gv`) | `t-storm-10-2.5k` | OFF | **PASS 9/9**, 2026-08-30 00:13Z — both replicas verified OFF via mTLS; engine signals 94,942 (inc 1,274; versions 5,168; vpi 4.06); T1 p50/p95/p99 434/2,763/3,063 s; tlast95 3,273 s; converged 23:53:05 (burst end 23:07:41 → completion ≈ 2,724 s); twin accuracy 903/1005 (90 %); residue 0 |
-| L2 | `agg-25-off-<MMDDHHMM>` | `t-storm-25-2.5k` | OFF | to run |
+| L2 | `agg-25-off-08300014` (run `083000149rrs`) | `t-storm-25-2.5k` | OFF | **FAIL 6/9 — INCOMPLETE** (valid OFF reading), 2026-08-30 02:17Z — drain/completion/memflat FAIL: pending 78,663 at the 2,700 s cap, lag 124,868; replica 4 alone carried the storm partition (rss 968→1,072 MiB, continuous 1–2.7 s loop stalls, **no rebalance/ejection**), replica 3 idle at 112 MiB. Engine signals 113,361 (inc 6,370; versions 16,602; vpi 2.61); T1 p50/p95/p99 1,833/3,750/4,491 s (scoped to what completed); undet 949; twin accuracy 1438/1773 (81 %); burst injection 900,000/900,000; residue 0. Deployed image has no 185/3 fix (`2852ad6f`, post-wave). |
 | L3 | `agg-10-on-<MMDDHHMM>` | `t-storm-10-2.5k` | **ON** | to run |
 | L4 | `agg-25-on-<MMDDHHMM>` | `t-storm-25-2.5k` | **ON** | to run |
 | L5 | `agg-2p5k-on-<MMDDHHMM>` | `t-storm-2.5k` | **ON** | to run — **neutrality guard** |
