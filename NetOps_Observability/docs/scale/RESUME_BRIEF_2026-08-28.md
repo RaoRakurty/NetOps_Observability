@@ -383,3 +383,40 @@ update `P4_PROGRAMME_WRITEUP_2026-08-29.md` tables.
   `cd NetOps_Observability && setsid nohup python3 scripts/scale-ab-driver.py --from L4 --ignore-cron-window >> /var/tmp/scale-runs/ab-driver.launcher.log 2>&1 < /dev/null &`
   Remaining: L4 `t-storm-25` ON (decides the rule — OFF was INCOMPLETE), L5 `t-storm-2.5k` ON (neutrality guard), then the driver restores OFF.
 - Then: fill RUN_PLAN §5 table + apply §6; redeploy `2852ad6f` (rebuild correlation with GIT_SHA), findings ALTER if api not rebuilt; final `t-storm-2.5k` 9/9; finalise P4_PROGRAMME_WRITEUP.
+
+## UPDATE 2026-08-30 07:50Z — PROGRAMME CLOSED
+- **Wave done.** All five A/B legs collected and graded; verdict
+  `docs/scale/P3_AB_2P5K_VERDICT_2026-08-29.md`: **`CORR_AGGREGATION_PLANE` stays
+  OFF by default** (criterion 2 MET with −41 % signals / −28 % T1 p95 at the 10 %
+  rung and INCOMPLETE→PASS 192 s at 25 %; criteria 1 and 3 FAIL at the 2 %
+  neutrality guard). Driver restored the OFF arm.
+- **`2852ad6f` deployed** 06:26Z — image `netops-correlation` `34d113a3a8bb`,
+  both replicas `--force-recreate`d fresh, findings dedup-window ALTER applied,
+  arm OFF verified on both (`corr_agg_enabled 0`).
+- **storm-s04 (`/var/tmp/scale-runs/storm-s04-08300637`, runid `08300637l2bv`):
+  PASS 9/9** — the first clean storm sweep. Completion 144 s, drain 1,384 s,
+  accounting exact (900,001 == 900,001 + 0 DLQ), memflat 79.5 % of cap ×0.961
+  FLAT, stability 0/0/0 restarts, residue 0. TTUR (re-queried same-session with
+  s02/s03): **T1 p95 832 s** vs 1,055 / 1,203. Accuracy **326/345 = 94.49 %**
+  (best recorded). Verdict `docs/scale/STORM_S04_2P5K_VERDICT_2026-08-30.md`.
+- **Tracker 188 CLOSED (row deleted)** — and the fault path was exercised LIVE:
+  three `netops.findings` transport failures during the run, all retried under
+  the dedup token and RECOVERED on attempt 2, 0 rows lost.
+- **Tracker 185 rewritten as a residual** — the ~30 s stall did NOT shrink:
+  `corr_sync_stretch_max_ms` **27,844 ms at `reconcile.find_continuation`** =
+  92.9 % of the 29,974 ms stall, a genuinely BLOCKED stretch (16 overruns of the
+  500 ms budget). `lifecycle.quiesce` is exonerated (26.5 s WALL, 0 overruns).
+  It stopped ejecting the consumer only because the same commit widened the
+  session timeout 30 s → 60 s. Fix = chunk-and-yield/offload that site.
+- **P4 write-up finalised** (`docs/scale/P4_PROGRAMME_WRITEUP_2026-08-29.md`):
+  §3 carries s03 + s04 with same-session re-queried p95s, §5 replaces the ladder
+  projection with the measured A/B, §7 lists what is actually left, and a new §8
+  puts **three SLO options** to the owner (A: completion+lossless as the gate
+  with T1 p95 as an indicator — available today; B: per-identity-class relative
+  to burst end — needs a classifier on the OFF path; C: A/B with the plane ON at
+  storm rungs — needs the matched fresh-container pair first).
+- **What's open:** (1) the owner's SLO decision — nothing more to measure;
+  (2) optional matched fresh-container P3 pair (the OFF half is storm-s04, so
+  only one ON leg is needed, ~1.5 h, owner go-ahead required);
+  (3) tracker 185 residual; (4) trackers 186 / 187 / 189, outside P4.
+- **Stack state:** idle, arm OFF, image `34d113a3a8bb`, residue 0, run lock free.
