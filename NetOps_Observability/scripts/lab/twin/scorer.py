@@ -68,6 +68,12 @@ from datetime import datetime, timedelta, timezone
 
 from stack import StackError, warn
 
+# Bumped whenever a scoring SEMANTIC changes, so two accuracy-report.json
+# files are never compared without knowing they were produced by the same
+# instrument. v1 = the original clause set; v2 (tracker 191) = `affected_includes`
+# over the union of the touching objects + a deterministic `best`.
+SCORER_VERSION = 2
+
 _TIER_RANK = {"undetermined": 0, "suspected": 1, "confirmed": 2}
 _SAFE = re.compile(r"^[A-Za-z0-9._/:-]+$")
 _UUID = re.compile(r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-"
@@ -599,6 +605,100 @@ class ScoreContext:
 
 # ── clause evaluation ────────────────────────────────────────────────────────
 
+# Which object(s) a clause is judged against — audited clause by clause,
+# tracker 191 (`P3_PAIR_2P5K_VERDICT_2026-08-30.md` §3).
+#
+# THE DEFECT: every clause below used to read `best = max(objects, key=tier)`,
+# and `max` returns the FIRST maximal element of a list that `objects_for()`
+# builds `sorted(...)` by (tenant, correlation_id). The correlation id is a
+# uuid5 over content that embeds the run id, so on a story whose touching
+# objects TIE at the top tier — every chained template: the engine resolves a
+# cascade into a cause object PLUS a cohort object rather than folding them —
+# the clause was decided by which random UUID sorted first. Measured on three
+# 2,500-device legs: the predicate "the lowest-UUID top-tier object holds the
+# cause" reproduced all 60 recorded tied-story verdicts exactly, and the
+# instrument's own noise floor (1σ = 0.71 pp) was wider than the A/B rule's
+# ±1 pp accuracy band. That is measurement variance manufactured by the
+# scorer, not engine behaviour.
+#
+# THE RULE, per clause:
+#
+#   COVERAGE questions — "did the engine's explanation of this story cover X?"
+#   — are set questions and are evaluated over the UNION of the objects that
+#   touch the story (the same list `detected` counts; already in hand, so no
+#   extra ClickHouse read):
+#     * `detected`            — existence over the set (`objects` non-empty).
+#     * `affected_includes`   — does ANY touching object name the labelled
+#                               cause entity. Reading one object asks a
+#                               different, much stronger question ("does the
+#                               single best object name it"), which is only
+#                               answerable at all once the tie is broken, and
+#                               the tie-break carries no information.
+#     * `forbid.*`            — a violation by ANY object is a violation.
+#     * `single_incident`     — a cardinality question over the whole set.
+#
+#   QUALITY questions — "how good is the engine's best explanation?" — stay on
+#   ONE object, `_best_object()`:
+#     * `verdict_tier_at_least` — union-equivalent by construction (the best
+#                               object is the max-tier one), kept on `best` so
+#                               the failure detail names the object it judged.
+#     * `hypothesis_matches`  — a union here would be a real loosening: on a
+#                               25-object cascade, "some object's top
+#                               hypothesis matches the pattern" is nearly free.
+#     * `seam_grounded` / `seam_owner` — a COUPLED pair describing ONE
+#                               verdict. Evaluated over a union they could be
+#                               satisfied by two different objects (seam ref
+#                               from one, owner from another), which is a free
+#                               pass. They stay on `best`; the coin flip is
+#                               removed by making `best` deterministic rather
+#                               than by widening them. (No workload in the
+#                               tree asserts a seam clause yet — the mini-
+#                               ladder provisions no seams — so this is the
+#                               conservative reading, not a measured one.)
+#
+# `single_incident` is the clause that measures cascade FOLDING, so widening
+# `affected_includes` cannot hide the split-object shape: a scenario that
+# wants one incident asserts `single_incident` and still fails on the split.
+
+
+def _num(v, default: float = 0.0) -> float:
+    """ClickHouse JSON hands numerics back as int/float/str depending on the
+    column and the driver; a tie-break must never crash on that."""
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return default
+
+
+def _best_object(objects: list[dict]) -> dict | None:
+    """The ONE object a best-object clause is judged against — deterministic.
+
+    Ordered by: verdict tier, then node_count (the object that explains more
+    of the story), then top confidence, then correlation_id ASC purely as a
+    total-order backstop. `corr_current` carries no per-object signal count, so
+    node_count + confidence stand in for it; both are engine output, unlike the
+    UUID, so a tie that reaches the id is genuinely a tie of equals.
+
+    Deterministic means: the result depends only on the CONTENT of `objects`,
+    never on their list order (tracker 191)."""
+    if not objects:
+        return None
+    return min(objects, key=lambda o: (
+        -_TIER_RANK.get(str(o.get("verdict_tier") or ""), 0),
+        -_num(o.get("node_count")),
+        -_num(o.get("conf")),
+        str(o.get("id") or ""),
+    ))
+
+
+def _affected_anywhere(objects: list[dict], name: str) -> bool:
+    """Does ANY of the touching objects name `name` in its affected set?
+
+    Tested per object rather than against a concatenation of them: joining the
+    blobs could manufacture a match across a boundary."""
+    return any(name in (o.get("affected") or "") for o in objects)
+
+
 def _top_owner(obj: dict, blob: str) -> str:
     """verdict.owner of the ranked-top hypothesis in the hypotheses JSON."""
     try:
@@ -661,12 +761,12 @@ def score_story(stack, gt: dict, prefix: str,
         clauses.append({"clause": name, "ok": bool(ok), "detail": detail})
 
     positive = bool(rca) or bool(seam_exp)
-    best = max(objects,
-               key=lambda o: _TIER_RANK.get(o["verdict_tier"], 0),
-               default=None)
+    # Best-object clauses only (see the audit above `_best_object`); coverage
+    # clauses read `objects`.
+    best = _best_object(objects)
 
     if positive:
-        clause("detected", best is not None,
+        clause("detected", bool(objects),
                f"{len(objects)} object(s) touch the story's entities")
     if rca.get("verdict_tier_at_least"):
         want = _TIER_RANK[rca["verdict_tier_at_least"]]
@@ -682,15 +782,13 @@ def score_story(stack, gt: dict, prefix: str,
                f"pattern {rca['hypothesis_matches']!r} vs "
                f"top_hypothesis {hyp!r}")
     if rca.get("affected_includes"):
-        missing = []
-        if best:
-            for d in rca["affected_includes"]:
-                if (prefix + d) not in (best.get("affected") or ""):
-                    missing.append(d)
+        # COVERAGE clause — the union of the touching objects (tracker 191).
+        missing = [d for d in rca["affected_includes"]
+                   if not _affected_anywhere(objects, prefix + d)]
         clause("affected_includes",
-               best is not None and not missing,
-               f"missing from object.affected: {missing or 'none'}"
-               if best else "no object")
+               bool(objects) and not missing,
+               f"missing from the affected set of all {len(objects)} touching "
+               f"object(s): {missing or 'none'}" if objects else "no object")
     if rca.get("single_incident"):
         clause("single_incident", len(objects) == 1,
                f"{len(objects)} non-merged object(s) span the story "
@@ -794,7 +892,11 @@ def score_run(stack, ground_truth: list[dict], state: dict,
                 if o.get("state") != "merged"]
         if not objs:
             continue
-        best = max(objs, key=lambda o: _TIER_RANK.get(o["verdict_tier"], 0))
+        # MUST be the same choice score_story makes, or the refs/hypotheses
+        # prefetched are another object's (tracker 191).
+        best = _best_object(objs)
+        if best is None:           # unreachable (objs is non-empty) — typed
+            continue
         seam_objs.append(best)
         if seam_exp.get("owner"):
             owner_objs.append(best)
@@ -865,6 +967,7 @@ def score_run(stack, ground_truth: list[dict], state: dict,
 
     return {
         "runid": state["runid"],
+        "scorer_version": SCORER_VERSION,
         "accuracy_slo": round(passed / total, 4) if total else None,
         "stories_total": total,
         "stories_passed": passed,
@@ -890,6 +993,7 @@ def render_md(report: dict) -> str:
     lines = [
         f"# Twin accuracy report — run {report['runid']}",
         "",
+        f"- Scorer version: `v{report.get('scorer_version', 1)}`",
         (f"- **RCA accuracy SLO: "
          f"{report['stories_passed']}/{report['stories_total']} stories "
          f"({(report['accuracy_slo'] or 0) * 100:.0f}%)**"),

@@ -341,3 +341,133 @@ def test_object_lookup_still_refuses_unsafe_identifiers():
         scorer.score_run(stack, [gt], STATE, {}, ctx=ctx_for(stack))
     assert "SQL-embed safe" in str(exc.value)
     assert stack.queries == [], "nothing may reach ClickHouse after a refusal"
+
+
+# ── tracker 191: which OBJECT a clause is judged against ─────────────────────
+#
+# The chained templates (`upstream_link_failure`, `enterprise_outage`) resolve
+# into a CAUSE object plus a COHORT object, both at `suspected`. Before the fix
+# `affected_includes` was judged against `max(objects, key=tier)`, which on a
+# tie returns the first element of a list sorted by correlation UUID — so the
+# story's verdict was a coin flip on a uuid5 redrawn every run.
+
+CHAIN_DEVICES = ["agg-c1"] + [f"acc-{i:02d}" for i in range(1, 25)]
+
+CHAIN_GT = {
+    "story_id": "ulf-1",
+    "template": "upstream_link_failure",
+    "fired_at": "2026-08-17T00:02:00Z",
+    "affected": {"devices": CHAIN_DEVICES, "tenants": []},
+    "entities": CHAIN_DEVICES,
+    "extra_entities": [],
+    # exactly the clause set scale-miniladder's twin_records() asserts
+    "expect": {"rca": {"verdict_tier_at_least": "suspected",
+                       "affected_includes": ["agg-c1"]}},
+}
+
+LOW_UUID = "11111111-1111-4111-8111-111111111111"
+HIGH_UUID = "99999999-9999-4999-8999-999999999999"
+CHAIN_TENANTS = {d: "acme" for d in CHAIN_DEVICES}
+
+
+def _tied_pair(cause_id, cohort_id, nodes=2):
+    """The two tied objects the engine actually emits for a chained story:
+    one naming the cause device, one naming the cohort. Same tier, same node
+    count, same confidence — so ONLY the correlation id separates them."""
+    cause = _obj(cause_id, "suspected", "sig.ent.access.local-link-fault",
+                 [PREFIX + "agg-c1"], nodes=nodes)
+    cohort = _obj(cohort_id, "suspected", "sig.ent.upstream.link-down",
+                  [PREFIX + d for d in CHAIN_DEVICES[1:]], nodes=nodes)
+    return [cause, cohort]
+
+
+@pytest.mark.parametrize("cause_id,cohort_id", [
+    (LOW_UUID, HIGH_UUID),      # cause sorts first
+    (HIGH_UUID, LOW_UUID),      # cause sorts second — the coin flip's tail
+])
+def test_affected_includes_reads_the_union_of_the_touching_objects(
+        cause_id, cohort_id):
+    """The clause asks "did the engine name the cause anywhere in its
+    explanation of this story", so it is evaluated over the union of the
+    objects that touch it — and must therefore PASS in BOTH UUID orders."""
+    stack = FakeStack(objects=_tied_pair(cause_id, cohort_id))
+    r = scorer.score_story(stack, CHAIN_GT, PREFIX, CHAIN_TENANTS, {},
+                           ctx=ctx_for(stack))
+    by = {c["clause"]: c["ok"] for c in r["clauses"]}
+    assert by["affected_includes"] is True, r["clauses"]
+    assert r["status"] == "PASS", r["clauses"]
+    assert len(r["objects"]) == 2
+
+
+def test_a_cause_no_touching_object_names_still_fails():
+    """The union must not become a free pass: if NO object names the labelled
+    cause device, the story still FAILs, on that clause, naming what is
+    missing."""
+    cohort = _obj(LOW_UUID, "suspected", "sig.ent.upstream.link-down",
+                  [PREFIX + d for d in CHAIN_DEVICES[1:13]])
+    cohort2 = _obj(HIGH_UUID, "suspected", "sig.ent.upstream.link-down",
+                   [PREFIX + d for d in CHAIN_DEVICES[13:]])
+    stack = FakeStack(objects=[cohort, cohort2])
+    r = scorer.score_story(stack, CHAIN_GT, PREFIX, CHAIN_TENANTS, {},
+                           ctx=ctx_for(stack))
+    assert r["status"] == "FAIL", r["clauses"]
+    clause = next(c for c in r["clauses"]
+                  if c["clause"] == "affected_includes")
+    assert clause["ok"] is False
+    assert "agg-c1" in clause["detail"]
+    assert "2 touching object(s)" in clause["detail"]
+    # detection is unaffected — the engine DID produce objects for the story
+    assert next(c for c in r["clauses"] if c["clause"] == "detected")["ok"]
+
+
+def test_best_object_is_deterministic_under_any_list_order():
+    """`_best_object` must depend only on the CONTENT of the object set, never
+    on the order `objects_for()` happened to sort it into."""
+    objs = [
+        _obj(LOW_UUID, "suspected", "sig.a", [PREFIX + "agg-c1"], nodes=2),
+        _obj(HIGH_UUID, "suspected", "sig.b", [PREFIX + "acc-01"], nodes=25),
+        _obj("33333333-3333-4333-8333-333333333333", "undetermined", "sig.c",
+             [PREFIX + "acc-02"], nodes=90),
+    ]
+    orders = [(0, 1, 2), (0, 2, 1), (1, 0, 2), (1, 2, 0), (2, 0, 1),
+              (2, 1, 0)]
+    picks = {scorer._best_object([objs[i] for i in order])["id"]
+             for order in orders}
+    assert picks == {HIGH_UUID}, "tier first, then node_count — never list order"
+    assert scorer._best_object([]) is None
+
+
+def test_best_object_breaks_a_total_tie_on_the_id_not_on_list_order():
+    a = _obj(LOW_UUID, "suspected", "sig.a", [PREFIX + "agg-c1"], nodes=2)
+    b = _obj(HIGH_UUID, "suspected", "sig.b", [PREFIX + "acc-01"], nodes=2)
+    assert scorer._best_object([a, b])["id"] == LOW_UUID
+    assert scorer._best_object([b, a])["id"] == LOW_UUID
+
+
+def test_a_best_object_clause_is_the_same_in_both_uuid_orders():
+    """`hypothesis_matches` legitimately reads ONE object — but which one must
+    be decided by engine output (tier, then blast size, then confidence), not
+    by a UUID draw."""
+    gt = json.loads(json.dumps(CHAIN_GT))
+    gt["expect"]["rca"]["hypothesis_matches"] = "upstream"
+    verdicts = []
+    for cause_id, cohort_id in ((LOW_UUID, HIGH_UUID), (HIGH_UUID, LOW_UUID)):
+        cause, cohort = _tied_pair(cause_id, cohort_id)
+        cohort["node_count"] = 25          # the cohort explains more of it
+        stack = FakeStack(objects=[cause, cohort])
+        r = scorer.score_story(stack, gt, PREFIX, CHAIN_TENANTS, {},
+                               ctx=ctx_for(stack))
+        verdicts.append([(c["clause"], c["ok"]) for c in r["clauses"]])
+    assert verdicts[0] == verdicts[1], "clause verdicts moved with the UUIDs"
+    assert dict(verdicts[0])["hypothesis_matches"] is True
+
+
+def test_the_report_carries_the_scorer_version():
+    """Two accuracy reports are only comparable if they were produced by the
+    same instrument (tracker 191 changed what `affected_includes` means)."""
+    stack = FakeStack(objects=_tied_pair(LOW_UUID, HIGH_UUID))
+    rep = scorer.score_run(stack, [CHAIN_GT], dict(STATE), {},
+                           ctx=ctx_for(stack))
+    assert scorer.SCORER_VERSION >= 2
+    assert rep["scorer_version"] == scorer.SCORER_VERSION
+    assert f"v{scorer.SCORER_VERSION}" in scorer.render_md(rep)
