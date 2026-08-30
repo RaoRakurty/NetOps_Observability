@@ -371,3 +371,8 @@ update `P4_PROGRAMME_WRITEUP_2026-08-29.md` tables.
 - L1 `t-storm-10-2.5k` OFF: PASS 9/9, 94,942 engine signals, T1 p95 2,763 s, accuracy 903/1005 — recorded in RUN_PLAN_P3_AB §1. L2 `t-storm-25-2.5k` OFF running since 00:14Z.
 - `2852ad6f` = tracker 188 (findings retry-safe) + 185 part 3 (26 s was wall time over ~400 closes, not a block; sync-only spans, per-object yield, 60 s session timeout). Gate 2496/79. **Do not deploy until the wave's restore step has run** — both arms on image `12074157`. Post-wave: rebuild correlation with GIT_SHA, apply the findings ALTER if api is not rebuilt, final `t-storm-2.5k`, fill §5, decide §6.
 - `fc0d8b23` driver OSError handlers reviewed; `d759836d` tracker 189 filed.
+
+## UPDATE 2026-08-30 03:20Z — session handoff mid-wave
+- L2 (`t-storm-25` OFF) INCOMPLETE — recorded in RUN_PLAN §1 (`81f9e876`). L3 (`t-storm-10` ON, dir `agg-10-on-0830*`) reached pending 0 at ~03:10Z, in stability grace; L4/L5 ON follow, then the driver restores OFF.
+- Image parity VERIFIED: single `netops-correlation` image `000e7bc3…` built 21:46Z (before the OFF switch); both arm switches are `up --force-recreate` with no build.
+- Fresh-session pickup: `tail -f /var/tmp/scale-runs/ab-driver.log` (grep `VERDICT|=====|arm reads|restore|ABORT`); per leg read `<run-dir>/ab-leg.json` (`ttur.row`, `metrics[*].corr_agg_*`, `phases`) + `twin-score.log` accuracy line; fill RUN_PLAN §1 rows and §5 table; apply §6. Then redeploy `2852ad6f` (rebuild correlation with GIT_SHA), findings ALTER if api not rebuilt, final `t-storm-2.5k`, P4 write-up.
