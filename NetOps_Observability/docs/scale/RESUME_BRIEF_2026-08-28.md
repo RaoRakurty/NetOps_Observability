@@ -376,3 +376,10 @@ update `P4_PROGRAMME_WRITEUP_2026-08-29.md` tables.
 - L2 (`t-storm-25` OFF) INCOMPLETE — recorded in RUN_PLAN §1 (`81f9e876`). L3 (`t-storm-10` ON, dir `agg-10-on-0830*`) reached pending 0 at ~03:10Z, in stability grace; L4/L5 ON follow, then the driver restores OFF.
 - Image parity VERIFIED: single `netops-correlation` image `000e7bc3…` built 21:46Z (before the OFF switch); both arm switches are `up --force-recreate` with no build.
 - Fresh-session pickup: `tail -f /var/tmp/scale-runs/ab-driver.log` (grep `VERDICT|=====|arm reads|restore|ABORT`); per leg read `<run-dir>/ab-leg.json` (`ttur.row`, `metrics[*].corr_agg_*`, `phases`) + `twin-score.log` accuracy line; fill RUN_PLAN §1 rows and §5 table; apply §6. Then redeploy `2852ad6f` (rebuild correlation with GIT_SHA), findings ALTER if api not rebuilt, final `t-storm-2.5k`, P4 write-up.
+
+## UPDATE 2026-08-30 03:45Z — HANDOFF: wave paused before L4, relaunch needed
+- L3 (`t-storm-10` ON) PASS 9/9: signals 76,680 vs L1 94,942 (−19.2 %), T1 p95 1,985 vs 2,763 s (−28 %), accuracy flat (899 vs 903). Rows L1–L3 in RUN_PLAN_P3_AB §1 (`413c6b44`).
+- Driver STOPPED at its stale 03:10–04:40 UTC canary guard (canary is gone from crontab, owner-approved). Stack: idle, arm ON (`CORR_AGGREGATION_PLANE=1` on both replicas, image `000e7bc3…`, residue 0). **Relaunch (owner runs it):**
+  `cd NetOps_Observability && setsid nohup python3 scripts/scale-ab-driver.py --from L4 --ignore-cron-window >> /var/tmp/scale-runs/ab-driver.launcher.log 2>&1 < /dev/null &`
+  Remaining: L4 `t-storm-25` ON (decides the rule — OFF was INCOMPLETE), L5 `t-storm-2.5k` ON (neutrality guard), then the driver restores OFF.
+- Then: fill RUN_PLAN §5 table + apply §6; redeploy `2852ad6f` (rebuild correlation with GIT_SHA), findings ALTER if api not rebuilt; final `t-storm-2.5k` 9/9; finalise P4_PROGRAMME_WRITEUP.
