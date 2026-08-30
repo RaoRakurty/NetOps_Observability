@@ -2363,12 +2363,20 @@ func (s *server) handleDevices(w http.ResponseWriter, r *http.Request) {
 				errors.New("device requires an id, name, or address"))
 			return
 		}
-		// 201 must mean the device survives a restart. Before this store existed
-		// the device lived only in RAM and vanished on the next deploy.
-		if err := s.discovery.Upsert(d); err != nil {
-			writeError(w, http.StatusInternalServerError, errors.New("device was not saved"))
-			return
-		}
+		// TRACKER 181: RESOLVE BEFORE PERSISTING. This used to Upsert first and
+		// only then ask what became of the record, so a create that dedupe
+		// absorbed still wrote its own row — a SHADOW: invisible to
+		// GET /api/devices (which shows the merged survivor), still addressable
+		// by DELETE, and it resurfaced the moment the absorber was deleted. Two
+		// overlapping scale runs left 1,000 of them, unlistable by any
+		// prefix-scoped cleanup. CreateOrResolve does the check and the write
+		// under one lock and declines to write an absorbed create, so GET and
+		// DELETE agree about what exists.
+		//
+		// 201 still means the device survives a restart (it is persisted before
+		// we answer) — before that store existed it lived only in RAM and
+		// vanished on the next deploy.
+		//
 		// TRACKER 161: 201 must also mean the REQUESTED identity actually
 		// exists. Cross-source dedupe merges records that share an identity
 		// token (management IP, serial, or normalized name), so a create can be
@@ -2385,16 +2393,15 @@ func (s *server) handleDevices(w http.ResponseWriter, r *http.Request) {
 		// The merge itself is right (same IP usually is the same device). What
 		// changes is that the caller is TOLD, and always receives the identity
 		// that actually survived.
-		canonical, kept, found := s.discovery.ResolveIdentity(d.ID)
-		if !found {
-			// Stored but not projected: report the store's own view rather than
-			// inventing a verdict.
-			writeJSON(w, http.StatusCreated, d)
+		canonical, kept, err := s.discovery.CreateOrResolve(d)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, errors.New("device was not saved"))
 			return
 		}
 		if !kept {
 			log.Printf("device create absorbed by dedupe: requested=%s canonical=%s "+
-				"(shared identity token) — caller told 200, not 201", d.ID, canonical.ID)
+				"(shared identity token) — no row written, caller told 200, not 201",
+				d.ID, canonical.ID)
 			w.Header().Set("X-Device-Requested-Id", d.ID)
 			w.Header().Set("X-Device-Canonical-Id", canonical.ID)
 			// 200, not 201: nothing was created under the requested identity.

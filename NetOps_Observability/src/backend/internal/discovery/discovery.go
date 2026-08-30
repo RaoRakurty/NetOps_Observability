@@ -341,9 +341,11 @@ func dedupeWithOwners(cache map[string]models.Device) ([]models.Device, map[stri
 	union := func(i, j int) { parent[find(i)] = find(j) }
 
 	// First record that claimed each identity token; subsequent claimants union.
+	// Tokens are TENANT-PARTITIONED (identityTokens), so a merge can never cross
+	// a tenant boundary — see identityTokens.
 	seen := make(map[string]int, len(ids)*2)
 	for i, id := range ids {
-		for _, tok := range DeviceIdentities(cache[id]) {
+		for _, tok := range identityTokens(cache[id]) {
 			if j, ok := seen[tok]; ok {
 				union(i, j)
 			} else {
@@ -406,6 +408,37 @@ func DeviceIdentities(d models.Device) []string {
 	}
 	if nm := strings.ToLower(strings.TrimSpace(d.Name)); nm != "" {
 		out = append(out, "name:"+nm)
+	}
+	return out
+}
+
+// deviceTenantKey is the normalized owning tenant of a record. "" is NOT a
+// wildcard: untagged means platform-scoped ("discovered infrastructure is
+// platform-scoped until an operator assigns it" — snmp_source.go), which is its
+// own partition.
+func deviceTenantKey(d models.Device) string {
+	return strings.ToLower(strings.TrimSpace(d.TenantID))
+}
+
+// identityTokens is DeviceIdentities partitioned by owning tenant.
+//
+// §3a: identity resolution must never cross a tenant boundary. Two tenants may
+// legitimately run the same RFC1918 management address or the same hostname
+// (`core-sw01`); those are DIFFERENT devices. Unioning them would fold one
+// tenant's row into the other's — the merged record carries a single TenantID,
+// so the loser's owner either sees a device that is not theirs or loses sight of
+// their own. Prefixing every token with the tenant makes the union-find in
+// dedupeWithOwners partition by tenant, which is the storage-layer enforcement
+// §3a rule 4 asks for. Untagged (platform) records keep their existing
+// behaviour: they share the "" partition with each other.
+func identityTokens(d models.Device) []string {
+	tenant := deviceTenantKey(d)
+	toks := DeviceIdentities(d)
+	out := make([]string, 0, len(toks))
+	for _, tok := range toks {
+		// NUL separator: no tenant id or identity token can contain one, so the
+		// partition prefix can never be forged by a crafted name/address.
+		out = append(out, tenant+"\x00"+tok)
 	}
 	return out
 }
@@ -569,6 +602,13 @@ func (a *DiscoveryAggregator) SetStore(st DeviceStore) {
 func (a *DiscoveryAggregator) Upsert(d models.Device) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	return a.upsertLocked(d)
+}
+
+// upsertLocked is Upsert's body; CreateOrResolve needs the store write and the
+// identity resolution to happen under ONE hold of the lock (see there).
+// Caller holds a.mu.
+func (a *DiscoveryAggregator) upsertLocked(d models.Device) error {
 	// F-8: an empty id persists a ""-keyed row no API path can ever address
 	// again (DELETE /api/devices/{id} cannot express it). The handler derives
 	// ids before calling here; this guard is the storage-layer enforcement so
@@ -589,6 +629,153 @@ func (a *DiscoveryAggregator) Upsert(d models.Device) error {
 	}
 	a.cache[d.ID] = d
 	return nil
+}
+
+// CreateOrResolve is the operator-create path: it persists d ONLY when d's
+// identity is genuinely new, and reports the device that actually represents
+// that identity either way.
+//
+// TRACKER 181. Upsert-then-ResolveIdentity wrote the requested row FIRST and
+// only then asked what became of it, so a create that dedupe absorbed still
+// persisted its own row: a SHADOW — invisible to GET /api/devices (the read
+// path shows the merged survivor), still addressable by DELETE, and it
+// SURFACES the moment the absorber is deleted. Two overlapping scale runs left
+// 1,000 such rows that no prefix-scoped cleanup could list. Resolving first and
+// declining to write is what makes GET and DELETE agree about what exists.
+//
+// Returns (canonical, created, err):
+//
+//	created=true  — d was new, was persisted, and owns its own identity (201)
+//	created=false — the identity already exists; NOTHING was written and
+//	                canonical is the device that owns it (200)
+//
+// Atomic: the check and the write share one hold of a.mu, so two concurrent
+// creates of the same identity cannot both decide they are new and race a
+// shadow row into the cache.
+func (a *DiscoveryAggregator) CreateOrResolve(d models.Device) (models.Device, bool, error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	id, err := a.tenantSafeIDLocked(d)
+	if err != nil {
+		return models.Device{}, false, err
+	}
+	d.ID = id
+	if canonical, absorbed := a.absorbedByLocked(d); absorbed {
+		return canonical, false, nil
+	}
+	if err := a.upsertLocked(d); err != nil {
+		return models.Device{}, false, err
+	}
+	devices, owners := dedupeWithOwners(a.cache)
+	ownerID, ok := owners[d.ID]
+	if !ok {
+		// Stored but not projected — report the store's own view rather than
+		// inventing a verdict.
+		return a.cache[d.ID], true, nil
+	}
+	for _, dev := range devices {
+		if dev.ID == ownerID {
+			return dev, ownerID == d.ID, nil
+		}
+	}
+	return a.cache[d.ID], ownerID == d.ID, nil
+}
+
+// tenantSafeIDLocked returns a cache key for a create that cannot overwrite
+// ANOTHER tenant's row.
+//
+// §3a. The cache is keyed by id, and an operator-created id is derived from
+// (name, address) — both tenant-independent. Two tenants legitimately running
+// `core-sw01` on 10.10.0.1 therefore derived the SAME key, and the second
+// create silently REPLACED the first tenant's device: a cross-tenant write, and
+// a device that vanished from its owner's inventory with a 201 reported to
+// somebody else. (Same failure mode ScanDeviceID's address hash was introduced
+// to stop — see snmp_source.go — one key, two devices, one silently gone.)
+//
+// The id is namespaced ONLY when it would collide across tenants, so ids are
+// unchanged for every non-colliding create, including every untagged
+// (platform-scoped) one. A re-onboard does not fragment: it derives the bare id
+// again, and absorbedByLocked folds it into the tenant's existing record via
+// the shared identity tokens.
+// Caller holds a.mu.
+func (a *DiscoveryAggregator) tenantSafeIDLocked(d models.Device) (string, error) {
+	cur, exists := a.cache[d.ID]
+	if !exists || deviceTenantKey(cur) == deviceTenantKey(d) {
+		return d.ID, nil
+	}
+	// Suffix with a stable tag for the OWNING tenant (not the incumbent's), so
+	// the same tenant re-deriving this key lands on the same row every time.
+	scoped := d.ID + "-" + shortAddrHash("tenant:"+deviceTenantKey(d))
+	if other, taken := a.cache[scoped]; taken && deviceTenantKey(other) != deviceTenantKey(d) {
+		// Astronomically unlikely (8 hex chars over a tenant id, and only when
+		// the bare id collides too). Refusing the write is the only safe answer;
+		// overwriting another tenant's device is exactly the failure being fixed.
+		return "", fmt.Errorf("device id %q is held by another tenant", d.ID)
+	}
+	return scoped, nil
+}
+
+// absorbedByLocked reports whether a NEW record d would be absorbed by an
+// existing one, and if so which device owns that identity today.
+//
+// A record joins a dedupe group only through a shared identity token, so
+// "shares a token with something already in the cache" is exactly "would not
+// exist as its own row". The candidate is NOT added to the cache to find that
+// out — that is the whole point (tracker 181).
+//
+// Tokens are tenant-partitioned (identityTokens), so an identical address or
+// hostname in ANOTHER tenant is not a match and that create proceeds
+// independently (§3a).
+//
+// A d.ID that is already in the cache is not a create at all: it rewrites an
+// existing row, which cannot add a shadow, so it is left to the normal upsert.
+// Caller holds a.mu.
+func (a *DiscoveryAggregator) absorbedByLocked(d models.Device) (models.Device, bool) {
+	if _, exists := a.cache[d.ID]; exists {
+		return models.Device{}, false
+	}
+	want := identityTokens(d)
+	if len(want) == 0 {
+		return models.Device{}, false // nothing to match on; it can only stand alone
+	}
+	set := make(map[string]bool, len(want))
+	for _, tok := range want {
+		set[tok] = true
+	}
+	// Deterministic winner when several existing records match: the smallest
+	// cache id, the same ordering dedupeWithOwners uses.
+	ids := make([]string, 0, len(a.cache))
+	for id := range a.cache {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	match := ""
+	for _, id := range ids {
+		for _, tok := range identityTokens(a.cache[id]) {
+			if set[tok] {
+				match = id
+				break
+			}
+		}
+		if match != "" {
+			break
+		}
+	}
+	if match == "" {
+		return models.Device{}, false
+	}
+	devices, owners := dedupeWithOwners(a.cache)
+	if ownerID, ok := owners[match]; ok {
+		for _, dev := range devices {
+			if dev.ID == ownerID {
+				return dev, true
+			}
+		}
+	}
+	// The projection could not name an owner. Still absorbed — report the raw
+	// matching record rather than falling through to a write, because writing
+	// is the defect.
+	return a.cache[match], true
 }
 
 // Delete removes a device and records a TOMBSTONE so it stays deleted.
