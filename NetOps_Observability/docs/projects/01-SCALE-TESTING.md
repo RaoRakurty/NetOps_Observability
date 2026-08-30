@@ -16,7 +16,8 @@ efficiency + TTUR on this box; the P5 scale-out proof is **dropped**
 **DONE means:** every rung of the ladder run to a graded verdict on this box,
 the ceiling and binding resource written down as a deliverable doc (§D below),
 and no open software defect that changes those numbers. Anything needing a
-second box, an 8-core node or a real rig is **out of scope** — see §Parked.
+second box, an 8-core node or a real rig is **out of scope** (owner decision,
+2026-08-31).
 
 **Model rule:** Fable specs + grades; Opus implements every code change.
 
@@ -68,38 +69,23 @@ second box, an 8-core node or a real rig is **out of scope** — see §Parked.
 
 ### Then the ladder (the ceiling itself)
 
-1. **Run `s1-2.5k`** — the profile exists (`scripts/scale-miniladder.py:2385`);
-   the storm-tolerance rung at 2.5K has never been run to a graded verdict.
-2. **Author + run 5k and 10k profiles** (`t-nominal-5k` / `s1-5k`,
+1. **Author + run 5k and 10k profiles** (`t-nominal-5k` / `s1-5k`,
    `t-nominal-10k` / `s1-10k`) — none exist in `SCALE_PROFILES` today.
    **First** discharge tracker **175** (device-store tombstone growth, file
    backend: 35,427 tombstones / 142 MB for 0 real devices; row status verified
    today = `Med · ⏳ follow-up, not started`). At 5k/10k the per-run churn is
    2–4× today's, so the tombstone debt is a run-blocker before it is a defect.
-3. **§D — grade and capture the ceiling** (the deliverable doc): per rung
+2. **§D — grade and capture the ceiling** (the deliverable doc): per rung
    drain / `correlation_completion` / stability / memflat / accounting, plus
    correlation QUALITY under storm (did the flood collapse into the *right*
    incidents), then record max devices nominal & storm, the binding resource,
    and the per-device envelope → pricing + hosting spec.
-4. **155 — partition-ownership correctness programme.** Harness built
+3. **155 — partition-ownership correctness programme.** Harness built
    (`scripts/lab/twin/ownership.py`, 21 tests, PASS/FAIL/**INVALID**); the
-   ownership-move runs are buildable now. Its 72 h soak validation leg is parked
-   (below).
-5. **152 — gNMI stretch** (digital twin, design §4.6) — the software half of the
-   twin's remaining work.
-
----
-
-## Parked — hardware / rig-gated (do not schedule)
-
-- **153 — GA scale ladder L2–L6 + chaos-under-load + 72 h soak.** Blocked on a
-  real rig, entirely. G1/G2 gates cover the hardware-independent half.
-- **152 — T2 rig scale.** The other half of 152; needs the rig.
-- **155 — the 72 h soak validation leg.** Preconditions are environmental
-  (a provably stable stack for 72 h on a 15 GiB host); the judging logic is
-  proven, the gate is not satisfiable here.
-- **P5 — scale-out proof (2-worker ≥ 1.6×, 8-core / 2-node).** DROPPED by the
-  owner 2026-08-28; success is defined on this single box.
+   ownership-move runs are buildable now — validation is the twin ownership
+   runs on this box.
+4. **gNMI stretch** (digital twin, design §4.6) — the twin serves gNMI so the
+   `ENABLE_GNMI_COLLECTION` path gets labelled-fault coverage end-to-end.
 
 ## Finish
 
