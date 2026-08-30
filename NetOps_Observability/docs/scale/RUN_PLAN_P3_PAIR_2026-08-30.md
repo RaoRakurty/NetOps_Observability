@@ -15,10 +15,24 @@ comparison are out of the picture (storm-s04 proved that live: 0/0/0, exact).
 
 ## 1. The two legs
 
-| leg | profile | arm | run dir prefix |
-|---|---|---|---|
-| **P1** | `t-storm-2.5k` | **OFF** | `pair-2p5k-off-<MMDDHHMM>` |
-| **P2** | `t-storm-2.5k` | **ON** (`compose.agg.yml`) | `pair-2p5k-on-<MMDDHHMM>` |
+| leg | profile | arm | run dir | result |
+|---|---|---|---|---|
+| **P1** | `t-storm-2.5k` | **OFF** | `pair-2p5k-off-08301624` (runid `083016240km5`) | **6/9** — `memflat` FAIL (carrier **corr-3** 489 → 1,014 → **1,093 MiB** end = **85.4 %** of its 1,280 MiB cap, FLAT ×1.078), `stability` FAIL (worst loop stall **32,446 ms** vs the stale 30,000 ms gate — 0 CommitFailed / 0 UnknownMember / 0 restarts / 0 rebalances, tracker 190), `cleanup` FAIL (OpenSearch purge stalled at 736,001 docs; cleared to a **verified 0** by the driver's `--cleanup-only` pass before P2). PASS: preflight · onboard 0.78 · burst 900,000/900,000 · drain **1,423 s** (peak lag 441,799) · **completion 223 s** · accounting **exact** (900,001 == 900,001 + 0 DLQ + 0 rejections, 2,500/2,500 devices, `corr_signals` 54,001 rows). TTUR (own `ttur.tsv`, §5.3 clean scope): inc **1,632** · versions 10,554 · vpi 6.47 · sigs **86,624** · T1 p50/p95/p99 **81 / 902 / 1,312 s** · T1 max 1,807 · T-last p95 2,374 · merged 191 · undet 0. Twin accuracy **325/345 = 94.20 %** (detection 100 %, specificity 100 %; `upstream_link_failure` 14/20, `enterprise_outage` 1/15, other three templates 310/310) |
+| **P2** | `t-storm-2.5k` | **ON** (`compose.agg.yml`) | `pair-2p5k-on-08301732` (runid `083017321c8x`) | **8/9** — `stability` FAIL only (worst loop stall **30,468 ms**, same stale gate, again **0/0/0/0**); **`memflat` and `cleanup` both FAIL → PASS** (carrier **corr-4** 626 → 1,012 → **1,068 MiB** = **83.4 %** of cap, FLAT ×1.055; residue 0). PASS: preflight · onboard 0.66 · burst 900,000/900,000 · drain **1,340 s** (peak lag 418,128) · **completion 195 s** · accounting **exact** (`corr_signals` 54,022 rows). Plane, leg-scoped and **exact**: observed **54,767** = forwarded **49,910** (`first` 41,921 · `state_transition` 3,223 · `recovery` 4,713 · `count_threshold` 23 · `repeat` 30 · `contradiction`/`new_vantage`/`new_modality` **0**) + suppressed **4,857** = **8.87 %**; evicted `expired` 18,254 / `ident_expired` 97 / capacity 0. TTUR: inc **1,532** · versions 9,094 · vpi 5.94 · sigs **76,036** · T1 p50/p95/p99 **81 / 830 / 1,295 s** · T1 max 1,734 · T-last p95 2,265 · merged 147 · undet 0. Twin accuracy **319/345 = 92.46 %** (`upstream_link_failure` **8/20**, `enterprise_outage` 1/15, other three 310/310) |
+
+**Outcome — `P3_PAIR_2P5K_VERDICT_2026-08-30.md`.** Criterion 1 **FAILS on the
+accuracy clause ONLY**: every TTUR clause passes against **both** OFF points for
+the first time (T1 p95 **−7.98 %** vs P1, **−0.24 %** vs s04, against an
+OFF-vs-OFF spread that has tightened from 13.11 % to **8.07 %**), while accuracy
+is **−1.74 pp** against a −1.00 pp floor. Criterion 3 **PASSES** (0 PASS→FAIL;
+`memflat` and `cleanup` FAIL→PASS; `stability` pre-existing on both).
+Criterion 2 was already MET and is not re-tested. **The plane stays OFF by
+default** per §7's disposition — but the 6-story accuracy gap is proven
+(60/60 exact reproduction) to be a **twin-scorer defect**, not an engine or plane
+result: `scorer.py:664` decides `affected_includes` from one arbitrarily-chosen
+object among tied-tier objects, and the choice is the **lowest correlation
+UUID**. Under the union reading all three legs score **345/345**. Filed as
+**tracker 191**; re-score (no new legs) before re-applying criterion 1.
 
 Both on the LIVE image `netops-correlation` **`34d113a3a8bb`**, code
 **`2852ad6f`** — the image `storm-s04` ran on. 2,500 devices, 1,000 eps, 15 min

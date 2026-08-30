@@ -436,3 +436,67 @@ update `P4_PROGRAMME_WRITEUP_2026-08-29.md` tables.
   (2) tracker 185 residual fix, then ONE confirming `t-storm-2.5k` after the pair;
   (3) tracker 190 — raise/re-derive the harness stability gate, stale at
   30,000 ms against the now-60 s session timeout (s04 PASSed by 26 ms).
+
+## UPDATE 2026-08-30 18:30Z — matched OFF/ON pair RUN and GRADED; the accuracy metric is the defect
+- **The pair ran** (owner-approved, `RUN_PLAN_P3_PAIR_2026-08-30.md`). Both legs on
+  the live image `34d113a3a8bb` / `2852ad6f`, one session, fresh containers per
+  leg (counters LEG-SCOPED, no subtraction), arm verified on BOTH replicas at
+  every switch. Driver restored the shipping default — **arm OFF, verified
+  `corr_agg_enabled 0.0` on both replicas at 18:29:58Z.** Stack idle, residue 0.
+  - **P1 OFF** `/var/tmp/scale-runs/pair-2p5k-off-08301624` (`083016240km5`) —
+    **6/9**: `memflat` FAIL (corr-3 carrier 1,093 MiB = 85.4 % of cap),
+    `stability` FAIL (stall 32,446 ms), `cleanup` FAIL (OS purge stalled, cleared
+    to a verified 0 before P2). Completion 223 s, accounting exact. TTUR
+    81 / **902** / 1,312 s, tlast95 2,374, inc 1,632, sigs 86,624. Accuracy
+    **325/345 = 94.20 %**.
+  - **P2 ON** `/var/tmp/scale-runs/pair-2p5k-on-08301732` (`083017321c8x`) —
+    **8/9**: `stability` FAIL only; **`memflat` and `cleanup` both FAIL→PASS**
+    (corr-4 carrier 1,068 MiB = 83.4 % of cap). Completion 195 s, accounting
+    exact. Plane exact: observed 54,767 = forwarded 49,910 + suppressed 4,857
+    (**8.87 %**); `contradiction` / `new_vantage` / `new_modality` all **0**.
+    TTUR 81 / **830** / 1,295 s, tlast95 2,265, inc 1,532, sigs 76,036. Accuracy
+    **319/345 = 92.46 %**.
+- **§7 outcome (`docs/scale/P3_PAIR_2P5K_VERDICT_2026-08-30.md`): criterion 3
+  PASSES, criterion 2 already MET, criterion 1 fails on the ACCURACY CLAUSE
+  ALONE.** Every TTUR clause passed against **both** OFF points for the first
+  time — T1 p95 **−7.98 %** vs P1 and **−0.24 %** vs storm-s04, p50 0.00 %,
+  p99 −1.30 %, tlast95 −4.59 % — and the OFF-vs-OFF spread tightened
+  **13.11 % → 8.07 %**. Accuracy −1.74 pp vs a −1.00 pp floor. Per §7's
+  disposition the **plane stays OFF by default**.
+- **THE FINDING: the 6-story gap is a twin-scorer defect, proven 60/60, not the
+  plane.** `scorer.py:664` decides `affected_includes` against ONE object
+  (`max` over tied-tier objects → the **lowest correlation UUID**, list sorted at
+  `:432`). All 65 FAILs across the three legs are that one clause missing exactly
+  `{cause_entity.device}`. The engine names the cause in **105 of 105** tied
+  stories on all three legs; under the union reading **every leg scores
+  345/345**. Instrument noise: expected 93.04 %, 1σ 0.71 pp — **wider than the
+  rule's ±1 pp floor and centred on the ratified SLO's 93 % clause.** Filed
+  **tracker 191**.
+- **Tracker 187's premise is falsified** by the same measurement (it says the
+  engine omits the cause; it does not) and its evidence came from this scorer.
+  Re-derive it after 191. 187 is High and blocked on 184 on that premise.
+- **Pickup order (revised):**
+  1. **Tracker 191** — the scorer fix (union over the already-fetched `objects`
+     + a deterministic tie-break + a unit test), then **re-score P1 / P2 / s04
+     from the still-resident `corr_objects`** (~45 s each, NO rig time) and
+     re-apply §7 criterion 1. If it confirms the counterfactual, criteria 1+2+3
+     all hold and the rule's own text says default ON — take that decision on the
+     re-scored numbers, never on the counterfactual.
+  2. **Do NOT buy more legs for the accuracy question.** ≈3 legs/arm to resolve
+     the 6-story gap, ≈92 legs/arm to establish equivalence within the 0.29 pp
+     OFF-vs-OFF spread. The one-line fix answers it exactly.
+  3. Tracker 185 residual (`reconcile.find_continuation`) — **note an
+     uncommitted, unbuilt, undeployed WIP for it sits in the working tree**
+     (`src/correlation/engine.py`, +147/−17: `SeamView.membership_values`,
+     `ObjectSnapshot.identity_refs`). It was NOT in either leg's image.
+  4. Tracker 190 — the stale 30,000 ms stability gate. All three legs recorded
+     **0 CommitFailed / 0 UnknownMember / 0 restarts / 0 rebalances**; the only
+     discriminator was 32,446 / 30,468 / 29,974 ms against 30,000. The gate
+     produced two FAILs and one PASS-by-26-ms out of three identically clean runs.
+  5. Then tracker 187 (re-derived), 186, 189.
+- **Unmeasured, and stated:** the plane's `contradiction` / `new_vantage` /
+  `new_modality` classes have never fired — the harness stamps `observer_id` from
+  the event's own device (`main.py:8814`) and `entity_id` is that device or its
+  child, so every `AggKey` has exactly one possible observer and one modality.
+  Exercising them needs a workload with a second independent vantage per entity
+  (harness work, adjacent to tracker 183).

@@ -119,14 +119,32 @@ all five legs with the rule applied (§5) — and the owner SLO decision, which 
 the last true blocker, was taken on 2026-08-30 (§8: Option A ratified). Nothing
 in P4 is waiting on a measurement. What remains is execution:
 
-1. **The matched fresh-container OFF/ON pair at `t-storm-2.5k`** — *pending owner
-   approval; not scheduled.* This is the only thing that can move Option C from
-   candidate to adoptable (`P3_AB_2P5K_VERDICT` §3.6). The OFF half already
-   exists (storm-s04, 9/9 on the post-`2852ad6f` image), so one ON leg on fresh
-   containers completes it and settles A/B criteria 1 and 3. Cost ~1.5 h, and it
-   requires **two force-recreate arm switches** (OFF → ON to run the leg, ON →
-   OFF to restore the shipping default). Do not run it without the owner's
-   go-ahead.
+1. **The matched fresh-container OFF/ON pair at `t-storm-2.5k` — APPROVED,
+   RUN AND GRADED 2026-08-30.** `RUN_PLAN_P3_PAIR_2026-08-30.md`; verdict
+   `P3_PAIR_2P5K_VERDICT_2026-08-30.md`. Both legs ran on the live image
+   `34d113a3a8bb` / `2852ad6f` in one session on fresh containers, and the driver
+   restored the OFF arm (verified `corr_agg_enabled 0.0` on both replicas).
+   **P1 OFF** `pair-2p5k-off-08301624` **6/9** · **P2 ON**
+   `pair-2p5k-on-08301732` **8/9**. Outcome: **criterion 3 PASSES** (0 phases
+   PASS→FAIL; `memflat` and `cleanup` went FAIL→PASS; `stability` is
+   pre-existing on both, on tracker 190's stale 30,000 ms gate, with 0
+   ejections on either) and **criterion 1's TTUR half passes for the first
+   time** — T1 p95 **−7.98 %** vs P1 and **−0.24 %** vs storm-s04, p50 0.00 %,
+   p99 −1.30 %, T-last p95 −4.59 %, all inside ±10 % against **both** OFF
+   points, against an OFF-vs-OFF spread that has tightened from 13.11 % to
+   **8.07 %**. **Criterion 1 fails on its accuracy clause alone** (92.46 % vs
+   94.20 % = −1.74 pp against a −1.00 pp floor), so under §7's disposition the
+   plane **stays OFF by default**. That gap is 6 stories of 345 and it is
+   **proven — 60/60, exactly reproduced from ClickHouse state — to be a twin-
+   scorer defect, not an engine or plane result**: `scripts/lab/twin/scorer.py`
+   decides `affected_includes` against one arbitrarily chosen object among
+   tied-tier objects, and the choice is the **lowest correlation UUID**. The
+   engine names the labelled cause in 105 of 105 tied stories across all three
+   legs; under the union reading every leg scores **345/345**. Filed as
+   **tracker 191**. **The remaining action is a re-score, not a leg** — the
+   `corr_objects` rows for all three runs are still resident, so P1, P2 and s04
+   can be re-scored in ~45 s each at zero rig cost once 191 lands, and criterion
+   1 re-applied on the corrected numbers.
 2. **Tracker 185 residual, then one confirming `t-storm-2.5k`.**
    `reconcile.find_continuation` still blocks the event loop for 27.8 s (92.9 %
    of the worst stall); it no longer ejects the consumer only because the session
@@ -141,9 +159,19 @@ in P4 is waiting on a measurement. What remains is execution:
    coin-flip, not a margin. Raise or re-derive the threshold against the 60 s
    timeout (and state the derivation in the harness), independently of the 185
    fix that reduces the stall itself.
-4. Trackers 186 (backfill watermark), 187 (chain attribution, blocked on 184)
-   and 189 (retry contract for six more tables) remain open and out of P4's
-   scope.
+4. **Tracker 191 — twin scorer `affected_includes` tie-break (NEW, from the
+   pair).** One-line fix (evaluate the clause over the touching objects the
+   scorer already fetched, and make the tie-break deterministic), then re-score
+   the three resident legs. It gates the re-application of A/B criterion 1, and
+   it also gates the accuracy clause of the ratified SLO — see §8.
+5. **Tracker 187's premise is falsified by the pair and must be re-derived
+   after 191.** 187 asserts the engine omits the cause device from `affected` on
+   chained outages; the pair measures the opposite on 105 of 105 tied stories
+   across three legs (the cause is named by a sibling object that the scorer's
+   `best` pick discards). 187's evidence came from this same scorer, and it is
+   currently High and blocked on 184 on the strength of that premise.
+6. Trackers 186 (backfill watermark) and 189 (retry contract for six more
+   tables) remain open and out of P4's scope.
 
 ## 8. SLO decision (owner, 2026-08-30) — Option A adopted
 
@@ -170,11 +198,23 @@ building an equivalent classifier on the OFF path. If Option C ever lands, that
 classifier arrives with the plane and B becomes a **refinement of C** rather than
 a project of its own; it is retired as an independent option.
 
-**Option C remains a candidate, contingent** on the matched fresh-container
-OFF/ON `t-storm-2.5k` pair (§7.1) clearing the 2 % neutrality guard. That pair is
-**not yet approved to run** — it needs owner approval and two force-recreate arm
-switches, and it is to be scheduled, not assumed. Until it clears, the
-aggregation plane stays OFF by default and C is not adoptable.
+**Option C remains a candidate. The matched fresh-container pair (§7.1) WAS
+approved and ran on 2026-08-30** (`P3_PAIR_2P5K_VERDICT_2026-08-30.md`), and it
+did not clear the guard on the rule's letter: **criterion 3 PASSED** and
+**criterion 1's entire TTUR half PASSED against both OFF points** (T1 p95
+−7.98 % / −0.24 %, p50 0.00 %, p99 −1.30 %, T-last p95 −4.59 %), but the
+**accuracy clause failed at −1.74 pp** against a −1.00 pp floor. Under §7's
+disposition the aggregation plane therefore **stays OFF by default and C is not
+adoptable today**. What changed is *why*: the 6-story accuracy gap is proven
+(60/60, reproduced from ClickHouse) to be a **twin-scorer tie-break defect**
+(**tracker 191**) rather than a cost of the plane — under the union reading of
+the same clause all three legs score 345/345, and criteria 1, 2 and 3 would all
+hold. **C's status is: blocked on tracker 191 + a re-score of the three resident
+legs (~45 s each, no rig time), not on another leg.** If the re-score confirms
+the counterfactual, the decision rule's own text — *"If both hold, criteria
+1+2+3 hold and the rule says default ON"* — becomes live, and the remaining work
+for C is the per-tenant storm-share routing signal. That decision must be taken
+on re-scored numbers, never on the counterfactual.
 
 ### The options, kept for the record
 
@@ -239,14 +279,25 @@ p99 −27.4 %, T-last p95 −25.9 %) for **−0.40 pp** of accuracy. At 25 % it 
 an INCOMPLETE run into a **192 s** completion and moves accuracy **81 % → 89 %**.
 Those are the two largest wins the programme produced.
 
-**What it costs.** The neutrality guard has not been cleared: at the 2 % rung the
-ON leg regressed T1 p95 by +13.1 %/+28.9 % against an OFF-vs-OFF spread of
-13.11 %, and introduced `memflat` (96.2 % of cap) and `onboard` FAILs — on a leg
-that was third in a row on one container and ran without `2852ad6f`. So C is
-**not available today**: it requires the matched fresh-container pair of §7.2
-first, and a per-tenant storm-share signal to switch on. If that pair clears the
-guard, the decision rule already says default ON, and C becomes the strongest
-option on the table.
+**What it costs.** The neutrality guard is **still not cleared, but every reason
+L5 failed it is gone.** L5's regression (T1 p95 +13.1 %/+28.9 %, `memflat` at
+96.2 % of cap, an `onboard` FAIL) was measured on a leg that was third in a row
+on one container and ran without `2852ad6f`. The matched pair of §7.1 removed
+those confounds and **reversed the TTUR result**: T1 p95 **−7.98 %** vs its
+matched OFF leg and **−0.24 %** vs storm-s04, `memflat` **PASS** (83.4 % of cap
+vs the OFF leg's failing 85.4 %), `onboard` PASS 0.66, criterion 3 clean.
+Criterion 1 now fails on **one clause only — accuracy, −1.74 pp** — and that
+clause is measured by an instrument the same pair proved defective (tracker 191;
+under the union reading all three legs are 345/345). So C is **not available
+today** and the plane stays OFF, but what stands between C and adoptability is
+now a **one-line scorer fix plus a re-score of three resident runs**, not rig
+time. At 2 % the plane also removed **7.6 %** of the signals reaching the engine
+(8.87 % suppressed) where §6b projected 0 % — the projection understates the
+low rung. Still outstanding for C independently of 191: the per-tenant
+storm-share routing signal, and the fact that the plane's `contradiction` /
+`new_vantage` / `new_modality` classes have **never been exercised** (all
+forwarded 0 — the harness gives every entity a single observer and a single
+modality), so C's behaviour under multi-vantage telemetry is unmeasured.
 
 ### Summary
 
@@ -254,10 +305,23 @@ option on the table.
 |---|---|---|---|---|
 | **A** | completion + lossless + memory + accuracy ≥ 93 % | every clause met on storm-s04, and at the 25 % rung with the plane ON | none (already gated) | **yes** |
 | **B** | per-class latency relative to burst end | p50 68 s vs p95 832 s vs T-last p95 2,251 s — the split is real and measured | new classifier on the OFF path + harness/dashboard work | no |
-| **C** | A or B with a tighter target at storm rungs | −41 % signals / −28 % p95 at 10 %; INCOMPLETE → 192 s and 81 → 89 % at 25 % | one matched fresh-container pair, then per-tenant storm-share routing | not yet |
+| **C** | A or B with a tighter target at storm rungs | −41 % signals / −28 % p95 at 10 %; INCOMPLETE → 192 s and 81 → 89 % at 25 %; **matched 2 % pair (2026-08-30): criterion 3 PASS, all four TTUR clauses PASS (p95 −7.98 %), accuracy clause FAIL −1.74 pp — shown to be a scorer defect (tracker 191)** | tracker 191 + re-score of three resident legs (no rig time), then per-tenant storm-share routing | **no — blocked on 191, not on a run** |
 
 **Decision recorded:** **A** adopted and ratified 2026-08-30 (statement verbatim
 at the top of this section). **B** not pursued — its classifier lives only inside
-the plane, so it becomes a refinement of C if C lands. **C** still a candidate,
-gated on the matched fresh-container pair of §7.1, which is not yet approved to
-run.
+the plane, so it becomes a refinement of C if C lands. **C** still a candidate:
+the matched fresh-container pair of §7.1 **was approved and ran on 2026-08-30**
+and did not clear the guard on the rule's letter (accuracy clause only), so the
+plane stays OFF by default; C is now **blocked on tracker 191 and a re-score**,
+not on further rig time.
+
+**A caveat the pair raises against A's own accuracy clause.** Option A's
+ratified statement gates on *"RCA accuracy ≥ 93 %"*. The pair measured the
+twin scorer's noise floor on the current 345-story corpus: 35 stories are
+decided by a correlation-UUID coin flip, giving an expected score of
+**93.04 % with 1σ = 0.71 pp** — i.e. the SLO's threshold sits at the noise
+distribution's **mean**, making that clause a ~50/50 pass on any build (the
+three legs measured 94.20 / 92.46 / 94.49 %, all inside a 2σ band of pure
+chance, and P2's 92.46 % is *below the ratified floor*). The SLO statement
+itself is not reopened — but its accuracy clause must be re-baselined against
+the corrected scorer once tracker 191 lands.
