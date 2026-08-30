@@ -500,3 +500,75 @@ update `P4_PROGRAMME_WRITEUP_2026-08-29.md` tables.
   child, so every `AggKey` has exactly one possible observer and one modality.
   Exercising them needs a workload with a second independent vantage per entity
   (harness work, adjacent to tracker 183).
+
+## UPDATE 2026-08-30 21:40Z — FINAL. PROGRAMME CLOSED; the plane ships ON
+
+**This is the last update to this brief.** The P4 storm-time optimisation
+programme is closed on both sides — nothing left to measure, nothing left to
+execute. Close-out: `docs/scale/STORM_S05_S06_CLOSEOUT_2026-08-30.md`.
+
+**What closed it, in order:**
+1. **Tracker 185 CLOSED** (`0bfdce1c`) — `reconcile.find_continuation`'s seam
+   bridge rescanned the whole probe per candidate; now cached + per-inventory,
+   Jaccard without a union set. Fixture **13,787 ms → 46.8 ms (294×)**; live
+   `corr_sync_stretch_max_ms` **443.5 ms** (s05) / **401.1 ms** (s06) with **0**
+   overruns and the worst site moved to `lifecycle.merge_index`. Worst in-window
+   loop stall 29,974 ms (s04) → **4,122 / 4,450 ms**.
+2. **Tracker 191 CLOSED** (`06450430`) — scorer v2 (`affected_includes` over the
+   union of touching objects; deterministic `_best_object`). Confirmed on LIVE
+   runs: s05 and s06 both `scorer_version: 2`, both **345/345 = 100.00 %**, zero
+   template FAILs.
+3. **§7 re-graded on v2** (`P3_PAIR_2P5K_VERDICT_2026-08-30.md` §8) — criterion 1
+   now **PASS** (TTUR all within ±10 %, accuracy Δ **0.00 pp**), criterion 2 MET
+   (−41.0 % signals at the 10 % rung, re-scored accuracy Δ −0.20 pp), criterion 3
+   PASS. The rule's own text: default ON.
+4. **Flip executed and committed** — `a9d9a10c`, deployed **20:31Z**.
+5. **`storm-s05` (OFF control) and `storm-s06` (ON, shipped default) both
+   `t-storm-2.5k` PASS 9/9.**
+
+**Deployed state (as of this update):**
+- Image `netops-correlation` **`c3f627581082`**, code **`0bfdce1c`**.
+- `CORR_AGGREGATION_PLANE` **ON by default** via
+  `deployment/docker/docker-compose.yml:1201`
+  (`${CORR_AGGREGATION_PLANE:-1}`). **Image default stays OFF**
+  (`src/correlation/main.py`) so the A/B overlay contract holds; fallback is
+  `CORR_AGGREGATION_PLANE=0` in `deployment/docker/.env`.
+- Both replicas verified: env `=1`, `corr_agg_enabled 1`.
+- Committed as `a9d9a10c`.
+- Stack idle, residue 0, run lock free.
+
+**s05 vs s06 headline** (full table in the close-out doc): completion 95 → 124 s;
+T1 p95 866 → **816 s** (−5.8 %); T-last p95 2,196 → **2,001 s** (−8.9 %); engine
+`sigs` 85,837 → **82,359** (−4.05 %); accuracy 345/345 both; memflat 83.2 % →
+**82.7 %** of cap, FLAT both; accounting exact both; 0/0/0/0 on stability both.
+Plane on s06: observed **54,767** = forwarded **49,913** + suppressed **4,854**
+(**8.86 %**), keys 32,243 / identities 27,280, zero capacity evictions, zero
+`beyond_lateness`. The prefilter stream is digit-identical across the two legs.
+
+**Open items — the whole list, in pickup order:**
+1. **187** (Med) — cause device dropped from `affected` when the object CLOSES.
+   3–5 `bgp_peer_flap` stories per 1,005-story leg, same story ids on both arms.
+   **The honest remaining accuracy defect**; scorer v2's union is over objects,
+   not versions, so it does not catch it. Decide whether a final `affected` may
+   shrink below its own history; if not, fix the close path.
+2. **190** (Low, was Med) — harness `stability` gate still hard-coded 30,000 ms
+   against a live 60 s session timeout. With worst in-window stalls now ~4 s it
+   no longer bites; still wrong, still worth re-deriving from the live value.
+3. **192** (Med, NEW) — un-instrumented ~9–14 s loop block on the cleanup/re-key
+   path. `corr_loop_lag_max_ms` **9,134.9 ms** (s05, block located at 20:11:54Z
+   during cleanup) / **13,881.1 ms** (s06), both OUTSIDE the stability window,
+   no `sync_span` site attributed. Needs a `sync_span` + a bound in the
+   `0bfdce1c` style.
+4. **189** (Med) — retry contract for six more correlation-written tables.
+5. **186** (High) — time-intelligence backfill `created_at` watermark (97 % of
+   objects never get a snapshot).
+6. **193** (Low, NEW) — no `.dockerignore` at the repo root; eight services build
+   with `context: ../..` over a 16 GB tree. Benign today (narrow `COPY`s):
+   wasted transfer, cache-busting, latent leak risk.
+
+**Unmeasured, and stated:** the plane's `contradiction` / `new_vantage` /
+`new_modality` classes have never fired on any leg — the harness gives every
+entity one observer and one modality. The shipped ON configuration's behaviour
+under multi-vantage telemetry is unmeasured (harness work, adjacent to 183).
+Also unchanged: the harness's `producer_key=tenant` single-key partitioning
+means every storm leg measures ONE replica's behaviour.

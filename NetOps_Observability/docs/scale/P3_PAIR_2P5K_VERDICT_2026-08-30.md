@@ -609,3 +609,83 @@ adjacent to tracker 183.
   · prior verdict `P3_AB_2P5K_VERDICT_2026-08-29.md` · OFF corroboration
   `STORM_S04_2P5K_VERDICT_2026-08-30.md` · programme
   `P4_PROGRAMME_WRITEUP_2026-08-29.md` §7/§8.
+
+---
+
+## 8. §7 re-grade on scorer v2 — criterion 1 now PASSES (added 2026-08-30)
+
+**Everything above §8 is preserved exactly as written on the v1 instrument.**
+This section does not amend it; it re-applies the same rule to the same two legs
+after the instrument §3 indicted was fixed and the legs were re-scored.
+
+**What changed.** Tracker 191 landed as `06450430`
+(`scripts/lab/twin/scorer.py`): `affected_includes` is now evaluated over the
+**union** of the objects touching the story (`_affected_anywhere`) instead of
+against a single `max()`-selected object, and `best` became `_best_object()`,
+deterministic on `(tier, node_count, confidence, correlation_id)`, so no clause
+can be decided by correlation-UUID order again. Reports carry
+`scorer_version: 2`. P1, P2 and storm-s04 were re-scored **from the still-
+resident `corr_objects` rows** — no new legs, no rig time — exactly as §6
+recommended.
+
+**Re-scored accuracy, the only clause that had failed:**
+
+| leg | v1 score | **v2 score** | v2 accuracy |
+|---|--:|--:|--:|
+| **P1 (OFF, matched)** | 325 / 345 = 94.20 % | **345 / 345** | **100.00 %** |
+| **P2 (ON)** | 319 / 345 = 92.46 % | **345 / 345** | **100.00 %** |
+| storm-s04 (OFF, second point) | 326 / 345 = 94.49 % | **345 / 345** | **100.00 %** |
+
+**Δ P2 vs P1 = 0.00 pp** against a −1.00 pp floor. Detection 100 % and
+specificity 100 % are unchanged on every leg. The counterfactual computed in
+§3.5 is confirmed by the actual re-score, on the actual reports.
+
+### Criterion 1 — neutrality guard — **PASS**
+
+| clause | threshold | **vs P1 (matched)** | vs s04 | verdict |
+|---|---|--:|--:|---|
+| **T1 p95 within ±10 %** | ±10 % | 902 → 830 = **−7.98 %** | 832 → 830 = **−0.24 %** | **PASS** |
+| T1 p50 (cross-check) | ±10 % | 81 → 81 = **0.00 %** | 68 → 81 = +19.12 % (below the 17.45 % OFF-vs-OFF spread's own scale) | **PASS vs the matched leg** |
+| T1 p99 (cross-check) | ±10 % | 1,312 → 1,295 = **−1.30 %** | 1,297 → 1,295 = −0.15 % | **PASS** |
+| T-last p95 (cross-check) | ±10 % | 2,374 → 2,265 = **−4.59 %** | 2,251 → 2,265 = +0.62 % | **PASS** |
+| **accuracy ≥ OFF − 1 pp** | ≥ −1.00 pp | 100.00 % → 100.00 % = **0.00 pp** | 100.00 % → 100.00 % = **0.00 pp** | **PASS — the clause that failed on v1** |
+
+**Criterion 1 PASSES on every clause.** The TTUR numbers are unchanged from
+§4.1 — nothing about the runs was re-measured, only re-scored.
+
+### The rule, re-applied word for word
+
+| criterion | requirement | **result on v2** |
+|---|---|---|
+| **1 — neutrality guard** | TTUR within ±10 % **and** accuracy ≥ OFF − 1 pp | **PASS** — all four TTUR clauses inside ±10 % against both OFF points; accuracy Δ **0.00 pp** |
+| **2 — the 10 % rung earns it** | ≥20 % fewer signals, TTUR not worse, accuracy not worse | **MET** — `P3_AB_2P5K_VERDICT_2026-08-29.md` §3.2: **−41.0 %** signals (98,636 → 58,194), T1 p95 −28.2 %, p50 −35.0 %, p99 −27.4 %, T-last p95 −25.9 %; re-scored accuracy L1 **1002/1005** → L3 **1000/1005** = **Δ −0.20 pp**, inside the 1 pp floor. Honest qualification retained: the engine-side secondary measure was −19.2 %, just under the 20 % bar |
+| **3 — no new gate FAIL** | no phase that PASSed on the OFF leg FAILs on the ON leg | **PASS** — unchanged from §4.3: 0 phases PASS→FAIL on the pair; `memflat` and `cleanup` went FAIL→PASS; `stability` pre-existing on both (tracker 190's stale gate), 0 ejections on either |
+
+§7's disposition for that outcome, quoted:
+
+> *"If both hold, criteria 1+2+3 hold and the rule says default ON."*
+
+### Outcome — executed
+
+**`CORR_AGGREGATION_PLANE` is ON by default.** Deployed **20:31Z on
+2026-08-30** and committed as **`a9d9a10c`**:
+`deployment/docker/docker-compose.yml:1201` now reads
+`CORR_AGGREGATION_PLANE: ${CORR_AGGREGATION_PLANE:-1}`. The **image default
+stays OFF** (`src/correlation/main.py`) so the A/B overlay contract still holds;
+the fallback is `CORR_AGGREGATION_PLANE=0` in `deployment/docker/.env`. Both
+replicas were verified at deploy with environment `=1` and `corr_agg_enabled 1`.
+
+**Confirmed on a live run of the shipped default:** `storm-s06`
+(`/var/tmp/scale-runs/storm-s06-08302033`, runid `08302033yg32`, image
+`c3f627581082` / `0bfdce1c`) — **`t-storm-2.5k` PASS 9/9**, completion 124 s,
+accounting exact (900,001 == 900,001 + 0 DLQ), memflat 82.7 % of cap FLAT,
+stability 0/0/0/0 with a worst in-window stall of 4,450 ms, accuracy
+**345/345** on `scorer_version: 2`, plane accounting exact (observed 54,767 =
+forwarded 49,913 + suppressed 4,854 = 8.86 %). Its matched OFF control
+`storm-s05` also scored 9/9 and 345/345. Full comparison and the residuals:
+`STORM_S05_S06_CLOSEOUT_2026-08-30.md`.
+
+**Caveats carried forward unchanged from §5**, and specifically: this is still a
+single matched pair on one replica's partition; the plane's `contradiction` /
+`new_vantage` / `new_modality` classes have still never fired; and criterion 2
+was re-scored, not re-run.

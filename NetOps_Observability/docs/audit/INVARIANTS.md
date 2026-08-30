@@ -280,10 +280,19 @@ The invariant, **ratified by the owner on 2026-08-30** (`docs/scale/P4_PROGRAMME
 > gate.*
 
 Every clause is **PROVEN**, not believed: it is asserted by the `t-storm-2.5k`
-9-gate sweep in `scripts/scale-miniladder.py` and was met end-to-end on
-**storm-s04** (run `08300637l2bv`, image `2852ad6f`, fresh-recreated replicas,
-aggregation plane OFF — the shipping default). Verdict:
-`docs/scale/STORM_S04_2P5K_VERDICT_2026-08-30.md`.
+9-gate sweep in `scripts/scale-miniladder.py`.
+
+**Evidence base, refreshed 2026-08-30.** Three fresh-container 9/9 legs on this
+profile, all against the same 345-incident labelled corpus:
+
+| leg | run | image / code | arm | result |
+|---|---|---|---|---|
+| `storm-s04` | `08300637l2bv` | `34d113a3a8bb` / `2852ad6f` | plane **OFF** | 9/9 — `docs/scale/STORM_S04_2P5K_VERDICT_2026-08-30.md` |
+| `storm-s05` | `08301919od1w` | `c3f627581082` / `0bfdce1c` | plane **OFF** (matched control) | 9/9 — `docs/scale/STORM_S05_S06_CLOSEOUT_2026-08-30.md` |
+| `storm-s06` | `08302033yg32` | `c3f627581082` / `0bfdce1c` | plane **ON** — **the shipping default** | 9/9 — same close-out |
+
+`storm-s06` is the reference run for the shipped configuration; `storm-s05` is
+its matched OFF control on the same image in the same session.
 
 **Honest tier note.** The sweep is a *rig* gate: it runs on the 4-core scale box
 against a live stack, not in CI, so no push can be blocked by it. Its clauses
@@ -294,22 +303,32 @@ as "proven on the named run", not "cannot regress".
 
 | Aspect | Status | Enforced by |
 |---|---|---|
-| Whole workload evaluated within 45 min of burst end | ✅ | **RIG-GATE** — `correlation_completion`; storm-s04 **144 s** against the 2,700 s budget (19× margin) |
-| Lossless: injected == persisted, 0 DLQ | ✅ | **RIG-GATE** — `accounting`; storm-s04 **900,001 == 900,001, exact, 0 DLQ**. The fault path was exercised unforced on that run: 3 `netops.findings` transport failures, all retried under the dedup token and recovered, 0 rows lost |
-| Stays within memory caps | ✅ | **RIG-GATE** — `memflat`; storm-s04 **79.5 % of cap, slope ×0.961 (FLAT)** |
-| RCA accuracy ≥ 93 % | ✅ | **RIG-GATE** — twin scorer against seeded ground truth; storm-s04 **326/345 = 94.49 %** (best recorded), detection 100 %, specificity 100 %. Residual misses are one clause on chained outages (trackers 187/184) |
-| T1 p95 is published every run and is NOT a gate | ✅ | **RIG-GATE (by construction)** — `scripts/scale-rca-latency.py` T0..T6 emits it; no clause consumes it. storm-s04 **832 s**. Deliberate: the storm p95 is queueing time behind the burst on one shard (T3−T1 = 0 at max on every leg), not a decision cost |
-| The SLO holds under a genuinely overloading storm, not only the nominal one | ✅ | **RIG-GATE (single leg)** — P3 A/B 25 % storm rung: with `CORR_AGGREGATION_PLANE` **ON**, an arm that was **INCOMPLETE** (78,663 objects pending at the 2,700 s cap) **completed in 192 s** and accuracy moved **81 % → 89 %**; 58.1 % of signals suppressed before the engine. `docs/scale/P3_AB_2P5K_VERDICT_2026-08-29.md`. **BOUNDARY: this is the ON arm; the plane is OFF by default**, so this row proves the SLO is reachable under 25 % storm share *with the plane*, not on the shipping configuration |
-| A loop stall cannot cost the consumer its partitions | 🟡 | **RIG-GATE, but the threshold is stale.** storm-s04 took 0/0/0 restarts — yet `reconcile.find_continuation` **BLOCKED the loop for 27,844 ms** (92.9 % of the 29,974 ms worst stall) and passed only because the session timeout was widened 30 s → 60 s. The harness's own `stability` gate still tests against a hard-coded 30,000 ms (`scale-miniladder.py:1876`) and s04 cleared it by **26 ms**. Bounding the stall = tracker 185; re-deriving the gate = tracker 190 |
+| Whole workload evaluated within 45 min of burst end | ✅ | **RIG-GATE** — `correlation_completion`; **storm-s06 (ON, shipped default) 124 s** and **storm-s05 (OFF) 95 s** against the 2,700 s budget (22× / 28× margin); storm-s04 144 s |
+| Lossless: injected == persisted, 0 DLQ | ✅ | **RIG-GATE** — `accounting`; **exact on all three legs**: 900,001 == 900,001 + 0 DLQ + 0 counted rejections, 2,500/2,500 devices covered, `unexplained_missing` 0. The fault path was exercised unforced on storm-s04: 3 `netops.findings` transport failures, all retried under the dedup token and recovered, 0 rows lost |
+| Stays within memory caps | ✅ | **RIG-GATE** — `memflat`; carrier replica **storm-s06 1,059 MiB = 82.7 % of its 1,280 MiB cap, ×1.021 FLAT**; storm-s05 1,065 MiB = 83.2 %, ×1.023 FLAT; storm-s04 79.5 %, ×0.961. Zero capacity evictions of any kind on the ON leg (`corr_agg_evicted_total{capacity,ident_capacity,tenant_capacity}` all 0) |
+| RCA accuracy ≥ 93 % | ✅ | **RIG-GATE** — twin scorer **v2** against seeded ground truth; **storm-s06 345/345 = 100.00 %**, storm-s05 345/345, detection 100 % and specificity 100 % on both. v2 (`06450430`, tracker 191) evaluates `affected_includes` over the union of the objects touching the story and picks `best` deterministically; the v1 instrument decided that clause by a correlation-UUID coin flip and carried a 0.71 pp noise floor centred on this very threshold. **Residual, named: tracker 187** — an object's final `affected` shrinks below its own version history at CLOSE (3–5 `bgp_peer_flap` stories per 1,005-story leg, same story ids on both arms). 100.00 % means the corrected clause passes, NOT that attribution is perfect |
+| T1 p95 is published every run and is NOT a gate | ✅ | **RIG-GATE (by construction)** — `scripts/scale-rca-latency.py` T0..T6 emits it; no clause consumes it. **storm-s06 816 s**, storm-s05 866 s, storm-s04 832 s. Deliberate: the storm p95 is queueing time behind the burst on one shard (T3−T1 = 0 at max on every leg), not a decision cost |
+| The SLO holds under a genuinely overloading storm, not only the nominal one | ✅ | **RIG-GATE (single leg)** — P3 A/B 25 % storm rung: with `CORR_AGGREGATION_PLANE` **ON**, an arm that was **INCOMPLETE** (78,663 objects pending at the 2,700 s cap) **completed in 192 s**; 58.1 % of signals suppressed before the engine. `docs/scale/P3_AB_2P5K_VERDICT_2026-08-29.md`. **BOUNDARY (flipped 2026-08-30): the plane is now ON by default**, so this row is evidence about the *shipping* configuration rather than about an opt-in overlay. What it does NOT prove is the OFF path at 25 % storm share — that arm was INCOMPLETE, so `CORR_AGGREGATION_PLANE=0` in `.env` is a fallback with a measured cliff, not an equivalent configuration |
+| The aggregation plane costs nothing at the low (2 %) rung | ✅ | **RIG-GATE** — the neutrality guard of `RUN_PLAN_P3_AB_2026-08-29.md` §7, cleared on the matched fresh-container pair re-scored on scorer v2: T1 p95 **−7.98 %** vs the matched OFF leg and **−0.24 %** vs storm-s04, p50 0.00 %, p99 −1.30 %, T-last p95 −4.59 % — all inside ±10 % — and accuracy **Δ 0.00 pp** (100.00 % on both arms). Confirmed independently by the s05/s06 pair: T1 p95 −5.8 %, T-last p95 −8.9 %, accuracy equal. `docs/scale/P3_PAIR_2P5K_VERDICT_2026-08-30.md` §8 |
+| The plane's own accounting closes exactly | ✅ | **RIG-GATE** — storm-s06, leg-scoped on the carrier replica: `corr_agg_observed_total` **54,767** = Σ`forwarded{class}` **49,913** + `corr_agg_suppressed_total` **4,854** (8.86 %), and 54,767 is digit-identical to the syslog prefilter's `passed` count on BOTH arms. `corr_agg_beyond_lateness_total` 0. **BOUNDARY:** `contradiction`, `new_vantage` and `new_modality` have forwarded **0 on every leg ever run** — the harness gives each entity one observer and one modality, so those three classes are **unexercised**, not proven |
+| A loop stall cannot cost the consumer its partitions | 🟡 | **RIG-GATE, and the stall is now bounded — but the gate's threshold is still stale.** Tracker 185 is CLOSED (`0bfdce1c`): `reconcile.find_continuation` no longer rescans the probe per candidate (fixture 13,787 ms → 46.8 ms, 294×), and live `corr_sync_stretch_max_ms` is **443.5 ms** (s05) / **401.1 ms** (s06) with **0** sync-budget overruns, the worst site having moved to `lifecycle.merge_index`. Worst in-window loop stall fell 29,974 ms (s04) → **4,122 / 4,450 ms**, with 0 CommitFailed / 0 UnknownMember / 0 restarts / 0 rebalances on both legs. **Two things keep this amber:** (a) the harness still judges against a hard-coded 30,000 ms while the engine runs a 60 s session timeout (`session_timeout_ms: 30000` in both legs' `phases[stability]` evidence) — **tracker 190**, now Low because ~4 s stalls leave it no room to bite; (b) a **~9–14 s loop block on the cleanup / re-key path** shows in the process-lifetime gauge (`corr_loop_lag_max_ms` 9,134.9 ms on s05, located at 20:11:54Z during cleanup; 13,881.1 ms on s06), **outside** the stability window and with no `sync_span` site attributed — **tracker 192** |
 
 **What is NOT claimed.** Option B (per-identity-class latency relative to burst
-end) was NOT adopted — the first-occurrence/repeat classifier exists only inside
-the aggregation plane, so no such property is measurable on the shipping OFF
-path. Option C (plane ON at storm rungs) is a **candidate, not an invariant**:
-it is contingent on a matched fresh-container OFF/ON `t-storm-2.5k` pair that is
-not yet approved to run, and at the 2 % neutrality rung the ON arm regressed
-T1 p95 (+13.1 %/+28.9 % against a 13.11 % OFF-vs-OFF spread) and failed `memflat`
-and `onboard`. Until that pair clears the guard, the plane stays OFF by default.
+end) was NOT adopted. Its first-occurrence/repeat classifier now ships — it lives
+inside the aggregation plane and the plane is on — but TTUR is still computed per
+*incident* from `min(window_start)`, so no per-class latency property is measured
+or gated today; B remains a refinement of C, not an invariant.
+
+**Option C (plane ON) IS adopted and IS the shipping default** as of 2026-08-30
+20:31Z (`a9d9a10c`, `deployment/docker/docker-compose.yml:1201` →
+`CORR_AGGREGATION_PLANE: ${CORR_AGGREGATION_PLANE:-1}`). The **image default
+remains OFF** (`src/correlation/main.py`) so the A/B overlay contract still
+holds, and `CORR_AGGREGATION_PLANE=0` in `deployment/docker/.env` is the
+documented fallback. What C's own statement proposed but was **not** taken: the
+per-tenant storm-share routing signal (unnecessary — the plane is on for every
+tenant, because the 2 % neutrality rung showed it costs nothing) and the tighter
+10-minute completion target (the SLO above is unchanged at 45 minutes; the
+plane's gains are recorded as margin, not as a tighter promise).
 
 When adding a feature, state its invariant and pick the tier you will enforce it
 at. If the answer is PROSE, say so out loud in the PR rather than leaving a
