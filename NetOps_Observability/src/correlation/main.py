@@ -3169,6 +3169,15 @@ EDGE_CACHE_PEAK = 0         # high-water mark across all tenants
 # plus the Edge's own slots. Deliberately an ESTIMATE and labelled as one — a
 # real sizeof walk per entry would cost more than the number is worth.
 EDGE_CACHE_BYTES_PER_ENTRY = 320
+# tracker 192: the per-tenant staleness filter is epoch-scoped. `_TENANT_EDGE_
+# FILTERED` is the epoch serial whose `live` set this tenant's cache has already
+# been tested against in full; `_TENANT_EDGE_ADDED` is the keys `_remember_edges`
+# has recorded since that test, i.e. the only ones whose verdict is unknown.
+# Both are derived state: dropping either only costs a redundant full scan, so a
+# leaked entry can never change a result (the serial is strictly increasing, so
+# a stale one can never be mistaken for a live one).
+_TENANT_EDGE_FILTERED: dict[str, int | None] = {}
+_TENANT_EDGE_ADDED: dict[str, set[tuple[str, str]]] = {}
 
 
 def live_node_keys(window: Iterable[Signal]) -> set[str]:
@@ -3177,40 +3186,94 @@ def live_node_keys(window: Iterable[Signal]) -> set[str]:
     return {f"{s.entity_type.value}:{s.entity_id}:{s.kind}" for s in window}
 
 
-def _carried_edges_for(tenant: str, live: set[str]) -> tuple:
+def _carried_edges_for(tenant: str, live: set[str], epoch: int | None = None) -> tuple:
     """This tenant's settled edges, filtered to nodes still in the window.
 
     tracker 166: `live` — the O(window) key set — is a pure function of the
-    frozen snapshot and is computed ONCE per epoch. Only the O(edges) cache
-    filter below is genuinely per cohort, because cohort n must see the edges
-    cohort n-1 settled."""
+    frozen snapshot and is computed ONCE per epoch. The O(edges) cache filter
+    below was then paid per COHORT, i.e. O(cohorts x |edge cache|) per epoch.
+
+    TRACKER 192. That is the term a mass device deletion drives, and it is the
+    one loop-thread stretch on the cleanup path that had neither a `sync_span`
+    nor a `loop_yield`: retiring 2,500 devices retires every node key at once,
+    so `live` collapses, EVERY entry of a 132,528-entry cache tests stale, and
+    the whole scan-plus-delete runs uninterrupted — once per cohort, K times
+    over one epoch, re-testing keys whose verdict cannot have changed.
+
+    THE BOUND, and it is algebraic rather than a yield. `live` is the epoch's
+    `live_keys[tenant]`: FROZEN for the epoch (built in `_begin_epoch`, read by
+    every cohort). So for a fixed epoch:
+
+      * a key that survived an earlier cohort's test against this same `live`
+        survives every later test against it — re-testing it is pure
+        re-derivation;
+      * the only keys whose verdict is unknown are the ones ADDED since the last
+        test, and `_remember_edges` is the sole writer, so it records them.
+
+    Therefore, within one epoch, cohort 1 pays the full O(|cache|) scan and
+    cohorts 2..K pay O(|added since|). Per epoch: O(|cache| + |added|) instead
+    of O(K x |cache|). The surviving set, the returned tuple and
+    `EDGE_CACHE_DROPPED` are all bit-identical — each key is still tested
+    against the same `live`, exactly once, and dropped at the first cohort that
+    sees it stale (pinned by the oracle in test_carried_edges_bound_192.py).
+
+    `epoch=None` (every caller outside a drain epoch: tests, tooling) keeps the
+    exact pre-192 behaviour — a full scan, every call — because nothing then
+    guarantees `live` is the same set twice.
+    """
     global EDGE_CACHE_DROPPED
     cache = _TENANT_EDGES.get(tenant)
     if not cache:
+        _TENANT_EDGE_FILTERED.pop(tenant, None)
+        _TENANT_EDGE_ADDED.pop(tenant, None)
         return ()
-    stale = [k for k in cache if k[0] not in live or k[1] not in live]
-    for k in stale:
-        del cache[k]
-    EDGE_CACHE_DROPPED += len(stale)
-    if not cache:
-        _TENANT_EDGES.pop(tenant, None)
-        return ()
-    return tuple(cache.values())
+    # SYNC span: scan + delete + snapshot, no await anywhere in it. It is the
+    # stretch tracker 192 found dark, so it is named whether or not it is
+    # bounded (see `sync_record`).
+    with sync_span("reconcile.carry_edges"):
+        if epoch is not None and _TENANT_EDGE_FILTERED.get(tenant) == epoch:
+            # Same epoch, same `live`: only the keys added since the last test
+            # have an unknown verdict.
+            probe: Iterable = [k for k in _TENANT_EDGE_ADDED.get(tenant, ()) if k in cache]
+        else:
+            probe = cache
+        stale = [k for k in probe if k[0] not in live or k[1] not in live]
+        for k in stale:
+            del cache[k]
+        EDGE_CACHE_DROPPED += len(stale)
+        _TENANT_EDGE_FILTERED[tenant] = epoch
+        _TENANT_EDGE_ADDED.pop(tenant, None)
+        if not cache:
+            _TENANT_EDGES.pop(tenant, None)
+            _TENANT_EDGE_FILTERED.pop(tenant, None)
+            return ()
+        return tuple(cache.values())
 
 
 def _remember_edges(tenant: str, snapshots: list) -> None:
     """Record the edges this transaction produced, for the next one's
-    component formation."""
+    component formation.
+
+    tracker 192: it also records WHICH keys are new, because those are the only
+    ones the next cohort's `_carried_edges_for` has to re-test (see there). The
+    set is bounded by the edges one cohort emitted, never by the cache."""
     global EDGE_CACHE_ADDED, EDGE_CACHE_PEAK
     cache = _TENANT_EDGES.setdefault(tenant, {})
-    for snap in snapshots:
-        for e in snap.edges:
-            key = (e.from_node, e.to_node)
-            if key not in cache:
-                EDGE_CACHE_ADDED += 1
-            cache[key] = e
-    EDGE_CACHE_PEAK = max(EDGE_CACHE_PEAK,
-                          sum(len(v) for v in _TENANT_EDGES.values()))
+    # SYNC span: O(edges emitted) with no await — the other half of the
+    # per-tenant transaction body tracker 192 found unattributed.
+    with sync_span("reconcile.remember_edges"):
+        added = _TENANT_EDGE_ADDED.setdefault(tenant, set())
+        for snap in snapshots:
+            for e in snap.edges:
+                key = (e.from_node, e.to_node)
+                if key not in cache:
+                    EDGE_CACHE_ADDED += 1
+                    added.add(key)
+                cache[key] = e
+        if not added:
+            _TENANT_EDGE_ADDED.pop(tenant, None)
+        EDGE_CACHE_PEAK = max(EDGE_CACHE_PEAK,
+                              sum(len(v) for v in _TENANT_EDGES.values()))
 
 
 def edge_cache_state() -> dict[str, int]:
@@ -3314,6 +3377,9 @@ OPEN_OBJECTS_EPOCH_PEAK = 0
 EPOCH_BUDGET_EXITS_TOTAL = 0
 
 
+_EPOCH_SERIAL = 0     # tracker 192: monotonic epoch identity (never id())
+
+
 class _EngineEpoch:
     """One immutable retained snapshot plus everything derived purely from it."""
 
@@ -3328,6 +3394,7 @@ class _EngineEpoch:
         "prep_seconds",
         "preps",
         "seen",
+        "serial",
         "snapshot",
         "started",
         "storm",
@@ -3335,6 +3402,14 @@ class _EngineEpoch:
     )
 
     def __init__(self, now: datetime) -> None:
+        global _EPOCH_SERIAL
+        # tracker 192: a STRICTLY INCREASING identity for the epoch, so the
+        # carried-edge staleness filter can tell "already tested against THIS
+        # epoch's frozen `live`" from "a different epoch". Deliberately not
+        # id(self): ids are recycled, and a recycled id would silently skip a
+        # scan that must run.
+        _EPOCH_SERIAL += 1
+        self.serial = _EPOCH_SERIAL
         self.now = now
         self.snapshot: tuple = ()
         self.by_tenant: dict[str, tuple] = {}
@@ -3415,67 +3490,86 @@ async def _begin_epoch(now: datetime) -> _EngineEpoch:
     # same inputs, so declaring the same verdict on all of them is the honest
     # reading, not a staleness.
     ep.topo_stale = _topology_stale(now)
-    # Backlog-age arm (design §"Detection tuning"): the event-time age of the oldest
-    # still-unevaluated signal, measured against the newest retained event — pure
-    # event-time, no wall-clock, so the recorded storm flag stays replay-deterministic.
-    _pend = pending_signals()
-    _oldest_pending_age_s = 0.0
-    if _pend and WINDOW_BUFFER:
-        _newest_ts = max(s.ts.timestamp() for s in WINDOW_BUFFER)
-        _oldest_pending_age_s = max(0.0, _newest_ts - min(s.ts.timestamp() for s in _pend))
-    ep.storm = _storm_state(len(WINDOW_BUFFER), WINDOW_BUFFER.maxlen or 1,
-                            _oldest_pending_age_s)
-    if ep.topo_stale or ep.storm:
-        log.warning("engine degradation: topology_stale=%s storm_mode=%s (buffer=%d/%s)",
-                    ep.topo_stale, ep.storm, len(WINDOW_BUFFER), WINDOW_BUFFER.maxlen)
-    # FREEZE. From here the epoch reads its own tuple, never WINDOW_BUFFER.
-    ep.snapshot = tuple(WINDOW_BUFFER)
-    grouped: dict[str, list[Signal]] = {}
-    with stage("engine.partition_by_tenant"):
-        for s in ep.snapshot:
-            grouped.setdefault(s.tenant_id, []).append(s)
-    # Tuples, and the SAME tuple object every cohort: the prep's reuse guard is
-    # object identity, so handing run_window a fresh tuple per cohort would
-    # invalidate the prep on every transaction and reinstate the defect.
-    ep.by_tenant = {t: tuple(v) for t, v in grouped.items()}
-    # Marker for the NEXT epoch's work accounting: the newest event this epoch
-    # can see. Captured before the per-tenant work so a long epoch does not
-    # mis-attribute signals that arrived while it ran.
-    ep.cycle_max_ts = max((s.ts.timestamp() for s in ep.snapshot), default=None)
-    adj_by_tenant = topology_links_by_tenant()  # L2/L3 links for the adjacency rung (G1)
-    pgv = path_graph_inventory()
+    # SYNC span (tracker 192): from here to the end of the freeze there is no
+    # await, and every line of it is O(window) — four full passes over a buffer
+    # that holds 150,000 signals in a storm. It had no span of its own, so a
+    # block here could only ever surface as un-attributed loop lag.
+    with sync_span("epoch.freeze"):
+        # Backlog-age arm (design §"Detection tuning"): the event-time age of the oldest
+        # still-unevaluated signal, measured against the newest retained event — pure
+        # event-time, no wall-clock, so the recorded storm flag stays replay-deterministic.
+        _pend = pending_signals()
+        _oldest_pending_age_s = 0.0
+        if _pend and WINDOW_BUFFER:
+            _newest_ts = max(s.ts.timestamp() for s in WINDOW_BUFFER)
+            _oldest_pending_age_s = max(0.0, _newest_ts - min(s.ts.timestamp() for s in _pend))
+        ep.storm = _storm_state(len(WINDOW_BUFFER), WINDOW_BUFFER.maxlen or 1,
+                                _oldest_pending_age_s)
+        if ep.topo_stale or ep.storm:
+            log.warning("engine degradation: topology_stale=%s storm_mode=%s (buffer=%d/%s)",
+                        ep.topo_stale, ep.storm, len(WINDOW_BUFFER), WINDOW_BUFFER.maxlen)
+        # FREEZE. From here the epoch reads its own tuple, never WINDOW_BUFFER.
+        ep.snapshot = tuple(WINDOW_BUFFER)
+        grouped: dict[str, list[Signal]] = {}
+        with stage("engine.partition_by_tenant"):
+            for s in ep.snapshot:
+                grouped.setdefault(s.tenant_id, []).append(s)
+        # Tuples, and the SAME tuple object every cohort: the prep's reuse guard is
+        # object identity, so handing run_window a fresh tuple per cohort would
+        # invalidate the prep on every transaction and reinstate the defect.
+        ep.by_tenant = {t: tuple(v) for t, v in grouped.items()}
+        # Marker for the NEXT epoch's work accounting: the newest event this epoch
+        # can see. Captured before the per-tenant work so a long epoch does not
+        # mis-attribute signals that arrived while it ran.
+        ep.cycle_max_ts = max((s.ts.timestamp() for s in ep.snapshot), default=None)
+    # SYNC span (tracker 192): the mtime-triggered enrichment reload. These are
+    # memoised on the exporter's file mtime, so they cost NOTHING until the API
+    # rewrites the export — and a mass device delete rewrites it. That makes
+    # this a stretch whose cost is zero on every cycle a test or a steady run
+    # ever measures, and O(inventory) on exactly the cycles tracker 192 is
+    # about. It is named so the next run cannot hide it again.
+    with sync_span("epoch.enrichment"):
+        adj_by_tenant = topology_links_by_tenant()  # L2/L3 links for the adjacency rung (G1)
+        pgv = path_graph_inventory()
     t0 = time.monotonic()
     with stage("engine.epoch_prepare"):
         for tenant in sorted(ep.by_tenant):
             window = ep.by_tenant[tenant]
-            seams = tuple(s for s in seam_inventory() if s.tenant_id in (tenant, ""))
-            # Tenant-scoped adjacency: this tenant's links ∪ global — never cross-tenant.
-            adjacency = TopologyAdjacency.from_links(
-                adj_by_tenant.get(tenant, []) + adj_by_tenant.get("", []))
-            # The directed-topology oracle for this tenant, sources in PRECEDENCE order
-            # (measured > observed > computed): C7.4 active-path-trace FIRST, then C7.3
-            # NetFlow volume, then C7.5 routing (BGP-LS/IGP SPF). Each resolves through
-            # this tenant's resolver / device entities → zero-leak. None when none covers
-            # → vote #2 abstains (no-op).
-            tenant_resolver = cached_entity_resolver_for(tenant)
-            before = resolve_path_order(probe_paths(), tenant_resolver)
-            vol = {**_FLOW_DIR.get("", {}), **_FLOW_DIR.get(tenant, {})}
-            forward = forwarding_pairs(routing_direction())
-            sources = []
-            if before:
-                sources.append(("traceroute", traceroute_direction_source(before)))
-            if vol:
-                sources.append(("netflow", netflow_direction_source(vol, FLOW_DIRECTION_DOMINANCE)))
-            if forward:
-                sources.append(("routing", routing_direction_source(forward)))
-            directed = DirectedTopology(sources=tuple(sources)) if sources else None
-            # Path-causality RCA P2: the tenant's typed causal paths for the on-path
-            # attribution enrichment, fusing measured + flow + inventory + DNS discovery
-            # (window carries this tenant's cloud_dns_log heads). Empty ⇒ no-op, objects
-            # byte-identical to pre-P2.
-            discovery = discovery_paths_for(tenant, pgv, list(window))
-            ep.ctx[tenant] = (seams, adjacency, directed, pgv, discovery)
-            ep.live_keys[tenant] = live_node_keys(window)
+            # SYNC span (tracker 192): the whole per-tenant context build runs
+            # on the loop thread between two awaits — the seam filter, the
+            # adjacency build, the resolver, the four direction sources and
+            # `discovery_paths_for` / `live_node_keys`, both O(this tenant's
+            # window). `engine.epoch_prepare` is WALL clock around the offload
+            # as well, so it could never say how much of it was loop-thread time.
+            with sync_span("epoch.tenant_context"):
+                seams = tuple(s for s in seam_inventory() if s.tenant_id in (tenant, ""))
+                # Tenant-scoped adjacency: this tenant's links ∪ global — never cross-tenant.
+                adjacency = TopologyAdjacency.from_links(
+                    adj_by_tenant.get(tenant, []) + adj_by_tenant.get("", []))
+                # The directed-topology oracle for this tenant, sources in PRECEDENCE order
+                # (measured > observed > computed): C7.4 active-path-trace FIRST, then C7.3
+                # NetFlow volume, then C7.5 routing (BGP-LS/IGP SPF). Each resolves through
+                # this tenant's resolver / device entities → zero-leak. None when none covers
+                # → vote #2 abstains (no-op).
+                tenant_resolver = cached_entity_resolver_for(tenant)
+                before = resolve_path_order(probe_paths(), tenant_resolver)
+                vol = {**_FLOW_DIR.get("", {}), **_FLOW_DIR.get(tenant, {})}
+                forward = forwarding_pairs(routing_direction())
+                sources = []
+                if before:
+                    sources.append(("traceroute", traceroute_direction_source(before)))
+                if vol:
+                    sources.append(("netflow", netflow_direction_source(vol, FLOW_DIRECTION_DOMINANCE)))
+                if forward:
+                    sources.append(("routing", routing_direction_source(forward)))
+                directed = DirectedTopology(sources=tuple(sources)) if sources else None
+                # Path-causality RCA P2: the tenant's typed causal paths for the on-path
+                # attribution enrichment, fusing measured + flow + inventory + DNS discovery
+                # (window carries this tenant's cloud_dns_log heads). Empty ⇒ no-op, objects
+                # byte-identical to pre-P2.
+                discovery = discovery_paths_for(tenant, pgv, list(window))
+                ep.ctx[tenant] = (seams, adjacency, directed, pgv, discovery)
+                ep.live_keys[tenant] = live_node_keys(window)
             try:
                 prep = await _offload(prepare_run_window, window, seams, ENGINE_CFG,
                                       adjacency, pgv, discovery)
@@ -6089,14 +6183,20 @@ async def _engine_cycle_inner(epoch: _EngineEpoch | None) -> None:
     # From the epoch's FROZEN snapshot: a cohort must never admit a signal the
     # epoch has no prepared node for (it would be dropped from the cohort index
     # and then marked processed — never-evaluated evidence).
-    _pending = epoch.pending()
-    PENDING_PEAK = max(PENDING_PEAK, len(pending_signals()))
-    # Tracker 172: while storm mode is DECLARED, admit smaller cohorts so each
-    # GIL-heavy stretch is shorter and the consumer keeps breathing between
-    # transactions. Retained history is still scored whole (166's contract);
-    # only the per-transaction admission shrinks.
-    _size = CORR_STORM_COHORT_SIZE if epoch.storm else CORR_ENGINE_COHORT_SIZE
-    _cohort = _select_cohort(_pending, _size)
+    # SYNC span (tracker 192): admission is TWO full O(window) scans — the
+    # epoch's frozen snapshot and the live buffer — each stringifying a uuid per
+    # signal, plus the round-robin selection, with no await between them. Paid
+    # once per COHORT, so it scales with both the window and the drain depth,
+    # and it had no span.
+    with sync_span("cohort.admit"):
+        _pending = epoch.pending()
+        PENDING_PEAK = max(PENDING_PEAK, len(pending_signals()))
+        # Tracker 172: while storm mode is DECLARED, admit smaller cohorts so each
+        # GIL-heavy stretch is shorter and the consumer keeps breathing between
+        # transactions. Retained history is still scored whole (166's contract);
+        # only the per-transaction admission shrinks.
+        _size = CORR_STORM_COHORT_SIZE if epoch.storm else CORR_ENGINE_COHORT_SIZE
+        _cohort = _select_cohort(_pending, _size)
     # A node is NEW to this transaction when ANY of its signals is in the cohort:
     # its activity interval changed, so its pairs must be re-scored. Grouped by
     # tenant up front — the first version rebuilt this per tenant with a nested
@@ -6157,7 +6257,11 @@ async def _engine_cycle_inner(epoch: _EngineEpoch | None) -> None:
             # Carried edges are deliberately NOT part of the epoch: cohort n
             # must see the edges cohort n-1 settled, so this is re-read per
             # transaction (docs/scale/SNAPSHOT_EPOCH_166.md §Phase 3).
-            carried = _carried_edges_for(tenant, epoch.live_keys[tenant])
+            # tracker 192: the epoch serial makes the staleness filter
+            # epoch-scoped — full scan on this epoch's FIRST cohort, then only
+            # the keys the previous cohort added (see _carried_edges_for).
+            carried = _carried_edges_for(tenant, epoch.live_keys[tenant],
+                                         epoch.serial)
             # P1 change G: the tenant's intra-epoch component memo. A component
             # this cohort's keys do not touch cannot have changed within the
             # epoch (ComponentMemo carries the proof), so it is served from here
@@ -6251,8 +6355,14 @@ async def _engine_cycle_inner(epoch: _EngineEpoch | None) -> None:
     # and versions it — one object with version bumps, no tombstone. Only an open
     # object whose own id did NOT materialize may be adopted, and at most once per
     # cycle — two live components can never collapse into one identity.
-    materialized = {s.correlation_id for _, _, snaps in evaluated for s in snaps}
-    seen_this_cycle: set[str] = set()
+    # SYNC span (tracker 192). This is the stretch tracker 192 named as its
+    # prime suspect — the O(open objects) bucket build immediately upstream of
+    # the adoption burst, with no span and no yield. Instrumented so the
+    # suspicion is now MEASURED rather than argued: on the live population it is
+    # a dict walk with a dict-lookup constant (463 open objects live, 1,385
+    # epoch peak) and it is not where 9-14 s can hide. The span is what makes
+    # that statement checkable on the next run instead of re-litigable.
+    #
     # Per-cycle continuation index (tracker 162): open objects bucketed by
     # tenant, built ONCE, with a shared entity-set cache. `materialized` is
     # fixed for the cycle so it is filtered here; `seen_this_cycle` grows as we
@@ -6265,11 +6375,14 @@ async def _engine_cycle_inner(epoch: _EngineEpoch | None) -> None:
     # index docstring carries the superset proof; equivalence is pinned by
     # test_continuation_index_162.py's oracle.
     _cont_buckets: dict[str, list] = {}
-    for _cid, _reg in OPEN_OBJECTS.items():
-        if _cid in materialized:
-            continue
-        _snap = _reg["snapshot"]
-        _cont_buckets.setdefault(_snap.tenant_id, []).append(_snap)
+    with sync_span("reconcile.cont_buckets"):
+        materialized = {s.correlation_id for _, _, snaps in evaluated for s in snaps}
+        for _cid, _reg in OPEN_OBJECTS.items():
+            if _cid in materialized:
+                continue
+            _snap = _reg["snapshot"]
+            _cont_buckets.setdefault(_snap.tenant_id, []).append(_snap)
+    seen_this_cycle: set[str] = set()
     # The index BUILD is O(open objects) on the loop thread, once per cohort —
     # the same shape as the lifecycle merge pass, and it had no span either
     # (storm-s02). It gets both: a span, and the executor once the population
@@ -6315,17 +6428,23 @@ async def _engine_cycle_inner(epoch: _EngineEpoch | None) -> None:
         # aggregate (undetermined, no nodes above the floor) naturally sorts LAST.
         # Gated: non-storm order is the engine's original emission order, byte-for-byte.
         if storm:
-            snapshots = sorted(
-                snapshots,
-                key=lambda s: (-max((_SEV_RANK[n.peak_severity] for n in s.nodes),
-                                    default=0),
-                               s.correlation_id))
-            global STORM_DEDUPED_TOTAL, STORM_AGGREGATED_TOTAL
-            for _s in snapshots:
-                if _s.storm_aggregate:
-                    STORM_AGGREGATED_TOTAL += _s.storm_occurrences
-                elif _s.storm_occurrences:
-                    STORM_DEDUPED_TOTAL += _s.storm_occurrences
+            # SYNC span (tracker 192): O(snapshots log snapshots) with an
+            # O(nodes) key — it walks every node of every snapshot this tenant
+            # emitted, on the loop thread, with no await and no yield, and it
+            # runs only under a DECLARED storm, i.e. only on the runs that
+            # stall. It had no span.
+            with sync_span("reconcile.storm_sort"):
+                snapshots = sorted(
+                    snapshots,
+                    key=lambda s: (-max((_SEV_RANK[n.peak_severity] for n in s.nodes),
+                                        default=0),
+                                   s.correlation_id))
+                global STORM_DEDUPED_TOTAL, STORM_AGGREGATED_TOTAL
+                for _s in snapshots:
+                    if _s.storm_aggregate:
+                        STORM_AGGREGATED_TOTAL += _s.storm_occurrences
+                    elif _s.storm_occurrences:
+                        STORM_DEDUPED_TOTAL += _s.storm_occurrences
         for snap in snapshots:
             gap_hints += snap.gap_hints
             reg = OPEN_OBJECTS.get(snap.correlation_id)
