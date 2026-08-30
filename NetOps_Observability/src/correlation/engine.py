@@ -277,6 +277,22 @@ class SeamView:
     def endpoint_values(self) -> frozenset[str]:
         return frozenset(v for _, v in self.endpoints)
 
+    def membership_values(self) -> frozenset[str]:
+        """`endpoint_values() | {seam_id}` — the exact token set rank-2 seam
+        membership tests a node's `identity_refs()` against.
+
+        Cached on the frozen instance (same `object.__setattr__` storage and
+        recompute-on-copy rule as `ObjectSnapshot.content_hash`): the seam
+        inventory is fixed for a cycle while this set is asked for once per
+        (candidate pair x grounded seam) on the reconcile path, and rebuilding
+        a two-element frozenset there buys nothing."""
+        cached = getattr(self, "_membership_c", None)
+        if cached is not None:
+            return cached
+        value = self.endpoint_values() | {self.seam_id}
+        object.__setattr__(self, "_membership_c", value)
+        return value
+
 
 def seams_hash(seams: tuple[SeamView, ...]) -> str:
     """topology_version pin: content hash of the grounding context."""
@@ -2022,6 +2038,54 @@ class ObjectSnapshot:
         object.__setattr__(self, "_agg_provenance_c", value)
         return value
 
+    def identity_refs(self) -> frozenset[str]:
+        """REFS(x) — the union of this object's nodes' STRUCTURAL identity refs.
+
+        `any(n.identity_refs() & ev for n in self.nodes)` and
+        `bool(self.identity_refs() & ev)` are the same predicate: a union
+        intersects `ev` exactly when some member does. Stating it as the union
+        is what makes it CACHEABLE, and that is the whole point.
+
+        TRACKER 185 (the 27,844 ms `reconcile.find_continuation` block). Node
+        refs were rebuilt from scratch inside `_snap_touches_seam`, which
+        `_seam_bridged` calls once per (candidate x grounded seam) — and
+        `Node.identity_refs()` is itself O(|node.signals|) because it derives
+        the observer set from the signals. So probing ONE storm aggregate (900+
+        nodes, ~95k signals) against C open candidates cost O(C x Σ|signals|)
+        and ran for 28 s on the event-loop thread. Computed once per snapshot it
+        is O(Σ|signals|) for the whole probe, whatever C is.
+
+        Cached exactly like `content_hash` / `agg_provenance`: stored via
+        `object.__setattr__`, NOT a dataclass field (so it never enters
+        __eq__/__hash__/replace()), recomputed on a copy, thread-safe by
+        idempotence. It holds no new strings — every ref is already reachable
+        from the node it came from — so the retained bytes are one pointer set
+        per snapshot, not a second copy of the identity."""
+        cached = getattr(self, "_identity_refs_c", None)
+        if cached is not None:
+            return cached
+        out: set[str] = set()
+        for n in self.nodes:
+            out |= n.identity_refs()
+        value = frozenset(out)
+        object.__setattr__(self, "_identity_refs_c", value)
+        return value
+
+    def grounded_seam_ids(self) -> frozenset[str]:
+        """G(x) — the seam ids this object holds an AUTHORITATIVE seam-grounded
+        edge on (a rank-7 token-matched seam edge is a name coincidence and may
+        never justify a fold).
+
+        Cached for the same reason and in the same way as `identity_refs`: it is
+        O(|edges|) and `_seam_bridged` asked for it once per candidate PAIR."""
+        cached = getattr(self, "_grounded_seams_c", None)
+        if cached is not None:
+            return cached
+        value = frozenset(e.grounding.ref for e in self.edges
+                          if e.grounding.kind == "seam" and e.grounding.authoritative)
+        object.__setattr__(self, "_grounded_seams_c", value)
+        return value
+
     def signal_count(self) -> int:
         """Signals attached to this object's nodes — i.e. what the ENGINE WINDOW
         held for it, which is `corr_objects.signal_count`.
@@ -3338,17 +3402,66 @@ def _windows_overlap(a: ObjectSnapshot, b: ObjectSnapshot) -> bool:
 def _snap_grounded_seam_ids(snap: ObjectSnapshot) -> frozenset[str]:
     """Seam ids this object's graph GROUNDED on — authoritative rank-2 seam
     edges only (a rank-7 token-matched seam edge is a name coincidence and may
-    never justify a fold)."""
-    return frozenset(e.grounding.ref for e in snap.edges
-                     if e.grounding.kind == "seam" and e.grounding.authoritative)
+    never justify a fold). Thin alias for the cached accessor (tracker 185)."""
+    return snap.grounded_seam_ids()
 
 
 def _snap_touches_seam(snap: ObjectSnapshot, view: SeamView) -> bool:
     """Structural seam membership of the OBJECT: any node whose identity_refs
     intersect the seam's endpoint values ∪ {seam_id} — the exact rank-2
-    membership test resolve_grounding trusts, never free-text tokens."""
-    ev = view.endpoint_values() | {view.seam_id}
-    return any(n.identity_refs() & ev for n in snap.nodes)
+    membership test resolve_grounding trusts, never free-text tokens.
+
+    Tracker 185: `any(n.identity_refs() & ev for n in snap.nodes)` is exactly
+    `bool(REFS(snap) & ev)` — a union meets `ev` iff some member does — and the
+    union form is the one that can be computed once per snapshot instead of
+    once per (candidate x seam). Same answer, on identical inputs, always."""
+    return bool(snap.identity_refs() & view.membership_values())
+
+
+# (seams-tuple identity, tenant) -> (that tuple, seam_id -> the FIRST view of
+# that id this inventory offers the tenant). See `_seam_view_index`.
+_SEAM_VIEW_INDEX: dict[tuple[int, str], tuple[tuple, dict[str, SeamView]]] = {}
+_SEAM_VIEW_INDEX_MAX = 4
+
+
+def _seam_view_index(seams: tuple, tenant: str) -> dict[str, SeamView]:
+    """seam_id -> the first view in `seams` that `tenant` may consult.
+
+    `_seam_bridged` used to derive this by scanning `(*a.seams, *b.seams)` on
+    EVERY candidate pair. `run_window` stamps the WHOLE tenant seam inventory
+    into every snapshot it emits, so that scan is O(|inventory|) per pair —
+    2,500 seams x thousands of pairs of pure re-derivation of a constant
+    (tracker 185, and the same "the inventory is not per-object" defect the
+    grounded re-keying fixed inside `ContinuationIndex`).
+
+    Keyed by `id()` and VERIFIED by identity against the tuple held in the entry
+    (plus the tenant it was filtered for), so a recycled id can never serve
+    another inventory's map — the same rule `_CATALOG_PLAN_CACHE` and
+    `ContinuationIndex._seam_map` follow. Hard-bounded at
+    `_SEAM_VIEW_INDEX_MAX` entries (4, as `_CATALOG_PLAN_CACHE` is): the
+    reconcile loop walks tenants sequentially and every candidate of a tenant
+    shares one inventory, so one live entry serves a whole probe. What it
+    retains is pointers into inventories every open snapshot of that cycle
+    already holds — it adds no snapshot-sized state and cannot grow with the
+    open-object population. On overflow the map is dropped whole and rebuilt,
+    which is at worst the ONE scan the old code paid on every pair.
+
+    Advisory under thread races, exactly like the digest caches: two threads may
+    build the same map and one insertion may be lost. Both build the SAME map
+    from the same frozen inventory, and the identity check means a lost or
+    evicted entry can only cost a rebuild — never a wrong view."""
+    key = (id(seams), tenant)
+    hit = _SEAM_VIEW_INDEX.get(key)
+    if hit is not None and hit[0] is seams:
+        return hit[1]
+    out: dict[str, SeamView] = {}
+    for v in seams:
+        if v.tenant_id in ("", tenant):
+            out.setdefault(v.seam_id, v)
+    if len(_SEAM_VIEW_INDEX) >= _SEAM_VIEW_INDEX_MAX:
+        _SEAM_VIEW_INDEX.clear()
+    _SEAM_VIEW_INDEX[key] = (seams, out)
+    return out
 
 
 def _seam_bridged(a: ObjectSnapshot, b: ObjectSnapshot) -> bool:
@@ -3366,13 +3479,25 @@ def _seam_bridged(a: ObjectSnapshot, b: ObjectSnapshot) -> bool:
     is replay-safe and needs no live inventory."""
     if a.tenant_id != b.tenant_id:
         return False
-    grounded = _snap_grounded_seam_ids(a) | _snap_grounded_seam_ids(b)
+    grounded = a.grounded_seam_ids() | b.grounded_seam_ids()
     if not grounded:
         return False
+    # TRACKER 185. Identical to the previous `for v in (*a.seams, *b.seams):
+    # if v.seam_id in grounded and tenant-ok: views.setdefault(v.seam_id, v)` —
+    # a's inventory is consulted first and the FIRST admissible view of an id
+    # wins, in both spellings — but driven from the grounded ids (a handful)
+    # through a per-inventory map instead of by re-scanning both inventories
+    # (thousands of views) on every candidate pair.
+    a_views = _seam_view_index(a.seams, a.tenant_id)
+    b_views = (a_views if b.seams is a.seams
+               else _seam_view_index(b.seams, a.tenant_id))
     views: dict[str, SeamView] = {}
-    for v in (*a.seams, *b.seams):
-        if v.seam_id in grounded and v.tenant_id in ("", a.tenant_id):
-            views.setdefault(v.seam_id, v)
+    for sid in grounded:
+        v = a_views.get(sid)
+        if v is None:
+            v = b_views.get(sid)
+        if v is not None:
+            views[sid] = v
     return any(_snap_touches_seam(a, views[sid]) and _snap_touches_seam(b, views[sid])
                for sid in sorted(views))
 
@@ -3617,11 +3742,14 @@ class ContinuationIndex:
     @staticmethod
     def _refs(snap: ObjectSnapshot) -> frozenset[str]:
         """The union of node identity_refs — the exact values
-        `_snap_touches_seam` tests against a view's endpoint set."""
-        out: set[str] = set()
-        for n in snap.nodes:
-            out |= n.identity_refs()
-        return frozenset(out)
+        `_snap_touches_seam` tests against a view's endpoint set.
+
+        Tracker 185: the union now lives on the snapshot (`identity_refs`),
+        cached, so the index build and every later seam-bridge probe of the same
+        object share ONE O(Σ|signals|) walk. Kept as the index's own spelling of
+        it because the superset proof and its oracles are written in terms of
+        REFS(x)."""
+        return snap.identity_refs()
 
     def candidates(self, snap: ObjectSnapshot) -> tuple[ObjectSnapshot, ...]:
         hits: set[int] = set()
@@ -3712,8 +3840,16 @@ def find_continuation(
             if cached is None:
                 cached = entity_cache[s.correlation_id] = _entity_ids(s)
             se = cached
-        union = ce | se
-        jac = len(ce & se) / len(union) if union else 0.0
+        # |A ∪ B| = |A| + |B| - |A ∩ B|, so the Jaccard needs the intersection
+        # only. Identical value — the same two integers divided — and it drops
+        # the O(|ce|) union SET that was built and thrown away once per
+        # candidate: a storm aggregate has ~900 entities and thousands of
+        # candidates, which is a million discarded set inserts inside the block
+        # tracker 185 exists to bound. `ce` is non-empty (guarded above), so the
+        # denominator can never be 0 and the old `if union else 0.0` guard has
+        # nothing left to guard.
+        inter = len(ce & se)
+        jac = inter / (len(ce) + len(se) - inter)
         # Tracker 154b: same seam-bridge admission as find_merges — a re-keyed
         # seam-far half continues the incident it is bridged to, never a clone.
         if jac < min_overlap and not _seam_bridged(snap, s):
