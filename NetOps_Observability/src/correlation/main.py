@@ -43,7 +43,7 @@ import threading
 import time
 import uuid
 from collections import Counter, OrderedDict, deque
-from collections.abc import Awaitable, Callable, Iterable, Sequence
+from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
@@ -86,6 +86,7 @@ from engine import (
     ComponentMemo,
     ContinuationIndex,
     EngineConfig,
+    Node,
     ObjectSnapshot,
     SeamView,
     TopologyAdjacency,
@@ -144,7 +145,7 @@ from producers import (
 from rank_memo import RankMemo
 from replay import replay_object
 from routing_direction import forwarding_pairs, routing_direction_source
-from scoring import template_scoring_metric_lines
+from scoring import RankingResult, template_scoring_metric_lines
 from series_budget import derive_max_series
 from signals import (
     DeadLetter,
@@ -155,6 +156,7 @@ from signals import (
     ProbeAuthority,
     ProbeIntent,
     ProbeScope,
+    Severity,
     Signal,
     Source,
     VantageType,
@@ -163,6 +165,7 @@ from signals import (
 )
 from synthetic_normalize import synthetic_app_signal
 from tls_ident import PeerIdentityMiddleware
+from verdicts import VerdictTier
 from verification_producer import verification_signal_from_event
 from wireless_onboarding import (
     assemble_episode as assemble_wireless_episode,
@@ -1161,6 +1164,15 @@ TS_BOUND_LOG_EVERY_S = 60.0
 # Open-object registry: correlation_id → persistence state. CH stays append-
 # only; this is the engine's working memory (PG corr_active wiring follows
 # with the ops lifecycle build).
+#
+# TRACKER 155, and read this before assuming it is empty at start-up: it is
+# per-process working memory with no STATE rehydration, but its IDENTITIES are
+# now reconstructed when a partition is acquired. `_run_ownership_seed` loads
+# the still-open objects of the acquired tenants and registers an identity
+# PLACEHOLDER for each (`seed_only`) so arriving evidence continues the incident
+# under its original correlation_id instead of minting a fragment. A placeholder
+# holds identity ONLY — no verdict, no edges, no signals — and is never
+# persisted; see `_seed_only`.
 OPEN_OBJECTS: dict[str, dict] = {}
 LAST_GAP_HINTS = 0
 
@@ -1953,8 +1965,10 @@ def agg_stats() -> dict:
 #     the two carry different tenants and cross-tenant edges do not exist;
 #   * per-tenant is therefore both the safe scope AND the tightest one.
 # This stays compatible with tracker 155: watermarks are per-process state with
-# no rehydration path, exactly like OPEN_OBJECTS and the window itself, so a
-# partition acquired at a rebalance starts with a cold watermark and refills.
+# no rehydration path, like the window itself, so a partition acquired at a
+# rebalance starts with a cold watermark and refills. (OPEN_OBJECTS is no longer
+# in that list for IDENTITY — see the ownership seed — but it still is for
+# STATE: the reconstructed placeholder carries no evidence.)
 #
 # BACKSTOP. A tenant that goes silent freezes its watermark, so its evidence
 # would never expire. That is semantically defensible (more evidence may still
@@ -6296,6 +6310,13 @@ async def _epoch_lifecycle(epoch: _EngineEpoch, loop_yield,
         reg = OPEN_OBJECTS.get(merged_cid)
         if reg is None:
             continue
+        if _seed_only(reg):
+            # Tracker 155: an UNADOPTED placeholder may not be tombstoned —
+            # state='merged' would publish a placeholder's empty content as this
+            # id's last durable word. Drop it: the survivor carries the incident
+            # forward and the row the previous owner wrote still stands.
+            _seed_expire(merged_cid, "merged-away")
+            continue
         reg["version"] += 1
         VERSIONS_PERSISTED += 1
         _wa_note_outcome(reg["snapshot"].tenant_id, "persisted")
@@ -6338,6 +6359,15 @@ async def _epoch_lifecycle(epoch: _EngineEpoch, loop_yield,
         if cid in seen:
             continue
         if (now - reg["last_seen"]).total_seconds() >= CORR_QUIESCE_S:
+            if _seed_only(reg):
+                # Tracker 155: a seeded identity nothing ever adopted. It is
+                # subject to the quiesce clock exactly like any other open
+                # object (its `last_seen` is derived from its own durable
+                # timestamps), so it is never frozen open — but it closes by
+                # being DROPPED, not by persisting a verdict this replica never
+                # computed. See `_seed_only`.
+                _seed_expire(cid, "quiesce")
+                continue
             reg["version"] += 1
             VERSIONS_PERSISTED += 1
             _wa_note_outcome(reg["snapshot"].tenant_id, "persisted")
@@ -6375,6 +6405,13 @@ async def _epoch_lifecycle(epoch: _EngineEpoch, loop_yield,
         for cid in victims:
             await loop_yield()  # eviction can span thousands under a storm
             reg = OPEN_OBJECTS[cid]
+            if _seed_only(reg):
+                # Tracker 155: same rule as quiesce. The cap's bound is still
+                # honoured (the entry leaves OPEN_OBJECTS), but a dropped
+                # placeholder is NOT a force-closed object and is not counted as
+                # one — it is counted as an expired seed.
+                _seed_expire(cid, "cap")
+                continue
             reg["version"] += 1
             VERSIONS_PERSISTED += 1
             OPEN_OBJECTS_FORCE_CLOSED += 1
@@ -6821,6 +6858,25 @@ async def _engine_cycle_inner(epoch: _EngineEpoch | None) -> None:
             # P1 (1000-device scale): content_hash on the live 48,375-edge
             # object is a 1.6s uninterruptible json.dumps+sha256 — offloaded.
             chash = await _snap_call(snap, snap.content_hash)
+            if reg is None:
+                # TRACKER 155 race: the seed task runs on this loop and may have
+                # registered this EXACT identity while the offloaded hash above
+                # was in flight. Re-read rather than overwrite — a placeholder
+                # carries the object's real version and its pre-handoff blast
+                # radius, and clobbering it with a fresh v1 would silently
+                # reinstate the fragmentation this cycle just avoided.
+                reg = OPEN_OBJECTS.get(snap.correlation_id)
+            if reg is not None and _seed_only(reg):
+                # TRACKER 155. Evidence has reached an identity this replica
+                # reconstructed from ClickHouse when it acquired the partition —
+                # either because the refilled window re-derived the SAME id (the
+                # direct `OPEN_OBJECTS.get` above) or through find_continuation.
+                # Either way the incident now continues under its ORIGINAL
+                # correlation_id instead of minting a fragment, and the
+                # registration stops being a placeholder: from here it is an
+                # ordinary open object on every path, with its AffectedHistory
+                # already carrying the pre-handoff blast radius (tracker 187).
+                _seed_adopted(reg, snap.correlation_id)
             if reg is None:
                 OPEN_OBJECTS[snap.correlation_id] = {
                     "version": 1, "hash": chash,
@@ -8778,6 +8834,572 @@ def tenant_partition(tenant: str, num_partitions: int) -> int:
     key = (tenant or "global").encode("utf-8")
     return (murmur2(key) & 0x7FFFFFFF) % max(1, int(num_partitions))
 
+# ── Tracker 155: DURABLE CONTINUATION SEEDING ON PARTITION ASSIGNMENT ────────
+#
+# THE MEASURED FAILURE (run ownership-155a-08302235, 2026-08-30; three move
+# arms: restart, restart-keep, exit/join). Across an ordinary rebalance
+# NOTHING DURABLE IS LOST — 0 offset rewinds, 0 duplicate signals, evidence
+# conserved. What breaks is IDENTITY. `correlation_id` is
+# `uuid5(tenant, earliest-node.key, onset_ms)`, derived from the ACQUIRING
+# replica's in-memory window, and that window starts empty for a partition it
+# just acquired. So the same in-flight incident re-keys under a NEW id: one
+# incident becomes N+1 fragments and the pre-move object freezes at its last
+# version, orphaned. Detection and specificity stayed 1.00 on every arm while
+# the positive-story pass rate went 1.00 -> 0.00: the RCA is right, the object
+# it lands on is a stranger.
+#
+# THE FIX — RECONSTRUCT IDENTITY, NOT STATE. On assignment the acquiring
+# replica loads the still-OPEN objects of the tenants whose partitions it just
+# acquired and registers an IDENTITY PLACEHOLDER for each: correlation_id,
+# tenant, window, version and blast radius, and nothing else. Arriving evidence
+# then ADOPTS that identity through the SAME machinery an in-process re-key
+# uses — a direct `OPEN_OBJECTS` hit when the refilled window re-derives the
+# same id, or `find_continuation` when it does not — and the object continues
+# under its ORIGINAL id with new versions.
+#
+# WHAT A PLACEHOLDER IS NOT. It carries no verdict, no hypotheses, no edges and
+# no signals, because this replica never saw them. It is therefore NEVER
+# persisted: see `_seed_only`. Until evidence adopts it, it is an entry in the
+# continuation index and nothing more.
+#
+# WHY THIS IS SAFE TO RUN OFF THE REBALANCE CALLBACK. `on_partitions_assigned`
+# executes INSIDE the rejoin, so time spent there is time the group is not
+# re-forming — the same budget `on_partitions_revoked` is already tightly bound
+# by (CORR_REVOKE_BUDGET_S). The seed therefore does ZERO work in the callback:
+# it schedules a task and returns. The task's deadline is the COLD WINDOW
+# (RETENTION_REQUIRED_S, the same constant `consumer_state` reports on), because
+# until the sliding window refills there is no evidence for a seeded identity to
+# be adopted by; finishing anywhere inside that window is as good as finishing
+# instantly.
+#
+# FAIL-OPEN, ALWAYS. ClickHouse unreachable, slow, or answering nonsense at
+# assignment time is counted (`corr_ownership_seed_failures_total`) and logged,
+# and the replica proceeds EXACTLY as it does today: new ids for in-flight
+# incidents. Fragmentation, never an outage.
+
+# Master switch. On by default: the failure it repairs is live in every
+# multi-replica deployment (the lab runs 2) and the fallback is today's
+# behaviour, so there is nothing to stage behind a flag.
+CORR_OWNERSHIP_SEED = os.environ.get(
+    "CORR_OWNERSHIP_SEED", "1").strip().lower() not in ("0", "false", "no", "off")
+# HOW MANY objects one assignment may seed. Justified from the live population,
+# not chosen: the storm rig measured 463 open objects live with a 1,385 epoch
+# PEAK on one replica, and the 155a arms saw 479 open at the moment of the move.
+# 2,000 is ~1.4x the measured whole-replica peak — and a replica only seeds the
+# tenants of the partitions it JUST acquired, which is a subset of a replica's
+# population except in the one case that matters most (the last surviving
+# replica taking everything). It sits below CORR_OPEN_OBJECTS_MAX (5,000) so a
+# seed can never by itself present the 163 cap with a population it must
+# immediately shed.
+CORR_OWNERSHIP_SEED_MAX = int(os.environ.get("CORR_OWNERSHIP_SEED_MAX", "2000"))
+# HOW FAR BACK to look, derived from the code's own lifecycle constants rather
+# than picked: an object still OPEN in a live replica has been seen within
+# CORR_QUIESCE_S (else quiesce closed it), and the durable write that proves it
+# trails that by at most one engine window (RETENTION_REQUIRED_S — the engine's
+# own statement of how far back evidence can still attach). Anything older is an
+# object the previous owner would itself have closed.
+CORR_OWNERSHIP_SEED_HORIZON_S = float(os.environ.get(
+    "CORR_OWNERSHIP_SEED_HORIZON_S", str(CORR_QUIESCE_S + RETENTION_REQUIRED_S)))
+# Per-QUERY bound (§9: all IO has a timeout). Two attempts with jittered
+# backoff, then give up and fail open — the seed is best-effort by contract.
+CORR_OWNERSHIP_SEED_TIMEOUT_S = float(
+    os.environ.get("CORR_OWNERSHIP_SEED_TIMEOUT_S", "10"))
+CORR_OWNERSHIP_SEED_ATTEMPTS = max(
+    1, int(os.environ.get("CORR_OWNERSHIP_SEED_ATTEMPTS", "2")))
+# Bound on the tenant-discovery probe. Tenant IDs only — never rows.
+CORR_OWNERSHIP_SEED_TENANTS_MAX = int(
+    os.environ.get("CORR_OWNERSHIP_SEED_TENANTS_MAX", "512"))
+# An object whose blast radius exceeds this is SKIPPED, not truncated. A
+# truncated entity set would feed `find_continuation` a Jaccard computed on a
+# mangled identity, which can only produce a WRONG adoption; skipping produces
+# today's behaviour. In practice this only excludes the per-tenant storm-noise
+# aggregate (922 entities on the live run), whose identity is re-derived every
+# cycle anyway. It is also what bounds the seed's memory: at most
+# CORR_OWNERSHIP_SEED_MAX x this many entity strings.
+CORR_OWNERSHIP_SEED_ENTITIES_MAX = int(
+    os.environ.get("CORR_OWNERSHIP_SEED_ENTITIES_MAX", "1000"))
+
+OWNERSHIP_SEED_RUNS_TOTAL = 0        # assignments that ran a seed
+OWNERSHIP_SEEDED_OBJECTS_TOTAL = 0   # identity placeholders registered
+OWNERSHIP_ADOPTIONS_TOTAL = 0        # arriving evidence that adopted one
+OWNERSHIP_SEED_FAILURES_TOTAL = 0    # seeds that fell back to today's behaviour
+OWNERSHIP_SEED_SKIPPED_TOTAL = 0     # open objects the seed did NOT register
+OWNERSHIP_SEED_EXPIRED_TOTAL = 0     # placeholders dropped unadopted
+_OWNERSHIP_SEED_TASK: asyncio.Task | None = None
+
+# The `kind` a placeholder's reconstructed nodes carry. Distinct on purpose: it
+# is never a real signal kind, so a placeholder node can never be mistaken for
+# one the engine built, in a log line or in a dump.
+_SEED_NODE_KIND = "ownership_seed"
+# Buckets of `ObjectSnapshot.affected()` -> the EntityType that produced them.
+# The EXACT inverse of the `bucket` map in engine.ObjectSnapshot.affected; a
+# type that map skips (it skips unmapped ones deliberately) is not
+# reconstructable here either, and such an object is skipped rather than seeded
+# with a partial identity.
+_SEED_BUCKET_TYPE: dict[str, EntityType] = {
+    "devices": EntityType.DEVICE,
+    "interfaces": EntityType.INTERFACE,
+    "sites": EntityType.SITE,
+    "paths": EntityType.PATH,
+    "segments": EntityType.SEGMENT,
+    "services": EntityType.SERVICE,
+    "prefixes": EntityType.PREFIX,
+    "apps": EntityType.APP,
+    "cloud_resources": EntityType.CLOUD_RESOURCE,
+}
+# A placeholder asserts NO verdict. `undetermined` is a first-class result in
+# this engine, and it is the only honest one for an object whose reasoning this
+# replica never performed. Never rendered (a placeholder is never persisted);
+# present because ObjectSnapshot requires a ranking.
+_SEED_RANKING = RankingResult(
+    top_hypothesis="undetermined", verdict_tier=VerdictTier.UNDETERMINED,
+    hypotheses=(), evidence_missing=(), catalog_version="")
+# Tenant ids are opaque platform ids (`t_…`, or the canonical "global"). They
+# are interpolated into SQL, so they are validated against an explicit charset
+# first — `ch.query` posts raw SQL and ClickHouse honours backslash escapes, so
+# quote-stripping alone would not be safe (the same reasoning as /findings).
+_TENANT_SAFE_CHARS = frozenset(
+    "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_.")
+
+
+def _seed_safe_tenant(t: str) -> bool:
+    """Is this tenant id safe to interpolate into the seed's SQL? Empty is
+    allowed (the legacy platform-global spelling; `canon_tenant` maps it to
+    "global" for the partition computation) and carries no metacharacters."""
+    return len(t) <= 128 and set(t) <= _TENANT_SAFE_CHARS
+
+
+def _seed_int(v: object, default: int = 0) -> int:
+    """ClickHouse's JSON format quotes 64-bit integers, so a column can arrive
+    as `int` or as `str` depending on its width. Never trust either (§3)."""
+    if isinstance(v, bool):        # bool is an int; a flag is not a count
+        return default
+    if isinstance(v, int):
+        return v
+    if isinstance(v, str):
+        try:
+            return int(v)
+        except ValueError:
+            return default
+    return default
+
+
+def _seed_dt(ms: object) -> datetime | None:
+    """A DateTime64(3) column read as epoch milliseconds -> aware UTC."""
+    v = _seed_int(ms, -1)
+    if v < 0:
+        return None
+    try:
+        return datetime.fromtimestamp(v / 1000.0, timezone.utc)
+    except (OverflowError, OSError, ValueError):
+        return None
+
+
+def _seed_snapshot(tenant: str, cid: str, window_start: datetime,
+                   window_end: datetime,
+                   affected: Mapping[str, object]) -> ObjectSnapshot | None:
+    """The IDENTITY-ONLY snapshot a placeholder stands on.
+
+    It reconstructs exactly what the continuation predicate reads and nothing
+    else: tenant (the §3a guard), the [window_start, window_end] interval
+    (`_windows_overlap`) and the node ENTITY SET (`_entity_ids`, the Jaccard).
+    Edges and seams are empty, so `grounded_seam_ids()` is empty and the
+    seam-bridge clause of the admission algebra is inert for a placeholder — a
+    placeholder can be adopted on entity overlap alone, never on a bridge it
+    has no grounded edge to justify.
+
+    The entity set is recovered from `corr_objects.affected`, which IS the
+    per-bucket projection of node identity (engine.ObjectSnapshot.affected).
+    One documented imprecision: `affected()` also names apps fused in from
+    `app_impact()` that were never graph nodes, so the reconstructed set can be
+    a strict SUPERSET of the real node set. A superset only ever LOWERS the
+    Jaccard against an arriving snapshot, so the error direction is
+    "occasionally fails to adopt" — today's behaviour — never a false adoption.
+
+    Returns None when no entity is reconstructable (an object built entirely
+    from entity types `affected()` does not bucket) or when the radius exceeds
+    CORR_OWNERSHIP_SEED_ENTITIES_MAX: both are skipped rather than seeded with a
+    partial identity that would be scored as if it were whole.
+    """
+    nodes: list[Node] = []
+    for bucket, etype in _SEED_BUCKET_TYPE.items():
+        members = affected.get(bucket)
+        if not isinstance(members, list):
+            continue
+        for raw in members:
+            if not isinstance(raw, str) or not raw:
+                continue
+            if len(nodes) >= CORR_OWNERSHIP_SEED_ENTITIES_MAX:
+                return None
+            nodes.append(Node(
+                key=f"{etype.value}:{raw}:{_SEED_NODE_KIND}", entity_type=etype,
+                entity_id=raw, kind=_SEED_NODE_KIND, signals=(),
+                onset=window_start, onset_uncertainty_s=0.0,
+                peak_severity=Severity.INFO))
+    if not nodes:
+        return None
+    nodes.sort(key=lambda n: n.key)
+    return ObjectSnapshot(
+        correlation_id=cid, tenant_id=tenant, window_start=window_start,
+        window_end=window_end, trigger_signal="", nodes=tuple(nodes), edges=(),
+        ranking=_SEED_RANKING, seams=(), engine_ver="", topology_version="",
+        gap_hints=0)
+
+
+def _seed_only(reg: dict) -> bool:
+    """Is this registration a seeded identity placeholder no evidence has
+    adopted yet?
+
+    Such a registration holds an object's IDENTITY and nothing else, so it must
+    never be PERSISTED: a terminal version rendered from a placeholder would
+    publish an empty verdict over the real one the previous owner left behind —
+    strictly worse than the fragmentation this change exists to remove. The
+    three terminal paths (lifecycle merge, quiesce, the 163 cap) therefore DROP
+    an unadopted placeholder instead of closing it, counted
+    (`corr_ownership_seed_expired_total`) and never silent. Its durable row is
+    left exactly as the previous owner wrote it.
+
+    This is also the whole of the tracker-187 interaction: a placeholder takes
+    none of the three terminal paths, so it contributes no `_affected_final`
+    union and cannot weaken the monotone invariant. Once ADOPTED the flag is
+    gone and the object is an ordinary open object on every path — with its
+    AffectedHistory pre-seeded from the pre-handoff radius, which is what makes
+    187's union span the handoff instead of restarting at it.
+    """
+    return bool(reg.get("seed_only"))
+
+
+def _seed_expire(cid: str, why: str) -> None:
+    """Drop an unadopted placeholder. Counted, never a persisted version."""
+    global OWNERSHIP_SEED_EXPIRED_TOTAL
+    OWNERSHIP_SEED_EXPIRED_TOTAL += 1
+    OPEN_OBJECTS.pop(cid, None)
+    _ARCHIVE_SLICE_HASH.pop(cid, None)
+    log.debug("ownership seed %s expired unadopted (%s) — durable row untouched",
+              cid[:8], why)
+
+
+def _seed_adopted(reg: dict, cid: str) -> None:
+    """Arriving evidence has adopted a seeded identity: this is the whole point
+    of the change, so it is INFO, not debug."""
+    global OWNERSHIP_ADOPTIONS_TOTAL
+    if not reg.pop("seed_only", False):
+        return
+    OWNERSHIP_ADOPTIONS_TOTAL += 1
+    log.info("corr-object %s identity ADOPTED across partition handoff "
+             "(tracker 155: continues at v%d under its original id, no fragment)",
+             cid[:8], reg["version"] + 1)
+
+
+async def _seed_ch_query(sql: str) -> list[dict]:
+    """One bounded, retried ClickHouse read for the seed (§9).
+
+    Every attempt has its own timeout; the retry is jittered so a fleet-wide
+    rebalance does not turn into a synchronized burst against one ClickHouse.
+    Raises the last error — the caller counts it and falls back."""
+    assert ch is not None
+    last: Exception = RuntimeError("no attempt made")
+    for attempt in range(CORR_OWNERSHIP_SEED_ATTEMPTS):
+        try:
+            return await asyncio.wait_for(
+                ch.query(sql), timeout=CORR_OWNERSHIP_SEED_TIMEOUT_S)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:  # noqa: BLE001 — best-effort by contract
+            last = exc
+            if attempt + 1 < CORR_OWNERSHIP_SEED_ATTEMPTS:
+                # The same full-jitter backoff the insert path uses, and for the
+                # same reason: a fleet-wide rebalance must not turn every
+                # replica's seed into one synchronized burst against ClickHouse.
+                await asyncio.sleep(ch_retry_delay(attempt + 1))
+    raise last
+
+
+async def _seed_owned_tenants(partitions: frozenset[int]) -> tuple[str, ...]:
+    """Which tenants' objects belong to the partitions this replica just
+    acquired.
+
+    §3a. There is no in-process tenant registry to consult — the whole problem
+    is that this replica has never seen these tenants — so the universe is
+    discovered from ClickHouse. The discovery probe returns tenant IDs ONLY, no
+    tenant data, and its result is narrowed to the acquired partitions BEFORE a
+    single row is read; the row query below is then explicitly scoped to that
+    narrowed list, so an object belonging to a tenant this replica does not own
+    is never fetched, let alone registered.
+    """
+    total = max((n for t in TOPICS
+                 if (n := CONSUMER_PARTITION_TOTALS.get(t)) is not None), default=0)
+    if total <= 0:
+        return ()
+    sql = (
+        "SELECT DISTINCT tenant_id FROM netops.corr_current "
+        "WHERE state = 'open' "
+        f"AND created_at >= now64(3) - toIntervalSecond({CORR_OWNERSHIP_SEED_HORIZON_S:.3f}) "
+        f"LIMIT {int(CORR_OWNERSHIP_SEED_TENANTS_MAX)} FORMAT JSON"
+    )
+    owned: list[str] = []
+    for row in await _seed_ch_query(sql):
+        tenant = row.get("tenant_id")
+        if not isinstance(tenant, str) or not _seed_safe_tenant(tenant):
+            continue
+        if tenant_partition(canon_tenant(tenant), total) in partitions:
+            owned.append(tenant)
+    return tuple(sorted(set(owned)))
+
+
+def _seed_sql(tenants: tuple[str, ...]) -> str:
+    """The seed's row query — latest version per object, open only, horizoned,
+    tenant-scoped, capped.
+
+    `corr_current FINAL` is the source rather than a GROUP BY over
+    `corr_objects`, and that is a correctness choice before it is a cost one:
+    corr_current holds exactly ONE row per (tenant, correlation_id) — the
+    "latest version per correlation_id" this seed is defined in terms of — and
+    it is a ReplacingMergeTree, so FINAL is the read pattern init.sql designed
+    it for (its partition key is tenant ALONE precisely so FINAL can collapse
+    re-persists). Without FINAL a superseded `open` row could outlive the
+    `closed` row that replaced it and the seed would resurrect a closed object.
+    It is also the cheap side: narrow columns, one partition per tenant, no
+    blobs — versus a scan of a day's worth of `corr_objects` versions
+    (10,960 in one 155a arm alone).
+
+    `count() OVER ()` is evaluated over the full filtered result before LIMIT
+    applies, so the over-cap overflow is EXACT rather than "at least one".
+    """
+    tlist = ", ".join(f"'{t}'" for t in tenants)
+    return f"""
+      SELECT tenant_id,
+             toString(correlation_id)              AS correlation_id,
+             version,
+             toUnixTimestamp64Milli(window_start)  AS window_start_ms,
+             toUnixTimestamp64Milli(window_end)    AS window_end_ms,
+             affected,
+             toUnixTimestamp64Milli(created_at)    AS created_at_ms,
+             count() OVER ()                       AS open_total
+        FROM netops.corr_current FINAL
+       WHERE tenant_id IN ({tlist})
+         AND state = 'open'
+         AND created_at >= now64(3) - toIntervalSecond({CORR_OWNERSHIP_SEED_HORIZON_S:.3f})
+       ORDER BY created_at DESC, correlation_id
+       LIMIT {int(CORR_OWNERSHIP_SEED_MAX)}
+      FORMAT JSON
+    """  # nosec B608 — tenant ids are charset-validated (_seed_safe_tenant); every
+    # other interpolation is an int()/float() cast of a module constant.
+
+
+def _seed_register(row: Mapping[str, object], now: datetime,
+                   owned: frozenset[str]) -> bool:
+    """Turn ONE durable row into an identity placeholder in OPEN_OBJECTS.
+
+    IDEMPOTENT BY CORRELATION_ID, which is what makes a second rebalance inside
+    the cold window (or a re-run of a cancelled seed) a no-op: a correlation_id
+    already in OPEN_OBJECTS is left completely alone. That rule also protects
+    the live case — an object this replica opened itself, or one the cycle
+    running concurrently with this task has already created, is never clobbered
+    by a placeholder built from an older durable row.
+
+    VERSION NUMBERING. `reg["version"]` is seeded with the loaded version, so
+    the first version this replica persists for the object is loaded+1 —
+    strictly above the durable maximum, which is what makes the continuation
+    monotone across the handoff for the first time. corr_current.version IS the
+    last version number `_persist_snapshot`/`_touch_current` wrote for the
+    object, so the only way corr_objects can hold a version >= the loaded one is
+    a corr_current dual-write that failed while the corr_objects write landed —
+    a condition that is already counted (PROJECTION_WRITE_FAILURES), already
+    self-heals on the next material persist, and is force-repaired by the Go
+    corr_current reconciler. In that window the seed re-uses a version number —
+    which is EXACTLY what HEAD does on every single handoff today, where
+    numbering restarts at 1 with different content, and it is absorbed by the
+    same two guards HEAD already relies on there: the content-hash suffix on the
+    insert dedup token (`obj:<cid>:v<n>:<state>:<hash16>`), and
+    corr_current's ReplacingMergeTree(created_at) latest-write-wins. So seeding
+    cannot make version numbering worse than HEAD, and in every other case it
+    makes it strictly better.
+
+    LATE FINAL VERSION FROM THE OLD OWNER (155a saw revoke-hook commits land
+    after the move). The previous owner still holds this object in ITS
+    OPEN_OBJECTS — 155's orphan half is unchanged by this design — and may
+    persist one more version, terminal or not, while this replica seeds. That
+    row carries its own content-derived dedup token, so it is never dropped and
+    never duplicated; if it is terminal, corr_current flips to closed and this
+    replica's next adopted version (later created_at) flips it back to open,
+    which is the truth. Nothing here reads corr_current again, so a late write
+    cannot corrupt the seeded state either.
+
+    QUIESCE CLOCK. `last_seen` comes from the object's own durable timestamps,
+    so a placeholder is subject to exactly the same CORR_QUIESCE_S rule as an
+    in-process object and can never be frozen open forever. It is clamped so
+    that a placeholder always gets at least one COLD WINDOW
+    (RETENTION_REQUIRED_S) before quiesce may drop it: the window has not
+    refilled before then, so closing it sooner would be judging the object on
+    evidence this replica structurally could not yet have seen.
+    """
+    global OWNERSHIP_SEED_SKIPPED_TOTAL
+    tenant = row.get("tenant_id")
+    cid = row.get("correlation_id")
+    if not isinstance(tenant, str) or not isinstance(cid, str) or not cid:
+        OWNERSHIP_SEED_SKIPPED_TOTAL += 1
+        return False
+    # §3a, belt AND braces: the query is already tenant-scoped, and a row that
+    # came back outside the scope is refused here rather than trusted.
+    if tenant not in owned:
+        OWNERSHIP_SEED_SKIPPED_TOTAL += 1
+        log.warning("ownership seed refused an out-of-scope tenant row "
+                    "(tenant=%s) — the query scope and the result disagree", tenant)
+        return False
+    if cid in OPEN_OBJECTS:
+        return False                      # idempotent: live state always wins
+    window_start = _seed_dt(row.get("window_start_ms"))
+    window_end = _seed_dt(row.get("window_end_ms"))
+    written = _seed_dt(row.get("created_at_ms"))
+    if window_start is None or window_end is None or written is None:
+        OWNERSHIP_SEED_SKIPPED_TOTAL += 1
+        return False
+    raw_affected = row.get("affected")
+    affected: dict = {}
+    if isinstance(raw_affected, str) and raw_affected:
+        try:
+            parsed = json.loads(raw_affected)
+        except ValueError:
+            parsed = None
+        if isinstance(parsed, dict):
+            affected = parsed
+    snap = _seed_snapshot(tenant, cid, window_start, window_end, affected)
+    if snap is None:
+        OWNERSHIP_SEED_SKIPPED_TOTAL += 1
+        return False
+    # The placeholder may not be quiesced before it has had one cold window to
+    # be adopted in (see the docstring).
+    floor = now.timestamp() - CORR_QUIESCE_S + RETENTION_REQUIRED_S
+    last_seen = max(written, datetime.fromtimestamp(floor, timezone.utc))
+    hist = AffectedHistory(CORR_AFFECTED_HISTORY_MAX)
+    # Tracker 187 spans the handoff: the accumulator starts from the blast
+    # radius the object had accumulated BEFORE the move, so the final union this
+    # replica publishes at close is over the object's whole life, not just the
+    # part this process witnessed.
+    hist.note({k: v for k, v in affected.items()
+               if isinstance(v, list) and all(isinstance(x, str) for x in v)})
+    OPEN_OBJECTS[cid] = {
+        "version": max(0, _seed_int(row.get("version"), 0)),
+        # Sentinel hashes no content_hash/material_hash can ever equal (both are
+        # sha256 hex), so the FIRST arriving snapshot always takes the
+        # material-moved persist branch: a placeholder can never damp away the
+        # version that proves the identity was adopted.
+        "hash": "", "material": "",
+        "affected_hist": hist,
+        "last_seen": last_seen, "last_persist": written, "last_version": written,
+        "snapshot": snap, "opened_at": window_start,
+        "seed_only": True,
+    }
+    return True
+
+
+async def _run_ownership_seed(partitions: frozenset[int]) -> None:
+    """Load the acquired partitions' still-open objects and seed their
+    identities. Fail-open on every error path."""
+    global OWNERSHIP_SEED_RUNS_TOTAL, OWNERSHIP_SEEDED_OBJECTS_TOTAL
+    global OWNERSHIP_SEED_FAILURES_TOTAL, OWNERSHIP_SEED_SKIPPED_TOTAL
+    OWNERSHIP_SEED_RUNS_TOTAL += 1
+    started = time.monotonic()
+    try:
+        tenants = await _seed_owned_tenants(partitions)
+        if not tenants:
+            log.info("ownership seed: no open objects for the %d newly acquired "
+                     "partition(s) — nothing to reconstruct", len(partitions))
+            return
+        rows = await _seed_ch_query(_seed_sql(tenants))
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:  # noqa: BLE001 — fail-open is the contract (§9/§10)
+        OWNERSHIP_SEED_FAILURES_TOTAL += 1
+        log.warning(
+            "ownership seed FAILED for partitions %s (%s: %s) — falling back to "
+            "today's behaviour: in-flight incidents on these partitions will be "
+            "re-keyed under new correlation_ids (tracker 155 fragmentation, not "
+            "an outage). failures_total=%d",
+            sorted(partitions), type(exc).__name__, exc,
+            OWNERSHIP_SEED_FAILURES_TOTAL)
+        return
+    owned = frozenset(tenants)
+    now = datetime.now(timezone.utc)
+    rows = [r for r in rows if isinstance(r, dict)]
+    # Over-cap overflow, EXACT: `open_total` is `count() OVER ()`, evaluated
+    # before the LIMIT. The rows come back newest-durable-write FIRST, so the
+    # cap keeps the freshest objects and skips the OLDEST — the same staleness
+    # order the 163 cap evicts in, and the right one here for a second reason:
+    # an old object is the one least likely to receive further evidence (it is
+    # closest to quiesce), so seeding its identity buys the least, while a
+    # freshly-written object is precisely the in-flight incident the handoff
+    # would otherwise fragment.
+    over = max(0, _seed_int(rows[0].get("open_total"), 0) - len(rows)) if rows else 0
+    if over:
+        OWNERSHIP_SEED_SKIPPED_TOTAL += over
+        log.warning(
+            "ownership seed cap: %d open object(s) beyond "
+            "CORR_OWNERSHIP_SEED_MAX=%d were NOT seeded (oldest durable write "
+            "first) — those incidents may fragment across this handoff. "
+            "skipped_total=%d",
+            over, CORR_OWNERSHIP_SEED_MAX, OWNERSHIP_SEED_SKIPPED_TOTAL)
+    seeded = 0
+    for i, row in enumerate(rows):
+        if _seed_register(row, now, owned):
+            seeded += 1
+        # The registration loop is O(rows) with a per-object node build; yield
+        # so a 2,000-object seed cannot become the loop stall this codebase has
+        # spent three trackers removing.
+        if (i & 0x3F) == 0x3F:
+            await asyncio.sleep(0)
+    OWNERSHIP_SEEDED_OBJECTS_TOTAL += seeded
+    log.info(
+        "ownership seed: %d identity placeholder(s) reconstructed for %d "
+        "tenant(s) across %d newly acquired partition(s) in %.0f ms "
+        "(seeded_total=%d, horizon=%.0fs, cap=%d)",
+        seeded, len(tenants), len(partitions), (time.monotonic() - started) * 1000,
+        OWNERSHIP_SEEDED_OBJECTS_TOTAL, CORR_OWNERSHIP_SEED_HORIZON_S,
+        CORR_OWNERSHIP_SEED_MAX)
+
+
+def _ownership_seed_done(task: asyncio.Task) -> None:
+    """Never let a seed die unobserved (§10)."""
+    global OWNERSHIP_SEED_FAILURES_TOTAL
+    if task.cancelled():
+        return
+    exc = task.exception()
+    if exc is None:
+        return
+    OWNERSHIP_SEED_FAILURES_TOTAL += 1
+    log.warning("ownership seed task raised %s — falling back to today's "
+                "behaviour (fragmentation, not an outage). failures_total=%d",
+                type(exc).__name__, OWNERSHIP_SEED_FAILURES_TOTAL)
+
+
+def _schedule_ownership_seed(partitions: frozenset[int]) -> None:
+    """Kick the seed for JUST-ACQUIRED partitions and return IMMEDIATELY.
+
+    Not one byte of ClickHouse work happens on this call: `on_partitions_
+    assigned` runs inside the rejoin, and this must never become a second
+    `CORR_REVOKE_BUDGET_S`-class hold on group re-formation. Retained partitions
+    are excluded because their objects are already in this process's memory —
+    re-seeding them would be pure waste (the registration is idempotent, so it
+    would also be harmless).
+    """
+    global _OWNERSHIP_SEED_TASK
+    if not (CORR_OWNERSHIP_SEED and partitions) or ch is None:
+        return
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:                       # no loop (direct/unit invocation)
+        return
+    prev = _OWNERSHIP_SEED_TASK
+    if prev is not None and not prev.done():
+        # A second rebalance inside the cold window supersedes the first: the
+        # newest assignment is the authoritative one. Cancelling a partial seed
+        # is SAFE precisely because registration is idempotent per
+        # correlation_id — nothing is half-written and nothing is double-seeded.
+        prev.cancel()
+    _OWNERSHIP_SEED_TASK = loop.create_task(_run_ownership_seed(partitions))
+    _OWNERSHIP_SEED_TASK.add_done_callback(_ownership_seed_done)
+
 
 class _AssignmentLogger(ConsumerRebalanceListener):
     """Records + logs partition ownership at every rebalance, and verifies the
@@ -8844,6 +9466,12 @@ class _AssignmentLogger(ConsumerRebalanceListener):
         CONSUMER_ASSIGNMENT_SEEN = True
         now_mono = time.monotonic()
         held = {f"{t}:{p}" for t, parts in owned.items() for p in parts}
+        # Tracker 155: the partitions acquired BY THIS CALLBACK — computed
+        # before the setdefault below makes every held key look retained. These,
+        # and only these, carry tenants whose in-flight objects live in another
+        # replica's memory and therefore need their identity reconstructed.
+        acquired = {int(k.rsplit(":", 1)[1])
+                    for k in held - set(CONSUMER_PARTITION_ACQUIRED_AT)}
         for key in list(CONSUMER_PARTITION_ACQUIRED_AT):
             if key not in held:
                 del CONSUMER_PARTITION_ACQUIRED_AT[key]
@@ -8887,6 +9515,10 @@ class _AssignmentLogger(ConsumerRebalanceListener):
                       "have diverged; re-run kafka-init with BUS_PARTITIONS "
                       "and check `kafka-topics --describe`",
                       {t: p for t, p in owned.items()})
+        # Tracker 155, LAST statement of the callback and deliberately so: it
+        # schedules a task and returns, doing no I/O here. Every millisecond
+        # spent in this hook is a millisecond the group is not re-forming.
+        _schedule_ownership_seed(frozenset(acquired))
 
 
 def consumer_state(now_mono: float | None = None) -> str:
@@ -8905,16 +9537,22 @@ def consumer_state(now_mono: float | None = None) -> str:
                      temporarily DEGRADED (thin window) rather than wrong.
       "active"       holds partitions, all held for at least one engine window.
 
-    HONEST LIMITATION (tracker 155). "cold_window" is a TIME-BASED PROXY, not a
-    measurement of carried-over state. `OPEN_OBJECTS` and `WINDOW_BUFFER` are
-    per-process with NO rehydration path, so a partition acquired at a rebalance
-    necessarily starts with none of its tenants' in-flight correlation state —
-    that state is stranded in whichever replica held the partition before. This
-    field therefore reports "the window has not had time to refill yet"; it does
-    NOT and cannot report the deeper loss tracker 155 covers (merges and
-    continuations whose open objects lived in the other replica's memory are
-    gone, and no elapsed time repairs them). Do not read "active" as "no state
-    was lost at the last rebalance".
+    HONEST LIMITATION (tracker 155), NARROWED but not removed. "cold_window" is
+    a TIME-BASED PROXY, not a measurement of carried-over state. `WINDOW_BUFFER`
+    is per-process with NO rehydration path, so a partition acquired at a
+    rebalance still starts with none of its tenants' EVIDENCE — that evidence is
+    stranded in whichever replica held the partition before, and no elapsed time
+    recovers it; the window can only refill from what arrives next. This field
+    therefore reports "the window has not had time to refill yet".
+
+    What it no longer hides is the IDENTITY half. The acquiring replica now
+    reconstructs the still-open objects' identities from ClickHouse at
+    assignment (`_run_ownership_seed`), so an in-flight incident continues under
+    its ORIGINAL correlation_id rather than fragmenting into a new one — which
+    is the loss the 155a run measured (positive-story pass rate 1.00 -> 0.00
+    with detection and specificity both still 1.00). Read the cold window as
+    "thin evidence for these tenants, right identities"; still do not read
+    "active" as "nothing was lost at the last rebalance".
     """
     if not CONSUMER_ASSIGNMENT_SEEN:
         return "pending"
@@ -10428,6 +11066,16 @@ async def lifespan(_app: FastAPI):
     try:
         yield
     finally:
+        # Tracker 155: the ownership seed is not in `tasks` (it is created by a
+        # rebalance callback, not here) but it must not outlive the loop either
+        # — an un-awaited pending task at teardown is exactly the kind of
+        # unobserved death §10 forbids. Cancelling a partial seed is safe:
+        # registration is idempotent per correlation_id.
+        seed_task = _OWNERSHIP_SEED_TASK
+        if seed_task is not None and not seed_task.done():
+            seed_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError, Exception):
+                await seed_task
         for task in tasks:
             task.cancel()
         for task in tasks:
@@ -10618,6 +11266,35 @@ def _metrics_text() -> str:
           for s in ("pending", "idle", "cold_window", "active")),
         "# TYPE corr_consumer_cold_partitions gauge",
         f"corr_consumer_cold_partitions {len(cold_partitions())}",
+        # Tracker 155 — durable continuation seeding across a partition handoff.
+        # READ THEM TOGETHER: `seeded_objects` is how many identities this
+        # replica reconstructed on assignment, `adoptions` how many of them
+        # arriving evidence actually continued (the repair, measured), `expired`
+        # how many were dropped unadopted, and `failures` how many assignments
+        # fell back to HEAD's behaviour (a new correlation_id per in-flight
+        # incident — fragmentation, not an outage). `skipped` counts open
+        # objects the seed did NOT register: beyond CORR_OWNERSHIP_SEED_MAX
+        # (oldest durable write first) or with no reconstructable entity
+        # identity. adoptions/seeded_objects is the ratio the ownership arm
+        # judges; failures > 0 with adoptions flat means ClickHouse, not logic.
+        "# HELP corr_ownership_seed_runs_total Assignments that ran a continuation seed.",
+        "# TYPE corr_ownership_seed_runs_total counter",
+        f"corr_ownership_seed_runs_total {OWNERSHIP_SEED_RUNS_TOTAL}",
+        "# HELP corr_ownership_seeded_objects_total Identity placeholders reconstructed from ClickHouse on assignment.",
+        "# TYPE corr_ownership_seeded_objects_total counter",
+        f"corr_ownership_seeded_objects_total {OWNERSHIP_SEEDED_OBJECTS_TOTAL}",
+        "# HELP corr_ownership_adoptions_total Arriving evidence that continued a seeded identity.",
+        "# TYPE corr_ownership_adoptions_total counter",
+        f"corr_ownership_adoptions_total {OWNERSHIP_ADOPTIONS_TOTAL}",
+        "# HELP corr_ownership_seed_failures_total Seeds that fell back to pre-155 behaviour.",
+        "# TYPE corr_ownership_seed_failures_total counter",
+        f"corr_ownership_seed_failures_total {OWNERSHIP_SEED_FAILURES_TOTAL}",
+        "# HELP corr_ownership_seed_skipped_total Open objects the seed did not register (cap / unreconstructable).",
+        "# TYPE corr_ownership_seed_skipped_total counter",
+        f"corr_ownership_seed_skipped_total {OWNERSHIP_SEED_SKIPPED_TOTAL}",
+        "# HELP corr_ownership_seed_expired_total Placeholders dropped without ever being adopted.",
+        "# TYPE corr_ownership_seed_expired_total counter",
+        f"corr_ownership_seed_expired_total {OWNERSHIP_SEED_EXPIRED_TOTAL}",
         "# TYPE corr_signal_batch_pending gauge",
         f"corr_signal_batch_pending {SIGNAL_BATCH.pending()}",
         # P1: event-loop stall watchdog. corr_loop_lag_stalls_total rising means
@@ -11319,6 +11996,21 @@ def _health_payload() -> dict:
             # flush exceeded CORR_REVOKE_BUDGET_S. Replay-safe, but rising means
             # rebalances are landing on a slow ClickHouse.
             "revoke_skipped": CONSUMER_REVOKE_SKIPPED,
+            # Tracker 155: what the last assignments reconstructed. Named on
+            # /healthz as well as /metrics because the ownership arm reads this
+            # endpoint directly at the moment of the move.
+            "ownership_seed": {
+                "enabled": CORR_OWNERSHIP_SEED,
+                "runs": OWNERSHIP_SEED_RUNS_TOTAL,
+                "seeded_objects": OWNERSHIP_SEEDED_OBJECTS_TOTAL,
+                "adoptions": OWNERSHIP_ADOPTIONS_TOTAL,
+                "failures": OWNERSHIP_SEED_FAILURES_TOTAL,
+                "skipped": OWNERSHIP_SEED_SKIPPED_TOTAL,
+                "expired": OWNERSHIP_SEED_EXPIRED_TOTAL,
+                "pending": sum(1 for r in OPEN_OBJECTS.values() if _seed_only(r)),
+                "horizon_s": round(CORR_OWNERSHIP_SEED_HORIZON_S, 3),
+                "cap": CORR_OWNERSHIP_SEED_MAX,
+            },
         },
         "engine_v2": {
             "corr_signals_enabled": CORR_SIGNALS_ENABLED,
