@@ -69,6 +69,7 @@ case "$1" in
     fmt="$3"
     case "$2" in -f) fmt="$3";; *) fmt="$2";; esac
     case "$fmt" in
+      *StartedAt*)     echo "${FAKE_API_STARTED:-}" ;;
       *RestartCount*)  echo "0 false 0" ;;
       *State.Status*)  echo "running" ;;
       *State.Health*)  echo "healthy" ;;
@@ -113,8 +114,28 @@ exit 0
 '''
 
 FAKE_CURL = r'''#!/bin/sh
+# Models the two HOST-side probes the watchdog makes through nginx :8000.
+#   FAKE_API_DOWN   /admin/version refuses the connection (api process dead)
+#   FAKE_API_5XX    nginx answers 502 (api container up, not serving)
+#   FAKE_API_EMPTY  a 200 with an EMPTY body (not a serving api either)
 printf 'CURL %s\n' "$*" >> "$CURL_LOG"
 case "$*" in
+  */admin/version*)
+    if [ -n "${FAKE_API_DOWN:-}" ]; then
+      echo "curl: (7) Failed to connect to localhost port 8000: Connection refused" >&2
+      printf '\nHTTP:000'
+      exit 7
+    fi
+    if [ -n "${FAKE_API_5XX:-}" ]; then
+      printf '<html>502 Bad Gateway</html>\nHTTP:502'
+      exit 0
+    fi
+    if [ -n "${FAKE_API_EMPTY:-}" ]; then
+      printf '\nHTTP:200'
+      exit 0
+    fi
+    printf '{"version":"0.1.0-scaffold","sha":"cafebabe","identified":true}\nHTTP:200'
+    ;;
   *http_code*) printf '200' ;;
 esac
 exit 0
@@ -369,6 +390,205 @@ def test_m27_packaged_intent_is_applied_via_installer_paths(tmp_path):
     assert r2.returncode == 0, r2.stderr
     assert applier_calls.read_text().count("run") == 1, \
         "unchanged intent must not re-apply (stamp discipline)"
+
+
+# ---------------------------------------------------------------------------
+# Tracker 194 — api liveness through nginx, with a cold-boot grace
+#
+# The blind spot this pins: APP_URL (:8000/) is proxied to the FRONTEND, so the
+# SPA answers 200 with the api dead; nginx declares no /healthz location, so
+# that path falls through to the SPA too; the api container declares no
+# healthcheck, so the container loop reads "running"; and the one api-touching
+# check (build_drift_check) emits BUILD UNVERIFIABLE, which problem_is_critical
+# does not match — advisory only. A two-minute api outage on 2026-08-31 was
+# therefore invisible: no urgent page, and the dead-man's switch kept pinging
+# "healthy" throughout.
+# ---------------------------------------------------------------------------
+
+HC_URL = "https://hc.example.test/ping-token"
+
+
+def _with_hc(etc):
+    """Give the layout a healthchecks.io dead-man URL so the ping/withhold
+    behaviour is observable in the curl log."""
+    envf = etc / "stack-watchdog.env"
+    envf.write_text(envf.read_text() + f"\nHC_PING_URL='{HC_URL}'\n")
+
+
+def _api_state(etc):
+    return etc / ".stack-watchdog.api"
+
+
+def _seed_api_state(etc, first_fail_ago_s: int, escalated: int) -> None:
+    import time
+    _api_state(etc).write_text(f"{int(time.time()) - first_fail_ago_s} {escalated}\n")
+
+
+def test_t194_healthy_api_is_probed_and_pings_the_dead_man(tmp_path):
+    """The probe runs in the normal flow, hits /admin/version through :8000,
+    and a healthy api leaves the dead-man's ping intact."""
+    _, etc, _, _, _ = _installed_layout(tmp_path)
+    _with_hc(etc)
+    r, curl_log = _run(tmp_path, etc, "api-ok")
+    assert r.returncode == 0, f"{r.stderr}\n{r.stdout}"
+    assert "/admin/version" in curl_log, (
+        f"the api liveness probe must actually run every cron minute:\n{curl_log}")
+    assert HC_URL in curl_log, "a healthy stack must still ping the dead-man's switch"
+    assert not _api_state(etc).exists(), \
+        "a passing probe must leave no api-failure state behind"
+
+
+def test_t194_first_failing_minutes_are_graced_but_withhold_the_heartbeat(tmp_path):
+    """Cold boot: ~2.5 min of fault-in must NOT page (every redeploy would),
+    but the dead-man's switch must stop reading 'healthy' immediately — that is
+    the whole point of a dead-man's switch."""
+    _, etc, _, _, _ = _installed_layout(tmp_path)
+    _with_hc(etc)
+    r, curl_log = _run(tmp_path, etc, "api-grace", FAKE_API_DOWN=1)
+    assert r.returncode == 0, f"a graced cold boot is not yet an outage:\n{r.stderr}"
+    assert "cold-boot grace" in r.stderr, r.stderr
+    assert "NetOps stack DOWN" not in curl_log, "no page inside the grace window"
+    assert "NetOps advisory" not in curl_log, \
+        "the grace must add NO push noise — every deploy would fire one"
+    assert HC_URL not in curl_log, (
+        "REQUIREMENT 3: a non-serving api must STOP the healthy dead-man ping, "
+        f"grace or not:\n{curl_log}")
+    assert _api_state(etc).exists(), "the first failure must anchor the grace clock"
+    assert _api_state(etc).read_text().split()[1] == "0", "not escalated yet"
+
+
+def test_t194_sustained_api_outage_escalates_to_a_critical_page(tmp_path):
+    """Past the grace the failure is CRITICAL: it rides the existing up<->down
+    transition machine (urgent push + /fail), and a sustained outage pushes
+    exactly ONCE."""
+    _, etc, _, _, _ = _installed_layout(tmp_path)
+    _with_hc(etc)
+    _seed_api_state(etc, first_fail_ago_s=200, escalated=0)
+
+    r, curl_log = _run(tmp_path, etc, "api-crit", FAKE_API_DOWN=1)
+    assert r.returncode == 1, f"an api outage must fail the run:\n{r.stderr}"
+    assert "API_UNRESPONSIVE" in r.stderr, r.stderr
+    assert "NetOps stack DOWN" in curl_log, (
+        "an api outage must page URGENTLY like any other critical — the "
+        f"pre-fix BUILD UNVERIFIABLE string was advisory only:\n{curl_log}")
+    assert f"{HC_URL}/fail" in curl_log, "a down api must hit the dead-man /fail leg"
+    assert f"{HC_URL} -o" not in curl_log, \
+        "the healthy ping must not also be sent while the api is down"
+    assert _api_state(etc).read_text().split()[1] == "1", "escalation must be recorded"
+
+    # Sustained: no transition, no second page.
+    r2, curl2 = _run(tmp_path, etc, "api-crit-2", FAKE_API_DOWN=1)
+    assert r2.returncode == 1
+    assert "NetOps stack DOWN" not in curl2, (
+        "a sustained outage must not re-push every minute — the problem key "
+        f"must be stable across runs (no digits in its first 160 chars):\n{curl2}")
+
+    # Recovery: one all-clear, and the api state is cleared.
+    r3, curl3 = _run(tmp_path, etc, "api-recover")
+    assert r3.returncode == 0, r3.stderr
+    assert "RECOVERED" in curl3, f"recovery must be announced once:\n{curl3}"
+    assert "api liveness RESTORED" in r3.stderr, r3.stderr
+    assert not _api_state(etc).exists()
+
+
+def test_t194_escalation_is_sticky_across_a_container_restart(tmp_path):
+    """A crash-looping api must not win a fresh 150 s grace every restart —
+    once escalated the verdict holds until a probe actually SUCCEEDS."""
+    import datetime
+    _, etc, _, _, _ = _installed_layout(tmp_path)
+    _seed_api_state(etc, first_fail_ago_s=200, escalated=1)
+    just_now = datetime.datetime.now(datetime.timezone.utc).strftime(
+        "%Y-%m-%dT%H:%M:%S.000000000Z")
+    r, _ = _run(tmp_path, etc, "api-sticky", FAKE_API_DOWN=1,
+                FAKE_API_STARTED=just_now)
+    assert r.returncode == 1, r.stderr
+    assert "API_UNRESPONSIVE" in r.stderr, (
+        "a restart mid-outage must not re-open the grace once escalated: "
+        f"{r.stderr}")
+
+
+def test_t194_a_restart_mid_outage_re_opens_the_boot_budget_once(tmp_path):
+    """The grace anchor is the LATER of first-failure and container start, so a
+    container that has only just started is still inside its cold-boot budget
+    even though the failure itself is older."""
+    import datetime
+    _, etc, _, _, _ = _installed_layout(tmp_path)
+    _seed_api_state(etc, first_fail_ago_s=300, escalated=0)
+    just_now = datetime.datetime.now(datetime.timezone.utc).strftime(
+        "%Y-%m-%dT%H:%M:%S.000000000Z")
+    r, curl_log = _run(tmp_path, etc, "api-restart-grace", FAKE_API_DOWN=1,
+                       FAKE_API_STARTED=just_now)
+    assert r.returncode == 0, f"a just-restarted api is still booting:\n{r.stderr}"
+    assert "cold-boot grace" in r.stderr, r.stderr
+    assert "NetOps stack DOWN" not in curl_log
+
+
+def test_t194_hard_ceiling_beats_a_restart_loop(tmp_path):
+    """The grace can never suppress forever: past API_BOOT_GRACE_MAX_SEC the
+    failure escalates however recently the container started."""
+    import datetime
+    _, etc, _, _, _ = _installed_layout(tmp_path)
+    _seed_api_state(etc, first_fail_ago_s=700, escalated=0)
+    just_now = datetime.datetime.now(datetime.timezone.utc).strftime(
+        "%Y-%m-%dT%H:%M:%S.000000000Z")
+    r, _ = _run(tmp_path, etc, "api-ceiling", FAKE_API_DOWN=1,
+                FAKE_API_STARTED=just_now)
+    assert r.returncode == 1, r.stderr
+    assert "API_UNRESPONSIVE" in r.stderr, r.stderr
+
+
+def test_t194_a_502_and_an_empty_200_both_count_as_not_serving(tmp_path):
+    """nginx answering 502, and a 200 with an empty body, are both 'the api is
+    not serving' — the probe requires 200 AND a body."""
+    for knob, name in (({"FAKE_API_5XX": 1}, "502"), ({"FAKE_API_EMPTY": 1}, "empty")):
+        sub = tmp_path / name
+        sub.mkdir()
+        _, etc, _, _, _ = _installed_layout(sub)
+        _seed_api_state(etc, first_fail_ago_s=200, escalated=0)
+        r, curl_log = _run(sub, etc, f"api-{name}", **knob)
+        assert r.returncode == 1, f"{name}: {r.stderr}"
+        assert "API_UNRESPONSIVE" in r.stderr, f"{name}: {r.stderr}"
+        assert "NetOps stack DOWN" in curl_log, f"{name}: {curl_log}"
+
+
+def test_t194_test_mode_exercises_the_api_probe(tmp_path):
+    """--test must exercise the probe it arms, not only the push channels."""
+    _, etc, bindir, _, _ = _installed_layout(tmp_path)
+    env = os.environ.copy()
+    env.update({"WATCHDOG_ENV": str(etc / "stack-watchdog.env"),
+                "CURL_LOG": str(tmp_path / "curl.test.log")})
+    ok = subprocess.run(["bash", str(etc / "stack-watchdog.sh"), "--test"],
+                        env=env, capture_output=True, text=True, timeout=120)
+    assert ok.returncode == 0, f"{ok.stdout}\n{ok.stderr}"
+    assert "api liveness probe OK" in ok.stdout, ok.stdout
+    assert "/admin/version" in ok.stdout, ok.stdout
+
+    env["FAKE_API_DOWN"] = "1"
+    env["CURL_LOG"] = str(tmp_path / "curl.test2.log")
+    bad = subprocess.run(["bash", str(etc / "stack-watchdog.sh"), "--test"],
+                         env=env, capture_output=True, text=True, timeout=120)
+    assert bad.returncode == 1, (
+        "--test must FAIL loudly when the probe it arms cannot reach the api "
+        f"(§16.1): rc={bad.returncode}\n{bad.stdout}\n{bad.stderr}")
+    assert "api liveness probe FAILED" in bad.stderr, bad.stderr
+    assert "CRITICAL" in bad.stderr, "say what a sustained failure would do"
+
+
+def test_t194_api_liveness_is_wired_into_the_main_flow_and_classified():
+    """Contract pins, so the probe cannot be quietly downgraded again."""
+    text = WATCHDOG.read_text()
+    assert re.search(r"^check_api_liveness$", text, re.M), \
+        "check_api_liveness is defined but never called"
+    assert 'API_PROBE_URL="${API_PROBE_URL:-${APP_URL%/}/admin/version}"' in text, \
+        "the api probe must target /admin/version — the one route only the api answers"
+    assert 'API_STATE="${WATCHDOG_API_STATE:-$SCRIPT_DIR/.stack-watchdog.api}"' in text, \
+        "the grace state must ride the same overridable state-file mechanism"
+    crit = re.search(r"problem_is_critical\(\) \{(.*?)\n\}", text, re.S)
+    assert crit and "API_UNRESPONSIVE" in crit.group(1), (
+        "API_UNRESPONSIVE must be CRITICAL — an advisory api outage is exactly "
+        "the tracker-194 defect")
+    # The pre-existing advisory stays advisory (requirement 5: no new noise).
+    assert "BUILD UNVERIFIABLE" in text and "BUILD UNVERIFIABLE" not in crit.group(1)
 
 
 # ---------------------------------------------------------------------------

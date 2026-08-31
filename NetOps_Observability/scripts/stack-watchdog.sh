@@ -139,6 +139,69 @@ notify_webhook() {  # status, detail
     || echo "watchdog: webhook notify failed" >&2
 }
 
+# -----------------------------------------------------------------------------
+# API LIVENESS (tracker 194) — the probe that ":8000/" cannot be.
+#
+# The end-to-end probe further down hits APP_URL (:8000/), which nginx's
+# `location /` proxies to the FRONTEND: the SPA answers 200 with the api dead,
+# and default.conf declares no /healthz location, so that path falls through to
+# the SPA too. The api container declares no healthcheck either, so the
+# container loop reads "running" for a process that is not serving. Net effect
+# (observed 2026-08-31 01:48-01:51): a two-minute api outage was invisible —
+# no page, and the dead-man's switch kept reporting "healthy".
+#
+# /admin/version is the one route only the api BINARY can answer (nginx
+# `location /admin/` proxies it to api:8080). A 200 with a non-empty body is
+# proof the api is serving through the same ingress a user would use —
+# transport, nginx and the process in one probe.
+#
+# COLD-BOOT GRACE. The api needs ~2.5 min to serve after a restart on this box
+# (fault-in under redeploy IO pressure), so paging on the first failing minute
+# would fire on every deploy. The grace is measured in WALL CLOCK, not in
+# missed runs: the cron cadence is NOT a reliable clock — the flock above
+# legitimately skips minutes when dockerd wedges, and a packaged install may
+# schedule this at another interval, so a "3 consecutive misses" counter means
+# a different amount of real time on every host (§16.2: assume nothing about
+# the environment). The anchor is the LATER of
+#   (a) the first failing probe, and
+#   (b) the api container's .State.StartedAt,
+# so a restart landing mid-outage restarts the boot budget exactly once, while
+# a long-running api that starts failing still escalates after the same ~150 s.
+# docker is best-effort here: an unreadable start time degrades to (a) alone,
+# never to an unbounded grace. And the grace can never suppress forever —
+# API_BOOT_GRACE_MAX_SEC is a hard ceiling, and once escalated the verdict is
+# STICKY until a probe actually SUCCEEDS, so a crash-looping api cannot win a
+# fresh grace every minute.
+# -----------------------------------------------------------------------------
+API_PROBE_URL="${API_PROBE_URL:-${APP_URL%/}/admin/version}"
+API_SERVICE="${API_SERVICE:-api}"
+API_STATE="${WATCHDOG_API_STATE:-$SCRIPT_DIR/.stack-watchdog.api}"
+API_BOOT_GRACE_SEC="${API_BOOT_GRACE_SEC:-150}"
+API_BOOT_GRACE_MAX_SEC="${API_BOOT_GRACE_MAX_SEC:-600}"
+API_PROBE_TIMEOUT="${API_PROBE_TIMEOUT:-10}"
+
+# Pure probe: no state, no problems[], no pushes — so --test and the cron flow
+# exercise the SAME code. Prints "<curl-rc> <http-code> <detail>" and returns 0
+# only for a 200 WITH a non-empty body (an empty 200 is not a serving api).
+api_probe_once() {
+  local out rc code body detail
+  out=$(curl -sS -m "$API_PROBE_TIMEOUT" ${APP_CACERT:+--cacert "$APP_CACERT"} \
+          -w '\nHTTP:%{http_code}' "$API_PROBE_URL" 2>&1)
+  rc=$?
+  code=$(printf '%s' "$out" | sed -n 's/.*HTTP:\([0-9]*\).*/\1/p' | tail -1)
+  body=$(printf '%s' "$out" | sed 's/HTTP:[0-9]*//' | tr -d '[:space:]')
+  detail=$(printf '%s' "$out" | tr '\n' ' ' | cut -c1-160)
+  if [ "$rc" -eq 0 ] && [ "${code:-}" = "200" ] && [ -n "$body" ]; then
+    printf '%s %s %s\n' "$rc" "$code" "ok"
+    return 0
+  fi
+  # An empty body carries no curl error text to report — name that explicitly
+  # rather than emitting a blank diagnostic (§16.1).
+  [ -n "$body" ] || detail="${detail:-empty body}"
+  printf '%s %s %s\n' "$rc" "${code:-none}" "${detail:-no output}"
+  return 1
+}
+
 # --test exercises every configured channel so you can confirm delivery
 # (phone subscribed, email arriving, webhook wired), then exits.
 if [ "${1:-}" = "--test" ]; then
@@ -149,7 +212,18 @@ if [ "${1:-}" = "--test" ]; then
     notify_webhook "test" "Test notification from $(hostname) at $(date -Is). If you see this, the webhook channel works."
     echo "Sent test webhook POST to $WATCHDOG_WEBHOOK_URL"
   fi
-  exit 0
+  # Tracker 194: also exercise the api liveness probe. A --test that only
+  # proves ntfy delivers cannot tell you the probe it arms is pointed at
+  # anything real, and this probe is the one that pages for an api outage.
+  if t_out=$(api_probe_once); then
+    read -r t_rc t_code t_detail <<<"$t_out"
+    echo "api liveness probe OK: $API_PROBE_URL -> HTTP $t_code, non-empty body (curl rc=$t_rc, ${t_detail})"
+    exit 0
+  fi
+  read -r t_rc t_code t_detail <<<"$t_out"
+  echo "api liveness probe FAILED: $API_PROBE_URL -> curl rc=$t_rc HTTP=$t_code: $t_detail" >&2
+  echo "watchdog: sustained past the ${API_BOOT_GRACE_SEC}s cold-boot grace this is classified CRITICAL (urgent push, and the healthy heartbeat stops)" >&2
+  exit 1
 fi
 
 # M25: overlap guard. When dockerd wedges, a run outlives its minute; without
@@ -573,6 +647,79 @@ case "$code" in
   200|301|302|401) ;;                               # served (401 = auth on / is fine)
   *) problems+=("dashboard $APP_URL: HTTP ${code:-no-response}") ;;
 esac
+
+# API liveness verdict (tracker 194). The design note lives beside
+# api_probe_once above; this half owns the STATE: the cold-boot grace, the
+# sticky escalation, and the CRITICAL classification that drives the existing
+# up<->down transition machine (problem_is_critical matches API_UNRESPONSIVE,
+# so a new one pushes urgently exactly like a dead service).
+api_probe_failing=0
+
+api_started_epoch() {  # -> unix epoch of the api container's start, or nothing
+  local cid started
+  cid=$(dkr ps -q --filter "label=com.docker.compose.project=$PROJECT" \
+                  --filter "label=com.docker.compose.service=$API_SERVICE" 2>/dev/null | head -1)
+  [ -n "$cid" ] || return 0
+  started=$(dkr inspect -f '{{.State.StartedAt}}' "$cid" 2>/dev/null) || return 0
+  [ -n "$started" ] || return 0
+  # RFC3339 with nanoseconds; GNU date parses it. A host whose `date` cannot
+  # (busybox) yields no start time and the grace falls back to the
+  # first-failure anchor — degraded, never unbounded (§16.2).
+  started=$(date -d "$started" +%s 2>/dev/null) || return 0
+  case "$started" in ''|*[!0-9]*) return 0 ;; esac
+  printf '%s' "$started"
+}
+
+check_api_liveness() {
+  local p_out p_rc p_code p_detail now first_fail escalated started anchor elapsed
+  if p_out=$(api_probe_once); then
+    if [ -f "$API_STATE" ]; then
+      echo "watchdog: api liveness RESTORED — $API_PROBE_URL answers 200 with a body again" >&2
+      rm -f "$API_STATE" 2>/dev/null ||
+        echo "watchdog: could not clear $API_STATE — a stale first-failure anchor will shorten the next cold-boot grace" >&2
+    fi
+    return 0
+  fi
+  read -r p_rc p_code p_detail <<<"$p_out"
+  api_probe_failing=1
+  now=$(date +%s)
+
+  first_fail=""; escalated=0
+  if [ -f "$API_STATE" ]; then
+    read -r first_fail escalated < "$API_STATE" 2>/dev/null || {
+      echo "watchdog: api liveness state $API_STATE unreadable — re-baselining the cold-boot grace" >&2
+      first_fail=""; escalated=0
+    }
+  fi
+  case "${first_fail:-}" in ''|*[!0-9]*) first_fail="$now" ;; esac
+  case "${escalated:-}" in 0|1) ;; *) escalated=0 ;; esac
+  # A first-failure stamp in the FUTURE (clock stepped back) would grant an
+  # unbounded grace — re-baseline instead of trusting it.
+  [ "$first_fail" -gt "$now" ] && first_fail="$now"
+
+  anchor="$first_fail"
+  started=$(api_started_epoch)
+  if [ -n "$started" ] && [ "$started" -gt "$anchor" ] && [ "$started" -le "$now" ]; then
+    anchor="$started"
+  fi
+  elapsed=$(( now - first_fail ))
+
+  if [ "$escalated" = "1" ] ||
+     [ "$elapsed" -ge "$API_BOOT_GRACE_MAX_SEC" ] ||
+     [ $(( now - anchor )) -ge "$API_BOOT_GRACE_SEC" ]; then
+    escalated=1
+    # Keep the first 160 characters — what problem_key hashes — FREE of
+    # run-varying text: the transport detail goes to the log, not into the
+    # key, or every minute would mint a "new" critical class and re-push.
+    problems+=("API_UNRESPONSIVE: the api is not serving $API_PROBE_URL through nginx — the dashboard probe cannot see this, nginx answers / from the SPA whether or not the api is alive. Failing for ${elapsed}s (curl rc=${p_rc}, HTTP ${p_code}); transport detail is in the watchdog log.")
+    echo "watchdog: api liveness CRITICAL after ${elapsed}s: rc=${p_rc} HTTP=${p_code}: ${p_detail}" >&2
+  else
+    echo "watchdog: api liveness failing for ${elapsed}s (rc=${p_rc} HTTP=${p_code}: ${p_detail}) — inside the ${API_BOOT_GRACE_SEC}s cold-boot grace, NOT escalated yet; the healthy heartbeat is withheld this run" >&2
+  fi
+  printf '%s %s\n' "$first_fail" "$escalated" > "$API_STATE" 2>/dev/null ||
+    echo "watchdog: could not persist api liveness state to $API_STATE — the cold-boot grace cannot accumulate, so an api outage may never escalate" >&2
+}
+check_api_liveness
 
 # Disk watermark — the cause of the silent log-ingest outage: OpenSearch sets
 # EVERY index read-only at its 95% flood stage, and ingestion stops with no
@@ -1106,6 +1253,7 @@ problem_is_critical() {
     *": not running"*|*": state="*|*": health="*|"dashboard "*|\
     *PID_LIMIT_REACHED*|*CONTAINER_RUNTIME_EXEC_FAILURE*|\
     *CLICKHOUSE_UNREACHABLE*|*CLICKHOUSE_TLS_FAILURE*|*"CANNOT PROBE"*|\
+    *API_UNRESPONSIVE*|\
     *"log ingest stalled"*)
       return 0 ;;
   esac
@@ -1164,6 +1312,16 @@ write_state() {
 }
 
 if [ ${#problems[@]} -eq 0 ]; then
+  if [ "$api_probe_failing" = 1 ]; then
+    # Tracker 194: the api is not serving, but it is still inside its cold-boot
+    # grace so nothing is CLASSIFIED as a problem yet. The dead-man's switch
+    # must still not read "healthy" — withholding it is the entire point of a
+    # dead-man's switch — and a RECOVERED all-clear here would be a lie. Stay
+    # silent for this run and leave the previous problem set on disk untouched,
+    # so a genuine recovery is still announced once the api answers again.
+    echo "watchdog: healthy heartbeat WITHHELD and the all-clear deferred — the api liveness probe is failing (inside its cold-boot grace)" >&2
+    exit 0
+  fi
   [ -n "${HC_PING_URL:-}" ] && curl -fsS -m 10 "$HC_PING_URL" -o /dev/null
   if [ "$prev_had_any" = 1 ]; then
     push "✅ NetOps stack RECOVERED on $(hostname)" "white_check_mark" "default" \
