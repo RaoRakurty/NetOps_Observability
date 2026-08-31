@@ -5063,6 +5063,13 @@ async def _touch_current(snap: ObjectSnapshot, version: int, state: str,
     assert ch is not None
     global PROJECTION_WRITE_FAILURES
     _t0 = time.perf_counter() if CORR_PROFILE_STAGES else 0.0
+    # Tracker 155b D3. A heartbeat touch writes corr_current and nothing else —
+    # which is EXACTLY the row an operator reads — so a seed-descended object
+    # could be demoted here without a corr_objects version ever recording it.
+    # No-op (identical object) for every other object. The dedup token keeps the
+    # caller's content hash: it is derived from the real recomputed content, and
+    # a touch only ever runs when that content has moved.
+    snap = _seed_verdict_floor(snap)
     tok = f"obj:{snap.correlation_id}:v{version}:{state}:{content_hash[:16]}"
     failure: tuple[str, bool] | None = None
     try:
@@ -5165,6 +5172,13 @@ async def _persist_snapshot(snap: ObjectSnapshot, version: int, state: str,
     version, a heartbeat re-persist or a direct call from outside the engine.
     """
     assert ch is not None
+    # Tracker 155b D3, and deliberately the FIRST statement of the write: every
+    # persisted version — open, heartbeat, terminal — goes through here, so the
+    # verdict floor is applied in exactly one place and cannot be forgotten on a
+    # path. Returns `snap` itself for every object that is not seed-descended
+    # (or whose recomputation is already at least as strong, or whose floor has
+    # expired), so the overwhelmingly common persist is byte-for-byte unchanged.
+    snap = _seed_verdict_floor(snap)
     # P2 step 4 observability: the profiler must show the SPLIT, so the two
     # halves are timed separately — `persist.decision` is what the operator's
     # verdict costs, `persist.evidence` (in _write_evidence) is what the graph
@@ -6317,6 +6331,11 @@ async def _epoch_lifecycle(epoch: _EngineEpoch, loop_yield,
             # forward and the row the previous owner wrote still stands.
             _seed_expire(merged_cid, "merged-away")
             continue
+        # TRACKER 155b D2b: same rule on the terminal paths — an adopted seed
+        # that has never persisted may not write its first (and here, TERMINAL)
+        # version onto a partition this replica no longer owns.
+        if not _seed_owner_guard(merged_cid, reg):
+            continue
         reg["version"] += 1
         VERSIONS_PERSISTED += 1
         _wa_note_outcome(reg["snapshot"].tenant_id, "persisted")
@@ -6368,6 +6387,9 @@ async def _epoch_lifecycle(epoch: _EngineEpoch, loop_yield,
                 # computed. See `_seed_only`.
                 _seed_expire(cid, "quiesce")
                 continue
+            # TRACKER 155b D2b — see `_seed_owner_guard`.
+            if not _seed_owner_guard(cid, reg):
+                continue
             reg["version"] += 1
             VERSIONS_PERSISTED += 1
             _wa_note_outcome(reg["snapshot"].tenant_id, "persisted")
@@ -6411,6 +6433,11 @@ async def _epoch_lifecycle(epoch: _EngineEpoch, loop_yield,
                 # placeholder is NOT a force-closed object and is not counted as
                 # one — it is counted as an expired seed.
                 _seed_expire(cid, "cap")
+                continue
+            # TRACKER 155b D2b — see `_seed_owner_guard`. Dropped here is not a
+            # force-close and is not counted as one (the cap's bound is still
+            # honoured: the entry leaves OPEN_OBJECTS either way).
+            if not _seed_owner_guard(cid, reg):
                 continue
             reg["version"] += 1
             VERSIONS_PERSISTED += 1
@@ -6876,7 +6903,15 @@ async def _engine_cycle_inner(epoch: _EngineEpoch | None) -> None:
                 # registration stops being a placeholder: from here it is an
                 # ordinary open object on every path, with its AffectedHistory
                 # already carrying the pre-handoff blast radius (tracker 187).
-                _seed_adopted(reg, snap.correlation_id)
+                _seed_adopted(reg, snap.correlation_id, now)
+            # TRACKER 155b D2b. Scoped to a registration that adopted a durable
+            # identity and has not written a version of its own yet: its first
+            # version is a corr_current overwrite of ANOTHER replica's row, so
+            # it may only be written while this replica still owns the tenant's
+            # partition. Otherwise the registration is dropped (counted, logged)
+            # and the durable row stands. A no-op for every other object.
+            if reg is not None and not _seed_owner_guard(snap.correlation_id, reg):
+                continue
             if reg is None:
                 OPEN_OBJECTS[snap.correlation_id] = {
                     "version": 1, "hash": chash,
@@ -6949,6 +6984,9 @@ async def _engine_cycle_inner(epoch: _EngineEpoch | None) -> None:
                     await _persist_snapshot(snap, reg["version"], "open", window,
                                             loop_yield=_loop_yield,
                                             priority_class=_pclass)
+                    # A seed-descended object has now written a version of its
+                    # own: the D2b first-persist guard is spent (155b).
+                    _seed_first_persist_done(reg)
                     await _affected_note(reg, snap)
                     VERSIONS_PERSISTED += 1
                     _wa_note_outcome(tenant, "persisted")
@@ -8876,6 +8914,39 @@ def tenant_partition(tenant: str, num_partitions: int) -> int:
 # assignment time is counted (`corr_ownership_seed_failures_total`) and logged,
 # and the replica proceeds EXACTLY as it does today: new ids for in-flight
 # incidents. Fragmentation, never an outage.
+#
+# ── WHAT THE LIVE VALIDATION FOUND (run ownership-155b-08310318, 2026-08-31) ──
+#
+# The mechanism above ran exactly as designed and the incident STILL fragmented.
+# Every acquiring replica seeded (5/5/9/13 placeholders, 75-96 ms, 0 failures, 0
+# fabricated rows), and the positive-story pass rate stayed 0.00 on both
+# disturbed arms. Three defects, all measured, all fixed here:
+#
+#   D1 PLACEHOLDER WINDOW FROZEN. The placeholder's match window was the durable
+#      row's `[window_start, window_end]`, but that end is only the last WRITTEN
+#      evidence time of a still-OPEN incident — the acquiring replica's own
+#      snapshots begin AFTER it (measured gaps 10.1 / 18.0 / 35.4 s), so
+#      `_windows_overlap` never admitted the placeholder: 1 adoption in 32, and
+#      that one only because a window_start exactly EQUALLED a window_end.
+#      Fixed by `ObjectSnapshot.match_slack_s` + CORR_OWNERSHIP_SEED_SLACK_S.
+#
+#   D2 TRANSIENT/REVOKED OWNER WRITES. In the restart arm c4 held the partitions
+#      ~5 s during the bounce, adopted a placeholder, and persisted a thin 3-node
+#      `suspected` v7 NINETEEN SECONDS AFTER revoking them; corr_current's
+#      latest-write-wins then demoted a confirmed 9-node v6. Fixed in both
+#      halves: `_seed_discard_revoked` (revoke drops unadopted placeholders) and
+#      `_seed_owner_guard` (an adopted seed's FIRST version requires the
+#      partition to still be owned).
+#
+#   D3 VERDICT DEMOTION DURING REFILL. Even on the CORRECT owner, the first
+#      post-adoption persist recomputes from a partially-refilled window and can
+#      publish a weaker tier than the durable row it continues (confirmed ->
+#      suspected). Fixed by `_seed_verdict_floor`: an expiring, seed-scoped
+#      FLOOR at the durable tier, with the recomputation declared in the
+#      version's own bytes.
+#
+# All three are scoped to seed-DESCENDED objects and all three EXPIRE. Nothing
+# about an ordinary object's matching, ownership or verdict changes.
 
 # Master switch. On by default: the failure it repairs is live in every
 # multi-replica deployment (the lab runs 2) and the fallback is today's
@@ -8900,6 +8971,35 @@ CORR_OWNERSHIP_SEED_MAX = int(os.environ.get("CORR_OWNERSHIP_SEED_MAX", "2000"))
 # object the previous owner would itself have closed.
 CORR_OWNERSHIP_SEED_HORIZON_S = float(os.environ.get(
     "CORR_OWNERSHIP_SEED_HORIZON_S", str(CORR_QUIESCE_S + RETENTION_REQUIRED_S)))
+# ── Tracker 155b (D1 + D3): THE COLD-WINDOW BRIDGE ───────────────────────────
+#
+# One constant, two uses, because they are the SAME interval measured from the
+# same statement: RETENTION_REQUIRED_S is the engine's own answer to "how far
+# back can evidence still attach to this window", i.e. exactly how long the
+# acquiring replica needs before its window is refilled.
+#
+#   (D1) MATCHING. `corr_current.window_end` is the last WRITTEN evidence time
+#        of a still-OPEN incident, not the incident's end — but `_seed_register`
+#        froze the placeholder there, and the acquiring replica's first snapshot
+#        necessarily begins AFTER it (the cold window is spent refilling). So
+#        `_windows_overlap` never admitted the placeholder as a continuation
+#        candidate: run ownership-155b-08310318 measured gaps of 10.1 / 18.0 /
+#        35.4 s and 1 adoption in 32 placeholders, that one only via an
+#        inclusive-boundary touch. A placeholder's MATCH window (never its
+#        persisted window — a placeholder is never persisted) is therefore
+#        extended by this slack; live-object matching is untouched.
+#
+#   (D3) VERDICT FLOOR HORIZON. The first post-adoption persist recomputes from
+#        the same partially-refilled window, so it can publish a WEAKER tier
+#        than the durable row it continues (155b measured confirmed -> suspected
+#        demoting the current row). The floor holds for exactly this interval
+#        after adoption and then expires — after it, recomputation rules
+#        unconditionally, because a genuine recovery must be able to downgrade.
+#
+# Derived from RETENTION_REQUIRED_S rather than chosen, so an operator who
+# re-times the engine window re-times the bridge with it and cannot leave a gap.
+CORR_OWNERSHIP_SEED_SLACK_S = max(0.0, float(os.environ.get(
+    "CORR_OWNERSHIP_SEED_SLACK_S", str(RETENTION_REQUIRED_S))))
 # Per-QUERY bound (§9: all IO has a timeout). Two attempts with jittered
 # backoff, then give up and fail open — the seed is best-effort by contract.
 CORR_OWNERSHIP_SEED_TIMEOUT_S = float(
@@ -8925,6 +9025,15 @@ OWNERSHIP_ADOPTIONS_TOTAL = 0        # arriving evidence that adopted one
 OWNERSHIP_SEED_FAILURES_TOTAL = 0    # seeds that fell back to today's behaviour
 OWNERSHIP_SEED_SKIPPED_TOTAL = 0     # open objects the seed did NOT register
 OWNERSHIP_SEED_EXPIRED_TOTAL = 0     # placeholders dropped unadopted
+# Tracker 155b D2a: placeholders discarded because their partition was REVOKED.
+OWNERSHIP_SEED_REVOKED_TOTAL = 0
+# Tracker 155b D2b: adopted seeds dropped BEFORE their first version because the
+# tenant's partition was no longer owned at persist time.
+OWNERSHIP_SEED_UNOWNED_DROPPED_TOTAL = 0
+# Tracker 155b D3: published versions whose verdict tier was carried from the
+# durable row across the handoff (the recomputation was weaker, window not yet
+# refilled).
+OWNERSHIP_SEED_VERDICT_CARRIED_TOTAL = 0
 _OWNERSHIP_SEED_TASK: asyncio.Task | None = None
 
 # The `kind` a placeholder's reconstructed nodes carry. Distinct on purpose: it
@@ -8954,6 +9063,16 @@ _SEED_BUCKET_TYPE: dict[str, EntityType] = {
 _SEED_RANKING = RankingResult(
     top_hypothesis="undetermined", verdict_tier=VerdictTier.UNDETERMINED,
     hypotheses=(), evidence_missing=(), catalog_version="")
+# Tracker 155b D3: the tier ORDER, spelled once. It mirrors the ClickHouse
+# Enum8 in init.sql ('undetermined'=0,'suspected'=1,'confirmed'=2), which is
+# what makes "weaker than the durable row" the same statement in the engine and
+# in the store. `.get(..., 0)` everywhere, so an unknown tier is the weakest and
+# can never be used to floor anything up.
+_VERDICT_RANK: dict[VerdictTier, int] = {
+    VerdictTier.UNDETERMINED: 0,
+    VerdictTier.SUSPECTED: 1,
+    VerdictTier.CONFIRMED: 2,
+}
 # Tenant ids are opaque platform ids (`t_…`, or the canonical "global"). They
 # are interpolated into SQL, so they are validated against an explicit charset
 # first — `ch.query` posts raw SQL and ClickHouse honours backslash escapes, so
@@ -9043,7 +9162,13 @@ def _seed_snapshot(tenant: str, cid: str, window_start: datetime,
         correlation_id=cid, tenant_id=tenant, window_start=window_start,
         window_end=window_end, trigger_signal="", nodes=tuple(nodes), edges=(),
         ranking=_SEED_RANKING, seams=(), engine_ver="", topology_version="",
-        gap_hints=0)
+        gap_hints=0,
+        # Tracker 155b D1. `window_end` stays the DURABLE value — this is an
+        # identity reconstruction and it may not misreport the row it was built
+        # from. What is extended is only what `_windows_overlap` matches
+        # against, and only for this placeholder: see
+        # CORR_OWNERSHIP_SEED_SLACK_S and engine._match_window_end.
+        match_slack_s=CORR_OWNERSHIP_SEED_SLACK_S)
 
 
 def _seed_only(reg: dict) -> bool:
@@ -9079,16 +9204,221 @@ def _seed_expire(cid: str, why: str) -> None:
               cid[:8], why)
 
 
-def _seed_adopted(reg: dict, cid: str) -> None:
+def _seed_adopted(reg: dict, cid: str, now: datetime) -> None:
     """Arriving evidence has adopted a seeded identity: this is the whole point
-    of the change, so it is INFO, not debug."""
+    of the change, so it is INFO, not debug.
+
+    Adoption also arms the two tracker-155b guards, both of which are scoped to
+    seed-DESCENDED objects and both of which expire:
+
+      * `seed_pending_first_persist` — this object has adopted a durable
+        identity but has not yet written a version of its own. Until it does,
+        `_seed_owner_guard` refuses to let it persist on a partition this
+        replica no longer owns (155b D2b: a transient owner wrote a thin v7
+        NINETEEN SECONDS after revoking the partition and, by corr_current
+        latest-write-wins, demoted the confirmed v6 it continued).
+      * `verdict_floor` — the durable row's tier + top hypothesis, held as a
+        FLOOR until the window has refilled (155b D3). See
+        `_seed_verdict_floor`.
+    """
     global OWNERSHIP_ADOPTIONS_TOTAL
+    tier = reg.pop("seed_tier", None)
+    hypothesis = reg.pop("seed_hypothesis", "")
     if not reg.pop("seed_only", False):
         return
     OWNERSHIP_ADOPTIONS_TOTAL += 1
+    reg["seed_pending_first_persist"] = True
+    # UNDETERMINED is the bottom tier — flooring with it can never change a
+    # published row, so it is not armed at all (no state, no expiry to reason
+    # about).
+    if isinstance(tier, VerdictTier) and tier is not VerdictTier.UNDETERMINED:
+        reg["verdict_floor"] = tier
+        reg["verdict_floor_hypothesis"] = hypothesis
+        # Epoch SECONDS, not a datetime: the module's `datetime` is a patch
+        # point (the tests substitute a fixed clock), so an `isinstance`
+        # narrowing against it would silently disarm the floor under a
+        # subclassed clock. A float has no such ambiguity.
+        reg["verdict_floor_until"] = now.timestamp() + CORR_OWNERSHIP_SEED_SLACK_S
     log.info("corr-object %s identity ADOPTED across partition handoff "
              "(tracker 155: continues at v%d under its original id, no fragment)",
              cid[:8], reg["version"] + 1)
+
+
+def _seed_partition_total(default: int = 0) -> int:
+    """How many partitions the bus topics carry, as this replica last saw them.
+
+    The same derivation `_seed_owned_tenants` uses — the maximum across the
+    topics it holds a total for — so "which partition does tenant T live on" is
+    answered identically wherever it is asked.
+    """
+    return max((n for t in TOPICS
+                if (n := CONSUMER_PARTITION_TOTALS.get(t)) is not None),
+               default=default)
+
+
+def _seed_tenant_owned(tenant: str) -> bool:
+    """Does this replica still own the partition `tenant`'s records land on?
+
+    Reuses `tenant_partition` — the single source of truth for "which instance
+    owns tenant T", the same function the seed itself scopes its query with —
+    against the assignment the last rebalance callback recorded.
+
+    DEFAULT-OPEN ONLY WHERE THERE IS NO KNOWLEDGE TO BE DEFAULT-CLOSED ABOUT: a
+    process that has never had an assignment callback (single-process dev, a
+    direct unit invocation, a broker-less run) has no partitions to lose and no
+    rebalance can have taken any away, so it answers True and behaves exactly as
+    HEAD does. Once an assignment HAS been seen, the answer is the assignment.
+    """
+    if not CONSUMER_ASSIGNMENT_SEEN:
+        return True
+    total = _seed_partition_total()
+    if total <= 0:
+        return True
+    part = tenant_partition(canon_tenant(tenant), total)
+    return any(part in parts for parts in CONSUMER_ASSIGNMENT.values())
+
+
+def _seed_discard_revoked(revoked_partitions: frozenset[int]) -> int:
+    """Tracker 155b D2a: drop the identity placeholders of REVOKED partitions.
+
+    A placeholder is a promise to continue an incident THIS replica owns. The
+    moment its partition moves away, the promise belongs to another replica —
+    and keeping it is not neutral: 155b measured a replica that held partitions
+    for ~5 s during a bounce, adopted a placeholder it had seeded, and persisted
+    a thin 3-node `suspected` version 19 s AFTER revoking the partition, which
+    corr_current's latest-write-wins then made the current row over a confirmed
+    9-node version. Discarding here removes the adoption path entirely; the
+    complementary guard (`_seed_owner_guard`) catches an object that was already
+    adopted when the revoke landed.
+
+    Only UNADOPTED placeholders are touched. An ordinary open object is left
+    exactly as HEAD leaves it — the pre-existing orphan half of tracker 155 is
+    not this change's business, and dropping live state would lose evidence.
+    """
+    global OWNERSHIP_SEED_REVOKED_TOTAL
+    if not revoked_partitions:
+        return 0
+    total = _seed_partition_total()
+    if total <= 0:
+        return 0
+    victims = [cid for cid, reg in OPEN_OBJECTS.items()
+               if _seed_only(reg)
+               and tenant_partition(canon_tenant(reg["snapshot"].tenant_id),
+                                    total) in revoked_partitions]
+    for cid in victims:
+        OPEN_OBJECTS.pop(cid, None)
+        _ARCHIVE_SLICE_HASH.pop(cid, None)
+        OWNERSHIP_SEED_REVOKED_TOTAL += 1
+    if victims:
+        log.info("ownership seed: discarded %d unadopted identity "
+                 "placeholder(s) for revoked partition(s) %s — their incidents "
+                 "belong to the acquiring replica now (revoked_total=%d)",
+                 len(victims), sorted(revoked_partitions),
+                 OWNERSHIP_SEED_REVOKED_TOTAL)
+    return len(victims)
+
+
+def _seed_owner_guard(cid: str, reg: dict) -> bool:
+    """Tracker 155b D2b: may this registration persist its FIRST version?
+
+    True for every ordinary object — the guard is scoped to registrations that
+    were ADOPTED FROM A PLACEHOLDER and have persisted nothing of their own yet,
+    and it is disarmed the moment such an object writes a version. Nothing about
+    a non-seed-descended object's lifecycle changes.
+
+    For that one class it asks the only question that matters: does this replica
+    still own the tenant's partition? A seed-descended object's identity comes
+    from ANOTHER replica's durable row, and its first version is a `corr_current`
+    latest-write-wins overwrite of that row. Writing it from a replica that has
+    already handed the partition back does not continue the incident, it
+    DEMOTES it — measured, 155b restart arm. So the registration is dropped
+    without persisting: the durable row the previous owner left stands, and the
+    replica that now owns the partition seeds and continues it.
+
+    Counted (`corr_ownership_seed_unowned_dropped_total`) and logged at INFO —
+    an operator must be able to see it happen, and it is a correct outcome
+    rather than a fault.
+    """
+    global OWNERSHIP_SEED_UNOWNED_DROPPED_TOTAL
+    if not reg.get("seed_pending_first_persist"):
+        return True
+    snap = reg.get("snapshot")
+    tenant = snap.tenant_id if snap is not None else ""
+    if _seed_tenant_owned(tenant):
+        return True
+    OWNERSHIP_SEED_UNOWNED_DROPPED_TOTAL += 1
+    OPEN_OBJECTS.pop(cid, None)
+    _ARCHIVE_SLICE_HASH.pop(cid, None)
+    log.info("corr-object %s adopted a seeded identity but this replica no "
+             "longer owns its tenant's partition — dropped WITHOUT persisting, "
+             "so the durable row the previous owner wrote still stands "
+             "(tracker 155b, unowned_dropped_total=%d)",
+             cid[:8], OWNERSHIP_SEED_UNOWNED_DROPPED_TOTAL)
+    return False
+
+
+def _seed_first_persist_done(reg: dict) -> None:
+    """A seed-descended object has written a version of its own: disarm D2b."""
+    reg.pop("seed_pending_first_persist", None)
+
+
+def _seed_verdict_floor(snap: ObjectSnapshot) -> ObjectSnapshot:
+    """Tracker 155b D3: hold a seed-descended object's PUBLISHED verdict at the
+    tier its durable row already earned, until this replica's window refills.
+
+    THE DEFECT, measured on the correct owner in run ownership-155b-08310318:
+    the first persist after an adoption recomputes from a window that has only
+    partially refilled, so it can publish a strictly weaker tier than the row it
+    continues (confirmed -> suspected) — and `corr_current` is
+    latest-write-wins, so the incident an operator is looking at appears to
+    WEAKEN merely because its owner changed. The durable evidence that earned
+    `confirmed` did not evaporate; this replica just cannot see it yet.
+
+    THE RULE, deliberately small:
+      * scoped to objects DESCENDED FROM A SEED (an armed `verdict_floor`);
+        nothing else in the engine is touched;
+      * it is a FLOOR, never a lift: the published tier is
+        max(recomputed, durable), so it can never exceed the durable row's tier
+        and a STRONGER recomputation publishes immediately;
+      * it EXPIRES at adoption + CORR_OWNERSHIP_SEED_SLACK_S — the same
+        refill horizon D1 bridges — after which recomputation rules
+        unconditionally, because a genuine recovery must be able to downgrade;
+      * it is HONEST. The row's verdict columns carry the floor; the version's
+        internals carry what this replica actually computed
+        (`ownership_handoff` in the hypotheses blob, present-only), and no
+        count, no confidence and no evidence list is fabricated — signal_count,
+        node_count, hypotheses and evidence_missing stay this replica's own.
+
+    Returns `snap` unchanged on every path that does not floor, so an ordinary
+    persist is byte-for-byte what it always was.
+    """
+    global OWNERSHIP_SEED_VERDICT_CARRIED_TOTAL
+    reg = OPEN_OBJECTS.get(snap.correlation_id)
+    if reg is None:
+        return snap
+    floor = reg.get("verdict_floor")
+    if not isinstance(floor, VerdictTier):
+        return snap
+    until = reg.get("verdict_floor_until")
+    if (not isinstance(until, (int, float))
+            or datetime.now(timezone.utc).timestamp() >= until):
+        # Expired (or never dated): disarm and never look again.
+        reg.pop("verdict_floor", None)
+        reg.pop("verdict_floor_until", None)
+        reg.pop("verdict_floor_hypothesis", None)
+        return snap
+    ranking = snap.ranking
+    if _VERDICT_RANK.get(ranking.verdict_tier, 0) >= _VERDICT_RANK.get(floor, 0):
+        return snap
+    OWNERSHIP_SEED_VERDICT_CARRIED_TOTAL += 1
+    carried_hypothesis = reg.get("verdict_floor_hypothesis") or ""
+    return dc_replace(
+        snap,
+        ranking=dc_replace(
+            ranking, verdict_tier=floor,
+            top_hypothesis=carried_hypothesis or ranking.top_hypothesis),
+        carried_verdict_tier=ranking.verdict_tier.value,
+        carried_top_hypothesis=ranking.top_hypothesis)
 
 
 async def _seed_ch_query(sql: str) -> list[dict]:
@@ -9174,6 +9504,8 @@ def _seed_sql(tenants: tuple[str, ...]) -> str:
              toUnixTimestamp64Milli(window_start)  AS window_start_ms,
              toUnixTimestamp64Milli(window_end)    AS window_end_ms,
              affected,
+             top_hypothesis,
+             verdict_tier,
              toUnixTimestamp64Milli(created_at)    AS created_at_ms,
              count() OVER ()                       AS open_total
         FROM netops.corr_current FINAL
@@ -9233,6 +9565,20 @@ def _seed_register(row: Mapping[str, object], now: datetime,
     (RETENTION_REQUIRED_S) before quiesce may drop it: the window has not
     refilled before then, so closing it sooner would be judging the object on
     evidence this replica structurally could not yet have seen.
+
+    MATCH WINDOW (tracker 155b D1). The registration stores the durable
+    `[window_start, window_end]` unchanged — this is an identity reconstruction
+    and it may not misreport the row it came from — but the SNAPSHOT it stands
+    on carries `match_slack_s`, so `_windows_overlap` admits it for
+    CORR_OWNERSHIP_SEED_SLACK_S past that end. The durable end is only the last
+    WRITTEN evidence time of a still-open incident; freezing the match there
+    guaranteed a miss of exactly the cold-window duration (155b: 1 adoption in
+    32, on an inclusive-boundary touch).
+
+    DURABLE VERDICT (tracker 155b D3). The row's tier and top hypothesis ride
+    along on the registration for `_seed_adopted` to turn into the refill-window
+    verdict floor. They are never PUBLISHED by a placeholder — an unadopted
+    placeholder publishes nothing at all.
     """
     global OWNERSHIP_SEED_SKIPPED_TOTAL
     tenant = row.get("tenant_id")
@@ -9279,6 +9625,18 @@ def _seed_register(row: Mapping[str, object], now: datetime,
     # part this process witnessed.
     hist.note({k: v for k, v in affected.items()
                if isinstance(v, list) and all(isinstance(x, str) for x in v)})
+    # Tracker 155b D3: the durable row's own verdict, carried on the
+    # registration so an ADOPTED object can floor its first recomputations with
+    # it. Validated (§3, never trust the store): an unknown tier reads as
+    # `undetermined`, which floors nothing.
+    raw_tier = row.get("verdict_tier")
+    try:
+        seed_tier = VerdictTier(raw_tier) if isinstance(raw_tier, str) else \
+            VerdictTier.UNDETERMINED
+    except ValueError:
+        seed_tier = VerdictTier.UNDETERMINED
+    raw_hyp = row.get("top_hypothesis")
+    seed_hyp = raw_hyp[:256] if isinstance(raw_hyp, str) else ""
     OPEN_OBJECTS[cid] = {
         "version": max(0, _seed_int(row.get("version"), 0)),
         # Sentinel hashes no content_hash/material_hash can ever equal (both are
@@ -9290,6 +9648,9 @@ def _seed_register(row: Mapping[str, object], now: datetime,
         "last_seen": last_seen, "last_persist": written, "last_version": written,
         "snapshot": snap, "opened_at": window_start,
         "seed_only": True,
+        # Consumed by `_seed_adopted` — an UNADOPTED placeholder never publishes
+        # anything, so these are inert until evidence arrives.
+        "seed_tier": seed_tier, "seed_hypothesis": seed_hyp,
     }
     return True
 
@@ -9420,6 +9781,12 @@ class _AssignmentLogger(ConsumerRebalanceListener):
 
     async def on_partitions_revoked(self, revoked) -> None:
         log.info("rebalance: %d partition(s) revoked", len(revoked))
+        # TRACKER 155b D2a, BEFORE the flush/commit hook and unconditional on
+        # whether one is wired: an identity placeholder for a partition that is
+        # leaving is a promise this replica can no longer keep. Pure in-memory
+        # dict work over the open population — no I/O, nothing that could add to
+        # the rejoin budget this callback is tightly bound by.
+        _seed_discard_revoked(frozenset(tp.partition for tp in revoked))
         if self.revoke_hook is None or not revoked:
             return
         global CONSUMER_REVOKE_COMMITS, CONSUMER_REVOKE_COMMIT_FAILURES
@@ -11295,6 +11662,15 @@ def _metrics_text() -> str:
         "# HELP corr_ownership_seed_expired_total Placeholders dropped without ever being adopted.",
         "# TYPE corr_ownership_seed_expired_total counter",
         f"corr_ownership_seed_expired_total {OWNERSHIP_SEED_EXPIRED_TOTAL}",
+        "# HELP corr_ownership_seed_revoked_total Placeholders discarded because their partition was revoked.",
+        "# TYPE corr_ownership_seed_revoked_total counter",
+        f"corr_ownership_seed_revoked_total {OWNERSHIP_SEED_REVOKED_TOTAL}",
+        "# HELP corr_ownership_seed_unowned_dropped_total Adopted seeds dropped before their first version because the partition was no longer owned.",
+        "# TYPE corr_ownership_seed_unowned_dropped_total counter",
+        f"corr_ownership_seed_unowned_dropped_total {OWNERSHIP_SEED_UNOWNED_DROPPED_TOTAL}",
+        "# HELP corr_ownership_seed_verdict_carried_total Versions whose verdict tier was carried from the durable row while the window refilled.",
+        "# TYPE corr_ownership_seed_verdict_carried_total counter",
+        f"corr_ownership_seed_verdict_carried_total {OWNERSHIP_SEED_VERDICT_CARRIED_TOTAL}",
         "# TYPE corr_signal_batch_pending gauge",
         f"corr_signal_batch_pending {SIGNAL_BATCH.pending()}",
         # P1: event-loop stall watchdog. corr_loop_lag_stalls_total rising means

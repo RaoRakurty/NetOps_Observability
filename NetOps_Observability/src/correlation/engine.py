@@ -25,7 +25,7 @@ import uuid
 from collections import OrderedDict
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field, replace
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from catalog import Catalog
 from directed_topology import Oracle, RecordingOracle
@@ -2006,6 +2006,36 @@ class ObjectSnapshot:
     # kept alongside the attribution so the render contract can show the segments /
     # key devices / unknown+ambiguous / head. Also NOT hashed (additive).
     attribution_path: AssembledPath | None = None
+    # ── Tracker 155b (D1): the MATCHING-ONLY extension of this snapshot's
+    # window_end, in seconds. 0.0 for EVERY snapshot `run_window` emits, so
+    # `_windows_overlap` is byte-for-byte the predicate it always was for live
+    # objects (pinned by the oracle in test_ownership_seed_155.py).
+    #
+    # It is non-zero for exactly one kind of snapshot: the tracker-155 ownership
+    # SEED placeholder, which is reconstructed from a durable `corr_current` row
+    # whose `window_end` is merely the last WRITTEN evidence time of a
+    # still-OPEN incident — not the incident's end. The acquiring replica's own
+    # window necessarily starts AFTER that (it spends the cold window
+    # refilling), so a frozen end guarantees a miss of exactly the cold-window
+    # duration: run ownership-155b-08310318 measured gaps of 10.1 / 18.0 /
+    # 35.4 s against a frozen end and adopted 1 of 32 placeholders, the one
+    # adoption landing on an inclusive-boundary touch rather than a margin.
+    # The seed exists to BRIDGE that gap, so the placeholder's match window is
+    # extended by how far evidence can still attach (see
+    # CORR_OWNERSHIP_SEED_SLACK_S). It moves no persisted byte: a placeholder is
+    # never persisted, and adoption replaces it with the ARRIVING snapshot
+    # (slack 0.0).
+    match_slack_s: float = 0.0
+    # ── Tracker 155b (D3): this version PUBLISHED a verdict tier/hypothesis
+    # CARRIED from the durable row it continues across an ownership handoff,
+    # because the recomputation ran on a window that has not refilled yet.
+    # These two fields record what the recomputation ACTUALLY produced, so the
+    # carry is declared in the object's own bytes rather than inferred. Empty
+    # for every ordinary version — the blob (hence content_hash and the replay
+    # pin) is byte-identical when no carry happened, exactly like `degradation`
+    # and `aggregation` above.
+    carried_verdict_tier: str = ""
+    carried_top_hypothesis: str = ""
 
     def attribution_blob(self) -> str:
         """The corr_objects.attribution JSON the RCA report reads (the P3 render
@@ -2354,6 +2384,21 @@ class ObjectSnapshot:
         agg = self.agg_provenance()
         if agg:
             ctx["aggregation"] = agg
+        # Tracker 155b (D3): the ownership-handoff verdict carry, PRESENT-ONLY
+        # and for the same reason `degradation` is — a stored object must be
+        # readable without the live state that produced it. The row's verdict
+        # columns carry the durable FLOOR (the tier the previous owner's
+        # evidence already supports); this block records the tier/hypothesis
+        # this replica's partially-refilled window recomputed, and why the two
+        # differ. Nothing is fabricated: signal_count / node_count / hypotheses
+        # / evidence_missing remain this replica's own honest recomputation.
+        if self.carried_verdict_tier or self.carried_top_hypothesis:
+            ctx["ownership_handoff"] = {
+                "note": ("verdict carried across ownership handoff pending "
+                         "window refill"),
+                "recomputed_verdict_tier": self.carried_verdict_tier,
+                "recomputed_top_hypothesis": self.carried_top_hypothesis,
+            }
         # C7: embed the directed-topology orientations ONLY when present, so an
         # undirected object's blob (hence content_hash + replay pin) is byte-identical
         # to pre-C7. A directed object embeds (from,to,verdict,source) → replay
@@ -3504,8 +3549,22 @@ def _entity_ids(snap: ObjectSnapshot) -> frozenset[str]:
     return frozenset(n.entity_id for n in snap.nodes)
 
 
+def _match_window_end(s: ObjectSnapshot) -> datetime:
+    """The window end `_windows_overlap` matches against.
+
+    EXACTLY `s.window_end` for every snapshot `run_window` emits — `match_slack_s`
+    is 0.0 there and the branch short-circuits — so live-object matching is
+    unchanged, byte for byte and object for object. See `ObjectSnapshot.
+    match_slack_s` for the one snapshot that sets it (the tracker-155 ownership
+    seed placeholder) and why a frozen end is a guaranteed miss for it.
+    """
+    return (s.window_end + timedelta(seconds=s.match_slack_s)
+            if s.match_slack_s else s.window_end)
+
+
 def _windows_overlap(a: ObjectSnapshot, b: ObjectSnapshot) -> bool:
-    return a.window_start <= b.window_end and b.window_start <= a.window_end
+    return (a.window_start <= _match_window_end(b)
+            and b.window_start <= _match_window_end(a))
 
 
 def _snap_grounded_seam_ids(snap: ObjectSnapshot) -> frozenset[str]:

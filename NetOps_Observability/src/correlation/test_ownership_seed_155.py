@@ -44,11 +44,13 @@ from __future__ import annotations
 
 import asyncio
 import json
+from dataclasses import replace as dc_replace
 from datetime import datetime, timedelta, timezone
 
 import httpx
 import pytest
 
+import engine
 import main
 from engine import find_continuation, run_window
 from signals import (
@@ -61,6 +63,7 @@ from signals import (
     Source,
 )
 from test_archive_slice import CAT
+from verdicts import VerdictTier
 
 T0 = datetime(2026, 8, 30, 22, 41, 0, tzinfo=timezone.utc)
 # A correlation_id no engine derivation would ever mint for this fixture — the
@@ -86,8 +89,14 @@ def _ms(dt: datetime) -> str:
 
 def _row(cid: str, tenant: str, *, version: int = 7,
          affected: dict | None = None, start: datetime | None = None,
-         end: datetime | None = None, written: datetime | None = None) -> dict:
-    """One `corr_current FINAL` row exactly as `ch.query` would hand it over."""
+         end: datetime | None = None, written: datetime | None = None,
+         tier: str = "undetermined", hypothesis: str = "") -> dict:
+    """One `corr_current FINAL` row exactly as `ch.query` would hand it over.
+
+    `tier`/`hypothesis` default to the neutral pair so every pre-155b test in
+    this file loads a row that arms NO verdict floor — the D3 behaviour is
+    exercised only where a test asks for a durable verdict.
+    """
     start = T0 - timedelta(seconds=300) if start is None else start
     end = T0 + timedelta(seconds=300) if end is None else end
     written = T0 if written is None else written
@@ -100,6 +109,8 @@ def _row(cid: str, tenant: str, *, version: int = 7,
         "affected": json.dumps(affected if affected is not None
                                else {"devices": ["dev-a"]}, sort_keys=True),
         "created_at_ms": _ms(written),
+        "top_hypothesis": hypothesis,
+        "verdict_tier": tier,
     }
 
 
@@ -209,6 +220,9 @@ def _clean(monkeypatch):
     for counter in ("OWNERSHIP_SEED_RUNS_TOTAL", "OWNERSHIP_SEEDED_OBJECTS_TOTAL",
                     "OWNERSHIP_ADOPTIONS_TOTAL", "OWNERSHIP_SEED_FAILURES_TOTAL",
                     "OWNERSHIP_SEED_SKIPPED_TOTAL", "OWNERSHIP_SEED_EXPIRED_TOTAL",
+                    "OWNERSHIP_SEED_REVOKED_TOTAL",
+                    "OWNERSHIP_SEED_UNOWNED_DROPPED_TOTAL",
+                    "OWNERSHIP_SEED_VERDICT_CARRIED_TOTAL",
                     "OPEN_OBJECTS_FORCE_CLOSED", "VERSIONS_PERSISTED"):
         monkeypatch.setattr(main, counter, 0)
     monkeypatch.setattr(main, "_OWNERSHIP_SEED_TASK", None)
@@ -773,3 +787,421 @@ def test_only_newly_acquired_partitions_are_seeded(monkeypatch):
     asyncio.run(listener.on_partitions_assigned(
         [_TP(t, 0) for t in main.TOPICS] + [_TP(t, 1) for t in main.TOPICS]))
     assert seen == [frozenset({0}), frozenset({1})], seen
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# TRACKER 155b — the three defects the LIVE validation measured
+# (run /var/tmp/scale-runs/ownership-155b-08310318, 2026-08-31; arms: control,
+# restart, exit/join). The seeding above ran perfectly — every acquiring replica
+# seeded, 0 failures, 0 fabricated content — and the incident STILL fragmented:
+# 1 adoption in 32 placeholders, and the one adoption landed on the WRONG
+# replica and demoted the row it continued. What follows pins the three fixes.
+# ═════════════════════════════════════════════════════════════════════════════
+#
+# MUTANTS (verified by hand while writing these):
+#   * drop `match_slack_s` from `_seed_snapshot` (or make `_match_window_end`
+#     return `s.window_end`) -> test_a_placeholder_is_admitted_across_the_cold_
+#     window_gap fails: the placeholder is not a candidate and a fragment id is
+#     minted.
+#   * remove the `_seed_discard_revoked` call from `on_partitions_revoked` ->
+#     test_revoking_a_partition_discards_its_placeholders fails.
+#   * make `_seed_owner_guard` return True unconditionally ->
+#     test_an_adopted_seed_will_not_persist_on_an_unowned_partition fails: the
+#     thin first version is written and the counter stays 0.
+#   * remove the expiry branch from `_seed_verdict_floor` ->
+#     test_the_verdict_floor_expires_and_a_weaker_tier_publishes fails.
+
+
+def _placeholder(tenant: str, *, end: datetime, start: datetime | None = None,
+                 cid: str = SEED_CID, **kw):
+    """Register ONE placeholder and hand back the snapshot it stands on."""
+    start = end - timedelta(seconds=300) if start is None else start
+    assert main._seed_register(
+        _row(cid, tenant, start=start, end=end,
+             affected={"devices": ["dev-a"]}, **kw),
+        T0, frozenset({tenant}))
+    return main.OPEN_OBJECTS[cid]["snapshot"]
+
+
+def _cold_snapshot(tenant: str, at: datetime):
+    """What a replica that acquired the partition at `at` would emit once its
+    window started refilling — a genuinely cold window, so its own derived id
+    differs from the durable one."""
+    fresh = run_window((_sig(tenant, "dev-a", offset_s=0, at=at),
+                        _sig(tenant, "dev-a", offset_s=30, at=at)),
+                       CAT, (), main.ENGINE_CFG)
+    assert fresh, "fixture must produce at least one object"
+    return fresh[0]
+
+
+# ── D1: the placeholder's match window must bridge the cold window ───────────
+
+def test_a_placeholder_is_admitted_across_the_cold_window_gap():
+    """THE MEASURED MISS. `corr_current.window_end` is the last WRITTEN evidence
+    time of a still-open incident; the acquiring replica's first snapshot begins
+    AFTER it by however long the cold window lasted (155b measured 10.1 / 18.0 /
+    35.4 s). Frozen there, the placeholder was never a continuation candidate."""
+    tenant = "t-155b-slack"
+    gap = timedelta(seconds=main.CORR_OWNERSHIP_SEED_SLACK_S / 2)
+    seeded = _placeholder(tenant, end=T0)
+    arriving = _cold_snapshot(tenant, T0 + gap)
+
+    assert arriving.window_start > seeded.window_end, (
+        "fixture invalid: the arriving window must start AFTER the durable end "
+        "— that gap IS the defect")
+    assert arriving.correlation_id != SEED_CID, "fixture invalid: ids must differ"
+    assert find_continuation(arriving, [seeded]) == SEED_CID, (
+        "a cold replica's first snapshot must still adopt the identity the "
+        "seed reconstructed — otherwise the incident fragments")
+
+
+def test_a_placeholder_is_not_admitted_beyond_the_slack():
+    """The bridge is BOUNDED. Past the horizon on which evidence can still
+    attach, a placeholder is a stale identity and adopting it would weld two
+    unrelated incidents together."""
+    tenant = "t-155b-slack"
+    gap = timedelta(seconds=main.CORR_OWNERSHIP_SEED_SLACK_S + 60)
+    seeded = _placeholder(tenant, end=T0)
+    arriving = _cold_snapshot(tenant, T0 + gap)
+    assert find_continuation(arriving, [seeded]) == "", (
+        "the slack must be a bounded bridge, not an open-ended one")
+
+
+def test_the_seed_slack_is_derived_from_the_retention_constant():
+    """Not a chosen number (and emphatically not the literal 516): the engine's
+    OWN statement of how far back evidence can still attach to a window, which
+    is exactly how long the acquiring replica needs to refill it."""
+    assert main.CORR_OWNERSHIP_SEED_SLACK_S == pytest.approx(
+        main.RETENTION_REQUIRED_S)
+    seeded = _placeholder("t-155b-derived", end=T0)
+    assert seeded.match_slack_s == pytest.approx(main.RETENTION_REQUIRED_S)
+    assert seeded.window_end == T0, (
+        "the placeholder must report the DURABLE window it was built from — "
+        "only the MATCHING is extended")
+
+
+def test_live_object_matching_is_oracle_unchanged():
+    """The slack may not leak into ordinary matching. Oracle: for snapshots
+    with no slack — every snapshot `run_window` emits — `_windows_overlap` is
+    the pre-155b predicate, over a grid that brackets every boundary case."""
+    tenant = "t-155b-oracle"
+    base = _cold_snapshot(tenant, T0)
+    assert base.match_slack_s == 0.0, (
+        "run_window must never emit a slacked snapshot — the slack belongs to "
+        "the ownership seed alone")
+
+    def _win(start_s: float, end_s: float):
+        return dc_replace(base,
+                          window_start=T0 + timedelta(seconds=start_s),
+                          window_end=T0 + timedelta(seconds=end_s))
+
+    grid = [(0, 10), (10, 20), (20, 30), (-30, -10), (5, 25), (10, 10)]
+    checked = 0
+    for a_bounds in grid:
+        for b_bounds in grid:
+            a, b = _win(*a_bounds), _win(*b_bounds)
+            expected = (a.window_start <= b.window_end
+                        and b.window_start <= a.window_end)
+            assert engine._windows_overlap(a, b) is expected, (a_bounds, b_bounds)
+            checked += 1
+    assert checked == len(grid) ** 2
+
+    # And the slack is what makes the seeded case differ — so the oracle above
+    # is passing because live objects carry none, not because it is inert.
+    far = _win(600, 620)
+    slacked = dc_replace(_win(0, 10), match_slack_s=1000.0)
+    assert not engine._windows_overlap(_win(0, 10), far)
+    assert engine._windows_overlap(slacked, far)
+
+
+def test_the_cold_window_gap_is_bridged_end_to_end(monkeypatch):
+    """(D1) THE 155b FAILURE INVERTED, through `main.engine_cycle`: a replica
+    acquires a partition, seeds, and the evidence that arrives AFTER the cold
+    window continues the ORIGINAL id instead of minting a fragment."""
+    tenant = _owned_tenant(2, 4)
+    gap = timedelta(seconds=120)
+    stub = _SeedCH([_row(SEED_CID, tenant, version=7,
+                         start=T0 - timedelta(seconds=300), end=T0,
+                         affected={"devices": ["dev-a"]})])
+    _run_seeded_cycle(monkeypatch, stub, tenant=tenant, partition=2,
+                      signals=[_sig(tenant, "dev-a", offset_s=o, at=T0 + gap)
+                               for o in (0, 30, 60)],
+                      at=T0 + gap + timedelta(seconds=60))
+
+    assert list(main.OPEN_OBJECTS) == [SEED_CID], (
+        "the incident fragmented across the cold window — "
+        f"{list(main.OPEN_OBJECTS)}")
+    assert main.OWNERSHIP_ADOPTIONS_TOTAL == 1
+    assert [(r["correlation_id"], r["version"]) for r in stub.objects()] == [
+        (SEED_CID, 8)]
+
+
+# ── D2a: a revoked partition's placeholders are discarded ────────────────────
+
+class _TP:
+    """The TopicPartition shape the rebalance callbacks are handed."""
+
+    def __init__(self, topic: str, partition: int) -> None:
+        self.topic, self.partition = topic, partition
+
+
+class _NullConsumer:
+    def partitions_for_topic(self, topic):
+        return {0, 1, 2, 3}
+
+
+def test_revoking_a_partition_discards_its_placeholders():
+    """(D2a) A placeholder is a promise to continue an incident THIS replica
+    owns. The moment the partition moves away the promise belongs to another
+    replica — and 155b measured what keeping it costs: a replica that held
+    partitions for ~5 s adopted one and wrote a thin version 19 s after
+    revoking, demoting a confirmed row through corr_current latest-write-wins."""
+    _assign({2, 3})
+    leaving = _owned_tenant(2, 4)
+    staying = _owned_tenant(3, 4)
+    _placeholder(leaving, end=T0, cid=SEED_CID)
+    _placeholder(staying, end=T0, cid=OTHER_CID)
+
+    listener = main._AssignmentLogger(_NullConsumer())
+    asyncio.run(listener.on_partitions_revoked([_TP(t, 2) for t in main.TOPICS]))
+
+    assert SEED_CID not in main.OPEN_OBJECTS, (
+        "the revoked partition's placeholder must be discarded")
+    assert OTHER_CID in main.OPEN_OBJECTS, (
+        "a RETAINED partition's placeholder must survive the revoke")
+    assert main.OWNERSHIP_SEED_REVOKED_TOTAL == 1
+    assert main.OWNERSHIP_SEED_EXPIRED_TOTAL == 0, (
+        "a revoke-discard is its own outcome, not an unadopted expiry")
+
+
+def test_a_revoke_never_discards_a_live_object():
+    """Scoped to UNADOPTED placeholders. An ordinary open object (and an already
+    adopted one) is live state — dropping it would lose evidence, and the
+    pre-existing orphan half of tracker 155 is not this change's business."""
+    _assign({2})
+    tenant = _owned_tenant(2, 4)
+    _placeholder(tenant, end=T0, cid=SEED_CID)
+    main._seed_adopted(main.OPEN_OBJECTS[SEED_CID], SEED_CID, T0)
+    assert not main._seed_only(main.OPEN_OBJECTS[SEED_CID])
+
+    listener = main._AssignmentLogger(_NullConsumer())
+    asyncio.run(listener.on_partitions_revoked([_TP(t, 2) for t in main.TOPICS]))
+
+    assert SEED_CID in main.OPEN_OBJECTS
+    assert main.OWNERSHIP_SEED_REVOKED_TOTAL == 0
+
+
+# ── D2b: an adopted seed may not persist onto a partition it no longer owns ──
+
+def _seed_adopt_then_reassign(monkeypatch, *, tenant, partition, owned_after):
+    """Seed + adopt on `partition`, then rewrite the assignment to
+    `owned_after` before the cycle that would persist the first version."""
+    stub = _SeedCH([_row(SEED_CID, tenant, version=7,
+                         affected={"devices": ["dev-a"]})])
+    monkeypatch.setattr(main, "ch", stub)
+    monkeypatch.setattr(main, "datetime", _Clock)
+    monkeypatch.setattr(main, "CONSUMER_ASSIGNMENT_SEEN", True)
+    _assign({partition})
+    asyncio.run(main._run_ownership_seed(frozenset({partition})))
+    _assign(owned_after)
+    for s in (_sig(tenant, "dev-a", offset_s=o) for o in (0, 30, 60)):
+        main.buffer_signal(s)
+    asyncio.run(main.engine_cycle())
+    return stub
+
+
+def test_an_adopted_seed_will_not_persist_on_an_unowned_partition(monkeypatch):
+    """(D2b) THE MEASURED WRITE. The transient owner's first version for an
+    adopted identity is a corr_current latest-write-wins OVERWRITE of another
+    replica's durable row. Written from a replica that has handed the partition
+    back, it does not continue the incident — it demotes it."""
+    tenant = _owned_tenant(2, 4)
+    stub = _seed_adopt_then_reassign(monkeypatch, tenant=tenant, partition=2,
+                                     owned_after=set())
+
+    assert stub.objects() == [], (
+        "a replica that no longer owns the partition persisted a version for "
+        "an identity it adopted — this is the 155b demotion")
+    assert SEED_CID not in main.OPEN_OBJECTS, (
+        "the registration must be dropped, not left to persist later")
+    assert main.OWNERSHIP_SEED_UNOWNED_DROPPED_TOTAL == 1
+    assert main.OWNERSHIP_ADOPTIONS_TOTAL == 1, (
+        "the adoption itself still happened and is still counted")
+
+
+def test_an_adopted_seed_persists_while_the_partition_is_still_owned(monkeypatch):
+    """The other half: the guard must not cost the TRUE owner its continuation."""
+    tenant = _owned_tenant(2, 4)
+    stub = _seed_adopt_then_reassign(monkeypatch, tenant=tenant, partition=2,
+                                     owned_after={2, 3})
+
+    assert [(r["correlation_id"], r["version"], r["state"])
+            for r in stub.objects()] == [(SEED_CID, 8, "open")]
+    assert main.OWNERSHIP_SEED_UNOWNED_DROPPED_TOTAL == 0
+    assert not main.OPEN_OBJECTS[SEED_CID].get("seed_pending_first_persist"), (
+        "the guard is spent once the object has written a version of its own")
+
+
+def test_an_ordinary_object_is_never_touched_by_the_owner_guard(monkeypatch):
+    """Oracle: the guard is scoped to seed-descended registrations. An object
+    this replica opened itself persists on a partition it does not own exactly
+    as HEAD does — that orphan-write behaviour is tracker 155's other half and
+    is deliberately unchanged here."""
+    tenant = _owned_tenant(2, 4)
+    stub = _SeedCH()
+    monkeypatch.setattr(main, "ch", stub)
+    monkeypatch.setattr(main, "datetime", _Clock)
+    monkeypatch.setattr(main, "CONSUMER_ASSIGNMENT_SEEN", True)
+    _assign(set())
+    for s in (_sig(tenant, "dev-a", offset_s=o) for o in (0, 30, 60)):
+        main.buffer_signal(s)
+    asyncio.run(main.engine_cycle())
+
+    assert stub.objects(), "an ordinary object must still persist"
+    assert main.OWNERSHIP_SEED_UNOWNED_DROPPED_TOTAL == 0
+
+
+# ── D3: the verdict may not weaken merely because the owner changed ──────────
+
+def _armed(tenant: str, *, tier: str, hypothesis: str, at: datetime = T0):
+    """A registration that has ADOPTED a placeholder loaded with `tier`."""
+    _placeholder(tenant, end=T0, tier=tier, hypothesis=hypothesis)
+    reg = main.OPEN_OBJECTS[SEED_CID]
+    main._seed_adopted(reg, SEED_CID, at)
+    return reg
+
+
+def _ranked(tenant: str, tier, hypothesis: str):
+    """A live snapshot for SEED_CID whose recomputation says `tier`."""
+    snap = _cold_snapshot(tenant, T0)
+    return dc_replace(
+        snap, correlation_id=SEED_CID,
+        ranking=dc_replace(snap.ranking, verdict_tier=tier,
+                           top_hypothesis=hypothesis))
+
+
+def test_a_weaker_recomputation_publishes_the_carried_verdict(monkeypatch):
+    """(D3) THE MEASURED DEMOTION, on the CORRECT owner. The first persist after
+    an adoption recomputes from a window that has only partially refilled, so it
+    can publish a strictly weaker tier than the durable row it continues
+    (155b: confirmed -> suspected). The durable evidence that earned `confirmed`
+    did not evaporate; this replica just cannot see it yet."""
+    monkeypatch.setattr(main, "datetime", _Clock)
+    tenant = "t-155b-floor"
+    _armed(tenant, tier="confirmed", hypothesis="private-interconnect-bgp-down")
+    weak = _ranked(tenant, VerdictTier.SUSPECTED, "saas-experience-degraded")
+
+    published = main._seed_verdict_floor(weak)
+    assert published.ranking.verdict_tier is VerdictTier.CONFIRMED
+    assert published.ranking.top_hypothesis == "private-interconnect-bgp-down"
+    assert main.OWNERSHIP_SEED_VERDICT_CARRIED_TOTAL == 1
+
+    # HONEST, not fabricated: the row's verdict columns carry the floor, the
+    # version's own internals record what this replica actually computed.
+    ctx = json.loads(published.hypotheses_blob())["grounding_context"]["ownership_handoff"]
+    assert ctx["recomputed_verdict_tier"] == "suspected"
+    assert ctx["recomputed_top_hypothesis"] == "saas-experience-degraded"
+    assert "pending window refill" in ctx["note"]
+    row = published.to_object_row(8, "open")
+    assert row["verdict_tier"] == "confirmed"
+    assert row["signal_count"] == weak.signal_count(), "no fabricated evidence"
+    assert row["node_count"] == len(weak.nodes), "no fabricated blast radius"
+
+
+def test_a_stronger_recomputation_publishes_immediately(monkeypatch):
+    """The floor is a FLOOR, never a damper: a recomputation at least as strong
+    as the durable row publishes untouched, byte for byte."""
+    monkeypatch.setattr(main, "datetime", _Clock)
+    tenant = "t-155b-floor"
+    _armed(tenant, tier="suspected", hypothesis="saas-experience-degraded")
+    strong = _ranked(tenant, VerdictTier.CONFIRMED, "private-interconnect-bgp-down")
+
+    assert main._seed_verdict_floor(strong) is strong
+    assert main.OWNERSHIP_SEED_VERDICT_CARRIED_TOTAL == 0
+
+
+def test_the_verdict_floor_never_raises_above_the_durable_tier(monkeypatch):
+    """The published tier is max(recomputed, durable) and can never exceed the
+    durable row's own word. A durable `undetermined` arms nothing at all."""
+    monkeypatch.setattr(main, "datetime", _Clock)
+    tenant = "t-155b-floor"
+    _armed(tenant, tier="suspected", hypothesis="saas-experience-degraded")
+    weak = _ranked(tenant, VerdictTier.UNDETERMINED, "undetermined")
+    assert main._seed_verdict_floor(weak).ranking.verdict_tier is (
+        VerdictTier.SUSPECTED), "floored to the durable tier, and no further"
+
+    main.OPEN_OBJECTS.clear()
+    reg = _armed(tenant, tier="undetermined", hypothesis="undetermined")
+    assert "verdict_floor" not in reg, (
+        "the bottom tier can never change a published row — it must arm no "
+        "state and no expiry")
+    assert main._seed_verdict_floor(weak) is weak
+
+
+def test_the_verdict_floor_expires_and_a_weaker_tier_publishes(monkeypatch):
+    """It must EXPIRE. Once the window has refilled, recomputation rules
+    unconditionally — a genuine recovery has to be able to downgrade."""
+    monkeypatch.setattr(main, "datetime", _Clock)
+    tenant = "t-155b-floor"
+    reg = _armed(tenant, tier="confirmed",
+                 hypothesis="private-interconnect-bgp-down")
+    weak = _ranked(tenant, VerdictTier.SUSPECTED, "saas-experience-degraded")
+
+    _Clock.current = T0 + timedelta(
+        seconds=main.CORR_OWNERSHIP_SEED_SLACK_S + 1)
+    assert main._seed_verdict_floor(weak) is weak, (
+        "past the refill horizon the recomputation is the truth")
+    assert "verdict_floor" not in reg, "an expired floor must disarm itself"
+    assert main.OWNERSHIP_SEED_VERDICT_CARRIED_TOTAL == 0
+
+
+def test_the_verdict_floor_horizon_is_the_refill_horizon(monkeypatch):
+    """One constant, one interval: the floor holds for exactly as long as the
+    D1 match slack bridges, because both answer the same question — how long
+    until this replica's window has refilled."""
+    monkeypatch.setattr(main, "datetime", _Clock)
+    reg = _armed("t-155b-floor", tier="confirmed", hypothesis="h")
+    assert reg["verdict_floor_until"] == pytest.approx(
+        T0.timestamp() + main.CORR_OWNERSHIP_SEED_SLACK_S)
+
+
+def test_a_non_seed_object_is_never_floored(monkeypatch):
+    """Oracle: an object that did not descend from a seed is returned by
+    identity, so its persisted row is byte-for-byte what it always was."""
+    monkeypatch.setattr(main, "datetime", _Clock)
+    tenant = "t-155b-plain"
+    snap = _cold_snapshot(tenant, T0)
+    main.OPEN_OBJECTS[snap.correlation_id] = {
+        "version": 1, "hash": "", "material": "", "last_seen": T0,
+        "last_persist": T0, "snapshot": snap, "opened_at": T0,
+    }
+    assert main._seed_verdict_floor(snap) is snap
+    assert main._seed_verdict_floor(_ranked(tenant, VerdictTier.SUSPECTED,
+                                            "x")) is not None
+    assert main.OWNERSHIP_SEED_VERDICT_CARRIED_TOTAL == 0
+
+
+def test_the_carried_verdict_reaches_the_persisted_row(monkeypatch):
+    """END-TO-END through `main.engine_cycle`: the durable row said `confirmed`,
+    the refilling window says less, and the version this replica publishes
+    carries the durable tier — the same incident must not appear to weaken
+    merely because its owner changed."""
+    tenant = _owned_tenant(2, 4)
+    stub = _SeedCH([_row(SEED_CID, tenant, version=7,
+                         affected={"devices": ["dev-a"]},
+                         tier="confirmed",
+                         hypothesis="private-interconnect-bgp-down")])
+    _run_seeded_cycle(monkeypatch, stub, tenant=tenant, partition=2,
+                      signals=[_sig(tenant, "dev-a", offset_s=o)
+                               for o in (0, 30, 60)])
+
+    rows = stub.objects()
+    assert [(r["correlation_id"], r["version"]) for r in rows] == [(SEED_CID, 8)]
+    assert rows[0]["verdict_tier"] == "confirmed", (
+        "the continuation published a WEAKER tier than the row it continues — "
+        "this is the 155b demotion")
+    assert rows[0]["top_hypothesis"] == "private-interconnect-bgp-down"
+    assert main.OWNERSHIP_SEED_VERDICT_CARRIED_TOTAL == 1
+    carried = json.loads(rows[0]["hypotheses"])["grounding_context"]["ownership_handoff"]
+    assert carried["recomputed_verdict_tier"] != "confirmed", (
+        "fixture invalid: the recomputation must actually be weaker")
