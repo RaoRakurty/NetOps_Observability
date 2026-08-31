@@ -140,6 +140,12 @@ def _ch_stub(sequence=None, **overrides):
         # preflight baseline is set on the harness (see `_harness`).
         "system.errors": "0",
         "system.error_log": _error_log(0, rows=9),
+        # The sole-producer probes (checks (c)/(d) of the full-delta
+        # exemption): healthy defaults say the backfill was alone. The
+        # foreign probe's key must sit BEFORE system.query_log — its query
+        # reads that same table and would otherwise match the victims answer.
+        "foreign_241": "0\t",
+        "system.part_log": "0",
         "system.query_log": "",
         "'MaxPartCountForPartition'": "180",
         "'parts_to_delay_insert'": "1000",
@@ -540,6 +546,7 @@ def test_a_recovered_backfill_negotiation_is_exempted_and_named(
     # NEVER silently: the exemption is in the line the operator reads.
     assert "4 backfill-negotiation refusals exempted, pass completed" in notes
     assert BACKFILL_TAG in notes and "1 completed pass(es)" in notes
+    assert "full-delta exemption: sole producer verified" in notes
     err = h.phases[-1]["evidence"]["clickhouse"]["memory_limit_exceeded"]
     assert err["window_count"] == 4 and err["delta"] == 4
     assert err["backfill_attributed"] == 4
@@ -602,19 +609,24 @@ def test_a_background_victim_is_never_exempted(tmp_path, monkeypatch):
 
 def test_mixed_run_exempts_only_the_attributable_recovered_ones(
         tmp_path, monkeypatch):
-    """6 refusals: 4 the budgeted worker's (recovered), 2 background. The run
-    fails on the 2, states the 4, and never rounds either into the other."""
+    """6 refusals: 4 the budgeted worker's (recovered), 2 a foreign endpoint's.
+    The foreign-producer probe sees the 2, so the exemption stays PER-ROW: the
+    run fails on the 2, states the 4, and never rounds either into the other."""
     _api_log_stub(monkeypatch, _pass_line(pages=2) + "\n")
     ch = _refusal_stub(6, _attribution((BACKFILL_TAG, "netops", 4),
-                                       ("endpoint:/api/incidents", "netops", 0)))
+                                       ("endpoint:/api/incidents", "netops", 2)),
+                       foreign_241="2\tendpoint:/api/incidents")
     h = _s06(tmp_path, monkeypatch, ch)
     assert h.memflat() is False
     notes = h.phases[-1]["notes"]
     assert "2 UNEXEMPTED MEMORY_LIMIT_EXCEEDED during this run" in notes
     assert "of 6 raised" in notes
     assert "4 backfill-negotiation refusals exempted, pass completed" in notes
+    assert "partial: foreign producers present" in notes
+    assert "endpoint:/api/incidents" in notes
     err = h.phases[-1]["evidence"]["clickhouse"]["memory_limit_exceeded"]
     assert err["backfill_attributed"] == 4
+    assert err["foreign_241"] == 2
     assert err["backfill_exempt"] == 4 and err["counted"] == 2
 
 
@@ -678,6 +690,117 @@ def test_the_exempting_run_does_not_also_claim_no_error_fired(
     notes = h.phases[-1]["notes"]
     assert "a transient that touched the ceiling and cost no work" not in notes
     assert "4 backfill-negotiation refusals exempted" in notes
+
+
+# -- like units: the full-delta exemption (run 083117507rl2) ----------------
+#
+# `system.errors` counts INCREMENTS — one per throwing thread plus the
+# query-level rethrow (max_threads=2 means a refused statement raises 2+) —
+# while `system.query_log` counts ROWS, one per statement. Subtracting rows
+# from increments manufactured ~5 phantom "unexempted" errors on every
+# negotiating run BY CONSTRUCTION (370 increments vs 365 rows; whole-history
+# 1160 vs 1133), with zero real victims (part_log: 0 errored merges). The
+# fix: when the backfill is the VERIFIED sole 241 producer, exempt the whole
+# raised delta; any foreign evidence falls back to the per-row subtraction.
+
+
+def _negotiating_stub(**overrides):
+    """Run 083117507rl2's measured shape: 370 raised increments against 365
+    attributed query rows, every row the budgeted worker's own."""
+    return _refusal_stub(370, _attribution((BACKFILL_TAG, "netops", 360),
+                                           (BACKFILL_PICK_TAG, "netops", 5)),
+                         **overrides)
+
+
+def test_the_measured_370_365_shape_passes_on_the_full_delta(
+        tmp_path, monkeypatch):
+    """370 increments, 365 rows, sole producer verified: the 5-increment gap
+    is thread-fan-out inside the same refusals, not 5 phantom victims, and
+    the whole delta is exempt."""
+    _api_log_stub(monkeypatch, _pass_line(pages=4) + "\n")
+    h = _s06(tmp_path, monkeypatch, _negotiating_stub())
+    assert h.memflat() is True, h.phases[-1]["notes"]
+    notes = h.phases[-1]["notes"]
+    assert "370 backfill-negotiation refusals exempted" in notes
+    assert "full-delta exemption: sole producer verified" in notes
+    err = h.phases[-1]["evidence"]["clickhouse"]["memory_limit_exceeded"]
+    assert err["window_count"] == 370 and err["delta"] == 370
+    assert err["backfill_attributed"] == 365
+    assert err["foreign_241"] == 0 and err["part_log_errored"] == 0
+    assert err["backfill_exempt"] == 370 and err["counted"] == 0
+
+
+def test_a_foreign_241_row_falls_back_to_the_per_row_subtraction(
+        tmp_path, monkeypatch):
+    """One producer that is NOT the backfill refused in the same window: the
+    full delta is off the table. The per-row subtraction under-exempts (the
+    5 counted here are increments, possibly phantoms) — the honest direction
+    when a foreign producer muddies the window — and the foreign producer is
+    NAMED so the operator knows why."""
+    _api_log_stub(monkeypatch, _pass_line(pages=4) + "\n")
+    ch = _negotiating_stub(foreign_241="2\tendpoint:/api/incidents")
+    h = _s06(tmp_path, monkeypatch, ch)
+    assert h.memflat() is False, h.phases[-1]["notes"]
+    notes = h.phases[-1]["notes"]
+    assert "5 UNEXEMPTED MEMORY_LIMIT_EXCEEDED" in notes
+    assert "partial: foreign producers present" in notes
+    assert "2x foreign 241 from endpoint:/api/incidents" in notes
+    err = h.phases[-1]["evidence"]["clickhouse"]["memory_limit_exceeded"]
+    assert err["foreign_241"] == 2
+    assert err["backfill_exempt"] == 365 and err["counted"] == 5
+
+
+def test_an_errored_merge_in_part_log_blocks_the_full_delta(
+        tmp_path, monkeypatch):
+    """Merges never produce a query_log row, so check (c) alone cannot clear
+    them: an OOM'd merge shows in part_log as error != 0, and its presence
+    means some raised increments may be a BACKGROUND victim's — per-row."""
+    _api_log_stub(monkeypatch, _pass_line(pages=4) + "\n")
+    ch = _negotiating_stub(**{"system.part_log": "3"})
+    h = _s06(tmp_path, monkeypatch, ch)
+    assert h.memflat() is False, h.phases[-1]["notes"]
+    notes = h.phases[-1]["notes"]
+    assert "5 UNEXEMPTED MEMORY_LIMIT_EXCEEDED" in notes
+    assert "partial: foreign producers present" in notes
+    assert "3 errored part op(s) in system.part_log" in notes
+    err = h.phases[-1]["evidence"]["clickhouse"]["memory_limit_exceeded"]
+    assert err["part_log_errored"] == 3
+    assert err["backfill_exempt"] == 365 and err["counted"] == 5
+
+
+def test_unreadable_sole_producer_probes_exempt_nothing(
+        tmp_path, monkeypatch):
+    """The standing rule extended to checks (c)/(d): a probe that cannot
+    answer verifies nothing, and unverified is not sole — NOTHING is exempt,
+    not even the per-row subset."""
+    _api_log_stub(monkeypatch, _pass_line(pages=4) + "\n")
+    ch = _negotiating_stub(**{
+        "foreign_241": (False, "Code 60: unknown function"),
+        "system.part_log": (False, "Code 60: no such table part_log")})
+    h = _s06(tmp_path, monkeypatch, ch)
+    assert h.memflat() is False, h.phases[-1]["notes"]
+    notes = h.phases[-1]["notes"]
+    assert "370 MEMORY_LIMIT_EXCEEDED during this run" in notes
+    assert "nothing exempted: sole-producer verification unreadable" in notes
+    err = h.phases[-1]["evidence"]["clickhouse"]["memory_limit_exceeded"]
+    assert err["foreign_241"] == -1 and err["part_log_errored"] == -1
+    assert err["backfill_exempt"] == 0 and err["counted"] == 370
+
+
+def test_MUTANT_dropping_the_foreign_producer_check_forgives_a_foreign_241(
+        tmp_path, monkeypatch):
+    """THE MUTANT for check (c). Assume 'no foreign producer' without asking
+    and the foreign-row run above goes green on the full delta — which is
+    what makes the probe load-bearing rather than decorative."""
+    _api_log_stub(monkeypatch, _pass_line(pages=4) + "\n")
+    monkeypatch.setattr(
+        ml, "ch_memory_error_foreign_producers",
+        lambda stack, start, end: (0, "", "MUTANT: assumed sole producer"))
+    ch = _negotiating_stub(foreign_241="2\tendpoint:/api/incidents")
+    h = _s06(tmp_path, monkeypatch, ch)
+    assert h.memflat() is True, (
+        "the mutant must go green — the foreign-producer probe is the only "
+        "thing standing between a foreign 241 and a full-delta exemption")
 
 
 # -- the two instruments, read directly -------------------------------------

@@ -703,6 +703,34 @@ def ch_memory_error_victims(stack, start: str, end: str, total: int) -> str:
 # An unreadable query_log or unreadable api log exempts NOTHING (-1, never 0):
 # a gate that cannot see must not forgive, and it must not be able to mistake
 # "I could not look" for "nothing was attributable".
+#
+# HOW MUCH is exempt (run 083117507rl2, 2026-08-31 — the units defect). The
+# first cut subtracted ATTRIBUTED QUERY ROWS (`system.query_log`, one per
+# refused statement) from RAISED ERROR INCREMENTS (`system.errors` /
+# `error_log`) — but ClickHouse bumps the 241 counter once per throwing
+# THREAD plus the query-level rethrow, so a refused query running
+# max_threads=2 raises 2+ increments for its single row. Measured: 370
+# increments against 365 rows in one window, 1160 against 1133 over the
+# table's whole history. The subtraction therefore manufactured ~5 phantom
+# "unexempted" errors on every negotiating run BY CONSTRUCTION, with zero
+# real victims behind them (part_log: 0 errored merges; the server log holds
+# exactly the 365 raises). Unlike units are never compared again.
+#
+# So with (a) attribution > 0 and (b) a completed pass, the gate decides HOW
+# MUCH to exempt by verifying the backfill was the SOLE 241 producer:
+#
+#   (c) query_log holds ZERO in-window 241 rows from any producer NOT tagged
+#       worker:timeintel-backfill* (ch_memory_error_foreign_producers), and
+#   (d) part_log holds ZERO error != 0 rows in the window — merges produce
+#       no query_log row, so (c) alone cannot clear them; an OOM'd merge
+#       shows up here (ch_part_log_errored).
+#
+# Both zero -> the ENTIRE raised delta is the backfill's own negotiation and
+# all of it is exempt. Either finds foreign work -> fall back to the per-row
+# subtraction (which under-exempts, never over-exempts) and NAME the foreign
+# producers in the note. Either probe unreadable with nothing foreign found
+# -> exempt NOTHING: sole-producer status is unverified, and the rule above
+# holds — a gate that cannot see must not forgive.
 CH_BACKFILL_TAG_PREFIX = "worker:timeintel-backfill"
 BACKFILL_PASS_COMPLETE = "backfill pass complete"
 
@@ -742,6 +770,68 @@ def ch_memory_error_backfill_attributed(stack, start: str,
         tags.append(f"{count}x {tag or user}")
     return total, "; ".join(tags), (
         f"system.query_log log_comment/user starting '{CH_BACKFILL_TAG_PREFIX}'")
+
+
+def ch_memory_error_foreign_producers(stack, start: str,
+                                      end: str) -> tuple[int, str, str]:
+    """(count, producers, source) — in-window 241 rows `system.query_log`
+    holds from ANY producer NOT tagged as the budgeted backfill worker.
+
+    Check (c) of the full-delta exemption (CH_BACKFILL_TAG_PREFIX header): a
+    zero here, beside a zero from `ch_part_log_errored`, proves the backfill
+    was the sole 241 producer the window has statement evidence of, so the
+    whole raised-increment delta is its own. -1 is UNREADABLE, never 0 — an
+    instrument that cannot answer verifies nothing. `trimBoth` mirrors the
+    attribution probe's Python-side `.strip()`, so no row can read as
+    attributed there and foreign here over whitespace."""
+    bound = ch_window_bound(start, end)
+    if not bound:
+        return -1, "", "no run window"
+    ok, out = stack.ch(
+        f"SELECT toInt64(count()) AS foreign_241, "
+        f"arrayStringConcat(groupUniqArray(10)(if(log_comment != '', "
+        f"log_comment, if(user != '', user, '(no log_comment, no user)'))), "
+        f"'; ') FROM system.query_log "
+        f"WHERE exception_code = {CH_MEM_ERROR_CODE} AND {bound} "
+        f"AND NOT (startsWith(trimBoth(log_comment), "
+        f"'{CH_BACKFILL_TAG_PREFIX}') "
+        f"OR startsWith(trimBoth(user), '{CH_BACKFILL_TAG_PREFIX}'))")
+    if not ok:
+        return -1, "", (f"system.query_log foreign-producer probe unreadable "
+                        f"({out[:100]})")
+    cells = out.strip().splitlines()[0].split("\t") if out.strip() else []
+    try:
+        count = int(float(cells[0]))
+    except (IndexError, ValueError):
+        return -1, "", (f"foreign-producer answer unparseable "
+                        f"({out.strip()[:80]!r})")
+    producers = cells[1].strip() if len(cells) > 1 else ""
+    return count, producers, (
+        f"system.query_log {CH_MEM_ERROR_CODE}s not tagged "
+        f"'{CH_BACKFILL_TAG_PREFIX}*' over the window")
+
+
+def ch_part_log_errored(stack, start: str, end: str) -> tuple[int, str]:
+    """(count, source) — part operations (merges above all) that ENDED IN
+    ERROR inside the window, from `system.part_log`.
+
+    Check (d) of the full-delta exemption: merges never produce a query_log
+    row, so check (c) alone cannot clear them — a merge that hit 241 shows
+    up here as `error != 0`. A cheap COUNT; -1 is UNREADABLE, never 0."""
+    bound = ch_window_bound(start, end)
+    if not bound:
+        return -1, "no run window"
+    ok, out = stack.ch(
+        f"SELECT toInt64(countIf(error != 0)) FROM system.part_log "
+        f"WHERE {bound}")
+    if not ok:
+        return -1, f"system.part_log unreadable ({out[:100]})"
+    try:
+        count = int(float(out.strip().splitlines()[0].split("\t")[0]))
+    except (IndexError, ValueError):
+        return -1, (f"system.part_log answer unparseable "
+                    f"({out.strip()[:80]!r})")
+    return count, "system.part_log rows with error != 0 over the window"
 
 
 def backfill_passes_completed(blob: str | None) -> int:
@@ -7211,6 +7301,11 @@ class Harness:
               "backfill_attribution_source": "not examined (no refusal)",
               "backfill_passes": -1,
               "backfill_pass_source": "not examined (no refusal)",
+              # Checks (c)/(d) — asked only once (a)+(b) hold.
+              "foreign_241": -1, "foreign_241_producers": "",
+              "foreign_241_source": "not examined (no exemptable refusal)",
+              "part_log_errored": -1,
+              "part_log_source": "not examined (no exemptable refusal)",
               "backfill_exempt": 0, "exemption_note": ""}
         problems: list = []
         if base < 0 or now < 0:
@@ -7262,8 +7357,52 @@ class Harness:
             # ATTRIBUTABLE **AND** RECOVERED, or nothing. A -1 on either
             # instrument is unreadable and exempts nothing; a refusal with no
             # completing pass is the STALL shape and must stay red.
-            exempt = (min(attributed, raised)
-                      if attributed > 0 and passes > 0 else 0)
+            exempt = 0
+            if attributed > 0 and passes > 0:
+                # HOW MUCH to exempt. `raised` counts error INCREMENTS (one
+                # per throwing thread plus the query-level rethrow) and
+                # `attributed` counts query ROWS — different units, and
+                # subtracting one from the other manufactured ~5 phantom
+                # "unexempted" errors on every negotiating run (the
+                # CH_BACKFILL_TAG_PREFIX header, run 083117507rl2). So verify
+                # the backfill was the SOLE 241 producer — checks (c)+(d) —
+                # and exempt the whole raised delta; any foreign evidence
+                # falls back to the per-row subtraction, which under-exempts
+                # and never over-exempts.
+                foreign, producers, foreign_source = (
+                    ch_memory_error_foreign_producers(self.stack, start, end))
+                part_errored, part_source = ch_part_log_errored(
+                    self.stack, start, end)
+                ev.update({"foreign_241": foreign,
+                           "foreign_241_producers": producers,
+                           "foreign_241_source": foreign_source,
+                           "part_log_errored": part_errored,
+                           "part_log_source": part_source})
+                if foreign == 0 and part_errored == 0:
+                    exempt = raised
+                    branch = ("full-delta exemption: sole producer verified "
+                              "(no foreign 241 in system.query_log, no "
+                              "errored part op in system.part_log)")
+                elif foreign > 0 or part_errored > 0:
+                    exempt = min(attributed, raised)
+                    foreign_bits = []
+                    if foreign > 0:
+                        foreign_bits.append(f"{foreign}x foreign 241 from "
+                                            f"{producers or '(unnamed)'}")
+                    if part_errored > 0:
+                        foreign_bits.append(f"{part_errored} errored part "
+                                            f"op(s) in system.part_log")
+                    branch = (f"partial: foreign producers present — only "
+                              f"the {attributed} attributed query row(s) of "
+                              f"{raised} raised increment(s) are exempt "
+                              f"({'; '.join(foreign_bits)})")
+                else:
+                    # Neither probe found foreign work, but at least one
+                    # could not answer: sole-producer status is UNVERIFIED,
+                    # and a gate that cannot see must not forgive.
+                    ev["exemption_note"] = (
+                        f"nothing exempted: sole-producer verification "
+                        f"unreadable ({foreign_source}; {part_source})")
             counted = raised - exempt
             ev["backfill_exempt"] = exempt
             ev["counted"] = counted
@@ -7271,14 +7410,19 @@ class Harness:
                 ev["exemption_note"] = (
                     f"{exempt} backfill-negotiation refusals exempted, pass "
                     f"completed ({tags or 'attributed by log_comment'}; "
-                    f"{passes} completed pass(es) — {pass_source})")
+                    f"{passes} completed pass(es) — {pass_source}; {branch})")
                 log(f"memflat: {ev['exemption_note']}")
             if counted > 0:
-                head = (
-                    f"clickhouse: {counted} {CH_MEM_ERROR} during this run "
-                    if not exempt else
-                    f"clickhouse: {counted} UNEXEMPTED {CH_MEM_ERROR} during "
-                    f"this run (of {raised} raised; {ev['exemption_note']}) ")
+                if exempt:
+                    head = (f"clickhouse: {counted} UNEXEMPTED {CH_MEM_ERROR} "
+                            f"during this run (of {raised} raised; "
+                            f"{ev['exemption_note']}) ")
+                elif ev["exemption_note"]:
+                    head = (f"clickhouse: {counted} {CH_MEM_ERROR} during "
+                            f"this run ({ev['exemption_note']}) ")
+                else:
+                    head = (f"clickhouse: {counted} {CH_MEM_ERROR} during "
+                            f"this run ")
                 problems.append(
                     head
                     + f"(system.errors delta {delta}"
