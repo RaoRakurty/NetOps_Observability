@@ -6331,10 +6331,11 @@ async def _epoch_lifecycle(epoch: _EngineEpoch, loop_yield,
             # forward and the row the previous owner wrote still stands.
             _seed_expire(merged_cid, "merged-away")
             continue
-        # TRACKER 155b D2b: same rule on the terminal paths — an adopted seed
-        # that has never persisted may not write its first (and here, TERMINAL)
-        # version onto a partition this replica no longer owns.
-        if not _seed_owner_guard(merged_cid, reg):
+        # TRACKER 155: same rule on the terminal paths — no object writes a
+        # version (and here, a TERMINAL one) onto a partition this replica no
+        # longer owns. A tombstone written from the wrong replica is the worst
+        # of the class: it is this id's last durable word.
+        if not _ownership_persist_guard(merged_cid, reg):
             continue
         reg["version"] += 1
         VERSIONS_PERSISTED += 1
@@ -6387,8 +6388,8 @@ async def _epoch_lifecycle(epoch: _EngineEpoch, loop_yield,
                 # computed. See `_seed_only`.
                 _seed_expire(cid, "quiesce")
                 continue
-            # TRACKER 155b D2b — see `_seed_owner_guard`.
-            if not _seed_owner_guard(cid, reg):
+            # TRACKER 155 — see `_ownership_persist_guard`.
+            if not _ownership_persist_guard(cid, reg):
                 continue
             reg["version"] += 1
             VERSIONS_PERSISTED += 1
@@ -6434,10 +6435,10 @@ async def _epoch_lifecycle(epoch: _EngineEpoch, loop_yield,
                 # one — it is counted as an expired seed.
                 _seed_expire(cid, "cap")
                 continue
-            # TRACKER 155b D2b — see `_seed_owner_guard`. Dropped here is not a
-            # force-close and is not counted as one (the cap's bound is still
+            # TRACKER 155 — see `_ownership_persist_guard`. Dropped here is not
+            # a force-close and is not counted as one (the cap's bound is still
             # honoured: the entry leaves OPEN_OBJECTS either way).
-            if not _seed_owner_guard(cid, reg):
+            if not _ownership_persist_guard(cid, reg):
                 continue
             reg["version"] += 1
             VERSIONS_PERSISTED += 1
@@ -6904,13 +6905,20 @@ async def _engine_cycle_inner(epoch: _EngineEpoch | None) -> None:
                 # ordinary open object on every path, with its AffectedHistory
                 # already carrying the pre-handoff blast radius (tracker 187).
                 _seed_adopted(reg, snap.correlation_id, now)
-            # TRACKER 155b D2b. Scoped to a registration that adopted a durable
-            # identity and has not written a version of its own yet: its first
-            # version is a corr_current overwrite of ANOTHER replica's row, so
-            # it may only be written while this replica still owns the tenant's
-            # partition. Otherwise the registration is dropped (counted, logged)
-            # and the durable row stands. A no-op for every other object.
-            if reg is not None and not _seed_owner_guard(snap.correlation_id, reg):
+            # TRACKER 155. STATE FOLLOWS PARTITION OWNERSHIP, asked at the
+            # moment of the write and of EVERY object: an existing registration
+            # whose tenant's partition has moved away may not persist a version
+            # or even a corr_current touch (both are latest-write-wins
+            # overwrites of the true owner's row — 155c F2 wrote a duplicate v7
+            # this way, every 30 s for six minutes). It is dropped instead,
+            # counted and logged, and the durable row stands.
+            if reg is not None and not _ownership_persist_guard(snap.correlation_id, reg):
+                continue
+            # ...and the same question for an object that does not exist yet
+            # (155c F1: an in-flight cycle minted a fresh object 13 s after the
+            # revoke). This is where objects ENTER OPEN_OBJECTS, so this is
+            # where the admission guard belongs.
+            if reg is None and not _ownership_admission_guard(snap.tenant_id):
                 continue
             if reg is None:
                 OPEN_OBJECTS[snap.correlation_id] = {
@@ -8935,8 +8943,10 @@ def tenant_partition(tenant: str, num_partitions: int) -> int:
 #      `suspected` v7 NINETEEN SECONDS AFTER revoking them; corr_current's
 #      latest-write-wins then demoted a confirmed 9-node v6. Fixed in both
 #      halves: `_seed_discard_revoked` (revoke drops unadopted placeholders) and
-#      `_seed_owner_guard` (an adopted seed's FIRST version requires the
-#      partition to still be owned).
+#      the ownership guard, which at that point covered only D2b — an adopted
+#      seed's FIRST version required the partition to still be owned. See the
+#      155-completion block below for why that scoping was not enough and what
+#      `_ownership_persist_guard` asks now.
 #
 #   D3 VERDICT DEMOTION DURING REFILL. Even on the CORRECT owner, the first
 #      post-adoption persist recomputes from a partially-refilled window and can
@@ -9035,6 +9045,73 @@ OWNERSHIP_SEED_UNOWNED_DROPPED_TOTAL = 0
 # refilled).
 OWNERSHIP_SEED_VERDICT_CARRIED_TOTAL = 0
 _OWNERSHIP_SEED_TASK: asyncio.Task | None = None
+
+# ── Tracker 155 (COMPLETION): STATE FOLLOWS PARTITION OWNERSHIP ──────────────
+#
+# 931efffb reconstructed IDENTITY on the acquiring side and 557dbef7 stopped a
+# transient owner's FIRST post-adoption version. Run ownership-155c-08311027
+# then measured the half neither covered: THE OLD OWNER STILL WRITING FOR
+# PARTITIONS IT HAD LOST. Two mechanisms, both from the same root — a
+# registration outlives the partition its tenant lives on:
+#
+#   F1 (restart arm). c5 held the partitions ~10 s during the bounce and MINTED
+#      A FRESH OBJECT (3eec17dd) for the story's entities 13 s AFTER revoking
+#      them: the consume/reconcile cycle that was already in flight when the
+#      revoke landed simply ran to completion and registered a new object for a
+#      tenant that had moved. The story then had two objects (3eec17dd v1 and
+#      the true owner's 9cd24b21) and `single_incident` failed.
+#
+#   F2 (exit/join arm). c5 had ADOPTED a placeholder and persisted v6, which
+#      disarms `seed_pending_first_persist` — so 557dbef7's D2b guard, scoped to
+#      the FIRST version, no longer applied, and D2a discards only UNADOPTED
+#      placeholders. c5 therefore kept the live object and continued it every
+#      30 s for six minutes on a partition it no longer owned, writing a
+#      DUPLICATE (correlation_id, version) = (b0f0fd7f, 7) whose content
+#      differed from the true owner's v7. corr_current is
+#      ReplacingMergeTree(created_at) latest-write-wins, so the ORPHAN became
+#      the current row: `seam_owner` wrong, durability assertion 8 failed.
+#
+# THE RULE, and it is now general rather than seed-scoped: A REGISTRATION MAY
+# ONLY LIVE, AND MAY ONLY WRITE, WHILE THIS REPLICA OWNS THE PARTITION ITS
+# TENANT HASHES ONTO. Three mechanisms enforce it, in the order they fire:
+#
+#   1. FLUSH-AND-RELEASE (`_handoff_flush` at revoke, `_release_lost_partitions`
+#      at assignment). The departing owner persists a final OPEN version of each
+#      affected object's current snapshot — a HANDOFF, not a close — and then
+#      forgets the registration if the partition does not come back.
+#   2. PERSIST-TIME OWNERSHIP GUARD (`_ownership_persist_guard`), on EVERY
+#      object and EVERY persist, open or terminal. This is what catches an
+#      in-flight cycle that completes after the move (F2's mechanism, and F1's
+#      13 s window for an object that already existed).
+#   3. NEW-OBJECT ADMISSION GUARD (`_ownership_admission_guard`), where objects
+#      enter OPEN_OBJECTS. This is what catches F1's fresh mint.
+#
+# Objects flushed at revoke (a final open version, freshest state to the new
+# owner).
+OWNERSHIP_HANDOFF_FLUSHED_TOTAL = 0
+# Objects on a revoked partition that could NOT be flushed inside
+# CORR_REVOKE_BUDGET_S (or with no ClickHouse to flush to). They are released
+# anyway — see `_handoff_flush` for the residue bound that costs.
+OWNERSHIP_HANDOFF_UNFLUSHED_TOTAL = 0
+# Registrations forgotten because the assignment did not give the partition
+# back.
+OWNERSHIP_HANDOFF_RELEASED_TOTAL = 0
+# Persists refused (and the registration dropped) because the tenant's partition
+# is not owned at persist time. The general form of D2b; 155b's
+# seed-first-version counter above is now the labelled subset of this one.
+OWNERSHIP_UNOWNED_PERSIST_DROPPED_TOTAL = 0
+# New objects a cycle tried to REGISTER for a tenant whose partition is not
+# owned — F1's fresh mint.
+OWNERSHIP_UNOWNED_ADMISSION_DROPPED_TOTAL = 0
+# Partitions revoked but not yet resolved: the assignment callback releases the
+# ones it did not get back. Mutated in place (never rebound) so both callbacks
+# see the same object.
+_OWNERSHIP_PENDING_RELEASE: set[int] = set()
+# Rate limit for the admission guard's INFO line: buffered evidence for a
+# departed tenant keeps producing snapshots until it ages out of the window
+# (RETENTION_REQUIRED_S), so the guard fires repeatedly by design and must not
+# flood the log. The COUNTER is exact; only the line is throttled.
+_OWNERSHIP_ADMISSION_LOG_LAST = 0.0
 
 # The `kind` a placeholder's reconstructed nodes carry. Distinct on purpose: it
 # is never a real signal kind, so a placeholder node can never be mistaken for
@@ -9194,12 +9271,72 @@ def _seed_only(reg: dict) -> bool:
     return bool(reg.get("seed_only"))
 
 
+def _forget_object(cid: str) -> None:
+    """Remove ONE correlation_id from every structure this process keys by it.
+
+    THE ENUMERATION, read off the code rather than remembered — every per-object
+    structure in this module, and for each one either the removal or the proof
+    that it needs none:
+
+      * `OPEN_OBJECTS`                 — the registration itself. REMOVED here.
+      * `_ARCHIVE_SLICE_HASH`          — cid -> last archived slice id-hash, a
+                                         process-lifetime dict. REMOVED here
+                                         (leaving it would also leak, one entry
+                                         per object, forever).
+      * `_LIFECYCLE_SEEN_WINDOW`       — P2 step 4a's cross-epoch deque of the
+                                         last K cohorts' `seen` sets. DISCARDED
+                                         here. It is already inert by
+                                         construction (`_epoch_lifecycle` builds
+                                         survivors as
+                                         `[OPEN_OBJECTS[c] ... if c in
+                                         OPEN_OBJECTS]`), but discarding costs
+                                         O(K) set operations and removes the
+                                         class of reasoning entirely: a released
+                                         id can never again be offered to
+                                         `find_merges` as a merge TARGET.
+      * `_EngineEpoch.seen`            — the epoch's union of cohort `seen` sets
+                                         (P1 change H). NOT reachable from here
+                                         (the epoch is a local of
+                                         `_drain_epoch_sweep`/`engine_cycle`) and
+                                         NOT needed: quiesce and the 163 cap
+                                         iterate OPEN_OBJECTS and consult `seen`
+                                         only as a skip set, and the merge pass
+                                         filters through OPEN_OBJECTS as above.
+                                         A stale id in it is a no-op.
+      * `_cont_buckets` / `cont_index` — the tracker-162 continuation index.
+                                         REBUILT from OPEN_OBJECTS at the top of
+                                         every cohort, so removal from
+                                         OPEN_OBJECTS IS the removal from it.
+      * tracker 192's epoch structures — `_EngineEpoch.serial`,
+                                         `.live_keys`, `.memos`, and the carried
+                                         edge cache `_TENANT_EDGES` are keyed by
+                                         TENANT and NODE KEY, never by
+                                         correlation_id, so an object's removal
+                                         has nothing to remove there. (A whole
+                                         tenant leaving is a different question,
+                                         deliberately out of scope: the edge
+                                         cache is bounded and ages out by its own
+                                         staleness filter.)
+      * `AffectedHistory` (tracker 187)— lives INSIDE the registration dict, so
+                                         it is released with it.
+      * `WINDOW_BUFFER` / `_BUFFERED_*`— keyed by SIGNAL, not by object. Left
+                                         alone on purpose: the buffered evidence
+                                         of a departed tenant ages out of the
+                                         window on its own, and the admission
+                                         guard is what stops it re-minting an
+                                         object in the meantime.
+    """
+    OPEN_OBJECTS.pop(cid, None)
+    _ARCHIVE_SLICE_HASH.pop(cid, None)
+    for _seen in _LIFECYCLE_SEEN_WINDOW:
+        _seen.discard(cid)
+
+
 def _seed_expire(cid: str, why: str) -> None:
     """Drop an unadopted placeholder. Counted, never a persisted version."""
     global OWNERSHIP_SEED_EXPIRED_TOTAL
     OWNERSHIP_SEED_EXPIRED_TOTAL += 1
-    OPEN_OBJECTS.pop(cid, None)
-    _ARCHIVE_SLICE_HASH.pop(cid, None)
+    _forget_object(cid)
     log.debug("ownership seed %s expired unadopted (%s) — durable row untouched",
               cid[:8], why)
 
@@ -9213,7 +9350,7 @@ def _seed_adopted(reg: dict, cid: str, now: datetime) -> None:
 
       * `seed_pending_first_persist` — this object has adopted a durable
         identity but has not yet written a version of its own. Until it does,
-        `_seed_owner_guard` refuses to let it persist on a partition this
+        `_ownership_persist_guard` refuses to let it persist on a partition this
         replica no longer owns (155b D2b: a transient owner wrote a thin v7
         NINETEEN SECONDS after revoking the partition and, by corr_current
         latest-write-wins, demoted the confirmed v6 it continued).
@@ -9288,7 +9425,8 @@ def _seed_discard_revoked(revoked_partitions: frozenset[int]) -> int:
     a thin 3-node `suspected` version 19 s AFTER revoking the partition, which
     corr_current's latest-write-wins then made the current row over a confirmed
     9-node version. Discarding here removes the adoption path entirely; the
-    complementary guard (`_seed_owner_guard`) catches an object that was already
+    complementary guard (`_ownership_persist_guard`) catches an object that was
+    already
     adopted when the revoke landed.
 
     Only UNADOPTED placeholders are touched. An ordinary open object is left
@@ -9306,8 +9444,7 @@ def _seed_discard_revoked(revoked_partitions: frozenset[int]) -> int:
                and tenant_partition(canon_tenant(reg["snapshot"].tenant_id),
                                     total) in revoked_partitions]
     for cid in victims:
-        OPEN_OBJECTS.pop(cid, None)
-        _ARCHIVE_SLICE_HASH.pop(cid, None)
+        _forget_object(cid)
         OWNERSHIP_SEED_REVOKED_TOTAL += 1
     if victims:
         log.info("ownership seed: discarded %d unadopted identity "
@@ -9318,43 +9455,300 @@ def _seed_discard_revoked(revoked_partitions: frozenset[int]) -> int:
     return len(victims)
 
 
-def _seed_owner_guard(cid: str, reg: dict) -> bool:
-    """Tracker 155b D2b: may this registration persist its FIRST version?
+def _ownership_persist_guard(cid: str, reg: dict) -> bool:
+    """Tracker 155 (completion): may this registration persist AT ALL?
 
-    True for every ordinary object — the guard is scoped to registrations that
-    were ADOPTED FROM A PLACEHOLDER and have persisted nothing of their own yet,
-    and it is disarmed the moment such an object writes a version. Nothing about
-    a non-seed-descended object's lifecycle changes.
+    THE GENERALIZATION OF 155b's D2b, and the reason it had to be generalized:
+    D2b asked the ownership question only for a seed-descended registration that
+    had not yet written a version of its own, and it DISARMED the moment such an
+    object persisted once (`_seed_first_persist_done`). Run
+    ownership-155c-08311027's exit/join arm walked straight through that hole —
+    c5 adopted a placeholder, persisted v6 (disarming the guard), and then
+    continued the object every 30 s for SIX MINUTES on a partition it no longer
+    owned, writing a duplicate (correlation_id, version) whose content differed
+    from the true owner's and which latest-write-wins made current.
 
-    For that one class it asks the only question that matters: does this replica
-    still own the tenant's partition? A seed-descended object's identity comes
-    from ANOTHER replica's durable row, and its first version is a `corr_current`
-    latest-write-wins overwrite of that row. Writing it from a replica that has
-    already handed the partition back does not continue the incident, it
-    DEMOTES it — measured, 155b restart arm. So the registration is dropped
-    without persisting: the durable row the previous owner left stands, and the
-    replica that now owns the partition seeds and continues it.
+    So the question is now asked of EVERY object on EVERY persist — open,
+    heartbeat touch or terminal, seed-descended or ordinary — at the moment of
+    the write:
 
-    Counted (`corr_ownership_seed_unowned_dropped_total`) and logged at INFO —
-    an operator must be able to see it happen, and it is a correct outcome
-    rather than a fault.
+        does this replica still own the partition this tenant's records land on?
+
+    Ownership is asked through `_seed_tenant_owned`, i.e. through
+    `tenant_partition` against the recorded assignment: the single source of
+    truth the seed scopes its own query with. It is DEFAULT-OPEN exactly where
+    there is no knowledge to be default-closed about (no assignment callback has
+    ever run — single-process dev, a unit invocation, a broker-less run), so a
+    single-replica deployment behaves precisely as it always has.
+
+    Unowned -> the registration is DROPPED WITHOUT PERSISTING. The durable row
+    the true owner holds stands untouched, and this replica stops carrying state
+    it has no right to write. This is not a fault, it is the correct outcome of
+    a partition move, so it is counted and logged at INFO rather than warned.
+
+    WHY DROPPING IS SAFE, not a loss: by the time this fires the object's
+    partition belongs to another replica, which seeds its identity from the
+    durable row (931efffb) and continues it. Anything this replica has that the
+    durable row does not is exactly the residue `_handoff_flush` exists to hand
+    over first, and its bound is stated there.
+
+    COST, measured rather than asserted: one `_seed_tenant_owned` call per
+    persist — `canon_tenant` + a murmur2 over a short tenant string plus an
+    `any()` over at most `len(TOPICS)` small lists — is 13.0 us on this box
+    (200k calls, 12 topics), against a persist that is MILLISECONDS of
+    serialization plus a ClickHouse round trip. Two to three orders of magnitude
+    below the thing it guards, and it is paid once per version, never per node,
+    edge or signal. Pinned by
+    `test_the_ownership_check_is_negligible_per_persist`.
+
+    Counted twice, on purpose: `corr_ownership_unowned_persist_dropped_total`
+    for every drop, and 155b's `corr_ownership_seed_unowned_dropped_total` for
+    the seed-first-version SUBSET, so that counter keeps the exact meaning it
+    was commissioned with.
     """
+    global OWNERSHIP_UNOWNED_PERSIST_DROPPED_TOTAL
     global OWNERSHIP_SEED_UNOWNED_DROPPED_TOTAL
-    if not reg.get("seed_pending_first_persist"):
-        return True
     snap = reg.get("snapshot")
     tenant = snap.tenant_id if snap is not None else ""
     if _seed_tenant_owned(tenant):
         return True
-    OWNERSHIP_SEED_UNOWNED_DROPPED_TOTAL += 1
-    OPEN_OBJECTS.pop(cid, None)
-    _ARCHIVE_SLICE_HASH.pop(cid, None)
-    log.info("corr-object %s adopted a seeded identity but this replica no "
-             "longer owns its tenant's partition — dropped WITHOUT persisting, "
-             "so the durable row the previous owner wrote still stands "
-             "(tracker 155b, unowned_dropped_total=%d)",
-             cid[:8], OWNERSHIP_SEED_UNOWNED_DROPPED_TOTAL)
+    OWNERSHIP_UNOWNED_PERSIST_DROPPED_TOTAL += 1
+    seed_first = bool(reg.get("seed_pending_first_persist"))
+    if seed_first:
+        OWNERSHIP_SEED_UNOWNED_DROPPED_TOTAL += 1
+    _forget_object(cid)
+    log.info("corr-object %s belongs to a tenant whose partition this replica "
+             "no longer owns — dropped WITHOUT persisting, so the durable row "
+             "the owning replica holds still stands (tracker 155, "
+             "seed_first_version=%s, persist_dropped_total=%d)",
+             cid[:8], seed_first, OWNERSHIP_UNOWNED_PERSIST_DROPPED_TOTAL)
     return False
+
+
+def _ownership_admission_guard(tenant: str) -> bool:
+    """Tracker 155 (completion): may a cycle REGISTER a new object for `tenant`?
+
+    F1, measured (ownership-155c-08311027, restart arm): the old owner c5 held
+    the partitions ~10 s during the bounce and minted a FRESH object
+    (3eec17dd) for the story's entities THIRTEEN SECONDS after revoking them.
+    Nothing was wrong with the evidence or the derivation — the consume/reconcile
+    cycle that was already in flight when the revoke landed simply ran to
+    completion, and `_ownership_persist_guard` cannot help because there is no
+    registration yet to guard. So the check belongs where objects ENTER
+    OPEN_OBJECTS.
+
+    THIS CANNOT FIRE ON HEALTHY OWNERSHIP. Every producer keys by tenant
+    (`tenant_partition`), so evidence for a tenant can only arrive on that
+    tenant's partition; if this replica is consuming it, it owns it. The only
+    way to reach a snapshot for an unowned tenant is the post-revoke race: the
+    evidence is already in `WINDOW_BUFFER` from before the move, and the engine
+    keeps re-deriving objects from it until it ages out of the window
+    (RETENTION_REQUIRED_S). That is also why the log line is rate-limited while
+    the counter is exact.
+    """
+    global OWNERSHIP_UNOWNED_ADMISSION_DROPPED_TOTAL
+    global _OWNERSHIP_ADMISSION_LOG_LAST
+    if _seed_tenant_owned(tenant):
+        return True
+    OWNERSHIP_UNOWNED_ADMISSION_DROPPED_TOTAL += 1
+    mono = time.monotonic()
+    if (mono - _OWNERSHIP_ADMISSION_LOG_LAST) >= 30.0:
+        _OWNERSHIP_ADMISSION_LOG_LAST = mono
+        log.info("declined to open a NEW corr-object for tenant %s: this "
+                 "replica no longer owns its partition (buffered pre-move "
+                 "evidence re-deriving; it ages out with the window). The "
+                 "owning replica keeps the incident whole — tracker 155, "
+                 "admission_dropped_total=%d",
+                 tenant, OWNERSHIP_UNOWNED_ADMISSION_DROPPED_TOTAL)
+    return False
+
+
+def _handoff_candidates(partitions: frozenset[int], *,
+                        placeholders: bool) -> list[str]:
+    """The registrations whose tenant hashes onto one of `partitions`,
+    MOST-RECENTLY-UPDATED FIRST.
+
+    The order is the flush order and it is a choice with a reason: under budget
+    pressure the objects that get flushed are the ones whose in-memory state has
+    moved most recently, which are (a) the in-flight incidents an operator is
+    watching right now, (b) the ones furthest ahead of their durable row, and
+    (c) the ones most likely to receive further evidence on the acquiring
+    replica, i.e. the ones where handing over the freshest state buys the most.
+    Ties break on correlation_id so the order is total and deterministic.
+    """
+    total = _seed_partition_total()
+    if total <= 0 or not partitions:
+        return []
+    rows = [(reg["last_seen"], cid) for cid, reg in OPEN_OBJECTS.items()
+            if (placeholders or not _seed_only(reg))
+            and tenant_partition(canon_tenant(reg["snapshot"].tenant_id),
+                                 total) in partitions]
+    rows.sort(key=lambda r: (-r[0].timestamp(), r[1]))
+    return [cid for _, cid in rows]
+
+
+async def _handoff_flush(partitions: frozenset[int]) -> tuple[int, int]:
+    """FLUSH the open objects of REVOKED partitions — the first half of
+    flush-and-release. Returns (flushed, unflushed).
+
+    WHAT IS WRITTEN: one more version of the object's CURRENT snapshot, state
+    `open`. This is a HANDOFF, not a close — the incident is not over, it has
+    changed owner, and the acquiring replica's seed (931efffb) continues it from
+    exactly this row: identity, version (numbering resumes above it), blast
+    radius and durable verdict. Writing `closed` here would be a lie about the
+    incident and would make the new owner resurrect a closed object.
+
+    HONESTY — NOTHING IS RECOMPUTED HERE. The row carries `reg["snapshot"]`
+    exactly as the last engine cycle left it. That field is only ever assigned
+    an `ObjectSnapshot` that `run_window` emitted and `_reconcile` fully
+    evaluated (see the reconcile loop: `reg["snapshot"] = snap` is the LAST
+    statement of the content-moved branch, after the persist decision), so there
+    is no such thing as a half-built snapshot to catch here — it is always the
+    last CONSISTENT, fully-evaluated state, which may be newer than the last
+    version that was persisted because damping suppressed the write. No verdict,
+    hypothesis, edge or count is re-derived in this hook: a rebalance may not
+    manufacture reasoning, and the whole point of the flush is to hand over what
+    was already computed.
+
+    The blast radius column IS the object's monotone union (tracker 187), for
+    the same reason the three terminal paths pass it: this is this owner's LAST
+    word for the object, so the row must carry the whole radius it accumulated,
+    not just the current window's projection. That is also what makes the
+    acquiring replica's `AffectedHistory` re-seed lossless.
+
+    BOUNDED by the existing revoke discipline. This callback runs INSIDE the
+    rejoin, so the flush gets ONE `CORR_REVOKE_BUDGET_S` (5 s), checked before
+    every object AND applied to each individual persist so no single slow write
+    can overrun the wall. Worst added rejoin latency is therefore
+    CORR_REVOKE_BUDGET_S on top of the flush/commit hook's own 2x backstop —
+    15 s against a 60 s rebalance timeout, still under a third of it.
+
+    WHAT IT COSTS TO RUN OUT OF BUDGET — the residue bound, stated rather than
+    hoped. An object that is not flushed is still RELEASED (state must follow
+    ownership; keeping it is what F2 measured). The new owner then seeds from
+    the object's LAST DURABLE VERSION instead of its last in-memory snapshot, so
+    what is lost is exactly the un-persisted window residue:
+      * window growth and signal/instance churn since that version — damped
+        away by design (#100), never material;
+      * at most one MATERIAL move, and only if it arrived inside the last
+        CORR_VERSION_HEARTBEAT_S (900 s) — beyond that the heartbeat had already
+        forced a version;
+      * entities that entered AND left the blast radius inside that same
+        interval, which the durable `affected` column therefore never recorded.
+    Identity, version monotonicity and the durable verdict are NOT at risk: they
+    come from the durable row, which exists by construction (an object in
+    OPEN_OBJECTS on a partition being revoked was either seeded from a durable
+    row or persisted v1 when it opened).
+    """
+    global OWNERSHIP_HANDOFF_FLUSHED_TOTAL, OWNERSHIP_HANDOFF_UNFLUSHED_TOTAL
+    global VERSIONS_PERSISTED
+    order = _handoff_candidates(partitions, placeholders=False)
+    if not order:
+        return (0, 0)
+    started = time.monotonic()
+    deadline = started + CORR_REVOKE_BUDGET_S
+    flushed = 0
+    unflushed = 0
+    for cid in order:
+        reg = OPEN_OBJECTS.get(cid)
+        if reg is None:
+            continue                      # closed by a concurrent cycle
+        left = deadline - time.monotonic()
+        if ch is None or left <= 0.0:
+            unflushed += 1
+            continue
+        snap = reg["snapshot"]
+        try:
+            # Fold this snapshot into the object's own history FIRST, so the
+            # column below is the true union including what we are writing.
+            await _affected_note(reg, snap)
+            hist = reg.get("affected_hist")
+            reg["version"] += 1
+            await asyncio.wait_for(
+                _persist_snapshot(
+                    snap, reg["version"], "open", [],
+                    # A handoff checkpoint is the highest-value Evidence there
+                    # is for the acquiring replica: it is the row its seed will
+                    # read. Never the heartbeat class.
+                    priority_class=EVIDENCE_CLASS_DECISION,
+                    affected=hist.merged_with({}) if hist is not None else None),
+                timeout=left)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:  # noqa: BLE001 — observable, never fatal (§10)
+            # §16.1: a failed flush is COUNTED as unflushed, never swallowed.
+            # The version number it consumed is spent exactly as it is on every
+            # other failed persist in this file, and the dedup token is
+            # content-derived, so nothing is duplicated.
+            unflushed += 1
+            log.warning("ownership handoff flush FAILED for corr-object %s "
+                        "(%s: %s) — releasing on its last durable version",
+                        cid[:8], type(exc).__name__, exc)
+            continue
+        now = datetime.now(timezone.utc)
+        reg["last_persist"] = now
+        reg["last_version"] = now
+        VERSIONS_PERSISTED += 1
+        _wa_note_outcome(snap.tenant_id, "persisted")
+        # This object has written a version of its own; 155b's first-version
+        # guard is spent whether or not it was seed-descended.
+        _seed_first_persist_done(reg)
+        flushed += 1
+    OWNERSHIP_HANDOFF_FLUSHED_TOTAL += flushed
+    OWNERSHIP_HANDOFF_UNFLUSHED_TOTAL += unflushed
+    log.info("ownership handoff: flushed %d open object(s) and could not flush "
+             "%d for revoked partition(s) %s in %.0f ms (budget %.1fs) — the "
+             "acquiring replica seeds from these rows "
+             "(flushed_total=%d, unflushed_total=%d)",
+             flushed, unflushed, sorted(partitions),
+             (time.monotonic() - started) * 1000, CORR_REVOKE_BUDGET_S,
+             OWNERSHIP_HANDOFF_FLUSHED_TOTAL, OWNERSHIP_HANDOFF_UNFLUSHED_TOTAL)
+    return (flushed, unflushed)
+
+
+def _release_lost_partitions(held: frozenset[int]) -> int:
+    """RELEASE — the second half of flush-and-release, run from the ASSIGNMENT
+    callback. Returns the registrations forgotten.
+
+    WHY THE RELEASE IS HERE AND NOT IN THE REVOKE CALLBACK, measured rather than
+    assumed: aiokafka rebalances EAGERLY. `_on_join_prepare` passes
+    `revoked = previous_assignment.tps` — the ENTIRE previous assignment — to
+    `on_partitions_revoked` on EVERY rebalance, including the overwhelmingly
+    common one where this replica gets the same partitions straight back. So
+    "release everything that was revoked" would, on every rebalance, throw away
+    live in-memory state for partitions that never moved and force it to be
+    rebuilt from ClickHouse — which would make a FAIL-OPEN read (the seed is
+    best-effort by contract) a correctness dependency for a no-op rebalance.
+    That is strictly worse than the defect being fixed.
+
+    The revoke callback therefore does the two things that CANNOT wait — the
+    flush, which must land before the new owner seeds, and the placeholder
+    discard — and records the revoked partitions. This function, one callback
+    later, knows what was actually lost and forgets exactly that.
+
+    Ownership itself needs no such deferral: `CONSUMER_ASSIGNMENT` is rewritten
+    by the assignment callback before this runs, so from here on both guards
+    answer against the new assignment. The residual window is the rejoin itself
+    (revoke -> assign), during which the previous assignment stands and a write
+    is absorbed exactly as HEAD absorbs it. That window is bounded by the
+    rebalance, and both measured defects (13 s, 6 minutes) are far outside it.
+    """
+    global OWNERSHIP_HANDOFF_RELEASED_TOTAL
+    lost = frozenset(_OWNERSHIP_PENDING_RELEASE) - held
+    _OWNERSHIP_PENDING_RELEASE.clear()
+    if not lost:
+        return 0
+    victims = _handoff_candidates(lost, placeholders=True)
+    for cid in victims:
+        _forget_object(cid)
+    OWNERSHIP_HANDOFF_RELEASED_TOTAL += len(victims)
+    if victims:
+        log.info("ownership handoff: released %d registration(s) for "
+                 "partition(s) %s this replica did not get back — their "
+                 "incidents belong to the acquiring replica now "
+                 "(released_total=%d)",
+                 len(victims), sorted(lost), OWNERSHIP_HANDOFF_RELEASED_TOTAL)
+    return len(victims)
 
 
 def _seed_first_persist_done(reg: dict) -> None:
@@ -9786,7 +10180,28 @@ class _AssignmentLogger(ConsumerRebalanceListener):
         # leaving is a promise this replica can no longer keep. Pure in-memory
         # dict work over the open population — no I/O, nothing that could add to
         # the rejoin budget this callback is tightly bound by.
-        _seed_discard_revoked(frozenset(tp.partition for tp in revoked))
+        _revoked_parts = frozenset(tp.partition for tp in revoked)
+        _seed_discard_revoked(_revoked_parts)
+        # TRACKER 155 (completion): FLUSH-AND-RELEASE. The flush half runs HERE
+        # because it is the only moment at which it is useful — the acquiring
+        # replica seeds from `corr_current` as soon as it is assigned, so a
+        # handoff version written after that point would race the new owner's
+        # own writes instead of informing them. Bounded by ONE
+        # CORR_REVOKE_BUDGET_S (see `_handoff_flush`), and it never raises into
+        # the rejoin. The RELEASE half is completed by the assignment callback,
+        # which is the first moment that knows which partitions actually left
+        # (aiokafka revokes the whole assignment on every rebalance) — see
+        # `_release_lost_partitions`.
+        if _revoked_parts:
+            _OWNERSHIP_PENDING_RELEASE.update(_revoked_parts)
+            try:
+                await _handoff_flush(_revoked_parts)
+            except asyncio.CancelledError:
+                raise
+            except Exception:  # a raise here would kill the rejoin
+                log.exception("ownership handoff flush raised — the affected "
+                              "objects are released on their last durable "
+                              "version (tracker 155)")
         if self.revoke_hook is None or not revoked:
             return
         global CONSUMER_REVOKE_COMMITS, CONSUMER_REVOKE_COMMIT_FAILURES
@@ -9882,6 +10297,14 @@ class _AssignmentLogger(ConsumerRebalanceListener):
                       "have diverged; re-run kafka-init with BUS_PARTITIONS "
                       "and check `kafka-topics --describe`",
                       {t: p for t, p in owned.items()})
+        # Tracker 155 (completion): RELEASE. `CONSUMER_ASSIGNMENT` above is now
+        # the new assignment, so this is the first moment that can tell a
+        # partition that LEFT from one the eager rebalance revoked and handed
+        # straight back. Pure in-memory dict work — the durable half already
+        # happened in the revoke callback's flush, so this hook stays I/O-free
+        # (pinned by test_the_rebalance_callback_does_no_io).
+        _release_lost_partitions(
+            frozenset(p for parts in owned.values() for p in parts))
         # Tracker 155, LAST statement of the callback and deliberately so: it
         # schedules a task and returns, doing no I/O here. Every millisecond
         # spent in this hook is a millisecond the group is not re-forming.
@@ -9920,6 +10343,14 @@ def consumer_state(now_mono: float | None = None) -> str:
     with detection and specificity both still 1.00). Read the cold window as
     "thin evidence for these tenants, right identities"; still do not read
     "active" as "nothing was lost at the last rebalance".
+
+    What it also no longer hides is the DEPARTING side (tracker 155
+    completion): a replica that loses a partition now flushes a final open
+    version of each affected object and forgets the registration, and both the
+    persist and the new-object admission paths refuse to write for a tenant
+    whose partition it does not own. So "the previous owner is still writing"
+    — measured twice in run ownership-155c-08311027 — is no longer one of the
+    things this field is quietly not telling you about.
     """
     if not CONSUMER_ASSIGNMENT_SEEN:
         return "pending"
@@ -11671,6 +12102,21 @@ def _metrics_text() -> str:
         "# HELP corr_ownership_seed_verdict_carried_total Versions whose verdict tier was carried from the durable row while the window refilled.",
         "# TYPE corr_ownership_seed_verdict_carried_total counter",
         f"corr_ownership_seed_verdict_carried_total {OWNERSHIP_SEED_VERDICT_CARRIED_TOTAL}",
+        "# HELP corr_ownership_handoff_flushed_total Open objects given a final open version at revoke, for the acquiring replica to continue.",
+        "# TYPE corr_ownership_handoff_flushed_total counter",
+        f"corr_ownership_handoff_flushed_total {OWNERSHIP_HANDOFF_FLUSHED_TOTAL}",
+        "# HELP corr_ownership_handoff_unflushed_total Revoked-partition objects released without a handoff flush (budget exhausted or the write failed).",
+        "# TYPE corr_ownership_handoff_unflushed_total counter",
+        f"corr_ownership_handoff_unflushed_total {OWNERSHIP_HANDOFF_UNFLUSHED_TOTAL}",
+        "# HELP corr_ownership_handoff_released_total Registrations forgotten because the rebalance did not return their partition.",
+        "# TYPE corr_ownership_handoff_released_total counter",
+        f"corr_ownership_handoff_released_total {OWNERSHIP_HANDOFF_RELEASED_TOTAL}",
+        "# HELP corr_ownership_unowned_persist_dropped_total Persists refused because the tenant's partition is not owned at write time.",
+        "# TYPE corr_ownership_unowned_persist_dropped_total counter",
+        f"corr_ownership_unowned_persist_dropped_total {OWNERSHIP_UNOWNED_PERSIST_DROPPED_TOTAL}",
+        "# HELP corr_ownership_unowned_admission_dropped_total New objects refused because the tenant's partition is not owned.",
+        "# TYPE corr_ownership_unowned_admission_dropped_total counter",
+        f"corr_ownership_unowned_admission_dropped_total {OWNERSHIP_UNOWNED_ADMISSION_DROPPED_TOTAL}",
         "# TYPE corr_signal_batch_pending gauge",
         f"corr_signal_batch_pending {SIGNAL_BATCH.pending()}",
         # P1: event-loop stall watchdog. corr_loop_lag_stalls_total rising means
@@ -12386,6 +12832,21 @@ def _health_payload() -> dict:
                 "pending": sum(1 for r in OPEN_OBJECTS.values() if _seed_only(r)),
                 "horizon_s": round(CORR_OWNERSHIP_SEED_HORIZON_S, 3),
                 "cap": CORR_OWNERSHIP_SEED_MAX,
+            },
+            # Tracker 155 (completion): the DEPARTING side. `unflushed` rising
+            # means revokes are landing on a slow ClickHouse and the acquiring
+            # replica is seeding from older rows (residue bound: _handoff_flush).
+            # `persist_dropped` / `admission_dropped` rising after a rebalance is
+            # the guard doing its job — an old owner's in-flight work being
+            # refused, not an error.
+            "ownership_handoff": {
+                "flushed": OWNERSHIP_HANDOFF_FLUSHED_TOTAL,
+                "unflushed": OWNERSHIP_HANDOFF_UNFLUSHED_TOTAL,
+                "released": OWNERSHIP_HANDOFF_RELEASED_TOTAL,
+                "persist_dropped": OWNERSHIP_UNOWNED_PERSIST_DROPPED_TOTAL,
+                "admission_dropped": OWNERSHIP_UNOWNED_ADMISSION_DROPPED_TOTAL,
+                "pending_release": sorted(_OWNERSHIP_PENDING_RELEASE),
+                "budget_s": CORR_REVOKE_BUDGET_S,
             },
         },
         "engine_v2": {

@@ -44,6 +44,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import time
 from dataclasses import replace as dc_replace
 from datetime import datetime, timedelta, timezone
 
@@ -223,9 +224,16 @@ def _clean(monkeypatch):
                     "OWNERSHIP_SEED_REVOKED_TOTAL",
                     "OWNERSHIP_SEED_UNOWNED_DROPPED_TOTAL",
                     "OWNERSHIP_SEED_VERDICT_CARRIED_TOTAL",
+                    # Tracker 155 completion: flush-and-release + the two guards.
+                    "OWNERSHIP_HANDOFF_FLUSHED_TOTAL",
+                    "OWNERSHIP_HANDOFF_UNFLUSHED_TOTAL",
+                    "OWNERSHIP_HANDOFF_RELEASED_TOTAL",
+                    "OWNERSHIP_UNOWNED_PERSIST_DROPPED_TOTAL",
+                    "OWNERSHIP_UNOWNED_ADMISSION_DROPPED_TOTAL",
                     "OPEN_OBJECTS_FORCE_CLOSED", "VERSIONS_PERSISTED"):
         monkeypatch.setattr(main, counter, 0)
     monkeypatch.setattr(main, "_OWNERSHIP_SEED_TASK", None)
+    main._OWNERSHIP_PENDING_RELEASE.clear()
     _Clock.current = T0
     yield
     main.OPEN_OBJECTS.clear()
@@ -235,6 +243,7 @@ def _clean(monkeypatch):
     main.CONSUMER_ASSIGNMENT.clear()
     main.CONSUMER_PARTITION_TOTALS.clear()
     main.CONSUMER_PARTITION_ACQUIRED_AT.clear()
+    main._OWNERSHIP_PENDING_RELEASE.clear()
     main.CONSUMER_ASSIGNMENT_SEEN = False
 
 
@@ -805,7 +814,7 @@ def test_only_newly_acquired_partitions_are_seeded(monkeypatch):
 #     minted.
 #   * remove the `_seed_discard_revoked` call from `on_partitions_revoked` ->
 #     test_revoking_a_partition_discards_its_placeholders fails.
-#   * make `_seed_owner_guard` return True unconditionally ->
+#   * make `_ownership_persist_guard` return True unconditionally ->
 #     test_an_adopted_seed_will_not_persist_on_an_unowned_partition fails: the
 #     thin first version is written and the counter stays 0.
 #   * remove the expiry branch from `_seed_verdict_floor` ->
@@ -1042,23 +1051,26 @@ def test_an_adopted_seed_persists_while_the_partition_is_still_owned(monkeypatch
         "the guard is spent once the object has written a version of its own")
 
 
-def test_an_ordinary_object_is_never_touched_by_the_owner_guard(monkeypatch):
-    """Oracle: the guard is scoped to seed-descended registrations. An object
-    this replica opened itself persists on a partition it does not own exactly
-    as HEAD does — that orphan-write behaviour is tracker 155's other half and
-    is deliberately unchanged here."""
-    tenant = _owned_tenant(2, 4)
-    stub = _SeedCH()
-    monkeypatch.setattr(main, "ch", stub)
-    monkeypatch.setattr(main, "datetime", _Clock)
-    monkeypatch.setattr(main, "CONSUMER_ASSIGNMENT_SEEN", True)
-    _assign(set())
-    for s in (_sig(tenant, "dev-a", offset_s=o) for o in (0, 30, 60)):
-        main.buffer_signal(s)
-    asyncio.run(main.engine_cycle())
+def test_the_155b_guard_is_now_the_155c_general_one(monkeypatch):
+    """SUPERSEDED ORACLE, kept as the record of what changed.
 
-    assert stub.objects(), "an ordinary object must still persist"
-    assert main.OWNERSHIP_SEED_UNOWNED_DROPPED_TOTAL == 0
+    Until 155c this file asserted the OPPOSITE of what it asserts now: that an
+    object this replica opened ITSELF persists on a partition it does not own
+    "exactly as HEAD does", because 155b deliberately scoped its guard to
+    seed-descended registrations and left the orphan-write half of tracker 155
+    alone. Run ownership-155c-08311027 measured what that costs (F1 and F2
+    below), so the guard is now asked of EVERY object — and the seed-scoped
+    counter survives as the labelled SUBSET, which is what this pins.
+    """
+    tenant = _owned_tenant(2, 4)
+    stub = _seed_adopt_then_reassign(monkeypatch, tenant=tenant, partition=2,
+                                     owned_after=set())
+    assert stub.objects() == []
+    assert main.OWNERSHIP_SEED_UNOWNED_DROPPED_TOTAL == 1, (
+        "the seed-first-version subset must still be counted on its own "
+        "counter — 155b commissioned it to mean exactly that")
+    assert main.OWNERSHIP_UNOWNED_PERSIST_DROPPED_TOTAL == 1, (
+        "and on the general one, which is what 155c added")
 
 
 # ── D3: the verdict may not weaken merely because the owner changed ──────────
@@ -1205,3 +1217,678 @@ def test_the_carried_verdict_reaches_the_persisted_row(monkeypatch):
     carried = json.loads(rows[0]["hypotheses"])["grounding_context"]["ownership_handoff"]
     assert carried["recomputed_verdict_tier"] != "confirmed", (
         "fixture invalid: the recomputation must actually be weaker")
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# TRACKER 155 — COMPLETION: STATE FOLLOWS PARTITION OWNERSHIP
+# (run /var/tmp/scale-runs/ownership-155c-08311027, 2026-08-31; arms control /
+# restart / exit-join). 931efffb fixed the ACQUIRING side and 557dbef7 the
+# transient owner's FIRST post-adoption version. 155c then measured the half
+# neither covered — THE OLD OWNER STILL WRITING FOR PARTITIONS IT HAD LOST:
+#
+#   F1 (restart). c5 held the partitions ~10 s during the bounce and minted a
+#      FRESH object (3eec17dd) for the story's entities 13 s AFTER revoking
+#      them — the consume/reconcile cycle already in flight ran to completion.
+#      Two objects for one story: `single_incident` failed.
+#
+#   F2 (exit/join). c5 had ADOPTED a placeholder and persisted v6, which
+#      DISARMED the D2b first-version guard, and D2a discards only UNADOPTED
+#      placeholders. So c5 kept the live object and continued it every 30 s for
+#      six minutes on a partition it no longer owned, writing a DUPLICATE
+#      (b0f0fd7f, 7) with different content; latest-write-wins made the orphan
+#      current. `seam_owner` wrong, durability assertion 8 failed.
+#
+# WHAT IS PINNED BELOW: flush-and-release on revoke, the persist-time ownership
+# guard on EVERY object, the new-object admission guard, and the full two-owner
+# round trip through them.
+#
+# MUTANTS (verified by hand while writing these):
+#   * remove the `_handoff_flush` call from `on_partitions_revoked` ->
+#     test_the_handoff_round_trip_carries_the_flushed_version fails: the
+#     acquiring replica seeds from the pre-move version and the flushed content
+#     (and its blast radius) is lost.
+#   * make `_ownership_persist_guard` return True unconditionally ->
+#     test_f2_an_established_object_cannot_write_after_losing_its_partition
+#     fails: the duplicate version is written.
+#   * make `_ownership_admission_guard` return True unconditionally ->
+#     test_f1_a_post_revoke_cycle_cannot_mint_a_new_object fails: the fresh
+#     fragment is minted exactly as 155c measured it.
+#   * drop the `_LIFECYCLE_SEEN_WINDOW` discard from `_forget_object` ->
+#     test_forgetting_an_object_clears_every_index_keyed_by_it fails.
+# ═════════════════════════════════════════════════════════════════════════════
+
+
+def _tps(partitions):
+    """The TopicPartition list a rebalance callback is handed."""
+    return [_TP(t, p) for t in main.TOPICS for p in sorted(partitions)]
+
+
+def _listener():
+    return main._AssignmentLogger(_NullConsumer())
+
+
+def _revoke(partitions):
+    asyncio.run(_listener().on_partitions_revoked(_tps(partitions)))
+
+
+def _reassign(partitions):
+    """The assignment callback, which is where the RELEASE half completes."""
+    asyncio.run(_listener().on_partitions_assigned(_tps(partitions)))
+
+
+def _open_object(monkeypatch, tenant, partition, *, stub=None, offsets=(0, 30, 60),
+                 at=None):
+    """Let this replica OPEN an ordinary object of its own for `tenant` while it
+    owns `partition`, and return (stub, correlation_id)."""
+    stub = _SeedCH() if stub is None else stub
+    monkeypatch.setattr(main, "ch", stub)
+    monkeypatch.setattr(main, "datetime", _Clock)
+    monkeypatch.setattr(main, "CONSUMER_ASSIGNMENT_SEEN", True)
+    _assign({partition})
+    for s in (_sig(tenant, "dev-a", offset_s=o, at=at) for o in offsets):
+        main.buffer_signal(s)
+    asyncio.run(main.engine_cycle())
+    assert len(main.OPEN_OBJECTS) == 1, main.OPEN_OBJECTS
+    return stub, next(iter(main.OPEN_OBJECTS))
+
+
+def _versions(stub):
+    return [(r["correlation_id"], r["version"], r["state"]) for r in stub.objects()]
+
+
+def _seed_row_from(row: dict, *, written: datetime | None = None) -> dict:
+    """The `corr_current FINAL` row an ACQUIRING replica's seed reads for a
+    version the departing replica just wrote.
+
+    A re-labelling, not a fabrication: every field below is a column
+    `_persist_snapshot` dual-writes into corr_current from this very row (see
+    CORR_CURRENT_FIELDS), rendered the way ClickHouse's JSON format hands it
+    back (64-bit integers quoted).
+    """
+    return {
+        "tenant_id": row["tenant_id"],
+        "correlation_id": row["correlation_id"],
+        "version": row["version"],
+        "window_start_ms": str(row["window_start"]),
+        "window_end_ms": str(row["window_end"]),
+        "affected": row["affected"],
+        "created_at_ms": _ms(_Clock.current if written is None else written),
+        "top_hypothesis": row["top_hypothesis"],
+        "verdict_tier": row["verdict_tier"],
+    }
+
+
+# ── F1: an in-flight cycle may not MINT an object for a partition it lost ────
+
+def test_f1_a_post_revoke_cycle_cannot_mint_a_new_object(monkeypatch):
+    """THE MEASURED MINT. Evidence buffered BEFORE the move keeps re-deriving
+    objects until it ages out of the window, and 155c's restart arm caught one
+    landing 13 s after the revoke: a second object for a story that has exactly
+    one incident. Nothing is wrong with the evidence — the cycle simply outlived
+    the ownership — so the check belongs where objects ENTER OPEN_OBJECTS.
+
+    This test replaces the pre-155c oracle that asserted the OPPOSITE (an
+    ordinary object persisting on an unowned partition, deliberately unchanged
+    by 155b). That behaviour IS the defect; it is now fixed.
+    """
+    tenant = _owned_tenant(2, 4)
+    stub = _SeedCH()
+    monkeypatch.setattr(main, "ch", stub)
+    monkeypatch.setattr(main, "datetime", _Clock)
+    monkeypatch.setattr(main, "CONSUMER_ASSIGNMENT_SEEN", True)
+    _assign(set())                       # the partition has moved away
+    for s in (_sig(tenant, "dev-a", offset_s=o) for o in (0, 30, 60)):
+        main.buffer_signal(s)
+    asyncio.run(main.engine_cycle())
+
+    assert main.OPEN_OBJECTS == {}, (
+        "a replica that does not own the tenant's partition registered a new "
+        "object — this is 155c F1, the fragment that broke single_incident")
+    assert stub.objects() == [], "and it must not have persisted one either"
+    assert main.OWNERSHIP_UNOWNED_ADMISSION_DROPPED_TOTAL >= 1
+    assert main.OWNERSHIP_UNOWNED_PERSIST_DROPPED_TOTAL == 0, (
+        "there was no registration to drop — the admission guard is what fires")
+
+
+def test_the_true_owner_still_opens_new_objects(monkeypatch):
+    """The other half, and the one that matters more: the guard must not cost
+    the OWNING replica a single incident."""
+    tenant = _owned_tenant(2, 4)
+    stub, cid = _open_object(monkeypatch, tenant, 2)
+    assert _versions(stub) == [(cid, 1, "open")]
+    assert main.OWNERSHIP_UNOWNED_ADMISSION_DROPPED_TOTAL == 0
+
+
+def test_the_admission_guard_is_default_open_before_any_assignment(monkeypatch):
+    """A process that has never had an assignment callback (single-replica dev,
+    a unit invocation, a broker-less run) has no partitions to lose, so it
+    behaves EXACTLY as it always has."""
+    tenant = _owned_tenant(2, 4)
+    stub = _SeedCH()
+    monkeypatch.setattr(main, "ch", stub)
+    monkeypatch.setattr(main, "datetime", _Clock)
+    monkeypatch.setattr(main, "CONSUMER_ASSIGNMENT_SEEN", False)
+    _assign(set())
+    for s in (_sig(tenant, "dev-a", offset_s=o) for o in (0, 30, 60)):
+        main.buffer_signal(s)
+    asyncio.run(main.engine_cycle())
+
+    assert len(main.OPEN_OBJECTS) == 1 and stub.objects()
+    assert main.OWNERSHIP_UNOWNED_ADMISSION_DROPPED_TOTAL == 0
+
+
+# ── F2: an ESTABLISHED object may not keep writing after the partition moves ─
+
+def test_f2_an_established_object_cannot_write_after_losing_its_partition(monkeypatch):
+    """THE MEASURED DUPLICATE. 155b's D2b guard covered only a seed-descended
+    object's FIRST version and disarmed as soon as one landed; 155c's exit/join
+    arm walked through the hole — c5 kept a live object on a partition it no
+    longer owned and continued it for six minutes, writing a (correlation_id,
+    version) pair the true owner had ALSO written, with different content, which
+    latest-write-wins then made current."""
+    tenant = _owned_tenant(2, 4)
+    stub, cid = _open_object(monkeypatch, tenant, 2)
+    before = _versions(stub)
+    assert before == [(cid, 1, "open")]
+    assert not main.OPEN_OBJECTS[cid].get("seed_pending_first_persist"), (
+        "fixture invalid: this is an ORDINARY object, so 155b's first-version "
+        "guard was never armed — that is exactly why F2 escaped it")
+
+    _assign({3})                          # partition 2 has moved to another replica
+    for s in (_sig(tenant, "dev-b", offset_s=o) for o in (90, 120)):
+        main.buffer_signal(s)
+    asyncio.run(main.engine_cycle())
+
+    assert _versions(stub) == before, (
+        "the old owner wrote a version for a partition it no longer owns — "
+        "this is the 155c F2 duplicate")
+    assert main.OPEN_OBJECTS == {}, "and the registration must not survive"
+    assert main.OWNERSHIP_UNOWNED_PERSIST_DROPPED_TOTAL == 1
+    assert main.OWNERSHIP_SEED_UNOWNED_DROPPED_TOTAL == 0, (
+        "155b's counter keeps its exact meaning: the seed-first-version subset")
+    seen = [(r["correlation_id"], r["version"]) for r in stub.objects()]
+    assert len(seen) == len(set(seen)), f"duplicate (cid, version): {seen}"
+
+
+def test_the_persist_guard_also_refuses_the_heartbeat_touch(monkeypatch):
+    """A heartbeat TOUCH writes `corr_current` and nothing else — which is
+    precisely the row an operator reads and the row latest-write-wins resolves.
+    An unowned touch is therefore the same harm as an unowned version, so the
+    guard sits ABOVE the touch/version branch, not inside it."""
+    tenant = _owned_tenant(2, 4)
+    stub, _cid = _open_object(monkeypatch, tenant, 2)
+    monkeypatch.setattr(main, "CORR_HEARTBEAT_TOUCH_ONLY", True)
+    monkeypatch.setattr(main, "CORR_VERSION_HEARTBEAT_S", 0.001)
+    current_before = len(stub.inserted.get("netops.corr_current", []))
+
+    _assign({3})
+    _Clock.current = T0 + timedelta(seconds=120)
+    for s in (_sig(tenant, "dev-a", offset_s=o, at=_Clock.current) for o in (0, 30)):
+        main.buffer_signal(s)
+    asyncio.run(main.engine_cycle())
+
+    assert len(stub.inserted.get("netops.corr_current", [])) == current_before, (
+        "an unowned replica touched corr_current — latest-write-wins makes "
+        "that touch the row the operator reads")
+    assert main.OWNERSHIP_UNOWNED_PERSIST_DROPPED_TOTAL == 1
+
+
+def test_the_persist_guard_is_default_open_before_any_assignment(monkeypatch):
+    """Same default-open rule as the admission guard, for the same reason."""
+    tenant = _owned_tenant(2, 4)
+    _stub, cid = _open_object(monkeypatch, tenant, 2)
+    monkeypatch.setattr(main, "CONSUMER_ASSIGNMENT_SEEN", False)
+    _assign(set())
+    for s in (_sig(tenant, "dev-b", offset_s=o) for o in (90, 120)):
+        main.buffer_signal(s)
+    asyncio.run(main.engine_cycle())
+
+    assert cid in main.OPEN_OBJECTS
+    assert main.OWNERSHIP_UNOWNED_PERSIST_DROPPED_TOTAL == 0
+
+
+def test_the_terminal_paths_refuse_an_unowned_close(monkeypatch):
+    """A tombstone is the WORST version to write from the wrong replica: it is
+    that id's last durable word. Quiesce must drop, never close."""
+    tenant = _owned_tenant(2, 4)
+    stub, cid = _open_object(monkeypatch, tenant, 2)
+    before = _versions(stub)
+
+    _assign({3})
+    _Clock.current = T0 + timedelta(seconds=main.CORR_QUIESCE_S + 600)
+    asyncio.run(main.engine_cycle())
+
+    assert _versions(stub) == before, "an unowned replica closed another's object"
+    assert cid not in main.OPEN_OBJECTS
+    assert main.OWNERSHIP_UNOWNED_PERSIST_DROPPED_TOTAL == 1
+    assert main.OPEN_OBJECTS_FORCE_CLOSED == 0
+
+
+# ── flush-and-release ────────────────────────────────────────────────────────
+
+def test_revoking_a_partition_flushes_its_open_objects(monkeypatch):
+    """THE HANDOFF WRITE. The departing owner persists one more version of the
+    object's CURRENT snapshot, state `open` — the incident is not over, it has
+    changed owner — so the acquiring replica's seed reads the freshest state
+    this replica had rather than whatever damping last let through."""
+    tenant = _owned_tenant(2, 4)
+    stub, cid = _open_object(monkeypatch, tenant, 2)
+    assert _versions(stub) == [(cid, 1, "open")]
+
+    _revoke({0, 1, 2, 3})
+
+    assert _versions(stub) == [(cid, 1, "open"), (cid, 2, "open")], (
+        "the flush must write a further OPEN version, never a close")
+    assert main.OWNERSHIP_HANDOFF_FLUSHED_TOTAL == 1
+    assert main.OWNERSHIP_HANDOFF_UNFLUSHED_TOTAL == 0
+    assert main.OPEN_OBJECTS[cid]["version"] == 2, (
+        "the in-memory version must follow the durable one — a retained "
+        "partition continues ABOVE it")
+
+
+def test_the_flush_publishes_the_monotone_blast_radius(monkeypatch):
+    """Tracker 187 across the handoff. This is this owner's LAST word for the
+    object, so the row carries the union it accumulated, not just the current
+    window's projection — which is what makes the acquiring replica's
+    AffectedHistory re-seed lossless."""
+    tenant = _owned_tenant(2, 4)
+    stub, cid = _open_object(monkeypatch, tenant, 2)
+    # A second cycle whose window has moved on from dev-a to dev-b: the live
+    # projection no longer names dev-a, the HISTORY still does.
+    hist = main.OPEN_OBJECTS[cid]["affected_hist"]
+    hist.note({"devices": ["dev-gone"]})
+
+    _revoke({2})
+
+    flushed = stub.objects()[-1]
+    assert "dev-gone" in json.loads(flushed["affected"])["devices"], (
+        "the handoff row must publish the object's whole blast radius")
+
+
+def test_an_unflushable_object_is_released_on_its_last_durable_version(monkeypatch):
+    """THE RESIDUE BOUND, made visible. Out of budget (or with no ClickHouse to
+    write to) the object is RELEASED anyway — state must follow ownership — and
+    the acquiring replica seeds from its last DURABLE version instead of its
+    last in-memory snapshot. Identity, version monotonicity and the durable
+    verdict are not at risk; only the un-persisted window residue is."""
+    tenant = _owned_tenant(2, 4)
+    stub, cid = _open_object(monkeypatch, tenant, 2)
+    before = _versions(stub)
+    monkeypatch.setattr(main, "CORR_REVOKE_BUDGET_S", 0.0)
+
+    _revoke({0, 1, 2, 3})
+    assert _versions(stub) == before, "no budget, no flush"
+    assert main.OWNERSHIP_HANDOFF_FLUSHED_TOTAL == 0
+    assert main.OWNERSHIP_HANDOFF_UNFLUSHED_TOTAL == 1
+    assert cid in main.OPEN_OBJECTS, "release waits for the assignment callback"
+
+    _reassign({3})
+    assert main.OPEN_OBJECTS == {}, "released anyway — unflushed is not unowned"
+    assert main.OWNERSHIP_HANDOFF_RELEASED_TOTAL == 1
+
+
+def test_no_clickhouse_still_releases(monkeypatch):
+    """Fail-open on the WRITE, never on the ownership: a store that is not there
+    cannot take the handoff row, and that is not a reason to keep writing for a
+    partition this replica lost."""
+    tenant = _owned_tenant(2, 4)
+    _open_object(monkeypatch, tenant, 2)
+    monkeypatch.setattr(main, "ch", None)
+
+    _revoke({2})
+    assert main.OWNERSHIP_HANDOFF_UNFLUSHED_TOTAL == 1
+    _reassign({3})
+    assert main.OPEN_OBJECTS == {}
+
+
+def test_a_failing_flush_is_counted_and_never_raises(monkeypatch):
+    """§16.1 / §10: a write that fails is COUNTED as unflushed and logged; a
+    raise out of this callback would kill the rejoin."""
+    tenant = _owned_tenant(2, 4)
+    _open_object(monkeypatch, tenant, 2)
+
+    async def _boom(*a, **kw):
+        raise httpx.ConnectError("clickhouse unreachable")
+
+    monkeypatch.setattr(main, "_persist_snapshot", _boom)
+    _revoke({2})
+    assert main.OWNERSHIP_HANDOFF_UNFLUSHED_TOTAL == 1
+    assert main.OWNERSHIP_HANDOFF_FLUSHED_TOTAL == 0
+
+
+def test_the_flush_order_is_most_recently_updated_first(monkeypatch):
+    """The order is a CHOICE with a reason: under budget pressure the objects
+    that get flushed are the ones whose in-memory state has moved most recently
+    — the in-flight incidents an operator is watching, furthest ahead of their
+    durable row, most likely to receive further evidence on the new owner."""
+    tenant = _owned_tenant(2, 4)
+    monkeypatch.setattr(main, "CONSUMER_ASSIGNMENT_SEEN", True)
+    _assign({2})
+    for i, age in enumerate((300, 0, 120)):
+        _placeholder(tenant, end=T0, cid=f"155c0000-0000-4000-8000-00000000000{i}")
+        reg = main.OPEN_OBJECTS[f"155c0000-0000-4000-8000-00000000000{i}"]
+        reg["seed_only"] = False          # ordinary open objects for this test
+        reg["last_seen"] = T0 - timedelta(seconds=age)
+
+    order = main._handoff_candidates(frozenset({2}), placeholders=False)
+    assert order == ["155c0000-0000-4000-8000-000000000001",
+                     "155c0000-0000-4000-8000-000000000002",
+                     "155c0000-0000-4000-8000-000000000000"], order
+
+
+def test_the_flush_stops_at_the_budget_and_counts_the_rest(monkeypatch):
+    """OPERATION-COUNT bound rather than a wall clock the CI can perturb: with a
+    monotonic clock that advances one budget-worth per persist, exactly ONE
+    object is flushed and every other is counted unflushed — and released."""
+    tenant = _owned_tenant(2, 4)
+    monkeypatch.setattr(main, "CONSUMER_ASSIGNMENT_SEEN", True)
+    monkeypatch.setattr(main, "CORR_REVOKE_BUDGET_S", 1.0)
+    _assign({2})
+    for i in range(5):
+        cid = f"155c0000-0000-4000-8000-00000000010{i}"
+        _placeholder(tenant, end=T0, cid=cid)
+        main.OPEN_OBJECTS[cid]["seed_only"] = False
+        main.OPEN_OBJECTS[cid]["last_seen"] = T0 - timedelta(seconds=i)
+
+    ticks = {"t": 1000.0}
+
+    def _mono():
+        return ticks["t"]
+
+    persists = []
+
+    async def _persist(snap, version, state, window, **kw):
+        persists.append((snap.correlation_id, version, state))
+        ticks["t"] += 1.0                 # one whole budget per write
+
+    monkeypatch.setattr(main.time, "monotonic", _mono)
+    monkeypatch.setattr(main, "_persist_snapshot", _persist)
+    monkeypatch.setattr(main, "ch", _SeedCH())
+
+    flushed, unflushed = asyncio.run(main._handoff_flush(frozenset({2})))
+    assert (flushed, unflushed) == (1, 4), (flushed, unflushed, persists)
+    assert len(persists) == 1, persists
+    assert main.OWNERSHIP_HANDOFF_FLUSHED_TOTAL == 1
+    assert main.OWNERSHIP_HANDOFF_UNFLUSHED_TOTAL == 4
+
+
+def test_a_retained_partition_is_flushed_but_never_released(monkeypatch):
+    """aiokafka rebalances EAGERLY — `_on_join_prepare` revokes the WHOLE
+    previous assignment on every rebalance, including the common one that hands
+    the same partitions straight back. Releasing on revoke would therefore throw
+    away live state for partitions that never moved and make a FAIL-OPEN
+    ClickHouse read a correctness dependency of a no-op rebalance."""
+    tenant = _owned_tenant(2, 4)
+    _stub, cid = _open_object(monkeypatch, tenant, 2)
+
+    _revoke({0, 1, 2, 3})
+    _reassign({0, 1, 2, 3})
+
+    assert cid in main.OPEN_OBJECTS, (
+        "an eager revoke followed by the SAME assignment must not cost this "
+        "replica the live state of a partition it never lost")
+    assert main.OWNERSHIP_HANDOFF_RELEASED_TOTAL == 0
+    assert main.OWNERSHIP_HANDOFF_FLUSHED_TOTAL == 1, (
+        "it is still flushed: a durable checkpoint is never wrong")
+
+
+def test_only_the_partitions_that_actually_left_are_released(monkeypatch):
+    """The release is EXACT, and it is the assignment callback that knows."""
+    monkeypatch.setattr(main, "CONSUMER_ASSIGNMENT_SEEN", True)
+    _assign({2, 3})
+    leaving = _owned_tenant(2, 4)
+    staying = _owned_tenant(3, 4)
+    _placeholder(leaving, end=T0, cid=SEED_CID)
+    _placeholder(staying, end=T0, cid=OTHER_CID)
+    for cid in (SEED_CID, OTHER_CID):
+        main.OPEN_OBJECTS[cid]["seed_only"] = False
+
+    monkeypatch.setattr(main, "ch", None)   # flush is not what this test is about
+    _revoke({0, 1, 2, 3})
+    _reassign({3})
+
+    assert OTHER_CID in main.OPEN_OBJECTS, "a retained partition keeps its state"
+    assert SEED_CID not in main.OPEN_OBJECTS, "a lost partition releases its state"
+    assert main.OWNERSHIP_HANDOFF_RELEASED_TOTAL == 1
+
+
+def test_the_release_also_drops_placeholders_of_lost_partitions(monkeypatch):
+    """A seed task racing the rebalance can register a placeholder for the OLD
+    assignment after `_seed_discard_revoked` has already run. The release is the
+    backstop."""
+    monkeypatch.setattr(main, "CONSUMER_ASSIGNMENT_SEEN", True)
+    monkeypatch.setattr(main, "ch", None)
+    _assign({2})
+    tenant = _owned_tenant(2, 4)
+    _revoke({0, 1, 2, 3})               # nothing registered yet
+    _placeholder(tenant, end=T0, cid=SEED_CID)   # the racing seed lands here
+    _reassign({3})
+
+    assert SEED_CID not in main.OPEN_OBJECTS
+    assert main.OWNERSHIP_HANDOFF_RELEASED_TOTAL == 1
+
+
+def test_the_assignment_callback_still_does_no_io(monkeypatch):
+    """The release half is pure in-memory dict work — the durable half already
+    happened in the revoke callback. This hook runs INSIDE the rejoin."""
+    tenant = _owned_tenant(2, 4)
+    monkeypatch.setattr(main, "CONSUMER_ASSIGNMENT_SEEN", True)
+    _assign({2})
+    _placeholder(tenant, end=T0, cid=SEED_CID)
+    main.OPEN_OBJECTS[SEED_CID]["seed_only"] = False
+    monkeypatch.setattr(main, "ch", None)
+    _revoke({0, 1, 2, 3})
+
+    calls = []
+
+    class _Forbidden:
+        async def query(self, sql):
+            calls.append(sql)
+            return []
+
+        async def insert(self, *a, **kw):
+            calls.append(a)
+
+    monkeypatch.setattr(main, "ch", _Forbidden())
+    monkeypatch.setattr(main, "CORR_OWNERSHIP_SEED", False)
+    _reassign({3})
+    assert calls == [], f"the assignment callback performed I/O: {calls}"
+    assert SEED_CID not in main.OPEN_OBJECTS
+
+
+def test_ordinary_and_seed_descended_objects_flush_alike(monkeypatch):
+    """PARITY. The flush is not a seed feature — it is what a departing owner
+    owes every object it holds. An object this replica opened itself and one it
+    adopted from a placeholder are flushed by the same path, in the same order,
+    onto the same counter."""
+    tenant = _owned_tenant(2, 4)
+    stub = _SeedCH([_row(SEED_CID, tenant, version=7,
+                         affected={"devices": ["dev-a"]})])
+    monkeypatch.setattr(main, "ch", stub)
+    monkeypatch.setattr(main, "datetime", _Clock)
+    monkeypatch.setattr(main, "CONSUMER_ASSIGNMENT_SEEN", True)
+    _assign({2})
+    asyncio.run(main._run_ownership_seed(frozenset({2})))
+    for s in (_sig(tenant, "dev-a", offset_s=o) for o in (0, 30, 60)):
+        main.buffer_signal(s)
+    asyncio.run(main.engine_cycle())
+    adopted = _versions(stub)
+    assert adopted == [(SEED_CID, 8, "open")]
+
+    # ...and an ordinary object of this replica's own, same tenant/partition.
+    other = dc_replace(main.OPEN_OBJECTS[SEED_CID]["snapshot"],
+                       correlation_id=OTHER_CID)
+    main.OPEN_OBJECTS[OTHER_CID] = dict(main.OPEN_OBJECTS[SEED_CID],
+                                        snapshot=other, version=3,
+                                        affected_hist=main.AffectedHistory(0))
+
+    _revoke({2})
+    assert main.OWNERSHIP_HANDOFF_FLUSHED_TOTAL == 2
+    assert _versions(stub)[1:] == [(SEED_CID, 9, "open"), (OTHER_CID, 4, "open")] \
+        or _versions(stub)[1:] == [(OTHER_CID, 4, "open"), (SEED_CID, 9, "open")], \
+        _versions(stub)
+
+
+# ── the full two-owner round trip ────────────────────────────────────────────
+
+def test_the_handoff_round_trip_carries_the_flushed_version(monkeypatch):
+    """FLUSH -> SEED -> ADOPT -> CONTINUE, end to end, as two owners.
+
+    Owner A opens the incident and is then revoked: it flushes a final OPEN
+    version and releases. Owner B seeds from THAT row — strictly fresher than
+    anything A had durably written before the move — adopts it with its own
+    cold-window evidence, and continues it. What must hold at the end:
+    ONE object for the whole story, versions strictly monotone with no
+    duplicate (correlation_id, version) anywhere, and a blast radius that spans
+    both owners.
+    """
+    tenant = _owned_tenant(2, 4)
+    # ── owner A ──────────────────────────────────────────────────────────────
+    stub_a, cid = _open_object(monkeypatch, tenant, 2)
+    main.OPEN_OBJECTS[cid]["affected_hist"].note({"devices": ["dev-owner-a"]})
+    _revoke({0, 1, 2, 3})
+    flushed = stub_a.objects()[-1]
+    assert (flushed["correlation_id"], flushed["version"], flushed["state"]) == \
+        (cid, 2, "open")
+    _reassign({3})
+    assert main.OPEN_OBJECTS == {}, "owner A must have released the object"
+
+    # ── owner B, a different process: cold memory, the same durable store ────
+    main.WINDOW_BUFFER.clear()
+    main._BUFFERED_IDS.clear()
+    main._BUFFERED_ID_ORDER.clear()
+    main._PROCESSED_IDS.clear()
+    main.TENANT_WATERMARK.clear()
+    gap = timedelta(seconds=180)
+    stub_b = _SeedCH([_seed_row_from(flushed)])
+    _Clock.current = T0 + gap
+    _run_seeded_cycle(monkeypatch, stub_b, tenant=tenant, partition=2,
+                      signals=[_sig(tenant, "dev-a", offset_s=o, at=T0 + gap)
+                               for o in (0, 30, 60)],
+                      at=T0 + gap + timedelta(seconds=60))
+
+    assert list(main.OPEN_OBJECTS) == [cid], (
+        "the story fragmented across the handoff — "
+        f"{list(main.OPEN_OBJECTS)} instead of [{cid[:8]}]")
+    assert main.OWNERSHIP_ADOPTIONS_TOTAL == 1
+    assert _versions(stub_b) == [(cid, 3, "open")], (
+        "owner B must continue ABOVE the flushed version, not beside it")
+
+    everything = _versions(stub_a) + _versions(stub_b)
+    assert everything == [(cid, 1, "open"), (cid, 2, "open"), (cid, 3, "open")]
+    pairs = [(c, v) for c, v, _ in everything]
+    assert len(pairs) == len(set(pairs)), f"duplicate (cid, version): {pairs}"
+
+    radius = main.OPEN_OBJECTS[cid]["affected_hist"].merged_with({})
+    assert "dev-owner-a" in radius["devices"], (
+        "tracker 187 must span the handoff: the flushed row carried owner A's "
+        "monotone union and owner B re-seeded its history from it")
+    assert "dev-a" in radius["devices"]
+
+
+def test_the_round_trip_loses_the_radius_without_the_flush(monkeypatch):
+    """THE MUTANT, made a test rather than a note: seed owner B from the version
+    that stood BEFORE the flush and owner A's later blast radius is simply
+    gone — which is exactly what `_handoff_flush` exists to prevent."""
+    tenant = _owned_tenant(2, 4)
+    stub_a, cid = _open_object(monkeypatch, tenant, 2)
+    main.OPEN_OBJECTS[cid]["affected_hist"].note({"devices": ["dev-owner-a"]})
+    pre_flush = stub_a.objects()[-1]
+    main.OPEN_OBJECTS.clear()
+
+    main.WINDOW_BUFFER.clear()
+    main._BUFFERED_IDS.clear()
+    main._BUFFERED_ID_ORDER.clear()
+    main._PROCESSED_IDS.clear()
+    main.TENANT_WATERMARK.clear()
+    gap = timedelta(seconds=180)
+    _Clock.current = T0 + gap
+    _run_seeded_cycle(monkeypatch, _SeedCH([_seed_row_from(pre_flush)]),
+                      tenant=tenant, partition=2,
+                      signals=[_sig(tenant, "dev-a", offset_s=o, at=T0 + gap)
+                               for o in (0, 30, 60)],
+                      at=T0 + gap + timedelta(seconds=60))
+
+    radius = main.OPEN_OBJECTS[cid]["affected_hist"].merged_with({})
+    assert "dev-owner-a" not in radius.get("devices", []), (
+        "if this ever passes, the pre-flush row already carried the union and "
+        "the flush test above proves nothing")
+
+
+# ── bounds, indices and cost ─────────────────────────────────────────────────
+
+def test_forgetting_an_object_clears_every_index_keyed_by_it(monkeypatch):
+    """The enumeration in `_forget_object`, pinned. Every structure this module
+    keys by correlation_id is cleared; the ones it does not clear are the ones
+    that are REBUILT from OPEN_OBJECTS (the continuation index) or filtered
+    through it (the seen sets), and that is asserted here too."""
+    tenant = _owned_tenant(2, 4)
+    _placeholder(tenant, end=T0, cid=SEED_CID)
+    main._ARCHIVE_SLICE_HASH[SEED_CID] = "slice-hash"
+    main._LIFECYCLE_SEEN_WINDOW.append({SEED_CID, OTHER_CID})
+
+    main._forget_object(SEED_CID)
+
+    assert SEED_CID not in main.OPEN_OBJECTS
+    assert SEED_CID not in main._ARCHIVE_SLICE_HASH
+    assert not any(SEED_CID in s for s in main._LIFECYCLE_SEEN_WINDOW)
+    assert any(OTHER_CID in s for s in main._LIFECYCLE_SEEN_WINDOW), (
+        "only the released id is discarded")
+
+
+def test_the_revoke_hook_stays_inside_its_stated_bound(monkeypatch):
+    """The revoke callback runs INSIDE the rejoin, so this is a hard operational
+    contract, not a preference: the flush gets ONE CORR_REVOKE_BUDGET_S, on top
+    of the flush/commit hook's own 2x backstop. 5 + 10 = 15 s against a 60 s
+    rebalance timeout. Measured as operation counts against a fake clock so the
+    assertion cannot flake on CI."""
+    assert 3 * main.CORR_REVOKE_BUDGET_S <= main.CORR_REBALANCE_TIMEOUT_MS / 1000.0
+
+    tenant = _owned_tenant(2, 4)
+    monkeypatch.setattr(main, "CONSUMER_ASSIGNMENT_SEEN", True)
+    monkeypatch.setattr(main, "CORR_REVOKE_BUDGET_S", 5.0)
+    _assign({2})
+    for i in range(40):
+        cid = f"155c0000-0000-4000-8000-0000000002{i:02d}"
+        _placeholder(tenant, end=T0, cid=cid)
+        main.OPEN_OBJECTS[cid]["seed_only"] = False
+
+    # 0.25 s is exactly representable, so the count below is arithmetic rather
+    # than a float race: 5.0 / 0.25 = 20 writes and then the deadline.
+    cost = 0.25
+    ticks = {"t": 0.0}
+    monkeypatch.setattr(main.time, "monotonic", lambda: ticks["t"])
+
+    async def _persist(*a, **kw):
+        ticks["t"] += cost
+
+    monkeypatch.setattr(main, "_persist_snapshot", _persist)
+    monkeypatch.setattr(main, "ch", _SeedCH())
+    flushed, unflushed = asyncio.run(main._handoff_flush(frozenset({2})))
+
+    assert flushed + unflushed == 40, "every object is accounted for"
+    assert flushed == 20, (flushed, unflushed)
+    assert ticks["t"] <= main.CORR_REVOKE_BUDGET_S + cost, (
+        "the flush overran its budget by more than one in-flight write")
+
+
+def test_the_ownership_check_is_negligible_per_persist(monkeypatch):
+    """COST, measured rather than asserted. The guard adds ONE
+    `_seed_tenant_owned` to every persist: `canon_tenant` + a murmur2 over a
+    short tenant string plus an `any()` over at most len(TOPICS) small lists —
+    13.0 us measured over 200k calls on the development box. A persist is
+    MILLISECONDS of serialization plus a ClickHouse round trip, so the check is
+    two to three orders of magnitude below the thing it guards. The bound here
+    is deliberately loose (50 us, ~4x the measurement) so it can only fail on a
+    real algorithmic regression — an ownership answer that started scanning
+    something."""
+    tenant = _owned_tenant(2, 4)
+    monkeypatch.setattr(main, "CONSUMER_ASSIGNMENT_SEEN", True)
+    _assign({0, 1, 2, 3})
+    assert main._seed_tenant_owned(tenant) is True
+    n = 20_000
+    started = time.perf_counter()
+    for _ in range(n):
+        main._seed_tenant_owned(tenant)
+    per_call = (time.perf_counter() - started) / n
+    assert per_call < 50e-6, f"{per_call * 1e6:.1f} us per ownership check"
