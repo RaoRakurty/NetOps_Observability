@@ -23,7 +23,7 @@ import math
 import os
 import uuid
 from collections import OrderedDict
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 
@@ -2507,14 +2507,24 @@ class ObjectSnapshot:
         return 0.0
 
     def to_object_row(self, version: int, state: str = "open", merged_into: str = "",
-                      *, hypotheses: str | None = None) -> dict:
+                      *, hypotheses: str | None = None,
+                      affected: Mapping[str, Iterable[str]] | None = None) -> dict:
         """The corr_objects row. `hypotheses` is a PASS-THROUGH of an already-built
         hypotheses_blob() (P1 §3): one persist needs the blob for the row and the
         caller has usually just built it for the content hash, and the blob is the
         single most expensive serialize on a storm object. Deliberately NOT cached
         on the instance — 15–25K open snapshots x 5.7 KB–MBs is exactly the RSS
         tracker 156 fought for. None (the default, and every existing call site)
-        rebuilds it here, so the row is byte-for-byte what it always was."""
+        rebuilds it here, so the row is byte-for-byte what it always was.
+
+        TRACKER 187. `affected` is the same kind of PASS-THROUGH, and it exists for
+        exactly one caller: a TERMINAL version (closed / merged), which must publish
+        the monotone union of this object's own persisted history rather than the
+        live window's projection — see `AffectedHistory`. It is NORMALIZED here
+        (sorted, empty buckets dropped) so the column is a deterministic function of
+        the set the caller accumulated, whatever order it accumulated it in. None —
+        the default, every non-terminal version, and every existing call site —
+        takes `self.affected()`, byte-for-byte what it always was."""
         r = self.ranking
         row = {
             "tenant_id": self.tenant_id,
@@ -2529,7 +2539,9 @@ class ObjectSnapshot:
             "verdict_tier": r.verdict_tier.value,
             "hypotheses": self.hypotheses_blob() if hypotheses is None else hypotheses,
             "evidence_missing": json.dumps(list(r.evidence_missing), separators=(",", ":")),
-            "affected": json.dumps(self.affected(), separators=(",", ":"), sort_keys=True),
+            "affected": json.dumps(
+                self.affected() if affected is None else _normalize_affected(affected),
+                separators=(",", ":"), sort_keys=True),
             "signal_count": self.signal_count(),
             "node_count": len(self.nodes),
             "engine_version": self.engine_ver,
@@ -2628,6 +2640,103 @@ class ObjectSnapshot:
                 out.append(self._identity_evidence_row(
                     self.identity_signals[i - ne], version))
         return out
+
+
+# ── Tracker 187: an object's FINAL blast radius may not shrink below its own ──
+# version history.
+#
+# THE DEFECT. `affected()` is a pure projection of `self.nodes`, and the nodes are
+# whatever the ENGINE WINDOW still holds. That is the honest answer for an OPEN
+# object — "here is what I can see right now" — and it is the wrong answer for the
+# terminal version, which is the object's last word and the row every downstream
+# reader (corr_current, the RCA report, the twin's `affected_includes` clause)
+# treats as THE blast radius. Measured 2026-08-30 on the 2.5K P3 pair: 3-5
+# `bgp_peer_flap` stories per 1,005-story leg where versions 1-4 (`open`) name the
+# cause device and version 6 (`closed`) does not, because the cause's evidence aged
+# out of the window before quiesce fired. Same story ids on BOTH arms — the loss is
+# deterministic engine behaviour, not variance.
+#
+# THE RULE. A terminal version publishes the UNION of every version this object
+# actually persisted, including its own. Non-terminal versions are untouched: a
+# shrinking blast radius mid-flight is honest reporting of the current view, and
+# only the FINAL word is claimed to be monotone.
+#
+# SCOPE. Strictly per-object: `AffectedHistory` is created with the registration
+# and folds ONLY that object's own persisted projections. A merge does not pool
+# two objects' radii (§3a stays trivially intact — one accumulator never sees a
+# second object's entities, let alone a second tenant's).
+#
+# BOUND. One accumulator holds at most the distinct (bucket, entity_id) pairs the
+# object ever PERSISTED, i.e. its lifetime entity population — which is itself
+# bounded by the window (`WINDOW_BUFFER` is maxlen-capped) and by the object's
+# lifetime (quiesce closes it after CORR_QUIESCE_S of silence; the 163 cap closes
+# it sooner). `max_entities` makes that a declared number rather than an inherited
+# one: past it the accumulator stops GROWING and counts the fact. Dropping the
+# newest is the safe direction — the terminal version unions the accumulator with
+# the live projection, so anything still in the window is published regardless of
+# the cap, and only genuinely-aged-out history can be lost.
+def _normalize_affected(affected: Mapping[str, Iterable[str]]) -> dict[str, list[str]]:
+    """`affected()`'s output shape from any bucket->entities mapping: sorted
+    members, empty buckets dropped. Order-independent by construction — that is
+    what makes a replayed close hash and render identically."""
+    return {k: sorted(v) for k, v in affected.items() if v}
+
+
+class AffectedHistory:
+    """Monotone accumulator of ONE object's blast radius across its persisted
+    versions (tracker 187). Pure, order-independent and bounded.
+
+    `note()` folds in one PERSISTED version's `affected()` projection; a damped or
+    heartbeat-touched cycle persisted no version and contributes nothing, so the
+    accumulator is exactly "the union over this object's version history" and never
+    a wider claim than the history supports.
+    """
+
+    __slots__ = ("_buckets", "_size", "max_entities", "truncated")
+
+    def __init__(self, max_entities: int = 0) -> None:
+        self._buckets: dict[str, set[str]] = {}
+        self._size = 0
+        # <= 0 disables the cap (the accumulator is then bounded only by the
+        # object's lifetime population, which is the natural bound above).
+        self.max_entities = max_entities
+        self.truncated = 0
+
+    def note(self, affected: Mapping[str, Iterable[str]]) -> None:
+        capped = self.max_entities > 0
+        for bucket, entities in affected.items():
+            col = self._buckets.get(bucket)
+            if col is None:
+                col = self._buckets[bucket] = set()
+            for entity in entities:
+                if entity in col:
+                    continue
+                if capped and self._size >= self.max_entities:
+                    self.truncated += 1
+                    continue
+                col.add(entity)
+                self._size += 1
+
+    def merged_with(self, affected: Mapping[str, Iterable[str]]) -> dict[str, list[str]]:
+        """The FINAL projection: this history unioned with one more version's
+        (the terminal version's own). Sorted, so two replays of the same history
+        in different arrival orders render byte-identical rows."""
+        out: dict[str, list[str]] = {}
+        # Sorted BUCKET order too, not only sorted members: the row is written
+        # through json.dumps(sort_keys=True) so the bytes would be safe either
+        # way, but a dict whose key order depends on set iteration is a trap for
+        # every caller that compares the mapping itself (the tests below do).
+        for bucket in sorted(set(self._buckets) | set(affected)):
+            members = set(self._buckets.get(bucket, ()))
+            members.update(affected.get(bucket, ()))
+            if members:
+                out[bucket] = sorted(members)
+        return out
+
+    def entity_count(self) -> int:
+        """Distinct (bucket, entity) pairs retained — the accumulator's size, and
+        the quantity `max_entities` bounds."""
+        return self._size
 
 
 def _ch_dt(dt: datetime) -> int:

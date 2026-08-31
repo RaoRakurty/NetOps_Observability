@@ -82,6 +82,7 @@ from engine import (
     _SEV_RANK,
     CORR_CANDIDATE_CEILING,
     CORR_TOKEN_HUB_CAP,
+    AffectedHistory,
     ComponentMemo,
     ContinuationIndex,
     EngineConfig,
@@ -3062,6 +3063,29 @@ CORR_STORM_COHORT_SIZE = max(1, int(os.environ.get("CORR_STORM_COHORT_SIZE", "10
 CORR_OPEN_OBJECTS_MAX = int(os.environ.get("CORR_OPEN_OBJECTS_MAX", "5000"))
 OPEN_OBJECTS_FORCE_CLOSED = 0     # objects closed by the cap (monotonic)
 _FORCE_CLOSE_LOG_LAST = 0.0
+
+# ── Tracker 187: the monotone blast radius ──────────────────────────────────
+# An object's FINAL `affected` may not shrink below its own version history: the
+# terminal version is the object's last word, and it was publishing the LIVE
+# window's projection — which has already lost the cause device whose evidence
+# aged out before quiesce fired (measured: 3-5 `bgp_peer_flap` stories per
+# 1,005-story leg, same ids on both arms of the 2.5K P3 pair). Each open object
+# carries an `AffectedHistory` — the union of every version it PERSISTED — and
+# every terminal persist (quiesce close, 163 cap close, lifecycle merge)
+# publishes that union. Non-terminal versions are untouched.
+#
+# The accumulator is bounded by the object's own lifetime entity population
+# (see AffectedHistory's contract); this makes that number DECLARED rather than
+# inherited, and behaviour at the bound is defined and counted, never silent:
+# the accumulator stops growing and the terminal version still unions in the
+# live projection, so only genuinely-aged-out history can be lost. <=0 disables
+# the cap (documented for lab characterization). The default is deliberately
+# generous — 20,000 distinct entities is far above any object measured to date
+# (the largest storm aggregate carried 922 nodes) — because the cap exists to
+# stop an unmeasured shape from growing without limit, not to trim a real one.
+CORR_AFFECTED_HISTORY_MAX = int(os.environ.get("CORR_AFFECTED_HISTORY_MAX", "20000"))
+AFFECTED_HISTORY_TRUNCATED = 0    # entities the cap refused (monotonic)
+AFFECTED_HISTORY_ENTITIES_MAX = 0  # gauge: largest accumulator seen this process
 INGEST_PRIORITY_DEFERRALS = 0     # sweeps deferred to protect ingest (monotonic)
 INGEST_PRIORITY_ACTIVE = False    # gauge: is the engine currently deferring?
 ENGINE_LAST_SWEEP_MONO = 0.0      # when the last non-deferred sweep STARTED
@@ -5061,10 +5085,53 @@ async def _touch_current(snap: ObjectSnapshot, version: int, state: str,
               snap.correlation_id[:8], version, state)
 
 
+# ── Tracker 187: the two halves of the monotone blast radius ────────────────
+# `_affected_note` runs on the PERSIST paths only (a damped cycle and a
+# heartbeat touch write no version, so they contribute no history); the
+# terminal paths call `_affected_final` for the union they publish.
+#
+# The accumulator lives on the REGISTRATION dict, which is what makes it
+# survive the continuation re-key: `find_continuation` re-keys the SNAPSHOT
+# (`dc_replace(snap, correlation_id=cont)`) and then reuses
+# `OPEN_OBJECTS[cont]` — the same dict object, so the adopted identity keeps
+# the history it accumulated under its own id. A registration that predates
+# this change (or one a test built by hand) simply has no accumulator: both
+# helpers then degrade to exactly today's behaviour rather than raising.
+
+async def _affected_note(reg: dict, snap: ObjectSnapshot) -> None:
+    """Fold ONE persisted version's blast radius into the object's history."""
+    global AFFECTED_HISTORY_TRUNCATED, AFFECTED_HISTORY_ENTITIES_MAX
+    hist = reg.get("affected_hist")
+    if hist is None:
+        return
+    before = hist.truncated
+    # Same offload rule as every other per-object projection on the persist
+    # path: `affected()` walks the nodes and the fused identities, which on a
+    # storm aggregate is all signals and no edges (see `_snap_cost`).
+    hist.note(await _snap_call(snap, snap.affected))
+    AFFECTED_HISTORY_TRUNCATED += hist.truncated - before
+    AFFECTED_HISTORY_ENTITIES_MAX = max(AFFECTED_HISTORY_ENTITIES_MAX,
+                                        hist.entity_count())
+
+
+async def _affected_final(reg: dict, snap: ObjectSnapshot) -> dict | None:
+    """The TERMINAL version's blast radius: this object's persisted history
+    unioned with the terminal snapshot's own projection.
+
+    Returns None when there is no history to add — the caller then passes no
+    override and `to_object_row` renders `snap.affected()` exactly as before.
+    """
+    hist = reg.get("affected_hist")
+    if hist is None:
+        return None
+    return hist.merged_with(await _snap_call(snap, snap.affected))
+
+
 async def _persist_snapshot(snap: ObjectSnapshot, version: int, state: str,
                             window: Sequence[Signal], merged_into: str = "",
                             loop_yield=_noop_yield,
-                            priority_class: int = EVIDENCE_CLASS_DECISION) -> None:
+                            priority_class: int = EVIDENCE_CLASS_DECISION,
+                            affected: dict | None = None) -> None:
     """The Decision write, then the Evidence write (inline or deferred).
 
     P2 step 4 (spec §1/§4): everything up to and including the `corr_current`
@@ -5077,6 +5144,11 @@ async def _persist_snapshot(snap: ObjectSnapshot, version: int, state: str,
     version IS (new incident / material change, terminal, unchanged re-persist);
     see evidence_plane's module docstring. It affects the Evidence DRAIN ORDER
     only — never a byte, never a token, never a verdict.
+
+    `affected` (tracker 187) overrides the blast-radius column with the object's
+    monotone history union. It is passed by the TERMINAL persists only — quiesce
+    close, the 163 cap close and the lifecycle merge — and never by an open
+    version, a heartbeat re-persist or a direct call from outside the engine.
     """
     assert ch is not None
     # P2 step 4 observability: the profiler must show the SPLIT, so the two
@@ -5098,8 +5170,11 @@ async def _persist_snapshot(snap: ObjectSnapshot, version: int, state: str,
     # serialize is gone. Outside a cycle (a lifecycle merge/close run at epoch
     # cadence) there is no cache and this is the plain build it always was.
     hypotheses = await _snap_call(snap, cycle_hypotheses_blob, snap)
+    # Tracker 187: `affected` is set ONLY by a terminal persist and is the
+    # monotone union of this object's own persisted history (`_affected_final`).
+    # None on every other path -> the row is byte-for-byte what it always was.
     obj_row = await _snap_call(snap, snap.to_object_row, version, state, merged_into,
-                               hypotheses=hypotheses)
+                               hypotheses=hypotheses, affected=affected)
     # The callers' cooperative gate, consulted INSIDE the object as well as
     # between objects (storm-s03). Quiesce, the count cap and the reconcile loop
     # all yield per OBJECT, which bounds the batch — but one object's Decision
@@ -6224,9 +6299,14 @@ async def _epoch_lifecycle(epoch: _EngineEpoch, loop_yield,
         reg["version"] += 1
         VERSIONS_PERSISTED += 1
         _wa_note_outcome(reg["snapshot"].tenant_id, "persisted")
+        # TERMINAL PATH 1 of 3 (tracker 187). A merged-away object's tombstone is
+        # its last word too — the survivor carries the incident forward, but THIS
+        # id's row is what a reader resolving the backlink lands on. Union over
+        # its OWN history only: a merge does not pool two objects' blast radii.
         await _persist_snapshot(reg["snapshot"], reg["version"], "merged", [],
                                 merged_into=survivor_cid, loop_yield=loop_yield,
-                                priority_class=EVIDENCE_CLASS_TERMINAL)
+                                priority_class=EVIDENCE_CLASS_TERMINAL,
+                                affected=await _affected_final(reg, reg["snapshot"]))
         log.info("corr-object %s merged into %s (split-brain de-duplicated)",
                  merged_cid[:8], survivor_cid[:8])
         _merged_away.add(merged_cid)
@@ -6261,9 +6341,14 @@ async def _epoch_lifecycle(epoch: _EngineEpoch, loop_yield,
             reg["version"] += 1
             VERSIONS_PERSISTED += 1
             _wa_note_outcome(reg["snapshot"].tenant_id, "persisted")
+            # TERMINAL PATH 2 of 3 (tracker 187), and the one the defect was
+            # MEASURED on: an object quiesces precisely because its evidence
+            # stopped arriving, so by the time it closes the window has aged out
+            # the very node that named the cause. The union republishes it.
             await _persist_snapshot(reg["snapshot"], reg["version"], "closed", [],
                                     loop_yield=loop_yield,
-                                    priority_class=EVIDENCE_CLASS_TERMINAL)
+                                    priority_class=EVIDENCE_CLASS_TERMINAL,
+                                    affected=await _affected_final(reg, reg["snapshot"]))
             del OPEN_OBJECTS[cid]
             _ARCHIVE_SLICE_HASH.pop(cid, None)
     if CORR_PROFILE_STAGES and _t_quiesce:
@@ -6294,9 +6379,15 @@ async def _epoch_lifecycle(epoch: _EngineEpoch, loop_yield,
             VERSIONS_PERSISTED += 1
             OPEN_OBJECTS_FORCE_CLOSED += 1
             _wa_note_outcome(reg["snapshot"].tenant_id, "persisted")
+            # TERMINAL PATH 3 of 3 (tracker 187). The cap evicts the
+            # least-recently-SEEN objects — the same staleness order quiesce
+            # uses — so it closes on the same shrunken window and needs the
+            # same union. Breadth loss at the cap stays what 163 declared it
+            # to be (fewer OBJECTS), never a quietly narrower blast radius.
             await _persist_snapshot(reg["snapshot"], reg["version"], "closed", [],
                                     loop_yield=loop_yield,
-                                    priority_class=EVIDENCE_CLASS_TERMINAL)
+                                    priority_class=EVIDENCE_CLASS_TERMINAL,
+                                    affected=await _affected_final(reg, reg["snapshot"]))
             del OPEN_OBJECTS[cid]
             _ARCHIVE_SLICE_HASH.pop(cid, None)
         mono = time.monotonic()
@@ -6733,6 +6824,11 @@ async def _engine_cycle_inner(epoch: _EngineEpoch | None) -> None:
             if reg is None:
                 OPEN_OBJECTS[snap.correlation_id] = {
                     "version": 1, "hash": chash,
+                    # Tracker 187: the monotone blast radius, per OBJECT. Created
+                    # with the registration and carried by the registration dict,
+                    # so a continuation adoption (which reuses OPEN_OBJECTS[cont])
+                    # keeps the history it accumulated under its own id.
+                    "affected_hist": AffectedHistory(CORR_AFFECTED_HISTORY_MAX),
                     "material": await _snap_call(snap, snap.material_hash),
                     "last_seen": now, "last_persist": now, "snapshot": snap,
                     "opened_at": now,  # #101: max_incident_age in the write-amp rollup
@@ -6747,6 +6843,7 @@ async def _engine_cycle_inner(epoch: _EngineEpoch | None) -> None:
                 await _persist_snapshot(snap, 1, "open", window,
                                         loop_yield=_loop_yield,
                                         priority_class=EVIDENCE_CLASS_DECISION)
+                await _affected_note(OPEN_OBJECTS[snap.correlation_id], snap)
                 VERSIONS_PERSISTED += 1
                 _wa_note_outcome(tenant, "persisted")
             elif reg["hash"] != chash:
@@ -6796,6 +6893,7 @@ async def _engine_cycle_inner(epoch: _EngineEpoch | None) -> None:
                     await _persist_snapshot(snap, reg["version"], "open", window,
                                             loop_yield=_loop_yield,
                                             priority_class=_pclass)
+                    await _affected_note(reg, snap)
                     VERSIONS_PERSISTED += 1
                     _wa_note_outcome(tenant, "persisted")
                 else:
@@ -10575,6 +10673,15 @@ def _metrics_text() -> str:
         f"corr_ingest_priority_active {int(INGEST_PRIORITY_ACTIVE)}",
         "# TYPE corr_open_objects_force_closed_total counter",
         f"corr_open_objects_force_closed_total {OPEN_OBJECTS_FORCE_CLOSED}",
+        # Tracker 187: the monotone blast radius. `_truncated_total` must stay 0
+        # on any measured shape — a non-zero value says an object's history hit
+        # CORR_AFFECTED_HISTORY_MAX and its FINAL affected may be missing
+        # aged-out entities (never live ones). `_entities_max` is the largest
+        # accumulator this process ever held, i.e. the bound, measured.
+        "# TYPE corr_affected_history_truncated_total counter",
+        f"corr_affected_history_truncated_total {AFFECTED_HISTORY_TRUNCATED}",
+        "# TYPE corr_affected_history_entities_max gauge",
+        f"corr_affected_history_entities_max {AFFECTED_HISTORY_ENTITIES_MAX}",
         # Housekeeping: the window-prune path. The 2026-08-20 review found the
         # service exposed NOTHING about its own maintenance work, so a 30,989 ms
         # prune stall was only findable with a bespoke forensic build. Low
@@ -11221,6 +11328,10 @@ def _health_payload() -> dict:
             "open_objects": len(OPEN_OBJECTS),
             "versions_persisted": VERSIONS_PERSISTED,
             "versions_damped": VERSIONS_DAMPED,
+            # Tracker 187: the monotone blast radius' bound, measured + declared.
+            "affected_history_truncated": AFFECTED_HISTORY_TRUNCATED,
+            "affected_history_entities_max": AFFECTED_HISTORY_ENTITIES_MAX,
+            "affected_history_max": CORR_AFFECTED_HISTORY_MAX,
             # P3 change A: heartbeats served by a corr_current-only touch.
             "versions_heartbeat_touched": VERSIONS_HEARTBEAT_TOUCHED,
             # #101: projection health + intentional-storm registry + top-K
