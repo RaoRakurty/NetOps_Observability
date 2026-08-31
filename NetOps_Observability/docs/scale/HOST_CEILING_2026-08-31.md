@@ -14,13 +14,34 @@ named run on this box, cited to the artefact it came from. Nothing is modelled.
 
 ## 1. The number
 
-> **The clean host ceiling on the reference box is 2,500 devices at 0.4 eps per
-> device — 1,000 eps sustained — carrying a storm up to a 25 % storm share, with
-> the ratified storm-time SLO met on every clause.**
+> **The clean host ceiling on the reference box is a TWO-AXIS ENVELOPE, not a
+> single device count.**
+>
+> - **Axis 1 — RATE: ≤ ~1,000 eps sustained.** This is the axis the ceiling was
+>   measured on, and it is the one that binds first. At **2,500 devices ×
+>   0.4 eps/device = 1,000 eps** the box carries a storm up to a **25 % storm
+>   share** with the ratified storm-time SLO met on every clause.
+> - **Axis 2 — FLEET AT STORM DENSITY: the per-cohort cost wall lies somewhere
+>   in (3,500, 5,000] devices.** With the rate held at or below ~1,000 eps the
+>   envelope **extends to ~3,500 devices at ~0.29 eps/device**, where every
+>   clause the correlation engine owns is clean. At 5,000 devices it is not.
+>
+> **Inside the envelope:** ~3,500 devices at ~0.29 eps/device, or the
+> proven-in-depth 2,500 devices at 0.4 eps/device — in both cases at
+> **≤ ~1,000 eps**.
 
-**This is measured, not extrapolated.** It is the largest fleet that has been run
-to a graded verdict on this box with the gates green; it is not an interpolation
-between a passing rung and a failing one.
+**Both points are measured, not extrapolated.** Each is a fleet that has been run
+to a graded verdict on this box with the engine's own gates green; neither is an
+interpolation between a passing rung and a failing one.
+
+**They are not equally proven, and this document does not treat them as such.**
+The 2,500 × 0.4 point rests on **four independent legs** carrying **345/345
+accuracy on each**; the 3,500 × 0.29 point rests on **one** leg
+(`ladder-s3k5-08311750`, below). **The number to plan against remains 2,500
+devices at 0.4 eps/device.** What the 3,500 rung adds is narrower and important:
+**at 3,500 devices it is not the fleet size that binds** — the two open FAILs
+there are the same tracker-186 backfill-worker memory clauses that also fail at
+2,500 devices, and every engine-side and transport-side limiter is clear.
 
 Evidence line, all on the shipped configuration (`CORR_AGGREGATION_PLANE` ON by
 default, `a9d9a10c`):
@@ -47,6 +68,20 @@ default, `a9d9a10c`):
   cap, anchored on a real `pending == 0`); TTUR T1 **p50/p95 646 / 1,753 s**,
   T-last p95 **2,564 s** with **no scope caveat**. The single `memflat` FAIL is
   tracker **186** in both of its clauses (§4).
+- **The fleet axis, extended: `ladder-s3k5-08311750`** (run `083117507rl2`,
+  `t-storm-2.5k` generated at **3,500 devices**, same shipped image —
+  correlation `2d617a1ba1fa`, api `dfe4f7553d44`, `cfd7ebdc`) — **7/9**.
+  Completion **144 s of a 2,700 s budget (5.3 %)** — *2,500-device class*;
+  accounting exact **900,001 == 900,001 + 0 DLQ + 0 counted rejections** with
+  **3,500/3,500** devices covered; accuracy **483/483 = 100.00 %** twin v2
+  (detection 1.000, specificity 1.000, **zero fails in any template**); TTUR T1
+  **p50/p95 118 / 810 s**, T-last p95 **2,038 s**, **no scope caveat**; carrier
+  memory **59.7 %** of its 1,280 MiB cap, **FLAT** on a real `pending == 0`
+  anchor; stability **0/0/0/0**, worst loop stall 3,745 ms = 6.2 % of the
+  session timeout; cleanup residue **0**. The two FAILs are `onboard`
+  (**CONFOUNDED** — the 199 builder's full pytest suite was on the host during
+  onboarding) and `memflat` (**tracker 186**, both clauses). §2's new subsection
+  reads this rung.
 
 **One honest qualification stands on the headline; the second is now discharged.**
 
@@ -84,12 +119,14 @@ default, `a9d9a10c`):
 
 ## 2. The ceilings above it — and what binds first
 
-Each sits on a **different axis**, which is why no single device count exists
-between 2,500 and 5,000. Sources for §2 unless stated:
-`/var/tmp/scale-runs/ladder-n5k-08310426/ceiling-facts.json` (run `08310426f5wf`,
-profile `t-nominal-5k`) and
+Each sits on a **different axis**, which is why the ceiling is stated in §1 as an
+envelope over two axes rather than as one device count. Sources for §2 unless
+stated: `/var/tmp/scale-runs/ladder-n5k-08310426/ceiling-facts.json` (run
+`08310426f5wf`, profile `t-nominal-5k`) and
 `/var/tmp/scale-runs/ladder-s5k-08310703/ceiling-facts.json` (run `08310703ujbf`,
-profile `t-storm-5k`) — both 5,000 devices.
+profile `t-storm-5k`) — both 5,000 devices — plus
+`/var/tmp/scale-runs/ladder-s3k5-08311750/ceiling-facts.json` (run
+`083117507rl2`, `t-storm-2.5k` at 3,500 devices) for the isolating rung below.
 
 ### The binding-resource ranking, after the 5k storm rung
 
@@ -109,6 +146,11 @@ one pid. Only the workload **shape** differs (1.77 % storm share vs none). It
    while `corr_engine_epoch_seconds_max` **did not move at all** — 3,391.4 s in
    both captures, literally **the same unfinished epoch**. Cost scales
    superlinearly in **signal density**, not merely in device count.
+   **Bounded below by the 3,500-device rung (2026-08-31):** this cost is real but
+   it **does not engage at 3,500 devices with the rate held at 1,000 eps** —
+   `epoch_seconds_max` **167.5 s** with **0** budget exits there. The wall is
+   bracketed to **(3,500, 5,000] devices at storm density**, and the ranking's
+   head is a statement about *where the axis runs*, not about where it starts.
 2. **Correlation carrier memory — PROMOTED from rank 5; the wall is arriving.**
    n5k filed it as "the forecast of the next bound" at 85.7 % of the 1,280 MiB
    cap. s5k collected on that forecast: **94.1 %**, no pending-0 anchor, 48,434
@@ -143,6 +185,66 @@ designed. Pending still went **33,760 → 48,434** and progress still fell 11×.
 Shaving 8.5 % off an input whose per-unit cost grows 2.1× is arithmetically
 irrelevant. The plane is itself under strain: **77 % eviction rate against 57 %
 at nominal**.
+
+### The 3,500-device isolating rung — the FLEET axis alone does not bind there
+
+`ladder-s3k5-08311750` (run `083117507rl2`) is the rung §4 had marked ⏳. It does
+one thing: **holds the event rate at 1,000 eps — under the measured consumer
+plane — and varies only fleet size, 2,500 → 3,500 devices**, on the same
+`t-storm-2.5k` scenario generator and the same shipped image. Per-device rate
+therefore falls **0.40 → 0.286 eps/device**. No new limiter is introduced: the
+injector was not saturated (**1,000 eps asked, 1,000 eps achieved, in exactly
+900 s with no window extension** — the only rung above 2,500 devices where §2c's
+harness bound is irrelevant *by construction*), the plane was not saturated, and
+the burst window was not stretched. **Fleet size is the only variable that moved.**
+
+**It came back clean on every clause the engine owns.**
+
+| measure | 2,500 storm (s05 / s06 / s07) | **3,500 storm** | 5,000 storm |
+|---|--:|--:|--:|
+| completion (budget 2,700 s) | 95.0 / 124.3 / 93.7 s | **144.2 s (5.3 %)** | **INCOMPLETE**, 48,434 pending at cap |
+| pending-curve shape | single/short close | **ONE step**: flat 3,211 for 130 s, one cohort close → 0 | 3-step staircase, never reaches 0 |
+| `corr_engine_epoch_seconds_max` | 107–188 s | **167.5 s** | **3,391.4 s** (same unfinished epoch) |
+| `corr_engine_epoch_budget_exits_total` | — | **0** | 10 |
+| components per window signal | — | **2.15** | **4.73** (s5k − n5k delta, same pid) |
+| seconds per preparation | — | **0.263 s** | **1.688 s** (6.4×) |
+| carrier memory, % of 1,280 MiB cap | 82.7–83.2 % | **59.7 %, FLAT** on a real `pending == 0` | 94.1 %, **no anchor** |
+| transport drain | 1,244 / 1,245 / 1,321 s @ 334–354 eps | **1,061 s @ 417 eps** | 2,232 s @ 547 eps |
+| TTUR T1 p95 / max | 816–908 / 1,717–1,766 s | **810 / 1,595 s** | 4,987 / 5,940 s (scoped-to-completed) |
+| incidents ending `undetermined` | 0 | **0** | 2,905 of 25,580 (11.4 %) |
+| accuracy (twin v2) | 345/345 = 100 % ×4 legs | **483/483 = 100.00 %** | 644/690 = 93.33 % |
+
+Three readings deserve to be stated plainly, because two of them are
+counter-intuitive:
+
+1. **The T1 tail did not degrade — it sits inside, and partly below, the
+   2,500-device band.** T1 p95 **810 s** is below that cohort's own 816–908 s
+   range and T1 max **1,595 s** below its 1,717–1,766 s range, *on 32.5 % more
+   incidents* (2,164 vs 1,633). Only T1 p50 moves materially (81 → 118 s, +45 %).
+2. **The mechanism is density, not size.** Holding the rate while growing the
+   fleet makes the workload **thinner, not heavier**: incidents rose 32.5 % while
+   total folded signals **fell 52.8 %** (39,790 vs 84,253) — signals per incident
+   **18.4 vs 51.6, −64 %**. Versions per incident barely moved (6.54 vs 6.32), so
+   the engine did the same per-object work over a larger, sparser population, and
+   merges halved (87 vs 180) because fewer stories overlap. This is exactly why
+   rank 1's axis is **signal density**, and why a fleet-size increase that
+   *lowers* density does not trip it.
+3. **Transport got further from binding, not closer.** From a comparable peak
+   lag (442,580 vs 415,749–441,274) the bus drained **faster than all three
+   2,500-device storm legs**.
+
+**What the rung does NOT license.** It does not raise §1's 2,500 × 0.4 figure —
+that is a different point on the *rate* axis, proven by four legs; this is one leg
+at a lower per-device rate. It does not prove **3,500 devices at 0.4 eps/device**
+(= 1,400 eps), a point that has never been run and would sit *above* the measured
+consumer plane. It does not locate the cohort-cost wall — it brackets it to
+**(3,500, 5,000] devices at storm density** and no finer; **no rung exists between
+them.** And it does not discharge `memflat`: the rung is **7/9**, and both FAILs
+are open — `onboard` **CONFOUNDED** (the 199 builder's full pytest suite was
+hammering the 4-core host through onboarding and was lifted mid-run; all 3,500
+devices were created, 0 failures, in 182 s of a 533 s budget, so the workload ran
+and the decay clause cannot be cleanly attributed to the api), and `memflat`
+attributed to **tracker 186** in both clauses (§4).
 
 ### (a) Engine per-cohort algorithmic cost — axis: FLEET SIZE — the binding one
 
@@ -320,7 +422,11 @@ assembled too little evidence to rank a hypothesis. Neither class is a
 misattribution: **the engine never guesses.** Both are the same root cause seen at
 two depths — the pending backlog — corroborated by the TTUR row (2,905 of 25,580
 in-scope incidents ended `undetermined`, **0** reached `confirmed`). Contrast
-`t-storm-2.5k`, which scores **345/345 = 100.0 %** on four independent runs. The
+`t-storm-2.5k`, which scores **345/345 = 100.0 %** on four independent runs —
+and, at **3,500 devices** with the rate held at 1,000 eps, **483/483 = 100.00 %
+with 0 fails in any template**, including the two that carried *all 46* losses at
+5,000 (`bgp_peer_flap` 140/140 here vs 36 fails there; `enterprise_outage` 21/21
+vs 10). The recall loss tracks **the backlog**, not the fleet size. The
 −6.67 points are **characterisation of overload, not an SLO breach**: the accuracy
 SLO is defined at the ceiling, and a score taken while 48,434 events are still
 queued measures the backlog, not the correlator. **OPEN:** all 46 failures fall in
@@ -371,7 +477,7 @@ explanation for this leg's ~675–710 eps consumer plane against 1,036–1,051 e
 | 2.5k storm 50 % | `t-storm-50-2.5k` | 2,500 × 1,000 | — | — | **NEVER RUN** — planned in the P4 §1 ladder, not executed |
 | **5k nominal** | `t-nominal-5k` · `ladder-n5k-08310426` | 5,000 × 1,417 eff. (2,000 planned) | **INCOMPLETE** — 33,760 pending at the 3,811 s cap, oldest 502 s | **1,800,001 == 1,800,001 + 0 DLQ** | **FAIL** — completion + memflat; stability/accounting/cleanup PASS |
 | **5k storm** | `t-storm-5k` · `ladder-s5k-08310703` (run `08310703ujbf`) | 5,000 × 1,605 eff. (2,000 planned) | **INCOMPLETE** — 48,434 pending at the 3,366 s cap, oldest 511 s | **1,800,001 == 1,800,001 + 0 DLQ** | **FAIL** — onboard (**CONFOUNDED**), completion, memflat; burst/drain/accounting/stability/cleanup PASS. Drain 2,232 s from a 1,221,005 peak lag; carrier **94.1 %** of cap; stability 0 CommitFailed / 0 UnknownMember / 0 restarts; accuracy **644/690 = 93.33 %** twin v2 (detection 0.9551, specificity **1.000**); T1 p50/p95 **2,752 / 4,987 s** scoped-to-completed |
-| ⏳ 3,500 isolating rung | `t-nominal` @ 3,500 | 3,500 × 1,000 (0.29 eps/dev) | — | — | Holds eps **under** the measured consumer ceiling and varies **only** fleet size — places the engine's own device ceiling directly, with no new limiter introduced |
+| **3,500 isolating rung** | `t-storm-2.5k` @ **3,500** · `ladder-s3k5-08311750` (run `083117507rl2`) | 3,500 × **1,000 achieved** (0.286 eps/dev) | **144.2 s** (2,700) — **5.3 % of budget**, *2,500-device class* | **900,001 == 900,001 + 0 DLQ + 0 rejections**, 3,500/3,500 devices | **7/9** — the fleet axis **does not bind here**. Offered load exact (1,000 of 1,000 eps in exactly 900 s, **no window extension**), so no new limiter was introduced. Accuracy **483/483 = 100.00 %** twin v2, **0 fails in any of the 5 templates**, detection 1.000, specificity 1.000. TTUR T1 **p50/p95 118 / 810 s**, T-last p95 **2,038 s**, **no scope caveat** — p95 and max sit *below* the 2,500-device storm band, **0** incidents `undetermined`. Carrier **59.7 %** of its 1,280 MiB cap, FLAT on a real `pending == 0`; `epoch_seconds_max` **167.5 s**, **0** budget exits. Drain **1,061 s @ 417 eps** from a 442,580 peak — faster than all three 2,500-device storm legs. Stability **0/0/0/0**, worst stall 3,745 ms = 6.2 %. Cleanup residue 0. FAILs: `onboard` **CONFOUNDED** (0.523 vs a 0.600 floor, under the 199-builder pytest suite on the host; 3,500 created, 0 failures, 182 s of a 533 s budget) and `memflat` (**tracker 186**, both clauses). **NOTE the profile change:** this rung was planned as `t-nominal` @ 3,500 and was run on **`t-storm-2.5k` @ 3,500** — a storm scenario (483 stories, 2.45 % achieved share), which is the *harder* of the two and the one that carries accuracy |
 | ⏳ 10k "cannot be offered" | `t-nominal-10k` / `t-storm-10k` | 10,000 × ≤1,400 | — | — | Documentation rung: records *how* the box fails at 4× the ceiling, so the hosting spec can refuse the configuration with evidence rather than by assertion. Note the injector bound: 10k × 0.4 = 4,000 eps **cannot be offered by this harness** |
 
 **The 5k-storm `onboard` FAIL is CONFOUNDED and is not a reading of record.** All
@@ -421,6 +527,38 @@ clauses, and in neither one the engine.**
   overcommit a 4 GiB server, and the eviction chain that fails this gate cannot
   form.** That is the pending causal fix for the last missing gate on this rung —
   a settings-precedence fix, not new engine work.
+- **UPDATE (3,500-device rung, image `dfe4f7553d44`): the 512 MiB budget IS NOW
+  IN FORCE — and the gate still fails.** On that run **363 of the 365** exempted
+  raises name `maximum: 512.00 MiB` — the worker's own
+  `timeIntelBackfillMemoryBytes` ceiling, not the 2 GiB `CH_BG_MEM` background
+  profile — and the heaviest raiser used **498 MiB**, against the 1.623 GiB
+  recorded above. The downstream evidence agrees: peak `MemoryTracking` fell to
+  **89.1 %** of the 4 GiB cap with **p99 at 38.5 %** (against 95.3 % peak on the
+  n2k5 rung), and ClickHouse's **anon slope PASSES at ×0.869** — memory *fell*
+  after input stopped. **Two consequences, and neither is a discharge.** (i) The
+  settings-precedence defect is fixed on this image, so that item is closed —
+  but **2 of the 365 raises still hit the 4 GiB SERVER total** via
+  `OvercommitTracker` (18:14:50 and 18:29:51, both selecting the backfill query
+  as victim), so the lane no longer overcommits *on its own* while the server can
+  still reach its ceiling under concurrent load. (ii) The gate now fails on
+  refusals that are **the budget working as designed** — which argues the next
+  look belongs on the **exemption clause**, not on the budget.
+  *(Source: `ladder-s3k5-08311750/ceiling-facts.json` → `memflat_split`.)*
+- **And the 5 unexempted raises on that rung are NOT a second consumer.** They
+  are 5 extra `system.errors` increments raised by **the same 365 backfill
+  queries** — the second reader thread of 5 of them tripping the per-query
+  tracker before cancellation propagated (`max_threads = 2` on every raising
+  query; 365 queries with 5 double-raises = 370 exactly). The negative half is
+  proven: `system.part_log` over the window has **zero** rows with `error != 0`
+  (so *no* merge or mutation raised it — unlike the n2k5 episode), the
+  ClickHouse **`.err.log` and the full 771 MB server log contain exactly 365
+  raises and not one more**, `system.query_log` has 365 rows all `Select` on
+  `netops.corr_objects`, and `sum(remote)` is 0. The positive half is
+  **inferred**, because `system.query_thread_log` is **not enabled** on this
+  deployment. **Recommendation: enable `query_thread_log` (or `text_log`) before
+  the next rung** — every "`query_log` cannot name them" residue in this
+  programme (1 at n5k, 1 at n2k5, 5 here) is unresolvable without per-thread
+  accounting, and each one costs an unexplained line in a gate verdict.
 
 **The onboard PASS is floor-exact and host-confounded, in the honest direction.**
 2,500 devices created in 82.1 s, first-window 41.94/s → last-window 25.21/s,
@@ -450,6 +588,33 @@ At the ceiling (2,500 devices, 1,000 eps), **per device**:
 | carrier memory, working set | **0.32–0.43 MiB** | carrier end rss 1,059–1,065 MiB ÷ 2,500 storm (`storm-s05`/`s06` memflat); **0.322 MiB** nominal on the shipped image (805.2 MiB ÷ 2,500, `ladder-n2k5-08311437`) — size on the storm end |
 | carrier memory, provisioned | **0.51 MiB** | the 1,280 MiB replica cap ÷ 2,500 — the number to size a host with |
 | storage / day | **n/a — NOT MEASURED** | no run instruments bytes on disk; see below |
+
+**And the device count stretches when the per-device rate falls.** The second
+point of §1's envelope is the same box carrying **3,500 devices at 0.286
+eps/device** — cite the `ladder-s3k5-08311750` row in §4 — for the same ~1,000
+eps offered, with completion at 5.3 % of budget, accuracy 483/483 and the carrier
+at 59.7 % of its memory cap. That is a **40 % larger device count at 72 % of the
+per-device rate**, and it changes what the pricing model may sell:
+
+| point | devices | eps/device | offered eps | evidence weight |
+|---|--:|--:|--:|---|
+| planning ceiling | **2,500** | **0.40** | ~1,000 | four legs, 345/345 accuracy on each |
+| stretched fleet | **3,500** | **0.286** | ~1,000 | **one** leg, 483/483 accuracy |
+| out of envelope | 5,000 | **0.283–0.321 achieved** (0.40 planned) | 1,417–1,605 | two legs, both **INCOMPLETE** |
+
+> **What the host ceiling actually constrains is EVENTS PER SECOND. Devices are
+> the billable proxy, and the proxy holds only at an assumed per-device rate.**
+
+Consequently: **price per device with a stated eps-per-device assumption, and
+meter the deviation.** A device count sold without one is unbacked by this
+document — a fleet of quieter devices legitimately buys more slots on the same
+box, and a fleet of noisier ones buys fewer. Carrier memory per device is *not*
+the constraint that moves here: the 3,500-device rung ended at **0.218 MiB/device
+working set** (764.1 MiB ÷ 3,500) against 0.32–0.43 MiB/device at 2,500, i.e. the
+thinner fleet is cheaper per device on memory as well. The **provisioned** figure
+is what a host is sized on and it falls the same way — **0.37 MiB/device**
+(1,280 MiB ÷ 3,500) against 0.51 at 2,500. Both are single-leg readings and carry
+the same one-leg caveat as the row above.
 
 **Storage/day is honestly n/a.** No mini-ladder phase records on-disk volume;
 `report.json` carries memory bytes only. What *is* measured, per 900,001-event
@@ -492,8 +657,10 @@ Consequences for pricing:
   absorbed inside the ratified SLO on the shipped ON configuration.
 
 **Owner capacity model, position:** validate 1K ✓ (`GA_WORKLOAD_CONTRACT_1K.md`)
-→ **host ceiling = THIS DOCUMENT (2,500 devices @ 0.4 eps/device)** → **per-tenant
-limits next**, and §5's storm-concentration note is the input to that step.
+→ **host ceiling = THIS DOCUMENT — a two-axis envelope: ≤ ~1,000 eps AND a fleet
+under the cohort-cost wall, i.e. 2,500 devices @ 0.4 eps/device for planning,
+extending to ~3,500 @ ~0.29 on one leg** → **per-tenant limits next**, and §5's
+storm-concentration note is the input to that step.
 
 ---
 
@@ -578,6 +745,25 @@ limits next**, and §5's storm-concentration note is the input to that step.
   the 25 % storm share (that rung is 8/9
   with a v1-scorer accuracy figure), it does not claim a storage-per-device
   figure, it does not claim to explain the 154 s accuracy-loss band or its
-  template selectivity at 5k storm (left open), and it does not claim a ceiling
-  anywhere between 2,500 and 5,000 — the limiters sit on different axes, so no
-  single intermediate device count exists until the ⏳ 3,500 isolating rung is run.
+  template selectivity at 5k storm (left open); and — **updated 2026-08-31** — it
+  no longer claims that nothing is known between 2,500 and 5,000, but it still
+  does not claim a *ceiling* there. The 3,500 isolating rung has been run and is
+  clean, which **brackets the cohort-cost wall to (3,500, 5,000] devices at storm
+  density** and nothing finer: no rung exists between those two, and the 3,500
+  reading is **one leg at 0.286 eps/device**, not a re-measured ceiling at the
+  ratified 0.4. **3,500 devices at 0.4 eps/device (1,400 eps) has never been run
+  and would sit above the measured consumer plane.**
+- **The 3,500 rung's own honesty tier.** Its `onboard` FAIL is **CONFOUNDED**
+  (concurrent pytest suite on the host, lifted mid-run) and is not a reading of
+  record in either direction. Its `memflat` FAIL is **open**, attributed to
+  tracker 186 in both clauses; the api clause is attributed **by pattern, not by
+  measurement** — the two-cycle idle census that proved the sawtooth on the n2k5
+  rung was **not** run here, because a 10k rung was already loading the same box,
+  and a later `docker stats` sample is **inadmissible** for the same reason.
+  Its accuracy figure is **one leg** against four at 2,500 devices. And
+  `metrics-final.txt` for that rung is **NOT leg-scoped** — both correlation
+  processes pre-date the run (17:05:14Z and 16:35:15Z vs a 17:50:34Z start) and
+  their `*_total` counters include the 155d-arm traffic; deltas are derivable only
+  for the four gauges the harness baselined at preflight, and for the *idle*
+  replica the delta for this run is **zero** (all 376 of its `agg_observed` are
+  pre-run residue).
