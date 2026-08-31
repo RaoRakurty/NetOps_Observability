@@ -87,6 +87,17 @@ crosses the cap at 5k, the monotone guarantee degrades to "monotone up to
 20,000 entities" and the cap must be raised or made fleet-relative before the
 rung is graded.
 
+**Refinement (2026-08-31, run `08311437us3b`, profile `t-nominal-2.5k`):** the
+**same 2,500-device fleet** under a nominal profile reads
+`corr_affected_history_entities_max` **6,390 = 32.0 %** of the cap with
+`corr_affected_history_truncated_total` still **0**
+(`/var/tmp/scale-runs/ladder-n2k5-08311437/ceiling-facts.json`,
+`engine_counters_carrier_corr5`). Fleet size is therefore **not** what fills the
+accumulator: the gauge tracks **signal density / blast radius**, and 83.1 % is a
+storm-profile number. Scope the ladder pre-flight check to the **storm** rungs —
+only a larger STORM rung moves this gauge; a nominal rung at any fleet size does
+not test the cap.
+
 ### 192 — bounded and named, but the residual is accumulation
 
 The worst uninterrupted loop-thread block is now **named**:
