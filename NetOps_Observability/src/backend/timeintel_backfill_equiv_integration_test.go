@@ -7,9 +7,15 @@ package backend
 //
 // The hermetic tests in timeintel_backfill_test.go pin the SHAPE of the repaired
 // read (bounded pick, prunable created_at bound, tenant-led key tuple) and the
-// GUARDS that go over the wire. Neither can prove the thing that actually
-// matters about a rewritten query: that it returns the same rows. Only a server
-// can answer that, so this file asks one.
+// GUARDS that go over the wire. Neither can prove the two things that actually
+// matter about a rewritten query: that it returns the same rows, and that the
+// SQL it emits is accepted by ClickHouse at all. Only a server can answer
+// those, so this file asks one.
+//
+// Tracker 186 split the pass into a narrow PICK (corr_current, watermarked,
+// page-limited) and a keyed WIDE FETCH (corr_objects, bounded to the page's own
+// created_at slice). The oracle below is unchanged: the two steps together must
+// still return exactly what the pre-incident single query returned.
 //
 // Run it against a throwaway server (never the live stack — it creates and drops
 // a scratch database):
@@ -35,6 +41,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"netops/backend/timeintel"
 )
 
 // timeIntelBackfillSQLOld is the shape that failed every pass during the storm,
@@ -206,14 +214,7 @@ func TestTimeIntelBackfillNewSQLMatchesOldOnFixture(t *testing.T) {
 	if err != nil {
 		t.Fatalf("old SQL: %v", err)
 	}
-	newRows, err := chWorkerQueryTuned(ctx, chWorkerRead{
-		SQL: timeIntelBackfillSQL(3600, timeIntelBackfillCap),
-		Tag: timeIntelBackfillTag, Budget: timeIntelBackfillBudget,
-		MaxBytes: timeIntelBackfillMaxResponseBytes,
-	})
-	if err != nil {
-		t.Fatalf("new SQL: %v", err)
-	}
+	newRows := timeIntelTwoStep(ctx, t, 3600, timeintel.BackfillCursor{})
 
 	got, want := narrow(newRows), narrow(oldRows)
 	if len(want) != 3 {
@@ -238,5 +239,100 @@ func TestTimeIntelBackfillNewSQLMatchesOldOnFixture(t *testing.T) {
 	}
 	if _, ok := got[idB]; ok {
 		t.Error("an object outside the lookback was returned — the window bound is not being applied")
+	}
+}
+
+// timeIntelTwoStep runs ONE page of the production pass — the real builders,
+// the real per-query guards — and returns the wide rows the fold would consume.
+func timeIntelTwoStep(ctx context.Context, t *testing.T, lookbackSeconds int, from timeintel.BackfillCursor) []map[string]any {
+	t.Helper()
+	s := &server{}
+	keys, err := s.timeIntelPickPage(ctx, lookbackSeconds, from, timeintel.BackfillCursor{})
+	if err != nil {
+		t.Fatalf("pick: %v", err)
+	}
+	if len(keys) == 0 {
+		return nil
+	}
+	rows, err := s.timeIntelFetchPage(ctx, keys)
+	if err != nil {
+		t.Fatalf("fetch: %v", err)
+	}
+	return rows
+}
+
+// TestTimeIntelBackfillWatermarkAdvancesOnLiveServer is the tracker-186 half the
+// hermetic tests cannot reach: the watermark predicate and the keyed literal
+// tuple list must be ACCEPTED by ClickHouse (tuple IN with toUUID()/String
+// literals, DateTime64 comparison against a 'UTC' literal), and they must
+// actually exclude what the cursor has already processed.
+//
+// Depends on the fixture created by the equivalence test above; run the whole
+// -run TimeIntelBackfill selection, not this test alone.
+func TestTimeIntelBackfillWatermarkAdvancesOnLiveServer(t *testing.T) {
+	requireCHTestURL(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	s := &server{}
+	all, err := s.timeIntelPickPage(ctx, 3600, timeintel.BackfillCursor{}, timeintel.BackfillCursor{})
+	if err != nil {
+		t.Fatalf("cold pick: %v", err)
+	}
+	if len(all) < 2 {
+		t.Fatalf("cold pick returned %d objects, want the 3 in-window fixtures (run the equivalence test first)", len(all))
+	}
+	// The pick is ordered by the cursor key, ascending.
+	for i := 1; i < len(all); i++ {
+		if all[i].CreatedAt.Before(all[i-1].CreatedAt) {
+			t.Fatalf("pick is not ordered by created_at ASC: %v then %v", all[i-1].CreatedAt, all[i].CreatedAt)
+		}
+	}
+	// A cursor on the FIRST object must exclude it and keep the rest.
+	cur := timeintel.BackfillCursor{CreatedAt: all[0].CreatedAt, CorrelationID: all[0].CorrelationID}
+	rest, err := s.timeIntelPickPage(ctx, 3600, cur, timeintel.BackfillCursor{})
+	if err != nil {
+		t.Fatalf("watermarked pick: %v", err)
+	}
+	if len(rest) != len(all)-1 {
+		t.Errorf("watermarked pick returned %d objects, want %d — the cursor predicate is not filtering", len(rest), len(all)-1)
+	}
+	for _, k := range rest {
+		if k.CorrelationID == all[0].CorrelationID {
+			t.Errorf("the watermarked pick returned the already-processed object %s", k.CorrelationID)
+		}
+	}
+	// A cursor past everything picks nothing — the caught-up state.
+	last := all[len(all)-1]
+	done, err := s.timeIntelPickPage(ctx, 3600, timeintel.BackfillCursor{CreatedAt: last.CreatedAt, CorrelationID: last.CorrelationID}, timeintel.BackfillCursor{})
+	if err != nil {
+		t.Fatalf("caught-up pick: %v", err)
+	}
+	if len(done) != 0 {
+		t.Errorf("a cursor past the newest object still picked %d rows", len(done))
+	}
+	// And the keyed wide fetch, on the real server, returns exactly the page.
+	rows, err := s.timeIntelFetchPage(ctx, all)
+	if err != nil {
+		t.Fatalf("keyed fetch: %v", err)
+	}
+	if len(rows) != len(all) {
+		t.Errorf("keyed fetch returned %d rows for a %d-key page", len(rows), len(all))
+	}
+}
+
+// TestTimeIntelBackfillPageLimitIsHonoured proves the page LIMIT bounds a real
+// pick — the property that turns one 20 000-row memory bomb into ten bounded
+// steps.
+func TestTimeIntelBackfillPageLimitIsHonoured(t *testing.T) {
+	requireCHTestURL(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	rows, err := chWorkerQuery(ctx, timeIntelBackfillPickSQL(3600, 1, timeintel.BackfillCursor{}, timeintel.BackfillCursor{}))
+	if err != nil {
+		t.Fatalf("one-row pick: %v", err)
+	}
+	if len(rows) != 1 {
+		t.Errorf("a LIMIT 1 pick returned %d rows", len(rows))
 	}
 }
