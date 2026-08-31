@@ -87,6 +87,17 @@ const (
 	codeNotEnoughSpace      = 243
 	codeTypeMismatch        = 53 // TYPE_MISMATCH — a malformed row, not a transient
 	codeUnknownIdentifier   = 47 // measured: SELECT no_such_col → HTTP 404 + code 47
+	// The ANALYSIS-time type faults. ClickHouse reports them as HTTP 500 like
+	// transient backpressure, so without naming them here they fell through to
+	// the "status >= 500 → retry, the backoff bounds the cost" default. They are
+	// produced by the query's TYPES, before a row is read: the same statement
+	// fails identically forever, on an empty table as readily as a full one.
+	// Retrying one only multiplies the failure and mislabels the operator's
+	// error string "(retryable)" — measured on the alias-shadowing
+	// undetermined-frequency read (386) and the timeintel pick cursor (43).
+	codeNoCommonType          = 386 // NO_COMMON_TYPE — e.g. String vs DateTime comparison
+	codeIllegalTypeOfArgument = 43  // ILLEGAL_TYPE_OF_ARGUMENT — no operation for these types
+	codeIllegalAggregation    = 184 // ILLEGAL_AGGREGATION — an aggregate resolved into WHERE
 )
 
 // retryableCodes are transient by nature: the same statement, unchanged, can
@@ -111,6 +122,10 @@ var permanentCodes = map[int]bool{
 	codeAuthFailed:        true,
 	codeTypeMismatch:      true,
 	codeUnknownIdentifier: true,
+	// Deterministic analysis faults — never heal, must never be retried.
+	codeNoCommonType:          true,
+	codeIllegalTypeOfArgument: true,
+	codeIllegalAggregation:    true,
 }
 
 // classificationFor maps a code to the stable metric slug. Metrics keyed on a
@@ -129,6 +144,11 @@ var classificationFor = map[int]string{
 	codeTypeMismatch:        "schema_type",
 	codeAuthFailed:          "auth",
 	codeUnknownIdentifier:   "schema_identifier",
+	// Named so an alert reads "the query's types are wrong" rather than
+	// "server_error", which is what a 500 without a known code becomes.
+	codeNoCommonType:          "schema_no_common_type",
+	codeIllegalTypeOfArgument: "schema_illegal_type",
+	codeIllegalAggregation:    "schema_illegal_aggregation",
 }
 
 // exceptionMarkers identify a ClickHouse exception embedded in a body that

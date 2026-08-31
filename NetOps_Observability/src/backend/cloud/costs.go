@@ -173,6 +173,19 @@ func CostFilterSQL(provider, account, service string) string {
 	return b.String()
 }
 
+// The day predicate and ORDER BY are TABLE-QUALIFIED (cloud_costs.day) on
+// purpose. `toString(day) AS day` is a projection alias that shadows the Date
+// column, and ClickHouse resolves a SELECT alias inside the WHERE and ORDER BY
+// of the same query — so the unqualified form compared the String expression to
+// toDate() and the server refused the whole surface with
+//
+//	Code: 386. DB::Exception: There is no supertype for types String, Date …
+//	(NO_COMMON_TYPE)
+//
+// Qualification is the minimal fix here because the alias names are also the
+// served wire fields (CostRow); alias resolution does not touch a qualified
+// name, so the predicate binds the raw Date and the JSON contract is unchanged.
+//
 // CostsSQL is the ONE read this surface issues: day-range-pruned,
 // LIMIT-bounded, FINAL (ReplacingMergeTree — restated days must read as the
 // replaced row, not both versions), carrying the caller's tenant_scope for
@@ -186,8 +199,8 @@ SELECT toString(day)      AS day,
        amount             AS amount,
        toString(currency) AS currency
   FROM netops.cloud_costs FINAL
- WHERE day >= toDate('%s') AND day <= toDate('%s')%s
- ORDER BY day DESC, provider, account, service
+ WHERE cloud_costs.day >= toDate('%s') AND cloud_costs.day <= toDate('%s')%s
+ ORDER BY cloud_costs.day DESC, provider, account, service
  LIMIT %d
  SETTINGS tenant_scope = '%s'
  FORMAT JSONEachRow`, fromDay, toDay, pred, limit, scope)

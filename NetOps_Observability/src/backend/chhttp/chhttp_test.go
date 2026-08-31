@@ -459,3 +459,64 @@ func TestExecWithRetryDoesNotRetryPermanent(t *testing.T) {
 		t.Errorf("permanent failure retried %d times — must be exactly 1", calls.Load())
 	}
 }
+
+// TestAnalysisTypeFaultsAreNotRetryable pins the deterministic ANALYSIS-time
+// faults on the permanent side of the 500 that transient backpressure also
+// arrives on. These are produced by the query's TYPES, before a row is read:
+// the same statement fails identically forever, on an empty table as readily as
+// a full one, so a retry only multiplies the failure and the operator's error
+// string says "(retryable)" about something that can never heal.
+//
+// The three bodies are the ones this platform actually measured:
+// 386 from the alias-shadowing undetermined-frequency read, 43 from the
+// timeintel pick's cursor tuple (tracker 186 hotfix), and 184 from an aggregate
+// output alias resolved into a WHERE (the cloud seam-telemetry read).
+func TestAnalysisTypeFaultsAreNotRetryable(t *testing.T) {
+	cases := []struct {
+		name           string
+		body           string
+		code           int
+		classification string
+	}{
+		{
+			"no supertype (alias-shadowed window predicate)",
+			"Code: 386. DB::Exception: There is no supertype for types String, DateTime because some of them are String/FixedString/Enum and some of them are not. (NO_COMMON_TYPE)",
+			codeNoCommonType, "schema_no_common_type",
+		},
+		{
+			"illegal type of argument (cursor tuple across a String alias)",
+			"Code: 43. DB::Exception: No operation greater between String and DateTime64(3, 'UTC'). (ILLEGAL_TYPE_OF_ARGUMENT)",
+			codeIllegalTypeOfArgument, "schema_illegal_type",
+		},
+		{
+			"aggregate resolved into WHERE",
+			"Code: 184. DB::Exception: Aggregate function argMax(kind, ts) AS kind is found in WHERE in query. (ILLEGAL_AGGREGATION)",
+			codeIllegalAggregation, "schema_illegal_aggregation",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			c, done := testClient(t, func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(http.StatusInternalServerError) // the same 500 TOO_MANY_PARTS arrives on
+				_, _ = w.Write([]byte(tc.body))
+			})
+			defer done()
+
+			e := mustExecErr(t, c, Request{SQL: "SELECT 1", Op: "probe", Scope: "__all__"})
+			if e.Code != tc.code {
+				t.Fatalf("code = %d, want %d", e.Code, tc.code)
+			}
+			if e.Retryable {
+				t.Error("a deterministic type fault must NOT be retryable — it cannot heal, " +
+					"and retrying it burns the caller's budget on a statement that is simply wrong")
+			}
+			if e.Classification != tc.classification {
+				t.Errorf("classification = %q, want %q — an alert must say the types are wrong, not %q",
+					e.Classification, tc.classification, "server_error")
+			}
+			if Retryable(e) {
+				t.Error("the package-level Retryable() must agree with the classification")
+			}
+		})
+	}
+}

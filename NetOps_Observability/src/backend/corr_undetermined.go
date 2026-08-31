@@ -230,6 +230,50 @@ func entityTypesFromAffected(blob string) []string {
 	return out
 }
 
+// undeterminedFrequencySQL builds the window read the feed clusters over.
+// windowSeconds is an integer literal the caller derived from ?since.
+//
+// The projected aliases are deliberately NON-SHADOWING (correlation_id_s /
+// window_start_iso). ClickHouse resolves a SELECT alias INSIDE the WHERE and
+// ORDER BY of the SAME query, so the previous projection —
+//
+//	SELECT toString(correlation_id) AS correlation_id,
+//	       <ISO text of window_start> AS window_start
+//	 WHERE window_start >= now() - INTERVAL n SECOND
+//	 ORDER BY window_start DESC
+//
+// bound the ISO *String* expression in the window predicate and the server
+// refused every call with
+//
+//	Code: 386. DB::Exception: There is no supertype for types String, DateTime
+//	because some of them are String/FixedString/Enum and some of them are not.
+//	(NO_COMMON_TYPE)
+//
+// This was never data-dependent: the analyzer types the predicate before a row
+// is read, so the endpoint answered 502 on an empty window too. It shipped that
+// way (#80, 2026-06-30) and the S3 log-time conversion only changed WHICH String
+// expression was shadowing.
+//
+// ORDER BY moves with the predicate: ISO text and DateTime64 happen to sort
+// alike, but the ordering must be the typed one for the same reason the
+// timeintel pick's ORDER BY had to (tracker 186 hotfix) — the sort and the
+// window bound must be the same domain, and only the raw column is that domain.
+// The row scan below reads the renamed result columns.
+func undeterminedFrequencySQL(windowSeconds string) string {
+	return `
+SELECT toString(correlation_id) AS correlation_id_s,
+       ` + chschema.ISO("window_start") + ` AS window_start_iso,
+       evidence_missing         AS evidence_missing,
+       affected                 AS affected,
+       signal_count             AS signal_count
+  FROM netops.corr_objects_latest
+ WHERE verdict_tier = 'undetermined'
+   AND window_start >= now() - INTERVAL ` + windowSeconds + ` SECOND
+ ORDER BY window_start DESC
+ LIMIT 5000
+ FORMAT JSON`
+}
+
 // handleUndeterminedFrequency: GET /api/correlations/undetermined-frequency
 // Ranks recurring undetermined gap-shapes over a window. Tenant-scoped via chRows.
 func (s *server) handleUndeterminedFrequency(w http.ResponseWriter, r *http.Request) {
@@ -249,19 +293,7 @@ func (s *server) handleUndeterminedFrequency(w http.ResponseWriter, r *http.Requ
 		writeError(w, http.StatusBadRequest, terr)
 		return
 	}
-	sql := `
-SELECT toString(correlation_id) AS correlation_id,
-       ` + chschema.ISO("window_start") + ` AS window_start,
-       evidence_missing         AS evidence_missing,
-       affected                 AS affected,
-       signal_count             AS signal_count
-  FROM netops.corr_objects_latest
- WHERE verdict_tier = 'undetermined'
-   AND window_start >= now() - INTERVAL ` + win + ` SECOND
- ORDER BY window_start DESC
- LIMIT 5000
- FORMAT JSON`
-	rows, err := s.chRows(r, sql)
+	rows, err := s.chRows(r, undeterminedFrequencySQL(win))
 	if err != nil {
 		writeError(w, http.StatusBadGateway, err)
 		return
@@ -271,8 +303,8 @@ SELECT toString(correlation_id) AS correlation_id,
 		var missing []string
 		_ = json.Unmarshal([]byte(asString(ro["evidence_missing"])), &missing) // best-effort: engine-authored JSON; malformed decodes to zero value
 		objs = append(objs, undeterminedObj{
-			CorrelationID:   asString(ro["correlation_id"]),
-			WindowStart:     parseCHTime(ro["window_start"]),
+			CorrelationID:   asString(ro["correlation_id_s"]),
+			WindowStart:     parseCHTime(ro["window_start_iso"]),
 			EvidenceMissing: missing,
 			EntityTypes:     entityTypesFromAffected(asString(ro["affected"])),
 			SignalCount:     int(asFloat(ro["signal_count"])),

@@ -138,6 +138,16 @@ SELECT `+chschema.ISO("max(ts)")+`            AS ts_s,
 // transitions the window saw. Grouped by the seam key (entity_id), newest
 // state via argMax — a seam that flapped shows its CURRENT state, with the
 // churn count as the evidence of instability.
+// The WHERE columns are TABLE-QUALIFIED (s.kind, s.ts, s.source) for the reason
+// ChangesSQL pushes its filter into a subquery: `argMax(kind, ts) AS kind` is an
+// output alias that shadows the source column, ClickHouse substitutes it into
+// the WHERE of the same query, and the server refused every call with
+//
+//	Code: 184. DB::Exception: Aggregate function argMax(kind, ts) AS kind is
+//	found in WHERE in query. (ILLEGAL_AGGREGATION)
+//
+// Alias resolution does not touch a qualified name, so the filter binds the raw
+// column and the projected names (the wire contract) stay as they are.
 func cloudSeamTelemetrySQL(windowHours int, limit int, scope string) string {
 	return fmt.Sprintf(`
 SELECT entity_id                      AS entity_id,
@@ -147,10 +157,10 @@ SELECT entity_id                      AS entity_id,
        count()                        AS events,
        argMax(value, ts)              AS value,
        argMax(attrs, ts)              AS attrs
-  FROM netops.corr_signals
- WHERE source = 'cloud'
-   AND kind IN (%s)
-   AND ts > now() - INTERVAL %d HOUR
+  FROM netops.corr_signals AS s
+ WHERE s.source = 'cloud'
+   AND s.kind IN (%s)
+   AND s.ts > now() - INTERVAL %d HOUR
  GROUP BY entity_id
  ORDER BY ts_s DESC, entity_id DESC
  LIMIT %d
