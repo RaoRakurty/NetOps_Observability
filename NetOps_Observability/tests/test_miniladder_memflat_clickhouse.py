@@ -441,6 +441,307 @@ def test_background_only_raises_say_query_log_could_name_none(
             "thread") in h.phases[-1]["notes"]
 
 
+# ── clause 2a: budgeted-backfill NEGOTIATION is exempt, a STALL is not ──────
+#
+# RUN 08311437us3b (2026-08-31 14:38-15:35). The clause failed the run on 4
+# MEMORY_LIMIT_EXCEEDED while the platform did exactly what 9ed38cbb designed
+# it to do: the timeintel backfill's wide fetch NEGOTIATES with the server — a
+# sub-fetch that does not fit is refused against the worker's OWN budgeted
+# max_memory_usage (241) or read cap (307), the splitter halves the key list,
+# the pass folds the pages and advances its watermark. Nothing else lost work.
+#
+# So the count is now taken on what is left after TWO conditions are BOTH met:
+#   attributable  system.query_log names the refused statement as the worker's
+#                 own (log_comment/user `worker:timeintel-backfill*`);
+#   recovered     the worker logged `backfill pass complete` with pages > 0
+#                 inside the run window.
+# A refusal that is attributable but never completed a pass is the STALL shape
+# 9ed38cbb fixed and still fails — that is the mutant below. A background
+# victim (a merge query_log cannot even name) still fails, which is s06.
+
+BACKFILL_TAG = "worker:timeintel-backfill"
+BACKFILL_PICK_TAG = "worker:timeintel-backfill-pick"
+
+
+def _pass_line(pages=3, written=1204):
+    """The worker's applog JSON line, as timeintel_backfill.go emits it."""
+    return json.dumps({
+        "ts": "2026-08-31T15:02:11.412831Z", "level": "info",
+        "component": "timeintel", "msg": "backfill pass complete",
+        "written": written, "pages": pages, "caught_up": False,
+        "cursor": "2026-08-14T09:11:02.5Z"})
+
+
+def _early_line(pages=0):
+    """The OTHER line the worker can emit: a pass that ended EARLY. This is the
+    stall shape — same words in it, and it must never read as a completion."""
+    return json.dumps({
+        "ts": "2026-08-31T15:02:11.412831Z", "level": "warn",
+        "component": "timeintel",
+        "msg": "backfill pass ended early — resuming from the watermark next tick",
+        "written": 0, "pages": pages, "retryable": False,
+        "err": "code 241 MEMORY_LIMIT_EXCEEDED"})
+
+
+def _api_log_stub(monkeypatch, blob, *, rc=0, ids=("netops-api-1",),
+                  calls=None):
+    """docker ps + docker logs for the api service, through ml.run — the same
+    seam collect_stability_blobs uses."""
+    def fake_run(cmd, timeout, *a, **k):
+        if calls is not None:
+            calls.append(cmd)
+        if "ps" in cmd:
+            return 0, "".join(f"{i}\n" for i in ids), ""
+        if "logs" in cmd:
+            return (0, blob, "") if rc == 0 else (rc, "", "no such container")
+        return 0, "", ""
+    monkeypatch.setattr(ml, "run", fake_run)
+
+
+def _attribution(*rows):
+    """The three cells the attribution probe returns per group: log_comment,
+    user and the count of 241s under it."""
+    return "\n".join(f"{tag}\t{user}\t{n}" for tag, user, n in rows)
+
+
+def _refusal_stub(errors, attribution, victims="Select\tnetops.incidents\t4",
+                  **overrides):
+    """s06's plumbing with `errors` refusals and a QUIET memory curve (so the
+    only thing under test is the error accounting), answering the ATTRIBUTION
+    probe (the one that groups by log_comment) separately from the victims
+    probe (which groups by query_kind)."""
+    base = {
+        "'max_server_memory_usage'": str(S06_CAP_MIB * MIB),
+        "system.metric_log": _metric_log(1200, 900, 400, samples=4141),
+        "system.metrics": (f"MemoryTracking\t{1188 * MIB}\n"
+                           f"MergesMutationsMemoryTracking\t{96 * MIB}"),
+        "system.errors": str(1 + errors),
+        "system.error_log": _error_log(errors, rows=max(errors, 9)),
+        "system.query_log": victims,
+        "'MaxPartCountForPartition'": "12",
+    }
+    base.update(overrides)
+    # `sequence` is consulted BEFORE the plain answers, which is how the
+    # attribution probe (it names log_comment) is told apart from the victims
+    # probe over the same table.
+    return _ch_stub(sequence={"log_comment": [attribution]}, **base)
+
+
+def test_a_recovered_backfill_negotiation_is_exempted_and_named(
+        tmp_path, monkeypatch):
+    """RUN 08311437us3b's exact shape: 4 refusals, every one of them the
+    budgeted worker's own, and a pass that completed 3 pages."""
+    _api_log_stub(monkeypatch, "INFO boot\n" + _pass_line(pages=3) + "\n")
+    ch = _refusal_stub(4, _attribution((BACKFILL_TAG, "netops", 3),
+                                       (BACKFILL_PICK_TAG, "netops", 1)))
+    h = _s06(tmp_path, monkeypatch, ch)
+    assert h.memflat() is True, h.phases[-1]["notes"]
+    notes = h.phases[-1]["notes"]
+    # NEVER silently: the exemption is in the line the operator reads.
+    assert "4 backfill-negotiation refusals exempted, pass completed" in notes
+    assert BACKFILL_TAG in notes and "1 completed pass(es)" in notes
+    err = h.phases[-1]["evidence"]["clickhouse"]["memory_limit_exceeded"]
+    assert err["window_count"] == 4 and err["delta"] == 4
+    assert err["backfill_attributed"] == 4
+    assert err["backfill_passes"] == 1
+    assert err["backfill_exempt"] == 4
+    assert err["counted"] == 0
+
+
+def test_a_backfill_refusal_without_a_completed_pass_STILL_FAILS(
+        tmp_path, monkeypatch):
+    """THE STALL SHAPE — the defect 9ed38cbb fixed. Same refusals, same
+    attribution, but the worker only ever logged passes that ended EARLY: the
+    watermark never advanced and the gate must stay red."""
+    _api_log_stub(monkeypatch, _early_line() + "\n" + _early_line() + "\n")
+    ch = _refusal_stub(4, _attribution((BACKFILL_TAG, "netops", 4)))
+    h = _s06(tmp_path, monkeypatch, ch)
+    assert h.memflat() is False, h.phases[-1]["notes"]
+    notes = h.phases[-1]["notes"]
+    assert "4 MEMORY_LIMIT_EXCEEDED during this run" in notes
+    assert "exempted" not in notes
+    err = h.phases[-1]["evidence"]["clickhouse"]["memory_limit_exceeded"]
+    assert err["backfill_attributed"] == 4
+    assert err["backfill_passes"] == 0
+    assert err["backfill_exempt"] == 0 and err["counted"] == 4
+
+
+def test_MUTANT_dropping_the_pass_completion_requirement_lets_a_stall_pass(
+        tmp_path, monkeypatch):
+    """THE MUTANT. Exempt on attribution ALONE — no recovery evidence — and the
+    stall above goes green. That is what makes the completed pass load-bearing
+    rather than decorative."""
+    _api_log_stub(monkeypatch, _early_line() + "\n")
+    monkeypatch.setattr(ml.Harness, "_backfill_pass_evidence",
+                        lambda self, now=None: (1, "MUTANT: assumed recovered"))
+    ch = _refusal_stub(4, _attribution((BACKFILL_TAG, "netops", 4)))
+    h = _s06(tmp_path, monkeypatch, ch)
+    assert h.memflat() is True, (
+        "the mutant must go green — a stall is indistinguishable from a "
+        "negotiation until the completed pass is required")
+
+
+def test_a_background_victim_is_never_exempted(tmp_path, monkeypatch):
+    """s06's shape, unchanged: raises query_log cannot attribute at all (a
+    metric_log merge) are still the customer-visible fact, and a completed
+    backfill pass in the same run does not launder them."""
+    _api_log_stub(monkeypatch, _pass_line(pages=5) + "\n")
+    ch = _refusal_stub(17, _attribution(("", "default", 2)),
+                       victims="Insert\tnetops.findings\t2",
+                       **{"system.errors": "18"})
+    h = _s06(tmp_path, monkeypatch, ch)
+    assert h.memflat() is False
+    notes = h.phases[-1]["notes"]
+    assert "17 MEMORY_LIMIT_EXCEEDED during this run" in notes
+    assert "exempted" not in notes
+    err = h.phases[-1]["evidence"]["clickhouse"]["memory_limit_exceeded"]
+    assert err["backfill_attributed"] == 0 and err["counted"] == 17
+    # The pass evidence is not even read when nothing is attributable.
+    assert err["backfill_passes"] == -1
+
+
+def test_mixed_run_exempts_only_the_attributable_recovered_ones(
+        tmp_path, monkeypatch):
+    """6 refusals: 4 the budgeted worker's (recovered), 2 background. The run
+    fails on the 2, states the 4, and never rounds either into the other."""
+    _api_log_stub(monkeypatch, _pass_line(pages=2) + "\n")
+    ch = _refusal_stub(6, _attribution((BACKFILL_TAG, "netops", 4),
+                                       ("endpoint:/api/incidents", "netops", 0)))
+    h = _s06(tmp_path, monkeypatch, ch)
+    assert h.memflat() is False
+    notes = h.phases[-1]["notes"]
+    assert "2 UNEXEMPTED MEMORY_LIMIT_EXCEEDED during this run" in notes
+    assert "of 6 raised" in notes
+    assert "4 backfill-negotiation refusals exempted, pass completed" in notes
+    err = h.phases[-1]["evidence"]["clickhouse"]["memory_limit_exceeded"]
+    assert err["backfill_attributed"] == 4
+    assert err["backfill_exempt"] == 4 and err["counted"] == 2
+
+
+def test_an_unreadable_api_log_exempts_nothing(tmp_path, monkeypatch):
+    """A gate that cannot see must not forgive: no pass evidence is UNKNOWN,
+    and UNKNOWN is not recovery."""
+    _api_log_stub(monkeypatch, "", rc=1)
+    ch = _refusal_stub(4, _attribution((BACKFILL_TAG, "netops", 4)))
+    h = _s06(tmp_path, monkeypatch, ch)
+    assert h.memflat() is False
+    err = h.phases[-1]["evidence"]["clickhouse"]["memory_limit_exceeded"]
+    assert err["backfill_passes"] == -1
+    assert "unreadable" in err["backfill_pass_source"]
+    assert err["backfill_exempt"] == 0 and err["counted"] == 4
+
+
+def test_an_unreadable_query_log_exempts_nothing(tmp_path, monkeypatch):
+    """The other half of the same rule: an attribution probe that cannot answer
+    must not read as 'none attributable' NOR as 'all the worker's'."""
+    _api_log_stub(monkeypatch, _pass_line() + "\n")
+    ch = _refusal_stub(4, _attribution((BACKFILL_TAG, "netops", 4)))
+
+    def refuse(query, timeout=60):
+        if "log_comment" in query:
+            return False, "Code 60: unknown column log_comment"
+        return ch(query, timeout)
+
+    h = _s06(tmp_path, monkeypatch, refuse)
+    assert h.memflat() is False
+    err = h.phases[-1]["evidence"]["clickhouse"]["memory_limit_exceeded"]
+    assert err["backfill_attributed"] == -1
+    assert "unreadable" in err["backfill_attribution_source"]
+    assert err["backfill_exempt"] == 0 and err["counted"] == 4
+
+
+def test_a_clean_run_asks_neither_backfill_question(tmp_path, monkeypatch):
+    """No refusal, no probes: a healthy run must not pay a docker logs or a
+    query_log scan, and its evidence must say the questions were not asked."""
+    calls: list = []
+    _api_log_stub(monkeypatch, _pass_line() + "\n", calls=calls)
+    h = _s06(tmp_path, monkeypatch, _s06_stub(errors=0))
+    assert h.memflat() is True
+    err = h.phases[-1]["evidence"]["clickhouse"]["memory_limit_exceeded"]
+    assert err["counted"] == 0 and err["backfill_exempt"] == 0
+    assert err["backfill_attribution_source"] == "not examined (no refusal)"
+    assert not [c for c in calls if "logs" in c]
+
+
+def test_the_exempting_run_does_not_also_claim_no_error_fired(
+        tmp_path, monkeypatch):
+    """The peak WARN says 'NO MEMORY_LIMIT_EXCEEDED fired'. With refusals
+    exempted that sentence would be false in the same report that exempts
+    them, so it is withheld."""
+    _api_log_stub(monkeypatch, _pass_line() + "\n")
+    ch = _refusal_stub(
+        4, _attribution((BACKFILL_TAG, "netops", 4)),
+        **{"system.metric_log": _metric_log(S06_PEAK_MIB, S06_P99_MIB,
+                                            S06_MERGE_MIB, samples=4141)})
+    h = _s06(tmp_path, monkeypatch, ch)
+    assert h.memflat() is True, h.phases[-1]["notes"]
+    notes = h.phases[-1]["notes"]
+    assert "a transient that touched the ceiling and cost no work" not in notes
+    assert "4 backfill-negotiation refusals exempted" in notes
+
+
+# -- the two instruments, read directly -------------------------------------
+
+def test_pass_parser_counts_only_completions_with_pages(tmp_path):
+    blob = "\n".join([
+        "not json at all",
+        _early_line(),                                   # the stall line
+        json.dumps({"msg": "backfill pass complete", "pages": 0}),
+        _pass_line(pages=1),
+        "2026-08-31T15:04:00Z stdout " + _pass_line(pages=9),   # prefixed line
+    ])
+    assert ml.backfill_passes_completed(blob) == 2
+    assert ml.backfill_passes_completed(None) == -1
+    assert ml.backfill_passes_completed("") == 0
+
+
+def test_pass_evidence_window_spans_the_whole_run_and_every_replica(
+        monkeypatch):
+    """The window reaches back to RUN start (preflight), not to burst start —
+    a refusal raised before injection began still has its recovery inside the
+    window — and every api replica is read."""
+    calls: list = []
+    _api_log_stub(monkeypatch, _pass_line() + "\n", calls=calls,
+                  ids=("netops-api-1", "netops-api-2"))
+    h = object.__new__(ml.Harness)
+    h.stack = ml.Stack("/nonexistent.env", "http://localhost:8000", "netops")
+    h.run_mono_t0 = 1000.0
+    h.stability_t0 = 1000.0 + 1500.0        # burst started 1500s into the run
+    passes, source = h._backfill_pass_evidence(now=1000.0 + 1800.0)
+    assert passes == 2, "every replica is read, not cid()'s first one"
+    since = [c[c.index("--since") + 1] for c in calls if "--since" in c]
+    assert since and all(int(v.rstrip("s")) >= 1800 for v in since), (
+        f"the evidence window is only {since} — it must span the run the "
+        "error clause judges, which opens at preflight")
+    assert "2 api container log(s)" in source
+
+
+def test_one_unreadable_replica_is_named_but_the_other_still_counts(
+        monkeypatch):
+    def fake_run(cmd, timeout, *a, **k):
+        if "ps" in cmd:
+            return 0, "netops-api-1\nnetops-api-2\n", ""
+        if "netops-api-2" in cmd:
+            return 1, "", "no such container"
+        return 0, _pass_line() + "\n", ""
+    monkeypatch.setattr(ml, "run", fake_run)
+    h = object.__new__(ml.Harness)
+    h.stack = ml.Stack("/nonexistent.env", "http://localhost:8000", "netops")
+    h.run_mono_t0 = 0.0
+    passes, source = h._backfill_pass_evidence(now=600.0)
+    assert passes == 1
+    assert "1 replica(s) unreadable" in source
+
+
+def test_no_api_container_is_unreadable_not_zero(monkeypatch):
+    monkeypatch.setattr(ml, "run", lambda cmd, timeout, *a, **k: (0, "", ""))
+    h = object.__new__(ml.Harness)
+    h.stack = ml.Stack("/nonexistent.env", "http://localhost:8000", "netops")
+    h.run_mono_t0 = 0.0
+    passes, source = h._backfill_pass_evidence(now=60.0)
+    assert passes == -1 and "no running api container" in source
+
+
 # ── the instrument can be DESTROYED under you: 2026-08-29, mid-task ────────
 #
 # A config change recreated BOTH `system.metric_log` and `system.error_log`

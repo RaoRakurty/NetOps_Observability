@@ -670,6 +670,113 @@ def ch_memory_error_victims(stack, start: str, end: str, total: int) -> str:
     return "; ".join(parts)
 
 
+# ── clause (2a) exemption: budgeted-backfill NEGOTIATION is not a fault ─────
+#
+# WHY THIS EXISTS (run 08311437us3b, 2026-08-31 14:38-15:35). The clause failed
+# that run on 4 MEMORY_LIMIT_EXCEEDED the platform raised BY DESIGN. Since
+# 9ed38cbb the timeintel backfill's wide fetch NEGOTIATES with the server: a
+# sub-fetch that does not fit is REFUSED against the worker's own budgeted
+# `max_memory_usage` (241) or read cap (307), the splitter halves the key list
+# and retries until it fits, the pass folds the pages and advances its
+# watermark. The refusal IS the mechanism working — bounded by the worker's own
+# budget, no other query lost work, and the pass completed. A gate that reddens
+# on that is noise, and noise is how a real regression gets ignored.
+#
+# WHAT IS EXEMPT — BOTH halves are required, and neither may be guessed at:
+#
+#   ATTRIBUTABLE  `system.query_log` names the refused statement as the
+#                 budgeted backfill's own: `log_comment` (or `user`) carries
+#                 the worker's attribution tag — `worker:timeintel-backfill`
+#                 for the wide fetch, `worker:timeintel-backfill-pick` for the
+#                 pick (timeintel_backfill.go, both set via chWorkerQueryTuned
+#                 -> chhttp `log_comment`). A refusal query_log cannot name is
+#                 a BACKGROUND victim (a merge, a flush) and still counts —
+#                 that is exactly the s06 shape this clause was written for.
+#
+#   RECOVERED     the worker's OWN pass evidence says the negotiation ended in
+#                 WORK: a `backfill pass complete` line with pages > 0 inside
+#                 this run's window, read from the api container's structured
+#                 log. Without it the identical refusals are the STALL shape
+#                 (refused, split, refused again, watermark never advances) —
+#                 the defect 9ed38cbb fixed — and that must stay red.
+#
+# An unreadable query_log or unreadable api log exempts NOTHING (-1, never 0):
+# a gate that cannot see must not forgive, and it must not be able to mistake
+# "I could not look" for "nothing was attributable".
+CH_BACKFILL_TAG_PREFIX = "worker:timeintel-backfill"
+BACKFILL_PASS_COMPLETE = "backfill pass complete"
+
+
+def ch_memory_error_backfill_attributed(stack, start: str,
+                                        end: str) -> tuple[int, str, str]:
+    """(count, tags, source) — the 241s `system.query_log` attributes to the
+    budgeted backfill worker.
+
+    -1 is UNREADABLE, never 0: a query_log that cannot answer must neither
+    exempt anything nor read as "none attributable"."""
+    bound = ch_window_bound(start, end)
+    if not bound:
+        return -1, "", "no run window"
+    ok, out = stack.ch(
+        f"SELECT log_comment, user, count() FROM system.query_log "
+        f"WHERE exception_code = {CH_MEM_ERROR_CODE} AND {bound} "
+        f"GROUP BY 1, 2 ORDER BY 3 DESC LIMIT 25")
+    if not ok:
+        return -1, "", f"system.query_log unreadable ({out[:100]})"
+    total, tags = 0, []
+    for line in out.strip().splitlines():
+        cells = line.split("\t")
+        if len(cells) < 3:
+            continue
+        try:
+            count = int(cells[2])
+        except ValueError:
+            continue
+        tag, user = cells[0].strip(), cells[1].strip()
+        # Prefix, because the worker deliberately carries TWO tags (the wide
+        # fetch and the pick) and both are the same budgeted pass.
+        if not (tag.startswith(CH_BACKFILL_TAG_PREFIX)
+                or user.startswith(CH_BACKFILL_TAG_PREFIX)):
+            continue
+        total += count
+        tags.append(f"{count}x {tag or user}")
+    return total, "; ".join(tags), (
+        f"system.query_log log_comment/user starting '{CH_BACKFILL_TAG_PREFIX}'")
+
+
+def backfill_passes_completed(blob: str | None) -> int:
+    """Completed backfill passes (pages > 0) in ONE container-log blob.
+
+    The worker emits applog JSON lines on stdout (internal/applog), so the line
+    is parsed as JSON and its `pages` read — a substring count would also match
+    the WARN line that says a pass ended EARLY, which is the stall shape this
+    exemption must never absorb. -1 means the blob could not be read."""
+    if blob is None:
+        return -1
+    done = 0
+    for line in blob.splitlines():
+        if BACKFILL_PASS_COMPLETE not in line:
+            continue
+        brace = line.find("{")
+        if brace < 0:
+            continue
+        try:
+            event = json.loads(line[brace:])
+        except (ValueError, TypeError):
+            continue
+        if not isinstance(event, dict):
+            continue
+        if event.get("msg") != BACKFILL_PASS_COMPLETE:
+            continue
+        try:
+            pages = int(event.get("pages", 0))
+        except (TypeError, ValueError):
+            continue
+        if pages > 0:
+            done += 1
+    return done
+
+
 def clean_slate_offset_note(bus_max_current: int, planned: int) -> tuple[str, str]:
     """("" | "log" | "warn", message) about clean-slate.sh --verify's bound.
 
@@ -4611,6 +4718,13 @@ class Harness:
         # requested name -> canonical id, when dedupe absorbed the create
         self.absorbed: dict[str, str] = {}
         self.stability_t0 = time.monotonic()
+        # The RUN's start on the harness's own clock, NEVER reassigned —
+        # unlike stability_t0, which is re-anchored at burst start. memflat's
+        # backfill pass-evidence window is derived from it so it spans the same
+        # run the ClickHouse error clause judges (which opens at PREFLIGHT, not
+        # at the burst): a narrower window would hide the recovery evidence for
+        # a refusal raised before injection began.
+        self.run_mono_t0 = time.monotonic()
         self.injected_total = 0
         self.burst_seconds = 0.0
         self.produce_failures: list[str] = []
@@ -7088,7 +7202,16 @@ class Harness:
         ev = {"baseline": base, "current": int(now) if now >= 0 else -1,
               "delta": -1, "window_count": window,
               "window_source": window_source, "window_state": window_state,
-              "window_start": start, "window_end": end, "victims": ""}
+              "window_start": start, "window_end": end, "victims": "",
+              # The exemption ledger (see CH_BACKFILL_TAG_PREFIX). `counted` is
+              # what the verdict is taken on; -1 on the attribution/pass rows
+              # means the question was never asked (no refusal fired) or the
+              # instrument could not answer — never "zero attributable".
+              "counted": -1, "backfill_attributed": -1, "backfill_tags": "",
+              "backfill_attribution_source": "not examined (no refusal)",
+              "backfill_passes": -1,
+              "backfill_pass_source": "not examined (no refusal)",
+              "backfill_exempt": 0, "exemption_note": ""}
         problems: list = []
         if base < 0 or now < 0:
             problems.append(
@@ -7114,17 +7237,92 @@ class Harness:
         # either one alone is enough to condemn the run: take the LARGER, never
         # the more convenient.
         raised = max(delta, max(0, window))
+        ev["counted"] = raised
         if raised > 0:
             ev["victims"] = ch_memory_error_victims(
                 self.stack, start, end, raised)
-            problems.append(
-                f"clickhouse: {raised} {CH_MEM_ERROR} during this run "
-                f"(system.errors delta {delta}"
-                + (f", {window_source} counted {window}" if window >= 0
-                   else f", {window_source}")
-                + f") — the store refused work for want of its own memory "
-                  f"budget. Victims: {ev['victims']}")
+            # The two independent halves of the exemption. Both are asked ONLY
+            # when something was actually refused — a clean run pays for
+            # neither probe.
+            attributed, tags, attr_source = ch_memory_error_backfill_attributed(
+                self.stack, start, end)
+            # The pass evidence costs a `docker logs` over the whole run, so it
+            # is only read when something IS attributable to the worker. When
+            # nothing is, the answer cannot change the verdict.
+            if attributed > 0:
+                passes, pass_source = self._backfill_pass_evidence()
+            else:
+                passes, pass_source = -1, ("not examined (no refusal attributed "
+                                           "to the backfill worker)")
+            ev.update({"backfill_attributed": attributed,
+                       "backfill_tags": tags,
+                       "backfill_attribution_source": attr_source,
+                       "backfill_passes": passes,
+                       "backfill_pass_source": pass_source})
+            # ATTRIBUTABLE **AND** RECOVERED, or nothing. A -1 on either
+            # instrument is unreadable and exempts nothing; a refusal with no
+            # completing pass is the STALL shape and must stay red.
+            exempt = (min(attributed, raised)
+                      if attributed > 0 and passes > 0 else 0)
+            counted = raised - exempt
+            ev["backfill_exempt"] = exempt
+            ev["counted"] = counted
+            if exempt > 0:
+                ev["exemption_note"] = (
+                    f"{exempt} backfill-negotiation refusals exempted, pass "
+                    f"completed ({tags or 'attributed by log_comment'}; "
+                    f"{passes} completed pass(es) — {pass_source})")
+                log(f"memflat: {ev['exemption_note']}")
+            if counted > 0:
+                head = (
+                    f"clickhouse: {counted} {CH_MEM_ERROR} during this run "
+                    if not exempt else
+                    f"clickhouse: {counted} UNEXEMPTED {CH_MEM_ERROR} during "
+                    f"this run (of {raised} raised; {ev['exemption_note']}) ")
+                problems.append(
+                    head
+                    + f"(system.errors delta {delta}"
+                    + (f", {window_source} counted {window}" if window >= 0
+                       else f", {window_source}")
+                    + f") — the store refused work for want of its own memory "
+                      f"budget. Victims: {ev['victims']}")
         return ev, problems
+
+    def _backfill_pass_evidence(self, now: float | None = None) -> tuple[int, str]:
+        """(passes, source) — `backfill pass complete` lines with pages > 0 in
+        the api container log over THIS RUN's window.
+
+        Same seam the stability diagnosis uses (`docker logs --since` over every
+        replica of the service), and the same rule: a replica whose log cannot
+        be read is UNREADABLE, not clean. -1 when NO replica could be read, so
+        the caller exempts nothing rather than forgiving blind."""
+        cids = self.stack.cids("api")
+        if not cids:
+            return -1, ("no running api container — backfill pass evidence "
+                        "unreadable")
+        now = time.monotonic() if now is None else now
+        # From RUN start (not burst start) + a minute of slack, so the evidence
+        # window covers the whole window the error clause judges. Floored at a
+        # minute: a nonsensical elapsed must not become a `--since -12s`.
+        since = max(60, int(now - self.run_mono_t0) + 60)
+        passes, read, unread = 0, 0, 0
+        for cc in cids:
+            rc, out, err2 = run(["docker", "logs", "--since", f"{since}s", cc],
+                                120)
+            found = backfill_passes_completed((out + err2) if rc == 0 else None)
+            if found < 0:
+                unread += 1
+                continue
+            read += 1
+            passes += found
+        if read == 0:
+            return -1, (f"api container log unreadable ({unread} replica(s)) — "
+                        f"backfill pass evidence unavailable")
+        source = (f"'{BACKFILL_PASS_COMPLETE}' with pages > 0 in {read} api "
+                  f"container log(s) over the last {since}s")
+        if unread:
+            source += f"; {unread} replica(s) unreadable"
+        return passes, source
 
     def _ch_parts_settled(self) -> dict:
         """Clause (3): parts come back down after input stops.
@@ -7278,8 +7476,13 @@ class Harness:
                         f"(> {CH_MEMORY_TRACKING_MAX_PCT}%) — this is the level "
                         f"the store RUNS at, not a transient: it spent 1% of "
                         f"the run at or above it")
+                # `not err_ev["backfill_exempt"]` as well as `not
+                # err_problems`: an EXEMPTED refusal leaves no problem behind,
+                # but "NO MEMORY_LIMIT_EXCEEDED fired" would then be a false
+                # sentence in the same report that exempts four of them.
                 if (track_pct >= CH_MEMORY_TRACKING_PEAK_WARN_PCT
-                        and not err_problems):
+                        and not err_problems
+                        and not err_ev.get("backfill_exempt")):
                     warnings.append(
                         f"clickhouse: peak MemoryTracking "
                         f"{peaks['MemoryTracking'] / 1024**2:.0f} MiB reached "
@@ -7317,6 +7520,10 @@ class Harness:
             f"verdict); MaxPartCountForPartition {parts['current']} "
             f"(preflight {parts['baseline']}, envelope {parts['envelope']}, "
             f"delay at {parts['parts_to_delay_insert']})")
+        # The exemption is NEVER silent: it rides in the one line the
+        # operator always reads, whether the phase passed or failed.
+        if err_ev.get("exemption_note"):
+            summary += f" | {err_ev['exemption_note']}"
         if warnings:
             summary += " | WARN: " + "; ".join(warnings)
         return ev, problems, summary
