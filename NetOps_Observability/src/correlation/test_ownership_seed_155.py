@@ -1892,3 +1892,261 @@ def test_the_ownership_check_is_negligible_per_persist(monkeypatch):
         main._seed_tenant_owned(tenant)
     per_call = (time.perf_counter() - started) / n
     assert per_call < 50e-6, f"{per_call * 1e6:.1f} us per ownership check"
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# TRACKER 199 — THE GRACEFUL SHUTDOWN IS AN OWNERSHIP CHANGE TOO
+#
+# WHAT 155d MEASURED (run ownership-155d-08311609, assertion
+# 3_handoff_counters.GAP). `_handoff_flush` is wired to
+# `on_partitions_revoked`, and aiokafka calls that hook when the GROUP
+# rebalances — never when THIS member leaves it. On `docker stop -t 30` /
+# `docker restart` (i.e. every rolling restart and every deploy) SIGTERM
+# reaches uvicorn, uvicorn runs the lifespan shutdown, `consume()`'s
+# cancellation handler calls `consumer.stop()`, aiokafka issues LeaveGroup, and
+# the departing replica flushes NOTHING: netops-correlation-6 went "Shutting
+# down" 16:35:14.198Z -> "LeaveGroup request succeeded" 16:35:14.318Z (120 ms)
+# holding 14 open objects, with zero flush lines in its whole log. Every flush
+# that run observed came from the SURVIVING replica's eager revoke.
+#
+# The arms still PASSED — the acquirer seeds from the last ORDINARY durable
+# version, so identity, version monotonicity and the durable verdict are never
+# at risk. What was lost is the FRESHNESS half of the handoff, on exactly the
+# ownership change that happens most often in production.
+#
+# WHAT IS PINNED BELOW: the flush runs on the SIGTERM path with no rebalance
+# callback in sight, over the FULL assignment, BEFORE LeaveGroup and before the
+# two drains and the offload plane that its writes depend on; the budget is the
+# same one the revoke path uses and overrunning it releases anyway; an empty
+# assignment does nothing at all.
+#
+# MUTANTS (verified by hand while writing these):
+#   * delete the `await _shutdown_handoff_flush()` call from `lifespan` ->
+#     test_a_graceful_shutdown_flushes_every_open_object_before_leavegroup
+#     fails: no handoff version is written and the departing replica exits
+#     holding its objects, exactly as 155d measured.
+#   * move that call BELOW `consume_task.cancel()` (or below `offload_stop`) ->
+#     the same test's ordering assertions fail.
+#   * drop the `_release_lost_partitions` call from `_shutdown_handoff_flush` ->
+#     test_an_over_budget_shutdown_releases_anyway and the released-counter
+#     assertion in the flush test fail (conservation breaks: N flushed, 0
+#     released).
+# ═════════════════════════════════════════════════════════════════════════════
+
+
+class _ShutdownCH(_SeedCH):
+    """The seed stub plus the two things a lifespan teardown touches: an
+    ordered trace of the writes, and `close()`."""
+
+    def __init__(self, order: list, **kw):
+        super().__init__(**kw)
+        self.order = order
+
+    async def insert(self, table: str, rows: list, dedup_token: str = "") -> None:
+        if table == "netops.corr_objects":
+            self.order.append("persist_version")
+        await super().insert(table, rows, dedup_token)
+
+    async def close(self) -> None:
+        self.order.append("ch_close")
+
+
+def _open_objects_on(monkeypatch, partition, stems, *, stub=None):
+    """Open one ORDINARY object per stem, all on `partition`, the way this
+    replica would while it owns it. Returns (stub, [correlation_id, ...])."""
+    stub = _SeedCH() if stub is None else stub
+    monkeypatch.setattr(main, "ch", stub)
+    monkeypatch.setattr(main, "datetime", _Clock)
+    monkeypatch.setattr(main, "CONSUMER_ASSIGNMENT_SEEN", True)
+    _assign({partition})
+    for i, stem in enumerate(stems):
+        tenant = _owned_tenant(partition, 4, stem=stem)
+        # A distinct entity per tenant: `_sig` derives `native_id` from the
+        # entity, and the intake dedups on it, so a shared one would silently
+        # drop the second tenant's evidence.
+        for s in (_sig(tenant, f"dev-{i}", offset_s=o) for o in (0, 30, 60)):
+            main.buffer_signal(s)
+    asyncio.run(main.engine_cycle())
+    assert len(main.OPEN_OBJECTS) == len(stems), main.OPEN_OBJECTS
+    return stub, sorted(main.OPEN_OBJECTS)
+
+
+def _lifespan_stubs(monkeypatch, order, *, ch_stub):
+    """Drive the REAL `main.lifespan` with every loop task replaced by a
+    recorder. Only the plumbing is stubbed — the teardown SEQUENCE under test,
+    including `_shutdown_handoff_flush` itself, is the shipping one."""
+    # monkeypatch owns the restore: `lifespan` assigns the module-global `ch`.
+    monkeypatch.setattr(main, "ch", ch_stub)
+    monkeypatch.setattr(main, "CH", lambda *a, **k: ch_stub)
+    monkeypatch.setattr(main, "dlq_startup_check", lambda: None)
+    monkeypatch.setattr(main, "gc_tune_startup", lambda: None)
+    monkeypatch.setattr(main.diagnostics, "start", lambda: None)
+    monkeypatch.setattr(main.diagnostics, "enabled", lambda: False)
+    monkeypatch.setattr(main, "_start_health_sidecar", lambda: None)
+    monkeypatch.setattr(main, "_evidence_ensure_consumer", lambda: None)
+
+    def _recorder(name):
+        async def run():
+            try:
+                await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                order.append(name)
+                raise
+        return run
+
+    async def _consume():
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            # What the real `consume()` does on its way out: the final commit,
+            # then `consumer.stop()` — which is aiokafka's LeaveGroup, the
+            # moment after which this replica's partitions belong to someone
+            # else and a handoff version can no longer inform their seed.
+            order.append("leave_group")
+            raise
+
+    monkeypatch.setattr(main, "consume", _consume)
+    for name in ("engine_loop", "cloud_log_tailer", "batch_flush_loop",
+                 "loop_lag_watchdog", "health_snapshot_loop"):
+        monkeypatch.setattr(main, name, _recorder(name))
+
+    async def _evidence_stop():
+        order.append("evidence_stop")
+
+    async def _signal_flush():
+        order.append("signal_batch_flush")
+
+    async def _offload_stop(*, drain_s=None):
+        order.append("offload_stop")
+        return {}
+
+    monkeypatch.setattr(main, "_evidence_stop", _evidence_stop)
+    monkeypatch.setattr(main.SIGNAL_BATCH, "flush", _signal_flush)
+    monkeypatch.setattr(main, "offload_stop", _offload_stop)
+
+
+def _run_lifespan():
+    async def enter():
+        async with main.lifespan(None):
+            # Let the loop tasks actually START. A task cancelled before its
+            # first step never enters its coroutine, so it would record nothing
+            # — the process this models runs for hours before the SIGTERM.
+            await asyncio.sleep(0.05)
+    asyncio.run(enter())
+
+
+def test_a_graceful_shutdown_flushes_every_open_object_before_leavegroup(monkeypatch):
+    """THE MEASURED GAP, closed. SIGTERM -> uvicorn -> lifespan teardown, with
+    NO rebalance callback anywhere in the path: every open object this replica
+    holds must still get its final open version, and it must be written while
+    the write can still reach ClickHouse and still reach the acquiring replica's
+    seed — i.e. before LeaveGroup, before the Evidence drain, before the signal
+    flush, before `offload_stop` and before `ch.close()`.
+    """
+    order: list[str] = []
+    stub = _ShutdownCH(order)
+    _, cids = _open_objects_on(monkeypatch, 2, ("t-155-", "t-199-"), stub=stub)
+    assert sorted(_versions(stub)) == [(c, 1, "open") for c in sorted(cids)], (
+        "fixture invalid: both objects must be ORDINARY and already durable")
+    order.clear()                       # the opening writes are not under test
+    persisted_before = main.VERSIONS_PERSISTED
+    _lifespan_stubs(monkeypatch, order, ch_stub=stub)
+
+    _run_lifespan()
+
+    # ── the flush happened at all (this is what 155d found missing) ──────────
+    final = {r["correlation_id"]: r for r in stub.objects() if r["version"] == 2}
+    assert set(final) == set(cids), (
+        "a departing replica exited holding open objects — 155d's measured gap: "
+        f"handoff versions written for {sorted(final)} of {sorted(cids)}")
+    assert all(r["state"] == "open" for r in final.values()), (
+        "a handoff is a change of owner, never a close")
+    assert main.OWNERSHIP_HANDOFF_FLUSHED_TOTAL == len(cids)
+    assert main.OWNERSHIP_HANDOFF_UNFLUSHED_TOTAL == 0
+    # Conservation: what was flushed was also released, so the shutdown path
+    # balances the same way every rebalance does.
+    assert main.OWNERSHIP_HANDOFF_RELEASED_TOTAL == len(cids)
+    assert main.VERSIONS_PERSISTED == persisted_before + len(cids)
+    assert main.OPEN_OBJECTS == {}
+
+    # ── and it happened in the only order that is any use ────────────────────
+    assert "persist_version" in order and "leave_group" in order, order
+    assert order.index("persist_version") < order.index("leave_group"), (
+        "the handoff version was written AFTER LeaveGroup — the partitions were "
+        f"already someone else's: {order}")
+    for later in ("evidence_stop", "signal_batch_flush", "offload_stop",
+                  "ch_close"):
+        assert order.index("persist_version") < order.index(later), (
+            f"the handoff flush ran after {later}, which it depends on: {order}")
+    # The engine is quiesced FIRST, so the flush is this owner's genuine last
+    # word and no post-release cycle can re-mint the objects it just handed off.
+    assert order.index("engine_loop") < order.index("persist_version"), order
+
+
+def test_an_over_budget_shutdown_releases_anyway_and_still_exits(monkeypatch):
+    """The released-anyway policy, unchanged from the revoke path: a ClickHouse
+    that cannot answer inside CORR_REVOKE_BUDGET_S costs the acquirer freshness
+    (it seeds from the last durable row — the residue bound stated in
+    `_handoff_flush`), never the exit. Nothing is waited for beyond the budget
+    and every object is still accounted for."""
+    stub, cids = _open_objects_on(monkeypatch, 2, ("t-155-", "t-199-"))
+    monkeypatch.setattr(main, "CORR_REVOKE_BUDGET_S", 0.0)
+    before = len(stub.objects())
+
+    started = time.perf_counter()
+    flushed, unflushed = asyncio.run(main._shutdown_handoff_flush())
+    elapsed = time.perf_counter() - started
+
+    assert (flushed, unflushed) == (0, len(cids))
+    assert main.OWNERSHIP_HANDOFF_UNFLUSHED_TOTAL == len(cids)
+    assert len(stub.objects()) == before, "no version was written out of budget"
+    # The exit is never blocked on the flush, and the state still follows the
+    # ownership: released, counted, gone.
+    assert main.OPEN_OBJECTS == {}
+    assert main.OWNERSHIP_HANDOFF_RELEASED_TOTAL == len(cids)
+    assert elapsed < 1.0, f"an out-of-budget shutdown flush took {elapsed:.2f}s"
+
+
+def test_a_shutdown_with_no_assignment_flushes_nothing(monkeypatch):
+    """The idle replica (beyond BUS_PARTITIONS with the range assignor), and the
+    process that never joined a group at all: there is no partition to hand off,
+    so the shutdown must not write, must not count and must not touch the
+    store."""
+    stub, _cids = _open_objects_on(monkeypatch, 2, ("t-155-",))
+    before = len(stub.objects())
+    held = dict(main.OPEN_OBJECTS)
+    _assign(set())
+
+    assert asyncio.run(main._shutdown_handoff_flush()) == (0, 0)
+
+    assert len(stub.objects()) == before
+    assert main.OWNERSHIP_HANDOFF_FLUSHED_TOTAL == 0
+    assert main.OWNERSHIP_HANDOFF_UNFLUSHED_TOTAL == 0
+    assert main.OWNERSHIP_HANDOFF_RELEASED_TOTAL == 0
+    assert main.OPEN_OBJECTS == held, "nothing was handed off, nothing changes"
+
+
+def test_the_crash_path_keeps_todays_behaviour_and_is_out_of_scope(monkeypatch):
+    """OUT OF SCOPE, DELIBERATELY — the residual, stated rather than implied.
+
+    Only a PLANNED stop can be fixed here. SIGKILL (the docker stop grace period
+    expiring on a wedged teardown), an OOM kill or a host loss runs no lifespan
+    teardown at all, so no shutdown flush happens and none can: there is no code
+    path left to run one from. On that path the acquiring replica seeds from the
+    object's last ORDINARY durable version — correct, merely staler by the
+    un-persisted window residue — which is exactly HEAD's behaviour and exactly
+    what 155d graded PASS.
+
+    What this test pins is the precondition that makes that acceptable: an open
+    object ALWAYS has a durable row to be seeded from, written when it opened,
+    with no flush involved. There is nothing to assert about the flush itself
+    on a path where the process is already gone.
+    """
+    stub, cids = _open_objects_on(monkeypatch, 2, ("t-155-",))
+    # No teardown, no revoke, no flush — the process simply stops existing here.
+    durable = [(r["correlation_id"], r["version"], r["state"])
+               for r in stub.objects()]
+    assert durable == [(cids[0], 1, "open")], (
+        "the crash path's whole safety net is this row: the acquiring replica "
+        "seeds the incident's identity and version from it")
+    assert main.OWNERSHIP_HANDOFF_FLUSHED_TOTAL == 0

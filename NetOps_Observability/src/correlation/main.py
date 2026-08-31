@@ -9751,6 +9751,80 @@ def _release_lost_partitions(held: frozenset[int]) -> int:
     return len(victims)
 
 
+async def _shutdown_handoff_flush() -> tuple[int, int]:
+    """TRACKER 199: flush-and-release on the GRACEFUL-SHUTDOWN path, which no
+    rebalance callback ever reaches. Returns (flushed, unflushed).
+
+    THE MEASURED GAP. `_handoff_flush` is wired to `on_partitions_revoked`, and
+    that hook fires when the GROUP rebalances — never when THIS member leaves.
+    On a planned stop (`docker stop` / `docker restart`, i.e. every rolling
+    restart and every deploy) SIGTERM reaches uvicorn, uvicorn runs the lifespan
+    shutdown, `consume()`'s cancellation handler calls `consumer.stop()` and
+    aiokafka issues LeaveGroup — with `on_partitions_revoked` never invoked
+    once. Measured in 155d on netops-correlation-6: "Shutting down"
+    16:35:14.198Z -> "LeaveGroup request succeeded" 16:35:14.318Z (120 ms) with
+    14 open objects in memory and ZERO flush lines anywhere in its log. Every
+    flush that run observed came from the SURVIVING replica's eager revoke, none
+    from the departing one. Nothing durable was lost — the acquirer seeds from
+    the last ORDINARY version — but the residue bound `_handoff_flush` exists to
+    remove was simply not applied on the most common ownership change there is.
+
+    THE FULL ASSIGNMENT, not a subset. A revoke hands over the partitions that
+    moved; a shutdown hands over ALL of them. This replica is leaving, so every
+    open object it holds is about to be somebody else's incident, and every one
+    of them gets its final open version.
+
+    SAME DISCIPLINE AS THE REVOKE PATH, deliberately: one `CORR_REVOKE_BUDGET_S`
+    for the whole flush, the same counters, and the same released-anyway policy
+    — an object that could not be flushed is still released and the acquirer
+    seeds it from its last durable row (the residue bound is stated in
+    `_handoff_flush`). The exit is never blocked on ClickHouse: what does not
+    fit in the budget is COUNTED (`unflushed`), never waited for.
+
+    THE RELEASE IS BOOKKEEPING HERE — the process is exiting, so forgetting the
+    registrations frees nothing that matters. It runs anyway because
+    `corr_ownership_handoff_*` conservation (seeded == adoptions + expired +
+    revoked + unowned_dropped + pending, released counted beside it) is an
+    invariant the 155d harness checks, and a shutdown that flushed N objects
+    without releasing them would be the one path on which it does not hold.
+
+    WHAT THIS DOES NOT COVER, stated rather than implied: the CRASH path. SIGKILL
+    (the docker stop grace period expiring), an OOM kill or a host loss runs no
+    teardown at all, so no flush happens and the acquiring replica seeds from the
+    last durable ORDINARY version — exactly today's behaviour, which 155d showed
+    is correct and merely staler. That is the accepted residual; only the PLANNED
+    stop is fixed here, because only the planned stop can be.
+    """
+    owned = frozenset(p for parts in CONSUMER_ASSIGNMENT.values() for p in parts)
+    if not owned:
+        # Never joined a group, or joined and was assigned nothing (the idle
+        # replica beyond BUS_PARTITIONS). Nothing is being handed off.
+        return (0, 0)
+    open_before = len(OPEN_OBJECTS)
+    flushed = 0
+    unflushed = 0
+    try:
+        flushed, unflushed = await _handoff_flush(owned)
+    except asyncio.CancelledError:
+        raise
+    except Exception:  # §16.1: observable, never fatal to the exit
+        log.exception("ownership handoff flush raised on shutdown — the open "
+                      "objects are released on their last durable version "
+                      "(tracker 199)")
+    # RELEASE, through the ordinary path so the counter and its log line are the
+    # same ones every other handoff writes: everything this replica still holds
+    # is "lost" now, so seed the pending set with the whole assignment and hold
+    # back nothing.
+    _OWNERSHIP_PENDING_RELEASE.update(owned)
+    released = _release_lost_partitions(frozenset())
+    log.info("ownership handoff (graceful shutdown): flushed %d of %d open "
+             "object(s) on partition(s) %s BEFORE LeaveGroup, released %d "
+             "registration(s) — the acquiring replica seeds from these rows "
+             "(unflushed=%d, tracker 199)",
+             flushed, open_before, sorted(owned), released, unflushed)
+    return (flushed, unflushed)
+
+
 def _seed_first_persist_done(reg: dict) -> None:
     """A seed-descended object has written a version of its own: disarm D2b."""
     reg.pop("seed_pending_first_persist", None)
@@ -11851,8 +11925,13 @@ async def lifespan(_app: FastAPI):
     # first cohort's Evidence is deferred rather than written inline, and NOT
     # put in `tasks` — it must outlive them by the shutdown drain (below).
     _evidence_ensure_consumer()
+    # Tracker 199: the consume task is held BY NAME because the teardown below
+    # must sequence it LAST of the loop tasks — cancelling it is what runs
+    # `consumer.stop()` and therefore what issues LeaveGroup, and the ownership
+    # handoff flush has to land before that.
+    consume_task = asyncio.create_task(consume())
     tasks = [
-        asyncio.create_task(consume()),
+        consume_task,
         asyncio.create_task(engine_loop()),
         asyncio.create_task(cloud_log_tailer()),  # #81 P3B file source (opt-in)
         asyncio.create_task(batch_flush_loop()),  # ≤2s latency bound for batched writes
@@ -11874,13 +11953,58 @@ async def lifespan(_app: FastAPI):
             seed_task.cancel()
             with contextlib.suppress(asyncio.CancelledError, Exception):
                 await seed_task
-        for task in tasks:
+        # TRACKER 199 — THE ORDER BELOW IS THE FIX, in three steps.
+        #
+        # 1. QUIESCE THE ENGINE FIRST. `engine_loop` is the only writer of
+        #    OPEN_OBJECTS (the reconcile loop registers, merges and closes;
+        #    `consume` only buffers signals), so stopping it first makes the
+        #    handoff flush this owner's genuine LAST word — no cycle can
+        #    re-number a version underneath it, and no post-release cycle can
+        #    re-mint an object from evidence still in the window (155c F1: the
+        #    admission guard cannot catch that one here, because on shutdown
+        #    CONSUMER_ASSIGNMENT still says we own the partition).
+        engine_tasks = [t for t in tasks if t is not consume_task]
+        for task in engine_tasks:
             task.cancel()
-        for task in tasks:
+        for task in engine_tasks:
             try:
                 await task
             except asyncio.CancelledError:
                 pass
+        # 2. FLUSH-AND-RELEASE, BEFORE LeaveGroup. `on_partitions_revoked` is
+        #    never called when THIS member leaves the group, so without this the
+        #    departing replica hands over nothing (155d measured 14 open objects
+        #    and 0 flush lines in a 120 ms exit). Three ordering constraints,
+        #    all satisfied here:
+        #      (a) it PERSISTS via ClickHouse -> it must run while `ch` is up;
+        #          `ch.close()` is the last statement of this block.
+        #      (b) `_persist_snapshot` OFFLOADS its serializers (`_snap_call`)
+        #          and defers its Evidence half to the evidence plane -> it must
+        #          run BEFORE `offload_stop()` and BEFORE `_evidence_stop()`, so
+        #          the rows it produces are drained by the two drains that
+        #          follow rather than stranded behind them. It is first here for
+        #          exactly that reason, and because the docker stop grace period
+        #          is the real wall: the highest-value write of the shutdown
+        #          takes the front of that budget, not what is left of it.
+        #      (c) it lands BEFORE `consume`'s final commit. That is safe in
+        #          both directions and deliberately not load-bearing: the flush
+        #          writes DURABLE VERSIONS while offsets govern only
+        #          REDELIVERY, and every version carries a content-derived
+        #          dedup token (`obj:<cid>:v<n>:<state>:<hash>`), so a replayed
+        #          message that re-derives the same version dedups instead of
+        #          duplicating. Flushing first is the strictly better half of
+        #          the choice anyway: were the commit to go first and the flush
+        #          then miss its budget, the residue would be lost with no
+        #          replay left to reconstruct it.
+        with contextlib.suppress(Exception):
+            await _shutdown_handoff_flush()
+        # 3. NOW the consumer leaves the group (final commit + LeaveGroup, both
+        #    bounded by CONSUMER_STOP_TIMEOUT_S inside `consume`).
+        consume_task.cancel()
+        try:
+            await consume_task
+        except asyncio.CancelledError:
+            pass
         # P2 step 4: the producers are stopped; give the Evidence plane a bounded
         # deadline to land what it still holds, then LOG AND COUNT whatever is
         # left (CORR_EVIDENCE_DRAIN_ON_STOP_S). An Evidence row that never landed
