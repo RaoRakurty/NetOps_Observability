@@ -65,7 +65,13 @@ STORY_TEMPLATES: dict[str, dict[str, Any]] = {
         # whole layer into one giant correlation object (rank-1 same-device +
         # rank-7 shared-interface-name groundings). Omitted ⇒ interfaces[0]
         # only, byte-identical to the pre-existing plan.
-        "params": {"probe_loss_pct", "with_trap", "interfaces"},
+        # `with_gnmi` (design §4.6) additionally moves the device's gNMI
+        # state (oper-status DOWN + counter stall + BGP session drop), so the
+        # fault is corroborated on the STREAMED-TELEMETRY transport the
+        # `gnmic` collector reads. Conditional like `with_trap`, so it is not
+        # in `lanes` — a scenario that asks for it on a stack with no gNMI
+        # target running gets a loud per-lane SKIP, never a silent one.
+        "params": {"probe_loss_pct", "with_trap", "with_gnmi", "interfaces"},
         "lanes": {"syslog", "probes"},
     },
     "bgp_flap": {
@@ -140,9 +146,12 @@ STORY_TEMPLATES: dict[str, dict[str, Any]] = {
     },
 }
 
-# Lanes the emitters implement (fidelity wave added trap + flows; gNMI is
-# still a stretch item — no template claims it).
-T1_CORE_LANES = {"syslog", "probes", "cloud", "metrics", "trap", "flows"}
+# Lanes the emitters implement. The fidelity wave added trap + flows; the
+# gNMI stretch (design §4.6) added `gnmi` — a PULL lane: its items mutate the
+# twin's gNMI target state (scripts/lab/twin/gnmi_server.py) and the platform's
+# gnmic collector streams the result, so nothing is produced onto the bus.
+T1_CORE_LANES = {"syslog", "probes", "cloud", "metrics", "trap", "flows",
+                 "gnmi"}
 
 FLOW_PROTOCOLS = ("ipfix", "netflow5")
 

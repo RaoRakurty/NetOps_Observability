@@ -35,12 +35,14 @@ run is itself detectable.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import glob
 import json
 import os
 import random
 import signal
 import string
+import subprocess
 import sys
 import time
 from datetime import datetime, timezone
@@ -54,18 +56,19 @@ sys.path.insert(0, SCRIPT_DIR)
 # twin-local modules (flat, self-contained package — nothing enters
 # src/backend or src/correlation).
 import fidelity as fidelity_mod
+import gnmi_server as gnmi_mod
 import lifecycle
 import scorer as scorer_mod
 import snmpsim_gen
 import spread as spread_mod
-from emitters import Injector, UdpLanes
+from emitters import GnmiLane, Injector, UdpLanes
 from scenario import (
     ScenarioError,
     check_budget,
     load_scenario,
     steady_eps,
 )
-from stack import Stack, StackError, env_get, log, warn
+from stack import Stack, StackError, env_get, log, run, warn
 from stories import build_run_plan, plan_end_s
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(SCRIPT_DIR)))
@@ -92,6 +95,7 @@ def fidelity_teardown(stack: Stack, state: dict, root: str) -> list[str]:
     detach exactly the product containers THIS run hot-attached to twinnet.
     Returns problems; never raises (teardown must report, not abort)."""
     problems: list[str] = []
+    problems += stop_gnmi_targets(state)
     if state.get("agents_generated"):
         agents_dir = os.path.join(root, "agents")
         try:
@@ -108,6 +112,70 @@ def fidelity_teardown(stack: Stack, state: dict, root: str) -> list[str]:
         if err:
             problems.append(f"twinnet detach {att['service']}: {err}")
     return problems
+
+
+GNMI_BASE_PORT = 57400
+GNMI_READY_TIMEOUT_S = 20
+
+
+def netops_gateway(project: str) -> str:
+    """The `<project>_netops` bridge gateway — the address a container on the
+    stack network reaches the HOST on. The twin's gNMI targets are served from
+    the host, so this is what the rendered gnmic targets file must advertise;
+    a merge that pointed gnmic at 127.0.0.1 would resolve to gnmic's own
+    container and silently subscribe to nothing."""
+    rc, out, _err = run(["docker", "network", "inspect", f"{project}_netops",
+                         "-f", "{{range .IPAM.Config}}{{.Gateway}}{{end}}"], 30)
+    gw = out.strip()
+    return gw if rc == 0 and gw else "127.0.0.1"
+
+
+def gnmi_target_alive(pid: int) -> bool:
+    """Is `pid` a RUNNING gNMI target?
+
+    `os.kill(pid, 0)` alone is not the answer: a child that has exited but has
+    not been reaped is a zombie, and a zombie still accepts signal 0 — which
+    made teardown report a live server that had in fact already stopped. So a
+    zombie is reaped (when we are its parent) and reported dead."""
+    try:
+        os.kill(pid, 0)
+    except OSError:
+        return False
+    try:
+        with open(f"/proc/{pid}/stat", encoding="utf-8") as fh:
+            # comm may contain spaces/parens: state is the field after the ')'
+            state = fh.read().rpartition(")")[2].split()[0]
+    except OSError:
+        return True                      # no procfs: signal 0 is all we have
+    if state == "Z":
+        with contextlib.suppress(ChildProcessError, OSError):
+            os.waitpid(pid, os.WNOHANG)
+        return False
+    return True
+
+
+def stop_gnmi_targets(state: dict) -> list[str]:
+    """Stop the run's gNMI target server. Teardown must be able to run from a
+    LATER process (`twin.py teardown --runid …`), so the pid is state, and a
+    pid that is already gone is success, not a problem."""
+    pid = state.get("gnmi_target_pid")
+    if not pid:
+        return []
+    try:
+        pid = int(pid)
+    except (TypeError, ValueError) as exc:
+        return [f"gnmi target server pid {state['gnmi_target_pid']!r}: {exc}"]
+    try:
+        os.kill(pid, signal.SIGTERM)
+    except ProcessLookupError:
+        return []
+    except OSError as exc:
+        return [f"gnmi target server (pid {pid}): {exc}"]
+    for _ in range(40):
+        if not gnmi_target_alive(pid):
+            return []
+        time.sleep(0.25)
+    return [f"gnmi target server (pid {pid}) did not exit on SIGTERM"]
 
 
 def enrichment_dir(env_file: str) -> str:
@@ -205,6 +273,7 @@ class Run:
         self.state["fidelity"] = self.args.fidelity
         self.save_state()
         self.setup_snmp_agents()
+        self.setup_gnmi_targets()
 
         self.hb("canary")
         first_dev = self.sc["devices"][0]
@@ -237,6 +306,89 @@ class Run:
         self.gates["snmp_agents"] = f"{st.get('running')} agents up " \
                                     f"(generation {self.runid})"
         log(f"snmpsim agents: {self.gates['snmp_agents']}")
+
+    def setup_gnmi_targets(self) -> None:
+        """Render this run's gNMI target manifest + the gnmic targets file
+        (design §4.6). ALWAYS rendered, even when no story asks for the lane:
+        the targets file is the artefact an operator merges into
+        `deployment/docker/gnmic/gnmic.yaml` (gnmic has no dynamic target
+        discovery in our pinned config), and rendering it costs nothing."""
+        self.hb("gnmi-targets")
+        gnmi_dir = os.path.join(self.run_dir, "gnmi")
+        os.makedirs(gnmi_dir, exist_ok=True)
+        ports = {d["name"]: GNMI_BASE_PORT + i
+                 for i, d in enumerate(self.sc["devices"])}
+        manifest = gnmi_mod.generate_manifest(
+            self.sc, self.prefix, ports,
+            listen_host="0.0.0.0",
+            advertise_host=netops_gateway(self.stack.project),
+            generation=self.runid)
+        write_json(os.path.join(gnmi_dir, "manifest.json"), manifest)
+        with open(os.path.join(gnmi_dir, "gnmic-targets.yaml"), "w",
+                  encoding="utf-8") as f:
+            f.write(gnmi_mod.render_gnmic_targets(manifest))
+        self.state["gnmi_manifest"] = os.path.join(gnmi_dir, "manifest.json")
+        self.state["gnmi_targets"] = [
+            {"name": d["name"], "port": d["port"]}
+            for d in manifest["devices"]]
+        self.state["gnmi_advertise_host"] = manifest["advertise_host"]
+        self.save_state()
+        log(f"gnmi targets: {len(manifest['devices'])} rendered "
+            f"({manifest['advertise_host']}:{GNMI_BASE_PORT}+) — merge "
+            f"{os.path.join(gnmi_dir, 'gnmic-targets.yaml')} into "
+            f"deployment/docker/gnmic/gnmic.yaml for platform collection")
+
+    def _gnmi_lane(self, plan: dict) -> GnmiLane | None:
+        """Start this run's gNMI target server and hand the emitter its fault
+        journal — but only when the plan actually carries gnmi items, so a
+        scenario that asks for no gNMI evidence starts no listener.
+
+        A target that fails to come up SKIPS THE LANE LOUDLY rather than
+        failing the run: gNMI is corroborating evidence for stories that are
+        already detectable on syslog/probe evidence (design §4.6), and the
+        report carries the skip count."""
+        needed = any(it["lane"] == "gnmi"
+                     for stx in plan["stories"] for it in stx["items"])
+        needed = needed or any(it["lane"] == "gnmi" for it in plan["baseline"])
+        if not needed:
+            return None
+        manifest_path = self.state.get("gnmi_manifest")
+        if not manifest_path:
+            warn("gnmi lane requested but no target manifest was rendered")
+            return None
+        journal = os.path.join(self.run_dir, "gnmi-faults.jsonl")
+        ready = os.path.join(self.run_dir, "gnmi", "ready.json")
+        with open(journal, "a", encoding="utf-8"):
+            pass                                   # exists before the tail
+        argv = [sys.executable,
+                os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                             "gnmi_server.py"),
+                "--manifest", manifest_path,
+                "--fault-journal", journal,
+                "--ready-file", ready]
+        # Popen dups the fd, so the parent's handle is closed straight after.
+        with open(os.path.join(self.run_dir, "gnmi-target.log"), "ab") as fh:
+            proc = subprocess.Popen(argv, stdout=fh,
+                                    stderr=subprocess.STDOUT)
+        self.state["gnmi_target_pid"] = proc.pid
+        self.save_state()
+        deadline = time.monotonic() + GNMI_READY_TIMEOUT_S
+        while time.monotonic() < deadline and not os.path.exists(ready):
+            if proc.poll() is not None:
+                warn(f"gnmi target server exited immediately (rc "
+                     f"{proc.returncode}) — see gnmi-target.log")
+                return None
+            time.sleep(0.25)
+        lane = GnmiLane(journal, [("127.0.0.1", t["port"])
+                                  for t in self.state["gnmi_targets"]])
+        if not lane.live():
+            warn(f"gnmi targets did not accept connections within "
+                 f"{GNMI_READY_TIMEOUT_S}s — lane SKIPPED (see "
+                 f"gnmi-target.log)")
+            return None
+        log(f"gnmi targets: {len(self.state['gnmi_targets'])} serving "
+            f"(pid {proc.pid}); faults -> {journal}")
+        return lane
 
     def _udp_lanes(self, plan: dict) -> UdpLanes | None:
         """Build the trap/flows transport for this run's fidelity mode, or
@@ -324,7 +476,7 @@ class Run:
         injector = Injector(
             self.stack, self.prefix, tenant_ids,
             os.path.join(self.run_dir, "events.jsonl"),
-            udp=self._udp_lanes(plan))
+            udp=self._udp_lanes(plan), gnmi=self._gnmi_lane(plan))
         sampler = spread_mod.SpreadSampler(
             self.stack, os.path.join(self.run_dir, "spread-samples.jsonl"))
 

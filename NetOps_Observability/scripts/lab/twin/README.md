@@ -5,7 +5,9 @@ Labeled multi-tenant fault-scenario harness for the LIVE stack. Design:
 T1 core shipped the scenario DSL, bus-lane emitters (syslog/probes/cloud/
 metrics), fault stories with machine-readable ground truth, the accuracy
 scorer and the partition-spread proof. The **fidelity wave** adds the
-protocol-faithful lanes and the `twinnet` source-IP overlay.
+protocol-faithful lanes and the `twinnet` source-IP overlay; the **gNMI
+stretch** (§4.6) adds twin-served gNMI targets so the platform's
+`ENABLE_GNMI_COLLECTION` path gets labelled-fault coverage.
 
 ```
 twin.py run      --scenario FILE [--duration-minutes N] [--fidelity hostname|source_ip]
@@ -102,6 +104,80 @@ actions through the platform-owner API/console:
    delete any scan devices discovery created; disable/narrow the discovery
    config again.
 
+## gNMI targets (design §4.6)
+
+The twin serves gNMI itself — a **minimal OpenConfig fake**, not a general gNMI
+stack. `gnmi_server.py` binds one listener per device (`57400 + index`) and
+speaks Capabilities / Get / Subscribe over a stdlib gRPC-on-HTTP/2 stack
+(`gnmi_proto.py` protobuf, `gnmi_hpack.py` HPACK, `gnmi_h2.py` framing) — **no
+new wheel in the twin image**; `docker/requirements.txt` is unchanged.
+
+It serves exactly the leaves `deployment/docker/gnmic/gnmic.yaml` subscribes
+to on its OpenConfig targets, with the enum spellings the canonical lane's
+processors expect:
+
+| subscription | paths | mode |
+|---|---|---|
+| `oc-interfaces` | `/interfaces/interface/state/counters/*`, `…/oper-status`, `…/admin-status` | SAMPLE 30 s |
+| `oc-bgp` | `…/bgp/neighbors/neighbor/state/session-state`, `…/established-transitions`, `…/afi-safis/afi-safi/state/prefixes/received` | ON_CHANGE + 30 s heartbeat |
+
+The server runs as a HOST process started by `twin.py` — a flagged deviation
+from design §4.6's "whatever serves gNMI lives in the twin container". The
+boundary that clause protects is "not in a product service", which holds
+either way; and because this target needs no dependency, it needs no image, so
+the gNMI lane works with no twin overlay container at all (unlike the snmpsim
+fleet, which needs the image's pinned wheels). One code path, and it is the
+one proven end-to-end.
+
+**Identity**: gnmic labels every sample `source: <target name>`, so a twin
+device's gNMI identity is its run-prefixed TARGET NAME (`twx-<runid>-<device>`),
+not its address — which is what carries through to `source`/`device` in
+VictoriaMetrics and makes teardown-by-prefix work.
+
+**Faults**: `link_down_cascade` with `params: {with_gnmi: true}` also moves the
+gNMI state — `oper-status UP→DOWN` + that port's counters stall, and every
+declared BGP session goes `ESTABLISHED→IDLE` — at the same instants and under
+the same `story_id` as the syslog/trap manifestations. The ops are appended to
+`<run>/gnmi-faults.jsonl`, which the target server tails; the manifestation
+table (device, path, before→after, canonical series) rides into
+`ground_truth.jsonl` as `labels.gnmi_manifestations`. No target running ⇒ the
+lane SKIPS LOUDLY into `skipped_by_lane`, exactly like trap/flows.
+
+**Wiring gnmic to the twin** (gnmic has no dynamic target discovery in our
+pinned config, so the merge is manual — design §4.6):
+
+1. `twin.py run` renders `<run>/gnmi/gnmic-targets.yaml`, addressed at the
+   `<project>_netops` bridge gateway (a container on the stack network reaches
+   the host there; `127.0.0.1` would resolve to gnmic's own container).
+2. Merge those rows under `targets:` in `deployment/docker/gnmic/gnmic.yaml`
+   and restart gnmic — a PRODUCT service recreate, so it is an explicit
+   operator step, never something the twin does.
+3. Remove the rows at teardown: they name run-scoped `twx-` devices.
+
+**Where the evidence lands** (verified live, gnmic 0.46.0 → vmauth →
+VictoriaMetrics):
+
+* raw lane (`metric-prefix: gnmi`) — `gnmi_interfaces_interface_state_counters_*`
+  with `source=twx-…`; the counter stall reads as `rate(...) == 0`;
+* canonical lane — `device_bgp_peer_state{device=twx-…,peer=…,transport="gnmi"}`
+  `6 → 1`, plus `device_bgp_fsm_transitions`;
+* **oper-status lands in NEITHER**, by current platform configuration, not by
+  twin limitation: the raw lane's `prometheus_write` drops non-numeric values
+  (the OpenConfig enum is the string `"DOWN"`), and the canonical lane maps it
+  to a number but then deletes the whole `device_if_*` family in the
+  `ownership-gate` processor, because interfaces are SNMP-owned today. Flipping
+  interface ownership to gNMI (gnmic.yaml's documented procedure) is what would
+  surface it.
+
+Standalone (without a twin run):
+
+```bash
+python3 scripts/lab/twin/gnmi_server.py --manifest <run>/gnmi/manifest.json \
+    --fault-journal /tmp/faults.jsonl --ready-file /tmp/gnmi-ready.json
+echo '{"device":"twx-…-edge-a1","op":"if_down","ifname":"Ethernet1"}' \
+    >> /tmp/faults.jsonl
+```
+
 ## Mini-ladder composition (design §8.3)
 
 ```bash
@@ -122,4 +198,6 @@ cleanup tears the twin run down through its own verified teardown. The default
 Per run dir (`data/twin/<ts>-<runid>/`): `events.jsonl` (journal, all lanes),
 `ground_truth.jsonl`, `twin-report.json` (per-lane emitted AND
 `skipped_by_lane` — undeliverable lanes are counted, never silent),
-`spread-report.json`, `accuracy-report.{json,md}`.
+`spread-report.json`, `accuracy-report.{json,md}`, and — when the scenario
+uses the gNMI lane — `gnmi/manifest.json`, `gnmi/gnmic-targets.yaml`,
+`gnmi-faults.jsonl` (the applied fault ops) and `gnmi-target.log`.

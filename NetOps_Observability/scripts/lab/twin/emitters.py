@@ -27,13 +27,19 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import random
 import socket
 import time
 from datetime import datetime, timedelta, timezone
 
+import gnmi_h2
 import wire
 from stack import Stack, log, warn
+
+# An empty SETTINGS frame: length 0, type SETTINGS, no flags, stream 0. Sent
+# after the client preface by GnmiLane.live()'s HTTP/2 liveness probe.
+_EMPTY_SETTINGS = b"\x00\x00\x00\x04\x00\x00\x00\x00\x00"
 
 LANE_TOPIC = {
     "syslog": "netops.syslog",
@@ -44,9 +50,14 @@ LANE_TOPIC = {
     # journal/report vocabulary only, the twin never writes these topics.
     "trap": "netops.snmptrap",
     "flows": "netops.flows.raw",
+    # gNMI is a PULL lane and never reaches the bus at all: gnmic streams the
+    # twin target's state and remote-writes it to VictoriaMetrics. The "topic"
+    # here is journal vocabulary naming that SINK, not a Kafka topic.
+    "gnmi": "victoria:gnmi",
 }
 
 UDP_LANES = ("trap", "flows")
+GNMI_LANE = "gnmi"
 
 TRAP_NAME_TO_OID = {
     "coldStart": wire.TRAP_COLDSTART,
@@ -112,10 +123,11 @@ def build_payload(item: dict, prefix: str, tenant_ids: dict[str, str]) -> str:
             "metric_name": item.get("metric_name") or "",
             "ts": iso(),
         })
-    raise ValueError(f"unknown bus lane {lane!r} — bus lanes are "
-                     f"{sorted(set(LANE_TOPIC) - set(UDP_LANES))} "
-                     f"(trap/flows are UDP lanes, built by build_trap_bytes/"
-                     f"build_flow_packets)")
+    raise ValueError(
+        f"unknown bus lane {lane!r} — bus lanes are "
+        f"{sorted(set(LANE_TOPIC) - set(UDP_LANES) - {GNMI_LANE})} "
+        f"(trap/flows are UDP lanes, built by build_trap_bytes/"
+        f"build_flow_packets; gnmi is a PULL lane, applied by GnmiLane)")
 
 
 # ── UDP lane payload builders (pure functions — unit-tested sans sockets) ──
@@ -289,6 +301,83 @@ class UdpLanes:
             return False, f"host UDP send failed: {exc}"
 
 
+class GnmiLane:
+    """Transport for the `gnmi` lane (design §4.6).
+
+    Inverted with respect to every other lane: nothing is SENT. A gNMI item is
+    a state op appended to the twin gNMI target server's FAULT JOURNAL
+    (`gnmi_server.FaultJournalWatcher` tails it), after which the platform's
+    `gnmic` collector observes the change on its own subscriptions. The
+    journal is the transport AND the audit trail — every applied op sits next
+    to `events.jsonl` in the run dir, replayable.
+
+    `live()` probes the target ports so an unreachable target SKIPS LOUDLY
+    (the §3.4 contract the trap/flows lanes already follow) instead of
+    labelling a story whose gNMI half never happened.
+    """
+
+    def __init__(self, journal_path: str,
+                 targets: list[tuple[str, int]] | None = None,
+                 connect_timeout: float = 1.5) -> None:
+        self.journal_path = journal_path
+        self.targets = targets or []
+        self.connect_timeout = connect_timeout
+
+    def live(self) -> bool:
+        """True when EVERY declared target answers as an HTTP/2 server. All,
+        not any: a half-up fleet would silently under-emit a story's gNMI half.
+
+        The probe speaks: it sends the HTTP/2 client preface and requires a
+        SETTINGS frame back. A bare `connect()` is NOT enough — the twin's
+        target ports sit inside the kernel's ephemeral range
+        (`ip_local_port_range`), where a loopback connect can pick the
+        destination port as its own source port and SELF-CONNECT, succeeding
+        against a target that is not running at all (observed, and the reason
+        this check exists in this form).
+        """
+        if not self.targets:
+            return False
+        for host, port in self.targets:
+            try:
+                with socket.create_connection((host, port),
+                                              self.connect_timeout) as sock:
+                    sock.settimeout(self.connect_timeout)
+                    sock.sendall(gnmi_h2.PREFACE + _EMPTY_SETTINGS)
+                    head = b""
+                    while len(head) < 9:
+                        chunk = sock.recv(9 - len(head))
+                        if not chunk:
+                            return False
+                        head += chunk
+                    if head[3] != gnmi_h2.FRAME_SETTINGS:
+                        return False       # not our target (or a self-connect)
+            except OSError:
+                return False
+        return True
+
+    def apply(self, items: list[dict], prefix: str) -> tuple[bool, str]:
+        """Append one batch of ops. fsync'd: the target process is a separate
+        reader, and a buffered op is an unemitted fault."""
+        if not items:
+            return True, ""
+        try:
+            with open(self.journal_path, "a", encoding="utf-8") as fh:
+                fh.writelines(json.dumps({
+                    "ts": iso(),
+                    "device": prefix + it["device"],
+                    "story_id": it.get("story_id"),
+                    "op": it["op"],
+                    "ifname": it.get("ifname") or "",
+                    "peer_ip": it.get("peer_ip") or "",
+                    "state": it.get("state") or "",
+                }) + "\n" for it in items)
+                fh.flush()
+                os.fsync(fh.fileno())
+        except OSError as exc:
+            return False, f"gnmi fault journal write failed: {exc}"
+        return True, ""
+
+
 class Injector:
     """Paced, journaled injection of a deterministic plan.
 
@@ -300,13 +389,15 @@ class Injector:
 
     def __init__(self, stack: Stack, prefix: str, tenant_ids: dict[str, str],
                  journal_path: str, tick_s: float = 5.0,
-                 udp: UdpLanes | None = None):
+                 udp: UdpLanes | None = None,
+                 gnmi: GnmiLane | None = None):
         self.stack = stack
         self.prefix = prefix
         self.tenant_ids = tenant_ids
         self.journal_path = journal_path
         self.tick_s = tick_s
         self.udp = udp
+        self.gnmi = gnmi
         self.emitted: dict[str, int] = {}          # lane -> count
         self.emitted_by_tenant: dict[str, dict[str, int]] = {}  # lane->tenant->n
         self.emitted_by_story: dict[str, dict[str, int]] = {}   # story->lane->n
@@ -371,15 +462,43 @@ class Injector:
                           f"{it['lane']}:{it.get('trap') or it.get('flow_seed')}")
         return True
 
+    def _emit_gnmi(self, items: list[dict], fh) -> bool:
+        """The gNMI half of a batch: state ops handed to the twin's gNMI
+        target server. No running target ⇒ SKIP LOUDLY (same contract as the
+        trap/flows lanes); a target that is up but rejects the write is a
+        produce failure like any other."""
+        if self.gnmi is None:
+            for it in items:
+                self.skipped["gnmi"] = self.skipped.get("gnmi", 0) + 1
+            if "gnmi" not in self._skip_warned:
+                self._skip_warned.add("gnmi")
+                warn("gnmi lane undeliverable in this run configuration — "
+                     "SKIPPED (counted in the report); it needs the twin gNMI "
+                     "target server up (scripts/lab/twin/gnmi_server.py) and "
+                     "gnmic subscribed to the rendered targets file")
+            return True
+        ok, err = self.gnmi.apply(items, self.prefix)
+        if not ok:
+            self.produce_failures.append(f"gnmi: {err}")
+            return len(self.produce_failures) < 3
+        for it in items:
+            self._count(it)
+            self._journal(fh, it, f"gnmi:{it['op']}:"
+                                  f"{it.get('ifname') or it.get('peer_ip')}")
+        return True
+
     def emit_batch(self, items: list[dict], fh) -> bool:
         """Produce one due batch. Returns False when failures exceed
         tolerance (caller aborts the emission loop loudly)."""
         udp_items = [it for it in items if it["lane"] in UDP_LANES]
         if udp_items and not self._emit_udp(udp_items, fh):
             return False
+        gnmi_items = [it for it in items if it["lane"] == GNMI_LANE]
+        if gnmi_items and not self._emit_gnmi(gnmi_items, fh):
+            return False
         by_topic: dict[str, list[tuple[str, str, dict]]] = {}
         for it in items:
-            if it["lane"] in UDP_LANES:
+            if it["lane"] in UDP_LANES or it["lane"] == GNMI_LANE:
                 continue
             payload = build_payload(it, self.prefix, self.tenant_ids)
             key = self.tenant_ids[it["tenant"]]

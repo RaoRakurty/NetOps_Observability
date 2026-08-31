@@ -125,6 +125,25 @@ def _trap(t: float, device: str, tenant: str, trap: str,
             "peer_ip": peer_ip}
 
 
+def _gnmi(t: float, device: str, tenant: str, op: str,
+          story_id: str | None = None, ifname: str = "", peer_ip: str = "",
+          state: str = "") -> dict:
+    """gNMI-lane item (design §4.6). This lane is INVERTED with respect to
+    every other one: the twin does not push a gNMI event anywhere — the
+    platform's `gnmic` collector DIALS IN and streams state off the twin's
+    gNMI targets. So the item is a STATE OP applied to the target at time `t`
+    (`gnmi_server.DeviceTarget.apply`), and the telemetry the platform sees is
+    whatever gnmic's next sample / on-change notification carries.
+
+    `op` is one of if_down / if_up / counter_stall / counter_resume /
+    bgp_down / bgp_up / if_errors — the mutations that move the leaves
+    `deployment/docker/gnmic/gnmic.yaml` actually subscribes to.
+    """
+    return {"t": round(t, 3), "lane": "gnmi", "tenant": tenant,
+            "device": device, "story_id": story_id, "op": op,
+            "ifname": ifname, "peer_ip": peer_ip, "state": state}
+
+
 def _flow(t: float, device: str, tenant: str, count: int, flow_seed: str,
           story_id: str | None = None) -> dict:
     """One second's worth of flow records from `device`'s exporter (design
@@ -321,12 +340,18 @@ def _tpl_link_down_cascade(story: dict, sc: dict,
     p = story.get("params") or {}
     loss = float(p.get("probe_loss_pct", 85))
     with_trap = bool(p.get("with_trap"))
+    # `with_gnmi` (design §4.6): the SAME fault also moves the device's gNMI
+    # state, so the story is corroborated across a fourth TRANSPORT (streamed
+    # telemetry) and the ENABLE_GNMI_COLLECTION path gets a labelled fault.
+    # Off ⇒ the plan is byte-identical to the pre-gNMI one.
+    with_gnmi = bool(p.get("with_gnmi"))
     sid = story["id"]
     # `interfaces` (optional) faults several ports per device — the uniform
     # access-layer signature. Absent ⇒ interfaces[0] only, so an existing
     # scenario's plan is unchanged byte-for-byte.
     want_ifaces = p.get("interfaces")
     items: list[dict] = []
+    manifests: list[dict] = []
     for dn in story["affected"].get("devices") or []:
         dev = _dev(sc, dn)
         ifnames = ([str(x) for x in want_ifaces] if want_ifaces
@@ -346,15 +371,54 @@ def _tpl_link_down_cascade(story: dict, sc: dict,
                 1.0, dn, dev["tenant"], "LINEPROTO-5-UPDOWN",
                 f"%LINEPROTO-5-UPDOWN: Line protocol on Interface {ifname}, "
                 f"changed state to down", "notice", sid))
+            if with_gnmi:
+                # 0.2 s after the console line: the device's own operational
+                # state flips, which also STALLS that port's counters (a
+                # down interface forwards nothing). Both are observable —
+                # oper-status on gnmic's oc-interfaces subscription, the
+                # counter stall in the raw `gnmi_*` VictoriaMetrics lane.
+                items.append(_gnmi(0.2, dn, dev["tenant"], "if_down", sid,
+                                   ifname=ifname))
+                manifests.append({
+                    "device": dn, "transport": "gnmi",
+                    "path": f"/interfaces/interface[name={ifname}]"
+                            f"/state/oper-status",
+                    "from": "UP", "to": "DOWN", "at_offset_s": 0.2})
+                manifests.append({
+                    "device": dn, "transport": "gnmi",
+                    "path": f"/interfaces/interface[name={ifname}]"
+                            f"/state/counters/in-octets",
+                    "from": "advancing", "to": "stalled", "at_offset_s": 0.2})
         # downstream BGP sessions riding the link drop too
         for nb in dev.get("bgp_neighbors") or []:
             items.append(_syslog(
                 3.0, dn, dev["tenant"], "BGP-5-ADJCHANGE",
                 f"%BGP-5-ADJCHANGE: neighbor {nb['peer_ip']} Down "
                 f"Interface flap", "notice", sid))
+            if with_gnmi:
+                # The session the console line just announced also drops in
+                # streamed state: ESTABLISHED -> IDLE on gnmic's ON-CHANGE
+                # oc-bgp subscription. This one survives the canonical lane
+                # (BGP is gNMI-OWNED there) as device_bgp_peer_state 6 -> 1.
+                items.append(_gnmi(3.2, dn, dev["tenant"], "bgp_down", sid,
+                                   peer_ip=str(nb["peer_ip"]), state="IDLE"))
+                manifests.append({
+                    "device": dn, "transport": "gnmi",
+                    "path": f"/network-instances/network-instance[name=default]"
+                            f"/protocols/protocol[identifier=BGP][name=BGP]/bgp"
+                            f"/neighbors/neighbor[neighbor-address="
+                            f"{nb['peer_ip']}]/state/session-state",
+                    "from": "ESTABLISHED", "to": "IDLE", "at_offset_s": 3.2,
+                    "canonical_series": "device_bgp_peer_state",
+                    "canonical_from": 6, "canonical_to": 1})
         items.append(_probe(6.0, dn, dev["tenant"], "vantage-1", loss,
                             "customer_path", "public_cloud_agent", sid))
-    return items
+    if not manifests:
+        return items
+    # Labelled form: the gNMI manifestation table rides into the run's
+    # ground_truth.jsonl so the streamed-telemetry half of this fault is
+    # ATTRIBUTABLE (device, path, before/after) without being re-derived.
+    return {"items": items, "labels": {"gnmi_manifestations": manifests}}
 
 
 def _tpl_isp_brownout_multi_tenant(story: dict, sc: dict,
