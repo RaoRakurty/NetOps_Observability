@@ -38,20 +38,47 @@ default, `a9d9a10c`):
 - Storm ladder at the same 2,500 devices: **2 %** rung 9/9 both arms, **10 %**
   rung 9/9 both arms (completion 170 s OFF → 130 s ON), **25 %** rung
   **INCOMPLETE OFF → 192 s PASS ON** (`P3_AB_2P5K_VERDICT_2026-08-29.md` §2.1/§2.2).
+- `ladder-n2k5-08311437` (run `08311437us3b`, **nominal**, shipped post-wave
+  image — correlation `26daf9680050`, api `4350dc839d8e`) **8/9** —
+  `t-nominal-2.5k` completion **1,828 s of a 2,908 s budget (62.9 %)**, the
+  fastest ever recorded on this profile; accounting exact **900,001 == 900,001
+  + 0 DLQ + 0 counted rejections**, 2,500/2,500 devices covered; both
+  correlation replicas **FLAT** (carrier 805.2 MiB = 62.9 % of its 1,280 MiB
+  cap, anchored on a real `pending == 0`); TTUR T1 **p50/p95 646 / 1,753 s**,
+  T-last p95 **2,564 s** with **no scope caveat**. The single `memflat` FAIL is
+  tracker **186** in both of its clauses (§4).
 
-**Two honest qualifications on the headline.**
+**One honest qualification stands on the headline; the second is now discharged.**
 
 1. At the **25 % storm share** the ON arm is **8/9**, not 9/9 — `memflat` is the
    one FAIL — and its accuracy figure, **89.06 %**, is a **v1-scorer** number
    with no published v2 re-score for that rung. The SLO's own clauses
    (evaluate within 45 min of burst end, lose nothing, stay in memory caps) are
    met; "9/9" is not. The 9/9 claim belongs to the 2 % and 10 % rungs.
-2. The **nominal** profile at 2,500 devices is the *tighter* of the two, not the
-   looser: `t-nominal-2.5k` completion PASSes at **1,986 / 2,439 / 2,515 s**
-   against a 2,700 s budget — **74–93 % of budget consumed** — and those three
-   legs ran on **P2-era builds** (`p2-s04b`, `p2-s05`, `p2-s06`), not on the
-   shipped post-wave build. The 2,500 nominal rung is **inside** its budget, not
-   comfortable in it, and it has not been re-run on the current image.
+2. **RESOLVED (2026-08-31).** The nominal qualification — that the three
+   passing `t-nominal-2.5k` legs consumed 74–93 % of budget on **P2-era builds**
+   and had never been graded on the shipped image — has been discharged by
+   `ladder-n2k5-08311437`. On the shipped image the same profile completes in
+   **1,828 s of a 2,908 s budget (62.9 %)**: **−21.0 % against the three-leg
+   P2-era cohort mean** (1,828 vs 2,313 s) and **−7.9 % against the single best
+   P2 leg** (`p2-s05`, 1,986 s). The comparison is **same-session** — all four
+   legs were re-queried in one `clickhouse-client` session with the verbatim
+   clean-scope SQL of `RUN_PLAN_P3_AB_2026-08-29.md` §5.3, AGG_CID excluded,
+   each leg scoped from its own `report.json` — and the re-query **reproduces
+   every published P2 figure to within ±0.2 %** (s04b T1 p95 2,207 vs 2,208
+   published; s05 1,948 vs 1,947; s06 2,101 vs 2,105). Read the two deltas
+   differently: the **−7.9 % vs the best single leg is INSIDE** the profile's
+   own ±10 % leg-to-leg noise floor and must not be sold as a proven speed-up on
+   its own; the **−21.0 % vs the cohort mean is outside it**, and so is the
+   latency move — **five measures fell together into a −10 % to −15 % band
+   against the P2 *best* leg** (T1 p95 −10.0 %, T1 max −13.5 %, T-last p95
+   −12.2 %, drain −14.8 %, peak lag −13.0 %), and −15.9 % to −28.4 % against the
+   mean (T1 p95 −15.9 %, T1 p99 −17.4 %, T1 max −17.4 %, T-last p95 −19.7 %,
+   drain −28.4 %). Noise does not move five percentiles the same way at once. The rung is therefore no longer "inside its
+   budget, not comfortable in it" — and it earned that from a **worse** starting
+   position: **+18 % mean and +70 % peak host `node_load1`** against `p2-s05`,
+   with the consumer plane measuring ~35 % slower under backfill contention, so
+   the gain is a **lower bound**, not an inflated one.
 
 ---
 
@@ -181,7 +208,7 @@ set the pace (window stretched 900 → 1,122 s, bound 1,350 s not exceeded, 0
 produce failures). The offered/absorbed gap therefore **widened from 1.37× to
 3.11×** under storm: the injector got faster while the stack got slower.
 
-### The forecast bound that arrived, and the one that receded
+### The forecast bound that arrived, the one that receded, and one that is further off than its watch item says
 
 - **Carrier replica memory — ARRIVED (rank 2).** At 5k nominal it stood at
   **1,097 MiB of a 1,280 MiB cap = 85.7 %** with 33,760 events pending. At 5k
@@ -202,6 +229,50 @@ produce failures). The offered/absorbed gap therefore **widened from 1.37× to
   ClickHouse is under *less* absolute pressure the harder the workload, precisely
   because the engine never fed it the backlog. It is downstream of (a), not an
   independent limiter.
+- **The tracker-187 history-accumulator cap — further away than the watch item
+  says, because the watch item is on the WRONG AXIS.** The wave validation
+  filed a watch on `corr_affected_history_entities_max` at **16,622 of the
+  20,000 cap = 83.1 %** (`PROJECT1_WAVE_VALIDATION_2026-08-31.md` §187 guard).
+  That is a **`t-storm-2.5k`** reading. On `ladder-n2k5-08311437` — same box,
+  same 2,500 devices, same shipped image, nominal profile — the same gauge reads
+  **6,390 = 32.0 % of cap**, with `corr_affected_history_truncated_total` still
+  **0**. **Refined wording:** the guard sits at *83.1 % of cap at 2,500 devices
+  under storm and 32 % at the same fleet size nominal*; it therefore tracks
+  **signal density / blast radius** — the same axis as rank 1 above — **not
+  device count**. The rung that would move it is a **storm** rung at a larger
+  fleet; no nominal rung, at any size run so far, approaches it.
+
+### At the ceiling on the shipped image: the engine's memory is FIXED
+
+The shipped-image nominal rung (`ladder-n2k5-08311437`) settles what the earlier
+2,500-device legs could not: **the correlation engine's memory behaviour on this
+profile is fixed.**
+
+- **Both replicas FLAT, on a real anchor.** The carrier `netops-correlation-5`
+  ends at **805.2 MiB = 62.9 %** of its 1,280 MiB cap, **×1.006** against a
+  `corr_engine_pending == 0` anchor — an *actual* convergence, not a cap
+  expiry. The idle replica sits at 108.2 MiB = 8.5 % of the same cap.
+- **The working set is bounded by the cohort population, not by the backlog.**
+  RSS rises 674.5 MiB at t = 4.3 s to a **~800 MiB plateau from t ≈ 990 s and
+  then does not move for the remaining 840 s — while pending falls 18,771 → 0.**
+  Memory stopped growing with 18,771 events still to evaluate. Contrast the 5k
+  rungs above, where RSS stepped **up** ~39 MiB at every cohort close.
+- **The `memflat` carrier has MIGRATED across waves — and it has left the
+  engine.** `p2-s05`'s FAIL was **correlation replica-3 at ×1.37**;
+  `p2-s06`'s was **ClickHouse peaking at 107.6 %** of its server cap; here both
+  correlation replicas are FLAT, ClickHouse's anon clause **PASSES at ×1.136**
+  and its peak is down to **95.3 %**, and the entire FAIL has moved to the
+  **api process plus 4 `MEMORY_LIMIT_EXCEEDED`** — i.e. to the time-intelligence
+  backfill worker of tracker **186**, and to nothing else (§4).
+- **Where it binds on this rung, ranked:** (1) **api process memory** — the
+  backfill working set at **504 MiB of a 565 MiB cap = 89.2 %**, reached on an
+  *idle* stack 33 min after the run, so it binds **first and without any
+  telemetry load at all**; (2) **ClickHouse server memory** — the same worker's
+  1.62 GiB query against the 4 GiB cap, binding only *during* a pass;
+  (3) **consumer plane** at ~675–710 eps on a contended host, which set the
+  backlog but drained it in 323 s; (4) **the correlation engine's per-cohort
+  cost — NOT AT ALL**, converging with 37 % of its memory and 37 % of its time
+  budget unused.
 
 ---
 
@@ -265,13 +336,31 @@ the epoch timeline to story `t0` is the open next step.
 sell: past the ceiling the customer waits longer for an RCA verdict; they do not
 lose an event, a device, or a consumer.
 
+**And at the ceiling, the platform's own background work completes under live
+load — at a cost that is itself the open defect.** On `ladder-n2k5-08311437` the
+time-intelligence backfill ran continuously *through* the burst and the drain,
+and **every pass completed at the full budget: 6/6 passes, `pages=10`,
+`written=20,000`, zero `ended early` / `degraded` / `wide fetch skipped`
+warnings** (`docker logs netops-api-1`, component `timeintel`). The bounded-pass
+machinery (10 pages, 1 rescan + 9 forward, durable watermark) held against a live
+2,500-device, 900,001-event leg — the watermark advanced 13.8 h of backlog per
+~78 min of wall clock. **The cost is the finding.** Those passes issued **1,043
+ClickHouse queries reading 1,104.2 GB to emit 65,088 rows — ~17 MB of ClickHouse
+read per row written** — with **263 GB of it issued *inside* the 969 s burst
+window**, while the consumer plane was trying to hold 928 eps on a 4-core host.
+That single ratio is the measured case for tracker **197** (the `seam_type`
+projection, which deletes the wide read); it is also the most plausible non-host
+explanation for this leg's ~675–710 eps consumer plane against 1,036–1,051 eps on
+`ladder-n5k` — **contention, not a correlation-engine regression.**
+
 ---
 
 ## 4. The rung table
 
 | rung | profile / run | devices × eps | completion (budget) | accounting | verdict |
 |---|---|---|--:|---|---|
-| 2.5k nominal | `t-nominal-2.5k` · `p2-s04b` / `p2-s05` / `p2-s06` | 2,500 × 1,000 | **2,515 / 1,986 / 2,439 s** (2,700) | exact | **PASS** — 74–93 % of budget; P2-era builds |
+| 2.5k nominal, P2-era | `t-nominal-2.5k` · `p2-s04b` / `p2-s05` / `p2-s06` | 2,500 × 1,000 | **2,515 / 1,986 / 2,439 s** (2,700) | exact (`p2-s04b` injected 870,001) | **PASS** — 74–93 % of budget; P2-era builds. Superseded on the shipped image by the row below |
+| **2.5k nominal, shipped image** | `t-nominal-2.5k` · `ladder-n2k5-08311437` (run `08311437us3b`) | 2,500 × 928 eff. (1,000 planned) | **1,828 s** (2,908) — **62.9 % of budget**, the **fastest `t-nominal-2.5k` ever recorded** | **900,001 == 900,001 + 0 DLQ + 0 rejections**, 2,500/2,500 devices | **8/9** — the §1 qualification-2 caveat **DISCHARGED**. **−21.0 % completion vs the P2 cohort mean** (−7.9 % vs the best single leg). Stability is the **programme best on any profile**: worst loop stall **2,711 ms = 4.5 %** of the 60 s session timeout, **0/0/0/0** CommitFailed / UnknownMember / restarts / rebalances over 3,634 s. Onboard **PASS but FLOOR-EXACT** (0.601 against a 0.600 floor, under the host confound below). TTUR T1 **p50/p95 646 / 1,753 s**, T-last p95 **2,564 s** over 11,211 incidents — **true convergence, no scope caveat** (pending 0 on both replicas, oldest age 0.0 s). Cleanup PASS, residue 0. Single FAIL = **`memflat`, both clauses tracker 186** |
 | 2.5k storm 2 % OFF | `t-storm-2.5k` · `storm-s05` | 2,500 × 1,000 | **95.0 s** (2,700) | 900,001 == 900,001 + 0 DLQ | **9/9**, accuracy 345/345 v2 |
 | 2.5k storm 2 % ON | `t-storm-2.5k` · `storm-s06` | 2,500 × 1,000 | **124.3 s** (2,700) | 900,001 == 900,001 + 0 DLQ | **9/9**, accuracy 345/345 v2 — shipped default |
 | 2.5k storm 2 % ON, post-wave | `t-storm-2.5k` · `storm-s07` | 2,500 × 1,000 | **94 s** (2,700) | 900,001 == 900,001 + 0 DLQ | **8/9** — `memflat` → tracker 186 |
@@ -282,7 +371,6 @@ lose an event, a device, or a consumer.
 | 2.5k storm 50 % | `t-storm-50-2.5k` | 2,500 × 1,000 | — | — | **NEVER RUN** — planned in the P4 §1 ladder, not executed |
 | **5k nominal** | `t-nominal-5k` · `ladder-n5k-08310426` | 5,000 × 1,417 eff. (2,000 planned) | **INCOMPLETE** — 33,760 pending at the 3,811 s cap, oldest 502 s | **1,800,001 == 1,800,001 + 0 DLQ** | **FAIL** — completion + memflat; stability/accounting/cleanup PASS |
 | **5k storm** | `t-storm-5k` · `ladder-s5k-08310703` (run `08310703ujbf`) | 5,000 × 1,605 eff. (2,000 planned) | **INCOMPLETE** — 48,434 pending at the 3,366 s cap, oldest 511 s | **1,800,001 == 1,800,001 + 0 DLQ** | **FAIL** — onboard (**CONFOUNDED**), completion, memflat; burst/drain/accounting/stability/cleanup PASS. Drain 2,232 s from a 1,221,005 peak lag; carrier **94.1 %** of cap; stability 0 CommitFailed / 0 UnknownMember / 0 restarts; accuracy **644/690 = 93.33 %** twin v2 (detection 0.9551, specificity **1.000**); T1 p50/p95 **2,752 / 4,987 s** scoped-to-completed |
-| ⏳ 2.5k nominal, shipped image | `t-nominal-2.5k` on the post-wave build | 2,500 × 1,000 | — | — | Re-run of the §1 qualification 2 caveat: the three passing legs are **P2-era** builds (`p2-s04b`/`p2-s05`/`p2-s06`) at 74–93 % of budget. The ceiling's tightest rung has never been graded on the shipped image |
 | ⏳ 3,500 isolating rung | `t-nominal` @ 3,500 | 3,500 × 1,000 (0.29 eps/dev) | — | — | Holds eps **under** the measured consumer ceiling and varies **only** fleet size — places the engine's own device ceiling directly, with no new limiter introduced |
 | ⏳ 10k "cannot be offered" | `t-nominal-10k` / `t-storm-10k` | 10,000 × ≤1,400 | — | — | Documentation rung: records *how* the box fails at 4× the ceiling, so the hosting spec can refuse the configuration with evidence rather than by assertion. Note the injector bound: 10k × 0.4 = 4,000 eps **cannot be offered by this harness** |
 
@@ -294,6 +382,55 @@ the 4-core host throughout onboarding**, so the decay is not cleanly attributabl
 to the api. The nominal sibling — same 5,000 devices, **same api image**, no
 concurrent load — **PASSED at ratio 0.80**, and that is the onboard-decay signal
 of record.
+
+**The shipped-image nominal rung's single FAIL is tracker 186 — in BOTH of its
+clauses, and in neither one the engine.**
+
+- **The api clause.** Judged **×2.343** against the warm (end-of-burst) anchor,
+  so it covers only the window *after* input stopped — and the mechanism is a
+  **bounded sawtooth, not a slope**. 34 `docker stats` samples across two
+  consecutive backfill cycles on an *idle* stack, 33 min after the run and after
+  cleanup had deleted all 2,500 devices and purged 900,001 OpenSearch docs, give
+  peak **504.2 → 508.9 MiB (+0.9 %)** and trough **407.3 → 405.0 MiB (−0.6 %)**:
+  **the floor is level and does not rise.** Period = one backfill pass, ~13 min;
+  every peak lands on a pass boundary and every trough between passes, on an
+  unrestarted process (started 14:33:35Z, 0 restarts). What is serious is the
+  **LEVEL, not the slope**: the worker parks the api at **405–509 MiB of a
+  565 MiB cap = 72–90 %** permanently, leaving ~10 % headroom for everything else
+  the api does. That is what the gate is correctly refusing to pass.
+- **The ClickHouse clause.** The anon slope **PASSES** (×1.136, under the ×1.3
+  gate); the FAIL is the **+4 `MEMORY_LIMIT_EXCEEDED`** — and all four were
+  raised **in one second** (`system.error_log`, 15:19:49). Three are now named:
+  **1 backfill-negotiation `Select` swinging 1.623 GiB**, **2 background
+  `MergeParts` it evicted**, and **1 unattributable** (`system.text_log` is not
+  enabled on this deployment, so `query_log`/`part_log` account for only three;
+  it is almost certainly a sub-thread raise of one of the three). The episode is
+  a **single overcommit** and the backfill query is its **cause, not its
+  co-victim** — the storm-s07 pattern of tracker 186 reproduced verbatim on a
+  nominal leg. Peak `MemoryTracking` **3,905 MiB = 95.3 %** of the 4,096 MiB
+  server cap; p50 **flat at 1.0–1.3 GiB**; all twelve of the window's
+  highest-memory queries are backfill `SELECT`s at 1.61–1.66 GiB, the heaviest
+  non-backfill consumer being a `MergeParts` at 194 MiB.
+- **The causal fix is in the build but NOT in force.** The worker carries its own
+  512 MiB per-query ceiling (`timeIntelBackfillMemoryBytes`, present in this api
+  image `4350dc839d8e` / `9ed38cbb`), yet the passes still peaked at **1.623
+  GiB** — the attributed `background` settings profile
+  (`deployment/docker/clickhouse/workload-profiles.xml`) sets
+  `max_memory_usage` from `CH_BG_MEM`, defaulted to **2 GiB**, which is what the
+  queries actually ran under. **With the 512 MiB budget effective the lane cannot
+  overcommit a 4 GiB server, and the eviction chain that fails this gate cannot
+  form.** That is the pending causal fix for the last missing gate on this rung —
+  a settings-precedence fix, not new engine work.
+
+**The onboard PASS is floor-exact and host-confounded, in the honest direction.**
+2,500 devices created in 82.1 s, first-window 41.94/s → last-window 25.21/s,
+ratio **0.601 against a 0.600 floor**. This leg ran at **+18 % mean / +70 % peak**
+host `node_load1` versus `p2-s05` (17.6 / 28.43 vs 14.9 / 16.72, VictoriaMetrics
+`node_load1`, 300 s step), corroborated by 2 retried-and-recovered DELETE socket
+timeouts in cleanup and the ~35 %-slower consumer plane. It is a **contended
+measurement, not a linearity claim** — and it makes every comparative gain on
+this rung a lower bound. Tombstone debt is now **10,000** suppressed entries
+(2,500 this run) — tracker 175's accumulation, re-read at api boot.
 
 **Both 5k rungs now fail on the same engine constraint, from opposite ends:**
 nominal ran out of **time** with memory headroom left (85.7 %); storm is running
@@ -310,7 +447,7 @@ At the ceiling (2,500 devices, 1,000 eps), **per device**:
 | quantity | value | basis |
 |---|--:|---|
 | sustained event rate | **0.4 eps** | ratified `t-nominal-2.5k` envelope; met exactly at 2,500 on all three counts — offered, absorbed, evaluated |
-| carrier memory, working set | **0.42–0.43 MiB** | carrier end rss 1,059–1,065 MiB ÷ 2,500 (`storm-s05`/`s06` memflat) |
+| carrier memory, working set | **0.32–0.43 MiB** | carrier end rss 1,059–1,065 MiB ÷ 2,500 storm (`storm-s05`/`s06` memflat); **0.322 MiB** nominal on the shipped image (805.2 MiB ÷ 2,500, `ladder-n2k5-08311437`) — size on the storm end |
 | carrier memory, provisioned | **0.51 MiB** | the 1,280 MiB replica cap ÷ 2,500 — the number to size a host with |
 | storage / day | **n/a — NOT MEASURED** | no run instruments bytes on disk; see below |
 
@@ -418,14 +555,27 @@ limits next**, and §5's storm-concentration note is the input to that step.
   `kafka-console-producer`, 63 of 90 chunks over their slot, 0 produce failures),
   so the offered rate is a property of the harness. No rung has been offered above
   1,605 eps, and none should be graded until the injector is fixed.
+- **No 2,500-device rung has ever passed `memflat`, on either profile — and on
+  the shipped image the reason is one worker.** `p2-s05` failed on a correlation
+  replica, `p2-s06` on ClickHouse's server cap, `storm-s07` and
+  `ladder-n2k5-08311437` on the time-intelligence backfill (tracker **186**).
+  On the current image both correlation replicas are FLAT and ClickHouse's anon
+  clause passes; what is left is the worker's api working set and its 1.62 GiB
+  query. `t-nominal-2.5k` carries **no scenario**, so correlation *quality* is
+  not measurable on it by construction — the 345/345 accuracy proof belongs to
+  the scenario-carrying sibling `t-storm-2.5k`.
 - **The 5k accuracy figure is characterisation, not a graded SLO number.** It was
   taken while 48,434 events were still queued; the accuracy SLO is defined at the
   ceiling, where the same storm profile scores 100 %. The 5k-storm `onboard` FAIL
   is likewise CONFOUNDED (concurrent host load) and is superseded by the nominal
   sibling's PASS on the same image.
 - **What this document does not claim:** it does not claim 2,500 is comfortable
-  (the nominal rung uses 74–93 % of its budget, and has not been re-run on the
-  shipped image), it does not claim 9/9 at the 25 % storm share (that rung is 8/9
+  on the P2-era builds (those legs use 74–93 % of budget) — on the **shipped**
+  image the nominal rung is now graded at **62.9 % of budget**, but at **8/9**,
+  and its −7.9 % gain over the single best P2 leg is inside the profile's own
+  ±10 % noise floor (only the −21.0 % against the cohort mean, and the five
+  simultaneous TTUR percentile moves, sit outside it); it does not claim 9/9 at
+  the 25 % storm share (that rung is 8/9
   with a v1-scorer accuracy figure), it does not claim a storage-per-device
   figure, it does not claim to explain the 154 s accuracy-loss band or its
   template selectivity at 5k storm (left open), and it does not claim a ceiling
