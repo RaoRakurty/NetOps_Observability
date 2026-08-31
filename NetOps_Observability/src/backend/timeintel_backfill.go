@@ -141,6 +141,29 @@ const (
 	timeIntelBackfillBlockRows = 1024
 	timeIntelBackfillThreads   = 2
 
+	// timeIntelBackfillNarrowBlockRows / timeIntelBackfillNarrowThreads are the
+	// geometry of the ONE extra query the splitter spends at its floor before
+	// writing an object off as unreadable (186 fix-5).
+	//
+	// MEASURED live 2026-08-31 (fix-4): the ~2 objects per 2 000-key page that
+	// are refused at EVERY key count under 1024x2 are NOT big themselves —
+	// tracker 195 measured the four earlier victims at 22-30 KiB of hypotheses
+	// each, dying at read_rows = 0 while allocating a 536 870 912-byte chunk.
+	// The size belongs to their GRANULE NEIGHBOURS: corr_objects holds storm
+	// aggregates up to 76 MiB against a 29 KiB mean, and a 1024-row block sized
+	// for those neighbours is what overruns the ceiling. Read one row per block
+	// and the neighbours are never in flight: both objects probed read CLEANLY
+	// at max_block_size=1, max_threads=1 — 162 and 284 MiB peak, ~2.5 s each,
+	// well inside the same 512 MiB / 2 GiB / 30 s budget the wide read carries.
+	//
+	// One row per block on one thread is the floor of the geometry, so a
+	// refusal that survives it is a property of the object and not of how we
+	// asked for it. That is the whole point: after this retry,
+	// netops_timeintel_fetch_oversize_skipped_total{reason="oversize"} means
+	// IRREDUCIBLE, and every non-zero sample is worth an operator's time.
+	timeIntelBackfillNarrowBlockRows = 1
+	timeIntelBackfillNarrowThreads   = 1
+
 	// timeIntelBackfillMemoryBytes is this worker's OWN per-query memory ceiling,
 	// tighter than the generic 1 GiB worker guard (chWorkerReadMemoryBytes).
 	//
@@ -256,6 +279,14 @@ const (
 	// on 3 of 16 sub-pages. Over the same 2 000-key page: 64 read 24.85 GiB in
 	// 30.6 s, 125 read 28.4 GiB in 33.4 s — the smaller cut is cheaper BECAUSE
 	// a refused sub-fetch still pays for the granules it read before the refusal.
+	//
+	// RE-MEASURED 2026-08-31 (186 fix-4) across 32/64/125-key arms over the same
+	// live page: 64 remained the cheapest arm end-to-end, so this stays a
+	// MEASURED literal rather than a value derived from the memory budget. A
+	// derived cut would have to re-derive the granule constant to land on 64
+	// anyway, and would then need its clamp floor lifted to
+	// ceil(pageRows/maxSubFetches) so no page could exhaust the sub-fetch tree —
+	// two moving parts bought for nothing while the measurement holds.
 	timeIntelBackfillFetchSubPageKeys = 64
 
 	// timeIntelBackfillFetchSplitMinKeys is where halving stops. ONE key, not a
@@ -284,6 +315,11 @@ const (
 	// 80 sub-fetches (32 sub-pages + 24 splits and their halves) to fold 1 996
 	// of 2 000 objects. 192 is 2.4x that, and a page that needs more is not fat,
 	// it is broken.
+	//
+	// The floor's narrow retry (186 fix-5) draws on this same cap — at most one
+	// extra query per floor refusal, ~2 per page live — and is bounded by it on
+	// purpose: a page whose every object needs re-shaping must still cost a
+	// bounded number of queries.
 	timeIntelBackfillFetchMaxSubFetches = 192
 
 	// timeIntelBackfillFetchSplitDeadline bounds the whole tree in WALL CLOCK.
@@ -325,6 +361,11 @@ const (
 // also a property of the key list, not of the moment. chhttp classifies 241 as
 // retryable for its other callers and does not classify 307 at all; neither
 // judgement is wrong there, and neither is useful here.
+//
+// The floor's narrow retry (186 fix-5) is not an exception to that. It re-asks
+// with a DIFFERENT read geometry (one row per block, one thread) on identical
+// memory/bytes/time budgets, which is a different question — not the same one
+// asked twice in the hope of a different mood.
 const (
 	chCodeTooManyBytes        = 307 // TOO_MANY_BYTES — max_bytes_to_read tripped
 	chCodeMemoryLimitExceeded = 241 // MEMORY_LIMIT_EXCEEDED — max_memory_usage tripped
@@ -761,12 +802,22 @@ func (s *server) timeIntelPickPage(ctx context.Context, lookbackSeconds int, fro
 // the splitter sub-pages and halves. A named function type rather than a method
 // value so the live-shape suite can drive the real splitter against a real
 // server without the HTTP client (§2: external dependencies are injected).
-type timeIntelFetchKeys func(ctx context.Context, keys []timeIntelBackfillKey) ([]map[string]any, error)
+//
+// narrow selects the FLOOR geometry (max_block_size=1, max_threads=1) instead
+// of the production one. Every other budget on the wire — memory, bytes, time —
+// is identical either way, so a narrow fetch is a differently SHAPED read of
+// the same size, never a bigger one.
+type timeIntelFetchKeys func(ctx context.Context, keys []timeIntelBackfillKey, narrow bool) ([]map[string]any, error)
 
 // timeIntelFetchOne is the production timeIntelFetchKeys: one bounded, tagged,
 // budgeted wide read.
-func (s *server) timeIntelFetchOne(ctx context.Context, keys []timeIntelBackfillKey) ([]map[string]any, error) {
+func (s *server) timeIntelFetchOne(ctx context.Context, keys []timeIntelBackfillKey,
+	narrow bool) ([]map[string]any, error) {
 	from, to := timeIntelKeySpan(keys)
+	settings := timeIntelBackfillReadSettings()
+	if narrow {
+		settings = timeIntelBackfillNarrowReadSettings()
+	}
 	// Extract owner + seam_type server-side (JSONExtractString) instead of
 	// pulling the whole hypotheses blob per object — at scale the blobs would
 	// blow past the response cap and truncate.
@@ -775,7 +826,7 @@ func (s *server) timeIntelFetchOne(ctx context.Context, keys []timeIntelBackfill
 		Tag:      timeIntelBackfillTag,
 		Budget:   timeIntelBackfillBudget,
 		MaxBytes: timeIntelBackfillMaxResponseBytes,
-		Settings: timeIntelBackfillReadSettings(),
+		Settings: settings,
 	})
 }
 
@@ -825,7 +876,14 @@ type timeIntelFetchSplit struct {
 	fetches int // sub-fetches issued (bounded by timeIntelBackfillFetchMaxSubFetches)
 	splits  int // sub-fetches that were refused and halved
 
-	oversizeSkipped int      // objects a MINIMUM-size fetch still could not read
+	// narrowRetries counts floor refusals RESCUED by the narrow-geometry retry
+	// (186 fix-5) — objects that would have been skipped as oversize before it.
+	// It is the fix's own evidence: > 0 means data that used to be lost is
+	// being folded, and 0 on a page with oversize skips means the retry was
+	// tried and the object really is irreducible.
+	narrowRetries int
+
+	oversizeSkipped int      // objects refused even at the FLOOR geometry (irreducible)
 	budgetSkipped   int      // objects the tree ran out of budget before reaching
 	skippedIDs      []string // bounded sample for the WARN line
 }
@@ -839,11 +897,15 @@ type timeIntelFetchSplit struct {
 //  1. A refusal that halving can fix (307/241) is NEVER returned as an error —
 //     it is split. This is what makes a fat page cost extra queries instead of
 //     costing the watermark.
-//  2. A single object that STILL cannot be read is skipped, counted on
+//  2. At the floor, a single object the production block geometry still cannot
+//     read is retried ONCE at max_block_size=1 / max_threads=1 on the same
+//     budgets (186 fix-5) — the shape most of these refusals actually are.
+//     Success folds the row and counts netops_timeintel_fetch_narrow_retries_total.
+//  3. An object refused even THERE is skipped, counted on
 //     netops_timeintel_fetch_oversize_skipped_total, named at WARN, and the
 //     page continues. One poisoned blob must not be able to hold the whole
 //     backfill still — which is precisely what it did before this change.
-//  3. Any OTHER error is returned unchanged, so a genuine fault (schema, auth)
+//  4. Any OTHER error is returned unchanged, so a genuine fault (schema, auth)
 //     stays as loud as it was.
 func (s *server) timeIntelFetchPage(ctx context.Context, keys []timeIntelBackfillKey) ([]map[string]any, error) {
 	return s.timeIntelFetchPageWith(ctx, keys, s.timeIntelFetchOne)
@@ -878,8 +940,9 @@ func (s *server) timeIntelFetchPageWith(ctx context.Context, keys []timeIntelBac
 }
 
 // run fetches one sublist, halving it on a 307/241 refusal until it fits or
-// until a single key is left. Returns an error ONLY for faults the splitter
-// must not swallow.
+// until a single key is left — and, at that floor, retrying once at the
+// narrowest block geometry before giving up on the object. Returns an error
+// ONLY for faults the splitter must not swallow.
 //
 // TWO contexts, deliberately. pass is the whole pass's — its cancellation is a
 // real error and must reach the caller, because a half-fetched page must never
@@ -902,7 +965,7 @@ func (sp *timeIntelFetchSplit) run(pass, tree context.Context, keys []timeIntelB
 	}
 
 	sp.fetches++
-	rows, err := sp.fetch(tree, keys)
+	rows, err := sp.fetch(tree, keys, false)
 	if err == nil {
 		sp.rows = append(sp.rows, rows...)
 		return nil
@@ -911,9 +974,46 @@ func (sp *timeIntelFetchSplit) run(pass, tree context.Context, keys []timeIntelB
 		return err
 	}
 	if len(keys) <= timeIntelBackfillFetchSplitMinKeys || depth >= timeIntelBackfillFetchSplitMaxDepth {
-		// An indivisible key list that still overruns the guard rails: this
-		// object's own blob is the problem. Skip it — LOUDLY — and continue.
-		sp.giveUp(keys, &sp.oversizeSkipped)
+		// THE FLOOR. Halving has no moves left — but "too wide" and "read the
+		// wrong shape" are different questions, and only the first one has been
+		// asked so far. MEASURED live (186 fix-4): an object refused at EVERY
+		// key count is refused while allocating a 512 MiB chunk for column
+		// hypotheses at read_rows = 0 — its granule neighbours' size, not its
+		// own (tracker 195) — and both objects probed read cleanly at
+		// max_block_size=1 / max_threads=1 inside the same budget. So spend ONE
+		// more query at the floor geometry before writing the object off.
+		//
+		// This is not the retry the const block rules out: the budgets on the
+		// wire are unchanged, so the same refusal is not being re-asked in the
+		// hope of a different mood — a different, smaller-grained read is.
+		if err := pass.Err(); err != nil {
+			return err
+		}
+		if tree.Err() == nil && sp.fetches < timeIntelBackfillFetchMaxSubFetches {
+			sp.fetches++
+			rows, nerr := sp.fetch(tree, keys, true)
+			switch {
+			case nerr == nil:
+				sp.narrowRetries++
+				sp.rows = append(sp.rows, rows...)
+				return nil
+			case !timeIntelFetchSplittable(nerr):
+				// Same contract as the wide read (4 above): a fault is never
+				// swallowed just because it surfaced on the retry.
+				return nerr
+			}
+			// Refused at one row on one thread: no key list and no read shape
+			// this pass can issue gets this object out. Skip it — LOUDLY — and
+			// continue.
+			sp.giveUp(keys, &sp.oversizeSkipped)
+			return nil
+		}
+		// The tree ran out of deadline or query budget before it could ASK the
+		// narrow question, so irreducibility is UNPROVEN. Counting this under
+		// oversize would quietly re-fill the "genuinely unreadable" series with
+		// objects nobody measured; it belongs to the budget reason, which is
+		// what actually stopped it.
+		sp.giveUp(keys, &sp.budgetSkipped)
 		return nil
 	}
 	sp.splits++
@@ -945,6 +1045,9 @@ func (s *server) recordTimeIntelFetchSplit(sp *timeIntelFetchSplit) {
 	if sp.splits > 0 {
 		s.timeIntelFetchSplits.Add(int64(sp.splits))
 	}
+	if sp.narrowRetries > 0 {
+		s.timeIntelFetchNarrowRetries.Add(int64(sp.narrowRetries))
+	}
 	if sp.oversizeSkipped > 0 {
 		s.timeIntelFetchOversizeSkipped.Add(int64(sp.oversizeSkipped))
 	}
@@ -957,6 +1060,7 @@ func (s *server) recordTimeIntelFetchSplit(sp *timeIntelFetchSplit) {
 	logWarn("timeintel", "backfill wide fetch skipped objects it could not read within the guard rails — the page still folded and the watermark still advances", map[string]any{
 		"oversize_skipped": sp.oversizeSkipped,
 		"budget_skipped":   sp.budgetSkipped,
+		"narrow_retries":   sp.narrowRetries,
 		"sub_fetches":      sp.fetches,
 		"splits":           sp.splits,
 		"folded":           len(sp.rows),
@@ -991,6 +1095,22 @@ func timeIntelBackfillReadSettings() map[string]string {
 		// memory (56.81 → 59.89 GiB, ~0.6 GiB per leg).
 		"max_bytes_to_read": intToString(timeIntelBackfillReadBytes),
 	}
+}
+
+// timeIntelBackfillNarrowReadSettings is the floor retry's budget (186 fix-5):
+// timeIntelBackfillReadSettings with the block geometry collapsed to one row on
+// one thread, and NOTHING else moved.
+//
+// Stated as an override of the production map rather than a second literal map
+// on purpose — a future memory/bytes/time change must reach BOTH reads or the
+// retry becomes a hole in the guard rails. The identity is asserted, not
+// trusted: timeintel_backfill_test.go pins that these two maps differ in
+// exactly max_block_size and max_threads.
+func timeIntelBackfillNarrowReadSettings() map[string]string {
+	settings := timeIntelBackfillReadSettings()
+	settings["max_block_size"] = intToString(timeIntelBackfillNarrowBlockRows)
+	settings["max_threads"] = intToString(timeIntelBackfillNarrowThreads)
+	return settings
 }
 
 // timeIntelBackfillDegraded logs a refused read and returns it unchanged.

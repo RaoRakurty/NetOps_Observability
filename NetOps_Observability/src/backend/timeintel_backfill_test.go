@@ -132,6 +132,15 @@ type synthCH struct {
 	// poison ids are refused with 241 at ANY size — a single object whose own
 	// blob overruns the memory ceiling, which no amount of halving can fix.
 	poison map[string]bool
+	// narrowPoison ids are the LIVE shape fix-4 measured (186 fix-5): refused
+	// with 241 at any key count under the production block geometry, and read
+	// cleanly at max_block_size=1 / max_threads=1. Halving never fixes them;
+	// only re-shaping the read does.
+	narrowPoison map[string]bool
+	// fetchNarrow records, per sub-fetch and in order, whether it was issued at
+	// the floor geometry — so a test can assert the retry was ASKED for, not
+	// merely that the outcome looks right.
+	fetchNarrow []bool
 	// fetchKeyCounts records the key count of every sub-fetch in order, so a
 	// test can assert the halving SEQUENCE and not merely the outcome.
 	fetchKeyCounts []int
@@ -176,6 +185,9 @@ func (f *synthCH) serve(w http.ResponseWriter, r *http.Request) {
 		f.fetches++
 		ids := fetchKeyIDs(sql)
 		f.fetchKeyCounts = append(f.fetchKeyCounts, len(ids))
+		narrow := r.URL.Query().Get("max_block_size") == intToString(timeIntelBackfillNarrowBlockRows) &&
+			r.URL.Query().Get("max_threads") == intToString(timeIntelBackfillNarrowThreads)
+		f.fetchNarrow = append(f.fetchNarrow, narrow)
 		refuse := 0
 		switch {
 		case f.failFetchOn == f.fetches:
@@ -183,6 +195,11 @@ func (f *synthCH) serve(w http.ResponseWriter, r *http.Request) {
 			if refuse == 0 {
 				refuse = 241
 			}
+		case !narrow && f.narrowPoisonHit(ids):
+			// Refused for the SHAPE of the read, not the size of the key list:
+			// the default block's ~512 MiB chunk allocation while reading
+			// column hypotheses. One row per block on one thread reads it.
+			refuse = 241
 		case f.poisonHit(ids):
 			// A single object whose own hypotheses blob overruns the ceiling —
 			// measured live: a ONE-key fetch that reads 0 bytes and still dies
@@ -258,6 +275,24 @@ func (f *synthCH) poisonHit(ids []string) bool {
 		}
 	}
 	return false
+}
+
+// narrowPoisonHit reports whether this sub-fetch touches an object the fake
+// refuses under the production block geometry. Caller holds f.mu.
+func (f *synthCH) narrowPoisonHit(ids []string) bool {
+	for _, id := range ids {
+		if f.narrowPoison[id] {
+			return true
+		}
+	}
+	return false
+}
+
+// subFetchNarrow is the geometry of every sub-fetch, in order.
+func (f *synthCH) subFetchNarrow() []bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]bool(nil), f.fetchNarrow...)
 }
 
 // subFetchKeyCounts is the key count of every sub-fetch, in order.
@@ -1349,6 +1384,16 @@ func TestTimeIntelBackfillPoisonedObjectIsSkippedAndWatermarkAdvances(t *testing
 	if got := s.timeIntelFetchOversizeSkipped.Load(); got != 1 {
 		t.Errorf("netops_timeintel_fetch_oversize_skipped_total{reason=\"oversize\"} = %d, want 1", got)
 	}
+	// Since 186 fix-5 an oversize skip is only allowed to be RECORDED after the
+	// floor geometry was tried and refused too — otherwise "irreducible" is a
+	// claim nobody tested. This object is refused at every geometry, so the
+	// retry happened, found nothing, and the rescue counter stayed 0.
+	if !containsTrue(f.subFetchNarrow()) {
+		t.Error("no sub-fetch was issued at the floor geometry — the object was written off without the narrow retry")
+	}
+	if got := s.timeIntelFetchNarrowRetries.Load(); got != 0 {
+		t.Errorf("netops_timeintel_fetch_narrow_retries_total = %d, want 0 — nothing was rescued here", got)
+	}
 	if got := s.timeIntelFetchBudgetSkipped.Load(); got != 0 {
 		t.Errorf("split_budget skips = %d, want 0 — this page had budget to spare", got)
 	}
@@ -1391,6 +1436,179 @@ func TestTimeIntelBackfillPoisonedObjectIsSkippedAndWatermarkAdvances(t *testing
 		// The bounded re-scan behind the watermark re-reads the poisoned object
 		// exactly once more; anything beyond that is a loop.
 		t.Errorf("oversize skips %d → %d over one re-scan, want exactly one more", before, got)
+	}
+}
+
+// containsTrue reports whether any sub-fetch in the sequence was narrow.
+func containsTrue(bs []bool) bool {
+	for _, b := range bs {
+		if b {
+			return true
+		}
+	}
+	return false
+}
+
+// TestTimeIntelBackfillNarrowRetryRescuesAFloorRefusal is the 186 fix-5
+// contract: an object the production block geometry refuses at EVERY key count
+// — the exact live shape fix-4 measured, a ~512 MiB chunk allocation while
+// reading column hypotheses — must be retried ONCE at max_block_size=1 /
+// max_threads=1 and FOLDED, not skipped as oversize.
+//
+// This is data loss recovered, not an optimisation: before the retry these
+// objects (~2 per 2 000-key page live, ~26 per pass) were silently missing
+// snapshots forever, because the watermark had already moved past them.
+//
+// MUTANT: delete the narrow-retry branch in timeIntelFetchSplit.run and this
+// test fails — written drops to n-2 and the two objects are counted as
+// oversize skips, which is the avoidable loss this fix removes.
+func TestTimeIntelBackfillNarrowRetryRescuesAFloorRefusal(t *testing.T) {
+	useTimeIntelKV(t)
+	const n = 130
+	objs := synthObjects(n, time.Now().UTC().Add(-30*time.Hour))
+	// Two objects, in different sub-pages and off the halving boundaries — the
+	// live density (2 per 2 000 keys), scaled to this page.
+	shaped := []synthCorr{objs[35], objs[100]}
+	f := newSynthCH(t, objs)
+	f.narrowPoison = map[string]bool{shaped[0].id: true, shaped[1].id: true}
+
+	m := timeintel.NewMemMetricsStore()
+	s := &server{incidentTimeMetrics: m}
+	res, err := s.backfillIncidentTimeMetrics(context.Background(), timeIntelBackfillLookback)
+	if err != nil {
+		t.Fatalf("a shape refusal must be re-shaped, not returned: %v", err)
+	}
+	if res.Written != n {
+		t.Errorf("written = %d, want %d — the narrow retry must fold every object, not lose the refused ones", res.Written, n)
+	}
+	if got := s.timeIntelFetchNarrowRetries.Load(); got != 2 {
+		t.Errorf("netops_timeintel_fetch_narrow_retries_total = %d, want 2", got)
+	}
+	if got := s.timeIntelFetchOversizeSkipped.Load(); got != 0 {
+		t.Errorf("oversize skips = %d, want 0 — nothing here is irreducible", got)
+	}
+	if got := s.timeIntelFetchBudgetSkipped.Load(); got != 0 {
+		t.Errorf("split_budget skips = %d, want 0 — this page had budget to spare", got)
+	}
+	// The retry is spent at the FLOOR, never as a second try at a wide sublist:
+	// every narrow sub-fetch asks for exactly one key.
+	counts, narrow := f.subFetchKeyCounts(), f.subFetchNarrow()
+	if len(counts) != len(narrow) {
+		t.Fatalf("fake recorded %d key counts and %d geometries", len(counts), len(narrow))
+	}
+	narrowed := 0
+	for i, isNarrow := range narrow {
+		if !isNarrow {
+			continue
+		}
+		narrowed++
+		if counts[i] != timeIntelBackfillFetchSplitMinKeys {
+			t.Errorf("narrow sub-fetch %d asked for %d keys, want the %d-key floor — a wide retry is a second bill, not a re-shape",
+				i, counts[i], timeIntelBackfillFetchSplitMinKeys)
+		}
+	}
+	if narrowed != 2 {
+		t.Errorf("%d narrow sub-fetches, want exactly 2 (one per shape-refused object) — the retry must not become a per-refusal habit", narrowed)
+	}
+	// And the rescued objects are really in the store, not merely counted.
+	rows, _ := m.List(context.Background(), "", true, n+10)
+	if len(rows) != n {
+		t.Fatalf("store holds %d snapshots, want %d", len(rows), n)
+	}
+	for _, want := range shaped {
+		found := false
+		for _, r := range rows {
+			if r.CorrelationID == want.id {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("shape-refused object %s was counted as rescued but never snapshotted", want.id)
+		}
+	}
+}
+
+// TestTimeIntelBackfillNarrowRetryKeepsEveryOtherBudget pins what the retry is
+// allowed to change. It re-SHAPES the read; it must not re-PRICE it.
+//
+// A retry that quietly relaxed max_memory_usage or max_bytes_to_read would be
+// the storm-s07 regression re-entering through the one path that runs on the
+// worst objects on the page — so the difference between the two settings maps
+// is asserted to be exactly two keys, both on the wire and in the builder.
+func TestTimeIntelBackfillNarrowRetryKeepsEveryOtherBudget(t *testing.T) {
+	wide, narrow := timeIntelBackfillReadSettings(), timeIntelBackfillNarrowReadSettings()
+	if len(wide) != len(narrow) {
+		t.Fatalf("narrow settings have %d keys, wide %d — the retry must send the SAME guards", len(narrow), len(wide))
+	}
+	for k, want := range wide {
+		got, ok := narrow[k]
+		if !ok {
+			t.Errorf("narrow settings dropped %q — a guard the retry does not send is a guard it does not have", k)
+			continue
+		}
+		switch k {
+		case "max_block_size":
+			if got != intToString(timeIntelBackfillNarrowBlockRows) || got != "1" {
+				t.Errorf("narrow max_block_size = %q, want 1 (the floor geometry fix-4 measured)", got)
+			}
+		case "max_threads":
+			if got != intToString(timeIntelBackfillNarrowThreads) || got != "1" {
+				t.Errorf("narrow max_threads = %q, want 1", got)
+			}
+		default:
+			if got != want {
+				t.Errorf("narrow settings moved %q from %q to %q — the retry may re-shape the read, never re-price it", k, want, got)
+			}
+		}
+	}
+	// The narrow geometry must actually BE narrower, or the retry is a plain
+	// repeat of a deterministic refusal.
+	if timeIntelBackfillNarrowBlockRows >= timeIntelBackfillBlockRows ||
+		timeIntelBackfillNarrowThreads > timeIntelBackfillThreads {
+		t.Errorf("floor geometry %dx%d is not narrower than the production %dx%d",
+			timeIntelBackfillNarrowBlockRows, timeIntelBackfillNarrowThreads,
+			timeIntelBackfillBlockRows, timeIntelBackfillThreads)
+	}
+
+	// And on the wire: the retry's own query carries the same memory/bytes/time
+	// budget the wide read does.
+	useTimeIntelKV(t)
+	const n = 70
+	objs := synthObjects(n, time.Now().UTC().Add(-30*time.Hour))
+	f := newSynthCH(t, objs)
+	f.narrowPoison = map[string]bool{objs[20].id: true}
+	s := &server{incidentTimeMetrics: timeintel.NewMemMetricsStore()}
+	if _, err := s.backfillIncidentTimeMetrics(context.Background(), timeIntelBackfillLookback); err != nil {
+		t.Fatalf("backfill: %v", err)
+	}
+	if got := s.timeIntelFetchNarrowRetries.Load(); got != 1 {
+		t.Fatalf("narrow retries = %d, want 1 — the wire assertion below would be vacuous", got)
+	}
+	f.mu.Lock()
+	params := append([]url.Values(nil), f.params...)
+	f.mu.Unlock()
+	seen := 0
+	for i, q := range params {
+		if q.Get("max_block_size") != intToString(timeIntelBackfillNarrowBlockRows) ||
+			q.Get("log_comment") != timeIntelBackfillTag {
+			continue
+		}
+		seen++
+		for k, want := range map[string]string{
+			"tenant_scope":       "__all__",
+			"max_memory_usage":   intToString(timeIntelBackfillMemoryBytes),
+			"max_bytes_to_read":  intToString(timeIntelBackfillReadBytes),
+			"max_execution_time": strconv.Itoa(int(timeIntelBackfillBudget / time.Second)),
+			"max_threads":        intToString(timeIntelBackfillNarrowThreads),
+		} {
+			if got := q.Get(k); got != want {
+				t.Errorf("narrow retry call %d: %s = %q, want %q", i, k, got, want)
+			}
+		}
+	}
+	if seen != 1 {
+		t.Errorf("%d narrow-geometry fetches on the wire, want exactly 1", seen)
 	}
 }
 

@@ -57,6 +57,12 @@ var envGateExempt = map[string]string{
 	// SKIP_SEALED_VAULT_TEST shape, where exporting it in CI would REMOVE
 	// coverage rather than add it.
 	"TIMEINTEL_LIVE_CH_CONTAINER": "inverse/override gate — the live pick-shape check self-enables by probing docker; setting this only renames the container or disables it",
+	// The whole-page splitter replay (186 fix-5) is a MEASUREMENT, not a shape
+	// check: 2 000 live keys over docker exec costs minutes of real reads
+	// against a populated corr_objects, which CI has no equivalent of. The
+	// cheap 256-key convergence check in the same file stays in the default
+	// build, so leaving this hand-run removes no CI coverage.
+	"TIMEINTEL_LIVE_FULL_PAGE": "opt-in whole-page live replay; needs a populated live corr_objects and costs minutes of reads, run by hand",
 }
 
 var envGateGetenvRe = regexp.MustCompile(`os\.Getenv\("([A-Z][A-Z0-9_]*)"\)`)

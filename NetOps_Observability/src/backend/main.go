@@ -255,7 +255,11 @@ type server struct {
 	// objects the page's fetch tree ran out of query/time budget before reaching.
 	// Non-zero skips mean snapshots are missing, so they are separate series
 	// rather than one blurred total.
+	// narrowRetries (186 fix-5) counts floor refusals RESCUED by one retry at
+	// max_block_size=1/max_threads=1 — objects the wide geometry could not read
+	// at any key count and that used to be counted as oversize loss.
 	timeIntelFetchSplits          atomic.Int64
+	timeIntelFetchNarrowRetries   atomic.Int64
 	timeIntelFetchOversizeSkipped atomic.Int64
 	timeIntelFetchBudgetSkipped   atomic.Int64
 	// workers is the shutdown drain group (see workerGroup below). It hangs off
@@ -2667,12 +2671,17 @@ func (s *server) handlePromMetrics(w http.ResponseWriter, _ *http.Request) {
 	fmt.Fprintf(w, "# HELP netops_ticketing_merged_redirects_total Manual ticket actions refused with the canonical id because the object was merged.\n")
 	fmt.Fprintf(w, "# TYPE netops_ticketing_merged_redirects_total counter\n")
 	fmt.Fprintf(w, "netops_ticketing_merged_redirects_total %d\n", s.tktMergedRedirects.Load())
-	// timeintel backfill wide-fetch adaptivity (186 fix-2). splits > 0 is the
-	// pass degrading as designed; either skip series > 0 means snapshots were
-	// NOT written for those objects and someone has to look at the WARN.
+	// timeintel backfill wide-fetch adaptivity (186 fix-2/fix-5). splits > 0 is
+	// the pass degrading as designed, and narrow_retries > 0 is loss AVOIDED;
+	// either skip series > 0 means snapshots were NOT written for those objects
+	// and someone has to look at the WARN. Since fix-5 the oversize series only
+	// counts objects refused at the floor geometry too, i.e. irreducible ones.
 	fmt.Fprintf(w, "# HELP netops_timeintel_fetch_splits_total Wide-fetch key lists halved after ClickHouse refused them for read/memory budget.\n")
 	fmt.Fprintf(w, "# TYPE netops_timeintel_fetch_splits_total counter\n")
 	fmt.Fprintf(w, "netops_timeintel_fetch_splits_total %d\n", s.timeIntelFetchSplits.Load())
+	fmt.Fprintf(w, "# HELP netops_timeintel_fetch_narrow_retries_total Floor refusals rescued by one retry at max_block_size=1/max_threads=1 — objects folded that would otherwise have been skipped as oversize.\n")
+	fmt.Fprintf(w, "# TYPE netops_timeintel_fetch_narrow_retries_total counter\n")
+	fmt.Fprintf(w, "netops_timeintel_fetch_narrow_retries_total %d\n", s.timeIntelFetchNarrowRetries.Load())
 	fmt.Fprintf(w, "# HELP netops_timeintel_fetch_oversize_skipped_total Correlation objects whose wide fetch was abandoned so the backfill watermark could still advance.\n")
 	fmt.Fprintf(w, "# TYPE netops_timeintel_fetch_oversize_skipped_total counter\n")
 	fmt.Fprintf(w, "netops_timeintel_fetch_oversize_skipped_total{reason=\"oversize\"} %d\n", s.timeIntelFetchOversizeSkipped.Load())

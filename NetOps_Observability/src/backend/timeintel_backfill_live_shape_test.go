@@ -150,14 +150,28 @@ type liveCHError struct{ msg string }
 
 func (e *liveCHError) Error() string { return e.msg }
 
-// liveCHSettings appends the production per-query budget the Go client sends as
-// URL parameters. The builders emit no SETTINGS clause of their own (the client
+// liveCHProbeTag marks every read this file issues, so a query_log dig (and the
+// scale ladder's own grading) can tell a test probe apart from the production
+// pass — which carries timeIntelBackfillTag instead. Without it the two are
+// indistinguishable in system.query_log and a probe run pollutes a rung.
+const liveCHProbeTag = "probe186fix5"
+
+// liveCHSettingsFrom appends a per-query budget the Go client would send as URL
+// parameters. The builders emit no SETTINGS clause of their own (the client
 // adds them), so a shape check that omitted them would test a query the worker
 // never actually runs — and max_bytes_to_read is precisely the guard a shape
 // regression would trip first.
-func liveCHSettings() string {
-	kv := map[string]string{"tenant_scope": "'__all__'", "max_execution_time": "30"}
-	for k, v := range timeIntelBackfillReadSettings() {
+//
+// It takes the budget rather than assuming the production one so the
+// narrow-geometry retry (186 fix-5) can be executed with the settings it really
+// sends rather than with the wide ones.
+func liveCHSettingsFrom(read map[string]string) string {
+	kv := map[string]string{
+		"tenant_scope":       "'__all__'",
+		"max_execution_time": "30",
+		"log_comment":        "'" + liveCHProbeTag + "'",
+	}
+	for k, v := range read {
 		kv[k] = v
 	}
 	keys := make([]string, 0, len(kv))
@@ -176,11 +190,16 @@ func liveCHSettings() string {
 // last. Everything else about the builder output is untouched — the point of
 // this file is to run the PRODUCTION string, not a paraphrase of it.
 func withLiveSettings(sql string) string {
+	return withLiveSettingsFrom(sql, timeIntelBackfillReadSettings())
+}
+
+// withLiveSettingsFrom is withLiveSettings over an explicit read budget.
+func withLiveSettingsFrom(sql string, read map[string]string) string {
 	const tail = "\n FORMAT JSON"
 	if !strings.HasSuffix(sql, tail) {
-		return sql + liveCHSettings()
+		return sql + liveCHSettingsFrom(read)
 	}
-	return strings.TrimSuffix(sql, tail) + liveCHSettings() + tail
+	return strings.TrimSuffix(sql, tail) + liveCHSettingsFrom(read) + tail
 }
 
 // execLiveShape runs one builder-produced statement and fails with the server's
@@ -403,9 +422,10 @@ func TestTimeIntelBackfillFetchAcceptedByLiveClickHouse(t *testing.T) {
 
 // liveSubFetch is one sub-fetch the splitter issued, as observed.
 type liveSubFetch struct {
-	keys int
-	code int // 0 = accepted
-	rows int
+	keys   int
+	code   int // 0 = accepted
+	rows   int
+	narrow bool // issued at the floor geometry (max_block_size=1/max_threads=1)
 }
 
 // liveFetchKeys adapts clickhouse-client-in-the-container to the splitter's
@@ -415,14 +435,18 @@ type liveSubFetch struct {
 // paraphrase of it.
 func liveFetchKeys(t *testing.T, container string, log *[]liveSubFetch) timeIntelFetchKeys {
 	t.Helper()
-	return func(_ context.Context, keys []timeIntelBackfillKey) ([]map[string]any, error) {
+	return func(_ context.Context, keys []timeIntelBackfillKey, narrow bool) ([]map[string]any, error) {
 		from, to := timeIntelKeySpan(keys)
-		sql := withLiveSettings(timeIntelBackfillFetchSQL(keys, from, to))
+		read := timeIntelBackfillReadSettings()
+		if narrow {
+			read = timeIntelBackfillNarrowReadSettings()
+		}
+		sql := withLiveSettingsFrom(timeIntelBackfillFetchSQL(keys, from, to), read)
 		mustBeReadOnlySQL(t, sql)
 		out, err := runLiveCH(container, sql)
 		if err != nil {
 			code := liveExceptionCode(err.Error())
-			*log = append(*log, liveSubFetch{keys: len(keys), code: code})
+			*log = append(*log, liveSubFetch{keys: len(keys), code: code, narrow: narrow})
 			return nil, &chhttp.Error{
 				Op: "worker query " + timeIntelBackfillTag, Status: 500,
 				Code: code, Message: err.Error(), Outcome: chhttp.OutcomeRejected,
@@ -434,7 +458,7 @@ func liveFetchKeys(t *testing.T, container string, log *[]liveSubFetch) timeInte
 		if jerr := json.Unmarshal([]byte(out), &parsed); jerr != nil {
 			t.Fatalf("sub-fetch of %d keys: response is not JSON: %v", len(keys), jerr)
 		}
-		*log = append(*log, liveSubFetch{keys: len(keys), rows: len(parsed.Data)})
+		*log = append(*log, liveSubFetch{keys: len(keys), rows: len(parsed.Data), narrow: narrow})
 		return parsed.Data, nil
 	}
 }
@@ -531,7 +555,7 @@ func TestTimeIntelBackfillFetchSplitterConvergesOnLiveClickHouse(t *testing.T) {
 	}
 	skipped := s.timeIntelFetchOversizeSkipped.Load() + s.timeIntelFetchBudgetSkipped.Load()
 	for i, f := range log {
-		t.Logf("sub-fetch %2d: %4d keys → code %d, %d rows", i, f.keys, f.code, f.rows)
+		t.Logf("sub-fetch %2d: %4d keys → code %d, %d rows (narrow=%v)", i, f.keys, f.code, f.rows, f.narrow)
 		if f.keys > timeIntelBackfillFetchSubPageKeys {
 			t.Errorf("sub-fetch %d asked for %d keys, above the %d sub-page cut", i, f.keys, timeIntelBackfillFetchSubPageKeys)
 		}
@@ -553,6 +577,11 @@ func TestTimeIntelBackfillFetchSplitterConvergesOnLiveClickHouse(t *testing.T) {
 			if skipped == 0 {
 				t.Errorf("the last sub-fetch was refused (code %d) and nothing was skipped — that refusal vanished", f.code)
 			}
+			continue
+		}
+		if log[i+1].narrow {
+			// The floor retry re-asks for the SAME keys at a narrower block
+			// geometry — that IS the action taken on this refusal (186 fix-5).
 			continue
 		}
 		if log[i+1].keys >= f.keys && f.keys > timeIntelBackfillFetchSplitMinKeys {
@@ -613,5 +642,98 @@ func TestTimeIntelBackfillPassShapeAdvancesWatermarkOnLiveClickHouse(t *testing.
 			t.Errorf("the pick after the advanced watermark re-served %s@%s — the pass would repeat",
 				k.CorrelationID, k.CreatedAt)
 		}
+	}
+}
+
+// TestTimeIntelBackfillFetchSplitterFoldsAWholeLivePage replays the PRODUCTION
+// splitter over a full 2 000-key page of the live table — the exact unit the
+// worker fetches — and asserts the whole page is accounted for, with the floor
+// refusals RESCUED by the narrow-geometry retry rather than skipped (186 fix-5).
+//
+// OPT-IN. Unlike the rest of this file it is not a shape check but a
+// MEASUREMENT: 2 000 keys over docker exec is ~32 sub-pages plus the split tree
+// and costs minutes of a developer's `go test`, so it runs only when asked. The
+// cheap 256-key convergence check above stays in the default build.
+//
+// Every read it issues carries log_comment='probe186fix5' (liveCHProbeTag), so
+// a scale run graded off system.query_log can discount this replay.
+//
+// TRANSPORT. The page is replayed in liveReplaySliceKeys-key slices, each
+// getting its own production fetch tree. That is not a weaker splitter — the
+// sub-page loop is already independent per 64-key cut and every decision under
+// test (halve, floor, narrow-retry, skip) is taken inside one sub-page — it is
+// a correction for the harness: this file talks to ClickHouse through
+// `docker exec`, which pays a process spawn per query (measured 1.4-1.5 s
+// under concurrent load, against the worker's sub-second HTTP path), so a
+// whole page in ONE tree exhausts timeIntelBackfillFetchSplitDeadline on the
+// transport rather than on anything the splitter did. Slicing keeps the
+// wall-clock budget per query honest while still covering all 2 000 keys.
+const liveReplaySliceKeys = 512
+
+func TestTimeIntelBackfillFetchSplitterFoldsAWholeLivePage(t *testing.T) {
+	if strings.TrimSpace(os.Getenv("TIMEINTEL_LIVE_FULL_PAGE")) == "" {
+		t.Skip("set TIMEINTEL_LIVE_FULL_PAGE=1 to replay a whole live page (minutes of live reads)")
+	}
+	container := liveCHContainer(t)
+	keys := livePickKeys(t, container, timeIntelBackfillPageRows, timeintel.BackfillCursor{})
+	if len(keys) < timeIntelBackfillPageRows {
+		t.Skipf("live corr_current holds %d keys in the window, need a full %d-key page", len(keys), timeIntelBackfillPageRows)
+	}
+
+	var log []liveSubFetch
+	s := &server{}
+	started := time.Now()
+	folded := 0
+	for start := 0; start < len(keys); start += liveReplaySliceKeys {
+		end := start + liveReplaySliceKeys
+		if end > len(keys) {
+			end = len(keys)
+		}
+		rows, err := s.timeIntelFetchPageWith(context.Background(), keys[start:end], liveFetchKeys(t, container, &log))
+		if err != nil {
+			t.Fatalf("the splitter returned an error over live keys [%d,%d) — it must degrade, not stall: %v", start, end, err)
+		}
+		folded += len(rows)
+	}
+	elapsed := time.Since(started)
+	narrow, refused := 0, 0
+	for _, f := range log {
+		if f.narrow {
+			narrow++
+		}
+		if f.code != 0 {
+			refused++
+		}
+	}
+	t.Logf("full-page replay [%s → %s]: %d keys → %d sub-fetches (%d refused, %d narrow, %s/query), %d splits, %d rows folded in %s; "+
+		"narrow_retries=%d oversize_skipped=%d budget_skipped=%d",
+		started.UTC().Format(time.RFC3339), time.Now().UTC().Format(time.RFC3339),
+		len(keys), len(log), refused, narrow, (elapsed / time.Duration(max(len(log), 1))).Round(10*time.Millisecond),
+		s.timeIntelFetchSplits.Load(), folded, elapsed.Round(time.Second),
+		s.timeIntelFetchNarrowRetries.Load(), s.timeIntelFetchOversizeSkipped.Load(), s.timeIntelFetchBudgetSkipped.Load())
+
+	skipped := s.timeIntelFetchOversizeSkipped.Load() + s.timeIntelFetchBudgetSkipped.Load()
+	if int64(folded)+skipped != int64(len(keys)) {
+		t.Errorf("%d keys in, %d rows + %d skipped out — the page does not add up", len(keys), folded, skipped)
+	}
+	// The fix's own assertion: an object may only be written off as oversize
+	// AFTER the floor geometry was tried on it and refused too. A one-key
+	// refusal with no narrow sub-fetch of the same key after it means the
+	// retry was skipped and the loss is avoidable.
+	for i, f := range log {
+		if f.code == 0 || f.keys > timeIntelBackfillFetchSplitMinKeys || f.narrow {
+			continue
+		}
+		if i+1 >= len(log) || !log[i+1].narrow || log[i+1].keys != f.keys {
+			t.Errorf("floor sub-fetch %d was refused at %d keys and was not retried at the narrow geometry — that is avoidable data loss",
+				i, f.keys)
+		}
+	}
+	if s.timeIntelFetchBudgetSkipped.Load() > 0 {
+		t.Errorf("%d objects were skipped for split budget on a single page — the tree ran out of %s / %d sub-fetches",
+			s.timeIntelFetchBudgetSkipped.Load(), timeIntelBackfillFetchSplitDeadline, timeIntelBackfillFetchMaxSubFetches)
+	}
+	if got := s.timeIntelFetchOversizeSkipped.Load(); got > 0 {
+		t.Logf("NOTE: %d objects were refused even at max_block_size=1/max_threads=1 — irreducible, and worth an operator's look", got)
 	}
 }
