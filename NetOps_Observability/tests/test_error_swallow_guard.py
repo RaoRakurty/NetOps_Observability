@@ -20,14 +20,19 @@ script:
 Every currently-shipping site that trips rule 2 was reviewed on 2026-08-16 and
 is pinned in ALLOWLIST below with its justification. Adding a NEW swallow
 means consciously adding an allowlist entry in this file — which is the point:
-the pattern becomes a reviewed decision, never a default.
+the pattern becomes a reviewed decision, never a default. Entries are keyed by
+the handler's CONTENT (file, enclosing def, digest), so editing an exempted
+handler forces re-review while unrelated edits above it never do.
 
 Run:  python3 -m pytest tests/test_error_swallow_guard.py -v
+Keys: python3 tests/test_error_swallow_guard.py   # every non-escalating site
 """
 from __future__ import annotations
 
 import ast
+import hashlib
 import re
+import textwrap
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -36,9 +41,56 @@ SCRIPTS = ROOT / "scripts"
 TARGET_EXC = {"OSError", "PermissionError"}
 ESCALATION_CALLS = {"fail", "die", "abort", "refuse", "exit"}  # + attr .exit (sys.exit / os._exit)
 
-# (filename, lineno) -> why this reviewed site is allowed to stay. Line numbers
-# are load-bearing: moving the handler invalidates the entry, forcing re-review.
-ALLOWLIST: dict[tuple[str, int], str] = {
+# Allowlist keys are CONTENT-ADDRESSED, not line-addressed (changed 2026-08-31
+# after the sixth pure-line-drift breakage in two weeks):
+#
+#     ("<script>.py", "<enclosing def/class qualname>", "<sha256[:8] of body>")
+#
+# What stays load-bearing is what should be: the HANDLER ITSELF. Editing an
+# exempted handler's `except` clause or body — or moving it to another
+# function — changes the digest, the entry goes stale, and the site must be
+# re-reviewed, which is the whole point of this file. What is NO LONGER
+# load-bearing is the line number, so inserting 460 lines of ladder profiles
+# above a reviewed handler no longer costs a re-pin wave and no longer trains
+# anyone to "fix" this guard by bumping numbers.
+#
+# The digest is over the handler's source segment, dedented, with trailing
+# whitespace stripped per line — so a pure re-indent (the handler moved under a
+# new `with`, say) survives, while any change to the code or its comments does
+# not. All 195 `except` handlers in scripts/*.py hash to distinct keys today;
+# `python3 tests/test_error_swallow_guard.py` prints the current key for every
+# non-escalating site, which is how a new entry (or a re-pin) is authored.
+#
+# A .sh site (Python inside a heredoc, rule 1 only — none today) has no AST and
+# keeps the legacy ("<script>.sh", lineno) key shape.
+AllowKey = tuple[str, str, str] | tuple[str, int]
+
+ALLOWLIST: dict[AllowKey, str] = {
+    # ===================================================================
+    # 2026-08-31 — RE-PIN + KEY CHANGE. The 5k/10k ladder profiles
+    # (63198dcd) and the memflat backfill-refusal clause (c0faf797) moved
+    # every one of scale-miniladder.py's SEVENTEEN reviewed sites without
+    # touching one of them (862->1019, 1163->1320, the RunLock group
+    # 3773..3889 -> 4091..4207, 4505/4512 -> 4830/4837, 5088->5426,
+    # 7070->7582, 7576->8088, 8220->8748). Proof, not assertion: each
+    # handler was hashed at 29686b0c (the commit these lines were pinned
+    # against) and every one of the seventeen baseline digests is present
+    # in the current file — the `except` clause and the full body are
+    # identical, dedented and trailing-space-normalised, in all seventeen.
+    # No handler body changed, no site was added, no exemption was granted.
+    #
+    # That was the SIXTH pure-drift breakage of this file in two weeks (see
+    # the archival notes below, each recording the same finding), so the
+    # key changed with the re-pin: an entry now addresses a handler by
+    # (file, enclosing def, body digest) instead of (file, line). The
+    # invariant the file exists to hold is stronger for it — editing an
+    # exempted handler now invalidates its entry even if the line number
+    # never moves, which the line key could not catch — while unrelated
+    # code above a handler no longer costs anyone a re-pin wave.
+    #
+    # The line numbers quoted in the notes below are ARCHIVAL. They record
+    # what each wave found; they no longer key anything.
+    # ===================================================================
     # Re-pinned 2026-08-29 (P3 storm-share ladder): `chain.StormShape`, the
     # ladder specs/profiles, the allocation-round `_build`, the shape record in
     # ground truth and the redesigned per-chunk guard inserted ~460 lines into
@@ -50,32 +102,32 @@ ALLOWLIST: dict[tuple[str, int], str] = {
     # RE-PIN workflow the line-keyed design exists to force — no handler was
     # weakened, no new site was added, no new exemption was granted.
     # -- probes / capability checks: the False/None IS the reported outcome --
-    ("install.py", 216): "docker-availability probe; returns False, caller reports/blocks",
-    ("install.py", 934): "sandboxed exec shim; returns ExecResult(126, stderr=exc) — error propagated",
-    ("install.py", 1175): "chown_tree direct-attempt probe; returns (False, err) to the fallback chain",
-    ("install.py", 1208): "chown_tree child walk; failures collected in `failed`, caller escalates",
-    ("install.py", 1214): "chown_tree direct attempt; err captured, docker fallback runs, both-fail => fail()",
-    ("vrl-harness.py", 68): "vector-binary availability probe; returns False => harness skips loudly",
+    ("install.py", "_is_debian_family", "1cdb4321"): "docker-availability probe; returns False, caller reports/blocks",
+    ("install.py", "ComposeRunner._run", "2e69c490"): "sandboxed exec shim; returns ExecResult(126, stderr=exc) — error propagated",
+    ("install.py", "_docker_chown", "f2c7a328"): "chown_tree direct-attempt probe; returns (False, err) to the fallback chain",
+    ("install.py", "chown_tree", "a3b625dd"): "chown_tree child walk; failures collected in `failed`, caller escalates",
+    ("install.py", "chown_tree", "e11fa36c"): "chown_tree direct attempt; err captured, docker fallback runs, both-fail => fail()",
+    ("vrl-harness.py", "available", "ef7cf66a"): "vector-binary availability probe; returns False => harness skips loudly",
     # -- optional-input reads with a sane, visible default --
-    ("install.py", 173): "git rev-parse for build provenance; falls back to 'unknown', which drift check FAILS on",
-    ("install.py", 1146): "uid/gid from a .env that may not exist yet (--no-start dry paths); compose default",
-    ("refresh_provider_ranges.py", 111): "first-run bootstrap: no previous snapshot file => empty baseline",
+    ("install.py", "_git_sha", "b26fa56b"): "git rev-parse for build provenance; falls back to 'unknown', which drift check FAILS on",
+    ("install.py", "api_runtime_uid", "831da648"): "uid/gid from a .env that may not exist yet (--no-start dry paths); compose default",
+    ("refresh_provider_ranges.py", "main", "0e6dd5ac"): "first-run bootstrap: no previous snapshot file => empty baseline",
     # Re-pinned 2026-08-17: shifted by the BUS_PARTITIONS planner work
     # (constants + derive_bus_partitions inserted above it). Handler re-read,
     # unchanged, justification holds.
-    ("resource_planner.py", 311): "optional cgroup limit file; absent => host os.cpu_count/meminfo defaults",
-    ("regression_correlation_smoke.py", 70): "optional .env read; returns '' and the caller reports missing config",
-    ("smoke-test.py", 291): "optional .env admin-credential read; falls back to prompting defaults",
-    ("snmp_fidelity_harness.py", 170): "optional .env read; returns None, caller handles absence",
-    ("snmp_fidelity_harness.py", 220): "partial walk returned on socket error; harness compares what it got",
-    ("snmp_fidelity_harness.py", 383): "optional ifName probe (noqa S110 on site); empty names still yields a recorded verdict",
+    ("resource_planner.py", "detect_host", "dea4b792"): "optional cgroup limit file; absent => host os.cpu_count/meminfo defaults",
+    ("regression_correlation_smoke.py", "read_env", "b2617939"): "optional .env read; returns '' and the caller reports missing config",
+    ("smoke-test.py", "_admin_from_env", "b2617939"): "optional .env admin-credential read; falls back to prompting defaults",
+    ("snmp_fidelity_harness.py", "read_env", "b2617939"): "optional .env read; returns None, caller handles absence",
+    ("snmp_fidelity_harness.py", "_minimal_devices_parse", "8a4addf7"): "partial walk returned on socket error; harness compares what it got",
+    ("snmp_fidelity_harness.py", "hop_c_contract", "79a9466e"): "optional ifName probe (noqa S110 on site); empty names still yields a recorded verdict",
     # -- reporting-and-continue in operator-facing lab/demo tooling --
-    ("demo_lab.py", 539): "lab inventory listing prints '<unreadable>' per file — reported, not swallowed",
-    ("seed-test-traffic.py", 109): "test-traffic generator prints each send failure to stderr and keeps seeding",
-    ("seed-test-traffic.py", 183): "test-traffic generator prints each send failure to stderr and keeps seeding",
-    ("secret_rotation.py", 251): "service-owned marker unreadable from operator uid; commented, rotation proceeds",
-    ("secret_rotation.py", 266): "service-owned marker dir unreadable from operator uid; commented fallback",
-    ("install.py", 2308): "external-broker reachability preflight; warn states services retry from inside the network",
+    ("demo_lab.py", "cmd_list", "723d4887"): "lab inventory listing prints '<unreadable>' per file — reported, not swallowed",
+    ("seed-test-traffic.py", "seed_syslog", "aef5700c"): "test-traffic generator prints each send failure to stderr and keeps seeding",
+    ("seed-test-traffic.py", "seed_netflow", "917b5452"): "test-traffic generator prints each send failure to stderr and keeps seeding",
+    ("secret_rotation.py", "store_initialized", "2780c832"): "service-owned marker unreadable from operator uid; commented, rotation proceeds",
+    ("secret_rotation.py", "store_initialized", "8772e462"): "service-owned marker dir unreadable from operator uid; commented fallback",
+    ("install.py", "main", "08a4c1f7"): "external-broker reachability preflight; warn states services retry from inside the network",
     # Re-pinned 2026-08-17 (same four reviewed sites, shifted twice in one day:
     # first by the group_lag/preflight consumer-membership fix, then by the
     # RUF012 move of _MEM_UNITS to module scope + the ruff I001 import re-sort.
@@ -195,7 +247,7 @@ ALLOWLIST: dict[tuple[str, int], str] = {
     # them and reported 15 violations instead of 17. A line-keyed allowlist can
     # alias like that after a large insertion; re-derive the full list from the
     # AST, never re-pin only the sites the failure happened to name.
-    ("scale-miniladder.py", 862): "optional .env read; returns '' with a documented callers-decide contract",
+    ("scale-miniladder.py", "env_get", "b2617939"): "optional .env read; returns '' with a documented callers-decide contract",
     # (+10-line drift 2026-08-22: the lanes-routing comment block in
     # WORKLOAD_PROFILES; all three re-read, unchanged.)
     # (+15-line drift 2026-08-22: soak-72h profile; +17 more 2026-08-23: the
@@ -261,9 +313,9 @@ ALLOWLIST: dict[tuple[str, int], str] = {
     # 682 (`env_get`) and 983 (`Stack.api` post-retry) are above the insertion
     # and did not move. RE-PIN of reviewed sites after line drift, which is the
     # workflow this line-keyed allowlist exists to force — not a new exemption.
-    ("scale-miniladder.py", 4505): "preflight ingress probe; failure appended to `problems`, preflight fails on any problem",
-    ("scale-miniladder.py", 4512): "preflight API-login probe; failure appended to `problems`, preflight fails on any problem",
-    ("scale-miniladder.py", 5088): "twin-mode burst artifact read; failure returns an explicit burst-phase FAIL (tracker 152 §8.3)",
+    ("scale-miniladder.py", "Harness.preflight", "5f588aff"): "preflight ingress probe; failure appended to `problems`, preflight fails on any problem",
+    ("scale-miniladder.py", "Harness.preflight", "3535aaa7"): "preflight API-login probe; failure appended to `problems`, preflight fails on any problem",
+    ("scale-miniladder.py", "Harness._burst_twin", "ae2ff072"): "twin-mode burst artifact read; failure returns an explicit burst-phase FAIL (tracker 152 §8.3)",
     # -- NEW 2026-08-29: Stack.api's post-retry transport handler -------------
     # THE ONE NEW ENTRY IN THIS WAVE, and a deliberate one. `Stack.api` used to
     # let a socket read timeout escape as a raw `TimeoutError`; on the live run
@@ -278,7 +330,7 @@ ALLOWLIST: dict[tuple[str, int], str] = {
     # (`devices_with_prefix` -> list ERROR -> residue UNKNOWN, never zero;
     # `delete_devices` -> a named failure string). Escalating here instead is
     # exactly the defect: one unreachable call must not cost the teardown.
-    ("scale-miniladder.py", 1163): "post-retry API transport failure; counted + warned + returned as HTTP 0 so every caller reports it as 'not evidence' (residue UNKNOWN, never zero)",
+    ("scale-miniladder.py", "Stack.api", "e37673c6"): "post-retry API transport failure; counted + warned + returned as HTTP 0 so every caller reports it as 'not evidence' (residue UNKNOWN, never zero)",
     # -- RunLock (NEW 2026-08-29, cross-run collision guard) -----------------
     # Reviewed as a group. The lock's contract is that EVERY failure becomes a
     # refusal the caller escalates: `acquire()` returns (False, message) and
@@ -289,15 +341,15 @@ ALLOWLIST: dict[tuple[str, int], str] = {
     # tests/test_miniladder_cross_run_collision.py pins that both callers do it.
     # The two `release()` handlers and the pid probe cannot escalate at all —
     # they run on the way out (or answer a question), and each REPORTS by name.
-    ("scale-miniladder.py", 3773): "pid liveness probe: PermissionError means a LIVE process owned by another user; the True is the answer, and it refuses rather than steals",
-    ("scale-miniladder.py", 3775): "pid liveness probe fallback: warns by name and answers ALIVE (never steals a lock on an unknown error)",
-    ("scale-miniladder.py", 3787): "lock-file read: warns that the file is unreadable and returns an owner-less holder, which the caller treats as stale — reported, not silent",
-    ("scale-miniladder.py", 3816): "lock dir creation: returns (False, reason); main()/cleanup_only() die() on it — refusing to run unlocked",
-    ("scale-miniladder.py", 3847): "stale-lock unlink: returns (False, reason); caller die()s rather than racing a lock it could not clear",
-    ("scale-miniladder.py", 3854): "lock O_EXCL create: returns (False, reason); caller die()s",
-    ("scale-miniladder.py", 3859): "lock stamp write: returns (False, reason) after removing the half-written lock; caller die()s",
-    ("scale-miniladder.py", 3862): "removal of a half-written lock: warns by name; the outer handler still refuses the run",
-    ("scale-miniladder.py", 3889): "lock release on the way out: warns by name and says the next run reclaims it as stale (this pid will be dead) — nothing left to escalate to",
+    ("scale-miniladder.py", "RunLock.pid_alive", "e419864a"): "pid liveness probe: PermissionError means a LIVE process owned by another user; the True is the answer, and it refuses rather than steals",
+    ("scale-miniladder.py", "RunLock.pid_alive", "eb367e8e"): "pid liveness probe fallback: warns by name and answers ALIVE (never steals a lock on an unknown error)",
+    ("scale-miniladder.py", "RunLock._read", "02f470bf"): "lock-file read: warns that the file is unreadable and returns an owner-less holder, which the caller treats as stale — reported, not silent",
+    ("scale-miniladder.py", "RunLock.acquire", "1b0a3ec1"): "lock dir creation: returns (False, reason); main()/cleanup_only() die() on it — refusing to run unlocked",
+    ("scale-miniladder.py", "RunLock.acquire", "4d308f97"): "stale-lock unlink: returns (False, reason); caller die()s rather than racing a lock it could not clear",
+    ("scale-miniladder.py", "RunLock.acquire", "be157579"): "lock O_EXCL create: returns (False, reason); caller die()s",
+    ("scale-miniladder.py", "RunLock.acquire", "4666a00f"): "lock stamp write: returns (False, reason) after removing the half-written lock; caller die()s",
+    ("scale-miniladder.py", "RunLock.acquire", "9a56eab1"): "removal of a half-written lock: warns by name; the outer handler still refuses the run",
+    ("scale-miniladder.py", "RunLock.release", "4e5de563"): "lock release on the way out: warns by name and says the next run reclaims it as stale (this pid will be dead) — nothing left to escalate to",
     # Re-pinned 2026-08-29 for the COMBINED diff (memflat ClickHouse rescore
     # + the enterprise_outage scenario chain, which inserted the shared-chain
     # import near the top of the file). All three handlers below were re-read
@@ -309,7 +361,7 @@ ALLOWLIST: dict[tuple[str, int], str] = {
     # re-scored verdict FAIL/UNKNOWN, is printed in memflat-rescore.md, and
     # exits non-zero. Escalating instead would throw away the ClickHouse half
     # of the re-score, which is readable and is the half being asked about.
-    ("scale-miniladder.py", 8220): "--rescore-memflat curve read; failure becomes a `problems` entry -> the re-scored verdict is FAIL/UNKNOWN and the tool exits non-zero",
+    ("scale-miniladder.py", "_rescore_correlation", "32331299"): "--rescore-memflat curve read; failure becomes a `problems` entry -> the re-scored verdict is FAIL/UNKNOWN and the tool exits non-zero",
     # -- NEW 2026-08-29 (tracker 175: the device-store tombstone debt) -------
     # Both handlers answer a DIAGNOSTIC question — how many suppression
     # tombstones the device store carries, and how the onboard rate has moved
@@ -318,8 +370,8 @@ ALLOWLIST: dict[tuple[str, int], str] = {
     # tombstone step deliberately routes its failures to its own list so a
     # device store this harness cannot count never turns a clean teardown red.
     # Escalating either one would fail a run over a directory listing.
-    ("scale-miniladder.py", 7070): "tombstone-count scandir; warns by name and returns reachable=False with the reason — the debt reads UNKNOWN, never 0",
-    ("scale-miniladder.py", 7576): "previous last-run.json read for the onboard-rate trend; warns by name and restarts the history at this run rather than costing the run its report",
+    ("scale-miniladder.py", "Harness.tombstone_debt", "6004b5f5"): "tombstone-count scandir; warns by name and returns reachable=False with the reason — the debt reads UNKNOWN, never 0",
+    ("scale-miniladder.py", "Harness._rate_history", "757d6e32"): "previous last-run.json read for the onboard-rate trend; warns by name and restarts the history at this run rather than costing the run its report",
     # -- NEW 2026-08-29: scripts/scale-ab-driver.py (the P3 aggregation-plane
     # A/B driver, committed dd051f53) ---------------------------------------
     # Eight rule-2 sites, each read at its own line and judged separately. TWO
@@ -355,14 +407,14 @@ ALLOWLIST: dict[tuple[str, int], str] = {
     # sites after line drift — no handler weakened, no new exemption. The new
     # code adds one OSError/ImportError handler (`harness_profiles`) and it
     # ESCALATES with DriverAbort, so it is covered by the rule's escalates arm.
-    ("scale-ab-driver.py", 243): "log-file append: prints path+errno to stderr and continues; the DURABLE record is the state file (which escalates), and the reporting channel cannot report its own death through itself",
-    ("scale-ab-driver.py", 286): "bounded subprocess shim: returns (127, '', 'cannot execute <cmd>: <exc>') — the error is the return value, and every caller checks rc and reports it (same shape as install.py:934)",
-    ("scale-ab-driver.py", 781): "pid liveness probe: PermissionError means a LIVE process owned by another uid; True IS the answer, and the driver then waits for that run instead of stealing its lock",
-    ("scale-ab-driver.py", 783): "pid liveness probe fallback: warns by name with pid+errno and answers UNKNOWN, which the idle gate refuses on — a lock is never stolen on an unprobeable pid",
-    ("scale-ab-driver.py", 809): "run-lock read: returns ('unknown', 'cannot read <path> (errno N: ...)'); 'unknown' is NOT free, so the idle gate keeps waiting and then aborts with that reason",
-    ("scale-ab-driver.py", 1173): "launcher.log read while a leg runs: warns with path+errno and reports NO verdict — the safe direction, since a leg is only finished when a verdict is READ and the process is gone",
-    ("scale-ab-driver.py", 1192): "log tail quoted inside a message: warns with path+errno and quotes nothing; narration only, never a verdict input",
-    ("scale-ab-driver.py", 1610): "compose .env read for COMPOSE_PROJECT_NAME: warns with path+errno and falls back to the documented default, which --project overrides (same contract as scale-miniladder.py's env_get)",
+    ("scale-ab-driver.py", "_emit", "09e54b26"): "log-file append: prints path+errno to stderr and continues; the DURABLE record is the state file (which escalates), and the reporting channel cannot report its own death through itself",
+    ("scale-ab-driver.py", "run", "03ee0244"): "bounded subprocess shim: returns (127, '', 'cannot execute <cmd>: <exc>') — the error is the return value, and every caller checks rc and reports it (same shape as install.py:934)",
+    ("scale-ab-driver.py", "Driver.pid_alive", "e419864a"): "pid liveness probe: PermissionError means a LIVE process owned by another uid; True IS the answer, and the driver then waits for that run instead of stealing its lock",
+    ("scale-ab-driver.py", "Driver.pid_alive", "5cc824ac"): "pid liveness probe fallback: warns by name with pid+errno and answers UNKNOWN, which the idle gate refuses on — a lock is never stolen on an unprobeable pid",
+    ("scale-ab-driver.py", "Driver.read_lock", "b8e2cff9"): "run-lock read: returns ('unknown', 'cannot read <path> (errno N: ...)'); 'unknown' is NOT free, so the idle gate keeps waiting and then aborts with that reason",
+    ("scale-ab-driver.py", "Driver.read_verdict", "9369fc70"): "launcher.log read while a leg runs: warns with path+errno and reports NO verdict — the safe direction, since a leg is only finished when a verdict is READ and the process is gone",
+    ("scale-ab-driver.py", "Driver.tail", "6756b446"): "log tail quoted inside a message: warns with path+errno and quotes nothing; narration only, never a verdict input",
+    ("scale-ab-driver.py", "env_get", "5030704b"): "compose .env read for COMPOSE_PROJECT_NAME: warns with path+errno and falls back to the documented default, which --project overrides (same contract as scale-miniladder.py's env_get)",
     # The four 2026-08-16 chown-swallow findings (enrichment seed, processors
     # seed, appid/cloud fixtures, vuln SUDO_UID dir) were RESOLVED the same
     # day: all now route through chown_tree (repair-or-refuse), and the vuln
@@ -414,19 +466,63 @@ def escalates(node: ast.AST) -> bool:
     return False
 
 
-def violation_key(path: Path, lineno: int) -> tuple[str, int]:
-    return (path.name, lineno)
+def qualname_map(tree: ast.AST) -> dict[ast.AST, str]:
+    """Every node -> the dotted def/class chain enclosing it ('' at module level)."""
+    out: dict[ast.AST, str] = {}
+
+    def walk(node: ast.AST, chain: tuple[str, ...]) -> None:
+        for child in ast.iter_child_nodes(node):
+            inner = chain
+            if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                inner = chain + (child.name,)
+            out[child] = ".".join(inner)
+            walk(child, inner)
+
+    walk(tree, ())
+    return out
 
 
-def literal_swallow_sites() -> dict[tuple[str, int], str]:
-    """All rule-1 matches, allowlisted or not: key -> offending first line."""
-    out: dict[tuple[str, int], str] = {}
+def handler_digest(segment: str) -> str:
+    """Stable digest of a handler's source: dedented, trailing space stripped."""
+    body = "\n".join(line.rstrip()
+                     for line in textwrap.dedent(segment).strip().splitlines())
+    return hashlib.sha256(body.encode()).hexdigest()[:8]
+
+
+def violation_key(path: Path, src: str, node: ast.ExceptHandler,
+                  quals: dict[ast.AST, str]) -> AllowKey:
+    """Content-addressed ALLOWLIST key for one `except` handler."""
+    return (path.name, quals.get(node, "") or "<module>",
+            handler_digest(ast.get_source_segment(src, node) or ""))
+
+
+def handler_keys_by_line(path: Path) -> dict[int, AllowKey]:
+    """`except`-clause line -> content key, for every handler in a .py script."""
+    if path.suffix != ".py":
+        return {}
+    src = path.read_text(errors="replace")
+    tree = ast.parse(src, str(path))
+    quals = qualname_map(tree)
+    return {n.lineno: violation_key(path, src, n, quals)
+            for n in ast.walk(tree) if isinstance(n, ast.ExceptHandler)}
+
+
+def literal_swallow_sites() -> dict[AllowKey, str]:
+    """All rule-1 matches, allowlisted or not: key -> offending first line.
+
+    Keyed by handler content like rule 2, so a literal swallow that merely
+    drifts down the file keeps its reviewed entry. A .sh match has no AST and
+    falls back to the legacy (filename, lineno) key.
+    """
+    out: dict[AllowKey, str] = {}
     for path in script_files(".py") + script_files(".sh"):
         text = path.read_text(errors="replace")
+        by_line = handler_keys_by_line(path)
         for rx in LITERAL_SWALLOWS:
             for m in rx.finditer(text):
                 lineno = text.count("\n", 0, m.start()) + 1
-                out[violation_key(path, lineno)] = (
+                key = by_line.get(lineno, (path.name, lineno))
+                out[key] = (
                     f"{path.relative_to(ROOT)}:{lineno}: {m.group(0).splitlines()[0]}")
     return out
 
@@ -447,10 +543,13 @@ def test_oserror_handlers_escalate_or_are_reviewed():
     PermissionError in scripts/*.py must escalate (raise / fail( / die( /
     abort( / refuse( / sys.exit) or carry a reviewed ALLOWLIST entry here."""
     violations: list[str] = []
-    seen_allowlisted: set[tuple[str, int]] = set()
+    seen_allowlisted: set[AllowKey] = set()
+    seen_keys: dict[AllowKey, int] = {}
+    ambiguous: list[str] = []
     for path in script_files(".py"):
         src = path.read_text(errors="replace")
         tree = ast.parse(src, str(path))
+        quals = qualname_map(tree)
         for node in ast.walk(tree):
             if not isinstance(node, ast.ExceptHandler):
                 continue
@@ -458,24 +557,43 @@ def test_oserror_handlers_escalate_or_are_reviewed():
                 continue
             if escalates(node):
                 continue
-            key = violation_key(path, node.lineno)
+            key = violation_key(path, src, node, quals)
+            # One key must address exactly one site, or a single reviewed entry
+            # would silently exempt two handlers. Distinct across all 195
+            # handlers today; if it ever collides, disambiguate the bodies.
+            if key in seen_keys:
+                ambiguous.append(
+                    f"{key} addresses both {path.name}:{seen_keys[key]} and "
+                    f"{path.name}:{node.lineno}")
+            seen_keys[key] = node.lineno
             if key in ALLOWLIST:
                 seen_allowlisted.add(key)
                 continue
             first = (ast.get_source_segment(src, node) or "").splitlines()
             head = first[0] if first else ""
-            violations.append(f"{path.relative_to(ROOT)}:{node.lineno}: {head}")
+            violations.append(
+                f"{path.relative_to(ROOT)}:{node.lineno}: {head}\n      "
+                f"allowlist key (if reviewed): {key}")
     assert not violations, (
         "§16.1: OSError/PermissionError caught without escalation (the "
         "warn-and-continue class that lost 238k dead-letter payloads). Either "
         "escalate, or add a REVIEWED allowlist entry in this file:\n  "
         + "\n  ".join(violations)
     )
+    assert not ambiguous, (
+        "two handlers share one ALLOWLIST key — a single reviewed exemption "
+        "would cover both; make the bodies distinguishable:\n  "
+        + "\n  ".join(ambiguous))
     # The allowlist must not rot: every entry still matches a live site (a
-    # rule-2 handler or a rule-1 literal), so a fixed/moved handler forces the
-    # entry's removal — and line drift is loud.
-    stale = sorted(set(ALLOWLIST) - seen_allowlisted - set(literal_swallow_sites()))
-    assert not stale, f"stale ALLOWLIST entries (site fixed or moved — update this file): {stale}"
+    # rule-2 handler or a rule-1 literal), so a handler that is FIXED, deleted,
+    # or edited at all forces the entry's re-review. Line drift alone no longer
+    # does — the key is the handler's content, not its address.
+    stale = sorted(set(ALLOWLIST) - seen_allowlisted - set(literal_swallow_sites()), key=str)
+    assert not stale, (
+        "stale ALLOWLIST entries (the handler was fixed, deleted, or its body "
+        "changed — re-review the site and re-key the entry; "
+        "`python3 tests/test_error_swallow_guard.py` prints current keys): "
+        f"{stale}")
 
 
 def test_chown_remedy_never_ships_as_warn_and_continue():
@@ -512,3 +630,29 @@ def test_chown_remedy_never_ships_as_warn_and_continue():
         "ownership (see chown_tree / tests/test_install_data_dirs.py):\n  "
         + "\n  ".join(violations)
     )
+
+
+def _print_keys() -> None:
+    """Author's aid: print the ALLOWLIST key of every non-escalating handler.
+
+    Run when adding an exemption or re-keying one whose body changed — the key
+    is derived here, never hand-written, so it can never disagree with the code.
+    """
+    for path in script_files(".py"):
+        src = path.read_text(errors="replace")
+        tree = ast.parse(src, str(path))
+        quals = qualname_map(tree)
+        for node in sorted((n for n in ast.walk(tree)
+                            if isinstance(n, ast.ExceptHandler)),
+                           key=lambda n: n.lineno):
+            if not (caught_names(node.type) & TARGET_EXC) or escalates(node):
+                continue
+            key = violation_key(path, src, node, quals)
+            mark = "PINNED " if key in ALLOWLIST else "UNPINNED"
+            head = (ast.get_source_segment(src, node) or "").splitlines()
+            print(f"{mark} {key} -> {path.name}:{node.lineno}: "
+                  f"{head[0] if head else ''}")
+
+
+if __name__ == "__main__":
+    _print_keys()
