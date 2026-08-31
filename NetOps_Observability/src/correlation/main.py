@@ -11,9 +11,11 @@ forever); this module owns everything that touches the world:
   * Normalize every event into canonical Signals (producers + the cloud /
     app-identity / wireless intakes), tenant-scoped end to end — a signal
     never crosses its tenant.
-  * Assemble per-tenant windows and run engine v3 in the default thread-pool
-    executor: storm-window CPU must never starve the consumer heartbeat or
-    /healthz (inputs are snapshotted tuples, so purity survives the offload).
+  * Assemble per-tenant windows and run engine v3 on the dedicated, BOUNDED
+    offload plane (`_offload`): storm-window CPU must never starve the
+    consumer heartbeat or /healthz (inputs are snapshotted tuples, so purity
+    survives the offload), and admission is bounded so a caller that outruns
+    the workers is pushed back on rather than queued invisibly.
   * Persist snapshots + signals through CHBatcher (bounded, size/time-flushed
     batches), with verdict / attribution fields flattened for the UI.
   * Serve the read API: /findings, /correlations (incl. /{id}/replay, which
@@ -42,6 +44,7 @@ import time
 import uuid
 from collections import Counter, OrderedDict, deque
 from collections.abc import Awaitable, Callable, Iterable, Sequence
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from dataclasses import replace as dc_replace
@@ -140,6 +143,7 @@ from producers import (
 from rank_memo import RankMemo
 from replay import replay_object
 from routing_direction import forwarding_pairs, routing_direction_source
+from scoring import template_scoring_metric_lines
 from series_budget import derive_max_series
 from signals import (
     DeadLetter,
@@ -4124,25 +4128,88 @@ class sync_span:
         return False
 
 
-# ── tracker 164: PASSIVE offload accounting (measurement only) ────────────────
+# ── tracker 164: the BOUNDED offload plane ───────────────────────────────────
 #
-# `_offload` hands work to asyncio's DEFAULT executor. That executor's queue is
-# an unbounded `SimpleQueue`: submission never blocks and never fails, so a
-# producer that outruns the workers builds an invisible backlog whose only
-# symptom is latency somewhere else. The architecture review flagged that as a
-# suspected contributor to the 12-19 minute drain lag — a suspicion with no
-# measurement behind it.
+# WHAT THIS REPLACED. `_offload` used to hand work to asyncio's DEFAULT
+# executor (`run_in_executor(None, …)`). Its WORKER count was bounded
+# (`min(32, cpu+4)` — 8 on the 4-core box) but its work QUEUE is an unbounded
+# `SimpleQueue`: submission never blocked and never failed, so a producer that
+# outran the workers built an invisible backlog whose only symptom was latency
+# somewhere else, and admission was instrumentation-only. §9 requires a bounded
+# queue with real backpressure. The first wave of this tracker added the
+# measurement; this is the bound the measurement justified.
 #
-# This block adds the measurement and NOTHING else. Admission is unchanged, the
-# executor is unchanged, no work is rejected or delayed. The question it exists
-# to answer is single: does the offload queue actually grow, and does its wait
-# time track the observed lag? Bounded admission (if the evidence justifies it)
-# is a separate change.
+# THE PLANE, in three parts:
+#
+#   1. A DEDICATED executor (CORR_OFFLOAD_WORKERS, default 4). The default
+#      executor is shared with everything else in the process that reaches for
+#      a thread — `asyncio.to_thread` for the diagnostics snapshots and the
+#      cloud-log tailer's blocking reads — so "the offload queue" was never
+#      actually the offload queue, and its size was somebody else's decision.
+#      It is ours now; `to_thread` keeps the default pool to itself.
+#
+#      WHY 4. Everything routed here is pure-CPU Python holding the GIL
+#      (`run_window`, the snapshot hashers, `_ndjson_body`'s C encoder), so
+#      threads past the first buy INTERLEAVING, not parallelism — the ceiling
+#      is one core-equivalent however many run. What the count must cover is
+#      the number of INDEPENDENT async lineages that can legitimately be inside
+#      an `await _offload(...)` at the same instant, because a lineage that
+#      finds no free worker waits on work it has nothing to do with. There are
+#      five, of which three are concurrently hot:
+#        * `engine_loop` — `prepare_run_window`, `run_window`, the continuation
+#          indices, `find_merges`, and every `_snap_call` / `_decision_offload`
+#          on the Decision path (all strictly serial inside the cycle);
+#        * `_evidence_consumer` — `_archive_chunk` and the child-row pages;
+#        * `_evidence_flusher` — `_batch_token` / `_ndjson_body` for the
+#          Evidence batcher;
+#        * `batch_flush_loop` — the same two for SIGNAL_BATCH;
+#        * `consume` — `SIGNAL_BATCH.flush()` at its commit points (in practice
+#          alternating with batch_flush_loop; both drain the one batcher).
+#      4 covers the three hot lineages with a slot to spare and matches the
+#      box's core count (the single-box TTUR goal) rather than the default
+#      executor's incidental cpu+4. Env-tunable, floored at 1.
+#
+#   2. A BOUNDED, STRICTLY FIFO ADMISSION GATE (CORR_OFFLOAD_INFLIGHT_MAX,
+#      default 2x workers). In-flight = queued + executing. When the plane is
+#      full the caller AWAITS: nothing is dropped, nothing is rejected, nothing
+#      queues without limit. The bound is a SAFETY bound rather than a
+#      throttle — with five lineages it does not bind in steady state, and the
+#      day a caller fans out with `gather` it turns an unbounded backlog into a
+#      visible, measured wait (`corr_offload_admission_waits_total`).
+#
+#   3. DEADLOCK AUDIT — must stay true. A gate held across an await deadlocks
+#      the moment offloaded work needs the gate itself. It cannot here:
+#      everything submitted is a SYNCHRONOUS pure function running on an
+#      executor thread, and `_offload` is a coroutine, so an offloaded callable
+#      has no way to re-enter it. None of them (engine `run_window` /
+#      `prepare_run_window` / `ContinuationIndex` / `find_merges`, the
+#      ObjectSnapshot hashers and row builders, `_archive_chunk`,
+#      `_ndjson_body`, `_batch_token`) touches an executor, an event loop, or a
+#      lock this module holds. Every call site awaits its offload to completion
+#      before starting another, so no lineage holds a slot while waiting on a
+#      second. IF a future change ever offloads something that itself schedules
+#      an offload, this gate must grow a reservation for the nested call — or
+#      the plane will wedge. `test_offload_instrumentation_164.py` pins the
+#      audit as an assertion over the call sites, not as a comment.
 #
 # Worker callbacks run on executor threads, so every counter below is updated
-# under one lock: `x += 1` is load/add/store and would lose counts across eight
+# under one lock: `x += 1` is load/add/store and would lose counts across
 # workers, and instrumentation that undercounts is worse than none.
 CORR_OFFLOAD_SAMPLES = max(64, int(os.environ.get("CORR_OFFLOAD_SAMPLES", "1024")))
+# Floored at 1: a zero-worker plane would hang forever, so a config typo must
+# degrade to serial execution, never to a stall.
+CORR_OFFLOAD_WORKERS = max(1, int(os.environ.get("CORR_OFFLOAD_WORKERS", "4")))
+# Queued + executing ceiling. Never below the worker count — a limit under it
+# would leave workers idle behind the gate, which is a throughput bug dressed
+# as a safety bound.
+CORR_OFFLOAD_INFLIGHT_MAX = max(
+    CORR_OFFLOAD_WORKERS,
+    int(os.environ.get("CORR_OFFLOAD_INFLIGHT_MAX",
+                       str(2 * CORR_OFFLOAD_WORKERS))))
+# How long `offload_stop` gives in-flight calls before it abandons them (and
+# says so). Queued-but-unstarted calls are cancelled immediately: they have not
+# begun, so nothing half-done is left behind.
+CORR_OFFLOAD_DRAIN_S = max(0.0, float(os.environ.get("CORR_OFFLOAD_DRAIN_S", "5")))
 
 _OFFLOAD_LOCK = threading.Lock()
 _OFFLOAD_SEQ = 0
@@ -4158,32 +4225,127 @@ OFFLOAD_DEPTH_PEAK = 0
 OFFLOAD_ACTIVE_PEAK = 0
 OFFLOAD_WAIT_MAX_S = 0.0
 OFFLOAD_EXEC_MAX_S = 0.0
+OFFLOAD_ADMISSION_WAITS = 0        # calls that had to wait for a slot
+OFFLOAD_ADMISSION_WAIT_MAX_S = 0.0
+OFFLOAD_ABANDONED = 0              # in-flight calls left behind by offload_stop
+
+
+class _OffloadGate:
+    """Bounded admission for the offload plane. Strictly FIFO, never refuses.
+
+    `asyncio.Semaphore` would do the counting, but on 3.10 `acquire()` re-checks
+    the counter before an already-woken waiter is rescheduled, so a newly
+    arriving caller can barge past one that is already queued — under sustained
+    submission that is starvation, and a bound that starves is worse than no
+    bound. Admission order here is arrival order, always: a caller that finds
+    anyone waiting joins the back of the line rather than taking a free slot.
+
+    A slot covers QUEUED + EXECUTING time; it is released when the offloaded
+    call returns (or raises, or its awaiter is cancelled), never before.
+    """
+
+    def __init__(self, limit: int) -> None:
+        self._limit = max(1, int(limit))
+        self._inflight = 0
+        self._waiters: deque[asyncio.Future[None]] = deque()
+
+    @property
+    def limit(self) -> int:
+        return self._limit
+
+    @property
+    def inflight(self) -> int:
+        return self._inflight
+
+    @property
+    def waiting(self) -> int:
+        return len(self._waiters)
+
+    async def acquire(self) -> float:
+        """Reserve one slot, awaiting one if the plane is full. Returns the
+        seconds spent waiting — 0.0 on the uncontended path, which is the
+        steady state and must stay free of a clock read that means nothing."""
+        if self._inflight < self._limit and not self._waiters:
+            self._inflight += 1
+            return 0.0
+        fut: asyncio.Future[None] = asyncio.get_running_loop().create_future()
+        self._waiters.append(fut)
+        t0 = time.monotonic()
+        try:
+            await fut
+        except asyncio.CancelledError:
+            # Two cases, and neither may leak a slot: still in line (drop out),
+            # or already granted the slot by `release` but cancelled before
+            # resuming (hand it straight to the next in line).
+            try:
+                self._waiters.remove(fut)
+            except ValueError:
+                self.release()
+            raise
+        return time.monotonic() - t0
+
+    def release(self) -> None:
+        """Give the slot up. It goes to the longest-waiting caller if there is
+        one — `_inflight` stays put in that case, because the slot never became
+        free."""
+        while self._waiters:
+            fut = self._waiters.popleft()
+            if not fut.done():
+                fut.set_result(None)
+                return
+        self._inflight -= 1
+
+
+_OFFLOAD_STATE_LOCK = threading.Lock()
+_OFFLOAD_EXECUTOR: ThreadPoolExecutor | None = None
+_OFFLOAD_GATE: _OffloadGate | None = None
+_OFFLOAD_GATE_LOOP: asyncio.AbstractEventLoop | None = None
+
+
+def _offload_plane(loop: asyncio.AbstractEventLoop) -> tuple[ThreadPoolExecutor,
+                                                             _OffloadGate]:
+    """The executor + admission gate for `loop`, built on first use.
+
+    The EXECUTOR is process-wide: threads are not loop-bound, and rebuilding a
+    pool per loop would churn threads for nothing.
+
+    The GATE is per-loop and rebuilt when the loop changes. Its waiters are
+    futures, and a future belongs to the loop that created it; a gate carried
+    across loops would either hand a slot to a future nobody will ever await
+    (tests run every coroutine under its own `asyncio.run`) or carry an
+    `_inflight` count from a loop that no longer exists. Same rule, and the same
+    reason, as `_EVIDENCE_LOOP`.
+    """
+    global _OFFLOAD_EXECUTOR, _OFFLOAD_GATE, _OFFLOAD_GATE_LOOP
+    with _OFFLOAD_STATE_LOCK:
+        if _OFFLOAD_EXECUTOR is None:
+            _OFFLOAD_EXECUTOR = ThreadPoolExecutor(
+                max_workers=CORR_OFFLOAD_WORKERS,
+                thread_name_prefix="corr-offload")
+        if _OFFLOAD_GATE is None or _OFFLOAD_GATE_LOOP is not loop:
+            _OFFLOAD_GATE = _OffloadGate(CORR_OFFLOAD_INFLIGHT_MAX)
+            _OFFLOAD_GATE_LOOP = loop
+        return _OFFLOAD_EXECUTOR, _OFFLOAD_GATE
 
 
 def _offload_max_workers() -> tuple[int, str]:
-    """How many threads the default executor may use, and where that came from.
+    """The offload executor's thread ceiling, and where that number came from.
 
-    asyncio creates the default executor lazily, so before the first offload
-    there is nothing to read. Report the source rather than presenting a
-    computed guess as a measurement.
+    Reads OUR executor, never the loop. The first version of this metric asked
+    `asyncio.get_running_loop()._default_executor`, which uvloop — what actually
+    runs in the container — does not have; /metrics and /healthz raised
+    AttributeError on startup and the container never went healthy. A dedicated
+    executor removes the question entirely: this function touches no loop, so it
+    is safe from the health sidecar's thread as well as from the loop.
     """
-    # Both lookups are best-effort and must NEVER raise: this runs inside
-    # /metrics and /healthz, and instrumentation that can break the health probe
-    # is worse than instrumentation that reports "unknown".
-    #   * RuntimeError  — called outside a running loop (no executor exists yet)
-    #   * AttributeError — uvloop, which is what actually runs in the container:
-    #     its Loop has no `_default_executor` at all. The stdlib loop does, so
-    #     unit tests on the default policy never saw this; the container did,
-    #     immediately, in the metrics path, and never went healthy.
-    try:
-        ex = getattr(asyncio.get_running_loop(), "_default_executor", None)
-    except RuntimeError:
-        ex = None
+    with _OFFLOAD_STATE_LOCK:
+        ex = _OFFLOAD_EXECUTOR
     workers = getattr(ex, "_max_workers", None)
     if isinstance(workers, int) and workers > 0:
         return workers, "executor"
-    # CPython's documented default when max_workers is unset.
-    return min(32, (os.cpu_count() or 1) + 4), "cpython_default"
+    # Nothing has been offloaded yet, so the pool does not exist. Report the
+    # configured value and SAY it is configuration, not a measurement.
+    return CORR_OFFLOAD_WORKERS, "config"
 
 
 def _quantile(sorted_vals: list[float], q: float) -> float:
@@ -4195,7 +4357,8 @@ def _quantile(sorted_vals: list[float], q: float) -> float:
 
 
 def offload_stats() -> dict[str, object]:
-    """A consistent snapshot of the offload queue. Read-only."""
+    """A consistent snapshot of the offload plane. Read-only, loop-free (the
+    health sidecar calls it from its own thread)."""
     now = time.monotonic()
     with _OFFLOAD_LOCK:
         pending = list(_OFFLOAD_PENDING.values())
@@ -4206,7 +4369,11 @@ def offload_stats() -> dict[str, object]:
         completed, failed = OFFLOAD_COMPLETED, OFFLOAD_FAILED
         depth_peak, active_peak = OFFLOAD_DEPTH_PEAK, OFFLOAD_ACTIVE_PEAK
         wait_max, exec_max = OFFLOAD_WAIT_MAX_S, OFFLOAD_EXEC_MAX_S
+        adm_waits, adm_wait_max = OFFLOAD_ADMISSION_WAITS, OFFLOAD_ADMISSION_WAIT_MAX_S
+        abandoned = OFFLOAD_ABANDONED
     workers, workers_src = _offload_max_workers()
+    with _OFFLOAD_STATE_LOCK:
+        gate = _OFFLOAD_GATE
     return {
         "queue_depth": len(pending),
         "queue_depth_peak": depth_peak,
@@ -4214,11 +4381,17 @@ def offload_stats() -> dict[str, object]:
         "active_workers_peak": active_peak,
         "max_workers": workers,
         "max_workers_source": workers_src,
-        # The default executor's queue is unbounded, so nothing is ever refused.
-        # Reported as a constant 0 so the absence of rejection is an explicit
-        # fact rather than a missing metric.
+        # Nothing is ever refused — a full plane makes the caller WAIT (see
+        # `_OffloadGate`). Reported as a constant 0 so "no drops" stays an
+        # explicit, scrapeable fact rather than a missing metric.
         "rejected": 0,
-        "queue_bounded": False,
+        "queue_bounded": True,
+        "admission_limit": gate.limit if gate is not None else CORR_OFFLOAD_INFLIGHT_MAX,
+        "admission_inflight": gate.inflight if gate is not None else 0,
+        "admission_waiting": gate.waiting if gate is not None else 0,
+        "admission_waits_total": adm_waits,
+        "admission_wait_max_s": round(adm_wait_max, 6),
+        "abandoned_total": abandoned,
         "oldest_queued_age_s": round(now - min(pending), 6) if pending else 0.0,
         "submitted_total": submitted,
         "started_total": started,
@@ -4239,56 +4412,138 @@ def offload_stats() -> dict[str, object]:
 async def _offload(fn, /, *args, **kwargs):
     """Run a size-unbounded PURE-CPU call off the event loop.
 
-    The default thread-pool executor: the call still holds the GIL, but it no
+    The dedicated offload executor: the call still holds the GIL, but it no
     longer owns the LOOP THREAD, so the loop's own tasks — critically
     aiokafka's heartbeat and fetch coroutines — are scheduled at the
     interpreter's switch interval instead of waiting out the whole call.
     Only for PURE functions (no shared mutable state, no IO): everything
-    routed here is a serializer/hasher over an immutable snapshot.
+    routed here is a serializer/hasher/ranker over an immutable snapshot.
 
-    Instrumented per tracker 164 — timings only, admission unchanged.
+    ADMISSION IS BOUNDED (tracker 164). Queued + executing may not exceed
+    CORR_OFFLOAD_INFLIGHT_MAX; a caller that arrives at a full plane AWAITS its
+    turn. Nothing is dropped and nothing is refused — the change is WHERE the
+    work waits (in the caller, visibly, with backpressure to whoever is feeding
+    it) and not WHAT runs. Results, exceptions and ordering are exactly what
+    the default executor produced.
     """
     global _OFFLOAD_SEQ, OFFLOAD_SUBMITTED, OFFLOAD_DEPTH_PEAK
-    enqueued = time.monotonic()
-    with _OFFLOAD_LOCK:
-        _OFFLOAD_SEQ += 1
-        seq = _OFFLOAD_SEQ
-        _OFFLOAD_PENDING[seq] = enqueued
-        OFFLOAD_SUBMITTED += 1
-        OFFLOAD_DEPTH_PEAK = max(OFFLOAD_DEPTH_PEAK, len(_OFFLOAD_PENDING))
-    call = functools.partial(fn, *args, **kwargs)
-
-    def _timed():
-        # Runs on an executor thread: the gap between `enqueued` and here IS the
-        # queue wait, which is the whole point of the exercise.
-        global OFFLOAD_STARTED, OFFLOAD_ACTIVE_PEAK, OFFLOAD_WAIT_MAX_S
-        global OFFLOAD_COMPLETED, OFFLOAD_FAILED, OFFLOAD_EXEC_MAX_S
-        started = time.monotonic()
-        wait = started - enqueued
-        with _OFFLOAD_LOCK:
-            _OFFLOAD_PENDING.pop(seq, None)
-            _OFFLOAD_RUNNING[seq] = started
-            OFFLOAD_STARTED += 1
-            OFFLOAD_ACTIVE_PEAK = max(OFFLOAD_ACTIVE_PEAK, len(_OFFLOAD_RUNNING))
-            _OFFLOAD_WAIT_S.append(wait)
-            OFFLOAD_WAIT_MAX_S = max(OFFLOAD_WAIT_MAX_S, wait)
-        ok = False
-        try:
-            result = call()
-            ok = True
-            return result
-        finally:
-            elapsed = time.monotonic() - started
+    global OFFLOAD_ADMISSION_WAITS, OFFLOAD_ADMISSION_WAIT_MAX_S
+    loop = asyncio.get_running_loop()
+    executor, gate = _offload_plane(loop)
+    waited = await gate.acquire()
+    try:
+        if waited > 0.0:
             with _OFFLOAD_LOCK:
-                _OFFLOAD_RUNNING.pop(seq, None)
-                _OFFLOAD_EXEC_S.append(elapsed)
-                OFFLOAD_EXEC_MAX_S = max(OFFLOAD_EXEC_MAX_S, elapsed)
-                if ok:
-                    OFFLOAD_COMPLETED += 1
-                else:
-                    OFFLOAD_FAILED += 1
+                OFFLOAD_ADMISSION_WAITS += 1
+                OFFLOAD_ADMISSION_WAIT_MAX_S = max(OFFLOAD_ADMISSION_WAIT_MAX_S,
+                                                   waited)
+        # Taken AFTER admission on purpose: `corr_offload_wait_seconds` keeps
+        # its pre-164 meaning (time queued in the executor), and the time spent
+        # at the gate is its own metric. Folding them together would have made
+        # the two waves' numbers incomparable.
+        enqueued = time.monotonic()
+        with _OFFLOAD_LOCK:
+            _OFFLOAD_SEQ += 1
+            seq = _OFFLOAD_SEQ
+            _OFFLOAD_PENDING[seq] = enqueued
+            OFFLOAD_SUBMITTED += 1
+            OFFLOAD_DEPTH_PEAK = max(OFFLOAD_DEPTH_PEAK, len(_OFFLOAD_PENDING))
+        call = functools.partial(fn, *args, **kwargs)
 
-    return await asyncio.get_running_loop().run_in_executor(None, _timed)
+        def _timed():
+            # Runs on an executor thread: the gap between `enqueued` and here IS
+            # the queue wait, which is the whole point of the exercise.
+            global OFFLOAD_STARTED, OFFLOAD_ACTIVE_PEAK, OFFLOAD_WAIT_MAX_S
+            global OFFLOAD_COMPLETED, OFFLOAD_FAILED, OFFLOAD_EXEC_MAX_S
+            started = time.monotonic()
+            wait = started - enqueued
+            with _OFFLOAD_LOCK:
+                _OFFLOAD_PENDING.pop(seq, None)
+                _OFFLOAD_RUNNING[seq] = started
+                OFFLOAD_STARTED += 1
+                OFFLOAD_ACTIVE_PEAK = max(OFFLOAD_ACTIVE_PEAK, len(_OFFLOAD_RUNNING))
+                _OFFLOAD_WAIT_S.append(wait)
+                OFFLOAD_WAIT_MAX_S = max(OFFLOAD_WAIT_MAX_S, wait)
+            ok = False
+            try:
+                result = call()
+                ok = True
+                return result
+            finally:
+                elapsed = time.monotonic() - started
+                with _OFFLOAD_LOCK:
+                    _OFFLOAD_RUNNING.pop(seq, None)
+                    _OFFLOAD_EXEC_S.append(elapsed)
+                    OFFLOAD_EXEC_MAX_S = max(OFFLOAD_EXEC_MAX_S, elapsed)
+                    if ok:
+                        OFFLOAD_COMPLETED += 1
+                    else:
+                        OFFLOAD_FAILED += 1
+
+        try:
+            return await loop.run_in_executor(executor, _timed)
+        except asyncio.CancelledError:
+            # Cancelled while still QUEUED: `_timed` will never run, so nothing
+            # else will ever clear this seq and the depth gauge — now a bound,
+            # not just a number — would drift up forever. A no-op once the call
+            # has started; `_timed`'s own finally owns it from there.
+            with _OFFLOAD_LOCK:
+                _OFFLOAD_PENDING.pop(seq, None)
+            raise
+    finally:
+        gate.release()
+
+
+async def offload_stop(*, drain_s: float | None = None) -> dict[str, int]:
+    """Shut the offload plane down: drain what is running, cancel what is only
+    queued, release the threads. Idempotent; safe to call with no plane.
+
+    Called from `lifespan` AFTER the loop tasks are cancelled and the Evidence
+    and signal batchers have had their shutdown flush — those flushes offload,
+    so tearing the plane down first would strand exactly the rows the drain
+    exists to save.
+
+    The drain awaits (it never blocks the loop thread) and is bounded by
+    CORR_OFFLOAD_DRAIN_S. Anything still executing at the deadline is COUNTED
+    and LOGGED rather than waited on forever: a `run_window` mid-storm can
+    outlast any deadline worth having, and a shutdown that hangs is a worse
+    failure than one that reports what it left. The worker threads are
+    non-daemon and joined by the interpreter's own atexit hook, so nothing
+    outlives the process either way.
+    """
+    global _OFFLOAD_EXECUTOR, _OFFLOAD_GATE, _OFFLOAD_GATE_LOOP, OFFLOAD_ABANDONED
+    with _OFFLOAD_STATE_LOCK:
+        ex, _OFFLOAD_EXECUTOR = _OFFLOAD_EXECUTOR, None
+        _OFFLOAD_GATE = None
+        _OFFLOAD_GATE_LOOP = None
+    if ex is None:
+        return {"drained": 0, "abandoned": 0}
+    budget = CORR_OFFLOAD_DRAIN_S if drain_s is None else max(0.0, drain_s)
+    deadline = time.monotonic() + budget
+    with _OFFLOAD_LOCK:
+        finished_at_entry = OFFLOAD_COMPLETED + OFFLOAD_FAILED
+    while True:
+        with _OFFLOAD_LOCK:
+            left = len(_OFFLOAD_PENDING) + len(_OFFLOAD_RUNNING)
+        if left == 0 or time.monotonic() >= deadline:
+            break
+        await asyncio.sleep(0.01)
+    with _OFFLOAD_LOCK:
+        abandoned = len(_OFFLOAD_PENDING) + len(_OFFLOAD_RUNNING)
+        OFFLOAD_ABANDONED += abandoned
+        # What THIS drain saved, not a lifetime total: the calls that were still
+        # in flight when the stop began and finished before the deadline. A
+        # process-lifetime figure here would read as success on a shutdown that
+        # actually abandoned everything.
+        drained = OFFLOAD_COMPLETED + OFFLOAD_FAILED - finished_at_entry
+    # cancel_futures drops the never-started ones; wait=False so a single long
+    # in-flight call cannot hold the shutdown path hostage past the deadline we
+    # already honoured above.
+    ex.shutdown(wait=False, cancel_futures=True)
+    if abandoned:
+        log.warning("offload plane stopped with %d call(s) still in flight "
+                    "after %.1fs", abandoned, budget)
+    return {"drained": drained, "abandoned": abandoned}
 
 
 def _snap_elements(snap: ObjectSnapshot) -> int:
@@ -10093,6 +10348,11 @@ async def lifespan(_app: FastAPI):
         # failure here was already counted by _note_ch_failure inside flush.
         with contextlib.suppress(Exception):
             await SIGNAL_BATCH.flush()
+        # tracker 164: the offload plane goes LAST of the compute teardown —
+        # both flushes above offload their body/token builds, so stopping it
+        # first would strand exactly the rows the drain exists to save.
+        with contextlib.suppress(Exception):
+            await offload_stop()
         await ch.close()
 
 
@@ -10596,6 +10856,10 @@ def _metrics_text() -> str:
         "# HELP corr_rank_memo_evicted_bytes_total Bytes evicted from the level-1 rank memo by either bound.",
         "# TYPE corr_rank_memo_evicted_bytes_total counter",
         f"corr_rank_memo_evicted_bytes_total {_rm['evicted_bytes']}",
+        # tracker 167: what the kind index actually buys, next to the memo it
+        # sits behind. scored/candidates IS the selectivity ratio; the metric
+        # NAMES are owned by scoring.py so they cannot drift from the counters.
+        *template_scoring_metric_lines(),
         # The two-level decision memo in one series: level 1 skips rank(), level
         # 2 skips the whole snapshot. Level 2 resets every epoch; level 1 does not.
         "# HELP corr_decision_memo_level Decision-memo hits by completeness level.",
@@ -10790,8 +11054,11 @@ def _metrics_text() -> str:
     ]
     off = offload_stats()
     lines += [
-        # tracker 164 — PASSIVE. The default executor's queue is unbounded, so
-        # depth and wait are the only evidence that it is a bottleneck at all.
+        # tracker 164 — the BOUNDED offload plane. Read these three together:
+        # `queue_depth` is work sitting in the executor, `admission_waiting` is
+        # callers held at the gate because the plane is full, and
+        # `admission_waits_total` climbing is backpressure actually engaging —
+        # the signal that the offload plane, not the loop, is the bottleneck.
         "# HELP corr_offload_queue_depth Work submitted to the offload executor and not yet started.",
         "# TYPE corr_offload_queue_depth gauge",
         f"corr_offload_queue_depth {off['queue_depth']}",
@@ -10816,9 +11083,27 @@ def _metrics_text() -> str:
         "# HELP corr_offload_failed_total Offload calls that raised.",
         "# TYPE corr_offload_failed_total counter",
         f"corr_offload_failed_total {off['failed_total']}",
-        "# HELP corr_offload_rejected_total Offload submissions refused (always 0: the queue is unbounded).",
+        "# HELP corr_offload_rejected_total Offload submissions refused (always 0: a full plane makes the caller wait, it never drops).",
         "# TYPE corr_offload_rejected_total counter",
         f"corr_offload_rejected_total {off['rejected']}",
+        "# HELP corr_offload_admission_waits_total Offload calls that had to wait for a slot (backpressure engaged).",
+        "# TYPE corr_offload_admission_waits_total counter",
+        f"corr_offload_admission_waits_total {off['admission_waits_total']}",
+        "# HELP corr_offload_admission_wait_max_seconds Longest wait at the admission gate.",
+        "# TYPE corr_offload_admission_wait_max_seconds gauge",
+        f"corr_offload_admission_wait_max_seconds {off['admission_wait_max_s']:.6f}",
+        "# HELP corr_offload_admission_waiting Callers blocked at the admission gate right now.",
+        "# TYPE corr_offload_admission_waiting gauge",
+        f"corr_offload_admission_waiting {off['admission_waiting']}",
+        "# HELP corr_offload_admission_inflight Offload calls admitted (queued + executing).",
+        "# TYPE corr_offload_admission_inflight gauge",
+        f"corr_offload_admission_inflight {off['admission_inflight']}",
+        "# HELP corr_offload_admission_limit Admitted-call ceiling (CORR_OFFLOAD_INFLIGHT_MAX).",
+        "# TYPE corr_offload_admission_limit gauge",
+        f"corr_offload_admission_limit {off['admission_limit']}",
+        "# HELP corr_offload_abandoned_total Calls still in flight when the plane was stopped.",
+        "# TYPE corr_offload_abandoned_total counter",
+        f"corr_offload_abandoned_total {off['abandoned_total']}",
         "# HELP corr_offload_wait_seconds Time between submission and start of execution.",
         "# TYPE corr_offload_wait_seconds summary",
         f'corr_offload_wait_seconds{{quantile="0.5"}} {off["wait_p50_s"]:.6f}',
