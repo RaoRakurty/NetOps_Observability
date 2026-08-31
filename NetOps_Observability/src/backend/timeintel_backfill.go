@@ -305,11 +305,36 @@ func timeIntelBackfillPickSQL(lookbackSeconds, pageRows int, from, until timeint
 	default:
 		where += "\n   AND created_at <= " + timeIntelCHDateTime64(until.CreatedAt)
 	}
+	// ALIAS SHADOWING (2026-08-31 deploy pre-check, 186 hotfix). ClickHouse
+	// resolves a SELECT alias INSIDE the WHERE and ORDER BY of the same query.
+	// The first cut of this projection aliased the CONVERTED expressions back
+	// onto the column names they were converted from — `toString(correlation_id)
+	// AS correlation_id`, `<ISO text> AS created_at` — so every predicate below
+	// bound the String expressions instead of the typed columns:
+	//
+	//   Code 43 ILLEGAL_TYPE_OF_ARGUMENT — no operation greater between String
+	//   and DateTime64(3,'UTC')   (and Code 386 NO_COMMON_TYPE on the UUID once
+	//   only created_at was renamed).
+	//
+	// It was a DELAYED trap, not an obvious one: the cold branch carries no
+	// cursor predicate, so the FIRST pass succeeded and stored a watermark and
+	// every later pass hard-failed — and 43 is not in the 241/159 retryable set,
+	// so the worker stalled permanently rather than degrading.
+	//
+	// So the projected aliases are deliberately NON-SHADOWING (`_s`/`_iso`
+	// suffixes) and the WHERE + ORDER BY below therefore bind the RAW typed
+	// columns. ORDER BY matters as much as the predicates: the cursor is a
+	// (created_at, correlation_id) tuple compared server-side, and UUID TEXT
+	// order is not UUID NATIVE order — an ORDER BY that bound the String alias
+	// would scan in a different order than the cursor advances in, and objects
+	// between the two orders would be skipped permanently. The scan order and
+	// the cursor comparison must be the same order, which means both must be
+	// the raw columns. timeIntelPickPage reads the renamed result columns.
 	return `
-SELECT toString(tenant_id)      AS tenant_id,
-       toString(correlation_id) AS correlation_id,
+SELECT toString(tenant_id)      AS tenant_id_s,
+       toString(correlation_id) AS correlation_id_s,
        version                  AS version,
-       ` + chschema.ISO("created_at") + ` AS created_at
+       ` + chschema.ISO("created_at") + ` AS created_at_iso
   FROM netops.corr_current FINAL
  ` + where + `
  ORDER BY created_at ASC, correlation_id ASC
@@ -568,8 +593,10 @@ func (s *server) timeIntelPickPage(ctx context.Context, lookbackSeconds int, fro
 	}
 	out := make([]timeIntelBackfillKey, 0, len(rows))
 	for _, r := range rows {
-		id := strings.TrimSpace(asString(r["correlation_id"]))
-		created := parseCHTime(r["created_at"])
+		// The pick projects NON-SHADOWING aliases on purpose (see
+		// timeIntelBackfillPickSQL); these are those names, not the column names.
+		id := strings.TrimSpace(asString(r["correlation_id_s"]))
+		created := parseCHTime(r["created_at_iso"])
 		// Zero trust on upstream rows (§3): a key that cannot be rendered as a
 		// safe literal, or that carries no cursor position, is skipped rather
 		// than interpolated. Skipping is safe — the page's LAST key still
@@ -578,7 +605,7 @@ func (s *server) timeIntelPickPage(ctx context.Context, lookbackSeconds int, fro
 			continue
 		}
 		out = append(out, timeIntelBackfillKey{
-			TenantID:      asString(r["tenant_id"]),
+			TenantID:      asString(r["tenant_id_s"]),
 			CorrelationID: id,
 			Version:       int(asFloat(r["version"])),
 			CreatedAt:     created,

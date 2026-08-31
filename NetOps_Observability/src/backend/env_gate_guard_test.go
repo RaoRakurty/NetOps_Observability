@@ -50,6 +50,13 @@ var envGateExempt = map[string]string{
 	"SEAL_SWTPM_TEST":             "needs the swtpm secrets-seal sidecar running; hardware-adjacent, run by hand",
 	"SKIP_SEALED_VAULT_TEST":      "inverse gate — set to SKIP a test, so CI runs it precisely by NOT exporting this",
 	"SNMP_LIVE":                   "live SNMP device poll; needs lab hardware",
+	// Not an enable-gate: the timeintel live pick-shape check turns ITSELF on by
+	// probing (docker on PATH → a running *clickhouse* container → SELECT 1 →
+	// the netops corr tables), so CI exports nothing and it skips cleanly. This
+	// var only NAMES a non-default container or turns the check off (=off) — the
+	// SKIP_SEALED_VAULT_TEST shape, where exporting it in CI would REMOVE
+	// coverage rather than add it.
+	"TIMEINTEL_LIVE_CH_CONTAINER": "inverse/override gate — the live pick-shape check self-enables by probing docker; setting this only renames the container or disables it",
 }
 
 var envGateGetenvRe = regexp.MustCompile(`os\.Getenv\("([A-Z][A-Z0-9_]*)"\)`)

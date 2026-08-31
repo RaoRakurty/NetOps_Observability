@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"netops/backend/chhttp"
+	"netops/backend/internal/chschema"
 	"netops/backend/internal/platformdb"
 	"netops/backend/timeintel"
 )
@@ -136,8 +137,16 @@ func (f *synthCH) serve(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case strings.Contains(sql, "FROM netops.corr_current FINAL"):
 		f.pickSQL = append(f.pickSQL, sql)
+		shadow := aliasShadowError(sql)
 		rows := f.pick(sql)
 		f.mu.Unlock()
+		if shadow != "" {
+			// What the live server does with a shadowed alias (186 hotfix).
+			w.Header().Set("X-ClickHouse-Exception-Code", "43")
+			w.WriteHeader(http.StatusInternalServerError)
+			_, _ = io.WriteString(w, shadow)
+			return
+		}
 		writeSynthRows(w, rows)
 	case strings.Contains(sql, "FROM netops.corr_objects AS o"):
 		f.fetchSQL = append(f.fetchSQL, sql)
@@ -165,6 +174,52 @@ func writeSynthRows(w http.ResponseWriter, rows []map[string]any) {
 		rows = []map[string]any{}
 	}
 	_ = json.NewEncoder(w).Encode(map[string]any{"data": rows})
+}
+
+// reSelectAlias captures every `<expr> AS <name>` in a projection line.
+var reSelectAlias = regexp.MustCompile(`(?m)^\s*(.+?)\s+AS\s+([A-Za-z_][A-Za-z0-9_]*)\s*,?\s*$`)
+
+// aliasShadowError reproduces ClickHouse's alias-resolution rule, which is the
+// one thing this fake got wrong before the 186 hotfix: a SELECT alias is
+// visible INSIDE the WHERE and ORDER BY of the same query and takes precedence
+// over the column of that name. So `toString(correlation_id) AS correlation_id`
+// silently re-points every predicate below at a String, and the server answers
+//
+//	Code 43 ILLEGAL_TYPE_OF_ARGUMENT   (or 386 NO_COMMON_TYPE on the UUID)
+//
+// while a regex-parsing fake happily matched the predicate text and passed.
+//
+// The rule below is deliberately narrow — an alias is a violation only when its
+// defining expression is NOT the bare column of the same name (`version AS
+// version` is a no-op and legal) and the name is then USED in a clause that
+// ClickHouse resolves aliases in. That is exactly the shadowing class, with no
+// false positive on a plain self-alias.
+func aliasShadowError(sql string) string {
+	head, rest, ok := strings.Cut(sql, "\n  FROM ")
+	if !ok {
+		return ""
+	}
+	// The clauses ClickHouse resolves SELECT aliases inside.
+	clauses := rest
+	if i := strings.Index(rest, "\n WHERE "); i >= 0 {
+		clauses = rest[i:]
+	} else if i := strings.Index(rest, "\n ORDER BY "); i >= 0 {
+		clauses = rest[i:]
+	} else {
+		return ""
+	}
+	for _, m := range reSelectAlias.FindAllStringSubmatch(head, -1) {
+		expr, alias := strings.TrimSpace(m[1]), m[2]
+		if expr == alias {
+			continue // a legal no-op self-alias
+		}
+		if regexp.MustCompile(`\b` + regexp.QuoteMeta(alias) + `\b`).MatchString(clauses) {
+			return "Code: 43. DB::Exception: No operation greater between String and DateTime64(3, 'UTC'). " +
+				"(ILLEGAL_TYPE_OF_ARGUMENT) — SELECT alias " + alias +
+				" shadows the typed column it is derived from, and ClickHouse resolves it inside WHERE/ORDER BY"
+		}
+	}
+	return ""
 }
 
 // pick applies the watermark predicate and the page LIMIT the builder emitted.
@@ -214,9 +269,11 @@ func (f *synthCH) pick(sql string) []map[string]any {
 			}
 		}
 		out = append(out, map[string]any{
-			"tenant_id": o.tenant, "correlation_id": o.id,
-			"version":    float64(o.version),
-			"created_at": o.created.UTC().Format("2006-01-02T15:04:05.000") + "Z",
+			// The projected names, which are deliberately NOT the column names
+			// — see resolveAliases below and timeIntelBackfillPickSQL.
+			"tenant_id_s": o.tenant, "correlation_id_s": o.id,
+			"version":        float64(o.version),
+			"created_at_iso": o.created.UTC().Format("2006-01-02T15:04:05.000") + "Z",
 		})
 		if limit > 0 && len(out) >= limit {
 			break
@@ -409,6 +466,69 @@ func TestTimeIntelBackfillPickSQLIsNarrowBoundedAndWatermarked(t *testing.T) {
 	}, timeintel.BackfillCursor{})
 	if strings.Contains(bad, "DROP TABLE") {
 		t.Errorf("a corrupt cursor tie-break reached the SQL:\n%s", bad)
+	}
+}
+
+// TestTimeIntelBackfillPickAliasesDoNotShadowTypedColumns is the 186 hotfix
+// regression, and the class of bug the hermetic corpus could not see before.
+//
+// ClickHouse resolves a SELECT alias INSIDE the WHERE and ORDER BY of the same
+// query. The shipped pick aliased its CONVERTED projections back onto the
+// column names they came from, so every cursor predicate compared a String to a
+// DateTime64 (Code 43 ILLEGAL_TYPE_OF_ARGUMENT) or to a UUID (Code 386
+// NO_COMMON_TYPE), and ORDER BY sorted by UUID TEXT order while the cursor
+// advanced in UUID NATIVE order. The cold branch has no cursor predicate, so
+// the first pass succeeded, stored a watermark, and every pass after it failed
+// on a code chhttp does not retry — a permanently stalled worker.
+//
+// Asserted on EVERY branch, because only the cursor-bearing ones can trip it.
+func TestTimeIntelBackfillPickAliasesDoNotShadowTypedColumns(t *testing.T) {
+	at := time.Date(2026, 8, 31, 1, 2, 3, 456000000, time.UTC)
+	const id = "11111111-1111-4111-8111-111111111111"
+	branches := map[string]string{
+		"cold": timeIntelBackfillPickSQL(3600, timeIntelBackfillPageRows,
+			timeintel.BackfillCursor{}, timeintel.BackfillCursor{}),
+		"forward tuple bound": timeIntelBackfillPickSQL(3600, timeIntelBackfillPageRows,
+			timeintel.BackfillCursor{CreatedAt: at, CorrelationID: id}, timeintel.BackfillCursor{}),
+		"closed lower bound": timeIntelBackfillPickSQL(3600, timeIntelBackfillPageRows,
+			timeintel.BackfillCursor{CreatedAt: at}, timeintel.BackfillCursor{}),
+		"re-scan ceiling": timeIntelBackfillPickSQL(3600, timeIntelBackfillPageRows,
+			timeintel.BackfillCursor{CreatedAt: at, CorrelationID: id},
+			timeintel.BackfillCursor{CreatedAt: at.Add(time.Hour), CorrelationID: id}),
+	}
+	for name, sql := range branches {
+		if msg := aliasShadowError(sql); msg != "" {
+			t.Errorf("%s branch: %s\n%s", name, msg, sql)
+		}
+	}
+	// The predicates and the sort must therefore be on the RAW typed columns,
+	// and the projection must carry the non-shadowing names the row scan reads.
+	cold := branches["cold"]
+	for _, want := range []string{"AS tenant_id_s", "AS correlation_id_s", "AS created_at_iso"} {
+		if !strings.Contains(cold, want) {
+			t.Errorf("pick projection lost %q — timeIntelPickPage decodes that name:\n%s", want, cold)
+		}
+	}
+	if !strings.Contains(cold, "ORDER BY created_at ASC, correlation_id ASC") {
+		t.Errorf("ORDER BY must sort the raw typed columns (UUID text order != UUID native order):\n%s", cold)
+	}
+
+	// SELF-CHECK: the detector must actually detect. Feed it the shape that was
+	// rejected on the live server — a fake that cannot fail the old query is a
+	// fake that would have passed the bug through a second time.
+	shadowed := `
+SELECT toString(tenant_id)      AS tenant_id,
+       toString(correlation_id) AS correlation_id,
+       version                  AS version,
+       ` + chschema.ISO("created_at") + ` AS created_at
+  FROM netops.corr_current FINAL
+ WHERE window_start >= now() - INTERVAL 3600 SECOND
+   AND (created_at, correlation_id) > (toDateTime64('2026-08-31 01:02:03.456', 3, 'UTC'), toUUID('` + id + `'))
+ ORDER BY created_at ASC, correlation_id ASC
+ LIMIT 2000
+ FORMAT JSON`
+	if aliasShadowError(shadowed) == "" {
+		t.Fatal("aliasShadowError did not flag the shape ClickHouse rejected with Code 43 — the fake is blind to alias shadowing again")
 	}
 }
 
