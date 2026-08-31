@@ -2,10 +2,10 @@
 
 Owner-set portfolio (2026-08-27). Three projects, executed **in this order**.
 Each has its own tracker in this directory. The master `docs/TRACKER.md` remains
-the authoritative id registry (the scale items live there as #155, #157, #164,
-#167, #171, #175, #181, #187, #190, #192 and #193 — shipped or descoped rows
-are deleted, so the set shrinks); these project trackers are the **execution
-views** that organize and sequence the work.
+the authoritative id registry (the scale items live there as #155, #186, #193
+and #194 — shipped or descoped rows are deleted, so the set shrinks); these
+project trackers are the **execution views** that organize and sequence the
+work.
 
 | # | Project | Priority | Tracker | One-line |
 |---|---------|----------|---------|----------|

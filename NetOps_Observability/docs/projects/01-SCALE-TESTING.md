@@ -1,7 +1,8 @@
 # Project 1 — Scale Testing  🔴 HIGH PRIORITY
 
-**Rewritten 2026-08-30 against HEAD (`71adcfc6`).** Working checklist, not a
-history — the history is in `docs/scale/` and `git log`.
+**Rewritten 2026-08-30 against HEAD (`71adcfc6`); refreshed 2026-08-31 after the
+engine wave was validated on `storm-s07`.** Working checklist, not a history —
+the history is in `docs/scale/` and `git log`.
 
 **Scope.** Establish the **host ceiling** on the owner's box — max sustained
 devices at nominal AND storm with all gates green — and the **binding resource**
@@ -46,6 +47,34 @@ second box, an 8-core node or a real rig is **out of scope** (owner decision,
 - **Storm ladder A/B measured at 2 / 10 / 25 / 50 % storm share** — plane ON
   turns the 25 % rung from INCOMPLETE into a 192 s completion.
   `docs/scale/P3_AB_2P5K_VERDICT_2026-08-29.md`.
+- **Engine wave VALIDATED on `storm-s07`** (`08310154mmk9`, ON, code `de8ca5b1`)
+  — **8/9 gates**, accuracy **345/345**, accounting exact 900,001 == 900,001 + 0
+  DLQ, completion **94 s** of 2,700 s. The one FAIL (`memflat`) is attributed
+  with evidence to tracker **186** and a young api process, not to the wave.
+  Full record: `docs/scale/PROJECT1_WAVE_VALIDATION_2026-08-31.md`.
+  Nine tracker rows closed and deleted:
+
+  | # | commit(s) | evidence on s07 |
+  |---|---|---|
+  | **190** | `0a4e57d2` | stability line now derives from the live gauge: session timeout **60,000 ms read from 2 replicas**, override `null`; worst stall 3,623 ms = 6.0 % |
+  | **167** | `3001d440` + `9990adec` | counters registered and read live: **230,824 / 954,500 = 24.2 %** selectivity (19.8 % offline) |
+  | **171** | `0a4e57d2` + s07 measure | `corr_prune_gap_max_s` **137.2 s** vs the 300 s epoch budget (45.7 %), **0** budget exits |
+  | **192** | `79e27efc` + s07 | worst block NAMED `reconcile.continuation_index` **385.3 ms** under a 500 ms budget, **0** overruns; loop lag **13,881 → 4,278 ms** (residual = accumulation of spans, not a dark block) |
+  | **187** | `de8ca5b1` + s07 | terminal shrink **526 → 0**, lost entity mentions **2,427 → 0**; history accumulator **16,622 / 20,000** cap = **83.1 %** → **ladder watch item** |
+  | **164** | `9990adec` + s07 | bound present, never engaged: admission waits **0**, queue peak **4** against an inflight limit of **8** |
+  | **181** | `b408cdbf` | 11 tests + the deployed binary; s07 onboard reports **0 absorbed shadow rows**, cleanup leaves 0 `mlx-` devices of ANY run id |
+  | **157** | `39eba8c0` + s07 | role-grounding gate fired **35,940** times; `spine-leaf-path-degradation` top-hypothesis **589 → 0**, redistributed to `local-link-fault` **169 → 788**; accuracy **flat at 345/345** |
+  | **175** | `8d0ba1e5` | live drain on a real store: **72,927 → exactly 10,000** tombstones (`DefaultTombstoneMax`) — the 5k/10k run-blocker is discharged |
+
+  Whole-run health: TTUR p95 **908 s** vs s06's 816 s (**+11.3 %**, at the top of
+  the six-leg 816–908 s envelope = noise, and p95 is published-not-gated); plane
+  accounting exact (54,767 = 49,900 + 4,867); carrier correlation memory
+  **×0.941, 79.1 % of cap — the first leg ever to fall below ×1.0**.
+- **gNMI stretch DONE** — `ccfda64c`: the twin serves gNMI, so the
+  `ENABLE_GNMI_COLLECTION` path has labelled-fault coverage end to end
+  (digital-twin design §4.6).
+- **5k/10k ladder profiles authored** — `63198dcd`
+  (`t-nominal`/`t-storm` × 5k/10k in `SCALE_PROFILES`); not yet run.
 - **Trackers closed today:** 185 + 191 (`0bfdce1c`, `06450430`, both evidenced in
   the close-out) and the 17 shipped rows pruned from `docs/TRACKER.md` in this
   commit — 156, 158, 159, 162, 163, 165, 166, 168, 169, 170, 172, 173, 174, 176,
@@ -54,38 +83,30 @@ second box, an 8-core node or a real rig is **out of scope** (owner decision,
 
 ---
 
-## Open software work (buildable on this box, in order)
+## Open software work
 
 | # | Item | Why it is here |
 |---|------|----------------|
-| **190** | Harness `stability` gate hard-codes 30,000 ms while the engine runs a 60 s session timeout — read the live timeout, state the derivation. | Low; ~4 s stalls leave it no room to bite, but the gate is wrong. Close-out §6.3. |
-| **167** | Live selectivity of the template index is still UNVALIDATED — needs one 1K run at `--event-mix realistic` (the harness gap is closed; the run never happened). | The only thing between 167 PASS-offline and PASS-live. Expect worse than 22 %; that is the honest number. |
-| **171** | No gauge publishes the prune-starvation interval; the P2 epoch wall-time budget (`CORR_ENGINE_EPOCH_BUDGET_S`) plausibly bounds it but that is **unverified on the current build**. | Add the gauge, re-measure, then close or fix. |
-| **192** | Un-instrumented ~9–14 s loop block on the cleanup / re-key path (`corr_loop_lag_max_ms` 9,134.9 / 13,881.1 ms, outside the stability window, no `sync_span` attributed). | Distinct from 185. Add the span, bound it `0bfdce1c`-style, confirm on one `t-storm-2.5k`. |
-| **187** | An object's final `affected` shrinks below its own version history at CLOSE (3–5 `bgp_peer_flap` stories per 1,005-story leg, same ids on both arms). | The named residue behind "100.00 %". Decide: fix the close path, or read the accuracy clause over versions. |
-| **164** | `_offload` uses the default executor — bounded workers, **unbounded** queue. | §9 boundedness defect; not the bottleneck, but pre-GA hardening. |
-| **181** | Device create absorbed by dedupe persists a SHADOW row (`main.go:2368` Upsert before `ResolveIdentity`). | Left 1,000 shadow devices from overlapping runs; needs an isolation-aware fix + `org_isolation_test.go`-shaped test. |
-| **157** | `spine-leaf-path-degradation` ranks confidence 1.0 in a topology with no spine — token co-occurrence, not structure. | Accuracy class, measured + evidenced, not started. |
+| **186** | Time-intelligence backfill query is **unbounded**, not merely un-incremental. On s07 it took **1.86 GiB / 35.4 GB read / 49.2 s** and was the named victim of a ClickHouse 4 GiB overcommit — evicting two background merges with it. 241/159 on **12 of 41 passes since 08-30 16:57**; read volume grows **~0.6 GiB per leg** with retention. | **The sole blocker to a 9/9 `t-storm-2.5k` leg on a cold api** — it causes both `memflat` clauses. Needs the watermark AND a per-query memory/read budget. |
+| **194** | Watchdog cannot see an api-only outage: `:8000/` is answered by the SPA, `/healthz` has no nginx location and falls through to the SPA, the api container declares no healthcheck, and the one api-touching probe (`/admin/version`) is classified advisory. Observed blind for ~2 min on 2026-08-31 01:48–01:51. | Low. Honest probe = `/admin/version`, CRITICAL class, with a **~2.5 min** cold-boot grace. |
 
 ### Then the ladder (the ceiling itself)
 
-1. **Author + run 5k and 10k profiles** (`t-nominal-5k` / `s1-5k`,
-   `t-nominal-10k` / `s1-10k`) — none exist in `SCALE_PROFILES` today.
-   **First** discharge tracker **175** (device-store tombstone growth, file
-   backend: 35,427 tombstones / 142 MB for 0 real devices; row status verified
-   today = `Med · ⏳ follow-up, not started`). At 5k/10k the per-run churn is
-   2–4× today's, so the tombstone debt is a run-blocker before it is a defect.
+1. **Run the 5k and 10k rungs.** Profiles exist (`63198dcd`); tracker 175 is
+   discharged, so the tombstone debt is no longer a run-blocker. Carry the
+   **187 watch item** into pre-flight: `corr_affected_history_entities_max` was
+   **83.1 %** of its 20,000 cap at 2,500 devices, and the cap must be raised or
+   made fleet-relative before a rung is graded if 5k crosses it.
 2. **§D — grade and capture the ceiling** (the deliverable doc): per rung
    drain / `correlation_completion` / stability / memflat / accounting, plus
    correlation QUALITY under storm (did the flood collapse into the *right*
    incidents), then record max devices nominal & storm, the binding resource,
    and the per-device envelope → pricing + hosting spec.
-3. **155 — partition-ownership correctness programme.** Harness built
-   (`scripts/lab/twin/ownership.py`, 21 tests, PASS/FAIL/**INVALID**); the
-   ownership-move runs are buildable now — validation is the twin ownership
-   runs on this box.
-4. **gNMI stretch** (digital twin, design §4.6) — the twin serves gNMI so the
-   `ENABLE_GNMI_COLLECTION` path gets labelled-fault coverage end-to-end.
+3. **155 — partition-ownership correctness programme.** `931efffb` (durable
+   continuation seeding on assignment) landed **after** s07, so it is committed
+   but **UNVALIDATED**; the twin ownership runs
+   (`scripts/lab/twin/ownership.py`, 21 tests, PASS/FAIL/**INVALID**) are the
+   validation and are in flight.
 
 ## Finish
 
