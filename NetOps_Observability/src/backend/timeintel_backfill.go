@@ -119,9 +119,18 @@ const (
 	// timeIntelBackfillPassTimeout bounds the WHOLE pass (every page's read and
 	// its upserts). DERIVED from the page budget and the page count so the two
 	// can never invert the way the transport timeout and the read budget did
-	// before chClientForBudget. Two reads per page (pick + fetch), hence the 2x.
+	// before chClientForBudget.
+	//
+	// A page is now ONE pick (bounded by the page budget) plus a fetch that is a
+	// TREE of sub-fetches (186 fix-2), bounded as a whole by
+	// timeIntelBackfillFetchSplitDeadline rather than by a single query budget —
+	// so the derivation names those two terms instead of the old "2 reads per
+	// page". Stating the fetch's own ceiling here is what keeps this honest: the
+	// pass timeout must always exceed what the page loop is allowed to spend, or
+	// it silently becomes the real bound and pages die mid-tree.
 	timeIntelBackfillPassTimeout = timeIntelBackfillMaxPages*
-		(2*timeIntelBackfillBudget+timeIntelBackfillPagePause) + 60*time.Second
+		(timeIntelBackfillBudget+timeIntelBackfillFetchSplitDeadline+timeIntelBackfillPagePause) +
+		60*time.Second
 
 	// timeIntelBackfillBlockRows / timeIntelBackfillThreads bound the WIDE part
 	// of the read. corr_objects.hypotheses is 48 GiB uncompressed / 26 KB per
@@ -205,6 +214,120 @@ const (
 	// is partitioned by toYYYYMMDD(created_at), so a minute of slack widens the
 	// scan by at most one partition at each end.
 	timeIntelBackfillFetchSlackSeconds = 60
+
+	// ── adaptive fetch sub-paging (tracker 186 fix-2) ─────────────────────────
+	//
+	// The 2026-08-31 deploy proved the page geometry above was still wrong on
+	// its widest axis. The pick works and is cheap (2 000 keys, ~30 MiB), but a
+	// SINGLE wide fetch for those 2 000 keys read 2.24 GiB in the deploy log and
+	// was refused with Code 307 TOO_MANY_BYTES — on EVERY tick, identically,
+	// because the pass is deterministic. pages=0, no watermark write, a
+	// permanent stall: the exact failure mode the watermark was introduced to
+	// end, one layer down. Reproduced the same day against the live table:
+	// 69 355 rows / 2.01 GiB read, 488 MiB peak, refused at the 2.00 GiB cap in
+	// 1.77 s — see TestTimeIntelBackfillWholePageFetchIsRefusedByLiveClickHouse,
+	// which now asserts that refusal rather than merely remembering it.
+	//
+	// WHY 2 000 KEYS CAN NEVER FIT, which is the fact the c189d37e budget math
+	// missed. That math assumed ~1 KB/row. The real unit is not a row, it is a
+	// GRANULE of the hypotheses blob. corr_objects has adaptive granularity
+	// (index_granularity_bytes = 10 MB) over a 70 GiB / 2.38 M-row blob column,
+	// so a granule is ~400 rows and ~10-12 MiB, and the picked correlation_ids
+	// are UUIDs scattered across the whole (tenant_id, correlation_id, version)
+	// key space — one key lands in one granule and shares it with nobody.
+	//
+	//	bytes(fetch) ~= 12 MiB x distinct granules ~= 12 MiB x keys
+	//
+	// MEASURED live 2026-08-31 on the 2.38 M-row table: 125 keys read 1.22-1.45
+	// GiB, 64 keys read 675-795 MiB. So the read cap alone permits at most ~170
+	// keys per query and the 512 MiB memory cap bites first — 2 000 keys is
+	// ~14x over, not marginally over. NO retry, NO budget bump and NO amount of
+	// waiting fixes that; only a smaller key list does.
+	//
+	// So the fetch SUB-PAGES the pick's page up front instead of discovering the
+	// same refusal every tick, and halves adaptively when a sub-page is still
+	// refused. The pick's page size deliberately stays 2 000 (it is cheap, and
+	// it is what makes the watermark advance in useful strides).
+	//
+	// timeIntelBackfillFetchSubPageKeys is that first cut. 64 from the
+	// measurement, not from taste: at 64 keys a sub-fetch reads ~700 MiB (2.9x
+	// under the 2 GiB read cap) and peaks at 79-253 MiB (2-6x under the 512 MiB
+	// memory cap), where 125 keys sat at 1.2-1.4 GiB / 412+ MiB and was refused
+	// on 3 of 16 sub-pages. Over the same 2 000-key page: 64 read 24.85 GiB in
+	// 30.6 s, 125 read 28.4 GiB in 33.4 s — the smaller cut is cheaper BECAUSE
+	// a refused sub-fetch still pays for the granules it read before the refusal.
+	timeIntelBackfillFetchSubPageKeys = 64
+
+	// timeIntelBackfillFetchSplitMinKeys is where halving stops. ONE key, not a
+	// round "min sublist" — because the live evidence says the poison is a
+	// single object, not a neighbourhood. Halving a refused sub-page all the way
+	// down isolated exactly 4 objects out of 2 000 whose own blob overruns the
+	// 512 MiB ceiling by itself (a one-key fetch that reads 0 bytes and still
+	// dies allocating a 512 MiB chunk while reading column hypotheses).
+	//
+	// Stopping at a coarser floor would throw away the ~31 healthy objects
+	// sharing that floor's sublist AND would report a 32-wide id list instead of
+	// naming the one object an operator has to go look at.
+	timeIntelBackfillFetchSplitMinKeys = 1
+
+	// timeIntelBackfillFetchSplitMaxDepth is a belt-and-braces bound on the
+	// recursion. 64 -> 1 is six halvings; 8 leaves headroom without ever being
+	// the thing that stops a descent (the min-keys floor is).
+	timeIntelBackfillFetchSplitMaxDepth = 8
+
+	// timeIntelBackfillFetchMaxSubFetches bounds the QUERY COUNT one page's
+	// fetch tree may spend on the server — the load axis, which the wall-clock
+	// deadline below does not bound on its own (a tree of cheap 40 ms refusals
+	// could run hundreds of queries inside the deadline).
+	//
+	// MEASURED with the production splitter over the worst live 2 000-key page:
+	// 80 sub-fetches (32 sub-pages + 24 splits and their halves) to fold 1 996
+	// of 2 000 objects. 192 is 2.4x that, and a page that needs more is not fat,
+	// it is broken.
+	timeIntelBackfillFetchMaxSubFetches = 192
+
+	// timeIntelBackfillFetchSplitDeadline bounds the whole tree in WALL CLOCK.
+	//
+	// Hitting it is a DEGRADATION, never an error: the keys not yet fetched are
+	// counted and logged, the page folds what it has, and the watermark still
+	// advances — which is the entire point of this fix. Making it an error would
+	// reinstate the stall on any page that is merely slow.
+	//
+	// But a skip is DATA LOSS (a snapshot that will not be written), so this
+	// must only fire on a genuinely pathological page, never on a fat one.
+	// MEASURED end-to-end with the production splitter over the worst live
+	// 2 000-key page: 80 sub-fetches, 24 splits, 48.0 s — and that is over the
+	// docker-exec path, which pays a process spawn per query that the worker's
+	// HTTP client does not. 3x the page budget is ~1.9x over that pessimistic
+	// number.
+	//
+	// The consequence, stated rather than discovered later: with 10 pages the
+	// derived pass timeout is ~21 min, longer than the 15-minute tick. That is
+	// the CEILING for an all-pathological backlog drain, not the normal case (a
+	// clean page is ~32 sub-fetches, ~15 s), and it is harmless by construction
+	// — the ticker drops missed ticks, and every page has already persisted its
+	// watermark, so back-to-back passes resume rather than repeat.
+	timeIntelBackfillFetchSplitDeadline = 3 * timeIntelBackfillBudget
+
+	// timeIntelBackfillSkipLogIDs caps how many correlation_ids one page's WARN
+	// line carries. Sanitize/bound all logs (§8): a fully poisoned page must not
+	// be able to emit a 2 000-id log record.
+	timeIntelBackfillSkipLogIDs = 16
+)
+
+// ClickHouse DB::Exception codes the fetch splitter reacts to. Both mean "this
+// key list is too wide for the per-query guard rails" and both are fixed by the
+// same action — fetch fewer keys — which is why they share one branch.
+//
+// They are NOT handled by retrying: 307 is deterministic (the same key list
+// reads the same granules and trips the same cap forever), and 241 here is
+// "Memory limit (for query) exceeded … while reading column hypotheses", i.e.
+// also a property of the key list, not of the moment. chhttp classifies 241 as
+// retryable for its other callers and does not classify 307 at all; neither
+// judgement is wrong there, and neither is useful here.
+const (
+	chCodeTooManyBytes        = 307 // TOO_MANY_BYTES — max_bytes_to_read tripped
+	chCodeMemoryLimitExceeded = 241 // MEMORY_LIMIT_EXCEEDED — max_memory_usage tripped
 )
 
 // timeIntelBackfillKey is one picked object: the primary-key tuple plus the
@@ -357,6 +480,26 @@ SELECT toString(tenant_id)      AS tenant_id_s,
 // usable; the created_at range prunes PARTITIONS (corr_objects is partitioned
 // on toYYYYMMDD(created_at), chschema/corr_repartition.go), which is what stops
 // a page from touching every retained day the way the un-watermarked pass did.
+//
+// ── WHAT THE FOLD ACTUALLY NEEDS (checked 2026-08-31, 186 fix-2) ──────────────
+//
+// foldTimeIntelPage reads exactly twelve values off each row: tenant_id,
+// correlation_id, window_start, created_at, verdict_tier, top_confidence,
+// top_hypothesis, evidence_missing, affected, state — and owner + seam_type,
+// which are JSON-extracted from the hypotheses blob. Nothing here is
+// speculative, so no column can be dropped to make the read cheaper; the two
+// blob extractions are pinned by
+// TestTimeIntelBackfillFetchSelectsOnlyWhatTheFoldNeeds.
+//
+// That matters because `hypotheses` is 94 % of this table and the ENTIRE reason
+// the fetch has to be sub-paged. The structural follow-up, recorded here so the
+// measurement is not lost: netops.corr_current — which the PICK already reads,
+// one narrow row per object — carries ten of those twelve (it gained a narrow
+// `owner` column with the #100 triage badges). Only seam_type is missing. If
+// the engine ever projected seam_type onto corr_current the way it projected
+// owner, this wide read against corr_objects would disappear entirely, and with
+// it ~25 GiB of granule reads per page. That is an ENGINE change (a new
+// persist-time projection + a backfill), out of this fix's bounded context.
 func timeIntelBackfillFetchSQL(keys []timeIntelBackfillKey, from, to time.Time) string {
 	if len(keys) == 0 {
 		return ""
@@ -614,13 +757,16 @@ func (s *server) timeIntelPickPage(ctx context.Context, lookbackSeconds int, fro
 	return out, nil
 }
 
-// timeIntelFetchPage reads the wide half for one picked page.
-func (s *server) timeIntelFetchPage(ctx context.Context, keys []timeIntelBackfillKey) ([]map[string]any, error) {
-	// The pick is ordered by created_at ASC, so the page's slice is [first,last].
-	from, to := keys[0].CreatedAt, keys[len(keys)-1].CreatedAt
-	if to.Before(from) {
-		from, to = to, from
-	}
+// timeIntelFetchKeys is ONE wide read for one key list — the indivisible unit
+// the splitter sub-pages and halves. A named function type rather than a method
+// value so the live-shape suite can drive the real splitter against a real
+// server without the HTTP client (§2: external dependencies are injected).
+type timeIntelFetchKeys func(ctx context.Context, keys []timeIntelBackfillKey) ([]map[string]any, error)
+
+// timeIntelFetchOne is the production timeIntelFetchKeys: one bounded, tagged,
+// budgeted wide read.
+func (s *server) timeIntelFetchOne(ctx context.Context, keys []timeIntelBackfillKey) ([]map[string]any, error) {
+	from, to := timeIntelKeySpan(keys)
 	// Extract owner + seam_type server-side (JSONExtractString) instead of
 	// pulling the whole hypotheses blob per object — at scale the blobs would
 	// blow past the response cap and truncate.
@@ -630,6 +776,191 @@ func (s *server) timeIntelFetchPage(ctx context.Context, keys []timeIntelBackfil
 		Budget:   timeIntelBackfillBudget,
 		MaxBytes: timeIntelBackfillMaxResponseBytes,
 		Settings: timeIntelBackfillReadSettings(),
+	})
+}
+
+// timeIntelKeySpan is the [min,max] created_at of a key list — the partition
+// bound the wide fetch is pruned with.
+//
+// A true min/max scan, NOT keys[0]/keys[last]. The page as picked is created_at
+// ASC so the endpoints would do, but the splitter hands this function ARBITRARY
+// sublists, and a bound derived from the wrong two elements would silently
+// exclude rows from the slice and lose their snapshots. Cheap, and it removes
+// an ordering assumption from a function that no longer gets to make one.
+func timeIntelKeySpan(keys []timeIntelBackfillKey) (time.Time, time.Time) {
+	if len(keys) == 0 {
+		return time.Time{}, time.Time{}
+	}
+	from, to := keys[0].CreatedAt, keys[0].CreatedAt
+	for _, k := range keys[1:] {
+		if k.CreatedAt.Before(from) {
+			from = k.CreatedAt
+		}
+		if k.CreatedAt.After(to) {
+			to = k.CreatedAt
+		}
+	}
+	return from, to
+}
+
+// timeIntelFetchSplittable reports whether err is a "this key list is too wide"
+// refusal — the one class the splitter can act on. Anything else (a schema
+// fault, auth, a transport loss) is returned to the caller unchanged: halving a
+// key list cannot fix a broken query, and pretending it might would turn one
+// loud failure into a hundred quiet ones.
+func timeIntelFetchSplittable(err error) bool {
+	var che *chhttp.Error
+	if !errors.As(err, &che) {
+		return false
+	}
+	return che.Code == chCodeTooManyBytes || che.Code == chCodeMemoryLimitExceeded
+}
+
+// timeIntelFetchSplit is one page's fetch tree: the accumulated rows, what it
+// had to give up on, and the two budgets that bound it.
+type timeIntelFetchSplit struct {
+	fetch timeIntelFetchKeys
+	rows  []map[string]any
+
+	fetches int // sub-fetches issued (bounded by timeIntelBackfillFetchMaxSubFetches)
+	splits  int // sub-fetches that were refused and halved
+
+	oversizeSkipped int      // objects a MINIMUM-size fetch still could not read
+	budgetSkipped   int      // objects the tree ran out of budget before reaching
+	skippedIDs      []string // bounded sample for the WARN line
+}
+
+// timeIntelFetchPage reads the wide half for one picked page, sub-paged and
+// adaptively split so a page that cannot be read WHOLE still advances the
+// watermark (tracker 186 fix-2).
+//
+// The contract, in order of precedence:
+//
+//  1. A refusal that halving can fix (307/241) is NEVER returned as an error —
+//     it is split. This is what makes a fat page cost extra queries instead of
+//     costing the watermark.
+//  2. A single object that STILL cannot be read is skipped, counted on
+//     netops_timeintel_fetch_oversize_skipped_total, named at WARN, and the
+//     page continues. One poisoned blob must not be able to hold the whole
+//     backfill still — which is precisely what it did before this change.
+//  3. Any OTHER error is returned unchanged, so a genuine fault (schema, auth)
+//     stays as loud as it was.
+func (s *server) timeIntelFetchPage(ctx context.Context, keys []timeIntelBackfillKey) ([]map[string]any, error) {
+	return s.timeIntelFetchPageWith(ctx, keys, s.timeIntelFetchOne)
+}
+
+// timeIntelFetchPageWith is timeIntelFetchPage over an injected one-shot fetch.
+func (s *server) timeIntelFetchPageWith(ctx context.Context, keys []timeIntelBackfillKey,
+	one timeIntelFetchKeys) ([]map[string]any, error) {
+	if len(keys) == 0 {
+		return nil, nil
+	}
+	// The tree's own wall-clock ceiling, strictly inside the pass context so a
+	// cancelled PASS and an exhausted FETCH stay distinguishable (§9).
+	fctx, cancel := context.WithTimeout(ctx, timeIntelBackfillFetchSplitDeadline)
+	defer cancel()
+
+	sp := &timeIntelFetchSplit{fetch: one, rows: make([]map[string]any, 0, len(keys))}
+	for start := 0; start < len(keys); start += timeIntelBackfillFetchSubPageKeys {
+		end := start + timeIntelBackfillFetchSubPageKeys
+		if end > len(keys) {
+			end = len(keys)
+		}
+		if err := sp.run(ctx, fctx, keys[start:end], 0); err != nil {
+			// A non-splittable fault, or the PASS itself being cancelled. Report
+			// what the tree did before it stopped, then surface the error.
+			s.recordTimeIntelFetchSplit(sp)
+			return nil, err
+		}
+	}
+	s.recordTimeIntelFetchSplit(sp)
+	return sp.rows, nil
+}
+
+// run fetches one sublist, halving it on a 307/241 refusal until it fits or
+// until a single key is left. Returns an error ONLY for faults the splitter
+// must not swallow.
+//
+// TWO contexts, deliberately. pass is the whole pass's — its cancellation is a
+// real error and must reach the caller, because a half-fetched page must never
+// be read as a complete one. tree is the fetch tree's own deadline, strictly
+// inside it — its expiry is a DEGRADATION, counted and logged, and the page
+// still completes. Collapsing them into one would make a slow page
+// indistinguishable from a shutdown.
+func (sp *timeIntelFetchSplit) run(pass, tree context.Context, keys []timeIntelBackfillKey, depth int) error {
+	if len(keys) == 0 {
+		return nil
+	}
+	if err := pass.Err(); err != nil {
+		return err
+	}
+	// The tree's deadline, and the query-count cap, are degradations: give up on
+	// the rest of this sublist, count it, and let the page complete.
+	if tree.Err() != nil || sp.fetches >= timeIntelBackfillFetchMaxSubFetches {
+		sp.giveUp(keys, &sp.budgetSkipped)
+		return nil
+	}
+
+	sp.fetches++
+	rows, err := sp.fetch(tree, keys)
+	if err == nil {
+		sp.rows = append(sp.rows, rows...)
+		return nil
+	}
+	if !timeIntelFetchSplittable(err) {
+		return err
+	}
+	if len(keys) <= timeIntelBackfillFetchSplitMinKeys || depth >= timeIntelBackfillFetchSplitMaxDepth {
+		// An indivisible key list that still overruns the guard rails: this
+		// object's own blob is the problem. Skip it — LOUDLY — and continue.
+		sp.giveUp(keys, &sp.oversizeSkipped)
+		return nil
+	}
+	sp.splits++
+	half := len(keys) / 2
+	if err := sp.run(pass, tree, keys[:half], depth+1); err != nil {
+		return err
+	}
+	return sp.run(pass, tree, keys[half:], depth+1)
+}
+
+// giveUp records keys the tree will not fetch, under the reason's counter.
+func (sp *timeIntelFetchSplit) giveUp(keys []timeIntelBackfillKey, into *int) {
+	*into += len(keys)
+	for _, k := range keys {
+		if len(sp.skippedIDs) >= timeIntelBackfillSkipLogIDs {
+			return
+		}
+		// A correlation_id is upstream data (§3): it reaches a log record
+		// scrubbed, like every other tenant-controlled string here.
+		sp.skippedIDs = append(sp.skippedIDs, scrubLogValue(k.CorrelationID))
+	}
+}
+
+// recordTimeIntelFetchSplit publishes what one page's fetch tree did: counters
+// on /metrics, and — only when something was actually given up — one bounded
+// WARN naming the objects. No silent failures (§10); a snapshot that will never
+// be written must not be invisible just because the pass succeeded.
+func (s *server) recordTimeIntelFetchSplit(sp *timeIntelFetchSplit) {
+	if sp.splits > 0 {
+		s.timeIntelFetchSplits.Add(int64(sp.splits))
+	}
+	if sp.oversizeSkipped > 0 {
+		s.timeIntelFetchOversizeSkipped.Add(int64(sp.oversizeSkipped))
+	}
+	if sp.budgetSkipped > 0 {
+		s.timeIntelFetchBudgetSkipped.Add(int64(sp.budgetSkipped))
+	}
+	if sp.oversizeSkipped == 0 && sp.budgetSkipped == 0 {
+		return
+	}
+	logWarn("timeintel", "backfill wide fetch skipped objects it could not read within the guard rails — the page still folded and the watermark still advances", map[string]any{
+		"oversize_skipped": sp.oversizeSkipped,
+		"budget_skipped":   sp.budgetSkipped,
+		"sub_fetches":      sp.fetches,
+		"splits":           sp.splits,
+		"folded":           len(sp.rows),
+		"correlation_ids":  sp.skippedIDs,
 	})
 }
 
