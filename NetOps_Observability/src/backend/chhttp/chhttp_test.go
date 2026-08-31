@@ -291,6 +291,59 @@ func TestRequestSettingsReachTheWire(t *testing.T) {
 	}
 }
 
+// TestProfileIsSentBeforePerQuerySettings pins the ORDER, which url.Values.Get
+// cannot see and which is the entire bug behind tracker 186 fix-3.
+//
+// ClickHouse applies HTTP query parameters left to right, and `profile=` assigns
+// every setting its profile declares — so a per-query setting emitted before it
+// is discarded. Encode() sorts alphabetically, which put max_memory_usage (m)
+// and max_execution_time (m) ahead of profile (p) every single time: the
+// timeintel backfill asked for 512 MiB and 2,250 consecutive queries ran at the
+// background lane's 2 GiB. Asserting the presence of a param is not enough;
+// this asserts where it sits.
+func TestProfileIsSentBeforePerQuerySettings(t *testing.T) {
+	var raw atomic.Value
+	c, done := testClient(t, func(w http.ResponseWriter, r *http.Request) {
+		raw.Store(r.URL.RawQuery)
+	})
+	defer done()
+
+	_, err := c.Exec(context.Background(), Request{
+		SQL: "SELECT 1", Op: "order probe", Scope: "tenant-a",
+		LogComment: "worker:timeintel-backfill", Profile: "background",
+		Settings: map[string]string{"max_memory_usage": "536870912"},
+		Budget:   7 * time.Second,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	q, _ := raw.Load().(string)
+	prof := strings.Index(q, "profile=")
+	if prof != 0 {
+		t.Fatalf("profile= must be the FIRST parameter so the lane defaults are applied before the caller's settings; RawQuery = %q", q)
+	}
+	// Every setting the profile could also declare has to land after it. The two
+	// the `background` profile actually declares are called out by name because
+	// they are the ones that were silently lost.
+	for _, k := range []string{"max_memory_usage=", "max_execution_time="} {
+		at := strings.Index(q, k)
+		if at < 0 {
+			t.Fatalf("%s missing from %q", k, q)
+		}
+		if at < prof {
+			t.Errorf("%s at %d precedes profile= at %d — the profile would overwrite it", k, at, prof)
+		}
+	}
+	// And the profile is still parsed as a normal parameter, exactly once.
+	vals, err := url.ParseQuery(q)
+	if err != nil {
+		t.Fatalf("RawQuery %q is not parseable: %v", q, err)
+	}
+	if got := vals["profile"]; len(got) != 1 || got[0] != "background" {
+		t.Errorf("profile param = %v, want exactly one \"background\"", got)
+	}
+}
+
 // TestSuccessReturnsTheBody — the happy path still has to work.
 func TestSuccessReturnsTheBody(t *testing.T) {
 	c, done := testClient(t, func(w http.ResponseWriter, r *http.Request) {

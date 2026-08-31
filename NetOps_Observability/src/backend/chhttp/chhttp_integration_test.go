@@ -10,9 +10,18 @@ package chhttp
 //
 //	docker run -d --rm --name chdrill \
 //	  -e CLICKHOUSE_USER=drill -e CLICKHOUSE_PASSWORD=drillpw \
+//	  -e CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT=1 \
+//	  -v "$PWD/deployment/docker/clickhouse/custom-settings.xml:/etc/clickhouse-server/config.d/custom-settings.xml:ro" \
 //	  -p 18123:8123 --tmpfs /var/lib/clickhouse:rw,size=512m \
 //	  clickhouse/clickhouse-server:24.8-alpine@sha256:b002e56ed5c16e224c312527f6fcba7e77216fec5d7a88a7828f59efc614feb5
 //	CH_TEST_URL=http://localhost:18123 go test -tags=integration ./chhttp/
+//
+// The two flags the original line lacked, both MEASURED as required 2026-08-31:
+// without the custom-settings.xml mount the server has no `tenant_` prefix and
+// EVERY test here dies on `tenant_scope` (UNKNOWN_SETTING, code 115) — this file
+// had been unrunnable as written; without access management the drill cannot
+// create the settings profile TestLiveQuerySettingsBeatTheProfile needs, and
+// that test skips.
 //
 // WHY THIS EXISTS SEPARATELY FROM chhttp_test.go: the httptest suite proves how
 // this CLIENT behaves when handed a given response. It cannot prove that
@@ -26,6 +35,7 @@ package chhttp
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"os"
 	"strings"
@@ -337,6 +347,121 @@ func TestLiveInsertToleranceActuallyTolerates(t *testing.T) {
 	}
 	if got := strings.TrimSpace(string(body)); got != "1" {
 		t.Errorf("count = %q, want 1 — the tolerated row did not land", got)
+	}
+}
+
+// ── the settings a query ASKS for vs the settings it RUNS with ───────────────
+
+// liveMemoryLane returns the name of a settings profile that declares
+// max_memory_usage at something other than liveQueryBudgetBytes, plus a cleanup.
+//
+// Against the deployed stack this finds `background` (workload-profiles.xml).
+// Against the throwaway drill container of this file's header there is no such
+// profile, so one is created — which needs CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT=1
+// on the container. Without the grant the drill skips rather than passing
+// vacuously: a profile that declares nothing cannot overwrite anything, so the
+// assertion below would be true for the wrong reason.
+func liveMemoryLane(t *testing.T, c *Client) (string, func()) {
+	t.Helper()
+	ctx := context.Background()
+	body, err := c.Exec(ctx, Request{
+		SQL: "SELECT profile_name FROM system.settings_profile_elements WHERE setting_name = 'max_memory_usage' " +
+			"AND value != '" + liveQueryBudgetBytes + "' ORDER BY profile_name = 'background' DESC LIMIT 1 FORMAT TSV",
+		Op: "find lane", Scope: "__all__",
+	})
+	if err != nil {
+		t.Fatalf("profile lookup: %v", err)
+	}
+	if name := strings.TrimSpace(string(body)); name != "" {
+		return name, func() {}
+	}
+	const drillLane = "chdrill_lane"
+	if _, err := c.Exec(ctx, Request{
+		SQL: "CREATE SETTINGS PROFILE IF NOT EXISTS " + drillLane + " SETTINGS max_memory_usage = 2147483648",
+		Op:  "create lane", Scope: "__all__",
+	}); err != nil {
+		t.Skipf("server declares no max_memory_usage profile and this user cannot create one (%v) — "+
+			"run the drill container with -e CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT=1", err)
+	}
+	return drillLane, func() {
+		if _, err := c.Exec(ctx, Request{SQL: "DROP SETTINGS PROFILE IF EXISTS " + drillLane, Op: "drop lane", Scope: "__all__"}); err != nil {
+			t.Logf("cleanup: drop settings profile %s: %v", drillLane, err)
+		}
+	}
+}
+
+// liveQueryBudgetBytes is the timeintel backfill's per-query memory budget
+// (timeIntelBackfillMemoryBytes = 512 MiB), duplicated here as a literal because
+// package chhttp must not import package main. It is a value under test, not a
+// shared constant: what matters is that SOME caller-supplied number survives.
+const liveQueryBudgetBytes = "536870912"
+
+// TestLiveQuerySettingsBeatTheProfile is the drill the timeintel backfill was
+// missing. Everything else in this repo asserted the settings were SENT; nobody
+// asked ClickHouse what it actually RAN with, and for eleven days the answer was
+// different — the 512 MiB budget arrived and was thrown away.
+//
+// MECHANISM (tracker 186 fix-3): ClickHouse applies HTTP query parameters left
+// to right and `profile=` overwrites every setting it declares, so a per-query
+// setting emitted BEFORE the profile is lost. url.Values.Encode() sorts
+// alphabetically, which put max_memory_usage ahead of profile on every request.
+// Reproduced on a stock 24.8.14.39 with nothing but a two-line profile:
+//
+//	?max_memory_usage=536870912&profile=lane -> 2147483648   (the profile won)
+//	?profile=lane&max_memory_usage=536870912 ->  536870912   (the query won)
+//
+// The test therefore has three parts, and the first two are what stop it from
+// passing vacuously: the profile must really be in force, its value must really
+// differ from ours, and only then does our value having won mean anything.
+func TestLiveQuerySettingsBeatTheProfile(t *testing.T) {
+	c := liveClient(t)
+	ctx := context.Background()
+	lane, cleanup := liveMemoryLane(t, c)
+	defer cleanup()
+
+	ask := func(settings map[string]string, tag string) string {
+		t.Helper()
+		body, err := c.Exec(ctx, Request{
+			SQL: "SELECT getSetting('max_memory_usage') FORMAT TSV", Op: "effective setting",
+			Scope: "__all__", Profile: lane, LogComment: tag, Settings: settings,
+		})
+		if err != nil {
+			t.Fatalf("query under profile %s: %v", lane, err)
+		}
+		return strings.TrimSpace(string(body))
+	}
+
+	// (1) The lane is genuinely in force and genuinely disagrees with us.
+	laneValue := ask(nil, "")
+	if laneValue == liveQueryBudgetBytes || laneValue == "0" {
+		t.Fatalf("profile %s runs at max_memory_usage=%s — it neither binds nor differs from the budget under test, so this drill would prove nothing", lane, laneValue)
+	}
+
+	// (2) The caller's setting must beat it, live.
+	tag := fmt.Sprintf("chdrill:effective-settings:%d", time.Now().UnixNano())
+	if got := ask(map[string]string{"max_memory_usage": liveQueryBudgetBytes}, tag); got != liveQueryBudgetBytes {
+		t.Fatalf("EFFECTIVE max_memory_usage = %s, want %s — the %s profile overwrote the per-query budget (parameter order regression)", got, liveQueryBudgetBytes, lane)
+	}
+
+	// (3) And the server must SAY SO in system.query_log, which is where an
+	// operator reads it back and where the deploy-D finding was diagnosed.
+	if _, err := c.Exec(ctx, Request{SQL: "SYSTEM FLUSH LOGS", Op: "flush logs", Scope: "__all__"}); err != nil {
+		t.Fatalf("flush logs: %v", err)
+	}
+	body, err := c.Exec(ctx, Request{
+		SQL: "SELECT Settings['max_memory_usage'] FROM system.query_log WHERE log_comment = '" + tag +
+			"' AND type = 'QueryFinish' ORDER BY event_time DESC LIMIT 1 FORMAT TSV",
+		Op: "query_log readback", Scope: "__all__",
+	})
+	if err != nil {
+		t.Fatalf("query_log readback: %v", err)
+	}
+	logged := strings.TrimSpace(string(body))
+	if logged == "" {
+		t.Fatalf("query_log has no QueryFinish row for %q — the readback proves nothing", tag)
+	}
+	if logged != liveQueryBudgetBytes {
+		t.Errorf("system.query_log Settings['max_memory_usage'] = %s, want %s", logged, liveQueryBudgetBytes)
 	}
 }
 

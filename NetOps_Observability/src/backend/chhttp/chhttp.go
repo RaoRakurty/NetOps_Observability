@@ -465,13 +465,35 @@ func (c *Client) do(ctx context.Context, req Request) (*http.Response, error) {
 	if req.LogComment != "" {
 		q.Set("log_comment", req.LogComment)
 	}
-	if req.Profile != "" {
-		q.Set("profile", req.Profile)
-	}
 	for k, v := range req.Settings {
 		q.Set(k, v)
 	}
+	// ORDER IS LOAD-BEARING — `profile` must precede every per-query setting.
+	//
+	// ClickHouse's HTTP handler applies URL parameters in the order they appear
+	// in the query string, and `profile=` is not a value, it is an ACTION: it
+	// assigns every setting the named profile declares, overwriting whatever was
+	// already set. url.Values.Encode() sorts keys alphabetically, so before this
+	// fix `max_memory_usage` (m) and `max_execution_time` (m) always landed
+	// BEFORE `profile` (p) and were silently thrown away by the profile.
+	//
+	// MEASURED on the deployed 24.8.14.39, same query, only the order differing:
+	//   ?max_memory_usage=536870912&profile=background -> getSetting() = 2147483648
+	//   ?profile=background&max_memory_usage=536870912 -> getSetting() =  536870912
+	// and in system.query_log, 2,250 `worker:timeintel-backfill` queries ran with
+	// the profile's 2 GiB / 60 s while the block/threads/bytes guards — which the
+	// `background` profile does NOT declare — arrived intact. That is the whole
+	// signature of the bug: only the settings the profile also names were lost.
+	//
+	// These are plain profile VALUES, not constraints (system.settings_profile_
+	// elements reports min/max/writability NULL for all of them), so a per-query
+	// setting is entitled to override them — it just has to be sent afterwards.
+	// Emitting the profile first restores the intended precedence: profile
+	// supplies the lane's defaults, the caller's explicit Settings win.
 	u.RawQuery = q.Encode()
+	if req.Profile != "" {
+		u.RawQuery = "profile=" + url.QueryEscape(req.Profile) + "&" + u.RawQuery
+	}
 
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, u.String(), bytes.NewReader([]byte(req.SQL)))
 	if err != nil {

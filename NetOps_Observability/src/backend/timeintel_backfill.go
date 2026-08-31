@@ -966,7 +966,18 @@ func (s *server) recordTimeIntelFetchSplit(sp *timeIntelFetchSplit) {
 
 // timeIntelBackfillReadSettings is the per-query budget both halves carry. A
 // guard that is only in a comment is not a guard, so every one of these is
-// asserted on the wire by timeintel_backfill_test.go.
+// asserted as SENT by timeintel_backfill_test.go and, for the one the workload
+// profile also declares, as EFFECTIVE against a real server by
+// chhttp.TestLiveQuerySettingsBeatTheProfile.
+//
+// Sending is not the same as taking effect, and this pass learned it the hard
+// way: these settings ride the `background` workload profile (ch_workload.go),
+// and until 2026-08-31 chhttp emitted `profile=` AFTER them in the query
+// string, so ClickHouse applied the profile last and replaced max_memory_usage
+// with the lane default of 2 GiB. Run 08311437us3b is what that cost — a single
+// Select swung to 1.578 GiB, tripped the 4 GiB server overcommit and evicted two
+// MergeParts. At the 512 MiB written here the sub-fetch is refused EARLY and the
+// splitter absorbs it without ever pressuring merges.
 func timeIntelBackfillReadSettings() map[string]string {
 	return map[string]string{
 		// Bound the WIDE half of the read: hypotheses is the only column whose
