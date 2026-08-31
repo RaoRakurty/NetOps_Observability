@@ -17,6 +17,12 @@ Scoring model (#67 §4.5):
     verdict tier    = verdicts.assess(satisfying signals, required_modalities)
                       — rank and verdict stay ORTHOGONAL (sacred invariant)
 
+Structural precondition (tracker 157): a template that NAMES a role, tier or
+group declares it (``Template.requires_structure``) and is admitted to ranking
+only if the evidence ATTESTS that structure. A gate, not a weight — a discount
+is out-scored by a strong symptom match, which is precisely how a leaf/spine
+signature came to rank top in a topology with no spine.
+
 Object outcome: rank-1 below the confidence floor ⇒ ``undetermined`` with
 ``evidence_missing`` derived mechanically from the nearest template's
 unsatisfied clauses — no forced root cause, ever.
@@ -24,11 +30,17 @@ unsatisfied clauses — no forced root cause, ever.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from functools import lru_cache
 
 from catalog import Catalog, Clause, Template
-from signals import ModalityClass, ProbeAuthority, Signal, probe_authority_of
+from signals import (
+    EntityType,
+    ModalityClass,
+    ProbeAuthority,
+    Signal,
+    probe_authority_of,
+)
 from verdicts import Verdict as GateVerdict
 from verdicts import VerdictTier, assess
 
@@ -67,10 +79,18 @@ def _same_entity(a: Signal, b: Signal) -> bool:
 
 
 def clause_matches(clause: Clause, sig: Signal) -> bool:
-    """Total predicate: signal vs one clause. Role constraints need topology
-    context the scorer doesn't have yet — a role-constrained clause matches on
-    the other fields and the gap is declared in the score's notes (honest,
-    not silently strict or silently lax)."""
+    """Total predicate: signal vs one clause. Role constraints need per-signal
+    topology context the scorer does not have — a role-constrained clause
+    matches on the other fields and the gap is declared in the score's notes
+    (honest, not silently strict or silently lax).
+
+    That gap used to be the WHOLE story, and it was a hole: a signature could
+    name a role and rank in an estate that had none. Since tracker 157 the role
+    is no longer decorative — a template carrying one must declare a
+    `requires_structure` class (enforced at catalog load), and `rank` refuses
+    the template outright unless the evidence attests it. This function is
+    unchanged and stays the CLAUSE-level predicate; the structure gate is a
+    TEMPLATE-level precondition, evaluated before scoring."""
     if sig.kind not in clause.kinds():
         return False
     if clause.entity_type is not None and sig.entity_type is not clause.entity_type:
@@ -512,6 +532,84 @@ def _inapplicable_score(template: Template) -> HypothesisScore:
     return _build_inapplicable_score(template)
 
 
+def ungrounded_note(template: Template) -> str:
+    """The refusal, in the operator's words, recorded on the suppressed
+    hypothesis (tracker 157).
+
+    A function of the TEMPLATE alone — it names what the signature REQUIRES,
+    not which subset happened to be missing this time — so it is built once per
+    catalog and is stable across objects. `structure_gap` is the per-evaluation
+    detail for anyone who needs it."""
+    needs = ", ".join(template.requires_structure)
+    return (f"suppressed: this signature names a {needs} structure and no "
+            f"evidence in this object attests one — a verdict the observed "
+            f"topology cannot support, so it is excluded from ranking "
+            f"(tracker 157)")
+
+
+def _build_ungrounded_score(template: Template) -> HypothesisScore:
+    """The fully-determined score of a template the evidence cannot structurally
+    support.
+
+    Byte-identical to `_build_inapplicable_score` except for the note: the
+    template is not scored, so it has satisfied nothing, coverage 0.0,
+    confidence 0.0, no contradictions and the empty verdict gate. Keeping it in
+    the scored LIST (rather than dropping it) is what makes this a RANKING
+    exclusion and not a catalog edit — `evidence_missing`'s nearest-template
+    derivation and the forced-competitor / contradicted-look-alike rules all
+    see the same list they always saw, at the same length and in the same
+    order.
+
+    What it does NOT do is guarantee the refusal is RENDERED. A zero-confidence
+    row reaches the persisted visible set only if it lands in the top-K by the
+    ordinary sort, and a suppressed template no longer contradicts anything, so
+    it also stops being pulled up as a "ruled out because…" row. The refusal is
+    therefore carried here and COUNTED in `corr_template_ungrounded_total`;
+    surfacing it as a visible "suppressed for lack of structure" row would need
+    its pre-gate score, which is exactly the work the gate avoids. Named, not
+    assumed away.
+
+    Built ONCE PER CATALOG for the same reason `_build_inapplicable_score` is:
+    the value depends on the template alone, and `HypothesisScore` is frozen."""
+    return replace(_build_inapplicable_score(template),
+                   notes=(ungrounded_note(template),))
+
+
+# Keyed by IDENTITY, exactly like `_CATALOG_PLAN_CACHE` above and for the same
+# measured reason (hashing a frozen pydantic model walks every field). Kept
+# SEPARATE from `_catalog_plan` rather than widening its tuple: that function's
+# arity is part of the tracker-167 test surface, and the structure plan is a
+# different question asked of the same catalog. Two small dicts, one identity
+# check each, no shared state.
+_CATALOG_STRUCTURE_CACHE: dict[int, tuple[Catalog, dict, dict]] = {}
+_CATALOG_STRUCTURE_CACHE_MAX = 4
+
+
+def _catalog_structure_plan(catalog: Catalog) -> tuple[dict[str, frozenset[str]],
+                                                       dict[str, HypothesisScore]]:
+    """Everything the structural gate needs from a catalog: each enabled
+    template's declared structure as a SET (the gate is a subset test), and the
+    analytic ungrounded score of every template that declares one. Both are pure
+    functions of the catalog, so both are built once and shared.
+
+    Only templates that DECLARE a structure appear in either map — a catalog
+    with no declarations costs two empty dicts and one dict lookup per
+    template."""
+    hit = _CATALOG_STRUCTURE_CACHE.get(id(catalog))
+    if hit is not None and hit[0] is catalog:
+        return hit[1], hit[2]
+    # `str(c)` not `c`: the field's type is the StructureClass Literal, and the
+    # gate compares against the plain-str set `evidence_structure` returns.
+    declared = {t.id: frozenset(str(c) for c in t.requires_structure)
+                for t in catalog.enabled_templates() if t.requires_structure}
+    ungrounded = {t.id: _build_ungrounded_score(t)
+                  for t in catalog.enabled_templates() if t.requires_structure}
+    if len(_CATALOG_STRUCTURE_CACHE) >= _CATALOG_STRUCTURE_CACHE_MAX:
+        _CATALOG_STRUCTURE_CACHE.clear()
+    _CATALOG_STRUCTURE_CACHE[id(catalog)] = (catalog, declared, ungrounded)
+    return declared, ungrounded
+
+
 def evidence_kinds(evidence: tuple[Signal, ...]) -> frozenset[str]:
     """The kinds this evidence pool can satisfy a clause with.
 
@@ -528,6 +626,146 @@ def evidence_kinds(evidence: tuple[Signal, ...]) -> frozenset[str]:
         if s.kind == VERIFICATION_RESULT_KIND:
             ks |= _attr_kinds(s, "corroborates_kinds")
     return frozenset(ks)
+
+
+# ── tracker 157: the structural grounding gate ───────────────────────────────
+#
+# THE DEFECT. `clause_matches` tests (kind, entity_type, min_deviation) — it
+# cannot test the TOPOLOGY. So a signature that NAMES a role, tier or group
+# ranks wherever those kinds co-occur, whether or not the estate has the
+# structure it names. Measured on the live corpus (2026-08-30, 30 h):
+# `sig.ent.fabric.spine-leaf-path-degradation` is the TOP hypothesis on 9,890
+# objects of which 6,338 implicate exactly ONE device — a purely local port
+# fault ranked as a leaf/spine fabric path degradation. `seams` does not stop
+# it: `seams` is a tie-break AFFINITY (engine `_break_ties_by_seam_affinity`),
+# not a matching gate. Catalog-wide the shape dominates: of 100 enabled
+# templates exactly 2 constrained `role` at all, and 79 declared a seam with no
+# structural predicate of their own.
+#
+# A GATE, NOT A WEIGHT. A confidence discount would be defeated by exactly the
+# case that produced the bug — a strong symptom match out-scores the penalty.
+# So a template that declares `requires_structure` is admitted to ranking only
+# when the evidence ATTESTS every class it declares; otherwise it is scored
+# ANALYTICALLY at zero with the refusal recorded in its notes (below) and
+# counted into `corr_template_ungrounded_total`. Same list, same length, same
+# order: the template is excluded from RANKING, never from the record.
+#
+# WHERE THE STRUCTURE COMES FROM, and why it is this and nothing else. `rank`
+# sees one thing: the evidence. Not the seam inventory, not the adjacency map,
+# not device metadata — those are engine context that `rank` is deliberately
+# pure of, and the level-1 rank memo (`rank_memo.py`) is keyed on the evidence
+# projection ALONE. So the gate reads the ONE structural signal the evidence
+# genuinely carries: the SIGNAL KIND. A kind like `fhrp_state_change` or
+# `mlag_keepalive_fail` is only ever emitted BY a member OF the group it
+# describes — the device is telling us its own structure. That is an
+# observation, not a config assertion, which is the bar this fix was held to.
+#
+# Because the gate is a pure function of `evidence_kinds(ev)` — an input the
+# rank key already carries verbatim (rank_memo.py, "Per-signal inputs `rank`
+# reads": `sig.kind`, first row) — the memo stays sound with NO change to its
+# key. A gated verdict cannot be served from a memo entry minted under
+# different structural evidence, because different attesting kinds are a
+# different key.
+#
+# WHAT FAILS CLOSED, EXPLICITLY. `device_tier` has an EMPTY attesting set, so
+# it is never attested and every template requiring it is always suppressed.
+# That is not an oversight: `Signal` carries no role/tier field, and a survey of
+# every `attrs` key over 5,345,497 archived signals (netops.corr_signals_archive,
+# 30 h of the production mix, 2026-08-30) returned none — observer_kind, tag,
+# state, interface, peer, the aggregation-plane keys, syslog fields, flow
+# fields. The platform DOES classify device roles, but that lives in the Go
+# topology view (`src/backend/topology/roles.go`) and never reaches the
+# evidence plane. Until it does, a leaf/spine or WAN-edge claim is a claim the
+# topology cannot support, and the honest answer is to withhold it. When a role
+# source lands, it becomes a non-empty entry in this table and the gate opens
+# with no template edit.
+STRUCTURE_ATTESTING_KINDS: dict[str, frozenset[str]] = {
+    # A named topology TIER. Nothing in the evidence plane attests one — see
+    # above. Empty ⇒ fails closed, deliberately and visibly.
+    "device_tier": frozenset(),
+    # Membership of a redundancy / aggregation group. Every kind here is
+    # emitted by a device ABOUT the group it belongs to: a standalone box has
+    # no FHRP state, no MLAG keepalive, no LACP member and no cluster peer.
+    "redundancy_group": frozenset({
+        "fhrp_state_change", "fhrp_dual_active",
+        "fw_ha_state_change", "fw_sync_fail", "fw_ha_sync_fail",
+        "fw_session_owner_mismatch",
+        "mlag_peerlink_issue", "mlag_keepalive_fail",
+        "lacp_member_bad", "lacp_inconsistent", "lag_member_down",
+        "host_bond_mismatch", "ecmp_member_loss",
+        "wireless_wlc_member_failover",
+    }),
+    # An overlay / encapsulation structure over an underlay: a VXLAN-EVPN
+    # fabric or a tunnel. Each kind names the encapsulation itself, so it
+    # cannot be produced by a native-path fault.
+    "overlay_encap": frozenset({
+        "vtep_state_change", "vni_reachability_fail", "evpn_route_missing",
+        "evpn_mac_move", "arp_suppression_stale", "anycast_gw_inconsistent",
+        "tunnel_degraded", "tunnel_flap", "tunnel_down",
+        "controller_tunnel_state",
+        "ipsec_tunnel_status", "ipsec_underlay_status",
+        "ipsec_negotiation_fail", "ipsec_sa_rekey_fail",
+    }),
+}
+
+
+# The one class attested by an entity's SHAPE rather than by a kind. A path or
+# segment entity is named `<near>-><far>`, both ends non-empty and distinct —
+# the same decomposition `engine.Node.device_part` uses to tell a leg from a
+# device-local entity (engine.py: `if "->" in eid: return None`). Every
+# path/segment entity in the live corpus and in every fixture is that shape.
+# The FACT it attests is modest and exact: the platform measured a leg between
+# two points here. It is a floor, not a role.
+STRUCTURE_ENTITY_ATTESTED: frozenset[str] = frozenset({"transit_path"})
+_TRANSIT_ENTITY_TYPES = frozenset({EntityType.PATH, EntityType.SEGMENT})
+
+
+def _attests_transit_leg(evidence: tuple[Signal, ...]) -> bool:
+    """True iff some non-debug path/segment signal names two distinct endpoints.
+
+    Short-circuits on the first hit: on the live shape most objects carry no
+    path entity at all, so this is a type check over the evidence and nothing
+    more."""
+    for s in evidence:
+        if s.entity_type not in _TRANSIT_ENTITY_TYPES:
+            continue
+        if probe_authority_of(s) is ProbeAuthority.DEBUG_ONLY:
+            continue
+        near, sep, far = s.entity_id.partition("->")
+        if sep and near and far and near != far:
+            return True
+    return False
+
+
+def evidence_structure(evidence: tuple[Signal, ...],
+                       present: frozenset[str]) -> frozenset[str]:
+    """The structural classes THIS evidence attests.
+
+    Two mechanisms, both reading fields the rank memo's key already carries
+    (`sig.kind`, `sig.entity_type`, `sig.entity_id`), so the gate needs no
+    change to that key:
+
+      * KIND-attested (`STRUCTURE_ATTESTING_KINDS`) — takes the already-computed
+        `evidence_kinds(ev)`, so the DEBUG_ONLY exclusion and the
+        active-verification corroboration lane are inherited exactly: a
+        verification result that corroborates `fhrp_state_change` attests the
+        group the same as the device's own report, and a lab probe attests
+        nothing.
+      * ENTITY-attested (`STRUCTURE_ENTITY_ATTESTED`) — a measured leg.
+
+    Pure, total, and monotone: adding evidence can only add classes."""
+    attested = {cls for cls, ks in STRUCTURE_ATTESTING_KINDS.items()
+                if ks & present}
+    if _attests_transit_leg(evidence):
+        attested.add("transit_path")
+    return frozenset(attested)
+
+
+def structure_gap(template: Template, attested: frozenset[str]) -> tuple[str, ...]:
+    """The structural classes this template declares and the evidence does NOT
+    attest — empty when the template is grounded (or declares nothing). Sorted,
+    so the recorded reason is deterministic."""
+    return tuple(sorted(c for c in template.requires_structure if c not in attested))
 
 
 # ── tracker 167: SELECTIVITY MEASUREMENT ─────────────────────────────────────
@@ -565,13 +803,37 @@ def evidence_kinds(evidence: tuple[Signal, ...]) -> frozenset[str]:
 _TEMPLATE_SCORED_TOTAL = 0
 _TEMPLATE_CANDIDATES_TOTAL = 0
 
+# ── tracker 157: the refusal is observable ───────────────────────────────────
+#
+# A suppression nobody can count is indistinguishable from a bug. This counter
+# is the number of (rank() x template) evaluations where a template SURVIVED the
+# kind index — its evidence was there, it would have been scored — and was then
+# refused because the evidence attests none of the structure it names.
+#
+# WHERE IT SITS RELATIVE TO THE 167 COUNTERS. `scored` and `ungrounded` are
+# disjoint and 167's ratio keeps its old meaning:
+#
+#     candidates  = scored + ungrounded + (nothing the evidence could reach)
+#     selectivity = scored / candidates      (as before — 'really scored')
+#
+# so the difference between a pre-157 and a post-157 `scored` is exactly this
+# counter. A template that is BOTH unreachable by kind and ungrounded is
+# counted in neither — the index already accounts for it, and counting a
+# refusal that cost nothing would flatter the number. Read it as a rate: a
+# spike means the catalog is being asked for verdicts the estate's topology
+# cannot support (an inventory gap, a mis-scoped tenant), which is worth an
+# operator's attention in its own right.
+_TEMPLATE_UNGROUNDED_TOTAL = 0
+
 
 def template_scoring_stats() -> dict[str, int]:
-    """Snapshot of the tracker-167 selectivity counters for the metrics
-    exposition: ``{"scored": …, "candidates": …}``. Read-only; a plain dict of
-    ints so the caller can never reach back into the counters."""
+    """Snapshot of the template-gate counters for the metrics exposition:
+    ``{"scored": …, "candidates": …, "ungrounded": …}`` (tracker 167 + 157).
+    Read-only; a plain dict of ints so the caller can never reach back into the
+    counters."""
     return {"scored": _TEMPLATE_SCORED_TOTAL,
-            "candidates": _TEMPLATE_CANDIDATES_TOTAL}
+            "candidates": _TEMPLATE_CANDIDATES_TOTAL,
+            "ungrounded": _TEMPLATE_UNGROUNDED_TOTAL}
 
 
 def template_scoring_metric_lines() -> tuple[str, ...]:
@@ -589,40 +851,79 @@ def template_scoring_metric_lines() -> tuple[str, ...]:
          "= corr_template_scored_total / corr_template_candidates_total."),
         "# TYPE corr_template_candidates_total counter",
         f"corr_template_candidates_total {st['candidates']}",
+        ("# HELP corr_template_ungrounded_total Templates refused by the "
+         "tracker-157 structural gate — the evidence attests none of the "
+         "role/tier/group structure the signature names, so it was excluded "
+         "from ranking. Disjoint from corr_template_scored_total; counted only "
+         "when the kind index would otherwise have scored the template."),
+        "# TYPE corr_template_ungrounded_total counter",
+        f"corr_template_ungrounded_total {st['ungrounded']}",
     )
 
 
 def reset_template_scoring_stats() -> None:
-    """Zero the selectivity counters. Tests and offline measurement runs only —
-    the engine never calls this (a counter that resets in production would make
-    the ratio unreadable)."""
+    """Zero the selectivity and grounding counters. Tests and offline
+    measurement runs only — the engine never calls this (a counter that resets
+    in production would make the ratio unreadable)."""
     global _TEMPLATE_SCORED_TOTAL, _TEMPLATE_CANDIDATES_TOTAL
+    global _TEMPLATE_UNGROUNDED_TOTAL
     _TEMPLATE_SCORED_TOTAL = 0
     _TEMPLATE_CANDIDATES_TOTAL = 0
+    _TEMPLATE_UNGROUNDED_TOTAL = 0
 
 
 def rank(catalog: Catalog, evidence: tuple[Signal, ...] | list[Signal]) -> RankingResult:
     """Score every enabled template; rank by confidence with deterministic
     tie-break (template id) so equal scores never flap between runs."""
     global _TEMPLATE_SCORED_TOTAL, _TEMPLATE_CANDIDATES_TOTAL
+    global _TEMPLATE_UNGROUNDED_TOTAL
     ev = tuple(evidence)
     # tracker 167: score only the templates the evidence could possibly reach;
     # the rest get their fully-determined zero score analytically. Same list,
     # same order, same values — see the module note above.
     present = evidence_kinds(ev)
     index, inapplicable = _catalog_plan(catalog)
+    # tracker 157: and of the templates the evidence CAN reach, admit only those
+    # whose named structure the evidence attests. Both maps are empty for a
+    # catalog that declares no structure, so the gate is a dict lookup that
+    # cannot fire.
+    declared, ungrounded_score = _catalog_structure_plan(catalog)
+    attested = evidence_structure(ev, present) if declared else frozenset()
     templates = catalog.enabled_templates()
     scores: list[HypothesisScore] = []
     append = scores.append          # bound once: this loop runs catalog-sized
     scored = 0                      # per rank(), and rank() runs per component
+    ungrounded = 0
     for t in templates:
-        if index[t.id] & present:
+        reachable = bool(index[t.id] & present)
+        need = declared.get(t.id)
+        if need is not None and not need <= attested:
+            # The structure this signature names is not in evidence. It is
+            # excluded from RANKING (analytic zero, refusal on the record) —
+            # never discounted, because a strong symptom match would out-score
+            # a discount and re-create the defect.
+            #
+            # The refusal is decided BEFORE the kind index so that the score
+            # this template EMITS does not depend on whether the index elided
+            # it: tracker 167's invariant is that the fast path changes no
+            # byte of the output, and an index that swapped the ungrounded note
+            # for a bare inapplicable score would have broken it.
+            #
+            # It is COUNTED only when the index would have let it through —
+            # the interesting number is "would have been scored, and was
+            # refused for lack of structure", not "was never going to match
+            # anyway", which the index already accounts for.
+            append(ungrounded_score[t.id])
+            if reachable:
+                ungrounded += 1
+        elif reachable:
             append(score_template(t, ev))
             scored += 1
         else:
             append(inapplicable[t.id])
     _TEMPLATE_SCORED_TOTAL += scored
     _TEMPLATE_CANDIDATES_TOTAL += len(templates)
+    _TEMPLATE_UNGROUNDED_TOTAL += ungrounded
     # Equal confidence → prefer the MORE SPECIFIC explanation (more matched
     # clauses = more of the evidence explained); template id only as the final
     # deterministic tie-break. Keeps a broad single-clause look-alike from

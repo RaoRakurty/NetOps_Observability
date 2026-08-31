@@ -389,7 +389,11 @@ def test_counters_are_hand_computable(counters):
     cat = _fixture_catalog()
     rank(cat, (sig("kind_a"), sig("kind_d", offset_s=5)))
     st = counters()
-    assert st == {"scored": 3, "candidates": 5}
+    # `ungrounded` (tracker 157) is 0 and must stay 0: this fixture catalog
+    # declares no `requires_structure`, so the structural gate cannot fire on
+    # it. A non-zero here would mean the gate fires on templates that never
+    # asked for it.
+    assert st == {"scored": 3, "candidates": 5, "ungrounded": 0}
     assert st["scored"] / st["candidates"] == 0.6
 
 
@@ -398,7 +402,7 @@ def test_candidates_counts_every_enabled_template_even_with_no_matches(counters)
     that reaches nothing still contributes its full candidate count."""
     cat = _fixture_catalog()
     rank(cat, (sig("kind_nothing_declares"),))
-    assert counters() == {"scored": 0, "candidates": 5}
+    assert counters() == {"scored": 0, "candidates": 5, "ungrounded": 0}
 
 
 def test_counters_accumulate_once_per_evaluation(counters):
@@ -407,7 +411,7 @@ def test_counters_accumulate_once_per_evaluation(counters):
     cat = _fixture_catalog()
     rank(cat, (sig("kind_a"),))                      # scores a + ac
     rank(cat, (sig("kind_b"),))                      # scores b
-    assert counters() == {"scored": 3, "candidates": 10}
+    assert counters() == {"scored": 3, "candidates": 10, "ungrounded": 0}
 
 
 def test_only_rank_charges_the_counters(counters):
@@ -425,9 +429,9 @@ def test_only_rank_charges_the_counters(counters):
     score_template(t, ev)
     _inapplicable_score(t)
     evidence_kinds(ev)
-    assert counters() == {"scored": 0, "candidates": 0}
+    assert counters() == {"scored": 0, "candidates": 0, "ungrounded": 0}
     rank(_fixture_catalog(), (sig("kind_a"),))
-    assert counters() == {"scored": 2, "candidates": 5}
+    assert counters() == {"scored": 2, "candidates": 5, "ungrounded": 0}
 
 
 def test_the_snapshot_cannot_write_back_to_the_counters(counters):
@@ -464,14 +468,24 @@ def test_MUTANT_no_fast_path_drives_the_ratio_to_one(counters, monkeypatch):
     exhaustive = rank(CAT, ev)
     st_mutant = counters()
 
-    assert st_mutant["scored"] == st_mutant["candidates"] == len(ALL_TEMPLATES)
+    # With no index every enabled template is REACHABLE, so the two elision
+    # counters must account for the whole catalog between them. The residue is
+    # the tracker-157 structural gate, which is not the fast path and does not
+    # go away when the fast path does — that is exactly the point of counting
+    # it separately.
+    assert st_mutant["candidates"] == len(ALL_TEMPLATES)
+    assert st_mutant["scored"] + st_mutant["ungrounded"] == len(ALL_TEMPLATES)
     assert st_mutant["scored"] > st_indexed["scored"], (
         "dropping the fast path did not change the numerator — the counters are "
         "not measuring the fast path")
     def ratio(s: dict) -> float:
         return s["scored"] / s["candidates"]
 
-    assert ratio(st_mutant) == 1.0 and ratio(st_indexed) < 1.0
+    def reached(s: dict) -> float:
+        return (s["scored"] + s["ungrounded"]) / s["candidates"]
+
+    assert reached(st_mutant) == 1.0 and reached(st_indexed) < 1.0
+    assert ratio(st_mutant) > ratio(st_indexed)
     assert indexed == exhaustive, "the fast path changed the ranking"
 
 

@@ -39,11 +39,21 @@ from signals import (
 
 T0 = datetime(2026, 6, 12, 9, 42, 0, tzinfo=timezone.utc)
 
-# content_hash of _fixture_snapshot(), FROZEN from the pre-P0 tree. content_hash
-# is the replay/damping pin — the paging change touches only ROW EMISSION and is
-# forbidden from moving this value. A drift here means the canonical hash path
-# regressed (replay would drift + every open object would re-version on deploy).
-FIXTURE_GOLDEN = "19b20bafb5eff558"
+# content_hash of _fixture_snapshot(). content_hash is the replay/damping pin —
+# the paging change touches only ROW EMISSION and is forbidden from moving this
+# value. A drift here means the canonical hash path regressed (replay would
+# drift + every open object would re-version on deploy).
+#
+# RE-FROZEN ONCE, 2026-08-31, tracker 157 (was "19b20bafb5eff558", frozen from
+# the pre-P0 tree). The structural grounding gate changed this object's RANKING,
+# deliberately and for the better: its evidence is a CPU alarm and interface
+# errors on ONE device, dallas-edge, and the pre-157 engine returned
+# `sig.ent.fabric.spine-leaf-path-degradation` at 0.5 as the top hypothesis — a
+# leaf/spine fabric verdict over a single box, which is the exact defect 157
+# exists to kill. It is now `undetermined` with a per-clause checklist. The hash
+# moved because the VERDICT moved; the hash PATH is untouched, and re-freezing
+# here is the record of that, not a licence to re-freeze again.
+FIXTURE_GOLDEN = "9faa2431af85b896"
 
 
 def _sig(kind, et, eid, *, off=0.0, src=Source.METRIC, sev=Severity.HIGH,

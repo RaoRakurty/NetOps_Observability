@@ -186,6 +186,71 @@ Seam = Literal["LAN", "WAN_SDWAN", "DC_FABRIC", "CARRIER_INTERCONNECT", "CLOUD_A
 DeploymentScope = Literal["onprem_only", "cloud_only", "hybrid"]
 
 
+# ── structural grounding vocabulary (tracker 157) ────────────────────────────
+#
+# THE DEFECT. A `requires` clause is (kind, entity_type, min_deviation) shaped.
+# Nothing in it can assert that the TOPOLOGY hosting the evidence has the
+# structure the signature NAMES, so a role/tier-scoped family ranks in a
+# topology that structurally cannot host it. Measured: with 130 leaf switches
+# suffering purely LOCAL port faults and no spine device anywhere in the
+# scenario, `sig.ent.fabric.spine-leaf-path-degradation` ranks TOP — satisfied
+# by token co-occurrence (interface + path signals), never by any evidence a
+# spine tier exists. `seams` does not help: it is a tie-break AFFINITY
+# (engine.py `_break_ties_by_seam_affinity`), not a matching gate.
+#
+# THE FIX IS A GATE, NOT A WEIGHT. A template that names a structure declares
+# it here, EXPLICITLY, in the template body — never inferred at runtime from the
+# template's name. `scoring.rank` admits such a template only when the evidence
+# ATTESTS that structure; otherwise it is excluded from ranking with the reason
+# recorded (`corr_template_ungrounded_total`). A discount would be wrong: a
+# strong symptom match would simply out-score it again.
+#
+# DEFAULT-CLOSED. `Catalog._checks` refuses to load a template that carries a
+# clause-level `role` predicate without declaring a structural requirement, so
+# "names a role but asserts no structure" is unwritable from here on.
+#
+# THE CLASSES. Each names a structure the EVIDENCE can attest (or provably
+# cannot). What attests each one is scoring's business — `scoring
+# .STRUCTURE_ATTESTING_KINDS` — because attestation is a statement about
+# evidence, not about the catalog; this module owns only the declaration.
+#
+#   device_tier       a device attributable to a named topology TIER
+#                     (spine / leaf / core). **NOTHING IN THE EVIDENCE PLANE
+#                     ATTESTS A TIER TODAY** — `Signal` has no role field, and a
+#                     survey of every `attrs` key across 5,345,497 archived
+#                     signals (2026-08-30) found none either. The class
+#                     therefore FAILS CLOSED: a template that needs a tier is
+#                     suppressed until a role source exists. That is the honest
+#                     behaviour — a tier the platform cannot see is a tier it
+#                     must not claim.
+#   redundancy_group  a device attested as a MEMBER of a redundancy or
+#                     aggregation group (FHRP/HSRP/VRRP, firewall HA pair,
+#                     MLAG/vPC, LACP/LAG bundle, ECMP member set, WLC cluster).
+#                     Attested by the group-scoped signal kinds themselves — a
+#                     device only reports FHRP state or MLAG keepalives if it is
+#                     in one.
+#   overlay_encap     an overlay/encapsulation structure (VXLAN/EVPN VNI, VTEP,
+#                     IPsec/GRE tunnel). Attested by the overlay-scoped kinds.
+#   transit_path      a MEASURED leg between two distinct endpoints — a path or
+#                     segment entity the platform actually probed, not a
+#                     device-local counter. Attested by the entity's own shape
+#                     (`a->b`). This is the structural floor under any family
+#                     that claims a fault at a hand-off or on a transit leg: no
+#                     measured leg, no leg-shaped verdict.
+#
+# SCOPE, AND WHAT IS DELIBERATELY NOT SOLVED HERE. This is the ROLE / TIER /
+# GROUP / LEG axis, all of it decided from the EVIDENCE. Ownership-SEAM scoping
+# — is this specific interface really the carrier handoff? — is a different
+# axis with a different source: the engine's seam inventory, which `rank` is
+# deliberately pure of. So `transit_path` is the strongest honest precondition
+# available for a WAN-edge claim (a measured leg exists), NOT proof that the
+# congested interface faces a provider. That residual is named, not papered
+# over; closing it means giving the scorer a seam/role context and re-keying
+# the rank memo, which is its own piece of work.
+StructureClass = Literal["device_tier", "redundancy_group", "overlay_encap",
+                         "transit_path"]
+
+
 class Template(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -227,12 +292,30 @@ class Template(BaseModel):
     # whose fault family cascades across layers declare the ladder so the RCA
     # can show HOW one failure causes the next. Optional — most templates omit.
     causal_chain: tuple[CausalStage, ...] = ()
+    # Structural precondition (tracker 157). The topology structures this
+    # signature's CLAIM depends on and its clauses cannot assert. A GATE, not a
+    # weight: `scoring.rank` refuses to rank the template unless the evidence
+    # attests every class listed. Empty = the family names no structure beyond
+    # what its clauses already assert, and it is untouched by the gate.
+    requires_structure: tuple[StructureClass, ...] = ()
 
     @field_validator("requires")
     @classmethod
     def _at_least_one_mandatory(cls, v: tuple[Clause, ...]) -> tuple[Clause, ...]:
         if all(c.optional for c in v):
             raise ValueError("template needs >=1 non-optional requires clause")
+        return v
+
+    @field_validator("requires_structure")
+    @classmethod
+    def _structure_declared_once(
+        cls, v: tuple[StructureClass, ...],
+    ) -> tuple[StructureClass, ...]:
+        """A repeated class is an authoring slip, and the gate is a SET test —
+        it would silently mean nothing. Reject it rather than absorb it."""
+        if len(set(v)) != len(v):
+            dupes = sorted({c for c in v if v.count(c) > 1})
+            raise ValueError(f"requires_structure repeats {dupes}")
         return v
 
 
@@ -267,6 +350,21 @@ class Catalog(BaseModel):
                     raise ValueError(f"{t.id}: seam-tagged template needs operator_phrase and manager_phrase")
                 if len(t.required_modalities) == 1 and len({k for c in t.requires for k in c.kinds()}) < 2:
                     raise ValueError(f"{t.id}: confirmable template needs evidence beyond a single kind/plane")
+            # tracker 157, DEFAULT-CLOSED: a clause-level `role` predicate NAMES a
+            # topology role, and `clause_matches` cannot enforce it (the scorer has
+            # no per-signal role to test against — see its docstring). Before this
+            # rule the role was decorative: two templates carried one, and both
+            # ranked in topologies that had no such role. A template may still
+            # declare a role, but it must now also declare the structure that role
+            # belongs to, so the gate can refuse it when the evidence cannot
+            # support it. An author who adds a role and forgets the structure gets
+            # a load failure, not a silent overclaim.
+            if any(c.role for c in t.requires) and not t.requires_structure:
+                roles = sorted({c.role for c in t.requires if c.role})
+                raise ValueError(
+                    f"{t.id}: clause role(s) {roles} declared with no "
+                    f"requires_structure — a named role needs a structural "
+                    f"precondition the evidence can be tested against (tracker 157)")
         return v
 
     def enabled_templates(self) -> tuple[Template, ...]:
@@ -376,6 +474,16 @@ def _cascade(root_stage: str) -> list[dict]:
 BUILTIN_TEMPLATES: list[dict] = [
     {
         "id": "sig.ent.wan-edge.congestion",
+        # tracker 157 — the `role: wan_edge` clause below names a role, and before
+        # the gate it was decorative: `clause_matches` cannot test it, so
+        # if_util_high on any busy link plus any loss signal satisfied this
+        # signature. The role itself is NOT attestable (no evidence carries a
+        # device role — see catalog.StructureClass), so the honest precondition
+        # is the structural floor beneath it: a MEASURED leg must exist. No
+        # probed path/segment ⇒ no edge-congestion verdict. It does not prove the
+        # interface faces a provider — that needs the seam inventory, which the
+        # scorer cannot see, and the gap is declared rather than pretended away.
+        "requires_structure": ["transit_path"],
         "title": "WAN edge congestion",
         "domain": "ent.wan-edge",
         "requires": [
@@ -921,6 +1029,10 @@ BUILTIN_TEMPLATES: list[dict] = [
     },
     {
         "id": "sig.ent.access.fhrp-failover",
+        # tracker 157 — the `role: fhrp_group` clause names a redundancy group, and
+        # here the evidence CAN attest it: a device only emits fhrp_state_change if
+        # it is a group member. Grounded ⇒ ranks exactly as before.
+        "requires_structure": ["redundancy_group"],
         "title": "First-hop redundancy failover (HSRP/VRRP)",
         "domain": "ent.access",
         "requires": [
@@ -1274,6 +1386,27 @@ BUILTIN_TEMPLATES: list[dict] = [
     },
     {
         "id": "sig.ent.fabric.spine-leaf-path-degradation",
+        # tracker 157 — THE measured defect. Both required clauses are generic
+        # (interface errors + a path probe), so ANY topology emitting them
+        # satisfies this signature: with 130 leaves taking purely local port
+        # faults and NO spine device in the scenario it still ranked top, and on
+        # the live corpus (30 h to 2026-08-30) it was top hypothesis on 9,890
+        # objects of which 6,338 implicate exactly ONE device.
+        #
+        # A fabric path is not a local port. It is a MULTI-PATH bundle (the
+        # leaf's uplink member set toward the spines) carrying a leg BETWEEN
+        # racks, and the evidence can attest both: ecmp_member_loss /
+        # lacp_* / lag_* for the member set, an `a->b` path entity for the leg.
+        # A device-local port fault attests neither, which is exactly the
+        # difference the old clauses could not see.
+        #
+        # This is NOT proof that a spine TIER exists — no evidence attests a
+        # tier (catalog.StructureClass) — and the residue is declared, not
+        # pretended away. It IS the structure the claim rests on, and it is
+        # satisfied by the family's own authored fixture
+        # (fixtures/spine-leaf-path-degradation-confirmed.json: ecmp_member_loss
+        # on leaf1 + the rack1->rack4 path) while the measured defect fails it.
+        "requires_structure": ["redundancy_group", "transit_path"],
         "title": "Leaf/spine fabric path degradation",
         "domain": "ent.fabric",
         "seams": ["DC_FABRIC"],
@@ -1303,6 +1436,9 @@ BUILTIN_TEMPLATES: list[dict] = [
     },
     {
         "id": "sig.ent.security.fw-ha-failover-drift",
+        # tracker 157 — a firewall HA PAIR. Attested by the fw_ha_* / fw_sync_fail
+        # kinds the required clause already names.
+        "requires_structure": ["redundancy_group"],
         "title": "Firewall HA failover or policy/session drift",
         "domain": "ent.security",
         "seams": ["LAN", "DC_FABRIC", "WAN_SDWAN", "CLOUD_APP"],
@@ -1651,6 +1787,9 @@ BUILTIN_TEMPLATES: list[dict] = [
     },
     {
         "id": "sig.ent.access.fhrp-split-brain",
+        # tracker 157 — an FHRP group by definition. Attested by fhrp_dual_active /
+        # fhrp_state_change, so grounded evidence ranks unchanged.
+        "requires_structure": ["redundancy_group"],
         "title": "HSRP/VRRP active-active split-brain",
         "domain": "ent.access",
         "seams": ["LAN", "DC_FABRIC"],
@@ -1968,11 +2107,42 @@ BUILTIN_TEMPLATES: list[dict] = [
 # "add as valid catalog entries, avoid destabilizing the engine"). Enable per
 # family as Layer-2 signal kinds land for them. Kept in a separate list so the
 # enabled-set version hash and the fixture-coverage test are unaffected.
+
+# tracker 157 — structural preconditions for the COMPACT backlog lists.
+#
+# The lists below are comprehensions over positional tuples, so there is no
+# per-entry dict to carry a `requires_structure` key; this table is that
+# declaration, keyed by the same `sid` the comprehension builds the id from. It
+# is the ONE place a disabled family declares its structure, and it is applied
+# by every compact list, so enabling a family cannot enable it ungated.
+#
+# The backlog is NOT neutral with respect to the defect (tracker 157): all 46
+# disabled templates declare `seams` and none carried a structural predicate, so
+# every family enablement enlarged the exposed surface. The four families here
+# are the ones whose CLAIM names a structure their clauses cannot assert.
+_BACKLOG_STRUCTURE: dict[str, list[str]] = {
+    # A LACP bundle — but the clause alternation admits a bare `if_errors`,
+    # which says nothing about a bundle. The lacp_* / lag_* kinds attest it.
+    "ent.fabric.lacp-member-blackhole": ["redundancy_group"],
+    # An MLAG/vPC PAIR; attested by the mlag_* kinds the clause names.
+    "ent.fabric.mlag-vpc-peerlink-issue": ["redundancy_group"],
+    # A host bond / switch bundle pair; attested by host_bond_mismatch and
+    # lacp_inconsistent.
+    "ent.fabric.server-bonding-mode-mismatch": ["redundancy_group"],
+    # An interconnect LAG; attested by lag_member_down / lacp_inconsistent.
+    "ent.middle-mile.interconnect-lag-member-loss": ["redundancy_group"],
+    # The claim is that an OVERLAY exceeds its underlay MTU, but both clauses
+    # (size_dependent_loss, tcp_retransmit_high) are equally true of a plain
+    # native-path MTU problem. The VXLAN/EVPN/tunnel kinds attest the overlay.
+    "ent.fabric.overlay-underlay-mtu-mismatch": ["overlay_encap"],
+}
+
 P1_BACKLOG_TEMPLATES: list[dict] = [
     {
         "id": f"sig.{sid}", "title": title, "domain": domain, "enabled": False,
         "seams": list(seams), "deployment_scope": scope, "demo_priority": "p1",
         "requires": [{"kind": req} for req in reqs],
+        "requires_structure": _BACKLOG_STRUCTURE.get(sid, []),
         "required_modalities": list(mods),
         "direction_expect": direction,
         "verdict": {"owner": owner, "layer": layer, "first_steps": list(steps)},
@@ -2126,6 +2296,7 @@ W2_BACKLOG_TEMPLATES: list[dict] = [
         "id": f"sig.{sid}", "title": title, "domain": domain, "enabled": False,
         "seams": list(seams), "deployment_scope": scope, "demo_priority": "p2",
         "requires": [{"kind": req} for req in reqs],
+        "requires_structure": _BACKLOG_STRUCTURE.get(sid, []),
         "required_modalities": list(mods),
         "direction_expect": "", "verdict": {"owner": owner, "layer": layer, "first_steps": list(steps)},
         "operator_phrase": op, "manager_phrase": mgr,
@@ -2324,6 +2495,9 @@ WAVE3_TEMPLATES: list[dict] = [
     },
     {
         "id": "sig.ent.security.fw-aa-session-owner-mismatch",
+        # tracker 157 — an active/active firewall pair; attested by the
+        # fw_session_owner_mismatch / fw_ha_sync_fail kinds.
+        "requires_structure": ["redundancy_group"],
         "title": "Firewall active/active session-owner mismatch",
         "domain": "ent.security",
         "seams": ["LAN", "WAN_SDWAN", "DC_FABRIC", "CLOUD_APP"],
@@ -2516,6 +2690,7 @@ W3_BACKLOG_TEMPLATES: list[dict] = [
         "id": f"sig.{sid}", "title": title, "domain": domain, "enabled": False,
         "seams": list(seams), "deployment_scope": scope, "demo_priority": "p2",
         "requires": [{"kind": req} for req in reqs],
+        "requires_structure": _BACKLOG_STRUCTURE.get(sid, []),
         "required_modalities": list(mods),
         "direction_expect": "", "verdict": {"owner": owner, "layer": layer, "first_steps": list(steps)},
         "operator_phrase": op, "manager_phrase": mgr,
@@ -3318,6 +3493,10 @@ WIRELESS_TEMPLATES: list[dict] = [
     },
     {
         "id": "sig.ent.wireless.wlc-failover",
+        # tracker 157 — a WLC CLUSTER. The clause alternation admits a bare
+        # controller_device_unreachable, which is equally true of a standalone
+        # controller; only wireless_wlc_member_failover attests the cluster.
+        "requires_structure": ["redundancy_group"],
         "title": "Controller failover / controller loss",
         "domain": "ent.wireless",
         "requires": [
