@@ -1,8 +1,8 @@
 # Project 1 — Scale Testing  🔴 HIGH PRIORITY
 
 **Rewritten 2026-08-30 against HEAD (`71adcfc6`); refreshed 2026-08-31 after the
-engine wave was validated on `storm-s07`.** Working checklist, not a history —
-the history is in `docs/scale/` and `git log`.
+engine wave was validated on `storm-s07` and tracker 155 closed on run 155d.**
+Working checklist, not a history — the history is in `docs/scale/` and `git log`.
 
 **Scope.** Establish the **host ceiling** on the owner's box — max sustained
 devices at nominal AND storm with all gates green — and the **binding resource**
@@ -70,11 +70,30 @@ second box, an 8-core node or a real rig is **out of scope** (owner decision,
   the six-leg 816–908 s envelope = noise, and p95 is published-not-gated); plane
   accounting exact (54,767 = 49,900 + 4,867); carrier correlation memory
   **×0.941, 79.1 % of cap — the first leg ever to fall below ×1.0**.
+- **Tracker 155 CLOSED — correlation state now follows partition ownership.**
+  Four live runs: `155a` measured the defect (identity fragments, +1 object per
+  move, positive-story pass **1.00 → 0.00**, zero durable loss), `155b`/`155c`
+  graded the first two fixes, `155d` returned **positive pass 1.00 on BOTH
+  disturbed arms** — one correlation_id per story, versions **v1–v10 gapless
+  across the handoff**, `seam_owner` correct, **0 duplicate (correlation_id,
+  version)** with the 155c duplicate as the negative control, conservation exact
+  on every replica, flush cost **210–652 ms** (13.0 % of the 5 s revoke budget).
+  Commits `931efffb` (identity seeding) + `557dbef7` (slack / revoke guard /
+  verdict floor) + `7c86223d` (flush-and-release + persist/admission guards).
+  Full record incl. caveats: `docs/scale/OWNERSHIP_155_VALIDATION_2026-08-31.md`.
+  Row 155 deleted from `docs/TRACKER.md`; carried forward as **196** (terminal
+  row unreachable in lab), **198** (ambient signal duplicate) and the new **199**.
+- **Tracker 194 CLOSED — watchdog api liveness** (`61974003`): first-class
+  CRITICAL probe on `/admin/version` with a cold-boot grace. Row deleted; the
+  close-out record is `docs/scale/PROJECT1_WAVE_VALIDATION_2026-08-31.md` §6
+  plus the script's own header.
 - **gNMI stretch DONE** — `ccfda64c`: the twin serves gNMI, so the
   `ENABLE_GNMI_COLLECTION` path has labelled-fault coverage end to end
   (digital-twin design §4.6).
 - **5k/10k ladder profiles authored** — `63198dcd`
-  (`t-nominal`/`t-storm` × 5k/10k in `SCALE_PROFILES`); not yet run.
+  (`t-nominal`/`t-storm` × 5k/10k in `SCALE_PROFILES`). Both 5k rungs have since
+  been run and graded (INCOMPLETE/FAIL, `docs/scale/HOST_CEILING_2026-08-31.md`);
+  the 10k pair is not yet run.
 - **Trackers closed today:** 185 + 191 (`0bfdce1c`, `06450430`, both evidenced in
   the close-out) and the 17 shipped rows pruned from `docs/TRACKER.md` in this
   commit — 156, 158, 159, 162, 163, 165, 166, 168, 169, 170, 172, 173, 174, 176,
@@ -87,26 +106,28 @@ second box, an 8-core node or a real rig is **out of scope** (owner decision,
 
 | # | Item | Why it is here |
 |---|------|----------------|
-| **186** | Time-intelligence backfill query is **unbounded**, not merely un-incremental. On s07 it took **1.86 GiB / 35.4 GB read / 49.2 s** and was the named victim of a ClickHouse 4 GiB overcommit — evicting two background merges with it. 241/159 on **12 of 41 passes since 08-30 16:57**; read volume grows **~0.6 GiB per leg** with retention. | **The sole blocker to a 9/9 `t-storm-2.5k` leg on a cold api** — it causes both `memflat` clauses. Needs the watermark AND a per-query memory/read budget. |
-| **194** | Watchdog cannot see an api-only outage: `:8000/` is answered by the SPA, `/healthz` has no nginx location and falls through to the SPA, the api container declares no healthcheck, and the one api-touching probe (`/admin/version`) is classified advisory. Observed blind for ~2 min on 2026-08-31 01:48–01:51. | Low. Honest probe = `/admin/version`, CRITICAL class, with a **~2.5 min** cold-boot grace. |
+| **186** (pending deploy-F validation) | Time-intelligence backfill query is **unbounded**, not merely un-incremental. On s07 it took **1.86 GiB / 35.4 GB read / 49.2 s** and was the named victim of a ClickHouse 4 GiB overcommit — evicting two background merges with it. 241/159 on **12 of 41 passes since 08-30 16:57**; read volume grows **~0.6 GiB per leg** with retention. | **The sole blocker to a 9/9 `t-storm-2.5k` leg on a cold api** — it causes both `memflat` clauses. Needs the watermark AND a per-query memory/read budget. |
+| **199** | A **graceful shutdown skips the ownership handoff flush**. SIGTERM → `consumer.stop()` → LeaveGroup never calls `on_partitions_revoked`, so `_handoff_flush` never runs for the departing replica's own open objects — measured on c6 in the 155d restart arm: exited in **120 ms** holding **14 open objects** with **0 flush lines**. | Med. On the rolling-restart/deploy path the residue bound `7c86223d` establishes is not applied; the acquirer seeds from the last ordinary durable row (correct, staler). Fix = a shutdown hook running `_handoff_flush` over the full assignment before LeaveGroup, same budget discipline. |
 
 ### Then the ladder (the ceiling itself)
 
-1. **Run the 5k and 10k rungs.** Profiles exist (`63198dcd`); tracker 175 is
+1. **Run the remaining rungs: the ⏳ 3,500 isolating rung and the ⏳ 10k
+   "cannot be offered" rung** (`docs/scale/HOST_CEILING_2026-08-31.md` §ladder).
+   5k nominal and 5k storm are already run and graded FAIL/INCOMPLETE; 3,500 holds
+   eps under the measured consumer ceiling and varies only fleet size, so it places
+   the engine's own device ceiling with no new limiter; 10k is a documentation rung
+   (how the box fails at 4× the ceiling). Profiles exist (`63198dcd`); tracker 175 is
    discharged, so the tombstone debt is no longer a run-blocker. Carry the
    **187 watch item** into pre-flight: `corr_affected_history_entities_max` was
    **83.1 %** of its 20,000 cap at 2,500 devices, and the cap must be raised or
-   made fleet-relative before a rung is graded if 5k crosses it.
-2. **§D — grade and capture the ceiling** (the deliverable doc): per rung
+   made fleet-relative before a rung is graded if 3,500 or 10k crosses it.
+2. **§D — NEAR-FINAL.** `docs/scale/HOST_CEILING_2026-08-31.md` is written and
+   carries the measured ceiling (2,500 devices @ 0.4 eps, 1,000 eps sustained,
+   carrying a storm share to 25 %). Remaining to finalise it: per rung
    drain / `correlation_completion` / stability / memflat / accounting, plus
    correlation QUALITY under storm (did the flood collapse into the *right*
    incidents), then record max devices nominal & storm, the binding resource,
    and the per-device envelope → pricing + hosting spec.
-3. **155 — partition-ownership correctness programme.** `931efffb` (durable
-   continuation seeding on assignment) landed **after** s07, so it is committed
-   but **UNVALIDATED**; the twin ownership runs
-   (`scripts/lab/twin/ownership.py`, 21 tests, PASS/FAIL/**INVALID**) are the
-   validation and are in flight.
 
 ## Finish
 
