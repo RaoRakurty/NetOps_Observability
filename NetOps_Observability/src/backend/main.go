@@ -91,6 +91,7 @@ const version = "0.1.0-scaffold"
 type server struct {
 	startedAt     time.Time
 	discovery     *discovery.DiscoveryAggregator
+	devStore      *discovery.DevStore // manual-device + tombstone store; Close() flushes hit recency at shutdown (ultra 9)
 	collectors    *collectors.Pool
 	alerts        *alerts.Engine
 	alertEpisodes *alertEpisodeStore
@@ -286,7 +287,6 @@ type server struct {
 	// timeIntelRescanFloor is the ultra-#5 bounded-skip floor (guarded by
 	// timeIntelPassMu — only pass code touches it). Zero = no active skip.
 	timeIntelRescanFloor time.Time
-
 	// workers is the shutdown drain group (see workerGroup below). It hangs off
 	// the server so ANY subsystem that starts a goroutine from a *server method
 	// can register it in one line — `s.workers.start("name", func(){…})` instead
@@ -377,7 +377,8 @@ func newServer() *server {
 	// any source polls or the API serves a request. Without this, POST
 	// /api/devices returned 201 for a device that existed only until the process
 	// exited (see device_persist.go).
-	d.SetStore(newDeviceStore(devicesPath()))
+	devStore := newDeviceStore(devicesPath())
+	d.SetStore(devStore)
 	d.Register(discovery.NewStaticSource(os.Getenv("STATIC_DEVICES_PATH")))
 	// SNMP subnet discovery: registered always with a LIVE config getter
 	// (console-set store, env bootstrap fallback) so operators can scope and
@@ -672,6 +673,7 @@ func newServer() *server {
 		startedAt:        time.Now().UTC(),
 		workers:          &workerGroup{},
 		discovery:        d,
+		devStore:         devStore,
 		collectors:       pool,
 		alerts:           engine,
 		userRules:        userRules,
@@ -1603,6 +1605,11 @@ func Run() {
 		logInfo("shutdown", "cancel-only subsystems were signalled but NOT waited for",
 			map[string]any{"subsystems": names, "count": len(names)})
 	}
+	// Ultra 9: the device store persists tombstone hit-recency on a TTL-derived
+	// cadence; the shutdown flush drains the last un-persisted window, so a
+	// restart never mistakes a continuously-hit suppression for an expired one.
+	// After the worker drain above, the pollers that record hits have stopped.
+	srv.devStore.Close()
 	// F-22: drain queued notifications last. A deploy during an incident used to
 	// kill the fan-out goroutines mid-send; the pages simply never arrived.
 	if srv.notifier != nil {
