@@ -614,7 +614,7 @@ def test_gotenberg_pdf_sidecar_rides_mesh_tls():
     assert "gotenberg-tls-init" in rot, (
         "rotate-tls-services.sh has no gotenberg re-stage leg — a rotated SVID "
         "would never reach the running sidecar")
-    assert re.search(r"verify\s+gotenberg:3000\s+gotenberg", rot), (
+    assert re.search(r"verify_r\s+gotenberg:3000\s+gotenberg", rot), (
         "rotate-tls-services.sh must wire-verify gotenberg:3000 (guarded on "
         "the pdf profile running)")
 
