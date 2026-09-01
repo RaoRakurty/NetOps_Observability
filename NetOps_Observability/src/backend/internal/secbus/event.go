@@ -166,14 +166,20 @@ func entityTokensOf(entityID string, r secfindings.Resource, seam *secfindings.S
 
 // nativeIDOf builds the deterministic native id the engine hashes (with ts) into
 // a stable signal_id. Same finding ⇒ same native_id ⇒ a re-emission dedups
-// (§9 idempotency). It is the assessment-scoped identity of the verdict:
-// evidence-class, control, subject and scan run. Kept < the engine's 256-char id
-// cap by hashing when the joined form would overflow (deterministic, collision-
-// resistant), so a long control id or scan id can never silently truncate to a
-// colliding id at the model boundary.
+// (§9 idempotency). It is the identity of the verdict: evidence-class, control,
+// subject, scan run AND the finding's own id (f.ID) — the per-finding
+// discriminator. Without f.ID, a rule that legitimately fires more than once
+// for one device in one scan (e.g. threatlane's per-conversation and per-source
+// detections) would collide onto ONE native_id, and every finding after the
+// first would dedup away downstream as a redelivery — silent evidence loss.
+// A producer that emits at most one finding per (rule, device, scan) may leave
+// ID empty: the segment is then empty and identity degrades to the assessment
+// scope. Kept < the engine's 256-char id cap by hashing when the joined form
+// would overflow (deterministic, collision-resistant), so a long control id or
+// scan id can never silently truncate to a colliding id at the model boundary.
 func nativeIDOf(f secfindings.Finding, entityID, kind string) string {
 	raw := strings.Join([]string{
-		"security", kind, f.EvidenceClass, f.ControlID, entityID, f.ScanID,
+		"security", kind, f.EvidenceClass, f.ControlID, entityID, f.ScanID, f.ID,
 	}, "|")
 	if len(raw) <= 256 {
 		return raw

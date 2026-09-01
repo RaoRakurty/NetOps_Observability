@@ -224,7 +224,7 @@ func TestGoldenWireShape(t *testing.T) {
     "seam:seam-isp-1"
   ],
   "severity": "critical",
-  "native_id": "security|security_exposure|exposure|expose-telnet|wan-gw|scan-999",
+  "native_id": "security|security_exposure|exposure|expose-telnet|wan-gw|scan-999|",
   "seam_id": "seam-isp-1",
   "seam_type": "ISP",
   "internet_facing": true,
@@ -252,7 +252,7 @@ func TestGoldenWireShape(t *testing.T) {
 	if back.SchemaVersion != "1" || back.Kind != KindExposure || back.EntityID != "wan-gw" {
 		t.Errorf("round-trip lost fields: %+v", back)
 	}
-	if back.NativeID != "security|security_exposure|exposure|expose-telnet|wan-gw|scan-999" {
+	if back.NativeID != "security|security_exposure|exposure|expose-telnet|wan-gw|scan-999|" {
 		t.Errorf("native_id = %q", back.NativeID)
 	}
 	if back.TS != "2026-08-27T13:30:00Z" {

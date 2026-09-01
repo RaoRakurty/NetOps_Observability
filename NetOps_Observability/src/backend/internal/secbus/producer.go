@@ -12,10 +12,13 @@ import (
 )
 
 // TopicSecurityEvidence is the bus topic the security evidence lane produces
-// onto, in the netops.* convention (see the kafka-init topic list in
-// deployment/docker/docker-compose.yml and the ACLs in
-// deployment/docker/kafka/apply-acls.sh). One lane, one topic — the correlation
-// engine consumes it co-partitioned by tenant like every other lane.
+// onto, in the netops.* convention. kafka-init pre-creates it (see the topic
+// list in deployment/docker/docker-compose.yml), and producing rides the
+// aggregator's prefixed netops.* bus-bridge grant. NOTE: the correlation
+// principal's consume ACLs (deployment/docker/kafka/apply-acls.sh) do NOT yet
+// cover this topic — its enumerated topic list stops at the pre-security lanes.
+// When the consumer (T2b) lands, add netops.security there, or an enforced
+// broker (allow.everyone.if.no.acl.found=false) will deny the reads.
 const TopicSecurityEvidence = "netops.security"
 
 // Record is one bus record from a producer's point of view — a partition Key and

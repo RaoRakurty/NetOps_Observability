@@ -3,6 +3,7 @@ package hardening
 import (
 	"context"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -278,4 +279,69 @@ type errConfigSource struct{}
 
 func (errConfigSource) RunningConfig(_ context.Context, _ string) (string, bool, error) {
 	return "", false, context.DeadlineExceeded
+}
+
+// TestExposureDetailWellFormed (#13): the informational detail string must be
+// well-formed in EVERY clause combination. The untrusted-only + ACL case used
+// to render "telnet enabled but not exposed (; restricted by ACL)" — an empty
+// first clause — because the string was built by blind concatenation.
+func TestExposureDetailWellFormed(t *testing.T) {
+	cases := []struct {
+		name   string
+		cfg    string
+		seams  []SeamInfo
+		detail string
+	}{
+		{
+			// Only untrusted seams exist, service ACL-restricted: no trusted
+			// seam to attribute to — single-clause parenthetical.
+			name:   "untrusted-only, restricted by ACL",
+			cfg:    cfgTelnetWithACL,
+			seams:  []SeamInfo{{SeamID: "seam-isp", SeamType: "ISP", Untrusted: true}},
+			detail: "telnet enabled but not exposed (restricted by ACL)",
+		},
+		{
+			// Trusted seam + ACL: both clauses (the pre-fix golden output —
+			// pins that the rework changed nothing for the healthy paths).
+			name:   "trusted seam, restricted by ACL",
+			cfg:    cfgTelnetWithACL,
+			seams:  []SeamInfo{{SeamID: "seam-mgmt", SeamType: "mgmt", Untrusted: false}},
+			detail: "telnet enabled but not exposed (attributed to the mgmt seam; restricted by ACL)",
+		},
+		{
+			// Trusted seam, no ACL, no untrusted seam reaches the service.
+			name:   "trusted seam, no ACL",
+			cfg:    cfgTelnetNoACL,
+			seams:  []SeamInfo{{SeamID: "seam-mgmt", SeamType: "mgmt", Untrusted: false}},
+			detail: "telnet enabled but not exposed (attributed to the mgmt seam; no untrusted seam reaches it)",
+		},
+	}
+	dev := Device{ID: "d1", Platform: "Cisco IOS-XE", TenantID: "acme"}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			eng := NewEngine(DefaultCatalog(),
+				MemConfigSource{"d1": tc.cfg},
+				MemSeamResolver{"d1": tc.seams},
+				WithClock(fixedClock()))
+			fs, err := eng.Evaluate(context.Background(), dev)
+			if err != nil {
+				t.Fatal(err)
+			}
+			exp, ok := findingFor(fs, "exposure-telnet")
+			if !ok {
+				t.Fatal("no exposure-telnet finding")
+			}
+			if exp.StatusID != secfindings.StatusPass {
+				t.Fatalf("status = %v, want Pass (informational)", exp.StatusID)
+			}
+			if exp.Detail != tc.detail {
+				t.Errorf("detail = %q, want %q", exp.Detail, tc.detail)
+			}
+			for _, malformed := range []string{"(;", "( ;", "(  "} {
+				if strings.Contains(exp.Detail, malformed) {
+					t.Errorf("detail %q contains malformed fragment %q", exp.Detail, malformed)
+				}
+			}
+		})
+	}
 }

@@ -1366,6 +1366,18 @@ services:
       CORR_RETENTION_CLOSED_DAYS: ${CORR_RETENTION_CLOSED_DAYS:-}
       # #101 corr_current projection drift repair cadence (0 = off).
       CORR_CURRENT_RECONCILE_INTERVAL: ${CORR_CURRENT_RECONCILE_INTERVAL:-1h}
+      # corr_* partition-key migration knobs (chschema/corr_repartition.go; the
+      # runbook is docs/runbooks/correlation-retention-cold-archive.md,
+      # "Re-partitioning an existing deployment"). Mapped here so the runbook's
+      # "set CORR_REPARTITION=auto|force in .env" actually reaches the api —
+      # an unmapped var never crosses the container boundary. Defaults are
+      # byte-equal to the code's own (check = report-only; empty string reads
+      # as unset), so behaviour is unchanged until an operator sets .env.
+      CORR_REPARTITION: ${CORR_REPARTITION:-check}
+      CORR_REPARTITION_MAX_GIB: ${CORR_REPARTITION_MAX_GIB:-}
+      CORR_REPARTITION_BATCH_ROWS: ${CORR_REPARTITION_BATCH_ROWS:-}
+      CORR_REPARTITION_CATCHUP_PASSES: ${CORR_REPARTITION_CATCHUP_PASSES:-}
+      CORR_REPARTITION_DROP_OLD: ${CORR_REPARTITION_DROP_OLD:-}
       # #101 workload fairness profiles (ch_workload.go; "off" = kill-switch).
       CH_WORKLOAD_PROFILES: ${CH_WORKLOAD_PROFILES:-}
       # #101 first-customer alert-delivery gate: seed the ntfy critical-push

@@ -617,3 +617,31 @@ def test_gotenberg_pdf_sidecar_rides_mesh_tls():
     assert re.search(r"verify\s+gotenberg:3000\s+gotenberg", rot), (
         "rotate-tls-services.sh must wire-verify gotenberg:3000 (guarded on "
         "the pdf profile running)")
+
+
+def test_corr_repartition_env_reaches_the_api_container():
+    """#36: chschema/corr_repartition.go reads the CORR_REPARTITION* knobs at
+    api boot, and the cold-archive runbook tells operators to set them in .env
+    — but an env var mapped in NO compose file never crosses the container
+    boundary, making the runbook instruction inert. Pin the api environment
+    mapping, with defaults byte-equal to the code's own (mode "check" =
+    report-only; empty string reads as unset via envOr), so behaviour is
+    unchanged until an operator sets .env."""
+    import yaml
+
+    base = yaml.safe_load(
+        (ROOT / "deployment" / "docker" / "docker-compose.yml").read_text())
+    env = base["services"]["api"]["environment"]
+
+    assert env.get("CORR_REPARTITION") == "${CORR_REPARTITION:-check}", (
+        "api must map CORR_REPARTITION with the code's own report-only default "
+        "('check') — anything else changes boot behaviour or unmaps the knob")
+    for var in (
+        "CORR_REPARTITION_MAX_GIB",
+        "CORR_REPARTITION_BATCH_ROWS",
+        "CORR_REPARTITION_CATCHUP_PASSES",
+        "CORR_REPARTITION_DROP_OLD",
+    ):
+        assert env.get(var) == "${%s:-}" % var, (
+            f"api must map {var} pass-through with an EMPTY default (envOr "
+            "treats empty as unset, so the code's own default governs)")

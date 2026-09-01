@@ -3,6 +3,7 @@ package hardening
 import (
 	"context"
 	"sort"
+	"strings"
 	"time"
 
 	"netops/backend/internal/secfindings"
@@ -199,17 +200,20 @@ func (e *Engine) evaluateExposure(ctx context.Context, dev Device, vendor Vendor
 	// by an ACL, or only present on a trusted/mgmt seam.
 	f.Severity = secfindings.SeverityInfo
 	f.Observed = evidence
+	// Assemble the parenthetical from only the clauses that apply — when no
+	// trusted seam exists (e.g. only untrusted seams, service ACL-restricted)
+	// the old string concatenation rendered a malformed "(; restricted by ACL)".
+	var clauses []string
 	if trusted, ok := pickTrusted(seams); ok {
 		f.SeamContext = &secfindings.SeamContext{SeamID: trusted.SeamID, SeamType: trusted.SeamType}
-		f.Detail = probe.Service + " enabled but not exposed (attributed to the " + trusted.SeamType + " seam"
-	} else {
-		f.Detail = probe.Service + " enabled but not exposed ("
+		clauses = append(clauses, "attributed to the "+trusted.SeamType+" seam")
 	}
 	if restricted {
-		f.Detail += "; restricted by ACL)"
+		clauses = append(clauses, "restricted by ACL")
 	} else {
-		f.Detail += "; no untrusted seam reaches it)"
+		clauses = append(clauses, "no untrusted seam reaches it")
 	}
+	f.Detail = probe.Service + " enabled but not exposed (" + strings.Join(clauses, "; ") + ")"
 	f.SetStatus(secfindings.StatusPass)
 	return f
 }

@@ -200,3 +200,75 @@ func TestFromFinding_TenantFromFindingOnly(t *testing.T) {
 		t.Errorf("tenant_id = %q, want tenant-Z (from finding)", ev.TenantID)
 	}
 }
+
+// TestNativeID_PerFindingDiscriminator (#11): the native id carries the
+// finding's own id, so two findings produced by ONE rule on ONE device in ONE
+// scan get DISTINCT native ids — they must not collapse into a single
+// signal downstream as "redeliveries" of each other — while a re-delivery of
+// the SAME finding keeps the same id (§9 idempotency preserved).
+func TestNativeID_PerFindingDiscriminator(t *testing.T) {
+	a := postureFinding()
+	a.ID = "sshd_root_login:dev-77:conv-1"
+	b := postureFinding() // same control, device, scan — different finding
+	b.ID = "sshd_root_login:dev-77:conv-2"
+
+	evA, err := FromFinding(a)
+	if err != nil {
+		t.Fatal(err)
+	}
+	evB, err := FromFinding(b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if evA.NativeID == evB.NativeID {
+		t.Fatalf("two distinct findings from one rule/device/scan collided: %q", evA.NativeID)
+	}
+	// Idempotency: the same finding re-delivered yields the same native id.
+	evA2, err := FromFinding(a)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if evA.NativeID != evA2.NativeID {
+		t.Errorf("re-delivery changed native_id: %q vs %q", evA.NativeID, evA2.NativeID)
+	}
+	// The stable prefix contract holds for discriminated ids too.
+	for _, id := range []string{evA.NativeID, evB.NativeID} {
+		if !strings.HasPrefix(id, "security|"+KindPosture+"|") {
+			t.Errorf("native_id = %q, want security|kind|... form", id)
+		}
+	}
+	// A finding with no ID still grounds (identity degrades to assessment scope).
+	c := postureFinding()
+	evC, err := FromFinding(c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if evC.NativeID == "" || evC.NativeID == evA.NativeID {
+		t.Errorf("empty-ID finding native_id = %q (a.ID variant = %q)", evC.NativeID, evA.NativeID)
+	}
+}
+
+// TestNativeID_OverflowStaysDiscriminated (#11): when the joined form overflows
+// the engine's 256-char cap and falls back to the hash, the per-finding
+// discriminator must still separate two findings (it is inside the hash input).
+func TestNativeID_OverflowStaysDiscriminated(t *testing.T) {
+	long := strings.Repeat("x", 300)
+	a := postureFinding()
+	a.ControlID, a.ID = long, "f-1"
+	b := postureFinding()
+	b.ControlID, b.ID = long, "f-2"
+	evA, err := FromFinding(a)
+	if err != nil {
+		t.Fatal(err)
+	}
+	evB, err := FromFinding(b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(evA.NativeID) > 256 || len(evB.NativeID) > 256 {
+		t.Fatalf("native_id over the 256-char cap: %d/%d", len(evA.NativeID), len(evB.NativeID))
+	}
+	if evA.NativeID == evB.NativeID {
+		t.Fatal("hashed native ids collided across distinct finding ids")
+	}
+}
