@@ -94,15 +94,34 @@ fi
 ch "CREATE TABLE IF NOT EXISTS netops_restore.${TABLE} AS netops.${TABLE}" || exit 1
 ch "ALTER TABLE netops_restore.${TABLE} REMOVE TTL" 2>/dev/null || true
 
-# The time column MUST be each table's PARTITION/TTL column, or a --day filter
-# selects rows the export never grouped that way. corr_objects moved from
-# window_start (event time) to created_at (persist time) with the daily
-# re-partition — filtering it by window_start silently returned a different set.
-TS_COL="ts"; case "$TABLE" in corr_objects|corr_edges|corr_evidence) TS_COL="created_at";; esac
+# The filter column must match how the requested ARCHIVE UNIT was grouped —
+# and day and month units are grouped by DIFFERENT columns for corr_objects
+# (ultra #26, 2026-09-01):
+#   --day    a current DAILY partition, so the daily partition/TTL column:
+#            created_at for corr_objects/edges/evidence, ts for the archive.
+#   --month  the PRE-MIGRATION monthly archive unit, so the column the OLD
+#            monthly partitions were grouped by: corr_objects was
+#            toYYYYMM(window_start) (init.sql "STORAGE SHAPE"; the daily
+#            re-partition moved it to created_at). The other tables kept
+#            their column (month->day granularity only), so day and month
+#            agree for them.
+# Filtering an old-vintage --month by created_at returned a DIFFERENT set than
+# the month's archive holds: a June window persisted Jul 1 sat in the June
+# file but was dropped by the filter, while a May 31 window persisted Jun 1
+# was pulled in — each reachable only under the adjacent month. Every cold
+# file is scanned and rows are filtered at INSERT, so filtering by the
+# grouping column makes `--month M` return exactly the month-M archive
+# unit's row set — which is also the event-time month that replay/audit
+# consumers ask for (runbook scenario 4).
+DAY_COL="ts" MONTH_COL="ts"
+case "$TABLE" in
+    corr_objects)             DAY_COL="created_at"; MONTH_COL="window_start" ;;
+    corr_edges|corr_evidence) DAY_COL="created_at"; MONTH_COL="created_at" ;;
+esac
 COND="1"
 [ "$TENANT" != "__any__" ] && COND="$COND AND tenant_id = '$(echo "$TENANT" | tr -d "'\\\\")'"
-[ -n "$MONTH" ] && COND="$COND AND toYYYYMM(${TS_COL}) = ${MONTH}"
-[ -n "$DAY" ] && COND="$COND AND toYYYYMMDD(${TS_COL}) = ${DAY}"
+[ -n "$MONTH" ] && COND="$COND AND toYYYYMM(${MONTH_COL}) = ${MONTH}"
+[ -n "$DAY" ] && COND="$COND AND toYYYYMMDD(${DAY_COL}) = ${DAY}"
 
 docker compose --project-directory "$COMPOSE_DIR" exec -T clickhouse \
     mkdir -p /var/lib/clickhouse/user_files/coldrestore </dev/null

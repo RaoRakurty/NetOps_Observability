@@ -27,6 +27,15 @@ scripts/ch-cold-export.sh          # export closed DAYS (idempotent; cron DAILY)
 # suggested cron (lead the horizon by weeks):
 # 17 2 * * * /opt/correlix/scripts/ch-cold-export.sh --quiet
 ```
+Idempotence is COUNT-checked, not existence-checked (ultra #22, 2026-09-01):
+each run compares every closed partition's hot row count (`system.parts`
+metadata — it rides the partition-listing query, no scan) against the count
+recorded at export time in `data/clickhouse-cold/<table>/.manifest.tsv`, and
+re-exports any partition whose hot count has GROWN since (late ingest /
+engine catch-up landing in a closed day after the nightly run). A
+pre-manifest Parquet file is re-exported once to establish its record; a hot
+count *below* the tiered count keeps the larger cold file and warns.
+
 Expiry is part-level (`ttl_only_drop_parts`): a part drops only when its
 NEWEST row passes the horizon. **The corr_* history tables are partitioned
 DAILY on the very column their TTL is keyed on**, so that lag is now at most
@@ -109,6 +118,15 @@ scripts/ch-cold-restore.sh --table corr_objects          --tenant <t> --month <Y
 # then run replay tooling against netops_restore.* — slices are keyed by
 # archived_for/archived_version exactly as in the hot archive.
 ```
+
+Date filters follow the ARCHIVE GROUPING (ultra #26, 2026-09-01): `--day`
+filters by the daily partition column (`created_at`; `ts` for
+`corr_signals_archive`), while `--month` — the pre-migration archive unit —
+filters `corr_objects` by `window_start`, the column its old monthly
+partitions were grouped by (the daily re-partition moved it to `created_at`).
+A June window persisted on Jul 1 therefore restores under `--month 202606`,
+matching both the June archive file's contents and event-time replay
+semantics; the other tables never changed column, so day and month agree.
 
 Notes: UUID columns travel as strings in Parquet (CH 24.8 limitation) and are
 parsed back into UUID columns on restore — verified round-trip. Restores run

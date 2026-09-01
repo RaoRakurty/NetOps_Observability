@@ -334,15 +334,24 @@ def test_cold_export_cron_guidance_is_daily():
 
 
 def test_cold_restore_filters_on_each_table_partition_column():
-    """corr_objects moved from window_start (event time) to created_at (persist
-    time); a restore still filtering on window_start silently returns a
-    different row set than the export grouped."""
+    """The filter column must match how the requested ARCHIVE UNIT was grouped
+    (ultra #26, 2026-09-01): --day = the current DAILY partition column
+    (created_at for corr_objects since the re-partition), but --month = the
+    PRE-MIGRATION monthly unit, and corr_objects' monthly archives were
+    grouped by toYYYYMM(window_start) — filtering them by created_at put
+    month-boundary rows into the adjacent month's restore set.
+    Set-level behavior is pinned in test_ch_cold_restore_vintage.py."""
     sh = (ROOT / "scripts" / "ch-cold-restore.sh").read_text()
-    assert 'corr_objects|corr_edges|corr_evidence) TS_COL="created_at"' in sh, (
-        "ch-cold-restore.sh does not filter corr_objects on created_at")
-    assert 'TS_COL="window_start"' not in sh
-    assert "--day)" in sh and "toYYYYMMDD(${TS_COL})" in sh, (
+    assert 'corr_objects)             DAY_COL="created_at"; MONTH_COL="window_start"' in sh, (
+        "corr_objects must restore --day by created_at (daily partition/TTL "
+        "column) and --month by window_start (the old monthly grouping)")
+    assert 'corr_edges|corr_evidence) DAY_COL="created_at"; MONTH_COL="created_at"' in sh, (
+        "edges/evidence never changed column — day and month must agree on created_at")
+    assert "--day)" in sh and "toYYYYMMDD(${DAY_COL})" in sh, (
         "ch-cold-restore.sh has no day-granularity filter for daily partitions")
+    assert "toYYYYMM(${MONTH_COL})" in sh, (
+        "the month filter must use the archive-grouping column, not a shared TS_COL")
+    assert "TS_COL" not in sh, "a single shared TS_COL cannot serve both vintages"
 
 
 # ── (d) the live-deployment migration and its gate ──────────────────────────

@@ -4,8 +4,16 @@
 # Exports CLOSED partitions (strictly older than the current one) of the
 # correlation history tables to Parquet under data/clickhouse-cold/, so
 # hot ClickHouse retention (corr_retention.go TTLs) deletes nothing that has
-# not already been tiered. Idempotent: a partition already exported is skipped
-# (its Parquet file is only replaced with --force).
+# not already been tiered. Idempotent, but COUNT-CHECKED, not existence-checked
+# (ultra #22, 2026-09-01): a partition already exported is skipped only while
+# its hot row count still matches the count recorded at export time in
+# <COLD_DIR>/<table>/.manifest.tsv (pid<TAB>rows). A CLOSED day can keep
+# receiving rows after the nightly run (late ingest, engine catch-up) — with
+# DAILY partitions the old skip-on-file-existence left those rows hot-only
+# until the TTL dropped them untiered. Now hot > tiered re-exports the
+# partition in place (tmp+mv), and --force re-exports everything. A Parquet
+# file with no manifest row (exported before the manifest existed) is
+# re-exported once to establish its record.
 #
 # The cold tier is the durable input for calibration (#67 P4), audit, offline
 # replay and model evaluation. Parquet is deliberately vendor-neutral: read it
@@ -81,11 +89,15 @@ for table in $TABLES; do
     # '(\\d{6,8})' matched the FIRST run of digits anywhere in the tuple text, so a
     # tenant id like 'tenant123456' exported under its own name's digits instead
     # of its date (verified live: naive -> 123456, anchored -> 20260803).
-    parts=$(ch "SELECT DISTINCT partition_id, extract(partition, ',\\\\s*(\\\\d{6,8})\\\\)') AS bucket
+    manifest="$COLD_DIR/$table/.manifest.tsv"
+    # sum(rows) rides the same partition-listing query: system.parts METADATA,
+    # no table scan — the late-arrival check below is close to free per run.
+    parts=$(ch "SELECT partition_id, extract(partition, ',\\\\s*(\\\\d{6,8})\\\\)') AS bucket, sum(rows) AS hot_rows
                   FROM system.parts
                  WHERE database='netops' AND table='${table}' AND active
+                 GROUP BY partition_id, bucket
                  ORDER BY partition_id FORMAT TSV")
-    while IFS=$'\t' read -r pid bucket; do
+    while IFS=$'\t' read -r pid bucket hot_rows; do
         [ -z "$pid" ] && continue
         [ -z "$bucket" ] && continue                    # undated partition: skip
         case "${#bucket}" in
@@ -95,8 +107,35 @@ for table in $TABLES; do
                fail=1; continue ;;
         esac
         out="$COLD_DIR/$table/${pid}.parquet"
+        case "$hot_rows" in ''|*[!0-9]*) hot_rows="" ;; esac  # unreadable count
         if [ -s "$out" ] && [ "$FORCE" = "0" ]; then
-            continue
+            # Late-arrival guard (ultra #22): "exported once" is NOT "current".
+            # Compare the hot row count now against the count recorded when the
+            # file was written:
+            #   hot >  tiered   re-export (idempotent tmp+mv overwrite below)
+            #   hot <= tiered   current — skip
+            #   no manifest row pre-manifest file: re-export ONCE to establish
+            #                   the count (bounded one-time cost per legacy file)
+            tiered=""
+            [ -f "$manifest" ] && tiered=$(awk -F'	' -v p="$pid" '$1==p{print $2; exit}' "$manifest")
+            case "$tiered" in *[!0-9]*) tiered="" ;; esac
+            if [ -n "$tiered" ] && [ -n "$hot_rows" ] && [ "$hot_rows" -le "$tiered" ]; then
+                if [ "$hot_rows" -lt "$tiered" ]; then
+                    # Loud but not fatal: the cold copy is intact (and larger).
+                    # Rows vanishing from a CLOSED hot partition is a hot-side
+                    # anomaly the operator must see — never overwrite the cold
+                    # file with the smaller hot set.
+                    echo "[cold-export] WARN: ${table} ${pid}: hot=${hot_rows} < tiered=${tiered} — rows vanished from a closed hot partition; keeping the larger cold file" >&2
+                else
+                    log "current: ${table} ${pid} (hot=${hot_rows} == tiered=${tiered})"
+                fi
+                continue
+            fi
+            if [ -n "$tiered" ]; then
+                log "re-export: ${table} ${pid} — hot=${hot_rows:-unknown} > tiered=${tiered} (late-arriving rows in a closed partition)"
+            else
+                log "re-export: ${table} ${pid} — existing file has no manifest row; establishing its count"
+            fi
         fi
         tmp="${out}.tmp"
         # </dev/null: docker compose exec would otherwise eat the while-read
@@ -104,7 +143,23 @@ for table in $TABLES; do
         if ch "SELECT *$(uuid_replace "$table") FROM netops.${table} WHERE _partition_id = '${pid}'
                SETTINGS tenant_scope='__all__' FORMAT Parquet" </dev/null > "$tmp" && [ -s "$tmp" ]; then
             mv "$tmp" "$out"
-            log "exported ${table} partition ${pid} ($(stat -c%s "$out") bytes)"
+            # Record the hot count OBSERVED AT LISTING time. Rows landing
+            # between the listing and the export SELECT are IN the file but
+            # not the record, so the next run re-exports once more and
+            # converges — the error direction is a redundant export, never a
+            # silent gap.
+            if [ -n "$hot_rows" ]; then
+                mtmp="$manifest.tmp"
+                if { [ ! -f "$manifest" ] || awk -F'	' -v p="$pid" '$1!=p' "$manifest"; printf '%s	%s
+' "$pid" "$hot_rows"; } > "$mtmp"                     && mv "$mtmp" "$manifest"; then :; else
+                    rm -f "$mtmp"
+                    echo "[cold-export] FAILED: manifest update for ${table} ${pid}" >&2
+                    fail=1
+                fi
+            else
+                echo "[cold-export] WARN: ${table} ${pid}: system.parts row count unreadable — exported without a manifest record (will re-export next run)" >&2
+            fi
+            log "exported ${table} partition ${pid} ($(stat -c%s "$out") bytes, rows=${hot_rows:-unknown})"
         else
             rm -f "$tmp"
             echo "[cold-export] FAILED: ${table} partition ${pid}" >&2

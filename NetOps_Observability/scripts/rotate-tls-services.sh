@@ -81,11 +81,6 @@ fi
 MODE=$([ "$CHECK_ONLY" -eq 1 ] && echo check || echo act)
 RESTARTS_OK=1
 WIRE_MIN_LEFT_H="${WIRE_MIN_LEFT_H:-48}"
-if [ "$CHECK_ONLY" -eq 0 ] && pgrep -f 'scale-miniladder\.py' >/dev/null; then
-    echo "[rotate-tls] DEFER: live qualification/soak run owns the stack — hot-reload legs only, restart class deferred" >&2
-    RESTARTS_OK=0
-    MODE=deferred
-fi
 
 # Compose resolves its file set from COMPOSE_FILE/COMPOSE_PROFILES in the
 # deployment .env, which it only reads from that directory — so run compose
@@ -96,6 +91,39 @@ dc() { (cd "$COMPOSE_DIR" && docker compose "$@"); }
 log() { echo "[rotate-tls] $*" >&2; }
 FAILURES=0
 flag() { log "FAIL: $*"; FAILURES=$((FAILURES + 1)); }
+
+# A REAL harness run is "a python interpreter executing scale-miniladder.py" —
+# not any command line that merely MENTIONS the file. The old bare
+# `pgrep -f 'scale-miniladder\.py'` also matched an editor, a `tail -f` on a
+# path carrying the name, a grep, or an agent shell whose own argv quoted it
+# (the exact false-match class scale-ab-driver.py's HARNESS_PROC_RE documents;
+# ultra #21, 2026-09-01) — any of which deferred the restart class
+# INDEFINITELY. So: candidates from `pgrep -af` (pid + full cmdline), then
+# narrow to lines where an interpreter is invoked ON the harness file, which
+# is what every real invocation looks like after `setsid nohup` execs (cron's
+# included). pgrep rc=1 means "no candidates"; rc>1 means pgrep itself failed
+# — then the sweep cannot PROVE the host is idle, so it defers the restart
+# class AND flags the run (16.1: refusing to guess must be loud; the deferred
+# endpoints still get the WIRE_MIN_LEFT_H floor check in phase 3).
+harness_live=0
+if harness_out=$(pgrep -af 'scale-miniladder\.py' 2>&1); then
+    harness_rc=0
+else
+    harness_rc=$?
+fi
+if [ "$harness_rc" -eq 0 ]; then
+    if printf '%s\n' "$harness_out" | grep -Eq '(^|[/[:space:]])python[0-9.]*[[:space:]]+[^[:space:]]*scale-miniladder\.py([[:space:]]|$)'; then
+        harness_live=1
+    fi
+elif [ "$harness_rc" -gt 1 ]; then
+    flag "pgrep for scale-miniladder.py failed (rc=${harness_rc}): ${harness_out:-no output} — cannot prove the host is idle; deferring the restart class"
+    harness_live=1
+fi
+if [ "$CHECK_ONLY" -eq 0 ] && [ "$harness_live" -eq 1 ]; then
+    log "DEFER: live qualification/soak run owns the stack — hot-reload legs only, restart class deferred"
+    RESTARTS_OK=0
+    MODE=deferred
+fi
 
 # disk_end <svc>: epoch NotAfter of the service's on-disk SVID.
 disk_end() {
