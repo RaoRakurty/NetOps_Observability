@@ -193,6 +193,8 @@ aggregation accounting of §7 exact, and no unexpected replica ejection or
 restart. The V1 baseline (`storm-s09`) met all of these; tracker 203 wraps this
 document into the rerunnable release regression suite.
 
+**(e) Qualification environment (added 2026-09-01):** a V1-graded leg additionally requires **≥ 10 GiB root-fs free at preflight and a quiet host** (no concurrent CI suites/builds during the leg) — motivated by `storm-s10` (run `09012025x578`, **excluded from qualification for environment violation**): concurrent CI disk draw pushed the root-fs through OpenSearch's flood-stage watermark mid-burst and the router's OS sink discarded 291,296 syslog evidence docs (`/var/tmp/scale-runs/storm-s10-09012025/s10-discard-diagnosis.md`; tracker 209/210).
+
 ## 9. Baseline evidence — `storm-s09` (the V1 leg of record)
 
 | clause | s09 reading |
