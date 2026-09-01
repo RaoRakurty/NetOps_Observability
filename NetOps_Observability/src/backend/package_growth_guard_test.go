@@ -319,7 +319,23 @@ import (
 //	                  other handler; the reusable BGP domain (there is little —
 //	                  it is mostly remote-API glue) has no subpackage worth
 //	                  extracting yet. Revisit if a RIS Live consumer lands.
-const rootPackageCeiling = 202
+//	2026-08-27  204  +2, unrecorded at the time (caught by this guard 2026-09-01):
+//	                  protocol_diagnostics.go (Troubleshooting item 7 — the HTTP
+//	                  boundary for the internal/protocoldiag domain, which went
+//	                  straight to its own subpackage; handlers need the *server
+//	                  receiver so the thin I/O boundary stays in the root, the
+//	                  pipeline_processors.go / bgp_ops.go shape) and
+//	                  clickhouse_repartition.go (a second free-standing chhttp
+//	                  transport adapter for chschema's corr repartition
+//	                  migration).
+//	2026-09-01  203  clickhouse_repartition.go folded into clickhouse_client.go —
+//	                  the 2026-07-29 (203) entry designates that file THE main-
+//	                  package chhttp adapter, and a standalone bridge was the
+//	                  same plumbing under a new name. protocol_diagnostics.go
+//	                  stays (see above), so the ratchet settles at 203: one
+//	                  justified +1 against the 2026-08-25 ceiling, same as the
+//	                  two precedented +1 entries before it.
+const rootPackageCeiling = 203
 
 func TestFlatPackageMainDoesNotGrow(t *testing.T) {
 	entries, err := os.ReadDir(".")

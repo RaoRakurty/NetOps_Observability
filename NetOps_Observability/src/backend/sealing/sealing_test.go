@@ -115,11 +115,31 @@ func TestSealUnsealRoundTrip(t *testing.T) {
 		if err != nil {
 			t.Fatalf("parse own token: %v", err)
 		}
-		if string(tok.Ciphertext) == plaintext {
-			t.Fatalf("CIPHERTEXT IS PLAINTEXT for %q", plaintext)
+		// The same short-value trap applies to the raw ciphertext: a CORRECT
+		// cipher's output bytes are uniform, so a 1-byte plaintext collides
+		// with its own 1-byte ciphertext 1 time in 256 (observed 2026-09-01:
+		// `CIPHERTEXT IS PLAINTEXT for "a"`). A real plaintext leak is
+		// STRUCTURAL — it reproduces on every seal — while a chance collision
+		// does not survive a re-seal under a fresh nonce. On a hit, re-seal
+		// and fail only if EVERY attempt collides: false-alarm odds drop to
+		// 256^-4, and a genuine leak still always fails.
+		leak := func(ct []byte) bool {
+			return string(ct) == plaintext || bytes.Contains(ct, []byte(plaintext))
 		}
-		if bytes.Contains(tok.Ciphertext, []byte(plaintext)) {
-			t.Fatalf("ciphertext contains the plaintext: %q", plaintext)
+		looksLeaked := leak(tok.Ciphertext)
+		for attempt := 0; looksLeaked && attempt < 3; attempt++ {
+			resealed, err := p.Seal(ctx, c, plaintext)
+			if err != nil {
+				t.Fatalf("re-seal %q: %v", plaintext, err)
+			}
+			rtok, err := parseToken(resealed)
+			if err != nil {
+				t.Fatalf("parse own re-sealed token: %v", err)
+			}
+			looksLeaked = leak(rtok.Ciphertext)
+		}
+		if looksLeaked {
+			t.Fatalf("CIPHERTEXT IS PLAINTEXT for %q — persisted across re-seals: a leak, not a collision", plaintext)
 		}
 		if !IsSealed(sealed) {
 			t.Fatalf("not recognisable as sealed: %q", sealed)

@@ -111,3 +111,69 @@ func TestProtocolDiagCollectCrossOrgIsolation(t *testing.T) {
 		t.Fatalf("owner collect B's device: %d, want 200", st)
 	}
 }
+
+// TestProtocolDiagAnalyzeTenantInvariantAndBodyTenantRejected pins the two
+// properties the ledger's "globalRef" classification of analyze rests on:
+//
+//  1. TENANT-INVARIANCE — analyze reads no store and persists nothing, so two
+//     operators in DIFFERENT orgs sending the identical request get the
+//     byte-identical response. If this ever fails, analyze has started serving
+//     tenant-variant data and must be reclassified "scoped" with a cross-org
+//     isolation test.
+//  2. §3a.2 — the tenant is never taken from the request body: a payload that
+//     tries to smuggle one in is rejected outright (DisallowUnknownFields).
+func TestProtocolDiagAnalyzeTenantInvariantAndBodyTenantRejected(t *testing.T) {
+	srv, _ := newTestServerState(t)
+	admin := login(t, srv, "admin", "Passw0rd!2345").Token
+
+	// Two orgs, each with its own tenant-scoped operator.
+	fix := map[string]*orgFixture{}
+	for _, name := range []string{"A", "B"} {
+		st, b := do(t, srv, "POST", "/api/orgs", admin, map[string]any{"name": "PDA Org " + name})
+		if st != 201 {
+			t.Fatalf("create org %s: %d %s", name, st, b)
+		}
+		orgID := idOf(t, b)
+		st, b = do(t, srv, "POST", "/api/tenants", admin, map[string]any{"name": "PDA Tenant " + name, "org_id": orgID})
+		if st != 201 {
+			t.Fatalf("create tenant %s: %d %s", name, st, b)
+		}
+		tenantID := idOf(t, b)
+		user := "pda-user-" + name
+		st, b = do(t, srv, "POST", "/api/users", admin, map[string]any{
+			"username": user, "password": "Passw0rd!2345", "role": "operator", "tenant_id": tenantID,
+		})
+		if st != 201 {
+			t.Fatalf("create user %s: %d %s", name, st, b)
+		}
+		fix[name] = &orgFixture{orgID: orgID, tenantID: tenantID, user: user, token: login(t, srv, user, "Passw0rd!2345").Token}
+	}
+
+	payload := map[string]any{
+		"issue_id": "ospf-neighbor-stuck",
+		"device":   map[string]any{"hostname": "lab-r1", "platform": "Cisco IOS-XE"},
+	}
+	analyze := func(token string, body map[string]any) (int, []byte) {
+		t.Helper()
+		return do(t, srv, "POST", "/api/troubleshoot/protocol-diagnostics/analyze", token, body)
+	}
+
+	stA, bodyA := analyze(fix["A"].token, payload)
+	stB, bodyB := analyze(fix["B"].token, payload)
+	if stA != 200 || stB != 200 {
+		t.Fatalf("analyze: A=%d B=%d, want 200/200 (%s | %s)", stA, stB, bodyA, bodyB)
+	}
+	if !bytes.Equal(bodyA, bodyB) {
+		t.Fatalf("analyze is no longer tenant-invariant — identical requests from two orgs "+
+			"produced different responses; reclassify the route \"scoped\" and add a real "+
+			"cross-org isolation test.\nA: %s\nB: %s", bodyA, bodyB)
+	}
+
+	// §3a.2: a tenant smuggled into the body is rejected, never honored.
+	for _, field := range []string{"tenant_id", "tenant"} {
+		bad := map[string]any{"issue_id": "ospf-neighbor-stuck", field: fix["B"].tenantID}
+		if st, b := analyze(fix["A"].token, bad); st != 400 {
+			t.Fatalf("analyze accepted a %q field in the body: %d %s (want 400)", field, st, b)
+		}
+	}
+}

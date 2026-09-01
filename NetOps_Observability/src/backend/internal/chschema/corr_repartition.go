@@ -97,7 +97,7 @@ import (
 
 // CHExec is the ClickHouse capability this migration needs, expressed as an
 // interface so the package stays free of transport and env (CLAUDE.md §2/§5:
-// every external dependency is injected). src/backend/clickhouse_repartition.go
+// every external dependency is injected). the repartition adapter in src/backend/clickhouse_client.go
 // supplies the real implementation over the chhttp seam.
 type CHExec interface {
 	// Exec runs one SHORT statement (DDL, DROP PARTITION, KILL) that returns no
@@ -548,7 +548,7 @@ func CorrTableExistsSQL(table string) string {
 //     COUNT (CorrCopyBudget), and the transport gives the HTTP client a longer
 //     timeout than that bound, so the ordinary case is simply "the client
 //     waits" (the incident's client timeout was 12 s against a 10-minute
-//     server budget — see chRepartitionSlack in clickhouse_repartition.go);
+//     server budget — see chRepartitionSlack in clickhouse_client.go);
 //  3. when the client call fails anyway, the copy is REAPED before the
 //     partition is declared failed: poll system.processes for that query_id
 //     until it is gone or the poll budget is spent, then KILL ... SYNC. The

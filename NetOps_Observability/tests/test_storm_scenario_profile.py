@@ -1753,10 +1753,22 @@ def test_ground_truth_scales_with_the_fleet(scen, fleets):
 
 def _twin_modules():
     """`scripts/lab/twin` is a flat script dir (scorer.py does
-    `from stack import ...`), so it has to be on the path as itself."""
+    `from stack import ...`), so it has to be on the path as itself.
+
+    twin.py pins os.environ["PATH"] to the cron path AT IMPORT (its process
+    entry assumes it owns the process). Imported in-process here, that rewrite
+    would leak into THIS pytest process and break every later test that spawns
+    a tool living outside the cron path — the watchdog shellcheck tests were
+    failing with FileNotFoundError exactly this way (2026-09-01). The twin is
+    digest-pinned by the capacity-qualification record, so the leak is
+    contained here rather than by editing twin.py: restore PATH after import."""
     sys.path.insert(0, str(ROOT / "scripts" / "lab" / "twin"))
-    import scorer as scorer_mod
-    import twin as twin_mod
+    path_before = os.environ.get("PATH", "")
+    try:
+        import scorer as scorer_mod
+        import twin as twin_mod
+    finally:
+        os.environ["PATH"] = path_before
     return twin_mod, scorer_mod
 
 

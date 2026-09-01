@@ -235,8 +235,8 @@ func DefaultAnalyzer() *Analyzer {
 		},
 		{
 			ID: "ospf-exstart-only", IssueID: "ospf-neighbor-stuck",
-			Verdict: "OSPF neighbor stuck in EXSTART/EXCHANGE",
-			Cause:   "almost certainly an IP MTU mismatch across the link (EXSTART is the classic MTU tell); interface MTU was not captured to confirm",
+			Verdict:     "OSPF neighbor stuck in EXSTART/EXCHANGE",
+			Cause:       "almost certainly an IP MTU mismatch across the link (EXSTART is the classic MTU tell); interface MTU was not captured to confirm",
 			Remediation: "Capture `show ip ospf interface` on BOTH ends and compare `ip mtu`; set them equal.",
 			Confidence:  ConfidenceMedium,
 			match: func(col *Collection) (Evidence, bool) {

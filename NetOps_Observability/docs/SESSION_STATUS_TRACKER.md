@@ -54,7 +54,7 @@ applied to anything genuinely destructive/irreversible.
 ## E. Security Track — DESIGN (all complete, committed)
 | Doc | Status |
 |---|---|
-| HLD (`SECURITY_OBSERVABILITY_HLD`) + §5b-§5h | ✅ |
+| HLD (`SECURITY_OBSERVABILITY_HLD_2026-08-25.md`) + §5b-§5h | ✅ |
 | 4 research streams (security section, BGP ops, troubleshooting, deep security) | ✅ |
 | All 9 open questions answered | ✅ |
 | Provider architecture + per-framework independence + compliance model | ✅ |
@@ -62,7 +62,7 @@ applied to anything genuinely destructive/irreversible.
 | Vendor extensibility (Vendor Profile) | ✅ |
 | Value/GTM + two end-to-end scenarios | ✅ |
 | Config backup / sync-drift / packet-capture module designs | ✅ |
-| Build plan (`SECURITY_BUILD_PLAN`) | ✅ |
+| Build plan (`SECURITY_BUILD_PLAN_2026-08-25.md`) | ✅ |
 
 ## F. Security Track — BUILD (Opus subagents, soak-safe)
 **⏸ PAUSED until soak finishes (~Aug 27 06:28Z):** disk is steady-state but

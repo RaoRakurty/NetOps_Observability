@@ -39,7 +39,7 @@ func ensureCHRowPolicies() {
 			if len(errs) == 0 {
 				log.Printf("clickhouse: tenant row policies ensured (#20 Phase 2)")
 				// P2 storage-shape fix: converge the corr_* history tables onto
-				// DAILY partitions (clickhouse_repartition.go). It runs HERE, not
+				// DAILY partitions (the repartition adapter in clickhouse_client.go). It runs HERE, not
 				// in the statement list above, because a partition-key change is a
 				// table rewrite — it has to read sizes, batch per partition, resume
 				// and verify, none of which a fire-and-forget DDL list can do. It is

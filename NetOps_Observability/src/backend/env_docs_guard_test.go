@@ -41,6 +41,13 @@ var envDocsExempt = map[string]string{
 	// ("Replace MONITOR_HOST with the host running the stack") — the operator
 	// substitutes it on the device CLI; nothing in this stack reads it.
 	"MONITOR_HOST": "device-config placeholder the operator substitutes, not an env switch",
+	// ClickHouse's OWN exception name for error code 307 (a `max_bytes_to_read`
+	// breach), quoted verbatim in tracker 207's chhttp-classification finding.
+	// It is a third-party server's error identifier, not a switch anything sets;
+	// the fix lands a lowercase `too_many_bytes` classification slug in
+	// chhttp.go. When tracker 207 ships and its row is deleted, delete this
+	// entry with it.
+	"TOO_MANY_BYTES": "ClickHouse exception name (code 307) cited in tracker 207 — a third-party error identifier, not an env switch",
 }
 
 var upperSnakeRe = regexp.MustCompile(`[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+`)

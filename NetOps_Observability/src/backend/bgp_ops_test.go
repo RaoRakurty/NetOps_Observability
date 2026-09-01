@@ -449,12 +449,12 @@ func TestBGPWatchStoreRefusesWildcardOrEmptyTenant(t *testing.T) {
 
 func TestTruncateUTF8(t *testing.T) {
 	cases := []struct{ in, want string }{
-		{strings.Repeat("a", 300), strings.Repeat("a", 300)},               // at the cap: untouched
-		{strings.Repeat("a", 301), strings.Repeat("a", 300)},               // ASCII overflow: plain cut
-		{strings.Repeat("a", 299) + "é", strings.Repeat("a", 299)},         // 2-byte rune straddles byte 300
-		{strings.Repeat("a", 298) + "€€", strings.Repeat("a", 298)},        // 3-byte rune straddles
-		{strings.Repeat("a", 299) + "🌍", strings.Repeat("a", 299)},         // 4-byte rune straddles
-		{strings.Repeat("a", 296) + "🌍", strings.Repeat("a", 296) + "🌍"},   // 4-byte rune ends exactly at 300
+		{strings.Repeat("a", 300), strings.Repeat("a", 300)},             // at the cap: untouched
+		{strings.Repeat("a", 301), strings.Repeat("a", 300)},             // ASCII overflow: plain cut
+		{strings.Repeat("a", 299) + "é", strings.Repeat("a", 299)},       // 2-byte rune straddles byte 300
+		{strings.Repeat("a", 298) + "€€", strings.Repeat("a", 298)},      // 3-byte rune straddles
+		{strings.Repeat("a", 299) + "🌍", strings.Repeat("a", 299)},       // 4-byte rune straddles
+		{strings.Repeat("a", 296) + "🌍", strings.Repeat("a", 296) + "🌍"}, // 4-byte rune ends exactly at 300
 		{"", ""},
 	}
 	for i, c := range cases {

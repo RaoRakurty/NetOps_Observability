@@ -60,8 +60,31 @@ var routeIsolationLedger = map[string]string{
 	// returns PUBLIC internet routing facts (RIPEstat/RDAP) identical for every
 	// tenant — global reference, gated by requirePerm(infrastructure), no tenant
 	// data crosses it (same shape as /api/cloud/providers, /api/snmp/profiles).
-	"/api/bgp/watchlist":            "scoped",
-	"/api/bgp/resource":             "globalRef",
+	"/api/bgp/watchlist": "scoped",
+	"/api/bgp/resource":  "globalRef",
+	// Protocol diagnostics (Troubleshooting item 7, protocol_diagnostics.go):
+	// catalog is the version-pinned 15-issue ruleset, identical for every tenant
+	// (?vendor= only picks the rendered command dialect), behind
+	// requirePerm(infrastructure, read) — global reference, the /api/bgp/resource
+	// shape. Analyze is the same category, not "scoped": it is a STATELESS
+	// computation — it reads no store, persists nothing, and its response is
+	// derived solely from the caller's own request body plus the version-pinned
+	// ruleset, so it is tenant-invariant (identical input → identical output for
+	// every tenant) and there is no held data for "scoped"'s isolation
+	// obligations (cross-tenant id → 404, own-only list) to even apply to. The
+	// token-derived tenant stamp on the built Collection is §3a.2 hygiene, and a
+	// tenant in the body is REJECTED (DisallowUnknownFields) — both pinned, with
+	// the tenant-invariance property, by
+	// TestProtocolDiagAnalyzeTenantInvariantAndBodyTenantRejected. If analyze
+	// ever starts persisting collections or resolving devices from inventory,
+	// reclassify it "scoped" and give it a real cross-org isolation test.
+	// Collect resolves the subject device through the principal-scoped inventory
+	// (cross-tenant/unknown id → 404, existence never revealed) and stamps the
+	// Collection's tenant from the RESOLVED device; cross-org isolation proven
+	// by protocol_diagnostics_isolation_test.go.
+	"/api/troubleshoot/protocol-diagnostics/catalog": "globalRef",
+	"/api/troubleshoot/protocol-diagnostics/analyze": "globalRef",
+	"/api/troubleshoot/protocol-diagnostics/collect": "scoped",
 	// Alert episodes (Wave 2 #6): list mirrors the /api/alerts visibility rule
 	// (own tenant + device-less platform rows); triage is own-tenant-only with
 	// cross-tenant ids → 404. Proven by alert_episodes_isolation_test.go.

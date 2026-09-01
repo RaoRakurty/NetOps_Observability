@@ -342,7 +342,7 @@ func aliasShadowError(sql string) string {
 		return ""
 	}
 	// The clauses ClickHouse resolves SELECT aliases inside.
-	clauses := rest
+	var clauses string
 	if i := strings.Index(rest, "\n WHERE "); i >= 0 {
 		clauses = rest[i:]
 	} else if i := strings.Index(rest, "\n ORDER BY "); i >= 0 {

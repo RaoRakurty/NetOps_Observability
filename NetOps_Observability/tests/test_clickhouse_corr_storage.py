@@ -437,7 +437,9 @@ def test_the_migration_is_wired_into_boot_but_not_into_the_ddl_list():
     boot = (ROOT / "src" / "backend" / "clickhouse_policies.go").read_text()
     assert "runCorrRepartition(base)" in boot, (
         "the migration exists but never runs")
-    adapter = (ROOT / "src" / "backend" / "clickhouse_repartition.go").read_text()
+    # 2026-09-01: the adapter was folded into clickhouse_client.go (the designated
+    # main-package chhttp adapter — package growth ratchet entry 2026-09-01).
+    adapter = (ROOT / "src" / "backend" / "clickhouse_client.go").read_text()
     assert "chschema.RunCorrRepartition" in adapter
 
 

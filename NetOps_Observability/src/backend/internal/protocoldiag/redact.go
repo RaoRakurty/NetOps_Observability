@@ -50,26 +50,26 @@ func newRedactor() *redactor {
 		pemEnd:     regexp.MustCompile(`(?i)-----END ` + pemKeyLabel + `-----`),
 		pemOneLine: regexp.MustCompile(`(?i)-----BEGIN ` + pemKeyLabel + `-----.*-----END ` + pemKeyLabel + `-----`),
 		rules: []redactRule{
-		// `username X password [enc] <secret>` / `... secret <secret>` — redact the secret.
-		rule(`(?i)((?:username\s+\S+\s+)?(?:password|secret)\s+(?:\d+\s+)?)(\S+)`, "${1}"+redactionMark),
-		// `enable secret 5 <hash>` / `enable password <secret>`.
-		rule(`(?i)(enable\s+(?:secret|password)\s+(?:\d+\s+)?)(\S+)`, "${1}"+redactionMark),
-		// SNMP community string.
-		rule(`(?i)(snmp-server\s+community\s+)(\S+)`, "${1}"+redactionMark),
-		// OSPF/IS-IS/generic keychain: `... md5 <secret>`, `authentication-key <secret>`,
-		// `key-string <secret>`, `message-digest-key N md5 <secret>`.
-		rule(`(?i)((?:md5|authentication-key|key-string|password)\s+(?:\d+\s+)?)(\S+)`, "${1}"+redactionMark),
-		// BGP neighbor password: `neighbor <x> password <secret>` handled by the
-		// password rule above; TCP-AO keychain name is not a secret, left intact.
-		// IPsec / IKE pre-shared keys: `pre-shared-key <secret>`,
-		// `crypto isakmp key <secret> address …`, `keyring … key <secret>`.
-		rule(`(?i)(pre-shared-key\s+(?:\S+\s+)?(?:key\s+)?)(\S+)`, "${1}"+redactionMark),
-		rule(`(?i)((?:isakmp|keyring)\s+key\s+(?:\d+\s+)?)(\S+)`, "${1}"+redactionMark),
-		// A PEM private key squeezed onto a single line. Real multi-line PEM
-		// blocks are handled by the stateful scanner in redactText — this
-		// per-line rule cannot see across lines.
-		rule(`(?i)-----BEGIN [A-Z ]*PRIVATE KEY-----.*?-----END [A-Z ]*PRIVATE KEY-----`, redactionMark),
-	}}
+			// `username X password [enc] <secret>` / `... secret <secret>` — redact the secret.
+			rule(`(?i)((?:username\s+\S+\s+)?(?:password|secret)\s+(?:\d+\s+)?)(\S+)`, "${1}"+redactionMark),
+			// `enable secret 5 <hash>` / `enable password <secret>`.
+			rule(`(?i)(enable\s+(?:secret|password)\s+(?:\d+\s+)?)(\S+)`, "${1}"+redactionMark),
+			// SNMP community string.
+			rule(`(?i)(snmp-server\s+community\s+)(\S+)`, "${1}"+redactionMark),
+			// OSPF/IS-IS/generic keychain: `... md5 <secret>`, `authentication-key <secret>`,
+			// `key-string <secret>`, `message-digest-key N md5 <secret>`.
+			rule(`(?i)((?:md5|authentication-key|key-string|password)\s+(?:\d+\s+)?)(\S+)`, "${1}"+redactionMark),
+			// BGP neighbor password: `neighbor <x> password <secret>` handled by the
+			// password rule above; TCP-AO keychain name is not a secret, left intact.
+			// IPsec / IKE pre-shared keys: `pre-shared-key <secret>`,
+			// `crypto isakmp key <secret> address …`, `keyring … key <secret>`.
+			rule(`(?i)(pre-shared-key\s+(?:\S+\s+)?(?:key\s+)?)(\S+)`, "${1}"+redactionMark),
+			rule(`(?i)((?:isakmp|keyring)\s+key\s+(?:\d+\s+)?)(\S+)`, "${1}"+redactionMark),
+			// A PEM private key squeezed onto a single line. Real multi-line PEM
+			// blocks are handled by the stateful scanner in redactText — this
+			// per-line rule cannot see across lines.
+			rule(`(?i)-----BEGIN [A-Z ]*PRIVATE KEY-----.*?-----END [A-Z ]*PRIVATE KEY-----`, redactionMark),
+		}}
 }
 
 // redactLine applies every rule to one line.

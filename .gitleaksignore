@@ -75,3 +75,10 @@ f861d29ae5a0e16c4864708a1bbc03b281feb3cd:NetOps_Observability/deployment/docker/
 0d6eb3240a0a1dc60c903ffc00dcf95abb2be273:NetOps_Observability/scripts/installer-gui/watchdog_test.go:generic-api-key:187
 0d6eb3240a0a1dc60c903ffc00dcf95abb2be273:NetOps_Observability/tests/test_watchdog_ship.py:generic-api-key:112
 0d6eb3240a0a1dc60c903ffc00dcf95abb2be273:NetOps_Observability/tests/test_watchdog_ship.py:generic-api-key:114
+#
+# protocoldiag/redact_test.go — false positive: the multi-line PEM blocks are
+# SYNTHETIC fixtures ("...linea111", "...openssh444") inside the redaction
+# tests themselves — the suite that PROVES real PEM bodies get redacted from
+# TAC exports. Deliberately fake, never key material; flagged by the
+# private-key rule on the BEGIN/END markers the tests must contain.
+e63e3021ee136c513fa797aeccb086d9161c0ed2:NetOps_Observability/src/backend/internal/protocoldiag/redact_test.go:private-key:105

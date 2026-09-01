@@ -409,7 +409,7 @@ func DefaultCatalog() *Catalog {
 						r := iosVTYTelnet(c)
 						return r.Tripped, r.Evidence
 					},
-					Restricted: func(c *Config) bool { return !iosVTYNoAccessClass(c).Tripped },
+					Restricted:  func(c *Config) bool { return !iosVTYNoAccessClass(c).Tripped },
 					Remediation: "line vty 0 15\n transport input ssh\n access-class MGMT-IN in",
 				},
 			},
