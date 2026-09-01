@@ -634,3 +634,42 @@ aggregation plane **ON** (`a9d9a10c`). Stack idle, run lock free, residue 0.
   the fix wave regression-clean.
 - **Then**: open Project 2 exactly per its REQUIRED workflow (inspect → gap
   report → prioritized plan). Tree clean at `430e87ac`.
+
+## FINAL UPDATE 2 (2026-09-01 late) — fix wave deployed, proven, and baselined
+
+The previous update's "next session, before anything else" is DONE, same day:
+
+- **Fix wave DEPLOYED 19:31Z** — correlation **`23dc2b88e966`** (both
+  replicas; image built 19:23:57Z) and api **`f6c67a4d0195`** (OCI revision
+  `0f8ea9d467bb…`, built 19:24:14Z), i.e. HEAD `0f8ea9d4` containing the full
+  ultra-review fix wave (`e63e3021..430e87ac`).
+- **CI green on the fix branch** — six lanes green on `a7e0cfa3`;
+  **backend-ci concluded SUCCESS** (27 m 05 s, observed read-only via
+  `gh run list`) alongside supply-chain, ingest-contract-ci and correlation-ci
+  on the same push.
+- **`storm-s10` (`09012025x578`) is ENVIRONMENT-INVALIDATED, not a regression**
+  — concurrent CI disk draw pushed the root-fs through OpenSearch's
+  flood-stage watermark mid-burst; the router OS sink discarded 291,296
+  syslog evidence docs post-retry. Kafka→engine lane intact (345 incidents,
+  drain/completion PASS). Tracker rows **209** (retry-exhaustion → deadletter)
+  and **210** (preflight disk/quiet gate) filed; full diagnosis:
+  `/var/tmp/scale-runs/storm-s10-09012025/s10-discard-diagnosis.md`. The V1
+  profile gained environment clause §8(e) (≥ 10 GiB free + quiet host).
+- **`storm-s11` (`090121382mk4`) — VERDICT PASS 9/9, the FIRST in programme
+  history — is the new `CORRELIX_REFERENCE_CAPACITY_V1` baseline run of
+  record**, superseding s09 (retained as the pre-fix-wave baseline, §9.1).
+  Run under §8(e) (11 GiB free, load 2.9 at launch). Scorecard: engine
+  completion 94.8 s; accounting exact 900,001 == 900,001 + 0 DLQ; memflat
+  all-9 (carrier ×1.011 FLAT, 82.5 %); accuracy **345/345 scorer v2**; T1 p95
+  **876 s** (in the 816–912 s band; inc 1,624, sigs 80,853); stability
+  0/0/0/0, worst stall 6,649 ms = 11.1 %; cleanup residue 0; plane accounting
+  exact (cumulative s10+s11: 109,534 = 99,838 + 9,696 — exactly 2 × 54,767
+  observed). This was tracker 203's qualification rerun in substance: the fix
+  wave is **regression-clean and better than the pre-fix baseline**. Full
+  record: `CORRELIX_REFERENCE_CAPACITY_V1.md` §9.
+- **Tracker journey is current** (209/210 filed with the diagnosis; staleness
+  sweep unchanged: the two known IN-PROGRESS INFO rows only).
+- **Next session opens Project 2 — Productization & Design Partners** —
+  exactly per its REQUIRED workflow in
+  `docs/projects/02-PRODUCTIZATION-DESIGN-PARTNERS.md`: inspect → gap report →
+  prioritized plan. Nothing of Project 1 remains open.

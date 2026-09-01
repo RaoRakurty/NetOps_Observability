@@ -31,6 +31,8 @@ STATUS: COMPLETE
 DATE: 2026-09-01
 ```
 
+*Post-closure note (2026-09-01 late): the ultra-review fix wave was deployed (correlation `23dc2b88e966`, api `f6c67a4d0195`, HEAD `0f8ea9d4`) and re-qualified — `storm-s11` (`090121382mk4`) scored the programme's **first 9/9** and is now the `CORRELIX_REFERENCE_CAPACITY_V1` baseline run of record, superseding s09 (kept as the pre-fix-wave baseline).*
+
 **Closing conclusion.** The single-reference-host envelope is **measured, not
 estimated**. The platform meets the ratified Option A SLO at 2,500 devices /
 ~1,000 eps with lossless ingestion, bounded memory, full completion, and

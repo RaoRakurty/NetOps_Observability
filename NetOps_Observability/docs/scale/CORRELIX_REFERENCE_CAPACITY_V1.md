@@ -15,11 +15,15 @@ compared against the V1 baseline run of record.**
 > silent modification of V1. This file changes only to fix typos or add
 > cross-references; its numbers and digests are frozen.
 
-**V1 baseline run of record: `storm-s09`** (run `09010750fq0u`, run dir
-`/var/tmp/scale-runs/storm-s09-09010750`, 2026-09-01) — **8/9 gates with every
-clause of the ratified SLO met (4/4)**, the first `memflat` PASS ever recorded
-at 2,500 devices; sole FAIL is the onboard-ratio clause, a measured harness
-artifact (tracker 202). Full grading: `PROJECT1_DONE_2026-09-01.md` §5.
+**V1 baseline run of record: `storm-s11`** (run `090121382mk4`, run dir
+`/var/tmp/scale-runs/storm-s11-09012138`, 2026-09-01, post-ultra-fix-wave
+images at `0f8ea9d4`) — **9/9 gates, the first perfect run in programme
+history**, every clause of the ratified SLO met (4/4), and the first leg graded
+under the §8(e) environment clause (11 GiB root-fs free, load1 2.9 at launch).
+Full scorecard: §9. It supersedes `storm-s09` (run `09010750fq0u`, 8/9 — sole
+FAIL the onboard-ratio harness artifact, tracker 202), which remains cited in
+§9.1 as the **pre-fix-wave baseline** for comparison; s09's grading:
+`PROJECT1_DONE_2026-09-01.md` §5.
 
 ---
 
@@ -190,12 +194,40 @@ purge does not block a re-score). Report `accuracy-report.{json,md}` +
 ≤ 2,700 s after burst end, accounting exact 900,001 == 900,001 + 0 DLQ + 0
 counted rejections, memory caps held per §6, accuracy ≥ 93 % on scorer v2), the
 aggregation accounting of §7 exact, and no unexpected replica ejection or
-restart. The V1 baseline (`storm-s09`) met all of these; tracker 203 wraps this
+restart. Both baseline legs (`storm-s11`, and `storm-s09` before it) met all of
+these; tracker 203 wraps this
 document into the rerunnable release regression suite.
 
 **(e) Qualification environment (added 2026-09-01):** a V1-graded leg additionally requires **≥ 10 GiB root-fs free at preflight and a quiet host** (no concurrent CI suites/builds during the leg) — motivated by `storm-s10` (run `09012025x578`, **excluded from qualification for environment violation**): concurrent CI disk draw pushed the root-fs through OpenSearch's flood-stage watermark mid-burst and the router's OS sink discarded 291,296 syslog evidence docs (`/var/tmp/scale-runs/storm-s10-09012025/s10-discard-diagnosis.md`; tracker 209/210).
 
-## 9. Baseline evidence — `storm-s09` (the V1 leg of record)
+## 9. Baseline evidence — `storm-s11` (the V1 leg of record)
+
+**Designated 2026-09-01 (late session): `storm-s11`, run `090121382mk4` — the
+first 9/9 VERDICT PASS in programme history**, on the complete ultra-review fix
+wave, and the first leg run and graded under the §8(e) environment clause.
+
+| clause | s11 reading |
+|---|---|
+| gates | **9/9 PASS — first ever** (incl. onboard ratio 0.747 ≥ 0.6 floor, the clause s09 failed; stop=none) |
+| completion | **94.8 s** engine completion (23 m 41 s total after burst end, drain 1,320 s / peak lag 423,155 included) of the 2,700 s budget |
+| losslessness | **900,001 == 900,001 + 0 DLQ + 0 counted rejections**; 2,500/2,500 devices covered; 53,965 `corr_signals` rows |
+| memory | **memflat PASS all 9**: carrier ×1.011 FLAT at 82.5 % of cap, idle replica ×1.033 at 7.0 %, api 22.7 %, CH p99 MemoryTracking 32.3 % (peak 42.9 %) with 82 backfill-negotiation refusals exempted (sole producer verified), OS 63.2 %, Kafka 43.5 % |
+| accuracy | **345/345 = 100.00 %** `scorer_version: 2` (16 ClickHouse queries; emission journal absent by design for miniladder runs) |
+| T1 p95 (published, not gated) | **876 s** (p50 80, p99 1,363, max 1,734; T-last p95 2,020; inc 1,624, versions 10,371, sigs 80,853) — inside the 816–912 s clean-leg band |
+| aggregation accounting | exact, **cumulative across s10+s11** on the deploy's containers (started 19:31Z, not recreated between legs): observed 109,534 = forwarded 99,838 + suppressed 9,696 (8.85 %); observed = exactly 2 × 54,767 — the deterministic workload's digit-identical per-leg count (metrics-final.txt carries the cumulative-scope note) |
+| stability | 0 CommitFailed / 0 UnknownMember / 0 restarts / 0 rebalances over 2,803 s; worst loop stall 6,649 ms = 11.1 % of the 60 s session timeout (read live from both replicas) |
+| cleanup | 2,500 devices deleted + whole-namespace verified, CH+OS purged (OS 900,001 docs in 213 s), residue 0 |
+| environment (§8e) | **11 GiB root-fs free, load1 2.9 at launch** — first leg graded under the clause; PASS |
+| scenario | seed 20260829, digest `0e1a8d7b4e707c505ae1bc505464be69aa26231d040cfce0fe38c779786404d5`, 345 incidents / 16,060 scenario events, storm share 1.78 % achieved exactly |
+| images | correlation `23dc2b88e966` (identical on both replicas; built 2026-09-01T19:23:57Z), api `f6c67a4d0195` (OCI revision `0f8ea9d467bb…`, built 19:24:14Z) — the complete ultra-review fix wave at `0f8ea9d4`; plane ON (`a9d9a10c`); deployed 19:31Z |
+
+Artifacts in the run dir: `report.{json,md}`, `metrics-final.txt` (both
+replicas, mTLS :8443, cumulative-scope-noted), `ttur.tsv` + `ttur-scope.json`
+(§8(b) clean-scope SQL verbatim), `accuracy-report.{json,md}` +
+`twin-score.log` (scorer v2), `ground-truth.json`, `lag-curve.json`,
+`correlation-completion.json`, `burst-chunks.json`.
+
+### 9.1 Pre-fix-wave baseline — `storm-s09` (superseded 2026-09-01, retained for comparison)
 
 | clause | s09 reading |
 |---|---|
