@@ -1334,6 +1334,25 @@ def test_the_repeat_distributions_have_the_mean_they_declare():
     assert max(g) > max(b)
 
 
+def test_the_geometric_draw_is_true_mean_not_mean_minus_one():
+    """Ultra #20: the inverse-CDF draw must use the SHIFTED parameterization
+    (p = 1/(mean+1) on support {0, 1, ...}), whose mean is `repeat_factor`
+    itself. The naive p = 1/mean delivers mean-1 — ~29 % of the declared
+    repeat mass silently missing at the configured 3.5 — while the wide
+    ±25 % band above stayed green."""
+    import random as _random
+    for factor, band in ((3.5, (3.35, 3.65)), (20.0, (19.4, 20.6))):
+        shape = chain.DEFAULT_SHAPE._replace(repeat_factor=factor,
+                                             repeat_distribution="geometric")
+        rng = _random.Random(20260829)
+        draws = [shape.draw_repeats(rng, chain.REPEAT_RANGE)
+                 for _ in range(40000)]
+        mean = sum(draws) / len(draws)
+        assert band[0] <= mean <= band[1], (
+            f"repeat_factor {factor}: geometric mean {mean:.3f} is off the "
+            f"declared mean — the draw is mis-parameterized")
+
+
 # ── the ladder ──────────────────────────────────────────────────────────────
 
 def test_every_ladder_rung_keeps_the_ratified_throughput():

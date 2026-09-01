@@ -172,9 +172,14 @@ class Connection:
     # -- flow control ------------------------------------------------------
     def _claim_window(self, stream: _Stream, want: int) -> int:
         """Reserve up to `want` octets of BOTH windows, blocking until some
-        capacity exists. Returns 0 only when the connection is going away."""
+        capacity exists. Returns 0 when the connection is going away OR the
+        stream's RPC has been cancelled — a writer parked here for a stream
+        the peer already reset must not stay blocked until connection death
+        (RST pops the stream, so no WINDOW_UPDATE will ever free it)."""
+        ctx = stream.ctx
         with self.window_cv:
-            while not self.closed.is_set():
+            while not self.closed.is_set() and not (
+                    ctx is not None and ctx.cancelled.is_set()):
                 n = min(want, self.conn_send_window, stream.send_window,
                         self.peer_max_frame)
                 if n > 0:
@@ -202,7 +207,7 @@ class Connection:
         while pos < len(data):
             n = self._claim_window(stream, len(data) - pos)
             if n <= 0:
-                raise ConnectionError("connection closing")
+                raise ConnectionError("stream cancelled or connection closing")
             self._send_frame(FRAME_DATA, 0, stream.id, data[pos:pos + n])
             pos += n
 
@@ -213,30 +218,38 @@ class Connection:
         path = ctx.headers.get(":path", "")
         status, message = GRPC_OK, ""
         try:
-            self.send_headers(stream.id, [
-                (":status", "200"),
-                ("content-type", "application/grpc"),
-            ])
-            for payload in self.handler(path, ctx, request):
-                if ctx.cancelled.is_set() or self.closed.is_set():
-                    return
-                self.send_message(stream, payload)
-        except GrpcStatus as exc:
-            status, message = exc.code, exc.message
-        except ConnectionError:
-            return
-        except Exception as exc:                          # noqa: BLE001
-            # A handler bug must not take the target down: report INTERNAL on
-            # this stream and keep serving the other devices' subscriptions.
-            status, message = GRPC_INTERNAL, f"{type(exc).__name__}: {exc}"
-            self.log(f"stream {stream.id}: handler error: {message}")
-        try:
-            trailers = [("grpc-status", str(status))]
-            if message:
-                trailers.append(("grpc-message", message.replace("\n", " ")))
-            self.send_headers(stream.id, trailers, end_stream=True)
-        except (ConnectionError, H2Error):
-            pass
+            try:
+                self.send_headers(stream.id, [
+                    (":status", "200"),
+                    ("content-type", "application/grpc"),
+                ])
+                for payload in self.handler(path, ctx, request):
+                    if ctx.cancelled.is_set() or self.closed.is_set():
+                        return
+                    self.send_message(stream, payload)
+            except GrpcStatus as exc:
+                status, message = exc.code, exc.message
+            except ConnectionError:
+                return
+            except Exception as exc:                      # noqa: BLE001
+                # A handler bug must not take the target down: report INTERNAL
+                # on this stream and keep serving the other subscriptions.
+                status, message = GRPC_INTERNAL, f"{type(exc).__name__}: {exc}"
+                self.log(f"stream {stream.id}: handler error: {message}")
+            try:
+                trailers = [("grpc-status", str(status))]
+                if message:
+                    trailers.append(
+                        ("grpc-message", message.replace("\n", " ")))
+                self.send_headers(stream.id, trailers, end_stream=True)
+            except (ConnectionError, H2Error):
+                pass
+        finally:
+            # The trailers (or the failure to send them) end this RPC either
+            # way: forget the stream, so MAX_CONCURRENT_STREAMS counts LIVE
+            # RPCs. Without this, a connection wedges after 64 completed RPCs
+            # — every later HEADERS is refused against a table of ghosts.
+            self._close_stream(stream.id)
 
     def _maybe_dispatch(self, stream: _Stream) -> None:
         """Start the RPC as soon as ONE complete gRPC message has arrived —
@@ -291,6 +304,9 @@ class Connection:
             body = body[1:len(body) - pad]
         if flags & FLAG_PRIORITY:
             body = body[5:]
+        # END_STREAM is a flag of the HEADERS frame; the CONTINUATION loop
+        # below overwrites `flags`, so latch it first.
+        end_stream = bool(flags & FLAG_END_STREAM)
         block = bytes(body)
         while not flags & FLAG_END_HEADERS:
             ftype, cflags, cstream, cpayload = self._read_frame()
@@ -298,12 +314,25 @@ class Connection:
                 raise H2Error("expected CONTINUATION for the open header block")
             block += cpayload
             flags = cflags
+        # The HPACK dynamic table is CONNECTION state (RFC 7541 §2.2): EVERY
+        # header block must reach the decoder, refused stream or not —
+        # skipping one desyncs the table and corrupts every later header
+        # block on this connection.
+        headers = {n: v for n, v in self.dec.decode(block)}
         if len(self.streams) >= MAX_CONCURRENT_STREAMS:
             self._send_frame(FRAME_RST_STREAM, 0, stream_id,
                              struct.pack("!I", ERR_PROTOCOL_ERROR))
             return
+        if end_stream:
+            # Half-closed (remote) with no body: no gRPC request message can
+            # ever arrive, so no RPC will ever run — and nothing would ever
+            # prune the stream. Refuse it loudly instead of tabling a ghost.
+            self.log(f"stream {stream_id}: half-closed with no request body")
+            self._send_frame(FRAME_RST_STREAM, 0, stream_id,
+                             struct.pack("!I", ERR_PROTOCOL_ERROR))
+            return
         stream = _Stream(stream_id, self.peer_initial_window)
-        stream.headers = {n: v for n, v in self.dec.decode(block)}
+        stream.headers = headers
         stream.ctx = StreamContext(stream_id, stream.headers)
         self.streams[stream_id] = stream
         # Give the peer room to send its request body immediately.
@@ -316,7 +345,15 @@ class Connection:
         if flags & FLAG_PADDED and body:
             body = body[1:len(body) - body[0]]
         if stream is None:
-            return                                   # already reset/closed
+            # Already reset/closed — but the frame still consumed CONNECTION-
+            # level flow-control window (RFC 9113 §6.9 counts DATA against it
+            # regardless of stream state). Replenish it by exactly the frame
+            # payload, or every late frame leaks window until the peer stalls
+            # at zero. No stream-level update: that stream is gone.
+            if payload:
+                self._send_frame(FRAME_WINDOW_UPDATE, 0, 0,
+                                 struct.pack("!I", len(payload)))
+            return
         stream.recv_bytes += len(payload)
         if stream.recv_bytes > MAX_REQUEST_BYTES:
             raise H2Error("request body exceeds the served maximum")
@@ -330,6 +367,11 @@ class Connection:
         self._maybe_dispatch(stream)
         if flags & FLAG_END_STREAM:
             stream.ended = True
+            if not stream.started:
+                # Half-closed (remote) without a complete request message: no
+                # RPC will ever start on this stream, so nothing else would
+                # ever prune it from the table.
+                self._close_stream(stream_id)
 
     def _on_window_update(self, stream_id: int, payload: bytes) -> None:
         if len(payload) != 4:
@@ -342,6 +384,15 @@ class Connection:
                 self.conn_send_window += inc
             elif stream_id in self.streams:
                 self.streams[stream_id].send_window += inc
+            self.window_cv.notify_all()
+
+    def _close_stream(self, stream_id: int) -> None:
+        """Forget a completed stream. Under `window_cv` because SETTINGS
+        processing iterates the stream table under that lock; the notify wakes
+        any writer blocked on this stream's window so it can observe the
+        cancellation/closure instead of waiting out its poll interval."""
+        with self.window_cv:
+            self.streams.pop(stream_id, None)
             self.window_cv.notify_all()
 
     def _on_rst(self, stream_id: int) -> None:

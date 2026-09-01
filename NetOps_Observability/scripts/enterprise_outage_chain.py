@@ -555,10 +555,15 @@ class StormShape(typing.NamedTuple):
             # Memoryless with the same mean as the bounded band: a few
             # identities chatter far harder than the mean, which is what a
             # real repetition storm looks like. Inverse-CDF so it is ONE draw.
+            # Shifted-geometric parameterization: on support {0, 1, ...} a
+            # geometric with success probability p has E[N] = (1-p)/p, so
+            # p = 1/(mean+1) — i.e. P(N >= k) = (mean/(mean+1))**k — gives
+            # E[N] = mean exactly. (The naive p = 1/mean reads mean-1: ~29 %
+            # under-injection at the configured 3.5.)
             mean = max(1.0, (lo + hi) / 2.0)
             u = rng.random()
-            n = math.floor(math.log(max(u, 1e-12)) / math.log(
-                max(1.0 - 1.0 / mean, 1e-12)))
+            n = math.floor(math.log(max(u, 1e-12)) /
+                           math.log(mean / (mean + 1.0)))
             return _clampi(n, 0, int(self.repeat_cap))
         if self.repeat_distribution != "bounded":   # 16.1: never guess
             raise ValueError(

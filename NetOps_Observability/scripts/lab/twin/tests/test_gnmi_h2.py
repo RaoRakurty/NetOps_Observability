@@ -25,6 +25,7 @@ from gnmi_h2 import (
     FRAME_SETTINGS,
     FRAME_WINDOW_UPDATE,
     GRPC_OK,
+    MAX_CONCURRENT_STREAMS,
     MAX_REQUEST_BYTES,
     PREFACE,
     Connection,
@@ -313,3 +314,137 @@ def test_bad_client_preface_is_refused_without_serving_the_rpc():
     # what it DOES get is a GOAWAY(PROTOCOL_ERROR) on stream 0, then a close
     assert data[3] == FRAME_GOAWAY
     assert struct.unpack("!II", data[9:17]) == (0, ERR_PROTOCOL_ERROR)
+
+
+def test_completed_streams_are_pruned_so_one_connection_outlives_64_rpcs(
+        server):
+    """Ultra #28: a finished RPC must leave the stream table. Without the
+    prune, the 65th HEADERS on a connection is refused with RST_STREAM
+    against a table full of ghosts, wedging every long-lived gnmic client."""
+    client, state = server
+    state["handler"] = lambda path, ctx, req: iter([b"ok"])
+    for i in range(MAX_CONCURRENT_STREAMS + 2):
+        client.open_rpc("/gnmi.gNMI/Get", b"", stream_id=1 + 2 * i,
+                        end_stream=True)
+        _h, messages, trailers = client.collect(1)
+        assert messages == [b"ok"] and trailers["grpc-status"] == "0"
+    deadline = time.monotonic() + 5.0
+    while state["conn"].streams and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert state["conn"].streams == {}
+
+
+def test_a_half_closed_stream_with_no_request_never_occupies_the_table(
+        server):
+    """Both remote half-close shapes that can never carry an RPC — HEADERS
+    with END_STREAM (no body at all) and DATA+END_STREAM short of one
+    complete gRPC message — must not leave a ghost in the stream table."""
+    client, state = server
+    state["handler"] = lambda path, ctx, req: iter([b"ok"])
+    empty = hpack.encode_headers([(":method", "POST"), (":scheme", "http"),
+                                  (":path", "/gnmi.gNMI/Get")])
+    client.send(FRAME_HEADERS, FLAG_END_HEADERS | FLAG_END_STREAM, 1, empty)
+    client.send(FRAME_HEADERS, FLAG_END_HEADERS, 3, empty)
+    client.send(FRAME_DATA, FLAG_END_STREAM, 3, b"\x00\x00")   # truncated
+    # a real RPC still works afterwards, and no ghost stream remains
+    client.open_rpc("/gnmi.gNMI/Get", b"", stream_id=5, end_stream=True)
+    _h, messages, trailers = client.collect(1)
+    assert messages == [b"ok"] and trailers["grpc-status"] == "0"
+    deadline = time.monotonic() + 5.0
+    while state["conn"].streams and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert state["conn"].streams == {}
+
+
+def test_a_refused_streams_headers_still_feed_the_hpack_decoder(server):
+    """Ultra #29: the HPACK dynamic table is CONNECTION state (RFC 7541
+    §2.2). A HEADERS block refused by the stream cap must still be decoded —
+    skipping it desyncs the table, and every later block that references the
+    entry it inserted decodes wrong (here: kills the connection)."""
+    client, state = server
+    state["handler"] = lambda path, ctx, req: iter([b"ok"])
+    filler = hpack.encode_headers([(":method", "POST"), (":scheme", "http"),
+                                   (":path", "/gnmi.gNMI/Subscribe")])
+    for i in range(MAX_CONCURRENT_STREAMS):
+        client.send(FRAME_HEADERS, FLAG_END_HEADERS, 1 + 2 * i, filler)
+    # the refused stream's block INSERTS a dynamic-table entry (0x40 literal
+    # with incremental indexing): x-twin-run: cafe
+    insert = (b"\x40" + bytes([len(b"x-twin-run")]) + b"x-twin-run"
+              + bytes([len(b"cafe")]) + b"cafe")
+    refused_id = 1 + 2 * MAX_CONCURRENT_STREAMS
+    client.send(FRAME_HEADERS, FLAG_END_HEADERS, refused_id, insert)
+    # free one slot, then reference the inserted entry by dynamic index 62
+    # (the static table is 61 entries; the refused block's insert is first)
+    client.send(FRAME_RST_STREAM, 0, 1, struct.pack("!I", 8))
+    block = hpack.encode_headers([
+        (":method", "POST"), (":scheme", "http"),
+        (":path", "/gnmi.gNMI/Get"), ("content-type", "application/grpc")])
+    block += bytes([0x80 | 62])
+    rpc_id = refused_id + 2
+    client.send(FRAME_HEADERS, FLAG_END_HEADERS, rpc_id, block)
+    client.send(FRAME_DATA, 0, rpc_id, grpc_frame(b""))
+    _h, messages, trailers = client.collect(1)
+    assert messages == [b"ok"] and trailers["grpc-status"] == "0"
+    assert state["ctx"].headers.get("x-twin-run") == "cafe"
+
+
+def test_data_on_a_reset_stream_still_replenishes_the_connection_window(
+        server):
+    """Ultra #30 / RFC 9113 §6.9: DATA counts against the CONNECTION window
+    whatever the stream's state, so a frame landing on an already-reset
+    stream must be handed back via a connection-level WINDOW_UPDATE — byte
+    for byte — or every late frame leaks window until the peer stalls."""
+    client, state = server
+    state["handler"] = lambda path, ctx, req: iter([b"ok"])
+    block = hpack.encode_headers([(":method", "POST"), (":scheme", "http"),
+                                  (":path", "/gnmi.gNMI/Subscribe")])
+    client.send(FRAME_HEADERS, FLAG_END_HEADERS, 1, block)
+    # drain until the per-stream grant proves stream 1 is registered, so the
+    # RST below is processed after registration, deterministically
+    while True:
+        ftype, flags, sid, payload = client.frame()
+        if ftype == FRAME_SETTINGS and not flags & FLAG_ACK:
+            client.send(FRAME_SETTINGS, FLAG_ACK, 0, b"")
+        if ftype == FRAME_WINDOW_UPDATE and sid == 1:
+            break
+    client.send(FRAME_RST_STREAM, 0, 1, struct.pack("!I", 8))
+    late = b"\x00" * 10
+    client.send(FRAME_DATA, 0, 1, late)
+    while True:
+        ftype, _flags, sid, payload = client.frame()
+        if ftype == FRAME_WINDOW_UPDATE:
+            assert sid == 0, "window grant for a dead stream"
+            assert struct.unpack("!I", payload)[0] == len(late)
+            break
+
+
+def test_rst_stream_unblocks_a_writer_stalled_on_flow_control(server):
+    """Ultra #31: a writer blocked in `_claim_window` for a stream the peer
+    has reset must observe the cancellation and exit — not stay parked until
+    connection death (the RST popped the stream, so no WINDOW_UPDATE can
+    ever free it again)."""
+    client, state = server
+    state["handler"] = lambda path, ctx, req: iter([b"x" * 200000])
+    client.open_rpc("/gnmi.gNMI/Subscribe", b"", end_stream=False)
+    # read DATA until the whole 65535-octet connection send window has been
+    # spent: the writer is now blocked claiming more
+    got = 0
+    while got < 65535:
+        ftype, flags, _sid, payload = client.frame()
+        if ftype == FRAME_SETTINGS and not flags & FLAG_ACK:
+            client.send(FRAME_SETTINGS, FLAG_ACK, 0, b"")
+        elif ftype == FRAME_DATA:
+            got += len(payload)
+    deadline = time.monotonic() + 5.0
+    thread = None
+    while thread is None and time.monotonic() < deadline:
+        stream = state["conn"].streams.get(1) if state["conn"] else None
+        thread = stream.thread if stream else None
+        if thread is None:
+            time.sleep(0.01)
+    assert thread is not None, "RPC thread never started"
+    assert thread.is_alive()
+    client.send(FRAME_RST_STREAM, 0, 1, struct.pack("!I", 8))
+    thread.join(3.0)
+    assert not thread.is_alive(), (
+        "writer stayed blocked in _claim_window after RST")
