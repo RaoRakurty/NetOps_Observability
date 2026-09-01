@@ -47,9 +47,11 @@ package timeintel
 // reachable only from the platform-admin-gated worker surface.
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"os"
+	"strings"
 	"time"
 
 	"netops/backend/internal/platformdb"
@@ -78,7 +80,13 @@ type BackfillCursor struct {
 func (c BackfillCursor) IsZero() bool { return c.CreatedAt.IsZero() }
 
 // Ahead reports whether (createdAt, corrID) sorts strictly AFTER the cursor in
-// the (created_at, correlation_id) order.
+// the (created_at, correlation_id) order — the order the pick SQL scans in,
+// which for the UUID tie-break is ClickHouse's NATIVE order, not Go's text
+// order (ultra finding #4; see CompareCorrelationUUID). Comparing here in any
+// other order makes Go and the server disagree about which boundary rows are
+// "already processed" whenever a page boundary lands inside one millisecond:
+// the mark then refuses to advance past rows the server has already returned
+// and the pass re-reads them every tick.
 func (c BackfillCursor) Ahead(createdAt time.Time, corrID string) bool {
 	if c.IsZero() {
 		return true
@@ -89,7 +97,7 @@ func (c BackfillCursor) Ahead(createdAt time.Time, corrID string) bool {
 	if createdAt.Before(c.CreatedAt) {
 		return false
 	}
-	return corrID > c.CorrelationID
+	return CompareCorrelationUUID(corrID, c.CorrelationID) > 0
 }
 
 // Advance returns the cursor moved to (createdAt, corrID). It NEVER moves
@@ -181,6 +189,88 @@ func (s *BackfillCursorStore) Save(c BackfillCursor) error {
 // lookback window (an operator-triggered full re-derivation, e.g. after a
 // calculation-version bump).
 func (s *BackfillCursorStore) Reset() error { return s.Save(BackfillCursor{}) }
+
+// CompareCorrelationUUID compares two correlation-id UUIDs in ClickHouse's
+// NATIVE UUID order (-1/0/+1, strcmp-style).
+//
+// ClickHouse does not order UUIDs the way their canonical text orders: a UUID
+// is stored as a UInt128 whose two 64-bit halves are SWAPPED relative to the
+// text — the LOW half of the integer holds the first 8 text bytes and the HIGH
+// half holds the last 8 — so ORDER BY compares the SECOND half of the text
+// first, then the first, big-endian within each half.
+//
+// MEASURED, not assumed (read-only probe, log_comment 'probe-ultra-ti',
+// ClickHouse 24.8.14.39, 2026-09-01): ORDER BY u ASC over crafted UUIDs gives
+//
+//	0000000a-0000-0000-0000-000000000000
+//	a0000000-0000-0000-0000-000000000000
+//	ffffffff-ffff-ffff-0000-000000000001
+//	00000000-0000-0000-0000-00000000000a
+//	00000000-0000-0000-a000-000000000000
+//	00000000-0000-0000-ffff-ffffffffffff
+//	00000000-0000-0001-ffff-ffffffffffff
+//
+// i.e. every UUID with a zero second half sorts before every UUID with a
+// non-zero one, whatever its first half — text order says the opposite for
+// rows 3 and 4. The same probe confirmed each half compares big-endian
+// (byte 0 outranks byte 7; byte 8 outranks byte 15).
+//
+// WHY THE CURSOR MUST USE THIS ORDER (ultra finding #4): the pick SQL both
+// ORDERs BY and compares the cursor tuple against the RAW UUID column
+// (deliberately — see timeIntelBackfillPickSQL's alias-shadowing note), so the
+// server's scan order is the native order. If Go advances the mark using TEXT
+// order instead, then on a created_at tie the two sides disagree: rows the
+// server already returned can look "not ahead" to Go, the mark refuses to
+// advance past them, and the pass re-reads the boundary every tick (a
+// degradation; a stall needs >page-size rows in one millisecond).
+//
+// A string that is not a canonical UUID cannot be given a native position, so
+// the comparison degrades to plain byte order — which keeps the one property
+// the cursor relies on: the empty string ("no tie-break") sorts before every
+// real id.
+func CompareCorrelationUUID(a, b string) int {
+	ab, aok := uuidBytes(a)
+	bb, bok := uuidBytes(b)
+	if !aok || !bok {
+		return strings.Compare(a, b)
+	}
+	if c := bytes.Compare(ab[8:], bb[8:]); c != 0 {
+		return c
+	}
+	return bytes.Compare(ab[:8], bb[:8])
+}
+
+// uuidBytes parses a canonical 8-4-4-4-12 UUID into its 16 big-endian bytes.
+// Case-insensitive, like the server's parser: 'AA' and 'aa' are the same octet.
+func uuidBytes(s string) ([16]byte, bool) {
+	var out [16]byte
+	if !ValidCorrelationUUID(s) {
+		return out, false
+	}
+	i := 0
+	for j := 0; j < len(s); j++ {
+		c := s[j]
+		if c == '-' {
+			continue
+		}
+		var v byte
+		switch {
+		case c >= '0' && c <= '9':
+			v = c - '0'
+		case c >= 'a' && c <= 'f':
+			v = c - 'a' + 10
+		default: // 'A'..'F' — ValidCorrelationUUID admits nothing else
+			v = c - 'A' + 10
+		}
+		if i%2 == 0 {
+			out[i/2] = v << 4
+		} else {
+			out[i/2] |= v
+		}
+		i++
+	}
+	return out, true
+}
 
 // ValidCorrelationUUID reports whether s is a canonical 8-4-4-4-12 hex UUID.
 // Everything that reaches a ClickHouse literal is validated here rather than

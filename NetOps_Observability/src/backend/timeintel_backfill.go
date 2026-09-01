@@ -217,6 +217,22 @@ const (
 	// that and still two orders of magnitude under the old single parse.
 	timeIntelBackfillPickResponseBytes = 2 << 20
 
+	// timeIntelBackfillRescanSkipStep (ultra #5) is how far the re-scan's start
+	// moves FORWARD after a pass whose re-scan was refused by ClickHouse — the
+	// bounded skip that stops a deterministically failing region behind the
+	// mark (e.g. a 159 TIMEOUT that the same window reproduces every tick) from
+	// consuming the re-scan budget forever. The splitter's philosophy, one
+	// layer up: progress over completeness, loudly — each move is counted on
+	// netops_timeintel_rescan_skips_total and named at WARN.
+	//
+	// A quarter of the slack: four consecutive refusals walk the floor across
+	// the whole 2 h re-scan window, so even a region that is unreadable END TO
+	// END costs one hour of ticks before the re-scan is running again — and the
+	// only data at risk is the re-scan's own redundancy (reconcile-repaired
+	// rows), never forward progress, which ultra #5's other half already
+	// unblocked. The floor is cleared by the first re-scan that completes.
+	timeIntelBackfillRescanSkipStep = timeIntelBackfillWatermarkSlack / 4
+
 	// timeIntelBackfillWatermarkSlack is how far BEHIND the stored cursor each
 	// pass restarts. See timeintel.BackfillCursor.Rewind: corr_current is also
 	// written by corr_current_reconcile.go, which repairs a drifted projection
@@ -369,6 +385,20 @@ const (
 const (
 	chCodeTooManyBytes        = 307 // TOO_MANY_BYTES — max_bytes_to_read tripped
 	chCodeMemoryLimitExceeded = 241 // MEMORY_LIMIT_EXCEEDED — max_memory_usage tripped
+)
+
+// Sentinel outcomes of the pass-serialization guard (ultra #6). Both are
+// EXPECTED coordination results, not faults: the ticker logs them at INFO and
+// the HTTP trigger maps them to 409 Conflict.
+var (
+	// errTimeIntelBackfillInFlight: another pass holds the inflight guard. The
+	// caller yields — the running pass is doing the same work.
+	errTimeIntelBackfillInFlight = errors.New("timeintel backfill: a pass is already in flight")
+	// errTimeIntelBackfillStale: the watermark was reset while this pass was
+	// running, so its remaining saves were discarded. The DISCARD is the point:
+	// this pass's progress is measured against a watermark the operator just
+	// declared void, and persisting it would silently undo the reset.
+	errTimeIntelBackfillStale = errors.New("timeintel backfill: watermark was reset during the pass — the pass's progress was discarded, the reset stands")
 )
 
 // timeIntelBackfillKey is one picked object: the primary-key tuple plus the
@@ -643,6 +673,15 @@ func (s *server) backfillIncidentTimeMetrics(ctx context.Context, lookback time.
 		lookback = timeIntelBackfillLookback
 	}
 
+	// ── inflight guard (ultra #6): AT MOST ONE pass, ticker or manual. TryLock
+	// so the loser yields (the running pass is doing the same work) instead of
+	// queueing a redundant pass behind a ~21-minute ceiling.
+	if !s.timeIntelPassMu.TryLock() {
+		return res, errTimeIntelBackfillInFlight
+	}
+	defer s.timeIntelPassMu.Unlock()
+	gen := s.timeIntelCursorGeneration()
+
 	cursors := timeintel.NewBackfillCursorStore("")
 	stored, err := cursors.Load()
 	if err != nil {
@@ -657,18 +696,62 @@ func (s *server) backfillIncidentTimeMetrics(ctx context.Context, lookback time.
 	pass := &timeIntelBackfillPass{
 		srv: s, lookbackSeconds: int(lookback / time.Second),
 		now: time.Now().UTC(), covered: s.timeIntelMaintenanceLookup(ctx),
-		cursors: cursors, mark: stored, res: &res,
+		cursors: cursors, mark: stored, res: &res, gen: gen,
 	}
 
 	forwardPages := timeIntelBackfillMaxPages
 	// PHASE 1 — the bounded re-scan behind the mark. Skipped on a cold pass
 	// (there is nothing behind a zero mark) and capped at
 	// timeIntelBackfillRescanPages so it can never eat the forward budget.
+	//
+	// Phase 1 can DEGRADE but it can NEVER BLOCK phase 2 (ultra #5): the
+	// re-scan is redundancy (an idempotent re-read of rows the reconcile may
+	// have repaired), phase 2 is the only mark-advancing phase — and a
+	// deterministic refusal inside the FIXED window behind the mark (159
+	// TIMEOUT hit 12 of 41 pre-rewrite passes, and 159 is not a code the fetch
+	// splitter halves on) used to abort the whole pass right here, every tick,
+	// forever: a permanently failing backfill with a healthy forward path.
 	if !stored.IsZero() {
 		forwardPages -= timeIntelBackfillRescanPages
-		if _, err := pass.run(ctx, stored.Rewind(timeIntelBackfillWatermarkSlack),
-			timeIntelBackfillRescanPages, false); err != nil {
-			return res, err
+		start := stored.Rewind(timeIntelBackfillWatermarkSlack)
+		if !s.timeIntelRescanFloor.IsZero() && s.timeIntelRescanFloor.After(start.CreatedAt) {
+			// A previous re-scan was refused below this point: resume from the
+			// skip floor instead of asking the failing window the same question.
+			start = timeintel.BackfillCursor{CreatedAt: s.timeIntelRescanFloor}
+		}
+		if _, rerr := pass.run(ctx, start, timeIntelBackfillRescanPages, false); rerr != nil {
+			if ctx.Err() != nil {
+				// The PASS was cancelled (shutdown, timeout) — that is not a
+				// re-scan degradation; phase 2 could not have run either.
+				return res, rerr
+			}
+			s.timeIntelRescanFailures.Add(1)
+			fields := map[string]any{
+				"err": rerr.Error(), "retryable": chhttp.Retryable(rerr),
+				"rescan_from": start.CreatedAt.Format(time.RFC3339Nano),
+			}
+			var che *chhttp.Error
+			if errors.As(rerr, &che) {
+				// A server refusal reproduces on the same window (the re-scan
+				// window is FIXED behind the mark), so move the floor a bounded
+				// step forward — the splitter's philosophy one layer up:
+				// progress over completeness, loudly. A transient refusal costs
+				// at most one skipped slice of the re-scan's redundancy; a
+				// deterministic one stops costing every tick.
+				next := start.CreatedAt.Add(timeIntelBackfillRescanSkipStep)
+				if next.After(stored.CreatedAt) {
+					next = stored.CreatedAt
+				}
+				s.timeIntelRescanFloor = next
+				s.timeIntelRescanSkips.Add(1)
+				fields["ch_code"] = che.Code
+				fields["skip_floor"] = next.Format(time.RFC3339Nano)
+			}
+			logWarn("timeintel", "backfill re-scan failed — counted (and skipped forward on a ClickHouse refusal); the forward phase still runs", fields)
+		} else {
+			// A completed re-scan clears the skip floor: the window is readable
+			// again, so the next pass re-earns the full rewind.
+			s.timeIntelRescanFloor = time.Time{}
 		}
 	}
 	// PHASE 2 — forward from the mark. This is the phase that advances and
@@ -690,6 +773,7 @@ type timeIntelBackfillPass struct {
 	cursors         *timeintel.BackfillCursorStore
 	mark            timeintel.BackfillCursor // the persisted watermark
 	res             *timeIntelBackfillResult
+	gen             int64 // watermark generation this pass runs under (ultra #6)
 }
 
 // run walks up to maxPages pages starting at `from`, folding each one.
@@ -723,31 +807,62 @@ func (p *timeIntelBackfillPass) run(ctx context.Context, from timeintel.Backfill
 			case <-time.After(timeIntelBackfillPagePause):
 			}
 		}
-		keys, err := p.srv.timeIntelPickPage(ctx, p.lookbackSeconds, page, until)
+		pg, err := p.srv.timeIntelPickPage(ctx, p.lookbackSeconds, page, until)
 		if err != nil {
 			return false, timeIntelBackfillDegraded("pick", err, *p.res)
 		}
-		if len(keys) == 0 {
+		if pg.raw == 0 {
 			return true, nil
 		}
-		rows, err := p.srv.timeIntelFetchPage(ctx, keys)
-		if err != nil {
-			return false, timeIntelBackfillDegraded("fetch", err, *p.res)
+		if pg.invalid > 0 {
+			// Invalid rows are PERMANENTLY unprocessable (ultra #3): re-picking
+			// them can never make them valid, so they must not hold the page
+			// cursor or the watermark still. They advance position like any
+			// other row; this counter and WARN are the only trace they leave.
+			p.srv.timeIntelInvalidRows.Add(int64(pg.invalid))
+			logWarn("timeintel", "backfill pick returned rows that fail validation — counted, never folded, and the watermark advances past them", map[string]any{
+				"invalid": pg.invalid, "raw": pg.raw,
+			})
 		}
-		written, err := p.srv.foldTimeIntelPage(ctx, rows, p.covered, p.now)
-		p.res.Written += written
-		if err != nil {
-			// A store failure leaves the watermark untouched: the page retries
-			// next tick, and the upsert is idempotent, so the redo costs nothing.
-			return false, err
+		if len(pg.keys) > 0 {
+			rows, err := p.srv.timeIntelFetchPage(ctx, pg.keys)
+			if err != nil {
+				return false, timeIntelBackfillDegraded("fetch", err, *p.res)
+			}
+			written, err := p.srv.foldTimeIntelPage(ctx, rows, p.covered, p.now)
+			p.res.Written += written
+			if err != nil {
+				// A store failure leaves the watermark untouched: the page retries
+				// next tick, and the upsert is idempotent, so the redo costs nothing.
+				return false, err
+			}
 		}
 		p.res.Pages++
 
-		last := keys[len(keys)-1]
-		page = timeintel.BackfillCursor{CreatedAt: last.CreatedAt, CorrelationID: last.CorrelationID}
+		// Advance from the RAW tail of the page (ultra #3), never from the
+		// validation-filtered key list: a page whose tail rows are invalid must
+		// still move the cursor past everything the server returned, or those
+		// rows are re-picked forever.
+		if pg.last.IsZero() {
+			// Not one raw row carried a parseable created_at — there is no
+			// position to advance to. Loud and fatal for this pass rather than
+			// a fake "caught up": the next tick retries, and if it persists an
+			// operator has a schema-grade problem to look at.
+			return false, fmt.Errorf("timeintel backfill: page of %d rows carried no usable cursor position — pass stopped without advancing", pg.raw)
+		}
+		page = pg.last
 		if advance {
-			p.mark = p.mark.Advance(last.CreatedAt, last.CorrelationID, p.now)
-			if err := p.cursors.Save(p.mark); err != nil {
+			p.mark = p.mark.Advance(pg.last.CreatedAt, pg.last.CorrelationID, p.now)
+			if err := p.srv.timeIntelSaveMark(p.cursors, p.gen, p.mark); err != nil {
+				if errors.Is(err, errTimeIntelBackfillStale) {
+					// An operator reset landed mid-pass (ultra #6). Expected
+					// coordination, not an outage: stop extending a watermark
+					// the reset just declared void.
+					logInfo("timeintel", "backfill pass stopped — watermark reset during the pass; its progress is discarded and the reset stands", map[string]any{
+						"pages_done": p.res.Pages, "written": p.res.Written,
+					})
+					return false, err
+				}
 				// Durable progress failed. Stop rather than keep folding pages
 				// the next pass would redo anyway — and say so.
 				logError("timeintel", "backfill watermark could not be persisted — pass stopped; the next pass will redo these pages", errf(err))
@@ -755,16 +870,36 @@ func (p *timeIntelBackfillPass) run(ctx context.Context, from timeintel.Backfill
 			}
 			p.res.Cursor = p.mark
 		}
-		if len(keys) < timeIntelBackfillPageRows {
+		// Caught-up is judged on the RAW page (ultra #3): a short page means the
+		// server ran out of rows past the cursor. Judging it on the FILTERED
+		// list turned a fully-invalid page into a false "caught up" with nothing
+		// advanced — the permanent re-pick of the same 2 000 corrupt rows.
+		if pg.raw < timeIntelBackfillPageRows {
 			return true, nil
 		}
 	}
 	return false, nil
 }
 
+// timeIntelPickedPage is what one pick returned: the VALIDATED keys the fetch
+// may use, plus the raw-page facts the page loop advances and terminates on.
+// The split is the ultra-#3 fix: validation filters what gets FOLDED, never
+// what counts as position or progress.
+type timeIntelPickedPage struct {
+	keys    []timeIntelBackfillKey
+	raw     int // rows the server returned, before validation
+	invalid int // rows validation refused — permanently unprocessable
+	// last is the cursor position of the page's RAW tail: the newest row with a
+	// parseable created_at, carrying its correlation_id as tie-break only when
+	// that id is a renderable UUID (otherwise the position degrades to a closed
+	// created_at bound, exactly like a rewound cursor). Zero only when no raw
+	// row carried a parseable created_at at all.
+	last timeintel.BackfillCursor
+}
+
 // timeIntelPickPage reads the next page of object keys past `from`, optionally
 // stopping at `until` (the re-scan phase's ceiling; a zero value = no ceiling).
-func (s *server) timeIntelPickPage(ctx context.Context, lookbackSeconds int, from, until timeintel.BackfillCursor) ([]timeIntelBackfillKey, error) {
+func (s *server) timeIntelPickPage(ctx context.Context, lookbackSeconds int, from, until timeintel.BackfillCursor) (timeIntelPickedPage, error) {
 	rows, err := chWorkerQueryTuned(ctx, chWorkerRead{
 		SQL:      timeIntelBackfillPickSQL(lookbackSeconds, timeIntelBackfillPageRows, from, until),
 		Tag:      timeIntelBackfillPickTag,
@@ -773,29 +908,47 @@ func (s *server) timeIntelPickPage(ctx context.Context, lookbackSeconds int, fro
 		Settings: timeIntelBackfillReadSettings(),
 	})
 	if err != nil {
-		return nil, err
+		return timeIntelPickedPage{}, err
 	}
-	out := make([]timeIntelBackfillKey, 0, len(rows))
+	pg := timeIntelPickedPage{keys: make([]timeIntelBackfillKey, 0, len(rows)), raw: len(rows)}
 	for _, r := range rows {
 		// The pick projects NON-SHADOWING aliases on purpose (see
 		// timeIntelBackfillPickSQL); these are those names, not the column names.
 		id := strings.TrimSpace(asString(r["correlation_id_s"]))
 		created := parseCHTime(r["created_at_iso"])
 		// Zero trust on upstream rows (§3): a key that cannot be rendered as a
-		// safe literal, or that carries no cursor position, is skipped rather
-		// than interpolated. Skipping is safe — the page's LAST key still
-		// advances the watermark past it.
+		// safe literal, or that carries no cursor position, is never folded and
+		// never interpolated into SQL. It is COUNTED instead (ultra #3), and
+		// position comes from the RAW tail below — so an invalid row advances
+		// the watermark like any other; it just leaves no snapshot behind.
 		if !timeintel.ValidCorrelationUUID(id) || created.IsZero() {
+			pg.invalid++
 			continue
 		}
-		out = append(out, timeIntelBackfillKey{
+		pg.keys = append(pg.keys, timeIntelBackfillKey{
 			TenantID:      asString(r["tenant_id_s"]),
 			CorrelationID: id,
 			Version:       int(asFloat(r["version"])),
 			CreatedAt:     created,
 		})
 	}
-	return out, nil
+	// The page's position, from the RAW tail. The server orders created_at ASC,
+	// so scanning back from the end finds the newest parseable position; a row
+	// behind an unparseable tail may be re-read (and re-counted) by the closed
+	// bound once — harmless, the fold never sees it.
+	for i := len(rows) - 1; i >= 0; i-- {
+		created := parseCHTime(rows[i]["created_at_iso"])
+		if created.IsZero() {
+			continue
+		}
+		id := strings.TrimSpace(asString(rows[i]["correlation_id_s"]))
+		if !timeintel.ValidCorrelationUUID(id) {
+			id = ""
+		}
+		pg.last = timeintel.BackfillCursor{CreatedAt: created, CorrelationID: id}
+		break
+	}
+	return pg, nil
 }
 
 // timeIntelFetchKeys is ONE wide read for one key list — the indivisible unit
@@ -1138,6 +1291,49 @@ func timeIntelBackfillDegraded(stage string, err error, res timeIntelBackfillRes
 	return err
 }
 
+// ── pass serialization & the watermark write path (ultra #6) ─────────────────
+
+// timeIntelCursorGeneration reads the current watermark generation. A pass
+// snapshots it ONCE, before loading the cursor: any later reset bumps it, and
+// every save that pass attempts afterwards is refused as stale.
+func (s *server) timeIntelCursorGeneration() int64 {
+	s.timeIntelCursorMu.Lock()
+	defer s.timeIntelCursorMu.Unlock()
+	return s.timeIntelCursorGen
+}
+
+// timeIntelSaveMark persists the watermark IF the pass's generation is still
+// current. The check and the write share one mutex with the reset path, so
+// there is no window in which a stale save can land after a reset it did not
+// see — the blind platformdb.Save that let an in-flight pass clobber a
+// POST ?reset is gone.
+func (s *server) timeIntelSaveMark(cursors *timeintel.BackfillCursorStore, gen int64, c timeintel.BackfillCursor) error {
+	s.timeIntelCursorMu.Lock()
+	defer s.timeIntelCursorMu.Unlock()
+	if s.timeIntelCursorGen != gen {
+		return errTimeIntelBackfillStale
+	}
+	return cursors.Save(c)
+}
+
+// timeIntelResetCursor is the reset path the HTTP trigger uses: it bumps the
+// generation and clears the stored watermark under the same lock, so an
+// in-flight pass's next save is refused rather than clobbering the reset.
+//
+// "Mark the pass stale" was chosen over "make the reset wait", deliberately: a
+// pass's ceiling is ~21 minutes, and the reset is an explicit operator command
+// whose entire point is to void the position that pass is extending — blocking
+// the operator behind work the reset invalidates would be priority inversion.
+// Discarding the pass is free by construction: the fold is an idempotent
+// upsert, so only the discarded WATERMARK writes are lost, and losing exactly
+// those is what the reset asked for.
+func (s *server) timeIntelResetCursor() error {
+	s.timeIntelCursorMu.Lock()
+	defer s.timeIntelCursorMu.Unlock()
+	s.timeIntelCursorGen++
+	return timeintel.NewBackfillCursorStore("").Reset()
+}
+
 // timeIntelMaintenanceLookup builds the per-pass maintenance-window memo (item
 // 121): one store read per TENANT per pass, not one per corr object.
 func (s *server) timeIntelMaintenanceLookup(ctx context.Context) func(tenant, device string, at time.Time) bool {
@@ -1243,6 +1439,15 @@ func (s *server) startIncidentTimeMetricsBackfill(ctx context.Context) {
 				// stopped. The failure itself is already counted by chhttp's
 				// classifier; this line carries the pass-level context.
 				if err != nil {
+					if errors.Is(err, errTimeIntelBackfillInFlight) || errors.Is(err, errTimeIntelBackfillStale) {
+						// Coordination outcomes (ultra #6), not faults: another
+						// pass is doing the work, or an operator reset voided
+						// this one. The next tick starts clean.
+						logInfo("timeintel", "backfill pass yielded", map[string]any{
+							"written": res.Written, "pages": res.Pages, "reason": err.Error(),
+						})
+						continue
+					}
 					logWarn("timeintel", "backfill pass ended early — resuming from the watermark next tick", map[string]any{
 						"written": res.Written, "pages": res.Pages,
 						"retryable": chhttp.Retryable(err), "err": err.Error(),
@@ -1287,7 +1492,10 @@ func (s *server) handleReliabilityTimeMetrics(w http.ResponseWriter, r *http.Req
 			}
 		}
 		if strings.EqualFold(strings.TrimSpace(r.URL.Query().Get("reset")), "true") {
-			if err := timeintel.NewBackfillCursorStore("").Reset(); err != nil {
+			// The generation-bumping reset path (ultra #6): an in-flight pass's
+			// later watermark saves are refused as stale, so a slow ticker pass
+			// can never clobber this reset with its pre-reset position.
+			if err := s.timeIntelResetCursor(); err != nil {
 				writeError(w, http.StatusBadGateway, err)
 				return
 			}
@@ -1299,6 +1507,14 @@ func (s *server) handleReliabilityTimeMetrics(w http.ResponseWriter, r *http.Req
 		defer cancel()
 		res, err := s.backfillIncidentTimeMetrics(pctx, lookback)
 		if err != nil {
+			if errors.Is(err, errTimeIntelBackfillInFlight) || errors.Is(err, errTimeIntelBackfillStale) {
+				// Coordination, not failure: another pass holds the inflight
+				// guard (its work covers this request, and any reset above
+				// already stands, protected by the generation), or a reset
+				// voided this pass mid-flight.
+				writeError(w, http.StatusConflict, err)
+				return
+			}
 			writeError(w, http.StatusBadGateway, err)
 			return
 		}

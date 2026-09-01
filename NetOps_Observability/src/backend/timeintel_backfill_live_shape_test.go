@@ -737,3 +737,63 @@ func TestTimeIntelBackfillFetchSplitterFoldsAWholeLivePage(t *testing.T) {
 		t.Logf("NOTE: %d objects were refused even at max_block_size=1/max_threads=1 — irreducible, and worth an operator's look", got)
 	}
 }
+
+// ── ClickHouse-native UUID order (ultra finding #4) ──────────────────────────
+
+// TestTimeIntelLiveUUIDOrderMatchesCursorComparator re-verifies, against a real
+// server, the empirical fact timeintel.CompareCorrelationUUID encodes: ORDER BY
+// on a UUID compares the SECOND half of the canonical text first, big-endian
+// within each half (first measured 2026-09-01, ClickHouse 24.8.14.39,
+// log_comment 'probe-ultra-ti'). The cursor's Ahead/Advance tie-break and the
+// pick SQL's ORDER BY + tuple predicate must agree on ONE order, or every
+// same-millisecond page boundary is re-read or skipped — so the agreement is
+// pinned against the live server, not only against a probe transcript.
+func TestTimeIntelLiveUUIDOrderMatchesCursorComparator(t *testing.T) {
+	container := liveCHContainer(t)
+	fixture := []string{
+		"0000000a-0000-0000-0000-000000000000",
+		"a0000000-0000-0000-0000-000000000000",
+		"ffffffff-ffff-ffff-0000-000000000001",
+		"00000000-0000-0000-0000-00000000000a",
+		"00000000-0000-0000-a000-000000000000",
+		"00000000-0000-0000-ffff-ffffffffffff",
+		"00000000-0000-0001-ffff-ffffffffffff",
+	}
+	// Hand the server TEXT order — deliberately not the expected answer — so a
+	// server that echoed its input would fail rather than trivially pass.
+	shuffled := append([]string(nil), fixture...)
+	sort.Strings(shuffled)
+	var arr strings.Builder
+	for i, id := range shuffled {
+		if i > 0 {
+			arr.WriteString(",")
+		}
+		arr.WriteString("toUUID('" + id + "')")
+	}
+	sql := `SELECT toString(u) AS u_s FROM (SELECT arrayJoin([` + arr.String() + `]) AS u) ORDER BY u ASC FORMAT JSON`
+	mustBeReadOnlySQL(t, sql)
+	out, err := runLiveCH(container, sql)
+	if err != nil {
+		t.Fatalf("live UUID order probe: %v", err)
+	}
+	var parsed struct {
+		Data []map[string]any `json:"data"`
+	}
+	if err := json.Unmarshal([]byte(out), &parsed); err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if len(parsed.Data) != len(fixture) {
+		t.Fatalf("server returned %d rows, want %d", len(parsed.Data), len(fixture))
+	}
+	got := make([]string, 0, len(parsed.Data))
+	for _, r := range parsed.Data {
+		got = append(got, asString(r["u_s"]))
+	}
+	want := append([]string(nil), fixture...)
+	sort.Slice(want, func(i, j int) bool { return timeintel.CompareCorrelationUUID(want[i], want[j]) < 0 })
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("live server order and CompareCorrelationUUID disagree at %d:\n server: %v\n cursor: %v", i, got, want)
+		}
+	}
+}

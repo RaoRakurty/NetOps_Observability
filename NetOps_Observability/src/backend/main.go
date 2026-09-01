@@ -262,6 +262,31 @@ type server struct {
 	timeIntelFetchNarrowRetries   atomic.Int64
 	timeIntelFetchOversizeSkipped atomic.Int64
 	timeIntelFetchBudgetSkipped   atomic.Int64
+	// timeIntelInvalidRows counts pick rows that failed validation (ultra #3).
+	// They are PERMANENTLY unprocessable — the watermark advances past them so
+	// they can never wedge the pass, and this series is the only trace they leave.
+	timeIntelInvalidRows atomic.Int64
+	// timeIntelRescanFailures / timeIntelRescanSkips (ultra #5): a failed
+	// phase-1 re-scan no longer blocks the mark-advancing forward phase — it is
+	// counted here, and a ClickHouse-refused re-scan additionally moves the
+	// re-scan floor forward (a bounded skip past a deterministically failing
+	// region — progress over completeness, loudly).
+	timeIntelRescanFailures atomic.Int64
+	timeIntelRescanSkips    atomic.Int64
+	// timeIntelPassMu serializes backfill passes (ultra #6): the ticker pass and
+	// the POST /time-metrics manual pass must never interleave. TryLock, never
+	// Lock — a pass that finds another in flight yields instead of queueing.
+	timeIntelPassMu sync.Mutex
+	// timeIntelCursorMu guards the watermark WRITE path and its generation:
+	// a ?reset bumps timeIntelCursorGen under this mutex, and every in-pass
+	// cursor save re-checks its own generation under the same mutex — so a save
+	// from a pass that predates the reset is discarded, never clobbering it.
+	timeIntelCursorMu  sync.Mutex
+	timeIntelCursorGen int64
+	// timeIntelRescanFloor is the ultra-#5 bounded-skip floor (guarded by
+	// timeIntelPassMu — only pass code touches it). Zero = no active skip.
+	timeIntelRescanFloor time.Time
+
 	// workers is the shutdown drain group (see workerGroup below). It hangs off
 	// the server so ANY subsystem that starts a goroutine from a *server method
 	// can register it in one line — `s.workers.start("name", func(){…})` instead
@@ -2686,6 +2711,21 @@ func (s *server) handlePromMetrics(w http.ResponseWriter, _ *http.Request) {
 	fmt.Fprintf(w, "# TYPE netops_timeintel_fetch_oversize_skipped_total counter\n")
 	fmt.Fprintf(w, "netops_timeintel_fetch_oversize_skipped_total{reason=\"oversize\"} %d\n", s.timeIntelFetchOversizeSkipped.Load())
 	fmt.Fprintf(w, "netops_timeintel_fetch_oversize_skipped_total{reason=\"split_budget\"} %d\n", s.timeIntelFetchBudgetSkipped.Load())
+	// Backfill pass integrity (ultra 3/5). invalid_rows > 0 means the pick
+	// returned rows that can never be folded — the watermark advanced past them
+	// and this counter is their only trace. rescan_failures > 0 means a phase-1
+	// re-scan died without blocking the forward phase; rescan_skips climbing
+	// means a region behind the mark is being skipped as deterministically
+	// unreadable and reconcile-repaired rows there may go unsnapshotted.
+	fmt.Fprintf(w, "# HELP netops_timeintel_invalid_rows_total Backfill pick rows that failed validation — permanently unprocessable; the watermark advanced past them.\n")
+	fmt.Fprintf(w, "# TYPE netops_timeintel_invalid_rows_total counter\n")
+	fmt.Fprintf(w, "netops_timeintel_invalid_rows_total %d\n", s.timeIntelInvalidRows.Load())
+	fmt.Fprintf(w, "# HELP netops_timeintel_rescan_failures_total Backfill phase-1 re-scans that failed; the forward (mark-advancing) phase still ran.\n")
+	fmt.Fprintf(w, "# TYPE netops_timeintel_rescan_failures_total counter\n")
+	fmt.Fprintf(w, "netops_timeintel_rescan_failures_total %d\n", s.timeIntelRescanFailures.Load())
+	fmt.Fprintf(w, "# HELP netops_timeintel_rescan_skips_total Bounded forward moves of the re-scan floor past a ClickHouse-refused region behind the watermark.\n")
+	fmt.Fprintf(w, "# TYPE netops_timeintel_rescan_skips_total counter\n")
+	fmt.Fprintf(w, "netops_timeintel_rescan_skips_total %d\n", s.timeIntelRescanSkips.Load())
 	// F-25: the brute-force throttle's pressure was entirely invisible — it went
 	// fail-open at its cap with no log and no metric, so "lockout: enabled" in
 	// Security Settings could be a lie for months. Saturation > 0 means sign-ins

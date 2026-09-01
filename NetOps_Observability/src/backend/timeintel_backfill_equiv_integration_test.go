@@ -247,10 +247,11 @@ func TestTimeIntelBackfillNewSQLMatchesOldOnFixture(t *testing.T) {
 func timeIntelTwoStep(ctx context.Context, t *testing.T, lookbackSeconds int, from timeintel.BackfillCursor) []map[string]any {
 	t.Helper()
 	s := &server{}
-	keys, err := s.timeIntelPickPage(ctx, lookbackSeconds, from, timeintel.BackfillCursor{})
+	page, err := s.timeIntelPickPage(ctx, lookbackSeconds, from, timeintel.BackfillCursor{})
 	if err != nil {
 		t.Fatalf("pick: %v", err)
 	}
+	keys := page.keys
 	if len(keys) == 0 {
 		return nil
 	}
@@ -275,10 +276,11 @@ func TestTimeIntelBackfillWatermarkAdvancesOnLiveServer(t *testing.T) {
 	defer cancel()
 
 	s := &server{}
-	all, err := s.timeIntelPickPage(ctx, 3600, timeintel.BackfillCursor{}, timeintel.BackfillCursor{})
+	coldPage, err := s.timeIntelPickPage(ctx, 3600, timeintel.BackfillCursor{}, timeintel.BackfillCursor{})
 	if err != nil {
 		t.Fatalf("cold pick: %v", err)
 	}
+	all := coldPage.keys
 	if len(all) < 2 {
 		t.Fatalf("cold pick returned %d objects, want the 3 in-window fixtures (run the equivalence test first)", len(all))
 	}
@@ -290,10 +292,11 @@ func TestTimeIntelBackfillWatermarkAdvancesOnLiveServer(t *testing.T) {
 	}
 	// A cursor on the FIRST object must exclude it and keep the rest.
 	cur := timeintel.BackfillCursor{CreatedAt: all[0].CreatedAt, CorrelationID: all[0].CorrelationID}
-	rest, err := s.timeIntelPickPage(ctx, 3600, cur, timeintel.BackfillCursor{})
+	restPage, err := s.timeIntelPickPage(ctx, 3600, cur, timeintel.BackfillCursor{})
 	if err != nil {
 		t.Fatalf("watermarked pick: %v", err)
 	}
+	rest := restPage.keys
 	if len(rest) != len(all)-1 {
 		t.Errorf("watermarked pick returned %d objects, want %d — the cursor predicate is not filtering", len(rest), len(all)-1)
 	}
@@ -304,10 +307,11 @@ func TestTimeIntelBackfillWatermarkAdvancesOnLiveServer(t *testing.T) {
 	}
 	// A cursor past everything picks nothing — the caught-up state.
 	last := all[len(all)-1]
-	done, err := s.timeIntelPickPage(ctx, 3600, timeintel.BackfillCursor{CreatedAt: last.CreatedAt, CorrelationID: last.CorrelationID}, timeintel.BackfillCursor{})
+	donePage, err := s.timeIntelPickPage(ctx, 3600, timeintel.BackfillCursor{CreatedAt: last.CreatedAt, CorrelationID: last.CorrelationID}, timeintel.BackfillCursor{})
 	if err != nil {
 		t.Fatalf("caught-up pick: %v", err)
 	}
+	done := donePage.keys
 	if len(done) != 0 {
 		t.Errorf("a cursor past the newest object still picked %d rows", len(done))
 	}

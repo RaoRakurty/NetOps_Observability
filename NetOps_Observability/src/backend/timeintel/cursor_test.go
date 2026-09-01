@@ -214,3 +214,91 @@ func TestBackfillCursorStoreLoadFailureIsAnError(t *testing.T) {
 		t.Error("a corrupt cursor blob must return an error, not a zero cursor")
 	}
 }
+
+// ── ClickHouse-native UUID order (ultra finding #4) ──────────────────────────
+
+// TestCompareCorrelationUUIDMatchesClickHouseNativeOrder encodes the EMPIRICAL
+// order measured read-only against the live server (ClickHouse 24.8.14.39,
+// 2026-09-01, log_comment 'probe-ultra-ti'): ORDER BY u ASC over these seven
+// UUIDs returned exactly this sequence — every UUID with a smaller SECOND half
+// sorts first, whatever its first half, and each half compares big-endian. The
+// live-shape suite re-verifies the same fixture against whatever server is
+// reachable (TestTimeIntelLiveUUIDOrderMatchesCursorComparator).
+func TestCompareCorrelationUUIDMatchesClickHouseNativeOrder(t *testing.T) {
+	measured := []string{
+		"0000000a-0000-0000-0000-000000000000",
+		"a0000000-0000-0000-0000-000000000000",
+		"ffffffff-ffff-ffff-0000-000000000001",
+		"00000000-0000-0000-0000-00000000000a",
+		"00000000-0000-0000-a000-000000000000",
+		"00000000-0000-0000-ffff-ffffffffffff",
+		"00000000-0000-0001-ffff-ffffffffffff",
+	}
+	sign := func(n int) int {
+		switch {
+		case n < 0:
+			return -1
+		case n > 0:
+			return 1
+		}
+		return 0
+	}
+	for i := range measured {
+		for j := range measured {
+			want := sign(i - j)
+			if got := sign(CompareCorrelationUUID(measured[i], measured[j])); got != want {
+				t.Errorf("CompareCorrelationUUID(%s, %s) sign = %d, want %d (ClickHouse native order, measured)",
+					measured[i], measured[j], got, want)
+			}
+		}
+	}
+	// The probe's boolean checks, verbatim — each pair answered "not less" live.
+	notLess := [][2]string{
+		{"00000000-0000-0000-0000-000000000001", "00000001-0000-0000-0000-000000000000"},
+		{"01000000-0000-0000-0000-000000000000", "00000000-0000-0001-0000-000000000000"},
+		{"00000000-0000-0000-0100-000000000000", "00000000-0000-0000-0000-000000000001"},
+		{"00000000-0000-0000-0000-000000000001", "00000000-0000-0001-0000-000000000000"},
+	}
+	for _, p := range notLess {
+		if CompareCorrelationUUID(p[0], p[1]) < 0 {
+			t.Errorf("CompareCorrelationUUID(%s, %s) < 0, but the live server says it sorts AFTER", p[0], p[1])
+		}
+	}
+	// Case-insensitive, like the server's hex parser.
+	if CompareCorrelationUUID("AAAAAAAA-bbbb-4ccc-8ddd-eeeeeeeeeeee", "aaaaaaaa-BBBB-4CCC-8DDD-EEEEEEEEEEEE") != 0 {
+		t.Error("case must not affect native UUID order")
+	}
+	// The degraded (non-UUID) path keeps the one property the cursor relies on:
+	// "" (no tie-break) sorts before every real id.
+	if CompareCorrelationUUID("", idLow) >= 0 || CompareCorrelationUUID(idLow, "") <= 0 {
+		t.Error("the empty tie-break must sort before every real id")
+	}
+}
+
+// TestBackfillCursorAheadUsesNativeUUIDOrder is the ultra-#4 mutant detector:
+// on a created_at tie the tie-break must agree with the server's scan order.
+// Go TEXT order says 'ffffffff-…-0001' > '00000000-…-000a'; ClickHouse native
+// order (second half first) says the opposite. A cursor comparing in text
+// order disagrees with the pick's ORDER BY on every same-millisecond boundary:
+// refuse-to-advance and per-tick re-reads (a stall needs a page-sized ms).
+func TestBackfillCursorAheadUsesNativeUUIDOrder(t *testing.T) {
+	const (
+		nativeLow  = "ffffffff-ffff-ffff-0000-000000000001" // text HIGH, native LOW
+		nativeHigh = "00000000-0000-0000-0000-00000000000a" // text LOW, native HIGH
+	)
+	c := BackfillCursor{CreatedAt: ts(10), CorrelationID: nativeLow}
+	if !c.Ahead(ts(10), nativeHigh) {
+		t.Error("a same-ms id sorting AFTER the mark in native order must be Ahead — text order would wrongly say no")
+	}
+	c2 := BackfillCursor{CreatedAt: ts(10), CorrelationID: nativeHigh}
+	if c2.Ahead(ts(10), nativeLow) {
+		t.Error("a same-ms id sorting BEFORE the mark in native order must not be Ahead — text order would wrongly say yes")
+	}
+	// Advance obeys the same order: the mark moves only to the native maximum.
+	if adv := c.Advance(ts(10), nativeHigh, ts(11)); adv.CorrelationID != nativeHigh {
+		t.Errorf("Advance kept %q — the native-order maximum is %q", adv.CorrelationID, nativeHigh)
+	}
+	if got := c2.Advance(ts(10), nativeLow, ts(11)); got.CorrelationID != nativeHigh {
+		t.Errorf("Advance moved BACKWARDS in native order to %q", got.CorrelationID)
+	}
+}

@@ -113,8 +113,13 @@ type synthCH struct {
 	// swallow set it to a code halving cannot fix.
 	failFetchOn   int
 	failFetchCode int
-	fetches       int
-	foldedIDs     []string
+	// failCeilPickCode refuses any PICK that carries a ceiling predicate — i.e.
+	// the phase-1 re-scan pick, whose window is bounded above by the watermark —
+	// with this DB::Exception code. 0 = never. This is the ultra-#5 shape: a
+	// deterministic refusal inside the FIXED window BEHIND the mark.
+	failCeilPickCode int
+	fetches          int
+	foldedIDs        []string
 
 	// ── read-budget accounting (186 fix-2) ────────────────────────────────────
 	//
@@ -170,8 +175,19 @@ func (f *synthCH) serve(w http.ResponseWriter, r *http.Request) {
 	case strings.Contains(sql, "FROM netops.corr_current FINAL"):
 		f.pickSQL = append(f.pickSQL, sql)
 		shadow := aliasShadowError(sql)
+		ceilRefuse := 0
+		if f.failCeilPickCode != 0 && (reCeilTuple.MatchString(sql) || reCeilLE.MatchString(sql)) {
+			ceilRefuse = f.failCeilPickCode
+		}
 		rows := f.pick(sql)
 		f.mu.Unlock()
+		if ceilRefuse != 0 {
+			// The live failure shape for a refused pick, same as the fetch path.
+			w.Header().Set("X-ClickHouse-Exception-Code", strconv.Itoa(ceilRefuse))
+			w.WriteHeader(http.StatusInternalServerError)
+			_, _ = io.WriteString(w, synthRefusal(ceilRefuse))
+			return
+		}
 		if shadow != "" {
 			// What the live server does with a shadowed alias (186 hotfix).
 			w.Header().Set("X-ClickHouse-Exception-Code", "43")
@@ -1719,5 +1735,274 @@ func TestTimeIntelBackfillPassTimeoutCoversTheFetchTree(t *testing.T) {
 		t.Errorf("max depth %d cannot reach a %d-key sublist from a %d-key sub-page (needs %d)",
 			timeIntelBackfillFetchSplitMaxDepth, timeIntelBackfillFetchSplitMinKeys,
 			timeIntelBackfillFetchSubPageKeys, need)
+	}
+}
+
+// ── ultra finding #5: the re-scan must never block the mark ──────────────────
+
+// TestTimeIntelBackfillRescanFailureDoesNotBlockTheMark: a deterministic 159
+// TIMEOUT in the phase-1 re-scan (159 is NOT splittable — only 307/241 are)
+// used to abort the pass BEFORE phase 2, the only mark-advancing phase, so a
+// fixed failing window behind the mark meant a permanently failing backfill
+// every tick. Now phase 1 degrades loudly and phase 2 still runs.
+func TestTimeIntelBackfillRescanFailureDoesNotBlockTheMark(t *testing.T) {
+	useTimeIntelKV(t)
+	const n = 200
+	objs := synthObjects(n, time.Now().UTC().Add(-6*time.Hour))
+	f := newSynthCH(t, objs)
+	f.failCeilPickCode = 159 // the re-scan pick (the only ceilinged pick) dies
+
+	// A warm mark mid-fixture so phase 1 actually runs.
+	mark := objs[100]
+	if err := timeintel.NewBackfillCursorStore("").Save(timeintel.BackfillCursor{
+		CreatedAt: mark.created, CorrelationID: mark.id,
+	}); err != nil {
+		t.Fatalf("seed watermark: %v", err)
+	}
+
+	s := &server{incidentTimeMetrics: timeintel.NewMemMetricsStore()}
+	res, err := s.backfillIncidentTimeMetrics(context.Background(), timeIntelBackfillLookback)
+	if err != nil {
+		t.Fatalf("a re-scan failure must not fail the pass: %v", err)
+	}
+	if !res.CaughtUp {
+		t.Error("phase 2 must run to caught-up despite the dead re-scan")
+	}
+	last := objs[n-1]
+	if !res.Cursor.CreatedAt.Equal(last.created) || res.Cursor.CorrelationID != last.id {
+		t.Errorf("watermark = (%s, %s), want the newest object (%s, %s) — the re-scan blocked the mark",
+			res.Cursor.CreatedAt, res.Cursor.CorrelationID, last.created, last.id)
+	}
+	if res.Written != n-101 {
+		t.Errorf("forward phase wrote %d, want %d (everything past the mark; the dead re-scan contributed nothing)",
+			res.Written, n-101)
+	}
+	if got := s.timeIntelRescanFailures.Load(); got != 1 {
+		t.Errorf("netops_timeintel_rescan_failures_total = %d, want 1", got)
+	}
+	if got := s.timeIntelRescanSkips.Load(); got != 1 {
+		t.Errorf("netops_timeintel_rescan_skips_total = %d, want 1 — a ClickHouse refusal must move the skip floor", got)
+	}
+}
+
+// TestTimeIntelBackfillRescanSkipsPastAFailingRegion: consecutive refusals walk
+// the re-scan's start FORWARD in bounded, counted steps, so a deterministically
+// unreadable region behind the mark costs a bounded number of ticks — the
+// splitter's philosophy one layer up: progress over completeness, loudly. A
+// completed re-scan clears the floor.
+func TestTimeIntelBackfillRescanSkipsPastAFailingRegion(t *testing.T) {
+	useTimeIntelKV(t)
+	objs := synthObjects(10, time.Now().UTC().Add(-3*time.Hour))
+	f := newSynthCH(t, objs)
+	f.failCeilPickCode = 159
+
+	// Mark on the NEWEST object: the forward phase is already caught up, so the
+	// re-scan window is fixed and each pass's re-scan start is comparable.
+	mark := objs[len(objs)-1]
+	if err := timeintel.NewBackfillCursorStore("").Save(timeintel.BackfillCursor{
+		CreatedAt: mark.created, CorrelationID: mark.id,
+	}); err != nil {
+		t.Fatalf("seed watermark: %v", err)
+	}
+	s := &server{incidentTimeMetrics: timeintel.NewMemMetricsStore()}
+	for i := 0; i < 2; i++ {
+		if _, err := s.backfillIncidentTimeMetrics(context.Background(), timeIntelBackfillLookback); err != nil {
+			t.Fatalf("pass %d: %v", i+1, err)
+		}
+	}
+	// The two re-scan picks (the ceilinged ones) must start one bounded step apart.
+	f.mu.Lock()
+	var rescanFrom []time.Time
+	for _, sql := range f.pickSQL {
+		if !reCeilTuple.MatchString(sql) && !reCeilLE.MatchString(sql) {
+			continue
+		}
+		m := reCursorGE.FindStringSubmatch(sql)
+		if m == nil {
+			t.Fatalf("re-scan pick carries no closed lower bound:\n%s", sql)
+		}
+		at, perr := time.ParseInLocation(synthTimeLayout, m[1], time.UTC)
+		if perr != nil {
+			t.Fatalf("parse re-scan bound: %v", perr)
+		}
+		rescanFrom = append(rescanFrom, at)
+	}
+	f.mu.Unlock()
+	if len(rescanFrom) != 2 {
+		t.Fatalf("want 2 re-scan picks, got %d", len(rescanFrom))
+	}
+	if got := rescanFrom[1].Sub(rescanFrom[0]); got != timeIntelBackfillRescanSkipStep {
+		t.Errorf("pass 2's re-scan started %s after pass 1's, want the bounded skip step %s", got, timeIntelBackfillRescanSkipStep)
+	}
+	if got := s.timeIntelRescanSkips.Load(); got != 2 {
+		t.Errorf("netops_timeintel_rescan_skips_total = %d, want 2", got)
+	}
+	// Health returns: the next COMPLETED re-scan clears the floor.
+	f.mu.Lock()
+	f.failCeilPickCode = 0
+	f.mu.Unlock()
+	if _, err := s.backfillIncidentTimeMetrics(context.Background(), timeIntelBackfillLookback); err != nil {
+		t.Fatalf("healthy pass: %v", err)
+	}
+	if !s.timeIntelRescanFloor.IsZero() {
+		t.Errorf("a completed re-scan must clear the skip floor, still at %s", s.timeIntelRescanFloor)
+	}
+}
+
+// ── ultra finding #3: invalid rows advance and are counted ───────────────────
+
+// TestTimeIntelBackfillFullyInvalidPageStillAdvances: a page whose EVERY row
+// fails validation used to return caughtUp=true with neither the page cursor
+// nor the mark advanced — the permanent re-pick of the same 2 000 corrupt rows,
+// every tick, with the store never gaining a snapshot past them. Now the RAW
+// tail advances the watermark and the rows are counted on
+// netops_timeintel_invalid_rows_total.
+func TestTimeIntelBackfillFullyInvalidPageStillAdvances(t *testing.T) {
+	useTimeIntelKV(t)
+	start := time.Now().UTC().Add(-40 * time.Hour).Truncate(time.Millisecond)
+	objs := make([]synthCorr, 0, timeIntelBackfillPageRows+5)
+	for i := 0; i < timeIntelBackfillPageRows; i++ {
+		objs = append(objs, synthCorr{
+			tenant: "acme",
+			// 36 chars, right shape, NON-HEX: fails ValidCorrelationUUID.
+			id:      fmt.Sprintf("zzzzzzzz-%04d-4000-8000-000000000000", i),
+			version: 1, created: start.Add(time.Duration(i) * time.Minute),
+		})
+	}
+	base := start.Add(time.Duration(timeIntelBackfillPageRows+10) * time.Minute)
+	for i := 0; i < 5; i++ {
+		objs = append(objs, synthCorr{
+			tenant: "acme", id: fmt.Sprintf("%08x-0000-4000-8000-000000000000", i),
+			version: 1, created: base.Add(time.Duration(i) * time.Minute),
+		})
+	}
+	newSynthCH(t, objs)
+	m := timeintel.NewMemMetricsStore()
+	s := &server{incidentTimeMetrics: m}
+	res, err := s.backfillIncidentTimeMetrics(context.Background(), timeIntelBackfillLookback)
+	if err != nil {
+		t.Fatalf("backfill: %v", err)
+	}
+	if res.Written != 5 {
+		t.Errorf("written = %d, want the 5 valid objects — the invalid page blocked the pass", res.Written)
+	}
+	if !res.CaughtUp {
+		t.Error("the pass must reach caught-up past the invalid page")
+	}
+	last := objs[len(objs)-1]
+	if !res.Cursor.CreatedAt.Equal(last.created) || res.Cursor.CorrelationID != last.id {
+		t.Errorf("watermark = (%s, %s), want (%s, %s)", res.Cursor.CreatedAt, res.Cursor.CorrelationID, last.created, last.id)
+	}
+	// The full invalid page, plus the boundary row the closed bound re-reads on
+	// page 2 (the invalid tail carries no tie-break, deliberately).
+	if got := s.timeIntelInvalidRows.Load(); got != timeIntelBackfillPageRows+1 {
+		t.Errorf("netops_timeintel_invalid_rows_total = %d, want %d", got, timeIntelBackfillPageRows+1)
+	}
+	rows, _ := m.List(context.Background(), "", true, 100)
+	if len(rows) != 5 {
+		t.Errorf("store holds %d snapshots, want 5", len(rows))
+	}
+}
+
+// TestTimeIntelBackfillInvalidTailRowStillAdvancesWatermark: the in-code claim
+// "the page's LAST key still advances the watermark past it" was FALSE when the
+// tail row itself was invalid — the filtered list ended one row early, so the
+// invalid tail sat exactly on the caught-up boundary and was re-picked forever.
+// The mark must land on the RAW tail, with the tie-break degraded to empty.
+func TestTimeIntelBackfillInvalidTailRowStillAdvancesWatermark(t *testing.T) {
+	useTimeIntelKV(t)
+	base := time.Now().UTC().Add(-2 * time.Hour).Truncate(time.Millisecond)
+	objs := []synthCorr{
+		{tenant: "acme", id: "11111111-1111-4111-8111-111111111111", version: 1, created: base},
+		{tenant: "acme", id: "22222222-2222-4222-8222-222222222222", version: 1, created: base.Add(time.Minute)},
+		{tenant: "acme", id: "zznot-a-uuid-but-36-characters-long!", version: 1, created: base.Add(2 * time.Minute)},
+	}
+	newSynthCH(t, objs)
+	s := &server{incidentTimeMetrics: timeintel.NewMemMetricsStore()}
+	res, err := s.backfillIncidentTimeMetrics(context.Background(), timeIntelBackfillLookback)
+	if err != nil {
+		t.Fatalf("backfill: %v", err)
+	}
+	if res.Written != 2 {
+		t.Errorf("written = %d, want 2", res.Written)
+	}
+	if !res.Cursor.CreatedAt.Equal(objs[2].created) {
+		t.Errorf("watermark = %s, want the RAW tail %s — the invalid tail row will be re-picked forever",
+			res.Cursor.CreatedAt, objs[2].created)
+	}
+	if res.Cursor.CorrelationID != "" {
+		t.Errorf("an invalid tail id must degrade the tie-break to empty, got %q", res.Cursor.CorrelationID)
+	}
+	if got := s.timeIntelInvalidRows.Load(); got != 1 {
+		t.Errorf("netops_timeintel_invalid_rows_total = %d, want 1", got)
+	}
+}
+
+// ── ultra finding #6: serialized passes, resets never clobbered ──────────────
+
+// TestTimeIntelBackfillPassesAreSerialized: the ticker pass and the manual POST
+// pass share one inflight guard — a pass that finds another running yields with
+// errTimeIntelBackfillInFlight and touches neither ClickHouse nor the cursor.
+func TestTimeIntelBackfillPassesAreSerialized(t *testing.T) {
+	useTimeIntelKV(t)
+	f := newSynthCH(t, synthObjects(5, time.Now().UTC().Add(-time.Hour)))
+	s := &server{incidentTimeMetrics: timeintel.NewMemMetricsStore()}
+
+	s.timeIntelPassMu.Lock() // another pass is in flight
+	res, err := s.backfillIncidentTimeMetrics(context.Background(), timeIntelBackfillLookback)
+	s.timeIntelPassMu.Unlock()
+	if !errors.Is(err, errTimeIntelBackfillInFlight) {
+		t.Fatalf("err = %v, want errTimeIntelBackfillInFlight", err)
+	}
+	if res.Written != 0 || res.Pages != 0 {
+		t.Errorf("a yielded pass did work: %+v", res)
+	}
+	if picks, fetches := f.counts(); picks != 0 || fetches != 0 {
+		t.Errorf("a yielded pass touched ClickHouse: %d picks, %d fetches", picks, fetches)
+	}
+	// And with the guard free the same server runs normally.
+	if _, err := s.backfillIncidentTimeMetrics(context.Background(), timeIntelBackfillLookback); err != nil {
+		t.Fatalf("pass after release: %v", err)
+	}
+}
+
+// resetDuringPassStore triggers an operator ?reset in the middle of the pass's
+// FIRST upsert — the exact interleaving that used to let the pass's blind
+// platformdb.Save land AFTER the reset and silently undo it.
+type resetDuringPassStore struct {
+	timeintel.MetricsStore
+	srv  *server
+	once sync.Once
+}
+
+func (r *resetDuringPassStore) Upsert(ctx context.Context, row timeintel.MetricRow) error {
+	var rerr error
+	r.once.Do(func() { rerr = r.srv.timeIntelResetCursor() })
+	if rerr != nil {
+		return rerr
+	}
+	return r.MetricsStore.Upsert(ctx, row)
+}
+
+// TestTimeIntelBackfillResetDuringPassIsNeverClobbered: a reset that lands
+// mid-pass STANDS — the in-flight pass's watermark save is refused as stale
+// (the pass stops with errTimeIntelBackfillStale) and the stored cursor stays
+// zero, so the next pass re-derives the whole window as the operator asked.
+func TestTimeIntelBackfillResetDuringPassIsNeverClobbered(t *testing.T) {
+	useTimeIntelKV(t)
+	newSynthCH(t, synthObjects(10, time.Now().UTC().Add(-time.Hour)))
+	s := &server{}
+	s.incidentTimeMetrics = &resetDuringPassStore{MetricsStore: timeintel.NewMemMetricsStore(), srv: s}
+
+	_, err := s.backfillIncidentTimeMetrics(context.Background(), timeIntelBackfillLookback)
+	if !errors.Is(err, errTimeIntelBackfillStale) {
+		t.Fatalf("err = %v, want errTimeIntelBackfillStale", err)
+	}
+	got, lerr := timeintel.NewBackfillCursorStore("").Load()
+	if lerr != nil {
+		t.Fatalf("load cursor: %v", lerr)
+	}
+	if !got.IsZero() {
+		t.Errorf("the pass CLOBBERED the reset: stored cursor = %+v, want zero", got)
 	}
 }
