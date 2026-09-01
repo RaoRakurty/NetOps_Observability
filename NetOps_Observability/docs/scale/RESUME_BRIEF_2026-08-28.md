@@ -572,3 +572,39 @@ entity one observer and one modality. The shipped ON configuration's behaviour
 under multi-vantage telemetry is unmeasured (harness work, adjacent to 183).
 Also unchanged: the harness's `producer_key=tenant` single-key partitioning
 means every storm leg measures ONE replica's behaviour.
+
+## UPDATE 2026-09-01 — PROJECT 1 DONE (the true final update)
+
+The 2026-08-30 21:40Z section closed the P4 *programme*; this closes **Project 1
+itself**. Completion record: `docs/scale/PROJECT1_DONE_2026-09-01.md`.
+
+- **`storm-s09`** (`09010750fq0u`) is the SLO leg of record: **8/9 with every
+  SLO clause met** — completion 93.7 s (record tie), accounting exact
+  900,001 == 900,001 + 0 DLQ, **memflat PASS (first ever at 2,500 devices;
+  carrier ×0.954 FLAT, all 558 CH refusals = the 512 MiB budget working,
+  exempted)**, accuracy **345/345** v2, T1 p95 912 s. Sole FAIL = the onboard
+  last/first-ratio clause, a measured harness artifact (tracker 202).
+- **The final cycle:** `storm-s08` (6/9) found the api `MemMetricsStore`
+  defect (100 % of cap, auth timeouts; T1 p95 1,101 s excursion owned by it) →
+  fixed `eb29c87a` → deploy H validated the plateau (+91/+24/+6.7 MiB over
+  three 20k-row passes, ~155 MiB = 27 % of cap) → s09 proved it. Record:
+  `docs/scale/API_MEMSTORE_DEFECT_2026-09-01.md`.
+- **Tracker:** 186 and 199 **CLOSED** (rows deleted; closure records in the
+  DONE doc §3/§4). Filed at close-out: **200** (latent alias ORDER-BY sites,
+  Low), **201** (undetermined-frequency query cost 18.9–28.3 s on storm corpora
+  vs the 20 s budget; ≈4.2 s post-cleanup, Med), **202** (onboard ratio clause,
+  Low); 189 carries its first live evidence (10k archive-lane loss); 195
+  reworded for fix-5 (skips irreducible-only).
+
+**Deployed state at close-out:** correlation **`a9e99871e812`** (`36036db5`) on
+both replicas · api **`eefcc527730a`** (`eb29c87a`, started 07:00:12Z) ·
+aggregation plane **ON** (`a9d9a10c`). Stack idle, run lock free, residue 0.
+
+**What's next (in order):**
+1. Owner runs **`/code-review ultra`** on the branch — the Project-1 finish
+   line, launching.
+2. The two owner-requested post-DONE deliverables: the scaling-numbers report
+   and the marketing capabilities brief (sources: HOST_CEILING doc, all
+   `ceiling-facts.json`, the close-out docs + the report datapack).
+3. **Project 2 — Security CTEM** per the fixed portfolio order (per-project
+   tracker in `docs/projects/`).

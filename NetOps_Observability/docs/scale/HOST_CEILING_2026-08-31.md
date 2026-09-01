@@ -56,6 +56,21 @@ default, `a9d9a10c`):
   accounting exact, accuracy **345/345**; the single `memflat` FAIL is
   attributed with evidence to tracker **186** and a 7-minute-old api process,
   not to the fleet size (`PROJECT1_WAVE_VALIDATION_2026-08-31.md` §1/§4).
+- **`storm-s08` / `storm-s09` — the close-out cycle (2026-09-01), and the SLO
+  leg of record.** s08 (**6/9**) found the programme's last defect: the api's
+  in-memory metrics store (`timeintel.MemMetricsStore.by`) grew unbounded on
+  backfill catch-up to **100.0 % of its 565 MiB cap** (memflat FAIL; the auth
+  timeouts it caused failed cleanup) — found, fixed (`eb29c87a`) and validated
+  in one cycle (`API_MEMSTORE_DEFECT_2026-09-01.md`). s09, on the fully-fixed
+  images (correlation `a9e99871e812` / `36036db5`, api `eefcc527730a`), is
+  **8/9 with every SLO clause met**: completion **93.7 s** (ties the s07
+  record), accounting exact, accuracy **345/345**, and **memflat PASS — the
+  first 2,500-device rung ever to pass it on any profile** (carrier ×0.954 FLAT
+  at 78.0 % of cap; api 33.4 %; the 558 ClickHouse refusals are the backfill's
+  own 512 MiB budget working as designed, fully exempted). The sole FAIL is the
+  onboard last/first-ratio clause — a measured harness artifact (tracker 202).
+  **`storm-s09` is the leg of record for the ratified SLO**
+  (`PROJECT1_DONE_2026-09-01.md` §5).
 - Storm ladder at the same 2,500 devices: **2 %** rung 9/9 both arms, **10 %**
   rung 9/9 both arms (completion 170 s OFF → 130 s ON), **25 %** rung
   **INCOMPLETE OFF → 192 s PASS ON** (`P3_AB_2P5K_VERDICT_2026-08-29.md` §2.1/§2.2).
@@ -459,6 +474,21 @@ projection, which deletes the wide read); it is also the most plausible non-host
 explanation for this leg's ~675–710 eps consumer plane against 1,036–1,051 eps on
 `ladder-n5k` — **contention, not a correlation-engine regression.**
 
+**Postscript (2026-09-01): the backfill's other cost — the api's own memory —
+was found and closed by the same gate, at the ceiling rather than beyond it.**
+On `storm-s08` the api reached **100.0 % of its 565 MiB cap** during an ordinary
+2,500-device run: `timeintel.MemMetricsStore.by` — the in-memory backend the
+lab's file store selects — retained EVERY snapshot the backfill catch-up folded
+(measured **778 MiB** anonymous against a **780 MB** prediction from ~3 KB/row ×
+260k rows; a full catch-up would have needed ~2.7 GiB, so the breach was
+guaranteed, not incidental). Its observed failure mode was the 10k rung's
+auth-latency cascade reproduced at 1× load. Fixed **`eb29c87a`** (per-tenant cap
+= SnapshotCap 20,000, derived from what reads can return; 366 d retention;
+amortized compaction); deploy-H validation read **+91 / +24 / +6.7 MiB over
+three consecutive 20k-row passes, settling ~155 MiB = 27 % of cap**, and
+`storm-s09`'s memflat PASS (api ×1.035 at 33.4 % of cap) is the rig-level proof.
+Full record: `API_MEMSTORE_DEFECT_2026-09-01.md`.
+
 ---
 
 ## 4. The rung table
@@ -470,6 +500,8 @@ explanation for this leg's ~675–710 eps consumer plane against 1,036–1,051 e
 | 2.5k storm 2 % OFF | `t-storm-2.5k` · `storm-s05` | 2,500 × 1,000 | **95.0 s** (2,700) | 900,001 == 900,001 + 0 DLQ | **9/9**, accuracy 345/345 v2 |
 | 2.5k storm 2 % ON | `t-storm-2.5k` · `storm-s06` | 2,500 × 1,000 | **124.3 s** (2,700) | 900,001 == 900,001 + 0 DLQ | **9/9**, accuracy 345/345 v2 — shipped default |
 | 2.5k storm 2 % ON, post-wave | `t-storm-2.5k` · `storm-s07` | 2,500 × 1,000 | **94 s** (2,700) | 900,001 == 900,001 + 0 DLQ | **8/9** — `memflat` → tracker 186 |
+| 2.5k storm 2 % ON, s08 | `t-storm-2.5k` · `storm-s08` (run `09010312jpiu`) | 2,500 × 995 eff. | **124 s** (2,714) | 900,001 == 900,001 + 0 DLQ | **6/9** — onboard (0.57), `memflat` (api **100.0 % of its 565 MiB cap** — the unbounded `MemMetricsStore`, fixed `eb29c87a`; correlation carrier itself ×0.965 FLAT at 74.9 %), cleanup (the defect's auth timeouts; residue recovered to 0 before s09). Accuracy **345/345** v2. T1 p95 **1,101 s** — the only reading ever outside the band, owned by the api defect (`API_MEMSTORE_DEFECT_2026-09-01.md`) |
+| **2.5k storm 2 % ON, s09 — SLO leg of record** | `t-storm-2.5k` · `storm-s09` (run `09010750fq0u`) | 2,500 × 1,000 | **93.7 s** (2,700) — ties the record | **900,001 == 900,001 + 0 DLQ + 0 rejections**, 2,500/2,500 devices | **8/9 — every SLO clause MET (4/4)**, and **`memflat` PASS: the first 2,500-device rung ever to pass it on any profile** (all 9 containers within ×1.3 and under 85 % of caps; carrier ×0.954 FLAT = 78.0 %; api 33.4 % under `eb29c87a`; CH p99 37.5 %, +558 refusals fully exempted — the 512 MiB budget working as designed). Accuracy **345/345** v2 (detection 1.000, specificity 1.000). T1 p95 **912 s**, drain 1,349.6 s, stability 0/0/0/0 (worst stall 6,464 ms = 10.8 %), cleanup residue 0. Sole FAIL: onboard ratio 0.56 — harness artifact, tracker 202 (`PROJECT1_DONE_2026-09-01.md`) |
 | 2.5k storm 10 % OFF | `t-storm-10-2.5k` · `agg-10-off` (L1) | 2,500 × 1,000 | **170 s** (2,700) | exact | **9/9** |
 | 2.5k storm 10 % ON | `t-storm-10-2.5k` · `agg-10-on` (L3) | 2,500 × 1,000 | **130 s** (2,700) | exact | **9/9**, −41.0 % signals to the engine |
 | 2.5k storm 25 % OFF | `t-storm-25-2.5k` · `agg-25-off` (L2) | 2,500 × 1,000 | **INCOMPLETE** — 78,663 pending at cap | — | **6/9** — drain, completion, memflat |
@@ -722,13 +754,18 @@ storm-concentration note is the input to that step.
   `kafka-console-producer`, 63 of 90 chunks over their slot, 0 produce failures),
   so the offered rate is a property of the harness. No rung has been offered above
   1,605 eps, and none should be graded until the injector is fixed.
-- **No 2,500-device rung has ever passed `memflat`, on either profile — and on
-  the shipped image the reason is one worker.** `p2-s05` failed on a correlation
-  replica, `p2-s06` on ClickHouse's server cap, `storm-s07` and
-  `ladder-n2k5-08311437` on the time-intelligence backfill (tracker **186**).
-  On the current image both correlation replicas are FLAT and ClickHouse's anon
-  clause passes; what is left is the worker's api working set and its 1.62 GiB
-  query. `t-nominal-2.5k` carries **no scenario**, so correlation *quality* is
+- **`memflat` history, stated honestly: no 2,500-device rung passed it until
+  `storm-s09` (2026-09-01).** The failing carrier migrated across waves —
+  a correlation replica (`p2-s05`), ClickHouse's server cap (`p2-s06`), the
+  time-intelligence backfill worker of tracker 186 (`storm-s07`,
+  `ladder-n2k5-08311437`, `ladder-s3k5`), and finally the api's unbounded
+  `MemMetricsStore` (`storm-s08`) — each traced, none waived. With the 186
+  chain landed (watermark + splitter `9ed38cbb`, the 512 MiB budget made
+  effective by `cfd7ebdc`, irreducible-only skips `e86ec6aa`) and the metrics
+  store bounded (`eb29c87a`), **`storm-s09` passes `memflat` outright** — all 9
+  containers inside the gates, carrier ×0.954 FLAT, and the 558 refusals being
+  the budget working as designed, fully exempted (trackers 186/199 CLOSED;
+  `PROJECT1_DONE_2026-09-01.md`). `t-nominal-2.5k` carries **no scenario**, so correlation *quality* is
   not measurable on it by construction — the 345/345 accuracy proof belongs to
   the scenario-carrying sibling `t-storm-2.5k`.
 - **The 5k accuracy figure is characterisation, not a graded SLO number.** It was
