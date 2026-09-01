@@ -1,4 +1,4 @@
-# Project 3 — Troubleshooting protocols (+ frontend-wave list)  🟡
+# Project 4 — Troubleshooting protocols (+ frontend-wave list)  🟡
 
 **Goal:** rebuild Troubleshooting into a **symptom-first investigation** surface
 that saves the NOC operator from "100 windows," plus the **BGP/OSPF/ISIS
@@ -37,8 +37,8 @@ Design: `TROUBLESHOOTING_PROTOCOL_DIAGNOSTICS_2026-08-27.md` (owner spec).
 `docs/design/IRIS_ENHANCEMENT_ROADMAP_2026-08-28.md` — extends the existing HLD
 §10 phase plan (does not reinvent it). Four asks mapped to phases:
 - **A. Auto-troubleshoot reach** (near-term, read-only, no new trust boundary):
-  add Iris read-only tools `run_protocol_diagnostic` (Proj 3 B), `get_security_
-  findings` (Proj 2), `get_topology_context`; **fix the routing inversion** so
+  add Iris read-only tools `run_protocol_diagnostic` (Proj 4 B), `get_security_
+  findings` (Proj 3), `get_topology_context`; **fix the routing inversion** so
   free-form text hits the grounded/cited engine. Highest leverage.
 - **B. Guide the engineer** (P5 advisory, no executor): guided checklist +
   escalation/TAC draft notes + handoff.

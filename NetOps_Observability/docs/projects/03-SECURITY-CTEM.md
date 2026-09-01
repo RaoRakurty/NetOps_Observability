@@ -1,4 +1,4 @@
-# Project 2 — Security CTEM  🟠
+# Project 3 — Security CTEM  🟠
 
 **Goal:** a **network-first security section** (CTEM: Scope → Discover →
 Prioritize → **Validate** → Mobilize) that grounds into the **correlation
