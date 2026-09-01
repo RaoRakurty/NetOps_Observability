@@ -10,6 +10,13 @@ the owner's single box. Owner constraint (2026-08-28): no more hardware; the P5
 scale-out proof is dropped. Every number below is **RIG-GATE**: measured on a
 named run on this box, cited to the artefact it came from. Nothing is modelled.
 
+> **Terminology note (owner, 2026-09-01).** Where this document labels a
+> latency "TTUR" (e.g. "TTUR T1 p95"), the quantity reported is **T1 — time to
+> first correlated version — an engineering lifecycle metric**
+> (`scale-rca-latency.py` T0..T6). **"TTUR" proper is reserved for
+> time-to-first-correct-operator-actionable-RCA, which has not yet been
+> measured** (tracker 205 defines it). T1 is not marketed as TTUR.
+
 ---
 
 ## 1. The number

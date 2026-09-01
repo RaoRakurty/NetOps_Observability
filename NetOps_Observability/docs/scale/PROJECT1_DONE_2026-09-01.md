@@ -131,6 +131,13 @@ The ratified storm-time SLO (Option A, owner 2026-08-30, `237b1161`), verbatim:
 | **SLO clauses met** | 4/4 | 4/4 | 3/4 | 3/4 | **4/4** |
 | gate total | 9/9 | 9/9 | 8/9 (memflat) | 6/9 | **8/9 — sole FAIL is the onboard ratio clause, a harness artifact (§7.1)** |
 
+> **Terminology note (owner, 2026-09-01).** The T1 figures above (and the
+> `ttur.tsv` artifacts of §9) report **T1 — time to first correlated version —
+> an engineering lifecycle metric** (`scale-rca-latency.py` T0..T6). **"TTUR"
+> proper is reserved for time-to-first-correct-operator-actionable-RCA, which
+> has not yet been measured** (tracker 205 defines it). T1 is not marketed as
+> TTUR.
+
 The band: the six clean-leg T1 p95 envelope is now **816–912 s**
 (816/830/832/866/902/908/912); s09's 912 re-enters it after s08's 1,101
 excursion, with p50 back at 88 s. The aggregation plane's accounting closes

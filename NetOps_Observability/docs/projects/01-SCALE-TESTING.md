@@ -23,6 +23,41 @@ the grading is `PROJECT1_DONE_2026-09-01.md` §1.
 
 ---
 
+## Formal closure (owner, 2026-09-01)
+
+```
+PROJECT 1 — SCALE PROGRAMME
+STATUS: COMPLETE
+DATE: 2026-09-01
+```
+
+**Closing conclusion.** The single-reference-host envelope is **measured, not
+estimated**. The platform meets the ratified Option A SLO at 2,500 devices /
+~1,000 eps with lossless ingestion, bounded memory, full completion, and
+qualifying RCA accuracy. Behaviour beyond the envelope is characterized —
+queueing and recall degradation, never loss, never false attribution. **Further
+synthetic capacity expansion is deferred until customer requirements justify
+it.**
+
+### FREEZE (owner, 2026-09-01) — none of the following without a real customer requirement that justifies it
+
+- No 5K/10K-specific optimization.
+- No topology sharding now.
+- No Go/Rust rewrite (of the correlation engine) for capacity.
+- No hardware acquisition for benchmarks.
+- No SLO capacity inflation.
+- No endless device ladder.
+
+### Engineering resource shift (owner guidance, not rigid)
+
+- **≈ 50 %** — UI / demo / operator experience
+- **≈ 20 %** — deployment / onboarding
+- **≈ 15 %** — integrations
+- **≈ 10 %** — hardening / security
+- **≈ 5 %** — reference benchmark regression (tracker 203 / `CORRELIX_REFERENCE_CAPACITY_V1.md`)
+
+---
+
 ## Completed (evidence, not claims)
 
 - **P0–P4 optimisation programme CLOSED** — T1 p95 4,771 → 1,947 → 816 s across

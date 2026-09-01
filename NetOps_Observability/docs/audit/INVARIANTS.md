@@ -348,6 +348,21 @@ tenant, because the 2 % neutrality rung showed it costs nothing) and the tighter
 10-minute completion target (the SLO above is unchanged at 45 minutes; the
 plane's gains are recorded as margin, not as a tighter promise).
 
+### 10a. Post-Project-1 preservation invariants (owner directives, 2026-09-01)
+
+Filed at Project-1 close-out. These preserve what the scale programme proved —
+they are constraints on FUTURE change, so several sit at PROSE by nature: the
+"enforced by" column names the evidence that made the rule and the act that
+would violate it.
+
+| Aspect | Status | Enforced by |
+|---|---|---|
+| The aggregation-plane shipping default stays the conservative **2 %-share configuration** it was qualified on | ✅ | **PROSE (owner, 2026-09-01) over RIG-GATE evidence** — the shipped default (`a9d9a10c`, plane ON, qualified at the ~2 % / achieved 1.78 % storm share of `t-storm-2.5k`; `CORRELIX_REFERENCE_CAPACITY_V1.md` §7). **Moving it requires NEW qualification (a V2 profile + graded legs), not benchmark enthusiasm.** The `contradiction` / `new_vantage` / `new_modality` paths remain **UNPROVEN until measured** — forwarded 0 on every leg ever run (the §10 BOUNDARY above); no configuration change may lean on them |
+| The structural verdict gate (tracker 157 role-grounding) must **not be relaxed for throughput or latency** | ✅ | **PROSE (owner, 2026-09-01) over RIG-GATE evidence** — the gate itself is proven (storm-s07 row above: 35,940 ungrounded templates refused, accuracy flat). **Any ranking optimization must measure specificity, false-positive RCA rate, unsupported-causal-object rate, AND accuracy before acceptance** — a throughput win that moves any of those is a regression, not an optimization |
+| Overload philosophy: prefer **"still analyzing" over an unsupported root cause** — specificity holds, recall queues | ✅ | **RIG-GATE (measured shape) + PROSE (the rule)** — at 2× the ceiling accuracy degraded by RECALL ONLY: 644/690 with specificity **1.000**, zero false positives, all 46 misses being never-evaluated windows or starved-`undetermined` objects (`HOST_CEILING_2026-08-31.md` §3). The engine never guesses; no future change may trade that for tail latency |
+| **Rebalance correctness is a RELEASE REQUIREMENT**: one identity through the handoff, gapless versions, no duplicate versions, durable offsets/signals/evidence preserved, and the measured ≤ 652 ms handoff flush not to regress | ✅ | **RIG-GATE** — the tracker-155 four-run arc (`OWNERSHIP_155_VALIDATION_2026-08-31.md`): positive pass 1.00/1.00 on both disturbed arms, v1–v10 gapless across the handoff, 0 duplicate versions, flush 210–652 ms; plus the 199 shutdown-handoff flush (`36036db5`, `corr_ownership_handoff_unflushed_total` 0 on every replica). A release that regresses any clause does not ship |
+| The **three-plane architecture is the preserved model**: Aggregation → Decision → Evidence; raw observations stay durable; suppression reduces correlation-plane work, **never drops raw evidence** | ✅ | **RIG-GATE + PROSE** — the plane's exact accounting (observed == forwarded + suppressed, §10 row above) with ingestion lossless on every graded leg including the suppressing arms (900,001 == 900,001 + 0 DLQ). **No reversion to every-observation-full-graph-work** — a change that makes the decision plane re-process raw observations, or that lets suppression touch the durable raw record, violates this row |
+
 When adding a feature, state its invariant and pick the tier you will enforce it
 at. If the answer is PROSE, say so out loud in the PR rather than leaving a
 future reader to assume a gate exists. When an audit finding is closed, add the
