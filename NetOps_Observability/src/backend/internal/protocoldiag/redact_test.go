@@ -58,6 +58,124 @@ func TestRedact_StripsSecrets(t *testing.T) {
 	}
 }
 
+// TestRedact_MultiLinePEMPrivateKeys proves a real multi-line PEM private key —
+// the form keys actually take on disk and in `show` output — is fully redacted:
+// no body line survives, the redaction mark is present, and the surrounding
+// text (including the BEGIN/END marker lines, kept so a TAC reader sees which
+// block was redacted) stays intact.
+func TestRedact_MultiLinePEMPrivateKeys(t *testing.T) {
+	bodies := map[string][]string{
+		"RSA PRIVATE KEY":       {"MIIEpAIBAAKCAQEA7rsaBODYlinea111", "q2xRSAlineb222/+detail333=="},
+		"OPENSSH PRIVATE KEY":   {"b3BlbnNzaC1rZXktdjEopenssh444", "AAAAB3NzaC1yc2Eopenssh555="},
+		"ENCRYPTED PRIVATE KEY": {"MIIFHDBOBgkqhkiGencrypted666", "hkiG9w0BBQencrypted777=="},
+	}
+	for label, body := range bodies {
+		raw := strings.Join([]string{
+			"crypto key export rsa mykey pem terminal",
+			"-----BEGIN " + label + "-----",
+			body[0],
+			body[1],
+			"-----END " + label + "-----",
+			"router bgp 65001",
+		}, "\n")
+		got := newRedactor().redactText(raw)
+		for _, b := range body {
+			if strings.Contains(got, b) {
+				t.Errorf("%s: body line %q survived redaction:\n%s", label, b, got)
+			}
+		}
+		if !strings.Contains(got, redactionMark) {
+			t.Errorf("%s: no redaction mark present:\n%s", label, got)
+		}
+		if !strings.Contains(got, "-----BEGIN "+label+"-----") || !strings.Contains(got, "-----END "+label+"-----") {
+			t.Errorf("%s: marker lines destroyed (reader can no longer see which block was redacted):\n%s", label, got)
+		}
+		if !strings.Contains(got, "crypto key export rsa mykey pem terminal") || !strings.Contains(got, "router bgp 65001") {
+			t.Errorf("%s: surrounding non-secret text destroyed:\n%s", label, got)
+		}
+	}
+}
+
+// TestRedact_UnterminatedPEMFailsClosed proves a BEGIN with no END (truncated
+// capture) redacts everything through to EOF — key material never survives a
+// missing terminator.
+func TestRedact_UnterminatedPEMFailsClosed(t *testing.T) {
+	raw := strings.Join([]string{
+		"before the block",
+		"-----BEGIN RSA PRIVATE KEY-----",
+		"MIIEpAIBAAKCAQEAtruncated888",
+		"q2xtruncated999==",
+		"output cut off here, no END marker",
+	}, "\n")
+	got := newRedactor().redactText(raw)
+	for _, leak := range []string{"MIIEpAIBAAKCAQEAtruncated888", "q2xtruncated999==", "output cut off here"} {
+		if strings.Contains(got, leak) {
+			t.Errorf("unterminated block leaked %q (must fail closed to EOF):\n%s", leak, got)
+		}
+	}
+	if !strings.Contains(got, "before the block") {
+		t.Errorf("text before the block destroyed:\n%s", got)
+	}
+	if !strings.Contains(got, redactionMark) {
+		t.Errorf("no redaction mark present:\n%s", got)
+	}
+}
+
+// TestRedact_CertificateBlockPreserved pins the deliberate decision that
+// certificate blocks — public material that legitimately appears in
+// `show crypto pki certificates` output and is often exactly what TAC needs —
+// are NOT block-redacted. Only private-key-class labels are.
+func TestRedact_CertificateBlockPreserved(t *testing.T) {
+	certBody := "MIIDcertificatebodyAAA111"
+	raw := strings.Join([]string{
+		"-----BEGIN CERTIFICATE-----",
+		certBody,
+		"-----END CERTIFICATE-----",
+	}, "\n")
+	got := newRedactor().redactText(raw)
+	if !strings.Contains(got, certBody) {
+		t.Errorf("certificate body was redacted (certificates are public material, kept by design):\n%s", got)
+	}
+}
+
+// TestRedact_SingleLinePEMStillRedacted proves the pre-existing single-line
+// rule (BEGIN and END on one line) still fires.
+func TestRedact_SingleLinePEMStillRedacted(t *testing.T) {
+	raw := "key: -----BEGIN PRIVATE KEY-----MIIEsingleline000-----END PRIVATE KEY----- trailing"
+	got := newRedactor().redactText(raw)
+	if strings.Contains(got, "MIIEsingleline000") {
+		t.Errorf("single-line PEM survived redaction:\n%s", got)
+	}
+	if !strings.Contains(got, redactionMark) {
+		t.Errorf("no redaction mark present:\n%s", got)
+	}
+	if !strings.Contains(got, "trailing") {
+		t.Errorf("text after the single-line block destroyed:\n%s", got)
+	}
+}
+
+// TestRedact_MultiLinePEMWithCRLF proves CRLF line endings do not defeat the
+// block scanner (marker detection is unanchored, so a trailing \r is harmless).
+func TestRedact_MultiLinePEMWithCRLF(t *testing.T) {
+	raw := strings.Join([]string{
+		"before\r",
+		"-----BEGIN EC PRIVATE KEY-----\r",
+		"MHcCAQEEcrlfbody123\r",
+		"-----END EC PRIVATE KEY-----\r",
+		"after\r",
+	}, "\n")
+	got := newRedactor().redactText(raw)
+	if strings.Contains(got, "MHcCAQEEcrlfbody123") {
+		t.Errorf("CRLF PEM body survived redaction:\n%s", got)
+	}
+	if !strings.Contains(got, redactionMark) {
+		t.Errorf("no redaction mark present:\n%s", got)
+	}
+	if !strings.Contains(got, "before\r") || !strings.Contains(got, "after\r") {
+		t.Errorf("surrounding CRLF text destroyed:\n%s", got)
+	}
+}
+
 // TestTACExport_RedactedAndComplete proves the TAC export is redacted, carries
 // the verdict + evidence, omits the tenant id, and includes each command.
 func TestTACExport_RedactedAndComplete(t *testing.T) {

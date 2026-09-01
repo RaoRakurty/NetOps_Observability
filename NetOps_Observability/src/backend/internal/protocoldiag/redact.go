@@ -16,6 +16,14 @@ const redactionMark = "[REDACTED]"
 // and replaces only the sensitive VALUE.
 type redactor struct {
 	rules []redactRule
+	// PEM private-key block markers for the stateful multi-line scanner in
+	// redactText. Matched unanchored so indentation and CRLF line endings do
+	// not defeat detection. Certificate blocks (public material that
+	// legitimately appears in `show crypto pki certificates` output) are
+	// deliberately NOT block-redacted — only private-key-class labels are.
+	pemBegin   *regexp.Regexp
+	pemEnd     *regexp.Regexp
+	pemOneLine *regexp.Regexp
 }
 
 type redactRule struct {
@@ -34,7 +42,14 @@ func newRedactor() *redactor {
 	rule := func(pat, repl string) redactRule {
 		return redactRule{re: regexp.MustCompile(pat), repl: repl}
 	}
-	return &redactor{rules: []redactRule{
+	// Private-key-class PEM labels: PRIVATE KEY and any prefixed variant
+	// (RSA/EC/DSA/ENCRYPTED/OPENSSH …), plus PGP's "PRIVATE KEY BLOCK".
+	const pemKeyLabel = `[A-Z0-9 ]*PRIVATE KEY(?: BLOCK)?`
+	return &redactor{
+		pemBegin:   regexp.MustCompile(`(?i)-----BEGIN ` + pemKeyLabel + `-----`),
+		pemEnd:     regexp.MustCompile(`(?i)-----END ` + pemKeyLabel + `-----`),
+		pemOneLine: regexp.MustCompile(`(?i)-----BEGIN ` + pemKeyLabel + `-----.*-----END ` + pemKeyLabel + `-----`),
+		rules: []redactRule{
 		// `username X password [enc] <secret>` / `... secret <secret>` — redact the secret.
 		rule(`(?i)((?:username\s+\S+\s+)?(?:password|secret)\s+(?:\d+\s+)?)(\S+)`, "${1}"+redactionMark),
 		// `enable secret 5 <hash>` / `enable password <secret>`.
@@ -50,7 +65,9 @@ func newRedactor() *redactor {
 		// `crypto isakmp key <secret> address …`, `keyring … key <secret>`.
 		rule(`(?i)(pre-shared-key\s+(?:\S+\s+)?(?:key\s+)?)(\S+)`, "${1}"+redactionMark),
 		rule(`(?i)((?:isakmp|keyring)\s+key\s+(?:\d+\s+)?)(\S+)`, "${1}"+redactionMark),
-		// A PEM private key line/body.
+		// A PEM private key squeezed onto a single line. Real multi-line PEM
+		// blocks are handled by the stateful scanner in redactText — this
+		// per-line rule cannot see across lines.
 		rule(`(?i)-----BEGIN [A-Z ]*PRIVATE KEY-----.*?-----END [A-Z ]*PRIVATE KEY-----`, redactionMark),
 	}}
 }
@@ -64,15 +81,38 @@ func (r *redactor) redactLine(line string) string {
 }
 
 // redactText applies the redaction pass to a multi-line blob.
+//
+// It is a stateful line scanner: a line carrying a private-key-class PEM BEGIN
+// marker (without its END on the same line — that case is the single-line rule's
+// job) enters redaction mode. The BEGIN and END marker lines are kept, so a TAC
+// reader still sees WHICH block was redacted, while every body line between them
+// is replaced by a single redaction mark. A block left unterminated at EOF is
+// redacted through to the end (fail closed: key material never survives a
+// truncated capture). Nested or repeated BEGIN markers inside a block are body
+// and are redacted with it.
 func (r *redactor) redactText(text string) string {
 	if text == "" {
 		return ""
 	}
 	lines := strings.Split(text, "\n")
-	for i, ln := range lines {
-		lines[i] = r.redactLine(ln)
+	out := make([]string, 0, len(lines))
+	inKeyBlock := false
+	for _, ln := range lines {
+		if inKeyBlock {
+			if r.pemEnd.MatchString(ln) {
+				inKeyBlock = false
+				out = append(out, ln) // keep the END marker line
+			}
+			continue // body line: dropped (the mark was emitted at BEGIN)
+		}
+		if r.pemBegin.MatchString(ln) && !r.pemOneLine.MatchString(ln) {
+			inKeyBlock = true
+			out = append(out, ln, redactionMark) // keep BEGIN, mark the body
+			continue
+		}
+		out = append(out, r.redactLine(ln))
 	}
-	return strings.Join(lines, "\n")
+	return strings.Join(out, "\n")
 }
 
 // Redact returns a COPY of col with every command's output run through the
