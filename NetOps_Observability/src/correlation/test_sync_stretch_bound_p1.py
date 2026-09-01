@@ -43,6 +43,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import dataclasses
+import gc
 import hashlib
 import json
 import logging
@@ -63,15 +64,23 @@ from test_find_merges_index_stage2 import _mixed_population
 # under the 1,000 ms loop-lag warn and two under the session timeout, so a
 # breach is a defect long before it is an ejection.
 BUDGET_S = 0.5
-# The storm shape the live run had: ~1,300 open objects, ~400 of them stale in
-# one pass. `OPEN` is deliberately above the live peak (1,362 open objects) and
-# `STALE` is the batch that closes together.
-OPEN, STALE = 1_300, 400
+# The storm shape the live run had — ~1,300 open objects (live peak 1,362),
+# ~400 of them stale in one pass — SCALED x5 in object count (2026-09-01): the
+# hosted CI runner plus the 185/P2 engine work closed the original 400-object
+# batch in 309 ms, inside the 500 ms budget, so the mutant below could no
+# longer reproduce the defect and the bound had lost its teeth on fast
+# hardware. Scaling the OBJECT COUNT (never the signals per object) keeps the
+# bounded leg's worst stretch — one builder's inline block — unchanged, while
+# the mutant's un-yielded grind is ~1.5 s on that runner (3x the budget, not a
+# marginal call) and several seconds on the 4-core lab box. The SHAPE
+# (open:closing ratio, signals per object) is the live one.
+OPEN, STALE = 6_500, 2_000
 # Signals per closing object. Sized from measurement, not taste: at 240 signals
-# one close costs ~4 ms, so the mutant's un-yielded grind is ~1.6 s — three
-# times the budget, not a marginal call on a slow CI runner — while the bounded
-# leg's worst stretch stays at ~70 ms, a 7x margin the other way. Neither
-# assertion is close to its threshold.
+# one close costs ~4 ms on the lab box (~0.77 ms on the 2026-09 hosted
+# runner), while the bounded leg's worst stretch stays at ~70 ms, a 7x margin.
+# Deliberately NOT scaled with OPEN/STALE: more signals per object would grow
+# the bounded leg's single-builder inline block toward the budget and erode
+# exactly that margin.
 STALE_SIGNALS = 240
 # A budget past any wall clock the pass can reach: the deadline is never met,
 # so `loop_yield` never yields and the loop behaves exactly as it did before the
@@ -155,6 +164,29 @@ class _Epoch:
     def __init__(self, seen: set[str], now: datetime) -> None:
         self.seen = set(seen)
         self.now = now
+
+
+@pytest.fixture(scope="module", autouse=True)
+def _engine_gc_policy():
+    """Measure the engine AS DEPLOYED: main ships a cycle-collector policy
+    (CORR_GC_TUNE, default ON — `gc_tune_startup`: `gc.freeze()` after startup
+    plus raised generation thresholds) precisely because a gen2 collection
+    walking the live object graph lands inside whatever inline block is
+    running and reads as a loop-thread stall that is GC, not engine blocking.
+    This harness drives `_epoch_lifecycle` directly, so without mirroring the
+    policy the bound below measures CPython's collector, not the engine:
+    at the x5 storm scale a gen2 walk of the ~2.4M-object fixture graph read
+    774 ms worst / 630 ms attributed to `builder.content_hash` un-tuned vs
+    65 ms / 16 ms with the policy applied (measured 2026-09-01, STALE=2,000).
+    The engine's OWN constants are used, and the interpreter defaults are
+    restored after the module. GC pause behavior itself is a separately
+    shipped, separately metered concern (`corr_gc_*` metrics, CORR_GC_TUNE
+    docstring in main.py)."""
+    old_threshold = gc.get_threshold()
+    gc.collect()
+    gc.set_threshold(main.CORR_GC_GEN0, main.CORR_GC_GEN1, main.CORR_GC_GEN2)
+    yield
+    gc.set_threshold(*old_threshold)
 
 
 @pytest.fixture(autouse=True)
@@ -255,7 +287,17 @@ def _run_close_batch(stale, live, *, yield_ms: float, rate_gate: bool = True):
             main._epoch_lifecycle(epoch, main._make_loop_yield()[0],
                                   seen=set(seen)))
 
-    worst_sync, worst_tick, dur = asyncio.run(go())
+    # The population plays the role of `gc_tune_startup`'s frozen startup heap
+    # for the duration of the measured leg: collected garbage cannot trigger a
+    # mid-leg gen2 walk of 2.4M fixture objects that would be charged to the
+    # engine (see _engine_gc_policy). Unfrozen right after — later tests see a
+    # normal heap.
+    gc.collect()
+    gc.freeze()
+    try:
+        worst_sync, worst_tick, dur = asyncio.run(go())
+    finally:
+        gc.unfreeze()
     return worst_sync, worst_tick, dur, ch, registry
 
 
@@ -366,8 +408,14 @@ def _run_merge_pass(survivors, candidates, *, yield_ms: float, rate_gate: bool):
     main._SYNC_RATE = {}
     main._ARCHIVE_SLICE_HASH.clear()
     seen = {s.correlation_id for s in survivors}
-    asyncio.run(main._epoch_lifecycle(_Epoch(seen, now),
-                                      main._make_loop_yield()[0], seen=set(seen)))
+    gc.collect()
+    gc.freeze()                      # same GC de-confounding as _run_close_batch
+    try:
+        asyncio.run(main._epoch_lifecycle(_Epoch(seen, now),
+                                          main._make_loop_yield()[0],
+                                          seen=set(seen)))
+    finally:
+        gc.unfreeze()
     return ch, registry
 
 

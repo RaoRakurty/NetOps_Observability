@@ -89,6 +89,19 @@ def reference_deep_bytes(obj: object, seen: set[int] | None = None,
             continue
         seen.add(oid)
         total += sys.getsizeof(item)
+        # CPython >= 3.11 managed dicts: until something touches an instance's
+        # `__dict__`, its attribute values live inline in the instance's own
+        # allocation — `getsizeof(instance)` reports only the 48 B header and
+        # `get_referents` hands back the VALUES with no dict container — so
+        # this walk would silently under-read real, allocated, per-instance
+        # memory that tracemalloc (the anchor, B5) and the estimator both
+        # charge (measured on 3.12.14: 269.5 B actually held per small frozen
+        # dataclass instance vs 48 B this walk saw; on the full corpus the
+        # blindness pushed est/ref to 1.16 with no estimator change). Touching
+        # `__dict__` materializes the real dict so the container is walked
+        # like any other object. A no-op on pre-managed-dict interpreters,
+        # where the dict always exists, and for slotted/dict-less objects.
+        getattr(item, "__dict__", None)
         stack.extend(gc.get_referents(item))
     return total
 
@@ -495,7 +508,14 @@ def test_B11_the_estimator_walks_the_whole_value_graph():
     result = ranking_of(THREE[0])
     assert result.hypotheses, "fixture must produce hypotheses"
     from dataclasses import replace as dc_replace
-    headless = dc_replace(result, hypotheses=())
+    # `evidence_missing` is CATALOG-shaped, not hypothesis-shaped: one line per
+    # unsatisfied template requirement, so it grows with every template that
+    # ships (the 157/167 wave pushed the bare shell past `full/5` with no walk
+    # change at all). The dominance claim under test is about the HYPOTHESES
+    # payload, so the baseline strips both. The header-only-walk mutant is
+    # still caught: with `hypotheses` invisible the full result estimates at
+    # about the bare shell, nowhere near 5x it.
+    headless = dc_replace(result, hypotheses=(), evidence_missing=())
     assert estimate_result_bytes(headless) < estimate_result_bytes(result) / 5
     top = result.hypotheses[0]
     assert estimate_result_bytes(top) > estimate_result_bytes(top.verdict_gate)

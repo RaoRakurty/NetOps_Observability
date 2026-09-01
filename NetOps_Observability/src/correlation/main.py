@@ -10191,7 +10191,9 @@ async def _seed_owned_tenants(partitions: frozenset[int]) -> tuple[str, ...]:
     if total <= 0:
         return ()
     sql = (
-        "SELECT DISTINCT tenant_id FROM netops.corr_current "
+        "SELECT DISTINCT tenant_id FROM netops.corr_current "  # nosec B608 — constants
+        # only: a float()-formatted and an int()-cast module constant below;
+        # no request or event data reaches this string.
         "WHERE state = 'open' "
         f"AND created_at >= now64(3) - toIntervalSecond({CORR_OWNERSHIP_SEED_HORIZON_S:.3f}) "
         f"LIMIT {int(CORR_OWNERSHIP_SEED_TENANTS_MAX)} FORMAT JSON"
@@ -12142,7 +12144,11 @@ def _start_health_sidecar() -> object | None:
         def log_message(self, *_a):                        # probes are not access-log noise
             return
 
-    srv = http.server.ThreadingHTTPServer(("0.0.0.0", CORR_HEALTH_SIDECAR_PORT), _Handler)
+    # Bind-all inside the container netns is the deploy convention for the
+    # health sidecar (reachability IS the feature); exposure is governed by
+    # the compose network — the port is not published on the host.
+    srv = http.server.ThreadingHTTPServer(
+        ("0.0.0.0", CORR_HEALTH_SIDECAR_PORT), _Handler)  # nosec B104 — see above
     # Deploy-convention fix (2026-08-24, caught in pre-deploy review): the
     # stack sets CORR_TLS_CERT/CORR_TLS_KEY (compose.tls.yml, same pair
     # tls_serve.py uses); the original CORRELATION_TLS_CRT names matched

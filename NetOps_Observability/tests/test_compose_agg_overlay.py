@@ -49,6 +49,14 @@ BASE_OVERLAYS = (
     "compose.lab.yml",
     "compose.profile.yml",
 )
+# Two of the six are PER-HOST files that are deliberately untracked (see
+# .gitignore): compose.offline-images.yml is written by `install.py --offline`
+# on the target host, and compose.lab.yml is the lab's site-local override
+# (Versa CA mount). A fresh checkout — CI — legitimately lacks them; the lab
+# deploy host must not. The split below is VERIFIED against the tracked
+# .gitignore rather than assumed, so moving a file between the two categories
+# without updating the ignore rules still fails here.
+PER_HOST_OVERLAYS = frozenset({"compose.offline-images.yml", "compose.lab.yml"})
 
 
 def _compose_yaml(text: str) -> dict:
@@ -200,11 +208,30 @@ def test_compose_default_is_on():
 # ── the operator-facing procedure ───────────────────────────────────────────
 def test_base_overlay_set_still_exists():
     """The run plan's deploy command names six files; a rename would leave the
-    plan pointing at nothing and the operator improvising the A/B."""
+    plan pointing at nothing and the operator improvising the A/B.
+
+    The two PER_HOST_OVERLAYS are generated/site-local and gitignored, so a
+    fresh checkout (CI) not having them is the expected state, not a rename:
+    they are asserted only where they can exist (a deployed host), and their
+    absence is excused ONLY if .gitignore still names them — an un-ignored
+    missing file fails loudly either way."""
     missing = [n for n in BASE_OVERLAYS
                if not (ROOT / "deployment" / "docker" / n).is_file()]
-    assert not missing, (
-        f"overlay files named by the P3 run plan are gone: {missing}")
+    tracked_missing = [n for n in missing if n not in PER_HOST_OVERLAYS]
+    assert not tracked_missing, (
+        f"overlay files named by the P3 run plan are gone: {tracked_missing}")
+    per_host_missing = [n for n in missing if n in PER_HOST_OVERLAYS]
+    if per_host_missing:
+        gitignore = (ROOT / ".gitignore").read_text().split()
+        not_ignored = [n for n in per_host_missing
+                       if f"deployment/docker/{n}" not in gitignore]
+        assert not not_ignored, (
+            f"{not_ignored} are missing and NOT gitignored — either the run "
+            f"plan's overlay was renamed/deleted (restore it) or it stopped "
+            f"being a per-host file (then it must be tracked)")
+        pytest.skip("per-host gitignored overlays not present in this "
+                    f"checkout (generated at install / lab-local): "
+                    f"{per_host_missing}")
 
 
 def test_overlay_documents_apply_verify_remove(overlay_path):
