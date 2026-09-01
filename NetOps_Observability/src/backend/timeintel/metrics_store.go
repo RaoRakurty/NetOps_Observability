@@ -103,17 +103,72 @@ func DeriveMetricRow(tenant, corrID, version string, facts CorrTimeFacts, group 
 
 // ── in-memory backend ─────────────────────────────────────────────────────────
 
-// NewMemMetricsStore builds the in-memory backend.
+// Bounds for the in-memory backend (§9: all stores bounded — measured defect,
+// storm-s08 2026-09-01). On the file backend the backfill fold used to
+// accumulate EVERY snapshot it ever derived in the map below: 259,999 rows
+// folded over 13 catch-up passes put ~800 MiB of anonymous memory (~3 KB/row:
+// 8 TimeMetrics + group keys + strings + map overhead) into a 565 MiB
+// container, and the 918k-object backlog would have needed ~2.7 GiB. The PG
+// backend was never affected — its rows live in Postgres and every read is
+// LIMIT-bounded in SQL.
+//
+// The bound is derived from what the READS can return, so eviction can never
+// change an answer:
+//
+//   - MemRowCapPerTenant = SnapshotCap. Every read is capped at SnapshotCap
+//     rows per call: the snapshots handler clamps List's limit to
+//     [1, SnapshotCap], and the reliability rollups call ListWindow with
+//     exactly SnapshotCap. Both serve NEWEST-first with honest capping, so
+//     keeping the newest SnapshotCap rows per tenant (by occurred_at) yields
+//     the same answers as an unbounded store for every reachable query. (One
+//     documented edge: during a calc-version transition, duplicate versions of
+//     one incident count twice against the raw-row cap, so the deduped
+//     ListWindow horizon can shrink by the duplicate count. The fold writes a
+//     single version, and this backend is restart-ephemeral, so the shrink is
+//     transient and bounded.)
+//   - MemRetention matches the widest window any consumer can request (the
+//     rollup handlers clamp `since` to <= 365 days), plus a day of slack. A
+//     row older than that is unreadable through every surface, so compaction
+//     drops it before it drops anything readable.
+//
+// Eviction is amortized: a tenant is compacted only when it runs
+// memCompactSlack rows past the cap, so resident rows per tenant are bounded
+// by MemRowCapPerTenant+memCompactSlack and the sort cost is paid once per
+// slack-many upserts, not per upsert.
+const (
+	// MemRowCapPerTenant bounds resident rows per tenant in MemMetricsStore.
+	MemRowCapPerTenant = SnapshotCap
+	// MemRetention bounds row age in MemMetricsStore (366d: the 365d consumer
+	// window clamp plus slack).
+	MemRetention = 366 * 24 * time.Hour
+	// memCompactSlack is the compaction hysteresis (rows past the cap before a
+	// tenant is compacted back down to it).
+	memCompactSlack = 1024
+)
+
+// NewMemMetricsStore builds the in-memory backend, bounded by
+// MemRowCapPerTenant and MemRetention (see the const block above).
 func NewMemMetricsStore() *MemMetricsStore {
-	return &MemMetricsStore{by: map[string]MetricRow{}}
+	return &MemMetricsStore{
+		by:        map[string]MetricRow{},
+		perTenant: map[string]int{},
+		rowCap:    MemRowCapPerTenant,
+		retention: MemRetention,
+		now:       time.Now,
+	}
 }
 
 // NewPGMetricsStore wraps the platform DB pool (FORCE-RLS backend).
 func NewPGMetricsStore(db *platformdb.DB) *PGMetricsStore { return &PGMetricsStore{db: db} }
 
 type MemMetricsStore struct {
-	mu sync.RWMutex
-	by map[string]MetricRow // key: tenant\x1fcorrID\x1fversion
+	mu        sync.RWMutex
+	by        map[string]MetricRow // key: tenant\x1fcorrID\x1fversion
+	perTenant map[string]int       // resident rows per tenant (drives compaction)
+	rowCap    int                  // max rows kept per tenant (<=0 disables, tests only)
+	retention time.Duration        // max row age by occurred_at (<=0 disables)
+	now       func() time.Time     // injectable clock (retention tests)
+	evicted   int64                // rows evicted since construction (observability)
 }
 
 func (m *MemMetricsStore) key(tenant, corrID, version string) string {
@@ -124,8 +179,82 @@ func (m *MemMetricsStore) Upsert(_ context.Context, row MetricRow) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	row.TenantID = normTenant(row.TenantID)
-	m.by[m.key(row.TenantID, row.CorrelationID, row.CalcVersion)] = row
+	k := m.key(row.TenantID, row.CorrelationID, row.CalcVersion)
+	// Idempotent on the PK: overwriting an existing row never grows the count,
+	// so a re-backfill of the same page cannot trigger (or skew) eviction.
+	if _, exists := m.by[k]; !exists {
+		m.perTenant[row.TenantID]++
+	}
+	m.by[k] = row
+	m.compactLocked(row.TenantID)
 	return nil
+}
+
+// Evicted reports how many rows compaction has dropped since construction —
+// the store's own evidence that the bound is doing work (§10: observable).
+func (m *MemMetricsStore) Evicted() int64 {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.evicted
+}
+
+// compactLocked bounds one tenant's resident rows. Caller holds mu.
+//
+// Two phases, cheapest-first: rows older than the retention window are
+// unreadable through every consumer surface (the rollup handlers clamp
+// `since` to <= 365d < MemRetention) and go first; if the tenant is still over
+// the cap, the OLDEST rows by occurred_at go until it fits. Reads serve
+// newest-first with honest capping, so what is dropped is exactly what no
+// bounded read would have returned anyway. A zero occurred_at sorts as oldest
+// (it is unreadable through any since-window) but is exempt from the retention
+// phase so a sparse tenant's zero-stamped rows don't vanish for free.
+func (m *MemMetricsStore) compactLocked(tenant string) {
+	if m.rowCap <= 0 || m.perTenant[tenant] <= m.rowCap+memCompactSlack {
+		return
+	}
+	var cutoff time.Time
+	if m.retention > 0 {
+		cutoff = m.now().UTC().Add(-m.retention)
+	}
+	type keyAge struct {
+		key      string
+		occurred time.Time
+		calc     time.Time
+	}
+	keep := make([]keyAge, 0, m.perTenant[tenant])
+	for k, r := range m.by {
+		if r.TenantID != tenant {
+			continue
+		}
+		if !cutoff.IsZero() && !r.OccurredAt.IsZero() && r.OccurredAt.Before(cutoff) {
+			delete(m.by, k)
+			m.evicted++
+			continue
+		}
+		keep = append(keep, keyAge{key: k, occurred: r.OccurredAt, calc: r.CalculatedAt})
+	}
+	if excess := len(keep) - m.rowCap; excess > 0 {
+		sort.Slice(keep, func(i, j int) bool { // oldest first; zero occurred_at oldest of all
+			a, b := keep[i], keep[j]
+			if a.occurred.IsZero() != b.occurred.IsZero() {
+				return a.occurred.IsZero()
+			}
+			if !a.occurred.Equal(b.occurred) {
+				return a.occurred.Before(b.occurred)
+			}
+			return a.calc.Before(b.calc)
+		})
+		for _, e := range keep[:excess] {
+			delete(m.by, e.key)
+			m.evicted++
+		}
+		keep = keep[excess:]
+	}
+	if len(keep) == 0 {
+		delete(m.perTenant, tenant) // no unbounded tenant-name residue
+		return
+	}
+	m.perTenant[tenant] = len(keep)
 }
 
 func (m *MemMetricsStore) List(_ context.Context, tenant string, cross bool, limit int) ([]MetricRow, error) {
