@@ -608,3 +608,29 @@ aggregation plane **ON** (`a9d9a10c`). Stack idle, run lock free, residue 0.
    `ceiling-facts.json`, the close-out docs + the report datapack).
 3. **Project 2 — Security CTEM** per the fixed portfolio order (per-project
    tracker in `docs/projects/`).
+
+## FINAL UPDATE 2026-09-01 — session closed; everything above's "next" is DONE
+
+- **`/code-review ultra` RAN and every CONFIRMED finding was fixed same-session**
+  (45 candidates → 4 refuted → 12 fix commits, `e63e3021..430e87ac`; two criticals
+  closed: the §3a bgp-watchlist cross-tenant delete `fe209696` and the
+  evidence-consumer deadlock `7096e207`). Full ledger + dispositions:
+  `docs/scale/ULTRA_REVIEW_DISPOSITION_2026-09-01.md`.
+- **Both deliverable artifacts published** (URLs in
+  `docs/projects/02-PRODUCTIZATION-DESIGN-PARTNERS.md`), reworked to the owner's
+  post-DONE directive set (capacity tiers, qualified accuracy, product-story-first).
+- **Owner directives encoded**: `CORRELIX_REFERENCE_CAPACITY_V1` (permanent
+  qualification profile; baseline = storm-s09), preservation invariants
+  (INVARIANTS §10a), the FREEZE on speculative scale work, `HOSTING_SIZING_GUIDE`,
+  closure marker, tracker rows 203 (release regression gate), 204 (storage
+  measurement), 205 (Time-to-Correct-Useful-RCA + 15-dim tail classification),
+  206–208 (review residuals).
+- **Portfolio renumbered**: Project 2 = **Productization & Design Partners**
+  (owner-defined; CTEM → 3, Troubleshooting → 4).
+- **⚠ FIX WAVE NOT DEPLOYED.** Live images predate the review fixes (correlation
+  `2d617a1ba1fa`+`a9e99871e812`-era wave, api `eefcc527730a`). **Next session,
+  before anything else engineering:** rebuild + redeploy correlation and api at
+  HEAD, then rerun the V1 qualification (tracker 203's first execution) to prove
+  the fix wave regression-clean.
+- **Then**: open Project 2 exactly per its REQUIRED workflow (inspect → gap
+  report → prioritized plan). Tree clean at `430e87ac`.
