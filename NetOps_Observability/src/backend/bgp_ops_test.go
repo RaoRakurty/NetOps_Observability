@@ -16,6 +16,10 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+	"unicode/utf8"
+
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 
 	"netops/backend/internal/platformdb"
 )
@@ -247,16 +251,19 @@ func TestBGPWatchlistTenantIsolationPG(t *testing.T) {
 	st := newBGPWatchStore(ps.DB())
 
 	// Each tenant writes its own entry (same resource on purpose: the PK is
-	// (tenant_id, resource), so collision would be the leak symptom).
-	if err := st.Add(ctx, "acme", false, bgpWatchEntry{Resource: "AS3333", Kind: "asn", AddedBy: "a@acme"}); err != nil {
-		t.Fatalf("acme add: %v", err)
+	// (tenant_id, resource), so collision would be the leak symptom). The acme
+	// note carries a rune-boundary truncation product — PG must accept it
+	// (invalid UTF-8 would be SQLSTATE 22021).
+	straddled := truncateUTF8(strings.Repeat("a", 299)+"🌍", bgpNoteMaxBytes)
+	if err := st.Add(ctx, "acme", bgpWatchEntry{Resource: "AS3333", Kind: "asn", Note: straddled, AddedBy: "a@acme"}); err != nil {
+		t.Fatalf("acme add (rune-truncated note): %v", err)
 	}
-	if err := st.Add(ctx, "globex", false, bgpWatchEntry{Resource: "AS3333", Kind: "asn", AddedBy: "g@globex"}); err != nil {
+	if err := st.Add(ctx, "globex", bgpWatchEntry{Resource: "AS3333", Kind: "asn", AddedBy: "g@globex"}); err != nil {
 		t.Fatalf("globex add: %v", err)
 	}
 	t.Cleanup(func() {
-		_, _ = st.Delete(ctx, "acme", false, "AS3333")
-		_, _ = st.Delete(ctx, "globex", false, "AS3333")
+		_, _ = st.Delete(ctx, "acme", "AS3333")
+		_, _ = st.Delete(ctx, "globex", "AS3333")
 	})
 
 	// Own-only list.
@@ -268,10 +275,13 @@ func TestBGPWatchlistTenantIsolationPG(t *testing.T) {
 		if e.AddedBy == "g@globex" {
 			t.Fatal("CROSS-TENANT LEAK: acme sees globex's watchlist row")
 		}
+		if e.Resource == "AS3333" && !utf8.ValidString(e.Note) {
+			t.Fatal("stored note is not valid UTF-8 — truncation corrupted it")
+		}
 	}
 
 	// Cross-tenant delete must not reach the other tenant's row.
-	if found, err := st.Delete(ctx, "acme", false, "AS3333"); err != nil || !found {
+	if found, err := st.Delete(ctx, "acme", "AS3333"); err != nil || !found {
 		t.Fatalf("acme deleting its own row: found=%v err=%v", found, err)
 	}
 	gx, err := st.List(ctx, "globex", false)
@@ -286,5 +296,210 @@ func TestBGPWatchlistTenantIsolationPG(t *testing.T) {
 	}
 	if !stillThere {
 		t.Fatal("acme's delete removed globex's row — RLS write scope broken")
+	}
+}
+
+// ── §3a write-scope proofs (no PG needed: a fake tx records the SQL) ────────
+
+type bgpRecordedExec struct {
+	sql  string
+	args []any
+}
+
+// bgpFakeTx embeds pgx.Tx for interface satisfaction; only Exec is scripted —
+// any other method panics, which is exactly right for a write-path probe.
+type bgpFakeTx struct {
+	pgx.Tx
+	execs []bgpRecordedExec
+}
+
+func (f *bgpFakeTx) Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error) {
+	f.execs = append(f.execs, bgpRecordedExec{sql: sql, args: args})
+	if strings.HasPrefix(strings.TrimSpace(sql), "DELETE") {
+		return pgconn.NewCommandTag("DELETE 1"), nil
+	}
+	return pgconn.NewCommandTag("INSERT 0 1"), nil
+}
+
+type bgpFakeDB struct {
+	tenants []string
+	crosses []bool
+	tx      bgpFakeTx
+}
+
+func (d *bgpFakeDB) WithTenant(ctx context.Context, tenant string, cross bool, fn func(pgx.Tx) error) error {
+	d.tenants = append(d.tenants, tenant)
+	d.crosses = append(d.crosses, cross)
+	return fn(&d.tx)
+}
+
+func bgpWatchServer(t *testing.T) (*server, *bgpFakeDB) {
+	t.Helper()
+	s := bgpServer(t, "")
+	db := &bgpFakeDB{}
+	s.bgpWatch = newBGPWatchStore(db)
+	return s, db
+}
+
+// A cross-tenant principal (platform owner, Global view) must be REFUSED on
+// write/delete — the ultra finding: the old path ran the delete under the '*'
+// RLS GUC and removed EVERY tenant's row for the resource.
+func TestBGPWatchlistCrossTenantWriteRefused(t *testing.T) {
+	s, db := bgpWatchServer(t)
+
+	w := httptest.NewRecorder()
+	s.handleBGPWatchlist(w, req("POST", "/api/bgp/watchlist", `{"resource":"AS3333","note":"x"}`, superA()))
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("cross POST: want 400, got %d: %s", w.Code, w.Body.String())
+	}
+	w = httptest.NewRecorder()
+	s.handleBGPWatchlist(w, req("DELETE", "/api/bgp/watchlist?resource=AS3333", "", superA()))
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("cross DELETE: want 400, got %d: %s", w.Code, w.Body.String())
+	}
+	if len(db.tenants) != 0 {
+		t.Fatalf("refused cross-tenant write still reached the store: %v", db.tenants)
+	}
+
+	// The tenant switcher is the sanctioned path: the platform owner scoped
+	// into a concrete tenant (cross=false) writes into THAT tenant only.
+	scoped := superA()
+	scoped.ActingTenant = "acme"
+	w = httptest.NewRecorder()
+	s.handleBGPWatchlist(w, req("POST", "/api/bgp/watchlist", `{"resource":"AS3333"}`, scoped))
+	if w.Code != http.StatusOK {
+		t.Fatalf("owner scoped into acme: want 200, got %d: %s", w.Code, w.Body.String())
+	}
+	if len(db.tenants) != 1 || db.tenants[0] != "acme" || db.crosses[0] {
+		t.Fatalf("scoped write ran as (%v cross=%v), want (acme cross=false)", db.tenants, db.crosses)
+	}
+}
+
+// Delete carries an explicit tenant_id predicate bound to the principal's
+// tenant — defense-in-depth on top of RLS. Killing the predicate (the original
+// bug) fails this test.
+func TestBGPWatchlistDeleteIsTenantScopedSQL(t *testing.T) {
+	s, db := bgpWatchServer(t)
+	w := httptest.NewRecorder()
+	s.handleBGPWatchlist(w, req("DELETE", "/api/bgp/watchlist?resource=AS3333", "", acme()))
+	if w.Code != http.StatusOK {
+		t.Fatalf("acme DELETE own resource: want 200, got %d: %s", w.Code, w.Body.String())
+	}
+	if len(db.tenants) != 1 || db.tenants[0] != "acme" || db.crosses[0] {
+		t.Fatalf("delete ran as (%v cross=%v), want (acme cross=false)", db.tenants, db.crosses)
+	}
+	if len(db.tx.execs) != 1 {
+		t.Fatalf("want exactly 1 statement, got %d", len(db.tx.execs))
+	}
+	ex := db.tx.execs[0]
+	if !strings.Contains(ex.sql, "tenant_id = $1") {
+		t.Fatalf("DELETE lost its tenant predicate: %q", ex.sql)
+	}
+	if len(ex.args) != 2 || ex.args[0] != "acme" || ex.args[1] != "AS3333" {
+		t.Fatalf("DELETE args = %v, want [acme AS3333]", ex.args)
+	}
+}
+
+// Add stamps tenant_id from the PRINCIPAL as a bound parameter — never the
+// RLS GUC, never '*'.
+func TestBGPWatchlistAddStampsPrincipalTenantNeverWildcard(t *testing.T) {
+	s, db := bgpWatchServer(t)
+	w := httptest.NewRecorder()
+	s.handleBGPWatchlist(w, req("POST", "/api/bgp/watchlist", `{"resource":"AS3333","note":"peering"}`, acme()))
+	if w.Code != http.StatusOK {
+		t.Fatalf("acme POST: want 200, got %d: %s", w.Code, w.Body.String())
+	}
+	if len(db.tx.execs) != 1 {
+		t.Fatalf("want exactly 1 statement, got %d", len(db.tx.execs))
+	}
+	ex := db.tx.execs[0]
+	if strings.Contains(ex.sql, "current_setting") {
+		t.Fatalf("INSERT stamps tenant from the GUC again (can become '*'): %q", ex.sql)
+	}
+	if len(ex.args) == 0 || ex.args[0] != "acme" {
+		t.Fatalf("INSERT tenant arg = %v, want acme first", ex.args)
+	}
+	for _, a := range ex.args {
+		if a == "*" {
+			t.Fatalf("INSERT carries the cross-tenant wildcard: %v", ex.args)
+		}
+	}
+}
+
+// The store itself is fail-closed: no concrete tenant, no write (§3a) — even
+// if a future handler forgets the boundary check.
+func TestBGPWatchStoreRefusesWildcardOrEmptyTenant(t *testing.T) {
+	db := &bgpFakeDB{}
+	st := newBGPWatchStore(db)
+	ctx := context.Background()
+	for _, tenant := range []string{"", "  ", "*", " * "} {
+		if err := st.Add(ctx, tenant, bgpWatchEntry{Resource: "AS1", Kind: "asn"}); err == nil {
+			t.Errorf("Add(%q) accepted a non-concrete tenant", tenant)
+		}
+		if _, err := st.Delete(ctx, tenant, "AS1"); err == nil {
+			t.Errorf("Delete(%q) accepted a non-concrete tenant", tenant)
+		}
+	}
+	if len(db.tenants) != 0 {
+		t.Fatalf("refused writes still reached the DB: %v", db.tenants)
+	}
+}
+
+// ── rune-safe note truncation (ultra finding 1) ─────────────────────────────
+
+func TestTruncateUTF8(t *testing.T) {
+	cases := []struct{ in, want string }{
+		{strings.Repeat("a", 300), strings.Repeat("a", 300)},               // at the cap: untouched
+		{strings.Repeat("a", 301), strings.Repeat("a", 300)},               // ASCII overflow: plain cut
+		{strings.Repeat("a", 299) + "é", strings.Repeat("a", 299)},         // 2-byte rune straddles byte 300
+		{strings.Repeat("a", 298) + "€€", strings.Repeat("a", 298)},        // 3-byte rune straddles
+		{strings.Repeat("a", 299) + "🌍", strings.Repeat("a", 299)},         // 4-byte rune straddles
+		{strings.Repeat("a", 296) + "🌍", strings.Repeat("a", 296) + "🌍"},   // 4-byte rune ends exactly at 300
+		{"", ""},
+	}
+	for i, c := range cases {
+		got := truncateUTF8(c.in, bgpNoteMaxBytes)
+		if got != c.want {
+			t.Errorf("case %d: got %d bytes %q…, want %d bytes", i, len(got), got[:min(20, len(got))], len(c.want))
+		}
+		if !utf8.ValidString(got) {
+			t.Errorf("case %d: truncation produced invalid UTF-8", i)
+		}
+		if len(got) > bgpNoteMaxBytes {
+			t.Errorf("case %d: %d bytes exceeds the cap", i, len(got))
+		}
+	}
+}
+
+// End-to-end through the handler: a note whose multi-byte rune straddles byte
+// 300 must reach the store as valid UTF-8 (the old byte slice sent PG invalid
+// UTF-8 → SQLSTATE 22021 → 500 on a legitimate add).
+func TestBGPWatchlistNoteRuneStraddleInsertsValidUTF8(t *testing.T) {
+	s, db := bgpWatchServer(t)
+	note := strings.Repeat("a", 299) + "🌍"
+	body, err := json.Marshal(map[string]string{"resource": "AS3333", "note": note})
+	if err != nil {
+		t.Fatal(err)
+	}
+	w := httptest.NewRecorder()
+	s.handleBGPWatchlist(w, req("POST", "/api/bgp/watchlist", string(body), acme()))
+	if w.Code != http.StatusOK {
+		t.Fatalf("add with straddling note: want 200, got %d: %s", w.Code, w.Body.String())
+	}
+	if len(db.tx.execs) != 1 {
+		t.Fatalf("want exactly 1 statement, got %d", len(db.tx.execs))
+	}
+	stored, ok := db.tx.execs[0].args[3].(string) // (tenant, resource, kind, note, added_by)
+	if !ok {
+		t.Fatalf("note arg is %T, want string", db.tx.execs[0].args[3])
+	}
+	if !utf8.ValidString(stored) {
+		t.Fatal("stored note is invalid UTF-8 — truncation split a rune")
+	}
+	if len(stored) > bgpNoteMaxBytes {
+		t.Fatalf("stored note is %d bytes, cap is %d", len(stored), bgpNoteMaxBytes)
+	}
+	if stored != strings.Repeat("a", 299) {
+		t.Fatalf("stored note = %d bytes %q…, want the 299 a's", len(stored), stored[:min(20, len(stored))])
 	}
 }

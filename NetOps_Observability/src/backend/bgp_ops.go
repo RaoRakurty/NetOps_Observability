@@ -38,6 +38,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/jackc/pgx/v5"
 )
@@ -82,24 +83,51 @@ func (s *bgpWatchStore) List(ctx context.Context, tenant string, cross bool) ([]
 	return out, err
 }
 
-func (s *bgpWatchStore) Add(ctx context.Context, tenant string, cross bool, e bgpWatchEntry) error {
-	return s.db.WithTenant(ctx, tenant, cross, func(tx pgx.Tx) error {
-		// tenant_id comes from the RLS GUC via the DEFAULT + WITH CHECK pair;
-		// stamping it explicitly keeps the row honest under cross-tenant admins.
+// bgpWatchTenant validates a WRITE-side tenant scope (§3a): watchlist rows are
+// per-tenant data, so every mutation needs one concrete tenant — never empty,
+// never the '*' cross-tenant wildcard. Fail-closed at the store so no future
+// caller can reintroduce a wildcard write.
+func bgpWatchTenant(tenant string) (string, error) {
+	t := strings.ToLower(strings.TrimSpace(tenant))
+	if t == "" || t == "*" {
+		return "", errors.New("bgp watchlist: write requires a concrete tenant (cross-tenant writes are refused)")
+	}
+	return t, nil
+}
+
+// Add upserts a watchlist row for ONE tenant. Writes always run cross=false
+// (the RLS GUC is the concrete tenant, never '*'), and tenant_id is stamped
+// from the principal's tenant as a bound parameter — defense-in-depth alongside
+// the FORCE-RLS WITH CHECK, and structurally unable to stamp '*'.
+func (s *bgpWatchStore) Add(ctx context.Context, tenant string, e bgpWatchEntry) error {
+	t, err := bgpWatchTenant(tenant)
+	if err != nil {
+		return err
+	}
+	return s.db.WithTenant(ctx, t, false, func(tx pgx.Tx) error {
 		_, err := tx.Exec(ctx,
 			`INSERT INTO bgp_watchlist (tenant_id, resource, kind, note, added_by)
-			 VALUES (current_setting('app.tenant_id', true), $1, $2, $3, $4)
+			 VALUES ($1, $2, $3, $4, $5)
 			 ON CONFLICT (tenant_id, resource)
 			 DO UPDATE SET note = EXCLUDED.note`,
-			e.Resource, e.Kind, e.Note, e.AddedBy)
+			t, e.Resource, e.Kind, e.Note, e.AddedBy)
 		return err
 	})
 }
 
-func (s *bgpWatchStore) Delete(ctx context.Context, tenant string, cross bool, resource string) (bool, error) {
+// Delete removes ONE tenant's row for the resource. The explicit tenant_id
+// predicate sits ON TOP of RLS (cross=false GUC): even a mis-scoped session
+// can only ever delete the caller's own row, never every tenant's (§3a).
+func (s *bgpWatchStore) Delete(ctx context.Context, tenant string, resource string) (bool, error) {
+	t, err := bgpWatchTenant(tenant)
+	if err != nil {
+		return false, err
+	}
 	var found bool
-	err := s.db.WithTenant(ctx, tenant, cross, func(tx pgx.Tx) error {
-		tag, err := tx.Exec(ctx, `DELETE FROM bgp_watchlist WHERE resource = $1`, resource)
+	err = s.db.WithTenant(ctx, t, false, func(tx pgx.Tx) error {
+		tag, err := tx.Exec(ctx,
+			`DELETE FROM bgp_watchlist WHERE tenant_id = $1 AND resource = $2`,
+			t, resource)
 		if err != nil {
 			return err
 		}
@@ -107,6 +135,27 @@ func (s *bgpWatchStore) Delete(ctx context.Context, tenant string, cross bool, r
 		return nil
 	})
 	return found, err
+}
+
+// bgpNoteMaxBytes caps a watchlist note. The column is TEXT (unbounded), so
+// this is the API's own storage bound — measured in BYTES (the original
+// semantic of the cap), but always cut on a rune boundary: a multi-byte
+// character straddling the cap must shorten the note, never corrupt it.
+const bgpNoteMaxBytes = 300
+
+// truncateUTF8 returns s cut to at most max bytes WITHOUT splitting a rune.
+// A naive byte slice can bisect a multi-byte UTF-8 sequence, producing an
+// invalid string that PostgreSQL rejects (SQLSTATE 22021) — turning a
+// legitimate add into a 500.
+func truncateUTF8(s string, max int) string {
+	if len(s) <= max {
+		return s
+	}
+	cut := max
+	for cut > 0 && !utf8.RuneStart(s[cut]) {
+		cut--
+	}
+	return s[:cut]
 }
 
 // ── resource validation ─────────────────────────────────────────────────────
@@ -332,6 +381,14 @@ func (s *server) handleBGPWatchlist(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusServiceUnavailable, errors.New("BGP watchlist requires the relational store"))
 		return
 	}
+	// §3a: the watchlist is per-tenant data — a cross-tenant principal (platform
+	// owner in the Global view) must scope into a concrete tenant via the tenant
+	// switcher (X-Acting-Tenant / ?as_tenant=) before writing. Refused, never a
+	// wildcard write (the codebase's established shape: nms_http, ticketing_http).
+	if r.Method != http.MethodGet && (cross || tenant == "" || tenant == TenantGlobal) {
+		writeError(w, http.StatusBadRequest, errors.New("select a tenant to edit its watchlist (cross-tenant writes are refused)"))
+		return
+	}
 	switch r.Method {
 	case http.MethodGet:
 		list, err := s.bgpWatch.List(r.Context(), tenant, cross)
@@ -354,12 +411,9 @@ func (s *server) handleBGPWatchlist(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, errors.New("resource must be a prefix (203.0.113.0/24) or an ASN (AS64500)"))
 			return
 		}
-		note := req.Note
-		if len(note) > 300 {
-			note = note[:300]
-		}
+		note := truncateUTF8(req.Note, bgpNoteMaxBytes)
 		e := bgpWatchEntry{Resource: resource, Kind: kind, Note: note, AddedBy: claims.Sub}
-		if err := s.bgpWatch.Add(r.Context(), tenant, cross, e); err != nil {
+		if err := s.bgpWatch.Add(r.Context(), tenant, e); err != nil {
 			writeError(w, http.StatusInternalServerError, err)
 			return
 		}
@@ -370,7 +424,7 @@ func (s *server) handleBGPWatchlist(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, errors.New("resource query parameter required"))
 			return
 		}
-		found, err := s.bgpWatch.Delete(r.Context(), tenant, cross, resource)
+		found, err := s.bgpWatch.Delete(r.Context(), tenant, resource)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, err)
 			return
