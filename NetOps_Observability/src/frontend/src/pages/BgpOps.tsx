@@ -9,7 +9,7 @@
 // shape. Honest by construction: each panel fails independently and SAYS so
 // (never blank, never fabricated).
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   api, type BgpStatusResp, type BgpUpdatesResp, type BgpWatchEntry,
 } from "../services/api";
@@ -123,20 +123,30 @@ export default function BgpOps() {
   }, []);
   useEffect(loadWatch, [loadWatch]);
 
+  // Latest-wins guard: each investigation bumps the sequence, and every setter
+  // (including the secondary panel loads) checks it before touching state — a
+  // slow response from an earlier lookup must never overwrite the one the
+  // user asked for last. Same staleness discipline as the `cancelled`/`alive`
+  // flags the effect-driven pages use.
+  const investSeq = useRef(0);
+
   const investigate = useCallback((resource: string) => {
     const r = resource.trim();
     if (!r) return;
+    const seq = ++investSeq.current;
+    const fresh = () => seq === investSeq.current;
     setActive(r); setBusy(true); setErr(""); setStatus(null); setUpdates(null); setWhois(null);
     api.bgpStatus(r)
       .then((s) => {
+        if (!fresh()) return;
         setStatus(s);
         // Secondary panels load after the verdict — independent failures stay quiet
         // in the corner of their own panel, never on the page.
-        api.bgpUpdates(r, 8).then(setUpdates).catch(() => setUpdates(null));
-        api.bgpWhois(r).then((w) => setWhois(w.rdap)).catch(() => setWhois(null));
+        api.bgpUpdates(r, 8).then((u) => { if (fresh()) setUpdates(u); }).catch(() => { if (fresh()) setUpdates(null); });
+        api.bgpWhois(r).then((w) => { if (fresh()) setWhois(w.rdap); }).catch(() => { if (fresh()) setWhois(null); });
       })
-      .catch((e: Error) => setErr(e.message || "lookup failed"))
-      .finally(() => setBusy(false));
+      .catch((e: Error) => { if (fresh()) setErr(e.message || "lookup failed"); })
+      .finally(() => { if (fresh()) setBusy(false); });
   }, []);
 
   const rs = status?.routing_status;
@@ -213,12 +223,14 @@ export default function BgpOps() {
             <div style={{ marginTop: 8 }}>
               {watched ? (
                 <button className="btn-ghost" style={{ fontSize: 11 }}
-                  onClick={() => api.bgpWatchDelete(status.resource).then(loadWatch)}>
+                  onClick={() => api.bgpWatchDelete(status.resource).then(loadWatch)
+                    .catch((e: Error) => setErr(`Watchlist update failed: ${e.message || "error"}`))}>
                   <Icon name="check" size={12} /> Watching — remove
                 </button>
               ) : (
                 <button className="btn-ghost" style={{ fontSize: 11 }}
-                  onClick={() => api.bgpWatchAdd(status.resource).then(loadWatch)}>
+                  onClick={() => api.bgpWatchAdd(status.resource).then(loadWatch)
+                    .catch((e: Error) => setErr(`Watchlist update failed: ${e.message || "error"}`))}>
                   <Icon name="alerts" size={12} /> Watch this {status.kind === "asn" ? "ASN" : "prefix"}
                 </button>
               )}
