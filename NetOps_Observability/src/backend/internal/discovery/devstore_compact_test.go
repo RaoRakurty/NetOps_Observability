@@ -2,6 +2,7 @@ package discovery
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"sync"
@@ -49,6 +50,8 @@ func (c *fakeClock) advance(d time.Duration) {
 // this multiplied by the filesystem's 4 KiB block; bounding the record count
 // bounds both.
 func tombstoneBytes(kv *recKV, st *DevStore) (count, bytes int) {
+	kv.mu.Lock()
+	defer kv.mu.Unlock()
 	for key, b := range kv.m {
 		if strings.HasPrefix(key, st.suppressedPrefix()) {
 			count++
@@ -161,7 +164,7 @@ func TestDeletedDeviceDoesNotResurrectInsideTheHorizon(t *testing.T) {
 	if !st.IsSuppressed(id) {
 		t.Fatal("deleted device resurrected inside the retention horizon")
 	}
-	if _, ok := kv.m[st.suppressedKey(id)]; !ok {
+	if _, ok := kv.get(st.suppressedKey(id)); !ok {
 		t.Fatal("the suppression record was compacted inside its horizon")
 	}
 }
@@ -195,7 +198,7 @@ func TestActivelySuppressedTombstoneIsNeverCapEvicted(t *testing.T) {
 	if !st.IsSuppressed(live) {
 		t.Fatal("an actively-hit suppression was cap-evicted — a live source device would resurrect")
 	}
-	if _, ok := kv.m[st.suppressedKey(live)]; !ok {
+	if _, ok := kv.get(st.suppressedKey(live)); !ok {
 		t.Fatal("the live suppression's record was deleted from the backend")
 	}
 	if st.Tombstones().EvictedCap == 0 {
@@ -290,7 +293,7 @@ func TestCompactionDoesNotCrossTenants(t *testing.T) {
 		if !st.IsSuppressed(id) {
 			t.Fatalf("quiet tenant's suppression %q was evicted by another tenant's churn (§3a cross-tenant effect)", id)
 		}
-		if _, ok := kv.m[st.suppressedKey(id)]; !ok {
+		if _, ok := kv.get(st.suppressedKey(id)); !ok {
 			t.Fatalf("quiet tenant's record for %q was deleted from the backend", id)
 		}
 	}
@@ -461,4 +464,209 @@ func TestPollDoesNotResurrectACompactedFleetsSurvivor(t *testing.T) {
 	if got := st.Tombstones().Count; got > 150+defaultEvictBudget {
 		t.Fatalf("count = %d, unbounded despite compaction", got)
 	}
+}
+
+// ---- durable hit flush (ultra 9) -------------------------------------------
+//
+// The hole these pin: in-memory hits were made durable ONLY by
+// buildEvictQueueLocked, which is reached from load() (boot) and Remove-driven
+// compaction. A continuously-hit suppression in a deployment with NO further
+// deletes never persisted a single hit — a restart more than TTL after the
+// delete read durable lastActivity = deleted_at, classified the tombstone
+// expired, and boot-evicted it: the deleted device resurrected (F-69 again).
+
+// TestContinuouslyHitSuppressionSurvivesARestart is the ultra-9 regression: a
+// device is deleted ONCE, stays live on the network (every 5-min sweep hits the
+// tombstone), and nothing else is ever deleted — so the only durable path for
+// those hits is the periodic flush. A restart >TTL after the delete must not
+// evict the tombstone, and the poll path must not resurrect the device.
+//
+// The restart deliberately simulates a CRASH (no Close): the graceful-shutdown
+// flush must not be what saves us here, and the flusher is exercised through
+// its production trigger — hits crossing the TTL/4 deadline — never called
+// directly.
+//
+// MUTANT: remove the flush kick from IsSuppressed (or neuter flushDirtyHits)
+// and this fails at the HitsFlushed check, then at the resurrection check.
+func TestContinuouslyHitSuppressionSurvivesARestart(t *testing.T) {
+	clk := newFakeClock()
+	kv := newRecKV()
+	lim := TombstoneLimits{TTL: 24 * time.Hour, Max: 10000, Now: clk.now, HitObservationWindow: time.Minute}
+	st := NewDevStoreWithLimits("devices.json", kv, nil, lim)
+	t.Cleanup(st.Close)
+	const id = "netbox-dc1-fw01"
+	if err := st.RemoveOwned("t_a", id); err != nil {
+		t.Fatal(err)
+	}
+
+	// 30 h of 5-min sweeps — past the 24 h TTL — with ZERO deletes, so no
+	// Remove-driven compaction pass ever runs.
+	steps := int((30 * time.Hour) / (5 * time.Minute))
+	for i := 0; i < steps; i++ {
+		clk.advance(5 * time.Minute)
+		if !st.IsSuppressed(id) {
+			t.Fatalf("suppression lost while the process was up (sweep %d)", i)
+		}
+	}
+	// Deterministically wait for the flusher to land every kick sent above
+	// (the barrier drains a pending kick before acknowledging — no sleeping).
+	st.syncHitFlush()
+	if st.Tombstones().HitsFlushed == 0 {
+		t.Fatal("no hit was ever made durable — the periodic flush is not running (the ultra-9 defect)")
+	}
+
+	// Crash + restart: 31 h after the DELETE, 1 h after the last hit. Boot
+	// compaction reads only durable state; before ultra 9 that said
+	// lastActivity = deleted_at (31 h > TTL) and evicted the tombstone.
+	clk.advance(time.Hour)
+	st2 := NewDevStoreWithLimits("devices.json", kv, nil, lim)
+	t.Cleanup(st2.Close)
+	if err := st2.Unreadable(); err != nil {
+		t.Fatalf("reboot: %v", err)
+	}
+	if !st2.IsSuppressed(id) {
+		t.Fatal("a continuously-hit suppression was boot-evicted after a restart >TTL past its delete — the deleted device resurrects (ultra 9 / F-69)")
+	}
+	if _, ok := kv.get(st2.suppressedKey(id)); !ok {
+		t.Fatal("the suppression record is gone from the backend after the restart")
+	}
+	// End-to-end: the live source replays the device through the real poll
+	// path; it must stay deleted.
+	a := NewDiscoveryAggregator()
+	a.SetStore(st2)
+	src := &fakeSource{name: "netbox", devices: []models.Device{{ID: id, Name: "dc1-fw01", Address: "10.1.1.1", Source: "netbox"}}}
+	a.PollOnceForTest(context.Background(), src)
+	if _, ok := a.Get(id); ok {
+		t.Fatal("deleted device resurrected through the poll path after the restart")
+	}
+}
+
+// TestHitFlushIsDirtyOnlyAndDrainsPastTheChunkBound: one flush cycle writes
+// exactly the tombstones whose in-memory hit is newer than their record — not
+// the whole set — and a dirty set larger than one lock-hold chunk is drained
+// completely across chunks. A second pass over the now-clean set writes
+// nothing.
+func TestHitFlushIsDirtyOnlyAndDrainsPastTheChunkBound(t *testing.T) {
+	clk := newFakeClock()
+	kv := newRecKV()
+	lim := TombstoneLimits{TTL: 24 * time.Hour, Max: 10000, Now: clk.now, HitObservationWindow: time.Minute}
+	st := NewDevStoreWithLimits("devices.json", kv, nil, lim)
+	t.Cleanup(st.Close)
+	const total, dirty = hitFlushChunk + 144, hitFlushChunk + 44 // dirty spans >1 chunk
+	ids := make([]string, total)
+	for i := range ids {
+		ids[i] = fmt.Sprintf("hf-%04d", i)
+		if err := st.RemoveOwned("t_a", ids[i]); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Hit the dirty subset BEFORE the flush deadline: every hit stays
+	// in-memory only (no kick can fire yet).
+	clk.advance(time.Hour)
+	for _, id := range ids[:dirty] {
+		if !st.IsSuppressed(id) {
+			t.Fatal("setup: not suppressed")
+		}
+	}
+	savesBefore, _ := kv.counts()
+
+	// Cross the TTL/4 deadline; the next hit kicks the flusher.
+	clk.advance(6 * time.Hour)
+	if !st.IsSuppressed(ids[0]) {
+		t.Fatal("setup: not suppressed")
+	}
+	st.syncHitFlush()
+	savesAfter, _ := kv.counts()
+	if got := savesAfter - savesBefore; got != dirty {
+		t.Fatalf("flush wrote %d records, want exactly the %d dirty ones — not dirty-set-only, or the drain lost some past the %d-write chunk bound", got, dirty, hitFlushChunk)
+	}
+	if got := st.Tombstones().HitsFlushed; got != dirty {
+		t.Fatalf("hits_flushed = %d, want %d", got, dirty)
+	}
+
+	// The set is clean now: a full flush cycle over it must write nothing.
+	st.flushDirtyHits()
+	savesFinal, _ := kv.counts()
+	if savesFinal != savesAfter {
+		t.Fatalf("a flush over a clean set wrote %d records — dirty tracking is broken", savesFinal-savesAfter)
+	}
+}
+
+// TestIsSuppressedDoesNoBackendIO pins the property the whole design preserves
+// (and the reason the flush is a background concern at all): the poll path
+// calls IsSuppressed three times per reported device, and it must never touch
+// the backend — thousands of hits, zero backend operations.
+func TestIsSuppressedDoesNoBackendIO(t *testing.T) {
+	clk := newFakeClock()
+	kv := newRecKV()
+	st := NewDevStoreWithLimits("devices.json", kv, nil, TombstoneLimits{TTL: 24 * time.Hour, Now: clk.now})
+	t.Cleanup(st.Close)
+	if err := st.RemoveOwned("t_a", "polled"); err != nil {
+		t.Fatal(err)
+	}
+	savesBefore, deletesBefore := kv.counts()
+	// Inside the flush deadline, so not even an async kick can be pending:
+	// any op counted here was issued synchronously from the poll path.
+	for i := 0; i < 5000; i++ {
+		clk.advance(time.Second)
+		if !st.IsSuppressed("polled") {
+			t.Fatal("suppression lost")
+		}
+	}
+	saves, deletes := kv.counts()
+	if saves != savesBefore || deletes != deletesBefore {
+		t.Fatalf("IsSuppressed drove backend IO (saves +%d, deletes +%d) — the poll path must never do IO", saves-savesBefore, deletes-deletesBefore)
+	}
+}
+
+// TestCloseFlushesHitRecencyDurably: a graceful shutdown drains the last
+// un-persisted hit window, so restart staleness is zero — a hit recorded well
+// inside the flush deadline (no kick has fired) still survives a restart that
+// lands >TTL after the delete but <TTL after the hit.
+func TestCloseFlushesHitRecencyDurably(t *testing.T) {
+	clk := newFakeClock()
+	kv := newRecKV()
+	lim := TombstoneLimits{TTL: 24 * time.Hour, Now: clk.now}
+	st := NewDevStoreWithLimits("devices.json", kv, nil, lim)
+	if err := st.RemoveOwned("t_a", "kept"); err != nil {
+		t.Fatal(err)
+	}
+	// One hit 1 h in — far inside the TTL/4 deadline, so ONLY the shutdown
+	// flush can make it durable.
+	clk.advance(time.Hour)
+	if !st.IsSuppressed("kept") {
+		t.Fatal("setup: not suppressed")
+	}
+	hitAt := clk.now()
+	st.Close()
+	st.Close() // idempotent
+	b, ok := kv.get(st.suppressedKey("kept"))
+	if !ok {
+		t.Fatal("suppression record missing")
+	}
+	var rec tombstoneRecord
+	if err := json.Unmarshal(b, &rec); err != nil {
+		t.Fatal(err)
+	}
+	if !rec.LastHit.Equal(hitAt) {
+		t.Fatalf("last_hit = %v after Close, want the shutdown flush to have persisted %v", rec.LastHit, hitAt)
+	}
+
+	// Restart 24.5 h after the delete (evictable on deleted_at alone) but
+	// 23.5 h after the hit (inside the horizon): the flushed hit must win.
+	clk.advance(23*time.Hour + 30*time.Minute)
+	st2 := NewDevStoreWithLimits("devices.json", kv, nil, lim)
+	t.Cleanup(st2.Close)
+	if err := st2.Unreadable(); err != nil {
+		t.Fatalf("reboot: %v", err)
+	}
+	if !st2.IsSuppressed("kept") {
+		t.Fatal("a hit flushed at graceful shutdown did not survive the restart")
+	}
+
+	// Close is nil-safe and a no-op in whole-blob mode (no flusher there).
+	var nilStore *DevStore
+	nilStore.Close()
+	blob := NewDevStoreWithLimits("", kv, nil, lim) // path "" ⇒ whole-blob mode
+	blob.Close()
 }

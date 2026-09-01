@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -23,8 +24,11 @@ import (
 // tests.
 
 // recKV is an in-memory PrefixKV that counts operations and can inject
-// failures per key.
+// failures per key. Mutex-guarded because the store's background hit flusher
+// (ultra 9, devstore_compact.go) writes from its own goroutine; tests that can
+// run concurrently with it read through get/counts, never k.m directly.
 type recKV struct {
+	mu         sync.Mutex
 	m          map[string][]byte
 	saves      int
 	savedBytes int
@@ -39,6 +43,8 @@ func newRecKV() *recKV {
 }
 
 func (k *recKV) Load(key string) ([]byte, error) {
+	k.mu.Lock()
+	defer k.mu.Unlock()
 	b, ok := k.m[key]
 	if !ok {
 		// The Backend contract: absent key = os.ErrNotExist-wrapped.
@@ -48,6 +54,8 @@ func (k *recKV) Load(key string) ([]byte, error) {
 }
 
 func (k *recKV) Save(key string, data []byte) error {
+	k.mu.Lock()
+	defer k.mu.Unlock()
 	if err := k.failSave[key]; err != nil {
 		return err
 	}
@@ -60,6 +68,8 @@ func (k *recKV) Save(key string, data []byte) error {
 }
 
 func (k *recKV) LoadPrefix(prefix string) (map[string][]byte, error) {
+	k.mu.Lock()
+	defer k.mu.Unlock()
 	if k.prefixErr != nil {
 		return nil, k.prefixErr
 	}
@@ -73,12 +83,30 @@ func (k *recKV) LoadPrefix(prefix string) (map[string][]byte, error) {
 }
 
 func (k *recKV) Delete(key string) error {
+	k.mu.Lock()
+	defer k.mu.Unlock()
 	if err := k.failDelete[key]; err != nil {
 		return err
 	}
 	k.deletes++
 	delete(k.m, key)
 	return nil
+}
+
+// get is the locked read for tests that inspect the backend while the store's
+// background hit flusher may be live.
+func (k *recKV) get(key string) ([]byte, bool) {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	b, ok := k.m[key]
+	return b, ok
+}
+
+// counts reads the operation counters under the lock.
+func (k *recKV) counts() (saves, deletes int) {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	return k.saves, k.deletes
 }
 
 // TestPerDevicePutWritesO1Records is the linearity proof: the N-th Put writes
@@ -219,7 +247,7 @@ func TestLegacyBlobMigratesToPerRecordStore(t *testing.T) {
 func TestMigrationCrashRerunsIdempotently(t *testing.T) {
 	kv := newRecKV()
 	legacy := devPersistFile{
-		Manual:     map[string]models.Device{"r1": {ID: "r1", Name: "r1", Source: "manual"}},
+		Manual: map[string]models.Device{"r1": {ID: "r1", Name: "r1", Source: "manual"}},
 		// Recent for the same reason as above (tracker 175 retention).
 		Suppressed: map[string]time.Time{"gone1": time.Now().UTC().Add(-time.Hour)},
 	}

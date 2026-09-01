@@ -124,6 +124,20 @@ type DevStore struct {
 	// resurrected deliberately-deleted devices and the first write flushed the
 	// empty maps over the survivors (§10).
 	loadErr error
+	// Durable-hit flush machinery (ultra 9 — see the "DURABLE HIT FLUSH"
+	// section of devstore_compact.go). Per-record mode only: flushKick == nil
+	// in whole-blob mode, whose record format carries no last_hit to persist.
+	// hitFlushEvery/hitFlushDue are the injected-clock cadence a hit uses to
+	// kick the background flusher; stopFlush/flushDone bracket its lifetime;
+	// hitsFlushed (guarded by mu) is the §10 counter.
+	hitFlushEvery time.Duration
+	hitFlushDue   atomic.Int64
+	flushKick     chan struct{}
+	flushSync     chan chan struct{}
+	stopFlush     chan struct{}
+	flushDone     chan struct{}
+	closeOnce     sync.Once
+	hitsFlushed   int
 }
 
 // devPersistFile is the legacy whole-blob shape (still written in fallback
@@ -160,9 +174,10 @@ type tombstoneRecord struct {
 // lastHit is an atomic unix-nano so IsSuppressed can record a hit while holding
 // only the READ lock — the poll path calls it three times per reported device
 // and must not serialize on the store's write lock. Every other field is
-// immutable after construction except hitSaved, which only compaction touches
-// under the write lock. A re-Remove of the same id installs a NEW *tombstone
-// rather than mutating this one, so no field is ever written concurrently.
+// immutable after construction except hitSaved, which only compaction and the
+// background hit flusher touch under the write lock. A re-Remove of the same id
+// installs a NEW *tombstone rather than mutating this one, so no field is ever
+// written concurrently.
 type tombstone struct {
 	tenant    string
 	deletedAt time.Time
@@ -235,6 +250,22 @@ func NewDevStoreWithLimits(path string, kv KV, errf func(component, msg string, 
 	if err != nil {
 		s.loadErr = err
 		s.errf("devices", "device store unreadable at boot — deleted devices may reappear and writes are refused until it is repaired", map[string]any{"error": err.Error()})
+	}
+	if s.pkv != nil {
+		// Ultra 9: start the background durable-hit flusher (per-record mode
+		// only — the blob format has no last_hit field). Started AFTER the load
+		// so the maps are fully built before another goroutine can see them.
+		// The wall-clock ticker is the safety net for a deployment whose hits
+		// stop arriving; the routine cadence is hit-driven (IsSuppressed kicks
+		// on the injected clock), so tests never depend on real time. Stopped
+		// (with a final flush) by Close.
+		s.hitFlushEvery = s.lim.hitFlushInterval()
+		s.hitFlushDue.Store(s.bootAt.Add(s.hitFlushEvery).UnixNano())
+		s.flushKick = make(chan struct{}, 1)
+		s.flushSync = make(chan chan struct{})
+		s.stopFlush = make(chan struct{})
+		s.flushDone = make(chan struct{})
+		go s.hitFlushLoop(time.NewTicker(s.hitFlushEvery))
 	}
 	return s
 }
@@ -664,6 +695,20 @@ func (s *DevStore) IsSuppressed(id string) bool {
 	// measured from it (tracker 175, devstore_compact.go). Recorded atomically
 	// under the READ lock — this is the poll path (three calls per reported
 	// device) and must not serialize on the write lock, and must not do IO.
-	ts.lastHit.Store(s.lim.Now().UnixNano())
+	now := s.lim.Now()
+	ts.lastHit.Store(now.UnixNano())
+	// Still no IO, ever (ultra 9): when a durable-hit flush has come due, hand
+	// the work to the background flusher — one atomic CAS (so exactly one
+	// caller per deadline wins) plus a non-blocking send. The poll path never
+	// blocks and never touches the backend.
+	if s.flushKick != nil {
+		if due := s.hitFlushDue.Load(); now.UnixNano() >= due &&
+			s.hitFlushDue.CompareAndSwap(due, now.Add(s.hitFlushEvery).UnixNano()) {
+			select {
+			case s.flushKick <- struct{}{}:
+			default:
+			}
+		}
+	}
 	return true
 }
