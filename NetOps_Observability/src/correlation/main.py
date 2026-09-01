@@ -110,6 +110,7 @@ from evidence_plane import (
     EVIDENCE_CLASS_HEARTBEAT,
     EVIDENCE_CLASS_TERMINAL,
     EvidenceItem,
+    EvidencePutAborted,
     EvidenceQueue,
     RowBatcher,
     estimate_bytes,
@@ -2833,6 +2834,14 @@ CORR_EVIDENCE_DRAIN_ON_STOP_S = max(0.0, float(
 # deadline (the hold is honoured until released).
 CORR_EVIDENCE_HOLD_MAX_S = max(0.0, float(
     os.environ.get("CORR_EVIDENCE_HOLD_MAX_S", "5")))
+# Ultra #15: how often a put PARKED on a full queue re-checks that the consumer
+# meant to make room is still alive. Under a healthy consumer this changes
+# nothing observable — the put still blocks, lossless, until room appears
+# (owner memo §22); it is purely the bound on how long the Decision plane can
+# stay parked against a consumer that no longer exists (the death callback
+# wakes waiters immediately; this is the belt for a lost wake-up).
+CORR_EVIDENCE_PUT_RECHECK_S = max(0.05, float(
+    os.environ.get("CORR_EVIDENCE_PUT_RECHECK_S", "1.0")))
 
 # ── P2 step 4c: CROSS-VERSION EVIDENCE BATCHING ──────────────────────────────
 # Measured brief: docs/scale/P2_CLICKHOUSE_MEMFLAT_2026-08-29.md §3(a).
@@ -4693,6 +4702,11 @@ async def _decision_offload(size: int, fn, /, *args, **kwargs):
 
 ARCHIVE_ROWS_WRITTEN = 0     # archive rows actually inserted (monotonic)
 ARCHIVE_SLICES_DAMPED = 0    # re-persists whose slice membership was unchanged
+# Ultra #16: optimistic damping records reverted because their slice never
+# landed (failed OR lost). Every occurrence names, loudly, the gap that used to
+# be silent: a later unchanged-membership version damped against a slice that
+# does not exist.
+ARCHIVE_SLICE_REVERTS = 0
 # Tracker 156 v2 observability: rows per archived slice. Settles the open
 # 8.5k-vs-38k measurement question from the redesign doc §1, and is the
 # write-amplification regression signal — component-sized slices must track
@@ -4700,6 +4714,51 @@ ARCHIVE_SLICES_DAMPED = 0    # re-persists whose slice membership was unchanged
 ARCHIVE_SLICE_ROWS_LAST = 0
 ARCHIVE_SLICE_ROWS_MAX = 0
 _ARCHIVE_SLICE_HASH: dict[str, str] = {}  # cid → last successfully archived slice id-hash
+
+
+def _archive_slice_revert(item: EvidenceItem, why: str) -> None:
+    """Ultra #16: revert the OPTIMISTIC damping record for a slice that will
+    never land.
+
+    The membership hash is recorded on the Decision path BEFORE the rows land
+    (`_persist_snapshot` — it has to be: the next version's damping decision
+    cannot wait for a deferred write). The original design reverted it only on
+    the FAILED paths; every LOST path (consumer cancelled or killed mid-write,
+    stranded-queue replacement, shutdown loss) left the record standing, so
+    every later unchanged-membership version was silently damped against a
+    slice that never existed and replay resolved to an older slice — or none —
+    until the membership changed. ALL loss/failure paths now come through here.
+
+    Guarded twice:
+      * `slice_sigs` — only an item that actually CARRIED the slice write may
+        revert; a damped / no-slice item's hash names an earlier, landed slice.
+      * identity — a later version's successful record is never clobbered by an
+        earlier version's failure draining out of order (spec §12.1, unchanged).
+
+    Deliberately NO startup/periodic assertion behind this: each revert runs
+    synchronously inside the same frame that accounts the failure or loss, on
+    the loop the damping decisions run on, so after it returns a recorded hash
+    always refers to a slice that is landed, queued or in flight — and the
+    queued/in-flight ones either land or come back through here. A sweeper
+    could not tell "in flight" from "lost without revert" without a second
+    landed-state ledger per object, whose own failure modes are a bigger
+    surface than the gap it would guard; the counter + warning ARE the
+    detection, and the damage window they bound is the same one the FAILED
+    paths always had — the next persist of the object re-writes the slice.
+    """
+    global ARCHIVE_SLICE_REVERTS
+    if not item.slice_sigs or not item.slice_hash:
+        return
+    if _ARCHIVE_SLICE_HASH.get(item.correlation_id) != item.slice_hash:
+        return
+    _ARCHIVE_SLICE_HASH.pop(item.correlation_id, None)
+    ARCHIVE_SLICE_REVERTS += 1
+    log.warning(
+        "archive slice damping record REVERTED (%s) corr_id=%s version=%d — "
+        "the slice never landed; later unchanged-membership versions will "
+        "re-archive instead of damping against a slice that does not exist "
+        "(archive_slice_reverts_total=%d)",
+        why, item.correlation_id, item.version, ARCHIVE_SLICE_REVERTS)
 
 
 @dataclass(frozen=True)
@@ -5374,7 +5433,7 @@ async def _persist_snapshot(snap: ObjectSnapshot, version: int, state: str,
         # investigation at the wrong function. `persist.backpressure_wait` is
         # the Evidence plane's back-pressure on the Decision plane, named.
         with stage("persist.backpressure_wait"):
-            await queue.put(item)
+            await _evidence_put(queue, item, loop_yield)
     else:
         await _write_evidence(item, loop_yield)
     log.info("corr-object %s v%d %s: top=%s tier=%s nodes=%d edges=%d",
@@ -5484,11 +5543,11 @@ async def _write_evidence_inner(item: EvidenceItem, loop_yield, emit) -> bool:
     # persist of this object. Today that is expressed by not recording the
     # membership hash; the record is now made optimistically on the Decision path
     # (it has to be — the next version's damping decision cannot wait for this
-    # write), so the same rule is expressed as a REVERT. Guarded on identity so a
-    # later version's successful record is never clobbered by an earlier
-    # version's failure draining out of order.
-    if not all_ok and _ARCHIVE_SLICE_HASH.get(snap.correlation_id) == item.slice_hash:
-        _ARCHIVE_SLICE_HASH.pop(snap.correlation_id, None)
+    # write), so the same rule is expressed as a REVERT — through the one shared
+    # helper (ultra #16) so failed and lost slices are reverted, counted and
+    # logged identically, with the identity guard stated there.
+    if not all_ok:
+        _archive_slice_revert(item, "archive write failed")
     return all_ok
 
 
@@ -5525,6 +5584,13 @@ _EVIDENCE_FLUSHER: asyncio.Task | None = None
 EVIDENCE_ITEMS_MATERIALIZED = 0
 EVIDENCE_ITEMS_FAILED = 0
 EVIDENCE_ITEMS_LOST = 0
+# Ultra #15: consumer tasks restarted on the SAME loop and queue after dying.
+# A death is a DEFECT (its traceback is logged by the done-callback); revival
+# is the containment that keeps the backlog serviceable and the engine unparked.
+EVIDENCE_CONSUMER_REVIVED = 0
+# Ultra #17: rows a dead loop's batcher had buffered but never flushed, counted
+# when the plane is replaced — the loss that used to vanish in a `.clear()`.
+EVIDENCE_BATCH_ROWS_ABANDONED = 0
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -5608,9 +5674,8 @@ def _ev_settle(pend: _EvidencePending) -> None:
     global EVIDENCE_ITEMS_MATERIALIZED, EVIDENCE_ITEMS_FAILED
     item = pend.item
     _EVIDENCE_PENDING.pop(id(item), None)
-    if (_ARCHIVE_TABLE in pend.failed_tables
-            and _ARCHIVE_SLICE_HASH.get(item.correlation_id) == item.slice_hash):
-        _ARCHIVE_SLICE_HASH.pop(item.correlation_id, None)
+    if _ARCHIVE_TABLE in pend.failed_tables:
+        _archive_slice_revert(item, "batched archive block failed")
     queue = _EVIDENCE_QUEUE
     if queue is not None:
         # T7 is "verdict -> materialized graph", so it is measured when the rows
@@ -5801,6 +5866,88 @@ def _active_evidence_queue() -> EvidenceQueue | None:
     return _EVIDENCE_QUEUE
 
 
+def _evidence_consumer_gone() -> bool:
+    """Ultra #15: the liveness predicate a parked put re-checks. True the
+    moment the consumer task cannot make room any more, however it ended."""
+    return _EVIDENCE_TASK is None or _EVIDENCE_TASK.done()
+
+
+def _evidence_task_done(task: asyncio.Task) -> None:
+    """Ultra #15(a): the consumer task's done-callback — ANY termination wakes
+    the queue's waiters, so a Decision-plane put parked on a full queue
+    re-checks liveness NOW instead of never (the engine coroutine that would
+    have called `_evidence_ensure_consumer` is exactly the one parked).
+
+    Revival itself happens on the put path / next `engine_cycle`, NOT here: at
+    shutdown `_evidence_stop` cancels this task, and a callback that restarted
+    the consumer would fight the teardown that is awaiting it. Waking waiters
+    is always safe; starting tasks is not.
+    """
+    if task is not _EVIDENCE_TASK:
+        return                      # a replaced plane's stale callback
+    if task.cancelled():
+        # Normal at shutdown/replacement; the cancel initiator does its own
+        # accounting. INFO, not a defect.
+        log.info("evidence consumer task cancelled")
+    else:
+        exc = task.exception()
+        if exc is not None:
+            log.error(
+                "evidence consumer task DIED: %r — queue waiters are being "
+                "woken and the next persist/cycle revives it "
+                "(corr_evidence_consumer_revived_total)", exc, exc_info=exc)
+        else:
+            log.error("evidence consumer task RETURNED — unreachable by "
+                      "design (its loop is `while True`); treating as death, "
+                      "waiters woken, next persist revives it")
+    queue = _EVIDENCE_QUEUE
+    if queue is not None:
+        # The loop may already be closing (asyncio.run teardown). Nothing is
+        # lost if the wake cannot be scheduled: every parked put also re-checks
+        # liveness on CORR_EVIDENCE_PUT_RECHECK_S, and a closing loop has no
+        # parked put to wake.
+        with contextlib.suppress(RuntimeError):
+            task.get_loop().create_task(queue.wake())
+
+
+async def _evidence_put(queue: EvidenceQueue, item: EvidenceItem,
+                        loop_yield=_noop_yield) -> None:
+    """Ultra #15(b): the Decision plane's put — backpressure-faithful under a
+    healthy consumer, never parked past a dead one.
+
+    THE WAKE MECHANISM, end to end: the consumer task carries a done-callback
+    (`_evidence_task_done`) that fires on ANY termination — cancellation,
+    Exception, MemoryError-class BaseException — and wakes every waiter on the
+    queue's condition. A put parked inside `queue.put` re-checks the
+    `_evidence_consumer_gone` predicate on every wake AND on a
+    CORR_EVIDENCE_PUT_RECHECK_S timeout (the belt for a lost wake-up), and
+    escapes with `EvidencePutAborted` instead of waiting on a consumer that no
+    longer exists. This wrapper then revives the plane
+    (`_evidence_ensure_consumer` — same loop ⇒ same queue, same backlog,
+    nothing stranded) and retries the put against whatever queue is now live;
+    if the plane cannot come back on this loop, the item is written INLINE,
+    which is always correct and never lossy.
+
+    Under a healthy consumer nothing observable changes: the put blocks,
+    lossless, until the consumer makes room — exactly the owner-memo §22
+    contract — and `backpressure_total` still counts one per put that waited.
+    """
+    while True:
+        try:
+            await queue.put(item, abort=_evidence_consumer_gone,
+                            recheck_s=CORR_EVIDENCE_PUT_RECHECK_S)
+            return
+        except EvidencePutAborted:
+            _evidence_ensure_consumer()
+            live = _active_evidence_queue()
+            if live is None:
+                # The plane cannot come back here (flag flipped off, or no
+                # revivable loop): inline is the documented always-correct path.
+                await _write_evidence(item, loop_yield)
+                return
+            queue = live
+
+
 def _evidence_ensure_consumer() -> EvidenceQueue | None:
     """Start (or adopt) the Evidence consumer for the RUNNING loop.
 
@@ -5815,7 +5962,8 @@ def _evidence_ensure_consumer() -> EvidenceQueue | None:
     rather than carried silently into the new one.
     """
     global _EVIDENCE_QUEUE, _EVIDENCE_TASK, _EVIDENCE_LOOP, EVIDENCE_ITEMS_LOST
-    global _EVIDENCE_BATCHER, _EVIDENCE_FLUSHER
+    global _EVIDENCE_BATCHER, _EVIDENCE_FLUSHER, EVIDENCE_CONSUMER_REVIVED
+    global EVIDENCE_BATCH_ROWS_ABANDONED
     if not CORR_EVIDENCE_ASYNC:
         return None
     try:
@@ -5825,6 +5973,35 @@ def _evidence_ensure_consumer() -> EvidenceQueue | None:
     if (_EVIDENCE_TASK is not None and _EVIDENCE_LOOP is loop
             and not _EVIDENCE_TASK.done()):
         return _EVIDENCE_QUEUE
+    if (_EVIDENCE_QUEUE is not None and _EVIDENCE_LOOP is loop
+            and _EVIDENCE_TASK is not None and _EVIDENCE_TASK.done()):
+        # ── REVIVAL (ultra #15). The LOOP is alive, so the queue, the batcher
+        # and every queued item are still serviceable — only the consumer TASK
+        # died (a defect; its done-callback logged the traceback). Replacing
+        # the plane here would strand the whole backlog as "lost"; a new task
+        # on the SAME queue loses nothing. Counted, because a revival happening
+        # at all means a defect fired in production.
+        EVIDENCE_CONSUMER_REVIVED += 1
+        log.error(
+            "evidence consumer REVIVED on its own loop (queue kept: depth=%d, "
+            "nothing stranded) — a consumer that died is a DEFECT, read the "
+            "traceback above (consumer_revived_total=%d)",
+            _EVIDENCE_QUEUE.qsize(), EVIDENCE_CONSUMER_REVIVED)
+        _EVIDENCE_TASK = loop.create_task(_evidence_consumer(_EVIDENCE_QUEUE))
+        _EVIDENCE_TASK.add_done_callback(_evidence_task_done)
+        if _EVIDENCE_BATCHER is not None and (
+                _EVIDENCE_FLUSHER is None or _EVIDENCE_FLUSHER.done()):
+            # The flusher can die the same way; a buffered block with no
+            # flusher would never age out (ultra #17's "flush if safe" is this
+            # branch — same loop, so the buffers stay and keep flushing).
+            _EVIDENCE_FLUSHER = loop.create_task(
+                _evidence_flusher(_EVIDENCE_BATCHER))
+        return _EVIDENCE_QUEUE
+    # ── REPLACEMENT: first start, or the previous plane's event loop is gone
+    # (every `asyncio.run` is its own loop). Nothing bound to a dead loop can
+    # drain, flush or settle, so everything it still held is accounted as LOST
+    # — items in the queue, items begun but never settled, and rows buffered in
+    # the batcher — before any of it is dropped. Never silent (§10).
     if _EVIDENCE_QUEUE is not None and _EVIDENCE_QUEUE.qsize():
         stranded = _EVIDENCE_QUEUE.pending()
         EVIDENCE_ITEMS_LOST += len(stranded)
@@ -5838,6 +6015,32 @@ def _evidence_ensure_consumer() -> EvidenceQueue | None:
         for it in stranded:
             log.info("evidence LOST (stranded queue) corr_id=%s version=%d state=%s",
                      it.correlation_id, it.version, it.state)
+            # Ultra #16: a stranded item's slice will never land; without the
+            # revert the next unchanged-membership version damps against it.
+            _archive_slice_revert(it, "stranded queue")
+    for pend in list(_EVIDENCE_PENDING.values()):
+        # Ultra #17: an item the dead loop's consumer had begun but whose
+        # blocks never settled. Its outcome would otherwise be counted nowhere.
+        EVIDENCE_ITEMS_LOST += 1
+        log.info("evidence LOST (unsettled on a dead loop) corr_id=%s "
+                 "version=%d state=%s", pend.item.correlation_id,
+                 pend.item.version, pend.item.state)
+        _archive_slice_revert(pend.item, "unsettled on a dead loop")
+    if _EVIDENCE_BATCHER is not None:
+        # Ultra #17: the old batcher's unflushed buffers. They CANNOT be
+        # flushed from here — this function is synchronous and the batcher's
+        # lock, flusher and write tasks all belong to the dead loop — so the
+        # loss is counted per table with the member tokens that name the rows,
+        # instead of vanishing in the rebuild.
+        for _tbl, _rows, _keys, _members in _EVIDENCE_BATCHER.abandon():
+            EVIDENCE_BATCH_ROWS_ABANDONED += len(_rows)
+            log.warning(
+                "evidence batch buffer ABANDONED table=%s rows=%d members=%d "
+                "— its flusher's event loop is gone and the rows never "
+                "reached ClickHouse (batch_rows_abandoned_total=%d) "
+                "member_tokens=%s",
+                _tbl, len(_rows), len(_members),
+                EVIDENCE_BATCH_ROWS_ABANDONED, " ".join(_keys))
     if _EVIDENCE_FLUSHER is not None and not _EVIDENCE_FLUSHER.done():
         # Belongs to the loop we are replacing; it can never flush again.
         with contextlib.suppress(Exception):
@@ -5847,6 +6050,7 @@ def _evidence_ensure_consumer() -> EvidenceQueue | None:
                                     hold_max_s=CORR_EVIDENCE_HOLD_MAX_S)
     _EVIDENCE_LOOP = loop
     _EVIDENCE_TASK = loop.create_task(_evidence_consumer(_EVIDENCE_QUEUE))
+    _EVIDENCE_TASK.add_done_callback(_evidence_task_done)
     # The batcher and its flusher are bound to the SAME loop for the same
     # reason the queue is: a partial block whose flusher belongs to a dead loop
     # would never be written. Rebuilt with the consumer, never carried over.
@@ -5894,6 +6098,9 @@ async def _evidence_consumer(queue: EvidenceQueue) -> None:
             # will still be written; the ITEM is lost because its write did not
             # complete, and it must not also be settled by that block.
             _EVIDENCE_PENDING.pop(id(item), None)
+            # Ultra #16: a slice interrupted mid-write is at best PARTIAL and
+            # must be retried whole by the next persist of this object.
+            _archive_slice_revert(item, "consumer cancelled mid-write")
             log.info("evidence LOST (consumer cancelled mid-write) corr_id=%s "
                      "version=%d state=%s", item.correlation_id, item.version,
                      item.state)
@@ -5908,6 +6115,23 @@ async def _evidence_consumer(queue: EvidenceQueue) -> None:
                 "(evidence_items_failed_total=%d)",
                 item.correlation_id, item.version, item.state, item.tenant_id,
                 EVIDENCE_ITEMS_FAILED + 1)
+        except BaseException:
+            # Ultra #15: a non-Exception escape (a MemoryError raised inside
+            # the handler above, KeyboardInterrupt, any future BaseException)
+            # kills this task. Revival is the done-callback's + put path's job;
+            # THIS handler's job is the item in hand — counted lost, its
+            # damping record reverted (ultra #16), the queue's inflight
+            # balanced so `evidence_drain`/`idle()` stay truthful for the
+            # revived consumer. Then re-raise: a dying task must die loudly.
+            EVIDENCE_ITEMS_LOST += 1
+            _EVIDENCE_PENDING.pop(id(item), None)
+            _archive_slice_revert(item, "consumer died mid-write")
+            log.error("evidence LOST (consumer DIED mid-write) corr_id=%s "
+                      "version=%d state=%s — the consumer task is ending; the "
+                      "next persist/cycle revives it", item.correlation_id,
+                      item.version, item.state)
+            queue.done()
+            raise
         if batcher is not None:
             _ev_finished(item, ok)
             queue.done()
@@ -6007,6 +6231,10 @@ async def _evidence_stop() -> None:
             await flusher
     for item in queue.pending():
         EVIDENCE_ITEMS_LOST += 1
+        # Ultra #16: matters beyond this process's last breath — an in-process
+        # restart (every test, tools that stop and re-start the plane) keeps
+        # the module-level damping map alive across `_evidence_stop`.
+        _archive_slice_revert(item, "lost at shutdown")
         log.info("evidence LOST at shutdown corr_id=%s version=%d state=%s "
                  "tenant_id=%s queued_for=%.1fs",
                  item.correlation_id, item.version, item.state, item.tenant_id,
@@ -6036,6 +6264,11 @@ def evidence_stats() -> dict[str, object]:
         "materialized_total": EVIDENCE_ITEMS_MATERIALIZED,
         "failed_total": EVIDENCE_ITEMS_FAILED,
         "lost_total": EVIDENCE_ITEMS_LOST,
+        # Ultra #15/#17. Both must stay 0: a revival means the consumer died (a
+        # defect, contained), an abandoned row means a dead loop's batcher held
+        # rows nothing could ever flush (counted, never silent).
+        "consumer_revived_total": EVIDENCE_CONSUMER_REVIVED,
+        "batch_rows_abandoned_total": EVIDENCE_BATCH_ROWS_ABANDONED,
         "drain_on_stop_s": CORR_EVIDENCE_DRAIN_ON_STOP_S,
         # P2 step 4c. Zeros (never absent keys) when batching is off, for the
         # same reason as everything above it: a key that appears and disappears
@@ -6125,6 +6358,11 @@ LIFECYCLE_SEEN_WINDOW_IDS = 0        # ids in the union at the last pass (gauge)
 LIFECYCLE_MERGE_SURVIVORS_LAST = 0
 LIFECYCLE_MERGE_CANDIDATES_LAST = 0
 LIFECYCLE_MERGE_CHAINS_SKIPPED_TOTAL = 0
+# Ultra #19: lifecycle loop entries skipped because a rebalance callback
+# (`_forget_object`) released the object during one of the pass's awaits. A
+# skip is the CORRECT outcome (the object is gone, there is nothing to close);
+# what this counts is how often the race actually fires.
+LIFECYCLE_FORGOTTEN_SKIPPED_TOTAL = 0
 # The two numbers that would have NAMED the storm-s02 stall on the first read:
 # how many (survivor, candidate) pairs the exact predicate was actually handed,
 # and how long the merge computation took. A pair count that tracks
@@ -6246,6 +6484,7 @@ async def _epoch_lifecycle(epoch: _EngineEpoch, loop_yield,
     """
     global LIFECYCLE_PASSES_TOTAL, VERSIONS_PERSISTED
     global LIFECYCLE_SEEN_WINDOW_COHORTS, LIFECYCLE_SEEN_WINDOW_IDS
+    global LIFECYCLE_FORGOTTEN_SKIPPED_TOTAL
     LIFECYCLE_PASSES_TOTAL += 1
     now = epoch.now
     # `seen` — what quiesce and the 163 cap read — is the EPOCH's set, exactly
@@ -6352,7 +6591,11 @@ async def _epoch_lifecycle(epoch: _EngineEpoch, loop_yield,
                  merged_cid[:8], survivor_cid[:8])
         _merged_away.add(merged_cid)
         _adopted.add(survivor_cid)
-        del OPEN_OBJECTS[merged_cid]
+        # `.pop`, not `del`: this loop already tolerates a concurrent forget at
+        # its head (`.get` above), but the persist it just awaited is the same
+        # window ultra #19 closes in the quiesce/cap loops — a forgotten cid
+        # here must not KeyError the rest of the merge pass.
+        OPEN_OBJECTS.pop(merged_cid, None)
         _ARCHIVE_SLICE_HASH.pop(merged_cid, None)
 
     # Quiesce: an object whose component no longer materializes (episodes aged
@@ -6375,7 +6618,16 @@ async def _epoch_lifecycle(epoch: _EngineEpoch, loop_yield,
     _t_quiesce = time.perf_counter() if CORR_PROFILE_STAGES else 0.0
     for cid in list(OPEN_OBJECTS):
         await loop_yield()  # this loop is O(open objects) — bound the grind
-        reg = OPEN_OBJECTS[cid]
+        reg = OPEN_OBJECTS.get(cid)
+        if reg is None:
+            # Ultra #19: a rebalance callback (`_forget_object`) released this
+            # object during an await of this pass (the yield above, or an
+            # earlier iteration's persist). Indexing would KeyError and abort
+            # the WHOLE pass — every remaining close this epoch — so skip it
+            # exactly as the merge loop's `.get` already does. Counted, and the
+            # skip is correct: the object is gone, there is nothing to close.
+            LIFECYCLE_FORGOTTEN_SKIPPED_TOTAL += 1
+            continue
         if cid in seen:
             continue
         if (now - reg["last_seen"]).total_seconds() >= CORR_QUIESCE_S:
@@ -6402,7 +6654,9 @@ async def _epoch_lifecycle(epoch: _EngineEpoch, loop_yield,
                                     loop_yield=loop_yield,
                                     priority_class=EVIDENCE_CLASS_TERMINAL,
                                     affected=await _affected_final(reg, reg["snapshot"]))
-            del OPEN_OBJECTS[cid]
+            # `.pop`, not `del`: a rebalance may have forgotten the object
+            # while the persist awaited (ultra #19).
+            OPEN_OBJECTS.pop(cid, None)
             _ARCHIVE_SLICE_HASH.pop(cid, None)
     if CORR_PROFILE_STAGES and _t_quiesce:
         stage_record("lifecycle.quiesce", time.perf_counter() - _t_quiesce)
@@ -6427,7 +6681,13 @@ async def _epoch_lifecycle(epoch: _EngineEpoch, loop_yield,
                 key=lambda c: (OPEN_OBJECTS[c]["last_seen"], c))[:excess]
         for cid in victims:
             await loop_yield()  # eviction can span thousands under a storm
-            reg = OPEN_OBJECTS[cid]
+            reg = OPEN_OBJECTS.get(cid)
+            if reg is None:
+                # Ultra #19 — same race, same rule as the quiesce loop above:
+                # `victims` was snapshotted before this loop's awaits, so a
+                # concurrently forgotten object must be skipped, not indexed.
+                LIFECYCLE_FORGOTTEN_SKIPPED_TOTAL += 1
+                continue
             if _seed_only(reg):
                 # Tracker 155: same rule as quiesce. The cap's bound is still
                 # honoured (the entry leaves OPEN_OBJECTS), but a dropped
@@ -6453,7 +6713,8 @@ async def _epoch_lifecycle(epoch: _EngineEpoch, loop_yield,
                                     loop_yield=loop_yield,
                                     priority_class=EVIDENCE_CLASS_TERMINAL,
                                     affected=await _affected_final(reg, reg["snapshot"]))
-            del OPEN_OBJECTS[cid]
+            # `.pop`, not `del` — ultra #19, same reason as the quiesce loop.
+            OPEN_OBJECTS.pop(cid, None)
             _ARCHIVE_SLICE_HASH.pop(cid, None)
         mono = time.monotonic()
         if (mono - _FORCE_CLOSE_LOG_LAST) >= 30.0:
@@ -12290,6 +12551,11 @@ def _metrics_text() -> str:
         f"corr_archive_slice_rows_last {ARCHIVE_SLICE_ROWS_LAST}",
         "# TYPE corr_archive_slice_rows_max gauge",
         f"corr_archive_slice_rows_max {ARCHIVE_SLICE_ROWS_MAX}",
+        # Ultra #16: damping records reverted because their slice never landed
+        # (failed OR lost). Every increment is a replay pin that WOULD have
+        # broken silently; the paired WARNING names the object and the reason.
+        "# TYPE corr_archive_slice_reverts_total counter",
+        f"corr_archive_slice_reverts_total {ARCHIVE_SLICE_REVERTS}",
         "# TYPE corr_ingest_priority_deferrals_total counter",
         f"corr_ingest_priority_deferrals_total {INGEST_PRIORITY_DEFERRALS}",
         "# TYPE corr_ingest_priority_active gauge",
@@ -12645,6 +12911,9 @@ def _metrics_text() -> str:
         "# HELP corr_lifecycle_merge_offloads_total Merge passes handed to the executor instead of the loop thread.",
         "# TYPE corr_lifecycle_merge_offloads_total counter",
         f"corr_lifecycle_merge_offloads_total {LIFECYCLE_MERGE_OFFLOADS_TOTAL}",
+        "# HELP corr_lifecycle_forgotten_skipped_total Lifecycle loop entries skipped because a rebalance forgot the object mid-pass (ultra #19).",
+        "# TYPE corr_lifecycle_forgotten_skipped_total counter",
+        f"corr_lifecycle_forgotten_skipped_total {LIFECYCLE_FORGOTTEN_SKIPPED_TOTAL}",
         # ── P2 step 4: the Evidence plane (spec §1/§4). depth/bytes/oldest are
         # the queue; lag is T7 (verdict -> materialized graph); backpressure is
         # how often the Decision plane was slowed to keep the queue bounded —
@@ -12698,6 +12967,16 @@ def _metrics_text() -> str:
         f'corr_evidence_items_total{{outcome="materialized"}} {_ev["materialized_total"]}',
         f'corr_evidence_items_total{{outcome="failed"}} {_ev["failed_total"]}',
         f'corr_evidence_items_total{{outcome="lost"}} {_ev["lost_total"]}',
+        # Ultra #15/#17: both must stay 0 in a healthy process. A revival means
+        # the consumer task DIED (defect, contained on the same queue with
+        # nothing stranded); an abandoned row means a dead loop's batcher held
+        # rows nothing could ever flush.
+        "# HELP corr_evidence_consumer_revived_total Evidence consumer tasks restarted on their own loop after dying.",
+        "# TYPE corr_evidence_consumer_revived_total counter",
+        f"corr_evidence_consumer_revived_total {_ev['consumer_revived_total']}",
+        "# HELP corr_evidence_batch_rows_abandoned_total Buffered batch rows counted lost when a dead loop's batcher was replaced.",
+        "# TYPE corr_evidence_batch_rows_abandoned_total counter",
+        f"corr_evidence_batch_rows_abandoned_total {_ev['batch_rows_abandoned_total']}",
         # ── P2 step 4c: cross-version batching. The number to read is
         # rows_per_flush: it IS the part-count divisor, and the whole point of
         # the step is that ClickHouse receives ~11x fewer level-0 parts for the
@@ -13086,6 +13365,7 @@ def _health_payload() -> dict:
             # slice membership had not moved (no re-write; readers fall back).
             "archive_rows_written": ARCHIVE_ROWS_WRITTEN,
             "archive_slices_damped": ARCHIVE_SLICES_DAMPED,
+            "archive_slice_reverts": ARCHIVE_SLICE_REVERTS,
         },
         # Metric/trap lane observability — proves netops.metrics is fed and where
         # events are accepted vs dropped (the lane was historically empty).

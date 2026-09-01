@@ -120,12 +120,21 @@ __all__ = [
     "EVIDENCE_CLASS_HEARTBEAT",
     "EVIDENCE_CLASS_TERMINAL",
     "EvidenceItem",
+    "EvidencePutAborted",
     "EvidenceQueue",
     "RowBatcher",
     "batch_token",
     "estimate_bytes",
     "loose_slice_signals",
 ]
+
+
+class EvidencePutAborted(RuntimeError):
+    """`EvidenceQueue.put` stopped waiting because the caller's `abort`
+    predicate fired (ultra #15: the consumer that would have made room is
+    gone). The item was NOT enqueued — nothing was mutated — so the caller
+    decides what happens next (revive the consumer and retry, or write
+    inline). Never raised unless the caller passed `abort`."""
 
 # Priority classes. Content-derived: the class is a property of what the version
 # IS, never of how busy the process was when it was minted.
@@ -440,23 +449,50 @@ class EvidenceQueue:
         return self._hold > 0
 
     # ── producer / consumer ──────────────────────────────────────────────────
-    async def put(self, item: EvidenceItem) -> None:
+    async def put(self, item: EvidenceItem, *,
+                  abort: Callable[[], bool] | None = None,
+                  recheck_s: float = 0.0) -> None:
         """Enqueue, BLOCKING the caller while the queue is at a bound.
 
         Never drops, never samples, never summarises (owner memo §22). One
         `backpressure_total` increment per put that actually had to wait — the
         number of times the Decision plane was slowed by the Evidence plane, not
-        the number of times a condition variable woke up."""
+        the number of times a condition variable woke up.
+
+        `abort` + `recheck_s` (ultra #15): a parked put waits on the consumer
+        to make room, so a consumer that DIED would park it forever. When the
+        caller passes an `abort` predicate it is consulted before every wait
+        and again whenever the wait wakes; `recheck_s > 0` additionally bounds
+        each individual wait, so the predicate is re-evaluated even if every
+        wake-up is lost. A firing predicate raises `EvidencePutAborted` with
+        NOTHING mutated (the wait loop precedes the enqueue, and a cancelled
+        `Condition.wait` reacquires the lock before propagating). Under a
+        healthy consumer the behaviour is byte-identical to the plain form:
+        the put still blocks, lossless, until room appears — the timeout only
+        re-checks the predicate and goes back to waiting."""
         async with self._cond:
             waited = False
             while self.full():
+                if abort is not None and abort():
+                    raise EvidencePutAborted(
+                        "evidence queue full and its consumer is gone")
                 if not waited:
                     waited = True
                     self.backpressure_total += 1
                 # Wake a consumer parked on the hold predicate: `full()` is now
                 # true, so the hold no longer applies and it can make room.
                 self._cond.notify_all()
-                await self._cond.wait()
+                if recheck_s > 0:
+                    try:
+                        await asyncio.wait_for(self._cond.wait(), recheck_s)
+                    except asyncio.TimeoutError:
+                        # asyncio's class, NOT the builtin: they are distinct
+                        # on 3.10 (unified only in 3.11+, where this still
+                        # matches). The cancelled `wait` has reacquired the
+                        # lock before this is raised.
+                        continue        # re-check abort() and full()
+                else:
+                    await self._cond.wait()
             self._seq += 1
             entry = (item.key, self._seq, item)
             # The OPEN generation only while a decision pass is running: those
@@ -1069,6 +1105,28 @@ class RowBatcher:
             if not fut.done():
                 fut.set_result(None)
                 return
+
+    # ── abandonment (ultra #17) ──────────────────────────────────────────────
+    def abandon(self) -> list[tuple[str, list, list[str], list]]:
+        """Take EVERY buffered (unflushed, unscheduled) block out WITHOUT
+        writing it, returning `(table, rows, keys, members)` per table so the
+        caller can ACCOUNT for the loss — the one legitimate caller is the
+        plane-replacement path, where this batcher's loop is dead and nothing
+        can ever flush these rows.
+
+        Synchronous on purpose: that caller cannot await (its own lock, its
+        flusher and its write tasks all belong to the dead loop, so a flush
+        from the new loop is not "unsafe", it is impossible). Blocks already
+        taken out (`_take_locked`) are owned by their own — equally dead —
+        write tasks and were reported through `on_flush` if they ever ran;
+        they are not reachable from the buffers and are not returned here.
+        """
+        out: list[tuple[str, list, list[str], list]] = []
+        for table, buf in list(self._bufs.items()):
+            if buf.rows:
+                out.append((table, buf.rows, buf.keys, buf.members))
+        self._bufs.clear()
+        return out
 
     # ── observability ────────────────────────────────────────────────────────
     def buffered(self) -> int:

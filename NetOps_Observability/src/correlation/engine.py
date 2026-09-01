@@ -1112,11 +1112,22 @@ def _emit_candidates(
         if ceiling is not None and len(cand) >= ceiling:
             _hit(idx.group_dims[g], len(idx.groups[g]))
             return cand
+    # Ultra #18: the ceiling record must carry what THIS branch emitted. The
+    # full-window branch above emits `idx.adj_pairs` whole, so its inventory
+    # size IS the emission; here only the cohort-touching pairs are generated,
+    # and recording the full inventory would misattribute the ceiling to a
+    # dimension size that was never on the table (a 50k-link inventory named
+    # for a 12-pair cohort emission sends the investigation at the wrong
+    # population). Collected in a local set so the recorded size is the
+    # DISTINCT pairs this emission produced — result-identical (`cand |=` of
+    # the same pairs), deterministic, and O(cohort adjacency) it already paid.
+    adj_emitted: set[tuple[int, int]] = set()
     for i in cohort:
         for j in idx.adj_by_node.get(i, ()):
-            cand.add((i, j) if i < j else (j, i))
+            adj_emitted.add((i, j) if i < j else (j, i))
+    cand |= adj_emitted
     if ceiling is not None and len(cand) >= ceiling:
-        _hit("adjacency", len(idx.adj_pairs))
+        _hit("adjacency", len(adj_emitted))
     return cand
 
 
