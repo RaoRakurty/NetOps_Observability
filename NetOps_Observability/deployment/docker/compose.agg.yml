@@ -3,10 +3,14 @@
 # Purpose: turn the ingest-boundary aggregation plane ON for one leg of the A/B
 # described in `docs/design/AGGREGATION_PLANE_P3_2026-08-29.md` §6a/§6b/§7 and
 # executed per `docs/scale/RUN_PLAN_P3_AB_2026-08-29.md`. `CORR_AGGREGATION_PLANE`
-# defaults to OFF in the image (src/correlation/main.py ~1855), so the OFF arm is
-# "deploy without this file" and the ON arm is "deploy with it" — the image, the
-# harness and every other overlay are byte-identical across the two arms. That is
-# the whole point: ONE variable.
+# defaults to OFF in the image (src/correlation/main.py ~1855) but — since the
+# owner-ratified default flip of 2026-08-30 — to ON in the base
+# docker-compose.yml (`${CORR_AGGREGATION_PLANE:-1}`). The absence of an overlay
+# therefore yields the DEPLOYED DEFAULT (ON), so each A/B arm pins the flag with
+# its own one-variable overlay: this file (=1) is the ON arm and its mirror
+# `compose.agg-off.yml` (=0) is the OFF arm — the image, the harness and every
+# other overlay are byte-identical across the two arms. That is the whole
+# point: ONE variable.
 #
 # This overlay sets EXACTLY ONE environment key on EXACTLY ONE service. It must
 # never grow a second knob (mem_limit, buffer size, profiler, …) — a second
@@ -53,10 +57,13 @@
 # A flat `corr_agg_observed_total` under load means the plane is not on the
 # ingest path — stop the leg, do not report it as an ON arm.
 #
-# REMOVE (OFF arm / back to the default) — redeploy WITHOUT this file, i.e. the
-# same command with `-f compose.agg.yml` dropped. Do not "unset" the variable by
-# editing this file; the OFF arm is defined by the file's absence so that the two
-# arms differ by a deployment argument and nothing else.
+# REMOVE (back to the deployed default) — redeploy WITHOUT this file AND
+# without compose.agg-off.yml, i.e. the same command with the `-f` pin dropped:
+# the base docker-compose.yml default (ON since 2026-08-30; `.env` can
+# override) then applies. The OFF arm is NOT this file's absence any more — it
+# is `-f compose.agg-off.yml` in this file's place. Do not "unset" the variable
+# by editing either file; each arm is defined by which ONE pin file is present,
+# so that the two arms differ by a deployment argument and nothing else.
 services:
   correlation:
     environment:

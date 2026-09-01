@@ -5,7 +5,8 @@ Executes the six-leg wave of `docs/scale/RUN_PLAN_P3_AB_2026-08-29.md` end to
 end without a human in the loop, and records enough evidence per leg that the
 arm a number came from is recoverable from the run dir alone.
 
-WHAT IT DRIVES (plan section 1). L0a/L0b are already run and are NEVER touched:
+WHAT IT DRIVES (plan section 1; arms amended 2026-08-31, ultra #35). L0a/L0b
+are already run and are NEVER touched:
 
     L1  t-storm-10-2.5k   OFF   agg-10-off-<MMDDHHMM>
     L2  t-storm-25-2.5k   OFF   agg-25-off-<MMDDHHMM>
@@ -13,8 +14,13 @@ WHAT IT DRIVES (plan section 1). L0a/L0b are already run and are NEVER touched:
     L3  t-storm-10-2.5k   ON    agg-10-on-<MMDDHHMM>
     L4  t-storm-25-2.5k   ON    agg-25-on-<MMDDHHMM>
     L5  t-storm-2.5k      ON    agg-2p5k-on-<MMDDHHMM>   (neutrality guard)
-    -- redeploy: arm back OFF (the deployed default) --
+    -- redeploy: NEITHER overlay (the deployed default — ON since 2026-08-30) --
 
+Each arm is pinned by exactly ONE one-variable overlay: compose.agg.yml sets
+CORR_AGGREGATION_PLANE=1 (ON), compose.agg-off.yml sets it to 0 (OFF).
+docker-compose.yml itself defaults the flag ON (owner-ratified 2026-08-30), so
+the OFF arm is NOT "deploy without compose.agg.yml" any more — the absence of
+both pins is the DEPLOYED DEFAULT, which only the end-of-wave restore deploys.
 Two redeploys total, exactly as the plan requires: the arm is switched only when
 the next leg needs a different one, never per leg.
 
@@ -93,7 +99,8 @@ USAGE
 Logs to /var/tmp/scale-runs/ab-driver.log (and stdout).
 
 EXIT CODES
-  0 = every planned leg complete and collected, arm restored to the default
+  0 = every planned leg complete and collected, stack restored to the deployed
+      default (redeployed with neither A/B pin overlay)
   1 = a gate, a launch, a verification or a collection failed (stack left in the
       state named in the final STOP block, which is also written to the state
       file)
@@ -127,12 +134,17 @@ COMPOSE_DIR = os.path.join(REPO_ROOT, "deployment", "docker")
 HARNESS = os.path.join(SCRIPT_DIR, "scale-miniladder.py")
 TWIN = os.path.join(SCRIPT_DIR, "lab", "twin", "twin.py")
 
-# The deployed overlay set (plan section 3). The ON arm appends AGG_OVERLAY and
-# nothing else — one variable is the whole experiment.
+# The deployed overlay set (plan section 3; arms amended 2026-08-31, ultra
+# #35). docker-compose.yml itself defaults CORR_AGGREGATION_PLANE ON
+# (owner-ratified 2026-08-30), so the ABSENCE of an overlay yields the deployed
+# default, not the OFF arm. Each A/B arm therefore appends exactly ONE
+# one-variable pin overlay — agg.yml (=1, ON) or agg-off.yml (=0, OFF) — and
+# nothing else: one variable is still the whole experiment.
 COMPOSE_FILES = ("docker-compose.yml", "compose.offline-images.yml",
                  "compose.tls.yml", "compose.mem125.yml", "compose.lab.yml",
                  "compose.profile.yml")
-AGG_OVERLAY = "compose.agg.yml"
+AGG_OVERLAY = "compose.agg.yml"          # ON arm pin (CORR_AGGREGATION_PLANE=1)
+AGG_OFF_OVERLAY = "compose.agg-off.yml"  # OFF arm pin (CORR_AGGREGATION_PLANE=0)
 
 DEFAULT_RUN_ROOT = "/var/tmp/scale-runs"
 STATE_BASENAME = "ab-state.json"
@@ -762,11 +774,18 @@ class Driver:
         return out.split()
 
     def compose_argv(self, arm: str, tail: list[str]) -> list[str]:
+        """The deploy command for an arm. 'on' and 'off' each append their ONE
+        one-variable pin overlay; 'default' appends NEITHER, leaving
+        docker-compose.yml's own CORR_AGGREGATION_PLANE default in charge (ON
+        since 2026-08-30, .env-overridable) — that is what the end-of-wave
+        restore deploys (ultra #35)."""
         argv = ["docker", "compose"]
         for name in COMPOSE_FILES:
             argv += ["-f", name]
         if arm == "on":
             argv += ["-f", AGG_OVERLAY]
+        elif arm == "off":
+            argv += ["-f", AGG_OFF_OVERLAY]
         return argv + tail
 
     def pid_alive(self, pid: int) -> bool | None:
@@ -1019,13 +1038,34 @@ class Driver:
         self.stack_note = f"correlation redeployed to arm {arm.upper()} (unverified)"
         deadline = time.monotonic() + REPLICA_SETTLE_TIMEOUT
         while True:
+            reps = None
             try:
                 reps = self.replicas()
+            except DriverAbort as exc:
+                warn(f"post-redeploy replica probe failed ({exc}) — retrying "
+                     f"until the settle deadline")
+            ready = False
+            if reps is not None:
+                # ── ultra #41 (2026-08-31): the pre-redeploy gate
+                # (replicas_healthy) refuses 'unhealthy', but this settle loop
+                # accepted it — only 'starting' was excluded — so a
+                # --fresh-containers leg could launch on a replica whose OWN
+                # healthcheck says it is broken. 'unhealthy' is terminal for
+                # the leg: abort and name the container. Ready requires
+                # healthy, or explicitly no-healthcheck ('none'), the same
+                # standard replicas_healthy() applies.
+                sick = [r for r in reps if r["health"] == "unhealthy"]
+                if sick:
+                    raise DriverAbort(
+                        f"after the arm-{arm.upper()} redeploy, correlation "
+                        f"replica(s) "
+                        + ", ".join(f"{r['name']} ({r['short']})" for r in sick)
+                        + " report UNHEALTHY — a leg must never launch on a "
+                        "broken arm. Inspect the replica (docker logs / "
+                        "compose ps) and fix it before re-running")
                 ready = (len(reps) == self.args.replicas and
-                         all(r["running"] and r["health"] != "starting" and r["ip"]
-                             for r in reps))
-            except DriverAbort:
-                ready = False
+                         all(r["running"] and r["health"] in ("healthy", "none")
+                             and r["ip"] for r in reps))
             if ready:
                 return
             if time.monotonic() >= deadline:
@@ -1076,6 +1116,29 @@ class Driver:
                 f"stack is in an UNVERIFIED arm; fix it by hand before any leg")
         self.stack_note = f"arm {arm.upper()}, verified on both replicas"
         return readings
+
+    def restore_deployed_default(self) -> None:
+        """End-of-wave restore (amended 2026-08-31, ultra #35): redeploy with
+        NEITHER A/B pin overlay. docker-compose.yml itself defaults
+        CORR_AGGREGATION_PLANE ON since 2026-08-30 (.env can override), so
+        "the deployed default" is whatever the base compose set yields —
+        currently ON — and it is restored by the ABSENCE of both pin files,
+        never by guessing which arm the default happens to equal today. The
+        arm is re-read afterwards and recorded; a mixed or unreadable result
+        still aborts."""
+        self.switch_arm("default")
+        current, readings = self.read_arm()
+        log(f"restore: with neither A/B overlay the deployed default reads "
+            f"{current.upper()} — {self.describe_readings(readings)}")
+        if current not in ("on", "off"):
+            raise DriverAbort(
+                f"restore: after redeploying with neither A/B overlay the "
+                f"replicas read {current.upper()} — "
+                f"{self.describe_readings(readings)}. The stack is in an "
+                f"UNVERIFIED state; fix it by hand")
+        self.state["final_deployed_default"] = current
+        self.stack_note = (f"deployed default restored (no A/B overlay; arm "
+                           f"reads {current.upper()})")
 
     # -- the run ----------------------------------------------------------
     def run_dir_for(self, leg: Leg) -> str:
@@ -1476,9 +1539,10 @@ class Driver:
             for leg in todo:
                 self.run_leg(leg)
             if self.args.restore_arm:
-                log("wave complete — restoring the deployed default (arm OFF, "
-                    "i.e. redeploy WITHOUT compose.agg.yml)")
-                self.ensure_arm("off", "restore")
+                log("wave complete — restoring the deployed default (redeploy "
+                    "with NEITHER A/B overlay; docker-compose.yml owns "
+                    "CORR_AGGREGATION_PLANE's default, ON since 2026-08-30)")
+                self.restore_deployed_default()
                 self.state["final_arm_restored"] = True
                 self.save()
         except DriverAbort as exc:
@@ -1587,8 +1651,11 @@ class Driver:
                 print("       counters: LEG-SCOPED (fresh containers) — "
                       "metrics-final.txt needs no subtraction")
         if self.args.restore_arm and todo:
-            print("\n[RUN ] restore: redeploy WITHOUT compose.agg.yml and verify "
-                  "corr_agg_enabled 0 on both replicas")
+            print("\n[RUN ] restore: redeploy with NEITHER A/B overlay "
+                  "(compose.agg.yml and compose.agg-off.yml both dropped) — "
+                  "docker-compose.yml's own CORR_AGGREGATION_PLANE default "
+                  "(ON since 2026-08-30) then applies; the arm is re-read on "
+                  "both replicas and recorded")
         print("\nNothing was touched (--dry-run).")
         return 0
 
@@ -1695,9 +1762,10 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
                     help=f"how often to say what it is waiting on (default "
                          f"{DEFAULT_WAIT_LOG})")
     ap.add_argument("--no-restore-arm", dest="restore_arm", action="store_false",
-                    help="do NOT redeploy back to the default (arm OFF) after "
-                         "the last leg. The plan's section 3.4 restore is on by "
-                         "default")
+                    help="do NOT redeploy back to the deployed default (neither "
+                         "A/B overlay; docker-compose.yml's own flag default, "
+                         "ON since 2026-08-30) after the last leg. The plan's "
+                         "section 3.4 restore is on by default")
     ap.set_defaults(restore_arm=True)
     return ap.parse_args(argv)
 
@@ -1717,11 +1785,11 @@ def main(argv: list[str]) -> int:
             die(f"{what} not found at {path}")
     if not os.path.isdir(COMPOSE_DIR):
         die(f"compose dir not found at {COMPOSE_DIR}")
-    for name in COMPOSE_FILES + (AGG_OVERLAY,):
+    for name in COMPOSE_FILES + (AGG_OVERLAY, AGG_OFF_OVERLAY):
         if not os.path.exists(os.path.join(COMPOSE_DIR, name)):
             die(f"compose file {name} missing from {COMPOSE_DIR} — the six-file "
-                f"overlay set and the ON-arm overlay must both exist before a "
-                f"wave starts")
+                f"overlay set and BOTH A/B arm pin overlays must exist before "
+                f"a wave starts")
     # Constructing the Driver resolves --legs and validates --from against the
     # resolved table. Both are refusals BEFORE anything is touched (exit 2).
     try:

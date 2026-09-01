@@ -6381,8 +6381,23 @@ class Harness:
         # snapshots computed and then thrown away.
         for cid_ in sorted(final_per):
             n, b = final_per[cid_], (base_per.get(cid_) or {})
-            cohorts_delta = float(n.get("cohorts_total", -1.0)) - \
-                float(b.get("cohorts_total", 0.0) or 0.0)
+            nvc = float(n.get("cohorts_total", -1.0))
+            bvc = float(b.get("cohorts_total", -1.0))
+            if nvc < 0 or bvc < 0:
+                # ── ultra #24 (2026-08-31): an unreadable cohorts_total used
+                # to flow into `cohorts_delta` as -1, land in the `<= 0`
+                # "drained nothing to judge" continue, and silently EXEMPT this
+                # replica from the hollow-completion clause — on exactly the
+                # replica it cannot vouch for. Tracker-170's own rule applies
+                # here too: UNKNOWN is never PASS.
+                problems.append(
+                    f"replica {cid_} corr_engine_cohorts_total is unreadable "
+                    f"(baseline={bvc:.0f}, final={nvc:.0f}) — whether this "
+                    f"replica drained cohorts is UNKNOWN, so the "
+                    f"hollow-completion clause cannot be evaluated, and "
+                    f"UNKNOWN is never PASS")
+                continue
+            cohorts_delta = nvc - bvc
             if cohorts_delta <= 0:
                 continue            # this replica drained nothing to judge
             nv, bv = (float(n.get("versions_persisted", -1.0)),
@@ -6579,6 +6594,43 @@ class Harness:
                 f"Kafka session timeout — the member can be ejected mid-stall")
         return problems
 
+    # ── ultra #23 (2026-08-31): the lag-settle window must never read an
+    # UNREADABLE consumer group as a settled one. `group_lag` answers
+    # `_total: -1` when `kafka-consumer-groups.sh --describe` itself fails, and
+    # two consecutive -1 readings are byte-identical — the old loop counted
+    # them as "lag stopped moving" and reported settled=True on a group it
+    # never actually read. Both helpers are pure so the arithmetic is unit- and
+    # mutation-testable without a stack.
+    @staticmethod
+    def settle_step(last: float | None, total: float | None, stable_for: float,
+                    epsilon: float, step_s: float = 15.0) -> tuple:
+        """One poll of the settle loop -> (last, stable_for, readable).
+
+        A negative (or absent) total is an UNREADABLE group, not a lag value:
+        it contributes no stability AND invalidates the previous reading, so
+        settlement must be re-established by consecutive REAL readings.
+        """
+        if total is None or total < 0:
+            return None, 0.0, False
+        if last is not None and abs(total - last) <= epsilon:
+            return total, stable_for + step_s, True
+        return total, 0.0, True
+
+    @staticmethod
+    def settle_lag_problems(lag_at_settlement: float | None,
+                            unreadable_polls: int) -> list:
+        """Disqualifying settle facts (pure). UNKNOWN is never PASS: a settle
+        window that ended without a readable lag total cannot claim the group
+        settled — the problem line names the unreadable source instead of
+        letting -1 == -1 read as stable."""
+        if lag_at_settlement is None or lag_at_settlement < 0:
+            return [(
+                f"consumer-group lag for netops-correlation was UNREADABLE at "
+                f"settlement ({unreadable_polls} unreadable poll(s); group_lag "
+                f"_total=-1 means the describe FAILED, not zero lag) — whether "
+                f"the group settled is UNKNOWN, and UNKNOWN is never PASS")]
+        return []
+
     def collect_stability_blobs(self, now: float | None = None) -> tuple:
         """(blobs, since_s) — one log blob per correlation replica.
 
@@ -6608,19 +6660,21 @@ class Harness:
         deadline = time.monotonic() + STABILITY_SETTLE_MAX_S
         last = None
         stable_for = 0.0
+        unreadable_polls = 0
         while time.monotonic() < deadline:
             total = self.stack.group_lag("netops-correlation").get("_total", -1)
-            if last is not None and abs(total - last) <= self.args.lag_epsilon:
-                stable_for += 15.0
-            else:
-                stable_for = 0.0
-            last = total
+            last, stable_for, readable = self.settle_step(
+                last, total, stable_for, self.args.lag_epsilon)
+            if not readable:
+                unreadable_polls += 1
             if stable_for >= 45.0:
                 break
             time.sleep(15)
-        ev["lag_at_settlement"] = last
+        ev["lag_at_settlement"] = last if last is not None else -1
+        ev["lag_unreadable_polls"] = unreadable_polls
         ev["settled"] = stable_for >= 45.0
-        log(f"stability: settled={ev['settled']} lag={last}; observing {grace:.0f}s grace")
+        log(f"stability: settled={ev['settled']} lag={last} "
+            f"(unreadable polls {unreadable_polls}); observing {grace:.0f}s grace")
         time.sleep(grace)
 
         blobs, since = self.collect_stability_blobs()
@@ -6640,7 +6694,8 @@ class Harness:
             (r.get("container") or "?"):
                 r.get("metrics", {}).get(SESSION_TIMEOUT_GAUGE, -1.0)
             for r in reps}
-        problems = self.stability_verdict(counters, timeout_ms, derivation)
+        problems = (self.settle_lag_problems(last, unreadable_polls)
+                    + self.stability_verdict(counters, timeout_ms, derivation))
         # INFORMATIONAL ONLY (never a gate): how much of the membership budget
         # the worst stall actually ate. A run well inside the timeout can still
         # be trending, and the number is worth carrying in the report — but the

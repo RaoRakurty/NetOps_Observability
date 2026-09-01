@@ -13,7 +13,11 @@ What is asserted, and why it matters:
                           re-collected, never re-run (that would burn an hour and
                           produce a second run dir for one table row). `--from`
                           overrides the state. A corrupt state file refuses.
-  arm verification        OFF and ON differ by exactly one compose file. The arm
+  arm verification        Each arm is pinned by exactly ONE one-variable
+                          overlay (compose.agg.yml = ON, compose.agg-off.yml =
+                          OFF) on a base compose whose own default is ON
+                          (ratified 2026-08-30) — absence of both pins is the
+                          DEPLOYED DEFAULT, deployed only by the restore. The arm
                           is read from BOTH replicas, from BOTH the env and the
                           engine's own `corr_agg_enabled`; any disagreement is a
                           MIXED ARM, which no run metric reveals and which
@@ -149,6 +153,7 @@ class FakeHost:
         self.ttur_queries: list[str] = []
         self.probes: list[str] = []
         self.mtls_fail = False
+        self.health = "healthy"      # docker inspect health for every replica
 
     def __call__(self, cmd, timeout, cwd=None, env=None):
         self.calls.append(list(cmd))
@@ -160,13 +165,20 @@ class FakeHost:
             return 0, "", ""
         if cmd[:2] == ["docker", "inspect"]:
             idx = CORR_IDS.index(cmd[2]) if cmd[2] in CORR_IDS else 0
-            return 0, (f"/netops-correlation-{3 + idx}|true|healthy|"
+            return 0, (f"/netops-correlation-{3 + idx}|true|{self.health}|"
                        f"2026-08-30T00:00:0{idx}Z|172.18.0.{9 + idx}\n"), ""
         if cmd[:2] == ["docker", "exec"]:
             return self._exec(cmd)
         if cmd[:2] == ["docker", "compose"]:
             self.compose_ups.append((list(cmd), dict(env or {})))
-            self.arm = "on" if drv.AGG_OVERLAY in cmd else "off"
+            if drv.AGG_OVERLAY in cmd:
+                self.arm = "on"
+            elif drv.AGG_OFF_OVERLAY in cmd:
+                self.arm = "off"
+            else:
+                # neither pin file -> the base docker-compose.yml default
+                # applies, and that default is ON (ratified 2026-08-30)
+                self.arm = "on"
             return 0, "recreated\n", ""
         if cmd[0] == "pgrep":
             if self.pgrep_rc not in (0, 1):
@@ -193,9 +205,11 @@ class FakeHost:
             self.ttur_queries.append(sql)
             return 0, TTUR_TSV, ""
         if cmd[3] == "env":
-            env = "PATH=/usr/bin\nCORR_HEALTH_SIDECAR_PORT=8094\n"
-            if self.arm == "on":
-                env += "CORR_AGGREGATION_PLANE=1\n"
+            # The compose default is ON (2026-08-30), so the variable is
+            # ALWAYS present in a deployed container: 1 on the ON arm and on
+            # the deployed default, 0 when compose.agg-off.yml pins it off.
+            env = ("PATH=/usr/bin\nCORR_HEALTH_SIDECAR_PORT=8094\n"
+                   f"CORR_AGGREGATION_PLANE={1 if self.arm == 'on' else 0}\n")
             return 0, env, ""
         if cmd[3] == "python":
             probe = cmd[-1]
@@ -349,12 +363,21 @@ def test_a_dead_launched_run_refuses_to_silently_start_a_second_one(tmp_path):
 # ---------------------------------------------------------------------------
 # arm verification
 # ---------------------------------------------------------------------------
-def test_compose_argv_differs_by_exactly_one_file():
-    off = drv.Driver(make_args(Path("/tmp"))).compose_argv("off", ["up"])
-    on = drv.Driver(make_args(Path("/tmp"))).compose_argv("on", ["up"])
-    assert drv.AGG_OVERLAY not in off
+def test_compose_argv_each_arm_adds_exactly_one_pin_file():
+    driver = drv.Driver(make_args(Path("/tmp")))
+    base = driver.compose_argv("default", ["up"])
+    off = driver.compose_argv("off", ["up"])
+    on = driver.compose_argv("on", ["up"])
+    # the deployed default appends NEITHER pin — docker-compose.yml owns it
+    assert drv.AGG_OVERLAY not in base and drv.AGG_OFF_OVERLAY not in base
+    # each arm differs from the default by exactly its own pin, appended LAST
+    assert [part for part in on if part not in base] == [drv.AGG_OVERLAY]
+    assert [part for part in off if part not in base] == [drv.AGG_OFF_OVERLAY]
     assert on[-1] == "up" and on[-2] == drv.AGG_OVERLAY
+    assert off[-1] == "up" and off[-2] == drv.AGG_OFF_OVERLAY
+    # and the two arms differ from each other by exactly one file each way
     assert [part for part in on if part not in off] == [drv.AGG_OVERLAY]
+    assert [part for part in off if part not in on] == [drv.AGG_OFF_OVERLAY]
 
 
 @pytest.mark.parametrize("readings,expected", [
@@ -403,12 +426,17 @@ def test_arm_switch_uses_the_overlay_and_exports_git_sha(tmp_path):
     assert env.get("GIT_SHA") == "abc123def456"
 
 
-def test_restore_drops_the_overlay(tmp_path):
+def test_restore_deploys_neither_overlay_and_records_the_default(tmp_path):
     host = FakeHost(arm="on")
     driver = make_driver(tmp_path, host)
-    driver.ensure_arm("off", "restore")
+    driver.restore_deployed_default()
+    assert len(host.compose_ups) == 1
     cmd, _env = host.compose_ups[0]
-    assert drv.AGG_OVERLAY not in cmd, "the OFF arm is the file's ABSENCE"
+    assert drv.AGG_OVERLAY not in cmd and drv.AGG_OFF_OVERLAY not in cmd, (
+        "restore is the ABSENCE of both pin files — docker-compose.yml owns "
+        "the flag's default")
+    assert host.arm == "on", "the deployed default is ON (ratified 2026-08-30)"
+    assert driver.state["final_deployed_default"] == "on"
 
 
 def test_mixed_arm_aborts_and_never_redeploys(tmp_path):
@@ -910,11 +938,14 @@ def test_run_completes_the_wave_and_restores_the_default_arm(tmp_path):
     state = json.loads((tmp_path / "ab-state.json").read_text(encoding="utf-8"))
     assert all(state["legs"][leg]["collected"] for leg in drv.LEG_IDS)
     assert state["final_arm_restored"] is True
-    # exactly two redeploys: OFF->ON before L3, ON->OFF after L5 (plan section 3)
+    assert state["final_deployed_default"] == "on"
+    # exactly two redeploys: OFF->ON before L3, then the restore to the
+    # deployed default after L5 (NEITHER pin overlay; plan section 3 amended)
     assert len(host.compose_ups) == 2
     assert drv.AGG_OVERLAY in host.compose_ups[0][0]
     assert drv.AGG_OVERLAY not in host.compose_ups[1][0]
-    assert host.arm == "off"
+    assert drv.AGG_OFF_OVERLAY not in host.compose_ups[1][0]
+    assert host.arm == "on", "the deployed default is ON (ratified 2026-08-30)"
 
 
 def test_rerunning_a_finished_wave_is_a_no_op(tmp_path):
@@ -937,6 +968,9 @@ def test_dry_run_touches_nothing(tmp_path, capsys):
     for leg in drv.LEG_IDS:
         assert leg in out
     assert "compose.agg.yml" in out
+    assert "compose.agg-off.yml" in out, (
+        "the plan must show the OFF legs' pin overlay and the neither-overlay "
+        "restore")
     assert not (tmp_path / "ab-state.json").exists()
 
 
@@ -1276,7 +1310,10 @@ def test_fresh_containers_recreates_even_when_the_arm_is_unchanged(tmp_path):
     assert len(host.compose_ups) == 1, "a fresh leg recreates its containers"
     cmd, env = host.compose_ups[0]
     assert cmd[:2] == ["docker", "compose"]
-    assert drv.AGG_OVERLAY not in cmd, "OFF is the overlay's ABSENCE"
+    assert drv.AGG_OVERLAY not in cmd
+    assert drv.AGG_OFF_OVERLAY in cmd, (
+        "under the default-ON compose the OFF arm is PINNED by its own "
+        "overlay — absence would deploy the deployed default (ON)")
     assert cmd[-6:] == ["up", "-d", "--no-deps", "--force-recreate",
                         "--scale", "correlation=2"] or cmd[-1] == "correlation"
     assert cmd[cmd.index("up"):] == ["up", "-d", "--no-deps", "--force-recreate",
@@ -1315,15 +1352,18 @@ def test_the_pair_wave_recreates_before_every_leg_then_restores(tmp_path):
     assert state["legs"]["P1"]["fresh_containers"] is True
     assert not (tmp_path / drv.STATE_BASENAME).exists(), \
         "the six-leg wave's state file is untouched"
-    # THREE compose runs, in this order: P1 cold OFF, P2 cold ON, restore OFF.
+    # THREE compose runs, in this order: P1 cold OFF (agg-off pin), P2 cold ON
+    # (agg pin), restore to the deployed default (NEITHER pin).
     # (Without --fresh-containers the first one would not happen at all.)
-    assert [drv.AGG_OVERLAY in cmd for cmd, _env in host.compose_ups] == \
-        [False, True, False]
+    assert [(drv.AGG_OVERLAY in cmd, drv.AGG_OFF_OVERLAY in cmd)
+            for cmd, _env in host.compose_ups] == \
+        [(False, True), (True, False), (False, False)]
     for cmd, _env in host.compose_ups:
         assert cmd[cmd.index("up"):] == ["up", "-d", "--no-deps",
                                          "--force-recreate", "--scale",
                                          "correlation=2", "correlation"]
-    assert host.arm == "off", "restore leaves the deployed default"
+    assert host.arm == "on", ("restore leaves the deployed default, which the "
+                              "base compose defines as ON (2026-08-30)")
 
 
 def test_collection_says_the_counters_are_leg_scoped(tmp_path, capsys):
@@ -1362,3 +1402,90 @@ def test_dry_run_prints_the_resolved_pair_table_and_touches_nothing(tmp_path, ca
     assert "LEG-SCOPED" in out
     assert "L1" not in out and "L5" not in out, "the built-in wave is replaced"
     assert not (tmp_path / "ab-pair-state.json").exists()
+
+
+# ---------------------------------------------------------------------------
+# ultra #35 / #41 (2026-08-31): the default-ON compose and the settle gate
+#
+# docker-compose.yml defaults CORR_AGGREGATION_PLANE ON since 2026-08-30, so
+# the OFF arm must PIN the flag (compose.agg-off.yml) — ensure_arm('off') on a
+# default-ON stack used to read env=1 and DriverAbort on every future OFF leg
+# and on the end-of-wave --restore-arm. And the post-recreate settle loop used
+# to accept 'unhealthy' (only 'starting' was excluded), so a
+# --fresh-containers leg could launch on a broken arm.
+# ---------------------------------------------------------------------------
+def test_off_leg_on_the_default_on_compose_pins_env_0_on_both_replicas(tmp_path):
+    host = FakeHost(arm="on")            # the deployed default: ON, no overlay
+    driver = make_driver(tmp_path, host)
+    readings = driver.ensure_arm("off", "L1")
+    assert len(host.compose_ups) == 1, "the OFF arm is reached by a redeploy"
+    cmd, _env = host.compose_ups[0]
+    assert drv.AGG_OFF_OVERLAY in cmd and drv.AGG_OVERLAY not in cmd
+    assert len(readings) == 2
+    assert all(r["env"] == "0" and r["metric"] == 0.0 for r in readings), (
+        "the OFF arm on a default-ON compose is env=0 READ BACK on both "
+        "replicas — never an unset variable, never a guess")
+
+
+def test_restore_after_an_off_wave_reaches_the_deployed_default(tmp_path):
+    """The restore from an OFF arm must REDEPLOY (the stack is pinned off; the
+    default is ON) — the old 'restore = ensure OFF' semantics would have
+    declared the pinned-off stack already restored and left the pin standing."""
+    host = FakeHost(arm="off")
+    driver = make_driver(tmp_path, host)
+    driver.restore_deployed_default()
+    assert len(host.compose_ups) == 1
+    cmd, _env = host.compose_ups[0]
+    assert drv.AGG_OVERLAY not in cmd and drv.AGG_OFF_OVERLAY not in cmd
+    assert host.arm == "on"
+    assert driver.state["final_deployed_default"] == "on"
+
+
+def test_settle_aborts_on_an_unhealthy_replica_and_names_it(tmp_path):
+    host = FakeHost(arm="on")
+
+    def sick_after_recreate(cmd, timeout, cwd=None, env=None):
+        rc, out, err = FakeHost.__call__(host, cmd, timeout, cwd, env)
+        if cmd[:2] == ["docker", "inspect"] and host.compose_ups:
+            out = out.replace("|healthy|", "|unhealthy|")
+        return rc, out, err
+
+    driver = make_driver(tmp_path, host)
+    driver.runner = sick_after_recreate
+    with pytest.raises(drv.DriverAbort) as exc:
+        driver.ensure_arm("off", "L1")
+    msg = str(exc.value)
+    assert "UNHEALTHY" in msg, "a broken replica must stop the leg, loudly"
+    assert "netops-correlation-3" in msg, "the abort must NAME the container"
+
+
+def test_settle_keeps_waiting_on_starting_instead_of_calling_it_ready(
+        tmp_path, monkeypatch):
+    """'starting' is neither ready nor unhealthy: with a zero settle budget the
+    redeploy times out — it neither launches on a warming replica nor
+    misdiagnoses it as broken."""
+    host = FakeHost(arm="on")
+
+    def warming(cmd, timeout, cwd=None, env=None):
+        rc, out, err = FakeHost.__call__(host, cmd, timeout, cwd, env)
+        if cmd[:2] == ["docker", "inspect"] and host.compose_ups:
+            out = out.replace("|healthy|", "|starting|")
+        return rc, out, err
+
+    monkeypatch.setattr(drv, "REPLICA_SETTLE_TIMEOUT", 0)
+    driver = make_driver(tmp_path, host)
+    driver.runner = warming
+    with pytest.raises(drv.DriverAbort) as exc:
+        driver.switch_arm("off")
+    assert "did not appear" in str(exc.value)
+    assert "UNHEALTHY" not in str(exc.value)
+
+
+def test_settle_accepts_a_replica_without_a_healthcheck(tmp_path):
+    """health 'none' (no healthcheck declared) is explicitly acceptable —
+    requiring 'healthy' alone would deadlock a deployment without one."""
+    host = FakeHost(arm="on")
+    host.health = "none"
+    driver = make_driver(tmp_path, host)
+    driver.switch_arm("off")            # must settle without aborting
+    assert host.compose_ups, "the redeploy itself still happened"

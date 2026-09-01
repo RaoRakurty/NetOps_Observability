@@ -1,0 +1,49 @@
+# P3 Aggregation plane — the OFF arm of the live A/B (added 2026-08-31, ultra #35).
+#
+# Purpose: pin the ingest-boundary aggregation plane OFF for one leg of the A/B
+# described in `docs/design/AGGREGATION_PLANE_P3_2026-08-29.md` §6a/§6b/§7 and
+# executed per `docs/scale/RUN_PLAN_P3_AB_2026-08-29.md`. Since the
+# owner-ratified default flip of 2026-08-30 the base docker-compose.yml
+# defaults `CORR_AGGREGATION_PLANE` ON (`${CORR_AGGREGATION_PLANE:-1}`), so the
+# OFF arm can no longer be "deploy without compose.agg.yml" — the absence of an
+# overlay now yields the DEPLOYED DEFAULT (ON). Each arm is therefore pinned by
+# its own one-variable overlay: `compose.agg.yml` (=1, ON) and this file (=0,
+# OFF). The image default stays OFF (src/correlation/main.py ~1855); the two
+# arms stay byte-identical apart from this ONE variable.
+#
+# This overlay sets EXACTLY ONE environment key on EXACTLY ONE service. It must
+# never grow a second knob (mem_limit, buffer size, profiler, …) — a second
+# variable would make the A/B uninterpretable, and
+# `tests/test_compose_agg_overlay.py` fails the build if one appears (the same
+# doctrine compose.agg.yml pins).
+#
+# APPLY (OFF arm) — append to the deployed overlay set, correlation only:
+#   cd deployment/docker
+#   docker compose -f docker-compose.yml -f compose.offline-images.yml \
+#     -f compose.tls.yml -f compose.mem125.yml -f compose.lab.yml \
+#     -f compose.profile.yml -f compose.agg-off.yml \
+#     up -d --no-deps --force-recreate --scale correlation=2 correlation
+#
+# VERIFY — in BOTH replicas (the engine runs two; a half-flagged pair silently
+# mixes arms and invalidates the leg):
+#   for c in $(docker compose ... ps -q correlation); do \
+#     echo "== $c"; docker exec "$c" env | grep CORR_AGGREGATION_PLANE; done
+#   # expect `CORR_AGGREGATION_PLANE=0` from BOTH containers (two lines).
+# And on each replica's OWN mTLS /metrics — ip:8443 with the correlation SVID,
+# exactly the probe compose.agg.yml's header spells out and
+# `scripts/scale-ab-driver.py` performs; never the :8094 sidecar (plaintext GET
+# is reset on the TLS deployment, ECONNRESET on both replicas, 2026-08-29
+# 22:43) — expect `corr_agg_enabled 0` and `corr_agg_observed_total` NOT
+# advancing under load. An advancing observed counter on an "OFF" leg means the
+# pin did not land — stop the leg, do not report it as an OFF arm.
+#
+# REMOVE (back to the deployed default) — redeploy WITHOUT this file (and
+# without compose.agg.yml): the base docker-compose.yml default then applies
+# (ON since 2026-08-30; `.env` `CORR_AGGREGATION_PLANE=0` can override it). Do
+# not "unset" or flip the variable by editing this file; each arm is defined by
+# which ONE pin file is present, so the two arms differ by a deployment
+# argument and nothing else.
+services:
+  correlation:
+    environment:
+      CORR_AGGREGATION_PLANE: "0"
