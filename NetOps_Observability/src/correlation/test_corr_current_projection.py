@@ -101,3 +101,91 @@ def test_chaos_fixture_env_parsing():
     ) == {"192.0.2.120": "lab_probe_storm_fixture_120", "devX": "other"}
     # Malformed pairs are dropped, never crash the engine at import time.
     assert main._parse_chaos_fixtures("oops,=x,name=") == {}
+
+
+# ── tracker 197: seam_type is a projection column, not a blob read ────────────
+#
+# The time-intelligence fold needs twelve values per object and corr_current
+# carried eleven; that ONE missing string (`seam_type`) was the entire reason
+# the fold still had to read corr_objects' ~5.7 KB hypotheses blob. The engine
+# now projects it at persist time, so what the projection writes MUST be
+# byte-identical to what
+# `JSONExtractString(hypotheses,'grounding_context','seams',1,'seam_type')`
+# would have returned from the very same row's blob — that equality is the
+# whole safety argument for deleting the wide read.
+
+def _json_extract_seam_type(hypotheses_blob: str) -> str:
+    """Python's answer to ClickHouse's
+    JSONExtractString(blob,'grounding_context','seams',1,'seam_type').
+    Deliberately spelled out here rather than imported from main: a test that
+    reused the projection's own helper could not detect the projection drifting
+    away from the reader it replaced."""
+    import json as _json
+    doc = _json.loads(hypotheses_blob)
+    seams = (doc.get("grounding_context") or {}).get("seams") or []
+    if not seams:
+        return ""            # absent key -> '' -> UNGROUNDED (never "unknown")
+    return str(seams[0].get("seam_type") or "")
+
+
+def _seam_views(*types):
+    """Seam inventory for tenant t-soak, minted with DESCENDING seam_ids so the
+    test also pins WHICH seam wins: the blob sorts by seam_id, so the answer
+    must be the seam_id-lowest one, never insertion order."""
+    from engine import SeamView
+    return tuple(
+        SeamView(seam_id=f"seam-{len(types) - i}", tenant_id="t-soak", seam_type=t,
+                 endpoints=(("device", "proj-dev-1"),))
+        for i, t in enumerate(types)
+    )
+
+
+def _current_and_object_rows(stub):
+    cur = stub.rows["netops.corr_current"]
+    obj = stub.rows["netops.corr_objects"]
+    assert cur and obj
+    return cur[-1], obj[-1]
+
+
+def test_seam_type_projected_matches_the_json_extract_it_replaces(monkeypatch):
+    """The projected column equals the JSON extraction, seam or no seam."""
+    for inventory in ((), _seam_views("DIA"), _seam_views("DIA", "SDWAN", "VPN")):
+        monkeypatch.setattr(main, "seam_inventory", lambda inv=inventory: inv)
+        stub = _StubCH()
+        _run_one_cycle(stub)
+        current, obj = _current_and_object_rows(stub)
+        assert "seam_type" in current, "corr_current row must carry seam_type"
+        assert current["seam_type"] == _json_extract_seam_type(obj["hypotheses"]), (
+            f"projection drifted from the blob extraction for inventory {inventory!r}")
+
+
+def test_seam_type_is_the_seam_id_lowest_embedded_seam(monkeypatch):
+    """`hypotheses_blob` sorts seams by seam_id, so element 1 — and therefore
+    the projected value — is the seam_id-lowest seam, not the first supplied."""
+    monkeypatch.setattr(main, "seam_inventory", lambda: _seam_views("VPN", "SDWAN", "DIA"))
+    stub = _StubCH()
+    _run_one_cycle(stub)
+    current, obj = _current_and_object_rows(stub)
+    assert current["seam_type"] == "DIA"          # seam-1 < seam-2 < seam-3
+    assert current["seam_type"] == _json_extract_seam_type(obj["hypotheses"])
+
+
+def test_seam_type_is_empty_when_the_object_grounds_on_no_seam(monkeypatch):
+    """No inventory -> '' , the same value an old (pre-197) corr_current row
+    carries under the column DEFAULT. The reader treats '' as UNGROUNDED, which
+    is exactly what a missing JSON key meant to it before."""
+    monkeypatch.setattr(main, "seam_inventory", tuple)
+    stub = _StubCH()
+    _run_one_cycle(stub)
+    current, obj = _current_and_object_rows(stub)
+    assert current["seam_type"] == ""
+    assert _json_extract_seam_type(obj["hypotheses"]) == ""
+
+
+def test_seam_type_badge_builders_agree_on_the_unparseable_blob():
+    """`_current_badges` degrades to '' on a blob it cannot parse — the same
+    answer JSONExtractString gives — and never raises into the persist path."""
+    for blob in ("", "{", "[]", '{"grounding_context":null}',
+                 '{"grounding_context":{"seams":[]}}',
+                 '{"grounding_context":{"seams":[{}]}}'):
+        assert main._current_badges(blob)["seam_type"] == "", blob

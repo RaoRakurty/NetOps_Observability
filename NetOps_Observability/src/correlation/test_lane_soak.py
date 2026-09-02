@@ -213,5 +213,8 @@ def test_current_badges_malformed_blob_defaults():
     """A malformed hypotheses blob must never block the projection write — it
     degrades to default badges (observable via the row itself)."""
     assert main._current_badges("not json") == {
-        "owner": "", "plane_count": 0, "debug_excluded": 0, "low_authority": 0}
+        "owner": "", "plane_count": 0, "debug_excluded": 0, "low_authority": 0,
+        # 197: seam_type joined the badges; '' is UNGROUNDED, the same answer
+        # JSONExtractString gives for a blob (or a key) it cannot resolve.
+        "seam_type": ""}
     assert main._current_badges("{}")["plane_count"] == 0

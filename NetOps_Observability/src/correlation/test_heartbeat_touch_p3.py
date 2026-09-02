@@ -122,6 +122,10 @@ def test_badges_agree_on_an_empty_ranking():
 
     class _NoHyps:
         ranking = _Ranking
+        # 197: seam_type is read off the snapshot's embedded seams, not off the
+        # ranking, so the degenerate stub has to carry the field a real
+        # ObjectSnapshot always carries (an ungrounded object: empty tuple).
+        seams: ClassVar[tuple] = ()
 
     assert main._current_badges_from_snapshot(_NoHyps()) == main._current_badges("not json")
 

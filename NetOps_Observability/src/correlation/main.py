@@ -2762,6 +2762,23 @@ def _current_row_fields(snap: ObjectSnapshot, version: int, state: str) -> dict:
     }
 
 
+def _snapshot_seam_type(snap: ObjectSnapshot) -> str:
+    """The corr_current `seam_type` projection value for one snapshot (197).
+
+    EXACTLY what `JSONExtractString(hypotheses,'grounding_context','seams',1,
+    'seam_type')` returned to the reader, computed from the source instead of
+    the rendering: `ObjectSnapshot.hypotheses_blob` writes
+    `grounding_context.seams` as `[s.to_dict() for s in sorted(self.seams, key=
+    seam_id)]`, so element 1 of that array (ClickHouse arrays are 1-based) is
+    the seam_id-lowest embedded seam. No seams embedded -> '' , which is the
+    same answer JSONExtractString gives for an absent key and means UNGROUNDED,
+    never "unknown seam".
+    """
+    if not snap.seams:
+        return ""
+    return str(min(snap.seams, key=lambda s: s.seam_id).seam_type or "")
+
+
 def _current_badges_from_snapshot(snap: ObjectSnapshot) -> dict:
     """`_current_badges` computed off the snapshot instead of off the JSON.
 
@@ -2777,6 +2794,7 @@ def _current_badges_from_snapshot(snap: ObjectSnapshot) -> dict:
         plane_count    <- len(cov.modality_classes)      (== len(sorted(...)))
         debug_excluded <- bool(cov.excluded_debug)       (== list(...) truthy)
         low_authority  <- bool(cov.low_authority_probe_scopes)
+        seam_type      <- _snapshot_seam_type(snap)      (grounding_context.seams)
 
     `modality_coverage` is `sorted(m.value for m in modality_classes)` over a
     frozenset, so its length is that set's cardinality -- the counts cannot
@@ -2784,10 +2802,16 @@ def _current_badges_from_snapshot(snap: ObjectSnapshot) -> dict:
     golden fixture in test_heartbeat_touch_p3.py; the empty-ranking case degrades
     to the same all-default dict `_current_badges` returns for a blob it cannot
     parse.
+
+    seam_type (197) is NOT a ranking scalar -- it hangs off grounding_context --
+    so it is derived independently of `hyps` and is present even on the
+    empty-ranking degrade path, exactly as the blob extraction was.
     """
+    seam_type = _snapshot_seam_type(snap)
     hyps = snap.ranking.hypotheses
     if not hyps:
-        return {"owner": "", "plane_count": 0, "debug_excluded": 0, "low_authority": 0}
+        return {"owner": "", "plane_count": 0, "debug_excluded": 0,
+                "low_authority": 0, "seam_type": seam_type}
     top = hyps[0]
     cov = top.verdict_gate.coverage
     return {
@@ -2795,6 +2819,7 @@ def _current_badges_from_snapshot(snap: ObjectSnapshot) -> dict:
         "plane_count": len(cov.modality_classes),
         "debug_excluded": 1 if cov.excluded_debug else 0,
         "low_authority": 1 if cov.low_authority_probe_scopes else 0,
+        "seam_type": seam_type,
     }
 
 
@@ -2803,17 +2828,37 @@ def _current_badges(hypotheses_blob: str) -> dict:
     hypotheses JSON the history row persists — semantically identical to the
     read-time JSONExtracts they replace, computed once per (damped) persist so
     the hot list path never reads the ~5.7KB blob column (#100 completion:
-    that read alone was ~1.3 GiB of blob granules per page at storm size)."""
+    that read alone was ~1.3 GiB of blob granules per page at storm size).
+
+    `seam_type` (197) joins them for the same reason and from the same blob:
+    it is the LAST of the twelve values the time-intelligence fold needs, and
+    with it on the projection that fold stops reading corr_objects at all."""
+    # Parsed ONCE, then read in two independent blocks: `ranking` and
+    # `grounding_context` are siblings, so a malformation in one must not cost
+    # the other its value -- JSONExtractString would still have found the seam.
     try:
-        ranked = json.loads(hypotheses_blob).get("ranking", {}).get("hypotheses") or [{}]
+        doc = json.loads(hypotheses_blob)
+    except ValueError:
+        doc = {}
+    if not isinstance(doc, dict):
+        doc = {}
+    try:
+        ranked = doc.get("ranking", {}).get("hypotheses") or [{}]
         verdict = ranked[0].get("verdict") or {}
-    except (ValueError, AttributeError, IndexError, TypeError):
+    except (AttributeError, IndexError, TypeError):
         verdict = {}
+    try:
+        # grounding_context.seams[1] in ClickHouse's 1-based JSON path.
+        seams = (doc.get("grounding_context") or {}).get("seams") or [{}]
+        seam_type = str(seams[0].get("seam_type") or "")
+    except (AttributeError, IndexError, TypeError):
+        seam_type = ""
     return {
         "owner": str(verdict.get("owner") or ""),
         "plane_count": len(verdict.get("modality_coverage") or []),
         "debug_excluded": 1 if verdict.get("excluded_debug_probes") else 0,
         "low_authority": 1 if verdict.get("low_authority_probe_scopes") else 0,
+        "seam_type": seam_type,
     }
 
 

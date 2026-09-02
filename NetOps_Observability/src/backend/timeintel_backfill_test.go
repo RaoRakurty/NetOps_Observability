@@ -84,9 +84,15 @@ type synthCorr struct {
 	// values mean "open, no recovery" so every existing fixture is unchanged.
 	state     string
 	windowEnd time.Time
+	// seamType is the tracker-197 projection column. The zero value is '' —
+	// exactly what a corr_current row written BEFORE that column existed carries
+	// under its DEFAULT, and what an ungrounded object has always meant — so the
+	// default fixture is the pre-197 install and every existing test keeps its
+	// meaning. Set it to exercise a grounded object.
+	seamType string
 }
 
-// chState is the corr_objects state the fake serves — "open" unless the fixture
+// chState is the corr_current state the fake serves — "open" unless the fixture
 // says otherwise (the default every pre-existing test relies on).
 func (o synthCorr) chState() string {
 	if o.state == "" {
@@ -102,8 +108,6 @@ var (
 	reCeilLE      = regexp.MustCompile(`\n\s+AND created_at <= toDateTime64\('([^']+)', 3, 'UTC'\)`)
 	reLimit       = regexp.MustCompile(`LIMIT (\d+)`)
 	reFetchUUID   = regexp.MustCompile(`toUUID\('([0-9a-fA-F-]{36})'\)`)
-	reFetchLo     = regexp.MustCompile(`o\.created_at >= toDateTime64\('([^']+)', 3, 'UTC'\)`)
-	reFetchHi     = regexp.MustCompile(`o\.created_at <= toDateTime64\('([^']+)', 3, 'UTC'\)`)
 )
 
 const synthTimeLayout = "2006-01-02 15:04:05.000"
@@ -120,10 +124,10 @@ type synthCH struct {
 	params   []url.Values
 	pickSQL  []string
 	fetchSQL []string
-	// failFetchOn is the 1-based SUB-fetch ordinal that is refused outright.
+	// failFetchOn is the 1-based FETCH ordinal that is refused outright (one
+	// fetch per page since tracker 197 deleted the sub-paging splitter).
 	// 0 = never. failFetchCode is the DB::Exception code it is refused with,
-	// defaulting to 241; the tests that want a refusal the SPLITTER must not
-	// swallow set it to a code halving cannot fix.
+	// defaulting to 241.
 	failFetchOn   int
 	failFetchCode int
 	// failCeilPickCode refuses any PICK that carries a ceiling predicate — i.e.
@@ -133,35 +137,6 @@ type synthCH struct {
 	failCeilPickCode int
 	fetches          int
 	foldedIDs        []string
-
-	// ── read-budget accounting (186 fix-2) ────────────────────────────────────
-	//
-	// The live failure is not "the Nth query dies", it is "a query over too many
-	// keys reads too many bytes". Modelling it as a per-key cost against a cap
-	// is what makes the splitter tests real: a fake that only ever failed on an
-	// ordinal would pass just as happily with the splitter deleted, because
-	// halving would never change the answer.
-	//
-	// bytesPerKey x len(keys) > readBytesCap  ⇒  Code 307 TOO_MANY_BYTES,
-	// which is exactly the shape measured live (bytes scale with the number of
-	// distinct hypotheses granules, i.e. with the number of scattered keys).
-	fetchBytesPerKey int
-	fetchReadBytes   int
-	// poison ids are refused with 241 at ANY size — a single object whose own
-	// blob overruns the memory ceiling, which no amount of halving can fix.
-	poison map[string]bool
-	// narrowPoison ids are the LIVE shape fix-4 measured (186 fix-5): refused
-	// with 241 at any key count under the production block geometry, and read
-	// cleanly at max_block_size=1 / max_threads=1. Halving never fixes them;
-	// only re-shaping the read does.
-	narrowPoison map[string]bool
-	// fetchNarrow records, per sub-fetch and in order, whether it was issued at
-	// the floor geometry — so a test can assert the retry was ASKED for, not
-	// merely that the outcome looks right.
-	fetchNarrow []bool
-	// fetchKeyCounts records the key count of every sub-fetch in order, so a
-	// test can assert the halving SEQUENCE and not merely the outcome.
-	fetchKeyCounts []int
 }
 
 func newSynthCH(t *testing.T, objs []synthCorr) *synthCH {
@@ -209,33 +184,15 @@ func (f *synthCH) serve(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		writeSynthRows(w, rows)
-	case strings.Contains(sql, "FROM netops.corr_objects AS o"):
+	case strings.Contains(sql, "FROM netops.corr_current AS c FINAL"):
 		f.fetchSQL = append(f.fetchSQL, sql)
 		f.fetches++
-		ids := fetchKeyIDs(sql)
-		f.fetchKeyCounts = append(f.fetchKeyCounts, len(ids))
-		narrow := r.URL.Query().Get("max_block_size") == intToString(timeIntelBackfillNarrowBlockRows) &&
-			r.URL.Query().Get("max_threads") == intToString(timeIntelBackfillNarrowThreads)
-		f.fetchNarrow = append(f.fetchNarrow, narrow)
 		refuse := 0
-		switch {
-		case f.failFetchOn == f.fetches:
+		if f.failFetchOn == f.fetches {
 			refuse = f.failFetchCode
 			if refuse == 0 {
 				refuse = 241
 			}
-		case !narrow && f.narrowPoisonHit(ids):
-			// Refused for the SHAPE of the read, not the size of the key list:
-			// the default block's ~512 MiB chunk allocation while reading
-			// column hypotheses. One row per block on one thread reads it.
-			refuse = 241
-		case f.poisonHit(ids):
-			// A single object whose own hypotheses blob overruns the ceiling —
-			// measured live: a ONE-key fetch that reads 0 bytes and still dies
-			// allocating a 512 MiB chunk while reading column hypotheses.
-			refuse = 241
-		case f.fetchReadBytes > 0 && len(ids)*f.fetchBytesPerKey > f.fetchReadBytes:
-			refuse = 307
 		}
 		var rows []map[string]any
 		if refuse == 0 {
@@ -283,52 +240,6 @@ func synthRefusal(code int) string {
 	default:
 		return "Code: " + strconv.Itoa(code) + ". DB::Exception: synthetic refusal"
 	}
-}
-
-// fetchKeyIDs is the correlation_ids one wide-fetch statement asked for.
-func fetchKeyIDs(sql string) []string {
-	ms := reFetchUUID.FindAllStringSubmatch(sql, -1)
-	out := make([]string, 0, len(ms))
-	for _, m := range ms {
-		out = append(out, m[1])
-	}
-	return out
-}
-
-// poisonHit reports whether this sub-fetch touches an object the fake refuses
-// at any size. Caller holds f.mu.
-func (f *synthCH) poisonHit(ids []string) bool {
-	for _, id := range ids {
-		if f.poison[id] {
-			return true
-		}
-	}
-	return false
-}
-
-// narrowPoisonHit reports whether this sub-fetch touches an object the fake
-// refuses under the production block geometry. Caller holds f.mu.
-func (f *synthCH) narrowPoisonHit(ids []string) bool {
-	for _, id := range ids {
-		if f.narrowPoison[id] {
-			return true
-		}
-	}
-	return false
-}
-
-// subFetchNarrow is the geometry of every sub-fetch, in order.
-func (f *synthCH) subFetchNarrow() []bool {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	return append([]bool(nil), f.fetchNarrow...)
-}
-
-// subFetchKeyCounts is the key count of every sub-fetch, in order.
-func (f *synthCH) subFetchKeyCounts() []int {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	return append([]int(nil), f.fetchKeyCounts...)
 }
 
 // reSelectAlias captures every `<expr> AS <name>` in a projection line.
@@ -437,29 +348,19 @@ func (f *synthCH) pick(sql string) []map[string]any {
 	return out
 }
 
-// fetch answers the wide half for exactly the keys the builder listed, and only
-// for objects inside the created_at slice the builder bounded it with — so a
-// builder that dropped either bound would hand back rows this fixture refuses.
+// fetch answers the fold's half for exactly the keys the builder listed — so a
+// builder that stopped keying the read would hand back rows this fixture
+// refuses. Since tracker 197 there is no created_at slice to honour: the read
+// is against corr_current, which is partitioned by tenant_id alone, so a time
+// window would prune nothing (measured identical read_bytes with and without).
 func (f *synthCH) fetch(sql string) []map[string]any {
 	want := map[string]bool{}
 	for _, m := range reFetchUUID.FindAllStringSubmatch(sql, -1) {
 		want[m[1]] = true
 	}
-	lo, hi := time.Time{}, time.Time{}
-	if m := reFetchLo.FindStringSubmatch(sql); m != nil {
-		lo, _ = time.ParseInLocation(synthTimeLayout, m[1], time.UTC)
-		lo = lo.Add(-timeIntelBackfillFetchSlackSeconds * time.Second)
-	}
-	if m := reFetchHi.FindStringSubmatch(sql); m != nil {
-		hi, _ = time.ParseInLocation(synthTimeLayout, m[1], time.UTC)
-		hi = hi.Add(timeIntelBackfillFetchSlackSeconds * time.Second)
-	}
 	out := []map[string]any{}
 	for _, o := range f.objs {
 		if !want[o.id] {
-			continue
-		}
-		if (!lo.IsZero() && o.created.Before(lo)) || (!hi.IsZero() && o.created.After(hi)) {
 			continue
 		}
 		f.foldedIDs = append(f.foldedIDs, o.id)
@@ -473,7 +374,9 @@ func (f *synthCH) fetch(sql string) []map[string]any {
 			"window_start": ts, "created_at": ts, "window_end": we,
 			"verdict_tier": "confirmed", "top_confidence": 0.9,
 			"top_hypothesis": "link_down", "evidence_missing": "[]",
-			"affected": "{}", "state": o.chState(), "owner": "isp", "seam_type": "DIA",
+			"affected": "{}", "state": o.chState(), "owner": "isp",
+			// A plain LowCardinality column since 197, not a JSON extraction.
+			"seam_type": o.seamType,
 		})
 	}
 	return out
@@ -692,46 +595,52 @@ SELECT toString(tenant_id)      AS tenant_id,
 }
 
 // TestTimeIntelBackfillFetchSQLIsKeyedAndPartitionBounded pins the wide half.
-func TestTimeIntelBackfillFetchSQLIsKeyedAndPartitionBounded(t *testing.T) {
+func TestTimeIntelBackfillFetchSQLIsKeyedToThePickedPage(t *testing.T) {
 	lo := time.Date(2026, 8, 31, 1, 0, 0, 0, time.UTC)
-	hi := lo.Add(7 * time.Minute)
 	keys := []timeIntelBackfillKey{
 		{TenantID: "acme", CorrelationID: "11111111-1111-4111-8111-111111111111", Version: 3, CreatedAt: lo},
-		{TenantID: "globex", CorrelationID: "22222222-2222-4222-8222-222222222222", Version: 1, CreatedAt: hi},
+		{TenantID: "globex", CorrelationID: "22222222-2222-4222-8222-222222222222", Version: 1, CreatedAt: lo.Add(7 * time.Minute)},
 	}
-	sql := timeIntelBackfillFetchSQL(keys, lo, hi)
+	sql := timeIntelBackfillFetchSQL(keys)
 
-	// 1. Keyed on the corr_objects primary key PREFIX (tenant_id first).
-	if !strings.Contains(sql, "(o.tenant_id, o.correlation_id, o.version) IN (") {
+	// 1. Keyed on corr_current's own key tuple, tenant_id first — the ORDER BY
+	//    prefix, so the predicate is a primary-key condition.
+	if !strings.Contains(sql, "(c.tenant_id, c.correlation_id, c.version) IN (") {
 		t.Errorf("fetch key tuple must lead with tenant_id:\n%s", sql)
 	}
-	// 2. BOTH created_at bounds — this is what prunes partitions
-	//    (toYYYYMMDD(created_at)) to the page's own slice. Losing the upper
-	//    bound is the storm-s07 regression: every page re-reads every retained
-	//    day from the cursor to now.
-	if !strings.Contains(sql, "o.created_at >= toDateTime64('2026-08-31 01:00:00.000', 3, 'UTC')") ||
-		!strings.Contains(sql, "o.created_at <= toDateTime64('2026-08-31 01:07:00.000', 3, 'UTC')") {
-		t.Errorf("fetch lost a created_at partition bound:\n%s", sql)
+	// 2. FINAL, or a re-persisted object is read from a stale duplicate part.
+	//    corr_current is a ReplacingMergeTree keyed on created_at.
+	if !strings.Contains(sql, "FROM netops.corr_current AS c FINAL") {
+		t.Errorf("the fold's read must collapse re-persists with FINAL:\n%s", sql)
 	}
-	// 3. Exactly the picked keys, no more.
+	// 3. NO created_at range. corr_current is partitioned by tenant_id ALONE
+	//    (its dedup key may not span partitions), so a time window prunes
+	//    nothing — measured byte-for-byte identical with and without it — while
+	//    adding one more way to miss a row re-persisted mid-page. The bound
+	//    belonged to corr_objects (PARTITION BY toYYYYMMDD(created_at)) and left
+	//    with it.
+	if strings.Contains(sql, "c.created_at >=") || strings.Contains(sql, "c.created_at <=") {
+		t.Errorf("the projection read carries a created_at range that prunes nothing:\n%s", sql)
+	}
+	// 4. Exactly the picked keys, no more.
 	if n := len(reFetchUUID.FindAllString(sql, -1)); n != len(keys) {
 		t.Errorf("fetch listed %d keys, want %d:\n%s", n, len(keys), sql)
 	}
-	// 4. No outer ORDER BY over the wide read: sorting the result set holds
-	//    hypotheses blocks alive across the whole scan (971 MiB measured, over
-	//    the 1 GiB ceiling) and buys nothing — the loop upserts by key.
-	if outer := sql[strings.Index(sql, "FROM netops.corr_objects AS o"):]; strings.Contains(outer, "ORDER BY") {
-		t.Errorf("the wide history read must not sort its result set:\n%s", outer)
+	// 5. No outer ORDER BY: the loop upserts by key, so sorting buys nothing and
+	//    forces the reader to hold blocks alive across the whole scan (971 MiB
+	//    vs 501 MiB measured on the old wide read — the reason has not changed).
+	if outer := sql[strings.Index(sql, "FROM netops.corr_current AS c FINAL"):]; strings.Contains(outer, "ORDER BY") {
+		t.Errorf("the fold's read must not sort its result set:\n%s", outer)
 	}
-	// 5. A tenant id is tenant-CONTROLLED data: it is quoted, not pasted.
+	// 6. A tenant id is tenant-CONTROLLED data: it is quoted, not pasted.
 	esc := timeIntelBackfillFetchSQL([]timeIntelBackfillKey{
-		{TenantID: `a'); DROP TABLE netops.corr_objects --`, CorrelationID: keys[0].CorrelationID, Version: 1},
-	}, lo, hi)
-	if !strings.Contains(esc, `'a\'); DROP TABLE netops.corr_objects --'`) {
+		{TenantID: `a'); DROP TABLE netops.corr_current --`, CorrelationID: keys[0].CorrelationID, Version: 1},
+	})
+	if !strings.Contains(esc, `'a\'); DROP TABLE netops.corr_current --'`) {
 		t.Errorf("tenant id is not escaped into a ClickHouse literal:\n%s", esc)
 	}
-	// 6. An empty page never produces a statement at all.
-	if timeIntelBackfillFetchSQL(nil, lo, hi) != "" {
+	// 7. An empty page never produces a statement at all.
+	if timeIntelBackfillFetchSQL(nil) != "" {
 		t.Error("an empty page must not build a fetch statement")
 	}
 }
@@ -757,12 +666,17 @@ func TestTimeIntelBackfillHasNoUnboundedSelect(t *testing.T) {
 		}
 	}
 	// The fetch has no LIMIT and must not need one: it is bounded by the KEY
-	// SET (at most one page of literals) AND by the created_at slice. Assert
-	// both, because either alone would leave a read that grows with the table.
+	// SET — at most one page of literals, and every one of them a primary-key
+	// condition on (tenant_id, correlation_id). That is the ONLY bound it needs
+	// now: the corr_objects created_at slice existed to prune partitions on a
+	// table partitioned by day, and corr_current is partitioned by tenant alone.
 	keys := []timeIntelBackfillKey{{TenantID: "t", CorrelationID: "11111111-1111-4111-8111-111111111111", Version: 1}}
-	sql := timeIntelBackfillFetchSQL(keys, time.Now().UTC().Add(-time.Hour), time.Now().UTC())
-	if !strings.Contains(sql, " IN (") || !reFetchLo.MatchString(sql) || !reFetchHi.MatchString(sql) {
-		t.Errorf("fetch is not bounded by BOTH the key set and the created_at slice:\n%s", sql)
+	sql := timeIntelBackfillFetchSQL(keys)
+	if !strings.Contains(sql, "(c.tenant_id, c.correlation_id, c.version) IN (") {
+		t.Errorf("fetch is not bounded by the picked key set:\n%s", sql)
+	}
+	if regexp.MustCompile(`(?i)SELECT\s+\*`).MatchString(sql) {
+		t.Errorf("fetch uses SELECT *:\n%s", sql)
 	}
 	// And the page geometry must not be able to exceed the historical per-pass
 	// cap: ten pages of 2 000 is the same 20 000 objects the single shot took.
@@ -875,19 +789,17 @@ func TestTimeIntelBackfillPagesThroughBacklog(t *testing.T) {
 	if !res.Cursor.CreatedAt.Equal(last.created) || res.Cursor.CorrelationID != last.id {
 		t.Errorf("cursor = (%s, %s), want (%s, %s)", res.Cursor.CreatedAt, res.Cursor.CorrelationID, last.created, last.id)
 	}
-	// One pick per page, and the pass STOPS when it runs dry — the fourth pick
-	// is the empty one that proves it, not an eleventh page.
+	// One pick and ONE fetch per page, and the pass STOPS when it runs dry — the
+	// fourth pick is the empty one that proves it, not an eleventh page.
 	//
-	// The FETCH count is no longer one per page (186 fix-2): the wide half is
-	// sub-paged at timeIntelBackfillFetchSubPageKeys because a whole 2 000-key
-	// fetch cannot fit under the read/memory guard rails on the live table. It
-	// is still EXACTLY the sub-pages, with no splitting, because nothing here is
-	// refused — a count above this means the fetch is halving when it has no
-	// reason to.
-	wantFetches := timeIntelSubPagesFor(timeIntelBackfillPageRows)*2 + timeIntelSubPagesFor(500)
+	// Exactly three fetches is a real assertion since tracker 197, not a
+	// formality: between 186 and 197 the fetch was sub-paged at 64 keys
+	// (32 queries for a 2 000-key page) because a whole page against
+	// corr_objects could not fit under the read/memory guard rails. It fits now,
+	// so a count above one per non-empty page means the splitter is back.
 	picks, fetches := f.counts()
-	if picks != 3 || fetches != wantFetches {
-		t.Errorf("picks/fetches = %d/%d, want 3/%d", picks, fetches, wantFetches)
+	if picks != 3 || fetches != 3 {
+		t.Errorf("picks/fetches = %d/%d, want 3/3", picks, fetches)
 	}
 	rows, _ := m.List(context.Background(), "", true, n+10)
 	if len(rows) != n {
@@ -1057,8 +969,8 @@ func TestTimeIntelBackfillUnsplittableFailureDegradesAndResumes(t *testing.T) {
 	const n = timeIntelBackfillPageRows*2 + 100
 	objs := synthObjects(n, time.Now().UTC().Add(-30*time.Hour))
 	f := newSynthCH(t, objs)
-	// The first sub-fetch of the SECOND page is killed.
-	f.failFetchOn = timeIntelSubPagesFor(timeIntelBackfillPageRows) + 1
+	// The SECOND page's fetch is killed (one fetch per page since 197).
+	f.failFetchOn = 2
 	f.failFetchCode = 159
 
 	m := timeintel.NewMemMetricsStore()
@@ -1161,8 +1073,8 @@ func TestTimeIntelBackfillWritesSnapshotsPerTenant(t *testing.T) {
 	useTimeIntelKV(t)
 	base := time.Now().UTC().Add(-2 * time.Hour)
 	newSynthCH(t, []synthCorr{
-		{tenant: "acme", id: "11111111-1111-4111-8111-111111111111", version: 3, created: base},
-		{tenant: "globex", id: "22222222-2222-4222-8222-222222222222", version: 1, created: base.Add(time.Minute)},
+		{tenant: "acme", id: "11111111-1111-4111-8111-111111111111", version: 3, created: base, seamType: "DIA"},
+		{tenant: "globex", id: "22222222-2222-4222-8222-222222222222", version: 1, created: base.Add(time.Minute), seamType: "SDWAN"},
 	})
 	m := timeintel.NewMemMetricsStore()
 	s := &server{incidentTimeMetrics: m}
@@ -1177,6 +1089,9 @@ func TestTimeIntelBackfillWritesSnapshotsPerTenant(t *testing.T) {
 	if err != nil {
 		t.Fatalf("store list: %v", err)
 	}
+	// The seam type is carried through from the projection column (197) — and it
+	// is acme's OWN seam type, never globex's, which is what makes this a
+	// per-tenant assertion rather than a "something was written" one.
 	if len(own) != 1 || own[0].TenantID != "acme" || own[0].SeamType != "DIA" {
 		t.Fatalf("acme must see exactly its own snapshot, got %+v", own)
 	}
@@ -1252,423 +1167,47 @@ func TestTimeIntelBackfillHTTPResetClearsWatermark(t *testing.T) {
 	}
 }
 
-// ── adaptive fetch splitting (tracker 186 fix-2) ──────────────────────────────
+// ── the fold's read (tracker 197) ────────────────────────────────────────────
 //
-// The failure these tests exist for: on 2026-08-31, with the pick finally
-// working, the WIDE fetch for a 2 000-key page read 2.24 GiB and was refused
-// with Code 307 TOO_MANY_BYTES — every tick, identically, because the pass is
-// deterministic. pages = 0, no watermark write, a permanent stall.
+// HISTORY, because the shape of these tests only makes sense with it. On
+// 2026-08-31 the WIDE fetch for a 2 000-key page read 2.24 GiB out of
+// corr_objects and was refused with Code 307 TOO_MANY_BYTES — every tick,
+// identically, because the pass is deterministic: pages = 0, no watermark
+// write, a permanent stall. Tracker 186 answered that with an adaptive
+// splitter (sub-pages, a halving tree, a narrow-geometry floor retry and an
+// oversize-skip path) whose rule was DEGRADE BY SPLITTING, NEVER BY STALLING —
+// and whose price was that a page could deliberately drop a snapshot to keep
+// moving.
 //
-// The rule the fix encodes: DEGRADE BY SPLITTING, NEVER BY STALLING.
+// Tracker 197 removed the cause instead of managing it. The fold needs twelve
+// values; corr_current carried eleven and the engine now projects the twelfth
+// (seam_type) at persist time, so the read is one keyed query against the
+// narrow projection: 555 MiB for a whole 2 000-key page, measured, against
+// ~37.8 GiB of granule reads for the same page before. The splitter and every
+// test that drove it are DELETED, not disabled — there is no longer a code path
+// that folds fewer objects than it picked.
 
-// timeIntelSubPagesFor is how many sub-fetches a key list of n is cut into
-// before any splitting.
-func timeIntelSubPagesFor(n int) int {
-	if n <= 0 {
-		return 0
-	}
-	return (n + timeIntelBackfillFetchSubPageKeys - 1) / timeIntelBackfillFetchSubPageKeys
-}
-
-// TestTimeIntelFetchSplittableActsOnlyOnBudgetRefusals pins the trigger set. A
-// splitter that fired on everything would turn one loud schema fault into a
-// hundred quiet ones; a splitter that fired on nothing is the stall.
-func TestTimeIntelFetchSplittableActsOnlyOnBudgetRefusals(t *testing.T) {
-	cases := []struct {
-		code int
-		want bool
-		why  string
-	}{
-		{307, true, "TOO_MANY_BYTES — the observed stall; deterministic, only fewer keys fix it"},
-		{241, true, "MEMORY_LIMIT_EXCEEDED while reading column hypotheses — a property of the key list"},
-		{159, false, "TIMEOUT_EXCEEDED — the server ran out of time, not the key list out of room"},
-		{43, false, "ILLEGAL_TYPE_OF_ARGUMENT — a broken query; halving it stays broken"},
-		{516, false, "auth — halving is not a credential"},
-		{0, false, "no exception code at all"},
-	}
-	for _, c := range cases {
-		err := error(&chhttp.Error{Op: "fetch", Status: 500, Code: c.code})
-		if got := timeIntelFetchSplittable(err); got != c.want {
-			t.Errorf("code %d: splittable = %v, want %v (%s)", c.code, got, c.want, c.why)
-		}
-	}
-	if timeIntelFetchSplittable(errors.New("transport lost")) {
-		t.Error("a non-ClickHouse error must never be split — the read may have half-happened")
-	}
-	if timeIntelFetchSplittable(nil) {
-		t.Error("nil is not a refusal")
-	}
-}
-
-// TestTimeIntelKeySpanIsMinMaxNotEndpoints: the splitter hands the SQL builder
-// arbitrary sublists, so the partition bound must be a real min/max. Endpoints
-// of an unsorted sublist would exclude rows from the created_at slice and lose
-// exactly those objects' snapshots — silently, since the fetch would succeed.
-func TestTimeIntelKeySpanIsMinMaxNotEndpoints(t *testing.T) {
-	base := time.Date(2026, 8, 22, 1, 0, 0, 0, time.UTC)
-	keys := []timeIntelBackfillKey{
-		{CreatedAt: base.Add(5 * time.Minute)},
-		{CreatedAt: base},
-		{CreatedAt: base.Add(9 * time.Minute)},
-		{CreatedAt: base.Add(2 * time.Minute)},
-	}
-	from, to := timeIntelKeySpan(keys)
-	if !from.Equal(base) || !to.Equal(base.Add(9*time.Minute)) {
-		t.Errorf("span = [%s, %s], want [%s, %s]", from, to, base, base.Add(9*time.Minute))
-	}
-	if f, tt := timeIntelKeySpan(nil); !f.IsZero() || !tt.IsZero() {
-		t.Errorf("empty span = [%s, %s], want zero", f, tt)
-	}
-}
-
-// TestTimeIntelBackfillFetchHalvesUntilItFits is the headline: a wide fetch the
-// server refuses for read volume must be HALVED until it is accepted, and the
-// page must fold every object anyway.
+// TestTimeIntelBackfillFetchSelectsOnlyWhatTheFoldNeeds pins the column set and
+// the SOURCE of the fold's read.
 //
-// MUTANT: delete the split branch in timeIntelFetchSplit.run and this test
-// fails — the pass returns the 307 and writes nothing, which is the live stall.
-func TestTimeIntelBackfillFetchHalvesUntilItFits(t *testing.T) {
-	useTimeIntelKV(t)
-	const n = 200
-	objs := synthObjects(n, time.Now().UTC().Add(-30*time.Hour))
-	f := newSynthCH(t, objs)
-	// The live shape, scaled: bytes grow with the number of scattered keys, and
-	// the cap admits at most 16 of them.
-	f.fetchBytesPerKey = 12
-	f.fetchReadBytes = 16 * 12
-
-	m := timeintel.NewMemMetricsStore()
-	s := &server{incidentTimeMetrics: m}
-	res, err := s.backfillIncidentTimeMetrics(context.Background(), timeIntelBackfillLookback)
-	if err != nil {
-		t.Fatalf("a read-budget refusal must be split, not returned: %v", err)
-	}
-	if res.Written != n {
-		t.Errorf("written = %d, want %d — splitting must not lose objects", res.Written, n)
-	}
-	if res.Cursor.CorrelationID != objs[n-1].id {
-		t.Errorf("cursor = %s, want the last object %s", res.Cursor.CorrelationID, objs[n-1].id)
-	}
-	if got := s.timeIntelFetchSplits.Load(); got == 0 {
-		t.Error("netops_timeintel_fetch_splits_total stayed 0 — the page was never actually split")
-	}
-	if got := s.timeIntelFetchOversizeSkipped.Load() + s.timeIntelFetchBudgetSkipped.Load(); got != 0 {
-		t.Errorf("a splittable page skipped %d objects — nothing here is unreadable", got)
-	}
-	// The SEQUENCE, not just the outcome: every sub-fetch that was refused must
-	// be followed by one of half its size, down to an accepted 16.
-	counts := f.subFetchKeyCounts()
-	wantPrefix := []int{64, 32, 16, 16, 32, 16, 16}
-	if len(counts) < len(wantPrefix) {
-		t.Fatalf("sub-fetch key counts = %v, want at least the halving prefix %v", counts, wantPrefix)
-	}
-	for i, want := range wantPrefix {
-		if counts[i] != want {
-			t.Fatalf("sub-fetch key counts = %v, want prefix %v (differs at %d)", counts[:len(wantPrefix)], wantPrefix, i)
-		}
-	}
-	for i, c := range counts {
-		if c > timeIntelBackfillFetchSubPageKeys {
-			t.Errorf("sub-fetch %d asked for %d keys, above the %d sub-page cut", i, c, timeIntelBackfillFetchSubPageKeys)
-		}
-	}
-	rows, _ := m.List(context.Background(), "", true, n+10)
-	if len(rows) != n {
-		t.Errorf("store holds %d snapshots, want %d", len(rows), n)
-	}
-}
-
-// TestTimeIntelBackfillPoisonedObjectIsSkippedAndWatermarkAdvances is the
-// second half of the contract, and the one that decides whether the worker can
-// stall at all: ONE object whose own hypotheses blob overruns the memory
-// ceiling (measured live — a one-key fetch reading 0 bytes still dies
-// allocating a 512 MiB chunk) must be skipped, counted and named, while every
-// other object on the page is folded and the watermark moves PAST it.
+// The set: exactly the twelve values foldTimeIntelPage reads, all of them plain
+// columns of corr_current. `owner` and `seam_type` are the two that used to be
+// JSONExtractString'd out of the hypotheses blob (MetricRow.Owner /
+// .OwnerDomain / .SeamType, and DriverContext.Owner); with seam_type projected
+// there is nothing left to extract, and the blob's table must not appear here
+// at all.
 //
-// MUTANT: delete the min-keys skip branch and this test fails — the splitter
-// either recurses forever or returns the 241, and the watermark never passes
-// the poisoned object, which is the stall in a new costume.
-func TestTimeIntelBackfillPoisonedObjectIsSkippedAndWatermarkAdvances(t *testing.T) {
-	useTimeIntelKV(t)
-	const n = 130
-	objs := synthObjects(n, time.Now().UTC().Add(-30*time.Hour))
-	poisoned := objs[70] // inside the second sub-page, not on a boundary
-	f := newSynthCH(t, objs)
-	f.poison = map[string]bool{poisoned.id: true}
-
-	m := timeintel.NewMemMetricsStore()
-	s := &server{incidentTimeMetrics: m}
-	res, err := s.backfillIncidentTimeMetrics(context.Background(), timeIntelBackfillLookback)
-	if err != nil {
-		t.Fatalf("one unreadable object must not fail the pass: %v", err)
-	}
-	if res.Written != n-1 {
-		t.Errorf("written = %d, want %d (everything but the poisoned object)", res.Written, n-1)
-	}
-	// THE point of the fix: the watermark is past the poisoned object, so the
-	// next tick does not re-read the same failing page forever.
-	if res.Cursor.CorrelationID != objs[n-1].id {
-		t.Errorf("cursor = %s, want the last object %s — the watermark did not pass the poison",
-			res.Cursor.CorrelationID, objs[n-1].id)
-	}
-	if !res.Cursor.CreatedAt.After(poisoned.created) {
-		t.Errorf("cursor at %s is not past the poisoned object at %s", res.Cursor.CreatedAt, poisoned.created)
-	}
-	if got := s.timeIntelFetchOversizeSkipped.Load(); got != 1 {
-		t.Errorf("netops_timeintel_fetch_oversize_skipped_total{reason=\"oversize\"} = %d, want 1", got)
-	}
-	// Since 186 fix-5 an oversize skip is only allowed to be RECORDED after the
-	// floor geometry was tried and refused too — otherwise "irreducible" is a
-	// claim nobody tested. This object is refused at every geometry, so the
-	// retry happened, found nothing, and the rescue counter stayed 0.
-	if !containsTrue(f.subFetchNarrow()) {
-		t.Error("no sub-fetch was issued at the floor geometry — the object was written off without the narrow retry")
-	}
-	if got := s.timeIntelFetchNarrowRetries.Load(); got != 0 {
-		t.Errorf("netops_timeintel_fetch_narrow_retries_total = %d, want 0 — nothing was rescued here", got)
-	}
-	if got := s.timeIntelFetchBudgetSkipped.Load(); got != 0 {
-		t.Errorf("split_budget skips = %d, want 0 — this page had budget to spare", got)
-	}
-	if got := s.timeIntelFetchSplits.Load(); got == 0 {
-		t.Error("the poisoned sub-page was never split — a 64-key skip would have cost 63 healthy objects")
-	}
-	// The skip is EXACTLY one object: its neighbours are in the store.
-	rows, _ := m.List(context.Background(), "", true, n+10)
-	if len(rows) != n-1 {
-		t.Fatalf("store holds %d snapshots, want %d", len(rows), n-1)
-	}
-	for _, r := range rows {
-		if r.CorrelationID == poisoned.id {
-			t.Errorf("the poisoned object %s was snapshotted — the fake never returned it", poisoned.id)
-		}
-	}
-	for _, want := range []string{objs[69].id, objs[71].id} {
-		found := false
-		for _, r := range rows {
-			if r.CorrelationID == want {
-				found = true
-				break
-			}
-		}
-		if !found {
-			t.Errorf("neighbour %s of the poisoned object was lost — the skip is wider than one object", want)
-		}
-	}
-	// A SECOND pass makes no further progress claim and does not re-skip: the
-	// watermark is past it. This is the anti-stall assertion.
-	before := s.timeIntelFetchOversizeSkipped.Load()
-	res2, err := s.backfillIncidentTimeMetrics(context.Background(), timeIntelBackfillLookback)
-	if err != nil {
-		t.Fatalf("pass 2: %v", err)
-	}
-	if !res2.CaughtUp {
-		t.Error("pass 2 must report caught-up — the backlog was drained past the poison")
-	}
-	if got := s.timeIntelFetchOversizeSkipped.Load(); got != before+1 {
-		// The bounded re-scan behind the watermark re-reads the poisoned object
-		// exactly once more; anything beyond that is a loop.
-		t.Errorf("oversize skips %d → %d over one re-scan, want exactly one more", before, got)
-	}
-}
-
-// containsTrue reports whether any sub-fetch in the sequence was narrow.
-func containsTrue(bs []bool) bool {
-	for _, b := range bs {
-		if b {
-			return true
-		}
-	}
-	return false
-}
-
-// TestTimeIntelBackfillNarrowRetryRescuesAFloorRefusal is the 186 fix-5
-// contract: an object the production block geometry refuses at EVERY key count
-// — the exact live shape fix-4 measured, a ~512 MiB chunk allocation while
-// reading column hypotheses — must be retried ONCE at max_block_size=1 /
-// max_threads=1 and FOLDED, not skipped as oversize.
-//
-// This is data loss recovered, not an optimisation: before the retry these
-// objects (~2 per 2 000-key page live, ~26 per pass) were silently missing
-// snapshots forever, because the watermark had already moved past them.
-//
-// MUTANT: delete the narrow-retry branch in timeIntelFetchSplit.run and this
-// test fails — written drops to n-2 and the two objects are counted as
-// oversize skips, which is the avoidable loss this fix removes.
-func TestTimeIntelBackfillNarrowRetryRescuesAFloorRefusal(t *testing.T) {
-	useTimeIntelKV(t)
-	const n = 130
-	objs := synthObjects(n, time.Now().UTC().Add(-30*time.Hour))
-	// Two objects, in different sub-pages and off the halving boundaries — the
-	// live density (2 per 2 000 keys), scaled to this page.
-	shaped := []synthCorr{objs[35], objs[100]}
-	f := newSynthCH(t, objs)
-	f.narrowPoison = map[string]bool{shaped[0].id: true, shaped[1].id: true}
-
-	m := timeintel.NewMemMetricsStore()
-	s := &server{incidentTimeMetrics: m}
-	res, err := s.backfillIncidentTimeMetrics(context.Background(), timeIntelBackfillLookback)
-	if err != nil {
-		t.Fatalf("a shape refusal must be re-shaped, not returned: %v", err)
-	}
-	if res.Written != n {
-		t.Errorf("written = %d, want %d — the narrow retry must fold every object, not lose the refused ones", res.Written, n)
-	}
-	if got := s.timeIntelFetchNarrowRetries.Load(); got != 2 {
-		t.Errorf("netops_timeintel_fetch_narrow_retries_total = %d, want 2", got)
-	}
-	if got := s.timeIntelFetchOversizeSkipped.Load(); got != 0 {
-		t.Errorf("oversize skips = %d, want 0 — nothing here is irreducible", got)
-	}
-	if got := s.timeIntelFetchBudgetSkipped.Load(); got != 0 {
-		t.Errorf("split_budget skips = %d, want 0 — this page had budget to spare", got)
-	}
-	// The retry is spent at the FLOOR, never as a second try at a wide sublist:
-	// every narrow sub-fetch asks for exactly one key.
-	counts, narrow := f.subFetchKeyCounts(), f.subFetchNarrow()
-	if len(counts) != len(narrow) {
-		t.Fatalf("fake recorded %d key counts and %d geometries", len(counts), len(narrow))
-	}
-	narrowed := 0
-	for i, isNarrow := range narrow {
-		if !isNarrow {
-			continue
-		}
-		narrowed++
-		if counts[i] != timeIntelBackfillFetchSplitMinKeys {
-			t.Errorf("narrow sub-fetch %d asked for %d keys, want the %d-key floor — a wide retry is a second bill, not a re-shape",
-				i, counts[i], timeIntelBackfillFetchSplitMinKeys)
-		}
-	}
-	if narrowed != 2 {
-		t.Errorf("%d narrow sub-fetches, want exactly 2 (one per shape-refused object) — the retry must not become a per-refusal habit", narrowed)
-	}
-	// And the rescued objects are really in the store, not merely counted.
-	rows, _ := m.List(context.Background(), "", true, n+10)
-	if len(rows) != n {
-		t.Fatalf("store holds %d snapshots, want %d", len(rows), n)
-	}
-	for _, want := range shaped {
-		found := false
-		for _, r := range rows {
-			if r.CorrelationID == want.id {
-				found = true
-				break
-			}
-		}
-		if !found {
-			t.Errorf("shape-refused object %s was counted as rescued but never snapshotted", want.id)
-		}
-	}
-}
-
-// TestTimeIntelBackfillNarrowRetryKeepsEveryOtherBudget pins what the retry is
-// allowed to change. It re-SHAPES the read; it must not re-PRICE it.
-//
-// A retry that quietly relaxed max_memory_usage or max_bytes_to_read would be
-// the storm-s07 regression re-entering through the one path that runs on the
-// worst objects on the page — so the difference between the two settings maps
-// is asserted to be exactly two keys, both on the wire and in the builder.
-func TestTimeIntelBackfillNarrowRetryKeepsEveryOtherBudget(t *testing.T) {
-	wide, narrow := timeIntelBackfillReadSettings(), timeIntelBackfillNarrowReadSettings()
-	if len(wide) != len(narrow) {
-		t.Fatalf("narrow settings have %d keys, wide %d — the retry must send the SAME guards", len(narrow), len(wide))
-	}
-	for k, want := range wide {
-		got, ok := narrow[k]
-		if !ok {
-			t.Errorf("narrow settings dropped %q — a guard the retry does not send is a guard it does not have", k)
-			continue
-		}
-		switch k {
-		case "max_block_size":
-			if got != intToString(timeIntelBackfillNarrowBlockRows) || got != "1" {
-				t.Errorf("narrow max_block_size = %q, want 1 (the floor geometry fix-4 measured)", got)
-			}
-		case "max_threads":
-			if got != intToString(timeIntelBackfillNarrowThreads) || got != "1" {
-				t.Errorf("narrow max_threads = %q, want 1", got)
-			}
-		default:
-			if got != want {
-				t.Errorf("narrow settings moved %q from %q to %q — the retry may re-shape the read, never re-price it", k, want, got)
-			}
-		}
-	}
-	// The narrow geometry must actually BE narrower, or the retry is a plain
-	// repeat of a deterministic refusal.
-	if timeIntelBackfillNarrowBlockRows >= timeIntelBackfillBlockRows ||
-		timeIntelBackfillNarrowThreads > timeIntelBackfillThreads {
-		t.Errorf("floor geometry %dx%d is not narrower than the production %dx%d",
-			timeIntelBackfillNarrowBlockRows, timeIntelBackfillNarrowThreads,
-			timeIntelBackfillBlockRows, timeIntelBackfillThreads)
-	}
-
-	// And on the wire: the retry's own query carries the same memory/bytes/time
-	// budget the wide read does.
-	useTimeIntelKV(t)
-	const n = 70
-	objs := synthObjects(n, time.Now().UTC().Add(-30*time.Hour))
-	f := newSynthCH(t, objs)
-	f.narrowPoison = map[string]bool{objs[20].id: true}
-	s := &server{incidentTimeMetrics: timeintel.NewMemMetricsStore()}
-	if _, err := s.backfillIncidentTimeMetrics(context.Background(), timeIntelBackfillLookback); err != nil {
-		t.Fatalf("backfill: %v", err)
-	}
-	if got := s.timeIntelFetchNarrowRetries.Load(); got != 1 {
-		t.Fatalf("narrow retries = %d, want 1 — the wire assertion below would be vacuous", got)
-	}
-	f.mu.Lock()
-	params := append([]url.Values(nil), f.params...)
-	f.mu.Unlock()
-	seen := 0
-	for i, q := range params {
-		if q.Get("max_block_size") != intToString(timeIntelBackfillNarrowBlockRows) ||
-			q.Get("log_comment") != timeIntelBackfillTag {
-			continue
-		}
-		seen++
-		for k, want := range map[string]string{
-			"tenant_scope":       "__all__",
-			"max_memory_usage":   intToString(timeIntelBackfillMemoryBytes),
-			"max_bytes_to_read":  intToString(timeIntelBackfillReadBytes),
-			"max_execution_time": strconv.Itoa(int(timeIntelBackfillBudget / time.Second)),
-			"max_threads":        intToString(timeIntelBackfillNarrowThreads),
-		} {
-			if got := q.Get(k); got != want {
-				t.Errorf("narrow retry call %d: %s = %q, want %q", i, k, got, want)
-			}
-		}
-	}
-	if seen != 1 {
-		t.Errorf("%d narrow-geometry fetches on the wire, want exactly 1", seen)
-	}
-}
-
-// TestTimeIntelBackfillFetchSelectsOnlyWhatTheFoldNeeds pins the column set of
-// the WIDE read, which is the expensive half.
-//
-// hypotheses is 94 % of corr_objects (70 GiB uncompressed) and is the entire
-// reason the fetch has to be split at all, so "does the fold actually need it"
-// is a question with a 20-GiB-per-page answer. It DOES: `owner` and `seam_type`
-// are both JSON-extracted from it and both land in the snapshot
-// (MetricRow.Owner / .OwnerDomain / .SeamType, and DriverContext.Owner). The
-// extraction stays SERVER-side — pulling the blob itself would blow the
-// response cap — and no THIRD extraction may be added without re-measuring.
-//
-// window_end joined the list for the engine-inferred recovery stamp (a closed
-// object's last-evidence time standing in for an absent ITSM recovery signal).
-// It is a DateTime64(3) — 8 bytes/row against a blob that is 94 % of the table
-// — so it is the one narrow column this read may grow by; the banned list below
-// still forbids every wide/unused one.
+// window_end is on the list for the engine-inferred recovery stamp (a closed
+// object's last-evidence time standing in for an absent ITSM recovery signal);
+// state was already there. Both are narrow columns of the projection.
 func TestTimeIntelBackfillFetchSelectsOnlyWhatTheFoldNeeds(t *testing.T) {
 	keys := []timeIntelBackfillKey{{
 		TenantID: "global", CorrelationID: "55befe37-0418-5dc4-8727-43006a30edab",
 		Version: 1, CreatedAt: time.Now().UTC(),
 	}}
-	sql := timeIntelBackfillFetchSQL(keys, keys[0].CreatedAt, keys[0].CreatedAt)
+	sql := timeIntelBackfillFetchSQL(keys)
 
-	// Every column foldTimeIntelPage reads out of a fetch row.
+	// 1. Every value foldTimeIntelPage reads out of a fetch row — all twelve.
 	for _, want := range []string{
 		"tenant_id", "correlation_id", "window_start", "window_end", "created_at",
 		"verdict_tier", "top_confidence", "top_hypothesis", "evidence_missing",
@@ -1678,86 +1217,88 @@ func TestTimeIntelBackfillFetchSelectsOnlyWhatTheFoldNeeds(t *testing.T) {
 			t.Errorf("fetch does not project %q, which foldTimeIntelPage reads", want)
 		}
 	}
-	// The blob is never selected raw — only extracted from.
-	if strings.Contains(sql, "o.hypotheses         ") || strings.Contains(sql, "o.hypotheses AS") {
-		t.Error("the fetch selects the raw hypotheses blob — that is 94 % of corr_objects and blows the response cap")
+	// 2. The SOURCE is the narrow projection, collapsed with FINAL.
+	if !strings.Contains(sql, "FROM netops.corr_current AS c FINAL") {
+		t.Errorf("the fold's read must come from the corr_current projection:\n%s", sql)
 	}
-	if got := strings.Count(sql, "JSONExtractString(o.hypotheses"); got != 2 {
-		t.Errorf("the fetch makes %d hypotheses extractions, want exactly 2 (owner, seam_type) — a third needs a re-measure", got)
+	// 3. corr_objects — and therefore the ~5.7 KB hypotheses blob that is 94 %
+	//    of it — must not be reachable from this statement at all. This is the
+	//    whole 197 deliverable: not "the blob is not selected raw", but "the
+	//    table it lives in is not read".
+	if strings.Contains(sql, "corr_objects") {
+		t.Errorf("the fold's read touches corr_objects again — the ~25 GiB/page wide read is back:\n%s", sql)
 	}
-	// And no column the fold does not read: the cost is per COLUMN read, so a
-	// speculative extra is a real bill on a 70 GiB table.
-	for _, banned := range []string{"o.attribution", "o.app_impact", "o.layer_coverage", "o.signal_count"} {
+	if strings.Contains(sql, "JSONExtract") {
+		t.Errorf("the fold's read JSON-extracts again; every one of the twelve is a plain column now:\n%s", sql)
+	}
+	// 4. And no column the fold does not read.
+	for _, banned := range []string{"c.attribution", "c.app_impact", "c.layer_coverage", "c.signal_count", "c.node_count"} {
 		if strings.Contains(sql, banned) {
 			t.Errorf("the fetch reads %s, which foldTimeIntelPage never looks at", banned)
 		}
 	}
 }
 
-// TestTimeIntelBackfillFetchTreeIsBounded: the splitter must not be able to run
-// an unbounded number of queries against the store. Every key poisoned is the
-// worst case — a full binary tree — and the sub-fetch cap must stop it, count
-// the remainder under the budget reason, and STILL advance the watermark.
-func TestTimeIntelBackfillFetchTreeIsBounded(t *testing.T) {
+// TestTimeIntelBackfillTreatsEmptySeamTypeAsUngrounded is the compatibility pin
+// for installs whose corr_current rows PREDATE the seam_type column.
+//
+// Such a row takes the column DEFAULT ” — which is byte-for-byte what
+// JSONExtractString returned for an object that grounded on no seam, and what
+// the fold has always read as UNGROUNDED. So an old row must fold to exactly
+// the snapshot it folded to before the change, and a grounded row must carry
+// its seam through. Without this, "the backfill still works on old rows" would
+// be an assumption rather than a fact.
+func TestTimeIntelBackfillTreatsEmptySeamTypeAsUngrounded(t *testing.T) {
 	useTimeIntelKV(t)
-	const n = 400
-	objs := synthObjects(n, time.Now().UTC().Add(-30*time.Hour))
-	f := newSynthCH(t, objs)
-	f.poison = map[string]bool{}
-	for _, o := range objs {
-		f.poison[o.id] = true // nothing on this page is readable at any size
-	}
+	objs := synthObjects(2, time.Now().UTC().Add(-3*time.Hour))
+	objs[0].seamType = ""    // a pre-197 row: the column DEFAULT
+	objs[1].seamType = "DIA" // a row written by the projecting engine
+	newSynthCH(t, objs)
 
 	m := timeintel.NewMemMetricsStore()
 	s := &server{incidentTimeMetrics: m}
-	res, err := s.backfillIncidentTimeMetrics(context.Background(), timeIntelBackfillLookback)
+	if _, err := s.backfillIncidentTimeMetrics(context.Background(), timeIntelBackfillLookback); err != nil {
+		t.Fatalf("backfill: %v", err)
+	}
+	rows, err := m.List(context.Background(), "", true, 10)
 	if err != nil {
-		t.Fatalf("a wholly unreadable page must still complete: %v", err)
+		t.Fatalf("list: %v", err)
 	}
-	if res.Written != 0 {
-		t.Errorf("written = %d, want 0 — nothing on this page is readable", res.Written)
+	got := map[string]string{}
+	for _, r := range rows {
+		got[r.CorrelationID] = r.SeamType
 	}
-	if !res.CaughtUp || res.Cursor.CorrelationID != objs[n-1].id {
-		t.Errorf("the watermark must still cross an unreadable page: caught_up=%v cursor=%s want %s",
-			res.CaughtUp, res.Cursor.CorrelationID, objs[n-1].id)
+	if len(got) != len(objs) {
+		t.Fatalf("folded %d snapshots, want %d — an unlabelled row must still fold", len(got), len(objs))
 	}
-	_, fetches := f.counts()
-	if fetches > timeIntelBackfillFetchMaxSubFetches {
-		t.Errorf("the fetch tree ran %d sub-fetches, above the %d cap", fetches, timeIntelBackfillFetchMaxSubFetches)
+	if v := got[objs[0].id]; v != "" {
+		t.Errorf("a pre-197 row folded with seam_type %q, want \"\" (ungrounded, never a guess)", v)
 	}
-	skipped := s.timeIntelFetchOversizeSkipped.Load() + s.timeIntelFetchBudgetSkipped.Load()
-	if skipped != int64(n) {
-		t.Errorf("skipped %d objects, want all %d counted — an uncounted skip is a silent data loss", skipped, n)
+	if v := got[objs[1].id]; v != "DIA" {
+		t.Errorf("a projected row folded with seam_type %q, want \"DIA\"", v)
 	}
 }
 
-// TestTimeIntelBackfillPassTimeoutCoversTheFetchTree: the pass deadline must
+// TestTimeIntelBackfillPassTimeoutCoversEveryPage: the pass deadline must
 // exceed what one page's loop is ALLOWED to spend, or it silently becomes the
-// real bound and pages die mid-tree with their work unrecorded.
-func TestTimeIntelBackfillPassTimeoutCoversTheFetchTree(t *testing.T) {
-	perPage := timeIntelBackfillBudget + timeIntelBackfillFetchSplitDeadline + timeIntelBackfillPagePause
+// real bound and pages die mid-page with their work unrecorded.
+//
+// A page is TWO reads of the narrow projection since tracker 197 (one pick, one
+// fetch), each carrying the page budget as max_execution_time, plus the
+// inter-page pause — where before it was one pick plus a fetch TREE with a
+// wall-clock deadline three times the page budget all of its own.
+func TestTimeIntelBackfillPassTimeoutCoversEveryPage(t *testing.T) {
+	perPage := 2*timeIntelBackfillBudget + timeIntelBackfillPagePause
 	if timeIntelBackfillPassTimeout <= time.Duration(timeIntelBackfillMaxPages)*perPage {
 		t.Errorf("pass timeout %s does not cover %d pages of %s",
 			timeIntelBackfillPassTimeout, timeIntelBackfillMaxPages, perPage)
 	}
-	if timeIntelBackfillFetchSplitDeadline < timeIntelBackfillBudget {
-		t.Errorf("the fetch tree's deadline (%s) is under ONE sub-fetch's server budget (%s) — the first sub-fetch could never finish",
-			timeIntelBackfillFetchSplitDeadline, timeIntelBackfillBudget)
-	}
-	if timeIntelBackfillFetchSplitMinKeys != 1 {
-		t.Errorf("min split = %d: a floor above 1 discards the healthy objects sharing a poisoned object's sublist and reports a list of ids instead of the one that is broken",
-			timeIntelBackfillFetchSplitMinKeys)
-	}
-	// 64 -> 1 needs six halvings; the depth guard must never be what stops a
-	// descent before the min-keys floor does.
-	need := 0
-	for k := timeIntelBackfillFetchSubPageKeys; k > timeIntelBackfillFetchSplitMinKeys; k /= 2 {
-		need++
-	}
-	if timeIntelBackfillFetchSplitMaxDepth < need {
-		t.Errorf("max depth %d cannot reach a %d-key sublist from a %d-key sub-page (needs %d)",
-			timeIntelBackfillFetchSplitMaxDepth, timeIntelBackfillFetchSplitMinKeys,
-			timeIntelBackfillFetchSubPageKeys, need)
+	// And it must not have quietly grown into something longer than a tick can
+	// tolerate: the old fetch-tree ceiling put a pass at ~21 minutes against a
+	// 15-minute cadence. Two page budgets per page is ~11 minutes.
+	if timeIntelBackfillPassTimeout >= 15*time.Minute {
+		t.Errorf("pass timeout %s is at or beyond the default tick — a pass must finish inside its own cadence",
+			timeIntelBackfillPassTimeout)
 	}
 }
 

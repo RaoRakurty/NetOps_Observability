@@ -52,7 +52,7 @@ const CorrCurrentNarrowInsertPrefix = `INSERT INTO netops.corr_current
     (tenant_id, correlation_id, version, state, window_start, window_end,
      top_hypothesis, top_confidence, verdict_tier, evidence_missing, affected,
      signal_count, node_count, engine_version, catalog_version, merged_into,
-     created_at, owner, plane_count, debug_excluded, low_authority)
+     created_at, owner, plane_count, debug_excluded, low_authority, seam_type)
 SELECT o.tenant_id, o.correlation_id, o.version, o.state, o.window_start, o.window_end,
        o.top_hypothesis, o.top_confidence, o.verdict_tier, o.evidence_missing, o.affected,
        o.signal_count, o.node_count, o.engine_version, o.catalog_version, o.merged_into,
@@ -60,7 +60,12 @@ SELECT o.tenant_id, o.correlation_id, o.version, o.state, o.window_start, o.wind
        JSONExtractString(o.hypotheses,'ranking','hypotheses',1,'verdict','owner'),
        toUInt8(length(JSONExtract(o.hypotheses,'ranking','hypotheses',1,'verdict','modality_coverage','Array(String)'))),
        toUInt8(length(JSONExtract(o.hypotheses,'ranking','hypotheses',1,'verdict','excluded_debug_probes','Array(String)')) > 0),
-       toUInt8(length(JSONExtract(o.hypotheses,'ranking','hypotheses',1,'verdict','low_authority_probe_scopes','Array(String)')) > 0)
+       toUInt8(length(JSONExtract(o.hypotheses,'ranking','hypotheses',1,'verdict','low_authority_probe_scopes','Array(String)')) > 0),
+       -- Tracker 197: the same extraction the time-intelligence fold used to do
+       -- per page. Done ONCE here, on the repair path that already reads the
+       -- blob, so a row this reconciler writes carries the grounded seam type
+       -- instead of the '' an un-backfilled row would keep.
+       JSONExtractString(o.hypotheses,'grounding_context','seams',1,'seam_type')
   FROM netops.corr_objects AS o
  WHERE (o.tenant_id, o.correlation_id, o.version) IN (`
 

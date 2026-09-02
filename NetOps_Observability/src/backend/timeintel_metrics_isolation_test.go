@@ -16,6 +16,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"sync"
 	"testing"
@@ -338,5 +339,81 @@ func TestInferredRecoveryCrossOrgIsolation(t *testing.T) {
 	}
 	if _, ok := rollupMetrics(b.token)["ttr_recovery"]; !ok {
 		t.Fatal("org-B owns the only recovered incident and must see its ttr_recovery stats")
+	}
+}
+
+// ── §3a: the backfill's NEW source must be scoped exactly as its old one ─────
+//
+// Tracker 197 moved the fold's read from netops.corr_objects to the
+// netops.corr_current projection. Both carry the STRICT tenant row policy
+// (chschema.StrictRowPolicyDDL: a row is visible only to its own tenant, or to
+// a caller that explicitly asked for the cross-tenant scope), so the move is
+// isolation-neutral ONLY if the new read still travels the same scoped path.
+// "Still travels it" is not something a code review can see once, because the
+// wire is where it is decided — so it is asserted here.
+//
+// Three things, which together are the whole §3a argument for this worker:
+//
+//  1. Every read the pass issues carries tenant_scope on the wire. A read that
+//     forgot it would be evaluated with an UNSET setting, which is the shape
+//     ClickHouse answers with Code 115 rather than silently widening — but a
+//     read that CHANGED it (to a single tenant, say) would quietly halve the
+//     backfill, and nothing else in the suite would notice.
+//  2. The scope is __all__, and that is CORRECT here rather than a leak: this
+//     is a platform worker whose HTTP trigger is requirePlatformAdmin and whose
+//     output is written back under each object's OWN tenant. It never widens a
+//     CALLER's view of anything.
+//  3. The rows land default-closed. A tenant-scoped list returns that tenant's
+//     snapshot and nothing else, and the tenant comes from the DATA (the row's
+//     own tenant_id column), never from a request body.
+func TestTimeIntelBackfillProjectionReadIsTenantScopedOnTheWire(t *testing.T) {
+	useTimeIntelKV(t)
+	base := time.Now().UTC().Add(-2 * time.Hour)
+	f := newSynthCH(t, []synthCorr{
+		{tenant: "org-a", id: "aaaaaaaa-1111-4111-8111-111111111111", version: 1, created: base, seamType: "DIA"},
+		{tenant: "org-b", id: "bbbbbbbb-2222-4222-8222-222222222222", version: 1, created: base.Add(time.Minute), seamType: "SDWAN"},
+	})
+	m := timeintel.NewMemMetricsStore()
+	s := &server{incidentTimeMetrics: m}
+	if _, err := s.backfillIncidentTimeMetrics(context.Background(), timeIntelBackfillLookback); err != nil {
+		t.Fatalf("backfill: %v", err)
+	}
+
+	// 1 + 2: the scope, on every query, including the corr_current fold read.
+	f.mu.Lock()
+	params := append([]url.Values(nil), f.params...)
+	fetches := append([]string(nil), f.fetchSQL...)
+	f.mu.Unlock()
+	if len(fetches) == 0 {
+		t.Fatal("the pass issued no fold read — this test would prove nothing")
+	}
+	for _, sql := range fetches {
+		if !strings.Contains(sql, "FROM netops.corr_current AS c FINAL") {
+			t.Errorf("the fold read is not against the row-policied projection:\n%s", sql)
+		}
+	}
+	for i, q := range params {
+		if got := q.Get("tenant_scope"); got != "__all__" {
+			t.Errorf("query %d carries tenant_scope=%q, want %q — the row policy is evaluated against this setting",
+				i, got, "__all__")
+		}
+	}
+
+	// 3: default-closed rows, stamped from the data.
+	for _, tc := range []struct{ tenant, id, seam string }{
+		{"org-a", "aaaaaaaa-1111-4111-8111-111111111111", "DIA"},
+		{"org-b", "bbbbbbbb-2222-4222-8222-222222222222", "SDWAN"},
+	} {
+		own, err := m.List(context.Background(), tc.tenant, false, 10)
+		if err != nil {
+			t.Fatalf("list %s: %v", tc.tenant, err)
+		}
+		if len(own) != 1 {
+			t.Fatalf("CROSS-TENANT LEAK: %s sees %d snapshots, want exactly its own 1", tc.tenant, len(own))
+		}
+		if own[0].TenantID != tc.tenant || own[0].CorrelationID != tc.id || own[0].SeamType != tc.seam {
+			t.Errorf("%s got %+v — the snapshot must be its OWN object, with its own projected seam type",
+				tc.tenant, own[0])
+		}
 	}
 }

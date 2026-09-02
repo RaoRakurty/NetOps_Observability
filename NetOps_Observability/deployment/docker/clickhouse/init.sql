@@ -520,7 +520,14 @@ CREATE TABLE IF NOT EXISTS netops.corr_current
     low_authority    UInt8 DEFAULT 0,
     -- #101: non-empty names an INTENTIONAL chaos/storm source (engine-tagged
     -- from CORR_CHAOS_FIXTURES); Command Center badges it, ticketing skips it.
-    chaos_fixture    LowCardinality(String) DEFAULT ''
+    chaos_fixture    LowCardinality(String) DEFAULT '',
+    -- Tracker 197: the grounded seam TYPE of the top-sorted grounding seam
+    -- (== JSONExtractString(hypotheses,'grounding_context','seams',1,'seam_type')),
+    -- derived by the engine at persist time exactly like `owner` above. '' means
+    -- UNGROUNDED — the same thing an absent JSON key meant to the reader before.
+    -- It is the twelfth and last value the time-intelligence fold needs, and its
+    -- absence was the ONLY reason that fold still had to read corr_objects.
+    seam_type        LowCardinality(String) DEFAULT ''
 )
 ENGINE = ReplacingMergeTree(created_at)
 PARTITION BY (tenant_id)

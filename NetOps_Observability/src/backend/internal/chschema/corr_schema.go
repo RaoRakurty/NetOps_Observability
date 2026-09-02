@@ -283,7 +283,8 @@ LIMIT 1 BY tenant_id, correlation_id`,
     plane_count      UInt8 DEFAULT 0,
     debug_excluded   UInt8 DEFAULT 0,
     low_authority    UInt8 DEFAULT 0,
-    chaos_fixture    LowCardinality(String) DEFAULT ''
+    chaos_fixture    LowCardinality(String) DEFAULT '',
+    seam_type        LowCardinality(String) DEFAULT ''
 )
 ENGINE = ReplacingMergeTree(created_at)
 PARTITION BY (tenant_id)
@@ -308,6 +309,19 @@ ORDER BY (tenant_id, correlation_id)`,
 		// persist time so Command Center badges it and the ticketing sweeper
 		// skips it. Narrow LowCardinality column — '' means "real incident".
 		`ALTER TABLE netops.corr_current ADD COLUMN IF NOT EXISTS chaos_fixture LowCardinality(String) DEFAULT '' AFTER low_authority`,
+
+		// Tracker 197: the grounded seam TYPE, projected the same way `owner`
+		// above is — engine-derived at persist time from the top-sorted entry of
+		// grounding_context.seams. It was the ONE value of the twelve the
+		// time-intelligence fold needs that corr_current did not carry, and that
+		// single absent string was why the fold still had to read the ~5.7 KB
+		// hypotheses blob out of corr_objects (measured 1.18 GiB per 64-key
+		// sub-fetch; a 2 000-key page as one query is refused at the 2 GiB read
+		// cap). '' = ungrounded, which is exactly what a missing JSON key meant
+		// to the reader before — so rows written before this ALTER stay CORRECT,
+		// they are merely unlabelled, and the reconciler's drift repair
+		// (CorrCurrentNarrowInsertPrefix) re-projects them with the real value.
+		`ALTER TABLE netops.corr_current ADD COLUMN IF NOT EXISTS seam_type LowCardinality(String) DEFAULT '' AFTER chaos_fixture`,
 
 		// One-time backfill from history (idempotent: the NOT IN makes a re-run a
 		// no-op). Sanctioned #100 shape: the FOLD picks narrow keys only; the wide

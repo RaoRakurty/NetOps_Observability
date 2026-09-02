@@ -249,20 +249,6 @@ type server struct {
 	// ticketing. nil = not configured for that tenant.
 	itsmCfg *itsmConfigStore
 	hub     *Hub
-	// timeintel backfill wide-fetch adaptivity (tracker 186 fix-2). splits counts
-	// key lists halved after a ClickHouse read/memory refusal — the healthy
-	// degradation. The two skip counters are the LOSS: oversize = a single object
-	// whose own hypotheses blob overruns the per-query guard rails, budget =
-	// objects the page's fetch tree ran out of query/time budget before reaching.
-	// Non-zero skips mean snapshots are missing, so they are separate series
-	// rather than one blurred total.
-	// narrowRetries (186 fix-5) counts floor refusals RESCUED by one retry at
-	// max_block_size=1/max_threads=1 — objects the wide geometry could not read
-	// at any key count and that used to be counted as oversize loss.
-	timeIntelFetchSplits          atomic.Int64
-	timeIntelFetchNarrowRetries   atomic.Int64
-	timeIntelFetchOversizeSkipped atomic.Int64
-	timeIntelFetchBudgetSkipped   atomic.Int64
 	// timeIntelInvalidRows counts pick rows that failed validation (ultra #3).
 	// They are PERMANENTLY unprocessable — the watermark advances past them so
 	// they can never wedge the pass, and this series is the only trace they leave.
@@ -2703,21 +2689,6 @@ func (s *server) handlePromMetrics(w http.ResponseWriter, _ *http.Request) {
 	fmt.Fprintf(w, "# HELP netops_ticketing_merged_redirects_total Manual ticket actions refused with the canonical id because the object was merged.\n")
 	fmt.Fprintf(w, "# TYPE netops_ticketing_merged_redirects_total counter\n")
 	fmt.Fprintf(w, "netops_ticketing_merged_redirects_total %d\n", s.tktMergedRedirects.Load())
-	// timeintel backfill wide-fetch adaptivity (186 fix-2/fix-5). splits > 0 is
-	// the pass degrading as designed, and narrow_retries > 0 is loss AVOIDED;
-	// either skip series > 0 means snapshots were NOT written for those objects
-	// and someone has to look at the WARN. Since fix-5 the oversize series only
-	// counts objects refused at the floor geometry too, i.e. irreducible ones.
-	fmt.Fprintf(w, "# HELP netops_timeintel_fetch_splits_total Wide-fetch key lists halved after ClickHouse refused them for read/memory budget.\n")
-	fmt.Fprintf(w, "# TYPE netops_timeintel_fetch_splits_total counter\n")
-	fmt.Fprintf(w, "netops_timeintel_fetch_splits_total %d\n", s.timeIntelFetchSplits.Load())
-	fmt.Fprintf(w, "# HELP netops_timeintel_fetch_narrow_retries_total Floor refusals rescued by one retry at max_block_size=1/max_threads=1 — objects folded that would otherwise have been skipped as oversize.\n")
-	fmt.Fprintf(w, "# TYPE netops_timeintel_fetch_narrow_retries_total counter\n")
-	fmt.Fprintf(w, "netops_timeintel_fetch_narrow_retries_total %d\n", s.timeIntelFetchNarrowRetries.Load())
-	fmt.Fprintf(w, "# HELP netops_timeintel_fetch_oversize_skipped_total Correlation objects whose wide fetch was abandoned so the backfill watermark could still advance.\n")
-	fmt.Fprintf(w, "# TYPE netops_timeintel_fetch_oversize_skipped_total counter\n")
-	fmt.Fprintf(w, "netops_timeintel_fetch_oversize_skipped_total{reason=\"oversize\"} %d\n", s.timeIntelFetchOversizeSkipped.Load())
-	fmt.Fprintf(w, "netops_timeintel_fetch_oversize_skipped_total{reason=\"split_budget\"} %d\n", s.timeIntelFetchBudgetSkipped.Load())
 	// Backfill pass integrity (ultra 3/5). invalid_rows > 0 means the pick
 	// returned rows that can never be folded — the watermark advanced past them
 	// and this counter is their only trace. rescan_failures > 0 means a phase-1
