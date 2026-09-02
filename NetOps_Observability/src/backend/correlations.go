@@ -30,6 +30,7 @@ import (
 	"netops/backend/internal/platformdb"
 	"netops/backend/internal/rca"
 	"netops/backend/rcafeedback"
+	"netops/backend/secapi"
 )
 
 // The RCA Path View mapping moved to internal/rca (path_view.go, Phase-2 W1).
@@ -1045,4 +1046,67 @@ func (s *server) handleRcaFeedbackSummary(w http.ResponseWriter, r *http.Request
 		"false_positive_rate": sum.FalsePositiveRate,
 		"by_template":         sum.ByTemplate,
 	})
+}
+
+// ── Exposure Stories (Project 3 P3-API) ─────────────────────────────────────
+//
+// An "Exposure Story" is not a new object type: it is an existing correlation
+// object whose evidence includes a SECURITY signal (the fourth evidence class,
+// §5b). So this reuses the Command Center's own list query verbatim —
+// correlationsListSQL — with ONE extra predicate on the picked set. Building a
+// second list shape here would mean two definitions of "a correlation object as
+// the UI sees it", and the security page would drift away from the RCA page's
+// triage badges the first time either changed.
+//
+// The predicate walks corr_evidence → corr_signals and keeps objects with at
+// least one attached signal whose kind is in the security vocabulary
+// (secapi.SecuritySignalKinds). Both halves are time-bounded by the SAME window
+// as the outer pick, so the subquery cannot become an unbounded scan of the
+// evidence/signal history (#100 budget rules).
+//
+// HONEST EMPTINESS: the engine-side grounding that lands security signals in
+// corr_signals is a separate task (T2b). Until it ships — or when it has simply
+// not correlated anything — this list is legitimately EMPTY. That is returned as
+// an empty list, never an error: "no exposure stories" and "the query failed"
+// must not look the same to the page.
+func securityExposureStoriesCond(sinceCond string) string {
+	kinds := make([]string, 0, len(secapi.SecuritySignalKinds))
+	for _, k := range secapi.SecuritySignalKinds {
+		// The vocabulary is a package-level constant list of plain identifiers,
+		// never caller input; the guard is here so it stays that way if the
+		// list is ever widened.
+		if !isAlphaToken(strings.ReplaceAll(k, "_", "")) {
+			continue
+		}
+		kinds = append(kinds, "'"+k+"'")
+	}
+	if len(kinds) == 0 {
+		return "0" // fail closed: no vocabulary means no stories, never all of them
+	}
+	return `(correlation_id, version) IN (
+	     SELECT ev.correlation_id, ev.version
+	       FROM netops.corr_evidence AS ev
+	      WHERE ev.` + sinceCond + `
+	        AND ev.signal_id IN (
+	            SELECT sig.signal_id FROM netops.corr_signals AS sig
+	             WHERE sig.ts >= now() - INTERVAL ` + intToString(int(securityStoryWindowSeconds)) + ` SECOND
+	               AND sig.kind IN (` + strings.Join(kinds, ",") + `)))`
+}
+
+// securityStoryWindowSeconds bounds the SIGNAL side of the exposure-story
+// predicate independently of the object window: signals TTL out at 30 days, so
+// looking further back reads nothing but costs a partition scan.
+const securityStoryWindowSeconds = 30 * 24 * 60 * 60
+
+// securityExposureStories runs the tenant-scoped list. It is the seam
+// secapi.Deps.ExposureStories binds to; the ClickHouse row policies enforce
+// isolation on top of chTenantScope regardless of the SQL (defense in depth).
+func (s *server) securityExposureStories(r *http.Request, limit int) ([]map[string]any, error) {
+	since, err := s.tenantRcaSince(r, 24*time.Hour)
+	if err != nil {
+		return nil, err
+	}
+	sinceCond := "created_at >= now() - INTERVAL " + intToString(int(since.Seconds())) + " SECOND"
+	conds := []string{"1", securityExposureStoriesCond(sinceCond)}
+	return s.chRows(r, correlationsListSQL(sinceCond, conds, limit))
 }

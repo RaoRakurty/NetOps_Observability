@@ -39,6 +39,21 @@ var apiRoutes = []apiRoute{
 	{"POST", "/api/correlations/{id}/feedback", "RCA", "Record an operator verdict on an RCA case (correct | wrong | partial, with the wrong part)"},
 	{"GET", "/api/correlations/{id}/feedback", "RCA", "List the operator verdicts on an RCA case, newest first (caller's tenant only)"},
 	{"GET", "/api/correlations/feedback/summary", "RCA", "Windowed verdict counts + false-positive RCA rate for the caller's tenant"},
+	// Security (CTEM) — Project 3 P3-API. Findings are read from the per-tenant
+	// OpenSearch index through TenantIndexPattern + TenantFilter; the rules and
+	// views routes are the small per-tenant control-plane state.
+	{"GET", "/api/security/findings", "Security", "List security findings (cursor-paged; current=true collapses to the latest verdict per finding identity)"},
+	{"GET", "/api/security/findings/{id}", "Security", "Fetch one finding (404 outside the caller's tenant)"},
+	{"GET", "/api/security/findings/facets", "Security", "Facet counts by severity/status/seam/framework/evidence class"},
+	{"GET", "/api/security/findings/trend", "Security", "Verdict trend over time (date histogram by status)"},
+	{"GET", "/api/security/posture", "Security", "CTEM funnel, assessment coverage and last scan for the caller's tenant"},
+	{"GET", "/api/security/exposure-stories", "Security", "Correlation objects grounded on security evidence"},
+	{"GET", "/api/security/exposure-stories/{id}", "Security", "One exposure story (delegates to the correlation detail)"},
+	{"GET", "/api/security/rules", "Security", "Detection catalog with the tenant's enable state"},
+	{"PUT", "/api/security/rules", "Security", "Enable/disable detections for the caller's tenant (administration:write)"},
+	{"GET", "/api/security/views", "Security", "Saved findings filter sets for the caller's tenant"},
+	{"POST", "/api/security/views", "Security", "Save a findings filter set (infrastructure:write)"},
+	{"DELETE", "/api/security/views/{id}", "Security", "Delete a saved filter set (404 outside the caller's tenant)"},
 	{"GET", "/api/tunnels", "Telemetry", "Overlay tunnel telemetry (IPsec/SD-WAN/GRE)"},
 	{"GET", "/api/flows/top", "Telemetry", "Top talkers (NetFlow/ClickHouse)"},
 	{"POST", "/api/logs/search", "Telemetry", "Search logs (OpenSearch)"},

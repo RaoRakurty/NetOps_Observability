@@ -29,6 +29,13 @@ func IndexBase(signal string) string {
 		// Tagged raw cloud logs (waf/lb/dns/flow/host/change/inventory), written
 		// by the cloud poller + aggregator into netops-cloudlogs-{tenant}-{date}.
 		return "netops-cloudlogs"
+	case "secfindings", "security":
+		// Security findings (P3-L1, SECURITY_FINDINGS_STORE_DECISION 2026-08-28):
+		// the durable, append-only verdict store the router writes from the
+		// netops.security topic into netops-secfindings-{tenant}-{date}. It is
+		// deliberately NOT part of the "" / "all" log search (it is verdict data,
+		// not log lines) and is reachable only through this explicit signal.
+		return "netops-secfindings"
 	default:
 		return "netops"
 	}

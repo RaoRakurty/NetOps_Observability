@@ -95,7 +95,28 @@ var routeIsolationLedger = map[string]string{
 	"/api/pipeline/processors":         "scoped", // per-tenant processor rules (item 121), administration:admin + tenant filter
 	"/api/pipeline/processors/":        "scoped", // GET|PUT|DELETE {id} · POST preview, cross-tenant id → 404
 	"/api/compliance":                  "scoped",
-	"/api/correlations":                "scoped",
+	// ── Security (CTEM), Project 3 P3-API ──
+	// All per-tenant DATA. The findings routes read ONLY the caller's own
+	// OpenSearch index pattern (oslog.TenantIndexPattern) with the per-doc
+	// oslog.TenantFilter clause on top — the applogs/flows chokepoint pair — so
+	// another tenant's document is unreachable even if a query filter were ever
+	// dropped, and a cross-tenant id answers 404 rather than revealing that it
+	// exists. The rules/views control-plane state is tenant_iso FORCE-RLS in PG
+	// (migration 0037) or tenant-keyed in the file store, with the owner stamped
+	// from the principal. /exposure-stories delegates to the correlations
+	// surface, which reads at chTenantScope. Proven by
+	// security_findings_isolation_test.go.
+	"/api/security/findings":          "scoped",
+	"/api/security/findings/facets":   "scoped",
+	"/api/security/findings/trend":    "scoped",
+	"/api/security/findings/":         "scoped", // GET {id}; cross-tenant id -> 404
+	"/api/security/posture":           "scoped",
+	"/api/security/exposure-stories":  "scoped",
+	"/api/security/exposure-stories/": "scoped", // delegates to handleCorrelationByID (ownership pre-read)
+	"/api/security/rules":             "scoped", // GET catalog + tenant state; PUT administration:write, owner from the token
+	"/api/security/views":             "scoped",
+	"/api/security/views/":            "scoped", // DELETE {id}; cross-tenant id -> 404
+	"/api/correlations":               "scoped",
 	// SUBRESOURCE WARNING (2026-08-04): this prefix entry covers MANY handlers,
 	// and a prefix classification is NOT evidence that each one enforces tenant
 	// scope. {id}/replay was classified "scoped" by this very line while

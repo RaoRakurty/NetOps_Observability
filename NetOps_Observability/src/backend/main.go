@@ -78,6 +78,7 @@ import (
 	"netops/backend/reports"
 	"netops/backend/safego"
 	"netops/backend/sealing"
+	"netops/backend/secapi"
 
 	"netops/backend/internal/httppage"
 
@@ -225,13 +226,21 @@ type server struct {
 	// under the Postgres backend, tenant-keyed file store otherwise.
 	rcaFeedback        rcafeedback.Store
 	rcaFeedbackMetrics *rcafeedback.Metrics
-	rcaRevisions       *rcaRevisionStore     // report revision register, tenant-keyed (postmortem Phase 1 immutability)
-	rcaClock           func() time.Time      // DI seam for the RCA generation clock (nil = wall clock) — deterministic re-render tests inject it
-	portStore          portintel.Store       // Port Intelligence physical-layer store (#94)
-	netboxCfg          *netboxConfigStore    // NetBox source-of-truth discovery config
-	discoveryCfg       *discoveryConfigStore // SNMP subnet-discovery scan config (platform-owner)
-	netboxSync         *netboxSyncer         // reconciles discovered devices INTO NetBox (write-through)
-	vulns              *vuln.Feed            // #13: advisory feed for /api/vulns (lazy, mtime hot-reload)
+	// Security (CTEM) read API + its control-plane state (Project 3 P3-API).
+	// The findings themselves live in OpenSearch (netops-secfindings-<seg>-*,
+	// SECURITY_FINDINGS_STORE_DECISION 2026-08-28); only rule enablement and
+	// saved views are relational — PG (migration 0037, tenant_iso FORCE-RLS)
+	// under the Postgres backend, tenant-keyed file store otherwise.
+	secAPI         *secapi.API
+	secStore       secapi.Store
+	secFindMetrics *secapi.Metrics
+	rcaRevisions   *rcaRevisionStore     // report revision register, tenant-keyed (postmortem Phase 1 immutability)
+	rcaClock       func() time.Time      // DI seam for the RCA generation clock (nil = wall clock) — deterministic re-render tests inject it
+	portStore      portintel.Store       // Port Intelligence physical-layer store (#94)
+	netboxCfg      *netboxConfigStore    // NetBox source-of-truth discovery config
+	discoveryCfg   *discoveryConfigStore // SNMP subnet-discovery scan config (platform-owner)
+	netboxSync     *netboxSyncer         // reconciles discovered devices INTO NetBox (write-through)
+	vulns          *vuln.Feed            // #13: advisory feed for /api/vulns (lazy, mtime hot-reload)
 	// oidc holds the live SSO provider. It is swapped atomically when an operator
 	// saves config from the admin UI (oidc_config.go), and is read on the hot
 	// auth path (withAuth RS256) and in the SSO handlers via oidcProvider().
@@ -849,6 +858,9 @@ func newServer() *server {
 	srv.rcaActionItems = newRcaActionItemStore(rcaActionItemsPath())
 	srv.rcaFeedback = newRcaFeedbackStore()           // Project 2 P7 operator verdicts (migration 0036 / file fallback)
 	srv.rcaFeedbackMetrics = rcafeedback.NewMetrics() // netops_rca_feedback_total{verdict}
+	srv.secStore = newSecurityControlPlaneStore()     // Project 3 P3-API (migration 0037 / file fallback)
+	srv.secFindMetrics = secapi.NewMetrics()          // netops_security_findings_queries_total{op}
+	srv.secAPI = secapi.New(srv.securityAPIDeps())    // handlers over injected seams (§5)
 	srv.rcaRevisions = newRcaRevisionStore(rcaRevisionsPath())
 
 	srv.portStore = newPortStore() // Port Intelligence #94 P5
@@ -1809,6 +1821,24 @@ func (s *server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/vulns", s.handleVulns)           // #13: device OS × advisory feed
 	mux.HandleFunc("/api/compliance", s.handleCompliance) // #14: SoT drift + policy baselines
 
+	// ── Security (CTEM) — Project 3 P3-API ──────────────────────────────────
+	// Read surface over the per-tenant findings index plus the small mutable
+	// control-plane state. Exact paths are registered BEFORE the /findings/
+	// prefix so facets/trend win over the by-id route (net/http's ServeMux
+	// prefers the longest registered pattern, and an exact path beats a prefix).
+	// Every route is tenant-scoped through secapi's oslog.TenantIndexPattern +
+	// oslog.TenantFilter chokepoint pair; see security_findings_isolation_test.go.
+	mux.HandleFunc("/api/security/findings", s.secAPI.HandleFindings)
+	mux.HandleFunc("/api/security/findings/facets", s.secAPI.HandleFacets)
+	mux.HandleFunc("/api/security/findings/trend", s.secAPI.HandleTrend)
+	mux.HandleFunc("/api/security/findings/", s.secAPI.HandleFindingByID)
+	mux.HandleFunc("/api/security/posture", s.secAPI.HandlePosture)
+	mux.HandleFunc("/api/security/exposure-stories", s.secAPI.HandleExposureStories)
+	mux.HandleFunc("/api/security/exposure-stories/", s.handleSecurityExposureStory)
+	mux.HandleFunc("/api/security/rules", s.secAPI.HandleRules)
+	mux.HandleFunc("/api/security/views", s.secAPI.HandleViews)
+	mux.HandleFunc("/api/security/views/", s.secAPI.HandleViews)
+
 	mux.HandleFunc("/api/incidents", s.handleIncidents)     // GET list (tenant-scoped)
 	mux.HandleFunc("/api/incidents/", s.handleIncidentByID) // GET {id}; POST {id}/ack|resolve|note|assign|…
 	// seam.Seam inventory (#67 build ⑤): suggest→confirm→active lifecycle; the
@@ -2669,6 +2699,9 @@ func (s *server) handlePromMetrics(w http.ResponseWriter, _ *http.Request) {
 	if s.rcaFeedbackMetrics != nil {
 		s.rcaFeedbackMetrics.Write(w)
 	}
+	if s.secFindMetrics != nil {
+		s.secFindMetrics.Write(w)
+	}
 	if s.intMetrics != nil {
 		s.intMetrics.write(w)
 	}
@@ -3133,4 +3166,131 @@ func (s *statusRecorder) Hijack() (net.Conn, *bufio.ReadWriter, error) {
 		return nil, nil, fmt.Errorf("underlying ResponseWriter does not support hijacking")
 	}
 	return hj.Hijack()
+}
+
+// ── Security (CTEM) API wiring — Project 3 P3-API ───────────────────────────
+//
+// The handlers live in package secapi (a real compiler-enforced boundary, §2);
+// what belongs HERE is the wiring: which permission each of its abstract gates
+// maps onto, which transports it gets, and how one route delegates to an
+// existing handler. secapi holds no ambient authority of its own — everything
+// below is handed to it explicitly.
+
+// newSecurityControlPlaneStore selects the Postgres register under the Postgres
+// backend (migration 0037, tenant_iso FORCE-RLS), else the tenant-keyed file
+// store so the default build works unchanged (the rcafeedback precedent).
+func newSecurityControlPlaneStore() secapi.Store {
+	if ps, ok := platformdb.ActivePG(); ok {
+		return secapi.NewPGStore(ps.DB())
+	}
+	fs := secapi.NewFileStore(envOr("SECURITY_CONTROL_PLANE_FILE", "/data/security_control_plane.json"))
+	if err := fs.LoadErr(); err != nil {
+		// The store still SERVES (the shipped catalog defaults + no saved
+		// views) rather than refusing to boot over a preferences file — but a
+		// tenant whose disabled rules did not load must not silently see the
+		// full catalog as if it had configured nothing (§10).
+		logError("security", "security control-plane state could not be read — serving the SHIPPED rule defaults and NO saved views; a tenant's stored rule state is NOT applied",
+			map[string]any{"err": err.Error()})
+	}
+	return fs
+}
+
+// securityAuthz maps secapi's abstract gates onto this platform's RBAC modules
+// and resolves the caller's tenant scope.
+//
+// GATE CHOICE (§3a rule 3 — "pick the right gate"):
+//   - READ is infrastructure:read, the SAME gate /api/compliance and
+//     /api/correlations already use. Security findings are per-tenant OPERATOR
+//     data about the tenant's own devices, not platform plumbing.
+//   - WRITE (saved views) is infrastructure:write: a saved filter set is
+//     operator working state, not administration.
+//   - ADMIN (rule enablement) is administration:write — the per-tenant config
+//     gate ticketing/contact points already use. It is deliberately NOT
+//     requirePlatformAdmin/requireCrossTenant: which detections a tenant runs
+//     is that TENANT's configuration, and a platform-global gate would put it
+//     out of the tenant's own reach while a scope-blind admin gate would put it
+//     in every other tenant's. The tenant filter is applied on top either way.
+func (s *server) securityAuthz(w http.ResponseWriter, r *http.Request, gate secapi.Gate) (secapi.Principal, bool) {
+	module, level := "infrastructure", LevelRead
+	switch gate {
+	case secapi.GateWrite:
+		module, level = "infrastructure", LevelWrite
+	case secapi.GateAdmin:
+		module, level = "administration", LevelWrite
+	case secapi.GateRead:
+		// the default above
+	}
+	claims, ok := s.requirePerm(w, r, module, level)
+	if !ok {
+		return secapi.Principal{}, false
+	}
+	tenant, cross := principalTenant(claims)
+	keys, _ := s.visibleDeviceKeys(claims)
+	addrs, _ := s.visibleDeviceAddrs(claims)
+	return secapi.Principal{
+		Tenant: tenant, Cross: cross, Subject: claims.Sub,
+		DeviceKeys: keys, DeviceAddrs: addrs,
+	}, true
+}
+
+// securityRegistryDevices is the CTEM funnel's `scope`: how many devices the
+// caller's tenant actually OWNS, from the same visibility rule every inventory
+// surface uses. It is the registry, not the set of devices that happen to carry
+// findings — that distinction is the whole point of reporting `unassessed`.
+func (s *server) securityRegistryDevices(r *http.Request) int {
+	claims, ok := userFrom(r.Context())
+	if !ok || s.discovery == nil {
+		return 0
+	}
+	return len(visibleDevices(s.discovery.Devices(), claims))
+}
+
+// securityAudit records an accepted security control-plane write (the
+// auditManualEdit shape: deny-by-default writes are audited, reads are not).
+func (s *server) securityAudit(r *http.Request, tenant, action string, detail map[string]any) {
+	if s.audit == nil {
+		return
+	}
+	claims, _ := userFrom(r.Context())
+	_, cross := principalTenant(claims)
+	if detail == nil {
+		detail = map[string]any{}
+	}
+	detail["action"] = action
+	s.audit.Record(AuditEvent{
+		Actor: claims.Sub, Tenant: tenant, Cross: cross,
+		Method: r.Method, Path: r.URL.Path, Status: http.StatusOK, Decision: "allow",
+		Remote: auditClientIP(r), Detail: detail,
+	})
+}
+
+// securityAPIDeps assembles the injected collaborators. Called AFTER secStore /
+// secFindMetrics are set, so the API never captures a nil store.
+func (s *server) securityAPIDeps() secapi.Deps {
+	return secapi.Deps{
+		Authz:           s.securityAuthz,
+		Search:          openSearch,
+		ExposureStories: s.securityExposureStories,
+		RegistryDevices: s.securityRegistryDevices,
+		Store:           s.secStore,
+		Metrics:         s.secFindMetrics,
+		Audit:           s.securityAudit,
+		WriteJSON:       writeJSON,
+		WriteError:      writeError,
+	}
+}
+
+// handleSecurityExposureStory serves GET /api/security/exposure-stories/{id} by
+// DELEGATING to the correlation detail handler — an Exposure Story IS a
+// correlation object, so it must render identically and, more importantly,
+// inherit that handler's ownership pre-read verbatim (loadCorrSlice reads at
+// chTenantScope and answers 404 on zero rows, so another tenant's id is never
+// confirmed). Re-implementing the lookup here is exactly how the 2026-08-04
+// {id}/replay cross-tenant leak happened: a second path to the same object
+// that forgot the check.
+func (s *server) handleSecurityExposureStory(w http.ResponseWriter, r *http.Request) {
+	id := strings.TrimPrefix(r.URL.Path, "/api/security/exposure-stories/")
+	clone := r.Clone(r.Context())
+	clone.URL.Path = "/api/correlations/" + id
+	s.handleCorrelationByID(w, clone)
 }
