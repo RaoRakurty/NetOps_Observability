@@ -160,6 +160,12 @@ from producers import (
     trap_control_signal,
     ts_invalid_count,
 )
+from proactive import (
+    ProactiveEvent,
+    ProactiveMonitor,
+    proactive_signal,
+    proactive_stats,
+)
 from rank_memo import RankMemo
 from replay import replay_object
 from routing_direction import forwarding_pairs, routing_direction_source
@@ -703,6 +709,15 @@ SERIES_EVICT_LOG_EVERY_S = 60.0
 
 CORR_SIGNALS_ENABLED = os.environ.get("CORR_SIGNALS_ENABLED", "true").lower() != "false"
 DETECTOR = EpisodeDetector()
+# A4 proactive-check plane (proactive.py) — the heartbeat conditions the engine
+# flagged only as TRANSITIONS: a peer stuck below ESTABLISHED, an adjacency that
+# dropped and never re-formed, a device pinned at its CPU/memory ceiling. Module
+# state like DETECTOR and for the same reason (dwell timers are per-process,
+# bounded, and deliberately not persisted across a restart — see
+# ProactiveMonitor.reset). EVERY check ships shadow, so this observes and counts
+# and emits nothing until a check is promoted.
+PROACTIVE = ProactiveMonitor()
+PROACTIVE_SIGNALS = 0    # signals a PROMOTED check emitted (0 while all shadow)
 DEADLETTER_COUNT = 0  # exposed via /healthz; provenance is never guessed
 
 # Metric-lane observability counters (exposed via /healthz). The netops.metrics
@@ -7900,9 +7915,54 @@ async def engine_loop() -> None:
             await _drain_epoch_sweep()
         except Exception:
             log.exception("engine cycle failed (observable, §10; loop continues)")
+        # A4 heartbeat sweep. Without it the syslog/trap-driven checks would
+        # never fire at all: a device logs "adjacency down" ONCE, so nothing
+        # else would ever come back and ask whether it is still down. Runs
+        # AFTER the object sweep and in its own try — a dwell timer must never
+        # be the reason correlation stops.
+        try:
+            await _emit_proactive(PROACTIVE.sweep(datetime.now(timezone.utc)))
+        except Exception:
+            log.exception("proactive sweep failed (observable, §10; loop continues)")
         # Idle (or drain-bounded): fall back to the normal interval. It still
         # drives low-volume flush, expiry and finalisation.
         await asyncio.sleep(CORR_ENGINE_INTERVAL_S)
+
+
+async def _emit_proactive(events: tuple[ProactiveEvent, ...]) -> None:
+    """Persist + buffer the signals a PROMOTED proactive check produced.
+
+    While every check is shadow this is called with an empty tuple on every
+    path, which is the point: the wiring is live and exercised, and promotion
+    is the one-line flag flip `proactive.PROMOTION` describes rather than a
+    second change to main.py under time pressure. Tested against a
+    deliberately-promoted check in test_proactive_checks_a4.py.
+
+    Same lane discipline as every other producer here: batched to
+    corr_signals, then admitted to the window through `agg_admit` /
+    `buffer_signal` so storm aggregation and the window-entry chokepoint apply
+    unchanged. A malformed event dead-letters like any other provenance
+    failure — it is never dropped silently (§10).
+    """
+    global PROACTIVE_SIGNALS, DEADLETTER_COUNT
+    if not events or not CORR_SIGNALS_ENABLED or ch is None:
+        return
+    for ev in events:
+        try:
+            sig = proactive_signal(ev)
+        except DeadLetter as exc:
+            DEADLETTER_COUNT += 1
+            keep_deadletter_payload("proactive", {"check_id": ev.check_id,
+                                                  "entity_id": ev.entity_id}, exc)
+            log.warning("dead-letter (proactive): %s", exc)
+            continue
+        await batch_signal(sig.to_ch_row())
+        PROACTIVE_SIGNALS += 1
+        fwd = agg_admit(sig)
+        if fwd is not None:
+            buffer_signal(fwd)
+        log.info("proactive %s %s: %s held=%.0fs", ev.phase, ev.check_id,
+                 ev.entity_id, ev.held_s)
 
 
 async def feed_episode_detector(
@@ -11847,6 +11907,18 @@ async def handle_metric(ev: dict) -> None:
         entity_tokens=tokens,
     )
 
+    # A4 heartbeat plane. The episode detector above answers "did this move?";
+    # these checks answer "is it STILL bad, and for how long?" — the question a
+    # CUSUM baseline structurally cannot, because a box that has been at 97 %
+    # CPU all week has 97 % as its baseline. Cheap on the hot path: one dict
+    # lookup on the metric name, and every metric that is not one of the three
+    # the plane watches returns immediately.
+    await _emit_proactive(PROACTIVE.observe_metric(
+        tenant=tenant, entity_id=entity_id, metric=metric, value=value,
+        ts=event_ts, observer_id=str(ev.get("device") or ""), tokens=tokens,
+        peer=str(ev.get("peer") or ""),
+    ))
+
     # Legacy rolling z-score finding (back-compat, netops.findings). Keyed on the
     # canonical entity_id so per-interface/per-peer series don't collide on a
     # shared metric name, and on the VERIFIED tenant (M29b) so same-named
@@ -12152,6 +12224,15 @@ async def handle_snmptrap(ev: dict) -> None:
     await batch_signal(sig.to_ch_row())  # batched: lane=snmptrap
     TRAPS_NORMALIZED += 1
     buffer_signal(sig)
+    # A4: the trap adjacency lane feeds the same heartbeat plane as syslog —
+    # the trap rules normalize `state` onto the same {down, up} vocabulary, so
+    # an estate that traps and an estate that logs get the same check.
+    await _emit_proactive(PROACTIVE.observe_signal(
+        tenant=tenant, entity_id=sig.entity_id, kind=sig.kind,
+        state=str(sig.attrs.get("state") or ""),
+        ts=sig.ts, observer_id=sig.observer.observer_id,
+        tokens=sig.entity_tokens, peer=str(sig.attrs.get("peer") or ""),
+    ))
     log.info("trap signal %s: %s %s", sig.kind, sig.entity_id, sig.attrs.get("state", ""))
 
 
@@ -12615,6 +12696,18 @@ async def handle_syslog(ev: dict) -> None:
                 # at debug level when someone is actually chasing one event.
                 log.debug("control-plane signal %s: %s %s",
                           cp_sig.kind, cp_sig.entity_id, cp_sig.attrs.get("state", ""))
+                # A4: the adjacency lane feeds the heartbeat plane. An
+                # adjacency-change line says a transition HAPPENED; the dwell
+                # timer decides whether it stayed. Kinds this plane does not
+                # watch return an empty tuple on the first dict lookup.
+                await _emit_proactive(PROACTIVE.observe_signal(
+                    tenant=cp_tenant, entity_id=cp_sig.entity_id,
+                    kind=cp_sig.kind,
+                    state=str(cp_sig.attrs.get("state") or ""),
+                    ts=cp_sig.ts, observer_id=cp_sig.observer.observer_id,
+                    tokens=cp_sig.entity_tokens,
+                    peer=str(cp_sig.attrs.get("peer") or ""),
+                ))
             # Port Intelligence physical-layer event (#94 P3b): transceiver/optics/
             # DOM/FEC syslog → sig.ent.spdc evidence kinds. Independent of the
             # control-plane classifier (a line can be one or the other, rarely both).
@@ -13313,6 +13406,36 @@ def _metrics_text(health: dict | None = None) -> str:
         "# TYPE corr_parser_shadow_hits_total counter",]
     for _rid, _hits in sorted(_parser["shadow_hits"].items()):
         lines.append(f'corr_parser_shadow_hits_total{{rule_id="{_rid}"}} {_hits}')
+    _proactive = proactive_stats()
+    lines += [
+        # A4 proactive checks. The SAME split as the parser's shadow series and
+        # for the same reason: a shadow check is a condition the engine
+        # recognised and deliberately did not act on, so the rate is the
+        # evidence that decides promotion. Bounded label set — `check_id` comes
+        # from the fixed `proactive.CHECKS` table, never from the wire.
+        "# HELP corr_proactive_shadow_hits_total Proactive checks that fired but emitted NO signal (shadow), by check.",
+        "# TYPE corr_proactive_shadow_hits_total counter",]
+    for _cid, _hits in sorted(_proactive["shadow_hits"].items()):
+        lines.append(f'corr_proactive_shadow_hits_total{{check_id="{_cid}"}} {_hits}')
+    lines += [
+        "# HELP corr_proactive_hits_total Proactive checks that fired AND emitted a signal (promoted), by check.",
+        "# TYPE corr_proactive_hits_total counter",]
+    for _cid, _hits in sorted(_proactive["live_hits"].items()):
+        lines.append(f'corr_proactive_hits_total{{check_id="{_cid}"}} {_hits}')
+    lines += [
+        # The size of the "something is still wrong" set: watches currently
+        # holding a bad state, whether or not their dwell has expired. A gauge,
+        # because it is a level and not a rate.
+        "# HELP corr_proactive_open_watches Proactive-check watches currently holding a bad state.",
+        "# TYPE corr_proactive_open_watches gauge",
+        f"corr_proactive_open_watches {PROACTIVE.open_watches()}",
+        "# HELP corr_proactive_watches Proactive-check watches held in memory (bounded by CORR_PROACTIVE_MAX_WATCHES).",
+        "# TYPE corr_proactive_watches gauge",
+        f"corr_proactive_watches {len(PROACTIVE)}",
+        "# HELP corr_proactive_watch_evictions_total Watches dropped at the cardinality cap.",
+        "# TYPE corr_proactive_watch_evictions_total counter",
+        f"corr_proactive_watch_evictions_total {PROACTIVE.evicted}",
+    ]
     lines += [
         # The unclassified safety nets (#80 §4). Rising against a flat typed
         # rate = the estate started emitting something the parser cannot read.
@@ -14465,6 +14588,16 @@ def _health_payload() -> dict:
         # the last `promotion_window` ADMITTED lines. `parser_rev` +
         # `rules_hash` say WHICH rule corpus produced the signals in flight.
         "parser": parser_stats(),
+        # A4 heartbeat plane: the check table (what each check IS, and whether
+        # it is still shadow) beside its counters, so the shadow rate can be
+        # read against the check that produced it without a second lookup.
+        "proactive": {
+            **proactive_stats(),
+            "open_watches": PROACTIVE.open_watches(),
+            "watches": len(PROACTIVE),
+            "watch_evictions": PROACTIVE.evicted,
+            "signals": PROACTIVE_SIGNALS,
+        },
         # A7: is the fidelity weighting rule in force, and what has it done?
         # `capped_objects` counts RCA objects whose verdict the rule held at
         # `suspected` because their confirming pair rested on doc_claimed
