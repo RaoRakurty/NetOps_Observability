@@ -23,6 +23,7 @@ from __future__ import annotations
 import hashlib
 import logging
 import re
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
 from episodes import EpisodeDetector, EpisodeEvent
@@ -200,6 +201,12 @@ EMITTED_KINDS: frozenset[str] = frozenset({
     "isis_adjacency_change", "bgp_adjacency_change", "ospf_adjacency_change",
     "routing_adjacency_change", "link_state_change", "lldp_neighbor_change",
     "stp_topology_change", "fhrp_state_change", "mac_flap",
+    # BGP session churn / prefix pressure (tracker 184): %BGP-5-NBR_RESET and
+    # %BGP-4-MAXPFX — a session that is resetting or a prefix table under
+    # pressure, which is NOT an adjacency transition. Corroborating evidence for
+    # a BGP fault; declared in coverage.INTENTIONAL_BLIND until a signature
+    # references it (see that entry for the template clause that would).
+    "bgp_route_churn",
     # DC overlay (P2)
     "vtep_state_change", "evpn_mac_move",
     # trap lane
@@ -265,6 +272,473 @@ EMITTED_KINDS: frozenset[str] = frozenset({
     # vocabulary → INTENTIONAL_BLIND in coverage.py.
     "active_verification_result", "active_verification_healthy",
 })
+
+
+# ══ PARSER PROVENANCE + THE RULE TABLE (W1b) ═════════════════════════════════
+#
+# THE PROBLEM THIS SOLVES. Until now a Signal said WHAT was classified and never
+# WHICH RULE classified it, or which revision of that rule. A parser edit that
+# silently re-routed a vendor line was invisible in the data: the same kind came
+# out, from a different branch, and no stored field disagreed. Three fields on
+# every classified signal close that:
+#
+#   rule_id     a stable identifier for the branch that fired (fixed set, so it
+#               is safe as a metric label)
+#   parser_rev  a HAND-BUMPED revision of the rule corpus — the human statement
+#               "the rules changed here"
+#   rules_hash  a COMPUTED sha256 over the ordered rule table — the machine
+#               statement, which catches the edit whose author forgot to bump
+#               parser_rev
+#
+# and a fourth, `fidelity`, says how well-evidenced the GRAMMAR is (the
+# telemetry-catalog ladder: doc_claimed < lab_validated < live_validated), or
+# "code" when the catalog declares no fidelity for that family.
+#
+# IDENTITY IS UNTOUCHED (tracker 198). None of the four enters `native_id`, so
+# none enters `signal_id = uuid5(NS, source|native_id|ts_ms)`. Identity stays
+# CONTENT-based: bumping PARSER_REV must never re-identify a stored event, and a
+# replay of an archived row must still derive the id it derived years ago.
+# They ride in `attrs`, which `Signal.to_ch_row` serializes into the
+# `corr_signals.attrs` String column (JSON) — so there is NO DDL change.
+#
+# WHY A TABLE. The branches below are hand-written Python and stay that way for
+# now, but every fact ABOUT a branch — its id, its kind, the markers its guard
+# tests, the message regex it compiles, the catalog family it implements — now
+# lives in exactly one place, `RULES`. The ingest screen's marker/pattern tables
+# are DERIVED from it (see `_CP_GUARD_MARKERS`), the port-event rule list is
+# DERIVED from it (`_PORT_EVENT_RULES`), and the hit counters are keyed by it.
+# That is the first step toward the catalog executing the rules rather than
+# mirroring them.
+
+# HAND-BUMPED on any rule change. Pair it with the computed RULES_HASH below:
+# the constant is the intent, the hash is the proof.
+PARSER_REV = "2026-09-02-184"
+
+# The telemetry-catalog event-family fidelity ladder, as of PARSER_REV. This is
+# a BUILD-TIME SNAPSHOT of `telemetry-catalog/events.yaml` (families that
+# declare a `fidelity_status`), not a runtime read: the catalog is a repo
+# artifact and is deliberately NOT shipped inside the correlation image (see
+# deployment/docker/Dockerfile.correlation — it copies src/correlation/ only),
+# so a runtime read would resolve to "unknown" in production and to the real
+# value in tests, which is worse than no lookup at all. Drift is caught in CI
+# instead: test_parser_provenance_w1b.py loads events.yaml and asserts this map
+# is exactly the set of families that declare a fidelity_status.
+#
+# A family the catalog knows but leaves undeclared, and a branch with no catalog
+# family at all, both stamp "code": the grammar exists only in this file and the
+# catalog makes no evidence claim about it. That is the honest default — it must
+# never read as validated.
+CATALOG_EVENT_FIDELITY: dict[str, str] = {
+    "bgp_route_churn": "doc_claimed",
+    "mac_move": "doc_claimed",
+    "stp_topology_notification": "doc_claimed",
+}
+FIDELITY_UNCATALOGUED = "code"
+
+
+def _fidelity_of(family: str | None) -> str:
+    """Catalog fidelity for an event family; "code" when it declares none."""
+    if not family:
+        return FIDELITY_UNCATALOGUED
+    return CATALOG_EVENT_FIDELITY.get(family, FIDELITY_UNCATALOGUED)
+
+
+# Bounded keyword gap for the port-event patterns (H11 ReDoS bound). Real
+# DOM/FEC/optics lines put their keywords within a few words of each other; a
+# bounded gap makes backtracking cost a small constant. Defined here because the
+# rule table below is now the single place those patterns are written.
+_G = r"[^\n]{0,80}"
+
+
+@dataclass(frozen=True)
+class Rule:
+    """One classified branch of the parser, as DATA.
+
+    `pattern` is derived from `pattern_src` at construction, so the string a
+    guard compiles and the string the ingest screen reads are the same object —
+    they cannot drift apart.
+    """
+
+    rule_id: str                       # stable id; the metric label
+    lane: str                          # "control" | "port" | "trap" (the producer)
+    source: str                        # wire Source value: "syslog" | "trap"
+    kind: str                          # the emitted Signal kind (∈ EMITTED_KINDS)
+    entity_type: str                   # "device" | "interface" | "device_or_interface"
+    state: str | None = None           # the fixed state, when the branch has one
+    state_re: str | None = None        # the regex the branch derives state with
+    vendors: tuple[str, ...] = ()      # vendor grammars the branch targets
+    markers: tuple[str, ...] = ()      # classification-token literals its guard tests
+    pattern_src: str | None = None     # message regex its guard tests (source text)
+    flags: int = re.IGNORECASE         # flags `pattern_src` is compiled with
+    fidelity_key: str | None = None    # telemetry-catalog events.yaml family
+    severity: Severity | None = None   # the fixed severity, when the branch has one
+    generic: bool = False              # the unclassified safety net (not a typed rule)
+    pattern: re.Pattern | None = field(default=None, compare=False, repr=False)
+
+    def __post_init__(self) -> None:
+        if self.pattern_src is not None:
+            object.__setattr__(self, "pattern",
+                               re.compile(self.pattern_src, self.flags))
+
+    @property
+    def fidelity(self) -> str:
+        return _fidelity_of(self.fidelity_key)
+
+    def digest_fields(self) -> tuple[str, ...]:
+        """Everything that MAKES this rule — the input to `rules_hash`.
+
+        `fidelity` is deliberately absent: it is the catalog's claim about the
+        grammar, not the grammar. A catalog promotion must not read as a parser
+        edit.
+        """
+        return (
+            self.rule_id, self.lane, self.source, self.kind, self.entity_type,
+            self.state or "", self.state_re or "", ",".join(self.vendors),
+            ",".join(self.markers), self.pattern_src or "", str(self.flags),
+            self.fidelity_key or "",
+            self.severity.value if self.severity is not None else "",
+            "1" if self.generic else "0",
+        )
+
+
+def rules_hash(rules: tuple[Rule, ...]) -> str:
+    """sha256 over the ORDERED rule table — the machine's "the rules changed".
+
+    Order is part of the identity on purpose: these branches are `if`/`elif` in
+    sequence and `_PORT_EVENT_RULES` is first-match-wins, so swapping two rules
+    changes what the parser does even though the set is unchanged.
+    """
+    h = hashlib.sha256()
+    for r in rules:
+        h.update("\x1f".join(r.digest_fields()).encode("utf-8"))
+        h.update(b"\x1e")
+    return h.hexdigest()
+
+
+# ── the table ────────────────────────────────────────────────────────────────
+#
+# Declared in CLASSIFICATION ORDER within each lane, because order is behaviour
+# (see `rules_hash`). Marker/pattern coverage is the ingest screen's soundness
+# contract: one marker per DISJUNCT of a guard, and where a guard is a
+# conjunction ("LINK" in ctoken AND "UPDOWN" in ctoken) only the more selective
+# conjunct is registered — see `_build_syslog_screen`.
+
+# -- syslog control-plane lane (`syslog_control_signal`) ----------------------
+R_ISIS_ADJ = Rule(
+    rule_id="syslog.isis.adjacency_change", lane="control", source="syslog",
+    kind="isis_adjacency_change", entity_type="device",
+    state_re=r"to state\s+(\w+)", vendors=("nokia", "cisco"),
+    markers=("ISISADJACENCYCHANGE", "CLNS"),
+    fidelity_key="isis_adjacency_change",
+)
+R_BGP_ADJ = Rule(
+    rule_id="syslog.bgp.adjacency_change", lane="control", source="syslog",
+    kind="bgp_adjacency_change", entity_type="device",
+    vendors=("cisco", "arista", "juniper"), markers=("ADJCHANGE", "ADJCHG"),
+    fidelity_key="bgp_adjacency_change",
+)
+R_OSPF_ADJ = Rule(
+    rule_id="syslog.ospf.adjacency_change", lane="control", source="syslog",
+    kind="ospf_adjacency_change", entity_type="device",
+    vendors=("cisco", "arista"), markers=("ADJCHANGE", "ADJCHG"),
+    fidelity_key="ospf_adjacency_change",
+)
+R_ROUTING_ADJ = Rule(
+    rule_id="syslog.routing.adjacency_change", lane="control", source="syslog",
+    kind="routing_adjacency_change", entity_type="device",
+    vendors=("generic",), markers=("ADJCHANGE", "ADJCHG"),
+)
+# The two tracker-184 BGP-churn rules share one guard (markers + pattern); the
+# branch splits them on the mnemonic. A NOTIFICATION closes the session (RFC 4271
+# §6) and is therefore a genuine adjacency change; a reset or a prefix-limit
+# warning is not.
+_BGP_CHURN_MARKERS = ("NBR_RESET", "MAXPFX", "NOTIFICATION")
+_BGP_CHURN_PATTERN = (r"\b(?:NOTIFICATION\s+(?:sent\s+to|received\s+from)|"
+                      r"maximum\s+prefix-limit)\b")
+R_BGP_NOTIFY = Rule(
+    rule_id="syslog.bgp.notification", lane="control", source="syslog",
+    kind="bgp_adjacency_change", entity_type="device", state="down",
+    vendors=("cisco", "juniper"), markers=_BGP_CHURN_MARKERS,
+    pattern_src=_BGP_CHURN_PATTERN, fidelity_key="bgp_adjacency_change",
+    severity=Severity.HIGH,
+)
+R_BGP_CHURN = Rule(
+    rule_id="syslog.bgp.route_churn", lane="control", source="syslog",
+    kind="bgp_route_churn", entity_type="device",
+    state_re=r"\b(?:exceed(?:ed|s)?|shut\s?down|shutdown|disabl\w*)\b",
+    vendors=("cisco", "juniper"), markers=_BGP_CHURN_MARKERS,
+    pattern_src=_BGP_CHURN_PATTERN, fidelity_key="bgp_route_churn",
+)
+R_LINK = Rule(
+    rule_id="syslog.link.state_change", lane="control", source="syslog",
+    kind="link_state_change", entity_type="interface",
+    vendors=("cisco", "arista"), markers=("UPDOWN",),
+    fidelity_key="link_state_change",
+)
+R_LLDP = Rule(
+    rule_id="syslog.lldp.neighbor_change", lane="control", source="syslog",
+    kind="lldp_neighbor_change", entity_type="interface",
+    state_re=r"\b(?:removed|deleted|aged)\b", vendors=("arista", "nokia"),
+    markers=("LLDP", "REMOTEPEER"), fidelity_key="lldp_neighbor_change",
+)
+R_STP_IF = Rule(
+    rule_id="syslog.stp.topology_change", lane="control", source="syslog",
+    kind="stp_topology_change", entity_type="interface",
+    state_re=r"\bto\s+(forwarding|learning|discarding|blocking)\b",
+    vendors=("cisco", "arista"), markers=("SPANTREE",),
+    fidelity_key="stp_topology_change",
+)
+R_STP_TCN = Rule(
+    rule_id="syslog.stp.topology_notification", lane="control", source="syslog",
+    kind="stp_topology_change", entity_type="device",
+    state_re=r"\bto\s+(forwarding|learning|discarding|blocking)\b",
+    vendors=("cisco",), markers=("SPANTREE",),
+    fidelity_key="stp_topology_notification",
+)
+R_VTEP = Rule(
+    rule_id="syslog.vtep.state_change", lane="control", source="syslog",
+    kind="vtep_state_change", entity_type="device",
+    vendors=("cisco",), markers=("NVE", "VTEP"),
+)
+R_EVPN = Rule(
+    rule_id="syslog.evpn.mac_move", lane="control", source="syslog",
+    kind="evpn_mac_move", entity_type="device", severity=Severity.HIGH,
+    vendors=("arista", "cisco"),
+    markers=("EVPN", "HMM", "DUP_HOST", "VXLAN_MAC_MOVE"),
+    pattern_src=r"\b(?:blacklisted|duplicate host|between NVE and)\b",
+)
+R_FHRP = Rule(
+    rule_id="syslog.fhrp.state_change", lane="control", source="syslog",
+    kind="fhrp_state_change", entity_type="device",
+    state_re=r"->\s*(\w+)", vendors=("cisco", "arista"),
+    markers=("HSRP", "VRRP", "STANDBY"),
+)
+R_MAC_FLAP = Rule(
+    rule_id="syslog.mac.flap", lane="control", source="syslog",
+    kind="mac_flap", entity_type="device", severity=Severity.HIGH,
+    state_re=r"\bflap", vendors=("cisco", "arista"),
+    markers=("MACFLAP", "MAC_MOVE"),
+    pattern_src=(r"\b(?:is flapping between|has moved between|mac[\s_-]?move|"
+                 r"mac[\s_-]?flap)\b"),
+    fidelity_key="mac_move",
+)
+R_SYSLOG_ALARM = Rule(
+    rule_id="syslog.generic.device_alarm", lane="control", source="syslog",
+    kind="device_alarm", entity_type="device_or_interface",
+    vendors=("any",), generic=True,
+)
+
+# The ADJCHANGE branch's kind is chosen by protocol; the table holds all three
+# so the branch never names a kind of its own.
+_ADJ_RULES: dict[str, Rule] = {
+    "bgp": R_BGP_ADJ, "ospf": R_OSPF_ADJ, "routing": R_ROUTING_ADJ,
+}
+
+# -- syslog port-intelligence lane (`port_event_signal`) ----------------------
+# ORDERED, first match wins — `_PORT_EVENT_RULES` is derived from these in this
+# order, so moving one changes classification (and `rules_hash`).
+_PORT_RULES: tuple[Rule, ...] = (
+    Rule(rule_id="syslog.port.transceiver_unsupported", lane="port",
+         source="syslog", kind="transceiver_unsupported", entity_type="interface",
+         severity=Severity.HIGH, vendors=("cisco", "arista", "fortinet"),
+         pattern_src=(r"unsupported\s+transceiver|unqualified\s+(sfp|transceiver|optic)"
+                      r"|not\s+qualified|UNSUPPORTED_TRANSCEIVER|transceiver"
+                      + _G + r"not\s+supported")),
+    Rule(rule_id="syslog.port.dom_rx_power_low", lane="port", source="syslog",
+         kind="dom_rx_power_low", entity_type="interface", severity=Severity.HIGH,
+         vendors=("generic",),
+         pattern_src=(r"(rx|receive)" + _G + r"power" + _G + r"(low|below)" + _G
+                      + r"(alarm|threshold)|RX_POWER_LOW|low\s+rx\s+power")),
+    Rule(rule_id="syslog.port.dom_temperature_high", lane="port", source="syslog",
+         kind="dom_temperature_high", entity_type="interface", severity=Severity.HIGH,
+         vendors=("generic",),
+         pattern_src=(r"(temperature|temp)" + _G + r"(high|above)" + _G
+                      + r"(alarm|threshold|warning)|TEMP_HIGH|high\s+temperature")),
+    Rule(rule_id="syslog.port.dom_lane_bias_anomaly", lane="port", source="syslog",
+         kind="dom_lane_bias_anomaly", entity_type="interface", severity=Severity.WARN,
+         vendors=("generic",),
+         pattern_src=(r"(tx\s+)?bias" + _G + r"(high|current)" + _G
+                      + r"(alarm|threshold)|BIAS_HIGH")),
+    Rule(rule_id="syslog.port.prefec_ber_rising", lane="port", source="syslog",
+         kind="prefec_ber_rising", entity_type="interface", severity=Severity.HIGH,
+         vendors=("generic",),
+         pattern_src=(r"uncorrectable" + _G + r"(fec|codeword|block)|FEC" + _G
+                      + r"UNCORRECTABLE|post[-_ ]?fec" + _G + r"(error|ber)")),
+    Rule(rule_id="syslog.port.fec_corrected_rate_high", lane="port", source="syslog",
+         kind="fec_corrected_rate_high", entity_type="interface", severity=Severity.WARN,
+         vendors=("generic",),
+         pattern_src=(r"pre[-_ ]?fec\s+ber|fec" + _G + r"corrected" + _G
+                      + r"(rate|high)|CORRECTED_FEC")),
+    Rule(rule_id="syslog.port.pcs_local_fault", lane="port", source="syslog",
+         kind="pcs_local_fault", entity_type="interface", severity=Severity.HIGH,
+         vendors=("generic",), pattern_src=r"local\s+fault|LOCAL_FAULT"),
+    Rule(rule_id="syslog.port.pcs_remote_fault", lane="port", source="syslog",
+         kind="pcs_remote_fault", entity_type="interface", severity=Severity.HIGH,
+         vendors=("generic",), pattern_src=r"remote\s+fault|REMOTE_FAULT"),
+    Rule(rule_id="syslog.port.pcs_deskew_fault", lane="port", source="syslog",
+         kind="pcs_deskew_fault", entity_type="interface", severity=Severity.HIGH,
+         vendors=("generic",),
+         pattern_src=(r"deskew|align" + _G + r"(marker|lane)" + _G
+                      + r"(fail|lost)|PCS" + _G + r"DESKEW")),
+    Rule(rule_id="syslog.port.hi_ber_indication", lane="port", source="syslog",
+         kind="hi_ber_indication", entity_type="interface", severity=Severity.HIGH,
+         vendors=("generic",), pattern_src=r"hi[-_ ]?ber|high\s+bit\s+error"),
+    Rule(rule_id="syslog.port.link_down_no_light", lane="port", source="syslog",
+         kind="link_down_no_light", entity_type="interface", severity=Severity.HIGH,
+         vendors=("generic",),
+         pattern_src=r"no\s+(light|signal)|loss\s+of\s+(light|signal)|LOS\b|SIGNAL_LOSS"),
+    Rule(rule_id="syslog.port.link_flap_on_insert", lane="port", source="syslog",
+         kind="link_flap_on_insert", entity_type="interface", severity=Severity.WARN,
+         vendors=("generic",),
+         pattern_src=(r"transceiver" + _G + r"(insert|remov)" + _G
+                      + r"(insert|remov)|SFP" + _G + r"flap|optic" + _G + r"flap")),
+)
+
+# -- SNMP trap lane (`trap_control_signal`) -----------------------------------
+R_TRAP_LINK = Rule(
+    rule_id="trap.link.state_change", lane="trap", source="trap",
+    kind="link_state_change", entity_type="interface", vendors=("standard",),
+    fidelity_key="link_state_change",
+)
+R_TRAP_RESTART = Rule(
+    rule_id="trap.device.restart", lane="trap", source="trap",
+    kind="device_restart", entity_type="device", severity=Severity.HIGH,
+    vendors=("standard",),
+)
+R_TRAP_BGP = Rule(
+    rule_id="trap.bgp.adjacency_change", lane="trap", source="trap",
+    kind="bgp_adjacency_change", entity_type="device", vendors=("standard",),
+    fidelity_key="bgp_adjacency_change",
+)
+R_TRAP_BGP_ETYPE = Rule(
+    rule_id="trap.bgp.adjacency_change.event_type", lane="trap", source="trap",
+    kind="bgp_adjacency_change", entity_type="device", vendors=("any",),
+    fidelity_key="bgp_adjacency_change",
+)
+R_TRAP_LINK_ETYPE = Rule(
+    rule_id="trap.link.state_change.event_type", lane="trap", source="trap",
+    kind="link_state_change", entity_type="interface", vendors=("any",),
+    fidelity_key="link_state_change",
+)
+R_TRAP_RESTART_ETYPE = Rule(
+    rule_id="trap.device.restart.event_type", lane="trap", source="trap",
+    kind="device_restart", entity_type="device", severity=Severity.HIGH,
+    vendors=("any",),
+)
+R_TRAP_ALARM = Rule(
+    rule_id="trap.generic.device_alarm", lane="trap", source="trap",
+    kind="device_alarm", entity_type="device_or_interface", vendors=("any",),
+    generic=True,
+)
+
+RULES: tuple[Rule, ...] = (
+    R_ISIS_ADJ, R_BGP_ADJ, R_OSPF_ADJ, R_ROUTING_ADJ,
+    R_BGP_NOTIFY, R_BGP_CHURN, R_LINK, R_LLDP, R_STP_IF, R_STP_TCN,
+    R_VTEP, R_EVPN, R_FHRP, R_MAC_FLAP, R_SYSLOG_ALARM,
+    *_PORT_RULES,
+    R_TRAP_LINK, R_TRAP_RESTART, R_TRAP_BGP,
+    R_TRAP_BGP_ETYPE, R_TRAP_LINK_ETYPE, R_TRAP_RESTART_ETYPE, R_TRAP_ALARM,
+)
+
+RULES_BY_ID: dict[str, Rule] = {r.rule_id: r for r in RULES}
+if len(RULES_BY_ID) != len(RULES):                      # pragma: no cover - guard
+    raise RuntimeError("duplicate rule_id in producers.RULES")
+
+# The computed half of provenance. The full digest is the comparison value; the
+# 16-hex prefix is what rides on every signal (64 hex chars per row, times the
+# whole syslog firehose, buys nothing over 64 bits of collision resistance).
+RULES_HASH = rules_hash(RULES)
+RULES_HASH_TAG = RULES_HASH[:16]
+
+
+# ── parser observability (bounded-cardinality counters) ──────────────────────
+#
+# `rule_id` is a FIXED set (the table above), so it is safe as a Prometheus
+# label — the series count is len(RULES), known at import, and no device string
+# can widen it. Pre-seeded at zero so a rule that stops firing is visible as a
+# flat series rather than as an absent one.
+RULE_HITS: dict[str, int] = {r.rule_id: 0 for r in RULES}
+GENERIC_FALLBACKS: dict[str, int] = {"syslog": 0, "trap": 0}
+
+# The semantic-promotion rate is measured over a ROLLING WINDOW of the last
+# PROMOTION_WINDOW ADMITTED lines — "admitted" meaning a line that produced a
+# signal at all (typed or generic). Lines that classify as nothing are not in
+# the denominator: they are the pre-filter's business, not the parser's, and
+# including them would make the rate a function of the noise mix rather than of
+# parser coverage. A fixed-size ring keeps the read O(1) and the memory bounded
+# (one int per slot, allocated once) — /metrics must never pay an O(window) sum.
+PROMOTION_WINDOW = 10_000
+_PROMO_RING: list[int] = []
+_PROMO_POS = 0
+_PROMO_TYPED = 0
+
+
+def _record_promotion(typed: bool) -> None:
+    global _PROMO_POS, _PROMO_TYPED
+    v = 1 if typed else 0
+    if len(_PROMO_RING) < PROMOTION_WINDOW:
+        _PROMO_RING.append(v)
+        _PROMO_TYPED += v
+        return
+    _PROMO_TYPED += v - _PROMO_RING[_PROMO_POS]
+    _PROMO_RING[_PROMO_POS] = v
+    _PROMO_POS = (_PROMO_POS + 1) % PROMOTION_WINDOW
+
+
+def semantic_promotion_rate() -> float:
+    """typed / (typed + generic) over the last PROMOTION_WINDOW admitted lines.
+
+    1.0 when nothing has been admitted yet: an empty window makes no claim, and
+    reporting 0.0 would page as "the parser stopped classifying".
+    """
+    if not _PROMO_RING:
+        return 1.0
+    return _PROMO_TYPED / len(_PROMO_RING)
+
+
+def parser_stats() -> dict:
+    """Provenance + coverage counters, for /metrics and the health payload."""
+    return {
+        "parser_rev": PARSER_REV,
+        "rules_hash": RULES_HASH_TAG,
+        "rules": len(RULES),
+        "rule_hits": dict(RULE_HITS),
+        "generic_fallbacks": dict(GENERIC_FALLBACKS),
+        "semantic_promotion_rate": round(semantic_promotion_rate(), 6),
+        "promotion_window": PROMOTION_WINDOW,
+        "promotion_window_used": len(_PROMO_RING),
+    }
+
+
+def reset_parser_counters() -> None:
+    """Test hook."""
+    global _PROMO_POS, _PROMO_TYPED
+    for k in RULE_HITS:
+        RULE_HITS[k] = 0
+    for k in GENERIC_FALLBACKS:
+        GENERIC_FALLBACKS[k] = 0
+    _PROMO_RING.clear()
+    _PROMO_POS = 0
+    _PROMO_TYPED = 0
+
+
+def _prov(rule: Rule) -> dict:
+    """Count the hit and return the provenance `attrs` for this rule.
+
+    Called exactly once per emitted Signal, from the branch's own `attrs`
+    literal. The returned keys are provenance ONLY — none of them reaches
+    `native_id`, so `signal_id` is unchanged (tracker 198: identity is content).
+    """
+    RULE_HITS[rule.rule_id] += 1
+    if rule.generic:
+        GENERIC_FALLBACKS[rule.source] = GENERIC_FALLBACKS.get(rule.source, 0) + 1
+    _record_promotion(not rule.generic)
+    return {
+        "rule_id": rule.rule_id,
+        "parser_rev": PARSER_REV,
+        "rules_hash": RULES_HASH_TAG,
+        "fidelity": rule.fidelity,
+    }
 
 
 def episode_signal(
@@ -595,23 +1069,41 @@ def _state_of(msg: str) -> str:
 # One MARKER per promotion gate of `syslog_control_signal`. Where a gate is a
 # conjunction ("LINK" in ctoken AND "UPDOWN" in ctoken) only ONE conjunct is
 # needed for soundness, and the more selective one is registered.
-_CP_GUARD_MARKERS: tuple[str, ...] = (
-    "ISISADJACENCYCHANGE", "CLNS",          # IS-IS adjacency  (CLNS ^ ADJ -> CLNS)
-    "ADJCHANGE", "ADJCHG",                  # BGP / OSPF / generic adjacency
-    "UPDOWN",                               # (LINK v LINEPROTO) ^ UPDOWN
-    "LLDP", "REMOTEPEER",                   # (LLDP ^ NEIGHBOR) v REMOTEPEER
-    "SPANTREE",                             # STP topology change
-    "NVE", "VTEP",                          # NVE v (VTEP ^ BFD)
-    "EVPN", "HMM", "DUP_HOST", "VXLAN_MAC_MOVE",   # EVPN MAC mobility
-    "HSRP", "VRRP", "STANDBY",              # FHRP state change
-    "MACFLAP", "MAC_MOVE",                  # local MAC flap / move
-)
-# The regexes those same gates test against the MESSAGE. Registered as source
-# text so the screen is derived from the identical string the gate compiles.
-_CP_GUARD_PATTERNS: tuple[str, ...] = (
-    r"\b(?:blacklisted|duplicate host|between NVE and)\b",
-    r"\b(?:is flapping between|has moved between|mac[\s_-]?move|mac[\s_-]?flap)\b",
-)
+#
+# W1b: DERIVED FROM `RULES`, not hand-written. Each control-plane Rule declares
+# the markers and the message pattern ITS OWN guard tests, so registering a new
+# branch's screen coverage is now the same act as registering the branch — the
+# two cannot drift. The order below is rule-table order, de-duplicated
+# first-seen; `_build_syslog_screen` folds them into a set, so order is
+# presentation only.
+#
+#   ISISADJACENCYCHANGE, CLNS   IS-IS adjacency  (CLNS ^ ADJ -> CLNS)
+#   ADJCHANGE, ADJCHG           BGP / OSPF / generic adjacency
+#   NBR_RESET, MAXPFX, NOTIFICATION   BGP churn (tracker 184; "BGP" ^ one of these)
+#   UPDOWN                      (LINK v LINEPROTO) ^ UPDOWN
+#   LLDP, REMOTEPEER            (LLDP ^ NEIGHBOR) v REMOTEPEER
+#   SPANTREE                    STP topology change / notification
+#   NVE, VTEP                   NVE v (VTEP ^ BFD)
+#   EVPN, HMM, DUP_HOST, VXLAN_MAC_MOVE   EVPN MAC mobility
+#   HSRP, VRRP, STANDBY         FHRP state change
+#   MACFLAP, MAC_MOVE           local MAC flap / move
+
+
+def _dedup(items) -> tuple[str, ...]:
+    """First-seen order, no duplicates (several Rules share one guard)."""
+    seen: dict[str, None] = {}
+    for it in items:
+        seen.setdefault(it, None)
+    return tuple(seen)
+
+
+_CP_GUARD_MARKERS: tuple[str, ...] = _dedup(
+    m for r in RULES if r.lane == "control" for m in r.markers)
+# The regexes those same gates test against the MESSAGE. Taken from the rule
+# table as SOURCE TEXT, which is the identical string the gate compiles — the
+# `Rule.pattern` the branch matches with is `re.compile` of this very string.
+_CP_GUARD_PATTERNS: tuple[str, ...] = _dedup(
+    r.pattern_src for r in RULES if r.lane == "control" and r.pattern_src)
 
 
 def _build_syslog_screen() -> tuple[str, ...] | None:
@@ -746,7 +1238,7 @@ def syslog_control_signal(ev: dict, tenant: str, ingest_ts: datetime) -> Signal 
             tenant_id=tenant,
             ts=ts,
             source=Source.SYSLOG,
-            kind="isis_adjacency_change",
+            kind=R_ISIS_ADJ.kind,
             observer=observer,
             modality_class=ModalityClass.CONTROL_PLANE,
             entity_type=EntityType.DEVICE,
@@ -755,11 +1247,13 @@ def syslog_control_signal(ev: dict, tenant: str, ingest_ts: datetime) -> Signal 
             native_id=f"{host}|isis_adj|{peer or '?'}|{state}|{ts_ms}",
             entity_tokens=tokens,
             metric_name="isis_adjacency",
-            attrs={"peer": peer, "state": state, "tag": tag or "isisAdjacencyChange"},
+            attrs={"peer": peer, "state": state, "tag": tag or "isisAdjacencyChange",
+                   **_prov(R_ISIS_ADJ)},
         )
 
     if "ADJCHANGE" in ctoken or "ADJCHG" in ctoken:
         proto = "bgp" if "BGP" in ctoken else "ospf" if "OSPF" in ctoken else "routing"
+        rule = _ADJ_RULES[proto]
         peer_m = _IP_RE.search(msg)
         peer = peer_m.group(1) if peer_m else ""
         state = _state_of(msg)
@@ -768,7 +1262,7 @@ def syslog_control_signal(ev: dict, tenant: str, ingest_ts: datetime) -> Signal 
             tenant_id=tenant,
             ts=ts,
             source=Source.SYSLOG,
-            kind=f"{proto}_adjacency_change",
+            kind=rule.kind,
             observer=observer,
             modality_class=ModalityClass.CONTROL_PLANE,
             entity_type=EntityType.DEVICE,
@@ -777,7 +1271,128 @@ def syslog_control_signal(ev: dict, tenant: str, ingest_ts: datetime) -> Signal 
             native_id=f"{host}|{proto}_adj|{peer or '?'}|{state}|{ts_ms}",
             entity_tokens=tokens,
             metric_name=f"{proto}_adjacency",
-            attrs={"peer": peer, "state": state, "tag": tag},
+            attrs={"peer": peer, "state": state, "tag": tag, **_prov(rule)},
+        )
+
+    # ── BGP session churn / prefix pressure (tracker 184) ───────────────────
+    #
+    # THE GAP THIS CLOSES. A real BGP fault emits MORE than %BGP-5-ADJCHANGE,
+    # and the classifier used to drop those extra lines or flatten them into a
+    # generic `device_alarm` with NO peer token, NO state and NO bgp_* kind —
+    # measured on a generated enterprise outage as the single largest slice of
+    # the invisible stream. The mnemonics, per vendor:
+    #
+    #   %BGP-5-NBR_RESET      the session was reset, WITH the reason         (IOS/IOS-XE/NX-OS)
+    #     "Neighbor 10.0.0.200 reset (BGP Notification received)"
+    #   %BGP-4-MAXPFX         prefix count crossed its warning threshold     (IOS/IOS-XE/NX-OS)
+    #     "No. of prefix received from 10.0.0.200 (afi 0) reaches 12000, max 250000"
+    #   %BGP-4-MAXPFXEXCEED   the limit was EXCEEDED — the peer is shut      (IOS/IOS-XE/NX-OS)
+    #   %BGP-3-NOTIFICATION   a BGP NOTIFICATION was sent/received           (IOS/IOS-XE/NX-OS)
+    #     "received from neighbor 10.0.0.200 6/4 (Administrative Reset) 0 bytes"
+    #   Junos (rpd, appname carries no mnemonic — matched on the MESSAGE):
+    #     "bgp_pp_recv:3435: NOTIFICATION received from 10.0.0.200 (External AS
+    #      65001): code 6 (Cease) subcode 4 (Administrative Reset)"
+    #     "bgp_rt_maxprefixes_check: 10.0.0.200 (External AS 65001): Configured
+    #      maximum prefix-limit threshold(90%) exceeded for inet-unicast nlri: 9000"
+    #
+    # TWO KINDS, on purpose:
+    #   * A NOTIFICATION always CLOSES the session (RFC 4271 §6 — "sends a
+    #     NOTIFICATION message and closes the connection"), so it is a genuine
+    #     `bgp_adjacency_change`, state down. It is the SAME fault the ADJCHANGE
+    #     line reports from the other side of the FSM — a second, corroborating
+    #     report from the same observer, exactly like %LINK + %LINEPROTO — and it
+    #     is the ONLY line some platforms log, so filing it as an adjacency
+    #     change is what makes those devices visible to the BGP signatures at all.
+    #   * A RESET or a prefix-limit warning is NOT an adjacency transition: a
+    #     reset reason may be a soft/administrative clear and a MAXPFX warning
+    #     leaves the session ESTABLISHED. Calling either "adjacency down" would
+    #     be a false session-down, so they get their own `bgp_route_churn` kind
+    #     (state-bearing, peer-tokened) and stay honest about what they saw.
+    #
+    # NOT COVERED, and it is not a parser gap: PER-PREFIX churn (which prefixes
+    # were withdrawn/re-announced) has NO syslog representation on any vendor —
+    # it is BMP / BGP-UPDATE data. These mnemonics are the session-level shadow
+    # of it, which is all syslog can carry.
+    if ("BGP" in ctoken and ("NBR_RESET" in ctoken or "MAXPFX" in ctoken
+                             or "NOTIFICATION" in ctoken)) \
+            or re.search(r"\b(?:NOTIFICATION\s+(?:sent\s+to|received\s+from)|maximum\s+prefix-limit)\b",
+                         msg, re.IGNORECASE):
+        peer_m = _IP_RE.search(msg)
+        peer = peer_m.group(1) if peer_m else ""
+        # MNEMONIC FIRST, message second. %BGP-5-NBR_RESET states its reason as
+        # "(BGP Notification received)" — reading the message first would file a
+        # reset as a teardown. The message shapes are the JUNOS fallback only
+        # (rpd puts no mnemonic in appname), and they are anchored on the
+        # "sent to"/"received from" that a Cisco reason text never contains.
+        if "NBR_RESET" in ctoken:
+            subtype = "nbr_reset"
+        elif "MAXPFX" in ctoken:
+            subtype = "maxpfx"
+        elif "NOTIFICATION" in ctoken:
+            subtype = "notification"
+        elif re.search(r"\bmaximum\s+prefix-limit\b", msg, re.IGNORECASE):
+            subtype = "maxpfx"
+        else:
+            subtype = "notification"
+        notify = subtype == "notification"
+        maxpfx = subtype == "maxpfx"
+        # The peer was actually torn down: an explicit limit-exceeded/shutdown.
+        shut = bool(re.search(r"\b(?:exceed(?:ed|s)?|shut\s?down|shutdown|disabl\w*)\b",
+                              msg, re.IGNORECASE))
+        # The reason a vendor puts in parentheses: "(BGP Notification received)",
+        # "(Administrative Reset)", "(Cease)". The LAST one that is not vendor
+        # bookkeeping — Cisco trails "(afi 0)" and Junos "(External AS 65001)" /
+        # "(instance master)" alongside the real reason. Bounded: untrusted text.
+        reason = ""
+        for cand in re.findall(r"\(([^)\n]{1,64})\)", msg):
+            if re.match(r"(?:afi|external\s+as|internal\s+as|instance|as)\b|^[\d.%\s]+$",
+                        cand, re.IGNORECASE):
+                continue
+            reason = cand
+        # NOTIFICATION code/subcode ("6/4" on IOS; "code 6 ... subcode 4" on Junos).
+        code_m = (re.search(r"\b(\d{1,2})/(\d{1,2})\b", msg)
+                  or re.search(r"\bcode\s+(\d{1,2})\b[^\n]{0,40}?\bsubcode\s+(\d{1,3})\b",
+                               msg, re.IGNORECASE))
+        code = f"{code_m.group(1)}/{code_m.group(2)}" if code_m else ""
+        # Prefix counts: IOS "reaches 12000, max 250000"; Junos "nlri: 9000".
+        cnt_m = (re.search(r"\breaches\s+(\d{1,10})\b", msg, re.IGNORECASE)
+                 or re.search(r"\bnlri:\s*(\d{1,10})\b", msg, re.IGNORECASE)
+                 or re.search(r":\s*(\d{1,10})\s+exceed", msg, re.IGNORECASE))
+        pfx_count = cnt_m.group(1) if cnt_m else ""
+        max_m = (re.search(r"\bmax(?:imum)?[\s:]+(\d{1,10})\b", msg, re.IGNORECASE)
+                 or re.search(r"\blimit\s+(\d{1,10})\b", msg, re.IGNORECASE))
+        pfx_max = max_m.group(1) if max_m else ""
+        tokens = (host, peer) if peer else (host,)
+        if notify:
+            # A NOTIFICATION closes the session — a real adjacency transition.
+            return Signal(
+                tenant_id=tenant, ts=ts, source=Source.SYSLOG,
+                kind=R_BGP_NOTIFY.kind, observer=observer,
+                modality_class=ModalityClass.CONTROL_PLANE,
+                entity_type=EntityType.DEVICE, entity_id=host,
+                severity=Severity.HIGH,
+                # `notify` keeps this distinct from the ADJCHANGE branch's id, so
+                # both reports of one teardown survive in the same millisecond.
+                native_id=f"{host}|bgp_adj|notify|{peer or '?'}|{code or '-'}|down|{ts_ms}",
+                entity_tokens=tokens, metric_name="bgp_adjacency",
+                attrs={"peer": peer, "state": "down", "subtype": "notification",
+                       "code": code, "reason": reason, "tag": tag,
+                       **_prov(R_BGP_NOTIFY)},
+            )
+        # A limit that was EXCEEDED shuts the peer; a threshold warning does not.
+        state = "down" if (maxpfx and shut) else "churn"
+        return Signal(
+            tenant_id=tenant, ts=ts, source=Source.SYSLOG,
+            kind=R_BGP_CHURN.kind, observer=observer,
+            modality_class=ModalityClass.CONTROL_PLANE,
+            entity_type=EntityType.DEVICE, entity_id=host,
+            severity=Severity.HIGH if state == "down" else Severity.WARN,
+            native_id=(f"{host}|bgp_churn|{subtype}|{peer or '?'}|"
+                       f"{pfx_count or '-'}|{state}|{ts_ms}"),
+            entity_tokens=tokens, metric_name="bgp_route_churn",
+            attrs={"peer": peer, "state": state, "subtype": subtype,
+                   "reason": reason, "prefix_count": pfx_count,
+                   "prefix_max": pfx_max, "tag": tag, **_prov(R_BGP_CHURN)},
         )
 
     if ("LINK" in ctoken or "LINEPROTO" in ctoken) and "UPDOWN" in ctoken:
@@ -788,7 +1403,7 @@ def syslog_control_signal(ev: dict, tenant: str, ingest_ts: datetime) -> Signal 
             tenant_id=tenant,
             ts=ts,
             source=Source.SYSLOG,
-            kind="link_state_change",
+            kind=R_LINK.kind,
             observer=observer,
             modality_class=ModalityClass.CONTROL_PLANE,
             entity_type=EntityType.INTERFACE,
@@ -797,7 +1412,8 @@ def syslog_control_signal(ev: dict, tenant: str, ingest_ts: datetime) -> Signal 
             native_id=f"{host}|link|{ifname}|{state}|{ts_ms}",
             entity_tokens=(host,),   # tracker 168: entity_id is already host:ifname
             metric_name="link_state",
-            attrs={"interface": ifname, "state": state, "tag": tag},
+            attrs={"interface": ifname, "state": state, "tag": tag,
+                   **_prov(R_LINK)},
         )
 
     # LLDP neighbor change — cEOS %LLDP-5-NEIGHBOR_NEW/REMOVED; SR Linux emits
@@ -816,7 +1432,7 @@ def syslog_control_signal(ev: dict, tenant: str, ingest_ts: datetime) -> Signal 
             tenant_id=tenant,
             ts=ts,
             source=Source.SYSLOG,
-            kind="lldp_neighbor_change",
+            kind=R_LLDP.kind,
             observer=observer,
             modality_class=ModalityClass.CONTROL_PLANE,
             entity_type=EntityType.INTERFACE,
@@ -825,14 +1441,47 @@ def syslog_control_signal(ev: dict, tenant: str, ingest_ts: datetime) -> Signal 
             native_id=f"{host}|lldp|{ifname}|{state}|{ts_ms}",
             entity_tokens=(host,),   # tracker 168: entity_id is already host:ifname
             metric_name="lldp_neighbor",
-            attrs={"interface": ifname, "state": state, "tag": tag or "remotePeer"},
+            attrs={"interface": ifname, "state": state, "tag": tag or "remotePeer",
+                   **_prov(R_LLDP)},
         )
 
     # STP topology change — cEOS %SPANTREE-6-INTERFACE_DEL/ADD/STATE. Interface-
     # scoped; prefer the transition target ("...to learning/forwarding").
+    #
+    # TRACKER 184 — TCN ATTRIBUTION. A domain-wide topology-change notification
+    # names NO interface: Cisco IOS/IOS-XE "%SPANTREE-5-TOPOTRAP: Topology Change
+    # Trap for instance MST0" (PVST: "... for vlan 100"). The old branch fell back
+    # to the literal string "unknown", so EVERY TCN a switch ever logged landed on
+    # the SYNTHETIC entity `<host>:unknown` — one fake interface node per device
+    # that fused unrelated topology changes and collapsed same-millisecond TCNs
+    # onto one identity. There is nothing interface-shaped to key on, so a TCN is
+    # now keyed on the DEVICE, with the STP INSTANCE/VLAN it names carried as a
+    # device-local grounding token (tracker 168: `MST0` and `vlan100` exist on
+    # every switch in the estate, so they are qualified, never bare).
+    #   1. "Interface X ..."     → that interface   (unchanged; every existing line)
+    #   2. a bare port name      → that port        (e.g. "New Root Port is Gi0/1")
+    #   3. an instance / VLAN    → the DEVICE, token <host>:mst0 / <host>:vlan100
+    #   4. nothing at all        → the DEVICE
     if "SPANTREE" in tag:
-        if_m = _IF_RE.search(msg)
-        ifname = if_m.group(1) if if_m else "unknown"
+        if_m = _IF_RE.search(msg) or re.search(
+            r"\b((?:Gi|Te|Fa|Po|Port-channel|Eth\w*|GigabitEthernet|TenGigE)[\d][\w/.\-]*)\b", msg)
+        ifname = if_m.group(1) if if_m else ""
+        inst_m = re.search(r"\binstance\s+([A-Za-z0-9_\-]{1,32})\b", msg, re.IGNORECASE)
+        vlan_m = re.search(r"\bvlan\s*(\d{1,4})\b", msg, re.IGNORECASE)
+        # `instance` is the vendor's own token (what telemetry-catalog's
+        # stp_topology_notification family labels `stp_instance`); `inst_tok` is
+        # the device-local grounding token, which prefixes a PVST VLAN so
+        # `vlan100` can never collide with an MST instance NAMED "100".
+        if inst_m:
+            instance = inst_m.group(1)
+            inst_tok = instance.lower()
+        elif vlan_m:                       # PVST names a VLAN, not an MST instance
+            instance = vlan_m.group(1)
+            inst_tok = f"vlan{instance}"
+        else:
+            mst_m = re.search(r"\b(MST\d{1,4})\b", msg)
+            instance = mst_m.group(1) if mst_m else ""
+            inst_tok = instance.lower()
         tgt_m = re.search(r"\bto\s+(forwarding|learning|discarding|blocking)\b", msg, re.IGNORECASE)
         if tgt_m:
             state = "up" if tgt_m.group(1).lower() in ("forwarding", "learning") else "down"
@@ -842,20 +1491,34 @@ def syslog_control_signal(ev: dict, tenant: str, ingest_ts: datetime) -> Signal 
             state = "up"
         else:
             state = "unknown"
+        rule_stp = R_STP_IF if ifname else R_STP_TCN
+        etype_stp = EntityType.INTERFACE if ifname else EntityType.DEVICE
+        eid_stp = f"{host}:{ifname}" if ifname else host
+        # tracker 168: an interface-scoped signal already carries the port in its
+        # entity_id; a device-scoped one qualifies the instance/VLAN with the host.
+        toks_stp = ((host,) if ifname
+                    else (host,) + _device_local(host, inst_tok))
         return Signal(
             tenant_id=tenant,
             ts=ts,
             source=Source.SYSLOG,
-            kind="stp_topology_change",
+            kind=rule_stp.kind,
             observer=observer,
             modality_class=ModalityClass.CONTROL_PLANE,
-            entity_type=EntityType.INTERFACE,
-            entity_id=f"{host}:{ifname}",
+            entity_type=etype_stp,
+            entity_id=eid_stp,
             severity=Severity.HIGH if state == "down" else Severity.WARN,
-            native_id=f"{host}|stp|{ifname}|{state}|{ts_ms}",
-            entity_tokens=(host,),   # tracker 168: entity_id is already host:ifname
+            # An interface-scoped STP signal keeps its identity BYTE-FOR-BYTE (the
+            # port is the content, and those lines never collapsed). Only the
+            # port-less TCN gets a new one: the instance is the only content it
+            # carries, and without it two TCNs for two different instances in one
+            # millisecond were ONE signal.
+            native_id=(f"{host}|stp|{ifname}|{state}|{ts_ms}" if ifname else
+                       f"{host}|stp_tcn|{instance or '?'}|{state}|{ts_ms}"),
+            entity_tokens=toks_stp,
             metric_name="stp_state",
-            attrs={"interface": ifname, "state": state, "tag": tag},
+            attrs={"interface": ifname, "instance": instance,
+                   "state": state, "tag": tag, **_prov(rule_stp)},
         )
 
     # VTEP / NVE peer reachability (DC overlay) — NX-OS %NVE-5-BFD_CC_STATE_CHANGE
@@ -868,13 +1531,13 @@ def syslog_control_signal(ev: dict, tenant: str, ingest_ts: datetime) -> Signal 
         state = _state_of(msg)
         tokens = (host, peer) if peer else (host,)
         return Signal(
-            tenant_id=tenant, ts=ts, source=Source.SYSLOG, kind="vtep_state_change",
+            tenant_id=tenant, ts=ts, source=Source.SYSLOG, kind=R_VTEP.kind,
             observer=observer, modality_class=ModalityClass.CONTROL_PLANE,
             entity_type=EntityType.DEVICE, entity_id=host,
             severity=Severity.HIGH if state == "down" else Severity.WARN,
             native_id=f"{host}|vtep|{peer or '?'}|{state}|{ts_ms}",
             entity_tokens=tokens, metric_name="vtep_state",
-            attrs={"vtep": peer, "state": state, "tag": tag},
+            attrs={"vtep": peer, "state": state, "tag": tag, **_prov(R_VTEP)},
         )
 
     # EVPN MAC mobility / duplicate-MAC freeze (DC overlay) — the cross-VTEP analog
@@ -898,14 +1561,14 @@ def syslog_control_signal(ev: dict, tenant: str, ingest_ts: datetime) -> Signal 
         tokens = tuple(t for t in (host, mac, f"vlan{vlan}" if vlan else "",
                                    f"vni{vni}" if vni else "", vtep) if t)
         return Signal(
-            tenant_id=tenant, ts=ts, source=Source.SYSLOG, kind="evpn_mac_move",
+            tenant_id=tenant, ts=ts, source=Source.SYSLOG, kind=R_EVPN.kind,
             observer=observer, modality_class=ModalityClass.CONTROL_PLANE,
             entity_type=EntityType.DEVICE, entity_id=host,
             severity=Severity.HIGH,
             native_id=f"{host}|evpn_mac|{mac or '?'}|vlan{vlan or '?'}|{ts_ms}",
             entity_tokens=tokens or (host,), metric_name="evpn_mac_move",
             attrs={"mac": mac, "vlan": vlan, "vni": vni, "vtep": vtep,
-                   "blacklisted": blacklisted, "tag": tag},
+                   "blacklisted": blacklisted, "tag": tag, **_prov(R_EVPN)},
         )
 
     # First-hop redundancy (HSRP/VRRP) state change — Cisco %HSRP-5-STATECHANGE /
@@ -937,7 +1600,7 @@ def syslog_control_signal(ev: dict, tenant: str, ingest_ts: datetime) -> Signal 
             tenant_id=tenant,
             ts=ts,
             source=Source.SYSLOG,
-            kind="fhrp_state_change",
+            kind=R_FHRP.kind,
             observer=observer,
             modality_class=ModalityClass.CONTROL_PLANE,
             entity_type=EntityType.DEVICE,
@@ -946,7 +1609,8 @@ def syslog_control_signal(ev: dict, tenant: str, ingest_ts: datetime) -> Signal 
             native_id=f"{host}|fhrp|{proto}|{ifname}|grp{group or '?'}|{role or '?'}|{ts_ms}",
             entity_tokens=tokens or (host,),
             metric_name="fhrp_state",
-            attrs={"proto": proto, "group": group, "interface": ifname, "state": role, "tag": tag},
+            attrs={"proto": proto, "group": group, "interface": ifname,
+                   "state": role, "tag": tag, **_prov(R_FHRP)},
         )
 
     # MAC flap / move — a host MAC oscillating between two ports: an L2 loop, a
@@ -969,13 +1633,34 @@ def syslog_control_signal(ev: dict, tenant: str, ingest_ts: datetime) -> Signal 
         # The VLAN id and the port names are device-local (`vlan10` and `Gi0/1`
         # exist on almost every switch), so they are qualified: the binding to
         # THIS device's port metrics is preserved, the estate-wide weld is not.
+        # tracker 184 — THE MOVE NEEDS A STATE. The signal carried no
+        # `attrs["state"]` at all, so `aggregation.parsed_state` read "" and
+        # `health_of` made NO health claim: a MAC move could never contribute a
+        # state transition, and a device whose MACs are moving looked exactly
+        # like a device whose MACs are not. It is a one-way symptom (no vendor
+        # logs "the MAC stopped moving"), so the state is the KIND of movement,
+        # never a recovery word: "flapping" (oscillating between two ports) or
+        # "moved" (a single relocation). Both are outside
+        # `aggregation.RECOVERY_STATES`, so both read as unhealthy — which is
+        # the truth about a moving MAC.
+        flapping = bool(re.search(r"\bflap", msg, re.IGNORECASE) or "MACFLAP" in ctoken)
+        state = "flapping" if flapping else "moved"
+        # NX-OS names the DIRECTION ("has moved from Eth1/1 to Eth1/2"); the
+        # Cisco flap line only names the pair ("between port A and port B"), so
+        # from/to stay empty rather than guessing an order.
+        dir_m = re.search(
+            r"\bfrom\s+((?:Gi|Te|Fa|Po|Port-channel|Eth\w*|GigabitEthernet|TenGigE)[\d][\w/.\-]*)"
+            r"\s+to\s+((?:Gi|Te|Fa|Po|Port-channel|Eth\w*|GigabitEthernet|TenGigE)[\d][\w/.\-]*)",
+            msg, re.IGNORECASE)
+        from_port = dir_m.group(1) if dir_m else ""
+        to_port = dir_m.group(2) if dir_m else ""
         tokens = ((host,) + ((mac,) if mac else ())
                   + _device_local(host, f"vlan{vlan}" if vlan else "", *ports[:2]))
         return Signal(
             tenant_id=tenant,
             ts=ts,
             source=Source.SYSLOG,
-            kind="mac_flap",
+            kind=R_MAC_FLAP.kind,
             observer=observer,
             modality_class=ModalityClass.CONTROL_PLANE,
             entity_type=EntityType.DEVICE,
@@ -984,9 +1669,11 @@ def syslog_control_signal(ev: dict, tenant: str, ingest_ts: datetime) -> Signal 
             native_id=f"{host}|mac_flap|{mac or '?'}|vlan{vlan or '?'}|{ts_ms}",
             entity_tokens=tokens or (host,),
             metric_name="mac_flap",
-            attrs={"mac": mac, "vlan": vlan,
+            attrs={"mac": mac, "vlan": vlan, "state": state,
                    "port_a": ports[0] if ports else "",
-                   "port_b": ports[1] if len(ports) > 1 else "", "tag": tag},
+                   "port_b": ports[1] if len(ports) > 1 else "",
+                   "from_port": from_port, "to_port": to_port, "tag": tag,
+                   **_prov(R_MAC_FLAP)},
         )
 
     # Generic device-alarm fallback (#80 §4 keystone) — the SAFETY NET. Nothing
@@ -1010,7 +1697,7 @@ def syslog_control_signal(ev: dict, tenant: str, ingest_ts: datetime) -> Signal 
             tenant_id=tenant,
             ts=ts,
             source=Source.SYSLOG,
-            kind="device_alarm",
+            kind=R_SYSLOG_ALARM.kind,
             observer=observer,
             modality_class=ModalityClass.CONTROL_PLANE,
             entity_type=etype_,
@@ -1025,7 +1712,8 @@ def syslog_control_signal(ev: dict, tenant: str, ingest_ts: datetime) -> Signal 
             entity_tokens=toks_,
             metric_name="device_alarm",
             attrs={"facility": facility, "mnemonic": mnem, "severity": sev_num,
-                   "interface": ifname, "tag": tag, "text": msg[:256]},
+                   "interface": ifname, "tag": tag, "text": msg[:256],
+                   **_prov(R_SYSLOG_ALARM)},
         )
 
     return None
@@ -1155,27 +1843,28 @@ def trap_control_signal(ev: dict, tenant: str, ingest_ts: datetime) -> Signal | 
         state = "down" if (oid == _TRAP_LINKDOWN or name == "linkDown") else "up"
         iface = _trap_interface(ev)
         return Signal(
-            tenant_id=tenant, ts=ts, source=Source.TRAP, kind="link_state_change",
+            tenant_id=tenant, ts=ts, source=Source.TRAP, kind=R_TRAP_LINK.kind,
             observer=observer, modality_class=ModalityClass.CONTROL_PLANE,
             entity_type=EntityType.INTERFACE, entity_id=f"{device}:{iface}",
             severity=Severity.HIGH if state == "down" else Severity.WARN,
             native_id=f"{device}|trap_link|{iface}|{state}|{ts_ms}",
             entity_tokens=(device,), metric_name="link_state",   # tracker 168
             attrs={"interface": iface, "state": state, "trap_oid": oid,
-                   "authenticated": authed},
+                   "authenticated": authed, **_prov(R_TRAP_LINK)},
         )
 
     # Device restart — device-scoped lifecycle event.
     if oid in (_TRAP_COLDSTART, _TRAP_WARMSTART) or name in ("coldStart", "warmStart"):
         kind_type = "cold" if (oid == _TRAP_COLDSTART or name == "coldStart") else "warm"
         return Signal(
-            tenant_id=tenant, ts=ts, source=Source.TRAP, kind="device_restart",
+            tenant_id=tenant, ts=ts, source=Source.TRAP, kind=R_TRAP_RESTART.kind,
             observer=observer, modality_class=ModalityClass.CONTROL_PLANE,
             entity_type=EntityType.DEVICE, entity_id=device,
             severity=Severity.HIGH,
             native_id=f"{device}|trap_restart|{kind_type}|{ts_ms}",
             entity_tokens=(device,), metric_name="device_restart",
-            attrs={"restart": kind_type, "trap_oid": oid, "authenticated": authed},
+            attrs={"restart": kind_type, "trap_oid": oid, "authenticated": authed,
+                   **_prov(R_TRAP_RESTART)},
         )
 
     # BGP neighbor transition — device:peer scoped (binds to BGP peer metrics).
@@ -1187,14 +1876,14 @@ def trap_control_signal(ev: dict, tenant: str, ingest_ts: datetime) -> Signal | 
         entity_id = f"{device}:{peer}" if peer else device
         tokens = (device, peer) if peer else (device,)
         return Signal(
-            tenant_id=tenant, ts=ts, source=Source.TRAP, kind="bgp_adjacency_change",
+            tenant_id=tenant, ts=ts, source=Source.TRAP, kind=R_TRAP_BGP.kind,
             observer=observer, modality_class=ModalityClass.CONTROL_PLANE,
             entity_type=EntityType.DEVICE, entity_id=entity_id,
             severity=Severity.WARN if established else Severity.HIGH,
             native_id=f"{device}|trap_bgp|{peer or '?'}|{state}|{ts_ms}",
             entity_tokens=tokens, metric_name="bgp_adjacency",
             attrs={"peer": peer, "state": state, "trap_oid": oid,
-                   "authenticated": authed},
+                   "authenticated": authed, **_prov(R_TRAP_BGP)},
         )
 
     # Generic vendor classification via the normalized event_type (envelope, #32).
@@ -1210,35 +1899,38 @@ def trap_control_signal(ev: dict, tenant: str, ingest_ts: datetime) -> Signal | 
         entity_id = f"{device}:{peer}" if peer else device
         tokens = (device, peer) if peer else (device,)
         return Signal(
-            tenant_id=tenant, ts=ts, source=Source.TRAP, kind="bgp_adjacency_change",
+            tenant_id=tenant, ts=ts, source=Source.TRAP, kind=R_TRAP_BGP_ETYPE.kind,
             observer=observer, modality_class=ModalityClass.CONTROL_PLANE,
             entity_type=EntityType.DEVICE, entity_id=entity_id,
             severity=Severity.WARN if established else Severity.HIGH,
             native_id=f"{device}|trap_bgp|{peer or '?'}|{state}|{ts_ms}",
             entity_tokens=tokens, metric_name="bgp_adjacency",
-            attrs={"peer": peer, "state": state, "trap_oid": oid, "event_type": etype, "authenticated": authed},
+            attrs={"peer": peer, "state": state, "trap_oid": oid, "event_type": etype,
+                   "authenticated": authed, **_prov(R_TRAP_BGP_ETYPE)},
         )
     if "link" in etype and ("down" in etype or "up" in etype):
         state = "down" if "down" in etype else "up"
         iface = _trap_interface(ev)
         return Signal(
-            tenant_id=tenant, ts=ts, source=Source.TRAP, kind="link_state_change",
+            tenant_id=tenant, ts=ts, source=Source.TRAP, kind=R_TRAP_LINK_ETYPE.kind,
             observer=observer, modality_class=ModalityClass.CONTROL_PLANE,
             entity_type=EntityType.INTERFACE, entity_id=f"{device}:{iface}",
             severity=Severity.HIGH if state == "down" else Severity.WARN,
             native_id=f"{device}|trap_link|{iface}|{state}|{ts_ms}",
             entity_tokens=(device,), metric_name="link_state",   # tracker 168
-            attrs={"interface": iface, "state": state, "trap_oid": oid, "event_type": etype, "authenticated": authed},
+            attrs={"interface": iface, "state": state, "trap_oid": oid, "event_type": etype,
+                   "authenticated": authed, **_prov(R_TRAP_LINK_ETYPE)},
         )
     if "start" in etype and ("cold" in etype or "warm" in etype):
         kind_type = "cold" if "cold" in etype else "warm"
         return Signal(
-            tenant_id=tenant, ts=ts, source=Source.TRAP, kind="device_restart",
+            tenant_id=tenant, ts=ts, source=Source.TRAP, kind=R_TRAP_RESTART_ETYPE.kind,
             observer=observer, modality_class=ModalityClass.CONTROL_PLANE,
             entity_type=EntityType.DEVICE, entity_id=device, severity=Severity.HIGH,
             native_id=f"{device}|trap_restart|{kind_type}|{ts_ms}",
             entity_tokens=(device,), metric_name="device_restart",
-            attrs={"restart": kind_type, "trap_oid": oid, "event_type": etype, "authenticated": authed},
+            attrs={"restart": kind_type, "trap_oid": oid, "event_type": etype,
+                   "authenticated": authed, **_prov(R_TRAP_RESTART_ETYPE)},
         )
 
     # Generic device-alarm fallback (#80 §4 keystone) — an unclassified trap is
@@ -1255,7 +1947,7 @@ def trap_control_signal(ev: dict, tenant: str, ingest_ts: datetime) -> Signal | 
         else:
             etype_, eid_, toks_ = EntityType.DEVICE, device, (device,)
         return Signal(
-            tenant_id=tenant, ts=ts, source=Source.TRAP, kind="device_alarm",
+            tenant_id=tenant, ts=ts, source=Source.TRAP, kind=R_TRAP_ALARM.kind,
             observer=observer, modality_class=ModalityClass.CONTROL_PLANE,
             entity_type=etype_, entity_id=eid_, severity=_severity_from_num(sev_num),
             # tracker 198 (same defect as the syslog generic alarm above): the OID
@@ -1269,7 +1961,8 @@ def trap_control_signal(ev: dict, tenant: str, ingest_ts: datetime) -> Signal | 
             attrs={"trap_oid": oid, "trap_name": name, "event_type": etype,
                    "category": str(ev.get("category") or ""), "severity": sev_num,
                    "authenticated": authed,
-                   "interface": iface if iface != "unknown" else ""},
+                   "interface": iface if iface != "unknown" else "",
+                   **_prov(R_TRAP_ALARM)},
         )
 
     return None  # unclassified — searchable in OpenSearch, no RCA signal
@@ -1297,36 +1990,17 @@ def trap_control_signal(ev: dict, tenant: str, ingest_ts: datetime) -> Signal | 
 #      and a bounded gap makes backtracking cost a small constant;
 #   2. the classification token itself is capped (_PORT_EVENT_TEXT_CAP) before
 #      any regex runs, so total work is bounded regardless of message size.
-_G = r"[^\n]{0,80}"  # bounded keyword gap (see H11 note above)
+# W1b: DERIVED FROM `RULES` (the `lane == "port"` rules, in table order — this
+# list is first-match-wins, so the order IS behaviour and is part of
+# `rules_hash`). The tuple shape is kept because `_build_syslog_screen`, the
+# union pre-filter and the screen's own tests consume it, and because a test
+# monkeypatches an extra rule onto it to prove the screen fails open.
 _PORT_EVENT_RULES: list[tuple[re.Pattern, str, bool, Severity]] = [
-    # Unsupported / unqualified transceiver (Cisco %PLATFORM UNSUPPORTED_TRANSCEIVER,
-    # Arista "unsupported transceiver", FortiGate "unqualified SFP").
-    (re.compile(r"unsupported\s+transceiver|unqualified\s+(sfp|transceiver|optic)|not\s+qualified|UNSUPPORTED_TRANSCEIVER|transceiver" + _G + r"not\s+supported", re.IGNORECASE),
-     "transceiver_unsupported", True, Severity.HIGH),
-    # DOM/DDM optical threshold alarms (SFF-8472 / %OPTICS / vendor DOM).
-    (re.compile(r"(rx|receive)" + _G + r"power" + _G + r"(low|below)" + _G + r"(alarm|threshold)|RX_POWER_LOW|low\s+rx\s+power", re.IGNORECASE),
-     "dom_rx_power_low", True, Severity.HIGH),
-    (re.compile(r"(temperature|temp)" + _G + r"(high|above)" + _G + r"(alarm|threshold|warning)|TEMP_HIGH|high\s+temperature", re.IGNORECASE),
-     "dom_temperature_high", True, Severity.HIGH),
-    (re.compile(r"(tx\s+)?bias" + _G + r"(high|current)" + _G + r"(alarm|threshold)|BIAS_HIGH", re.IGNORECASE),
-     "dom_lane_bias_anomaly", True, Severity.WARN),
-    # FEC / PCS.
-    (re.compile(r"uncorrectable" + _G + r"(fec|codeword|block)|FEC" + _G + r"UNCORRECTABLE|post[-_ ]?fec" + _G + r"(error|ber)", re.IGNORECASE),
-     "prefec_ber_rising", True, Severity.HIGH),
-    (re.compile(r"pre[-_ ]?fec\s+ber|fec" + _G + r"corrected" + _G + r"(rate|high)|CORRECTED_FEC", re.IGNORECASE),
-     "fec_corrected_rate_high", True, Severity.WARN),
-    (re.compile(r"local\s+fault|LOCAL_FAULT", re.IGNORECASE), "pcs_local_fault", True, Severity.HIGH),
-    (re.compile(r"remote\s+fault|REMOTE_FAULT", re.IGNORECASE), "pcs_remote_fault", True, Severity.HIGH),
-    (re.compile(r"deskew|align" + _G + r"(marker|lane)" + _G + r"(fail|lost)|PCS" + _G + r"DESKEW", re.IGNORECASE),
-     "pcs_deskew_fault", True, Severity.HIGH),
-    (re.compile(r"hi[-_ ]?ber|high\s+bit\s+error", re.IGNORECASE), "hi_ber_indication", True, Severity.HIGH),
-    # Optic present but no light / signal (link-down-with-optic-in fingerprint).
-    (re.compile(r"no\s+(light|signal)|loss\s+of\s+(light|signal)|LOS\b|SIGNAL_LOSS", re.IGNORECASE),
-     "link_down_no_light", True, Severity.HIGH),
-    # Transceiver insert/remove flap on insert (interop/incompat fingerprint).
-    (re.compile(r"transceiver" + _G + r"(insert|remov)" + _G + r"(insert|remov)|SFP" + _G + r"flap|optic" + _G + r"flap", re.IGNORECASE),
-     "link_flap_on_insert", True, Severity.WARN),
+    (rule.pattern, rule.kind, rule.entity_type == "interface", rule.severity)
+    for rule in RULES if rule.lane == "port"
+    if rule.pattern is not None and rule.severity is not None
 ]
+_PORT_RULE_BY_KIND: dict[str, Rule] = {r.kind: r for r in _PORT_RULES}
 
 # H11: classification never needs more text than this — a real vendor DOM/FEC
 # line is well under 2000 chars, and the cap bounds regex work on a hostile or
@@ -1400,6 +2074,12 @@ def port_event_signal(ev: dict, tenant: str, ingest_ts: datetime) -> Signal | No
     for pat, kind, iface_scoped, sev in _PORT_EVENT_RULES:
         if not pat.search(ctoken):
             continue
+        # W1b: the table row this rule came from, for provenance + the hit
+        # counter. `_PORT_EVENT_RULES` is derived from `_PORT_RULES`, so the
+        # lookup always hits in production; it can miss only for a rule a TEST
+        # injected, and such a rule then carries no provenance rather than
+        # inventing a rule_id that is in no table.
+        rule = _PORT_RULE_BY_KIND.get(kind)
         port = _port_of(ev)
         toks_: tuple[str, ...]
         if iface_scoped and port:
@@ -1412,7 +2092,8 @@ def port_event_signal(ev: dict, tenant: str, ingest_ts: datetime) -> Signal | No
             entity_type=etype_, entity_id=eid_, severity=sev,
             native_id=f"{host}|portevt|{kind}|{port or '-'}|{ts_ms}",
             entity_tokens=toks_, metric_name="port_event",
-            attrs={"interface": port, "port_event": kind, "message": msg[:240]},
+            attrs={"interface": port, "port_event": kind, "message": msg[:240],
+                   **(_prov(rule) if rule is not None else {})},
         )
     return None
 

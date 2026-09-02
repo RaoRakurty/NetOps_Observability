@@ -137,6 +137,7 @@ from producers import (
     episode_signal,
     flow_sample,
     parse_event_ts,
+    parser_stats,
     port_event_signal,
     prefilter_counts,
     probe_signals,
@@ -13010,6 +13011,7 @@ def _metrics_text(health: dict | None = None) -> str:
             lines.append(f'corr_ingest_events{{counter="{key}"}} {val}')
     eng = h["engine_v2"]
     ing = h["ingest"]
+    _parser = h["parser"]
     lines += [
         "# TYPE corr_deadletters counter",
         f"corr_deadletters {eng['deadletter_count']}",
@@ -13042,6 +13044,40 @@ def _metrics_text(health: dict | None = None) -> str:
         "# TYPE corr_ingest_prefilter_total counter",
         f'corr_ingest_prefilter_total{{outcome="passed"}} {ing["syslog_prefilter_passed"]}',
         f'corr_ingest_prefilter_total{{outcome="rejected"}} {ing["syslog_prefilter_rejected"]}',
+        # W1b parser provenance. `corr_parser_rule_hits_total` is labelled by
+        # `rule_id`, whose value set is `producers.RULES` — fixed at import, so
+        # the series count is bounded and no untrusted device string reaches a
+        # label. A rule that stops firing shows as a FLAT series, not a missing
+        # one (every id is pre-seeded at zero), which is what makes a silently
+        # dead branch visible.
+        "# HELP corr_parser_rule_hits_total Signals emitted, by the parser rule that classified them.",
+        "# TYPE corr_parser_rule_hits_total counter",]
+    for _rid, _hits in sorted(_parser["rule_hits"].items()):
+        lines.append(f'corr_parser_rule_hits_total{{rule_id="{_rid}"}} {_hits}')
+    lines += [
+        # The unclassified safety nets (#80 §4). Rising against a flat typed
+        # rate = the estate started emitting something the parser cannot read.
+        "# HELP corr_parser_generic_fallback_total Signals that fell through to the generic device_alarm net, by lane.",
+        "# TYPE corr_parser_generic_fallback_total counter",]
+    for _src, _n in sorted(_parser["generic_fallbacks"].items()):
+        lines.append(f'corr_parser_generic_fallback_total{{source="{_src}"}} {_n}')
+    lines += [
+        # typed / (typed + generic) over a ROLLING WINDOW of the last
+        # `promotion_window` (10,000) ADMITTED lines — lines that produced a
+        # signal at all. Lines that classify as nothing are deliberately NOT in
+        # the denominator: they are the pre-filter's business, and counting them
+        # would make this a measure of the noise mix rather than of parser
+        # coverage. 1.0 with an empty window (no claim), never 0.0.
+        "# HELP corr_semantic_promotion_rate Share of admitted lines classified by a typed rule, over the last 10000 admitted lines.",
+        "# TYPE corr_semantic_promotion_rate gauge",
+        f'corr_semantic_promotion_rate {_parser["semantic_promotion_rate"]}',
+        # The rule corpus that produced the counters above: the hand-bumped
+        # revision and the computed hash of the ordered table. Exported as a
+        # 1-valued info series so a scrape can join signals to their parser.
+        "# HELP corr_parser_info The parser rule corpus in force (always 1).",
+        "# TYPE corr_parser_info gauge",
+        (f'corr_parser_info{{parser_rev="{_parser["parser_rev"]}",'
+         f'rules_hash="{_parser["rules_hash"]}",rules="{_parser["rules"]}"}} 1'),
         # #101: lost corr_current dual-writes = stale Command Center. Alerted
         # by CorrCurrentProjectionFailing; repaired by the Go reconciler.
         "# HELP corr_current_projection_write_failures_total corr_current projection writes lost (hot-read staleness risk).",
@@ -14150,6 +14186,13 @@ def _health_payload() -> dict:
             "wireless_signals": WIRELESS_SIGNALS,
             "wireless_dropped": WIRELESS_DROPPED,
         },
+        # W1b parser provenance + coverage. `rule_hits` is keyed by the FIXED
+        # `producers.RULES` id set (bounded cardinality — no device string can
+        # widen it), `generic_fallbacks` counts the two unclassified safety
+        # nets, and `semantic_promotion_rate` is typed / (typed + generic) over
+        # the last `promotion_window` ADMITTED lines. `parser_rev` +
+        # `rules_hash` say WHICH rule corpus produced the signals in flight.
+        "parser": parser_stats(),
     }
 
 

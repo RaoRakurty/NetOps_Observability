@@ -1,0 +1,106 @@
+name: Feature request
+description: Something Correlix cannot do that a pilot or an operator needs.
+title: "[feature] "
+labels: ["enhancement", "design-partner"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Describe the **problem and the operator it blocks**, not a solution. The most
+        useful request names the moment it hurts: "at 02:00, on a bridge call, I could
+        not tell whether…".
+
+        Two things that are *not* feature requests:
+
+        - The product refused to name a cause it could not support. That is deliberate —
+          it prefers "still analyzing" to an unsupported cause.
+        - Informational log lines did not become incidents. Also deliberate: everything is
+          searchable, but only warning-or-worse lines or lines carrying a known typed
+          symptom marker become correlation evidence
+          (`docs/INGESTION.md` §"What reaches correlation").
+
+        A **missing typed symptom** — a real mnemonic your devices emit that the engine
+        cannot read — *is* a good feature request. Attach three real example lines.
+
+        No secrets, tokens or credentials in anything you paste.
+
+  - type: input
+    id: partner
+    attributes:
+      label: Pilot / partner
+      description: Or "internal" if this is not from a pilot.
+      placeholder: "acme-w2"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: category
+    attributes:
+      label: Category
+      options:
+        - "Telemetry coverage — a vendor / mnemonic / MIB / metric we cannot read"
+        - "Correlation / RCA quality"
+        - "Operator UI — comprehension, workflow, navigation"
+        - "Integration — ticketing, notification, NMS, source of truth"
+        - "Reporting / export"
+        - "Deployment / install / upgrade"
+        - "Administration / access / multi-tenancy"
+        - "Other"
+    validations:
+      required: true
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: What can you not do today, and who is blocked by it?
+    validations:
+      required: true
+
+  - type: textarea
+    id: moment
+    attributes:
+      label: When does it hurt
+      description: The concrete situation. A real incident you can point at is ideal.
+      placeholder: "During the 2026-08-30 branch outage we could not tell whether the DIA circuit or the CPE was at fault, because ..."
+    validations:
+      required: true
+
+  - type: textarea
+    id: today
+    attributes:
+      label: What you do today instead
+      description: The workaround, the other tool, or the manual step. This is how we judge the size of the win.
+    validations:
+      required: true
+
+  - type: dropdown
+    id: impact
+    attributes:
+      label: Impact if this is not built
+      options:
+        - "Blocks the pilot — we cannot complete it without this"
+        - "Blocks adoption — we could pilot but not deploy for real"
+        - "Significant friction — costs operator time on every incident"
+        - "Nice to have"
+    validations:
+      required: true
+
+  - type: textarea
+    id: examples
+    attributes:
+      label: Concrete examples
+      description: |
+        For a telemetry-coverage request, paste **three real log lines / trap OIDs /
+        metric names** (redacted). For a UI request, name the route (e.g.
+        `#/investigate/rca`) and what should be on it.
+    validations:
+      required: false
+
+  - type: textarea
+    id: shape
+    attributes:
+      label: What "done" would look like
+      description: How you would know it works. Not an implementation — an acceptance test in your words.
+    validations:
+      required: false

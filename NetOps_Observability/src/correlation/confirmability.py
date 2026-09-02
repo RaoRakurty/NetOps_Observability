@@ -67,6 +67,9 @@ KIND_MODALITY: dict[str, ModalityClass] = {
     "cloud_dns_log": ModalityClass.PASSIVE_FLOW,
     # control-plane lane (syslog/trap/route events)
     "bgp_adjacency_change": ModalityClass.CONTROL_PLANE,
+    # tracker 184 — BGP session churn / prefix pressure, from the device's own
+    # syslog: the same observer class as the adjacency change it corroborates.
+    "bgp_route_churn": ModalityClass.CONTROL_PLANE,
     "ospf_adjacency_change": ModalityClass.CONTROL_PLANE,
     "isis_adjacency_change": ModalityClass.CONTROL_PLANE,
     "routing_adjacency_change": ModalityClass.CONTROL_PLANE,

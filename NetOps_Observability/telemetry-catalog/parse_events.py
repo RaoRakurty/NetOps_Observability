@@ -42,10 +42,19 @@ def _first_group(pattern: str, text: str) -> str:
 
 
 def _classify(token: str, state_cfg: dict) -> str:
-    if re.search(state_cfg.get("down", r"(?!)"), token, re.IGNORECASE):
-        return "down"
-    if re.search(state_cfg.get("up", r"(?!)"), token, re.IGNORECASE):
-        return "up"
+    """First DECLARED state whose regex hits, in declaration order.
+
+    Every family declared `{down: ..., up: ...}` until tracker 184, and those two
+    still resolve down-before-up because that is the order they are written in.
+    Iterating the declaration instead of hard-coding the pair is what lets a
+    family name a state its phenomenon actually has — a MAC that is `flapping`
+    or `moved`, a BGP session in `churn` — instead of being forced to call it
+    "down" (a teardown that did not happen) or "" (no health claim at all, the
+    defect tracker 184 records for mac_flap).
+    """
+    for name, pattern in state_cfg.items():
+        if pattern and re.search(pattern, token, re.IGNORECASE):
+            return str(name)
     return "unknown"
 
 
@@ -88,11 +97,19 @@ def parse_event(ev: dict, cat: EventCatalog | None = None) -> dict | None:
                     cand[k] = _first_group(pat, msg)
             # a grammar matches if its peer_re/ifname_re (whichever it declares) hit
             keyfields = [k for k in cand if k in ("peer_re", "ifname_re")]
-            if keyfields and all(cand[k] for k in keyfields):
+            if keyfields:
+                if all(cand[k] for k in keyfields):
+                    extracted = cand
+                    break
+                continue
+            # A vendor grammar with no peer/ifname requirement (the STP-instance
+            # and PAN-CSV shapes). Accept it — but a LATER sibling that extracts
+            # nothing must not overwrite one that did: that is how the MST0 TCN
+            # lost its instance to the PVST grammar (tracker 184).
+            if not extracted or any(cand.values()):
                 extracted = cand
+            if any(cand.values()):
                 break
-            if not keyfields:  # vendor with no extraction reqs (rare) — accept
-                extracted = cand
         # fall back to last grammar's (possibly partial) extraction
         if not extracted and fam.get("grammars"):
             g = fam["grammars"][-1]

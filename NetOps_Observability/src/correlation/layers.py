@@ -64,6 +64,7 @@ _KIND_LAYER: dict[str, CausalLayer] = {
     # network (L3)
     "bgp_adjacency_change": CausalLayer.NETWORK,
     "bgp_state_anomaly": CausalLayer.NETWORK,
+    "bgp_route_churn": CausalLayer.NETWORK,   # tracker 184 (session/table churn)
     "bgp_path_change": CausalLayer.NETWORK,
     "ospf_adjacency_change": CausalLayer.NETWORK,
     "isis_adjacency_change": CausalLayer.NETWORK,

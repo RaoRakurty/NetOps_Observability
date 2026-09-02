@@ -1,0 +1,157 @@
+name: Design-partner bug
+description: Something in Correlix is broken, wrong, or does not behave as documented during a pilot.
+title: "[pilot bug] "
+labels: ["bug", "design-partner"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for filing this — a design partner's bug report is the highest-signal
+        input this project gets.
+
+        **Before you file:**
+
+        - **Nothing secret.** Never paste `.env` values, tokens, API keys, passwords or
+          certificates. Config goes in as **key names only**.
+        - **Anything touching credentials, tenant isolation, or data leaving your estate
+          is NOT a public issue** — stop and contact your pilot engineer directly, same
+          day.
+        - Hostnames, management IPs and user names are yours to redact. Redact before
+          pasting, not after.
+        - If the problem is that an **RCA verdict was wrong**, use the
+          *RCA verdict feedback* form instead — that one is not a bug report and is
+          triaged differently.
+
+  - type: input
+    id: partner
+    attributes:
+      label: Pilot / partner
+      description: Which pilot deployment is this? Use the agreed short name, not a customer legal name.
+      placeholder: "acme-w2"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: severity
+    attributes:
+      label: Severity
+      description: Be honest — over-classifying costs you triage attention later.
+      options:
+        - "Stack down — the platform is unusable"
+        - "Lane down — one telemetry lane stopped (syslog / traps / polling / flows / probes)"
+        - "Wrong or missing data — evidence is present but the product shows it wrong"
+        - "Degraded — works, but slow, noisy, or awkward"
+        - "Cosmetic"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - "Install / upgrade"
+        - "Ingestion — syslog"
+        - "Ingestion — SNMP traps"
+        - "Ingestion — SNMP polling"
+        - "Ingestion — flows (NetFlow / IPFIX / sFlow)"
+        - "Ingestion — active probes"
+        - "Correlation / RCA"
+        - "Command Center / Incidents"
+        - "Search — Logs / Flows / Metrics"
+        - "Alerting / notifications"
+        - "Ticketing integration"
+        - "Reports / export"
+        - "Administration / access"
+        - "Other / not sure"
+    validations:
+      required: true
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What you saw. One paragraph is fine.
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected instead
+    validations:
+      required: true
+
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      description: Exact clicks, routes (e.g. `#/investigate/rca`) or commands. If it is intermittent, say how often.
+      placeholder: |
+        1. Point core-sw-01 syslog at the host on 5514
+        2. Open Explore -> Logs, signal=syslog
+        3. ...
+    validations:
+      required: true
+
+  - type: input
+    id: first-seen
+    attributes:
+      label: When did it first happen (UTC)
+      description: An approximate timestamp is enough — it is what makes the logs searchable.
+      placeholder: "2026-09-02 14:05Z"
+    validations:
+      required: true
+
+  - type: input
+    id: correlation-id
+    attributes:
+      label: Correlation / RCA id
+      description: If a specific incident is involved. The short id is on the RCA header ("RCA ID").
+    validations:
+      required: false
+
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: |
+        Build from `GET /admin/version`; host shape; which lanes are live.
+      value: |
+        - Build / version:
+        - Install method: bundle / source checkout
+        - Host: cores / RAM / disk / OS
+        - Root filesystem free space:
+        - Lanes live: syslog / SNMP traps / SNMP polling / flows / probes
+        - Devices onboarded (approx):
+    validations:
+      required: true
+
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Evidence attached
+      description: |
+        See `docs/runbooks/pilot-playbook.md` §"What to send back" for how to collect a
+        diagnostics bundle by hand. Paste log excerpts here (redacted); attach larger
+        files to the issue.
+      placeholder: |
+        - status.txt / compose-ps.txt
+        - health.json, version.json
+        - logs excerpt (redacted)
+        - case.json / timeline.json for the incident
+        - env KEY NAMES only (never values)
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: hygiene
+    attributes:
+      label: Before submitting
+      options:
+        - label: I have removed all secrets, tokens and credentials from everything pasted or attached.
+          required: true
+        - label: I have redacted (or accepted sharing) any real hostnames and addresses in the evidence.
+          required: true
+        - label: This is not a security or data-isolation issue (those go to the pilot engineer directly, not here).
+          required: true

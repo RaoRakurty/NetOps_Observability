@@ -40,7 +40,10 @@ def test_syslog_parses_to_expected_canonical_event(row, cat):
     assert got["event_type"] == expect["event_type"]
     assert got["state"] == expect["state"]
     assert got["severity"] == expect["severity"]
-    for key in ("device", "peer", "ifName"):
+    # tracker 184 adds `stp_instance` (the STP instance/VLAN a TCN names) and
+    # `mac` (the moving MAC) — checked here so a fixture cannot claim an
+    # attribution the grammar does not actually extract.
+    for key in ("device", "peer", "ifName", "stp_instance", "mac"):
         if key in expect:
             assert got["labels"].get(key) == expect[key], \
                 f"{key}: expected {expect[key]!r}, got {got['labels'].get(key)!r}"

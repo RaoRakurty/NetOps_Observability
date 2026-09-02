@@ -96,6 +96,23 @@ def check() -> list[str]:
                 problems.append(f"events: '{ename}' join_on '{k}' is not a label the parser produces")
             if k not in metric_label_space:
                 problems.append(f"events: '{ename}' join_on '{k}' is not a canonical identity key used by any metric family")
+        # Event-family fidelity (tracker 184). Optional — the Phase-2 families
+        # predate the field — but when declared it must sit on the ladder, and a
+        # doc_claimed row must carry the same explicit "validate later" plan the
+        # collection rows do, so a documented-but-uncaptured grammar can never
+        # drift into reading as supported.
+        efs = efam.get("fidelity_status")
+        if efs is not None:
+            if efs not in FIDELITY_LADDER:
+                problems.append(f"events: '{ename}' fidelity_status '{efs}' not in ladder {FIDELITY_LADDER}")
+            if efs in NEEDS_LIVE_CAPTURE:
+                elc = efam.get("live_capture") or {}
+                if elc.get("status") != "pending":
+                    problems.append(f"events: '{ename}' doc_claimed requires live_capture.status: pending")
+                if not elc.get("blocked_on"):
+                    problems.append(f"events: '{ename}' doc_claimed requires live_capture.blocked_on")
+            if efs in NEEDS_ISSUE and not efam.get("issue_ref"):
+                problems.append(f"events: '{ename}' fidelity '{efs}' requires an issue_ref")
         cw = efam.get("correlates_with")
         if cw and cw not in families:
             # correlates_with may point at a Phase-3 metric not yet in

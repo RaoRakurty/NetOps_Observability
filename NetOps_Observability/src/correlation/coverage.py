@@ -58,6 +58,20 @@ INTENTIONAL_BLIND: dict[str, dict] = {
         "reason": "generic fallback for an unscoped ADJCHANGE",
         "owner": "correlix", "date_added": "2026-06-20",
     },
+    "bgp_route_churn": {
+        "reason": "tracker 184 — %BGP-5-NBR_RESET / %BGP-4-MAXPFX: the session "
+                  "is resetting or the prefix table is under pressure, which is "
+                  "NOT an adjacency transition (a reset reason may be a soft "
+                  "clear; a MAXPFX warning leaves the session ESTABLISHED). It "
+                  "is CORROBORATING evidence for a BGP fault whose root cause "
+                  "the adjacency/metric kinds carry, exactly like "
+                  "lldp_neighbor_change — never a lone root cause, so no "
+                  "signature REQUIRES it. It lights up as an optional clause "
+                  "the moment one is authored (candidate: the existing "
+                  "bgp_adjacency_change|bgp_state_anomaly clauses gain "
+                  "|bgp_route_churn, or an optional churn corroborator).",
+        "owner": "correlix", "date_added": "2026-09-02",
+    },
     "lb_4xx_high": {
         "reason": "app-edge 4xx spike is an auth/config/client-side indicator "
                   "(#98 P5) — deliberately consumed by NO outage signature so "

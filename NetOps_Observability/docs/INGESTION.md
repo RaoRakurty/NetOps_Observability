@@ -172,6 +172,73 @@ In the dashboard, the **Logs** tab takes the same LogQL queries:
 {job="syslog", host="core-router-01"} | json
 ```
 
+## What reaches correlation
+
+**Ingestion and correlation are two different admissions.** Everything above —
+every syslog line, every trap, every flow — is indexed and searchable
+regardless. `vector-router` consumes `netops.syslog` / `netops.snmptrap` /
+`netops.flows` and writes each document into its own per-tenant OpenSearch
+index (`netops-syslog-<tenant>-YYYY.MM.DD`, `netops-snmptrap-…`,
+`netops-flows-…`, see `deployment/docker/vector-router/vector.yaml`). Nothing
+the correlation engine declines to read is discarded; it is **search-only**.
+
+The correlation engine reads the same bus but admits far less. A raw syslog
+line becomes correlation evidence (a *Signal*) only when one of two things is
+true — `src/correlation/producers.py`:
+
+1. **The device itself called it warning-or-worse.** The severity floor is
+   `ALARM_SEVERITY_FLOOR = 4` (RFC5424 *warning*). Severity is read from the
+   `severity` keyword AND from the Cisco `%FACILITY-N-MNEMONIC` tag, and the
+   most severe of the two wins; when neither is present the line has no
+   severity and no alarm is guessed. A warning-or-worse line that no specific
+   classifier recognizes still promotes, as a generic `device_alarm` — the
+   safety net at the bottom of the chain.
+2. **The line carries a known typed symptom marker, at any severity.** These
+   are the shapes a classifier can turn into a *state-bearing, entity-tokened*
+   signal — adjacency (`ADJCHANGE` / `ADJCHG`, IS-IS `CLNS`), link and line
+   protocol (`UPDOWN`), LLDP neighbour, `SPANTREE`, NVE/VTEP, EVPN MAC mobility
+   (`HMM`, `DUP_HOST`, `VXLAN_MAC_MOVE`), FHRP (`HSRP`/`VRRP`/`STANDBY`), local
+   MAC flap/move, and the optics/PCS port-event rules (LOS, Rx-power low, FEC,
+   local/remote fault, hi-BER, transceiver flap). A `notice`- or `info`-severity
+   `%LINK-3-UPDOWN` is admitted on the marker alone.
+
+Everything else — notice/info/debug lines with no typed marker — is rejected by
+the pre-filter and never reaches a classifier. The rejection is **counted, not
+silent**: `corr_ingest_prefilter_total{outcome="passed"|"rejected"}` on the
+correlation service's `/metrics`. The screen is derived from the classifiers'
+own guards (a new classifier branch without a registered marker is red in CI),
+it fails **open** if any guard cannot be screened soundly, and it can be
+disabled entirely with `CORR_INGEST_PREFILTER=0`.
+
+Two consequences worth stating to an operator up front:
+
+* **A quiet correlation page is not a broken pipeline.** Check Logs first — if
+  the lines are in `Explore → Logs` but no incident formed, the stream was
+  admitted to storage and declined by the engine, which is the designed
+  behaviour for informational chatter.
+* **Passing the screen is necessary, not sufficient.** Promotion still requires
+  a classifier to produce a signal, and a *verdict* still requires the grounding
+  and independence gates. The engine prefers "still analyzing" to an
+  unsupported cause.
+
+**Tracker 184 widened the typed set** (in the tree; the 2026-09-02 erratum in
+`docs/scale/CORRELIX_REFERENCE_CAPACITY_V1.md` §3 records the digest split it
+required). It adds:
+
+* **BGP session churn / prefix pressure** — `%BGP-5-NBR_RESET`, `%BGP-4-MAXPFX`
+  and the Junos `maximum prefix-limit` shape become their own state-bearing,
+  peer-tokened family (`bgp_route_churn`, states `down` / `churn`) instead of an
+  anonymous `device_alarm`. Per-prefix churn has no syslog form on any vendor —
+  that is BMP/BGP-UPDATE data; this is its session-level shadow.
+* **`%BGP-3-NOTIFICATION`** — joins the adjacency family as a genuine teardown
+  (RFC 4271 §6: sending or receiving a NOTIFICATION closes the session), with
+  the peer parsed from both the Cisco and the Junos `rpd` shapes.
+* **STP attribution** — `%SPANTREE-5-TOPOTRAP` gets a device-scoped identity per
+  STP instance/VLAN (`stp_topology_notification`) instead of collapsing every
+  TCN a device logs onto `host:unknown`.
+* **MAC flap state** — a MAC move now carries old/new port state (`mac_move`),
+  so a re-homing event is a transition rather than a stateless mention.
+
 ## Operational notes
 
 * **UDP loss.** Syslog over UDP and NetFlow are unreliable by design.
