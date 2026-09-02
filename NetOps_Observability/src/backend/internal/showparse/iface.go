@@ -181,12 +181,12 @@ func ciscoDuplexSpeed(fs []string, cur *InterfaceState) {
 	for _, f := range fs {
 		tok := strings.TrimRight(f, ",")
 		low := strings.ToLower(tok)
-		switch {
-		case low == "full-duplex", low == "half-duplex", low == "auto-duplex":
+		switch low {
+		case "full-duplex", "half-duplex", "auto-duplex":
 			if cur.Duplex == nil {
 				cur.Duplex = strPtr(strings.TrimSuffix(tok, "-duplex"))
 			}
-		case low == "full", low == "half":
+		case "full", "half":
 			// "Full Duplex" — only when the NEXT token is the word Duplex.
 			continue
 		}

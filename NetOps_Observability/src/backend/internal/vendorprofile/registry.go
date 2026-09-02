@@ -23,6 +23,9 @@ type Registry struct {
 	vrfTerms   map[string]string
 	vrfSyn     map[string]struct{}
 	hardDisp   map[string]string
+	cliDisp    map[string]string
+	verifyCmds map[string]map[string]string // vendor → check id → command
+	verifyAll  map[string]struct{}          // every declared command, verbatim
 }
 
 type descrRule struct {
@@ -60,6 +63,9 @@ func build(docs []vendorDoc) (*Registry, error) {
 		vrfTerms:   make(map[string]string),
 		vrfSyn:     make(map[string]struct{}),
 		hardDisp:   make(map[string]string),
+		cliDisp:    make(map[string]string),
+		verifyCmds: make(map[string]map[string]string),
+		verifyAll:  make(map[string]struct{}),
 	}
 	seenDescrRank := make(map[int]string)
 	seenPlatRank := make(map[int]string)
@@ -102,6 +108,15 @@ func build(docs []vendorDoc) (*Registry, error) {
 		for _, s := range doc.Dialect.VRFSynonyms {
 			r.vrfSyn[canon(s)] = struct{}{}
 		}
+		// ── active-verification command allowlist (vendor level) ─────────────
+		if len(doc.Verify.Commands) > 0 {
+			cmds := make(map[string]string, len(doc.Verify.Commands))
+			for checkID, cmd := range doc.Verify.Commands {
+				cmds[checkID] = cmd
+				r.verifyAll[cmd] = struct{}{}
+			}
+			r.verifyCmds[doc.Vendor] = cmds
+		}
 		// ── profiles ─────────────────────────────────────────────────────────
 		var osp vendorOSParse
 		if doc.Detection.OSVersionPattern != "" {
@@ -115,7 +130,7 @@ func build(docs []vendorDoc) (*Registry, error) {
 		defaultProduct := ""
 		rec := VendorRecord{
 			ID: doc.Vendor, DisplayName: doc.DisplayName,
-			Detection: doc.Detection, Dialect: doc.Dialect,
+			Detection: doc.Detection, Dialect: doc.Dialect, Verify: doc.Verify,
 		}
 		for _, p := range doc.Profiles {
 			p.Vendor = doc.Vendor
@@ -180,6 +195,13 @@ func build(docs []vendorDoc) (*Registry, error) {
 					return nil, fmt.Errorf("vendorprofile: hardening binding %q has two displays (%q, %q)", p.Hardening.Binding, other, p.Hardening.Display)
 				}
 				r.hardDisp[p.Hardening.Binding] = p.Hardening.Display
+			}
+			// cli dialect display must be consistent across profiles
+			if p.CLI.Dialect != "" {
+				if other, dup := r.cliDisp[p.CLI.Dialect]; dup && other != p.CLI.Display {
+					return nil, fmt.Errorf("vendorprofile: cli dialect %q has two displays (%q, %q)", p.CLI.Dialect, other, p.CLI.Display)
+				}
+				r.cliDisp[p.CLI.Dialect] = p.CLI.Display
 			}
 		}
 		sort.Slice(osp.products, func(i, j int) bool { return osp.products[i].rank < osp.products[j].rank })
@@ -259,7 +281,21 @@ func (v VendorRecord) clone() VendorRecord {
 	out := v
 	out.Detection = v.Detection.clone()
 	out.Dialect = v.Dialect.clone()
+	out.Verify = v.Verify.clone()
 	out.ProfileIDs = cp(v.ProfileIDs)
+	return out
+}
+
+// clone deep-copies the verification allowlist so a caller can never reach back
+// into the shared index through the map.
+func (vb VerifyBinding) clone() VerifyBinding {
+	if vb.Commands == nil {
+		return VerifyBinding{}
+	}
+	out := VerifyBinding{Commands: make(map[string]string, len(vb.Commands))}
+	for k, v := range vb.Commands {
+		out.Commands[k] = v
+	}
 	return out
 }
 
@@ -492,4 +528,76 @@ func (r *Registry) CaptureFor(id string) (Capture, error) {
 		return Capture{}, fmt.Errorf("%w: %s", ErrNotFound, id)
 	}
 	return p.Capture, nil
+}
+
+// ─── cli dialect ─────────────────────────────────────────────────────────────
+
+// CLIDialectForPlatform returns the show-command dialect id a free-form platform
+// label resolves to. ok=false means no profile matched the label, OR the matched
+// profile declares no CLI dialect — either way the caller reports the platform's
+// grammar as unknown and records any fallback it renders, never a silent guess.
+func (r *Registry) CLIDialectForPlatform(platform string) (string, bool) {
+	p, ok := r.ProfileForPlatformText(platform)
+	if !ok || p.CLI.Dialect == "" {
+		return "", false
+	}
+	return p.CLI.Dialect, true
+}
+
+// CLIDialectDisplay returns the operator-facing label for a CLI dialect id.
+func (r *Registry) CLIDialectDisplay(dialect string) (string, bool) {
+	d, ok := r.cliDisp[dialect]
+	return d, ok
+}
+
+// ─── active verification ─────────────────────────────────────────────────────
+
+// VerifyCommand resolves (vendor family, check id) to the EXACT allowlisted
+// read-only command the verification engine may execute. An unknown vendor or
+// an id the vendor does not declare returns ok=false: the check is skipped, and
+// no command is ever composed or borrowed from another vendor's grammar.
+func (r *Registry) VerifyCommand(vendor, checkID string) (string, bool) {
+	fam, ok := r.verifyCmds[strings.ToLower(strings.TrimSpace(vendor))]
+	if !ok {
+		return "", false
+	}
+	cmd, ok := fam[checkID]
+	return cmd, ok
+}
+
+// VerifyCommandAllowed reports whether cmd appears VERBATIM in some vendor's
+// verification allowlist. It is the runner's defense-in-depth gate: matching is
+// exact, with no normalization surface to exploit.
+func (r *Registry) VerifyCommandAllowed(cmd string) bool {
+	_, ok := r.verifyAll[cmd]
+	return ok
+}
+
+// VerifyCommands returns one vendor's whole verification allowlist as a copy,
+// or nil when the vendor declares none.
+func (r *Registry) VerifyCommands(vendor string) map[string]string {
+	fam, ok := r.verifyCmds[strings.ToLower(strings.TrimSpace(vendor))]
+	if !ok {
+		return nil
+	}
+	out := make(map[string]string, len(fam))
+	for k, v := range fam {
+		out[k] = v
+	}
+	return out
+}
+
+// VerifyCommandTable returns the WHOLE verification allowlist (vendor → check id
+// → command) as a deep copy, for the engine's closed-table invariant tests and
+// for operator-facing documentation of what the battery may run.
+func (r *Registry) VerifyCommandTable() map[string]map[string]string {
+	out := make(map[string]map[string]string, len(r.verifyCmds))
+	for vendor, fam := range r.verifyCmds {
+		cp := make(map[string]string, len(fam))
+		for k, v := range fam {
+			cp[k] = v
+		}
+		out[vendor] = cp
+	}
+	return out
 }

@@ -34,17 +34,60 @@ func TestDialects_ResolveThroughVendorProfile(t *testing.T) {
 			t.Errorf("dialect %q is not a vendorprofile profile id", d)
 		}
 	}
-	// The fallback table's targets must be supported dialects too.
-	supported := map[Dialect]bool{}
+	// Every supported dialect must be REACHABLE from platform text through the
+	// registry alone. This is what replaced the Arista/Huawei fallback token map
+	// (T9 residual, tracker 216): a dialect the registry cannot resolve is a
+	// missing platform_contains in internal/vendorprofile/profiles/*.json, and
+	// this assertion is what makes that a build failure rather than a silent
+	// "unassessed" at runtime.
 	for _, d := range Dialects() {
-		supported[d] = true
-	}
-	for _, r := range platformFallbacks() {
-		if !supported[r.dialect] {
-			t.Errorf("fallback rule targets unsupported dialect %q", r.dialect)
+		prof, ok := reg.Lookup(string(d))
+		if !ok {
+			continue // already reported above
 		}
-		if _, ok := reg.Lookup(string(r.dialect)); !ok {
-			t.Errorf("fallback rule targets non-existent profile %q", r.dialect)
+		if len(prof.Detection.PlatformContains) == 0 {
+			t.Errorf("dialect %q declares no detection.platform_contains — no platform text can resolve to it", d)
+			continue
+		}
+		for _, sub := range prof.Detection.PlatformContains {
+			got, ok := DialectFromPlatform(sub)
+			if !ok || got != d {
+				t.Errorf("DialectFromPlatform(%q) = (%q,%v), want (%q,true) — %s's own detection string must resolve to it",
+					sub, got, ok, d, d)
+			}
+		}
+	}
+}
+
+// TestDialectFromPlatform_EveryProfileDetectionString is the CROSS-PROFILE
+// no-regression gate for the fallback deletion: EVERY profile in the registry
+// that declares detection strings must still resolve to ITSELF through
+// DialectFromPlatform's registry path (or to "unsupported dialect" when this
+// library ships no parsers for it). Adding the Arista and Huawei
+// platform_contains rows must not have stolen any other profile's text.
+func TestDialectFromPlatform_EveryProfileDetectionString(t *testing.T) {
+	reg := vendorprofile.Default()
+	supported := map[string]bool{}
+	for _, d := range Dialects() {
+		supported[string(d)] = true
+	}
+	for _, prof := range reg.Profiles() {
+		for _, sub := range prof.Detection.PlatformContains {
+			resolved, ok := reg.ProfileForPlatformText(sub)
+			if !ok {
+				t.Errorf("profile %s: its own detection string %q resolves to nothing", prof.ID, sub)
+				continue
+			}
+			if resolved.ID != prof.ID {
+				t.Errorf("profile %s: its own detection string %q now resolves to %s — a higher-ranked rule stole it",
+					prof.ID, sub, resolved.ID)
+				continue
+			}
+			got, gotOK := DialectFromPlatform(sub)
+			wantOK := supported[prof.ID]
+			if gotOK != wantOK || (wantOK && string(got) != prof.ID) {
+				t.Errorf("DialectFromPlatform(%q) = (%q,%v), want (%q,%v)", sub, got, gotOK, prof.ID, wantOK)
+			}
 		}
 	}
 }

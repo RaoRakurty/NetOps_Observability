@@ -125,7 +125,7 @@ func TestLoaderRejectsUnknownKeys(t *testing.T) {
 	})
 	t.Run("nested detection", func(t *testing.T) {
 		d := goodDoc()
-		d["detection"].(map[string]any)["sysdescr_countains"] = []string{"x"}
+		d["detection"].(map[string]any)["sysdescr_contains_typo"] = []string{"x"}
 		if _, err := loadDoc(t, d); err == nil {
 			t.Fatal("unknown detection key accepted")
 		}
@@ -409,4 +409,109 @@ func TestLoaderRejectsMalformedPcapCommandSets(t *testing.T) {
 			t.Errorf("%s was ACCEPTED — a malformed template must fail at load, not at a live router", tc.name)
 		}
 	}
+}
+
+// ─── verify.commands (T9 residual: internal/verify's command tables) ─────────
+
+// TestLoaderEnforcesReadOnlyVerifyCommands is the load-time half of the
+// active-verification read-only guarantee. The engine will execute nothing but
+// these strings, so a document that declares a state-changing or chainable
+// command must fail the BUILD, not a live router.
+func TestLoaderEnforcesReadOnlyVerifyCommands(t *testing.T) {
+	bad := []string{
+		"reload",
+		"configure terminal",
+		"show ip interface brief; reload",
+		"show ip interface brief | include reload",
+		"show ip interface brief && reload",
+		"show ip interface brief\nreload",
+		"clear counters",
+		"write memory",
+		"copy running-config startup-config",
+		"request system reboot",
+		"rollback 1",
+		"delete flash:x",
+		"show $(reload)",
+		"show `reload`",
+		" show ip interface brief",
+		"",
+	}
+	for _, cmd := range bad {
+		d := goodDoc()
+		d["verify"] = map[string]any{"commands": map[string]any{"ssh_interfaces": cmd}}
+		if _, err := loadDoc(t, d); err == nil {
+			t.Errorf("verify command %q was accepted — the engine would run it", cmd)
+		}
+	}
+	for _, cmd := range []string{
+		"show ip interface brief",
+		"show running-config",
+		"show running-config diffs",
+		"show system rollback",
+		"display configuration commit list",
+	} {
+		d := goodDoc()
+		d["verify"] = map[string]any{"commands": map[string]any{"ssh_interfaces": cmd}}
+		if _, err := loadDoc(t, d); err != nil {
+			t.Errorf("legal read-only command %q was rejected: %v", cmd, err)
+		}
+	}
+}
+
+// TestLoaderRejectsMalformedVerifyCheckID — the id keys the engine's check
+// selection; an upper-cased or space-carrying id would silently never resolve.
+func TestLoaderRejectsMalformedVerifyCheckID(t *testing.T) {
+	for _, id := range []string{"", "SSH_Interfaces", "ssh interfaces", "ssh/interfaces"} {
+		d := goodDoc()
+		d["verify"] = map[string]any{"commands": map[string]any{id: "show version"}}
+		if _, err := loadDoc(t, d); err == nil {
+			t.Errorf("verify check id %q was accepted", id)
+		}
+	}
+}
+
+// ─── cli dialect (T9 residual: protocoldiag's platform→vendor switch) ────────
+
+// TestLoaderEnforcesCLIBindingPairing — a dialect without its operator label
+// (or the reverse) is a half-declared binding, and two profiles claiming the
+// same dialect with different labels would render one device two ways.
+func TestLoaderEnforcesCLIBindingPairing(t *testing.T) {
+	t.Run("dialect without display", func(t *testing.T) {
+		d := goodDoc()
+		d["profiles"].([]any)[0].(map[string]any)["cli"] = map[string]any{"dialect": "acme-cli"}
+		if _, err := loadDoc(t, d); err == nil {
+			t.Fatal("half-declared cli binding accepted")
+		}
+	})
+	t.Run("display without dialect", func(t *testing.T) {
+		d := goodDoc()
+		d["profiles"].([]any)[0].(map[string]any)["cli"] = map[string]any{"display": "Acme CLI"}
+		if _, err := loadDoc(t, d); err == nil {
+			t.Fatal("half-declared cli binding accepted")
+		}
+	})
+	t.Run("non-canonical dialect id", func(t *testing.T) {
+		d := goodDoc()
+		d["profiles"].([]any)[0].(map[string]any)["cli"] = map[string]any{"dialect": "Acme CLI", "display": "Acme CLI"}
+		if _, err := loadDoc(t, d); err == nil {
+			t.Fatal("upper-cased/space-carrying cli dialect accepted")
+		}
+	})
+	t.Run("two displays for one dialect", func(t *testing.T) {
+		d := goodDoc()
+		p0 := d["profiles"].([]any)[0].(map[string]any)
+		p0["cli"] = map[string]any{"dialect": "acme-cli", "display": "Acme CLI"}
+		p1 := map[string]any{
+			"platform": "acmeos2", "display_name": "Acme AcmeOS 2",
+			"device_class": []string{"switch"}, "fidelity": FidelityDocClaimed,
+			"detection": map[string]any{}, "capture": map[string]any{},
+			"advisory": map[string]any{}, "hardening": map[string]any{},
+			"threat": map[string]any{},
+			"cli":    map[string]any{"dialect": "acme-cli", "display": "Acme CLI 2"},
+		}
+		d["profiles"] = []any{p0, p1}
+		if _, err := loadDoc(t, d); err == nil {
+			t.Fatal("one cli dialect with two displays accepted")
+		}
+	})
 }

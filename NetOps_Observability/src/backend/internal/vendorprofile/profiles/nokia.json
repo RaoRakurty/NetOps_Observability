@@ -28,6 +28,15 @@
       "vprn"
     ]
   },
+  "verify": {
+    "commands": {
+      "ssh_bgp_edge": "show router bgp summary",
+      "ssh_config_change": "show system rollback",
+      "ssh_iface_deep": "show port detail",
+      "ssh_interfaces": "show port",
+      "ssh_routing": "show router bgp summary"
+    }
+  },
   "profiles": [
     {
       "platform": "sros",
@@ -68,6 +77,10 @@
         "binding": "nokia",
         "display": "Nokia SR OS"
       },
+      "cli": {
+        "dialect": "nokia",
+        "display": "Nokia SR OS"
+      },
       "threat": {}
     },
     {
@@ -97,6 +110,10 @@
       },
       "hardening": {
         "binding": "nokia",
+        "display": "Nokia SR OS"
+      },
+      "cli": {
+        "dialect": "nokia",
         "display": "Nokia SR OS"
       },
       "threat": {}

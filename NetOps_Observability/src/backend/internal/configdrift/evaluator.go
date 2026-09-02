@@ -287,7 +287,7 @@ func Finding(ev configstore.CaptureEvent, state string, added, removed int, at t
 			Address:    ev.Device.Address,
 			Kind:       secfindings.KindNetworkDevice,
 			Platform:   ev.Device.Platform(),
-		},
+		}.ResolvePlatform(), // T9: the registry-resolved profile id rides along
 		Observed:    observed,
 		Intended:    intended,
 		Detail:      observed,

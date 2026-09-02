@@ -40,7 +40,7 @@
 // TAC export runs an explicit REDACTION pass first.
 package protocoldiag
 
-import "strings"
+import "netops/backend/internal/vendorprofile"
 
 // RulesetVersion is the pinned version stamp for the hand-authored catalog +
 // signatures in this package (§5c version-pinning). It is stamped onto every
@@ -86,40 +86,32 @@ const (
 // "Cisco IOS-XE 17.9", "Juniper Junos 22.4") into a canonical Vendor. It is
 // deliberately conservative: an unrecognized platform maps to VendorUnknown so
 // the caller can decide, rather than mis-rendering against the wrong dialect.
+//
+// T9 (Vendor Profile registry): the substring switch this used to be is now
+// DECLARATIVE DATA — the `detection.platform_contains` / `detection.platform_rank`
+// and `cli.dialect` fields of internal/vendorprofile's profile documents. The
+// rank lives in the data because first-match-wins order is load-bearing. The
+// CLI dialect is a SEPARATE profile field from the hardening binding even where
+// the ids coincide: Arista EOS speaks the Cisco IOS-XE show grammar (so it
+// resolves to VendorCiscoIOSXE here, exactly as before) while shipping no
+// hardening rule bindings at all. Adding a dialect is "author one profile", not
+// "edit this switch".
 func VendorFromPlatform(platform string) Vendor {
-	p := strings.ToLower(strings.TrimSpace(platform))
-	switch {
-	case p == "":
-		return VendorUnknown
-	case strings.Contains(p, "ios-xe"), strings.Contains(p, "iosxe"),
-		strings.Contains(p, "ios xe"), strings.Contains(p, "ios-xr"),
-		strings.Contains(p, "iosxr"), strings.Contains(p, "nx-os"),
-		strings.Contains(p, "nxos"), strings.Contains(p, "cisco"),
-		strings.Contains(p, "arista"), strings.Contains(p, "eos"):
-		return VendorCiscoIOSXE
-	case strings.Contains(p, "junos"), strings.Contains(p, "juniper"):
-		return VendorJuniper
-	case strings.Contains(p, "nokia"), strings.Contains(p, "sr os"),
-		strings.Contains(p, "sros"), strings.Contains(p, "sr linux"),
-		strings.Contains(p, "srlinux"), strings.Contains(p, "timos"):
-		return VendorNokia
-	default:
+	dialect, ok := vendorprofile.Default().CLIDialectForPlatform(platform)
+	if !ok {
 		return VendorUnknown
 	}
+	return Vendor(dialect)
 }
 
-// DisplayVendor renders a Vendor as an operator-facing label.
+// DisplayVendor renders a Vendor as an operator-facing label. A dialect no
+// profile declares — including VendorUnknown — renders as "unknown vendor",
+// never as some other vendor's name.
 func DisplayVendor(v Vendor) string {
-	switch v {
-	case VendorCiscoIOSXE:
-		return "Cisco IOS-XE"
-	case VendorJuniper:
-		return "Juniper Junos"
-	case VendorNokia:
-		return "Nokia SR OS"
-	default:
-		return "unknown vendor"
+	if label, ok := vendorprofile.Default().CLIDialectDisplay(string(v)); ok {
+		return label
 	}
+	return "unknown vendor"
 }
 
 // renderVendor is the dialect actually rendered for v: a recognized vendor

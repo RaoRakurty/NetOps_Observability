@@ -235,6 +235,7 @@ func DecodeFinding(raw json.RawMessage, docID string) (Finding, error) {
 		Address:    s.str("resource.ip"),
 		Kind:       s.first("resource.type", "resource.kind", "attrs.resource_kind"),
 		Platform:   s.str("resource.platform"),
+		ProfileID:  s.str("resource.profile_id"),
 	}
 	if f.Resource.Hostname == "" {
 		f.Resource.Hostname = hostFromTokens(s)

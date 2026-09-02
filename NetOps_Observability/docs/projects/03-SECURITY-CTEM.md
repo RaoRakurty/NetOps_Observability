@@ -99,9 +99,19 @@ mutable PG rows. Unblocks T8.
   binding, threat tags) behind an immutable registry with `Load(fs.FS)` for the
   air-gap path; `collectors`, `netconcepts`, `hardening`, `advisory` and
   `threatlane` resolve through it with **byte-identical goldens**; unknown vendor
-  is unassessed, never a silent default. **Residual (tracker 216):**
-  `protocoldiag` + `verify` command tables and `secfindings`'s free-form
-  platform string still hold vendor knowledge outside the registry.
+  is unassessed, never a silent default. **The tracker-216 residual is CLOSED:**
+  `internal/verify`'s two command tables are now the vendor-level
+  `verify.commands` block (read-only shape enforced at load, all 25 rows pinned
+  byte-identically), `protocoldiag.VendorFromPlatform`/`DisplayVendor` resolve
+  through the new per-profile `cli.dialect`/`cli.display` binding (a SEPARATE
+  axis from `hardening.binding`: Arista EOS speaks the Cisco IOS-XE show grammar
+  but binds no hardening rules), `showparse.DialectFromPlatform`'s Arista/Huawei
+  fallback token map is deleted now that both profiles declare their own
+  `platform_contains`/`platform_rank`, and `secfindings.Resource` carries the
+  registry-resolved `ProfileID` beside the free-form label so no consumer
+  re-parses it. `TestNoVendorVocabularyOutsideTheRegistry` (an AST scan of every
+  non-test Go file) is what keeps them gone; the six sites it found elsewhere are
+  allowlisted with reasons and carried on tracker 221.
 
 ### Infra modules (owner order, after the core lanes)
 - [x] **Config Backup (sealed store) · Config Sync/Drift (in-sync badge)** —

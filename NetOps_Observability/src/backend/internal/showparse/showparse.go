@@ -310,66 +310,34 @@ func Parse(cmdID string, d Dialect, raw string) (Result, error) {
 // DialectFromPlatform resolves a free-form platform string ("Cisco IOS-XE 17.9",
 // "Juniper Junos 22.4R3", "Arista EOS 4.30.2F") onto a supported Dialect.
 //
-// The vendorprofile registry is asked FIRST — it is the one vendor vocabulary,
-// and its ranked platform_contains table is the authority. Only for platforms
-// the registry's table does not yet resolve (today: Arista EOS and Huawei VRP,
-// whose profiles declare no platform_contains) does this fall back to a narrow
-// token map — and that map's targets are vendorprofile profile IDS, asserted to
-// exist by TestDialects_ResolveThroughVendorProfile. It is therefore a
-// text-to-id RESOLVER, never a second vocabulary.
+// The vendorprofile registry is the ONLY authority: its ranked
+// platform_contains table resolves the text to a profile id, and this package
+// answers only "do I have parsers for that id?". There is no local token map —
+// the Arista/Huawei fallback that used to stand in for the two profiles that
+// declared no platform_contains was deleted when those profiles gained their own
+// detection strings (T9 residual, tracker 216). A gap in resolution is therefore
+// a gap in internal/vendorprofile/profiles/*.json, fixed there and nowhere else.
 //
 // An unrecognized platform returns ("", false): the caller reports the device
 // unassessed. There is NO default dialect — rendering a Cisco command at an
 // unknown platform is exactly the kind of guess this package exists to refuse.
 func DialectFromPlatform(platform string) (Dialect, bool) {
-	p := strings.ToLower(strings.TrimSpace(platform))
-	if p == "" {
+	if strings.TrimSpace(platform) == "" {
 		return "", false
 	}
-	supported := make(map[Dialect]struct{}, len(Dialects()))
-	for _, d := range Dialects() {
-		supported[d] = struct{}{}
+	prof, ok := vendorprofile.Default().ProfileForPlatformText(platform)
+	if !ok {
+		return "", false
 	}
-	if prof, ok := vendorprofile.Default().ProfileForPlatformText(platform); ok {
-		if d := Dialect(prof.ID); isIn(supported, d) {
+	d := Dialect(prof.ID)
+	for _, sup := range Dialects() {
+		if sup == d {
 			return d, true
 		}
-		// The registry resolved the platform to a profile this library has no
-		// dialect for (e.g. cisco/asa, nokia/srlinux). Honest miss.
-		return "", false
 	}
-	for _, r := range platformFallbacks() {
-		for _, sub := range r.contains {
-			if strings.Contains(p, sub) {
-				if isIn(supported, r.dialect) {
-					return r.dialect, true
-				}
-			}
-		}
-	}
+	// The registry resolved the platform to a profile this library has no
+	// dialect for (e.g. cisco/asa, nokia/srlinux). Honest miss.
 	return "", false
-}
-
-func isIn(set map[Dialect]struct{}, d Dialect) bool {
-	_, ok := set[d]
-	return ok
-}
-
-// platformFallback is one text→dialect fallback rule.
-type platformFallback struct {
-	dialect  Dialect
-	contains []string
-}
-
-// platformFallbacks are the ordered fallback rules for platforms the
-// vendorprofile platform_contains table does not (yet) carry. Keep this list
-// SHORT: every entry is a gap in the registry data, and closing the gap in
-// internal/vendorprofile/profiles/*.json is the real fix.
-func platformFallbacks() []platformFallback {
-	return []platformFallback{
-		{dialect: DialectAristaEOS, contains: []string{"arista", "eos", "ceos"}},
-		{dialect: DialectHuaweiVRP, contains: []string{"huawei", "vrp"}},
-	}
 }
 
 // splitLines splits raw output into lines, normalizing CRLF and dropping a

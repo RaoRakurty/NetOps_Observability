@@ -284,3 +284,94 @@ func TestTenantIDNeverSerialized(t *testing.T) {
 		t.Fatalf("TenantID must not be settable from JSON, got %q", back.TenantID)
 	}
 }
+
+// ── platform identity (T9: the one vendor vocabulary) ───────────────────────
+
+// TestResolvePlatform stamps the registry-resolved profile id from the
+// free-form label, leaves the label itself untouched, and resolves an
+// unrecognized platform to the honest EMPTY id rather than a fallback profile.
+func TestResolvePlatform(t *testing.T) {
+	cases := []struct {
+		platform string
+		want     string
+	}{
+		{"Cisco IOS-XE 17.9", "cisco/ios_xe"},
+		{"cisco ios_xr NCS-5500", "cisco/ios"}, // "cisco" is the vendor's catch-all rule
+		{"Juniper Junos 22.4R3", "juniper/junos"},
+		{"Nokia SR OS 22.10", "nokia/sros"},
+		{"Arista EOS 4.30.2F", "arista/eos"},
+		{"Huawei VRP V800R021", "huawei/vrp"},
+		{"Ubuntu 22.04", ""},  // a host, no network profile claims it
+		{"Acme WidgetOS", ""}, // unknown: NEVER a fallback profile
+		{"", ""},              // nothing to resolve
+		{"   ", ""},           // nothing to resolve
+	}
+	for _, tc := range cases {
+		got := Resource{Platform: tc.platform}.ResolvePlatform()
+		if got.ProfileID != tc.want {
+			t.Errorf("ResolvePlatform(%q).ProfileID = %q, want %q", tc.platform, got.ProfileID, tc.want)
+		}
+		if got.Platform != tc.platform {
+			t.Errorf("ResolvePlatform must not rewrite the free-form label: %q → %q", tc.platform, got.Platform)
+		}
+	}
+}
+
+// TestResolvePlatformIsIdempotentAndNonDestructive: calling it twice changes
+// nothing, and an id a caller already stamped is never overwritten.
+func TestResolvePlatformIsIdempotentAndNonDestructive(t *testing.T) {
+	once := Resource{Platform: "Cisco IOS-XE 17.9"}.ResolvePlatform()
+	twice := once.ResolvePlatform()
+	if once != twice {
+		t.Fatalf("not idempotent: %+v vs %+v", once, twice)
+	}
+	pinned := Resource{Platform: "Cisco IOS-XE 17.9", ProfileID: "juniper/junos"}.ResolvePlatform()
+	if pinned.ProfileID != "juniper/junos" {
+		t.Fatalf("an already-stamped ProfileID must be kept, got %q", pinned.ProfileID)
+	}
+}
+
+// TestFindingResolvePlatform is the provider-facing one-liner: it stamps the
+// resource in place and leaves every other field alone.
+func TestFindingResolvePlatform(t *testing.T) {
+	f := Finding{
+		ID:       "find-42",
+		Resource: Resource{DeviceID: "d1", Kind: KindNetworkDevice, Platform: "SR Linux 23.3"},
+	}
+	f.ResolvePlatform()
+	if f.Resource.ProfileID != "nokia/srlinux" {
+		t.Fatalf("ProfileID = %q, want nokia/srlinux", f.Resource.ProfileID)
+	}
+	if f.ID != "find-42" || f.Resource.DeviceID != "d1" || f.Resource.Kind != KindNetworkDevice {
+		t.Fatalf("ResolvePlatform disturbed another field: %+v", f)
+	}
+}
+
+// TestProfileIDRoundTrips proves the new identity survives the wire and stays
+// absent (omitempty) when nothing was resolved — an unidentified platform must
+// not appear as an empty-string claim in the JSON.
+func TestProfileIDRoundTrips(t *testing.T) {
+	f := Finding{Resource: Resource{Platform: "Cisco IOS-XE 17.9"}.ResolvePlatform()}
+	b, err := json.Marshal(f)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if !strings.Contains(string(b), `"profile_id":"cisco/ios_xe"`) {
+		t.Fatalf("profile id missing from JSON: %s", b)
+	}
+	var back Finding
+	if err := json.Unmarshal(b, &back); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if back.Resource.ProfileID != "cisco/ios_xe" {
+		t.Fatalf("profile id not preserved: %q", back.Resource.ProfileID)
+	}
+
+	unknown, err := json.Marshal(Finding{Resource: Resource{Platform: "Acme WidgetOS"}.ResolvePlatform()})
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if strings.Contains(string(unknown), "profile_id") {
+		t.Fatalf("an unresolved platform must not emit a profile_id key: %s", unknown)
+	}
+}

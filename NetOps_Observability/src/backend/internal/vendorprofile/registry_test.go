@@ -235,3 +235,192 @@ func TestAccessorsReturnCopies(t *testing.T) {
 		}
 	}
 }
+
+// ─── T9 residual (tracker 216): the three call sites that used to hold vendor
+// knowledge outside this registry ───────────────────────────────────────────
+
+// TestVerifyCommandsResolveThroughTheRegistry pins the active-verification
+// allowlist internal/verify used to hold as two Go map literals. Every row is
+// asserted verbatim: this is the no-regression gate for that move.
+func TestVerifyCommandsResolveThroughTheRegistry(t *testing.T) {
+	reg := Default()
+	want := map[string]map[string]string{
+		"cisco": {
+			"ssh_interfaces": "show ip interface brief", "ssh_routing": "show ip bgp summary",
+			"ssh_iface_deep": "show interfaces", "ssh_bgp_edge": "show bgp all summary",
+			"ssh_config_change": "show running-config",
+		},
+		"arista": {
+			"ssh_interfaces": "show interfaces status", "ssh_routing": "show ip bgp summary",
+			"ssh_iface_deep": "show interfaces", "ssh_bgp_edge": "show ip bgp summary vrf all",
+			"ssh_config_change": "show running-config diffs",
+		},
+		"juniper": {
+			"ssh_interfaces": "show interfaces terse", "ssh_routing": "show bgp summary",
+			"ssh_iface_deep": "show interfaces extensive", "ssh_bgp_edge": "show bgp summary",
+			"ssh_config_change": "show system commit",
+		},
+		"huawei": {
+			"ssh_interfaces": "display interface brief", "ssh_routing": "display bgp peer",
+			"ssh_iface_deep": "display interface", "ssh_bgp_edge": "display bgp peer",
+			"ssh_config_change": "display configuration commit list",
+		},
+		"nokia": {
+			"ssh_interfaces": "show port", "ssh_routing": "show router bgp summary",
+			"ssh_iface_deep": "show port detail", "ssh_bgp_edge": "show router bgp summary",
+			"ssh_config_change": "show system rollback",
+		},
+	}
+	got := reg.VerifyCommandTable()
+	if len(got) != len(want) {
+		t.Fatalf("vendor families with verify commands: got %d, want %d", len(got), len(want))
+	}
+	for vendor, fam := range want {
+		for check, cmd := range fam {
+			if g, ok := reg.VerifyCommand(vendor, check); !ok || g != cmd {
+				t.Errorf("VerifyCommand(%q,%q) = (%q,%v), want %q", vendor, check, g, ok, cmd)
+			}
+			if !reg.VerifyCommandAllowed(cmd) {
+				t.Errorf("declared command %q is not allowed by the gate", cmd)
+			}
+		}
+		if n := len(got[vendor]); n != len(fam) {
+			t.Errorf("vendor %q: %d verify rows, want %d", vendor, n, len(fam))
+		}
+	}
+	// Unknown vendor / unknown check / a command nobody declared: all refused.
+	if _, ok := reg.VerifyCommand("mikrotik", "ssh_interfaces"); ok {
+		t.Error("a vendor that declares no verify commands must not resolve one")
+	}
+	if _, ok := reg.VerifyCommand("cisco", "ssh_reboot"); ok {
+		t.Error("an undeclared check id must not resolve a command")
+	}
+	for _, cmd := range []string{"", "reload", "configure terminal", "SHOW IP INTERFACE BRIEF"} {
+		if reg.VerifyCommandAllowed(cmd) {
+			t.Errorf("command %q must not be allowed", cmd)
+		}
+	}
+	// Case/space tolerance on the vendor token only (it comes from discovery).
+	if cmd, ok := reg.VerifyCommand("  Cisco ", "ssh_interfaces"); !ok || cmd != "show ip interface brief" {
+		t.Errorf("vendor token normalization: got (%q,%v)", cmd, ok)
+	}
+}
+
+// TestVerifyAccessorsHandOutCopies — the registry is shared immutable reference
+// data; a caller must not be able to widen the runner's allowlist through it.
+func TestVerifyAccessorsHandOutCopies(t *testing.T) {
+	reg := Default()
+	tbl := reg.VerifyCommandTable()
+	tbl["cisco"]["ssh_interfaces"] = "reload"
+	tbl["acme"] = map[string]string{"x": "reload"}
+	fam := reg.VerifyCommands("cisco")
+	fam["ssh_routing"] = "reload"
+	if reg.VerifyCommandAllowed("reload") {
+		t.Fatal("mutating a returned map widened the allowlist")
+	}
+	if cmd, _ := reg.VerifyCommand("cisco", "ssh_interfaces"); cmd != "show ip interface brief" {
+		t.Fatalf("mutating a returned map changed a resolution: %q", cmd)
+	}
+	if reg.VerifyCommands("mikrotik") != nil {
+		t.Fatal("a vendor with no verify commands must return nil, not an empty map")
+	}
+}
+
+// TestCLIDialectResolvesThroughTheRegistry pins the platform→CLI-dialect
+// resolution internal/protocoldiag used to hold as a substring switch. The
+// Arista row is the interesting one: EOS speaks the Cisco IOS-XE SHOW grammar
+// (so it resolves here) while binding NO hardening dialect — the two axes are
+// deliberately separate fields.
+func TestCLIDialectResolvesThroughTheRegistry(t *testing.T) {
+	cases := []struct {
+		platform string
+		want     string
+		ok       bool
+	}{
+		{"Cisco IOS-XE 17.9", "cisco-iosxe", true},
+		{"cisco-iosxr", "cisco-iosxe", true},
+		{"Catalyst NX-OS", "cisco-iosxe", true},
+		{"Cisco Adaptive Security Appliance", "cisco-iosxe", true},
+		{"Arista EOS", "cisco-iosxe", true},
+		{"eos", "cisco-iosxe", true},
+		{"ceos", "cisco-iosxe", true},
+		{"Juniper Junos 22", "juniper", true},
+		{"junos", "juniper", true},
+		{"Nokia SR OS 23", "nokia", true},
+		{"srlinux", "nokia", true},
+		{"TiMOS-B", "nokia", true},
+		{"Huawei VRP", "", false}, // resolves to a profile, which declares no CLI dialect
+		{"MikroTik RouterOS", "", false},
+		{"Acme WidgetOS", "", false},
+		{"", "", false},
+		{"   ", "", false},
+	}
+	reg := Default()
+	for _, tc := range cases {
+		got, ok := reg.CLIDialectForPlatform(tc.platform)
+		if got != tc.want || ok != tc.ok {
+			t.Errorf("CLIDialectForPlatform(%q) = (%q,%v), want (%q,%v)", tc.platform, got, ok, tc.want, tc.ok)
+		}
+	}
+	for dialect, want := range map[string]string{
+		"cisco-iosxe": "Cisco IOS-XE", "juniper": "Juniper Junos", "nokia": "Nokia SR OS",
+	} {
+		if d, ok := reg.CLIDialectDisplay(dialect); !ok || d != want {
+			t.Errorf("CLIDialectDisplay(%q) = (%q,%v), want %q", dialect, d, ok, want)
+		}
+	}
+	for _, unknown := range []string{"", "bogus", "huawei"} {
+		if d, ok := reg.CLIDialectDisplay(unknown); ok {
+			t.Errorf("CLIDialectDisplay(%q) claimed the label %q", unknown, d)
+		}
+	}
+}
+
+// TestAristaAndHuaweiResolveByPlatformText is the T9 residual for
+// showparse.DialectFromPlatform: the two profiles that carried no
+// platform_contains (and forced a local fallback token map) now resolve through
+// the registry.
+func TestAristaAndHuaweiResolveByPlatformText(t *testing.T) {
+	reg := Default()
+	for _, tc := range []struct{ text, want string }{
+		{"Arista EOS 4.30.2F", "arista/eos"},
+		{"arista", "arista/eos"},
+		{"eos", "arista/eos"},
+		{"ceos", "arista/eos"},
+		{"Huawei VRP V800R021", "huawei/vrp"},
+		{"huawei", "huawei/vrp"},
+		{"vrp", "huawei/vrp"},
+	} {
+		p, ok := reg.ProfileForPlatformText(tc.text)
+		if !ok || p.ID != tc.want {
+			t.Errorf("ProfileForPlatformText(%q) = (%q,%v), want %q", tc.text, p.ID, ok, tc.want)
+		}
+	}
+	// Resolving them must NOT have invented a hardening verdict: neither vendor
+	// ships hardening rule bindings, so both stay NotApplicable.
+	for _, text := range []string{"Arista EOS 4.33", "arista", "eos", "Huawei VRP", "vrp"} {
+		if b, ok := reg.HardeningBindingForPlatform(text); ok {
+			t.Errorf("%q bound hardening dialect %q — the catalog ships no rules for it", text, b)
+		}
+	}
+}
+
+// TestEveryProfileDetectionStringResolvesToItself is the cross-profile
+// no-regression gate for adding platform_contains rows: a new rule must never
+// steal text that already belonged to another profile. It walks EVERY profile's
+// own declared detection strings and asserts each still resolves to its author.
+func TestEveryProfileDetectionStringResolvesToItself(t *testing.T) {
+	reg := Default()
+	for _, p := range reg.Profiles() {
+		for _, sub := range p.Detection.PlatformContains {
+			got, ok := reg.ProfileForPlatformText(sub)
+			if !ok {
+				t.Errorf("profile %s: its own platform_contains %q resolves to nothing", p.ID, sub)
+				continue
+			}
+			if got.ID != p.ID {
+				t.Errorf("profile %s: its own platform_contains %q resolves to %s — a lower rank stole it", p.ID, sub, got.ID)
+			}
+		}
+	}
+}

@@ -234,13 +234,16 @@ func (e *Engine) base(dev Device, evidenceClass string) secfindings.Finding {
 		Time:          e.now().UTC(),
 		TenantID:      dev.TenantID, // §3a: stamped from the device record, never a body
 		EvidenceClass: evidenceClass,
+		// ResolvePlatform stamps the registry-resolved profile id alongside the
+		// free-form label, so a consumer keys on one canonical identity instead
+		// of re-parsing the label with its own vendor table (T9).
 		Resource: secfindings.Resource{
 			DeviceID:   dev.ID,
 			DeviceName: dev.Hostname,
 			Hostname:   dev.Hostname,
 			Kind:       secfindings.KindNetworkDevice,
 			Platform:   dev.Platform,
-		},
+		}.ResolvePlatform(),
 	}
 }
 

@@ -2,7 +2,7 @@
   "schema_version": 1,
   "vendor": "arista",
   "display_name": "Arista Networks",
-  "notes": "The telemetry catalog names this platform 'ceos' (the containerized EOS in the lab); 'ceos' is a platform ALIAS of the eos profile, not a second product. internal/hardening ships NO Arista bindings today, so the hardening binding is deliberately empty (rules report NotApplicable, never a false Pass).",
+  "notes": "The telemetry catalog names this platform 'ceos' (the containerized EOS in the lab); 'ceos' is a platform ALIAS of the eos profile, not a second product. internal/hardening ships NO Arista bindings today, so the hardening binding is deliberately empty (rules report NotApplicable, never a false Pass). The CLI binding is deliberately cisco-iosxe: EOS speaks the Cisco IOS-XE show-command grammar, which is why the protocol-diagnostics catalog renders EOS devices in that dialect. That is a SHOW-GRAMMAR claim only and is a separate axis from the (empty) hardening binding above.",
   "detection": {
     "sysobjectid_prefixes": [
       "1.3.6.1.4.1.30065"
@@ -23,6 +23,15 @@
       "vrf"
     ]
   },
+  "verify": {
+    "commands": {
+      "ssh_bgp_edge": "show ip bgp summary vrf all",
+      "ssh_config_change": "show running-config diffs",
+      "ssh_iface_deep": "show interfaces",
+      "ssh_interfaces": "show interfaces status",
+      "ssh_routing": "show ip bgp summary"
+    }
+  },
   "profiles": [
     {
       "platform": "eos",
@@ -38,6 +47,12 @@
           "rank": 10,
           "sysdescr_contains_any": []
         },
+        "platform_contains": [
+          "arista",
+          "eos",
+          "ceos"
+        ],
+        "platform_rank": 40,
         "syslog_facilities": [
           "SYS"
         ]
@@ -65,6 +80,10 @@
         ]
       },
       "hardening": {},
+      "cli": {
+        "dialect": "cisco-iosxe",
+        "display": "Cisco IOS-XE"
+      },
       "threat": {
         "log_rule_ids": [
           "log-logging-disabled",

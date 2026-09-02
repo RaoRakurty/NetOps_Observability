@@ -18,7 +18,9 @@
 // This package is model + normalization + converter ONLY. It wires to no HTTP
 // handler, no correlation engine and no bus — those are later tasks (T2+). It
 // deliberately depends only on internal/compliance (read-only, for the
-// converter) and the standard library.
+// converter), internal/vendorprofile (read-only, the ONE vendor vocabulary, for
+// resolving a subject's platform label onto a profile id — platform.go) and the
+// standard library.
 package secfindings
 
 import "time"
@@ -68,8 +70,16 @@ type Resource struct {
 	DeviceName string `json:"name,omitempty"`
 	Hostname   string `json:"hostname,omitempty"`
 	Address    string `json:"ip,omitempty"`
-	Kind       string `json:"type,omitempty"`     // host|network-device|container
-	Platform   string `json:"platform,omitempty"` // e.g. "Cisco IOS-XE 17.9"
+	Kind       string `json:"type,omitempty"` // host|network-device|container
+	// Platform is the FREE-FORM label the provider's upstream carried, kept
+	// verbatim: it is evidence of what the device (or operator) actually said.
+	Platform string `json:"platform,omitempty"` // e.g. "Cisco IOS-XE 17.9"
+	// ProfileID is that label RESOLVED through the one vendor vocabulary — an
+	// internal/vendorprofile profile id ("cisco/ios_xe"). It is what a consumer
+	// keys on instead of re-parsing Platform with its own vendor table (T9).
+	// EMPTY means the registry did not recognize the label: an unidentified
+	// platform, never a fallback profile. Stamped by ResolvePlatform.
+	ProfileID string `json:"profile_id,omitempty"`
 }
 
 // EvidenceRef is a BY-REFERENCE, version-pinned pointer to the raw artifact a

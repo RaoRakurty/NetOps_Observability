@@ -25,6 +25,15 @@
       "routing-instance"
     ]
   },
+  "verify": {
+    "commands": {
+      "ssh_bgp_edge": "show bgp summary",
+      "ssh_config_change": "show system commit",
+      "ssh_iface_deep": "show interfaces extensive",
+      "ssh_interfaces": "show interfaces terse",
+      "ssh_routing": "show bgp summary"
+    }
+  },
   "profiles": [
     {
       "platform": "junos",
@@ -77,6 +86,10 @@
       },
       "hardening": {
         "binding": "juniper",
+        "display": "Juniper Junos"
+      },
+      "cli": {
+        "dialect": "juniper",
         "display": "Juniper Junos"
       },
       "threat": {}

@@ -693,7 +693,7 @@ func (l *Lane) advisoryFindings(ctx context.Context, scanID string,
 		res := secfindings.Resource{
 			DeviceID: d.ID, DeviceName: d.Name, Hostname: d.Name, Address: d.Address,
 			Kind: secfindings.KindNetworkDevice, Platform: d.Platform(),
-		}
+		}.ResolvePlatform() // T9: one canonical platform identity on every finding
 		product, version := parse(d.Vendor, d.OS)
 		switch {
 		case strings.TrimSpace(d.Vendor) == "":

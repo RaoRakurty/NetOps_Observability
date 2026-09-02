@@ -8,6 +8,7 @@ package verify
 
 import (
 	"context"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -18,12 +19,22 @@ import (
 
 // ---- allowlist: the closed table ------------------------------------------
 
+// TestVerifyCommandTableReadOnly asserts the read-only invariant over the table
+// the vendor-profile REGISTRY serves (T9: the command knowledge moved into
+// internal/vendorprofile's `verify.commands` blocks; the invariant did not).
+// The registry enforces the same shape at load — this test is the independent
+// second assertion, and it is what fails first if the enforcement is ever
+// loosened there.
 func TestVerifyCommandTableReadOnly(t *testing.T) {
 	// "configure" (the config-MODE verb) is forbidden; reading configuration
 	// state ("show running-config", "display configuration commit list") is
 	// exactly what the recent-change module exists to do and stays legal.
 	forbidden := []string{";", "|", "&", "`", "$", "\n", "reload", "configure", "write ", "copy ", "delete", "clear ", "request ", "rollback "}
-	for _, table := range []map[string]map[string]string{verifyCommandTable, verifyModuleCommandTable} {
+	table := CommandTable()
+	if len(table) == 0 {
+		t.Fatal("the registry served an EMPTY command table — the battery would silently skip every ssh check")
+	}
+	for _, table := range []map[string]map[string]string{table} {
 		for vendor, fam := range table {
 			for check, cmd := range fam {
 				if !strings.HasPrefix(cmd, "show ") && !strings.HasPrefix(cmd, "display ") {
@@ -37,6 +48,94 @@ func TestVerifyCommandTableReadOnly(t *testing.T) {
 			}
 		}
 	}
+}
+
+// TestVerifyCommandTableMatchesTheShippedRows pins the EXACT table the registry
+// serves. It is the T9 no-regression gate: the rows below are the ones the
+// in-code verifyCommandTable / verifyModuleCommandTable literals held before
+// they moved into the profile documents, byte for byte.
+func TestVerifyCommandTableMatchesTheShippedRows(t *testing.T) {
+	want := map[string]map[string]string{
+		"cisco": {
+			"ssh_interfaces":    "show ip interface brief",
+			"ssh_routing":       "show ip bgp summary",
+			"ssh_iface_deep":    "show interfaces",
+			"ssh_bgp_edge":      "show bgp all summary",
+			"ssh_config_change": "show running-config",
+		},
+		"arista": {
+			"ssh_interfaces":    "show interfaces status",
+			"ssh_routing":       "show ip bgp summary",
+			"ssh_iface_deep":    "show interfaces",
+			"ssh_bgp_edge":      "show ip bgp summary vrf all",
+			"ssh_config_change": "show running-config diffs",
+		},
+		"juniper": {
+			"ssh_interfaces":    "show interfaces terse",
+			"ssh_routing":       "show bgp summary",
+			"ssh_iface_deep":    "show interfaces extensive",
+			"ssh_bgp_edge":      "show bgp summary",
+			"ssh_config_change": "show system commit",
+		},
+		"huawei": {
+			"ssh_interfaces":    "display interface brief",
+			"ssh_routing":       "display bgp peer",
+			"ssh_iface_deep":    "display interface",
+			"ssh_bgp_edge":      "display bgp peer",
+			"ssh_config_change": "display configuration commit list",
+		},
+		"nokia": {
+			"ssh_interfaces":    "show port",
+			"ssh_routing":       "show router bgp summary",
+			"ssh_iface_deep":    "show port detail",
+			"ssh_bgp_edge":      "show router bgp summary",
+			"ssh_config_change": "show system rollback",
+		},
+	}
+	got := CommandTable()
+	if len(got) != len(want) {
+		t.Fatalf("vendor families: got %d (%v), want %d", len(got), keysOf(got), len(want))
+	}
+	for vendor, wantFam := range want {
+		gotFam, ok := got[vendor]
+		if !ok {
+			t.Fatalf("vendor %q missing from the registry table", vendor)
+		}
+		if len(gotFam) != len(wantFam) {
+			t.Fatalf("vendor %q: got %d rows, want %d", vendor, len(gotFam), len(wantFam))
+		}
+		for check, wantCmd := range wantFam {
+			if gotCmd := gotFam[check]; gotCmd != wantCmd {
+				t.Errorf("%s/%s = %q, want %q", vendor, check, gotCmd, wantCmd)
+			}
+		}
+	}
+}
+
+// TestVerifyCommandTableIsACopy proves the accessor hands out a COPY: a caller
+// that mutates what it got must not be able to widen what the runner will run.
+func TestVerifyCommandTableIsACopy(t *testing.T) {
+	tbl := CommandTable()
+	tbl["cisco"]["ssh_interfaces"] = "reload"
+	tbl["acme"] = map[string]string{"ssh_interfaces": "reload"}
+	if CommandAllowed("reload") {
+		t.Fatal("mutating the returned table widened the allowlist")
+	}
+	if cmd, _ := CommandFor("cisco", "ssh_interfaces"); cmd != "show ip interface brief" {
+		t.Fatalf("mutating the returned table changed a resolution: %q", cmd)
+	}
+	if _, ok := CommandFor("acme", "ssh_interfaces"); ok {
+		t.Fatal("mutating the returned table added a vendor family")
+	}
+}
+
+func keysOf(m map[string]map[string]string) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
 }
 
 func TestVerifyCommandForClosedTable(t *testing.T) {

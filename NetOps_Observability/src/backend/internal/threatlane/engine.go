@@ -254,13 +254,15 @@ func (e *Engine) convTime(flows []FlowRecord) time.Time {
 }
 
 func logResource(ev LogEvent) secfindings.Resource {
+	// ResolvePlatform stamps the registry-resolved profile id beside the
+	// free-form platform hint the log event carried (T9).
 	return secfindings.Resource{
 		DeviceID:   ev.DeviceID,
 		DeviceName: ev.Hostname,
 		Hostname:   ev.Hostname,
 		Kind:       secfindings.KindNetworkDevice,
 		Platform:   ev.Platform,
-	}
+	}.ResolvePlatform()
 }
 
 func flowResource(deviceID, hostname string) secfindings.Resource {

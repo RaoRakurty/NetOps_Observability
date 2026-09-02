@@ -75,39 +75,28 @@ func verifyModuleSpecs() []verifyCheckSpec {
 	}
 }
 
-// verifyModuleCommandTable is the CLOSED read-only command allowlist for the
-// module checks — same contract as verifyCommandTable (verify_engine.go):
-// vendor family → check id → EXACT command line; amending it is the only way
-// a new command can run. verifyCommandTableReadOnly (tests) guards both tables.
+// The module command allowlist is the SAME closed table the core battery reads
+// (CommandFor / CommandAllowed in verify_engine.go), served by the vendor-profile
+// registry's vendor-level `verify.commands` block. Core and module check ids are
+// disjoint, so one table per vendor expresses both without ambiguity, and the
+// helpers below simply SCOPE a lookup to the module half.
 //
-// Command provenance: cisco + juniper rows mined from NetClaw skills (see file
-// header); arista, huawei, nokia rows authored fresh for EOS / VRP / SR OS.
-var verifyModuleCommandTable = map[string]map[string]string{
-	"cisco": {
-		"ssh_iface_deep":    "show interfaces",
-		"ssh_bgp_edge":      "show bgp all summary",
-		"ssh_config_change": "show running-config", // only the "Last configuration change" header lines are parsed; full text is discarded
-	},
-	"arista": {
-		"ssh_iface_deep":    "show interfaces",
-		"ssh_bgp_edge":      "show ip bgp summary vrf all",
-		"ssh_config_change": "show running-config diffs", // any diff ⇒ unsaved (recent) change
-	},
-	"juniper": {
-		"ssh_iface_deep":    "show interfaces extensive",
-		"ssh_bgp_edge":      "show bgp summary",
-		"ssh_config_change": "show system commit",
-	},
-	"huawei": {
-		"ssh_iface_deep":    "display interface",
-		"ssh_bgp_edge":      "display bgp peer",
-		"ssh_config_change": "display configuration commit list",
-	},
-	"nokia": {
-		"ssh_iface_deep":    "show port detail",
-		"ssh_bgp_edge":      "show router bgp summary",
-		"ssh_config_change": "show system rollback",
-	},
+// Command provenance (recorded on the profile documents' authoring history):
+// cisco + juniper rows mined from NetClaw skills (see file header); arista,
+// huawei, nokia rows authored fresh for EOS / VRP / SR OS.
+//
+// Semantics per row, kept from the former in-code table:
+//   - cisco   ssh_config_change "show running-config"       — only the "Last configuration change" header lines are parsed; full text is discarded
+//   - arista  ssh_config_change "show running-config diffs" — any diff ⇒ unsaved (recent) change
+//
+// moduleCheckIDs is the set of check ids the MODULES own. It is derived from
+// verifyModuleSpecs, so a module and its table half can never drift apart.
+func moduleCheckIDs() map[string]bool {
+	out := make(map[string]bool, 4)
+	for _, s := range verifyModuleSpecs() {
+		out[s.ID] = true
+	}
+	return out
 }
 
 // ---- trigger gates ----------------------------------------------------------
@@ -165,23 +154,27 @@ func ActiveBattery(cc CaseContext) []verifyCheckSpec {
 	return out
 }
 
-// verifyModuleCommandFor resolves (vendor, check) → command from the module
-// table; same unknown ⇒ skip contract as CommandFor.
+// verifyModuleCommandFor resolves (vendor, MODULE check) → command from the
+// registry-served table; same unknown ⇒ skip contract as CommandFor. A core
+// check id does not resolve here — the scoping is what keeps the module half of
+// the table nameable on its own.
 func verifyModuleCommandFor(vendor, checkID string) (string, bool) {
-	fam, ok := verifyModuleCommandTable[strings.ToLower(strings.TrimSpace(vendor))]
-	if !ok {
+	if !moduleCheckIDs()[checkID] {
 		return "", false
 	}
-	cmd, ok := fam[checkID]
-	return cmd, ok
+	return CommandFor(vendor, checkID)
 }
 
-// verifyModuleCommandAllowed reports whether cmd appears VERBATIM in the
-// module table (defense-in-depth gate, or-ed with the core table's).
+// verifyModuleCommandAllowed reports whether cmd appears VERBATIM as a MODULE
+// row of the closed table (defense-in-depth gate, scoped to the module half).
 func verifyModuleCommandAllowed(cmd string) bool {
-	for _, fam := range verifyModuleCommandTable {
-		for _, c := range fam {
-			if c == cmd {
+	if cmd == "" {
+		return false
+	}
+	mods := moduleCheckIDs()
+	for _, fam := range CommandTable() {
+		for check, c := range fam {
+			if c == cmd && mods[check] {
 				return true
 			}
 		}

@@ -28,13 +28,14 @@ const enterpriseOIDPrefix = "1.3.6.1.4.1."
 
 // vendorDoc is the on-disk shape of one vendor document (profiles/<vendor>.json).
 type vendorDoc struct {
-	SchemaVersion int       `json:"schema_version"`
-	Vendor        string    `json:"vendor"`
-	DisplayName   string    `json:"display_name"`
-	Detection     Detection `json:"detection"`
-	Dialect       Dialect   `json:"dialect"`
-	Profiles      []Profile `json:"profiles"`
-	Notes         string    `json:"notes,omitempty"`
+	SchemaVersion int           `json:"schema_version"`
+	Vendor        string        `json:"vendor"`
+	DisplayName   string        `json:"display_name"`
+	Detection     Detection     `json:"detection"`
+	Dialect       Dialect       `json:"dialect"`
+	Verify        VerifyBinding `json:"verify"`
+	Profiles      []Profile     `json:"profiles"`
+	Notes         string        `json:"notes,omitempty"`
 }
 
 // ErrNotFound is returned by the lookup helpers that report an error rather than
@@ -118,6 +119,9 @@ func decodeVendorDoc(name string, b []byte) (vendorDoc, error) {
 		return vendorDoc{}, err
 	}
 	if err := validateDialect(name, doc.Dialect); err != nil {
+		return vendorDoc{}, err
+	}
+	if err := validateVerify(name, doc.Verify); err != nil {
 		return vendorDoc{}, err
 	}
 	for i := range doc.Profiles {
@@ -254,8 +258,67 @@ func validateProfile(name string, p Profile) error {
 	if (p.Hardening.Binding == "") != (p.Hardening.Display == "") {
 		return fmt.Errorf("vendorprofile: %s: hardening binding and display must be set together", where)
 	}
+	if (p.CLI.Dialect == "") != (p.CLI.Display == "") {
+		return fmt.Errorf("vendorprofile: %s: cli dialect and display must be set together", where)
+	}
+	if p.CLI.Dialect != "" && (p.CLI.Dialect != strings.ToLower(p.CLI.Dialect) || strings.ContainsAny(p.CLI.Dialect, " /")) {
+		return fmt.Errorf("vendorprofile: %s: cli dialect %q must be lower-case with no space or slash", where, p.CLI.Dialect)
+	}
 	if len(p.Advisory.ProductIDs) > 0 && p.Advisory.Provider == "" {
 		return fmt.Errorf("vendorprofile: %s: advisory.product_ids set with no provider", where)
+	}
+	return nil
+}
+
+// ─── active-verification commands ────────────────────────────────────────────
+
+// verifyForbiddenTokens are the substrings a verification command may NEVER
+// contain. Two families, one rule: shell/CLI CHAINING metacharacters (a command
+// that can carry a second command is not one command), and STATE-CHANGING verbs
+// (the battery is read-only by contract — CLAUDE.md §8).
+//
+// The trailing spaces are load-bearing: `show system rollback` READS the
+// rollback history and is legal, while `rollback ` followed by an argument
+// applies one and is not.
+var verifyForbiddenTokens = []string{
+	";", "|", "&", "`", "$", "\n", "\r", "\\",
+	"reload", "configure", "write ", "copy ", "delete", "clear ", "request ", "rollback ",
+}
+
+// validateVerifyCommand enforces the READ-ONLY SHAPE of one verification
+// command AT LOAD, so a command the engine could not safely run fails the build
+// rather than a live router. The engine's own allowlist gate and its test then
+// assert the same invariant over this data — defense in depth, one authority.
+func validateVerifyCommand(name, checkID, cmd string) error {
+	if strings.TrimSpace(cmd) != cmd || cmd == "" {
+		return fmt.Errorf("vendorprofile: %s: verify.commands[%s]: command must be non-empty and untrimmed-free", name, checkID)
+	}
+	if !strings.HasPrefix(cmd, "show ") && !strings.HasPrefix(cmd, "display ") {
+		return fmt.Errorf("vendorprofile: %s: verify.commands[%s]: %q is not a read-only show/display command", name, checkID, cmd)
+	}
+	for _, tok := range verifyForbiddenTokens {
+		if strings.Contains(cmd, tok) {
+			return fmt.Errorf("vendorprofile: %s: verify.commands[%s]: %q contains the forbidden token %q", name, checkID, cmd, tok)
+		}
+	}
+	for i := 0; i < len(cmd); i++ {
+		if c := cmd[i]; c < 0x20 || c == 0x7f {
+			return fmt.Errorf("vendorprofile: %s: verify.commands[%s]: %q contains a control character", name, checkID, cmd)
+		}
+	}
+	return nil
+}
+
+// validateVerify checks a vendor's whole verification allowlist: well-formed
+// check ids and a read-only command for each.
+func validateVerify(name string, v VerifyBinding) error {
+	for checkID, cmd := range v.Commands {
+		if checkID == "" || checkID != strings.ToLower(checkID) || strings.ContainsAny(checkID, " /") {
+			return fmt.Errorf("vendorprofile: %s: verify check id %q must be non-empty, lower-case, with no space or slash", name, checkID)
+		}
+		if err := validateVerifyCommand(name, checkID, cmd); err != nil {
+			return err
+		}
 	}
 	return nil
 }

@@ -27,6 +27,15 @@
       "vrf-lite"
     ]
   },
+  "verify": {
+    "commands": {
+      "ssh_bgp_edge": "show bgp all summary",
+      "ssh_config_change": "show running-config",
+      "ssh_iface_deep": "show interfaces",
+      "ssh_interfaces": "show ip interface brief",
+      "ssh_routing": "show ip bgp summary"
+    }
+  },
   "profiles": [
     {
       "platform": "ios_xr",
@@ -76,6 +85,10 @@
       },
       "hardening": {
         "binding": "cisco-iosxe",
+        "display": "Cisco IOS-XE"
+      },
+      "cli": {
+        "dialect": "cisco-iosxe",
         "display": "Cisco IOS-XE"
       },
       "threat": {
@@ -169,6 +182,10 @@
         "binding": "cisco-iosxe",
         "display": "Cisco IOS-XE"
       },
+      "cli": {
+        "dialect": "cisco-iosxe",
+        "display": "Cisco IOS-XE"
+      },
       "threat": {
         "log_rule_ids": [
           "log-logging-disabled",
@@ -249,6 +266,10 @@
         "binding": "cisco-iosxe",
         "display": "Cisco IOS-XE"
       },
+      "cli": {
+        "dialect": "cisco-iosxe",
+        "display": "Cisco IOS-XE"
+      },
       "threat": {
         "log_rule_ids": [
           "log-logging-disabled",
@@ -314,6 +335,10 @@
       },
       "hardening": {
         "binding": "cisco-iosxe",
+        "display": "Cisco IOS-XE"
+      },
+      "cli": {
+        "dialect": "cisco-iosxe",
         "display": "Cisco IOS-XE"
       },
       "threat": {
@@ -386,6 +411,10 @@
       },
       "hardening": {
         "binding": "cisco-iosxe",
+        "display": "Cisco IOS-XE"
+      },
+      "cli": {
+        "dialect": "cisco-iosxe",
         "display": "Cisco IOS-XE"
       },
       "threat": {

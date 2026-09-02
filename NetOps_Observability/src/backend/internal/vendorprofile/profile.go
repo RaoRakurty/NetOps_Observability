@@ -218,6 +218,47 @@ type HardeningBinding struct {
 	Display string `json:"display,omitempty"`
 }
 
+// CLIBinding names the SHOW-COMMAND DIALECT this platform speaks: the family
+// whose read-only `show` / `display` grammar a diagnostic renders in.
+//
+// It is a SEPARATE axis from HardeningBinding even where the two ids coincide.
+// Arista EOS speaks the Cisco IOS-XE show grammar but the hardening catalog
+// ships NO Arista rule bindings; conflating the two would either invent an
+// Arista hardening verdict or refuse to render an EOS show command. One field
+// per question is what keeps both answers honest.
+type CLIBinding struct {
+	// Dialect is the CLI dialect id ("cisco-iosxe", "juniper", "nokia").
+	// Empty = this platform's show grammar is NOT established here: the caller
+	// reports an unknown dialect (and records any fallback it renders), never a
+	// silently guessed command.
+	Dialect string `json:"dialect,omitempty"`
+	// Display is the operator-facing label for Dialect. Every profile sharing a
+	// Dialect must declare the SAME Display (enforced at load).
+	Display string `json:"display,omitempty"`
+}
+
+// VerifyBinding is the ACTIVE-VERIFICATION command allowlist for a VENDOR
+// FAMILY: check id -> the EXACT read-only command line the verification engine
+// (internal/verify) may execute on a device of this vendor.
+//
+// It is authored at the VENDOR level, not per platform, because the engine keys
+// on the discovery vendor token a device's sysObjectID/sysDescr resolved to —
+// it never knows the platform of a device it is about to interrogate.
+//
+// The engine composes NOTHING at runtime: a check id selects a row, and the SSH
+// runner re-validates the exact string against this table before executing it.
+// The registry therefore enforces the read-only shape AT LOAD (see
+// validateVerifyCommand): a document whose command is not a bare show/display
+// read, or that carries a shell/CLI metacharacter or a state-changing verb,
+// fails the build rather than a live router.
+type VerifyBinding struct {
+	// Commands maps a verification check id ("ssh_interfaces", "ssh_bgp_edge")
+	// to the exact command line. An id this vendor does not declare is simply
+	// absent: the check is reported SKIPPED, never guessed against another
+	// vendor's grammar.
+	Commands map[string]string `json:"commands,omitempty"`
+}
+
 // ThreatBinding declares which device-log detections the threat lane has
 // ASSESSED for this platform. An empty list means unassessed — the lane's rules
 // still run (they are text matches), but the platform makes no coverage claim.
@@ -257,7 +298,11 @@ type Profile struct {
 	Capture   Capture          `json:"capture"`
 	Advisory  AdvisoryBinding  `json:"advisory"`
 	Hardening HardeningBinding `json:"hardening"`
-	Threat    ThreatBinding    `json:"threat"`
+	// CLI is the show-command dialect this platform speaks. Optional: a profile
+	// that declares none is a platform whose CLI grammar we have not
+	// established.
+	CLI    CLIBinding    `json:"cli,omitempty"`
+	Threat ThreatBinding `json:"threat"`
 }
 
 // VendorRecord is the vendor-level view: identity, detection, dialect and the
@@ -269,7 +314,10 @@ type VendorRecord struct {
 	DisplayName string
 	Detection   Detection
 	Dialect     Dialect
-	ProfileIDs  []string
+	// Verify is the vendor's active-verification command allowlist (vendor
+	// level: the engine keys on the discovery vendor token, not on a platform).
+	Verify     VerifyBinding
+	ProfileIDs []string
 }
 
 // OSIdentity is the OS product + version parsed out of a sysDescr. Either field

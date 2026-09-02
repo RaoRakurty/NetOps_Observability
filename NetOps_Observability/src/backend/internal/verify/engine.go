@@ -9,7 +9,8 @@ package verify
 // serial SSH took 41 s; this engine's whole run is budget-capped).
 //
 // READ-ONLY guarantees (non-negotiable, CLAUDE.md §8):
-//   - SSH commands come ONLY from the closed vendor table below. Check ids
+//   - SSH commands come ONLY from the closed vendor table the vendor-profile
+//     registry serves (internal/vendorprofile, `verify.commands`). Check ids
 //     select a row; command text is never composed from user input.
 //   - The SSH runner re-validates every command against the table before
 //     executing (defense in depth: a non-allowlisted command is impossible
@@ -33,6 +34,7 @@ import (
 	"time"
 
 	"netops/backend/collectors"
+	"netops/backend/internal/vendorprofile"
 	"netops/backend/models"
 )
 
@@ -119,59 +121,39 @@ func verifyBattery() []verifyCheckSpec {
 	}
 }
 
-// verifyCommandTable is the CLOSED read-only command allowlist, keyed by the
-// discovery vendor family (collectors.vendorFromDescr vocabulary) → check id →
-// the EXACT command line executed. Amending this table is the ONLY way a new
-// command can ever be run; nothing is composed at runtime. Every entry must be
-// a state-inspection (show/display) command — verifyCommandTableReadOnly in
-// verify_engine_test.go guards the invariant.
-var verifyCommandTable = map[string]map[string]string{
-	"cisco": {
-		"ssh_interfaces": "show ip interface brief",
-		"ssh_routing":    "show ip bgp summary",
-	},
-	"arista": {
-		"ssh_interfaces": "show interfaces status",
-		"ssh_routing":    "show ip bgp summary",
-	},
-	"juniper": {
-		"ssh_interfaces": "show interfaces terse",
-		"ssh_routing":    "show bgp summary",
-	},
-	"huawei": {
-		"ssh_interfaces": "display interface brief",
-		"ssh_routing":    "display bgp peer",
-	},
-	"nokia": {
-		"ssh_interfaces": "show port",
-		"ssh_routing":    "show router bgp summary",
-	},
-}
+// commandRegistry is the vendor-profile registry this package resolves its
+// closed command allowlist through. It is a FUNCTION, not a package variable,
+// so there is no mutable global (§5) and no hidden singleton: the registry it
+// returns is the shipped, immutable one built once from the embedded profile
+// documents.
+//
+// T9 (Vendor Profile registry). The per-vendor command tables this file and
+// verify_modules.go used to hold as Go map literals are now DECLARATIVE DATA —
+// the vendor-level `verify.commands` block of internal/vendorprofile's profile
+// documents, keyed exactly as before (discovery vendor family → check id → the
+// EXACT command line). Nothing about the contract moved: amending that data is
+// the ONLY way a new command can ever run, nothing is composed at runtime, and
+// the read-only show/display shape is now enforced at LOAD (the registry
+// refuses a document whose command is not a bare read) as well as by
+// TestVerifyCommandTableReadOnly over the registry-provided table. Adding a
+// vendor is "author one profile", not "edit two Go tables".
+func commandRegistry() *vendorprofile.Registry { return vendorprofile.Default() }
 
-// CommandFor resolves (vendor, check) → the allowlisted command from the
-// core table, then the module table (verify_modules.go). Unknown vendor or
-// check ⇒ no command (the check is skipped, never guessed).
+// CommandTable returns the whole closed allowlist (vendor family → check id →
+// command) as a copy — the shape the engine's invariant tests and the operator
+// documentation read.
+func CommandTable() map[string]map[string]string { return commandRegistry().VerifyCommandTable() }
+
+// CommandFor resolves (vendor, check) → the allowlisted command. Core and
+// module checks share one table because their check ids are disjoint; an
+// unknown vendor or check ⇒ no command (the check is skipped, never guessed).
 func CommandFor(vendor, checkID string) (string, bool) {
-	if fam, ok := verifyCommandTable[strings.ToLower(strings.TrimSpace(vendor))]; ok {
-		if cmd, ok := fam[checkID]; ok {
-			return cmd, true
-		}
-	}
-	return verifyModuleCommandFor(vendor, checkID)
+	return commandRegistry().VerifyCommand(vendor, checkID)
 }
 
-// CommandAllowed reports whether cmd appears VERBATIM in the closed
-// core or module table — the SSH runner's defense-in-depth gate.
-func CommandAllowed(cmd string) bool {
-	for _, fam := range verifyCommandTable {
-		for _, c := range fam {
-			if c == cmd {
-				return true
-			}
-		}
-	}
-	return verifyModuleCommandAllowed(cmd)
-}
+// CommandAllowed reports whether cmd appears VERBATIM in the closed table —
+// the SSH runner's defense-in-depth gate.
+func CommandAllowed(cmd string) bool { return commandRegistry().VerifyCommandAllowed(cmd) }
 
 // ---- targets & executor seams (interfaces for tests, §5 injectable deps) ----
 

@@ -2,6 +2,7 @@
   "schema_version": 1,
   "vendor": "huawei",
   "display_name": "Huawei",
+  "notes": "VRP declares NO cli dialect: the protocol-diagnostics catalog ships no Huawei command bindings, so a Huawei device's dialect is honestly unknown there (the caller records the fallback it renders). The vendor-level verify.commands block IS established — the active-verification battery has authored VRP display-command rows.",
   "detection": {
     "sysobjectid_prefixes": [
       "1.3.6.1.4.1.2011"
@@ -23,6 +24,15 @@
       "vpn-instance"
     ]
   },
+  "verify": {
+    "commands": {
+      "ssh_bgp_edge": "display bgp peer",
+      "ssh_config_change": "display configuration commit list",
+      "ssh_iface_deep": "display interface",
+      "ssh_interfaces": "display interface brief",
+      "ssh_routing": "display bgp peer"
+    }
+  },
   "profiles": [
     {
       "platform": "vrp",
@@ -37,7 +47,12 @@
           "product": "vrp",
           "rank": 10,
           "sysdescr_contains_any": []
-        }
+        },
+        "platform_contains": [
+          "huawei",
+          "vrp"
+        ],
+        "platform_rank": 50
       },
       "capture": {
         "running_config_cmd": "display current-configuration",
