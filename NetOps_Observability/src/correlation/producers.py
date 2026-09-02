@@ -16,6 +16,11 @@ honestly rather than assumed away.
 
 Everything here is deterministic given (event, detector state): no wall-clock
 reads, no IO. main.py owns tenancy resolution, persistence and buffering.
+
+Every Signal the syslog / trap / port classifiers emit carries PROVENANCE in
+`attrs` -- `rule_id`, `parser_rev`, `rules_hash`, `fidelity` -- so a stored
+signal says which rule of which parser revision produced it. See "PARSER
+PROVENANCE + THE RULE TABLE" below; none of it touches signal identity.
 """
 
 from __future__ import annotations
@@ -23,6 +28,7 @@ from __future__ import annotations
 import hashlib
 import logging
 import re
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
@@ -1052,14 +1058,20 @@ def _state_of(msg: str) -> str:
 # screen is therefore built as a UNION of per-gate necessary conditions, and it
 # fails OPEN whenever any part of it cannot be derived.
 #
-# DERIVED, NOT HAND-WRITTEN, on both halves:
-#   * the port-event half is extracted from `_PORT_EVENT_RULES` themselves by
-#     `regex_screen.pattern_screen` -- adding a rule updates the screen with it;
-#   * the control-plane half is the table below, and `test_ingest_prefilter_p3`
-#     re-derives it from `syslog_control_signal`'s OWN AST: every top-level `if`
+# DERIVED, NOT HAND-WRITTEN, on both halves -- and since W1b both halves derive
+# from the SAME place, `RULES`:
+#   * the port-event half is extracted from `_PORT_EVENT_RULES` (itself built
+#     from the `lane == "port"` rules) by `regex_screen.pattern_screen` --
+#     adding a rule updates the screen with it;
+#   * the control-plane half is `_CP_GUARD_MARKERS` / `_CP_GUARD_PATTERNS`,
+#     which are now built from the `lane == "control"` rules' own `markers` and
+#     `pattern_src`, so registering a branch's screen coverage is the same act
+#     as registering the branch. `test_ingest_prefilter_p3` then re-derives it
+#     INDEPENDENTLY from `syslog_control_signal`'s OWN AST: every top-level `if`
 #     that can return a Signal must be covered (an OR needs every branch covered,
-#     an AND needs one), and an unrecognized guard shape fails the test. Adding a
-#     branch without registering its marker is RED in CI.
+#     an AND needs one), and an unrecognized guard shape fails the test. So a
+#     branch whose Rule forgot a marker is still RED in CI -- the table is the
+#     single source, the AST walk is the independent auditor of it.
 #
 # ORDERING NOTE. The `device_alarm` safety net at the bottom of the chain fires
 # on SEVERITY alone, for any mnemonic. So the screen tests severity FIRST and
@@ -1089,7 +1101,7 @@ def _state_of(msg: str) -> str:
 #   MACFLAP, MAC_MOVE           local MAC flap / move
 
 
-def _dedup(items) -> tuple[str, ...]:
+def _dedup(items: Iterable[str]) -> tuple[str, ...]:
     """First-seen order, no duplicates (several Rules share one guard)."""
     seen: dict[str, None] = {}
     for it in items:
@@ -1099,9 +1111,17 @@ def _dedup(items) -> tuple[str, ...]:
 
 _CP_GUARD_MARKERS: tuple[str, ...] = _dedup(
     m for r in RULES if r.lane == "control" for m in r.markers)
-# The regexes those same gates test against the MESSAGE. Taken from the rule
-# table as SOURCE TEXT, which is the identical string the gate compiles — the
-# `Rule.pattern` the branch matches with is `re.compile` of this very string.
+# The regexes those same gates test against the MESSAGE, as SOURCE TEXT.
+#
+# The branch bodies still compile their own literal inline (they are ordinary
+# `if re.search(r"...", msg, re.IGNORECASE)` gates and stay that way until the
+# catalog executes them), so the table holds a COPY of that string, not the
+# object the branch uses. Both directions of that copy are pinned in CI:
+# `test_ingest_prefilter_p3` walks `syslog_control_signal`'s AST and fails on a
+# guard regex that is NOT in this tuple, and
+# `test_parser_provenance_w1b.test_every_registered_guard_pattern_is_in_the_branch_source`
+# fails on an entry here that no longer appears in the function. Neither copy
+# can move without the other.
 _CP_GUARD_PATTERNS: tuple[str, ...] = _dedup(
     r.pattern_src for r in RULES if r.lane == "control" and r.pattern_src)
 
