@@ -632,3 +632,163 @@ describe("buildCaseEvents — chronological event timeline (owner P1 2026-07-19)
     expect((c.events ?? []).length).toBeGreaterThan(0);
   });
 });
+
+// ── Security evidence class (T2b) + parser-rule fidelity (A7) ────────────────
+// The engine's fourth evidence class is a VERDICT plane: a rule/benchmark/
+// advisory evaluated against captured state, published on the evidence bus with
+// modality_class "security". These tests pin that it is accounted as its OWN
+// independent source class (so security + BGP reads "2 independent sources"),
+// that it can never confirm alone, and that its rows carry the attribution the
+// operator needs (seam · internet exposure · witnessing provider) plus the
+// weakest parser-rule fidelity behind them.
+
+const SEC_ATTRS = JSON.stringify({
+  evidence_class: "security", evidence_subclass: "exposure",
+  rule_id: "netrule.exposed_mgmt", parser_rev: "bus", rules_hash: "abc123",
+  fidelity: "doc_claimed", seam_id: "seam-7", seam_type: "DIA", internet_facing: true,
+});
+
+function securitySignal(over: Record<string, unknown> = {}) {
+  return signal({
+    kind: "security_exposure", source: "security", modality_class: "security",
+    observer_type: "platform", observer_id: "security:vuln", collection_path: "via_aggregator",
+    entity_id: "edge-r1", entity_type: "device", metric_name: "", severity: "warning",
+    attrs: SEC_ATTRS, attached: true, is_trigger: false,
+    ...over,
+  });
+}
+
+function bgpSignal(over: Record<string, unknown> = {}) {
+  return signal({
+    kind: "bgp_adjacency_change", modality_class: "control_plane",
+    entity_id: "edge-r1:192.168.100.5", attrs: JSON.stringify({ peer: "192.168.100.5", fidelity: "live_validated" }),
+    attached: true, ts: "2026-06-16 19:25:30", ...over,
+  });
+}
+
+describe("buildRcaCase — security evidence is its own independent source class", () => {
+  const tl = timeline({
+    verdict_tier: "confirmed", top_hypothesis: "sig.ent.security.exposure-story",
+    signals: [bgpSignal(), securitySignal()],
+  });
+  const c = buildRcaCase(tl, corrObject({ verdict_tier: "confirmed", signal_count: 2 }), {}, "netops", []);
+
+  it("counts security + network evidence as 2 independent sources", () => {
+    expect(c.evidenceSummary?.sources).toBe(2);
+    expect(c.evidenceSummary?.verdictReason).toContain("2 independent sources");
+    expect(c.evidenceSummary?.verdictReason).toContain("Security evidence");
+  });
+
+  it("never labels the class with the engine word", () => {
+    const printed = JSON.stringify(c);
+    expect(printed).not.toMatch(/\bSignals\b/);
+  });
+
+  it("adds a security evidence row named by its lane subclass, beside the four planes", () => {
+    expect(c.evidence).toHaveLength(ALL_PLANES + 1);
+    const sec = c.evidence.find((e) => e.title === "Exposure");
+    expect(sec).toBeTruthy();
+    expect(sec?.variant).toBe("confirm");
+    expect(sec?.finding).toBe("1 observation used.");
+    expect(sec?.foot).toMatch(/rule verdict, not a wire measurement/);
+  });
+
+  it("chips the security row with its seam, internet exposure and provider", () => {
+    const sec = c.evidence.find((e) => e.title === "Exposure");
+    expect(sec?.chips).toEqual(["Seam: ISP (seam-7)", "Internet-facing", "Observed by vuln"]);
+  });
+
+  it("grades the security row with the parser-rule fidelity the evidence declared", () => {
+    expect(c.evidence.find((e) => e.title === "Exposure")?.fidelity).toBe("doc_claimed");
+    expect(c.evidence.find((e) => e.title === "Routing / link")?.fidelity).toBe("live_validated");
+  });
+
+  it("gives the evidence summary row the subclass label, not a plane label", () => {
+    const row = c.evidenceSummary?.rows.find((r) => r.label === "Exposure finding");
+    expect(row?.source).toBe("Exposure");
+    expect(row?.fidelity).toBe("doc_claimed");
+  });
+
+  it("shows a security lane in the evidence timeline only because security evidence exists", () => {
+    const lane = c.timeline.find((l) => l.label === "Security evidence");
+    expect(lane?.markers.length).toBe(1);
+    // a network-only case keeps exactly the four standard lanes
+    const netOnly = buildRcaCase(timeline({ signals: [bgpSignal()] }), corrObject(), {}, "netops", []);
+    expect(netOnly.timeline).toHaveLength(ALL_PLANES);
+    expect(netOnly.evidence).toHaveLength(ALL_PLANES);
+  });
+
+  it('the "Why" rows treat security like any other modality — no special casing', () => {
+    // control_plane is dominant here, so the why-lines read exactly as they do
+    // for a plain routing case: the class only changes the labels, not the logic.
+    expect(c.why.map((w) => w.label)).toEqual(["Why suspected", "Why confirmed", "To confirm"]);
+  });
+
+  it("security evidence rows are stable (snapshot)", () => {
+    expect(c.evidence.filter((e) => e.title === "Exposure")).toMatchSnapshot();
+  });
+});
+
+describe("buildRcaCase — security evidence alone can never confirm", () => {
+  const tl = timeline({
+    verdict_tier: "confirmed", top_hypothesis: "sig.ent.security.exposure-story",
+    signals: [securitySignal()],
+  });
+  const c = buildRcaCase(tl, corrObject({ verdict_tier: "confirmed", signal_count: 1 }), {}, "netops", []);
+
+  it("reports exactly 1 independent source", () => {
+    expect(c.evidenceSummary?.sources).toBe(1);
+    expect(c.evidenceSummary?.verdictReason).toBe("Only security evidence saw this — a second independent source is needed to confirm.");
+  });
+
+  it("keeps the header verdict at NOT CONFIRMED even though the engine tier says confirmed", () => {
+    expect(c.pills.map((p) => p.text)).toContain("NOT CONFIRMED");
+    expect(c.pills.map((p) => p.text)).not.toContain("✓ CONFIRMED");
+    expect(c.verdictState).toBe("suspected");
+  });
+
+  it("titles and describes it as a security finding without inventing a network cause", () => {
+    const sec = c.evidence.find((e) => e.title === "Exposure");
+    expect(sec?.variant).toBe("main");
+    expect(sec?.pill.text).toBe("Main evidence");
+  });
+});
+
+describe("buildRcaCase — fidelity gap (A7) is rendered only when the engine sends it", () => {
+  const hypotheses = (verdict: Record<string, unknown>) => JSON.stringify({
+    ranking: { hypotheses: [{ id: "sig.ent.security.exposure-story", verdict }] },
+  });
+  const tl = timeline({
+    verdict_tier: "suspected", top_hypothesis: "sig.ent.security.exposure-story",
+    signals: [bgpSignal(), securitySignal()],
+  });
+
+  it("names the rules that held confirmation back", () => {
+    const c = buildRcaCase(tl, corrObject({
+      hypotheses: hypotheses({ reasons: [], fidelity_gap: ["netrule.exposed_mgmt", "cisco.ios.link_updown"], fidelity_min: "doc_claimed" }),
+    }), {}, "netops", []);
+    expect(c.fidelityGap).toEqual(["netrule.exposed_mgmt", "cisco.ios.link_updown"]);
+    expect(c.fidelityMin).toBe("doc_claimed");
+    expect(c.ladderNote).toBe("Confirmation held back — evidence from unvalidated parser rules: netrule.exposed_mgmt, cisco.ios.link_updown");
+  });
+
+  it("renders nothing at all when the engine sends no gap (flag off)", () => {
+    const c = buildRcaCase(tl, corrObject({ hypotheses: hypotheses({ reasons: [] }) }), {}, "netops", []);
+    expect(c.fidelityGap).toBeUndefined();
+    expect(c.fidelityMin).toBeUndefined();
+    expect(c.ladderNote).toBeUndefined();
+  });
+
+  it("truncates a very long gap list honestly rather than overflowing the ladder", () => {
+    const ids = Array.from({ length: 11 }, (_, i) => `rule.${i}`);
+    const c = buildRcaCase(tl, corrObject({ hypotheses: hypotheses({ fidelity_gap: ids }) }), {}, "netops", []);
+    expect(c.ladderNote).toContain("rule.7");
+    expect(c.ladderNote).not.toContain("rule.8");
+    expect(c.ladderNote).toContain("(+3 more)");
+  });
+
+  it("never upgrades the verdict the engine gave, gap or no gap", () => {
+    const c = buildRcaCase(tl, corrObject({ hypotheses: hypotheses({ fidelity_gap: ["r1"] }) }), {}, "netops", []);
+    expect(c.pills.map((p) => p.text)).toContain("NOT CONFIRMED");
+  });
+});

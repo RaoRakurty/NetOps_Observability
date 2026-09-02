@@ -1,5 +1,6 @@
 import { CorrTimeline, CorrObject, CorrSignal, Seam, VerificationRun } from "../../services/api";
-import { isRoutingKind, kindLabel, entityLabel, modalityLabel, MODALITY_ORDER, mentionsInternal, signatureNocTitle, PLANE_NOC_TITLE, ownerLabel, nocVerdictReason } from "./labels";
+import { isRoutingKind, kindLabel, entityLabel, modalityLabel, MODALITY_ORDER, mentionsInternal, signatureNocTitle, PLANE_NOC_TITLE, ownerLabel, nocVerdictReason, evidenceSourceLabel, isSecurityModality, securityClassTitle, securityProvider, seamTypeLabel, SECURITY_MODALITY, SECURITY_SOURCE_LABEL } from "./labels";
+import { weakestFidelity } from "../../lib/fidelity";
 import { kindForRole, type ShapeKind } from "../graph/shapes";
 import { parseTs } from "../../lib/time";
 import type { TopoGraph } from "./topoGraph";
@@ -27,7 +28,13 @@ export interface TopoNode { kind: NodeKind; abbr: string; name: string; meta: st
 // converging on one target). When omitted, the edge is positional (edge i joins
 // node i↔i+1) — the legacy linear-chain form, still supported.
 export interface TopoEdge { state: "good" | "warn" | "bad"; label?: string; side?: -1 | 1; from?: number; to?: number; }
-export interface EvidenceCard { variant: "main" | "confirm" | "missing" | "conflict"; dot: Tone; title: string; pill: RcaPill; desc: string; finding: string; foot: string; }
+// `chips` are short attribution facts that qualify the row (the seam it sits on,
+// whether the asset faces the internet, which provider witnessed it) — rendered
+// as chips because they are FACTS about the row, not prose. `fidelity` is the
+// weakest parser-rule tier behind the row (W1b/A3): a row is only as trustworthy
+// as its least-proven rule. Both are absent-by-default; nothing renders when the
+// engine said nothing.
+export interface EvidenceCard { variant: "main" | "confirm" | "missing" | "conflict"; dot: Tone; title: string; pill: RcaPill; desc: string; finding: string; foot: string; chips?: string[]; fidelity?: string; }
 export interface LadderStep { state: "done" | "active" | "next"; label: string; caption: string; }
 export interface TimelineMarker { left: number; tone: Tone; label: string; detail: string; }
 export interface TimelineLane { dot: Tone; label: string; markers: TimelineMarker[]; }
@@ -88,6 +95,7 @@ export interface EvidenceSymptom {
   since: string;        // onset, HH:MM
   buckets: number[];    // observation density over the case window
   observations: number;
+  fidelity?: string;    // weakest parser-rule tier behind this symptom ("" → no badge)
 }
 export interface EvidenceSummary {
   symptoms: number;
@@ -112,6 +120,22 @@ export function bucketTimes(times: number[], start: number, end: number, n: numb
 
 export const EVIDENCE_BUCKETS = 24;
 
+// One safe read of a signal's `attrs` JSON blob. The field is a STRING on the
+// wire and may be absent or malformed; a bad blob yields {} so a single corrupt
+// row can never take the workspace down (§3 zero-trust: never trust upstream).
+export function signalAttrs(s: { attrs?: string }): Record<string, unknown> {
+  try {
+    const a = JSON.parse(s.attrs || "{}");
+    return a && typeof a === "object" && !Array.isArray(a) ? (a as Record<string, unknown>) : {};
+  } catch { return {}; }
+}
+
+/** The parser-rule fidelity one observation declares (W1b/A3), "" when none. */
+export function signalFidelity(s: { attrs?: string }): string {
+  const v = signalAttrs(s).fidelity;
+  return typeof v === "string" ? v.trim() : "";
+}
+
 // buildEvidenceSummary — pure: derives the summary from the timeline the
 // workspace already holds. `sources` is the SAME independent-stream count the
 // confirm rule uses (streamCount), so the headline can never out-claim the verdict.
@@ -120,11 +144,14 @@ export function buildEvidenceSummary(
   open: boolean, streams: string[], verdict: VerdictState, rawTotal: number,
 ): EvidenceSummary {
   const anomalous = signals.filter((s) => s.attached && !s.kind.endsWith("_clear"));
-  const byKind = new Map<string, { source: string; times: number[] }>();
+  const byKind = new Map<string, { source: string; times: number[]; fidelities: string[] }>();
   for (const s of anomalous) {
-    const g = byKind.get(s.kind) ?? { source: modalityLabel(s.modality_class), times: [] };
+    // Security evidence names its SUBCLASS ("Exposure"), every other modality
+    // keeps its plane label — one widening, no branch on the class anywhere else.
+    const g = byKind.get(s.kind) ?? { source: evidenceSourceLabel(s), times: [], fidelities: [] };
     const t = parseTs(s.ts)?.getTime();
     if (t) g.times.push(t);
+    g.fidelities.push(signalFidelity(s));
     byKind.set(s.kind, g);
   }
   const start = parseTs(windowStart)?.getTime() ?? 0;
@@ -136,6 +163,7 @@ export function buildEvidenceSummary(
       since: g.times.length ? new Date(Math.min(...g.times)).toISOString().slice(11, 16) : "",
       buckets: bucketTimes(g.times, start, end, EVIDENCE_BUCKETS),
       observations: g.times.length,
+      fidelity: weakestFidelity(g.fidelities),
       _first: g.times.length ? Math.min(...g.times) : Number.MAX_SAFE_INTEGER,
     }))
     .sort((a, b) => (a as any)._first - (b as any)._first)
@@ -295,6 +323,14 @@ export interface RcaCase {
   topoGraph?: TopoGraph;
   evidence: EvidenceCard[];
   ladder: LadderStep[];
+  // A7 (flag-gated in the engine): the parser rules whose evidence was NOT
+  // strong enough to confirm, and the weakest tier the verdict rests on. Present
+  // ONLY when the engine sends them — absent means nothing is rendered, never a
+  // reassuring default.
+  fidelityGap?: string[];
+  fidelityMin?: string;
+  // The honest one-line reason the ladder stops short, derived from fidelityGap.
+  ladderNote?: string;
   // Chronological event timeline (real timestamps only) — the NOC "what
   // happened when" read; rendered as a collapsible list near the summary.
   events?: CaseEvent[];
@@ -468,6 +504,81 @@ const PLANE_TITLE: Record<string, string> = {
   device_telemetry: "Device health", control_plane: "Routing / link", passive_flow: "Traffic flow", active_probe: "Active checks",
 };
 
+// The evidence CLASS one observation is accounted under. Routing kinds read as
+// routing/link however they were observed; the security modality is normalised
+// (the wire says "security", the engine enum is SECURITY) so a case-shift can
+// never silently split one class into two. Everything else is the raw modality.
+export function planeKey(s: { kind: string; modality_class: string }): string {
+  if (isRoutingKind(s.kind)) return "control_plane";
+  if (isSecurityModality(s.modality_class)) return SECURITY_MODALITY;
+  return s.modality_class;
+}
+
+// Short "what this class covers" line per security lane subclass. Kept beside
+// PLANE_DESC so the security rows read in exactly the same register as the
+// network ones.
+const SECURITY_DESC: Record<string, string> = {
+  security_posture: "hardening drift against a benchmark or baseline",
+  security_exposure: "reachable service / advisory exposure on the asset",
+  security_signal: "rule or feed detection about the asset",
+};
+
+/**
+ * The security evidence rows, one per lane subclass actually present.
+ *
+ * Everything rendered comes from the observations themselves: the seam the
+ * verdict was attributed to, whether the asset faces the internet, the provider
+ * that witnessed it, and the WEAKEST parser-rule tier behind the row. Nothing is
+ * defaulted — a fact the engine did not send simply does not appear.
+ *
+ * `main` marks the class as the case's dominant evidence; the row is otherwise a
+ * corroborating one, exactly like any other non-dominant class.
+ */
+export function buildSecurityCards(signals: CorrSignal[], main: boolean): EvidenceCard[] {
+  const byKind = new Map<string, CorrSignal[]>();
+  for (const s of signals) {
+    const g = byKind.get(s.kind) ?? [];
+    g.push(s);
+    byKind.set(s.kind, g);
+  }
+  return [...byKind.entries()].map(([kind, rows]) => {
+    const seams = new Set<string>();
+    const providers = new Set<string>();
+    let internetFacing = false;
+    for (const r of rows) {
+      const a = signalAttrs(r);
+      const seamType = seamTypeLabel(typeof a.seam_type === "string" ? a.seam_type : "");
+      const seamId = typeof a.seam_id === "string" ? a.seam_id.trim() : "";
+      if (seamType && seamId) seams.add(`${seamType} (${seamId})`);
+      else if (seamType || seamId) seams.add(seamType || seamId);
+      if (a.internet_facing === true) internetFacing = true;
+      const prov = securityProvider(r.observer_id);
+      if (prov) providers.add(prov);
+    }
+    const chips = [
+      ...[...seams].map((x) => `Seam: ${x}`),
+      ...(internetFacing ? ["Internet-facing"] : []),
+      ...[...providers].map((p) => `Observed by ${p}`),
+    ];
+    const n = rows.length;
+    return {
+      variant: main ? "main" : "confirm",
+      dot: main ? "orange" : "purple",
+      title: securityClassTitle(kind),
+      pill: main ? { tone: "orange", text: "Main evidence" } : { tone: "green", text: "Used" },
+      desc: SECURITY_DESC[kind] ?? "security evidence about the asset",
+      finding: `${n} ${n === 1 ? "observation" : "observations"} used.`,
+      // Honest ceiling: a verdict is evaluated ABOUT the asset, not measured on
+      // the wire, so it corroborates a measured class but never confirms alone.
+      foot: main
+        ? "Primary evidence for this issue — a rule verdict, not a wire measurement"
+        : "Independent of the network classes — a rule verdict, not a wire measurement",
+      ...(chips.length ? { chips } : {}),
+      ...(weakestFidelity(rows.map(signalFidelity)) ? { fidelity: weakestFidelity(rows.map(signalFidelity)) } : {}),
+    } as EvidenceCard;
+  });
+}
+
 export function buildRcaCase(timeline: CorrTimeline, obj: CorrObject, _seams: Record<string, Seam>, owner: string, steps: string[], seamOwners?: Record<string, { name: string; contact?: string }>, extras?: CaseEventExtras): RcaCase {
   // #113 slice 2: the tenant's seam-ownership registry turns an owner CLASS
   // into the actual responsible party — "Lumen (DIA #12345) · ISP / carrier"
@@ -480,7 +591,7 @@ export function buildRcaCase(timeline: CorrTimeline, obj: CorrObject, _seams: Re
   const att: Record<string, number> = {};
   for (const s of timeline.signals) {
     if (s.kind.endsWith("_clear") || !s.attached) continue;
-    const p = isRoutingKind(s.kind) ? "control_plane" : s.modality_class;
+    const p = planeKey(s);
     att[p] = (att[p] ?? 0) + 1;
   }
   const dominant = Object.entries(att).sort((a, b) => b[1] - a[1])[0]?.[0] ?? "control_plane";
@@ -493,7 +604,12 @@ export function buildRcaCase(timeline: CorrTimeline, obj: CorrObject, _seams: Re
   // the same fault. "Confirmed root cause" is NEVER shown on fewer than two — a
   // single stream, however strong, reads as suspected, not confirmed. This guard
   // sits in the UI on top of the engine verdict so the page can never overclaim.
-  const streamCount = [hasRouting || hasDevice, (att.passive_flow ?? 0) > 0, (att.active_probe ?? 0) > 0].filter(Boolean).length;
+  // Security evidence (T2b) is the FOURTH independent class: a rule/advisory
+  // verdict is not a wire measurement, so it corroborates a network plane rather
+  // than duplicating it. It counts exactly like the others — and, exactly like
+  // the others, it can never reach two sources on its own.
+  const hasSecurity = (att.security ?? 0) > 0;
+  const streamCount = [hasRouting || hasDevice, (att.passive_flow ?? 0) > 0, (att.active_probe ?? 0) > 0, hasSecurity].filter(Boolean).length;
   const confirmed = timeline.verdict_tier === "confirmed" && streamCount >= 2;
   const suspected = !confirmed && (timeline.verdict_tier === "suspected" || timeline.verdict_tier === "confirmed");
 
@@ -542,6 +658,11 @@ export function buildRcaCase(timeline: CorrTimeline, obj: CorrObject, _seams: Re
   let whyNot: string[] = [];
   let rawReasons: string[] = [];
   let contradicted = false;
+  // A7 (engine-side, flag-gated): the rules whose evidence was too weak to
+  // confirm, plus the weakest tier the verdict rests on. Empty when the flag is
+  // off or the engine has nothing to say — the UI then renders NOTHING.
+  let fidelityGap: string[] = [];
+  let fidelityMin = "";
   let cascade: CascadeStage[] | undefined;
   try {
     const ranked = JSON.parse(obj.hypotheses || "{}")?.ranking?.hypotheses ?? [];
@@ -550,6 +671,10 @@ export function buildRcaCase(timeline: CorrTimeline, obj: CorrObject, _seams: Re
       contradicted = !!top.contradicted;
       if (Array.isArray(top.contradictions)) ruledOut = top.contradictions.map((c: string) => kindLabel(c));
       const reasons: string[] = top?.verdict?.reasons ?? [];
+      const gap = top?.verdict?.fidelity_gap;
+      if (Array.isArray(gap)) fidelityGap = gap.map((g: unknown) => String(g ?? "").trim()).filter(Boolean);
+      const fmin = top?.verdict?.fidelity_min;
+      if (typeof fmin === "string") fidelityMin = fmin.trim();
       // Operator register (owner 2026-07-18): the consequence, not the taxonomy —
       // the verbatim engine reasons stay behind "How was this verified?".
       if (!confirmed && reasons.length) {
@@ -585,6 +710,7 @@ export function buildRcaCase(timeline: CorrTimeline, obj: CorrObject, _seams: Re
     ...(hasRouting || hasDevice ? [modalityLabel(hasRouting ? "control_plane" : "device_telemetry")] : []),
     ...((att.passive_flow ?? 0) > 0 ? [modalityLabel("passive_flow")] : []),
     ...((att.active_probe ?? 0) > 0 ? [modalityLabel("active_probe")] : []),
+    ...(hasSecurity ? [SECURITY_SOURCE_LABEL] : []),
   ];
   const evidenceSummary = buildEvidenceSummary(
     timeline.signals, timeline.window_start, timeline.window_end,
@@ -735,6 +861,19 @@ export function buildRcaCase(timeline: CorrTimeline, obj: CorrObject, _seams: Re
   ];
 
   // evidence cards per plane
+  // The attached observations backing each class, so a card can report the
+  // WEAKEST parser-rule tier behind it (A3): a class fused from a live-validated
+  // and a code-only rule is graded `code` — the honest floor, not the ceiling.
+  const attachedByPlane = new Map<string, CorrSignal[]>();
+  for (const s of timeline.signals) {
+    if (!s.attached || s.kind.endsWith("_clear")) continue;
+    const p = planeKey(s);
+    const g = attachedByPlane.get(p) ?? [];
+    g.push(s);
+    attachedByPlane.set(p, g);
+  }
+  const planeFidelity = (p: string): string => weakestFidelity((attachedByPlane.get(p) ?? []).map(signalFidelity));
+
   const evidence: EvidenceCard[] = MODALITY_ORDER.map((p) => {
     const n = att[p] ?? 0;
     const main = p === dominant && n > 0;
@@ -743,10 +882,27 @@ export function buildRcaCase(timeline: CorrTimeline, obj: CorrObject, _seams: Re
       title: PLANE_TITLE[p] ?? modalityLabel(p), pill: main ? { tone: "orange", text: "Main evidence" } : n > 0 ? { tone: "green", text: "Used" } : { tone: "gray", text: "No data" },
       desc: PLANE_DESC[p] ?? "", finding: n > 0 ? `${n} ${n === 1 ? "observation" : "observations"} used.` : "No telemetry from this evidence class reached the platform in this window — unavailable or not configured.",
       foot: n > 0 ? (main ? "Primary evidence for this issue" : "Supports the case") : "Coverage gap — absence is not evidence of health",
+      ...(n > 0 && planeFidelity(p) ? { fidelity: planeFidelity(p) } : {}),
     };
   });
+  // Security evidence rows (T2b). ADDITIVE and present only when the object
+  // actually carries security evidence — an empty "Security: No data" card on
+  // every network RCA would be noise, and would imply the platform was looking.
+  // One row per lane subclass, each carrying the seam it was attributed to,
+  // whether the asset faces the internet, and the provider that witnessed it.
+  evidence.push(...buildSecurityCards(attachedByPlane.get(SECURITY_MODALITY) ?? [], dominant === SECURITY_MODALITY));
 
   // confidence ladder
+  // The honest reason the ladder stops short when the engine held confirmation
+  // back on parser-rule fidelity (A7). The verdict itself is NEVER recomputed
+  // here — the engine already decided; this only says WHY, naming the rules so
+  // the operator can go and validate them.
+  const GAP_IDS_SHOWN = 8;
+  const ladderNote = fidelityGap.length
+    ? `Confirmation held back — evidence from unvalidated parser rules: ${
+      fidelityGap.slice(0, GAP_IDS_SHOWN).join(", ")}${
+      fidelityGap.length > GAP_IDS_SHOWN ? ` (+${fidelityGap.length - GAP_IDS_SHOWN} more)` : ""}`
+    : "";
   const reached = confirmed ? 4 : suspected ? 2 : 1;
   const ladder: LadderStep[] = [
     { state: "done", label: "✓ Detected", caption: "Anomaly detected" },
@@ -761,9 +917,13 @@ export function buildRcaCase(timeline: CorrTimeline, obj: CorrObject, _seams: Re
   const span = Math.max(1, Date.parse((timeline.window_end || "").replace(" ", "T") + "Z") - t0);
   const lanes = new Map<string, TimelineLane>();
   for (const p of MODALITY_ORDER) lanes.set(p, { dot: p === "control_plane" ? "orange" : p === "device_telemetry" ? "blue" : p === "passive_flow" ? "green" : "purple", label: PLANE_TITLE[p] ?? modalityLabel(p), markers: [] });
+  // The security lane appears only when the case carries security evidence —
+  // the same additive rule the evidence matrix follows, so an empty lane never
+  // implies the platform was watching a class it has no feed for.
+  if (hasSecurity) lanes.set(SECURITY_MODALITY, { dot: "purple", label: SECURITY_SOURCE_LABEL, markers: [] });
   for (const s of timeline.signals) {
     if (s.kind.endsWith("_clear") || mentionsInternal(s.entity_id)) continue;
-    const p = isRoutingKind(s.kind) ? "control_plane" : s.modality_class;
+    const p = planeKey(s);
     const lane = lanes.get(p);
     if (!lane) continue;
     const left = Math.max(3, Math.min(97, ((Date.parse(s.ts.replace(" ", "T") + "Z") - t0) / span) * 94 + 3));
@@ -772,7 +932,7 @@ export function buildRcaCase(timeline: CorrTimeline, obj: CorrObject, _seams: Re
   // Show ALL standard evidence lanes (in MODALITY_ORDER), even empty ones — an
   // empty lane is informative: it shows the operator exactly which evidence plane
   // has nothing in this window (what's missing to confirm), not just what fired.
-  const timelineLanes = MODALITY_ORDER.map((p) => lanes.get(p)).filter((l): l is TimelineLane => !!l);
+  const timelineLanes = [...MODALITY_ORDER, SECURITY_MODALITY].map((p) => lanes.get(p)).filter((l): l is TimelineLane => !!l);
 
   // hypotheses
   const conf: RcaPill = { tone: confirmed ? "green" : "gray", text: confidence };
@@ -1017,6 +1177,9 @@ export function buildRcaCase(timeline: CorrTimeline, obj: CorrObject, _seams: Re
     evidenceSummary,
     summary, why, impact, topology,
     evidence, ladder,
+    ...(fidelityGap.length ? { fidelityGap } : {}),
+    ...(fidelityMin ? { fidelityMin } : {}),
+    ...(ladderNote ? { ladderNote } : {}),
     events: buildCaseEvents(timeline, obj, extras),
     ownershipLabel: owner ? ownerDisplay(owner) : "",
     possiblyCause,

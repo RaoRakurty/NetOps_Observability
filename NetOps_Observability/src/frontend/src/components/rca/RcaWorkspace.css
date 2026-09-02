@@ -116,6 +116,7 @@
 .rca-ws .rw-evsum-bar { display: inline-flex; gap: 1px; flex: 1; max-width: 560px; }
 .rca-ws .rw-evsum-cell { flex: 1 1 0; height: 10px; border-radius: 1px; background: var(--rw-muted2, #64748b); }
 .rca-ws .rw-evsum-since { flex: 0 0 92px; text-align: right; color: var(--rw-muted2, #8a94a6); font-size: 10.5px; }
+.rca-ws .rw-evsum-row .badge { flex: 0 0 auto; font-size: 10px; }
 
 /* pills */
 .rca-ws .rw-pill { display: inline-flex; align-items: center; gap: 5px; border-radius: 7px; padding: 3px 8px;
@@ -178,6 +179,10 @@
 .rca-ws .rw-ladder-step.next { background: #f8fafc; color: #5b6675; } /* was #98a2b3 (2.5:1) */
 .rca-ws .rw-ladder-caption { display: grid; grid-template-columns: repeat(4,1fr); gap: 8px; margin-top: 7px; color: #6b7280; font-size: 12px; }
 .rca-ws .rw-ladder-caption div { padding: 0 4px; text-align: center; }
+/* The honest "why it stopped short" line under the ladder (A7 fidelity gap).
+   Amber = held back, not failed; it names rules to validate, not a fault. */
+.rca-ws .rw-ladder-note { margin-top: 10px; padding: 7px 10px; border-radius: 8px; font-size: 12px;
+  background: var(--rw-orange2); border: 1px solid #fac898; color: var(--rw-orange); }
 
 /* topology — flex chain */
 .rca-ws .rw-topo { display: flex; align-items: flex-start; gap: 0; overflow-x: auto;
@@ -229,6 +234,14 @@
 .rca-ws .rw-edesc { font-size: 12px; color: var(--rw-muted); margin: 0; }
 .rca-ws .rw-efinding { font-size: 13px; font-weight: 700; margin: 2px 0 0; line-height: 1.38; }
 .rca-ws .rw-efoot { margin-top: auto; padding-top: 4px; font-size: 11.5px; color: #667085; }
+/* Row attribution chips (seam · internet exposure · witnessing provider) and the
+   parser-rule fidelity grade. Both are optional per row — absent facts render
+   nothing at all, so a network-only card is byte-identical to before. */
+.rca-ws .rw-echips { display: flex; flex-wrap: wrap; gap: 4px; margin: 3px 0 1px; }
+.rca-ws .rw-echip { font-size: 10.5px; line-height: 1.5; padding: 1px 6px; border-radius: 999px;
+  border: 1px solid var(--rw-line); background: var(--surface-2, #f4f6fa); color: #4b5563; white-space: nowrap; }
+.rca-ws .rw-efid { display: flex; align-items: center; gap: 6px; margin-top: 3px; }
+.rca-ws .rw-efid-k { font-size: 10.5px; color: #6b7280; text-transform: uppercase; letter-spacing: .03em; }
 .rca-ws .rw-dot { width: 9px; height: 9px; border-radius: 50%; display: inline-block; margin-right: 6px; }
 .rca-ws .rw-dot.orange { background: var(--rw-orange); }
 .rca-ws .rw-dot.green { background: var(--rw-green); }

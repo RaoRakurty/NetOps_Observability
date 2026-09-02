@@ -6,7 +6,7 @@
 import { describe, it, expect } from "vitest";
 import { reportHtml } from "./rcaExport";
 import { rcaVerdictLine } from "./labels";
-import { EXAMPLE_CASE } from "./rcaCase";
+import { EXAMPLE_CASE, type RcaCase } from "./rcaCase";
 import type { RcaFeedback } from "../../services/api";
 
 const WRONG: RcaFeedback = {
@@ -45,5 +45,50 @@ describe("exported RCA document", () => {
     const html = reportHtml(EXAMPLE_CASE, "obj-123");
     expect(html).not.toContain("Operator verdict");
     expect(html).not.toContain("verdict-fb\">");
+  });
+});
+
+// ── Fidelity + security attribution reach the printed report (A7 / T2b) ──────
+// A report that dropped the rule grade or the held-back reason would let a
+// reader over-trust evidence the screen honestly qualified.
+
+const GRADED: RcaCase = {
+  ...EXAMPLE_CASE,
+  evidence: [
+    { variant: "main", dot: "orange", title: "Routing / link", pill: { tone: "orange", text: "Main evidence" },
+      desc: "BGP, link up/down", finding: "2 observations used.", foot: "Primary evidence", fidelity: "live_validated" },
+    { variant: "confirm", dot: "purple", title: "Exposure", pill: { tone: "green", text: "Used" },
+      desc: "reachable service / advisory exposure on the asset", finding: "1 observation used.",
+      foot: "Independent of the network classes — a rule verdict, not a wire measurement",
+      chips: ["Seam: ISP (seam-7)", "Internet-facing", "Observed by vuln"], fidelity: "doc_claimed" },
+    { variant: "missing", dot: "gray", title: "Active checks", pill: { tone: "gray", text: "No data" },
+      desc: "ping, HTTP", finding: "No telemetry.", foot: "Coverage gap" },
+  ],
+  ladderNote: "Confirmation held back — evidence from unvalidated parser rules: netrule.exposed_mgmt",
+};
+
+describe("exported RCA document — evidence fidelity + fidelity gap", () => {
+  const html = reportHtml(GRADED, "obj-123");
+
+  it("prints a Rule fidelity column with the same badge wording the screen uses", () => {
+    expect(html).toContain("<th>Rule fidelity</th>");
+    expect(html).toContain("live validated");
+    expect(html).toContain("doc claimed");
+  });
+
+  it("prints an em dash — not a guess — for a row that declared no fidelity", () => {
+    expect(html).toContain("&mdash;");
+  });
+
+  it("prints the security row's seam, exposure and provider attribution", () => {
+    expect(html).toContain("Seam: ISP (seam-7) · Internet-facing · Observed by vuln");
+  });
+
+  it("prints the held-back line under the confidence ladder", () => {
+    expect(html).toContain("Confirmation held back — evidence from unvalidated parser rules: netrule.exposed_mgmt");
+  });
+
+  it("prints no held-back line when the case carries no gap", () => {
+    expect(reportHtml(EXAMPLE_CASE, "obj-123")).not.toContain("Confirmation held back");
   });
 });

@@ -3,6 +3,7 @@ import "./RcaWorkspace.css";
 import { api } from "../../services/api";
 import type { RcaCase, RcaPill, KV, CaseEvent } from "./rcaCase";
 import { bandLabel, bandTone, appIdSourceLabel } from "./labels";
+import FidelityBadge from "../FidelityBadge";
 import { fmtTime, fmtDateTime, fmtDate, parseTs } from "../../lib/time";
 
 // RcaWorkspace — the production RCA detail view, organized after the reference
@@ -232,6 +233,7 @@ export default function RcaWorkspace({
                     return <span key={j} className="rw-evsum-cell" style={{ opacity: b > 0 ? 0.25 + 0.75 * (b / max) : 0.08 }} />;
                   })}
                 </span>
+                {r.fidelity && <FidelityBadge fidelity={r.fidelity} />}
                 <span className="rw-evsum-since">{r.since ? `since ${r.since}` : ""}</span>
               </div>
             ))}
@@ -418,7 +420,23 @@ export default function RcaWorkspace({
                   <Pill p={e.pill} />
                 </div>
                 <div className="rw-edesc">{e.desc}</div>
+                {/* Attribution facts about the row (seam, internet exposure, the
+                    witnessing provider) — chips, because they are facts, not prose.
+                    Absent when the engine sent none. */}
+                {e.chips && e.chips.length > 0 && (
+                  <div className="rw-echips">
+                    {e.chips.map((c, j) => <span key={j} className="rw-echip">{c}</span>)}
+                  </div>
+                )}
                 <div className="rw-efinding">{e.finding}</div>
+                {/* The weakest parser-rule tier behind this row — the same badge,
+                    colours and wording the Telemetry Coverage rules table uses. */}
+                {e.fidelity && (
+                  <div className="rw-efid">
+                    <span className="rw-efid-k">Rule fidelity</span>
+                    <FidelityBadge fidelity={e.fidelity} />
+                  </div>
+                )}
                 <div className="rw-efoot">{e.foot}</div>
               </div>
             ))}
@@ -433,6 +451,10 @@ export default function RcaWorkspace({
             <div className="rw-ladder-caption">
               {data.ladder.map((s, i) => <div key={i}>{s.caption}</div>)}
             </div>
+            {/* Why the ladder stopped short, when the engine held confirmation
+                back on parser-rule fidelity (A7). The verdict above is the
+                engine's — this line only names the rules to go and validate. */}
+            {data.ladderNote && <div className="rw-ladder-note">{data.ladderNote}</div>}
           </section>
 
           {/* evidence timeline */}

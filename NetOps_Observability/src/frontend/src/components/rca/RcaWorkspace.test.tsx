@@ -198,3 +198,104 @@ describe("RcaWorkspace — cloud section (#81 P3G 1c)", () => {
     expect(screen.getByText(/Cloud ↔ network seam/)).toBeInTheDocument();
   });
 });
+
+// ── Security evidence rows + parser-rule fidelity (T2b class / A7) ───────────
+
+const SEC_ATTRS = JSON.stringify({
+  evidence_class: "security", evidence_subclass: "exposure", rule_id: "netrule.exposed_mgmt",
+  parser_rev: "bus", fidelity: "doc_claimed", seam_id: "seam-7", seam_type: "DIA", internet_facing: true,
+});
+
+function securityCase(objOver: Record<string, unknown> = {}) {
+  const tl = timeline({
+    verdict_tier: "confirmed", top_hypothesis: "sig.ent.security.exposure-story",
+    signals: [
+      signal({ kind: "bgp_adjacency_change", modality_class: "control_plane", entity_id: "edge-r1:192.168.100.5",
+        attrs: '{"peer":"192.168.100.5","fidelity":"live_validated"}' }),
+      signal({ kind: "security_exposure", source: "security", modality_class: "security", observer_type: "platform",
+        observer_id: "security:vuln", collection_path: "via_aggregator", entity_id: "edge-r1", metric_name: "",
+        attrs: SEC_ATTRS, is_trigger: false, ts: "2026-06-16 19:25:20" }),
+    ],
+  });
+  return buildRcaCase(tl, corrObject({ verdict_tier: "confirmed", signal_count: 2, ...objOver }), {}, "netops", []);
+}
+
+describe("RcaWorkspace — security evidence reads as its own source class", () => {
+  it("renders the security row by subclass with its seam, exposure and provider chips", () => {
+    renderWS(securityCase());
+    expect(screen.getByText("Exposure")).toBeInTheDocument();
+    expect(screen.getByText("Seam: ISP (seam-7)")).toBeInTheDocument();
+    expect(screen.getByText("Internet-facing")).toBeInTheDocument();
+    expect(screen.getByText("Observed by vuln")).toBeInTheDocument();
+  });
+
+  it('accounts security + network evidence as "2 independent sources"', () => {
+    renderWS(securityCase());
+    expect(screen.getByText("Confirmed — cross-checked by 2 independent sources (Routing & link events + Security evidence).")).toBeInTheDocument();
+  });
+
+  it("shows no security row at all for a network-only case", () => {
+    renderWS(suspectedCase());
+    expect(screen.queryByText("Exposure")).not.toBeInTheDocument();
+    expect(screen.queryByText(/^Seam: /)).not.toBeInTheDocument();
+  });
+});
+
+describe("RcaWorkspace — parser-rule fidelity badges", () => {
+  it("renders one badge per evidence row, coloured by tier (same ladder as Telemetry Coverage)", () => {
+    const tl = timeline({
+      verdict_tier: "suspected",
+      signals: [
+        signal({ kind: "bgp_adjacency_change", modality_class: "control_plane", entity_id: "edge-r1", attrs: '{"fidelity":"live_validated"}' }),
+        signal({ kind: "if_errors", modality_class: "device_telemetry", entity_id: "edge-r1", attrs: '{"fidelity":"lab_validated"}', is_trigger: false }),
+        signal({ kind: "flow_volume_anomaly", modality_class: "passive_flow", entity_id: "edge-r1", attrs: '{"fidelity":"doc_claimed"}', is_trigger: false }),
+        signal({ kind: "probe_loss", modality_class: "active_probe", entity_id: "probe-dallas", attrs: '{"fidelity":"code"}', is_trigger: false }),
+      ],
+    });
+    renderWS(buildRcaCase(tl, corrObject({ signal_count: 4 }), {}, "netops", []));
+    expect(screen.getAllByText("live validated")[0]).toHaveClass("badge", "tier-t1");
+    expect(screen.getAllByText("lab validated")[0]).toHaveClass("badge", "tier-t3");
+    expect(screen.getAllByText("doc claimed")[0]).toHaveClass("badge", "tier-t4");
+    expect(screen.getAllByText("code")[0]).toHaveClass("badge", "tier-t5");
+  });
+
+  it("renders no badge when the evidence declared no fidelity", () => {
+    renderWS(suspectedCase());
+    ["live validated", "lab validated", "doc claimed", "code", "unrated"].forEach((t) =>
+      expect(screen.queryByText(t)).not.toBeInTheDocument());
+  });
+
+  it("grades a row by its WEAKEST rule — one unproven rule caps the whole row", () => {
+    const tl = timeline({
+      verdict_tier: "suspected",
+      signals: [
+        signal({ kind: "bgp_adjacency_change", modality_class: "control_plane", entity_id: "edge-r1", attrs: '{"fidelity":"live_validated"}' }),
+        signal({ kind: "bgp_state_anomaly", modality_class: "control_plane", entity_id: "edge-r1", attrs: '{"fidelity":"code"}', is_trigger: false }),
+      ],
+    });
+    const { container } = renderWS(buildRcaCase(tl, corrObject({ signal_count: 2 }), {}, "netops", []));
+    const routing = [...container.querySelectorAll<HTMLElement>(".rw-ecard")]
+      .find((el) => el.querySelector(".rw-etitle")?.textContent === "Routing / link") as HTMLElement;
+    expect(within(routing).getByText("code")).toBeInTheDocument();
+    expect(within(routing).queryByText("live validated")).not.toBeInTheDocument();
+  });
+});
+
+describe("RcaWorkspace — confidence ladder fidelity gap (A7)", () => {
+  const gapObj = {
+    verdict_tier: "suspected",
+    hypotheses: JSON.stringify({
+      ranking: { hypotheses: [{ id: "sig.ent.security.exposure-story", verdict: { fidelity_gap: ["netrule.exposed_mgmt"], fidelity_min: "doc_claimed" } }] },
+    }),
+  };
+
+  it("states the honest reason and names the rules that held confirmation back", () => {
+    renderWS(securityCase(gapObj));
+    expect(screen.getByText("Confirmation held back — evidence from unvalidated parser rules: netrule.exposed_mgmt")).toBeInTheDocument();
+  });
+
+  it("renders nothing when the engine sent no gap", () => {
+    renderWS(securityCase());
+    expect(screen.queryByText(/Confirmation held back/)).not.toBeInTheDocument();
+  });
+});

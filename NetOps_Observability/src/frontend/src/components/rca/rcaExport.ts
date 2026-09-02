@@ -3,6 +3,7 @@ import { kindForRole, type ShapeKind } from "../graph/shapes";
 import type { TopoGraph, TopoGraphNode, EdgeState } from "./topoGraph";
 import { fmtDateTime } from "../../lib/time";
 import { rcaVerdictLine } from "./labels";
+import { fidelityLabel } from "../../lib/fidelity";
 import type { RcaFeedback } from "../../services/api";
 
 // rcaExport — generates an elegant, light-themed, print-ready RCA report and
@@ -296,10 +297,20 @@ export function reportHtml(d: RcaCase, objId: string, verdict?: RcaFeedback | nu
       const conn = i < d.ladder.length - 1 ? `<span style="width:20px;height:2px;background:#cbd5e1"></span>` : "";
       return chip + conn;
     }).join("")
-  }</div>`;
+  }</div>${d.ladderNote ? `<p class="body" style="margin-top:10px;color:#b45309"><b>${esc(d.ladderNote)}</b></p>` : ""}`;
 
-  const evidence = `<table><thead><tr><th>Evidence type</th><th>Covers</th><th>Finding</th><th>Status</th></tr></thead><tbody>${
-    d.evidence.map((e) => `<tr><td>${esc(e.title)}</td><td style="color:#64748b">${esc(e.desc)}</td><td>${esc(e.finding)}</td><td>${pill(e.pill)}</td></tr>`).join("")
+  // The printed matrix carries the SAME row attribution chips and the SAME
+  // fidelity wording the screen shows — a report that quietly dropped the grade
+  // would let a reader over-trust a code-only rule. A row without a grade prints
+  // an em dash: the platform does not know, and does not pretend to.
+  const evidence = `<table><thead><tr><th>Evidence type</th><th>Covers</th><th>Finding</th><th>Rule fidelity</th><th>Status</th></tr></thead><tbody>${
+    d.evidence.map((e) => {
+      const chips = e.chips?.length
+        ? `<div style="color:#475569;font-size:10.5px;margin-top:2px">${esc(e.chips.join(" · "))}</div>`
+        : "";
+      const fid = e.fidelity ? esc(fidelityLabel(e.fidelity)) : "&mdash;";
+      return `<tr><td>${esc(e.title)}</td><td style="color:#64748b">${esc(e.desc)}${chips}</td><td>${esc(e.finding)}</td><td>${fid}</td><td>${pill(e.pill)}</td></tr>`;
+    }).join("")
   }</tbody></table>`;
 
   const hypotheses = d.hypotheses.length ? `<table><thead><tr><th>Rank</th><th>Hypothesis</th><th>Confidence</th><th>Reason</th></tr></thead><tbody>${

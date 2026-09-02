@@ -47,6 +47,10 @@ export const MODALITY_META: Record<string, { label: string; color: string; help:
   control_plane: { label: "Routing & link events", color: C.warn, help: "BGP, link up/down, syslog, traps" },
   passive_flow: { label: "Traffic flow evidence", color: C.flow, help: "traffic loss, volume drop, traffic shift" },
   active_probe: { label: "Active checks", color: C.ok, help: "ping, HTTP, STAMP, path checks" },
+  // The FOURTH evidence class (T2b). A rule/benchmark/advisory VERDICT evaluated
+  // against captured state — its own independent source class, never folded into
+  // the network planes and never called "signals" on screen.
+  security: { label: "Security", color: C.discriminates, help: "posture drift, internet exposure, security detections" },
 };
 
 export const MODALITY_ORDER = ["device_telemetry", "control_plane", "passive_flow", "active_probe"];
@@ -144,6 +148,7 @@ export const PLANE_NOC_TITLE: Record<string, string> = {
   device_telemetry: "Device health change",
   control_plane: "Routing adjacency change",
   passive_flow: "Traffic flow change",
+  security: "Security finding",
 };
 // Domain-correct fallback for an unmapped signature — order matters: cloud and
 // SD-WAN/tunnel are tested BEFORE the generic WAN/provider catch, so a cloud or
@@ -262,6 +267,10 @@ const KIND_NOC: Record<string, string> = {
   security_policy_change: "Security policy change",
   ipsec_tunnel_status: "IPsec/IKE tunnel state",
   ipsec_underlay_status: "Underlay path check (gateway to peer)",
+  // Security evidence-class kinds (T2b). The lane discriminator IS the kind; the
+  // producing rule/control identity rides in attrs.
+  security_posture: "Security posture finding", security_exposure: "Exposure finding",
+  security_signal: "Security detection",
 };
 // "probe_latency_departure" → "Response-time change"; trims a trailing _clear.
 export function kindLabel(kind: string): string {
@@ -269,6 +278,55 @@ export function kindLabel(kind: string): string {
   if (KIND_NOC[base]) return KIND_NOC[base];
   const words = base.replace(/_/g, " ");
   return words.charAt(0).toUpperCase() + words.slice(1);
+}
+
+// ── Security evidence class (T2b / A7) ───────────────────────────────────────
+// The engine's fourth evidence class is a VERDICT plane (a rule/benchmark/
+// advisory evaluated against captured state), so it is an INDEPENDENT source in
+// its own right — never folded into the network planes, and never displayed with
+// the engine word. The three lane kinds each get their own operator noun so a
+// reader can tell a posture drift from an internet exposure from a detection.
+export const SECURITY_MODALITY = "security";
+
+// The class name as it appears in the "N independent sources" accounting and in
+// the verdict reason ("Only security evidence saw this — …"). MODALITY_META's
+// label is the bare noun because the prose paths append " evidence" themselves.
+export const SECURITY_SOURCE_LABEL = "Security evidence";
+
+const SECURITY_KIND_TITLE: Record<string, string> = {
+  security_posture: "Security posture",
+  security_exposure: "Exposure",
+  security_signal: "Security detection",
+};
+
+/** True for the engine's security modality_class (case-insensitive: the wire
+ *  value is lowercase, the enum name is SECURITY — accept either). */
+export function isSecurityModality(modality: string): boolean {
+  return (modality || "").trim().toLowerCase() === SECURITY_MODALITY;
+}
+
+/** Security lane kind → its operator source class ("Exposure"). An unregistered
+ *  security kind degrades to the class label rather than showing a raw token. */
+export function securityClassTitle(kind: string): string {
+  return SECURITY_KIND_TITLE[kind.replace(/_clear$/, "")] ?? SECURITY_SOURCE_LABEL;
+}
+
+/** The independent SOURCE CLASS one observation is read as. Security evidence
+ *  reports its subclass ("Exposure"); every other modality keeps the existing
+ *  plane label, so this is a pure widening of modalityLabel(). */
+export function evidenceSourceLabel(s: { kind: string; modality_class: string }): string {
+  return isSecurityModality(s.modality_class) ? securityClassTitle(s.kind) : modalityLabel(s.modality_class);
+}
+
+/** The provider behind a security observation. The engine stamps the observer as
+ *  `security:<provider>`; the prefix is engine plumbing, the provider is the
+ *  witness an operator needs to see. "" when unknown — never a guess. */
+export function securityProvider(observerId?: string): string {
+  const raw = (observerId ?? "").trim();
+  if (!raw) return "";
+  const i = raw.indexOf(":");
+  const tail = i >= 0 ? raw.slice(i + 1).trim() : raw;
+  return tail && tail !== "lane" ? tail : "";
 }
 
 // Operator-facing evidence CLASS for a signal — the lane a NOC reads it as.
@@ -288,11 +346,13 @@ const CLASS_SIGNAL_LABEL: Record<string, string> = {
   device_telemetry: "Device-health evidence",
   passive_flow: "Traffic-flow evidence",
   active_probe: "Active-check evidence",
+  security: "Security evidence",
 };
 // class key → short noun for inline prose ("supporting routing/link evidence").
 export const CLASS_NOUN: Record<string, string> = {
   control_plane: "routing/link", device_telemetry: "device-health",
   passive_flow: "traffic-flow", active_probe: "active-check",
+  security: "security",
 };
 // "Routing/link evidence: BGP state change" — the operator title for one signal.
 export function signalClassTitle(s: { kind: string; modality_class: string }): string {

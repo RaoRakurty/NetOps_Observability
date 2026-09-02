@@ -10,7 +10,7 @@
 //     ("platform-admin only"), not a failure to report as an error.
 //   · an empty unrecognized list always carries a reason, never a blank table.
 
-import type { ParserFidelity, ParserRuleStat, ParserStats, UnrecognizedPage } from "../../services/api";
+import type { ParserRuleStat, ParserStats, UnrecognizedPage } from "../../services/api";
 
 // ── permissions ─────────────────────────────────────────────────────────────
 
@@ -48,35 +48,10 @@ export function promotionDisplay(stats: Pick<ParserStats, "promotion_rate" | "wi
 
 // ── fidelity ────────────────────────────────────────────────────────────────
 
-// Evidence ladder, strongest first. The badge tier classes already exist in
-// styles.css (tier-t1 green … tier-t5 neutral), so the four values get four
-// distinct, ordered colours without new CSS.
-const FIDELITY: Record<ParserFidelity, { rank: number; cls: string; label: string; title: string }> = {
-  live_validated: { rank: 4, cls: "tier-t1", label: "live validated", title: "Confirmed against live device output" },
-  lab_validated: { rank: 3, cls: "tier-t3", label: "lab validated", title: "Confirmed against a lab capture" },
-  doc_claimed: { rank: 2, cls: "tier-t4", label: "doc claimed", title: "Vendor documentation only — unconfirmed on the wire" },
-  code: { rank: 1, cls: "tier-t5", label: "code", title: "Written in code, no capture behind it yet" },
-};
-
-export function fidelityBadgeClass(f: string): string {
-  const hit = FIDELITY[f as ParserFidelity];
-  return `badge ${hit ? hit.cls : "tier-t5"}`;
-}
-
-export function fidelityLabel(f: string): string {
-  const hit = FIDELITY[f as ParserFidelity];
-  return hit ? hit.label : f || "unrated";
-}
-
-export function fidelityTitle(f: string): string {
-  const hit = FIDELITY[f as ParserFidelity];
-  return hit ? hit.title : "Unknown fidelity tier — treat as unproven";
-}
-
-/** Sort key: higher = stronger evidence. Unknown values sort below `code`. */
-export function fidelityRank(f: string): number {
-  return FIDELITY[f as ParserFidelity]?.rank ?? 0;
-}
+// The tier table moved to lib/fidelity.ts when the RCA evidence rows started
+// grading the same rules (A7): one ladder, one set of colours, one tooltip.
+// Re-exported here so this page's callers and tests keep their import site.
+export { fidelityBadgeClass, fidelityLabel, fidelityTitle, fidelityRank } from "../../lib/fidelity";
 
 // ── rules table ─────────────────────────────────────────────────────────────
 

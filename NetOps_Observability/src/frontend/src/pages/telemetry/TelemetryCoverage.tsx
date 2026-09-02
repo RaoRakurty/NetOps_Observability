@@ -26,16 +26,14 @@ import {
   type UnrecognizedItem,
   type UnrecognizedPage,
 } from "../../services/api";
+import FidelityBadge from "../../components/FidelityBadge";
 import DataTable, { type Column } from "../../components/DataTable";
 import { Segmented, Stat, StatStrip } from "../../components/ui";
 import { useWorkspace } from "../../context/workspace";
 import { fmtDateTime } from "../../lib/time";
 import {
   CATALOG_DOCS_URL,
-  fidelityBadgeClass,
-  fidelityLabel,
   fidelityRank,
-  fidelityTitle,
   isForbidden,
   promotionDisplay,
   ruleRows,
@@ -132,9 +130,7 @@ function ParserStatsSection({ stats, err, loaded }: { stats: ParserStats | null;
     {
       key: "fidelity", header: "Fidelity", width: 140, sortable: true,
       text: (r) => r.fidelity, sortValue: (r) => fidelityRank(r.fidelity),
-      render: (r) => (
-        <span className={fidelityBadgeClass(r.fidelity)} title={fidelityTitle(r.fidelity)}>{fidelityLabel(r.fidelity)}</span>
-      ),
+      render: (r) => <FidelityBadge fidelity={r.fidelity} />,
     },
     {
       key: "hits", header: "Hits", width: 100, align: "right", sortable: true,
