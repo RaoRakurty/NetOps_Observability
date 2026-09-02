@@ -1,5 +1,5 @@
-// NotificationsAdmin audience contract. The five delivery channels (SMTP,
-// Twilio SMS, ntfy push, Slack, PagerDuty) are PLATFORM-global plumbing —
+// NotificationsAdmin audience contract. The seven delivery channels (SMTP,
+// Twilio SMS, ntfy push, Slack, PagerDuty, Teams, SNS) are PLATFORM-global plumbing —
 // every config endpoint behind their tiles is platform-gated, so a tenant
 // admin clicking one gets only 403'd loads and dead forms. The tiles must not
 // render for a non-platform principal. Contact points, by contrast, ARE
@@ -13,7 +13,7 @@ vi.mock("../hooks/useAuth", () => ({ useAuth: (...a: unknown[]) => mockUseAuth(.
 import { NotificationsAdmin } from "./admin";
 import { api } from "../services/api";
 
-const CHANNEL_TILES = ["Configure Email", "Configure SMS & Push", "Configure Slack", "Configure PagerDuty"];
+const CHANNEL_TILES = ["Configure Email", "Configure SMS & Push", "Configure Slack", "Configure PagerDuty", "Configure Microsoft Teams", "Configure Amazon SNS"];
 
 beforeEach(() => {
   localStorage.clear();
@@ -22,6 +22,8 @@ beforeEach(() => {
   vi.spyOn(api, "ntfyConfig").mockResolvedValue({ enabled: false, server: "", topic: "", token_set: false, min_severity: "critical" } as never);
   vi.spyOn(api, "slackConfig").mockResolvedValue({ enabled: false, webhook_set: false, min_severity: "critical" } as never);
   vi.spyOn(api, "pagerDutyConfig").mockResolvedValue({ enabled: false, routing_set: false, min_severity: "critical" } as never);
+  vi.spyOn(api, "notifyTeams").mockResolvedValue({ enabled: false, webhook_set: false, min_severity: "warning" } as never);
+  vi.spyOn(api, "notifySNS").mockResolvedValue({ enabled: false, topic_arn: "", region: "", phone_numbers: "", min_severity: "critical", scope: "all", credentials_set: false } as never);
   vi.spyOn(api, "integrations").mockResolvedValue({ integrations: [], inbound_enabled: false } as never);
   vi.spyOn(api, "contactPoints").mockResolvedValue([]);
 });
@@ -52,6 +54,8 @@ describe("NotificationsAdmin", () => {
     // And the platform-gated channel config endpoints were never called.
     expect(api.smtpConfig).not.toHaveBeenCalled();
     expect(api.pagerDutyConfig).not.toHaveBeenCalled();
+    expect(api.notifyTeams).not.toHaveBeenCalled();
+    expect(api.notifySNS).not.toHaveBeenCalled();
   });
 
   it("renders no channel tiles while auth is still resolving (no flash either way)", async () => {

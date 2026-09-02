@@ -11,13 +11,14 @@
 
 import { fmtDate, fmtDateTime } from "../lib/time";
 import { useCallback, useEffect, useState } from "react";
-import { api, AdminUser, AdminSession, Role, Tenant, Org, Region, RoleBinding, SecuritySettings as SecuritySettingsT, ApiKey, CreateApiKeyRequest, LdapConfig, TacacsConfig, OidcConfig, AuthTestResult, LdapRoleMapping, TokenPolicy, ExportPolicy, SmtpConfig, TwilioConfig, NtfyConfig, SlackConfig, PagerDutyConfig, ContactPoint, ContactPointType, ItsmConfig, ItsmConfigInput, IntegrationConfig, ServiceNowStatus, JiraStatus, IncidentPolicy, IncidentPolicyTestFacts, TicketPolicyDecision } from "../services/api";
+import { api, AdminUser, AdminSession, Role, Tenant, Org, Region, RoleBinding, SecuritySettings as SecuritySettingsT, ApiKey, CreateApiKeyRequest, LdapConfig, TacacsConfig, OidcConfig, AuthTestResult, LdapRoleMapping, TokenPolicy, ExportPolicy, SmtpConfig, TwilioConfig, NtfyConfig, SlackConfig, PagerDutyConfig, TeamsConfig, SNSConfig, ContactPoint, ContactPointType, ItsmConfig, ItsmConfigInput, IntegrationConfig, ServiceNowStatus, JiraStatus, IncidentPolicy, IncidentPolicyTestFacts, TicketPolicyDecision } from "../services/api";
 import { BRAND } from "../brand";
 import Wizard, { WizardStep } from "../components/Wizard";
 import { SsoIdpPanel } from "./AdminSsoIdp";
 import { StatStrip, Stat, Skeleton, InfoTip, Modal, Segmented } from "../components/ui";
 import { Group } from "../components/board/panels";
-import { ServiceNowLogo, JiraLogo, SlackLogo, TwilioLogo, PagerDutyLogo } from "../components/ConnectorLogos";
+import { ServiceNowLogo, JiraLogo, SlackLogo, TwilioLogo, PagerDutyLogo, TeamsLogo, AwsLogo } from "../components/ConnectorLogos";
+import { teamsErrors, snsErrors, hasErrors, FieldErrors } from "../lib/notifyValidation";
 import Icon from "../components/Icon";
 import { useAuth } from "../hooks/useAuth";
 
@@ -3190,13 +3191,23 @@ const SEVERITIES = ["info", "notice", "warning", "error", "critical"];
 // Integrations). SMS (Twilio) and Push (ntfy) are grouped into one "SMS & Push"
 // tile since both are phone-delivery channels. Branded channels (Slack,
 // PagerDuty) use their real logos; generic ones use modern stroke icons.
-type ChannelId = "email" | "mobile" | "slack" | "pagerduty";
+type ChannelId = "email" | "mobile" | "slack" | "pagerduty" | "teams" | "sns";
 const CHANNELS: { id: ChannelId; name: string; tagline: string; logo: JSX.Element }[] = [
   { id: "email", name: "Email", tagline: "SMTP relay — route alert emails to your NOC distribution list.", logo: <Icon name="mail" size={26} /> },
   { id: "mobile", name: "SMS & Push", tagline: "Phone alerts — SMS via Twilio and free push via ntfy.", logo: <Icon name="smartphone" size={26} /> },
   { id: "slack", name: "Slack", tagline: "Post alerts to a Slack channel via an Incoming Webhook.", logo: <SlackLogo size={30} /> },
   { id: "pagerduty", name: "PagerDuty", tagline: "On-call escalation via the PagerDuty Events API v2.", logo: <PagerDutyLogo size={30} /> },
+  { id: "teams", name: "Microsoft Teams", tagline: "Post alerts to a Teams channel via an Incoming Webhook.", logo: <TeamsLogo size={30} /> },
+  { id: "sns", name: "Amazon SNS", tagline: "Publish to an SNS topic or SMS phone numbers — AWS credentials come from the deployment environment.", logo: <AwsLogo size={30} /> },
 ];
+
+// FieldError — the inline, field-level validation message shown under an input
+// when the client-side mirror of a server validator rejects what was typed. Kept
+// as one component so every channel form reports a rejection identically.
+function FieldError({ msg }: { msg?: string }) {
+  if (!msg) return null;
+  return <p className="pol-row-err" role="alert" style={{ margin: "2px 0 0" }}>{msg}</p>;
+}
 
 function SeveritySelect({ value, onChange }: { value: string; onChange: (v: string) => void }) {
   return (
@@ -3297,13 +3308,15 @@ export function NotificationsAdmin() {
   const [ntfy, setNtfy] = useState<NtfyConfig | null>(null);
   const [slack, setSlack] = useState<SlackConfig | null>(null);
   const [pager, setPager] = useState<PagerDutyConfig | null>(null);
+  const [teams, setTeams] = useState<TeamsConfig | null>(null);
+  const [sns, setSns] = useState<SNSConfig | null>(null);
   // Bidirectional-sync config (Integration Platform) for the channels that
   // support it — PagerDuty & Slack live here; ServiceNow/Jira sync lives in the
   // Integrations connector setup.
   const [integrations, setIntegrations] = useState<IntegrationConfig[] | null>(null);
   const [inboundEnabled, setInboundEnabled] = useState(false);
   const [openCh, setOpenCh] = useState<ChannelId | null>(null); // which channel's setup modal is open
-  const [secret, setSecret] = useState({ smtp: "", twilio: "", ntfy: "", slack: "", pager: "" });
+  const [secret, setSecret] = useState({ smtp: "", twilio: "", ntfy: "", slack: "", pager: "", teams: "" });
   const [msg, setMsg] = useState<Record<string, string>>({});
   // Contact points (reusable delivery audiences referenced by reports).
   const [cps, setCps] = useState<ContactPoint[]>([]);
@@ -3326,6 +3339,8 @@ export function NotificationsAdmin() {
     api.ntfyConfig().then(setNtfy).catch(() => {});
     api.slackConfig().then(setSlack).catch(() => {});
     api.pagerDutyConfig().then(setPager).catch(() => {});
+    api.notifyTeams().then(setTeams).catch(() => {});
+    api.notifySNS().then(setSns).catch(() => {});
     api.integrations().then((r) => { setIntegrations(r.integrations); setInboundEnabled(r.inbound_enabled); }).catch(() => {});
   }, [platform]);
 
@@ -3406,6 +3421,39 @@ export function NotificationsAdmin() {
       setPager(await api.savePagerDutyConfig(body)); setSecret((s) => ({ ...s, pager: "" })); flash("pager", "Saved.");
     } catch (e) { flash("pager", (e as Error).message); }
   };
+  // Teams / SNS (G10). Validation mirrors the API's own validators
+  // (lib/notifyValidation) so a rejection names the field inline instead of
+  // arriving as an opaque 400 — the server still re-validates every PUT.
+  const teamsErrs: FieldErrors = teams
+    ? teamsErrors({ enabled: teams.enabled, webhookSet: !!teams.webhook_set, typedWebhook: secret.teams })
+    : {};
+  const snsErrs: FieldErrors = sns
+    ? snsErrors({ enabled: sns.enabled, topic_arn: sns.topic_arn, region: sns.region, phone_numbers: sns.phone_numbers, scope: sns.scope })
+    : {};
+
+  const saveTeams = async () => {
+    if (!teams) return;
+    if (hasErrors(teamsErrs)) { flash("teams", "Fix the highlighted fields first."); return; }
+    try {
+      // The webhook is write-only: send it ONLY when the operator typed a
+      // replacement. Omitting it is what tells the API to keep the stored one.
+      const body: Partial<TeamsConfig> = { enabled: teams.enabled, min_severity: teams.min_severity };
+      if (secret.teams.trim()) body.webhook_url = secret.teams.trim();
+      setTeams(await api.notifyTeamsUpdate(body)); setSecret((s) => ({ ...s, teams: "" })); flash("teams", "Saved.");
+    } catch (e) { flash("teams", (e as Error).message); }
+  };
+  const saveSns = async () => {
+    if (!sns) return;
+    if (hasErrors(snsErrs)) { flash("sns", "Fix the highlighted fields first."); return; }
+    try {
+      // credentials_set is a read-only status field — never echo it back.
+      const body: Partial<SNSConfig> = {
+        enabled: sns.enabled, topic_arn: sns.topic_arn.trim(), region: sns.region.trim(),
+        phone_numbers: sns.phone_numbers.trim(), min_severity: sns.min_severity, scope: sns.scope,
+      };
+      setSns(await api.notifySNSUpdate(body)); flash("sns", "Saved.");
+    } catch (e) { flash("sns", (e as Error).message); }
+  };
   const test = async (k: string, fn: () => Promise<{ status: string }>) => {
     try { await fn(); flash(k, "Test sent — check your inbox/phone."); }
     catch (e) { flash(k, "Test failed: " + (e as Error).message); }
@@ -3421,7 +3469,7 @@ export function NotificationsAdmin() {
       />
       {platform ? (() => {
         const loaded = smtp !== null;
-        const groups = [!!smtp?.enabled, !!(twilio?.enabled || ntfy?.enabled), !!slack?.enabled, !!pager?.enabled];
+        const groups = [!!smtp?.enabled, !!(twilio?.enabled || ntfy?.enabled), !!slack?.enabled, !!pager?.enabled, !!teams?.enabled, !!sns?.enabled];
         const enabled = groups.filter(Boolean).length;
         return (
           <StatStrip>
@@ -3452,9 +3500,16 @@ export function NotificationsAdmin() {
           } else if (c.id === "slack") {
             enabled = !!slack?.enabled; configured = !!slack?.webhook_set;
             metaLine = configured ? "Webhook configured" : "Click to set up";
-          } else {
+          } else if (c.id === "pagerduty") {
             enabled = !!pager?.enabled; configured = !!pager?.routing_set;
             metaLine = configured ? "Routing key configured" : "Click to set up";
+          } else if (c.id === "teams") {
+            enabled = !!teams?.enabled; configured = !!teams?.webhook_set;
+            metaLine = configured ? "Webhook configured" : "Click to set up";
+          } else {
+            enabled = !!sns?.enabled; configured = !!(sns?.topic_arn || sns?.phone_numbers);
+            metaLine = !configured ? "Click to set up"
+              : [sns?.topic_arn ? "Topic" : null, sns?.phone_numbers ? "SMS" : null].filter(Boolean).join(" \u00b7 ");
           }
           const tone = !configured ? "" : enabled ? "good" : "warn";
           const tag = !loaded ? "…" : !configured ? "Not set up" : enabled ? "On" : "Off";
@@ -3590,6 +3645,72 @@ export function NotificationsAdmin() {
                   {msg.pager && <span className="mini-meta">{msg.pager}</span>}
                 </div>
                 <SyncSettings integration={integrationFor("pagerduty")} inboundEnabled={inboundEnabled} webhookHint="Paste into a PagerDuty v3 webhook subscription." onSaved={onIntegrationSaved} />
+              </>
+            )}
+
+            {openCh === "teams" && teams && (
+              <>
+                <label className="scope-chip" style={{ marginBottom: 12 }}>
+                  <input type="checkbox" checked={teams.enabled} onChange={(e) => setTeams({ ...teams, enabled: e.target.checked })} /> Enable Teams delivery
+                </label>
+                <div className="form-grid">
+                  <div>
+                    <LabeledInput label={`Webhook URL${teams.webhook_set ? " (stored)" : ""}`} type="password" value={secret.teams} onChange={(v) => setSecret((s) => ({ ...s, teams: v }))} placeholder={teams.webhook_set ? "\u2022\u2022\u2022\u2022\u2022\u2022 (unchanged)" : "https://\u2026.webhook.office.com/webhookb2/\u2026"} required={!teams.webhook_set} info="Teams Incoming Webhook URL (channel \u2192 Connectors \u2192 Incoming Webhook). It embeds a bearer token, so it is write-only \u2014 blank keeps the stored value." />
+                    <FieldError msg={teamsErrs.webhook_url} />
+                    {teams.webhook_set && <p className="mini-meta" style={{ marginTop: 2 }}>A webhook is stored. Type a new one to replace it; leave blank to keep it.</p>}
+                  </div>
+                  <SeveritySelect value={teams.min_severity} onChange={(v) => setTeams({ ...teams, min_severity: v })} />
+                </div>
+                <RequiredLegend />
+                <div className="admin-actions">
+                  <button onClick={saveTeams}>Save</button>
+                  <button className="ghost" onClick={() => test("teams", api.notifyTeamsTest)}>Send test</button>
+                  {msg.teams && <span className="mini-meta">{msg.teams}</span>}
+                </div>
+              </>
+            )}
+
+            {openCh === "sns" && sns && (
+              <>
+                <label className="scope-chip" style={{ marginBottom: 12 }}>
+                  <input type="checkbox" checked={sns.enabled} onChange={(e) => setSns({ ...sns, enabled: e.target.checked })} /> Enable SNS delivery
+                </label>
+                <div className="form-grid">
+                  <div>
+                    <LabeledInput label="Topic ARN" value={sns.topic_arn} onChange={(v) => setSns({ ...sns, topic_arn: v })} placeholder="arn:aws:sns:us-east-1:123456789012:netops-alerts" info="The SNS topic alerts are published to. Optional if you deliver to phone numbers only." />
+                    <FieldError msg={snsErrs.topic_arn} />
+                  </div>
+                  <div>
+                    <LabeledInput label="Region" value={sns.region} onChange={(v) => setSns({ ...sns, region: v })} placeholder="us-east-1" info="AWS region of the SNS endpoint. Blank derives it from the topic ARN." />
+                    <FieldError msg={snsErrs.region} />
+                  </div>
+                  <div>
+                    <LabeledInput label="Phone numbers (comma-separated)" value={sns.phone_numbers} onChange={(v) => setSns({ ...sns, phone_numbers: v })} placeholder="+14155550123, +14155550124" info="Optional E.164 numbers to SMS directly, in addition to (or instead of) the topic." />
+                    <FieldError msg={snsErrs.phone_numbers} />
+                  </div>
+                  <div>
+                    <LabeledSelect label="Scope" value={sns.scope} onChange={(v) => setSns({ ...sns, scope: v })} options={["all", "platform"]} info={"\"platform\" restricts this globally-credentialled pager to Correlix self-health alerts; \"all\" sends every alert that clears the severity floor."} />
+                    <FieldError msg={snsErrs.scope} />
+                  </div>
+                  <SeveritySelect value={sns.min_severity} onChange={(v) => setSns({ ...sns, min_severity: v })} />
+                </div>
+                {/* AWS credentials are deliberately NOT editable here: they live in
+                    the deployment environment and are never stored or returned by
+                    the API, so the surface can only report their presence. */}
+                <div className="ds-readonly-note">
+                  <span className="mini-meta">
+                    AWS credentials come from the environment (<code>AWS_ACCESS_KEY_ID</code> / <code>AWS_SECRET_ACCESS_KEY</code>) and are never stored or shown here.
+                  </span>
+                  <span className={`conn-status ${sns.credentials_set ? "good" : "warn"}`}>
+                    {sns.credentials_set ? "Credentials detected" : "Credentials not set"}
+                  </span>
+                </div>
+                <RequiredLegend />
+                <div className="admin-actions">
+                  <button onClick={saveSns}>Save</button>
+                  <button className="ghost" onClick={() => test("sns", api.notifySNSTest)}>Send test</button>
+                  {msg.sns && <span className="mini-meta">{msg.sns}</span>}
+                </div>
               </>
             )}
           </Modal>

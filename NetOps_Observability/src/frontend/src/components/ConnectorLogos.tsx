@@ -131,3 +131,18 @@ export function PagerDutyLogo({ size = 40, className }: LogoProps) {
     </svg>
   );
 }
+
+// Microsoft Teams — the official two-tone purple mark: the "T" tile in front of
+// the two collaborator silhouettes.
+export function TeamsLogo({ size = 40, className }: LogoProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 64 64" className={className} aria-hidden="true" role="img">
+      <circle cx="49.5" cy="15" r="6.5" fill="#5059c9" />
+      <path fill="#5059c9" d="M44 24h14a2 2 0 0 1 2 2v13a9 9 0 0 1-9 9h-.5A9.5 9.5 0 0 1 41 38.5V27a3 3 0 0 1 3-3z" />
+      <circle cx="33" cy="14" r="8" fill="#7b83eb" />
+      <path fill="#7b83eb" d="M23 24h20a2 2 0 0 1 2 2v15a12 12 0 0 1-12 12 12 12 0 0 1-12-12V26a2 2 0 0 1 2-2z" />
+      <rect x="4" y="16" width="32" height="32" rx="3" fill="#5059c9" />
+      <path fill="#fff" d="M11 22h18v4.2h-6.8V42h-4.4V26.2H11z" />
+    </svg>
+  );
+}

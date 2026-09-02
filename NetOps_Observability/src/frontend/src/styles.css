@@ -3826,6 +3826,8 @@ button:disabled { opacity: 0.55; cursor: not-allowed; }
 .conn-logo.jira { background: #f3f7ff; }
 .conn-logo.slack { background: #f7f1f7; }
 .conn-logo.pagerduty { background: #eef8f0; }
+.conn-logo.teams { background: #f0f0fb; }
+.conn-logo.sns { background: #fff6ea; color: #b25d05; }
 /* generic-icon channels: tinted chip + icon colour (Lucide strokes inherit currentColor) */
 .conn-logo.email { background: #eef2f8; color: #4b6a8a; }
 .conn-logo.mobile { background: #eef7f1; color: #2e9e6b; }
@@ -3836,6 +3838,13 @@ button:disabled { opacity: 0.55; cursor: not-allowed; }
 .conn-logo.api-keys { background: #eef0fe; color: var(--accent); }
 .conn-logo.api-token { background: #eef6f1; color: #2e9e6b; }
 .conn-logo.api-rest { background: #eef2f8; color: #4b6a8a; }
+
+/* ds-readonly-note — a config value the admin surface can REPORT but never set
+   (e.g. SNS's AWS credentials, which live in the deployment environment). Reads
+   as an explanatory strip with a status chip, not an editable field. */
+.ds-readonly-note { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between;
+  gap: var(--sp-2); margin-top: var(--sp-3); padding: var(--sp-2) var(--sp-3);
+  border: 1px dashed var(--panel-border); border-radius: var(--radius-md); background: var(--surface); }
 
 /* embedded provider form inside a glass modal — no nested card chrome */
 .auth-form { display: block; }

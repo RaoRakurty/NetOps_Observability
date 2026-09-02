@@ -365,6 +365,31 @@ export type PagerDutyConfig = {
   min_severity: string;
 };
 
+// Microsoft Teams — an Incoming Webhook URL embeds a bearer token, so the WHOLE
+// URL is the secret and is redacted exactly the way Slack's is: GET returns
+// `webhook_set`, PUT accepts `webhook_url`, and a PUT that omits it preserves
+// the stored value.
+export type TeamsConfig = {
+  enabled: boolean;
+  webhook_url?: string; // write-only on PUT
+  webhook_set?: boolean; // read-only on GET
+  min_severity: string;
+};
+
+// Amazon SNS — SMS to E.164 numbers and/or publish to a topic ARN. There is no
+// write-only secret here on purpose: the AWS access/secret key pair lives in
+// the deployment environment and is never stored or returned by the API. The
+// only thing the surface ever says about it is `credentials_set`.
+export type SNSConfig = {
+  enabled: boolean;
+  topic_arn: string;
+  region: string;
+  phone_numbers: string; // comma-separated E.164 list
+  min_severity: string;
+  scope: string; // "all" | "platform"
+  credentials_set?: boolean; // read-only on GET — env credential presence
+};
+
 // ---------- Audit trail (tenant-scoped) ----------
 
 export type AuditEvent = {
@@ -2331,6 +2356,14 @@ export const api = {
   pagerDutyConfig: () => request<PagerDutyConfig>("/api/notify/pagerduty"),
   savePagerDutyConfig: (c: Partial<PagerDutyConfig>) => request<PagerDutyConfig>("/api/notify/pagerduty", { method: "PUT", body: JSON.stringify(c) }),
   testPagerDuty: () => request<{ status: string }>("/api/notify/pagerduty/test", { method: "POST" }),
+  // Teams + SNS (G10). Same platform-gated GET/PUT/test shape as the five
+  // above; a PUT that omits `webhook_url` keeps the stored Teams secret.
+  notifyTeams: () => request<TeamsConfig>("/api/notify/teams"),
+  notifyTeamsUpdate: (c: Partial<TeamsConfig>) => request<TeamsConfig>("/api/notify/teams", { method: "PUT", body: JSON.stringify(c) }),
+  notifyTeamsTest: () => request<{ status: string }>("/api/notify/teams/test", { method: "POST" }),
+  notifySNS: () => request<SNSConfig>("/api/notify/sns"),
+  notifySNSUpdate: (c: Partial<SNSConfig>) => request<SNSConfig>("/api/notify/sns", { method: "PUT", body: JSON.stringify(c) }),
+  notifySNSTest: () => request<{ status: string }>("/api/notify/sns/test", { method: "POST" }),
 
   // Contact points — reusable, tenant-scoped delivery audiences (email group /
   // slack / webhook) referenced by reports. Managed in the Notifications section.
