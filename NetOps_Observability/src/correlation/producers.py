@@ -474,6 +474,19 @@ def parser_stats() -> dict:
         "parser_rev": PARSER_REV,
         "rules_hash": RULES_HASH_TAG,
         "rules": len(RULES),
+        # Per-rule METADATA (not counters): what each rule IS, so the API's
+        # parser-coverage page can render the corpus — lane, emitted kind, the
+        # catalog's fidelity claim for its grammar, and whether it is a shadow
+        # row that deliberately emits nothing. Derived from the same fixed
+        # `RULES` table the counters are keyed by (bounded, import-time), in
+        # CLASSIFICATION ORDER, so the list is deterministic and no runtime
+        # string can widen it. `fidelity` is read through `Rule.fidelity`, so a
+        # catalog promotion/demotion shows up here without a parser edit.
+        "rules_meta": [
+            {"rule_id": r.rule_id, "lane": r.lane, "kind": r.kind,
+             "fidelity": r.fidelity, "shadow": bool(r.shadow)}
+            for r in RULES
+        ],
         "rule_hits": dict(RULE_HITS),
         "shadow_hits": dict(SHADOW_HITS),
         "generic_fallbacks": dict(GENERIC_FALLBACKS),

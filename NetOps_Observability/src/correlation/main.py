@@ -163,7 +163,12 @@ from producers import (
 from rank_memo import RankMemo
 from replay import replay_object
 from routing_direction import forwarding_pairs, routing_direction_source
-from scoring import RankingResult, template_scoring_metric_lines
+from scoring import (
+    RankingResult,
+    fidelity_weighting_metric_lines,
+    fidelity_weighting_stats,
+    template_scoring_metric_lines,
+)
 from series_budget import derive_max_series
 from signals import (
     EVIDENCE_CLASSES,
@@ -13178,6 +13183,17 @@ async def metrics_exposition():
     return PlainTextResponse(_metrics_text())
 
 
+def _prom_label(value: str) -> str:
+    """Escape one Prometheus LABEL VALUE (exposition format: backslash, double
+    quote and newline). Every label rendered below comes from a fixed,
+    import-time corpus today, so this changes nothing about the output — it is
+    here so that a future value which is NOT from a fixed corpus cannot break
+    the exposition (or inject a series) by carrying a quote. Cheap, total, and
+    idempotent on already-safe values."""
+    return (str(value).replace("\\", "\\\\")
+            .replace('"', '\\"').replace("\n", "\\n"))
+
+
 def _metrics_text(health: dict | None = None) -> str:
     """The /metrics body, extracted SYNC (tracker 174) — served by both the
     route and the loop-independent sidecar; see _health_payload.
@@ -13266,6 +13282,25 @@ def _metrics_text(health: dict | None = None) -> str:
         "# TYPE corr_parser_rule_hits_total counter",]
     for _rid, _hits in sorted(_parser["rule_hits"].items()):
         lines.append(f'corr_parser_rule_hits_total{{rule_id="{_rid}"}} {_hits}')
+    lines += [
+        # The corpus itself, one 1-valued info series per rule: what the rule IS
+        # (lane, emitted kind, the catalog's fidelity claim for its grammar,
+        # whether it is a shadow row that emits nothing) so a scrape can JOIN
+        # the hit counters above to that metadata — which is what the parser-
+        # coverage page renders. Cardinality is len(RULES), fixed at import, the
+        # same bound the hit series carries; label values are escaped anyway
+        # (`_prom_label`) so the exposition cannot be broken by a rule id, and a
+        # `fidelity` here that reads `doc_claimed` is exactly the row the A7
+        # weighting rule refuses to confirm on.
+        "# HELP corr_parser_rule_info The parser rule corpus, one series per rule (always 1).",
+        "# TYPE corr_parser_rule_info gauge",]
+    for _meta in _parser["rules_meta"]:
+        lines.append(
+            f'corr_parser_rule_info{{rule_id="{_prom_label(_meta["rule_id"])}",'
+            f'lane="{_prom_label(_meta["lane"])}",'
+            f'kind="{_prom_label(_meta["kind"])}",'
+            f'fidelity="{_prom_label(_meta["fidelity"])}",'
+            f'shadow="{"true" if _meta["shadow"] else "false"}"}} 1')
     lines += [
         # A3 shadow rules: a branch that MATCHED but deliberately emitted no
         # signal. Disjoint from corr_parser_rule_hits_total by construction —
@@ -13787,6 +13822,11 @@ def _metrics_text(health: dict | None = None) -> str:
         # sits behind. scored/candidates IS the selectivity ratio; the metric
         # NAMES are owned by scoring.py so they cannot drift from the counters.
         *template_scoring_metric_lines(),
+        # A7 parser-fidelity weighting (flag CORR_FIDELITY_WEIGHTING). Declared
+        # whether or not the flag is on: the pair (enabled gauge, capped
+        # counter) is only readable together — a 0 counter means nothing until
+        # you know whether the rule was in force.
+        *fidelity_weighting_metric_lines(),
         # The two-level decision memo in one series: level 1 skips rank(), level
         # 2 skips the whole snapshot. Level 2 resets every epoch; level 1 does not.
         "# HELP corr_decision_memo_level Decision-memo hits by completeness level.",
@@ -14425,6 +14465,11 @@ def _health_payload() -> dict:
         # the last `promotion_window` ADMITTED lines. `parser_rev` +
         # `rules_hash` say WHICH rule corpus produced the signals in flight.
         "parser": parser_stats(),
+        # A7: is the fidelity weighting rule in force, and what has it done?
+        # `capped_objects` counts RCA objects whose verdict the rule held at
+        # `suspected` because their confirming pair rested on doc_claimed
+        # (unvalidated) parser rules — see the confirmability.py header.
+        "fidelity_weighting": fidelity_weighting_stats(),
     }
 
 

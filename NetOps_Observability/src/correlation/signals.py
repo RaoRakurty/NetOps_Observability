@@ -20,6 +20,7 @@ import os
 import re
 import uuid
 from collections import OrderedDict
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
@@ -318,6 +319,123 @@ def probe_authority_of(sig: Signal) -> ProbeAuthority | None:
         return ProbeAuthority(raw) if raw else ProbeAuthority.LOW
     except ValueError:
         return ProbeAuthority.LOW
+
+
+# ── Parser-rule fidelity (W1b/A3) + the A7 weighting vocabulary ──────────────
+#
+# Every classified signal carries `attrs.fidelity`: how well-evidenced the
+# GRAMMAR that produced it is. The values are the telemetry-catalog ladder plus
+# the hand-written default:
+#
+#   doc_claimed     the rule exists because a vendor DOC says the line looks
+#                   like this — nobody has seen the device emit it
+#   code            the grammar lives in the rule table with a test/fixture
+#                   behind it (hand-written branches, and catalog rows migrated
+#                   from them). The catalog vouches for nothing extra
+#   lab_validated   matched against a real device's output in a lab
+#   live_validated  matched against production traffic
+#
+# THE WEIGHTING RULE that reads them (flag CORR_FIDELITY_WEIGHTING, default OFF)
+# is stated once, in full, in the confirmability.py module header. This module
+# owns only its VOCABULARY and the pure predicates over a signal set, so the
+# audit's math and the runtime's cap can never drift apart.
+#
+# TWO CASES THAT ARE NOT THE SAME (and the reason `fidelity_of` returns ""):
+#   * ABSENT — a metric episode, a probe, a flow, a cloud API record: no parser
+#     ran, so the signal makes NO fidelity claim. It is NOT doc_claimed, and it
+#     is treated exactly as it is today (this is what keeps the flag-OFF path
+#     and every non-syslog lane byte-identical).
+#   * PRESENT BUT UNREADABLE — a lane stamped a value outside the ladder. That
+#     IS a claim, and one we cannot read, so it fails closed to unvalidated: it
+#     may support a suspicion, never anchor a confirmation.
+FIDELITY_DOC_CLAIMED = "doc_claimed"
+FIDELITY_CODE = "code"
+FIDELITY_LAB_VALIDATED = "lab_validated"
+FIDELITY_LIVE_VALIDATED = "live_validated"
+
+#: Weakest → strongest. `code` sits ABOVE `doc_claimed` deliberately: a
+#: hand-written, tested branch is evidence of the grammar; a doc claim is not.
+FIDELITY_LADDER: tuple[str, ...] = (
+    FIDELITY_DOC_CLAIMED, FIDELITY_CODE,
+    FIDELITY_LAB_VALIDATED, FIDELITY_LIVE_VALIDATED,
+)
+
+#: The tiers that may take part in a CONFIRMING pair. The catalog can demote a
+#: row to `doc_claimed` to shadow it out of confirmation without touching code.
+VALIDATED_FIDELITIES: frozenset[str] = frozenset({
+    FIDELITY_CODE, FIDELITY_LAB_VALIDATED, FIDELITY_LIVE_VALIDATED,
+})
+
+_FIDELITY_RANK: dict[str, int] = {f: i for i, f in enumerate(FIDELITY_LADDER)}
+
+
+def fidelity_of(sig: Signal) -> str:
+    """A signal's declared parser fidelity; "" when it declares none."""
+    attrs = sig.attrs if isinstance(sig.attrs, dict) else {}
+    return str(attrs.get("fidelity", "") or "").strip()
+
+
+def is_validated_fidelity(fidelity: str) -> bool:
+    """May evidence with this fidelity anchor a confirming pair?
+
+    "" (no claim) — yes, unchanged from today. A ladder tier — only the
+    validated three. Anything else — no (fail closed on an unreadable claim).
+    """
+    return not fidelity or fidelity in VALIDATED_FIDELITIES
+
+
+def validated_signals(signals: Iterable[Signal]) -> tuple[Signal, ...]:
+    """The subset that may anchor a confirmation. Order preserved."""
+    return tuple(s for s in signals if is_validated_fidelity(fidelity_of(s)))
+
+
+def unvalidated_rule_ids(signals: Iterable[Signal]) -> tuple[str, ...]:
+    """Sorted, de-duplicated ids of the RULES behind the unvalidated evidence —
+    what a verdict names when fidelity held its confirmation back.
+
+    A signal with an unvalidated fidelity and no `rule_id` is reported as
+    ``<unknown rule>:<fidelity>`` rather than dropped: §10 — nothing about a
+    capped verdict may be silent.
+    """
+    out: set[str] = set()
+    for sig in signals:
+        fidelity = fidelity_of(sig)
+        if is_validated_fidelity(fidelity):
+            continue
+        attrs = sig.attrs if isinstance(sig.attrs, dict) else {}
+        rule_id = str(attrs.get("rule_id", "") or "").strip()
+        out.add(rule_id or f"<unknown rule>:{fidelity}")
+    return tuple(sorted(out))
+
+
+def fidelity_min(signals: Iterable[Signal]) -> str:
+    """The WEAKEST fidelity claimed in this evidence set; "" when none claims
+    one. An unreadable value ranks below the whole ladder (it is the weakest
+    thing an evidence set can carry), and ties break on the string so the value
+    is deterministic for a given set."""
+    claimed = [f for f in (fidelity_of(s) for s in signals) if f]
+    if not claimed:
+        return ""
+    return min(claimed, key=lambda f: (_FIDELITY_RANK.get(f, -1), f))
+
+
+# The flag. Read ONCE at import like every other CORR_* knob; `set_fidelity_
+# weighting` is the test hook (a monkeypatched module attribute would not be
+# seen by `fidelity_weighting_enabled`'s callers, which is the trap this avoids).
+_FIDELITY_WEIGHTING: bool = os.environ.get(
+    "CORR_FIDELITY_WEIGHTING", "0").strip().lower() in ("1", "true", "yes", "on")
+
+
+def fidelity_weighting_enabled() -> bool:
+    """Is A7 fidelity weighting ON? Default OFF — with it off, not one byte of
+    any object moves (INVARIANTS §10/§10a)."""
+    return _FIDELITY_WEIGHTING
+
+
+def set_fidelity_weighting(enabled: bool) -> None:
+    """Test hook: toggle the flag in-process. Production reads the env var."""
+    global _FIDELITY_WEIGHTING
+    _FIDELITY_WEIGHTING = bool(enabled)
 
 
 # ── Observer kind (evidence-accounting Phase B) ──────────────────────────────

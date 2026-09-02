@@ -17,6 +17,66 @@ modality classes to confirm).
 
 Run ``python3 confirmability.py`` to write build/reports/
 signature_confirmability.{json,md} + producer_signature_reconciliation.md.
+
+THE FIDELITY WEIGHTING RULE (A7 — flag ``CORR_FIDELITY_WEIGHTING``, default OFF)
+================================================================================
+This module answers "can this signature confirm, with the producers that exist?"
+The parser programme adds the other half of the same question: **is the evidence
+that would confirm it EVIDENCED?** Every signal now carries ``attrs.fidelity``
+(W1b/A3; the evidence bus passes it through, T2b) — the telemetry-catalog ladder
+for the rule that classified it. The catalog README states the product truth:
+*validated fidelity is the product truth — not vendor documentation.* This is
+that sentence, made mechanical:
+
+  A signal whose fidelity is ``doc_claimed`` — the grammar exists because a
+  VENDOR DOC says the line looks like that, and nobody has ever seen the device
+  emit it — COUNTS TOWARD SUPPORT and NEVER TOWARD CONFIRMATION.
+
+  * SUPPORT means everything it does today: it attaches to the object, it
+    satisfies clauses, it drives coverage and confidence, it can make an object
+    ``suspected``, and it is shown in the evidence log. Nothing is hidden and
+    nothing is dropped — "prefer still analyzing over an unsupported cause"
+    (INVARIANTS §10a) cuts the same way here: a weakly-evidenced rule must not
+    silence the analysis, only the claim of proof.
+  * CONFIRMATION means the independent cross-modality pair of `verdicts.assess`.
+    That pair must consist of signals with fidelity ∈ {``code``,
+    ``lab_validated``, ``live_validated``}. An object whose confirmation rests
+    on ``doc_claimed`` evidence is capped at ``suspected``, with the verdict
+    reason naming the gap: "evidence from unvalidated parser rules: <rule ids>".
+
+  ``code`` COUNTS AS VALIDATED, and that is a deliberate, stated position: it is
+  a hand-written, tested branch — including the catalog rows migrated from those
+  branches — with a fixture behind it, so the grammar is evidenced by our own
+  code rather than by a vendor's PDF. It is the honest floor, not a promotion:
+  the catalog can later DEMOTE a row to ``doc_claimed`` to shadow it out of
+  confirmation, and that demotion is a catalog edit, not a parser edit.
+  ``shadow`` rows emit nothing at all, so they never reach a verdict.
+
+  A signal that declares NO fidelity (a metric episode, a probe, a flow, a cloud
+  API record — no parser ran) makes no claim and is unaffected. A signal that
+  declares a value OUTSIDE the ladder fails closed to unvalidated.
+
+WHERE IT LIVES. The vocabulary and the pure predicates are in ``signals.py``
+(``fidelity_of`` / ``is_validated_fidelity`` / ``validated_signals`` /
+``unvalidated_rule_ids`` / ``fidelity_min``) so the runtime and this audit read
+ONE definition; the cap itself is applied in ``scoring.score_template``, beside
+the #94 physical-layer cap, because that is where the object's verdict gate is
+computed. Surfaces: ``verdict.fidelity_gap`` (the rule ids that held back the
+confirmation) and ``verdict.fidelity_min`` in the hypotheses/verdict block, the
+``corr_fidelity_capped_total`` counter, and the ``/healthz`` fidelity_weighting
+block. Tests: ``test_fidelity_weighting_a7.py``.
+
+OPERATIONAL NOTE. The two surfaces are PRESENT-ONLY, but they are part of the
+hypotheses blob, so FLIPPING the flag on a running deployment re-versions every
+open object exactly once (a new blob = a new material hash). That is the
+intended, visible cost of turning a verdict rule on; it is not a mid-flight
+toggle.
+
+WHAT THE RULE DOES **NOT** TOUCH. The structural verdict gate (tracker 157) is
+upstream of the verdict and is never relaxed by it: an ungrounded template stays
+refused whatever its evidence's fidelity. And this audit's own math is unchanged
+— fidelity is a property of a RULE, not of a KIND, so the confirmable_now
+ratchet (confirmability_baseline.json) neither moves nor should.
 """
 from __future__ import annotations
 

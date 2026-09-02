@@ -39,8 +39,12 @@ from signals import (
     ModalityClass,
     ProbeAuthority,
     Signal,
+    fidelity_weighting_enabled,
     probe_authority_of,
+    unvalidated_rule_ids,
+    validated_signals,
 )
+from signals import fidelity_min as weakest_fidelity
 from verdicts import Verdict as GateVerdict
 from verdicts import VerdictTier, assess
 
@@ -199,6 +203,11 @@ class HypothesisScore:
     # (honest unobserved note). Rendered by the UI as "how one failure caused
     # the next"; empty for templates that declare no chain.
     causal_chain: tuple[dict, ...] = ()
+    # A7 fidelity weighting (flag CORR_FIDELITY_WEIGHTING, default OFF). Both
+    # stay empty with the flag off, and `to_dict` then emits no key for them —
+    # which is what makes the OFF path byte-identical (INVARIANTS §10/§10a).
+    fidelity_gap: tuple[str, ...] = ()   # rule ids that held CONFIRMATION back
+    fidelity_min: str = ""               # weakest fidelity claimed in the evidence
 
     def confidence_label(self) -> str:
         """The lexical confidence label of the owner's taxonomy (voice contract):
@@ -214,7 +223,7 @@ class HypothesisScore:
         return "suspected"
 
     def to_dict(self) -> dict:
-        return {
+        out: dict = {
             "id": self.template_id,
             "title": self.title,
             "coverage": round(self.coverage, 4),
@@ -239,6 +248,13 @@ class HypothesisScore:
                 **self.verdict_gate.to_dict(),
             },
         }
+        if self.fidelity_min:
+            # A7 surfaces for the RCA confidence ladder. APPENDED, and only when
+            # the flag put a value there, so with the flag OFF this dict is the
+            # one it always was — key for key, byte for byte.
+            out["verdict"]["fidelity_min"] = self.fidelity_min
+            out["verdict"]["fidelity_gap"] = list(self.fidelity_gap)
+        return out
 
 
 def score_template(
@@ -331,10 +347,8 @@ def score_template(
     if contradictions:
         confidence *= CONTRADICTION_PENALTY
 
-    gate = assess(
-        matched_signals,
-        required_modalities=frozenset(template.required_modalities) or None,
-    )
+    required_modalities = frozenset(template.required_modalities) or None
+    gate = assess(matched_signals, required_modalities=required_modalities)
     # Port-Intelligence cap (#94): physical-layer families with
     # allow_root_cause_confirmed=False never emit CONFIRMED from telemetry
     # alone — the tier is capped at SUSPECTED with the reason on the record
@@ -346,6 +360,41 @@ def score_template(
             reasons=gate.reasons + (
                 "confirmed capped to suspected: physical-layer family requires fiber-path validation or human corroboration (allow_root_cause_confirmed=false)",),
         )
+    # A7 fidelity cap (flag CORR_FIDELITY_WEIGHTING, default OFF) — the same
+    # shape as the #94 cap above, one rung further down the evidence chain: the
+    # rule is stated in full in the confirmability.py header. doc_claimed
+    # evidence has already done everything SUPPORT means (it matched clauses,
+    # it drove coverage and confidence, it is in the evidence log); what it may
+    # not do is BE the confirming pair. So the question asked here is exactly
+    # that one — would the VALIDATED evidence alone still confirm? — and the
+    # answer is computed by re-running the same gate over that subset, never by
+    # a second, parallel rule that could disagree with `assess`.
+    #
+    # COST, stated rather than assumed: with the flag OFF this is one truthiness
+    # test plus one function call on the templates that matched anything — the
+    # measured hot path (P2) is untouched. With the flag ON it adds an O(matched
+    # signals) attrs scan per scored template, and a SECOND `assess` only on the
+    # objects that would otherwise confirm. That is a real cost on the storm
+    # plane and it must be MEASURED on a graded leg before the flag ships on —
+    # never assumed free (INVARIANTS §10a).
+    fidelity_gap: tuple[str, ...] = ()
+    fidelity_low = ""
+    if matched_signals and fidelity_weighting_enabled():
+        fidelity_low = weakest_fidelity(matched_signals)
+        if gate.tier is VerdictTier.CONFIRMED:
+            unvalidated = unvalidated_rule_ids(matched_signals)
+            if unvalidated and assess(
+                validated_signals(matched_signals),
+                required_modalities=required_modalities,
+            ).tier is not VerdictTier.CONFIRMED:
+                fidelity_gap = unvalidated
+                gate = GateVerdict(
+                    tier=VerdictTier.SUSPECTED,
+                    coverage=gate.coverage,
+                    reasons=gate.reasons + ((
+                        "confirmed capped to suspected: evidence from "
+                        f"unvalidated parser rules: {', '.join(unvalidated)}"),),
+                )
 
     return HypothesisScore(
         template_id=template.id,
@@ -369,6 +418,8 @@ def score_template(
         blast_radius=template.blast_radius,
         false_positives=tuple(template.false_positives),
         causal_chain=causal_chain,
+        fidelity_gap=fidelity_gap,
+        fidelity_min=fidelity_low,
     )
 
 
@@ -826,6 +877,50 @@ _TEMPLATE_CANDIDATES_TOTAL = 0
 _TEMPLATE_UNGROUNDED_TOTAL = 0
 
 
+# A7. Objects (not hypotheses) whose verdict the fidelity rule capped: counted
+# once per `rank()`, and only when the CAP decided the object's tier — i.e. the
+# hypothesis that became the top one was capped. A hypothesis capped somewhere
+# down the ranking changed no verdict the operator sees, so counting it would
+# overstate the rule's reach. Zero and flat while the flag is off, which is the
+# honest reading of "the rule is not in force".
+_FIDELITY_CAPPED_TOTAL = 0
+
+
+def fidelity_weighting_stats() -> dict:
+    """Snapshot for /healthz + /metrics: is the rule in force, and how many
+    objects has it capped? Read-only plain values."""
+    return {
+        "enabled": fidelity_weighting_enabled(),
+        "flag": "CORR_FIDELITY_WEIGHTING",
+        "capped_objects": _FIDELITY_CAPPED_TOTAL,
+    }
+
+
+def fidelity_weighting_metric_lines() -> tuple[str, ...]:
+    """The A7 counter as exposition lines — the metric NAME stays owned by the
+    module that counts it. Declared even when the flag is OFF, so the series
+    reads as "in force, nothing capped" / "not in force" rather than going
+    missing from the dashboard (§10 / test_parser_shadow_metrics_a3's rule)."""
+    st = fidelity_weighting_stats()
+    return (
+        ("# HELP corr_fidelity_capped_total RCA objects whose verdict was capped "
+         "to suspected because the confirming pair rested on unvalidated "
+         "(doc_claimed) parser rules (CORR_FIDELITY_WEIGHTING)."),
+        "# TYPE corr_fidelity_capped_total counter",
+        f"corr_fidelity_capped_total {st['capped_objects']}",
+        ("# HELP corr_fidelity_weighting_enabled 1 when the A7 fidelity "
+         "weighting rule is in force (flag CORR_FIDELITY_WEIGHTING)."),
+        "# TYPE corr_fidelity_weighting_enabled gauge",
+        f"corr_fidelity_weighting_enabled {1 if st['enabled'] else 0}",
+    )
+
+
+def reset_fidelity_weighting_stats() -> None:
+    """Zero the A7 counter. Tests and offline measurement runs only."""
+    global _FIDELITY_CAPPED_TOTAL
+    _FIDELITY_CAPPED_TOTAL = 0
+
+
 def template_scoring_stats() -> dict[str, int]:
     """Snapshot of the template-gate counters for the metrics exposition:
     ``{"scored": …, "candidates": …, "ungrounded": …}`` (tracker 167 + 157).
@@ -876,7 +971,7 @@ def rank(catalog: Catalog, evidence: tuple[Signal, ...] | list[Signal]) -> Ranki
     """Score every enabled template; rank by confidence with deterministic
     tie-break (template id) so equal scores never flap between runs."""
     global _TEMPLATE_SCORED_TOTAL, _TEMPLATE_CANDIDATES_TOTAL
-    global _TEMPLATE_UNGROUNDED_TOTAL
+    global _TEMPLATE_UNGROUNDED_TOTAL, _FIDELITY_CAPPED_TOTAL
     ev = tuple(evidence)
     # tracker 167: score only the templates the evidence could possibly reach;
     # the rest get their fully-determined zero score analytically. Same list,
@@ -971,6 +1066,9 @@ def rank(catalog: Catalog, evidence: tuple[Signal, ...] | list[Signal]) -> Ranki
     # (coverage may be 1.0) but the verdict gate's shortfall — a missing second
     # modality, a single observer, or a fate-shared pair. Surface both so the
     # checklist is actionable per-object, never the old catalog-wide boilerplate.
+    if top.fidelity_gap:
+        # A7: this object's tier is `suspected` BECAUSE of the fidelity rule.
+        _FIDELITY_CAPPED_TOTAL += 1
     top_missing: tuple[str, ...] = ()
     if top.verdict_gate.tier is not VerdictTier.CONFIRMED:
         clause_gaps = tuple(f"{top.template_id}: needs {m}" for m in top.missing)

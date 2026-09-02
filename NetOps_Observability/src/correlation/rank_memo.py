@@ -41,6 +41,7 @@ Per-signal inputs `rank` reads (transitively):
 | `probe_authority_of(sig)` | `scoring.py:102` (`_satisfying`), `scoring.py:481` (`evidence_kinds`); derived in `signals.py:296` from `modality_class` + `attrs["probe_authority"]` | the DEBUG_ONLY exclusion |
 | `attrs["corroborates_kinds"]` | `scoring.py:93`, `scoring.py:485` | only for `kind == active_verification_result` |
 | `attrs["refutes_kinds"]` | `scoring.py:236` | only for `kind == active_verification_healthy` |
+| `attrs["fidelity"]`, `attrs["rule_id"]` | `scoring.py` A7 cap (`fidelity_weighting_enabled()`) | ONLY when `CORR_FIDELITY_WEIGHTING` is on — see `signal_projection` |
 | `verdicts.witness_of(sig)` | `verdicts.py:242` inside `coverage`, reached from `assess` (`scoring.py:270`) | THE whole verdict-gate projection — see below |
 
 `witness_of` (`verdicts.py:147-192`) is itself the exact reader of everything
@@ -339,7 +340,12 @@ from scoring import (
     RankingResult,
     _attr_kinds,
 )
-from signals import Signal, probe_authority_of
+from signals import (
+    Signal,
+    fidelity_of,
+    fidelity_weighting_enabled,
+    probe_authority_of,
+)
 from verdicts import (
     EvidenceCoverage,
     ModalityClass,
@@ -898,7 +904,7 @@ def signal_projection(sig: Signal) -> tuple:
     drift from the function it claims to describe."""
     kind = sig.kind
     pa = probe_authority_of(sig)
-    return (
+    proj: tuple = (
         kind,
         sig.entity_type.value,
         # Only |deviation| is ever compared (scoring.py:78); the sign is not read.
@@ -912,6 +918,18 @@ def signal_projection(sig: Signal) -> tuple:
          if kind == VERIFICATION_HEALTHY_KIND else ()),
         _witness_projection(witness_of(sig)),
     )
+    if fidelity_weighting_enabled():
+        # A7. With the fidelity rule in force `rank` reads TWO more attrs keys:
+        # `fidelity` (which decides whether the signal may anchor a confirming
+        # pair) and `rule_id` (which the capped verdict NAMES). A key that did
+        # not carry them would serve one object's verdict to another whose only
+        # difference is the evidence's fidelity — the exact collision this
+        # module's soundness argument forbids. APPENDED under the flag, so with
+        # the flag off the projection is the tuple it always was, byte for byte,
+        # and the table in the module docstring still holds verbatim.
+        attrs = sig.attrs if isinstance(sig.attrs, dict) else {}
+        proj += (fidelity_of(sig), str(attrs.get("rule_id", "") or "").strip())
+    return proj
 
 
 def rank_key(tenant: str, catalog_version: str,
