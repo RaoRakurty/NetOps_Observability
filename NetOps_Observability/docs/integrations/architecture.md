@@ -84,6 +84,47 @@ flowchart TB
    Derivations are byte-identical Go↔TS (`problemDisplayID`/`friendlyProblemId`,
    `incidentDisplayID`/`friendlyIncidentId`).
 
+## Managed platform channels (the operator lane's inventory)
+
+Every destination in the platform-global lane is **managed**: its configuration
+lives in the notification-channel store (`notify.ChannelConfig`, persisted via
+`notifyConfigStore`), its secrets are write-only and sealed at rest with the
+platform DEK, it is reconfigurable live (`Dispatcher.Replace` / `Remove`, no
+restart), and it sits behind a per-channel severity floor. The admin surface for
+all of them is **platform-owner only** (`requirePlatformAdmin`, CLAUDE.md §3a
+rule 3): channels are platform-GLOBAL plumbing, so an org/tenant admin — who
+holds `administration:admin` inside its own scope — is refused with 403 and can
+neither read the operator's channel inventory nor repoint the platform's paging.
+
+| Channel | Class | Default floor | Secret (write-only, sealed) | Scope filter | Admin endpoints |
+|---|---|---|---|---|---|
+| `email` (SMTP) | chatter | `warning` | password | — | `/api/notify/smtp[/test]` |
+| `slack` | chat | `warning` | webhook URL | — | `/api/notify/slack[/test]` |
+| `teams` | chat | `warning` | webhook URL | — | `/api/notify/teams[/test]` |
+| `ntfy` | push | `critical` | topic token | — | `/api/notify/ntfy[/test]` |
+| `twilio` | SMS | `critical` | auth token | — | `/api/notify/twilio[/test]` |
+| `sns` | SMS / topic | `critical` | *(none stored — AWS keys stay in the environment)* | `platform` \| `all` (default `all`) | `/api/notify/sns[/test]` |
+| `pagerduty` | paging | `critical` | routing key | `platform` (default) \| `all` | `/api/notify/pagerduty[/test]` |
+
+Two notes on the newest entries (G10), which were env-only until now:
+
+- **Teams** mirrors Slack exactly — same chat class, same `warning` floor, same
+  whole-URL-is-the-secret handling. It carries no scope knob because scope
+  exists for the paging classes whose global credential wakes a human.
+- **SNS** stores only a destination (topic ARN / E.164 numbers / region). Its
+  AWS credential is deliberately NOT part of the config: `AWS_ACCESS_KEY_ID` /
+  `AWS_SECRET_ACCESS_KEY` stay in the deployment environment and are handed to
+  the signer at build time, so nothing secret is ever written to the config
+  file or returned by the API (`credentials_set: true` is all it will say). Its
+  `scope` defaults to `all` rather than PagerDuty's `platform`, because unlike
+  PagerDuty there is no per-tenant SNS adapter in the RCA lane for customer
+  alerts to route to instead; operators paging humans should set `platform`.
+
+The deprecated `TEAMS_WEBHOOK_URL` / `SNS_*` env wiring is migrated into the
+store **once**, latched in `env_seeded`, and then ignored — so disabling a
+channel in the admin UI is never overruled at the next boot by a variable still
+sitting in `.env`. See `teams.md` for the Teams setup guide.
+
 ## Read surfaces (#103 UX-1 — "where did this go?")
 
 - `GET /api/correlations/{id}/tickets` → `destinations[]`: every destination

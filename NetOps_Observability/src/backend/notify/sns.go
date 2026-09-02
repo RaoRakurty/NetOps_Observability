@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"netops/backend/models"
+	"netops/backend/safehttp"
 )
 
 // SNS sends SMS via Amazon SNS using the `Publish` action.
@@ -22,37 +23,62 @@ import (
 // Go stdlib. That keeps the scaffold dependency-free; switch to the
 // official aws-sdk-go-v2 if you want STS, IMDS, profile loading, etc.
 //
-// Required env (read by main.go and passed in here):
+// The DESTINATION (region / phone numbers / topic ARN) is admin-managed config
+// (notify_config.go, SNSConfig). The CREDENTIAL is not: the access key and
+// secret key come from the process environment
 //
 //	AWS_ACCESS_KEY_ID
 //	AWS_SECRET_ACCESS_KEY
-//	AWS_REGION              (e.g. us-east-1)
-//	SNS_PHONE_NUMBERS       comma-separated E.164 numbers
-//	SNS_TOPIC_ARN           optional — publish to a topic instead of phone numbers
+//
+// and are handed to NewSNS by the builder. They are never persisted in the
+// channel config, never returned by the admin API, and never logged (§8).
 type SNS struct {
 	accessKey string
 	secretKey string
 	region    string
 	numbers   []string
 	topicARN  string
-	client    *http.Client
+	// endpoint is the SNS base URL. Defaulted from the region in NewSNS and
+	// overridable ONLY through WithEndpoint, which tests use to point at a
+	// local fake. Kept as a field rather than a package var so there is no
+	// mutable global (CLAUDE.md §5) and no cross-test interference.
+	endpoint string
+	client   *http.Client
 }
 
 func NewSNS(accessKey, secretKey, region, phoneNumbersCSV, topicARN string) *SNS {
-	s := &SNS{
+	return &SNS{
 		accessKey: accessKey,
 		secretKey: secretKey,
 		region:    region,
-		topicARN:  topicARN,
-		client:    &http.Client{Timeout: 15 * time.Second},
+		topicARN:  strings.TrimSpace(topicARN),
+		numbers:   SplitList(phoneNumbersCSV),
+		endpoint:  snsEndpointFor(region),
+		// safehttp (SR-015): the region is admin-controlled and interpolated
+		// into the endpoint host, so the outbound call goes through the same
+		// SSRF-guarded dialer every other operator-configurable destination uses.
+		client: safehttp.Client(15 * time.Second),
 	}
-	for _, n := range strings.Split(phoneNumbersCSV, ",") {
-		n = strings.TrimSpace(n)
-		if n != "" {
-			s.numbers = append(s.numbers, n)
-		}
+}
+
+// snsEndpointFor builds the regional SNS endpoint. The region has already been
+// validated against awsRegionRe by the admin boundary; this is the second half
+// of that defence — an empty/unset region yields an empty endpoint, and Send
+// refuses rather than dialling something half-formed.
+func snsEndpointFor(region string) string {
+	region = strings.TrimSpace(region)
+	if region == "" || !awsRegionRe.MatchString(region) {
+		return ""
 	}
-	return s
+	return fmt.Sprintf("https://sns.%s.amazonaws.com/", region)
+}
+
+// WithEndpoint returns a copy targeting an explicit SNS endpoint. Test seam
+// (a local fake SNS), mirroring PagerDuty's overridable endpoint.
+func (s *SNS) WithEndpoint(u string) *SNS {
+	cp := *s
+	cp.endpoint = u
+	return &cp
 }
 
 func (s *SNS) Name() string { return "sns" }
@@ -61,8 +87,11 @@ func (s *SNS) Send(a models.Alert) error {
 	if s.accessKey == "" || s.secretKey == "" || s.region == "" {
 		return errors.New("aws credentials or region not set")
 	}
+	if s.endpoint == "" {
+		return errors.New("sns endpoint unresolved (invalid region)")
+	}
 	if len(s.numbers) == 0 && s.topicARN == "" {
-		return errors.New("neither SNS_PHONE_NUMBERS nor SNS_TOPIC_ARN configured")
+		return errors.New("neither SNS phone numbers nor a topic ARN configured")
 	}
 
 	body := smsBody(a)
@@ -90,10 +119,9 @@ func (s *SNS) publish(message, destKey, destVal string) error {
 	form.Set("Message", message)
 	form.Set(destKey, destVal)
 
-	endpoint := fmt.Sprintf("https://sns.%s.amazonaws.com/", s.region)
 	bodyStr := form.Encode()
 
-	req, err := http.NewRequest(http.MethodPost, endpoint, strings.NewReader(bodyStr))
+	req, err := http.NewRequest(http.MethodPost, s.endpoint, strings.NewReader(bodyStr))
 	if err != nil {
 		return err
 	}

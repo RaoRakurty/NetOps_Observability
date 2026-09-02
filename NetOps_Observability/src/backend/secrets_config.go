@@ -25,6 +25,7 @@ const (
 	fieldTwilioAuthToken = "notify.twilio.auth_token" // #nosec G101 -- vault.Vault AAD field-id (a config key name), not a credential value
 	fieldNtfyToken       = "notify.ntfy.token"        // #nosec G101 -- vault.Vault AAD field-id (a config key name), not a credential value
 	fieldSlackWebhookURL = "notify.slack.webhook_url"
+	fieldTeamsWebhookURL = "notify.teams.webhook_url"
 	fieldPagerDutyKey    = "notify.pagerduty.routing_key"
 	fieldOIDCSecret      = "oidc.client_secret"    // #nosec G101 -- vault.Vault AAD field-id (a config key name), not a credential value
 	fieldSSOIdPSecret    = "sso_idp.client_secret" // #nosec G101 -- vault.Vault AAD field-id (a config key name), not a credential value
@@ -61,7 +62,12 @@ func openFn(v *vault.Vault) secretXform {
 	return v.Decrypt
 }
 
-// mapNotify transforms the notify config's five secret fields (platform DEK).
+// mapNotify transforms the notify config's reversible secret fields (platform DEK).
+//
+// G10 added Teams. SNS has no entry ON PURPOSE: its AWS keys are never written
+// to the config file at all (they stay in the process environment), so there is
+// no at-rest secret of its own to seal. The topic ARN / phone numbers it does
+// store are destinations, not credentials.
 func mapNotify(c notify.ChannelConfig, f secretXform) (notify.ChannelConfig, error) {
 	var e error
 	if c.SMTP.Pass, e = f("", fieldSMTPPass, c.SMTP.Pass); e != nil {
@@ -74,6 +80,9 @@ func mapNotify(c notify.ChannelConfig, f secretXform) (notify.ChannelConfig, err
 		return c, e
 	}
 	if c.Slack.WebhookURL, e = f("", fieldSlackWebhookURL, c.Slack.WebhookURL); e != nil {
+		return c, e
+	}
+	if c.Teams.WebhookURL, e = f("", fieldTeamsWebhookURL, c.Teams.WebhookURL); e != nil {
 		return c, e
 	}
 	if c.PagerDuty.RoutingKey, e = f("", fieldPagerDutyKey, c.PagerDuty.RoutingKey); e != nil {
