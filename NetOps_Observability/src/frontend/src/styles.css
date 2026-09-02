@@ -5906,3 +5906,24 @@ button.cc-kpi-btn.on::after { content: "filtered"; display: block; margin-top: 5
 .cfg-diff-del { background: var(--sev-critical-bg); color: var(--bad); }
 .cfg-diff-hunk { color: var(--accent); }
 .cfg-diff-meta { color: var(--muted); }
+
+/* ── Packet capture (Project 3, FEATURE_PACKET_CAPTURE) ──
+   The device "Packet capture" tab. Reuses the configuration panel's frame
+   (.cfg-panel/.cfg-note/.cfg-actions) so the two device-operations surfaces
+   read as one; only the request form is new. */
+.pcap-form {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 12px;
+  align-items: start;
+  padding: 12px;
+  border: 1px solid var(--panel-border);
+  border-radius: var(--radius, 8px);
+  background: var(--surface);
+}
+.pcap-field { display: flex; flex-direction: column; gap: 4px; min-width: 0; font-size: 12px; }
+.pcap-field > span:first-child { font-weight: 600; color: var(--fg); }
+.pcap-field input[type="range"] { width: 100%; accent-color: var(--accent); }
+.pcap-field-wide { grid-column: 1 / -1; }
+.pcap-actions { display: flex; align-items: flex-end; gap: 8px; grid-column: 1 / -1; }
+.pcap-filter-cell { max-width: 220px; overflow-wrap: anywhere; }

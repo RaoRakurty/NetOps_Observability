@@ -27,3 +27,38 @@ export function vrfTermPlural(vendor?: string): string {
   if (t === "VPN instance") return "VPN instances";
   return `${t}s`;
 }
+
+/**
+ * An example interface name in the device's own dialect. Used as the placeholder
+ * and hint when a device has no discovered interface inventory to pick from, so
+ * the operator types the name THE DEVICE uses rather than a normalized one.
+ */
+export function interfaceExample(vendor?: string): string {
+  switch (canon(vendor ?? "")) {
+    case "juniper": case "junos": case "jnpr":
+      return "ge-0/0/0";
+    case "cisco": case "ios": case "iosxe": case "iosxr": case "nxos":
+      return "GigabitEthernet0/0/1";
+    case "arista": case "eos":
+      return "Ethernet1";
+    case "nokia": case "sros": case "alcatel": case "alcatellucent":
+      return "1/1/1";
+    case "srlinux":
+      return "ethernet-1/1";
+    case "huawei": case "vrp":
+      return "GigabitEthernet0/0/1";
+    case "mikrotik": case "routeros":
+      return "ether1";
+    case "paloalto": case "panos":
+      return "ethernet1/1";
+    case "fortinet": case "fortios":
+      return "port1";
+    default:
+      return "eth0";
+  }
+}
+
+/** One sentence of guidance for a free-text interface field. */
+export function interfaceHint(vendor?: string): string {
+  return `Type the interface name exactly as the device reports it — for example ${interfaceExample(vendor)}.`;
+}

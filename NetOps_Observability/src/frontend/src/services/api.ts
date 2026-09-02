@@ -2187,6 +2187,65 @@ export function configDriftParams(q: ConfigDriftQuery = {}): string {
   return p.toString();
 }
 
+// ---------- Packet capture (FEATURE_PACKET_CAPTURE) -------------------------
+// On-demand, strictly bounded tcpdump-style capture on ONE device interface.
+// Standing rules for every consumer of this family:
+//  · The capture is a WEAPON if unbounded, so the contract is bounded at both
+//    ends: duration 1-60 s, 1-10 000 packets. The client pre-validates to give
+//    an honest inline reason; the SERVER is the authority and answers 400.
+//  · The BPF filter is operator-authored text that reaches a packet engine.
+//    It is validated client-side against the same host/net/port/proto grammar
+//    the backend enforces, and shell metacharacters are refused outright.
+//  · Capture METADATA (interface, filter, error) is device/operator authored —
+//    render it as escaped React text, never through an HTML sink.
+//  · Tenant isolation (§3a) is a SERVER guarantee: no call here sends a tenant.
+// The whole family is dormant unless the backend flag is on; a 404/501 is the
+// "not enabled" answer, not a failure.
+
+/** Lifecycle of one capture. "expired" = the retention window closed and the
+ *  file is gone — an honest state, never rendered as a successful download. */
+export type PcapStatus = "running" | "done" | "failed" | "expired";
+
+export type PcapCapture = {
+  capture_id: string;
+  /** Device-reported interface name. Untrusted text — render escaped. */
+  interface: string;
+  started_at: string;
+  /** null while the capture is still running. */
+  ended_at: string | null;
+  status: PcapStatus;
+  packets: number;
+  bytes: number;
+  /** The BPF filter the capture ran with ("" = capture everything). */
+  filter: string;
+  /** Present on a failed capture — the reason the backend gave. */
+  error?: string;
+};
+
+/** Newest first. */
+export type PcapList = { items: PcapCapture[] };
+
+export type PcapStartRequest = {
+  interface: string;
+  duration_s: number;
+  max_packets: number;
+  filter?: string;
+};
+
+export type PcapStartResult = {
+  capture_id: string;
+  status: "running";
+  expires_at: string;
+};
+
+/** A safe, predictable download name: `<device>-<capture>.pcap`, with every
+ *  character outside [A-Za-z0-9._-] collapsed to `_` so an id from the wire can
+ *  never steer a path or a Content-Disposition. */
+export function pcapFileName(deviceId: string, captureId: string): string {
+  const safe = (s: string) => String(s ?? "").replace(/[^A-Za-z0-9._-]+/g, "_").slice(0, 64) || "capture";
+  return `${safe(deviceId)}-${safe(captureId)}.pcap`;
+}
+
 export const api = {
   // ---- BGP Operations (item 10) ----
   bgpWatchlist: () => request<{ watchlist: BgpWatchEntry[] }>("/api/bgp/watchlist"),
@@ -3592,6 +3651,56 @@ export const api = {
   configDriftList: (q: ConfigDriftQuery = {}) => {
     const qs = configDriftParams(q);
     return request<ConfigDriftPage>(`/api/config/drift${qs ? `?${qs}` : ""}`);
+  },
+
+  // ---------- Packet capture (FEATURE_PACKET_CAPTURE) ----------------------
+  // Reads need infrastructure:read; start, download and delete need
+  // infrastructure:write. The device id and capture id are path-encoded at
+  // every call site (never interpolated raw). The client gate in the panel is
+  // a courtesy only — a server 403 is caught and shown inline.
+  /** 202 + {capture_id,status,expires_at}; 409 when one is already running;
+   *  400 when the server's own guardrails refuse the request. */
+  pcapStart: (deviceId: string, req: PcapStartRequest) =>
+    request<PcapStartResult>(`/api/devices/${encodeURIComponent(deviceId)}/pcap`, {
+      method: "POST",
+      body: JSON.stringify(req),
+    }),
+  /** Capture history for one device, newest first. */
+  pcapList: (deviceId: string) =>
+    request<PcapList>(`/api/devices/${encodeURIComponent(deviceId)}/pcap`),
+  /** One capture — the poll target while a capture is running. */
+  pcapCapture: (deviceId: string, captureId: string) =>
+    request<PcapCapture>(
+      `/api/devices/${encodeURIComponent(deviceId)}/pcap/${encodeURIComponent(captureId)}`,
+    ),
+  pcapDelete: (deviceId: string, captureId: string) =>
+    request<void>(
+      `/api/devices/${encodeURIComponent(deviceId)}/pcap/${encodeURIComponent(captureId)}`,
+      { method: "DELETE" },
+    ),
+  /**
+   * Fetches the .pcap WITH the auth header (a bare <a href> would arrive
+   * tokenless and 401) and hands it to the browser through a normal anchor
+   * carrying `download`. Some sandboxed viewers block programmatic downloads;
+   * the panel therefore reports the byte size next to the button so an
+   * operator can tell "nothing arrived" from "there was nothing to fetch".
+   * A non-2xx becomes the same `"<status> <statusText>: <body>"` Error every
+   * other call throws, so 403/404 classify identically.
+   */
+  pcapDownload: async (deviceId: string, captureId: string): Promise<void> => {
+    const token = getToken();
+    const headers: Record<string, string> = token ? { Authorization: `Bearer ${token}` } : {};
+    const scope = getActiveScope();
+    if (scope) headers["X-Acting-Tenant"] = scope;
+    const res = await fetch(
+      `/api/devices/${encodeURIComponent(deviceId)}/pcap/${encodeURIComponent(captureId)}/download`,
+      { headers },
+    );
+    if (!res.ok) {
+      const text = await res.text().catch(() => "");
+      throw new Error(`${res.status} ${res.statusText}: ${text}`);
+    }
+    await downloadResponse(res, pcapFileName(deviceId, captureId));
   },
 };
 

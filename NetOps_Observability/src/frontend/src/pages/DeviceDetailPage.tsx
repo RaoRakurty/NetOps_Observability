@@ -5,6 +5,7 @@ import { MetricLine, MetricStat, labelSelector, fmtBps, fmtPct } from "../compon
 import InterfacePerformance from "./InterfacePerformance";
 import DeviceNeighbors from "./DeviceNeighbors";
 import DeviceConfigPanel from "./config/DeviceConfigPanel";
+import DevicePcapPanel from "./capture/DevicePcapPanel";
 
 // DeviceDetailPage — the full-page device drill-down (NetBox/Dynatrace-style):
 // breadcrumb + identity header + a KPI strip, then tabs (Overview · Interfaces ·
@@ -22,7 +23,7 @@ const TYPE_META: Record<string, { label: string; color: string }> = {
 
 const DOWN_AFTER_MS = 5 * 60 * 1000;
 
-type Tab = "overview" | "interfaces" | "routing" | "config";
+type Tab = "overview" | "interfaces" | "routing" | "config" | "capture";
 
 export default function DeviceDetailPage({ device, onClose }: { device: Device; onClose: () => void }) {
   const [tab, setTab] = useState<Tab>("overview");
@@ -56,7 +57,7 @@ export default function DeviceDetailPage({ device, onClose }: { device: Device; 
 
         {/* Tabs */}
         <div className="ddp-tabs" role="tablist">
-          {([["overview", "Overview"], ["interfaces", "Interfaces"], ["routing", "Routing & neighbors"], ["config", "Configuration"]] as [Tab, string][]).map(([id, label]) => (
+          {([["overview", "Overview"], ["interfaces", "Interfaces"], ["routing", "Routing & neighbors"], ["config", "Configuration"], ["capture", "Packet capture"]] as [Tab, string][]).map(([id, label]) => (
             <button key={id} role="tab" aria-selected={tab === id} className={tab === id ? "on" : ""} onClick={() => setTab(id)}>{label}</button>
           ))}
         </div>
@@ -85,6 +86,9 @@ export default function DeviceDetailPage({ device, onClose }: { device: Device; 
           {/* Configuration backup / golden baseline / drift (FEATURE_CONFIG_BACKUP).
               Renders its own "not enabled" card when the flag is off. */}
           {tab === "config" && <DeviceConfigPanel device={d} />}
+          {/* On-demand, bounded packet capture (FEATURE_PACKET_CAPTURE).
+              Renders its own "not enabled" card when the flag is off. */}
+          {tab === "capture" && <DevicePcapPanel device={d} />}
         </div>
       </div>
     </div>
