@@ -1,4 +1,4 @@
-# Event / parser catalog — Phase 2.
+# Event / parser catalog — Phase 2 + A3 (the catalog IS the executor).
 #
 # The metric catalog (normalization.yaml) covers state/counters/gauges. Half of
 # network root-cause lives in EVENTS (syslog, traps, NOTIFICATION reasons,
@@ -7,325 +7,1562 @@
 # metrics — so an event and a metric about the same BGP peer / interface
 # CORRELATE on the same identity keys.
 #
-# This is the SPEC; parse_events.py applies it and test_events.py proves it
-# against captured syslog fixtures. It mirrors (and is the authoritative spec
-# for) the correlation engine's src/correlation/producers.py syslog parsing.
+# A3 — ONE SOURCE OF TRUTH. Until A3 this file was a SPEC that
+# src/correlation/producers.py mirrored by hand: every family had a hand-written
+# `if` branch, the two could drift, and they DID (see `target_scope` below).
+# Now the `rules:` rows below ARE the parser:
 #
-# THE CORRELATION INVARIANT: each event family declares `correlates_with` — the
-# metric family it pairs with — and `join_on` — the identity keys both sides
-# share. bgp_adjacency_change (device,peer) ⨝ device_bgp_peer_state (device,peer).
+#     events.yaml  --bake_rules.py-->  src/correlation/parser_rules.py
+#                                        (GENERATED, checked in, drift-guarded)
+#                                              |
+#                        +---------------------+---------------------+
+#                        v                                           v
+#            producers.classify()                         parse_events.parse_event()
+#            (the runtime, → Signal)                      (conformance, → canonical event)
+#
+# There is no second grammar copy: one regex, read by both. A new symptom is a
+# ROW here plus a fixture — never a new code branch.
+#
+# THE CORRELATION INVARIANT (unchanged): each event family declares
+# `correlates_with` — the metric family it pairs with — and `join_on` — the
+# identity keys both sides share. bgp_adjacency_change (device,peer) ⨝
+# device_bgp_peer_state (device,peer).
 version: 1
 
-# Canonical event schema (every event family normalizes to these fields):
-#   event_type   - canonical event family name
-#   device       - canonical device identity (shared with metric plane)
+# HAND-BUMPED on any rule change; rides on every signal as `parser_rev`. Paired
+# with the COMPUTED rules_hash: the constant is the intent, the hash the proof.
+#
+# 2026-09-02-a3 — the rows became the parser. No GRAMMAR changed (the 1,123-entry
+# golden corpus replays byte-for-byte against the pre-A3 branch code), but the
+# corpus was restructured and `rules_hash` moved with it, so the human statement
+# moves too: a hash that changed under an unchanged parser_rev is exactly the
+# "someone forgot to bump" case the pairing exists to catch.
+parser_rev: "2026-09-02-a3"
+
+# ══ SCHEMA: a `rules:` row ═══════════════════════════════════════════════════
+#
+# IDENTITY / PROVENANCE
+#   rule_id      stable id; the Prometheus label and the provenance stamp. Fixed
+#                set, so it can never be widened by a device string.
+#   lane         syslog | trap | port | catalog
+#                  syslog  → producers.syslog_control_signal (control plane)
+#                  port    → producers.port_event_signal     (optics/DOM/FEC)
+#                  trap    → producers.trap_control_signal
+#                  catalog → conformance ONLY; NOT baked into the runtime image
+#                            (a family the canonical-event spec covers and no
+#                            correlation lane consumes yet — the firewall rows)
+#   source       the wire Source value stamped on the Signal: syslog | trap
+#   kind         the emitted Signal kind (∈ producers.EMITTED_KINDS for the
+#                syslog/trap lanes)
+#   entity_type  device | interface | device_or_interface (the DECLARED scope;
+#                `emit.entity` decides per event when it is conditional)
+#   family       the event family this rule implements → the fidelity ladder
+#                entry + the canonical event_type. null = grammar with no
+#                catalog family (it makes no evidence claim and stamps
+#                fidelity "code").
+#   generic      the unclassified safety net (severity-floor alarm), not a typed
+#                rule — counted separately in the promotion rate.
+#   shadow       EVALUATED and COUNTED, emits NOTHING and falls through to the
+#                next rule (A8). How a candidate grammar earns its promotion on
+#                real traffic before it is allowed to produce evidence.
+#
+# SCREEN CONTRACT (the ingest pre-filter is DERIVED from these — see
+# producers._build_syslog_screen)
+#   markers      classification-token literals the guard tests. One per DISJUNCT
+#                of the guard; where a guard is a conjunction, the more
+#                selective conjunct.
+#   pattern_src  the message regex the guard tests, as source text. MUST appear
+#                as a `re` node inside `guard` (bake_rules validates it).
+#   vendors      the vendor grammars this rule targets (documentation + audit)
+#
+# EXECUTION
+#   guard        a boolean tree over the lane's haystacks. Node forms:
+#                  {all: [...]} {any: [...]} {not: node} {always: bool}
+#                  {contains: [FIELD, "LITERAL"]}
+#                  {re: [FIELD, "pattern", FLAGS]}        FLAGS: "" | "i"
+#                  {eq|ne: [FIELD, "value"]}
+#                  {equals_any|not_in: [FIELD, [...]]}
+#                  {truthy: FIELD}   {var_true: varname}
+#                  {severity_floor: syslog|trap}
+#                FIELD is a lane haystack or `$var` (an extraction, lazily run):
+#                  syslog lane: msg, msg_u, tag, ctoken, ctoken_msg_u
+#                  port lane:   pctoken, msg
+#                  trap lane:   oid, name, etype
+#   extract      name → extraction spec, LAZY and memoized per event (a rule may
+#                carry fields only the catalog reads without taxing ingest).
+#                  {const: v} {field: FIELD} {var: name} {lane: name}
+#                  {ev: [k1, k2]}                first truthy raw event key
+#                  {re: [[FIELD, pat, group, flags], ...]}   first alternative
+#                  {findall: [FIELD, pat, flags]}  {nth: [listvar, i]}
+#                  {vb: [oid...]} {vbname: [substr...]}      SNMP varbinds
+#                  {pick: {find: [pat, flags], reject: [pat, flags]}}
+#                  {alt: [spec, ...]}            first non-empty
+#                  {bool: guard}  {case: [{when: guard, value: template}]}
+#                  {template: "..."}  {severity_num: true}
+#                  {scan: {...}}                 the STATE primitive:
+#                     target/target_order  classify the TRANSITION TARGET first
+#                     order/field/default  else scan the field in order
+#                     target_scope: all|catalog  (see the divergence note)
+#                     target_fallthrough: bool
+#                plus post-transforms on any spec: `lower: true`, `slice: N`.
+#   emit         kind, metric, modality, entity{type,id,when,else},
+#                severity ({by_state}|{case}|{from_severity_num}|literal, or
+#                omitted to use the row's fixed `severity`), native_id template,
+#                content_tag (a var whose sha256 prefix discriminates the id —
+#                tracker 198), tokens (templates; `local: true` qualifies a
+#                DEVICE-LOCAL name as `<device>:<name>` — tracker 168), attrs.
+#                Template placeholders are `{var}` and `{var|default}`; a token
+#                whose vars are empty is DROPPED, never rendered as a stub.
+#
+# ══ KNOWN DIVERGENCE (exactly one, pinned by a test) ═════════════════════════
+# `bgp_adjacency_change` declares `new state (\w+)` as its transition target
+# with `target_scope: catalog`. The conformance reader honours it (a flap INTO
+# Established is an `up`); the EXECUTABLE rule does not, because consulting it
+# would re-classify every "old state X new state Y" line already stored. The
+# defect is RECORDED here rather than hidden in a second grammar; closing it is
+# a behaviour change that needs its own corpus re-bake.
+
+# ── shared grammar fragments (YAML anchors — they expand at load, so the baked
+#    table holds the literal text; nothing is indirect at runtime) ────────────
+_frag:
+  ip: &ip '\b(\d{1,3}(?:\.\d{1,3}){3})\b'
+  mac: &mac '\b([0-9a-fA-F]{4}\.[0-9a-fA-F]{4}\.[0-9a-fA-F]{4}|(?:[0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2})\b'
+  sysid: &sysid '\b([0-9a-fA-F]{4}\.[0-9a-fA-F]{4}\.[0-9a-fA-F]{4})\b'
+  ifword: &ifword '[Ii]nterface\s+([A-Za-z][\w/.\-]*)'
+  port_shape: &port_shape '\b((?:Gi|Te|Fa|Po|Port-channel|Eth\w*|GigabitEthernet|TenGigE)[\d][\w/.\-]*)\b'
+  # down BEATS up: 'old state Established new state Idle' is a down.
+  updown: &updown
+    - [down, '\b(?:down|idle|init|backward|failed)\b', 'i']
+    - [up, '\b(?:up|established|full)\b', 'i']
+  bgp_churn_pattern: &bgp_churn_pattern '\b(?:NOTIFICATION\s+(?:sent\s+to|received\s+from)|maximum\s+prefix-limit)\b'
+  # The two tracker-184 BGP-churn rules share ONE guard; the subtype splits them.
+  bgp_churn_guard: &bgp_churn_guard
+    any:
+      - all:
+          - {contains: [ctoken, 'BGP']}
+          - any:
+              - {contains: [ctoken, 'NBR_RESET']}
+              - {contains: [ctoken, 'MAXPFX']}
+              - {contains: [ctoken, 'NOTIFICATION']}
+      - {re: [msg, *bgp_churn_pattern, 'i']}
+  bgp_churn_extract: &bgp_churn_extract
+    peer: {re: [[msg, *ip, 1, '']]}
+    # MNEMONIC FIRST, message second. %BGP-5-NBR_RESET states its reason as
+    # "(BGP Notification received)" — reading the message first would file a
+    # reset as a teardown. The message shapes are the JUNOS fallback only (rpd
+    # puts no mnemonic in appname) and are anchored on the "sent to"/"received
+    # from" that a Cisco reason text never contains.
+    subtype:
+      case:
+        - {when: {contains: [ctoken, 'NBR_RESET']}, value: nbr_reset}
+        - {when: {contains: [ctoken, 'MAXPFX']}, value: maxpfx}
+        - {when: {contains: [ctoken, 'NOTIFICATION']}, value: notification}
+        - {when: {re: [msg, '\bmaximum\s+prefix-limit\b', 'i']}, value: maxpfx}
+        - {when: {always: true}, value: notification}
+    # The peer was actually torn down: an explicit limit-exceeded / shutdown.
+    shut: {bool: {re: [msg, '\b(?:exceed(?:ed|s)?|shut\s?down|shutdown|disabl\w*)\b', 'i']}}
+    # The reason a vendor puts in parentheses. Bounded: untrusted text.
+    reason:
+      pick:
+        field: msg
+        find: ['\(([^)\n]{1,64})\)', '']
+        reject: ['(?:afi|external\s+as|internal\s+as|instance|as)\b|^[\d.%\s]+$', 'i']
+    # NOTIFICATION code/subcode ("6/4" on IOS; "code 6 ... subcode 4" on Junos).
+    code_a: {re: [[msg, '\b(\d{1,2})/(\d{1,2})\b', 1, ''], [msg, '\bcode\s+(\d{1,2})\b[^\n]{0,40}?\bsubcode\s+(\d{1,3})\b', 1, 'i']]}
+    code_b: {re: [[msg, '\b(\d{1,2})/(\d{1,2})\b', 2, ''], [msg, '\bcode\s+(\d{1,2})\b[^\n]{0,40}?\bsubcode\s+(\d{1,3})\b', 2, 'i']]}
+    code: {case: [{when: {truthy: '$code_a'}, value: '{code_a}/{code_b}'}]}
+    # Prefix counts: IOS "reaches 12000, max 250000"; Junos "nlri: 9000".
+    pfx_count: {re: [[msg, '\breaches\s+(\d{1,10})\b', 1, 'i'], [msg, '\bnlri:\s*(\d{1,10})\b', 1, 'i'], [msg, ':\s*(\d{1,10})\s+exceed', 1, 'i']]}
+    pfx_max: {re: [[msg, '\bmax(?:imum)?[\s:]+(\d{1,10})\b', 1, 'i'], [msg, '\blimit\s+(\d{1,10})\b', 1, 'i']]}
+  trap_iface: &trap_iface
+    alt:
+      - {vb: ['1.3.6.1.2.1.31.1.1.1.1']}     # ifName  (matches the metric model)
+      - {vb: ['1.3.6.1.2.1.2.2.1.2']}        # ifDescr
+      - {vb: ['1.3.6.1.2.1.2.2.1.1']}        # ifIndex
+      - {vbname: [ifname, ifdescr, interfacename, intfname]}
+      - {const: unknown}
+
+# ══ THE RULE TABLE ═══════════════════════════════════════════════════════════
+# Declared in CLASSIFICATION ORDER within each lane, because ORDER IS BEHAVIOUR:
+# the interpreter evaluates a lane's rules in sequence, first match wins, and
+# `rules_hash` covers the order for exactly that reason.
+rules:
+
+  # ── syslog control plane ───────────────────────────────────────────────────
+
+  # IS-IS adjacency — Nokia SR Linux emits "isisAdjacencyChange" in the message
+  # with a nil appname; Cisco IOS uses %CLNS-5-ADJCHANGE. Checked before the
+  # generic ADJCHANGE rule so CLNS isn't misfiled as "routing". Device-scoped;
+  # peer = the IS-IS system-id (the shared adjacency identity).
+  #
+  # The sampled/on-change METRIC misses an adjacency loss because SR Linux
+  # DELETES the adjacency on neighbor-down (down = path absence, masked by TSDB
+  # lookback). This event IS the authoritative flap record.
+  - rule_id: syslog.isis.adjacency_change
+    lane: syslog
+    source: syslog
+    kind: isis_adjacency_change
+    entity_type: device
+    family: isis_adjacency_change
+    vendors: [nokia, cisco]
+    markers: [ISISADJACENCYCHANGE, CLNS]
+    state_re: 'to state\s+(\w+)'
+    guard:
+      any:
+        - {contains: [msg_u, 'ISISADJACENCYCHANGE']}
+        - all:
+            - {contains: [ctoken, 'CLNS']}
+            - {contains: [ctoken, 'ADJ']}
+    extract:
+      peer: {re: [[msg, *sysid, 1, '']]}
+      # local interface — a canonical label the catalog reads; the Signal does
+      # not carry it, so it is only ever computed by the conformance reader.
+      ifname: {re: [[msg, '\busing interface\s+([A-Za-z][\w/.\-]*)', 1, 'i']]}
+      tgt: {re: [[msg, 'to state\s+(\w+)', 1, 'i']]}
+      state: {scan: {target: tgt, order: *updown, field: msg, default: unknown}}
+    emit:
+      kind: isis_adjacency_change
+      metric: isis_adjacency
+      modality: control_plane
+      entity: {type: device, id: '{host}'}
+      severity: {by_state: {down: high}, default: warn}
+      native_id: '{host}|isis_adj|{peer|?}|{state}|{ts_ms}'
+      tokens: [{t: '{host}'}, {t: '{peer}'}]
+      attrs:
+        peer: {var: peer}
+        state: {var: state}
+        tag: {alt: [{var: tag}, {const: isisAdjacencyChange}]}
+
+  # BGP adjacency change (the control-plane root-cause event).
+  #   Arista EOS: "%BGP-5-ADJCHANGE: peer 10.0.0.1 (AS 65001) old state
+  #               Established event RecvNotify new state Idle"
+  #   Cisco IOS : "%BGP-5-ADJCHANGE: neighbor 10.0.0.1 Down Interface flap"
+  #   Junos rpd : "NOTIFICATION received from 10.0.0.1 (External AS 65001): …"
+  #               (that shape is syslog.bgp.notification, below)
+  #
+  # WHY ONE GENERIC PEER REGEX AND NOT THREE VENDOR-ANCHORED ONES. The vendor
+  # shapes really are distinct — `\bpeer\s+<ip>` (Arista), `\bneighbor\s+<ip>`
+  # (Cisco), `\b(?:sent to|received from)\s+<ip>` (Junos) — and the catalog used
+  # to spell each out. The EXECUTABLE rule has always taken the first IP in the
+  # message instead, and the two agree on every line either has ever seen, so
+  # migrating the anchored set in would have been a behaviour change (a line
+  # naming two addresses would pick a different one) with no evidence behind it.
+  # The vendor shapes are recorded here; promoting them to the grammar is a
+  # deliberate change with its own corpus re-bake, not a side effect of A3.
+  - rule_id: syslog.bgp.adjacency_change
+    lane: syslog
+    source: syslog
+    kind: bgp_adjacency_change
+    entity_type: device
+    family: bgp_adjacency_change
+    vendors: [cisco, arista, juniper]
+    markers: [ADJCHANGE, ADJCHG]
+    guard:
+      all:
+        - any:
+            - {contains: [ctoken, 'ADJCHANGE']}
+            - {contains: [ctoken, 'ADJCHG']}
+        - {contains: [ctoken, 'BGP']}
+    extract:
+      peer: {re: [[msg, *ip, 1, '']]}
+      tgt_new: {re: [[msg, '\bnew state\s+(\w+)', 1, 'i']]}
+      # target_scope: catalog — THE DIVERGENCE. See the header note.
+      state:
+        scan:
+          target: tgt_new
+          target_scope: catalog
+          target_fallthrough: true
+          order: *updown
+          field: msg
+          default: unknown
+    emit:
+      kind: bgp_adjacency_change
+      metric: bgp_adjacency
+      modality: control_plane
+      entity: {type: device, id: '{host}'}
+      severity: {by_state: {down: high}, default: warn}
+      native_id: '{host}|bgp_adj|{peer|?}|{state}|{ts_ms}'
+      tokens: [{t: '{host}'}, {t: '{peer}'}]
+      attrs:
+        peer: {var: peer}
+        state: {var: state}
+        tag: {var: tag}
+
+  # OSPF adjacency change:
+  #   "%OSPF-5-ADJCHG: Process 1, Nbr 10.0.0.2 on Ethernet1 from FULL to DOWN"
+  - rule_id: syslog.ospf.adjacency_change
+    lane: syslog
+    source: syslog
+    kind: ospf_adjacency_change
+    entity_type: device
+    family: ospf_adjacency_change
+    vendors: [cisco, arista]
+    markers: [ADJCHANGE, ADJCHG]
+    guard:
+      all:
+        - any:
+            - {contains: [ctoken, 'ADJCHANGE']}
+            - {contains: [ctoken, 'ADJCHG']}
+        - {contains: [ctoken, 'OSPF']}
+    extract:
+      peer: {re: [[msg, *ip, 1, '']]}
+      ifname: {re: [[msg, '\bon\s+([A-Za-z][\w/.\-]*)', 1, 'i']]}
+      state: {scan: {order: *updown, field: msg, default: unknown}}
+    emit:
+      kind: ospf_adjacency_change
+      metric: ospf_adjacency
+      modality: control_plane
+      entity: {type: device, id: '{host}'}
+      severity: {by_state: {down: high}, default: warn}
+      native_id: '{host}|ospf_adj|{peer|?}|{state}|{ts_ms}'
+      tokens: [{t: '{host}'}, {t: '{peer}'}]
+      attrs:
+        peer: {var: peer}
+        state: {var: state}
+        tag: {var: tag}
+
+  # Any other protocol's ADJCHANGE (%RIB-5-ADJCHANGE, …). No catalog family: the
+  # grammar exists only here and makes no evidence claim → fidelity "code".
+  - rule_id: syslog.routing.adjacency_change
+    lane: syslog
+    source: syslog
+    kind: routing_adjacency_change
+    entity_type: device
+    family: null
+    vendors: [generic]
+    markers: [ADJCHANGE, ADJCHG]
+    guard:
+      any:
+        - {contains: [ctoken, 'ADJCHANGE']}
+        - {contains: [ctoken, 'ADJCHG']}
+    extract:
+      peer: {re: [[msg, *ip, 1, '']]}
+      state: {scan: {order: *updown, field: msg, default: unknown}}
+    emit:
+      kind: routing_adjacency_change
+      metric: routing_adjacency
+      modality: control_plane
+      entity: {type: device, id: '{host}'}
+      severity: {by_state: {down: high}, default: warn}
+      native_id: '{host}|routing_adj|{peer|?}|{state}|{ts_ms}'
+      tokens: [{t: '{host}'}, {t: '{peer}'}]
+      attrs:
+        peer: {var: peer}
+        state: {var: state}
+        tag: {var: tag}
+
+  # BGP NOTIFICATION (tracker 184). RFC 4271 §6 — a speaker that sends or
+  # receives a NOTIFICATION CLOSES the session, so the line IS an adjacency
+  # transition (state down), and on several platforms it is the ONLY line
+  # logged for a teardown. Anchored on "sent to"/"received from" so a Cisco
+  # %BGP-5-NBR_RESET reason ("(BGP Notification received)") is NOT read as one.
+  - rule_id: syslog.bgp.notification
+    lane: syslog
+    source: syslog
+    kind: bgp_adjacency_change
+    entity_type: device
+    family: bgp_adjacency_change
+    vendors: [cisco, juniper]
+    markers: [NBR_RESET, MAXPFX, NOTIFICATION]
+    pattern_src: *bgp_churn_pattern
+    state: down
+    severity: high
+    guard:
+      all:
+        - *bgp_churn_guard
+        - {not: {contains: [ctoken, 'NBR_RESET']}}
+        - {not: {contains: [ctoken, 'MAXPFX']}}
+        - any:
+            - {contains: [ctoken, 'NOTIFICATION']}
+            - {not: {re: [msg, '\bmaximum\s+prefix-limit\b', 'i']}}
+    extract:
+      <<: *bgp_churn_extract
+      state: {const: down}
+    emit:
+      kind: bgp_adjacency_change
+      metric: bgp_adjacency
+      modality: control_plane
+      entity: {type: device, id: '{host}'}
+      # `notify` keeps this distinct from the ADJCHANGE rule's id, so both
+      # reports of one teardown survive in the same millisecond.
+      native_id: '{host}|bgp_adj|notify|{peer|?}|{code|-}|down|{ts_ms}'
+      tokens: [{t: '{host}'}, {t: '{peer}'}]
+      attrs:
+        peer: {var: peer}
+        state: {var: state}
+        subtype: {const: notification}
+        code: {var: code}
+        reason: {var: reason}
+        tag: {var: tag}
+
+  # BGP session churn / prefix pressure (tracker 184). A reset reason may be a
+  # soft/administrative clear and a MAXPFX warning leaves the session
+  # ESTABLISHED — calling either "adjacency down" would be a false session-down,
+  # so they get their own state-bearing, peer-tokened kind. Per-prefix churn has
+  # NO syslog form on any vendor (it is BMP/BGP-UPDATE data); this is its
+  # session-level shadow, which is all syslog can carry.
+  - rule_id: syslog.bgp.route_churn
+    lane: syslog
+    source: syslog
+    kind: bgp_route_churn
+    entity_type: device
+    family: bgp_route_churn
+    vendors: [cisco, juniper]
+    markers: [NBR_RESET, MAXPFX, NOTIFICATION]
+    pattern_src: *bgp_churn_pattern
+    state_re: '\b(?:exceed(?:ed|s)?|shut\s?down|shutdown|disabl\w*)\b'
+    guard: *bgp_churn_guard
+    extract:
+      <<: *bgp_churn_extract
+      maxpfx: {bool: {eq: ['$subtype', maxpfx]}}
+      # A limit that was EXCEEDED shuts the peer; a threshold warning does not.
+      state:
+        case:
+          - when: {all: [{var_true: maxpfx}, {var_true: shut}]}
+            value: down
+          - {when: {always: true}, value: churn}
+    emit:
+      kind: bgp_route_churn
+      metric: bgp_route_churn
+      modality: control_plane
+      entity: {type: device, id: '{host}'}
+      severity: {by_state: {down: high}, default: warn}
+      native_id: '{host}|bgp_churn|{subtype}|{peer|?}|{pfx_count|-}|{state}|{ts_ms}'
+      tokens: [{t: '{host}'}, {t: '{peer}'}]
+      attrs:
+        peer: {var: peer}
+        state: {var: state}
+        subtype: {var: subtype}
+        reason: {var: reason}
+        prefix_count: {var: pfx_count}
+        prefix_max: {var: pfx_max}
+        tag: {var: tag}
+
+  # Link / line-protocol state change:
+  #   "%LINK-3-UPDOWN: Interface Ethernet1, changed state to down"
+  #   "%LINEPROTO-5-UPDOWN: Line protocol on Interface Ethernet1, changed …"
+  - rule_id: syslog.link.state_change
+    lane: syslog
+    source: syslog
+    kind: link_state_change
+    entity_type: interface
+    family: link_state_change
+    vendors: [cisco, arista]
+    markers: [UPDOWN]
+    guard:
+      all:
+        - any:
+            - {contains: [ctoken, 'LINK']}
+            - {contains: [ctoken, 'LINEPROTO']}
+        - {contains: [ctoken, 'UPDOWN']}
+    extract:
+      ifname: {alt: [{re: [[msg, *ifword, 1, '']]}, {const: unknown}]}
+      state: {scan: {order: *updown, field: msg, default: unknown}}
+    emit:
+      kind: link_state_change
+      metric: link_state
+      modality: control_plane
+      entity: {type: interface, id: '{host}:{ifname}'}
+      severity: {by_state: {down: high}, default: warn}
+      native_id: '{host}|link|{ifname}|{state}|{ts_ms}'
+      # tracker 168: entity_id is already host:ifname — a BARE local name would
+      # weld every device in the estate that owns the same port number.
+      tokens: [{t: '{host}'}]
+      attrs:
+        interface: {var: ifname}
+        state: {var: state}
+        tag: {var: tag}
+
+  # LLDP neighbor change — the cleanest "neighbor vanished" root-cause: a port
+  # whose LLDP peer drops cross-checks the IS-IS/BGP adjacencies. Arista cEOS
+  # %LLDP-5-NEIGHBOR_NEW/REMOVED; Nokia SRL nil appname + "remotePeerAdded/
+  # Removed" in the message.
+  - rule_id: syslog.lldp.neighbor_change
+    lane: syslog
+    source: syslog
+    kind: lldp_neighbor_change
+    entity_type: interface
+    family: lldp_neighbor_change
+    vendors: [arista, nokia]
+    markers: [LLDP, REMOTEPEER]
+    state_re: '\b(?:removed|deleted|aged)\b'
+    guard:
+      any:
+        - all:
+            - {contains: [ctoken, 'LLDP']}
+            - {contains: [ctoken, 'NEIGHBOR']}
+        - {contains: [msg_u, 'REMOTEPEER']}
+    extract:
+      ifname:
+        alt:
+          - {re: [[msg, 'on interface\s+([A-Za-z][\w/.\-]*)', 1, 'i'], [msg, *ifword, 1, '']]}
+          - {const: unknown}
+      state:
+        scan:
+          order:
+            - [down, '\b(?:removed|deleted|aged)\b', 'i']
+            - [up, '\b(?:added|new)\b', 'i']
+          field: msg
+          default: unknown
+    emit:
+      kind: lldp_neighbor_change
+      metric: lldp_neighbor
+      modality: control_plane
+      entity: {type: interface, id: '{host}:{ifname}'}
+      severity: {by_state: {down: high}, default: warn}
+      native_id: '{host}|lldp|{ifname}|{state}|{ts_ms}'
+      tokens: [{t: '{host}'}]
+      attrs:
+        interface: {var: ifname}
+        state: {var: state}
+        tag: {alt: [{var: tag}, {const: remotePeer}]}
+
+  # STP topology change, INTERFACE-scoped — cEOS %SPANTREE-6-INTERFACE_DEL/ADD/
+  # STATE. Prefer the transition target ("… to learning/forwarding").
+  - rule_id: syslog.stp.topology_change
+    lane: syslog
+    source: syslog
+    kind: stp_topology_change
+    entity_type: interface
+    family: stp_topology_change
+    vendors: [cisco, arista]
+    markers: [SPANTREE]
+    state_re: '\bto\s+(forwarding|learning|discarding|blocking)\b'
+    guard:
+      all:
+        - {contains: [tag, 'SPANTREE']}
+        - any:
+            - {re: [msg, *ifword, '']}
+            - {re: [msg, *port_shape, '']}
+    extract: &stp_extract
+      ifname: {re: [[msg, *ifword, 1, ''], [msg, *port_shape, 1, '']]}
+      inst_a: {re: [[msg, '\binstance\s+([A-Za-z0-9_\-]{1,32})\b', 1, 'i']]}
+      inst_b: {re: [[msg, '\bvlan\s*(\d{1,4})\b', 1, 'i']]}
+      inst_c: {re: [[msg, '\b(MST\d{1,4})\b', 1, '']]}
+      # `instance` is the vendor's own token (the canonical `stp_instance`
+      # label); `inst_tok` is the device-local grounding token, which prefixes a
+      # PVST VLAN so `vlan100` can never collide with an MST instance NAMED 100.
+      instance: {alt: [{var: inst_a}, {var: inst_b}, {var: inst_c}]}
+      inst_a_low: {var: inst_a, lower: true}
+      inst_c_low: {var: inst_c, lower: true}
+      inst_tok:
+        case:
+          - {when: {truthy: '$inst_a'}, value: '{inst_a_low}'}
+          - {when: {truthy: '$inst_b'}, value: 'vlan{inst_b}'}
+          - {when: {always: true}, value: '{inst_c_low}'}
+      tgt: {re: [[msg, '\bto\s+(forwarding|learning|discarding|blocking)\b', 1, 'i']]}
+      state:
+        scan:
+          target: tgt
+          target_order:
+            - [up, '(?:forwarding|learning)', 'i']
+            - [down, '(?:discarding|blocking)', 'i']
+          order:
+            - [down, '\b(?:removed|discarding|blocking)\b', 'i']
+            - [up, '\b(?:added|forwarding|learning)\b', 'i']
+          field: msg
+          default: unknown
+    emit:
+      kind: stp_topology_change
+      metric: stp_state
+      modality: control_plane
+      entity: {type: interface, id: '{host}:{ifname}'}
+      severity: {by_state: {down: high}, default: warn}
+      # An interface-scoped STP signal keeps its identity BYTE-FOR-BYTE: the
+      # port is the content, and those lines never collapsed.
+      native_id: '{host}|stp|{ifname}|{state}|{ts_ms}'
+      tokens: [{t: '{host}'}]
+      attrs:
+        interface: {var: ifname}
+        instance: {var: instance}
+        state: {var: state}
+        tag: {var: tag}
+
+  # STP topology-change NOTIFICATION (tracker 184) — a domain-wide TCN names NO
+  # interface: "%SPANTREE-5-TOPOTRAP: Topology Change Trap for instance MST0"
+  # (PVST: "for vlan 100"). The old branch fell back to the literal "unknown",
+  # so EVERY TCN landed on the SYNTHETIC entity `<host>:unknown` — one fake
+  # interface node per device that fused unrelated topology changes. There is
+  # nothing interface-shaped to key on, so a TCN is keyed on the DEVICE with the
+  # instance/VLAN as a device-local grounding token.
+  - rule_id: syslog.stp.topology_notification
+    lane: syslog
+    source: syslog
+    kind: stp_topology_change
+    entity_type: device
+    family: stp_topology_notification
+    vendors: [cisco]
+    markers: [SPANTREE]
+    state_re: '\bto\s+(forwarding|learning|discarding|blocking)\b'
+    guard: {contains: [tag, 'SPANTREE']}
+    extract: *stp_extract
+    emit:
+      kind: stp_topology_change
+      metric: stp_state
+      modality: control_plane
+      entity: {type: device, id: '{host}'}
+      severity: {by_state: {down: high}, default: warn}
+      # The instance is the only content a TCN carries; without it two TCNs for
+      # two different instances in one millisecond were ONE signal.
+      native_id: '{host}|stp_tcn|{instance|?}|{state}|{ts_ms}'
+      tokens: [{t: '{host}'}, {t: '{inst_tok}', local: true}]
+      attrs:
+        interface: {var: ifname}
+        instance: {var: instance}
+        state: {var: state}
+        tag: {var: tag}
+
+  # VTEP / NVE peer reachability (DC overlay) — NX-OS
+  # %NVE-5-BFD_CC_STATE_CHANGE ("BFD CC down for bfd-neighbor <remote-VTEP>"):
+  # the underlay→VTEP liveness that gates VXLAN-encapsulated traffic. The remote
+  # VTEP IP is a grounding token so it binds to underlay reachability/BGP to
+  # that loopback.
+  - rule_id: syslog.vtep.state_change
+    lane: syslog
+    source: syslog
+    kind: vtep_state_change
+    entity_type: device
+    family: null
+    vendors: [cisco]
+    markers: [NVE, VTEP]
+    guard:
+      any:
+        - {contains: [ctoken, 'NVE']}
+        - all:
+            - {contains: [ctoken, 'VTEP']}
+            - {contains: [ctoken_msg_u, 'BFD']}
+    extract:
+      peer: {re: [[msg, *ip, 1, '']]}
+      state: {scan: {order: *updown, field: msg, default: unknown}}
+    emit:
+      kind: vtep_state_change
+      metric: vtep_state
+      modality: control_plane
+      entity: {type: device, id: '{host}'}
+      severity: {by_state: {down: high}, default: warn}
+      native_id: '{host}|vtep|{peer|?}|{state}|{ts_ms}'
+      tokens: [{t: '{host}'}, {t: '{peer}'}]
+      attrs:
+        vtep: {var: peer}
+        state: {var: state}
+        tag: {var: tag}
+
+  # EVPN MAC mobility / duplicate-MAC freeze (DC overlay) — the cross-VTEP
+  # analogue of a local mac_flap: Arista %EVPN-3-BLACKLISTED_DUPLICATE_MAC,
+  # NX-OS %HMM-2-DUP_HOSTS, %L2FM-2-L2FM_VXLAN_MAC_MOVE_PORT_DOWN. Checked
+  # BEFORE the local mac_flap rule (NX-OS "VXLAN_MAC_MOVE" else hits it).
+  - rule_id: syslog.evpn.mac_move
+    lane: syslog
+    source: syslog
+    kind: evpn_mac_move
+    entity_type: device
+    family: null
+    vendors: [arista, cisco]
+    markers: [EVPN, HMM, DUP_HOST, VXLAN_MAC_MOVE]
+    pattern_src: '\b(?:blacklisted|duplicate host|between NVE and)\b'
+    severity: high
+    guard:
+      any:
+        - {contains: [ctoken, 'EVPN']}
+        - {contains: [ctoken, 'HMM']}
+        - {contains: [ctoken, 'DUP_HOST']}
+        - {contains: [ctoken, 'VXLAN_MAC_MOVE']}
+        - {re: [msg, '\b(?:blacklisted|duplicate host|between NVE and)\b', 'i']}
+    extract:
+      mac: {re: [[msg, *mac, 1, '']]}
+      vlan: {re: [[msg, '\bvlan\s*(\d+)\b', 1, 'i']]}
+      vni: {re: [[msg, '\bvni\s*(\d+)\b', 1, 'i']]}
+      vtep: {re: [[msg, 'VTEP\s+(\d{1,3}(?:\.\d{1,3}){3})', 1, 'i']]}
+      blacklisted: {bool: {re: [msg, 'blacklist|frozen|disabl|port[\s-]?down', 'i']}}
+    emit:
+      kind: evpn_mac_move
+      metric: evpn_mac_move
+      modality: control_plane
+      entity: {type: device, id: '{host}'}
+      native_id: '{host}|evpn_mac|{mac|?}|vlan{vlan|?}|{ts_ms}'
+      # A MAC is genuinely GLOBAL — two devices seeing the same MAC really are
+      # related (tracker 168) — so it stays bare, unlike a VLAN id or a port.
+      tokens:
+        - {t: '{host}'}
+        - {t: '{mac}'}
+        - {t: 'vlan{vlan}'}
+        - {t: 'vni{vni}'}
+        - {t: '{vtep}'}
+      tokens_fallback: host
+      attrs:
+        mac: {var: mac}
+        vlan: {var: vlan}
+        vni: {var: vni}
+        vtep: {var: vtep}
+        blacklisted: {var: blacklisted}
+        tag: {var: tag}
+
+  # First-hop redundancy (HSRP/VRRP) state change — Cisco %HSRP-5-STATECHANGE /
+  # %STANDBY-6-STATECHANGE, %VRRP-6-STATECHANGE. "-> Active"/"-> Master" is a
+  # TAKEOVER (a failover happened). Device-scoped; group + interface are
+  # DEVICE-LOCAL and therefore qualified (tracker 168): two routers in one FHRP
+  # group must relate through topology, not through a group number.
+  - rule_id: syslog.fhrp.state_change
+    lane: syslog
+    source: syslog
+    kind: fhrp_state_change
+    entity_type: device
+    family: null
+    vendors: [cisco, arista]
+    markers: [HSRP, VRRP, STANDBY]
+    state_re: '->\s*(\w+)'
+    guard:
+      any:
+        - {contains: [ctoken, 'HSRP']}
+        - {contains: [ctoken, 'VRRP']}
+        - {contains: [ctoken, 'STANDBY']}
+    extract:
+      proto:
+        case:
+          - {when: {contains: [ctoken, 'VRRP']}, value: vrrp}
+          - {when: {always: true}, value: hsrp}
+      group: {re: [[msg, '\b[Gg]r(?:ou)?p\s+(\d+)\b', 1, '']]}
+      ifname:
+        alt:
+          - {re: [[msg, *ifword, 1, ''], [msg, '\b((?:Vl(?:an)?|Gi|Te|Fa|Po|Port-channel|Eth\w*|GigabitEthernet|TenGigE)[\d][\w/.\-]*)\b', 1, '']]}
+          - {const: unknown}
+      # The NEW role: the target of an "X -> Y" transition, else the trailing
+      # state word.
+      role: {re: [[msg, '->\s*(\w+)', 1, ''], [msg, '\bstate\s+(\w+)\s*$', 1, 'i']], lower: true}
+      takeover: {bool: {equals_any: ['$role', [active, master]]}}
+    emit:
+      kind: fhrp_state_change
+      metric: fhrp_state
+      modality: control_plane
+      entity: {type: device, id: '{host}'}
+      severity: {case: [{when: {var_true: takeover}, value: high}], default: warn}
+      native_id: '{host}|fhrp|{proto}|{ifname}|grp{group|?}|{role|?}|{ts_ms}'
+      tokens:
+        - {t: '{host}'}
+        - {t: '{ifname}', local: true}
+        - {t: 'grp{group}', local: true}
+      tokens_fallback: host
+      attrs:
+        proto: {var: proto}
+        group: {var: group}
+        interface: {var: ifname}
+        state: {var: role}
+        tag: {var: tag}
+
+  # MAC flap / move — a host MAC oscillating between two ports: an L2 loop, a
+  # dual-homing/NIC-teaming misconfig, or a duplicate MAC. Cisco
+  # %SW_MATM-4-MACFLAP_NOTIF, NX-OS %L2FM-4-L2FM_MAC_MOVE, Arista %MACFLAP.
+  #
+  # tracker 184 — THE MOVE NEEDS A STATE. It is a one-way symptom (no vendor
+  # logs "the MAC stopped moving"), so the state is the KIND of movement, never
+  # a recovery word: "flapping" (oscillating) or "moved" (one relocation). Both
+  # sit outside aggregation.RECOVERY_STATES, so both read as unhealthy — the
+  # truth about a moving MAC.
+  - rule_id: syslog.mac.flap
+    lane: syslog
+    source: syslog
+    kind: mac_flap
+    entity_type: device
+    family: mac_move
+    vendors: [cisco, arista]
+    markers: [MACFLAP, MAC_MOVE]
+    pattern_src: '\b(?:is flapping between|has moved between|mac[\s_-]?move|mac[\s_-]?flap)\b'
+    state_re: '\bflap'
+    severity: high
+    guard:
+      any:
+        - {contains: [ctoken, 'MACFLAP']}
+        - {contains: [ctoken, 'MAC_MOVE']}
+        - {re: [msg, '\b(?:is flapping between|has moved between|mac[\s_-]?move|mac[\s_-]?flap)\b', 'i']}
+    extract:
+      mac: {re: [[msg, *mac, 1, '']]}
+      vlan: {re: [[msg, '\bvlan\s*(\d+)\b', 1, 'i']]}
+      ports: {findall: [msg, '\b(?:Gi|Te|Fa|Po|Port-channel|Eth\w*|GigabitEthernet|TenGigE)[\d][\w/.\-]*', '']}
+      port_a: {nth: [ports, 0]}
+      port_b: {nth: [ports, 1]}
+      flapping:
+        bool:
+          any:
+            - {re: [msg, '\bflap', 'i']}
+            - {contains: [ctoken, 'MACFLAP']}
+      state:
+        case:
+          - {when: {var_true: flapping}, value: flapping}
+          - {when: {always: true}, value: moved}
+      # NX-OS names the DIRECTION ("has moved from Eth1/1 to Eth1/2"); the Cisco
+      # flap line only names the pair, so from/to stay empty rather than
+      # guessing an order.
+      from_port: {re: [[msg, '\bfrom\s+((?:Gi|Te|Fa|Po|Port-channel|Eth\w*|GigabitEthernet|TenGigE)[\d][\w/.\-]*)\s+to\s+((?:Gi|Te|Fa|Po|Port-channel|Eth\w*|GigabitEthernet|TenGigE)[\d][\w/.\-]*)', 1, 'i']]}
+      to_port: {re: [[msg, '\bfrom\s+((?:Gi|Te|Fa|Po|Port-channel|Eth\w*|GigabitEthernet|TenGigE)[\d][\w/.\-]*)\s+to\s+((?:Gi|Te|Fa|Po|Port-channel|Eth\w*|GigabitEthernet|TenGigE)[\d][\w/.\-]*)', 2, 'i']]}
+    emit:
+      kind: mac_flap
+      metric: mac_flap
+      modality: control_plane
+      entity: {type: device, id: '{host}'}
+      native_id: '{host}|mac_flap|{mac|?}|vlan{vlan|?}|{ts_ms}'
+      tokens:
+        - {t: '{host}'}
+        - {t: '{mac}'}
+        - {t: 'vlan{vlan}', local: true}
+        - {t: '{port_a}', local: true}
+        - {t: '{port_b}', local: true}
+      tokens_fallback: host
+      attrs:
+        mac: {var: mac}
+        vlan: {var: vlan}
+        state: {var: state}
+        port_a: {var: port_a}
+        port_b: {var: port_b}
+        from_port: {var: from_port}
+        to_port: {var: to_port}
+        tag: {var: tag}
+
+  # Generic device-alarm fallback (#80 §4 keystone) — the SAFETY NET, and the
+  # LAST syslog rule by construction. Nothing above recognized this event, but
+  # if the DEVICE itself flagged it at warning or worse it is still real
+  # evidence: one canonical `device_alarm` so it grounds + correlates + tiers
+  # like any other. Below the floor stays a searchable log, never an RCA signal.
+  - rule_id: syslog.generic.device_alarm
+    lane: syslog
+    source: syslog
+    kind: device_alarm
+    entity_type: device_or_interface
+    family: null
+    vendors: [any]
+    generic: true
+    guard: {severity_floor: syslog}
+    extract:
+      ifname: {re: [[msg, *ifword, 1, '']]}
+      ev_facility: {ev: [facility]}
+      tag_facility: {re: [[tag, '^%*([^-]*)', 1, '']]}
+      facility:
+        case:
+          - {when: {truthy: '$ev_facility'}, value: '{ev_facility}'}
+          - {when: {always: true}, value: '{tag_facility}'}
+      tag_mnem: {re: [[tag, '-([^-]*)$', 1, '']]}
+      ev_etype: {ev: [event_type]}
+      mnem:
+        case:
+          - {when: {contains: [tag, '-']}, value: '{tag_mnem}'}
+          - {when: {always: true}, value: '{ev_etype}'}
+      sev_num: {severity_num: true}
+      text: {var: msg, slice: 256}
+    emit:
+      kind: device_alarm
+      metric: device_alarm
+      modality: control_plane
+      entity:
+        when: {truthy: '$ifname'}
+        type: interface
+        id: '{host}:{ifname}'
+        else: {type: device, id: '{host}'}
+      severity: {from_severity_num: true}
+      # tracker 198: the MESSAGE TEXT is the discriminator. Without it two
+      # DISTINCT unrecognized lines sharing facility+mnemonic(+interface) in one
+      # millisecond collapsed onto one signal_id and one was dropped as a
+      # "replay". A byte-identical redelivery still hashes the same and dedups.
+      native_id: '{host}|alarm|{facility}|{mnem|?}|{ifname|-}|{ts_ms}'
+      content_tag: msg
+      tokens: [{t: '{host}'}]
+      attrs:
+        facility: {var: facility}
+        mnemonic: {var: mnem}
+        severity: {var: sev_num}
+        interface: {var: ifname}
+        tag: {var: tag}
+        text: {var: text}
+
+  # ── syslog port intelligence (#94 P3b) ─────────────────────────────────────
+  # Transceiver / optics / DOM / FEC syslog → the sig.ent.spdc evidence kinds.
+  # ORDERED, first match wins.
+  #
+  # H11 (ReDoS): these run on device-supplied text on the single event loop. The
+  # original patterns chained unbounded `.*` gaps, whose backtracking on a
+  # keyword-dense non-matching line was superlinear (a 4 KB adversarial message
+  # cost ~3.9 s and froze consume/healthz/engine). Every inter-keyword gap is
+  # now the bounded `[^\n]{0,80}`, and the classification token is capped at
+  # 2 000 chars before any regex runs.
+
+  - rule_id: syslog.port.transceiver_unsupported
+    lane: port
+    source: syslog
+    kind: transceiver_unsupported
+    entity_type: interface
+    family: null
+    vendors: [cisco, arista, fortinet]
+    severity: high
+    pattern_src: 'unsupported\s+transceiver|unqualified\s+(sfp|transceiver|optic)|not\s+qualified|UNSUPPORTED_TRANSCEIVER|transceiver[^\n]{0,80}not\s+supported'
+    guard: {re: [pctoken, 'unsupported\s+transceiver|unqualified\s+(sfp|transceiver|optic)|not\s+qualified|UNSUPPORTED_TRANSCEIVER|transceiver[^\n]{0,80}not\s+supported', 'i']}
+    extract: &port_extract
+      port:
+        alt:
+          - {ev: [interface, if_name, ifname, port]}
+          - {re: [[msg, '\b((?:Ethernet|Eth|Et|Gi|Te|Fo|Hu|xe-|ge-|et-)[\w./:-]+)', 1, '']]}
+      message: {var: msg, slice: 240}
+    emit: &port_emit
+      # `kind` is omitted: bake_rules fills it from the row (these twelve rules
+      # differ ONLY in id / pattern / severity / kind, so the emit shape is one
+      # anchor and a new optics symptom is a five-line row).
+      metric: port_event
+      modality: device_telemetry
+      entity:
+        when: {truthy: '$port'}
+        type: interface
+        id: '{host}:{port}'
+        else: {type: device, id: '{host}'}
+      native_id: '{host}|portevt|{kind}|{port|-}|{ts_ms}'
+      tokens: [{t: '{host}'}]
+      attrs:
+        interface: {var: port}
+        port_event: {var: kind}
+        message: {var: message}
+
+  - rule_id: syslog.port.dom_rx_power_low
+    lane: port
+    source: syslog
+    kind: dom_rx_power_low
+    entity_type: interface
+    family: null
+    vendors: [generic]
+    severity: high
+    pattern_src: '(rx|receive)[^\n]{0,80}power[^\n]{0,80}(low|below)[^\n]{0,80}(alarm|threshold)|RX_POWER_LOW|low\s+rx\s+power'
+    guard: {re: [pctoken, '(rx|receive)[^\n]{0,80}power[^\n]{0,80}(low|below)[^\n]{0,80}(alarm|threshold)|RX_POWER_LOW|low\s+rx\s+power', 'i']}
+    extract: *port_extract
+    emit: *port_emit
+
+  - rule_id: syslog.port.dom_temperature_high
+    lane: port
+    source: syslog
+    kind: dom_temperature_high
+    entity_type: interface
+    family: null
+    vendors: [generic]
+    severity: high
+    pattern_src: '(temperature|temp)[^\n]{0,80}(high|above)[^\n]{0,80}(alarm|threshold|warning)|TEMP_HIGH|high\s+temperature'
+    guard: {re: [pctoken, '(temperature|temp)[^\n]{0,80}(high|above)[^\n]{0,80}(alarm|threshold|warning)|TEMP_HIGH|high\s+temperature', 'i']}
+    extract: *port_extract
+    emit: *port_emit
+
+  - rule_id: syslog.port.dom_lane_bias_anomaly
+    lane: port
+    source: syslog
+    kind: dom_lane_bias_anomaly
+    entity_type: interface
+    family: null
+    vendors: [generic]
+    severity: warn
+    pattern_src: '(tx\s+)?bias[^\n]{0,80}(high|current)[^\n]{0,80}(alarm|threshold)|BIAS_HIGH'
+    guard: {re: [pctoken, '(tx\s+)?bias[^\n]{0,80}(high|current)[^\n]{0,80}(alarm|threshold)|BIAS_HIGH', 'i']}
+    extract: *port_extract
+    emit: *port_emit
+
+  - rule_id: syslog.port.prefec_ber_rising
+    lane: port
+    source: syslog
+    kind: prefec_ber_rising
+    entity_type: interface
+    family: null
+    vendors: [generic]
+    severity: high
+    pattern_src: 'uncorrectable[^\n]{0,80}(fec|codeword|block)|FEC[^\n]{0,80}UNCORRECTABLE|post[-_ ]?fec[^\n]{0,80}(error|ber)'
+    guard: {re: [pctoken, 'uncorrectable[^\n]{0,80}(fec|codeword|block)|FEC[^\n]{0,80}UNCORRECTABLE|post[-_ ]?fec[^\n]{0,80}(error|ber)', 'i']}
+    extract: *port_extract
+    emit: *port_emit
+
+  - rule_id: syslog.port.fec_corrected_rate_high
+    lane: port
+    source: syslog
+    kind: fec_corrected_rate_high
+    entity_type: interface
+    family: null
+    vendors: [generic]
+    severity: warn
+    pattern_src: 'pre[-_ ]?fec\s+ber|fec[^\n]{0,80}corrected[^\n]{0,80}(rate|high)|CORRECTED_FEC'
+    guard: {re: [pctoken, 'pre[-_ ]?fec\s+ber|fec[^\n]{0,80}corrected[^\n]{0,80}(rate|high)|CORRECTED_FEC', 'i']}
+    extract: *port_extract
+    emit: *port_emit
+
+  - rule_id: syslog.port.pcs_local_fault
+    lane: port
+    source: syslog
+    kind: pcs_local_fault
+    entity_type: interface
+    family: null
+    vendors: [generic]
+    severity: high
+    pattern_src: 'local\s+fault|LOCAL_FAULT'
+    guard: {re: [pctoken, 'local\s+fault|LOCAL_FAULT', 'i']}
+    extract: *port_extract
+    emit: *port_emit
+
+  - rule_id: syslog.port.pcs_remote_fault
+    lane: port
+    source: syslog
+    kind: pcs_remote_fault
+    entity_type: interface
+    family: null
+    vendors: [generic]
+    severity: high
+    pattern_src: 'remote\s+fault|REMOTE_FAULT'
+    guard: {re: [pctoken, 'remote\s+fault|REMOTE_FAULT', 'i']}
+    extract: *port_extract
+    emit: *port_emit
+
+  - rule_id: syslog.port.pcs_deskew_fault
+    lane: port
+    source: syslog
+    kind: pcs_deskew_fault
+    entity_type: interface
+    family: null
+    vendors: [generic]
+    severity: high
+    pattern_src: 'deskew|align[^\n]{0,80}(marker|lane)[^\n]{0,80}(fail|lost)|PCS[^\n]{0,80}DESKEW'
+    guard: {re: [pctoken, 'deskew|align[^\n]{0,80}(marker|lane)[^\n]{0,80}(fail|lost)|PCS[^\n]{0,80}DESKEW', 'i']}
+    extract: *port_extract
+    emit: *port_emit
+
+  - rule_id: syslog.port.hi_ber_indication
+    lane: port
+    source: syslog
+    kind: hi_ber_indication
+    entity_type: interface
+    family: null
+    vendors: [generic]
+    severity: high
+    pattern_src: 'hi[-_ ]?ber|high\s+bit\s+error'
+    guard: {re: [pctoken, 'hi[-_ ]?ber|high\s+bit\s+error', 'i']}
+    extract: *port_extract
+    emit: *port_emit
+
+  - rule_id: syslog.port.link_down_no_light
+    lane: port
+    source: syslog
+    kind: link_down_no_light
+    entity_type: interface
+    family: null
+    vendors: [generic]
+    severity: high
+    pattern_src: 'no\s+(light|signal)|loss\s+of\s+(light|signal)|LOS\b|SIGNAL_LOSS'
+    guard: {re: [pctoken, 'no\s+(light|signal)|loss\s+of\s+(light|signal)|LOS\b|SIGNAL_LOSS', 'i']}
+    extract: *port_extract
+    emit: *port_emit
+
+  - rule_id: syslog.port.link_flap_on_insert
+    lane: port
+    source: syslog
+    kind: link_flap_on_insert
+    entity_type: interface
+    family: null
+    vendors: [generic]
+    severity: warn
+    pattern_src: 'transceiver[^\n]{0,80}(insert|remov)[^\n]{0,80}(insert|remov)|SFP[^\n]{0,80}flap|optic[^\n]{0,80}flap'
+    guard: {re: [pctoken, 'transceiver[^\n]{0,80}(insert|remov)[^\n]{0,80}(insert|remov)|SFP[^\n]{0,80}flap|optic[^\n]{0,80}flap', 'i']}
+    extract: *port_extract
+    emit: *port_emit
+
+  # ── SNMP traps ─────────────────────────────────────────────────────────────
+  # Traps are discrete control-plane RCA evidence — often the FIRST hard signal
+  # of a failure. The firehose is noisy and full of vendor notifications, so
+  # ONLY a small, explicit set of high-value, well-standardized families becomes
+  # a correlation signal. Classifying by OID beats the rendered trap_name (which
+  # varies by agent MIB load); the `.event_type` twins catch vendor traps the
+  # standard OIDs miss, keyed off the MIB-decoded envelope, not a per-vendor
+  # hardcode.
+
+  - rule_id: trap.link.state_change
+    lane: trap
+    source: trap
+    kind: link_state_change
+    entity_type: interface
+    family: link_state_change
+    vendors: [standard]
+    guard:
+      any:
+        - {equals_any: [oid, ['1.3.6.1.6.3.1.1.5.3', '1.3.6.1.6.3.1.1.5.4']]}
+        - {equals_any: [name, [linkDown, linkUp]]}
+    extract:
+      state:
+        case:
+          - when:
+              any:
+                - {eq: [oid, '1.3.6.1.6.3.1.1.5.3']}
+                - {eq: [name, linkDown]}
+            value: down
+          - {when: {always: true}, value: up}
+      iface: *trap_iface
+    emit:
+      kind: link_state_change
+      metric: link_state
+      modality: control_plane
+      entity: {type: interface, id: '{device}:{iface}'}
+      severity: {by_state: {down: high}, default: warn}
+      native_id: '{device}|trap_link|{iface}|{state}|{ts_ms}'
+      tokens: [{t: '{device}'}]
+      attrs:
+        interface: {var: iface}
+        state: {var: state}
+        trap_oid: {var: oid}
+        authenticated: {var: authed}
+
+  - rule_id: trap.device.restart
+    lane: trap
+    source: trap
+    kind: device_restart
+    entity_type: device
+    family: null
+    vendors: [standard]
+    severity: high
+    guard:
+      any:
+        - {equals_any: [oid, ['1.3.6.1.6.3.1.1.5.1', '1.3.6.1.6.3.1.1.5.2']]}
+        - {equals_any: [name, [coldStart, warmStart]]}
+    extract:
+      restart:
+        case:
+          - when:
+              any:
+                - {eq: [oid, '1.3.6.1.6.3.1.1.5.1']}
+                - {eq: [name, coldStart]}
+            value: cold
+          - {when: {always: true}, value: warm}
+    emit:
+      kind: device_restart
+      metric: device_restart
+      modality: control_plane
+      entity: {type: device, id: '{device}'}
+      native_id: '{device}|trap_restart|{restart}|{ts_ms}'
+      tokens: [{t: '{device}'}]
+      attrs:
+        restart: {var: restart}
+        trap_oid: {var: oid}
+        authenticated: {var: authed}
+
+  # BGP4-MIB (RFC 4273) + its deprecated notification root.
+  - rule_id: trap.bgp.adjacency_change
+    lane: trap
+    source: trap
+    kind: bgp_adjacency_change
+    entity_type: device
+    family: bgp_adjacency_change
+    vendors: [standard]
+    guard:
+      equals_any:
+        - oid
+        - ['1.3.6.1.2.1.15.7.2', '1.3.6.1.2.1.15.7.1',
+           '1.3.6.1.2.1.0.2', '1.3.6.1.2.1.0.1']
+    extract:
+      peer: {vb: ['1.3.6.1.2.1.15.3.1.7']}      # bgpPeerRemoteAddr
+      established: {bool: {equals_any: [oid, ['1.3.6.1.2.1.15.7.1', '1.3.6.1.2.1.0.1']]}}
+      state:
+        case:
+          - {when: {var_true: established}, value: up}
+          - {when: {always: true}, value: down}
+    emit:
+      kind: bgp_adjacency_change
+      metric: bgp_adjacency
+      modality: control_plane
+      entity:
+        when: {truthy: '$peer'}
+        type: device
+        id: '{device}:{peer}'
+        else: {type: device, id: '{device}'}
+      severity: {case: [{when: {var_true: established}, value: warn}], default: high}
+      native_id: '{device}|trap_bgp|{peer|?}|{state}|{ts_ms}'
+      tokens: [{t: '{device}'}, {t: '{peer}'}]
+      attrs:
+        peer: {var: peer}
+        state: {var: state}
+        trap_oid: {var: oid}
+        authenticated: {var: authed}
+
+  # Vendor BGP/link/restart traps the standard-OID checks miss (e.g. Arista
+  # arista_bgp4_v2_backward_transition), classified off the normalized
+  # event_type (#32 envelope) — vendor-agnostic, same Signal shapes.
+  - rule_id: trap.bgp.adjacency_change.event_type
+    lane: trap
+    source: trap
+    kind: bgp_adjacency_change
+    entity_type: device
+    family: bgp_adjacency_change
+    vendors: [any]
+    guard:
+      all:
+        - {contains: [etype, bgp]}
+        - any:
+            - {contains: [etype, backward]}
+            - {contains: [etype, transition]}
+            - {contains: [etype, established]}
+            - {contains: [etype, neighbor]}
+            - {contains: [etype, fsm]}
+            - {contains: [etype, state]}
+    extract:
+      established: {bool: {contains: [etype, establish]}}
+      state:
+        case:
+          - {when: {var_true: established}, value: up}
+          - {when: {always: true}, value: down}
+      peer:
+        alt:
+          - {vb: ['1.3.6.1.2.1.15.3.1.7']}
+          - {vbname: [peerremoteaddr, peeraddr, remoteaddr, peer]}
+    emit:
+      kind: bgp_adjacency_change
+      metric: bgp_adjacency
+      modality: control_plane
+      entity:
+        when: {truthy: '$peer'}
+        type: device
+        id: '{device}:{peer}'
+        else: {type: device, id: '{device}'}
+      severity: {case: [{when: {var_true: established}, value: warn}], default: high}
+      native_id: '{device}|trap_bgp|{peer|?}|{state}|{ts_ms}'
+      tokens: [{t: '{device}'}, {t: '{peer}'}]
+      attrs:
+        peer: {var: peer}
+        state: {var: state}
+        trap_oid: {var: oid}
+        event_type: {var: etype}
+        authenticated: {var: authed}
+
+  - rule_id: trap.link.state_change.event_type
+    lane: trap
+    source: trap
+    kind: link_state_change
+    entity_type: interface
+    family: link_state_change
+    vendors: [any]
+    guard:
+      all:
+        - {contains: [etype, link]}
+        - any:
+            - {contains: [etype, down]}
+            - {contains: [etype, up]}
+    extract:
+      state:
+        case:
+          - {when: {contains: [etype, down]}, value: down}
+          - {when: {always: true}, value: up}
+      iface: *trap_iface
+    emit:
+      kind: link_state_change
+      metric: link_state
+      modality: control_plane
+      entity: {type: interface, id: '{device}:{iface}'}
+      severity: {by_state: {down: high}, default: warn}
+      native_id: '{device}|trap_link|{iface}|{state}|{ts_ms}'
+      tokens: [{t: '{device}'}]
+      attrs:
+        interface: {var: iface}
+        state: {var: state}
+        trap_oid: {var: oid}
+        event_type: {var: etype}
+        authenticated: {var: authed}
+
+  - rule_id: trap.device.restart.event_type
+    lane: trap
+    source: trap
+    kind: device_restart
+    entity_type: device
+    family: null
+    vendors: [any]
+    severity: high
+    guard:
+      all:
+        - {contains: [etype, start]}
+        - any:
+            - {contains: [etype, cold]}
+            - {contains: [etype, warm]}
+    extract:
+      restart:
+        case:
+          - {when: {contains: [etype, cold]}, value: cold}
+          - {when: {always: true}, value: warm}
+    emit:
+      kind: device_restart
+      metric: device_restart
+      modality: control_plane
+      entity: {type: device, id: '{device}'}
+      native_id: '{device}|trap_restart|{restart}|{ts_ms}'
+      tokens: [{t: '{device}'}]
+      attrs:
+        restart: {var: restart}
+        trap_oid: {var: oid}
+        event_type: {var: etype}
+        authenticated: {var: authed}
+
+  # Generic trap alarm (#80 §4 keystone) — an unclassified trap is still real
+  # evidence IF the device/MIB flagged it at warning or worse. Below the floor
+  # stays searchable in OpenSearch, never an RCA signal.
+  - rule_id: trap.generic.device_alarm
+    lane: trap
+    source: trap
+    kind: device_alarm
+    entity_type: device_or_interface
+    family: null
+    vendors: [any]
+    generic: true
+    guard: {severity_floor: trap}
+    extract:
+      iface: *trap_iface
+      sev_num: {severity_num: true}
+      category: {ev: [category]}
+      # tracker 198: the OID alone does not identify the EVENT — two
+      # unclassified traps of one OID differing only in their varbinds
+      # (different entity, different threshold) collided in a millisecond. The
+      # varbind rendering IS the trap's content and is stable under redelivery.
+      content: {lane: trap_content}
+      interface_attr:
+        case:
+          - {when: {ne: ['$iface', unknown]}, value: '{iface}'}
+          - {when: {always: true}, value: ''}
+    emit:
+      kind: device_alarm
+      metric: device_alarm
+      modality: control_plane
+      entity:
+        when: {all: [{truthy: '$iface'}, {ne: ['$iface', unknown]}]}
+        type: interface
+        id: '{device}:{iface}'
+        else: {type: device, id: '{device}'}
+      severity: {from_severity_num: true}
+      native_id: '{device}|alarm|{oid|?}|{ts_ms}'
+      content_tag: content
+      tokens: [{t: '{device}'}]
+      attrs:
+        trap_oid: {var: oid}
+        trap_name: {var: name}
+        event_type: {var: etype}
+        category: {var: category}
+        severity: {var: sev_num}
+        authenticated: {var: authed}
+        interface: {var: interface_attr}
+
+  # ── catalog-only lane (NGFW) ───────────────────────────────────────────────
+  # Firewall logs the canonical-event schema covers and no correlation lane
+  # consumes yet. `lane: catalog` keeps them OUT of the baked runtime table:
+  # zero hot-path cost, one grammar. Promoting one to a correlation lane =
+  # change `lane`, add a fixture, re-bake. FortiOS is the reusable firewall
+  # pattern (key="value"); PAN-OS is positional CSV, anchored on the
+  # ",TYPE,SUBTYPE," pair — robust without full column mapping (that lives in
+  # the Vector pan parser).
+
+  - rule_id: catalog.fortios.traffic
+    lane: catalog
+    source: syslog
+    kind: fortios_traffic
+    entity_type: device
+    family: fortios_traffic
+    vendors: [fortinet]
+    severity: warn        # sessions are routine; threats carry severity
+    guard: {contains: [msg, 'type="traffic"']}
+    extract:
+      ifname: {re: [[msg, 'srcintf="([^"]+)"', 1, '']]}
+      action: {re: [[msg, 'action="(\w+)"', 1, '']]}
+      state:
+        scan:
+          target: action
+          target_fallthrough: true
+          order:
+            - [down, '\b(deny|drop|block|timeout|reset)\b', 'i']
+            - [up, '\b(accept|start|close|allow)\b', 'i']
+          field: msg
+          default: unknown
+    emit:
+      kind: fortios_traffic
+      severity: warn
+
+  # ANY UTM hit is a security signal → high, blocked or passthrough(detected).
+  - rule_id: catalog.fortios.utm_threat
+    lane: catalog
+    source: syslog
+    kind: fortios_utm_threat
+    entity_type: device
+    family: fortios_utm_threat
+    vendors: [fortinet]
+    severity: high
+    guard: {contains: [msg, 'type="utm"']}
+    extract:
+      ifname: {re: [[msg, 'srcintf="([^"]+)"', 1, '']]}
+      action: {re: [[msg, 'action="(\w+)"', 1, '']]}
+      state:
+        scan:
+          target: action
+          target_fallthrough: true
+          order:
+            - [down, '\b(block|blocked|dropped|reset|deny|quarantine)\b', 'i']
+            - [up, '\b(pass|passthrough|allow|detected|monitor)\b', 'i']
+          field: msg
+          default: unknown
+    emit:
+      kind: fortios_utm_threat
+      severity: high
+
+  - rule_id: catalog.pan.traffic
+    lane: catalog
+    source: syslog
+    kind: pan_traffic
+    entity_type: device
+    family: pan_traffic
+    vendors: [paloalto]
+    severity: warn
+    guard: {contains: [msg, ',TRAFFIC,']}
+    extract:
+      subtype: {re: [[msg, ',TRAFFIC,(\w+),', 1, '']]}
+      state:
+        scan:
+          target: subtype
+          target_fallthrough: true
+          order:
+            - [down, '\b(deny|drop)\b', 'i']
+            - [up, '\b(start|end|allow)\b', 'i']
+          field: msg
+          default: unknown
+    emit:
+      kind: pan_traffic
+      severity: warn
+
+  # ANY threat log is a security signal → high (blocked or alerted).
+  - rule_id: catalog.pan.threat
+    lane: catalog
+    source: syslog
+    kind: pan_threat
+    entity_type: device
+    family: pan_threat
+    vendors: [paloalto]
+    severity: high
+    guard: {contains: [msg, ',THREAT,']}
+    extract:
+      subtype: {re: [[msg, ',THREAT,(\w+),', 1, '']]}
+      state:
+        scan:
+          target: subtype
+          target_fallthrough: true
+          order:
+            - [down, '\b(reset|drop|block|deny|sinkhole)\b', 'i']
+            - [up, '\b(alert|allow|detected)\b', 'i']
+          field: msg
+          default: unknown
+    emit:
+      kind: pan_threat
+      severity: high
+
+
+# ══ EVENT FAMILIES ═══════════════════════════════════════════════════════════
+#
+# The canonical-event schema every family normalizes to:
+#   event_type   - canonical event family name (the key here)
+#   device       - canonical device identity (shared with the metric plane)
 #   ifName?      - interface identity (link/interface events)
-#   vrf?         - network-instance (routing events; default if unstated)
 #   peer?        - BGP/adjacency peer identity (shared with device_bgp_peer_state)
 #   severity     - warn | high  (down beats up)
-#   state        - up | down | unknown   (normalized transition direction)
-#   reason_code? - vendor reason text where present (e.g. "Interface flap")
-#   raw_ts       - device-stamped event time (event plane KEEPS true event time,
-#                  unlike the sampled metric plane — see the cEOS timestamp lesson)
+#   state        - the normalized transition, in the family's OWN vocabulary
+#   raw_ts       - device-stamped event time (the event plane KEEPS true event
+#                  time, unlike the sampled metric plane — the cEOS lesson)
 #   message      - original text (untrusted; rendered as escaped data only)
-
+#
+# A family row carries NO grammar any more — that lives in `rules:` above, once.
+# What is left is the CORRELATION contract and the fidelity claim:
+#   labels           canonical label → `hostname` or a rule VAR name
+#   correlates_with  the metric family it pairs with
+#   join_on          the identity keys both sides share
+#   fidelity_status  the ladder position of the GRAMMAR (doc_claimed <
+#                    lab_validated < live_validated); absent = "code", i.e. the
+#                    catalog makes no evidence claim. Rides on every signal.
 families:
-  # ---- BGP adjacency change (the control-plane root-cause event) ----------
+
   bgp_adjacency_change:
-    # RFC5424 tag (%FAC-SEV-MNEMONIC) arrives in appname; text after ':' in message.
-    # TRACKER 184: %BGP-3-NOTIFICATION joins this family. RFC 4271 §6 — a speaker
-    # that sends or receives a NOTIFICATION CLOSES the session, so the line is a
-    # genuine adjacency transition (state down), not a separate phenomenon. On
-    # several platforms it is the ONLY line logged for a teardown. Junos (rpd)
-    # carries no mnemonic in appname, so the message shape is matched too, and it
-    # is anchored on "sent to" / "received from" so a Cisco %BGP-5-NBR_RESET
-    # reason text ("(BGP Notification received)") is NOT read as a teardown.
-    match_tag: "(BGP).*(ADJCHANGE|ADJCHG)|BGP-\\d-NOTIFICATION|NOTIFICATION\\s+(?:sent\\s+to|received\\s+from)"
-    grammars:
-      # Arista EOS: "%BGP-5-ADJCHANGE: peer 10.0.0.1 (AS 65001) old state Established event RecvNotify new state Idle"
-      - vendor: arista
-        peer_re: '\bpeer\s+(\d{1,3}(?:\.\d{1,3}){3})\b'
-      # Cisco IOS:  "%BGP-5-ADJCHANGE: neighbor 10.0.0.1 Down Interface flap"
-      # Cisco IOS:  "%BGP-3-NOTIFICATION: received from neighbor 10.0.0.1 6/4 (Administrative Reset) 0 bytes"
-      - vendor: cisco
-        peer_re: '\bneighbor\s+(\d{1,3}(?:\.\d{1,3}){3})\b'
-      # Junos rpd: "NOTIFICATION received from 10.0.0.1 (External AS 65001): code 6 (Cease) subcode 4 (Administrative Reset)"
-      - vendor: juniper
-        peer_re: '\b(?:sent\s+to|received\s+from)\s+(\d{1,3}(?:\.\d{1,3}){3})\b'
-      # generic fallback: first IP in the message
-      - vendor: generic
-        peer_re: '\b(\d{1,3}(?:\.\d{1,3}){3})\b'
-    # Prefer the TRANSITION TARGET (the token after "new state") — a flap INTO
-    # Established is an 'up' even though "old state Idle" mentions a down token.
-    # Falls back to down-beats-up scan when no explicit new-state is present.
-    target_state_re: '\bnew state\s+(\w+)'
-    # A NOTIFICATION line names no FSM state — the teardown IS the message. Both
-    # the Cisco ("received from neighbor <ip> 6/4 (...)") and the Junos
-    # ("NOTIFICATION received from <ip> ...") shapes are therefore read as down.
-    state: {down: '\b(?:down|idle|active|connect|backward|failed|notification\s+(?:sent|received)|(?:sent\s+to|received\s+from)\s+(?:neighbor\s+)?\d{1,3}(?:\.\d{1,3}){3})\b', up: '\b(?:up|established|full)\b'}
-    entity: {type: device, key_from: hostname}
-    labels: {device: hostname, peer: peer_re}
-    severity: {down: high, up: warn}
+    labels: {device: hostname, peer: peer}
     correlates_with: device_bgp_peer_state
     join_on: [device, peer]
 
-  # ---- BGP session churn / prefix pressure (tracker 184) -------------------
-  # The lines a real BGP fault emits ALONGSIDE %BGP-5-ADJCHANGE. They are NOT
-  # adjacency transitions — a reset reason may be a soft/administrative clear and
-  # a prefix-limit WARNING leaves the session Established — so they are their own
-  # family, state-bearing and peer-tokened, joining the prefix gauges rather than
-  # the peer-state enum. Per-prefix churn (which prefixes moved) has NO syslog
-  # form on any vendor: it is BMP / BGP-UPDATE data. This is its session-level
-  # shadow, which is all syslog can carry.
+  # The lines a real BGP fault emits ALONGSIDE %BGP-5-ADJCHANGE — session-level
+  # churn, joining the prefix gauges rather than the peer-state enum.
   #
-  # fidelity: doc_claimed — the grammars come from vendor documentation, not from
-  # a captured device stream. The fixtures below are hand-built from those
+  # fidelity: doc_claimed — the grammars come from vendor documentation, not
+  # from a captured device stream. The fixtures are hand-built from those
   # documented shapes, so they pin parser↔catalog agreement but they do NOT
   # promote the row: only a real capture does (see README, fidelity ladder).
   bgp_route_churn:
     fidelity_status: doc_claimed
     live_capture: {status: pending, blocked_on: "no lab device configured with a BGP prefix-limit or a peer that resets under load"}
-    # Cisco IOS/IOS-XE/NX-OS: %BGP-5-NBR_RESET, %BGP-4-MAXPFX, %BGP-4-MAXPFXEXCEED.
-    # Junos (rpd, no mnemonic in appname): "Configured maximum prefix-limit
-    # threshold(90%) exceeded for inet-unicast nlri: 9000".
-    match_tag: "(BGP).*(NBR_RESET|MAXPFX)|maximum\\s+prefix-limit"
-    grammars:
-      # Cisco: "Neighbor 10.0.0.200 reset (BGP Notification received)"
-      #        "No. of prefix received from 10.0.0.200 (afi 0) reaches 12000, max 250000"
-      - vendor: cisco
-        peer_re: '\b(?:[Nn]eighbor|from)\s+(\d{1,3}(?:\.\d{1,3}){3})\b'
-      # Junos: "bgp_rt_maxprefixes_check: 10.0.0.200 (External AS 65001): ..."
-      - vendor: juniper
-        peer_re: '\b(\d{1,3}(?:\.\d{1,3}){3})\b'
-      - vendor: generic
-        peer_re: '\b(\d{1,3}(?:\.\d{1,3}){3})\b'
-    # A limit that was EXCEEDED shuts the peer (down); a reset or a threshold
-    # warning is instability, not a teardown (churn). down is tested first.
-    state: {down: '\b(?:exceed(?:ed|s)?|shut\s?down|shutdown|disabl\w*)\b', churn: '\b(?:reset|reaches|prefix-limit|threshold)\b'}
-    entity: {type: device, key_from: hostname}
-    labels: {device: hostname, peer: peer_re}
-    severity: {down: high, churn: warn}
+    labels: {device: hostname, peer: peer}
     correlates_with: device_bgp_pfx_in
     join_on: [device, peer]
 
-  # ---- OSPF adjacency change ---------------------------------------------
   ospf_adjacency_change:
-    match_tag: "(OSPF).*(ADJCHANGE|ADJCHG)"
-    grammars:
-      # "%OSPF-5-ADJCHG: Process 1, Nbr 10.0.0.2 on Ethernet1 from FULL to DOWN"
-      - vendor: generic
-        peer_re: '\bNbr\s+(\d{1,3}(?:\.\d{1,3}){3})\b'
-        ifname_re: '\bon\s+([A-Za-z][\w/.\-]*)'
-    # OSPF: "...from FULL to DOWN" — target is the token after "to".
-    target_state_re: '\bto\s+(\w+)'
-    state: {down: '\bdown\b', up: '\bfull\b'}
-    entity: {type: device, key_from: hostname}
-    labels: {device: hostname, peer: peer_re, ifName: ifname_re}
-    severity: {down: high, up: warn}
+    labels: {device: hostname, peer: peer, ifName: ifname}
     correlates_with: device_ospf_nbr_state    # Phase 3 metric (doc_claimed)
     join_on: [device, peer]
 
-  # ---- Link / line-protocol state change ---------------------------------
   link_state_change:
-    match_tag: "(LINK|LINEPROTO).*(UPDOWN)"
-    grammars:
-      # "%LINK-3-UPDOWN: Interface Ethernet1, changed state to down"
-      # "%LINEPROTO-5-UPDOWN: Line protocol on Interface Ethernet1, changed state to down"
-      - vendor: generic
-        ifname_re: '[Ii]nterface\s+([A-Za-z][\w/.\-]*)'
-    state: {down: '\bdown\b', up: '\bup\b'}
-    entity: {type: interface, key_from: [hostname, ifname_re]}
-    labels: {device: hostname, ifName: ifname_re}
-    severity: {down: high, up: warn}
+    labels: {device: hostname, ifName: ifname}
     correlates_with: device_if_oper_status
     join_on: [device, ifName]
 
-  # ---- LLDP neighbor change (L2 topology integrity; multi-vendor) ---------
-  # The cleanest "neighbor vanished" root-cause: a port whose LLDP peer drops is
-  # a cabling/link/peer-down signal that cross-checks the IS-IS/BGP adjacencies.
   lldp_neighbor_change:
-    # Arista cEOS: appname "%LLDP-5-NEIGHBOR_NEW" / "%LLDP-5-NEIGHBOR_REMOVED".
-    # Nokia SRL: appname nil; message carries "remotePeerAdded/remotePeerRemoved".
-    # Matcher spans appname+message (see parse_event), so one family is bi-vendor.
-    match_tag: "(LLDP.*NEIGHBOR|remotePeer(Added|Removed))"
-    grammars:
-      # Arista: "LLDP neighbor with chassisId .. and portId .. added on interface Ethernet2"
-      # Nokia : "LLDP remote peer removed on interface ethernet-1/1: System leaf1 .."
-      #   ([\w/.\-] stops at the ':' so both forms yield the local ifName).
-      - vendor: generic
-        ifname_re: '\bon interface\s+([A-Za-z][\w/.\-]*)'
-    # added/new = neighbor present (up); removed/deleted/aged = neighbor lost (down).
-    state: {down: '\b(?:removed|deleted|aged)\b', up: '\b(?:added|new)\b'}
-    entity: {type: interface, key_from: [hostname, ifname_re]}
-    labels: {device: hostname, ifName: ifname_re}
-    severity: {down: high, up: warn}
-    correlates_with: device_if_oper_status   # interface-scoped; a future device_lldp_frame_in is the more precise pair
+    labels: {device: hostname, ifName: ifname}
+    # interface-scoped; a future device_lldp_frame_in is the more precise pair
+    correlates_with: device_if_oper_status
     join_on: [device, ifName]
 
-  # ---- STP topology-change NOTIFICATION (tracker 184) ----------------------
-  # A domain-wide TCN names no interface: Cisco IOS/IOS-XE
-  # "%SPANTREE-5-TOPOTRAP: Topology Change Trap for instance MST0" (PVST: "for
-  # vlan 100"). It is a DEVICE-scoped event about an STP instance, and it must be
-  # matched BEFORE the interface-scoped stp_topology_change family below (whose
-  # match_tag "(SPANTREE)" would otherwise claim it and key it on a synthetic
-  # "<host>:unknown" interface — the identity collapse tracker 184 records).
+  # A domain-wide TCN names no interface, so it is DEVICE-scoped and must be
+  # matched only after the interface-scoped stp_topology_change rule has had its
+  # chance (the identity collapse tracker 184 records).
   #
   # fidelity: doc_claimed — documented Cisco shape, no captured fixture.
   stp_topology_notification:
     fidelity_status: doc_claimed
     live_capture: {status: pending, blocked_on: "the cEOS/SRL lab fabric is routed/EVPN; no PVST/MST domain emits a TCN"}
-    match_tag: "(TOPOTRAP|TOPOLOGY_CHANGE)"
-    grammars:
-      - vendor: cisco
-        instance_re: '\binstance\s+([A-Za-z0-9_\-]{1,32})\b'
-      - vendor: cisco
-        instance_re: '\bvlan\s*(\d{1,4})\b'
-    # A TCN carries no direction: it says the topology changed, not which way.
-    state: {}
-    entity: {type: device, key_from: hostname}
-    labels: {device: hostname, stp_instance: instance_re}
-    severity: {unknown: warn}
+    labels: {device: hostname, stp_instance: instance}
     correlates_with: device_if_oper_status
     join_on: [device]
 
-  # ---- MAC move / flap (tracker 184) ---------------------------------------
   # A host MAC oscillating between two ports (L2 loop, dual-homing/NIC-teaming
-  # misconfig, duplicate MAC). Cisco %SW_MATM-4-MACFLAP_NOTIF, NX-OS
-  # %L2FM-4-L2FM_MAC_MOVE, Arista %MACFLAP. The STATE is the KIND of movement —
-  # there is no vendor line saying "the MAC stopped moving", so neither value is a
-  # recovery: both read as unhealthy, which is the truth about a moving MAC.
+  # misconfig, duplicate MAC).
   #
   # fidelity: doc_claimed — documented vendor shapes, no captured fixture.
   mac_move:
     fidelity_status: doc_claimed
     live_capture: {status: pending, blocked_on: "no lab L2 access domain; the cEOS/SRL fabric does not learn host MACs"}
-    match_tag: "(MACFLAP|MAC_MOVE|is flapping between|has moved)"
-    grammars:
-      # Cisco: "Host 0011.2233.4455 in vlan 10 is flapping between port Gi1/0/1 and port Gi1/0/2"
-      # NX-OS: "Mac 00ab.cd00.1122 in vlan 20 has moved from Eth1/1 to Eth1/2"
-      - vendor: generic
-        mac_re: '\b([0-9a-fA-F]{4}\.[0-9a-fA-F]{4}\.[0-9a-fA-F]{4}|(?:[0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2})\b'
-    # "flapping" (oscillating between two ports) beats "moved" (one relocation).
-    state: {flapping: '\bflap\w*\b', moved: '\b(?:has moved|mac[\s_-]?move)\b'}
-    entity: {type: device, key_from: hostname}
-    labels: {device: hostname, mac: mac_re}
-    severity: {flapping: high, moved: high}
+    labels: {device: hostname, mac: mac}
     correlates_with: device_if_oper_status
     join_on: [device]
 
-  # ---- STP topology change (L2 forwarding-state events) -------------------
-  # A port leaving/entering the spanning tree, or a forwarding-state transition —
-  # the L2 control-plane analogue of an adjacency change.
+  # A port leaving/entering the spanning tree, or a forwarding-state transition
+  # — the L2 control-plane analogue of an adjacency change. (SRL fabric is
+  # routed/EVPN — no STP events; add an SRL xstp eventType if STP appears there.)
   stp_topology_change:
-    # Arista cEOS: "%SPANTREE-6-INTERFACE_DEL/ADD/STATE". (SRL fabric is routed/
-    # EVPN — no STP events; add an SRL xstp eventType here if STP appears on SRL.)
-    match_tag: "(SPANTREE)"
-    grammars:
-      # "Interface Ethernet3 has been removed from instance MST0"
-      # "Interface Ethernet3 instance MST0 moving from discarding to learning"
-      - vendor: arista
-        ifname_re: '\bInterface\s+([A-Za-z][\w/.\-]*)'
-    # Prefer the transition TARGET (token after 'to'); fall back to message scan.
-    # forwarding/learning/added = up-ward; removed/discarding/blocking = down.
-    target_state_re: '\bto\s+(\w+)'
-    state: {down: '\b(?:removed|discarding|blocking)\b', up: '\b(?:forwarding|learning|added)\b'}
-    entity: {type: interface, key_from: [hostname, ifname_re]}
-    labels: {device: hostname, ifName: ifname_re}
-    severity: {down: high, up: warn}
+    labels: {device: hostname, ifName: ifname}
     correlates_with: device_if_oper_status
     join_on: [device, ifName]
 
-  # ---- IS-IS adjacency change (the IGP flap the METRIC plane cannot see) ---
-  # The sampled/on-change metric misses an adjacency loss because SR Linux DELETES
-  # the adjacency on neighbor-down (down = path absence, masked by TSDB lookback).
-  # This event IS the authoritative flap record — it joins device_isis_adj_state
-  # on (device, isis_neighbor). (Why the SRL event plane had to be wired.)
+  # The IGP flap the METRIC plane cannot see: SR Linux DELETES the adjacency on
+  # neighbor-down (down = path absence, masked by TSDB lookback). This event IS
+  # the authoritative flap record — why the SRL event plane had to be wired.
   isis_adjacency_change:
-    # Nokia SRL: appname nil; message "isis|..|EV|isisAdjacencyChange|W: ... the
-    #   level-2 IS-IS adjacency with system 0100.0000.0011, using interface
-    #   ethernet-1/1.0, moved to state DOWN." Cisco IOS: "%CLNS-5-ADJCHANGE".
-    match_tag: "(isisAdjacencyChange|ISIS.*ADJ|CLNS.*ADJCHANGE)"
-    grammars:
-      # SRL: system-id after 'system', local interface after 'using interface'.
-      - vendor: nokia
-        peer_re: '\bsystem\s+([0-9a-fA-F]{4}\.[0-9a-fA-F]{4}\.[0-9a-fA-F]{4})'
-        ifname_re: '\busing interface\s+([A-Za-z][\w/.\-]*)'
-      # generic fallback: first system-id-shaped token.
-      - vendor: generic
-        peer_re: '\b([0-9a-fA-F]{4}\.[0-9a-fA-F]{4}\.[0-9a-fA-F]{4})\b'
-    # target after 'to state'; UP = up, DOWN/INIT/FAILED = down.
-    target_state_re: '\bto state\s+(\w+)'
-    state: {down: '\b(?:down|init|failed)\b', up: '\bup\b'}
-    entity: {type: device, key_from: hostname}
-    labels: {device: hostname, isis_neighbor: peer_re, ifName: ifname_re}
-    severity: {down: high, up: warn}
+    labels: {device: hostname, isis_neighbor: peer, ifName: ifname}
     correlates_with: device_isis_adj_state
     join_on: [device, isis_neighbor]
 
-  # ---- Firewall (NGFW) event plane — FortiOS, the reusable firewall pattern ----
-  # FortiOS logs are key="value"; the Vector FortiOS parser normalizes device=devname
-  # and surfaces type/subtype as appname. The same shape applies to Palo Alto (CSV) /
-  # Versa with their own grammars — see [[netops-firewall-onboarding-methodology]].
-
-  # Allowed/denied session (type="traffic").
+  # ---- Firewall (NGFW) event plane — the reusable firewall pattern. The same
+  # shape applies to Versa with its own grammar; see
+  # [[netops-firewall-onboarding-methodology]].
   fortios_traffic:
-    match_tag: 'type="traffic"'
-    grammars:
-      # "... srcintf=\"port3\" ... action=\"accept|deny|close|timeout\" ..."
-      - vendor: fortinet
-        ifname_re: 'srcintf="([^"]+)"'
-    target_state_re: 'action="(\w+)"'
-    state: {down: '\b(deny|drop|block|timeout|reset)\b', up: '\b(accept|start|close|allow)\b'}
-    entity: {type: device, key_from: hostname}
-    labels: {device: hostname, ifName: ifname_re}
-    severity: {down: warn, up: warn}        # sessions are routine; threats carry severity
+    labels: {device: hostname, ifName: ifname}
     correlates_with: device_session_count
     join_on: [device]
 
-  # UTM / threat detection (type="utm": ips / virus / webfilter / app-control).
-  # ANY UTM hit is a security signal → high, whether blocked or passthrough(detected).
   fortios_utm_threat:
-    match_tag: 'type="utm"'
-    grammars:
-      - vendor: fortinet
-        ifname_re: 'srcintf="([^"]+)"'
-    target_state_re: 'action="(\w+)"'
-    state: {down: '\b(block|blocked|dropped|reset|deny|quarantine)\b', up: '\b(pass|passthrough|allow|detected|monitor)\b'}
-    entity: {type: device, key_from: hostname}
-    labels: {device: hostname, ifName: ifname_re}
-    severity: {down: high, up: high}
+    labels: {device: hostname, ifName: ifname}
     correlates_with: device_session_count
     join_on: [device]
 
-  # ---- Palo Alto NGFW (PAN-OS CSV syslog) — same firewall methodology as FortiOS,
-  # different grammar. PAN logs are positional CSV: "...,<serial>,TYPE,SUBTYPE,...".
-  # The SUBTYPE token is positionally fixed right after TYPE, so we anchor on
-  # ",TRAFFIC,(subtype)," / ",THREAT,(subtype)," — robust without full CSV column
-  # mapping (that lives in the Vector pan parser). doc_claimed (PAN-OS log ref). ----
-
-  # Allowed/denied session (type TRAFFIC; subtype start/end = allowed, drop/deny = blocked).
   pan_traffic:
-    match_tag: ',TRAFFIC,'
-    grammars:
-      - vendor: paloalto   # no positional regex extraction here — device from hostname
-    target_state_re: ',TRAFFIC,(\w+),'
-    state: {down: '\b(deny|drop)\b', up: '\b(start|end|allow)\b'}
-    entity: {type: device, key_from: hostname}
     labels: {device: hostname}
-    severity: {down: warn, up: warn}
     correlates_with: device_session_count
     join_on: [device]
 
-  # Threat detection (type THREAT: vulnerability/virus/spyware/url/wildfire/...).
-  # ANY threat log is a security signal → high (blocked or alerted).
   pan_threat:
-    match_tag: ',THREAT,'
-    grammars:
-      - vendor: paloalto
-    target_state_re: ',THREAT,(\w+),'
-    state: {down: '\b(reset|drop|block|deny|sinkhole)\b', up: '\b(alert|allow|detected)\b'}
-    entity: {type: device, key_from: hostname}
     labels: {device: hostname}
-    severity: {down: high, up: high}
     correlates_with: device_session_count
     join_on: [device]

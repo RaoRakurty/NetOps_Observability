@@ -10,8 +10,13 @@ These tests pin soundness three independent ways:
 
   1. STRUCTURAL — the screen is DERIVED. Its port-event half is extracted from
      `_PORT_EVENT_RULES` by `regex_screen`; its control-plane half is
-     re-derived here from `syslog_control_signal`'s OWN AST, so a new branch
+     re-derived here from each syslog rule's OWN GUARD TREE, so a new rule
      whose marker nobody registered is RED.
+
+     (Before A3 that walk read `syslog_control_signal`'s Python AST, because the
+     guards WERE Python. They are catalog rows now — telemetry-catalog/
+     events.yaml — so the walk reads the rows. Same contract, same fail-closed
+     rule for an unrecognized shape, one less layer of indirection.)
   2. PROPERTY — >=100k lines from the ratified harness generator mix
      (`scripts/scale-miniladder.py` EVENT_MIX_REALISTIC + EVENT_MIX_NOISE) are
      replayed through both classifiers with and without the screen: the
@@ -21,8 +26,6 @@ These tests pin soundness three independent ways:
 """
 from __future__ import annotations
 
-import ast
-import inspect
 import json
 import re
 from datetime import datetime, timedelta, timezone
@@ -45,81 +48,72 @@ def _covered(literal: str) -> bool:
     return any(lit in hay for lit in lits)
 
 
-def _guard_covered(node: ast.expr) -> bool:
+def _guard_covered(node) -> bool:
     """Is this promotion guard implied by the screen?
 
-    An OR needs EVERY branch covered (any branch alone can admit a line); an AND
-    needs only ONE conjunct (all must hold, so screening on one is sound). An
-    unrecognized shape is NOT covered — fail closed, so a new guard idiom shows
-    up as a test failure rather than a silent hole.
+    An `any` needs EVERY disjunct covered (any one alone can admit a line); an
+    `all` needs only ONE conjunct (all must hold, so screening on one is sound).
+    An unrecognized shape — and a `not`, and an UNREGISTERED regex — is NOT
+    covered: fail closed, so a new guard idiom shows up as a test failure rather
+    than as a silent hole.
     """
-    if isinstance(node, ast.BoolOp):
-        if isinstance(node.op, ast.Or):
-            return all(_guard_covered(v) for v in node.values)
-        return any(_guard_covered(v) for v in node.values)
-    if (isinstance(node, ast.Compare) and len(node.ops) == 1
-            and isinstance(node.ops[0], ast.In)
-            and isinstance(node.left, ast.Constant)
-            and isinstance(node.left.value, str)):
-        return _covered(node.left.value)
-    if isinstance(node, ast.Call):
-        fn = node.func
-        name = fn.attr if isinstance(fn, ast.Attribute) else getattr(fn, "id", "")
-        if name in ("search", "match", "fullmatch") and node.args:
-            pat = node.args[0]
-            if isinstance(pat, ast.Constant) and isinstance(pat.value, str):
-                assert pat.value in P._CP_GUARD_PATTERNS, (
-                    f"promotion guard uses an UNREGISTERED regex {pat.value!r} — "
-                    "add it to producers._CP_GUARD_PATTERNS or the screen may "
-                    "reject a line it matches")
-                screen = pattern_screen(pat.value)
-                return bool(screen) and all(_covered(lit) for lit in screen)
+    if not isinstance(node, dict) or len(node) != 1:
+        return False
+    op, arg = next(iter(node.items()))
+    if op == "any":
+        return all(_guard_covered(v) for v in arg)
+    if op == "all":
+        return any(_guard_covered(v) for v in arg)
+    if op == "contains":
+        return _covered(str(arg[1]))
+    if op == "re":
+        # A regex is only allowed to CARRY the coverage of a guard if the rule
+        # registered it as its `pattern_src`; anything else the screen has never
+        # seen and cannot be relied on (the bake refuses a `pattern_src` that is
+        # not a live `re` node of its own guard, so the two directions meet).
+        pat = str(arg[1])
+        if pat not in P._CP_GUARD_PATTERNS:
+            return False
+        screen = pattern_screen(pat)
+        return bool(screen) and all(_covered(lit) for lit in screen)
     return False
 
 
-def _severity_guard(node: ast.expr) -> bool:
+def _severity_guard(node) -> bool:
     """The generic device-alarm net: `sev_num is not None and sev_num <= FLOOR`.
     The screen implements it directly (severity is checked before the literal
     scan), so recognizing it is enough."""
-    return "ALARM_SEVERITY_FLOOR" in ast.dump(node)
+    return isinstance(node, dict) and "severity_floor" in node
 
 
-def _promotion_guards() -> list[ast.If]:
-    """Every TOP-LEVEL `if` in syslog_control_signal that can return a Signal."""
-    import textwrap
-    src = textwrap.dedent(inspect.getsource(P.syslog_control_signal))
-    fn = ast.parse(src).body[0]
-    assert isinstance(fn, ast.FunctionDef)
-    out = []
-    for stmt in fn.body:
-        if not isinstance(stmt, ast.If):
-            continue
-        returns_signal = any(
-            isinstance(n, ast.Return) and isinstance(n.value, ast.Call)
-            and getattr(n.value.func, "id", "") == "Signal"
-            for n in ast.walk(stmt))
-        if returns_signal:
-            out.append(stmt)
-    return out
+def _promotion_guards() -> list:
+    """Every syslog-lane rule that can emit a Signal, as (rule_id, guard tree).
+
+    A `shadow` row emits nothing, so the screen owes it nothing — excluded on
+    purpose, and that is why adding one cannot silently widen this contract."""
+    return [(r.rule_id, r.guard_src) for r in P.RULES
+            if r.lane == "syslog" and not r.shadow]
 
 
-def test_the_ast_finds_every_promotion_branch():
-    """A canary on the derivation itself: if this stops finding branches, every
+def test_the_table_holds_every_promotion_guard():
+    """A canary on the derivation itself: if this stops finding rules, every
     coverage test below becomes vacuously true."""
     guards = _promotion_guards()
     assert len(guards) >= 9, (
-        f"only {len(guards)} promotion guards found in syslog_control_signal — "
-        "the AST walk drifted from the function's shape and proves nothing")
+        f"only {len(guards)} promotion guards found in the syslog rule table — "
+        "the lane split drifted and this proves nothing")
+    assert all(g is not None for _rid, g in guards), \
+        "a syslog rule carries no guard tree at all"
 
 
 @pytest.mark.parametrize("idx", range(len(_promotion_guards())))
 def test_every_promotion_guard_is_implied_by_the_screen(idx):
-    guard = _promotion_guards()[idx]
-    assert _guard_covered(guard.test) or _severity_guard(guard.test), (
-        f"promotion guard at line {guard.test.lineno} of syslog_control_signal "
-        f"is NOT implied by the ingest screen: {ast.unparse(guard.test)}\n"
+    rule_id, guard = _promotion_guards()[idx]
+    assert _guard_covered(guard) or _severity_guard(guard), (
+        f"rule {rule_id!r} is NOT implied by the ingest screen: {guard}\n"
         "A line matching it would be rejected before the classifier ran. "
-        "Register its marker in producers._CP_GUARD_MARKERS.")
+        "Register its marker in the rule's `markers:` (telemetry-catalog/"
+        "events.yaml) — that is what builds producers._CP_GUARD_MARKERS.")
 
 
 def test_every_port_event_rule_is_implied_by_the_screen():
@@ -360,13 +354,13 @@ def test_dropping_one_marker_loses_that_kind(monkeypatch, marker, tag, msg):
 
 @pytest.mark.parametrize("kill", ["updown", "adjchange", "lldp", "spantree"])
 def test_dropping_a_marker_breaks_the_structural_coverage_test(monkeypatch, kill):
-    """MUTANT on the DERIVATION test: with a marker gone, some promotion guard
-    in syslog_control_signal must stop being implied by the screen."""
+    """MUTANT on the DERIVATION test: with a marker gone, some rule's guard tree
+    must stop being implied by the screen."""
     mutant = tuple(x for x in P._SYSLOG_SCREEN_LITERALS if x != kill)
     assert len(mutant) == len(P._SYSLOG_SCREEN_LITERALS) - 1, f"{kill!r} was not in the screen"
     monkeypatch.setattr(P, "_SYSLOG_SCREEN_LITERALS", mutant)
     guards = _promotion_guards()
-    assert not all(_guard_covered(g.test) or _severity_guard(g.test) for g in guards), \
+    assert not all(_guard_covered(g) or _severity_guard(g) for _rid, g in guards), \
         f"dropping {kill!r} did not break guard coverage — the structural test is vacuous"
 
 

@@ -347,7 +347,35 @@ def test_bumping_parser_rev_never_re_identifies_a_signal(monkeypatch, rule_id):
 
 # ══ 4. rules_hash — the machine's "the rules changed" ════════════════════════
 
+#: PINNED. A3 re-serialized the rule table (the rows now carry the grammar, so
+#: `digest_fields` includes guard/extract/emit), which MOVED this value from
+#: 44f1e46426eb39e2… — the last W1b hash — to the one below. Every classified
+#: signal's kind/entity/state/tokens/native_id/signal_id/attrs is byte-identical
+#: across that move (the golden corpus below is the proof); only the hash and
+#: the `rules_hash` stamp changed. Re-pinning it is a deliberate act.
+RULES_HASH_A3 = "1b69ab8f5c4cd6109e80808950195d912b107ad12479158bfaf8fa97f3a98675"
+
+
+def _guard_patterns(node) -> list[str]:
+    """Every regex SOURCE string reachable in a guard tree (test-local walker:
+    the point is to re-derive, not to reuse the bake's own helper)."""
+    out: list[str] = []
+    if isinstance(node, dict):
+        for k, v in node.items():
+            if k == "re" and isinstance(v, list) and len(v) >= 2:
+                out.append(str(v[1]))
+            else:
+                out.extend(_guard_patterns(v))
+    elif isinstance(node, list):
+        for v in node:
+            out.extend(_guard_patterns(v))
+    return out
+
+
 def test_rules_hash_is_stable_and_matches_the_exported_tag():
+    assert P.RULES_HASH == RULES_HASH_A3, (
+        "rules_hash moved — a rule changed. If that was intended, re-pin "
+        "RULES_HASH_A3 and bump parser_rev in telemetry-catalog/events.yaml.")
     assert P.rules_hash(RULES) == P.RULES_HASH
     assert P.RULES_HASH_TAG == P.RULES_HASH[:16]
     assert len(P.RULES_HASH) == 64      # sha256 hex
@@ -461,7 +489,7 @@ def test_an_undeclared_family_never_reads_as_validated():
 def test_the_guard_markers_are_derived_from_the_rule_table():
     expected = []
     for r in RULES:
-        if r.lane != "control":
+        if r.lane != "syslog":
             continue
         for m in r.markers:
             if m not in expected:
@@ -472,26 +500,29 @@ def test_the_guard_markers_are_derived_from_the_rule_table():
 def test_the_guard_patterns_are_derived_from_the_rule_table():
     expected = []
     for r in RULES:
-        if r.lane == "control" and r.pattern_src and r.pattern_src not in expected:
+        if r.lane == "syslog" and r.pattern_src and r.pattern_src not in expected:
             expected.append(r.pattern_src)
     assert list(P._CP_GUARD_PATTERNS) == expected
 
 
-def test_every_registered_guard_pattern_is_in_the_branch_source():
-    """The table→branch direction of the copy.
+def test_every_registered_guard_pattern_is_in_its_own_guard_tree():
+    """The table→guard direction of the screen contract.
 
-    `test_ingest_prefilter_p3` walks the AST and fails on a guard regex missing
-    from `_CP_GUARD_PATTERNS`; this is the other way round — an entry in the
-    table that no longer appears in `syslog_control_signal` would silently widen
-    the screen (harmless) while advertising coverage for a gate that is gone
-    (not harmless: it hides the fact that a branch was deleted)."""
-    import inspect
-    src = inspect.getsource(P.syslog_control_signal)
+    `test_ingest_prefilter_p3` walks the guard trees and fails on a regex
+    missing from `_CP_GUARD_PATTERNS`; this is the other way round — an entry in
+    the table that no longer appears in the rule's OWN guard would silently
+    widen the screen (harmless) while advertising coverage for a gate that is
+    gone (not harmless: it hides that a rule was deleted).
+
+    Before A3 this read the branch function's source text. The branches are data
+    now, so it reads the data — a strictly stronger check: a pattern that merely
+    APPEARED in the file used to satisfy it, where a pattern must now be a live
+    `re` node of that exact rule's guard."""
     for r in RULES:
-        if r.lane == "control" and r.pattern_src:
-            assert r.pattern_src in src, (
+        if r.pattern_src:
+            assert r.pattern_src in _guard_patterns(r.guard_src), (
                 f"rule {r.rule_id!r} registers guard pattern {r.pattern_src!r}, "
-                "which syslog_control_signal no longer contains")
+                "which is not a `re` node of its own guard tree")
 
 
 def test_the_port_event_rule_list_is_derived_from_the_rule_table():
@@ -507,12 +538,12 @@ def test_the_port_event_rule_list_is_derived_from_the_rule_table():
 def test_a_new_marker_reaches_the_screen_through_the_table_alone():
     """The derivation is the point: registering a branch's screen coverage is
     now the same act as registering the branch."""
-    extra = P.Rule(rule_id="syslog.test.mutant", lane="control", source="syslog",
+    extra = P.Rule(rule_id="syslog.test.mutant", lane="syslog", source="syslog",
                    kind="device_alarm", entity_type="device",
                    markers=("ZZZ_MUTANT_MARKER",))
     markers = []
     for r in (*RULES, extra):
-        if r.lane == "control":
+        if r.lane == "syslog":
             markers.extend(r.markers)
     assert "ZZZ_MUTANT_MARKER" in markers
     assert "ZZZ_MUTANT_MARKER" not in P._CP_GUARD_MARKERS

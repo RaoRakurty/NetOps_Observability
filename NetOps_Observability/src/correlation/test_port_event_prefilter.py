@@ -93,16 +93,20 @@ def test_union_would_pick_up_a_newly_added_rule():
 # --- the behaviour the pre-filter exists to change -------------------------
 
 def test_ordinary_traffic_short_circuits(monkeypatch):
-    """A LINK-3-UPDOWN line must not reach the rule chain at all."""
+    """A LINK-3-UPDOWN line must not reach the rule chain at all.
+
+    A3: the chain the classifier walks is `_PORT_PLAN` (the compiled rules), not
+    the flattened `_PORT_EVENT_RULES` projection the screen reads — watch the
+    one the classifier actually iterates or this test proves nothing."""
     touched = []
-    real = list(P._PORT_EVENT_RULES)
+    real = list(P._PORT_PLAN)
 
     class Watch(list):
         def __iter__(self):
             touched.append(1)
             return super().__iter__()
 
-    monkeypatch.setattr(P, "_PORT_EVENT_RULES", Watch(real))
+    monkeypatch.setattr(P, "_PORT_PLAN", Watch(real))
     ev = {"hostname": "leaf1", "appname": "LINK-3-UPDOWN",
           "message": "%LINK-3-UPDOWN: Interface GigabitEthernet0/1, changed state to down",
           "severity": "err"}
