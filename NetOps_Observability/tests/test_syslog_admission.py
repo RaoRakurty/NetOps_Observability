@@ -558,6 +558,69 @@ def test_the_harness_still_injects_the_full_lane_into_netops_syslog():
     assert 'produce(SYSLOG_CONTROL_TOPIC' in src
 
 
+# ── 7b. the stamp must be SEARCHABLE, not merely present ─────────────────────
+
+def _templates() -> dict:
+    with open(ROOT / "deployment" / "docker" / "opensearch" /
+              "index-templates.json", encoding="utf-8") as fh:
+        return json.load(fh)["templates"]
+
+
+def test_the_syslog_template_maps_cx_admission_by_as_keyword():
+    """THE MINING CONTRACT. `src/backend/parsercov/admission.go` counts
+    unrecognized lines with `must_not exists cx_admission.by`. The syslog
+    template is `dynamic: false`, so an UNDECLARED object is kept in _source
+    but never mapped — `exists` then matches nothing and the miner would report
+    100 % unrecognized against a pipeline that is stamping correctly. Declared
+    keyword: exact-match and aggregatable, never analysed."""
+    props = _templates()["netops-syslog"]["template"]["mappings"]["properties"]
+    assert "cx_admission" in props, (
+        "the syslog template must declare cx_admission — under dynamic:false "
+        "an undeclared stamp is stored but unsearchable")
+    cx = props["cx_admission"]
+    assert cx["type"] == "object"
+    assert cx["properties"]["by"] == {"type": "keyword"}
+    assert cx["properties"]["v"] == {"type": "keyword"}
+    assert _templates()["netops-syslog"]["template"]["mappings"]["dynamic"] is False, (
+        "the field wall (F-05) stays closed — cx_admission is declared, not "
+        "admitted by loosening dynamic mapping")
+
+
+def test_only_the_syslog_lane_declares_the_stamp():
+    """The stamp rides syslog ONLY: syslog_admission_stamp feeds kafka_syslog
+    and the control route, and no other transform reads it. Declaring it on a
+    lane that never carries it would advertise a field that is always absent."""
+    cfg = _vector_cfg()
+    readers = {name for name, comp in
+               list((cfg.get("transforms") or {}).items()) +
+               list((cfg.get("sinks") or {}).items())
+               if "syslog_admission_stamp" in (comp.get("inputs") or [])}
+    assert readers == {"syslog_admission", "kafka_syslog"}, readers
+    declaring = {name for name, tpl in _templates().items()
+                 if "cx_admission" in tpl["template"]["mappings"]["properties"]}
+    assert declaring == {"netops-syslog"}, declaring
+
+
+def test_no_documentation_key_leaks_into_a_template_payload():
+    """`bootstrap-opensearch.sh` strips `_`-prefixed doc keys only at the TOP
+    level of a template, and install.py does not strip them at all. A nested
+    `_comment` therefore reaches OpenSearch as an unknown mapping parameter and
+    the PUT 400s — a template that fails to apply while the install looks fine.
+    Keep prose at the template level, never inside `template`."""
+    for name, tpl in _templates().items():
+        stack = [("template", tpl["template"])]
+        while stack:
+            path, node = stack.pop()
+            if isinstance(node, dict):
+                for key, value in node.items():
+                    assert not key.startswith("_"), (
+                        f"{name}: documentation key {path}.{key} would be PUT "
+                        "to OpenSearch as an unknown mapping parameter")
+                    stack.append((f"{path}.{key}", value))
+            elif isinstance(node, list):
+                stack.extend((f"{path}[{i}]", v) for i, v in enumerate(node))
+
+
 # ── 8. the docs say the switch is not thrown yet ─────────────────────────────
 
 def test_the_operator_doc_states_the_topic_is_off_by_default():

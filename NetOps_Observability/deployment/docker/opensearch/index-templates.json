@@ -200,7 +200,7 @@
       "_comment": "Platform-infra self-health logs (log_class=platform), split from netops-applogs-* so they stay out of the device-monitoring GUI. Same field contract as applogs."
     },
     "netops-syslog": {
-      "_comment": "F-05: `fgt` holds the parsed FortiOS key=value map \u2014 VENDOR-controlled key names, i.e. the same unbounded generator as snmptrap's varbinds. Stored but not indexed, exactly like varbinds: searchable-by-document, un-mappable-by-vendor.",
+      "_comment": "F-05: `fgt` holds the parsed FortiOS key=value map \u2014 VENDOR-controlled key names, i.e. the same unbounded generator as snmptrap's varbinds. Stored but not indexed, exactly like varbinds: searchable-by-document, un-mappable-by-vendor. A4 `cx_admission` is the aggregator's admission stamp and rides the syslog lane ONLY (syslog_admission_stamp feeds kafka_syslog and the control route; no other lane reads it). It MUST stay declared: under `dynamic: false` an undeclared object is kept in _source but never mapped, so `exists` / `must_not exists` on cx_admission.by matches NOTHING \u2014 and that query IS the parsercov mining contract (src/backend/parsercov/admission.go: admissionField = cx_admission.by, admissionVersionField = cx_admission.v). `by` is the gate that admitted the line (severity|marker|unscreenable); `v` is the rules_hash prefix, so a window can be split by the screen revision that judged it. Both keyword: exact-match and aggregate, never analysed.",
       "index_patterns": [
         "netops-syslog-*"
       ],
@@ -261,6 +261,18 @@
             },
             "event_type": {
               "type": "keyword"
+            },
+            "cx_admission": {
+              "type": "object",
+              "dynamic": false,
+              "properties": {
+                "v": {
+                  "type": "keyword"
+                },
+                "by": {
+                  "type": "keyword"
+                }
+              }
             },
             "subsystem": {
               "type": "keyword"

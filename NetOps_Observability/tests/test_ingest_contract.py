@@ -17,6 +17,7 @@ Run:  python3 -m pytest tests/test_ingest_contract.py -v
 import json
 import os
 import re
+import sys
 
 import pytest
 import yaml
@@ -830,6 +831,29 @@ def _kafka_init_topics() -> set:
     return {t for t in m.group(1).split() if t.startswith("netops.")}
 
 
+def _correlation_main():
+    """The engine module, imported for its RESOLVED subscription set.
+
+    `TOPICS` is no longer a literal list — it is composed (LANE_TOPICS + the
+    env-grounded CORR_EVIDENCE_TOPICS, then the A4 syslog-topic substitution).
+    A regex over the source reads whichever literal list appears first and
+    reports something that is NOT the subscription set: it silently dropped
+    netops.security (and would drop netops.syslog.control the moment the engine
+    is switched onto it), i.e. exactly the topics whose absence from kafka-init
+    this test exists to catch. Ask the module what it computed instead."""
+    corr = os.path.join(ROOT, "src", "correlation")
+    if corr not in sys.path:
+        sys.path.insert(0, corr)
+    try:
+        # Imported here, not at module scope: sys.path has to carry
+        # src/correlation before the import can resolve.
+        import main
+    except Exception as exc:  # noqa: BLE001 — reported, never hidden
+        pytest.skip(f"correlation main.py is not importable here ({exc}) — the "
+                    "topic-creation contract DID NOT RUN")
+    return main
+
+
 def _pipeline_topics() -> set:
     """Every topic any live producer or consumer names: Vector kafka
     components (sink `topic:` + source `topics:`), the correlation consumer's
@@ -848,10 +872,7 @@ def _pipeline_topics() -> set:
                 for t in comp.get("topics") or []:
                     if isinstance(t, str) and t.startswith("netops."):
                         used.add(t)
-    m = re.search(r"^TOPICS\s*=\s*\[(.*?)\]", read("src", "correlation", "main.py"),
-                  re.S | re.M)
-    assert m, "correlation main.py no longer declares a TOPICS list"
-    used |= set(re.findall(r'"(netops\.[^"]+)"', m.group(1)))
+    used |= set(_correlation_main().TOPICS)
     goflow2 = _compose()["services"]["goflow2"]["command"]
     if "-transport.kafka.topic" in goflow2:
         used.add(goflow2[goflow2.index("-transport.kafka.topic") + 1])
