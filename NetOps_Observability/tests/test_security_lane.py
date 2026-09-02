@@ -36,6 +36,7 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
 
 import pytest
@@ -461,15 +462,73 @@ def test_the_topic_is_created_explicitly_on_both_compose_variants():
             f"{compose} kafka-init does not create {TOPIC}"
 
 
-def test_correlation_topic_set_is_unchanged():
-    """The findings lane is a STORAGE consumer. The Python engine grounds the
-    same topic independently (T2b, not yet built), so correlation's TOPICS list
-    must not have been quietly widened by this change."""
-    src = read("src", "correlation", "main.py")
-    m = re.search(r"^TOPICS\s*=\s*\[(.*?)\]", src, re.S | re.M)
-    assert m, "correlation main.py no longer declares a TOPICS list"
-    assert TOPIC not in m.group(1), (
-        "netops.security appeared in correlation's TOPICS — the P3-L1 findings lane "
-        "is a vector-router → OpenSearch path; the engine's consumer is T2b and lands "
-        "with its own ACL grant and its own tests"
-    )
+# The 12 lane topics the engine has always consumed. Pinned as a LIST (order
+# included): the consumer's subscription set is what the ACL matrix and the
+# co-partition assignment are both derived from, so a silent addition here is
+# an auth-dead lane or a resharded tenant, not a cosmetic diff.
+LANE_TOPICS_PINNED = [
+    "netops.syslog", "netops.flows", "netops.metrics", "netops.probes",
+    "netops.snmptrap", "netops.cloud", "netops.app.identities.v1",
+    "netops.controller_events", "netops.app.edge", "netops.verification",
+    "netops.wireless_sessions", "netops.wireless_events",
+]
+
+
+def _correlation_main():
+    """The engine module, imported for its RESOLVED values.
+
+    `TOPICS` is no longer a literal list — it is composed (LANE_TOPICS + the
+    env-grounded evidence topics, then the A4 syslog-topic substitution). A
+    regex over the source now reads whichever literal list appears first and
+    reports something that is not the subscription set, so this asks the module
+    what it actually computed."""
+    corr = os.path.join(ROOT, "src", "correlation")
+    if corr not in sys.path:
+        sys.path.insert(0, corr)
+    try:
+        # Imported here, not at module scope: sys.path has to carry
+        # src/correlation before the import can resolve.
+        import main
+    except Exception as exc:  # noqa: BLE001 — reported, never hidden
+        pytest.skip(f"correlation main.py is not importable here ({exc}) — the "
+                    "topic-set contract DID NOT RUN")
+    return main
+
+
+def test_correlation_lane_topics_are_unchanged():
+    """The 12 telemetry lanes are the historical set; the findings lane is NOT
+    one of them — it arrives as an EVIDENCE topic, separately grounded."""
+    main = _correlation_main()
+    assert list(main.LANE_TOPICS) == LANE_TOPICS_PINNED
+    assert TOPIC not in main.LANE_TOPICS, (
+        f"{TOPIC} became a lane topic — the P3-L1 findings lane is evidence "
+        "the engine grounds, not a telemetry lane")
+
+
+def test_correlation_grounds_the_findings_lane_as_evidence():
+    """T2b: the engine consumes netops.security itself, as its ONE evidence
+    topic, and it composes into TOPICS after the lanes."""
+    main = _correlation_main()
+    assert main.CORR_EVIDENCE_TOPICS == (TOPIC,)
+    assert main.TOPICS == main.LANE_TOPICS + list(main.CORR_EVIDENCE_TOPICS)
+
+
+def test_evidence_topics_default_to_nothing_on_an_empty_setting():
+    """An empty/unset env must ground NO evidence topic — never a default
+    subscription the ACL matrix was not asked about (a topic the principal
+    cannot Describe fails the WHOLE subscription, not just that lane)."""
+    assert _correlation_main().evidence_topics_from_env("") == ()
+
+
+def test_correlation_is_granted_every_topic_it_subscribes_to():
+    """The blocker this pair of tests exists for: netops.security was in the
+    engine's subscription but only in the ROUTER's ACL loop."""
+    acls = read("deployment", "docker", "kafka", "apply-acls.sh")
+    corr_loop = acls.split('echo "acls: correlation', 1)[1].split("done", 1)[0]
+    # Strip the shell's own punctuation: the last topic carries the `;` of
+    # `...; do`, and continuations carry a trailing backslash.
+    granted = {t.strip(";\\") for t in corr_loop.split()
+               if t.startswith("netops.")}
+    for topic in _correlation_main().TOPICS:
+        assert topic in granted, (
+            f"correlation subscribes to {topic} with no Read/Describe ACL")

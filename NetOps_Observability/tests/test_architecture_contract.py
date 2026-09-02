@@ -13,7 +13,9 @@ Run:  python3 -m pytest tests/test_architecture_contract.py -v
 """
 import os
 import re
+import sys
 
+import pytest
 import yaml
 
 ROOT = os.path.normpath(os.path.join(os.path.dirname(__file__), ".."))
@@ -115,11 +117,27 @@ def test_vector_does_not_misroute_metrics_to_other_topics():
 
 # ── Layer 2C: correlation topic contract ──────────────────────────────────────
 
+def _correlation_main():
+    """The engine module itself, imported (its siblings import flat, so the
+    package dir goes on sys.path). RESOLVED values, not a source regex: TOPICS
+    is now computed (LANE_TOPICS + the env-grounded evidence topics), and a
+    regex over the assignment would silently read only the first literal list
+    it found — under-reporting the very topics an ACL has to cover."""
+    corr = os.path.join(ROOT, "src", "correlation")
+    if corr not in sys.path:
+        sys.path.insert(0, corr)
+    try:
+        # Imported here, not at module scope: sys.path has to carry
+        # src/correlation before the import can resolve.
+        import main
+    except Exception as exc:  # noqa: BLE001 — reported, never hidden
+        pytest.skip(f"correlation main.py is not importable here ({exc}) — the "
+                    "topic/ACL contract DID NOT RUN")
+    return main
+
+
 def _correlation_topics():
-    src = read("src", "correlation", "main.py")
-    m = re.search(r"TOPICS\s*=\s*\[([^\]]*)\]", src)
-    assert m, "TOPICS list not found in correlation main.py"
-    return set(re.findall(r"netops\.\w+", m.group(1)))
+    return set(_correlation_main().TOPICS)
 
 
 def test_correlation_consumes_all_bus_planes():
@@ -206,6 +224,17 @@ def test_router_does_not_consume_the_syslog_control_topic():
         "the engine over is one env var and not an ACL change in the window")
     assert "netops.syslog" in grants["CORR"], (
         "correlation keeps Read on the full lane — the control topic is opt-in")
+    # T2b BLOCKER (2026-09-02): netops.security was granted to the ROUTER only,
+    # while the engine grounds the same findings lane itself. A kafka-python
+    # consumer that subscribes to a topic it may not Describe fails the WHOLE
+    # subscription, so the missing grant would have taken every lane down under
+    # enforced ACLs — not just security — with all healthchecks still green.
+    # Every topic the engine actually subscribes to must therefore be granted:
+    # this asserts the SET, so a lane added to main.py without an ACL is red.
+    for topic in _correlation_topics():
+        assert topic in grants["CORR"], (
+            f"correlation subscribes to {topic} but has no Read/Describe ACL — "
+            "one ungranted topic fails the entire subscription")
 
 
 # ── Layer 2D: VictoriaMetrics is not the LIVE correlation path ────────────────

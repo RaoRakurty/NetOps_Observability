@@ -39,7 +39,10 @@
 #                      findings lane); produce netops.deadletter AND
 #                      netops.flows (the tenant-keyed flow feed);
 #                      groups netops-router-* (prefixed)
-#   correlation        consume  its 13 topics (incl. netops.syslog.control,
+#   correlation        consume  its 14 topics (incl. netops.security — the
+#                      P3-L1 findings lane it grounds itself, and whose absence
+#                      would have failed its entire subscription — plus
+#                      netops.syslog.control,
 #                      the A4 pre-screened syslog lane — granted now so the
 #                      engine can be switched onto it by env alone, with no
 #                      second ACL-and-restart step in the change window);
@@ -113,10 +116,16 @@ $ACLS --add --allow-principal "$ROUTER" --operation Read \
 # vector-router is deliberately NOT granted Read on netops.syslog.control: it
 # indexes the FULL syslog lane from netops.syslog, and a second consumer would
 # duplicate every admitted document into OpenSearch.
-echo "acls: correlation — consume-only on its 13 topics + its one group" >&2
+# T2b BLOCKER (found 2026-09-02): netops.security was granted to the ROUTER
+# only. The engine grounds the same findings lane itself (CORR_EVIDENCE_TOPICS),
+# and a kafka-python consumer subscribing to a topic it may not Describe fails
+# the WHOLE subscription, not just that lane — under enforced ACLs the engine
+# would have been auth-dead across all 13 topics while every healthcheck stayed
+# green (the 2026-08-16 incident shape, one lane later).
+echo "acls: correlation — consume-only on its 14 topics + its one group" >&2
 for t in netops.syslog netops.syslog.control \
          netops.flows netops.metrics netops.probes \
-         netops.snmptrap netops.cloud netops.app.identities.v1 \
+         netops.snmptrap netops.security netops.cloud netops.app.identities.v1 \
          netops.controller_events netops.app.edge netops.verification \
          netops.wireless_sessions netops.wireless_events; do
     $ACLS --add --allow-principal "$CORR" \
