@@ -75,6 +75,7 @@ import { severityRank } from "../theme/severity";
 import { healthRank, confidenceRank, verdictRank, timeRank } from "./appobs/sortRanks";
 import { buildTimeline, cleanVal, isStateEvent, stateLabel, stateReason } from "./appobs/timeline";
 import type { TimelineEpisode } from "./appobs/timeline";
+import { operatorError } from "../lib/errors";
 import {
   healthMetricCell, healthCurrentCell, healthBaselineCell, healthReasonCell,
 } from "./appobs/healthCells";
@@ -498,7 +499,7 @@ function Overview({ goTab, summary, openInvestigation, ctl }: {
           investigation drawer); an Overview-level aggregate returns here when
           its feed lands. */}
       <div className="ao-muted" style={{ fontSize: 12 }}>
-        Coming soon: network impact (service→connection correlation)
+        Network impact is not connected on this deployment
       </div>
 
       {/* A2. worst-first degraded services (rev #22): name · duration ·
@@ -706,7 +707,7 @@ function AppMap({ ctl }: { ctl: CloudScopeControl }) {
     <div className="ao-stack">
       <div className="ao-preview-note">
         <Chip label="structural" tone="var(--good)" />
-        <span>App→resource structure is live from the inventory. Traffic dependencies (talks_to / egresses_via) and RCA edges appear when cloud flow logs are ingested.</span>
+        <span>App→resource structure is live from the inventory. Traffic dependencies and RCA edges appear when cloud flow logs are ingested.</span>
       </div>
       <div className="ao-appmap">
         {groups.map((g) => (
@@ -1201,7 +1202,7 @@ function ExportButtons({ surfaces, windowHours, q }: {
   const [err, setErr] = useState("");
   const run = (surface: "health" | "changes" | "evidence", format: "csv" | "json") =>
     downloadCloudExport(surface, format, undefined, windowHours, q)
-      .then(() => setErr(""), (e: unknown) => setErr(e instanceof Error ? e.message : "export failed"));
+      .then(() => setErr(""), (e: unknown) => setErr(operatorError(e, "The export could not be produced.")));
   return (
     <span className="ao-export">
       {surfaces.map((s) => (

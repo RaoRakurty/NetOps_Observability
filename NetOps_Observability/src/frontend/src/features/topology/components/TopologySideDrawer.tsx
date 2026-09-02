@@ -113,7 +113,7 @@ function UnresolvedBlock({ node }: { node: TopologyNode }) {
           <button
             key={a}
             type="button"
-            title={`${a} (Phase 2 stub — resolution backend lands later)`}
+            title={`${a} — not available yet`}
             style={{
               fontSize: 11, fontWeight: 600, padding: "4px 9px", cursor: "pointer",
               color: "var(--fg-muted)", background: "var(--panel)",

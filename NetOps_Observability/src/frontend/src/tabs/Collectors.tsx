@@ -2,7 +2,7 @@ import { fmtDate, fmtDateTime } from "../lib/time";
 import { useEffect, useState } from "react";
 import { api, CollectorStatus, DiscoveryConfig, DiscoveryConfigEnvelope } from "../services/api";
 import { StatStrip, Stat, InfoTip } from "../components/ui";
-
+import { operatorError } from "../lib/errors";
 // Friendly display names for collector ids. Unknown ids fall back to the raw
 // name uppercased, so new collectors still render sensibly.
 const COLLECTOR_LABELS: Record<string, string> = {
@@ -100,7 +100,7 @@ export function DiscoveryCard() {
       setDenied(false);
       setLoadErr(null);
     } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e);
+      const msg = operatorError(e, "The collector could not be reached.");
       if (/^\s*40[13]\b/.test(msg)) {
         // Tenant-scoped admins are refused by design — hide the card entirely
         // rather than render a form that can only fail.

@@ -12,7 +12,7 @@ import { incidentTopology } from "../mock/index";
 export const InvestigateWorkflow: WorkflowDef = {
   id: "investigate",
   label: "Investigate",
-  blurb: "Triage an incident. Lands on the RCA path; select a node to refocus.",
+  blurb: "Triage an incident on its RCA path.",
   implemented: true,
   view: incidentTopology,
   computeSpotlight(view: TopologyView, selection: TopologySelection): SpotlightResult {

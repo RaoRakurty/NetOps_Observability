@@ -86,7 +86,7 @@ const EMPTY_HINTS: Record<DataKind, { msg: string; hint: string }> = {
   logs: { msg: "No events in this window.", hint: "Forward syslog and SNMP traps from your devices to the collector." },
   tunnels: { msg: "No tunnels discovered.", hint: "Set ENABLE_TUNNEL_DISCOVERY=true — tunnel interfaces (IPsec / GRE / VTI) are found via standard IF-MIB & TUNNEL-MIB SNMP walks, no per-vendor setup." },
   synthetics: { msg: "No active measurements in this window.", hint: "Set FEATURE_SYNTHETICS=true with SYNTHETIC_HTTP/ICMP/TCP_TARGETS for service checks, and FEATURE_ACTIVE_PROBE + STAMP_TARGETS for path SLA (RFC 8762)." },
-  generic: { msg: "No data in this window.", hint: "" },
+  generic: { msg: "Nothing collected in this window.", hint: "" },
 };
 export function EmptyHint({ kind = "metrics" }: { kind?: DataKind }) {
   const h = EMPTY_HINTS[kind];
@@ -128,7 +128,7 @@ export function Panel({ title, action, children }: { title: string; action?: Rea
   return (
     <div className="panel" style={{ minWidth: 0 }}>
       <div className="panel-tools">
-        <h3 className="panel-zoomable" title="Click to enlarge" onClick={() => setZoom(true)}>{title}</h3>
+        <h3 className="panel-zoomable" title="Enlarge" onClick={() => setZoom(true)}>{title}</h3>
         {action}
         <button className="panel-zoom-btn" aria-label={`Enlarge ${title}`} title="Enlarge" onClick={() => setZoom(true)}>⤢</button>
       </div>

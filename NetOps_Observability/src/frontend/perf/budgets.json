@@ -1,0 +1,9 @@
+{
+  "$comment": "Per-surface render budgets enforced by `npm run perf:budget`. `nodes` is an EXACT, machine-independent DOM element count after settling and is the real regression gate — it is set ~25% above the measured value, so de-virtualizing a list (which multiplies it by 10x or more) fails immediately. mountMs/updateMs are happy-dom medians and are therefore machine-relative; they are set at roughly 2x the measured median so a slower CI runner passes while a genuine O(rows) regression (5-40x) does not. Measurements, method and the before/after table live in docs/design/FRONTEND_PERF_BUDGETS_2026-09-02.md.",
+
+  "events-feed": { "mountMs": 500, "updateMs": 120, "nodes": 900 },
+  "rca-list": { "mountMs": 700, "updateMs": 90, "nodes": 1200 },
+  "log-search": { "mountMs": 500, "updateMs": 120, "nodes": 1000 },
+  "device-inventory": { "mountMs": 600, "updateMs": 110, "nodes": 1350 },
+  "topology-device-list": { "mountMs": 250, "updateMs": 40, "nodes": 600 }
+}

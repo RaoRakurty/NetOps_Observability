@@ -106,7 +106,7 @@ function devKey(segIndex: number, d: { address?: string; label?: string; role?: 
 // grey box (owner 2026-07-18). Count comes only from what the engine measured.
 function GapConnector({ seg }: { seg: RcaTypedSegment }) {
   const n = seg.unknown_hops?.length ?? 0;
-  const reason = seg.reason || "This span could not be classified from the available telemetry — shown as a gap, not guessed.";
+  const reason = seg.reason || "This segment could not be classified from the available telemetry — shown as a gap, not guessed.";
   return (
     <span className="rpc-gap" title={reason}>
       <span className="rpc-gap-dots" aria-hidden="true">· · ·</span>
@@ -344,7 +344,7 @@ export default function RcaPathCausality({ data, timeline, ownership, possibleCa
                         <span className="rpc-seg-tick" aria-hidden="true" />
                         <span className="rpc-seg-name">{segmentLabel(seg.segment_type)}</span>
                         {seg.provider && <span className="rpc-seg-provider">{seg.provider.toUpperCase()}</span>}
-                        {seg.attachmentText && <span className="rpc-seg-provider" title="Cloud attachment type (from backend connectivity data)">{seg.attachmentText}</span>}
+                        {seg.attachmentText && <span className="rpc-seg-provider" title="Cloud attachment type">{seg.attachmentText}</span>}
                         {seg.ambiguous && <span className="rpc-seg-flag" title="Multiple equal-cost paths (ECMP) — the exact hop is ambiguous">ECMP</span>}
                         {health && (
                           <span className={`rpc-seg-health ${health}`}>

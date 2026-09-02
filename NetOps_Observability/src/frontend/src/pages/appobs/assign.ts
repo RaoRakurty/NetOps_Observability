@@ -45,7 +45,7 @@ export function validServiceName(s: string): boolean {
  */
 export function buildAssignRequest(resourceIds: string[], target: AssignTarget): AssignRequestResult {
   const ids = [...new Set(resourceIds.map((r) => r.trim()).filter(Boolean))];
-  if (ids.length === 0) return { ok: false, error: "select at least one resource" };
+  if (ids.length === 0) return { ok: false, error: "Select at least one resource." };
   if (ids.length > ASSIGN_MAX_RESOURCES) {
     return { ok: false, error: `at most ${ASSIGN_MAX_RESOURCES.toLocaleString()} resources per assignment` };
   }
@@ -92,7 +92,7 @@ export function toggleAllVisible(sel: ReadonlySet<string>, visibleIds: string[])
 export function assignErrorMessage(e: unknown): string {
   const msg = e instanceof Error ? e.message : String(e);
   if (msg.startsWith("501")) {
-    return "Service assignment needs the platform database backend — it is not enabled on this deployment.";
+    return "Service assignment is not enabled on this deployment.";
   }
   if (msg.startsWith("404")) return "That service no longer exists — refresh and pick again.";
   return "Assignment failed — retry, or check your access.";

@@ -7,7 +7,7 @@ import {
 import DataTable, { Column } from "../components/DataTable";
 import { Modal } from "../components/ui";
 import { Chip } from "../components/noc";
-
+import { operatorError } from "../lib/errors";
 // Pipeline Processors — the tenant's log-processing chain.
 //
 // The page renders from the ENGINE's own catalog (/catalog): registered
@@ -187,7 +187,7 @@ function Wizard({ catalog, initial, editingId, onDone, onCancel }: {
       else await api.processorRuleCreate(toInput(f));
       onDone();
     } catch (e) {
-      setErr(e instanceof Error ? e.message : String(e));
+      setErr(operatorError(e, "The change could not be completed."));
     } finally {
       setSaving(false);
     }
@@ -209,7 +209,7 @@ function Wizard({ catalog, initial, editingId, onDone, onCancel }: {
       // already-saved chain does.
       setPreview(await api.processorPreview(f.lane, ev, toInput(f)));
     } catch (e) {
-      setErr(e instanceof Error ? e.message : String(e));
+      setErr(operatorError(e, "The change could not be completed."));
     }
   };
 
@@ -295,7 +295,7 @@ function Wizard({ catalog, initial, editingId, onDone, onCancel }: {
                   <input className="ccw-input" value={f.match.value}
                     onChange={(e) => set("match", { ...f.match, value: e.target.value })} maxLength={256}
                     placeholder={f.match.op === "regex" ? "^auth(-svc)?$" : "authentication"} />
-                  {f.match.op === "regex" && <span className="ccw-hint">RE2 syntax · validated on save</span>}
+                  {f.match.op === "regex" && <span className="ccw-hint">Pattern is checked when you save</span>}
                 </label>
               </div>
             )}
@@ -334,7 +334,7 @@ function Wizard({ catalog, initial, editingId, onDone, onCancel }: {
                     onChange={(e) => set("pattern_kind", e.target.value as FormState["pattern_kind"])}>
                     <option value="builtin">Managed rule</option>
                     <option value="literal">Literal text</option>
-                    <option value="regex">Custom regex</option>
+                    <option value="regex">Custom pattern</option>
                   </select>
                 </label>
                 {f.pattern_kind === "builtin" ? (
@@ -353,7 +353,7 @@ function Wizard({ catalog, initial, editingId, onDone, onCancel }: {
                 ) : (
                   <label className="ccw-field">
                     <span className="ccw-label">
-                      {f.pattern_kind === "regex" ? "Regex (RE2)" : "Literal text"} <span className="ccw-req">*</span>
+                      {f.pattern_kind === "regex" ? "Pattern" : "Exact text"} <span className="ccw-req">*</span>
                     </span>
                     <input className="ccw-input" value={f.pattern} onChange={(e) => set("pattern", e.target.value)}
                       maxLength={256} placeholder={f.pattern_kind === "regex" ? "Bearer\\s+[A-Za-z0-9._-]+" : "exact text"} />
@@ -365,7 +365,7 @@ function Wizard({ catalog, initial, editingId, onDone, onCancel }: {
               <label className="ccw-field">
                 <span className="ccw-label">{f.type === "tag" ? "Tag" : "Replacement"}</span>
                 <input className="ccw-input" value={f.replacement} onChange={(e) => set("replacement", e.target.value)}
-                  placeholder={f.type === "tag" ? "PCI · stamped on cx_sensitive" : "[EMAIL] · defaults to ***"} maxLength={64} />
+                  placeholder={f.type === "tag" ? "PCI" : "[EMAIL] · defaults to ***"} maxLength={64} />
                 {f.type === "tag" && <span className="ccw-hint">Detect only — the value is NOT modified.</span>}
                 {f.type === "hash" && <span className="ccw-hint">Stable digest: unreadable, still joinable.</span>}
               </label>
@@ -442,7 +442,7 @@ function Wizard({ catalog, initial, editingId, onDone, onCancel }: {
         {step === 3 && (
           <div style={{ display: "grid", gap: 10 }}>
             <div className="ccw-hint">
-              Dry run against a sample event — nothing is stored, and the pipeline is not touched.
+              Test run against a sample event — nothing is saved, and live processing is untouched.
               This includes the rule you are writing <em>plus</em> your already-saved processors, in execution order.
             </div>
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
@@ -510,7 +510,7 @@ function HistoryModal({ rule, onClose, onRolledBack }: {
       try {
         setVersions((await api.processorVersions(rule.id)).versions ?? []);
       } catch (e) {
-        setErr(e instanceof Error ? e.message : String(e));
+        setErr(operatorError(e, "The change could not be completed."));
       }
     })();
   }, [rule.id]);
@@ -521,7 +521,7 @@ function HistoryModal({ rule, onClose, onRolledBack }: {
       await api.processorRollback(rule.id, v);
       onRolledBack();
     } catch (e) {
-      setErr(e instanceof Error ? e.message : String(e));
+      setErr(operatorError(e, "The change could not be completed."));
     }
   };
 
@@ -569,7 +569,7 @@ export default function ProcessorsAdmin() {
       setCatalog(cat);
       setLoadErr(null);
     } catch (e) {
-      setLoadErr(e instanceof Error ? e.message : String(e));
+      setLoadErr(operatorError(e, "The change could not be completed."));
     }
   }, []);
   useEffect(() => { void load(); }, [load, nonce]);
@@ -581,7 +581,7 @@ export default function ProcessorsAdmin() {
       await api.processorRuleDelete(r.id);
       refresh();
     } catch (e) {
-      setLoadErr(e instanceof Error ? e.message : String(e));
+      setLoadErr(operatorError(e, "The change could not be completed."));
     }
   };
   const toggle = async (r: ProcessorRule) => {
@@ -591,7 +591,7 @@ export default function ProcessorsAdmin() {
       await api.processorRuleUpdate(r.id, { ...toInput(fromRule(r)), enabled: !r.enabled });
       refresh();
     } catch (e) {
-      setLoadErr(e instanceof Error ? e.message : String(e));
+      setLoadErr(operatorError(e, "The change could not be completed."));
     }
   };
   const clone = async (m: ManagedRule, lane: ProcessorLane, field: string) => {
@@ -600,7 +600,7 @@ export default function ProcessorsAdmin() {
       setShowCatalog(false);
       refresh();
     } catch (e) {
-      setLoadErr(e instanceof Error ? e.message : String(e));
+      setLoadErr(operatorError(e, "The change could not be completed."));
     }
   };
 

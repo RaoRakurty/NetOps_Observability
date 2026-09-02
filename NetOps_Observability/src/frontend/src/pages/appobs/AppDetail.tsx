@@ -281,7 +281,7 @@ export default function AppDetail({ app, onBack }: { app: App; onBack: () => voi
       {tab === "dependencies" && (
         <div className="ao-panel">
           <div className="ao-panel-h">Dependencies</div>
-          <EmptyState title="Dependency graph renders on the App Map" hint="talks_to / depends_on / backed_by edges from cloud_flow + traces (P3D/P3E)" />
+          <EmptyState title="Dependency graph renders on the App Map" hint="Dependencies observed in cloud flows and traces." />
         </div>
       )}
 

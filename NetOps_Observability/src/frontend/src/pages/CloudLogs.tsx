@@ -284,7 +284,7 @@ export default function CloudLogs() {
             className="xpl-q"
             value={text}
             onChange={(e) => setText(e.target.value)}
-            placeholder={lane.source === "log" ? "Search (Lucene) — e.g. rcode:SERVFAIL" : "Filter loaded rows…"}
+            placeholder={lane.source === "log" ? "Search — e.g. rcode:SERVFAIL" : "Filter loaded rows…"}
           />
           <select value={provider} onChange={(e) => setProvider(e.target.value)} aria-label="Provider">
             {PROVIDERS.map((p) => <option key={p.id} value={p.id}>{p.label}</option>)}
@@ -340,7 +340,7 @@ export default function CloudLogs() {
           onRowClick={openDetail}
           rowAccent={(r) => (r.level ? severityColor(r.level) : undefined)}
           rowClassName={(r) => (detail?.id === r.id ? "dtv-selected" : "")}
-          empty={busy ? "Loading…" : "No logs in range."}
+          empty={busy ? "Loading…" : "No log entries in this window."}
         />
         {!ws.enabled && detail && (
           <div style={{ marginTop: 12, borderTop: "1px solid var(--border, #2a2f3a)", paddingTop: 12 }}>

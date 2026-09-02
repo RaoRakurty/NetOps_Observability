@@ -5610,11 +5610,15 @@ button.cc-kpi-btn.on::after { content: "filtered"; display: block; margin-top: 5
   font-size: 12px; padding: 5px 8px; border: 1px solid var(--border); border-radius: 7px;
   background: var(--surface); color: var(--fg);
 }
-.topo-inventory-list { overflow-y: auto; display: flex; flex-direction: column; gap: 2px; }
+/* Windowed (components/WindowedList): rows are absolutely positioned on a
+   32px pitch inside a full-height spacer, so flex/gap stacking is gone and the
+   row box is FIXED. ROW_H in TopologyInventoryPanel.tsx must match this pitch. */
+.topo-inventory-list { overflow-y: auto; flex: 1 1 auto; min-height: 0; }
 .topo-inventory-empty { color: var(--muted); font-size: 12px; padding: 10px 4px; }
 .topo-inventory-row {
   display: flex; align-items: center; gap: 7px; width: 100%;
-  padding: 5px 7px; border: 1px solid transparent; border-radius: 7px;
+  height: 30px; box-sizing: border-box;               /* 32px pitch − 2px gutter */
+  padding: 0 7px; border: 1px solid transparent; border-radius: 7px;
   background: none; color: var(--fg); cursor: pointer; text-align: left; font-size: 12px;
 }
 .topo-inventory-row:hover { background: var(--surface-2); }

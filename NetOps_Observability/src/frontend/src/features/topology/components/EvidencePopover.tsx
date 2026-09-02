@@ -26,7 +26,7 @@ function EvidenceRows({ evidence }: { evidence: EvidenceRef[] }) {
         </div>
       ))}
       {evidence.length > rows.length && (
-        <div className="topo-evpop-more">+{evidence.length - rows.length} more · click to open</div>
+        <div className="topo-evpop-more">+{evidence.length - rows.length} more</div>
       )}
     </div>
   );

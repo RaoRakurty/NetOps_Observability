@@ -95,14 +95,17 @@ describe("every lane renders the loading state before its source answers", () =>
   });
 });
 
-describe("every lane renders its failure verbatim, prefixed by the lane", () => {
+// The raw message is no longer rendered verbatim: lib/errors.ts strips the api
+// envelope so an operator never reads "500 Internal Server Error: {…}". The
+// lane PREFIX stays — it is what says which lane failed.
+describe("every lane renders its failure as operator copy, prefixed by the lane", () => {
   it.each(ALL_LANES)("%s", async (id) => {
     Object.values(mocks).forEach((f) => f.mockRejectedValue(new Error("upstream 502")));
     const Lane = LANE_COMPONENT[id];
     render(<Lane scope={scope} />);
     await waitFor(() => expect(stateOf(id)).toBe("error"));
     const alert = within(card(id)).getByRole("alert");
-    expect(alert).toHaveTextContent("upstream 502");
+    expect(alert).toHaveTextContent("Upstream 502.");
     expect(alert).toHaveTextContent(LANE_TITLE[id]);
   });
 });
@@ -127,14 +130,14 @@ describe("not_connected — the source was never wired", () => {
     mocks.metricNames.mockResolvedValue({ status: "success", data: ["collector_targets"] });
     render(<HealthLane scope={scope} />);
     await waitFor(() => expect(stateOf("health")).toBe("not_connected"));
-    expect(card("health")).toHaveTextContent(/SNMP\/gNMI collectors are not polling/i);
+    expect(card("health")).toHaveTextContent(/SNMP\/gNMI collectors are not collecting/i);
   });
 
-  it("routing says protocol polling is not enabled", async () => {
+  it("routing says protocol collection is not enabled", async () => {
     mocks.metricNames.mockResolvedValue({ status: "success", data: ["device_if_oper_status"] });
     render(<RoutingLane scope={scope} />);
     await waitFor(() => expect(stateOf("routing")).toBe("not_connected"));
-    expect(card("routing")).toHaveTextContent(/BGP\/OSPF\/IS-IS polling is not enabled/i);
+    expect(card("routing")).toHaveTextContent(/BGP\/OSPF\/IS-IS collection is not enabled/i);
   });
 
   it("flows says no exporter has ever been seen", async () => {

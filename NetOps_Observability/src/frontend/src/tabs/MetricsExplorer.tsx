@@ -149,7 +149,7 @@ function MetricPicker({ names, onPick }: { names: string[]; onPick: (n: string) 
               ))
             )}
             {filtered.length > shown.length && (
-              <div className="combo-empty">+{filtered.length - shown.length} more — refine the filter</div>
+              <div className="combo-empty">+{filtered.length - shown.length} more — narrow your search</div>
             )}
           </div>
         </div>

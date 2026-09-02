@@ -386,7 +386,7 @@ export default function CommandCenter() {
   const pressureTone = pressure === "Severe" ? "var(--crit)" : pressure === "Elevated" ? "var(--warn)" : pressure === "Watch" ? "var(--accent)" : "var(--ok)";
 
   const decision = items.length === 0
-    ? "No correlated incidents require action. Raw signals (if any) have not formed a correlated group."
+    ? "No correlated incidents require action. Individual alerts have not yet grouped into an incident."
     : `${items.length} correlated incident${items.length > 1 ? "s" : ""} in queue · ${critical} critical · ${confirmed} with confirmed RCA · ${ownerMissing} missing owner · ${ticketNeeded} awaiting a ticket. ` +
       (confirmed > 0 ? "Work confirmed-RCA criticals with missing owners first." : suspected > 0 ? "Confirm impact on suspected incidents before any ticketing." : "Triage correlated groups by blast radius.");
 
@@ -409,7 +409,7 @@ export default function CommandCenter() {
         </div>
         <div className="cc-kpis">
           {/* KPIs filter the queue below (same data → counts always match) and toggle. */}
-          <CcKpi n={items.length} label="Correlated incidents" interp="grouped, not raw alerts" onClick={() => setFilters({})} active={activeFilterCount(filters) === 0} />
+          <CcKpi n={items.length} label="Correlated incidents" interp="grouped, not individual alerts" onClick={() => setFilters({})} active={activeFilterCount(filters) === 0} />
           <CcKpi n={critical} label="Critical" interp="confirmed impact or high blast radius" tone={critical ? "var(--crit)" : undefined} onClick={() => applyKpi({ sev: "crit" })} active={kpiActive({ sev: "crit" })} />
           <CcKpi n={untriaged} label="Untriaged" interp="correlated, RCA not yet run" tone={untriaged ? "var(--warn)" : undefined} onClick={() => applyKpi({ untriaged: true })} active={kpiActive({ untriaged: true })} />
           <CcKpi n={suspected} label="Suspected RCA" interp="impact not confirmed" tone={suspected ? "var(--warn)" : undefined} onClick={() => applyKpi({ rca: "Suspected" })} active={kpiActive({ rca: "Suspected" })} />

@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { api, SnmpProfile, SnmpMetric } from "../services/api";
 import { capitalize } from "../lib/text";
-
+import { operatorError } from "../lib/errors";
 // SNMP Profiles — the vendor OID/metric library (vendor "device profiles"
 // pattern): profiles grouped by category on the left, the selected profile's
 // metric table on the right, with the ability to add custom metrics. Built-in
@@ -40,7 +40,7 @@ export default function SnmpProfiles() {
       setErr(null);
       setSelected((cur) => cur ?? (p[0]?.id ?? null));
     } catch (e) {
-      setErr(e instanceof Error ? e.message : "failed to load profiles");
+      setErr(operatorError(e, "SNMP profiles could not be loaded."));
     }
   };
   useEffect(() => {
@@ -68,7 +68,7 @@ export default function SnmpProfiles() {
       setProfiles((ps) => ps.map((p) => (p.id === updated.id ? updated : p)));
       setDraft(EMPTY_METRIC);
     } catch (e) {
-      setErr(e instanceof Error ? e.message : "failed to add metric");
+      setErr(operatorError(e, "The metric could not be added."));
     }
   };
 
@@ -78,13 +78,13 @@ export default function SnmpProfiles() {
     try {
       const parsed = JSON.parse(uploadText);
       const metrics: SnmpMetric[] = Array.isArray(parsed) ? parsed : parsed.metrics;
-      if (!Array.isArray(metrics)) throw new Error("expected a JSON array of metrics (or {metrics:[…]})");
+      if (!Array.isArray(metrics)) throw new Error("That file does not look like a list of metrics.");
       const updated = await api.addSnmpProfileMetrics(current.id, metrics);
       setProfiles((ps) => ps.map((p) => (p.id === updated.id ? updated : p)));
       setUploadText("");
       setShowUpload(false);
     } catch (e) {
-      setErr(e instanceof Error ? e.message : "invalid OID JSON");
+      setErr(operatorError(e, "That OID file could not be read."));
     }
   };
 
@@ -103,7 +103,7 @@ export default function SnmpProfiles() {
       await load();
       setSelected(p.id);
     } catch (e) {
-      setErr(e instanceof Error ? e.message : "failed to create profile");
+      setErr(operatorError(e, "The profile could not be created."));
     }
   };
 
@@ -152,7 +152,7 @@ export default function SnmpProfiles() {
       {/* Selected profile detail */}
       <div className="panel" style={{ flex: 1, padding: 16 }}>
         {!current ? (
-          <div style={{ color: "var(--muted)" }}>Select a profile.</div>
+          <div style={{ color: "var(--muted)" }}>No profile selected.</div>
         ) : (
           <>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
@@ -242,7 +242,7 @@ export default function SnmpProfiles() {
                 <option value="gauge">gauge</option>
                 <option value="counter">counter</option>
                 <option value="string">string</option>
-                <option value="enum">enum</option>
+                <option value="enum">Named states</option>
               </select>
               <input placeholder="unit" value={draft.unit}
                 onChange={(e) => setDraft({ ...draft, unit: e.target.value })} style={{ width: 90 }} />

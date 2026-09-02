@@ -62,7 +62,7 @@ export default function DeviceTerminal({ device, onClose }: { device: Device; on
       ({ ticket } = await api.deviceSSHTicket(device.id));
     } catch (err) {
       setPhase("form");
-      setBanner({ kind: "error", text: `Could not start terminal session: ${(err as Error)?.message ?? String(err)}` });
+      setBanner({ kind: "error", text: "Could not start the terminal session." });
       return;
     }
     const url = sshSocketUrl(device.id, ticket);

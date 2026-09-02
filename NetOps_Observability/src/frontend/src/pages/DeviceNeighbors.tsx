@@ -68,7 +68,7 @@ export default function DeviceNeighbors({ device }: { device: Device }) {
       </Section>
 
       <Section title="BGP neighbors" sub={bgp ? `${bgp.length} peer${bgp.length === 1 ? "" : "s"}` : "loading…"}>
-        {bgp === null ? <div className="empty">Loading…</div> : bgp.length === 0 ? <p className="mini-meta" style={{ padding: "0 12px" }}>No BGP peers in telemetry (device_bgp_peer_state) for this device.</p> : (
+        {bgp === null ? <div className="empty">Loading…</div> : bgp.length === 0 ? <p className="mini-meta" style={{ padding: "0 12px" }}>No BGP peers have been seen for this device.</p> : (
           <table style={{ width: "100%", borderCollapse: "collapse" }}>
             <thead><tr><th style={th}>Peer</th><th style={th}>State</th><th style={th}>AS / {vrfTerm(device.vendor)}</th></tr></thead>
             <tbody>
@@ -89,7 +89,7 @@ export default function DeviceNeighbors({ device }: { device: Device }) {
       </Section>
 
       <Section title="OSPF neighbors" sub={ospf ? `${ospf.length} adjacenc${ospf.length === 1 ? "y" : "ies"}` : "loading…"}>
-        {ospf === null ? <div className="empty">Loading…</div> : ospf.length === 0 ? <p className="mini-meta" style={{ padding: "0 12px" }}>No OSPF neighbors in telemetry (device_ospf_nbr_state) for this device.</p> : (
+        {ospf === null ? <div className="empty">Loading…</div> : ospf.length === 0 ? <p className="mini-meta" style={{ padding: "0 12px" }}>No OSPF neighbours have been seen for this device.</p> : (
           <table style={{ width: "100%", borderCollapse: "collapse" }}>
             <thead><tr><th style={th}>Neighbor</th><th style={th}>State</th></tr></thead>
             <tbody>

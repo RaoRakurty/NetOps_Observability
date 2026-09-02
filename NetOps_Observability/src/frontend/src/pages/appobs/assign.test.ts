@@ -69,7 +69,7 @@ describe("selection helpers", () => {
 
 describe("assignErrorMessage", () => {
   it("maps 501 to the honest store-off message, 404 to a refresh hint", () => {
-    expect(assignErrorMessage(new Error("501 Not Implemented: store off"))).toContain("database backend");
+    expect(assignErrorMessage(new Error("501 Not Implemented: store off"))).toContain("not enabled on this deployment");
     expect(assignErrorMessage(new Error("404 Not Found: x"))).toContain("no longer exists");
     expect(assignErrorMessage(new Error("500 boom"))).toContain("failed");
   });

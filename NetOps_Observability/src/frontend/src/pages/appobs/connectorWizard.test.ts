@@ -253,7 +253,7 @@ describe("connectorStatus honesty", () => {
     expect(connectorStatus({ ...base, identity_health: { state: "failed" } }).label).toBe("Validation failed");
   });
   it("translates the 501 no-store error into customer language", () => {
-    expect(errText(new Error("501 Not Implemented: store off"))).toMatch(/platform database backend/);
+    expect(errText(new Error("501 Not Implemented: store off"))).toMatch(/not available on this deployment/);
     expect(errText(new Error("409 Conflict: validate the connector before activating")))
       .toBe("409 Conflict: validate the connector before activating");
   });

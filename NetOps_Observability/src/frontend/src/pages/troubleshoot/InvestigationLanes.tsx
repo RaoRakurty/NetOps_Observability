@@ -18,6 +18,7 @@
 
 import { useEffect, useState, type ReactNode } from "react";
 import { api, type FeedItem, type PathHealthItem, type ProbePath, type PromInstantSeries } from "../../services/api";
+import { operatorError } from "../../lib/errors";
 import {
   LANE_SOURCE,
   LANE_TITLE,
@@ -94,7 +95,7 @@ function useLane<T>(
       .then((r) => { if (alive) { setRes(r); report?.(id, r.state); } })
       .catch((e: unknown) => {
         if (!alive) return;
-        const r = laneError<T>(`${LANE_TITLE[id]}: ${(e as Error)?.message ?? String(e)}`);
+        const r = laneError<T>(`${LANE_TITLE[id]} — ${operatorError(e, "this lane could not be loaded.")}`);
         setRes(r);
         report?.(id, r.state);
       });
@@ -180,7 +181,7 @@ export function HealthLane({ scope, report, protocolSlot }: {
         names?.data ?? [],
         HEALTH_METRICS,
         q?.data?.result ?? [],
-        "No device metric has ever been scraped — the SNMP/gNMI collectors are not polling this fleet.",
+        "No device metric has ever been scraped — the SNMP/gNMI collectors are not collecting from this fleet.",
       );
     },
     [scope.device, scope.minutes, scope.caseId],
@@ -253,7 +254,7 @@ export function RoutingLane({ scope, report }: { scope: LaneScope; report?: Lane
         names?.data ?? [],
         ROUTING_METRICS,
         q?.data?.result ?? [],
-        "No routing-protocol metric has ever been scraped — BGP/OSPF/IS-IS polling is not enabled for this fleet.",
+        "No routing-protocol metric has ever been scraped — BGP/OSPF/IS-IS collection is not enabled for this fleet.",
       );
     },
     [scope.device, scope.minutes, scope.caseId],

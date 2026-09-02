@@ -47,7 +47,7 @@ function useReload<T>(loader: () => Promise<T>): [T | undefined, string | null, 
 export function observedText(r: PostureRow): string {
   if (!r.observed) return "not probed";
   if (r.observed.probe_ok && r.observed.cert_not_after) return `cert ok, expires ${fmtDate(r.observed.cert_not_after)}`;
-  return "NO certificate";
+  return "No certificate presented";
 }
 
 // Drift is a warning (declared ≠ current); an accepted exception is disclosed
@@ -172,8 +172,8 @@ export function TransportSecurity() {
         <Stat label="Paths" value={rows.length} />
         <Stat label="Drifting" value={drifting} tone={drifting > 0 ? "warn" : ""} />
         <Stat label="Exceptions" value={exceptions} tone={exceptions > 0 ? "accent" : ""} />
-        <Stat label="Validator fatal" value={v?.fatal ?? "—"} tone={v && v.fatal > 0 ? "bad" : ""} />
-        <Stat label="Validator warn" value={v?.warn ?? "—"} tone={v && v.warn > 0 ? "warn" : ""} />
+        <Stat label="Critical problems" value={v?.fatal ?? "—"} tone={v && v.fatal > 0 ? "bad" : ""} />
+        <Stat label="Warnings" value={v?.warn ?? "—"} tone={v && v.warn > 0 ? "warn" : ""} />
       </StatStrip>
       <div className="ds-toolbar">
         <span className="mini-meta">Generated {fmtDateTime(data.generated)}{v ? ` · profile ${v.profile}` : ""}</span>

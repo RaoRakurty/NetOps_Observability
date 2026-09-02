@@ -61,7 +61,7 @@ describe("workloadClass (Wave 5 #15)", () => {
       const meta = WORKLOAD_CLASS_META[c];
       expect(meta.label.length).toBeGreaterThan(0);
       expect(meta.emptyTitle).toMatch(/^No /);
-      expect(meta.emptyHint).toContain("the poller needs");
+      expect(meta.emptyHint).toContain("the collector needs");
     }
     expect(WORKLOAD_CLASS_META.k8s.emptyHint).toContain("eks:ListClusters");
     expect(WORKLOAD_CLASS_META.serverless.emptyHint).toContain("lambda:ListFunctions");

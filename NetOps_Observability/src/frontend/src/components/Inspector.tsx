@@ -67,7 +67,7 @@ export default function Inspector() {
                 ws.setInspectorWidth(clampW(ws.inspectorWidth - 24));
               }
             }}
-            title="Drag to resize"
+            title="Resize"
           />
           <div className="inspector-head">
             <div className="inspector-title">

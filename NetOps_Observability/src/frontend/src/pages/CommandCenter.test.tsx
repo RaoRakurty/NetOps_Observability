@@ -114,7 +114,7 @@ describe("Action Queue — renders through the shared DataTable", () => {
     const started = screen.getByRole("separator", { name: /Resize Started column/i });
     expect(started.querySelector(".dtv-resize-grip")).toBeTruthy(); // the visible mark
     expect(started.getAttribute("tabindex")).toBe("0");             // reachable by keyboard
-    expect(started.getAttribute("title")).toMatch(/←\/→/);          // discoverable affordance
+    expect(started.getAttribute("title")).toMatch(/Resize column/);          // discoverable affordance
   });
 
   it("keeps the queue's severity row-accent treatment after migration", async () => {

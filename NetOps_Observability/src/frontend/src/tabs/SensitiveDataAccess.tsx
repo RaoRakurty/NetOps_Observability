@@ -3,7 +3,7 @@ import { fmtDateTime } from "../lib/time";
 import { api, AuditEvent } from "../services/api";
 import DataTable, { Column } from "../components/DataTable";
 import { Chip } from "../components/noc";
-
+import { operatorError } from "../lib/errors";
 // Sensitive Data Access — who revealed protected data, when, and why.
 //
 // This is the counterpart to the reveal endpoint: auditing a reveal is only
@@ -59,7 +59,7 @@ export default function SensitiveDataAccess() {
       // An ERROR is not an empty trail. Rendering a failed fetch as "no access
       // recorded" would be the most dangerous lie this page could tell.
       setRows(null);
-      setError(e instanceof Error ? e.message : "Could not load the access trail.");
+      setError(operatorError(e, "Could not load the access trail."));
     }
   }, []);
 

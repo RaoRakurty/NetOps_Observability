@@ -160,7 +160,7 @@ export default function CommandPalette({ nav }: { nav: NavSection[] }) {
             id: "logs:raw",
             kind: "logs",
             title: `Search logs for "${q.trim()}"`,
-            sub: "OpenSearch",
+            sub: "Log search",
             run: () => {
               setQuery(q.trim());
               go("explore/logs");

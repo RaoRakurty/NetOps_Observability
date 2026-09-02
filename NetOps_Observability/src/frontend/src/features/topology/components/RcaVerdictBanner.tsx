@@ -118,7 +118,7 @@ function RcaLayerStack({ cov }: { cov: RcaLayerCoverage }) {
         })}
       </ul>
       {cov.unmapped_kinds.length > 0 && (
-        <div className="topo-rca-layers-unmapped" title="Signal kinds with no causal-layer mapping yet — surfaced, never silently dropped">
+        <div className="topo-rca-layers-unmapped" title="Evidence types not yet mapped to a causal layer — surfaced, never silently dropped">
           {cov.unmapped_kinds.length} signal{cov.unmapped_kinds.length === 1 ? "" : "s"} not layer-mapped
         </div>
       )}

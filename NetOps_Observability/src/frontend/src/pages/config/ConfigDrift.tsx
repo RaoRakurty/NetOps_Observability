@@ -173,7 +173,7 @@ export default function ConfigDrift() {
               </button>
               <span className="mini-meta" role="status">
                 {rows.length.toLocaleString()} of {total.toLocaleString()} device
-                {total === 1 ? "" : "s"} shown — cursor pagination appends rows, never re-orders them.
+                {total === 1 ? "" : "s"} shown — more rows are added as you scroll; the order never changes.
               </span>
             </div>
           </>

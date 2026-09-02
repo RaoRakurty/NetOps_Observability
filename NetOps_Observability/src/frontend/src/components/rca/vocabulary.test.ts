@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import { readFileSync, readdirSync } from "node:fs";
 import { join, dirname, relative, sep } from "node:path";
 import { fileURLToPath } from "node:url";
+import { stripComments, readableSpans } from "../../lib/copyScan";
 
 // ── UI VOCABULARY REGRESSION (owner directive, docs/design/rca-evidence-summary.md §3)
 //
@@ -15,6 +16,8 @@ import { fileURLToPath } from "node:url";
 // comments are stripped first, and the match is case-sensitive + word-bounded —
 // so `signalCount`, `loadHealthSignals`, `deriveHealthFromAvailableSignals`,
 // `useAppSignals` and API field names are all deliberately untouched.
+
+export { stripComments };
 
 const SRC = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 
@@ -31,48 +34,6 @@ const LABEL_SHAPES: ReadonlyArray<{ re: RegExp; why: string }> = [
   { re: />Signals</, why: "JSX text node" },
   { re: /["'`]Signals["'`]/, why: "quoted label" },
 ];
-
-/**
- * Blanks out line and block comments, preserving every character position (and
- * therefore line numbers) so hits report the true file:line.
- */
-export function stripComments(text: string): string {
-  const out = text.split("");
-  let i = 0;
-  type Mode = "code" | "line" | "block" | "sq" | "dq" | "tpl";
-  let mode: Mode = "code";
-  while (i < text.length) {
-    const c = text[i], n = text[i + 1];
-    if (mode === "code") {
-      if (c === "/" && n === "/") { mode = "line"; out[i] = out[i + 1] = " "; i += 2; continue; }
-      if (c === "/" && n === "*") { mode = "block"; out[i] = out[i + 1] = " "; i += 2; continue; }
-      if (c === "'") mode = "sq"; else if (c === '"') mode = "dq"; else if (c === "`") mode = "tpl";
-      i++; continue;
-    }
-    if (mode === "line") {
-      if (c === "\n") { mode = "code"; i++; continue; }
-      out[i] = " "; i++; continue;
-    }
-    if (mode === "block") {
-      if (c === "*" && n === "/") { mode = "code"; out[i] = out[i + 1] = " "; i += 2; continue; }
-      if (c !== "\n") out[i] = " ";
-      i++; continue;
-    }
-    // inside a string literal
-    if (c === "\\") { i += 2; continue; }
-    if ((mode === "sq" && c === "'") || (mode === "dq" && c === '"') || (mode === "tpl" && c === "`")) mode = "code";
-    i++;
-  }
-  return out.join("");
-}
-
-/** The parts of a line a user can actually read: string literals + JSX text. */
-function readableSpans(line: string): string[] {
-  const spans: string[] = [];
-  for (const m of line.matchAll(/"([^"]*)"|'([^']*)'|`([^`]*)`/g)) spans.push(m[1] ?? m[2] ?? m[3] ?? "");
-  for (const m of line.matchAll(/>([^<>{}]+)</g)) spans.push(m[1]);
-  return spans;
-}
 
 function tsxFiles(dir: string, out: string[] = []): string[] {
   for (const e of readdirSync(dir, { withFileTypes: true })) {

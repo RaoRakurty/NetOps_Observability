@@ -133,11 +133,11 @@ describe("RcaWorkspace — view toggle + export wiring", () => {
     expect(onExportPdf).toHaveBeenCalledOnce();
   });
 
-  it("clicking Debug View requests the view change", () => {
+  it("clicking Evidence detail requests the view change", () => {
     const { onView } = renderWS();
     // a11y pass: the view switch is a toggle-button group (aria-pressed), not
     // an ARIA tablist (no tabpanel/roving-focus wiring exists here).
-    fireEvent.click(screen.getByRole("button", { name: "Debug View" }));
+    fireEvent.click(screen.getByRole("button", { name: "Evidence detail" }));
     expect(onView).toHaveBeenCalledWith("debug");
   });
 
@@ -256,12 +256,12 @@ describe("RcaWorkspace — parser-rule fidelity badges", () => {
     expect(screen.getAllByText("live validated")[0]).toHaveClass("badge", "tier-t1");
     expect(screen.getAllByText("lab validated")[0]).toHaveClass("badge", "tier-t3");
     expect(screen.getAllByText("doc claimed")[0]).toHaveClass("badge", "tier-t4");
-    expect(screen.getAllByText("code")[0]).toHaveClass("badge", "tier-t5");
+    expect(screen.getAllByText("unverified")[0]).toHaveClass("badge", "tier-t5");
   });
 
   it("renders no badge when the evidence declared no fidelity", () => {
     renderWS(suspectedCase());
-    ["live validated", "lab validated", "doc claimed", "code", "unrated"].forEach((t) =>
+    ["live validated", "lab validated", "doc claimed", "unverified", "unrated"].forEach((t) =>
       expect(screen.queryByText(t)).not.toBeInTheDocument());
   });
 
@@ -276,7 +276,7 @@ describe("RcaWorkspace — parser-rule fidelity badges", () => {
     const { container } = renderWS(buildRcaCase(tl, corrObject({ signal_count: 2 }), {}, "netops", []));
     const routing = [...container.querySelectorAll<HTMLElement>(".rw-ecard")]
       .find((el) => el.querySelector(".rw-etitle")?.textContent === "Routing / link") as HTMLElement;
-    expect(within(routing).getByText("code")).toBeInTheDocument();
+    expect(within(routing).getByText("unverified")).toBeInTheDocument();
     expect(within(routing).queryByText("live validated")).not.toBeInTheDocument();
   });
 });

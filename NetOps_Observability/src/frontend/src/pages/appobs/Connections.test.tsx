@@ -75,7 +75,7 @@ describe("Connections list", () => {
     mock.cloudConnectors.mockRejectedValueOnce(new Error("501 Not Implemented: store off"));
     render(<Connections nonce={0} onConnect={() => {}} onResume={() => {}} />);
     expect(await screen.findByText("Unable to load cloud connections")).toBeTruthy();
-    expect(screen.getByText(/platform database backend/)).toBeTruthy();
+    expect(screen.getByText(/not available on this deployment/)).toBeTruthy();
   });
 
   it("empty tenant → honest empty state with the connect action", async () => {

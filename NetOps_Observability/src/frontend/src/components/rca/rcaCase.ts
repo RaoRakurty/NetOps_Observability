@@ -879,7 +879,7 @@ export function buildRcaCase(timeline: CorrTimeline, obj: CorrObject, _seams: Re
     const main = p === dominant && n > 0;
     return {
       variant: main ? "main" : n > 0 ? "confirm" : "missing", dot: main ? "orange" : n > 0 ? "green" : "gray",
-      title: PLANE_TITLE[p] ?? modalityLabel(p), pill: main ? { tone: "orange", text: "Main evidence" } : n > 0 ? { tone: "green", text: "Used" } : { tone: "gray", text: "No data" },
+      title: PLANE_TITLE[p] ?? modalityLabel(p), pill: main ? { tone: "orange", text: "Main evidence" } : n > 0 ? { tone: "green", text: "Used" } : { tone: "gray", text: "Nothing collected" },
       desc: PLANE_DESC[p] ?? "", finding: n > 0 ? `${n} ${n === 1 ? "observation" : "observations"} used.` : "No telemetry from this evidence class reached the platform in this window — unavailable or not configured.",
       foot: n > 0 ? (main ? "Primary evidence for this issue" : "Supports the case") : "Coverage gap — absence is not evidence of health",
       ...(n > 0 && planeFidelity(p) ? { fidelity: planeFidelity(p) } : {}),

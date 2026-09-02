@@ -94,7 +94,7 @@ export default function SnmpConfigGenerator() {
             {res.device_config}
           </pre>
           <div style={{ fontSize: 11, color: "var(--warn,#f5a623)", marginTop: 6 }}>
-            ⚠ These credentials are shown once — the profile stores them write-only. Copy the block now.
+            ⚠ These credentials are shown once — the profile stores them but can never display them again. Copy them now.
             The credential sentinel will confirm the device answers within ~2 minutes.
           </div>
         </div>

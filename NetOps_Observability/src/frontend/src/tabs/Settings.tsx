@@ -47,7 +47,7 @@ function DefaultLandingCard() {
         <h3 style={{ fontWeight: 700, fontSize: "inherit", margin: 0 }}>Default landing page</h3>
         <div style={{ fontSize: 12, color: "var(--muted)" }}>
           The page everyone lands on after sign-in. Tenants can override this in Identity &amp; Access.
-          {err && <span role="alert" style={{ color: "var(--crit)" }}> · Error: {err}</span>}
+          {err && <span role="alert" style={{ color: "var(--crit)" }}> · {err}</span>}
           <span role="status">{saved ? " · saved" : ""}</span>
         </div>
       </div>
@@ -108,7 +108,7 @@ function TimeDisplayCard() {
         <div style={{ fontSize: 12, color: "var(--muted)" }}>
           How every timestamp renders for this tenant — your local zone ({tzLabel("local")}) or UTC.
           Storage is always UTC; only display changes. Admin-set, applies to all of the tenant&apos;s users.
-          {err && <span role="alert" style={{ color: "var(--crit)" }}> · Error: {err}</span>}
+          {err && <span role="alert" style={{ color: "var(--crit)" }}> · {err}</span>}
           <span role="status">{saved ? " · saved" : ""}</span>
         </div>
       </div>

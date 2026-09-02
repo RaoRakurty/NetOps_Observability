@@ -604,7 +604,7 @@ function AuthStep({ provider, methods, method, onMethod, values, onValue, secret
 // ── Step 4: trust setup templates ─────────────────────────────────────────────
 function TrustStep({ setup, connector }: { setup: CloudSetupBundle | null; connector: CloudConnectorView | null }) {
   const extId = connector?.identity?.external_id;
-  if (!setup) return <div className="ccw-stack"><p className="ccw-lead ao-muted">Loading trust setup from the connector API…</p></div>;
+  if (!setup) return <div className="ccw-stack"><p className="ccw-lead ao-muted">Loading trust setup…</p></div>;
   return (
     <div className="ccw-stack">
       <p className="ccw-lead">{setup.summary}</p>
@@ -663,7 +663,7 @@ function ScopeStep({ accountId, onAccount, regions, onRegions, pack, scopeLabel,
           {pack && <span className="ccw-panel-meta">{pack.title} · read-only</span>}
         </div>
         {perms.length === 0 ? (
-          <p className="ccw-hint">Permissions are defined by the capability pack from the API.</p>
+          <p className="ccw-hint">Permissions are set by the provider’s capability pack.</p>
         ) : (
           <ul className="ccw-perms">
             {perms.map((p) => <li key={p} className="ccw-perm"><code>{p}</code></li>)}

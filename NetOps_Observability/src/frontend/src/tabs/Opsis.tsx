@@ -328,8 +328,8 @@ export default function Opsis({ split, onToggleSplit }: { split?: boolean; onTog
     return (
       <div className="op-chat" style={{ padding: 20 }}>
         <p style={{ color: "var(--muted)", fontSize: 13 }}>
-          Iris AI is turned off. Set <code>FEATURE_COPILOT=true</code> in{" "}
-          <code>deployment/docker/.env</code> and restart the API.
+          Iris AI is turned off. An administrator can enable it in the platform
+          configuration.
         </p>
       </div>
     );
@@ -443,7 +443,7 @@ export default function Opsis({ split, onToggleSplit }: { split?: boolean; onTog
               disabled={cfg.key_source === "env"}
             />
             {cfg.key_source === "env" && (
-              <span style={{ color: "var(--muted)", fontSize: 11 }}>Set via environment; clear it from <code>.env</code> to manage it here.</span>
+              <span style={{ color: "var(--muted)", fontSize: 11 }}>Set by your deployment configuration; clear it there to manage the key here.</span>
             )}
           </label>
           <div className="op-field">
@@ -708,7 +708,7 @@ export default function Opsis({ split, onToggleSplit }: { split?: boolean; onTog
                 <span className="op-slash-cmd">{c.cmd}</span>
                 <span className="op-slash-title">{c.title}</span>
                 <span className="op-slash-mod">{c.module}</span>
-                {c.soon && <span className="op-slash-soon">soon</span>}
+                {c.soon && <span className="op-slash-soon">not yet</span>}
               </button>
             ))}
           </div>
@@ -811,7 +811,7 @@ function GroundedAnswer({ ans, onCite, onClose }: { ans: AiAnswer; onCite: () =>
   // Provider-fallback chips are pulled OUT of the top badge row and shown once as
   // a small footer note (spec §1/§8) — never a loud top badge or a headline.
   const badges = (ans.mode_badges ?? []).filter((b) => !/^(evidence-only|ai provider)/i.test(b));
-  const providerNote = ans.provider_note || (ans.evidence_only ? "Evidence-only mode: AI provider not configured." : "");
+  const providerNote = ans.provider_note || (ans.evidence_only ? "Evidence only — no AI provider is connected." : "");
   const whyFirst = pr?.why_first ?? cs?.why_first;
   return (
     <div className="op-grounded">

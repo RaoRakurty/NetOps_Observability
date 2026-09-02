@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { api, Device, VrfInterface, VrfInterfaceGroup, VrfInterfacesResponse } from "../../services/api";
 import { vrfTermPlural } from "../../lib/vendorTerms";
+import { operatorError } from "../../lib/errors";
 import {
   PANEL_SOURCE,
   coverageHeadline,
@@ -157,7 +158,7 @@ export default function VrfInterfaces({ device }: { device: Device }) {
       .catch((e: unknown) => {
         if (!alive) return;
         setData(null);
-        setError(e instanceof Error ? e.message : String(e));
+        setError(operatorError(e, "Interface data could not be loaded."));
       })
       .finally(() => { if (alive) setLoading(false); });
     return () => { alive = false; };

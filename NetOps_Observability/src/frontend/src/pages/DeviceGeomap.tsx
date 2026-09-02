@@ -7,7 +7,7 @@ import { escapeHtml } from "../lib/text";
 import { StatStrip, Stat, Segmented } from "../components/ui";
 import DataTable, { Column } from "../components/DataTable";
 import Icon from "../components/Icon";
-
+import { operatorError } from "../lib/errors";
 // Device Geomap (Infrastructure → Maps) — the fleet plotted by site. Placement
 // is INTENT data: sites and their latitude/longitude live in the Source of
 // Truth (Automation → Source of Truth), never GeoIP — RFC 1918 management
@@ -90,7 +90,7 @@ function MapPanel({ sites, height = 460 }: { sites: GeoSite[]; height?: number }
     ],
   }), [plotted]);
 
-  if (!ready) return <div className="empty board-empty"><div className="board-empty-msg">Loading basemap…</div></div>;
+  if (!ready) return <div className="empty board-empty"><div className="board-empty-msg">Loading map…</div></div>;
   if (plotted.length === 0) {
     return (
       <div className="empty board-empty">
@@ -121,7 +121,7 @@ export function GeomapSection() {
         const d = await api.geomap();
         if (alive) { setData(d); setErr(null); }
       } catch (e) {
-        if (alive) setErr(e instanceof Error ? e.message : String(e));
+        if (alive) setErr(operatorError(e, "The site map could not be updated."));
       }
     };
     load();
@@ -162,7 +162,7 @@ function LocationsEditor({ onChanged }: { onChanged: () => void }) {
 
   const load = async () => {
     try { setRows((await api.deviceLocations()).devices); setErr(null); }
-    catch (e) { setErr(e instanceof Error ? e.message : String(e)); }
+    catch (e) { setErr(operatorError(e, "The site map could not be updated.")); }
   };
   useEffect(() => { load(); }, []);
 
@@ -180,13 +180,13 @@ function LocationsEditor({ onChanged }: { onChanged: () => void }) {
       await api.setDeviceLocation(r.id, { site: d.site.trim(), lat, lng });
       const next = { ...draft }; delete next[r.id]; setDraft(next);
       setErr(null); await load(); onChanged();
-    } catch (e) { setErr(e instanceof Error ? e.message : String(e)); }
+    } catch (e) { setErr(operatorError(e, "The site map could not be updated.")); }
     finally { setBusy(null); }
   };
   const clear = async (r: DeviceLocationRow) => {
     setBusy(r.id);
     try { await api.clearDeviceLocation(r.id); setErr(null); await load(); onChanged(); }
-    catch (e) { setErr(e instanceof Error ? e.message : String(e)); }
+    catch (e) { setErr(operatorError(e, "The site map could not be updated.")); }
     finally { setBusy(null); }
   };
 
@@ -259,7 +259,7 @@ function SitesManager({ onChanged }: { onChanged: () => void }) {
 
   const load = async () => {
     try { const r = await api.sites(); setSites(r.sites); setActive(r.active || "internal"); setErr(null); }
-    catch (e) { setErr(e instanceof Error ? e.message : String(e)); }
+    catch (e) { setErr(operatorError(e, "The site map could not be updated.")); }
   };
   useEffect(() => { load(); }, []);
 
@@ -285,7 +285,7 @@ function SitesManager({ onChanged }: { onChanged: () => void }) {
     try {
       await api.saveSite({ name, status: add.status.trim() || undefined, owner: add.owner.trim() || undefined, ...c });
       setAdd({ name: "", status: "", owner: "", lat: "", lng: "" }); setErr(null); await load(); onChanged();
-    } catch (e) { setErr(e instanceof Error ? e.message : String(e)); }
+    } catch (e) { setErr(operatorError(e, "The site map could not be updated.")); }
     finally { setBusy(null); }
   };
 
@@ -302,7 +302,7 @@ function SitesManager({ onChanged }: { onChanged: () => void }) {
     try {
       await api.updateSite(slug, { name: d.name.trim(), status: d.status.trim() || undefined, owner: d.owner.trim() || undefined, ...c });
       cancelEdit(slug); setErr(null); await load(); onChanged();
-    } catch (e) { setErr(e instanceof Error ? e.message : String(e)); }
+    } catch (e) { setErr(operatorError(e, "The site map could not be updated.")); }
     finally { setBusy(null); }
   };
 
@@ -310,7 +310,7 @@ function SitesManager({ onChanged }: { onChanged: () => void }) {
     if (!window.confirm(`Delete site "${s.name}"? Devices labelled with its slug fall back to unplaced.`)) return;
     setBusy(s.slug);
     try { await api.deleteSite(s.slug); setErr(null); await load(); onChanged(); }
-    catch (e) { setErr(e instanceof Error ? e.message : String(e)); }
+    catch (e) { setErr(operatorError(e, "The site map could not be updated.")); }
     finally { setBusy(null); }
   };
 
@@ -426,7 +426,7 @@ function ImportPanel({ onDone }: { onDone: () => void }) {
       const r = await api.importSot({ kind, format: fmt, data: text, dry_run: dry, overwrite });
       setPlan(r);
       if (!dry) onDone();
-    } catch (e) { setErr(e instanceof Error ? e.message : String(e)); }
+    } catch (e) { setErr(operatorError(e, "The site map could not be updated.")); }
     finally { setBusy(false); }
   };
 
@@ -527,7 +527,7 @@ export default function DeviceGeomap({ view: viewProp, onViewChange }: {
     let alive = true;
     const load = async () => {
       try { const d = await api.geomap(); if (alive) { setData(d); setErr(null); } }
-      catch (e) { if (alive) setErr(e instanceof Error ? e.message : String(e)); }
+      catch (e) { if (alive) setErr(operatorError(e, "The site map could not be updated.")); }
     };
     load();
     const t = setInterval(load, 30_000);

@@ -3,7 +3,7 @@ import { api, SavedObject } from "../services/api";
 import { PANELS, PANEL_CATEGORIES } from "./panels";
 import { Modal } from "../components/ui";
 import { fmtDateTime } from "../lib/time";
-
+import { operatorError } from "../lib/errors";
 // Saved dashboards — the customer dashboard BUILDER (the surface the panel
 // registry was designed for: panels.tsx's PANEL_CATEGORIES is the "Add panel"
 // picker). A dashboard is a named, ordered list of {type, span} cells rendered
@@ -106,7 +106,7 @@ function BoardEditor({ board, onBack, onSaved }: {
       setDirty(false);
       onSaved();
     } catch (e) {
-      setErr(e instanceof Error ? e.message : String(e));
+      setErr(operatorError(e, "The dashboard could not be loaded."));
     } finally {
       setSaving(false);
     }
@@ -217,7 +217,7 @@ export default function SavedDashboards() {
       setBoards(list ?? []);
       setLoadErr(null);
     } catch (e) {
-      setLoadErr(e instanceof Error ? e.message : String(e));
+      setLoadErr(operatorError(e, "The dashboard could not be loaded."));
     }
   }, []);
   useEffect(() => { void load(); }, [load, nonce]);
@@ -228,7 +228,7 @@ export default function SavedDashboards() {
       await api.deleteSaved(b.id);
       setNonce((n) => n + 1);
     } catch (e) {
-      setLoadErr(e instanceof Error ? e.message : String(e));
+      setLoadErr(operatorError(e, "The dashboard could not be loaded."));
     }
   };
 

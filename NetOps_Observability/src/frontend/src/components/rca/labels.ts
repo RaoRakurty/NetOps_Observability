@@ -408,7 +408,7 @@ export const PROBE_AUTHORITY_META: Record<string, { label: string; color: string
   high: { label: "High authority", color: C.ok },
   medium: { label: "Medium authority", color: C.info },
   low: { label: "Low authority — support only", color: C.warn },
-  debug_only: { label: "Debug / lab — excluded", color: C.faint },
+  debug_only: { label: "Lab / test source — excluded", color: C.faint },
 };
 export const PROBE_SCOPE_LABEL: Record<string, string> = {
   customer_path: "Customer path",

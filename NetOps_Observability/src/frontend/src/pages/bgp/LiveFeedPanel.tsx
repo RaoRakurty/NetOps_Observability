@@ -63,13 +63,13 @@ export function LiveFeedPanel() {
       {status?.enabled && (
         <>
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 8, alignItems: "center" }}>
-            <Chip label={status.capped ? "PAUSED · poller cap" : status.polling ? "POLLING" : "IDLE"}
+            <Chip label={status.capped ? "Paused — at capacity" : status.polling ? "Receiving" : "Idle"}
               tone={status.capped ? "var(--warn)" : status.polling ? "var(--ok)" : "var(--muted)"}
               title={status.capped ? status.note : `Every ~${status.interval ?? "60s"}, jittered`} />
             <Chip label={`${counts.announce} announce`} tone="var(--accent)" />
             <Chip label={`${counts.withdraw} withdraw`} tone="var(--crit)" />
             <Chip label={`${status.buffered ?? 0}/${status.ring_size} buffered`}
-              title="Server-side ring buffer: constant size, oldest overwritten." />
+              title="Keeps the most recent updates; older ones roll off." />
             {(status.dropped ?? 0) > 0 && (
               <Chip label={`${status.dropped} overwritten`} tone="var(--warn)"
                 title="Updates that rolled out of the ring before this page read them." />

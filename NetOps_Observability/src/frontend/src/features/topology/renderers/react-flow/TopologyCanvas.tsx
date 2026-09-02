@@ -787,7 +787,7 @@ function CanvasInner({
             role="switch"
             aria-checked={showInventory}
             onClick={() => setShowInventory((v) => !v)}
-            title="Show the device inventory beside the canvas (status, mgmt IP, observed-since; click a row to focus it on the map)."
+            title="Device inventory beside the map — status, management IP, first observed."
           >
             Devices
           </button>
@@ -828,7 +828,7 @@ function CanvasInner({
         })()}
         {viewStatus === "sample" && (
           <span className="topo-coverage" style={{ color: "var(--warn)" }}
-            title="This workflow mode is not backed by live data yet — a bundled sample is shown.">
+            title="No live data for this view yet — a sample is shown.">
             Sample data
           </span>
         )}
@@ -941,7 +941,7 @@ function CanvasInner({
             {(!view || view.nodes.length === 0) && (
               <span className="topo-coverage" role="status"
                 style={{ position: "absolute", top: 10, left: 10, color: "var(--warn)", background: "var(--panel)", padding: "3px 8px", borderRadius: 6, border: "1px solid var(--border)" }}
-                title="No live topology resolved for this view — a bundled sample fabric is shown so the renderer can be evaluated.">
+                title="No live topology resolved for this view — a sample fabric is shown instead.">
                 Sample data — not your network
               </span>
             )}
@@ -1068,7 +1068,7 @@ function CanvasInner({
                 keep it collapsed, steer to the overview / search. */}
             {expandBlocked && (
               <div className="topo-focus-banner" role="status">
-                <span>That group is too large to expand on the canvas — use the overview or search.</span>
+                <span>That group is too large to expand here.</span>
                 <button className="btn btn-xs" onClick={() => { setExpandBlocked(null); setRenderer("overview"); }}>
                   WebGL overview
                 </button>
@@ -1122,7 +1122,7 @@ function CanvasInner({
                   <div style={{ fontSize: 13, fontWeight: 600, color: readFailed ? "var(--bad)" : "var(--fg)", marginBottom: 6 }}>
                     {readFailed
                       ? "The topology could not be read"
-                      : mode === "dependency" ? "No service dependencies in this window" : "Nothing to display for this view"}
+                      : mode === "dependency" ? "No service dependencies in this window" : "Nothing to show for this view yet"}
                   </div>
                   <div style={{ fontSize: 12, color: "var(--fg-muted)", lineHeight: 1.5 }}>
                     {readFailed

@@ -13,7 +13,7 @@ import { physicalTopology } from "../mock/index";
 export const ExploreWorkflow: WorkflowDef = {
   id: "explore",
   label: "Explore",
-  blurb: "Browse the physical fabric. Select a device to light up its neighbours.",
+  blurb: "The physical fabric, device by device.",
   implemented: true,
   view: physicalTopology,
   computeSpotlight(view: TopologyView, selection: TopologySelection): SpotlightResult {

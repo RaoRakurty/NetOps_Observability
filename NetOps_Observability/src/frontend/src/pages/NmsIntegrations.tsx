@@ -37,7 +37,7 @@ type CredField = { key: string; label: string; secret?: boolean; hint?: string }
 const CRED_FIELDS: Record<string, CredField[]> = {
   meraki: [
     { key: "api_key", label: "Dashboard API key", secret: true },
-    { key: "org", label: "Organization ID", hint: "used in poll paths (/organizations/{org}/…)" },
+    { key: "org", label: "Organization ID", hint: "Identifies your organisation with the vendor." },
     { key: "webhook_secret", label: "Webhook shared secret", secret: true, hint: "optional — verifies inbound alert webhooks" },
   ],
   catalyst_center: [
@@ -262,7 +262,7 @@ export default function NmsIntegrations() {
                 <div className="nms-tile-tag">{meta.tagline}</div>
                 <div className="nms-tile-caps">
                   {c.poll ? <span className="nms-cap">POLL</span> : null}
-                  {c.webhook ? <span className="nms-cap">WEBHOOK</span> : null}
+                  {c.webhook ? <span className="nms-cap">PUSH</span> : null}
                   <span className="nms-cap dim">{c.preferredAuth.toUpperCase()}</span>
                   <span className="nms-cap dim">{c.streams.length} streams</span>
                   <span className="nms-cta">{mine.length ? "Add another →" : "Connect →"}</span>
@@ -390,7 +390,7 @@ function ConfiguredList({ integrations, health, onManage, onChanged }: {
                       }
                     }}
                   >
-                    {busyId === it.id ? "Polling…" : "Poll now"}
+                    {busyId === it.id ? "Collecting…" : "Collect now"}
                   </button>
                 </td>
               </tr>
@@ -426,7 +426,7 @@ function SetupWizard({ connector, onClose, onDone }: {
       render: () => (
         <div className="nms-form">
           <Field label="Display name" value={name} onChange={setName} hint={`e.g. "${meta.domain} — production"`} />
-          <Field label="Base URL" value={baseUrl} onChange={setBaseUrl} mono hint="https://controller.example.com (or http://mock-nms:8091 for the bundled stand-in)" />
+          <Field label="Base URL" value={baseUrl} onChange={setBaseUrl} mono hint="https://controller.example.com" />
           <Field label="Poll interval (seconds)" value={interval} onChange={setIntervalS} mono hint={`vendor default ${connector.defaultPollS}s; floored at 30s`} />
           <label className="nms-check">
             <input type="checkbox" checked={tlsSkip} onChange={(e) => setTlsSkip(e.target.checked)} />
@@ -459,7 +459,7 @@ function SetupWizard({ connector, onClose, onDone }: {
     {
       id: "credentials",
       title: "Credentials",
-      hint: "Stored write-only in the encrypted vault — never shown again, never returned by the API.",
+      hint: "Stored write-only in the encrypted vault — and is never displayed again.",
       isValid: () => credsValid(connector.vendor, creds),
       render: () => (
         <div className="nms-form">
@@ -488,9 +488,9 @@ function SetupWizard({ connector, onClose, onDone }: {
             <dt>Platform</dt><dd>{connector.product}</dd>
             <dt>Name</dt><dd>{name}</dd>
             <dt>Base URL</dt><dd className="mono">{baseUrl}</dd>
-            <dt>Poll</dt><dd className="mono">{connector.poll ? `every ${interval}s · ${streams.length} streams` : "webhook only"}</dd>
+            <dt>Poll</dt><dd className="mono">{connector.poll ? `every ${interval}s · ${streams.length} streams` : "push only"}</dd>
             <dt>Credentials</dt>
-            <dd className="mono">{Object.keys(creds).filter((k) => creds[k]).join(", ") || "none"}</dd>
+            <dd>{fields.filter((f) => creds[f.key]).map((f) => f.label).join(", ") || "None set"}</dd>
           </dl>
           <div className="nms-field-h">
             The connector is read-only: it never writes to the controller. Controller evidence alone caps at
@@ -606,7 +606,7 @@ function ManageModal({ integration, health, onClose, onChanged, onDeleted }: {
 
         <div className="nms-actions">
           <button className="btn" disabled={!!busy} onClick={() => act("poll", () => api.pollNmsIntegration(it.id))}>
-            {busy === "poll" ? "Polling…" : "Poll now"}
+            {busy === "poll" ? "Collecting…" : "Collect now"}
           </button>
           <button className="btn" disabled={!!busy} onClick={() => act("test", () => api.testNmsIntegration(it.id))}>
             {busy === "test" ? "Testing…" : "Test connection"}
@@ -616,7 +616,7 @@ function ManageModal({ integration, health, onClose, onChanged, onDeleted }: {
             disabled={!!busy}
             onClick={() => act("toggle", () => api.updateNmsIntegration(it.id, { enabled: !it.enabled }))}
           >
-            {it.enabled ? "Pause polling" : "Resume polling"}
+            {it.enabled ? "Pause collection" : "Resume collection"}
           </button>
           <span className="nms-spacer" />
           <button

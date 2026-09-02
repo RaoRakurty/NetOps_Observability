@@ -92,7 +92,7 @@ function ScopeDimField({ label, dim, values, options, fmt, add, remove }: {
       {values.map((v) => (
         <button key={v} type="button" className="ao-scope-chip"
           onClick={() => remove(dim, v)} aria-label={`Remove ${label} filter ${show(v)}`}
-          title={`Click to remove this ${label.toLowerCase()} filter`}>
+          title={`Remove this ${label.toLowerCase()} filter`}>
           {show(v)}<span className="ao-scope-chip-x" aria-hidden="true">×</span>
         </button>
       ))}

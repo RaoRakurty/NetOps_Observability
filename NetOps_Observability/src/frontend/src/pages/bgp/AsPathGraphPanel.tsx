@@ -170,7 +170,7 @@ export function AsPathGraphPanel({ prefix }: { prefix?: string }) {
           <p className="mini-meta" style={{ marginBottom: 0 }}>
             Left to right: collector-adjacent AS → transit → <span style={{ color: "var(--accent)" }}>origin</span>.
             Line thickness is how many collector paths traverse that adjacency — an observation count, not capacity.
-            Your own watched ASNs are outlined in <span style={{ color: "var(--ok)" }}>green</span>. Hover any AS for its
+            Your own watched ASNs are outlined in <span style={{ color: "var(--ok)" }}>green</span>. Each AS carries its
             registry holder.
           </p>
         </>

@@ -356,7 +356,7 @@ export default function NetworkPathView({ view }: { view: TopologyView }) {
         {!anyStamp && !openHop && (
           <div className="netpath-stamp-foot" role="note">
             Per-hop latency / jitter appear here from STAMP active probes and traceroute per-hop
-            measurements — click a hop for the full metric list. No probe currently covers the hops
+            measurements. No probe currently covers the hops
             on this path; add a STAMP target per hop to light them up.
           </div>
         )}

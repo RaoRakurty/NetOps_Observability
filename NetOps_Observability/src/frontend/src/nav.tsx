@@ -438,7 +438,7 @@ export const NAV: NavSection[] = [
       { id: "regions", label: "Regions", group: "Platform", platformOnly: true, render: () => <RegionsAdmin /> },
       { id: "health", label: "Stack Health", group: "Platform", platformOnly: true, render: () => <StackHealth /> },
       { id: "grafana", label: "Self-Monitoring", group: "Platform", platformOnly: true, requiresGrafana: true, render: () => <GrafanaTab /> },
-      { id: "opensearch", label: "OpenSearch", group: "Platform", platformOnly: true, render: () => <SearchDashboardsTab /> },
+      { id: "opensearch", label: "Search Dashboards", group: "Platform", platformOnly: true, render: () => <SearchDashboardsTab /> },
       { id: "graphql", label: "GraphQL Explorer", group: "Platform", platformOnly: true, render: () => <GraphQLExplorer /> },
       {
         id: "api", label: "API Access", render: () => <ApiAccessAdmin />,

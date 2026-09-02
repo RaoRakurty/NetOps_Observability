@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { api, StackHealth as StackHealthData, StackComponent } from "../services/api";
 import Icon from "../components/Icon";
 import { StatStrip, Stat, Skeleton } from "../components/ui";
-
+import { operatorError } from "../lib/errors";
 // Stack Health — the platform's OWN infrastructure monitoring: the data
 // backends, event bus, state stores and visualization that make up the stack
 // behind the app. Platform-owner only (the API returns 403 otherwise); the nav
@@ -76,7 +76,7 @@ export default function StackHealth() {
           setErr(null);
         }
       } catch (e) {
-        if (alive) setErr(e instanceof Error ? e.message : "failed to load stack health");
+        if (alive) setErr(operatorError(e, "Platform health could not be read."));
       }
     };
     tick();

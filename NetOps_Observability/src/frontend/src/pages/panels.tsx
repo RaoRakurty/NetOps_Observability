@@ -654,13 +654,13 @@ function WanInterfaces() {
       <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
         {degraded
           ? <span className="badge warn" title="The last poll failed">● NO DATA</span>
-          : <span className="badge good" title="Polling every 10 seconds">● LIVE · 10s</span>}
+          : <span className="badge good" title="Refreshed every 10 seconds">● LIVE · 10s</span>}
         {!degraded && (
           <span className="mini-meta">↓ {fmtBps(totIn)} · ↑ {fmtBps(totOut)} · peak util {worst.toFixed(1)}%{down > 0 ? ` · ${down} down` : ""}</span>
         )}
         <span style={{ marginLeft: "auto", display: "flex", gap: 4, alignItems: "center" }}>
           <input value={draft} onChange={(e) => setDraft(e.target.value)} onKeyDown={(e) => e.key === "Enter" && applyPattern()}
-            aria-label="WAN device name pattern (regex)" title="WAN device pattern (regex on device name)" style={{ width: 130, fontSize: 12, padding: "3px 6px", border: "1px solid var(--border)", borderRadius: 6, background: "var(--surface)", color: "var(--fg)" }} />
+            aria-label="Filter WAN devices by name" title="Filter WAN devices by name" style={{ width: 130, fontSize: 12, padding: "3px 6px", border: "1px solid var(--border)", borderRadius: 6, background: "var(--surface)", color: "var(--fg)" }} />
           <button className="dash-btn" style={{ padding: "3px 8px", fontSize: 12 }} onClick={applyPattern}>Apply</button>
         </span>
       </div>
@@ -929,7 +929,7 @@ function TopologyPanel() {
 // ---- donut: a shared colorful ring used by several panels ------------------
 
 function Donut({ rows, unit, onClick }: { rows: { name: string; value: number }[]; unit?: string; onClick?: () => void }) {
-  if (rows.length === 0) return <Empty msg="No data yet." />;
+  if (rows.length === 0) return <Empty msg="Nothing collected yet." />;
   return (
     <ReactECharts
       style={{ height: 190, cursor: onClick ? "pointer" : undefined }}

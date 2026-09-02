@@ -401,7 +401,7 @@ export default function ProtocolDiagnosticsPanel() {
                   )}
                 </div>
               ))}
-              <p className="mini-meta cfg-note">Scored under ruleset {analysis.ruleset_version}.</p>
+              <p className="mini-meta cfg-note">Scored using rule set {analysis.ruleset_version}.</p>
             </>
           ) : (
             <>
@@ -409,7 +409,7 @@ export default function ProtocolDiagnosticsPanel() {
               <p className="mini-meta cfg-note">{analysis.unmatched}</p>
               <p className="mini-meta cfg-note">
                 That is the honest answer, not a failure: the raw output above is attached to the TAC
-                bundle so a human can read it. Scored under ruleset {analysis.ruleset_version}.
+                bundle so a human can read it. Scored using rule set {analysis.ruleset_version}.
               </p>
             </>
           )

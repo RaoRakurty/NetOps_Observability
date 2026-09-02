@@ -67,8 +67,8 @@ export const STATUS_META: Record<SourceStatus, { label: string; tone: string }> 
   off: { label: "Not configured", tone: "var(--fg-subtle)" },
   permission_denied: { label: "Permission denied", tone: "var(--crit)" },
   misconfigured: { label: "Misconfigured", tone: "var(--crit)" },
-  no_data: { label: "No data received", tone: "var(--warn)" },
-  not_supported: { label: "Coming soon", tone: "var(--fg-subtle)" },
+  no_data: { label: "Nothing has arrived yet", tone: "var(--warn)" },
+  not_supported: { label: "Not collected here", tone: "var(--fg-subtle)" },
 };
 
 export interface SourceReadiness {

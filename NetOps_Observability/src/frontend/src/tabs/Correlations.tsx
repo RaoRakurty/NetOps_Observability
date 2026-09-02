@@ -15,7 +15,7 @@ import { buildTopoGraph } from "../components/rca/topoGraph";
 import { exportRcaPdf } from "../components/rca/rcaExport";
 import { signatureName, ownerLabel, isInternalStackAffected, friendlyProblemId, ticketStateLabel } from "../components/rca/labels";
 import { NocHeader, NocKpis, NocKpi, Chip, LiveChip } from "../components/noc";
-
+import { operatorError } from "../lib/errors";
 // RCA is for CUSTOMER networks; internal self-monitoring objects (every affected
 // entity is our own infra) are hidden by default and revealed via a toggle for
 // platform debugging. A mixed object (any real device) is NOT hidden. Decision #76.
@@ -301,38 +301,42 @@ export default function Correlations() {
     // "Load more" stay a consistent keyset walk of the new filter.
     setMore([]);
     setMoreCursor("");
+    // The three reads run in PARALLEL and commit ONCE. They used to be awaited
+    // one after another, which cost three serial round trips AND three separate
+    // React commits per refresh — each one re-rendering the whole loaded list.
+    // Nothing here depends on anything else here, so there was never a reason
+    // to serialize them.
+    //
+    // The summary is the TRUE window totals for the stat chips — real COUNTs,
+    // never the capped list length. Tier is deliberately NOT applied so every
+    // chip stays clickable while one tier is active; the state filter is applied
+    // so the chips describe the same population as the table. Ticket links are a
+    // best-effort enrichment — the list renders without them.
     const tick = async () => {
-      try {
-        const r = await api.correlations(PAGE_SIZE, LIST_WINDOW_S, state || undefined, tier || undefined);
-        if (alive) {
-          setItems(r?.data ?? []);
-          setBaseCursor(r?.next_cursor ?? "");
-          setListErr(null);
-        }
-      } catch (e) {
+      const [listR, sumR, linkR] = await Promise.allSettled([
+        api.correlations(PAGE_SIZE, LIST_WINDOW_S, state || undefined, tier || undefined),
+        api.correlationsSummary(LIST_WINDOW_S, state || undefined),
+        api.ticketLinks(),
+      ]);
+      if (!alive) return;
+
+      const links: Record<string, TicketLinkRow[]> = {};
+      if (linkR.status === "fulfilled") {
+        (linkR.value?.links ?? []).forEach((row) => { (links[row.corr_object_id] ??= []).push(row); });
+      }
+
+      // One commit. React batches these because they are in the same tick.
+      if (listR.status === "fulfilled") {
+        setItems(listR.value?.data ?? []);
+        setBaseCursor(listR.value?.next_cursor ?? "");
+        setListErr(null);
+      } else {
         // Clearing to [] beside a Live chip claimed the engine found nothing.
         // Keep the last good page and report the failed refresh.
-        if (alive) setListErr(e instanceof Error ? e.message : String(e));
+        setListErr(operatorError(listR.reason, "The candidate list could not be refreshed."));
       }
-      // True window totals for the stat chips — real COUNTs, never the capped
-      // list length. Tier is deliberately NOT applied so every chip stays
-      // clickable while one tier is active; the state filter is applied so the
-      // chips describe the same population as the table.
-      try {
-        const sm = await api.correlationsSummary(LIST_WINDOW_S, state || undefined);
-        if (alive) setSummary(sm ?? null);
-      } catch {
-        if (alive) setSummary(null);
-      }
-      // Ticket links are a best-effort enrichment — the list renders without them.
-      try {
-        const l = await api.ticketLinks();
-        if (alive) {
-          const m: Record<string, TicketLinkRow[]> = {};
-          (l?.links ?? []).forEach((row) => { (m[row.corr_object_id] ??= []).push(row); });
-          setNotified(m);
-        }
-      } catch { /* column shows "—" */ }
+      setSummary(sumR.status === "fulfilled" ? (sumR.value ?? null) : null);
+      if (linkR.status === "fulfilled") setNotified(links);
     };
     tick();
     const id = setInterval(tick, 15_000);
@@ -409,9 +413,18 @@ export default function Correlations() {
 
   // Header KPIs = TRUE window totals from the server rollup (never the capped
   // list length); fall back to loaded-row counts only until the rollup arrives.
-  const rConfirmed = summary?.confirmed ?? visible.filter((o) => o.verdict_tier === "confirmed").length;
-  const rSuspected = summary?.suspected ?? visible.filter((o) => o.verdict_tier === "suspected").length;
-  const rUndet = summary?.undetermined ?? visible.filter((o) => o.verdict_tier === "undetermined").length;
+  // Memoized: before the rollup arrives these are three full passes over the
+  // loaded list, and they were recomputed on EVERY render of the page.
+  const loadedTiers = useMemo(() => {
+    const c = { confirmed: 0, suspected: 0, undetermined: 0 };
+    for (const o of visible) {
+      if (o.verdict_tier in c) c[o.verdict_tier as keyof typeof c]++;
+    }
+    return c;
+  }, [visible]);
+  const rConfirmed = summary?.confirmed ?? loadedTiers.confirmed;
+  const rSuspected = summary?.suspected ?? loadedTiers.suspected;
+  const rUndet = summary?.undetermined ?? loadedTiers.undetermined;
   const trueTotal = summary?.total ?? null;
   // The population the TABLE describes (honest "showing X of N"): the active
   // tier's true count when a tier filter is on, the full window total otherwise.
@@ -460,20 +473,20 @@ export default function Correlations() {
           <div style={{ display: "flex", gap: 8, marginBottom: 10, flexWrap: "wrap", alignItems: "center" }}>
             <TierChip label="total" n={trueTotal} tone="var(--accent, #2563EB)"
               active={tier === ""} onClick={() => setTier("")}
-              title="All candidates in the last 24h (merged duplicates excluded) — click to clear the status filter" />
+              title="All candidates in the last 24h (merged duplicates excluded)" />
             <TierChip label="confirmed" n={summary?.confirmed ?? null} tone="#E11D48"
               active={tier === "confirmed"} onClick={() => setTier(tier === "confirmed" ? "" : "confirmed")}
-              title="Confirmed root causes — click to show only these" />
+              title="Confirmed root causes" />
             <TierChip label="suspected" n={summary?.suspected ?? null} tone="#D97706"
               active={tier === "suspected"} onClick={() => setTier(tier === "suspected" ? "" : "suspected")}
-              title="Suspected root causes — click to show only these" />
+              title="Suspected root causes" />
             <TierChip label="not confirmed" n={summary?.undetermined ?? null} tone="#8A93A6"
               active={tier === "undetermined"} onClick={() => setTier(tier === "undetermined" ? "" : "undetermined")}
-              title="Undetermined — still gathering evidence; click to show only these" />
+              title="Undetermined — still gathering evidence" />
             {/* #113: narrow (client-side) to rows with a promoted RCA document */}
             <TierChip label="promoted" n={promotedVisible} tone="#16A34A"
               active={promotedOnly} onClick={() => setPromotedOnly((v) => !v)}
-              title="Promoted real outages — rows whose RCA document is in the RCA Reports library; click to show only these" />
+              title="Promoted real outages — those whose RCA document is in the RCA Reports library" />
             {summary && (
               <span style={{ fontSize: 12, color: "var(--muted)", marginLeft: 4 }}>
                 {summary.open} open · {summary.closed} resolved
@@ -575,7 +588,7 @@ function SignatureGaps() {
         setTotal(r?.total_undetermined ?? 0);
         setErr(null);
       } catch (e) {
-        if (alive) setErr(e instanceof Error ? e.message : String(e));
+        if (alive) setErr(operatorError(e, "This view could not be loaded."));
       } finally {
         if (alive) setLoaded(true);
       }

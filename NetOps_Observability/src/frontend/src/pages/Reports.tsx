@@ -747,7 +747,7 @@ function ExecutionsDrawer({ report, onClose }: { report: SavedObject; onClose: (
             <button className="dash-btn" onClick={onClose}>Close</button>
           </div>
         </div>
-        {err && <p className="mini-meta" style={{ color: "var(--warn)" }}>{err.includes("409") ? "Execution history requires the Postgres backend." : err}</p>}
+        {err && <p className="mini-meta" style={{ color: "var(--warn)" }}>{err.includes("409") ? "Run history is not available on this deployment." : "Run history could not be read."}</p>}
         {!execs ? (
           <div className="empty">Loading…</div>
         ) : execs.length === 0 ? (

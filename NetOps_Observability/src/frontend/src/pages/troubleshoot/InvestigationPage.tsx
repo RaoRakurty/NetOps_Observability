@@ -36,6 +36,7 @@ import { exportRcaPdf } from "../../components/rca/rcaExport";
 import ProtocolDiagnosticsPanel from "./ProtocolDiagnosticsPanel";
 import IrisLane from "./IrisLane";
 import { LANE_COMPONENT, type LaneScope } from "./InvestigationLanes";
+import { operatorError } from "../../lib/errors";
 import {
   SYMPTOMS,
   bisectingHeadline,
@@ -99,7 +100,7 @@ export default function InvestigationPage({ rangeMinutes = 60, initialSymptom = 
     let alive = true;
     api.correlations(25, 86400, "open")
       .then((r) => { if (alive) { setCases(r?.data ?? []); setCasesErr(""); } })
-      .catch((e: unknown) => { if (alive) setCasesErr((e as Error)?.message ?? String(e)); });
+      .catch((e: unknown) => { if (alive) setCasesErr(operatorError(e, "Open investigations could not be loaded.")); });
     api.seams("active")
       .then((list) => { if (!alive) return; const m: Record<string, Seam> = {}; (list ?? []).forEach((s) => { m[s.seam_id] = s; }); setSeams(m); })
       .catch(() => { /* seam inventory optional — class labels still render */ });
@@ -118,7 +119,7 @@ export default function InvestigationPage({ rangeMinutes = 60, initialSymptom = 
     // The case read is the one fetch that is NOT best-effort: if it fails the
     // page says so verbatim instead of spinning on "Loading…" forever (§10 —
     // no silent failure, and never a reassuring blank).
-    const fail = (e: unknown) => { if (alive) setCaseErr((prev) => prev || ((e as Error)?.message ?? String(e))); };
+    const fail = (e: unknown) => { if (alive) setCaseErr((prev) => prev || operatorError(e, "This investigation could not be loaded.")); };
     api.correlationDetail(caseId).then((r) => { if (alive) setObj(r.object); }).catch(fail);
     api.correlationTimeline(caseId).then((t) => { if (alive) setTimeline(t); }).catch(fail);
     api.correlationTickets(caseId).then((t) => { if (alive) setTicket(t?.status ?? null); }).catch(() => { /* ticketing optional */ });

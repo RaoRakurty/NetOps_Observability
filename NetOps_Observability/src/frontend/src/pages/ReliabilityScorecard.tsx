@@ -250,7 +250,7 @@ export default function ReliabilityScorecard() {
             {(trend?.x.length ?? 0) > 1 ? (
               <ReactECharts style={{ height: 200 }} notMerge lazyUpdate option={{
                 grid: { left: 8, right: 12, top: 28, bottom: 22, containLabel: true },
-                tooltip: { trigger: "axis", valueFormatter: (v: number) => (v == null ? "—" : `${v}s`) },
+                tooltip: { trigger: "axis", valueFormatter: (v: number) => (v == null ? "not measured" : `${v}s`) },
                 legend: { top: 0, textStyle: { color: "var(--fg-muted)", fontSize: 11 } },
                 xAxis: { type: "category", data: trend!.x, axisLabel: { color: "var(--fg-muted)", fontSize: 10 } },
                 yAxis: { type: "value", name: "seconds", nameTextStyle: { color: "var(--fg-subtle)", fontSize: 10 }, axisLabel: { color: "var(--fg-muted)", fontSize: 10 } },

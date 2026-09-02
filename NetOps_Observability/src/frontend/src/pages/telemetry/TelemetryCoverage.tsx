@@ -31,6 +31,7 @@ import DataTable, { type Column } from "../../components/DataTable";
 import { Segmented, Stat, StatStrip } from "../../components/ui";
 import { useWorkspace } from "../../context/workspace";
 import { fmtDateTime } from "../../lib/time";
+import { operatorError } from "../../lib/errors";
 import {
   CATALOG_DOCS_URL,
   fidelityRank,
@@ -60,10 +61,15 @@ function AdminHead({ title, sub }: { title: string; sub: string }) {
   );
 }
 
+// The raw message stays in state because isForbidden() reads the 403 out of it
+// (a legitimate 403 is an ANSWER — the platform-admin card — not a failure).
+// The operator sentence is produced HERE, at the one place it is rendered.
 function ErrLine({ msg }: { msg: string | null }) {
   if (!msg) return null;
   return (
-    <p role="alert" style={{ color: "var(--bad)", fontSize: "var(--fs-meta)", margin: "0 0 var(--sp-2)" }}>{msg}</p>
+    <p role="alert" style={{ color: "var(--bad)", fontSize: "var(--fs-meta)", margin: "0 0 var(--sp-2)" }}>
+      {operatorError(msg, "This could not be loaded.")}
+    </p>
   );
 }
 
@@ -105,7 +111,7 @@ export function ProposalBody({ proposal, template }: { proposal: CatalogProposal
         applied: review the row, then land it through a pull request.
       </p>
       <CodeBlock title="Draft catalog row (YAML)" content={proposal.catalog_row} />
-      <CodeBlock title="Fixture" content={proposal.fixture} />
+      <CodeBlock title="Sample event" content={proposal.fixture} />
       <p className="mini-meta">
         <a href={CATALOG_DOCS_URL} target="_blank" rel="noreferrer">
           How to land a catalog row via a pull request →
@@ -245,7 +251,7 @@ export default function TelemetryCoverage() {
     let alive = true;
     api.parserStats()
       .then((s) => { if (alive) { setStats(s); setStatsErr(null); } })
-      .catch((e: Error) => { if (alive) setStatsErr(e.message); })
+      .catch((e: unknown) => { if (alive) setStatsErr(e instanceof Error ? e.message : String(e)); })
       .finally(() => { if (alive) setStatsLoaded(true); });
     return () => { alive = false; };
   }, []);
@@ -255,7 +261,7 @@ export default function TelemetryCoverage() {
     setPageLoaded(false);
     api.unrecognizedTemplates({ days: DAYS, limit: LIMIT, ...(lane === "all" ? {} : { lane }) })
       .then((p) => { if (alive) { setPage(p); setPageErr(null); } })
-      .catch((e: Error) => { if (alive) { setPage(null); setPageErr(e.message); } })
+      .catch((e: unknown) => { if (alive) { setPage(null); setPageErr(e instanceof Error ? e.message : String(e)); } })
       .finally(() => { if (alive) setPageLoaded(true); });
     return () => { alive = false; };
   }, [lane]);

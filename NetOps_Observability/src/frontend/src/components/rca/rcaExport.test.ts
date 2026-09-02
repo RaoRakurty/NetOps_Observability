@@ -61,7 +61,7 @@ const GRADED: RcaCase = {
       desc: "reachable service / advisory exposure on the asset", finding: "1 observation used.",
       foot: "Independent of the network classes — a rule verdict, not a wire measurement",
       chips: ["Seam: ISP (seam-7)", "Internet-facing", "Observed by vuln"], fidelity: "doc_claimed" },
-    { variant: "missing", dot: "gray", title: "Active checks", pill: { tone: "gray", text: "No data" },
+    { variant: "missing", dot: "gray", title: "Active checks", pill: { tone: "gray", text: "Nothing collected" },
       desc: "ping, HTTP", finding: "No telemetry.", foot: "Coverage gap" },
   ],
   ladderNote: "Confirmation held back — evidence from unvalidated parser rules: netrule.exposed_mgmt",

@@ -211,7 +211,7 @@ export default function GeoTopologyMap({ view }: { view: TopologyView }) {
   );
 
   if (!ready) {
-    return <div className="topo-geo-loading">Loading basemap…</div>;
+    return <div className="topo-geo-loading">Loading map…</div>;
   }
 
   if (model.sites.length === 0) {
@@ -237,7 +237,7 @@ export default function GeoTopologyMap({ view }: { view: TopologyView }) {
       />
       <GeoLegend />
       {isSample && (
-        <div className="topo-geo-sample" title="No SoT-placed sites found — showing sample data">
+        <div className="topo-geo-sample" title="No sites have coordinates yet — showing sample data">
           Sample data · set site coordinates in the <a href="#/infrastructure/sot">Source of Truth</a> for live geo
         </div>
       )}

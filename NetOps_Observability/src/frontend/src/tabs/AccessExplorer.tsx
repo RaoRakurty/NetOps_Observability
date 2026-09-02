@@ -36,7 +36,7 @@ export default function AccessExplorer() {
           <label className="req-field" style={{ flex: 2 }}>
             <span>Person or service</span>
             <input
-              placeholder="username (blank = yourself)"
+              placeholder="Username — leave blank for yourself"
               value={who}
               onChange={(e) => setWho(e.target.value)}
               onKeyDown={(e) => { if (e.key === "Enter") run(who.trim() || undefined); }}

@@ -64,7 +64,7 @@ export const unrecognizedNotMinedFixture: UnrecognizedPage = {
   days: 7,
   total: 0,
   items: [],
-  note: "mining not yet run",
+  note: "analysis has not run yet",
 };
 
 export const proposalFixture: CatalogProposal = {

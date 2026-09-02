@@ -102,7 +102,7 @@ export default function ResourceDetail({ kind, id }: { kind: string; id: string 
   if (state === "error" || !detail) {
     return (
       <div className="resource-page">
-        <EmptyState title="Couldn't load this resource" hint={errMsg || "The inventory backend did not answer."} />
+        <EmptyState title="Couldn't load this resource" hint={errMsg || "Inventory did not answer."} />
       </div>
     );
   }
@@ -245,7 +245,7 @@ function FlowsTab({ r }: { r: CloudResourceRow }) {
       />
     );
   }
-  if (failed) return <EmptyState title="Flow backend unavailable" hint="The flow store did not answer." />;
+  if (failed) return <EmptyState title="Flow data unavailable" hint="The flow store did not answer." />;
   if (rows === null) return <Skeleton w="100%" h={160} />;
   if (rows.length === 0) {
     return (
@@ -299,7 +299,7 @@ function EventsTab({ r }: { r: CloudResourceRow }) {
     };
   }, [needle]);
 
-  if (failed) return <EmptyState title="Events backend unavailable" hint="The event feed did not answer." />;
+  if (failed) return <EmptyState title="Event data unavailable" hint="The event feed did not answer." />;
   if (items === null) return <Skeleton w="100%" h={160} />;
   if (items.length === 0) {
     return (

@@ -120,7 +120,7 @@ export function SeamHealthStrip({ windowHours = 24 }: { windowHours?: number }) 
         <EmptyState title="Unable to load seam telemetry" hint="retry, or check the cloud connector status in Settings" />
       ) : seams.length === 0 ? (
         <EmptyState title="Awaiting seam telemetry"
-          hint="the seam lanes are built and polling; no VPN tunnel, BGP session or gateway-drop signal has been observed in this window — states appear the moment the gateways report" />
+          hint="the seam lanes are built and collecting; no VPN tunnel, BGP session or gateway-drop signal has been observed in this window — states appear the moment the gateways report" />
       ) : (
         <div className="ao-chips" role="list" aria-label="Seam health">
           {seams.map((s) => (

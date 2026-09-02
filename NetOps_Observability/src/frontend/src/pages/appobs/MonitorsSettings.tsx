@@ -70,7 +70,7 @@ export default function MonitorsSettings() {
         and notifies on the configured contact points when it fires.
         {/* role=alert announces the failure; the wording (not only the color)
             identifies it as an error (3.3.1/1.4.1). */}
-        {err && <span role="alert" style={{ color: "var(--crit)" }}> · Error: {err}</span>}
+        {err && <span role="alert" style={{ color: "var(--crit)" }}> · {err}</span>}
       </p>
 
       {busy ? <div className="ao-muted" role="status">Loading…</div> : (

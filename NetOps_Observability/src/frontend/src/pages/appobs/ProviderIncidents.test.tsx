@@ -78,7 +78,7 @@ describe("SeamHealthStrip", () => {
     mock.cloudSeamTelemetry.mockResolvedValueOnce({ seams: [], count: 0, window_hours: 24 });
     render(<SeamHealthStrip />);
     expect(await screen.findByText("Awaiting seam telemetry")).toBeInTheDocument();
-    expect(screen.getByText(/built and polling/)).toBeInTheDocument();
+    expect(screen.getByText(/built and collecting/)).toBeInTheDocument();
   });
 
   it("seamShortLabel reduces seam keys to readable chips", () => {

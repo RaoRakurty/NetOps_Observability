@@ -96,7 +96,7 @@ describe("rules table", () => {
     expect(screen.getAllByText("live validated")[0]).toHaveClass("badge", "tier-t1");
     expect(screen.getByText("lab validated")).toHaveClass("badge", "tier-t3");
     expect(screen.getByText("doc claimed")).toHaveClass("badge", "tier-t4");
-    expect(screen.getByText("code")).toHaveClass("badge", "tier-t5");
+    expect(screen.getByText("unverified")).toHaveClass("badge", "tier-t5");
     expect(screen.getAllByText("shadow").length).toBe(2);
     expect(ruleRowsOf(container).length).toBe(5);
   });
@@ -150,7 +150,7 @@ describe("unrecognized message shapes", () => {
   it("renders the backend's honest note when nothing has been mined yet", async () => {
     unrecognizedTemplates.mockResolvedValue(unrecognizedNotMinedFixture);
     const { container } = render(<TelemetryCoverage />);
-    await waitFor(() => expect(screen.getAllByText("mining not yet run").length).toBeGreaterThan(0));
+    await waitFor(() => expect(screen.getAllByText("analysis has not run yet").length).toBeGreaterThan(0));
     expect(shapeRowsOf(container).length).toBe(0);
   });
 
@@ -165,7 +165,9 @@ describe("unrecognized message shapes", () => {
     unrecognizedTemplates.mockRejectedValue(new Error("503 Service Unavailable: miner down"));
     render(<TelemetryCoverage />);
     const alert = await screen.findByRole("alert");
-    expect(alert).toHaveTextContent("503 Service Unavailable: miner down");
+    // The HTTP envelope is stripped at the render boundary (lib/errors.ts): the
+    // operator gets the server's sentence, never "503 Service Unavailable: …".
+    expect(alert).toHaveTextContent("Miner down.");
   });
 });
 
@@ -181,7 +183,7 @@ describe("draft catalog row", () => {
     expect(yaml.tagName).toBe("CODE");
     expect(yaml.closest("pre")).not.toBeNull();
     expect(screen.getByText("Draft catalog row (YAML)")).toBeInTheDocument();
-    expect(screen.getByText("Fixture")).toBeInTheDocument();
+    expect(screen.getByText("Sample event")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Copy Draft catalog row (YAML)" })).toBeInTheDocument();
     expect(screen.getByText(/land a catalog row via a pull request/i).closest("a")?.getAttribute("href"))
       .toMatch(/^https:\/\//);
@@ -226,7 +228,7 @@ describe("draft catalog row", () => {
     await screen.findByText("%LINK-3-UPDOWN: Interface <*>, changed state to <*>");
     fireEvent.click(screen.getAllByRole("button", { name: "Draft catalog row" })[0]);
     const alert = await screen.findByRole("alert");
-    expect(alert).toHaveTextContent("alerts:write required");
+    expect(alert).toHaveTextContent("Alerts:write required.");
   });
 });
 
@@ -249,7 +251,7 @@ describe("permission states (§3a)", () => {
     parserStats.mockRejectedValue(new Error("500 Internal Server Error: parser stats unavailable"));
     render(<TelemetryCoverage />);
     const alert = await screen.findByRole("alert");
-    expect(alert).toHaveTextContent("parser stats unavailable");
+    expect(alert).toHaveTextContent("Parser stats unavailable.");
     expect(screen.queryByText("Parser coverage — platform-admin only")).toBeNull();
   });
 });

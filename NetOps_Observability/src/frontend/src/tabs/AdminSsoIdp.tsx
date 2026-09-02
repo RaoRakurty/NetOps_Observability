@@ -194,7 +194,7 @@ export function RoleMappingTable({ rows, roleIds, defaultRole, onChange }: {
     onChange(rows.map((r, j) => (j === i ? { ...r, ...patch } : r)));
   return (
     <>
-      <p className="mini-meta">Rows are evaluated top to bottom — the <strong>first match wins</strong>. Use the arrows to reorder.</p>
+      <p className="mini-meta">Rules are evaluated top to bottom — the <strong>first match wins</strong>.</p>
       <table className="map-table">
         <thead>
           <tr><th style={{ width: 64 }}>Order</th><th>Group / claim value</th><th style={{ width: 64 }}>Match</th><th>Correlix role</th><th aria-label="actions" /></tr>

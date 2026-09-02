@@ -12,7 +12,7 @@ import { pathTopology } from "../mock/index";
 export const PathTraceWorkflow: WorkflowDef = {
   id: "path_trace",
   label: "Path Trace",
-  blurb: "Follow a traced A→B path hop by hop. Select a hop to inspect its neighbours.",
+  blurb: "A traced A→B path, hop by hop.",
   implemented: true,
   view: pathTopology,
   computeSpotlight(view: TopologyView, selection: TopologySelection): SpotlightResult {

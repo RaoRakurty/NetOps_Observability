@@ -67,7 +67,7 @@ export default function BottomDrawer() {
                 ws.setDrawerHeight(clampH(ws.drawerHeight - 24));
               }
             }}
-            title="Drag to resize"
+            title="Resize"
           />
           <div className="bottom-drawer-head">
             <strong>{d?.title ?? "Console"}</strong>

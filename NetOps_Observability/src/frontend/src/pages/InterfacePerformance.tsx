@@ -215,7 +215,7 @@ function InterfaceFlows({ addr, device, iface, since }: { addr: string; device: 
         <p className="mini-meta" style={{ margin: 0 }}>
           {addr
             ? `Flows with ${device} as the exporter. Pick an interface above to scope to ingress/egress on that port.`
-            : "Fleet-wide top talkers across all exporters. Select a device to scope to the flows it exports."}
+            : "Top talkers across the whole fleet."}
         </p>
       )}
     </>

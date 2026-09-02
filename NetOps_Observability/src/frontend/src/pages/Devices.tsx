@@ -1,5 +1,5 @@
 import { fmtDateTime } from "../lib/time";
-import { Suspense, lazy, useEffect, useMemo, useState } from "react";
+import { Suspense, lazy, startTransition, useDeferredValue, useEffect, useMemo, useState } from "react";
 import { api, Device, Alert, DeviceLocationRow, SiteRow } from "../services/api";
 import { takeDrill } from "../theme/drill";
 import DeviceDetailPage from "./DeviceDetailPage";
@@ -109,6 +109,10 @@ export default function Devices() {
   const [draft, setDraft] = useState({ id: "", name: "", address: "", vendor: "" });
   const [filter, setFilter] = useState<Filter>("all");
   const [q, setQ] = useState("");
+  // The box keeps the typed value; the TABLE filters against the deferred one,
+  // so typing stays responsive on a fleet-sized list (DataTable's filter runs
+  // every column's text accessor over every row).
+  const deferredQ = useDeferredValue(q);
   const [detail, setDetail] = useState<Device | null>(null);
   const [term, setTerm] = useState<Device | null>(null);
 
@@ -138,8 +142,12 @@ export default function Devices() {
         api.deviceLocations().catch(() => ({ devices: [] as DeviceLocationRow[] })),
         api.sites().catch(() => ({ sites: [] as SiteRow[], active: "internal" })),
       ]);
-      setDevices(list ?? []);
-      setAlerts(alRes.ok ? alRes.v ?? [] : []);
+      // The 30s refresh replaces the whole fleet. As a transition the re-render
+      // yields to whatever the operator is doing rather than blocking on it.
+      startTransition(() => {
+        setDevices(list ?? []);
+        setAlerts(alRes.ok ? alRes.v ?? [] : []);
+      });
       setAlertsErr(alRes.ok ? null : (alRes.e instanceof Error ? alRes.e.message : String(alRes.e)));
       setLocs(new Map((locRes?.devices ?? []).map((r) => [r.id, r])));
       setSiteOptions([...(siteRes?.sites ?? [])].sort((a, b) => a.name.localeCompare(b.name)));
@@ -418,7 +426,7 @@ export default function Devices() {
               rows={rows}
               columns={columns}
               rowKey={(d) => d.id}
-              filter={q}
+              filter={deferredQ}
               height="58vh"
               ariaLabel="Devices"
               initialSort={{ key: "vendor", dir: "asc" }}
@@ -553,7 +561,7 @@ function DistroBar({ title, slices, total }: { title: string; slices: Slice[]; t
         <span className="fc-distro-n">{slices.length} {slices.length === 1 ? "kind" : "kinds"}</span>
       </div>
       {total === 0 ? (
-        <div className="fc-distro-empty">No data</div>
+        <div className="fc-distro-empty">Nothing collected yet</div>
       ) : (
         <>
           <div className="fc-bar" role="img" aria-label={`${title} distribution`}>

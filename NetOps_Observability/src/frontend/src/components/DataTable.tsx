@@ -335,7 +335,7 @@ export default function DataTable<T>({
                   role="separator"
                   aria-orientation="vertical"
                   aria-label={`Resize ${typeof c.header === "string" ? c.header : c.key} column`}
-                  title="Drag or use ←/→ to resize"
+                  title="Resize column"
                   tabIndex={0}
                   className="dtv-resize"
                   onMouseDown={(e) => startResize(e, c.key)}

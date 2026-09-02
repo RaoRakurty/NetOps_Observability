@@ -425,7 +425,7 @@ export default function IgpAdjacencies({ proto, defaultWindow = "24h" }: IgpAdja
           </div>
           {payload?.truncated && (
             <p className="mini-meta">
-              This page is truncated at {payload.limit} events — the window holds more.
+              Showing the first {payload.limit} events — the window holds more.
             </p>
           )}
           {(payload?.notes ?? []).length > 0 && (

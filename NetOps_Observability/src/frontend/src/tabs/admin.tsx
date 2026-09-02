@@ -438,8 +438,8 @@ export function RolesAdmin({ scopeTenant, variant = "all" }: { scopeTenant?: str
   const sub = variant === "builtin"
     ? "The standard roles and what each can see and change. These are fixed."
     : variant === "custom"
-    ? "Roles you define. Click a cell to set its access level."
-    : "Control what each role can see and change. Built-in roles are fixed; click a cell on a custom role to set its access.";
+    ? "Roles you define. Each cell sets a role’s access level."
+    : "Control what each role can see and change. Built-in roles are fixed; each cell on a custom role sets its access.";
   return (
     <>
       <div className="admin-head-row">
@@ -449,7 +449,7 @@ export function RolesAdmin({ scopeTenant, variant = "all" }: { scopeTenant?: str
       {tenantScoped && (
         <div className="card" style={{ fontSize: 12, color: "var(--muted)", borderLeft: "3px solid var(--accent)" }}>
           These roles are shared across the platform and shown here for reference. Assign them to this tenant's
-          people in <b>Users</b>. Tenant-specific roles are coming soon.
+          people in <b>Users</b>. Tenant-specific roles are not available yet.
         </div>
       )}
       <div className="card">
@@ -475,7 +475,7 @@ export function RolesAdmin({ scopeTenant, variant = "all" }: { scopeTenant?: str
                       <button
                         className="perm-pill"
                         disabled={r.builtin}
-                        title={r.builtin ? "built-in (read-only)" : "click to cycle"}
+                        title={r.builtin ? "Built-in — cannot be changed" : "Change access level"}
                         style={{ color: LEVEL_VAR[lvl], borderColor: LEVEL_VAR[lvl], cursor: r.builtin ? "default" : "pointer" }}
                         onClick={() => cycle(r, m)}
                       >{lvl}</button>
@@ -701,7 +701,7 @@ export function TenantsAdmin({ onManageTenant, orgId }: { onManageTenant?: (id: 
                           aria-checked={!t.operator_restricted}
                           className={`vis-toggle${t.operator_restricted ? "" : " on"}`}
                           onClick={() => toggleGlobalVisibility(t)}
-                          title={t.operator_restricted ? "Hidden from the global view — click to make visible" : "Visible in the global view — click to hide (data privacy)"}
+                          title={t.operator_restricted ? "Hidden from the global view" : "Visible in the global view"}
                         >
                           <span className="vis-knob" />
                           <span className="vis-label">{t.operator_restricted ? "No" : "Yes"}</span>
@@ -2567,11 +2567,11 @@ export function AuthenticationAdmin() {
     if (id === "local") return { tag: "Always on", tone: "good", meta: "Built-in · always available" };
     if (!loaded) return { tag: "…", tone: "", meta: "Loading…" };
     if (id === "sso") {
-      if (!sso!.enabled) return { tag: "Off", tone: "", meta: "Click to configure" };
+      if (!sso!.enabled) return { tag: "Off", tone: "", meta: "Not configured" };
       return sso!.ready ? { tag: "On", tone: "good", meta: "OIDC ready" } : { tag: "On", tone: "warn", meta: "Enabled — finish issuer & client ID" };
     }
     const s = id === "ldap" ? ldap! : tac!;
-    if (!s.enabled) return { tag: "Off", tone: "", meta: s.configured ? "Configured — disabled" : "Click to configure" };
+    if (!s.enabled) return { tag: "Off", tone: "", meta: s.configured ? "Configured — disabled" : "Not configured" };
     return { tag: "On", tone: "good", meta: s.configured ? "Enabled" : "Enabled — needs a host" };
   };
 
@@ -2958,7 +2958,7 @@ export function IntegrationsAdmin() {
                     ? `${st?.open_count ?? 0} open ${c.noun} · tickets ≥ ${sec?.min_severity ?? "critical"}`
                     : configured
                       ? "Configured — currently disabled"
-                      : "Click to set up"}
+                      : "Not set up"}
                 </span>
               </span>
               <span className="conn-cta">{configured ? "Manage" : "Set up"} →</span>
@@ -3492,23 +3492,23 @@ export function NotificationsAdmin() {
           let enabled = false, configured = false, metaLine = "";
           if (c.id === "email") {
             enabled = !!smtp?.enabled; configured = !!smtp?.host;
-            metaLine = configured ? `Relay ${smtp?.host}` : "Click to set up";
+            metaLine = configured ? `Relay ${smtp?.host}` : "Not set up";
           } else if (c.id === "mobile") {
             enabled = !!(twilio?.enabled || ntfy?.enabled);
             configured = !!(twilio?.account_sid || ntfy?.topic);
-            metaLine = [twilio?.account_sid ? "SMS" : null, ntfy?.topic ? "Push" : null].filter(Boolean).join(" · ") || "Click to set up";
+            metaLine = [twilio?.account_sid ? "SMS" : null, ntfy?.topic ? "Push" : null].filter(Boolean).join(" · ") || "Not set up";
           } else if (c.id === "slack") {
             enabled = !!slack?.enabled; configured = !!slack?.webhook_set;
-            metaLine = configured ? "Webhook configured" : "Click to set up";
+            metaLine = configured ? "Webhook configured" : "Not set up";
           } else if (c.id === "pagerduty") {
             enabled = !!pager?.enabled; configured = !!pager?.routing_set;
-            metaLine = configured ? "Routing key configured" : "Click to set up";
+            metaLine = configured ? "Routing key configured" : "Not set up";
           } else if (c.id === "teams") {
             enabled = !!teams?.enabled; configured = !!teams?.webhook_set;
-            metaLine = configured ? "Webhook configured" : "Click to set up";
+            metaLine = configured ? "Webhook configured" : "Not set up";
           } else {
             enabled = !!sns?.enabled; configured = !!(sns?.topic_arn || sns?.phone_numbers);
-            metaLine = !configured ? "Click to set up"
+            metaLine = !configured ? "Not set up"
               : [sns?.topic_arn ? "Topic" : null, sns?.phone_numbers ? "SMS" : null].filter(Boolean).join(" \u00b7 ");
           }
           const tone = !configured ? "" : enabled ? "good" : "warn";
@@ -3757,7 +3757,7 @@ export function NotificationsAdmin() {
             <span>Type</span>
             <select value={cpDraft.type ?? "email"} onChange={(e) => setCpDraft({ ...cpDraft, type: e.target.value as ContactPointType })}
               style={{ padding: 8, color: "var(--fg)", border: "1px solid var(--panel-border)", borderRadius: 6, background: "var(--bg)" }}>
-              {(["email", "slack", "webhook"] as ContactPointType[]).map((t) => <option key={t} value={t}>{t}</option>)}
+              {(["email", "slack", "webhook"] as ContactPointType[]).map((t) => <option key={t} value={t}>{t === "email" ? "Email" : t === "slack" ? "Slack" : "Webhook"}</option>)}
             </select>
           </label>
           {cpDraft.type === "email" ? (
@@ -3923,7 +3923,7 @@ function PolicyEditor({ policy, canWrite, onSaved, onCancel, inModal }: {
         <PolicyCheck label="Require customer-facing" info="Only ticket objects with a meaningful affected device/path/app." checked={p.require_customer_facing} onChange={(v) => set("require_customer_facing", v)} />
         <PolicyCheck label="Suspected needs critical" info="A suspected (not yet confirmed) verdict only tickets at critical severity." checked={p.suspected_requires_critical} onChange={(v) => set("suspected_requires_critical", v)} />
         <PolicyCheck label="Allow probe-only" info="Allow ticketing when the only evidence is an active probe (overrides the ≥2-stream rule)." checked={p.allow_probe_only} onChange={(v) => set("allow_probe_only", v)} />
-        <PolicyCheck label="Allow internal monitoring" info="Allow ticketing internal/debug-only monitoring (off keeps non-customer noise out)." checked={p.allow_internal_monitoring} onChange={(v) => set("allow_internal_monitoring", v)} />
+        <PolicyCheck label="Allow internal monitoring" info="Allow ticketing internal-only monitoring (off keeps non-customer noise out)." checked={p.allow_internal_monitoring} onChange={(v) => set("allow_internal_monitoring", v)} />
       </div>
       <RequiredLegend />
 
@@ -4052,7 +4052,7 @@ function SlackChannelConnection() {
       <div style={{ display: "flex", gap: "var(--sp-2)", alignItems: "center", flexWrap: "wrap" }}>
         <label className="scope-chip"><input type="checkbox" checked={enabled} onChange={(e) => setEnabled(e.target.checked)} /> Enabled</label>
         <input className="app-input" type="password" style={{ minWidth: 280 }} value={url}
-          placeholder={hasHook ? "webhook set — leave blank to keep" : "https://hooks.slack.com/services/…"}
+          placeholder={hasHook ? "Webhook is set — leave blank to keep it" : "https://hooks.slack.com/services/…"}
           onChange={(e) => setUrl(e.target.value)} autoComplete="new-password" />
         <button className="btn btn-primary" onClick={() => { void save(); }}>Save</button>
         {hasHook && <span className="mini-meta">webhook stored (write-only)</span>}

@@ -197,7 +197,7 @@ export default function RcaWorkspace({
               focus wiring here, and plain buttons are fully keyboard operable). */}
           <div className="rw-tabs" role="group" aria-label="View">
             <button aria-pressed={view === "operator"} className={`rw-tab${view === "operator" ? " active" : ""}`} onClick={() => onView("operator")}>Operator View</button>
-            <button aria-pressed={view === "debug"} className={`rw-tab${view === "debug" ? " active" : ""}`} onClick={() => onView("debug")}>Debug View</button>
+            <button aria-pressed={view === "debug"} className={`rw-tab${view === "debug" ? " active" : ""}`} onClick={() => onView("debug")}>Evidence detail</button>
           </div>
         </div>
       </div>
@@ -440,7 +440,7 @@ export default function RcaWorkspace({
               </div>
             </div>
             <div className="rw-tdetail" role="status" aria-live="polite">
-              {detail ? <><b>Marker detail:</b> {detail}</> : <><b>Tip:</b> Click any marker to see why it was counted as evidence.</>}
+              {detail ? <><b>Marker detail:</b> {detail}</> : <>Each marker carries the reason it counted as evidence.</>}
             </div>
           </section>
 
@@ -538,7 +538,7 @@ export default function RcaWorkspace({
             <div className="rw-panel">
               <h3>Promotion logic</h3>
               <KeyVal rows={data.debug.promotion} />
-              <div className="rw-callout confirmed"><strong>Reasoning:</strong><span>{data.debug.reasoning}</span></div>
+              <div className="rw-callout confirmed"><strong>Why:</strong><span>{data.debug.reasoning}</span></div>
             </div>
           </section>
           {debugExtra && <section className="rw-panel" style={{ marginTop: 12 }}>{debugExtra}</section>}

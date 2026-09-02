@@ -6,7 +6,7 @@ import DataTable, { Column } from "../components/DataTable";
 import { useWorkspace } from "../context/workspace";
 import { NocHeader, NocKpis, NocKpi, Chip, LiveChip } from "../components/noc";
 import Logs from "./Logs";
-
+import { operatorError } from "../lib/errors";
 // Findings are written by the Correlation/AI service into ClickHouse
 // table netops.findings. This tab is a triage queue — most-recent first.
 // Selecting a row opens its full context in the dockable Inspector (shell-v2,
@@ -51,7 +51,7 @@ export default function Findings() {
         if (alive) { setItems(r?.data ?? []); setErr(null); }
       } catch (e) {
         // Keep the last good rows on screen; report the failed refresh.
-        if (alive) setErr(e instanceof Error ? e.message : String(e));
+        if (alive) setErr(operatorError(e, "Findings could not be loaded."));
       }
     };
     tick();

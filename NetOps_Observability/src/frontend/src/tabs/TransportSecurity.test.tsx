@@ -95,7 +95,7 @@ describe("TransportSecurity — platform scope", () => {
     // Observed: probed-with-cert vs unprobed vs certless — all three honest.
     expect(screen.getByText(`cert ok, expires ${fmtDate("2027-01-15T00:00:00Z")}`)).toBeInTheDocument();
     expect(screen.getByText("not probed")).toBeInTheDocument();
-    expect(screen.getByText("NO certificate")).toBeInTheDocument();
+    expect(screen.getByText("No certificate presented")).toBeInTheDocument();
     // The device-domain row is labelled as a device lane.
     expect(screen.getByText("device lane")).toBeInTheDocument();
   });
@@ -113,8 +113,8 @@ describe("TransportSecurity — platform scope", () => {
     expect(screen.getByText("Paths")).toBeInTheDocument();
     expect(screen.getByText("Drifting")).toBeInTheDocument();
     expect(screen.getByText("Exceptions")).toBeInTheDocument();
-    expect(screen.getByText("Validator fatal")).toBeInTheDocument();
-    expect(screen.getByText("Validator warn")).toBeInTheDocument();
+    expect(screen.getByText("Critical problems")).toBeInTheDocument();
+    expect(screen.getByText("Warnings")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Export report (HTML)" })).toBeInTheDocument();
   });
 });

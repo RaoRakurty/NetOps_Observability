@@ -136,7 +136,7 @@ export default function Wireless() {
                     {ap.uplink_switch_ref ? `${ap.uplink_switch_ref}:${ap.uplink_port_ref}` : <span className="muted">unknown</span>}
                   </td>
                   <td>{ap.mgmt_address || "—"}</td>
-                  <td>{ap.forwarding_mode || "unknown"}</td>
+                  <td>{ap.forwarding_mode || "not reported"}</td>
                   <td>{fmtSeen(ap.last_seen)}</td>
                 </tr>
               ))}
@@ -157,8 +157,8 @@ export default function Wireless() {
                 <tr key={w.wlan_id} className={w.stale ? "row-stale" : ""}>
                   <td>{w.profile_name}</td>
                   <td>{w.ssid_name || "—"}</td>
-                  <td>{w.security_mode || "unknown"}</td>
-                  <td>{w.auth_method || "unknown"}</td>
+                  <td>{w.security_mode || "not reported"}</td>
+                  <td>{w.auth_method || "not reported"}</td>
                   <td>{w.forwarding_mode || "unknown"}</td>
                   <td>{w.enabled ? "yes" : "no"}</td>
                 </tr>

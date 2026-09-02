@@ -57,17 +57,17 @@ export const WORKLOAD_CLASS_META: Record<WorkloadClass, { label: string; emptyTi
   k8s: {
     label: "K8s clusters",
     emptyTitle: "No clusters discovered",
-    emptyHint: "the poller needs eks:ListClusters + eks:DescribeCluster (AWS), Microsoft.ContainerService/managedClusters read (Azure), or container.clusters.list (GCP) — grant the read and clusters appear on the next discovery cycle",
+    emptyHint: "the collector needs eks:ListClusters + eks:DescribeCluster (AWS), Microsoft.ContainerService/managedClusters read (Azure), or container.clusters.list (GCP) — grant the read and clusters appear on the next discovery cycle",
   },
   serverless: {
     label: "Serverless / PaaS",
     emptyTitle: "No serverless or PaaS services discovered",
-    emptyHint: "the poller needs lambda:ListFunctions (AWS), Microsoft.Web sites/serverfarms read (Azure), or run.services.list (GCP) — grant the read and services appear on the next discovery cycle",
+    emptyHint: "the collector needs lambda:ListFunctions (AWS), Microsoft.Web sites/serverfarms read (Azure), or run.services.list (GCP) — grant the read and services appear on the next discovery cycle",
   },
   db: {
     label: "Managed databases",
     emptyTitle: "No managed databases discovered",
-    emptyHint: "the poller needs rds:DescribeDBInstances (AWS), Microsoft.Sql servers/databases read (Azure), or cloudsql.instances.list (GCP) — grant the read and databases appear on the next discovery cycle",
+    emptyHint: "the collector needs rds:DescribeDBInstances (AWS), Microsoft.Sql servers/databases read (Azure), or cloudsql.instances.list (GCP) — grant the read and databases appear on the next discovery cycle",
   },
 };
 

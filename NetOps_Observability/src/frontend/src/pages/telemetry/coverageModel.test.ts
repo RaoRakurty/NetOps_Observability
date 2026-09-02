@@ -67,7 +67,7 @@ describe("fidelity badge mapping", () => {
     expect(fidelityLabel("live_validated")).toBe("live validated");
     expect(fidelityLabel("doc_claimed")).toBe("doc claimed");
     expect(fidelityTitle("doc_claimed")).toMatch(/unconfirmed on the wire/i);
-    expect(fidelityTitle("code")).toMatch(/no capture behind it/i);
+    expect(fidelityTitle("code")).toMatch(/not yet confirmed against a device/i);
   });
 
   it("orders the evidence ladder strongest-first for sorting", () => {
@@ -113,7 +113,7 @@ describe("rule inventory summary", () => {
 
 describe("unrecognizedNote", () => {
   it("prefers the backend's honest note verbatim", () => {
-    expect(unrecognizedNote(unrecognizedNotMinedFixture)).toBe("mining not yet run");
+    expect(unrecognizedNote(unrecognizedNotMinedFixture)).toBe("analysis has not run yet");
   });
 
   it("says the window is clean when the list is empty with no note", () => {

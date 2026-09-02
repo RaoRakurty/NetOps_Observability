@@ -454,7 +454,7 @@ export function RequiredTagsCard() {
       </div>
       <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
         <input className="ao-search" style={{ maxWidth: 220 }} value={draft} disabled={busy || saving}
-          placeholder="add a tag key, e.g. cost_center"
+          placeholder="add a tag, e.g. cost centre"
           aria-label="New required tag key"
           onChange={(e) => setDraft(e.target.value)}
           onKeyDown={(e) => { if (e.key === "Enter") add(); }} />

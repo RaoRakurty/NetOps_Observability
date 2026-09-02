@@ -13,7 +13,7 @@ import { cloudTopology } from "../mock/index";
 export const DependencyWorkflow: WorkflowDef = {
   id: "dependency",
   label: "Dependency",
-  blurb: "Map app/service dependencies. Select a service to light up what it depends on.",
+  blurb: "Application and service dependencies.",
   implemented: true,
   view: cloudTopology,
   computeSpotlight(view: TopologyView, selection: TopologySelection): SpotlightResult {

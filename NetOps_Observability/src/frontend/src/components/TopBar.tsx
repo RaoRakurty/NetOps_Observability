@@ -92,7 +92,7 @@ export default function TopBar({ health, user, onLogout, onChangePassword, hideU
       group.hits.forEach((h, i) => out.push({ hit: h, header: i === 0 ? OMNI_KIND_LABEL[group.kind] : undefined }));
     }
     if (draft.trim().length >= 2) {
-      out.push({ hit: { kind: "logs", id: "logs", label: `Search logs for "${draft.trim()}"`, sublabel: "OpenSearch", href: "" } });
+      out.push({ hit: { kind: "logs", id: "logs", label: `Search logs for "${draft.trim()}"`, sublabel: "Log search", href: "" } });
     }
     return out;
   }, [results, draft]);

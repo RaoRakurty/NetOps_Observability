@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { api, BackupConfig, BackupStatus, SnapshotPolicy } from "../services/api";
 import Icon from "../components/Icon";
-
+import { operatorError } from "../lib/errors";
 // Data Protection — platform-global backup/DR posture. Two halves:
 //   1. a LIVE status panel (repo registered? last snapshot age? on-host-only?),
 //      honest by construction so an operator sees the truth, not a blank form;
@@ -56,7 +56,7 @@ export default function DataProtection() {
       setSnap(r);
       setSnapMsg({ kind: "ok", text: "Snapshot policy updated." });
     } catch (e: unknown) {
-      setSnapMsg({ kind: "err", text: e instanceof Error ? e.message : "Update failed" });
+      setSnapMsg({ kind: "err", text: operatorError(e, "The change could not be saved.") });
     } finally { setSnapBusy(false); }
   };
 
@@ -67,7 +67,7 @@ export default function DataProtection() {
       setCfg(r.config); setStatus(r.status);
       setMsg({ kind: "ok", text: "Saved. A host-side applier writes the schedule/remote on the next install run." });
     } catch (e: unknown) {
-      setMsg({ kind: "err", text: e instanceof Error ? e.message : "Save failed" });
+      setMsg({ kind: "err", text: operatorError(e, "The change could not be saved.") });
     } finally { setBusy(false); }
   };
 

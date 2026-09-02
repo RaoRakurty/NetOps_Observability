@@ -7,7 +7,7 @@ import { Segmented } from "../components/ui";
 import { useWorkspace } from "../context/workspace";
 import { NocHeader, NocKpis, NocKpi, Chip, LiveChip } from "../components/noc";
 import Logs from "./Logs";
-
+import { operatorError } from "../lib/errors";
 // Active Alerts, grouped by EPISODE: repeated firings of the same
 // (resource, signal, state) collapse into one row with first/last/count,
 // flap detection and triage (acknowledge / assign / mute / snooze / notes).
@@ -57,7 +57,7 @@ export default function Alerts() {
       setRawFiring((raw ?? []).length);
       setLoadErr(null);
     } catch (e) {
-      setLoadErr(e instanceof Error ? e.message : String(e));
+      setLoadErr(operatorError(e, "Alerts could not be loaded."));
     } finally {
       setLoaded(true);
     }
@@ -284,7 +284,7 @@ export function EpisodeDetailBody({
       onUpdated?.(next);
       return true;
     } catch (e) {
-      setErr(e instanceof Error ? e.message : "The action could not be completed.");
+      setErr(operatorError(e, "The action could not be completed."));
       return false;
     } finally {
       setBusy(false);

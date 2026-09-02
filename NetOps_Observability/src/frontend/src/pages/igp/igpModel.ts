@@ -173,7 +173,7 @@ export const isMeasured = (n: number | null | undefined): n is number => typeof 
  *  and there is nothing in the window, that is `empty`, which is a different
  *  (and much better) fact. */
 export function classifyAdjacencies(r: IgpAdjacenciesResponse | undefined): IgpResult<IgpAdjacenciesResponse> {
-  if (!r) return { state: "error", note: "The server returned no adjacency payload." };
+  if (!r) return { state: "error", note: "No adjacency data came back." };
   const cov = r.coverage ?? EMPTY_COVERAGE;
   if (!cov.events && !cov.live_series) {
     return { state: "not_connected", note: notConnectedNote(r.protocol, r.notes) };
@@ -190,7 +190,7 @@ export function classifyAdjacencies(r: IgpAdjacenciesResponse | undefined): IgpR
 }
 
 export function classifySummary(r: IgpSummaryResponse | undefined): IgpResult<IgpSummaryResponse> {
-  if (!r) return { state: "error", note: "The server returned no summary payload." };
+  if (!r) return { state: "error", note: "No summary data came back." };
   const cov = r.coverage ?? EMPTY_COVERAGE;
   if (!cov.events && !cov.live_series) {
     return { state: "not_connected", note: notConnectedNote(r.protocol, r.notes) };
@@ -209,7 +209,7 @@ export function classifySummary(r: IgpSummaryResponse | undefined): IgpResult<Ig
  *  value is the honest null-vs-number distinction in each field, so blanking
  *  the whole panel would hide exactly what it exists to say. */
 export function classifyHealth(r: IgpHealthResponse | undefined): IgpResult<IgpHealthResponse> {
-  if (!r) return { state: "error", note: "The server returned no health payload." };
+  if (!r) return { state: "error", note: "No health data came back." };
   const cov = r.coverage ?? EMPTY_COVERAGE;
   if (!cov.events && !cov.live_series) {
     return { state: "not_connected", note: notConnectedNote(r.protocol, r.notes) };

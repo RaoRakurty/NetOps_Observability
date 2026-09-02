@@ -51,7 +51,7 @@ export default function SnmpCredentials() {
         <h2 style={{ margin: 0, fontSize: "var(--fs-lg)" }}>SNMP Credentials</h2>
         <p className="admin-sub">
           Community strings (v1/v2c) and SNMPv3 USM profiles. Assign a profile to a device via its
-          <code> credential_ref</code>; the poller uses it instead of the global default. Different device
+          <code> credential_ref</code>; the collector uses it instead of the global default. Different device
           groups can use different communities.
         </p>
       </div>

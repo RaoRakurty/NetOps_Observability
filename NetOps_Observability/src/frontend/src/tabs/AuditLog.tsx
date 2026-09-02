@@ -2,7 +2,7 @@ import { fmtDateTime } from "../lib/time";
 import { useEffect, useMemo, useState } from "react";
 import { api, AuditEvent } from "../services/api";
 import DataTable, { Column } from "../components/DataTable";
-
+import { operatorError } from "../lib/errors";
 // Audit Log — the tenant-scoped trail of mutations and denials. The backend
 // returns only events the caller may see (platform owner: all; tenant admin:
 // own tenant). Admin-gated.
@@ -46,7 +46,7 @@ export default function AuditLog() {
           setErr(null);
         }
       } catch (e) {
-        if (alive) setErr(e instanceof Error ? e.message : "failed to load audit log");
+        if (alive) setErr(operatorError(e, "The audit log could not be loaded."));
       }
     };
     tick();

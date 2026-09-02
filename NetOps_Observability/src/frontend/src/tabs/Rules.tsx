@@ -5,7 +5,7 @@ import DataTable, { type Column } from "../components/DataTable";
 import { NocHeader, Chip, LiveChip } from "../components/noc";
 import Wizard from "../components/Wizard";
 import { Modal } from "../components/ui";
-
+import { operatorError } from "../lib/errors";
 const EMPTY: Rule = { name: "", expr: "", for: 300, severity: "warning" };
 
 export default function Rules() {
@@ -24,7 +24,7 @@ export default function Rules() {
       setRules((await api.rules()) ?? []);
       setLoadErr(null);
     } catch (e) {
-      setLoadErr(e instanceof Error ? e.message : String(e));
+      setLoadErr(operatorError(e, "Monitor rules could not be loaded."));
     }
   };
   useEffect(() => {

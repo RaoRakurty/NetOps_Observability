@@ -396,4 +396,4 @@ export const POLL_INTERVAL_MS = 2000;
  *  stops being polled and says so rather than spinning forever. */
 export const MAX_POLLS = 45;
 export const POLL_GAVE_UP_MESSAGE =
-  "This capture is still reported as running after 90 seconds — polling stopped. Reload the list to check again.";
+  "This capture is still running after 90 seconds. Refresh the list to check again.";

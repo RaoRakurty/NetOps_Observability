@@ -3,7 +3,7 @@ import { fmtDateTime } from "../lib/time";
 import { api, MaintenanceWindow, MaintenanceWindowInput } from "../services/api";
 import DataTable, { Column } from "../components/DataTable";
 import { Chip } from "../components/noc";
-
+import { operatorError } from "../lib/errors";
 // Maintenance Windows (item 121): declared planned-work periods. A covering
 // window pauses alert NOTIFICATIONS for the scoped devices/sites/rules — the
 // alerts still fire and stay visible (the mute/snooze honesty rule) — and
@@ -154,7 +154,7 @@ function WindowForm({ initial, onSaved, onCancel }: {
       else await api.maintenanceWindowCreate(toInput(f));
       onSaved();
     } catch (e) {
-      setErr(e instanceof Error ? e.message : String(e));
+      setErr(operatorError(e, "Maintenance windows could not be loaded."));
     } finally {
       setSaving(false);
     }
@@ -289,7 +289,7 @@ export default function MaintenanceWindows() {
       setItems(r.windows ?? []);
       setLoadErr(null);
     } catch (e) {
-      setLoadErr(e instanceof Error ? e.message : String(e));
+      setLoadErr(operatorError(e, "Maintenance windows could not be loaded."));
     }
   }, []);
   useEffect(() => { void load(); }, [load, nonce]);
@@ -300,7 +300,7 @@ export default function MaintenanceWindows() {
       await api.maintenanceWindowDelete(w.id);
       setNonce((n) => n + 1);
     } catch (e) {
-      setLoadErr(e instanceof Error ? e.message : String(e));
+      setLoadErr(operatorError(e, "Maintenance windows could not be loaded."));
     }
   };
 

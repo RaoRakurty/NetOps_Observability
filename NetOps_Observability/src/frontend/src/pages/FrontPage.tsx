@@ -145,7 +145,7 @@ function Panel({ title, action, state = "ok", note, hint, to, children }: {
         {state === "degraded"
           ? <EmptyReading t={note || "This source is temporarily unavailable."} h="The rest of the page is unaffected." />
           : state === "inactive"
-            ? <EmptyReading t={note || "No data in this window."} h={hint} />
+            ? <EmptyReading t={note || "Nothing collected in this window."} h={hint} />
             : children}
       </div>
     </div>
@@ -170,7 +170,7 @@ function TopIssues() {
   const items = (data?.data ?? [])
     .filter((o) => o.verdict_tier !== "undetermined" && !isInternalStackAffected(o.affected))
     .slice(0, 6);
-  if (err) return <Panel title="Top active issues" state="degraded" note="Correlation engine unreachable." />;
+  if (err) return <Panel title="Top active issues" state="degraded" note="Correlation is not answering right now." />;
   if (items.length === 0) {
     // Honesty: if health is degraded/critical but RCA hasn't confirmed a cause,
     // do NOT say "nothing needs attention" — point at the health contributors.

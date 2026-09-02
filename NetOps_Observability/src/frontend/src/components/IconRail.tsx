@@ -324,7 +324,7 @@ export default function IconRail({ nav, activeSection, activeLeaf, user, onLogou
             {/* Placeholder — the support portal isn't live yet. Keep it honest
                 and give the operator somewhere useful to go meanwhile. */}
             <div className="support-placeholder">
-              <p><strong>The support portal is coming soon.</strong></p>
+              <p><strong>The support portal is not open yet.</strong></p>
               <p>
                 Until it opens, the documentation covers setup, operations and
                 troubleshooting for every part of the platform.

@@ -15,6 +15,7 @@ import {
 } from "../services/api";
 import { NocHeader, Chip } from "../components/noc";
 import Icon from "../components/Icon";
+import { operatorError } from "../lib/errors";
 // BGP depth (item 10 completion) — each panel owns its own fetch and its own
 // failure, so a dead geofeed or an unreachable validator never blanks the page.
 // Lazy so the React Flow graph never rides in this route's first chunk.
@@ -158,7 +159,7 @@ export default function BgpOps() {
         api.bgpUpdates(r, 8).then((u) => { if (fresh()) setUpdates(u); }).catch(() => { if (fresh()) setUpdates(null); });
         api.bgpWhois(r).then((w) => { if (fresh()) setWhois(w.rdap); }).catch(() => { if (fresh()) setWhois(null); });
       })
-      .catch((e: Error) => { if (fresh()) setErr(e.message || "lookup failed"); })
+      .catch((e: Error) => { if (fresh()) setErr(operatorError(e, "The lookup could not be completed.")); })
       .finally(() => { if (fresh()) setBusy(false); });
   }, []);
 

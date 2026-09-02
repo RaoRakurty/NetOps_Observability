@@ -16,7 +16,7 @@ const FIDELITY: Record<ParserFidelity, { rank: number; cls: string; label: strin
   live_validated: { rank: 4, cls: "tier-t1", label: "live validated", title: "Confirmed against live device output" },
   lab_validated: { rank: 3, cls: "tier-t3", label: "lab validated", title: "Confirmed against a lab capture" },
   doc_claimed: { rank: 2, cls: "tier-t4", label: "doc claimed", title: "Vendor documentation only — unconfirmed on the wire" },
-  code: { rank: 1, cls: "tier-t5", label: "code", title: "Written in code, no capture behind it yet" },
+  code: { rank: 1, cls: "tier-t5", label: "unverified", title: "Defined in the product, not yet confirmed against a device" },
 };
 
 export function fidelityBadgeClass(f: string): string {
@@ -31,7 +31,7 @@ export function fidelityLabel(f: string): string {
 
 export function fidelityTitle(f: string): string {
   const hit = FIDELITY[f as ParserFidelity];
-  return hit ? hit.title : "Unknown fidelity tier — treat as unproven";
+  return hit ? hit.title : "Fidelity not recorded — treat as unproven";
 }
 
 /** Sort key: higher = stronger evidence. Unknown values sort below `code`. */

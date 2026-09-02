@@ -61,7 +61,7 @@ describe("ServiceMap (observed dependencies)", () => {
     // the React Flow pipeline mounts after the deterministic ELK layout resolves
     await waitFor(() => expect(container.querySelector(".react-flow")).toBeTruthy());
     // legend explains every mark, including the blocked treatment
-    expect(screen.getByText(/talks_to · width = observed bytes/)).toBeTruthy();
+    expect(screen.getByText(/talks to · width = observed bytes/)).toBeTruthy();
     expect(screen.getByText(/blocked · observed REJECT count/)).toBeTruthy();
   });
 

@@ -72,7 +72,7 @@ describe("buildRcaCase — suspected single-signal routing object", () => {
     expect(routing?.variant).toBe("main");
     const device = c.evidence.find((e) => e.title === "Device health");
     expect(device?.variant).toBe("missing");
-    expect(device?.pill.text).toBe("No data");
+    expect(device?.pill.text).toBe("Nothing collected");
   });
 
   it("timeline shows ALL standard lanes (empty ones included)", () => {

@@ -196,12 +196,12 @@ describe("LiveFeedPanel", () => {
     expect(screen.getByText("12 overwritten")).toBeInTheDocument();
   });
 
-  it("tells the operator the poller cap is holding this tenant back", async () => {
+  it("tells the operator the feed is paused because the platform is at capacity", async () => {
     bgpFeed.mockResolvedValue({
       updates: [], status: { enabled: true, polling: false, capped: true, resources: ["AS1"], ring_size: 2000, producer: "ripestat-poll", note: "The global poller cap is reached; this tenant's feed is not being polled right now." },
     });
     render(<LiveFeedPanel />);
-    await waitFor(() => expect(screen.getByText("PAUSED · poller cap")).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText("Paused — at capacity")).toBeInTheDocument());
   });
 });
 

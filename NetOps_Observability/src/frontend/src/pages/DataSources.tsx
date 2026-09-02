@@ -68,10 +68,10 @@ export default function DataSources() {
         const ok = <T,>(r: PromiseSettledResult<T>): T | null => (r.status === "fulfilled" ? r.value : null);
         const snmpRes = ok(snmpS), flowRes = ok(flowS), sysRes = ok(sysS), trapRes = ok(trapS);
         const down: string[] = [];
-        if (snmpS.status === "rejected") down.push("SNMP metrics (VictoriaMetrics)");
-        if (flowS.status === "rejected") down.push("flows (ClickHouse)");
-        if (sysS.status === "rejected") down.push("syslog (OpenSearch)");
-        if (trapS.status === "rejected") down.push("traps (OpenSearch)");
+        if (snmpS.status === "rejected") down.push("SNMP metrics");
+        if (flowS.status === "rejected") down.push("flows");
+        if (sysS.status === "rejected") down.push("syslog");
+        if (trapS.status === "rejected") down.push("traps");
         setDownPlanes(down);
 
         // SNMP: device labels with a fresh device_sysuptime series.
@@ -163,7 +163,7 @@ export default function DataSources() {
           <Stat label="SNMP metrics" value={totals.snmp} tone={totals.snmp > 0 ? "good" : "bad"} />
           <Stat label="Flows" value={totals.flows} tone={totals.flows > 0 ? "good" : ""} />
           <Stat label="Syslog" value={totals.syslog} tone={totals.syslog > 0 ? "good" : ""} />
-          <Stat label="No data" value={totals.none} tone={totals.none > 0 ? "bad" : "good"} />
+          <Stat label="Nothing arriving" value={totals.none} tone={totals.none > 0 ? "bad" : "good"} />
           {totals.unknown > 0 && <Stat label="Unknown" value={totals.unknown} tone="warn" />}
         </StatStrip>
         {downPlanes.length > 0 && (

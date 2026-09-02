@@ -9,6 +9,7 @@
     "preview": "vite preview",
     "test": "vitest run",
     "test:watch": "vitest",
+    "perf:budget": "vitest run --config vitest.perf.config.ts",
     "e2e": "playwright test",
     "ui:check": "node scripts/ui-consistency-check.mjs"
   },

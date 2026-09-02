@@ -241,7 +241,7 @@ export default function ServiceMap({ ctl }: { ctl: CloudScopeControl }) {
       <div className="ao-panel">
         <EmptyState
           title={`No observed service traffic in the ${rangeWords(windowHours * 60)}`}
-          hint="this map draws ONLY observed cloud flow pairs (AWS VPC Flow Logs · Azure NSG flow logs · GCP VPC flows) — connect cloud flow telemetry in Data sources and talks_to dependencies appear here as they are observed; nothing is inferred from co-location or timing"
+          hint="this map draws ONLY observed cloud flow pairs (AWS VPC Flow Logs · Azure NSG flow logs · GCP VPC flows) — connect cloud flow telemetry in Data sources and dependencies appear here as they are observed; nothing is inferred from co-location or timing"
           action={
             <button className="ao-btn ao-btn--primary"
               onClick={() => { location.hash = "#/operations/services/datasources"; }}>
@@ -271,7 +271,7 @@ export default function ServiceMap({ ctl }: { ctl: CloudScopeControl }) {
         )}
         {ctl.active && (
           <span className="ao-svcmap-tenantwide"
-            title="the provider / account / region / env filters do not narrow this map yet — /api/cloud/service-map takes only window_hours">
+            title="Scope filters do not narrow this map yet — it is drawn for the whole tenant over the selected time window.">
             tenant-wide · scope filters not applied
           </span>
         )}
@@ -304,7 +304,7 @@ export default function ServiceMap({ ctl }: { ctl: CloudScopeControl }) {
       <div className="ao-svcmap-legend" aria-label="Service map legend">
         <span><i className="ao-svcmap-key ao-svcmap-key--svc" /> service (resolved)</span>
         <span><i className="ao-svcmap-key ao-svcmap-key--ep" /> unattributed endpoint</span>
-        <span><i className="ao-svcmap-key ao-svcmap-key--talks" /> talks_to · width = observed bytes</span>
+        <span><i className="ao-svcmap-key ao-svcmap-key--talks" /> talks to · width = observed bytes</span>
         <span><i className="ao-svcmap-key ao-svcmap-key--blocked" /> ⊘ blocked · observed REJECT count</span>
       </div>
     </div>

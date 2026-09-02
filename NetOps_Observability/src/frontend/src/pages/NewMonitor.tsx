@@ -194,7 +194,7 @@ export default function NewMonitor() {
                     <div className="form-field wide">
                       <label className="form-label" htmlFor="nm-scope">Device scope</label>
                       <input id="nm-scope" className="form-input mono" placeholder='all devices — or a regex like leaf.* or edge-1' value={scope} onChange={(e) => setScope(e.target.value)} />
-                      <span className="form-hint">Optional. Matches the device label (regex). Empty = the whole fleet.</span>
+                      <span className="form-hint">Optional. Leave blank to cover the whole fleet.</span>
                     </div>
                     {tpl?.threshold !== undefined && (
                       <div className="form-field">
@@ -288,7 +288,7 @@ function LivePreview({ expr }: { expr: string }) {
   const label = (m: Record<string, string>) =>
     Object.entries(m).filter(([k]) => k !== "__name__").map(([k, v]) => `${k}=${v}`).join(" ") || m.__name__ || "series";
 
-  if (err) return <div className="empty" style={{ color: "var(--bad)" }}>Expression error: {err}</div>;
+  if (err) return <div className="empty" style={{ color: "var(--bad)" }}>That expression is not valid: {err}</div>;
   if (series === null) return <div className="mini-meta">Checking what this would fire on right now…</div>;
   return (
     <div>

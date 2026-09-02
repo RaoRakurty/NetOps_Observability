@@ -1,7 +1,7 @@
 // CloudLogs.test.tsx — the unified Cloud Logs view: a lane per cloud log family,
 // each wired to a real tenant-scoped source (Inventory + Change to the cloud
 // surfaces, the raw families to the tagged /api/logs/search?signal=cloud index).
-// Honesty-first: an empty lane reads "No logs in range", never fabricated rows.
+// Honesty-first: an empty lane reads "No log entries in this window", never fabricated rows.
 
 import { describe, it, expect, vi, afterEach, beforeEach } from "vitest";
 import { render, screen, cleanup, fireEvent, within, waitFor } from "@testing-library/react";
@@ -82,6 +82,6 @@ describe("Cloud Logs unified view", () => {
     searchLogs.mockResolvedValue({ hits: { total: { value: 0 }, hits: [] } });
     render(<CloudLogs />);
     fireEvent.click(screen.getByRole("tab", { name: "Flow" }));
-    expect(await screen.findByText("No logs in range.")).toBeTruthy();
+    expect(await screen.findByText("No log entries in this window.")).toBeTruthy();
   });
 });

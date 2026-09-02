@@ -382,7 +382,7 @@ const ART_TITLE: Record<NmsVendorId, string> = {
   versa_director: "Versa Director — appliance services",
   versa_concerto: "Versa Concerto — orchestration",
   prime: "Prime Infrastructure — alarm browser",
-  generic: "generic controller — REST / webhook",
+  generic: "generic controller — HTTP integration",
 };
 
 /** Rich dashboard-preview art for a vendor card. */

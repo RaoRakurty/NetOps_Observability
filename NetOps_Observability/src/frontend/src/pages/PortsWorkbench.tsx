@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { api, PortRow } from "../services/api";
 import DataTable, { Column } from "../components/DataTable";
-
+import { operatorError } from "../lib/errors";
 // PortsWorkbench — the service-provider-grade Interfaces / Ports / Optics / DDM
 // workbench (#94 P6). Fleet-wide table over /api/infrastructure/interfaces with
 // six column presets (NOC / Troubleshooting / Optics-DDM / 400G-800G Lane /
@@ -144,7 +144,7 @@ export default function PortsWorkbench() {
     if (seamFilter) qs.set("seam", seamFilter);
     if (rcaOnly) qs.set("rca_attached", "true");
     qs.set("limit", "500");
-    api.portInterfaces(qs.toString()).then((r) => { setRows(r.interfaces ?? []); setTotal(r.total); setErr(null); }).catch((e) => setErr(String(e)));
+    api.portInterfaces(qs.toString()).then((r) => { setRows(r.interfaces ?? []); setTotal(r.total); setErr(null); }).catch((e) => setErr(operatorError(e, "Interface data could not be loaded.")));
     api.portSummary().then(setSummary).catch(() => {});
   }, [seamFilter, rcaOnly]);
 

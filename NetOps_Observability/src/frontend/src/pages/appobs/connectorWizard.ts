@@ -26,7 +26,7 @@ export type { AuthField, AuthFieldKey, SecretConfig };
 // no connector store" message — no backend vendor names.
 export function errText(e: unknown): string {
   const m = (e as Error)?.message ?? String(e);
-  if (m.startsWith("501")) return "Cloud connectors need the platform database backend — this deployment runs the in-memory store.";
+  if (m.startsWith("501")) return "Cloud connectors are not available on this deployment.";
   return m;
 }
 

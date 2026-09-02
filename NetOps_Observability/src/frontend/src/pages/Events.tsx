@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useDeferredValue, useEffect, useMemo, useState, startTransition } from "react";
 import { api } from "../services/api";
 import DataTable, { Column } from "../components/DataTable";
 import { EmptyHint } from "../components/board/panels";
@@ -28,7 +28,7 @@ const parseTs = (o: Record<string, any>): number => {
 // OpenSearch hit → feed row mappers (shared by the initial load and Load-more).
 const mapSyslog = (h: { _source?: Record<string, any> }): Ev => {
   const s = h._source || {};
-  return { ts: parseTs(s), type: "syslog", severity: pick(s, ["severity", "level", "syslog_severity"], "info"), source: pick(s, ["host", "hostname", "device", "source"], "—"), message: pick(s, ["message", "msg", "content", "log"], JSON.stringify(s).slice(0, 200)) };
+  return { ts: parseTs(s), type: "syslog", severity: pick(s, ["severity", "level", "syslog_severity"], "info"), source: pick(s, ["host", "hostname", "device", "source"], "—"), message: pick(s, ["message", "msg", "content", "log"], "Event details unavailable") };
 };
 const mapTrap = (h: { _source?: Record<string, any> }): Ev => {
   const s = h._source || {};
@@ -51,6 +51,9 @@ export default function Events({ sinceSeconds }: { sinceSeconds?: number } = {})
   const [err, setErr] = useState<string | null>(null);
   const [typeFilter, setTypeFilter] = useState<"" | EvType>("");
   const [q, setQ] = useState("");
+  // The box keeps the typed value; the FEED re-filters against the deferred one,
+  // so a keystroke during a storm never waits on a pass over the whole window.
+  const deferredQ = useDeferredValue(q);
 
   useEffect(() => {
     let alive = true;
@@ -83,7 +86,12 @@ export default function Events({ sinceSeconds }: { sinceSeconds?: number } = {})
           out.push({ ts: parseTs(a), type: "alert", severity: a.severity || "warning", source: a.device_id || a.rule || "—", message: a.summary || a.rule || "alert" });
         }
         out.sort((x, y) => y.ts - x.ts);
-        setBase(out);
+        // The 30s refresh swaps in the whole window at once. As a TRANSITION it
+        // yields to anything the operator is doing (typing, scrolling) instead
+        // of blocking on the re-render of a full feed.
+        startTransition(() => {
+          setBase(out);
+        });
         setSysTotal(sys?.hits?.total?.value ?? null);
         setTrapTotal(traps?.hits?.total?.value ?? null);
         setErr(
@@ -144,12 +152,12 @@ export default function Events({ sinceSeconds }: { sinceSeconds?: number } = {})
   };
 
   const filtered = useMemo(() => {
-    const needle = q.trim().toLowerCase();
+    const needle = deferredQ.trim().toLowerCase();
     return events.filter((e) =>
       (!typeFilter || e.type === typeFilter) &&
       (!needle || e.message.toLowerCase().includes(needle) || e.source.toLowerCase().includes(needle)),
     );
-  }, [events, typeFilter, q]);
+  }, [events, typeFilter, deferredQ]);
 
   const [sel, setSel] = useState<Ev | null>(null);
   const cols = useMemo<Column<Ev>[]>(() => [
@@ -175,7 +183,7 @@ export default function Events({ sinceSeconds }: { sinceSeconds?: number } = {})
     <div className="dm-board cc-board">
       <NocHeader
         title="Events"
-        subtitle="Raw signal stream — syslog, SNMP traps and active alerts on one timeline to correlate against metrics and flows."
+        subtitle="Live event stream — syslog, SNMP traps and active alerts on one timeline to correlate against metrics and flows."
         chips={<>
           <Chip label={trueTotal > events.length ? `${events.length.toLocaleString()} of ${trueTotal.toLocaleString()} signals loaded` : `${events.length.toLocaleString()} signals`} />
           <LiveChip detail="merged feed" />
@@ -191,7 +199,7 @@ export default function Events({ sinceSeconds }: { sinceSeconds?: number } = {})
       </NocHeader>
       <div className="cc-panel">
         <div className="cc-panel-h">
-          <h3 className="cc-panel-t">Signal stream</h3>
+          <h3 className="cc-panel-t">Event stream</h3>
           <span className="cc-panel-meta">
             {trueTotal > events.length
               ? `showing ${filtered.length.toLocaleString()} of ${trueTotal.toLocaleString()} in window`
@@ -240,7 +248,7 @@ export default function Events({ sinceSeconds }: { sinceSeconds?: number } = {})
             </header>
             <dl className="ev-detail-grid">
               <dt>Time</dt><dd><LogTime ts={sel.ts} /></dd>
-              <dt>Type</dt><dd>{sel.type === "syslog" ? "Syslog (raw signal)" : sel.type === "trap" ? "SNMP trap" : "Active alert"}</dd>
+              <dt>Type</dt><dd>{sel.type === "syslog" ? "Syslog message" : sel.type === "trap" ? "SNMP trap" : "Active alert"}</dd>
               <dt>Source</dt><dd><LogSource source={sel.source} /></dd>
               <dt>Linked to</dt><dd style={{ color: "var(--fg-muted)" }}>Pending correlation</dd>
             </dl>

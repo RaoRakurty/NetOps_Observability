@@ -1,5 +1,5 @@
 import { fmtDateTime, parseTs } from "../lib/time";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { startTransition, useEffect, useMemo, useRef, useState } from "react";
 import { api, OSHit, ExportFmt, LogRetention, LogSampling, LogSearchOpts } from "../services/api";
 import { severityColor, severityRank } from "../theme/severity";
 import { LogTime, LogSource, LogLevel, LogMessage, LogJson } from "../lib/logfmt";
@@ -39,7 +39,7 @@ const SIGNALS: { id: SignalId; label: string }[] = [
   { id: "", label: "All" },
   { id: "applogs", label: "App logs" },
   { id: "syslog", label: "Syslog (devices)" },
-  { id: "firewall", label: "fw_logs" },
+  { id: "firewall", label: "Firewall logs" },
   { id: "snmptrap", label: "SNMP traps" },
   { id: "flows", label: "Flows" },
 ];
@@ -123,7 +123,12 @@ export default function Logs({ initialQuery, rangeMinutes, initialSignal }: Prop
       };
       const r = await api.searchLogs(opts);
       lastRun.current = opts;
-      setHits(r?.hits?.hits ?? []);
+      // A result set can be tens of thousands of rows; mapping and committing it
+      // is the single most expensive thing this page does. As a transition it
+      // yields to the operator's next keystroke or click instead of blocking it.
+      startTransition(() => {
+        setHits(r?.hits?.hits ?? []);
+      });
       setTotal(r?.hits?.total?.value ?? null);
       // Sample honesty: trust the response's metadata; fall back to the known
       // rate so a flows result is NEVER presented as exact.
@@ -312,7 +317,7 @@ export default function Logs({ initialQuery, rangeMinutes, initialSignal }: Prop
           setExportMsg(`Export ready — downloaded.${flowsExportNote}`);
           return;
         }
-        if (st.status === "failed") throw new Error(st.error || "export failed");
+        if (st.status === "failed") throw new Error(st.error || "The export could not be produced.");
       }
       setExportMsg("Export still running — check back shortly.");
     } catch (e) {
@@ -325,7 +330,7 @@ export default function Logs({ initialQuery, rangeMinutes, initialSignal }: Prop
   const columns = useMemo<Column<Line>[]>(() => [
     {
       key: "sel", width: 30,
-      header: <input type="checkbox" checked={allSelected} onChange={toggleAll} title="Select all loaded" />,
+      header: <input type="checkbox" checked={allSelected} onChange={toggleAll} title="Select all rows in view" />,
       render: (l) => (
         <input type="checkbox" checked={selected.has(l.id)}
           onClick={(e) => e.stopPropagation()} onChange={() => toggleRow(l.id)} />
