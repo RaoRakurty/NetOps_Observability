@@ -125,7 +125,9 @@ def test_the_catalog_only_rows_never_reach_the_runtime(catalog):
 
 def test_the_rule_count_is_what_the_lanes_add_up_to():
     assert len(P.RULES) == len(P._SYSLOG_RULES) + len(P._PORT_RULES) + len(P._TRAP_RULES)
-    assert len(P.RULES) == 38
+    # 38 through A9 · 40 since A9b (`trap.config.change` emits;
+    # `syslog.config.change` ships SHADOW — see events.yaml for why).
+    assert len(P.RULES) == 40
 
 
 # ══ 2. the schema ════════════════════════════════════════════════════════════
@@ -363,6 +365,11 @@ def test_the_baseline_skips_are_exactly_the_post_freeze_promotions(golden):
     allowed = {
         "trap.ospf.adjacency_change", "trap.isis.adjacency_change",
         "trap.stp.topology_change", "trap.fhrp.state_change",
+        # A9b. Only the TRAP half: `syslog.config.change` is a shadow row, so it
+        # emits nothing and the frozen code agrees with it line for line — its
+        # corpus entries stay IN the parity run, which is what proves a shadow
+        # row cannot change what the parser emits.
+        "trap.config.change",
     }
     fired = set()
     for entry in golden:
@@ -377,7 +384,14 @@ def test_the_baseline_skips_are_exactly_the_post_freeze_promotions(golden):
 
 
 def test_the_corpus_exercises_every_rule(golden):
-    """A parity run that never reaches a rule proves nothing about it."""
+    """A parity run that never reaches a rule proves nothing about it.
+
+    A SHADOW row is "reached" when its guard matches, not when it emits — it
+    never emits by construction — so it is counted through `SHADOW_HITS`, which
+    is the same signal `corr_parser_shadow_hits_total` exports. Reading emission
+    alone would leave a shadow row permanently uncovered and the gap invisible.
+    """
+    before = dict(P.SHADOW_HITS)
     fired: set[str] = set()
     for entry in golden:
         for _name, fn, _old in LANE_FNS[entry["lane"]]:
@@ -387,6 +401,7 @@ def test_the_corpus_exercises_every_rule(golden):
                 continue
             if sig is not None:
                 fired.add(sig.attrs["rule_id"])
+    fired |= {rid for rid, n in P.SHADOW_HITS.items() if n > before.get(rid, 0)}
     missing = sorted({r.rule_id for r in P.RULES} - fired)
     assert not missing, f"the corpus never fires: {missing}"
 
@@ -516,10 +531,55 @@ def test_shadow_is_a_first_class_catalog_field(catalog):
     _expect_rejected(catalog, bad, "must be a boolean")
 
 
-def test_no_shadow_rule_ships_today():
+def test_the_shipped_shadow_rows_are_exactly_the_declared_ones():
     """Pinned so a shadow row cannot be left switched on by accident: shipping
-    one is a deliberate act, and this line is where you record it."""
-    assert [r.rule_id for r in P.RULES if r.shadow] == []
+    one is a deliberate act, and this line is where you record it.
+
+    `syslog.config.change` (A9b) is the first. Its grammar is finished and its
+    trap twin emits; it is shadow for a WORKLOAD reason, not a parser one —
+    `%SYS-5-CONFIG_I` is 35 of the 100 noise slots of the ratified V1 profile
+    (`scripts/scale-miniladder.py EVENT_MIX_NOISE`), declared there as a line
+    that never classifies, so emitting would re-classify a third of the V1
+    background and silently re-baseline every capacity number measured on it.
+    Promotion is `shadow: false` once that profile is versioned."""
+    assert [r.rule_id for r in P.RULES if r.shadow] == ["syslog.config.change"]
+
+
+def test_a_shadow_row_emits_nothing_and_still_counts_itself():
+    """The A8 contract, on the first row to use it: the guard matches (the hit
+    is counted, and `corr_parser_shadow_hits_total` exports it), evaluation
+    continues, and the parser emits exactly what it would with the row absent —
+    here nothing, because a config-change line is below the alarm floor."""
+    ev = syslog_ev("%SYS-5-CONFIG_I", "Configured from console by admin on vty0")
+    before = P.SHADOW_HITS["syslog.config.change"]
+    assert P.syslog_control_signal(dict(ev), "t1", T0) is None
+    assert P.SHADOW_HITS["syslog.config.change"] == before + 1
+
+
+def test_a_shadow_row_contributes_nothing_to_the_ingest_screen():
+    """A9b. The screen is what keeps the classifiers off the ~95 % of syslog
+    that can never promote, so every literal in it admits more raw lines into
+    both producers. A row that EMITS NOTHING must not buy that: re-derive the
+    screen with the shadow rows included and assert the literal set is the one
+    the runtime actually uses, i.e. that the shadow row added none of its own.
+
+    This is also what keeps promotion a single act — flipping `shadow: false`
+    re-derives the screen, the generated admission VRL and `rules_hash`
+    together, instead of letting the admission change leak in ahead of the
+    emission change."""
+    assert [r.rule_id for r in P.RULES if r.shadow] == ["syslog.config.change"]
+    shadow_markers = {m for r in P.RULES if r.shadow for m in r.markers}
+    assert shadow_markers, "the row under test declares no markers to leak"
+    assert not shadow_markers & set(P._CP_GUARD_MARKERS)
+    assert P._SYSLOG_SCREEN_LITERALS is not None
+    assert not {m.lower() for m in shadow_markers} & set(P._SYSLOG_SCREEN_LITERALS)
+    # …and the whole screen equals the screen built from the NON-shadow rows,
+    # which is the property stated directly rather than inferred from markers.
+    non_shadow = {m.lower() for r in P.RULES
+                  if r.lane == "syslog" and not r.shadow for m in r.markers}
+    assert non_shadow <= set(P._SYSLOG_SCREEN_LITERALS)
+    assert not P.syslog_promotable(dict(
+        syslog_ev("%SYS-5-CONFIG_I", "Configured from console by admin on vty0")))
 
 
 # ══ 6. COST ══════════════════════════════════════════════════════════════════

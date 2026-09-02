@@ -66,12 +66,91 @@ SOURCES = ["file://" + d for d in VENDOR_LOCAL if os.path.isdir(d)] + [
     f"{_LNMS}/@mib@",
 ] + [f"{_LNMS}/{v}/@mib@" for v in ("arista", "cisco", "juniper", "nokia", "dell", "fortinet")]
 
-# MIBs carry no universal severity; seed the well-known IETF notifications.
+# MIBs carry no universal severity; seed the well-known notifications here.
+#
+# WHY A HINT IS NOT COSMETICS — IT IS THE ADMISSION GATE. `trapMeta()`
+# (collectors/snmptrap.go) falls back to "notice" for a notification with no
+# hint, and notice (5) is BELOW the correlation engine's
+# `producers.ALARM_SEVERITY_FLOOR` (4 = warning). A trap that lands below that
+# floor is stored and searchable in OpenSearch and NEVER reaches the engine —
+# not even as the generic `device_alarm` safety net. So an unhinted (or
+# notice-hinted) notification is invisible to RCA by omission, which is exactly
+# what the A9 trap audit found for the two families below.
+#
+# THE RULE THIS TABLE FOLLOWS. A notification that reports a FAULT, a
+# DEGRADATION or a CHANGE OF STATE an operator would want correlated is
+# `warning`; its recovery/clear twin is `info` — the same split `linkDown` /
+# `linkUp` has always had. `info` still reaches OpenSearch; it just never opens
+# an RCA object on its own.
 SEVERITY_HINT = {
+    # ── IETF core ────────────────────────────────────────────────────────────
     "linkDown": "warning", "authenticationFailure": "warning",
     "bgpBackwardTransition": "warning", "ospfNbrStateChange": "warning",
     "ospfIfStateChange": "warning", "coldStart": "info", "warmStart": "info",
-    "linkUp": "info", "bgpEstablished": "info", "entConfigChange": "notice",
+    "linkUp": "info", "bgpEstablished": "info",
+
+    # ── CONFIG CHANGE (A9 follow-up) ─────────────────────────────────────────
+    # "What changed?" is the first question of every real RCA, and a config
+    # change is the direct input to the security hardening-drift story. These
+    # were `notice`/unhinted, i.e. below the floor: the engine could not see a
+    # device being reconfigured AT ALL. They are `warning`, not higher: a
+    # change is not itself a fault — it is context that must be REACHABLE.
+    # The parser types them further as `device_config_change`
+    # (telemetry-catalog/events.yaml, rule `trap.config.change`).
+    "entConfigChange": "warning",              # was notice — below the floor
+    "ciscoConfigManEvent": "warning",          # was notice — below the floor
+    "ccmCLIRunningConfigChanged": "warning",
+    "jnxCmCfgChange": "warning", "jnxCmRescueChange": "warning",
+    "tmnxConfigModify": "warning", "tmnxConfigCreate": "warning",
+    "tmnxConfigDelete": "warning",
+
+    # ── HARDWARE / ENVIRONMENT (A9 follow-up) ────────────────────────────────
+    # Fan, PSU, temperature, FRU and entity-sensor health. Every one of these
+    # was UNHINTED and therefore defaulted to `notice`: a failed power supply
+    # or an over-temperature chassis never became evidence. There is no typed
+    # syslog kind for environmental health to pair them with (see the coverage
+    # matrix, "Audited and NOT promoted"), so they stay GENERIC `device_alarm`s
+    # — but a generic alarm the engine can see is the whole point.
+    #
+    # BOUNDARY: CPU/memory pressure (cpmCPURisingThreshold,
+    # ciscoMemoryPoolLowMemoryNotif) is deliberately NOT here — the metric
+    # lane already carries it as `device_resource_anomaly` with a real
+    # magnitude, and a duplicate trap witness would double-count it.
+    #   Cisco — ENVMON
+    "ciscoEnvMonFanNotification": "warning",
+    "ciscoEnvMonTemperatureNotification": "warning",
+    "ciscoEnvMonVoltageNotification": "warning",
+    "ciscoEnvMonRedundantSupplyNotification": "warning",
+    "ciscoEnvMonShutdownNotification": "warning",
+    "ciscoEnvMonFanStatusChangeNotif": "warning",
+    "ciscoEnvMonSuppStatusChangeNotif": "warning",
+    "ciscoEnvMonTempStatusChangeNotif": "warning",
+    "ciscoEnvMonVoltStatusChangeNotif": "warning",
+    #   Cisco — ENTITY-FRU-CONTROL (an insert is inventory, not a fault)
+    "cefcModuleStatusChange": "warning", "cefcPowerStatusChange": "warning",
+    "cefcFanTrayStatusChange": "warning",
+    "cefcPowerSupplyOutputChange": "warning",
+    "cefcUnrecognizedFRU": "warning", "cefcFRURemoved": "warning",
+    "cefcFRUInserted": "info",
+    #   IETF entity state + Arista sensor alarm
+    "entStateOperDisabled": "warning", "entStateOperEnabled": "info",
+    "aristaEntSensorAlarm": "warning",
+    #   Juniper — the fault/recovery pairs the MIB defines explicitly
+    "jnxFanFailure": "warning", "jnxPowerSupplyFailure": "warning",
+    "jnxOverTemperature": "warning", "jnxFruFailed": "warning",
+    "jnxFruOffline": "warning", "jnxFruPowerOff": "warning",
+    "jnxFruRemoval": "warning", "jnxFruCheck": "warning",
+    "jnxHardDiskFailed": "warning", "jnxHardDiskMissing": "warning",
+    "jnxFanOK": "info", "jnxPowerSupplyOK": "info",
+    "jnxTemperatureOK": "info", "jnxFruOK": "info",
+    "jnxFruOnline": "info", "jnxFruPowerOn": "info",
+    "jnxFruInsertion": "info",
+    #   Nokia SR OS — chassis equipment
+    "tmnxEqFanFailure": "warning", "tmnxEqPowerSupplyFailure": "warning",
+    "tmnxEnvTempTooHigh": "warning", "tmnxEqCardFailure": "warning",
+    "tmnxEqMemoryFailure": "warning", "tmnxEqCpuFailure": "warning",
+    "tmnxEqPowerSupplyRemoved": "warning",
+    "tmnxEqPowerSupplyInserted": "info", "tmnxEqCardInserted": "info",
 }
 # Standard OIDs whose MIB won't compile from source here (SMIv1 grammar, e.g.
 # Q-BRIDGE-MIB→RFC-1212) but which are stable IETF definitions — anchored so the
@@ -247,6 +326,17 @@ def main() -> int:
         base[oid] = n  # override — real compiled MIB beats pysmi/overlay
     for oid, n in STD_OVERLAY.items():
         base.setdefault(oid, n)  # only fills genuinely-undefined OIDs (e.g. v1 traps)
+    # THE TABLE IS THE SOURCE OF TRUTH FOR A CURATED HINT — re-applied LAST.
+    # The merge above preserves the hint already stored on a node, which is what
+    # keeps a curated overlay alive across a compile that cannot supply one; but
+    # it also meant a hint CHANGE in SEVERITY_HINT could never propagate to an
+    # OID the index already held (the first value ever generated won forever).
+    # That is how `entConfigChange` stayed pinned below the alarm floor. A name
+    # this table does not mention keeps whatever it has (e.g. the STD_OVERLAY
+    # v1-trap hints), so the overlay is still preserved.
+    for n in base.values():
+        if n.get("kind") == "notification" and n.get("name") in SEVERITY_HINT:
+            n["severity_hint"] = SEVERITY_HINT[n["name"]]
     nodes = base
     print(f"gen_index: pysmi={len(gen)} net-snmp={len(ns)} nodes; index now {len(nodes)}.")
     errs = validate(nodes)

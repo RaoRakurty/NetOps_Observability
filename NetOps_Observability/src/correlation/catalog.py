@@ -893,6 +893,14 @@ BUILTIN_TEMPLATES: list[dict] = [
             # Optional downstream impact: host pressure, route-driven loss, or a
             # co-incident link event.
             {"kind": "device_resource_anomaly|probe_loss|link_state_change", "optional": True},
+            # "What changed?" — a config change on the SAME device inside the window.
+            # Optional and single-plane by construction (it is the box talking about
+            # itself, like the transition it corroborates), so it can raise coverage
+            # but never supply the second modality a confirmation needs.
+            # Today it arrives on the TRAP observer only: `syslog.config.change`
+            # ships `shadow: true` until the V1 workload profile is versioned
+            # (events.yaml), so on a syslog-only estate this clause is inert.
+            {"kind": "device_config_change", "optional": True},
         ],
         "required_modalities": ["control_plane"],
         "discriminators": [
@@ -954,6 +962,14 @@ BUILTIN_TEMPLATES: list[dict] = [
             # counter anomaly, or a co-incident link event on the adjacency.
             {"kind": "if_metric_anomaly|device_resource_anomaly|probe_loss|link_state_change",
              "optional": True},
+            # "What changed?" — a config change on the SAME device inside the window.
+            # Optional and single-plane by construction (it is the box talking about
+            # itself, like the transition it corroborates), so it can raise coverage
+            # but never supply the second modality a confirmation needs.
+            # Today it arrives on the TRAP observer only: `syslog.config.change`
+            # ships `shadow: true` until the V1 workload profile is versioned
+            # (events.yaml), so on a syslog-only estate this clause is inert.
+            {"kind": "device_config_change", "optional": True},
         ],
         "required_modalities": ["control_plane"],
         "discriminators": [
@@ -983,6 +999,14 @@ BUILTIN_TEMPLATES: list[dict] = [
             # supports but does not by itself confirm — that needs a 2nd modality).
             {"kind": "if_metric_anomaly|device_resource_anomaly|lldp_neighbor_change|link_state_change",
              "optional": True},
+            # "What changed?" — a config change on the SAME device inside the window.
+            # Optional and single-plane by construction (it is the box talking about
+            # itself, like the transition it corroborates), so it can raise coverage
+            # but never supply the second modality a confirmation needs.
+            # Today it arrives on the TRAP observer only: `syslog.config.change`
+            # ships `shadow: true` until the V1 workload profile is versioned
+            # (events.yaml), so on a syslog-only estate this clause is inert.
+            {"kind": "device_config_change", "optional": True},
         ],
         "required_modalities": ["control_plane"],
         "discriminators": [
@@ -3078,6 +3102,12 @@ NMS_TEMPLATES: list[dict] = [
             {"kind": "controller_policy_change", "entity_type": "device"},
             {"kind": "tunnel_degraded|tunnel_flap|link_state_change|bgp_adjacency_change|probe_loss|if_util_high|device_resource_anomaly",
              "optional": True},
+            # The DEVICE's own record of the same push. A controller says it
+            # sent a policy; `%SYS-5-CONFIG_I` / `UI_COMMIT` on the box says it
+            # landed — and an on-box change with NO controller push is the
+            # out-of-band edit this family exists to catch.
+            # TRAP observer only today — the syslog half is shadowed (events.yaml).
+            {"kind": "device_config_change", "optional": True},
         ],
         "seams": ["WAN_SDWAN"],
         "verdict": {
@@ -3649,6 +3679,15 @@ EXPOSURE_STORY_TEMPLATES: list[dict] = [
         "requires": [
             {"kind": "security_posture"},
             {"kind": _CORROBORATING_NETWORK_EVIDENCE, "optional": True},
+            # WHEN the baseline broke. A failed hardening control is a STANDING
+            # property with no onset — that is why this family cannot confirm on
+            # the verdict alone. A config change on the same device inside the
+            # window is the first piece of evidence that dates the drift, and it
+            # is the operator's next click ("what changed?"). Optional, and
+            # control-plane like the fault clause above it, so it can never be
+            # the independent second plane that promotes the verdict. TRAP
+            # observer only today — the syslog half is shadowed (events.yaml).
+            {"kind": "device_config_change", "optional": True},
         ],
         "verdict": {
             "owner": "netops", "layer": "security/posture",

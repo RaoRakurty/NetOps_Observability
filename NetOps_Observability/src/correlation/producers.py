@@ -231,6 +231,13 @@ EMITTED_KINDS: frozenset[str] = frozenset({
     # a BGP fault; declared in coverage.INTENTIONAL_BLIND until a signature
     # references it (see that entry for the template clause that would).
     "bgp_route_churn",
+    # Device configuration change (A9 follow-up) — %SYS-5-CONFIG_I / UI_COMMIT
+    # and the CISCO-CONFIG-MAN-MIB / JUNIPER-CFGMGMT-MIB traps. The "what
+    # changed?" evidence: consumed as an OPTIONAL clause by the adjacency
+    # families and the security hardening-drift story, never as a verdict of its
+    # own (it is emitted at `info`, below `severity_open_floor`, so it cannot
+    # open an RCA object by itself).
+    "device_config_change",
     # DC overlay (P2)
     "vtep_state_change", "evpn_mac_move",
     # trap lane
@@ -877,8 +884,24 @@ def _dedup(items: Iterable[str]) -> tuple[str, ...]:
     return tuple(seen)
 
 
+# A SHADOW ROW CONTRIBUTES NOTHING TO THE SCREEN (A9b). A shadow rule emits
+# nothing, so widening the screen for it would buy no evidence and would cost
+# the whole estate: the screen is what keeps the classifiers off the ~95 % of
+# syslog that can never promote, and every literal added to it admits more raw
+# lines into the two producers. A shadow row is therefore observed ONLY on lines
+# the screen already admits for another rule's sake; measuring the shapes the
+# screen REJECTS is the parser-coverage mining path (`parsercov`), which reads
+# the firehose off the bus and never touches the ingest hot path.
+#
+# It also keeps promotion honest as a ONE-LINE act: flipping `shadow: false`
+# re-derives the screen, the generated VRL and `rules_hash` together, so the
+# admission change lands in the same commit as the emission change instead of
+# leaking in ahead of it.
+_SCREEN_RULES: tuple[Rule, ...] = tuple(
+    r for r in RULES if r.lane == "syslog" and not r.shadow)
+
 _CP_GUARD_MARKERS: tuple[str, ...] = _dedup(
-    m for r in RULES if r.lane == "syslog" for m in r.markers)
+    m for r in _SCREEN_RULES for m in r.markers)
 # The regexes those same gates test against the MESSAGE, as SOURCE TEXT.
 #
 # A3 ended the copy. `pattern_src` used to be a hand-kept duplicate of a string
@@ -891,7 +914,7 @@ _CP_GUARD_MARKERS: tuple[str, ...] = _dedup(
 # `test_parser_provenance_w1b.test_every_registered_guard_pattern_is_in_its_own_guard_tree`
 # fails on an entry here that is not a node of its rule's guard.
 _CP_GUARD_PATTERNS: tuple[str, ...] = _dedup(
-    r.pattern_src for r in RULES if r.lane == "syslog" and r.pattern_src)
+    r.pattern_src for r in _SCREEN_RULES if r.pattern_src)
 
 
 def _build_syslog_screen() -> tuple[str, ...] | None:

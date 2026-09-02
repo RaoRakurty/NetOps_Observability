@@ -63,7 +63,19 @@ T0 = datetime(2026, 6, 12, 9, 42, 0, tzinfo=timezone.utc)
 # still `undetermined`. The same property is asserted for whole objects in
 # test_security_grounding_t2b.py
 # ::test_v1_stream_is_byte_identical_with_and_without_the_templates.
-FIXTURE_GOLDEN = "4bbdad70a36d0cee"
+#
+# RE-FROZEN AGAIN, 2026-09-02, A9b (was "4bbdad70a36d0cee"). Same mechanism as
+# the T2b re-freeze directly above, and for the same reason: `content_hash` pins
+# `catalog_version`, and five templates gained ONE OPTIONAL clause each
+# (`device_config_change` — the "what changed?" evidence). An optional clause
+# that matches nothing contributes no coverage and no bonus (scoring.py:
+# `coverage` divides by the REQUIRED clauses only), so this object's DECISION
+# cannot move — and that was CHECKED, not assumed: rebuilt against the pre-A9b
+# template list, its whole object row is byte-identical except the
+# `catalog_version` stamp, and the verdict is still `undetermined` with the same
+# top hypothesis. The proof is
+# test_config_change_symptom.py::test_v1_stream_is_byte_identical_with_and_without_the_optional_clause.
+FIXTURE_GOLDEN = "e8223a77e621d10e"
 
 
 def _sig(kind, et, eid, *, off=0.0, src=Source.METRIC, sev=Severity.HIGH,

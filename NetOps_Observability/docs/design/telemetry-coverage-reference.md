@@ -208,20 +208,36 @@ that read only the label would silently produce `unknown` on half the fleet.
 from every guard): LLDP-MIB, CISCO-BGP4-MIB (compiles no notifications),
 VRRP-MIB, CISCO-HSRP-MIB, CISCO-STP-EXTENSIONS-MIB, CISCO-MAC-NOTIFICATION-MIB.
 
-### E.3 Two findings outside the parser (open, one line each)
+### E.3 Two findings outside the parser — both CLOSED by A9b (2026-09-02)
 
 1. **Config-change traps are invisible, not merely untyped.** `gen_index.py`'s
-   `SEVERITY_HINT` seeds `ciscoConfigManEvent` at `notice`, which is *below*
+   `SEVERITY_HINT` seeded `ciscoConfigManEvent` at `notice`, which is *below*
    `producers.ALARM_SEVERITY_FLOOR` (4 = warning) — so a device config change
-   does not even become a generic `device_alarm`. Seeding the config-change and
-   hardware/environment notifications at `warning`/`err` makes them searchable
-   RCA evidence with **no parser change at all**. (Typing them further needs a
-   `device_config_change` kind *and* the catalog clause that consumes it — a kind
-   no signature names is inert.)
+   did not even become a generic `device_alarm`.
+   **CLOSED.** The config-change notifications (`ciscoConfigManEvent`,
+   `ccmCLIRunningConfigChanged`, `jnxCmCfgChange`, `jnxCmRescueChange`,
+   `entConfigChange`, `tmnxConfig*`) are seeded `warning`, and the symptom is
+   now TYPED on both observers as `device_config_change`
+   (`syslog.config.change`, `trap.config.change`) — with the five signature
+   templates that consume it as an optional clause, so the kind is not inert.
+   The SYSLOG row ships `shadow: true` (counted, emits nothing) and contributes
+   nothing to the ingest screen: `%SYS-5-CONFIG_I` is 35 of the 100 noise slots
+   of the ratified V1 workload profile, so emitting would re-classify a third of
+   the V1 background — a profile version, which is the owner's call. The trap
+   row emits (V1 injects syslog only).
+   A merge bug was fixed in the same file: the generator preserved a node's
+   *existing* hint over the table, so a hint CHANGE could never propagate to an
+   OID the index already held. That is why this value had stayed at `notice`.
 2. **Hardware/environment traps have the same problem**: `cefc*`,
-   `ciscoEnvMon*`, `entStateOperDisabled`, `jnxFanFailure`,
-   `jnxPowerSupplyFailure`, `tmnxEq*` all carry **no** severity hint and default
-   to `notice`.
+   `ciscoEnvMon*`, `entStateOperDisabled`, `aristaEntSensorAlarm`,
+   `jnxFanFailure`, `jnxPowerSupplyFailure`, `tmnxEq*` all carried **no**
+   severity hint and defaulted to `notice`.
+   **CLOSED.** The FAULTS are seeded `warning` and their recovery twins
+   (`jnxFanOK`, `cefcFRUInserted`, `entStateOperEnabled`, …) `info` — the same
+   split `linkDown`/`linkUp` has always had. They stay GENERIC `device_alarm`s:
+   there is still no typed environmental kind to promote them to, and a sensor
+   trap says a threshold moved, not which optic or which lane
+   (see § E.4 / the coverage matrix).
 
 ### E.4 Audited and deliberately NOT promoted
 

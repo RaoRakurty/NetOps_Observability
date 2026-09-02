@@ -138,24 +138,6 @@ KEEP_AS_ALARM: tuple[tuple[str, str, str, str], ...] = (
          "stay generic alarms and the DOM metric lane carries the real signal."),
     ),
     (
-        "config change (a security-lane input)",
-        ("CISCO-CONFIG-MAN-MIB ciscoConfigManEvent · ccmCLIRunningConfigChanged "
-         "· JUNIPER-CFGMGMT-MIB jnxCmCfgChange · ENTITY-MIB entConfigChange"),
-        "yes — index-verified",
-        ("**The one gap worth opening.** All four OIDs resolve in the vendored "
-         "index, and a config change is the highest-yield change-correlation "
-         "input there is. It is NOT promoted here because it needs a `kind` no "
-         "signature template names, and a kind nothing consumes is inert "
-         "evidence. Worse, it is invisible today: `gen_index.py`'s severity "
-         "seed gives `ciscoConfigManEvent` **notice**, which is BELOW "
-         "`ALARM_SEVERITY_FLOOR` — so it does not even become a generic alarm. "
-         "Two-step fix, in order: (1) seed these notifications at `warning` in "
-         "`gen_index.py SEVERITY_HINT` so they surface as `device_alarm`; "
-         "(2) add a `device_config_change` kind together with the catalog "
-         "clause that consumes it. Neither is in this change's bounded "
-         "context."),
-    ),
-    (
         "hardware / environment (fan, PSU, FRU, over-temperature)",
         ("CISCO-ENTITY-FRU-CONTROL-MIB cefc* · CISCO-ENVMON-MIB ciscoEnvMon* · "
          "ENTITY-STATE-MIB entStateOperDisabled · JUNIPER-MIB jnxFanFailure / "
@@ -163,11 +145,15 @@ KEEP_AS_ALARM: tuple[tuple[str, str, str, str], ...] = (
         "yes — index-verified",
         ("There is no syslog-typed kind for environmental health to pair with, "
          "so promoting these would mean inventing kinds. They belong as generic "
-         "`device_alarm`s — but the same severity-seed gap applies: every one "
-         "of these notifications carries NO severity hint and therefore "
-         "defaults to `notice`, below the floor. Seeding them at "
-         "`warning`/`err` in `gen_index.py` is a one-line, high-value change "
-         "outside this scope."),
+         "`device_alarm`s — and since **A9b they actually ARE ones**: every one "
+         "of these notifications carried NO severity hint, defaulted to "
+         "`notice` and therefore sat below `ALARM_SEVERITY_FLOOR`, so a failed "
+         "power supply or an over-temperature chassis reached the engine as "
+         "nothing at all. `gen_index.py SEVERITY_HINT` now seeds the FAULTS at "
+         "`warning` and their recovery twins (`jnxFanOK`, `cefcFRUInserted`, "
+         "`entStateOperEnabled`) at `info` — the same split `linkDown`/`linkUp` "
+         "has always had. Typing them further would still be a guess: a sensor "
+         "trap says a threshold moved, not which optic or which lane."),
     ),
     (
         "authenticationFailure",
@@ -215,11 +201,22 @@ def build(rows: list[dict], families: dict) -> dict:
     return {"by_kind": by_kind, "episode": episode}
 
 
+def _carries(row: dict) -> bool:
+    """Does this row actually CARRY the symptom into correlation?
+
+    A `generic` row is the severity-floor safety net, not coverage (§ the
+    module docstring). A `shadow` row is evaluated and counted and emits
+    NOTHING — advertising it as a source would promise a design partner
+    evidence the engine does not produce."""
+    return not row.get("generic") and not row.get("shadow")
+
+
 def _sources(kind: str, slot: dict, episode: dict) -> int:
-    """How many INDEPENDENT sources carry this symptom (generic nets excluded)."""
+    """How many INDEPENDENT sources carry this symptom (generic + shadow rows
+    excluded — neither produces evidence)."""
     n = 0
     for src in ("syslog", "trap"):
-        if any(not r.get("generic") for r in slot[src]):
+        if any(_carries(r) for r in slot[src]):
             n += 1
     if episode.get(kind):
         n += 1
@@ -236,10 +233,10 @@ def _fidelity(row: dict, families: dict) -> str:
 def render(data: dict, rows: list[dict], families: dict, parser_rev: str) -> str:
     by_kind, episode = data["by_kind"], data["episode"]
     typed = {k: v for k, v in by_kind.items()
-             if any(not r.get("generic") for lst in v.values() for r in lst)}
+             if any(_carries(r) for lst in v.values() for r in lst)}
     multi = [k for k, v in typed.items() if _sources(k, v, episode) >= 2]
     trap_typed = [k for k, v in typed.items()
-                  if any(not r.get("generic") for r in v["trap"])]
+                  if any(_carries(r) for r in v["trap"])]
 
     out: list[str] = []
     w = out.append
@@ -270,7 +267,8 @@ def render(data: dict, rows: list[dict], families: dict, parser_rev: str) -> str
     w(f"- **{len(multi)}** of them arrive on **two or more independent sources**")
     w("  and can therefore be corroborated across observers.")
     w(f"- **{len(trap_typed)}** are carried by a typed SNMP-trap rule "
-      f"(3 before the A9 audit, {len(trap_typed)} after).")
+      f"(3 before the A9 trap audit, 7 after it, {len(trap_typed)} since the "
+      f"A9b config-change follow-up).")
     w(f"- **{len(typed) - len(multi)}** are single-source today — the list below")
     w("  says which, and the audit section says why.")
     w("")
@@ -284,7 +282,7 @@ def render(data: dict, rows: list[dict], families: dict, parser_rev: str) -> str
         vendors: set[str] = set()
         fids: list[str] = []
         for src in ("syslog", "trap"):
-            live = [r for r in slot[src] if not r.get("generic")]
+            live = [r for r in slot[src] if _carries(r)]
             cells[src] = _fmt(sorted(r["rule_id"] for r in live))
             for r in live:
                 vendors |= set(r.get("vendors") or ())
@@ -335,6 +333,30 @@ def render(data: dict, rows: list[dict], families: dict, parser_rev: str) -> str
           f"declined that the DEVICE itself flagged at warning or worse. Below "
           f"that floor it stays a searchable log and is never RCA evidence. |")
     w("")
+    shadow_rows = [r for r in rows if r.get("shadow")]
+    if shadow_rows:
+        w("## Measured but not emitting (`shadow`)")
+        w("")
+        w("A shadow row is evaluated on real traffic and COUNTED "
+          "(`corr_parser_shadow_hits_total{rule_id}`)")
+        w("and emits nothing. It is NOT coverage and is excluded from every "
+          "count above —")
+        w("it is a finished grammar whose promotion is blocked on something "
+          "other than itself.")
+        w("")
+        w("| Rule | Symptom it would emit | Vendors | Blocked on |")
+        w("|---|---|---|---|")
+        for row in shadow_rows:
+            w(f"| `{row['rule_id']}` | `{row['kind']}` | "
+              f"{_fmt(sorted(row.get('vendors') or ()))} | "
+              "`%SYS-5-CONFIG_I` is 35 of the 100 noise slots of the ratified "
+              "V1 workload profile (`scripts/scale-miniladder.py "
+              "EVENT_MIX_NOISE`), declared there as a line that never "
+              "classifies. Emitting would re-classify a third of the V1 "
+              "background — a semantic change to the profile every "
+              "CORRELIX_REFERENCE_CAPACITY_V1 number was measured on. "
+              "Promotion is `shadow: false` once that profile is versioned. |")
+        w("")
     w("## Audited and NOT promoted (A9)")
     w("")
     w("Every symptom below has a real trap. Each is left as a generic")
@@ -344,6 +366,65 @@ def render(data: dict, rows: list[dict], families: dict, parser_rev: str) -> str
     w("|---|---|---|---|")
     for symptom, traps, indexed, why in KEEP_AS_ALARM:
         w(f"| {symptom} | {traps} | {indexed} | {why} |")
+    w("")
+    w("## A9b — the finding A9 recorded, and closed")
+    w("")
+    w("A9 left one verdict deliberately open: a **config change** is the "
+      "highest-yield")
+    w("change-correlation input there is, all four of its OIDs resolve in the "
+      "vendored")
+    w("index, and it was nevertheless *invisible* — `ciscoConfigManEvent` and")
+    w("`entConfigChange` were seeded `notice` in `gen_index.py SEVERITY_HINT`, "
+      "BELOW")
+    w("`ALARM_SEVERITY_FLOOR`, so they were not even generic `device_alarm`s; "
+      "and the")
+    w("syslog half (`%SYS-5-CONFIG_I`, severity notice) fell the same way. A9 "
+      "would not")
+    w("open it because typing a symptom needs a `kind`, and **a kind no "
+      "signature")
+    w("template names is inert evidence**.")
+    w("")
+    w("A9b closes it in the order the change had to happen:")
+    w("")
+    w("1. **The severity seed** — config-change AND hardware/environment "
+      "notifications")
+    w("   are seeded `warning` (their recovery twins `info`), so they clear the "
+      "alarm")
+    w("   floor at all. Pinned by `src/correlation/test_config_change_symptom.py` "
+      "against")
+    w("   the checked-in index *and* end to end through the trap producer.")
+    w("2. **The kind** — `device_config_change` (entity `device`, state "
+      "`changed`), on")
+    w("   BOTH observers: `syslog.config.change` (IOS/NX-OS `CONFIG_I`, EOS "
+      "ConfigAgent,")
+    w("   Junos `UI_COMMIT`) and `trap.config.change`. The SYSLOG half ships")
+    w("   `shadow: true` — counted, emitting nothing — because that line is a "
+      "third of")
+    w("   the ratified V1 workload profile's declared noise; see the shadow "
+      "table")
+    w("   above. The trap half emits: V1 injects syslog only, so it "
+      "re-classifies")
+    w("   nothing. `user` and `source` ride as")
+    w("   attributes and NEVER as grounding tokens — a username is not an")
+    w("   infrastructure identity, and tokening `admin` would weld every box "
+      "that")
+    w("   operator ever touched into one correlation object (tracker 168).")
+    w("3. **The consumer** — five signature templates name it as an OPTIONAL "
+      "clause")
+    w("   (BGP / OSPF / IS-IS adjacency, the SD-WAN change-induced family, and "
+      "the")
+    w("   security hardening-drift story, where it is the only evidence that "
+      "can DATE")
+    w("   a standing posture failure). Optional and control-plane: it raises "
+      "coverage,")
+    w("   it can never supply the independent second plane a confirmation "
+      "needs.")
+    w("")
+    w("It is emitted at `info`, below `EngineConfig.severity_open_floor`, so a "
+      "fleet")
+    w("reconfiguration cannot manufacture RCA objects — a change can only join "
+      "an")
+    w("object a real fault already opened.")
     w("")
     w("### The anti-fabrication rule this audit followed")
     w("")

@@ -32,6 +32,17 @@ version: 1
 # HAND-BUMPED on any rule change; rides on every signal as `parser_rev`. Paired
 # with the COMPUTED rules_hash: the constant is the intent, the hash the proof.
 #
+# 2026-09-02-a9b — the A9 FOLLOW-UP: `device_config_change`, the symptom the
+# audit found invisible. Two rules (`syslog.config.change`, `trap.config.change`)
+# for one symptom on two observers, and the MIB severity seed that lets the trap
+# half reach the engine at all (`gen_index.py SEVERITY_HINT`: config-change and
+# hardware/environment notifications were `notice`/unhinted, i.e. BELOW
+# `ALARM_SEVERITY_FLOOR`). The kind is consumed as an OPTIONAL clause by the
+# adjacency families and the security hardening-drift story, so it is corroborating
+# evidence and never a verdict of its own; `severity: info` keeps it below
+# `severity_open_floor`, so it cannot open an RCA object by itself. No existing
+# rule's grammar moved.
+#
 # 2026-09-02-a9 — the TRAP-COVERAGE audit (the tracker-184 exercise applied to
 # SNMP traps): four trap rules promoted from the generic device_alarm to the
 # SAME kind/entity/state vocabulary their syslog counterparts emit (OSPF and
@@ -45,7 +56,7 @@ version: 1
 # corpus was restructured and `rules_hash` moved with it, so the human statement
 # moves too: a hash that changed under an unchanged parser_rev is exactly the
 # "someone forgot to bump" case the pairing exists to catch.
-parser_rev: "2026-09-02-a9"
+parser_rev: "2026-09-02-a9b"
 
 # ══ SCHEMA: a `rules:` row ═══════════════════════════════════════════════════
 #
@@ -834,6 +845,139 @@ rules:
         to_port: {var: to_port}
         tag: {var: tag}
 
+  # ── Device configuration change (A9 follow-up) ─────────────────────────────
+  #
+  # WHAT CHANGED? is the first question of every real RCA, and until now the
+  # platform could not answer it from the device's own mouth: a config-change
+  # line is severity notice/info, so it fell THROUGH every typed rule and then
+  # below the generic net's severity floor — classified as nothing at all. This
+  # rule types it as `device_config_change`, the corroborating "a human touched
+  # this box" evidence the adjacency families and the security hardening-drift
+  # story consume as an OPTIONAL clause (catalog.py).
+  #
+  # SEVERITY IS `info`, DELIBERATELY. A change is not a fault; it is context.
+  # `info` keeps it out of `severity_open_floor` (engine.py: a singleton episode
+  # below `high` opens NO object), so a fleet reconfiguration cannot manufacture
+  # RCA objects — it can only join an object some real fault already opened.
+  # It is still stored, searchable and on the timeline, which is the whole ask.
+  #
+  # GROUNDING IS THE DEVICE, AND ONLY THE DEVICE. `user` is the highest-value
+  # attribute here and it must NEVER be a grounding token: a username is not an
+  # infrastructure identity, so tokening `admin` would weld every box in the
+  # estate that admin ever touched into ONE correlation object — tracker 168's
+  # failure mode, at estate scale. It rides as an attr, where the operator and
+  # the "what changed" timeline read it.
+  #
+  # VENDOR SHAPES (doc_claimed — built from vendor documentation, not captured):
+  #   Cisco IOS/XE : %SYS-5-CONFIG_I: Configured from console by admin on vty0
+  #   Cisco NX-OS  : %VSHD-5-VSHD_SYSLOG_CONFIG_I: Configured from vty by admin
+  #                  on 10.1.1.1@pts/0
+  #   Arista EOS   : ConfigAgent: %SYS-5-CONFIG_I: Configured from console by
+  #                  admin on vty1   (appname is the agent, mnemonic in the msg
+  #                  — which is why the guard reads `ctoken_msg_u`, not `tag`)
+  #   Junos        : mgd[…]: UI_COMMIT: User 'admin' requested 'commit'
+  #                  operation (comment: none)
+  - rule_id: syslog.config.change
+    lane: syslog
+    source: syslog
+    kind: device_config_change
+    entity_type: device
+    family: null
+    fidelity_status: doc_claimed
+    vendors: [cisco, arista, juniper]
+    markers: [CONFIG_I, UI_COMMIT]
+    severity: info
+    # SHIPS AS SHADOW (A8): evaluated and COUNTED
+    # (`corr_parser_shadow_hits_total{rule_id}`), emits nothing, falls through.
+    #
+    # WHY, and it is not about the grammar. `%SYS-5-CONFIG_I` is 35 of the 100
+    # NOISE slots of the RATIFIED V1 workload profile
+    # (`scripts/scale-miniladder.py EVENT_MIX_NOISE`) — 33 % of the V1
+    # background — declared there as a line that NEVER classifies. An emitting
+    # rule re-classifies a third of the V1 stream, which is a SEMANTIC CHANGE to
+    # the profile every capacity number in CORRELIX_REFERENCE_CAPACITY_V1 was
+    # measured on, not a parser improvement. Versioning that profile is the
+    # owner's call, so the row ships shadow and the promotion is a one-line
+    # `shadow: false` once a V2 profile exists.
+    #
+    # The TRAP twin (`trap.config.change`) emits: V1 injects syslog only, so it
+    # re-classifies nothing. One symptom, two observers — for now only one of
+    # them speaks.
+    shadow: true
+    # THE GUARD IS FOUR EAGER LITERAL TESTS, ON PURPOSE — this rule sits near the
+    # BOTTOM of the syslog lane, so every line the typed rules above declined
+    # runs it, and the hot path is the line that matches NOTHING.
+    #   * `ctoken` (appname + facility + event_type, upper) and `msg` (raw) are
+    #     both built EAGERLY once per line. `ctoken_msg_u` / `msg_u` are LAZY:
+    #     the first rule that reads one pays `.upper()` on the whole message —
+    #     up to 2 KB, allocated, for every line in the estate. Reading one here
+    #     measured +0.14x on the A3 interpreter-vs-branch-code cost gate.
+    #   * the message half is CASE-SENSITIVE against the raw text, which is
+    #     sound because a syslog MNEMONIC is upper-case on the wire by vendor
+    #     convention (`%SYS-5-CONFIG_I`, `UI_COMMIT`) — that is what makes the
+    #     cheap field usable at all.
+    #   * a homogeneous `any` of simple eager `contains` is FUSED by the
+    #     compiler into one closure with an inline loop (rule_model
+    #     `_fused_contains`), so this is one call, not four.
+    guard:
+      any:
+        # IOS/XE + EOS %SYS-5-CONFIG_I and NX-OS %VSHD-5-VSHD_SYSLOG_CONFIG_I
+        # (the NX-OS mnemonic ENDS in CONFIG_I, so one literal covers both).
+        - {contains: [ctoken, 'CONFIG_I']}
+        # Junos UI_COMMIT / UI_COMMIT_COMPLETED (`mgd` is the appname, so the
+        # mnemonic is in the MESSAGE — hence the msg arms below).
+        - {contains: [ctoken, 'UI_COMMIT']}
+        # …and the same two mnemonics when the vendor puts them in the message
+        # instead of the appname: Arista's `ConfigAgent: %SYS-5-CONFIG_I: …`
+        # and Junos's `mgd[…]: UI_COMMIT: …`.
+        #
+        # NOT an `appname == ConfigAgent` arm: the agent logs more than changes,
+        # and matching the PROCESS rather than the event would claim all of it.
+        - {contains: [msg, 'CONFIG_I']}
+        - {contains: [msg, 'UI_COMMIT']}
+    extract:
+      # WHO. "…by admin on vty0" (Cisco/Arista/NX-OS) | "User 'admin' requested"
+      # (Junos). Bounded: this is untrusted device text on the event loop.
+      user:
+        re:
+          - [msg, '\bby\s+([\w.\-\\@]{1,64})', 1, 'i']
+          - [msg, "\\bUser\\s+'([^'\\n]{1,64})'", 1, 'i']
+      # WHERE FROM. "Configured from console|vty0|nvram|memory|vty". Junos names
+      # no source on the commit line (it is in the separate UI_LOGIN_EVENT), so
+      # it stays EMPTY rather than being guessed — an invented source would be
+      # indistinguishable from an observed one in the timeline.
+      source: {re: [[msg, '\bConfigured\s+from\s+([\w./\-]{1,32})', 1, 'i']]}
+      # WHICH SESSION. "…by admin on vty0" (IOS) | "…on 10.1.1.1@pts/0"
+      # (NX-OS). Part of the identity: two operators committing in the same
+      # millisecond from two sessions are two changes, not one (tracker 198).
+      # ANCHORED ON THE USER TAIL, not on a bare "on": the message is untrusted
+      # device text and the first `on` in some other clause is not a session.
+      line: {re: [[msg, '\bby\s+[\w.\-\\@]{1,64}\s+on\s+([\w.@/\-]{1,48})', 1, 'i']]}
+      # Junos logs the commit TWICE — `UI_COMMIT` when it is requested and
+      # `UI_COMMIT_COMPLETED` when it lands. They are two observations of one
+      # change and must not share an identity, so the completion is its own
+      # method (checked FIRST: `UI_COMMIT_COMPLETED` contains `UI_COMMIT`).
+      method:
+        case:
+          - {when: {contains: [ctoken_msg_u, 'UI_COMMIT_COMPLETED']}, value: commit_completed}
+          - {when: {contains: [ctoken_msg_u, 'UI_COMMIT']}, value: commit}
+          - {when: {always: true}, value: config_i}
+      state: {const: changed}
+    emit:
+      kind: device_config_change
+      metric: device_config_change
+      modality: control_plane
+      entity: {type: device, id: '{host}'}
+      native_id: '{host}|config_change|{method}|{source|?}|{user|?}|{line|?}|{ts_ms}'
+      tokens: [{t: '{host}'}]
+      attrs:
+        user: {var: user}
+        source: {var: source}
+        line: {var: line}
+        method: {var: method}
+        state: {var: state}
+        tag: {var: tag}
+
   # Generic device-alarm fallback (#80 §4 keystone) — the SAFETY NET, and the
   # LAST syslog rule by construction. Nothing above recognized this event, but
   # if the DEVICE itself flagged it at warning or worse it is still real
@@ -1559,6 +1703,114 @@ rules:
         group: {var: group}
         interface: {var: ifname}
         state: {var: role}
+        trap_oid: {var: oid}
+        event_type: {var: etype}
+        authenticated: {var: authed}
+
+  # Device configuration change, seen by SNMP — the trap twin of
+  # `syslog.config.change` (same kind, same entity shape, same `changed` state:
+  # one symptom, two observers).
+  #
+  # WHAT THE SEVERITY SEED DOES, PRECISELY. This rule does NOT depend on it: a
+  # typed trap rule is matched on the OID/name before the severity-floor net is
+  # reached, and the severity it emits is its own `info`. The seed
+  # (`gen_index.py SEVERITY_HINT`, config-change notifications `notice` →
+  # `warning`) matters for the trap's STORED severity and for every
+  # config-change notification this rule does not name — without it they land
+  # below `ALARM_SEVERITY_FLOOR` and are not even generic `device_alarm`s. The
+  # same seed is what finally admits the hardware/environment traps, which have
+  # no typed kind to be promoted to (see the coverage matrix).
+  #
+  # ANTI-FABRICATION: the four OIDs are the ones the vendored index resolves
+  # (CISCO-CONFIG-MAN-MIB ×2, JUNIPER-CFGMGMT-MIB, ENTITY-MIB). Nokia's
+  # TIMETRA-SYSTEM-MIB config traps have no NOTIFICATION-TYPE OID in the index,
+  # so they are matched on the MIB-DECODED `event_type` (#32) instead.
+  - rule_id: trap.config.change
+    lane: trap
+    source: trap
+    kind: device_config_change
+    entity_type: device
+    family: null
+    fidelity_status: doc_claimed
+    vendors: [standard, cisco, juniper, nokia]
+    severity: info
+    guard:
+      any:
+        - equals_any:
+            - oid
+            - ['1.3.6.1.4.1.9.9.43.2.0.1',    # ciscoConfigManEvent
+               '1.3.6.1.4.1.9.9.43.2.0.2',    # ccmCLIRunningConfigChanged
+               '1.3.6.1.4.1.2636.4.5.0.1',    # jnxCmCfgChange
+               '1.3.6.1.2.1.47.2.0.1']        # entConfigChange
+        - equals_any:
+            - name
+            - [ciscoConfigManEvent, ccmCLIRunningConfigChanged,
+               jnxCmCfgChange, entConfigChange]
+        # The MIB-decoded envelope, for a config-change notification whose
+        # module is not vendored (Nokia tmnxConfigModify/Create/Delete today).
+        # BOTH halves are required on purpose: `ospfIfConfigError` and
+        # `tmnxPeConfigurationError` contain "config" and are FAULTS, not
+        # changes — they must stay generic alarms.
+        - all:
+            - any:
+                - {contains: [etype, config]}
+                - {contains: [etype, cfg]}
+            - any:
+                - {contains: [etype, change]}
+                - {contains: [etype, commit]}
+                - {contains: [etype, modif]}
+                - {contains: [etype, create]}
+                - {contains: [etype, delete]}
+    extract:
+      # WHO — ccmHistoryEventTerminalUser / ccmHistoryEventRcpUser (Cisco),
+      # jnxCmCfgChgEventUser (Junos). Never a grounding token; see the syslog
+      # twin for why.
+      user:
+        alt:
+          - {vb: ['1.3.6.1.4.1.9.9.43.1.1.6.1.8', '1.3.6.1.4.1.9.9.43.1.1.6.1.14',
+                  '1.3.6.1.4.1.2636.3.18.1.7.1.5']}
+          - {vbname: [terminaluser, rcpuser, cfgchgeventuser, chguser]}
+      # WHERE FROM — ccmHistoryEventCommandSource (enum commandLine(1)/snmp(2)),
+      # ccmHistoryEventConfigSource, jnxCmCfgChgEventSource. `resolveVarbind`
+      # renders a decoded enum as `label(raw)` and an agent with the MIB
+      # unloaded sends the bare integer, so the label is taken when present and
+      # the raw value is kept otherwise — never a guessed label.
+      source_raw:
+        alt:
+          - {vb: ['1.3.6.1.4.1.9.9.43.1.1.6.1.3', '1.3.6.1.4.1.9.9.43.1.1.6.1.4',
+                  '1.3.6.1.4.1.2636.3.18.1.7.1.4']}
+          - {vbname: [commandsource, configsource, cfgchgeventsource]}
+        lower: true
+      source_word: {re: [['$source_raw', '([a-z]+)', 1, '']]}
+      source:
+        case:
+          - {when: {truthy: '$source_word'}, value: '{source_word}'}
+          - {when: {always: true}, value: '{source_raw}'}
+      # WHERE TO — ccmHistoryEventConfigDestination: running vs startup is the
+      # difference between "someone is editing" and "someone made it permanent".
+      dest_raw:
+        alt:
+          - {vb: ['1.3.6.1.4.1.9.9.43.1.1.6.1.5']}
+          - {vbname: [configdestination, cfgdestination]}
+        lower: true
+      dest_word: {re: [['$dest_raw', '([a-z]+)', 1, '']]}
+      dest:
+        case:
+          - {when: {truthy: '$dest_word'}, value: '{dest_word}'}
+          - {when: {always: true}, value: '{dest_raw}'}
+      state: {const: changed}
+    emit:
+      kind: device_config_change
+      metric: device_config_change
+      modality: control_plane
+      entity: {type: device, id: '{device}'}
+      native_id: '{device}|trap_config_change|{source|?}|{user|?}|{dest|?}|{ts_ms}'
+      tokens: [{t: '{device}'}]
+      attrs:
+        user: {var: user}
+        source: {var: source}
+        destination: {var: dest}
+        state: {var: state}
         trap_oid: {var: oid}
         event_type: {var: etype}
         authenticated: {var: authed}

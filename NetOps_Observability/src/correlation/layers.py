@@ -48,6 +48,10 @@ _KIND_LAYER: dict[str, CausalLayer] = {
     # device / infra health
     "device_resource_anomaly": CausalLayer.DEVICE,
     "metric_anomaly": CausalLayer.DEVICE,
+    # A configuration change is an act on the BOX, not on a link or a protocol,
+    # and it can cause a symptom at any layer above — which is exactly what
+    # DEVICE (0, the bottom of the stack) encodes as a direction prior.
+    "device_config_change": CausalLayer.DEVICE,
     # physical (L1)
     "optics_power_low": CausalLayer.PHYSICAL,
     "if_errors": CausalLayer.PHYSICAL,

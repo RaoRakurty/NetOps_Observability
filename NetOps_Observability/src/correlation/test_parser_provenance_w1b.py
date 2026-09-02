@@ -190,6 +190,18 @@ RULE_FIXTURES: dict[str, tuple[str, dict]] = {
         trap_oid="1.3.6.1.4.1.9.9.999.0.1", trap_name="vendorAlarm",
         varbinds=[{"oid": "1.3.6.1.4.1.9.9.999.1.1", "name": "alarmText",
                    "value": "PSU 1 failed"}])),
+    # -- A9b: device configuration change, on both observers ------------------
+    # The syslog row is SHADOW (see events.yaml): its guard matches this line
+    # and it emits nothing, so the tests below read `SHADOW_HITS` for it rather
+    # than a Signal. The fixture is still required — an unexercised shadow row
+    # is a grammar nobody is measuring, which is the opposite of the point.
+    "syslog.config.change": ("control", syslog_ev(
+        "%SYS-5-CONFIG_I", "Configured from console by admin on vty0")),
+    "trap.config.change": ("trap", trap_ev(
+        trap_oid="1.3.6.1.4.1.9.9.43.2.0.1", trap_name="ciscoConfigManEvent",
+        event_type="cisco_config_man_event",
+        varbinds=[{"oid": "1.3.6.1.4.1.9.9.43.1.1.6.1.8.7",
+                   "name": "ccmHistoryEventTerminalUser", "value": "admin"}])),
 }
 
 PRODUCERS = {
@@ -280,9 +292,21 @@ def test_every_emitted_kind_is_owned_by_a_rule_or_another_lane(kind):
 
 @pytest.mark.parametrize("rule_id", sorted(RULE_FIXTURES))
 def test_every_rule_stamps_its_own_provenance(rule_id):
+    rule = P.RULES_BY_ID[rule_id]
+    if rule.shadow:
+        # A8: a shadow row is EVALUATED and COUNTED and emits nothing, so there
+        # is no signal to carry provenance. What must hold is that its fixture
+        # reaches it (otherwise the row is unmeasured) and that it changed
+        # nothing — asserted here rather than skipped, so a shadow row cannot
+        # quietly opt out of this file's coverage.
+        before = P.SHADOW_HITS[rule_id]
+        assert fire(rule_id) is None, (
+            f"{rule_id} is a shadow row and must emit nothing")
+        assert P.SHADOW_HITS[rule_id] == before + 1, (
+            f"the fixture for {rule_id!r} never reaches its guard")
+        return
     sig = fire(rule_id)
     assert sig is not None, f"fixture for {rule_id!r} classified as nothing"
-    rule = P.RULES_BY_ID[rule_id]
     assert sig.attrs["rule_id"] == rule_id, (
         f"branch stamped {sig.attrs['rule_id']!r} but the fixture targets "
         f"{rule_id!r} — the fixture fires the wrong branch, or the branch reads "
@@ -299,8 +323,10 @@ def test_every_emitted_kind_carries_a_rule_id(kind):
     parser emits is ever anonymous."""
     fired = [fire(rid) for rid, r in
              ((rid, P.RULES_BY_ID[rid]) for rid in sorted(RULE_FIXTURES))
-             if r.kind == kind]
-    assert fired, f"no fixture emits {kind!r}"
+             if r.kind == kind and not r.shadow]
+    assert fired, (
+        f"no fixture emits {kind!r} — every rule that CAN emit it is a shadow "
+        "row, so the kind is unreachable in production")
     for sig in fired:
         assert sig is not None
         assert sig.attrs.get("rule_id") in P.RULES_BY_ID
@@ -358,6 +384,8 @@ def test_the_tracker_198_pinned_identities_still_hold():
 def test_bumping_parser_rev_never_re_identifies_a_signal(monkeypatch, rule_id):
     """The whole point of keeping provenance out of the identity key: a rule
     revision must not orphan the signals already stored."""
+    if P.RULES_BY_ID[rule_id].shadow:
+        pytest.skip("shadow row: it emits no signal, so none can be re-identified")
     before = fire(rule_id)
     assert before is not None
     monkeypatch.setattr(P, "PARSER_REV", "9999-12-31-mutant")
@@ -383,7 +411,17 @@ def test_bumping_parser_rev_never_re_identifies_a_signal(monkeypatch, rule_id):
 #: only reachable by traps that previously fell to the generic alarm.
 #: Re-pinning it is a deliberate act, and `parser_rev` moves with it.
 RULES_HASH_A9 = "5ebe16c3b9b6f06fe5db50954b4d2fd7071d7f89d0660b36e7e9b1e1d659021f"
-RULES_HASH_A3 = RULES_HASH_A9
+#:
+#: A9b (the config-change follow-up) adds TWO more rows — `syslog.config.change`
+#: and `trap.config.change`, one symptom (`device_config_change`) on two
+#: observers — so the table moved again and so does this pin. Again no EXISTING
+#: rule's grammar changed: the whole pre-A9b corpus replays byte-for-byte except
+#: the single `entConfigChange` trap fixture A9 recorded as a generic alarm,
+#: which is now typed (that entry declares the baseline skip and carries its new
+#: recorded output). The syslog half ships `shadow: true` — it is counted and
+#: emits nothing — so the SYSLOG lane's emission is byte-identical to A9's.
+RULES_HASH_A9B = "a0be9de50a0657bc8a8a029305b23909cf5a09d72179f294b96cec889426eade"
+RULES_HASH_A3 = RULES_HASH_A9B
 
 
 def _guard_patterns(node) -> list[str]:
@@ -517,14 +555,23 @@ def test_an_undeclared_family_never_reads_as_validated():
 # ══ 6. the screen is DERIVED from the table ═════════════════════════════════
 
 def test_the_guard_markers_are_derived_from_the_rule_table():
+    """…from the EMITTING syslog rules. A9b: a `shadow` row emits nothing, so
+    widening the ingest screen for it would admit more raw lines into both
+    producers and buy no evidence at all — it is observed only on lines the
+    screen already admits for some other rule. Re-derived here independently of
+    `producers._SCREEN_RULES`, so the exclusion cannot be assumed."""
     expected = []
     for r in RULES:
-        if r.lane != "syslog":
+        if r.lane != "syslog" or r.shadow:
             continue
         for m in r.markers:
             if m not in expected:
                 expected.append(m)
     assert list(P._CP_GUARD_MARKERS) == expected
+    leaked = {m for r in RULES if r.shadow for m in r.markers} - set(expected)
+    assert leaked or not any(r.shadow for r in RULES), (
+        "a shadow row's markers are all also declared by an emitting rule — "
+        "this test would pass vacuously; pick a different assertion")
 
 
 def test_the_guard_patterns_are_derived_from_the_rule_table():
@@ -584,9 +631,19 @@ def test_the_screen_still_admits_every_rule_fixture():
     these rules classifies. Held at INFO severity so the generic device-alarm
     net cannot mask a hole in the derived markers."""
     for rule_id, (lane, ev) in sorted(RULE_FIXTURES.items()):
-        if lane == "trap" or P.RULES_BY_ID[rule_id].generic:
+        rule = P.RULES_BY_ID[rule_id]
+        if lane == "trap" or rule.generic:
             continue
         probe = dict(ev, severity="info")
+        if rule.shadow:
+            # A9b: a shadow row emits nothing, so the screen is NOT widened for
+            # it and rejecting its line loses no signal. Asserted in the
+            # REJECTING direction so the exclusion is a stated contract rather
+            # than a hole in this test's coverage.
+            assert not P.syslog_promotable(probe), (
+                f"{rule_id!r} is a shadow row — the screen must not be widened "
+                "for a rule that cannot emit")
+            continue
         assert P.syslog_promotable(probe), (
             f"the derived screen rejects {rule_id!r}: {ev['message']!r}")
 

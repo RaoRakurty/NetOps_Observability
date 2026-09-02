@@ -3,7 +3,7 @@
 
 # Telemetry Coverage Matrix — what Correlix recognizes
 
-Derived from `telemetry-catalog/events.yaml` at **parser_rev `2026-09-02-a9`**, plus the metric-episode lane reconstructed from
+Derived from `telemetry-catalog/events.yaml` at **parser_rev `2026-09-02-a9b`**, plus the metric-episode lane reconstructed from
 `src/backend/collectors/metric_events.go` (`rcaMetricFamilies`) and
 `src/correlation/main.py` (`metric_identity`). Nothing here is written by
 hand: `coverage_matrix.py --check` fails CI if this file and the catalog
@@ -19,12 +19,12 @@ engine treats them as such. Fidelity is the catalog's ladder
 
 ## Summary
 
-- **25** typed symptoms (the two severity-floor `device_alarm`
+- **26** typed symptoms (the two severity-floor `device_alarm`
   nets are the safety net, not coverage, and are excluded).
 - **8** of them arrive on **two or more independent sources**
   and can therefore be corroborated across observers.
-- **7** are carried by a typed SNMP-trap rule (3 before the A9 audit, 7 after).
-- **17** are single-source today — the list below
+- **8** are carried by a typed SNMP-trap rule (3 before the A9 trap audit, 7 after it, 8 since the A9b config-change follow-up).
+- **18** are single-source today — the list below
   says which, and the audit section says why.
 
 ## Matrix
@@ -33,6 +33,7 @@ engine treats them as such. Fidelity is the catalog's ladder
 |---|---|---|---|---|---|
 | **`bgp_adjacency_change`** | `syslog.bgp.adjacency_change`, `syslog.bgp.notification` | `trap.bgp.adjacency_change`, `trap.bgp.adjacency_change.event_type` | `bgp_state_anomaly` | `any`, `arista`, `cisco`, `juniper`, `standard` | syslog: code · trap: code |
 | `bgp_route_churn` | `syslog.bgp.route_churn` | — | — | `cisco`, `juniper` | syslog: doc_claimed |
+| `device_config_change` | — | `trap.config.change` | — | `cisco`, `juniper`, `nokia`, `standard` | trap: doc_claimed |
 | `device_restart` | — | `trap.device.restart`, `trap.device.restart.event_type` | — | `any`, `standard` | trap: code |
 | `dom_lane_bias_anomaly` | `syslog.port.dom_lane_bias_anomaly` | — | — | `generic` | syslog: code |
 | `dom_rx_power_low` | `syslog.port.dom_rx_power_low` | — | — | `generic` | syslog: code |
@@ -102,6 +103,16 @@ lane**, which is exactly why its trap twin matters.
 | `syslog.generic.device_alarm` | syslog | Anything the typed rules declined that the DEVICE itself flagged at warning or worse. Below that floor it stays a searchable log and is never RCA evidence. |
 | `trap.generic.device_alarm` | trap | Anything the typed rules declined that the DEVICE itself flagged at warning or worse. Below that floor it stays a searchable log and is never RCA evidence. |
 
+## Measured but not emitting (`shadow`)
+
+A shadow row is evaluated on real traffic and COUNTED (`corr_parser_shadow_hits_total{rule_id}`)
+and emits nothing. It is NOT coverage and is excluded from every count above —
+it is a finished grammar whose promotion is blocked on something other than itself.
+
+| Rule | Symptom it would emit | Vendors | Blocked on |
+|---|---|---|---|
+| `syslog.config.change` | `device_config_change` | `arista`, `cisco`, `juniper` | `%SYS-5-CONFIG_I` is 35 of the 100 noise slots of the ratified V1 workload profile (`scripts/scale-miniladder.py EVENT_MIX_NOISE`), declared there as a line that never classifies. Emitting would re-classify a third of the V1 background — a semantic change to the profile every CORRELIX_REFERENCE_CAPACITY_V1 number was measured on. Promotion is `shadow: false` once that profile is versioned. |
+
 ## Audited and NOT promoted (A9)
 
 Every symptom below has a real trap. Each is left as a generic
@@ -114,10 +125,46 @@ Every symptom below has a real trap. Each is left as a generic
 | bgp_route_churn | CISCO-BGP4-MIB cbgpPeer2PrefixThresholdExceeded | no | CISCO-BGP4-MIB compiles no notifications into the vendored index, so there is no OID here that could be checked against a real definition, and per-prefix churn has no trap form at all (it is BMP/BGP-UPDATE data). The BGP `.event_type` twin already types any MIB-decoded vendor BGP transition. |
 | vtep_state_change | — none | n/a | VXLAN/EVPN has no IETF notification MIB; NX-OS reports VTEP/NVE liveness on syslog only. Nothing to promote. |
 | transceiver / DOM / FEC / PCS (12 port kinds) | ENTITY-SENSOR-MIB entSensorThresholdNotification, ARISTA-ENTITY-SENSOR-MIB aristaEntSensorAlarm | no | A sensor-threshold trap says *a sensor crossed a threshold*; it does not say pre-FEC BER, lane bias, deskew or LOS. Mapping one onto a specific optics kind would be a guess presented as evidence. They stay generic alarms and the DOM metric lane carries the real signal. |
-| config change (a security-lane input) | CISCO-CONFIG-MAN-MIB ciscoConfigManEvent · ccmCLIRunningConfigChanged · JUNIPER-CFGMGMT-MIB jnxCmCfgChange · ENTITY-MIB entConfigChange | yes — index-verified | **The one gap worth opening.** All four OIDs resolve in the vendored index, and a config change is the highest-yield change-correlation input there is. It is NOT promoted here because it needs a `kind` no signature template names, and a kind nothing consumes is inert evidence. Worse, it is invisible today: `gen_index.py`'s severity seed gives `ciscoConfigManEvent` **notice**, which is BELOW `ALARM_SEVERITY_FLOOR` — so it does not even become a generic alarm. Two-step fix, in order: (1) seed these notifications at `warning` in `gen_index.py SEVERITY_HINT` so they surface as `device_alarm`; (2) add a `device_config_change` kind together with the catalog clause that consumes it. Neither is in this change's bounded context. |
-| hardware / environment (fan, PSU, FRU, over-temperature) | CISCO-ENTITY-FRU-CONTROL-MIB cefc* · CISCO-ENVMON-MIB ciscoEnvMon* · ENTITY-STATE-MIB entStateOperDisabled · JUNIPER-MIB jnxFanFailure / jnxPowerSupplyFailure · TIMETRA-CHASSIS-MIB tmnxEq* | yes — index-verified | There is no syslog-typed kind for environmental health to pair with, so promoting these would mean inventing kinds. They belong as generic `device_alarm`s — but the same severity-seed gap applies: every one of these notifications carries NO severity hint and therefore defaults to `notice`, below the floor. Seeding them at `warning`/`err` in `gen_index.py` is a one-line, high-value change outside this scope. |
+| hardware / environment (fan, PSU, FRU, over-temperature) | CISCO-ENTITY-FRU-CONTROL-MIB cefc* · CISCO-ENVMON-MIB ciscoEnvMon* · ENTITY-STATE-MIB entStateOperDisabled · JUNIPER-MIB jnxFanFailure / jnxPowerSupplyFailure · TIMETRA-CHASSIS-MIB tmnxEq* | yes — index-verified | There is no syslog-typed kind for environmental health to pair with, so promoting these would mean inventing kinds. They belong as generic `device_alarm`s — and since **A9b they actually ARE ones**: every one of these notifications carried NO severity hint, defaulted to `notice` and therefore sat below `ALARM_SEVERITY_FLOOR`, so a failed power supply or an over-temperature chassis reached the engine as nothing at all. `gen_index.py SEVERITY_HINT` now seeds the FAULTS at `warning` and their recovery twins (`jnxFanOK`, `cefcFRUInserted`, `entStateOperEnabled`) at `info` — the same split `linkDown`/`linkUp` has always had. Typing them further would still be a guess: a sensor trap says a threshold moved, not which optic or which lane. |
 | authenticationFailure | SNMPv2-MIB authenticationFailure (1.3.6.1.6.3.1.1.5.5) | yes — index-verified | A security-lane symptom with no network-fault counterpart; it is hinted `warning`, so it already becomes a `device_alarm` and is searchable. Routing it further is the security programme's call (network-first scope decision), not the parser's. |
 | link_state_change · ifAdminStatus/ifOperStatus enrichment | IF-MIB linkDown/linkUp varbinds | yes — already classified | AUDITED AND DEFERRED. Reading `ifAdminStatus` would let the engine tell an administratively-shut port from a fault, and `ifOperStatus` would distinguish `lowerLayerDown`. Both change the ATTRS and the state of an already-shipping rule, which re-identifies every link trap already stored and breaks the frozen parity baseline — the same class of change as the declared `bgp_adjacency_change` divergence. It needs its own corpus re-bake, not a side effect of this audit. |
+
+## A9b — the finding A9 recorded, and closed
+
+A9 left one verdict deliberately open: a **config change** is the highest-yield
+change-correlation input there is, all four of its OIDs resolve in the vendored
+index, and it was nevertheless *invisible* — `ciscoConfigManEvent` and
+`entConfigChange` were seeded `notice` in `gen_index.py SEVERITY_HINT`, BELOW
+`ALARM_SEVERITY_FLOOR`, so they were not even generic `device_alarm`s; and the
+syslog half (`%SYS-5-CONFIG_I`, severity notice) fell the same way. A9 would not
+open it because typing a symptom needs a `kind`, and **a kind no signature
+template names is inert evidence**.
+
+A9b closes it in the order the change had to happen:
+
+1. **The severity seed** — config-change AND hardware/environment notifications
+   are seeded `warning` (their recovery twins `info`), so they clear the alarm
+   floor at all. Pinned by `src/correlation/test_config_change_symptom.py` against
+   the checked-in index *and* end to end through the trap producer.
+2. **The kind** — `device_config_change` (entity `device`, state `changed`), on
+   BOTH observers: `syslog.config.change` (IOS/NX-OS `CONFIG_I`, EOS ConfigAgent,
+   Junos `UI_COMMIT`) and `trap.config.change`. The SYSLOG half ships
+   `shadow: true` — counted, emitting nothing — because that line is a third of
+   the ratified V1 workload profile's declared noise; see the shadow table
+   above. The trap half emits: V1 injects syslog only, so it re-classifies
+   nothing. `user` and `source` ride as
+   attributes and NEVER as grounding tokens — a username is not an
+   infrastructure identity, and tokening `admin` would weld every box that
+   operator ever touched into one correlation object (tracker 168).
+3. **The consumer** — five signature templates name it as an OPTIONAL clause
+   (BGP / OSPF / IS-IS adjacency, the SD-WAN change-induced family, and the
+   security hardening-drift story, where it is the only evidence that can DATE
+   a standing posture failure). Optional and control-plane: it raises coverage,
+   it can never supply the independent second plane a confirmation needs.
+
+It is emitted at `info`, below `EngineConfig.severity_open_floor`, so a fleet
+reconfiguration cannot manufacture RCA objects — a change can only join an
+object a real fault already opened.
 
 ### The anti-fabrication rule this audit followed
 

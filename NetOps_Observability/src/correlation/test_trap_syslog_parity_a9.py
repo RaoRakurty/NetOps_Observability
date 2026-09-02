@@ -181,10 +181,19 @@ def test_the_trap_lane_has_no_prefilter_and_the_screen_stays_syslog_derived():
         "a trap-side pre-filter appeared: derive its literals from the "
         "`lane == 'trap'` rules (as _CP_GUARD_MARKERS does for syslog) and "
         "extend this test to re-derive them independently")
-    # The syslog screen is table-derived and covers ONLY syslog rows: a trap
-    # row's markers must never leak into it (they screen a different haystack).
-    syslog_markers = {m for r in P.RULES if r.lane == "syslog" for m in r.markers}
+    # The syslog screen is table-derived and covers ONLY the syslog rows that
+    # can EMIT: a trap row's markers must never leak into it (they screen a
+    # different haystack), and neither may a `shadow` row's (A9b) — a row that
+    # emits nothing must not widen the gate that admits raw lines into the
+    # classifiers, so it is observed only on lines already admitted for some
+    # other rule.
+    syslog_markers = {m for r in P.RULES
+                      if r.lane == "syslog" and not r.shadow for m in r.markers}
     assert set(P._CP_GUARD_MARKERS) == syslog_markers
+    shadow_markers = {m for r in P.RULES if r.shadow for m in r.markers}
+    assert not (shadow_markers & set(P._CP_GUARD_MARKERS)), (
+        "a shadow rule's markers reached the screen — it emits nothing, so the "
+        "only effect would be admitting more raw syslog into both producers")
     assert all(m == m.upper() for m in P._CP_GUARD_MARKERS)
     trap_markers = {m for r in P.RULES if r.lane == "trap" for m in r.markers}
     assert not (trap_markers & set(P._CP_GUARD_MARKERS)), (

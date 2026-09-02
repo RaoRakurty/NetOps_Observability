@@ -82,6 +82,7 @@ the regression guard that keeps the catalog honest.
 python3 -m pytest test_events.py -q      # grammar parsing + the correlation invariant
 python3 -m pytest test_bake_rules.py -q  # the rule table + its bake
 python3 -m pytest test_trap_rules_a9.py -q   # the trap rows, replayed through the producer
+python3 -m pytest test_config_change_rules.py -q  # the A9b config-change rows, likewise
 python3 bake_rules.py                    # regenerate src/correlation/parser_rules.py
 python3 bake_rules.py --check            # CI drift guard (exit 1 if stale)
 python3 coverage_matrix.py               # regenerate docs/design/telemetry-coverage-matrix.md
@@ -223,3 +224,79 @@ lane reconstructed from the collector's RCA allowlist and `metric_identity`.
 It is the answer to "what does Correlix recognize?", it is drift-guarded, and
 the two Go/engine tables it mirrors are re-derived and compared in
 `test_coverage_matrix.py`.
+
+
+---
+
+## A9b — the config-change symptom, and why a severity hint is a product decision
+
+A9 recorded a finding it would not act on: a **config change is invisible, not
+merely untyped**. `gen_index.py SEVERITY_HINT` seeded `ciscoConfigManEvent` and
+`entConfigChange` at `notice`; the Go receiver defaults an *unhinted*
+notification to `notice` too; and `notice` (5) is BELOW
+`producers.ALARM_SEVERITY_FLOOR` (4). A trap under that floor is stored and
+searchable and **never reaches the engine — not even as the generic
+`device_alarm`**. The syslog half was invisible for the mirror-image reason:
+`%SYS-5-CONFIG_I` is severity notice, so it fell through every typed rule and
+then below the same floor. A9 left it because typing it needs a `kind`, and a
+kind no signature names is inert.
+
+A9b closes it, in the order the change had to happen.
+
+**1. The seed.** Config-change *and* hardware/environment notifications (fan,
+PSU, temperature, FRU, entity sensor) are seeded `warning`; their recovery twins
+(`jnxFanOK`, `cefcFRUInserted`, `entStateOperEnabled`) `info` — the split
+`linkDown`/`linkUp` has always had. The generator's merge was also fixed: it
+preserved a node's *existing* hint over the table, so a hint CHANGE could never
+propagate to an OID the index already held. That is why `entConfigChange` stayed
+pinned below the floor.
+
+**2. The rows, and the V1 versioning rule.** `syslog.config.change` and
+`trap.config.change` — one symptom
+(`device_config_change`, entity `device`, state `changed`), two observers, the
+A9 contract. `user` / `source` / `line` / `destination` are ATTRIBUTES and never
+grounding tokens: a username is not an infrastructure identity, and tokening
+`admin` would weld every box that operator ever touched into one correlation
+object (tracker 168, at estate scale). Fidelity `doc_claimed` on both rows —
+the fixtures are built from vendor documentation and MIB definitions, not
+captured off a device.
+
+> **THE RULE, and it applies to every future row: a row that would
+> re-classify a V1 noise arm ships as `shadow` until the profile is versioned.**
+>
+> The ratified V1 workload profile (`scripts/scale-miniladder.py`
+> `EVENT_MIX_NOISE`) declares specific lines as noise that NEVER classifies —
+> `%SYS-5-CONFIG_I` is 35 of its 100 noise slots, a third of the V1 background.
+> A rule that emits on one of them does not merely add coverage: it changes what
+> the profile MEANS, and every capacity number in
+> `CORRELIX_REFERENCE_CAPACITY_V1` was measured against the old meaning. That is
+> a profile version, which is the owner's call — not a side effect of a parser
+> change. So `syslog.config.change` ships `shadow: true`: evaluated, COUNTED as
+> `corr_parser_shadow_hits_total{rule_id}`, emitting nothing. Its grammar is
+> fully fixtured and tested under a `promoted()` context (the tests run it as if
+> `shadow: false`), so promotion is a one-line flip with no unproven grammar
+> behind it. `trap.config.change` is NOT shadowed: V1 injects syslog only, so it
+> re-classifies nothing.
+>
+> A shadow row also contributes **no markers or literals to the ingest screen**
+> (`producers._SCREEN_RULES`). The screen is what keeps the classifiers off the
+> ~95 % of syslog that can never promote, and widening it for a row that emits
+> nothing costs the whole estate and buys nothing; a shadow row is observed only
+> on lines the screen already admits for another rule, and measuring the shapes
+> the screen REJECTS is the `parsercov` mining path, off the ingest hot path.
+> The generated admission VRL is byte-identical to its pre-A9b state
+> (`rules_hash 0538afc1b47c`, 61 literals) because of it.
+
+**3. `severity: info`, deliberately.** A change is not a fault; it is context.
+`info` keeps it below `EngineConfig.severity_open_floor` (`high`), so a fleet
+reconfiguration cannot manufacture RCA objects — a change can only join an object
+a real fault already opened. That is what makes a high-rate symptom safe to
+admit: in the scale harness's own mix, config-change lines are a third of the
+"noise".
+
+**4. Not inert.** The kind reaches production on the trap observer, and five
+signature templates name it as an OPTIONAL clause
+(BGP/OSPF/IS-IS adjacency, the SD-WAN change-induced family, and the security
+hardening-drift story — where it is the only evidence that can DATE a standing
+posture failure). Optional and control-plane: it raises coverage, and it can
+never supply the independent second plane a confirmation needs.

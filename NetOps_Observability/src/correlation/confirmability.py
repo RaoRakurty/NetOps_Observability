@@ -141,6 +141,13 @@ KIND_MODALITY: dict[str, ModalityClass] = {
     "fhrp_state_change": ModalityClass.CONTROL_PLANE,
     "device_restart": ModalityClass.CONTROL_PLANE,
     "device_alarm": ModalityClass.CONTROL_PLANE,
+    # A9 follow-up — the device reporting its own reconfiguration (syslog
+    # %SYS-5-CONFIG_I / Junos UI_COMMIT, or the CONFIG-MAN/CFGMGMT trap). Same
+    # observer class as every other thing the box says about itself, so it
+    # SUPPORTS a control-plane story and can never be its independent second
+    # plane — which is the honest reading of "the config changed and then it
+    # broke".
+    "device_config_change": ModalityClass.CONTROL_PLANE,
     "lldp_neighbor_change": ModalityClass.CONTROL_PLANE,
     "cloud_change": ModalityClass.CONTROL_PLANE,
     "cloud_audit": ModalityClass.CONTROL_PLANE,
