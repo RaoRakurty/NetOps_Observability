@@ -5885,3 +5885,24 @@ button.cc-kpi-btn.on::after { content: "filtered"; display: block; margin-top: 5
 .rsc-fb { margin-top: 16px; }
 .rsc-fb-split { display: flex; align-items: baseline; gap: 6px; }
 .rsc-fb-sep { color: var(--fg-subtle); font-weight: 400; }
+
+/* ── Configuration backup & drift (Project 3, FEATURE_CONFIG_BACKUP) ──
+   The device Configuration panel + the fleet Config drift list. Diff lines are
+   coloured by CLASS from a parsed +/- prefix — the text itself is always an
+   escaped React text node, never markup. */
+.cfg-panel { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+.cfg-h { margin: 0; font-size: 14px; font-weight: 600; color: var(--fg); }
+.cfg-summary { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.cfg-toolbar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 8px 0; }
+.cfg-note { margin: 0; }
+.cfg-bad { color: var(--bad); }
+.cfg-sha { text-align: left; font-weight: 500; white-space: nowrap; }
+.cfg-actions { display: flex; gap: 6px; flex-wrap: wrap; }
+.cfg-actions .btn { padding: 2px 8px; font-size: 12px; }
+.cfg-detail { margin-top: 10px; }
+.cfg-diff { max-height: 420px; }
+.cfg-diff-line { white-space: pre; font-family: var(--font-mono, ui-monospace, monospace); }
+.cfg-diff-add { background: var(--sev-ok-bg); color: var(--good); }
+.cfg-diff-del { background: var(--sev-critical-bg); color: var(--bad); }
+.cfg-diff-hunk { color: var(--accent); }
+.cfg-diff-meta { color: var(--muted); }

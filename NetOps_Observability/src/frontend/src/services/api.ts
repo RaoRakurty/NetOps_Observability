@@ -2098,6 +2098,95 @@ export function unrecognizedParams(q: UnrecognizedQuery = {}): string {
   return p.toString();
 }
 
+// ---------- Configuration backup, versions & drift (FEATURE_CONFIG_BACKUP) ---
+// Device running-configuration capture, version history, golden-baseline
+// comparison and fleet drift. Two standing rules for every consumer:
+//  · Config TEXT is device-authored and therefore UNTRUSTED (§3 zero trust).
+//    It is redacted server-side but must still be rendered as ESCAPED React
+//    text — never through innerHTML/dangerouslySetInnerHTML or any HTML sink.
+//  · Tenant isolation (§3a) is a SERVER guarantee: no call here sends a tenant
+//    and none offers a cross-tenant path.
+// The whole family is dormant unless the backend feature flag is on; a 404/501
+// is the "not enabled" answer, not a failure (see classifyError in pages/config).
+
+/** Drift verdict. "unknown" is an HONEST answer — never captured, or no golden
+ *  baseline to compare against. It is an absence of assessment, not "clean". */
+export type ConfigDrift = "in_sync" | "changed" | "drifted" | "unknown";
+
+export type ConfigVersion = {
+  sha: string;
+  captured_at: string;
+  size_bytes: number;
+  status: "ok" | "failed";
+  error?: string;
+  golden: boolean;
+  drift: ConfigDrift;
+  added?: number;
+  removed?: number;
+};
+
+/** Newest first. `next_cursor` is reserved by the contract (always null today). */
+export type ConfigVersionsPage = {
+  device_id: string;
+  items: ConfigVersion[];
+  golden_sha: string | null;
+  next_cursor: string | null;
+};
+
+export type ConfigText = {
+  device_id: string;
+  sha: string;
+  captured_at: string;
+  size_bytes: number;
+  golden: boolean;
+  /** Redacted server-side; still untrusted. Render as escaped text ONLY. */
+  text: string;
+};
+
+export type ConfigDiffResult = {
+  device_id: string;
+  from: string;
+  to: string;
+  added: number;
+  removed: number;
+  /** Unified diff body. Untrusted text — render escaped, line by line. */
+  unified: string;
+  truncated: boolean;
+};
+
+export type ConfigBackupJob = { job_id: string; status: string };
+export type ConfigGoldenResult = { device_id: string; golden_sha: string };
+
+export type ConfigStatus = {
+  device_id: string;
+  state: string;
+  last_capture_at?: string;
+  last_sha?: string;
+  golden_sha?: string | null;
+  last_error?: string;
+  next_scheduled_at?: string;
+};
+
+export type ConfigDriftRow = ConfigStatus & { device_name: string };
+
+export type ConfigDriftPage = {
+  items: ConfigDriftRow[];
+  next_cursor: string | null;
+  total: number;
+};
+
+export type ConfigDriftQuery = { state?: string; cursor?: string; limit?: number };
+
+/** ConfigDriftQuery → query string. Only the three contracted params are ever
+ *  sent, and everything goes through URLSearchParams (no hand-built URLs). */
+export function configDriftParams(q: ConfigDriftQuery = {}): string {
+  const p = new URLSearchParams();
+  if (q.state) p.set("state", q.state);
+  if (q.cursor) p.set("cursor", q.cursor);
+  if (q.limit !== undefined) p.set("limit", String(q.limit));
+  return p.toString();
+}
+
 export const api = {
   // ---- BGP Operations (item 10) ----
   bgpWatchlist: () => request<{ watchlist: BgpWatchEntry[] }>("/api/bgp/watchlist"),
@@ -3471,6 +3560,39 @@ export const api = {
       `/api/telemetry/unrecognized/${encodeURIComponent(templateId)}/propose`,
       { method: "POST" },
     ),
+
+  // ---------- Configuration backup & drift (FEATURE_CONFIG_BACKUP) ----------
+  // Reads need infrastructure:read; backup + golden need infrastructure:write.
+  // The device id is path-encoded at every call site (never interpolated raw).
+  configVersions: (deviceId: string) =>
+    request<ConfigVersionsPage>(`/api/devices/${encodeURIComponent(deviceId)}/config/versions`),
+  configVersion: (deviceId: string, sha: string) =>
+    request<ConfigText>(
+      `/api/devices/${encodeURIComponent(deviceId)}/config/versions/${encodeURIComponent(sha)}`,
+    ),
+  configDiff: (deviceId: string, from: string, to: string) => {
+    const p = new URLSearchParams({ from, to });
+    return request<ConfigDiffResult>(
+      `/api/devices/${encodeURIComponent(deviceId)}/config/diff?${p.toString()}`,
+    );
+  },
+  /** 202 + {job_id,status} on accept; 429 when a capture is already running. */
+  configBackup: (deviceId: string) =>
+    request<ConfigBackupJob>(`/api/devices/${encodeURIComponent(deviceId)}/config/backup`, {
+      method: "POST",
+    }),
+  configSetGolden: (deviceId: string, sha: string) =>
+    request<ConfigGoldenResult>(`/api/devices/${encodeURIComponent(deviceId)}/config/golden`, {
+      method: "POST",
+      body: JSON.stringify({ sha }),
+    }),
+  configStatus: (deviceId: string) =>
+    request<ConfigStatus>(`/api/devices/${encodeURIComponent(deviceId)}/config/status`),
+  /** Fleet drift list — server-scoped to the caller's tenant (§3a). */
+  configDriftList: (q: ConfigDriftQuery = {}) => {
+    const qs = configDriftParams(q);
+    return request<ConfigDriftPage>(`/api/config/drift${qs ? `?${qs}` : ""}`);
+  },
 };
 
 

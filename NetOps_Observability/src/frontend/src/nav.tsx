@@ -72,6 +72,8 @@ export const ROUTE_CHUNKS: Record<string, () => Promise<unknown>> = {
   Discovery: () => import("./pages/Discovery"),
   LogsExplore: () => import("./pages/LogsExplore"),
   TelemetryCoverage: () => import("./pages/telemetry/TelemetryCoverage"),
+  // Configuration backup & drift (Project 3, FEATURE_CONFIG_BACKUP).
+  ConfigDrift: () => import("./pages/config/ConfigDrift"),
 };
 
 const Dashboard = lazy(ROUTE_CHUNKS["Dashboard"] as () => Promise<{ default: React.ComponentType<any> }>);
@@ -148,6 +150,8 @@ const Discovery = lazy(ROUTE_CHUNKS["Discovery"] as () => Promise<{ default: Rea
 const LogsExplore = lazy(ROUTE_CHUNKS["LogsExplore"] as () => Promise<{ default: React.ComponentType<any> }>);
 // Parser programme A6 — Administration → Data Collection coverage view.
 const TelemetryCoverage = lazy(ROUTE_CHUNKS["TelemetryCoverage"] as () => Promise<{ default: React.ComponentType<any> }>);
+// Fleet configuration drift — Infrastructure → Config Drift.
+const ConfigDrift = lazy(ROUTE_CHUNKS["ConfigDrift"] as () => Promise<{ default: React.ComponentType<any> }>);
 
 // A leaf is one rendered view. Sections with multiple leaves get a SubNav.
 export type NavLeaf = {
@@ -279,6 +283,10 @@ export const NAV: NavSection[] = [
         { id: "discovery", label: "Subnet Discovery" },
         { id: "nms", label: "NMS Integrations" },
       ] },
+      // Config drift — fleet configuration state; each row deep-links to the
+      // device's Configuration panel. Dormant (renders "not enabled") unless
+      // FEATURE_CONFIG_BACKUP is set on the backend.
+      { id: "config-drift", label: "Config Drift", render: () => <ConfigDrift /> },
       { id: "sot", label: "Source of Truth", platformOnly: true, render: () => <SourceOfTruth /> },
     ],
   },
