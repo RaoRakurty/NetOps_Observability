@@ -68,6 +68,75 @@ func (p Proto) LSDBMetric() string {
 	return "device_isis_lsp_count"
 }
 
+// AreaMetric is the canonical area-membership INFO series: one sample per area
+// the router participates in, the area itself carried in the `area` label and
+// the value a constant placeholder (1 on the gNMI lane, the OSPF-MIB RowStatus
+// on the SNMP one). Consumers read the LABEL and must never read the value as a
+// measurement.
+func (p Proto) AreaMetric() string {
+	if p == ProtoOSPF {
+		return "device_ospf_area"
+	}
+	return "device_isis_area"
+}
+
+// SPFMetric is the canonical SPF-run counter. It is monotonic as collected and
+// scoped: per OSPF area (OSPF-MIB has no router-wide ospfSpfRuns) or per IS-IS
+// level.
+func (p Proto) SPFMetric() string {
+	if p == ProtoOSPF {
+		return "device_ospf_spf_runs_total"
+	}
+	return "device_isis_spf_runs_total"
+}
+
+// HoldMetric is the IS-IS per-adjacency REMAINING hold time (a countdown reset
+// by every received hello). It is empty for OSPF, which has no per-neighbour
+// timer to collect — see HelloMetric/DeadMetric.
+func (p Proto) HoldMetric() string {
+	if p == ProtoOSPF {
+		return ""
+	}
+	return "device_isis_adj_hold_seconds"
+}
+
+// HelloMetric / DeadMetric are the OSPF per-INTERFACE configured intervals
+// (OSPF-MIB ospfIfHelloInterval / ospfIfRtrDeadInterval). They are empty for
+// IS-IS, whose collected timer is per-adjacency instead.
+func (p Proto) HelloMetric() string {
+	if p == ProtoOSPF {
+		return "device_ospf_if_hello_seconds"
+	}
+	return ""
+}
+
+func (p Proto) DeadMetric() string {
+	if p == ProtoOSPF {
+		return "device_ospf_if_dead_seconds"
+	}
+	return ""
+}
+
+// ScopeLabel is the series label the protocol's counts are scoped by: the OSPF
+// area (ospfAreaTable's index) or the IS-IS level. The two vocabularies are
+// deliberately NOT unified — an area is not a level, and rendering one under
+// the other's heading is the kind of quiet mislabelling this package refuses.
+func (p Proto) ScopeLabel() string {
+	if p == ProtoOSPF {
+		return "area"
+	}
+	return "isis_level"
+}
+
+// TimerScopeKind names what a timer row identifies for this protocol:
+// "adjacency" (IS-IS, per-neighbour) or "interface" (OSPF, per ospfIfTable row).
+func (p Proto) TimerScopeKind() string {
+	if p == ProtoOSPF {
+		return "interface"
+	}
+	return "adjacency"
+}
+
 // PeerLabel is the series label carrying the neighbour identity: the IS-IS
 // system-id (canon-tags renames adjacency_neighbor-system-id → isis_neighbor)
 // or the OSPF-MIB ospfNbrTable index label.

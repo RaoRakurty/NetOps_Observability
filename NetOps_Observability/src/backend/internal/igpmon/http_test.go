@@ -472,8 +472,23 @@ func TestAbsentSourcesAreNullWithANoteNeverZero(t *testing.T) {
 	if !hasNote(body, "OSPF area membership is not collected") {
 		t.Errorf("OSPF area absence is not declared: %v", notesOf(body))
 	}
-	if body["areas"] != nil {
-		t.Errorf("areas = %v, want null (collected by nothing)", body["areas"])
+	// areas / spf_runs / timers are BLOCKS with their own null + note. Each is
+	// probed separately, so each must be able to say "not collected" on its own.
+	for _, b := range []struct{ key, field, series string }{
+		{"areas", "areas", "device_ospf_area"},
+		{"spf_runs", "runs", "device_ospf_spf_runs_total"},
+		{"timers", "rows", "device_ospf_if_hello_seconds"},
+	} {
+		blk, _ := body[b.key].(map[string]any)
+		if blk == nil {
+			t.Fatalf("%s block missing: %v", b.key, body[b.key])
+		}
+		if blk[b.field] != nil {
+			t.Errorf("%s.%s = %v, want null (collected by nothing here)", b.key, b.field, blk[b.field])
+		}
+		if note, _ := blk["note"].(string); !strings.Contains(note, b.series) {
+			t.Errorf("the %s note must name the absent series %s: %q", b.key, b.series, note)
+		}
 	}
 }
 
@@ -873,7 +888,7 @@ func TestLSDBFailureIsNotReportedAsAbsence(t *testing.T) {
 		if wA.Code != http.StatusOK {
 			t.Fatalf("%s/%s absent = %d", rt.proto, rt.op, wA.Code)
 		}
-		if !hasNote(bodyA, "is emitted by no collector today") {
+		if !hasNote(bodyA, "LSDB size is not reported rather than reported as zero") {
 			t.Errorf("%s/%s absence is not stated as absence: %v", rt.proto, rt.op, notesOf(bodyA))
 		}
 
@@ -889,7 +904,7 @@ func TestLSDBFailureIsNotReportedAsAbsence(t *testing.T) {
 		if coverageOf(t, bodyB).LSDB {
 			t.Errorf("%s/%s claimed LSDB coverage after the store failed", rt.proto, rt.op)
 		}
-		if hasNote(bodyB, "is emitted by no collector today") {
+		if hasNote(bodyB, "LSDB size is not reported rather than reported as zero") {
 			t.Errorf("%s/%s reported a STORE FAILURE as 'no collector emits it': %v",
 				rt.proto, rt.op, notesOf(bodyB))
 		}
@@ -907,12 +922,15 @@ func TestLSDBRefusalIsLoggedAndDistinct(t *testing.T) {
 	h.seedDevice("leaf1", "leaf1", "acme")
 	h.scopeFilters = nil
 	var warnings []string
-	h.onWarn = func(msg string, _ map[string]any) { warnings = append(warnings, msg) }
+	h.onWarn = func(msg string, f map[string]any) {
+		metric, _ := f["metric"].(string)
+		warnings = append(warnings, msg+" metric="+metric)
+	}
 	w, body := h.get("/api/protocols/isis/health?device=leaf1")
 	if w.Code != http.StatusOK {
 		t.Fatalf("health = %d", w.Code)
 	}
-	if hasNote(body, "is emitted by no collector today") {
+	if hasNote(body, "LSDB size is not reported rather than reported as zero") {
 		t.Errorf("a scope wiring fault was reported as an absent collector: %v", notesOf(body))
 	}
 	if !hasNote(body, "this is a wiring fault") {
@@ -920,7 +938,7 @@ func TestLSDBRefusalIsLoggedAndDistinct(t *testing.T) {
 	}
 	found := false
 	for _, m := range warnings {
-		if strings.Contains(m, "LSDB") {
+		if strings.Contains(m, "metric=device_isis_lsp_count") {
 			found = true
 		}
 	}

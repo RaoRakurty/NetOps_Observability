@@ -7,6 +7,7 @@ import { describe, expect, it } from "vitest";
 import type {
   IgpAdjacenciesResponse,
   IgpAdjacency,
+  IgpCoverage,
   IgpHealthResponse,
   IgpSummaryResponse,
 } from "../../services/api";
@@ -14,6 +15,14 @@ import {
   adjCounts,
   adjKey,
   adjTone,
+  areasCell,
+  areasView,
+  holdLabel,
+  lsdbView,
+  scopeLabelText,
+  spfView,
+  timerCell,
+  timersView,
   classifyAdjacencies,
   classifyHealth,
   classifySummary,
@@ -29,6 +38,18 @@ import {
   worstFirst,
 } from "./igpModel";
 
+/** The default fixture coverage: the two adjacency sources answered and NONE
+ *  of the four depth sources did — the honest baseline for a deployment that
+ *  has not wired the LSDB/area/SPF/timer collectors. */
+const NO_DEPTH_COVERAGE: IgpCoverage = {
+  events: true,
+  live_series: true,
+  lsdb: false,
+  areas: false,
+  spf_runs: false,
+  timers: false,
+};
+
 const adjacency = (over: Partial<IgpAdjacency> = {}): IgpAdjacency => ({
   device: "leaf1",
   peer: "0000.0000.0002",
@@ -40,6 +61,7 @@ const adjacency = (over: Partial<IgpAdjacency> = {}): IgpAdjacency => ({
   changes: 0,
   up_events: 0,
   down_events: 0,
+  hold_seconds: null,
   timeline: [],
   ...over,
 });
@@ -52,7 +74,11 @@ const adjResponse = (over: Partial<IgpAdjacenciesResponse> = {}): IgpAdjacencies
   now: "2026-09-02T12:00:00Z",
   adjacencies: [],
   event_count: 0,
-  coverage: { events: true, live_series: true, lsdb: false },
+  lsdb: { lsp_count: null },
+  areas: { areas: null },
+  spf_runs: { runs: null },
+  timers: { rows: null },
+  coverage: NO_DEPTH_COVERAGE,
   source: "events+live_series",
   notes: [],
   limit: 200,
@@ -81,22 +107,34 @@ describe("countOrNotCollected — the anti-zero rule", () => {
 describe("coverageChips", () => {
   it("reports each class and carries the SERVER's reason for an absent one", () => {
     const chips = coverageChips(
-      { events: true, live_series: false, lsdb: false },
+      { ...NO_DEPTH_COVERAGE, live_series: false },
       [
         "no live series collected for this device; adjacency history is from syslog/trap events only",
-        "no LSDB/LSP-count series is collected on this deployment (device_isis_lsp_count …)",
+        "no LSDB/LSP-count series is collected for these devices (device_isis_lsp_count …)",
+        "IS-IS area addresses are not collected for these devices (device_isis_area …)",
+        "no SPF-run counter is collected for these devices (device_isis_spf_runs_total …)",
+        "no IS-IS timer series is collected for these devices (device_isis_adj_hold_seconds …)",
       ],
     );
+    // Six chips, because the four depth sources are probed and reported
+    // independently: one flag for all of them would say something is missing
+    // without saying what.
     expect(chips.map((c) => [c.id, c.collected])).toEqual([
       ["events", true],
       ["live_series", false],
       ["lsdb", false],
+      ["areas", false],
+      ["spf_runs", false],
+      ["timers", false],
     ]);
     expect(chips[1].detail).toContain("syslog/trap events only");
     expect(chips[2].detail).toContain("device_isis_lsp_count");
+    expect(chips[3].detail).toContain("device_isis_area");
+    expect(chips[4].detail).toContain("device_isis_spf_runs_total");
+    expect(chips[5].detail).toContain("device_isis_adj_hold_seconds");
   });
   it("falls back to an honest sentence when the server sent no note", () => {
-    const chips = coverageChips({ events: false, live_series: false, lsdb: false }, []);
+    const chips = coverageChips({ ...NO_DEPTH_COVERAGE, events: false, live_series: false }, []);
     for (const c of chips) {
       expect(c.collected).toBe(false);
       expect(c.detail.length).toBeGreaterThan(0);
@@ -143,7 +181,7 @@ describe("classifySummary / classifyHealth", () => {
     now: "n",
     devices: [],
     event_count: 0,
-    coverage: { events: true, live_series: false, lsdb: false },
+    coverage: { ...NO_DEPTH_COVERAGE, live_series: false },
     source: "events",
     notes: [],
     limit: 100,
@@ -157,7 +195,6 @@ describe("classifySummary / classifyHealth", () => {
     window_seconds: 3600,
     since: "s",
     now: "n",
-    areas: null,
     levels: null,
     neighbor_count: null,
     adjacencies_up: null,
@@ -167,7 +204,10 @@ describe("classifySummary / classifyHealth", () => {
     last_change: "",
     stability: { flaps_per_hour: 0, score: 100, basis: "0 adjacency down-transitions over 1h" },
     lsdb: { lsp_count: null, note: "no LSDB series" },
-    coverage: { events: true, live_series: false, lsdb: false },
+    areas: { areas: null, note: "no area series" },
+    spf_runs: { runs: null, note: "no SPF series" },
+    timers: { rows: null, note: "no timer series" },
+    coverage: { ...NO_DEPTH_COVERAGE, live_series: false },
     source: "events",
     notes: [],
     ...over,
@@ -302,5 +342,142 @@ describe("windowLabel / adjKey", () => {
   it("keys a row on (device, peer)", () => {
     expect(adjKey({ device: "a", peer: "b" })).toBe("a b");
     expect(adjKey({ device: "a" })).toBe("a ");
+  });
+});
+
+// ── the advanced depth views (LSDB · areas · SPF runs · timers) ─────────────
+//
+// One property, four blocks: a source that was not collected renders the word
+// "not collected" and the server's reason — never a number, never a dash that
+// could pass for a measurement, and never a green tone.
+
+describe("lsdbView / spfView", () => {
+  it("renders a collected count with its per-scope breakdown", () => {
+    const v = lsdbView(
+      { lsp_count: 8, scope_label: "isis_level", by_scope: [{ scope: "L1", count: 2 }, { scope: "L2", count: 6 }] },
+      true,
+    );
+    expect(v.collected).toBe(true);
+    expect(v.value).toBe("8");
+    expect(v.scopeLabel).toBe("level");
+    expect(v.scopes).toHaveLength(2);
+    expect(v.note).toBe("");
+  });
+  it("a count of ZERO is a measurement and stays a number", () => {
+    const v = lsdbView({ lsp_count: 0 }, true);
+    expect(v.collected).toBe(true);
+    expect(v.value).toBe("0");
+  });
+  it("an uncollected count is the phrase, never 0, and carries the server's reason", () => {
+    const v = lsdbView({ lsp_count: null, note: "no LSDB/LSP-count series (device_ospf_lsdb_count …)" }, false);
+    expect(v.collected).toBe(false);
+    expect(v.value).toBe("not collected");
+    expect(v.value).not.toMatch(/^\d/);
+    expect(v.note).toContain("device_ospf_lsdb_count");
+    expect(v.scopes).toEqual([]);
+  });
+  it("a coverage flag that disagrees with the payload resolves to NOT collected", () => {
+    // The flag says covered, the value is null. Rendering "null" as a number is
+    // the exact failure this view exists to prevent, so the safe reading wins.
+    expect(lsdbView({ lsp_count: null }, true).collected).toBe(false);
+    // And the reverse: a value with the flag off is not promoted to a fact.
+    expect(lsdbView({ lsp_count: 9 }, false).collected).toBe(false);
+  });
+  it("falls back to its own sentence when the server sent no note", () => {
+    expect(lsdbView(undefined, false).note.length).toBeGreaterThan(0);
+    expect(spfView(undefined, false).note.length).toBeGreaterThan(0);
+  });
+  it("SPF runs are reported as the counter value, never converted to a rate", () => {
+    const v = spfView({ runs: 10, scope_label: "area", by_scope: [{ scope: "0.0.0.0", count: 10 }] }, true);
+    expect(v.value).toBe("10");
+    expect(v.scopeLabel).toBe("area");
+    expect(v.value).not.toMatch(/\/|per|hour/i);
+  });
+});
+
+describe("scopeLabelText", () => {
+  it("renders the raw series label as the operator's word", () => {
+    expect(scopeLabelText("isis_level")).toBe("level");
+    expect(scopeLabelText("area")).toBe("area");
+  });
+  it("passes an unknown label through rather than inventing one", () => {
+    expect(scopeLabelText("something_new")).toBe("something_new");
+    expect(scopeLabelText(undefined)).toBe("scope");
+  });
+});
+
+describe("areasView", () => {
+  it("lists the collected areas", () => {
+    const v = areasView({ areas: ["49.0001", "49.0002"] }, true);
+    expect(v.collected).toBe(true);
+    expect(v.areas).toEqual(["49.0001", "49.0002"]);
+    expect(v.value).toBe("49.0001, 49.0002");
+  });
+  it("null membership is 'not collected' with the server's reason", () => {
+    const v = areasView({ areas: null, note: "OSPF area membership is not collected (device_ospf_area …)" }, false);
+    expect(v.collected).toBe(false);
+    expect(v.value).toBe("not collected");
+    expect(v.note).toContain("device_ospf_area");
+  });
+  it("an EMPTY list is not 'member of no area' — that is not a state a router can be in", () => {
+    const v = areasView({ areas: [] }, true);
+    expect(v.collected).toBe(false);
+    expect(v.value).toBe("not collected");
+  });
+});
+
+describe("timersView", () => {
+  const isisBlock = {
+    scope_kind: "adjacency" as const,
+    rows: [{ device: "spine1", scope: "0100.0000.0011", ifname: "ethernet-1/1.0", level: "L2", hold_seconds: 27 }],
+  };
+  it("IS-IS timers are per adjacency and carry the countdown caveat", () => {
+    const v = timersView(isisBlock, true, "isis");
+    expect(v.collected).toBe(true);
+    expect(v.kind).toBe("adjacency");
+    expect(v.scopeHeading).toBe("Neighbour");
+    expect(v.rows).toHaveLength(1);
+    // The caveat is load-bearing: without it a mid-range countdown reads as a
+    // configured interval and a low one reads as an emergency.
+    expect(v.caveat).toMatch(/countdown/i);
+    expect(v.caveat).toMatch(/not a configured interval/i);
+  });
+  it("OSPF timers are per interface and carry NO countdown caveat — they are configured intervals", () => {
+    const v = timersView(
+      { scope_kind: "interface", rows: [{ device: "edge1", scope: "10.0.0.1.0", hello_seconds: 10, dead_seconds: 40 }] },
+      true, "ospf",
+    );
+    expect(v.kind).toBe("interface");
+    expect(v.scopeHeading).toBe("Interface");
+    expect(v.caveat).toBe("");
+  });
+  it("absent timers report the server's reason and no rows", () => {
+    const v = timersView({ rows: null, note: "no IS-IS timer series (device_isis_adj_hold_seconds …)" }, false, "isis");
+    expect(v.collected).toBe(false);
+    expect(v.rows).toEqual([]);
+    expect(v.note).toContain("device_isis_adj_hold_seconds");
+  });
+  it("falls back to the protocol's own shape when the server sent no scope_kind", () => {
+    expect(timersView({ rows: [] }, true, "isis").kind).toBe("adjacency");
+    expect(timersView({ rows: [] }, true, "ospf").kind).toBe("interface");
+  });
+});
+
+describe("timerCell / holdLabel / areasCell", () => {
+  it("a measured timer keeps its unit; an absent one is a dash, never 0", () => {
+    expect(timerCell(27)).toBe("27s");
+    // 0 IS a measurement — an adjacency genuinely expiring — and must show.
+    expect(timerCell(0)).toBe("0s");
+    expect(timerCell(null)).toBe("—");
+    expect(timerCell(undefined)).toBe("—");
+  });
+  it("an adjacency with no hold sample says so instead of showing 0", () => {
+    expect(holdLabel({ hold_seconds: 27 })).toBe("27s");
+    expect(holdLabel({ hold_seconds: null })).toBe("not collected");
+  });
+  it("a device with no area series says so instead of showing an empty cell", () => {
+    expect(areasCell(["0.0.0.0"])).toBe("0.0.0.0");
+    expect(areasCell([])).toBe("not collected");
+    expect(areasCell(null)).toBe("not collected");
   });
 });

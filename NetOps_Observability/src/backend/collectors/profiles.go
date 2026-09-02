@@ -111,6 +111,39 @@ func builtinProfiles() []SNMPProfile {
 				// not OSPF). IndexLabel "neighbor" is the canonical adjacency identity.
 				{Name: "device_ospf_nbr_state", OID: []int{1, 3, 6, 1, 2, 1, 14, 10, 1, 6}, Table: true, IndexLabel: "neighbor"}, // ospfNbrState
 				{Name: "device_ospf_if_state", OID: []int{1, 3, 6, 1, 2, 1, 14, 7, 1, 12}, Table: true},                          // ospfIfState
+				// OSPF DEPTH (frontend-wave #11 "OSPF advanced"). Every OID below is
+				// resolved against the vendored OSPF-MIB through mibs/index/oididx.json —
+				// none is transcribed from a datasheet. NOT lab-attested: this deployment
+				// has no OSPF-speaking SNMP device, so these rows are doc_claimed in the
+				// ledger and a walk on a device without OSPF simply returns nothing.
+				//
+				// LSDB size is ospfAreaLsaCount, NOT a row count of ospfLsdbTable. The
+				// collector walks a COLUMN and labels each row by its index; it has no
+				// aggregate-and-count mode, and counting the LSDB by walking it means
+				// pulling one varbind per LSA on every poll. ospfAreaLsaCount is the
+				// MIB's own answer to the same question, per area, in one row. It counts
+				// the LSAs IN each area: AS-external LSAs (ospfExternLsaCount, a scalar)
+				// are area-less and therefore NOT included — the ledger says so, and the
+				// series is labelled {area} so the number is never read as a fleet total.
+				{Name: "device_ospf_lsdb_count", OID: []int{1, 3, 6, 1, 2, 1, 14, 2, 1, 7}, Table: true, IndexLabel: "area"}, // ospfAreaLsaCount
+				// Area membership as the standard info series: one row per area the
+				// router participates in, the identity in the `area` label. The VALUE is
+				// ospfAreaStatus (RowStatus, active(1) on a read-only implementation) —
+				// consumers read the LABEL, never the value.
+				{Name: "device_ospf_area", OID: []int{1, 3, 6, 1, 2, 1, 14, 2, 1, 10}, Table: true, IndexLabel: "area"}, // ospfAreaStatus
+				// SPF runs are PER AREA in OSPF-MIB (ospfAreaTable), not per router —
+				// there is no global ospfSpfRuns object. Summing across areas is the
+				// consumer's decision, not the collector's.
+				{Name: "device_ospf_spf_runs_total", OID: []int{1, 3, 6, 1, 2, 1, 14, 2, 1, 4}, Table: true, IndexLabel: "area"}, // ospfSpfRuns
+				// Hello / dead timers are PER INTERFACE (ospfIfTable). OSPF-MIB
+				// ospfNbrTable has NO hello or dead column — 14.10.1.1..14 is
+				// addr/index/rtrid/options/priority/state/events/retransQ/nbmaStatus/
+				// permanence/helloSuppressed/restart-helper{,Age,ExitReason} — so a
+				// per-NEIGHBOUR timer cannot be collected over SNMP at all. These rows
+				// keep ospfIfTable's own index (ospfIfIpAddress.ospfAddressLessIf) so they
+				// join device_ospf_if_state, which is labelled the same way.
+				{Name: "device_ospf_if_hello_seconds", OID: []int{1, 3, 6, 1, 2, 1, 14, 7, 1, 9}, Table: true}, // ospfIfHelloInterval
+				{Name: "device_ospf_if_dead_seconds", OID: []int{1, 3, 6, 1, 2, 1, 14, 7, 1, 10}, Table: true}, // ospfIfRtrDeadInterval
 				// POWER-ETHERNET-MIB (RFC 3621) — PoE port status on the SWITCH side,
 				// the port-intelligence lane for powered endpoints (APs, phones,
 				// cameras): deliveringPower vs fault/otherFault localizes an AP outage

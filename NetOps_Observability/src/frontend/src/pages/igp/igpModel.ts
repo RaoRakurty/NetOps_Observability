@@ -15,10 +15,16 @@
 import type {
   IgpAdjacenciesResponse,
   IgpAdjacency,
+  IgpAreasBlock,
   IgpCoverage,
   IgpHealthResponse,
+  IgpLsdbBlock,
   IgpProto,
+  IgpScopeCount,
+  IgpSpfBlock,
   IgpSummaryResponse,
+  IgpTimerRow,
+  IgpTimersBlock,
 } from "../../services/api";
 
 export type IgpState = "loading" | "error" | "not_connected" | "empty" | "ready";
@@ -60,7 +66,7 @@ export const PEER_LABEL: Record<IgpProto, string> = {
 /** One row of the coverage strip. `collected:false` MUST render as
  *  "not collected", never as a zero and never as a green tick. */
 export interface CoverageChip {
-  id: "events" | "live_series" | "lsdb";
+  id: "events" | "live_series" | "lsdb" | "areas" | "spf_runs" | "timers";
   label: string;
   collected: boolean;
   detail: string;
@@ -70,6 +76,20 @@ const COVERAGE_LABEL: Record<CoverageChip["id"], string> = {
   events: "Change events",
   live_series: "Live adjacency state",
   lsdb: "LSDB / LSP count",
+  areas: "Areas",
+  spf_runs: "SPF runs",
+  timers: "Timers",
+};
+
+/** EMPTY_COVERAGE is the default when a response carries no coverage block at
+ *  all. Every flag is false: an unparseable answer is not evidence of coverage. */
+const EMPTY_COVERAGE: IgpCoverage = {
+  events: false,
+  live_series: false,
+  lsdb: false,
+  areas: false,
+  spf_runs: false,
+  timers: false,
 };
 
 /** coverageChips turns the response's coverage block plus its notes into the
@@ -77,7 +97,7 @@ const COVERAGE_LABEL: Record<CoverageChip["id"], string> = {
  *  one — the server knows why the source is absent on THIS deployment, and
  *  inventing a client-side reason is how a UI starts lying. */
 export function coverageChips(cov: IgpCoverage | undefined, notes: string[] | undefined): CoverageChip[] {
-  const c: IgpCoverage = cov ?? { events: false, live_series: false, lsdb: false };
+  const c: IgpCoverage = cov ?? EMPTY_COVERAGE;
   const ns = notes ?? [];
   const noteFor = (needle: string) => ns.find((n) => n.toLowerCase().includes(needle)) ?? "";
   return [
@@ -103,7 +123,32 @@ export function coverageChips(cov: IgpCoverage | undefined, notes: string[] | un
       collected: c.lsdb,
       detail: c.lsdb
         ? "an LSDB / LSP-count series is collected for these devices"
-        : noteFor("lsdb") || "No LSDB / LSP-count series is collected on this deployment.",
+        : noteFor("lsdb") || "No LSDB / LSP-count series is collected for these devices.",
+    },
+    {
+      id: "areas",
+      label: COVERAGE_LABEL.areas,
+      collected: c.areas,
+      detail: c.areas
+        ? "an area-membership series is collected for these devices"
+        : noteFor("area membership") || noteFor("area addresses") ||
+          "No area-membership series is collected for these devices.",
+    },
+    {
+      id: "spf_runs",
+      label: COVERAGE_LABEL.spf_runs,
+      collected: c.spf_runs,
+      detail: c.spf_runs
+        ? "an SPF-run counter is collected for these devices"
+        : noteFor("spf-run") || "No SPF-run counter is collected for these devices.",
+    },
+    {
+      id: "timers",
+      label: COVERAGE_LABEL.timers,
+      collected: c.timers,
+      detail: c.timers
+        ? "an IGP timer series is collected for these devices"
+        : noteFor("timer series") || "No IGP timer series is collected for these devices.",
     },
   ];
 }
@@ -129,7 +174,7 @@ export const isMeasured = (n: number | null | undefined): n is number => typeof 
  *  (and much better) fact. */
 export function classifyAdjacencies(r: IgpAdjacenciesResponse | undefined): IgpResult<IgpAdjacenciesResponse> {
   if (!r) return { state: "error", note: "The server returned no adjacency payload." };
-  const cov = r.coverage ?? { events: false, live_series: false, lsdb: false };
+  const cov = r.coverage ?? EMPTY_COVERAGE;
   if (!cov.events && !cov.live_series) {
     return { state: "not_connected", note: notConnectedNote(r.protocol, r.notes) };
   }
@@ -146,7 +191,7 @@ export function classifyAdjacencies(r: IgpAdjacenciesResponse | undefined): IgpR
 
 export function classifySummary(r: IgpSummaryResponse | undefined): IgpResult<IgpSummaryResponse> {
   if (!r) return { state: "error", note: "The server returned no summary payload." };
-  const cov = r.coverage ?? { events: false, live_series: false, lsdb: false };
+  const cov = r.coverage ?? EMPTY_COVERAGE;
   if (!cov.events && !cov.live_series) {
     return { state: "not_connected", note: notConnectedNote(r.protocol, r.notes) };
   }
@@ -165,7 +210,7 @@ export function classifySummary(r: IgpSummaryResponse | undefined): IgpResult<Ig
  *  the whole panel would hide exactly what it exists to say. */
 export function classifyHealth(r: IgpHealthResponse | undefined): IgpResult<IgpHealthResponse> {
   if (!r) return { state: "error", note: "The server returned no health payload." };
-  const cov = r.coverage ?? { events: false, live_series: false, lsdb: false };
+  const cov = r.coverage ?? EMPTY_COVERAGE;
   if (!cov.events && !cov.live_series) {
     return { state: "not_connected", note: notConnectedNote(r.protocol, r.notes) };
   }
@@ -288,3 +333,160 @@ export const IGP_WINDOWS: { value: string; label: string }[] = [
   { value: "24h", label: "24h" },
   { value: "7d", label: "7d" },
 ];
+
+// ── the advanced depth blocks (LSDB · areas · SPF runs · timers) ────────────
+//
+// Four blocks, four independent sources, four separate verdicts. Each one is
+// reduced to the same shape here so the view renders them identically and
+// cannot accidentally treat one absent block as a reason to blank another —
+// or, worse, print a 0 for a source that was never wired.
+
+export interface DepthView {
+  /** True only when the server reported a real measurement for this block. */
+  collected: boolean;
+  /** The headline, already rendered: a number, or "not collected". */
+  value: string;
+  /** What the per-scope rows are scoped BY ("isis_level" / "area"), rendered
+   *  for a reader rather than as the raw label name. */
+  scopeLabel: string;
+  /** The per-level / per-area breakdown. Empty when the server sent none. */
+  scopes: IgpScopeCount[];
+  /** The server's own sentence for an absent block. The server knows why the
+   *  source is absent on THIS deployment; inventing a client-side reason is how
+   *  a UI starts lying. */
+  note: string;
+}
+
+/** SCOPE_LABEL renders the raw series label name as the word an operator uses. */
+const SCOPE_LABEL: Record<string, string> = { isis_level: "level", area: "area" };
+
+export const scopeLabelText = (raw: string | undefined): string =>
+  (raw && SCOPE_LABEL[raw]) || raw || "scope";
+
+function depthView(
+  collected: boolean,
+  measured: number | null | undefined,
+  scopeLabel: string | undefined,
+  scopes: IgpScopeCount[] | undefined,
+  note: string | undefined,
+  fallback: string,
+): DepthView {
+  const ok = collected && isMeasured(measured);
+  return {
+    collected: ok,
+    value: ok ? String(measured) : "not collected",
+    scopeLabel: scopeLabelText(scopeLabel),
+    scopes: ok ? (scopes ?? []) : [],
+    note: ok ? "" : (note ?? "").trim() || fallback,
+  };
+}
+
+/** lsdbView — the link-state database size.
+ *
+ *  `collected` is taken from the COVERAGE flag and the value independently: a
+ *  block may carry a note and a null even when the flag is stale, and the two
+ *  disagreeing must resolve to "not collected", never to a rendered null. */
+export function lsdbView(block: IgpLsdbBlock | undefined, collected: boolean): DepthView {
+  return depthView(
+    collected, block?.lsp_count, block?.scope_label, block?.by_scope, block?.note,
+    "No LSDB / LSP-count series is collected for these devices.",
+  );
+}
+
+/** spfView — the SPF-run counter, reported as the counter value it is. It is
+ *  never converted to a rate here: a rate over a window the counter may have
+ *  reset inside is a number the reader cannot check. */
+export function spfView(block: IgpSpfBlock | undefined, collected: boolean): DepthView {
+  return depthView(
+    collected, block?.runs, block?.scope_label, block?.by_scope, block?.note,
+    "No SPF-run counter is collected for these devices.",
+  );
+}
+
+export interface AreasView {
+  collected: boolean;
+  /** The areas, or [] when nothing collects them (never a fabricated "0.0.0.0"). */
+  areas: string[];
+  /** The rendered headline: the joined list, or "not collected". */
+  value: string;
+  note: string;
+}
+
+/** areasView — area (OSPF) / area-address (IS-IS) membership.
+ *
+ *  An EMPTY list from a collected source is still reported as not collected:
+ *  a router that answered the area query with no areas is not a router in zero
+ *  areas, it is a router whose answer says nothing, and "member of no area" is
+ *  not a state an operational IGP router can be in. */
+export function areasView(block: IgpAreasBlock | undefined, collected: boolean): AreasView {
+  const list = block?.areas ?? null;
+  const ok = collected && Array.isArray(list) && list.length > 0;
+  return {
+    collected: ok,
+    areas: ok ? list : [],
+    value: ok ? list.join(", ") : "not collected",
+    note: ok ? "" : (block?.note ?? "").trim() ||
+      "No area-membership series is collected for these devices.",
+  };
+}
+
+export interface TimersView {
+  collected: boolean;
+  /** What each row identifies, in operator words. */
+  scopeHeading: string;
+  /** The heading for the timer column(s) this protocol actually has. */
+  kind: "adjacency" | "interface";
+  rows: IgpTimerRow[];
+  note: string;
+  /** The sentence that keeps the IS-IS number honest: it is a countdown, so a
+   *  mid-range value is normal and only a trend to zero means anything. Empty
+   *  for OSPF, whose values ARE configured intervals. */
+  caveat: string;
+}
+
+const ISIS_HOLD_CAVEAT =
+  "Hold is the REMAINING countdown to expiry, reset by every received hello — not a configured interval. " +
+  "It is sampled, so a mid-range value is normal; only a value trending to zero, or a row that stops updating, is a signal.";
+
+/** timersView — the adjacency (IS-IS) or interface (OSPF) timers.
+ *
+ *  The protocol decides the shape and the view says which shape it got, because
+ *  the two are not interchangeable: OSPF-MIB has no per-neighbour timer column,
+ *  so an OSPF timer can never be attributed to an adjacency. */
+export function timersView(
+  block: IgpTimersBlock | undefined,
+  collected: boolean,
+  proto: IgpProto,
+): TimersView {
+  const kind: TimersView["kind"] = block?.scope_kind ?? (proto === "isis" ? "adjacency" : "interface");
+  const rows = block?.rows ?? null;
+  const ok = collected && Array.isArray(rows) && rows.length > 0;
+  return {
+    collected: ok,
+    kind,
+    scopeHeading: kind === "adjacency" ? "Neighbour" : "Interface",
+    rows: ok ? rows : [],
+    note: ok ? "" : (block?.note ?? "").trim() ||
+      "No IGP timer series is collected for these devices.",
+    caveat: ok && kind === "adjacency" ? ISIS_HOLD_CAVEAT : "",
+  };
+}
+
+/** timerCell renders one timer value. An absent timer is a dash with a title,
+ *  never a 0: a hold of 0 reads as "expiring right now" and a dead interval of
+ *  0 reads as a misconfiguration. */
+export function timerCell(seconds: number | null | undefined): string {
+  return isMeasured(seconds) ? `${seconds}s` : "—";
+}
+
+/** holdLabel renders an adjacency row's own hold countdown. */
+export function holdLabel(a: Pick<IgpAdjacency, "hold_seconds">): string {
+  return isMeasured(a.hold_seconds) ? `${a.hold_seconds}s` : "not collected";
+}
+
+/** depthOrNotCollected renders a per-device summary depth cell. Identical in
+ *  spirit to countOrNotCollected — it exists so the summary table and the
+ *  health panel print the same phrase for the same fact. */
+export function areasCell(areas: string[] | null | undefined): string {
+  return Array.isArray(areas) && areas.length > 0 ? areas.join(", ") : "not collected";
+}

@@ -38,16 +38,24 @@ import {
   classifyAdjacencies,
   classifyHealth,
   classifySummary,
+  areasCell,
+  areasView,
   countOrNotCollected,
   coverageChips,
   currentStateLabel,
+  holdLabel,
   igpError,
   igpLoading,
   isMeasured,
+  lsdbView,
+  spfView,
   stateSourceLabel,
   timelineTicks,
+  timerCell,
+  timersView,
   windowLabel,
   worstFirst,
+  type DepthView,
   type IgpResult,
 } from "./igpModel";
 
@@ -117,6 +125,97 @@ function Timeline({ ticks }: { ticks: ReturnType<typeof timelineTicks> }) {
   );
 }
 
+// ── the advanced depth panels ───────────────────────────────────────────────
+//
+// One renderer for the two counting blocks (LSDB size, SPF runs). A block that
+// was not collected prints the server's reason and NO number — not a dash that
+// could be mistaken for a measurement, and never a 0.
+
+function DepthCount({ title, view }: { title: string; view: DepthView }) {
+  if (!view.collected) {
+    return (
+      <div className="igp-depth" data-block={title} data-collected="no">
+        <span className="mini-meta igp-depth-title">{title}</span>
+        <div className="empty igp-notwired" role="status">
+          <span className="badge">Not collected</span> {view.note}
+        </div>
+      </div>
+    );
+  }
+  return (
+    <div className="igp-depth" data-block={title} data-collected="yes">
+      <span className="mini-meta igp-depth-title">{title}</span>
+      <span className="igp-depth-value mono">{view.value}</span>
+      {view.scopes.length > 0 && (
+        <ul className="mini-meta igp-depth-scopes" aria-label={`${title} by ${view.scopeLabel}`}>
+          {view.scopes.map((sc) => (
+            <li key={sc.scope}>
+              <span className="mono">{sc.scope}</span>: <span className="mono">{sc.count}</span>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+function TimersPanel({ result }: { result: IgpResult<IgpHealthResponse> }) {
+  const h = result.data;
+  if (!h) return null;
+  const view = timersView(h.timers, h.coverage?.timers ?? false, h.protocol);
+  return (
+    <Panel title="IGP timers">
+      {!view.collected ? (
+        <div className="empty igp-notwired" role="status">
+          <span className="badge">Not collected</span> {view.note}
+        </div>
+      ) : (
+        <>
+          <table className="ds-table igp-timers">
+            <thead>
+              <tr>
+                <th scope="col">{view.scopeHeading}</th>
+                {view.kind === "adjacency" ? (
+                  <>
+                    <th scope="col">Interface</th>
+                    <th scope="col">Level</th>
+                    <th scope="col">Hold remaining</th>
+                  </>
+                ) : (
+                  <>
+                    <th scope="col">Hello</th>
+                    <th scope="col">Dead</th>
+                  </>
+                )}
+              </tr>
+            </thead>
+            <tbody>
+              {view.rows.map((row) => (
+                <tr key={`${row.device} ${row.scope}`}>
+                  <td className="mono">{row.scope || "—"}</td>
+                  {view.kind === "adjacency" ? (
+                    <>
+                      <td className="mono">{row.ifname || "—"}</td>
+                      <td className="mono">{row.level || "—"}</td>
+                      <td className="mono">{timerCell(row.hold_seconds)}</td>
+                    </>
+                  ) : (
+                    <>
+                      <td className="mono">{timerCell(row.hello_seconds)}</td>
+                      <td className="mono">{timerCell(row.dead_seconds)}</td>
+                    </>
+                  )}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          {view.caveat && <p className="mini-meta igp-timer-caveat">{view.caveat}</p>}
+        </>
+      )}
+    </Panel>
+  );
+}
+
 // ── health block ────────────────────────────────────────────────────────────
 
 function HealthBlock({ result }: { result: IgpResult<IgpHealthResponse> }) {
@@ -140,8 +239,11 @@ function HealthBlock({ result }: { result: IgpResult<IgpHealthResponse> }) {
               />
               <Stat label="Flaps in window" value={String(h.flaps)} tone={h.flaps > 0 ? "warn" : ""} />
               <Stat label="Stability" value={h.stability ? h.stability.score.toFixed(1) : "—"} />
-              <Stat label="LSDB / LSP count" value={countOrNotCollected(h.lsdb?.lsp_count)} />
             </StatStrip>
+            <div className="igp-depth-row">
+              <DepthCount title="LSDB / LSP count" view={lsdbView(h.lsdb, h.coverage?.lsdb ?? false)} />
+              <DepthCount title="SPF runs" view={spfView(h.spf_runs, h.coverage?.spf_runs ?? false)} />
+            </div>
             {h.stability?.basis && <p className="mini-meta">{h.stability.basis}</p>}
             <table className="ds-table">
               <tbody>
@@ -150,12 +252,15 @@ function HealthBlock({ result }: { result: IgpResult<IgpHealthResponse> }) {
                   <td className="mono">{h.device_name || h.device}</td>
                 </tr>
                 <tr>
-                  <th scope="row">{h.protocol === "isis" ? "IS-IS levels" : "OSPF areas"}</th>
-                  <td>
-                    {h.protocol === "isis"
-                      ? (h.levels && h.levels.length ? h.levels.join(", ") : "not collected")
-                      : (h.areas && h.areas.length ? h.areas.join(", ") : "not collected")}
-                  </td>
+                  <th scope="row">{h.protocol === "isis" ? "IS-IS area addresses" : "OSPF areas"}</th>
+                  {/* Area membership now has its own collected series. It is a
+                      different fact from `levels` below, which is derived from
+                      the adjacency labels — where this router HAS a neighbour. */}
+                  <td>{areasView(h.areas, h.coverage?.areas ?? false).value}</td>
+                </tr>
+                <tr>
+                  <th scope="row">{h.protocol === "isis" ? "Levels with an adjacency" : "Adjacency levels"}</th>
+                  <td>{h.levels && h.levels.length ? h.levels.join(", ") : "not collected"}</td>
                 </tr>
                 <tr>
                   <th scope="row">Adjacency changes</th>
@@ -289,6 +394,10 @@ export default function IgpAdjacencies({ proto, defaultWindow = "24h" }: IgpAdja
                   <th scope="col">Interface</th>
                   {proto === "isis" && <th scope="col">Level</th>}
                   <th scope="col">State</th>
+                  {/* OSPF-MIB has no per-neighbour timer column, so this
+                      column exists only where a per-adjacency timer can be
+                      collected at all. */}
+                  {proto === "isis" && <th scope="col">Hold remaining</th>}
                   <th scope="col">Flaps</th>
                   <th scope="col">Last change</th>
                   <th scope="col">Timeline (oldest → newest)</th>
@@ -305,6 +414,7 @@ export default function IgpAdjacencies({ proto, defaultWindow = "24h" }: IgpAdja
                       <span className="igp-state" data-tone={adjTone(a)}>{currentStateLabel(a)}</span>{" "}
                       <span className="mini-meta">({stateSourceLabel(a)})</span>
                     </td>
+                    {proto === "isis" && <td className="mono">{holdLabel(a)}</td>}
                     <td className="mono">{a.flaps}</td>
                     <td className="mono">{a.last_change || "—"}</td>
                     <td><Timeline ticks={timelineTicks(a)} /></td>
@@ -330,6 +440,7 @@ export default function IgpAdjacencies({ proto, defaultWindow = "24h" }: IgpAdja
       </Panel>
 
       {device && <HealthBlock result={health} />}
+      {device && <TimersPanel result={health} />}
 
       <Panel title={`${PROTO_LABEL[proto]} roll-up by device (worst first)`}>
         <StateBlock result={sum}>
@@ -342,6 +453,9 @@ export default function IgpAdjacencies({ proto, defaultWindow = "24h" }: IgpAdja
                   <th scope="col">Down</th>
                   <th scope="col">Flaps</th>
                   <th scope="col">Changes</th>
+                  <th scope="col">LSDB</th>
+                  <th scope="col">SPF runs</th>
+                  <th scope="col">{proto === "isis" ? "Area addresses" : "Areas"}</th>
                   <th scope="col">Last change</th>
                 </tr>
               </thead>
@@ -358,6 +472,12 @@ export default function IgpAdjacencies({ proto, defaultWindow = "24h" }: IgpAdja
                     </td>
                     <td className="mono">{d.flaps}</td>
                     <td className="mono">{d.changes}</td>
+                    {/* Per device, not per fleet: a router that reports no LSDB
+                        series says "not collected" on its own row while its
+                        neighbour shows a real count. */}
+                    <td className="mono">{countOrNotCollected(d.lsp_count)}</td>
+                    <td className="mono">{countOrNotCollected(d.spf_runs)}</td>
+                    <td className="mono">{areasCell(d.areas)}</td>
                     <td className="mono">{d.last_change || "—"}</td>
                   </tr>
                 ))}

@@ -32,7 +32,13 @@
       { "name": "device_bgp_in_updates",      "oid": "1.3.6.1.2.1.15.3.1.10", "table": true, "owner": "gnmi", "index_label": "peer" },
       { "_comment": "OSPF-MIB — ospfNbrState (1=down..8=full); ospfIfState (1=down..7=DR). SNMP-OWNED: gNMI carries IS-IS (the fabric IGP) here, not OSPF — OSPF is the agentless Cisco/edge IGP, so no collision. index_label=neighbor is the canonical adjacency identity.",
         "name": "device_ospf_nbr_state",      "oid": "1.3.6.1.2.1.14.10.1.6", "table": true, "index_label": "neighbor" },
-      { "name": "device_ospf_if_state",       "oid": "1.3.6.1.2.1.14.7.1.12", "table": true }
+      { "name": "device_ospf_if_state",       "oid": "1.3.6.1.2.1.14.7.1.12", "table": true },
+      { "_comment": "OSPF DEPTH (frontend-wave #11). OIDs index-resolved against the vendored OSPF-MIB (mibs/index/oididx.json), NOT transcribed. doc_claimed: no OSPF-speaking SNMP device on this deployment, so a walk returns nothing until one exists. LSDB size = ospfAreaLsaCount PER AREA (the collector walks columns and cannot count ospfLsdbTable rows; AS-external LSAs are area-less and excluded). SPF runs are per-area in OSPF-MIB — there is no global counter. Hello/dead are PER INTERFACE: ospfNbrTable has no timer column, so a per-neighbour hold timer is not collectable over SNMP at all; these keep ospfIfTable's own index so they join device_ospf_if_state.",
+        "name": "device_ospf_lsdb_count",     "oid": "1.3.6.1.2.1.14.2.1.7",  "table": true, "index_label": "area" },
+      { "name": "device_ospf_area",           "oid": "1.3.6.1.2.1.14.2.1.10", "table": true, "index_label": "area" },
+      { "name": "device_ospf_spf_runs_total", "oid": "1.3.6.1.2.1.14.2.1.4",  "table": true, "index_label": "area" },
+      { "name": "device_ospf_if_hello_seconds", "oid": "1.3.6.1.2.1.14.7.1.9",  "table": true },
+      { "name": "device_ospf_if_dead_seconds",  "oid": "1.3.6.1.2.1.14.7.1.10", "table": true }
     ]
   },
   {

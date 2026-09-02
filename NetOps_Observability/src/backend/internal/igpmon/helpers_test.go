@@ -169,6 +169,9 @@ func coverageOf(t *testing.T, body map[string]any) Coverage {
 		Events:     raw["events"] == true,
 		LiveSeries: raw["live_series"] == true,
 		LSDB:       raw["lsdb"] == true,
+		Areas:      raw["areas"] == true,
+		SPFRuns:    raw["spf_runs"] == true,
+		Timers:     raw["timers"] == true,
 	}
 }
 

@@ -45,9 +45,9 @@ OVERLAY_PROCESSOR = "corr-rca-shape"
 # (device, family) pair stays served by exactly one transport on the bus.
 CANONICAL_CHAIN = [
     "canon-override-ts", "canon-names", "canon-status-enums", "canon-bgp-enums",
-    "canon-isis-enums", "canon-convert", "vendor-nokia", "vendor-arista",
-    "transport-tag", "canon-tags", "ownership-gate", "drop-unmapped",
-    "drop-internal-tags",
+    "canon-isis-enums", "canon-isis-area-info", "canon-convert", "vendor-nokia",
+    "vendor-arista", "transport-tag", "canon-tags", "canon-isis-level-tag",
+    "ownership-gate", "drop-unmapped", "drop-internal-tags",
 ]
 
 # handle_metric's wire contract, in the field order the Go MetricEvent struct
@@ -348,6 +348,37 @@ RAW_FIXTURES = [
      "tags": {"source": "spine1", "subscription-name": "srl-cpu",
               "control_slot": "A"},
      "values": {"platform/control/memory/utilization": 73}},
+    # ---- IS-IS DEPTH (frontend-wave #11). Every tag/value shape below is
+    # transcribed VERBATIM from a live gNMI capture of lab spine1 (SRL 24.10,
+    # 2026-09-02), including the leaf-list `.0` suffix gnmic appends to
+    # oper-area-id and the bare "2" the level list-key carries. These are
+    # canonical for VictoriaMetrics and must NOT reach the correlation bus.
+    {"name": "srl-isis-db", "timestamp": TS_NS,
+     "tags": {"source": "spine1", "subscription-name": "srl-isis-db",
+              "network-instance_name": "default", "instance_name": "fabric",
+              "level_level-number": "2"},
+     "values": {"/srl_nokia-network-instance:network-instance/protocols/"
+                "srl_nokia-isis:isis/instance/level/statistics/total-lsps": 6}},
+    {"name": "srl-isis-db", "timestamp": TS_NS,
+     "tags": {"source": "spine1", "subscription-name": "srl-isis-db",
+              "network-instance_name": "default", "instance_name": "fabric",
+              "level_level-number": "2"},
+     "values": {"/srl_nokia-network-instance:network-instance/protocols/"
+                "srl_nokia-isis:isis/instance/level/statistics/spf-runs": 10}},
+    {"name": "srl-isis-db", "timestamp": TS_NS,
+     "tags": {"source": "spine1", "subscription-name": "srl-isis-db",
+              "network-instance_name": "default", "instance_name": "fabric"},
+     "values": {"/srl_nokia-network-instance:network-instance/protocols/"
+                "srl_nokia-isis:isis/instance/oper-area-id.0": "49.0001"}},
+    {"name": "srl-isis-timers", "timestamp": TS_NS,
+     "tags": {"source": "spine1", "subscription-name": "srl-isis-timers",
+              "network-instance_name": "default", "instance_name": "fabric",
+              "interface_interface-name": "ethernet-1/1.0",
+              "adjacency_neighbor-system-id": "0100.0000.0011",
+              "adjacency_adjacency-level": "L2"},
+     "values": {"/srl_nokia-network-instance:network-instance/protocols/"
+                "srl_nokia-isis:isis/instance/interface/adjacency/"
+                "remaining-holdtime": 27}},
 ]
 
 DETERMINISTIC_CHAIN = [p for p in CANONICAL_CHAIN if p != "canon-override-ts"]
@@ -370,6 +401,76 @@ def test_full_chain_admits_only_gnmi_owned_rca_families():
     assert bgp["tags"]["vendor"] == "arista"
     assert bgp["tags"]["mvalue"] == "6", "BGP enum → BGP4-MIB established(6)"
     assert bgp["tags"]["ts"] == TS_ISO, "ts must be RFC3339Nano, like the Go lane"
+
+
+# The four IS-IS-depth families and the exact canonical labels each must carry.
+# The label SET is the contract igpmon queries on (device/vrf/isis_level/
+# isis_neighbor/ifName/area) — a missing or renamed label is an empty panel.
+ISIS_DEPTH_EXPECTED = {
+    "device_isis_lsp_count": (
+        6, {"device": "spine1", "vrf": "default", "isis_level": "L2",
+            "vendor": "nokia", "transport": "gnmi"}),
+    "device_isis_spf_runs_total": (
+        10, {"device": "spine1", "vrf": "default", "isis_level": "L2",
+             "vendor": "nokia", "transport": "gnmi"}),
+    "device_isis_area": (
+        1, {"device": "spine1", "vrf": "default", "area": "49.0001",
+            "vendor": "nokia", "transport": "gnmi"}),
+    "device_isis_adj_hold_seconds": (
+        27, {"device": "spine1", "vrf": "default", "isis_level": "L2",
+             "ifName": "ethernet-1/1.0", "isis_neighbor": "0100.0000.0011",
+             "vendor": "nokia", "transport": "gnmi"}),
+}
+
+
+@needs_gnmic
+def test_isis_depth_families_are_canonicalized_with_their_join_labels():
+    """frontend-wave #11: the LSDB/area/SPF/hold series igpmon probes for.
+
+    Run WITHOUT the shaper — this is the VictoriaMetrics lane, which is the only
+    lane these belong on. Asserted through gnmic's own engine, so the starlark
+    info-series step and the level-number -> L1/L2 vocabulary are proven by the
+    runtime that actually applies them, not by re-reading the YAML."""
+    out = run_processors(RAW_FIXTURES, DETERMINISTIC_CHAIN)
+    got = {}
+    for e in out:
+        # The ownership gate deletes SNMP-owned values, which can leave an event
+        # with no `values` key at all — that is a dropped family, not a failure.
+        for name, val in (e.get("values") or {}).items():
+            if name.startswith("device_isis_") and name != "device_isis_adj_state":
+                got[name] = (val, e["tags"])
+    assert set(got) == set(ISIS_DEPTH_EXPECTED), (
+        "the IS-IS depth families did not all survive the canonical chain: "
+        f"got {sorted(got)}")
+    for name, (want_val, want_tags) in ISIS_DEPTH_EXPECTED.items():
+        val, tags = got[name]
+        assert val == want_val, f"{name}: value {val!r} != {want_val!r}"
+        assert tags == want_tags, f"{name}: labels {tags} != {want_tags}"
+
+
+@needs_gnmic
+def test_isis_level_vocabulary_is_single_valued_across_families():
+    """One label name, one vocabulary. The adjacency series speaks L1/L2 and the
+    level-scoped series carry a bare list-key digit; if the two ever diverge the
+    LSDB count silently stops joining the adjacency it describes."""
+    out = run_processors(RAW_FIXTURES, DETERMINISTIC_CHAIN)
+    levels = {t["isis_level"] for t in ((e.get("tags") or {}) for e in out)
+              if "isis_level" in t}
+    assert levels and levels <= {"L1", "L2"}, (
+        f"isis_level carries a non-canonical vocabulary: {sorted(levels)}")
+
+
+def test_isis_depth_families_are_not_on_the_correlation_allowlist():
+    """These are MONITORING series, not RCA evidence: they have no Go
+    counterpart in rcaMetricFamilies and must never widen the bus allowlist."""
+    admitted = set(jq_rca_table())
+    base_src = read("deployment", "docker", "gnmic", "gnmic.yaml")
+    for name in ("device_isis_lsp_count", "device_isis_spf_runs_total",
+                 "device_isis_area", "device_isis_adj_hold_seconds"):
+        assert name in base_src, \
+            f"{name} is no longer a canonical gnmic name — refresh this guard"
+        assert name not in admitted, \
+            f"{name} reached the correlation allowlist without a Go counterpart"
 
 
 @needs_gnmic

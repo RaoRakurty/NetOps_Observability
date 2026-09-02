@@ -3,6 +3,7 @@ package collectors
 import (
 	"os"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -215,4 +216,86 @@ func TestLoadProfiles_OwnerIndexLabel(t *testing.T) {
 		}
 	}
 	t.Fatal("device_bgp_peer_state not found in loaded generic profile")
+}
+
+// TestGenericProfileCarriesOSPFDepth pins the frontend-wave #11 "OSPF advanced"
+// rows on the generic (standard-MIB) floor.
+//
+// Every OID is asserted as a literal against the OSPF-MIB, because the whole
+// value of this profile is that the numbers are right: a transposed digit polls
+// a different object and the panel fills with a plausible wrong number, which is
+// worse than an empty one. The expected values below were resolved through the
+// vendored MIB index (collectors/mibs/index/oididx.json), not transcribed.
+//
+// The index labels are part of the contract too: the three ospfAreaTable rows
+// MUST be labelled {area} (the table is indexed by ospfAreaId) and the two
+// ospfIfTable rows MUST keep the default {index} so they join
+// device_ospf_if_state, which is labelled the same way.
+func TestGenericProfileCarriesOSPFDepth(t *testing.T) {
+	want := map[string]struct {
+		oid   []int
+		index string
+	}{
+		"device_ospf_lsdb_count":       {[]int{1, 3, 6, 1, 2, 1, 14, 2, 1, 7}, "area"},   // ospfAreaLsaCount
+		"device_ospf_area":             {[]int{1, 3, 6, 1, 2, 1, 14, 2, 1, 10}, "area"},  // ospfAreaStatus
+		"device_ospf_spf_runs_total":   {[]int{1, 3, 6, 1, 2, 1, 14, 2, 1, 4}, "area"},   // ospfSpfRuns
+		"device_ospf_if_hello_seconds": {[]int{1, 3, 6, 1, 2, 1, 14, 7, 1, 9}, "index"},  // ospfIfHelloInterval
+		"device_ospf_if_dead_seconds":  {[]int{1, 3, 6, 1, 2, 1, 14, 7, 1, 10}, "index"}, // ospfIfRtrDeadInterval
+	}
+	got := map[string]SNMPMetric{}
+	for _, p := range builtinProfiles() {
+		if p.Name != "generic" {
+			continue
+		}
+		for _, m := range p.Metrics {
+			if _, ok := want[m.Name]; ok {
+				got[m.Name] = m
+			}
+		}
+	}
+	for name, w := range want {
+		m, ok := got[name]
+		if !ok {
+			t.Errorf("%s missing from the generic profile", name)
+			continue
+		}
+		if !reflect.DeepEqual(m.OID, w.oid) {
+			t.Errorf("%s OID = %v, want %v", name, m.OID, w.oid)
+		}
+		if m.indexLabel() != w.index {
+			t.Errorf("%s index label = %q, want %q", name, m.indexLabel(), w.index)
+		}
+		if !m.Table {
+			t.Errorf("%s must be a table walk (ospfAreaTable / ospfIfTable)", name)
+		}
+		// SNMP-owned: gNMI carries IS-IS on this fabric, not OSPF. An owner here
+		// would silently withhold the family on every gNMI-capable device.
+		if m.Owner != "" {
+			t.Errorf("%s must stay SNMP-owned, got owner %q", name, m.Owner)
+		}
+	}
+}
+
+// The OSPF-MIB has NO per-neighbour hello or dead-interval column: ospfNbrTable
+// (1.3.6.1.2.1.14.10.1.x) is addr/index/rtrId/options/priority/state/events/
+// retransQLen/nbmaStatus/permanence/helloSuppressed + the three restart-helper
+// columns, and that is the whole table. The timers therefore come from
+// ospfIfTable and are PER INTERFACE. This test exists so nobody "fixes" the
+// profile later by inventing a neighbour-scoped timer OID under ospfNbrTable.
+func TestNoPerNeighbourOSPFTimerIsClaimed(t *testing.T) {
+	nbrTable := []int{1, 3, 6, 1, 2, 1, 14, 10}
+	underNbrTable := func(oid []int) bool {
+		if len(oid) < len(nbrTable) {
+			return false
+		}
+		return reflect.DeepEqual(oid[:len(nbrTable)], nbrTable)
+	}
+	for _, p := range builtinProfiles() {
+		for _, m := range p.Metrics {
+			isTimer := strings.Contains(m.Name, "hello") || strings.Contains(m.Name, "dead")
+			if isTimer && underNbrTable(m.OID) {
+				t.Errorf("%s polls %v under ospfNbrTable, which has no timer column", m.Name, m.OID)
+			}
+		}
+	}
 }

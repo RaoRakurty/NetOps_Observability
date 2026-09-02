@@ -20,11 +20,11 @@ targets:
     # Item 4: BGP/protocol subscriptions widened to network-instance[name=*] so
     # per-VRF / routing-instance / VPRN state flows (the widening lives in the
     # srl-bgp path definitions below; this target just lists subscription names).
-    subscriptions: [srl-interfaces, srl-cpu, srl-bgp, srl-isis]
+    subscriptions: [srl-interfaces, srl-cpu, srl-bgp, srl-isis, srl-isis-db, srl-isis-timers]
   172.40.40.12:57400:
     name: spine2
     password: ${SRL_GNMI_PASS}
-    subscriptions: [srl-interfaces, srl-cpu, srl-bgp, srl-isis]
+    subscriptions: [srl-interfaces, srl-cpu, srl-bgp, srl-isis, srl-isis-db, srl-isis-timers]
 
   # ---- Arista cEOS (plaintext gNMI :6030) ----
   172.40.40.21:6030:
@@ -112,6 +112,41 @@ subscriptions:
     stream-mode: on-change
     heartbeat-interval: 30s
 
+  # IS-IS DEPTH — LSP-database size, SPF-run counter and area membership
+  # (frontend-wave #11 "IS-IS advanced"). All three are Nokia SR Linux NATIVE
+  # nodes VERIFIED against lab spine1 (srl_nokia-isis, SRL 24.10) on 2026-09-02
+  # by a gNMI Get of /network-instance[name=default]/protocols/isis/instance[*] —
+  # the paths below are transcribed from that reply, not from a datasheet:
+  #   level[level-number=*]/statistics/total-lsps  -> 6   (LSPs in the L2 database)
+  #   level[level-number=*]/statistics/spf-runs    -> 10  (monotonic SPF counter)
+  #   oper-area-id                                 -> ["49.0001"] (leaf-list)
+  # SAMPLE, not on-change: none of the three is a flap signal — a database size
+  # and a run counter are levels an operator reads, and on-change on a counter
+  # that ticks per SPF would be a write amplifier for no diagnostic gain.
+  srl-isis-db:
+    paths:
+      - "/network-instance[name=*]/protocols/isis/instance[name=*]/level[level-number=*]/statistics/total-lsps"
+      - "/network-instance[name=*]/protocols/isis/instance[name=*]/level[level-number=*]/statistics/spf-runs"
+      - "/network-instance[name=*]/protocols/isis/instance[name=*]/oper-area-id"
+    mode: stream
+    stream-mode: sample
+    sample-interval: 60s
+
+  # IS-IS per-adjacency hold timer. VERIFIED on spine1: the SRL node is
+  # `adjacency[neighbor-system-id=*]/remaining-holdtime` and it is a COUNTDOWN
+  # (seconds left before the adjacency expires if no IIH arrives), reset by every
+  # hello — NOT the configured hold interval. Sampling it therefore yields a
+  # sawtooth; what it is evidence FOR is the floor: a value that trends toward 0,
+  # or a series that goes stale, means hellos stopped arriving. The canonical
+  # name keeps the `_seconds` unit suffix and every consumer is told the
+  # countdown semantics (igpmon's timers block, the ledger, the UI label).
+  srl-isis-timers:
+    paths:
+      - "/network-instance[name=*]/protocols/isis/instance[name=*]/interface[interface-name=*]/adjacency[neighbor-system-id=*]/remaining-holdtime"
+    mode: stream
+    stream-mode: sample
+    sample-interval: 30s
+
   # Nokia SR Linux control-plane health: CPU, memory, temperature.
   srl-cpu:
     paths:
@@ -169,11 +204,13 @@ outputs:
       - canon-status-enums
       - canon-bgp-enums
       - canon-isis-enums
+      - canon-isis-area-info
       - canon-convert
       - vendor-nokia
       - vendor-arista
       - transport-tag
       - canon-tags
+      - canon-isis-level-tag
       - ownership-gate
       - drop-unmapped
       - drop-internal-tags
@@ -245,6 +282,19 @@ processors:
         - replace: {apply-on: name, old: ".*bgp/neighbors/neighbor/afi-safis/afi-safi/state/prefixes/received$", new: "device_bgp_pfx_in"}
         # --- IS-IS adjacency state (IGP, SRL native) ---
         - replace: {apply-on: name, old: ".*isis/instance/interface/adjacency/state$", new: "device_isis_adj_state"}
+        # --- IS-IS depth (SRL native): LSP database size, SPF runs, area, hold ---
+        # Anchored on the SRL native suffixes captured from spine1. `total-lsps`
+        # is the DATABASE SIZE per level, which is exactly the LSDB count the
+        # igpmon LSDB block probes for (device_isis_lsp_count) — the day this
+        # subscription is deployed that block lights up with no code change.
+        - replace: {apply-on: name, old: ".*isis/instance/level/statistics/total-lsps$", new: "device_isis_lsp_count"}
+        - replace: {apply-on: name, old: ".*isis/instance/level/statistics/spf-runs$", new: "device_isis_spf_runs_total"}
+        # oper-area-id is a leaf-LIST: gnmic flattens it to `oper-area-id.<idx>`,
+        # one value per configured area address. The index is not identity, so
+        # every element maps to the same canonical family and the area itself
+        # becomes a LABEL (canon-isis-area-info below).
+        - replace: {apply-on: name, old: ".*isis/instance/oper-area-id\\.[0-9]+$", new: "device_isis_area"}
+        - replace: {apply-on: name, old: ".*isis/instance/interface/adjacency/remaining-holdtime$", new: "device_isis_adj_hold_seconds"}
 
   # [2] Status enums → IF-MIB numerics (ifOperStatus/ifAdminStatus values;
   # OpenConfig enums are modeled on the same list). Anchored — no substring
@@ -300,6 +350,30 @@ processors:
         - replace: {apply-on: value, old: "^up$", new: "3"}
         - replace: {apply-on: value, old: "^failed$", new: "4"}
 
+  # [2d] IS-IS area membership → an INFO series. The area address lives in the
+  # VALUE ("49.0001"), which is not a number and therefore cannot be a Prometheus
+  # sample; the identity has to move into a LABEL and the sample becomes the
+  # constant 1 (the standard `*_info` shape). None of gnmic's declarative
+  # processors can move a value into a tag PER EVENT — event-value-tag keys on
+  # the timestamp and would stamp `area` onto every other series sampled in the
+  # same instant — so this is the one place the chain runs a script. It is
+  # guarded on the canonical name, touches nothing else, and is a no-op for every
+  # other event in the stream.
+  #
+  # Verified end-to-end against lab spine1 on 2026-09-02: raw
+  # `oper-area-id.0 = "49.0001"` → `device_isis_area{area="49.0001",device="spine1",
+  # vrf="default"} 1`.
+  canon-isis-area-info:
+    event-starlark:
+      source: |
+        def apply(*events):
+            for e in events:
+                v = e.values.get("device_isis_area")
+                if v != None:
+                    e.tags["area"] = str(v)
+                    e.values["device_isis_area"] = 1
+            return events
+
   # [3] Canonical values are integers (matches the SNMP emitter's valueInt).
   canon-convert:
     event-convert:
@@ -309,7 +383,7 @@ processors:
   # [4] Vendor label, keyed on which subscription produced the event.
   vendor-nokia:
     event-add-tag:
-      tags: ["^srl-(interfaces|cpu|bgp|isis)$"]
+      tags: ["^srl-(interfaces|cpu|bgp|isis|isis-db|isis-timers)$"]
       add: {vendor: nokia}
   vendor-arista:
     event-add-tag:
@@ -330,7 +404,7 @@ processors:
   # invalid Prometheus labels.
   canon-tags:
     event-strings:
-      tag-names: ["^interface_name$", "^interface_interface-name$", "^source$", "^neighbor_neighbor-address$", "^neighbor_peer-address$", "^network-instance_name$", "^adjacency_neighbor-system-id$", "^adjacency_adjacency-level$", "^afi-safi_afi-safi-name$"]
+      tag-names: ["^interface_name$", "^interface_interface-name$", "^source$", "^neighbor_neighbor-address$", "^neighbor_peer-address$", "^network-instance_name$", "^adjacency_neighbor-system-id$", "^adjacency_adjacency-level$", "^afi-safi_afi-safi-name$", "^level_level-number$"]
       transforms:
         - replace: {apply-on: name, old: "^interface_name$", new: "ifName"}
         - replace: {apply-on: name, old: "^interface_interface-name$", new: "ifName"}
@@ -345,6 +419,25 @@ processors:
         # IS-IS adjacency identity
         - replace: {apply-on: name, old: "^adjacency_neighbor-system-id$", new: "isis_neighbor"}
         - replace: {apply-on: name, old: "^adjacency_adjacency-level$", new: "isis_level"}
+        # The level-scoped IS-IS series (LSDB size, SPF runs) are keyed by the
+        # SRL path key `level-number`, whose value is the bare digit 1/2 while
+        # the adjacency series already speaks L1/L2. Renaming alone would put two
+        # vocabularies under one label name and silently break the join, so the
+        # rename is paired with the value normalization in canon-isis-level-tag.
+        - replace: {apply-on: name, old: "^level_level-number$", new: "isis_level"}
+
+  # [6b] IS-IS level VOCABULARY. canon-tags renames two different raw keys onto
+  # `isis_level`: the adjacency's `adjacency-level` (already L1/L2) and the
+  # level list-key `level-number` (a bare 1/2). One label name must carry ONE
+  # vocabulary or device_isis_lsp_count{isis_level="2"} will never join
+  # device_isis_adj_state{isis_level="L2"}. Anchored, so the already-correct
+  # L1/L2 values are untouched. Verified live on spine1: level-number 2 → "L2".
+  canon-isis-level-tag:
+    event-strings:
+      tag-names: ["^isis_level$"]
+      transforms:
+        - replace: {apply-on: value, old: "^1$", new: "L1"}
+        - replace: {apply-on: value, old: "^2$", new: "L2"}
 
   # [7] OWNERSHIP GATE — families listed here are mapped and ready but still
   # SNMP-owned; deleting them prevents double-producing the same canonical

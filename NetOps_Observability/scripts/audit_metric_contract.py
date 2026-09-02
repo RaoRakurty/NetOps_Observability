@@ -43,6 +43,24 @@ GNMI_OWNED: dict[str, str] = {
                          "(gnmic.yaml ownership gate; telemetry-coverage-reference.md).",
     "device_isis_adj_state": "IS-IS adjacency on-change; no IS-IS MIB is collected — "
                              "gNMI is the sole, priority source (gnmic.yaml ownership gate).",
+    # --- IGP depth, frontend-wave #11 (telemetry-coverage-reference.md § F) ---
+    # The SNMP profile polls NO ISIS-MIB object at all, so the whole IS-IS family
+    # is gNMI-owned by the same logic as device_isis_adj_state above. Where
+    # ISIS-MIB (RFC 4444) does have a counterpart it is named, so a future
+    # agentless-IS-IS device has a starting point rather than a blank.
+    "device_isis_lsp_count": "LSP-database size per level (SRL level statistics/total-lsps). "
+                             "ISIS-MIB offers no database-SIZE column — only isisLSPTable, one row "
+                             "per LSP — and no ISIS-MIB object is polled here; gNMI owns it.",
+    "device_isis_spf_runs_total": "SPF runs per level (SRL level statistics/spf-runs). ISIS-MIB has "
+                                  "isisSysStatSPFRuns (1.3.6.1.2.1.138.1.5.1.1.12) but no ISIS-MIB "
+                                  "object is polled here; gNMI owns it.",
+    "device_isis_area": "IS-IS area-address INFO series (SRL instance oper-area-id). ISIS-MIB has "
+                        "isisManAreaAddr / isisAreaAddr but no ISIS-MIB object is polled here; "
+                        "gNMI owns it.",
+    "device_isis_adj_hold_seconds": "per-adjacency REMAINING hold countdown (SRL adjacency "
+                                    "remaining-holdtime). ISIS-MIB's isisISAdjHoldTimer "
+                                    "(1.3.6.1.2.1.138.1.6.1.1.9) is the nearest counterpart and is "
+                                    "not polled here; gNMI owns it.",
 }
 
 # PromQL functions / keywords that look like identifiers but are never metrics.

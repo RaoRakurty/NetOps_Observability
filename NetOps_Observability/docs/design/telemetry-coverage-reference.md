@@ -257,3 +257,149 @@ The two that most often get asked for:
   changes the attrs and state of an already-shipping rule, re-identifying every
   link trap already stored. That is the same class of change as the declared
   `bgp_adjacency_change` divergence and needs its own corpus re-bake.
+
+---
+
+## F. SHIPPED 2026-09-02 — IGP DEPTH (frontend-wave #11: "OSPF advanced + IS-IS advanced")
+
+Nine new canonical series. They close the four gaps `internal/igpmon` had been
+probing for and honestly reporting as absent since it shipped: **LSP/LSA
+database size, area membership, SPF-run counters and adjacency/interface
+timers**. Before this change no collector emitted any of them on either
+transport; `igpmon` answered `lsdb:false` + a note, forever.
+
+These are **monitoring** series, not RCA evidence. None was added to
+`rcaMetricFamilies` (`src/backend/collectors/metric_events.go`) or to the gnmic
+shaper's allowlist, and `tests/test_gnmi_correlation_lane.py` now asserts that
+they stay off the correlation bus — the bus allowlist is a volume/RCA gate and a
+database size is not an incident signal.
+
+### F.1 IS-IS over gNMI — Nokia SR Linux native — **lab_validated**
+
+| Canonical series | SR Linux path (native `srl_nokia-isis`) | Fidelity | Promotion step |
+|---|---|---|---|
+| `device_isis_lsp_count{device,vrf,isis_level}` | `…/isis/instance[name=*]/level[level-number=*]/statistics/total-lsps` | **lab_validated** | deploy the `srl-isis-db` subscription and confirm the series in VictoriaMetrics → `live_validated` |
+| `device_isis_spf_runs_total{device,vrf,isis_level}` | `…/isis/instance[name=*]/level[level-number=*]/statistics/spf-runs` | **lab_validated** | as above |
+| `device_isis_area{device,vrf,area} = 1` | `…/isis/instance[name=*]/oper-area-id` (leaf-list) | **lab_validated** | as above |
+| `device_isis_adj_hold_seconds{device,vrf,ifName,isis_level,isis_neighbor}` | `…/isis/instance[name=*]/interface[interface-name=*]/adjacency[neighbor-system-id=*]/remaining-holdtime` | **lab_validated** | as above |
+
+**What "lab_validated" means here, precisely.** Two independent checks, both
+against reality rather than a datasheet:
+
+1. **The paths were read off the device.** A gNMI `Get` of
+   `/network-instance[name=default]/protocols/isis/instance[name=*]` on lab
+   **spine1** (Nokia SR Linux 24.10, 2026-09-02) returned the four nodes above
+   with real values (`total-lsps: 6`, `spf-runs: 10`, `oper-area-id: ["49.0001"]`,
+   `remaining-holdtime: 27`). Not one path in this section was transcribed from
+   documentation.
+2. **The canonical output was produced by the real engine.** The new
+   subscriptions were run through gnmic itself against spine1 with the full
+   canonical processor chain, and the emitted series/labels were captured and
+   pinned as fixtures in
+   `tests/test_gnmi_correlation_lane.py::test_isis_depth_families_are_canonicalized_with_their_join_labels`,
+   which replays them through the SAME gnmic binary the stack runs.
+
+**What is NOT yet claimed.** The deployed collector has not been restarted with
+the new subscriptions, so the series are not yet in VictoriaMetrics on this
+host. That single step is what separates `lab_validated` from `live_validated`,
+and it is why `igpmon` probes for the series rather than assuming them: the
+panel lights up by itself the moment the data arrives, with no code change and
+no window in which the UI shows a fabricated count.
+
+**Two mechanisms this needed, both verified live rather than assumed:**
+
+- `device_isis_area` is an **info series**. The area address lives in the VALUE
+  (`"49.0001"`), which is not a number and cannot be a Prometheus sample, so the
+  identity has to move into a label and the sample becomes the constant 1. No
+  declarative gnmic processor can do a per-event value→tag move (`event-value-tag`
+  keys on the timestamp and would stamp `area` onto every other series sampled in
+  the same instant), so the chain runs one guarded `event-starlark` step,
+  `canon-isis-area-info`. It is a no-op for every event that is not this family.
+- `isis_level` had to stay **one vocabulary**. The adjacency series already
+  speaks `L1`/`L2` (from `adjacency-level`), while the level-scoped statistics
+  are keyed by `level-number`, a bare `1`/`2`. Renaming alone would have put two
+  vocabularies under one label name and silently broken every join between an
+  LSDB count and the adjacency it describes, so `canon-isis-level-tag` normalizes
+  the value. Pinned by `test_isis_level_vocabulary_is_single_valued_across_families`.
+
+**Semantics that must not be lost in translation.**
+`device_isis_adj_hold_seconds` carries SR Linux's `remaining-holdtime`: a
+COUNTDOWN to adjacency expiry, reset by every received IIH — **not** the
+configured hold interval. Sampled, it is a sawtooth; the diagnostic content is
+the floor (a value trending to zero, or a series that stops updating, means
+hellos stopped arriving). The `_seconds` name is kept because the unit is
+seconds, and every consumer is told the countdown semantics: `igpmon`'s timers
+block note, the API type doc, and the UI's own caveat line under the table.
+
+### F.2 OSPF over SNMP — OSPF-MIB — **doc_claimed**
+
+| Canonical series | OSPF-MIB object | OID | Fidelity | Promotion step |
+|---|---|---|---|---|
+| `device_ospf_lsdb_count{device,area}` | `ospfAreaLsaCount` | `1.3.6.1.2.1.14.2.1.7` | **doc_claimed** | poll an OSPF-speaking SNMP device that answers `ospfAreaTable`, capture the walk, confirm the canonical series |
+| `device_ospf_area{device,area}` | `ospfAreaStatus` | `1.3.6.1.2.1.14.2.1.10` | **doc_claimed** | as above |
+| `device_ospf_spf_runs_total{device,area}` | `ospfSpfRuns` | `1.3.6.1.2.1.14.2.1.4` | **doc_claimed** | as above |
+| `device_ospf_if_hello_seconds{device,index}` | `ospfIfHelloInterval` | `1.3.6.1.2.1.14.7.1.9` | **doc_claimed** | poll a device that answers `ospfIfTable` |
+| `device_ospf_if_dead_seconds{device,index}` | `ospfIfRtrDeadInterval` | `1.3.6.1.2.1.14.7.1.10` | **doc_claimed** | as above |
+
+**Why doc_claimed and not lower.** Every OID was **resolved through the vendored
+MIB index** (`src/backend/collectors/mibs/index/oididx.json`, which carries
+OSPF-MIB), per the § E.1 anti-fabrication rule — none is transcribed from a
+vendor page. What is missing is the other half: **this deployment has no
+OSPF-speaking SNMP device**, so not one of these five has ever returned a row.
+They are correct-by-index and unproven-by-device, which is exactly what
+`doc_claimed` means.
+
+**Three modelling decisions, stated so they are not silently "fixed" later.**
+
+- **LSDB size is `ospfAreaLsaCount`, not a row count of `ospfLsdbTable`.** The
+  SNMP collector walks a COLUMN and labels each row by its index; it has no
+  aggregate-and-count mode, and counting the LSDB by walking it would pull one
+  varbind per LSA on every poll. `ospfAreaLsaCount` is the MIB's own answer to
+  the same question, one row per area. **It counts the LSAs IN each area:
+  AS-external LSAs (`ospfExternLsaCount`, a scalar) are area-less and are NOT
+  included.** The series is labelled `{area}` so the number is never read as a
+  router-wide total.
+- **SPF runs are per AREA.** OSPF-MIB has no router-wide `ospfSpfRuns` object —
+  the counter lives in `ospfAreaTable`. Summing across areas is the consumer's
+  decision, not the collector's, so `igpmon` reports both the total and the
+  per-area split and names the scope label it used.
+- **There is no per-NEIGHBOUR OSPF timer, and there cannot be.**
+  `ospfNbrTable` (`1.3.6.1.2.1.14.10.1.x`) is
+  addr/index/rtrId/options/priority/state/events/retransQLen/nbmaStatus/
+  permanence/helloSuppressed plus the three restart-helper columns — that is the
+  whole table. Hello and dead intervals exist only in `ospfIfTable` and are
+  therefore per INTERFACE. The API says which shape it returned rather than
+  letting a reader assume, and `TestNoPerNeighbourOSPFTimerIsClaimed` fails if
+  anyone later invents a neighbour-scoped timer OID under `ospfNbrTable`.
+
+### F.3 Where the definitions live, and what is still open
+
+The runtime definitions are in **`deployment/docker/gnmic/gnmic.yaml`** (+ its
+correlation twin) for the gNMI lane and in **both** SNMP profile sources for the
+SNMP lane — `src/backend/collectors/profiles.go` (built-ins) **and**
+`src/config/snmp_profiles.json`, because compose mounts `src/config` at
+`/config` and a JSON profile REPLACES the built-in of the same name at runtime.
+Editing only the Go file would leave the deployment unchanged.
+
+**Open: the code-owned catalog is not yet updated.** `telemetry-catalog/`
+(`identity.yaml`, `normalization.yaml`, `collection.yaml`, `normalize.py`) is the
+parallel, code-owned expression of these same rules, and it does not yet carry
+these nine families. Registering them there needs three things that are a
+separate change:
+
+1. an `area` identity entity (`identity.yaml` has no such canonical key today,
+   and `catalog.py` rejects a family label that is neither an identity key nor
+   structural);
+2. a `level_level-number` alias on the `isis_level` entity;
+3. two capabilities `normalize.py` does not have — the value→label promotion that
+   makes `device_isis_area` an info series, and the level-number → `L1`/`L2`
+   value normalization. Without them the replay engine and the gnmic runtime
+   would disagree about a label VALUE, which is precisely the drift the catalog
+   exists to catch, so adding the rows before the engine can express them would
+   be worse than leaving them out.
+
+`docs/design/telemetry-coverage-matrix.md` is GENERATED from that catalog by
+`coverage_matrix.py` and is drift-guarded in CI — it was deliberately NOT
+hand-edited here. It covers event symptoms and the RCA metric-episode lane, and
+since none of these nine series is an RCA family, the matrix is unchanged by
+this work (verified with `coverage_matrix.py --check`).

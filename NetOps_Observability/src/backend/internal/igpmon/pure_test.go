@@ -382,7 +382,7 @@ func TestMergeAdjacenciesBothSources(t *testing.T) {
 		ev(2000, "id2", "leaf1", "0000.0000.0002", "down"),
 		ev(1000, "id1", "leaf1", "0000.0000.0002", "unknown"),
 	}
-	got := MergeAdjacencies(live, events, 0)
+	got := MergeAdjacencies(live, events, nil, 0)
 	if len(got) != 1 {
 		t.Fatalf("want one adjacency, got %d", len(got))
 	}
@@ -408,7 +408,7 @@ func TestMergeAdjacenciesBothSources(t *testing.T) {
 }
 
 func TestMergeAdjacenciesEventsOnlyNeverClaimsUp(t *testing.T) {
-	got := MergeAdjacencies(nil, []Event{ev(2000, "b", "r1", "10.0.0.2", "up")}, 0)
+	got := MergeAdjacencies(nil, []Event{ev(2000, "b", "r1", "10.0.0.2", "up")}, nil, 0)
 	if len(got) != 1 {
 		t.Fatalf("want one adjacency, got %d", len(got))
 	}
@@ -427,7 +427,7 @@ func TestMergeAdjacenciesEventsOnlyNeverClaimsUp(t *testing.T) {
 }
 
 func TestMergeAdjacenciesLiveOnlyHasEmptyTimeline(t *testing.T) {
-	got := MergeAdjacencies([]LiveAdj{{Device: "leaf1", Peer: "p", State: "down", Up: false, Value: 1}}, nil, 10)
+	got := MergeAdjacencies([]LiveAdj{{Device: "leaf1", Peer: "p", State: "down", Up: false, Value: 1}}, nil, nil, 10)
 	if len(got) != 1 {
 		t.Fatalf("want one adjacency, got %d", len(got))
 	}
@@ -450,7 +450,7 @@ func TestMergeAdjacenciesOrderingCapAndIfnameFallback(t *testing.T) {
 		ev(7000, "e3", "a-dev", "p1", "up"),
 	}
 	events[1].IfName = "Gi0/1"
-	got := MergeAdjacencies(nil, events, 1)
+	got := MergeAdjacencies(nil, events, nil, 1)
 	if len(got) != 2 {
 		t.Fatalf("want two adjacencies, got %d", len(got))
 	}
@@ -469,7 +469,7 @@ func TestMergeAdjacenciesOrderingCapAndIfnameFallback(t *testing.T) {
 }
 
 func TestMergeAdjacenciesEmpty(t *testing.T) {
-	if got := MergeAdjacencies(nil, nil, 10); len(got) != 0 {
+	if got := MergeAdjacencies(nil, nil, nil, 10); len(got) != 0 {
 		t.Errorf("MergeAdjacencies(nil,nil) = %+v, want empty", got)
 	}
 }

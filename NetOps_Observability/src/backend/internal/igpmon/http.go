@@ -262,11 +262,9 @@ func (a *API) handleAdjacencies(w http.ResponseWriter, r *http.Request, proto Pr
 	if !live.available {
 		notes = append(notes, live.note)
 	}
-	lsdb := a.fetchLSDB(ctx, r, p, proto, deviceIDs)
-	cov.LSDB = lsdb.available
-	if !lsdb.available {
-		notes = append(notes, lsdb.note)
-	}
+	adv := a.fetchAdvanced(ctx, r, p, proto, deviceIDs)
+	cov.applyAdvanced(adv)
+	notes = append(notes, adv.notes()...)
 
 	a.deps.Metrics.Query(proto, "adjacencies")
 	a.deps.WriteJSON(w, http.StatusOK, map[string]any{
@@ -275,8 +273,12 @@ func (a *API) handleAdjacencies(w http.ResponseWriter, r *http.Request, proto Pr
 		"window_seconds": int(window.Seconds()),
 		"since":          since.Format(time.RFC3339),
 		"now":            now.Format(time.RFC3339),
-		"adjacencies":    MergeAdjacencies(live.rows, events, maxTimeline),
+		"adjacencies":    MergeAdjacencies(live.rows, events, adv.timers.byAdj, maxTimeline),
 		"event_count":    len(events),
+		"lsdb":           adv.lsdbBlock(proto),
+		"areas":          adv.areasBlock(),
+		"spf_runs":       adv.spfBlock(proto),
+		"timers":         adv.timersBlock(proto),
 		"coverage":       cov,
 		"source":         sourceLabel(cov),
 		"notes":          notes,
@@ -338,13 +340,13 @@ func (a *API) handleSummary(w http.ResponseWriter, r *http.Request, proto Proto)
 	if !live.available {
 		notes = append(notes, live.note)
 	}
-	lsdb := a.fetchLSDB(ctx, r, p, proto, nil)
-	cov.LSDB = lsdb.available
-	if !lsdb.available {
-		notes = append(notes, lsdb.note)
-	}
+	adv := a.fetchAdvanced(ctx, r, p, proto, nil)
+	cov.applyAdvanced(adv)
+	notes = append(notes, adv.notes()...)
 
-	devices := Summarize(live.rows, events, live.available)
+	devices := AttachAdvanced(
+		Summarize(live.rows, events, live.available),
+		adv.lsdb.byDevice, adv.spf.byDevice, adv.areas.byDevice)
 	deviceTruncated := false
 	if len(devices) > limit {
 		devices = devices[:limit]
@@ -368,13 +370,6 @@ func (a *API) handleSummary(w http.ResponseWriter, r *http.Request, proto Proto)
 }
 
 // ── GET /api/protocols/{proto}/health ───────────────────────────────────────
-
-// healthLSDB is the LSDB block. Both fields are null on every deployment today:
-// no collector emits an LSDB/LSP count over gNMI or SNMP.
-type healthLSDB struct {
-	LSPCount *int   `json:"lsp_count"`
-	Note     string `json:"note,omitempty"`
-}
 
 func (a *API) handleHealth(w http.ResponseWriter, r *http.Request, proto Proto) {
 	p, ok := a.deps.Authz(w, r, GateRead)
@@ -466,31 +461,13 @@ func (a *API) handleHealth(w http.ResponseWriter, r *http.Request, proto Proto) 
 		sortStrings(levels)
 	}
 
-	probe := a.fetchLSDB(ctx, r, p, proto, deviceIDs)
-	cov.LSDB = probe.available
-	lsdb := healthLSDB{Note: probe.note}
-	if probe.available {
-		total := 0
-		for _, n := range probe.counts {
-			total += n
-		}
-		lsdb = healthLSDB{LSPCount: &total}
-	} else {
-		notes = append(notes, probe.note)
-	}
-
-	// Area / level membership. IS-IS levels come from the adjacency series'
-	// isis_level label; OSPF area membership is collected by NOTHING today
-	// (ospfNbrTable carries no area, and the OpenConfig ospfv2 path is
-	// unvalidated), so it is null with the reason attached.
-	var areas []string
-	if proto == ProtoOSPF {
-		notes = append(notes, "OSPF area membership is not collected on this deployment "+
-			"(neither OSPF-MIB ospfNbrTable nor any validated gNMI path carries it)")
-	} else {
-		notes = append(notes, "IS-IS area addresses are not collected on this deployment; `levels` is derived from the "+
-			"isis_level label of the live adjacency series and is empty when no such series exists for this device")
-	}
+	// The four advanced probes. `levels` above stays derived from the live
+	// adjacency series' isis_level label — it says which levels this device has
+	// an ADJACENCY on, which is a different (and independently useful) fact from
+	// the area addresses the instance is configured with.
+	adv := a.fetchAdvanced(ctx, r, p, proto, deviceIDs)
+	cov.applyAdvanced(adv)
+	notes = append(notes, adv.notes()...)
 
 	a.deps.Metrics.Query(proto, "health")
 	a.deps.WriteJSON(w, http.StatusOK, map[string]any{
@@ -500,7 +477,6 @@ func (a *API) handleHealth(w http.ResponseWriter, r *http.Request, proto Proto) 
 		"window_seconds":    int(window.Seconds()),
 		"since":             since.Format(time.RFC3339),
 		"now":               now.Format(time.RFC3339),
-		"areas":             areas,
 		"levels":            levels,
 		"neighbor_count":    neighborCount,
 		"adjacencies_up":    adjUp,
@@ -509,17 +485,14 @@ func (a *API) handleHealth(w http.ResponseWriter, r *http.Request, proto Proto) 
 		"flaps":             flaps,
 		"last_change":       lastChange,
 		"stability":         stabilityScore(flaps, int(window.Seconds())),
-		"lsdb":              lsdb,
+		"lsdb":              adv.lsdbBlock(proto),
+		"areas":             adv.areasBlock(),
+		"spf_runs":          adv.spfBlock(proto),
+		"timers":            adv.timersBlock(proto),
 		"coverage":          cov,
 		"source":            sourceLabel(cov),
 		"notes":             notes,
 	})
-}
-
-// lsdbNote is the honest sentence for the absent LSDB source.
-func lsdbNote(proto Proto) string {
-	return "no LSDB/LSP-count series is collected on this deployment (" + proto.LSDBMetric() +
-		" is emitted by no collector today); LSDB size is not reported rather than reported as zero"
 }
 
 // sortStrings is a tiny in-place sort so the level list is stable across calls.

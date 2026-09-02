@@ -27,7 +27,24 @@ import (
 type Coverage struct {
 	Events     bool `json:"events"`
 	LiveSeries bool `json:"live_series"`
-	LSDB       bool `json:"lsdb"`
+	// The four "advanced" depth sources. Each is probed and reported
+	// SEPARATELY: on a real deployment they are collected by different
+	// transports and fail independently, so one flag for all of them would tell
+	// an operator that something is missing without telling them what.
+	LSDB    bool `json:"lsdb"`
+	Areas   bool `json:"areas"`
+	SPFRuns bool `json:"spf_runs"`
+	Timers  bool `json:"timers"`
+}
+
+// applyAdvanced records which of the four depth probes actually returned data.
+// It is the only place those flags are set, so a handler can never report a
+// block as covered while rendering its null.
+func (c *Coverage) applyAdvanced(a advanced) {
+	c.LSDB = a.lsdb.available
+	c.Areas = a.areas.available
+	c.SPFRuns = a.spf.available
+	c.Timers = a.timers.available
 }
 
 // Adjacency is one (device, neighbour) adjacency with its evidence.
@@ -51,6 +68,11 @@ type Adjacency struct {
 	Changes    int    `json:"changes"` // all adjacency-change events
 	UpEvents   int    `json:"up_events"`
 	DownEvents int    `json:"down_events"`
+	// HoldSeconds is the adjacency's remaining hold time where a timer series
+	// exists (IS-IS only — OSPF-MIB has no per-neighbour timer). It is a
+	// sampled COUNTDOWN, not a configured interval, and is null whenever no
+	// such series is collected for this adjacency.
+	HoldSeconds *int `json:"hold_seconds"`
 	// Timeline is the window's events for this adjacency, NEWEST FIRST.
 	Timeline []Event `json:"timeline"`
 }
@@ -62,9 +84,15 @@ type Adjacency struct {
 // plain (device, peer) key is a real join and not a guess.
 type adjKey struct{ device, peer string }
 
-// MergeAdjacencies joins live samples and windowed events into the per-
-// adjacency view, sorted by (device, peer) and each timeline newest-first.
-func MergeAdjacencies(live []LiveAdj, events []Event, capTimeline int) []Adjacency {
+// MergeAdjacencies joins live samples, windowed events and (where collected)
+// the per-adjacency hold timer into the per-adjacency view, sorted by
+// (device, peer) and each timeline newest-first.
+//
+// holds may be nil — no timer series is collected — in which case every row's
+// HoldSeconds stays null. It is never defaulted to 0: a hold countdown of zero
+// means "this adjacency is expiring right now", which is the single most
+// alarming value the field can carry and must never be invented.
+func MergeAdjacencies(live []LiveAdj, events []Event, holds map[adjKey]int, capTimeline int) []Adjacency {
 	byKey := map[adjKey]*Adjacency{}
 	order := make([]adjKey, 0, len(live)+len(events))
 
@@ -115,6 +143,13 @@ func MergeAdjacencies(live []LiveAdj, events []Event, capTimeline int) []Adjacen
 		}
 	}
 
+	for k, hold := range holds {
+		if a, ok := byKey[k]; ok {
+			h := hold
+			a.HoldSeconds = &h
+		}
+	}
+
 	out := make([]Adjacency, 0, len(order))
 	for _, k := range order {
 		out = append(out, *byKey[k])
@@ -141,6 +176,13 @@ type DeviceSummary struct {
 	// the single most dangerous number this API could return.
 	Adjacencies     *int `json:"adjacencies"`
 	DownAdjacencies *int `json:"down_adjacencies"`
+	// The advanced depth, per device. Each is null unless its OWN series was
+	// collected for THIS device — a fleet where one router streams an LSDB count
+	// and the rest do not must show the count on that one row and "not
+	// collected" on the others, never 0 on the others.
+	LSPCount *int     `json:"lsp_count"`
+	SPFRuns  *int     `json:"spf_runs"`
+	Areas    []string `json:"areas"`
 }
 
 // Summarize rolls events and live samples up per device, worst-first (most
@@ -291,4 +333,63 @@ func formatFloat1(f float64) string {
 		frac = 0
 	}
 	return itoa(whole) + "." + itoa(frac)
+}
+
+// AttachAdvanced annotates a roll-up with the per-device advanced depth.
+//
+// It is separate from Summarize because the two answer to different sources:
+// Summarize folds events + adjacency state, while these three come from three
+// independently-probed series that each may be absent. Only a device the probe
+// actually returned a value FOR is annotated; the rest keep their null, which
+// is what makes "collected here, not collected there" visible in one table.
+//
+// A device that appears ONLY in the advanced maps — it streams an LSDB count
+// but produced no adjacency event and no adjacency-state series in the window —
+// is APPENDED rather than dropped. It is a device participating in the protocol,
+// and silently omitting it would be the same class of error as reporting a zero.
+func AttachAdvanced(devices []DeviceSummary, lsdb, spf map[string]int, areas map[string][]string) []DeviceSummary {
+	idx := make(map[string]int, len(devices))
+	for i, d := range devices {
+		idx[d.Device] = i
+	}
+	extra := make([]string, 0, 4)
+	seenExtra := map[string]bool{}
+	touch := func(dev string) *DeviceSummary {
+		if i, ok := idx[dev]; ok {
+			return &devices[i]
+		}
+		if !seenExtra[dev] {
+			seenExtra[dev] = true
+			extra = append(extra, dev)
+		}
+		return nil
+	}
+	// Pass 1: discover any device known only to the advanced probes, so pass 2
+	// can annotate a slice that already contains it (append invalidates the
+	// pointers pass 1 would have handed out).
+	for _, m := range []map[string]int{lsdb, spf} {
+		for dev := range m {
+			touch(dev)
+		}
+	}
+	for dev := range areas {
+		touch(dev)
+	}
+	sort.Strings(extra)
+	for _, dev := range extra {
+		idx[dev] = len(devices)
+		devices = append(devices, DeviceSummary{Device: dev})
+	}
+	for dev, n := range lsdb {
+		v := n
+		devices[idx[dev]].LSPCount = &v
+	}
+	for dev, n := range spf {
+		v := n
+		devices[idx[dev]].SPFRuns = &v
+	}
+	for dev, list := range areas {
+		devices[idx[dev]].Areas = append([]string(nil), list...)
+	}
+	return devices
 }
