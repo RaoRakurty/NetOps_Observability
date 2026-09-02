@@ -24,10 +24,20 @@ import (
 	"netops/backend/internal/apikey"
 	"netops/backend/internal/applog"
 	"netops/backend/internal/audit"
+	// CONFIG-BACKUP-BEGIN
+	"netops/backend/internal/configdrift"
+	"netops/backend/internal/configstore"
+	// CONFIG-BACKUP-END
 	"netops/backend/internal/discovery"
+	// CONFIG-BACKUP-BEGIN
+	"netops/backend/internal/hardening"
+	// CONFIG-BACKUP-END
 	"netops/backend/internal/keycloak"
 	"netops/backend/internal/loginguard"
 	"netops/backend/internal/metricval"
+	// PACKET-CAPTURE-BEGIN
+	"netops/backend/internal/pcap"
+	// PACKET-CAPTURE-END
 	"netops/backend/internal/platformdb"
 	"netops/backend/internal/protocoldiag"
 	"netops/backend/internal/quarantine"
@@ -247,6 +257,18 @@ type server struct {
 	// package doc, "REMOVAL RULE". nil unless FEATURE_SECURITY_LANE=true.
 	securityLane *seclane.Lane
 	// SECURITY-LANE-END
+	// CONFIG-BACKUP-BEGIN — P3-CFG removable module (internal/configstore +
+	// internal/configdrift). All nil unless FEATURE_CONFIG_BACKUP=true.
+	configBackup *configstore.Manager   // capture runtime + scheduler
+	configAPI    *configstore.API       // /api/devices/{id}/config/* subtree
+	configDrift  *configdrift.Evaluator // sync badge + ConfigDrift bus signal
+	// CONFIG-BACKUP-END
+	// PACKET-CAPTURE-BEGIN — removable module (internal/pcap). Both nil unless
+	// FEATURE_PACKET_CAPTURE=true. A PCAP is customer payload, so this module is
+	// dormant by default and answers 404 when off (see internal/pcap's doc.go).
+	packetCapture *pcap.Manager // bounded on-device capture runtime
+	pcapAPI       *pcap.API     // /api/devices/{id}/pcap* subtree
+	// PACKET-CAPTURE-END
 	rcaRevisions *rcaRevisionStore     // report revision register, tenant-keyed (postmortem Phase 1 immutability)
 	rcaClock     func() time.Time      // DI seam for the RCA generation clock (nil = wall clock) — deterministic re-render tests inject it
 	portStore    portintel.Store       // Port Intelligence physical-layer store (#94)
@@ -1391,6 +1413,30 @@ func Run() {
 		}
 	}
 	// SECURITY-LANE-END
+	// CONFIG-BACKUP-BEGIN — Config Backup & Drift (P3-CFG): capture over the SSH
+	// gateway → sealed, content-addressed version store → drift verdict →
+	// ConfigDrift finding onto netops.security. Opt-in and default-off; with the
+	// flag off NOTHING is constructed, started or routed.
+	if envBool(configstore.EnvFeatureFlag) {
+		if err := srv.buildConfigBackup(); err != nil {
+			// Fail LOUD, not silently dormant: the operator asked for backups.
+			logError("config.backup", "config backup could not be started — NO device configurations will be captured", errf(err))
+		} else {
+			workers.start("config-backup", func() { srv.configBackup.Run(ctx) })
+		}
+	}
+	// CONFIG-BACKUP-END
+	// PACKET-CAPTURE-BEGIN — Packet Capture: bounded, per-interface, on-device
+	// capture over the SSH gateway → sealed capture store. There is NO scheduler
+	// and NO worker: every capture is an explicit, audited operator action.
+	// Opt-in and default-off; with the flag off NOTHING is constructed or routed.
+	if envBool(pcap.EnvFeatureFlag) {
+		if err := srv.buildPacketCapture(); err != nil {
+			// Fail LOUD, not silently dormant: the operator asked for capture.
+			logError("pcap", "packet capture could not be started — NO captures will be possible", errf(err))
+		}
+	}
+	// PACKET-CAPTURE-END
 	// seam.Seam bootstrap engine (#67 build ⑤ / cloud-ingestion §4.1): auto-suggest
 	// seam instances from telemetry so the grounding gate has an inventory.
 	srv.startSeamBootstrap(ctx)
@@ -1866,6 +1912,11 @@ func (s *server) routes(mux *http.ServeMux) {
 	// SECURITY-LANE-BEGIN
 	s.registerSecurityLaneRoutes(mux)
 	// SECURITY-LANE-END
+	// CONFIG-BACKUP-BEGIN
+	if s.configDrift != nil {
+		mux.HandleFunc("/api/config/drift", s.configDrift.HandleDriftList)
+	}
+	// CONFIG-BACKUP-END
 	// Parser coverage (A6). /api/admin/parser/stats is platform-GLOBAL plumbing
 	// (whole-process engine counters, not a tenant's rows) and takes the
 	// platform-admin gate; the two /api/telemetry routes are per-tenant DATA,
@@ -2553,6 +2604,16 @@ func (s *server) handleDeviceByID(w http.ResponseWriter, r *http.Request) {
 		s.handleDeviceSite(w, r)
 		return
 	}
+	// CONFIG-BACKUP-BEGIN
+	if s.configAPI != nil && s.configAPI.ServeDeviceSubroute(w, r) {
+		return
+	}
+	// CONFIG-BACKUP-END
+	// PACKET-CAPTURE-BEGIN
+	if s.pcapAPI != nil && s.pcapAPI.ServeDeviceSubroute(w, r) {
+		return
+	}
+	// PACKET-CAPTURE-END
 	id := r.URL.Path[len("/api/devices/"):]
 	if id == "" {
 		http.NotFound(w, r)
@@ -2747,6 +2808,19 @@ func (s *server) handlePromMetrics(w http.ResponseWriter, _ *http.Request) {
 		s.securityLane.Metrics().Write(w)
 	}
 	// SECURITY-LANE-END
+	// CONFIG-BACKUP-BEGIN
+	if s.configBackup != nil {
+		s.configBackup.Metrics().Write(w)
+	}
+	if s.configDrift != nil {
+		s.configDrift.Metrics().Write(w)
+	}
+	// CONFIG-BACKUP-END
+	// PACKET-CAPTURE-BEGIN
+	if s.packetCapture != nil {
+		s.packetCapture.Metrics().Write(w)
+	}
+	// PACKET-CAPTURE-END
 	if s.parserCovMetrics != nil {
 		s.parserCovMetrics.Write(w)
 	}
@@ -3449,10 +3523,11 @@ func (s *server) securityLaneDeps() seclane.Deps {
 		},
 
 		// Vendor advisories: the OFFLINE feed is the canonical, credential-free
-		// provider (§5g air-gap path). ConfigSource stays nil until config
-		// capture (T-config) lands — the hardening lane then reports every rule
-		// UNASSESSED rather than falsely clear.
+		// provider (§5g air-gap path). ConfigSource is the sealed config store
+		// when FEATURE_CONFIG_BACKUP is on; nil while it is off — the hardening
+		// lane then reports every rule UNASSESSED rather than falsely clear.
 		AdvisoryFeed: s.vulns,
+		ConfigSource: s.configHardeningSource(), // P3-CFG: sealed config store (nil while FEATURE_CONFIG_BACKUP is off)
 		ParseSoftware: func(vendor, osStr string) (string, string) {
 			osi := collectors.ParseOS(vendor, osStr)
 			return osi.Product, osi.Version
@@ -3540,6 +3615,485 @@ func (s *server) securityLaneSeams(ctx context.Context, tenant string) ([]seclan
 }
 
 // SECURITY-LANE-END
+
+// CONFIG-BACKUP-BEGIN
+
+// configVersionStore selects the version register: normalized PG rows under
+// STORE_BACKEND=postgres (migration 0038, tenant_iso FORCE-RLS), else the file
+// register. Same selector shape as newSecurityControlPlaneStore.
+func (s *server) configVersionStore() configstore.Store {
+	if ps, ok := platformdb.ActivePG(); ok {
+		return configstore.NewPGStore(ps.DB())
+	}
+	return configstore.NewFileStore(envOr("CONFIG_BACKUP_VERSIONS_FILE", "/data/config_backup_versions.json"))
+}
+
+func (s *server) configDriftStore() configdrift.StateStore {
+	if ps, ok := platformdb.ActivePG(); ok {
+		return configdrift.NewPGStore(ps.DB())
+	}
+	return configdrift.NewFileStore(envOr("CONFIG_DRIFT_STATE_FILE", "/data/config_drift_state.json"))
+}
+
+// configSealer adapts the secret-custody vault to configstore.Sealer. Marker is
+// the vault's own version prefix, so the blob store can prove a value is sealed
+// before it ever reaches the disk.
+type configSealer struct{ v *vault.Vault }
+
+func (c configSealer) Seal(tenant, fieldID, plaintext string) (string, error) {
+	return c.v.Encrypt(tenant, fieldID, plaintext)
+}
+func (c configSealer) Open(tenant, fieldID, sealed string) (string, error) {
+	return c.v.Decrypt(tenant, fieldID, sealed)
+}
+func (c configSealer) Active() bool   { return c.v.Sealed() }
+func (c configSealer) Marker() string { return vault.VersionPrefix }
+
+// configDeviceOwner resolves a device's OWNING tenant from the inventory row —
+// the §3a rule 2 authority the hardening ConfigSource keys on.
+func (s *server) configDeviceOwner(deviceID string) (string, bool) {
+	if s.discovery == nil {
+		return "", false
+	}
+	d, ok := s.discovery.Get(deviceID)
+	if !ok {
+		return "", false
+	}
+	return deviceTenant(d), true
+}
+
+// configBackupTenants lists the tenants the scheduler sweeps (the
+// securityLaneTenants rule: no global tenant, no suspended tenant).
+func (s *server) configBackupTenants() []string {
+	if s.tenants == nil {
+		return nil
+	}
+	out := make([]string, 0, 8)
+	for _, t := range s.tenants.List() {
+		id := normTenant(t.ID)
+		if id == "" || id == TenantGlobal || t.Status == TenantStatusSuspended {
+			continue
+		}
+		out = append(out, id)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// configBackupDevices returns ONE tenant's own devices (§3a: the inventory row's
+// tenant is the authority; this path has no request body at all).
+func (s *server) configBackupDevices(tenant string) []configstore.Device {
+	if s.discovery == nil {
+		return nil
+	}
+	want := normTenant(tenant)
+	all := s.discovery.Devices()
+	out := make([]configstore.Device, 0, len(all))
+	for _, d := range all {
+		if deviceTenant(d) != want {
+			continue
+		}
+		out = append(out, configstore.Device{
+			ID: d.ID, Name: d.Name, Address: d.Address,
+			Vendor: d.Vendor, OS: d.OS, Model: d.Model, TenantID: deviceTenant(d),
+		})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
+	return out
+}
+
+func (s *server) configLookupDevice(deviceID string) (configstore.Device, bool) {
+	if s.discovery == nil {
+		return configstore.Device{}, false
+	}
+	d, ok := s.discovery.Get(deviceID)
+	if !ok {
+		return configstore.Device{}, false
+	}
+	return configstore.Device{
+		ID: d.ID, Name: d.Name, Address: d.Address,
+		Vendor: d.Vendor, OS: d.OS, Model: d.Model, TenantID: deviceTenant(d),
+	}, true
+}
+
+// configAuthz maps the module's gates onto the RBAC model: reads are
+// infrastructure:read, capture/golden are infrastructure:write. Config backup is
+// per-tenant DATA, so it is requirePerm + a tenant filter, NOT a platform gate.
+func (s *server) configAuthz(w http.ResponseWriter, r *http.Request, gate configstore.Gate) (configstore.Principal, bool) {
+	level := LevelRead
+	if gate == configstore.GateWrite {
+		level = LevelWrite
+	}
+	claims, ok := s.requirePerm(w, r, "infrastructure", level)
+	if !ok {
+		return configstore.Principal{}, false
+	}
+	tenant, cross := principalTenant(claims)
+	return configstore.Principal{Tenant: tenant, Cross: cross, Subject: claims.Sub}, true
+}
+
+func (s *server) configDriftAuthz(w http.ResponseWriter, r *http.Request, _ configdrift.Gate) (configdrift.Principal, bool) {
+	claims, ok := s.requirePerm(w, r, "infrastructure", LevelRead)
+	if !ok {
+		return configdrift.Principal{}, false
+	}
+	tenant, cross := principalTenant(claims)
+	return configdrift.Principal{Tenant: tenant, Cross: cross, Subject: claims.Sub}, true
+}
+
+// configAudit is the securityAudit shape for API actions. A configuration READ
+// passes detail["sensitive"]=true from the module itself.
+func (s *server) configAudit(r *http.Request, tenant, action string, detail map[string]any) {
+	if s.audit == nil {
+		return
+	}
+	claims, _ := userFrom(r.Context())
+	_, cross := principalTenant(claims)
+	if detail == nil {
+		detail = map[string]any{}
+	}
+	detail["action"] = action
+	s.audit.Record(AuditEvent{
+		Actor: claims.Sub, Tenant: tenant, Cross: cross,
+		Method: r.Method, Path: r.URL.Path, Status: http.StatusOK, Decision: "allow",
+		Remote: auditClientIP(r), Detail: detail,
+	})
+}
+
+// configCaptureAudit records a SCHEDULED capture — there is no request behind
+// it, so the actor is the worker identity rather than a borrowed principal.
+func (s *server) configCaptureAudit(tenant, deviceID, action string, detail map[string]any) {
+	if s.audit == nil {
+		return
+	}
+	if detail == nil {
+		detail = map[string]any{}
+	}
+	detail["action"] = action
+	detail["device"] = deviceID
+	s.audit.Record(AuditEvent{
+		Time: time.Now().UTC(), Actor: "system:config-backup", Tenant: tenant,
+		Method: "WORKER", Path: "/api/devices/" + deviceID + "/config/backup",
+		Status: http.StatusOK, Decision: "allow", Detail: detail,
+	})
+}
+
+// configGateway binds capture to the SAME SSH client and the SAME host-key TOFU
+// custody the operator terminal uses: HostKeyCheck IS device_ssh.go's pinned
+// fingerprint store, so a device whose key changed is refused identically on
+// both paths. Credentials are a least-privilege, read-only account whose
+// password/key are sealed at rest like every other reversible secret (§8).
+func (s *server) configGateway() *configstore.SSHGateway {
+	return &configstore.SSHGateway{
+		Credentials: func(context.Context, configstore.Device) (configstore.Credential, error) {
+			user := os.Getenv(configstore.EnvSSHUser)
+			pw, err := s.vault.Decrypt("", "configstore.capture.password", os.Getenv(configstore.EnvSSHPassword))
+			if err != nil {
+				return configstore.Credential{}, err
+			}
+			key, err := s.vault.Decrypt("", "configstore.capture.key", os.Getenv(configstore.EnvSSHKey))
+			if err != nil {
+				return configstore.Credential{}, err
+			}
+			if user == "" || (pw == "" && key == "") {
+				return configstore.Credential{}, errors.New("no config-capture credential configured (set CONFIG_BACKUP_SSH_USER and CONFIG_BACKUP_SSH_PASSWORD or _KEY)")
+			}
+			return configstore.Credential{Username: user, Password: pw, PrivateKey: key}, nil
+		},
+		HostKeyCheck: s.sshHosts.check,
+		DialTimeout:  sshDialTimeout(),
+		Port:         envInt(configstore.EnvSSHPort, 22),
+		OnHostKey: func(dev configstore.Device, fp string, first bool) {
+			if first {
+				logInfo("config.backup", "device host key pinned on first capture", map[string]any{
+					"device": dev.ID, "fingerprint": fp})
+			}
+		},
+	}
+}
+
+// buildConfigBackup CONSTRUCTS the drift evaluator, then the capture manager
+// over it, and stores all three on the server. Order matters: the manager's
+// drift observers ARE the evaluator's methods.
+//
+// It is a builder, not a launcher, and its name says so: the only goroutine this
+// module runs is the scheduler, started by the VISIBLE workers.start(
+// "config-backup", …) beside the call — so it is drained on shutdown like every
+// other tracked worker, and cancelOnlyWorkers() correctly does not list it.
+func (s *server) buildConfigBackup() error {
+	versions := s.configVersionStore()
+	sealer := configSealer{v: s.vault}
+	blobs, err := configstore.NewFileBlobStore(envOr(configstore.EnvDir, configstore.DefaultDir), sealer.Marker())
+	if err != nil {
+		return err
+	}
+	open := func(v configstore.Version) (string, error) {
+		sealed, gerr := blobs.Get(v.BlobRef)
+		if gerr != nil {
+			return "", gerr
+		}
+		return sealer.Open(configstore.NormTenant(v.TenantID), configstore.BlobField(v.DeviceID, v.SHA), sealed)
+	}
+	drift, err := configdrift.New(configdrift.Deps{
+		Now:      func() time.Time { return time.Now().UTC() },
+		Store:    s.configDriftStore(),
+		Versions: versions,
+		Open:     open,
+		// The same Vector bus-bridge produce path every other Go producer uses
+		// (no Kafka client in the backend, §6 allowlist). The retry ladder itself
+		// lives in internal/secbus and is REUSED, never re-implemented.
+		Publish: func(ctx context.Context, topic string, recs []configdrift.Record) (int, error) {
+			out := make([]proxyRecord, 0, len(recs))
+			for _, r := range recs {
+				out = append(out, proxyRecord{Key: r.Key, Value: r.Value})
+			}
+			return produceJSON(ctx, topic, out)
+		},
+		// Spool is deliberately nil: the drift VERDICT is already durable in the
+		// state row and the version row, so an unplaceable bus copy is counted
+		// (netops_config_drift_lost_total) and logged rather than duplicating
+		// seclane's dead-letter ladder — which would also break seclane's
+		// removal recipe by making main.go's seclane import load-bearing here.
+		Devices: func(tenant string) []configdrift.DeviceRef {
+			refs := []configdrift.DeviceRef{}
+			for _, d := range s.configBackupDevices(tenant) {
+				refs = append(refs, configdrift.DeviceRef{ID: d.ID, Name: d.Name, TenantID: d.TenantID})
+			}
+			return refs
+		},
+		Metrics:    configdrift.NewMetrics(),
+		Authz:      s.configDriftAuthz,
+		WriteJSON:  writeJSON,
+		WriteError: writeError,
+		LogWarn:    func(m string, f map[string]any) { logWarn("config.drift", m, f) },
+		LogError:   func(m string, f map[string]any) { logError("config.drift", m, f) },
+		Scrub:      scrubLogValue,
+	})
+	if err != nil {
+		return err
+	}
+	mgr, err := configstore.New(configstore.Deps{
+		Now:          func() time.Time { return time.Now().UTC() },
+		Tenants:      s.configBackupTenants,
+		Devices:      s.configBackupDevices,
+		LookupDevice: s.configLookupDevice,
+		Gateway:      s.configGateway(),
+		Sealer:       sealer,
+		Blobs:        blobs,
+		Store:        versions,
+		Metrics:      configstore.NewMetrics(),
+		OnCapture:    drift.Observe,
+		OnFailure:    drift.OnFailure,
+		Authz:        s.configAuthz,
+		Audit:        s.configAudit,
+		AuditCapture: s.configCaptureAudit,
+		WriteJSON:    writeJSON,
+		WriteError:   writeError,
+		LogWarn:      func(m string, f map[string]any) { logWarn("config.backup", m, f) },
+		LogError:     func(m string, f map[string]any) { logError("config.backup", m, f) },
+		Scrub:        scrubLogValue,
+		Interval:     durationOr(configstore.EnvInterval, configstore.DefaultInterval),
+		KeepVersions: envInt(configstore.EnvKeepVersions, configstore.DefaultKeepVersions),
+	})
+	if err != nil {
+		return err
+	}
+	s.configDrift, s.configBackup = drift, mgr
+	s.configAPI = configstore.NewAPI(mgr, drift.StatusFor)
+	return nil
+}
+
+// configHardeningSource is the seam internal/seclane's Deps.ConfigSource takes.
+// nil while config backup is off, which keeps the hardening lane's honest
+// "control not assessed (fail-closed)" verdicts.
+func (s *server) configHardeningSource() hardening.ConfigSource {
+	if s.configDrift == nil {
+		return nil
+	}
+	return s.configDrift.HardeningSource(s.configDeviceOwner)
+}
+
+// CONFIG-BACKUP-END
+
+// PACKET-CAPTURE-BEGIN
+
+// pcapStore selects the capture register: normalized PG rows under
+// STORE_BACKEND=postgres (migration 0039, tenant_iso FORCE-RLS), else the file
+// register. Same selector shape as configVersionStore.
+func (s *server) pcapStore() pcap.Store {
+	if ps, ok := platformdb.ActivePG(); ok {
+		return pcap.NewPGStore(ps.DB())
+	}
+	return pcap.NewFileStore(envOr(pcap.EnvMetaFile, "/data/pcap_captures.json"))
+}
+
+// pcapSealer adapts the secret-custody vault to pcap.Sealer. The marker is the
+// vault's own version prefix, so the blob store can prove a value is sealed
+// before it ever reaches the disk — the property that matters most here,
+// because the value is customer payload.
+type pcapSealer struct{ v *vault.Vault }
+
+func (c pcapSealer) Seal(tenant, fieldID, plaintext string) (string, error) {
+	return c.v.Encrypt(tenant, fieldID, plaintext)
+}
+func (c pcapSealer) Open(tenant, fieldID, sealed string) (string, error) {
+	return c.v.Decrypt(tenant, fieldID, sealed)
+}
+func (c pcapSealer) Active() bool   { return c.v.Sealed() }
+func (c pcapSealer) Marker() string { return vault.VersionPrefix }
+
+// pcapLookupDevice resolves ONE device id for the HTTP path. The inventory row's
+// tenant is the §3a rule 2 authority; this path reads no tenant from a request.
+func (s *server) pcapLookupDevice(deviceID string) (pcap.Device, bool) {
+	if s.discovery == nil {
+		return pcap.Device{}, false
+	}
+	d, ok := s.discovery.Get(deviceID)
+	if !ok {
+		return pcap.Device{}, false
+	}
+	return pcap.Device{
+		ID: d.ID, Name: d.Name, Address: d.Address,
+		Vendor: d.Vendor, OS: d.OS, Model: d.Model, TenantID: deviceTenant(d),
+	}, true
+}
+
+// pcapAuthz maps the module's gates onto the RBAC model. Packet capture is
+// per-tenant DATA, so it is requirePerm + a tenant filter, NOT a platform gate.
+// The gate SPLIT is the deliberate part: listing captures is infrastructure:read,
+// but STARTING one, DOWNLOADING one (a reveal of customer payload) and DELETING
+// one are infrastructure:write — a PCAP download must never be a read-level act.
+func (s *server) pcapAuthz(w http.ResponseWriter, r *http.Request, gate pcap.Gate) (pcap.Principal, bool) {
+	level := LevelRead
+	if gate == pcap.GateWrite {
+		level = LevelWrite
+	}
+	claims, ok := s.requirePerm(w, r, "infrastructure", level)
+	if !ok {
+		return pcap.Principal{}, false
+	}
+	tenant, cross := principalTenant(claims)
+	return pcap.Principal{Tenant: tenant, Cross: cross, Subject: claims.Sub}, true
+}
+
+// pcapAudit is the securityAudit shape for capture actions. The module itself
+// passes detail["sensitive"]=true on every start, fetch and download: a capture
+// contains real payload, and a reveal of it is never anonymous.
+func (s *server) pcapAudit(r *http.Request, tenant, action string, detail map[string]any) {
+	if s.audit == nil {
+		return
+	}
+	claims, _ := userFrom(r.Context())
+	_, cross := principalTenant(claims)
+	if detail == nil {
+		detail = map[string]any{}
+	}
+	detail["action"] = action
+	s.audit.Record(AuditEvent{
+		Actor: claims.Sub, Tenant: tenant, Cross: cross,
+		Method: r.Method, Path: r.URL.Path, Status: http.StatusOK, Decision: "allow",
+		Remote: auditClientIP(r), Detail: detail,
+	})
+}
+
+// pcapRuntimeAudit records the moment packet payload left a device — the
+// capture runtime has no request behind it, so the actor is the worker identity
+// and the capture row carries the operator who asked for it.
+func (s *server) pcapRuntimeAudit(tenant, deviceID, action string, detail map[string]any) {
+	if s.audit == nil {
+		return
+	}
+	if detail == nil {
+		detail = map[string]any{}
+	}
+	detail["action"] = action
+	detail["device"] = deviceID
+	s.audit.Record(AuditEvent{
+		Time: time.Now().UTC(), Actor: "system:packet-capture", Tenant: tenant,
+		Method: "WORKER", Path: "/api/devices/" + deviceID + "/pcap",
+		Status: http.StatusOK, Decision: "allow", Detail: detail,
+	})
+}
+
+// pcapGateway binds capture to the SAME SSH client and the SAME host-key TOFU
+// custody the operator terminal and config capture use: HostKeyCheck IS
+// device_ssh.go's pinned fingerprint store, so a device whose key changed is
+// refused identically on all three paths. Credentials are a least-privilege
+// account whose password/key are sealed at rest like every other reversible
+// secret (§8).
+func (s *server) pcapGateway() *pcap.SSHGateway {
+	return &pcap.SSHGateway{
+		Credentials: func(context.Context, pcap.Device) (pcap.Credential, error) {
+			user := os.Getenv(pcap.EnvSSHUser)
+			pw, err := s.vault.Decrypt("", "pcap.capture.password", os.Getenv(pcap.EnvSSHPassword))
+			if err != nil {
+				return pcap.Credential{}, err
+			}
+			key, err := s.vault.Decrypt("", "pcap.capture.key", os.Getenv(pcap.EnvSSHKey))
+			if err != nil {
+				return pcap.Credential{}, err
+			}
+			if user == "" || (pw == "" && key == "") {
+				return pcap.Credential{}, errors.New("no packet-capture credential configured (set PCAP_SSH_USER and PCAP_SSH_PASSWORD or _KEY)")
+			}
+			return pcap.Credential{Username: user, Password: pw, PrivateKey: key}, nil
+		},
+		HostKeyCheck: s.sshHosts.check,
+		DialTimeout:  sshDialTimeout(),
+		Port:         envInt(pcap.EnvSSHPort, 22),
+		OnHostKey: func(dev pcap.Device, fp string, first bool) {
+			if first {
+				logInfo("pcap", "device host key pinned on first capture", map[string]any{
+					"device": dev.ID, "fingerprint": fp})
+			}
+		},
+	}
+}
+
+// buildPacketCapture CONSTRUCTS the capture manager and its HTTP surface. There
+// is no worker to start AT ALL: a capture is always an explicit, audited
+// operator action, never a scheduled sweep — the design's "capturing customer
+// traffic is high-privilege" rule made structural. Each capture's own bounded
+// goroutine is spawned by the manager for the life of that one capture and is
+// bounded by the request's duration cap, so there is nothing here for the
+// shutdown drain or cancelOnlyWorkers() to name.
+func (s *server) buildPacketCapture() error {
+	sealer := pcapSealer{v: s.vault}
+	blobs, err := pcap.NewFileBlobStore(envOr(pcap.EnvDir, "/data/packet-captures"), sealer.Marker())
+	if err != nil {
+		return err
+	}
+	mgr, err := pcap.New(pcap.Deps{
+		Now:          func() time.Time { return time.Now().UTC() },
+		LookupDevice: s.pcapLookupDevice,
+		Gateway:      s.pcapGateway(),
+		// The DEFAULT command table. When the Vendor Profile registry grows the
+		// capture.pcap_start_cmd / pcap_stop_cmd / pcap_fetch_cmd field set, a
+		// registry-backed table is swapped in HERE and nothing else changes.
+		Commands:     pcap.NewDefaultCommandTable(),
+		Sealer:       sealer,
+		Blobs:        blobs,
+		Store:        s.pcapStore(),
+		Metrics:      pcap.NewMetrics(),
+		Authz:        s.pcapAuthz,
+		Audit:        s.pcapAudit,
+		AuditRuntime: s.pcapRuntimeAudit,
+		WriteJSON:    writeJSON,
+		WriteError:   writeError,
+		LogWarn:      func(m string, f map[string]any) { logWarn("pcap", m, f) },
+		LogError:     func(m string, f map[string]any) { logError("pcap", m, f) },
+		Scrub:        scrubLogValue,
+		Keep:         envInt(pcap.EnvKeep, pcap.DefaultKeep),
+	})
+	if err != nil {
+		return err
+	}
+	s.packetCapture = mgr
+	s.pcapAPI = pcap.NewAPI(mgr)
+	return nil
+}
+
+// PACKET-CAPTURE-END
 
 // handleSecurityExposureStory serves GET /api/security/exposure-stories/{id} by
 // DELEGATING to the correlation detail handler — an Exposure Story IS a

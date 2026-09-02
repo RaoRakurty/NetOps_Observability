@@ -69,6 +69,18 @@ var apiRoutes = []apiRoute{
 	{"POST", "/api/devices/{id}/config/golden", "Config Backup", "Mark a stored version as the device's golden baseline (infrastructure:write)"},
 	{"GET", "/api/devices/{id}/config/status", "Config Backup", "One device's configuration sync status: in_sync | changed | drifted | unknown"},
 	{"GET", "/api/config/drift", "Config Backup", "Configuration drift across the caller's devices, paged and filterable by state (infrastructure:read)"},
+	// Packet Capture (internal/pcap). Registered ONLY when
+	// FEATURE_PACKET_CAPTURE=true, so a flag-off deployment 404s every one of
+	// them and the feature is not enumerable. A PCAP is customer PAYLOAD: every
+	// capture is bounded (<=60 s, <=10 000 packets, <=25 MiB, one per device at
+	// a time), sealed under the tenant DEK at rest, and start/download/delete
+	// are audited with a `sensitive` tag. Download is deliberately
+	// infrastructure:WRITE, not read — revealing payload is not a read-level act.
+	{"POST", "/api/devices/{id}/pcap", "Packet Capture", "Start a bounded on-device packet capture on one interface (infrastructure:write; 202 + capture id, 409 when one is already running, 400 naming the bound on a guardrail breach)"},
+	{"GET", "/api/devices/{id}/pcap", "Packet Capture", "List a device's captures, newest first (infrastructure:read; 404 outside the caller's tenant)"},
+	{"GET", "/api/devices/{id}/pcap/{capture_id}", "Packet Capture", "One capture's status: running | stored | failed, with packets, bytes and the filter it ran with"},
+	{"GET", "/api/devices/{id}/pcap/{capture_id}/download", "Packet Capture", "Stream the unsealed capture as application/vnd.tcpdump.pcap (infrastructure:write; audited as a sensitive reveal)"},
+	{"DELETE", "/api/devices/{id}/pcap/{capture_id}", "Packet Capture", "Delete a capture and its sealed blob (infrastructure:write; audited)"},
 	{"GET", "/api/tunnels", "Telemetry", "Overlay tunnel telemetry (IPsec/SD-WAN/GRE)"},
 	{"GET", "/api/flows/top", "Telemetry", "Top talkers (NetFlow/ClickHouse)"},
 	{"POST", "/api/logs/search", "Telemetry", "Search logs (OpenSearch)"},

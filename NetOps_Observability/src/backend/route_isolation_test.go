@@ -203,6 +203,36 @@ var routeIsolationLedger = map[string]string{
 	// optional UI surfaces silently vanish for everyone else.
 	"/api/features": "infra",
 	"/api/devices":  "scoped",
+	// "/api/devices/" also carries the Config Backup subtree (P3-CFG,
+	// internal/configstore): {id}/config/versions, {id}/config/versions/{sha},
+	// {id}/config/diff, {id}/config/backup, {id}/config/golden and
+	// {id}/config/status are dispatched from handleDeviceByID via
+	// configAPI.ServeDeviceSubroute, so they inherit this "scoped"
+	// classification (they are not separate mux.HandleFunc registrations and
+	// therefore cannot be separate ledger keys — TestEveryRouteClassified
+	// rejects a ledger key that is not a live mux route). Each one is per-tenant
+	// DATA: the device is resolved through the principal-scoped inventory FIRST
+	// (foreign or absent id → 404 alike, existence never revealed) and the
+	// version rows are then read through the store's own tenant filter (PG
+	// tenant_iso FORCE-RLS, migration 0038) as an independent second line.
+	// Cross-org isolation proven by config_backup_isolation_test.go.
+	//
+	// It ALSO carries the Packet Capture subtree (internal/pcap):
+	// {id}/pcap (GET list, POST start), {id}/pcap/{capture_id} (GET status,
+	// DELETE) and {id}/pcap/{capture_id}/download, dispatched the same way from
+	// handleDeviceByID via pcapAPI.ServeDeviceSubroute and inheriting this
+	// "scoped" classification for the same reason (no separate mux.HandleFunc,
+	// so no separate ledger key). These are per-tenant DATA of the most
+	// sensitive kind — a PCAP is customer PAYLOAD — so the chain is: device
+	// resolved through the principal-scoped inventory FIRST (foreign or absent
+	// id → 404 alike), then the capture row read through the store's own tenant
+	// filter (PG tenant_iso FORCE-RLS, migration 0039), then the sealed blob
+	// opened under an AAD bound to (tenant, device, capture) so a blob that
+	// somehow crossed tenants is unreadable rather than mis-served. The gate is
+	// deliberately SPLIT: list/status are infrastructure:read, but start,
+	// download (a reveal of payload) and delete are infrastructure:write.
+	// Cross-org isolation proven by pcap_isolation_test.go plus
+	// internal/pcap/{http,store}_test.go.
 	"/api/devices/": "scoped",
 	// Port Intelligence (#94): every port/interface/optics read is tenant DATA,
 	// scoped by requirePerm(infrastructure:read) + the portStore RLS/tenant
@@ -543,7 +573,17 @@ var routeIsolationLedger = map[string]string{
 	"/api/auth/ldap/login":      "public",
 	"/api/auth/tacacs/login":    "public",
 	"/api/auth/mfa/login":       "public",
-	"/api/openapi.json":         "public",
+	// Config Backup & Drift (P3-CFG, internal/configstore + internal/configdrift).
+	// Per-tenant DATA: version rows and the drift badge are stamped with the
+	// DEVICE's tenant and read through the store's own tenant filter (PG
+	// tenant_iso FORCE-RLS, migration 0038); a cross-tenant device or version id
+	// answers 404 and a cursor cannot page out of the caller's tenant. The
+	// /api/devices/{id}/config/* subtree is dispatched from handleDeviceByID (it
+	// inherits /api/devices/'s classification); this is the one new mux route.
+	// Isolation proven by config_backup_isolation_test.go plus
+	// internal/configstore/{http,store}_test.go and internal/configdrift/http_test.go.
+	"/api/config/drift": "scoped",
+	"/api/openapi.json": "public",
 }
 
 var validRouteCategories = map[string]bool{
