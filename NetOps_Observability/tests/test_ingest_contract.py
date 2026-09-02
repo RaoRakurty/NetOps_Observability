@@ -434,8 +434,16 @@ def test_every_storage_sink_routes_through_its_processor_hook():
         "opensearch_snmptrap": ("snmptrap_rules", "snmptrap_store_route"),
         "opensearch_cloudlogs": ("cloudlogs_rules", None),
         "clickhouse_flows": ("flows_rules", "flows_store_route"),
+        # P3-L1 security findings lane. Its store route peels off findings whose
+        # (native_id, scan_id) identity is incomplete — see tests/test_security_lane.py.
+        "opensearch_secfindings": ("security_rules", "security_store_route"),
     }
-    hooks = processors_default()["transforms"]
+    # The security lane's hook pair is declared STATICALLY in the router config
+    # (src/backend/processors/generate.go does not enumerate the lane yet), so it
+    # is not in the generated file — the mutual exclusion is pinned in
+    # tests/test_security_lane.py.
+    hooks = dict(processors_default()["transforms"])
+    hooks["security_rules"] = vector_cfg("router")["transforms"]["security_rules"]
     for sink, (hook, route) in expect.items():
         got = cfg["sinks"][sink]["inputs"]
         if route is None:
@@ -451,12 +459,14 @@ def test_every_storage_sink_routes_through_its_processor_hook():
         assert hook in hooks, f"default processors file no longer defines {hook} — a cold start cannot boot"
     assert cfg["transforms"]["flows_os_sample"]["inputs"] == ["flows_store_route._unmatched"], \
         "the OS flow sample must see the SAME shaped (and quarantine-filtered) records as ClickHouse"
-    # The quarantine sink consumes exactly the three routes' quarantine outputs.
+    # The quarantine sink consumes exactly the four routes' quarantine outputs
+    # (P3-L1 added security: a finding with no deterministic doc identity).
     assert sorted(cfg["sinks"]["opensearch_quarantine"]["inputs"]) == [
         "flows_store_route.quarantine",
+        "security_store_route.quarantine",
         "snmptrap_store_route.quarantine",
         "syslog_store_route.quarantine",
-    ], "opensearch_quarantine must consume exactly the three lanes' quarantine routes"
+    ], "opensearch_quarantine must consume exactly the four lanes' quarantine routes"
 
 
 def test_processor_hooks_shape_after_attribution_not_before():
@@ -493,7 +503,7 @@ def test_processor_metrics_are_exported():
     # The attribution metric stays on the PRE-hook transforms.
     metric = vector_cfg("router")["transforms"]["tenant_attribution_metric"]
     assert set(metric["inputs"]) == {"applogs_tagged", "syslog_tagged", "snmptrap_tagged",
-                                     "cloudlogs_tagged", "flows_decoded"}
+                                     "cloudlogs_tagged", "security_tagged", "flows_decoded"}
 
 
 def test_router_loads_and_watches_the_generated_processors_config():

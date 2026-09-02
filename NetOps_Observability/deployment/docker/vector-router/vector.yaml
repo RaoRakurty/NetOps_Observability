@@ -217,6 +217,29 @@ sources:
     group_id: "netops-router-cloudlogs"
     decoding: { codec: json }
 
+  # Security evidence (P3-L1) — the generic secbus.EvidenceEvent envelope that
+  # every security provider (posture / exposure / signal) produces through
+  # internal/secbus. Indexed into netops-secfindings-{tenant}-* so findings are
+  # searchable, facetable and trendable as RAW verdicts, exactly as the
+  # syslog/flows/cloudlogs lanes are (SECURITY_FINDINGS_STORE_DECISION
+  # 2026-08-28). Kafka fan-out: the T2b Python engine consumes the SAME topic
+  # independently to ground Exposure Stories — neither consumer blocks the other.
+  kafka_security:
+    type: kafka
+    # SEC-006.2: mTLS to the broker when the deployment enables it — unquoted
+    # interpolation so the boolean lands as a boolean. Plaintext default; the
+    # enabling override sets KAFKA_TLS_ENABLED=true + the SVID paths and
+    # repoints BROKER_URLS at the mTLS listener.
+    tls:
+      enabled: ${KAFKA_TLS_ENABLED:-false}
+      ca_file: "${KAFKA_TLS_CA:-/tls/ca.pem}"
+      crt_file: "${KAFKA_TLS_CRT:-/tls/ca.pem}"
+      key_file: "${KAFKA_TLS_KEY:-/tls/ca.pem}"
+    bootstrap_servers: "${BROKER_URLS:-kafka:9092}"
+    topics: ["netops.security"]
+    group_id: "netops-router-security"
+    decoding: { codec: json }
+
   # F-03: dead letters produced by the AGGREGATOR tier (which has no storage
   # sink of its own). Already in the flat dead-letter shape, so this lane goes
   # straight to the opensearch_deadletter sink with no transform — a
@@ -456,6 +479,80 @@ transforms:
     type: remap
     inputs: [kafka_cloudlogs]
     source: *log_lane
+
+  # Security findings carry an explicit tenant_id stamped upstream from the
+  # AUTHENTICATED principal (secfindings.Finding.TenantID → EvidenceEvent), so
+  # this lane is `producer_stamped` by construction. Same shared anchor as the
+  # other log-shaped lanes: the forgeable control marks (cx_quarantine /
+  # cx_drop / cx_event_id) die at the head, the tenant segment is derived once,
+  # and `ts` (RFC3339 on this topic) is normalised to epoch-millis.
+  security_tagged:
+    type: remap
+    inputs: [kafka_security]
+    source: *log_lane
+
+  # DOC IDENTITY (SECURITY_FINDINGS_STORE_DECISION 2026-08-28, "Doc identity"):
+  #   _id = sha2(native_id | scan_id)
+  # Every scan's verdict is RETAINED (so trend/drift over time is queryable),
+  # while a redelivery or a bulk retry of the SAME verdict UPSERTS instead of
+  # duplicating. "Current state" is a query-time collapse (latest-by-ts per
+  # native_id), never a mutable upsert — which is why the id must be
+  # deterministic and must NEVER fall back to a random/auto id: an auto id
+  # would silently re-insert the same verdict on every replay and inflate every
+  # facet count the CTEM funnel is built on.
+  #
+  # Both halves are MANDATORY. `native_id` is the producer's deterministic
+  # verdict identity (secbus.nativeIDOf) and `scan_id` is the assessment run
+  # (attrs.scan_id, where secbus.attrsOf puts it). A document missing either is
+  # UNIDENTIFIABLE — it can be neither deduped nor collapsed — so it is
+  # QUARANTINED (operator-only index) rather than written with an invented id.
+  # That is the F-11 posture applied to this lane: an unattributable record is
+  # kept and made visible, never guessed at and never silently dropped.
+  security_identity:
+    type: remap
+    inputs: [security_tagged]
+    source: |
+      # The CLAUDE.md dotted-key gotcha: a `.label` map (Docker's
+      # com.docker.compose.* keys) is read by OpenSearch as an object PATH and
+      # produces a mapping conflict that silently drops EVERY doc on the lane.
+      # Hostile-capable/dotted fields die at the head, same as the anchor's
+      # control marks.
+      del(.label)
+      nid = to_string(.native_id) ?? ""
+      sid = to_string(.attrs.scan_id) ?? ""
+      if nid == "" || sid == "" {
+        # F-11 posture: mint the quarantine mark HERE (after the anchor
+        # stripped any inbound one), so only this stage can set it.
+        .cx_quarantine = true
+        .lane = "security"
+        .reason = "secfindings identity incomplete: native_id and attrs.scan_id are both required for the deterministic _id"
+        del(.cx_finding_id)
+      } else {
+        .cx_finding_id = sha2(nid + "|" + sid, variant: "SHA-256")
+      }
+
+  # ── PROCESSOR HOOK — STATIC PLACEHOLDER, NOT the generated pair ────────────
+  # Every other lane's <lane>_rules_apply/<lane>_rules pair is emitted by the
+  # API's processor compiler (src/backend/processors/generate.go, laneInputs +
+  # LaneOrder). That compiler does NOT enumerate `security`, and adding a lane
+  # to it is a backend change outside this task — so the pair is declared here
+  # STATICALLY, in the identical shape, so the sink can already read a hook and
+  # a cold start boots.
+  #
+  # !! WHEN generate.go GAINS `"security": "security_identity"` IN laneInputs
+  # !! (and "security" in LaneOrder), DELETE THESE TWO COMPONENTS in the same
+  # !! change. Vector refuses to start on a duplicate component id across its
+  # !! two --config files, so leaving both would take the whole router down.
+  # tests/test_security_lane.py pins that mutual exclusion.
+  security_rules_apply:
+    type: remap
+    inputs: [security_identity]
+    source: |
+      del(.__cx_noop__)
+  security_rules:
+    type: filter
+    inputs: [security_rules_apply]
+    condition: '!(to_bool(.cx_drop) ?? false)'
 
   # goflow2 renders the IP protocol as a NAME ("TCP"/"UDP"/"ICMP"…), but the
   # ClickHouse flows.proto column is UInt8 (the IANA number). Without this
@@ -721,6 +818,15 @@ transforms:
     inputs: [flows_rules]
     route:
       quarantine: 'to_bool(.cx_quarantine) ?? false'
+  # Security lane: same predicate, different mint site — the mark is set by
+  # security_identity when a finding carries no usable (native_id, scan_id)
+  # identity, so an unidentifiable verdict lands in the operator-only
+  # quarantine index instead of the tenant findings index under a made-up id.
+  security_store_route:
+    type: route
+    inputs: [security_rules]
+    route:
+      quarantine: 'to_bool(.cx_quarantine) ?? false'
 
   flows_os_sample:
     type: sample
@@ -765,6 +871,7 @@ transforms:
       - syslog_tagged
       - snmptrap_tagged
       - cloudlogs_tagged
+      - security_tagged
       - flows_decoded
     metrics:
       - type: counter
@@ -871,7 +978,7 @@ sinks:
   # F11.11 idempotency half at the storage layer.
   opensearch_quarantine:
     type: elasticsearch
-    inputs: [syslog_store_route.quarantine, snmptrap_store_route.quarantine, flows_store_route.quarantine]
+    inputs: [syslog_store_route.quarantine, snmptrap_store_route.quarantine, flows_store_route.quarantine, security_store_route.quarantine]
     endpoints: ["${OPENSEARCH_ENDPOINT:-http://opensearch:9200}"]  # SEC-008: TLS deployments point this at https
     auth:
       strategy: basic
@@ -1121,6 +1228,57 @@ sinks:
     # Partial-bulk 429s (cluster_block_exception) must back-pressure into Kafka
     # (72 h retention, F-04 acknowledgements), never be discarded; `id_key`
     # above makes the retried batch an UPSERT, so a retry cannot duplicate.
+    request_retry_partial: true
+    request:
+      retry_attempts: 90             # 2,581 s ≈ 43 min envelope; bounded so a
+      retry_initial_backoff_secs: 1  # poison batch cannot wedge the lane for long
+      retry_max_duration_secs: 30    # (caps the DELAY between retries, not total)
+    buffer:
+      type: memory                   # never disk: the router's only writable host
+      max_events: 500                # path is the root fs whose exhaustion is the
+      when_full: block               # trigger — see opensearch_syslog
+
+  # Security findings → OpenSearch (P3-L1). The durable findings store per
+  # SECURITY_FINDINGS_STORE_DECISION 2026-08-28: per-tenant index, read back
+  # through TenantIndexPattern("secfindings", …) + TenantFilter (§3a — the read
+  # path names only the caller's own pattern, so at-rest separation backstops a
+  # missed query filter, exactly as on the other lanes).
+  opensearch_secfindings:
+    type: elasticsearch
+    inputs: [security_store_route._unmatched]
+    endpoints: ["${OPENSEARCH_ENDPOINT:-http://opensearch:9200}"]  # SEC-008: TLS deployments point this at https
+    auth:
+      strategy: basic
+      user: "${OPENSEARCH_USER:-svc_router}"
+      password: "${OPENSEARCH_PASSWORD:-unused-on-plaintext-opensearch}"
+    # SEC-008: Vector's elasticsearch healthcheck performs a READ, and this
+    # identity is deliberately WRITE-ONLY — so a passing healthcheck would
+    # mean the role model is too permissive. Disabled on purpose: the real
+    # liveness signal for this lane is document counts climbing (F-18 /
+    # F-17), never a probe, and never "no errors in the log".
+    healthcheck: false
+    mode: bulk
+    # NOT cx_event_id (the Kafka coordinate every other lane uses): this lane's
+    # document identity is the VERDICT identity, sha2(native_id | scan_id),
+    # computed in security_identity. A record that could not produce one never
+    # reaches this sink (it peels off to quarantine), so the id is always
+    # present and always deterministic — a redelivery, a replay from the
+    # retained topic, or a #209 partial-bulk retry all UPSERT the same document
+    # instead of duplicating a verdict and inflating every facet count.
+    id_key: cx_finding_id
+    bulk:
+      index: "netops-secfindings-{{ tenant_seg }}-%Y.%m.%d"
+      action: index
+    api_version: v7
+    # #209 — same flood-stage exposure as opensearch_syslog; the full evidence,
+    # the 0.40.0 measurements and the buffer arithmetic live on that sink.
+    # Partial-bulk 429s (cluster_block_exception) must back-pressure into Kafka
+    # (72 h retention, F-04 acknowledgements), never be discarded; `id_key`
+    # above makes the retried batch an UPSERT, so a retry cannot duplicate.
+    # s10 back-reference: this is the sink class that silently discarded
+    # 291,296 syslog events during an 11-minute OpenSearch block because
+    # request_retry_partial defaults to FALSE. Evidence lanes degrade to
+    # DELAYED, never to LOST.
     request_retry_partial: true
     request:
       retry_attempts: 90             # 2,581 s ≈ 43 min envelope; bounded so a

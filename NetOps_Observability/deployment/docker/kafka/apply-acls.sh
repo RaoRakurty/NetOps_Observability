@@ -34,8 +34,9 @@
 #                      the kafka_bus sink multiplexes every HTTP-ingested
 #                      lane by __topic, so enumerating lanes here would just
 #                      go stale; the HTTP side authenticates producers.
-#   vector-router      consume  its 8 lanes (incl. netops.flows.raw — the
-#                      scale-P0 re-key hop); produce netops.deadletter AND
+#   vector-router      consume  its 9 lanes (incl. netops.flows.raw — the
+#                      scale-P0 re-key hop, and netops.security — the P3-L1
+#                      findings lane); produce netops.deadletter AND
 #                      netops.flows (the tenant-keyed flow feed);
 #                      groups netops-router-* (prefixed)
 #   correlation        consume  its 12 topics; group netops-correlation
@@ -79,8 +80,13 @@ $ACLS --add --allow-principal "$AGG" --producer \
     --topic netops. --resource-pattern-type prefixed >/dev/null
 
 echo "acls: router — consume its lanes, produce deadletter+flows, own its groups" >&2
+# P3-L1: netops.security joins the router's consume set — the security
+# findings lane (kafka_security → opensearch_secfindings). The topic is
+# already created by kafka-init in BOTH compose files and produced by the
+# backend's secbus producer under the aggregator's prefixed netops. grant;
+# only the router's READ was missing, so only the READ is added here.
 for t in netops.applogs netops.syslog netops.flows netops.flows.raw \
-         netops.snmptrap \
+         netops.snmptrap netops.security \
          netops.cloudlogs netops.cloudcosts netops.deadletter; do
     $ACLS --add --allow-principal "$ROUTER" \
         --operation Read --operation Describe --topic "$t" >/dev/null

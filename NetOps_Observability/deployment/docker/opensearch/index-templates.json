@@ -604,6 +604,279 @@
         }
       }
     },
+    "netops-secfindings": {
+      "_comment": "P3-L1 security findings lane (SECURITY_FINDINGS_STORE_DECISION 2026-08-28). The durable, append-only findings store: one document per (native_id, scan_id) verdict, _id = sha2(native_id|scan_id) stamped by the router's security_identity transform, so a replay UPSERTS and every scan's verdict is retained for trend/drift while \"current state\" is a query-time collapse (latest-by-ts per native_id). Facet fields (severity/status/status_id/standards/control_id/evidence_class/source/scan_id/native_id/seam_*/resource.*) are KEYWORD because the CTEM funnel, the compliance-%-by-framework and the severity breakdown are all terms aggregations; the narrative fields (title/observed/intended/detail/remediation) are TEXT because the T8 UI does full-text search over them. status_id is keyword deliberately: it is a 1-5 OCSF enum that is only ever faceted, never range-queried, and OpenSearch coerces the wire integer to its string form. The lane carries BOTH shapes on purpose: the secbus EvidenceEvent wire fields (native_id, entity_id, attrs.*, evidence_refs) that the producer emits today, and the secfindings.Finding json names (resource.*, observed/intended/status_detail/remediation) so a future direct-Finding writer cannot land unmapped. dynamic:false is the F-05 field wall \u2014 with attrs and evidence_refs being producer-shaped objects, an undeclared (or dotted, the del(.label) gotcha) key stays in _source and can never grow the mapping or reject a doc. Retention rides the shared netops-retention ISM policy (OPENSEARCH_LOG_RETENTION_DAYS), like every other lane.",
+      "index_patterns": [
+        "netops-secfindings-*"
+      ],
+      "template": {
+        "settings": {
+          "number_of_shards": 1,
+          "number_of_replicas": "${OPENSEARCH_REPLICAS}",
+          "codec": "best_compression",
+          "refresh_interval": "5s",
+          "mapping": {
+            "total_fields": {
+              "limit": 1000
+            },
+            "ignore_malformed": true
+          }
+        },
+        "mappings": {
+          "dynamic": false,
+          "properties": {
+            "ts": {
+              "type": "date",
+              "format": "strict_date_optional_time||epoch_millis"
+            },
+            "ts_source": {
+              "type": "keyword"
+            },
+            "ts_invalid": {
+              "type": "keyword"
+            },
+            "time": {
+              "type": "date",
+              "format": "strict_date_optional_time||epoch_millis"
+            },
+            "timestamp": {
+              "type": "date",
+              "format": "strict_date_optional_time||epoch_millis"
+            },
+            "tenant_id": {
+              "type": "keyword"
+            },
+            "tenant_seg": {
+              "type": "keyword"
+            },
+            "tenant_attribution": {
+              "type": "keyword"
+            },
+            "topic": {
+              "type": "keyword"
+            },
+            "schema_version": {
+              "type": "keyword"
+            },
+            "cx_finding_id": {
+              "type": "keyword"
+            },
+            "cx_event_id": {
+              "type": "keyword"
+            },
+            "cx_quarantine": {
+              "type": "boolean"
+            },
+            "native_id": {
+              "type": "keyword"
+            },
+            "scan_id": {
+              "type": "keyword"
+            },
+            "scan_uid": {
+              "type": "keyword"
+            },
+            "uid": {
+              "type": "keyword"
+            },
+            "evidence_class": {
+              "type": "keyword"
+            },
+            "kind": {
+              "type": "keyword"
+            },
+            "source": {
+              "type": "keyword"
+            },
+            "provider_source": {
+              "type": "keyword"
+            },
+            "severity": {
+              "type": "keyword"
+            },
+            "status": {
+              "type": "keyword"
+            },
+            "status_id": {
+              "type": "keyword"
+            },
+            "standards": {
+              "type": "keyword"
+            },
+            "control": {
+              "type": "keyword"
+            },
+            "control_id": {
+              "type": "keyword"
+            },
+            "category": {
+              "type": "keyword"
+            },
+            "category_name": {
+              "type": "keyword"
+            },
+            "raw_rule_id": {
+              "type": "keyword"
+            },
+            "entity_id": {
+              "type": "keyword"
+            },
+            "entity_type": {
+              "type": "keyword"
+            },
+            "entity_tokens": {
+              "type": "keyword"
+            },
+            "resource": {
+              "properties": {
+                "uid": {
+                  "type": "keyword"
+                },
+                "name": {
+                  "type": "keyword"
+                },
+                "hostname": {
+                  "type": "keyword"
+                },
+                "ip": {
+                  "type": "keyword"
+                },
+                "type": {
+                  "type": "keyword"
+                },
+                "platform": {
+                  "type": "keyword"
+                },
+                "device": {
+                  "type": "keyword"
+                },
+                "host": {
+                  "type": "keyword"
+                },
+                "kind": {
+                  "type": "keyword"
+                }
+              }
+            },
+            "seam": {
+              "properties": {
+                "seam_id": {
+                  "type": "keyword"
+                },
+                "seam_type": {
+                  "type": "keyword"
+                },
+                "internet_facing": {
+                  "type": "boolean"
+                }
+              }
+            },
+            "seam_id": {
+              "type": "keyword"
+            },
+            "seam_type": {
+              "type": "keyword"
+            },
+            "internet_facing": {
+              "type": "boolean"
+            },
+            "title": {
+              "type": "text"
+            },
+            "control_title": {
+              "type": "text"
+            },
+            "observed": {
+              "type": "text"
+            },
+            "intended": {
+              "type": "text"
+            },
+            "detail": {
+              "type": "text"
+            },
+            "status_detail": {
+              "type": "text"
+            },
+            "remediation": {
+              "type": "text"
+            },
+            "evidence_ref": {
+              "properties": {
+                "locator": {
+                  "type": "keyword"
+                },
+                "kind": {
+                  "type": "keyword"
+                },
+                "ruleset_version": {
+                  "type": "keyword"
+                },
+                "digest": {
+                  "type": "keyword"
+                }
+              }
+            },
+            "evidence_refs": {
+              "properties": {
+                "locator": {
+                  "type": "keyword"
+                },
+                "kind": {
+                  "type": "keyword"
+                },
+                "ruleset_version": {
+                  "type": "keyword"
+                },
+                "digest": {
+                  "type": "keyword"
+                }
+              }
+            },
+            "attrs": {
+              "properties": {
+                "evidence_class": {
+                  "type": "keyword"
+                },
+                "provider_source": {
+                  "type": "keyword"
+                },
+                "control_id": {
+                  "type": "keyword"
+                },
+                "control_title": {
+                  "type": "keyword"
+                },
+                "category": {
+                  "type": "keyword"
+                },
+                "raw_rule_id": {
+                  "type": "keyword"
+                },
+                "scan_id": {
+                  "type": "keyword"
+                },
+                "status": {
+                  "type": "keyword"
+                },
+                "status_id": {
+                  "type": "keyword"
+                },
+                "standards": {
+                  "type": "keyword"
+                }
+              }
+            },
+            "lane": {
+              "type": "keyword"
+            },
+            "reason": {
+              "type": "keyword"
+            }
+          }
+        }
+      }
+    },
     "netops-deadletter": {
       "_comment": "The dead-letter lane is deliberately flat: dropped_at/lane/reason/detail/raw only, raw being an encoded JSON STRING. A dead-letter index that can itself reject a document is worthless, so nothing here is dynamically typed. `detail` carries Vector's own error text (F-14) and `lane` the component that dropped the event; `reason` is the abort/error discriminator.",
       "index_patterns": [

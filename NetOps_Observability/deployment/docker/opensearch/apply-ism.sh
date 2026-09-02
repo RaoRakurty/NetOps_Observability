@@ -18,11 +18,18 @@ SNAP_KEEP="${OPENSEARCH_SNAPSHOT_KEEP:-14}"
 # already hit NOT_ENOUGH_SPACE once (F-55). Dead-letter is included too: it is
 # tiny by construction but "tiny by construction" is exactly the assumption that
 # stops being true during the incident you wrote it for.
+# netops-secfindings-*: the P3-L1 security findings lane (per-tenant, daily,
+# same shape as every lane above). It rides the SHARED netops-retention policy
+# and therefore the same OPENSEARCH_LOG_RETENTION_DAYS window on purpose — a
+# lane with no ism_template is a lane that grows forever (F-53), and findings
+# volume is bounded (a scan emits per-device, not per-packet), so it needs no
+# window of its own. Give it a dedicated policy the day compliance-trend
+# retention has to outlive telemetry retention, not before.
 # security-auditlog-*: the security plugin's own audit trail (SEC-008.1) rolls
 # a DAILY index like every lane above and is managed by no other policy —
 # without retention it is unbounded growth on the disk-fill path (F-53 class).
-PATTERNS='["netops-applogs-*","netops-platformlogs-*","netops-syslog-*","netops-flows-*","netops-snmptrap-*","netops-cloudlogs-*","netops-deadletter-*","security-auditlog-*"]'
-ADD_PATTERNS='netops-applogs-*,netops-platformlogs-*,netops-syslog-*,netops-flows-*,netops-snmptrap-*,netops-cloudlogs-*,netops-deadletter-*,security-auditlog-*'
+PATTERNS='["netops-applogs-*","netops-platformlogs-*","netops-syslog-*","netops-flows-*","netops-snmptrap-*","netops-cloudlogs-*","netops-secfindings-*","netops-deadletter-*","security-auditlog-*"]'
+ADD_PATTERNS='netops-applogs-*,netops-platformlogs-*,netops-syslog-*,netops-flows-*,netops-snmptrap-*,netops-cloudlogs-*,netops-secfindings-*,netops-deadletter-*,security-auditlog-*'
 
 # §8: OPENSEARCH_URL carries the bootstrap credential as URL userinfo on a
 # secured cluster — strip it before logging (this line used to echo the
