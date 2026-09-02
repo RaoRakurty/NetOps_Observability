@@ -198,9 +198,15 @@ def test_every_dedup_safe_table_is_rca_critical_or_replacing():
     non-committing findings write must not raise CHInsertRejected, because
     nothing upstream can replay it. It is durably spooled instead
     (CH_DLQ_ON_LOSS_TABLES); see test_findings_dedup_retry.py.
+
+    The four wireless tables joined on 2026-09-02 (tracker 189) on the
+    ReplacingMergeTree half of the claim — the same one corr_current has always
+    stood on — so the allowlist is now expressed as CH_REPLACING_TABLES rather
+    than a hand-written table name, and the DDL that backs it is asserted in
+    test_persist_contract_189.py.
     """
     assert main.CH_DEDUP_SAFE_TABLES <= (
-        main.CH_CRITICAL_TABLES | {"netops.corr_current", "netops.findings"})
+        main.CH_CRITICAL_TABLES | main.CH_REPLACING_TABLES | {"netops.findings"})
     assert "netops.corr_signals" not in main.CH_DEDUP_SAFE_TABLES
     assert "netops.corr_signals_archive" not in main.CH_DEDUP_SAFE_TABLES
     # A dedup-safe table that is neither RCA-critical nor a ReplacingMergeTree

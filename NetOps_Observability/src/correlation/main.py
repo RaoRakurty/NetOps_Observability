@@ -911,7 +911,18 @@ def _wa_note_outcome(tenant: str, outcome: str) -> None:
 async def _flush_tenant_write_amp(now: datetime) -> None:
     """Flush the accumulated per-tenant window to ClickHouse + refresh the
     top-K exposition. Failure is observable and non-fatal; the window resets
-    either way (accounting is best-effort, never backpressure)."""
+    either way (the flush is a TIMER — it must never backpressure the engine).
+
+    Tracker 189: "non-fatal" used to mean the whole window was DROPPED — one
+    insert carries every tenant's raw/persisted/damped accounting for those
+    300 s, nothing redelivers a timer, and the only trace was `lost_total++`.
+    The rows are now durably spooled by `ch_insert`'s give-up path
+    (corr_tenant_write_amp is in CH_DLQ_ON_LOSS_TABLES) and retried under a
+    stable `natural_key_token` first, so what stays best-effort is the
+    SCHEDULING, not the data. The `except` below is the last resort for a
+    caller-side failure (row building, an unexpected sink error) — by the time
+    it runs, `_ch_give_up` has already made the durable copy or counted the
+    loss."""
     global TENANT_WA, TENANT_WA_LAST, _WA_WINDOW_START
     if _WA_WINDOW_START is None:
         _WA_WINDOW_START = now
@@ -956,8 +967,15 @@ async def _flush_tenant_write_amp(now: datetime) -> None:
     if ch is not None:
         try:
             await ch_insert("netops.corr_tenant_write_amp", rows)
-        except Exception as exc:  # noqa: BLE001 — observable, non-fatal (§10)
-            log.warning("tenant write-amp flush failed (window kept in metrics): %s", exc)
+        # Blanket on purpose, and no longer blind (§10): the traceback is kept
+        # at DEBUG below, which is why the BLE001 suppression this line used to
+        # carry is gone rather than merely moved.
+        except Exception as exc:
+            log.warning("tenant write-amp flush failed (rows=%d; durable copy "
+                        "and accounting handled by the ch_insert give-up path, "
+                        "window still exposed in metrics): %s",
+                        len(rows), type(exc).__name__)
+            log.debug("tenant write-amp flush failure detail", exc_info=exc)
     TENANT_WA_LAST = sorted(
         rows, key=lambda r: (r["persisted"] + r["damped"], r["raw_seen"]), reverse=True,
     )[:CORR_WA_TOPK]
@@ -5245,6 +5263,19 @@ async def _ch_emit(table: str, rows: list, dedup_token: str, ctx: dict) -> bool:
     later, in a different call, on behalf of several versions at once.
     """
     global ARCHIVE_ROWS_WRITTEN
+    # tracker 189: an archive chunk carries no dedup token of its own, so the
+    # UNBATCHED sink now sends the same content-derived `member_key` the batched
+    # sink has always used — `<snapshot tok>:archive:<chunk>`, i.e.
+    # correlation_id + version + content hash + chunk number. It is stable
+    # across every retry of this insert AND across a replay of this version, and
+    # unique per chunk. Inert server-side today (corr_signals_archive has no
+    # non_replicated_deduplication_window — see CH_DEDUP_SAFE_TABLES) and
+    # therefore NOT a licence to retry a transport-unknown outcome on it; what
+    # it buys is that the day a window is added, the token that makes dedup
+    # correct is already on the wire. Only the archive: the other Evidence
+    # tables mint their own tokens at the call site.
+    if not dedup_token and table == "netops.corr_signals_archive":
+        dedup_token = str(ctx.get("member_key", ""))
     ok = await ch_insert(table, rows, dedup_token=dedup_token, **ctx)
     if ok is not False and table == "netops.corr_signals_archive":
         ARCHIVE_ROWS_WRITTEN += len(rows)
@@ -5773,15 +5804,18 @@ async def _write_evidence_inner(item: EvidenceItem, loop_yield, emit) -> bool:
         chunk = (await _offload(_archive_chunk, part, snap.correlation_id, version)
                  if len(part) >= CORR_ROW_PAGE_SIZE
                  else _archive_chunk(part, snap.correlation_id, version))
-        # No dedup token today (corr_signals_archive is neither RCA-critical
-        # nor dedup-safe), so `emit` gets "" and derives a deterministic member
-        # key from the item when it is batching. The row tally moved into the
-        # sink (`_ch_emit`) — under batching the insert happens later, on behalf
-        # of several versions at once, and only the sink knows when it landed.
-        # `member_key` (read only by the BATCHED sink; `_ch_emit` passes it
-        # through as failure context, so the unbatched INSERT itself — token,
-        # body, settings — is unchanged): a content-derived, chunk-numbered key
-        # for a write that carries no dedup token of its own. Without it the batcher fell back to a key scoped to
+        # No dedup token minted HERE (corr_signals_archive is neither
+        # RCA-critical nor dedup-safe): `emit` gets "" and both sinks derive the
+        # deterministic member key below instead — the batched one as its block
+        # member name, the unbatched one as the insert's own token (tracker
+        # 189). The row tally moved into the sink (`_ch_emit`) — under batching
+        # the insert happens later, on behalf of several versions at once, and
+        # only the sink knows when it landed.
+        # `member_key`: a content-derived, chunk-numbered key for a write that
+        # carries no dedup token of its own. Read by the batched sink as its
+        # block member name and, since tracker 189, by the unbatched sink as
+        # the insert's dedup token (the BODY and settings are unchanged either
+        # way). Without it the batcher fell back to a key scoped to
         # the BUFFER, so two consecutive solo blocks of the same item both
         # keyed `<tok>:<table>:0` and hashed to the SAME block token — inert
         # today only because corr_signals_archive is the one Evidence table
@@ -7931,18 +7965,122 @@ CORR_CH_TIMEOUT_S = float(os.environ.get("CORR_CH_TIMEOUT_S", "30.0"))
 #       a bare `ReadError`: the table was outside this set, so an AMBIGUOUS
 #       transport outcome (the server may well have committed) was counted lost
 #       instead of retried, and the ladder's accounting phase failed on it.
-# Deliberately ABSENT: corr_signals and corr_signals_archive are plain MergeTree
-# with no dedup window, so retrying them would duplicate causal/replay rows.
-# corr_signals is retried by the batcher instead (_flush_table), which resends
-# under a content-hash token; corr_signals_archive never raises (it is not an
-# RCA-critical table) and is retried whole on the next persist.
+#   wireless_sessions / wireless_onboarding_episodes / wireless_roams /
+#       wireless_mlo_links — ReplacingMergeTree(ingest_ts) keyed by the row's
+#       stable natural id ((tenant_id, session_id), (tenant_id, episode_id),
+#       (tenant_id, roam_id), (tenant_id, session_ref, link_id) —
+#       init.sql:1004-1110), so a re-sent row COLLAPSES on merge BY DDL with no
+#       schema change. Exactly the corr_current justification, and every insert
+#       now carries `natural_key_token(...)` so the token half of the proof
+#       holds too. Joined 2026-09-02 (tracker 189): all four were outside the
+#       retry contract, so a transient ClickHouse rejection dropped a wireless
+#       session/roam/episode outright — `ch_insert`'s bool return is ignored at
+#       those four call sites, which made `lost_total++` the entire trace.
+#
+# Deliberately ABSENT, and WHY — the previous version of this note said
+# "corr_signals and corr_signals_archive are plain MergeTree with no dedup
+# window", which was true of only one of them (tracker 189 audit, corrected
+# 2026-09-02):
+#   corr_signals — DOES carry non_replicated_deduplication_window = 1000: the
+#       ALTER in src/backend/internal/chschema/corr_schema.go converges it on
+#       every boot. The real reason it stays out is TOKEN STABILITY, not the
+#       DDL: the batcher's token is a content hash of the batch MEMBERSHIP, and
+#       a redelivery re-forms the batch differently, so the token moves and
+#       server-side dedup cannot fire. `CHBatcher._insert_batch` therefore
+#       retries the batch itself, parked with its membership (and token) frozen.
+#   corr_signals_archive — genuinely has NO dedup window: it is in neither
+#       init.sql (init.sql:364-408) nor that ALTER list, so a token is inert on
+#       it and re-sending after an UNKNOWN (transport) outcome would DUPLICATE
+#       replay rows in a plain MergeTree. A DEFINITE rejection is still retried
+#       on every table (single-block inserts are atomic — see `_retry_safe`).
+#       What tracker 189 changes for it is the GIVE-UP path, not the retry
+#       path: DLQ-on-loss instead of a silent `lost_total++` (see
+#       CH_DLQ_ON_LOSS_TABLES), plus a stable per-chunk token so the moment a
+#       dedup window IS added the retry becomes safe without another audit.
+#   corr_tenant_write_amp — same DDL story (plain MergeTree, no window,
+#       init.sql:514-535), same treatment: DLQ-on-loss, no transport retry.
+
+# ReplacingMergeTree tables: a duplicate row collapses on merge BY DDL, which is
+# what makes a re-send after an unknown outcome safe without a dedup window.
+# Named as a set so the guard test can assert the claim structurally instead of
+# re-listing table names (test_persist_retry_166).
+CH_REPLACING_TABLES = frozenset({
+    "netops.corr_current",
+    "netops.wireless_sessions",
+    "netops.wireless_onboarding_episodes",
+    "netops.wireless_roams",
+    "netops.wireless_mlo_links",
+})
+
 CH_DEDUP_SAFE_TABLES = frozenset({
     "netops.corr_objects",
     "netops.corr_edges",
     "netops.corr_evidence",
-    "netops.corr_current",
     "netops.findings",
-})
+}) | CH_REPLACING_TABLES
+
+# ── tracker 189: natural-key dedup tokens ───────────────────────────────────
+#
+# `_next_dedup_token` mints a token from the KAFKA COORDINATE, which only the
+# RCA-critical tables use, and the batcher mints one from batch membership.
+# Neither fits a table written straight out of a handler (the four wireless
+# tables) or out of a timer (corr_tenant_write_amp): those have no batch, and
+# the consumer coordinate is the wrong identity for a row whose own natural key
+# is already stable across a redelivery.
+#
+# So the token is derived from the ROW: its natural-key columns (named here,
+# each one the table's ORDER BY in init.sql) plus every other value it carries.
+# Both halves matter:
+#   * the natural key is what makes the token STABLE — a Kafka redelivery
+#     rebuilds a byte-identical row from the same message, so attempt 2 and a
+#     redelivered attempt 1 send the same token;
+#   * the remaining values are what keep it UNIQUE per LOGICAL insert. A
+#     ReplacingMergeTree row is legitimately rewritten in place (a session gains
+#     `assoc_end` when it closes); a key-only token would make that update look
+#     like a duplicate of the original and — the moment one of these tables
+#     gains a deduplication window — drop it server-side, silently. That is the
+#     exact failure class this row exists to remove, so it is not reintroduced
+#     by the fix for it.
+CH_NATURAL_KEY_COLUMNS: dict[str, tuple[str, ...]] = {
+    "netops.wireless_sessions": ("tenant_id", "session_id"),
+    "netops.wireless_onboarding_episodes": ("tenant_id", "episode_id"),
+    "netops.wireless_roams": ("tenant_id", "roam_id"),
+    "netops.wireless_mlo_links": ("tenant_id", "session_ref", "link_id"),
+    "netops.corr_tenant_write_amp": ("tenant_id", "window_start"),
+}
+
+
+def natural_key_token(table: str, rows: list) -> str:
+    """Stable, per-logical-insert dedup token for a natural-keyed table.
+
+    Empty for any table not in CH_NATURAL_KEY_COLUMNS (leaving dedup off,
+    exactly as before) and for an empty row list. Pure and deterministic: the
+    same rows always produce the same token, which is the whole property a
+    retry depends on.
+
+    Deliberately NOT `corr_signals_archive`: its chunks run to
+    CORR_ARCHIVE_CHUNK_ROWS (10,000) rows and hashing every value of every row
+    on the loop thread is precisely the kind of synchronous stretch the P1 pass
+    removed. It carries its `member_key` instead — content-derived
+    (correlation_id + version + content hash + chunk number), already built,
+    already stable across a replay of the same version.
+    """
+    cols = CH_NATURAL_KEY_COLUMNS.get(table)
+    if not cols or not rows:
+        return ""
+    h = hashlib.sha256()
+    for r in rows:
+        for c in cols:
+            h.update(str(r.get(c, "")).encode("utf-8", "replace"))
+            h.update(b"\x1f")
+        # sorted(): a row is a dict built by our own code, but a token that
+        # depends on key INSERTION order is a token that can move for a reason
+        # nobody would think to look for.
+        for k in sorted(r):
+            h.update(str(r[k]).encode("utf-8", "replace"))
+            h.update(b"\x1e")
+        h.update(b"\x1d")
+    return f"nk:{table.rpartition('.')[2]}:{h.hexdigest()[:32]}"
 
 # Tables whose rows are DURABLY SPOOLED to the dead-letter file when an insert
 # is finally given up on (permanent rejection, or retries exhausted).
@@ -7960,8 +8098,66 @@ CH_DEDUP_SAFE_TABLES = frozenset({
 # CH_ROWS_DLQ_SPOOLED and `lost_total` (CH_INSERT_FAILURES — what the ladder's
 # accounting phase gates on) stays reserved for the genuinely unrecoverable
 # case: no CORR_DLQ_DIR configured, or the dead-letter write itself failed.
-CH_DLQ_ON_LOSS_TABLES = frozenset({"netops.findings"})
+#
+# TRACKER 189 (2026-09-02) extends it to every OTHER correlation-written table
+# that shares findings' predicament — nothing upstream raises for it, and
+# nothing upstream replays it:
+#   * corr_signals_archive — the row's first LIVE evidence. On the 10k
+#     documentation rung (`ladder-s10k-08311849`, 2026-08-31) 12 archive
+#     batches, ~357 rows, were LOST inside the accounting window: every one a
+#     `transport`/ReadError against a ClickHouse raising MEMORY_LIMIT_EXCEEDED
+#     906x in the same span, rising to lost_total 16 post-window including one
+#     10,000-row / 12.7 MB batch. Its sibling tables retried without loss; the
+#     archive was the only fire-and-forget path. The slice IS re-written whole
+#     on the next persist (`_archive_slice_revert`), but that recovery needs a
+#     next version of the same object to exist — recovery by luck, not by
+#     contract, and it says nothing about the rows that never got one.
+#   * corr_tenant_write_amp — one insert carries an ENTIRE per-tenant
+#     accounting window; the flush is a timer, so nothing redelivers it and a
+#     failure dropped the window whole (`raw_seen/persisted/damped` for every
+#     tenant in those 300 s), leaving the storm-attribution runbook query with
+#     a hole no counter named.
+#   * wireless_sessions / wireless_roams / wireless_mlo_links /
+#     wireless_onboarding_episodes — the bool return is ignored at all four
+#     call sites, so a rejected insert was a dropped session/roam/episode with
+#     `lost_total++` as the only trace. They now retry first (they are
+#     dedup-safe by DDL, see CH_REPLACING_TABLES) and spool second.
+#
+# WHAT IS DELIBERATELY NOT HERE: the five CH_CRITICAL_TABLES. They raise
+# CHInsertRejected instead, which the consumer turns into a durable quarantine
+# of the SOURCE MESSAGE — a stronger guarantee than spooling the rows, because
+# the message replays through the whole handler rather than being re-inserted
+# as-is. Adding them here would keep a second, redundant plaintext copy of the
+# same payload.
+CH_DLQ_ON_LOSS_TABLES = frozenset({
+    "netops.findings",
+    "netops.corr_signals_archive",
+    "netops.corr_tenant_write_amp",
+    "netops.wireless_sessions",
+    "netops.wireless_onboarding_episodes",
+    "netops.wireless_roams",
+    "netops.wireless_mlo_links",
+})
 CH_ROWS_DLQ_SPOOLED: dict[str, int] = {}
+
+# Per-table, per-outcome write accounting (tracker 189). CH_INSERT_FAILURES
+# answers "what was lost"; this answers "what happened", which is the question
+# an operator actually has when the archive lane goes quiet: rows that landed,
+# attempts that were retried, rows that ended in the dead-letter file, rows
+# with no durable home at all. Cardinality is bounded by construction — the
+# table names are module constants, the outcomes are the four below — so this
+# is not a per-tenant series in disguise.
+CH_OUTCOMES = ("flushed", "retried", "deadlettered", "lost")
+CH_TABLE_OUTCOMES: dict[str, dict[str, int]] = {}
+
+
+def _note_table_outcome(table: str, outcome: str, n: int = 1) -> None:
+    """Count one write outcome for one table. Never raises, never logs — the
+    log lines belong to the paths that decide the outcome."""
+    slot = CH_TABLE_OUTCOMES.get(table)
+    if slot is None:
+        slot = CH_TABLE_OUTCOMES[table] = {}
+    slot[outcome] = slot.get(outcome, 0) + n
 
 
 async def _insert_with_outcome(table: str, rows: list, token: str) -> InsertOutcome:
@@ -8162,6 +8358,56 @@ def _note_ch_failure(table: str, reason: str, ctx: dict) -> None:
                 table, reason, CH_INSERT_FAILURES[table], detail)
 
 
+def _ch_give_up(table: str, rows: list, outcome: InsertOutcome | None,
+                origin: str, error: str, ctx: dict,
+                reason: str = "") -> bool:
+    """THE one give-up path for an insert that will not be attempted again.
+
+    Tracker 189. Before this, four different places decided what a dead write
+    meant, and three of them decided "count it and move on" — so `lost_total`
+    could rise with the rows existing nowhere and nothing but a rate-limited
+    WARN to say so. Now every give-up runs this, and the ORDER is the contract:
+
+        spool durably FIRST, count a loss only if that failed.
+
+    `lost_total` (CH_INSERT_FAILURES / corr_ch_insert_failures_total) is
+    therefore no longer reachable from a path that keeps nothing. It fires for
+    exactly two situations, both of which also log:
+      * the table is in CH_DLQ_ON_LOSS_TABLES and the durable copy could NOT be
+        made — CORR_DLQ_DIR unset (memory-only ring, gone at restart) or the
+        dead-letter write itself failed. `_dlq_spool_rows` detects both and
+        says so by returning False; this is the genuinely-unrecoverable case
+        the counter is reserved for.
+      * the table is outside CH_DLQ_ON_LOSS_TABLES because something upstream
+        holds the payload instead — the RCA-critical tables, whose caller
+        raises CHInsertRejected into the consumer's quarantine.
+
+    Returns True when a durable copy actually landed on disk.
+    """
+    kind = reason or (outcome.kind if outcome is not None else "") or "rejected"
+    spooled = table in CH_DLQ_ON_LOSS_TABLES and _dlq_spool_rows(
+        f"{origin}:{table}", table, rows, outcome, error)
+    if spooled:
+        _note_table_outcome(table, "deadlettered", len(rows))
+        # Rate-limited on the same clock as _note_ch_failure: a ClickHouse
+        # outage fails every write, and 10k identical lines bury the one that
+        # explains it. The COUNTERS are always exact.
+        now = time.monotonic()
+        if (now - _CH_FAIL_LOG_LAST.get("dlq:" + table, -1e9)) >= CH_FAIL_LOG_EVERY_S:
+            _CH_FAIL_LOG_LAST["dlq:" + table] = now
+            log.warning("clickhouse write SPOOLED to DLQ table=%s reason=%s "
+                        "rows=%d spooled_total=%d ch_code=%s query_id=%s",
+                        table, kind, len(rows),
+                        CH_ROWS_DLQ_SPOOLED.get(table, 0),
+                        (outcome.ch_code if outcome is not None else None) or "-",
+                        (outcome.query_id if outcome is not None else "") or "-")
+        return True
+    _note_table_outcome(table, "lost", len(rows))
+    _note_ch_failure(table, kind,
+                     {**ctx, **(outcome.as_evidence() if outcome is not None else {})})
+    return False
+
+
 # RCA-critical tables: a rejected write here corrupts causality, so it must
 # never advance the Kafka offset silently. These raise CHInsertRejected on a
 # rejected insert, which the consumer's per-event handler turns into a durable
@@ -8239,13 +8485,25 @@ async def ch_insert(table: str, rows, *, dedup_token: str | None = None, **ctx) 
     borrowing the consumer coordinate meant a redelivery reset the per-message
     seq and a NEW object version minted during replay reused an already-seen
     token, which ClickHouse then silently dropped.
+
+    Tracker 189: a caller that supplies NO token for a natural-keyed table
+    (the four wireless tables, corr_tenant_write_amp) gets `natural_key_token`
+    minted here rather than writing untokened. That is what lets those tables
+    join CH_DEDUP_SAFE_TABLES — the DDL half of the retry proof was already
+    true of them (ReplacingMergeTree), only the stable-token half was missing.
     """
     assert ch is not None
-    if dedup_token is not None:
-        token = dedup_token
-    else:
-        token = _next_dedup_token(table) if table in CH_CRITICAL_TABLES else ""
     rows = list(rows)
+    if dedup_token:
+        token = dedup_token
+    elif table in CH_CRITICAL_TABLES:
+        # `dedup_token=""` stays an explicit "no token" on the critical tables:
+        # test_persist_retry_166's no-token-means-no-retry guard depends on it,
+        # and the coordinate is only meaningful when a consumer message drives
+        # the write.
+        token = _next_dedup_token(table) if dedup_token is None else ""
+    else:
+        token = natural_key_token(table, rows)
     # A retry may only be attempted where re-sending cannot duplicate. Two
     # independent proofs exist, one per failure class:
     #   * UNKNOWN outcome (kind="transport" — timeout mid-flight, the server
@@ -8278,9 +8536,24 @@ async def ch_insert(table: str, rows, *, dedup_token: str | None = None, **ctx) 
         try:
             outcome = await _insert_with_outcome(table, rows, token)
         except Exception as exc:  # blanket on purpose: counted, then re-raised
-            _note_ch_failure(table, type(exc).__name__, ctx)
+            # Tracker 189: the sink raising is still an insert that will not be
+            # attempted again, so it takes the SAME give-up path — durable copy
+            # first, `lost_total` only if that failed. The re-raise is
+            # unchanged: a consumer-driven write also gets its source message
+            # quarantined, and the two copies are not redundant (the DLQ row is
+            # replayable as a row; the message is replayable through the whole
+            # handler). Only reachable on an UNEXPECTED sink failure —
+            # `insert_detailed` turns every httpx.HTTPError into a `transport`
+            # OUTCOME rather than an exception.
+            _ch_give_up(table, rows,
+                        InsertOutcome(committed=False, kind="transport",
+                                      error=type(exc).__name__, rows=len(rows)),
+                        "chinsert",
+                        f"clickhouse sink raised {type(exc).__name__}",
+                        ctx, reason=type(exc).__name__)
             raise
         if outcome.committed:
+            _note_table_outcome(table, "flushed", len(rows))
             if attempt > 1:
                 CH_RETRIES_RECOVERED += 1
                 log.warning("clickhouse insert RECOVERED table=%s attempt=%d rows=%d",
@@ -8289,6 +8562,7 @@ async def ch_insert(table: str, rows, *, dedup_token: str | None = None, **ctx) 
         if attempt >= attempts or not _retry_safe(outcome) or not ch_retryable(outcome):
             break
         CH_RETRIES_ATTEMPTED += 1
+        _note_table_outcome(table, "retried")
         delay = ch_retry_delay(attempt)
         log.warning("clickhouse insert retry table=%s attempt=%d/%d ch_code=%s "
                     "kind=%s rows=%d backoff=%.2fs",
@@ -8304,25 +8578,11 @@ async def ch_insert(table: str, rows, *, dedup_token: str | None = None, **ctx) 
         # and the two want different operator responses.
         #
         # A row this path can no longer retry is either DURABLY KEPT or LOST —
-        # never both, never neither. Spooling first means `lost_total` rises
-        # only for rows that have no durable copy anywhere (CH_DLQ_ON_LOSS_TABLES).
-        spooled = table in CH_DLQ_ON_LOSS_TABLES and _dlq_spool_rows(
-            f"chinsert:{table}", table, rows, outcome,
-            "clickhouse did not commit the insert")
-        if spooled:
-            # Rate-limited on the same clock as _note_ch_failure: a ClickHouse
-            # outage fails every write, and 10k identical lines bury the one
-            # that explains it. The COUNTER is always exact.
-            _now = time.monotonic()
-            if (_now - _CH_FAIL_LOG_LAST.get("dlq:" + table, -1e9)) >= CH_FAIL_LOG_EVERY_S:
-                _CH_FAIL_LOG_LAST["dlq:" + table] = _now
-                log.warning("clickhouse write SPOOLED to DLQ table=%s reason=%s "
-                            "rows=%d spooled_total=%d ch_code=%s",
-                            table, outcome.kind or "rejected", len(rows),
-                            CH_ROWS_DLQ_SPOOLED.get(table, 0),
-                            outcome.ch_code or "-")
-        else:
-            _note_ch_failure(table, outcome.kind or "rejected", {**ctx, **outcome.as_evidence()})
+        # never both, never neither. `_ch_give_up` is where that is decided, for
+        # every give-up path in the module (tracker 189): it spools first and
+        # counts a loss only when nothing was kept.
+        _ch_give_up(table, rows, outcome, "chinsert",
+                    "clickhouse did not commit the insert", ctx)
         if table in CH_CRITICAL_TABLES:
             raise CHInsertRejected(
                 f"{table} insert did not commit (kind={outcome.kind or 'rejected'})")
@@ -8581,13 +8841,25 @@ class CHBatcher:
         if outcome is not None and not outcome.committed:
             if ch_retryable(outcome):
                 CH_RETRIES_EXHAUSTED += 1
+            # Spool FIRST, count second — the tracker-189 ordering, so the
+            # per-table outcome series can never say "lost" about rows that are
+            # sitting in the dead-letter file. `_note_ch_failure` stays
+            # unconditional HERE and only here: on this path `lost_total` has
+            # always meant "one batch was given up on", it is what the ladder's
+            # accounting phase gates on for corr_signals, and it is not silent —
+            # `_quarantine_rows` runs on every one of them. (`ch_insert`'s
+            # unbatched path reserves `lost_total` for rows kept NOWHERE; the
+            # two readings are documented at CH_DLQ_ON_LOSS_TABLES.)
+            kept = self._quarantine_rows(table, b.rows, outcome)
+            _note_table_outcome(table, "deadlettered" if kept else "lost",
+                                len(b.rows))
             _note_ch_failure(table, "rejected", {"batched_rows": len(b.rows),
                                                  **outcome.as_evidence()})
-            self._quarantine_rows(table, b.rows, outcome)
             BATCH_ROWS_QUARANTINED += len(b.rows)
             return
         BATCH_FLUSHES += 1
         BATCH_ROWS_FLUSHED += len(b.rows)
+        _note_table_outcome(table, "flushed", len(b.rows))
         # Remember what landed until its offsets commit (replay guard, §9-bounded).
         guard = self._flushed_uncommitted.setdefault(table, OrderedDict())
         for rid in b.ids:
@@ -8597,17 +8869,20 @@ class CHBatcher:
 
     @staticmethod
     def _quarantine_rows(table: str, rows: list[dict],
-                         outcome: InsertOutcome | None = None) -> None:
+                         outcome: InsertOutcome | None = None) -> bool:
         """Durably preserve every row of a rejected batch.
 
         One implementation, shared with the unbatched `ch_insert` give-up path
         (`_dlq_spool_rows`) — the record shape IS the contract the accounting
-        gate reads, so the two paths must not be able to drift apart. The
-        durability verdict is ignored here only because the batch path already
-        counted the loss through `_note_ch_failure` before calling.
+        gate reads, so the two paths must not be able to drift apart.
+
+        Returns whether a copy actually landed ON DISK (tracker 189). The
+        verdict used to be discarded here, which meant the batch path could not
+        tell "spooled" from "spooled nowhere, CORR_DLQ_DIR is unset" and its
+        per-table outcome would have been a guess.
         """
-        _dlq_spool_rows(f"chbatch:{table}", table, rows, outcome,
-                        "clickhouse rejected the batched insert")
+        return _dlq_spool_rows(f"chbatch:{table}", table, rows, outcome,
+                               "clickhouse rejected the batched insert")
 
 
 SIGNAL_BATCH = CHBatcher()
@@ -12712,6 +12987,22 @@ def _metrics_text(health: dict | None = None) -> str:
     ]
     for table, n in sorted(CH_ROWS_DLQ_SPOOLED.items()):
         lines.append(f'corr_ch_rows_dlq_spooled_total{{table="{table}"}} {n}')
+    # tracker 189: the whole outcome split per table, not just the bad half.
+    # "flushed" landing while "deadlettered" climbs is a ClickHouse that is
+    # refusing SOME batches; "lost" above zero means rows exist nowhere at all
+    # (CORR_DLQ_DIR unset or unwritable) and is the one series that is an
+    # incident on its own. Cardinality is bounded: module-constant table names
+    # x the four CH_OUTCOMES.
+    lines += [
+        "# HELP corr_ch_table_writes_total ClickHouse write outcomes in rows, by table and outcome.",
+        "# TYPE corr_ch_table_writes_total counter",
+    ]
+    for table, outcomes in sorted(CH_TABLE_OUTCOMES.items()):
+        for outcome in CH_OUTCOMES:
+            if outcome in outcomes:
+                lines.append(
+                    f'corr_ch_table_writes_total{{table="{table}",'
+                    f'outcome="{outcome}"}} {outcomes[outcome]}')
     lines += [
         # Perf defect #2/#3: batched write path + bounded archive slices.
         "# HELP corr_signal_batch Batched corr_signals write-path events.",
@@ -13675,6 +13966,9 @@ def _health_payload() -> dict:
         "durability": {
             "ch_insert_failures": dict(sorted(CH_INSERT_FAILURES.items())),
             "ch_rows_dlq_spooled": dict(sorted(CH_ROWS_DLQ_SPOOLED.items())),
+            # tracker 189: per-table flushed/retried/deadlettered/lost.
+            "ch_table_writes": {t: dict(sorted(o.items()))
+                                for t, o in sorted(CH_TABLE_OUTCOMES.items())},
             "handler_failures": dict(sorted(HANDLER_FAILURES.items())),
             "quarantined_events": len(QUARANTINE),
             "quarantine_write_failures": QUARANTINE_WRITE_FAILURES,
