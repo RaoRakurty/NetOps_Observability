@@ -336,6 +336,7 @@ export const EXAMPLE_CASE: RcaCase = {
   rcaId: "RCA-20260616-0427",
   aside: [
     { k: "Root cause object", v: "wan-r2 ↔ 192.168.100.5" }, { k: "Likely owner", v: "NetOps / Carrier" },
+    { k: "Affected", v: "1 site · 1 device · 1 peer · Checkout API · ~184 active sessions" },
     { k: "MTTD", v: "28s" }, { k: "Suggested ticket", v: "Open P2" },
   ],
   summary: "A BGP state change was observed on wan-r2 with peer 192.168.100.5. Within the same evidence window, SD-WAN tunnel loss increased, active probes failed from the Dallas branch, traffic retransmits spiked, and Checkout API errors increased for the same branch users.",
@@ -682,6 +683,32 @@ export function buildRcaCase(timeline: CorrTimeline, obj: CorrObject, _seams: Re
         : "Add peer-side BGP/routing state, interface errors or drops, traffic-flow loss, downstream service impact, or an active check from an independent vantage.",
   });
 
+  // ── blast radius, ONE source of truth (2026-09-02). The engine's `affected`
+  // projection is the authoritative device list; the routing context only ever
+  // knows the single device the trigger landed on, so printing "1 device" for a
+  // three-device incident would be a WRONG number — worse than saying nothing.
+  // Absent/malformed list → fall back to the routing device (previous
+  // behaviour). Internal self-monitoring names are dropped here exactly as they
+  // are for the routing context, so the customer view never leaks them.
+  const affectedDevices: string[] = (() => {
+    const set = new Set<string>();
+    try {
+      const aff = JSON.parse(obj.affected || "{}") as { devices?: unknown };
+      if (Array.isArray(aff.devices)) {
+        for (const d of aff.devices) {
+          const raw = String(d ?? "").trim();
+          if (!raw || mentionsInternal(raw)) continue;
+          set.add(entityLabel(raw));
+        }
+      }
+    } catch { /* affected not JSON → routing-context fallback below */ }
+    if (device) set.add(device);
+    return [...set];
+  })();
+  const affectedDeviceLabel: string = affectedDevices.length
+    ? `${affectedDevices.length} device${affectedDevices.length === 1 ? "" : "s"}`
+    : "";
+
   // impact
   const notTied: string[] = [];
   if (!hasDevice) notTied.push("device-health");
@@ -700,6 +727,7 @@ export function buildRcaCase(timeline: CorrTimeline, obj: CorrObject, _seams: Re
       tone: confirmed ? "red" : "orange",
     },
     ...(device ? [{ k: "Affected device", v: device, mono: true }] : []),
+    ...(affectedDeviceLabel ? [{ k: "Affected devices", v: affectedDeviceLabel }] : []),
     ...(peer ? [{ k: "Affected peer", v: peer, mono: true }] : []),
     { k: "Scope type", v: device && peer ? "Routing adjacency" : "Device area" },
     { k: "Service / application", v: confirmed ? "Under assessment" : "Not confirmed" },
@@ -909,6 +937,26 @@ export function buildRcaCase(timeline: CorrTimeline, obj: CorrObject, _seams: Re
     }
   }
 
+  // ── "What is affected" — the sixth NOC header question, answered above the
+  // fold. Derived ONLY from what the "Impact & blast radius" panel below
+  // already shows: the same `affectedDeviceLabel` count, the adjacency peer row
+  // and the engine's authoritative app_impact projection. A real correlation object carries no
+  // site or user-session count (only the synthetic EXAMPLE_CASE does), so those
+  // units are never invented here. Nothing known → "Not yet determined":
+  // unknown is not zero, exactly as the impact panel refuses to say "no impact"
+  // when no impact telemetry existed.
+  const affectedSummary: string = (() => {
+    const parts: string[] = [];
+    if (affectedDeviceLabel) parts.push(affectedDeviceLabel);
+    if (peer) parts.push("1 peer");
+    const impactedApps = appImpact?.apps ?? [];
+    if (impactedApps.length) {
+      const extra = impactedApps.length - 1;
+      parts.push(extra > 0 ? `${impactedApps[0].app} (+${extra} app${extra === 1 ? "" : "s"})` : impactedApps[0].app);
+    }
+    return parts.length ? parts.join(" · ") : "Not yet determined";
+  })();
+
   return {
     synthetic: false,
     title, subtitle,
@@ -954,6 +1002,9 @@ export function buildRcaCase(timeline: CorrTimeline, obj: CorrObject, _seams: Re
           ? { k: "Owner", v: ownerDisplay(owner) }
           : { k: "Possible owner", v: `${ownerDisplay(owner)} — unconfirmed` }]
         : [{ k: "Possible owner", v: "Not yet narrowed — NOC triage" }]),
+      // What is affected (blast radius, above the fold) — scale only; the
+      // Root cause / Evidence-localizes-to rows above already name the object.
+      { k: "Affected", v: affectedSummary },
       // Evidence quality, not volume (owner 2026-07-18): symptoms · independent
       // sources · duration ARE the evidence; the raw count trails, de-emphasized.
       {

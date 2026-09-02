@@ -357,6 +357,95 @@ describe("buildRcaCase — application impact section (#81 P5)", () => {
   });
 });
 
+// ── "Affected" aside row (2026-09-02) — the sixth NOC header question answered
+// above the fold. It reports SCALE only, from exactly what the "Impact & blast
+// radius" panel already shows (affected device / adjacency peer + the engine's
+// app_impact projection). It never invents a site or user count, and it never
+// prints "0 devices" when the blast radius is simply unknown.
+describe("buildRcaCase — the aside answers \"What is affected\"", () => {
+  const affected = (c: ReturnType<typeof buildRcaCase>) => c.aside.find((r) => r.k === "Affected")?.v;
+
+  it("counts device + peer and names the impacted apps", () => {
+    const tl = timeline({
+      signals: [signal({
+        kind: "bgp_state_anomaly", modality_class: "control_plane",
+        entity_id: "wan-r2:192.168.100.5", attrs: '{"peer":"192.168.100.5"}', attached: true,
+      })],
+    });
+    const appImpact = JSON.stringify({ apps: [
+      { app: "Checkout API", band: "authoritative", state: "fused", sources: ["ngfw_app_id"], evidence_score: 91 },
+      { app: "Salesforce", band: "medium", state: "inferred", sources: ["ip_catalog"], evidence_score: 55 },
+    ] });
+    const c = buildRcaCase(tl, corrObject({ app_impact: appImpact }), {}, "NetOps", []);
+    expect(affected(c)).toBe("1 device · 1 peer · Checkout API (+1 app)");
+  });
+
+  it("reports only what is known when the object names a device and nothing else", () => {
+    const tl = timeline({
+      signals: [signal({ kind: "bgp_state_anomaly", modality_class: "control_plane", entity_id: "wan-r2", attrs: "{}", attached: true })],
+    });
+    const c = buildRcaCase(tl, corrObject(), {}, "NetOps", []);
+    expect(affected(c)).toBe("1 device");
+  });
+
+  it("says \"Not yet determined\" when the blast radius is unknown (never \"0 devices\")", () => {
+    const tl = timeline({ signals: [signal({ kind: "probe_loss", modality_class: "active_probe", entity_id: "probe-dallas", attached: true })] });
+    const c = buildRcaCase(tl, corrObject(), {}, "NetOps", []);
+    expect(affected(c)).toBe("Not yet determined");
+    expect(affected(c)).not.toMatch(/\b0\b/);
+  });
+
+  it("counts the engine's affected.devices list, not just the trigger device", () => {
+    const tl = timeline({
+      signals: [signal({
+        kind: "bgp_state_anomaly", modality_class: "control_plane",
+        entity_id: "wan-r2:192.168.100.5", attrs: '{"peer":"192.168.100.5"}', attached: true,
+      })],
+    });
+    const appImpact = JSON.stringify({ apps: [
+      { app: "Checkout API", band: "authoritative", state: "fused", sources: ["ngfw_app_id"], evidence_score: 91 },
+      { app: "Salesforce", band: "medium", state: "inferred", sources: ["ip_catalog"], evidence_score: 55 },
+    ] });
+    const obj = corrObject({
+      app_impact: appImpact,
+      affected: JSON.stringify({ devices: ["wan-r2", "core-sw-1", "edge-fw-1"] }),
+    });
+    const c = buildRcaCase(tl, obj, {}, "NetOps", []);
+    expect(affected(c)).toBe("3 devices · 1 peer · Checkout API (+1 app)");
+    // header and the "Impact & blast radius" panel are ONE source of truth
+    expect(c.impact.find((r) => r.k === "Affected devices")?.v).toBe("3 devices");
+  });
+
+  it("falls back to the routing device when affected.devices is absent or malformed", () => {
+    const tl = timeline({
+      signals: [signal({ kind: "bgp_state_anomaly", modality_class: "control_plane", entity_id: "wan-r2", attrs: "{}", attached: true })],
+    });
+    for (const aff of ["{}", "", "not-json", JSON.stringify({ paths: ["a -> b"] })]) {
+      const c = buildRcaCase(tl, corrObject({ affected: aff }), {}, "NetOps", []);
+      expect(affected(c), `affected=${aff}`).toBe("1 device");
+      expect(c.impact.find((r) => r.k === "Affected devices")?.v).toBe("1 device");
+    }
+  });
+
+  it("dedupes the trigger device against the list and drops internal names", () => {
+    const tl = timeline({
+      signals: [signal({ kind: "bgp_state_anomaly", modality_class: "control_plane", entity_id: "wan-r2", attrs: "{}", attached: true })],
+    });
+    const obj = corrObject({ affected: JSON.stringify({ devices: ["wan-r2", "wan-r2", "core-sw-1", "clickhouse", ""] }) });
+    expect(affected(buildRcaCase(tl, obj, {}, "NetOps", []))).toBe("2 devices");
+  });
+
+  it("sits directly under the ownership row and survives the PDF export contract", () => {
+    const c = buildRcaCase(timeline({ signals: [signal({ attached: true })] }), corrObject(), {}, "NetOps", []);
+    const keys = c.aside.map((r) => r.k);
+    const own = Math.max(keys.indexOf("Owner"), keys.indexOf("Possible owner"));
+    expect(own).toBeGreaterThanOrEqual(0);
+    expect(keys[own + 1]).toBe("Affected");
+    // rcaExport renders data.aside by iteration — every row must be a k/v pair.
+    for (const r of c.aside) { expect(typeof r.k).toBe("string"); expect(typeof r.v).toBe("string"); }
+  });
+});
+
 describe("buildRcaCase — canonical 5-state verdict (convergence)", () => {
   const tl = timeline({
     verdict_tier: "suspected", top_hypothesis: "undetermined",

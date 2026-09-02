@@ -1,6 +1,6 @@
 # RCA Evidence Summary — replacing "Signals: 300" with evidence quality
 
-Owner directive 2026-07-18. Status: **DESIGN** (implementation not started).
+Owner directive 2026-07-18. Status: **SHIPPED** (evidence summary + density bars + aside vocabulary — commits 649b2a83…f2e6015c; header "Affected" row 2026-09-02).
 
 ## 1. The problem
 

@@ -409,7 +409,7 @@ function EngineRcaBanner({ rca }: { rca: AppRca }) {
       </div>
       <div className="ao-rca-grid">
         <div><div className="ao-rca-l">Assessment</div><div className="ao-rca-v">{VERDICT_LABEL[rca.verdictTier] ?? rca.verdictTier}</div></div>
-        <div><div className="ao-rca-l">Signals</div><div className="ao-rca-v">{rca.signalCount}</div></div>
+        <div><div className="ao-rca-l">Observations</div><div className="ao-rca-v">{rca.signalCount}</div></div>
         {/* Observers = distinct observer identities (audit D-P2-12: the old cell
             printed the source PLANES and called them observers). */}
         <div><div className="ao-rca-l">Observers</div><div className="ao-rca-v"

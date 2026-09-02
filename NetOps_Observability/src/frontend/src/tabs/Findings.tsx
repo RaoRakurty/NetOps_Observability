@@ -90,7 +90,7 @@ export default function Findings() {
     <div className="dm-board cc-board">
       <NocHeader
         title="Detected Findings"
-        subtitle="Signals that deviate from baseline and may contribute to incidents or RCA candidates."
+        subtitle="Observations that deviate from baseline and may contribute to incidents or RCA candidates."
         chips={<><Chip label={`${items.length} findings`} /><LiveChip detail="anomaly + correlation" /></>}
       >
         <NocKpis cols={4}>

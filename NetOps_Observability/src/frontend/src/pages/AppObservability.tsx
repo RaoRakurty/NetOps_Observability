@@ -587,7 +587,7 @@ function Overview({ goTab, summary, openInvestigation, ctl }: {
               { key: "verdict", header: "Assessment", width: 120, sortValue: (o) => verdictRank(o.verdictTier), render: (o) => <ConfidenceBadge level={verdictConf(o.verdictTier)} /> },
               { key: "hyp", header: "Probable cause", width: 300, sortValue: (o) => o.topHypothesis, render: (o) => <span className="ao-why" title={o.topHypothesis}>{o.topHypothesis.startsWith("sig.") ? signatureNocTitle(o.topHypothesis) : o.topHypothesis}</span> },
               { key: "conf", header: "Confidence", width: 96, align: "right", sortValue: (o) => o.confidence, render: (o) => `${Math.round(o.confidence * 100)}%` },
-              { key: "sig", header: "Signals", width: 80, align: "right", sortValue: (o) => o.signalCount, render: (o) => o.signalCount },
+              { key: "sig", header: "Observations", width: 110, align: "right", sortValue: (o) => o.signalCount, render: (o) => o.signalCount },
               { key: "state", header: "State", width: 80, sortValue: (o) => o.state, render: (o) => o.state },
               { key: "start", header: "Started", width: 110, sortValue: (o) => timeRank(o.windowStart), render: (o) => ago(o.windowStart) },
               { key: "act", header: "Findings", width: 110, render: () => <button className="ao-rowaction" onClick={(e) => { e.stopPropagation(); goTab("investigations", "findings"); }}>Findings</button> },
