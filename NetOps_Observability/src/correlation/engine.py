@@ -1701,6 +1701,250 @@ def cycle_hypotheses_blob(snap: ObjectSnapshot) -> str:
     return value
 
 
+# ── TRACKER 195: the PERSIST-SIDE `hypotheses` BLOB BOUND ────────────────────
+#
+# THE MEASURED DEFECT. `netops.corr_objects.hypotheses` had NO bound on the
+# write side. Against a 29 KiB mean the table holds 1,195 rows > 1 MiB, 74
+# > 10 MiB, 11 > 50 MiB, max 76.53 MiB (66.15 GiB over 2.38 M rows) — and
+# because MergeTree granularity is ADAPTIVE, one such row makes its whole
+# GRANULE unreadable. A one-key SELECT for an innocent 22-30 KiB neighbour dies
+# at `read_rows = 0` with `Code: 241 ... attempt to allocate chunk of
+# 536871039 bytes, maximum: 512.00 MiB ... (while reading column hypotheses)`.
+# The victims are objects that did nothing wrong, and the set of victims is
+# unbounded and unpredictable.
+#
+# WHERE THE BYTES ACTUALLY ARE — MEASURED 2026-09-02 on the two worst rows, and
+# it is NOT what the tracker row assumed:
+#
+#   e571c39d-a4ea-55f6-8c75-354dbbb372a7 v3   80,243,943 B total
+#     grounding_context.path_graph.relations  80,173,403 B  (99.91 %) 195,888 items
+#     ranking.hypotheses                          69,729 B
+#     grounding_context.seams                          2 B  ("[]")
+#     grounding_context.degradation               ABSENT   -> storm_mode is FALSE
+#
+#   The REAL storm aggregate — `storm_aggregate=True`, the tenant-constant
+#   `uuid5(SIGNAL_NS, "corrobj|<tenant>|storm-noise")` id (bb1e46d6-… for
+#   `global`) that the scale scripts exclude — measures 643-648 BYTES per
+#   version at 8k-21k nodes, because `run_window` gives it `hypotheses=()` and
+#   `edges=()`: no ranking body, and no `path_graph` block at all (that block is
+#   emitted only when an EDGE carries a path relation). See `bound_hypotheses_
+#   blob`'s AGGREGATE note: the cap cannot change its semantics because it is
+#   three orders of magnitude below any usable cap, by construction.
+#
+# So the unbounded term is `path_graph.relations`: ONE entry per edge admitted
+# on a path relation, ~409 B each, growing with the graph and capped by nothing.
+# The ladder below therefore sheds THAT first, and the ranking only after.
+#
+# THE CAP, AND WHY 1 MiB. Measured legitimate rows: the four "poisoned" victims
+# carry 22,029-30,773 B, of which the ranking is a FIXED ~21 KiB (TOP_K = 4 plus
+# forced competitors) and path_graph is 0-8,728 B (1-21 relations). 1 MiB is
+#   * ~34x the largest measured legitimate row, so no real object is touched;
+#   * ~2,400 relations of headroom on the unbounded term;
+#   * 0.05 % of the table (1,195 of 2.38 M rows) — the pathological tail only;
+#   * two orders of magnitude below the 512 MiB per-query allocation guard that
+#     today refuses the read, so the worst single row can no longer poison a
+#     granule for its neighbours.
+#
+# WHAT IS PRESERVED, ALWAYS (pinned by test_hypotheses_bound_195.py): the top
+# hypothesis, the verdict tier, every contradicted hypothesis and its
+# contradictions, and the relative RANKING of whatever survives. The output is
+# always VALID JSON — the blob is reduced structurally and re-serialized, never
+# cut mid-string.
+#
+# HONEST COST. A truncated object's `path_graph` no longer replays against the
+# complete relation set, so `replay` may report drift on it. That is strictly
+# better than today: those rows cannot be READ at all, by replay or anything
+# else. The truncation is declared in the row itself (`hypotheses_truncated`),
+# counted (`corr_hypotheses_truncated_total`) and logged at WARN with the
+# correlation_id — never silent.
+CORR_HYPOTHESES_MAX_BYTES = int(
+    os.environ.get("CORR_HYPOTHESES_MAX_BYTES", str(1 << 20)))
+# A cap below this cannot hold the irreducible skeleton (one full
+# HypothesisScore measures ~5.3 KiB), so a misconfiguration would truncate
+# every object instead of the pathological tail. Clamped UP, and said out loud.
+HYPOTHESES_CAP_FLOOR = 1 << 16
+# Byte accounting: `hypotheses_blob()` and every re-dump below use json.dumps
+# with the default ensure_ascii=True, so the payload is pure ASCII and
+# `len(str) == len(utf-8 bytes) == ClickHouse length()`. Pinned by
+# test_the_blob_is_ascii_so_character_length_is_byte_length.
+_MARKER_SLACK = 512      # room for the hypotheses_truncated marker itself
+
+
+def hypotheses_cap_bytes(max_bytes: int | None = None) -> int:
+    """The effective cap: 0 disables the bound entirely, anything positive is
+    clamped up to HYPOTHESES_CAP_FLOOR."""
+    cap = CORR_HYPOTHESES_MAX_BYTES if max_bytes is None else int(max_bytes)
+    if cap <= 0:
+        return 0
+    return max(cap, HYPOTHESES_CAP_FLOOR)
+
+
+def _rel_sort_key(rel: object, index: int) -> tuple:
+    """Relation shedding order: BEST evidence first, then the builder's own
+    order. `rank` 1-5 is observed (authoritative), 6 inferred route, 7 shared
+    token — exactly the ladder `hypotheses_blob` already reasons with — and the
+    index tiebreak makes the choice TOTAL, so the same object always sheds the
+    same relations."""
+    if not isinstance(rel, dict):
+        return (99, 1, index)
+    try:
+        rank = int(rel.get("rank", 7))
+    except (TypeError, ValueError):
+        rank = 7
+    return (rank, 0 if rel.get("authoritative") else 1, index)
+
+
+def _protected_hypothesis(index: int, hyp: object) -> bool:
+    """Never dropped: the TOP hypothesis (the verdict's own hypothesis) and any
+    hypothesis carrying a contradiction — a contradicted look-alike is why the
+    ranking is trustworthy, so shedding it would change the answer, not just
+    shorten it."""
+    if index == 0:
+        return True
+    if not isinstance(hyp, dict):
+        return False
+    return bool(hyp.get("contradicted")) or bool(hyp.get("contradictions"))
+
+
+def _dump(doc: dict) -> str:
+    return json.dumps(doc, separators=(",", ":"), sort_keys=True)
+
+
+def bound_hypotheses_blob(blob: str,
+                          max_bytes: int | None = None) -> tuple[str, dict | None]:
+    """Bound the serialized `corr_objects.hypotheses` payload (tracker 195).
+
+    Returns `(blob, None)` — the SAME string object, byte for byte — for every
+    payload at or under the cap, which is 99.95 % of them. Over the cap it
+    returns `(reduced_json, marker)` where `marker` is the
+    `hypotheses_truncated` block embedded in the reduced document.
+
+    The reduction ladder, least decision-critical first, each step verified by
+    re-serializing and re-measuring:
+
+      A. `grounding_context.path_graph.relations` — the O(edges) term that is
+         99.91 % of every measured monster. Keeps the highest-RANKED prefix that
+         fits (see `_rel_sort_key`) and re-emits the survivors in the builder's
+         original order, so the relation list stays ordered the way a reader
+         expects.
+      B. `ranking.hypotheses` — drops the LOWEST-ranked entries (the tail;
+         `rank()` emits in descending confidence) while `_protected_hypothesis`
+         holds the top one and every contradicted one.
+      C. the whole `path_graph` block.
+      D. the floor: every LIST under `grounding_context` dropped, leaving the
+         verdict, the protected hypotheses and the scalar grounding.
+
+    If even the floor exceeds the cap (only reachable with an absurd cap or a
+    single enormous hypothesis) the floor is returned ANYWAY with
+    `floor_exceeded: true` in the marker — a valid, honest, oversized document
+    beats a corrupt truncated one.
+    """
+    cap = hypotheses_cap_bytes(max_bytes)
+    if cap <= 0 or len(blob) <= cap:
+        return blob, None
+    original_bytes = len(blob)
+    try:
+        doc = json.loads(blob)
+    except ValueError:
+        # Not JSON we built. Refuse to cut bytes we cannot parse — a mid-JSON
+        # cut is worse than a big row — and report it rather than fail silently.
+        return blob, {"original_bytes": original_bytes, "cap_bytes": cap,
+                      "dropped": 0, "applied": False, "reason": "unparseable"}
+    if not isinstance(doc, dict):
+        return blob, {"original_bytes": original_bytes, "cap_bytes": cap,
+                      "dropped": 0, "applied": False, "reason": "not-an-object"}
+
+    marker: dict = {"original_bytes": original_bytes, "cap_bytes": cap,
+                    "dropped": 0, "applied": True, "dropped_relations": 0,
+                    "dropped_hypotheses": 0, "dropped_blocks": []}
+
+    def emit() -> str:
+        out = dict(doc)
+        out["hypotheses_truncated"] = marker
+        return _dump(out)
+
+    ctx = doc.get("grounding_context")
+    ctx = ctx if isinstance(ctx, dict) else None
+    ranking = doc.get("ranking")
+    ranking = ranking if isinstance(ranking, dict) else None
+
+    # ── A. path_graph.relations ─────────────────────────────────────────────
+    pg = ctx.get("path_graph") if ctx is not None else None
+    pg = pg if isinstance(pg, dict) else None
+    rels = pg.get("relations") if pg is not None else None
+    if pg is not None and isinstance(rels, list) and rels:
+        sizes = [len(_dump(r)) + 1 if isinstance(r, dict)
+                 else len(json.dumps(r, separators=(",", ":"))) + 1 for r in rels]
+        # Everything in the document that is NOT the relation array's body.
+        overhead = original_bytes - (sum(sizes) - 1)
+        budget = cap - overhead - _MARKER_SLACK
+        keep: set[int] = set()
+        used = 0
+        for i in sorted(range(len(rels)), key=lambda i: _rel_sort_key(rels[i], i)):
+            if used + sizes[i] > budget:
+                break
+            used += sizes[i]
+            keep.add(i)
+        if len(keep) < len(rels):
+            marker["dropped_relations"] = len(rels) - len(keep)
+            marker["dropped"] += marker["dropped_relations"]
+            pg["relations"] = [r for i, r in enumerate(rels) if i in keep]
+    out = emit()
+    if len(out) <= cap:
+        return out, marker
+
+    # ── B. the lowest-ranked hypotheses ─────────────────────────────────────
+    hyps = ranking.get("hypotheses") if ranking is not None else None
+    if isinstance(hyps, list) and len(hyps) > 1 and ranking is not None:
+        # Drop from the TAIL (lowest ranked; `rank()` emits in descending
+        # confidence) inward, skipping every protected entry, and STOP the
+        # moment the document fits — so the ranking loses as little as the cap
+        # allows. Re-measuring per drop is cheap here: step A has already
+        # brought the document to cap scale and TOP_K is 4.
+        kept: list = list(hyps)
+        for i in range(len(hyps) - 1, 0, -1):
+            if _protected_hypothesis(i, hyps[i]):
+                continue
+            kept[i] = None
+            marker["dropped_hypotheses"] += 1
+            marker["dropped"] += 1
+            ranking["hypotheses"] = [h for h in kept if h is not None]
+            if len(emit()) <= cap:
+                break
+    out = emit()
+    if len(out) <= cap:
+        return out, marker
+
+    # ── C. the whole path_graph block ───────────────────────────────────────
+    if ctx is not None and "path_graph" in ctx:
+        del ctx["path_graph"]
+        marker["dropped_blocks"].append("grounding_context.path_graph")
+    out = emit()
+    if len(out) <= cap:
+        return out, marker
+
+    # ── D. the floor: every remaining LIST under grounding_context ──────────
+    if ctx is not None:
+        for key in sorted(k for k, v in ctx.items() if isinstance(v, list) and v):
+            ctx[key] = []
+            marker["dropped_blocks"].append(f"grounding_context.{key}")
+    if isinstance(hyps, list) and ranking is not None:
+        floor = [h for i, h in enumerate(hyps) if _protected_hypothesis(i, h)]
+        current = ranking.get("hypotheses")
+        if len(floor) < len(current if isinstance(current, list) else []):
+            marker["dropped_hypotheses"] = len(hyps) - len(floor)
+            marker["dropped"] = (marker["dropped_relations"]
+                                 + marker["dropped_hypotheses"])
+            ranking["hypotheses"] = floor
+    out = emit()
+    if len(out) > cap:
+        # Irreducible. Say so in the row itself rather than emitting a corrupt
+        # document or pretending the bound held.
+        marker["floor_exceeded"] = True
+        out = emit()
+    return out, marker
+
+
 def _streaming_json_digest16(blob: dict) -> str:
     h = hashlib.sha256()
     buf = bytearray()

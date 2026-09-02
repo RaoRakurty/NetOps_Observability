@@ -94,11 +94,13 @@ from engine import (
     _ch_dt,
     blob_cycle_begin,
     blob_cycle_end,
+    bound_hypotheses_blob,
     cycle_hypotheses_blob,
     digest_cache_stats,
     engine_temporal_reach_s,
     find_continuation,
     find_merges,
+    hypotheses_cap_bytes,
     prepare_run_window,
     required_retention_s,
     run_window,
@@ -2061,6 +2063,155 @@ CONSUMER_LAG_AT = 0.0                   # monotonic of the last measurement
 CONSUMER_LAG_PROBE_FAILURES = 0         # consumer lacked assignment()/highwater()
 _LAG_SAMPLED_AT = 0.0
 
+# ── TRACKER 196: proving levelness on partitions this process has NOT read ──
+#
+# THE MEASURED DEFECT. `_consumer_caught_up` vetoed itself whenever ANY assigned
+# partition had never been read here (`CONSUMER_LAG_UNKNOWN_PARTITIONS > 0`). On
+# the lab that count is 17 and 18 on the two correlation replicas — quiet topics
+# this member owns but never fetches a record from — so the veto was PERMANENT,
+# `_tenant_idle` could never return True, and the memory backstop was inert:
+# `idle_tenant_evictions == 0` on both replicas, with 155c objects still `open`
+# 2 h 15 m after their last signal (ownership-155c-08311027).
+#
+# THE INVARIANT THE VETO PROTECTS — UNCHANGED. Evidence may only be shed when
+# "this tenant is silent" is PROVEN, never assumed. A partition we are merely
+# BEHIND on can still hold records that would advance the tenant's clock, so it
+# must keep vetoing. What was wrong is treating "never read" as a synonym for
+# "behind": a partition that holds nothing we have not already got is not
+# backlog, it is emptiness, and emptiness is provable.
+#
+# CAUGHT-UP THEREFORE MEANS: no KNOWN lag on any partition that HAS unread data.
+# A never-read partition is resolved, not assumed:
+#
+#   * end offset 0                  -> the partition has never held a record
+#   * end offset == our position    -> everything it holds is already consumed
+#                                      (by this group; nothing is waiting here)
+#   * end offset >  our position    -> REAL backlog: it vetoes, exactly as before
+#   * end offset / position unknown -> UNRESOLVED: it vetoes, exactly as before,
+#                                      and says so on /metrics + in the log
+#
+# The resolution costs one BOUNDED, CACHED broker round trip per partition
+# (`_probe_unread_partitions`), scheduled off the consume path, refreshed on a
+# TTL and invalidated on every rebalance. Nothing here can make the backstop
+# fire EARLIER than the proof allows; it can only stop it being inert forever.
+#
+# STRICTLY ADDITIVE TO THE 172 STORM PATH. `CONSUMER_LAG_TOTAL`, `CONSUMER_LAG_AT`
+# and `CONSUMER_LAG_UNKNOWN_PARTITIONS` keep EXACTLY their pre-196 values and
+# meanings, because `_ingest_priority_decision` (tracker 172, fail-OPEN) reads
+# them and its behaviour on the 2,500-device leg must not move. The resolution
+# lives in its own variables and is consulted ONLY by the fail-SAFE side.
+CORR_LAG_PROBE_TTL_S = float(os.environ.get("CORR_LAG_PROBE_TTL_S", "60"))
+CORR_LAG_PROBE_TIMEOUT_S = float(os.environ.get("CORR_LAG_PROBE_TIMEOUT_S", "5"))
+# §9 bounded: one probe pass asks about at most this many partitions.
+CORR_LAG_PROBE_MAX_PARTITIONS = int(
+    os.environ.get("CORR_LAG_PROBE_MAX_PARTITIONS", "64"))
+# (topic, partition) -> (end_offset, position, sampled_at_mono)
+_UNREAD_PROBE: dict[tuple[str, int], tuple[int, int, float]] = {}
+_UNREAD_PROBE_TASK: asyncio.Task | None = None
+CONSUMER_UNREAD_PROBE_ATTEMPTS = 0       # counter: probe passes started
+CONSUMER_UNREAD_PROBE_FAILURES = 0       # counter: probe passes that could not answer
+CONSUMER_LAG_UNRESOLVED_PARTITIONS = 0   # gauge: never-read AND unproven -> veto
+CONSUMER_LAG_PROVEN_PARTITIONS = 0       # gauge: never-read but PROVEN to hold nothing
+CONSUMER_LAG_UNREAD_TOTAL = 0            # gauge: proven backlog on never-read partitions
+
+# The closed reason set behind `corr_consumer_caught_up{reason=...}`. Low
+# cardinality, safe as a label, and the whole point of tracker 196: an inert
+# backstop must be able to say WHY it is inert.
+CAUGHT_UP_LEVEL = "level"                 # provably level with the broker
+CAUGHT_UP_NEVER_MEASURED = "lag-never-measured"
+CAUGHT_UP_STALE = "lag-stale"
+CAUGHT_UP_UNRESOLVED = "partitions-unresolved"
+CAUGHT_UP_BEHIND = "behind"
+CAUGHT_UP_REASONS = (CAUGHT_UP_LEVEL, CAUGHT_UP_NEVER_MEASURED, CAUGHT_UP_STALE,
+                     CAUGHT_UP_UNRESOLVED, CAUGHT_UP_BEHIND)
+
+
+def _unread_partition_lag(topic: str, partition: int, highwater: int | None,
+                          now_mono: float) -> int | None:
+    """Backlog on a partition THIS PROCESS has never read, or None if unproven.
+
+    `highwater` is the consumer's local view (populated by any fetch response,
+    `None` before the first one). The probe cache supplies both the end offset
+    and our position when the local view is not enough. Fail-SAFE: every path
+    that cannot PROVE the answer returns None, which vetoes eviction.
+    """
+    entry = _UNREAD_PROBE.get((topic, partition))
+    fresh = entry is not None and (now_mono - entry[2]) <= CORR_LAG_PROBE_TTL_S
+    if not fresh:
+        entry = None                 # a stale proof is not a proof
+    end = highwater if highwater is not None else (entry[0] if entry else None)
+    if end == 0:
+        # Never held a record. Nothing can be waiting on it — provable without
+        # any notion of where we are, and true for as long as end stays 0.
+        return 0
+    if end is None or entry is None:
+        return None
+    return max(0, end - entry[1])
+
+
+async def _probe_pass(consumer, tps: tuple) -> None:
+    """The probe's body: end offsets for the batch, then our position on each.
+
+    Split out so ONE `wait_for` bounds the whole pass (see the caller). Raises
+    on anything the caller must count — it never swallows.
+    """
+    ends = await consumer.end_offsets(list(tps))
+    now = time.monotonic()
+    for tp in tps:
+        end = ends.get(tp)
+        if end is None:
+            continue
+        pos = await consumer.position(tp)
+        if pos is None:
+            continue
+        _UNREAD_PROBE[(tp.topic, tp.partition)] = (int(end), int(pos), now)
+
+
+async def _probe_unread_partitions(consumer, tps: tuple) -> None:
+    """One BOUNDED round trip that resolves never-read partitions.
+
+    Runs off the consume path (scheduled, never awaited by it), asks for at most
+    CORR_LAG_PROBE_MAX_PARTITIONS partitions, and is bounded end-to-end by
+    CORR_LAG_PROBE_TIMEOUT_S (§9: all IO has a timeout). A failure is COUNTED
+    and LOGGED and leaves the partitions UNRESOLVED — i.e. still vetoing — which
+    is the fail-safe direction (§10: never a silent fallthrough).
+    """
+    global CONSUMER_UNREAD_PROBE_ATTEMPTS, CONSUMER_UNREAD_PROBE_FAILURES
+    CONSUMER_UNREAD_PROBE_ATTEMPTS += 1
+    try:
+        # asyncio.wait_for, not asyncio.timeout: the correlation service is
+        # pinned to a 3.12 runtime but the suite also runs on 3.10 runners, and
+        # `asyncio.timeout` is 3.11+. Same bound, one deadline for the whole
+        # pass so a slow coordinator cannot be paid once per partition.
+        await asyncio.wait_for(_probe_pass(consumer, tps), CORR_LAG_PROBE_TIMEOUT_S)
+    except Exception as exc:  # noqa: BLE001 — observable, never fatal (§10)
+        CONSUMER_UNREAD_PROBE_FAILURES += 1
+        log.warning("unread-partition watermark probe failed (%s): %d partition(s) "
+                    "stay UNRESOLVED, so the idle backstop keeps holding evidence "
+                    "(corr_consumer_caught_up{reason=\"%s\"})",
+                    type(exc).__name__, len(tps), CAUGHT_UP_UNRESOLVED)
+
+
+def _schedule_unread_probe(consumer, tps: tuple) -> None:
+    """Kick a probe for the unresolved partitions and return IMMEDIATELY.
+
+    Single-flight: a pass already running owns the cache refresh, so the
+    per-message sampler can never stack round trips. No running loop (a direct
+    unit invocation) means no probe — the caller's fail-safe answer stands.
+    """
+    global _UNREAD_PROBE_TASK
+    if not tps:
+        return
+    prev = _UNREAD_PROBE_TASK
+    if prev is not None and not prev.done():
+        return
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:                       # no loop (direct/unit invocation)
+        return
+    _UNREAD_PROBE_TASK = loop.create_task(
+        _probe_unread_partitions(consumer, tps[:CORR_LAG_PROBE_MAX_PARTITIONS]))
+
 
 def _note_consumed(topic: str, partition: int, offset: int) -> None:
     """Record the newest offset this process has actually handled."""
@@ -2082,11 +2233,14 @@ def _refresh_consumer_lag(consumer, now_mono: float) -> None:
     total = 0
     seen_any = False
     unknown = 0
+    # Tracker 196, all three strictly ADDITIVE to the counters above.
+    unresolved = 0
+    proven = 0
+    unread_total = 0
+    pending: list = []
     try:
         for tp in consumer.assignment():
             hw = consumer.highwater(tp)
-            if hw is None:
-                continue      # not fetched yet — cannot judge this partition
             last = _LAST_OFFSET.get((tp.topic, tp.partition))
             if last is None:
                 # We have consumed nothing from this partition THIS process, so
@@ -2098,7 +2252,29 @@ def _refresh_consumer_lag(consumer, now_mono: float) -> None:
                 # left the backstop inert forever. Silent inertness in a memory
                 # control is exactly the kind of thing that looks fine until it
                 # matters, so count it as UNKNOWN and say so.
+                #
+                # UNKNOWN keeps its pre-196 meaning EXACTLY ("assigned, never
+                # read here") because tracker 172's fail-open sweep decision
+                # reads it and its behaviour must not move. Tracker 196 then
+                # asks the separate, fail-SAFE question the idle backstop needs:
+                # does this partition actually hold anything we have not got?
                 unknown += 1
+                resolved = _unread_partition_lag(tp.topic, tp.partition, hw, now_mono)
+                if resolved is None:
+                    unresolved += 1
+                    pending.append(tp)
+                elif resolved:
+                    unread_total += resolved
+                else:
+                    proven += 1
+                continue
+            if hw is None:
+                # Read here, but no fetch response has carried a watermark yet.
+                # Pre-196 this fell through silently and vetoed NOTHING; it is
+                # now counted as unresolved (fail-SAFE for the backstop) while
+                # still staying out of `unknown` (fail-OPEN for the 172 sweep).
+                unresolved += 1
+                pending.append(tp)
                 continue
             seen_any = True
             total += max(0, hw - (last + 1))
@@ -2114,30 +2290,62 @@ def _refresh_consumer_lag(consumer, now_mono: float) -> None:
                         type(exc).__name__)
         return
     global CONSUMER_LAG_UNKNOWN_PARTITIONS
+    global CONSUMER_LAG_UNRESOLVED_PARTITIONS, CONSUMER_LAG_PROVEN_PARTITIONS
+    global CONSUMER_LAG_UNREAD_TOTAL
     CONSUMER_LAG_UNKNOWN_PARTITIONS = unknown
+    CONSUMER_LAG_UNRESOLVED_PARTITIONS = unresolved
+    CONSUMER_LAG_PROVEN_PARTITIONS = proven
+    CONSUMER_LAG_UNREAD_TOTAL = unread_total
     if seen_any:
         CONSUMER_LAG_TOTAL = total
         CONSUMER_LAG_AT = now_mono
+    _schedule_unread_probe(consumer, tuple(pending))
 
 
 CONSUMER_LAG_UNKNOWN_PARTITIONS = 0   # assigned but never read by this process
+
+
+def caught_up_reason(now_mono: float) -> str:
+    """WHY this process is (not) level with the broker — one of CAUGHT_UP_REASONS.
+
+    THE INVARIANT (tracker 165, preserved verbatim by tracker 196): the backstop
+    may shed evidence only when no unprocessed record can still advance a
+    tenant's clock. Every branch that cannot PROVE that returns a non-level
+    reason, so the fail-SAFE polarity is unchanged — what tracker 196 changed is
+    that "assigned but never read" is now RESOLVED (empty / already-consumed /
+    genuinely behind) instead of being assumed behind forever.
+
+    Exported as `corr_consumer_caught_up{reason=...}` so an inert backstop can
+    never again be a silent state (§10).
+    """
+    if CONSUMER_LAG_TOTAL is None:
+        # Nothing has ever been read on any assigned partition. A process that
+        # has consumed nothing has proven nothing.
+        return CAUGHT_UP_NEVER_MEASURED
+    if (now_mono - CONSUMER_LAG_AT) > CORR_LAG_FRESH_S:
+        return CAUGHT_UP_STALE
+    # NO separate freshness clause for the resolution counters: they are
+    # published by the SAME completed walk that stamps CONSUMER_LAG_AT, and on a
+    # walk where nothing was read they are published while CONSUMER_LAG_AT is
+    # NOT — so they are always at least as fresh as the lag figure, and the
+    # staleness check above already covers both. The per-partition proofs behind
+    # them carry their OWN TTL (CORR_LAG_PROBE_TTL_S, see
+    # `_unread_partition_lag`) and are dropped wholesale on every rebalance.
+    if CONSUMER_LAG_UNRESOLVED_PARTITIONS:
+        return CAUGHT_UP_UNRESOLVED
+    if CONSUMER_LAG_TOTAL != 0 or CONSUMER_LAG_UNREAD_TOTAL != 0:
+        return CAUGHT_UP_BEHIND
+    return CAUGHT_UP_LEVEL
 
 
 def _consumer_caught_up(now_mono: float) -> bool:
     """Is this process demonstrably level with the broker RIGHT NOW?
 
     Fail-SAFE: unknown or stale ⇒ False (assume there is backlog), because the
-    only caller uses this to decide whether it may DELETE evidence.
+    only caller uses this to decide whether it may DELETE evidence. See
+    `caught_up_reason` for the closed set of answers and why each one is safe.
     """
-    if CONSUMER_LAG_TOTAL is None:
-        return False
-    if (now_mono - CONSUMER_LAG_AT) > CORR_LAG_FRESH_S:
-        return False
-    if CONSUMER_LAG_UNKNOWN_PARTITIONS:
-        # Some assigned partition has never been read here, so "level with the
-        # broker" is unproven for it. Fail-safe: retain.
-        return False
-    return CONSUMER_LAG_TOTAL == 0
+    return caught_up_reason(now_mono) == CAUGHT_UP_LEVEL
 
 
 def _tenant_idle(tenant: str, now_mono: float) -> bool:
@@ -2255,10 +2463,20 @@ def retention_state() -> dict[str, object]:
         "stream_expiry_suspended": not COPARTITION_OK,
         "consumer_lag_total": CONSUMER_LAG_TOTAL,
         "consumer_caught_up": _consumer_caught_up(time.monotonic()),
+        # Tracker 196: the BOOLEAN alone could not explain an inert backstop.
+        "consumer_caught_up_reason": caught_up_reason(time.monotonic()),
+        "consumer_lag_unresolved_partitions": CONSUMER_LAG_UNRESOLVED_PARTITIONS,
+        "consumer_lag_proven_partitions": CONSUMER_LAG_PROVEN_PARTITIONS,
+        "consumer_lag_unread_total": CONSUMER_LAG_UNREAD_TOTAL,
         # Non-zero means the backlog probe is unusable, so the idle backstop is
         # holding evidence it might otherwise reclaim — a memory risk, and a
         # silent one until it is on /healthz.
         "consumer_lag_probe_failures": CONSUMER_LAG_PROBE_FAILURES,
+        # Tracker 196: a probe that cannot answer leaves partitions unresolved,
+        # so the backstop keeps holding evidence — the same memory risk as the
+        # line above, and just as invisible until it is on /healthz.
+        "consumer_unread_probe_failures": CONSUMER_UNREAD_PROBE_FAILURES,
+        "consumer_unread_probe_attempts": CONSUMER_UNREAD_PROBE_ATTEMPTS,
         "consumer_lag_unknown_partitions": CONSUMER_LAG_UNKNOWN_PARTITIONS,
         # tracker 165 phase 7: the sharing cache must not become "every unique
         # network value, forever". Population + evictions, always visible.
@@ -3107,6 +3325,12 @@ _FORCE_CLOSE_LOG_LAST = 0.0
 # (the largest storm aggregate carried 922 nodes) — because the cap exists to
 # stop an unmeasured shape from growing without limit, not to trim a real one.
 CORR_AFFECTED_HISTORY_MAX = int(os.environ.get("CORR_AFFECTED_HISTORY_MAX", "20000"))
+# TRACKER 195: versions whose persisted `hypotheses` blob had to be bounded.
+# A non-zero value is not an error — it is the write-side cap doing its job on
+# the pathological tail — but it must never be invisible, because an object
+# whose ranking was shortened is an object a reader must not over-read.
+HYPOTHESES_TRUNCATED = 0          # versions truncated (monotonic)
+HYPOTHESES_TRUNCATED_BYTES = 0    # original bytes those versions carried
 AFFECTED_HISTORY_TRUNCATED = 0    # entities the cap refused (monotonic)
 AFFECTED_HISTORY_ENTITIES_MAX = 0  # gauge: largest accumulator seen this process
 INGEST_PRIORITY_DEFERRALS = 0     # sweeps deferred to protect ingest (monotonic)
@@ -5257,6 +5481,37 @@ async def _persist_snapshot(snap: ObjectSnapshot, version: int, state: str,
     # serialize is gone. Outside a cycle (a lifecycle merge/close run at epoch
     # cadence) there is no cache and this is the plain build it always was.
     hypotheses = await _snap_call(snap, cycle_hypotheses_blob, snap)
+    # TRACKER 195: bound the PERSISTED blob. Applied HERE and nowhere else, so
+    # `content_hash` — which builds its own blob from the frozen snapshot — and
+    # therefore object identity, version numbering and every replay pin are
+    # untouched: the cap changes what lands in the column, never what the engine
+    # decided. Under the cap this is a length check and the same string object
+    # (99.95 % of versions, byte-for-byte identical rows); over it, the ladder
+    # in `bound_hypotheses_blob` runs on the same offload the blob build uses.
+    # The GUARD is a bare `len()` on a string we already hold, so the 99.95 %
+    # path adds no await, no offload decision and no scheduling point — the
+    # persist sequence the storm SLO measures is byte- and schedule-identical.
+    # Only an over-cap blob pays the reduction, and it pays it on the same
+    # offload every other per-object serializer uses.
+    _hyp_cap = hypotheses_cap_bytes()
+    _hyp_cut: dict | None = None
+    if 0 < _hyp_cap < len(hypotheses):
+        hypotheses, _hyp_cut = await _snap_call(snap, bound_hypotheses_blob, hypotheses)
+    if _hyp_cut is not None:
+        global HYPOTHESES_TRUNCATED, HYPOTHESES_TRUNCATED_BYTES
+        HYPOTHESES_TRUNCATED += 1
+        HYPOTHESES_TRUNCATED_BYTES += int(_hyp_cut.get("original_bytes", 0))
+        # WARN, with the correlation_id, because a shortened ranking is a
+        # material fact about that object — never a debug line (§10).
+        log.warning(
+            "hypotheses blob bounded: correlation_id=%s tenant=%s version=%d "
+            "original_bytes=%d cap_bytes=%d dropped_relations=%d "
+            "dropped_hypotheses=%d dropped_blocks=%s applied=%s",
+            snap.correlation_id, snap.tenant_id, version,
+            _hyp_cut.get("original_bytes", 0), _hyp_cut.get("cap_bytes", 0),
+            _hyp_cut.get("dropped_relations", 0),
+            _hyp_cut.get("dropped_hypotheses", 0),
+            _hyp_cut.get("dropped_blocks", []), _hyp_cut.get("applied", False))
     # Tracker 187: `affected` is set ONLY by a terminal persist and is the
     # monotone union of this object's own persisted history (`_affected_final`).
     # None on every other path -> the row is byte-for-byte what it always was.
@@ -10577,6 +10832,13 @@ class _AssignmentLogger(ConsumerRebalanceListener):
             parts.sort()
         CONSUMER_ASSIGNMENT.clear()
         CONSUMER_ASSIGNMENT.update(owned)
+        # Tracker 196: every cached end-offset/position proof belongs to the
+        # PREVIOUS assignment. Positions move when partitions do, so the cache
+        # is dropped wholesale and re-earned — a stale proof would be the one
+        # way this mechanism could shed evidence it should have kept. Pure
+        # in-memory dict work, so the hook stays I/O-free (pinned by
+        # test_the_rebalance_callback_does_no_io).
+        _UNREAD_PROBE.clear()
         # Cold-window bookkeeping (see consumer_state): RETAINED partitions keep
         # their original acquisition time, NEWLY acquired ones start their window
         # now, released ones are forgotten. Recorded here — never inferred from
@@ -12369,6 +12631,9 @@ def _metrics_text(health: dict | None = None) -> str:
     # the LRU for its byte figure, so paying it per line would make /metrics
     # O(series x entries).
     _rm = rank_memo_stats()
+    # Tracker 196: one evaluation for the whole reason label set — the state is
+    # a single instantaneous answer, not five independent ones.
+    _caught_up_reason_now = caught_up_reason(time.monotonic())
     lines = [
         "# HELP corr_ingest_events Correlation intake counters by lane (monotonic since process start).",
         "# TYPE corr_ingest_events counter",
@@ -13072,6 +13337,41 @@ def _metrics_text(health: dict | None = None) -> str:
         "# HELP corr_consumer_lag_probe_failures_total Backlog probe unusable; backstop holds evidence.",
         "# TYPE corr_consumer_lag_probe_failures_total counter",
         f"corr_consumer_lag_probe_failures_total {CONSUMER_LAG_PROBE_FAILURES}",
+        # TRACKER 196. The idle backstop was INERT for months because a
+        # never-read partition vetoed it and nothing said so. These five series
+        # make the state answerable from /metrics alone: the reason label says
+        # what is blocking, and the gauges say how much of it there is.
+        # TRACKER 195: the write-side blob bound. Rising means the pathological
+        # tail is being clipped instead of poisoning its granule neighbours.
+        "# HELP corr_hypotheses_truncated_total Persisted hypotheses blobs bounded by CORR_HYPOTHESES_MAX_BYTES.",
+        "# TYPE corr_hypotheses_truncated_total counter",
+        f"corr_hypotheses_truncated_total {HYPOTHESES_TRUNCATED}",
+        "# HELP corr_hypotheses_truncated_bytes_total Original bytes carried by the blobs that were bounded.",
+        "# TYPE corr_hypotheses_truncated_bytes_total counter",
+        f"corr_hypotheses_truncated_bytes_total {HYPOTHESES_TRUNCATED_BYTES}",
+        "# HELP corr_hypotheses_max_bytes Effective persist-side cap on the hypotheses column.",
+        "# TYPE corr_hypotheses_max_bytes gauge",
+        f"corr_hypotheses_max_bytes {hypotheses_cap_bytes()}",
+        "# HELP corr_consumer_caught_up Provable levelness with the broker, by reason (closed label set).",
+        "# TYPE corr_consumer_caught_up gauge",
+        *(f'corr_consumer_caught_up{{reason="{r}"}} '
+          f'{1 if _caught_up_reason_now == r else 0}'
+          for r in CAUGHT_UP_REASONS),
+        "# HELP corr_consumer_lag_unresolved_partitions Assigned partitions whose levelness is UNPROVEN; each one vetoes idle eviction.",
+        "# TYPE corr_consumer_lag_unresolved_partitions gauge",
+        f"corr_consumer_lag_unresolved_partitions {CONSUMER_LAG_UNRESOLVED_PARTITIONS}",
+        "# HELP corr_consumer_lag_proven_partitions Never-read partitions PROVEN to hold nothing unread.",
+        "# TYPE corr_consumer_lag_proven_partitions gauge",
+        f"corr_consumer_lag_proven_partitions {CONSUMER_LAG_PROVEN_PARTITIONS}",
+        "# HELP corr_consumer_lag_unread_total Proven backlog sitting on partitions this process has never read.",
+        "# TYPE corr_consumer_lag_unread_total gauge",
+        f"corr_consumer_lag_unread_total {CONSUMER_LAG_UNREAD_TOTAL}",
+        "# HELP corr_consumer_unread_probe_total Bounded end-offset probes started for never-read partitions.",
+        "# TYPE corr_consumer_unread_probe_total counter",
+        f"corr_consumer_unread_probe_total {CONSUMER_UNREAD_PROBE_ATTEMPTS}",
+        "# HELP corr_consumer_unread_probe_failures_total Probe passes that could not answer; partitions stay unresolved.",
+        "# TYPE corr_consumer_unread_probe_failures_total counter",
+        f"corr_consumer_unread_probe_failures_total {CONSUMER_UNREAD_PROBE_FAILURES}",
         # tracker 165 phase 9: three different lags, reported separately.
         # Event-time lag is how far the newest EVENT in the window is behind the
         # wall clock — the quantity that shortens the retained span, because
