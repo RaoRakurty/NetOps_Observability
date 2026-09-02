@@ -38,6 +38,20 @@ package chschema
 //     enforced by CHECK, verified live at freeze time
 //   - NO materialized view reads these tables (row policies break MV inserts)
 
+import "strconv"
+
+// Fixed retention horizons for the two corr_* tables whose TTL is written into
+// their CREATE TABLE rather than resolved from the retention profile
+// (corr_retention.go). They are CONSTANTS, not literals inside the DDL string,
+// because corr_repartition.go has to build a shadow table carrying the SAME
+// horizon and used to repeat the number in its own descriptor. Two copies of a
+// retention horizon drift silently and only the copy notices; this is the single
+// source both now read (ultra-review #42, tracker 208a).
+const (
+	corrPathEdgesTTLDays      = 90 // typed path edges: same horizon as corr_edges history
+	corrTenantWriteAmpTTLDays = 30 // write-amp rollup: small by construction, short horizon
+)
+
 func CorrSchemaDDL() []string {
 	// Shared column block: corr_signals (hot spine, 30 d TTL) and
 	// corr_signals_archive (replay input, no TTL) must stay structurally
@@ -371,7 +385,7 @@ ORDER BY (tenant_id, correlation_id, version, subject_kind, subject_id)`,
 ENGINE = MergeTree
 PARTITION BY (tenant_id, toYYYYMMDD(window_start))
 ORDER BY (tenant_id, window_start)
-TTL toDateTime(window_start) + INTERVAL 30 DAY
+TTL toDateTime(window_start) + INTERVAL ` + strconv.Itoa(corrTenantWriteAmpTTLDays) + ` DAY
 SETTINGS index_granularity = 8192, ttl_only_drop_parts = 1`,
 
 		// ── Service Path Graph §5 typed edges (contract v1) ──────────────────────
@@ -425,7 +439,7 @@ SETTINGS index_granularity = 8192, ttl_only_drop_parts = 1`,
 ENGINE = MergeTree
 PARTITION BY (tenant_id, toYYYYMMDD(created_at))
 ORDER BY (tenant_id, correlation_id, version, from_node, to_node)
-TTL toDateTime(created_at) + INTERVAL 90 DAY
+TTL toDateTime(created_at) + INTERVAL ` + strconv.Itoa(corrPathEdgesTTLDays) + ` DAY
 SETTINGS index_granularity = 8192, ttl_only_drop_parts = 1`,
 
 		// STRICT policy (the corr_current model): an untagged path edge is

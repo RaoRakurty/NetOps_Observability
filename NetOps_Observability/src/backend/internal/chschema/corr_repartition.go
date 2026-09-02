@@ -181,12 +181,12 @@ func corrRepartitionTables() []corrRepartitionTable {
 		{
 			Name: "corr_path_edges", TimeCol: "created_at",
 			OrderBy:  "(tenant_id, correlation_id, version, from_node, to_node)",
-			Settings: "index_granularity = 8192, ttl_only_drop_parts = 1", ttlDays: fixed(90),
+			Settings: "index_granularity = 8192, ttl_only_drop_parts = 1", ttlDays: fixed(corrPathEdgesTTLDays),
 		},
 		{
 			Name: "corr_tenant_write_amp", TimeCol: "window_start",
 			OrderBy:  "(tenant_id, window_start)",
-			Settings: "index_granularity = 8192, ttl_only_drop_parts = 1", ttlDays: fixed(30),
+			Settings: "index_granularity = 8192, ttl_only_drop_parts = 1", ttlDays: fixed(corrTenantWriteAmpTTLDays),
 		},
 	}
 }
@@ -427,16 +427,19 @@ func corrMergeBudgetSettingsFor(table string) string {
 // It is applied AFTER the copy has been verified and BEFORE the swap, on
 // purpose: a TTL on the shadow while rows are still being copied would let
 // background part drops remove expired history mid-copy and make the row-count
-// verification disagree with itself. materialize_ttl_after_modify = 0 keeps it
-// metadata-only, exactly as corr_retention.go does.
+// verification disagree with itself.
+//
+// The statement is DERIVED, not duplicated: it renders through
+// corrModifyTTLStmt — the same function CorrRetentionDDL renders the live
+// table's TTL with — so the shadow cannot come out of the swap carrying a
+// retention shape the live table stopped using. Only the table name differs
+// (ultra-review #42, tracker 208a).
 func CorrShadowTTLStmt(t corrRepartitionTable, d corrRetentionDays) string {
 	days := t.ttlDays(d)
 	if days <= 0 {
 		return ""
 	}
-	return "ALTER TABLE netops." + t.Name + corrRepartitionShadowSuffix +
-		" MODIFY TTL toDateTime(" + t.TimeCol + ") + INTERVAL " + strconv.Itoa(days) +
-		" DAY SETTINGS materialize_ttl_after_modify = 0"
+	return corrModifyTTLStmt(t.Name+corrRepartitionShadowSuffix, t.TimeCol, days)
 }
 
 // CorrPartitionKeysSQL enumerates the DESTINATION partitions and their source

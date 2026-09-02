@@ -3723,7 +3723,6 @@ def find_merges(
     index once and probe it over several candidate chunks. `entity_cache` holds
     the same frozensets `_entity_ids` would return, keyed by correlation_id.
     """
-    surv = sorted(survivors, key=lambda s: (s.window_start, s.correlation_id))
     # TRACKER 162 PATTERN (Stage-2 Lever 2, results-preserving): index the
     # survivors so each stale candidate probes only the plausible merge targets
     # instead of the full survivor list — killing the O(survivors × stale)
@@ -3737,7 +3736,22 @@ def find_merges(
     # independent of which candidates are examined or in what order. Output is
     # byte-identical (pinned by the equivalence oracle in
     # test_find_merges_index_stage2.py).
-    surv_index = ContinuationIndex(surv) if index is None else index
+    #
+    # THE SURVIVOR SORT IS BUILT ONLY WHEN IT IS USED (tracker 208c,
+    # ultra-review #44). It used to run unconditionally at the top of this
+    # function, but its ONLY consumer is the ContinuationIndex built here — and
+    # the hot caller (`_lifecycle_find_merges`) builds that index ONCE and then
+    # passes it in for every candidate chunk, so on the storm path the sorted
+    # list was computed, handed to nobody, and discarded, once per chunk. The
+    # winner is a total order over unique survivor cids (see the docstring), so
+    # neither the index's ordering nor this sort's existence can change the
+    # result; keeping it on the index-building branch preserves the exact
+    # ContinuationIndex input the equivalence oracle was pinned against.
+    if index is not None:
+        surv_index = index
+    else:
+        surv_index = ContinuationIndex(
+            sorted(survivors, key=lambda s: (s.window_start, s.correlation_id)))
     pairs: list[tuple[str, str]] = []
     for cand in sorted(candidates, key=lambda s: (s.window_start, s.correlation_id)):
         ce = _entity_ids(cand)

@@ -95,6 +95,26 @@ func CorrRetentionConfig() corrRetentionDays {
 	}
 }
 
+// corrModifyTTLStmt renders THE part-level retention TTL statement — the single
+// source for the expression's shape.
+//
+// It exists because the shadow table built by the daily-repartition migration
+// (corr_repartition.go, CorrShadowTTLStmt) has to carry the SAME TTL the live
+// table carries, and used to render its own copy of this string. Two copies of
+// one expression drift silently: change the horizon shape here — the
+// toDateTime() wrap, the INTERVAL unit, the materialize_ttl_after_modify
+// setting — and the shadow would keep the old shape, so the table would come out
+// of the swap with a retention contract nobody wrote down. Both callers now
+// render through this function and TestShadowTTLMatchesTheLiveRetentionTTL pins
+// them equal (ultra-review #42, tracker 208a).
+//
+// materialize_ttl_after_modify = 0 keeps the ALTER metadata-only: it must not
+// rewrite every part on boot.
+func corrModifyTTLStmt(table, timeCol string, days int) string {
+	return "ALTER TABLE netops." + table + " MODIFY TTL toDateTime(" + timeCol +
+		") + INTERVAL " + strconv.Itoa(days) + " DAY SETTINGS materialize_ttl_after_modify = 0"
+}
+
 // CorrRetentionDDL renders the converge statements for the resolved retention
 // config. Appended to the corr schema converge list on every API boot (same
 // idempotent, best-effort contract as CorrSchemaDDL).
@@ -105,18 +125,16 @@ func CorrRetentionDDL(d corrRetentionDays) []string {
 	for _, t := range []string{"corr_objects", "corr_edges", "corr_evidence", "corr_signals_archive"} {
 		stmts = append(stmts, "ALTER TABLE netops."+t+" MODIFY SETTING ttl_only_drop_parts = 1")
 	}
-	ttl := func(table, expr string, days int) {
-		stmts = append(stmts,
-			"ALTER TABLE netops."+table+" MODIFY TTL "+expr+" + INTERVAL "+
-				strconv.Itoa(days)+" DAY SETTINGS materialize_ttl_after_modify = 0")
+	ttl := func(table, timeCol string, days int) {
+		stmts = append(stmts, corrModifyTTLStmt(table, timeCol, days))
 	}
 	if d.History > 0 {
-		ttl("corr_objects", "toDateTime(created_at)", d.History)
-		ttl("corr_edges", "toDateTime(created_at)", d.History)
-		ttl("corr_evidence", "toDateTime(created_at)", d.History)
+		ttl("corr_objects", "created_at", d.History)
+		ttl("corr_edges", "created_at", d.History)
+		ttl("corr_evidence", "created_at", d.History)
 	}
 	if d.Archive > 0 {
-		ttl("corr_signals_archive", "toDateTime(ts)", d.Archive)
+		ttl("corr_signals_archive", "ts", d.Archive)
 	}
 	if d.Closed > 0 {
 		// Row-level: only rows that left 'open' expire. An abandoned 'open' row

@@ -209,3 +209,71 @@ def test_determinism_and_order_invariance():
         random.Random(_).shuffle(s)
         random.Random(_ + 100).shuffle(t)
         assert find_merges(s, t) == base, "merge result depended on input order"
+
+
+# ── tracker 208c (ultra-review #44): the survivor sort is not paid per chunk ──
+
+def _sort_probe(monkeypatch):
+    """Replace `sorted` INSIDE engine with a counting wrapper.
+
+    Module-global lookup shadows the builtin, so this sees every `sorted` call
+    `engine` makes and nothing else. The probe records the identity of each
+    sorted sequence so the survivor list can be told apart from the candidate
+    list and the final pair sort.
+    """
+    import engine as eng
+
+    seen: list[int] = []
+    real = sorted
+
+    def counting(seq, *a, **kw):
+        seen.append(id(seq))
+        return real(seq, *a, **kw)
+
+    monkeypatch.setattr(eng, "sorted", counting, raising=False)
+    return seen
+
+
+def test_survivor_sort_is_skipped_when_the_index_is_supplied(monkeypatch):
+    """The hot caller builds the ContinuationIndex ONCE and reuses it across
+    candidate chunks. The survivor sort's only consumer is that index build, so
+    on every chunk after the first it produced a list nobody read — an O(n log n)
+    scan of the whole survivor population, per chunk, for nothing.
+
+    A storm is exactly when both factors are large, which is exactly when the
+    waste is worst; that is why this is pinned rather than left to review.
+    """
+    survivors = [_obj([f"iso-{i}"], f"S{i}", 0, 5) for i in range(40)]
+    candidates = [_obj(["iso-3", "iso-4"], "C1", 1, 6)]
+    index = ContinuationIndex(survivors)
+
+    seen = _sort_probe(monkeypatch)
+    find_merges(survivors, candidates, index=index)
+    assert id(survivors) not in seen, (
+        "find_merges sorted the survivor list even though the index was supplied "
+        "— that sorted list has no consumer on this branch")
+
+
+def test_survivor_sort_still_happens_when_the_index_must_be_built(monkeypatch):
+    """The other half: with no index supplied, find_merges builds one itself and
+    must hand it the SAME sorted survivor list it always did — that ordering is
+    the input the equivalence oracle above was pinned against.
+    """
+    survivors = [_obj([f"iso-{i}"], f"S{i}", 0, 5) for i in range(40)]
+    candidates = [_obj(["iso-3", "iso-4"], "C1", 1, 6)]
+
+    seen = _sort_probe(monkeypatch)
+    find_merges(survivors, candidates)
+    assert id(survivors) in seen, (
+        "find_merges no longer sorts the survivors before building its own index")
+
+
+def test_lazy_sort_changes_no_result():
+    """Results-preserving, both branches: a caller that supplies the index and a
+    caller that does not must return the identical pair set, and both must match
+    the brute-force oracle."""
+    rng = random.Random(20812)
+    survivors, stale = _mixed_population(rng, n_surv=16, n_stale=20)
+    own_index = find_merges(survivors, stale)
+    supplied = find_merges(survivors, stale, index=ContinuationIndex(survivors))
+    assert own_index == supplied == brute_find_merges(survivors, stale)

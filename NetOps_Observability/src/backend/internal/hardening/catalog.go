@@ -61,10 +61,18 @@ var (
 	reIOSTransIn       = regexp.MustCompile(`^transport input\b`)
 	reIOSTransTelnet   = regexp.MustCompile(`^transport input\b.*\b(telnet|all)\b`)
 	reIOSAccessClassIn = regexp.MustCompile(`^access-class\s+\S+\s+in\b`)
+	// The two EXPOSURE probes below. They used to be compiled INSIDE the
+	// `Enabled` closures of exposure-ssh / exposure-snmp, so every exposure
+	// evaluation of every device re-parsed the same two fixed patterns —
+	// regexp compilation is orders of magnitude dearer than the match it
+	// enables, and these run per device per assessment (ultra-review #45,
+	// tracker 208d). Same compile-once contract as the four above.
+	reIOSSSHEnabled  = regexp.MustCompile(`^(ip ssh|transport input\b.*\bssh\b)`)
+	reIOSSNMPEnabled = regexp.MustCompile(`^snmp-server (community|host|user|group)\b`)
 )
 
-// Note: the four regexps above are compile-once matchers used only by the two
-// IOS stanza detections below. They are unexported, immutable *regexp.Regexp
+// Note: the regexps above are compile-once matchers used by the IOS stanza and
+// exposure detections below. They are unexported, immutable *regexp.Regexp
 // values (regexp objects are safe for concurrent use) — matcher constants, not
 // mutable program state; the no-globals rule targets shared MUTABLE state.
 
@@ -422,8 +430,7 @@ func DefaultCatalog() *Catalog {
 			bindings: map[Vendor]ExposureBinding{
 				VendorCiscoIOSXE: {
 					Enabled: func(c *Config) (bool, string) {
-						re := regexp.MustCompile(`^(ip ssh|transport input\b.*\bssh\b)`)
-						if line, ok := c.firstMatch(re); ok {
+						if line, ok := c.firstMatch(reIOSSSHEnabled); ok {
 							return true, line
 						}
 						return false, "SSH not configured"
@@ -441,8 +448,7 @@ func DefaultCatalog() *Catalog {
 			bindings: map[Vendor]ExposureBinding{
 				VendorCiscoIOSXE: {
 					Enabled: func(c *Config) (bool, string) {
-						re := regexp.MustCompile(`^snmp-server (community|host|user|group)\b`)
-						if line, ok := c.firstMatch(re); ok {
+						if line, ok := c.firstMatch(reIOSSNMPEnabled); ok {
 							return true, line
 						}
 						return false, "SNMP not configured"

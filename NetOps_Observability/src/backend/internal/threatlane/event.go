@@ -39,12 +39,44 @@ type LogEvent struct {
 	// User is the actor associated with the event, when the log carries one
 	// (e.g. the CLI user who made a change). Optional.
 	User string
+
+	// norm memoizes normalized(). It is UNEXPORTED and never populated by a
+	// caller: the engine fills it once per event, immediately before the rule
+	// loop, via withNormalized (see runLogRules). A zero value is simply a cache
+	// miss, so an event built anywhere else — a test, a source adapter — behaves
+	// exactly as it did before this field existed.
+	norm string
 }
 
 // normalized returns the lowercased mnemonic + message joined for case-
 // insensitive matching. It never mutates the event.
+//
+// Every device-log rule calls this on every event, so before tracker 208d the
+// same string was lowercased and re-allocated once PER RULE PER EVENT — O(rules
+// × events) copies of an identical result on the lane's hot path. The engine now
+// computes it once per event (withNormalized) and every rule reads the memo;
+// when the memo is empty this falls back to computing it, so the function's
+// contract is unchanged (ultra-review #45).
 func (e LogEvent) normalized() string {
+	if e.norm != "" {
+		return e.norm
+	}
+	return e.computeNormalized()
+}
+
+// computeNormalized is the normalization itself — the single definition of what
+// "normalized" means, so the memo can never encode a different rule than the
+// fallback.
+func (e LogEvent) computeNormalized() string {
 	return strings.ToLower(e.Mnemonic + " " + e.Message)
+}
+
+// withNormalized returns a COPY of e carrying the memoized normalization. It
+// takes and returns a value: nothing the caller holds is mutated, and the copy
+// is what the rules are handed.
+func (e LogEvent) withNormalized() LogEvent {
+	e.norm = e.computeNormalized()
+	return e
 }
 
 // FlowRecord is a NORMALIZED flow (one IPFIX/NetFlow record) the flow-behavioral

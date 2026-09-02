@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -262,4 +263,101 @@ func itoa(i int) string {
 		i /= 10
 	}
 	return string(b[pos:])
+}
+
+// ─── tracker 208d (ultra-review #45): normalize once per EVENT, not per rule ──
+
+// TestNormalizationIsComputedOncePerEvent counts the actual normalizations.
+//
+// Every device-log rule matches over the same lowercased mnemonic+message. Before
+// this change each rule recomputed it, so the lane paid O(rules × events)
+// identical string allocations on its hot path. The engine now memoizes it once
+// per event and the rules read the memo.
+//
+// The count is taken from the engine's own behaviour, not from a source scan: a
+// probe rule records, per event it is handed, whether the memo was ALREADY
+// populated. Rule 0 must see it populated (the engine normalized before entering
+// the rule loop) and so must every later rule — i.e. exactly one computation per
+// event, whatever the rule count.
+func TestNormalizationIsComputedOncePerEvent(t *testing.T) {
+	const rules = 5
+	seenUnmemoized := 0
+	probe := func(ev LogEvent) DetectResult {
+		if ev.norm == "" {
+			seenUnmemoized++
+		}
+		// Reading through the accessor must still give the right answer.
+		if ev.normalized() != ev.computeNormalized() {
+			t.Errorf("memoized normalization %q != freshly computed %q",
+				ev.normalized(), ev.computeNormalized())
+		}
+		return DetectResult{Tripped: false}
+	}
+	cat := &Catalog{}
+	for i := 0; i < rules; i++ {
+		cat.logRules = append(cat.logRules, LogRule{ID: "probe", Detect: probe})
+	}
+	logs := MemLogSource{
+		{TenantID: "acme", DeviceID: "d1", Mnemonic: "SYS-5-CONFIG_I", Message: "Configured from console by ADMIN"},
+		{TenantID: "acme", DeviceID: "d2", Mnemonic: "SEC-6-IPACCESSLOGP", Message: "list 101 denied TCP"},
+		{TenantID: "acme", DeviceID: "d3", Mnemonic: "", Message: ""},
+	}
+	e := NewEngine(cat, logs, nil, WithClock(fixedClock()))
+	_ = e.runLogRules(logs)
+
+	if seenUnmemoized != 0 {
+		t.Errorf("%d of %d rule invocations were handed an UNMEMOIZED event — the engine is "+
+			"normalizing inside the rule loop again (O(rules x events) instead of O(events))",
+			seenUnmemoized, rules*len(logs))
+	}
+}
+
+// TestMemoizedNormalizationMatchesTheComputedOne is the correctness half: the
+// memo must be byte-identical to what the rules used to compute themselves, for
+// every shape of event — including the empty one, whose normalization is a
+// single space and must therefore NOT be mistaken for "no memo".
+func TestMemoizedNormalizationMatchesTheComputedOne(t *testing.T) {
+	cases := []LogEvent{
+		{Mnemonic: "SYS-5-CONFIG_I", Message: "Configured from console by ADMIN"},
+		{Mnemonic: "", Message: "%SEC-6-IPACCESSLOGP: list 101 denied TCP 10.0.0.1 -> 10.0.0.2"},
+		{Mnemonic: "PARSER-5-CFGLOG_LOGGEDCMD", Message: ""},
+		{Mnemonic: "", Message: ""},
+		{Mnemonic: "MiXeD-CaSe", Message: "UPPER lower ÄÖÜ"},
+	}
+	for _, ev := range cases {
+		want := strings.ToLower(ev.Mnemonic + " " + ev.Message)
+		if got := ev.normalized(); got != want {
+			t.Errorf("uncached normalized() = %q, want %q", got, want)
+		}
+		memo := ev.withNormalized()
+		if got := memo.normalized(); got != want {
+			t.Errorf("memoized normalized() = %q, want %q", got, want)
+		}
+		if memo.norm != want {
+			t.Errorf("memo field = %q, want %q", memo.norm, want)
+		}
+		// withNormalized must not mutate the receiver's copy held by the caller.
+		if ev.norm != "" {
+			t.Error("withNormalized mutated its receiver — it must return a copy")
+		}
+	}
+}
+
+// BenchmarkRunLogRules is the measurement the change exists for: allocations
+// must scale with EVENTS, not with events × rules.
+func BenchmarkRunLogRules(b *testing.B) {
+	logs := make(MemLogSource, 0, 64)
+	for i := 0; i < 64; i++ {
+		logs = append(logs, LogEvent{
+			TenantID: "acme", DeviceID: "d1", Mnemonic: "SYS-5-CONFIG_I",
+			Message: "Configured from console by ADMIN at a length typical of a real syslog line",
+			Time:    time.Date(2026, 8, 27, 3, 0, 0, 0, time.UTC),
+		})
+	}
+	e := NewEngine(DefaultCatalog(), logs, nil, WithClock(fixedClock()))
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_ = e.runLogRules(logs)
+	}
 }

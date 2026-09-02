@@ -133,3 +133,69 @@ def test_lifespan_starts_the_sidecar_wiring_pin():
     src = inspect.getsource(main.lifespan)
     assert "_start_health_sidecar()" in src
     assert "health_snapshot_loop()" in src
+
+
+# ── tracker 208b (ultra-review #43): one health build per snapshot tick ──────
+
+def test_health_payload_is_built_once_per_snapshot_tick(monkeypatch):
+    """The publisher renders TWO bodies from ONE set of numbers.
+
+    `_publish_health_snapshot` builds the /healthz body and the /metrics body,
+    and `_metrics_text` used to call `_health_payload()` for itself — so every
+    tick walked the whole health surface twice for a value it already had in
+    hand. The snapshot loop runs on CORR_HEALTH_SNAPSHOT_S (2 s by default) for
+    the life of the process, and it runs ON the main loop precisely because the
+    reads must be race-free, which makes wasted work there loop time the storm
+    cannot use.
+
+    The count is the assertion: exactly one build per tick, whatever the number
+    of bodies rendered from it.
+    """
+    calls = {"n": 0}
+    real = main._health_payload
+
+    def counting():
+        calls["n"] += 1
+        return real()
+
+    monkeypatch.setattr(main, "_health_payload", counting)
+    main._publish_health_snapshot()
+    assert calls["n"] == 1, (
+        f"_health_payload built {calls['n']} times in ONE snapshot tick — the "
+        "publisher and _metrics_text are each building their own again")
+
+    # A second tick is one more build, not two: the memo is per-tick, not cached
+    # across ticks (a cached snapshot would freeze the numbers).
+    main._publish_health_snapshot()
+    assert calls["n"] == 2
+
+
+def test_snapshot_bodies_are_rendered_from_the_same_health_payload():
+    """Handing the payload through is what makes the two bodies consistent.
+
+    Both are rendered from ONE dict now, so a counter that moves between the two
+    renders can no longer make /healthz and /metrics in the SAME snapshot
+    disagree. Pinned on a field both bodies carry.
+    """
+    main._publish_health_snapshot()
+    snap = main._HEALTH_SNAPSHOT
+    assert snap is not None
+    health = snap["health"]
+    metrics = snap["metrics"]
+    assert isinstance(health, dict) and isinstance(metrics, str)
+    open_objects = health["engine_v2"]["open_objects"]
+    assert f"corr_open_objects {open_objects}" in metrics, (
+        "the metrics body was not rendered from the snapshot's own health payload")
+
+
+def test_metrics_text_still_builds_its_own_payload_when_not_given_one():
+    """The /metrics ROUTE passes nothing and must keep working exactly as before
+    — the parameter is an optimisation for the publisher, never a requirement."""
+    body = main._metrics_text()
+    assert body.startswith("# HELP ")
+    assert "corr_open_objects " in body
+    # And an explicitly passed payload must be the one used, not a fresh read.
+    injected = dict(main._health_payload())
+    injected["engine_v2"] = dict(injected["engine_v2"])
+    injected["engine_v2"]["open_objects"] = 123456
+    assert "corr_open_objects 123456" in main._metrics_text(injected)

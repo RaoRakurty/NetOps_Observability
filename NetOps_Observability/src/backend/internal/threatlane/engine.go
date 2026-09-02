@@ -84,6 +84,13 @@ func (e *Engine) Detect(ctx context.Context) ([]secfindings.Finding, error) {
 func (e *Engine) runLogRules(logs []LogEvent) []secfindings.Finding {
 	var out []secfindings.Finding
 	for _, ev := range logs {
+		// Normalize ONCE per event, not once per rule: every log rule matches
+		// over the same lowercased mnemonic+message, and recomputing it inside
+		// each rule made the lane O(rules × events) string allocations for a
+		// value that cannot change between rules (ultra-review #45, tracker
+		// 208d). `ev` is already this loop's own copy, so this mutates nothing
+		// the caller can see.
+		ev = ev.withNormalized()
 		for _, rule := range e.catalog.logRules {
 			res := rule.Detect(ev)
 			if !res.Tripped {

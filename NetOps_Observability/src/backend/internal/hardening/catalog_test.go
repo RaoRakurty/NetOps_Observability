@@ -1,6 +1,11 @@
 package hardening
 
 import (
+	"go/ast"
+	"go/parser"
+	"go/token"
+	"io/fs"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -161,5 +166,121 @@ func TestMultiVendorBindingsDeclarative(t *testing.T) {
 	}
 	if jb.Detect(NewConfig(VendorJuniper, "set system services ssh\n")).Tripped {
 		t.Error("Juniper telnet detection falsely tripped without telnet")
+	}
+}
+
+// ─── tracker 208d (ultra-review #45): no regexp is compiled per call ─────────
+
+// TestNoRegexpIsCompiledInsideAFunctionLiteral is a STRUCTURAL guard, and it is
+// structural on purpose: "this regexp is compiled once" is not observable from
+// outside the closure that holds it, so a behavioural test cannot pin it.
+//
+// This package's contract (stated at the top of catalog.go) is that every
+// pattern is compiled ONCE — either at package scope, or in a builder function
+// that returns a closure capturing the compiled value. Two exposure bindings had
+// drifted from it: exposure-ssh and exposure-snmp each called
+// regexp.MustCompile INSIDE their `Enabled` closure, so the same two fixed
+// patterns were re-parsed on every evaluation of every device. Compilation costs
+// orders of magnitude more than the match it enables, and it is invisible in
+// review — which is exactly why it is worth a guard rather than a comment.
+//
+// The rule the test enforces: a regexp.MustCompile call may not appear inside a
+// function LITERAL. A literal is the thing that gets called repeatedly; a named
+// builder function runs once, at catalog-build time.
+func TestNoRegexpIsCompiledInsideAFunctionLiteral(t *testing.T) {
+	fset := token.NewFileSet()
+	pkgs, err := parser.ParseDir(fset, ".", func(fi fs.FileInfo) bool {
+		return !strings.HasSuffix(fi.Name(), "_test.go")
+	}, 0)
+	if err != nil {
+		t.Fatalf("parse package: %v", err)
+	}
+	if len(pkgs) == 0 {
+		t.Fatal("parsed no packages — the guard would pass vacuously")
+	}
+	compiled := 0
+	for _, pkg := range pkgs {
+		for _, file := range pkg.Files {
+			ast.Inspect(file, func(n ast.Node) bool {
+				lit, ok := n.(*ast.FuncLit)
+				if !ok {
+					return true
+				}
+				ast.Inspect(lit.Body, func(inner ast.Node) bool {
+					call, ok := inner.(*ast.CallExpr)
+					if !ok {
+						return true
+					}
+					sel, ok := call.Fun.(*ast.SelectorExpr)
+					if !ok {
+						return true
+					}
+					ident, ok := sel.X.(*ast.Ident)
+					if !ok || ident.Name != "regexp" {
+						return true
+					}
+					if sel.Sel.Name == "MustCompile" || sel.Sel.Name == "Compile" {
+						t.Errorf("%s: regexp.%s inside a function literal — the pattern is "+
+							"recompiled on EVERY call. Hoist it to a package-level var or to the "+
+							"enclosing builder, as the rest of this package does.",
+							fset.Position(call.Pos()), sel.Sel.Name)
+					}
+					return true
+				})
+				return true
+			})
+			// Sanity: the guard must be scanning a file that actually holds
+			// regexps, or it proves nothing.
+			ast.Inspect(file, func(n ast.Node) bool {
+				if call, ok := n.(*ast.CallExpr); ok {
+					if sel, ok := call.Fun.(*ast.SelectorExpr); ok {
+						if id, ok := sel.X.(*ast.Ident); ok && id.Name == "regexp" {
+							compiled++
+						}
+					}
+				}
+				return true
+			})
+		}
+	}
+	if compiled == 0 {
+		t.Fatal("found no regexp compilations at all — the guard is not scanning this package")
+	}
+}
+
+// TestExposureProbesUseThePackageLevelMatchers pins the two hoisted patterns
+// themselves: the behaviour must be exactly what the inline compiles produced.
+func TestExposureProbesUseThePackageLevelMatchers(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		re   *regexp.Regexp
+		hit  []string
+		miss []string
+	}{
+		{
+			name: "ssh",
+			re:   reIOSSSHEnabled,
+			hit:  []string{"ip ssh version 2", "transport input ssh", "transport input telnet ssh"},
+			miss: []string{"transport input telnet", "no ip ssh", "line vty 0 15"},
+		},
+		{
+			name: "snmp",
+			re:   reIOSSNMPEnabled,
+			hit:  []string{"snmp-server community public RO", "snmp-server host 10.0.0.1", "snmp-server user u g v3", "snmp-server group g v3 priv"},
+			miss: []string{"snmp-server enable traps", "no snmp-server", "ip snmp-server community x"},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			for _, s := range tc.hit {
+				if !tc.re.MatchString(s) {
+					t.Errorf("%q must match %s", s, tc.re)
+				}
+			}
+			for _, s := range tc.miss {
+				if tc.re.MatchString(s) {
+					t.Errorf("%q must NOT match %s", s, tc.re)
+				}
+			}
+		})
 	}
 }

@@ -520,3 +520,88 @@ func TestAnalysisTypeFaultsAreNotRetryable(t *testing.T) {
 		})
 	}
 }
+
+// TestReadBudgetFaultIsPermanentButUnknown5xxStillRetries pins BOTH halves of
+// tracker 207 in one table, because fixing one half by breaking the other is
+// the easy mistake here.
+//
+// Half one: code 307 TOO_MANY_BYTES is a `max_bytes_to_read` breach. It arrives
+// on the same HTTP 500 that TOO_MANY_PARTS backpressure arrives on, and before
+// this row it was in neither code map — so it fell through the "status >= 500 →
+// retry the unknown" default and the caller was told "(retryable)" about a
+// statement that reads the same bytes and breaches the same ceiling forever.
+//
+// Half two: that default MUST still stand for a genuinely unrecognised 5xx.
+// Naming 307 is a one-code addition, not a narrowing of the fallback: an
+// unlisted server-side code we know nothing about is still safer to retry, and
+// the caller's backoff bounds the cost. If this case ever goes red, the
+// classifier has stopped retrying things it should.
+func TestReadBudgetFaultIsPermanentButUnknown5xxStillRetries(t *testing.T) {
+	cases := []struct {
+		name           string
+		body           string
+		code           int
+		classification string
+		retryable      bool
+	}{
+		{
+			name:           "too many bytes (max_bytes_to_read breach)",
+			body:           "Code: 307. DB::Exception: Limit for rows or bytes to read exceeded, max bytes: 1.00 GiB, current bytes: 1.34 GiB. (TOO_MANY_BYTES)",
+			code:           codeTooManyBytes,
+			classification: "too_many_bytes",
+			retryable:      false,
+		},
+		{
+			name:           "an unlisted server-side code still retries (the default is not narrowed)",
+			body:           "Code: 999. DB::Exception: Some future ClickHouse failure this build has never seen.",
+			code:           999,
+			classification: "server_error",
+			retryable:      true,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			c, done := testClient(t, func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(http.StatusInternalServerError) // the same 500 TOO_MANY_PARTS arrives on
+				_, _ = w.Write([]byte(tc.body))
+			})
+			defer done()
+
+			e := mustExecErr(t, c, Request{SQL: "SELECT count() FROM netops.flows", Op: "probe", Scope: "__all__"})
+			if e.Code != tc.code {
+				t.Fatalf("code = %d, want %d", e.Code, tc.code)
+			}
+			if e.Retryable != tc.retryable {
+				t.Errorf("Retryable = %v, want %v — a read-budget breach is deterministic and must not "+
+					"be retried, while an unrecognised 5xx must still be", e.Retryable, tc.retryable)
+			}
+			if e.Classification != tc.classification {
+				t.Errorf("classification = %q, want %q", e.Classification, tc.classification)
+			}
+			if Retryable(e) != tc.retryable {
+				t.Errorf("package-level Retryable() = %v, want %v — it must agree with the classification",
+					Retryable(e), tc.retryable)
+			}
+		})
+	}
+}
+
+// TestTooManyBytesIsNotAlsoRetryable guards the maps themselves: a code in both
+// tables would resolve by switch order, silently, and the behavioural test above
+// would still pass for the wrong reason.
+func TestTooManyBytesIsNotAlsoRetryable(t *testing.T) {
+	if retryableCodes[codeTooManyBytes] {
+		t.Error("307 TOO_MANY_BYTES must not appear in retryableCodes")
+	}
+	if !permanentCodes[codeTooManyBytes] {
+		t.Error("307 TOO_MANY_BYTES must appear in permanentCodes")
+	}
+	if classificationFor[codeTooManyBytes] != "too_many_bytes" {
+		t.Errorf("classification slug = %q, want \"too_many_bytes\"", classificationFor[codeTooManyBytes])
+	}
+	for code := range permanentCodes {
+		if retryableCodes[code] {
+			t.Errorf("code %d is in BOTH retryableCodes and permanentCodes — the classification is ambiguous", code)
+		}
+	}
+}

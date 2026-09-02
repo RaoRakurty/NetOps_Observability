@@ -12071,11 +12071,19 @@ HEALTH_SIDECAR_ERRORS = 0
 
 def _publish_health_snapshot() -> None:
     """Build both bodies ON the main loop (cheap, race-free reads of module
-    state) and swap the whole holder atomically (GIL object swap)."""
+    state) and swap the whole holder atomically (GIL object swap).
+
+    The health payload is built ONCE and handed to `_metrics_text`: the two
+    bodies are two renderings of the same numbers, and `_metrics_text` used to
+    call `_health_payload()` itself, so every snapshot tick walked the whole
+    health surface twice (ultra-review #43, tracker 208b). Passing it also makes
+    the two bodies in one snapshot EXACTLY consistent — they can no longer be
+    rendered from two reads of module state taken microseconds apart."""
     global _HEALTH_SNAPSHOT, HEALTH_SNAPSHOTS_BUILT
+    health = _health_payload()
     _HEALTH_SNAPSHOT = {
-        "health": _health_payload(),
-        "metrics": _metrics_text(),
+        "health": health,
+        "metrics": _metrics_text(health),
         "built_mono": time.monotonic(),
     }
     HEALTH_SNAPSHOTS_BUILT += 1
@@ -12341,10 +12349,15 @@ async def metrics_exposition():
     return PlainTextResponse(_metrics_text())
 
 
-def _metrics_text() -> str:
+def _metrics_text(health: dict | None = None) -> str:
     """The /metrics body, extracted SYNC (tracker 174) — served by both the
-    route and the loop-independent sidecar; see _health_payload."""
-    h = _health_payload()
+    route and the loop-independent sidecar; see _health_payload.
+
+    `health` is an ALREADY-BUILT `_health_payload()`. The snapshot publisher
+    passes the one it just built so a tick walks the health surface once instead
+    of twice (ultra-review #43, tracker 208b); every other caller omits it and
+    gets the previous behaviour — a payload built here, on demand."""
+    h = _health_payload() if health is None else health
     # P2 step 4: read the Evidence-plane figures ONCE — the queue's oldest-age
     # scan is O(depth) and must not be paid per exposition line.
     _ev = evidence_stats()

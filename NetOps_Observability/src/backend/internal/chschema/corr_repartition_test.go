@@ -297,6 +297,92 @@ func TestShadowTTLIsMetadataOnlyAndKeyedRight(t *testing.T) {
 	}
 }
 
+// TestShadowTTLMatchesTheLiveRetentionTTL is the anti-drift pin for tracker 208a
+// (ultra-review #42).
+//
+// The shadow table the daily-repartition migration builds has to carry the SAME
+// retention the live table carries — it BECOMES the live table at the swap. Both
+// statements used to be written out longhand in two files, so a change to the
+// expression's shape in corr_retention.go (the toDateTime() wrap, the INTERVAL
+// unit, the materialize_ttl_after_modify setting) would leave the shadow
+// rendering the old shape and nothing would notice until a table came out of a
+// migration with a retention contract nobody wrote down.
+//
+// The assertion is deliberately EXACT-STRING and not "contains": the shadow TTL
+// must be byte-identical to the live one for the same table and horizon, modulo
+// the shadow suffix on the table name and nothing else. Rendering both through
+// corrModifyTTLStmt is what makes that true; this test is what keeps it true.
+func TestShadowTTLMatchesTheLiveRetentionTTL(t *testing.T) {
+	for _, profile := range []string{"lab", "demo", "production"} {
+		ret := corrRetentionProfiles[profile]
+		live := CorrRetentionDDL(ret)
+		for _, tbl := range corrRepartitionTables() {
+			shadow := CorrShadowTTLStmt(tbl, ret)
+			// Find the live MODIFY TTL for exactly this table (not a prefix
+			// match: corr_signals_archive must not match corr_signals).
+			var want string
+			for _, stmt := range live {
+				if strings.HasPrefix(stmt, "ALTER TABLE netops."+tbl.Name+" MODIFY TTL ") {
+					want = stmt
+					break
+				}
+			}
+			if want == "" {
+				// This table's horizon is not profile-resolved — it is written
+				// into its own CREATE TABLE (corr_path_edges,
+				// corr_tenant_write_amp). corr_schema.go is then the single
+				// source, and the shadow must reproduce that clause exactly.
+				schemaTTL := clause(createStmt(t, tbl.Name), "TTL")
+				if schemaTTL == "" {
+					// Genuinely keep-forever: the shadow must emit nothing.
+					if shadow != "" {
+						t.Errorf("%s/%s: neither the retention profile nor the schema sets a TTL, "+
+							"but the shadow renders one: %q", profile, tbl.Name, shadow)
+					}
+					continue
+				}
+				wantShadow := corrModifyTTLStmt(tbl.Name+corrRepartitionShadowSuffix,
+					tbl.TimeCol, ttlDaysFromClause(t, schemaTTL))
+				if shadow != wantShadow {
+					t.Errorf("%s/%s: shadow TTL has DRIFTED from the CREATE TABLE TTL in corr_schema.go\n"+
+						" shadow: %s\n schema: %s", profile, tbl.Name, shadow, schemaTTL)
+				}
+				// And the clause the schema states must be the one the shadow
+				// carries, expression and all.
+				if !strings.Contains(shadow, schemaTTL) {
+					t.Errorf("%s/%s: shadow TTL %q does not carry the schema's clause %q",
+						profile, tbl.Name, shadow, schemaTTL)
+				}
+				continue
+			}
+			got := strings.Replace(shadow, "netops."+tbl.Name+corrRepartitionShadowSuffix,
+				"netops."+tbl.Name, 1)
+			if got != want {
+				t.Errorf("%s/%s: shadow TTL has DRIFTED from the live retention TTL\n shadow: %s\n   live: %s",
+					profile, tbl.Name, got, want)
+			}
+		}
+	}
+}
+
+// ttlDaysFromClause pulls N out of "... + INTERVAL N DAY".
+func ttlDaysFromClause(t *testing.T, clause string) int {
+	t.Helper()
+	_, rest, ok := strings.Cut(clause, "INTERVAL ")
+	if !ok {
+		t.Fatalf("TTL clause %q has no INTERVAL", clause)
+	}
+	numStr, _, ok := strings.Cut(rest, " DAY")
+	if !ok {
+		t.Fatalf("TTL clause %q is not expressed in DAY units", clause)
+	}
+	n, err := strconv.Atoi(numStr)
+	if err != nil {
+		t.Fatalf("TTL clause %q: %v", clause, err)
+	}
+	return n
+}
+
 // TestSwapOrdering: exchange, then rename the old data aside, then re-emit the
 // STRICT policies. The pre-migration table is KEPT — it is the rollback.
 func TestSwapOrdering(t *testing.T) {

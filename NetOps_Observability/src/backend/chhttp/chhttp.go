@@ -98,6 +98,15 @@ const (
 	codeNoCommonType          = 386 // NO_COMMON_TYPE — e.g. String vs DateTime comparison
 	codeIllegalTypeOfArgument = 43  // ILLEGAL_TYPE_OF_ARGUMENT — no operation for these types
 	codeIllegalAggregation    = 184 // ILLEGAL_AGGREGATION — an aggregate resolved into WHERE
+	// TOO_MANY_BYTES is the same SHAPE as the analysis faults above, but it is
+	// raised by the READ BUDGET rather than by the types: the query would read
+	// more than `max_bytes_to_read` allows. ClickHouse reports it as HTTP 500,
+	// so without naming it here it fell through the "status >= 500 → retry the
+	// unknown" default — yet it is deterministic: the same statement over the
+	// same parts reads the same bytes and breaches the same ceiling on every
+	// attempt. The fix is a narrower query or a larger budget, never a retry
+	// (ultra-review #39, tracker 207).
+	codeTooManyBytes = 307 // TOO_MANY_BYTES — a max_bytes_to_read breach
 )
 
 // retryableCodes are transient by nature: the same statement, unchanged, can
@@ -126,6 +135,8 @@ var permanentCodes = map[int]bool{
 	codeNoCommonType:          true,
 	codeIllegalTypeOfArgument: true,
 	codeIllegalAggregation:    true,
+	// Deterministic BUDGET fault — the same read breaches the same ceiling.
+	codeTooManyBytes: true,
 }
 
 // classificationFor maps a code to the stable metric slug. Metrics keyed on a
@@ -149,6 +160,9 @@ var classificationFor = map[int]string{
 	codeNoCommonType:          "schema_no_common_type",
 	codeIllegalTypeOfArgument: "schema_illegal_type",
 	codeIllegalAggregation:    "schema_illegal_aggregation",
+	// Named so an alert reads "the query asked for too many bytes" — which
+	// points at the query or at the budget — rather than "server_error".
+	codeTooManyBytes: "too_many_bytes",
 }
 
 // exceptionMarkers identify a ClickHouse exception embedded in a body that
