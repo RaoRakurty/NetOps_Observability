@@ -58,6 +58,17 @@ var apiRoutes = []apiRoute{
 	// FEATURE_SECURITY_LANE=true, so a flag-off deployment 404s both.
 	{"GET", "/api/security/lane/status", "Security", "Security producer lane status: last scan id/time/outcome per tenant (own-only; cross-tenant for the platform admin)"},
 	{"POST", "/api/security/scan", "Security", "Queue a bounded security scan for the caller's own tenant (administration:write; 429 when one is already queued or running)"},
+	// Config Backup & Drift (P3-CFG, internal/configstore + internal/configdrift).
+	// Registered ONLY when FEATURE_CONFIG_BACKUP=true, so a flag-off deployment
+	// 404s every one of them. Version text and diffs are SECRET-REDACTED and the
+	// read is audited with a `sensitive` tag; the sealed copy keeps the original.
+	{"POST", "/api/devices/{id}/config/backup", "Config Backup", "Queue a running-configuration capture for one device over the SSH gateway (infrastructure:write; 202 + job id, 429 when one is already running)"},
+	{"GET", "/api/devices/{id}/config/versions", "Config Backup", "List a device's stored configuration versions, newest first (infrastructure:read; 404 outside the caller's tenant)"},
+	{"GET", "/api/devices/{id}/config/versions/{sha}", "Config Backup", "Fetch one stored configuration version as secret-redacted text (infrastructure:read; audited as a sensitive read)"},
+	{"GET", "/api/devices/{id}/config/diff", "Config Backup", "Bounded, secret-redacted unified diff between two configuration versions (from, to)"},
+	{"POST", "/api/devices/{id}/config/golden", "Config Backup", "Mark a stored version as the device's golden baseline (infrastructure:write)"},
+	{"GET", "/api/devices/{id}/config/status", "Config Backup", "One device's configuration sync status: in_sync | changed | drifted | unknown"},
+	{"GET", "/api/config/drift", "Config Backup", "Configuration drift across the caller's devices, paged and filterable by state (infrastructure:read)"},
 	{"GET", "/api/tunnels", "Telemetry", "Overlay tunnel telemetry (IPsec/SD-WAN/GRE)"},
 	{"GET", "/api/flows/top", "Telemetry", "Top talkers (NetFlow/ClickHouse)"},
 	{"POST", "/api/logs/search", "Telemetry", "Search logs (OpenSearch)"},
