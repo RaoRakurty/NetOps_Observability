@@ -2246,6 +2246,123 @@ export function pcapFileName(deviceId: string, captureId: string): string {
   return `${safe(deviceId)}-${safe(captureId)}.pcap`;
 }
 
+
+// ── Protocol diagnostics (Troubleshooting → Protocol diagnostics, item 7) ────
+// The operator-initiated routing-protocol capture: pick a protocol (BGP / OSPF /
+// IS-IS) and one of its five common issues, COLLECT the curated read-only `show`
+// bundle from one of your OWN devices (or paste the output by hand), ANALYZE it
+// against the version-pinned failure signatures, and export the redacted TAC
+// bundle.
+//
+// SECURITY (§3/§15). Every string below is DEVICE- or OPERATOR-authored text:
+// command output, verdicts quoting that output, evidence lines. It is rendered
+// as escaped React text (a <pre> text node) and never through an HTML sink.
+// Tenant isolation is a SERVER guarantee — no call here sends a tenant, the
+// device is resolved in the caller's scope and a foreign/unknown id is a 404.
+// The collector may be unwired on a deployment: that is an honest 503 ("paste
+// the output instead"), never a fabricated capture.
+
+/** One curated read-only command in an issue's bundle, rendered in the device's
+ *  dialect. `spec_id` is the stable key the pasted/collected output is filed
+ *  under — the server rejects a spec id that is not part of the issue. */
+export type ProtocolDiagCommand = {
+  spec_id: string;
+  purpose: string;
+  command: string;
+};
+
+/** One of the 15 catalog issues (5 per protocol). `description` is the symptom
+ *  wording an operator matches their outage against. */
+export type ProtocolDiagIssue = {
+  id: string;
+  protocol: string; // bgp | ospf | isis
+  title: string;
+  description: string;
+  commands: ProtocolDiagCommand[];
+};
+
+/** GET /catalog — the version-pinned issue matrix, rendered in one dialect. */
+export type ProtocolDiagCatalog = {
+  ruleset_version: string;
+  vendor: string;
+  vendor_display: string;
+  protocols: string[];
+  /** protocol id → its issues, in catalog order. */
+  issues: Record<string, ProtocolDiagIssue[]>;
+};
+
+/** The single output line a fired signature stands on. Untrusted device text. */
+export type ProtocolDiagEvidence = { command: string; spec_id: string; line: string };
+
+export type ProtocolDiagFinding = {
+  signature_id: string;
+  verdict: string;
+  cause: string;
+  remediation: string;
+  /** high | medium | low — honest, not decorative. */
+  confidence: string;
+  evidence: ProtocolDiagEvidence;
+};
+
+/** POST /analyze body. The server bounds it (2 MiB, ≤64 outputs, ≤256 KiB each)
+ *  and rejects unknown JSON fields, so the shape here is exact. */
+export type ProtocolDiagAnalyzeRequest = {
+  protocol: string;
+  issue_id: string;
+  device: { hostname: string; platform: string };
+  outputs: { spec_id: string; output: string }[];
+};
+
+/** POST /analyze result. `matched=false` carries the honest `unmatched` line —
+ *  a verdict is never invented. `tac_export` is the REDACTED shareable bundle. */
+export type ProtocolDiagAnalysis = {
+  protocol: string;
+  issue_id: string;
+  issue_title: string;
+  ruleset_version: string;
+  matched: boolean;
+  findings: ProtocolDiagFinding[];
+  unmatched: string;
+  tac_export: string;
+};
+
+/** One captured command. `error` is the per-command transport failure (an honest
+ *  partial capture); `output` is raw device text — redaction happens in the TAC
+ *  export, so this is shown to the same-tenant operator as captured. */
+export type ProtocolDiagCollectedCommand = {
+  spec_id: string;
+  command: string;
+  purpose: string;
+  output: string;
+  timestamp: string;
+  error: string;
+};
+
+/** POST /collect result. */
+export type ProtocolDiagCollection = {
+  device_id: string;
+  hostname: string;
+  platform: string;
+  vendor: string;
+  /** The dialect actually rendered — an unknown vendor falls back to Cisco
+   *  IOS-XE and says so here, so the fallback is never silent. */
+  rendered_vendor: string;
+  protocol: string;
+  issue_id: string;
+  issue_title: string;
+  ruleset_version: string;
+  collected_at: string;
+  commands: ProtocolDiagCollectedCommand[];
+};
+
+/** POST /collect body. Every target field is optional — an empty one renders the
+ *  command in its unscoped ("all") form. */
+export type ProtocolDiagCollectRequest = {
+  device_id: string;
+  issue_id: string;
+  target: { interface: string; peer: string; prefix: string; vrf: string };
+};
+
 export const api = {
   // ---- BGP Operations (item 10) ----
   bgpWatchlist: () => request<{ watchlist: BgpWatchEntry[] }>("/api/bgp/watchlist"),
@@ -3652,6 +3769,34 @@ export const api = {
     const qs = configDriftParams(q);
     return request<ConfigDriftPage>(`/api/config/drift${qs ? `?${qs}` : ""}`);
   },
+
+  // ---------- Protocol diagnostics (Troubleshooting, item 7) ---------------
+  // catalog + analyze need infrastructure:read; collect performs an operation
+  // against a device and needs infrastructure:write. The device is resolved in
+  // the caller's own scope server-side (a foreign/unknown id is a 404) and a
+  // deployment with no command runner wired answers collect with 503 — never a
+  // fabricated capture. The client gate in the panel is a courtesy only; the
+  // server is the authority and its 403 is rendered inline.
+  /** The 15-issue matrix. `vendor` is a free-form platform string ("Cisco
+   *  IOS-XE 17.9") the server normalizes to a dialect for the command text. */
+  protocolDiagCatalog: (vendor?: string) =>
+    request<ProtocolDiagCatalog>(
+      `/api/troubleshoot/protocol-diagnostics/catalog${vendor ? `?vendor=${encodeURIComponent(vendor)}` : ""}`,
+    ),
+  /** Runs the failure signatures over collected/pasted output. Touches no
+   *  device, persists nothing, and returns the redacted TAC export. */
+  protocolDiagAnalyze: (req: ProtocolDiagAnalyzeRequest) =>
+    request<ProtocolDiagAnalysis>("/api/troubleshoot/protocol-diagnostics/analyze", {
+      method: "POST",
+      body: JSON.stringify(req),
+    }),
+  /** Runs an issue's read-only bundle against one of the caller's own devices.
+   *  503 = no collector wired on this deployment; 404 = device not visible. */
+  protocolDiagCollect: (req: ProtocolDiagCollectRequest) =>
+    request<ProtocolDiagCollection>("/api/troubleshoot/protocol-diagnostics/collect", {
+      method: "POST",
+      body: JSON.stringify(req),
+    }),
 
   // ---------- Packet capture (FEATURE_PACKET_CAPTURE) ----------------------
   // Reads need infrastructure:read; start, download and delete need

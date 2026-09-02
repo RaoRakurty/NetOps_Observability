@@ -5927,3 +5927,37 @@ button.cc-kpi-btn.on::after { content: "filtered"; display: block; margin-top: 5
 .pcap-field-wide { grid-column: 1 / -1; }
 .pcap-actions { display: flex; align-items: flex-end; gap: 8px; grid-column: 1 / -1; }
 .pcap-filter-cell { max-width: 220px; overflow-wrap: anywhere; }
+
+/* ── Protocol diagnostics (Troubleshooting → Protocol diagnostics, item 7) ──
+   The issue checklist, the per-command capture/paste column and the analysis
+   verdicts. Reuses the device-operations frame (.cfg-panel/.pcap-form) so the
+   surface reads as one with Config backup and Packet capture. Device text is
+   always an escaped React text node inside .pd-pre — never markup. */
+.pd-panel { gap: 12px; }
+.pd-tabs { align-self: flex-start; }
+.pd-issues { border: 1px solid var(--panel-border); border-radius: var(--radius, 8px); padding: 10px 12px; margin: 0; display: flex; flex-direction: column; gap: 8px; }
+.pd-issues legend { padding: 0 4px; }
+.pd-issue { display: flex; gap: 8px; align-items: flex-start; padding: 8px; border: 1px solid transparent; border-radius: var(--radius-sm, 6px); cursor: pointer; }
+.pd-issue:hover { background: var(--hover); }
+.pd-issue.on { border-color: var(--accent-ring); background: var(--surface); }
+.pd-issue-body { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.pd-issue-title { font-weight: 600; color: var(--fg); }
+.pd-issue-id { font-family: var(--font-mono, ui-monospace, monospace); }
+.pd-cmds { display: flex; flex-wrap: wrap; gap: 6px 14px; margin-top: 4px; }
+.pd-cmd { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.pd-cmd code { font-family: var(--font-mono, ui-monospace, monospace); color: var(--accent); overflow-wrap: anywhere; }
+.pd-form { margin: 0; }
+.pd-outputs { display: flex; flex-direction: column; gap: 10px; }
+.pd-output { display: flex; flex-direction: column; gap: 4px; }
+.pd-output-head { display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap; }
+.pd-output-head code { font-family: var(--font-mono, ui-monospace, monospace); color: var(--accent); overflow-wrap: anywhere; }
+.pd-pre { margin: 0; padding: 8px 10px; max-height: 320px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere;
+  font-family: var(--font-mono, ui-monospace, monospace); background: var(--surface); border: 1px solid var(--panel-border); border-radius: var(--radius-sm, 6px); }
+.pd-paste { width: 100%; min-height: 90px; resize: vertical; font-family: var(--font-mono, ui-monospace, monospace);
+  background: var(--surface); color: var(--fg); border: 1px solid var(--panel-border); border-radius: var(--radius-sm, 6px); padding: 8px 10px; }
+.pd-analysis { display: flex; flex-direction: column; gap: 10px; }
+.pd-finding { display: flex; flex-direction: column; gap: 4px; padding: 10px; border: 1px solid var(--panel-border); border-left: 3px solid var(--accent); border-radius: var(--radius-sm, 6px); background: var(--surface); }
+.pd-finding-head { display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap; }
+.pd-conf-good { color: var(--good); border-color: var(--good); }
+.pd-conf-warn { color: var(--warn); border-color: var(--warn); }
+.pd-conf-muted { color: var(--muted); }
