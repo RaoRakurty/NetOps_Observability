@@ -10,6 +10,7 @@ import {
   api, type ReliabilityRollupResp, type ChronicOffender, type OwnerDomainStat, type ReliabilityQuery,
 } from "../services/api";
 import { Segmented, InfoTip } from "../components/ui";
+import RcaFeedbackTile from "../components/rca/RcaFeedbackTile";
 import {
   fmtDur, delayLabel, recommendedAction, offenderDisplay, DOMAIN_TONE,
   deriveCoverage, recoveryReadiness, COVERAGE_LABEL, COVERAGE_TONE, type CoverageState,
@@ -270,6 +271,11 @@ export default function ReliabilityScorecard() {
           </div>
         </>
       )}
+
+      {/* Engine quality (Project 2 P7) — the operator verdict loop. Its own fixed
+          30-day window (it measures the engine, not the selected incident
+          window) and its own fetch, so a reliability outage never hides it. */}
+      <RcaFeedbackTile />
     </div>
   );
 }

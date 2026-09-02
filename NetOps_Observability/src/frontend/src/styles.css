@@ -5871,3 +5871,8 @@ button.cc-kpi-btn.on::after { content: "filtered"; display: block; margin-top: 5
 }
 .chip-btn:hover { border-color: var(--accent); color: var(--fg); }
 .chip-btn-on { border-color: var(--accent); color: var(--accent); font-weight: 600; }
+
+/* Verdict feedback tile (Project 2 P7) — engine quality on the NOC scorecard. */
+.rsc-fb { margin-top: 16px; }
+.rsc-fb-split { display: flex; align-items: baseline; gap: 6px; }
+.rsc-fb-sep { color: var(--fg-subtle); font-weight: 400; }

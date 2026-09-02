@@ -2,6 +2,8 @@ import type { RcaCase, RcaPill, KV, Tone, CaseEvent } from "./rcaCase";
 import { kindForRole, type ShapeKind } from "../graph/shapes";
 import type { TopoGraph, TopoGraphNode, EdgeState } from "./topoGraph";
 import { fmtDateTime } from "../../lib/time";
+import { rcaVerdictLine } from "./labels";
+import type { RcaFeedback } from "../../services/api";
 
 // rcaExport — generates an elegant, light-themed, print-ready RCA report and
 // opens it for the browser's "Save as PDF". No PDF dependency: a self-contained
@@ -276,7 +278,8 @@ function topoGraphSvg(g: TopoGraph): string {
   return `<svg viewBox="0 0 ${W} ${H}" width="100%" style="max-width:${Math.min(W, 720)}px;display:block;margin:6px auto" role="img" aria-label="Network path and causal topology"><defs>${markers}</defs>${parts}${legend}</svg>`;
 }
 
-function reportHtml(d: RcaCase, objId: string): string {
+// Exported for the report regression tests (pure: RcaCase in, document out).
+export function reportHtml(d: RcaCase, objId: string, verdict?: RcaFeedback | null): string {
   // Export header time is explicit-zone (UTC) so a printed report is unambiguous.
   const now = new Date().toISOString().replace("T", " ").slice(0, 19) + " UTC";
 
@@ -307,6 +310,12 @@ function reportHtml(d: RcaCase, objId: string): string {
 
   const actions = `<ol>${d.nextActions.map((a) => `<li><b>${esc(a.badge)}</b> — ${esc(a.text)}</li>`).join("")}</ol>`;
 
+  // Operator verdict (Project 2 P7) — the LATEST recorded human judgement of
+  // this case, printed verbatim from the same formatter the screen uses. A
+  // report that an operator marked wrong must say so on its face; when nobody
+  // has judged the case, nothing is printed (silence, never an invented "n/a").
+  const verdictFb = verdict ? `<div class="verdict-fb">${esc(rcaVerdictLine(verdict, { utc: true }))}</div>` : "";
+
   return `<!doctype html><html><head><meta charset="utf-8"><title>RCA Report — ${esc(d.title)}</title>
 <style>
   @page { size: A4; margin: 16mm 14mm; }
@@ -331,6 +340,7 @@ function reportHtml(d: RcaCase, objId: string): string {
   .kv .k { color:#64748b; min-width: 150px; }
   .kv .v { color:#172033; font-weight:600; }
   p.body { margin: 3px 0; }
+  .verdict-fb { font-size:11.5px; color:#334155; background:#f8fafc; border:1px solid #e2e8f0; border-left:3px solid #64748b; border-radius:6px; padding:7px 11px; margin-bottom:12px; }
   .decision { background:#fff7ed; border:1px solid #fed7aa; border-left:3px solid #d66a00; border-radius:6px; padding:9px 12px; margin-bottom:6px; }
   table { width:100%; border-collapse: collapse; font-size:12px; }
   th, td { text-align:left; padding:5px 8px; border-bottom:1px solid #e2e8f0; vertical-align:top; }
@@ -352,6 +362,7 @@ function reportHtml(d: RcaCase, objId: string): string {
   <h1>${esc(d.title)}</h1>
   <div class="badges">${d.pills.map(pill).join("")}</div>
   <div class="meta">Detected at: <b>${esc(d.observedAt)}</b> &middot; RCA ID: <b>${esc(d.rcaId)}</b></div>
+  ${verdictFb}
 
   ${d.decision.text ? block("Decision", `<div class="decision"${d.decision.tone === "confirmed" ? ' style="border-left-color:#0f9f4f;background:#f2fbf6;border-color:#b9e5c7"' : ""}>${esc(d.decision.text)}</div>`) : ""}
   ${block("Case", kvRows(d.aside))}
@@ -375,8 +386,8 @@ function reportHtml(d: RcaCase, objId: string): string {
 // exportRcaPdf renders the print-ready report from the RcaCase and opens it for
 // "Save as PDF". Prefers a new tab (preview + working toolbar); falls back to a
 // real-size off-screen iframe when pop-ups are blocked. Always returns true.
-export function exportRcaPdf(data: RcaCase, objId: string): boolean {
-  const html = reportHtml(data, objId);
+export function exportRcaPdf(data: RcaCase, objId: string, verdict?: RcaFeedback | null): boolean {
+  const html = reportHtml(data, objId, verdict);
 
   const win = window.open("", "_blank", "width=920,height=1040");
   if (win) {

@@ -31,6 +31,11 @@ vi.mock("../services/api", () => ({
     reliabilityChronicOffenders: vi.fn(() => Promise.resolve({ offenders: [
       { group_key: "device:spine1", incident_count: 70, mtbf_ms: 86400000, last_seen: "2026-06-24T00:00:00Z", owner_domain: "LAN" },
     ] })),
+    // Project 2 P7 — the verdict-feedback tile fetches its own 30-day summary.
+    rcaFeedbackSummary: vi.fn(() => Promise.resolve({
+      days: 30, since: "2026-05-25T00:00:00Z", n: 0,
+      counts: { correct: 0, wrong: 0, partial: 0 }, false_positive_rate: null, by_template: [],
+    })),
   },
 }));
 

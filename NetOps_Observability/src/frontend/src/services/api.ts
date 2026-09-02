@@ -599,6 +599,52 @@ export type CorrelationTickets = {
 // plus the correlation it belongs to.
 export type TicketLinkRow = TicketStatus & { corr_object_id: string };
 
+// ---- RCA operator verdict feedback (Project 2 P7) --------------------------
+// The record an operator writes after reading a correlation case: "the engine
+// got this right / wrong / partly right", and when it was wrong, WHICH claim
+// was wrong. Append-only — a revision adds a row, it never edits one. Mirrors
+// src/backend/rcafeedback/feedback.go; write = alerts:write, read =
+// infrastructure:read.
+export type RcaVerdict = "correct" | "wrong" | "partial";
+export type RcaWrongPart = "cause" | "owner" | "affected" | "evidence" | "recovery";
+export type RcaFeedback = {
+  id: string;
+  tenant_id: string;
+  correlation_id: string;
+  verdict: RcaVerdict;
+  wrong_part?: RcaWrongPart;
+  reason?: string;
+  /** The object version the operator actually judged; absent = not stated. */
+  correlation_version?: number;
+  top_hypothesis?: string;
+  verdict_tier?: string;
+  created_by: string;
+  created_at: string;
+};
+export type RcaFeedbackList = { correlation_id: string; feedback: RcaFeedback[]; count: number };
+/** The write body. No tenant field: the owner is stamped from the resolved object. */
+export type RcaFeedbackCreate = {
+  verdict: RcaVerdict;
+  wrong_part?: RcaWrongPart;
+  reason?: string;
+  correlation_version?: number;
+};
+/** One engine template's tally. false_positive_rate is NULL for an empty sample —
+ *  "nobody has judged this yet" is never rendered as a 0% false-positive rate. */
+export type RcaFeedbackTemplateCounts = {
+  template: string;
+  correct: number; wrong: number; partial: number; n: number;
+  false_positive_rate: number | null;
+};
+export type RcaFeedbackSummary = {
+  days: number;
+  since: string;
+  n: number;
+  counts: { correct: number; wrong: number; partial: number };
+  false_positive_rate: number | null;
+  by_template: RcaFeedbackTemplateCounts[];
+};
+
 // Active Verification (RCA spec item 8): one normalized read-only check result
 // and the latest run per case. Statuses: pass | fail | unreachable | skipped.
 export type VerificationCheckResult = {
@@ -2606,6 +2652,17 @@ export const api = {
   correlationTicketSync: (id: string) =>
     request<{ enqueued: string; corr_object_id: string; system: string }>(
       `/api/correlations/${encodeURIComponent(id)}/ticket/sync`, { method: "POST", body: "{}" }),
+  // RCA operator verdict feedback (Project 2 P7). The list is newest-first as
+  // the server orders it; the create appends (never overwrites) and returns 201
+  // with the stored record. Summary is the windowed false-positive rate for the
+  // caller's scope — days is clamped 1..365 server-side.
+  correlationFeedback: (id: string) =>
+    request<RcaFeedbackList>(`/api/correlations/${encodeURIComponent(id)}/feedback`),
+  correlationFeedbackCreate: (id: string, body: RcaFeedbackCreate) =>
+    request<RcaFeedback>(`/api/correlations/${encodeURIComponent(id)}/feedback`,
+      { method: "POST", body: JSON.stringify(body) }),
+  rcaFeedbackSummary: (days = 30) =>
+    request<RcaFeedbackSummary>(`/api/correlations/feedback/summary?days=${encodeURIComponent(String(days))}`),
   // Active Verification (RCA spec item 8): latest run for a case + manual
   // "Verify now". 404 = feature dormant or case not visible to this tenant.
   verificationStatus: (id: string) =>

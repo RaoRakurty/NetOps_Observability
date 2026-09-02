@@ -450,3 +450,35 @@
 .rca-ws .rw-event-dot.gray, .rca-ws .rw-event-dot.purple { background: var(--rw-muted2); }
 .rca-ws .rw-event-text { font-size: 13px; color: var(--rw-text); }
 .rca-ws .rw-event-detail { color: var(--rw-muted); font-size: 12px; }
+
+/* ----- Operator verdict feedback (Project 2 P7) -----------------------------
+ * "Was this verdict right?" — a compact full-width row under the case aside.
+ * Calm by default (this is a question, not an alarm); the chosen choice reads
+ * as a pressed button, the inline form only appears for wrong/partial. */
+.rca-ws .rw-fbrow { grid-column: 1 / -1; margin-top: 2px; padding-top: 10px; border-top: 1px dashed var(--rw-line); }
+.rca-ws .rw-fb-head { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.rca-ws .rw-fb-q { font-size: 12.5px; font-weight: 700; color: var(--rw-text); }
+.rca-ws .rw-fb-btns { display: inline-flex; gap: 6px; flex-wrap: wrap; }
+.rca-ws .rw-fb-btn { font-size: 12px; padding: 5px 12px; }
+.rca-ws .rw-fb-btn[aria-pressed="true"] { background: #4f46e5; color: #fff; border-color: #4f46e5; }
+.rca-ws .rw-fb-btn:focus-visible { outline: 2px solid var(--rw-blue); outline-offset: 2px; }
+.rca-ws .rw-fb-form { margin-top: 10px; padding: 10px 12px; border: 1px solid var(--rw-line);
+  border-radius: 8px; background: var(--rw-soft); display: grid; gap: 10px; }
+.rca-ws .rw-fb-parts { border: 0; margin: 0; padding: 0; display: flex; gap: 14px; flex-wrap: wrap; align-items: center; }
+.rca-ws .rw-fb-parts legend { font-size: 11.5px; font-weight: 700; color: var(--rw-muted); padding: 0 0 4px; }
+.rca-ws .rw-fb-part { display: inline-flex; align-items: center; gap: 5px; font-size: 12.5px; color: var(--rw-text); }
+.rca-ws .rw-fb-reason { display: grid; gap: 4px; }
+.rca-ws .rw-fb-reason label { font-size: 11.5px; font-weight: 700; color: var(--rw-muted); }
+.rca-ws .rw-fb-reason textarea { width: 100%; resize: vertical; font: inherit; font-size: 12.5px;
+  color: var(--rw-text); background: #fff; border: 1px solid var(--rw-line); border-radius: 7px; padding: 7px 9px; }
+.rca-ws .rw-fb-count { font-size: 10.5px; color: var(--rw-muted2, #8a94a6); justify-self: end; font-variant-numeric: tabular-nums; }
+.rca-ws .rw-fb-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.rca-ws .rw-fb-status:empty { display: none; }
+.rca-ws .rw-fb-status { margin-top: 8px; font-size: 12px; }
+.rca-ws .rw-fb-ok { color: var(--rw-green); font-weight: 600; }
+.rca-ws .rw-fb-err { color: var(--rw-red); font-weight: 600; }
+.rca-ws .rw-fb-latest { margin-top: 8px; font-size: 12.5px; color: var(--rw-text); }
+.rca-ws .rw-fb-none { margin-top: 8px; font-size: 12px; color: var(--rw-muted2, #8a94a6); }
+.rca-ws .rw-fb-earlier { margin-top: 6px; font-size: 12px; color: var(--rw-muted); }
+.rca-ws .rw-fb-earlier summary { cursor: pointer; }
+.rca-ws .rw-fb-earlier ul { margin: 6px 0 0; padding-left: 18px; }

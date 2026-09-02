@@ -153,6 +153,7 @@ function EventTimeline({ events }: { events: CaseEvent[] }) {
 
 export default function RcaWorkspace({
   data, view, onView, onExportPdf, exportDisabled, debugExtra, pathSlot, timeImpactSlot, ticketSlot, aiSlot, verifySlot,
+  feedbackSlot,
 }: {
   data: RcaCase;
   view: "operator" | "debug";
@@ -169,6 +170,10 @@ export default function RcaWorkspace({
   ticketSlot?: ReactNode;     // RCA auto-ticketing (#78) — live external ticket status + actions
   aiSlot?: ReactNode;         // Iris AI — grounded "Ask AI" RCA explanation card
   verifySlot?: ReactNode;     // Active Verification (spec #8) — read-only device interrogation card
+  // Operator verdict feedback (Project 2 P7) — "was this verdict right?".
+  // Rendered as a compact full-width row under the case aside, where the reader
+  // has just finished the verdict and the aside claims.
+  feedbackSlot?: ReactNode;
 }) {
   const [detail, setDetail] = useState<string>("");
 
@@ -232,6 +237,10 @@ export default function RcaWorkspace({
             ))}
           </div>
         )}
+        {/* Operator verdict feedback (Project 2 P7) — the reader has just read
+            the verdict and the aside claims; this is where "was it right?"
+            belongs. Full-width row so neither column is squeezed. */}
+        {feedbackSlot && <div className="rw-fbrow">{feedbackSlot}</div>}
       </section>
 
       {view === "operator" ? (

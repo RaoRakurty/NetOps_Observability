@@ -1,6 +1,6 @@
 import { fmtDateTime, parseTs } from "../lib/time";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { api, CorrObject, CorrReplay, CorrSummary, CorrTimeline, RcaNotPromotedError, RcaPathAttribution, Seam, SeamOwnerEntry, TicketLinkRow, UndeterminedCluster } from "../services/api";
+import { api, CorrObject, CorrReplay, CorrSummary, CorrTimeline, RcaFeedback, RcaNotPromotedError, RcaPathAttribution, Seam, SeamOwnerEntry, TicketLinkRow, UndeterminedCluster } from "../services/api";
 import DataTable, { Column } from "../components/DataTable";
 import { useWorkspace } from "../context/workspace";
 import RcaWorkspace from "../components/rca/RcaWorkspace";
@@ -8,6 +8,7 @@ import RcaVerifyPanel from "../components/rca/RcaVerifyPanel";
 import RcaTimeImpact from "../components/rca/RcaTimeImpact";
 import RcaAskAi from "../components/rca/RcaAskAi";
 import RcaTicketCard from "../components/rca/RcaTicketCard";
+import RcaVerdictFeedback from "../components/rca/RcaVerdictFeedback";
 import RcaPathCausality from "../components/rca/RcaPathCausality";
 import { buildRcaCase, type CaseEventExtras } from "../components/rca/rcaCase";
 import { buildTopoGraph } from "../components/rca/topoGraph";
@@ -749,6 +750,14 @@ export function CorrelationDetail({ id }: { id: string }) {
   const exportPdf = () => {
     if (!rcaCase) return;
     const id = obj.correlation_id || "";
+    // Client-side fallback document. It carries the latest recorded operator
+    // verdict when one exists; the read is best-effort — a feedback outage must
+    // never block an export (the report is still true without the line).
+    const printFallback = async (): Promise<boolean> => {
+      let verdict: RcaFeedback | undefined;
+      try { verdict = (await api.correlationFeedback(id)).feedback?.[0]; } catch { /* optional */ }
+      return exportRcaPdf(rcaCase, id, verdict);
+    };
     // Canonical server-side report first (typed states, controlled PDF headers,
     // no browser print chrome). The legacy client-side print doc remains only
     // as the last-resort fallback when the backend render fails entirely.
@@ -770,7 +779,7 @@ export function CorrelationDetail({ id }: { id: string }) {
           }
           return;
         }
-        const ok = exportRcaPdf(rcaCase, id);
+        const ok = await printFallback();
         if (!ok) alert("Could not generate the incident report.");
       });
   };
@@ -822,6 +831,9 @@ export function CorrelationDetail({ id }: { id: string }) {
         : null}
       timeImpactSlot={obj.correlation_id ? <RcaTimeImpact correlationId={obj.correlation_id} /> : null}
       ticketSlot={obj.correlation_id ? <RcaTicketCard correlationId={obj.correlation_id} /> : null}
+      feedbackSlot={obj.correlation_id
+        ? <RcaVerdictFeedback correlationId={obj.correlation_id} correlationVersion={obj.version} />
+        : null}
     />
   );
 }

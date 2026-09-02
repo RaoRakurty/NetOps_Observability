@@ -4,6 +4,8 @@
 // `probe_latency_departure` → "Probe latency departure — active probe", while the
 // raw id stays available (rendered small/gray) for debugging.
 import type { Tone } from "./rcaCase";
+import type { RcaFeedback, RcaVerdict, RcaWrongPart } from "../../services/api";
+import { fmtDateTime } from "../../lib/time";
 
 // NOC color system — tuned for engineers on wall + desk monitors, 24/7 day/night.
 // Principle: the surface stays CALM (desaturated slate, off-white text, never pure
@@ -774,4 +776,46 @@ export function confidenceLabel(c?: string): string {
     case "weak": return "weak signal";
     default: return c || "";
   }
+}
+
+// ---- Operator verdict feedback (Project 2 P7) -------------------------------
+// One vocabulary for the control, the recorded line, and the exported report, so
+// the PDF can never disagree with the screen.
+
+/** Max reason CHARACTERS the backend accepts (rcafeedback.MaxReasonChars).
+ *  Lives with the vocabulary, not the transport, so the counter and the server
+ *  cap can never drift apart behind a mocked api module. */
+export const RCA_MAX_REASON_CHARS = 500;
+
+/** Button copy — the three choices an operator is offered. */
+export const VERDICT_LABEL: Record<RcaVerdict, string> = {
+  correct: "Correct", partial: "Partially", wrong: "Wrong",
+};
+/** Prose copy — the same verdict inside a sentence ("Partially" alone is not one). */
+export const VERDICT_PROSE: Record<RcaVerdict, string> = {
+  correct: "Correct", partial: "Partially correct", wrong: "Wrong",
+};
+/** The five RCA claims an operator can point at, in the order the case asserts
+ *  them: what broke, who owns it, who it hit, what proved it, how it came back. */
+export const WRONG_PART_ORDER: readonly RcaWrongPart[] = ["cause", "owner", "affected", "evidence", "recovery"];
+export const WRONG_PART_LABEL: Record<RcaWrongPart, string> = {
+  cause: "Cause", owner: "Owner", affected: "Affected", evidence: "Evidence", recovery: "Recovery",
+};
+
+/**
+ * rcaVerdictLine — the single rendering of a recorded operator verdict:
+ *   "Operator verdict: Wrong - owner - 'ISP was not at fault' - alice, Sep 02, 10:14:00 UTC"
+ * Absent parts are omitted rather than filled with a placeholder. `utc` pins the
+ * zone for exported documents (a printed report must not depend on a UI toggle).
+ */
+export function rcaVerdictLine(fb: RcaFeedback, opts: { utc?: boolean } = {}): string {
+  const bits: string[] = [VERDICT_PROSE[fb.verdict] ?? String(fb.verdict)];
+  if (fb.wrong_part) bits.push(fb.wrong_part);
+  const reason = (fb.reason ?? "").trim();
+  if (reason) bits.push(`'${reason}'`);
+  const who = (fb.created_by || "").trim();
+  const when = fb.created_at ? fmtDateTime(fb.created_at, opts.utc ? { mode: "utc" } : {}) : "";
+  const stamp = [who, when].filter(Boolean).join(", ");
+  if (stamp) bits.push(stamp);
+  return `Operator verdict: ${bits.join(" \u2014 ")}`;
 }
