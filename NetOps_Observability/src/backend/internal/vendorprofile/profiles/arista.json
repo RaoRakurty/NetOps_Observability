@@ -48,7 +48,15 @@
         "pager_off_cmds": [
           "terminal length 0"
         ],
-        "prompt_regex": "(?m)^[A-Za-z0-9._-]+[>#]\\s*$"
+        "prompt_regex": "(?m)^[A-Za-z0-9._-]+[>#]\\s*$",
+        "pcap_start_cmd": [
+          "bash timeout {secs} tcpdump -i {iface} -c {count} -s 0 -U -w /mnt/flash/{file}.pcap[ '{filter}']"
+        ],
+        "pcap_cleanup_cmd": [
+          "bash rm -f /mnt/flash/{file}.pcap"
+        ],
+        "pcap_remote_path": "/mnt/flash/{file}.pcap",
+        "pcap_supports_filter": true
       },
       "advisory": {
         "provider": "offline-feed",

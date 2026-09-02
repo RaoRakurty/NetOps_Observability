@@ -248,11 +248,179 @@ func validateProfile(name string, p Profile) error {
 			return fmt.Errorf("vendorprofile: %s: capture.prompt_regex: %w", where, err)
 		}
 	}
+	if err := validatePcapCapture(where, p.Capture); err != nil {
+		return err
+	}
 	if (p.Hardening.Binding == "") != (p.Hardening.Display == "") {
 		return fmt.Errorf("vendorprofile: %s: hardening binding and display must be set together", where)
 	}
 	if len(p.Advisory.ProductIDs) > 0 && p.Advisory.Provider == "" {
 		return fmt.Errorf("vendorprofile: %s: advisory.product_ids set with no provider", where)
+	}
+	return nil
+}
+
+// ─── packet-capture command templates ────────────────────────────────────────
+
+// pcapPlaceholderSet is CapturePcapPlaceholders as a set, for validation.
+var pcapPlaceholderSet = func() map[string]bool {
+	m := make(map[string]bool, len(CapturePcapPlaceholders))
+	for _, n := range CapturePcapPlaceholders {
+		m[n] = true
+	}
+	return m
+}()
+
+// pcapLiteralByte reports whether a byte may appear as LITERAL text in a
+// packet-capture template. The set is an ALLOWLIST, not an escape pass: every
+// byte that means something to a shell or a device CLI parser (`;` `|` `&` `$`
+// backtick `\` `<` `>` `*` `?` `#` `!` `%` `(` `)` newline …) is absent, so a
+// template can no more carry an injection than a rendered command can. The
+// template syntax bytes `{` `}` `[` `]` are handled by the parser and never
+// reach here — a stray one is an error, which is why they are excluded too.
+//
+// A template that needs a byte outside this set is not a template we know how to
+// render safely: it must fail at LOAD, in CI, rather than at a live router.
+func pcapLiteralByte(b byte) bool {
+	switch {
+	case b >= 'a' && b <= 'z', b >= 'A' && b <= 'Z', b >= '0' && b <= '9':
+		return true
+	}
+	switch b {
+	case ' ', '_', '-', '.', '/', ':', '"', '\'':
+		return true
+	}
+	return false
+}
+
+// validatePcapTemplate checks ONE template's bytes and structure and reports the
+// placeholders it uses and whether each sits inside an optional `[ … ]` group.
+//
+// Structure rules (all enforced here, all cheap, all load-time):
+//   - `{name}` holes only, name drawn from CapturePcapPlaceholders;
+//   - `[ … ]` optional groups, non-empty, NOT nested, balanced;
+//   - a group must contain at least one placeholder — an unconditional group
+//     would silently mean something different from what it looks like;
+//   - no stray `{`, `}`, `[` or `]`, and no literal byte outside the allowlist.
+func validatePcapTemplate(where, field, tpl string) (used map[string]bool, grouped map[string]bool, err error) {
+	if strings.TrimSpace(tpl) == "" {
+		return nil, nil, fmt.Errorf("vendorprofile: %s: capture.%s: empty command template", where, field)
+	}
+	used, grouped = map[string]bool{}, map[string]bool{}
+	inGroup, groupHoles := false, 0
+	for i := 0; i < len(tpl); i++ {
+		switch c := tpl[i]; c {
+		case '{':
+			end := strings.IndexByte(tpl[i:], '}')
+			if end < 0 {
+				return nil, nil, fmt.Errorf("vendorprofile: %s: capture.%s: unterminated placeholder in %q", where, field, tpl)
+			}
+			name := tpl[i+1 : i+end]
+			if !pcapPlaceholderSet[name] {
+				return nil, nil, fmt.Errorf("vendorprofile: %s: capture.%s: unknown placeholder {%s} (allowed: %s)",
+					where, field, name, strings.Join(CapturePcapPlaceholders, ", "))
+			}
+			used[name] = true
+			if inGroup {
+				grouped[name] = true
+				groupHoles++
+			}
+			i += end
+		case '}':
+			return nil, nil, fmt.Errorf("vendorprofile: %s: capture.%s: stray '}' in %q", where, field, tpl)
+		case '[':
+			if inGroup {
+				return nil, nil, fmt.Errorf("vendorprofile: %s: capture.%s: nested optional group in %q", where, field, tpl)
+			}
+			inGroup, groupHoles = true, 0
+		case ']':
+			if !inGroup {
+				return nil, nil, fmt.Errorf("vendorprofile: %s: capture.%s: stray ']' in %q", where, field, tpl)
+			}
+			if groupHoles == 0 {
+				return nil, nil, fmt.Errorf("vendorprofile: %s: capture.%s: optional group with no placeholder in %q", where, field, tpl)
+			}
+			inGroup = false
+		default:
+			if !pcapLiteralByte(c) {
+				return nil, nil, fmt.Errorf("vendorprofile: %s: capture.%s: byte %q is not permitted in a capture command template (%q)",
+					where, field, string(c), tpl)
+			}
+		}
+	}
+	if inGroup {
+		return nil, nil, fmt.Errorf("vendorprofile: %s: capture.%s: unclosed optional group in %q", where, field, tpl)
+	}
+	return used, grouped, nil
+}
+
+// validatePcapCapture enforces the packet-capture half of a profile's capture
+// block. A platform either declares NOTHING here (internal/pcap refuses the
+// device honestly) or declares a COMPLETE, well-formed set: a start, a remote
+// path and a cleanup. A half-declared platform would leave a capture point
+// configured on a production interface, which is the one failure the packet-
+// capture design leads with.
+func validatePcapCapture(where string, c Capture) error {
+	sets := []struct {
+		field string
+		cmds  []string
+	}{
+		{"pcap_start_cmd", c.PcapStartCmd},
+		{"pcap_stop_cmd", c.PcapStopCmd},
+		{"pcap_fetch_cmd", c.PcapFetchCmd},
+		{"pcap_cleanup_cmd", c.PcapCleanupCmd},
+	}
+	declared := c.PcapRemotePath != "" || c.PcapSupportsFilter
+	for _, s := range sets {
+		if len(s.cmds) > 0 {
+			declared = true
+		}
+	}
+	if !declared {
+		return nil
+	}
+	if len(c.PcapStartCmd) == 0 {
+		return fmt.Errorf("vendorprofile: %s: capture declares packet-capture fields but no pcap_start_cmd", where)
+	}
+	if c.PcapRemotePath == "" {
+		return fmt.Errorf("vendorprofile: %s: pcap_start_cmd set with no pcap_remote_path — the captured file would be unreachable", where)
+	}
+	if len(c.PcapCleanupCmd) == 0 {
+		return fmt.Errorf("vendorprofile: %s: pcap_start_cmd set with no pcap_cleanup_cmd — a capture point could be left on a production interface", where)
+	}
+	usesFilter, ungroupedFilter := false, false
+	for _, s := range sets {
+		for _, tpl := range s.cmds {
+			used, grouped, err := validatePcapTemplate(where, s.field, tpl)
+			if err != nil {
+				return err
+			}
+			if used["filter"] {
+				usesFilter = true
+				if !grouped["filter"] {
+					ungroupedFilter = true
+				}
+			}
+		}
+	}
+	pathUsed, _, err := validatePcapTemplate(where, "pcap_remote_path", c.PcapRemotePath)
+	if err != nil {
+		return err
+	}
+	if strings.ContainsAny(c.PcapRemotePath, "[]") {
+		return fmt.Errorf("vendorprofile: %s: pcap_remote_path may not carry an optional group — a file either has a path or it does not", where)
+	}
+	if !pathUsed["file"] {
+		return fmt.Errorf("vendorprofile: %s: pcap_remote_path must carry {file}, or two captures would collide on one path", where)
+	}
+	if usesFilter && ungroupedFilter {
+		return fmt.Errorf("vendorprofile: %s: {filter} must sit inside an optional [ … ] group, or an unfiltered capture renders a dangling clause", where)
+	}
+	if usesFilter && !c.PcapSupportsFilter {
+		return fmt.Errorf("vendorprofile: %s: a template carries {filter} but pcap_supports_filter is false", where)
+	}
+	if !usesFilter && c.PcapSupportsFilter {
+		return fmt.Errorf("vendorprofile: %s: pcap_supports_filter is true but no template carries {filter} — the claim would silently widen a capture", where)
 	}
 	return nil
 }

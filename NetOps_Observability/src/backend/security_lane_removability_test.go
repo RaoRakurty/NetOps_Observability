@@ -15,11 +15,20 @@ package backend
 // THE REMOVAL RECIPE (kept in sync with internal/seclane's package doc):
 //
 //	rm -r internal/seclane internal/secbus internal/hardening \
-//	      internal/threatlane internal/advisory
+//	      internal/threatlane internal/advisory internal/configdrift
 //	rm secapi/rules.go secapi/rules_test.go
 //	rm security_lane_isolation_test.go security_lane_removability_test.go
 //	delete every main.go line between a SECURITY-LANE-BEGIN marker and its
 //	matching SECURITY-LANE-END
+//	then, for internal/configdrift (which is NOT inside those markers because it
+//	is wired to FEATURE_CONFIG_BACKUP, not FEATURE_SECURITY_LANE): drop main.go's
+//	configdrift import, the s.configDrift field, the drift construction inside
+//	buildConfigBackup (leave OnCapture/OnFailure unset and call
+//	configstore.NewAPI(mgr, nil) — all three seams are already nil-safe), the
+//	/api/config/drift route, configDriftStore/configDriftAuthz and
+//	configHardeningSource; and delete the drift cases from
+//	config_backup_isolation_test.go. Config BACKUP (capture, versioning, diff,
+//	retention) keeps working — only the security/RCA consumption goes.
 //
 // internal/secfindings deliberately STAYS: it is the finding MODEL the secapi
 // READ API (which is not part of the producer) serves, not producer code.
@@ -51,6 +60,16 @@ var securityImportAllowlist = map[string]bool{
 	"security_lane_isolation_test.go":       true,
 	"security_lane_removability_test.go":    true,
 	"internal/protocoldiag/protocoldiag.go": false, // (documented non-importer; comments only)
+
+	// internal/configdrift is a security-lane PRODUCER: the drift verdict is
+	// emitted as a secfindings.Finding through internal/secbus, and the sealed
+	// config it reads is what internal/hardening's ConfigSource serves. It is
+	// therefore part of the removable security module set (see the recipe above
+	// and internal/seclane's package doc), not an outside importer reaching in.
+	"internal/configdrift/configsource.go":      true, // hardening.ConfigSource adapter
+	"internal/configdrift/configsource_test.go": true,
+	"internal/configdrift/evaluator.go":         true, // secbus.Producer emission
+	"internal/configdrift/evaluator_test.go":    true,
 }
 
 // securityAllowedDirs are the producer packages themselves — they may import

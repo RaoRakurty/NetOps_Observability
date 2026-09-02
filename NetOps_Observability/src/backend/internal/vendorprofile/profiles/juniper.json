@@ -59,7 +59,15 @@
         "pager_off_cmds": [
           "set cli screen-length 0"
         ],
-        "prompt_regex": "(?m)^[A-Za-z0-9._-]+@[A-Za-z0-9._-]+[>#]\\s*$"
+        "prompt_regex": "(?m)^[A-Za-z0-9._-]+@[A-Za-z0-9._-]+[>#]\\s*$",
+        "pcap_start_cmd": [
+          "monitor traffic interface {iface} no-resolve brief count {count} write-file /var/tmp/{file}.pcap[ matching \"{filter}\"]"
+        ],
+        "pcap_cleanup_cmd": [
+          "file delete /var/tmp/{file}.pcap"
+        ],
+        "pcap_remote_path": "/var/tmp/{file}.pcap",
+        "pcap_supports_filter": true
       },
       "advisory": {
         "provider": "offline-feed",

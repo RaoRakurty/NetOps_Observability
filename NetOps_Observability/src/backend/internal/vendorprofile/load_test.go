@@ -284,3 +284,129 @@ func TestLoaderRejectsCrossDocumentConflicts(t *testing.T) {
 		}
 	})
 }
+
+// ─── packet-capture command templates ────────────────────────────────────────
+
+// withCapture returns goodDoc() with the profile's capture block replaced.
+func withCapture(capture map[string]any) map[string]any {
+	doc := goodDoc()
+	doc["profiles"].([]any)[0].(map[string]any)["capture"] = capture
+	return doc
+}
+
+// TestLoaderAcceptsAWellFormedPcapCommandSet is the positive half: a complete,
+// well-formed declaration loads and survives the round trip intact.
+func TestLoaderAcceptsAWellFormedPcapCommandSet(t *testing.T) {
+	reg, err := loadDoc(t, withCapture(map[string]any{
+		"pcap_start_cmd":       []string{"capture {name} interface {iface} count {count}[ filter \"{filter}\"]"},
+		"pcap_stop_cmd":        []string{"capture {name} stop"},
+		"pcap_cleanup_cmd":     []string{"delete flash:{file}.pcap"},
+		"pcap_remote_path":     "flash:{file}.pcap",
+		"pcap_supports_filter": true,
+	}))
+	if err != nil {
+		t.Fatalf("a well-formed pcap command set was rejected: %v", err)
+	}
+	c, err := reg.CaptureFor("acme/acmeos")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !c.HasPcapCommands() || len(c.PcapStartCmd) != 1 || c.PcapRemotePath != "flash:{file}.pcap" || !c.PcapSupportsFilter {
+		t.Fatalf("the capture block did not survive the load: %+v", c)
+	}
+}
+
+// TestPcapCaptureIsDeepCopiedOut — the registry is shared immutable reference
+// data; a caller must not be able to reach back into the index through a slice.
+func TestPcapCaptureIsDeepCopiedOut(t *testing.T) {
+	reg, err := loadDoc(t, withCapture(map[string]any{
+		"pcap_start_cmd":   []string{"capture {name} interface {iface}"},
+		"pcap_stop_cmd":    []string{"capture {name} stop"},
+		"pcap_cleanup_cmd": []string{"delete flash:{file}.pcap"},
+		"pcap_remote_path": "flash:{file}.pcap",
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, err := reg.CaptureFor("acme/acmeos")
+	if err != nil {
+		t.Fatal(err)
+	}
+	first.PcapStartCmd[0] = "reload"
+	first.PcapCleanupCmd[0] = "reload"
+	first.PcapStopCmd[0] = "reload"
+	second, err := reg.CaptureFor("acme/acmeos")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, got := range [][]string{second.PcapStartCmd, second.PcapStopCmd, second.PcapCleanupCmd} {
+		if got[0] == "reload" {
+			t.Fatal("a caller mutated the registry through a returned capture slice")
+		}
+	}
+}
+
+// TestLoaderRejectsMalformedPcapCommandSets — every one of these must fail at
+// LOAD, in CI, rather than at a live router.
+func TestLoaderRejectsMalformedPcapCommandSets(t *testing.T) {
+	complete := func(over map[string]any) map[string]any {
+		c := map[string]any{
+			"pcap_start_cmd":   []string{"capture {name} interface {iface}"},
+			"pcap_cleanup_cmd": []string{"delete flash:{file}.pcap"},
+			"pcap_remote_path": "flash:{file}.pcap",
+		}
+		for k, v := range over {
+			c[k] = v
+		}
+		return c
+	}
+	for _, tc := range []struct {
+		name    string
+		capture map[string]any
+	}{
+		{"a stop command with no start", map[string]any{"pcap_stop_cmd": []string{"capture stop"}}},
+		{"a start with no remote path", map[string]any{
+			"pcap_start_cmd": []string{"capture {iface}"}, "pcap_cleanup_cmd": []string{"delete x"}}},
+		{"a start with no cleanup", map[string]any{
+			"pcap_start_cmd": []string{"capture {iface}"}, "pcap_remote_path": "flash:{file}.pcap"}},
+		{"an unknown placeholder", complete(map[string]any{
+			"pcap_start_cmd": []string{"capture {hostname}"}})},
+		{"an unterminated placeholder", complete(map[string]any{
+			"pcap_start_cmd": []string{"capture {iface"}})},
+		{"a stray closing brace", complete(map[string]any{
+			"pcap_start_cmd": []string{"capture iface}"}})},
+		{"a shell metacharacter", complete(map[string]any{
+			"pcap_start_cmd": []string{"capture {iface}; reload"}})},
+		{"a command substitution", complete(map[string]any{
+			"pcap_start_cmd": []string{"capture $(id)"}})},
+		{"a newline", complete(map[string]any{
+			"pcap_start_cmd": []string{"capture {iface}\nreload"}})},
+		{"an unclosed optional group", complete(map[string]any{
+			"pcap_start_cmd":       []string{"capture {iface}[ filter \"{filter}\""},
+			"pcap_supports_filter": true})},
+		{"a nested optional group", complete(map[string]any{
+			"pcap_start_cmd":       []string{"capture {iface}[ a[ b{filter}]]"},
+			"pcap_supports_filter": true})},
+		{"a stray closing bracket", complete(map[string]any{
+			"pcap_start_cmd": []string{"capture {iface}]"}})},
+		{"an optional group with no placeholder", complete(map[string]any{
+			"pcap_start_cmd": []string{"capture {iface}[ always]"}})},
+		{"an ungrouped filter", complete(map[string]any{
+			"pcap_start_cmd":       []string{"capture {iface} filter \"{filter}\""},
+			"pcap_supports_filter": true})},
+		{"a filter template with supports_filter false", complete(map[string]any{
+			"pcap_start_cmd": []string{"capture {iface}[ filter \"{filter}\"]"}})},
+		{"supports_filter with no filter template", complete(map[string]any{
+			"pcap_supports_filter": true})},
+		{"a remote path with no {file}", complete(map[string]any{
+			"pcap_remote_path": "flash:capture.pcap"})},
+		{"a remote path with an optional group", complete(map[string]any{
+			"pcap_remote_path": "flash:{file}[.{count}].pcap"})},
+		{"an empty command template", complete(map[string]any{
+			"pcap_cleanup_cmd": []string{"   "}})},
+	} {
+		if _, err := loadDoc(t, withCapture(tc.capture)); err == nil {
+			t.Errorf("%s was ACCEPTED — a malformed template must fail at load, not at a live router", tc.name)
+		}
+	}
+}

@@ -317,7 +317,7 @@ func TestManagerRefusesToRunWithADormantSealer(t *testing.T) {
 	}
 	_, err = New(Deps{
 		Now: time.Now, LookupDevice: func(string) (Device, bool) { return Device{}, false },
-		Gateway: &fakeGateway{}, Commands: NewDefaultCommandTable(), Sealer: sealer,
+		Gateway: &fakeGateway{}, Commands: NewProfileCommandTable(), Sealer: sealer,
 		Blobs: blobs, Store: NewFileStore(""),
 		Authz:      func(http.ResponseWriter, *http.Request, Gate) (Principal, bool) { return Principal{}, false },
 		WriteJSON:  testWriteJSON,

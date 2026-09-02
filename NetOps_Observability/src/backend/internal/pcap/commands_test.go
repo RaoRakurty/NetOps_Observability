@@ -19,7 +19,7 @@ func testRequest(iface, filter string) CommandRequest {
 }
 
 func TestCommandTableRendersEverySupportedPlatform(t *testing.T) {
-	table := NewDefaultCommandTable()
+	table := NewProfileCommandTable()
 	for _, tc := range []struct {
 		platform string
 		wantKey  string
@@ -54,7 +54,7 @@ func TestCommandTableRendersEverySupportedPlatform(t *testing.T) {
 }
 
 func TestCommandTableRefusesUnknownPlatform(t *testing.T) {
-	table := NewDefaultCommandTable()
+	table := NewProfileCommandTable()
 	if _, _, ok := table.Supports("acme-networks SomeOS"); ok {
 		t.Fatal("an unknown platform reported as supported — a guessed command would reach a live device")
 	}
@@ -69,7 +69,7 @@ func TestCommandTableRefusesUnknownPlatform(t *testing.T) {
 var shellMeta = []string{";", "|", "&", "$", "`", "\n", "\r", ">", "<", "\\", "*", "?", "#", "{", "}", "[", "]", "!"}
 
 func TestRenderedCommandsNeverCarryUnescapedUserInput(t *testing.T) {
-	table := NewDefaultCommandTable()
+	table := NewProfileCommandTable()
 	// Every filter here is one the GRAMMAR accepts, rendered on every platform
 	// that claims filter support. The assertion is that the resulting command
 	// line contains no shell-meaningful byte at all.
@@ -109,7 +109,7 @@ func TestRenderedCommandsNeverCarryUnescapedUserInput(t *testing.T) {
 // assertion: even a caller that BYPASSES the manager and reaches a table
 // directly cannot get a hostile value rendered.
 func TestRenderedCommandsRejectUnvalidatedInputAtTheTable(t *testing.T) {
-	table := NewDefaultCommandTable()
+	table := NewProfileCommandTable()
 	for _, iface := range []string{"eth0; reboot", "eth0 && id", "eth0`id`", "eth0$(id)", "eth0\nreload"} {
 		if _, err := table.For("cisco_nxos", testRequest(iface, "")); err == nil {
 			t.Errorf("INJECTION ACCEPTED at the table: interface %q rendered", iface)
@@ -131,7 +131,7 @@ func TestRenderedCommandsRejectUnvalidatedInputAtTheTable(t *testing.T) {
 }
 
 func TestIOSXERefusesAFilterItCannotExpress(t *testing.T) {
-	table := NewDefaultCommandTable()
+	table := NewProfileCommandTable()
 	key, supports, ok := table.Supports("cisco IOS-XE")
 	if !ok || key != "cisco_iosxe" {
 		t.Fatalf("Supports(cisco IOS-XE) = (%q, %v, %v)", key, supports, ok)
@@ -145,7 +145,7 @@ func TestIOSXERefusesAFilterItCannotExpress(t *testing.T) {
 }
 
 func TestRenderedCommandsCarryTheBounds(t *testing.T) {
-	table := NewDefaultCommandTable()
+	table := NewProfileCommandTable()
 	req := testRequest("Ethernet1/1", "")
 	req.MaxPackets = 77
 	req.DurationSec = 11

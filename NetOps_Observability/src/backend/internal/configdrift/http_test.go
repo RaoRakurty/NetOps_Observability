@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 )
@@ -206,5 +207,52 @@ func TestFileStorePersistsAndReloads(t *testing.T) {
 	}
 	if _, ok, _ := reloaded.Get(context.Background(), "globex", false, "d1"); ok {
 		t.Fatal("CROSS-TENANT LEAK after reload")
+	}
+}
+
+// TestDriftListAcceptsAsTenantAndStillScopesToThePrincipal pins the ONE
+// exception to the strict unknown-parameter rule.
+//
+// as_tenant is the platform-wide acting-tenant switcher. It is applied UPSTREAM
+// of this handler — the auth middleware folds it into the claims Deps.Authz
+// resolves — so this package's only job is to not 400 on it. What it must NEVER
+// do is let the parameter influence the scope from inside the handler: the rows
+// served are the ones Deps.Authz's principal is entitled to, whatever the query
+// string says. Both halves are asserted here, plus the fact that every OTHER
+// unknown parameter is still refused (the exception did not become a hole).
+func TestDriftListAcceptsAsTenantAndStillScopesToThePrincipal(t *testing.T) {
+	f := newFixture(t, nil)
+	seedState(t, f, "acme", "d1", StateDrifted)
+	seedState(t, f, "globex", "d2", StateDrifted)
+
+	f.principal = Principal{Tenant: "acme", Subject: "ops@acme"}
+
+	// Accepted, not refused: the drift page is reachable with the selector on.
+	w := f.do(http.MethodGet, "/api/config/drift?as_tenant=globex")
+	if w.Code != http.StatusOK {
+		t.Fatalf("?as_tenant = %d, want 200 (%s)", w.Code, w.Body)
+	}
+	// …and INERT here: the principal, not the query string, decides the scope.
+	items := f.decode(w)["items"].([]any)
+	if len(items) != 1 || items[0].(map[string]any)["device_id"] != "d1" {
+		t.Fatalf("CROSS-TENANT LEAK: ?as_tenant widened the list from inside the handler: %v", items)
+	}
+	if strings.Contains(w.Body.String(), "d2") {
+		t.Fatalf("CROSS-TENANT LEAK: the body carried another tenant's device: %s", w.Body)
+	}
+
+	// A principal the middleware ALREADY narrowed sees exactly that tenant — the
+	// handler reads the resolved principal and nothing else.
+	f.principal = Principal{Tenant: "globex", Subject: "root"}
+	items = f.decode(f.do(http.MethodGet, "/api/config/drift?as_tenant=globex"))["items"].([]any)
+	if len(items) != 1 || items[0].(map[string]any)["device_id"] != "d2" {
+		t.Fatalf("a narrowed principal must read that tenant: %v", items)
+	}
+
+	// The exception is exactly one parameter wide.
+	for _, bad := range []string{"as_tenants", "tenant", "states", "offset"} {
+		if w := f.do(http.MethodGet, "/api/config/drift?"+bad+"=x"); w.Code != http.StatusBadRequest {
+			t.Errorf("?%s = %d, want 400 — the as_tenant exception must not widen", bad, w.Code)
+		}
 	}
 }

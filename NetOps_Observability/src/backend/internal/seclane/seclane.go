@@ -9,22 +9,35 @@
 // the correlation engine with ZERO security-specific code.
 //
 // ── REMOVAL RULE (the removable-module constraint) ──────────────────────────
-// The security PRODUCER stays REMOVABLE. Exactly two units in the compiled tree
-// depend on internal/{secbus,hardening,threatlane,advisory}:
+// The security PRODUCER stays REMOVABLE. Exactly three units in the compiled
+// tree depend on internal/{secbus,hardening,threatlane,advisory}:
 //
 //  1. THIS PACKAGE (internal/seclane) — the producer runtime
 //  2. secapi/rules.go               — the catalog the read API serves
+//  3. internal/configdrift          — the config-drift producer: it emits its
+//     verdict as a secfindings.Finding through internal/secbus and adapts the
+//     sealed config store to internal/hardening's ConfigSource
 //
 // To remove the security producer feature entirely:
 //
 //	rm -r internal/seclane internal/secbus internal/hardening \
-//	      internal/threatlane internal/advisory
+//	      internal/threatlane internal/advisory internal/configdrift
 //	rm secapi/rules.go secapi/rules_test.go
 //	rm security_lane_isolation_test.go security_lane_removability_test.go
 //	delete every main.go line between a `SECURITY-LANE-BEGIN` marker and its
 //	matching `SECURITY-LANE-END` (five blocks: the import, the server field, the
 //	worker start, the route registration, the metrics write, and the
 //	securityLaneDeps/registerSecurityLaneRoutes wiring)
+//
+// internal/configdrift is deliberately NOT inside those markers — it is wired to
+// FEATURE_CONFIG_BACKUP, not FEATURE_SECURITY_LANE — so its removal is a named
+// step of its own: drop main.go's configdrift import, the s.configDrift field,
+// the drift construction inside buildConfigBackup (leave OnCapture/OnFailure
+// unset and call configstore.NewAPI(mgr, nil) — all three seams are already
+// nil-safe), the /api/config/drift route, configDriftStore/configDriftAuthz and
+// configHardeningSource; then delete the drift cases from
+// config_backup_isolation_test.go. Config BACKUP itself (capture, versioning,
+// diff, retention) keeps working: only the security/RCA consumption goes.
 //
 // …and `go build ./...` is green again. internal/secfindings deliberately STAYS:
 // it is the finding MODEL the secapi READ API serves, not producer code.
@@ -52,11 +65,16 @@
 //     `lost_total` move — `lost` is reserved for evidence with no durable copy
 //     anywhere (the 189 persist contract).
 //   - §5g honesty: an unassessable check emits an UNASSESSED verdict
-//     (StatusUnknown), never a Pass. Config capture (T-config) does not exist
-//     yet, so the hardening lane runs against an EMPTY ConfigSource and every
-//     rule reports "running-config unavailable — control not assessed
-//     (fail-closed)". That is deliberate: a clean security page must never be
-//     the same shape as an unrun one.
+//     (StatusUnknown), never a Pass. Config capture (P3-CFG) now EXISTS: the
+//     integrator supplies Deps.ConfigSource from internal/configdrift's
+//     HardeningSource (main.go's configHardeningSource), so a device with a
+//     sealed backup is assessed against its real running-config. The empty
+//     source remains the honest DEFAULT, not a fallback that guesses: with
+//     FEATURE_CONFIG_BACKUP off — or for a device that has never been captured —
+//     Deps.ConfigSource is nil / yields nothing and every §5e rule reports
+//     "running-config unavailable — control not assessed (fail-closed)". That is
+//     deliberate: a clean security page must never be the same shape as an unrun
+//     one.
 package seclane
 
 import (

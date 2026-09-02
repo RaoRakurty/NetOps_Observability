@@ -83,9 +83,21 @@ func (e *Evaluator) HandleDriftList(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	// Reject unknown query parameters rather than ignoring them: a typo'd
 	// ?states= that silently returns everything reads as "nothing is drifted".
+	//
+	// as_tenant is the ONE exception, and it is the platform-wide convention
+	// (httppage.alwaysAllowedQuery, parsercov, secapi): the acting-tenant
+	// switcher is applied UPSTREAM of this handler by the auth middleware, which
+	// folds it into the claims Deps.Authz resolves — so by the time we run it has
+	// already become p.Tenant/p.Cross and there is nothing here to do with it but
+	// let it through. It can only ever NARROW (principalTenant honours it for the
+	// platform owner; a non-owner's selection is applied only to a tenant it
+	// actually reaches, and is otherwise IGNORED), so accepting it cannot widen
+	// this list. Refusing it with a 400 — the previous behaviour — did not make
+	// the endpoint safer, it just made the drift page the one surface the
+	// selector could not reach.
 	for k := range q {
 		switch k {
-		case "state", "cursor", "limit":
+		case "state", "cursor", "limit", "as_tenant":
 		default:
 			e.deps.WriteError(w, http.StatusBadRequest, errors.New("unknown query parameter: "+k))
 			return

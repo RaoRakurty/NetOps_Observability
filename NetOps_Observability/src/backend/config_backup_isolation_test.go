@@ -17,8 +17,9 @@ package backend
 //     foreign are indistinguishable, so the subtree is not an existence oracle;
 //   - a foreign VERSION id under an own device answers 404 too (the store's own
 //     tenant filter is the second, independent line);
-//   - GET /api/config/drift is own-only and ?as_tenant into another org is
-//     accepted-then-IGNORED;
+//   - GET /api/config/drift is own-only; ?as_tenant into another org is
+//     accepted-then-IGNORED for a tenant admin and HONOURED (narrowing) for the
+//     platform owner, while every other unknown parameter is still a 400;
 //   - the platform owner is the ONLY principal that reads cross-tenant;
 //   - with FEATURE_CONFIG_BACKUP off nothing is constructed and the device
 //     subtree dispatcher declines every path (flag-off registers nothing).
@@ -274,30 +275,67 @@ func TestConfigDriftListIsOwnTenantOnly(t *testing.T) {
 	}
 }
 
-func TestConfigDriftListRefusesAsTenantIntoAnotherOrg(t *testing.T) {
+// TestConfigDriftListIgnoresAsTenantForATenantAdminAndHonoursItForThePlatformOwner
+// is the §3a rule-5 acting-tenant obligation on the drift list, in both
+// directions. The parameter is ACCEPTED (a 400 here would make the drift page
+// the one surface the platform-wide tenant selector cannot reach) and it can
+// only ever NARROW:
+//
+//   - a scoped caller's ?as_tenant into another org is IGNORED — principalTenant
+//     never trusts ActingTenant for a non-owner, and withActingTenant rewrites
+//     the effective tenant only for a tenant the principal actually reaches — so
+//     acme asking for globex still gets acme;
+//   - the PLATFORM OWNER's selection is HONOURED — its default view is
+//     cross-tenant Global, and selecting a tenant drops it to that tenant.
+//
+// The owner's claims here carry ActingTenant directly: that is exactly what the
+// auth middleware's withActingTenant mints for an owner after resolving
+// ?as_tenant=globex, and req() builds the post-middleware context these handler
+// tests run against.
+func TestConfigDriftListIgnoresAsTenantForATenantAdminAndHonoursItForThePlatformOwner(t *testing.T) {
 	fx := cfgServer(t)
 
-	// HandleDriftList rejects every query parameter outside {state,cursor,limit}
-	// (a typo'd ?states= that silently returned everything would read as
-	// "nothing is drifted"), so ?as_tenant is REFUSED with 400 rather than
-	// accepted-and-ignored. That is strictly safer than the usual narrowing
-	// contract — what matters for §3a is that it cannot WIDEN the scope — but it
-	// diverges from every other scoped route, and the platform-wide acting-tenant
-	// selector therefore cannot narrow this list. Pinned here so the behaviour is
-	// a decision, not an accident.
+	// A scoped caller: accepted, then inert. Never a 400, never a widening.
 	w := httptest.NewRecorder()
 	fx.s.configDrift.HandleDriftList(w, req(http.MethodGet, "/api/config/drift?as_tenant=globex", "", acme()))
-	if w.Code != http.StatusBadRequest {
-		t.Fatalf("?as_tenant = %d, want 400 (%s)", w.Code, w.Body.String())
+	if w.Code != http.StatusOK {
+		t.Fatalf("?as_tenant = %d, want 200 (%s)", w.Code, w.Body.String())
 	}
 	if strings.Contains(w.Body.String(), "globex-core") {
-		t.Fatalf("TENANT LEAK: the refusal body carried another org's device: %s", w.Body.String())
+		t.Fatalf("TENANT LEAK: ?as_tenant carried acme into another org: %s", w.Body.String())
+	}
+	ids := cfgDriftIDs(t, fx.s, "/api/config/drift?as_tenant=globex", acme())
+	if len(ids) != 1 || ids[0] != "acme-core" {
+		t.Fatalf("TENANT LEAK: ?as_tenant changed a tenant admin's scope: %v", ids)
 	}
 
-	// The scope a scoped caller DOES get is unchanged and own-only.
-	ids := cfgDriftIDs(t, fx.s, "/api/config/drift", acme())
+	// Same for a tenant ADMIN holding full administration:admin — a role that is
+	// NOT the platform owner and must not be able to buy reach with a parameter.
+	ids = cfgDriftIDs(t, fx.s, "/api/config/drift?as_tenant=globex", tAdmin("acme"))
+	if len(ids) != 1 || ids[0] != "acme-core" {
+		t.Fatalf("TENANT LEAK: a tenant admin used ?as_tenant to reach another org: %v", ids)
+	}
+
+	// The platform owner: the selection is HONOURED and NARROWS the cross-tenant
+	// view to exactly the selected tenant.
+	owner := platformOwner()
+	owner.ActingTenant = "globex"
+	ids = cfgDriftIDs(t, fx.s, "/api/config/drift?as_tenant=globex", owner)
+	if len(ids) != 1 || ids[0] != "globex-core" {
+		t.Fatalf("the platform owner's tenant selection was not honoured: %v", ids)
+	}
+
+	// The scope a scoped caller gets with no parameter at all is unchanged.
+	ids = cfgDriftIDs(t, fx.s, "/api/config/drift", acme())
 	if len(ids) != 1 || ids[0] != "acme-core" {
 		t.Fatalf("TENANT LEAK: acme's scope is not own-only: %v", ids)
+	}
+
+	// The exception is exactly one parameter wide: everything else still 400s.
+	w = httptest.NewRecorder()
+	fx.s.configDrift.HandleDriftList(w, req(http.MethodGet, "/api/config/drift?states=drifted", "", acme()))
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("?states = %d, want 400 (%s)", w.Code, w.Body.String())
 	}
 }
 

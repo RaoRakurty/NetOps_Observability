@@ -4067,10 +4067,12 @@ func (s *server) buildPacketCapture() error {
 		Now:          func() time.Time { return time.Now().UTC() },
 		LookupDevice: s.pcapLookupDevice,
 		Gateway:      s.pcapGateway(),
-		// The DEFAULT command table. When the Vendor Profile registry grows the
-		// capture.pcap_start_cmd / pcap_stop_cmd / pcap_fetch_cmd field set, a
-		// registry-backed table is swapped in HERE and nothing else changes.
-		Commands:     pcap.NewDefaultCommandTable(),
+		// The per-vendor capture commands live in the Vendor Profile registry
+		// (capture.pcap_start_cmd / pcap_stop_cmd / pcap_cleanup_cmd /
+		// pcap_remote_path / pcap_supports_filter), so onboarding a platform is
+		// "author a profile", not "edit an engine". This is the swap point the
+		// CommandTable seam exists for.
+		Commands:     pcap.NewProfileCommandTable(),
 		Sealer:       sealer,
 		Blobs:        blobs,
 		Store:        s.pcapStore(),

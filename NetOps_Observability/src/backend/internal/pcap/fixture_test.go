@@ -209,7 +209,7 @@ func newFixture(t *testing.T, tweak func(*Deps)) *fixture {
 		Now:          func() time.Time { return fx.now },
 		LookupDevice: func(id string) (Device, bool) { dev, ok := fx.devices[id]; return dev, ok },
 		Gateway:      fx.gw,
-		Commands:     NewDefaultCommandTable(),
+		Commands:     NewProfileCommandTable(),
 		Sealer:       sealer,
 		Blobs:        blobs,
 		Store:        fx.store,

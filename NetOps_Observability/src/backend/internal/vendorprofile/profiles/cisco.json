@@ -141,7 +141,23 @@
         "pager_off_cmds": [
           "terminal length 0"
         ],
-        "prompt_regex": "(?m)^[A-Za-z0-9._-]+[>#]\\s*$"
+        "prompt_regex": "(?m)^[A-Za-z0-9._-]+[>#]\\s*$",
+        "pcap_start_cmd": [
+          "monitor capture {name} interface {iface} both",
+          "monitor capture {name} match any",
+          "monitor capture {name} buffer size {mb}",
+          "monitor capture {name} limit packets {count} duration {secs}",
+          "monitor capture {name} start"
+        ],
+        "pcap_stop_cmd": [
+          "monitor capture {name} stop"
+        ],
+        "pcap_cleanup_cmd": [
+          "monitor capture {name} stop",
+          "no monitor capture {name}",
+          "delete /force flash:{file}.pcap"
+        ],
+        "pcap_remote_path": "flash:{file}.pcap"
       },
       "advisory": {
         "provider": "offline-feed",
@@ -213,7 +229,15 @@
         "pager_off_cmds": [
           "terminal length 0"
         ],
-        "prompt_regex": "(?m)^[A-Za-z0-9._-]+[>#]\\s*$"
+        "prompt_regex": "(?m)^[A-Za-z0-9._-]+[>#]\\s*$",
+        "pcap_start_cmd": [
+          "ethanalyzer local interface {iface} limit-captured-frames {count} limit-frame-size 0[ capture-filter \"{filter}\"] write bootflash:{file}.pcap"
+        ],
+        "pcap_cleanup_cmd": [
+          "delete bootflash:{file}.pcap no-prompt"
+        ],
+        "pcap_remote_path": "/{file}.pcap",
+        "pcap_supports_filter": true
       },
       "advisory": {
         "provider": "offline-feed",

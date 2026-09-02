@@ -131,7 +131,71 @@ type Capture struct {
 	ShowVersionCmd   string   `json:"show_version_cmd,omitempty"`
 	PagerOffCmds     []string `json:"pager_off_cmds,omitempty"`
 	PromptRegex      string   `json:"prompt_regex,omitempty"`
+
+	// ── packet capture (consumed by internal/pcap) ───────────────────────────
+	//
+	// PcapStartCmd / PcapStopCmd / PcapFetchCmd / PcapCleanupCmd are the BOUNDED
+	// packet-capture command templates for this platform. They are TEMPLATES
+	// with typed holes, never free-form strings, and CapturePcapPlaceholders is
+	// the closed set of holes a template may contain:
+	//
+	//	{iface}  — an interface name validated by pcap.ValidateInterface
+	//	{file}   — the on-device file base name, derived from a server-minted
+	//	           32-hex capture id (never a caller string)
+	//	{count}  — the packet bound, already clamped
+	//	{secs}   — the duration bound, already clamped
+	//	{filter} — a pcap-style filter validated and re-rendered by
+	//	           pcap.ValidateFilter
+	//	{name}   — the capture-point name platforms that configure one need
+	//	           (IOS-XE), also derived from the minted capture id
+	//	{mb}     — the byte ceiling expressed in whole megabytes, for the one
+	//	           platform whose buffer knob is denominated that way (IOS-XE)
+	//
+	// A template may also carry OPTIONAL GROUPS in square brackets: the text
+	// inside `[` … `]` is emitted only when every placeholder inside it has a
+	// value. That is what lets ONE template express "…and, if the operator asked
+	// for a filter, this clause" without a second template or a template
+	// language — `{filter}` MUST sit inside such a group, so an unfiltered
+	// capture can never render a dangling clause. Groups do not nest.
+	//
+	// An empty field means "not established for this platform" — capture is
+	// REFUSED rather than guessing a command at a live device.
+	PcapStartCmd []string `json:"pcap_start_cmd,omitempty"`
+	PcapStopCmd  []string `json:"pcap_stop_cmd,omitempty"`
+	// PcapFetchCmd is RESERVED for a platform whose file retrieval is a CLI
+	// command rather than the SSH gateway's transfer channel. No shipped profile
+	// declares one, and internal/pcap's registry-backed table REFUSES to build a
+	// platform that does — ignoring a declared command would make the profile a
+	// lie about what runs at the device (§10, no silent failure).
+	PcapFetchCmd []string `json:"pcap_fetch_cmd,omitempty"`
+	// PcapCleanupCmd tears the capture point AND the on-device file down. It runs
+	// on every exit path, success or failure: a capture point left configured on
+	// a production interface is the packet-capture design's top operational risk,
+	// so a platform that declares a start with no cleanup is rejected at load.
+	PcapCleanupCmd []string `json:"pcap_cleanup_cmd,omitempty"`
+	// PcapRemotePath is the on-device file the start template writes. Required
+	// whenever PcapStartCmd is set — a start with no path is unusable.
+	PcapRemotePath string `json:"pcap_remote_path,omitempty"`
+	// PcapSupportsFilter reports whether this platform's capture command can
+	// express a pcap-style filter. FALSE means a filtered request is REFUSED,
+	// never silently widened (Cisco IOS-XE Embedded Packet Capture has no
+	// pcap-filter syntax). A platform declaring false may not carry {filter} in
+	// any template, and one carrying {filter} must declare true — enforced at
+	// load, so the claim and the commands cannot drift apart.
+	PcapSupportsFilter bool `json:"pcap_supports_filter,omitempty"`
 }
+
+// CapturePcapPlaceholders is the CLOSED set of holes a pcap command template may
+// contain. It is exported because it is a CONTRACT between this registry and
+// internal/pcap: the registry validates that a template uses nothing else, and
+// the renderer supplies exactly these names. Adding one is a deliberate act in
+// both packages.
+var CapturePcapPlaceholders = []string{"iface", "file", "count", "secs", "filter", "name", "mb"}
+
+// HasPcapCommands reports whether this platform declares a packet-capture
+// command set at all. False is the honest "not established here" — the caller
+// refuses the capture rather than guessing.
+func (c Capture) HasPcapCommands() bool { return len(c.PcapStartCmd) > 0 }
 
 // AdvisoryBinding selects the VendorAdvisoryProvider for this platform and names
 // the product ids an advisory query carries.
