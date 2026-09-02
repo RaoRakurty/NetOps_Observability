@@ -26,6 +26,10 @@
 #     ./install-correlix.sh reset-demo-data
 #     ./install-correlix.sh enable  <add-on>    log-search-ui | self-monitoring
 #     ./install-correlix.sh disable <add-on>
+#     ./install-correlix.sh support-bundle [--out DIR] [--since 24h] [--no-logs]
+#         Collect a REDACTED diagnostic bundle (compose state, container logs,
+#         health, store/bus summaries) as one .tar.zst to send to support.
+#         Secrets are stripped; read its MANIFEST before sending.
 #
 # Advanced (documented in ADVANCED.md, hidden from the quickstart):
 #     --external-kafka --broker-urls host1:9092[,host2:9092]
@@ -113,11 +117,13 @@ PURGE=0
 LOG_SVC=""
 CONFIG_FILE=""
 PRINT_FLAGS=0
+# support-bundle passthrough (rejected for every other subcommand).
+SB_ARGS=()
 if [ $# -gt 0 ]; then
   case "$1" in
-    install|status|logs|stop|start|uninstall|reset-demo-data|enable|disable|menu|gui) CMD="$1"; shift ;;
+    install|status|logs|stop|start|uninstall|reset-demo-data|enable|disable|menu|gui|support-bundle) CMD="$1"; shift ;;
     -*) : ;;  # bare options → install
-    *) die "Unknown command: $1" "Commands: install status logs stop start uninstall reset-demo-data enable disable menu" ;;
+    *) die "Unknown command: $1" "Commands: install status logs stop start uninstall reset-demo-data enable disable support-bundle menu" ;;
   esac
 elif [ -t 0 ] && [ -t 1 ]; then
   # No arguments in an interactive terminal → the setup console (menu
@@ -136,9 +142,13 @@ while [ $# -gt 0 ]; do
     --broker-urls)    BROKER_URLS_ARG="${2:?--broker-urls needs host:port[,host:port]}"; shift 2 ;;
     --config)         CONFIG_FILE="${2:?--config needs a profile.json path}"; shift 2 ;;
     --print-flags)    PRINT_FLAGS=1; shift ;;
+    --out|--since)    [ "$CMD" = "support-bundle" ] || die "Unknown option: $1" "$1 is only valid for: ./install-correlix.sh support-bundle"
+                      SB_ARGS+=("$1" "${2:?$1 needs a value}"); shift 2 ;;
+    --no-logs)        [ "$CMD" = "support-bundle" ] || die "Unknown option: $1" "--no-logs is only valid for: ./install-correlix.sh support-bundle"
+                      SB_ARGS+=("$1"); shift ;;
     --lab)            LAB=1; shift ;;
     --purge)          PURGE=1; shift ;;
-    -h|--help)        sed -n '3,32p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help)        sed -n '3,36p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) if [ "$CMD" = "logs" ] && [ -z "$LOG_SVC" ]; then LOG_SVC="$1"; shift
        else die "Unknown option: $1" "See ./install-correlix.sh --help"; fi ;;
   esac
@@ -814,6 +824,26 @@ cmd_disable() {
   ok "$ADDON_ARG disabled (its images and data were kept)."
 }
 
+cmd_support_bundle() {
+  # The collector lives with the rest of the operational scripts; the wrapper
+  # only locates it, hands the flags through, and translates its exit code
+  # into customer-facing language. Exit 2 = the bundle IS written but PARTIAL.
+  local sb="$ROOT/scripts/support-bundle.sh"
+  [ -f "$sb" ] || die "support-bundle.sh is missing from this installation." \
+      "Expected: $sb"
+  say "Collecting a redacted Correlix support bundle (this can take a minute)..."
+  local rc=0
+  bash "$sb" ${SB_ARGS+"${SB_ARGS[@]}"} || rc=$?
+  case "$rc" in
+    0) ok "Support bundle written. Read its MANIFEST, then send the .tar.zst to support." ;;
+    2) warn "Support bundle written but PARTIAL — at least one collector failed."
+       say  "Every failure is named in the bundle's MANIFEST; send it anyway, it is still useful."
+       exit 2 ;;
+    *) die "Could not produce a support bundle (support-bundle.sh exited $rc)." \
+           "Run it directly for the full output: $sb" ;;
+  esac
+}
+
 # ---------- setup console (menu navigation) ------------------------------
 menu_state() {
   if [ ! -f "$ENV_FILE" ]; then echo "not installed"
@@ -900,5 +930,6 @@ case "$CMD" in
   uninstall)       cmd_uninstall ;;
   reset-demo-data) cmd_reset_demo ;;
   enable)          cmd_enable ;;
+  support-bundle)  cmd_support_bundle ;;
   disable)         cmd_disable ;;
 esac

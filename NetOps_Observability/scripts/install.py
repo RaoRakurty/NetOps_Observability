@@ -66,6 +66,7 @@ def warn(msg: str) -> None:    print(f"[warn ] {msg}", file=sys.stderr)
 
 def fail(msg: str) -> None:
     _stage_fail(msg)
+    _timing_finish("fail")
     print(f"[fail ] {msg}", file=sys.stderr)
     sys.exit(1)
 
@@ -99,6 +100,26 @@ _PROGRESS: dict = {
     "stage": None,  # (id, title) of the open stage, or None
 }
 
+# ---- deployment-friction instrument (Project 2 G6) --------------------------
+# Time-to-first-value is a product metric, not a feeling: every stage carries
+# its own wall clock, each closing marker reports `elapsed_s`, and a run writes
+# data/install-timing.json (total + per stage) so a pilot install can be
+# MEASURED instead of remembered. `--time-report` prints the same table.
+#
+# Timing is collected whether or not --progress-json is on (the JSON file is
+# the instrument; markers are the GUI's view of it). `record` gates the two
+# terminal side effects — the summary marker and the file — to a real install
+# run, so importing this module or calling fail() in a unit test writes
+# nothing.
+_TIMING: dict = {
+    "t0": time.monotonic(),
+    "open_t": None,           # monotonic start of the currently-open stage
+    "stages": [],             # [{"id","title","status","elapsed_s"}]
+    "record": False,          # set by main(): a real run may write the file
+    "report": False,          # --time-report: print the table at the end
+    "path": None,             # data/install-timing.json (resolved in main())
+}
+
 
 def _progress(obj: dict) -> None:
     """Emit one marker line, unbuffered (the GUI streams stdout live)."""
@@ -107,16 +128,33 @@ def _progress(obj: dict) -> None:
     print("@CX@ " + json.dumps(obj, separators=(",", ":")), flush=True)
 
 
+def _stage_elapsed() -> float:
+    """Wall-clock seconds since the open stage started (0.0 if none is open)."""
+    if _TIMING["open_t"] is None:
+        return 0.0
+    return round(time.monotonic() - _TIMING["open_t"], 3)
+
+
+def _stage_record(sid: str, title: str, status: str, elapsed: float) -> None:
+    _TIMING["stages"].append({"id": sid, "title": title, "status": status,
+                              "elapsed_s": elapsed})
+    _TIMING["open_t"] = None
+
+
 def _stage_close_ok() -> None:
     if _PROGRESS["stage"] is not None:
         sid, title = _PROGRESS["stage"]
         _PROGRESS["stage"] = None
-        _progress({"kind": "stage", "id": sid, "title": title, "status": "ok"})
+        elapsed = _stage_elapsed()
+        _stage_record(sid, title, "ok", elapsed)
+        _progress({"kind": "stage", "id": sid, "title": title, "status": "ok",
+                   "elapsed_s": elapsed})
 
 
 def _stage_start(sid: str, title: str) -> None:
     _stage_close_ok()
     _PROGRESS["stage"] = (sid, title)
+    _TIMING["open_t"] = time.monotonic()
     _progress({"kind": "stage", "id": sid, "title": title, "status": "start"})
 
 
@@ -125,8 +163,10 @@ def _stage_fail(message: str) -> None:
     if _PROGRESS["stage"] is not None:
         sid, title = _PROGRESS["stage"]
         _PROGRESS["stage"] = None
+        elapsed = _stage_elapsed()
+        _stage_record(sid, title, "fail", elapsed)
         _progress({"kind": "stage", "id": sid, "title": title,
-                   "status": "fail", "message": message})
+                   "status": "fail", "message": message, "elapsed_s": elapsed})
     _progress({"kind": "result", "status": "fail"})
 
 
@@ -134,6 +174,51 @@ def _result_ok(url: str, admin_user: str) -> None:
     _stage_close_ok()
     _progress({"kind": "result", "status": "ok", "url": url,
                "admin_user": admin_user})
+
+
+def _timing_doc(status: str) -> dict:
+    return {
+        "version": 1,
+        "generated_utc": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "status": status,
+        "total_s": round(time.monotonic() - _TIMING["t0"], 3),
+        "stages": list(_TIMING["stages"]),
+    }
+
+
+def _print_time_report(doc: dict) -> None:
+    print()
+    print("=== install timing ===")
+    print(f"  {'stage':<18} {'status':<7} {'elapsed_s':>10}")
+    for st in doc["stages"]:
+        print(f"  {st['id']:<18} {st['status']:<7} {st['elapsed_s']:>10.1f}")
+    print(f"  {'TOTAL':<18} {doc['status']:<7} {doc['total_s']:>10.1f}")
+
+
+def _timing_finish(status: str) -> None:
+    """Terminal timing side effects: the summary marker, the JSON file and —
+    with --time-report — the table. Never fatal: a run that installed the stack
+    must not be reported as failed because a timing file could not be written,
+    but the failure IS named (§16.1 — reported, never swallowed)."""
+    if not _TIMING["record"]:
+        return
+    doc = _timing_doc(status)
+    _progress({"kind": "timing", "status": doc["status"],
+               "total_s": doc["total_s"],
+               "stages": [{"id": s["id"], "status": s["status"],
+                           "elapsed_s": s["elapsed_s"]} for s in doc["stages"]]})
+    path = _TIMING["path"]
+    if path is not None:
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            tmp = path.with_suffix(".json.tmp")
+            tmp.write_text(json.dumps(doc, indent=2) + "\n")
+            os.replace(tmp, path)
+        except OSError as e:
+            warn(f"could not write the install timing file {path}: {e} "
+                 "(the install itself is unaffected)")
+    if _TIMING["report"]:
+        _print_time_report(doc)
 
 # ---- secret generation ------------------------------------------------------
 
@@ -2259,6 +2344,11 @@ def main() -> None:
                     help="Emit machine-readable '@CX@ {json}' progress markers on "
                          "stdout alongside the human output (GUI installer contract; "
                          "also activated by CORRELIX_PROGRESS_JSON=1).")
+    ap.add_argument("--time-report", action="store_true",
+                    help="Print a per-stage wall-clock table when the run ends. "
+                         "The same numbers are always written to "
+                         "data/install-timing.json (deployment-friction "
+                         "instrument; see docs/DEPLOY_LINUX.md).")
     ap.add_argument("--bootstrap-docker", choices=["yes", "no"], default=None,
                     help="Answer the Ubuntu/Debian Docker-bootstrap prompt "
                          "non-interactively — the flag wins over the prompt, "
@@ -2367,6 +2457,12 @@ def main() -> None:
             fail(f"{failures} secret(s) could not be rotated (details above)")
         return
 
+    # The install proper starts here — arm the timing instrument (the standalone
+    # replan/rotate/rollback paths above run no stages and write no timing).
+    _TIMING["record"] = True
+    _TIMING["report"] = args.time_report
+    _TIMING["path"] = root / "data" / "install-timing.json"
+
     step("checking prerequisites", stage="prereq")
     check_docker(args.bootstrap_docker)
 
@@ -2428,6 +2524,7 @@ def main() -> None:
         else:
             ok(".env and data/ ready. Skipping docker compose up (per --no-start).")
         _result_ok(dash_url, _parse_env(env_path).get("ADMIN_USERNAME", "admin"))
+        _timing_finish("ok")
         return
 
     if args.bundle:
@@ -2514,6 +2611,7 @@ def main() -> None:
     # Terminal machine-readable marker (GUI contract): url + admin_user ONLY —
     # the password never rides a progress event.
     _result_ok(dash_url, _parse_env(env_path).get("ADMIN_USERNAME", "admin"))
+    _timing_finish("ok")
 
 
 if __name__ == "__main__":

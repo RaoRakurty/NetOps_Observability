@@ -118,6 +118,67 @@ After the first start, run the OpenSearch index-template bootstrap:
 scripts/bootstrap-opensearch.sh
 ```
 
+## 5b. Measuring time-to-first-value
+
+Deployment friction is a product metric, so the installer measures itself.
+Every run writes `data/install-timing.json`:
+
+```json
+{
+  "version": 1,
+  "generated_utc": "2026-09-02T09:14:03Z",
+  "status": "ok",
+  "total_s": 0.0,
+  "stages": [
+    {"id": "prereq", "title": "checking prerequisites", "status": "ok", "elapsed_s": 0.0}
+  ]
+}
+```
+
+* `total_s` — wall clock for the whole run.
+* `stages[]` — one row per installer stage (`prereq`, `scaffold`, `env`,
+  `sizing`, `tls-env`, `data-dirs`, `bundle`, `up-a`, `mint`, `up-b`,
+  `kafka-acls`, `status`, `bootstrap-os`, `bootstrap-kc`, `bootstrap-grafana`)
+  with its own `elapsed_s` and `ok`/`fail` status.
+* A FAILED run writes the file too, with `"status": "fail"` and the failing
+  stage last — which stage a host gets stuck on is the interesting number.
+
+Print the same table at the end of a run with `--time-report`:
+
+```bash
+python3 scripts/install.py --time-report
+```
+
+The numbers also ride the machine-readable progress stream: each closing
+`@CX@` stage marker carries `elapsed_s`, and the run ends with one
+`{"kind":"timing", ...}` marker (see `--progress-json`).
+
+**Reference procedure.** To compare hosts, releases or install profiles,
+measure the same four checkpoints every time and record them next to the
+hardware profile (`scripts/resource_planner.py --detect-json` prints it):
+
+1. **Clean VM → tarball.** A fresh VM at the documented sizing, Docker
+   installed per §1, the release tarball staged per §2. Start the clock at
+   `install-correlix.sh` / `scripts/install.py`.
+2. **Installer finish.** `total_s` in `data/install-timing.json` — the
+   installer's own number, no stopwatch required.
+3. **First login.** Browse to the dashboard, sign in with
+   `ADMIN_INITIAL_PASSWORD`, change the password.
+4. **First synthetic RCA.** `python3 scripts/demo_fill.py --once`, then wait
+   for a correlation to appear in the UI. This is the first moment the product
+   has shown a user something it figured out — the value in
+   time-to-first-value.
+
+Record all four; a single "install took N minutes" number hides which stage
+actually costs the time. No reference figures are published here on purpose:
+the numbers depend on host CPU/disk, image pull vs. offline bundle, and TLS
+enablement, and quoting a figure we have not measured on comparable hardware
+would be worse than quoting none. Measure your own baseline on the first
+install and treat later runs as deltas against it.
+
+If a stage's `elapsed_s` looks wrong, `scripts/support-bundle.sh` collects the
+matching evidence (see `docs/runbooks/support-bundle.md`).
+
 ## 6. Install the systemd unit
 
 ```bash

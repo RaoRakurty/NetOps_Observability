@@ -110,6 +110,17 @@ ALLOWLIST: dict[AllowKey, str] = {
     ("vrl-harness.py", "available", "ef7cf66a"): "vector-binary availability probe; returns False => harness skips loudly",
     # -- optional-input reads with a sane, visible default --
     ("install.py", "_git_sha", "b26fa56b"): "git rev-parse for build provenance; falls back to 'unknown', which drift check FAILS on",
+    # Reviewed 2026-09-02 (Project 2 G6, deployment-friction instrument). The
+    # handler guards ONLY the write of data/install-timing.json — a measurement
+    # artifact, never a stack input. Escalating would invert the priority it
+    # exists to serve: a stack that installed correctly would be reported as a
+    # FAILED install because a metrics file could not be written, and on the
+    # fail() path the raised OSError would REPLACE the real install error the
+    # operator needs. The failure is not swallowed: warn() names the path and
+    # the errno on stderr, and the terminal `timing` progress marker still
+    # carries the same numbers, so the run's timing is observable even when the
+    # file is not written.
+    ("install.py", "_timing_finish", "5fcaf1a7"): "install-timing.json write; warn() names path+errno, marker still carries the numbers, install verdict unchanged",
     ("install.py", "api_runtime_uid", "831da648"): "uid/gid from a .env that may not exist yet (--no-start dry paths); compose default",
     ("refresh_provider_ranges.py", "main", "0e6dd5ac"): "first-run bootstrap: no previous snapshot file => empty baseline",
     # Re-pinned 2026-08-17: shifted by the BUS_PARTITIONS planner work

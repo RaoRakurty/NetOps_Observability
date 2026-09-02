@@ -4,7 +4,10 @@ Pins the correlix-setup v1 API + event contract the graphical installer parses:
 
   (a) install.py --progress-json emits `@CX@ {json}` stage/result markers in
       the contract's exact format, ADDITIONAL to the human output; the stage-id
-      set matches the contract; the terminal result NEVER carries a password
+      set matches the contract; the terminal result NEVER carries a password.
+      Each CLOSING stage marker (ok/fail) also carries `elapsed_s` — the
+      deployment-friction instrument (G6) — and a real run ends with one
+      `timing` marker plus data/install-timing.json
   (b) --bootstrap-docker gives the Docker-bootstrap prompt flag parity
       (the prompt is never reached when the flag is given — like --tls)
   (c) --snmp-discovery validates CIDRs at the boundary and lands in .env via
@@ -82,6 +85,10 @@ def test_stage_start_then_next_stage_closes_previous_ok(progress_on, capsys):
     install._stage_start("prereq", "checking prerequisites")
     install._stage_start("scaffold", "validating scaffold")
     ms = marker_lines(capsys.readouterr().out)
+    # The CLOSING marker carries the stage's wall clock (G6); start markers do
+    # not — a stage that has not run yet has no elapsed time to report.
+    elapsed = ms[1].pop("elapsed_s")
+    assert isinstance(elapsed, float) and elapsed >= 0.0
     assert ms == [
         {"kind": "stage", "id": "prereq", "title": "checking prerequisites",
          "status": "start"},
@@ -90,6 +97,7 @@ def test_stage_start_then_next_stage_closes_previous_ok(progress_on, capsys):
         {"kind": "stage", "id": "scaffold", "title": "validating scaffold",
          "status": "start"},
     ]
+    assert "elapsed_s" not in ms[0] and "elapsed_s" not in ms[2]
 
 
 def test_step_with_stage_keeps_human_output_and_adds_marker(progress_on, capsys):
@@ -110,6 +118,8 @@ def test_fail_emits_stage_fail_with_message_then_result_fail(progress_on, capsys
     cap = capsys.readouterr()
     assert "[fail ] boom happened" in cap.err               # human line on stderr
     ms = marker_lines(cap.out)
+    elapsed = ms[0].pop("elapsed_s")
+    assert isinstance(elapsed, float) and elapsed >= 0.0
     assert ms == [
         {"kind": "stage", "id": "env", "title": "generating environment",
          "status": "fail", "message": "boom happened"},
@@ -141,6 +151,97 @@ def test_result_markers_emitted_at_both_run_ends():
     emit the terminal result marker the GUI treats as completion."""
     src = (SCRIPTS / "install.py").read_text()
     assert src.count("_result_ok(dash_url") == 2
+
+
+# ── (a2) deployment-friction timing instrument (G6) ──────────────────────────
+
+@pytest.fixture
+def timing_reset():
+    """Isolate the module's timing state (it is per-run, not per-import)."""
+    old = dict(install._TIMING)
+    install._TIMING.update({"t0": install.time.monotonic(), "open_t": None,
+                            "stages": [], "record": False, "report": False,
+                            "path": None})
+    yield install._TIMING
+    install._TIMING.clear()
+    install._TIMING.update(old)
+
+
+def test_timing_writes_nothing_until_a_real_run_arms_it(progress_on, timing_reset,
+                                                        capsys, tmp_path):
+    """Importing the module or failing at the argv boundary must not produce a
+    timing file: the instrument measures INSTALLS, and unit tests are not one."""
+    timing_reset["path"] = tmp_path / "data" / "install-timing.json"
+    install._stage_start("env", "generating environment")
+    with pytest.raises(SystemExit):
+        install.fail("boom")
+    kinds = [m["kind"] for m in marker_lines(capsys.readouterr().out)]
+    assert "timing" not in kinds
+    assert not (tmp_path / "data").exists()
+
+
+def test_timing_marker_and_file_carry_total_and_per_stage_elapsed(
+        progress_on, timing_reset, capsys, tmp_path):
+    timing_reset["record"] = True
+    timing_reset["path"] = tmp_path / "data" / "install-timing.json"
+    install._stage_start("prereq", "checking prerequisites")
+    install._stage_start("scaffold", "validating scaffold")
+    install._result_ok("http://localhost:8000", "admin")
+    install._timing_finish("ok")
+
+    ms = marker_lines(capsys.readouterr().out)
+    timing = [m for m in ms if m["kind"] == "timing"]
+    assert len(timing) == 1, "exactly one terminal timing marker per run"
+    t = timing[0]
+    assert set(t) == {"kind", "status", "total_s", "stages"}
+    assert t["status"] == "ok" and isinstance(t["total_s"], float)
+    assert [st["id"] for st in t["stages"]] == ["prereq", "scaffold"]
+    for st in t["stages"]:
+        assert set(st) == {"id", "status", "elapsed_s"}
+        assert st["status"] == "ok" and st["elapsed_s"] >= 0.0
+    # ...and the same numbers land in the file the friction report reads.
+    doc = json.loads((tmp_path / "data" / "install-timing.json").read_text())
+    assert doc["version"] == 1 and doc["status"] == "ok"
+    assert doc["total_s"] >= 0.0 and doc["generated_utc"].endswith("Z")
+    assert [st["id"] for st in doc["stages"]] == ["prereq", "scaffold"]
+    assert all("title" in st and "elapsed_s" in st for st in doc["stages"])
+    # No credential ever rides the instrument.
+    assert "password" not in (tmp_path / "data" / "install-timing.json").read_text().lower()
+
+
+def test_timing_file_failure_is_reported_not_fatal(timing_reset, capsys, tmp_path):
+    """A run that installed the stack is not a failed run because a timing file
+    could not be written — but the failure is NAMED (§16.1)."""
+    blocked = tmp_path / "file"
+    blocked.write_text("not a directory")
+    timing_reset["record"] = True
+    timing_reset["path"] = blocked / "data" / "install-timing.json"
+    install._timing_finish("ok")                       # must not raise
+    assert "could not write the install timing file" in capsys.readouterr().err
+
+
+def test_time_report_prints_a_per_stage_table(timing_reset, capsys):
+    timing_reset["record"] = True
+    timing_reset["report"] = True
+    install._stage_start("prereq", "checking prerequisites")
+    install._stage_close_ok()
+    install._timing_finish("ok")
+    out = capsys.readouterr().out
+    assert "=== install timing ===" in out
+    assert "prereq" in out and "TOTAL" in out
+
+
+def test_failed_run_records_the_stage_that_failed(progress_on, timing_reset,
+                                                  capsys, tmp_path):
+    timing_reset["record"] = True
+    timing_reset["path"] = tmp_path / "install-timing.json"
+    install._stage_start("up-a", "starting stack")
+    with pytest.raises(SystemExit):
+        install.fail("compose up failed")
+    doc = json.loads((tmp_path / "install-timing.json").read_text())
+    assert doc["status"] == "fail"
+    assert doc["stages"][-1]["id"] == "up-a"
+    assert doc["stages"][-1]["status"] == "fail"
 
 
 # ── (b) --bootstrap-docker flag parity ───────────────────────────────────────
@@ -198,7 +299,8 @@ def test_cli_help_advertises_the_new_flags():
     r = subprocess.run([sys.executable, str(SCRIPTS / "install.py"), "--help"],
                        capture_output=True, text=True, timeout=60)
     assert r.returncode == 0
-    for flag in ("--progress-json", "--bootstrap-docker", "--snmp-discovery"):
+    for flag in ("--progress-json", "--bootstrap-docker", "--snmp-discovery",
+                 "--time-report"):
         assert flag in r.stdout
 
 
