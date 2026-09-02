@@ -1687,6 +1687,29 @@ export function setActiveScope(tenantId: string) {
   } catch { /* ignore storage errors */ }
 }
 
+
+/**
+ * Serializes the shared security-finding filter set. Undefined/empty values are
+ * DROPPED rather than sent blank, so an unset filter never narrows the server's
+ * query by accident; `current` is sent explicitly (true|false) because the
+ * current-vs-history toggle is a real, user-visible choice, not a default.
+ */
+export function secFindingParams(q: SecFindingQuery): string {
+  const p = new URLSearchParams();
+  if (q.cursor) p.set("cursor", q.cursor);
+  if (q.limit !== undefined) p.set("limit", String(q.limit));
+  if (q.severity) p.set("severity", q.severity);
+  if (q.status) p.set("status", q.status);
+  if (q.seam) p.set("seam", q.seam);
+  if (q.framework) p.set("framework", q.framework);
+  if (q.device) p.set("device", q.device);
+  if (q.q) p.set("q", q.q);
+  if (q.since) p.set("since", q.since);
+  if (q.until) p.set("until", q.until);
+  if (q.current !== undefined) p.set("current", q.current ? "true" : "false");
+  return p.toString();
+}
+
 async function request<T>(path: string, init?: RequestInit, retried = false): Promise<T> {
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
@@ -2957,6 +2980,44 @@ export const api = {
     if (!res.ok) throw new Error(`Export failed: ${res.status} ${await res.text().catch(() => "")}`);
     return res.blob();
   },
+
+  // ---------- Security CTEM (P3-T8) ---------------------------------------
+  // Every call below is tenant-scoped SERVER-side from the bearer token (§3a);
+  // the client never sends a tenant, and a foreign id answers 404. Filters are
+  // URL-encoded through URLSearchParams — no string concatenation, no injection
+  // surface. Only the endpoints in the T8 contract exist here; nothing extra.
+  securityFindings: (query: SecFindingQuery = {}) =>
+    request<SecFindingsPage>(`/api/security/findings?${secFindingParams(query)}`),
+  securityFinding: (id: string) =>
+    request<SecFinding>(`/api/security/findings/${encodeURIComponent(id)}`),
+  securityFindingFacets: (query: SecFindingQuery = {}) =>
+    request<SecFacets>(`/api/security/findings/facets?${secFindingParams(query)}`),
+  securityFindingTrend: (query: SecFindingQuery = {}, bucket = "1d") =>
+    request<SecTrend>(`/api/security/findings/trend?${secFindingParams({ ...query, cursor: undefined, limit: undefined })}&bucket=${encodeURIComponent(bucket)}`),
+  securityPosture: () => request<SecPosture>("/api/security/posture"),
+  // Exposure Stories are correlation objects filtered to the security evidence
+  // class — the SAME RCA shape, so the workspace components are reused as-is.
+  securityExposureStories: (limit = 20) =>
+    request<CorrObject[]>(`/api/security/exposure-stories?limit=${encodeURIComponent(String(limit))}`),
+  securityExposureStory: (correlationId: string) =>
+    request<{ object: CorrObject; edges: CorrEdge[] }>(
+      `/api/security/exposure-stories/${encodeURIComponent(correlationId)}`),
+  securityRules: () => request<SecRule[]>("/api/security/rules"),
+  // Admin-gated server-side. The body carries enablement ONLY — fidelity,
+  // family, MITRE tags and seam-awareness are server-owned facts, so echoing
+  // them back would let a client claim properties it does not own.
+  securityRulesUpdate: (updates: SecRuleToggle[]) =>
+    request<SecRule[]>("/api/security/rules", {
+      method: "PUT",
+      body: JSON.stringify(updates.map((u) => ({ rule_id: u.rule_id, enabled: u.enabled }))),
+    }),
+  securityViews: () => request<SecSavedView[]>("/api/security/views"),
+  securityViewCreate: (name: string, filters: SecFindingQuery) =>
+    request<SecSavedView>("/api/security/views", {
+      method: "POST", body: JSON.stringify({ name, filters }),
+    }),
+  securityViewDelete: (id: string) =>
+    request<void>(`/api/security/views/${encodeURIComponent(id)}`, { method: "DELETE" }),
 
   // ---------- Sessions (admin: live session listing + revocation) ----------
   listSessions: (user?: string) =>
@@ -4430,6 +4491,147 @@ export type CloudIdentityMappingRow = {
   confidence: CloudConfidence;
   attribution_reason: string;
   updated_at: string;
+};
+
+// ── Security CTEM (P3-T8) ─────────────────────────────────────────────────
+// The read model behind the Security section. Every shape here mirrors the
+// backend contract 1:1 (src/backend/internal/secfindings/finding.go for the
+// finding itself) — the client INVENTS nothing. All of it is tenant-scoped by
+// the bearer token server-side (§3a): the UI never asks for, and must never
+// assume it can see, another tenant's rows; a foreign id answers 404 and is
+// rendered as "not found", never as an empty-but-clean state.
+
+/** Subject of a finding — the device or host it concerns (Resource in Go). */
+export type SecResource = {
+  uid?: string;
+  name?: string;
+  hostname?: string;
+  ip?: string;
+  type?: string;      // host | network-device | container
+  platform?: string;  // e.g. "Cisco IOS-XE 17.9"
+};
+
+/** By-reference, version-pinned pointer to the raw artifact a verdict came from. */
+export type SecEvidenceRef = {
+  locator: string;
+  kind?: string;            // oval-result | ch-row | config-line | os-doc | arf
+  ruleset_version?: string;
+  digest?: string;
+};
+
+/** Optional seam attribution — set only on seam-aware exposure findings. */
+export type SecSeamContext = {
+  seam_id?: string;
+  seam_type?: string;       // e.g. "ISP", "internet", "mgmt"
+  internet_facing?: boolean;
+};
+
+/**
+ * One normalized security finding: one subject × one evaluated rule, with an
+ * OCSF-normalized verdict. `status_id` is 1=Pass 2=Warning 3=Fail
+ * 4=NotApplicable 5=Error — 4/5 are NOT a pass, which is why the UI renders
+ * them as "unassessed", never green.
+ *
+ * `id`, `time`, `scan_id` and `native_id` are the read-API additions on top of
+ * the stored document (tenant_id is never serialized to a client).
+ */
+export type SecFinding = {
+  id: string;               // OpenSearch doc id
+  native_id: string;        // stable provider identity (current-verdict collapse key)
+  scan_id?: string;         // read-API alias of scan_uid
+  scan_uid?: string;
+  uid?: string;
+  time: string;
+  source?: string;
+  evidence_class?: string;  // posture | exposure | signal (threat lane) …
+  status?: string;
+  status_id: number;
+  standards?: string[];
+  control?: string;
+  control_title?: string;
+  category_name?: string;
+  severity?: string;        // critical | high | medium | low | info
+  resource: SecResource;
+  observed?: string;
+  intended?: string;
+  status_detail?: string;
+  remediation?: string;
+  evidence_ref?: SecEvidenceRef;
+  raw_rule_id?: string;
+  seam?: SecSeamContext;
+};
+
+/** GET /api/security/findings — one cursor page. */
+export type SecFindingsPage = {
+  items: SecFinding[];
+  next_cursor: string | null;
+  total: number;
+};
+
+/** The filter set every findings-family endpoint accepts (all optional). */
+export type SecFindingQuery = {
+  cursor?: string;
+  limit?: number;
+  severity?: string;
+  status?: string;
+  seam?: string;
+  framework?: string;
+  device?: string;
+  q?: string;
+  since?: string;
+  until?: string;
+  /** true = latest verdict per native_id ("current"); false = full history. */
+  current?: boolean;
+};
+
+/** GET /api/security/findings/facets — counts for the same filter set. */
+export type SecFacets = {
+  severity: { crit: number; high: number; medium: number; low: number; info: number };
+  status: { pass: number; warn: number; fail: number };
+  seam: Record<string, number>;
+  framework: Record<string, number>;
+  evidence_class: Record<string, number>;
+};
+
+/** GET /api/security/findings/trend — one bucket per period. */
+export type SecTrendBucket = { t: string; fail: number; warn: number; pass: number };
+export type SecTrend = { buckets: SecTrendBucket[] };
+
+/**
+ * GET /api/security/posture — the CTEM funnel + assessment coverage.
+ * `coverage.unassessed` is rendered honestly (an unassessed asset is UNKNOWN,
+ * never "clear"); the funnel numbers are counts, never percentages of a total
+ * the API did not state.
+ */
+export type SecPosture = {
+  funnel: {
+    scope: number;       // assets in scope
+    discover: number;    // current findings
+    prioritize: number;  // high or critical
+    validate: number;    // validated
+    mobilize: number;    // has an owner
+  };
+  coverage: { assessed_assets: number; total_assets: number; unassessed: number };
+  last_scan: { scan_id: string; time: string };
+};
+
+/** GET/PUT /api/security/rules — the detection/hardening rule inventory. */
+export type SecRule = {
+  rule_id: string;
+  family: string;
+  enabled: boolean;
+  fidelity: string;
+  mitre?: string[];
+  seam_aware: boolean;
+};
+/** PUT body — enablement only; the server owns every other field. */
+export type SecRuleToggle = { rule_id: string; enabled: boolean };
+
+/** GET/POST/DELETE /api/security/views — a named, saved filter set. */
+export type SecSavedView = {
+  id: string;
+  name: string;
+  filters: SecFindingQuery;
 };
 
 // ── Iris AI ───────────────────────────────────────────────────────────────

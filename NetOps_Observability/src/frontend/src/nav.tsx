@@ -24,7 +24,6 @@ export const ROUTE_CHUNKS: Record<string, () => Promise<unknown>> = {
   BgpOspf: () => import("./pages/BgpOspf"),
   BgpOps: () => import("./pages/BgpOps"),
   Troubleshooting: () => import("./pages/Troubleshooting"),
-  ThreatDetection: () => import("./pages/ThreatDetection"),
   Events: () => import("./pages/Events"),
   Correlations: () => import("./tabs/Correlations"),
   RcaReports: () => import("./pages/RcaReports"),
@@ -58,7 +57,14 @@ export const ROUTE_CHUNKS: Record<string, () => Promise<unknown>> = {
   TransportSecurity: () => import("./tabs/TransportSecurity"),
   AccessExplorer: () => import("./tabs/AccessExplorer"),
   VulnerabilityManagement: () => import("./pages/VulnerabilityManagement"),
-  ComplianceMonitoring: () => import("./pages/ComplianceMonitoring"),
+  // Security CTEM section (P3-T8) — one chunk per route, lazily fetched.
+  SecurityOverview: () => import("./pages/security/SecurityOverview"),
+  SecurityExposures: () => import("./pages/security/Exposures"),
+  SecurityExposureStories: () => import("./pages/security/ExposureStories"),
+  SecurityThreatDetection: () => import("./pages/security/ThreatDetectionView"),
+  SecurityCompliance: () => import("./pages/security/SecurityCompliance"),
+  SecurityRules: () => import("./pages/security/SecurityRules"),
+  SecuritySavedViews: () => import("./pages/security/SavedViews"),
   NewMonitor: () => import("./pages/NewMonitor"),
   CommandCenter: () => import("./pages/CommandCenter"),
   ActionQueue: () => import("./pages/ActionQueue"),
@@ -78,7 +84,6 @@ const Wireless = lazy(ROUTE_CHUNKS["Wireless"] as () => Promise<{ default: React
 const BgpOspf = lazy(ROUTE_CHUNKS["BgpOspf"] as () => Promise<{ default: React.ComponentType<any> }>);
 const BgpOps = lazy(ROUTE_CHUNKS["BgpOps"] as () => Promise<{ default: React.ComponentType<any> }>);
 const Troubleshooting = lazy(ROUTE_CHUNKS["Troubleshooting"] as () => Promise<{ default: React.ComponentType<any> }>);
-const ThreatDetection = lazy(ROUTE_CHUNKS["ThreatDetection"] as () => Promise<{ default: React.ComponentType<any> }>);
 const Events = lazy(ROUTE_CHUNKS["Events"] as () => Promise<{ default: React.ComponentType<any> }>);
 const Correlations = lazy(ROUTE_CHUNKS["Correlations"] as () => Promise<{ default: React.ComponentType<any> }>);
 const RcaReports = lazy(ROUTE_CHUNKS["RcaReports"] as () => Promise<{ default: React.ComponentType<any> }>);
@@ -124,7 +129,13 @@ const IncidentPoliciesAdmin = lazy(() => import("./tabs/admin").then((m) => ({ d
 const GraphQLExplorer = lazy(() => import("./tabs/admin").then((m) => ({ default: m.GraphQLExplorer })));
 const DashboardList = lazy(() => import("./pages/Placeholders").then((m) => ({ default: m.DashboardList })));
 const VulnerabilityManagement = lazy(ROUTE_CHUNKS["VulnerabilityManagement"] as () => Promise<{ default: React.ComponentType<any> }>);
-const ComplianceMonitoring = lazy(ROUTE_CHUNKS["ComplianceMonitoring"] as () => Promise<{ default: React.ComponentType<any> }>);
+const SecurityOverview = lazy(ROUTE_CHUNKS["SecurityOverview"] as () => Promise<{ default: React.ComponentType<any> }>);
+const SecurityExposures = lazy(ROUTE_CHUNKS["SecurityExposures"] as () => Promise<{ default: React.ComponentType<any> }>);
+const SecurityExposureStories = lazy(ROUTE_CHUNKS["SecurityExposureStories"] as () => Promise<{ default: React.ComponentType<any> }>);
+const SecurityThreatDetection = lazy(ROUTE_CHUNKS["SecurityThreatDetection"] as () => Promise<{ default: React.ComponentType<any> }>);
+const SecurityCompliance = lazy(ROUTE_CHUNKS["SecurityCompliance"] as () => Promise<{ default: React.ComponentType<any> }>);
+const SecurityRules = lazy(ROUTE_CHUNKS["SecurityRules"] as () => Promise<{ default: React.ComponentType<any> }>);
+const SecuritySavedViews = lazy(ROUTE_CHUNKS["SecuritySavedViews"] as () => Promise<{ default: React.ComponentType<any> }>);
 const NewMonitor = lazy(ROUTE_CHUNKS["NewMonitor"] as () => Promise<{ default: React.ComponentType<any> }>);
 const CommandCenter = lazy(ROUTE_CHUNKS["CommandCenter"] as () => Promise<{ default: React.ComponentType<any> }>);
 // Nav-redesign promotions (2026-08, owner tree): the extracted Action Queue
@@ -285,15 +296,37 @@ export const NAV: NavSection[] = [
       { id: "saved", label: "Saved Searches", render: () => <SavedSearches /> },
     ],
   },
-  // ── Security — vulnerability, threat and compliance posture ─────────────────
+  // ── Security — the CTEM section (P3-T8) ─────────────────────────────────────
+  // Scope → Discover → Prioritize → Validate → Mobilize, rendered as product.
+  // The three pre-existing leaves keep their ids (legacy deep links resolve
+  // unchanged): "threat" and "compliance" now open the EVOLVED views that carry
+  // the old boards as a sub-view, and "vuln" is untouched.
   {
     id: "security",
     label: "Security",
     icon: "shield",
     children: [
+      { id: "overview", label: "Security Overview", render: () => <SecurityOverview /> },
+      { id: "exposures", label: "Exposures", render: () => <SecurityExposures /> },
+      { id: "stories", label: "Exposure Stories", render: () => <SecurityExposureStories /> },
       { id: "vuln", label: "Vulnerabilities", render: () => <VulnerabilityManagement /> },
-      { id: "threat", label: "Threat Detection", render: (c) => <ThreatDetection sinceSeconds={c.rangeMinutes * 60} /> },
-      { id: "compliance", label: "Compliance Monitoring", render: () => <ComplianceMonitoring /> },
+      {
+        id: "threat", label: "Threat Detection",
+        render: (c) => <SecurityThreatDetection sinceSeconds={c.rangeMinutes * 60} />,
+        subItems: [
+          { id: "detections", label: "Detections" },
+          { id: "behavior", label: "Network Behavior" },
+        ],
+      },
+      {
+        id: "compliance", label: "Compliance", render: () => <SecurityCompliance />,
+        subItems: [
+          { id: "controls", label: "Control set" },
+          { id: "drift", label: "Drift & baselines" },
+        ],
+      },
+      { id: "rules", label: "Detection Rules", group: "Configuration", render: () => <SecurityRules /> },
+      { id: "views", label: "Saved Views", group: "Configuration", render: () => <SecuritySavedViews /> },
     ],
   },
   // ── Analytics — boards, reports and management trend views ──────────────────

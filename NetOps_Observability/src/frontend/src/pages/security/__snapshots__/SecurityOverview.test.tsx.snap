@@ -1,0 +1,951 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`Security Overview — snapshot > matches the rendered posture page for the fixture set 1`] = `
+<div
+  class="sec dm-board"
+>
+  <details
+    class="dm-group"
+    open=""
+  >
+    <summary
+      class="dm-group-head"
+      style="--g: #e11d48;"
+    >
+      <svg
+        aria-hidden="true"
+        class="dm-group-chevron"
+        fill="none"
+        height="14"
+        stroke="currentColor"
+        stroke-linecap="round"
+        stroke-linejoin="round"
+        stroke-width="1.75"
+        viewBox="0 0 24 24"
+        width="14"
+      >
+        <path
+          d="m9 6 6 6-6 6"
+        />
+      </svg>
+      <span>
+        Exposure pipeline
+      </span>
+    </summary>
+    <div
+      class="dm-group-body"
+    >
+      <div
+        class="sec-band"
+      >
+        <section
+          aria-label="Assessment coverage"
+          class="sec-card sec-coverage"
+        >
+          <div
+            class="sec-eyebrow"
+          >
+            Assessment coverage
+          </div>
+          <div
+            class="sec-cov-num"
+          >
+            75
+            <small>
+              %
+            </small>
+          </div>
+          <div
+            class="sec-cov-lbl"
+          >
+            1900 of 2547 assets assessed · 647 unassessed (unknown, not clear)
+          </div>
+          <div
+            class="sec-cov-bar"
+          >
+            <i
+              style="width: 75%;"
+            />
+          </div>
+          <p
+            class="mini-meta"
+            style="margin: 8px 0px 0px;"
+          >
+            647
+             asset
+            s
+             were never assessed. Absence of a finding on them means 
+            <span
+              class="sec-unassessed"
+            >
+              unknown
+            </span>
+            , not safe.
+          </p>
+        </section>
+        <ol
+          aria-label="Continuous threat exposure management pipeline"
+          class="sec-funnel"
+        >
+          <li
+            class="sec-stage"
+          >
+            <span
+              class="k"
+            >
+              Scope
+            </span>
+            <span
+              class="v"
+            >
+              2,547
+            </span>
+            <span
+              class="d"
+            >
+              assets in scope
+            </span>
+            <span
+              class="r"
+            >
+              —
+            </span>
+          </li>
+          <li
+            class="sec-stage"
+          >
+            <span
+              class="k"
+            >
+              Discover
+            </span>
+            <span
+              class="v"
+            >
+              1,284
+            </span>
+            <span
+              class="d"
+            >
+              current findings
+            </span>
+            <span
+              class="r"
+            >
+              50% of previous stage
+            </span>
+          </li>
+          <li
+            class="sec-stage"
+          >
+            <span
+              class="k"
+            >
+              Prioritize
+            </span>
+            <span
+              class="v"
+            >
+              47
+            </span>
+            <span
+              class="d"
+            >
+              high or critical
+            </span>
+            <span
+              class="r"
+            >
+              4% of previous stage
+            </span>
+          </li>
+          <li
+            class="sec-stage is-validate"
+          >
+            <span
+              class="tag"
+            >
+              live
+            </span>
+            <span
+              class="k"
+            >
+              Validate
+            </span>
+            <span
+              class="v"
+            >
+              12
+            </span>
+            <span
+              class="d"
+            >
+              live-confirmed reachable
+            </span>
+            <span
+              class="r"
+            >
+              26% of previous stage
+            </span>
+          </li>
+          <li
+            class="sec-stage"
+          >
+            <span
+              class="k"
+            >
+              Mobilize
+            </span>
+            <span
+              class="v"
+            >
+              5
+            </span>
+            <span
+              class="d"
+            >
+              owner assigned
+            </span>
+            <span
+              class="r"
+            >
+              42% of previous stage
+            </span>
+          </li>
+        </ol>
+      </div>
+      <p
+        class="mini-meta"
+        role="status"
+        style="margin: 0px;"
+      >
+        Last assessment 
+        Sep 01, 10:00:00 UTC
+         · scan 
+        scan-7
+      </p>
+    </div>
+  </details>
+  <details
+    class="dm-group"
+    open=""
+  >
+    <summary
+      class="dm-group-head"
+      style="--g: #0ea5e9;"
+    >
+      <svg
+        aria-hidden="true"
+        class="dm-group-chevron"
+        fill="none"
+        height="14"
+        stroke="currentColor"
+        stroke-linecap="round"
+        stroke-linejoin="round"
+        stroke-width="1.75"
+        viewBox="0 0 24 24"
+        width="14"
+      >
+        <path
+          d="m9 6 6 6-6 6"
+        />
+      </svg>
+      <span>
+        Exposure story
+      </span>
+    </summary>
+    <div
+      class="dm-group-body"
+    >
+      <section
+        aria-labelledby="sec-hero-h"
+        class="sec-hero"
+      >
+        <div
+          class="sec-eyebrow"
+        >
+          Exposure story · flagship
+        </div>
+        <h3
+          id="sec-hero-h"
+        >
+          core-01's management plane is reachable from the ISP seam
+        </h3>
+        <p
+          class="sec-sub"
+        >
+          One narrative, not four alerts — the engine folded 
+          14
+           observation
+          s
+           across 
+          3
+           entit
+          ies
+           into a single seam-owned story.
+        </p>
+        <div
+          class="sec-hero-grid"
+        >
+          <div>
+            <p
+              class="mini-meta"
+              style="margin: 0px;"
+            >
+              The chronology for this story has not loaded — open the full story for its causality path.
+            </p>
+          </div>
+          <div>
+            <div
+              class="sec-owner"
+            >
+              <div
+                class="sec-eyebrow"
+              >
+                Ownership
+              </div>
+              <div
+                class="seam-name"
+              >
+                isp
+              </div>
+              <div
+                class="who"
+              >
+                Verdict 
+                suspected
+                 · engine 
+                e-2026.09
+              </div>
+              <div
+                class="conf"
+              >
+                Confidence: 
+                72%
+                 · grounded on seam+topo
+              </div>
+              <div
+                class="sec-chips"
+              >
+                <span
+                  class="sec-chip"
+                >
+                  active
+                </span>
+                <span
+                  class="sec-chip k"
+                >
+                  seam+topo
+                </span>
+                <span
+                  class="sec-chip"
+                >
+                  3
+                   planes
+                </span>
+              </div>
+            </div>
+            <div
+              class="sec-hero-cta"
+            >
+              <button
+                class="btn accent"
+              >
+                Open the full story
+              </button>
+            </div>
+          </div>
+        </div>
+      </section>
+    </div>
+  </details>
+  <details
+    class="dm-group"
+    open=""
+  >
+    <summary
+      class="dm-group-head"
+      style="--g: #8b5cf6;"
+    >
+      <svg
+        aria-hidden="true"
+        class="dm-group-chevron"
+        fill="none"
+        height="14"
+        stroke="currentColor"
+        stroke-linecap="round"
+        stroke-linejoin="round"
+        stroke-width="1.75"
+        viewBox="0 0 24 24"
+        width="14"
+      >
+        <path
+          d="m9 6 6 6-6 6"
+        />
+      </svg>
+      <span>
+        Evidence, by class
+      </span>
+    </summary>
+    <div
+      class="dm-group-body"
+    >
+      <div
+        class="sec-lanes"
+      >
+        <section
+          aria-label="Hardening & posture"
+          class="sec-card"
+        >
+          <div
+            class="sec-lane-h"
+          >
+            <h3
+              class="t"
+              style="margin: 0px;"
+            >
+              Hardening & posture
+            </h3>
+            <span
+              class="badge bad"
+            >
+              3 current
+            </span>
+          </div>
+          <button
+            class="sec-row"
+            type="button"
+          >
+            <span
+              aria-hidden="true"
+              class="sec-stripe t-bad"
+            />
+            <span
+              class="main"
+            >
+              <b>
+                Non-TLS HTTP server
+              </b>
+              <span
+                class="sub"
+              >
+                edge-02 · Juniper Junos 22.4
+              </span>
+            </span>
+            <span
+              class="fix"
+            >
+              delete system services web-management http
+            </span>
+          </button>
+          <button
+            class="sec-row"
+            type="button"
+          >
+            <span
+              aria-hidden="true"
+              class="sec-stripe t-warn"
+            />
+            <span
+              class="main"
+            >
+              <b>
+                SNMP v2c community
+              </b>
+              <span
+                class="sub"
+              >
+                spine-01 · Nokia SR Linux
+                 · seam ISP
+              </span>
+            </span>
+            <span
+              class="fix"
+            >
+              snmp v3 authPriv
+            </span>
+          </button>
+        </section>
+        <section
+          aria-label="Seam exposure"
+          class="sec-card"
+        >
+          <div
+            class="sec-lane-h"
+          >
+            <h3
+              class="t"
+              style="margin: 0px;"
+            >
+              Seam exposure
+            </h3>
+            <span
+              class="badge bad"
+            >
+              1 current
+            </span>
+          </div>
+          <button
+            class="sec-row"
+            type="button"
+          >
+            <span
+              aria-hidden="true"
+              class="sec-stripe t-bad"
+            />
+            <span
+              class="main"
+            >
+              <b>
+                Telnet on VTY — ISP seam
+              </b>
+              <span
+                class="sub"
+              >
+                core-01 · Cisco IOS-XE 17.9
+                 · seam ISP
+              </span>
+            </span>
+            <span
+              class="fix"
+            >
+              transport input ssh
+            </span>
+          </button>
+        </section>
+        <section
+          aria-label="Threat detections"
+          class="sec-card"
+        >
+          <div
+            class="sec-lane-h"
+          >
+            <h3
+              class="t"
+              style="margin: 0px;"
+            >
+              Threat detections
+            </h3>
+            <span
+              class="badge bad"
+            >
+              1 current
+            </span>
+          </div>
+          <button
+            class="sec-row"
+            type="button"
+          >
+            <span
+              aria-hidden="true"
+              class="sec-stripe t-bad"
+            />
+            <span
+              class="main"
+            >
+              <b>
+                Outbound beacon to a rare destination
+              </b>
+              <span
+                class="sub"
+              >
+                core-01
+                 · seam ISP
+              </span>
+            </span>
+            <span
+              class="fix"
+            >
+              transport input ssh
+            </span>
+          </button>
+        </section>
+        <section
+          aria-label="Standards coverage"
+          class="sec-card"
+        >
+          <div
+            class="sec-lane-h"
+          >
+            <h3
+              class="t"
+              style="margin: 0px;"
+            >
+              Standards coverage
+            </h3>
+            <span
+              class="badge "
+            >
+              3 tagged
+            </span>
+          </div>
+          <div>
+            <div
+              class="sec-row"
+              style="cursor: default;"
+            >
+              <span
+                aria-hidden="true"
+                class="sec-stripe"
+              />
+              <span
+                class="main"
+              >
+                <b>
+                  CIS
+                </b>
+                <span
+                  class="sub"
+                >
+                  tagged hardening findings
+                </span>
+              </span>
+              <span
+                class="fix"
+              >
+                3
+              </span>
+            </div>
+            <div
+              class="sec-row"
+              style="cursor: default;"
+            >
+              <span
+                aria-hidden="true"
+                class="sec-stripe"
+              />
+              <span
+                class="main"
+              >
+                <b>
+                  NIST-CSF
+                </b>
+                <span
+                  class="sub"
+                >
+                  tagged hardening findings
+                </span>
+              </span>
+              <span
+                class="fix"
+              >
+                1
+              </span>
+            </div>
+            <div
+              class="sec-row"
+              style="cursor: default;"
+            >
+              <span
+                aria-hidden="true"
+                class="sec-stripe"
+              />
+              <span
+                class="main"
+              >
+                <b>
+                  PCI-DSS
+                </b>
+                <span
+                  class="sub"
+                >
+                  tagged hardening findings
+                </span>
+              </span>
+              <span
+                class="fix"
+              >
+                1
+              </span>
+            </div>
+            <p
+              class="mini-meta"
+              style="margin: 8px 0px 0px;"
+            >
+              Counts of hardening findings on the tagged control set — not a framework compliance verdict.
+            </p>
+          </div>
+        </section>
+      </div>
+    </div>
+  </details>
+  <details
+    class="dm-group"
+    open=""
+  >
+    <summary
+      class="dm-group-head"
+      style="--g: #f59e0b;"
+    >
+      <svg
+        aria-hidden="true"
+        class="dm-group-chevron"
+        fill="none"
+        height="14"
+        stroke="currentColor"
+        stroke-linecap="round"
+        stroke-linejoin="round"
+        stroke-width="1.75"
+        viewBox="0 0 24 24"
+        width="14"
+      >
+        <path
+          d="m9 6 6 6-6 6"
+        />
+      </svg>
+      <span>
+        Exposure by seam
+      </span>
+    </summary>
+    <div
+      class="dm-group-body"
+    >
+      <div
+        class="sec-seams"
+      >
+        <div
+          class="sec-seam"
+        >
+          <span
+            aria-hidden="true"
+            class="edge t-bad"
+          />
+          <div
+            class="nm"
+          >
+            ISP
+          </div>
+          <div
+            class="ct"
+          >
+            2
+          </div>
+          <div
+            class="ow"
+          >
+            open findings · isp
+          </div>
+        </div>
+        <div
+          class="sec-seam"
+        >
+          <span
+            aria-hidden="true"
+            class="edge t-bad"
+          />
+          <div
+            class="nm"
+          >
+            Internet
+          </div>
+          <div
+            class="ct"
+          >
+            1
+          </div>
+          <div
+            class="ow"
+          >
+            open findings · enterprise
+          </div>
+        </div>
+        <div
+          class="sec-seam"
+        >
+          <span
+            aria-hidden="true"
+            class="edge "
+          />
+          <div
+            class="nm"
+          >
+            SaaS
+          </div>
+          <div
+            class="ct sec-unassessed"
+          >
+            —
+          </div>
+          <div
+            class="ow"
+          >
+            unassessed
+          </div>
+        </div>
+      </div>
+      <p
+        class="mini-meta"
+        style="margin: 0px;"
+      >
+        Where the estate meets untrusted networks, and who owns each boundary. A seam with no assessment shows 
+        <span
+          class="sec-unassessed"
+        >
+          —
+        </span>
+        , never a zero.
+      </p>
+    </div>
+  </details>
+  <details
+    class="dm-group"
+    open=""
+  >
+    <summary
+      class="dm-group-head"
+      style="--g: #14b8a6;"
+    >
+      <svg
+        aria-hidden="true"
+        class="dm-group-chevron"
+        fill="none"
+        height="14"
+        stroke="currentColor"
+        stroke-linecap="round"
+        stroke-linejoin="round"
+        stroke-width="1.75"
+        viewBox="0 0 24 24"
+        width="14"
+      >
+        <path
+          d="m9 6 6 6-6 6"
+        />
+      </svg>
+      <span>
+        Verdict trend
+      </span>
+    </summary>
+    <div
+      class="dm-group-body"
+    >
+      <div
+        class="panel"
+        style="min-width: 0;"
+      >
+        <div
+          class="panel-tools"
+        >
+          <h3
+            class="panel-zoomable"
+            title="Click to enlarge"
+          >
+            Fail / warning / pass per day
+          </h3>
+          <button
+            aria-label="Enlarge Fail / warning / pass per day"
+            class="panel-zoom-btn"
+            title="Enlarge"
+          >
+            ⤢
+          </button>
+        </div>
+        <table
+          aria-label="Verdict trend by day"
+          class="ds-table"
+        >
+          <thead>
+            <tr>
+              <th
+                scope="col"
+              >
+                Day
+              </th>
+              <th
+                scope="col"
+              >
+                Fail
+              </th>
+              <th
+                scope="col"
+              >
+                Warning
+              </th>
+              <th
+                scope="col"
+              >
+                Pass
+              </th>
+              <th
+                scope="col"
+              >
+                Total
+              </th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <th
+                scope="row"
+                style="font-weight: 500; text-align: left;"
+              >
+                2026-08-30
+              </th>
+              <td>
+                5
+              </td>
+              <td>
+                2
+              </td>
+              <td>
+                30
+              </td>
+              <td>
+                37
+              </td>
+            </tr>
+            <tr>
+              <th
+                scope="row"
+                style="font-weight: 500; text-align: left;"
+              >
+                2026-08-31
+              </th>
+              <td>
+                4
+              </td>
+              <td>
+                3
+              </td>
+              <td>
+                31
+              </td>
+              <td>
+                38
+              </td>
+            </tr>
+            <tr>
+              <th
+                scope="row"
+                style="font-weight: 500; text-align: left;"
+              >
+                2026-09-01
+              </th>
+              <td>
+                4
+              </td>
+              <td>
+                1
+              </td>
+              <td>
+                32
+              </td>
+              <td>
+                37
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <p
+        class="mini-meta"
+        style="margin: 0px;"
+      >
+        5
+         current findings across 
+        3
+         scored seams.
+      </p>
+    </div>
+  </details>
+</div>
+`;
