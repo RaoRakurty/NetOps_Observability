@@ -15,9 +15,11 @@
 // SHAPE (mirrors internal/hardening and internal/threatlane): a rules-as-code
 // CATALOG (the issue→command-bundle matrix, version-pinned), a command SOURCE
 // behind a NARROW injected interface (CommandRunner) with an in-memory stub, and
-// an Analyze engine of hand-authored signatures. The real command source is the
-// dormant device SSH gateway (FEATURE_DEVICE_SSH, device_ssh.go) / gNMI, wired at
-// deploy time (see the TODO(deploy) markers on CommandRunner). It is a pure,
+// an Analyze engine of hand-authored signatures. The real command source is
+// SSHCommandRunner over SSHGateway (sshrunner.go / sshgw.go) — the same vendored
+// ssh client and the same pinned host-key custody the operator terminal uses —
+// wired by the integrator behind FEATURE_PROTOCOL_DIAG_COLLECT (env.go) and
+// DORMANT by default. It is a pure,
 // deterministic LIBRARY: no goroutines, no shared mutable state (safe under -race
 // by construction), no HTTP handler, no store — so it ships no org_isolation_test
 // (there is no data-returning surface to leak; see the commit note). §3a is still
@@ -175,6 +177,13 @@ type Device struct {
 	Hostname string
 	// Platform is the free-form platform string used to derive the dialect.
 	Platform string
+	// Address is the management address the LIVE command source dials. It is
+	// empty for the in-memory/stub runners (which never reach a network) and is
+	// populated at the call site from the same principal-scoped inventory row the
+	// device SSH gateway uses. Never taken from a request body.
+	Address string
+	// Port is the device SSH port; 0 means "use the gateway's default".
+	Port int
 	// TenantID is the owning tenant, resolved upstream from the authenticated
 	// principal's device lookup. It is stamped onto the Collection.
 	TenantID string

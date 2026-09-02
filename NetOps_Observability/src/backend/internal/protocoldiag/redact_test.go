@@ -222,3 +222,77 @@ func TestTACExport_UnmatchedHonest(t *testing.T) {
 		t.Errorf("unmatched export missing honest message:\n%s", blob)
 	}
 }
+
+// TestRedact_RoutingProtocolSecretCanaries pins the exact secret SHAPES a
+// routing-protocol capture carries. These are canaries, not examples: each line
+// is one that a real `show run | section router bgp` / `show isis interface`
+// capture reliably contains, and each must come back with the KNOB visible and
+// the VALUE masked. A non-secret line on either side must survive untouched, so
+// a failure here is unambiguous — over-redaction is as much a bug as under.
+func TestRedact_RoutingProtocolSecretCanaries(t *testing.T) {
+	cases := []struct {
+		name   string
+		line   string
+		secret string // must NOT survive
+		keep   string // must survive (the knob, so TAC still sees which one)
+	}{
+		{"bgp neighbor type-7 password",
+			" neighbor 10.0.0.1 password 7 094F471A1A0A", "094F471A1A0A", "password"},
+		{"bgp neighbor cleartext password",
+			" neighbor 10.0.0.1 password S3cr3tPeerPass", "S3cr3tPeerPass", "neighbor 10.0.0.1"},
+		{"ospf interface authentication-key",
+			" ip ospf authentication-key 7 110A1016141D", "110A1016141D", "authentication-key"},
+		{"junos authentication-key",
+			"    authentication-key \"$9$abcDEF123\"; ## SECRET-DATA", "$9$abcDEF123", "authentication-key"},
+		{"isis key-chain key-string",
+			"  key-string 7 05080F1C2243", "05080F1C2243", "key-string"},
+		{"isis md5 key",
+			" isis authentication key-chain md5 IsIsMd5Secret", "IsIsMd5Secret", "md5"},
+		{"snmp community",
+			"snmp-server community Str1ctlyPr1vate RO", "Str1ctlyPr1vate", "snmp-server community"},
+	}
+	untouched := []string{
+		" router bgp 65001",
+		"  neighbor 10.0.0.1 remote-as 65002",
+		"  neighbor 10.0.0.1 send-community both",
+		" ip ospf network point-to-point",
+		"  MTU is 1500 bytes",
+	}
+
+	var lines []string
+	for _, c := range cases {
+		lines = append(lines, c.line)
+	}
+	lines = append(lines, untouched...)
+	raw := strings.Join(lines, "\n")
+
+	col := &Collection{
+		DeviceID: "dev-1", Hostname: "core-01", Vendor: VendorCiscoIOSXE,
+		RenderedVendor: VendorCiscoIOSXE, Protocol: ProtocolBGP,
+		IssueID: "bgp-session-down", IssueTitle: "Session down",
+		RulesetVersion: RulesetVersion,
+		Commands: []CollectedCommand{
+			{SpecID: "bgp-neighbor", Command: "show ip bgp neighbors 10.0.0.1", Output: raw},
+		},
+	}
+	got := Redact(col).Commands[0].Output
+
+	for _, c := range cases {
+		if strings.Contains(got, c.secret) {
+			t.Errorf("%s: secret %q survived redaction:\n%s", c.name, c.secret, got)
+		}
+		if !strings.Contains(got, c.keep) {
+			t.Errorf("%s: knob %q was destroyed — TAC can no longer see which setting it was", c.name, c.keep)
+		}
+	}
+	for _, u := range untouched {
+		if !strings.Contains(got, u) {
+			t.Errorf("non-secret line %q was altered by redaction:\n%s", u, got)
+		}
+	}
+	// The original capture is untouched — the caller keeps the raw evidence for
+	// its own in-tenant use.
+	if !strings.Contains(col.Commands[0].Output, "094F471A1A0A") {
+		t.Error("Redact mutated the original capture")
+	}
+}

@@ -192,6 +192,8 @@ All three flags are `false` by default and the modules are inert until flipped
 | `FEATURE_PACKET_CAPTURE` | `false` | On-demand bounded `tcpdump` over the read-only SSH gateway, sealed at rest. Same preconditions as config backup |
 | `PCAP_KEEP` | `20` | Captures kept per device (duration/size ceilings are hard caps in code, not env knobs) |
 | `PCAP_SSH_USER` / `PCAP_SSH_PASSWORD` / `PCAP_SSH_KEY` / `PCAP_SSH_PORT` | *(empty)* / `22` | Capture identity, same shape as the config-backup account |
+| `FEATURE_PROTOCOL_DIAG_COLLECT` | `false` | Live BGP/OSPF/IS-IS collect on the Troubleshooting page: runs the curated read-only `show` bundle on a device over the same SSH gateway. Off = the collect endpoint returns 503; the catalog and paste-your-own-output analysis are unaffected |
+| `PROTOCOL_DIAG_SSH_USER` / `PROTOCOL_DIAG_SSH_PASSWORD` / `PROTOCOL_DIAG_SSH_KEY` / `PROTOCOL_DIAG_SSH_PORT` | *(empty)* / `22` | Dedicated least-privilege read-only diagnostics identity. All three unset ⇒ falls back to the `CONFIG_BACKUP_SSH_*` capture account; a partially set identity (user with no secret) is a hard error, never a silent fallback |
 | `PARSERCOV_MAX_LINES` | `200000` | Cap on one parser-coverage mining scan; a truncated run reports itself partial |
 | `CORRELATION_REPLICA_URLS` | *(empty)* | Explicit correlation replica base URLs to sum per-process parser counters over; empty = the single-replica default |
 | `CORR_SYSLOG_TOPIC` | `netops.syslog` | Point the syslog lane at a pre-screened topic instead of the raw one |

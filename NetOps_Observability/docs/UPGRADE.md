@@ -163,6 +163,9 @@ template list is missing, and this release adds the optional-module knobs:
 `CONFIG_BACKUP_SSH_KEY` / `CONFIG_BACKUP_SSH_PORT`, `PARSERCOV_MAX_LINES`,
 `CORRELATION_REPLICA_URLS`, `FEATURE_PACKET_CAPTURE` / `PCAP_KEEP` /
 `PCAP_SSH_USER` / `PCAP_SSH_PASSWORD` / `PCAP_SSH_KEY` / `PCAP_SSH_PORT`,
+`FEATURE_PROTOCOL_DIAG_COLLECT` / `PROTOCOL_DIAG_SSH_USER` /
+`PROTOCOL_DIAG_SSH_PASSWORD` / `PROTOCOL_DIAG_SSH_KEY` /
+`PROTOCOL_DIAG_SSH_PORT`,
 `CORR_SYSLOG_TOPIC` and `CORR_FIDELITY_WEIGHTING`. Every appended value equals the default compose
 already interpolates, so the upgrade is behaviour-neutral: both feature flags
 stay `false` until you flip them (see `docs/DEPLOY_LINUX.md` §5c for what each

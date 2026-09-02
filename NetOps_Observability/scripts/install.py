@@ -946,6 +946,19 @@ WATCHDOG_NTFY_TOPIC=
 #PCAP_SSH_KEY=
 #PCAP_SSH_PORT=22
 #
+# Protocol diagnostics — LIVE collect. The Troubleshooting page's BGP/OSPF/IS-IS
+# collect→analyze runs a curated bundle of READ-ONLY `show` commands against the
+# device you pick, over the SAME read-only SSH gateway and pinned host-key
+# custody as config backup. With the flag off the collect button returns an
+# honest 503; the catalog and the paste-your-own-output analysis still work
+# (neither touches a device). NEEDS a least-privilege read-only account —
+# leaving PROTOCOL_DIAG_SSH_* empty reuses the CONFIG_BACKUP_SSH_* one.
+#FEATURE_PROTOCOL_DIAG_COLLECT=true
+#PROTOCOL_DIAG_SSH_USER=
+#PROTOCOL_DIAG_SSH_PASSWORD=
+#PROTOCOL_DIAG_SSH_KEY=
+#PROTOCOL_DIAG_SSH_PORT=22
+#
 # Parser-coverage mining bound (one run's OpenSearch scan) and the explicit
 # correlation replica list the per-process parser counters are summed over
 # (empty = the single-replica default, which falls back to CORRELATION_URL).

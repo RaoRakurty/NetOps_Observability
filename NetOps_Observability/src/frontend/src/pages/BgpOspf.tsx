@@ -1,6 +1,7 @@
 import {
   Group, MetricLine, MetricTop, MetricStat, fmtUptime,
 } from "../components/board/panels";
+import IgpAdjacencies from "./igp/IgpAdjacencies";
 
 // Routing protocols — BGP / OSPF / IS-IS session & adjacency health.
 //   BGP   is gNMI-OWNED per-device (single-contract): device_bgp_peer_state /
@@ -11,6 +12,16 @@ import {
 //   IS-IS is gNMI-owned (the fabric IGP — leaf↔spine L2): device_isis_adj_state,
 //         labelled {device, ifName, isis_level, isis_neighbor}.
 // Panels show "No data" until a device exposes the corresponding session/adjacency.
+//
+// ADVANCED OSPF / IS-IS (Project 4 D item 11) is the IgpAdjacencies block in
+// each IGP group. The PromQL stat panels below CANNOT be honest on their own:
+// `count(device_ospf_nbr_state != 8) or vector(0)` renders "0 neighbours not
+// full" both when every neighbour is full AND when nothing collects OSPF here.
+// The advanced view reads /api/protocols/{proto}/* instead, which reports an
+// uncollected source as "not collected" with the reason attached, joins the
+// live state to the syslog/trap adjacency-change history, and gives a
+// per-adjacency timeline and a per-device roll-up. Read the coverage strip
+// there before believing a zero anywhere on this page.
 
 const BGP_STATES = "1 idle · 2 connect · 3 active · 4 opensent · 5 openconfirm · 6 established";
 const OSPF_STATES = "1 down · 2 attempt · 3 init · 4 twoWay · 5 exchangeStart · 6 exchange · 7 loading · 8 full";
@@ -52,6 +63,7 @@ export default function BgpOspf({ rangeMinutes = 60 }: { rangeMinutes?: number }
           <MetricLine title="OSPF interface state over time" query="device_ospf_if_state" minutes={m} fmtY={(n) => `${n.toFixed(0)}`} labelKeys={["device", "index"]} stepped />
         </div>
         <p className="mini-meta" style={{ margin: 0 }}><strong>OSPF state</strong>: {OSPF_STATES}</p>
+        <IgpAdjacencies proto="ospf" />
       </Group>
 
       <Group title="IS-IS — fabric IGP" hue="#10B981">
@@ -65,6 +77,7 @@ export default function BgpOspf({ rangeMinutes = 60 }: { rangeMinutes?: number }
           <MetricLine title="IS-IS adjacencies by device" query="count by (device) (device_isis_adj_state == 3)" minutes={m} fmtY={(n) => `${n.toFixed(0)}`} labelKeys={["device"]} stepped />
         </div>
         <p className="mini-meta" style={{ margin: 0 }}><strong>IS-IS adjacency</strong>: {ISIS_STATES} · neighbour = IS-IS system-id</p>
+        <IgpAdjacencies proto="isis" />
       </Group>
     </div>
   );

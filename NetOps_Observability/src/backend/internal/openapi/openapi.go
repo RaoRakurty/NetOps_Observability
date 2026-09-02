@@ -81,6 +81,41 @@ var apiRoutes = []apiRoute{
 	{"GET", "/api/devices/{id}/pcap/{capture_id}", "Packet Capture", "One capture's status: running | stored | failed, with packets, bytes and the filter it ran with"},
 	{"GET", "/api/devices/{id}/pcap/{capture_id}/download", "Packet Capture", "Stream the unsealed capture as application/vnd.tcpdump.pcap (infrastructure:write; audited as a sensitive reveal)"},
 	{"DELETE", "/api/devices/{id}/pcap/{capture_id}", "Packet Capture", "Delete a capture and its sealed blob (infrastructure:write; audited)"},
+	// Routing-protocol diagnostics (Troubleshooting item 7, internal/protocoldiag).
+	// A version-pinned, hand-authored ruleset: 15 issues across BGP/OSPF/IS-IS,
+	// each with a curated READ-ONLY command bundle rendered in the device's
+	// dialect. Collect runs the bundle against one of the caller's OWN devices
+	// (infrastructure:write, cross-tenant id → 404, audited `sensitive`) and
+	// returns SECRET-REDACTED output; analyze and export are stateless
+	// computations over operator-supplied text.
+	{"GET", "/api/troubleshoot/protocol-diagnostics/catalog", "Troubleshooting", "The 15-issue BGP/OSPF/IS-IS matrix: symptoms, dialect coverage and the per-issue read-only command bundle (?vendor= picks the rendered dialect)"},
+	{"POST", "/api/troubleshoot/protocol-diagnostics/analyze", "Troubleshooting", "Run the failure signatures over supplied `show` output; returns the verdict + cause + remediation, or an honest \"no known signature matched\" (infrastructure:read)"},
+	{"POST", "/api/troubleshoot/protocol-diagnostics/collect", "Troubleshooting", "Run an issue's read-only command bundle against one of the caller's own devices; output is secret-redacted (infrastructure:write; 503 when no command source is wired)"},
+	{"POST", "/api/troubleshoot/protocol-diagnostics/export", "Troubleshooting", "Assemble the redacted \"Send to TAC\" bundle from supplied outputs, optionally with the signature analysis folded in (infrastructure:read; audited)"},
+	// OSPF / IS-IS advanced monitoring (Project 4 D item 11, internal/igpmon).
+	// READ-ONLY: the module collects nothing and invents nothing. Adjacency
+	// HISTORY comes from the typed syslog/trap adjacency-change signals on the
+	// correlation spine (always available); adjacency STATE NOW comes from the
+	// live series, which exists only where a collector actually emits one
+	// (device_isis_adj_state over gNMI, device_ospf_nbr_state over SNMP
+	// OSPF-MIB) — so on a deployment with no such device there is no live OSPF
+	// series at all. LSDB/LSP counts, OSPF areas and IS-IS area addresses are
+	// collected by NOTHING today.
+	//
+	// The coverage contract: every response carries coverage{events,
+	// live_series, lsdb} and a `notes` list. A source that is not collected is
+	// reported ABSENT — null plus a note naming why — NEVER as a zero and never
+	// as "healthy". A fabricated "0 adjacencies down" from a protocol nobody is
+	// watching is exactly the number an operator would wrongly act on.
+	//
+	// All three are per-tenant reads (infrastructure:read): events are read at
+	// the caller's ClickHouse tenant_scope and every metrics read carries the
+	// caller's device boundary as extra_filters[]. ?device= resolves through the
+	// principal-scoped inventory, so a foreign id and an absent id both answer
+	// 404 and existence is never revealed.
+	{"GET", "/api/protocols/{proto}/adjacencies", "Protocols", "Per-adjacency OSPF/IS-IS view for {proto} = ospf | isis: live state where a series exists, plus the windowed change timeline from syslog/trap events, keyset-paged (?device=, ?since= 1m..7d, ?limit= 1..1000, ?cursor=). `up` is null for an event-only adjacency — history is not evidence of the state right now"},
+	{"GET", "/api/protocols/{proto}/summary", "Protocols", "Fleet roll-up per device for {proto} = ospf | isis, worst-first by flap count (?since= 1m..7d, ?limit= 1..500). `adjacencies` / `down_adjacencies` are LIVE counts and are null without a live series; a partial roll-up says so in `notes` and `truncated`"},
+	{"GET", "/api/protocols/{proto}/health", "Protocols", "One device's IGP health for {proto} = ospf | isis: neighbour/up/down counts (null without a live series), IS-IS levels, adjacency changes, flap count and a stability score that always carries the basis it was computed from. `lsdb.lsp_count` and OSPF `areas` are null with a note — nothing collects them (?device= required, ?since= 1m..7d)"},
 	{"GET", "/api/tunnels", "Telemetry", "Overlay tunnel telemetry (IPsec/SD-WAN/GRE)"},
 	{"GET", "/api/flows/top", "Telemetry", "Top talkers (NetFlow/ClickHouse)"},
 	{"POST", "/api/logs/search", "Telemetry", "Search logs (OpenSearch)"},

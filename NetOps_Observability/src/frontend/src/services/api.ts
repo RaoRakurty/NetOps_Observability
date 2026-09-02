@@ -2363,6 +2363,139 @@ export type ProtocolDiagCollectRequest = {
   target: { interface: string; peer: string; prefix: string; vrf: string };
 };
 
+// ---- OSPF / IS-IS advanced monitoring (Project 4 D item 11) ---------------
+// GET /api/protocols/{ospf|isis}/{adjacencies,summary,health}. The backend
+// collects NOTHING for these routes: adjacency history comes from the typed
+// syslog/trap adjacency-change signals, adjacency state NOW comes from a live
+// series only where a collector actually emits one, and LSDB/LSP counts and
+// OSPF areas are collected by nothing at all today.
+//
+// THE COVERAGE CONTRACT, and the reason every count below is `| null`: an
+// absent source is reported ABSENT — null plus a note naming why — never as a
+// zero and never as "healthy". `0` here means "measured, and it is zero";
+// `null` means "nobody is watching". The UI must render those differently.
+
+export type IgpProto = "ospf" | "isis";
+
+/** Which evidence classes actually backed the response. */
+export type IgpCoverage = {
+  events: boolean;
+  live_series: boolean;
+  lsdb: boolean;
+};
+
+/** One adjacency-change signal, from syslog or an SNMP trap. */
+export type IgpEvent = {
+  ts: string;
+  signal_id: string;
+  device: string;
+  peer?: string;
+  ifname?: string;
+  state: "up" | "down" | "unknown";
+  severity: string;
+  source: string; // syslog | trap
+};
+
+/** One (device, neighbour) adjacency with its evidence. */
+export type IgpAdjacency = {
+  device: string;
+  peer?: string;
+  ifname?: string;
+  level?: string; // IS-IS L1/L2; absent for OSPF
+  vrf?: string;
+  /** Live decoded state, else the newest event's state, else null. */
+  current_state: string | null;
+  /** Where current_state came from. */
+  state_source: "live_series" | "events" | "none";
+  /** The LIVE verdict only — null for an event-only adjacency, because
+   *  history is not evidence that the adjacency is up right now. */
+  up: boolean | null;
+  last_change?: string;
+  flaps: number;
+  changes: number;
+  up_events: number;
+  down_events: number;
+  /** The window's events for this adjacency, NEWEST FIRST. */
+  timeline: IgpEvent[];
+};
+
+export type IgpAdjacenciesResponse = {
+  protocol: IgpProto;
+  device: string;
+  window_seconds: number;
+  since: string;
+  now: string;
+  adjacencies: IgpAdjacency[];
+  event_count: number;
+  coverage: IgpCoverage;
+  source: string; // events+live_series | events | live_series | none
+  notes: string[];
+  limit: number;
+  truncated: boolean;
+  next_cursor: string;
+};
+
+/** Per-device roll-up. The two live counts are null without a live series. */
+export type IgpDeviceSummary = {
+  device: string;
+  flaps: number;
+  changes: number;
+  up_events: number;
+  down_events: number;
+  last_change?: string;
+  adjacencies: number | null;
+  down_adjacencies: number | null;
+};
+
+export type IgpSummaryResponse = {
+  protocol: IgpProto;
+  window_seconds: number;
+  since: string;
+  now: string;
+  devices: IgpDeviceSummary[];
+  event_count: number;
+  coverage: IgpCoverage;
+  source: string;
+  notes: string[];
+  limit: number;
+  truncated: boolean;
+};
+
+/** The flap-rate verdict — always with the basis it was computed from. */
+export type IgpStability = {
+  flaps_per_hour: number;
+  score: number;
+  basis: string;
+};
+
+export type IgpHealthResponse = {
+  protocol: IgpProto;
+  device: string;
+  device_name: string;
+  window_seconds: number;
+  since: string;
+  now: string;
+  /** Null: OSPF area membership is collected by nothing today. */
+  areas: string[] | null;
+  /** IS-IS levels, derived from the live series' isis_level label. */
+  levels: string[] | null;
+  neighbor_count: number | null;
+  adjacencies_up: number | null;
+  adjacencies_down: number | null;
+  adjacency_changes: number;
+  flaps: number;
+  last_change: string;
+  stability: IgpStability;
+  lsdb: { lsp_count: number | null; note?: string };
+  coverage: IgpCoverage;
+  source: string;
+  notes: string[];
+};
+
+/** Window token accepted by ?since= — the server bounds it to 1m..7d and
+ *  REFUSES anything outside that (400), it does not silently clamp. */
+export type IgpWindow = string;
+
 export const api = {
   // ---- BGP Operations (item 10) ----
   bgpWatchlist: () => request<{ watchlist: BgpWatchEntry[] }>("/api/bgp/watchlist"),
@@ -3847,6 +3980,44 @@ export const api = {
     }
     await downloadResponse(res, pcapFileName(deviceId, captureId));
   },
+
+  // ---------- OSPF / IS-IS monitoring (Project 4 D item 11) ---------------
+  // All three need infrastructure:read. The device is resolved in the caller's
+  // own scope server-side: a foreign or unknown id answers 404 identically, so
+  // these calls are not an existence oracle. `since` and `limit` are REFUSED
+  // (400) rather than clamped when out of range — a caller that asked for 30
+  // days must learn it cannot have them.
+  /** Per-adjacency view. Omit `device` for the fleet; `cursor` pages the
+   *  event feed (the response carries next_cursor when truncated). */
+  igpAdjacencies: (proto: IgpProto, opts: { device?: string; since?: IgpWindow; limit?: number; cursor?: string } = {}) => {
+    const p = new URLSearchParams();
+    if (opts.device) p.set("device", opts.device);
+    if (opts.since) p.set("since", opts.since);
+    if (opts.limit) p.set("limit", String(opts.limit));
+    if (opts.cursor) p.set("cursor", opts.cursor);
+    const qs = p.toString();
+    return request<IgpAdjacenciesResponse>(
+      `/api/protocols/${encodeURIComponent(proto)}/adjacencies${qs ? `?${qs}` : ""}`,
+    );
+  },
+  /** Fleet roll-up per device, worst-first. Takes no device — it IS the fleet. */
+  igpSummary: (proto: IgpProto, opts: { since?: IgpWindow; limit?: number } = {}) => {
+    const p = new URLSearchParams();
+    if (opts.since) p.set("since", opts.since);
+    if (opts.limit) p.set("limit", String(opts.limit));
+    const qs = p.toString();
+    return request<IgpSummaryResponse>(
+      `/api/protocols/${encodeURIComponent(proto)}/summary${qs ? `?${qs}` : ""}`,
+    );
+  },
+  /** One device's IGP health. `device` is REQUIRED (400 without it). */
+  igpHealth: (proto: IgpProto, device: string, opts: { since?: IgpWindow } = {}) => {
+    const p = new URLSearchParams({ device });
+    if (opts.since) p.set("since", opts.since);
+    return request<IgpHealthResponse>(
+      `/api/protocols/${encodeURIComponent(proto)}/health?${p.toString()}`,
+    );
+  },
 };
 
 
@@ -5196,7 +5367,22 @@ export type SecSavedView = {
 };
 
 // ── Iris AI ───────────────────────────────────────────────────────────────
-export type AiCitation = { id: string; kind: string; label: string; href: string };
+// A citation is the evidence the answer stands on. IRIS Phase A adds the
+// PROVENANCE of that evidence — which read-only tool produced it and the ids it
+// returned — as OPTIONAL fields, so an older backend (which sends neither) and a
+// Phase-A backend both decode against this one type.
+export type AiCitation = {
+  id: string; kind: string; label: string; href: string;
+  tool?: string;      // the read-only IRIS tool that produced this evidence
+  ids?: string[];     // the object ids that tool returned
+};
+// The IRIS skill that answered, when the backend names one (Phase A). Absent on
+// an older backend — the UI renders the chip only when it is present, never a
+// placeholder.
+// `version` is an INTEGER on the wire (backend ai.SkillRef.Version is an int) —
+// typing it as a string made `v${version}` render from a value TypeScript
+// believed was text while the JSON carried a number.
+export type AiSkill = { name: string; version?: number; layer?: string };
 export type AiProblemExplanation = {
   problem_id: string;
   title: string;
@@ -5275,6 +5461,9 @@ export type AiAnswer = {
   module?: AiModuleHealth;
   navigation?: AiNavEntry[];
   citations: AiCitation[];
+  // IRIS Phase A — the answering skill's identity. Optional: a backend that
+  // does not send it renders no skill chip (never an invented one).
+  skill?: AiSkill;
   disclaimers: string[];
   provider?: string;
   // Universal Response-Quality fields (rendered as badges + sections).

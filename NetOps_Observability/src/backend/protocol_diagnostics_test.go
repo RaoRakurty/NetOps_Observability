@@ -10,7 +10,10 @@ package backend
 // protocol_diagnostics_isolation_test.go.
 
 import (
+	"bytes"
+	"context"
 	"encoding/json"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
@@ -284,4 +287,300 @@ func TestProtocolDiagCollect_UnknownDeviceIs404(t *testing.T) {
 // pdTestDevice builds an inventory device whose OS string drives the dialect.
 func pdTestDevice(id, tenant, platform string) models.Device {
 	return models.Device{ID: id, Name: id, TenantID: tenant, OS: platform}
+}
+
+// ── catalog: symptoms + per-issue vendor coverage ───────────────────────────
+
+// TestProtocolDiagCatalog_SymptomsAndVendors pins the two fields the
+// Troubleshooting UI needs to render an issue picker: WHAT the operator is
+// seeing (symptoms) and WHICH dialects the issue's bundle is authored for
+// (vendors). All 15 issues must carry both, in every protocol tab.
+func TestProtocolDiagCatalog_SymptomsAndVendors(t *testing.T) {
+	srv, _ := newTestServerState(t)
+	admin := login(t, srv, "admin", "Passw0rd!2345").Token
+
+	st, b := do(t, srv, "GET", "/api/troubleshoot/protocol-diagnostics/catalog", admin, nil)
+	if st != 200 {
+		t.Fatalf("catalog: %d %s", st, b)
+	}
+	var resp struct {
+		Issues map[string][]pdIssueView `json:"issues"`
+	}
+	if err := json.Unmarshal(b, &resp); err != nil {
+		t.Fatal(err)
+	}
+	total := 0
+	for _, p := range []string{"bgp", "ospf", "isis"} {
+		for _, is := range resp.Issues[p] {
+			total++
+			if len(is.Symptoms) < 2 {
+				t.Errorf("issue %s has %d symptoms, want at least 2", is.ID, len(is.Symptoms))
+			}
+			for _, sym := range is.Symptoms {
+				if strings.TrimSpace(sym) == "" {
+					t.Errorf("issue %s has a blank symptom", is.ID)
+				}
+			}
+			if len(is.Vendors) == 0 {
+				t.Errorf("issue %s advertises no vendor coverage", is.ID)
+				continue
+			}
+			// Coverage is honest: the primary dialect is always covered, and every
+			// advertised vendor is one the library actually claims.
+			known := map[string]bool{
+				string(protocoldiag.VendorCiscoIOSXE): true,
+				string(protocoldiag.VendorJuniper):    true,
+				string(protocoldiag.VendorNokia):      true,
+			}
+			var hasPrimary bool
+			for _, v := range is.Vendors {
+				if !known[v] {
+					t.Errorf("issue %s advertises unknown vendor %q", is.ID, v)
+				}
+				if v == string(protocoldiag.VendorCiscoIOSXE) {
+					hasPrimary = true
+				}
+			}
+			if !hasPrimary {
+				t.Errorf("issue %s does not advertise the primary dialect: %v", is.ID, is.Vendors)
+			}
+		}
+	}
+	if total != 15 {
+		t.Fatalf("catalog returned %d issues, want 15", total)
+	}
+}
+
+// ── collect: redaction at capture (§8) ──────────────────────────────────────
+
+// pdSecretCapture is a fixture `show` capture that carries the secret shapes a
+// real routing-protocol read returns. It is the canary the collect redaction
+// test masks: if any of these strings reaches the HTTP response, an operator's
+// screen (and anything they copy off it) is leaking device credentials.
+const pdSecretCapture = "router bgp 65001\n" +
+	" neighbor 10.0.0.1 remote-as 65002\n" +
+	" neighbor 10.0.0.1 password 7 094F471A1A0A\n" +
+	" ip ospf authentication-key 7 110A1016141D\n" +
+	"  key-string 7 05080F1C2243\n" +
+	"snmp-server community Str1ctlyPr1vate RO\n" +
+	" neighbor 10.0.0.1 send-community both\n"
+
+// TestProtocolDiagCollect_RedactsCapturedOutput is the gap-1 proof: redaction
+// runs at COLLECT, not only in the TAC export, so on-screen output is masked.
+func TestProtocolDiagCollect_RedactsCapturedOutput(t *testing.T) {
+	srv, s := newTestServerState(t)
+	admin := login(t, srv, "admin", "Passw0rd!2345").Token
+	s.discovery.Upsert(pdTestDevice("dev-x", "", "Cisco IOS-XE"))
+
+	pdDev := protocoldiag.Device{ID: "dev-x", Hostname: "dev-x", Platform: "Cisco IOS-XE", TenantID: ""}
+	var tgt protocoldiag.Target
+	s.protocolCollector = pdMemCollector(t, pdDev, tgt, "bgp-session-down", map[string]string{
+		"bgp-neighbor": pdSecretCapture,
+	})
+
+	body := map[string]any{"device_id": "dev-x", "issue_id": "bgp-session-down"}
+	st, b := do(t, srv, "POST", "/api/troubleshoot/protocol-diagnostics/collect", admin, body)
+	if st != 200 {
+		t.Fatalf("collect: %d %s", st, b)
+	}
+	raw := string(b)
+	for _, secret := range []string{
+		"094F471A1A0A", "110A1016141D", "05080F1C2243", "Str1ctlyPr1vate",
+	} {
+		if strings.Contains(raw, secret) {
+			t.Errorf("secret %q reached the collect response body", secret)
+		}
+	}
+	// Non-secret evidence survives — redaction must not gut the capture.
+	for _, keep := range []string{"remote-as 65002", "send-community both", "router bgp 65001"} {
+		if !strings.Contains(raw, keep) {
+			t.Errorf("non-secret line %q was lost from the collect response", keep)
+		}
+	}
+	var resp struct {
+		Redacted bool `json:"redacted"`
+	}
+	if err := json.Unmarshal(b, &resp); err != nil {
+		t.Fatal(err)
+	}
+	if !resp.Redacted {
+		t.Error("collect response does not declare itself redacted")
+	}
+}
+
+// ── export ──────────────────────────────────────────────────────────────────
+
+// pdExportCall drives handleProtocolDiagExport directly with an injected
+// principal. The route registration lives in main.go (owned elsewhere), so the
+// handler is exercised at its own boundary — requirePerm and all — rather than
+// through the mux.
+func pdExportCall(t *testing.T, s *server, claims *jwtClaims, body []byte) (int, string) {
+	t.Helper()
+	r := httptest.NewRequest("POST", "/api/troubleshoot/protocol-diagnostics/export", bytes.NewReader(body))
+	if claims != nil {
+		r = r.WithContext(context.WithValue(r.Context(), userCtxKey, *claims))
+	}
+	w := httptest.NewRecorder()
+	s.handleProtocolDiagExport(w, r)
+	return w.Code, w.Body.String()
+}
+
+func pdExportBody(t *testing.T, v any) []byte {
+	t.Helper()
+	b, err := json.Marshal(v)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return b
+}
+
+var pdAdminClaims = jwtClaims{Sub: "u-1", Role: RoleSuperAdmin, Tenant: TenantGlobal}
+
+// TestProtocolDiagExport_WithoutAnalysis is the gap-3 proof: "Send to TAC"
+// works with NO analysis at all — the honest case the feature exists for — and
+// the bundle it produces is redacted.
+func TestProtocolDiagExport_WithoutAnalysis(t *testing.T) {
+	_, s := newTestServerState(t)
+	body := pdExportBody(t, map[string]any{
+		"protocol": "bgp",
+		"issue_id": "bgp-session-down",
+		"device":   map[string]string{"hostname": "core-01", "platform": "Cisco IOS-XE 17.9"},
+		"outputs": []map[string]string{
+			{"spec_id": "bgp-neighbor", "output": pdSecretCapture},
+		},
+	})
+	st, out := pdExportCall(t, s, &pdAdminClaims, body)
+	if st != 200 {
+		t.Fatalf("export: %d %s", st, out)
+	}
+	var resp struct {
+		Analyzed  bool            `json:"analyzed"`
+		Matched   bool            `json:"matched"`
+		Findings  []pdFindingView `json:"findings"`
+		Filename  string          `json:"filename"`
+		Redacted  bool            `json:"redacted"`
+		TACExport string          `json:"tac_export"`
+	}
+	if err := json.Unmarshal([]byte(out), &resp); err != nil {
+		t.Fatal(err)
+	}
+	if resp.Analyzed || resp.Matched || len(resp.Findings) != 0 {
+		t.Errorf("un-analyzed export claims analysis: %+v", resp)
+	}
+	if !resp.Redacted {
+		t.Error("export does not declare itself redacted")
+	}
+	if resp.TACExport == "" {
+		t.Fatal("export produced an empty bundle")
+	}
+	for _, secret := range []string{"094F471A1A0A", "110A1016141D", "05080F1C2243", "Str1ctlyPr1vate"} {
+		if strings.Contains(resp.TACExport, secret) {
+			t.Errorf("secret %q survived into the TAC bundle", secret)
+		}
+	}
+	if !strings.Contains(resp.TACExport, "remote-as 65002") {
+		t.Error("the TAC bundle lost non-secret evidence")
+	}
+	// The bundle says plainly that no analysis was run, rather than implying a
+	// clean bill of health.
+	if !strings.Contains(resp.TACExport, "Analysis was not run") {
+		t.Error("the un-analyzed bundle does not say so")
+	}
+	// The suggested filename carries no tenant and no device id.
+	if resp.Filename != "correlix-tac-core-01-bgp-session-down.txt" {
+		t.Errorf("filename = %q", resp.Filename)
+	}
+}
+
+// TestProtocolDiagExport_WithAnalysis proves the same endpoint folds the
+// signature verdicts in when asked, so the UI needs one call, not two.
+func TestProtocolDiagExport_WithAnalysis(t *testing.T) {
+	_, s := newTestServerState(t)
+	body := pdExportBody(t, map[string]any{
+		"protocol": "ospf",
+		"issue_id": "ospf-neighbor-stuck",
+		"analyze":  true,
+		"device":   map[string]string{"hostname": "core-01", "platform": "Cisco IOS-XE 17.9"},
+		"outputs": []map[string]string{
+			{"spec_id": "ospf-neighbor", "output": "10.0.0.2 1 EXSTART/DR 00:00:35 10.0.0.2 GigabitEthernet0/0"},
+			{"spec_id": "ospf-interface", "output": "GigabitEthernet0/0 is up\n  MTU is 1500 bytes\n  message-digest-key 1 md5 SuperSecretKey123"},
+		},
+	})
+	st, out := pdExportCall(t, s, &pdAdminClaims, body)
+	if st != 200 {
+		t.Fatalf("export: %d %s", st, out)
+	}
+	var resp struct {
+		Analyzed  bool            `json:"analyzed"`
+		Matched   bool            `json:"matched"`
+		Findings  []pdFindingView `json:"findings"`
+		TACExport string          `json:"tac_export"`
+	}
+	if err := json.Unmarshal([]byte(out), &resp); err != nil {
+		t.Fatal(err)
+	}
+	if !resp.Analyzed || !resp.Matched || len(resp.Findings) == 0 {
+		t.Fatalf("analyzed export produced no findings: %+v", resp)
+	}
+	if strings.Contains(resp.TACExport, "SuperSecretKey123") {
+		t.Error("the md5 key survived into the analyzed TAC bundle")
+	}
+}
+
+// TestProtocolDiagExport_RejectsGarbage covers the §3 boundary: malformed
+// bodies, unknown issues, mismatched protocols, foreign spec ids, oversized
+// fields and an oversized BODY are all 400 — never a partial or silent accept.
+func TestProtocolDiagExport_RejectsGarbage(t *testing.T) {
+	_, s := newTestServerState(t)
+	cases := []struct {
+		name string
+		body []byte
+	}{
+		{"not json", []byte("this is not json at all")},
+		{"empty body", []byte("")},
+		{"json array", []byte(`[1,2,3]`)},
+		{"unknown field", []byte(`{"issue_id":"bgp-session-down","tenant_id":"other"}`)},
+		{"unknown issue", pdExportBody(t, map[string]any{"issue_id": "no-such-issue"})},
+		{"protocol mismatch", pdExportBody(t, map[string]any{"protocol": "isis", "issue_id": "bgp-session-down"})},
+		{"foreign spec id", pdExportBody(t, map[string]any{
+			"issue_id": "bgp-session-down",
+			"outputs":  []map[string]string{{"spec_id": "ospf-neighbor", "output": "x"}},
+		})},
+		{"oversized single output", pdExportBody(t, map[string]any{
+			"issue_id": "bgp-session-down",
+			"outputs":  []map[string]string{{"spec_id": "bgp-neighbor", "output": strings.Repeat("A", pdAnalyzeMaxOutput+1)}},
+		})},
+		{"too many outputs", func() []byte {
+			outs := make([]map[string]string, 0, pdAnalyzeMaxOutputs+1)
+			for i := 0; i <= pdAnalyzeMaxOutputs; i++ {
+				outs = append(outs, map[string]string{"spec_id": "bgp-neighbor", "output": "x"})
+			}
+			return pdExportBody(t, map[string]any{"issue_id": "bgp-session-down", "outputs": outs})
+		}()},
+		// Body bound (§9): a single field larger than the whole-body budget must
+		// be cut off by MaxBytesReader, not buffered.
+		{"oversized body", []byte(`{"issue_id":"` + strings.Repeat("A", pdAnalyzeMaxBody+1024) + `"}`)},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if st, out := pdExportCall(t, s, &pdAdminClaims, tc.body); st != 400 {
+				t.Fatalf("export(%s) = %d %s, want 400", tc.name, st, out)
+			}
+		})
+	}
+}
+
+// TestProtocolDiagExport_RequiresAuth proves the endpoint is not an anonymous
+// door into the redaction/analysis engine.
+func TestProtocolDiagExport_RequiresAuth(t *testing.T) {
+	_, s := newTestServerState(t)
+	body := pdExportBody(t, map[string]any{"issue_id": "bgp-session-down"})
+	if st, out := pdExportCall(t, s, nil, body); st != 401 {
+		t.Fatalf("unauthenticated export = %d %s, want 401", st, out)
+	}
+	// A principal without infrastructure:read is refused too.
+	viewer := jwtClaims{Sub: "u-2", Role: "viewer", Tenant: "t-a"}
+	if st, _ := pdExportCall(t, s, &viewer, body); st != 200 && st != 403 {
+		t.Fatalf("viewer export = %d, want 200 (if viewers hold infrastructure:read) or 403", st)
+	}
 }

@@ -5961,3 +5961,39 @@ button.cc-kpi-btn.on::after { content: "filtered"; display: block; margin-top: 5
 .pd-conf-good { color: var(--good); border-color: var(--good); }
 .pd-conf-warn { color: var(--warn); border-color: var(--warn); }
 .pd-conf-muted { color: var(--muted); }
+
+/* ── OSPF / IS-IS advanced monitoring (Project 4 D item 11) ─────────────────
+   The coverage strip is the point of this block: a source that is NOT
+   collected must read as an explicit, muted "not collected" — never as a
+   green tick and never as a zero. So `not collected` is styled as absence
+   (muted, dashed) rather than as a failure (red), because "nobody is
+   watching this" is not an outage. */
+.igp-view { display: grid; gap: var(--sp-2); margin-top: var(--sp-2); }
+.igp-controls { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-2); }
+.igp-device-pick { display: inline-flex; align-items: center; gap: 6px; }
+.igp-device-pick select {
+  padding: 4px 8px; border: 1px solid var(--border); border-radius: var(--r-1);
+  background: var(--surface); color: var(--fg); font-size: var(--fs-meta);
+}
+.igp-coverage { display: flex; flex-wrap: wrap; gap: var(--sp-2); list-style: none; margin: 0; padding: 0; }
+.igp-cov-chip {
+  display: grid; gap: 2px; padding: 6px 10px; border-radius: var(--r-1);
+  border: 1px solid var(--border); background: var(--surface); min-width: 200px; max-width: 420px;
+}
+.igp-cov-label { font-size: var(--fs-meta); font-weight: 600; }
+.igp-cov-state { font-size: var(--fs-meta); text-transform: uppercase; letter-spacing: .04em; }
+.igp-cov-chip[data-collected="yes"] { border-color: var(--good, #16a34a); }
+.igp-cov-chip[data-collected="yes"] .igp-cov-state { color: var(--good, #16a34a); }
+.igp-cov-chip[data-collected="no"] { border-style: dashed; }
+.igp-cov-chip[data-collected="no"] .igp-cov-state { color: var(--muted); }
+.igp-cov-detail { display: block; }
+.igp-notwired .badge { margin-right: 6px; }
+.igp-notes { margin: var(--sp-1) 0 0; padding-left: 1.1em; }
+.igp-state[data-tone="good"] { color: var(--good, #16a34a); }
+.igp-state[data-tone="bad"] { color: var(--bad, #dc2626); }
+.igp-state[data-tone=""] { color: var(--muted); }
+.igp-timeline { display: inline-flex; flex-wrap: wrap; gap: 1px; font-size: 11px; line-height: 1; }
+.igp-tick[data-state="up"] { color: var(--good, #16a34a); }
+.igp-tick[data-state="down"] { color: var(--bad, #dc2626); }
+.igp-tick[data-state="unknown"] { color: var(--muted); }
+.ds-table td[data-tone="bad"] { color: var(--bad, #dc2626); }

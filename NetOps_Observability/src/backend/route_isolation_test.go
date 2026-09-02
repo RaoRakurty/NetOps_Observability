@@ -85,6 +85,24 @@ var routeIsolationLedger = map[string]string{
 	"/api/troubleshoot/protocol-diagnostics/catalog": "globalRef",
 	"/api/troubleshoot/protocol-diagnostics/analyze": "globalRef",
 	"/api/troubleshoot/protocol-diagnostics/collect": "scoped",
+	// OSPF / IS-IS advanced monitoring (Project 4 D item 11, internal/igpmon).
+	// All six are per-tenant DATA and read NOTHING that is not already
+	// collected. The chain is the pcap/configstore one: requirePerm
+	// (infrastructure:read) → ?device= resolved through the principal-scoped
+	// inventory (a foreign id and an absent id answer the SAME 404, so the
+	// subtree is not an existence oracle) → the adjacency-change events read at
+	// chTenantScope, which is what the tenant_iso FORCE row policies on
+	// corr_signals / corr_signals_archive enforce on ("" / "__none__" reads
+	// nothing) → every VictoriaMetrics read carries the caller's device
+	// boundary as extra_filters[], and a SCOPED principal with no boundary is
+	// refused the read rather than served the fleet. Cross-org isolation proven
+	// by igpmon_deps_test.go plus internal/igpmon/http_test.go.
+	"/api/protocols/ospf/adjacencies": "scoped",
+	"/api/protocols/ospf/summary":     "scoped",
+	"/api/protocols/ospf/health":      "scoped",
+	"/api/protocols/isis/adjacencies": "scoped",
+	"/api/protocols/isis/summary":     "scoped",
+	"/api/protocols/isis/health":      "scoped",
 	// Alert episodes (Wave 2 #6): list mirrors the /api/alerts visibility rule
 	// (own tenant + device-less platform rows); triage is own-tenant-only with
 	// cross-tenant ids → 404. Proven by alert_episodes_isolation_test.go.

@@ -335,7 +335,38 @@ import (
 //	                  stays (see above), so the ratchet settles at 203: one
 //	                  justified +1 against the 2026-08-25 ceiling, same as the
 //	                  two precedented +1 entries before it.
-const rootPackageCeiling = 203
+//	2026-09-02  204  +1: igpmon_deps.go (Project 4 D item 11 — the wiring for
+//	                  internal/igpmon, where the OSPF/IS-IS monitoring DOMAIN
+//	                  actually lives). The file holds no domain logic at all:
+//	                  it is the Deps assembly plus five adapter methods that
+//	                  need the *server receiver to reach requirePerm,
+//	                  chTenantScope, chRowsScope, visibleDeviceMetricLabels and
+//	                  vmInstantScoped. Those primitives are root-package
+//	                  identity/tenancy plumbing, so the adapter cannot move
+//	                  down without dragging them with it — the same shape as
+//	                  the pcap/configstore wiring that already lives here, and
+//	                  the deliberate alternative to re-deriving tenant scoping
+//	                  inside the subpackage. Net effect on §2: the ~700-line
+//	                  feature is in internal/igpmon; ~160 lines of adapter stay.
+//	2026-09-02  206  +2, the same Deps-wiring shape the 204 entry establishes:
+//	                  protocol_diag_gateway.go — the deploy-time integrator that
+//	                  supplies internal/protocoldiag's CommandRunner (the ONLY
+//	                  place the diagnostics feature acquires authority to reach a
+//	                  device); it needs the root's ssh gateway, host-key custody
+//	                  and vault primitives, exactly as configGateway()/
+//	                  pcapGateway() do. And ai_troubleshoot_deps.go — the
+//	                  server half of ai.TroubleshootDeps (IRIS Phase A): five
+//	                  read-only closures that need the *server receiver to reach
+//	                  principalTenant, canSeeDevice, s.discovery, s.roles.Allows,
+//	                  chTenantScopeFor, loadCorrSlice, gatherTopoLinks and
+//	                  s.secAPI. Those are root-package identity/tenancy plumbing;
+//	                  moving the adapter down would drag them with it, or worse,
+//	                  re-derive tenant scoping inside the ai package — the exact
+//	                  §3a.4 failure the single-derivation rule exists to prevent.
+//	                  Net effect on §2: the Phase-A DOMAIN (skills, selection,
+//	                  the tool set, ~1.8k lines) lives in netops/backend/ai; only
+//	                  the wiring stays in the root.
+const rootPackageCeiling = 206
 
 func TestFlatPackageMainDoesNotGrow(t *testing.T) {
 	entries, err := os.ReadDir(".")

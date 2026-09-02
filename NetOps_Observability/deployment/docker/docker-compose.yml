@@ -1701,6 +1701,26 @@ services:
       PCAP_SSH_PASSWORD: ${PCAP_SSH_PASSWORD:-}
       PCAP_SSH_KEY: ${PCAP_SSH_KEY:-}
       PCAP_SSH_PORT: ${PCAP_SSH_PORT:-22}
+      # Protocol diagnostics — LIVE collect (internal/protocoldiag): the
+      # operator-triggered BGP/OSPF/IS-IS `show` bundle run over the SAME
+      # read-only SSH gateway and the SAME pinned host-key (TOFU) custody as the
+      # operator terminal and config capture. DORMANT unless
+      # FEATURE_PROTOCOL_DIAG_COLLECT=true — with the flag off the collect
+      # endpoint answers an honest 503 and no transport is constructed. The
+      # catalog and the paste-your-own-output Analyze surface work regardless;
+      # neither touches a device. Timeouts, the per-command output cap and the
+      # closed per-vendor command table are HARD limits in code, not knobs.
+      FEATURE_PROTOCOL_DIAG_COLLECT: ${FEATURE_PROTOCOL_DIAG_COLLECT:-false}
+      # Dedicated least-privilege, READ-ONLY diagnostics identity. Empty = the
+      # module falls back to the CONFIG_BACKUP_SSH_* capture account (already a
+      # read-only account on the same devices); a PARTIALLY set identity (user
+      # with no secret) is a hard error, never a silent fallback. The
+      # password/key may be vault ciphertext or plaintext; neither ever reaches
+      # a log, a response or an audit detail.
+      PROTOCOL_DIAG_SSH_USER: ${PROTOCOL_DIAG_SSH_USER:-}
+      PROTOCOL_DIAG_SSH_PASSWORD: ${PROTOCOL_DIAG_SSH_PASSWORD:-}
+      PROTOCOL_DIAG_SSH_KEY: ${PROTOCOL_DIAG_SSH_KEY:-}
+      PROTOCOL_DIAG_SSH_PORT: ${PROTOCOL_DIAG_SSH_PORT:-22}
       # Parser-coverage mining (parsercov): ONE mining run scans at most this
       # many OpenSearch documents — the bound that keeps a coverage query off
       # the ingest tier's back (a partial scan is REPORTED as partial, never

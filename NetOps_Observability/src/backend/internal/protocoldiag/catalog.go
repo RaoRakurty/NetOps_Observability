@@ -53,6 +53,21 @@ func (s CommandSpec) Render(v Vendor, tgt Target) string {
 	return strings.Join(strings.Fields(out), " ")
 }
 
+// BoundVendors returns the vendors this spec carries an EXPLICIT dialect
+// template for, in canonical order. A vendor absent from the list still renders
+// (it falls back to the primary Cisco IOS-XE template) — the distinction the UI
+// needs is "authored for this dialect" vs "rendered by fallback", and only the
+// former is advertised as coverage.
+func (s CommandSpec) BoundVendors() []Vendor {
+	out := make([]Vendor, 0, 3)
+	for _, v := range []Vendor{VendorCiscoIOSXE, VendorJuniper, VendorNokia} {
+		if t, ok := s.templates[v]; ok && strings.TrimSpace(t) != "" {
+			out = append(out, v)
+		}
+	}
+	return out
+}
+
 // vrfScopeToken renders the dialect CLI qualifier that scopes a route lookup to a
 // VRF / routing-instance, or "" when no VRF is set. The concept is resolved
 // through internal/netconcepts (VRFDisplayTerm proves the same concept spans
@@ -116,6 +131,11 @@ type Issue struct {
 	// Description is the independently-worded explanation of the fault and the
 	// classic tell (no vendor doc text — original wording).
 	Description string
+	// Symptoms is the operator-facing "what you are seeing" list — the concrete,
+	// observable tells that lead an operator to pick THIS issue out of the five
+	// on a protocol tab. It is authored data (never derived from a device), so it
+	// is identical for every tenant and safe to serve from the catalog.
+	Symptoms []string
 	// probes are the protocol-specific commands; common is appended at build
 	// time. Kept unexported so the catalog is immutable.
 	probes []CommandSpec
@@ -127,6 +147,32 @@ func (i Issue) Bundle() []CommandSpec {
 	out := make([]CommandSpec, 0, len(i.probes)+len(commonSupportingSet))
 	out = append(out, i.probes...)
 	out = append(out, commonSupportingSet...)
+	return out
+}
+
+// Vendors returns the dialects this issue's WHOLE bundle is explicitly bound
+// for, in canonical order. Coverage is the INTERSECTION across the bundle: a
+// vendor is advertised only when every command in the bundle has an authored
+// template for it, so the UI never claims coverage a single fallback-rendered
+// command would quietly break. Cisco IOS-XE (the primary dialect) is always
+// bound and therefore always present.
+func (i Issue) Vendors() []Vendor {
+	bundle := i.Bundle()
+	if len(bundle) == 0 {
+		return nil
+	}
+	count := map[Vendor]int{}
+	for _, s := range bundle {
+		for _, v := range s.BoundVendors() {
+			count[v]++
+		}
+	}
+	out := make([]Vendor, 0, 3)
+	for _, v := range []Vendor{VendorCiscoIOSXE, VendorJuniper, VendorNokia} {
+		if count[v] == len(bundle) {
+			out = append(out, v)
+		}
+	}
 	return out
 }
 
@@ -217,6 +263,11 @@ func DefaultCatalog() *Catalog {
 			Description: "The OSPF adjacency negotiates but never reaches FULL. A neighbor " +
 				"parked in EXSTART/EXCHANGE is the classic tell for an IP MTU mismatch across " +
 				"the link; INIT means hellos are only heard one way.",
+			Symptoms: []string{
+				"Neighbor sits in EXSTART or EXCHANGE and never reaches FULL",
+				"Adjacency shows INIT on one side only",
+				"Database exchange starts and then stalls on large LSAs",
+			},
 			probes: []CommandSpec{
 				spec("ospf-neighbor", "adjacency state per neighbor (EXSTART/EXCHANGE/INIT/FULL)",
 					"show ip ospf neighbor",
@@ -234,6 +285,11 @@ func DefaultCatalog() *Catalog {
 			Description: "No adjacency forms at all. Usually a parameter that must match across " +
 				"the link disagrees: hello/dead timers, area id, authentication, network-type, " +
 				"or subnet mask.",
+			Symptoms: []string{
+				"No OSPF neighbor is listed on an interface that should have one",
+				"Hellos are seen on the wire but no adjacency forms",
+				"Parameter-mismatch or authentication-failure events in the log",
+			},
 			probes: []CommandSpec{
 				spec("ospf-interface", "hello/dead timers, area-id, auth, network-type, mask",
 					"show ip ospf interface {if}",
@@ -251,6 +307,11 @@ func DefaultCatalog() *Catalog {
 			Description: "Expected OSPF routes are absent from the table. Suspect area type " +
 				"(stub/NSSA filters externals), administrative distance losing to another source, " +
 				"or a router advertising a max-metric (stub-router) LSA.",
+			Symptoms: []string{
+				"An expected OSPF prefix is absent from the routing table",
+				"The prefix is in the OSPF database but never installed",
+				"External or inter-area routes disappear in one area only",
+			},
 			probes: []CommandSpec{
 				spec("ospf-database", "link-state database: are the expected LSAs present?",
 					"show ip ospf database",
@@ -272,6 +333,11 @@ func DefaultCatalog() *Catalog {
 			Description: "The adjacency repeatedly drops and re-forms. The state-change count and " +
 				"repeated ADJCHG log events point at an unstable link underneath (CRC/errors/flaps) " +
 				"or timer instability.",
+			Symptoms: []string{
+				"Neighbor state alternates between FULL and DOWN",
+				"Repeated OSPF adjacency-change events in the log",
+				"Traffic blackholes for a few seconds at a time",
+			},
 			probes: []CommandSpec{
 				spec("ospf-neighbor", "adjacency state and state-change count",
 					"show ip ospf neighbor",
@@ -289,6 +355,11 @@ func DefaultCatalog() *Catalog {
 			Description: "Traffic takes a worse path than expected. Most often the auto-cost " +
 				"reference-bandwidth is left at its default (100 Mbps), so every link at or above " +
 				"100 Mbps shares cost 1 and the SPF can't distinguish 1G from 100G.",
+			Symptoms: []string{
+				"Traffic prefers a slower link over a faster one",
+				"Links of very different bandwidth carry the same cost",
+				"The path changes unexpectedly after an unrelated topology event",
+			},
 			probes: []CommandSpec{
 				spec("ospf-interface", "per-interface cost",
 					"show ip ospf interface {if}",
@@ -314,6 +385,11 @@ func DefaultCatalog() *Catalog {
 			Description: "The BGP session never reaches Established. Idle with no route to the peer " +
 				"means the peering address is unreachable (underlay/ACL); Active/Connect with a " +
 				"route present means TCP/179 is being blocked to a reachable peer.",
+			Symptoms: []string{
+				"Neighbor state is Idle, Active or Connect and never Established",
+				"The session resets moments after coming up",
+				"The peering address is unreachable or TCP/179 never completes",
+			},
 			probes: []CommandSpec{
 				spec("bgp-summary", "session state per neighbor",
 					"show ip bgp summary",
@@ -335,6 +411,11 @@ func DefaultCatalog() *Catalog {
 			Description: "A prefix the operator expects to send or receive is missing. Check what is " +
 				"actually advertised to and received from the peer, and the outbound/inbound policy " +
 				"(route-map, prefix-list) or a missing network statement.",
+			Symptoms: []string{
+				"A prefix the peer should receive never arrives",
+				"A locally originated network is not advertised to the peer",
+				"Received-routes is empty on an otherwise Established session",
+			},
 			probes: []CommandSpec{
 				spec("bgp-advertised", "prefixes actually advertised to the peer",
 					"show ip bgp neighbors {peer} advertised-routes",
@@ -356,6 +437,11 @@ func DefaultCatalog() *Catalog {
 			Description: "The prefix is in the BGP table but not selected/installed. The usual cause " +
 				"is an unresolved (inaccessible) next-hop; otherwise best-path is decided on " +
 				"local-pref, AS-path, MED or weight.",
+			Symptoms: []string{
+				"The prefix is in the BGP table but not in the routing table",
+				"The path is marked inaccessible or the next-hop is unresolved",
+				"Another path wins unexpectedly on local-pref, AS-path, MED or weight",
+			},
 			probes: []CommandSpec{
 				spec("bgp-prefix", "best-path detail incl. next-hop reachability",
 					"show ip bgp {prefix}",
@@ -373,6 +459,11 @@ func DefaultCatalog() *Catalog {
 			Description: "The session or a set of prefixes flap. The neighbor's flap count and last " +
 				"reset reason, plus dampening flap-statistics, show whether route dampening is now " +
 				"suppressing the prefix.",
+			Symptoms: []string{
+				"The session repeatedly resets with a rising flap count",
+				"Prefixes are suppressed or dampened",
+				"The last reset reason cycles (hold timer expired, peer reset)",
+			},
 			probes: []CommandSpec{
 				spec("bgp-neighbor", "flap count and last reset reason",
 					"show ip bgp neighbors {peer}",
@@ -394,6 +485,11 @@ func DefaultCatalog() *Catalog {
 			Description: "The prefix resolves but takes an unexpected path, or does not propagate. " +
 				"A well-known community (no-export / no-advertise) or an AS-path/community policy is " +
 				"steering or withholding it.",
+			Symptoms: []string{
+				"The prefix resolves via an unexpected neighbor or AS path",
+				"The route is not propagated beyond the local AS",
+				"A well-known community such as no-export is attached to the path",
+			},
 			probes: []CommandSpec{
 				spec("bgp-prefix", "path attributes: communities, AS-path, local-pref, MED",
 					"show ip bgp {prefix}",
@@ -415,6 +511,11 @@ func DefaultCatalog() *Catalog {
 			Description: "No IS-IS adjacency on a link that should have one. Check the level " +
 				"(L1/L2), the area (NET), MTU, and authentication — a mismatch on any of these " +
 				"prevents the adjacency.",
+			Symptoms: []string{
+				"No IS-IS adjacency on a link that should have one",
+				"Adjacency state never leaves Down",
+				"A level (L1/L2), area or authentication mismatch is reported on the interface",
+			},
 			probes: []CommandSpec{
 				spec("isis-neighbors", "adjacency state per neighbor",
 					"show isis neighbors",
@@ -436,6 +537,11 @@ func DefaultCatalog() *Catalog {
 			Description: "The adjacency reaches INIT but not Up — the analogue of OSPF EXSTART. " +
 				"Suspect an MTU / hello-padding problem or a point-to-point-vs-broadcast network-type " +
 				"mismatch across the link.",
+			Symptoms: []string{
+				"The adjacency reaches INIT and stops there",
+				"Hellos are received but never acknowledged by the neighbor",
+				"Padded hellos fail across a link with a smaller MTU",
+			},
 			probes: []CommandSpec{
 				spec("clns-neighbors-detail", "detailed adjacency state (INIT vs Up)",
 					"show clns neighbors detail",
@@ -452,6 +558,11 @@ func DefaultCatalog() *Catalog {
 			Title: "Routes missing",
 			Description: "Expected IS-IS routes are absent. Suspect the overload bit (this IS asks " +
 				"not to be used for transit), or L1↔L2 route leaking not being configured.",
+			Symptoms: []string{
+				"Expected IS-IS prefixes are absent from the routing table",
+				"L1 routes never appear in L2 (or the reverse)",
+				"A reachable neighbor is never used for transit",
+			},
 			probes: []CommandSpec{
 				spec("isis-database", "LSP database incl. overload bit",
 					"show isis database",
@@ -468,6 +579,11 @@ func DefaultCatalog() *Catalog {
 			Title: "Flapping",
 			Description: "The adjacency repeatedly drops and re-forms. Repeated adjacency-change " +
 				"log events plus interface errors point at an unstable link or timer instability.",
+			Symptoms: []string{
+				"The adjacency repeatedly drops and re-forms",
+				"Repeated IS-IS adjacency-change events in the log",
+				"Interface error counters climb alongside the flaps",
+			},
 			probes: []CommandSpec{
 				spec("isis-neighbors", "adjacency state / uptime",
 					"show isis neighbors",
@@ -485,6 +601,11 @@ func DefaultCatalog() *Catalog {
 			Description: "Paths are suboptimal or the router is avoided for transit. The overload " +
 				"bit forces max metric; a narrow metric-style caps link metric at 63 and blocks " +
 				"wide-metric features, distorting SPF.",
+			Symptoms: []string{
+				"The router is bypassed for transit traffic",
+				"Every metric through a node looks maximal",
+				"Link metrics cap at 63 on high-bandwidth links",
+			},
 			probes: []CommandSpec{
 				spec("isis-database-detail", "overload bit and metric-style in the LSPs",
 					"show isis database detail",

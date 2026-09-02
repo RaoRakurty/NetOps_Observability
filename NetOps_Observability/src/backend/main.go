@@ -32,6 +32,7 @@ import (
 	// CONFIG-BACKUP-BEGIN
 	"netops/backend/internal/hardening"
 	// CONFIG-BACKUP-END
+	"netops/backend/internal/igpmon"
 	"netops/backend/internal/keycloak"
 	"netops/backend/internal/loginguard"
 	"netops/backend/internal/metricval"
@@ -121,9 +122,10 @@ type server struct {
 	bgpWatch      *bgpWatchStore // BGP ops watchlist (item 10, PG FORCE-RLS; nil on file backend)
 	bgpFetch      *bgpFetcher    // outbound RIPEstat/RDAP fetcher with TTL cache
 	// Routing-protocol diagnostics (Troubleshooting item 7). Catalog + analyzer
-	// are pure/immutable and always built; the collector stays nil until a real
-	// CommandRunner (SSH/gNMI) is wired at deploy time (TODO(deploy) in
-	// internal/protocoldiag/collect.go) — the collect endpoint 503s until then.
+	// are pure/immutable and always built; the collector is wired to the live
+	// read-only SSH command source ONLY when FEATURE_PROTOCOL_DIAG_COLLECT=true
+	// (protocol_diag_gateway.go) and stays nil otherwise — the collect endpoint
+	// 503s while it is nil, and never fabricates a capture.
 	protocolCatalog   *protocoldiag.Catalog
 	protocolAnalyzer  *protocoldiag.Analyzer
 	protocolCollector *protocoldiag.Collector
@@ -269,6 +271,12 @@ type server struct {
 	packetCapture *pcap.Manager // bounded on-device capture runtime
 	pcapAPI       *pcap.API     // /api/devices/{id}/pcap* subtree
 	// PACKET-CAPTURE-END
+	// igpAPI serves the read-only OSPF/IS-IS monitoring subtree
+	// /api/protocols/{ospf|isis}/{adjacencies,summary,health} (internal/igpmon).
+	// It is always on — it collects nothing and reads only telemetry the
+	// platform already has. A nil value (construction refused an incomplete
+	// Deps) answers 404 on every route rather than reading unscoped.
+	igpAPI       *igpmon.API
 	rcaRevisions *rcaRevisionStore     // report revision register, tenant-keyed (postmortem Phase 1 immutability)
 	rcaClock     func() time.Time      // DI seam for the RCA generation clock (nil = wall clock) — deterministic re-render tests inject it
 	portStore    portintel.Store       // Port Intelligence physical-layer store (#94)
@@ -831,13 +839,22 @@ func newServer() *server {
 		srv.bgpWatch = newBGPWatchStore(ps.DB())
 	}
 	srv.bgpFetch = newBGPFetcher()
-	// Routing-protocol diagnostics (Troubleshooting item 7): the catalog +
-	// signatures are a pure, always-available library. The collector is left nil
-	// until the read-only SSH/gNMI CommandRunner is wired at deploy time
-	// (TODO(deploy)); the collect endpoint returns 503 rather than fabricating a
-	// capture while the transport is dormant.
+	// PROTOCOL-DIAG-BEGIN — Routing-protocol diagnostics (Troubleshooting item
+	// 7): the catalog + signatures are a pure, always-available library (they
+	// never touch a device). The LIVE collect transport is opt-in and
+	// default-OFF: unless FEATURE_PROTOCOL_DIAG_COLLECT=true the collector stays
+	// nil and the collect endpoint returns an honest 503 rather than fabricating
+	// a capture. When the flag is on, buildProtocolDiagCollector wires the
+	// read-only SSH command source (protocol_diag_gateway.go) — same ssh client,
+	// same pinned host-key TOFU custody and same sealed credentials as config
+	// capture and the operator terminal.
 	srv.protocolCatalog = protocoldiag.DefaultCatalog()
 	srv.protocolAnalyzer = protocoldiag.DefaultAnalyzer()
+	if err := srv.buildProtocolDiagCollector(); err != nil {
+		// Fail LOUD, not silently dormant: the operator asked for live collect.
+		logError("protocol-diag", "live collect transport could not be wired — collect stays 503", errf(err))
+	}
+	// PROTOCOL-DIAG-END
 	// NMS vendor-controller framework (#95 P3b): dormant unless
 	// FEATURE_NMS_INTEGRATIONS=true. PG-backed on postgres (migration 0020,
 	// FORCE-RLS); in-memory store on the file backend (dev).
@@ -1818,6 +1835,24 @@ func (s *server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/troubleshoot/protocol-diagnostics/catalog", s.handleProtocolDiagCatalog)
 	mux.HandleFunc("/api/troubleshoot/protocol-diagnostics/analyze", s.handleProtocolDiagAnalyze)
 	mux.HandleFunc("/api/troubleshoot/protocol-diagnostics/collect", s.handleProtocolDiagCollect)
+	// IGP-MONITORING-BEGIN — OSPF/IS-IS advanced monitoring (Project 4 D item
+	// 11, internal/igpmon). READ-ONLY over telemetry the platform already
+	// collects; every response carries an honest coverage block. Each route is
+	// registered individually so it stays visible to the route-isolation ledger;
+	// a nil igpAPI (construction refused) answers 404 on all six.
+	if api, err := s.buildIGPMon(); err != nil {
+		logError("igpmon", "OSPF/IS-IS monitoring could not be wired — the routes will answer 404", errf(err))
+	} else {
+		s.igpAPI = api
+	}
+	igp := s.igpAPI.Handler()
+	mux.HandleFunc("/api/protocols/ospf/adjacencies", igp)
+	mux.HandleFunc("/api/protocols/ospf/summary", igp)
+	mux.HandleFunc("/api/protocols/ospf/health", igp)
+	mux.HandleFunc("/api/protocols/isis/adjacencies", igp)
+	mux.HandleFunc("/api/protocols/isis/summary", igp)
+	mux.HandleFunc("/api/protocols/isis/health", igp)
+	// IGP-MONITORING-END
 	// Port Intelligence (#94 P5) — enhances the Infrastructure surface (no new nav).
 	mux.HandleFunc("/api/infrastructure/interfaces", s.handlePortInterfaces)
 	mux.HandleFunc("/api/infrastructure/interfaces/", s.handlePortInterfaceDetail)
@@ -2821,6 +2856,9 @@ func (s *server) handlePromMetrics(w http.ResponseWriter, _ *http.Request) {
 		s.packetCapture.Metrics().Write(w)
 	}
 	// PACKET-CAPTURE-END
+	// IGP-MONITORING-BEGIN
+	s.igpAPI.Metrics().Write(w) // nil-safe on both the API and the counter set
+	// IGP-MONITORING-END
 	if s.parserCovMetrics != nil {
 		s.parserCovMetrics.Write(w)
 	}

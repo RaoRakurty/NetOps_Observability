@@ -18,12 +18,17 @@ import (
 //
 // The runner MUST honor ctx (deadline/cancel) — all IO is bounded (§9).
 //
-// TODO(deploy): wire a real CommandRunner backed by the dormant device SSH
-// gateway (FEATURE_DEVICE_SSH, device_ssh.go) or gNMI where the device exposes
-// the equivalent state path, tenant-scoped and audited (who ran what, where,
-// when — §3a/§8). Until then MemCommandRunner is the only implementation and is
-// used by tests and any dormant, flag-off call site, keeping this package fully
-// decoupled from the running stack.
+// The LIVE implementation is SSHCommandRunner (sshrunner.go) over SSHGateway
+// (sshgw.go): a read-only `show` from the closed per-vendor table, one in flight
+// per device, bounded output and a per-command deadline. It is wired by the
+// integrator (backend/protocol_diag_gateway.go) ONLY when
+// FEATURE_PROTOCOL_DIAG_COLLECT=true (env.go) — dormant by default, so the
+// collect endpoint answers an honest 503 until an operator opts in and
+// provisions a least-privilege read-only account. MemCommandRunner stays the
+// test/stub implementation, which is what keeps this package decoupled from the
+// running stack and every test offline. gNMI, where a device exposes the
+// equivalent state path, remains a possible second source behind the same
+// interface.
 type CommandRunner interface {
 	Run(ctx context.Context, device Device, command string) (string, error)
 }

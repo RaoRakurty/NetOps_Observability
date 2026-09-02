@@ -95,6 +95,14 @@ API_ENV_DEFAULTS = {
     "PCAP_SSH_PASSWORD": "${PCAP_SSH_PASSWORD:-}",
     "PCAP_SSH_KEY": "${PCAP_SSH_KEY:-}",
     "PCAP_SSH_PORT": "${PCAP_SSH_PORT:-22}",
+    # protocoldiag: the LIVE collect transport is dormant by default (the
+    # collect endpoint 503s); the credential falls back to the config-backup
+    # read-only account when PROTOCOL_DIAG_SSH_* is entirely unset.
+    "FEATURE_PROTOCOL_DIAG_COLLECT": "${FEATURE_PROTOCOL_DIAG_COLLECT:-false}",
+    "PROTOCOL_DIAG_SSH_USER": "${PROTOCOL_DIAG_SSH_USER:-}",
+    "PROTOCOL_DIAG_SSH_PASSWORD": "${PROTOCOL_DIAG_SSH_PASSWORD:-}",
+    "PROTOCOL_DIAG_SSH_KEY": "${PROTOCOL_DIAG_SSH_KEY:-}",
+    "PROTOCOL_DIAG_SSH_PORT": "${PROTOCOL_DIAG_SSH_PORT:-22}",
 }
 
 
@@ -230,7 +238,8 @@ def test_fix_permissions_mirrors_the_api_owned_dirs():
 def test_env_template_ships_the_flags_commented_out():
     """Default OFF means ABSENT-or-commented, never `=true`."""
     src = INSTALL_PY.read_text()
-    for flag in ("FEATURE_SECURITY_LANE", "FEATURE_CONFIG_BACKUP"):
+    for flag in ("FEATURE_SECURITY_LANE", "FEATURE_CONFIG_BACKUP",
+                 "FEATURE_PROTOCOL_DIAG_COLLECT"):
         assert f"#{flag}=true" in src, f"{flag} must ship commented out in .env"
         assert f"\n{flag}=true" not in src, f"{flag} must not ship enabled"
     # The one variable whose EMPTY value is a real (and different) setting must
