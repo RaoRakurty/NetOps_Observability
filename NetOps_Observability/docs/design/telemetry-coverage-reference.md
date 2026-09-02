@@ -274,16 +274,18 @@ shaper's allowlist, and `tests/test_gnmi_correlation_lane.py` now asserts that
 they stay off the correlation bus — the bus allowlist is a volume/RCA gate and a
 database size is not an incident signal.
 
-### F.1 IS-IS over gNMI — Nokia SR Linux native — **lab_validated**
+### F.1 IS-IS over gNMI — Nokia SR Linux native — **live_validated** (2026-09-02 19:18 UTC)
 
 | Canonical series | SR Linux path (native `srl_nokia-isis`) | Fidelity | Promotion step |
 |---|---|---|---|
-| `device_isis_lsp_count{device,vrf,isis_level}` | `…/isis/instance[name=*]/level[level-number=*]/statistics/total-lsps` | **lab_validated** | deploy the `srl-isis-db` subscription and confirm the series in VictoriaMetrics → `live_validated` |
-| `device_isis_spf_runs_total{device,vrf,isis_level}` | `…/isis/instance[name=*]/level[level-number=*]/statistics/spf-runs` | **lab_validated** | as above |
-| `device_isis_area{device,vrf,area} = 1` | `…/isis/instance[name=*]/oper-area-id` (leaf-list) | **lab_validated** | as above |
-| `device_isis_adj_hold_seconds{device,vrf,ifName,isis_level,isis_neighbor}` | `…/isis/instance[name=*]/interface[interface-name=*]/adjacency[neighbor-system-id=*]/remaining-holdtime` | **lab_validated** | as above |
+| `device_isis_lsp_count{device,vrf,isis_level}` | `…/isis/instance[name=*]/level[level-number=*]/statistics/total-lsps` | **live_validated** | done 2026-09-02: gnmic restarted on the deployed stack (commit `b59111a0`), series present in VictoriaMetrics |
+| `device_isis_spf_runs_total{device,vrf,isis_level}` | `…/isis/instance[name=*]/level[level-number=*]/statistics/spf-runs` | **live_validated** | done 2026-09-02 (as above) |
+| `device_isis_area{device,vrf,area} = 1` | `…/isis/instance[name=*]/oper-area-id` (leaf-list) | **live_validated** | done 2026-09-02 (as above) |
+| `device_isis_adj_hold_seconds{device,vrf,ifName,isis_level,isis_neighbor}` | `…/isis/instance[name=*]/interface[interface-name=*]/adjacency[neighbor-system-id=*]/remaining-holdtime` | **live_validated** | done 2026-09-02 (as above) |
 
-**What "lab_validated" means here, precisely.** Two independent checks, both
+**Live attestation (2026-09-02 19:18 UTC, after `docker compose up -d gnmic` on the deployed stack):** `count(device_isis_lsp_count)=2`, `count(device_isis_spf_runs_total)=2`, `count(device_isis_area)=2`, `count(device_isis_adj_hold_seconds)=8` (matching `count(device_isis_adj_state)=8`) queried directly from VictoriaMetrics.
+
+**What "lab_validated" meant before that, precisely.** Two independent checks, both
 against reality rather than a datasheet:
 
 1. **The paths were read off the device.** A gNMI `Get` of
