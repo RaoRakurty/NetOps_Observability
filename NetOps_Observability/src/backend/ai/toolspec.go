@@ -154,6 +154,47 @@ var toolMetas = map[string]toolMeta{
 			{name: "device", desc: "The device name or id exactly as it appears in the inventory.", required: true},
 		},
 	},
+	// ── IRIS Phase A: auto-troubleshoot reach (read-only, tenant-scoped) ──
+	"run_protocol_diagnostic": {
+		description: "Run the curated BGP/OSPF/IS-IS diagnostic for one device: the read-only command bundle plus the failure-signature catalog's own verdict, cause and remediation. Returns the suggested checks (never a cause) when live capture is not wired on this deployment.",
+		label:       "Protocol diagnostic",
+		args: []toolArgSpec{
+			{name: "device_id", desc: "The device name or id exactly as it appears in the inventory.", required: true},
+			{name: "protocol", desc: "One of bgp, ospf, isis.", required: true},
+			{name: "issue_id", desc: "Optional catalog issue id (e.g. bgp-session-down, ospf-neighbor-stuck); omit to use the protocol's default scenario.", required: false},
+		},
+	},
+	"get_security_findings": {
+		description: "List this tenant's security findings (current verdict per finding by default): title, severity, status, seam and device. Reports exposure context — it never remediates.",
+		label:       "Security findings",
+		args: []toolArgSpec{
+			{name: "device", desc: "Restrict to one device by name or id.", required: false},
+			{name: "seam", desc: "Restrict to one seam id or seam type.", required: false},
+			{name: "severity", desc: "One of critical, high, medium, low, info.", required: false},
+			{name: "current", desc: "true (default) = latest verdict per finding; false = full retained history.", required: false},
+		},
+	},
+	"get_topology_context": {
+		description: "Topology context for one device: its neighbours, the seams it sits on, and the measured paths it participates in. Use it to decide WHO OWNS a hop before escalating.",
+		label:       "Topology context",
+		args: []toolArgSpec{
+			{name: "device_id", desc: "The device name or id exactly as it appears in the inventory.", required: true},
+		},
+	},
+	"get_case_timeline": {
+		description: "The ordered event timeline for one correlation case — what happened first, next, and in which order across evidence classes.",
+		label:       "Case timeline",
+		args: []toolArgSpec{
+			{name: "correlation_id", desc: "The case's correlation UUID (take it from a problem:<uuid> citation id).", required: true},
+		},
+	},
+	"get_rca_verdict": {
+		description: "The engine's RCA header for one correlation case: what broke, the verdict tier and confidence, what is affected, what evidence is missing, and the recommended owner. START HERE when a case is in scope — narrate this conclusion rather than deriving a different one.",
+		label:       "RCA verdict",
+		args: []toolArgSpec{
+			{name: "correlation_id", desc: "The case's correlation UUID (take it from a problem:<uuid> citation id).", required: true},
+		},
+	},
 }
 
 // ToolLabel returns the customer-facing label for a tool ("Log search", not

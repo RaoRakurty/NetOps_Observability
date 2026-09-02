@@ -30,7 +30,9 @@ type ModelRoute struct {
 // behavior (deterministic modes skip the provider entirely).
 func RouteFor(mode AnswerMode) ModelRoute {
 	switch mode {
-	case ModeProblemExplanation:
+	case ModeProblemExplanation, ModeTroubleshootFinding:
+		// A skill answer reasons over several tool results at once and MUST be
+		// verified — it is the most fabrication-prone surface we have.
 		return ModelRoute{Tier: TierStrong, UseLLM: true, Verify: true}
 	case ModeCurrentStateSummary, ModeModuleHealthSummary:
 		return ModelRoute{Tier: TierFast, UseLLM: true, Verify: true}

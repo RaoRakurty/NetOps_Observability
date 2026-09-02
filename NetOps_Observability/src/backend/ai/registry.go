@@ -96,7 +96,7 @@ var modules = []Module{
 		Description:        "Root-cause analysis: correlation groups (problems), their evidence ledger, timeline, candidate root domains, missing evidence, and recommended owner.",
 		Entities:           []string{"problem", "correlation_group", "evidence", "hypothesis", "owner"},
 		QuestionCategories: []string{"problem_explanation", "evidence", "missing_evidence", "recommended_owner", "root_domain"},
-		Tools:              []string{"get_problem", "get_problem_timeline", "get_problem_evidence", "get_candidate_root_domains", "get_missing_evidence", "get_recommended_owner"},
+		Tools:              []string{"get_problem", "get_problem_timeline", "get_problem_evidence", "get_candidate_root_domains", "get_missing_evidence", "get_recommended_owner", "get_rca_verdict", "get_case_timeline"},
 		Permissions:        []string{"correlations:read"},
 		Freshness:          FreshnessLive, Sensitivity: SensitivityOperational, Availability: AvailabilityStable,
 		CrossModule:   []string{"topology", "telemetry", "flow_analytics", "itsm"},
@@ -107,7 +107,7 @@ var modules = []Module{
 		Description:        "Network/service topology: paths, neighbors, dependency maps, and blast radius for an incident.",
 		Entities:           []string{"node", "link", "path", "service_dependency", "blast_radius"},
 		QuestionCategories: []string{"topology_path", "blast_radius", "neighbors", "dependency"},
-		Tools:              []string{"get_topology_path", "get_entity_neighbors", "get_service_dependency_map", "get_blast_radius", "explain_topology_path"},
+		Tools:              []string{"get_topology_path", "get_entity_neighbors", "get_service_dependency_map", "get_blast_radius", "explain_topology_path", "get_topology_context"},
 		Permissions:        []string{"infrastructure:read"},
 		Freshness:          FreshnessLive, Sensitivity: SensitivityOperational, Availability: AvailabilityStable,
 		CrossModule:   []string{"correlations_rca", "flow_analytics"},
@@ -239,6 +239,37 @@ var modules = []Module{
 		Freshness:          FreshnessConfig, Sensitivity: SensitivityOperational, Availability: AvailabilityStable,
 		CrossModule:   []string{"correlations_rca", "telemetry"},
 		ResponseModes: []string{"investigation_plan", "module_health_summary"},
+	},
+	{
+		// IRIS Phase A. The protocoldiag domain as an assistant-reachable module:
+		// the curated 15-issue BGP/OSPF/IS-IS catalog + its failure signatures.
+		// READ-ONLY: the tool analyses captured output and, when no capture
+		// transport is wired, hands back the read-only command bundle for a human
+		// to run. It never executes a device change.
+		ID: "protocol_diagnostics", DisplayName: "Protocol Diagnostics",
+		Description:        "Curated BGP/OSPF/IS-IS diagnostic scenarios: the read-only command bundle per issue and the hand-authored failure signatures that turn captured output into a cited verdict, cause and remediation.",
+		Entities:           []string{"issue", "signature", "command_bundle", "finding"},
+		QuestionCategories: []string{"protocol_fault", "adjacency", "prefix_missing", "session_down"},
+		Tools:              []string{"run_protocol_diagnostic"},
+		Permissions:        []string{"infrastructure:read"},
+		Freshness:          FreshnessLive, Sensitivity: SensitivityOperational, Availability: AvailabilityStable,
+		CrossModule:   []string{"correlations_rca", "topology", "telemetry"},
+		ResponseModes: []string{"troubleshoot_finding", "investigation_plan"},
+	},
+	{
+		// IRIS Phase A. Security is the FOURTH evidence class here, not a SIEM:
+		// the module answers "what is my exposure on this device/seam" and feeds
+		// that context into a network conclusion. Sensitivity is SENSITIVE — a
+		// findings row names a control failure on a named device.
+		ID: "security_posture", DisplayName: "Security Findings",
+		Description:        "Per-tenant security findings (exposure and hardening verdicts) by device, seam and severity. Context for a network conclusion; this module reports exposure, it never remediates.",
+		Entities:           []string{"finding", "control", "seam", "severity"},
+		QuestionCategories: []string{"exposure", "security_posture", "hardening", "compliance_gap"},
+		Tools:              []string{"get_security_findings"},
+		Permissions:        []string{"infrastructure:read"},
+		Freshness:          FreshnessRecent, Sensitivity: SensitivitySensitive, Availability: AvailabilityStable,
+		CrossModule:   []string{"correlations_rca", "topology"},
+		ResponseModes: []string{"troubleshoot_finding", "module_health_summary"},
 	},
 	{
 		ID: "documentation", DisplayName: "Documentation",

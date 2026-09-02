@@ -353,6 +353,15 @@ func chTenantScope(r *http.Request) string {
 	if !ok {
 		return "__none__"
 	}
+	return chTenantScopeFor(claims)
+}
+
+// chTenantScopeFor is the same derivation for a caller that already HOLDS the
+// claims and has no request to read them from (the AI assistant's tool seams,
+// background workers). It exists so there is exactly one rule for what a
+// principal's ClickHouse scope is — a second hand-rolled derivation is how the
+// two drift apart.
+func chTenantScopeFor(claims jwtClaims) string {
 	tenant, cross := principalTenant(claims)
 	if cross {
 		return "__all__"

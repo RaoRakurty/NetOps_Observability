@@ -54,6 +54,29 @@ var aiDocsIndex = ai.LoadDocsIndex(
 	ai.ExtraDoc{Name: "kb/runbook", Markdown: appKnowledge, Tier: ai.DocTierRunbook},
 )
 
+// aiSkills is the IRIS troubleshooting-method catalog (ai/skills/*/SKILL.md),
+// parsed and whole-set validated once at startup. Like aiKB and aiDocsIndex it
+// is embedded, immutable, tenant-free content shared read-only across requests.
+//
+// Unlike them, LoadSkills can FAIL — its validation is the CI gate that keeps a
+// method from naming a tool, an argument or a handoff the platform does not
+// have. A failure is content drift, identical on every deployment, and it is
+// logged LOUDLY rather than swallowed: the orchestrator then runs with
+// Skills=nil, which disables the skills layer and keeps every pre-existing
+// answer path intact. Silently degrading with no log line is the one outcome
+// that would be unacceptable — an operator would see the assistant get worse
+// with no way to find out why.
+var aiSkills = loadAISkills()
+
+func loadAISkills() *ai.SkillSet {
+	set, err := ai.LoadSkills()
+	if err != nil {
+		log.Printf("FATAL-GRADE CONFIG ERROR: iris skills failed to load — the troubleshooting-method layer is DISABLED for this process: %v", err)
+		return nil
+	}
+	return set
+}
+
 type aiAskRequest struct {
 	Question string            `json:"question"`
 	Context  map[string]string `json:"context,omitempty"` // e.g. {"correlation_id": "<uuid>"}
@@ -129,9 +152,15 @@ func (s *server) handleAIAsk(w http.ResponseWriter, r *http.Request) {
 // no LLM can). All reads ride the caller's tenant-scoped aiDataSource.
 func (s *server) newOrchestrator(r *http.Request, claims jwtClaims) *ai.Orchestrator {
 	ds := aiDataSource{srv: s, ctx: r.Context(), scope: chTenantScope(r), claims: claims}
+	tools := ai.Tools(ds)
+	// IRIS Phase A: the read-only troubleshooting tools, wired to the seams this
+	// deployment actually has. A nil seam means the tool is NOT registered, so
+	// the assistant can never answer from a capability that is absent.
+	deps := s.aiTroubleshootDeps(r, claims)
+	tools.AddTroubleshootTools(ds, deps)
 	return &ai.Orchestrator{
 		DS:        ds,
-		Tools:     ai.Tools(ds),
+		Tools:     tools,
 		LLM:       aiLLM{srv: s, claims: claims},
 		Flags:     envFlagLookup,
 		Policy:    ai.NewPolicyEngine(ai.PolicyConfig{}, envFlagLookup), // safe default: read-only
@@ -139,6 +168,10 @@ func (s *server) newOrchestrator(r *http.Request, claims jwtClaims) *ai.Orchestr
 		KB:        aiKB,                                                 // Network Expert KB (supporting knowledge)
 		ProductKB: aiProductKB,                                          // Correlix product knowledge (concepts + how-tos)
 		Docs:      aiDocsIndex,                                          // docs-portal retriever (real page citations)
+		Skills:    aiSkills,                                             // troubleshooting methods (nil = layer disabled)
+
+		Troubleshoot: deps,                  // tenant-scoped Phase-A reads
+		ToolAudit:    s.aiToolAudit(claims), // one audit line per gather step (arg NAMES only)
 	}
 }
 

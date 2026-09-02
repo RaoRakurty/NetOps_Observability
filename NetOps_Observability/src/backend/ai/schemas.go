@@ -20,6 +20,12 @@ const (
 	ModeProductNavigationHelp    AnswerMode = "product_navigation_help"
 	ModeProductAnswer            AnswerMode = "product_answer" // answers a question ABOUT Correlix from product knowledge
 	ModeInvestigationPlan        AnswerMode = "investigation_plan"
+	// ModeTroubleshootFinding is the IRIS Phase-A skill answer: a grounded,
+	// cited troubleshooting finding produced by a SKILL (skills/<name>/SKILL.md)
+	// whose gather step ran governed read-only tools before the model narrated.
+	// The card renders Text + NextActions + Citations, with the skill's
+	// name/layer/version shown as provenance.
+	ModeTroubleshootFinding AnswerMode = "troubleshoot_finding"
 	// NOC-focus + status-breakdown answer modes (spec §4/§5). Both are backed by
 	// the CurrentStateSummary schema (they read the same active-correlation set),
 	// but render a recommendation-first / two-section card rather than the generic
@@ -77,6 +83,16 @@ type Answer struct {
 	// Counts is the normalized, labeled incident-count set (spec §6). One place
 	// defines what each number means, so no two answers show conflicting counts.
 	Counts *IncidentCounts `json:"counts,omitempty"`
+	// Skill is the IRIS Phase-A provenance stamp: which troubleshooting method
+	// (skills/<name>/SKILL.md, with its version) produced this answer. Set only
+	// on ModeTroubleshootFinding; nil means the answer came from the classic
+	// classify→mode path. The UI renders it so an operator can see — and audit —
+	// which method was applied.
+	Skill *SkillRef `json:"skill,omitempty"`
+	// Lookups names the tools the skill's gather step actually ran, in order, so
+	// the UI can show "investigated: N lookups" with the same provenance the
+	// agent loop already returns.
+	Lookups []string `json:"lookups,omitempty"`
 }
 
 // IncidentCounts is the normalized incident-count set (spec §6). Every count

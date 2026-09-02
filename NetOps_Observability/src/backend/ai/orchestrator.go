@@ -27,6 +27,23 @@ type Orchestrator struct {
 	KB        *KB        // Network Expert KB (curated playbooks); nil = no supporting knowledge
 	ProductKB *ProductKB // Correlix product knowledge (concepts + how-tos); nil = no product answers
 	Docs      *DocsIndex // docs-portal BM25 retriever; when set it upgrades product answers with real page citations
+	// Skills is the loaded, validated troubleshooting-method catalog (IRIS Phase
+	// A, skills/<name>/SKILL.md compiled in). nil = skills DISABLED: Ask keeps
+	// its classic classify→mode path exactly as before, so the feature can be
+	// left unwired on a deployment without changing any existing answer.
+	Skills *SkillSet
+	// Troubleshoot are the injected, tenant-scoped reads behind the Phase-A
+	// read-only tools (device resolution, protocol diagnostics, security
+	// findings, topology context, case timeline). Every field is optional; a nil
+	// field means that capability is not wired here and its tool is simply not
+	// registered. This package holds no store and no ambient authority of its
+	// own — the server fills these with the SAME gates its HTTP handlers use.
+	Troubleshoot TroubleshootDeps
+	// ToolAudit receives one entry per skill gather-step execution (allowed or
+	// not, and why). nil = no audit sink. The ai package never sees a token, so
+	// the server adds the actor (tenant + subject); entries carry argument NAMES
+	// only, never values (§8 no-PII logging).
+	ToolAudit func(ToolAuditEntry)
 }
 
 // policy returns the configured Policy Engine, or the safe v1 default
@@ -287,7 +304,9 @@ func Classify(question string, uiContext map[string]string) Plan {
 		// TRULY unmatched → a helpful capability clarification, NOT the current-state
 		// briefing. Dumping the "25 correlations" summary for every unrecognized
 		// question read as a bug; instead we say what we CAN do and let the operator
-		// pick (or type /). "capability" is short-circuited in Ask before governance.
+		// pick (or type /). Ask offers this plan to the SKILLS layer first (an
+		// unmatched operational complaint gets the osi-bisection method); the
+		// clarification is what remains when no skill could ground an answer.
 		return Plan{Intent: "capability", Modules: []string{}, Mode: ModeUnavailable, Entities: ent}
 	}
 }
@@ -297,20 +316,9 @@ func Classify(question string, uiContext map[string]string) Plan {
 func (o *Orchestrator) Ask(ctx context.Context, p Principal, question string, uiContext map[string]string) (Answer, error) {
 	plan := Classify(question, uiContext)
 
-	// Answer modes whose answering tools land in a later phase (HLD P3+): respond
-	// honestly and uniformly — the feature isn't built yet for ANYONE — and record
-	// the demand (intent) for audit. We short-circuit BEFORE the permission/
-	// availability gate so the disclosure never reads as an access problem, and so
-	// a past-window question is never silently answered with live current state.
-	// Unrecognized question → a helpful capability clarification (NOT the
-	// current-state briefing). Short-circuit before governance since it reads no
-	// data and needs no module.
-	if plan.Intent == "capability" {
-		return o.answerCapability(plan), nil
-	}
-
 	// Governance: every module route passes the Policy Engine (availability +
 	// deny-list + RBAC/PBAC). Disallowed modules are dropped with an honest reason.
+	// A "capability" plan carries no modules, so this loop is a no-op for it.
 	pe := o.policy()
 	var allowed []string
 	var disc []string
@@ -320,6 +328,42 @@ func (o *Orchestrator) Ask(ctx context.Context, p Principal, question string, ui
 		} else {
 			disc = append(disc, capitalize(d.Reason)+".")
 		}
+	}
+
+	// IRIS Phase A — skill selection (the routing inversion). A troubleshooting
+	// question now gets a SERVER-PLANNED gather over governed read-only tools
+	// before the model narrates, instead of reaching a provider — or the
+	// capability clarification — with no evidence attached.
+	//
+	// Placed AFTER the governance loop (so a skill can never widen module access:
+	// every gather step is re-authorized by the SAME Policy Engine, per tool, in
+	// answerSkill) and BEFORE both the capability short-circuit and the mode
+	// switch. The capability case is the POINT: "bgp neighbor down on edge-1" and
+	// "the site is not working" both classify as `capability` today, which is
+	// exactly the unrecognized-question dead end this layer exists to replace.
+	//
+	// It is additive and fails back to the old path in three ways: nil Skills
+	// disables it entirely; SelectSkill refuses every intent that already has a
+	// better deterministic answer (skillExcludedIntents); and a skill that could
+	// not gather ANY evidence returns handled=false, so the classic path runs
+	// unchanged. No existing answer changes shape unless a skill grounded it.
+	if o.Skills != nil {
+		if match, ok := SelectSkill(o.Skills, question, plan); ok {
+			if ans, handled := o.answerSkill(ctx, p, question, plan, match, uiContext, disc); handled {
+				return ans, nil
+			}
+		}
+	}
+
+	// Answer modes whose answering tools land in a later phase (HLD P3+): respond
+	// honestly and uniformly — the feature isn't built yet for ANYONE — and record
+	// the demand (intent) for audit. The disclosure is emitted BEFORE the
+	// permission/availability bail below so it never reads as an access problem,
+	// and so a past-window question is never silently answered with live current
+	// state. Unrecognized question → a helpful capability clarification (NOT the
+	// current-state briefing); it reads no data and needs no module.
+	if plan.Intent == "capability" {
+		return o.answerCapability(plan), nil
 	}
 
 	if len(allowed) == 0 {
