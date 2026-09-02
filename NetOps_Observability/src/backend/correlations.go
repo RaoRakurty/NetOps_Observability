@@ -15,6 +15,7 @@ package backend
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -24,8 +25,11 @@ import (
 	"time"
 
 	"netops/backend/internal/chschema"
+	"netops/backend/internal/httppage"
 	"netops/backend/internal/metricval"
+	"netops/backend/internal/platformdb"
 	"netops/backend/internal/rca"
+	"netops/backend/rcafeedback"
 )
 
 // The RCA Path View mapping moved to internal/rca (path_view.go, Phase-2 W1).
@@ -455,6 +459,12 @@ func (s *server) handleCorrelationByID(w http.ResponseWriter, r *http.Request) {
 		s.handleRcaActionItems(w, r, id, strings.TrimPrefix(strings.TrimPrefix(sub, "actions"), "/"))
 		return
 	}
+	// Operator verdict feedback (Project 2 P7) — GET list / POST record; own
+	// auth (read vs incident-action write) + audit inside the handler.
+	if sub == "feedback" {
+		s.handleCorrelationFeedback(w, r, id)
+		return
+	}
 	if r.Method != http.MethodGet {
 		writeError(w, http.StatusMethodNotAllowed, errors.New("GET only"))
 		return
@@ -809,4 +819,230 @@ SELECT toString(o.correlation_id) AS correlation_id
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(resp.StatusCode)
 	_, _ = io.Copy(w, io.LimitReader(resp.Body, 1<<20)) // best-effort: proxy stream; a failed copy means the client is gone
+}
+
+// ── RCA operator verdict feedback (Project 2, P7) ────────────────────────────
+//
+// The instrument behind the "false-positive RCA rate" success metric and the
+// design-partner loop: an operator who has read a case tells us whether the
+// engine got it right, and when it did not, WHICH claim was wrong.
+//
+//	POST /api/correlations/{id}/feedback   record a verdict (write perm, audited)
+//	GET  /api/correlations/{id}/feedback   this case's verdicts, newest first
+//	GET  /api/correlations/feedback/summary?days=  windowed rate for the tenant
+//
+// The domain (vocabulary, validation, the append-only file/PG store with
+// tenant_iso FORCE-RLS, the summary arithmetic, the counter) lives in
+// rcafeedback/ — a real package boundary. What stays here is the HTTP shell:
+// RBAC, the ClickHouse ownership pre-read, audit, and the response shape. The
+// root package is at its decomposition ceiling, so this shell extends the file
+// that already owns the /api/correlations surface rather than adding a new one.
+//
+// Isolation (§3a): a write and a per-case list both resolve the object under
+// the caller's ClickHouse row-policy scope FIRST — a correlation id outside the
+// caller's tenant answers 404 before the store is touched, so existence is
+// never revealed. The row is then stamped with the OBJECT's owning tenant
+// (never the request body, never the caller's own tenant for a platform admin
+// acting on someone else's case) — the rca_action_items.go precedent.
+
+// newRcaFeedbackStore selects the Postgres register under the Postgres backend
+// (migration 0036, RLS), else the tenant-keyed file store so the default build
+// works unchanged.
+func newRcaFeedbackStore() rcafeedback.Store {
+	if ps, ok := platformdb.ActivePG(); ok {
+		return rcafeedback.NewPGStore(ps.DB())
+	}
+	return rcafeedback.NewFileStore(envOr("RCA_FEEDBACK_FILE", "/data/rca_feedback.json"))
+}
+
+// corrFeedbackObject is the object context a verdict is written against, read
+// once under the caller's tenant scope.
+type corrFeedbackObject struct {
+	tenant        string
+	version       int
+	topHypothesis string
+	verdictTier   string
+}
+
+// loadCorrFeedbackObject resolves one correlation object under the caller's
+// ClickHouse row-policy scope. ok=false means "not visible to you" — the caller
+// answers 404 for BOTH a missing object and another tenant's object, which is
+// the whole point (§3a rule 1: never reveal another tenant's id).
+func (s *server) loadCorrFeedbackObject(r *http.Request, id string) (corrFeedbackObject, bool, error) {
+	// id is shape-validated by isUUIDToken before it reaches here (SR-011).
+	rows, err := s.chRowsScope(r.Context(), chTenantScope(r), `
+SELECT tenant_id, version, top_hypothesis, verdict_tier
+  FROM netops.corr_objects
+ WHERE correlation_id = '`+id+`'
+ ORDER BY version DESC
+ LIMIT 1
+ FORMAT JSON`, "api:/api/correlations")
+	if err != nil {
+		return corrFeedbackObject{}, false, err
+	}
+	if len(rows) == 0 {
+		return corrFeedbackObject{}, false, nil
+	}
+	obj := corrFeedbackObject{
+		tenant:        canonicalCorrTenant(asString(rows[0]["tenant_id"])),
+		topHypothesis: asString(rows[0]["top_hypothesis"]),
+		verdictTier:   asString(rows[0]["verdict_tier"]),
+	}
+	// ClickHouse renders UInt32 as a JSON string; a malformed value leaves the
+	// version at 0, which Validate reads as "unknown" rather than as a ceiling.
+	if v, convErr := strconv.Atoi(asString(rows[0]["version"])); convErr == nil && v > 0 {
+		obj.version = v
+	}
+	return obj, true, nil
+}
+
+// rcaFeedbackRequest is the accepted write body. It deliberately has NO tenant
+// field: a tenant supplied by a client is not rejected, it is IGNORED — the
+// owner is stamped from the resolved object (§3a rule 2).
+type rcaFeedbackRequest struct {
+	Verdict            string `json:"verdict"`
+	WrongPart          string `json:"wrong_part"`
+	Reason             string `json:"reason"`
+	CorrelationVersion *int   `json:"correlation_version"`
+}
+
+// handleCorrelationFeedback serves GET/POST /api/correlations/{id}/feedback.
+//
+// Permissions follow the operator-action split already in force: reading a case
+// is the correlations read permission (infrastructure:read, the same gate as
+// the case itself); recording a verdict is the incident-action write permission
+// (alerts:write, the gate ack/assign use) — judging the engine is an operator
+// action on an incident, not a change to infrastructure.
+func (s *server) handleCorrelationFeedback(w http.ResponseWriter, r *http.Request, id string) {
+	if r.Method != http.MethodGet && r.Method != http.MethodPost {
+		w.Header().Set("Allow", "GET, POST")
+		writeError(w, http.StatusMethodNotAllowed, errors.New("GET or POST"))
+		return
+	}
+	module, level := "infrastructure", LevelRead
+	if r.Method == http.MethodPost {
+		module, level = "alerts", LevelWrite
+	}
+	claims, ok := s.requirePerm(w, r, module, level)
+	if !ok {
+		return
+	}
+	if s.rcaFeedback == nil {
+		writeError(w, http.StatusServiceUnavailable, errors.New("rca feedback store unavailable"))
+		return
+	}
+	if err := httppage.RejectUnknownQuery(r); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	obj, visible, err := s.loadCorrFeedbackObject(r, id)
+	if err != nil {
+		writeError(w, http.StatusBadGateway, err)
+		return
+	}
+	if !visible {
+		writeError(w, http.StatusNotFound, errors.New("correlation object not found"))
+		return
+	}
+
+	if r.Method == http.MethodGet {
+		items, listErr := s.rcaFeedback.List(r.Context(), obj.tenant, false, id)
+		if listErr != nil {
+			writeError(w, http.StatusInternalServerError, listErr)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"correlation_id": id,
+			"feedback":       items,
+			"count":          len(items),
+		})
+		return
+	}
+
+	var in rcaFeedbackRequest
+	if decErr := json.NewDecoder(http.MaxBytesReader(w, r.Body, 8<<10)).Decode(&in); decErr != nil {
+		writeError(w, http.StatusBadRequest, errors.New("invalid JSON body"))
+		return
+	}
+	f := rcafeedback.Feedback{
+		Verdict:            in.Verdict,
+		WrongPart:          in.WrongPart,
+		Reason:             in.Reason,
+		CorrelationVersion: in.CorrelationVersion,
+	}
+	if valErr := rcafeedback.Validate(&f, obj.version); valErr != nil {
+		writeError(w, http.StatusBadRequest, valErr)
+		return
+	}
+	// Server-owned fields: owner, case, engine context, author, stamp.
+	f.TenantID = obj.tenant
+	f.CorrelationID = id
+	f.TopHypothesis, f.VerdictTier = obj.topHypothesis, obj.verdictTier
+	f.CreatedBy = claims.Sub
+	f.CreatedAt = time.Now().UTC()
+
+	saved, addErr := s.rcaFeedback.Add(r.Context(), obj.tenant, false, f)
+	if errors.Is(addErr, rcafeedback.ErrLimit) {
+		writeError(w, http.StatusBadRequest, addErr)
+		return
+	}
+	if addErr != nil {
+		writeError(w, http.StatusInternalServerError, addErr)
+		return
+	}
+	s.rcaFeedbackMetrics.Inc(saved.Verdict)
+	// The reason is operator prose — it is NOT copied into the audit detail
+	// (§8 log sanitation); the audited fact is who judged what, and how.
+	s.auditManualEdit(r, claims, obj.tenant, "rca_feedback_create", id, map[string]any{
+		"feedback_id": saved.ID,
+		"verdict":     saved.Verdict,
+		"wrong_part":  saved.WrongPart,
+	})
+	writeJSON(w, http.StatusCreated, saved)
+}
+
+// handleRcaFeedbackSummary serves GET /api/correlations/feedback/summary?days=N
+// — the false-positive rate for the CALLER'S tenant over a window, with the
+// per-template breakdown. A platform owner sees the cross-tenant aggregate;
+// narrowing with ?as_tenant= (applied by the tenancy middleware, which a
+// non-owner's request can never use) scopes it to one tenant.
+func (s *server) handleRcaFeedbackSummary(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		w.Header().Set("Allow", "GET")
+		writeError(w, http.StatusMethodNotAllowed, errors.New("GET only"))
+		return
+	}
+	claims, ok := s.requirePerm(w, r, "infrastructure", LevelRead)
+	if !ok {
+		return
+	}
+	if s.rcaFeedback == nil {
+		writeError(w, http.StatusServiceUnavailable, errors.New("rca feedback store unavailable"))
+		return
+	}
+	if err := httppage.RejectUnknownQuery(r, "days"); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	days, err := intQuery(r, "days", 30, 1, 365)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	since := time.Now().UTC().AddDate(0, 0, -days)
+	tenant, cross := principalTenant(claims)
+	buckets, err := s.rcaFeedback.Buckets(r.Context(), tenant, cross, since)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	sum := rcafeedback.Summarize(buckets)
+	writeJSON(w, http.StatusOK, map[string]any{
+		"days":                days,
+		"since":               since.Format(time.RFC3339),
+		"n":                   sum.N,
+		"counts":              map[string]int{"correct": sum.Correct, "wrong": sum.Wrong, "partial": sum.Partial},
+		"false_positive_rate": sum.FalsePositiveRate,
+		"by_template":         sum.ByTemplate,
+	})
 }

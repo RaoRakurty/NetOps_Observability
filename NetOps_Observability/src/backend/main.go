@@ -74,6 +74,7 @@ import (
 	"netops/backend/nms"
 	"netops/backend/notify"
 	"netops/backend/processors"
+	"netops/backend/rcafeedback"
 	"netops/backend/reports"
 	"netops/backend/safego"
 	"netops/backend/sealing"
@@ -219,13 +220,18 @@ type server struct {
 	cloudMonitors   *cloudMonitorStore     // per-tenant cloud monitors (Wave 5 #14 slice 3)
 	rcaPromotions   *rcaPromotionStore     // manual RCA-document promotions, tenant-keyed (#113 point 3)
 	rcaActionItems  *rcaActionItemStore    // postmortem action-item register, tenant-keyed (postmortem Phase 1 §3/§7)
-	rcaRevisions    *rcaRevisionStore      // report revision register, tenant-keyed (postmortem Phase 1 immutability)
-	rcaClock        func() time.Time       // DI seam for the RCA generation clock (nil = wall clock) — deterministic re-render tests inject it
-	portStore       portintel.Store        // Port Intelligence physical-layer store (#94)
-	netboxCfg       *netboxConfigStore     // NetBox source-of-truth discovery config
-	discoveryCfg    *discoveryConfigStore  // SNMP subnet-discovery scan config (platform-owner)
-	netboxSync      *netboxSyncer          // reconciles discovered devices INTO NetBox (write-through)
-	vulns           *vuln.Feed             // #13: advisory feed for /api/vulns (lazy, mtime hot-reload)
+	// Operator verdict feedback on RCA cases (Project 2 P7) — the
+	// false-positive-rate instrument. PG (migration 0036, tenant_iso FORCE-RLS)
+	// under the Postgres backend, tenant-keyed file store otherwise.
+	rcaFeedback        rcafeedback.Store
+	rcaFeedbackMetrics *rcafeedback.Metrics
+	rcaRevisions       *rcaRevisionStore     // report revision register, tenant-keyed (postmortem Phase 1 immutability)
+	rcaClock           func() time.Time      // DI seam for the RCA generation clock (nil = wall clock) — deterministic re-render tests inject it
+	portStore          portintel.Store       // Port Intelligence physical-layer store (#94)
+	netboxCfg          *netboxConfigStore    // NetBox source-of-truth discovery config
+	discoveryCfg       *discoveryConfigStore // SNMP subnet-discovery scan config (platform-owner)
+	netboxSync         *netboxSyncer         // reconciles discovered devices INTO NetBox (write-through)
+	vulns              *vuln.Feed            // #13: advisory feed for /api/vulns (lazy, mtime hot-reload)
 	// oidc holds the live SSO provider. It is swapped atomically when an operator
 	// saves config from the admin UI (oidc_config.go), and is read on the hot
 	// auth path (withAuth RS256) and in the SSO handlers via oidcProvider().
@@ -841,6 +847,8 @@ func newServer() *server {
 	srv.cloudMonitors = newCloudMonitorStore(cloudMonitorsPath())
 	srv.rcaPromotions = newRcaPromotionStore(rcaPromotionsPath()) // #113 point 3
 	srv.rcaActionItems = newRcaActionItemStore(rcaActionItemsPath())
+	srv.rcaFeedback = newRcaFeedbackStore()           // Project 2 P7 operator verdicts (migration 0036 / file fallback)
+	srv.rcaFeedbackMetrics = rcafeedback.NewMetrics() // netops_rca_feedback_total{verdict}
 	srv.rcaRevisions = newRcaRevisionStore(rcaRevisionsPath())
 
 	srv.portStore = newPortStore() // Port Intelligence #94 P5
@@ -1815,6 +1823,7 @@ func (s *server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/correlations/stats", s.handleCorrelationStats)                       // exact path wins over the prefix below
 	mux.HandleFunc("/api/correlations/summary", s.handleCorrelationsSummary)                  // true window counts (total / tier / state) behind the page's stat chips
 	mux.HandleFunc("/api/correlations/rca-reports", s.handleRcaReportsLibrary)                // #113 point 3: the management library — promoted real outages only (exact path wins over the /api/correlations/ prefix)
+	mux.HandleFunc("/api/correlations/feedback/summary", s.handleRcaFeedbackSummary)          // Project 2 P7: windowed false-positive rate for the caller's tenant (exact path wins over the /api/correlations/ prefix)
 	mux.HandleFunc("/api/correlations/undetermined-frequency", s.handleUndeterminedFrequency) // #80 signature-governance: ranked recurring undetermined gap-shapes
 	mux.HandleFunc("/api/correlations/", s.handleCorrelationByID)
 	// Service Path Graph (frozen contract §7): GET /api/rca/{correlation_id}/path —
@@ -2656,6 +2665,9 @@ func (s *server) handlePromMetrics(w http.ResponseWriter, _ *http.Request) {
 	}
 	if s.incMetrics != nil {
 		s.incMetrics.write(w)
+	}
+	if s.rcaFeedbackMetrics != nil {
+		s.rcaFeedbackMetrics.Write(w)
 	}
 	if s.intMetrics != nil {
 		s.intMetrics.write(w)

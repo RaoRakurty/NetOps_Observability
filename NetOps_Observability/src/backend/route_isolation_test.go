@@ -107,10 +107,17 @@ var routeIsolationLedger = map[string]string{
 	// pre-read (correlations_replay_isolation_test.go pins it).
 	// Adding a NEW subresource here? It must reach data through a tenant-scoped
 	// loader or do its own ownership check — this line does not do it for you.
-	"/api/correlations/":            "scoped", // incl. {id}/time-metrics + {id}/time-events (#84) + {id}/rca-promotion (#113 point 3, rca_promotion_test) + {id}/replay (ownership pre-read, 2026-08-04): chRows(chTenantScope) reads + tenant-stamped RLS writes (store isolation test); manual writes audited
-	"/api/correlations/rca-reports": "scoped", // #113 management library: chTenantScope prefilter + shared report pipeline + tenant-keyed manual-promotion union (TestRcaLibraryTenantIsolation)
-	"/api/correlations/stats":       "scoped",
-	"/api/correlations/summary":     "scoped", // window rollup counts: chRows(chTenantScope) over corr_current — a tenant counts only its OWN objects (correlations_summary_test.go)
+	"/api/correlations/": "scoped", // incl. {id}/time-metrics + {id}/time-events (#84) + {id}/rca-promotion (#113 point 3, rca_promotion_test) + {id}/replay (ownership pre-read, 2026-08-04): chRows(chTenantScope) reads + tenant-stamped RLS writes (store isolation test); manual writes audited; {id}/feedback (Project 2 P7 operator verdicts) resolves the object under chTenantScope FIRST (cross-tenant id -> 404) and stamps the OBJECT's owning tenant (rca_feedback_isolation_test.go)
+	// Project 2 P7 operator verdict feedback. The windowed summary is per-tenant
+	// DATA (a tenant's own false-positive rate): store-scoped by
+	// principalTenant + tenant_iso FORCE-RLS (migration 0036) / tenant-keyed
+	// file store; the per-case POST/GET ride the /api/correlations/ prefix
+	// below behind a ClickHouse ownership pre-read. Proven by
+	// rca_feedback_isolation_test.go.
+	"/api/correlations/feedback/summary": "scoped",
+	"/api/correlations/rca-reports":      "scoped", // #113 management library: chTenantScope prefilter + shared report pipeline + tenant-keyed manual-promotion union (TestRcaLibraryTenantIsolation)
+	"/api/correlations/stats":            "scoped",
+	"/api/correlations/summary":          "scoped", // window rollup counts: chRows(chTenantScope) over corr_current — a tenant counts only its OWN objects (correlations_summary_test.go)
 	// Per-tenant display preference (a281c7a): GET/PUT always the CALLER's own
 	// tenant record (principalTenant; PUT behind requireAdmin, audited) — the
 	// tenant id never comes from the request (tenant_display_test.go).
