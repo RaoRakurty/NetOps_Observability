@@ -1,7 +1,9 @@
 # Project 2 — Productization & Design Partners  🔴
 
-**Status: NOT STARTED — the next session opens with the gap report** (step 6 of
-the required workflow below). Filed 2026-09-01 from the owner directive that
+**Status: OPENED 2026-09-02 — gap report + force-ranked wave-1 plan filed:
+[`02-GAP-REPORT-2026-09-02.md`](02-GAP-REPORT-2026-09-02.md)** (workflow steps
+1–7 done; awaiting the owner's ranking + two go-aheads listed in its §4).
+Filed 2026-09-01 from the owner directive that
 redefined the portfolio: Project 1 (Scale Testing) is DONE, this project takes
 its slot, and Security CTEM / Troubleshooting renumber to Projects 3 / 4.
 

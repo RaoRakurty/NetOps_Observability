@@ -11,7 +11,7 @@ rows are deleted, so the set shrinks); these project trackers are the
 | # | Project | Priority | Tracker | One-line |
 |---|---------|----------|---------|----------|
 | 1 | **Scale Testing** | ✅ COMPLETE (2026-09-01) | [01-SCALE-TESTING.md](01-SCALE-TESTING.md) | Host ceiling + binding resource found at nominal AND storm; completion record `docs/scale/PROJECT1_DONE_2026-09-01.md`. |
-| 2 | **Productization & Design Partners** | 🔴 HIGH | [02-PRODUCTIZATION-DESIGN-PARTNERS.md](02-PRODUCTIZATION-DESIGN-PARTNERS.md) | Operator-first UI, RCA hero experience, deployment simplicity, pilot/design-partner readiness. NOT STARTED — opens with the gap report. |
+| 2 | **Productization & Design Partners** | 🔴 HIGH | [02-PRODUCTIZATION-DESIGN-PARTNERS.md](02-PRODUCTIZATION-DESIGN-PARTNERS.md) | Operator-first UI, RCA hero experience, deployment simplicity, pilot/design-partner readiness. **OPENED 2026-09-02** — gap report + wave-1 plan in `02-GAP-REPORT-2026-09-02.md`; awaiting owner ranking. |
 | 3 | **Security CTEM** | 🟠 | [03-SECURITY-CTEM.md](03-SECURITY-CTEM.md) | Network-security section (CTEM) that grounds into the correlation engine. Design approved + mockup done; build ahead. Runway survey 2026-09-01 remains valid. |
 | 4 | **Troubleshooting protocols** | 🟡 | [04-TROUBLESHOOTING.md](04-TROUBLESHOOTING.md) | Rebuild Troubleshooting (symptom-first + BGP/OSPF/ISIS collect→analyze) + the frontend-wave item list + IRIS. |
 
