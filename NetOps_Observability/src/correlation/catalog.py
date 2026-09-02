@@ -3566,6 +3566,138 @@ WIRELESS_TEMPLATES: list[dict] = [
 BUILTIN_TEMPLATES.extend(WIRELESS_TEMPLATES)
 
 
+
+# ══ EXPOSURE STORY seed (T2b / T7 seed) ══════════════════════════════════════
+#
+# WHAT THESE ARE. The signature family that lets a verdict from an EVIDENCE-CLASS
+# bus lane (signals.EVIDENCE_CLASSES — today: security) be folded into the same
+# seam-attributed causality object the network lanes already build, instead of
+# living in a parallel list. They are ordinary catalog data: no engine code knows
+# they exist, and deleting them leaves every other template untouched.
+#
+# WHY THE SECURITY KIND IS THE **REQUIRED** CLAUSE AND THE NETWORK EVIDENCE IS
+# OPTIONAL — and not the other way round. The inverse shape (network required,
+# security optional) would make these templates fire on EVERY object the V1
+# workload already produces, competing with the network signatures and moving
+# the ranking. With the verdict as the required clause they cannot match at all
+# unless an evidence-class signal is present, so a stream that carries none
+# produces byte-identical decision content (`content_hash`, hypotheses blob,
+# verdict tier, affected) — asserted by test_security_grounding_t2b.py. The one
+# field that legitimately moves is `catalog_version`: it is the rule-base
+# revision stamp and MUST move when the rule base changes.
+#
+# WHY THEY CANNOT OVERCLAIM. The optional clause is what an INDEPENDENTLY
+# MEASURED plane (control_plane / device_telemetry / passive_flow) contributes.
+# A verdict standing alone matches with ONE modality, and the runtime gate
+# (verdicts.assess: >=2 independent modality classes to confirm) caps it at
+# suspected — the honest "possibly because of X" reading, never a confirmed
+# cause built out of a scanner's opinion. Corroboration is what promotes it, and
+# corroboration can only come from a plane the verdict lane does not own.
+#
+# GROUNDING. Both clauses are matched on the SAME object, i.e. on evidence the
+# engine already co-located by entity/token — the producer's entity_tokens
+# (device:/host:/seam:) are what put the verdict on the device's node in the
+# first place. Nothing here names a topology ROLE, so `requires_structure` stays
+# empty and the tracker-157 structural gate is a dict lookup that cannot fire.
+
+# The independently-measured network evidence an evidence-class verdict can be
+# corroborated BY, on the same entity. One alternation, authored once: every
+# member is a control-plane / device-telemetry kind a producer actually emits,
+# so the clause can never be a dead template.
+# Deliberately EXCLUDES the kinds coverage.INTENTIONAL_BLIND declares as
+# consumed-by-no-signature (device_alarm, device_restart,
+# routing_adjacency_change, lldp_neighbor_change): those declarations are a
+# contract about the rule base, and quietly consuming one here would flip its
+# coverage classification as a side effect of an unrelated family.
+_CORROBORATING_NETWORK_EVIDENCE = (
+    "bgp_adjacency_change|ospf_adjacency_change|isis_adjacency_change|"
+    "link_state_change|device_resource_anomaly|if_metric_anomaly"
+)
+
+EXPOSURE_STORY_TEMPLATES: list[dict] = [
+    {
+        "id": "sig.ent.security.exposure-story",
+        "title": "Exposed device is also failing (exposure + network fault on one node)",
+        "domain": "ent.security",
+        "demo_priority": "p2",
+        "requires": [
+            {"kind": "security_exposure"},
+            {"kind": _CORROBORATING_NETWORK_EVIDENCE, "optional": True},
+        ],
+        "verdict": {
+            "owner": "netops", "layer": "security/exposure",
+            "first_steps": [
+                "Open the exposure evidence (advisory + affected version) on this device",
+                "Check whether the network fault on the same device started AFTER the exposure was first observed",
+                "If the device sits on an internet-facing seam, isolate or ACL it before upgrading",
+            ],
+        },
+        "operator_phrase": "This device carries a known exposure and is showing a network fault at the same time — the two are on one node, not yet proven to be one cause",
+        "manager_phrase": "A device with a known security weakness is also misbehaving on the network",
+        "blast_radius": "the exposed device and everything transiting it",
+        "false_positives": (
+            ("an exposure is a standing property, not an event — co-occurrence "
+             "with an unrelated network fault is common, and is why this family "
+             "cannot confirm on the verdict alone"),
+        ),
+    },
+    {
+        "id": "sig.ent.security.hardening-drift-story",
+        "title": "Hardening gap on a device that is also failing (posture + network fault)",
+        "domain": "ent.security",
+        "demo_priority": "p2",
+        "requires": [
+            {"kind": "security_posture"},
+            {"kind": _CORROBORATING_NETWORK_EVIDENCE, "optional": True},
+        ],
+        "verdict": {
+            "owner": "netops", "layer": "security/posture",
+            "first_steps": [
+                "Open the failed control and the exact config evidence it cites",
+                "Compare the capture time of the failed control with the fault onset",
+                "Check the change/maintenance window: a hardening regression outside one is itself a signal",
+            ],
+        },
+        "operator_phrase": "A hardening control failed on this device and the device is also showing a network fault — check whether the same config change caused both",
+        "manager_phrase": "A device is out of its hardening baseline and is also having problems",
+        "blast_radius": "the audited device; wider if the same baseline drift is fleet-wide",
+        "false_positives": (
+            ("a long-standing accepted deviation will co-occur with every "
+             "unrelated fault on that device"),
+        ),
+    },
+    {
+        "id": "sig.ent.security.threat-signal-story",
+        "title": "Threat signal on a device that is also failing (detection + network fault)",
+        "domain": "ent.security",
+        "demo_priority": "p2",
+        "requires": [
+            {"kind": "security_signal"},
+            {"kind": _CORROBORATING_NETWORK_EVIDENCE, "optional": True},
+            # A behavioural detection's own measured plane: a flow anomaly on the
+            # same entity is PASSIVE_FLOW, independent of the detection lane.
+            {"kind": "flow_volume_anomaly", "optional": True},
+        ],
+        "verdict": {
+            "owner": "netops", "layer": "security/detection",
+            "first_steps": [
+                "Open the detection's evidence reference (the rule and the observation it fired on)",
+                "Check whether the network fault on this device began within the detection window",
+                "Verify the device's config/audit trail for an unplanned change around the same time",
+            ],
+        },
+        "operator_phrase": "A detection fired on this device and the device is also showing a network fault — treat as one story until the evidence separates them",
+        "manager_phrase": "Suspicious activity was detected on a device that is also having network problems",
+        "blast_radius": "the detected device and its immediate neighbours",
+        "false_positives": (
+            ("a single detection is one vantage and one rule; without an "
+             "independently measured plane it stays suspected by construction"),
+        ),
+    },
+]
+BUILTIN_TEMPLATES.extend(EXPOSURE_STORY_TEMPLATES)
+
+
 def builtin_catalog() -> Catalog:
     """The validated built-in set. Import-time safe: validation errors here
     are a build break, not a runtime surprise (guarded by test)."""

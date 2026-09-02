@@ -314,7 +314,7 @@ CREATE TABLE IF NOT EXISTS netops.corr_signals
     ingest_ts      DateTime64(3) DEFAULT now64(3),
     source         Enum8('flow'=1,'probe'=2,'metric'=3,'alert'=4,
                          'topology'=5,'syslog'=6,'sot_drift'=7,'trap'=8,'cloud'=9,
-                         'app_identity'=10,'controller'=11,'verification'=12,'audit'=13),
+                         'app_identity'=10,'controller'=11,'verification'=12,'audit'=13,'security'=14),
     kind           LowCardinality(String),   -- e.g. probe_loss, if_errors, bgp_peer_down
     observer_id    LowCardinality(String),   -- WHO measured it (independence gate)
     observer_type  Enum8('device'=1,'vantage_agent'=2,'cloud_api'=3,
@@ -324,7 +324,7 @@ CREATE TABLE IF NOT EXISTS netops.corr_signals
     collection_path       LowCardinality(String) DEFAULT 'direct', -- fate-sharing analysis:
                                               -- direct|via_controller|via_cloud_api|via_aggregator
     modality_class Enum8('active_probe'=1,'passive_flow'=2,
-                         'control_plane'=3,'device_telemetry'=4,'management_plane'=5,'active_verification'=6),  -- C4 verdict gate
+                         'control_plane'=3,'device_telemetry'=4,'management_plane'=5,'active_verification'=6,'security'=7),  -- C4 verdict gate
     source_clock_quality LowCardinality(String) DEFAULT 'unknown', -- ntp|ptp|free_running|unknown
     entity_type    Enum8('device'=1,'interface'=2,'path'=3,'segment'=4,
                          'site'=5,'service'=6,'prefix'=7,'app'=8,'cloud_resource'=9,
@@ -369,7 +369,7 @@ CREATE TABLE IF NOT EXISTS netops.corr_signals_archive
     ingest_ts      DateTime64(3) DEFAULT now64(3),
     source         Enum8('flow'=1,'probe'=2,'metric'=3,'alert'=4,
                          'topology'=5,'syslog'=6,'sot_drift'=7,'trap'=8,'cloud'=9,
-                         'app_identity'=10,'controller'=11,'verification'=12,'audit'=13),
+                         'app_identity'=10,'controller'=11,'verification'=12,'audit'=13,'security'=14),
     kind           LowCardinality(String),
     observer_id    LowCardinality(String),
     observer_type  Enum8('device'=1,'vantage_agent'=2,'cloud_api'=3,
@@ -378,7 +378,7 @@ CREATE TABLE IF NOT EXISTS netops.corr_signals_archive
     observer_trust_domain LowCardinality(String) DEFAULT '',
     collection_path       LowCardinality(String) DEFAULT 'direct',
     modality_class Enum8('active_probe'=1,'passive_flow'=2,
-                         'control_plane'=3,'device_telemetry'=4,'management_plane'=5,'active_verification'=6),
+                         'control_plane'=3,'device_telemetry'=4,'management_plane'=5,'active_verification'=6,'security'=7),
     source_clock_quality LowCardinality(String) DEFAULT 'unknown',
     entity_type    Enum8('device'=1,'interface'=2,'path'=3,'segment'=4,
                          'site'=5,'service'=6,'prefix'=7,'app'=8,'cloud_resource'=9,

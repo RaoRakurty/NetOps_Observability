@@ -53,7 +53,17 @@ T0 = datetime(2026, 6, 12, 9, 42, 0, tzinfo=timezone.utc)
 # exists to kill. It is now `undetermined` with a per-clause checklist. The hash
 # moved because the VERDICT moved; the hash PATH is untouched, and re-freezing
 # here is the record of that, not a licence to re-freeze again.
-FIXTURE_GOLDEN = "9faa2431af85b896"
+#
+# RE-FROZEN AGAIN, 2026-09-02, T2b (was "9faa2431af85b896"). content_hash pins
+# `catalog_version` (it is part of the hypotheses blob), and the catalog gained
+# the three Exposure Story templates — so the pin MUST move whenever the rule
+# base does, by design. This object's DECISION is unchanged and that was checked
+# rather than assumed: rebuilt against the pre-T2b template list, its hypotheses
+# blob is byte-identical modulo the `catalog_version` string, and the verdict is
+# still `undetermined`. The same property is asserted for whole objects in
+# test_security_grounding_t2b.py
+# ::test_v1_stream_is_byte_identical_with_and_without_the_templates.
+FIXTURE_GOLDEN = "4bbdad70a36d0cee"
 
 
 def _sig(kind, et, eid, *, off=0.0, src=Source.METRIC, sev=Severity.HIGH,

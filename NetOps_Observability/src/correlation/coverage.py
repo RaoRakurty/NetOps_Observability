@@ -28,7 +28,18 @@ Classification vocabulary (``classify_kind`` / ``coverage_report``):
 from __future__ import annotations
 
 from catalog import Catalog
-from producers import EMITTED_KINDS
+from producers import EMITTED_KINDS as PRODUCER_EMITTED_KINDS
+from signals import EVIDENCE_BUS_KINDS
+
+# The engine's FULL emitted vocabulary = the producer pipeline's kinds
+# (producers.EMITTED_KINDS — everything parsed out of a raw wire shape) UNION
+# the kinds the generic evidence-class bus intake emits (signals.EVIDENCE_BUS_
+# KINDS — lanes that publish an already-canonical envelope, T2b). Both are kinds
+# `handle_*` puts on the spine, so both are "emitted" for every gate in this
+# module: a signature may reference either, and either is an orphan if no
+# reasoning path consumes it. Kept as one name so the coverage contract has ONE
+# definition of emitted and a new intake style cannot open a hole in it.
+EMITTED_KINDS: frozenset[str] = PRODUCER_EMITTED_KINDS | EVIDENCE_BUS_KINDS
 
 # ── intentional blind spots ──────────────────────────────────────────────────
 # Emitted-but-unconsumed kinds that are INTENTIONALLY required by no signature.

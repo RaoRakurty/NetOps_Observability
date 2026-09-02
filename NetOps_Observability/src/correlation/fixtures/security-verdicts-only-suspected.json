@@ -1,0 +1,17 @@
+{
+  "name": "Two security verdicts on one device, no measured plane: SUSPECTED, never confirmed",
+  "comment": "T2b honesty gate. Independence is about PLANES, not counts: a second verdict from the same lane is the same modality and the same witness, so it adds evidence without adding a vantage. Confirmation needs an independently MEASURED plane — security-exposure-story-confirmed.json is the same exposure with one.",
+  "signals": [
+    {"kind": "security_exposure", "entity_type": "device", "entity_id": "edge-r1",
+     "observer_id": "security:vuln", "observer_type": "platform",
+     "modality": "security", "collection_path": "via_aggregator",
+     "attrs": {"evidence_class": "security", "control_id": "CVE-2026-1234",
+               "seam_id": "seam-7", "internet_facing": true}},
+    {"kind": "security_posture", "entity_type": "device", "entity_id": "edge-r1",
+     "observer_id": "security:netrule", "observer_type": "platform",
+     "modality": "security", "collection_path": "via_aggregator", "ts_offset_s": 20,
+     "attrs": {"evidence_class": "security", "control_id": "CIS-IOS-1.1.4",
+               "status": "Fail"}}
+  ],
+  "expect": {"top": "sig.ent.security.exposure-story", "tier": "suspected", "owner": "netops"}
+}

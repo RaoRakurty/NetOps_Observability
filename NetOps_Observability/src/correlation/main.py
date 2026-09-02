@@ -3,11 +3,25 @@
 FastAPI + aiokafka. engine.py owns determinism (pure ``run_window``, replayable
 forever); this module owns everything that touches the world:
 
-  * Consume the 12 ``TOPICS`` lanes (syslog / flows / metrics / probes /
+  * Consume the 12 ``LANE_TOPICS`` lanes (syslog / flows / metrics / probes /
     snmptrap / cloud / app identities / controller events / app edge /
-    verification / wireless sessions + events) under a supervised consumer —
-    offsets commit only after the ClickHouse flush succeeds, so a crash
-    replays instead of losing signals.
+    verification / wireless sessions + events) PLUS the generic evidence-class
+    topics (``CORR_EVIDENCE_TOPICS``) under a supervised consumer — offsets
+    commit only after the ClickHouse flush succeeds, so a crash replays instead
+    of losing signals.
+
+    Two lane knobs, both DEFAULT-UNCHANGED and both a per-deployment override
+    rather than a shipped behaviour change:
+      - ``CORR_EVIDENCE_TOPICS`` selects the evidence-class lanes (T2b). Empty
+        subscribes to none, which is the run-time half of the removable-module
+        constraint.
+      - ``CORR_SYSLOG_TOPIC`` (A4) swaps the raw syslog lane for the
+        vector-PRE-SCREENED feed (``netops.syslog.control``) on ONE deployment.
+        Pointing it there changes WHICH lines the engine ever sees, so it is a
+        qualification-gated switch: it MUST NOT become the default until a
+        release-qualify leg has graded the pre-screened feed against the raw
+        one (accuracy + accounting), and the correlation principal holds a Read
+        ACL on whatever topic it names.
   * Normalize every event into canonical Signals (producers + the cloud /
     app-identity / wireless intakes), tenant-scoped end to end — a signal
     never crosses its tenant.
@@ -152,6 +166,8 @@ from routing_direction import forwarding_pairs, routing_direction_source
 from scoring import RankingResult, template_scoring_metric_lines
 from series_budget import derive_max_series
 from signals import (
+    EVIDENCE_CLASSES,
+    EVIDENCE_TOPICS,
     DeadLetter,
     EntityType,
     ModalityClass,
@@ -166,6 +182,7 @@ from signals import (
     VantageType,
     derive_probe_authority,
     derive_probe_scope,
+    evidence_signal_from_event,
 )
 from synthetic_normalize import synthetic_app_signal
 from tls_ident import PeerIdentityMiddleware
@@ -218,11 +235,74 @@ CLICKHOUSE_URL   = os.environ.get("CLICKHOUSE_URL", "http://clickhouse:8123")
 CLICKHOUSE_USER  = os.environ.get("CLICKHOUSE_USER", "netops")
 CLICKHOUSE_PASS  = os.environ.get("CLICKHOUSE_PASSWORD", "")
 
-TOPICS = ["netops.syslog", "netops.flows", "netops.metrics", "netops.probes", "netops.snmptrap", "netops.cloud", "netops.app.identities.v1", "netops.controller_events", "netops.app.edge", "netops.verification",
-          # #128 Q7: DEDICATED wireless topics — session records and onboarding
-          # observations must not starve SD-WAN/fabric controller events on a
-          # shared partition set (wireless is the highest-volume producer).
-          "netops.wireless_sessions", "netops.wireless_events"]
+LANE_TOPICS = ["netops.syslog", "netops.flows", "netops.metrics", "netops.probes", "netops.snmptrap", "netops.cloud", "netops.app.identities.v1", "netops.controller_events", "netops.app.edge", "netops.verification",
+               # #128 Q7: DEDICATED wireless topics — session records and onboarding
+               # observations must not starve SD-WAN/fabric controller events on a
+               # shared partition set (wireless is the highest-volume producer).
+               "netops.wireless_sessions", "netops.wireless_events"]
+
+
+# T2b — the GENERIC evidence-class bus (signals.EVIDENCE_CLASSES). These topics
+# carry records that are ALREADY canonical (entity + seam + ts + evidence refs),
+# so they need no lane parser and get no lane handler: one generic intake maps
+# the envelope onto a Signal by field name. The default is every registered
+# class's topic; `CORR_EVIDENCE_TOPICS` overrides it (a comma list, or empty to
+# subscribe to none) — which is what makes an evidence class REMOVABLE at run
+# time as well as at build time, with nothing else in the engine to change.
+#
+# OPERATIONAL PRECONDITION: the correlation principal needs a Kafka Read ACL on
+# every topic listed here (deployment/docker/kafka/apply-acls.sh). A topic the
+# principal cannot read fails the whole SUBSCRIPTION, not just that lane — set
+# CORR_EVIDENCE_TOPICS="" to drop back to the network lanes if a broker has not
+# been granted it yet.
+
+
+def evidence_topics_from_env(raw: str | None) -> tuple[str, ...]:
+    """`CORR_EVIDENCE_TOPICS` → the evidence topics to subscribe to.
+
+    None (unset) = every registered class's topic. A comma list overrides it;
+    the EMPTY string subscribes to none, which is the run-time half of the
+    removable-module constraint — the engine then consumes exactly the network
+    lanes it consumed before any evidence class existed. Pure, so the contract
+    is testable without reimporting this module."""
+    if raw is None:
+        raw = ",".join(EVIDENCE_TOPICS)
+    return tuple(t.strip() for t in raw.split(",") if t.strip())
+
+
+CORR_EVIDENCE_TOPICS: tuple[str, ...] = evidence_topics_from_env(
+    os.environ.get("CORR_EVIDENCE_TOPICS"))
+EVIDENCE_TOPIC_SET: frozenset[str] = frozenset(CORR_EVIDENCE_TOPICS)
+
+TOPICS = LANE_TOPICS + [t for t in CORR_EVIDENCE_TOPICS if t not in LANE_TOPICS]
+
+
+def apply_syslog_topic(topics: list[str], syslog_topic: str) -> list[str]:
+    """Swap the raw syslog lane for `syslog_topic`, leaving every other entry
+    byte-identical (A4). Pure, so the switch is testable without reimporting
+    this module — and so "exactly one entry moves" is an assertion, not a
+    reading of the code."""
+    return [syslog_topic if t == "netops.syslog" else t for t in topics]
+
+
+# A4 — the pre-screened syslog lane, as a per-deployment SWITCH.
+#
+# The syslog lane can be pointed at the vector-PRE-SCREENED `netops.syslog.control`
+# feed instead of the raw `netops.syslog` one. DEFAULT UNCHANGED: absent the env
+# var this resolves to "netops.syslog" and `TOPICS` is byte-identical to what it
+# was, so nothing about the shipped configuration moves.
+#
+# WHY IT IS NOT A DEFAULT. Pointing it at the pre-screened feed changes WHICH
+# LINES THE ENGINE EVER SEES — it is an accuracy and an accounting change, not a
+# transport change (a line the screen drops can never become evidence, and
+# injected == persisted is measured against the lane the engine consumed). It
+# therefore requires a RELEASE-QUALIFY LEG grading the pre-screened feed against
+# the raw one before it may become the default (INVARIANTS §10: the SLO's
+# lossless and accuracy clauses are proven per-configuration, never inherited).
+# The correlation principal also needs a Read ACL on whatever topic it names
+# (deployment/docker/kafka/apply-acls.sh).
+CORR_SYSLOG_TOPIC = os.environ.get("CORR_SYSLOG_TOPIC", "netops.syslog")
+TOPICS = apply_syslog_topic(TOPICS, CORR_SYSLOG_TOPIC)
 
 # #81 P3B runtime source — a file-based cloud-log tailer (dev/demo + on-host log
 # drops). Reads *.alb / *.vpc files from CLOUD_LOGS_DIR, parses them with the P3B
@@ -661,6 +741,42 @@ APP_EDGE_RECEIVED = 0         # consumed from netops.app.edge (#98 P5 LB/proxy/i
 APP_EDGE_SIGNALS = 0          # canonical app-edge signals written + buffered
 APP_EDGE_DROPPED = 0          # dropped: no tenant (default-closed) / unclassifiable
 CLOCK_SKEW_SIGNALS = 0        # clock_skew meta-findings written (S5 — never buffered)
+
+# T2b generic evidence-class bus intake (handle_evidence_event). One counter set
+# for EVERY class — the class is a metric LABEL, never a counter name, so adding
+# or removing an evidence class adds no counter and needs no exposure change.
+EVIDENCE_EVENTS_RECEIVED = 0  # records consumed from the evidence-class topics
+EVIDENCE_EVENTS_SIGNALS = 0   # canonical signals written to corr_signals + buffered
+EVIDENCE_EVENTS_DROPPED = 0   # dropped: refused tenant claim / malformed (dead-lettered)
+# (class, outcome) -> count, rendered as corr_evidence_events_total{class,outcome}.
+# BOUNDED BY CONSTRUCTION (§9): the key space is the registered class names (plus
+# the fixed "unknown" bucket for a record whose kind names no class) x the three
+# outcomes below — no untrusted string ever becomes a key, so this map cannot
+# grow with traffic. Keyed "class|outcome" so it is JSON-shaped for /healthz.
+#
+#   grounded — a signal was built AND its entity is one the tenant registry
+#              knows, so it can co-locate with that device's telemetry
+#   orphan   — a signal was built and persisted, but the registry knows no such
+#              entity: it is kept (never silently dropped) and counted, because
+#              "the security lane is grounding onto devices we do not have" is a
+#              coverage fact an operator must be able to SEE
+#   invalid  — refused: bad envelope (dead-lettered) or a contradicted tenant
+#              claim (quarantined). Never guessed, never persisted.
+EVIDENCE_EVENT_OUTCOMES: tuple[str, ...] = ("grounded", "orphan", "invalid")
+EVIDENCE_EVENTS_TOTAL: dict[str, int] = {
+    f"{cls}|{outcome}": 0
+    for cls in list(EVIDENCE_CLASSES) + ["unknown"]
+    for outcome in ("grounded", "orphan", "invalid")
+}
+
+
+def _count_evidence_event(evidence_class: str, outcome: str) -> None:
+    """Tally one evidence-bus record. Pre-seeded keys only — an unregistered
+    class falls into the fixed "unknown" bucket rather than minting a key."""
+    key = f"{evidence_class}|{outcome}"
+    if key not in EVIDENCE_EVENTS_TOTAL:
+        key = f"unknown|{outcome}"
+    EVIDENCE_EVENTS_TOTAL[key] = EVIDENCE_EVENTS_TOTAL.get(key, 0) + 1
 
 # Clock-skew finding cooldown (log-time standard S5): one clock_skew signal per
 # (tenant, entity) per window — a device with a wrong clock logs continuously,
@@ -9711,7 +9827,8 @@ def quarantine_event(topic: str, event: object, exc: BaseException) -> None:
 
 # ── horizontal scale: tenant-keyed co-partitioning (scale P0) ────────────────
 #
-# THE CONTRACT: every producer onto the 12 consumed topics keys each record by
+# THE CONTRACT: every producer onto the consumed topics (the 12 lane topics
+# plus whatever CORR_EVIDENCE_TOPICS subscribes to) keys each record by
 # the tenant the engine will attribute it to (fallback "global"), using the
 # Java-compatible murmur2 partitioner (Vector sinks: librdkafka
 # `murmur2_random`; cloud-ingest: kafka-python's default murmur2; flows are
@@ -11583,7 +11700,12 @@ async def handle(topic: str, event: dict | None) -> None:
 async def _handle_lane(topic: str, event: dict) -> None:
     if topic == "netops.metrics":
         await handle_metric(event)
-    elif topic == "netops.syslog":
+    elif topic == CORR_SYSLOG_TOPIC:
+        # A4: the syslog lane is whichever topic CORR_SYSLOG_TOPIC names —
+        # `netops.syslog` by default. Compared against the resolved constant
+        # rather than a literal so the switch cannot silently route the lane's
+        # traffic to no handler at all (which is what a TOPICS-only swap would
+        # have done: subscribed, consumed, and dropped every line).
         await handle_syslog(event)
     elif topic == "netops.flows":
         await handle_flow(event)
@@ -11605,6 +11727,13 @@ async def _handle_lane(topic: str, event: dict) -> None:
         await handle_wireless_session(event)
     elif topic == "netops.wireless_events":
         await handle_wireless_event(event)
+    elif topic in EVIDENCE_TOPIC_SET:
+        # ONE branch for every evidence class, present and future: the class is
+        # selected by the envelope's own `kind`, inside the generic adapter.
+        # Nothing here names a class, so this tail is O(1) and unchanged when a
+        # class is added or removed (INVARIANTS §10: no per-class branching in
+        # the hot loop).
+        await handle_evidence_event(event)
 
 
 def metric_identity(ev: dict) -> tuple[str, EntityType, str, tuple[str, ...]] | None:
@@ -12345,6 +12474,76 @@ async def handle_app_edge(ev: dict) -> None:
              sig.observer.observer_id)
 
 
+async def handle_evidence_event(ev: dict) -> None:
+    """GENERIC evidence-class intake (T2b) — the ONE handler for every topic in
+    `CORR_EVIDENCE_TOPICS`, whatever evidence class publishes there.
+
+    THE CONTRACT (SECURITY_OBSERVABILITY_HLD 2026-08-25, "security is a REMOVABLE
+    module"): a lane that already speaks the canonical evidence shape — entity +
+    seam + timestamp + evidence refs — is grounded by the engine with ZERO
+    lane-specific code. This function reads the envelope's `kind`, looks up the
+    `EvidenceClassSpec` it belongs to, and hands both to a pure adapter. It
+    names no class, imports no class's module, and branches on nothing about the
+    class; every class-specific fact is a row of data in signals.EVIDENCE_CLASSES.
+    Deleting a producing module (or dropping its topic from CORR_EVIDENCE_TOPICS)
+    leaves this handler, and every other lane, unchanged.
+
+    TENANCY (§3a), verified exactly like syslog rather than trusted like the
+    cloud lane: an evidence verdict names a DEVICE, so its self-declared tenant
+    can be checked against the device registry. A claim that CONTRADICTS the
+    registry is refused and quarantined before anything is persisted — a verdict
+    about tenant A's device can never be filed under tenant B. It is not
+    registry-ANCHORED, because a legitimate subject (a host, a container) may not
+    be in the device registry at all; for those the authenticated producer's
+    claim stands, and an unclaimed unknown subject falls to the platform tenant,
+    never to another customer's.
+
+    A malformed envelope dead-letters (counted, payload kept) exactly as every
+    other lane's malformed input does — provenance is never invented.
+    """
+    global EVIDENCE_EVENTS_RECEIVED, EVIDENCE_EVENTS_SIGNALS, EVIDENCE_EVENTS_DROPPED
+    global DEADLETTER_COUNT
+    EVIDENCE_EVENTS_RECEIVED += 1
+    if not CORR_SIGNALS_ENABLED or ch is None:
+        return
+    # The class label for the metric, resolved from the envelope's own kind. A
+    # kind naming no registered class lands in the fixed "unknown" bucket — the
+    # counter can never be widened by an untrusted string.
+    spec = signals.EVIDENCE_CLASS_BY_KIND.get(str(ev.get("kind") or "").strip())
+    label = spec.name if spec is not None else "unknown"
+    entity_id = str(ev.get("entity_id") or "").strip()
+    try:
+        tenant = verified_tenant(str(ev.get("tenant_id") or ""), entity_id,
+                                 "evidence")
+    except TenantClaimRefused as exc:
+        DEADLETTER_COUNT += 1
+        EVIDENCE_EVENTS_DROPPED += 1
+        _count_evidence_event(label, "invalid")
+        keep_deadletter_payload("evidence", ev, exc)
+        return
+    try:
+        sig = evidence_signal_from_event(ev, tenant)
+    except DeadLetter as exc:
+        DEADLETTER_COUNT += 1
+        EVIDENCE_EVENTS_DROPPED += 1
+        _count_evidence_event(label, "invalid")
+        keep_deadletter_payload("evidence", ev, exc)
+        log.warning("dead-letter (evidence): %s", exc)
+        return
+    await batch_signal(sig.to_ch_row())  # batched: lane=evidence
+    EVIDENCE_EVENTS_SIGNALS += 1
+    buffer_signal(sig)
+    # Grounded vs orphan is an OBSERVATION about coverage, not a gate: the signal
+    # is written and buffered either way. An orphan can still co-locate with any
+    # later signal that carries the same token — it just has no registry-known
+    # device to co-locate WITH today, which is the honest thing to report.
+    _count_evidence_event(
+        label, "grounded" if tenant_lookup(sig.entity_id) is not None else "orphan")
+    log.info("evidence signal %s: class=%s entity=%s sev=%s seam=%s",
+             sig.kind, label, sig.entity_id, sig.severity.value,
+             sig.attrs.get("seam_id", ""))
+
+
 async def handle_syslog(ev: dict) -> None:
     # Control-plane extraction first (#67 build ⑦): adjacency / link-state
     # events become control_plane signals on the spine regardless of burst
@@ -13050,10 +13249,35 @@ def _metrics_text(health: dict | None = None) -> str:
         # label. A rule that stops firing shows as a FLAT series, not a missing
         # one (every id is pre-seeded at zero), which is what makes a silently
         # dead branch visible.
+        # T2b evidence-class bus intake. DISTINCT from corr_evidence_items_total
+        # (the Evidence PLANE's materialization queue): this counts INBOUND
+        # records off the generic evidence topics. Label cardinality is the
+        # registered class set x 3 outcomes — fixed at import, no untrusted
+        # string reaches a label, and every series is pre-seeded at zero so a
+        # lane that stops producing shows as FLAT, not as a missing series.
+        "# HELP corr_evidence_events_total Evidence-class bus records consumed, by class and grounding outcome.",
+        "# TYPE corr_evidence_events_total counter",]
+    for _key, _n in sorted(ing["evidence_by_class"].items()):
+        _cls, _, _outcome = _key.partition("|")
+        lines.append(
+            f'corr_evidence_events_total{{class="{_cls}",outcome="{_outcome}"}} {_n}')
+    lines += [
         "# HELP corr_parser_rule_hits_total Signals emitted, by the parser rule that classified them.",
         "# TYPE corr_parser_rule_hits_total counter",]
     for _rid, _hits in sorted(_parser["rule_hits"].items()):
         lines.append(f'corr_parser_rule_hits_total{{rule_id="{_rid}"}} {_hits}')
+    lines += [
+        # A3 shadow rules: a branch that MATCHED but deliberately emitted no
+        # signal. Disjoint from corr_parser_rule_hits_total by construction —
+        # a hit is a signal, a shadow hit is a match the parser chose not to
+        # promote — so the pair is the honest "what the estate sends vs what
+        # the engine acts on" split, and a shadow rate climbing against a flat
+        # hit rate is the signal that a shadow branch is ready to graduate.
+        # Same bounded label set: `rule_id` comes from the fixed rule corpus.
+        "# HELP corr_parser_shadow_hits_total Shadow-rule matches that emitted NO signal, by rule.",
+        "# TYPE corr_parser_shadow_hits_total counter",]
+    for _rid, _hits in sorted(_parser["shadow_hits"].items()):
+        lines.append(f'corr_parser_shadow_hits_total{{rule_id="{_rid}"}} {_hits}')
     lines += [
         # The unclassified safety nets (#80 §4). Rising against a flat typed
         # rate = the estate started emitting something the parser cannot read.
@@ -14185,6 +14409,14 @@ def _health_payload() -> dict:
             "wireless_received": WIRELESS_RECEIVED,
             "wireless_signals": WIRELESS_SIGNALS,
             "wireless_dropped": WIRELESS_DROPPED,
+            # T2b generic evidence-class bus: proves the subscribed evidence
+            # topics are consumed, and where records are refused. `by_class` is
+            # the (class, outcome) split — the same numbers /metrics labels.
+            "evidence_topics": list(CORR_EVIDENCE_TOPICS),
+            "evidence_received": EVIDENCE_EVENTS_RECEIVED,
+            "evidence_signals": EVIDENCE_EVENTS_SIGNALS,
+            "evidence_dropped": EVIDENCE_EVENTS_DROPPED,
+            "evidence_by_class": dict(sorted(EVIDENCE_EVENTS_TOTAL.items())),
         },
         # W1b parser provenance + coverage. `rule_hits` is keyed by the FIXED
         # `producers.RULES` id set (bounded cardinality — no device string can

@@ -26,11 +26,11 @@ from pathlib import Path
 from catalog import Catalog, Template, builtin_catalog
 from coverage import (
     COLLECTION_PENDING,
+    EMITTED_KINDS,
     NORMALIZATION_PENDING,
     classify_kind,
 )
-from producers import EMITTED_KINDS
-from signals import ModalityClass
+from signals import EVIDENCE_CLASS_BY_KIND, ModalityClass
 
 # ── kind → modality class of its PRODUCTION producer ─────────────────────────
 # The audit's ground truth for evidence-independence math. Completeness is
@@ -130,6 +130,14 @@ KIND_MODALITY: dict[str, ModalityClass] = {
     "active_verification_result": ModalityClass.ACTIVE_VERIFICATION,
     "active_verification_healthy": ModalityClass.ACTIVE_VERIFICATION,
 }
+
+# Evidence-class bus lanes (T2b) register DECLARATIVELY: their modality is the
+# one their `EvidenceClassSpec` stamps, read from the same registry the intake
+# adapter reads, so the audit's independence math and the runtime Signal can
+# never disagree. No class is named here — adding or removing a class is a
+# registry edit, and this loop is unchanged either way.
+KIND_MODALITY.update(
+    {kind: spec.modality for kind, spec in EVIDENCE_CLASS_BY_KIND.items()})
 
 # Kinds whose PRODUCTION signals can ground on an application/service entity
 # (app:/host: tokens) so they can co-locate on an app-impact object. The

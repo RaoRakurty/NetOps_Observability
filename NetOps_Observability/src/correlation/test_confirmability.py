@@ -17,7 +17,10 @@ from confirmability import (
     reconciliation,
     write_reports,
 )
-from producers import EMITTED_KINDS
+
+# The engine's FULL emitted vocabulary (producer-pipeline kinds UNION the
+# evidence-class bus kinds) — coverage.py owns the single definition.
+from coverage import EMITTED_KINDS
 
 CAT = builtin_catalog()
 ROWS = {r["signature_id"]: r for r in audit(CAT)}

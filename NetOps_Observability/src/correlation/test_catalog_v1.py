@@ -43,8 +43,14 @@ def test_v1_voice_contract_mandatory():
 
 
 def test_seam_tagged_template_rejects_missing_phrases():
-    bad = dict(BUILTIN_TEMPLATES[-1])  # a valid v1 entry…
-    bad = {**bad, "id": "sig.ent.app.phrase-lint-probe", "operator_phrase": ""}
+    # Pick a SEAM-TAGGED entry explicitly rather than BUILTIN_TEMPLATES[-1]:
+    # the lint under test only fires on `seams`, so "the last template in the
+    # list" quietly stopped exercising it the first time a seam-less family was
+    # appended (T2b's Exposure Story seed). Selecting by the property being
+    # tested makes the test independent of catalog ORDER.
+    seam_tagged = next(t for t in BUILTIN_TEMPLATES if t.get("seams"))
+    bad = {**seam_tagged, "id": "sig.ent.app.phrase-lint-probe",
+           "operator_phrase": ""}
     with pytest.raises(pydantic.ValidationError):
         load_catalog([bad])
 

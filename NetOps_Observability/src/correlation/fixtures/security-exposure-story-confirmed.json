@@ -1,0 +1,15 @@
+{
+  "name": "Exposure verdict (security lane) + BGP adjacency change (syslog) on ONE device: exposure story confirmed",
+  "comment": "T2b. Two INDEPENDENT planes: a rule/advisory verdict (security modality, platform witness) and a control-plane transition measured on the wire (device witness). The verdict alone could never confirm — see security-exposure-only-suspected.json, the same signal without corroboration.",
+  "signals": [
+    {"kind": "security_exposure", "entity_type": "device", "entity_id": "edge-r1",
+     "observer_id": "security:vuln", "observer_type": "platform",
+     "modality": "security", "collection_path": "via_aggregator",
+     "attrs": {"evidence_class": "security", "control_id": "CVE-2026-1234",
+               "seam_id": "seam-7", "internet_facing": true}},
+    {"kind": "bgp_adjacency_change", "entity_type": "device", "entity_id": "edge-r1",
+     "observer_id": "syslog-edge-r1", "observer_type": "device",
+     "modality": "control_plane", "collection_path": "direct", "ts_offset_s": 30}
+  ],
+  "expect": {"top": "sig.ent.security.exposure-story", "tier": "confirmed", "owner": "netops"}
+}

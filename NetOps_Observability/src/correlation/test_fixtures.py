@@ -43,6 +43,9 @@ MODALITY_SOURCE = {
     ModalityClass.CONTROL_PLANE: Source.TOPOLOGY,
     ModalityClass.DEVICE_TELEMETRY: Source.METRIC,
     ModalityClass.MANAGEMENT_PLANE: Source.CONTROLLER,  # NMS controller intelligence
+    # T2b evidence-class bus: a rule/benchmark/advisory VERDICT, its own plane
+    # (signals.EVIDENCE_CLASSES). Source mirrors the lane exactly as the others do.
+    ModalityClass.SECURITY: Source.SECURITY,
 }
 
 

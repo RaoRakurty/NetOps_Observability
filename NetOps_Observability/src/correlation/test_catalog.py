@@ -12,7 +12,7 @@ from verdicts import VerdictTier
 
 def test_builtin_catalog_validates():
     cat = builtin_catalog()
-    assert len(cat.enabled_templates()) == 100  # +9 wireless (#128 Phase 3: ap-down pair, 3 RF, capwap, wlc-failover, 2 onboarding); +3 NMS controller-intel (P4b); +1 saas-experience-degraded; +1 cloud app-dependency-down; +1 cloud ipsec-tunnel-down; +1 middle-mile ipsec-underlay-down; +4 cloud edge-dependency attribution (Wave 3 #9: lb-5xx / waf-block / firewall-reject / dns-failure)
+    assert len(cat.enabled_templates()) == 103  # +3 Exposure Story (T2b evidence-class grounding seed); +9 wireless (#128 Phase 3: ap-down pair, 3 RF, capwap, wlc-failover, 2 onboarding); +3 NMS controller-intel (P4b); +1 saas-experience-degraded; +1 cloud app-dependency-down; +1 cloud ipsec-tunnel-down; +1 middle-mile ipsec-underlay-down; +4 cloud edge-dependency attribution (Wave 3 #9: lb-5xx / waf-block / firewall-reject / dns-failure)
     assert all(t.id.startswith("sig.ent.") for t in cat.templates)
 
 

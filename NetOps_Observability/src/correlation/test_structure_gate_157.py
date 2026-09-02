@@ -182,7 +182,7 @@ def test_the_audit_is_pinned():
     that quietly loses its declaration, or a new family that declares one, has
     to come through this list — which is the whole point of auditing all 146
     rather than patching the one that was reported."""
-    assert (len(CAT.templates), len(ALL_TEMPLATES)) == (146, 100)
+    assert (len(CAT.templates), len(ALL_TEMPLATES)) == (149, 103)
     assert {t.id: tuple(t.requires_structure) for t in CAT.templates
             if t.requires_structure} == {
         "sig.ent.wan-edge.congestion": ("transit_path",),

@@ -136,6 +136,12 @@ class Source(str, Enum):
     CONTROLLER = "controller"  # NMS: vendor-controller intelligence (Meraki/vManage/Catalyst/…)
     VERIFICATION = "verification"  # RCA spec item 8: active-verification check battery results
     AUDIT = "audit"  # item 121: operator/API actions mirrored onto the spine (audit→feed bridge)
+    # T2b generic EVIDENCE-CLASS bus lane. One value per registered evidence
+    # class (see EVIDENCE_CLASSES below) — the wire lane a verdict arrived on,
+    # exactly as CLOUD names the cloud lane and CONTROLLER the NMS lane. It is
+    # DATA, not a code path: the engine has no branch on it, and deleting the
+    # producing module leaves an unused enum value, nothing to unwind.
+    SECURITY = "security"
 
 
 class ObserverType(str, Enum):
@@ -162,6 +168,15 @@ class ModalityClass(str, Enum):
     # while observer identity (the answering device itself) still blocks a
     # device from corroborating its own passive telemetry.
     ACTIVE_VERIFICATION = "active_verification"
+    # A VERDICT plane: a rule/benchmark/advisory evaluated against captured
+    # state or a feed, not a measurement taken on the wire. It is its OWN
+    # modality so the independence gate treats it as a corroborating-but-not-
+    # confirming plane exactly like MANAGEMENT_PLANE: a verdict alone can never
+    # reach confirmed, and confirmation always needs a second, independently
+    # measured plane (control_plane / device_telemetry / passive_flow /
+    # active_probe). Distinct from MANAGEMENT_PLANE because a scanner and a
+    # vendor controller are not one witness — they can corroborate each other.
+    SECURITY = "security"
 
 
 class EntityType(str, Enum):
@@ -347,9 +362,11 @@ def classify_observer_kind(
     mod = modality.value if isinstance(modality, ModalityClass) else str(modality or "").strip().lower()
     if mod in ("control_plane", "management_plane"):
         return OBSERVER_KIND_CONTROL_PLANE
-    if mod in ("device_telemetry", "passive_flow", "active_verification"):
+    if mod in ("device_telemetry", "passive_flow", "active_verification", "security"):
         # active_verification: the witness is the answering device (or the
         # platform executor for reach probes) — never a logical vantage.
+        # security (and any future evidence-class lane): the witness is the
+        # platform rule/feed evaluator, never a logical vantage either.
         return OBSERVER_KIND_COLLECTOR
     if mod == "active_probe":
         if _is_never_vantage(observer_id):
@@ -851,3 +868,277 @@ def _ch_dt(dt: datetime) -> int:
     the old strftime()[:-3] string form."""
     dt = dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
     return int(dt.timestamp()) * 1000 + dt.microsecond // 1000
+
+
+# ══ GENERIC EVIDENCE-CLASS BUS INTAKE (T2b) ══════════════════════════════════
+#
+# WHAT THIS IS. A second, declarative way for an evidence lane to reach the
+# spine. The existing lanes (syslog, flows, cloud, controller, verification …)
+# each own a hand-written producer module because each parses a DIFFERENT raw
+# wire shape. An evidence-class lane does not: it publishes an ALREADY-CANONICAL
+# envelope — entity + seam + timestamp + evidence refs — whose fields map onto
+# Signal fields BY NAME. So there is no per-lane parser to write, and therefore
+# no per-lane code for the engine to depend on.
+#
+# WHY IT MATTERS (the removable-module constraint, HLD 2026-08-25). The engine
+# must ground a new evidence class WITHOUT importing, naming or branching on
+# that class. Everything class-specific here is one frozen row in
+# `EVIDENCE_CLASSES` — data. `evidence_signal_from_event` reads the row and
+# never asks which class it got. Removing a class is deleting its producers
+# (and, optionally, its row); nothing in the engine has to change.
+#
+# WHY THE FIELDS ARE DECLARED, NOT HARD-CODED. `rule_id_fields` /
+# `observer_fields` are ordered lookup lists rather than an if-chain, so a lane
+# whose attrs spell the rule id differently is a data edit, not a code edit.
+#
+# BOUNDEDNESS (§9 / INVARIANTS §10a). Nothing here retains state: the registry
+# is built once at import and is O(classes × kinds); the adapter is pure and
+# allocates one Signal. Every untrusted string it copies is capped by the
+# Signal/Observer model, `entity_tokens` by MAX_TOKENS and the whole attrs blob
+# by ATTRS_MAX_BYTES — the same bounds every other lane passes through.
+
+# Wire severity token → canonical Severity. Deliberately its OWN table rather
+# than a reach into a lane module (signals.py is the bottom of the import
+# graph): the vocabulary is the union of the common vendor/cloud/OCSF spellings.
+EVIDENCE_SEVERITY_ALIASES: dict[str, Severity] = {
+    "info": Severity.INFO, "informational": Severity.INFO, "notice": Severity.INFO,
+    "debug": Severity.INFO, "ok": Severity.INFO, "low": Severity.INFO,
+    "none": Severity.INFO, "pass": Severity.INFO,
+    "warn": Severity.WARN, "warning": Severity.WARN, "minor": Severity.WARN,
+    "medium": Severity.WARN, "moderate": Severity.WARN,
+    "high": Severity.HIGH, "error": Severity.HIGH, "err": Severity.HIGH,
+    "major": Severity.HIGH, "important": Severity.HIGH,
+    "crit": Severity.CRIT, "critical": Severity.CRIT, "fatal": Severity.CRIT,
+    "emergency": Severity.CRIT,
+}
+
+# Max evidence_refs copied onto a Signal. Refs are POINTERS (locator + ruleset
+# version + digest), so a handful is the honest working set; a producer that
+# shipped hundreds would otherwise push the attrs blob into _shrink_attrs and
+# cost every downstream reader. Bounded here, at the boundary (§9).
+EVIDENCE_REFS_MAX = 8
+
+# The wire contract this adapter implements (secbus.SchemaVersion). A record
+# stamped with anything else is REFUSED, never best-effort parsed: provenance is
+# never invented (§10 no silent failures). "" is accepted as the pre-versioning
+# form so an older producer is not silently darkened.
+EVIDENCE_SCHEMA_VERSIONS: frozenset[str] = frozenset({"", "1"})
+
+
+@dataclass(frozen=True)
+class EvidenceClassSpec:
+    """One registered EVIDENCE CLASS — the whole of what the engine knows about
+    a bus lane whose records are already canonical. Pure data."""
+
+    name: str                              # attrs["evidence_class"]; the metric label
+    topic: str                             # the bus topic the class publishes on
+    kinds: frozenset[str]                  # the class's Signal.kind vocabulary
+    source: Source
+    modality: ModalityClass
+    observer_type: ObserverType
+    default_entity_type: EntityType
+    trust_domain: str = "platform"
+    collection_path: str = "via_aggregator"
+    # Ordered attrs keys the lane may carry its producing rule's id under; the
+    # first present, non-empty one wins (provenance, W1b `rule_id`).
+    rule_id_fields: tuple[str, ...] = ()
+    # Ordered keys naming the producing sub-lane; used to build the observer id
+    # so two sub-lanes are two witnesses and neither is ever the device itself.
+    observer_fields: tuple[str, ...] = ()
+
+
+EVIDENCE_CLASSES: dict[str, EvidenceClassSpec] = {
+    # The fourth evidence class (SECURITY_OBSERVABILITY_HLD §1). Its kinds are
+    # the lane discriminators secbus emits (src/backend/internal/secbus/event.go
+    # Kind*), NOT per-rule kinds: the control/rule identity rides in attrs, so
+    # the engine's kind space stays a small, stable vocabulary.
+    "security": EvidenceClassSpec(
+        name="security",
+        topic="netops.security",
+        kinds=frozenset({"security_posture", "security_exposure", "security_signal"}),
+        source=Source.SECURITY,
+        modality=ModalityClass.SECURITY,
+        # The witness is the platform's rule/feed evaluator — never the device
+        # under evaluation, so a verdict can never corroborate itself.
+        observer_type=ObserverType.PLATFORM,
+        default_entity_type=EntityType.DEVICE,
+        rule_id_fields=("rule_id", "raw_rule_id", "control_id"),
+        observer_fields=("provider_source", "source"),
+    ),
+}
+
+# kind → its class. Built once; the adapter's ONLY dispatch (one dict lookup,
+# no branch on the class).
+EVIDENCE_CLASS_BY_KIND: dict[str, EvidenceClassSpec] = {
+    kind: spec for spec in EVIDENCE_CLASSES.values() for kind in spec.kinds
+}
+# The kind vocabulary the evidence bus contributes to the engine's emitted set
+# (coverage.EMITTED_KINDS unions it with the producer-pipeline kinds).
+EVIDENCE_BUS_KINDS: frozenset[str] = frozenset(EVIDENCE_CLASS_BY_KIND)
+# The topics the classes publish on — the default of main.CORR_EVIDENCE_TOPICS.
+EVIDENCE_TOPICS: tuple[str, ...] = tuple(
+    sorted({spec.topic for spec in EVIDENCE_CLASSES.values()}))
+
+
+def evidence_class_of(kind: str) -> str:
+    """The evidence class a signal kind belongs to, or "" for the network
+    lanes. Pure, O(1) — the projection a consumer filters stories with."""
+    spec = EVIDENCE_CLASS_BY_KIND.get(kind)
+    return spec.name if spec is not None else ""
+
+
+def evidence_classes_of(kinds) -> tuple[str, ...]:
+    """The sorted, deduped evidence classes present in an iterable of signal
+    kinds. "" (the network lanes) is never emitted as a class."""
+    return tuple(sorted({c for c in (evidence_class_of(k) for k in kinds) if c}))
+
+
+def parse_evidence_severity(raw: object) -> Severity:
+    """Wire severity token → canonical Severity; an unknown token is WARN."""
+    return EVIDENCE_SEVERITY_ALIASES.get(str(raw or "").strip().lower(), Severity.WARN)
+
+
+def _parse_evidence_ts(raw: object) -> datetime | None:
+    """RFC3339(Nano) → tz-aware UTC datetime, or None when unparseable.
+
+    Go's RFC3339Nano emits up to 9 fractional digits; `fromisoformat` accepts at
+    most 6, so the fraction is truncated (never rounded — truncation is
+    deterministic and monotone, which replay requires)."""
+    s = str(raw or "").strip()
+    if not s:
+        return None
+    if s.endswith(("Z", "z")):
+        s = s[:-1] + "+00:00"
+    if "." in s:
+        head, _, rest = s.partition(".")
+        digits = ""
+        for ch in rest:
+            if not ch.isdigit():
+                break
+            digits += ch
+        s = f"{head}.{digits[:6]}{rest[len(digits):]}" if digits else head + rest[len(digits):]
+    try:
+        dt = datetime.fromisoformat(s)
+    except ValueError:
+        return None
+    return dt.astimezone(timezone.utc) if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+
+
+def _first_attr(attrs: dict, keys: tuple[str, ...]) -> str:
+    for k in keys:
+        v = str(attrs.get(k) or "").strip()
+        if v:
+            return v
+    return ""
+
+
+def evidence_signal_from_event(ev: dict, tenant: str) -> Signal:
+    """One canonical evidence-bus envelope → one canonical Signal.
+
+    GENERIC BY CONSTRUCTION: every class-specific fact is read from the
+    `EvidenceClassSpec` the envelope's `kind` selects. There is no branch on the
+    class, and no name of any class appears in this function.
+
+    Raises DeadLetter on a malformed envelope (unknown schema version, unknown
+    kind, no entity, bad entity type, unparseable event time) so the consumer
+    parks + counts the record rather than guessing (§10 no silent failures).
+    Tenancy is the CALLER's job — it is verified against the device registry
+    before this is reached, exactly as the syslog lane does (§3a).
+
+    There is deliberately no ingest-clock fallback (unlike the cloud lane): an
+    envelope with no parseable event time is REFUSED. The producer stamps the
+    verdict instant and refuses to emit without one (secbus.FromFinding), so a
+    missing ts here is a corrupt record, not a tolerable omission — and
+    substituting arrival time would silently re-date evidence (log-time
+    standard S3: event time is never invented).
+    """
+    if not isinstance(ev, dict):
+        raise DeadLetter("evidence event is not an object")
+    schema = str(ev.get("schema_version") or "").strip()
+    if schema not in EVIDENCE_SCHEMA_VERSIONS:
+        raise DeadLetter(f"unsupported evidence schema_version: {schema!r}")
+    kind = str(ev.get("kind") or "").strip()
+    spec = EVIDENCE_CLASS_BY_KIND.get(kind)
+    if spec is None:
+        raise DeadLetter(f"unknown evidence kind: {kind!r}")
+    entity_id = str(ev.get("entity_id") or "").strip()
+    if not entity_id:
+        raise DeadLetter(f"evidence event {kind!r} carries no entity_id")
+    native_id = str(ev.get("native_id") or "").strip()
+    if not native_id:
+        raise DeadLetter(f"evidence event {kind!r} carries no native_id (identity)")
+    ts = _parse_evidence_ts(ev.get("ts"))
+    if ts is None:
+        raise DeadLetter(f"evidence event {kind!r} carries no parseable ts: {ev.get('ts')!r}")
+
+    raw_et = str(ev.get("entity_type") or "").strip()
+    if raw_et:
+        try:
+            entity_type = EntityType(raw_et)
+        except ValueError as exc:
+            raise DeadLetter(f"unknown entity_type {raw_et!r}") from exc
+    else:
+        entity_type = spec.default_entity_type
+
+    raw_tokens = ev.get("entity_tokens")
+    tokens = (tuple(str(t).strip() for t in raw_tokens if str(t or "").strip())
+              if isinstance(raw_tokens, (list, tuple)) else ())
+    if not tokens:
+        tokens = (entity_id,)
+
+    raw_attrs = ev.get("attrs")
+    wire_attrs = dict(raw_attrs) if isinstance(raw_attrs, dict) else {}
+
+    # The engine's evidence CLASS is the registry's, not the payload's. A lane
+    # that already carries a finer `evidence_class` of its own keeps it, under
+    # `evidence_subclass` — renamed, never dropped (§10 nothing silently lost).
+    incoming_class = str(wire_attrs.pop("evidence_class", "") or "").strip()
+    attrs: dict = dict(wire_attrs)
+    if incoming_class:
+        attrs["evidence_subclass"] = incoming_class
+    attrs["evidence_class"] = spec.name
+    # Seam attribution rides in attrs — opaque to the engine's hot path, read by
+    # the seam-owned story surfaces.
+    for wire_key in ("seam_id", "seam_type"):
+        v = str(ev.get(wire_key) or "").strip()
+        if v:
+            attrs[wire_key] = v
+    if bool(ev.get("internet_facing")):
+        attrs["internet_facing"] = True
+    refs = ev.get("evidence_refs")
+    if isinstance(refs, (list, tuple)) and refs:
+        attrs["evidence_refs"] = [r for r in list(refs)[:EVIDENCE_REFS_MAX]
+                                  if isinstance(r, dict)]
+    # W1b provenance, on the same three fields every classified signal carries.
+    # `parser_rev` is "bus" because NO parser ran: the producer published an
+    # already-canonical record, and claiming a rule-corpus revision it never
+    # passed through would be a false provenance claim.
+    rule_id = _first_attr(wire_attrs, spec.rule_id_fields)
+    if rule_id:
+        attrs["rule_id"] = rule_id
+    attrs["parser_rev"] = "bus"
+    fidelity = str(wire_attrs.get("fidelity") or "").strip()
+    if fidelity:
+        attrs["fidelity"] = fidelity
+
+    sub = _first_attr(wire_attrs, spec.observer_fields)
+    observer = observer_of(
+        f"{spec.name}:{sub}" if sub else f"{spec.name}:lane",
+        spec.observer_type,
+        trust_domain=spec.trust_domain,
+        collection_path=spec.collection_path,
+    )
+    return Signal(
+        tenant_id=tenant,
+        ts=ts,
+        source=spec.source,
+        kind=kind,
+        observer=observer,
+        modality_class=spec.modality,
+        entity_type=entity_type,
+        entity_id=entity_id,
+        severity=parse_evidence_severity(ev.get("severity")),
+        native_id=native_id,
+        entity_tokens=tokens,
+        attrs=attrs,
+    )

@@ -129,6 +129,26 @@ _KIND_LAYER: dict[str, CausalLayer] = {
     "wireless_onboarding_key_failure": CausalLayer.LINK,    # 4-way handshake
     "wireless_onboarding_dhcp_failure": CausalLayer.NETWORK,
     "wireless_onboarding_dns_failure": CausalLayer.SERVICE,
+    # ── evidence-class bus lanes (T2b, signals.EVIDENCE_CLASSES) ────────────
+    # The layer model is CLOSED and CAUSAL — it is the practitioner's stack, and
+    # a lower value means "more root-ward". A NEW layer was considered and
+    # REJECTED: "security" is not a layer of the network stack, it is a property
+    # OF a node at one, and inventing a layer for it would put an unordered
+    # value into an ordering that exists only to say what causes what.
+    #
+    # A standing exposure or a failed hardening control is a PRECONDITION of the
+    # device — never a symptom of a link or a routing fault — so DEVICE (the
+    # lowest non-RF layer) is the honest placement: it orders below every
+    # network symptom it could plausibly explain, which is exactly the direction
+    # an Exposure Story needs, and ties with the other device-health kinds so
+    # onset ordering still decides between them.
+    "security_exposure": CausalLayer.DEVICE,
+    "security_posture": CausalLayer.DEVICE,
+    # `security_signal` is INTENTIONALLY unmapped, for the same reason
+    # `cloud_change` / `device_alarm` are: a detection is a classification of an
+    # observation, not a fault at a fixed layer (a beaconing flow is L4, a new
+    # local user is device-plane), so the prior abstains and onset ordering
+    # decides. Honest, never a guessed layer.
     # `wireless_wlc_member_failover` is INTENTIONALLY unmapped: a member
     # failover has no fixed causal layer (a redundancy event, not a fault
     # layer) — the prior abstains, onset ordering decides. By design.
