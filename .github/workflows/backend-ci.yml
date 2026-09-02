@@ -6,9 +6,13 @@ name: backend-ci
 # for those packages, and run repo-wide as non-blocking triage until the existing
 # backlog is burned down (then flip `full-lint` to blocking).
 #
-# Go is pinned to a patched toolchain (go1.25.13): govulncheck flagged a batch of
+# Go is pinned to a patched toolchain (go1.26.8): govulncheck flagged a batch of
 # stdlib CVEs (crypto/tls, crypto/x509, net/http, …) present in go1.24. The same
 # bump is applied to deployment/docker/Dockerfile.backend so prod ships patched.
+# Raised 1.25.13 -> 1.26.8 on 2026-09-02: x/crypto v0.56.0 (GO-2026-6354 /
+# GO-2026-6355, x/crypto/ssh DoS) declares `go 1.26.0`, so the module no longer
+# builds on 1.25. The scanner pins below moved with it — a scanner binary built
+# with an older Go refuses to load a go1.26 module.
 
 on:
   push:
@@ -29,15 +33,17 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  GO_VERSION: '1.25.13'
+  GO_VERSION: '1.26.8'
   # All scanners pinned for reproducible, supply-chain-sound builds (SC-010): an
   # unpinned @latest would let a compromised/regressed release run in CI. Bump
   # deliberately (Dependabot watches these too).
-  STATICCHECK_VERSION: '2025.1.1'
-  GOVULNCHECK_VERSION: 'v1.3.0'
-  GOSEC_VERSION: 'v2.27.1'
-  # v2.x: built with go1.25, required since the go 1.25.0 directive (x/crypto
-  # v0.52.0) made the go1.24-built v1.64.8 refuse to load. Config is v2 format.
+  STATICCHECK_VERSION: '2026.2.1'
+  GOVULNCHECK_VERSION: 'v1.7.0'
+  GOSEC_VERSION: 'v2.29.0'
+  # v2.x config format. The pin must be a release whose published binary is
+  # built with a Go >= the module's `go` directive, or it refuses to load the
+  # module: the v2.12.2 linux-amd64 release is built with go1.26.2, so it still
+  # loads the go 1.26.0 module after the 1.25.13 -> 1.26.8 toolchain raise.
   GOLANGCI_VERSION: 'v2.12.2'
 
 defaults:

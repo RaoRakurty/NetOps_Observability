@@ -22,6 +22,7 @@ package pcap
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"reflect"
 	"strings"
@@ -284,7 +285,7 @@ func TestProfileTableRefusesAPlatformTheProfilesDoNotEstablish(t *testing.T) {
 		if key, _, ok := table.Supports(platform); ok {
 			t.Errorf("Supports(%q) = %q, true — a platform with no declared commands must be refused", platform, key)
 		}
-		if _, err := table.For(platform, testRequest("Ethernet1/1", "")); err != ErrNoPlatform {
+		if _, err := table.For(platform, testRequest("Ethernet1/1", "")); !errors.Is(err, ErrNoPlatform) {
 			t.Errorf("For(%q) = %v, want ErrNoPlatform", platform, err)
 		}
 	}

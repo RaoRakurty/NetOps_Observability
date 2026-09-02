@@ -128,10 +128,7 @@ func (s *notifyConfigStore) seedFromEnv() {
 // itself over a later admin decision. A channel whose env is not set is NOT
 // latched — nothing was migrated, so there is nothing to protect against.
 func (s *notifyConfigStore) migrateEnvChannels() bool {
-	changed := false
-	if s.migrateTeamsFromEnv() {
-		changed = true
-	}
+	changed := s.migrateTeamsFromEnv()
 	if s.migrateSNSFromEnv() {
 		changed = true
 	}

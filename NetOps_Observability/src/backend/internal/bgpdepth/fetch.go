@@ -40,7 +40,7 @@ var ErrUnsafeURL = errors.New("bgpdepth: refused unsafe outbound URL")
 func SafeOutboundURL(raw string) (*url.URL, error) {
 	u, err := url.Parse(strings.TrimSpace(raw))
 	if err != nil {
-		return nil, fmt.Errorf("%w: %v", ErrUnsafeURL, err)
+		return nil, fmt.Errorf("%w: %w", ErrUnsafeURL, err)
 	}
 	if u.Scheme != "https" {
 		return nil, fmt.Errorf("%w: scheme %q (https only)", ErrUnsafeURL, u.Scheme)

@@ -8,6 +8,7 @@ package secapi
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -144,7 +145,7 @@ func TestFileStoreEnforcesViewLimitsAndUniqueNames(t *testing.T) {
 	s := NewFileStore("")
 	ctx := context.Background()
 	seedView(t, s, "acme", "dup")
-	if _, err := s.AddView(ctx, "acme", false, SavedView{TenantID: "acme", Name: "DUP"}); err != ErrDuplicateView {
+	if _, err := s.AddView(ctx, "acme", false, SavedView{TenantID: "acme", Name: "DUP"}); !errors.Is(err, ErrDuplicateView) {
 		t.Fatalf("duplicate name (case-insensitive) = %v, want ErrDuplicateView", err)
 	}
 	// The same name in ANOTHER tenant is fine — uniqueness is per tenant.

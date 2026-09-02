@@ -119,7 +119,7 @@ func TestConfigSourceDistinguishesTransportFailureFromAbsence(t *testing.T) {
 // TestConfigSourceSatisfiesTheHardeningInterface pins the contract structurally.
 func TestConfigSourceSatisfiesTheHardeningInterface(t *testing.T) {
 	f := newFixture(t, nil)
-	var src hardening.ConfigSource = f.eval.ConfigSourceFor("acme")
+	src := f.eval.ConfigSourceFor("acme") // typed hardening.ConfigSource by the method signature
 	if src == nil {
 		t.Fatal("nil config source")
 	}

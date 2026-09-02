@@ -4,7 +4,7 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
-	"io/fs"
+	"os"
 	"regexp"
 	"strings"
 	"testing"
@@ -188,60 +188,71 @@ func TestMultiVendorBindingsDeclarative(t *testing.T) {
 // function LITERAL. A literal is the thing that gets called repeatedly; a named
 // builder function runs once, at catalog-build time.
 func TestNoRegexpIsCompiledInsideAFunctionLiteral(t *testing.T) {
+	// Parsed file-by-file rather than with parser.ParseDir: that helper is
+	// deprecated (it ignores build tags when grouping files into packages), and
+	// this guard only ever wanted "every non-test .go file in this directory".
 	fset := token.NewFileSet()
-	pkgs, err := parser.ParseDir(fset, ".", func(fi fs.FileInfo) bool {
-		return !strings.HasSuffix(fi.Name(), "_test.go")
-	}, 0)
+	entries, err := os.ReadDir(".")
 	if err != nil {
-		t.Fatalf("parse package: %v", err)
+		t.Fatalf("read package dir: %v", err)
 	}
-	if len(pkgs) == 0 {
-		t.Fatal("parsed no packages — the guard would pass vacuously")
+	var files []*ast.File
+	for _, e := range entries {
+		name := e.Name()
+		if e.IsDir() || !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
+			continue
+		}
+		f, err := parser.ParseFile(fset, name, nil, 0)
+		if err != nil {
+			t.Fatalf("parse %s: %v", name, err)
+		}
+		files = append(files, f)
+	}
+	if len(files) == 0 {
+		t.Fatal("parsed no files — the guard would pass vacuously")
 	}
 	compiled := 0
-	for _, pkg := range pkgs {
-		for _, file := range pkg.Files {
-			ast.Inspect(file, func(n ast.Node) bool {
-				lit, ok := n.(*ast.FuncLit)
+	for _, file := range files {
+		ast.Inspect(file, func(n ast.Node) bool {
+			lit, ok := n.(*ast.FuncLit)
+			if !ok {
+				return true
+			}
+			ast.Inspect(lit.Body, func(inner ast.Node) bool {
+				call, ok := inner.(*ast.CallExpr)
 				if !ok {
 					return true
 				}
-				ast.Inspect(lit.Body, func(inner ast.Node) bool {
-					call, ok := inner.(*ast.CallExpr)
-					if !ok {
-						return true
-					}
-					sel, ok := call.Fun.(*ast.SelectorExpr)
-					if !ok {
-						return true
-					}
-					ident, ok := sel.X.(*ast.Ident)
-					if !ok || ident.Name != "regexp" {
-						return true
-					}
-					if sel.Sel.Name == "MustCompile" || sel.Sel.Name == "Compile" {
-						t.Errorf("%s: regexp.%s inside a function literal — the pattern is "+
-							"recompiled on EVERY call. Hoist it to a package-level var or to the "+
-							"enclosing builder, as the rest of this package does.",
-							fset.Position(call.Pos()), sel.Sel.Name)
-					}
+				sel, ok := call.Fun.(*ast.SelectorExpr)
+				if !ok {
 					return true
-				})
-				return true
-			})
-			// Sanity: the guard must be scanning a file that actually holds
-			// regexps, or it proves nothing.
-			ast.Inspect(file, func(n ast.Node) bool {
-				if call, ok := n.(*ast.CallExpr); ok {
-					if sel, ok := call.Fun.(*ast.SelectorExpr); ok {
-						if id, ok := sel.X.(*ast.Ident); ok && id.Name == "regexp" {
-							compiled++
-						}
-					}
+				}
+				ident, ok := sel.X.(*ast.Ident)
+				if !ok || ident.Name != "regexp" {
+					return true
+				}
+				if sel.Sel.Name == "MustCompile" || sel.Sel.Name == "Compile" {
+					t.Errorf("%s: regexp.%s inside a function literal — the pattern is "+
+						"recompiled on EVERY call. Hoist it to a package-level var or to the "+
+						"enclosing builder, as the rest of this package does.",
+						fset.Position(call.Pos()), sel.Sel.Name)
 				}
 				return true
 			})
-		}
+			return true
+		})
+		// Sanity: the guard must be scanning a file that actually holds
+		// regexps, or it proves nothing.
+		ast.Inspect(file, func(n ast.Node) bool {
+			if call, ok := n.(*ast.CallExpr); ok {
+				if sel, ok := call.Fun.(*ast.SelectorExpr); ok {
+					if id, ok := sel.X.(*ast.Ident); ok && id.Name == "regexp" {
+						compiled++
+					}
+				}
+			}
+			return true
+		})
 	}
 	if compiled == 0 {
 		t.Fatal("found no regexp compilations at all — the guard is not scanning this package")

@@ -9,6 +9,7 @@ package rcafeedback
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -218,7 +219,7 @@ func TestFileStoreBoundsPerCase(t *testing.T) {
 	}
 	if _, err := st.Add(context.Background(), "acme", false, Feedback{
 		TenantID: "acme", CorrelationID: "c-1", Verdict: "correct",
-	}); err != ErrLimit {
+	}); !errors.Is(err, ErrLimit) {
 		t.Fatalf("the per-case bound must be enforced, got %v", err)
 	}
 	// A different case of the same tenant is unaffected.

@@ -208,7 +208,7 @@ func Summarize(buckets []Bucket) Summary {
 		if b.N <= 0 {
 			continue
 		}
-		s.Counts.add(b.Verdict, b.N)
+		s.add(b.Verdict, b.N)
 		tpl := b.Template
 		if tpl == "" {
 			tpl = "undetermined" // the engine's own name for "no template matched"
@@ -220,7 +220,7 @@ func Summarize(buckets []Bucket) Summary {
 		}
 		c.add(b.Verdict, b.N)
 	}
-	s.Counts.seal()
+	s.seal()
 	s.ByTemplate = make([]TemplateCounts, 0, len(byTpl))
 	for tpl, c := range byTpl {
 		if c.N == 0 {

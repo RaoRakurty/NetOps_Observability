@@ -56,7 +56,8 @@ Confidence high unless noted.
   requests/reservation layer exists (no `mem_reservation` anywhere).
 - **[FACT]** Go services set no GOMEMLIMIT/GOGC (repo grep = 0). **[VENDOR]**
   Go GC therefore targets heap growth against host RAM, blind to the cgroup.
-  (**[FACT]** Go toolchain 1.25 per go.mod/Dockerfile; **[VENDOR, verify in P3]**
+  (**[FACT]** Go toolchain 1.26 per go.mod/Dockerfile (raised 1.25.13 → 1.26.8,
+  2026-09-02); **[VENDOR, verify in P3]**
   Go ≥1.25 sets GOMAXPROCS cgroup-aware natively; GOMEMLIMIT still manual.)
 - **[FACT]** ClickHouse per-query caps are absolute constants
   (`query-spill.xml:19-29` 2 GiB hard / 1.5 GiB spill;

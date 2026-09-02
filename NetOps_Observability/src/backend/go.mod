@@ -1,12 +1,12 @@
 module netops/backend
 
-go 1.25.0
+go 1.26.0
 
-toolchain go1.25.13
+toolchain go1.26.8
 
 require (
 	github.com/jackc/pgx/v5 v5.9.2
-	golang.org/x/crypto v0.55.0
+	golang.org/x/crypto v0.56.0
 	golang.org/x/net v0.57.0
 )
 

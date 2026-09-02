@@ -217,14 +217,16 @@ func TestListenerRefusesASourceItCannotAttribute(t *testing.T) {
 	c := f.dial()
 	_, _ = c.Write(initiation("rogue", "who?"))
 
-	f.waitFor("the refusal to be counted", func() bool {
-		return f.metrics.Snapshot().Sessions[OutcomeUnknownSource] == 1
+	// Wait for BOTH facts. serve() increments the counter BEFORE writing the log
+	// line, so waiting on the counter alone and then asserting the log races the
+	// listener's goroutine — it failed exactly that way once under full-suite
+	// load. The refusal is only "observable" (§10) when both have landed.
+	f.waitFor("the refusal to be counted AND logged", func() bool {
+		return f.metrics.Snapshot().Sessions[OutcomeUnknownSource] == 1 &&
+			f.logs.contains("not a known device")
 	})
 	if got := f.sessions(); len(got) != 0 {
 		t.Fatalf("an unattributable source was STORED: %+v — it must never be admitted as tenant \"\"", got)
-	}
-	if !f.logs.contains("not a known device") {
-		t.Fatal("the refusal was silent")
 	}
 	// The socket is closed, so the next read fails.
 	_ = c.SetReadDeadline(time.Now().Add(5 * time.Second))
@@ -241,8 +243,11 @@ func TestListenerRefusesASourceThatResolvesToAnEmptyTenant(t *testing.T) {
 	f.known = map[string][2]string{"127.0.0.1": {"orphan-device", ""}, "::1": {"orphan-device", ""}}
 	c := f.dial()
 	_, _ = c.Write(initiation("orphan", "d"))
-	f.waitFor("the refusal to be counted", func() bool {
-		return f.metrics.Snapshot().Sessions[OutcomeUnknownSource] == 1
+	// Same both-facts wait as above: the counter lands before the log line, so
+	// the refusal is only proven observable once BOTH are in.
+	f.waitFor("the refusal to be counted AND logged", func() bool {
+		return f.metrics.Snapshot().Sessions[OutcomeUnknownSource] == 1 &&
+			f.logs.contains("not a known device")
 	})
 	if got := f.sessions(); len(got) != 0 {
 		t.Fatalf("a tenant-less device was stored: %+v", got)

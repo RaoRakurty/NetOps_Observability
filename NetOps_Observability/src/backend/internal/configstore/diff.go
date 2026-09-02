@@ -283,7 +283,7 @@ func renderUnified(v Vendor, ops []diffOp) (string, bool) {
 		emitted++
 	}
 	if truncated {
-		b.WriteString(fmt.Sprintf("@@ diff truncated at %d lines @@\n", MaxDiffOutput))
+		fmt.Fprintf(&b, "@@ diff truncated at %d lines @@\n", MaxDiffOutput)
 	}
 	return b.String(), truncated
 }

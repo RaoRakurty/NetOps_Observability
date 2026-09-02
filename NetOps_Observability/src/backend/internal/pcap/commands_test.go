@@ -1,6 +1,7 @@
 package pcap
 
 import (
+	"errors"
 	"strings"
 	"testing"
 )
@@ -139,7 +140,7 @@ func TestIOSXERefusesAFilterItCannotExpress(t *testing.T) {
 	if supports {
 		t.Fatal("IOS-XE Embedded Packet Capture has no pcap-filter syntax; claiming support would silently widen captures")
 	}
-	if _, err := table.For("cisco IOS-XE", testRequest("GigabitEthernet0/0/1", "host 10.1.2.3")); err != ErrFilterUnsupported {
+	if _, err := table.For("cisco IOS-XE", testRequest("GigabitEthernet0/0/1", "host 10.1.2.3")); !errors.Is(err, ErrFilterUnsupported) {
 		t.Fatalf("For(IOS-XE, filtered) = %v, want ErrFilterUnsupported", err)
 	}
 }

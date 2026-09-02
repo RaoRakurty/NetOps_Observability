@@ -6,7 +6,10 @@
 # Upgraded v1.64 → v2 on 2026-06-05: the `go 1.25.0` directive (forced by
 # golang.org/x/crypto v0.52.0, which declares go 1.25.0) made the go1.24-built
 # golangci-lint v1.64.8 refuse to load ("language version go1.24 < targeted
-# 1.25.0"). v2.12.2 is built with go1.25 and loads cleanly. Migrated with
+# 1.25.0"). The pin must therefore always be a release whose PUBLISHED binary is
+# built with a Go >= this module's `go` directive: the v2.12.2 linux-amd64
+# release is built with go1.26.2, so it still loads cleanly after the
+# 1.25.13 -> 1.26.8 toolchain raise (go 1.26.0 directive). Migrated with
 # `golangci-lint migrate`, then re-tuned to the SAME effective rule set the
 # green v1 gate enforced — see the gosec/staticcheck notes below. vendor/,
 # testdata/ are auto-skipped.
