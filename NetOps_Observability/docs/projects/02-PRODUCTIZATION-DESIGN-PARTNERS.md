@@ -2,7 +2,8 @@
 
 **Status: OPENED 2026-09-02 — gap report + force-ranked wave-1 plan filed:
 [`02-GAP-REPORT-2026-09-02.md`](02-GAP-REPORT-2026-09-02.md)** (workflow steps
-1–7 done; awaiting the owner's ranking + two go-aheads listed in its §4).
+1–7 done; **owner ranking applied 2026-09-02, §3a**: correlation/RCA always P1 →
+Security → BGP/ops → shipping wave. Execution started at P0).
 Filed 2026-09-01 from the owner directive that
 redefined the portfolio: Project 1 (Scale Testing) is DONE, this project takes
 its slot, and Security CTEM / Troubleshooting renumber to Projects 3 / 4.
