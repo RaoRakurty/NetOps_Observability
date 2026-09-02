@@ -200,7 +200,7 @@ SELECT toString(day)      AS day,
        toString(currency) AS currency
   FROM netops.cloud_costs FINAL
  WHERE cloud_costs.day >= toDate('%s') AND cloud_costs.day <= toDate('%s')%s
- ORDER BY cloud_costs.day DESC, provider, account, service
+ ORDER BY cloud_costs.day DESC, cloud_costs.provider, account, service
  LIMIT %d
  SETTINGS tenant_scope = '%s'
  FORMAT JSONEachRow`, fromDay, toDay, pred, limit, scope)

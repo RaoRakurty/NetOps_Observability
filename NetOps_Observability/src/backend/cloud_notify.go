@@ -151,14 +151,14 @@ WITH cloud_objs AS (
        FROM netops.corr_signals_archive
       WHERE source = 'cloud' AND ts > now() - INTERVAL %d HOUR
 )
-SELECT toString(correlation_id)  AS correlation_id,
+SELECT toString(c.correlation_id)  AS correlation_id,
        tenant_id                 AS tenant_id,
        toString(verdict_tier)    AS verdict_tier,
        top_hypothesis            AS top_hypothesis,
        affected                  AS affected,
        `+chschema.ISO("created_at")+`   AS created_at_s
-  FROM netops.corr_current FINAL
- WHERE correlation_id IN (SELECT archived_for FROM cloud_objs)
+  FROM netops.corr_current AS c FINAL
+ WHERE c.correlation_id IN (SELECT archived_for FROM cloud_objs)
    AND state = 'open'
    AND created_at >= now() - INTERVAL %d SECOND
    AND merged_into IS NULL

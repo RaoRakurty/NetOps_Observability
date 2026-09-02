@@ -645,7 +645,14 @@ func (s *PGCHStore) ListObservations(ctx context.Context, tenant string, cross b
 	if limit <= 0 || limit > 500 {
 		limit = 100
 	}
-	sql := `SELECT observation_id, path_id, ` + chschema.ISO("observed_at") + ` AS observed_at, method, vantage_id,
+	// Alias-shadowing guard (tracker 200, the 1c402b5c/dda24f37 class): the ISO
+	// conversion is aliased to a DISTINCT name (observed_at_iso) so the WHERE and
+	// ORDER BY below bind the raw DateTime64 column. ClickHouse resolves a SELECT
+	// alias INSIDE those clauses, so `AS observed_at` would have sorted (and, on
+	// the next range predicate, compared) the ISO String. The result name is
+	// internal — the row scan below reads it — so a rename is safe here where the
+	// findings/tunnels reads had to table-qualify instead.
+	sql := `SELECT observation_id, path_id, ` + chschema.ISO("observed_at") + ` AS observed_at_iso, method, vantage_id,
        status, hop_count, tenant_id, data_class, environment, scenario_id, run_id, producer_id, provenance_id
   FROM netops.path_observations FINAL
  WHERE ` + strings.Join(conds, " AND ") + `
@@ -660,7 +667,7 @@ func (s *PGCHStore) ListObservations(ctx context.Context, tenant string, cross b
 	for _, r := range rows {
 		out = append(out, PathObservation{
 			ObservationID: str(r["observation_id"]), PathID: str(r["path_id"]),
-			ObservedAt: parseCHTime(r["observed_at"]), Method: str(r["method"]),
+			ObservedAt: parseCHTime(r["observed_at_iso"]), Method: str(r["method"]),
 			VantageID: str(r["vantage_id"]), Status: str(r["status"]), HopCount: asInt(r["hop_count"]),
 			ContractVersion: ContractVersion,
 			Provenance: Provenance{

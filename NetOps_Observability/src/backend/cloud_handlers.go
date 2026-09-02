@@ -373,6 +373,14 @@ func (s *server) handleCloudAppRca(w http.ResponseWriter, r *http.Request) {
 	// engine's own plane_count ≥ 2 (the platform-wide ≥2-independent-streams
 	// standard) — a countIf(source != 'cloud') fired on every flow-touched
 	// object and carried no information.
+	// Alias-shadowing guard (tracker 200, the 1c402b5c/dda24f37 class): both
+	// datetime projections alias the ISO conversion back onto the column name
+	// (window_start / created_at) because those ARE the served wire fields.
+	// ClickHouse resolves a SELECT alias INSIDE the ORDER BY of the same query,
+	// so the sort names the raw aggregate `any(o.created_at)` — the DateTime64
+	// domain — and never the ISO String the alias renders. Latent before this
+	// (RFC 3339 text sorts like the instant); a format change or an added range
+	// predicate turns it into a silent mis-sort or code 386.
 	sql := `
 WITH picked AS (
      SELECT correlation_id, version, state, verdict_tier, top_confidence,
@@ -404,7 +412,7 @@ SELECT toString(o.correlation_id)                   AS correlation_id,
   ) AS a
        ON a.archived_for = o.correlation_id
  GROUP BY o.correlation_id
- ORDER BY created_at DESC
+ ORDER BY any(o.created_at) DESC
  FORMAT JSON`
 	proxyClickHouse(w, r, sql)
 }

@@ -408,12 +408,20 @@ func (s *server) handleFindings(w http.ResponseWriter, r *http.Request) {
 	if len(conds) > 0 {
 		where = " WHERE " + strings.Join(conds, " AND ") + " "
 	}
+	// Alias-shadowing guard (tracker 200, the 1c402b5c/dda24f37 class): the
+	// projection aliases the ISO conversion back onto `ts` because `ts` is the
+	// served wire field — renaming it would change the API. ClickHouse resolves
+	// a SELECT alias INSIDE the WHERE/ORDER BY of the same query, so ORDER BY
+	// must name a TABLE-QUALIFIED column (alias resolution does not touch a
+	// qualified name) or it sorts the ISO String instead of the DateTime. Latent
+	// today (RFC 3339 text happens to sort like the instant); the next range
+	// predicate on `ts` would be code 386 NO_COMMON_TYPE.
 	sql := `
-SELECT ` + chschema.ISO("ts") + ` AS ts, id, kind, severity, score, device,
+SELECT ` + chschema.ISO("f.ts") + ` AS ts, id, kind, severity, score, device,
        component, summary, description
-  FROM netops.findings
+  FROM netops.findings AS f
 ` + where + `
- ORDER BY ts DESC
+ ORDER BY f.ts DESC
  LIMIT ` + intToString(limit) + `
  FORMAT JSON`
 	proxyClickHouse(w, r, sql)
@@ -587,13 +595,16 @@ func (s *server) handleTunnels(w http.ResponseWriter, r *http.Request) {
 	if len(conds) > 0 {
 		where = " WHERE " + strings.Join(conds, " AND ") + " "
 	}
+	// Alias-shadowing guard (tracker 200) — same reasoning as handleFindings:
+	// `ts` is the wire field, so the ORDER BY is TABLE-QUALIFIED rather than
+	// renamed, and the fold sorts the DateTime column, never the ISO String.
 	sql := `
 SELECT id, type, local_device, local_addr, remote_device, remote_addr,
        status, latency_ms, jitter_ms, loss_pct, qoe, uptime_s,
-       ` + chschema.ISO("ts") + ` AS ts
-  FROM netops.tunnels
+       ` + chschema.ISO("t.ts") + ` AS ts
+  FROM netops.tunnels AS t
 ` + where + `
- ORDER BY ts DESC
+ ORDER BY t.ts DESC
  LIMIT 1 BY id
  LIMIT ` + intToString(limit) + `
  FORMAT JSON`

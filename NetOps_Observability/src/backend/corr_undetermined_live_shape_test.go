@@ -21,7 +21,7 @@ package backend
 //
 // GUARD (so CI without a stack stays green): the test enables ITSELF by probing —
 // docker on PATH → a running container whose name contains "clickhouse" →
-// SELECT 1 answered → netops.corr_objects_latest present. Any link missing is a
+// SELECT 1 answered → netops.corr_current present. Any link missing is a
 // clean t.Skip, never a failure. No env switch: an enable-gate that CI could
 // export would only ever REMOVE coverage here.
 //
@@ -108,12 +108,12 @@ func undetLiveContainer(t *testing.T) string {
 			continue
 		}
 		got, err := undetRunLiveCH(name, `SELECT count() AS n FROM system.tables
- WHERE database = 'netops' AND name = 'corr_objects_latest' FORMAT TSV`)
+ WHERE database = 'netops' AND name = 'corr_current' FORMAT TSV`)
 		if err == nil && strings.TrimSpace(got) == "1" {
 			return name
 		}
 	}
-	t.Skip("no running ClickHouse container with netops.corr_objects_latest — skipping live shape check")
+	t.Skip("no running ClickHouse container with netops.corr_current — skipping live shape check")
 	return ""
 }
 
@@ -128,9 +128,19 @@ func undetLiveContainer(t *testing.T) string {
 // regression that turns this into a full-table scan fails the test instead of
 // loading the production server.
 func undetLiveSQL(sql string, executionSeconds int) string {
-	settings := "\n SETTINGS tenant_scope = '__all__', max_execution_time = " +
+	probe := "tenant_scope = '__all__', max_execution_time = " +
 		strconv.Itoa(executionSeconds) +
-		", max_bytes_to_read = 20000000000, log_comment = '" + undetProbeTag + "'"
+		", log_comment = '" + undetProbeTag + "'"
+	// The production builder now carries its OWN SETTINGS clause (tracker 201's
+	// scan cap). Two SETTINGS clauses is a syntax error and, worse, dropping the
+	// builder's would test a statement the API never sends — so the probe
+	// settings are MERGED into the existing clause when there is one. The
+	// builder's max_bytes_to_read is deliberately left in place: this check must
+	// exercise the cap the endpoint actually runs under.
+	if i := strings.Index(sql, "\n SETTINGS "); i >= 0 {
+		return sql[:i+len("\n SETTINGS ")] + probe + ", " + sql[i+len("\n SETTINGS "):]
+	}
+	settings := "\n SETTINGS " + probe + ", max_bytes_to_read = 20000000000"
 	if i := strings.LastIndex(sql, "\n FORMAT JSON"); i >= 0 {
 		return sql[:i] + settings + sql[i:]
 	}

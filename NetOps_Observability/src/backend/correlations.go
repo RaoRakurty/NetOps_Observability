@@ -629,8 +629,8 @@ SELECT version, tenant_id, state,
 
 	// 2) Full window slice (attached or not), ordered by event time = the cascade.
 	sigSQL := `
-SELECT toString(signal_id)  AS signal_id,
-       ` + chschema.ISO("ts") + `         AS ts_iso,
+SELECT toString(a.signal_id)  AS signal_id,
+       ` + chschema.ISO("a.ts") + `         AS ts_iso,
        ` + chschema.ISO("ingest_ts") + `  AS ingest_ts_iso,
        source, kind, observer_type, observer_id, collection_path, modality_class,
        source_clock_quality AS clock_quality,
@@ -642,10 +642,10 @@ SELECT toString(signal_id)  AS signal_id,
        JSONExtractString(attrs, 'probe_scope')        AS probe_scope,
        JSONExtractString(attrs, 'probe_authority')    AS probe_authority,
        JSONExtractString(attrs, 'classification_source') AS classification_source
-  FROM netops.corr_signals_archive
+  FROM netops.corr_signals_archive AS a
  WHERE archived_for = '` + id + `' AND archived_version = ` + intToString(archiveVer) + `
    AND ts >= '` + wsQ + `' AND ts <= '` + weQ + `'
- ORDER BY ts ASC, signal_id ASC
+ ORDER BY a.ts ASC, a.signal_id ASC
  FORMAT JSON`
 	sigRows, err := s.chRowsScope(ctx, scope, sigSQL)
 	if err != nil {
@@ -711,7 +711,7 @@ func (s *server) serveCorrelationDetail(w http.ResponseWriter, r *http.Request, 
 		verCond = " AND version = " + intToString(version)
 	}
 	objSQL := `
-SELECT toString(correlation_id)  AS correlation_id,
+SELECT toString(o.correlation_id)  AS correlation_id,
        version, state,
        ` + chschema.ISO("window_start") + ` AS window_start,
        ` + chschema.ISO("window_end") + `   AS window_end,
@@ -721,8 +721,8 @@ SELECT toString(correlation_id)  AS correlation_id,
        signal_count, node_count,
        engine_version, topology_version, catalog_version,
        ` + chschema.ISO("created_at") + `   AS created_at
-  FROM netops.corr_objects
- WHERE correlation_id = '` + id + `'` + verCond + `
+  FROM netops.corr_objects AS o
+ WHERE o.correlation_id = '` + id + `'` + verCond + `
  ORDER BY version DESC
  LIMIT 1
  FORMAT JSON`
@@ -777,9 +777,9 @@ func (s *server) proxyCorrelationReplay(w http.ResponseWriter, r *http.Request, 
 	// 404 the sibling detail route returns, so no existence oracle remains.
 	// Same prefilter-then-authorize pattern as rca_reports_list.go.
 	ownSQL := `
-SELECT toString(correlation_id) AS correlation_id
-  FROM netops.corr_objects
- WHERE correlation_id = '` + id + `'
+SELECT toString(o.correlation_id) AS correlation_id
+  FROM netops.corr_objects AS o
+ WHERE o.correlation_id = '` + id + `'
  LIMIT 1
  FORMAT JSON`
 	ownRows, err := s.chRows(r, ownSQL)

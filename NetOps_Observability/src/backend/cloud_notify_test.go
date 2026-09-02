@@ -182,7 +182,14 @@ func TestCloudNotifyCandidatesSQLBounded(t *testing.T) {
 		"source = 'cloud'",
 		"chaos_fixture = ''",
 		"merged_into IS NULL",
-		"netops.corr_current FINAL",
+		// The hot projection, read FINAL. Matched in two parts because the
+		// table now carries a TABLE ALIAS (`AS c`): the id predicate must be
+		// qualified or the `toString(correlation_id) AS correlation_id`
+		// projection shadows it and the IN-subquery compares String to UUID
+		// (tracker 200 — alias resolution reaches inside WHERE).
+		"netops.corr_current",
+		"FINAL",
+		"c.correlation_id IN (",
 	} {
 		if !strings.Contains(sql, want) {
 			t.Fatalf("candidates SQL missing %q:\n%s", want, sql)

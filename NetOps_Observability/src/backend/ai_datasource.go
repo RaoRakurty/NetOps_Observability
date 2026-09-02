@@ -52,13 +52,13 @@ func (d aiDataSource) GetProblem(_ context.Context, _ ai.Principal, id string) (
 		return nil, ai.ErrNotFound
 	}
 	sql := `
-SELECT toString(correlation_id) AS correlation_id, tenant_id,
+SELECT toString(o.correlation_id) AS correlation_id, tenant_id,
        top_hypothesis, top_confidence, verdict_tier,
        evidence_missing, affected, hypotheses,
        signal_count, node_count,
        ` + chschema.ISO("created_at") + ` AS created_at
-  FROM netops.corr_objects
- WHERE correlation_id = '` + id + `'
+  FROM netops.corr_objects AS o
+ WHERE o.correlation_id = '` + id + `'
  ORDER BY version DESC
  LIMIT 1
  FORMAT JSON`
@@ -158,13 +158,13 @@ func (d aiDataSource) ListActiveProblems(_ context.Context, _ ai.Principal, limi
 		limit = 25
 	}
 	sql := fmt.Sprintf(`
-SELECT toString(correlation_id) AS correlation_id, tenant_id,
+SELECT toString(o.correlation_id) AS correlation_id, tenant_id,
        top_hypothesis, top_confidence, verdict_tier,
        affected, signal_count, node_count
-  FROM netops.corr_objects
+  FROM netops.corr_objects AS o
  WHERE state = 'open'
  ORDER BY created_at DESC
- LIMIT 1 BY correlation_id
+ LIMIT 1 BY o.correlation_id
  LIMIT %d
  FORMAT JSON`, limit)
 	rows, err := d.srv.chRowsScope(d.ctx, d.scope, sql)
@@ -213,14 +213,14 @@ func (d aiDataSource) ListProblemsInWindow(_ context.Context, _ ai.Principal, si
 		sinceSeconds = 12 * 3600
 	}
 	sql := fmt.Sprintf(`
-SELECT toString(correlation_id) AS correlation_id, tenant_id,
+SELECT toString(o.correlation_id) AS correlation_id, tenant_id,
        top_hypothesis, top_confidence, verdict_tier, state,
        affected, signal_count, node_count
-  FROM netops.corr_objects
+  FROM netops.corr_objects AS o
  WHERE window_start >= now() - INTERVAL %d SECOND
    AND created_at >= now() - INTERVAL %d SECOND
  ORDER BY window_start DESC
- LIMIT 1 BY correlation_id
+ LIMIT 1 BY o.correlation_id
  LIMIT 1000
  FORMAT JSON`, sinceSeconds, sinceSeconds+corrPartitionSkewSlackSeconds)
 	rows, err := d.srv.chRowsScope(d.ctx, d.scope, sql)

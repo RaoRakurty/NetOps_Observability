@@ -259,6 +259,40 @@ func entityTypesFromAffected(blob string) []string {
 // timeintel pick's ORDER BY had to (tracker 186 hotfix) — the sort and the
 // window bound must be the same domain, and only the raw column is that domain.
 // The row scan below reads the renamed result columns.
+//
+// COST (tracker 201). The read used to source netops.corr_objects_latest, whose
+// body is `SELECT * FROM corr_objects ORDER BY … LIMIT 1 BY tenant_id,
+// correlation_id`. A LIMIT BY cannot have a predicate pushed through it without
+// changing the result, so ClickHouse folded the WHOLE HISTORY table first and
+// filtered afterwards: EXPLAIN indexes=1 reported 6672/6672 granules — no
+// MinMax, Partition or PrimaryKey pruning of any kind — and the endpoint's cost
+// scaled with VERSIONS, which a storm multiplies (s11: 10,371 versions for 1,624
+// objects). Measured on the live 2.57 M-row corpus: 4,606 ms, 2,572,440 rows,
+// 1.50 GiB read, 349 MiB peak. The tracker recorded 18.9–28.3 s against the 20 s
+// API budget when a full storm corpus was resident.
+//
+// corr_current is the sanctioned hot projection (#100 / tracker 197): ONE narrow
+// row per live object, carrying every column this feed needs and NONE of the
+// wide blobs (hypotheses/layer_coverage/app_impact are not in it at all, so they
+// cannot be re-widened into the scan by a later edit). Its cost scales with
+// OBJECTS, not versions — the axis a storm does not multiply. FINAL, not a fold:
+// the table is ReplacingMergeTree keyed (tenant_id, correlation_id), so FINAL is
+// the collapse, and a PREWHERE would filter BEFORE that collapse and could
+// resurrect a stale verdict_tier. Same measurement, same corpus: 390 ms,
+// 923,184 rows, 497 MiB read, 35.6 MiB peak — 11.8x faster, 3.1x fewer bytes,
+// 9.8x less memory, and 12x under the < 5 s target.
+//
+// SCAN CAP. max_bytes_to_read is the containment the tracker asked for: a corpus
+// that outgrows this read fails LOUD and ALONE (code 307 TOO_MANY_BYTES, which
+// chhttp already classifies) instead of spending the whole 20 s API budget on
+// its way to the same answer. Deliberately NOT read_overflow_mode='break': a
+// silently truncated scan would serve a ranking computed from an arbitrary
+// subset of the corpus, and this feed's entire purpose is telling the team WHICH
+// signature gap recurs most — a quietly wrong ranking is worse than a loud
+// failure (CLAUDE.md §10, no silent failures). 2 GiB is ~4x the measured read.
+// max_memory_usage mirrors chWorkerReadMemoryBytes so the read is contained on
+// both axes; SQL-level SETTINGS bind after the URL/profile settings chhttp
+// sends, so these are the values that take effect.
 func undeterminedFrequencySQL(windowSeconds string) string {
 	return `
 SELECT toString(correlation_id) AS correlation_id_s,
@@ -266,11 +300,12 @@ SELECT toString(correlation_id) AS correlation_id_s,
        evidence_missing         AS evidence_missing,
        affected                 AS affected,
        signal_count             AS signal_count
-  FROM netops.corr_objects_latest
+  FROM netops.corr_current FINAL
  WHERE verdict_tier = 'undetermined'
    AND window_start >= now() - INTERVAL ` + windowSeconds + ` SECOND
  ORDER BY window_start DESC
  LIMIT 5000
+ SETTINGS max_bytes_to_read = 2000000000, max_memory_usage = 1073741824
  FORMAT JSON`
 }
 

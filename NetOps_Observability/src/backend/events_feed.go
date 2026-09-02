@@ -206,24 +206,34 @@ func (s *server) handleEventsFeed(w http.ResponseWriter, r *http.Request) {
 	}
 	where := strings.Join(conds, " AND ")
 
-	// keyset cursor (ts DESC, signal_id DESC)
+	// keyset cursor (ts DESC, signal_id DESC).
+	//
+	// signal_id is TABLE-QUALIFIED here (tracker 200): the projection serves
+	// `toString(s.signal_id) AS signal_id`, and ClickHouse resolves a SELECT
+	// alias inside the WHERE of the same query — an unqualified `signal_id` in
+	// this predicate binds the alias, so the cursor compares
+	// toString(toString(...)) and, more to the point, the tie-break stops being
+	// the column the ORDER BY names. It is built at runtime, so the structural
+	// sweep in sql_alias_shadow_guard_test.go cannot see it: qualify by hand.
+	// `ts` needs no qualifier — the projection renames it (ts_iso / ts_ms) and
+	// never shadows the DateTime64 column this predicate and the sort both bind.
 	itemConds := where
 	if cur := strings.TrimSpace(q.Get("cursor")); cur != "" {
 		if ms, sid, ok := decodeFeedCursor(cur); ok {
 			ets := time.UnixMilli(ms).UTC().Format("2006-01-02 15:04:05.000")
-			itemConds = where + " AND (ts < '" + ets + "' OR (ts = '" + ets + "' AND toString(signal_id) < '" + sid + "'))"
+			itemConds = where + " AND (s.ts < '" + ets + "' OR (s.ts = '" + ets + "' AND toString(s.signal_id) < '" + sid + "'))"
 		}
 	}
 
 	itemSQL := `
-SELECT toString(signal_id) AS signal_id,
-       ` + chschema.ISO("ts") + ` AS ts_iso,
-       toUnixTimestamp64Milli(ts) AS ts_ms,
+SELECT toString(s.signal_id) AS signal_id,
+       ` + chschema.ISO("s.ts") + ` AS ts_iso,
+       toUnixTimestamp64Milli(s.ts) AS ts_ms,
        source, kind, severity, entity_type, entity_id, site,
        observer_type, modality_class, metric_name, value, deviation, attrs
-  FROM netops.corr_signals
+  FROM netops.corr_signals AS s
  WHERE ` + itemConds + `
- ORDER BY ts DESC, signal_id DESC
+ ORDER BY s.ts DESC, s.signal_id DESC
  LIMIT ` + intToString(limit) + `
  FORMAT JSON`
 	rows, err := s.chRows(r, itemSQL)
