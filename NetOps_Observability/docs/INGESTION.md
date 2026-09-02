@@ -202,6 +202,26 @@ true — `src/correlation/producers.py`:
    local/remote fault, hi-BER, transceiver flap). A `notice`- or `info`-severity
    `%LINK-3-UPDOWN` is admitted on the marker alone.
 
+**Optionally, the same screen also runs one hop earlier — off by default.**
+`vector-aggregator` compiles the two rules above into VRL
+(`deployment/docker/vector/generated/syslog-admission.vrl`, GENERATED from
+`producers.py` by `scripts/gen-syslog-admission.py`), stamps every syslog
+document with `cx_admission = {v, by}` when it would be admitted, and publishes
+the admitted subset onto a second topic, `netops.syslog.control` — a strict
+subset of `netops.syslog`, same tenant key, same partition count. **Nothing
+consumes it today.** `netops.syslog` still carries every line, `vector-router`
+still indexes the full lane into OpenSearch (it is deliberately not granted the
+control topic), and the correlation engine still reads `netops.syslog` and still
+applies its own screen; the only visible change is the additive `cx_admission`
+field, which is what lets the screen's coverage be measured against real traffic
+before anything depends on it. Pointing the engine at the pre-screened topic is
+one environment variable (`CORR_SYSLOG_TOPIC`, to be added by the engine owner)
+— and it is **not** a default until a release-qualify leg has run: the engine
+would then never see the rejected 94 %, so a screen defect that today costs
+microseconds would cost evidence. A `vector test` suite proves case by case that
+the VRL admits exactly what `syslog_promotable` admits, and CI fails if the
+generated file drifts from the Python.
+
 Everything else — notice/info/debug lines with no typed marker — is rejected by
 the pre-filter and never reaches a classifier. The rejection is **counted, not
 silent**: `corr_ingest_prefilter_total{outcome="passed"|"rejected"}` on the

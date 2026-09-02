@@ -261,6 +261,13 @@ services:
   # auto-creation; deadletter is new with F-03. A topic that exists only by
   # auto-creation races its first consumer on a fresh install — the same
   # "works until it doesn't, silently" shape as the rest of this audit.
+  #
+  # netops.syslog.control (A4 Phase 1) is the PRE-SCREENED syslog lane the
+  # aggregator publishes alongside netops.syslog. It is created here — not left
+  # to auto-creation — for the co-partitioning reason above: it must carry the
+  # SAME BUS_PARTITIONS count as netops.syslog, or an engine switched onto it
+  # would land a tenant on a different partition than the one that owns it.
+  # Nothing consumes it yet (see docs/INGESTION.md).
   kafka-init:
     image: apache/kafka:4.1.1@sha256:0bc1bb2478f45b6cea78864df86acdc11e8df2c5172477819a4d12942cbe5d40
     profiles: ["embedded-bus"]
@@ -282,7 +289,8 @@ services:
       - -c
       - >-
         p="$${BUS_PARTITIONS:-1}";
-        for t in netops.applogs netops.syslog netops.flows netops.flows.raw
+        for t in netops.applogs netops.syslog netops.syslog.control
+        netops.flows netops.flows.raw
         netops.snmptrap
         netops.probes netops.metrics netops.cloud netops.app.identities.v1
         netops.controller_events netops.app.edge netops.verification

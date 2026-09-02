@@ -23,7 +23,9 @@ promotion outcome (`PROMOTED` / `NOT_PROMOTED`), pinned against the real
 producer by tests in BOTH harnesses, and the harnesses write that table into
 their ground truth. A `not_promoted` row is a PRODUCT BACKLOG ITEM — a symptom
 real networks emit and this engine cannot see — never a licence to substitute a
-message that happens to classify.
+message that happens to classify. Tracker 184 CLOSED the last of them (BGP
+route/update churn), so the table is currently all-promoted; the machinery
+stays, because the next symptom this engine cannot see must land here.
 
 THE MESSAGES ARE VENDOR-STANDARD, not invented: Cisco IOS-XE / NX-OS shapes
 (`%LINK-3-UPDOWN`, `%LINEPROTO-5-UPDOWN`, `%OSPF-5-ADJCHG`, `%BGP-5-ADJCHANGE`,
@@ -148,9 +150,9 @@ def bgp_adj(peer: str, state: str) -> Line:
 
 def bgp_nbr_reset(peer: str) -> Line:
     """%BGP-5-NBR_RESET — the withdraw/announce churn a resetting session
-    produces. NOT PROMOTED: notice severity is under the generic device-alarm
-    floor and the mnemonic carries no ADJCHANGE token, so the classifier
-    returns None. This is the honest representation of BGP route churn."""
+    produces. Promotes (tracker 184) to the peer-tokened `bgp_route_churn`
+    kind, state 'churn' — a reset is instability, NOT an adjacency teardown
+    (its reason may be a soft/administrative clear)."""
     return ("BGP-5-NBR_RESET",
             (f"%BGP-5-NBR_RESET: Neighbor {peer} reset "
              f"(BGP Notification received)"),
@@ -159,9 +161,9 @@ def bgp_nbr_reset(peer: str) -> Line:
 
 def bgp_maxpfx(peer: str, prefixes: int) -> Line:
     """%BGP-4-MAXPFX — the prefix count crossing its threshold as the table
-    churns. Promotes only through the GENERIC device-alarm net (warning
-    severity), so the engine sees "something is wrong on this device", not
-    "this BGP session is churning"."""
+    churns. Promotes (tracker 184) to `bgp_route_churn` with the peer, the
+    count and the limit; the session is still Established at the WARNING
+    threshold, so the state is 'churn', not 'down'."""
     return ("BGP-4-MAXPFX",
             (f"%BGP-4-MAXPFX: No. of prefix received from {peer} (afi 0) "
              f"reaches {prefixes}, max 250000"),
@@ -170,7 +172,8 @@ def bgp_maxpfx(peer: str, prefixes: int) -> Line:
 
 def bgp_notification(peer: str) -> Line:
     """%BGP-3-NOTIFICATION — the router-update burst's session teardown.
-    Promotes as a generic device_alarm (err severity)."""
+    Promotes (tracker 184) as `bgp_adjacency_change`, state down: RFC 4271 §6,
+    a NOTIFICATION closes the session."""
     return ("BGP-3-NOTIFICATION",
             (f"%BGP-3-NOTIFICATION: received from neighbor {peer} 6/4 "
              f"(Administrative Reset) 0 bytes"),
@@ -180,9 +183,9 @@ def bgp_notification(peer: str) -> Line:
 def stp_tcn() -> Line:
     """%SPANTREE-5-TOPOTRAP — the topology-change notification that floods the
     whole STP domain, so EVERY switch in the site logs it. It names no
-    interface, so the classifier's `_IF_RE` finds none and the signal lands on
-    the synthetic entity `<host>:unknown` with state "unknown" — promoted, but
-    with a DEGRADED identity (see PARSER_COVERAGE_DETAIL)."""
+    interface, so (tracker 184) the signal is keyed on the DEVICE with the STP
+    instance as a device-local grounding token — no longer the synthetic
+    `<host>:unknown`. A TCN carries no direction, so state stays "unknown"."""
     return ("SPANTREE-5-TOPOTRAP",
             "%SPANTREE-5-TOPOTRAP: Topology Change Trap for instance MST0",
             "notice")
@@ -300,41 +303,52 @@ CHAIN_SIGNATURES: tuple[ChainSignature, ...] = (
     _row("bgp_session_up", "bgp_session_flap", PROMOTED,
          "bgp_adjacency_change", "device", "up", bgp_adj(SAMPLE_PEER, "up"),
          ""),
-    _row("bgp_route_churn", "route_churn", NOT_PROMOTED, "", "", "",
-         bgp_nbr_reset(SAMPLE_PEER),
-         "BACKLOG. %BGP-5-NBR_RESET is the standard vendor line for a session "
-         "resetting under withdraw/announce churn, and the classifier drops "
-         "it: notice severity is below the generic device-alarm floor and the "
-         "mnemonic carries no ADJCHANGE/ADJCHG token. Per-prefix churn has no "
-         "syslog representation at all (it is BMP/BGP-UPDATE data), so route "
-         "churn is INVISIBLE to correlation today."),
-    _row("bgp_router_update_burst", "route_churn", NOT_PROMOTED, "", "", "",
-         bgp_nbr_reset(SAMPLE_PEER),
-         "BACKLOG. Same signature, emitted densely — the update burst that "
-         "follows a session reset. Also invisible."),
-    _row("bgp_maxprefix", "route_churn", PROMOTED, "device_alarm", "device",
-         "", bgp_maxpfx(SAMPLE_PEER, 12000),
-         "PARTIAL. Promotes only through the GENERIC device-alarm net "
-         "(warning severity), so the engine learns 'this device raised an "
-         "alarm', not 'this BGP session is churning': no peer token, no "
-         "state, no bgp_* kind."),
-    _row("bgp_notification", "route_churn", PROMOTED, "device_alarm",
-         "device", "", bgp_notification(SAMPLE_PEER),
-         "PARTIAL. Same generic net, via err severity."),
+    _row("bgp_route_churn", "route_churn", PROMOTED, "bgp_route_churn",
+         "device", "churn", bgp_nbr_reset(SAMPLE_PEER),
+         "CLOSED by tracker 184. %BGP-5-NBR_RESET now classifies to its own "
+         "state-bearing, peer-tokened kind: a session reset is NOT an "
+         "adjacency transition (the reason may be a soft/administrative "
+         "clear), so it is `bgp_route_churn`, not `bgp_adjacency_change`. "
+         "STILL TRUE, and not a parser gap: PER-PREFIX churn has no syslog "
+         "representation on any vendor (it is BMP/BGP-UPDATE data); these "
+         "mnemonics are its session-level shadow."),
+    _row("bgp_router_update_burst", "route_churn", PROMOTED, "bgp_route_churn",
+         "device", "churn", bgp_nbr_reset(SAMPLE_PEER),
+         "Same signature, emitted densely — the update burst that follows a "
+         "session reset. Each occurrence is its own signal (the identity "
+         "carries peer + subtype + ts)."),
+    _row("bgp_maxprefix", "route_churn", PROMOTED, "bgp_route_churn", "device",
+         "churn", bgp_maxpfx(SAMPLE_PEER, 12000),
+         "CLOSED by tracker 184. Was the GENERIC device-alarm net (no peer "
+         "token, no state, no bgp_* kind); now peer-tokened prefix pressure "
+         "with the count/limit in attrs. A threshold WARNING leaves the "
+         "session Established, so the state is 'churn' — only "
+         "%BGP-4-MAXPFXEXCEED (a limit actually exceeded) reads 'down'."),
+    _row("bgp_notification", "route_churn", PROMOTED, "bgp_adjacency_change",
+         "device", "down", bgp_notification(SAMPLE_PEER),
+         "CLOSED by tracker 184. RFC 4271 §6 — a speaker that sends or "
+         "receives a NOTIFICATION CLOSES the session, so this is a genuine "
+         "adjacency teardown and reuses the kind the BGP signatures already "
+         "consume. On several platforms it is the ONLY line logged."),
     _row("stp_topology_change", "access_layer", PROMOTED,
-         "stp_topology_change", "device:unknown", "unknown", stp_tcn(),
-         "DEGRADED IDENTITY. %SPANTREE-5-TOPOTRAP names no interface, so the "
-         "signal keys on `<host>:unknown` and carries state 'unknown' — every "
-         "TCN a device ever logs collapses onto one synthetic identity."),
+         "stp_topology_change", "device", "unknown", stp_tcn(),
+         "ATTRIBUTION FIXED by tracker 184. %SPANTREE-5-TOPOTRAP names no "
+         "interface, so it is keyed on the DEVICE with the STP instance/VLAN "
+         "as a device-local grounding token — no longer the synthetic "
+         "`<host>:unknown` every TCN on a device collapsed onto. A TCN still "
+         "carries no direction, so the state stays 'unknown'."),
     _row("stp_port_block", "access_layer", PROMOTED, "stp_topology_change",
          "device:interface", "down", stp_port(SAMPLE_IF_B, "down"),
          "the port that actually transitioned — a real interface identity"),
     _row("stp_port_forward", "recovery", PROMOTED, "stp_topology_change",
          "device:interface", "up", stp_port(SAMPLE_IF_B, "up"), ""),
-    _row("mac_move", "access_layer", PROMOTED, "mac_flap", "device", "",
-         mac_flap(SAMPLE_MAC, SAMPLE_VLAN, SAMPLE_IF, SAMPLE_IF_B),
-         "promoted, but the signal carries no state — a MAC move can never "
-         "contribute a state transition or a recovery"),
+    _row("mac_move", "access_layer", PROMOTED, "mac_flap", "device",
+         "flapping", mac_flap(SAMPLE_MAC, SAMPLE_VLAN, SAMPLE_IF, SAMPLE_IF_B),
+         "STATE ADDED by tracker 184: 'flapping' (oscillating between two "
+         "ports) or 'moved' (one relocation). Neither is a recovery word — no "
+         "vendor logs 'the MAC stopped moving' — so a MAC move now yields a "
+         "state transition and an unhealthy health claim, but can never "
+         "close an incident."),
 )
 
 CHAIN_BY_TYPE: dict[str, ChainSignature] = {

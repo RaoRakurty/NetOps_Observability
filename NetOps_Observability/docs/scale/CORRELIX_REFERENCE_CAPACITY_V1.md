@@ -85,6 +85,31 @@ identity):**
 Both pins are enforced by the test suite; a rerun of V1 REQUIRES both tests
 green on the build under qualification.
 
+**ERRATUM (2026-09-02, tracker 184).** The scenario digest quoted above,
+`f9d126d41c3fdf209dcba5b37c402a7f0ba19352f420e95289948972c36c33be`, was a
+COMBINED digest: it hashed the injected plan together with the derived
+ground-truth annotations (the kind/entity/state the harness expects the
+correlation parser to produce), so a change to what the engine *reads* moved a
+number whose job is to say the *workload* did not move. The digest is therefore
+split, and the **wire digest** —
+`93b614f8b169cffd9bd00671099da52e1705471430c5cfc337729ebade2b13cd`
+(`tests/test_storm_scenario_profile.py` `DEFAULT_SCENARIO_WIRE_DIGEST`, SHA-256
+over the injected fields alone: `t`, `device`, `appname`, `message`,
+`severity`, `incident_id`, `role`, `etype`) — **is the qualification's
+identity**: it is what says two runs were fed the same stream, and it is
+unchanged by parser-expectation revisions. Expectation rev **B-2026-09-02-184**
+(tracker 184: BGP route/update churn promoted, `%SPANTREE-5-TOPOTRAP` given a
+device identity, `mac_move` given a state) moved only the annotation half —
+measured pre- and post-184 on the reverted tree, the wire digest is bit
+identical, while the combined value became
+`b1e0695a60bde1e51927135e38f77eee67934316aa1602c762d1836268ec359b` and the
+expectation digest is
+`da5e2fc12d82ae58c876fabdfd9ea3745164417ba6fb2611701b296648fe09e0`. The V1 run
+recorded in this document is therefore unaffected. Every run's
+`ground-truth.json` (and `report.json`) now records all three — `digest`,
+`wire_digest`, `expectation_digest` — plus `expectation_rev`, so "same stream?"
+and "same expectations?" are separately answerable from a run's own evidence.
+
 ## 4. The SLO — Option A, verbatim (ratified, owner 2026-08-30, `237b1161`)
 
 > *Under a 15-minute 1,000-eps storm on 2,500 devices, the platform MUST

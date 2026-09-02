@@ -36,6 +36,7 @@ Run:  python3 -m pytest tests/test_storm_scenario_profile.py -v
 from __future__ import annotations
 
 import argparse
+import copy
 import importlib.util
 import itertools
 import json
@@ -337,9 +338,14 @@ def test_scenario_lines_classify_as_planned(scen):
         assert sig.entity_id == e.entity, f"{sig.entity_id} != {e.entity}"
         if e.state:
             assert sig.attrs.get("state") == e.state, ev
-    assert unpromotable > 0, (
-        "no unpromotable lines at all — the enterprise chain is supposed to "
-        "emit the vendor-standard BGP churn messages the engine cannot see")
+    # Tracker 184 promoted the last invisible symptom (BGP route/update
+    # churn), so a V1 scenario now plans ZERO unpromotable lines. The count is
+    # still asserted — as an EQUALITY against the chain's own table, not a
+    # ">0" that would silently pass whatever the harness happened to emit.
+    assert unpromotable == sum(
+        1 for e in scen.events if e.etype in set(chain.not_promoted_types())), (
+        f"{unpromotable} unpromotable lines do not match the chain's "
+        f"not_promoted table {chain.not_promoted_types()}")
 
 
 def test_the_incident_marker_cannot_change_the_parse(scen):
@@ -441,8 +447,9 @@ def test_ground_truth_schema(scen):
     gt = scen.ground_truth(planned_total=900_000)
     assert gt["schema"] == ml.GROUND_TRUTH_SCHEMA == "correlix.scale.ground-truth/1"
     for key in ("profile", "scenario", "seed", "runid", "window_s", "chunk_secs",
-                "planned_total_events", "digest", "devices", "templates",
-                "counts", "incidents", "contract", "description"):
+                "planned_total_events", "digest", "wire_digest",
+                "expectation_digest", "expectation_rev", "devices",
+                "templates", "counts", "incidents", "contract", "description"):
         assert key in gt, f"ground truth lost {key!r}"
     assert gt["seed"] == ml.SCENARIO_SEED_DEFAULT
     assert gt["window_s"] == WINDOW_S and gt["chunk_secs"] == ml.BURST_CHUNK_SECS
@@ -480,6 +487,11 @@ def test_ground_truth_is_written_into_the_run_dir(tmp_path, monkeypatch):
     gt = json.loads(path.read_text(encoding="utf-8"))
     assert gt["schema"] == ml.GROUND_TRUTH_SCHEMA
     assert gt["digest"] == ev["scenario"]["digest"] == ev["ground_truth"]["digest"]
+    # ...and both halves reach the report, so a run's identity ("same stream?")
+    # is answerable from report.json alone, without re-reading ground truth.
+    for key in ("wire_digest", "expectation_digest", "expectation_rev"):
+        assert gt[key] == ev["scenario"][key] == ev["ground_truth"][key]
+    assert gt["expectation_rev"] == ml.EXPECTATION_REV
     assert gt["runid"] == "testrun"
     assert ev["ground_truth"]["path"] == str(path)
 
@@ -965,9 +977,11 @@ def test_the_parser_coverage_table_is_pinned_against_the_real_parser():
     cov = chain.parser_coverage()
     assert set(cov) == {r.event_type for r in chain.CHAIN_SIGNATURES}
     assert set(cov.values()) <= {chain.PROMOTED, chain.NOT_PROMOTED}
-    # the symptoms this engine cannot see — a product backlog item each
-    assert set(chain.not_promoted_types()) == {
-        "bgp_route_churn", "bgp_router_update_burst"}, (
+    # The symptoms this engine cannot see — a product backlog item each.
+    # EMPTY since tracker 184 promoted BGP route/update churn: every symptom
+    # this chain emits is now visible to the classifier. Pinned as a set, so a
+    # symptom going dark is as loud as one lighting up.
+    assert set(chain.not_promoted_types()) == set(), (
         "the not-promoted list changed — that is either an engine improvement "
         "worth recording or a regression; either way it is not silent")
 
@@ -995,12 +1009,19 @@ def test_a_mutant_message_for_a_promoted_type_is_caught():
 
 def test_a_mutant_that_makes_an_invisible_symptom_classify_is_caught():
     """The other direction: a `not_promoted` row whose message DOES classify
-    would silently add signals no scorer counts."""
-    mutated = [row._replace(exemplar=chain.link(chain.SAMPLE_IF, "down"))
-               if row.coverage == chain.NOT_PROMOTED else row
-               for row in chain.CHAIN_SIGNATURES]
+    would silently add signals no scorer counts.
+
+    The chain has had no not_promoted row since tracker 184, so the mutant is
+    SYNTHESIZED rather than borrowed from the table — the checker's teeth must
+    not depend on the backlog being non-empty (that is exactly when a
+    regression would slip in unnoticed)."""
+    invisible = chain._row(
+        "synthetic_invisible_symptom", "route_churn", chain.NOT_PROMOTED,
+        "", "", "", chain.link(chain.SAMPLE_IF, "down"),
+        "test-only fixture: declared invisible, but the exemplar is a %LINK "
+        "line the classifier certainly promotes")
     with pytest.raises(AssertionError, match="declared not_promoted"):
-        _check_coverage(mutated)
+        _check_coverage([*chain.CHAIN_SIGNATURES, invisible])
 
 
 def test_ground_truth_carries_the_coverage_table_and_the_backlog(scen):
@@ -1013,7 +1034,12 @@ def test_ground_truth_carries_the_coverage_table_and_the_backlog(scen):
         assert detail[etype]["note"] or verdict == chain.PROMOTED
     assert [p["phase"] for p in gt["phase_timeline"]] == list(
         chain.PHASE_ORDER)
-    assert gt["counts"]["unpromotable_events"] > 0
+    # ZERO since tracker 184 promoted BGP route/update churn. Asserted as an
+    # EQUALITY against the chain's own not_promoted table, so the count stays
+    # pinned to the coverage truth in BOTH directions — a symptom going dark
+    # again would move it right back up and fail here.
+    assert gt["counts"]["unpromotable_events"] == sum(
+        1 for e in scen.events if e.etype in set(chain.not_promoted_types()))
     assert (gt["counts"]["promoted_events"]
             + gt["counts"]["unpromotable_events"]
             == gt["counts"]["scenario_events"])
@@ -1188,8 +1214,49 @@ LADDER = ("storm-2.5k", "storm-10-2.5k", "storm-25-2.5k", "storm-50-2.5k")
 # on. (The digest is a function of the DEVICE NAMES too, so a run with real
 # `mlx-<runid>-*` ids hashes differently — what is pinned is that this fixture
 # does not move.)
+#
+# THE PIN IS NOW SPLIT (tracker 184 erratum, 2026-09-02). `digest()` hashes the
+# injected plan AND the derived ground-truth annotations together, so the 184
+# parser promotions — which changed what the harness EXPECTS the classifier to
+# make of the lines, and not one byte of the lines themselves — moved a number
+# whose whole job is to say "the workload did not move". The wire half and the
+# expectation half are pinned separately below; the combined value is kept
+# because every report.json ever written carries it.
 DEFAULT_SCENARIO_DIGEST = (
-    "f9d126d41c3fdf209dcba5b37c402a7f0ba19352f420e95289948972c36c33be")
+    # COMBINED (wire + annotations) — was
+    # f9d126d41c3fdf209dcba5b37c402a7f0ba19352f420e95289948972c36c33be before
+    # tracker 184. The WIRE HALF IS UNCHANGED (proved below); what moved is the
+    # expectation half, rev A-2026-08-29-183 → B-2026-09-02-184.
+    "b1e0695a60bde1e51927135e38f77eee67934316aa1602c762d1836268ec359b")
+
+# THE QUALIFICATION'S IDENTITY (V1 §3 erratum). SHA-256 over the injected plan
+# alone — t, device, appname, message, severity, incident_id, role, etype — the
+# fields that leave `_scenario_line`, plus the two plan-side keys that decide
+# which line is injected when and in what order.
+#
+# PROVED PRE-184 == POST-184, 2026-09-02. The five files tracker 184 touched
+# (`scripts/enterprise_outage_chain.py`, `src/correlation/{producers,
+# confirmability,coverage,layers}.py`) were restored to their HEAD versions in a
+# scratch copy of this tree and this same fixture plan was re-planned there:
+#
+#   pre-184  wire        93b614f8b169cffd9bd00671099da52e1705471430c5cfc337729ebade2b13cd
+#   post-184 wire        93b614f8b169cffd9bd00671099da52e1705471430c5cfc337729ebade2b13cd  (identical)
+#   pre-184  combined    f9d126d41c3fdf209dcba5b37c402a7f0ba19352f420e95289948972c36c33be  (== the old pin, so the revert was faithful)
+#   post-184 combined    b1e0695a60bde1e51927135e38f77eee67934316aa1602c762d1836268ec359b
+#
+# The pre-184 combined value reproducing the old pin exactly is what makes the
+# wire equality above evidence rather than assertion.
+DEFAULT_SCENARIO_WIRE_DIGEST = (
+    "93b614f8b169cffd9bd00671099da52e1705471430c5cfc337729ebade2b13cd")
+
+# The DERIVED half: per-line (symptom, state, entity), the per-incident
+# symptom_kinds rollup, the chain's promotion table and the revision string
+# itself. Moving this re-bases NOTHING — the stack was fed the same stream —
+# but it must never move silently, because it decides what a scorer may charge
+# the engine with.
+DEFAULT_SCENARIO_EXPECTATION_DIGEST = (
+    "da5e2fc12d82ae58c876fabdfd9ea3745164417ba6fb2611701b296648fe09e0")
+DEFAULT_SCENARIO_EXPECTATION_REV = "B-2026-09-02-184"
 
 
 def _rung(name: str, devices: int = DEVICES, window_s: int = WINDOW_S,
@@ -1234,9 +1301,104 @@ def test_the_default_shape_is_todays_plan(scen):
     assert ml.STORM_SCENARIO_2K5["shape"] is chain.DEFAULT_SHAPE
     assert scen.shape is chain.DEFAULT_SHAPE
     assert scen.rounds_built == 1
+    assert scen.wire_digest() == DEFAULT_SCENARIO_WIRE_DIGEST, (
+        "the ratified t-storm-2.5k WIRE plan changed — the stack is being fed "
+        "a different stream, and every recorded 2.5K number is now about a "
+        "different workload")
+    assert scen.expectation_digest() == DEFAULT_SCENARIO_EXPECTATION_DIGEST, (
+        "the parser expectations moved. That re-bases NOTHING (the wire is "
+        "unchanged), but it must be deliberate: bump ml.EXPECTATION_REV and "
+        "re-pin DEFAULT_SCENARIO_EXPECTATION_DIGEST in the same change")
     assert scen.digest() == DEFAULT_SCENARIO_DIGEST, (
-        "the ratified t-storm-2.5k plan changed — every recorded 2.5K number "
-        "is now about a different workload")
+        "the combined digest moved — see the two assertions above for which "
+        "half did it")
+
+
+def _mutant(scen, **field):
+    """The same plan with ONE ScenarioEvent field changed on its first event.
+
+    A shallow copy is enough — the digests read only `events` and `incidents`,
+    and both are rebound here rather than mutated in place, so the module-scoped
+    fixture is untouched.
+    """
+    clone = copy.copy(scen)
+    clone.events = [scen.events[0]._replace(**field), *scen.events[1:]]
+    return clone
+
+
+def test_the_wire_digest_is_blind_to_expectations_and_only_to_those(scen):
+    """THE ERRATUM, as a test. `wire_digest()` must move for every field that
+    reaches the producer and for NO field the harness merely derives — that
+    separation is the whole reason tracker 184 moved the old combined pin
+    without changing one injected byte.
+
+    Both directions are checked, because a wire digest that ignored too much
+    would be just as wrong as one that ignored too little: it would call two
+    genuinely different streams the same qualification.
+    """
+    base_wire, base_exp = scen.wire_digest(), scen.expectation_digest()
+
+    # DERIVED fields: expectation moves, wire does not.
+    for field, value in (("symptom", "not_a_kind"), ("state", "sideways"),
+                         ("entity", "someone-else")):
+        m = _mutant(scen, **{field: value})
+        assert m.wire_digest() == base_wire, (
+            f"{field} is a derived annotation and must not reach the wire "
+            f"digest")
+        assert m.expectation_digest() != base_exp, (
+            f"{field} moved and the expectation digest did not notice")
+
+    # INJECTED fields: wire moves for every one of them.
+    for field, value in (("t", 123.456), ("device", "mlx-storm-99999"),
+                         ("appname", "OTHER-3-THING"), ("message", "%OTHER"),
+                         ("severity", "crit"), ("incident_id", "inc-999"),
+                         ("role", "onset" if scen.events[0].role != "onset"
+                          else "repeat"),
+                         ("etype", "link_up" if scen.events[0].etype !=
+                          "link_up" else "link_down")):
+        assert _mutant(scen, **{field: value}).wire_digest() != base_wire, (
+            f"{field} leaves the producer (or decides which line does) and "
+            f"the wire digest ignored it")
+
+    # ...and the field set is DECLARED, so a new ScenarioEvent field cannot be
+    # silently omitted from both halves.
+    assert (set(ml.StormScenario.WIRE_FIELDS)
+            | set(ml.StormScenario.EXPECTATION_FIELDS)
+            == set(ml.ScenarioEvent._fields)), (
+        "a ScenarioEvent field is in neither the wire nor the expectation "
+        "digest — it would move the plan invisibly")
+    assert not (set(ml.StormScenario.WIRE_FIELDS)
+                & set(ml.StormScenario.EXPECTATION_FIELDS))
+
+
+def test_the_expectation_revision_is_part_of_the_expectation_digest(scen):
+    """A promotion table that changed while the rev string did not is exactly
+    the silent re-base this split exists to prevent, so the rev is hashed IN."""
+    assert ml.EXPECTATION_REV == DEFAULT_SCENARIO_EXPECTATION_REV
+    before = scen.expectation_digest()
+    try:
+        ml.EXPECTATION_REV = "C-9999-99-99-000"
+        assert scen.expectation_digest() != before
+        assert scen.wire_digest() == DEFAULT_SCENARIO_WIRE_DIGEST
+    finally:
+        ml.EXPECTATION_REV = DEFAULT_SCENARIO_EXPECTATION_REV
+    assert scen.expectation_digest() == before
+
+
+def test_ground_truth_records_all_three_digests(scen):
+    """A run must be able to answer "same stream?" and "same expectations?"
+    separately, months later, from its own evidence dir — V1 §3 erratum."""
+    gt = scen.ground_truth(900_000)
+    assert gt["wire_digest"] == DEFAULT_SCENARIO_WIRE_DIGEST
+    assert gt["expectation_digest"] == DEFAULT_SCENARIO_EXPECTATION_DIGEST
+    assert gt["digest"] == DEFAULT_SCENARIO_DIGEST
+    assert gt["expectation_rev"] == DEFAULT_SCENARIO_EXPECTATION_REV
+    # three distinct numbers, all canonical SHA-256 hex
+    trio = {gt["digest"], gt["wire_digest"], gt["expectation_digest"]}
+    assert len(trio) == 3
+    assert all(re.fullmatch(r"[0-9a-f]{64}", d) for d in trio)
+    # and the twin projection still carries the run's own identity
+    assert json.dumps(gt)  # JSON-serialisable, no stray objects
 
 
 def test_a_shape_is_a_pure_function_of_its_knobs():
@@ -1508,7 +1670,15 @@ def test_the_achieved_metrics_never_claim_dynamics_the_engine_cannot_see(rungs):
         obs = scen.observations()
         assert len(obs) == len(scen.events)
         unpromoted = [o for o in obs if not o.promoted]
-        assert unpromoted, f"{name} lost its not-promoted lines"
+        # Tracker 184 left the chain with no invisible symptom, so this list is
+        # empty today. It is pinned to the chain's table rather than asserted
+        # non-empty: the invariant under test is "an unpromoted line carries no
+        # kind", and that must hold at zero as well as at 4,989.
+        assert len(unpromoted) == sum(
+            1 for e in scen.events
+            if e.etype in set(chain.not_promoted_types())), (
+            f"{name}: unpromoted lines do not match the chain's "
+            f"not_promoted table {chain.not_promoted_types()}")
         assert all(not o.kind for o in unpromoted)
         m = scen.measured(900_000)
         assert m["unpromoted_events"] == len(unpromoted)
@@ -1662,7 +1832,9 @@ def test_a_fleet_rung_plans_the_ratified_digest_on_the_ratified_fleet():
     and nothing about the story, and that the run's ground truth is the same
     contract under a different label."""
     for name in ("storm-5k", "storm-10k"):
-        assert _rung(name, devices=DEVICES).digest() == DEFAULT_SCENARIO_DIGEST
+        rung = _rung(name, devices=DEVICES)
+        assert rung.wire_digest() == DEFAULT_SCENARIO_WIRE_DIGEST
+        assert rung.digest() == DEFAULT_SCENARIO_DIGEST
 
 
 @pytest.mark.parametrize("name,profile,devices,eps", FLEET_LADDER)

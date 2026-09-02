@@ -532,7 +532,8 @@ services:
         && cp /certs-src/ca.pem /tmp/ts.pem
         && printf 'security.protocol=SSL\nssl.keystore.type=PEM\nssl.keystore.location=/tmp/ks.pem\nssl.truststore.type=PEM\nssl.truststore.location=/tmp/ts.pem\n' > /tmp/admin.properties
         && p="$${BUS_PARTITIONS:-1}"
-        && for t in netops.applogs netops.syslog netops.flows netops.flows.raw
+        && for t in netops.applogs netops.syslog netops.syslog.control
+        netops.flows netops.flows.raw
         netops.snmptrap
         netops.probes netops.metrics netops.cloud netops.app.identities.v1
         netops.controller_events netops.app.edge netops.verification

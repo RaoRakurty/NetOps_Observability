@@ -190,6 +190,64 @@ HTTP_TIMEOUT = 15
 MUTATION_TIMEOUT = 180       # ClickHouse ALTER DELETE settle bound
 
 # ---------------------------------------------------------------------------
+# A4 Phase 1 — the syslog-control MIRROR (opt-in, default OFF)
+#
+# The aggregator now publishes a pre-screened copy of the syslog lane onto
+# netops.syslog.control (see deployment/docker/vector/vector.yaml). This
+# harness injects DIRECTLY into netops.syslog with kafka-console-producer, so
+# it bypasses the aggregator entirely and that topic would stay empty under
+# load — which would make any capacity number measured against the split
+# meaningless.
+#
+# `--syslog-control-mirror` closes that gap by doing what the aggregator would
+# have done: after each chunk reaches netops.syslog UNCHANGED, the subset the
+# engine's OWN screen admits is produced to netops.syslog.control under the
+# same tenant key. It is OFF by default and the default leg is byte-identical
+# — no import, no extra produce, no extra field (pinned by
+# tests/test_syslog_admission.py).
+SYSLOG_CONTROL_TOPIC = "netops.syslog.control"
+
+
+def load_syslog_screen():
+    """Return `producers.syslog_promotable` — the ENGINE'S OWN screen.
+
+    The mirror must admit exactly what the engine admits, so it calls the
+    engine's function rather than reimplementing it. No scale script imports an
+    engine module today (the twin shares only `enterprise_outage_chain`, a
+    sibling of this file), so the import path is set here: src/correlation's
+    modules import each other FLAT, so the package directory itself goes on
+    sys.path. Read-only, and only on the opt-in path — the default leg never
+    imports correlation code, keeps its stdlib-only startup, and cannot be
+    broken by an engine-side import error.
+
+    Raises RuntimeError with the reason if the engine screen cannot be loaded:
+    a mirror that silently mirrored nothing (or everything) would be worse than
+    no mirror at all (16.1).
+    """
+    corr_dir = os.path.join(REPO_ROOT, "src", "correlation")
+    if not os.path.isdir(corr_dir):
+        raise RuntimeError(f"--syslog-control-mirror needs {corr_dir}, which "
+                           "does not exist in this checkout")
+    if corr_dir not in sys.path:
+        sys.path.insert(0, corr_dir)
+    try:
+        import producers
+    except Exception as exc:
+        raise RuntimeError(
+            f"--syslog-control-mirror could not import the engine screen from "
+            f"{corr_dir}: {exc}") from exc
+    screen = getattr(producers, "syslog_promotable", None)
+    if not callable(screen):
+        # RuntimeError is deliberate (TRY004 suppressed below): this is a
+        # broken WIRING between two components — the harness and the engine's
+        # screen — not a caller passing this function the wrong type.
+        raise RuntimeError(  # noqa: TRY004
+            "producers.syslog_promotable is missing or not callable — the "
+            "engine screen this mirror exists to reproduce no longer has "
+            "that name")
+    return screen
+
+# ---------------------------------------------------------------------------
 # INJECTION INTEGRITY — the producer must never lose a record quietly
 # (defect 2026-08-29, run p2-s04b-08290858: "901 events UNEXPLAINED").
 #
@@ -2398,6 +2456,25 @@ SCENARIO_CHUNK_HEADROOM = 0.10
 SCENARIO_CHUNK_PEAK_OVER_MEAN_MAX = 8.0
 GROUND_TRUTH_FILE = "ground-truth.json"
 GROUND_TRUTH_SCHEMA = "correlix.scale.ground-truth/1"
+# THE EXPECTATION REVISION. A scenario plan has two halves that move for
+# entirely different reasons, and conflating them cost the V1 qualification its
+# identity once already (see `StormScenario.wire_digest` below):
+#
+#   * the INJECTED half — the bytes that leave the producer. Moving it re-bases
+#     every recorded number, because the stack was fed something else.
+#   * the DERIVED half — what the harness EXPECTS the correlation parser to
+#     make of those bytes (kind, entity, state, per-incident symptom_kinds).
+#     Moving it re-bases nothing: the wire is identical, the engine simply got
+#     better (or worse) at reading it.
+#
+# This string names the second half's revision and is written into every run's
+# ground truth and report. BUMP IT whenever a parser promotion, an entity shape
+# or a state vocabulary changes — never when only the wire moves.
+#   A-2026-08-29-183  original t-storm-2.5k expectations (tracker 183)
+#   B-2026-09-02-184  tracker 184 promoted BGP route/update churn, gave
+#                     %SPANTREE-5-TOPOTRAP a device identity instead of the
+#                     synthetic `<host>:unknown`, and gave mac_move a state
+EXPECTATION_REV = "B-2026-09-02-184"
 # The SAME incidents in the network digital twin's record shape, so
 # `scripts/lab/twin/twin.py score --runid <id> --run-root data/miniladder`
 # scores a mini-ladder run with the twin's existing scorer instead of a second
@@ -3975,14 +4052,85 @@ class StormScenario:
                     out.add(str(ce[key]))
         return out
 
+    # THE FIELDS THAT LEAVE THE PRODUCER. `_scenario_line` puts `device`,
+    # `appname`, `message` (with the incident id appended) and `severity` on
+    # the wire; `t` decides WHICH 10 s chunk carries the line and `role`
+    # co-decides the injection ORDER (it is the last key of the plan sort). The
+    # wire timestamp is wall clock at produce time and is deliberately NOT
+    # here — it is the one thing a replan cannot reproduce. `etype` names the
+    # chain vocabulary entry the line realizes, which selects the message; it
+    # is an INPUT to the injection, not a parser expectation.
+    WIRE_FIELDS: tuple[str, ...] = ("t", "device", "appname", "message",
+                                    "severity", "incident_id", "role", "etype")
+    # ...and the fields the harness DERIVES by asking the real classifier what
+    # it will make of those bytes. See EXPECTATION_REV.
+    EXPECTATION_FIELDS: tuple[str, ...] = ("symptom", "state", "entity")
+
+    @staticmethod
+    def _sha(obj) -> str:
+        """Canonical SHA-256 — sorted keys, compact separators, so the number
+        is a function of the CONTENT and not of dict insertion order."""
+        return hashlib.sha256(
+            json.dumps(obj, sort_keys=True,
+                       separators=(",", ":")).encode()).hexdigest()
+
+    def wire_digest(self) -> str:
+        """SHA-256 over the INJECTED PLAN ALONE — the qualification's identity.
+
+        ERRATUM (tracker 184, 2026-09-02). `digest()` below hashes the injected
+        fields AND the derived ground-truth annotations together, so a parser
+        promotion that changed nothing about the bytes this harness puts on the
+        wire moved the pinned number and read as "the ratified workload
+        changed". It had not: the 184 promotions were measured to leave this
+        digest bit-identical (proof recorded in
+        `tests/test_storm_scenario_profile.py`, `DEFAULT_SCENARIO_WIRE_DIGEST`).
+
+        THIS is the number that says two runs were fed the same stream, and it
+        is the one V1 §3 means by "the qualification's identity". It moves only
+        when the plan really moves: a different seed, device list, window,
+        shape, message vocabulary or injection order.
+        """
+        return self._sha({"events": [
+            [getattr(e, f) for f in self.WIRE_FIELDS] for e in self.events]})
+
+    def expectation_digest(self) -> str:
+        """SHA-256 over the DERIVED annotations — what the harness expects the
+        REAL classifier to make of the injected plan.
+
+        Three parts, all of them read from the parser rather than restated:
+        the per-line (symptom, entity, state) the plan claims, the per-incident
+        `symptom_kinds` rollup, and the chain's promotion table projected to
+        its machine-readable columns (the prose `note` is excluded on purpose —
+        an editorial pass must not look like an expectation change).
+
+        A move here is NOT a re-base: it means the engine reads the same wire
+        differently, which is exactly what `EXPECTATION_REV` records.
+        """
+        return self._sha({
+            "expectation_rev": EXPECTATION_REV,
+            "annotations": [[getattr(e, f) for f in self.EXPECTATION_FIELDS]
+                            for e in self.events],
+            "symptom_kinds": [[i["incident_id"], i["symptom_kinds"]]
+                              for i in self.incidents],
+            "promotion": [[s.event_type, s.coverage, s.kind, s.entity_shape,
+                           s.state] for s in chain.CHAIN_SIGNATURES],
+        })
+
     def digest(self) -> str:
         """SHA-256 over the canonical plan. Two runs of one seed on one device
         list must print the same 64 hex characters, or the scenario is not
-        deterministic and no A/B built on it means anything."""
-        blob = json.dumps({"incidents": self.incidents,
-                           "events": [list(e) for e in self.events]},
-                          sort_keys=True, separators=(",", ":"))
-        return hashlib.sha256(blob.encode()).hexdigest()
+        deterministic and no A/B built on it means anything.
+
+        COMBINED (wire + annotations), and kept that way for the readers that
+        already exist — every `report.json` / `ground-truth.json` ever written
+        carries this key, and a scorer comparing two runs' `digest` must keep
+        working. It is NOT the qualification's identity: use `wire_digest()`
+        for "were these two runs fed the same stream", and
+        `expectation_digest()` + `EXPECTATION_REV` for "did what we expect the
+        parser to do change".
+        """
+        return self._sha({"incidents": self.incidents,
+                          "events": [list(e) for e in self.events]})
 
     def shape_record(self, planned_total: int = 0) -> dict:
         """What this workload was ASKED for, and what it actually contains.
@@ -4086,7 +4234,15 @@ class StormScenario:
             "window_s": self.window_s,
             "chunk_secs": self.chunk_secs,
             "planned_total_events": planned_total,
+            # THREE DIGESTS, one question each (see `wire_digest`):
+            #   wire        — were two runs fed the same stream? (the identity)
+            #   expectation — did what we expect the parser to do change?
+            #   digest      — the legacy COMBINED value, kept for existing
+            #                 report readers; it moves when EITHER half does.
             "digest": self.digest(),
+            "wire_digest": self.wire_digest(),
+            "expectation_digest": self.expectation_digest(),
+            "expectation_rev": EXPECTATION_REV,
             "devices": {
                 "total": len(self.devices),
                 "scenario": len(self.devices) - len(self.noise_pool),
@@ -4903,6 +5059,10 @@ class Harness:
         # Resolved at burst Gate 1 (registry propagation): the tenant key every
         # injected record carries, or None for the legacy null-key shape.
         self.producer_key: str | None = None
+        # A4 mirror state (only ever touched behind --syslog-control-mirror).
+        self._syslog_screen = None
+        self.control_mirror_considered = 0
+        self.control_mirrored_total = 0
         self.run_dir = args.run_dir or os.path.join(
             REPO_ROOT, "data", "miniladder",
             datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ") + "-" + self.runid)
@@ -5868,7 +6028,11 @@ class Harness:
             ev["ground_truth"] = {
                 "path": gt_path, "schema": gt["schema"],
                 "scenario": gt["scenario"], "seed": gt["seed"],
-                "digest": gt["digest"], "incidents": len(gt["incidents"]),
+                "digest": gt["digest"],
+                "wire_digest": gt["wire_digest"],
+                "expectation_digest": gt["expectation_digest"],
+                "expectation_rev": gt["expectation_rev"],
+                "incidents": len(gt["incidents"]),
                 "templates": gt["templates"], "devices": gt["devices"],
                 "counts": gt["counts"],
                 "shape": gt["shape"],
@@ -5883,6 +6047,8 @@ class Harness:
                     f"{self.runid} --run-root data/miniladder"),
             }
             log(f"scenario {gt['scenario']} seed={gt['seed']} "
+                f"wire={gt['wire_digest'][:16]} "
+                f"exp={gt['expectation_digest'][:16]}@{gt['expectation_rev']} "
                 f"digest={gt['digest'][:16]} — {len(gt['incidents'])} incidents, "
                 f"{gt['counts']['scenario_events']} planned events "
                 f"({gt['counts']['state_transitions']} transitions, "
@@ -5992,6 +6158,8 @@ class Harness:
                     for ln in lanes:
                         ln["sent"] += detail[ln["name"]]
                     scenario_injected += sum(sc_detail.values())
+                    # A4 opt-in mirror; no-op on the default leg.
+                    self._mirror_syslog_control(lines)
             chunks.append({"i": idx, "t": round(elapsed, 1), "lanes": detail,
                            "scenario": sc_detail, "n": len(lines), "ok": ok,
                            "produce_s": round(time.monotonic() - tp, 2)})
@@ -6004,6 +6172,7 @@ class Harness:
         shortfall = fleet_planned - fleet_injected
         ev.update({
             "workload_class": self.profile["workload_class"],
+            "syslog_control_mirror": self._mirror_evidence(),
             "target_events": fleet_planned,
             # The workload contract, stated in three numbers: what the profile
             # ratified, what reached the bus, and how fast it got there.
@@ -6030,6 +6199,9 @@ class Harness:
                 "name": scen.spec["name"],
                 "seed": scen.seed,
                 "digest": scen.digest(),
+                "wire_digest": scen.wire_digest(),
+                "expectation_digest": scen.expectation_digest(),
+                "expectation_rev": EXPECTATION_REV,
                 "planned": len(scen.events),
                 "injected": scenario_injected,
                 "shortfall": len(scen.events) - scenario_injected,
@@ -6071,6 +6243,65 @@ class Harness:
                           f"fleet_planned={fleet_planned} events in "
                           f"{self.burst_seconds:.0f}s (rate_achieved="
                           f"{rate_achieved:.0f}/s; {lane_txt}){extended}")
+
+    def _mirror_evidence(self) -> dict:
+        """What the mirror actually did, in the burst evidence. `enabled:
+        false` is recorded deliberately: a run's evidence must say the mirror
+        was OFF rather than leave the reader to infer it from an absent key.
+
+        Read through `getattr` defaults because the burst-integrity suites
+        build a Harness with `__new__` and set only the attributes the phase
+        under test needs — an opt-in counter must not be able to turn one of
+        those into an AttributeError mid-burst."""
+        return {
+            "enabled": bool(getattr(self.args, "syslog_control_mirror", False)),
+            "topic": SYSLOG_CONTROL_TOPIC,
+            "considered": getattr(self, "control_mirror_considered", 0),
+            "mirrored": getattr(self, "control_mirrored_total", 0),
+        }
+
+    def _mirror_syslog_control(self, lines: list[str]) -> None:
+        """A4 opt-in: re-produce the ADMITTED subset of a chunk onto
+        netops.syslog.control, under the same tenant key.
+
+        No-op unless --syslog-control-mirror is set. Called only AFTER the
+        chunk has reached netops.syslog successfully, so the primary lane and
+        the accounting that reads it are untouched either way: this never
+        adds to `injected_total`, never rewrites a line, and never changes
+        which lines reach netops.syslog.
+
+        A failure here is LOUD (16.1). It lands in `produce_failures`, which
+        already fails the burst phase — a half-mirrored control topic would
+        make the very comparison the flag exists to enable dishonest, and the
+        run must not report a number built on it.
+        """
+        if not getattr(self.args, "syslog_control_mirror", False):
+            return
+        if getattr(self, "_syslog_screen", None) is None:
+            self._syslog_screen = load_syslog_screen()
+        subset = []
+        for line in lines:
+            try:
+                event = json.loads(line)
+            except (json.JSONDecodeError, TypeError) as exc:
+                self.produce_failures.append(
+                    f"syslog-control mirror: an injected line is not a JSON "
+                    f"object ({exc}) — the mirror cannot screen what it cannot "
+                    f"parse")
+                return
+            if self._syslog_screen(event):
+                subset.append(line)
+        self.control_mirror_considered = (
+            getattr(self, "control_mirror_considered", 0) + len(lines))
+        if not subset:
+            return
+        ok, err = self.stack.produce(SYSLOG_CONTROL_TOPIC, subset,
+                                     key=self.producer_key)
+        if not ok:
+            self.produce_failures.append(f"syslog-control mirror: {err}")
+            return
+        self.control_mirrored_total = (
+            getattr(self, "control_mirrored_total", 0) + len(subset))
 
     def _burst_internal(self) -> bool:
         ev: dict = {}
@@ -6194,6 +6425,8 @@ class Harness:
             else:
                 self.injected_total += chunk_n
                 fleet_injected += chunk_n
+                # A4 opt-in mirror; no-op on the default leg.
+                self._mirror_syslog_control(lines)
             chunks.append({"n": chunk_n, "ok": ok, "produce_s": round(time.monotonic() - tp, 2)})
             seq += chunk_n
             # Pace to the wall clock; if production is slower than the target
@@ -6223,6 +6456,7 @@ class Harness:
             "producer_key_mode": self.args.producer_key,
             "chunks": len(chunks),
             "produce_failures": self.produce_failures,
+            "syslog_control_mirror": self._mirror_evidence(),
         })
         self.evidence_file("burst-chunks.json", json.dumps(chunks, indent=1))
         if self.produce_failures:
@@ -8772,6 +9006,22 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
                          "template index has to be judged against; a single-kind "
                          "window is its friendly case. Deterministic in sequence "
                          "number either way, so accounting stays exact.")
+    ap.add_argument("--syslog-control-mirror", action="store_true",
+                    dest="syslog_control_mirror", default=False,
+                    help="ALSO produce the admitted subset of every injected "
+                         "chunk to netops.syslog.control (A4 Phase 1), using "
+                         "the engine's own producers.syslog_promotable screen. "
+                         "OFF by default and the default leg is byte-identical "
+                         "— netops.syslog receives exactly the same records in "
+                         "the same order either way. This harness injects "
+                         "straight into the topic and bypasses the "
+                         "vector-aggregator, so without this flag the "
+                         "aggregator-produced control topic stays empty under "
+                         "harness load and nothing measured against the split "
+                         "would mean anything. Costs a second produce per "
+                         "chunk for the admitted lines (~6%% of the ratified "
+                         "mix), so a capacity number taken WITH the mirror on "
+                         "is not comparable to the reference baseline.")
     ap.add_argument("--load-generator", choices=("internal", "twin"),
                     default="internal", dest="load_generator",
                     help="burst-phase load source: internal (default; the "

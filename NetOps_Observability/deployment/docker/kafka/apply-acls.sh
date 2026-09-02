@@ -39,7 +39,11 @@
 #                      findings lane); produce netops.deadletter AND
 #                      netops.flows (the tenant-keyed flow feed);
 #                      groups netops-router-* (prefixed)
-#   correlation        consume  its 12 topics; group netops-correlation
+#   correlation        consume  its 13 topics (incl. netops.syslog.control,
+#                      the A4 pre-screened syslog lane — granted now so the
+#                      engine can be switched onto it by env alone, with no
+#                      second ACL-and-restart step in the change window);
+#                      group netops-correlation
 #   kafka-exporter     describe netops.* topics + netops-* groups (lag math
 #                      is ListOffsets/OffsetFetch = Describe on both)
 #   ANONYMOUS          produce  netops.flows.raw ONLY — goflow2 on the FLOWS
@@ -101,8 +105,17 @@ $ACLS --add --allow-principal "$ROUTER" --producer \
 $ACLS --add --allow-principal "$ROUTER" --operation Read \
     --group netops-router- --resource-pattern-type prefixed >/dev/null
 
-echo "acls: correlation — consume-only on its 12 topics + its one group" >&2
-for t in netops.syslog netops.flows netops.metrics netops.probes \
+# A4 Phase 1: the aggregator's WRITE on netops.syslog.control needs no grant
+# of its own — the bus-bridge `--producer --topic netops. --resource-pattern-type
+# prefixed` ACL above already covers every netops.* topic, and adding a
+# redundant literal ACL would imply the prefixed one does not apply.
+#
+# vector-router is deliberately NOT granted Read on netops.syslog.control: it
+# indexes the FULL syslog lane from netops.syslog, and a second consumer would
+# duplicate every admitted document into OpenSearch.
+echo "acls: correlation — consume-only on its 13 topics + its one group" >&2
+for t in netops.syslog netops.syslog.control \
+         netops.flows netops.metrics netops.probes \
          netops.snmptrap netops.cloud netops.app.identities.v1 \
          netops.controller_events netops.app.edge netops.verification \
          netops.wireless_sessions netops.wireless_events; do

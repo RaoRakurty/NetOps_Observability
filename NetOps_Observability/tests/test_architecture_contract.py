@@ -129,6 +129,85 @@ def test_correlation_consumes_all_bus_planes():
         assert required in topics, f"correlation must consume {required}; has {topics}"
 
 
+# ── Layer 2C.1: the A4 pre-screened syslog lane (topic pin) ───────────────────
+
+SYSLOG_CONTROL_TOPIC = "netops.syslog.control"
+
+
+def _kafka_init_topics(compose_text: str) -> set[str]:
+    """The netops.* topic set the kafka-init loop pre-creates, from the raw
+    compose TEXT (both files write it as a folded shell one-liner)."""
+    m = re.search(r"for t in (.*?)\s*;\s*do", compose_text, re.DOTALL)
+    assert m, "kafka-init lost its topic for-loop"
+    return {t for t in m.group(1).split() if t.startswith("netops.")}
+
+
+def test_syslog_control_topic_is_pre_created_in_both_compose_files():
+    """A4 Phase 1. The aggregator produces the pre-screened syslog subset onto
+    netops.syslog.control, so the topic must EXIST with the same partition
+    count as every other netops.* topic — co-partitioning is what lets a
+    consumer move between netops.syslog and netops.syslog.control without
+    resharding a tenant. Auto-creation would give it the broker default and
+    race the first producer (the reason kafka-init exists at all)."""
+    for rel in (("deployment", "docker", "docker-compose.yml"),
+                ("deployment", "docker", "compose.tls.yml")):
+        topics = _kafka_init_topics(read(*rel))
+        assert SYSLOG_CONTROL_TOPIC in topics, (
+            f"{rel[-1]} kafka-init must pre-create {SYSLOG_CONTROL_TOPIC}")
+        assert "netops.syslog" in topics, (
+            f"{rel[-1]} must still pre-create the FULL syslog lane — the "
+            "control topic is an addition, never a replacement")
+
+
+def test_syslog_control_topic_is_produced_by_the_aggregator_only():
+    """The split is a SUPERSET/subset pair, not a re-route: kafka_syslog still
+    carries the whole lane, kafka_syslog_control carries the admitted subset,
+    and both are keyed identically so the two topics co-partition."""
+    sinks = _vector_cfg()["sinks"]
+    full, ctrl = sinks["kafka_syslog"], sinks["kafka_syslog_control"]
+    assert full["topic"] == "netops.syslog"
+    assert ctrl["topic"] == SYSLOG_CONTROL_TOPIC
+    for field in ("key_field", "librdkafka_options", "compression"):
+        assert ctrl[field] == full[field], (
+            f"kafka_syslog_control.{field} must match kafka_syslog — a "
+            "different key or partitioner breaks co-partitioning")
+    assert ctrl["encoding"] == full["encoding"]
+    assert ctrl["tls"] == full["tls"], "the control sink must ride the same mTLS"
+    assert ctrl["inputs"] == ["syslog_admission.control"], (
+        "the control sink must be fed by the admission ROUTE, never by the "
+        "unfiltered lane")
+
+
+def test_router_does_not_consume_the_syslog_control_topic():
+    """OpenSearch indexes the FULL lane from netops.syslog. A router
+    subscription to the pre-screened copy would duplicate every admitted
+    document — and it is the ACL, not just the config, that has to say so."""
+    router = yaml.safe_load(
+        read("deployment", "docker", "vector-router", "vector.yaml"))
+    for name, src in router.get("sources", {}).items():
+        assert SYSLOG_CONTROL_TOPIC not in (src.get("topics") or []), (
+            f"vector-router source {name!r} must not consume "
+            f"{SYSLOG_CONTROL_TOPIC}")
+    acls = read("deployment", "docker", "kafka", "apply-acls.sh")
+    grants = {}   # principal variable -> the topic set its Read loop covers
+    for topics, body in re.findall(r"for t in (.*?);\s*do(.*?)done", acls,
+                                   re.DOTALL):
+        for principal in re.findall(r'"\$(\w+)"', body):
+            grants.setdefault(principal, set()).update(
+                t for t in topics.replace("\\", " ").split()
+                if t.startswith("netops."))
+    assert "ROUTER" in grants and "CORR" in grants, (
+        f"apply-acls.sh no longer has per-principal topic loops: {sorted(grants)}")
+    assert SYSLOG_CONTROL_TOPIC not in grants["ROUTER"], (
+        "the router principal must NOT be granted the control topic — it "
+        "indexes the full lane and would duplicate every admitted document")
+    assert SYSLOG_CONTROL_TOPIC in grants["CORR"], (
+        "correlation must be granted Read on the control topic, so switching "
+        "the engine over is one env var and not an ACL change in the window")
+    assert "netops.syslog" in grants["CORR"], (
+        "correlation keeps Read on the full lane — the control topic is opt-in")
+
+
 # ── Layer 2D: VictoriaMetrics is not the LIVE correlation path ────────────────
 
 def test_correlation_live_path_does_not_query_victoriametrics():

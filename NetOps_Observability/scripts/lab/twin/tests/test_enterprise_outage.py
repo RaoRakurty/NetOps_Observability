@@ -330,8 +330,10 @@ def _check_coverage(rows) -> None:
 
 def test_the_coverage_table_is_pinned_against_the_real_parser():
     _check_coverage(chain.CHAIN_SIGNATURES)
-    assert set(chain.not_promoted_types()) == {
-        "bgp_route_churn", "bgp_router_update_burst"}, (
+    # EMPTY since tracker 184 promoted BGP route/update churn: every symptom
+    # this chain emits is now visible to the classifier. Pinned as a set, so a
+    # symptom going dark is as loud as one lighting up.
+    assert set(chain.not_promoted_types()) == set(), (
         "the not-promoted list changed — an engine improvement worth "
         "recording, or a regression; either way not silent")
 
@@ -376,9 +378,20 @@ def test_every_emitted_line_matches_the_coverage_table(stx):
             seen_unpromoted += 1
         else:
             assert sig is not None, f"line never promotes: {it['message']!r}"
-    assert seen_unpromoted > 0, (
-        "the chain emitted no BGP route-churn lines — the symptom the engine "
-        "cannot see is part of the story, not an optional extra")
+    # Tracker 184 promoted the last invisible symptom (BGP route/update
+    # churn), so a story now emits ZERO unpromotable lines. Asserted as an
+    # EQUALITY against the chain's own table rather than a ">0" that would
+    # pass whatever the harness happened to emit: the story must still carry
+    # the route-churn LINES (checked below), they are simply visible now.
+    assert seen_unpromoted == 0 and not chain.not_promoted_types(), (
+        f"{seen_unpromoted} invisible lines, but the chain declares "
+        f"{chain.not_promoted_types()} — table and story have drifted")
+    churn_apps = {chain.CHAIN_BY_TYPE[t].exemplar[0]
+                  for t in ("bgp_route_churn", "bgp_router_update_burst")}
+    assert churn_apps & {it["appname"] for it in stx["items"]
+                         if it["lane"] == "syslog"}, (
+        "the chain emitted no BGP route-churn lines — the route-churn phase "
+        "is part of the story, not an optional extra")
 
 
 def test_the_story_publishes_its_coverage_table_into_ground_truth(stx):
@@ -584,4 +597,6 @@ def test_shaped_lines_still_match_the_coverage_table():
             seen_unpromoted += 1
         else:
             assert sig is not None, f"line never promotes: {it['message']!r}"
-    assert seen_unpromoted > 0
+    # See the note in test_every_emitted_line_matches_the_coverage_table: the
+    # chain has had no invisible symptom since tracker 184.
+    assert seen_unpromoted == 0 and not chain.not_promoted_types()
