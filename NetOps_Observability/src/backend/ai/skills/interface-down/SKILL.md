@@ -16,7 +16,7 @@ look_for:
   - Flap count and the time of the last transition. A single clean transition points at a change; repeated transitions point at optics or power.
   - Whether the device itself stopped reporting. A device that went quiet in every collector is unreachable, not down on one port.
 decisions:
-  - next=optics-degraded when the link is up but errors or light levels are abnormal
+  - next=optics-degraded when evidence:kind=metric an anomalous interface counter is present alongside the link event
   - next=ospf-adjacency when the link recovered and the IGP neighbour did not
   - next=bgp-session-down when the link recovered and the BGP peer did not
   - next=path-seam-handoff when the down link is the handoff to a provider

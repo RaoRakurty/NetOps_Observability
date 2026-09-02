@@ -345,14 +345,29 @@ func DefaultAnalyzer() *Analyzer {
 			Remediation: "Restore reachability to the peer address (IGP/static route, and any ACL blocking it). BGP will not leave Idle until the peer is routable.",
 			Confidence:  ConfidenceHigh,
 			match: func(col *Collection) (Evidence, bool) {
-				// Multi-condition: summary shows Idle AND the peer route lookup shows
-				// no reachable route.
-				sm, ok := col.command("bgp-summary")
-				if !ok {
-					return Evidence{}, false
+				// Multi-condition: the session is Idle AND the peer route lookup
+				// shows no reachable route.
+				//
+				// TYPED FIRST (typedbridge.go): when the capture parses for this
+				// device's dialect the state is read from BGPPeer.State, so the
+				// word "Idle" appearing anywhere ELSE in the output — a
+				// description, a log echo, another column — can no longer fire
+				// this verdict. The regex below is the fallback for a platform
+				// whose summary layout has no parser.
+				ev, fired, typed := typedBGPStateEvidence(col, "bgp-summary",
+					bgpStateIs("Idle", "Idle (Admin)"))
+				if !typed {
+					sm, ok := col.command("bgp-summary")
+					if !ok {
+						return Evidence{}, false
+					}
+					idleLine, ok := firstMatch(sm, reBgpIdle)
+					if !ok {
+						return Evidence{}, false
+					}
+					ev, fired = evidenceOf(sm, idleLine), true
 				}
-				idleLine, ok := firstMatch(sm, reBgpIdle)
-				if !ok {
+				if !fired {
 					return Evidence{}, false
 				}
 				pr, ok := col.command("bgp-peer-route")
@@ -362,7 +377,7 @@ func DefaultAnalyzer() *Analyzer {
 				if _, reachable := firstMatch(pr, reRouteReachable); reachable {
 					return Evidence{}, false
 				}
-				return evidenceOf(sm, idleLine), true
+				return ev, true
 			},
 		},
 		{
@@ -372,12 +387,25 @@ func DefaultAnalyzer() *Analyzer {
 			Remediation: "Permit TCP/179 both directions between the peers, and confirm the neighbor is configured on the far end.",
 			Confidence:  ConfidenceHigh,
 			match: func(col *Collection) (Evidence, bool) {
-				sm, ok := col.command("bgp-summary")
-				if !ok {
-					return Evidence{}, false
+				// Typed first, regex fallback — see bgp-idle-unreachable. The
+				// gain here is larger: "active" is an ordinary English word that
+				// appears in plenty of BGP output ("Active Route", "active
+				// paths"), and reading the FSM state from the parsed row removes
+				// every one of those false tells.
+				ev, fired, typed := typedBGPStateEvidence(col, "bgp-summary",
+					bgpStateIs("Active", "Connect"))
+				if !typed {
+					sm, ok := col.command("bgp-summary")
+					if !ok {
+						return Evidence{}, false
+					}
+					stLine, ok := firstMatch(sm, reBgpActiveConnect)
+					if !ok {
+						return Evidence{}, false
+					}
+					ev, fired = evidenceOf(sm, stLine), true
 				}
-				stLine, ok := firstMatch(sm, reBgpActiveConnect)
-				if !ok {
+				if !fired {
 					return Evidence{}, false
 				}
 				pr, ok := col.command("bgp-peer-route")
@@ -387,7 +415,7 @@ func DefaultAnalyzer() *Analyzer {
 				if _, reachable := firstMatch(pr, reRouteReachable); !reachable {
 					return Evidence{}, false
 				}
-				return evidenceOf(sm, stLine), true
+				return ev, true
 			},
 		},
 		{

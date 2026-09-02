@@ -16,14 +16,15 @@ look_for:
   - Scope before mechanism: one interface, one device, one site, or many? A single-device symptom and a site-wide symptom are different faults with different owners.
   - Whether the evidence classes agree. Two independent classes agreeing is the threshold for "confirmed"; one class alone is "suspected" at best.
 decisions:
-  - next=interface-down when the symptom is one link, an interface counter, or a device that stopped reporting
+  - next=interface-down when verdict:phrase=interface the engine's verdict names an interface
+  - next=interface-down when verdict:phrase=link the engine's verdict names a link
   - next=optics-degraded when errors rise without the link going down
-  - next=stp-topology when a whole L2 domain went unstable at once
-  - next=mac-flap when hosts appear on more than one port
-  - next=ospf-adjacency when an OSPF neighbour is not FULL
-  - next=isis-adjacency when an IS-IS adjacency is not UP
-  - next=bgp-session-down when a BGP peer is not Established
-  - next=bgp-prefix-missing when the session is up but the prefix is absent
+  - next=stp-topology when verdict:phrase=stp the engine's verdict names spanning tree
+  - next=mac-flap when verdict:phrase=mac the engine's verdict names a MAC address or MAC churn
+  - next=ospf-adjacency when verdict:phrase=ospf the engine's verdict names OSPF
+  - next=isis-adjacency when verdict:phrase=isis the engine's verdict names IS-IS
+  - next=bgp-session-down when verdict:phrase=bgp the engine's verdict names BGP
+  - next=bgp-prefix-missing when verdict:phrase=prefix the engine's verdict names a missing or unadvertised prefix
   - next=path-seam-handoff when the loss or latency sits on a hop we do not own
   - next=app-edge-5xx when the transport is clean and only one application is failing
   - next=security-exposure-context when the operator asks about exposure, posture, or a security finding

@@ -204,4 +204,9 @@ type Target struct {
 	Peer      string
 	Prefix    string
 	VRF       string
+	// Address is the L3 or L2 address an ARP / MAC lookup is scoped to. It is
+	// used ONLY by the state battery (statebattery.go); the 15-issue catalog's
+	// templates carry no {addr} placeholder, so adding it changes nothing about
+	// what the catalog renders.
+	Address string
 }

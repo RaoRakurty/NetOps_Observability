@@ -134,6 +134,22 @@ func Redact(col *Collection) *Collection {
 	return &out
 }
 
+// RedactOutput runs the redaction pass over ONE raw command output and returns
+// the redacted copy. It is the single-string form of Redact, for the paths that
+// hold a command's text rather than a whole Collection — today the STATE BATTERY
+// (fanout.go), which redacts every capture BEFORE it is parsed, so nothing
+// unredacted can reach a typed evidence row, a log line, or a caller.
+//
+// It is deliberately the SAME pass Redact and TACExport use: there is one
+// redaction implementation in this package and no way to take a capture out of
+// it without going through this function or Redact.
+func RedactOutput(raw string) string {
+	if raw == "" {
+		return ""
+	}
+	return newRedactor().redactText(raw)
+}
+
 // TACExport assembles a redacted, shareable text blob from a Collection and its
 // AnalyzeResult: a header (device / vendor / protocol / issue / ruleset / time),
 // the analyze verdict(s) with evidence, then every captured command with its

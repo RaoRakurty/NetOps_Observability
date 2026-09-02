@@ -16,10 +16,16 @@ package ai
 // the next skill, and cannot reach the gated action subsystem — which is a
 // separate subsystem it has no path to at all.
 //
-// BOUNDS (LLM04/LLM10). At most MaxSkillToolCalls tool calls per turn, each
-// result capped by its tool and re-capped by RenderToolReply, the whole evidence
-// block capped again before it is handed to the provider, and output tokens
-// capped by the transport as on every other path.
+// BOUNDS (LLM04/LLM10). At most MaxSkillToolCalls tool calls per ROUND and
+// MaxChainToolCalls per turn, each result capped by its tool and re-capped by
+// RenderToolReply, the whole evidence block capped again before it is handed to
+// the provider, and output tokens capped by the transport as on every other path.
+//
+// PHASE A2 — the turn is now a BOUNDED CHAIN of skills, not a single one. The
+// loop, the closed condition vocabulary that drives it and the closed choice the
+// model is allowed to make all live in skill_chain.go; this file owns one round
+// (plan → govern → run → audit) and the single final narration over everything
+// the chain gathered.
 
 import (
 	"context"
@@ -60,6 +66,15 @@ type ToolAuditEntry struct {
 	Reason   string   `json:"reason"`
 	Items    int      `json:"items"`
 	Duration int64    `json:"duration_ms"`
+	// Round is the 1-based investigation round this entry belongs to (Phase A2).
+	// Zero on an entry emitted outside the chain.
+	Round int `json:"round,omitempty"`
+	// Selected is HOW the skill of this entry came to run: entry | rule | model
+	// (the Chain* constants in skill_chain.go). With Round it makes the whole
+	// investigation path reconstructible from the audit alone. An entry whose
+	// Tool is "next_skill" is a SELECTION decision rather than a tool execution;
+	// its Reason is rule_selected / model_selected / model_selected_invalid.
+	Selected string `json:"selected,omitempty"`
 }
 
 // reDeviceCandidate matches hostname-shaped tokens in an operator question. It
@@ -176,99 +191,120 @@ func planGather(sk *Skill, ent skillEntitySet) []plannedStep {
 	return out
 }
 
-// answerSkill runs the selected skill end to end. It returns handled=false when
-// the skill could not gather ANY evidence for this turn — a skill answer with no
-// evidence would be exactly the ungrounded reply this whole change exists to
-// remove, so the caller falls back to its normal path instead.
+// answerSkill runs the selected skill — and, when the gathered evidence points
+// onward, the bounded chain of skills after it — end to end. It returns
+// handled=false when NO skill in the chain could gather ANY evidence: a skill
+// answer with no evidence would be exactly the ungrounded reply this whole
+// change exists to remove, so the caller falls back to its normal path instead.
 func (o *Orchestrator) answerSkill(ctx context.Context, p Principal, question string, plan Plan, match SkillMatch, uiContext map[string]string, disc []string) (Answer, bool) {
 	sk := match.Skill
 	if sk == nil || o.Tools == nil {
 		return Answer{}, false
 	}
-	ent := o.resolveSkillEntities(ctx, p, question, uiContext)
-	steps := planGather(sk, ent)
-	if len(steps) == 0 {
-		return Answer{}, false
-	}
+	// §9: the whole turn is bounded in wall-clock time BEFORE the first tool
+	// runs, so a slow upstream cannot hold the operator's request open. An
+	// earlier deadline already on the caller's context always wins.
+	ctx, cancel := context.WithTimeout(ctx, SkillTurnBudget)
+	defer cancel()
 
-	pe := o.policy()
-	var bundle []EvidenceItem
-	var notes []string
-	var lookups []string
-	ran := 0
-	for _, st := range steps {
-		tool, ok := o.Tools.Get(st.Tool)
-		if !ok {
-			// The capability is not wired on this deployment. Disclose it rather
-			// than pretending the check happened.
-			notes = append(notes, ToolLabel(st.Tool)+" is not available on this deployment — treat that evidence as UNKNOWN, not clean")
-			o.auditSkillTool(sk.Name, st, false, "not_registered", 0, 0)
-			continue
-		}
-		if d := pe.EvaluateTool(tool, p); !d.Allow {
-			notes = append(notes, ToolLabel(st.Tool)+" was not run: "+d.Reason)
-			o.auditSkillTool(sk.Name, st, false, "policy_denied", 0, 0)
-			continue
-		}
-		started := time.Now()
-		res, err := tool.Run(ctx, p, st.Args)
-		elapsed := time.Since(started)
-		if err != nil {
-			// ErrNotFound covers unknown AND cross-tenant ids identically (§3a).
-			reason := "tool_error"
-			switch {
-			case errors.Is(err, ErrNotFound):
-				reason = "not_found"
-				notes = append(notes, ToolLabel(st.Tool)+" found nothing for the id in scope")
-			case errors.Is(err, ErrNotImplemented):
-				reason = "not_implemented"
-				notes = append(notes, ToolLabel(st.Tool)+" is not implemented in this build")
-			default:
-				notes = append(notes, ToolLabel(st.Tool)+" failed — do NOT invent the data it would have returned")
+	// §3a: entities are resolved ONCE per turn, under the caller's tenant,
+	// before any skill runs. Every later hop reuses this binding — a skill
+	// selected in a later round can never resolve a new device or otherwise
+	// widen the scope of the investigation.
+	ent := o.resolveSkillEntities(ctx, p, question, uiContext)
+
+	st := newChainState()
+	var last *Skill
+	cur, selected, reason := sk, ChainSelectedEntry, match.Reason
+	for round := 1; round <= MaxInvestigationRounds; round++ {
+		roundItems, ranNow := o.runSkillRound(ctx, p, cur, ent, st, round, selected)
+		st.visited[cur.Name] = true // visited even when it gathered nothing: never retried
+		if ranNow == 0 {
+			if last != nil {
+				st.addNote("the " + humanizeSkillName(cur.Name) + " check added no evidence for this scope")
 			}
-			o.auditSkillTool(sk.Name, st, false, reason, 0, elapsed)
-			continue
+			break
 		}
-		ran++
-		lookups = append(lookups, st.Tool)
-		bundle = append(bundle, res.Items...)
-		notes = append(notes, res.Notes...)
-		if res.Truncated {
-			notes = append(notes, ToolLabel(st.Tool)+" results were capped")
+		last = cur
+		st.chain = append(st.chain, SkillHop{SkillRef: cur.Ref(), Selected: selected, Round: round, Reason: reason})
+
+		// Budgets, checked BEFORE another round is started and DISCLOSED when
+		// they cut the investigation short (§10: no silent failure).
+		if round == MaxInvestigationRounds {
+			if len(o.chainCandidates(cur, st)) > 0 {
+				st.addNote("the investigation stopped at its " + strconv.Itoa(MaxInvestigationRounds) +
+					"-round budget — the remaining checks were not run")
+			}
+			break
 		}
-		o.auditSkillTool(sk.Name, st, true, "ok", len(res.Items), elapsed)
+		if st.toolCalls >= MaxChainToolCalls {
+			st.addNote("the investigation stopped at its per-turn lookup budget — the remaining checks were not run")
+			break
+		}
+		if !timeLeftForAnotherRound(ctx) {
+			st.addNote("the investigation stopped at its time budget — the remaining checks were not run")
+			break
+		}
+
+		// (a) deterministic authored rules, then (b) the model's CLOSED choice.
+		next, why, ok := o.nextByRule(cur, st)
+		how := ChainSelectedRule
+		if ok {
+			o.auditChainChoice(next.Name, ChainSelectedRule, "rule_selected", round, true)
+		} else {
+			next, why, ok = o.nextByModel(ctx, cur, st, question, roundItems, round)
+			how = ChainSelectedModel
+		}
+		if !ok {
+			break // (c) nothing fired and nothing valid was proposed
+		}
+		cur, selected, reason = next, how, why
 	}
-	if ran == 0 {
+	if st.ran == 0 || last == nil {
 		return Answer{}, false // nothing was gathered — fall back rather than narrate nothing
 	}
-	notes = append(notes, ent.notes...)
+	st.notes = append(st.notes, ent.notes...)
+	if st.capped {
+		st.addNote("the gathered evidence was capped at the prompt budget — later rows were not narrated")
+	}
+	bundle, notes := st.bundle, dedupeStrings(st.notes)
 
 	ans := Answer{
 		Mode:    ModeTroubleshootFinding,
 		Intent:  firstNonEmpty(plan.Intent, "troubleshoot"),
-		Modules: skillModules(sk, o.Tools),
-		Title:   skillTitle(sk),
-		Skill:   ptrSkillRef(sk.Ref()),
-		Lookups: lookups,
+		Modules: st.modules,
+		Title:   skillTitle(last),
+		Skill:   ptrSkillRef(last.Ref()),
+		Chain:   st.chain,
+		Lookups: st.lookups,
 	}
 	ans.Citations = citationsFrom(bundle, skillMaxCitations)
-	ans.NextActions = skillNextActions(sk)
+	ans.NextActions = skillNextActions(last)
 	ans.Disclaimers = disc
 	if len(bundle) == 0 {
 		ans.Disclaimers = append(ans.Disclaimers, "No evidence rows were returned for this scope.")
 	}
 
-	// Narrate. The system prompt stays server-owned; the skill body is
-	// server-owned reference material; the gathered evidence is fenced as DATA.
-	system := o.systemPrompt() + "\n\n" + skillSystemBlock(sk)
-	prompt := o.skillPrompt(question, sk, bundle, notes, match)
+	// Narrate ONCE, over everything the chain gathered. The system prompt stays
+	// server-owned; the LAST skill's method is the reference material; the
+	// chain summary says which path was taken; the evidence is fenced as DATA.
+	system := o.systemPrompt() + "\n\n" + skillSystemBlock(last)
+	if line := chainSummaryLine(st.chain); line != "" {
+		system += "\n" + line + "\n"
+	}
+	prompt := o.skillPrompt(question, last, bundle, notes, match)
 	text, provider, err := "", "", error(nil)
 	if o.LLM != nil {
 		text, provider, err = o.LLM.Complete(ctx, system, []LLMMessage{{Role: "user", Content: o.redact(prompt)}})
 	}
+	// A routing directive is a server↔model control line, never operator text:
+	// strip it even from the final narration — and BEFORE the emptiness check, so
+	// a reply that was nothing but a directive degrades to the deterministic
+	// summary instead of shipping an empty answer.
+	text = stripNextDirective(text)
 	if err != nil || strings.TrimSpace(text) == "" {
 		// Evidence-only fallback: the finding still ships, deterministically.
-		ans.Text = deterministicSkillSummary(sk, bundle, notes)
+		ans.Text = deterministicSkillSummary(last, bundle, notes)
 		ans.EvidenceOnly = true
 		ans.ProviderNote = "Answered from evidence only — no AI provider was available for the narrative."
 	} else {
@@ -285,9 +321,86 @@ func (o *Orchestrator) answerSkill(ctx context.Context, p Principal, question st
 	return ans, true
 }
 
+// runSkillRound is ONE round of the investigation: plan this skill's gather from
+// the already-resolved entities, run each step through the Policy Engine, audit
+// it, and fold what came back into the turn's accumulated state. It returns the
+// evidence this round CONTRIBUTED (deduped and within the prompt budget) and how
+// many steps actually returned — a round that returns zero ends the chain.
+func (o *Orchestrator) runSkillRound(ctx context.Context, p Principal, sk *Skill, ent skillEntitySet, st *chainState, round int, selected string) ([]EvidenceItem, int) {
+	steps := planGather(sk, ent)
+	if len(steps) == 0 {
+		return nil, 0
+	}
+	pe := o.policy()
+	var items []EvidenceItem
+	var notes []string
+	ran := 0
+	for _, step := range steps {
+		if st.toolCalls >= MaxChainToolCalls {
+			break // the per-turn ceiling; the caller discloses it
+		}
+		st.toolCalls++
+		tool, ok := o.Tools.Get(step.Tool)
+		if !ok {
+			// The capability is not wired on this deployment. Disclose it rather
+			// than pretending the check happened.
+			notes = append(notes, ToolLabel(step.Tool)+" is not available on this deployment — treat that evidence as UNKNOWN, not clean")
+			st.facts.recordTool(step.Tool, "not_wired")
+			o.auditSkillTool(sk.Name, step, false, "not_registered", 0, 0, round, selected)
+			continue
+		}
+		if d := pe.EvaluateTool(tool, p); !d.Allow {
+			notes = append(notes, ToolLabel(step.Tool)+" was not run: "+d.Reason)
+			st.facts.recordTool(step.Tool, "denied")
+			o.auditSkillTool(sk.Name, step, false, "policy_denied", 0, 0, round, selected)
+			continue
+		}
+		started := time.Now()
+		res, err := tool.Run(ctx, p, step.Args)
+		elapsed := time.Since(started)
+		if err != nil {
+			// ErrNotFound covers unknown AND cross-tenant ids identically (§3a).
+			reason, outcome := "tool_error", "error"
+			switch {
+			case errors.Is(err, ErrNotFound):
+				reason, outcome = "not_found", "not_found"
+				notes = append(notes, ToolLabel(step.Tool)+" found nothing for the id in scope")
+			case errors.Is(err, ErrNotImplemented):
+				reason, outcome = "not_implemented", "not_wired"
+				notes = append(notes, ToolLabel(step.Tool)+" is not implemented in this build")
+			default:
+				notes = append(notes, ToolLabel(step.Tool)+" failed — do NOT invent the data it would have returned")
+			}
+			st.facts.recordTool(step.Tool, outcome)
+			o.auditSkillTool(sk.Name, step, false, reason, 0, elapsed, round, selected)
+			continue
+		}
+		ran++
+		st.lookups = append(st.lookups, step.Tool)
+		items = append(items, res.Items...)
+		notes = append(notes, res.Notes...)
+		if res.Truncated {
+			notes = append(notes, ToolLabel(step.Tool)+" results were capped")
+		}
+		// Machine facts for the next-skill decision. Signals are what the TOOL
+		// asserted about what it read; kinds and outcomes are what the SERVER
+		// observed. Neither can come from model text.
+		st.facts.addSignals(res.Signals)
+		st.facts.recordTool(step.Tool, "ok")
+		o.auditSkillTool(sk.Name, step, true, "ok", len(res.Items), elapsed, round, selected)
+	}
+	st.facts.addEvidence(items)
+	st.facts.addNotes(notes)
+	st.notes = append(st.notes, notes...)
+	st.addModules(sk, o.Tools)
+	st.ran += ran
+	return st.addEvidence(items), ran
+}
+
 // auditSkillTool records one gather execution (arg NAMES only — no values).
-// `took` is the tool's own wall time; a step that never ran records zero.
-func (o *Orchestrator) auditSkillTool(skill string, st plannedStep, allowed bool, reason string, items int, took time.Duration) {
+// `took` is the tool's own wall time; a step that never ran records zero. Round
+// and selected place the entry in the investigation chain (Phase A2).
+func (o *Orchestrator) auditSkillTool(skill string, st plannedStep, allowed bool, reason string, items int, took time.Duration, round int, selected string) {
 	if o.ToolAudit == nil {
 		return
 	}
@@ -300,6 +413,7 @@ func (o *Orchestrator) auditSkillTool(skill string, st plannedStep, allowed bool
 		Skill: skill, Tool: st.Tool, Args: names,
 		Allowed: allowed, Reason: reason, Items: items,
 		Duration: took.Milliseconds(),
+		Round:    round, Selected: selected,
 	})
 }
 
@@ -416,9 +530,17 @@ func deterministicSkillSummary(sk *Skill, bundle []EvidenceItem, notes []string)
 // reach the operator's action list.
 func skillNextActions(sk *Skill) []string {
 	var out []string
+	seen := map[string]bool{}
 	for _, d := range sk.Decisions {
 		switch d.Kind {
 		case DecisionNext:
+			// One line per TARGET: a skill may author several machine conditions
+			// for the same handoff (Phase A2), and the operator's action list
+			// should name that check once, with the first authored reason.
+			if seen[d.Target] {
+				continue
+			}
+			seen[d.Target] = true
 			if d.Reason != "" {
 				out = append(out, "Check "+humanizeSkillName(d.Target)+" — when "+d.Reason+".")
 			} else {
@@ -443,7 +565,7 @@ func skillMissingEvidence(notes []string) []string {
 		low := strings.ToLower(n)
 		if strings.Contains(low, "not available") || strings.Contains(low, "not wired") ||
 			strings.Contains(low, "not implemented") || strings.Contains(low, "found nothing") ||
-			strings.Contains(low, "was not run") || strings.Contains(low, "failed") ||
+			strings.Contains(low, "not run") || strings.Contains(low, "failed") ||
 			strings.Contains(low, "unknown") {
 			out = append(out, n)
 		}

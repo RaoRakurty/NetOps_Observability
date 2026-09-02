@@ -88,9 +88,16 @@ troubleshooting documentation is the knowledge source).
   narrates → citation verifier; the model chooses NO tool. The `capability`
   dead end is now offered to the skills layer first. 136 ai tests + root
   isolation suite; gate green. UI: skill chip + provenance in `IrisLane`.
-- [ ] **A2 — bounded skill chaining** (≤4 rounds; authored decision rules first,
-  model may pick only among a skill's declared `next=` targets; chain shown as
-  provenance). Spec §3.1 of the model doc.
+- [x] **A2 — bounded skill chaining** — SHIPPED 2026-09-02. `ai/skill_chain.go`:
+  ≤4 rounds, ≤6 tools/round, ≤16 tools/turn, 45s wall-clock, every budget
+  disclosed. Next skill chosen by authored MACHINE conditions first (closed
+  grammar: `signature=` · `tool:<name>=` · `evidence:kind=` · `verdict:tier=` ·
+  `verdict:phrase=` · `note=`, unknown key = loader error), else by a model
+  choice restricted to that skill's own declared `next=` targets (refusals
+  audited as `model_selected_invalid`, the name never logged). Evidence
+  accumulates deduped + capped; entities resolved once per turn (no scope
+  widening). `Answer.Chain` + `round`/`selected` on every audit entry; the
+  breadcrumb renders in `IrisLane`. Spec §3.1 of the model doc.
 - [ ] **A3 — show-first state battery + `internal/showparse` parser library**
   (Genie-equivalent; skip-on-unparseable; parallel failure-isolated collection).
   Spec §3.2. Largest piece.
@@ -110,26 +117,39 @@ Full audit: `docs/FRONTEND_WAVE_TRACKER.md`.
     telemetry done; the device-detail UI remains).
   - [ ] **#10** BGP depth — live RIS/BMP feed + local buffer, RPKI/ASPA/geofeed
     panels, **AS-path graph** (design `91df4f62`), AI-over-BGP-tools.
-  - [ ] **#11** OSPF advanced + **IS-IS advanced** monitoring — **backend +
-    frontend SHIPPED, unverified against a live IGP fabric.**
+  - [ ] **#11** OSPF advanced + **IS-IS advanced** monitoring — **the depth
+    collectors now exist; IS-IS is lab-attested, OSPF is `doc_claimed`.**
     `internal/igpmon` serves `GET /api/protocols/{ospf|isis}/{adjacencies,
     summary,health}` (infrastructure:read; wired in `igpmon_deps.go`, routes in
-    `main.go`, ledger + `igpmon_deps_test.go` cross-org test, 98.5% package
-    coverage). It COLLECTS NOTHING new: adjacency history is the typed
-    syslog/trap `{ospf,isis}_adjacency_change` signals read at `chTenantScope`;
-    adjacency state now is `device_isis_adj_state` / `device_ospf_nbr_state`
-    read with the caller's `extra_filters[]`. Every response carries
-    `coverage{events,live_series,lsdb}` and an absent source is **null + a note,
-    never 0**. UI: `src/pages/igp/IgpAdjacencies.tsx`, mounted in the OSPF and
-    IS-IS groups of `BgpOspf.tsx` (per-adjacency state + timeline, roll-up,
-    coverage strip; five honest states).
-    Still open: (a) **LSDB/LSP counts, OSPF area membership and IS-IS area
-    addresses are collected by NO collector** on either transport — the API
-    probes for the series and reports `lsdb:false` / `areas:null` until one
-    exists, so "advanced" here stops at adjacency depth; (b) there is no
-    OSPF-speaking SNMP device on the validated lab, so the OSPF live-series path
-    has never returned a row; (c) no per-adjacency hold/dead timers or SPF-run
-    counters. Closing #11 fully = a collector for the LSDB/area/SPF series.
+    `main.go`, ledger + `igpmon_deps_test.go` cross-org test). Adjacency history
+    is the typed syslog/trap `{ospf,isis}_adjacency_change` signals read at
+    `chTenantScope`; adjacency state now is `device_isis_adj_state` /
+    `device_ospf_nbr_state` read with the caller's `extra_filters[]`.
+    **The four "advanced" gaps are now collected** (fidelity ledger:
+    `docs/design/telemetry-coverage-reference.md` § F): LSP/LSA database size,
+    area membership, SPF-run counters and adjacency/interface timers.
+    IS-IS ships four gNMI series from the SR Linux native model
+    (`device_isis_lsp_count` / `_area` / `_spf_runs_total` / `_adj_hold_seconds`,
+    subscriptions `srl-isis-db` + `srl-isis-timers`), every path READ OFF lab
+    spine1 and the canonical output replayed through gnmic's own engine in
+    `tests/test_gnmi_correlation_lane.py`. OSPF ships five OSPF-MIB series in the
+    generic SNMP profile (`ospfAreaLsaCount` / `ospfAreaStatus` / `ospfSpfRuns` /
+    `ospfIfHelloInterval` / `ospfIfRtrDeadInterval`), OIDs index-resolved against
+    the vendored MIB. These are MONITORING series: none was added to
+    `rcaMetricFamilies`, and a test asserts they stay off the correlation bus.
+    Every response carries `coverage{events,live_series,lsdb,areas,spf_runs,
+    timers}` — four separate depth flags, because the four probes are separate
+    reads that fail independently — and an absent source is **null + a note
+    naming the series and its transport, never 0**. UI:
+    `src/pages/igp/IgpAdjacencies.tsx` (depth blocks, per-device roll-up
+    columns, an IGP-timers panel, per-adjacency hold on the IS-IS row).
+    Still open: (a) **deploy** — the gnmic collector has not been restarted with
+    the new subscriptions, so the IS-IS series are `lab_validated`, not
+    `live_validated`, and nothing is in VictoriaMetrics yet; (b) there is still
+    no OSPF-speaking SNMP device on the lab, so not one OSPF series (state or
+    depth) has ever returned a row; (c) `telemetry-catalog/` does not yet carry
+    the nine families — that needs an `area` identity entity and two capabilities
+    `normalize.py` lacks (§ F.3 lists them).
   - [ ] **#1** perf wave 2 (measured budgets, high-EPS render) · **#1.1/2**
     confirm full-site copy coverage.
 

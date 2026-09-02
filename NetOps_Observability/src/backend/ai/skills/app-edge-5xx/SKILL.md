@@ -17,7 +17,7 @@ look_for:
   - The change timeline on both the network and the service side in the window before onset.
 decisions:
   - next=path-seam-handoff when transport measurements are outside baseline
-  - next=optics-degraded when retransmissions are elevated without visible loss
+  - next=optics-degraded when evidence:kind=metric an anomalous counter is present on the path while transport otherwise reads clean
   - next=log-confirmation when the onset time must be pinned before comparing to changes
   - verdict=state whether the network path is within baseline, and name the service-side signal that best explains the errors
   - escalate=the application or platform owner with the transport evidence attached as an exoneration

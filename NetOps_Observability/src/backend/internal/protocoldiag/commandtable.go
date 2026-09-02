@@ -24,6 +24,8 @@ package protocoldiag
 import (
 	"regexp"
 	"strings"
+
+	"netops/backend/internal/showparse"
 )
 
 // maxArgToken bounds one substituted argument token. An interface name, peer
@@ -53,23 +55,44 @@ func itoa(n int) string {
 	return string(b[i:])
 }
 
-// placeholders is the set of substitutable tokens a template may carry. It is
-// the authoritative list — a template token that looks like a placeholder but is
-// not in this set is treated as a LITERAL, so a typo fails closed (the command
-// simply never matches) rather than opening a wildcard.
-var placeholders = map[string]struct{}{
-	"{if}": {}, "{peer}": {}, "{prefix}": {}, "{vrf-scope}": {},
+// tokenGrammar is the substitution vocabulary ONE closed table matches against:
+// which template tokens are placeholders, and which dialect keywords a
+// {vrf-scope} placeholder may emit ahead of the instance name.
+//
+// It is a PARAMETER rather than a package constant because there are two closed
+// tables in this package — the 15-issue catalog's (catalogGrammar) and the state
+// battery's (batteryGrammar) — and widening one to fit the other would widen the
+// set of strings the live SSH runner will put on a wire. Keeping them separate
+// is what lets the battery add `{addr}` and Huawei's `vpn-instance` qualifier
+// without loosening the catalog's table by a single token.
+type tokenGrammar struct {
+	// placeholders is the authoritative substitutable-token set. A template
+	// token that LOOKS like a placeholder but is not in this set is treated as a
+	// LITERAL, so a typo fails closed (the command simply never matches) rather
+	// than opening a wildcard.
+	placeholders map[string]struct{}
+	// vrfQualifiers are the dialect keywords a {vrf-scope} may emit ahead of the
+	// instance name.
+	vrfQualifiers map[string]struct{}
 }
 
-// vrfQualifiers are the dialect keywords vrfScopeToken can emit ahead of the
-// instance name. Kept in sync with vrfScopeToken by TestCommandTable_VRFScope.
-var vrfQualifiers = map[string]struct{}{"vrf": {}, "instance": {}}
+// catalogGrammar is the 15-issue catalog's substitution vocabulary. Kept in sync
+// with CommandSpec.Render and vrfScopeToken by TestCommandTable_VRFScope.
+func catalogGrammar() tokenGrammar {
+	return tokenGrammar{
+		placeholders: map[string]struct{}{
+			"{if}": {}, "{peer}": {}, "{prefix}": {}, "{vrf-scope}": {},
+		},
+		vrfQualifiers: map[string]struct{}{"vrf": {}, "instance": {}},
+	}
+}
 
 // commandTable is the compiled, immutable closed table: per rendered dialect,
 // the token list of every template the catalog can produce. It is built once
 // from a Catalog and never mutated, so it is safe to share across goroutines.
 type commandTable struct {
 	byVendor map[Vendor][][]string
+	grammar  tokenGrammar
 }
 
 // newCommandTable compiles the closed table from a catalog. Every issue's whole
@@ -77,7 +100,7 @@ type commandTable struct {
 // contributes the primary template it would fall back to), so the table is
 // exactly the set of shapes Collect can emit.
 func newCommandTable(cat *Catalog) *commandTable {
-	t := &commandTable{byVendor: map[Vendor][][]string{}}
+	t := &commandTable{byVendor: map[Vendor][][]string{}, grammar: catalogGrammar()}
 	if cat == nil {
 		return t
 	}
@@ -117,7 +140,7 @@ func (t *commandTable) Allows(v Vendor, command string) bool {
 		return false
 	}
 	for _, tmpl := range t.byVendor[renderVendor(v)] {
-		if matchTemplate(tmpl, cmd) {
+		if matchTemplate(t.grammar, tmpl, cmd) {
 			return true
 		}
 	}
@@ -129,29 +152,70 @@ func (t *commandTable) Allows(v Vendor, command string) bool {
 // zero or one argument token; {vrf-scope} may additionally consume the two-token
 // `vrf X` / `instance X` qualifier. Backtracking is bounded by the template
 // length (never more than a dozen tokens), so recursion is cheap and terminates.
-func matchTemplate(tmpl, cmd []string) bool {
+func matchTemplate(g tokenGrammar, tmpl, cmd []string) bool {
 	if len(tmpl) == 0 {
 		return len(cmd) == 0
 	}
 	head := tmpl[0]
-	if _, isPlaceholder := placeholders[head]; !isPlaceholder {
+	if _, isPlaceholder := g.placeholders[head]; !isPlaceholder {
 		if len(cmd) == 0 || cmd[0] != head {
 			return false
 		}
-		return matchTemplate(tmpl[1:], cmd[1:])
+		return matchTemplate(g, tmpl[1:], cmd[1:])
 	}
 	// Empty argument: the placeholder collapsed to nothing.
-	if matchTemplate(tmpl[1:], cmd) {
+	if matchTemplate(g, tmpl[1:], cmd) {
 		return true
 	}
 	// One argument token.
-	if len(cmd) >= 1 && argTokenRE.MatchString(cmd[0]) && matchTemplate(tmpl[1:], cmd[1:]) {
+	if len(cmd) >= 1 && argTokenRE.MatchString(cmd[0]) && matchTemplate(g, tmpl[1:], cmd[1:]) {
 		return true
 	}
 	// {vrf-scope} only: the dialect qualifier plus the instance name.
 	if head == "{vrf-scope}" && len(cmd) >= 2 {
-		if _, ok := vrfQualifiers[strings.ToLower(cmd[0])]; ok && argTokenRE.MatchString(cmd[1]) {
-			return matchTemplate(tmpl[1:], cmd[2:])
+		if _, ok := g.vrfQualifiers[strings.ToLower(cmd[0])]; ok && argTokenRE.MatchString(cmd[1]) {
+			return matchTemplate(g, tmpl[1:], cmd[2:])
+		}
+	}
+	return false
+}
+
+// ── the state battery's closed table ────────────────────────────────────────
+//
+// batteryGrammar is the SHOW-FIRST STATE BATTERY's substitution vocabulary
+// (statebattery.go). It adds {addr} — the L3/L2 address an ARP or MAC lookup is
+// scoped to — and the two VRF qualifiers the battery's seven dialects spell the
+// concept with that the three-vendor catalog never needed.
+func batteryGrammar() tokenGrammar {
+	return tokenGrammar{
+		placeholders: map[string]struct{}{
+			"{if}": {}, "{peer}": {}, "{prefix}": {}, "{vrf-scope}": {}, "{addr}": {},
+		},
+		vrfQualifiers: map[string]struct{}{
+			"vrf": {}, "instance": {}, "vpn-instance": {},
+		},
+	}
+}
+
+// dialectTable is the compiled closed table for the state battery: per DIALECT
+// (a vendorprofile profile id, not the catalog's three-value Vendor), the token
+// list of every template the battery can render. Built once, never mutated.
+type dialectTable struct {
+	byDialect map[showparse.Dialect][][]string
+	grammar   tokenGrammar
+}
+
+// Allows reports whether command is a rendering of one of the battery templates
+// authored for dialect d. Like commandTable.Allows it does NOT replace
+// ValidateReadOnly, which the runner also applies.
+func (t *dialectTable) Allows(d showparse.Dialect, command string) bool {
+	cmd := strings.Fields(command)
+	if len(cmd) == 0 {
+		return false
+	}
+	for _, tmpl := range t.byDialect[d] {
+		if matchTemplate(t.grammar, tmpl, cmd) {
+			return true
 		}
 	}
 	return false

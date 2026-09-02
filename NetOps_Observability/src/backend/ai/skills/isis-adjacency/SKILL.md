@@ -16,9 +16,9 @@ look_for:
   - MTU. IS-IS pads its hellos to the interface MTU, so an MTU mismatch prevents the adjacency from forming at all rather than degrading it.
   - Authentication and the interface circuit type, both of which fail quietly.
 decisions:
-  - next=interface-down when the circuit beneath the adjacency is down or flapping
+  - next=interface-down when verdict:phrase=link the RCA verdict names the circuit beneath the adjacency
   - next=optics-degraded when the link is up but padded hellos could be corrupted
-  - next=log-confirmation when the adjacency transition times must be pinned
+  - next=log-confirmation when signature=none the adjacency diagnostic ran and no known signature matched, so the transition times must be pinned from the device's own words
   - verdict=name the neighbour system id, the level, the state and the mismatch the signature identified
   - escalate=the routing owner with both ends' level and area named when the mismatch is on the far end
 ---

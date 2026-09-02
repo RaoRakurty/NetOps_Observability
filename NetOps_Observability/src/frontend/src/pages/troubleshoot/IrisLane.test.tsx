@@ -14,7 +14,7 @@
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, cleanup, fireEvent, waitFor } from "@testing-library/react";
-import type { AiAnswer, AiCitation } from "../../services/api";
+import type { AiAnswer, AiCitation, AiSkillHop } from "../../services/api";
 
 // The WHOLE api surface is mocked, so "the lane called something else" is an
 // assertable failure rather than an invisible network call.
@@ -32,7 +32,7 @@ vi.mock("../../services/api", () => ({ api: { aiAsk: mocks.aiAsk, ...mocks.other
 const aiAsk = mocks.aiAsk;
 const otherApi = mocks.other;
 
-import IrisLane, { citeProvenance, safeCiteHref } from "./IrisLane";
+import IrisLane, { chainHops, citeProvenance, hopSelectionLabel, safeCiteHref } from "./IrisLane";
 
 const answer = (over: Partial<AiAnswer> = {}): AiAnswer => ({
   mode: "grounded", intent: "explain", modules: [], text: "Nothing is wrong right now.",
@@ -41,6 +41,9 @@ const answer = (over: Partial<AiAnswer> = {}): AiAnswer => ({
 
 const cite = (over: Partial<AiCitation> = {}): AiCitation =>
   ({ id: "c1", kind: "correlation", label: "P-ABC123", href: "/correlations/1", ...over });
+
+const hop = (over: Partial<AiSkillHop> = {}): AiSkillHop =>
+  ({ name: "bgp-session-down", layer: "bgp", version: 3, selected: "entry", round: 1, ...over });
 
 beforeEach(() => {
   aiAsk.mockReset();
@@ -213,6 +216,79 @@ describe("provenance chips", () => {
     fireEvent.click(screen.getByRole("button", { name: "Ask Iris" }));
     expect(await screen.findByText("Evidence-only mode.")).toBeInTheDocument();
     expect(screen.getByText("No action was taken.")).toBeInTheDocument();
+  });
+});
+
+// ── the investigation chain (Phase A2) ───────────────────────────────────────
+
+describe("chainHops", () => {
+  it("draws nothing for a pre-A2 backend or a single-method turn", () => {
+    expect(chainHops(null)).toEqual([]);
+    expect(chainHops(answer())).toEqual([]);
+    expect(chainHops(answer({ chain: [hop()] }))).toEqual([]);
+  });
+
+  it("keeps every hop, in the backend's order, once there is a real chain", () => {
+    const chain = [hop(), hop({ name: "interface-down", selected: "rule", round: 2 })];
+    expect(chainHops(answer({ chain })).map((h) => h.name))
+      .toEqual(["bgp-session-down", "interface-down"]);
+  });
+});
+
+describe("hopSelectionLabel", () => {
+  it.each([["entry", "entry"], ["rule", "rule"], ["model", "proposed"]])(
+    "renders %p as %p", (selected, want) => {
+      expect(hopSelectionLabel(hop({ selected }))).toBe(want);
+    });
+
+  it("passes an unrecognised value through instead of inventing one", () => {
+    expect(hopSelectionLabel(hop({ selected: "future-mode" }))).toBe("future-mode");
+    expect(hopSelectionLabel(hop({ selected: undefined }))).toBe("");
+  });
+});
+
+describe("the chain breadcrumb", () => {
+  it("renders one chip per hop, in order, with how it was chosen", async () => {
+    aiAsk.mockResolvedValue(answer({
+      skill: { name: "interface-down", version: 2, layer: "physical" },
+      chain: [
+        hop(),
+        hop({ name: "interface-down", layer: "physical", version: 2, selected: "rule", round: 2,
+              reason: "the RCA verdict names a link" }),
+      ],
+    }));
+    render(<IrisLane />);
+    fireEvent.click(screen.getByRole("button", { name: "Ask Iris" }));
+    await screen.findByTestId("iris-chain");
+    const chips = screen.getAllByTestId("iris-chain-hop");
+    expect(chips.map((c) => c.textContent)).toEqual([
+      "bgp-session-down · entry",
+      "interface-down · rule",
+    ]);
+    expect(chips[1]).toHaveAttribute("title", "the RCA verdict names a link");
+    // The skill chip still names the LAST method, unchanged from Phase A.
+    expect(screen.getByTestId("iris-skill-chip")).toHaveTextContent("Skill: interface-down v2 · physical");
+  });
+
+  it("renders NO breadcrumb when the backend sent no chain", async () => {
+    aiAsk.mockResolvedValue(answer({ skill: { name: "bgp-session-down" } }));
+    render(<IrisLane />);
+    fireEvent.click(screen.getByRole("button", { name: "Ask Iris" }));
+    await screen.findByTestId("iris-skill-chip");
+    expect(screen.queryByTestId("iris-chain")).toBeNull();
+  });
+
+  it("renders a hostile hop name as characters, never as markup", async () => {
+    aiAsk.mockResolvedValue(answer({
+      chain: [hop({ name: "<img src=x onerror=alert(1)>" }), hop({ name: "interface-down", selected: "model" })],
+    }));
+    const { container } = render(<IrisLane />);
+    fireEvent.click(screen.getByRole("button", { name: "Ask Iris" }));
+    const chips = await screen.findAllByTestId("iris-chain-hop");
+    expect(chips[0]).toHaveTextContent("<img src=x onerror=alert(1)> · entry");
+    expect(chips[1]).toHaveTextContent("interface-down · proposed");
+    expect(container.querySelector("img")).toBeNull();
+    expect(container.innerHTML).toContain("&lt;img");
   });
 });
 

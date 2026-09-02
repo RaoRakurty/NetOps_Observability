@@ -95,6 +95,16 @@ type ToolResult struct {
 	Items     []EvidenceItem
 	Truncated bool
 	Notes     []string
+	// Signals are the MACHINE FACTS a tool declares about what it just read, in
+	// the `key=value` form of the skill-condition vocabulary (skill.go) — e.g.
+	// "verdict:tier=confirmed", "signature=bgp-idle-unreachable". They exist so
+	// the bounded investigation loop (skill_chain.go) can branch on a fact the
+	// TOOL asserted instead of re-parsing narrative text, and they are the only
+	// channel by which gathered evidence may influence which authored skill runs
+	// next. Optional: a tool that declares none simply cannot fire a condition.
+	// Malformed or unknown signals are ignored by the evaluator, and both the
+	// count and the length of each are bounded there.
+	Signals []string
 }
 
 // ToolArgs are validated, simple string args (no free-form SQL/shell — ever).

@@ -40,10 +40,19 @@ package ai
 //	  - one observation per bullet
 //	decisions:
 //	  - next=interface-down when the link beneath it is down
+//	  - next=log-confirmation when signature=none the capture matched nothing
 //	  - verdict=what a conclusion must state
 //	  - escalate=who to hand it to
 //	---
 //	prose body …
+//
+// A `next=` line may carry a MACHINE CONDITION (IRIS Phase A2): when the first
+// word after `when ` contains an `=`, it must be a `key=value` condition from
+// the closed vocabulary in skillConditionKeys — anything else is a load error,
+// so a typo can never degrade into a rule that silently never fires. The rest of
+// the line is the human reason. A `when` clause WITHOUT an `=` in its first word
+// stays a human-only reason: it is shown to the operator and offered to the
+// model as a closed choice, but it never fires a deterministic hop.
 //
 // In a gather step, a BARE identifier binds that tool argument from the
 // server-resolved entity of the same name (never from the model); `k=v` is a
@@ -170,12 +179,159 @@ const (
 	DecisionEscalate SkillDecisionKind = "escalate" // who owns it beyond us
 )
 
+// ---- machine conditions (IRIS Phase A2) ------------------------------------
+//
+// A condition is `key=value` over a CLOSED vocabulary of facts the server itself
+// derives from the evidence gathered so far (skill_chain.go). The model never
+// supplies a fact and never supplies a key: a condition can only ever select a
+// skill the author already declared, so the worst a manipulated device string
+// could do is pick an authored branch — never a new tool, a new skill, or a
+// wider scope.
+
+const (
+	// CondSignature fires on a protocol-diagnostic signature id, or on the
+	// reserved value CondSignatureNone ("a diagnostic ran and nothing matched").
+	CondSignature = "signature"
+	// CondEvidenceKind fires when an evidence item of that kind was gathered.
+	CondEvidenceKind = "evidence:kind"
+	// CondVerdictTier fires on the RCA engine's verdict tier.
+	CondVerdictTier = "verdict:tier"
+	// CondVerdictPhrase fires when the engine's own operator phrase/title
+	// contains that word — the engine's words, never the model's.
+	CondVerdictPhrase = "verdict:phrase"
+	// CondNote fires when a server-authored collection note contains that token.
+	CondNote = "note"
+	// CondToolPrefix + a tool name fires on that tool's outcome this turn.
+	CondToolPrefix = "tool:"
+	// CondSignatureNone is the reserved CondSignature value: a protocol
+	// diagnostic RAN this turn and no known signature matched its output.
+	CondSignatureNone = "none"
+)
+
+// skillToolOutcomes is the closed outcome vocabulary of a `tool:<name>=` condition.
+// It is exactly the set skill_chain.go can derive from a gather step's fate.
+var skillToolOutcomes = map[string]bool{
+	"ok":        true, // the tool ran and returned
+	"not_found": true, // ErrNotFound — unknown OR another tenant's id (§3a)
+	"not_wired": true, // not registered / not implemented on this deployment
+	"denied":    true, // the Policy Engine or the caller's permissions refused it
+	"error":     true, // the tool failed
+}
+
+// skillEvidenceKinds is the closed evidence-kind vocabulary (EvidenceItem.Kind
+// as produced by the registered tools and the DataSource).
+var skillEvidenceKinds = map[string]bool{
+	"app": true, "device": true, "doc": true, "finding": true, "flow": true,
+	"integration": true, "knowledge": true, "log": true, "metric": true,
+	"navigation": true, "ticket": true, "topology": true,
+}
+
+// skillVerdictTiers is the closed RCA verdict-tier vocabulary.
+var skillVerdictTiers = map[string]bool{
+	"confirmed": true, "suspected": true, "candidate": true, "undetermined": true,
+}
+
+var (
+	reCondToken     = regexp.MustCompile(`^[a-z][a-z0-9_-]{1,31}$`)
+	reCondSignature = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,63}$`)
+)
+
+// SkillCondition is one machine-checkable guard on a next= decision.
+type SkillCondition struct {
+	Key   string // one of the Cond* keys, or CondToolPrefix + a declared tool
+	Value string // validated against that key's closed vocabulary
+}
+
+// String renders the condition in its authored form (audit + docs).
+func (c SkillCondition) String() string { return c.Key + "=" + c.Value }
+
+// Human renders the condition as the operator-facing reason a hop was taken.
+func (c SkillCondition) Human() string {
+	switch {
+	case c.Key == CondSignature && c.Value == CondSignatureNone:
+		return "the protocol diagnostic ran and no known signature matched"
+	case c.Key == CondSignature:
+		return "the " + c.Value + " signature fired"
+	case c.Key == CondEvidenceKind:
+		return c.Value + " evidence was gathered"
+	case c.Key == CondVerdictTier:
+		return "the RCA verdict is " + c.Value
+	case c.Key == CondVerdictPhrase:
+		return "the RCA verdict names \"" + c.Value + "\""
+	case c.Key == CondNote:
+		return "a collection note mentions \"" + c.Value + "\""
+	case strings.HasPrefix(c.Key, CondToolPrefix):
+		tool := ToolLabel(strings.TrimPrefix(c.Key, CondToolPrefix))
+		switch c.Value {
+		case "ok":
+			return tool + " returned data"
+		case "not_found":
+			return tool + " found nothing for the id in scope"
+		case "not_wired":
+			return tool + " is not available on this deployment"
+		case "denied":
+			return tool + " was not permitted for this caller"
+		default:
+			return tool + " failed"
+		}
+	default:
+		return c.String()
+	}
+}
+
+// parseSkillCondition validates one `key=value` machine condition against the
+// closed vocabulary. `declared` is the skill's own tools: list — a tool:
+// condition on a tool the skill never declared is a load error, so a rule can
+// never depend on evidence the skill does not gather.
+func parseSkillCondition(raw string, declared map[string]bool) (SkillCondition, error) {
+	key, value, ok := strings.Cut(strings.TrimSpace(raw), "=")
+	key, value = strings.TrimSpace(key), strings.TrimSpace(value)
+	if !ok || key == "" || value == "" {
+		return SkillCondition{}, fmt.Errorf("condition %q must be key=value", raw)
+	}
+	switch {
+	case key == CondSignature:
+		if value != CondSignatureNone && !reCondSignature.MatchString(value) {
+			return SkillCondition{}, fmt.Errorf("signature %q must be %q or a signature id matching %s", value, CondSignatureNone, reCondSignature)
+		}
+	case key == CondEvidenceKind:
+		if !skillEvidenceKinds[value] {
+			return SkillCondition{}, fmt.Errorf("evidence kind %q is not one of %v", value, sortedKeys(skillEvidenceKinds))
+		}
+	case key == CondVerdictTier:
+		if !skillVerdictTiers[value] {
+			return SkillCondition{}, fmt.Errorf("verdict tier %q is not one of %v", value, sortedKeys(skillVerdictTiers))
+		}
+	case key == CondVerdictPhrase, key == CondNote:
+		if !reCondToken.MatchString(value) {
+			return SkillCondition{}, fmt.Errorf("%s token %q must match %s", key, value, reCondToken)
+		}
+	case strings.HasPrefix(key, CondToolPrefix):
+		tool := strings.TrimPrefix(key, CondToolPrefix)
+		if !skillToolAllowlist[tool] {
+			return SkillCondition{}, fmt.Errorf("condition tool %q is not on the skill tool allowlist", tool)
+		}
+		if !declared[tool] {
+			return SkillCondition{}, fmt.Errorf("condition tool %q is not in this skill's tools: list", tool)
+		}
+		if !skillToolOutcomes[value] {
+			return SkillCondition{}, fmt.Errorf("tool outcome %q is not one of %v", value, sortedKeys(skillToolOutcomes))
+		}
+	default:
+		return SkillCondition{}, fmt.Errorf("condition key %q is not one of %s, %s, %s, %s, %s, %s<tool>",
+			key, CondSignature, CondEvidenceKind, CondVerdictTier, CondVerdictPhrase, CondNote, CondToolPrefix)
+	}
+	return SkillCondition{Key: key, Value: value}, nil
+}
+
 // SkillDecision is one authored decision. Target is the next skill's name for
-// DecisionNext and empty otherwise.
+// DecisionNext and empty otherwise. Cond, when non-nil, is the machine condition
+// that makes the hop DETERMINISTIC; a nil Cond is a human-only reason.
 type SkillDecision struct {
 	Kind   SkillDecisionKind
 	Target string
 	Reason string
+	Cond   *SkillCondition
 }
 
 // Skill is one parsed, validated troubleshooting method.
@@ -387,7 +543,7 @@ func parseSkill(dir, raw string) (*Skill, error) {
 	}
 
 	for _, line := range blocks["decisions"] {
-		d, derr := parseDecision(line)
+		d, derr := parseDecision(line, declared)
 		if derr != nil {
 			return nil, fmt.Errorf("decisions %q: %w", line, derr)
 		}
@@ -537,8 +693,8 @@ func parseGatherStep(line string, declared map[string]bool) (GatherStep, error) 
 	return step, nil
 }
 
-// parseDecision parses `kind=target reason` / `kind=reason`.
-func parseDecision(line string) (SkillDecision, error) {
+// parseDecision parses `kind=target [when <condition|reason>]` / `kind=reason`.
+func parseDecision(line string, declared map[string]bool) (SkillDecision, error) {
 	kindRaw, rest, ok := strings.Cut(strings.TrimSpace(line), "=")
 	if !ok {
 		return SkillDecision{}, fmt.Errorf("expected kind=…")
@@ -556,6 +712,22 @@ func parseDecision(line string) (SkillDecision, error) {
 			return SkillDecision{}, fmt.Errorf("next= must name a skill (got %q)", target)
 		}
 		reason = strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(reason), "when "))
+		// A machine condition is the FIRST word of the reason when that word
+		// carries an `=`. It must then parse against the closed vocabulary: a
+		// mistyped key fails the build rather than becoming a rule that can
+		// never fire. Everything after it is the human reason.
+		head, tail, _ := strings.Cut(reason, " ")
+		if strings.Contains(head, "=") {
+			cond, cerr := parseSkillCondition(head, declared)
+			if cerr != nil {
+				return SkillDecision{}, cerr
+			}
+			human := strings.TrimSpace(tail)
+			if human == "" {
+				human = cond.Human()
+			}
+			return SkillDecision{Kind: kind, Target: target, Reason: human, Cond: &cond}, nil
+		}
 		return SkillDecision{Kind: kind, Target: target, Reason: reason}, nil
 	case DecisionVerdict, DecisionEscalate:
 		return SkillDecision{Kind: kind, Reason: rest}, nil

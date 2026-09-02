@@ -31,6 +31,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"netops/backend/internal/showparse"
 )
 
 // SSHCommandRunner is the live CommandRunner: it validates a rendered command
@@ -42,7 +44,7 @@ import (
 // touches.
 type SSHCommandRunner struct {
 	gw      Gateway
-	table   *commandTable
+	gate    commandGate
 	max     int64
 	timeout time.Duration
 
@@ -85,9 +87,35 @@ func NewSSHCommandRunner(catalog *Catalog, gw Gateway, opts ...SSHRunnerOption) 
 	if gw == nil {
 		return nil, errors.New("protocoldiag: nil gateway")
 	}
+	return newLiveRunner(gw, catalogGate{table: newCommandTable(catalog)}, opts...), nil
+}
+
+// NewSSHBatteryRunner is the live runner for the SHOW-FIRST STATE BATTERY
+// (statebattery.go). It is the SAME policy layer — read-only shape, closed
+// table, one in flight per device, bounded IO — over the BATTERY's closed table
+// instead of the catalog's.
+//
+// It exists because the two tables must not be merged: a runner that accepted
+// both would let a catalog call reach a battery command and the reverse, and the
+// whole value of a closed table is that it is exactly as wide as the feature it
+// serves. Wiring RunBattery to a catalog runner would refuse every battery
+// command (honestly, as ErrCommandNotInTable) — this constructor is the correct
+// wiring.
+func NewSSHBatteryRunner(battery *StateBattery, gw Gateway, opts ...SSHRunnerOption) (*SSHCommandRunner, error) {
+	if battery == nil {
+		return nil, errors.New("protocoldiag: nil state battery")
+	}
+	if gw == nil {
+		return nil, errors.New("protocoldiag: nil gateway")
+	}
+	return newLiveRunner(gw, batteryGate{battery: battery}, opts...), nil
+}
+
+// newLiveRunner is the shared constructor behind both live runners.
+func newLiveRunner(gw Gateway, gate commandGate, opts ...SSHRunnerOption) *SSHCommandRunner {
 	r := &SSHCommandRunner{
 		gw:      gw,
-		table:   newCommandTable(catalog),
+		gate:    gate,
 		max:     MaxOutputBytes,
 		timeout: DefaultCommandTimeout,
 		busy:    map[string]bool{},
@@ -95,8 +123,41 @@ func NewSSHCommandRunner(catalog *Catalog, gw Gateway, opts ...SSHRunnerOption) 
 	for _, o := range opts {
 		o(r)
 	}
-	return r, nil
+	return r
 }
+
+// commandGate answers the closed-table question for ONE device: "could the
+// feature this runner serves have rendered this exact command for this device?".
+// Injecting it is what lets the catalog and the state battery share every other
+// policy rule without sharing a table.
+type commandGate interface {
+	allows(dev Device, command string) bool
+	// name identifies the gate in a refusal message.
+	name() string
+}
+
+// catalogGate is the 15-issue catalog's gate, keyed on the catalog's
+// three-value rendering Vendor.
+type catalogGate struct{ table *commandTable }
+
+func (g catalogGate) allows(dev Device, command string) bool {
+	return g.table.Allows(dev.Vendor(), command)
+}
+func (g catalogGate) name() string { return "diagnostics catalog" }
+
+// batteryGate is the state battery's gate, keyed on the device's resolved
+// vendorprofile DIALECT. A platform that resolves to no dialect is refused —
+// there is no fallback dialect, so there is no command to allow.
+type batteryGate struct{ battery *StateBattery }
+
+func (g batteryGate) allows(dev Device, command string) bool {
+	d, ok := showparse.DialectFromPlatform(dev.Platform)
+	if !ok {
+		return false
+	}
+	return g.battery.Allows(d, command)
+}
+func (g batteryGate) name() string { return "state battery" }
 
 // Run implements CommandRunner.
 func (r *SSHCommandRunner) Run(ctx context.Context, device Device, command string) (string, error) {
@@ -106,8 +167,9 @@ func (r *SSHCommandRunner) Run(ctx context.Context, device Device, command strin
 		return "", fmt.Errorf("%w: %s", ErrNotReadOnly, err.Error())
 	}
 	// (2) closed table for THIS device's dialect.
-	if !r.table.Allows(device.Vendor(), command) {
-		return "", fmt.Errorf("%w: %q", ErrCommandNotInTable, command)
+	if !r.gate.allows(device, command) {
+		return "", fmt.Errorf("%w: %q is not in the %s table for platform %q",
+			ErrCommandNotInTable, command, r.gate.name(), device.Platform)
 	}
 	if strings.TrimSpace(device.Address) == "" {
 		return "", ErrNoAddress

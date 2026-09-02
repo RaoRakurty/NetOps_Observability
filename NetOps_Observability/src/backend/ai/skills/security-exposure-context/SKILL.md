@@ -15,7 +15,7 @@ look_for:
   - Whether the finding is corroborated by anything operational. Security evidence is one evidence class among four here; it supports a network conclusion, it does not replace one.
   - Coverage. Say plainly which devices were assessed and which were not, because an unassessed device reads as clean if you do not.
 decisions:
-  - next=osi-bisection when the operator's real question is an outage rather than posture
+  - next=osi-bisection when verdict:tier=confirmed a confirmed outage verdict is in scope, so the operator's real question is the outage rather than posture
   - next=path-seam-handoff when the exposure is on a seam whose owner is not us
   - verdict=name the finding, its severity, its seam and whether it is current, and state the assessed scope
   - escalate=the security owner for remediation — this platform reports exposure, it does not remediate it

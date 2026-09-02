@@ -16,10 +16,11 @@ look_for:
   - The last notification or reset reason, which usually names the cause outright (hold timer expired, administrative reset, bad AS number).
   - Whether the underlying interface or the path to the peer changed at the same time as the session.
 decisions:
-  - next=interface-down when the interface carrying the session is down or flapping
+  - next=interface-down when verdict:phrase=link the RCA verdict names the link beneath the session
+  - next=interface-down when signature=bgp-idle-unreachable the peering address is unreachable from this device, so the interface carrying the session is the next check
   - next=path-seam-handoff when the peer sits across a provider or partner handoff
-  - next=bgp-prefix-missing when the session is Established but routes are absent
-  - next=log-confirmation when the reset reason must be read from the device's own words
+  - next=bgp-prefix-missing when signature=bgp-nothing-advertised the session is Established but nothing is being advertised to the peer
+  - next=log-confirmation when signature=none the session diagnostic ran and no known signature matched, so the reset reason must be read from the device's own words
   - verdict=name the peer, the FSM state, the reset reason if captured, and whether reachability to the peer is intact
   - escalate=the peer's owner, named from the seam, with the state and last reason quoted
 ---

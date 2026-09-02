@@ -74,9 +74,11 @@ func (s *server) aiTroubleshootDeps(r *http.Request, claims jwtClaims) ai.Troubl
 	return deps
 }
 
-// aiToolAudit records one skill gather-step execution. The ai package never
-// sees a token, so the ACTOR is added here; the entry itself carries argument
-// NAMES only (§8: no PII, no values, in a log line).
+// aiToolAudit records one skill gather-step execution — or, when the tool is
+// "next_skill", one chain SELECTION decision (IRIS Phase A2). The ai package
+// never sees a token, so the ACTOR is added here; the entry itself carries
+// argument NAMES only (§8: no PII, no values, in a log line), and `round` +
+// `selected` make the whole investigation path reconstructible from the log.
 func (s *server) aiToolAudit(claims jwtClaims) func(ai.ToolAuditEntry) {
 	tenant, cross := principalTenant(claims)
 	return func(e ai.ToolAuditEntry) {
@@ -85,6 +87,7 @@ func (s *server) aiToolAudit(claims jwtClaims) func(ai.ToolAuditEntry) {
 			"skill": e.Skill, "tool": e.Tool, "args": e.Args,
 			"allowed": e.Allowed, "reason": e.Reason,
 			"items": e.Items, "duration_ms": e.Duration,
+			"round": e.Round, "selected": e.Selected,
 		})
 	}
 }

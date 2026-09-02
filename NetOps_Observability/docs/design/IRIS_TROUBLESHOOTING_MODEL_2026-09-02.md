@@ -73,6 +73,69 @@ Today: one gather round → narrate. Target: NetClaw's iterate-and-chain, closed
 - Isolation: entity binding resolved once per turn under the caller's tenant; a
   later skill cannot widen scope.
 
+#### A2 — shipped (2026-09-02)
+
+`ai/skill_chain.go` + `ai/skill_run.go`. Bounds: `MaxInvestigationRounds = 4`,
+`MaxSkillToolCalls = 6` per round, `MaxChainToolCalls = 16` per turn,
+`SkillTurnBudget = 45s` wall-clock (a context deadline installed before the
+first tool; an earlier caller deadline wins) with `skillRoundReserve = 8s` kept
+back so the turn can always narrate what it has. Every budget that cuts the
+investigation short is DISCLOSED as a collection note and lifted into
+`missing_evidence`. Evidence accumulates across rounds deduped by citation id
+and re-capped at `skillEvidenceMaxChars`. Entities are resolved ONCE per turn,
+before round 1; a later hop reuses that binding and can never re-resolve from
+model text. `Answer.Skill` stays the LAST hop; `Answer.Chain` (`chain`) carries
+every hop — `{name, layer, version, selected, round, reason}` — and every tool
+audit entry gains `round` + `selected`, with one `next_skill` entry per
+selection (`rule_selected` / `model_selected` / `model_selected_invalid`; a
+refused name is never logged).
+
+**Condition grammar (the closed vocabulary).** A `next=` line may carry ONE
+machine condition as the first word after `when`; if that word contains an `=`
+it MUST parse, so a mistyped key fails the loader (and CI) rather than becoming
+a rule that silently never fires. Everything after the condition is the human
+reason (auto-generated from the condition when omitted). A `when` clause with no
+`=` in its first word stays a free-text human reason: it is shown to the
+operator and offered to the model as a closed choice, but fires no rule.
+
+```
+decisions:
+  - next=<skill> when <key>=<value> [human reason]
+```
+
+| key | value vocabulary | fires when |
+|---|---|---|
+| `signature` | a protocol-diagnostic signature id, or `none` | that signature fired this turn; `none` = `run_protocol_diagnostic` RAN and no signature matched (never true on a turn that ran no diagnostic) |
+| `tool:<name>` | `ok` · `not_found` · `not_wired` · `denied` · `error` | that tool's outcome this turn. `<name>` must be on the skill tool allowlist AND in this skill's own `tools:` list |
+| `evidence:kind` | `app` `device` `doc` `finding` `flow` `integration` `knowledge` `log` `metric` `navigation` `ticket` `topology` | an evidence item of that kind was gathered |
+| `verdict:tier` | `confirmed` `suspected` `candidate` `undetermined` | the RCA engine's verdict tier |
+| `verdict:phrase` | a token `[a-z][a-z0-9_-]{1,31}` | the ENGINE's own operator phrase/title contains that word (hyphenated compounds also contribute their parts) |
+| `note` | a token `[a-z][a-z0-9_-]{1,31}` | a server-authored collection note contains that token |
+
+Facts are SERVER-derived only: tool outcomes and evidence kinds are observed by
+the runner, and `signature` / `verdict:*` arrive as `ToolResult.Signals` that the
+TOOL declares (bounded, re-validated against the same vocabulary). A tool cannot
+assert a kind, an outcome or a note; the model cannot assert anything. Rules are
+evaluated in authored order; the first that holds wins.
+
+**Model path (b).** When no rule fires, one small routing turn per round gets
+this round's evidence plus the skill's own `next=` menu and must end with
+`NEXT: <name>` or `NEXT: none`. The name is validated against that skill's
+declared, unvisited targets; anything else (a tool name, another real skill it
+does not hand off to, an invention) is refused and audited. The directive is
+stripped from any text that could reach an operator.
+
+**Authored conditions in the corpus.** `bgp-session-down` → `interface-down` on
+`verdict:phrase=link` and on `signature=bgp-idle-unreachable`;
+`ospf-adjacency` → `interface-down` on `signature=ospf-flap-l1` and
+`verdict:phrase=link`; `isis-adjacency` → `interface-down` on
+`verdict:phrase=link`; every diagnostic-bearing skill → `log-confirmation` on
+`signature=none`; `bgp-session-down` → `bgp-prefix-missing` on
+`signature=bgp-nothing-advertised`; `osi-bisection` routes to the layer skill by
+`verdict:phrase` in bisection order; `interface-down`/`app-edge-5xx` →
+`optics-degraded` on `evidence:kind=metric`; `security-exposure-context` →
+`osi-bisection` on `verdict:tier=confirmed`.
+
 ### 3.2 Show-first state battery + deterministic parser library — Phase A3
 NetClaw's "run a show command first" and Genie, in-house and closed.
 
@@ -93,6 +156,69 @@ NetClaw's "run a show command first" and Genie, in-house and closed.
 - Parallel collection: `SSHCommandRunner` fan-out across the devices a skill names
   (a case's affected set), per-device timeout, failure-isolated, bounded
   concurrency (≤ 8), one-in-flight-per-device kept.
+
+#### A3 backend — shipped; `ai` tool pending (2026-09-02)
+
+`internal/protocoldiag/statebattery.go` + `fanout.go` + `typedbridge.go` and the
+new `internal/showparse` package. The `get_device_state` skill tool is NOT here —
+`ai/` is owned by another agent this wave — so the backend exports a clean package
+API and the tool is a thin call over it (`StateBattery.Battery`'s doc comment
+carries the worked call sequence).
+
+**State battery.** A SECOND closed table beside the 15-issue catalog's, never a
+widening of it: `matchTemplate` now takes a `tokenGrammar`, so the battery can add
+`{addr}` and Huawei's `vpn-instance` qualifier without loosening the catalog by a
+token (`TestStateBattery_CatalogTableUnaffected`). 14 specs across 7 areas
+(`interfaces` · `igp` · `bgp` · `routes` · `l2` · `platform` · `logs`) × 8
+dialects = 103 authored (spec, dialect) templates; 578 rendered forms are proven
+read-only AND admitted by their own table, and `show running-config` is refused on
+every dialect. Dialects are **vendorprofile profile ids** (`cisco/ios`,
+`cisco/ios_xe`, `cisco/nx-os`, `cisco/ios_xr`, `juniper/junos`, `nokia/sros`,
+`arista/eos`, `huawei/vrp`) — one vendor vocabulary, asserted against the registry.
+Two rules differ from the catalog on purpose: **no dialect fallback** (an unbound
+platform gets no command, never a Cisco one) and **required arguments**
+(`show mac address-table address` with no address is omitted, never rendered as a
+dangling keyword). Log reads are bounded by a CONSTANT 200 lines where the dialect
+has the keyword, by `MaxOutputBytes` where it does not.
+
+**`internal/showparse`.** 77 (command, dialect) parsers over 14 command concepts,
+92.8 % covered. `Parse(cmdID, dialect, raw) (Result, error)` errors only on a
+contract violation (empty id, over-cap input); everything else — unknown command,
+unsupported dialect, unreadable text — is `Skipped` + `Reason`. Every optional
+field is a POINTER: absent means absent, and the tests assert the nils as hard as
+the values (IOS reports no last-flap ⇒ `LastFlap == nil`). Three distinctions the
+library refuses to collapse: Cisco's OSPF **dead time** vs NX-OS's **up time**;
+Cisco's fused `State/PfxRcd` column vs Arista's split one (a naive reader calls
+Arista's *Idle, 0 prefixes* "Established"); and "the device says there is no such
+route" vs "we could not read the answer". Bounded input, no nested quantifier
+anywhere, adversarial-input test over all 77 bindings.
+
+**Fan-out.** `BatteryCollector.RunBattery(ctx, devices, area, target)` — ≤ 8 in
+flight (constant, `WithConcurrency` can only narrow), per-device and whole-run
+deadlines, ≤ 64 devices (the rest REPORTED as `not_run`), devices deduped by id so
+one run never schedules a router twice. One device's error / hang / unassessed
+platform is its own status and note and changes nothing for the others; a
+cancelled run still returns one honest state per device. Every capture goes
+through `RedactOutput` BEFORE it is stored and BEFORE it is parsed, so nothing
+unredacted reaches a typed row. `NewSSHBatteryRunner` is the live wiring (same
+policy layer as `NewSSHCommandRunner`, over the battery's table).
+
+**Signature bridge.** `bgp-idle-unreachable` and `bgp-tcp-blocked` now read
+`BGPPeer.State` where the capture parses and fall back to their regexes where it
+does not — three-valued, so a typed refusal does NOT hand the regex a second
+chance. Every pre-existing signature test is unchanged and green.
+
+**Deliberately left skipping-only / not done.** No parser for: ARP on IOS-XR,
+Junos and VRP; `if-brief` on VRP and SR OS; IS-IS on NX-OS, EOS and VRP;
+`platform-env` on any dialect; `platform-cpu` on EOS and SR OS; `route-prefix` on
+SR OS and VRP; `platform-uptime` on SR OS and VRP; `platform-memory` on the Cisco
+family and SR OS. Those commands still RUN and their output is honest raw
+evidence — `TestStateBattery_ParserCoverage` lists the gap every build.
+`internal/verify`'s three parsers were **left untouched** (they parse different
+commands — `show interfaces` fleet-wide, `show bgp all summary`, `show system
+commit` — against a different evidence vocabulary, so delegating could not have
+kept their tests byte-identical); the duplication is tracked for the
+registry-consolidation follow-up, tracker 216.
 
 ### 3.3 Knowledge ingestion — the owner's documents become skills — continuous
 The owner's troubleshooting documentation is the knowledge source, NetClaw only the

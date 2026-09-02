@@ -43,6 +43,11 @@ const (
 	maxDiagEvidenceChars  = 240 // per quoted device output line
 	defaultFindingsLimit  = 25
 	protocolDiagRouteHref = "#/infrastructure/protocol-diagnostics"
+	// maxVerdictPhraseTokens bounds how many words of the ENGINE's own verdict
+	// phrase become `verdict:phrase=` signals. The phrase is short by
+	// construction; the cap is there so a pathological one cannot inflate the
+	// signal list the chain evaluator walks (§9 bounded).
+	maxVerdictPhraseTokens = 24
 )
 
 // ---- injected seams --------------------------------------------------------
@@ -288,6 +293,12 @@ func (t protocolDiagnosticTool) Run(ctx context.Context, p Principal, args ToolA
 			tr.Notes = append(tr.Notes, fmt.Sprintf("showing the top %d of %d matched signatures", MaxDiagFindings, len(rep.Findings)))
 		}
 		for _, f := range findings {
+			// Machine fact for the investigation loop: THIS signature fired. The
+			// id is the catalog's own (server-owned), and is shape-validated
+			// before it can steer an authored next= rule.
+			if reCondSignature.MatchString(f.SignatureID) {
+				tr.Signals = append(tr.Signals, CondSignature+"="+f.SignatureID)
+			}
 			text := fmt.Sprintf("%s (%s confidence) — cause: %s; remediation: %s",
 				f.Verdict, firstNonEmpty(f.Confidence, "unstated"), f.Cause, f.Remediation)
 			if f.EvidenceLine != "" {
@@ -567,6 +578,14 @@ func (t rcaVerdictTool) Run(ctx context.Context, p Principal, args ToolArgs) (To
 	tr := ToolResult{}
 	// 1. What broke + 2. how sure we are.
 	what := firstNonEmpty(pr.OperatorPhrase, pr.Title)
+	// Machine facts for the investigation loop (skill_chain.go): the ENGINE's
+	// verdict tier and the words of its own operator phrase. Both come from the
+	// correlation engine, never from a model, and both are validated against the
+	// closed condition vocabulary before they can steer an authored next= rule.
+	if tier := strings.ToLower(strings.TrimSpace(pr.Verdict)); skillVerdictTiers[tier] {
+		tr.Signals = append(tr.Signals, CondVerdictTier+"="+tier)
+	}
+	tr.Signals = append(tr.Signals, verdictPhraseSignals(what, maxVerdictPhraseTokens)...)
 	conf := firstNonEmpty(pr.ConfidenceLabel, StatusLabel(pr.Verdict))
 	tr.Items = append(tr.Items, EvidenceItem{
 		CitationID: "verdict:" + pr.ID, Kind: "finding",
@@ -636,6 +655,21 @@ func (r *ToolRegistry) AddTroubleshootTools(ds DataSource, d TroubleshootDeps) {
 	if d.TopologyContext != nil {
 		r.add(topologyContextTool{deps: d})
 	}
+}
+
+// verdictPhraseSignals turns the engine's own verdict phrase into bounded,
+// deduplicated `verdict:phrase=<word>` signals. Only words that satisfy the
+// condition-token shape become signals, so nothing outside the closed grammar
+// can reach the chain evaluator.
+func verdictPhraseSignals(phrase string, max int) []string {
+	var out []string
+	for _, w := range conditionTokens(phrase) {
+		if len(out) >= max {
+			break
+		}
+		out = append(out, CondVerdictPhrase+"="+w)
+	}
+	return out
 }
 
 // shortToken is a stable short form of an id for citation ids (no secret

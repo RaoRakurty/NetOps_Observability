@@ -89,6 +89,12 @@ type Answer struct {
 	// classify→mode path. The UI renders it so an operator can see — and audit —
 	// which method was applied.
 	Skill *SkillRef `json:"skill,omitempty"`
+	// Chain is the IRIS Phase-A2 investigation path: every method the bounded
+	// loop ran, in authored order, with the round it ran in and HOW it was
+	// chosen (entry | rule | model). Skill above stays the LAST hop, so an
+	// older UI that reads only `skill` is unaffected; a Phase-A2 UI renders the
+	// chain as a breadcrumb so an operator can audit the path taken.
+	Chain []SkillHop `json:"chain,omitempty"`
 	// Lookups names the tools the skill's gather step actually ran, in order, so
 	// the UI can show "investigated: N lookups" with the same provenance the
 	// agent loop already returns.

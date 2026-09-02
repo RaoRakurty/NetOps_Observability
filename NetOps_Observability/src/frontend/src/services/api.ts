@@ -2022,6 +2022,105 @@ export type BgpUpdatesResp = {
   updates: { updates?: { type?: string; timestamp?: string; attrs?: { path?: number[]; source_id?: string } }[]; nr_updates?: number };
 };
 
+// ---- BGP depth (item 10 completion: RPKI · ASPA · geofeed · graph · feed) ---
+// Wire shapes of the internal/bgpdepth endpoints. Every one of these panels can
+// come back "we could not determine this" and SAYS so in its own field — the UI
+// renders the gap, never a blank that reads as "fine".
+
+/** The four states the API promises. `unavailable` = the lookup failed; it is
+ *  NOT a verdict and must never be rendered as one. */
+export type BgpRpkiState = "valid" | "invalid" | "unknown" | "unavailable";
+
+export type BgpRpkiRoa = { origin: string; prefix: string; max_length: number; validity: string };
+
+export type BgpRpkiResult = {
+  prefix: string;
+  origin?: string;
+  state: BgpRpkiState;
+  /** Present on invalid: "origin_as" | "max_length". */
+  reason?: string;
+  validator?: string;
+  roas?: BgpRpkiRoa[];
+  fetched_at: string;
+  error?: string;
+};
+
+export type BgpRpkiResp = {
+  results: BgpRpkiResult[];
+  /** true when the sweep came from the caller's watchlist rather than ?resource. */
+  from_watchlist: boolean;
+  truncated: boolean;
+  max_prefixes: number;
+};
+
+/** ASPA has NO public per-ASN source (verified 2026-09-02), so the default
+ *  answer is configured:false with an explanation — never a fabricated verdict. */
+export type BgpAspaStatus = { configured: boolean; host?: string; reason: string; how_to?: string };
+export type BgpAspaRecord = {
+  customer_asn: number;
+  providers: { asn: number; afi?: string }[];
+  found: boolean;
+  source: string;
+  fetched_at: string;
+  truncated?: boolean;
+};
+export type BgpAspaResp = { resource: string; status: BgpAspaStatus; aspa?: BgpAspaRecord; error?: string };
+
+export type BgpGeofeedEntry = { prefix: string; country?: string; region?: string; city?: string; postal?: string };
+export type BgpGeofeedResp = {
+  resource: string;
+  published: boolean;
+  source_url?: string;
+  entries: BgpGeofeedEntry[];
+  rows_scanned: number;
+  rows_kept: number;
+  rows_dropped: number;
+  truncated: boolean;
+  fetched_at: string;
+  error?: string;
+  note?: string;
+};
+
+export type BgpGraphNode = {
+  asn: number; name?: string; depth: number;
+  origin?: boolean; tenant?: boolean; vantage?: boolean; paths: number;
+};
+/** peers = how many observed collector paths traverse this adjacency. It is an
+ *  observation count, NOT a capacity — the link width means "how many vantage
+ *  points agree", nothing about bandwidth. */
+export type BgpGraphEdge = { from: number; to: number; peers: number };
+export type BgpAsPathGraph = {
+  prefix: string;
+  nodes: BgpGraphNode[];
+  edges: BgpGraphEdge[];
+  origins: number[];
+  paths: number;
+  paths_seen: number;
+  max_edges: number;
+  edges_capped: boolean;
+  nodes_capped: boolean;
+  source: "bgp-state" | "looking-glass" | string;
+  fetched_at: string;
+  error?: string;
+};
+
+export type BgpFeedUpdate = {
+  seq: number; time: string; type: "A" | "W" | string;
+  resource: string; prefix: string; peer: string; path?: number[]; origin?: number;
+};
+export type BgpFeedStatus = {
+  enabled: boolean; polling?: boolean; capped?: boolean;
+  resources?: string[]; buffered?: number; written?: number; dropped?: number;
+  ring_size: number; interval?: string; producer: string; note?: string; now?: string;
+};
+export type BgpFeedResp = {
+  updates: BgpFeedUpdate[];
+  next?: number;
+  gap?: boolean;
+  status: BgpFeedStatus;
+  metrics?: Record<string, number>;
+};
+
 // ---- Telemetry coverage / parser stats (parser programme A6) ---------------
 // Three endpoints, exactly as contracted — nothing invented beyond them.
 //   GET  /api/admin/parser/stats                          (platform admin only)
@@ -2365,10 +2464,15 @@ export type ProtocolDiagCollectRequest = {
 
 // ---- OSPF / IS-IS advanced monitoring (Project 4 D item 11) ---------------
 // GET /api/protocols/{ospf|isis}/{adjacencies,summary,health}. The backend
-// collects NOTHING for these routes: adjacency history comes from the typed
-// syslog/trap adjacency-change signals, adjacency state NOW comes from a live
-// series only where a collector actually emits one, and LSDB/LSP counts and
-// OSPF areas are collected by nothing at all today.
+// collects NOTHING for these routes itself: adjacency history comes from the
+// typed syslog/trap adjacency-change signals, and everything else is read from
+// series the two collectors emit — the gNMI lane for IS-IS (SR Linux native)
+// and the SNMP standard profile (OSPF-MIB) for OSPF.
+//
+// The advanced depth — LSDB/LSP size, area membership, SPF runs and
+// adjacency/interface timers — is defined for both protocols but is only as
+// real as the deployment's collectors. On a fabric with no OSPF-speaking SNMP
+// device, every OSPF depth block answers null.
 //
 // THE COVERAGE CONTRACT, and the reason every count below is `| null`: an
 // absent source is reported ABSENT — null plus a note naming why — never as a
@@ -2377,11 +2481,68 @@ export type ProtocolDiagCollectRequest = {
 
 export type IgpProto = "ospf" | "isis";
 
-/** Which evidence classes actually backed the response. */
+/** Which evidence classes actually backed the response.
+ *
+ *  The four depth flags are separate because the backend probes them as four
+ *  independent reads that fail independently: one flag for all of them would
+ *  say that something is missing without saying what. */
 export type IgpCoverage = {
   events: boolean;
   live_series: boolean;
   lsdb: boolean;
+  areas: boolean;
+  spf_runs: boolean;
+  timers: boolean;
+};
+
+/** One count inside the protocol's own scope: an IS-IS level ("L2") or an OSPF
+ *  area ("0.0.0.0"). The block's `scope_label` names which. */
+export type IgpScopeCount = { scope: string; count: number };
+
+/** LSP / LSA database size. `lsp_count` is null when nothing collects it — an
+ *  LSDB rendered as 0 reads as "the database is empty". */
+export type IgpLsdbBlock = {
+  lsp_count: number | null;
+  scope_label?: string;
+  by_scope?: IgpScopeCount[];
+  note?: string;
+};
+
+/** Area (OSPF) / area-address (IS-IS) membership. Null, not [], when absent:
+ *  an empty list would claim the router belongs to no area. */
+export type IgpAreasBlock = { areas: string[] | null; note?: string };
+
+/** SPF-run counter, as collected (a monotonic counter, never a rate). */
+export type IgpSpfBlock = {
+  runs: number | null;
+  scope_label?: string;
+  by_scope?: IgpScopeCount[];
+  note?: string;
+};
+
+/** One collected IGP timer.
+ *
+ *  The two protocols are genuinely different and the API does not pretend
+ *  otherwise: IS-IS gives a per-ADJACENCY `hold_seconds`, which is the REMAINING
+ *  countdown reset by every received hello — not a configured interval — while
+ *  OSPF gives per-INTERFACE configured `hello_seconds`/`dead_seconds`, because
+ *  OSPF-MIB's ospfNbrTable has no timer column at all. */
+export type IgpTimerRow = {
+  device: string;
+  /** IS-IS: the neighbour system-id. OSPF: the ospfIfTable row index. */
+  scope: string;
+  ifname?: string;
+  level?: string;
+  hold_seconds?: number;
+  hello_seconds?: number;
+  dead_seconds?: number;
+};
+
+export type IgpTimersBlock = {
+  /** What a row's `scope` identifies. */
+  scope_kind?: "adjacency" | "interface";
+  rows: IgpTimerRow[] | null;
+  note?: string;
 };
 
 /** One adjacency-change signal, from syslog or an SNMP trap. */
@@ -2415,6 +2576,10 @@ export type IgpAdjacency = {
   changes: number;
   up_events: number;
   down_events: number;
+  /** Remaining hold time for this adjacency where a timer series exists
+   *  (IS-IS only). A sampled COUNTDOWN, not a configured interval, and null
+   *  whenever nothing collects it — 0 would read as "expiring right now". */
+  hold_seconds: number | null;
   /** The window's events for this adjacency, NEWEST FIRST. */
   timeline: IgpEvent[];
 };
@@ -2427,6 +2592,10 @@ export type IgpAdjacenciesResponse = {
   now: string;
   adjacencies: IgpAdjacency[];
   event_count: number;
+  lsdb: IgpLsdbBlock;
+  areas: IgpAreasBlock;
+  spf_runs: IgpSpfBlock;
+  timers: IgpTimersBlock;
   coverage: IgpCoverage;
   source: string; // events+live_series | events | live_series | none
   notes: string[];
@@ -2445,6 +2614,12 @@ export type IgpDeviceSummary = {
   last_change?: string;
   adjacencies: number | null;
   down_adjacencies: number | null;
+  /** The depth, per device. Null unless that device's OWN series was
+   *  collected — a fleet where one router streams an LSDB count and the rest
+   *  do not must show the count on that row and "not collected" on the others. */
+  lsp_count: number | null;
+  spf_runs: number | null;
+  areas: string[] | null;
 };
 
 export type IgpSummaryResponse = {
@@ -2475,9 +2650,10 @@ export type IgpHealthResponse = {
   window_seconds: number;
   since: string;
   now: string;
-  /** Null: OSPF area membership is collected by nothing today. */
-  areas: string[] | null;
-  /** IS-IS levels, derived from the live series' isis_level label. */
+  /** IS-IS levels, derived from the live adjacency series' isis_level label.
+   *  This says which levels the device has an ADJACENCY on, which is a
+   *  different fact from the area addresses the instance is configured with
+   *  (`areas` below). */
   levels: string[] | null;
   neighbor_count: number | null;
   adjacencies_up: number | null;
@@ -2486,7 +2662,10 @@ export type IgpHealthResponse = {
   flaps: number;
   last_change: string;
   stability: IgpStability;
-  lsdb: { lsp_count: number | null; note?: string };
+  lsdb: IgpLsdbBlock;
+  areas: IgpAreasBlock;
+  spf_runs: IgpSpfBlock;
+  timers: IgpTimersBlock;
   coverage: IgpCoverage;
   source: string;
   notes: string[];
@@ -2495,6 +2674,93 @@ export type IgpHealthResponse = {
 /** Window token accepted by ?since= — the server bounds it to 1m..7d and
  *  REFUSES anything outside that (400), it does not silently clamp. */
 export type IgpWindow = string;
+
+// ---- Interfaces grouped by routing instance (frontend-wave item 4) ---------
+// Wire shape of GET /api/devices/{id}/interfaces/by-vrf (backend
+// internal/ifgroup). Every MEASURED field is nullable on purpose: null means
+// "no series", which is a different fact from zero. A UI that renders a null
+// error rate as "0 errors" is stating something the platform never measured.
+
+/** How an interface's routing-instance binding was established. */
+export type VrfMembership = "observed" | "not_collected";
+
+/** The lane the interface series came from. "snmp" is INFERRED from the absence
+ *  of a transport stamp (the gNMI lane stamps transport=gnmi, the SNMP lane
+ *  stamps nothing today) — coverage.transport_inferred says when that is so. */
+export type VrfTransport = "none" | "gnmi" | "snmp" | "mixed";
+
+export interface VrfInterface {
+  ifname: string;
+  ifalias?: string;
+  index?: string;
+  vrf?: string;
+  transport?: string;
+  oper: string;
+  oper_value: number | null;
+  admin: string;
+  admin_value: number | null;
+  in_bps: number | null;
+  out_bps: number | null;
+  speed_bps: number | null;
+  in_util_pct: number | null;
+  out_util_pct: number | null;
+  in_errors_per_s: number | null;
+  out_errors_per_s: number | null;
+}
+
+export interface VrfInterfaceGroup {
+  /** The instance name. EMPTY exactly when membership is "not_collected" — it
+   *  is never the string "default", which would be a claim about the device. */
+  vrf: string;
+  label: string;
+  membership: VrfMembership;
+  count: number;
+  up: number;
+  down: number;
+  unknown: number;
+  members: VrfInterface[];
+}
+
+export interface VrfCoverage {
+  /** PROBED per request: did any interface series actually carry a vrf label? */
+  vrf_labels: boolean;
+  transport: VrfTransport;
+  transport_inferred: boolean;
+  interfaces: number;
+  in_groups: number;
+  ungrouped: number;
+  utilisation: boolean;
+  errors: boolean;
+  truncated: boolean;
+  notes: string[];
+}
+
+/** The vendor's own word for the concept — Cisco "VRF", Juniper
+ *  "routing-instance", Nokia "VPRN", Huawei "VPN instance". vendor_known=false
+ *  means no vendor profile claimed the device and the word is the
+ *  industry-majority display default, not an identification. */
+export interface VrfDialect {
+  term: string;
+  term_plural: string;
+  vendor?: string;
+  vendor_known: boolean;
+}
+
+/** A routing instance the device's BGP control-plane series report. That lane
+ *  carries the instance NAME but not which interfaces belong to it. */
+export interface VrfRoutingInstance {
+  name: string;
+  source: string;
+}
+
+export interface VrfInterfacesResponse {
+  device: { id: string; name?: string; vendor?: string };
+  window: string;
+  dialect: VrfDialect;
+  coverage: VrfCoverage;
+  groups: VrfInterfaceGroup[];
+  routing_instances: VrfRoutingInstance[];
+}
 
 export const api = {
   // ---- BGP Operations (item 10) ----
@@ -2511,6 +2777,19 @@ export const api = {
     request<BgpUpdatesResp>(`/api/bgp/resource?resource=${encodeURIComponent(resource)}&view=updates&hours=${hours}`),
   bgpWhois: (resource: string) =>
     request<{ resource: string; rdap: unknown }>(`/api/bgp/resource?resource=${encodeURIComponent(resource)}&view=whois`),
+  // ---- BGP depth (item 10 completion) ----
+  /** No resource = the caller's own watchlist prefixes (tenant-scoped). */
+  bgpRpki: (resource?: string) =>
+    request<BgpRpkiResp>(`/api/bgp/rpki${resource ? `?resource=${encodeURIComponent(resource)}` : ""}`),
+  bgpAspa: (asn: string) =>
+    request<BgpAspaResp>(`/api/bgp/aspa?resource=${encodeURIComponent(asn)}`),
+  bgpGeofeed: (resource: string) =>
+    request<BgpGeofeedResp>(`/api/bgp/geofeed?resource=${encodeURIComponent(resource)}`),
+  bgpAsPathGraph: (prefix: string) =>
+    request<BgpAsPathGraph>(`/api/bgp/aspath-graph?prefix=${encodeURIComponent(prefix)}`),
+  /** `since` is the cursor from the previous page's `next`. */
+  bgpFeed: (since = 0, limit = 200) =>
+    request<BgpFeedResp>(`/api/bgp/feed?since=${since}&limit=${limit}`),
 
   // ---- tenant display preferences (Wave 4 #11: time display, per-tenant) ----
   getDisplaySettings: () =>
@@ -3014,6 +3293,20 @@ export const api = {
     request<{ ok: boolean; site: string }>(`/api/devices/${encodeURIComponent(id)}/site`, { method: "PUT", body: JSON.stringify({ site }) }),
   clearDeviceSite: (id: string) =>
     request<{ ok: boolean }>(`/api/devices/${encodeURIComponent(id)}/site`, { method: "DELETE" }),
+
+  // One device's interfaces grouped by routing instance, in the DEVICE's own
+  // dialect (frontend-wave item 4, backend internal/ifgroup). `window` is the
+  // rate window for utilisation and error rates (1m..24h; the server refuses
+  // anything outside that rather than substituting a default).
+  //
+  // Read `coverage` before rendering anything: on today's telemetry NO
+  // interface series carries a vrf label on either transport, so vrf_labels is
+  // false and every interface arrives in one ungrouped bucket. That is the
+  // honest answer — the API deliberately does not invent a "default" group.
+  deviceInterfacesByVrf: (id: string, window?: string) =>
+    request<VrfInterfacesResponse>(
+      `/api/devices/${encodeURIComponent(id)}/interfaces/by-vrf` +
+        (window ? `?window=${encodeURIComponent(window)}` : "")),
 
   // Internal Source-of-Truth sites (the default SoT provider). `active` reports
   // which provider currently answers ("internal" | "netbox").
@@ -5383,6 +5676,16 @@ export type AiCitation = {
 // typing it as a string made `v${version}` render from a value TypeScript
 // believed was text while the JSON carried a number.
 export type AiSkill = { name: string; version?: number; layer?: string };
+// One hop of the IRIS Phase-A2 investigation chain: the skill that ran, the
+// round it ran in, and HOW it was chosen — "entry" (the deterministic entry
+// selection), "rule" (an authored machine condition fired) or "model" (the
+// model picked from that skill's own declared handoffs). A superset of AiSkill,
+// so the same rendering works for both.
+export type AiSkillHop = AiSkill & {
+  selected?: "entry" | "rule" | "model" | string;
+  round?: number;
+  reason?: string;
+};
 export type AiProblemExplanation = {
   problem_id: string;
   title: string;
@@ -5464,6 +5767,10 @@ export type AiAnswer = {
   // IRIS Phase A — the answering skill's identity. Optional: a backend that
   // does not send it renders no skill chip (never an invented one).
   skill?: AiSkill;
+  // IRIS Phase A2 — the investigation path, in authored order; `skill` above is
+  // its LAST hop. Optional: a pre-A2 backend sends no chain and the breadcrumb
+  // is simply not drawn.
+  chain?: AiSkillHop[];
   disclaimers: string[];
   provider?: string;
   // Universal Response-Quality fields (rendered as badges + sections).
