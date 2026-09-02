@@ -162,6 +162,30 @@ RULE_FIXTURES: dict[str, tuple[str, dict]] = {
     "trap.device.restart.event_type": ("trap", trap_ev(
         trap_oid="1.3.6.1.4.1.9.9.41.2.0.2", trap_name="vendorTrap",
         event_type="cold_start")),
+    # -- A9: the trap twins of the syslog control-plane symptoms --------------
+    "trap.ospf.adjacency_change": ("trap", trap_ev(
+        trap_oid="1.3.6.1.2.1.14.16.2.2", trap_name="ospfNbrStateChange",
+        event_type="ospf_nbr_state_change",
+        varbinds=[{"oid": "1.3.6.1.2.1.14.10.1.1.10.0.0.2.0",
+                   "name": "ospfNbrIpAddr", "value": "10.0.0.2"},
+                  {"oid": "1.3.6.1.2.1.14.10.1.6.10.0.0.2.0",
+                   "name": "ospfNbrState", "value": "down(1)"}])),
+    "trap.isis.adjacency_change": ("trap", trap_ev(
+        trap_oid="1.3.6.1.2.1.138.0.17", trap_name="isisAdjacencyChange",
+        event_type="isis_adjacency_change",
+        varbinds=[{"oid": "1.3.6.1.2.1.138.1.6.1.1.6.1.1",
+                   "name": "isisISAdjNeighSysID", "value": "1921.6800.1001"},
+                  {"oid": "1.3.6.1.2.1.138.1.10.1.12.0",
+                   "name": "isisAdjState", "value": "down(1)"}])),
+    "trap.stp.topology_change": ("trap", trap_ev(
+        trap_oid="1.3.6.1.2.1.17.0.2", trap_name="topologyChange",
+        event_type="topology_change")),
+    "trap.fhrp.state_change": ("trap", trap_ev(
+        trap_oid="1.3.6.1.4.1.9.9.106.2.0.1", trap_name="cHsrpStateChange",
+        event_type="c_hsrp_state_change",
+        varbinds=[{"oid": IFN + ".5", "name": "ifName", "value": "Vlan100"},
+                  {"oid": "1.3.6.1.4.1.9.9.106.1.2.1.1.11.5.1",
+                   "name": "cHsrpGrpStandbyState", "value": "active(6)"}])),
     "trap.generic.device_alarm": ("trap", trap_ev(
         trap_oid="1.3.6.1.4.1.9.9.999.0.1", trap_name="vendorAlarm",
         varbinds=[{"oid": "1.3.6.1.4.1.9.9.999.1.1", "name": "alarmText",
@@ -349,11 +373,17 @@ def test_bumping_parser_rev_never_re_identifies_a_signal(monkeypatch, rule_id):
 
 #: PINNED. A3 re-serialized the rule table (the rows now carry the grammar, so
 #: `digest_fields` includes guard/extract/emit), which MOVED this value from
-#: 44f1e46426eb39e2… — the last W1b hash — to the one below. Every classified
-#: signal's kind/entity/state/tokens/native_id/signal_id/attrs is byte-identical
-#: across that move (the golden corpus below is the proof); only the hash and
-#: the `rules_hash` stamp changed. Re-pinning it is a deliberate act.
-RULES_HASH_A3 = "1b69ab8f5c4cd6109e80808950195d912b107ad12479158bfaf8fa97f3a98675"
+#: 44f1e46426eb39e2… — the last W1b hash — to 1b69ab8f5c4cd610….
+#:
+#: A9 (the trap-coverage audit) then ADDED four rows — the OSPF/IS-IS adjacency,
+#: STP topology-change and FHRP state-change trap twins of symptoms the syslog
+#: lane already typed — which moves it again, to the value below. No EXISTING
+#: rule's grammar changed: every pre-A9 corpus entry still replays
+#: byte-identically (the corpus below is the proof), and the four new rows are
+#: only reachable by traps that previously fell to the generic alarm.
+#: Re-pinning it is a deliberate act, and `parser_rev` moves with it.
+RULES_HASH_A9 = "5ebe16c3b9b6f06fe5db50954b4d2fd7071d7f89d0660b36e7e9b1e1d659021f"
+RULES_HASH_A3 = RULES_HASH_A9
 
 
 def _guard_patterns(node) -> list[str]:

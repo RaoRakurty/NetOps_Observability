@@ -43,7 +43,7 @@ def test_the_catalog_loads_and_validates(loaded):
 def test_the_lanes_are_the_declared_ones(rows):
     assert {r["lane"] for r in rows} <= set(B.LANES)
     runtime = [r for r in rows if r["lane"] in B.RUNTIME_LANES]
-    assert len(runtime) == 34, (
+    assert len(runtime) == 38, (
         f"{len(runtime)} runtime rules — if that is intended, re-pin this "
         "count and the golden corpus in src/correlation")
 

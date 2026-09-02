@@ -806,6 +806,13 @@ class Rule:
     pattern_src: str | None = None     # message regex its guard tests (source text)
     flags: int = re.IGNORECASE         # flags `pattern_src` is compiled with
     fidelity_key: str | None = None    # telemetry-catalog events.yaml family
+    #: A9 — a ROW-LEVEL fidelity claim, for a rule whose symptom is already a
+    #: catalog family but whose OWN grammar is evidenced differently from the
+    #: family's other rules. A trap rule for a symptom the syslog rules also
+    #: carry is exactly that case: promoting the shared FAMILY would restate the
+    #: syslog grammar's evidence, which the trap capture says nothing about. When
+    #: set it WINS over the family lookup; when absent nothing changes.
+    fidelity_status: str | None = None
     severity: Severity | None = None   # the fixed severity, when the rule has one
     generic: bool = False              # the unclassified safety net
     shadow: bool = False               # evaluated + counted, emits NOTHING (A8)
@@ -840,13 +847,18 @@ class Rule:
     @property
     def fidelity(self) -> str:
         # Resolved by the owning module (producers) against the baked catalog
-        # fidelity map; kept here only so `Rule` stays self-describing.
+        # fidelity map; kept here only so `Rule` stays self-describing. A
+        # row-level `fidelity_status` (A9) is the rule's OWN claim and wins over
+        # the family's — see the field's note.
+        if self.fidelity_status:
+            return self.fidelity_status
         return _FIDELITY.get(self.fidelity_key or "", FIDELITY_UNCATALOGUED)
 
     def digest_fields(self) -> tuple[str, ...]:
         """Everything that MAKES this rule — the input to `rules_hash`.
 
-        `fidelity` is deliberately absent: it is the catalog's claim about the
+        `fidelity` is deliberately absent (both the family lookup and the
+        row-level `fidelity_status`): it is the catalog's claim about the
         grammar, not the grammar. A catalog promotion must not read as a parser
         edit. `guard_src` / `extract_src` / `emit_src` ARE included — they are
         now the branch body, and an edit to them IS a parser edit.
@@ -943,6 +955,7 @@ def compile_rule(row: Mapping[str, Any]) -> Rule:
         markers=tuple(row.get("markers", ())),
         pattern_src=row.get("pattern_src"),
         fidelity_key=row.get("family"),
+        fidelity_status=row.get("fidelity_status"),
         severity=_SEV_BY_NAME[sev] if sev else None,
         generic=bool(row.get("generic")),
         shadow=bool(row.get("shadow")),

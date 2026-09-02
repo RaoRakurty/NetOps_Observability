@@ -125,7 +125,7 @@ def test_the_catalog_only_rows_never_reach_the_runtime(catalog):
 
 def test_the_rule_count_is_what_the_lanes_add_up_to():
     assert len(P.RULES) == len(P._SYSLOG_RULES) + len(P._PORT_RULES) + len(P._TRAP_RULES)
-    assert len(P.RULES) == 34
+    assert len(P.RULES) == 38
 
 
 # ══ 2. the schema ════════════════════════════════════════════════════════════
@@ -295,13 +295,32 @@ LANE_FNS = {
 }
 
 
+#: A9 — the ONLY way an entry may sit out the parity run. The frozen branch code
+#: in `fixtures/parser_branch_baseline.py` is the pre-A3 parser: a symptom
+#: PROMOTED after it was frozen has no branch there to be compared against, and
+#: the promotion IS the behaviour change. Such an entry must say so IN THE FILE
+#: (`"baseline": "absent"` + a `baseline_reason`), never fail silently and never
+#: be dropped from the corpus — it is still replayed byte-identically against
+#: its recorded output by `test_parser_provenance_w1b`, and its kind/entity/
+#: state are pinned against the syslog counterpart by
+#: `test_trap_syslog_parity_a9`.
+BASELINE_ABSENT = "absent"
+
+
+def _skips_baseline(entry: dict) -> bool:
+    return entry.get("baseline") == BASELINE_ABSENT
+
+
 def test_the_interpreter_and_the_branch_code_agree_on_the_whole_corpus(golden):
     """THE PROOF. Not "the interpreter matches a recorded snapshot" — both sides
-    are RUN, on the same 1,115 events, and every emitted field is compared,
-    provenance INCLUDED (the rule that fires must be the same rule)."""
+    are RUN, on the same events, and every emitted field is compared, provenance
+    INCLUDED (the rule that fires must be the same rule)."""
     assert len(golden) >= 1000, f"corpus shrank to {len(golden)} entries"
-    mismatches = []
+    mismatches, skipped = [], 0
     for entry in golden:
+        if _skips_baseline(entry):
+            skipped += 1
+            continue
         ev = entry["ev"]
         for name, new_fn, old_fn in LANE_FNS[entry["lane"]]:
             got, want = _call(new_fn, ev), _call(old_fn, ev)
@@ -311,6 +330,50 @@ def test_the_interpreter_and_the_branch_code_agree_on_the_whole_corpus(golden):
     assert not mismatches, (
         f"{len(mismatches)} of {len(golden)} corpus events classify differently "
         f"under the interpreter. First: {mismatches[0]}")
+    # The skip must never be able to hollow the proof out.
+    assert len(golden) - skipped >= 1000, (
+        f"{skipped} of {len(golden)} entries opted out of the parity run — the "
+        "baseline comparison is no longer proving anything")
+
+
+def test_every_baseline_skip_is_declared_and_justified(golden):
+    """A silent skip is how a parity proof rots. An entry may leave the run ONLY
+    by declaring it in the corpus with a reason, and only because the FROZEN
+    branch code genuinely has no branch for it — which this test checks by
+    running the baseline and asserting it really does classify differently."""
+    skipped = [e for e in golden if _skips_baseline(e)]
+    assert skipped, ("no entry skips the baseline — if the last post-freeze "
+                     "promotion was reverted, delete this test with it")
+    for entry in skipped:
+        reason = str(entry.get("baseline_reason") or "")
+        assert len(reason) > 40, (
+            f"a baseline skip needs a REASON, not a flag: {entry['ev']}")
+        ev = entry["ev"]
+        for name, new_fn, old_fn in LANE_FNS[entry["lane"]]:
+            got, want = _call(new_fn, ev), _call(old_fn, ev)
+            assert got != want, (
+                f"{name}: this entry claims the frozen branch code cannot "
+                f"classify it, but the two agree — remove the skip. {ev}")
+
+
+def test_the_baseline_skips_are_exactly_the_post_freeze_promotions(golden):
+    """Pins WHICH rules are allowed to sit out, so a future promotion cannot
+    quietly join the list: the set is stated here and in the corpus, and the two
+    must agree."""
+    allowed = {
+        "trap.ospf.adjacency_change", "trap.isis.adjacency_change",
+        "trap.stp.topology_change", "trap.fhrp.state_change",
+    }
+    fired = set()
+    for entry in golden:
+        if not _skips_baseline(entry):
+            continue
+        for _name, new_fn, _old in LANE_FNS[entry["lane"]]:
+            sig = _call(new_fn, entry["ev"])
+            if sig is not None and "error" not in sig:
+                fired.add(P.trap_control_signal(
+                    dict(entry["ev"]), "t1", T0).attrs["rule_id"])
+    assert fired == allowed, f"unexpected baseline-skipping rules: {fired ^ allowed}"
 
 
 def test_the_corpus_exercises_every_rule(golden):
@@ -475,6 +538,15 @@ BENCH_RATIO = 1.5
 #: is set above that spread so this gate reports a real regression rather than
 #: the neighbours on the CI runner. The gates that matter (the corpus as a whole
 #: and the syslog lane) stay at 1.5x.
+#:
+#: A9 RE-MEASURED, budget UNCHANGED. The four promoted trap rows add four guards
+#: that an unclassified trap now walks before reaching the generic net. Measured
+#: on the pre-A9 trap corpus with the four rows plan-patched in and out:
+#: 56.13 -> 56.54 us/event, ratio 1.57 -> 1.58 — **0.41 us/event, 0.7 %**. The
+#: guards are OID/name equality and short substring tests; the lane's cost is
+#: dominated by EMISSION (the generic alarm's content rendering + sha256), which
+#: A9 did not touch. So the budget stays where it is: widening it would have
+#: hidden the next real regression behind a change that did not cause one.
 TRAP_BENCH_RATIO = 2.0
 
 

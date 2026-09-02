@@ -48,11 +48,15 @@ RUNTIME_LANES = ("syslog", "port", "trap")   # what the image actually ships
 SOURCES = ("syslog", "trap")
 SEVERITIES = ("info", "warn", "high", "crit")
 ENTITY_TYPES = ("device", "interface", "device_or_interface")
+#: The catalog's fidelity ladder (README). A ROW may state its own rung when the
+#: family's rung is not its evidence — see `fidelity_status` below.
+FIDELITY_STATUSES = ("doc_claimed", "lab_validated", "live_validated",
+                     "degraded", "failed")
 
 ROW_KEYS = frozenset({
     "rule_id", "lane", "source", "kind", "entity_type", "family", "vendors",
     "markers", "pattern_src", "state", "state_re", "severity", "generic",
-    "shadow", "guard", "extract", "emit",
+    "shadow", "guard", "extract", "emit", "fidelity_status",
 })
 ROW_REQUIRED = ("rule_id", "lane", "source", "kind", "entity_type", "guard", "emit")
 EMIT_KEYS = frozenset({
@@ -150,6 +154,15 @@ def validate_row(row: dict, families: dict, seen: set[str]) -> None:
     sev = row.get("severity")
     if sev is not None and sev not in SEVERITIES:
         raise BakeError(f"{where}: severity {sev!r} not in {SEVERITIES}")
+    # A9: a row-level fidelity claim. A trap rule for a symptom the syslog rules
+    # already carry shares their FAMILY but not their evidence — promoting the
+    # family would restate a syslog capture the trap says nothing about — so the
+    # rung is stated on the row. It is a CATALOG claim, not grammar: it never
+    # enters `rules_hash` (see Rule.digest_fields).
+    fid = row.get("fidelity_status")
+    if fid is not None and fid not in FIDELITY_STATUSES:
+        raise BakeError(
+            f"{where}: fidelity_status {fid!r} not on the ladder {FIDELITY_STATUSES}")
     for k in ("generic", "shadow"):
         if k in row and not isinstance(row[k], bool):
             raise BakeError(f"{where}: {k} must be a boolean")
