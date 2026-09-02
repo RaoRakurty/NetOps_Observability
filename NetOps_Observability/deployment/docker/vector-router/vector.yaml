@@ -844,6 +844,20 @@ sinks:
       index: "netops-{{ log_index_base }}-{{ tenant_seg }}-%Y.%m.%d"
       action: index
     api_version: v7
+    # #209 — same flood-stage exposure as opensearch_syslog; the full evidence,
+    # the 0.40.0 measurements and the buffer arithmetic live on that sink.
+    # Partial-bulk 429s (cluster_block_exception) must back-pressure into Kafka
+    # (72 h retention, F-04 acknowledgements), never be discarded; `id_key`
+    # above makes the retried batch an UPSERT, so a retry cannot duplicate.
+    request_retry_partial: true
+    request:
+      retry_attempts: 90             # 2,581 s ≈ 43 min envelope; bounded so a
+      retry_initial_backoff_secs: 1  # poison batch cannot wedge the lane for long
+      retry_max_duration_secs: 30    # (caps the DELAY between retries, not total)
+    buffer:
+      type: memory                   # never disk: the router's only writable host
+      max_events: 500                # path is the root fs whose exhaustion is the
+      when_full: block               # trigger — see opensearch_syslog
 
   # Dead-letter → OpenSearch. Small by construction (only genuinely malformed
   # records land here), so a non-empty netops-deadletter-* index is itself the
@@ -871,6 +885,20 @@ sinks:
       index: "netops-quarantine-%Y.%m.%d"
       action: index
     api_version: v7
+    # #209 — same flood-stage exposure as opensearch_syslog; the full evidence,
+    # the 0.40.0 measurements and the buffer arithmetic live on that sink.
+    # Partial-bulk 429s (cluster_block_exception) must back-pressure into Kafka
+    # (72 h retention, F-04 acknowledgements), never be discarded; `id_key`
+    # above makes the retried batch an UPSERT, so a retry cannot duplicate.
+    request_retry_partial: true
+    request:
+      retry_attempts: 90             # 2,581 s ≈ 43 min envelope; bounded so a
+      retry_initial_backoff_secs: 1  # poison batch cannot wedge the lane for long
+      retry_max_duration_secs: 30    # (caps the DELAY between retries, not total)
+    buffer:
+      type: memory                   # never disk: the router's only writable host
+      max_events: 500                # path is the root fs whose exhaustion is the
+      when_full: block               # trigger — see opensearch_syslog
 
   opensearch_deadletter:
     type: elasticsearch
@@ -892,6 +920,20 @@ sinks:
       index: "netops-deadletter-%Y.%m.%d"
       action: index
     api_version: v7
+    # #209 — same flood-stage exposure as opensearch_syslog; the full evidence,
+    # the 0.40.0 measurements and the buffer arithmetic live on that sink.
+    # Partial-bulk 429s (cluster_block_exception) must back-pressure into Kafka
+    # (72 h retention, F-04 acknowledgements), never be discarded; `id_key`
+    # above makes the retried batch an UPSERT, so a retry cannot duplicate.
+    request_retry_partial: true
+    request:
+      retry_attempts: 90             # 2,581 s ≈ 43 min envelope; bounded so a
+      retry_initial_backoff_secs: 1  # poison batch cannot wedge the lane for long
+      retry_max_duration_secs: 30    # (caps the DELAY between retries, not total)
+    buffer:
+      type: memory                   # never disk: the router's only writable host
+      max_events: 500                # path is the root fs whose exhaustion is the
+      when_full: block               # trigger — see opensearch_syslog
 
   # Syslog from network devices → OpenSearch
   opensearch_syslog:
@@ -920,6 +962,90 @@ sinks:
       index: "netops-syslog-{{ tenant_seg }}-%Y.%m.%d"
       action: index
     api_version: v7
+    # ── #209 — a storage BLOCK must degrade to DELAYED, never to LOST ───────
+    # THE DEFECT THIS FIXES (storm-s10, run 09012025x578, 2026-09-01):
+    # the host root-fs crossed OpenSearch's flood-stage watermark (95 %; trough
+    # 3.45 GiB free on the shared 77 GiB volume), OpenSearch put EVERY index
+    # into read-only-allow-delete for 11 minutes (20:39:04→20:50:04 UTC), and
+    # THIS sink dropped 291,296 syslog events: 900,001 injected → 610,001 OS
+    # docs. The Kafka→correlation lane was untouched (345 incidents, identical
+    # to the passing leg) — what died was the search/EVIDENCE copy, permanently.
+    # Full diagnosis: /var/tmp/scale-runs/storm-s10-09012025/s10-discard-diagnosis.md
+    #
+    # WHY IT WAS LOST — measured against THIS image, not inferred
+    # (netops-vector-router:0.40.0-curl / vector 0.40.0, 2026-09-02):
+    # a blocked OpenSearch answers _bulk with HTTP **200** carrying a per-ITEM
+    # `"status":429, cluster_block_exception`. Vector 0.40 classifies a
+    # 200-with-`"errors":true` body as NON-retriable unless
+    # `request_retry_partial` is set, and that option DEFAULTS TO FALSE.
+    # Reproduced against a mock returning that exact body:
+    #   false → every batch sent ONCE (84 requests / 84 distinct bodies) and
+    #           vector_component_discarded_events_total{intentional="false"}
+    #           = 500 after 30 s — the exact counter s10 measured, and NOTHING
+    #           is logged at the default level.
+    #   true  → the same batches are retried (584 requests / 91 distinct
+    #           bodies), WARN `Retrying after response. reason=partial error,
+    #           status: 429 Too Many Requests, error type:
+    #           cluster_block_exception`, and the discard counter never appears.
+    # The HTTP status stays 200 for the whole block, so
+    # vector_http_client_responses_total{status="429"} can NEVER see this —
+    # do not build an alarm on it (rules.yaml OpenSearchFloodStageBlock does not).
+    # `id_key: cx_event_id` above is what makes the retry safe: the replayed
+    # batch UPSERTS instead of duplicating (the F-18 idempotency contract).
+    request_retry_partial: true
+    request:
+      # RETRY ENVELOPE — deliberately long, deliberately NOT infinite.
+      # Measured on 0.40.0: `retry_max_duration_secs` caps the DELAY BETWEEN
+      # retries, it is NOT a total deadline (a 5 s setting still retried for a
+      # 40 s run with zero drops), and `retry_attempts` is what actually
+      # bounds the batch (3 attempts → `Events dropped … reason="Service call
+      # failed. No retries or retries exhausted."`, the s10 log line verbatim).
+      # Backoff is 1,2,4,8,16 then flat at retry_max_duration_secs, so
+      #     envelope = 1+2+4+8+16 + 30 × (retry_attempts − 5)
+      #              = 31 s + 30 s × 85 = **2,581 s ≈ 43 min** at 90 attempts,
+      # which still covers s10's 660 s block 3.9× over.
+      # SIZED DOWN FROM AN EARLIER 3.3 h ON PURPOSE. `request_retry_partial`
+      # retries the WHOLE batch and CANNOT tell a transient 429 from a
+      # permanent per-item 400 (mapping rejection — the F-17 class, 1,127 docs
+      # in 2026-08), so one poisoned document stalls its lane for the whole
+      # envelope, and repeatedly if more arrive: too long an envelope turns
+      # "lossy but flowing" into "stall-prone", the opposite failure for an
+      # evidence lane. 43 min is the balance — a real storage block costs
+      # nothing, a poison batch costs one batch after 43 min of Kafka lag
+      # (netops.* retains 72 h, so nothing is lost meanwhile), and the stall is
+      # VISIBLE within ~12 min via VectorOpenSearchRetryStorm.
+      # Measured 2026-09-02 on the live router: per-item 4xx runs a flat
+      # 33–48/h — the ISM/optimistic-lock 409 housekeeping rate, NOT Vector
+      # bulk items — and router sink discards over the last 3 h are ZERO, so no
+      # lane is carrying a poison document today.
+      # All three fields are pinned explicitly because the arithmetic above is
+      # only true if they are.
+      retry_attempts: 90
+      retry_initial_backoff_secs: 1
+      retry_max_duration_secs: 30
+    buffer:
+      # NO DISK BUFFER HERE — ON PURPOSE, and that is the other half of #209.
+      # Sizing one honestly from the measured numbers: this sink's events
+      # average **478 B** (vector_component_sent_event_bytes_total /
+      # vector_component_sent_events_total = 15,488,574,206 / 32,421,173, read
+      # off the live router), so s10's 291,296 lost events were ~139 MB and a
+      # 30-minute block at the V1 rate (1,000 eps → 1.8 M events) needs
+      # ~860 MB — call it **~2 GiB** with headroom for the other OS lanes.
+      # This container has NO writable data volume, and the only host path
+      # available (`../../data`) sits on the SAME 77 GiB root filesystem whose
+      # 3.45 GiB trough CAUSED the block: a 2 GiB spool there would eat most of
+      # the remaining flood-stage margin and hold OpenSearch past the watermark
+      # LONGER. Buffering onto the disk that is full is self-defeating.
+      # Kafka is the buffer instead, and already is: `acknowledgements:
+      # enabled` (F-04) withholds the consumer-group offset until this sink
+      # acks, and the netops.* topics retain 72 h. `when_full: block` therefore
+      # pushes back buffer → kafka source → uncommitted offsets, and the topic
+      # replays on recovery. Pinned explicitly (these ARE Vector's defaults)
+      # so that a future edit to `drop_newest` is a test failure
+      # (tests/test_ingest_contract.py) instead of a silent return to s10.
+      type: memory
+      max_events: 500
+      when_full: block
 
   # SNMP traps from network devices → OpenSearch
   opensearch_snmptrap:
@@ -948,6 +1074,20 @@ sinks:
       index: "netops-snmptrap-{{ tenant_seg }}-%Y.%m.%d"
       action: index
     api_version: v7
+    # #209 — same flood-stage exposure as opensearch_syslog; the full evidence,
+    # the 0.40.0 measurements and the buffer arithmetic live on that sink.
+    # Partial-bulk 429s (cluster_block_exception) must back-pressure into Kafka
+    # (72 h retention, F-04 acknowledgements), never be discarded; `id_key`
+    # above makes the retried batch an UPSERT, so a retry cannot duplicate.
+    request_retry_partial: true
+    request:
+      retry_attempts: 90             # 2,581 s ≈ 43 min envelope; bounded so a
+      retry_initial_backoff_secs: 1  # poison batch cannot wedge the lane for long
+      retry_max_duration_secs: 30    # (caps the DELAY between retries, not total)
+    buffer:
+      type: memory                   # never disk: the router's only writable host
+      max_events: 500                # path is the root fs whose exhaustion is the
+      when_full: block               # trigger — see opensearch_syslog
 
   # Tagged raw cloud logs → OpenSearch (the unified Cloud Logs search plane).
   opensearch_cloudlogs:
@@ -976,6 +1116,20 @@ sinks:
       index: "netops-cloudlogs-{{ tenant_seg }}-%Y.%m.%d"
       action: index
     api_version: v7
+    # #209 — same flood-stage exposure as opensearch_syslog; the full evidence,
+    # the 0.40.0 measurements and the buffer arithmetic live on that sink.
+    # Partial-bulk 429s (cluster_block_exception) must back-pressure into Kafka
+    # (72 h retention, F-04 acknowledgements), never be discarded; `id_key`
+    # above makes the retried batch an UPSERT, so a retry cannot duplicate.
+    request_retry_partial: true
+    request:
+      retry_attempts: 90             # 2,581 s ≈ 43 min envelope; bounded so a
+      retry_initial_backoff_secs: 1  # poison batch cannot wedge the lane for long
+      retry_max_duration_secs: 30    # (caps the DELAY between retries, not total)
+    buffer:
+      type: memory                   # never disk: the router's only writable host
+      max_events: 500                # path is the root fs whose exhaustion is the
+      when_full: block               # trigger — see opensearch_syslog
 
   # Flow records → both OpenSearch (search) and ClickHouse (analytics)
   opensearch_flows:
@@ -1006,6 +1160,24 @@ sinks:
       index: "netops-flows-{{ tenant_seg }}-%Y.%m.%d"
       action: index
     api_version: v7
+    # #209 — same flood-stage exposure as opensearch_syslog; the full evidence,
+    # the 0.40.0 measurements and the buffer arithmetic live on that sink.
+    # Partial-bulk 429s (cluster_block_exception) must back-pressure into Kafka
+    # (72 h retention, F-04 acknowledgements), never be discarded; `id_key`
+    # above makes the retried batch an UPSERT, so a retry cannot duplicate.
+    # FAN-OUT NOTE: flows_store_route also feeds clickhouse_flows, so a blocked
+    # OpenSearch now pauses the whole flows lane instead of quietly dropping the
+    # OS copy. That is the intended trade — ClickHouse resumes from the retained
+    # topic, and s10 proved the alternative is permanent evidence loss.
+    request_retry_partial: true
+    request:
+      retry_attempts: 90             # 2,581 s ≈ 43 min envelope; bounded so a
+      retry_initial_backoff_secs: 1  # poison batch cannot wedge the lane for long
+      retry_max_duration_secs: 30    # (caps the DELAY between retries, not total)
+    buffer:
+      type: memory                   # never disk: the router's only writable host
+      max_events: 500                # path is the root fs whose exhaustion is the
+      when_full: block               # trigger — see opensearch_syslog
 
   # Scale P0 — the tenant-keyed flow feed (see kafka_flows_raw). Same
   # Java-murmur2 partitioner as every keyed producer on the bus (the

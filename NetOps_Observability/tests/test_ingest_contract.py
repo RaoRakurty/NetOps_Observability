@@ -868,3 +868,168 @@ def test_broker_autocreate_stays_off():
         "auto-create lets anything that reaches the broker mint topics, and "
         "it hides missing kafka-init entries until a fresh install loses data"
     )
+
+
+# ── #209: an OpenSearch storage block must DELAY evidence, never destroy it ──
+#
+# storm-s10 (run 09012025x578, 2026-09-01): the host root-fs crossed
+# OpenSearch's flood-stage watermark, every index went read-only-allow-delete
+# for 11 minutes, and the router's opensearch_syslog sink DISCARDED 291,296
+# events (900,001 injected -> 610,001 OS docs). Measured against
+# netops-vector-router:0.40.0-curl on 2026-09-02: a blocked cluster answers
+# _bulk with HTTP 200 and a per-ITEM 429 cluster_block_exception, and Vector
+# 0.40 treats a 200-with-"errors":true body as NON-retriable unless
+# `request_retry_partial` is set -- the option defaults to FALSE. With it
+# false the discard counter reached 500 in 30s and nothing was logged; with it
+# true the counter never appeared. These guards pin the class, not the one
+# sink: any elasticsearch sink added later inherits them.
+
+def _es_sinks(tier: str) -> dict:
+    return {name: sink for name, sink in (vector_cfg(tier).get("sinks") or {}).items()
+            if sink.get("type") == "elasticsearch"}
+
+
+# The retry envelope the config comment advertises. Vector 0.40 backs off
+# 1,2,4,8,16 then holds flat at retry_max_duration_secs (verified: that field
+# caps the DELAY BETWEEN retries, it is NOT a total deadline), so
+#   envelope ~= sum(1,2,4,8,16) + max_backoff * (attempts - 5).
+_S10_BLOCK_SECONDS = 11 * 60          # the measured read-only-allow-delete window
+_MIN_ENVELOPE_SECONDS = 30 * 60       # cover a 30-minute block at the V1 rate
+_MAX_ENVELOPE_SECONDS = 2 * 3600      # bounded: request_retry_partial retries the WHOLE
+                                      # batch, so a permanently-rejected doc stalls its lane for
+                                      # the whole envelope — too long is "stall-prone", the
+                                      # opposite failure for an evidence lane
+
+
+def _retry_envelope_seconds(request: dict) -> float:
+    attempts = int(request["retry_attempts"])
+    initial = float(request["retry_initial_backoff_secs"])
+    cap = float(request["retry_max_duration_secs"])
+    total, delay = 0.0, initial
+    for _ in range(attempts):
+        total += min(delay, cap)
+        delay *= 2
+    return total
+
+
+@pytest.mark.parametrize("tier", ALL_TIERS)
+def test_opensearch_sinks_retry_partial_bulk_failures(tier):
+    """Vector 0.40's `request_retry_partial` defaults to FALSE, which makes a
+    200-with-per-item-429 bulk response a silent, terminal discard. That single
+    default is the whole s10 loss mechanism."""
+    for name, sink in _es_sinks(tier).items():
+        assert sink.get("request_retry_partial") is True, (
+            f"{tier}/{name} does not set request_retry_partial: true — a "
+            "flood-stage cluster_block_exception arrives as a per-ITEM 429 "
+            "inside an HTTP 200 bulk response and is discarded on the first "
+            "attempt (storm-s10 lost 291,296 events exactly this way)"
+        )
+        assert sink.get("id_key"), (
+            f"{tier}/{name} retries partial bulk failures with no id_key — the "
+            "replayed batch would DUPLICATE instead of upserting (F-18)"
+        )
+
+
+@pytest.mark.parametrize("tier", ALL_TIERS)
+def test_opensearch_sink_retry_envelope_outlives_a_storage_block(tier):
+    """Bounded, but long. Unbounded retry would let one permanently-rejected
+    batch (a per-item 400 mapping rejection — this stack has measured 1,127 of
+    those) wedge the lane forever; too short a bound is the s10 loss again."""
+    for name, sink in _es_sinks(tier).items():
+        req = sink.get("request") or {}
+        for field in ("retry_attempts", "retry_initial_backoff_secs", "retry_max_duration_secs"):
+            assert field in req, (
+                f"{tier}/{name} leaves {field} implicit — the retry envelope "
+                "documented on the sink is only true if its inputs are pinned"
+            )
+        envelope = _retry_envelope_seconds(req)
+        assert envelope >= _MIN_ENVELOPE_SECONDS, (
+            f"{tier}/{name} retries for only {envelope:.0f}s — shorter than the "
+            f"{_MIN_ENVELOPE_SECONDS}s a 30-minute flood-stage block needs "
+            f"(s10's block alone ran {_S10_BLOCK_SECONDS}s)"
+        )
+        assert envelope <= _MAX_ENVELOPE_SECONDS, (
+            f"{tier}/{name} retries for {envelope:.0f}s — a permanently rejected "
+            "batch would hold the lane (and its Kafka offsets) that long"
+        )
+
+
+@pytest.mark.parametrize("tier", ALL_TIERS)
+def test_opensearch_sinks_backpressure_instead_of_dropping(tier):
+    """`when_full: block` is what turns a full buffer into Kafka consumer lag
+    instead of a silent drop; `acknowledgements` (F-04) is what makes the
+    retained topic the real buffer. A disk buffer is deliberately NOT used on
+    the router: its only writable host path is the same filesystem whose
+    exhaustion triggers the block, so spooling there deepens the outage. If one
+    is ever added it must be sized above Vector's boot-time floor AND the tier
+    must actually mount a data volume for it."""
+    cfg = vector_cfg(tier)
+    assert (cfg.get("acknowledgements") or {}).get("enabled") is True, (
+        f"{tier} lost end-to-end acknowledgements — without them a blocking "
+        "sink no longer holds the Kafka offset and back-pressure loses data"
+    )
+    compose = yaml.safe_load(read("deployment", "docker", "docker-compose.yml"))
+    service = {"aggregator": "vector-aggregator", "router": "vector-router"}[tier]
+    volumes = " ".join(compose["services"][service].get("volumes") or [])
+    for name, sink in _es_sinks(tier).items():
+        buf = sink.get("buffer") or {}
+        assert buf.get("when_full") == "block", (
+            f"{tier}/{name} must set when_full: block — drop_newest (or the "
+            "unpinned default drifting) discards under pressure, which is the "
+            "s10 failure with extra steps"
+        )
+        assert buf.get("type") in ("memory", "disk"), \
+            f"{tier}/{name} has no explicit buffer type"
+        if buf.get("type") == "disk":
+            assert int(buf.get("max_size") or 0) >= 268435488, (
+                f"{tier}/{name}: a disk buffer below Vector's 268435488-byte "
+                "floor is rejected at BOOT, not by `vector validate`"
+            )
+            assert "/var/lib/vector" in volumes, (
+                f"{tier}/{name} declares a disk buffer but {service} mounts no "
+                "data volume — the spool would land on the container layer, on "
+                "the same root filesystem whose exhaustion causes the block"
+            )
+
+
+def test_flood_stage_block_is_alerted_and_pinned_to_the_sink_buffer():
+    """s10 had NO alarm on the block itself: DiskFloodStageImminent says 'this
+    is coming', and OpenSearchDocumentsRejected requires a simultaneous Vector
+    discard — which the fix above removes. The buffer alert's threshold is
+    80% of the sink's pinned max_events; if either side moves alone the alert
+    silently stops meaning what its comment says."""
+    rules = yaml.safe_load(read("src", "config", "rules.yaml"))
+    by_name = {r["alert"]: r for g in rules["groups"] for r in g["rules"]}
+    for required in ("OpenSearchFloodStageBlock", "VectorSinkBufferFilling",
+                     "VectorOpenSearchRetryStorm"):
+        assert required in by_name, f"rules.yaml is missing {required} (#209)"
+        assert by_name[required]["labels"]["severity"] == "critical", \
+            f"{required} must be critical — it is active evidence delay"
+
+    sinks = _es_sinks("router")
+    caps = {int((s.get("buffer") or {})["max_events"]) for s in sinks.values()}
+    assert len(caps) == 1, \
+        f"router OpenSearch sinks disagree on max_events ({sorted(caps)}) — the alert can only pin one"
+    threshold = int(re.search(r">\s*(\d+)\s*$", by_name["VectorSinkBufferFilling"]["expr"].strip()).group(1))
+    assert threshold == int(0.8 * caps.pop()), (
+        "VectorSinkBufferFilling's threshold has drifted from 80% of the sinks' "
+        "pinned buffer max_events — it no longer means '80% full'"
+    )
+    assert 'component_id=~"opensearch_.*"' in by_name["VectorSinkBufferFilling"]["expr"], \
+        "VectorSinkBufferFilling must select the OpenSearch sinks by pattern, not one instance"
+
+    # The retry-storm rule is the ONLY thing that sees a poison-batch stall:
+    # measured, a full retry storm leaves the buffer at 137/500 (27%), well
+    # under VectorSinkBufferFilling's 80% floor, and drops the sink's
+    # vector_component_sent_events_total series entirely. `unless` is therefore
+    # load-bearing — an `== 0` comparison against an ABSENT series matches
+    # nothing and reads as coverage (F-35).
+    storm = by_name["VectorOpenSearchRetryStorm"]["expr"]
+    assert "unless" in storm, (
+        "VectorOpenSearchRetryStorm must use `unless` — during a full stall the "
+        "sink's vector_component_sent_events_total series is ABSENT, not zero, "
+        "so an `== 0` form can never fire"
+    )
+    assert "vector_http_client_requests_sent_total" in storm and \
+           "vector_component_sent_events_total" in storm, \
+        "VectorOpenSearchRetryStorm must compare requests ISSUED against events DELIVERED"

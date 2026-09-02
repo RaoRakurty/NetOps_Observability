@@ -1204,6 +1204,105 @@ groups:
         annotations:
           summary: "Vector {{ $labels.component_id }} error_type={{ $labels.error_type }} ({{ $value }} in 15m)"
 
+      - alert: OpenSearchFloodStageBlock
+        # ####################################################################
+        # #209 (storm-s10, run 09012025x578, 2026-09-01). Flood stage is not a
+        # precursor — it is an ACTIVE data-integrity event. At 95% used
+        # OpenSearch puts EVERY index into read-only-allow-delete and answers
+        # every _bulk with HTTP **200** carrying a per-ITEM 429
+        # cluster_block_exception. Nothing in the HTTP status moves: the router
+        # only ever exported vector_http_client_responses_total{status="200"}
+        # through the whole 11-minute s10 block, so an alarm keyed on 429s
+        # would have been permanently silent. Built instead from the two
+        # signals this stack ALREADY scrapes:
+        #   * the shared filesystem at or under the flood-stage watermark
+        #     (node-exporter — the same selector as the disk-headroom group),
+        #   * AND the write path actually suffering it: per-DOCUMENT 4xx
+        #     climbing (opensearch_indexing_doc_status, the F-17 counter — a
+        #     per-item 429 lands in the 4xx bucket) or 2xx flat-lined.
+        # Why this is NOT redundant with what already exists:
+        # DiskFloodStageImminent (disk-headroom) fires at <7% free and says
+        # "this is coming"; this one says "it has ARRIVED and evidence is being
+        # delayed right now". And OpenSearchDocumentsRejected deliberately
+        # cannot cover it any more: it requires a SIMULTANEOUS Vector discard,
+        # and the #209 sink fix means there is no longer one to find.
+        # ####################################################################
+        expr: >
+          (min(node_filesystem_avail_bytes{mountpoint="/",fstype!~"tmpfs|overlay|squashfs"}
+               / node_filesystem_size_bytes{mountpoint="/",fstype!~"tmpfs|overlay|squashfs"}) < 0.05)
+          and
+          (sum(delta(opensearch_indexing_doc_status{code="4xx"}[5m])) > 0
+           or sum(delta(opensearch_indexing_doc_status{code="2xx"}[5m])) == 0)
+        for: 2m
+        labels: { severity: critical, layer: storage }
+        annotations:
+          summary: "OpenSearch is at FLOOD STAGE — every index is read-only-allow-delete and every bulk write is being refused"
+          description: "Evidence is DELAYED, not lost: the router retries partial-bulk 429s and back-pressures into Kafka, which retains 72h (#209). The delay becomes LOSS if the block outlives the router's ~43min retry envelope or the topic retention. Free space now — docker builder prune -f; verify ISM is deleting EVERY lane (_plugins/_ism/explain/netops-*); check Kafka retention.bytes — then, once free is back over 5%, clear the block: PUT _all/_settings {index.blocks.read_only_allow_delete: null}. Never shrink Kafka retention to buy disk (soak-2 lesson)."
+
+      - alert: VectorSinkBufferFilling
+        # ####################################################################
+        # #209, the other half. Converting a storage block from LOSS into
+        # BACK-PRESSURE is only an improvement if the back-pressure is VISIBLE
+        # — otherwise "delayed" quietly becomes "delayed forever" and nobody
+        # learns until Kafka retention expires.
+        # Every OpenSearch sink carries the pinned 500-event memory buffer
+        # (deployment/docker/vector-router/vector.yaml); a healthy sink's
+        # buffer returns to zero between flushes — measured 0 on EVERY lane on
+        # the live router. min_over_time keeps the FLOOR, so this fires only
+        # when the buffer never once dropped below 80% of capacity across ten
+        # minutes, i.e. the sink is not draining at all. That is precisely
+        # what a read-only-allow-delete block looks like from the router side,
+        # and it also catches the non-disk shapes (OpenSearch OOM, a wedged
+        # bulk queue) that the flood-stage rule above cannot see.
+        # 400 = 0.8 x max_events; tests/test_ingest_contract.py pins the
+        # threshold and the sink's max_events together so they cannot drift.
+        # ####################################################################
+        expr: min_over_time(vector_buffer_events{component_id=~"opensearch_.*",component_kind="sink"}[10m]) > 400
+        for: 5m
+        labels: { severity: critical, layer: ingest }
+        annotations:
+          summary: "Vector sink {{ $labels.component_id }} has been over 80% buffered for 10m — its store is not accepting writes"
+          description: "Back-pressure has reached the Kafka source: offsets stop committing and consumer lag grows, which is the CORRECT degradation (netops.* retains 72h, so this is delayed, not lost). Check OpenSearchFloodStageBlock, disk headroom and OpenSearch heap. If the block outlives the router's ~43min retry envelope the batches ARE dropped and become VectorEventsDiscarded."
+
+      - alert: VectorOpenSearchRetryStorm
+        # ####################################################################
+        # #209, third leg — the POISON-STALL alarm, and it is not optional.
+        # `request_retry_partial: true` retries the WHOLE bulk batch and Vector
+        # 0.40 cannot tell a transient 429 cluster_block from a PERMANENT
+        # per-item 400 mapping rejection (the F-17 class, 1,127 docs in
+        # 2026-08). So one poisoned document now holds its lane for the full
+        # ~43-minute retry envelope, and again for every batch it lands in.
+        # That trade is only acceptable while the stall is VISIBLE.
+        #
+        # VectorSinkBufferFilling CANNOT see it. Measured on a mock cluster
+        # refusing every write (netops-vector-router:0.40.0-curl, 2026-09-02):
+        # after 45 s of continuous retrying the sink showed
+        #   vector_http_client_requests_sent_total = 835   (climbing hard)
+        #   vector_http_client_responses_total{status="200"} = 835
+        #   vector_component_sent_events_total   = SERIES ABSENT (0 delivered)
+        #   vector_utilization  = 0.99
+        #   vector_buffer_events = 137 / 500  ← only 27% — WELL under the
+        #                                       80% buffer threshold
+        # so the buffer rule stays silent through a retry storm on any lane
+        # whose arrival rate is below the retry rate. The discriminator is
+        # "requests going OUT while no events are DELIVERED", which is exactly
+        # what a retried-forever batch looks like and cannot be confused with a
+        # healthy sink (every delivered batch ticks sent_events).
+        # `unless` rather than `and … == 0` on purpose: during a full storm the
+        # sent_events series is ABSENT, not zero, and `== 0` would match
+        # nothing — the F-35 "selector that matches nothing reads as coverage"
+        # trap. 10m window + for:2m ⇒ fires after ~12 minutes of solid retrying.
+        # ####################################################################
+        expr: >
+          increase(vector_http_client_requests_sent_total{component_id=~"opensearch_.*"}[10m]) > 0
+          unless on (component_id, instance)
+          increase(vector_component_sent_events_total{component_id=~"opensearch_.*",component_kind="sink"}[10m]) > 0
+        for: 2m
+        labels: { severity: critical, layer: ingest }
+        annotations:
+          summary: "Vector sink {{ $labels.component_id }} has been issuing bulk requests for 10m and delivering NOTHING — it is stuck retrying"
+          description: "Either OpenSearch is refusing writes (see OpenSearchFloodStageBlock and disk headroom) or a permanently-rejected document is poisoning the batch: request_retry_partial retries the whole batch and cannot tell a transient 429 from a per-item 400. The lane is STALLED, not losing — Kafka holds 72h and the batch is dropped after the ~43min retry envelope. Identify the poison with GET _nodes/stats/indices/indexing (doc_status.4xx) and the router's bulk error log, then fix the lane's template or drop the offending key in its transform (the del(.label) precedent in vector/vector.yaml)."
+
       - alert: LogIngestRateDegraded
         # ####################################################################
         # F-19: PARTIAL loss, not total stall.

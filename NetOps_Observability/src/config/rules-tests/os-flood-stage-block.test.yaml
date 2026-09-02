@@ -1,0 +1,135 @@
+# promtool unit tests for the #209 flood-stage alerts (storage-loss-observability).
+#
+# WHY THIS FILE EXISTS. storm-s10 (run 09012025x578, 2026-09-01) lost 291,296
+# syslog evidence docs to an 11-minute OpenSearch read-only-allow-delete block
+# and NOTHING alerted on the block itself: the only disk rule that could fire
+# (DiskFloodStageImminent) says "this is coming", not "it is happening", and the
+# rejection rules key off a Vector discard that the #209 sink fix removes. So
+# both new rules are proved here the same way security-posture.test.yaml proves
+# its own: each fires on a synthetic reproduction of the s10 condition AND stays
+# silent on the all-clear. Run by scripts/preflight-configs.sh (promtool test
+# rules); paths are as mounted by that docker run.
+rule_files:
+  - /etc/prometheus/rules.yaml
+
+evaluation_interval: 1m
+
+tests:
+  # 1) OpenSearchFloodStageBlock — the s10 shape: 3.45 GiB free on the 77 GiB
+  #    root (4.5% — under the 5% flood-stage watermark) WHILE per-document 4xx
+  #    climbs, because a per-item 429 cluster_block_exception lands in the 4xx
+  #    bucket of opensearch_indexing_doc_status.
+  - interval: 1m
+    input_series:
+      - series: 'node_filesystem_avail_bytes{mountpoint="/",fstype="ext4",instance="node-exporter:9100",device="/dev/mapper/root"}'
+        values: "3704409292x20"
+      - series: 'node_filesystem_size_bytes{mountpoint="/",fstype="ext4",instance="node-exporter:9100",device="/dev/mapper/root"}'
+        values: "82678120448x20"
+      - series: 'opensearch_indexing_doc_status{code="4xx"}'
+        values: "0+2000x20"
+      - series: 'opensearch_indexing_doc_status{code="2xx"}'
+        values: "610001x20"
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: OpenSearchFloodStageBlock
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              layer: storage
+            exp_annotations:
+              summary: "OpenSearch is at FLOOD STAGE — every index is read-only-allow-delete and every bulk write is being refused"
+              description: "Evidence is DELAYED, not lost: the router retries partial-bulk 429s and back-pressures into Kafka, which retains 72h (#209). The delay becomes LOSS if the block outlives the router's ~43min retry envelope or the topic retention. Free space now — docker builder prune -f; verify ISM is deleting EVERY lane (_plugins/_ism/explain/netops-*); check Kafka retention.bytes — then, once free is back over 5%, clear the block: PUT _all/_settings {index.blocks.read_only_allow_delete: null}. Never shrink Kafka retention to buy disk (soak-2 lesson)."
+
+  # 1b) All-clear: the SAME 4xx trickle (OpenSearch's own ISM/optimistic-lock
+  #     409s — measured at ~0.8/min on a healthy cluster, see the 2026-08-05
+  #     addendum on OpenSearchDocumentsRejected) with 11 GiB free must stay
+  #     silent. Without the disk clause this rule would fire every night.
+  - interval: 1m
+    input_series:
+      - series: 'node_filesystem_avail_bytes{mountpoint="/",fstype="ext4",instance="node-exporter:9100",device="/dev/mapper/root"}'
+        values: "11811160064x20"
+      - series: 'node_filesystem_size_bytes{mountpoint="/",fstype="ext4",instance="node-exporter:9100",device="/dev/mapper/root"}'
+        values: "82678120448x20"
+      - series: 'opensearch_indexing_doc_status{code="4xx"}'
+        values: "0+1x20"
+      - series: 'opensearch_indexing_doc_status{code="2xx"}'
+        values: "0+900x20"
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: OpenSearchFloodStageBlock
+        exp_alerts: []
+
+  # 2) VectorSinkBufferFilling — the router's opensearch_syslog buffer pinned at
+  #    its 500-event capacity for the whole window (the sink is not draining at
+  #    all, which is what the block looks like from the router side).
+  - interval: 1m
+    input_series:
+      - series: 'vector_buffer_events{component_id="opensearch_syslog",component_kind="sink",component_type="elasticsearch",buffer_type="memory",instance="vector-router:9598"}'
+        values: "500x30"
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: VectorSinkBufferFilling
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              layer: ingest
+              component_id: opensearch_syslog
+              component_kind: sink
+              component_type: elasticsearch
+              buffer_type: memory
+              instance: "vector-router:9598"
+            exp_annotations:
+              summary: "Vector sink opensearch_syslog has been over 80% buffered for 10m — its store is not accepting writes"
+              description: "Back-pressure has reached the Kafka source: offsets stop committing and consumer lag grows, which is the CORRECT degradation (netops.* retains 72h, so this is delayed, not lost). Check OpenSearchFloodStageBlock, disk headroom and OpenSearch heap. If the block outlives the router's ~43min retry envelope the batches ARE dropped and become VectorEventsDiscarded."
+
+  # 2b) All-clear: a busy but HEALTHY sink whose buffer keeps returning to zero
+  #     between flushes. min_over_time keeps the floor, so a sawtooth — however
+  #     tall its peaks — must never fire. This is the false-positive that would
+  #     have made the rule untrustworthy under storm load.
+  - interval: 1m
+    input_series:
+      - series: 'vector_buffer_events{component_id="opensearch_syslog",component_kind="sink",component_type="elasticsearch",buffer_type="memory",instance="vector-router:9598"}'
+        values: "500 0 500 0 500 0 500 0 500 0 500 0 500 0 500 0 500 0 500 0 500 0 500 0 500 0 500 0 500 0"
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: VectorSinkBufferFilling
+        exp_alerts: []
+
+  # 3) VectorOpenSearchRetryStorm — the poison-stall shape. Bulk requests keep
+  #    going out (measured 835 in 45 s against a cluster refusing every write)
+  #    while NOTHING is delivered, so vector_component_sent_events_total is
+  #    ABSENT for that sink. `unless` must survive the absent series — an
+  #    `== 0` form would match nothing and read as coverage (F-35).
+  - interval: 1m
+    input_series:
+      - series: 'vector_http_client_requests_sent_total{component_id="opensearch_syslog",component_kind="sink",component_type="elasticsearch",method="POST",instance="vector-router:9598"}'
+        values: "0+1100x30"
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: VectorOpenSearchRetryStorm
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              layer: ingest
+              component_id: opensearch_syslog
+              component_kind: sink
+              component_type: elasticsearch
+              method: POST
+              instance: "vector-router:9598"
+            exp_annotations:
+              summary: "Vector sink opensearch_syslog has been issuing bulk requests for 10m and delivering NOTHING — it is stuck retrying"
+              description: "Either OpenSearch is refusing writes (see OpenSearchFloodStageBlock and disk headroom) or a permanently-rejected document is poisoning the batch: request_retry_partial retries the whole batch and cannot tell a transient 429 from a per-item 400. The lane is STALLED, not losing — Kafka holds 72h and the batch is dropped after the ~43min retry envelope. Identify the poison with GET _nodes/stats/indices/indexing (doc_status.4xx) and the router's bulk error log, then fix the lane's template or drop the offending key in its transform (the del(.label) precedent in vector/vector.yaml)."
+
+  # 3b) All-clear: a busy, HEALTHY sink issuing the same volume of requests and
+  #     actually delivering. Retries do happen on a healthy lane (a 5xx blip, a
+  #     reconnect); what must never fire is a sink whose events land.
+  - interval: 1m
+    input_series:
+      - series: 'vector_http_client_requests_sent_total{component_id="opensearch_syslog",component_kind="sink",component_type="elasticsearch",method="POST",instance="vector-router:9598"}'
+        values: "0+1100x30"
+      - series: 'vector_component_sent_events_total{component_id="opensearch_syslog",component_kind="sink",component_type="elasticsearch",instance="vector-router:9598"}'
+        values: "0+60000x30"
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: VectorOpenSearchRetryStorm
+        exp_alerts: []
