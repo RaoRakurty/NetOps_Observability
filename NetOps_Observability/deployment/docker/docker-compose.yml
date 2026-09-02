@@ -1378,6 +1378,11 @@ services:
       CORR_REPARTITION_BATCH_ROWS: ${CORR_REPARTITION_BATCH_ROWS:-}
       CORR_REPARTITION_CATCHUP_PASSES: ${CORR_REPARTITION_CATCHUP_PASSES:-}
       CORR_REPARTITION_DROP_OLD: ${CORR_REPARTITION_DROP_OLD:-}
+      # tracker 206 escape hatch: DROP every corr_*__daily shadow before an
+      # auto/force run. Ignored (loudly) in check mode. Default unset — the
+      # shadow is normally a resumable, partially finished copy worth hours,
+      # and every pass reconciles it against the source anyway.
+      CORR_REPARTITION_RESET_SHADOW: ${CORR_REPARTITION_RESET_SHADOW:-}
       # #101 workload fairness profiles (ch_workload.go; "off" = kill-switch).
       CH_WORKLOAD_PROFILES: ${CH_WORKLOAD_PROFILES:-}
       # #101 first-customer alert-delivery gate: seed the ntfy critical-push

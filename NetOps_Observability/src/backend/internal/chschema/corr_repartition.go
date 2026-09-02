@@ -61,14 +61,31 @@ package chschema
 //     partition whose row count already matches the source is skipped, and a
 //     PARTIALLY copied one is DROPped and redone. A crash at any point leaves
 //     the live table untouched and the next boot continues.
-//   - VERIFIED. The swap happens only when the shadow table's total row count
-//     equals the source's, re-read after the copy. If the source is still
-//     growing (the correlation engine is writing), the migration retries the
-//     delta up to CORR_REPARTITION_CATCHUP_PASSES times and then ABORTS
-//     without swapping rather than silently losing the rows written during the
-//     copy. Nothing is destroyed: the pre-migration table is kept as
-//     netops.<table>__premigration until an operator drops it (or
-//     CORR_REPARTITION_DROP_OLD=true).
+//   - VERIFIED, BOUNDED BY THE SOURCE-VISIBLE PARTITION SET. The swap happens
+//     only when (a) every partition the SOURCE still holds has exactly that many
+//     rows in the shadow, and (b) the shadow holds NO partition the source no
+//     longer has. If the source is still growing (the correlation engine is
+//     writing), the migration retries the delta up to
+//     CORR_REPARTITION_CATCHUP_PASSES times and then ABORTS without swapping
+//     rather than silently losing the rows written during the copy. Nothing is
+//     destroyed: the pre-migration table is kept as netops.<table>__premigration
+//     until an operator drops it (or CORR_REPARTITION_DROP_OLD=true).
+//   - RECONCILED, NOT WEDGED (tracker 206, ultra-review #10). The verification
+//     used to compare WHOLE-TABLE counts, and that made a SHRINKING source
+//     unrepresentable: the shadow deliberately carries no TTL while the copy
+//     runs (CorrShadowTTLStmt), so when the source's TTL expired a day mid-copy
+//     the rows already copied had no counterpart left, the delta could never
+//     converge FROM ABOVE, and the run aborted errSourceUnstable. The shadow is
+//     CREATE IF NOT EXISTS and reused on every boot, so the orphaned excess
+//     persisted and every later attempt re-wedged on it. Now every pass STARTS
+//     by reconciling: a shadow partition whose source partition is gone (TTL'd
+//     away, or the day rolled out of the horizon) is an ORPHAN, is DROPped with
+//     the drop CONFIRMED, is logged with (tenant, day, rows) and is counted in
+//     the run report. A source that keeps shrinking therefore converges instead
+//     of wedging, and the shadow stays safe to reuse across boots. The
+//     last-resort escape is CORR_REPARTITION_RESET_SHADOW=true, which drops
+//     every shadow table before an auto/force run (and is refused, loudly, in
+//     check mode — check mutates nothing, ever).
 //   - TENANT-ISOLATED (CLAUDE.md §3a rule 4). The shadow table gets its STRICT
 //     row policy BEFORE the first row is copied into it, so no window exists in
 //     which correlation history is queryable without a tenant policy; the
@@ -88,6 +105,7 @@ import (
 	"errors"
 	"fmt"
 	"hash/fnv"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -256,6 +274,14 @@ type CorrRepartitionSettings struct {
 	// DropOld drops netops.<table>__premigration immediately after a verified
 	// swap. Default false: keeping the pre-migration table is the rollback.
 	DropOld bool
+	// ResetShadow DROPs every netops.<table>__daily shadow BEFORE the run, in
+	// auto/force mode only. Default false, because the shadow is normally the
+	// valuable thing — it is a resumable, partially finished copy of a table
+	// that can take hours. This is the explicit operator escape hatch for a
+	// shadow that cannot be reconciled (tracker 206): it throws that progress
+	// away and starts the copy from empty. In `check` mode it is IGNORED with a
+	// log line — check mutates nothing, and a reset knob is no exception.
+	ResetShadow bool
 	// ReapPollInterval / ReapPollAttempts bound the orphaned-copy reaper: how
 	// often, and how many times, system.processes is polled for a copy whose
 	// client call failed before the copy is KILLed. Zero means the default; they
@@ -338,6 +364,8 @@ func CorrRepartitionConfig(logf func(string, ...any)) CorrRepartitionSettings {
 		}
 	}
 	cfg.DropOld = strings.EqualFold(strings.TrimSpace(envOr("CORR_REPARTITION_DROP_OLD", "")), "true")
+	cfg.ResetShadow = strings.EqualFold(
+		strings.TrimSpace(envOr("CORR_REPARTITION_RESET_SHADOW", "")), "true")
 	return cfg
 }
 
@@ -445,8 +473,31 @@ func CorrShadowTTLStmt(t corrRepartitionTable, d corrRetentionDays) string {
 // CorrPartitionKeysSQL enumerates the DESTINATION partitions and their source
 // row counts — the migration's unit of work, resume and verification.
 func CorrPartitionKeysSQL(t corrRepartitionTable) string {
-	return "SELECT tenant_id AS t, toYYYYMMDD(" + t.TimeCol + ") AS d, count() AS n " +
-		"FROM netops." + t.Name + " GROUP BY t, d ORDER BY d, t" + corrScope + " FORMAT JSON"
+	return corrPartitionKeysSQLFor(t.Name, t.TimeCol)
+}
+
+// CorrShadowPartitionKeysSQL is the SAME enumeration over the SHADOW table.
+//
+// It exists because the whole-table row-count verification it replaces could not
+// see the one shape that wedges the migration (tracker 206): rows in the shadow
+// whose SOURCE partition has expired under the source's TTL while the copy ran.
+// A whole-table delta cannot distinguish "the engine wrote 3 more rows" from
+// "the TTL removed a day I already copied" — the first converges by copying
+// more, the second never converges at all. Enumerating BOTH sides in the same
+// (tenant, day, rows) shape makes the difference a set operation: a partition
+// present in the shadow and absent from the source is an ORPHAN and is dropped,
+// not chased.
+//
+// Rendered through the SAME builder as the source enumeration, so the two can
+// never drift into comparing differently-shaped keys.
+func CorrShadowPartitionKeysSQL(t corrRepartitionTable) string {
+	return corrPartitionKeysSQLFor(t.Name+corrRepartitionShadowSuffix, t.TimeCol)
+}
+
+// corrPartitionKeysSQLFor is the one renderer behind both enumerations.
+func corrPartitionKeysSQLFor(table, timeCol string) string {
+	return "SELECT tenant_id AS t, toYYYYMMDD(" + timeCol + ") AS d, count() AS n " +
+		"FROM netops." + table + " GROUP BY t, d ORDER BY d, t" + corrScope + " FORMAT JSON"
 }
 
 // CorrPartitionCountSQL counts what a given table already holds for one
@@ -464,6 +515,15 @@ func CorrPartitionCountSQL(table string, t corrRepartitionTable, tenant string, 
 func CorrDropShadowPartitionStmt(t corrRepartitionTable, tenant string, day int64) string {
 	return "ALTER TABLE netops." + t.Name + corrRepartitionShadowSuffix +
 		" DROP PARTITION (" + chQuote(tenant) + ", " + strconv.FormatInt(day, 10) + ")"
+}
+
+// CorrDropShadowStmt discards the WHOLE shadow table. Two callers, one
+// renderer: prepareShadow uses it when a shadow's column list has drifted from
+// the source (an `INSERT ... SELECT *` is positional, so a drifted shadow must
+// be rebuilt, never appended to), and the CORR_REPARTITION_RESET_SHADOW path
+// uses it as the operator's deliberate "throw the partial copy away".
+func CorrDropShadowStmt(t corrRepartitionTable) string {
+	return "DROP TABLE IF EXISTS netops." + t.Name + corrRepartitionShadowSuffix
 }
 
 // CorrCopyPartitionStmts renders the copy for one destination partition. A
@@ -750,6 +810,13 @@ type CorrRepartitionOutcome struct {
 	Rows   int64
 	Bytes  int64 // uncompressed
 	Detail string
+	// OrphanPartitions / OrphanRows count the shadow partitions reconciled away
+	// during the run because the SOURCE no longer had them (tracker 206). They
+	// are part of the report, not a diagnostic: a run that dropped orphans
+	// copied a table that was shrinking underneath it, and an operator reading
+	// the report should be told so rather than inferring it from a log line.
+	OrphanPartitions int
+	OrphanRows       int64
 }
 
 // Per-table outcomes.
@@ -807,6 +874,9 @@ func RunCorrRepartition(ctx context.Context, ex CHExec, cfg CorrRepartitionSetti
 		}
 		return out
 	}
+	if cfg.ResetShadow {
+		resetShadows(ctx, ex, cfg, tables, logf)
+	}
 	for _, t := range tables {
 		o := migrateOne(ctx, ex, cfg, ret, t, logf)
 		out = append(out, o)
@@ -820,6 +890,44 @@ func RunCorrRepartition(ctx context.Context, ex CHExec, cfg CorrRepartitionSetti
 		}
 	}
 	return out
+}
+
+// resetShadows implements CORR_REPARTITION_RESET_SHADOW: drop every shadow
+// table before the run, so the copy starts from empty.
+//
+// This is the operator's escape hatch, not a routine step. Ordinary shadow reuse
+// is SAFE now that every pass reconciles orphan partitions away (tracker 206),
+// and a shadow is a partially finished copy of a table that can take hours — so
+// discarding it is only ever right when a human has decided the shadow is
+// untrustworthy. Hence: opt-in, loud, and NEVER in check mode.
+//
+// A failed drop is logged and the run continues: reconciliation is the normal
+// path and it still applies to a shadow that could not be dropped. What is not
+// allowed is silence (§10).
+func resetShadows(ctx context.Context, ex CHExec, cfg CorrRepartitionSettings,
+	tables []corrRepartitionTable, logf func(string, ...any)) {
+
+	if cfg.Mode != CorrRepartitionAuto && cfg.Mode != CorrRepartitionForce {
+		logf("corr-repartition: CORR_REPARTITION_RESET_SHADOW=true is IGNORED in mode=%s — "+
+			"check mode reads metadata and mutates NOTHING, and a reset knob is not an "+
+			"exception to that. Re-run with CORR_REPARTITION=auto (or force) to actually "+
+			"discard the shadow tables.", cfg.Mode)
+		return
+	}
+	logf("corr-repartition: CORR_REPARTITION_RESET_SHADOW=true — dropping every shadow table " +
+		"before this run. Any partially finished copy is DISCARDED and restarts from empty; " +
+		"this is the operator reset, not the normal path (a reused shadow is reconciled " +
+		"partition-by-partition against the source on every pass).")
+	for _, t := range tables {
+		shadow := t.Name + corrRepartitionShadowSuffix
+		if err := ex.Exec(ctx, CorrDropShadowStmt(t)); err != nil {
+			logf("corr-repartition: RESET — dropping netops.%s FAILED: %v. The run continues "+
+				"and the shadow will be reconciled against the source instead; if it is the "+
+				"thing that is wedged, drop it by hand.", shadow, err)
+			continue
+		}
+		logf("corr-repartition: RESET — dropped netops.%s", shadow)
+	}
 }
 
 // corrModeNote spells out, in the boot line itself, what this mode is about to
@@ -940,13 +1048,24 @@ func migrateOne(ctx context.Context, ex CHExec, cfg CorrRepartitionSettings,
 		return res
 	}
 
-	copied, err := copyAllPasses(ctx, ex, cfg, t, logf)
+	cp, err := copyAllPasses(ctx, ex, cfg, t, logf)
+	res.OrphanPartitions, res.OrphanRows = cp.OrphanPartitions, cp.OrphanRows
 	if err != nil {
 		if errors.Is(err, errSourceUnstable) {
 			res.Status, res.Detail = CorrRepartitionUnstable, err.Error()
-			logf("corr-repartition: ABORTED netops.%s — %v. Nothing was swapped and "+
-				"the live table is untouched; the partial copy in netops.%s%s is "+
-				"resumable. Stop the correlation engine and restart the API to finish it.",
+			// The shadow is KEPT. Reconciliation makes reusing it safe — every pass
+			// drops the partitions the source no longer has — and a large copy's
+			// progress is worth hours. The per-partition deltas above are what tell
+			// an operator WHICH condition this is: a partition where the shadow is
+			// SHORT is the engine still writing; one where the shadow is AHEAD (or
+			// the source has none) is a day that expired and will be reconciled away
+			// on the next run.
+			logf("corr-repartition: ABORTED netops.%s — %v. Nothing was swapped and the live "+
+				"table is untouched. The partial copy in netops.%s%s is KEPT and is "+
+				"resumable: the next auto/force run reconciles it against the source "+
+				"partition-by-partition before copying. Stop the correlation engine and "+
+				"restart the API to finish it; if the shadow itself is the problem, discard "+
+				"it deliberately with CORR_REPARTITION_RESET_SHADOW=true.",
 				t.Name, err, t.Name, corrRepartitionShadowSuffix)
 			return res
 		}
@@ -954,6 +1073,7 @@ func migrateOne(ctx context.Context, ex CHExec, cfg CorrRepartitionSettings,
 		logf("corr-repartition: %s — %s (live table untouched)", t.Name, res.Detail)
 		return res
 	}
+	copied := cp.Rows
 
 	if ttl := CorrShadowTTLStmt(t, ret); ttl != "" {
 		if err := ex.Exec(ctx, ttl); err != nil {
@@ -976,13 +1096,14 @@ func migrateOne(ctx context.Context, ex CHExec, cfg CorrRepartitionSettings,
 			logf("corr-repartition: netops.%s migrated, but dropping netops.%s failed: %v",
 				t.Name, backup, err)
 		}
-		logf("corr-repartition: netops.%s now %s — %d rows copied; pre-migration copy dropped "+
-			"(CORR_REPARTITION_DROP_OLD=true)", t.Name, want, copied)
+		logf("corr-repartition: netops.%s now %s — %d rows copied%s; pre-migration copy dropped "+
+			"(CORR_REPARTITION_DROP_OLD=true)", t.Name, want, copied, orphanNote(cp))
 		return res
 	}
-	logf("corr-repartition: netops.%s now %s — %d rows copied. The pre-migration table is "+
+	logf("corr-repartition: netops.%s now %s — %d rows copied%s. The pre-migration table is "+
 		"KEPT as netops.%s (your rollback); drop it with `DROP TABLE netops.%s` once you are "+
-		"satisfied, or set CORR_REPARTITION_DROP_OLD=true.", t.Name, want, copied, backup, backup)
+		"satisfied, or set CORR_REPARTITION_DROP_OLD=true.",
+		t.Name, want, copied, orphanNote(cp), backup, backup)
 	return res
 }
 
@@ -1002,7 +1123,7 @@ func prepareShadow(ctx context.Context, ex CHExec, t corrRepartitionTable) error
 			return fmt.Errorf("compare shadow columns: %w", err)
 		}
 		if !same {
-			if err := ex.Exec(ctx, "DROP TABLE IF EXISTS netops."+shadow); err != nil {
+			if err := ex.Exec(ctx, CorrDropShadowStmt(t)); err != nil {
 				return fmt.Errorf("drop drifted shadow: %w", err)
 			}
 		}
@@ -1015,35 +1136,300 @@ func prepareShadow(ctx context.Context, ex CHExec, t corrRepartitionTable) error
 	return nil
 }
 
-// copyAllPasses runs the per-partition copy, then re-reads the source and
-// repeats for whatever arrived while it ran. It returns only when the two
-// tables agree, or gives up after cfg.CatchUpPasses with errSourceUnstable —
-// never by swapping a short copy into place.
+// corrPart is one destination partition's identity: (tenant, day). It is the
+// unit of copy, resume, verification and orphan reconciliation alike, so there
+// is exactly one type for it.
+type corrPart struct {
+	tenant string
+	day    int64
+}
+
+// corrPartDelta is one partition on which the source and the shadow disagree.
+// src == 0 with dst > 0 is the ORPHAN shape; dst < src is "not copied yet".
+type corrPartDelta struct {
+	corrPart
+	src int64
+	dst int64
+}
+
+// corrCopyResult is what one table's copy produced, including the orphan
+// accounting the run report carries.
+type corrCopyResult struct {
+	Rows             int64 // rows the source held, per partition, at the verifying pass
+	Partitions       int
+	OrphanPartitions int
+	OrphanRows       int64
+}
+
+// corrUnstableTopParts bounds how many per-partition deltas the unstable-abort
+// message spells out. The message has to be readable in a boot log; the count of
+// differing partitions is always exact, only the enumeration is truncated.
+const corrUnstableTopParts = 5
+
+// copyAllPasses reconciles, copies, and verifies — once per pass — until the
+// shadow agrees with the SOURCE-VISIBLE partition set, or gives up after
+// cfg.CatchUpPasses with errSourceUnstable. It never swaps a short copy into
+// place, and it never chases a delta it cannot close.
+//
+// The order inside a pass is load-bearing:
+//
+//  1. RECONCILE FIRST. Drop every shadow partition the source no longer has.
+//     Doing this before the copy is what makes a SHRINKING source converge: the
+//     excess is removed at the top of each pass rather than accumulating into a
+//     delta that can only be closed by rows that no longer exist. Before tracker
+//     206 this step did not exist and the run wedged on errSourceUnstable — and
+//     because the shadow is CREATE IF NOT EXISTS, every later boot re-wedged on
+//     the same orphaned rows.
+//  2. COPY. Unchanged: per destination partition, skip the complete ones, DROP
+//     and redo a partial one.
+//  3. VERIFY, BOUNDED BY THE SOURCE. Every source partition's shadow count
+//     equals its source count, AND the shadow holds nothing the source does not.
 func copyAllPasses(ctx context.Context, ex CHExec, cfg CorrRepartitionSettings,
-	t corrRepartitionTable, logf func(string, ...any)) (int64, error) {
+	t corrRepartitionTable, logf func(string, ...any)) (corrCopyResult, error) {
+
+	var res corrCopyResult
+	var last []corrPartDelta
+	for pass := 1; pass <= cfg.CatchUpPasses; pass++ {
+		n, rows, err := reconcileOrphans(ctx, ex, t, pass, logf)
+		res.OrphanPartitions += n
+		res.OrphanRows += rows
+		if err != nil {
+			return res, err
+		}
+		if err := copyOnePass(ctx, ex, cfg, t, pass, logf); err != nil {
+			return res, err
+		}
+		total, parts, deltas, err := verifyAgainstSource(ctx, ex, t)
+		if err != nil {
+			return res, err
+		}
+		if len(deltas) == 0 {
+			res.Rows, res.Partitions = total, parts
+			logf("corr-repartition: netops.%s — copy verified against the source's own "+
+				"partitions: %d rows across %d partitions, every one matching, and no "+
+				"shadow partition outside the source%s",
+				t.Name, total, parts, orphanNote(res))
+			return res, nil
+		}
+		last = deltas
+		logf("corr-repartition: netops.%s — pass %d/%d did not converge: %s; re-running the delta",
+			t.Name, pass, cfg.CatchUpPasses, deltaSummary(deltas))
+	}
+	return res, fmt.Errorf("%w after %d catch-up passes: %s%s",
+		errSourceUnstable, cfg.CatchUpPasses, deltaSummary(last), totalsNote(ctx, ex, t))
+}
+
+// orphanNote renders the orphan accounting for an operator-facing line, or "".
+func orphanNote(res corrCopyResult) string {
+	if res.OrphanPartitions == 0 {
+		return ""
+	}
+	return fmt.Sprintf(" (%d orphan shadow partition(s) holding %d rows were reconciled away "+
+		"during the copy — the source shrank underneath it, which is normal when its TTL "+
+		"expires a day mid-copy)", res.OrphanPartitions, res.OrphanRows)
+}
+
+// reconcileOrphans drops every shadow partition whose SOURCE partition is gone.
+//
+// "Gone" means exactly one thing here — absent from CorrPartitionKeysSQL — and
+// covers both ways it happens: the source's TTL expired the day while the copy
+// ran, or the day rolled out of the retention horizon between boots. Either way
+// the rows in the shadow have no counterpart to be verified against and would
+// hold the delta open forever.
+//
+// The drop is CONFIRMED, with the same refusal semantics as the partial-redo
+// guard in copyOnePass: a destination partition that still holds rows after
+// DROP PARTITION means something else is writing into it (an orphaned copy from
+// an earlier attempt is exactly that shape — incident 2026-08-29), and
+// continuing would race a live writer. Refusing and saying why is the only safe
+// answer.
+//
+// Returns the number of orphan partitions dropped and the rows they held —
+// including on the error path, so a partial reconciliation is still reported.
+func reconcileOrphans(ctx context.Context, ex CHExec, t corrRepartitionTable, pass int,
+	logf func(string, ...any)) (int, int64, error) {
 
 	shadow := t.Name + corrRepartitionShadowSuffix
-	for pass := 1; pass <= cfg.CatchUpPasses; pass++ {
-		if err := copyOnePass(ctx, ex, cfg, t, pass, logf); err != nil {
-			return 0, err
-		}
-		src, err := totalCount(ctx, ex, t.Name)
-		if err != nil {
-			return 0, fmt.Errorf("verify source count: %w", err)
-		}
-		dst, err := totalCount(ctx, ex, shadow)
-		if err != nil {
-			return 0, fmt.Errorf("verify shadow count: %w", err)
-		}
-		if src == dst {
-			logf("corr-repartition: netops.%s — copy verified, %d rows in both tables", t.Name, src)
-			return src, nil
-		}
-		logf("corr-repartition: netops.%s — pass %d/%d left a delta of %d rows "+
-			"(source %d, shadow %d); the engine is still writing, re-running the delta",
-			t.Name, pass, cfg.CatchUpPasses, src-dst, src, dst)
+	src, err := partitionKeyMap(ctx, ex, CorrPartitionKeysSQL(t))
+	if err != nil {
+		return 0, 0, fmt.Errorf("enumerate source partitions: %w", err)
 	}
-	return 0, fmt.Errorf("%w after %d catch-up passes", errSourceUnstable, cfg.CatchUpPasses)
+	dst, err := partitionKeyMap(ctx, ex, CorrShadowPartitionKeysSQL(t))
+	if err != nil {
+		return 0, 0, fmt.Errorf("enumerate shadow partitions: %w", err)
+	}
+	orphans := make([]corrPart, 0, len(dst))
+	for k := range dst {
+		if _, alive := src[k]; !alive {
+			orphans = append(orphans, k)
+		}
+	}
+	sortParts(orphans)
+
+	var dropped int
+	var rows int64
+	for _, k := range orphans {
+		had := dst[k]
+		if err := ex.Exec(ctx, CorrDropShadowPartitionStmt(t, k.tenant, k.day)); err != nil {
+			return dropped, rows, fmt.Errorf("drop orphan partition (%s, %d) from netops.%s: %w",
+				k.tenant, k.day, shadow, err)
+		}
+		left, err := partitionCount(ctx, ex, shadow, t, k.tenant, k.day)
+		if err != nil {
+			return dropped, rows, fmt.Errorf("re-count dropped orphan partition (%s, %d): %w",
+				k.tenant, k.day, err)
+		}
+		if left != 0 {
+			return dropped, rows, fmt.Errorf("orphan partition (%s, %d) still holds %d rows after "+
+				"DROP PARTITION on netops.%s — something is still writing to it (an orphaned "+
+				"copy from an earlier attempt?); refusing to reconcile against a live writer",
+				k.tenant, k.day, left, shadow)
+		}
+		dropped++
+		rows += had
+		logf("corr-repartition: netops.%s pass %d — ORPHAN shadow partition (%s, %d) held %d "+
+			"rows the source no longer has (its TTL expired the day, or the day rolled out); "+
+			"dropped from netops.%s so the copy can converge",
+			t.Name, pass, k.tenant, k.day, had, shadow)
+	}
+	return dropped, rows, nil
+}
+
+// verifyAgainstSource is the verification rule tracker 206 replaced the
+// whole-table count comparison with.
+//
+// The copy is verified when BOTH hold:
+//
+//	(a) every partition the SOURCE still has holds exactly that many rows in the
+//	    shadow, and
+//	(b) the shadow has NO partition the source does not have.
+//
+// A whole-table comparison collapses both into one number and loses the sign
+// information that matters: `src != dst` cannot tell "3 rows arrived" (close it
+// by copying) from "a day I already copied expired" (never closable). Returned
+// deltas carry both counts per partition so the abort message can say which.
+func verifyAgainstSource(ctx context.Context, ex CHExec, t corrRepartitionTable) (
+	rows int64, parts int, deltas []corrPartDelta, err error) {
+
+	src, err := partitionKeyMap(ctx, ex, CorrPartitionKeysSQL(t))
+	if err != nil {
+		return 0, 0, nil, fmt.Errorf("verify: enumerate source partitions: %w", err)
+	}
+	dst, err := partitionKeyMap(ctx, ex, CorrShadowPartitionKeysSQL(t))
+	if err != nil {
+		return 0, 0, nil, fmt.Errorf("verify: enumerate shadow partitions: %w", err)
+	}
+	for k, want := range src {
+		rows += want
+		if have := dst[k]; have != want {
+			deltas = append(deltas, corrPartDelta{corrPart: k, src: want, dst: have})
+		}
+	}
+	for k, have := range dst {
+		if _, alive := src[k]; !alive {
+			deltas = append(deltas, corrPartDelta{corrPart: k, src: 0, dst: have})
+		}
+	}
+	sortDeltas(deltas)
+	return rows, len(src), deltas, nil
+}
+
+// deltaSummary renders the per-partition disagreement for an operator. The
+// abort used to say only "N rows short", which reads identically whether the
+// engine is writing, a day expired, or a copy silently failed — three different
+// operator actions. Naming the partitions and both counts is what makes them
+// distinguishable from the log alone.
+func deltaSummary(deltas []corrPartDelta) string {
+	if len(deltas) == 0 {
+		return "no partition differs"
+	}
+	shown := len(deltas)
+	if shown > corrUnstableTopParts {
+		shown = corrUnstableTopParts
+	}
+	items := make([]string, 0, shown)
+	for _, d := range deltas[:shown] {
+		items = append(items, fmt.Sprintf("(%s, %d) source %d shadow %d [%+d]",
+			d.tenant, d.day, d.src, d.dst, d.src-d.dst))
+	}
+	out := fmt.Sprintf("%d partition(s) still differ; largest %d: %s",
+		len(deltas), shown, strings.Join(items, "; "))
+	if rest := len(deltas) - shown; rest > 0 {
+		out += fmt.Sprintf(" (+%d more)", rest)
+	}
+	return out
+}
+
+// totalsNote appends whole-table counts to the unstable abort as CONTEXT — not
+// as the verification, which is per-partition now. An unreadable count degrades
+// the message; it never fails the run, which is already failing.
+func totalsNote(ctx context.Context, ex CHExec, t corrRepartitionTable) string {
+	src, err := totalCount(ctx, ex, t.Name)
+	if err != nil {
+		return ""
+	}
+	dst, err := totalCount(ctx, ex, t.Name+corrRepartitionShadowSuffix)
+	if err != nil {
+		return ""
+	}
+	return fmt.Sprintf(" [whole-table context: source %d rows, shadow %d]", src, dst)
+}
+
+// partitionKeyMap reads a (tenant, day) -> rows enumeration. Every field is
+// CHECKED: an unreadable count must not be silently read as zero, which would
+// look exactly like an empty partition and "verify" a lost day.
+func partitionKeyMap(ctx context.Context, ex CHExec, sql string) (map[corrPart]int64, error) {
+	rows, err := ex.Query(ctx, sql)
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[corrPart]int64, len(rows))
+	for _, k := range rows {
+		day, err := chInt(k["d"])
+		if err != nil {
+			return nil, fmt.Errorf("partition day %v: %w", k["d"], err)
+		}
+		n, err := chInt(k["n"])
+		if err != nil {
+			return nil, fmt.Errorf("partition rows %v: %w", k["n"], err)
+		}
+		out[corrPart{tenant: chString(k["t"]), day: day}] = n
+	}
+	return out, nil
+}
+
+// sortParts orders partitions deterministically (day, then tenant) — a map
+// iteration order would make the drop sequence and the log unreproducible.
+func sortParts(p []corrPart) {
+	sort.Slice(p, func(i, j int) bool {
+		if p[i].day != p[j].day {
+			return p[i].day < p[j].day
+		}
+		return p[i].tenant < p[j].tenant
+	})
+}
+
+// sortDeltas orders the disagreements largest-first (by absolute row gap) so the
+// truncated abort message names the partitions that matter, tie-broken
+// deterministically by (day, tenant).
+func sortDeltas(d []corrPartDelta) {
+	sort.Slice(d, func(i, j int) bool {
+		a, b := absInt64(d[i].src-d[i].dst), absInt64(d[j].src-d[j].dst)
+		if a != b {
+			return a > b
+		}
+		if d[i].day != d[j].day {
+			return d[i].day < d[j].day
+		}
+		return d[i].tenant < d[j].tenant
+	})
+}
+
+func absInt64(n int64) int64 {
+	if n < 0 {
+		return -n
+	}
+	return n
 }
 
 // copyOnePass copies every destination partition whose shadow row count does
