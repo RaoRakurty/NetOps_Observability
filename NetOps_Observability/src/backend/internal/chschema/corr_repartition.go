@@ -481,7 +481,7 @@ func CorrShadowTTLStmt(t corrRepartitionTable, d corrRetentionDays) string {
 // CorrPartitionKeysSQL enumerates the DESTINATION partitions and their source
 // row counts — the migration's unit of work, resume and verification.
 func CorrPartitionKeysSQL(t corrRepartitionTable) string {
-	return corrPartitionKeysSQLFor(t.Name, t.TimeCol)
+	return corrPartitionKeysSQLFor(t.Name, t.TimeCol, corrScope)
 }
 
 // CorrShadowPartitionKeysSQL is the SAME enumeration over the SHADOW table.
@@ -499,13 +499,22 @@ func CorrPartitionKeysSQL(t corrRepartitionTable) string {
 // Rendered through the SAME builder as the source enumeration, so the two can
 // never drift into comparing differently-shaped keys.
 func CorrShadowPartitionKeysSQL(t corrRepartitionTable) string {
-	return corrPartitionKeysSQLFor(t.Name+corrRepartitionShadowSuffix, t.TimeCol)
+	return corrPartitionKeysSQLFor(t.Name+corrRepartitionShadowSuffix, t.TimeCol, corrScope)
 }
 
 // corrPartitionKeysSQLFor is the one renderer behind both enumerations.
-func corrPartitionKeysSQLFor(table, timeCol string) string {
+//
+// The scope is a PARAMETER, not a constant reached from inside here, so that
+// every exported migration read names corrScope in its own body: enumerating a
+// corr_* table partition-by-partition is a cross-tenant maintenance read and has
+// to say so on the wire (CLAUDE.md §3a rule 4), and that property is guarded by
+// a source-level scan over each builder (tests/test_clickhouse_corr_storage.py,
+// test_every_migration_read_carries_the_cross_tenant_scope). A shared renderer
+// that hid the setting one call away would satisfy the wire and defeat the
+// guard — and the guard is the thing that catches the next refactor.
+func corrPartitionKeysSQLFor(table, timeCol, scope string) string {
 	return "SELECT tenant_id AS t, toYYYYMMDD(" + timeCol + ") AS d, count() AS n " +
-		"FROM netops." + table + " GROUP BY t, d ORDER BY d, t" + corrScope + " FORMAT JSON"
+		"FROM netops." + table + " GROUP BY t, d ORDER BY d, t" + scope + " FORMAT JSON"
 }
 
 // CorrPartitionCountSQL counts what a given table already holds for one

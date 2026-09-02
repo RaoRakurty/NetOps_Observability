@@ -204,6 +204,7 @@ func TestEveryCorrReadCarriesTenantScope(t *testing.T) {
 	tbl := corrRepartitionTables()[0]
 	reads := []string{
 		CorrPartitionKeysSQL(tbl),
+		CorrShadowPartitionKeysSQL(tbl),
 		CorrPartitionCountSQL(tbl.Name, tbl, "acme", 20260803),
 		CorrTotalCountSQL(tbl.Name),
 	}
