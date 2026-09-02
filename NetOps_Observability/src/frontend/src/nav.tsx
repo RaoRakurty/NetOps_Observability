@@ -71,6 +71,7 @@ export const ROUTE_CHUNKS: Record<string, () => Promise<unknown>> = {
   Sites: () => import("./pages/Sites"),
   Discovery: () => import("./pages/Discovery"),
   LogsExplore: () => import("./pages/LogsExplore"),
+  TelemetryCoverage: () => import("./pages/telemetry/TelemetryCoverage"),
 };
 
 const Dashboard = lazy(ROUTE_CHUNKS["Dashboard"] as () => Promise<{ default: React.ComponentType<any> }>);
@@ -145,6 +146,8 @@ const ActionQueue = lazy(ROUTE_CHUNKS["ActionQueue"] as () => Promise<{ default:
 const Sites = lazy(ROUTE_CHUNKS["Sites"] as () => Promise<{ default: React.ComponentType<any> }>);
 const Discovery = lazy(ROUTE_CHUNKS["Discovery"] as () => Promise<{ default: React.ComponentType<any> }>);
 const LogsExplore = lazy(ROUTE_CHUNKS["LogsExplore"] as () => Promise<{ default: React.ComponentType<any> }>);
+// Parser programme A6 — Administration → Data Collection coverage view.
+const TelemetryCoverage = lazy(ROUTE_CHUNKS["TelemetryCoverage"] as () => Promise<{ default: React.ComponentType<any> }>);
 
 // A leaf is one rendered view. Sections with multiple leaves get a SubNav.
 export type NavLeaf = {
@@ -401,6 +404,10 @@ export const NAV: NavSection[] = [
       // Sealed Fields (#129): who revealed protected data, when, and why.
       // Server-gated on sensitive_data:admin.
       { id: "sensitive-data-access", label: "Sensitive Data Access", group: "Data Collection", render: () => <SensitiveDataAccess /> },
+      // Parser programme A6: what the parser recognizes (platform-global stats,
+      // 403 → "platform-admin only" card) beside the TENANT's own unrecognized
+      // message shapes. NOT platformOnly — a tenant admin needs the second half.
+      { id: "telemetry-coverage", label: "Telemetry Coverage", group: "Data Collection", render: () => <TelemetryCoverage /> },
       // Identity & Access — consolidates Users · Roles · Security Settings.
       // Sub-items deep-link its internal views via the #/admin/identity/<sub>
       // suffix (read by IdentityAccess, same mechanism as admin/api).

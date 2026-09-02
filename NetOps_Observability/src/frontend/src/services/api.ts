@@ -1997,6 +1997,82 @@ export type BgpUpdatesResp = {
   updates: { updates?: { type?: string; timestamp?: string; attrs?: { path?: number[]; source_id?: string } }[]; nr_updates?: number };
 };
 
+// ---- Telemetry coverage / parser stats (parser programme A6) ---------------
+// Three endpoints, exactly as contracted — nothing invented beyond them.
+//   GET  /api/admin/parser/stats                          (platform admin only)
+//   GET  /api/telemetry/unrecognized?days&limit&lane      (tenant-scoped)
+//   POST /api/telemetry/unrecognized/{template_id}/propose(tenant, alerts:write)
+// The propose call returns a DRAFT catalog row generated deterministically from
+// the template — there is NO model in this path, and the UI applies nothing.
+export type ParserLane = "syslog" | "trap" | "port";
+export type ParserFidelity = "code" | "doc_claimed" | "lab_validated" | "live_validated";
+
+export type ParserRuleStat = {
+  rule_id: string;
+  lane: ParserLane;
+  kind: string;
+  fidelity: ParserFidelity;
+  hits: number;
+  shadow: boolean;
+};
+
+export type ParserStats = {
+  parser_rev: string;
+  rules_hash: string;
+  generated_at: string;
+  // null = no admitted lines in the window yet. NEVER coerce it to 0 — "no data"
+  // and "0% promoted" are different facts (honest-empty rule).
+  promotion_rate: number | null;
+  window_lines: number;
+  prefilter: { passed: number; rejected: number };
+  generic_fallback: { syslog: number; trap: number };
+  rules: ParserRuleStat[];
+};
+
+export type UnrecognizedItem = {
+  template_id: string;
+  // Masked template text with <*> wildcards. Rendered as ESCAPED text in a mono
+  // cell — never as markup (§15 LLM02 applies to any untrusted string).
+  template: string;
+  count: number;
+  devices: number;
+  severity_max: number;
+  first_seen: string;
+  last_seen: string;
+  sample: string;
+  appname?: string;
+  mnemonic?: string;
+};
+
+export type UnrecognizedPage = {
+  generated_at: string;
+  days: number;
+  items: UnrecognizedItem[];
+  total: number;
+  // Honest state carried by the backend, e.g. "mining not yet run" or
+  // "no unrecognized lines in window". Rendered verbatim, never swallowed.
+  note?: string;
+};
+
+export type CatalogProposal = {
+  proposal_id: string;
+  status: "drafted";
+  catalog_row: string; // YAML text — shown read-only, copied, never executed
+  fixture: string;
+};
+
+export type UnrecognizedQuery = { days?: number; limit?: number; lane?: "syslog" | "trap" };
+
+/** Query string for the unrecognized-shapes endpoint. Only the three contracted
+ *  params are ever sent; everything goes through URLSearchParams. */
+export function unrecognizedParams(q: UnrecognizedQuery = {}): string {
+  const p = new URLSearchParams();
+  if (q.days !== undefined) p.set("days", String(q.days));
+  if (q.limit !== undefined) p.set("limit", String(q.limit));
+  if (q.lane) p.set("lane", q.lane);
+  return p.toString();
+}
+
 export const api = {
   // ---- BGP Operations (item 10) ----
   bgpWatchlist: () => request<{ watchlist: BgpWatchEntry[] }>("/api/bgp/watchlist"),
@@ -3344,7 +3420,26 @@ export const api = {
   // Legacy-only: encrypt-and-store a reusable secret (federated methods never call this).
   cloudConnectorSecret: (id: string, body: { kind: string; key_hint: string; secret: string }) =>
     request<CloudConnectorView>(ccnPath(id, "secret"), { method: "POST", body: JSON.stringify(body) }),
+
+  // ---------- Telemetry coverage (parser programme A6) ---------------------
+  // Platform-admin only; a 403 is a legitimate answer for a tenant admin and the
+  // page renders it as a "platform-admin only" card, not as a failure.
+  parserStats: () => request<ParserStats>("/api/admin/parser/stats"),
+  // Tenant-scoped SERVER-side from the bearer token (§3a) — the client never
+  // sends a tenant.
+  unrecognizedTemplates: (q: UnrecognizedQuery = {}) => {
+    const qs = unrecognizedParams(q);
+    return request<UnrecognizedPage>(`/api/telemetry/unrecognized${qs ? `?${qs}` : ""}`);
+  },
+  // Drafts a catalog row from one template. Requires alerts:write; applies
+  // NOTHING — the row is landed by a human through a pull request.
+  proposeCatalogRow: (templateId: string) =>
+    request<CatalogProposal>(
+      `/api/telemetry/unrecognized/${encodeURIComponent(templateId)}/propose`,
+      { method: "POST" },
+    ),
 };
+
 
 // shared query string for the cloud signal surfaces (optional app + limit).
 function cloudQS(app?: string, limit?: number, windowHours?: number, extra?: CloudSignalPage): string {
