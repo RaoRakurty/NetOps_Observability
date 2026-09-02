@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "vendor": "ruckus",
+  "display_name": "Ruckus Wireless",
+  "detection": {
+    "sysobjectid_prefixes": [
+      "1.3.6.1.4.1.25053"
+    ],
+    "sysdescr_contains": [
+      "ruckus"
+    ],
+    "sysdescr_rank": 140
+  },
+  "dialect": {},
+  "profiles": []
+}

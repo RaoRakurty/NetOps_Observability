@@ -1,0 +1,22 @@
+{
+  "schema_version": 1,
+  "vendor": "generic",
+  "display_name": "Vendor-neutral",
+  "notes": "The pseudo-vendor telemetry-catalog/events.yaml uses for grammars that are not vendor-anchored (RFC syslog, standard traps, NetFlow/IPFIX). It carries the vendor-NEUTRAL dialect synonyms only: no detection, no platforms, nothing to claim about a device.",
+  "detection": {},
+  "dialect": {
+    "vrf_term": "VRF",
+    "vrf_term_keys": [
+      "generic",
+      "frr"
+    ],
+    "vrf_synonyms": [
+      "vrf",
+      "vpn-vrf",
+      "l3vpn",
+      "ip-vpn",
+      "network-instance"
+    ]
+  },
+  "profiles": []
+}

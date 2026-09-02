@@ -1,0 +1,80 @@
+{
+  "schema_version": 1,
+  "vendor": "arista",
+  "display_name": "Arista Networks",
+  "notes": "The telemetry catalog names this platform 'ceos' (the containerized EOS in the lab); 'ceos' is a platform ALIAS of the eos profile, not a second product. internal/hardening ships NO Arista bindings today, so the hardening binding is deliberately empty (rules report NotApplicable, never a false Pass).",
+  "detection": {
+    "sysobjectid_prefixes": [
+      "1.3.6.1.4.1.30065"
+    ],
+    "sysdescr_contains": [
+      "arista"
+    ],
+    "sysdescr_rank": 30,
+    "os_version_pattern": "(?i)\\bversion[ :]+([0-9][0-9A-Za-z.-]*)"
+  },
+  "dialect": {
+    "vrf_term": "VRF",
+    "vrf_term_keys": [
+      "arista",
+      "eos"
+    ],
+    "vrf_synonyms": [
+      "vrf"
+    ]
+  },
+  "profiles": [
+    {
+      "platform": "eos",
+      "display_name": "Arista EOS",
+      "device_class": [
+        "switch",
+        "router"
+      ],
+      "fidelity": "live_validated",
+      "detection": {
+        "os_parse": {
+          "product": "eos",
+          "rank": 10,
+          "sysdescr_contains_any": []
+        },
+        "syslog_facilities": [
+          "SYS"
+        ]
+      },
+      "capture": {
+        "running_config_cmd": "show running-config",
+        "show_version_cmd": "show version",
+        "pager_off_cmds": [
+          "terminal length 0"
+        ],
+        "prompt_regex": "(?m)^[A-Za-z0-9._-]+[>#]\\s*$"
+      },
+      "advisory": {
+        "provider": "offline-feed",
+        "product_ids": [
+          "eos"
+        ]
+      },
+      "hardening": {},
+      "threat": {
+        "log_rule_ids": [
+          "log-logging-disabled",
+          "log-buffer-cleared",
+          "log-offhours-config-change",
+          "log-new-local-user",
+          "log-privilege-escalation",
+          "log-gre-tunnel",
+          "log-aaa-tampering",
+          "log-boot-image-change"
+        ],
+        "mnemonic_prefixes": [
+          "SYS"
+        ]
+      },
+      "platform_aliases": [
+        "ceos"
+      ]
+    }
+  ]
+}

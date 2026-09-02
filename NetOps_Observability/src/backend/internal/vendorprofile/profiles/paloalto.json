@@ -1,0 +1,56 @@
+{
+  "schema_version": 1,
+  "vendor": "paloalto",
+  "display_name": "Palo Alto Networks",
+  "notes": "A PAN-OS sysDescr often omits the version entirely; the profile still names the product so the device reports as UNASSESSED for advisories rather than clear.",
+  "detection": {
+    "sysobjectid_prefixes": [
+      "1.3.6.1.4.1.25461"
+    ],
+    "sysdescr_contains": [
+      "palo alto",
+      "pan-os"
+    ],
+    "sysdescr_rank": 50,
+    "os_version_pattern": "(?i)\\bPAN-?OS[ :]+v?([0-9][0-9A-Za-z.-]*)"
+  },
+  "dialect": {
+    "vrf_term": "VRF",
+    "vrf_term_keys": [
+      "paloalto",
+      "panos"
+    ]
+  },
+  "profiles": [
+    {
+      "platform": "pan-os",
+      "display_name": "Palo Alto PAN-OS",
+      "device_class": [
+        "firewall"
+      ],
+      "fidelity": "doc_claimed",
+      "detection": {
+        "os_parse": {
+          "product": "pan-os",
+          "rank": 10,
+          "sysdescr_contains_any": []
+        }
+      },
+      "capture": {
+        "running_config_cmd": "show config running",
+        "show_version_cmd": "show system info",
+        "pager_off_cmds": [
+          "set cli pager off"
+        ]
+      },
+      "advisory": {
+        "provider": "offline-feed",
+        "product_ids": [
+          "pan-os"
+        ]
+      },
+      "hardening": {},
+      "threat": {}
+    }
+  ]
+}

@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "vendor": "extreme",
+  "display_name": "Extreme Networks",
+  "detection": {
+    "sysobjectid_prefixes": [
+      "1.3.6.1.4.1.1916"
+    ]
+  },
+  "dialect": {},
+  "profiles": []
+}

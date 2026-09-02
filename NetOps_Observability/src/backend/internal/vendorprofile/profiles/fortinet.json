@@ -1,0 +1,52 @@
+{
+  "schema_version": 1,
+  "vendor": "fortinet",
+  "display_name": "Fortinet",
+  "detection": {
+    "sysobjectid_prefixes": [
+      "1.3.6.1.4.1.12356"
+    ],
+    "sysdescr_contains": [
+      "fortinet",
+      "fortigate"
+    ],
+    "sysdescr_rank": 40,
+    "os_version_pattern": "(?i)\\bv([0-9]+\\.[0-9]+\\.[0-9]+)"
+  },
+  "dialect": {
+    "vrf_term": "VRF",
+    "vrf_term_keys": [
+      "fortinet",
+      "fortios"
+    ]
+  },
+  "profiles": [
+    {
+      "platform": "fortios",
+      "display_name": "Fortinet FortiOS",
+      "device_class": [
+        "firewall"
+      ],
+      "fidelity": "doc_claimed",
+      "detection": {
+        "os_parse": {
+          "product": "fortios",
+          "rank": 10,
+          "sysdescr_contains_any": []
+        }
+      },
+      "capture": {
+        "running_config_cmd": "show full-configuration",
+        "show_version_cmd": "get system status"
+      },
+      "advisory": {
+        "provider": "offline-feed",
+        "product_ids": [
+          "fortios"
+        ]
+      },
+      "hardening": {},
+      "threat": {}
+    }
+  ]
+}

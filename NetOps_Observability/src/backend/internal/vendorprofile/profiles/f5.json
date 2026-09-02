@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "vendor": "f5",
+  "display_name": "F5 Networks",
+  "detection": {
+    "sysobjectid_prefixes": [
+      "1.3.6.1.4.1.3375"
+    ],
+    "sysdescr_contains": [
+      "big-ip",
+      "bigip",
+      "f5 networks"
+    ],
+    "sysdescr_rank": 120
+  },
+  "dialect": {},
+  "profiles": [],
+  "notes": "Ranked ABOVE linux: a BIG-IP sysDescr embeds 'Linux 3.10…' and must not resolve to the generic linux backstop."
+}

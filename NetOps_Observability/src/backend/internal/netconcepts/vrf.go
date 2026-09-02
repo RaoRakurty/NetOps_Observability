@@ -12,7 +12,11 @@
 // the surfaces gNMI does not cover (syslog text, SNMP contexts, UI labels).
 package netconcepts
 
-import "strings"
+import (
+	"strings"
+
+	"netops/backend/internal/vendorprofile"
+)
 
 // Concept is a canonical platform vocabulary id.
 type Concept string
@@ -21,47 +25,31 @@ type Concept string
 // (OpenConfig: network-instance of type L3VRF). One id, every dialect.
 const ConceptVRF Concept = "vrf"
 
-// vrfSynonyms maps normalized vendor spellings to ConceptVRF. Keys are
-// lower-cased with separators collapsed (see canon).
-var vrfSynonyms = map[string]struct{}{
-	"vrf":             {}, // cisco, arista, frr, generic
-	"vrflite":         {}, // cisco "VRF-Lite"
-	"routinginstance": {}, // juniper
-	"vprn":            {}, // nokia SR OS service
-	"vpninstance":     {}, // huawei
-	"vpnvrf":          {},
-	"l3vpn":           {},
-	"networkinstance": {}, // openconfig
-	"ipvpn":           {},
-}
-
-func canon(s string) string {
-	s = strings.ToLower(strings.TrimSpace(s))
-	repl := strings.NewReplacer("-", "", "_", "", " ", "", ".", "")
-	return repl.Replace(s)
-}
+// T9 (Vendor Profile registry): the synonym table and the display-term switch
+// that used to live in this file are now DECLARATIVE DATA — the `dialect` block
+// of each vendor profile in internal/vendorprofile. This package keeps the
+// CONCEPT vocabulary and the correlation-identity rules; the per-vendor words
+// are read through the registry, so adding a dialect is "author one profile".
+// Outputs are byte-identical (internal/netconcepts/testdata/vendorprofile_parity.json).
 
 // IsVRFTerm reports whether a vendor token names the VRF concept in any
 // supported dialect. Parser-side use: "routing-instance CORP-WAN" and
 // "vrf CORP-WAN" both classify as ConceptVRF.
 func IsVRFTerm(term string) bool {
-	_, ok := vrfSynonyms[canon(term)]
-	return ok
+	return vendorprofile.Default().IsVRFTerm(term)
 }
 
 // VRFDisplayTerm returns the dialect the DEVICE's operator expects to read,
-// keyed by vendor. Unknown vendors get the industry-majority "VRF".
+// keyed by vendor. A vendor NO profile claims falls back to the
+// industry-majority "VRF" — a deliberate DISPLAY default (rendering a label),
+// not an assessment: nothing about the device is claimed by it, and the
+// registry itself reports the vendor as unknown so an assessing caller can stay
+// honest.
 func VRFDisplayTerm(vendor string) string {
-	switch canon(vendor) {
-	case "juniper", "junos", "jnpr":
-		return "routing-instance"
-	case "nokia", "sros", "alcatel", "alcatellucent", "srlinux":
-		return "VPRN"
-	case "huawei", "vrp":
-		return "VPN instance"
-	default: // cisco, iosxe, iosxr, nxos, arista, eos, frr, generic
-		return "VRF"
+	if term, ok := vendorprofile.Default().VRFDisplayTerm(vendor); ok {
+		return term
 	}
+	return "VRF"
 }
 
 // VRFEntityToken builds the canonical correlation identity for one VRF on one

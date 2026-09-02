@@ -1,0 +1,390 @@
+{
+  "schema_version": 1,
+  "vendor": "cisco",
+  "display_name": "Cisco",
+  "notes": "os_parse ranks reproduce collectors.ciscoProduct exactly: IOS-XR and IOS-XE sysDescrs also contain the bare 'ios', so the family markers must be evaluated before it. No unconditional default: a Cisco sysDescr naming no family yields product \"\" (version still parsed) — honest, not a guess.",
+  "detection": {
+    "sysobjectid_prefixes": [
+      "1.3.6.1.4.1.9"
+    ],
+    "sysdescr_contains": [
+      "cisco"
+    ],
+    "sysdescr_rank": 10,
+    "os_version_pattern": "(?i)\\bVersion[ :]+([0-9][0-9A-Za-z.()-]*)"
+  },
+  "dialect": {
+    "vrf_term": "VRF",
+    "vrf_term_keys": [
+      "cisco",
+      "ios",
+      "iosxe",
+      "iosxr",
+      "nxos"
+    ],
+    "vrf_synonyms": [
+      "vrf",
+      "vrf-lite"
+    ]
+  },
+  "profiles": [
+    {
+      "platform": "ios_xr",
+      "display_name": "Cisco IOS-XR",
+      "device_class": [
+        "router"
+      ],
+      "fidelity": "doc_claimed",
+      "detection": {
+        "os_parse": {
+          "product": "ios_xr",
+          "rank": 10,
+          "sysdescr_contains_any": [
+            "ios xr",
+            "ios-xr"
+          ]
+        },
+        "platform_contains": [
+          "ios-xr"
+        ],
+        "platform_rank": 11,
+        "syslog_facilities": [
+          "SYS",
+          "SEC",
+          "SEC_LOGIN",
+          "LINK",
+          "LINEPROTO",
+          "PARSER",
+          "AAA",
+          "BGP",
+          "OSPF"
+        ]
+      },
+      "capture": {
+        "running_config_cmd": "show running-config",
+        "show_version_cmd": "show version",
+        "pager_off_cmds": [
+          "terminal length 0"
+        ],
+        "prompt_regex": "(?m)^RP/\\d+/RP\\d+/CPU\\d+:[A-Za-z0-9._-]+[>#]\\s*$"
+      },
+      "advisory": {
+        "provider": "offline-feed",
+        "product_ids": [
+          "ios_xr"
+        ]
+      },
+      "hardening": {
+        "binding": "cisco-iosxe",
+        "display": "Cisco IOS-XE"
+      },
+      "threat": {
+        "log_rule_ids": [
+          "log-logging-disabled",
+          "log-buffer-cleared",
+          "log-offhours-config-change",
+          "log-new-local-user",
+          "log-privilege-escalation",
+          "log-gre-tunnel",
+          "log-aaa-tampering",
+          "log-boot-image-change"
+        ],
+        "mnemonic_prefixes": [
+          "SYS",
+          "SEC",
+          "SEC_LOGIN",
+          "LINK",
+          "LINEPROTO",
+          "PARSER",
+          "AAA"
+        ]
+      }
+    },
+    {
+      "platform": "ios_xe",
+      "display_name": "Cisco IOS-XE",
+      "device_class": [
+        "router",
+        "switch"
+      ],
+      "fidelity": "doc_claimed",
+      "detection": {
+        "os_parse": {
+          "product": "ios_xe",
+          "rank": 20,
+          "sysdescr_contains_any": [
+            "ios xe",
+            "ios-xe"
+          ]
+        },
+        "platform_contains": [
+          "ios-xe",
+          "iosxe",
+          "ios xe"
+        ],
+        "platform_rank": 10,
+        "syslog_facilities": [
+          "SYS",
+          "SEC",
+          "SEC_LOGIN",
+          "LINK",
+          "LINEPROTO",
+          "PARSER",
+          "AAA",
+          "BGP",
+          "OSPF"
+        ]
+      },
+      "capture": {
+        "running_config_cmd": "show running-config",
+        "show_version_cmd": "show version",
+        "pager_off_cmds": [
+          "terminal length 0"
+        ],
+        "prompt_regex": "(?m)^[A-Za-z0-9._-]+[>#]\\s*$"
+      },
+      "advisory": {
+        "provider": "offline-feed",
+        "product_ids": [
+          "ios_xe"
+        ]
+      },
+      "hardening": {
+        "binding": "cisco-iosxe",
+        "display": "Cisco IOS-XE"
+      },
+      "threat": {
+        "log_rule_ids": [
+          "log-logging-disabled",
+          "log-buffer-cleared",
+          "log-offhours-config-change",
+          "log-new-local-user",
+          "log-privilege-escalation",
+          "log-gre-tunnel",
+          "log-aaa-tampering",
+          "log-boot-image-change"
+        ],
+        "mnemonic_prefixes": [
+          "SYS",
+          "SEC",
+          "SEC_LOGIN",
+          "LINK",
+          "LINEPROTO",
+          "PARSER",
+          "AAA"
+        ]
+      }
+    },
+    {
+      "platform": "nx-os",
+      "display_name": "Cisco NX-OS",
+      "device_class": [
+        "switch"
+      ],
+      "fidelity": "doc_claimed",
+      "detection": {
+        "os_parse": {
+          "product": "nx-os",
+          "rank": 30,
+          "sysdescr_contains_any": [
+            "nx-os"
+          ]
+        },
+        "platform_contains": [
+          "nx-os",
+          "nxos"
+        ],
+        "platform_rank": 12,
+        "syslog_facilities": [
+          "SYS",
+          "SEC",
+          "SEC_LOGIN",
+          "LINK",
+          "LINEPROTO",
+          "PARSER",
+          "AAA",
+          "BGP",
+          "OSPF"
+        ]
+      },
+      "capture": {
+        "running_config_cmd": "show running-config",
+        "show_version_cmd": "show version",
+        "pager_off_cmds": [
+          "terminal length 0"
+        ],
+        "prompt_regex": "(?m)^[A-Za-z0-9._-]+[>#]\\s*$"
+      },
+      "advisory": {
+        "provider": "offline-feed",
+        "product_ids": [
+          "nx-os"
+        ]
+      },
+      "hardening": {
+        "binding": "cisco-iosxe",
+        "display": "Cisco IOS-XE"
+      },
+      "threat": {
+        "log_rule_ids": [
+          "log-logging-disabled",
+          "log-buffer-cleared",
+          "log-offhours-config-change",
+          "log-new-local-user",
+          "log-privilege-escalation",
+          "log-gre-tunnel",
+          "log-aaa-tampering",
+          "log-boot-image-change"
+        ],
+        "mnemonic_prefixes": [
+          "SYS",
+          "SEC",
+          "SEC_LOGIN",
+          "LINK",
+          "LINEPROTO",
+          "PARSER",
+          "AAA"
+        ]
+      }
+    },
+    {
+      "platform": "asa",
+      "display_name": "Cisco ASA",
+      "device_class": [
+        "firewall"
+      ],
+      "fidelity": "doc_claimed",
+      "detection": {
+        "os_parse": {
+          "product": "asa",
+          "rank": 40,
+          "sysdescr_contains_any": [
+            "adaptive security appliance"
+          ]
+        },
+        "syslog_facilities": [
+          "SYS",
+          "SEC",
+          "SEC_LOGIN",
+          "LINK",
+          "LINEPROTO",
+          "PARSER",
+          "AAA",
+          "BGP",
+          "OSPF"
+        ]
+      },
+      "capture": {
+        "running_config_cmd": "show running-config",
+        "show_version_cmd": "show version",
+        "pager_off_cmds": [
+          "terminal pager 0"
+        ],
+        "prompt_regex": "(?m)^[A-Za-z0-9._-]+[>#]\\s*$"
+      },
+      "advisory": {
+        "provider": "offline-feed",
+        "product_ids": [
+          "asa"
+        ]
+      },
+      "hardening": {
+        "binding": "cisco-iosxe",
+        "display": "Cisco IOS-XE"
+      },
+      "threat": {
+        "log_rule_ids": [
+          "log-logging-disabled",
+          "log-buffer-cleared",
+          "log-offhours-config-change",
+          "log-new-local-user",
+          "log-privilege-escalation",
+          "log-gre-tunnel",
+          "log-aaa-tampering",
+          "log-boot-image-change"
+        ],
+        "mnemonic_prefixes": [
+          "SYS",
+          "SEC",
+          "SEC_LOGIN",
+          "LINK",
+          "LINEPROTO",
+          "PARSER",
+          "AAA"
+        ]
+      }
+    },
+    {
+      "platform": "ios",
+      "display_name": "Cisco IOS",
+      "device_class": [
+        "router",
+        "switch"
+      ],
+      "fidelity": "doc_claimed",
+      "detection": {
+        "os_parse": {
+          "product": "ios",
+          "rank": 50,
+          "sysdescr_contains_any": [
+            "ios"
+          ]
+        },
+        "platform_contains": [
+          "cisco"
+        ],
+        "platform_rank": 13,
+        "syslog_facilities": [
+          "SYS",
+          "SEC",
+          "SEC_LOGIN",
+          "LINK",
+          "LINEPROTO",
+          "PARSER",
+          "AAA",
+          "BGP",
+          "OSPF"
+        ]
+      },
+      "capture": {
+        "running_config_cmd": "show running-config",
+        "show_version_cmd": "show version",
+        "pager_off_cmds": [
+          "terminal length 0"
+        ],
+        "prompt_regex": "(?m)^[A-Za-z0-9._-]+[>#]\\s*$"
+      },
+      "advisory": {
+        "provider": "offline-feed",
+        "product_ids": [
+          "ios"
+        ]
+      },
+      "hardening": {
+        "binding": "cisco-iosxe",
+        "display": "Cisco IOS-XE"
+      },
+      "threat": {
+        "log_rule_ids": [
+          "log-logging-disabled",
+          "log-buffer-cleared",
+          "log-offhours-config-change",
+          "log-new-local-user",
+          "log-privilege-escalation",
+          "log-gre-tunnel",
+          "log-aaa-tampering",
+          "log-boot-image-change"
+        ],
+        "mnemonic_prefixes": [
+          "SYS",
+          "SEC",
+          "SEC_LOGIN",
+          "LINK",
+          "LINEPROTO",
+          "PARSER",
+          "AAA"
+        ]
+      }
+    }
+  ]
+}

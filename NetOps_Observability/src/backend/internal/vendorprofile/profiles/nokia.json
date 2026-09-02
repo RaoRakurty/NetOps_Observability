@@ -1,0 +1,105 @@
+{
+  "schema_version": 1,
+  "vendor": "nokia",
+  "display_name": "Nokia",
+  "notes": "SR OS is identified from the TiMOS sysDescr; SR Linux is a gNMI-native platform whose identity does not come from sysDescr, so it declares NO os_parse (an unconditional default would mislabel every SR OS box as SR Linux). SR Linux pager-off and prompt are left empty: not established, so capture reports unassessed rather than issuing a guessed command.",
+  "detection": {
+    "sysobjectid_prefixes": [
+      "1.3.6.1.4.1.6527"
+    ],
+    "sysdescr_contains": [
+      "nokia",
+      "timos",
+      "sr os"
+    ],
+    "sysdescr_rank": 60,
+    "os_version_pattern": "(?i)\\bTiMOS-[A-Z]+-([0-9][0-9A-Za-z.]*)"
+  },
+  "dialect": {
+    "vrf_term": "VPRN",
+    "vrf_term_keys": [
+      "nokia",
+      "sros",
+      "alcatel",
+      "alcatel-lucent",
+      "srlinux"
+    ],
+    "vrf_synonyms": [
+      "vprn"
+    ]
+  },
+  "profiles": [
+    {
+      "platform": "sros",
+      "display_name": "Nokia SR OS",
+      "device_class": [
+        "router"
+      ],
+      "fidelity": "doc_claimed",
+      "detection": {
+        "os_parse": {
+          "product": "sros",
+          "rank": 10,
+          "sysdescr_contains_any": []
+        },
+        "platform_contains": [
+          "nokia",
+          "sr os",
+          "sros",
+          "timos"
+        ],
+        "platform_rank": 30
+      },
+      "capture": {
+        "running_config_cmd": "admin display-config",
+        "show_version_cmd": "show version",
+        "pager_off_cmds": [
+          "environment no more"
+        ],
+        "prompt_regex": "(?m)^[A-Za-z0-9._-]+#\\s*$"
+      },
+      "advisory": {
+        "provider": "offline-feed",
+        "product_ids": [
+          "sros"
+        ]
+      },
+      "hardening": {
+        "binding": "nokia",
+        "display": "Nokia SR OS"
+      },
+      "threat": {}
+    },
+    {
+      "platform": "srlinux",
+      "display_name": "Nokia SR Linux",
+      "device_class": [
+        "switch",
+        "router"
+      ],
+      "fidelity": "live_validated",
+      "detection": {
+        "platform_contains": [
+          "sr linux",
+          "srlinux"
+        ],
+        "platform_rank": 31
+      },
+      "capture": {
+        "running_config_cmd": "info from running",
+        "show_version_cmd": "show version"
+      },
+      "advisory": {
+        "provider": "offline-feed",
+        "product_ids": [
+          "srlinux"
+        ]
+      },
+      "hardening": {
+        "binding": "nokia",
+        "display": "Nokia SR OS"
+      },
+      "threat": {}
+    }
+  ]
+}

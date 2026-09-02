@@ -343,7 +343,7 @@ func vendorLabel(enterprise int, ok bool) string {
 	if !ok {
 		return "generic"
 	}
-	if v := enterpriseVendor[enterprise]; v != "" {
+	if v := vendorForEnterprise(enterprise); v != "" {
 		return v
 	}
 	return "unknown"

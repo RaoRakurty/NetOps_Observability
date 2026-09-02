@@ -109,7 +109,7 @@ func vendorFromOID(oid string) string {
 	if err != nil {
 		return ""
 	}
-	return enterpriseVendor[n]
+	return vendorForEnterprise(n)
 }
 
 // camelToSnake normalizes a MIB object name to a stable lower_snake event token

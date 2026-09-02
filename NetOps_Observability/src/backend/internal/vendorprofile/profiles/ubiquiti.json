@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "vendor": "ubiquiti",
+  "display_name": "Ubiquiti",
+  "detection": {
+    "sysobjectid_prefixes": [
+      "1.3.6.1.4.1.41112"
+    ],
+    "sysdescr_contains": [
+      "ubiquiti",
+      "edgeos",
+      "edgerouter",
+      "unifi"
+    ],
+    "sysdescr_rank": 100
+  },
+  "dialect": {},
+  "profiles": []
+}

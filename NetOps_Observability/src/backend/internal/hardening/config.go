@@ -33,6 +33,8 @@ package hardening
 import (
 	"regexp"
 	"strings"
+
+	"netops/backend/internal/vendorprofile"
 )
 
 // Vendor is the canonical device-family id the per-vendor detection bindings key
@@ -58,40 +60,31 @@ const (
 // Vendor. It is deliberately conservative: an unrecognized platform maps to
 // VendorUnknown so its rules are reported NotApplicable rather than misdetected
 // against the wrong dialect.
+//
+// T9 (Vendor Profile registry): the substring table it used to hold as a switch
+// is now DECLARATIVE DATA — the `detection.platform_contains` /
+// `detection.platform_rank` and `hardening.binding` fields of the vendor
+// profiles in internal/vendorprofile. The rank is carried in the data because
+// first-match-wins order is load-bearing. Outputs are byte-identical
+// (internal/hardening/testdata/vendorprofile_parity.json). Adding a dialect is
+// "author one profile + add the bindings", not "edit this switch".
 func VendorFromPlatform(platform string) Vendor {
-	p := strings.ToLower(strings.TrimSpace(platform))
-	switch {
-	case p == "":
-		return VendorUnknown
-	case strings.Contains(p, "ios-xe"), strings.Contains(p, "iosxe"),
-		strings.Contains(p, "ios xe"), strings.Contains(p, "cisco"),
-		strings.Contains(p, "ios-xr"), strings.Contains(p, "nx-os"),
-		strings.Contains(p, "nxos"):
-		return VendorCiscoIOSXE
-	case strings.Contains(p, "junos"), strings.Contains(p, "juniper"):
-		return VendorJuniper
-	case strings.Contains(p, "nokia"), strings.Contains(p, "sr os"),
-		strings.Contains(p, "sros"), strings.Contains(p, "sr linux"),
-		strings.Contains(p, "srlinux"), strings.Contains(p, "timos"):
-		return VendorNokia
-	default:
+	binding, ok := vendorprofile.Default().HardeningBindingForPlatform(platform)
+	if !ok {
 		return VendorUnknown
 	}
+	return Vendor(binding)
 }
 
 // DisplayVendor renders a Vendor as an operator-facing label (dialect-aware, in
-// the spirit of netconcepts.VRFDisplayTerm).
+// the spirit of netconcepts.VRFDisplayTerm). A binding no profile declares —
+// including VendorUnknown — renders as "unknown vendor", never as some other
+// vendor's name.
 func DisplayVendor(v Vendor) string {
-	switch v {
-	case VendorCiscoIOSXE:
-		return "Cisco IOS-XE"
-	case VendorJuniper:
-		return "Juniper Junos"
-	case VendorNokia:
-		return "Nokia SR OS"
-	default:
-		return "unknown vendor"
+	if label, ok := vendorprofile.Default().HardeningDisplay(string(v)); ok {
+		return label
 	}
+	return "unknown vendor"
 }
 
 // Config is a parsed device running-configuration. It is vendor-neutral at the

@@ -1,0 +1,20 @@
+{
+  "schema_version": 1,
+  "vendor": "sophos",
+  "display_name": "Sophos",
+  "detection": {
+    "sysobjectid_prefixes": [
+      "1.3.6.1.4.1.21067",
+      "1.3.6.1.4.1.9789"
+    ],
+    "sysdescr_contains": [
+      "sophos",
+      "sfos",
+      "astaro"
+    ],
+    "sysdescr_rank": 90
+  },
+  "dialect": {},
+  "profiles": [],
+  "notes": "Two enterprise numbers: Sophos Ltd (SFOS/XG) and the legacy Astaro GmbH (Sophos UTM) — one vendor label."
+}

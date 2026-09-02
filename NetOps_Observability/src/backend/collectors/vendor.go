@@ -5,7 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"net"
-	"strings"
+
+	"netops/backend/internal/vendorprofile"
 )
 
 // vendor.go — authoritative vendor identification via SNMP, the way modern NMS
@@ -36,29 +37,16 @@ func ProbeIdentity(ctx context.Context, addr, community string) (sysName, vendor
 	return sysName, vendor, sysDescr, true
 }
 
-// enterpriseVendor maps IANA Private Enterprise Numbers (the 7th arc of a
-// sysObjectID under 1.3.6.1.4.1.<ENT>) to a normalized vendor name. Extend as
-// new vendors are onboarded.
-var enterpriseVendor = map[int]string{
-	9:     "cisco",
-	2636:  "juniper",
-	30065: "arista",
-	12356: "fortinet",
-	25461: "paloalto",
-	6527:  "nokia",
-	2011:  "huawei",
-	14988: "mikrotik",
-	1916:  "extreme",
-	3375:  "f5",
-	674:   "dell",
-	11:    "hp",
-	2620:  "checkpoint",
-	21067: "sophos", // Sophos Ltd (SFOS / XG firewall)
-	9789:  "sophos", // Astaro GmbH (legacy Sophos UTM) — same vendor label
-	41112: "ubiquiti",
-	14823: "aruba",  // Aruba Networks (wireless: IAP/campus APs, mobility controllers)
-	25053: "ruckus", // Ruckus Wireless (APs, ZoneDirector/SmartZone)
-	8072:  "net-snmp",
+// vendorForEnterprise maps an IANA Private Enterprise Number (the 7th arc of a
+// sysObjectID under 1.3.6.1.4.1.<ENT>) to a normalized vendor name. T9: the
+// table it used to hold inline is now DECLARATIVE DATA — the
+// `sysobjectid_prefixes` field of the vendor profiles in
+// internal/vendorprofile. Onboarding a vendor's detection is "author one
+// profile", not "edit this map". "" means the enterprise is not claimed by any
+// profile (an honest unknown, never a guess).
+func vendorForEnterprise(ent int) string {
+	v, _ := vendorprofile.Default().VendorForEnterprise(ent)
+	return v
 }
 
 // DetectVendor SNMP-GETs sysObjectID (authoritative) then sysDescr (fallback)
@@ -69,7 +57,7 @@ func DetectVendor(ctx context.Context, addr, community string) (vendor, sysDescr
 	addr = withPort(addr, 161)
 	if v, err := snmpGet(ctx, addr, v2c(community), sysObjectIDOID); err == nil && v.tag == 0x06 {
 		if ent, ok := enterpriseOf(decodeOID(v.raw)); ok {
-			vendor = enterpriseVendor[ent] // "" if enterprise not in the table
+			vendor = vendorForEnterprise(ent) // "" if no profile claims the enterprise
 		}
 	}
 	if d, err := snmpGet(ctx, addr, v2c(community), sysDescrOID); err == nil {
@@ -97,44 +85,14 @@ func enterpriseOf(arcs []int) (int, bool) {
 }
 
 // vendorFromDescr is the sysDescr text backstop when the enterprise number is
-// unknown — sysDescr usually names the vendor/OS in plain text.
+// unknown — sysDescr usually names the vendor/OS in plain text. T9: the ordered
+// substring table it used to hold as a switch is now the `sysdescr_contains` +
+// `sysdescr_rank` fields of the vendor profiles. The RANK is load-bearing and
+// is carried in the data: a BIG-IP sysDescr embeds "Linux 3.10…", so f5 ranks
+// above the generic linux backstop.
 func vendorFromDescr(d string) string {
-	s := strings.ToLower(d)
-	switch {
-	case strings.Contains(s, "cisco"):
-		return "cisco"
-	case strings.Contains(s, "junos"), strings.Contains(s, "juniper"):
-		return "juniper"
-	case strings.Contains(s, "arista"):
-		return "arista"
-	case strings.Contains(s, "fortinet"), strings.Contains(s, "fortigate"):
-		return "fortinet"
-	case strings.Contains(s, "palo alto"), strings.Contains(s, "pan-os"):
-		return "paloalto"
-	case strings.Contains(s, "nokia"), strings.Contains(s, "timos"), strings.Contains(s, "sr os"):
-		return "nokia"
-	case strings.Contains(s, "huawei"), strings.Contains(s, "vrp"):
-		return "huawei"
-	case strings.Contains(s, "mikrotik"), strings.Contains(s, "routeros"):
-		return "mikrotik"
-	case strings.Contains(s, "sophos"), strings.Contains(s, "sfos"), strings.Contains(s, "astaro"):
-		return "sophos"
-	case strings.Contains(s, "ubiquiti"), strings.Contains(s, "edgeos"), strings.Contains(s, "edgerouter"), strings.Contains(s, "unifi"):
-		return "ubiquiti"
-	case strings.Contains(s, "check point"), strings.Contains(s, "gaia"), strings.Contains(s, "checkpoint"):
-		return "checkpoint"
-	// BIG-IP sysDescr embeds "Linux" ("BIG-IP … : Linux 3.10…"), so this case
-	// must stay ABOVE the generic linux backstop.
-	case strings.Contains(s, "big-ip"), strings.Contains(s, "bigip"), strings.Contains(s, "f5 networks"):
-		return "f5"
-	case strings.Contains(s, "arubaos"), strings.Contains(s, "aruba"):
-		return "aruba"
-	case strings.Contains(s, "ruckus"):
-		return "ruckus"
-	case strings.Contains(s, "linux"):
-		return "linux"
-	}
-	return ""
+	v, _ := vendorprofile.Default().VendorForSysDescr(d)
+	return v
 }
 
 // snmpGet issues a single SNMP GET (v2c or v3 per creds) and returns the first

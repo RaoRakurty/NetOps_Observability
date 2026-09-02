@@ -1,0 +1,77 @@
+{
+  "schema_version": 1,
+  "vendor": "juniper",
+  "display_name": "Juniper Networks",
+  "notes": "Junos device logs use RFC5424 APP-NAME (process) rather than a Cisco-style mnemonic, so the threat lane's device-log rules are UNASSESSED here (empty threat binding) rather than claimed.",
+  "detection": {
+    "sysobjectid_prefixes": [
+      "1.3.6.1.4.1.2636"
+    ],
+    "sysdescr_contains": [
+      "junos",
+      "juniper"
+    ],
+    "sysdescr_rank": 20,
+    "os_version_pattern": "(?i)\\bJUNOS[ :]+([0-9][0-9A-Za-z.-]*)"
+  },
+  "dialect": {
+    "vrf_term": "routing-instance",
+    "vrf_term_keys": [
+      "juniper",
+      "junos",
+      "jnpr"
+    ],
+    "vrf_synonyms": [
+      "routing-instance"
+    ]
+  },
+  "profiles": [
+    {
+      "platform": "junos",
+      "display_name": "Juniper Junos",
+      "device_class": [
+        "router",
+        "switch"
+      ],
+      "fidelity": "doc_claimed",
+      "detection": {
+        "os_parse": {
+          "product": "junos",
+          "rank": 10,
+          "sysdescr_contains_any": []
+        },
+        "platform_contains": [
+          "junos",
+          "juniper"
+        ],
+        "platform_rank": 20,
+        "syslog_appnames": [
+          "mgd",
+          "rpd",
+          "sshd",
+          "kernel",
+          "chassisd"
+        ]
+      },
+      "capture": {
+        "running_config_cmd": "show configuration | display set",
+        "show_version_cmd": "show version",
+        "pager_off_cmds": [
+          "set cli screen-length 0"
+        ],
+        "prompt_regex": "(?m)^[A-Za-z0-9._-]+@[A-Za-z0-9._-]+[>#]\\s*$"
+      },
+      "advisory": {
+        "provider": "offline-feed",
+        "product_ids": [
+          "junos"
+        ]
+      },
+      "hardening": {
+        "binding": "juniper",
+        "display": "Juniper Junos"
+      },
+      "threat": {}
+    }
+  ]
+}

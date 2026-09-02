@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "vendor": "dell",
+  "display_name": "Dell",
+  "detection": {
+    "sysobjectid_prefixes": [
+      "1.3.6.1.4.1.674"
+    ]
+  },
+  "dialect": {},
+  "profiles": []
+}

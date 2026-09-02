@@ -1,0 +1,4447 @@
+{
+  "enterprise_vendor": {
+    "11": "hp",
+    "12356": "fortinet",
+    "14823": "aruba",
+    "14988": "mikrotik",
+    "1916": "extreme",
+    "2011": "huawei",
+    "21067": "sophos",
+    "25053": "ruckus",
+    "25461": "paloalto",
+    "2620": "checkpoint",
+    "2636": "juniper",
+    "30065": "arista",
+    "3375": "f5",
+    "41112": "ubiquiti",
+    "6527": "nokia",
+    "674": "dell",
+    "8072": "net-snmp",
+    "9": "cisco",
+    "9789": "sophos"
+  },
+  "parse_os": [
+    {
+      "Vendor": "cisco",
+      "SysDescr": "",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "cisco",
+      "SysDescr": "Cisco IOS Software, C2960 Software (C2960-LANBASEK9-M), Version 15.2(4)E10, RELEASE SOFTWARE (fc4)",
+      "Product": "ios",
+      "Version": "15.2(4)E10"
+    },
+    {
+      "Vendor": "cisco",
+      "SysDescr": "Cisco IOS Software [Cupertino], Catalyst L3 Switch Software (CAT9K_IOSXE), Version 17.9.4a, RELEASE SOFTWARE — Cisco IOS-XE Software",
+      "Product": "ios_xe",
+      "Version": "17.9.4a"
+    },
+    {
+      "Vendor": "cisco",
+      "SysDescr": "Cisco IOS XE Software, Version 16.12.05",
+      "Product": "ios_xe",
+      "Version": "16.12.05"
+    },
+    {
+      "Vendor": "cisco",
+      "SysDescr": "Cisco NX-OS(tm) n9000, Software (n9000-dk9), Version 9.3(10), RELEASE SOFTWARE",
+      "Product": "nx-os",
+      "Version": "9.3(10)"
+    },
+    {
+      "Vendor": "cisco",
+      "SysDescr": "Cisco IOS XR Software (NCS-5500), Version 7.5.2 Copyright (c) 2013-2022 by Cisco Systems, Inc.",
+      "Product": "ios_xr",
+      "Version": "7.5.2"
+    },
+    {
+      "Vendor": "cisco",
+      "SysDescr": "Cisco Adaptive Security Appliance Version 9.16(4)",
+      "Product": "asa",
+      "Version": "9.16(4)"
+    },
+    {
+      "Vendor": "cisco",
+      "SysDescr": "Cisco Systems something with no version marker",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "cisco",
+      "SysDescr": "Juniper Networks, Inc. mx240 internet router, kernel JUNOS 21.4R3-S4.9, Build date: 2023-06-15",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "cisco",
+      "SysDescr": "Juniper Networks, Inc. ex4300 Ethernet Switch, kernel JUNOS 12.3R11.2",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "cisco",
+      "SysDescr": "Juniper without a version",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "cisco",
+      "SysDescr": "Arista Networks EOS version 4.33.1F running on an Arista cEOSLab",
+      "Product": "",
+      "Version": "4.33.1F"
+    },
+    {
+      "Vendor": "cisco",
+      "SysDescr": "Arista Networks cEOSLab",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "cisco",
+      "SysDescr": "FortiGate-60F v7.2.8,build1639,240228 (GA.M)",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "cisco",
+      "SysDescr": "Fortinet FortiGate no version",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "cisco",
+      "SysDescr": "Palo Alto Networks PA-3220 series firewall, PAN-OS 10.2.4-h2",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "cisco",
+      "SysDescr": "Palo Alto Networks PA-220 series firewall",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "cisco",
+      "SysDescr": "TiMOS-B-21.10.R6 both/x86_64 Nokia 7750 SR Copyright (c) 2000-2021 Nokia.",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "cisco",
+      "SysDescr": "Nokia SR Linux srlinux 24.10.1",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "cisco",
+      "SysDescr": "Huawei Versatile Routing Platform Software VRP (R) software, Version 8.180 (CE12800 V200R005C10SPC800)",
+      "Product": "",
+      "Version": "8.180"
+    },
+    {
+      "Vendor": "cisco",
+      "SysDescr": "RouterOS 7.14.2 (stable) on RB4011iGS+",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "cisco",
+      "SysDescr": "RouterOS v6.49",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "cisco",
+      "SysDescr": "Linux leaf1 5.15.0-179-generic #199-Ubuntu SMP x86_64",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "cisco",
+      "SysDescr": "BIG-IP 15.1.10 : Linux 3.10.0-862.14.4.el7.ve.x86_64",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "cisco",
+      "SysDescr": "ArubaOS (MODEL: 7010), Version 8.6.0.0",
+      "Product": "",
+      "Version": "8.6.0.0"
+    },
+    {
+      "Vendor": "cisco",
+      "SysDescr": "Ruckus ZoneDirector 1200",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "cisco",
+      "SysDescr": "Sophos SFOS 19.5.3",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "cisco",
+      "SysDescr": "Astaro Security Gateway",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "cisco",
+      "SysDescr": "Ubiquiti EdgeRouter 4 EdgeOS v2.0.9",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "cisco",
+      "SysDescr": "UniFi Switch 24 PoE",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "cisco",
+      "SysDescr": "Check Point Gaia R81.20",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "cisco",
+      "SysDescr": "Extreme Networks EXOS version 31.7",
+      "Product": "",
+      "Version": "31.7"
+    },
+    {
+      "Vendor": "cisco",
+      "SysDescr": "AcmeOS 1.2.3",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "cisco",
+      "SysDescr": "Some Linux box with big-ip absent",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "juniper",
+      "SysDescr": "",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "juniper",
+      "SysDescr": "Cisco IOS Software, C2960 Software (C2960-LANBASEK9-M), Version 15.2(4)E10, RELEASE SOFTWARE (fc4)",
+      "Product": "junos",
+      "Version": ""
+    },
+    {
+      "Vendor": "juniper",
+      "SysDescr": "Cisco IOS Software [Cupertino], Catalyst L3 Switch Software (CAT9K_IOSXE), Version 17.9.4a, RELEASE SOFTWARE — Cisco IOS-XE Software",
+      "Product": "junos",
+      "Version": ""
+    },
+    {
+      "Vendor": "juniper",
+      "SysDescr": "Cisco IOS XE Software, Version 16.12.05",
+      "Product": "junos",
+      "Version": ""
+    },
+    {
+      "Vendor": "juniper",
+      "SysDescr": "Cisco NX-OS(tm) n9000, Software (n9000-dk9), Version 9.3(10), RELEASE SOFTWARE",
+      "Product": "junos",
+      "Version": ""
+    },
+    {
+      "Vendor": "juniper",
+      "SysDescr": "Cisco IOS XR Software (NCS-5500), Version 7.5.2 Copyright (c) 2013-2022 by Cisco Systems, Inc.",
+      "Product": "junos",
+      "Version": ""
+    },
+    {
+      "Vendor": "juniper",
+      "SysDescr": "Cisco Adaptive Security Appliance Version 9.16(4)",
+      "Product": "junos",
+      "Version": ""
+    },
+    {
+      "Vendor": "juniper",
+      "SysDescr": "Cisco Systems something with no version marker",
+      "Product": "junos",
+      "Version": ""
+    },
+    {
+      "Vendor": "juniper",
+      "SysDescr": "Juniper Networks, Inc. mx240 internet router, kernel JUNOS 21.4R3-S4.9, Build date: 2023-06-15",
+      "Product": "junos",
+      "Version": "21.4R3-S4.9"
+    },
+    {
+      "Vendor": "juniper",
+      "SysDescr": "Juniper Networks, Inc. ex4300 Ethernet Switch, kernel JUNOS 12.3R11.2",
+      "Product": "junos",
+      "Version": "12.3R11.2"
+    },
+    {
+      "Vendor": "juniper",
+      "SysDescr": "Juniper without a version",
+      "Product": "junos",
+      "Version": ""
+    },
+    {
+      "Vendor": "juniper",
+      "SysDescr": "Arista Networks EOS version 4.33.1F running on an Arista cEOSLab",
+      "Product": "junos",
+      "Version": ""
+    },
+    {
+      "Vendor": "juniper",
+      "SysDescr": "Arista Networks cEOSLab",
+      "Product": "junos",
+      "Version": ""
+    },
+    {
+      "Vendor": "juniper",
+      "SysDescr": "FortiGate-60F v7.2.8,build1639,240228 (GA.M)",
+      "Product": "junos",
+      "Version": ""
+    },
+    {
+      "Vendor": "juniper",
+      "SysDescr": "Fortinet FortiGate no version",
+      "Product": "junos",
+      "Version": ""
+    },
+    {
+      "Vendor": "juniper",
+      "SysDescr": "Palo Alto Networks PA-3220 series firewall, PAN-OS 10.2.4-h2",
+      "Product": "junos",
+      "Version": ""
+    },
+    {
+      "Vendor": "juniper",
+      "SysDescr": "Palo Alto Networks PA-220 series firewall",
+      "Product": "junos",
+      "Version": ""
+    },
+    {
+      "Vendor": "juniper",
+      "SysDescr": "TiMOS-B-21.10.R6 both/x86_64 Nokia 7750 SR Copyright (c) 2000-2021 Nokia.",
+      "Product": "junos",
+      "Version": ""
+    },
+    {
+      "Vendor": "juniper",
+      "SysDescr": "Nokia SR Linux srlinux 24.10.1",
+      "Product": "junos",
+      "Version": ""
+    },
+    {
+      "Vendor": "juniper",
+      "SysDescr": "Huawei Versatile Routing Platform Software VRP (R) software, Version 8.180 (CE12800 V200R005C10SPC800)",
+      "Product": "junos",
+      "Version": ""
+    },
+    {
+      "Vendor": "juniper",
+      "SysDescr": "RouterOS 7.14.2 (stable) on RB4011iGS+",
+      "Product": "junos",
+      "Version": ""
+    },
+    {
+      "Vendor": "juniper",
+      "SysDescr": "RouterOS v6.49",
+      "Product": "junos",
+      "Version": ""
+    },
+    {
+      "Vendor": "juniper",
+      "SysDescr": "Linux leaf1 5.15.0-179-generic #199-Ubuntu SMP x86_64",
+      "Product": "junos",
+      "Version": ""
+    },
+    {
+      "Vendor": "juniper",
+      "SysDescr": "BIG-IP 15.1.10 : Linux 3.10.0-862.14.4.el7.ve.x86_64",
+      "Product": "junos",
+      "Version": ""
+    },
+    {
+      "Vendor": "juniper",
+      "SysDescr": "ArubaOS (MODEL: 7010), Version 8.6.0.0",
+      "Product": "junos",
+      "Version": ""
+    },
+    {
+      "Vendor": "juniper",
+      "SysDescr": "Ruckus ZoneDirector 1200",
+      "Product": "junos",
+      "Version": ""
+    },
+    {
+      "Vendor": "juniper",
+      "SysDescr": "Sophos SFOS 19.5.3",
+      "Product": "junos",
+      "Version": ""
+    },
+    {
+      "Vendor": "juniper",
+      "SysDescr": "Astaro Security Gateway",
+      "Product": "junos",
+      "Version": ""
+    },
+    {
+      "Vendor": "juniper",
+      "SysDescr": "Ubiquiti EdgeRouter 4 EdgeOS v2.0.9",
+      "Product": "junos",
+      "Version": ""
+    },
+    {
+      "Vendor": "juniper",
+      "SysDescr": "UniFi Switch 24 PoE",
+      "Product": "junos",
+      "Version": ""
+    },
+    {
+      "Vendor": "juniper",
+      "SysDescr": "Check Point Gaia R81.20",
+      "Product": "junos",
+      "Version": ""
+    },
+    {
+      "Vendor": "juniper",
+      "SysDescr": "Extreme Networks EXOS version 31.7",
+      "Product": "junos",
+      "Version": ""
+    },
+    {
+      "Vendor": "juniper",
+      "SysDescr": "AcmeOS 1.2.3",
+      "Product": "junos",
+      "Version": ""
+    },
+    {
+      "Vendor": "juniper",
+      "SysDescr": "Some Linux box with big-ip absent",
+      "Product": "junos",
+      "Version": ""
+    },
+    {
+      "Vendor": "arista",
+      "SysDescr": "",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "arista",
+      "SysDescr": "Cisco IOS Software, C2960 Software (C2960-LANBASEK9-M), Version 15.2(4)E10, RELEASE SOFTWARE (fc4)",
+      "Product": "eos",
+      "Version": "15.2"
+    },
+    {
+      "Vendor": "arista",
+      "SysDescr": "Cisco IOS Software [Cupertino], Catalyst L3 Switch Software (CAT9K_IOSXE), Version 17.9.4a, RELEASE SOFTWARE — Cisco IOS-XE Software",
+      "Product": "eos",
+      "Version": "17.9.4a"
+    },
+    {
+      "Vendor": "arista",
+      "SysDescr": "Cisco IOS XE Software, Version 16.12.05",
+      "Product": "eos",
+      "Version": "16.12.05"
+    },
+    {
+      "Vendor": "arista",
+      "SysDescr": "Cisco NX-OS(tm) n9000, Software (n9000-dk9), Version 9.3(10), RELEASE SOFTWARE",
+      "Product": "eos",
+      "Version": "9.3"
+    },
+    {
+      "Vendor": "arista",
+      "SysDescr": "Cisco IOS XR Software (NCS-5500), Version 7.5.2 Copyright (c) 2013-2022 by Cisco Systems, Inc.",
+      "Product": "eos",
+      "Version": "7.5.2"
+    },
+    {
+      "Vendor": "arista",
+      "SysDescr": "Cisco Adaptive Security Appliance Version 9.16(4)",
+      "Product": "eos",
+      "Version": "9.16"
+    },
+    {
+      "Vendor": "arista",
+      "SysDescr": "Cisco Systems something with no version marker",
+      "Product": "eos",
+      "Version": ""
+    },
+    {
+      "Vendor": "arista",
+      "SysDescr": "Juniper Networks, Inc. mx240 internet router, kernel JUNOS 21.4R3-S4.9, Build date: 2023-06-15",
+      "Product": "eos",
+      "Version": ""
+    },
+    {
+      "Vendor": "arista",
+      "SysDescr": "Juniper Networks, Inc. ex4300 Ethernet Switch, kernel JUNOS 12.3R11.2",
+      "Product": "eos",
+      "Version": ""
+    },
+    {
+      "Vendor": "arista",
+      "SysDescr": "Juniper without a version",
+      "Product": "eos",
+      "Version": ""
+    },
+    {
+      "Vendor": "arista",
+      "SysDescr": "Arista Networks EOS version 4.33.1F running on an Arista cEOSLab",
+      "Product": "eos",
+      "Version": "4.33.1F"
+    },
+    {
+      "Vendor": "arista",
+      "SysDescr": "Arista Networks cEOSLab",
+      "Product": "eos",
+      "Version": ""
+    },
+    {
+      "Vendor": "arista",
+      "SysDescr": "FortiGate-60F v7.2.8,build1639,240228 (GA.M)",
+      "Product": "eos",
+      "Version": ""
+    },
+    {
+      "Vendor": "arista",
+      "SysDescr": "Fortinet FortiGate no version",
+      "Product": "eos",
+      "Version": ""
+    },
+    {
+      "Vendor": "arista",
+      "SysDescr": "Palo Alto Networks PA-3220 series firewall, PAN-OS 10.2.4-h2",
+      "Product": "eos",
+      "Version": ""
+    },
+    {
+      "Vendor": "arista",
+      "SysDescr": "Palo Alto Networks PA-220 series firewall",
+      "Product": "eos",
+      "Version": ""
+    },
+    {
+      "Vendor": "arista",
+      "SysDescr": "TiMOS-B-21.10.R6 both/x86_64 Nokia 7750 SR Copyright (c) 2000-2021 Nokia.",
+      "Product": "eos",
+      "Version": ""
+    },
+    {
+      "Vendor": "arista",
+      "SysDescr": "Nokia SR Linux srlinux 24.10.1",
+      "Product": "eos",
+      "Version": ""
+    },
+    {
+      "Vendor": "arista",
+      "SysDescr": "Huawei Versatile Routing Platform Software VRP (R) software, Version 8.180 (CE12800 V200R005C10SPC800)",
+      "Product": "eos",
+      "Version": "8.180"
+    },
+    {
+      "Vendor": "arista",
+      "SysDescr": "RouterOS 7.14.2 (stable) on RB4011iGS+",
+      "Product": "eos",
+      "Version": ""
+    },
+    {
+      "Vendor": "arista",
+      "SysDescr": "RouterOS v6.49",
+      "Product": "eos",
+      "Version": ""
+    },
+    {
+      "Vendor": "arista",
+      "SysDescr": "Linux leaf1 5.15.0-179-generic #199-Ubuntu SMP x86_64",
+      "Product": "eos",
+      "Version": ""
+    },
+    {
+      "Vendor": "arista",
+      "SysDescr": "BIG-IP 15.1.10 : Linux 3.10.0-862.14.4.el7.ve.x86_64",
+      "Product": "eos",
+      "Version": ""
+    },
+    {
+      "Vendor": "arista",
+      "SysDescr": "ArubaOS (MODEL: 7010), Version 8.6.0.0",
+      "Product": "eos",
+      "Version": "8.6.0.0"
+    },
+    {
+      "Vendor": "arista",
+      "SysDescr": "Ruckus ZoneDirector 1200",
+      "Product": "eos",
+      "Version": ""
+    },
+    {
+      "Vendor": "arista",
+      "SysDescr": "Sophos SFOS 19.5.3",
+      "Product": "eos",
+      "Version": ""
+    },
+    {
+      "Vendor": "arista",
+      "SysDescr": "Astaro Security Gateway",
+      "Product": "eos",
+      "Version": ""
+    },
+    {
+      "Vendor": "arista",
+      "SysDescr": "Ubiquiti EdgeRouter 4 EdgeOS v2.0.9",
+      "Product": "eos",
+      "Version": ""
+    },
+    {
+      "Vendor": "arista",
+      "SysDescr": "UniFi Switch 24 PoE",
+      "Product": "eos",
+      "Version": ""
+    },
+    {
+      "Vendor": "arista",
+      "SysDescr": "Check Point Gaia R81.20",
+      "Product": "eos",
+      "Version": ""
+    },
+    {
+      "Vendor": "arista",
+      "SysDescr": "Extreme Networks EXOS version 31.7",
+      "Product": "eos",
+      "Version": "31.7"
+    },
+    {
+      "Vendor": "arista",
+      "SysDescr": "AcmeOS 1.2.3",
+      "Product": "eos",
+      "Version": ""
+    },
+    {
+      "Vendor": "arista",
+      "SysDescr": "Some Linux box with big-ip absent",
+      "Product": "eos",
+      "Version": ""
+    },
+    {
+      "Vendor": "fortinet",
+      "SysDescr": "",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "fortinet",
+      "SysDescr": "Cisco IOS Software, C2960 Software (C2960-LANBASEK9-M), Version 15.2(4)E10, RELEASE SOFTWARE (fc4)",
+      "Product": "fortios",
+      "Version": ""
+    },
+    {
+      "Vendor": "fortinet",
+      "SysDescr": "Cisco IOS Software [Cupertino], Catalyst L3 Switch Software (CAT9K_IOSXE), Version 17.9.4a, RELEASE SOFTWARE — Cisco IOS-XE Software",
+      "Product": "fortios",
+      "Version": ""
+    },
+    {
+      "Vendor": "fortinet",
+      "SysDescr": "Cisco IOS XE Software, Version 16.12.05",
+      "Product": "fortios",
+      "Version": ""
+    },
+    {
+      "Vendor": "fortinet",
+      "SysDescr": "Cisco NX-OS(tm) n9000, Software (n9000-dk9), Version 9.3(10), RELEASE SOFTWARE",
+      "Product": "fortios",
+      "Version": ""
+    },
+    {
+      "Vendor": "fortinet",
+      "SysDescr": "Cisco IOS XR Software (NCS-5500), Version 7.5.2 Copyright (c) 2013-2022 by Cisco Systems, Inc.",
+      "Product": "fortios",
+      "Version": ""
+    },
+    {
+      "Vendor": "fortinet",
+      "SysDescr": "Cisco Adaptive Security Appliance Version 9.16(4)",
+      "Product": "fortios",
+      "Version": ""
+    },
+    {
+      "Vendor": "fortinet",
+      "SysDescr": "Cisco Systems something with no version marker",
+      "Product": "fortios",
+      "Version": ""
+    },
+    {
+      "Vendor": "fortinet",
+      "SysDescr": "Juniper Networks, Inc. mx240 internet router, kernel JUNOS 21.4R3-S4.9, Build date: 2023-06-15",
+      "Product": "fortios",
+      "Version": ""
+    },
+    {
+      "Vendor": "fortinet",
+      "SysDescr": "Juniper Networks, Inc. ex4300 Ethernet Switch, kernel JUNOS 12.3R11.2",
+      "Product": "fortios",
+      "Version": ""
+    },
+    {
+      "Vendor": "fortinet",
+      "SysDescr": "Juniper without a version",
+      "Product": "fortios",
+      "Version": ""
+    },
+    {
+      "Vendor": "fortinet",
+      "SysDescr": "Arista Networks EOS version 4.33.1F running on an Arista cEOSLab",
+      "Product": "fortios",
+      "Version": ""
+    },
+    {
+      "Vendor": "fortinet",
+      "SysDescr": "Arista Networks cEOSLab",
+      "Product": "fortios",
+      "Version": ""
+    },
+    {
+      "Vendor": "fortinet",
+      "SysDescr": "FortiGate-60F v7.2.8,build1639,240228 (GA.M)",
+      "Product": "fortios",
+      "Version": "7.2.8"
+    },
+    {
+      "Vendor": "fortinet",
+      "SysDescr": "Fortinet FortiGate no version",
+      "Product": "fortios",
+      "Version": ""
+    },
+    {
+      "Vendor": "fortinet",
+      "SysDescr": "Palo Alto Networks PA-3220 series firewall, PAN-OS 10.2.4-h2",
+      "Product": "fortios",
+      "Version": ""
+    },
+    {
+      "Vendor": "fortinet",
+      "SysDescr": "Palo Alto Networks PA-220 series firewall",
+      "Product": "fortios",
+      "Version": ""
+    },
+    {
+      "Vendor": "fortinet",
+      "SysDescr": "TiMOS-B-21.10.R6 both/x86_64 Nokia 7750 SR Copyright (c) 2000-2021 Nokia.",
+      "Product": "fortios",
+      "Version": ""
+    },
+    {
+      "Vendor": "fortinet",
+      "SysDescr": "Nokia SR Linux srlinux 24.10.1",
+      "Product": "fortios",
+      "Version": ""
+    },
+    {
+      "Vendor": "fortinet",
+      "SysDescr": "Huawei Versatile Routing Platform Software VRP (R) software, Version 8.180 (CE12800 V200R005C10SPC800)",
+      "Product": "fortios",
+      "Version": ""
+    },
+    {
+      "Vendor": "fortinet",
+      "SysDescr": "RouterOS 7.14.2 (stable) on RB4011iGS+",
+      "Product": "fortios",
+      "Version": ""
+    },
+    {
+      "Vendor": "fortinet",
+      "SysDescr": "RouterOS v6.49",
+      "Product": "fortios",
+      "Version": ""
+    },
+    {
+      "Vendor": "fortinet",
+      "SysDescr": "Linux leaf1 5.15.0-179-generic #199-Ubuntu SMP x86_64",
+      "Product": "fortios",
+      "Version": ""
+    },
+    {
+      "Vendor": "fortinet",
+      "SysDescr": "BIG-IP 15.1.10 : Linux 3.10.0-862.14.4.el7.ve.x86_64",
+      "Product": "fortios",
+      "Version": ""
+    },
+    {
+      "Vendor": "fortinet",
+      "SysDescr": "ArubaOS (MODEL: 7010), Version 8.6.0.0",
+      "Product": "fortios",
+      "Version": ""
+    },
+    {
+      "Vendor": "fortinet",
+      "SysDescr": "Ruckus ZoneDirector 1200",
+      "Product": "fortios",
+      "Version": ""
+    },
+    {
+      "Vendor": "fortinet",
+      "SysDescr": "Sophos SFOS 19.5.3",
+      "Product": "fortios",
+      "Version": ""
+    },
+    {
+      "Vendor": "fortinet",
+      "SysDescr": "Astaro Security Gateway",
+      "Product": "fortios",
+      "Version": ""
+    },
+    {
+      "Vendor": "fortinet",
+      "SysDescr": "Ubiquiti EdgeRouter 4 EdgeOS v2.0.9",
+      "Product": "fortios",
+      "Version": "2.0.9"
+    },
+    {
+      "Vendor": "fortinet",
+      "SysDescr": "UniFi Switch 24 PoE",
+      "Product": "fortios",
+      "Version": ""
+    },
+    {
+      "Vendor": "fortinet",
+      "SysDescr": "Check Point Gaia R81.20",
+      "Product": "fortios",
+      "Version": ""
+    },
+    {
+      "Vendor": "fortinet",
+      "SysDescr": "Extreme Networks EXOS version 31.7",
+      "Product": "fortios",
+      "Version": ""
+    },
+    {
+      "Vendor": "fortinet",
+      "SysDescr": "AcmeOS 1.2.3",
+      "Product": "fortios",
+      "Version": ""
+    },
+    {
+      "Vendor": "fortinet",
+      "SysDescr": "Some Linux box with big-ip absent",
+      "Product": "fortios",
+      "Version": ""
+    },
+    {
+      "Vendor": "paloalto",
+      "SysDescr": "",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "paloalto",
+      "SysDescr": "Cisco IOS Software, C2960 Software (C2960-LANBASEK9-M), Version 15.2(4)E10, RELEASE SOFTWARE (fc4)",
+      "Product": "pan-os",
+      "Version": ""
+    },
+    {
+      "Vendor": "paloalto",
+      "SysDescr": "Cisco IOS Software [Cupertino], Catalyst L3 Switch Software (CAT9K_IOSXE), Version 17.9.4a, RELEASE SOFTWARE — Cisco IOS-XE Software",
+      "Product": "pan-os",
+      "Version": ""
+    },
+    {
+      "Vendor": "paloalto",
+      "SysDescr": "Cisco IOS XE Software, Version 16.12.05",
+      "Product": "pan-os",
+      "Version": ""
+    },
+    {
+      "Vendor": "paloalto",
+      "SysDescr": "Cisco NX-OS(tm) n9000, Software (n9000-dk9), Version 9.3(10), RELEASE SOFTWARE",
+      "Product": "pan-os",
+      "Version": ""
+    },
+    {
+      "Vendor": "paloalto",
+      "SysDescr": "Cisco IOS XR Software (NCS-5500), Version 7.5.2 Copyright (c) 2013-2022 by Cisco Systems, Inc.",
+      "Product": "pan-os",
+      "Version": ""
+    },
+    {
+      "Vendor": "paloalto",
+      "SysDescr": "Cisco Adaptive Security Appliance Version 9.16(4)",
+      "Product": "pan-os",
+      "Version": ""
+    },
+    {
+      "Vendor": "paloalto",
+      "SysDescr": "Cisco Systems something with no version marker",
+      "Product": "pan-os",
+      "Version": ""
+    },
+    {
+      "Vendor": "paloalto",
+      "SysDescr": "Juniper Networks, Inc. mx240 internet router, kernel JUNOS 21.4R3-S4.9, Build date: 2023-06-15",
+      "Product": "pan-os",
+      "Version": ""
+    },
+    {
+      "Vendor": "paloalto",
+      "SysDescr": "Juniper Networks, Inc. ex4300 Ethernet Switch, kernel JUNOS 12.3R11.2",
+      "Product": "pan-os",
+      "Version": ""
+    },
+    {
+      "Vendor": "paloalto",
+      "SysDescr": "Juniper without a version",
+      "Product": "pan-os",
+      "Version": ""
+    },
+    {
+      "Vendor": "paloalto",
+      "SysDescr": "Arista Networks EOS version 4.33.1F running on an Arista cEOSLab",
+      "Product": "pan-os",
+      "Version": ""
+    },
+    {
+      "Vendor": "paloalto",
+      "SysDescr": "Arista Networks cEOSLab",
+      "Product": "pan-os",
+      "Version": ""
+    },
+    {
+      "Vendor": "paloalto",
+      "SysDescr": "FortiGate-60F v7.2.8,build1639,240228 (GA.M)",
+      "Product": "pan-os",
+      "Version": ""
+    },
+    {
+      "Vendor": "paloalto",
+      "SysDescr": "Fortinet FortiGate no version",
+      "Product": "pan-os",
+      "Version": ""
+    },
+    {
+      "Vendor": "paloalto",
+      "SysDescr": "Palo Alto Networks PA-3220 series firewall, PAN-OS 10.2.4-h2",
+      "Product": "pan-os",
+      "Version": "10.2.4-h2"
+    },
+    {
+      "Vendor": "paloalto",
+      "SysDescr": "Palo Alto Networks PA-220 series firewall",
+      "Product": "pan-os",
+      "Version": ""
+    },
+    {
+      "Vendor": "paloalto",
+      "SysDescr": "TiMOS-B-21.10.R6 both/x86_64 Nokia 7750 SR Copyright (c) 2000-2021 Nokia.",
+      "Product": "pan-os",
+      "Version": ""
+    },
+    {
+      "Vendor": "paloalto",
+      "SysDescr": "Nokia SR Linux srlinux 24.10.1",
+      "Product": "pan-os",
+      "Version": ""
+    },
+    {
+      "Vendor": "paloalto",
+      "SysDescr": "Huawei Versatile Routing Platform Software VRP (R) software, Version 8.180 (CE12800 V200R005C10SPC800)",
+      "Product": "pan-os",
+      "Version": ""
+    },
+    {
+      "Vendor": "paloalto",
+      "SysDescr": "RouterOS 7.14.2 (stable) on RB4011iGS+",
+      "Product": "pan-os",
+      "Version": ""
+    },
+    {
+      "Vendor": "paloalto",
+      "SysDescr": "RouterOS v6.49",
+      "Product": "pan-os",
+      "Version": ""
+    },
+    {
+      "Vendor": "paloalto",
+      "SysDescr": "Linux leaf1 5.15.0-179-generic #199-Ubuntu SMP x86_64",
+      "Product": "pan-os",
+      "Version": ""
+    },
+    {
+      "Vendor": "paloalto",
+      "SysDescr": "BIG-IP 15.1.10 : Linux 3.10.0-862.14.4.el7.ve.x86_64",
+      "Product": "pan-os",
+      "Version": ""
+    },
+    {
+      "Vendor": "paloalto",
+      "SysDescr": "ArubaOS (MODEL: 7010), Version 8.6.0.0",
+      "Product": "pan-os",
+      "Version": ""
+    },
+    {
+      "Vendor": "paloalto",
+      "SysDescr": "Ruckus ZoneDirector 1200",
+      "Product": "pan-os",
+      "Version": ""
+    },
+    {
+      "Vendor": "paloalto",
+      "SysDescr": "Sophos SFOS 19.5.3",
+      "Product": "pan-os",
+      "Version": ""
+    },
+    {
+      "Vendor": "paloalto",
+      "SysDescr": "Astaro Security Gateway",
+      "Product": "pan-os",
+      "Version": ""
+    },
+    {
+      "Vendor": "paloalto",
+      "SysDescr": "Ubiquiti EdgeRouter 4 EdgeOS v2.0.9",
+      "Product": "pan-os",
+      "Version": ""
+    },
+    {
+      "Vendor": "paloalto",
+      "SysDescr": "UniFi Switch 24 PoE",
+      "Product": "pan-os",
+      "Version": ""
+    },
+    {
+      "Vendor": "paloalto",
+      "SysDescr": "Check Point Gaia R81.20",
+      "Product": "pan-os",
+      "Version": ""
+    },
+    {
+      "Vendor": "paloalto",
+      "SysDescr": "Extreme Networks EXOS version 31.7",
+      "Product": "pan-os",
+      "Version": ""
+    },
+    {
+      "Vendor": "paloalto",
+      "SysDescr": "AcmeOS 1.2.3",
+      "Product": "pan-os",
+      "Version": ""
+    },
+    {
+      "Vendor": "paloalto",
+      "SysDescr": "Some Linux box with big-ip absent",
+      "Product": "pan-os",
+      "Version": ""
+    },
+    {
+      "Vendor": "nokia",
+      "SysDescr": "",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "nokia",
+      "SysDescr": "Cisco IOS Software, C2960 Software (C2960-LANBASEK9-M), Version 15.2(4)E10, RELEASE SOFTWARE (fc4)",
+      "Product": "sros",
+      "Version": ""
+    },
+    {
+      "Vendor": "nokia",
+      "SysDescr": "Cisco IOS Software [Cupertino], Catalyst L3 Switch Software (CAT9K_IOSXE), Version 17.9.4a, RELEASE SOFTWARE — Cisco IOS-XE Software",
+      "Product": "sros",
+      "Version": ""
+    },
+    {
+      "Vendor": "nokia",
+      "SysDescr": "Cisco IOS XE Software, Version 16.12.05",
+      "Product": "sros",
+      "Version": ""
+    },
+    {
+      "Vendor": "nokia",
+      "SysDescr": "Cisco NX-OS(tm) n9000, Software (n9000-dk9), Version 9.3(10), RELEASE SOFTWARE",
+      "Product": "sros",
+      "Version": ""
+    },
+    {
+      "Vendor": "nokia",
+      "SysDescr": "Cisco IOS XR Software (NCS-5500), Version 7.5.2 Copyright (c) 2013-2022 by Cisco Systems, Inc.",
+      "Product": "sros",
+      "Version": ""
+    },
+    {
+      "Vendor": "nokia",
+      "SysDescr": "Cisco Adaptive Security Appliance Version 9.16(4)",
+      "Product": "sros",
+      "Version": ""
+    },
+    {
+      "Vendor": "nokia",
+      "SysDescr": "Cisco Systems something with no version marker",
+      "Product": "sros",
+      "Version": ""
+    },
+    {
+      "Vendor": "nokia",
+      "SysDescr": "Juniper Networks, Inc. mx240 internet router, kernel JUNOS 21.4R3-S4.9, Build date: 2023-06-15",
+      "Product": "sros",
+      "Version": ""
+    },
+    {
+      "Vendor": "nokia",
+      "SysDescr": "Juniper Networks, Inc. ex4300 Ethernet Switch, kernel JUNOS 12.3R11.2",
+      "Product": "sros",
+      "Version": ""
+    },
+    {
+      "Vendor": "nokia",
+      "SysDescr": "Juniper without a version",
+      "Product": "sros",
+      "Version": ""
+    },
+    {
+      "Vendor": "nokia",
+      "SysDescr": "Arista Networks EOS version 4.33.1F running on an Arista cEOSLab",
+      "Product": "sros",
+      "Version": ""
+    },
+    {
+      "Vendor": "nokia",
+      "SysDescr": "Arista Networks cEOSLab",
+      "Product": "sros",
+      "Version": ""
+    },
+    {
+      "Vendor": "nokia",
+      "SysDescr": "FortiGate-60F v7.2.8,build1639,240228 (GA.M)",
+      "Product": "sros",
+      "Version": ""
+    },
+    {
+      "Vendor": "nokia",
+      "SysDescr": "Fortinet FortiGate no version",
+      "Product": "sros",
+      "Version": ""
+    },
+    {
+      "Vendor": "nokia",
+      "SysDescr": "Palo Alto Networks PA-3220 series firewall, PAN-OS 10.2.4-h2",
+      "Product": "sros",
+      "Version": ""
+    },
+    {
+      "Vendor": "nokia",
+      "SysDescr": "Palo Alto Networks PA-220 series firewall",
+      "Product": "sros",
+      "Version": ""
+    },
+    {
+      "Vendor": "nokia",
+      "SysDescr": "TiMOS-B-21.10.R6 both/x86_64 Nokia 7750 SR Copyright (c) 2000-2021 Nokia.",
+      "Product": "sros",
+      "Version": "21.10.R6"
+    },
+    {
+      "Vendor": "nokia",
+      "SysDescr": "Nokia SR Linux srlinux 24.10.1",
+      "Product": "sros",
+      "Version": ""
+    },
+    {
+      "Vendor": "nokia",
+      "SysDescr": "Huawei Versatile Routing Platform Software VRP (R) software, Version 8.180 (CE12800 V200R005C10SPC800)",
+      "Product": "sros",
+      "Version": ""
+    },
+    {
+      "Vendor": "nokia",
+      "SysDescr": "RouterOS 7.14.2 (stable) on RB4011iGS+",
+      "Product": "sros",
+      "Version": ""
+    },
+    {
+      "Vendor": "nokia",
+      "SysDescr": "RouterOS v6.49",
+      "Product": "sros",
+      "Version": ""
+    },
+    {
+      "Vendor": "nokia",
+      "SysDescr": "Linux leaf1 5.15.0-179-generic #199-Ubuntu SMP x86_64",
+      "Product": "sros",
+      "Version": ""
+    },
+    {
+      "Vendor": "nokia",
+      "SysDescr": "BIG-IP 15.1.10 : Linux 3.10.0-862.14.4.el7.ve.x86_64",
+      "Product": "sros",
+      "Version": ""
+    },
+    {
+      "Vendor": "nokia",
+      "SysDescr": "ArubaOS (MODEL: 7010), Version 8.6.0.0",
+      "Product": "sros",
+      "Version": ""
+    },
+    {
+      "Vendor": "nokia",
+      "SysDescr": "Ruckus ZoneDirector 1200",
+      "Product": "sros",
+      "Version": ""
+    },
+    {
+      "Vendor": "nokia",
+      "SysDescr": "Sophos SFOS 19.5.3",
+      "Product": "sros",
+      "Version": ""
+    },
+    {
+      "Vendor": "nokia",
+      "SysDescr": "Astaro Security Gateway",
+      "Product": "sros",
+      "Version": ""
+    },
+    {
+      "Vendor": "nokia",
+      "SysDescr": "Ubiquiti EdgeRouter 4 EdgeOS v2.0.9",
+      "Product": "sros",
+      "Version": ""
+    },
+    {
+      "Vendor": "nokia",
+      "SysDescr": "UniFi Switch 24 PoE",
+      "Product": "sros",
+      "Version": ""
+    },
+    {
+      "Vendor": "nokia",
+      "SysDescr": "Check Point Gaia R81.20",
+      "Product": "sros",
+      "Version": ""
+    },
+    {
+      "Vendor": "nokia",
+      "SysDescr": "Extreme Networks EXOS version 31.7",
+      "Product": "sros",
+      "Version": ""
+    },
+    {
+      "Vendor": "nokia",
+      "SysDescr": "AcmeOS 1.2.3",
+      "Product": "sros",
+      "Version": ""
+    },
+    {
+      "Vendor": "nokia",
+      "SysDescr": "Some Linux box with big-ip absent",
+      "Product": "sros",
+      "Version": ""
+    },
+    {
+      "Vendor": "huawei",
+      "SysDescr": "",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "huawei",
+      "SysDescr": "Cisco IOS Software, C2960 Software (C2960-LANBASEK9-M), Version 15.2(4)E10, RELEASE SOFTWARE (fc4)",
+      "Product": "vrp",
+      "Version": "15.2"
+    },
+    {
+      "Vendor": "huawei",
+      "SysDescr": "Cisco IOS Software [Cupertino], Catalyst L3 Switch Software (CAT9K_IOSXE), Version 17.9.4a, RELEASE SOFTWARE — Cisco IOS-XE Software",
+      "Product": "vrp",
+      "Version": "17.9.4a"
+    },
+    {
+      "Vendor": "huawei",
+      "SysDescr": "Cisco IOS XE Software, Version 16.12.05",
+      "Product": "vrp",
+      "Version": "16.12.05"
+    },
+    {
+      "Vendor": "huawei",
+      "SysDescr": "Cisco NX-OS(tm) n9000, Software (n9000-dk9), Version 9.3(10), RELEASE SOFTWARE",
+      "Product": "vrp",
+      "Version": "9.3"
+    },
+    {
+      "Vendor": "huawei",
+      "SysDescr": "Cisco IOS XR Software (NCS-5500), Version 7.5.2 Copyright (c) 2013-2022 by Cisco Systems, Inc.",
+      "Product": "vrp",
+      "Version": "7.5.2"
+    },
+    {
+      "Vendor": "huawei",
+      "SysDescr": "Cisco Adaptive Security Appliance Version 9.16(4)",
+      "Product": "vrp",
+      "Version": "9.16"
+    },
+    {
+      "Vendor": "huawei",
+      "SysDescr": "Cisco Systems something with no version marker",
+      "Product": "vrp",
+      "Version": ""
+    },
+    {
+      "Vendor": "huawei",
+      "SysDescr": "Juniper Networks, Inc. mx240 internet router, kernel JUNOS 21.4R3-S4.9, Build date: 2023-06-15",
+      "Product": "vrp",
+      "Version": ""
+    },
+    {
+      "Vendor": "huawei",
+      "SysDescr": "Juniper Networks, Inc. ex4300 Ethernet Switch, kernel JUNOS 12.3R11.2",
+      "Product": "vrp",
+      "Version": ""
+    },
+    {
+      "Vendor": "huawei",
+      "SysDescr": "Juniper without a version",
+      "Product": "vrp",
+      "Version": ""
+    },
+    {
+      "Vendor": "huawei",
+      "SysDescr": "Arista Networks EOS version 4.33.1F running on an Arista cEOSLab",
+      "Product": "vrp",
+      "Version": "4.33.1F"
+    },
+    {
+      "Vendor": "huawei",
+      "SysDescr": "Arista Networks cEOSLab",
+      "Product": "vrp",
+      "Version": ""
+    },
+    {
+      "Vendor": "huawei",
+      "SysDescr": "FortiGate-60F v7.2.8,build1639,240228 (GA.M)",
+      "Product": "vrp",
+      "Version": ""
+    },
+    {
+      "Vendor": "huawei",
+      "SysDescr": "Fortinet FortiGate no version",
+      "Product": "vrp",
+      "Version": ""
+    },
+    {
+      "Vendor": "huawei",
+      "SysDescr": "Palo Alto Networks PA-3220 series firewall, PAN-OS 10.2.4-h2",
+      "Product": "vrp",
+      "Version": ""
+    },
+    {
+      "Vendor": "huawei",
+      "SysDescr": "Palo Alto Networks PA-220 series firewall",
+      "Product": "vrp",
+      "Version": ""
+    },
+    {
+      "Vendor": "huawei",
+      "SysDescr": "TiMOS-B-21.10.R6 both/x86_64 Nokia 7750 SR Copyright (c) 2000-2021 Nokia.",
+      "Product": "vrp",
+      "Version": ""
+    },
+    {
+      "Vendor": "huawei",
+      "SysDescr": "Nokia SR Linux srlinux 24.10.1",
+      "Product": "vrp",
+      "Version": ""
+    },
+    {
+      "Vendor": "huawei",
+      "SysDescr": "Huawei Versatile Routing Platform Software VRP (R) software, Version 8.180 (CE12800 V200R005C10SPC800)",
+      "Product": "vrp",
+      "Version": "8.180"
+    },
+    {
+      "Vendor": "huawei",
+      "SysDescr": "RouterOS 7.14.2 (stable) on RB4011iGS+",
+      "Product": "vrp",
+      "Version": ""
+    },
+    {
+      "Vendor": "huawei",
+      "SysDescr": "RouterOS v6.49",
+      "Product": "vrp",
+      "Version": ""
+    },
+    {
+      "Vendor": "huawei",
+      "SysDescr": "Linux leaf1 5.15.0-179-generic #199-Ubuntu SMP x86_64",
+      "Product": "vrp",
+      "Version": ""
+    },
+    {
+      "Vendor": "huawei",
+      "SysDescr": "BIG-IP 15.1.10 : Linux 3.10.0-862.14.4.el7.ve.x86_64",
+      "Product": "vrp",
+      "Version": ""
+    },
+    {
+      "Vendor": "huawei",
+      "SysDescr": "ArubaOS (MODEL: 7010), Version 8.6.0.0",
+      "Product": "vrp",
+      "Version": "8.6.0.0"
+    },
+    {
+      "Vendor": "huawei",
+      "SysDescr": "Ruckus ZoneDirector 1200",
+      "Product": "vrp",
+      "Version": ""
+    },
+    {
+      "Vendor": "huawei",
+      "SysDescr": "Sophos SFOS 19.5.3",
+      "Product": "vrp",
+      "Version": ""
+    },
+    {
+      "Vendor": "huawei",
+      "SysDescr": "Astaro Security Gateway",
+      "Product": "vrp",
+      "Version": ""
+    },
+    {
+      "Vendor": "huawei",
+      "SysDescr": "Ubiquiti EdgeRouter 4 EdgeOS v2.0.9",
+      "Product": "vrp",
+      "Version": ""
+    },
+    {
+      "Vendor": "huawei",
+      "SysDescr": "UniFi Switch 24 PoE",
+      "Product": "vrp",
+      "Version": ""
+    },
+    {
+      "Vendor": "huawei",
+      "SysDescr": "Check Point Gaia R81.20",
+      "Product": "vrp",
+      "Version": ""
+    },
+    {
+      "Vendor": "huawei",
+      "SysDescr": "Extreme Networks EXOS version 31.7",
+      "Product": "vrp",
+      "Version": "31.7"
+    },
+    {
+      "Vendor": "huawei",
+      "SysDescr": "AcmeOS 1.2.3",
+      "Product": "vrp",
+      "Version": ""
+    },
+    {
+      "Vendor": "huawei",
+      "SysDescr": "Some Linux box with big-ip absent",
+      "Product": "vrp",
+      "Version": ""
+    },
+    {
+      "Vendor": "mikrotik",
+      "SysDescr": "",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "mikrotik",
+      "SysDescr": "Cisco IOS Software, C2960 Software (C2960-LANBASEK9-M), Version 15.2(4)E10, RELEASE SOFTWARE (fc4)",
+      "Product": "routeros",
+      "Version": ""
+    },
+    {
+      "Vendor": "mikrotik",
+      "SysDescr": "Cisco IOS Software [Cupertino], Catalyst L3 Switch Software (CAT9K_IOSXE), Version 17.9.4a, RELEASE SOFTWARE — Cisco IOS-XE Software",
+      "Product": "routeros",
+      "Version": ""
+    },
+    {
+      "Vendor": "mikrotik",
+      "SysDescr": "Cisco IOS XE Software, Version 16.12.05",
+      "Product": "routeros",
+      "Version": ""
+    },
+    {
+      "Vendor": "mikrotik",
+      "SysDescr": "Cisco NX-OS(tm) n9000, Software (n9000-dk9), Version 9.3(10), RELEASE SOFTWARE",
+      "Product": "routeros",
+      "Version": ""
+    },
+    {
+      "Vendor": "mikrotik",
+      "SysDescr": "Cisco IOS XR Software (NCS-5500), Version 7.5.2 Copyright (c) 2013-2022 by Cisco Systems, Inc.",
+      "Product": "routeros",
+      "Version": ""
+    },
+    {
+      "Vendor": "mikrotik",
+      "SysDescr": "Cisco Adaptive Security Appliance Version 9.16(4)",
+      "Product": "routeros",
+      "Version": ""
+    },
+    {
+      "Vendor": "mikrotik",
+      "SysDescr": "Cisco Systems something with no version marker",
+      "Product": "routeros",
+      "Version": ""
+    },
+    {
+      "Vendor": "mikrotik",
+      "SysDescr": "Juniper Networks, Inc. mx240 internet router, kernel JUNOS 21.4R3-S4.9, Build date: 2023-06-15",
+      "Product": "routeros",
+      "Version": ""
+    },
+    {
+      "Vendor": "mikrotik",
+      "SysDescr": "Juniper Networks, Inc. ex4300 Ethernet Switch, kernel JUNOS 12.3R11.2",
+      "Product": "routeros",
+      "Version": ""
+    },
+    {
+      "Vendor": "mikrotik",
+      "SysDescr": "Juniper without a version",
+      "Product": "routeros",
+      "Version": ""
+    },
+    {
+      "Vendor": "mikrotik",
+      "SysDescr": "Arista Networks EOS version 4.33.1F running on an Arista cEOSLab",
+      "Product": "routeros",
+      "Version": ""
+    },
+    {
+      "Vendor": "mikrotik",
+      "SysDescr": "Arista Networks cEOSLab",
+      "Product": "routeros",
+      "Version": ""
+    },
+    {
+      "Vendor": "mikrotik",
+      "SysDescr": "FortiGate-60F v7.2.8,build1639,240228 (GA.M)",
+      "Product": "routeros",
+      "Version": ""
+    },
+    {
+      "Vendor": "mikrotik",
+      "SysDescr": "Fortinet FortiGate no version",
+      "Product": "routeros",
+      "Version": ""
+    },
+    {
+      "Vendor": "mikrotik",
+      "SysDescr": "Palo Alto Networks PA-3220 series firewall, PAN-OS 10.2.4-h2",
+      "Product": "routeros",
+      "Version": ""
+    },
+    {
+      "Vendor": "mikrotik",
+      "SysDescr": "Palo Alto Networks PA-220 series firewall",
+      "Product": "routeros",
+      "Version": ""
+    },
+    {
+      "Vendor": "mikrotik",
+      "SysDescr": "TiMOS-B-21.10.R6 both/x86_64 Nokia 7750 SR Copyright (c) 2000-2021 Nokia.",
+      "Product": "routeros",
+      "Version": ""
+    },
+    {
+      "Vendor": "mikrotik",
+      "SysDescr": "Nokia SR Linux srlinux 24.10.1",
+      "Product": "routeros",
+      "Version": ""
+    },
+    {
+      "Vendor": "mikrotik",
+      "SysDescr": "Huawei Versatile Routing Platform Software VRP (R) software, Version 8.180 (CE12800 V200R005C10SPC800)",
+      "Product": "routeros",
+      "Version": ""
+    },
+    {
+      "Vendor": "mikrotik",
+      "SysDescr": "RouterOS 7.14.2 (stable) on RB4011iGS+",
+      "Product": "routeros",
+      "Version": "7.14.2"
+    },
+    {
+      "Vendor": "mikrotik",
+      "SysDescr": "RouterOS v6.49",
+      "Product": "routeros",
+      "Version": "6.49"
+    },
+    {
+      "Vendor": "mikrotik",
+      "SysDescr": "Linux leaf1 5.15.0-179-generic #199-Ubuntu SMP x86_64",
+      "Product": "routeros",
+      "Version": ""
+    },
+    {
+      "Vendor": "mikrotik",
+      "SysDescr": "BIG-IP 15.1.10 : Linux 3.10.0-862.14.4.el7.ve.x86_64",
+      "Product": "routeros",
+      "Version": ""
+    },
+    {
+      "Vendor": "mikrotik",
+      "SysDescr": "ArubaOS (MODEL: 7010), Version 8.6.0.0",
+      "Product": "routeros",
+      "Version": ""
+    },
+    {
+      "Vendor": "mikrotik",
+      "SysDescr": "Ruckus ZoneDirector 1200",
+      "Product": "routeros",
+      "Version": ""
+    },
+    {
+      "Vendor": "mikrotik",
+      "SysDescr": "Sophos SFOS 19.5.3",
+      "Product": "routeros",
+      "Version": ""
+    },
+    {
+      "Vendor": "mikrotik",
+      "SysDescr": "Astaro Security Gateway",
+      "Product": "routeros",
+      "Version": ""
+    },
+    {
+      "Vendor": "mikrotik",
+      "SysDescr": "Ubiquiti EdgeRouter 4 EdgeOS v2.0.9",
+      "Product": "routeros",
+      "Version": ""
+    },
+    {
+      "Vendor": "mikrotik",
+      "SysDescr": "UniFi Switch 24 PoE",
+      "Product": "routeros",
+      "Version": ""
+    },
+    {
+      "Vendor": "mikrotik",
+      "SysDescr": "Check Point Gaia R81.20",
+      "Product": "routeros",
+      "Version": ""
+    },
+    {
+      "Vendor": "mikrotik",
+      "SysDescr": "Extreme Networks EXOS version 31.7",
+      "Product": "routeros",
+      "Version": ""
+    },
+    {
+      "Vendor": "mikrotik",
+      "SysDescr": "AcmeOS 1.2.3",
+      "Product": "routeros",
+      "Version": ""
+    },
+    {
+      "Vendor": "mikrotik",
+      "SysDescr": "Some Linux box with big-ip absent",
+      "Product": "routeros",
+      "Version": ""
+    },
+    {
+      "Vendor": "linux",
+      "SysDescr": "",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "linux",
+      "SysDescr": "Cisco IOS Software, C2960 Software (C2960-LANBASEK9-M), Version 15.2(4)E10, RELEASE SOFTWARE (fc4)",
+      "Product": "linux_kernel",
+      "Version": ""
+    },
+    {
+      "Vendor": "linux",
+      "SysDescr": "Cisco IOS Software [Cupertino], Catalyst L3 Switch Software (CAT9K_IOSXE), Version 17.9.4a, RELEASE SOFTWARE — Cisco IOS-XE Software",
+      "Product": "linux_kernel",
+      "Version": ""
+    },
+    {
+      "Vendor": "linux",
+      "SysDescr": "Cisco IOS XE Software, Version 16.12.05",
+      "Product": "linux_kernel",
+      "Version": ""
+    },
+    {
+      "Vendor": "linux",
+      "SysDescr": "Cisco NX-OS(tm) n9000, Software (n9000-dk9), Version 9.3(10), RELEASE SOFTWARE",
+      "Product": "linux_kernel",
+      "Version": ""
+    },
+    {
+      "Vendor": "linux",
+      "SysDescr": "Cisco IOS XR Software (NCS-5500), Version 7.5.2 Copyright (c) 2013-2022 by Cisco Systems, Inc.",
+      "Product": "linux_kernel",
+      "Version": ""
+    },
+    {
+      "Vendor": "linux",
+      "SysDescr": "Cisco Adaptive Security Appliance Version 9.16(4)",
+      "Product": "linux_kernel",
+      "Version": ""
+    },
+    {
+      "Vendor": "linux",
+      "SysDescr": "Cisco Systems something with no version marker",
+      "Product": "linux_kernel",
+      "Version": ""
+    },
+    {
+      "Vendor": "linux",
+      "SysDescr": "Juniper Networks, Inc. mx240 internet router, kernel JUNOS 21.4R3-S4.9, Build date: 2023-06-15",
+      "Product": "linux_kernel",
+      "Version": ""
+    },
+    {
+      "Vendor": "linux",
+      "SysDescr": "Juniper Networks, Inc. ex4300 Ethernet Switch, kernel JUNOS 12.3R11.2",
+      "Product": "linux_kernel",
+      "Version": ""
+    },
+    {
+      "Vendor": "linux",
+      "SysDescr": "Juniper without a version",
+      "Product": "linux_kernel",
+      "Version": ""
+    },
+    {
+      "Vendor": "linux",
+      "SysDescr": "Arista Networks EOS version 4.33.1F running on an Arista cEOSLab",
+      "Product": "linux_kernel",
+      "Version": ""
+    },
+    {
+      "Vendor": "linux",
+      "SysDescr": "Arista Networks cEOSLab",
+      "Product": "linux_kernel",
+      "Version": ""
+    },
+    {
+      "Vendor": "linux",
+      "SysDescr": "FortiGate-60F v7.2.8,build1639,240228 (GA.M)",
+      "Product": "linux_kernel",
+      "Version": ""
+    },
+    {
+      "Vendor": "linux",
+      "SysDescr": "Fortinet FortiGate no version",
+      "Product": "linux_kernel",
+      "Version": ""
+    },
+    {
+      "Vendor": "linux",
+      "SysDescr": "Palo Alto Networks PA-3220 series firewall, PAN-OS 10.2.4-h2",
+      "Product": "linux_kernel",
+      "Version": ""
+    },
+    {
+      "Vendor": "linux",
+      "SysDescr": "Palo Alto Networks PA-220 series firewall",
+      "Product": "linux_kernel",
+      "Version": ""
+    },
+    {
+      "Vendor": "linux",
+      "SysDescr": "TiMOS-B-21.10.R6 both/x86_64 Nokia 7750 SR Copyright (c) 2000-2021 Nokia.",
+      "Product": "linux_kernel",
+      "Version": ""
+    },
+    {
+      "Vendor": "linux",
+      "SysDescr": "Nokia SR Linux srlinux 24.10.1",
+      "Product": "linux_kernel",
+      "Version": "24.10.1"
+    },
+    {
+      "Vendor": "linux",
+      "SysDescr": "Huawei Versatile Routing Platform Software VRP (R) software, Version 8.180 (CE12800 V200R005C10SPC800)",
+      "Product": "linux_kernel",
+      "Version": ""
+    },
+    {
+      "Vendor": "linux",
+      "SysDescr": "RouterOS 7.14.2 (stable) on RB4011iGS+",
+      "Product": "linux_kernel",
+      "Version": ""
+    },
+    {
+      "Vendor": "linux",
+      "SysDescr": "RouterOS v6.49",
+      "Product": "linux_kernel",
+      "Version": ""
+    },
+    {
+      "Vendor": "linux",
+      "SysDescr": "Linux leaf1 5.15.0-179-generic #199-Ubuntu SMP x86_64",
+      "Product": "linux_kernel",
+      "Version": "5.15.0-179-generic"
+    },
+    {
+      "Vendor": "linux",
+      "SysDescr": "BIG-IP 15.1.10 : Linux 3.10.0-862.14.4.el7.ve.x86_64",
+      "Product": "linux_kernel",
+      "Version": ""
+    },
+    {
+      "Vendor": "linux",
+      "SysDescr": "ArubaOS (MODEL: 7010), Version 8.6.0.0",
+      "Product": "linux_kernel",
+      "Version": ""
+    },
+    {
+      "Vendor": "linux",
+      "SysDescr": "Ruckus ZoneDirector 1200",
+      "Product": "linux_kernel",
+      "Version": ""
+    },
+    {
+      "Vendor": "linux",
+      "SysDescr": "Sophos SFOS 19.5.3",
+      "Product": "linux_kernel",
+      "Version": ""
+    },
+    {
+      "Vendor": "linux",
+      "SysDescr": "Astaro Security Gateway",
+      "Product": "linux_kernel",
+      "Version": ""
+    },
+    {
+      "Vendor": "linux",
+      "SysDescr": "Ubiquiti EdgeRouter 4 EdgeOS v2.0.9",
+      "Product": "linux_kernel",
+      "Version": ""
+    },
+    {
+      "Vendor": "linux",
+      "SysDescr": "UniFi Switch 24 PoE",
+      "Product": "linux_kernel",
+      "Version": ""
+    },
+    {
+      "Vendor": "linux",
+      "SysDescr": "Check Point Gaia R81.20",
+      "Product": "linux_kernel",
+      "Version": ""
+    },
+    {
+      "Vendor": "linux",
+      "SysDescr": "Extreme Networks EXOS version 31.7",
+      "Product": "linux_kernel",
+      "Version": ""
+    },
+    {
+      "Vendor": "linux",
+      "SysDescr": "AcmeOS 1.2.3",
+      "Product": "linux_kernel",
+      "Version": ""
+    },
+    {
+      "Vendor": "linux",
+      "SysDescr": "Some Linux box with big-ip absent",
+      "Product": "linux_kernel",
+      "Version": ""
+    },
+    {
+      "Vendor": "net-snmp",
+      "SysDescr": "",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "net-snmp",
+      "SysDescr": "Cisco IOS Software, C2960 Software (C2960-LANBASEK9-M), Version 15.2(4)E10, RELEASE SOFTWARE (fc4)",
+      "Product": "linux_kernel",
+      "Version": ""
+    },
+    {
+      "Vendor": "net-snmp",
+      "SysDescr": "Cisco IOS Software [Cupertino], Catalyst L3 Switch Software (CAT9K_IOSXE), Version 17.9.4a, RELEASE SOFTWARE — Cisco IOS-XE Software",
+      "Product": "linux_kernel",
+      "Version": ""
+    },
+    {
+      "Vendor": "net-snmp",
+      "SysDescr": "Cisco IOS XE Software, Version 16.12.05",
+      "Product": "linux_kernel",
+      "Version": ""
+    },
+    {
+      "Vendor": "net-snmp",
+      "SysDescr": "Cisco NX-OS(tm) n9000, Software (n9000-dk9), Version 9.3(10), RELEASE SOFTWARE",
+      "Product": "linux_kernel",
+      "Version": ""
+    },
+    {
+      "Vendor": "net-snmp",
+      "SysDescr": "Cisco IOS XR Software (NCS-5500), Version 7.5.2 Copyright (c) 2013-2022 by Cisco Systems, Inc.",
+      "Product": "linux_kernel",
+      "Version": ""
+    },
+    {
+      "Vendor": "net-snmp",
+      "SysDescr": "Cisco Adaptive Security Appliance Version 9.16(4)",
+      "Product": "linux_kernel",
+      "Version": ""
+    },
+    {
+      "Vendor": "net-snmp",
+      "SysDescr": "Cisco Systems something with no version marker",
+      "Product": "linux_kernel",
+      "Version": ""
+    },
+    {
+      "Vendor": "net-snmp",
+      "SysDescr": "Juniper Networks, Inc. mx240 internet router, kernel JUNOS 21.4R3-S4.9, Build date: 2023-06-15",
+      "Product": "linux_kernel",
+      "Version": ""
+    },
+    {
+      "Vendor": "net-snmp",
+      "SysDescr": "Juniper Networks, Inc. ex4300 Ethernet Switch, kernel JUNOS 12.3R11.2",
+      "Product": "linux_kernel",
+      "Version": ""
+    },
+    {
+      "Vendor": "net-snmp",
+      "SysDescr": "Juniper without a version",
+      "Product": "linux_kernel",
+      "Version": ""
+    },
+    {
+      "Vendor": "net-snmp",
+      "SysDescr": "Arista Networks EOS version 4.33.1F running on an Arista cEOSLab",
+      "Product": "linux_kernel",
+      "Version": ""
+    },
+    {
+      "Vendor": "net-snmp",
+      "SysDescr": "Arista Networks cEOSLab",
+      "Product": "linux_kernel",
+      "Version": ""
+    },
+    {
+      "Vendor": "net-snmp",
+      "SysDescr": "FortiGate-60F v7.2.8,build1639,240228 (GA.M)",
+      "Product": "linux_kernel",
+      "Version": ""
+    },
+    {
+      "Vendor": "net-snmp",
+      "SysDescr": "Fortinet FortiGate no version",
+      "Product": "linux_kernel",
+      "Version": ""
+    },
+    {
+      "Vendor": "net-snmp",
+      "SysDescr": "Palo Alto Networks PA-3220 series firewall, PAN-OS 10.2.4-h2",
+      "Product": "linux_kernel",
+      "Version": ""
+    },
+    {
+      "Vendor": "net-snmp",
+      "SysDescr": "Palo Alto Networks PA-220 series firewall",
+      "Product": "linux_kernel",
+      "Version": ""
+    },
+    {
+      "Vendor": "net-snmp",
+      "SysDescr": "TiMOS-B-21.10.R6 both/x86_64 Nokia 7750 SR Copyright (c) 2000-2021 Nokia.",
+      "Product": "linux_kernel",
+      "Version": ""
+    },
+    {
+      "Vendor": "net-snmp",
+      "SysDescr": "Nokia SR Linux srlinux 24.10.1",
+      "Product": "linux_kernel",
+      "Version": "24.10.1"
+    },
+    {
+      "Vendor": "net-snmp",
+      "SysDescr": "Huawei Versatile Routing Platform Software VRP (R) software, Version 8.180 (CE12800 V200R005C10SPC800)",
+      "Product": "linux_kernel",
+      "Version": ""
+    },
+    {
+      "Vendor": "net-snmp",
+      "SysDescr": "RouterOS 7.14.2 (stable) on RB4011iGS+",
+      "Product": "linux_kernel",
+      "Version": ""
+    },
+    {
+      "Vendor": "net-snmp",
+      "SysDescr": "RouterOS v6.49",
+      "Product": "linux_kernel",
+      "Version": ""
+    },
+    {
+      "Vendor": "net-snmp",
+      "SysDescr": "Linux leaf1 5.15.0-179-generic #199-Ubuntu SMP x86_64",
+      "Product": "linux_kernel",
+      "Version": "5.15.0-179-generic"
+    },
+    {
+      "Vendor": "net-snmp",
+      "SysDescr": "BIG-IP 15.1.10 : Linux 3.10.0-862.14.4.el7.ve.x86_64",
+      "Product": "linux_kernel",
+      "Version": ""
+    },
+    {
+      "Vendor": "net-snmp",
+      "SysDescr": "ArubaOS (MODEL: 7010), Version 8.6.0.0",
+      "Product": "linux_kernel",
+      "Version": ""
+    },
+    {
+      "Vendor": "net-snmp",
+      "SysDescr": "Ruckus ZoneDirector 1200",
+      "Product": "linux_kernel",
+      "Version": ""
+    },
+    {
+      "Vendor": "net-snmp",
+      "SysDescr": "Sophos SFOS 19.5.3",
+      "Product": "linux_kernel",
+      "Version": ""
+    },
+    {
+      "Vendor": "net-snmp",
+      "SysDescr": "Astaro Security Gateway",
+      "Product": "linux_kernel",
+      "Version": ""
+    },
+    {
+      "Vendor": "net-snmp",
+      "SysDescr": "Ubiquiti EdgeRouter 4 EdgeOS v2.0.9",
+      "Product": "linux_kernel",
+      "Version": ""
+    },
+    {
+      "Vendor": "net-snmp",
+      "SysDescr": "UniFi Switch 24 PoE",
+      "Product": "linux_kernel",
+      "Version": ""
+    },
+    {
+      "Vendor": "net-snmp",
+      "SysDescr": "Check Point Gaia R81.20",
+      "Product": "linux_kernel",
+      "Version": ""
+    },
+    {
+      "Vendor": "net-snmp",
+      "SysDescr": "Extreme Networks EXOS version 31.7",
+      "Product": "linux_kernel",
+      "Version": ""
+    },
+    {
+      "Vendor": "net-snmp",
+      "SysDescr": "AcmeOS 1.2.3",
+      "Product": "linux_kernel",
+      "Version": ""
+    },
+    {
+      "Vendor": "net-snmp",
+      "SysDescr": "Some Linux box with big-ip absent",
+      "Product": "linux_kernel",
+      "Version": ""
+    },
+    {
+      "Vendor": "acme",
+      "SysDescr": "",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "acme",
+      "SysDescr": "Cisco IOS Software, C2960 Software (C2960-LANBASEK9-M), Version 15.2(4)E10, RELEASE SOFTWARE (fc4)",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "acme",
+      "SysDescr": "Cisco IOS Software [Cupertino], Catalyst L3 Switch Software (CAT9K_IOSXE), Version 17.9.4a, RELEASE SOFTWARE — Cisco IOS-XE Software",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "acme",
+      "SysDescr": "Cisco IOS XE Software, Version 16.12.05",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "acme",
+      "SysDescr": "Cisco NX-OS(tm) n9000, Software (n9000-dk9), Version 9.3(10), RELEASE SOFTWARE",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "acme",
+      "SysDescr": "Cisco IOS XR Software (NCS-5500), Version 7.5.2 Copyright (c) 2013-2022 by Cisco Systems, Inc.",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "acme",
+      "SysDescr": "Cisco Adaptive Security Appliance Version 9.16(4)",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "acme",
+      "SysDescr": "Cisco Systems something with no version marker",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "acme",
+      "SysDescr": "Juniper Networks, Inc. mx240 internet router, kernel JUNOS 21.4R3-S4.9, Build date: 2023-06-15",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "acme",
+      "SysDescr": "Juniper Networks, Inc. ex4300 Ethernet Switch, kernel JUNOS 12.3R11.2",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "acme",
+      "SysDescr": "Juniper without a version",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "acme",
+      "SysDescr": "Arista Networks EOS version 4.33.1F running on an Arista cEOSLab",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "acme",
+      "SysDescr": "Arista Networks cEOSLab",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "acme",
+      "SysDescr": "FortiGate-60F v7.2.8,build1639,240228 (GA.M)",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "acme",
+      "SysDescr": "Fortinet FortiGate no version",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "acme",
+      "SysDescr": "Palo Alto Networks PA-3220 series firewall, PAN-OS 10.2.4-h2",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "acme",
+      "SysDescr": "Palo Alto Networks PA-220 series firewall",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "acme",
+      "SysDescr": "TiMOS-B-21.10.R6 both/x86_64 Nokia 7750 SR Copyright (c) 2000-2021 Nokia.",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "acme",
+      "SysDescr": "Nokia SR Linux srlinux 24.10.1",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "acme",
+      "SysDescr": "Huawei Versatile Routing Platform Software VRP (R) software, Version 8.180 (CE12800 V200R005C10SPC800)",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "acme",
+      "SysDescr": "RouterOS 7.14.2 (stable) on RB4011iGS+",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "acme",
+      "SysDescr": "RouterOS v6.49",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "acme",
+      "SysDescr": "Linux leaf1 5.15.0-179-generic #199-Ubuntu SMP x86_64",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "acme",
+      "SysDescr": "BIG-IP 15.1.10 : Linux 3.10.0-862.14.4.el7.ve.x86_64",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "acme",
+      "SysDescr": "ArubaOS (MODEL: 7010), Version 8.6.0.0",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "acme",
+      "SysDescr": "Ruckus ZoneDirector 1200",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "acme",
+      "SysDescr": "Sophos SFOS 19.5.3",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "acme",
+      "SysDescr": "Astaro Security Gateway",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "acme",
+      "SysDescr": "Ubiquiti EdgeRouter 4 EdgeOS v2.0.9",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "acme",
+      "SysDescr": "UniFi Switch 24 PoE",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "acme",
+      "SysDescr": "Check Point Gaia R81.20",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "acme",
+      "SysDescr": "Extreme Networks EXOS version 31.7",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "acme",
+      "SysDescr": "AcmeOS 1.2.3",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "acme",
+      "SysDescr": "Some Linux box with big-ip absent",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "",
+      "SysDescr": "",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "",
+      "SysDescr": "Cisco IOS Software, C2960 Software (C2960-LANBASEK9-M), Version 15.2(4)E10, RELEASE SOFTWARE (fc4)",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "",
+      "SysDescr": "Cisco IOS Software [Cupertino], Catalyst L3 Switch Software (CAT9K_IOSXE), Version 17.9.4a, RELEASE SOFTWARE — Cisco IOS-XE Software",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "",
+      "SysDescr": "Cisco IOS XE Software, Version 16.12.05",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "",
+      "SysDescr": "Cisco NX-OS(tm) n9000, Software (n9000-dk9), Version 9.3(10), RELEASE SOFTWARE",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "",
+      "SysDescr": "Cisco IOS XR Software (NCS-5500), Version 7.5.2 Copyright (c) 2013-2022 by Cisco Systems, Inc.",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "",
+      "SysDescr": "Cisco Adaptive Security Appliance Version 9.16(4)",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "",
+      "SysDescr": "Cisco Systems something with no version marker",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "",
+      "SysDescr": "Juniper Networks, Inc. mx240 internet router, kernel JUNOS 21.4R3-S4.9, Build date: 2023-06-15",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "",
+      "SysDescr": "Juniper Networks, Inc. ex4300 Ethernet Switch, kernel JUNOS 12.3R11.2",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "",
+      "SysDescr": "Juniper without a version",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "",
+      "SysDescr": "Arista Networks EOS version 4.33.1F running on an Arista cEOSLab",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "",
+      "SysDescr": "Arista Networks cEOSLab",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "",
+      "SysDescr": "FortiGate-60F v7.2.8,build1639,240228 (GA.M)",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "",
+      "SysDescr": "Fortinet FortiGate no version",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "",
+      "SysDescr": "Palo Alto Networks PA-3220 series firewall, PAN-OS 10.2.4-h2",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "",
+      "SysDescr": "Palo Alto Networks PA-220 series firewall",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "",
+      "SysDescr": "TiMOS-B-21.10.R6 both/x86_64 Nokia 7750 SR Copyright (c) 2000-2021 Nokia.",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "",
+      "SysDescr": "Nokia SR Linux srlinux 24.10.1",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "",
+      "SysDescr": "Huawei Versatile Routing Platform Software VRP (R) software, Version 8.180 (CE12800 V200R005C10SPC800)",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "",
+      "SysDescr": "RouterOS 7.14.2 (stable) on RB4011iGS+",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "",
+      "SysDescr": "RouterOS v6.49",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "",
+      "SysDescr": "Linux leaf1 5.15.0-179-generic #199-Ubuntu SMP x86_64",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "",
+      "SysDescr": "BIG-IP 15.1.10 : Linux 3.10.0-862.14.4.el7.ve.x86_64",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "",
+      "SysDescr": "ArubaOS (MODEL: 7010), Version 8.6.0.0",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "",
+      "SysDescr": "Ruckus ZoneDirector 1200",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "",
+      "SysDescr": "Sophos SFOS 19.5.3",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "",
+      "SysDescr": "Astaro Security Gateway",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "",
+      "SysDescr": "Ubiquiti EdgeRouter 4 EdgeOS v2.0.9",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "",
+      "SysDescr": "UniFi Switch 24 PoE",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "",
+      "SysDescr": "Check Point Gaia R81.20",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "",
+      "SysDescr": "Extreme Networks EXOS version 31.7",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "",
+      "SysDescr": "AcmeOS 1.2.3",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "",
+      "SysDescr": "Some Linux box with big-ip absent",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "extreme",
+      "SysDescr": "",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "extreme",
+      "SysDescr": "Cisco IOS Software, C2960 Software (C2960-LANBASEK9-M), Version 15.2(4)E10, RELEASE SOFTWARE (fc4)",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "extreme",
+      "SysDescr": "Cisco IOS Software [Cupertino], Catalyst L3 Switch Software (CAT9K_IOSXE), Version 17.9.4a, RELEASE SOFTWARE — Cisco IOS-XE Software",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "extreme",
+      "SysDescr": "Cisco IOS XE Software, Version 16.12.05",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "extreme",
+      "SysDescr": "Cisco NX-OS(tm) n9000, Software (n9000-dk9), Version 9.3(10), RELEASE SOFTWARE",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "extreme",
+      "SysDescr": "Cisco IOS XR Software (NCS-5500), Version 7.5.2 Copyright (c) 2013-2022 by Cisco Systems, Inc.",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "extreme",
+      "SysDescr": "Cisco Adaptive Security Appliance Version 9.16(4)",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "extreme",
+      "SysDescr": "Cisco Systems something with no version marker",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "extreme",
+      "SysDescr": "Juniper Networks, Inc. mx240 internet router, kernel JUNOS 21.4R3-S4.9, Build date: 2023-06-15",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "extreme",
+      "SysDescr": "Juniper Networks, Inc. ex4300 Ethernet Switch, kernel JUNOS 12.3R11.2",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "extreme",
+      "SysDescr": "Juniper without a version",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "extreme",
+      "SysDescr": "Arista Networks EOS version 4.33.1F running on an Arista cEOSLab",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "extreme",
+      "SysDescr": "Arista Networks cEOSLab",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "extreme",
+      "SysDescr": "FortiGate-60F v7.2.8,build1639,240228 (GA.M)",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "extreme",
+      "SysDescr": "Fortinet FortiGate no version",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "extreme",
+      "SysDescr": "Palo Alto Networks PA-3220 series firewall, PAN-OS 10.2.4-h2",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "extreme",
+      "SysDescr": "Palo Alto Networks PA-220 series firewall",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "extreme",
+      "SysDescr": "TiMOS-B-21.10.R6 both/x86_64 Nokia 7750 SR Copyright (c) 2000-2021 Nokia.",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "extreme",
+      "SysDescr": "Nokia SR Linux srlinux 24.10.1",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "extreme",
+      "SysDescr": "Huawei Versatile Routing Platform Software VRP (R) software, Version 8.180 (CE12800 V200R005C10SPC800)",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "extreme",
+      "SysDescr": "RouterOS 7.14.2 (stable) on RB4011iGS+",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "extreme",
+      "SysDescr": "RouterOS v6.49",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "extreme",
+      "SysDescr": "Linux leaf1 5.15.0-179-generic #199-Ubuntu SMP x86_64",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "extreme",
+      "SysDescr": "BIG-IP 15.1.10 : Linux 3.10.0-862.14.4.el7.ve.x86_64",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "extreme",
+      "SysDescr": "ArubaOS (MODEL: 7010), Version 8.6.0.0",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "extreme",
+      "SysDescr": "Ruckus ZoneDirector 1200",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "extreme",
+      "SysDescr": "Sophos SFOS 19.5.3",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "extreme",
+      "SysDescr": "Astaro Security Gateway",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "extreme",
+      "SysDescr": "Ubiquiti EdgeRouter 4 EdgeOS v2.0.9",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "extreme",
+      "SysDescr": "UniFi Switch 24 PoE",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "extreme",
+      "SysDescr": "Check Point Gaia R81.20",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "extreme",
+      "SysDescr": "Extreme Networks EXOS version 31.7",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "extreme",
+      "SysDescr": "AcmeOS 1.2.3",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "extreme",
+      "SysDescr": "Some Linux box with big-ip absent",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "f5",
+      "SysDescr": "",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "f5",
+      "SysDescr": "Cisco IOS Software, C2960 Software (C2960-LANBASEK9-M), Version 15.2(4)E10, RELEASE SOFTWARE (fc4)",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "f5",
+      "SysDescr": "Cisco IOS Software [Cupertino], Catalyst L3 Switch Software (CAT9K_IOSXE), Version 17.9.4a, RELEASE SOFTWARE — Cisco IOS-XE Software",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "f5",
+      "SysDescr": "Cisco IOS XE Software, Version 16.12.05",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "f5",
+      "SysDescr": "Cisco NX-OS(tm) n9000, Software (n9000-dk9), Version 9.3(10), RELEASE SOFTWARE",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "f5",
+      "SysDescr": "Cisco IOS XR Software (NCS-5500), Version 7.5.2 Copyright (c) 2013-2022 by Cisco Systems, Inc.",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "f5",
+      "SysDescr": "Cisco Adaptive Security Appliance Version 9.16(4)",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "f5",
+      "SysDescr": "Cisco Systems something with no version marker",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "f5",
+      "SysDescr": "Juniper Networks, Inc. mx240 internet router, kernel JUNOS 21.4R3-S4.9, Build date: 2023-06-15",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "f5",
+      "SysDescr": "Juniper Networks, Inc. ex4300 Ethernet Switch, kernel JUNOS 12.3R11.2",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "f5",
+      "SysDescr": "Juniper without a version",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "f5",
+      "SysDescr": "Arista Networks EOS version 4.33.1F running on an Arista cEOSLab",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "f5",
+      "SysDescr": "Arista Networks cEOSLab",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "f5",
+      "SysDescr": "FortiGate-60F v7.2.8,build1639,240228 (GA.M)",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "f5",
+      "SysDescr": "Fortinet FortiGate no version",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "f5",
+      "SysDescr": "Palo Alto Networks PA-3220 series firewall, PAN-OS 10.2.4-h2",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "f5",
+      "SysDescr": "Palo Alto Networks PA-220 series firewall",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "f5",
+      "SysDescr": "TiMOS-B-21.10.R6 both/x86_64 Nokia 7750 SR Copyright (c) 2000-2021 Nokia.",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "f5",
+      "SysDescr": "Nokia SR Linux srlinux 24.10.1",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "f5",
+      "SysDescr": "Huawei Versatile Routing Platform Software VRP (R) software, Version 8.180 (CE12800 V200R005C10SPC800)",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "f5",
+      "SysDescr": "RouterOS 7.14.2 (stable) on RB4011iGS+",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "f5",
+      "SysDescr": "RouterOS v6.49",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "f5",
+      "SysDescr": "Linux leaf1 5.15.0-179-generic #199-Ubuntu SMP x86_64",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "f5",
+      "SysDescr": "BIG-IP 15.1.10 : Linux 3.10.0-862.14.4.el7.ve.x86_64",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "f5",
+      "SysDescr": "ArubaOS (MODEL: 7010), Version 8.6.0.0",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "f5",
+      "SysDescr": "Ruckus ZoneDirector 1200",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "f5",
+      "SysDescr": "Sophos SFOS 19.5.3",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "f5",
+      "SysDescr": "Astaro Security Gateway",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "f5",
+      "SysDescr": "Ubiquiti EdgeRouter 4 EdgeOS v2.0.9",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "f5",
+      "SysDescr": "UniFi Switch 24 PoE",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "f5",
+      "SysDescr": "Check Point Gaia R81.20",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "f5",
+      "SysDescr": "Extreme Networks EXOS version 31.7",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "f5",
+      "SysDescr": "AcmeOS 1.2.3",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "f5",
+      "SysDescr": "Some Linux box with big-ip absent",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "aruba",
+      "SysDescr": "",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "aruba",
+      "SysDescr": "Cisco IOS Software, C2960 Software (C2960-LANBASEK9-M), Version 15.2(4)E10, RELEASE SOFTWARE (fc4)",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "aruba",
+      "SysDescr": "Cisco IOS Software [Cupertino], Catalyst L3 Switch Software (CAT9K_IOSXE), Version 17.9.4a, RELEASE SOFTWARE — Cisco IOS-XE Software",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "aruba",
+      "SysDescr": "Cisco IOS XE Software, Version 16.12.05",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "aruba",
+      "SysDescr": "Cisco NX-OS(tm) n9000, Software (n9000-dk9), Version 9.3(10), RELEASE SOFTWARE",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "aruba",
+      "SysDescr": "Cisco IOS XR Software (NCS-5500), Version 7.5.2 Copyright (c) 2013-2022 by Cisco Systems, Inc.",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "aruba",
+      "SysDescr": "Cisco Adaptive Security Appliance Version 9.16(4)",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "aruba",
+      "SysDescr": "Cisco Systems something with no version marker",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "aruba",
+      "SysDescr": "Juniper Networks, Inc. mx240 internet router, kernel JUNOS 21.4R3-S4.9, Build date: 2023-06-15",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "aruba",
+      "SysDescr": "Juniper Networks, Inc. ex4300 Ethernet Switch, kernel JUNOS 12.3R11.2",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "aruba",
+      "SysDescr": "Juniper without a version",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "aruba",
+      "SysDescr": "Arista Networks EOS version 4.33.1F running on an Arista cEOSLab",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "aruba",
+      "SysDescr": "Arista Networks cEOSLab",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "aruba",
+      "SysDescr": "FortiGate-60F v7.2.8,build1639,240228 (GA.M)",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "aruba",
+      "SysDescr": "Fortinet FortiGate no version",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "aruba",
+      "SysDescr": "Palo Alto Networks PA-3220 series firewall, PAN-OS 10.2.4-h2",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "aruba",
+      "SysDescr": "Palo Alto Networks PA-220 series firewall",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "aruba",
+      "SysDescr": "TiMOS-B-21.10.R6 both/x86_64 Nokia 7750 SR Copyright (c) 2000-2021 Nokia.",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "aruba",
+      "SysDescr": "Nokia SR Linux srlinux 24.10.1",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "aruba",
+      "SysDescr": "Huawei Versatile Routing Platform Software VRP (R) software, Version 8.180 (CE12800 V200R005C10SPC800)",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "aruba",
+      "SysDescr": "RouterOS 7.14.2 (stable) on RB4011iGS+",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "aruba",
+      "SysDescr": "RouterOS v6.49",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "aruba",
+      "SysDescr": "Linux leaf1 5.15.0-179-generic #199-Ubuntu SMP x86_64",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "aruba",
+      "SysDescr": "BIG-IP 15.1.10 : Linux 3.10.0-862.14.4.el7.ve.x86_64",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "aruba",
+      "SysDescr": "ArubaOS (MODEL: 7010), Version 8.6.0.0",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "aruba",
+      "SysDescr": "Ruckus ZoneDirector 1200",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "aruba",
+      "SysDescr": "Sophos SFOS 19.5.3",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "aruba",
+      "SysDescr": "Astaro Security Gateway",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "aruba",
+      "SysDescr": "Ubiquiti EdgeRouter 4 EdgeOS v2.0.9",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "aruba",
+      "SysDescr": "UniFi Switch 24 PoE",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "aruba",
+      "SysDescr": "Check Point Gaia R81.20",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "aruba",
+      "SysDescr": "Extreme Networks EXOS version 31.7",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "aruba",
+      "SysDescr": "AcmeOS 1.2.3",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "aruba",
+      "SysDescr": "Some Linux box with big-ip absent",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "ruckus",
+      "SysDescr": "",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "ruckus",
+      "SysDescr": "Cisco IOS Software, C2960 Software (C2960-LANBASEK9-M), Version 15.2(4)E10, RELEASE SOFTWARE (fc4)",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "ruckus",
+      "SysDescr": "Cisco IOS Software [Cupertino], Catalyst L3 Switch Software (CAT9K_IOSXE), Version 17.9.4a, RELEASE SOFTWARE — Cisco IOS-XE Software",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "ruckus",
+      "SysDescr": "Cisco IOS XE Software, Version 16.12.05",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "ruckus",
+      "SysDescr": "Cisco NX-OS(tm) n9000, Software (n9000-dk9), Version 9.3(10), RELEASE SOFTWARE",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "ruckus",
+      "SysDescr": "Cisco IOS XR Software (NCS-5500), Version 7.5.2 Copyright (c) 2013-2022 by Cisco Systems, Inc.",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "ruckus",
+      "SysDescr": "Cisco Adaptive Security Appliance Version 9.16(4)",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "ruckus",
+      "SysDescr": "Cisco Systems something with no version marker",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "ruckus",
+      "SysDescr": "Juniper Networks, Inc. mx240 internet router, kernel JUNOS 21.4R3-S4.9, Build date: 2023-06-15",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "ruckus",
+      "SysDescr": "Juniper Networks, Inc. ex4300 Ethernet Switch, kernel JUNOS 12.3R11.2",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "ruckus",
+      "SysDescr": "Juniper without a version",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "ruckus",
+      "SysDescr": "Arista Networks EOS version 4.33.1F running on an Arista cEOSLab",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "ruckus",
+      "SysDescr": "Arista Networks cEOSLab",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "ruckus",
+      "SysDescr": "FortiGate-60F v7.2.8,build1639,240228 (GA.M)",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "ruckus",
+      "SysDescr": "Fortinet FortiGate no version",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "ruckus",
+      "SysDescr": "Palo Alto Networks PA-3220 series firewall, PAN-OS 10.2.4-h2",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "ruckus",
+      "SysDescr": "Palo Alto Networks PA-220 series firewall",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "ruckus",
+      "SysDescr": "TiMOS-B-21.10.R6 both/x86_64 Nokia 7750 SR Copyright (c) 2000-2021 Nokia.",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "ruckus",
+      "SysDescr": "Nokia SR Linux srlinux 24.10.1",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "ruckus",
+      "SysDescr": "Huawei Versatile Routing Platform Software VRP (R) software, Version 8.180 (CE12800 V200R005C10SPC800)",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "ruckus",
+      "SysDescr": "RouterOS 7.14.2 (stable) on RB4011iGS+",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "ruckus",
+      "SysDescr": "RouterOS v6.49",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "ruckus",
+      "SysDescr": "Linux leaf1 5.15.0-179-generic #199-Ubuntu SMP x86_64",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "ruckus",
+      "SysDescr": "BIG-IP 15.1.10 : Linux 3.10.0-862.14.4.el7.ve.x86_64",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "ruckus",
+      "SysDescr": "ArubaOS (MODEL: 7010), Version 8.6.0.0",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "ruckus",
+      "SysDescr": "Ruckus ZoneDirector 1200",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "ruckus",
+      "SysDescr": "Sophos SFOS 19.5.3",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "ruckus",
+      "SysDescr": "Astaro Security Gateway",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "ruckus",
+      "SysDescr": "Ubiquiti EdgeRouter 4 EdgeOS v2.0.9",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "ruckus",
+      "SysDescr": "UniFi Switch 24 PoE",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "ruckus",
+      "SysDescr": "Check Point Gaia R81.20",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "ruckus",
+      "SysDescr": "Extreme Networks EXOS version 31.7",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "ruckus",
+      "SysDescr": "AcmeOS 1.2.3",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "ruckus",
+      "SysDescr": "Some Linux box with big-ip absent",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "sophos",
+      "SysDescr": "",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "sophos",
+      "SysDescr": "Cisco IOS Software, C2960 Software (C2960-LANBASEK9-M), Version 15.2(4)E10, RELEASE SOFTWARE (fc4)",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "sophos",
+      "SysDescr": "Cisco IOS Software [Cupertino], Catalyst L3 Switch Software (CAT9K_IOSXE), Version 17.9.4a, RELEASE SOFTWARE — Cisco IOS-XE Software",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "sophos",
+      "SysDescr": "Cisco IOS XE Software, Version 16.12.05",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "sophos",
+      "SysDescr": "Cisco NX-OS(tm) n9000, Software (n9000-dk9), Version 9.3(10), RELEASE SOFTWARE",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "sophos",
+      "SysDescr": "Cisco IOS XR Software (NCS-5500), Version 7.5.2 Copyright (c) 2013-2022 by Cisco Systems, Inc.",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "sophos",
+      "SysDescr": "Cisco Adaptive Security Appliance Version 9.16(4)",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "sophos",
+      "SysDescr": "Cisco Systems something with no version marker",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "sophos",
+      "SysDescr": "Juniper Networks, Inc. mx240 internet router, kernel JUNOS 21.4R3-S4.9, Build date: 2023-06-15",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "sophos",
+      "SysDescr": "Juniper Networks, Inc. ex4300 Ethernet Switch, kernel JUNOS 12.3R11.2",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "sophos",
+      "SysDescr": "Juniper without a version",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "sophos",
+      "SysDescr": "Arista Networks EOS version 4.33.1F running on an Arista cEOSLab",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "sophos",
+      "SysDescr": "Arista Networks cEOSLab",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "sophos",
+      "SysDescr": "FortiGate-60F v7.2.8,build1639,240228 (GA.M)",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "sophos",
+      "SysDescr": "Fortinet FortiGate no version",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "sophos",
+      "SysDescr": "Palo Alto Networks PA-3220 series firewall, PAN-OS 10.2.4-h2",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "sophos",
+      "SysDescr": "Palo Alto Networks PA-220 series firewall",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "sophos",
+      "SysDescr": "TiMOS-B-21.10.R6 both/x86_64 Nokia 7750 SR Copyright (c) 2000-2021 Nokia.",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "sophos",
+      "SysDescr": "Nokia SR Linux srlinux 24.10.1",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "sophos",
+      "SysDescr": "Huawei Versatile Routing Platform Software VRP (R) software, Version 8.180 (CE12800 V200R005C10SPC800)",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "sophos",
+      "SysDescr": "RouterOS 7.14.2 (stable) on RB4011iGS+",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "sophos",
+      "SysDescr": "RouterOS v6.49",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "sophos",
+      "SysDescr": "Linux leaf1 5.15.0-179-generic #199-Ubuntu SMP x86_64",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "sophos",
+      "SysDescr": "BIG-IP 15.1.10 : Linux 3.10.0-862.14.4.el7.ve.x86_64",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "sophos",
+      "SysDescr": "ArubaOS (MODEL: 7010), Version 8.6.0.0",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "sophos",
+      "SysDescr": "Ruckus ZoneDirector 1200",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "sophos",
+      "SysDescr": "Sophos SFOS 19.5.3",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "sophos",
+      "SysDescr": "Astaro Security Gateway",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "sophos",
+      "SysDescr": "Ubiquiti EdgeRouter 4 EdgeOS v2.0.9",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "sophos",
+      "SysDescr": "UniFi Switch 24 PoE",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "sophos",
+      "SysDescr": "Check Point Gaia R81.20",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "sophos",
+      "SysDescr": "Extreme Networks EXOS version 31.7",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "sophos",
+      "SysDescr": "AcmeOS 1.2.3",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "sophos",
+      "SysDescr": "Some Linux box with big-ip absent",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "ubiquiti",
+      "SysDescr": "",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "ubiquiti",
+      "SysDescr": "Cisco IOS Software, C2960 Software (C2960-LANBASEK9-M), Version 15.2(4)E10, RELEASE SOFTWARE (fc4)",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "ubiquiti",
+      "SysDescr": "Cisco IOS Software [Cupertino], Catalyst L3 Switch Software (CAT9K_IOSXE), Version 17.9.4a, RELEASE SOFTWARE — Cisco IOS-XE Software",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "ubiquiti",
+      "SysDescr": "Cisco IOS XE Software, Version 16.12.05",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "ubiquiti",
+      "SysDescr": "Cisco NX-OS(tm) n9000, Software (n9000-dk9), Version 9.3(10), RELEASE SOFTWARE",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "ubiquiti",
+      "SysDescr": "Cisco IOS XR Software (NCS-5500), Version 7.5.2 Copyright (c) 2013-2022 by Cisco Systems, Inc.",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "ubiquiti",
+      "SysDescr": "Cisco Adaptive Security Appliance Version 9.16(4)",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "ubiquiti",
+      "SysDescr": "Cisco Systems something with no version marker",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "ubiquiti",
+      "SysDescr": "Juniper Networks, Inc. mx240 internet router, kernel JUNOS 21.4R3-S4.9, Build date: 2023-06-15",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "ubiquiti",
+      "SysDescr": "Juniper Networks, Inc. ex4300 Ethernet Switch, kernel JUNOS 12.3R11.2",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "ubiquiti",
+      "SysDescr": "Juniper without a version",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "ubiquiti",
+      "SysDescr": "Arista Networks EOS version 4.33.1F running on an Arista cEOSLab",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "ubiquiti",
+      "SysDescr": "Arista Networks cEOSLab",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "ubiquiti",
+      "SysDescr": "FortiGate-60F v7.2.8,build1639,240228 (GA.M)",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "ubiquiti",
+      "SysDescr": "Fortinet FortiGate no version",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "ubiquiti",
+      "SysDescr": "Palo Alto Networks PA-3220 series firewall, PAN-OS 10.2.4-h2",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "ubiquiti",
+      "SysDescr": "Palo Alto Networks PA-220 series firewall",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "ubiquiti",
+      "SysDescr": "TiMOS-B-21.10.R6 both/x86_64 Nokia 7750 SR Copyright (c) 2000-2021 Nokia.",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "ubiquiti",
+      "SysDescr": "Nokia SR Linux srlinux 24.10.1",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "ubiquiti",
+      "SysDescr": "Huawei Versatile Routing Platform Software VRP (R) software, Version 8.180 (CE12800 V200R005C10SPC800)",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "ubiquiti",
+      "SysDescr": "RouterOS 7.14.2 (stable) on RB4011iGS+",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "ubiquiti",
+      "SysDescr": "RouterOS v6.49",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "ubiquiti",
+      "SysDescr": "Linux leaf1 5.15.0-179-generic #199-Ubuntu SMP x86_64",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "ubiquiti",
+      "SysDescr": "BIG-IP 15.1.10 : Linux 3.10.0-862.14.4.el7.ve.x86_64",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "ubiquiti",
+      "SysDescr": "ArubaOS (MODEL: 7010), Version 8.6.0.0",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "ubiquiti",
+      "SysDescr": "Ruckus ZoneDirector 1200",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "ubiquiti",
+      "SysDescr": "Sophos SFOS 19.5.3",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "ubiquiti",
+      "SysDescr": "Astaro Security Gateway",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "ubiquiti",
+      "SysDescr": "Ubiquiti EdgeRouter 4 EdgeOS v2.0.9",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "ubiquiti",
+      "SysDescr": "UniFi Switch 24 PoE",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "ubiquiti",
+      "SysDescr": "Check Point Gaia R81.20",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "ubiquiti",
+      "SysDescr": "Extreme Networks EXOS version 31.7",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "ubiquiti",
+      "SysDescr": "AcmeOS 1.2.3",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "ubiquiti",
+      "SysDescr": "Some Linux box with big-ip absent",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "checkpoint",
+      "SysDescr": "",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "checkpoint",
+      "SysDescr": "Cisco IOS Software, C2960 Software (C2960-LANBASEK9-M), Version 15.2(4)E10, RELEASE SOFTWARE (fc4)",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "checkpoint",
+      "SysDescr": "Cisco IOS Software [Cupertino], Catalyst L3 Switch Software (CAT9K_IOSXE), Version 17.9.4a, RELEASE SOFTWARE — Cisco IOS-XE Software",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "checkpoint",
+      "SysDescr": "Cisco IOS XE Software, Version 16.12.05",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "checkpoint",
+      "SysDescr": "Cisco NX-OS(tm) n9000, Software (n9000-dk9), Version 9.3(10), RELEASE SOFTWARE",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "checkpoint",
+      "SysDescr": "Cisco IOS XR Software (NCS-5500), Version 7.5.2 Copyright (c) 2013-2022 by Cisco Systems, Inc.",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "checkpoint",
+      "SysDescr": "Cisco Adaptive Security Appliance Version 9.16(4)",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "checkpoint",
+      "SysDescr": "Cisco Systems something with no version marker",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "checkpoint",
+      "SysDescr": "Juniper Networks, Inc. mx240 internet router, kernel JUNOS 21.4R3-S4.9, Build date: 2023-06-15",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "checkpoint",
+      "SysDescr": "Juniper Networks, Inc. ex4300 Ethernet Switch, kernel JUNOS 12.3R11.2",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "checkpoint",
+      "SysDescr": "Juniper without a version",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "checkpoint",
+      "SysDescr": "Arista Networks EOS version 4.33.1F running on an Arista cEOSLab",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "checkpoint",
+      "SysDescr": "Arista Networks cEOSLab",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "checkpoint",
+      "SysDescr": "FortiGate-60F v7.2.8,build1639,240228 (GA.M)",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "checkpoint",
+      "SysDescr": "Fortinet FortiGate no version",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "checkpoint",
+      "SysDescr": "Palo Alto Networks PA-3220 series firewall, PAN-OS 10.2.4-h2",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "checkpoint",
+      "SysDescr": "Palo Alto Networks PA-220 series firewall",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "checkpoint",
+      "SysDescr": "TiMOS-B-21.10.R6 both/x86_64 Nokia 7750 SR Copyright (c) 2000-2021 Nokia.",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "checkpoint",
+      "SysDescr": "Nokia SR Linux srlinux 24.10.1",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "checkpoint",
+      "SysDescr": "Huawei Versatile Routing Platform Software VRP (R) software, Version 8.180 (CE12800 V200R005C10SPC800)",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "checkpoint",
+      "SysDescr": "RouterOS 7.14.2 (stable) on RB4011iGS+",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "checkpoint",
+      "SysDescr": "RouterOS v6.49",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "checkpoint",
+      "SysDescr": "Linux leaf1 5.15.0-179-generic #199-Ubuntu SMP x86_64",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "checkpoint",
+      "SysDescr": "BIG-IP 15.1.10 : Linux 3.10.0-862.14.4.el7.ve.x86_64",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "checkpoint",
+      "SysDescr": "ArubaOS (MODEL: 7010), Version 8.6.0.0",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "checkpoint",
+      "SysDescr": "Ruckus ZoneDirector 1200",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "checkpoint",
+      "SysDescr": "Sophos SFOS 19.5.3",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "checkpoint",
+      "SysDescr": "Astaro Security Gateway",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "checkpoint",
+      "SysDescr": "Ubiquiti EdgeRouter 4 EdgeOS v2.0.9",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "checkpoint",
+      "SysDescr": "UniFi Switch 24 PoE",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "checkpoint",
+      "SysDescr": "Check Point Gaia R81.20",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "checkpoint",
+      "SysDescr": "Extreme Networks EXOS version 31.7",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "checkpoint",
+      "SysDescr": "AcmeOS 1.2.3",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "checkpoint",
+      "SysDescr": "Some Linux box with big-ip absent",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "dell",
+      "SysDescr": "",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "dell",
+      "SysDescr": "Cisco IOS Software, C2960 Software (C2960-LANBASEK9-M), Version 15.2(4)E10, RELEASE SOFTWARE (fc4)",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "dell",
+      "SysDescr": "Cisco IOS Software [Cupertino], Catalyst L3 Switch Software (CAT9K_IOSXE), Version 17.9.4a, RELEASE SOFTWARE — Cisco IOS-XE Software",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "dell",
+      "SysDescr": "Cisco IOS XE Software, Version 16.12.05",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "dell",
+      "SysDescr": "Cisco NX-OS(tm) n9000, Software (n9000-dk9), Version 9.3(10), RELEASE SOFTWARE",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "dell",
+      "SysDescr": "Cisco IOS XR Software (NCS-5500), Version 7.5.2 Copyright (c) 2013-2022 by Cisco Systems, Inc.",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "dell",
+      "SysDescr": "Cisco Adaptive Security Appliance Version 9.16(4)",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "dell",
+      "SysDescr": "Cisco Systems something with no version marker",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "dell",
+      "SysDescr": "Juniper Networks, Inc. mx240 internet router, kernel JUNOS 21.4R3-S4.9, Build date: 2023-06-15",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "dell",
+      "SysDescr": "Juniper Networks, Inc. ex4300 Ethernet Switch, kernel JUNOS 12.3R11.2",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "dell",
+      "SysDescr": "Juniper without a version",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "dell",
+      "SysDescr": "Arista Networks EOS version 4.33.1F running on an Arista cEOSLab",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "dell",
+      "SysDescr": "Arista Networks cEOSLab",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "dell",
+      "SysDescr": "FortiGate-60F v7.2.8,build1639,240228 (GA.M)",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "dell",
+      "SysDescr": "Fortinet FortiGate no version",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "dell",
+      "SysDescr": "Palo Alto Networks PA-3220 series firewall, PAN-OS 10.2.4-h2",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "dell",
+      "SysDescr": "Palo Alto Networks PA-220 series firewall",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "dell",
+      "SysDescr": "TiMOS-B-21.10.R6 both/x86_64 Nokia 7750 SR Copyright (c) 2000-2021 Nokia.",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "dell",
+      "SysDescr": "Nokia SR Linux srlinux 24.10.1",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "dell",
+      "SysDescr": "Huawei Versatile Routing Platform Software VRP (R) software, Version 8.180 (CE12800 V200R005C10SPC800)",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "dell",
+      "SysDescr": "RouterOS 7.14.2 (stable) on RB4011iGS+",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "dell",
+      "SysDescr": "RouterOS v6.49",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "dell",
+      "SysDescr": "Linux leaf1 5.15.0-179-generic #199-Ubuntu SMP x86_64",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "dell",
+      "SysDescr": "BIG-IP 15.1.10 : Linux 3.10.0-862.14.4.el7.ve.x86_64",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "dell",
+      "SysDescr": "ArubaOS (MODEL: 7010), Version 8.6.0.0",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "dell",
+      "SysDescr": "Ruckus ZoneDirector 1200",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "dell",
+      "SysDescr": "Sophos SFOS 19.5.3",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "dell",
+      "SysDescr": "Astaro Security Gateway",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "dell",
+      "SysDescr": "Ubiquiti EdgeRouter 4 EdgeOS v2.0.9",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "dell",
+      "SysDescr": "UniFi Switch 24 PoE",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "dell",
+      "SysDescr": "Check Point Gaia R81.20",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "dell",
+      "SysDescr": "Extreme Networks EXOS version 31.7",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "dell",
+      "SysDescr": "AcmeOS 1.2.3",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "dell",
+      "SysDescr": "Some Linux box with big-ip absent",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "hp",
+      "SysDescr": "",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "hp",
+      "SysDescr": "Cisco IOS Software, C2960 Software (C2960-LANBASEK9-M), Version 15.2(4)E10, RELEASE SOFTWARE (fc4)",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "hp",
+      "SysDescr": "Cisco IOS Software [Cupertino], Catalyst L3 Switch Software (CAT9K_IOSXE), Version 17.9.4a, RELEASE SOFTWARE — Cisco IOS-XE Software",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "hp",
+      "SysDescr": "Cisco IOS XE Software, Version 16.12.05",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "hp",
+      "SysDescr": "Cisco NX-OS(tm) n9000, Software (n9000-dk9), Version 9.3(10), RELEASE SOFTWARE",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "hp",
+      "SysDescr": "Cisco IOS XR Software (NCS-5500), Version 7.5.2 Copyright (c) 2013-2022 by Cisco Systems, Inc.",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "hp",
+      "SysDescr": "Cisco Adaptive Security Appliance Version 9.16(4)",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "hp",
+      "SysDescr": "Cisco Systems something with no version marker",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "hp",
+      "SysDescr": "Juniper Networks, Inc. mx240 internet router, kernel JUNOS 21.4R3-S4.9, Build date: 2023-06-15",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "hp",
+      "SysDescr": "Juniper Networks, Inc. ex4300 Ethernet Switch, kernel JUNOS 12.3R11.2",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "hp",
+      "SysDescr": "Juniper without a version",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "hp",
+      "SysDescr": "Arista Networks EOS version 4.33.1F running on an Arista cEOSLab",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "hp",
+      "SysDescr": "Arista Networks cEOSLab",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "hp",
+      "SysDescr": "FortiGate-60F v7.2.8,build1639,240228 (GA.M)",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "hp",
+      "SysDescr": "Fortinet FortiGate no version",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "hp",
+      "SysDescr": "Palo Alto Networks PA-3220 series firewall, PAN-OS 10.2.4-h2",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "hp",
+      "SysDescr": "Palo Alto Networks PA-220 series firewall",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "hp",
+      "SysDescr": "TiMOS-B-21.10.R6 both/x86_64 Nokia 7750 SR Copyright (c) 2000-2021 Nokia.",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "hp",
+      "SysDescr": "Nokia SR Linux srlinux 24.10.1",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "hp",
+      "SysDescr": "Huawei Versatile Routing Platform Software VRP (R) software, Version 8.180 (CE12800 V200R005C10SPC800)",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "hp",
+      "SysDescr": "RouterOS 7.14.2 (stable) on RB4011iGS+",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "hp",
+      "SysDescr": "RouterOS v6.49",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "hp",
+      "SysDescr": "Linux leaf1 5.15.0-179-generic #199-Ubuntu SMP x86_64",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "hp",
+      "SysDescr": "BIG-IP 15.1.10 : Linux 3.10.0-862.14.4.el7.ve.x86_64",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "hp",
+      "SysDescr": "ArubaOS (MODEL: 7010), Version 8.6.0.0",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "hp",
+      "SysDescr": "Ruckus ZoneDirector 1200",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "hp",
+      "SysDescr": "Sophos SFOS 19.5.3",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "hp",
+      "SysDescr": "Astaro Security Gateway",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "hp",
+      "SysDescr": "Ubiquiti EdgeRouter 4 EdgeOS v2.0.9",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "hp",
+      "SysDescr": "UniFi Switch 24 PoE",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "hp",
+      "SysDescr": "Check Point Gaia R81.20",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "hp",
+      "SysDescr": "Extreme Networks EXOS version 31.7",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "hp",
+      "SysDescr": "AcmeOS 1.2.3",
+      "Product": "",
+      "Version": ""
+    },
+    {
+      "Vendor": "hp",
+      "SysDescr": "Some Linux box with big-ip absent",
+      "Product": "",
+      "Version": ""
+    }
+  ],
+  "vendor_from_descr": [
+    {
+      "SysDescr": "",
+      "Vendor": ""
+    },
+    {
+      "SysDescr": "Cisco IOS Software, C2960 Software (C2960-LANBASEK9-M), Version 15.2(4)E10, RELEASE SOFTWARE (fc4)",
+      "Vendor": "cisco"
+    },
+    {
+      "SysDescr": "Cisco IOS Software [Cupertino], Catalyst L3 Switch Software (CAT9K_IOSXE), Version 17.9.4a, RELEASE SOFTWARE — Cisco IOS-XE Software",
+      "Vendor": "cisco"
+    },
+    {
+      "SysDescr": "Cisco IOS XE Software, Version 16.12.05",
+      "Vendor": "cisco"
+    },
+    {
+      "SysDescr": "Cisco NX-OS(tm) n9000, Software (n9000-dk9), Version 9.3(10), RELEASE SOFTWARE",
+      "Vendor": "cisco"
+    },
+    {
+      "SysDescr": "Cisco IOS XR Software (NCS-5500), Version 7.5.2 Copyright (c) 2013-2022 by Cisco Systems, Inc.",
+      "Vendor": "cisco"
+    },
+    {
+      "SysDescr": "Cisco Adaptive Security Appliance Version 9.16(4)",
+      "Vendor": "cisco"
+    },
+    {
+      "SysDescr": "Cisco Systems something with no version marker",
+      "Vendor": "cisco"
+    },
+    {
+      "SysDescr": "Juniper Networks, Inc. mx240 internet router, kernel JUNOS 21.4R3-S4.9, Build date: 2023-06-15",
+      "Vendor": "juniper"
+    },
+    {
+      "SysDescr": "Juniper Networks, Inc. ex4300 Ethernet Switch, kernel JUNOS 12.3R11.2",
+      "Vendor": "juniper"
+    },
+    {
+      "SysDescr": "Juniper without a version",
+      "Vendor": "juniper"
+    },
+    {
+      "SysDescr": "Arista Networks EOS version 4.33.1F running on an Arista cEOSLab",
+      "Vendor": "arista"
+    },
+    {
+      "SysDescr": "Arista Networks cEOSLab",
+      "Vendor": "arista"
+    },
+    {
+      "SysDescr": "FortiGate-60F v7.2.8,build1639,240228 (GA.M)",
+      "Vendor": "fortinet"
+    },
+    {
+      "SysDescr": "Fortinet FortiGate no version",
+      "Vendor": "fortinet"
+    },
+    {
+      "SysDescr": "Palo Alto Networks PA-3220 series firewall, PAN-OS 10.2.4-h2",
+      "Vendor": "paloalto"
+    },
+    {
+      "SysDescr": "Palo Alto Networks PA-220 series firewall",
+      "Vendor": "paloalto"
+    },
+    {
+      "SysDescr": "TiMOS-B-21.10.R6 both/x86_64 Nokia 7750 SR Copyright (c) 2000-2021 Nokia.",
+      "Vendor": "nokia"
+    },
+    {
+      "SysDescr": "Nokia SR Linux srlinux 24.10.1",
+      "Vendor": "nokia"
+    },
+    {
+      "SysDescr": "Huawei Versatile Routing Platform Software VRP (R) software, Version 8.180 (CE12800 V200R005C10SPC800)",
+      "Vendor": "huawei"
+    },
+    {
+      "SysDescr": "RouterOS 7.14.2 (stable) on RB4011iGS+",
+      "Vendor": "mikrotik"
+    },
+    {
+      "SysDescr": "RouterOS v6.49",
+      "Vendor": "mikrotik"
+    },
+    {
+      "SysDescr": "Linux leaf1 5.15.0-179-generic #199-Ubuntu SMP x86_64",
+      "Vendor": "linux"
+    },
+    {
+      "SysDescr": "BIG-IP 15.1.10 : Linux 3.10.0-862.14.4.el7.ve.x86_64",
+      "Vendor": "f5"
+    },
+    {
+      "SysDescr": "ArubaOS (MODEL: 7010), Version 8.6.0.0",
+      "Vendor": "aruba"
+    },
+    {
+      "SysDescr": "Ruckus ZoneDirector 1200",
+      "Vendor": "ruckus"
+    },
+    {
+      "SysDescr": "Sophos SFOS 19.5.3",
+      "Vendor": "sophos"
+    },
+    {
+      "SysDescr": "Astaro Security Gateway",
+      "Vendor": "sophos"
+    },
+    {
+      "SysDescr": "Ubiquiti EdgeRouter 4 EdgeOS v2.0.9",
+      "Vendor": "ubiquiti"
+    },
+    {
+      "SysDescr": "UniFi Switch 24 PoE",
+      "Vendor": "ubiquiti"
+    },
+    {
+      "SysDescr": "Check Point Gaia R81.20",
+      "Vendor": "checkpoint"
+    },
+    {
+      "SysDescr": "Extreme Networks EXOS version 31.7",
+      "Vendor": ""
+    },
+    {
+      "SysDescr": "AcmeOS 1.2.3",
+      "Vendor": ""
+    },
+    {
+      "SysDescr": "Some Linux box with big-ip absent",
+      "Vendor": "f5"
+    }
+  ]
+}
