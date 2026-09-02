@@ -20,6 +20,7 @@ reads, no IO. main.py owns tenancy resolution, persistence and buffering.
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import re
 from datetime import datetime, timezone
@@ -27,6 +28,7 @@ from datetime import datetime, timezone
 from episodes import EpisodeDetector, EpisodeEvent
 from regex_screen import pattern_screen
 from signals import (
+    MAX_ID_CHARS,
     EntityType,
     ModalityClass,
     Observer,
@@ -61,6 +63,91 @@ def severity_for(peak_z: float) -> Severity:
 # kind `device_alarm` matches no signature → it only enriches clusters / the
 # undetermined-with-evidence outcome — exactly the long-tail coverage the fault
 # matrix (docs/design/fault-coverage-and-signature-matrix.md) relies on.
+
+# CONTENT DISCRIMINATOR (tracker 198) — why the generic-alarm ids carry one.
+#
+# `signal_id = uuid5(NS, "{source}|{native_id}|{ts_ms}")`, so the native_id IS the
+# identity. Every CLASSIFIED producer below builds one out of the fields its
+# classifier extracted (peer, interface, state, mac, vlan, group, role) — the
+# semantic content of the event — so two lines that collide there are, in the
+# classifier's own vocabulary, the same event at the same millisecond.
+#
+# The two GENERIC device_alarm nets are the exception: they fire precisely when
+# nothing was recognized, so their id held only host + facility + mnemonic (or
+# device + trap OID). Two DIFFERENT lines from one device sharing those in the
+# same millisecond therefore produced the SAME signal_id, and the batcher/window
+# dedup then silently discarded one genuinely distinct piece of evidence
+# (docs/scale/TRACKER_198_DUPLICATE_SIGNAL_RCA_2026-09-02.md). Folding a short
+# hash of the event's own content into the id fixes that WITHOUT weakening
+# idempotency: a true Kafka redelivery carries byte-identical content, so it
+# still hashes to the same tag and still dedups.
+#
+# AUDIT OF EVERY native_id BUILDER IN THIS MODULE (tracker 198). The question
+# asked of each: can two DISTINCT events legitimately share this id inside one
+# millisecond?
+#
+#   episode_signal      tenant|entity|metric|phase|onset_ms — NO. An episode is
+#                       one open interval per (tenant, entity, metric) in the
+#                       detector; onset and clear differ in `phase`. The id is
+#                       the episode's natural key, not a summary of text.
+#   probe_signals       prober|host|kind|loss|ts_ms — NO. One measurement per
+#                       (prober, target, kind) per probe cycle; a second in the
+#                       same millisecond is a duplicate of the same measurement,
+#                       which is exactly what this id should collapse.
+#   syslog_control_*    host|<kind>|<peer|ifname|mac|vlan|group|role>|state|ts_ms
+#                       — NO for a classified line: the extracted fields ARE the
+#                       event's content, so a collision means the classifier saw
+#                       the same event twice. Residual: when extraction yields
+#                       '?'/'' (an unparsed peer or interface) two distinct lines
+#                       can still collide. That residual is deliberately left
+#                       alone — narrowing it means changing the identity of every
+#                       classified control-plane signal, far past this fix — and
+#                       it is no longer INVISIBLE: `CHBatcher.add` now counts
+#                       every in-batch identity collapse as
+#                       corr_signal_batch{event="rows_identity_collapsed"}.
+#   trap_control_*      device|trap_link|iface|state|ts_ms and the bgp/restart
+#                       twins — NO, same reasoning as the classified syslog
+#                       branches (the varbind-extracted entity + state is the
+#                       content).
+#   port_event_signal   host|portevt|kind|port|ts_ms — NO. `kind` is the matched
+#                       rule (the classification) and `port` its subject; two
+#                       lines matching the same rule on the same port in one
+#                       millisecond are the same optics event.
+#   clock_skew_signal   host|clock_skew|ts_ms — NO. One per-device meta-finding
+#                       per event; a second in the same millisecond is the same
+#                       finding about the same clock.
+#   device_alarm (x2)   FIXED here — see above.
+_CONTENT_TAG_CHARS = 8
+
+
+def _content_tag(text: str) -> str:
+    """Short, stable content discriminator for an identity string.
+
+    Deterministic and process-independent (a plain SHA-256 prefix, never
+    `hash()`, which is salted per process) — replay must re-derive the same
+    signal_id in a different process, years later. Not a security primitive:
+    it separates distinct events, it does not authenticate them. Encoding is
+    surrogate-tolerant because the text arrives from `json.loads` of an
+    untrusted device string and may carry lone surrogates (§3 zero trust).
+    """
+    return hashlib.sha256(
+        text.encode("utf-8", "surrogatepass"),
+    ).hexdigest()[:_CONTENT_TAG_CHARS]
+
+
+def _tagged_native_id(native: str, text: str) -> str:
+    """`native` with `_content_tag(text)` appended, RESERVING room for the tag.
+
+    `Signal._bound_untrusted_strings` caps native_id at MAX_ID_CHARS by cutting
+    the TAIL, and the components here are untrusted device strings (a 300-char
+    hostname is a valid syslog input). Trimming the descriptive head ourselves
+    is what guarantees the discriminator survives the cap — otherwise a long
+    hostname would silently restore the collision this exists to prevent. The
+    trailing ts_ms that gets trimmed first is redundant anyway: the uuid5 key
+    already carries ts_ms as its own field.
+    """
+    return f"{native[:MAX_ID_CHARS - _CONTENT_TAG_CHARS - 1]}|{_content_tag(text)}"
+
 
 # Severity keyword/char → numeric (RFC5424; lower = more severe). Covers IOS
 # keywords, SR Linux single-char (I/N/W/E/C), and the %FAC-N-MNEMONIC tag digit.
@@ -613,7 +700,17 @@ def syslog_promotable(ev: dict) -> bool:
 def syslog_control_signal(ev: dict, tenant: str, ingest_ts: datetime) -> Signal | None:
     """Adjacency / link-state syslog → one control_plane Signal; None for
     everything that is not a recognized control-plane event. May raise
-    DeadLetter on malformed provenance."""
+    DeadLetter on malformed provenance.
+
+    tracker 198: the generic `device_alarm` net at the bottom now folds a hash
+    of the message text into its native_id, so two distinct unrecognized lines
+    that share host + facility + mnemonic (+ interface) inside one millisecond
+    are two signals instead of one. The V1 qualification leg's `corr_signals`
+    ROW COUNT (informational, never gated) may therefore rise slightly: fewer
+    distinct alarms collapse into each other. Nothing else moves — persistence,
+    versioning, the memflat structures and the replay guard are untouched
+    (INVARIANTS §10/§10a), and a byte-identical redelivery still derives the
+    same signal_id and still dedups."""
     host = str(ev.get("hostname") or "")
     if not host or host == "unknown":
         return None
@@ -919,7 +1016,12 @@ def syslog_control_signal(ev: dict, tenant: str, ingest_ts: datetime) -> Signal 
             entity_type=etype_,
             entity_id=eid_,
             severity=_severity_from_num(sev_num),
-            native_id=f"{host}|alarm|{facility}|{mnem or '?'}|{ifname or '-'}|{ts_ms}",
+            # tracker 198: the message text is the discriminator — without it two
+            # DISTINCT unrecognized lines sharing facility+mnemonic(+interface) in
+            # one millisecond collapsed onto one signal_id and one of them was
+            # dropped as a "replay". Byte-identical redelivery still dedups.
+            native_id=_tagged_native_id(
+                f"{host}|alarm|{facility}|{mnem or '?'}|{ifname or '-'}|{ts_ms}", msg),
             entity_tokens=toks_,
             metric_name="device_alarm",
             attrs={"facility": facility, "mnemonic": mnem, "severity": sev_num,
@@ -991,6 +1093,24 @@ def _trap_interface(ev: dict) -> str:
             or "unknown")
 
 
+def _trap_content(ev: dict, name: str, etype: str) -> str:
+    """Canonical rendering of what a trap actually SAID — its resolved name, its
+    normalized event_type and its varbinds in wire order — for the generic-alarm
+    content tag (tracker 198). Deterministic: the varbind list order is the one
+    the receiver emitted and JSON round-trips it unchanged, so a redelivery of
+    the same trap renders byte-identically and still dedups.
+    """
+    vbs = ev.get("varbinds") or []
+    parts = [name, etype]
+    if isinstance(vbs, list):
+        for vb in vbs:
+            if isinstance(vb, dict):
+                parts.append(f"{vb.get('oid')}={vb.get('value')}")
+            else:
+                parts.append(str(vb))
+    return "\x1f".join(str(x) for x in parts)
+
+
 def trap_control_signal(ev: dict, tenant: str, ingest_ts: datetime) -> Signal | None:
     """Normalized SNMP trap → one control_plane Signal for the high-value
     families only (link state, device restart, BGP transition); None for every
@@ -999,7 +1119,13 @@ def trap_control_signal(ev: dict, tenant: str, ingest_ts: datetime) -> Signal | 
 
     HA-failover, environmental/hardware-health, and threshold-alarm traps are
     vendor-specific OIDs — deliberately deferred to a per-vendor fixture-driven
-    follow-up rather than guessed (the anti-noise guardrail)."""
+    follow-up rather than guessed (the anti-noise guardrail).
+
+    tracker 198: the generic `device_alarm` fallback folds a hash of the trap's
+    own content (name + event_type + varbinds) into its native_id, so two
+    unclassified traps of one OID that differ only in their varbinds no longer
+    share a signal_id inside a millisecond. Same informational row-count note as
+    `syslog_control_signal`; redelivery idempotency is preserved."""
     # G2 canonicalization: the device MUST be a real inventory id (attributed by the
     # Go receiver's G2a — source-IP/sysName/agent-addr — and, when that fails, by the
     # caller's C7.1 EntityResolver). We deliberately do NOT fall back to the raw source
@@ -1132,7 +1258,13 @@ def trap_control_signal(ev: dict, tenant: str, ingest_ts: datetime) -> Signal | 
             tenant_id=tenant, ts=ts, source=Source.TRAP, kind="device_alarm",
             observer=observer, modality_class=ModalityClass.CONTROL_PLANE,
             entity_type=etype_, entity_id=eid_, severity=_severity_from_num(sev_num),
-            native_id=f"{device}|alarm|{oid or '?'}|{ts_ms}",
+            # tracker 198 (same defect as the syslog generic alarm above): the OID
+            # alone does not identify the EVENT — two unclassified traps of one
+            # OID differing only in their varbinds (different entity, different
+            # threshold) collided in a millisecond. The varbind rendering is the
+            # trap's content; it is stable under redelivery.
+            native_id=_tagged_native_id(
+                f"{device}|alarm|{oid or '?'}|{ts_ms}", _trap_content(ev, name, etype)),
             entity_tokens=toks_, metric_name="device_alarm",
             attrs={"trap_oid": oid, "trap_name": name, "event_type": etype,
                    "category": str(ev.get("category") or ""), "severity": sev_num,

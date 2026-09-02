@@ -8366,6 +8366,12 @@ BATCH_FLUSHES = 0            # committed batch inserts (monotonic)
 BATCH_ROWS_FLUSHED = 0       # rows landed through the batcher (monotonic)
 BATCH_ROWS_QUARANTINED = 0   # rows a rejected batch preserved in the DLQ
 BATCH_ROWS_REPLAY_DEDUPED = 0  # redelivered rows dropped by the commit guard
+# tracker 198: rows dropped because an identical identity was ALREADY in the
+# live/parked batch. Usually a true redelivery (correct, idempotent) — but it
+# is also where a signal_id collision between two genuinely DISTINCT events
+# discards evidence, and that used to happen with no trace at all. Counted,
+# never WARNed per row: the honest reading is a RATE, not an incident.
+BATCH_ROWS_IDENTITY_COLLAPSED = 0
 # P1 thrash fix: identities of rows that FLUSHED but whose Kafka offsets have
 # not yet committed. A member ejection between flush and commit redelivers the
 # messages; their handlers re-add the same rows to a FRESH batch whose
@@ -8459,14 +8465,23 @@ class CHBatcher:
                    for b in self._batches.values())
 
     async def add(self, table: str, row: dict) -> None:
-        global BATCH_ROWS_REPLAY_DEDUPED
+        global BATCH_ROWS_REPLAY_DEDUPED, BATCH_ROWS_IDENTITY_COLLAPSED
         b = self._batches.get(table)
         if b is None:
             b = self._batches[table] = _TableBatch()
         rid = self._row_identity(row)
         parked = self._retry.get(table)
         if rid in b.ids or (parked is not None and rid in parked.ids):
-            return  # H12: redelivered row already pending — replay, not new data
+            # H12: redelivered row already pending — replay, not new data.
+            # tracker 198: this drop is CORRECT for a redelivery and WRONG for a
+            # native_id collision between two distinct events, and add() cannot
+            # tell the two apart from here. So it is counted rather than judged:
+            # DEBUG plus corr_signal_batch{event="rows_identity_collapsed"}. A
+            # per-row WARN would fire on every ordinary redelivery and train the
+            # operator to ignore the one line that matters.
+            BATCH_ROWS_IDENTITY_COLLAPSED += 1
+            log.debug("batch identity collapse: table=%s identity=%s", table, rid)
+            return
         if rid in self._flushed_uncommitted.get(table, ()):
             # Post-flush redelivery (member ejected between flush and commit):
             # the row already LANDED; re-adding it would re-insert it under a
@@ -12705,6 +12720,10 @@ def _metrics_text(health: dict | None = None) -> str:
         f'corr_signal_batch{{event="rows_flushed"}} {BATCH_ROWS_FLUSHED}',
         f'corr_signal_batch{{event="rows_quarantined"}} {BATCH_ROWS_QUARANTINED}',
         f'corr_signal_batch{{event="rows_replay_deduped"}} {BATCH_ROWS_REPLAY_DEDUPED}',
+        # tracker 198: in-batch drops on an identity already pending. Expected to
+        # track redelivery; a rise with no rebalance means distinct events are
+        # sharing a native_id and evidence is being discarded.
+        f'corr_signal_batch{{event="rows_identity_collapsed"}} {BATCH_ROWS_IDENTITY_COLLAPSED}',
         # P1 max-poll thrash: revoke-hook flush+commit outcomes. "failed" is
         # replay-safe (dedup absorbs) but rising = rebalances are landing on a
         # broken flush path.
