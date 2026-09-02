@@ -2,8 +2,11 @@ package backend
 
 import (
 	"context"
+	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -201,5 +204,70 @@ func TestBuildIncidentSummariesSnapshotIsolation(t *testing.T) {
 	}
 	if _, ok := ro.Metrics[timeintel.MetricTTD]; ok {
 		t.Error("rollup from snapshots must not include TTD (onset-fallback zero)")
+	}
+}
+
+// ── the live-scan (cold-start) fallback must map the new column too ───────────
+
+// liveScanFakeCH serves ONE corr_current page for buildIncidentSummariesLive and
+// records the SQL, so the test pins both the projection and the mapping.
+func liveScanFakeCH(t *testing.T, rows []map[string]any) *[]string {
+	t.Helper()
+	seen := &[]string{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		*seen = append(*seen, string(body))
+		_ = json.NewEncoder(w).Encode(map[string]any{"data": rows})
+	}))
+	t.Cleanup(srv.Close)
+	t.Setenv("CLICKHOUSE_URL", srv.URL)
+	return seen
+}
+
+// TestLiveScanMapsWindowEndToRecovery: the cold-start fallback derives lifecycles
+// itself (it does not read snapshots), so it needs the same window_end → recovery
+// mapping the backfill got. Without the extra column a fresh install would show
+// "recovery not connected" until the first backfill pass landed.
+func TestLiveScanMapsWindowEndToRecovery(t *testing.T) {
+	base := time.Now().UTC().Add(-2 * time.Hour).Truncate(time.Millisecond)
+	iso := func(tm time.Time) string { return tm.Format("2006-01-02T15:04:05.000") + "Z" }
+	seen := liveScanFakeCH(t, []map[string]any{
+		{
+			"correlation_id": "c-closed", "window_start": iso(base),
+			"window_end": iso(base.Add(5 * time.Minute)), "created_at": iso(base.Add(30 * time.Second)),
+			"verdict_tier": "confirmed", "top_confidence": 0.9, "top_hypothesis": "link_down",
+			"evidence_missing": "[]", "affected": `{"devices":["wan-r2"]}`,
+			"state": "closed", "owner": "isp",
+		},
+		{
+			"correlation_id": "c-open", "window_start": iso(base), "window_end": iso(base.Add(5 * time.Minute)),
+			"created_at":   iso(base.Add(30 * time.Second)),
+			"verdict_tier": "confirmed", "top_confidence": 0.9, "top_hypothesis": "link_down",
+			"evidence_missing": "[]", "affected": `{"devices":["lan-sw1"]}`,
+			"state": "open", "owner": "isp",
+		},
+	})
+
+	s := &server{}
+	incs, err := s.buildIncidentSummariesLive(
+		reliabilityReq(jwtClaims{Role: "admin", Tenant: "acme", Sub: "u"}), 30*86400, timeintel.Filters{}, false)
+	if err != nil {
+		t.Fatalf("live scan: %v", err)
+	}
+	if len(*seen) == 0 || !strings.Contains((*seen)[0], "o.window_end") {
+		t.Fatalf("the live scan must project o.window_end; SQL was:\n%s", strings.Join(*seen, "\n"))
+	}
+	byID := map[string]timeintel.IncidentSummary{}
+	for _, in := range incs {
+		byID[in.CorrelationID] = in
+	}
+	if d, ok := byID["c-closed"].Durations[timeintel.MetricTTRRecovery]; !ok || d != int64(5*time.Minute/time.Millisecond) {
+		t.Fatalf("closed object must carry a 5m ttr_recovery in the live path, got %d (present=%v)", d, ok)
+	}
+	if _, ok := byID["c-open"].Durations[timeintel.MetricTTRRecovery]; ok {
+		t.Fatal("an OPEN object must contribute no recovery duration, even with a window_end")
+	}
+	if byID["c-closed"].TimeLossDriver == timeintel.DriverWorkflow {
+		t.Errorf("a recovered incident must not vote workflow_not_connected: %q", byID["c-closed"].TimeLossDriver)
 	}
 }

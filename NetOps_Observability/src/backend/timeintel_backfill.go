@@ -554,13 +554,21 @@ SELECT toString(tenant_id)      AS tenant_id_s,
 //
 // ── WHAT THE FOLD ACTUALLY NEEDS (checked 2026-08-31, 186 fix-2) ──────────────
 //
-// foldTimeIntelPage reads exactly twelve values off each row: tenant_id,
-// correlation_id, window_start, created_at, verdict_tier, top_confidence,
-// top_hypothesis, evidence_missing, affected, state — and owner + seam_type,
-// which are JSON-extracted from the hypotheses blob. Nothing here is
-// speculative, so no column can be dropped to make the read cheaper; the two
-// blob extractions are pinned by
+// foldTimeIntelPage reads exactly thirteen values off each row: tenant_id,
+// correlation_id, window_start, window_end, created_at, verdict_tier,
+// top_confidence, top_hypothesis, evidence_missing, affected, state — and
+// owner + seam_type, which are JSON-extracted from the hypotheses blob. Nothing
+// here is speculative, so no column can be dropped to make the read cheaper;
+// the two blob extractions are pinned by
 // TestTimeIntelBackfillFetchSelectsOnlyWhatTheFoldNeeds.
+//
+// window_end is the THIRTEENTH, added for the engine-inferred recovery stamp
+// (timeintel/derive.go's v2 mapping: a closed object's last-evidence time
+// stands in for a service recovery signal that no ITSM workflow supplies). It
+// is a DateTime64(3) — 8 bytes/row, versus the ~5.7 KB hypotheses blob that is
+// 94 % of this table and the entire reason the fetch is sub-paged — so it does
+// not move the cost this read is bounded against. state was already selected;
+// without window_end the state alone cannot say WHEN the incident recovered.
 //
 // That matters because `hypotheses` is 94 % of this table and the ENTIRE reason
 // the fetch has to be sub-paged. The structural follow-up, recorded here so the
@@ -588,6 +596,7 @@ func timeIntelBackfillFetchSQL(keys []timeIntelBackfillKey, from, to time.Time) 
 SELECT toString(o.tenant_id)      AS tenant_id,
        toString(o.correlation_id) AS correlation_id,
        ` + chschema.ISO("o.window_start") + ` AS window_start,
+       ` + chschema.ISO("o.window_end") + `   AS window_end,
        ` + chschema.ISO("o.created_at") + `   AS created_at,
        o.verdict_tier             AS verdict_tier,
        o.top_confidence           AS top_confidence,
@@ -1388,6 +1397,9 @@ func (s *server) foldTimeIntelPage(ctx context.Context, rows []map[string]any,
 			Owner:           owner,
 			EvidenceMissing: evidenceMissingFromBlob(asString(o["evidence_missing"])),
 			Confidence:      asFloat(o["top_confidence"]),
+			// State is stamped by DeriveMetricRow from its own `state` argument
+			// (one source of truth); only the timestamp comes from the row here.
+			WindowEnd: parseCHTime(o["window_end"]),
 		}
 		group := timeintel.GroupKeysFromAffected(asString(o["affected"]))
 		if owner != "" {

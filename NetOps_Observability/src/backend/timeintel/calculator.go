@@ -154,8 +154,16 @@ func DeriveCurrentBottleneck(lc Lifecycle, ctx DriverContext) (TimeLossDriver, s
 	}
 	// Evidence is ready. Everything past here is ITSM/workflow — if no workflow is
 	// connected, say so honestly rather than invent a ticket phase that can't move.
+	rec, recovered := lc[EvRecovered]
 	if !has(EvTicketCreated) {
 		if !ctx.WorkflowConnected {
+			if recovered {
+				// The engine already answered "did the service come back" (a closed
+				// window, source=inferred — see DeriveLifecycle's v2 mapping), so
+				// claiming recovery evidence is missing would be false. What is
+				// genuinely outstanding is the ticket and its closure.
+				return DriverClosure, recoveredPrefix(rec) + " — ticket creation and closure require ServiceNow, Jira, PagerDuty or operator workflow evidence."
+			}
 			return DriverWorkflow, "Evidence bundle ready; ticket, recovery and closure require ServiceNow, Jira, PagerDuty or operator workflow evidence."
 		}
 		if provider {
@@ -182,9 +190,23 @@ func DeriveCurrentBottleneck(lc Lifecycle, ctx DriverContext) (TimeLossDriver, s
 		return DriverRecovery, "Mitigated; awaiting a service recovery signal."
 	}
 	if !has(EvClosed) {
+		if rec.Source == SrcInferred {
+			return DriverClosure, recoveredPrefix(rec) + " — awaiting ticket closure."
+		}
 		return DriverClosure, "Service recovered; waiting for ticket closure."
 	}
 	return DriverResolved, "Incident resolved and closed."
+}
+
+// recoveredPrefix renders the recovery half of a closure-phase message, NAMING the
+// source when the stamp was inferred by the engine rather than confirmed by a
+// workflow. The honesty rule (types.go) applies to copy as much as to the metric:
+// an operator must never read a proxy as a measurement.
+func recoveredPrefix(rec EventStamp) string {
+	if rec.Source == SrcInferred {
+		return "Recovered (engine: no further symptoms; window closed)"
+	}
+	return "Service recovered"
 }
 
 // providerOwners are seam owners outside the customer's repair control — once the

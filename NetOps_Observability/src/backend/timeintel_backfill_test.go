@@ -80,6 +80,19 @@ type synthCorr struct {
 	id      string
 	version int
 	created time.Time
+	// state/windowEnd model the engine LIFECYCLE columns the fold reads. Zero
+	// values mean "open, no recovery" so every existing fixture is unchanged.
+	state     string
+	windowEnd time.Time
+}
+
+// chState is the corr_objects state the fake serves — "open" unless the fixture
+// says otherwise (the default every pre-existing test relies on).
+func (o synthCorr) chState() string {
+	if o.state == "" {
+		return "open"
+	}
+	return o.state
 }
 
 var (
@@ -451,12 +464,16 @@ func (f *synthCH) fetch(sql string) []map[string]any {
 		}
 		f.foldedIDs = append(f.foldedIDs, o.id)
 		ts := o.created.UTC().Format("2006-01-02T15:04:05.000") + "Z"
+		we := ""
+		if !o.windowEnd.IsZero() {
+			we = o.windowEnd.UTC().Format("2006-01-02T15:04:05.000") + "Z"
+		}
 		out = append(out, map[string]any{
 			"tenant_id": o.tenant, "correlation_id": o.id,
-			"window_start": ts, "created_at": ts,
+			"window_start": ts, "created_at": ts, "window_end": we,
 			"verdict_tier": "confirmed", "top_confidence": 0.9,
 			"top_hypothesis": "link_down", "evidence_missing": "[]",
-			"affected": "{}", "state": "open", "owner": "isp", "seam_type": "DIA",
+			"affected": "{}", "state": o.chState(), "owner": "isp", "seam_type": "DIA",
 		})
 	}
 	return out
@@ -1638,6 +1655,12 @@ func TestTimeIntelBackfillNarrowRetryKeepsEveryOtherBudget(t *testing.T) {
 // (MetricRow.Owner / .OwnerDomain / .SeamType, and DriverContext.Owner). The
 // extraction stays SERVER-side — pulling the blob itself would blow the
 // response cap — and no THIRD extraction may be added without re-measuring.
+//
+// window_end joined the list for the engine-inferred recovery stamp (a closed
+// object's last-evidence time standing in for an absent ITSM recovery signal).
+// It is a DateTime64(3) — 8 bytes/row against a blob that is 94 % of the table
+// — so it is the one narrow column this read may grow by; the banned list below
+// still forbids every wide/unused one.
 func TestTimeIntelBackfillFetchSelectsOnlyWhatTheFoldNeeds(t *testing.T) {
 	keys := []timeIntelBackfillKey{{
 		TenantID: "global", CorrelationID: "55befe37-0418-5dc4-8727-43006a30edab",
@@ -1647,9 +1670,9 @@ func TestTimeIntelBackfillFetchSelectsOnlyWhatTheFoldNeeds(t *testing.T) {
 
 	// Every column foldTimeIntelPage reads out of a fetch row.
 	for _, want := range []string{
-		"tenant_id", "correlation_id", "window_start", "created_at", "verdict_tier",
-		"top_confidence", "top_hypothesis", "evidence_missing", "affected", "state",
-		"owner", "seam_type",
+		"tenant_id", "correlation_id", "window_start", "window_end", "created_at",
+		"verdict_tier", "top_confidence", "top_hypothesis", "evidence_missing",
+		"affected", "state", "owner", "seam_type",
 	} {
 		if !strings.Contains(sql, " AS "+want) {
 			t.Errorf("fetch does not project %q, which foldTimeIntelPage reads", want)
@@ -1664,7 +1687,7 @@ func TestTimeIntelBackfillFetchSelectsOnlyWhatTheFoldNeeds(t *testing.T) {
 	}
 	// And no column the fold does not read: the cost is per COLUMN read, so a
 	// speculative extra is a real bill on a 70 GiB table.
-	for _, banned := range []string{"o.attribution", "o.app_impact", "o.layer_coverage", "o.signal_count", "o.window_end"} {
+	for _, banned := range []string{"o.attribution", "o.app_impact", "o.layer_coverage", "o.signal_count"} {
 		if strings.Contains(sql, banned) {
 			t.Errorf("the fetch reads %s, which foldTimeIntelPage never looks at", banned)
 		}
@@ -2004,5 +2027,131 @@ func TestTimeIntelBackfillResetDuringPassIsNeverClobbered(t *testing.T) {
 	}
 	if !got.IsZero() {
 		t.Errorf("the pass CLOBBERED the reset: stored cursor = %+v, want zero", got)
+	}
+}
+
+// ── engine-inferred recovery through the WHOLE pass ──────────────────────────
+
+// ttrRecoveryOf returns the ttr_recovery metric of a persisted snapshot.
+func ttrRecoveryOf(t *testing.T, row incidentTimeMetricRow) timeintel.TimeMetric {
+	t.Helper()
+	for _, m := range row.Metrics {
+		if m.Name == timeintel.MetricTTRRecovery {
+			return m
+		}
+	}
+	t.Fatalf("snapshot %s carries no ttr_recovery metric at all", row.CorrelationID)
+	return timeintel.TimeMetric{}
+}
+
+// TestTimeIntelBackfillFoldsWindowEndIntoRecovery proves the NEW column survives
+// the whole wide-read → fold → snapshot path: a closed object's window_end lands
+// as an INFERRED recovery stamp and a complete ttr_recovery, while an open object
+// derived by the same pass stays honestly incomplete.
+func TestTimeIntelBackfillFoldsWindowEndIntoRecovery(t *testing.T) {
+	useTimeIntelKV(t)
+	base := time.Now().UTC().Add(-2 * time.Hour).Truncate(time.Millisecond)
+	newSynthCH(t, []synthCorr{
+		{tenant: "acme", id: "11111111-1111-4111-8111-111111111111", version: 2,
+			created: base, state: "closed", windowEnd: base.Add(7 * time.Minute)},
+		{tenant: "acme", id: "22222222-2222-4222-8222-222222222222", version: 1,
+			created: base.Add(time.Minute)}, // open, no window_end
+	})
+	m := timeintel.NewMemMetricsStore()
+	s := &server{incidentTimeMetrics: m}
+	if _, err := s.backfillIncidentTimeMetrics(context.Background(), timeIntelBackfillLookback); err != nil {
+		t.Fatalf("backfill: %v", err)
+	}
+	rows, err := m.List(context.Background(), "acme", false, 10)
+	if err != nil {
+		t.Fatalf("store list: %v", err)
+	}
+	byID := map[string]incidentTimeMetricRow{}
+	for _, r := range rows {
+		byID[r.CorrelationID] = r
+	}
+	closed, ok := byID["11111111-1111-4111-8111-111111111111"]
+	if !ok {
+		t.Fatalf("closed object not persisted: %+v", rows)
+	}
+	if closed.State != "closed" {
+		t.Fatalf("state did not reach the snapshot: %q", closed.State)
+	}
+	ttr := ttrRecoveryOf(t, closed)
+	if !ttr.Complete || ttr.DurationMs != int64(7*time.Minute/time.Millisecond) {
+		t.Fatalf("window_end did not reach the fold — ttr_recovery = %+v", ttr)
+	}
+	if !ttr.IsInferred {
+		t.Error("a backfilled engine recovery must stay flagged is_inferred")
+	}
+	if closed.Bottleneck == string(timeintel.DriverWorkflow) {
+		t.Errorf("a recovered snapshot must not carry workflow_not_connected: %q", closed.Bottleneck)
+	}
+
+	open, ok := byID["22222222-2222-4222-8222-222222222222"]
+	if !ok {
+		t.Fatalf("open object not persisted: %+v", rows)
+	}
+	if o := ttrRecoveryOf(t, open); o.Complete {
+		t.Errorf("an OPEN object must keep ttr_recovery incomplete: %+v", o)
+	}
+}
+
+// TestTimeIntelBackfillRederivesAnObjectThatCloses is the question the cursor
+// design raises: an object first folded while OPEN carries no recovery, so it must
+// be RE-derived once it closes — a state change that brings no new signals with it.
+//
+// It is: the engine's close path persists a NEW object version, and corr_current's
+// projection row for it takes created_at's DEFAULT now64(3), which is the
+// ReplacingMergeTree version column the cursor orders by. So the closed version
+// sorts strictly AFTER the mark, the next pass picks it, the keyed wide fetch reads
+// THAT version's state/window_end, and Upsert overwrites the same
+// (tenant, correlation, calc-version) row. No page-key change is needed; this test
+// exists so that property can never silently regress.
+func TestTimeIntelBackfillRederivesAnObjectThatCloses(t *testing.T) {
+	useTimeIntelKV(t)
+	base := time.Now().UTC().Add(-2 * time.Hour).Truncate(time.Millisecond)
+	const id = "33333333-3333-4333-8333-333333333333"
+
+	// Pass 1: the object is OPEN.
+	f := newSynthCH(t, []synthCorr{{tenant: "acme", id: id, version: 1, created: base}})
+	m := timeintel.NewMemMetricsStore()
+	s := &server{incidentTimeMetrics: m}
+	if _, err := s.backfillIncidentTimeMetrics(context.Background(), timeIntelBackfillLookback); err != nil {
+		t.Fatalf("pass 1: %v", err)
+	}
+	rows, _ := m.List(context.Background(), "acme", false, 10)
+	if len(rows) != 1 {
+		t.Fatalf("pass 1 wrote %d snapshots, want 1", len(rows))
+	}
+	if ttr := ttrRecoveryOf(t, rows[0]); ttr.Complete {
+		t.Fatalf("an open object must not have recovered yet: %+v", ttr)
+	}
+
+	// The engine closes it: version 2, state closed, a LATER created_at (the
+	// projection row's DEFAULT now64(3)).
+	f.mu.Lock()
+	f.objs = []synthCorr{{
+		tenant: "acme", id: id, version: 2, created: base.Add(5 * time.Minute),
+		// The synth fetch serves window_start = created, so window_end must sit
+		// after the CLOSED version's own onset for the span to be non-zero.
+		state: "closed", windowEnd: base.Add(9 * time.Minute),
+	}}
+	f.mu.Unlock()
+
+	// Pass 2 resumes from the stored watermark — it must still SEE the new version.
+	if _, err := s.backfillIncidentTimeMetrics(context.Background(), timeIntelBackfillLookback); err != nil {
+		t.Fatalf("pass 2: %v", err)
+	}
+	rows, _ = m.List(context.Background(), "acme", false, 10)
+	if len(rows) != 1 {
+		t.Fatalf("re-derivation must OVERWRITE the same snapshot, got %d rows", len(rows))
+	}
+	if rows[0].State != "closed" {
+		t.Fatalf("the close did not re-derive: state = %q", rows[0].State)
+	}
+	ttr := ttrRecoveryOf(t, rows[0])
+	if !ttr.Complete || ttr.DurationMs != int64(4*time.Minute/time.Millisecond) {
+		t.Fatalf("the re-derived snapshot must carry the recovery: %+v", ttr)
 	}
 }

@@ -151,8 +151,9 @@ func confidenceLabel(tier string) string {
 func (s *server) serveCorrelationTimeMetrics(w http.ResponseWriter, r *http.Request, id string) {
 	objSQL := `
 SELECT ` + chschema.ISO("window_start") + ` AS window_start,
+       ` + chschema.ISO("window_end") + `   AS window_end,
        ` + chschema.ISO("created_at") + `   AS created_at,
-       verdict_tier, top_confidence,
+       verdict_tier, top_confidence, state,
        hypotheses, evidence_missing, affected
   FROM netops.corr_objects
  WHERE correlation_id = '` + id + `'
@@ -180,6 +181,12 @@ SELECT ` + chschema.ISO("window_start") + ` AS window_start,
 		Owner:           owner,
 		EvidenceMissing: evidenceMissingFromBlob(asString(o["evidence_missing"])),
 		Confidence:      asFloat(o["top_confidence"]),
+		// Engine lifecycle: a CLOSED object's last-evidence time stands in for a
+		// service recovery signal when no ITSM workflow is linked (source=inferred,
+		// capped confidence — DeriveLifecycle's v2 mapping). Two narrow columns on a
+		// single-row read; the wide hypotheses blob was already being fetched here.
+		State:     asString(o["state"]),
+		WindowEnd: parseCHTime(o["window_end"]),
 	}
 	ownerDomain, _ := timeintel.ClassifyOwnerDomain(owner, group)
 

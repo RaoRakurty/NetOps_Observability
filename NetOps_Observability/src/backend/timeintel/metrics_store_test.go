@@ -3,6 +3,7 @@ package timeintel
 import (
 	"context"
 	"encoding/json"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -119,5 +120,86 @@ func TestMemIncidentTimeMetricsIsolation(t *testing.T) {
 	_ = m.Upsert(ctx, mk("acme", "c1", now))
 	if acme2, _ := m.List(ctx, "acme", false, 0); len(acme2) != 2 {
 		t.Fatalf("upsert must be idempotent on PK, got %d rows", len(acme2))
+	}
+}
+
+// TestDeriveMetricRowClosedObjectCarriesRecovery is the snapshot half of the v2
+// mapping: the row the backfill persists (and the rollups read) must carry a
+// COMPLETE ttr_recovery for a closed object, so /api/reliability/rollups can
+// report recovery p50/p90 with no ITSM workflow linked at all.
+func TestDeriveMetricRowClosedObjectCarriesRecovery(t *testing.T) {
+	now := time.Date(2026, 6, 24, 12, 30, 0, 0, time.UTC)
+	facts := backfillFacts()
+	facts.WindowEnd = facts.WindowStart.Add(6 * time.Minute)
+	group := map[string]string{"provider": "isp", "device": "wan-r2"}
+
+	row := DeriveMetricRow("acme", "corr-closed", "ti-1", facts, group, "DIA", "CLOSED", false, now)
+	if row.State != "closed" {
+		t.Fatalf("state must be normalized onto the row: %q", row.State)
+	}
+	var ttr TimeMetric
+	for _, m := range row.Metrics {
+		if m.Name == MetricTTRRecovery {
+			ttr = m
+		}
+	}
+	if !ttr.Complete {
+		t.Fatalf("a closed object's snapshot must carry a complete ttr_recovery: %+v", ttr)
+	}
+	if ttr.DurationMs != int64(6*time.Minute/time.Millisecond) {
+		t.Fatalf("ttr_recovery = %d ms, want 360000 (window_start → window_end)", ttr.DurationMs)
+	}
+	if !ttr.IsInferred {
+		t.Fatal("an engine-proxied recovery must stay flagged is_inferred in the snapshot")
+	}
+	if row.Bottleneck == string(DriverWorkflow) {
+		t.Fatalf("a recovered incident must not persist the workflow_not_connected driver: %q", row.Bottleneck)
+	}
+
+	// The caller cannot desync the two: `state` is the single source, so an OPEN
+	// object derived from the same facts still yields no recovery.
+	open := DeriveMetricRow("acme", "corr-open", "ti-1", facts, group, "DIA", "open", false, now)
+	for _, m := range open.Metrics {
+		if m.Name == MetricTTRRecovery && m.Complete {
+			t.Fatal("an OPEN object must never persist a complete ttr_recovery")
+		}
+	}
+	// …and a MERGED one never recovers either (it folds into its parent).
+	merged := DeriveMetricRow("acme", "corr-merged", "ti-1", facts, group, "DIA", "merged", false, now)
+	for _, m := range merged.Metrics {
+		if m.Name == MetricTTRRecovery && m.Complete {
+			t.Fatal("a MERGED object must never persist a complete ttr_recovery")
+		}
+	}
+}
+
+// TestRollupSurfacesInferredRecoveryPercentiles closes the loop the NOC scorecard
+// reads: many closed objects → a ttr_recovery MetricStat with real p50/p90, which
+// is exactly what flips the scorecard's `coverage.recovery` chip to "connected".
+func TestRollupSurfacesInferredRecoveryPercentiles(t *testing.T) {
+	now := time.Date(2026, 6, 24, 12, 30, 0, 0, time.UTC)
+	var incs []IncidentSummary
+	for i := 1; i <= 4; i++ {
+		facts := backfillFacts()
+		facts.WindowStart = facts.WindowStart.Add(time.Duration(i) * time.Hour)
+		facts.CreatedAt = facts.WindowStart.Add(90 * time.Second)
+		facts.WindowEnd = facts.WindowStart.Add(time.Duration(i) * time.Minute)
+		row := DeriveMetricRow("acme", "c"+strconv.Itoa(i), "ti-1", facts,
+			map[string]string{"device": "wan-r2"}, "DIA", "closed", false, now)
+		incs = append(incs, SummariesFromSnapshots([]MetricRow{row}, Filters{}, false)...)
+	}
+	ro := Rollup(incs)
+	st, ok := ro.Metrics[MetricTTRRecovery]
+	if !ok {
+		t.Fatal("rollup must carry ttr_recovery stats once objects close — this is the scorecard's coverage.recovery gate")
+	}
+	if st.Count != 4 {
+		t.Fatalf("ttr_recovery incident_count = %d, want 4", st.Count)
+	}
+	if st.P50ms != int64(2*time.Minute/time.Millisecond) || st.P90ms != int64(4*time.Minute/time.Millisecond) {
+		t.Fatalf("ttr_recovery percentiles wrong: p50=%d p90=%d", st.P50ms, st.P90ms)
+	}
+	if ro.TopTimeLossPhase == DriverWorkflow {
+		t.Fatal("top time-loss phase must no longer be workflow_not_connected once recovery is derivable")
 	}
 }

@@ -117,6 +117,7 @@ func (s *server) buildIncidentSummariesLive(r *http.Request, sinceSeconds int, f
 	sql := `
 SELECT toString(o.correlation_id) AS correlation_id,
        ` + chschema.ISO("o.window_start") + ` AS window_start,
+       ` + chschema.ISO("o.window_end") + `   AS window_end,
        ` + chschema.ISO("o.created_at") + `   AS created_at,
        o.verdict_tier             AS verdict_tier,
        o.top_confidence           AS top_confidence,
@@ -157,6 +158,11 @@ SELECT toString(o.correlation_id) AS correlation_id,
 			Owner:           owner,
 			EvidenceMissing: evidenceMissingFromBlob(asString(o["evidence_missing"])),
 			Confidence:      asFloat(o["top_confidence"]),
+			// Engine lifecycle → engine-inferred recovery when no ITSM workflow is
+			// linked (DeriveLifecycle's v2 mapping). state was already selected; only
+			// window_end is new, and corr_current is the NARROW projection.
+			State:     asString(o["state"]),
+			WindowEnd: parseCHTime(o["window_end"]),
 		}
 		group := timeintel.GroupKeysFromAffected(asString(o["affected"]))
 		if owner != "" {

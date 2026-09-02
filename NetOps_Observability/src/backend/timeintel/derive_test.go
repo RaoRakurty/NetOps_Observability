@@ -103,3 +103,118 @@ func TestDeriveLifecycle_DetectionNeverBeforeOnset(t *testing.T) {
 		t.Fatalf("detection must not precede first_signal; got %v", lc[EvDetected].At)
 	}
 }
+
+// ── engine-inferred recovery (v2 mapping) ────────────────────────────────────
+//
+// No ITSM workflow is linked in most deployments, so ttr_recovery used to be
+// permanently INCOMPLETE and the driver permanently "workflow_not_connected" —
+// even though the engine already records the incident's own close. These pin the
+// exact mapping, including the three states that must yield NOTHING.
+
+func TestDeriveLifecycle_ClosedObjectInfersRecovery(t *testing.T) {
+	b := tBase()
+	end := b.Add(9 * time.Minute)
+	lc := DeriveLifecycle(CorrTimeFacts{
+		WindowStart: b, CreatedAt: b.Add(30 * time.Second),
+		VerdictTier: "confirmed", Owner: "isp", Confidence: 0.9,
+		State: "closed", WindowEnd: end,
+	}, ITSMTimeFacts{})
+
+	rec, ok := lc[EvRecovered]
+	if !ok {
+		t.Fatal("a CLOSED object with a window_end must yield an inferred recovery stamp")
+	}
+	if !rec.At.Equal(end) {
+		t.Fatalf("recovery must land on window_end (last observed symptom); got %v want %v", rec.At, end)
+	}
+	if rec.Source != SrcInferred {
+		t.Fatalf("engine recovery must be source=inferred, never observed/itsm; got %s", rec.Source)
+	}
+	if rec.Confidence != inferredRecoveryMaxConfidence {
+		t.Fatalf("a 0.9-confidence verdict must still cap the recovery stamp at %v; got %v",
+			inferredRecoveryMaxConfidence, rec.Confidence)
+	}
+	// The whole point: ttr_recovery is now COMPLETE and flagged inferred.
+	var ttr TimeMetric
+	for _, m := range ComputeTimeMetrics(lc, "v1", b) {
+		if m.Name == MetricTTRRecovery {
+			ttr = m
+		}
+	}
+	if !ttr.Complete || ttr.DurationMs != int64(9*time.Minute/time.Millisecond) {
+		t.Fatalf("ttr_recovery must be complete at 9m: %+v", ttr)
+	}
+	if !ttr.IsInferred {
+		t.Fatal("ttr_recovery built on an engine proxy MUST be flagged is_inferred")
+	}
+	if ttr.Confidence > inferredRecoveryMaxConfidence {
+		t.Fatalf("ttr_recovery confidence must propagate the capped stamp; got %v", ttr.Confidence)
+	}
+}
+
+func TestDeriveLifecycle_ITSMRecoveryBeatsEngineInference(t *testing.T) {
+	b := tBase()
+	itsmAt := b.Add(20 * time.Minute)
+	lc := DeriveLifecycle(CorrTimeFacts{
+		WindowStart: b, CreatedAt: b.Add(30 * time.Second), Confidence: 0.9,
+		State: "closed", WindowEnd: b.Add(9 * time.Minute),
+	}, ITSMTimeFacts{Recovered: itsmAt})
+
+	rec := lc[EvRecovered]
+	if rec.Source != SrcITSM || !rec.At.Equal(itsmAt) {
+		t.Fatalf("a linked ITSM recovery must WIN over the engine proxy; got %+v", rec)
+	}
+	if rec.Confidence != 1 {
+		t.Fatalf("an ITSM recovery keeps confidence 1, got %v", rec.Confidence)
+	}
+}
+
+func TestDeriveLifecycle_MergedAndOpenNeverRecover(t *testing.T) {
+	b := tBase()
+	for _, state := range []string{"merged", "open", "", "unknown"} {
+		lc := DeriveLifecycle(CorrTimeFacts{
+			WindowStart: b, CreatedAt: b.Add(30 * time.Second), Confidence: 0.9,
+			State: state, WindowEnd: b.Add(9 * time.Minute),
+		}, ITSMTimeFacts{})
+		if _, ok := lc[EvRecovered]; ok {
+			t.Fatalf("state %q must NOT yield recovery (merged folds into its parent; open is still live)", state)
+		}
+	}
+}
+
+func TestDeriveLifecycle_ClosedWithoutWindowEndStaysIncomplete(t *testing.T) {
+	b := tBase()
+	lc := DeriveLifecycle(CorrTimeFacts{
+		WindowStart: b, CreatedAt: b.Add(30 * time.Second), Confidence: 0.9,
+		State: "CLOSED", // case-insensitive, but no timestamp to stand on
+	}, ITSMTimeFacts{})
+	if _, ok := lc[EvRecovered]; ok {
+		t.Fatal("a closed object with a zero window_end must yield NO recovery — never a bogus zero time")
+	}
+}
+
+func TestDeriveLifecycle_InferredRecoveryNeverPrecedesOnset(t *testing.T) {
+	b := tBase()
+	// Corrupt/skewed row: window_end before window_start. Clamp to the onset, the
+	// same guard `detected` carries — never a "recovered before it started" timeline.
+	lc := DeriveLifecycle(CorrTimeFacts{
+		WindowStart: b, CreatedAt: b.Add(30 * time.Second), Confidence: 0.9,
+		State: "closed", WindowEnd: b.Add(-5 * time.Second),
+	}, ITSMTimeFacts{})
+	if got := lc[EvRecovered].At; !got.Equal(b) {
+		t.Fatalf("recovery must clamp to the onset under skew; got %v want %v", got, b)
+	}
+}
+
+func TestDeriveLifecycle_InferredRecoveryConfidenceFloors(t *testing.T) {
+	b := tBase()
+	// An object reporting no confidence floors at 0.5, which is BELOW the cap —
+	// min() must keep the floor, not raise it to the cap.
+	lc := DeriveLifecycle(CorrTimeFacts{
+		WindowStart: b, CreatedAt: b.Add(30 * time.Second),
+		State: "closed", WindowEnd: b.Add(time.Minute),
+	}, ITSMTimeFacts{})
+	if got := lc[EvRecovered].Confidence; got != 0.5 {
+		t.Fatalf("a confidence-less object must keep the 0.5 floor, not the 0.7 cap; got %v", got)
+	}
+}

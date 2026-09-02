@@ -225,3 +225,79 @@ func TestBottleneckWorkflowNotConnected(t *testing.T) {
 		t.Fatalf("evidence ready, no workflow → %s, want workflow_not_connected", d)
 	}
 }
+
+// ── driver copy for an ENGINE-INFERRED recovery ──────────────────────────────
+//
+// Before the v2 mapping, an unlinked-workflow incident fell to
+// workflow_not_connected with "a service recovery signal is required to confirm
+// recovery" — which, once the engine's own close supplies a recovery stamp, is
+// simply false. These pin BOTH halves: the driver moves to closure, and the copy
+// names the source so a proxy never reads as a measurement.
+
+func inferredRec(sec int) EventStamp {
+	return EventStamp{At: at(sec), Source: SrcInferred, Confidence: inferredRecoveryMaxConfidence}
+}
+
+func TestBottleneckInferredRecoveryNoWorkflowIsClosureNotWorkflow(t *testing.T) {
+	lc := Lifecycle{
+		EvFirstSignal: obs(5), EvDetected: obs(10), EvRootDomainIdentified: obs(25),
+		EvOwnerIdentified: obs(30), EvEvidenceReady: obs(35),
+		EvRecovered: inferredRec(120),
+	}
+	d, msg := DeriveCurrentBottleneck(lc, DriverContext{Owner: "isp", WorkflowConnected: false})
+	if d != DriverClosure {
+		t.Fatalf("engine-recovered, no ticket → %s, want closure (the service DID come back)", d)
+	}
+	if strings.Contains(msg, "recovery signal is required") || strings.Contains(msg, "ticket, recovery and closure require") {
+		t.Fatalf("message still claims recovery evidence is missing after the engine supplied it: %q", msg)
+	}
+	if !strings.Contains(msg, "engine: no further symptoms") {
+		t.Fatalf("an INFERRED recovery must name its source in the copy: %q", msg)
+	}
+	if !strings.Contains(msg, "closure") {
+		t.Fatalf("the outstanding phase (ticket closure) must still be stated: %q", msg)
+	}
+}
+
+func TestBottleneckInferredRecoveryWithTicketIsClosure(t *testing.T) {
+	lc := Lifecycle{
+		EvFirstSignal: obs(5), EvDetected: obs(10), EvRootDomainIdentified: obs(25),
+		EvOwnerIdentified: obs(30), EvEvidenceReady: obs(35),
+		EvTicketCreated: obs(40), EvAcknowledged: obs(70), EvRecovered: inferredRec(120),
+	}
+	d, msg := DeriveCurrentBottleneck(lc, DriverContext{Owner: "isp", WorkflowConnected: true})
+	if d != DriverClosure {
+		t.Fatalf("engine-recovered, acked, not closed → %s, want closure", d)
+	}
+	if !strings.Contains(msg, "engine: no further symptoms") {
+		t.Fatalf("inferred recovery must be named as inferred: %q", msg)
+	}
+}
+
+// An OBSERVED/ITSM recovery keeps the original copy verbatim — the new branch may
+// not leak "engine" wording onto a workflow-confirmed recovery.
+func TestBottleneckObservedRecoveryCopyUnchanged(t *testing.T) {
+	lc := Lifecycle{
+		EvFirstSignal: obs(5), EvDetected: obs(10), EvRootDomainIdentified: obs(25),
+		EvOwnerIdentified: obs(30), EvEvidenceReady: obs(35),
+		EvTicketCreated: obs(40), EvAcknowledged: obs(70),
+		EvRecovered: EventStamp{At: at(120), Source: SrcITSM, Confidence: 1},
+	}
+	d, msg := DeriveCurrentBottleneck(lc, DriverContext{Owner: "isp", WorkflowConnected: true})
+	if d != DriverClosure || msg != "Service recovered; waiting for ticket closure." {
+		t.Fatalf("ITSM-recovered copy changed: %s / %q", d, msg)
+	}
+}
+
+// The provider-repair clock must STOP once the engine says the symptoms stopped:
+// an acked provider incident that recovered is no longer "waiting on the carrier".
+func TestBottleneckInferredRecoveryEndsProviderRepair(t *testing.T) {
+	lc := Lifecycle{
+		EvFirstSignal: obs(5), EvDetected: obs(10), EvRootDomainIdentified: obs(25),
+		EvOwnerIdentified: obs(30), EvEvidenceReady: obs(35),
+		EvTicketCreated: obs(40), EvAcknowledged: obs(70), EvRecovered: inferredRec(120),
+	}
+	if d, _ := DeriveCurrentBottleneck(lc, DriverContext{Owner: "carrier", WorkflowConnected: true}); d == DriverProviderRepair {
+		t.Fatal("provider_repair must not survive a recovery stamp — the repair clock ended")
+	}
+}

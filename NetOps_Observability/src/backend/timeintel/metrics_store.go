@@ -77,6 +77,11 @@ type MetricsStore interface {
 // owner-domain classification, MTBF grouping and dimension filters; state is the
 // corr object state (open|closed|merged — merged = child, excluded from MTBF).
 func DeriveMetricRow(tenant, corrID, version string, facts CorrTimeFacts, group map[string]string, seamType, state string, maintenance bool, now time.Time) MetricRow {
+	// `state` is a PARAMETER of this derivation and it also lands in MetricRow.State,
+	// so it is stamped onto the facts here rather than trusted to be set twice. That
+	// makes one source of truth: a caller can never persist State="closed" while
+	// deriving a lifecycle whose engine-inferred recovery never saw the close.
+	facts.State = strings.ToLower(strings.TrimSpace(state))
 	lc := DeriveLifecycle(facts, ITSMTimeFacts{})
 	metrics := ComputeTimeMetrics(lc, version, now)
 	ownerDomain, internal := ClassifyOwnerDomain(facts.Owner, group)
@@ -94,7 +99,7 @@ func DeriveMetricRow(tenant, corrID, version string, facts CorrTimeFacts, group 
 		Metrics:       metrics,
 		CalculatedAt:  now,
 		Owner:         facts.Owner,
-		State:         strings.ToLower(strings.TrimSpace(state)),
+		State:         facts.State, // normalized once, above
 		Internal:      internal,
 		Group:         group,
 		Maintenance:   maintenance,
