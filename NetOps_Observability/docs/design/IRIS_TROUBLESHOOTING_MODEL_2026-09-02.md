@@ -157,13 +157,60 @@ NetClaw's "run a show command first" and Genie, in-house and closed.
   (a case's affected set), per-device timeout, failure-isolated, bounded
   concurrency (≤ 8), one-in-flight-per-device kept.
 
-#### A3 backend — shipped; `ai` tool pending (2026-09-02)
+#### A4 — the `get_device_state` tool SHIPPED (2026-09-02)
+
+The show-first tool is now the front half of every device-scoped method.
+`ai/troubleshoot_state.go` + the `TroubleshootDeps.DeviceState` seam in
+`ai_troubleshoot_deps.go` over `StateBattery` + `NewSSHBatteryRunner`:
+
+- **Closed arguments.** `get_device_state(device_id, area, target?)` — `area` is
+  the battery's own seven, duplicated in `ai` (which must not import
+  `internal/protocoldiag`) and PINNED to `protocoldiag.Areas()` by
+  `TestAIDeviceStateAreasMatchTheBattery`. `target` is validated PER AREA and is
+  a hard error where the area takes none: required for `routes` (an unscoped
+  routing-table read is the one expensive command in the battery), an
+  address/prefix alphabet for `routes`/`l2`, an id alphabet elsewhere.
+- **Same gates as the collect endpoint.** ResolveDevice under the caller's
+  tenant (cross-tenant ⇒ `ErrNotFound`), then infrastructure **WRITE** for a
+  live read, because touching a device is an operation and not a read of stored
+  state. Without a transport, without the write level, or on a platform that
+  resolves to no dialect, the answer is an honest `NotWired` PLUS the read-only
+  command list — never a reading.
+- **Typed, not raw.** The seam renders `showparse` rows to text; only output NO
+  parser could read reaches the model, quoted and labelled **UNPARSED** in those
+  words. Per-area prompt caps (`MaxStateRows*`), stable citation ids
+  `state:<area>:<device>:<n>`.
+- **New chaining vocabulary.** One new condition key family, enumerated and
+  loader-validated: `state:<facet>=<value>` over `collect` · `if_oper` ·
+  `if_errors` · `igp_nbr` · `bgp_peer` · `route` · `l2_entry` · `platform`.
+  Every value is derived from a TYPED field by the server, one signal per facet
+  (the WORST reading wins), re-validated in the tool and again in the chain
+  evaluator. A `state:` rule may only be authored by a skill that gathers
+  `get_device_state`, so it can never be a rule that silently never fires.
+- **Skills.** Nine SKILL.md files now gather state FIRST (only `get_rca_verdict`
+  may precede it, and a test enforces that): interface-down · optics-degraded
+  (`interfaces`), ospf-adjacency · isis-adjacency (`igp`), bgp-session-down ·
+  bgp-prefix-missing (`bgp`), mac-flap · stp-topology (`l2`), osi-bisection
+  (`platform`). The design's acceptance fixture now runs twice: the A2 version
+  hops bgp-session-down → interface-down on the engine's verdict phrase, the A4
+  version hops on `state:bgp_peer=idle` read off the device itself, with no
+  verdict phrase in scope at all.
+- **Not authored (deliberate).** No skill gathers `area=routes`: a prefix is not
+  one of the four resolvable entities, so the step could only ever be dropped.
+  The area is reachable from the agent loop, where the model supplies the prefix.
+
+Also shipped in A4, the read-only **BGP operations** tools (`ai/troubleshoot_bgp.go`,
+module `bgp_operations`): `get_bgp_watchlist` · `get_bgp_rpki` ·
+`get_bgp_feed_recent(prefix?, limit)`, each through the same tenant scoping
+`/api/bgp/*` uses (FORCE-RLS watchlist, per-tenant update ring; a cross-tenant
+caller with no tenant selected is refused, not merged). The watchlist WRITE path
+is deliberately unreachable. `bgp-prefix-missing` gathers rpki + feed.
+
+#### A3 backend — shipped (2026-09-02)
 
 `internal/protocoldiag/statebattery.go` + `fanout.go` + `typedbridge.go` and the
-new `internal/showparse` package. The `get_device_state` skill tool is NOT here —
-`ai/` is owned by another agent this wave — so the backend exports a clean package
-API and the tool is a thin call over it (`StateBattery.Battery`'s doc comment
-carries the worked call sequence).
+new `internal/showparse` package (`StateBattery.Battery`'s doc comment carries
+the worked call sequence the A4 tool follows).
 
 **State battery.** A SECOND closed table beside the 15-issue catalog's, never a
 widening of it: `matchTemplate` now takes a `tokenGrammar`, so the battery can add
@@ -251,8 +298,61 @@ any new layer the documents justify (e.g. `wan_sdwan`, `dns`, `qos`, `mcast`,
   (igpmon), BGP IDLE/ACTIVE (bgp watch), CPU/memory thresholds, config change in
   window (verify `recent_change`), CVE match (Project 3 findings). Where a rule is
   missing, add a symptom rule — the engine flags, Iris narrates.
+- **Iris half shipped 2026-09-02 (see §3.2).** The heartbeat list is now readable
+  ON DEMAND through `get_device_state`, and its closed `state:` vocabulary is
+  exactly that list expressed as machine facts: `igp_nbr=not_full` (non-FULL
+  OSPF / non-Up IS-IS), `bgp_peer=idle|active`, `platform=cpu_high|mem_high`
+  (the ">90 %" thresholds, and only when the device actually reported a figure —
+  an unread CPU is UNKNOWN, never calm), `if_oper` / `if_errors`, `route` /
+  `l2_entry`. The **engine-side** half — turning those readings into unsolicited
+  symptom rules that fire without an operator asking — is audited and built
+  below (shadow, so nothing fires yet): Iris still reads and narrates, and does
+  not sweep. `get_bgp_rpki` / `get_bgp_feed_recent` cover the routing-security
+  and prefix-churn heartbeats for watched resources.
 - Intent cross-reference: seam/topology graph and config drift are the SoT we own.
   IPAM/NetBox connector is a Project 2 integration item, not an Iris item.
+
+#### A4 engine side — audited + shadow rules shipped (2026-09-02)
+
+Full audit with `file:line` evidence per heartbeat item:
+`docs/design/PROACTIVE_CHECKS_AUDIT_2026-09-02.md`. Five of the ten audited items needed
+nothing new — config change (trap emits, syslog SHADOW per tracker 220),
+device restart (`device_restart`, deliberately `INTENTIONAL_BLIND`), interface
+errors (`if_metric_anomaly`), CVE match (`security_exposure` →
+`sig.ent.security.exposure-story`) and SoT drift (`configdrift` → `security_posture`
+→ `sig.ent.security.hardening-drift-story`). The gap was ONE thing, in three
+instances: **the engine flagged transitions, not a state that stays bad.**
+`bgp_adjacency_change` fires once and never again; `device_resource_anomaly` is
+a CUSUM episode against the box's OWN baseline, so a router at 97 % CPU all week
+deviates by nothing.
+
+`src/correlation/proactive.py` adds a pure dwell-timer plane — six checks
+(persistent BGP not-established from `device_bgp_peer_state` and from the
+adjacency signal; persistent OSPF not-FULL and IS-IS not-UP; sustained CPU and
+memory) with four `operator_phrase` signatures authored beside them. The
+discriminator is deliberate: a flap fires NOTHING and is left to the existing
+`*-adjacency-flap` signatures, which explain it and have different first steps.
+
+Two constraints shaped it, both recorded in the audit:
+
+- **`rcaMetricFamilies` was NOT widened.** CPU/memory were already RCA families,
+  so #4/#5 needed nothing. `device_ospf_nbr_state` / `device_isis_adj_state` are
+  explicitly NOT RCA families (the gnmic `corr-rca-shape` allowlist drops them),
+  so the IGP checks are built on the adjacency SIGNALS instead. The exact
+  five-part contract change the metric path would need is written down — tracker
+  222, not done here.
+- **Every check ships SHADOW and the four signatures are NOT installed**, so the
+  V1 goldens are byte-identical: no signal is emitted, `catalog_version` does not
+  move, and no parser rule was added (`PARSER_REV` untouched), so unlike tracker
+  220 nothing can re-classify a V1 noise line.
+
+**What Iris can see: nothing, by design.** A shadow check writes no
+`corr_signals` row at all — there is no "shadow flag" on a signal — so
+`get_rca_verdict` and `get_case_timeline` (which read the correlation OBJECT)
+cannot see one. That is the same contract a shadow parser rule has, unchanged.
+Operators read the rate on `corr_proactive_shadow_hits_total{check_id}` and the
+check table on `/healthz .proactive`. After promotion a fired check is an
+ordinary signal and reaches Iris through the existing path — no new surface.
 
 ### 3.5 Investigation memory — Phase B
 Per-tenant, per-entity memory of prior conclusions ("this peer flapped on 2026-08-30,

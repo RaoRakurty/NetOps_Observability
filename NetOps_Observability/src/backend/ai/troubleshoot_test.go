@@ -62,6 +62,34 @@ func tsDeps() TroubleshootDeps {
 			}
 			return []TimelineEvent{{At: "2026-09-01T10:00:00Z", Kind: "log", Entity: "edge-1", Text: "%BGP-5-ADJCHANGE Down"}}, nil
 		},
+		DeviceState: func(_ context.Context, _ Principal, req DeviceStateRequest) (DeviceStateReport, error) {
+			return DeviceStateReport{
+				DeviceID: req.DeviceID, DeviceName: "edge-1", Platform: "ios-xe",
+				Dialect: "cisco/ios_xe", Area: req.Area, Status: "ok", Collected: true,
+				RulesetVersion: "v1",
+				Rows: []StateRow{
+					{Text: "BGP peer 10.0.0.1 — AS65001, state Idle", Kind: "device", Signals: []string{"state:bgp_peer=idle"}},
+				},
+			}, nil
+		},
+		BGPWatchlist: func(_ context.Context, _ Principal) (BGPWatchlistReport, error) {
+			return BGPWatchlistReport{Scope: "t-a", Items: []BGPWatchItem{
+				{Resource: "203.0.113.0/24", Kind: "prefix", Note: "customer block", Status: "announced by AS64500"},
+			}}, nil
+		},
+		BGPRPKI: func(_ context.Context, _ Principal) (BGPRPKIReport, error) {
+			return BGPRPKIReport{Scope: "t-a", Items: []BGPRPKIItem{
+				{Prefix: "203.0.113.0/24", Origin: "AS64500", State: "valid", ROAs: 1},
+			}}, nil
+		},
+		BGPFeedRecent: func(_ context.Context, _ Principal, prefix string, limit int) (BGPFeedReport, error) {
+			return BGPFeedReport{
+				Scope: "t-a", Resources: []string{"203.0.113.0/24"},
+				Updates: []BGPFeedUpdate{
+					{Seq: 7, At: "2026-09-02T10:00:00Z", Type: "W", Prefix: "203.0.113.0/24", Peer: "192.0.2.1"},
+				},
+			}, nil
+		},
 	}
 }
 
@@ -95,8 +123,8 @@ func mustRun(t *testing.T, reg *ToolRegistry, name string, args ToolArgs) ToolRe
 func TestTroubleshootToolsAreReadOnly(t *testing.T) {
 	reg := tsRegistry(t, tsDeps())
 	names := TroubleshootToolNames()
-	if len(names) != 5 {
-		t.Fatalf("expected 5 Phase-A tools, got %v", names)
+	if len(names) != 9 {
+		t.Fatalf("expected 9 Phase-A/A4 tools, got %v", names)
 	}
 	for i := 1; i < len(names); i++ {
 		if names[i-1] >= names[i] {
@@ -145,7 +173,7 @@ func TestAddTroubleshootToolsRegistersOnlyWiredSeams(t *testing.T) {
 		{
 			name: "only the DataSource", ds: newMockDS(), deps: TroubleshootDeps{},
 			want:    []string{"get_rca_verdict"},
-			notWant: []string{"get_case_timeline", "run_protocol_diagnostic", "get_security_findings", "get_topology_context"},
+			notWant: []string{"get_case_timeline", "run_protocol_diagnostic", "get_security_findings", "get_topology_context", "get_device_state", "get_bgp_watchlist", "get_bgp_rpki", "get_bgp_feed_recent"},
 		},
 		{
 			name: "timeline without device resolution",
@@ -157,7 +185,7 @@ func TestAddTroubleshootToolsRegistersOnlyWiredSeams(t *testing.T) {
 			name: "device resolution but no findings seam",
 			ds:   newMockDS(),
 			deps: TroubleshootDeps{ResolveDevice: full.ResolveDevice, TopologyContext: full.TopologyContext},
-			want: []string{"get_topology_context"}, notWant: []string{"get_security_findings", "run_protocol_diagnostic"},
+			want: []string{"get_topology_context"}, notWant: []string{"get_security_findings", "run_protocol_diagnostic", "get_device_state"},
 		},
 		{
 			name: "everything wired", ds: newMockDS(), deps: full,

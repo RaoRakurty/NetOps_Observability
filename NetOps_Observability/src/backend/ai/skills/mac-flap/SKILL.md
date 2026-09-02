@@ -4,18 +4,21 @@ layer: l2
 version: 1
 when_to_use: mac flap, mac move, host moving between ports, duplicate mac, mac address flapping, station move, arp instability
 symptom_kinds: l2, instability, duplicate
-tools: get_device_health, get_topology_context, search_logs, get_metric_anomalies
+tools: get_device_state, get_device_health, get_topology_context, search_logs, get_metric_anomalies
 gather:
+  - get_device_state(device_id, area=l2)
   - get_topology_context(device_id)
   - get_device_health(device)
   - search_logs(device, query=MACFLAP, window=6h)
   - get_metric_anomalies()
 look_for:
+  - The device's own ARP / MAC tables, read live. What the forwarding table says right now beats any inference from an alarm.
   - The pair of ports a single MAC address is moving between. That pair, not the MAC, is the finding.
   - Whether one of the two ports leads back into the same L2 domain by another route, which is a loop rather than a mobile host.
   - Whether the address belongs to a virtual or clustered service, where a legitimate failover looks identical to a flap but happens once, not continuously.
   - The move rate. A handful of moves is mobility; continuous moves are a topology defect.
 decisions:
+  - next=log-confirmation when state:collect=not_wired the device's own ARP and MAC tables could not be read, so the port pair must come from its logs
   - next=stp-topology when the moves coincide with topology-change notifications
   - next=interface-down when one of the two ports is also flapping
   - next=log-confirmation when the exact port pair must be read from the device's own words

@@ -4,18 +4,22 @@ layer: physical
 version: 1
 when_to_use: interface down, port down, link down, line protocol down, uplink down, circuit down, device unreachable, no link
 symptom_kinds: physical, reachability, adjacency
-tools: get_device_health, get_topology_context, get_rca_verdict, search_logs
+tools: get_device_state, get_device_health, get_topology_context, get_rca_verdict, search_logs
 gather:
+  - get_device_state(device_id, area=interfaces)
   - get_rca_verdict(correlation_id)
   - get_device_health(device)
   - get_topology_context(device_id)
   - search_logs(device, query=LINK, window=6h)
 look_for:
+  - The device's OWN admin and oper state for the port, read live. Never guess it from an alarm; the counters and the last-flap text arrive with it.
   - Whether the interface is administratively down or operationally down. Admin-down is a change; oper-down is a fault.
   - Whether the LINK PARTNER also reports the loss. One side down and the other up is an optic, a patch, or a duplex problem, not a device failure.
   - Flap count and the time of the last transition. A single clean transition points at a change; repeated transitions point at optics or power.
   - Whether the device itself stopped reporting. A device that went quiet in every collector is unreachable, not down on one port.
 decisions:
+  - next=optics-degraded when state:if_errors=present the port is counting errors, CRCs or drops alongside the link event
+  - next=log-confirmation when state:collect=not_wired the device's own state could not be read, so the transition must be pinned from its logs instead
   - next=optics-degraded when evidence:kind=metric an anomalous interface counter is present alongside the link event
   - next=ospf-adjacency when the link recovered and the IGP neighbour did not
   - next=bgp-session-down when the link recovered and the BGP peer did not

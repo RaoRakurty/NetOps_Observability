@@ -98,15 +98,35 @@ troubleshooting documentation is the knowledge source).
   accumulates deduped + capped; entities resolved once per turn (no scope
   widening). `Answer.Chain` + `round`/`selected` on every audit entry; the
   breadcrumb renders in `IrisLane`. Spec §3.1 of the model doc.
-- [ ] **A3 — show-first state battery + `internal/showparse` parser library**
-  (Genie-equivalent; skip-on-unparseable; parallel failure-isolated collection).
-  Spec §3.2. Largest piece.
+- [x] **A3 — show-first state battery + `internal/showparse` parser library**
+  (Genie-equivalent; skip-on-unparseable; parallel failure-isolated collection)
+  — SHIPPED 2026-09-02. `internal/protocoldiag/statebattery.go` + `fanout.go` +
+  `typedbridge.go`; 14 specs × 8 dialects, 77 (command, dialect) parsers, every
+  optional field a pointer (absent means absent). Spec §3.2.
+- [x] **A4 — `get_device_state` + read-only BGP operations tools** — SHIPPED
+  2026-09-02. `ai/troubleshoot_state.go` (`get_device_state(device_id, area,
+  target?)`, closed 7-area vocabulary pinned to `protocoldiag.Areas()`, per-area
+  target rules, per-area prompt caps, stable `state:<area>:<device>:<n>`
+  citations) over a new `TroubleshootDeps.DeviceState` seam using the SAME gates
+  as the collect endpoint (tenant-scoped ResolveDevice, infrastructure **write**
+  for a live read, honest `NotWired` + the read-only command list otherwise,
+  unparsed output labelled UNPARSED and quoted rather than typed).
+  `ai/troubleshoot_bgp.go` adds read-only `get_bgp_watchlist` ·
+  `get_bgp_rpki` · `get_bgp_feed_recent` (tenant-scoped exactly as `/api/bgp/*`;
+  no write path). New closed condition family `state:<facet>=<value>` over 8
+  facets, loader-validated and only authorable by a skill that gathers state;
+  9 SKILL.md files now gather state FIRST. The design's chain fixture runs twice
+  — once on the engine's verdict phrase (A2), once on `state:bgp_peer=idle` read
+  off the device (A4). Spec §3.2/§3.4. Remaining A4: the ENGINE-side proactive
+  sweep (symptom rules that fire unasked) — Iris reads and narrates, it does not
+  yet sweep.
 - [ ] **Knowledge ingestion** — owner drops docs in `docs/knowledge/inbox/`;
   Fable distils to SKILL.md (+ CommandTable/signature entries) with `source:`
   citations; owner reviews prose; golden evals per skill. Spec §3.3. Waiting on
   the first drop.
-- [ ] A4 proactive checks mapped onto the engine · Phase B guide/memory ·
-  Phase C human-in-the-loop actions (P6, separate subsystem) · Phase D interop.
+- [ ] A4 ENGINE-side proactive sweep (unsolicited symptom rules for the
+  heartbeat list) · Phase B guide/memory · Phase C human-in-the-loop actions
+  (P6, separate subsystem) · Phase D interop.
 
 ## D. Frontend-wave items (owner's original 13-item list)
 Full audit: `docs/FRONTEND_WAVE_TRACKER.md`.
@@ -118,7 +138,10 @@ Full audit: `docs/FRONTEND_WAVE_TRACKER.md`.
   - [ ] **#10** BGP depth — live RIS/BMP feed + local buffer, RPKI/ASPA/geofeed
     panels, **AS-path graph** (design `91df4f62`), AI-over-BGP-tools.
   - [ ] **#11** OSPF advanced + **IS-IS advanced** monitoring — **the depth
-    collectors now exist; IS-IS is lab-attested, OSPF is `doc_claimed`.**
+    collectors now exist; IS-IS is LIVE-ATTESTED 2026-09-02 (gnmic restarted on the
+    deployed stack after `b59111a0`: `device_isis_lsp_count` / `_spf_runs_total` /
+    `_area` / `_adj_hold_seconds` present in VictoriaMetrics from the SR Linux
+    spine), OSPF stays `doc_claimed` (no OSPF SNMP device in the lab).**
     `internal/igpmon` serves `GET /api/protocols/{ospf|isis}/{adjacencies,
     summary,health}` (infrastructure:read; wired in `igpmon_deps.go`, routes in
     `main.go`, ledger + `igpmon_deps_test.go` cross-org test). Adjacency history

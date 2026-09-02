@@ -4,18 +4,24 @@ layer: bgp
 version: 1
 when_to_use: prefix missing, route not advertised, route not received, bgp not advertising, prefix not in table, route missing, not learning routes, best path wrong
 symptom_kinds: bgp, routing, policy, reachability
-tools: run_protocol_diagnostic, get_rca_verdict, get_topology_context, search_logs
+tools: get_device_state, run_protocol_diagnostic, get_rca_verdict, get_topology_context, get_bgp_rpki, get_bgp_feed_recent
 gather:
+  - get_device_state(device_id, area=bgp)
   - get_rca_verdict(correlation_id)
   - run_protocol_diagnostic(device_id, protocol=bgp, issue_id=bgp-prefix-not-exchanged)
+  - get_bgp_rpki()
+  - get_bgp_feed_recent()
   - get_topology_context(device_id)
-  - search_logs(device, query=BGP, window=24h)
 look_for:
+  - The session state read LIVE off the device, before any policy theory. Whether the session is Established first.
+  - Whether the prefix is RPKI-valid and whether the global table has recently withdrawn or re-originated it. An invalid origin is a routing-security finding, not a policy bug.
   - Whether the session is Established first. A missing prefix on a session that is not up is the session's fault, not policy.
   - Whether the prefix is received-but-filtered, received-and-hidden by a better path, or never received at all. These are three different owners.
   - Outbound policy on the sending side and inbound policy on the receiving side, including prefix-list, route-map and maximum-prefix state.
   - Next-hop reachability. A received prefix whose next hop is unresolvable is valid but never installed, which looks identical to "missing" from the routing table.
 decisions:
+  - next=bgp-session-down when state:bgp_peer=idle the device reports the peer Idle, so the missing prefix is the session's fault rather than policy
+  - next=bgp-session-down when state:bgp_peer=active the device reports the peer Active, so the session is not up and policy cannot be the cause yet
   - next=bgp-session-down when the session is not Established
   - next=path-seam-handoff when the missing prefix belongs to a partner or provider we do not control
   - next=log-confirmation when signature=none the prefix diagnostic ran and no known signature matched, so a maximum-prefix or policy event must be pinned from the device's own words

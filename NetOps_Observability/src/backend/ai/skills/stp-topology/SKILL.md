@@ -4,18 +4,21 @@ layer: l2
 version: 1
 when_to_use: spanning tree, stp, tcn, topology change, broadcast storm, loop, root bridge, blocking port, vlan unstable, l2 storm
 symptom_kinds: l2, instability, broadcast
-tools: get_device_health, get_metric_anomalies, get_topology_context, search_logs, get_rca_verdict
+tools: get_device_state, get_metric_anomalies, get_topology_context, search_logs, get_rca_verdict
 gather:
+  - get_device_state(device_id, area=l2)
   - get_rca_verdict(correlation_id)
   - get_topology_context(device_id)
   - get_metric_anomalies()
   - search_logs(device, query=SPANTREE, window=6h)
 look_for:
+  - The device's own L2 tables, read live: repeated flushes leave an ARP/MAC cache that looks nothing like a stable domain's.
   - A burst of topology-change notifications rather than a single one. One TCN is a port coming up; a stream of them is instability.
   - Which port is the source of the change and whether it is an access port that should have been edge-configured.
   - Whether the root bridge moved. A root change re-converges the whole domain and explains a simultaneous, domain-wide symptom.
   - Broadcast and unknown-unicast rates on the affected VLANs, and whether MAC tables are being flushed repeatedly.
 decisions:
+  - next=log-confirmation when state:collect=not_wired the device's own L2 tables could not be read, so the change source must come from its logs
   - next=mac-flap when hosts are appearing on more than one port during the changes
   - next=interface-down when one specific port is flapping and driving every change
   - next=log-confirmation when the change source port must be read from the device's own words

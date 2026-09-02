@@ -4,13 +4,15 @@ layer: method
 version: 1
 when_to_use: something is broken, site is down, users complain, network slow, not working, where do i start, troubleshoot, investigate, unknown fault, no idea
 symptom_kinds: unknown, general, triage
-tools: get_rca_verdict, get_case_timeline, get_topology_context, get_active_major_incidents
+tools: get_rca_verdict, get_device_state, get_case_timeline, get_topology_context, get_active_major_incidents
 gather:
   - get_rca_verdict(correlation_id)
+  - get_device_state(device_id, area=platform)
   - get_case_timeline(correlation_id)
   - get_active_major_incidents()
   - get_topology_context(device_id)
 look_for:
+  - When a device is in scope, its LIVE control-plane health — CPU, memory, uptime and last reload. A router that rebooted or is CPU-bound reframes every symptom above it, and it is read, never assumed.
   - A correlation verdict already in scope. If the engine has concluded, START THERE and narrate its conclusion — do not re-derive a cause the engine already named.
   - Absent a verdict, work the layer order bottom-up and stop at the FIRST layer that explains the symptom: physical, then L2, then IGP, then BGP, then path/seam, then application. Logs confirm; they never lead.
   - Scope before mechanism: one interface, one device, one site, or many? A single-device symptom and a site-wide symptom are different faults with different owners.
@@ -28,6 +30,7 @@ decisions:
   - next=path-seam-handoff when the loss or latency sits on a hop we do not own
   - next=app-edge-5xx when the transport is clean and only one application is failing
   - next=security-exposure-context when the operator asks about exposure, posture, or a security finding
+  - next=log-confirmation when state:platform=cpu_high the control plane is saturated, which explains adjacency and session loss that looks like a link fault
   - next=log-confirmation when a layer hypothesis needs a device's own words to confirm it
   - verdict=state the layer that explains the symptom, the scope it affects, and which evidence classes agree
   - escalate=say plainly which evidence is missing and which check would close the gap

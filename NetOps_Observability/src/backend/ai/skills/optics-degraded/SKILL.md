@@ -4,18 +4,22 @@ layer: physical
 version: 1
 when_to_use: crc errors, input errors, optics, ddm, light level, transceiver, sfp, dirty fibre, errors climbing, fcs errors, packet corruption
 symptom_kinds: physical, errors, degradation
-tools: get_device_health, get_metric_anomalies, get_topology_context, search_logs
+tools: get_device_state, get_device_health, get_metric_anomalies, get_topology_context, search_logs
 gather:
+  - get_device_state(device_id, area=interfaces)
   - get_device_health(device)
   - get_metric_anomalies()
   - get_topology_context(device_id)
   - search_logs(device, query=error, window=24h)
 look_for:
+  - The device's own counters and transceiver readings, read live: Rx/Tx power, bias, temperature and the error columns. A reading the device did not report is UNKNOWN, never zero.
   - Error counters that are RISING, not merely non-zero. A lifetime counter with no recent delta is history, not a fault.
   - Which direction the errors are on. Receive-side errors accuse the far end and the fibre; transmit-side errors accuse this device.
   - Whether the error rate tracks traffic volume. Errors proportional to load are usually a marginal optic; errors independent of load are usually the fibre or a connector.
   - Whether the link ever went down. Errors without a link transition are a brownout, and a brownout hurts applications long before it trips an alarm.
 decisions:
+  - next=interface-down when state:if_oper=down the port is operationally down, so this is a link failure rather than a brownout
+  - next=log-confirmation when state:collect=not_wired the optics could not be read live, so the device's own alarms are the only evidence left
   - next=interface-down when the link has since transitioned
   - next=path-seam-handoff when the degraded link is the provider handoff
   - next=app-edge-5xx when the errors are too few to explain the reported application impact

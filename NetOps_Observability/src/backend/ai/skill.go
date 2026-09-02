@@ -133,6 +133,12 @@ var skillEntities = map[string]bool{
 // A skill naming anything else fails the loader — this is the structural half of
 // "the model can never request a device write" (the Policy Engine is the other).
 var skillToolAllowlist = map[string]bool{
+	// Phase-A4 additions: the show-first state battery and the read-only BGP
+	// operations reads.
+	"get_device_state":    true,
+	"get_bgp_watchlist":   true,
+	"get_bgp_rpki":        true,
+	"get_bgp_feed_recent": true,
 	// Phase-A additions.
 	"run_protocol_diagnostic": true,
 	"get_security_findings":   true,
@@ -203,6 +209,14 @@ const (
 	CondNote = "note"
 	// CondToolPrefix + a tool name fires on that tool's outcome this turn.
 	CondToolPrefix = "tool:"
+	// CondStatePrefix + a FACET fires on a TYPED device-state field the
+	// show-first state battery actually read (`state:if_oper=down`). The value
+	// set is enumerated per facet in skillStateFacets, and every fact is derived
+	// from a showparse typed row by the server — never from raw device text and
+	// never from the model. A `state:` rule may only be authored by a skill that
+	// declares get_device_state, so a rule can never depend on state the skill
+	// does not gather.
+	CondStatePrefix = "state:"
 	// CondSignatureNone is the reserved CondSignature value: a protocol
 	// diagnostic RAN this turn and no known signature matched its output.
 	CondSignatureNone = "none"
@@ -229,6 +243,135 @@ var skillEvidenceKinds = map[string]bool{
 // skillVerdictTiers is the closed RCA verdict-tier vocabulary.
 var skillVerdictTiers = map[string]bool{
 	"confirmed": true, "suspected": true, "candidate": true, "undetermined": true,
+}
+
+// skillStateFacets is the closed `state:` vocabulary: FACET → its enumerated
+// value set (IRIS Phase A4). Each facet is a question the state battery can
+// answer from a TYPED showparse field, and each value is a conclusion the
+// server derives deterministically:
+//
+//	collect    how the live read itself went (an unread device is not a clean one)
+//	if_oper    the subject interface's operational/line-protocol state
+//	if_errors  whether any error/CRC/drop counter on the read interfaces is non-zero
+//	igp_nbr    the WORST OSPF/IS-IS adjacency state on the device
+//	bgp_peer   the WORST BGP neighbour FSM state on the device
+//	route      whether the looked-up prefix is in the routing table
+//	l2_entry   whether the looked-up address is in the ARP / MAC table
+//	platform   control-plane CPU / memory pressure (the design's ">90 %" flag)
+//
+// Adding a facet or a value is a DELIBERATE edit here plus a derivation in the
+// server seam; nothing else can widen it, and the loader rejects anything else.
+var skillStateFacets = map[string]map[string]bool{
+	"collect": {
+		"ok": true, "partial": true, "failed": true,
+		"timed_out": true, "unsupported": true, "not_wired": true,
+	},
+	"if_oper":   {"up": true, "down": true, "admin_down": true},
+	"if_errors": {"none": true, "present": true},
+	"igp_nbr":   {"full": true, "not_full": true, "none": true},
+	"bgp_peer": {
+		"established": true, "idle": true, "active": true,
+		"connect": true, "other": true, "none": true,
+	},
+	"route":    {"present": true, "absent": true},
+	"l2_entry": {"present": true, "absent": true},
+	"platform": {"ok": true, "cpu_high": true, "mem_high": true},
+}
+
+// StateFacets returns every `state:` facet name in sorted order (loader error
+// messages, tests and documentation).
+func StateFacets() []string {
+	out := make([]string, 0, len(skillStateFacets))
+	for k := range skillStateFacets {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// validStateFact reports whether facet=value is inside the closed `state:`
+// vocabulary. It is the ONE gate: the loader calls it on an authored condition
+// and the chain evaluator calls it again on a signal a tool declared.
+func validStateFact(facet, value string) bool {
+	vals, ok := skillStateFacets[facet]
+	return ok && vals[value]
+}
+
+// stateConditionHuman renders a `state:` condition as the operator-facing
+// reason a hop was taken.
+func stateConditionHuman(facet, value string) string {
+	switch facet {
+	case "collect":
+		switch value {
+		case "ok":
+			return "the device's live state was read in full"
+		case "partial":
+			return "only part of the device's live state could be read"
+		case "not_wired":
+			return "live device state could not be read on this deployment"
+		case "unsupported":
+			return "no read-only command is established for this platform"
+		case "timed_out":
+			return "the device did not answer the state read in time"
+		default:
+			return "the device's live state could not be read"
+		}
+	case "if_oper":
+		switch value {
+		case "admin_down":
+			return "the interface is administratively down"
+		case "down":
+			return "the interface is operationally down"
+		default:
+			return "the interface is operationally up"
+		}
+	case "if_errors":
+		if value == "present" {
+			return "the interface is counting errors, CRCs or drops"
+		}
+		return "the interface reports no error counters"
+	case "igp_nbr":
+		switch value {
+		case "full":
+			return "every IGP adjacency read is fully established"
+		case "none":
+			return "the device has no IGP adjacency at all"
+		default:
+			return "an IGP adjacency is not fully established"
+		}
+	case "bgp_peer":
+		switch value {
+		case "established":
+			return "the BGP session read is Established"
+		case "none":
+			return "the device has no BGP neighbour at all"
+		case "other":
+			return "the BGP session is in a non-Established state"
+		default:
+			return "the BGP session is " + value
+		}
+	case "route":
+		if value == "present" {
+			return "the prefix is in the routing table"
+		}
+		return "the device says the prefix is not in the routing table"
+	case "l2_entry":
+		if value == "present" {
+			return "the address is in the ARP / MAC table"
+		}
+		return "the device says the address is not in the ARP / MAC table"
+	case "platform":
+		switch value {
+		case "cpu_high":
+			return "control-plane CPU is above 90%"
+		case "mem_high":
+			return "control-plane memory is above 90%"
+		default:
+			return "control-plane CPU and memory are within bounds"
+		}
+	default:
+		return CondStatePrefix + facet + "=" + value
+	}
 }
 
 var (
@@ -260,6 +403,8 @@ func (c SkillCondition) Human() string {
 		return "the RCA verdict names \"" + c.Value + "\""
 	case c.Key == CondNote:
 		return "a collection note mentions \"" + c.Value + "\""
+	case strings.HasPrefix(c.Key, CondStatePrefix):
+		return stateConditionHuman(strings.TrimPrefix(c.Key, CondStatePrefix), c.Value)
 	case strings.HasPrefix(c.Key, CondToolPrefix):
 		tool := ToolLabel(strings.TrimPrefix(c.Key, CondToolPrefix))
 		switch c.Value {
@@ -306,6 +451,22 @@ func parseSkillCondition(raw string, declared map[string]bool) (SkillCondition, 
 		if !reCondToken.MatchString(value) {
 			return SkillCondition{}, fmt.Errorf("%s token %q must match %s", key, value, reCondToken)
 		}
+	case strings.HasPrefix(key, CondStatePrefix):
+		facet := strings.TrimPrefix(key, CondStatePrefix)
+		if _, known := skillStateFacets[facet]; !known {
+			return SkillCondition{}, fmt.Errorf("state facet %q is not one of %v", facet, StateFacets())
+		}
+		if !validStateFact(facet, value) {
+			return SkillCondition{}, fmt.Errorf("state value %q is not one of %v for facet %q",
+				value, sortedKeys(skillStateFacets[facet]), facet)
+		}
+		// A state rule may only be authored by a skill that actually reads state
+		// — otherwise the condition could only ever fire on another skill's
+		// evidence, which is exactly the silent-never-fires trap this loader
+		// exists to prevent.
+		if !declared["get_device_state"] {
+			return SkillCondition{}, fmt.Errorf("a %s condition needs get_device_state in this skill's tools: list", CondStatePrefix)
+		}
 	case strings.HasPrefix(key, CondToolPrefix):
 		tool := strings.TrimPrefix(key, CondToolPrefix)
 		if !skillToolAllowlist[tool] {
@@ -318,8 +479,9 @@ func parseSkillCondition(raw string, declared map[string]bool) (SkillCondition, 
 			return SkillCondition{}, fmt.Errorf("tool outcome %q is not one of %v", value, sortedKeys(skillToolOutcomes))
 		}
 	default:
-		return SkillCondition{}, fmt.Errorf("condition key %q is not one of %s, %s, %s, %s, %s, %s<tool>",
-			key, CondSignature, CondEvidenceKind, CondVerdictTier, CondVerdictPhrase, CondNote, CondToolPrefix)
+		return SkillCondition{}, fmt.Errorf("condition key %q is not one of %s, %s, %s, %s, %s, %s<facet>, %s<tool>",
+			key, CondSignature, CondEvidenceKind, CondVerdictTier, CondVerdictPhrase, CondNote,
+			CondStatePrefix, CondToolPrefix)
 	}
 	return SkillCondition{Key: key, Value: value}, nil
 }

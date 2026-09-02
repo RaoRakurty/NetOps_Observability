@@ -272,6 +272,36 @@ var modules = []Module{
 		ResponseModes: []string{"troubleshoot_finding", "module_health_summary"},
 	},
 	{
+		// IRIS Phase A4. The SHOW-FIRST state battery as an assistant-reachable
+		// module: read-only `show`/`display` commands from a closed per-vendor
+		// table, parsed into typed rows by internal/showparse. It is a DEVICE
+		// READ, never a device change — the gated action subsystem stays a
+		// separate subsystem the model has no path to.
+		ID: "device_state", DisplayName: "Device State",
+		Description:        "Live, read-only device state from the closed state battery: interface state and error counters, transceiver diagnostics, IGP adjacencies, BGP neighbour summary, route and ARP/MAC lookups, control-plane health and the bounded log buffer — parsed into typed fields, never raw CLI text.",
+		Entities:           []string{"interface", "adjacency", "bgp_peer", "route", "arp_entry", "mac_entry", "platform_health"},
+		QuestionCategories: []string{"device_state", "interface_health", "adjacency", "reachability", "platform_health"},
+		Tools:              []string{"get_device_state"},
+		Permissions:        []string{"infrastructure:read"},
+		Freshness:          FreshnessLive, Sensitivity: SensitivityOperational, Availability: AvailabilityStable,
+		CrossModule:   []string{"protocol_diagnostics", "topology", "telemetry", "correlations_rca"},
+		ResponseModes: []string{"troubleshoot_finding", "investigation_plan"},
+	},
+	{
+		// IRIS Phase A4. BGP Operations, read-only: the tenant's watchlist, the
+		// RPKI verdict per watched prefix, and the near-live update buffer. The
+		// watchlist WRITE path is deliberately NOT exposed to the assistant.
+		ID: "bgp_operations", DisplayName: "BGP Operations",
+		Description:        "Internet-edge BGP operations for this tenant: the watched prefixes and ASNs, route-origin (RPKI) validation per watched prefix, and recent announcements/withdrawals from the near-live update buffer. Read-only — the assistant can never change what is watched.",
+		Entities:           []string{"watched_resource", "prefix", "asn", "rpki_verdict", "bgp_update"},
+		QuestionCategories: []string{"prefix_missing", "route_origin", "routing_security", "bgp_churn"},
+		Tools:              []string{"get_bgp_watchlist", "get_bgp_rpki", "get_bgp_feed_recent"},
+		Permissions:        []string{"infrastructure:read"},
+		Freshness:          FreshnessLive, Sensitivity: SensitivityOperational, Availability: AvailabilityStable,
+		CrossModule:   []string{"protocol_diagnostics", "correlations_rca", "topology"},
+		ResponseModes: []string{"troubleshoot_finding", "module_health_summary"},
+	},
+	{
 		ID: "documentation", DisplayName: "Documentation",
 		Description:        "The Correlix product documentation portal: setup guides, operator procedures, and concept reference (platform-global, tenant-free corpus).",
 		Entities:           []string{"doc_page", "doc_section"},

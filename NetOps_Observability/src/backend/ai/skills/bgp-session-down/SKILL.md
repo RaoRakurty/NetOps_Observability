@@ -4,18 +4,22 @@ layer: bgp
 version: 1
 when_to_use: bgp, bgp down, bgp neighbor down, peer down, bgp idle, bgp active, session not established, bgp flap, ebgp down, ibgp down
 symptom_kinds: bgp, adjacency, routing, reachability
-tools: run_protocol_diagnostic, get_rca_verdict, get_case_timeline, get_topology_context, search_logs
+tools: get_device_state, run_protocol_diagnostic, get_rca_verdict, get_topology_context, search_logs
 gather:
+  - get_device_state(device_id, area=bgp)
   - get_rca_verdict(correlation_id)
   - run_protocol_diagnostic(device_id, protocol=bgp, issue_id=bgp-session-down)
   - get_topology_context(device_id)
   - search_logs(device, query=BGP, window=6h)
 look_for:
+  - The neighbour summary read LIVE off the device. The FSM state and the accepted-prefix count come from the device itself, never from an assumption.
   - The peer's FSM state. Idle means the session is not even being attempted or was damped; Active means we are trying and the TCP connection is not completing; Connect means TCP is mid-handshake.
   - Whether the peer address is reachable at all, and by which route. An eBGP peer that is not directly connected needs multihop, and an unreachable next hop keeps the session in Active forever.
   - The last notification or reset reason, which usually names the cause outright (hold timer expired, administrative reset, bad AS number).
   - Whether the underlying interface or the path to the peer changed at the same time as the session.
 decisions:
+  - next=interface-down when state:bgp_peer=idle the device itself reports the peer Idle, so reachability to the peer — and the link carrying it — is the next check
+  - next=log-confirmation when state:collect=not_wired the neighbour table could not be read live, so the reset reason must come from the device's own words
   - next=interface-down when verdict:phrase=link the RCA verdict names the link beneath the session
   - next=interface-down when signature=bgp-idle-unreachable the peering address is unreachable from this device, so the interface carrying the session is the next check
   - next=path-seam-handoff when the peer sits across a provider or partner handoff

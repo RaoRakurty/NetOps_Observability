@@ -188,6 +188,32 @@ var toolMetas = map[string]toolMeta{
 			{name: "correlation_id", desc: "The case's correlation UUID (take it from a problem:<uuid> citation id).", required: true},
 		},
 	},
+	// ── IRIS Phase A4: show-first device state + BGP operations reads ──
+	"get_device_state": {
+		description: "Read one device's LIVE state with read-only show commands and return TYPED rows: interfaces (state/errors/optics), igp (OSPF/IS-IS adjacencies), bgp (neighbour summary), routes (a prefix lookup), l2 (ARP/MAC for an address), platform (CPU/memory/environment/uptime) or logs (bounded buffer). USE THIS FIRST for any device question — never guess device state. Returns the read-only commands for an operator to run when live capture is not wired here.",
+		label:       "Device state",
+		args: []toolArgSpec{
+			{name: "device_id", desc: "The device name or id exactly as it appears in the inventory.", required: true},
+			{name: "area", desc: "One of interfaces, igp, bgp, routes, l2, platform, logs.", required: true},
+			{name: "target", desc: "What to scope the read to: an interface name (interfaces), a neighbour id or peer address (igp, bgp), the prefix to look up (routes — REQUIRED there), an IP or MAC address (l2). platform and logs take no target.", required: false},
+		},
+	},
+	"get_bgp_watchlist": {
+		description: "List this tenant's watched BGP prefixes and ASNs with their current announcement status. Use it to learn which internet resources this tenant actually cares about before reasoning about a routing change.",
+		label:       "BGP watchlist",
+	},
+	"get_bgp_rpki": {
+		description: "Route-origin validation (RPKI) state for this tenant's watched prefixes: valid, invalid, not-found or unavailable, with the origin AS. An INVALID verdict is a routing-security finding, not a reachability one — report it as such.",
+		label:       "BGP RPKI validation",
+	},
+	"get_bgp_feed_recent": {
+		description: "Recent announcements and withdrawals for this tenant's watched resources from the near-live BGP update buffer. THE tool for \"did our prefix get withdrawn / did the origin change\". Says plainly when the feed is not enabled.",
+		label:       "BGP update feed",
+		args: []toolArgSpec{
+			{name: "prefix", desc: "Restrict to one prefix (e.g. 203.0.113.0/24); omit for every watched resource.", required: false},
+			{name: "limit", desc: "How many updates to return, 1-30 (default 15).", required: false},
+		},
+	},
 	"get_rca_verdict": {
 		description: "The engine's RCA header for one correlation case: what broke, the verdict tier and confidence, what is affected, what evidence is missing, and the recommended owner. START HERE when a case is in scope — narrate this conclusion rather than deriving a different one.",
 		label:       "RCA verdict",

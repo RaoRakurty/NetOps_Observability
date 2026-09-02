@@ -194,6 +194,23 @@ type TroubleshootDeps struct {
 	TopologyContext func(ctx context.Context, p Principal, deviceID string) (TopologyContext, error)
 	// CaseTimeline returns one correlation case's ordered timeline.
 	CaseTimeline func(ctx context.Context, p Principal, correlationID string) ([]TimelineEvent, error)
+
+	// ── IRIS Phase A4 ──────────────────────────────────────────────────────
+
+	// DeviceState runs the SHOW-FIRST state battery for one device and one area
+	// and returns TYPED evidence rows (never raw CLI text the model must parse).
+	// Like ProtocolDiagnostic it collects only when a battery runner is wired
+	// AND the caller holds infrastructure:write; otherwise it returns the
+	// read-only command list with NotWired set. Cross-tenant → ErrNotFound.
+	DeviceState func(ctx context.Context, p Principal, req DeviceStateRequest) (DeviceStateReport, error)
+	// BGPWatchlist lists the CALLER'S OWN watched prefixes and ASNs.
+	BGPWatchlist func(ctx context.Context, p Principal) (BGPWatchlistReport, error)
+	// BGPRPKI returns the RPKI validation state of the caller's own watched
+	// prefixes (public routing facts, tenant-selected inputs).
+	BGPRPKI func(ctx context.Context, p Principal) (BGPRPKIReport, error)
+	// BGPFeedRecent returns recent BGP updates from the caller's OWN per-tenant
+	// ring, optionally narrowed to one prefix.
+	BGPFeedRecent func(ctx context.Context, p Principal, prefix string, limit int) (BGPFeedReport, error)
 }
 
 // ---- shared validation -----------------------------------------------------
@@ -643,6 +660,17 @@ func (r *ToolRegistry) AddTroubleshootTools(ds DataSource, d TroubleshootDeps) {
 	if d.CaseTimeline != nil {
 		r.add(caseTimelineTool{deps: d})
 	}
+	// The BGP operations reads are RESOURCE-scoped, not device-scoped: they need
+	// no inventory resolution, so they register independently of ResolveDevice.
+	if d.BGPWatchlist != nil {
+		r.add(bgpWatchlistTool{deps: d})
+	}
+	if d.BGPRPKI != nil {
+		r.add(bgpRPKITool{deps: d})
+	}
+	if d.BGPFeedRecent != nil {
+		r.add(bgpFeedTool{deps: d})
+	}
 	if d.ResolveDevice == nil {
 		return // every remaining tool resolves a device under the caller's tenant first
 	}
@@ -654,6 +682,9 @@ func (r *ToolRegistry) AddTroubleshootTools(ds DataSource, d TroubleshootDeps) {
 	}
 	if d.TopologyContext != nil {
 		r.add(topologyContextTool{deps: d})
+	}
+	if d.DeviceState != nil {
+		r.add(deviceStateTool{deps: d})
 	}
 }
 
@@ -687,6 +718,8 @@ func TroubleshootToolNames() []string {
 	out := []string{
 		"run_protocol_diagnostic", "get_security_findings",
 		"get_topology_context", "get_case_timeline", "get_rca_verdict",
+		// Phase A4.
+		"get_device_state", "get_bgp_watchlist", "get_bgp_rpki", "get_bgp_feed_recent",
 	}
 	sort.Strings(out)
 	return out

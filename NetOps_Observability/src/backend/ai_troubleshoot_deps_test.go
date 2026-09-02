@@ -32,7 +32,10 @@ import (
 	"testing"
 
 	"netops/backend/ai"
+	"netops/backend/internal/bgpdepth"
 	"netops/backend/internal/discovery"
+	"netops/backend/internal/protocoldiag"
+	"netops/backend/internal/showparse"
 	"netops/backend/models"
 )
 
@@ -524,5 +527,411 @@ func TestAITroubleshootSecurityFindingsBoundsTheLimit(t *testing.T) {
 	body := fake.all()[0].Body
 	if !strings.Contains(body, `"size":`+strconv.Itoa(aiFindingsMaxLimit)) {
 		t.Fatalf("an oversized limit must be clamped to %d: %s", aiFindingsMaxLimit, body)
+	}
+}
+
+// ---- DeviceState (IRIS Phase A4) --------------------------------------------
+
+// The show-first seam obeys the same §3a contract as every other one: another
+// tenant's device and a device that does not exist are BOTH ai.ErrNotFound, and
+// the tool never learns which it was.
+func TestAITroubleshootDeviceStateIsTenantScoped(t *testing.T) {
+	s := aiTSServer(t)
+	deps := aiTSDeps(t, s, acme())
+	if deps.DeviceState == nil {
+		t.Fatal("with an inventory wired the state seam must be filled (it answers honestly when there is no transport)")
+	}
+	for _, ref := range []string{"globex-core", "no-such-device", ""} {
+		_, err := deps.DeviceState(context.Background(), aiTSPrincipal(), ai.DeviceStateRequest{
+			DeviceID: ref, Area: "bgp",
+		})
+		if !errors.Is(err, ai.ErrNotFound) {
+			t.Fatalf("DeviceState(%q) err = %v, want ai.ErrNotFound", ref, err)
+		}
+	}
+	// The platform owner reaches both tenants; a narrowed owner reaches only one.
+	owner := aiTSDeps(t, s, superA())
+	for _, id := range []string{"acme-core", "globex-core"} {
+		if _, err := owner.DeviceState(context.Background(), aiTSPrincipal(), ai.DeviceStateRequest{DeviceID: id, Area: "platform"}); err != nil {
+			t.Fatalf("cross-tenant principal must reach %s: %v", id, err)
+		}
+	}
+	narrowed := superA()
+	narrowed.ActingTenant = "acme"
+	nd := aiTSDeps(t, s, narrowed)
+	if _, err := nd.DeviceState(context.Background(), aiTSPrincipal(), ai.DeviceStateRequest{DeviceID: "globex-core", Area: "bgp"}); !errors.Is(err, ai.ErrNotFound) {
+		t.Fatalf("a narrowed owner must NOT read the other tenant's device state (err = %v)", err)
+	}
+
+	// A non-owner's as_tenant selector never widens.
+	sneaky := acme()
+	sneaky.ActingTenant = "globex"
+	sd := aiTSDeps(t, s, sneaky)
+	if _, err := sd.DeviceState(context.Background(), aiTSPrincipal(), ai.DeviceStateRequest{DeviceID: "globex-core", Area: "bgp"}); !errors.Is(err, ai.ErrNotFound) {
+		t.Fatalf("TENANT LEAK: as_tenant widened a non-owner into globex (err = %v)", err)
+	}
+}
+
+// No capture transport on this deployment: the report must be HONEST — the
+// read-only command list, a stated reason, and no rows.
+func TestAITroubleshootDeviceStateIsHonestWithoutATransport(t *testing.T) {
+	deps := aiTSDeps(t, aiTSServer(t), acme())
+	rep, err := deps.DeviceState(context.Background(), aiTSPrincipal(), ai.DeviceStateRequest{
+		DeviceID: "acme-core", Area: "bgp",
+	})
+	if err != nil {
+		t.Fatalf("DeviceState: %v", err)
+	}
+	if rep.Collected {
+		t.Fatal("no battery runner is wired, yet the report claims a capture happened")
+	}
+	if rep.NotWired == "" {
+		t.Fatal("an uncollected report must say WHY it did not collect")
+	}
+	if len(rep.Rows) != 0 || len(rep.Gaps) != 0 {
+		t.Fatalf("nothing was captured, so there can be no rows or gaps: %+v", rep)
+	}
+	if len(rep.Commands) == 0 {
+		t.Fatal("an uncollected report must hand back the read-only command bundle")
+	}
+	for _, c := range rep.Commands {
+		low := strings.ToLower(c.Command)
+		if !strings.HasPrefix(low, "show") && !strings.HasPrefix(low, "display") {
+			t.Errorf("the bundle must be read-only, got %q", c.Command)
+		}
+		if strings.Contains(low, "running-config") {
+			t.Errorf("the state battery must never render a config read: %q", c.Command)
+		}
+	}
+	if rep.Dialect == "" {
+		t.Errorf("a resolvable platform (%q) must record its dialect", rep.Platform)
+	}
+}
+
+// A platform we have not assessed is its OWN answer: no command is rendered, and
+// nothing is guessed from another vendor's dialect.
+func TestAITroubleshootDeviceStateUnassessedPlatform(t *testing.T) {
+	deps := aiTSDeps(t, aiTSServer(t), acme())
+	rep, err := deps.DeviceState(context.Background(), aiTSPrincipal(), ai.DeviceStateRequest{
+		DeviceID: "acme-edge", Area: "interfaces", // seeded with no vendor/OS at all
+	})
+	if err != nil {
+		t.Fatalf("DeviceState: %v", err)
+	}
+	if rep.Status != string(protocoldiag.DeviceStatusUnsupported) {
+		t.Fatalf("status = %q, want %q", rep.Status, protocoldiag.DeviceStatusUnsupported)
+	}
+	if len(rep.Commands) != 0 {
+		t.Fatalf("an unassessed platform must render NO command (a guessed dialect is a guessed command): %+v", rep.Commands)
+	}
+	if !strings.Contains(rep.NotWired, "does not resolve") {
+		t.Errorf("the reason must name the unresolved platform: %q", rep.NotWired)
+	}
+}
+
+func TestAITroubleshootDeviceStateRejectsUnknownArea(t *testing.T) {
+	deps := aiTSDeps(t, aiTSServer(t), acme())
+	for _, area := range []string{"", "everything", "config", "interfaces; show run"} {
+		if _, err := deps.DeviceState(context.Background(), aiTSPrincipal(), ai.DeviceStateRequest{
+			DeviceID: "acme-core", Area: area,
+		}); !errors.Is(err, protocoldiag.ErrUnknownArea) {
+			t.Errorf("area %q err = %v, want ErrUnknownArea", area, err)
+		}
+	}
+}
+
+// The ai package duplicates the area vocabulary deliberately (it must not import
+// internal/protocoldiag). This is the pin that keeps the two identical.
+func TestAIDeviceStateAreasMatchTheBattery(t *testing.T) {
+	want := protocoldiag.Areas()
+	got := ai.StateAreas()
+	if len(got) != len(want) {
+		t.Fatalf("ai.StateAreas() = %v, battery = %v", got, want)
+	}
+	for i := range want {
+		if got[i] != string(want[i]) {
+			t.Fatalf("area %d: ai says %q, the battery says %q", i, got[i], want[i])
+		}
+	}
+}
+
+// The single validated `target` lands on the right typed placeholder — and never
+// on another one.
+func TestAIStateTargetMapping(t *testing.T) {
+	cases := []struct {
+		area protocoldiag.Area
+		in   string
+		want protocoldiag.Target
+	}{
+		{protocoldiag.AreaInterfaces, "Gi0/0/1", protocoldiag.Target{Interface: "Gi0/0/1"}},
+		{protocoldiag.AreaRoutes, "203.0.113.0/24", protocoldiag.Target{Prefix: "203.0.113.0/24"}},
+		{protocoldiag.AreaL2, "0011.2233.4455", protocoldiag.Target{Address: "0011.2233.4455"}},
+		{protocoldiag.AreaBGP, "10.0.0.1", protocoldiag.Target{Peer: "10.0.0.1"}},
+		{protocoldiag.AreaIGP, "core-2", protocoldiag.Target{Peer: "core-2"}},
+		{protocoldiag.AreaPlatform, "ignored-by-contract", protocoldiag.Target{}},
+		{protocoldiag.AreaLogs, "ignored-by-contract", protocoldiag.Target{}},
+		{protocoldiag.AreaRoutes, "  ", protocoldiag.Target{}},
+	}
+	for _, tc := range cases {
+		if got := aiStateTarget(tc.area, tc.in); got != tc.want {
+			t.Errorf("aiStateTarget(%s, %q) = %+v, want %+v", tc.area, tc.in, got, tc.want)
+		}
+	}
+}
+
+// ---- typed-row projection ---------------------------------------------------
+
+func aiTSPtrS(v string) *string   { return &v }
+func aiTSPtrI(v int64) *int64     { return &v }
+func aiTSPtrF(v float64) *float64 { return &v }
+
+// One signal per facet, and it is the WORST reading — a battery that read twenty
+// healthy interfaces and one dead one must assert "down", not both.
+func TestAIProjectDeviceStateWorstSignalWins(t *testing.T) {
+	st := protocoldiag.DeviceState{
+		Status: protocoldiag.DeviceStatusOK,
+		Commands: []protocoldiag.CollectedCommand{
+			{SpecID: showparse.CmdInterfaceDetail, Command: "show interfaces"},
+		},
+		Parsed: []showparse.Result{{
+			CmdID: showparse.CmdInterfaceDetail, Dialect: showparse.DialectCiscoIOSXE,
+			Interfaces: []showparse.InterfaceState{
+				{Name: "Gi0/0/1", Admin: aiTSPtrS("up"), Oper: aiTSPtrS("up"), CRC: aiTSPtrI(0), InErrors: aiTSPtrI(0)},
+				{Name: "Gi0/0/2", Admin: aiTSPtrS("up"), Oper: aiTSPtrS("down"), CRC: aiTSPtrI(94), RxPowerDbm: aiTSPtrF(-31.5)},
+				{Name: "Gi0/0/3", Admin: aiTSPtrS("administratively down"), Oper: aiTSPtrS("down")},
+			},
+		}},
+	}
+	var rep ai.DeviceStateReport
+	aiProjectDeviceState(&rep, st, "")
+	if !rep.Collected || len(rep.Rows) != 3 {
+		t.Fatalf("want three typed rows from a completed read, got %+v", rep)
+	}
+	signals := map[string]int{}
+	for _, r := range rep.Rows {
+		for _, sig := range r.Signals {
+			signals[sig]++
+		}
+	}
+	want := map[string]int{"state:if_oper=down": 1, "state:if_errors=present": 1}
+	if len(signals) != len(want) {
+		t.Fatalf("signals = %v, want exactly %v (one per facet, worst reading)", signals, want)
+	}
+	for k, n := range want {
+		if signals[k] != n {
+			t.Fatalf("signals = %v, want %v", signals, want)
+		}
+	}
+	// Absent fields must not be rendered as zeros.
+	if strings.Contains(rep.Rows[2].Text, "CRC") {
+		t.Errorf("an unreported counter must not appear: %q", rep.Rows[2].Text)
+	}
+	if !strings.Contains(rep.Rows[1].Text, "rx power -31.50 dBm") {
+		t.Errorf("a reported optic reading must appear verbatim: %q", rep.Rows[1].Text)
+	}
+}
+
+// A skipped parse is a GAP with its raw (already redacted) lines — never a
+// fabricated typed row; and a failed run is reported as not-collected so the
+// caller hands back the commands instead of narrating silence.
+func TestAIProjectDeviceStateGapsAndFailures(t *testing.T) {
+	st := protocoldiag.DeviceState{
+		Status: protocoldiag.DeviceStatusPartial, Note: "1 of 2 commands failed",
+		Commands: []protocoldiag.CollectedCommand{
+			{SpecID: showparse.CmdISISNeighbor, Command: "show isis adjacency", Output: "System Id   State\ncore-2      Up\n"},
+			{SpecID: showparse.CmdOSPFNeighbor, Command: "show ip ospf neighbor", Err: "device did not answer in time"},
+		},
+		Parsed: []showparse.Result{{
+			CmdID: showparse.CmdISISNeighbor, Skipped: true, Reason: "no parser for isis-neighbor on this dialect",
+		}},
+	}
+	var rep ai.DeviceStateReport
+	aiProjectDeviceState(&rep, st, "")
+	if len(rep.Rows) != 0 {
+		t.Fatalf("a skipped parse must produce NO typed row, got %+v", rep.Rows)
+	}
+	if len(rep.Gaps) != 2 {
+		t.Fatalf("want a gap for the unparsed capture AND one for the failed command, got %+v", rep.Gaps)
+	}
+	var unparsed, failed ai.StateGap
+	for _, g := range rep.Gaps {
+		if strings.Contains(g.Reason, "did not run") {
+			failed = g
+		} else {
+			unparsed = g
+		}
+	}
+	if len(unparsed.Lines) != 2 || !strings.Contains(unparsed.Reason, "no parser") {
+		t.Fatalf("the unparsed gap must quote the raw lines and say why: %+v", unparsed)
+	}
+	if len(failed.Lines) != 0 || failed.Command != "show ip ospf neighbor" {
+		t.Fatalf("a command that never ran has no output to quote: %+v", failed)
+	}
+
+	// A run that produced nothing is NOT a collected report.
+	var failedRep ai.DeviceStateReport
+	aiProjectDeviceState(&failedRep, protocoldiag.DeviceState{
+		Status: protocoldiag.DeviceStatusTimedOut, Note: "the device did not answer within its collection deadline",
+	}, "")
+	if failedRep.Collected || failedRep.NotWired == "" {
+		t.Fatalf("a timed-out read must be reported as not collected, with a reason: %+v", failedRep)
+	}
+}
+
+// "The device says there is none" and "we could not read it" are different
+// evidence and must never collapse.
+func TestAIProjectDeviceStateAbsenceIsNotSilence(t *testing.T) {
+	var rep ai.DeviceStateReport
+	aiProjectDeviceState(&rep, protocoldiag.DeviceState{
+		Status:   protocoldiag.DeviceStatusOK,
+		Commands: []protocoldiag.CollectedCommand{{SpecID: showparse.CmdRoutePrefix, Command: "show ip route 203.0.113.0/24"}},
+		Parsed:   []showparse.Result{{CmdID: showparse.CmdRoutePrefix, Reason: "% Network not in table"}},
+	}, "")
+	if len(rep.Rows) != 1 || len(rep.Rows[0].Signals) != 1 || rep.Rows[0].Signals[0] != "state:route=absent" {
+		t.Fatalf("a definitive 'no such route' must assert absence: %+v", rep.Rows)
+	}
+	if !strings.Contains(rep.Rows[0].Text, "NO matching route") {
+		t.Errorf("the row must state the absence in words: %q", rep.Rows[0].Text)
+	}
+}
+
+// A row filter names the subject that is NOT in the table — an empty answer
+// would read as "we found nothing", which is a different fact.
+func TestAIProjectDeviceStateFilterMissIsAFinding(t *testing.T) {
+	st := protocoldiag.DeviceState{
+		Status:   protocoldiag.DeviceStatusOK,
+		Commands: []protocoldiag.CollectedCommand{{SpecID: showparse.CmdBGPSummary, Command: "show ip bgp summary"}},
+		Parsed: []showparse.Result{{
+			CmdID: showparse.CmdBGPSummary,
+			BGPPeers: []showparse.BGPPeer{
+				{Peer: "10.0.0.1", State: "Established", Established: true},
+				{Peer: "10.0.0.2", State: "Idle"},
+			},
+		}},
+	}
+	var hit ai.DeviceStateReport
+	aiProjectDeviceState(&hit, st, "10.0.0.2")
+	if len(hit.Rows) != 1 || len(hit.Rows[0].Signals) != 1 || hit.Rows[0].Signals[0] != "state:bgp_peer=idle" {
+		t.Fatalf("the filter must keep the named peer and its fact: %+v", hit.Rows)
+	}
+	var miss ai.DeviceStateReport
+	aiProjectDeviceState(&miss, st, "10.9.9.9")
+	if len(miss.Rows) != 1 || !strings.Contains(miss.Rows[0].Text, "NONE matches") {
+		t.Fatalf("a subject absent from a read table is a finding, not silence: %+v", miss.Rows)
+	}
+	for _, r := range miss.Rows {
+		if len(r.Signals) != 0 {
+			t.Errorf("a filter miss must assert NO peer-state fact, got %v", r.Signals)
+		}
+	}
+}
+
+// Control-plane pressure is derived only from fields the device actually
+// reported (model doc §3.4's ">90 %" proactive flag).
+func TestAIPlatformPressureNeedsAReading(t *testing.T) {
+	cases := []struct {
+		name  string
+		h     showparse.PlatformHealth
+		facet string
+	}{
+		{"nothing reported", showparse.PlatformHealth{Uptime: aiTSPtrS("3 weeks")}, ""},
+		{"cpu at the threshold", showparse.PlatformHealth{CPUPercent: aiTSPtrF(90)}, "cpu_high"},
+		{"cpu below it", showparse.PlatformHealth{CPUPercent: aiTSPtrF(89.9)}, "ok"},
+		{"memory from absolutes", showparse.PlatformHealth{MemUsedKB: aiTSPtrI(95), MemTotalKB: aiTSPtrI(100)}, "mem_high"},
+		{"cpu wins over memory", showparse.PlatformHealth{CPUPercent: aiTSPtrF(99), MemUsedPercent: aiTSPtrF(99)}, "cpu_high"},
+	}
+	for _, tc := range cases {
+		if got, _ := aiPlatformPressure(tc.h); got != tc.facet {
+			t.Errorf("%s: aiPlatformPressure = %q, want %q", tc.name, got, tc.facet)
+		}
+	}
+}
+
+// ---- BGP operations reads ---------------------------------------------------
+
+// Absent sources leave the seams NIL, so the tools are never registered and the
+// assistant cannot answer from a capability this deployment does not have.
+func TestAIBGPSeamsAreNilWhenUnwired(t *testing.T) {
+	deps := aiTSDeps(t, aiTSServer(t), acme())
+	if deps.BGPWatchlist != nil || deps.BGPRPKI != nil || deps.BGPFeedRecent != nil {
+		t.Fatal("no watchlist store and no feed runtime are wired, so all three BGP seams must stay nil")
+	}
+	reg := ai.Tools(aiDataSource{srv: aiTSServer(t), ctx: context.Background(), claims: acme()})
+	reg.AddTroubleshootTools(nil, deps)
+	for _, n := range []string{"get_bgp_watchlist", "get_bgp_rpki", "get_bgp_feed_recent"} {
+		if _, ok := reg.Get(n); ok {
+			t.Errorf("%s must not be registered without its source", n)
+		}
+	}
+}
+
+// The update buffer is PER-TENANT data: a cross-tenant caller with no tenant
+// selected is refused with an honest reason, never served a merged view.
+func TestAIBGPFeedRefusesAnUnscopedRead(t *testing.T) {
+	s := aiTSServer(t)
+	s.bgpFetch = newBGPFetcher()
+	s.bgpFeed = bgpdepth.NewRuntime(s.bgpFetch, bgpdepth.Options{}) // disabled: no poller, no egress
+
+	owner := s.aiBGPFeedRecent(superA())
+	rep, err := owner(context.Background(), aiTSPrincipal(), "", 10)
+	if err != nil {
+		t.Fatalf("BGPFeedRecent: %v", err)
+	}
+	if len(rep.Updates) != 0 || !strings.Contains(rep.NotWired, "select a tenant") {
+		t.Fatalf("a cross-tenant read must be refused with a reason, got %+v", rep)
+	}
+
+	// A scoped caller gets an honest "the feed is off" instead.
+	scoped := s.aiBGPFeedRecent(acme())
+	rep, err = scoped(context.Background(), aiTSPrincipal(), "", 10)
+	if err != nil {
+		t.Fatalf("BGPFeedRecent: %v", err)
+	}
+	if rep.Scope != "acme" {
+		t.Errorf("scope = %q, want the caller's own tenant", rep.Scope)
+	}
+	if len(rep.Updates) != 0 || rep.NotWired == "" {
+		t.Fatalf("a disabled feed must say so rather than answer with nothing: %+v", rep)
+	}
+}
+
+// Every BGP read is gated on infrastructure:read before it touches a store.
+func TestAIBGPReadsRequireInfrastructureRead(t *testing.T) {
+	s := aiTSServer(t)
+	s.bgpFetch = newBGPFetcher()
+	s.bgpFeed = bgpdepth.NewRuntime(s.bgpFetch, bgpdepth.Options{})
+	noAccess := jwtClaims{Sub: "nobody@acme", Role: "no-such-role", Tenant: "acme"}
+
+	if _, err := s.aiBGPWatchlist(noAccess)(context.Background(), aiTSPrincipal()); !errors.Is(err, ai.ErrForbidden) {
+		t.Errorf("watchlist err = %v, want ai.ErrForbidden", err)
+	}
+	if _, err := s.aiBGPRPKI(noAccess)(context.Background(), aiTSPrincipal()); !errors.Is(err, ai.ErrForbidden) {
+		t.Errorf("rpki err = %v, want ai.ErrForbidden", err)
+	}
+	if _, err := s.aiBGPFeedRecent(noAccess)(context.Background(), aiTSPrincipal(), "", 5); !errors.Is(err, ai.ErrForbidden) {
+		t.Errorf("feed err = %v, want ai.ErrForbidden", err)
+	}
+}
+
+// Without a watchlist store the watchlist and RPKI answers are UNKNOWN, and the
+// scope label is always the CALLER'S own — never a wildcard.
+func TestAIBGPWatchlistAndRPKIAreHonestAndScoped(t *testing.T) {
+	s := aiTSServer(t)
+	rep, err := s.aiBGPWatchlist(acme())(context.Background(), aiTSPrincipal())
+	if err != nil {
+		t.Fatalf("BGPWatchlist: %v", err)
+	}
+	if rep.Scope != "acme" || len(rep.Items) != 0 || !strings.Contains(rep.NotWired, "not enabled") {
+		t.Fatalf("an absent store must be disclosed under the caller's own scope: %+v", rep)
+	}
+	rrep, err := s.aiBGPRPKI(globex())(context.Background(), aiTSPrincipal())
+	if err != nil {
+		t.Fatalf("BGPRPKI: %v", err)
+	}
+	if rrep.Scope != "globex" || len(rrep.Items) != 0 || rrep.NotWired == "" {
+		t.Fatalf("an absent fetcher must be disclosed under the caller's own scope: %+v", rrep)
+	}
+	if got := aiBGPScopeLabel("", true); got != "platform (cross-tenant)" {
+		t.Errorf("a cross-tenant scope must be labelled as such, got %q", got)
 	}
 }

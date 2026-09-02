@@ -4,18 +4,22 @@ layer: igp
 version: 1
 when_to_use: ospf, ospf neighbor, adjacency stuck, exstart, exchange, ospf not full, ospf flapping, ospf down, igp adjacency
 symptom_kinds: igp, adjacency, routing
-tools: run_protocol_diagnostic, get_rca_verdict, get_topology_context, get_device_health, search_logs
+tools: get_device_state, run_protocol_diagnostic, get_rca_verdict, get_topology_context, search_logs
 gather:
+  - get_device_state(device_id, area=igp)
   - get_rca_verdict(correlation_id)
   - run_protocol_diagnostic(device_id, protocol=ospf, issue_id=ospf-neighbor-stuck)
   - get_topology_context(device_id)
   - search_logs(device, query=OSPF, window=6h)
 look_for:
+  - The adjacency table read LIVE off the device. Never guess the state; the exact word the device prints is the tell.
   - The exact neighbour state. EXSTART or EXCHANGE is the classic IP MTU mismatch; INIT means hellos are heard one way only; DOWN means they are not heard at all.
   - Hello and dead interval, area id, and network type on BOTH ends. Any mismatch prevents the adjacency regardless of reachability.
   - Whether the underlying interface is clean. An IGP adjacency cannot be healthier than the link beneath it.
   - Authentication state, which fails silently on many platforms and produces a neighbour that never leaves INIT.
 decisions:
+  - next=interface-down when state:igp_nbr=none the device has no OSPF adjacency at all in this table, so the circuit beneath it is the next check
+  - next=log-confirmation when state:collect=not_wired the adjacency table could not be read live, so the transition times must come from the device's own words
   - next=interface-down when signature=ospf-flap-l1 the adjacency is flapping with L1 errors on the interface beneath it
   - next=interface-down when verdict:phrase=link the RCA verdict names the link beneath the adjacency
   - next=optics-degraded when the link is up but errors could be dropping the larger database packets

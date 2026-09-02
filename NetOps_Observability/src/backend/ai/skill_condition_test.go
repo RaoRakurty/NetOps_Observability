@@ -232,19 +232,19 @@ func TestChainFactsHolds(t *testing.T) {
 	f.recordTool("search_logs", "invented")           // outside the vocabulary: ignored
 
 	holds := map[string]bool{
-		"signature=bgp-idle-unreachable":  true,
-		"signature=ospf-flap-l1":          false,
-		"signature=none":                  false, // a signature DID fire
-		"verdict:tier=confirmed":          true,
-		"verdict:tier=suspected":          false,
-		"verdict:phrase=link":             true,
-		"verdict:phrase=optics":           false,
-		"evidence:kind=log":               true,
-		"evidence:kind=metric":            false, // a tool cannot assert a kind
-		"note=capped":                     true,
-		"note=mac":                        true, // hyphenated compounds contribute their parts
-		"note=absent":                     false,
-		"tool:run_protocol_diagnostic=ok": true,
+		"signature=bgp-idle-unreachable":      true,
+		"signature=ospf-flap-l1":              false,
+		"signature=none":                      false, // a signature DID fire
+		"verdict:tier=confirmed":              true,
+		"verdict:tier=suspected":              false,
+		"verdict:phrase=link":                 true,
+		"verdict:phrase=optics":               false,
+		"evidence:kind=log":                   true,
+		"evidence:kind=metric":                false, // a tool cannot assert a kind
+		"note=capped":                         true,
+		"note=mac":                            true, // hyphenated compounds contribute their parts
+		"note=absent":                         false,
+		"tool:run_protocol_diagnostic=ok":     true,
 		"tool:run_protocol_diagnostic=denied": false,
 		"tool:search_logs=ok":                 false,
 	}

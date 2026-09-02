@@ -11,7 +11,7 @@ package ai
 //  1. DETERMINISTIC AUTHORED RULES. A skill's `next=` line may carry a machine
 //     condition from the closed vocabulary in skill.go (`signature=`,
 //     `tool:<name>=`, `evidence:kind=`, `verdict:tier=`, `verdict:phrase=`,
-//     `note=`). The condition is evaluated against facts the SERVER derived from
+//     `note=`, `state:<facet>=`). The condition is evaluated against facts the SERVER derived from
 //     the evidence gathered so far — tool outcomes it observed, evidence kinds it
 //     received, and machine signals the TOOLS declared (ToolResult.Signals). The
 //     first rule that holds wins, in authored order.
@@ -101,16 +101,21 @@ type chainFacts struct {
 	kinds       map[string]bool   // evidence kinds gathered
 	noteTokens  map[string]bool   // tokens of the collection notes
 	toolOutcome map[string]string // tool name → its outcome this turn
+	// states holds the `state:` facts the show-first battery read, keyed
+	// "facet=value" (IRIS Phase A4). Each is derived by the SERVER from a typed
+	// showparse field and re-validated here against the closed vocabulary.
+	states map[string]bool
 }
 
 func newChainFacts() *chainFacts {
 	return &chainFacts{
 		signatures: map[string]bool{}, tiers: map[string]bool{}, phrases: map[string]bool{},
 		kinds: map[string]bool{}, noteTokens: map[string]bool{}, toolOutcome: map[string]string{},
+		states: map[string]bool{},
 	}
 }
 
-// addSignals records the machine facts a tool declared. Only the three
+// addSignals records the machine facts a tool declared. Only the four
 // TOOL-DECLARABLE keys are accepted, each re-validated against the same closed
 // vocabulary the loader enforces; anything else is ignored rather than trusted.
 // (Evidence kinds, tool outcomes and note tokens are derived by the runner
@@ -140,6 +145,13 @@ func (f *chainFacts) addSignals(signals []string) {
 		case CondVerdictPhrase:
 			if reCondToken.MatchString(value) {
 				f.phrases[value] = true
+			}
+		default:
+			// `state:<facet>=<value>` — a typed device-state fact. The facet and
+			// the value are both checked against the closed vocabulary, so a
+			// tool cannot invent either one.
+			if facet, isState := strings.CutPrefix(key, CondStatePrefix); isState && validStateFact(facet, value) {
+				f.states[facet+"="+value] = true
 			}
 		}
 	}
@@ -224,6 +236,8 @@ func (f *chainFacts) holds(c SkillCondition) bool {
 		return f.phrases[c.Value]
 	case c.Key == CondNote:
 		return f.noteTokens[c.Value]
+	case strings.HasPrefix(c.Key, CondStatePrefix):
+		return f.states[strings.TrimPrefix(c.Key, CondStatePrefix)+"="+c.Value]
 	case strings.HasPrefix(c.Key, CondToolPrefix):
 		return f.toolOutcome[strings.TrimPrefix(c.Key, CondToolPrefix)] == c.Value
 	default:
