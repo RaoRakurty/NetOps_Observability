@@ -54,11 +54,25 @@ var apiRoutes = []apiRoute{
 	{"GET", "/api/security/views", "Security", "Saved findings filter sets for the caller's tenant"},
 	{"POST", "/api/security/views", "Security", "Save a findings filter set (infrastructure:write)"},
 	{"DELETE", "/api/security/views/{id}", "Security", "Delete a saved filter set (404 outside the caller's tenant)"},
+	// P3-EMIT producer lane (internal/seclane). Registered ONLY when
+	// FEATURE_SECURITY_LANE=true, so a flag-off deployment 404s both.
+	{"GET", "/api/security/lane/status", "Security", "Security producer lane status: last scan id/time/outcome per tenant (own-only; cross-tenant for the platform admin)"},
+	{"POST", "/api/security/scan", "Security", "Queue a bounded security scan for the caller's own tenant (administration:write; 429 when one is already queued or running)"},
 	{"GET", "/api/tunnels", "Telemetry", "Overlay tunnel telemetry (IPsec/SD-WAN/GRE)"},
 	{"GET", "/api/flows/top", "Telemetry", "Top talkers (NetFlow/ClickHouse)"},
 	{"POST", "/api/logs/search", "Telemetry", "Search logs (OpenSearch)"},
 	{"GET", "/api/metrics/query", "Telemetry", "Instant PromQL query"},
 	{"GET", "/api/metrics/query_range", "Telemetry", "Range PromQL query"},
+	// Parser coverage (programme A6, parsercov/). The stats route is
+	// platform-GLOBAL plumbing — engine counters for the whole fleet's parser,
+	// not one tenant's rows — so it takes the platform-admin gate, while the
+	// two /api/telemetry routes are per-tenant data read through
+	// TenantIndexPattern + TenantFilter. The propose route APPLIES NOTHING: it
+	// returns a drafted catalog row as text, which a human lands by pull
+	// request against telemetry-catalog/events.yaml.
+	{"GET", "/api/admin/parser/stats", "Telemetry", "Parser rule corpus, per-rule hit counts, promotion rate and ingest pre-filter split, summed across the correlation replicas (platform admin)"},
+	{"GET", "/api/telemetry/unrecognized", "Telemetry", "Mined templates of the caller's log lines the parser would not admit (days, limit, lane)"},
+	{"POST", "/api/telemetry/unrecognized/{template_id}/propose", "Telemetry", "Draft a telemetry-catalog rule row and fixture for one unrecognized template — returned as text, applied nowhere (alerts:write)"},
 	{"GET", "/api/users", "Identity", "List users (administration:admin)"},
 	{"POST", "/api/users", "Identity", "Create a user (administration:admin)"},
 	{"GET", "/api/roles", "Identity", "List roles + modules (administration:admin)"},
