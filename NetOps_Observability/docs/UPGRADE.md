@@ -150,6 +150,50 @@ docker compose exec clickhouse clickhouse-client -q \
 Skipping this is not fatal — only reads over pre-upgrade parts stay slow until
 their next natural merge.
 
+### 2026-09-02 — optional modules (security lane, config backup)
+
+Nothing to do by hand; this is what changes and what to check.
+
+**New `.env` keys are reconciled for you.** `update.sh` appends any key its
+template list is missing, and this release adds the optional-module knobs:
+`FEATURE_SECURITY_LANE` / `SECURITY_SCAN_INTERVAL` /
+`SECURITY_MAX_FINDINGS_PER_TENANT`, `FEATURE_CONFIG_BACKUP` /
+`CONFIG_BACKUP_INTERVAL` / `CONFIG_BACKUP_KEEP_VERSIONS` /
+`CONFIG_BACKUP_SSH_USER` / `CONFIG_BACKUP_SSH_PASSWORD` /
+`CONFIG_BACKUP_SSH_KEY` / `CONFIG_BACKUP_SSH_PORT`, `PARSERCOV_MAX_LINES`,
+`CORRELATION_REPLICA_URLS`, `FEATURE_PACKET_CAPTURE` / `PCAP_KEEP` /
+`PCAP_SSH_USER` / `PCAP_SSH_PASSWORD` / `PCAP_SSH_KEY` / `PCAP_SSH_PORT`,
+`CORR_SYSLOG_TOPIC` and `CORR_FIDELITY_WEIGHTING`. Every appended value equals the default compose
+already interpolates, so the upgrade is behaviour-neutral: both feature flags
+stay `false` until you flip them (see `docs/DEPLOY_LINUX.md` §5c for what each
+one additionally needs). `CORR_EVIDENCE_TOPICS` is deliberately NOT appended —
+for that variable unset ("every registered evidence class") and empty
+("subscribe to none") are different contracts.
+
+**Two new data directories.** `data/config-backups` and `data/pcap` are bind
+mounts for the sealed configuration and packet-capture blobs, created `0700`
+and owned by the api's runtime uid.
+`update.sh` does not create it — run `python3 scripts/install.py --no-start`
+(it is idempotent and only touches `.env` + `data/`) or
+`sudo bash scripts/fix-permissions.sh` before enabling `FEATURE_CONFIG_BACKUP` or
+`FEATURE_PACKET_CAPTURE`. Add `data/config-backups` to your backup rotation:
+it is the only copy of a captured config.
+
+**Postgres migrations apply on boot.** The api runs `0036_rca_feedback`,
+`0037_security_control_plane` and `0038_config_backup` itself at startup on
+the Postgres backend — no manual step, forward-only, serialised by an
+advisory lock so two replicas booting together cannot both apply one. A
+migration failure is fatal at boot, never a silently skipped table. Confirm
+with:
+
+```bash
+docker compose exec postgres psql -U netops -c \
+  "SELECT version FROM schema_migrations ORDER BY version DESC LIMIT 5"
+```
+
+On the file backend (`STORE_BACKEND` unset) there is nothing to apply — those
+stores fall back to their tenant-keyed files.
+
 ## Quick sanity checks after every upgrade
 
 ```bash

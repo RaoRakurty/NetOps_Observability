@@ -160,6 +160,33 @@ EXPECTED = {
     "AWS_REGION":                "",
     "SNS_PHONE_NUMBERS":         "",
     "SNS_TOPIC_ARN":             "",
+    # optional modules (Project 3). Every value here is BYTE-IDENTICAL to the
+    # default docker-compose.yml interpolates, so materializing the key changes
+    # nothing — it only makes the knob discoverable in .env after an upgrade.
+    # DELIBERATELY ABSENT: CORR_EVIDENCE_TOPICS. For that one variable "unset"
+    # and "empty" are different contracts (unset = every registered evidence
+    # class; empty = subscribe to none), so appending it with an empty default
+    # would silently unsubscribe every evidence class on the next restart.
+    "FEATURE_SECURITY_LANE":         "false",
+    "SECURITY_SCAN_INTERVAL":        "15m",
+    "SECURITY_MAX_FINDINGS_PER_TENANT": "5000",
+    "FEATURE_CONFIG_BACKUP":         "false",
+    "CONFIG_BACKUP_INTERVAL":        "24h",
+    "CONFIG_BACKUP_KEEP_VERSIONS":   "30",
+    "CONFIG_BACKUP_SSH_USER":        "",
+    "CONFIG_BACKUP_SSH_PASSWORD":    "",
+    "CONFIG_BACKUP_SSH_KEY":         "",
+    "CONFIG_BACKUP_SSH_PORT":        "22",
+    "FEATURE_PACKET_CAPTURE":        "false",
+    "PCAP_KEEP":                     "20",
+    "PCAP_SSH_USER":                 "",
+    "PCAP_SSH_PASSWORD":             "",
+    "PCAP_SSH_KEY":                  "",
+    "PCAP_SSH_PORT":                 "22",
+    "PARSERCOV_MAX_LINES":           "200000",
+    "CORRELATION_REPLICA_URLS":      "",
+    "CORR_SYSLOG_TOPIC":             "netops.syslog",
+    "CORR_FIDELITY_WEIGHTING":       "0",
 }
 
 alphabet = string.ascii_letters + string.digits + "!@#%^&*-_=+"

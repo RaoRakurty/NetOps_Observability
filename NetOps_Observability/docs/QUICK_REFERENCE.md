@@ -171,6 +171,37 @@ CLOUD_WORKLOAD_ISSUER_URL=https://correlix.example.com
 CLOUD_INGEST_METRICS_PORT=9109
 ```
 
+## Optional modules
+
+All three flags are `false` by default and the modules are inert until flipped
+(full preconditions in `docs/DEPLOY_LINUX.md` §5c). Edit
+`deployment/docker/.env`, then `docker compose up -d api`.
+
+| Env var | Default | What it does |
+|---------|---------|--------------|
+| `FEATURE_SECURITY_LANE` | `false` | Security evidence producer: hardening + advisory + threat findings onto the security topic |
+| `SECURITY_SCAN_INTERVAL` | `15m` | Jittered scan cadence (Go duration) |
+| `SECURITY_MAX_FINDINGS_PER_TENANT` | `5000` | Per-tenant per-run emission cap; the excess is counted, not dropped silently |
+| `FEATURE_CONFIG_BACKUP` | `false` | Scheduled read-only SSH config capture + drift verdicts. Needs an active `SEAL_PROVIDER` and a capture credential |
+| `CONFIG_BACKUP_INTERVAL` | `24h` | Capture cadence (Go duration) |
+| `CONFIG_BACKUP_KEEP_VERSIONS` | `30` | Per-device retention depth in the sealed blob store |
+| `CONFIG_BACKUP_SSH_USER` | *(empty)* | Least-privilege read-only capture account |
+| `CONFIG_BACKUP_SSH_PASSWORD` | *(empty)* | Capture password — vault ciphertext or plaintext; never logged |
+| `CONFIG_BACKUP_SSH_KEY` | *(empty)* | Capture private key — alternative to the password |
+| `CONFIG_BACKUP_SSH_PORT` | `22` | Device SSH port override |
+| `FEATURE_PACKET_CAPTURE` | `false` | On-demand bounded `tcpdump` over the read-only SSH gateway, sealed at rest. Same preconditions as config backup |
+| `PCAP_KEEP` | `20` | Captures kept per device (duration/size ceilings are hard caps in code, not env knobs) |
+| `PCAP_SSH_USER` / `PCAP_SSH_PASSWORD` / `PCAP_SSH_KEY` / `PCAP_SSH_PORT` | *(empty)* / `22` | Capture identity, same shape as the config-backup account |
+| `PARSERCOV_MAX_LINES` | `200000` | Cap on one parser-coverage mining scan; a truncated run reports itself partial |
+| `CORRELATION_REPLICA_URLS` | *(empty)* | Explicit correlation replica base URLs to sum per-process parser counters over; empty = the single-replica default |
+| `CORR_SYSLOG_TOPIC` | `netops.syslog` | Point the syslog lane at a pre-screened topic instead of the raw one |
+| `CORR_FIDELITY_WEIGHTING` | `0` | Weigh evidence by parser/source fidelity tier |
+| `CORR_EVIDENCE_TOPICS` | *(unset)* | Evidence-class lanes to subscribe to. **Unset = all registered classes; empty = none.** Not written to `.env` for that reason |
+
+The sealed blobs live in `data/config-backups` and `data/pcap` (mode `0700`,
+owned by the api's runtime uid). `scripts/install.py` creates them;
+`sudo bash scripts/fix-permissions.sh` repairs the ownership if it drifts.
+
 ## RCA document promotion (#113)
 
 Every correlation case is fully analyzed and visible in Correlations —

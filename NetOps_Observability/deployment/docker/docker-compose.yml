@@ -1264,6 +1264,25 @@ services:
       # #101 tenant write-amplification rollup cadence + top-K exposition size.
       CORR_WA_FLUSH_S: ${CORR_WA_FLUSH_S:-300}
       CORR_WA_TOPK: ${CORR_WA_TOPK:-5}
+      # A4: point the syslog lane at a PRE-SCREENED topic instead of the raw
+      # one. Exactly one entry of the subscription moves; every other lane is
+      # byte-identical. Default = the raw lane (unchanged behaviour).
+      CORR_SYSLOG_TOPIC: ${CORR_SYSLOG_TOPIC:-netops.syslog}
+      # A7: weigh evidence by parser/source fidelity tier. Default OFF — the
+      # engine scores exactly as it does today until this is turned on.
+      CORR_FIDELITY_WEIGHTING: ${CORR_FIDELITY_WEIGHTING:-0}
+      # T2b: which evidence-CLASS topics the generic intake subscribes to.
+      # DELIBERATELY a bare pass-through, NOT ${VAR:-default}: for this one
+      # variable "unset" and "empty" are different contracts — unset means
+      # every registered class's topic (the shipped default, enumerated in
+      # correlation/main.py so the list cannot drift), while the EMPTY string
+      # means subscribe to NONE (the run-time half of the removable-module
+      # constraint, and the fallback when a broker has not yet granted the
+      # correlation principal Read on a class topic). Interpolating a default
+      # here would turn "unset" into "" and silently unsubscribe every
+      # evidence class. Compose omits the variable entirely when it is absent
+      # from .env and the environment.
+      CORR_EVIDENCE_TOPICS:
     volumes:
       - ../../data/correlation/deadletter:/data/deadletter
       - ../../data/api/enrichment:/data/enrichment:ro
@@ -1635,6 +1654,65 @@ services:
       SECURITY_SCAN_INTERVAL: ${SECURITY_SCAN_INTERVAL:-15m}
       SECURITY_MAX_FINDINGS_PER_TENANT: ${SECURITY_MAX_FINDINGS_PER_TENANT:-5000}
       SECURITY_DEADLETTER_FILE: /data/security_deadletter.jsonl
+      # Config Backup & Drift (Project 3, P3-CFG — internal/configstore): a
+      # scheduled, READ-ONLY SSH capture of each device's running-config →
+      # sealed, content-addressed version store → drift verdict → ConfigDrift
+      # finding onto netops.security. DORMANT unless FEATURE_CONFIG_BACKUP=true;
+      # with the flag off nothing is constructed, scheduled or routed and the
+      # /api/devices/{id}/config/* subtree 404s. TWO runtime preconditions, both
+      # fail LOUD rather than degrade: a sealing provider must be active
+      # (SEAL_PROVIDER — the manager REFUSES to store configs in cleartext), and
+      # a capture credential must be set below.
+      FEATURE_CONFIG_BACKUP: ${FEATURE_CONFIG_BACKUP:-false}
+      CONFIG_BACKUP_INTERVAL: ${CONFIG_BACKUP_INTERVAL:-24h}
+      CONFIG_BACKUP_KEEP_VERSIONS: ${CONFIG_BACKUP_KEEP_VERSIONS:-30}
+      # Sealed-blob directory. PINNED to the container path of the 0700 bind
+      # mount below (same reasoning as SECURITY_DEADLETTER_FILE above): an
+      # operator override here would point the store at an unmounted path
+      # inside the container, and every captured version would die with it.
+      CONFIG_BACKUP_DIR: /data/config-backups
+      # Least-privilege, read-only capture account. Empty = inert: a capture
+      # without a credential fails loudly, it is never guessed. The password/key
+      # may be supplied as vault ciphertext (sealed at rest like every other
+      # reversible secret) or plaintext; neither ever reaches a log, a response
+      # or an audit detail. The capture rides the SAME SSH client and the SAME
+      # pinned host-key (TOFU) custody as the operator terminal, so a device
+      # whose key changed is refused identically on both paths.
+      CONFIG_BACKUP_SSH_USER: ${CONFIG_BACKUP_SSH_USER:-}
+      CONFIG_BACKUP_SSH_PASSWORD: ${CONFIG_BACKUP_SSH_PASSWORD:-}
+      CONFIG_BACKUP_SSH_KEY: ${CONFIG_BACKUP_SSH_KEY:-}
+      CONFIG_BACKUP_SSH_PORT: ${CONFIG_BACKUP_SSH_PORT:-22}
+      # On-demand packet capture (internal/pcap): a bounded, operator-triggered
+      # tcpdump over the SAME read-only SSH gateway, sealed at rest. DORMANT
+      # unless FEATURE_PACKET_CAPTURE=true. The duration/size ceilings are HARD
+      # CAPS in code and deliberately NOT env knobs — a config that can raise
+      # "max capture duration" to an hour is the unbounded capture the design
+      # forbids, wearing a config file. Only retention and identity are tunable.
+      FEATURE_PACKET_CAPTURE: ${FEATURE_PACKET_CAPTURE:-false}
+      PCAP_KEEP: ${PCAP_KEEP:-20}
+      # Sealed capture blobs + the file-backend metadata register. PINNED to
+      # mounted container paths for the same reason as CONFIG_BACKUP_DIR: an
+      # override would write captures to the container filesystem, where they
+      # die on the next recreate.
+      PCAP_DIR: /data/pcap
+      PCAP_METADATA_FILE: /data/pcap-metadata.json
+      # Least-privilege capture identity (empty = inert; never guessed).
+      PCAP_SSH_USER: ${PCAP_SSH_USER:-}
+      PCAP_SSH_PASSWORD: ${PCAP_SSH_PASSWORD:-}
+      PCAP_SSH_KEY: ${PCAP_SSH_KEY:-}
+      PCAP_SSH_PORT: ${PCAP_SSH_PORT:-22}
+      # Parser-coverage mining (parsercov): ONE mining run scans at most this
+      # many OpenSearch documents — the bound that keeps a coverage query off
+      # the ingest tier's back (a partial scan is REPORTED as partial, never
+      # presented as a complete count).
+      PARSERCOV_MAX_LINES: ${PARSERCOV_MAX_LINES:-200000}
+      # Parser counters are PER correlation PROCESS: with `--scale correlation=N`
+      # the service name round-robins and one scrape samples one replica. Naming
+      # the replicas explicitly (comma-separated base URLs) is the only way to
+      # sum them, and it is configuration rather than discovery because the
+      # replicas are TLS-verified BY NAME. Empty is correct for the default
+      # single-replica stack: the list falls back to CORRELATION_URL.
+      CORRELATION_REPLICA_URLS: ${CORRELATION_REPLICA_URLS:-}
       # Cloud signal notifications (#12 slice 1): page the owning tenant when a
       # CLOUD correlation object opens, through that tenant's OWN RCA Slack/
       # PagerDuty lanes. Opt-in; a tenant with no lane configured is a no-op.
@@ -1840,6 +1918,20 @@ services:
       # and the TLS variant (compose.tls.yml) mounts them into each service.
       # Dormant/empty on plaintext installs — nothing writes or reads it.
       - ../../data/tls:/data/tls
+      # Sealed device-configuration blobs (FEATURE_CONFIG_BACKUP). Its own
+      # bind mount rather than a subdir of /data so the operator can size,
+      # snapshot and back it up independently — the blobs are the only copy
+      # of a captured running-config. Pre-created 0700 and owned by the api's
+      # runtime uid by install.py/fix-permissions.sh: Docker would otherwise
+      # auto-create the bind source as ROOT and the api (cap_drop:ALL) could
+      # never write into it. Empty and inert with the flag off.
+      - ../../data/config-backups:/data/config-backups
+      # Sealed packet-capture blobs (FEATURE_PACKET_CAPTURE). Same contract as
+      # the config blobs above: own bind mount, 0700, api-owned, pre-created by
+      # install.py. Captures can carry payload bytes — keep the directory
+      # private and size it deliberately (PCAP_KEEP x 25 MiB x devices worst
+      # case).
+      - ../../data/pcap:/data/pcap
     # SNMP traps arrive on host UDP 162 and forward to the in-container
     # receiver on 1162 (unprivileged). Active only when FEATURE_SNMP_TRAPS=true;
     # the mapping is harmless otherwise (nothing binds 1162 inside). Override the

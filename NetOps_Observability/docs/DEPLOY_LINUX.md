@@ -179,6 +179,75 @@ install and treat later runs as deltas against it.
 If a stage's `elapsed_s` looks wrong, `scripts/support-bundle.sh` collects the
 matching evidence (see `docs/runbooks/support-bundle.md`).
 
+## 5c. Optional modules (default OFF)
+
+Three api-side modules ship dormant. Each is gated by one flag, and with the
+flag off nothing is constructed, scheduled or routed — no worker, no route,
+no metric series. Uncomment the block you want in
+`deployment/docker/.env`, then `docker compose up -d api` to apply.
+
+| Module | Flag | Also needs |
+|--------|------|------------|
+| Security evidence lane | `FEATURE_SECURITY_LANE` | nothing — bounded by `SECURITY_SCAN_INTERVAL` and `SECURITY_MAX_FINDINGS_PER_TENANT` |
+| Config Backup & Drift | `FEATURE_CONFIG_BACKUP` | a sealing provider, a read-only SSH capture account, and disk for the sealed blobs |
+| On-demand packet capture | `FEATURE_PACKET_CAPTURE` | the same sealing provider and SSH capture account, plus disk for the sealed captures |
+
+**Security evidence lane.** One jittered scan per `SECURITY_SCAN_INTERVAL`
+(default `15m`) turns per-tenant hardening, vendor-advisory and threat
+detections into findings on the `netops.security` topic. At most
+`SECURITY_MAX_FINDINGS_PER_TENANT` (default `5000`) findings per tenant per
+run — the excess is counted, never silently dropped — and a batch the bus
+refuses is dead-lettered to the topic and then to a local spool file under
+`data/api/` before anything is counted as lost.
+
+**Config Backup & Drift.** A scheduled, READ-ONLY SSH capture of each
+device's running-config, sealed at rest, content-addressed, with a per-device
+drift verdict. It rides the same SSH client and the same pinned host-key
+(TOFU) custody as the operator device terminal (`FEATURE_DEVICE_SSH`), but
+does not require that flag. Two preconditions, both of which fail LOUD rather
+than degrade:
+
+1. **Sealing must be active.** Add `seal` to `COMPOSE_PROFILES` and set
+   `SEAL_PROVIDER=swtpm`. Without custody the module refuses to start rather
+   than write device configurations to disk in cleartext.
+2. **A capture credential.** `CONFIG_BACKUP_SSH_USER` plus
+   `CONFIG_BACKUP_SSH_PASSWORD` or `CONFIG_BACKUP_SSH_KEY` (and
+   `CONFIG_BACKUP_SSH_PORT` if the device does not listen on 22). Use a
+   least-privilege, read-only account. A capture with no credential fails
+   loudly; it is never guessed.
+
+**Disk.** The sealed blobs live in their own bind mount,
+`data/config-backups` (created `0700` and owned by the api's runtime uid by
+`scripts/install.py`; `scripts/fix-permissions.sh` repairs it if a restore or
+a sudo install drifts the ownership). Budget roughly
+
+    running-config size x CONFIG_BACKUP_KEEP_VERSIONS x devices
+
+so 200 KB x 30 x 500 devices is about 3 GB before compression. Lower
+`CONFIG_BACKUP_KEEP_VERSIONS` (default `30`) or raise
+`CONFIG_BACKUP_INTERVAL` (default `24h`) to trade history for disk. The
+directory is the ONLY copy of a captured config: include it in the backup
+job (`scripts/backup.sh` covers `data/`).
+
+**On-demand packet capture.** A bounded, operator-triggered `tcpdump` over
+the same read-only SSH gateway, sealed at rest, with the same two
+preconditions as config backup. Its duration and size ceilings are HARD CAPS
+in code and deliberately have no env knob — a setting that could raise "max
+capture duration" to an hour would be the unbounded capture the design
+forbids, wearing a config file. Only retention (`PCAP_KEEP`, default `20` per
+device) and the capture identity (`PCAP_SSH_USER` with `PCAP_SSH_PASSWORD` or
+`PCAP_SSH_KEY`, `PCAP_SSH_PORT`) are tunable. The sealed captures live in
+their own `0700` api-owned bind mount, `data/pcap`; budget up to 25 MiB per
+capture x `PCAP_KEEP` x devices in the worst case, and remember a capture can
+contain payload bytes — treat that directory as sensitive.
+
+Two correlation-side lane switches live in the same block:
+`CORR_SYSLOG_TOPIC` points the syslog lane at a pre-screened topic, and
+`CORR_FIDELITY_WEIGHTING` weighs evidence by parser fidelity tier (off by
+default). `CORR_EVIDENCE_TOPICS` is intentionally absent from the generated
+`.env`: unset means "every registered evidence class", while an empty value
+means "subscribe to none" — set it only when you mean the latter.
+
 ## 6. Install the systemd unit
 
 ```bash

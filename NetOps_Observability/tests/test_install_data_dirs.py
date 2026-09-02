@@ -30,6 +30,7 @@ Run:  python3 -m pytest tests/test_install_data_dirs.py -v
 from __future__ import annotations
 
 import os
+import stat
 import subprocess
 import sys
 from pathlib import Path
@@ -219,6 +220,51 @@ def test_ensure_data_dirs_covers_tls_and_deadletter(fake_root, monkeypatch):
     assert seen["data/api/cloud-fixtures"] == api_ug      # operator drops fixtures
     # No SUDO_UID → the operator-owned vuln dir is not chowned at all.
     assert not any("vuln" in name for name in seen)
+
+
+def test_ensure_data_dirs_creates_sealed_blob_dirs_0700_api_owned(fake_root, monkeypatch):
+    """The two sealed-blob bind sources (device configurations, packet
+    captures). Docker auto-creates a MISSING bind source as root, and the api
+    is user-mapped with cap_drop:ALL — so a dir the installer does not
+    pre-create is one the module can never write, failing its first capture
+    and every one after it. The MODE is part of the contract too: the blobs
+    are sealed, but the listing (device ids, capture times) and any payload
+    bytes are owner-only."""
+    seen: dict[str, tuple[int, int]] = {}
+    monkeypatch.setattr(install, "chown_tree",
+                        lambda d, uid, gid, name: seen.update({name: (uid, gid)}))
+    monkeypatch.delenv("SUDO_UID", raising=False)
+    monkeypatch.delenv("SUDO_GID", raising=False)
+
+    install.ensure_data_dirs(fake_root)
+
+    api_ug = (os.getuid(), os.getgid())          # api runtime uid from .env
+    for name in ("config-backups", "pcap"):
+        d = fake_root / "data" / name
+        assert d.is_dir(), f"data/{name} was not created"
+        assert seen[f"data/{name}"] == api_ug, (
+            f"data/{name} must be owned by the api's RUNTIME uid")
+        assert stat.S_IMODE(d.stat().st_mode) == 0o700, (
+            f"data/{name} must be 0700 — it holds sealed device data")
+
+
+def test_ensure_data_dirs_reports_an_unsettable_private_mode(fake_root, monkeypatch, capsys):
+    """§16.1: a blob dir left group/world-readable is a real posture
+    regression, so a failing chmod FAILS the install with the remedy — it is
+    never warned past."""
+    monkeypatch.setattr(install, "chown_tree", lambda d, uid, gid, name: None)
+    monkeypatch.delenv("SUDO_UID", raising=False)
+    real_chmod = Path.chmod
+
+    def boom(self, mode, **kw):
+        if self.name in ("config-backups", "pcap"):
+            raise PermissionError(1, "Operation not permitted", str(self))
+        return real_chmod(self, mode, **kw)
+
+    monkeypatch.setattr(Path, "chmod", boom)
+    with pytest.raises(SystemExit):
+        install.ensure_data_dirs(fake_root)
+    assert "sudo chmod 0700" in capsys.readouterr().err
 
 
 def test_ensure_data_dirs_hands_vuln_dir_to_the_sudo_invoker(fake_root, monkeypatch):

@@ -40,6 +40,7 @@ import re
 import secrets
 import shutil
 import socket
+import stat
 import string
 import subprocess
 import sys
@@ -904,6 +905,62 @@ NTFY_ALERT_SERVER=
 NTFY_ALERT_TOKEN=
 WATCHDOG_NTFY_TOPIC=
 
+# ---- Optional modules (default OFF — uncomment to enable) ---------------
+# Each block below is DORMANT unless its flag is uncommented: nothing is
+# constructed, scheduled or routed, no route is registered and no metric
+# series exists. Compose already carries the same defaults, so a commented
+# line and a missing line mean exactly the same thing.
+#
+# Security evidence lane — per-tenant hardening + vendor-advisory + threat
+# detections onto the netops.security topic, persisted as CTEM findings.
+# Bounded: one jittered pass per interval, at most N findings per tenant per
+# run (the excess is counted, never silently dropped).
+#FEATURE_SECURITY_LANE=true
+#SECURITY_SCAN_INTERVAL=15m
+#SECURITY_MAX_FINDINGS_PER_TENANT=5000
+#
+# Config Backup & Drift — scheduled READ-ONLY SSH capture of each device's
+# running-config, sealed at rest, content-addressed, with a drift verdict per
+# device. NEEDS: (1) a sealing provider — add 'seal' to COMPOSE_PROFILES and
+# set SEAL_PROVIDER=swtpm, or the module refuses to start rather than write
+# configurations in cleartext; (2) a least-privilege read-only capture
+# account; (3) disk for the sealed blobs under data/config-backups (0700,
+# api-owned) — roughly config size x KEEP_VERSIONS x devices.
+#FEATURE_CONFIG_BACKUP=true
+#CONFIG_BACKUP_INTERVAL=24h
+#CONFIG_BACKUP_KEEP_VERSIONS=30
+#CONFIG_BACKUP_SSH_USER=
+#CONFIG_BACKUP_SSH_PASSWORD=
+#CONFIG_BACKUP_SSH_KEY=
+#CONFIG_BACKUP_SSH_PORT=22
+#
+# On-demand packet capture — a bounded, operator-triggered tcpdump over the
+# same read-only SSH gateway, sealed at rest. Duration/size ceilings are HARD
+# CAPS in code, not knobs; only retention and the capture identity are
+# tunable. NEEDS the same sealing provider as config backup, plus disk under
+# data/pcap (0700, api-owned): PCAP_KEEP x up to 25 MiB per capture.
+#FEATURE_PACKET_CAPTURE=true
+#PCAP_KEEP=20
+#PCAP_SSH_USER=
+#PCAP_SSH_PASSWORD=
+#PCAP_SSH_KEY=
+#PCAP_SSH_PORT=22
+#
+# Parser-coverage mining bound (one run's OpenSearch scan) and the explicit
+# correlation replica list the per-process parser counters are summed over
+# (empty = the single-replica default, which falls back to CORRELATION_URL).
+#PARSERCOV_MAX_LINES=200000
+#CORRELATION_REPLICA_URLS=
+#
+# Correlation lane switches. CORR_SYSLOG_TOPIC swaps the raw syslog lane for
+# a pre-screened topic; CORR_FIDELITY_WEIGHTING weighs evidence by parser
+# fidelity tier (default off). CORR_EVIDENCE_TOPICS is deliberately NOT
+# listed as an empty key: unset means "every registered evidence class",
+# while an EMPTY value means "subscribe to none" — set it only when you mean
+# that, e.g. while the broker still lacks a Read ACL on a class topic.
+#CORR_SYSLOG_TOPIC=netops.syslog
+#CORR_FIDELITY_WEIGHTING=0
+
 # Device-side ingestion ports (host-side, mapped into the syslog-ng /
 # goflow2 containers). Use standard ports (514, 2055, 4739, 6343) on
 # Linux with rootful Docker; on rootless or Docker Desktop use non-
@@ -1365,7 +1422,22 @@ def ensure_data_dirs(root: Path) -> None:
         # stale root-owned data/tls/services deadlocked the TLS phase-A
         # bootstrap (api: "mkdir /data/tls/services/api: permission denied").
         "tls": (api_uid, api_gid),
+        # Sealed device-configuration blobs (FEATURE_CONFIG_BACKUP,
+        # internal/configstore). Same class as data/tls: a bind-mount source
+        # Docker would otherwise auto-create as ROOT, into which the api
+        # (user-mapped, cap_drop:ALL) could then never write — the module
+        # fails its FIRST capture and every one after it. Pre-create it owned
+        # by the api's RUNTIME uid, and 0700 below: the blobs are sealed but
+        # the directory listing itself (device ids, capture times) is not for
+        # every local user to read.
+        "config-backups": (api_uid, api_gid),
+        # Sealed packet-capture blobs (FEATURE_PACKET_CAPTURE, internal/pcap).
+        # Same class and same 0700 reasoning as config-backups — a capture can
+        # contain payload bytes, so the directory is owner-only.
+        "pcap": (api_uid, api_gid),
     }
+    # Directories whose MODE is part of the contract, not just their owner.
+    private_modes: dict[str, int] = {"config-backups": 0o700, "pcap": 0o700}
     for name, uid_gid in owners.items():
         d = root / "data" / name
         try:
@@ -1388,6 +1460,25 @@ def ensure_data_dirs(root: Path) -> None:
                 f"    cd {root / 'deployment' / 'docker'} && docker compose down\n"
                 f"    docker run --rm -v {root / 'data'}:/d alpine sh -c 'rm -rf /d/*'"
             )
+        mode = private_modes.get(name)
+        if mode is not None:
+            # Idempotent: a re-install over a dir the SERVICE uid already owns
+            # cannot chmod it, and must not need to — check the mode first and
+            # only act when it is actually wrong. When it IS wrong and we
+            # cannot fix it, FAIL (§16.1): a sealed-blob dir left group/world
+            # readable is a real posture regression, and the operator can only
+            # fix what they are told about.
+            try:
+                current = stat.S_IMODE(d.stat().st_mode)
+            except OSError as exc:
+                fail(f"cannot stat data/{name}: {exc}")
+            if current != mode:
+                try:
+                    d.chmod(mode)
+                except OSError as exc:
+                    fail(f"cannot set mode {mode:04o} on data/{name} "
+                         f"(currently {current:04o}): {exc}\n"
+                         f"    sudo chmod {mode:04o} {d}")
         if uid_gid is not None:
             chown_tree(d, uid_gid[0], uid_gid[1], f"data/{name}")
 
