@@ -358,6 +358,20 @@ services:
       # dropped — proven from its parsed-config echo). Device-facing gNMI TLS
       # is configured separately and unaffected.
       SSL_CERT_FILE: /tls/ca.pem
+      # ENABLE_GNMI_CORRELATION is NOT SUPPORTED under this profile, and the
+      # value is pinned false here so an .env that enables it for the plaintext
+      # stack cannot silently half-enable it under TLS. Two things are missing
+      # and neither can be forged from the gnmic side: SEC-006.3 removed
+      # PLAINTEXT:9092 (only MTLS:9094 / FLOWS:9095 remain), so the producer
+      # needs a gnmic SVID; and SEC-007.2 enforces ACLs, where netops.metrics
+      # already carries grants — a principal not named on it is DENIED. Both
+      # live outside this file (the SVID mint + kafka/apply-acls.sh). Until they
+      # land, keep GNMIC_CONFIG_FILE at its gnmic.yaml default here.
+      ENABLE_GNMI_CORRELATION: "false"
+      # …and the broker env points at the ONLY listener that exists here, so a
+      # GNMIC_CONFIG_FILE flipped by mistake fails loudly on the mTLS handshake
+      # instead of quietly finding a plaintext port to write netops.metrics on.
+      GNMI_CORRELATION_BROKERS: kafka:9094
     volumes:
       - ../../data/tls/ca.pem:/tls/ca.pem:ro
 

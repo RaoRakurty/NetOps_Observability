@@ -10,7 +10,7 @@ The docs and UI must reflect exactly this — no more:
 |---|---|
 | SNMP metric → correlation (`device_telemetry`) | **validated** (live) |
 | Trap → `control_plane` correlation | **validated for high-value families** (linkDown/Up, cold/warmStart, BGP transition) |
-| **gNMI metric → correlation bus path** | **Phase 2 — NOT wired** |
+| **gNMI metric → correlation bus path** | **BUILT, flag-gated, not yet live-attested** (`ENABLE_GNMI_CORRELATION` / `GNMIC_CONFIG_FILE=gnmic-correlation.yaml`; off in every shipped profile) |
 | gNMI fidelity | **partially validated / degraded by platform·version·mode** (catalog-tracked) |
 | Fixture-replay harness | **not complete** |
 
@@ -26,7 +26,9 @@ implemented and proven end-to-end on the live stack. SNMP metrics now flow
 produce `device_telemetry` signals with canonical identity; SNMP traps produce
 normalized `control_plane` signals (high-value only); syslog/flows/probes remain
 working; VictoriaMetrics stays the metric store, not the live RCA path; Telegraf
-is not a bus producer. gNMI metric→correlation remains Phase 2 (see status above).
+is not a bus producer.
+
+**gNMI metric → correlation is no longer "not wired" — it is BUILT and OFF.** The `correlation` output in `deployment/docker/gnmic/gnmic-correlation.yaml` produces canonical MetricEvents onto `netops.metrics` for the gNMI-OWNED RCA families (BGP session state / FSM transitions, Nokia SRL memory), reusing the canonical chain including the ownership gate, with a family allowlist a test holds equal to `rcaMetricFamilies` in the Go collector. Every claim above is static or fixture-replay evidence. Live attestation is still owed and the telemetry catalog's fidelity ladder is deliberately unchanged; enabling the flag also requires `BUS_PARTITIONS=1` and is unsupported under `compose.tls.yml` (no gnmic SVID / Kafka ACL grant) — see docs/INGESTION.md.
 
 | Suite | Result |
 |-------|--------|
@@ -50,6 +52,7 @@ is not a bus producer. gNMI metric→correlation remains Phase 2 (see status abo
 | 3 | MetricEvent → `device_telemetry` signal | ✅ PROVEN live | smoke C3 — signal `entity_id=smoke-…:eth-smoke0`, `observer=device`, `modality=device_telemetry`, `collection_path=snmp_poll`, `entity_type=interface`; unit `test_metric_intake.py` |
 | 4 | Trap normalized before correlation | ✅ PROVEN live | smoke C4 — linkDown→`control_plane` bound to interface; unknown trap→no signal; `test_trap_classify.py` |
 | 5 | gNMI fidelity / conformance harness | ✅ core enforced | `test_gnmi_fidelity.py` — doc_claimed/degraded ≠ supported; cEOS leaf-BGP pinned `degraded` (full fixture-replay = follow-up) |
+| 6 | gNMI metric → correlation bus path | ⚙️ BUILT, NOT live-attested | `test_gnmi_correlation_lane.py` (17 tests) — overlay-vs-base delta, allowlist equality with `rcaMetricFamilies`, reshape replayed through gnmic's own `event-jq` engine and the msg-template through Go's own `text/template`, default-off + mTLS-pinned-off, no secret in the config. NOT PROVEN: no deployment has yet put a gNMI-sourced signal into `corr_signals` — that needs a stack with the flag on |
 
 ## Layer-by-layer coverage
 

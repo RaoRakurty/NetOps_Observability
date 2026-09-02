@@ -259,6 +259,58 @@ required). It adds:
 * **MAC flap state** — a MAC move now carries old/new port state (`mac_move`),
   so a re-homing event is a transition rather than a stateless mention.
 
+### gNMI metrics and correlation — BUILT, off by default, not yet live-attested
+
+gNMI is collected by the `gnmic` sidecar (`deployment/docker/gnmic/gnmic.yaml`),
+which subscribes to the fabric and remote-writes two lanes to VictoriaMetrics: a
+raw `gnmi_*` debug lane and a canonical `device_*` lane normalized by a
+thirteen-stage processor chain. That has always been a **store** path — gnmic was
+not a bus producer, so no gNMI sample ever reached the correlation engine. The
+live metric evidence lane was, and by default still is, SNMP only: Go collector →
+Vector `:8690` → `netops.metrics` → `handle_metric()`.
+
+A third gnmic output now closes that gap, **behind a flag that is off in every
+shipped profile**. `deployment/docker/gnmic/gnmic-correlation.yaml` is
+`gnmic.yaml` plus one `correlation` output that produces canonical MetricEvents
+onto the same `netops.metrics` topic the Vector lane writes, in the same wire
+shape `handle_metric` reads (`observer_type`/`modality_class`/`collection_path`/
+`device`/`vendor`/`if_name`/`peer`/`signal_family`/`metric`/`value`/`unit`/`ts`,
+`collection_path = "gnmi_subscribe"`). It runs the SAME canonical chain as the
+VictoriaMetrics lane — **including the ownership gate**, so a `(device, family)`
+pair is still served by exactly one transport — and then one `event-jq` stage
+that explodes multi-value events to one metric each, admits only the families in
+`rcaMetricFamilies` (`src/backend/collectors/metric_events.go` — a test asserts
+the two lists are identical), and refuses any sample that could not ground a
+signal. Today that leaves the gNMI-OWNED families: BGP session state and
+transitions, and Nokia SR Linux memory. Interfaces, CPU and temperature stay SNMP-
+owned; IS-IS adjacency and per-AFI BGP prefixes are canonical for VictoriaMetrics
+but are not RCA families, so they stop at the shaper.
+
+Enable it with one line — `GNMIC_CONFIG_FILE=gnmic-correlation.yaml` — and read
+these constraints first:
+
+* **Kafka, not the Vector `:8690` lane.** gnmic 0.46.0 registers no `http`
+  output, and its only HTTP egress (the `event-trigger` `http` action) silently
+  drops events past `max-occurrences`. The output therefore produces to Kafka
+  directly. It does not pass through Vector's `metrics_normalized`, so it carries
+  no `tenant_id` claim — which is safe, because the engine resolves the tenant
+  from the device registry when an event makes no claim, exactly as Vector's
+  enrichment does.
+* **`BUS_PARTITIONS=1` only.** Vector keys `netops.metrics` by tenant with the
+  murmur2 partitioner so a tenant always lands on the same partition; gnmic
+  cannot know tenants and keys per device. At the default single partition this
+  is moot; above it, a tenant's gNMI evidence would split across correlation
+  instances until a re-key hop exists (the `netops.flows.raw` pattern).
+* **Not supported under `compose.tls.yml`.** That profile removed
+  `PLAINTEXT:9092` and enforces Kafka ACLs; gnmic has neither an SVID nor a
+  produce grant on `netops.metrics`, so the flag is pinned false there
+  (`docs/security/transport-inventory.yaml`, edge `gnmic-kafka`).
+* **Nothing is live-attested yet.** The lane is proven by fixture replay through
+  gnmic's own processor engine and Go's own template engine
+  (`tests/test_gnmi_correlation_lane.py`); no deployment has yet been observed
+  putting a gNMI-sourced signal into `corr_signals`. The telemetry catalog's
+  fidelity ladder is unchanged for that reason.
+
 ## Operational notes
 
 * **UDP loss.** Syslog over UDP and NetFlow are unreliable by design.

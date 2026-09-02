@@ -1,3 +1,16 @@
+# gnmic-correlation.yaml — the ENABLE_GNMI_CORRELATION overlay.
+#
+# gnmic takes exactly ONE --config (pkg flag `--config string`, not a list) and
+# YAML has no include, so an "overlay" here is a FULL config: this file is
+# gnmic.yaml verbatim plus (a) the `correlation` kafka output and (b) the
+# `corr-rca-shape` processor it runs. Nothing else may differ —
+# tests/test_gnmi_correlation_lane.py parses both files and fails on any other
+# delta, which is what keeps the copy from rotting.
+#
+# Selected at deploy time by the compose command:
+#   GNMIC_CONFIG_FILE=gnmic-correlation.yaml   (default: gnmic.yaml)
+# See deployment/docker/docker-compose.yml (gnmic) and docs/INGESTION.md.
+#
 # gnmic — gNMI dial-in telemetry collector (sidecar).
 #
 # Subscribes to the clos-multivendor fabric over gNMI and remote-writes the
@@ -177,6 +190,89 @@ outputs:
       - ownership-gate
       - drop-unmapped
       - drop-internal-tags
+
+  # ---------------------------------------------------------------------------
+  # Correlation lane — RCA EVIDENCE (feature-flagged: ENABLE_GNMI_CORRELATION).
+  #
+  # THIS BLOCK IS THE ONLY DIFFERENCE between gnmic.yaml and this file. The
+  # default deployment loads gnmic.yaml and never produces to the bus; the
+  # compose command selects THIS file only when the operator opts in
+  # (GNMIC_CONFIG_FILE=gnmic-correlation.yaml). tests/test_gnmi_correlation_lane.py
+  # asserts the delta mechanically, so the two files cannot drift.
+  #
+  # WHY kafka AND NOT http: gnmic 0.46.0 has NO http output. Its registered
+  # output types are file/influxdb/kafka/nats/otlp/prometheus/prometheus_write/
+  # tcp/udp/gnmi/jetstream/snmp/asciigraph (pkg/outputs/output.go OutputTypes;
+  # `type: http` fails with `unknown output type: "http"`). The only HTTP egress
+  # gnmic can do at all is the event-trigger processor's `http` ACTION — which is
+  # a rate-limited alerting hook: it keeps an in-memory occurrence slice per
+  # window and DROPS every event past max-occurrences (pkg/formatters/
+  # event_trigger evalOccurrencesWithinWindow). A metric lane that silently
+  # discards evidence is not acceptable (§9/§10), so the Vector :8690 HTTP lane
+  # the Go SNMP collector uses is unreachable from gnmic and this output produces
+  # to the same Kafka topic Vector's kafka_metrics sink writes: netops.metrics.
+  #
+  # KNOWN GAPS (why the flag is default-OFF and NOT live-attested — see
+  # docs/TEST_REPORT_metric-trap-lane.md):
+  #   * Vector's metrics_normalized stamps `.__key` = tenant so a tenant always
+  #     hashes to the same partition (murmur2). gnmic cannot know tenants, so it
+  #     keys per device. Harmless at BUS_PARTITIONS=1 (the default), NOT safe
+  #     above it until a re-key hop exists (the netops.flows.raw pattern).
+  #     Tenancy itself is unaffected: the engine resolves the tenant from the
+  #     registry when the event carries no claim (verified_tenant, "no claim →
+  #     the registry decides"), which is exactly what Vector's stamp does.
+  #   * compose.tls.yml removes PLAINTEXT:9092 and enforces ACLs; gnmic has no
+  #     SVID and no ACL grant, so this lane is unsupported under the mTLS
+  #     profile until both land (kafka/apply-acls.sh + the SVID mint).
+  correlation:
+    type: kafka
+    # Env-injected by compose (never a literal): brokers + topic.
+    address: ${GNMI_CORRELATION_BROKERS}
+    topic: ${GNMI_CORRELATION_TOPIC}
+    format: event
+    # One Kafka message per metric sample — the correlation consumer reads one
+    # JSON object per message. corr-rca-shape has already exploded multi-value
+    # events into one value each, so this yields exactly one MetricEvent.
+    split-events: true
+    # THE RESHAPE. Rendered by outputs.ExecTemplate over the marshalled event
+    # (text/template, Option("missingkey=zero"), gnmic's fromJSON = json.Marshal
+    # → every interpolated string is JSON-escaped, so a hostile ifName/peer from
+    # a device cannot break out of the JSON). Field order mirrors the Go
+    # MetricEvent struct (collectors/metric_events.go) so the two producers put
+    # the same bytes on the same topic. `value` is unquoted on purpose: it comes
+    # from corr-rca-shape, which admits it only after `type == "number"`.
+    msg-template: '{"observer_type":"device","modality_class":"device_telemetry","collection_path":"gnmi_subscribe","device":{{ index .tags "device" | fromJSON }}{{ with index .tags "vendor" }},"vendor":{{ . | fromJSON }}{{ end }}{{ with index .tags "ifName" }},"if_name":{{ . | fromJSON }}{{ end }}{{ with index .tags "peer" }},"peer":{{ . | fromJSON }}{{ end }},"signal_family":{{ index .tags "signal_family" | fromJSON }},"metric":{{ index .tags "metric" | fromJSON }},"value":{{ index .tags "mvalue" }},"unit":{{ index .tags "unit" | fromJSON }},"ts":{{ index .tags "ts" | fromJSON }}}'
+    # Partition key = ${source}_${subscription-name}: a device's series stay
+    # ordered on one partition. See the tenant-key gap above.
+    insert-key: true
+    # §9 bounded queue + backpressure: a fixed producer channel, a single
+    # worker, bounded retries, and a recovery wait instead of a hot reconnect
+    # loop. When the buffer is full gnmic blocks the output, it does not grow.
+    num-workers: 1
+    buffer-size: 1000
+    max-retry: 3
+    required-acks: wait-for-all
+    timeout: 5s
+    recovery-wait-time: 10s
+    compression-codec: snappy
+    # Same canonical chain as victoria-canonical (incl. the OWNERSHIP GATE, so a
+    # (device, family) pair is still served by exactly one transport on the bus),
+    # then the RCA shaper.
+    event-processors:
+      - canon-override-ts
+      - canon-names
+      - canon-status-enums
+      - canon-bgp-enums
+      - canon-isis-enums
+      - canon-convert
+      - vendor-nokia
+      - vendor-arista
+      - transport-tag
+      - canon-tags
+      - ownership-gate
+      - drop-unmapped
+      - drop-internal-tags
+      - corr-rca-shape
 
 processors:
   # [0] Override sample timestamp with collection time. cEOS stamps a STABLE
@@ -373,3 +469,69 @@ processors:
   drop-internal-tags:
     event-delete:
       tag-names: ["^subscription[-_]name$", "^control_slot$", "^cpu_index$", "^protocol_identifier$", "^protocol_name$", "^instance_name$"]
+
+  # [10] RCA SHAPER — the correlation lane's admission + reshape stage (only the
+  # `correlation` output runs it; the two VictoriaMetrics lanes never do).
+  #
+  # THE TABLE BELOW IS A MIRROR of rcaMetricFamilies in
+  # src/backend/collectors/metric_events.go (name -> {family, unit}).
+  # tests/test_gnmi_correlation_lane.py parses BOTH and fails on any difference,
+  # so the SNMP producer and the gNMI producer admit exactly the same RCA
+  # families onto netops.metrics. Do not widen it here alone.
+  #
+  # It does four things, in order:
+  #   1. EXPLODES one gnmic event carrying N values into N single-value events,
+  #      so `split-events` yields one MetricEvent per Kafka message.
+  #   2. ALLOWLISTS: a metric absent from the table is dropped (fail-closed —
+  #      device_isis_adj_state and device_bgp_pfx_in are mapped canonically for
+  #      VictoriaMetrics but are NOT RCA families, so they stop here).
+  #   3. VALIDATES (zero trust, §3): the value must be a number, the device tag
+  #      must be present, an `interface` sample must carry ifName and a `bgp`
+  #      sample must carry peer — the identities handle_metric needs to ground a
+  #      signal (metric_identity in src/correlation/main.py). Evidence that
+  #      cannot be grounded is refused HERE, not counted as a drop on the bus.
+  #   4. Stamps the wire fields the msg-template renders: metric, mvalue,
+  #      signal_family, unit, and ts as RFC3339Nano (the Go collector's
+  #      time.RFC3339Nano). Tags are strings, which is why the numeric value
+  #      travels as `mvalue` and is emitted unquoted by the template.
+  corr-rca-shape:
+    event-jq:
+      expression: |
+        {
+          "device_if_oper_status":      {"f":"interface","u":"state"},
+          "device_if_admin_status":     {"f":"interface","u":"state"},
+          "device_if_in_octets":        {"f":"interface","u":"bytes"},
+          "device_if_out_octets":       {"f":"interface","u":"bytes"},
+          "device_if_in_errors":        {"f":"interface","u":"errors"},
+          "device_if_out_errors":       {"f":"interface","u":"errors"},
+          "device_if_in_discards":      {"f":"interface","u":"discards"},
+          "device_if_out_discards":     {"f":"interface","u":"discards"},
+          "device_if_fcs_errors":       {"f":"interface","u":"fcs_errors"},
+          "device_if_speed":            {"f":"interface","u":"mbps"},
+          "device_bgp_peer_state":      {"f":"bgp","u":"state"},
+          "device_bgp_fsm_transitions": {"f":"bgp","u":"transitions"},
+          "device_cpu_percent":         {"f":"device_resource","u":"percent"},
+          "device_mem_percent":         {"f":"device_resource","u":"percent"},
+          "device_temp_celsius":        {"f":"device_resource","u":"celsius"}
+        } as $rca
+        | [ .[]
+            | . as $e
+            | (($e.values // {}) | to_entries[])
+            | . as $v
+            | select($rca[$v.key] != null)
+            | select(($v.value | type) == "number")
+            | select((($e.tags.device // "") | length) > 0)
+            | select($rca[$v.key].f != "interface" or ((($e.tags.ifName // "") | length) > 0))
+            | select($rca[$v.key].f != "bgp" or ((($e.tags.peer // "") | length) > 0))
+            | { name: $e.name,
+                timestamp: $e.timestamp,
+                tags: (($e.tags // {}) + {
+                  "metric": $v.key,
+                  "mvalue": ($v.value | tostring),
+                  "signal_family": $rca[$v.key].f,
+                  "unit": $rca[$v.key].u,
+                  "ts": ((($e.timestamp / 1000000000) | floor | strftime("%Y-%m-%dT%H:%M:%S"))
+                         + "." + (("000000000" + (($e.timestamp % 1000000000) | tostring)) | .[-9:])
+                         + "Z")
+                }),
+                values: { ($v.key): $v.value } } ]

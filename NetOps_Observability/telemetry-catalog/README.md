@@ -32,6 +32,30 @@ Only `lab_validated` / `live_validated` may be advertised as supported.
 — established BGP not delivered under a persistent multi-target subscription. That
 row is exactly why this catalog exists.
 
+### What the ladder does NOT say: correlation delivery
+
+`fidelity_status` grades ONE thing — whether the (vendor, platform, signal-family)
+row's path collects the correct canonical value. It says nothing about which
+*consumer* receives it. Until now that distinction was invisible, because every
+gNMI row had exactly one destination: VictoriaMetrics.
+
+As of 2026-09-02 gnmic can also produce canonical MetricEvents to the correlation
+bus (`netops.metrics`) — `deployment/docker/gnmic/gnmic-correlation.yaml`, gated
+by `ENABLE_GNMI_CORRELATION` / `GNMIC_CONFIG_FILE` and **off in every shipped
+profile**. That lane is CONFIGURED AND FIXTURE-PROVEN, **not live-attested**: no
+deployment has yet been observed turning a gNMI sample into a `corr_signals` row.
+
+So **no row's `fidelity_status` was promoted, and no `delivery:` column was
+added.** Adding a `delivery: victoria | victoria+correlation` attestation column
+here would be a claim about a path this catalog has not seen work, which is
+exactly the failure mode the ladder exists to prevent (the cEOS BGP row above).
+The column lands when a live run shows the signal, together with the rows it
+actually covers — which, given the ownership gate, will be the gNMI-OWNED
+families only (BGP session state / FSM transitions, Nokia SRL memory), not the
+interface or CPU/temperature rows that SNMP owns.
+
+Status meanwhile: `docs/TEST_REPORT_metric-trap-lane.md` and `docs/INGESTION.md`.
+
 ## Tooling
 
 ```bash

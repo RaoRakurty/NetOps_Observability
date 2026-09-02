@@ -699,6 +699,43 @@
       }
     },
     {
+      "id": "gnmic-kafka",
+      "source": "gnmic",
+      "destination": "kafka",
+      "channel": "bus",
+      "protocol": "kafka",
+      "port": 9092,
+      "current": {
+        "transport": "plaintext",
+        "authn": "none",
+        "authz": "none",
+        "notes": "OPT-IN AND OFF BY DEFAULT: the hop exists only when the operator selects the correlation overlay (GNMIC_CONFIG_FILE=gnmic-correlation.yaml); the stock deployment loads gnmic.yaml, which has no bus output at all. When enabled it is the same shape as vector-kafka/goflow2-kafka on the base compose — ${BROKER_URLS:-kafka:9092} against the single PLAINTEXT:9092 client listener — producing canonical MetricEvents onto netops.metrics beside the Go SNMP collector's Vector lane. gnmic 0.46.0 has no http output, so the authenticated Vector :8690 lane the Go collector uses is not reachable from gnmic (see gnmic-correlation.yaml)."
+      },
+      "target": {
+        "transport": "mtls",
+        "authn": "svid",
+        "authz": "produce-netops.metrics-only",
+        "notes": "same shape as every other SEC-006.2 bus client: a gnmic SVID on MTLS:9094 plus a produce grant on netops.metrics in kafka/apply-acls.sh. Neither exists yet, which is exactly why the lane is pinned off under compose.tls.yml and why this row carries an exception instead of a security_profile."
+      },
+      "trust_domain": "workload",
+      "owning_epic": "SEC-006",
+      "priority": "P1",
+      "evidence": [
+        "deployment/docker/gnmic/gnmic-correlation.yaml",
+        "deployment/docker/docker-compose.yml"
+      ],
+      "security_profile": {
+        "transport": "plaintext",
+        "notes": "NO TLS SHAPE EXISTS. compose.tls.yml removed PLAINTEXT:9092 (SEC-006.3) and enforces ACLs (SEC-007.2) on netops.metrics, and gnmic has neither an SVID nor a grant — so the TLS profile PINS the lane off (ENABLE_GNMI_CORRELATION=false, GNMI_CORRELATION_BROKERS=kafka:9094 so a mistaken flip fails the handshake loudly instead of finding a plaintext port). The row is declared anyway so the edge is visible rather than silently excluded (F-5)."
+      },
+      "exception": {
+        "owner": "platform-eng",
+        "accepted": "2026-09-02",
+        "review_by": "2026-12-02",
+        "reason": "PENDING OWNER RATIFICATION BEFORE THIS LANE MAY BE ENABLED ANYWHERE. The exception covers a hop that is OFF in every shipped profile: default compose loads gnmic.yaml (no bus output) and compose.tls.yml pins the flag false. It is declared, not accepted for production — enabling it on the base compose puts canonical MetricEvents on the plaintext :9092 listener with no producer identity, the same posture as vector-kafka/goflow2-kafka there, and enabling it under mTLS is impossible until the SVID + netops.metrics produce grant land (the target row). Short review_by on purpose: this row must be closed by shipping the mTLS shape or by removing the lane, not renewed indefinitely."
+      }
+    },
+    {
       "id": "prober-victoria",
       "source": "prober",
       "destination": "victoria",
