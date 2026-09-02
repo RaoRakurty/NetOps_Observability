@@ -1721,6 +1721,22 @@ services:
       PROTOCOL_DIAG_SSH_PASSWORD: ${PROTOCOL_DIAG_SSH_PASSWORD:-}
       PROTOCOL_DIAG_SSH_KEY: ${PROTOCOL_DIAG_SSH_KEY:-}
       PROTOCOL_DIAG_SSH_PORT: ${PROTOCOL_DIAG_SSH_PORT:-22}
+      # BMP receiver (internal/bmp) — the live BGP feed. A router is configured
+      # (by a human, on the router) to PUSH its Adj-RIB-In to us over TCP; this
+      # stack configures NOTHING on any device and the whole surface is
+      # read-only. DORMANT unless FEATURE_BMP=true: with the flag off no port is
+      # bound inside the container, no goroutine starts and the three read
+      # routes answer 404.
+      #
+      # A session's tenant is stamped from the INVENTORY device its source
+      # address resolves to; a source that resolves to no device is refused and
+      # disconnected, so a router must be in inventory BEFORE its feed is
+      # accepted. Message size, connection count, per-session update depth and
+      # both read deadlines are HARD caps in code, not env knobs — a config
+      # that can raise "max message size" is the unbounded read the design
+      # forbids, wearing a config file.
+      FEATURE_BMP: ${FEATURE_BMP:-false}
+      BMP_LISTEN: ${BMP_LISTEN:-:11019}
       # Parser-coverage mining (parsercov): ONE mining run scans at most this
       # many OpenSearch documents — the bound that keeps a coverage query off
       # the ingest tier's back (a partial scan is REPORTED as partial, never
@@ -1958,6 +1974,12 @@ services:
     # host port with SNMP_TRAP_PORT if 162 is taken.
     ports:
       - "${SNMP_TRAP_PORT:-162}:1162/udp"
+      # BMP sessions arrive on host TCP 11019 (the IANA `bmp` port) and forward
+      # to the in-container receiver. Active only when FEATURE_BMP=true; the
+      # mapping is harmless otherwise (nothing binds 11019 inside). Override the
+      # host port with BMP_PORT if 11019 is taken — and point the routers' `bmp
+      # server` stanzas at whatever you chose (docs/INGESTION.md).
+      - "${BMP_PORT:-11019}:11019/tcp"
     depends_on:
       postgres:    { condition: service_healthy }
       redis:       { condition: service_healthy }

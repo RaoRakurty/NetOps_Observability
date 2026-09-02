@@ -67,6 +67,11 @@ inject events carrying a forged `tenant_id` into any tenant's index.
 | NetFlow v5/v9       |           2055 | `NETFLOW_PORT` (2055)   |     2055 |
 | IPFIX               |           4739 | `IPFIX_PORT` (4739)     |     4739 |
 | sFlow               |           6343 | `SFLOW_PORT` (6343)     |     6343 |
+| BMP (RFC 7854)      |          11019 | `BMP_PORT` (11019)      |    11019 |
+
+BMP is **opt-in and default-off**: nothing binds 11019 unless `FEATURE_BMP=true`
+(the in-container bind address is `BMP_LISTEN`, default `:11019`). See
+"BMP — live BGP feed" below.
 
 Linux with rootful Docker can bind 514 directly:
 
@@ -144,6 +149,98 @@ Add to `/etc/rsyslog.d/00-netops.conf`:
 ```
 
 Then `systemctl restart rsyslog`.
+
+### BMP — live BGP feed (Protocol Monitoring page)
+
+BMP (BGP Monitoring Protocol, RFC 7854) is the one live BGP feed that needs **no
+external service**: your own routers push a copy of their Adj-RIB-In to the
+platform over TCP. The receiver is **read-only toward the network** — it accepts
+a feed and **performs no configuration on any device**. The commands below are
+what a network engineer types on the router; the platform never types them.
+
+Turn the receiver on first (it is dormant by default):
+
+```
+FEATURE_BMP=true
+BMP_LISTEN=:11019         # in-container bind address
+BMP_PORT=11019            # host port mapped to it
+```
+
+Then point a router at it. Replace `MONITOR_HOST` with the host running the
+stack.
+
+**Cisco IOS-XR**
+
+```
+bmp server 1
+ host MONITOR_HOST port 11019
+ description Correlix BMP receiver
+ update-source Loopback0
+ initial-refresh delay 30
+ stats-reporting-period 60
+!
+router bgp 65000
+ neighbor 192.0.2.10
+  bmp-activate server 1
+```
+
+**Cisco IOS-XE**
+
+```
+router bgp 65000
+ bmp server 1
+  address MONITOR_HOST port-number 11019
+  initial-refresh delay 30
+  update-source Loopback0
+  exit-bmp-server-mode
+ bmp buffer-size 200
+ neighbor 192.0.2.10 bmp-activate all
+```
+
+**Juniper Junos**
+
+```
+set routing-options bmp station correlix station-address MONITOR_HOST
+set routing-options bmp station correlix station-port 11019
+set routing-options bmp station correlix local-address 10.0.0.1
+set routing-options bmp station correlix connection-mode active
+set routing-options bmp station correlix route-monitoring pre-policy
+set routing-options bmp station correlix statistics-timeout 60
+```
+
+**Nokia SR OS**
+
+```
+configure router bgp monitor
+    admin-state enable
+    station "correlix"
+        admin-state enable
+        connection router-instance "Base" station-address ip-address MONITOR_HOST port 11019
+        all-route-monitoring pre-policy
+        stat-report-interval 60
+    exit
+exit
+```
+
+**What the platform does with it, and what it does NOT**
+
+* The session's **source address is resolved against the device inventory**, and
+  the tenant is stamped from that device row. A router whose address matches no
+  device is **refused and disconnected** — it is never admitted untenanted. Add
+  the router to inventory first, or the feed will not be accepted.
+* Only **IPv4 and IPv6 unicast** are decoded (plus MP_REACH/MP_UNREACH,
+  AS_PATH incl. AS4, NEXT_HOP, ORIGIN, MED, LOCAL_PREF, communities incl. RFC
+  8092 large). VPN/EVPN/flowspec families and ADD-PATH-encoded NLRI are
+  **counted as unsupported and skipped**, never partially decoded.
+* What is held is a **bounded monitoring feed of recent updates, not a converged
+  RIB**. A prefix that is absent has simply not been seen recently. Every
+  response carries a `coverage` block naming what was dropped, skipped or not
+  decoded, so an incomplete view is never presented as a complete one.
+* Read it at `GET /api/bgp/bmp/sessions`, `GET /api/bgp/bmp/updates` and
+  `GET /api/bgp/bmp/stats` (all `infrastructure:read`, all per-tenant).
+* Counters are on the metrics endpoint as `netops_bmp_*`
+  (`netops_bmp_sessions_active`, `netops_bmp_messages_total`,
+  `netops_bmp_parse_errors_total`, `netops_bmp_updates_dropped_total`).
 
 ## Verifying ingestion
 

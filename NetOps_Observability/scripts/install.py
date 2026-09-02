@@ -959,6 +959,19 @@ WATCHDOG_NTFY_TOPIC=
 #PROTOCOL_DIAG_SSH_KEY=
 #PROTOCOL_DIAG_SSH_PORT=22
 #
+# BMP receiver — the LIVE BGP feed. Your own routers push a copy of their
+# Adj-RIB-In to this platform over TCP (RFC 7854); nothing external is needed
+# and NOTHING is configured on any device by us — pointing a router here is a
+# human act on the router (config snippets for IOS-XR/IOS-XE/Junos/SR OS are in
+# docs/INGESTION.md). Binds host TCP 11019 (BMP_PORT) → :11019 in the container.
+# A session is accepted ONLY from a source address that resolves to a device in
+# inventory, and the tenant is stamped from that device row — an unknown source
+# is disconnected, never stored untenanted. Message size, connection count and
+# per-session update depth are hard caps in code, not knobs.
+#FEATURE_BMP=true
+#BMP_LISTEN=:11019
+#BMP_PORT=11019
+#
 # Parser-coverage mining bound (one run's OpenSearch scan) and the explicit
 # correlation replica list the per-process parser counters are summed over
 # (empty = the single-replica default, which falls back to CORRELATION_URL).

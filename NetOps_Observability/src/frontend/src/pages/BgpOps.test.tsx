@@ -116,6 +116,16 @@ vi.mock("../services/api", () => ({
   },
 }));
 
+// The depth panels (item 10 completion) are lazy children that fetch on their
+// own. Their contracts are covered by src/pages/bgp/panels.test.tsx; here they
+// are stubbed so this file keeps testing the PAGE — otherwise every assertion
+// about the page would also be waiting on five unrelated Suspense boundaries.
+vi.mock("./bgp/RpkiPanel", () => ({ default: () => <div data-testid="rpki-panel" /> }));
+vi.mock("./bgp/AspaCard", () => ({ default: () => <div data-testid="aspa-card" /> }));
+vi.mock("./bgp/GeofeedPanel", () => ({ default: () => <div data-testid="geofeed-panel" /> }));
+vi.mock("./bgp/LiveFeedPanel", () => ({ default: () => <div data-testid="live-feed-panel" /> }));
+vi.mock("./bgp/AsPathGraphPanel", () => ({ default: () => <div data-testid="aspath-panel" /> }));
+
 function deferred<T>() {
   let resolve!: (v: T) => void;
   let reject!: (e: unknown) => void;

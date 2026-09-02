@@ -120,13 +120,16 @@ mutable PG rows. Unblocks T8.
   `hardening.ConfigSource`. 81 tests; gosec 133. UI: device Configuration tab
   with honest never-captured / failed states, back up now, versions with
   view/diff/golden, and an Infrastructure → Config Drift fleet list; config text
-  and diffs render as escaped text only. **`main.go` / seclane / route-ledger
-  wiring was still uncommitted at the time of writing** — until it lands the
-  routes are not registered, and nothing here has run on the stack: the
-  hardening `Unknown` posture below is unlocked by a real capture, not by the
-  code existing.
-- [ ] **Packet Capture** (per-interface, bounded, secure export) — **not built.**
-  Design exists (`a25c6fe0`); no package, no route, no commit.
+  and diffs render as escaped text only. Wiring (`main.go` / seclane / route ledger)
+  landed in `1378ca26`; nothing here has run on the stack yet — the hardening
+  `Unknown` posture below is unlocked by a real capture, not by the code
+  existing.
+- [x] **Packet Capture** — `1378ca26`: `internal/pcap` — bounded on-device
+  capture over the same SSH gateway (closed BPF grammar, one capture per device,
+  sealed blobs, audited `sensitive` download) under `/api/devices/{id}/pcap*`;
+  the Config Backup `main.go` / seclane / route-ledger wiring landed in the same
+  commit, and `042b8e62` put configdrift on the removability allowlist and moved
+  the capture templates onto the registry-backed CommandTable.
 
 ### Later-flagged (non-blocking)
 - PSIRT/CSAF API credentials (vault) · CIS-CAT licensing · framework crosswalk

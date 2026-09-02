@@ -36,6 +36,18 @@ var apiRoutes = []apiRoute{
 	{"GET", "/api/rules", "Alerts", "Alert rules"},
 	{"POST", "/api/rules", "Alerts", "Add an alert rule"},
 	{"GET", "/api/findings", "Alerts", "Correlation findings (ClickHouse)"},
+	// BGP Operations — item 10. The watchlist is per-tenant; the resource proxy
+	// and the depth panels are public internet routing facts about a named
+	// resource. The feed is the per-tenant near-live ring buffer.
+	{"GET", "/api/bgp/watchlist", "BGP", "The caller's tenant watchlist of prefixes and ASNs"},
+	{"POST", "/api/bgp/watchlist", "BGP", "Watch a prefix or ASN (tenant stamped from the token)"},
+	{"DELETE", "/api/bgp/watchlist", "BGP", "Stop watching a resource (?resource=)"},
+	{"GET", "/api/bgp/resource", "BGP", "Routing status, RPKI verdict, collector paths or registry ownership for one resource (?view=status|updates|whois)"},
+	{"GET", "/api/bgp/rpki", "BGP", "RPKI origin validation for the caller's watchlist prefixes, or for one ?resource= prefix"},
+	{"GET", "/api/bgp/aspa", "BGP", "ASPA record for an ?resource=ASn — honest 'not configured' unless BGP_ASPA_PROVIDER_URL names a provider (no public per-ASN ASPA API exists)"},
+	{"GET", "/api/bgp/geofeed", "BGP", "RFC 8805 geofeed published for a prefix or ASN, discovered per RFC 9092 from the registry object"},
+	{"GET", "/api/bgp/aspath-graph", "BGP", "AS-path node-link graph for ?prefix= from RIS collector state (deduped, edges capped at 500)"},
+	{"GET", "/api/bgp/feed", "BGP", "Near-live BGP updates for the caller's watchlist from a bounded per-tenant ring buffer (?since= cursor); requires FEATURE_BGP_LIVE_FEED"},
 	{"POST", "/api/correlations/{id}/feedback", "RCA", "Record an operator verdict on an RCA case (correct | wrong | partial, with the wrong part)"},
 	{"GET", "/api/correlations/{id}/feedback", "RCA", "List the operator verdicts on an RCA case, newest first (caller's tenant only)"},
 	{"GET", "/api/correlations/feedback/summary", "RCA", "Windowed verdict counts + false-positive RCA rate for the caller's tenant"},
@@ -81,6 +93,18 @@ var apiRoutes = []apiRoute{
 	{"GET", "/api/devices/{id}/pcap/{capture_id}", "Packet Capture", "One capture's status: running | stored | failed, with packets, bytes and the filter it ran with"},
 	{"GET", "/api/devices/{id}/pcap/{capture_id}/download", "Packet Capture", "Stream the unsealed capture as application/vnd.tcpdump.pcap (infrastructure:write; audited as a sensitive reveal)"},
 	{"DELETE", "/api/devices/{id}/pcap/{capture_id}", "Packet Capture", "Delete a capture and its sealed blob (infrastructure:write; audited)"},
+	// Interfaces grouped by routing instance (frontend-wave item 4,
+	// internal/ifgroup). READ-ONLY: it collects nothing and invents nothing.
+	// The routing-instance concept is carried by NO interface series on either
+	// transport today — SNMP IF-MIB (the owner of every device_if_* family) has
+	// no VRF column, and the gNMI interface subscriptions sit outside the
+	// /network-instances tree that carries the instance name. So the response
+	// reports coverage.vrf_labels=false and returns the interfaces UNGROUPED
+	// with a note; it never fabricates a "default" group, because "every
+	// interface is in the default instance" is a claim about the device that no
+	// collected series supports. vrf_labels is PROBED per request, so the
+	// grouping lights up by itself the day a deployment does collect it.
+	{"GET", "/api/devices/{id}/interfaces/by-vrf", "Inventory", "One device's interfaces grouped by routing instance, in the device's own dialect (VRF | routing-instance | VPRN | VPN instance), with per-interface oper/admin state, in/out utilisation and error rates over ?window= (1m..24h, default 5m). Carries an honest coverage block: vrf_labels says whether any interface series actually carried a vrf label, transport names the lane (snmp is INFERRED from an absent transport stamp), and every absent measurement is null with a note rather than zero (infrastructure:read; 404 outside the caller's tenant, identical to an absent device)"},
 	// Routing-protocol diagnostics (Troubleshooting item 7, internal/protocoldiag).
 	// A version-pinned, hand-authored ruleset: 15 issues across BGP/OSPF/IS-IS,
 	// each with a curated READ-ONLY command bundle rendered in the device's
@@ -115,7 +139,30 @@ var apiRoutes = []apiRoute{
 	// 404 and existence is never revealed.
 	{"GET", "/api/protocols/{proto}/adjacencies", "Protocols", "Per-adjacency OSPF/IS-IS view for {proto} = ospf | isis: live state where a series exists, plus the windowed change timeline from syslog/trap events, keyset-paged (?device=, ?since= 1m..7d, ?limit= 1..1000, ?cursor=). `up` is null for an event-only adjacency — history is not evidence of the state right now"},
 	{"GET", "/api/protocols/{proto}/summary", "Protocols", "Fleet roll-up per device for {proto} = ospf | isis, worst-first by flap count (?since= 1m..7d, ?limit= 1..500). `adjacencies` / `down_adjacencies` are LIVE counts and are null without a live series; a partial roll-up says so in `notes` and `truncated`"},
-	{"GET", "/api/protocols/{proto}/health", "Protocols", "One device's IGP health for {proto} = ospf | isis: neighbour/up/down counts (null without a live series), IS-IS levels, adjacency changes, flap count and a stability score that always carries the basis it was computed from. `lsdb.lsp_count` and OSPF `areas` are null with a note — nothing collects them (?device= required, ?since= 1m..7d)"},
+	{"GET", "/api/protocols/{proto}/health", "Protocols", "One device's IGP health for {proto} = ospf | isis: neighbour/up/down counts (null without a live series), IS-IS levels, adjacency changes, flap count and a stability score that always carries the basis it was computed from. plus the depth blocks `lsdb` / `areas` / `spf_runs` / `timers`, each with its own coverage flag and each null + a note naming the absent series when nothing collects it — never 0 (?device= required, ?since= 1m..7d)"},
+	// BMP receiver (internal/bmp) — the live BGP feed. Registered ONLY when
+	// FEATURE_BMP=true, so a flag-off deployment 404s all three and the feature
+	// is not enumerable. A router is configured (by a human, on the router) to
+	// PUSH its Adj-RIB-In to the platform over TCP; nothing here configures a
+	// device, and the whole surface is read-only.
+	//
+	// The honesty contract, carried as a `coverage` block on every response:
+	// this is a BOUNDED MONITORING FEED of recent updates, NOT a converged RIB.
+	// A prefix that is absent has simply not been seen recently. With no router
+	// exporting, the answer is an empty feed that SAYS SO — never a zero-route
+	// "converged" verdict. Dropped records (bounded ring), skipped frames and
+	// undecoded address families are each counted and reported, so an
+	// incomplete view is never presented as a complete one.
+	//
+	// All three are per-tenant reads (infrastructure:read). A session's tenant
+	// is stamped at connect time from the inventory device its source address
+	// resolves to; a source that resolves to nothing is refused rather than
+	// stored untenanted. Only IPv4/IPv6 unicast is decoded (RFC 7854 +
+	// RFC 4760); VPN/EVPN/flowspec families and ADD-PATH NLRI are counted as
+	// unsupported, never partially decoded.
+	{"GET", "/api/bgp/bmp/sessions", "Protocols", "BMP sessions the caller's routers have opened to the platform: router identity, up/closed state, per-peer BGP state (up | down | unknown — never an assumed up), message counts, dropped-update and parse-error counters"},
+	{"GET", "/api/bgp/bmp/updates", "Protocols", "Recent per-prefix BGP updates from those sessions, newest first (?prefix= matches a prefix or anything inside it, ?peer=, ?session=, ?limit= 1..1000, ?cursor= opaque keyset). Announcements carry AS_PATH (AS4-merged), NEXT_HOP, ORIGIN, MED, LOCAL_PREF and communities incl. RFC 8092 large; a withdrawal carries none, because it has none"},
+	{"GET", "/api/bgp/bmp/stats", "Protocols", "The caller's own BMP aggregate — sessions, peers, messages by type, updates held/dropped, parse errors — plus the receiver's hard bounds, so a non-zero dropped count can be read against what it was measured against"},
 	{"GET", "/api/tunnels", "Telemetry", "Overlay tunnel telemetry (IPsec/SD-WAN/GRE)"},
 	{"GET", "/api/flows/top", "Telemetry", "Top talkers (NetFlow/ClickHouse)"},
 	{"POST", "/api/logs/search", "Telemetry", "Search logs (OpenSearch)"},

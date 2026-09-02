@@ -5988,6 +5988,19 @@ button.cc-kpi-btn.on::after { content: "filtered"; display: block; margin-top: 5
 .igp-cov-chip[data-collected="no"] .igp-cov-state { color: var(--muted); }
 .igp-cov-detail { display: block; }
 .igp-notwired .badge { margin-right: 6px; }
+/* The advanced depth blocks (LSDB · SPF runs · areas · timers). A block that
+   was never collected keeps the dashed "not collected" treatment the coverage
+   chips use, so an uncollected source can never be mistaken for a quiet one. */
+.igp-depth-row { display: flex; flex-wrap: wrap; gap: var(--sp-2); margin-top: var(--sp-2); }
+.igp-depth {
+  display: grid; gap: 2px; padding: 8px 12px; border-radius: var(--r-1);
+  border: 1px solid var(--border); background: var(--surface); min-width: 220px; flex: 1 1 240px;
+}
+.igp-depth[data-collected="no"] { border-style: dashed; }
+.igp-depth-title { font-weight: 600; }
+.igp-depth-value { font-size: var(--fs-h3, 1.15rem); }
+.igp-depth-scopes { list-style: none; margin: 2px 0 0; padding: 0; display: flex; flex-wrap: wrap; gap: var(--sp-2); }
+.igp-timer-caveat { margin-top: var(--sp-1); }
 .igp-notes { margin: var(--sp-1) 0 0; padding-left: 1.1em; }
 .igp-state[data-tone="good"] { color: var(--good, #16a34a); }
 .igp-state[data-tone="bad"] { color: var(--bad, #dc2626); }

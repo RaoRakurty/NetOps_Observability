@@ -188,6 +188,13 @@ EXPECTED = {
     "PROTOCOL_DIAG_SSH_PASSWORD":    "",
     "PROTOCOL_DIAG_SSH_KEY":         "",
     "PROTOCOL_DIAG_SSH_PORT":        "22",
+    # BMP receiver (the live BGP feed). Byte-identical to the docker-compose
+    # defaults, so materializing these keys changes nothing — it only makes the
+    # knob discoverable in .env after an upgrade. BMP_PORT is the HOST port the
+    # compose ports: mapping publishes; BMP_LISTEN is the in-container bind.
+    "FEATURE_BMP":                   "false",
+    "BMP_LISTEN":                    ":11019",
+    "BMP_PORT":                      "11019",
     "PARSERCOV_MAX_LINES":           "200000",
     "CORRELATION_REPLICA_URLS":      "",
     "CORR_SYSLOG_TOPIC":             "netops.syslog",

@@ -24,7 +24,11 @@ import (
 	"netops/backend/internal/apikey"
 	"netops/backend/internal/applog"
 	"netops/backend/internal/audit"
+	// BMP-BEGIN
+	"netops/backend/internal/bmp"
+	// BMP-END
 	// CONFIG-BACKUP-BEGIN
+	"netops/backend/internal/bgpdepth"
 	"netops/backend/internal/configdrift"
 	"netops/backend/internal/configstore"
 	// CONFIG-BACKUP-END
@@ -121,6 +125,15 @@ type server struct {
 	roles         *roleStore
 	bgpWatch      *bgpWatchStore // BGP ops watchlist (item 10, PG FORCE-RLS; nil on file backend)
 	bgpFetch      *bgpFetcher    // outbound RIPEstat/RDAP fetcher with TTL cache
+	// BGP-DEPTH-BEGIN — item 10 depth (internal/bgpdepth). bgpFeed holds the
+	// per-tenant bounded ring buffers + pollers and is nil unless
+	// FEATURE_BGP_LIVE_FEED=true, so a flag-off deployment allocates nothing and
+	// /api/bgp/feed answers an honest "not enabled". bgpASPA is the pluggable
+	// ASPA source: NoASPAProvider unless BGP_ASPA_PROVIDER_URL names one, because
+	// no public per-ASN ASPA API exists (see internal/bgpdepth/aspa.go).
+	bgpFeed *bgpdepth.Runtime
+	bgpASPA bgpdepth.ASPAProvider
+	// BGP-DEPTH-END
 	// Routing-protocol diagnostics (Troubleshooting item 7). Catalog + analyzer
 	// are pure/immutable and always built; the collector is wired to the live
 	// read-only SSH command source ONLY when FEATURE_PROTOCOL_DIAG_COLLECT=true
@@ -271,6 +284,12 @@ type server struct {
 	packetCapture *pcap.Manager // bounded on-device capture runtime
 	pcapAPI       *pcap.API     // /api/devices/{id}/pcap* subtree
 	// PACKET-CAPTURE-END
+	// BMP-BEGIN — the BGP Monitoring Protocol receiver (internal/bmp,
+	// frontend-wave item 10). nil unless FEATURE_BMP=true: with the flag off
+	// no TCP port is bound, no worker starts, and all three routes answer 404.
+	// A router PUSHES its RIB-In to us; we configure nothing on any device.
+	bmpAPI *bmp.API
+	// BMP-END
 	// igpAPI serves the read-only OSPF/IS-IS monitoring subtree
 	// /api/protocols/{ospf|isis}/{adjacencies,summary,health} (internal/igpmon).
 	// It is always on — it collects nothing and reads only telemetry the
@@ -839,6 +858,23 @@ func newServer() *server {
 		srv.bgpWatch = newBGPWatchStore(ps.DB())
 	}
 	srv.bgpFetch = newBGPFetcher()
+	// BGP-DEPTH-BEGIN — depth wiring (item 10). The ASPA provider is always
+	// present but is the honest no-op unless an operator configured a real one.
+	// The live feed runtime is built only under its flag; Stop() is registered
+	// with the server's shutdown hooks so pollers never outlive the process.
+	srv.bgpASPA = bgpdepth.NewASPAProvider(os.Getenv(bgpdepth.EnvASPAProviderURL), srv.bgpFetch, time.Now)
+	if envBool(bgpdepth.EnvFeatureFlag) {
+		srv.bgpFeed = bgpdepth.NewRuntime(srv.bgpFetch, bgpdepth.Options{
+			Enabled: true,
+			Log: func(msg string, fields map[string]any) {
+				logInfo("bgp-feed", msg, fields)
+			},
+		})
+		logInfo("bgp-feed", "near-live BGP update feed enabled (RIPEstat poller; RIS Live is WebSocket-only and no websocket module is on the §6 allowlist)", map[string]any{
+			"ring_size": bgpdepth.RingSize, "max_pollers": bgpdepth.MaxPollers,
+		})
+	}
+	// BGP-DEPTH-END
 	// PROTOCOL-DIAG-BEGIN — Routing-protocol diagnostics (Troubleshooting item
 	// 7): the catalog + signatures are a pure, always-available library (they
 	// never touch a device). The LIVE collect transport is opt-in and
@@ -1454,6 +1490,25 @@ func Run() {
 		}
 	}
 	// PACKET-CAPTURE-END
+	// BMP-BEGIN — BGP Monitoring Protocol receiver (internal/bmp): a TCP
+	// listener a router pushes its Adj-RIB-In to. READ-ONLY toward the network —
+	// it accepts a feed and configures nothing on any device. Opt-in and
+	// default-off; with the flag off NO port is bound, no goroutine starts and
+	// the three read routes answer 404.
+	if envBool(bmp.EnvFeatureFlag) {
+		api, err := srv.buildBMP()
+		if err != nil {
+			// Fail LOUD, not silently dormant: the operator asked for the feed.
+			logError("bmp", "BMP receiver could not be constructed — NO router feed will be received", errf(err))
+		} else {
+			srv.bmpAPI = api
+			// TRACKED worker (not a fire-and-forget goroutine): shutdown WAITS
+			// for the receiver, and Listener.Run closes the bound socket and
+			// every live connection when ctx is cancelled.
+			workers.start("bmp-receiver", func() { srv.bmpAPI.Run(ctx) })
+		}
+	}
+	// BMP-END
 	// seam.Seam bootstrap engine (#67 build ⑤ / cloud-ingestion §4.1): auto-suggest
 	// seam instances from telemetry so the grounding gate has an inventory.
 	srv.startSeamBootstrap(ctx)
@@ -1682,6 +1737,13 @@ func Run() {
 		logError("shutdown", "http graceful shutdown", errf(err))
 	}
 	cancel()
+	// BGP-DEPTH-BEGIN — the feed's pollers run on their own contexts (they are
+	// started lazily per tenant, long after this ctx was built), so they need an
+	// explicit stop or they would keep making outbound calls during shutdown.
+	if srv.bgpFeed != nil {
+		srv.bgpFeed.Stop()
+	}
+	// BGP-DEPTH-END
 	drainTimeout := durationOr("WORKER_DRAIN_TIMEOUT", 15*time.Second)
 	if stuck := workers.drain(drainTimeout); len(stuck) > 0 {
 		// Name them. "did not drain" with no names cannot be acted on, and the
@@ -1831,6 +1893,16 @@ func (s *server) routes(mux *http.ServeMux) {
 	// BGP Operations (item 10): tenant watchlist + remote-API data spine.
 	mux.HandleFunc("/api/bgp/watchlist", s.handleBGPWatchlist)
 	mux.HandleFunc("/api/bgp/resource", s.handleBGPResource)
+	// BGP-DEPTH-BEGIN — item 10 depth: RPKI, ASPA (honest), geofeed, the AS-path
+	// graph and the near-live update feed. Registered individually so each stays
+	// visible to the route-isolation ledger; /api/bgp/rpki and /api/bgp/feed are
+	// the per-tenant ones (watchlist-driven), the rest are public routing facts.
+	mux.HandleFunc("/api/bgp/rpki", s.handleBGPRPKI)
+	mux.HandleFunc("/api/bgp/aspa", s.handleBGPASPA)
+	mux.HandleFunc("/api/bgp/geofeed", s.handleBGPGeofeed)
+	mux.HandleFunc("/api/bgp/aspath-graph", s.handleBGPASPathGraph)
+	mux.HandleFunc("/api/bgp/feed", s.handleBGPFeed)
+	// BGP-DEPTH-END
 	// Routing-protocol diagnostics (Troubleshooting item 7).
 	mux.HandleFunc("/api/troubleshoot/protocol-diagnostics/catalog", s.handleProtocolDiagCatalog)
 	mux.HandleFunc("/api/troubleshoot/protocol-diagnostics/analyze", s.handleProtocolDiagAnalyze)
@@ -1853,6 +1925,28 @@ func (s *server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/protocols/isis/summary", igp)
 	mux.HandleFunc("/api/protocols/isis/health", igp)
 	// IGP-MONITORING-END
+	// BMP-BEGIN — the live BGP feed (internal/bmp). Each route is registered
+	// individually so it stays visible to the route-isolation ledger; a nil
+	// bmpAPI (FEATURE_BMP off, or construction refused) answers 404 on all
+	// three, so a flag-off deployment does not even enumerate the feature.
+	bmpH := s.bmpAPI.Handler()
+	mux.HandleFunc("/api/bgp/bmp/sessions", bmpH)
+	mux.HandleFunc("/api/bgp/bmp/updates", bmpH)
+	mux.HandleFunc("/api/bgp/bmp/stats", bmpH)
+	// BMP-END
+	// VRF-IFACES-BEGIN — per-device interfaces grouped by routing instance
+	// (frontend-wave item 4, internal/ifgroup). READ-ONLY over telemetry the
+	// platform already collects, in the DEVICE's own dialect (VRF /
+	// routing-instance / VPRN / VPN instance). The route is more specific than
+	// the "/api/devices/" subtree above it, so ServeMux prefers it; a failed
+	// build leaves the route unregistered and "/api/devices/" answers 404 for
+	// the path, which is the same dormant, never-unscoped outcome.
+	if api, err := s.buildIfGroup(); err != nil {
+		logError("ifgroup", "interfaces-by-routing-instance could not be wired — the route will answer 404", errf(err))
+	} else {
+		mux.HandleFunc("/api/devices/{id}/interfaces/by-vrf", api.Handler())
+	}
+	// VRF-IFACES-END
 	// Port Intelligence (#94 P5) — enhances the Infrastructure surface (no new nav).
 	mux.HandleFunc("/api/infrastructure/interfaces", s.handlePortInterfaces)
 	mux.HandleFunc("/api/infrastructure/interfaces/", s.handlePortInterfaceDetail)
@@ -2859,6 +2953,9 @@ func (s *server) handlePromMetrics(w http.ResponseWriter, _ *http.Request) {
 	// IGP-MONITORING-BEGIN
 	s.igpAPI.Metrics().Write(w) // nil-safe on both the API and the counter set
 	// IGP-MONITORING-END
+	// BMP-BEGIN
+	s.bmpAPI.Metrics().Write(w) // nil-safe on both the API and the counter set
+	// BMP-END
 	if s.parserCovMetrics != nil {
 		s.parserCovMetrics.Write(w)
 	}

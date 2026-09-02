@@ -6,6 +6,8 @@ import InterfacePerformance from "./InterfacePerformance";
 import DeviceNeighbors from "./DeviceNeighbors";
 import DeviceConfigPanel from "./config/DeviceConfigPanel";
 import DevicePcapPanel from "./capture/DevicePcapPanel";
+import VrfInterfaces from "./device/VrfInterfaces";
+import { vrfTerm } from "../lib/vendorTerms";
 
 // DeviceDetailPage — the full-page device drill-down (NetBox/Dynatrace-style):
 // breadcrumb + identity header + a KPI strip, then tabs (Overview · Interfaces ·
@@ -23,7 +25,7 @@ const TYPE_META: Record<string, { label: string; color: string }> = {
 
 const DOWN_AFTER_MS = 5 * 60 * 1000;
 
-type Tab = "overview" | "interfaces" | "routing" | "config" | "capture";
+type Tab = "overview" | "interfaces" | "vrf" | "routing" | "config" | "capture";
 
 export default function DeviceDetailPage({ device, onClose }: { device: Device; onClose: () => void }) {
   const [tab, setTab] = useState<Tab>("overview");
@@ -57,7 +59,7 @@ export default function DeviceDetailPage({ device, onClose }: { device: Device; 
 
         {/* Tabs */}
         <div className="ddp-tabs" role="tablist">
-          {([["overview", "Overview"], ["interfaces", "Interfaces"], ["routing", "Routing & neighbors"], ["config", "Configuration"], ["capture", "Packet capture"]] as [Tab, string][]).map(([id, label]) => (
+          {([["overview", "Overview"], ["interfaces", "Interfaces"], ["vrf", `By ${vrfTerm(d.vendor)}`], ["routing", "Routing & neighbors"], ["config", "Configuration"], ["capture", "Packet capture"]] as [Tab, string][]).map(([id, label]) => (
             <button key={id} role="tab" aria-selected={tab === id} className={tab === id ? "on" : ""} onClick={() => setTab(id)}>{label}</button>
           ))}
         </div>
@@ -82,6 +84,12 @@ export default function DeviceDetailPage({ device, onClose }: { device: Device; 
             </>
           )}
           {tab === "interfaces" && <InterfacePerformance initialDevice={d.id} rangeMinutes={60} />}
+          {/* Interfaces grouped by routing instance, in the DEVICE's own dialect
+              (item 4). The tab label is the vendor's word — a Juniper operator
+              reads "By routing-instance". The panel renders its own honest
+              coverage strip: on a transport that does not collect the binding it
+              says so instead of inventing a default group. */}
+          {tab === "vrf" && <VrfInterfaces device={d} />}
           {tab === "routing" && <DeviceNeighbors device={d} />}
           {/* Configuration backup / golden baseline / drift (FEATURE_CONFIG_BACKUP).
               Renders its own "not enabled" card when the flag is off. */}

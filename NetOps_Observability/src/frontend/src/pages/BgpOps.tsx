@@ -9,12 +9,25 @@
 // shape. Honest by construction: each panel fails independently and SAYS so
 // (never blank, never fabricated).
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   api, type BgpStatusResp, type BgpUpdatesResp, type BgpWatchEntry,
 } from "../services/api";
 import { NocHeader, Chip } from "../components/noc";
 import Icon from "../components/Icon";
+// BGP depth (item 10 completion) — each panel owns its own fetch and its own
+// failure, so a dead geofeed or an unreachable validator never blanks the page.
+// Lazy so the React Flow graph never rides in this route's first chunk.
+const RpkiPanel = lazy(() => import("./bgp/RpkiPanel"));
+const AspaCard = lazy(() => import("./bgp/AspaCard"));
+const GeofeedPanel = lazy(() => import("./bgp/GeofeedPanel"));
+const LiveFeedPanel = lazy(() => import("./bgp/LiveFeedPanel"));
+const AsPathGraphPanel = lazy(() => import("./bgp/AsPathGraphPanel"));
+
+/** A panel that has not loaded its chunk yet says so — never an empty gap. */
+function PanelFallback({ label }: { label: string }) {
+  return <div className="card" style={{ marginTop: 12 }}><div className="empty">Loading {label}…</div></div>;
+}
 
 // ── small pure helpers (exported for tests) ──────────────────────────────────
 
@@ -156,6 +169,13 @@ export default function BgpOps() {
   const churn = useMemo(() => bucketUpdates(updates?.updates), [updates]);
   const contacts = useMemo(() => rdapContacts(whois), [whois]);
   const watched = watch.some((w) => w.resource === status?.resource);
+  // ASPA is a property of an AS, so for a prefix lookup we ask about the AS that
+  // is ACTUALLY announcing it (from the live routing status) — never a guess.
+  const aspaAsn = useMemo(() => {
+    if (status?.kind === "asn") return status.resource;
+    const origin = status?.rpki_origin ?? (rs?.last_seen?.origin ? `AS${String(rs.last_seen.origin).replace(/^AS/i, "").split(/[{},]/).filter(Boolean)[0]}` : "");
+    return origin || undefined;
+  }, [status, rs]);
 
   return (
     <div className="dm-board cc-board">
@@ -265,6 +285,26 @@ export default function BgpOps() {
             </div>
           )}
 
+          {/* ── BGP depth (item 10 completion) ───────────────────────────── */}
+
+          {status.kind === "prefix" && (
+            <Suspense fallback={<PanelFallback label="the AS-path graph" />}>
+              <AsPathGraphPanel prefix={status.resource} />
+            </Suspense>
+          )}
+
+          <Suspense fallback={<PanelFallback label="RPKI" />}>
+            <RpkiPanel resource={status.kind === "prefix" ? status.resource : undefined} />
+          </Suspense>
+
+          <Suspense fallback={<PanelFallback label="ASPA" />}>
+            <AspaCard asn={aspaAsn} />
+          </Suspense>
+
+          <Suspense fallback={<PanelFallback label="the geofeed" />}>
+            <GeofeedPanel resource={status.resource} />
+          </Suspense>
+
           {/* update churn */}
           <div className="card" style={panelCss}>
             <h2>Update churn — last 8h</h2>
@@ -316,6 +356,12 @@ export default function BgpOps() {
           </div>
         </>
       )}
+
+      {/* The near-live feed follows the WATCHLIST, not the current lookup, so it
+          renders whether or not an investigation is open. */}
+      <Suspense fallback={<PanelFallback label="the live feed" />}>
+        <LiveFeedPanel />
+      </Suspense>
 
       {!status && !err && (
         <div className="empty" style={{ marginTop: 16 }}>

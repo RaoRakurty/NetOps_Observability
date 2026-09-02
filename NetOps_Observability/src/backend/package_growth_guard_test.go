@@ -366,7 +366,40 @@ import (
 //	                  Net effect on §2: the Phase-A DOMAIN (skills, selection,
 //	                  the tool set, ~1.8k lines) lives in netops/backend/ai; only
 //	                  the wiring stays in the root.
-const rootPackageCeiling = 206
+//	2026-09-02  207  +1: ifgroup_deps.go (frontend-wave item 4 — the wiring for
+//	                  internal/ifgroup, where the interfaces-by-routing-instance
+//	                  DOMAIN actually lives). Same Deps-wiring shape as the 204
+//	                  igpmon entry and for the same reason: the file holds no
+//	                  domain logic, only the Deps assembly plus five adapter
+//	                  methods that need the *server receiver to reach
+//	                  requirePerm, principalTenant, s.discovery/deviceTenant,
+//	                  visibleDeviceMetricLabels/restrictedTelemetry and
+//	                  vmInstantScoped. Those primitives are root-package
+//	                  identity/tenancy plumbing, so the adapter cannot move down
+//	                  without dragging them with it — and re-deriving tenant
+//	                  scoping inside the subpackage is the §3a.4 failure the
+//	                  single-derivation rule exists to prevent. Net effect on §2:
+//	                  the whole feature (pure grouping model, coverage honesty,
+//	                  HTTP surface) is in internal/ifgroup; ~150 lines of adapter
+//	                  stay.
+//	2026-09-02  208  +1: bmp_deps.go (frontend-wave item 10, the live BGP feed —
+//	                  the wiring for internal/bmp, where the RFC 7854 receiver
+//	                  DOMAIN actually lives: the wire parser, the BGP UPDATE
+//	                  decoder, the bounded tenant-keyed store, the TCP listener
+//	                  and the read handlers, ~2.5k lines). Same Deps-wiring
+//	                  shape as the 204 igpmon and 207 ifgroup entries, for the
+//	                  same reason: the file holds no domain logic, only the Deps
+//	                  assembly plus three adapter members that need the *server
+//	                  receiver to reach requirePerm/principalTenant (the gate),
+//	                  s.discovery + deviceTenant (the ONE inventory→tenant rule
+//	                  a BMP session is attributed by) and s.workers.start (the
+//	                  shutdown drain group). Those are root-package
+//	                  identity/tenancy plumbing; moving the adapter down would
+//	                  drag them with it, or re-derive tenant attribution inside
+//	                  the subpackage — the §3a.4 failure the single-derivation
+//	                  rule exists to prevent. Net effect on §2: the whole
+//	                  receiver is in internal/bmp; ~110 lines of adapter stay.
+const rootPackageCeiling = 208
 
 func TestFlatPackageMainDoesNotGrow(t *testing.T) {
 	entries, err := os.ReadDir(".")

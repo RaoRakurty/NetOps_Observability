@@ -62,6 +62,42 @@ var routeIsolationLedger = map[string]string{
 	// data crosses it (same shape as /api/cloud/providers, /api/snmp/profiles).
 	"/api/bgp/watchlist": "scoped",
 	"/api/bgp/resource":  "globalRef",
+	// BMP receiver (internal/bmp) — the live BGP feed half of item 10. All
+	// three are per-tenant DATA: a BMP session is one customer's router
+	// pushing one customer's Adj-RIB-In, and the tenant is stamped at CONNECT
+	// time from the inventory device the source address resolves to (§3a.2 —
+	// never from anything the router said; an unresolvable source is refused
+	// outright rather than stored under tenant ""). The store itself takes a
+	// (tenant, cross) pair on every read and has NO unscoped "list all", so a
+	// handler cannot forget the filter; a principal with no tenant and no
+	// cross grant reads nothing. Filters (?prefix=/?peer=/?session=) NARROW
+	// within that scope and can never widen it. Cross-org isolation proven by
+	// bmp_deps_test.go, which exercises all three paths through the production
+	// s.bmpAuthz / s.bmpResolveDevice wiring.
+	"/api/bgp/bmp/sessions": "scoped",
+	"/api/bgp/bmp/updates":  "scoped",
+	"/api/bgp/bmp/stats":    "scoped",
+	// BGP depth (item 10 completion, internal/bgpdepth).
+	//   /api/bgp/rpki — with no ?resource it validates the CALLER'S OWN
+	//     watchlist prefixes, read through the same FORCE-RLS store, so the
+	//     answer's very CONTENTS are tenant data (which prefixes a tenant
+	//     watches). scoped, isolation proven by TestBGPDepthRPKIIsWatchlistScoped.
+	//   /api/bgp/feed — the near-live update ring is keyed BY TENANT and a
+	//     cross-tenant principal is refused outright (a platform owner must
+	//     scope in with the switcher), same shape as the watchlist write.
+	//     Proven by TestBGPDepthFeedIsPerTenantAndRefusesCross.
+	//   /api/bgp/aspa, /api/bgp/geofeed, /api/bgp/aspath-graph — PUBLIC internet
+	//     facts about an explicitly named resource (registry ASPA, an RFC 8805
+	//     geofeed, RIS collector paths), identical for every tenant and gated by
+	//     requirePerm(infrastructure, read): the /api/bgp/resource category. The
+	//     graph consults the caller's watchlist ONLY to MARK its own ASNs — that
+	//     highlight never filters or widens the public graph, and is proven
+	//     tenant-invariant by TestBGPDepthASPathGraphTenantOnlyMarks.
+	"/api/bgp/rpki":         "scoped",
+	"/api/bgp/feed":         "scoped",
+	"/api/bgp/aspa":         "globalRef",
+	"/api/bgp/geofeed":      "globalRef",
+	"/api/bgp/aspath-graph": "globalRef",
 	// Protocol diagnostics (Troubleshooting item 7, protocol_diagnostics.go):
 	// catalog is the version-pinned 15-issue ruleset, identical for every tenant
 	// (?vendor= only picks the rendered command dialect), behind
@@ -252,6 +288,20 @@ var routeIsolationLedger = map[string]string{
 	// Cross-org isolation proven by pcap_isolation_test.go plus
 	// internal/pcap/{http,store}_test.go.
 	"/api/devices/": "scoped",
+	// Per-device interfaces grouped by routing instance (frontend-wave item 4,
+	// internal/ifgroup). Per-tenant DATA: interface oper/admin state,
+	// utilisation and error rates for ONE device. Unlike the config/pcap
+	// subtrees this one IS its own mux pattern (a wildcard route, more specific
+	// than "/api/devices/", so ServeMux prefers it) and therefore gets its own
+	// ledger key. The chain is the igpmon one: requirePerm(infrastructure:read)
+	// → {id} resolved through the principal-scoped inventory FIRST (a foreign
+	// id and an absent id answer the SAME 404, so the subtree is not an
+	// existence oracle) → EVERY VictoriaMetrics read carries the caller's
+	// device boundary as extra_filters[], and a SCOPED principal with no
+	// boundary is refused the read rather than served the fleet. Read-only; it
+	// collects nothing and writes nothing. Cross-org isolation proven by
+	// ifgroup_deps_test.go plus internal/ifgroup/http_test.go.
+	"/api/devices/{id}/interfaces/by-vrf": "scoped",
 	// Port Intelligence (#94): every port/interface/optics read is tenant DATA,
 	// scoped by requirePerm(infrastructure:read) + the portStore RLS/tenant
 	// filter (cross-tenant get → 404); proven by port_handlers_test.go.
