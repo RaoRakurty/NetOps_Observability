@@ -43,6 +43,15 @@ transforms:
     type: filter
     inputs: [cloudlogs_rules_apply]
     condition: '!(to_bool(.cx_drop) ?? false)'
+  security_rules_apply:
+    type: remap
+    inputs: [security_identity]
+    source: |
+      del(.__cx_noop__)
+  security_rules:
+    type: filter
+    inputs: [security_rules_apply]
+    condition: '!(to_bool(.cx_drop) ?? false)'
   flows_rules_apply:
     type: remap
     inputs: [flows_decoded]
@@ -54,7 +63,7 @@ transforms:
     condition: '!(to_bool(.cx_drop) ?? false)'
   cx_applied_only:
     type: filter
-    inputs: [applogs_rules_apply, syslog_rules_apply, snmptrap_rules_apply, cloudlogs_rules_apply, flows_rules_apply]
+    inputs: [applogs_rules_apply, syslog_rules_apply, snmptrap_rules_apply, cloudlogs_rules_apply, security_rules_apply, flows_rules_apply]
     condition: 'exists(.cx_applied)'
   cx_processor_metrics:
     type: log_to_metric

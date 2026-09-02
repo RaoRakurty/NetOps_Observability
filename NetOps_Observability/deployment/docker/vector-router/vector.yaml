@@ -531,28 +531,16 @@ transforms:
         .cx_finding_id = sha2(nid + "|" + sid, variant: "SHA-256")
       }
 
-  # ── PROCESSOR HOOK — STATIC PLACEHOLDER, NOT the generated pair ────────────
-  # Every other lane's <lane>_rules_apply/<lane>_rules pair is emitted by the
-  # API's processor compiler (src/backend/processors/generate.go, laneInputs +
-  # LaneOrder). That compiler does NOT enumerate `security`, and adding a lane
-  # to it is a backend change outside this task — so the pair is declared here
-  # STATICALLY, in the identical shape, so the sink can already read a hook and
-  # a cold start boots.
-  #
-  # !! WHEN generate.go GAINS `"security": "security_identity"` IN laneInputs
-  # !! (and "security" in LaneOrder), DELETE THESE TWO COMPONENTS in the same
-  # !! change. Vector refuses to start on a duplicate component id across its
-  # !! two --config files, so leaving both would take the whole router down.
-  # tests/test_security_lane.py pins that mutual exclusion.
-  security_rules_apply:
-    type: remap
-    inputs: [security_identity]
-    source: |
-      del(.__cx_noop__)
-  security_rules:
-    type: filter
-    inputs: [security_rules_apply]
-    condition: '!(to_bool(.cx_drop) ?? false)'
+  # ── PROCESSOR HOOK — GENERATED, not declared here ──────────────────────────
+  # `security_rules_apply` / `security_rules` are emitted for this lane by the
+  # API's processor compiler (src/backend/processors/generate.go: laneInputs
+  # `"security": "security_identity"` + LaneOrder), exactly as for every other
+  # lane, and reach the router through the second --config file
+  # (/etc/vector/processors/processors.yaml, seeded from
+  # processors-default.yaml). They must NEVER be re-declared here: Vector
+  # refuses to start on a duplicate component id across its two --config files,
+  # which would take the whole router down. tests/test_security_lane.py pins
+  # that mutual exclusion.
 
   # goflow2 renders the IP protocol as a NAME ("TCP"/"UDP"/"ICMP"…), but the
   # ClickHouse flows.proto column is UInt8 (the IANA number). Without this

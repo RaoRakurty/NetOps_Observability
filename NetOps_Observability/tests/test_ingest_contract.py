@@ -438,12 +438,10 @@ def test_every_storage_sink_routes_through_its_processor_hook():
         # (native_id, scan_id) identity is incomplete — see tests/test_security_lane.py.
         "opensearch_secfindings": ("security_rules", "security_store_route"),
     }
-    # The security lane's hook pair is declared STATICALLY in the router config
-    # (src/backend/processors/generate.go does not enumerate the lane yet), so it
-    # is not in the generated file — the mutual exclusion is pinned in
-    # tests/test_security_lane.py.
-    hooks = dict(processors_default()["transforms"])
-    hooks["security_rules"] = vector_cfg("router")["transforms"]["security_rules"]
+    # Every hook — the security lane's included — comes from the GENERATED file;
+    # a static duplicate in vector.yaml would be a duplicate component id across
+    # the router's two --config files (pinned in tests/test_security_lane.py).
+    hooks = processors_default()["transforms"]
     for sink, (hook, route) in expect.items():
         got = cfg["sinks"][sink]["inputs"]
         if route is None:
@@ -479,6 +477,10 @@ def test_processor_hooks_shape_after_attribution_not_before():
     expected_inputs = {
         "applogs": "applogs_tagged", "syslog": "syslog_tagged",
         "snmptrap": "snmptrap_tagged", "cloudlogs": "cloudlogs_tagged",
+        # P3-L1: the findings lane hangs off security_identity, so the
+        # deterministic doc id and the quarantine mark are computed before any
+        # tenant rule runs — the same ordering rule as tenant attribution.
+        "security": "security_identity",
         "flows": "flows_decoded",
     }
     for lane, inp in expected_inputs.items():

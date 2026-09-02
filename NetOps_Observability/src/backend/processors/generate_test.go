@@ -88,6 +88,22 @@ func TestGenerateEscapesUserInput(t *testing.T) {
 	}
 }
 
+// TestLaneInputsCoverEveryLane — every lane in LaneOrder must have a router
+// input, or its generated chain would consume the empty component name and the
+// router would refuse the whole config. The reverse direction matters too: an
+// input for a lane nobody generates is dead weight that hides a typo.
+func TestLaneInputsCoverEveryLane(t *testing.T) {
+	if len(laneInputs) != len(LaneOrder) {
+		t.Fatalf("laneInputs (%d) and LaneOrder (%d) disagree: %v vs %v",
+			len(laneInputs), len(LaneOrder), laneInputs, LaneOrder)
+	}
+	for _, lane := range LaneOrder {
+		if laneInputs[lane] == "" {
+			t.Fatalf("lane %s has no router input — its generated chain would have an empty input", lane)
+		}
+	}
+}
+
 func TestGenerateShapeAndOrdering(t *testing.T) {
 	base := time.Date(2026, 7, 31, 0, 0, 0, 0, time.UTC)
 	rules := []Rule{
@@ -101,7 +117,7 @@ func TestGenerateShapeAndOrdering(t *testing.T) {
 	}
 	out := mustGenerate(t, rules)
 
-	for _, lane := range []string{"applogs", "syslog", "snmptrap", "cloudlogs", "flows"} {
+	for _, lane := range []string{"applogs", "syslog", "snmptrap", "cloudlogs", "security", "flows"} {
 		if !strings.Contains(out, lane+"_rules:") || !strings.Contains(out, lane+"_rules_apply:") {
 			t.Fatalf("lane %s missing its apply+filter pair:\n%s", lane, out)
 		}

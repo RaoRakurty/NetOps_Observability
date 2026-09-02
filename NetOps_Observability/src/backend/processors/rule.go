@@ -40,7 +40,13 @@ import (
 // in generation order. Everything else (the Lanes set, the compiler's input
 // map, the catalog response, error messages) derives from it, so adding a lane
 // is one edit here plus its router input (review B3).
-var LaneOrder = []string{"applogs", "syslog", "snmptrap", "cloudlogs", "flows"}
+//
+// `security` is the P3-L1 findings lane (netops.security → netops-secfindings-*).
+// Its hook pair was declared STATICALLY in the router config while this list did
+// not know it; the generator now owns it and the static pair is gone — Vector
+// refuses to boot on a duplicate component id across its two --config files, so
+// the two can never coexist (tests/test_security_lane.py pins that).
+var LaneOrder = []string{"applogs", "syslog", "snmptrap", "cloudlogs", "security", "flows"}
 
 // Lanes is the membership set derived from LaneOrder.
 var Lanes = func() map[string]bool {

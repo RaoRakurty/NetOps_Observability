@@ -129,13 +129,16 @@ def test_sink_routes_through_the_hook_and_the_store_route():
     sink, so a tenant's processors touch what is actually stored and an
     unidentifiable finding peels off before the tenant index."""
     cfg = router()
+    gen = processors_default()["transforms"]
     assert cfg["sinks"]["opensearch_secfindings"]["inputs"] == ["security_store_route._unmatched"]
     route = cfg["transforms"]["security_store_route"]
     assert route["type"] == "route"
     assert route["inputs"] == ["security_rules"]
     assert route["route"]["quarantine"] == "to_bool(.cx_quarantine) ?? false"
-    assert cfg["transforms"]["security_rules"]["inputs"] == ["security_rules_apply"]
-    assert cfg["transforms"]["security_rules_apply"]["inputs"] == ["security_identity"]
+    # The hook pair lives in the GENERATED config (the router's second --config
+    # file), so the chain crosses the two files: identity here, hook there.
+    assert gen["security_rules"]["inputs"] == ["security_rules_apply"]
+    assert gen["security_rules_apply"]["inputs"] == ["security_identity"]
     assert cfg["transforms"]["security_identity"]["inputs"] == ["security_tagged"]
 
 
@@ -146,24 +149,34 @@ def test_unidentifiable_findings_reach_the_quarantine_sink():
     assert "security_store_route.quarantine" in inputs
 
 
-def test_the_static_hook_and_the_generated_one_are_mutually_exclusive():
-    """src/backend/processors/generate.go does not enumerate `security`, so the
-    hook pair is declared STATICALLY in vector.yaml. Vector refuses to start on
-    a duplicate component id across its two --config files, so the day the
-    generator gains the lane the static pair MUST be deleted in the same
-    change — otherwise the whole router fails to boot."""
+def test_the_generated_hook_is_the_only_definition_of_the_pair():
+    """The hook pair is now emitted by the processor compiler
+    (src/backend/processors/generate.go: laneInputs + rule.go LaneOrder), like
+    every other lane's. Vector refuses to start on a duplicate component id
+    across its two --config files, so the generated pair and a static one in
+    vector.yaml can NEVER coexist — declaring the pair in vector.yaml again
+    would take the whole router down on the next boot."""
     generated = processors_default()["transforms"]
     static = router()["transforms"]
     for name in ("security_rules", "security_rules_apply"):
-        assert name in static, f"{name} is not declared statically in the router config"
-        assert name not in generated, (
-            f"{name} is now emitted by the processor generator AND declared statically "
-            "in vector.yaml — duplicate component ids; delete the static pair"
+        assert name in generated, (
+            f"{name} is no longer emitted by the processor generator — the sinks "
+            "would read a component that does not exist"
         )
-    # generate.go must still not know the lane; if it learns it, this test is
-    # the reminder that the static pair above has to go.
-    assert '"security"' not in read("src", "backend", "processors", "generate.go"), \
-        "generate.go now enumerates a security lane — remove the static hook pair from vector.yaml"
+        assert name not in static, (
+            f"{name} is declared statically in vector.yaml AND emitted by the "
+            "processor generator — duplicate component ids across the router's two "
+            "--config files; Vector refuses to boot. Delete the static declaration."
+        )
+    # The generator's side of the same invariant: the lane must stay enumerated,
+    # with its chain hung off security_identity (post-identity, pre-storage).
+    gen_src = read("src", "backend", "processors", "generate.go")
+    assert '"security": "security_identity"' in gen_src, \
+        "generate.go no longer maps the security lane to security_identity"
+    assert '"security"' in read("src", "backend", "processors", "rule.go"), \
+        "LaneOrder no longer carries the security lane — the pair would vanish from the generated config"
+    assert generated["security_rules_apply"]["inputs"] == ["security_identity"], \
+        "the generated chain must consume security_identity (identity before any tenant rule)"
 
 
 def test_sink_writes_the_per_tenant_index_with_the_deterministic_id():

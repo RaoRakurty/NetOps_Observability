@@ -30,7 +30,12 @@ var laneInputs = map[string]string{
 	"syslog":    "syslog_tagged",
 	"snmptrap":  "snmptrap_tagged",
 	"cloudlogs": "cloudlogs_tagged",
-	"flows":     "flows_decoded",
+	// The findings lane's chain runs AFTER security_identity, so the
+	// deterministic doc id (and the quarantine mark for a finding that cannot
+	// produce one) is computed before any tenant processor touches the event —
+	// the same "shape after attribution, not before" rule the other lanes obey.
+	"security": "security_identity",
+	"flows":    "flows_decoded",
 }
 
 // laneOrder is LaneOrder (rule.go) — the single lane source (review B3).
