@@ -85,6 +85,14 @@ func (e *Engine) Evaluate(ctx context.Context, dev Device) ([]secfindings.Findin
 	for _, rule := range e.catalog.Rules() {
 		f := e.base(dev, secfindings.EvidencePosture)
 		f.RawRuleID = rule.ID
+		// ID is the PER-FINDING discriminator secbus.nativeIDOf folds into the
+		// deterministic signal identity. It must be the RULE id, not the control
+		// id: several rules/probes legitimately map onto the SAME canonical
+		// control (exposure-snmp and exposure-http are both AC-4), and without
+		// this segment their verdicts for one device in one scan collapse onto
+		// ONE native_id — the second would dedup away downstream as a
+		// redelivery, which is silent evidence loss.
+		f.ID = rule.ID
 		f.ControlID = rule.canonicalControl()
 		f.ControlTitle = rule.Title
 		f.Standards = rule.Controls
@@ -134,6 +142,7 @@ func (e *Engine) Evaluate(ctx context.Context, dev Device) ([]secfindings.Findin
 func (e *Engine) evaluateExposure(ctx context.Context, dev Device, vendor Vendor, cfg *Config, haveCfg bool, probe ExposureProbe) secfindings.Finding {
 	f := e.base(dev, secfindings.EvidenceExposure)
 	f.RawRuleID = probe.ID
+	f.ID = probe.ID // see the note on the posture loop: control ids are shared
 	f.ControlID = probe.canonicalControl()
 	f.ControlTitle = probe.Title
 	f.Standards = probe.Controls

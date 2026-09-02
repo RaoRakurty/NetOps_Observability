@@ -28,20 +28,12 @@ import (
 	"time"
 )
 
-// registerG10NotifyRoutes mounts the Teams/SNS admin endpoints.
+// newG10NotifyServer is newNotifyCfgServer over the real router.
 //
-// They are intentionally NOT in main.go's routes() yet: main.go is owned by a
-// separate change and the registration hunk is reported rather than applied.
-// Mounting them here keeps the handlers exercised end-to-end through the real
-// router + auth middleware, which is where the §3a gate actually lives.
-func registerG10NotifyRoutes(s *server, mux *http.ServeMux) {
-	mux.HandleFunc("/api/notify/teams", s.handleTeamsConfig)
-	mux.HandleFunc("/api/notify/teams/test", s.handleTeamsTest)
-	mux.HandleFunc("/api/notify/sns", s.handleSNSConfig)
-	mux.HandleFunc("/api/notify/sns/test", s.handleSNSTest)
-}
-
-// newG10NotifyServer is newNotifyCfgServer plus the G10 routes.
+// The four Teams/SNS admin routes are registered by main.go's routes() as of
+// the P3-EMIT wiring pass (2026-09-02); the local shim that mounted them while
+// main.go was owned by another change is GONE — leaving it would have
+// double-registered the patterns, which Go's ServeMux panics on.
 func newG10NotifyServer(t *testing.T) (*httptest.Server, *server) {
 	t.Helper()
 	dir := t.TempDir()
@@ -63,7 +55,6 @@ func newG10NotifyServer(t *testing.T) (*httptest.Server, *server) {
 	s.notifyCfg = newNotifyConfigStore(dir+"/notify.json", s)
 	mux := http.NewServeMux()
 	s.routes(mux)
-	registerG10NotifyRoutes(s, mux)
 	srv := httptest.NewServer(s.withAuth(mux))
 	t.Cleanup(srv.Close)
 	return srv, s
@@ -434,10 +425,9 @@ func TestNotifyG10ChannelsArePlatformOwnerOnly(t *testing.T) {
 	orgBoss := login(t, srv, "orgboss", "Passw0rd!2345").Token
 	tenantAdmin := login(t, srv, "tadmin", "Passw0rd!2345").Token
 
-	// Mount the G10 endpoints on the same *server (see registerG10NotifyRoutes).
+	// The G10 endpoints are part of the real router now (main.go routes()).
 	mux := http.NewServeMux()
 	s.routes(mux)
-	registerG10NotifyRoutes(s, mux)
 	g10 := httptest.NewServer(s.withAuth(mux))
 	defer g10.Close()
 

@@ -85,6 +85,17 @@ and thereby certified the blind scope as healthy.
 | CI gates report *why* they failed | ✅ | `preflight-configs.sh` always emits a reason (2026-07-22) |
 | An unreadable audit trail cannot render as an empty one | ✅ | **BUILD** — `audit_failure_test.go` (F-73): a failing `auditRepo` must produce 503, never `200 {"events":[]}`. `Count` returns −1, never 0, for an unknown total |
 
+### 2a. Security producer (P3-EMIT, 2026-09-02)
+
+| Aspect | Status | Enforced by |
+|---|---|---|
+| Evidence the bus refuses is dead-lettered, never dropped | ✅ | **BUILD** — `TestProducerFailureDeadLettersOntoTheBusAndNeverCountsLost` |
+| `lost_total` moves ONLY when no sink kept a durable copy (the 189 contract) | ✅ | **BUILD** — `TestDeadLetterTopicFailureFallsBackToTheSpool` + `TestOnlyWhenEverySinkFailsDoesLostMove` |
+| An unassessable control is UNASSESSED, never a Pass (§5g) | ✅ | **BUILD** — `TestHardeningWithNoConfigCaptureYieldsUnassessedNotPass`, `TestAdvisoryUnassessableDeviceIsUnassessedNotClear` |
+| An unreadable rule-enablement set fails the run CLOSED | ✅ | **BUILD** — `TestRuleStateFailureFailsClosed` |
+| One lane's source outage does not silence the others | ✅ | **BUILD** — `TestThreatLaneLogSourceFailureDoesNotSuppressOtherLanes` |
+| The security PRODUCER stays removable (2 units + marked main.go blocks) | ✅ | **BUILD** — `security_lane_removability_test.go` (import allowlist + marker discipline; it imports nothing security-specific, so it survives its own recipe) |
+
 ## 3. Bounded execution
 
 > *Every external operation has bounded execution time.*
@@ -131,6 +142,8 @@ and thereby certified the blind scope as healthy.
 | One tenant's failed write cannot destroy another's data | ✅ | **BUILD** — `TestAITenantConfigFailedSaveDoesNotDestroyOtherTenants` (F-64) |
 | GraphQL enforces the same RBAC as REST | ✅ | **BUILD** — `TestGraphQLEnforcesTheSameRBACGateAsREST` (was an auth bypass) |
 | Ingest ports authenticate the producer | ✅ | **BUILD** — `TestProduceCarriesIngestAuth`; fail-closed config (F-08) |
+| The security producer keys every bus record by the owning tenant | ✅ | **BUILD** — `internal/seclane`: `TestScanAllIteratesTenantsAndKeysEveryRecordByTenant` (partition key == event tenant, and a device never ships under another tenant's key), `TestScanNamesOnlyTheCallersOwnIndicesAndCHScope` |
+| One tenant's disabled detection cannot change another tenant's scan | ✅ | **BUILD** — `TestDisabledRuleIsPerTenant` (P3-EMIT, 2026-09-02) |
 
 **Gap — the highest-value one in this file:** §3a rule 5 is mandatory and unenforced. A guard that fails when a new tenant-scoped route lacks an isolation test would close the class the way `TestNoVoidSaveLocked` closed its own.
 

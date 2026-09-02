@@ -116,7 +116,15 @@ var routeIsolationLedger = map[string]string{
 	"/api/security/rules":             "scoped", // GET catalog + tenant state; PUT administration:write, owner from the token
 	"/api/security/views":             "scoped",
 	"/api/security/views/":            "scoped", // DELETE {id}; cross-tenant id -> 404
-	"/api/correlations":               "scoped",
+	// P3-EMIT producer lane (internal/seclane). Both are per-tenant: the status
+	// list is filtered by principalTenant (a tenant admin sees ONLY its own row;
+	// the cross-tenant platform admin sees every tenant), and the manual trigger
+	// enqueues a scan for the CALLER'S OWN tenant only — a cross-tenant caller is
+	// refused (400) rather than allowed to scan on someone else's behalf.
+	// Isolation proven by security_lane_isolation_test.go.
+	"/api/security/lane/status": "scoped",
+	"/api/security/scan":        "scoped",
+	"/api/correlations":         "scoped",
 	// SUBRESOURCE WARNING (2026-08-04): this prefix entry covers MANY handlers,
 	// and a prefix classification is NOT evidence that each one enforces tenant
 	// scope. {id}/replay was classified "scoped" by this very line while
@@ -453,6 +461,10 @@ var routeIsolationLedger = map[string]string{
 	"/api/notify/ntfy/test":           "platform",
 	"/api/notify/pagerduty":           "platform",
 	"/api/notify/pagerduty/test":      "platform",
+	"/api/notify/teams":               "platform",
+	"/api/notify/teams/test":          "platform",
+	"/api/notify/sns":                 "platform",
+	"/api/notify/sns/test":            "platform",
 	// The channel enumeration is over the SAME platform-global notify integrations
 	// as /api/notify/* — a tenant admin must not enumerate operator channel names
 	// (requirePlatformAdmin; report_scheduler.go handleReportChannels).

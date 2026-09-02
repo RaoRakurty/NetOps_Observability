@@ -381,7 +381,17 @@ services:
     mem_limit: ${GNMIC_MEM_LIMIT:-512m}
     cpus: ${GNMIC_CPU_LIMIT:-1}
     # F-51: DIRECTORY mount (see vector-aggregator).
-    command: ["subscribe", "--config", "/app/conf/gnmic.yaml"]
+    #
+    # ENABLE_GNMI_CORRELATION (default OFF): gnmic takes exactly ONE --config
+    # and YAML has no include, so the correlation lane ships as a SECOND FULL
+    # config (gnmic/gnmic-correlation.yaml = this file's config plus the
+    # `correlation` kafka output + its `corr-rca-shape` processor) selected here
+    # by GNMIC_CONFIG_FILE. Unset → gnmic.yaml → the two VictoriaMetrics lanes
+    # only, i.e. the default deployment is byte-for-byte what it was.
+    # Turning the lane ON is one .env line: GNMIC_CONFIG_FILE=gnmic-correlation.yaml.
+    # Supported ONLY at BUS_PARTITIONS=1 and NOT under compose.tls.yml — see the
+    # gaps documented in gnmic/gnmic-correlation.yaml and docs/INGESTION.md.
+    command: ["subscribe", "--config", "/app/conf/${GNMIC_CONFIG_FILE:-gnmic.yaml}"]
     environment:
       # SEC-013 narrowing note: gnmic held the shared INGEST_TOKEN from the
       # F-08 era, but it has posted to no vector-aggregator lane since SEC-010
@@ -400,6 +410,16 @@ services:
       # 2026-08-09 enforce wave, where the api never reads it (dead env); TLS
       # deployments point it at vmauth via the override/compose.tls.yml.
       VICTORIA_WRITE_URL: ${VICTORIA_WRITE_URL:-http://victoria:8428/api/v1/write}
+      # Correlation lane (gnmic-correlation.yaml only — the default config
+      # expands neither). Declared unconditionally so a flipped
+      # GNMIC_CONFIG_FILE never boots against an unexpanded ${...} placeholder;
+      # inert while the base config is loaded. Bus endpoint + topic ONLY: this
+      # lane carries no credential (the broker is reached over the same
+      # PLAINTEXT listener every non-TLS bus client uses), so there is no token
+      # to leak into the rendered config.
+      ENABLE_GNMI_CORRELATION: ${ENABLE_GNMI_CORRELATION:-false}
+      GNMI_CORRELATION_BROKERS: ${BROKER_URLS:-kafka:9092}
+      GNMI_CORRELATION_TOPIC: ${GNMI_CORRELATION_TOPIC:-netops.metrics}
     volumes:
       - ./gnmic:/app/conf:ro
     depends_on: [victoria]
@@ -1600,6 +1620,21 @@ services:
       # alert). DORMANT unless FEATURE_RCA_TICKETING=true; the connection is the
       # per-tenant ServiceNow configured in Incident Response → Integrations.
       FEATURE_RCA_TICKETING: ${FEATURE_RCA_TICKETING:-false}
+      # Security evidence PRODUCER lane (Project 3, P3-EMIT — internal/seclane):
+      # per-tenant hardening + vendor-advisory + threat detections →
+      # secbus.FromFinding → the netops.security topic, which vector-router
+      # already persists into netops-secfindings-<seg>-* (P3-L1). DORMANT unless
+      # FEATURE_SECURITY_LANE=true; with the flag off no worker starts, no route
+      # is registered and no metric series exists. The scan is bounded: one
+      # jittered pass per interval, at most SECURITY_MAX_FINDINGS_PER_TENANT
+      # findings per tenant per run (the excess is counted, not silently
+      # dropped), and a batch the bus refuses is dead-lettered onto
+      # netops.deadletter, then to SECURITY_DEADLETTER_FILE, before anything is
+      # ever counted as lost.
+      FEATURE_SECURITY_LANE: ${FEATURE_SECURITY_LANE:-false}
+      SECURITY_SCAN_INTERVAL: ${SECURITY_SCAN_INTERVAL:-15m}
+      SECURITY_MAX_FINDINGS_PER_TENANT: ${SECURITY_MAX_FINDINGS_PER_TENANT:-5000}
+      SECURITY_DEADLETTER_FILE: /data/security_deadletter.jsonl
       # Cloud signal notifications (#12 slice 1): page the owning tenant when a
       # CLOUD correlation object opens, through that tenant's OWN RCA Slack/
       # PagerDuty lanes. Opt-in; a tenant with no lane configured is a no-op.

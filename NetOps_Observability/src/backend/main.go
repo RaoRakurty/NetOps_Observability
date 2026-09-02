@@ -35,6 +35,9 @@ import (
 	"netops/backend/internal/saved"
 	"netops/backend/internal/sealedfields"
 	"netops/backend/internal/seam"
+	// SECURITY-LANE-BEGIN
+	"netops/backend/internal/seclane"
+	// SECURITY-LANE-END
 	"netops/backend/internal/secobs"
 	"netops/backend/internal/secprofile"
 	"netops/backend/internal/selfheal"
@@ -234,13 +237,17 @@ type server struct {
 	secAPI         *secapi.API
 	secStore       secapi.Store
 	secFindMetrics *secapi.Metrics
-	rcaRevisions   *rcaRevisionStore     // report revision register, tenant-keyed (postmortem Phase 1 immutability)
-	rcaClock       func() time.Time      // DI seam for the RCA generation clock (nil = wall clock) — deterministic re-render tests inject it
-	portStore      portintel.Store       // Port Intelligence physical-layer store (#94)
-	netboxCfg      *netboxConfigStore    // NetBox source-of-truth discovery config
-	discoveryCfg   *discoveryConfigStore // SNMP subnet-discovery scan config (platform-owner)
-	netboxSync     *netboxSyncer         // reconciles discovered devices INTO NetBox (write-through)
-	vulns          *vuln.Feed            // #13: advisory feed for /api/vulns (lazy, mtime hot-reload)
+	// SECURITY-LANE-BEGIN — P3-EMIT removable module; see internal/seclane's
+	// package doc, "REMOVAL RULE". nil unless FEATURE_SECURITY_LANE=true.
+	securityLane *seclane.Lane
+	// SECURITY-LANE-END
+	rcaRevisions *rcaRevisionStore     // report revision register, tenant-keyed (postmortem Phase 1 immutability)
+	rcaClock     func() time.Time      // DI seam for the RCA generation clock (nil = wall clock) — deterministic re-render tests inject it
+	portStore    portintel.Store       // Port Intelligence physical-layer store (#94)
+	netboxCfg    *netboxConfigStore    // NetBox source-of-truth discovery config
+	discoveryCfg *discoveryConfigStore // SNMP subnet-discovery scan config (platform-owner)
+	netboxSync   *netboxSyncer         // reconciles discovered devices INTO NetBox (write-through)
+	vulns        *vuln.Feed            // #13: advisory feed for /api/vulns (lazy, mtime hot-reload)
 	// oidc holds the live SSO provider. It is swapped atomically when an operator
 	// saves config from the admin UI (oidc_config.go), and is read on the hot
 	// auth path (withAuth RS256) and in the SSO handlers via oidcProvider().
@@ -501,14 +508,16 @@ func newServer() *server {
 	notifier.SetLogger(func(level, msg string, fields map[string]any) {
 		applog.Log(level, "notify", msg, fields)
 	})
-	// Slack + PagerDuty are now UI-configurable via the notifyConfigStore (created
-	// after srv exists), which seeds from FEATURE_SLACK_NOTIFICATIONS/SLACK_WEBHOOK_URL
-	// and FEATURE_PAGERDUTY_NOTIFICATIONS/PAGERDUTY_KEY on first run and is then
-	// editable live from the admin UI — mirroring the ITSM connectors. See
-	// notify_config.go. They are intentionally NOT registered from env here.
-	if os.Getenv("FEATURE_TEAMS_NOTIFICATIONS") == "true" {
-		notifier.Register(notify.NewTeams(os.Getenv("TEAMS_WEBHOOK_URL")))
-	}
+	// Slack, PagerDuty, Teams and SNS are now UI-configurable via the
+	// notifyConfigStore (created after srv exists), which seeds from
+	// FEATURE_SLACK_NOTIFICATIONS/SLACK_WEBHOOK_URL,
+	// FEATURE_PAGERDUTY_NOTIFICATIONS/PAGERDUTY_KEY,
+	// FEATURE_TEAMS_NOTIFICATIONS/TEAMS_WEBHOOK_URL and
+	// FEATURE_SNS_NOTIFICATIONS/AWS_*+SNS_* on first run and is then editable
+	// live from the admin UI — mirroring the ITSM connectors. See
+	// notify_config.go. They are intentionally NOT registered from env here: a
+	// second, env-only registration would shadow the stored channel config and
+	// silently keep paging a webhook the operator had already removed in the UI.
 	if os.Getenv("FEATURE_EMAIL_NOTIFICATIONS") == "true" {
 		notifier.Register(
 			notify.NewEmail(os.Getenv("SMTP_HOST"), os.Getenv("SMTP_FROM")).
@@ -523,15 +532,6 @@ func newServer() *server {
 			os.Getenv("TWILIO_AUTH_TOKEN"),
 			os.Getenv("TWILIO_FROM_NUMBER"),
 			os.Getenv("TWILIO_TO_NUMBERS"),
-		))
-	}
-	if os.Getenv("FEATURE_SNS_NOTIFICATIONS") == "true" {
-		notifier.Register(notify.NewSNS(
-			os.Getenv("AWS_ACCESS_KEY_ID"),
-			os.Getenv("AWS_SECRET_ACCESS_KEY"),
-			os.Getenv("AWS_REGION"),
-			os.Getenv("SNS_PHONE_NUMBERS"),
-			os.Getenv("SNS_TOPIC_ARN"),
 		))
 	}
 	// ITSM connectors (ServiceNow + Jira) are built from the itsmConfigStore, which
@@ -1366,6 +1366,23 @@ func Run() {
 	if envOr("FUSION_WORKER_ENABLED", "") == "true" {
 		srv.fusion.start(ctx)
 	}
+	// SECURITY-LANE-BEGIN — Security evidence producer (Project 3, P3-EMIT):
+	// hardening + vendor-advisory + threat detections → secbus.FromFinding →
+	// netops.security, per tenant, on a bounded jittered ticker. Opt-in and
+	// default-off (FEATURE_SECURITY_LANE=true); with the flag off NOTHING is
+	// constructed, started or routed.
+	if envBool(seclane.EnvFeatureFlag) {
+		lane, err := seclane.New(srv.securityLaneDeps())
+		if err != nil {
+			// Fail LOUD, not silently dormant: the operator asked for the lane.
+			logError("security.lane", "security evidence lane could not be constructed — NOTHING will be emitted",
+				errf(err))
+		} else {
+			srv.securityLane = lane
+			workers.start("security-lane", func() { lane.Run(ctx) })
+		}
+	}
+	// SECURITY-LANE-END
 	// seam.Seam bootstrap engine (#67 build ⑤ / cloud-ingestion §4.1): auto-suggest
 	// seam instances from telemetry so the grounding gate has an inventory.
 	srv.startSeamBootstrap(ctx)
@@ -1838,6 +1855,9 @@ func (s *server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/security/rules", s.secAPI.HandleRules)
 	mux.HandleFunc("/api/security/views", s.secAPI.HandleViews)
 	mux.HandleFunc("/api/security/views/", s.secAPI.HandleViews)
+	// SECURITY-LANE-BEGIN
+	s.registerSecurityLaneRoutes(mux)
+	// SECURITY-LANE-END
 
 	mux.HandleFunc("/api/incidents", s.handleIncidents)     // GET list (tenant-scoped)
 	mux.HandleFunc("/api/incidents/", s.handleIncidentByID) // GET {id}; POST {id}/ack|resolve|note|assign|…
@@ -1952,6 +1972,10 @@ func (s *server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/notify/slack/test", s.handleSlackTest)
 	mux.HandleFunc("/api/notify/pagerduty", s.handlePagerDutyConfig)
 	mux.HandleFunc("/api/notify/pagerduty/test", s.handlePagerDutyTest)
+	mux.HandleFunc("/api/notify/teams", s.handleTeamsConfig)
+	mux.HandleFunc("/api/notify/teams/test", s.handleTeamsTest)
+	mux.HandleFunc("/api/notify/sns", s.handleSNSConfig)
+	mux.HandleFunc("/api/notify/sns/test", s.handleSNSTest)
 	mux.HandleFunc("/api/notify/contact-points", s.handleContactPoints)
 	mux.HandleFunc("/api/notify/contact-points/", s.handleContactPointByID)
 	mux.HandleFunc("/api/copilot/chat", s.handleCopilot)
@@ -2702,6 +2726,11 @@ func (s *server) handlePromMetrics(w http.ResponseWriter, _ *http.Request) {
 	if s.secFindMetrics != nil {
 		s.secFindMetrics.Write(w)
 	}
+	// SECURITY-LANE-BEGIN
+	if s.securityLane != nil {
+		s.securityLane.Metrics().Write(w)
+	}
+	// SECURITY-LANE-END
 	if s.intMetrics != nil {
 		s.intMetrics.write(w)
 	}
@@ -3279,6 +3308,151 @@ func (s *server) securityAPIDeps() secapi.Deps {
 		WriteError:      writeError,
 	}
 }
+
+// SECURITY-LANE-BEGIN
+// registerSecurityLaneRoutes registers the producer lane's two operator
+// surfaces — ONLY when the lane is on. A flag-off deployment answers 404 rather
+// than advertising a dormant surface (and a 404 is also what a would-be prober
+// gets, so the feature's presence is not enumerable).
+func (s *server) registerSecurityLaneRoutes(mux *http.ServeMux) {
+	if s.securityLane == nil {
+		return
+	}
+	mux.HandleFunc("/api/security/lane/status", s.securityLane.HandleStatus)
+	mux.HandleFunc("/api/security/scan", s.securityLane.HandleScan)
+}
+
+// securityLaneDeps assembles the P3-EMIT producer lane's injected collaborators
+// (internal/seclane holds NO ambient authority — everything below is handed to
+// it explicitly, the secapi precedent). Deleting this function, the four other
+// SECURITY-LANE marker blocks in this file and internal/seclane removes the
+// security PRODUCER without touching anything else; see the seclane package doc.
+func (s *server) securityLaneDeps() seclane.Deps {
+	return seclane.Deps{
+		Now:          func() time.Time { return time.Now().UTC() },
+		Interval:     durationOr(seclane.EnvScanInterval, seclane.DefaultScanInterval),
+		MaxFindings:  envInt(seclane.EnvMaxFindings, seclane.DefaultMaxFindings),
+		GlobalTenant: TenantGlobal,
+
+		Tenants: s.securityLaneTenants,
+		Devices: s.securityLaneDevices,
+		RuleStates: func(ctx context.Context, tenant string) (map[string]bool, error) {
+			if s.secStore == nil {
+				return nil, errors.New("security control-plane store unavailable")
+			}
+			// cross=false ALWAYS: a worker pass is scoped to one tenant, and a
+			// cross-tenant read here would let one tenant's stored state reach
+			// another tenant's scan (§3a).
+			return s.secStore.RuleStates(ctx, tenant, false)
+		},
+		Seams: s.securityLaneSeams,
+
+		// Transport: the same Vector bus-bridge produce path every other Go
+		// producer uses (no Kafka client in the backend, §6 allowlist).
+		Publish: func(ctx context.Context, topic string, recs []seclane.Record) (int, error) {
+			out := make([]proxyRecord, 0, len(recs))
+			for _, r := range recs {
+				out = append(out, proxyRecord{Key: r.Key, Value: r.Value})
+			}
+			return produceJSON(ctx, topic, out)
+		},
+		Search: openSearch,
+		CHQuery: func(ctx context.Context, scope, sql string) ([]map[string]any, error) {
+			return chSelect(ctx, scope, sql, "worker:security-lane-flows")
+		},
+
+		// Vendor advisories: the OFFLINE feed is the canonical, credential-free
+		// provider (§5g air-gap path). ConfigSource stays nil until config
+		// capture (T-config) lands — the hardening lane then reports every rule
+		// UNASSESSED rather than falsely clear.
+		AdvisoryFeed: s.vulns,
+		ParseSoftware: func(vendor, osStr string) (string, string) {
+			osi := collectors.ParseOS(vendor, osStr)
+			return osi.Product, osi.Version
+		},
+
+		Authz:      s.securityAuthz,
+		Audit:      s.securityAudit,
+		WriteJSON:  writeJSON,
+		WriteError: writeError,
+		LogWarn:    func(msg string, f map[string]any) { logWarn("security.lane", msg, f) },
+		LogError:   func(msg string, f map[string]any) { logError("security.lane", msg, f) },
+		Scrub:      scrubLogValue,
+		TenantSeg:  seclane.TenantSeg,
+		Spool: seclane.NewFileSpool(
+			envOr(seclane.EnvDeadLetterFile, seclane.DefaultDeadLetterFile),
+			seclane.DeadLetterMaxBytes,
+			func() time.Time { return time.Now().UTC() },
+			seclane.TenantSeg, scrubLogValue),
+	}
+}
+
+// securityLaneTenants lists the tenant ids the producer scans. Untagged/global
+// devices are deliberately NOT scanned: a finding with no owning tenant has no
+// one to attribute it to, and stamping one would be inventing provenance (§10).
+func (s *server) securityLaneTenants() []string {
+	if s.tenants == nil {
+		return nil
+	}
+	out := make([]string, 0, 8)
+	for _, t := range s.tenants.List() {
+		id := normTenant(t.ID)
+		if id == "" || id == TenantGlobal || t.Status == TenantStatusSuspended {
+			continue
+		}
+		out = append(out, id)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// securityLaneDevices returns ONE tenant's own devices (§3a: the inventory row's
+// tenant is the authority — this path has no request body at all).
+func (s *server) securityLaneDevices(tenant string) []seclane.Device {
+	if s.discovery == nil {
+		return nil
+	}
+	want := normTenant(tenant)
+	all := s.discovery.Devices()
+	out := make([]seclane.Device, 0, len(all))
+	for _, d := range all {
+		if deviceTenant(d) != want {
+			continue
+		}
+		out = append(out, seclane.Device{
+			ID: d.ID, Name: d.Name, Address: d.Address,
+			Vendor: d.Vendor, OS: d.OS, Model: d.Model,
+			TenantID: deviceTenant(d),
+		})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
+	return out
+}
+
+// securityLaneSeams projects ONE tenant's ACTIVE seam inventory for the
+// seam-aware exposure probes. An error propagates so the evaluator fails CLOSED
+// (StatusUnknown) — it must never read an unreadable seam model as "not
+// exposed". A deployment with no seam store (file backend) has no seam data,
+// which is the same honest non-verdict.
+func (s *server) securityLaneSeams(ctx context.Context, tenant string) ([]seclane.SeamRow, error) {
+	if s.seams == nil {
+		return nil, nil
+	}
+	list, err := s.seams.List(ctx, normTenant(tenant), false, "active", "")
+	if err != nil {
+		return nil, err
+	}
+	out := make([]seclane.SeamRow, 0, len(list))
+	for _, sm := range list {
+		out = append(out, seclane.SeamRow{
+			SeamID: sm.SeamID, SeamType: sm.SeamType,
+			OnPrem: sm.Endpoints["on_prem"], Interface: sm.Endpoints["interface"],
+		})
+	}
+	return out, nil
+}
+
+// SECURITY-LANE-END
 
 // handleSecurityExposureStory serves GET /api/security/exposure-stories/{id} by
 // DELEGATING to the correlation detail handler — an Exposure Story IS a

@@ -15,10 +15,23 @@ HLD (`SECURITY_OBSERVABILITY_HLD`), compliance model, scenarios, GTM, build plan
 (CTEM funnel · Exposure Story hero · four evidence lanes · seam map) — **owner
 approved the page 2026-08-27**. This is the T8 build target.
 
-## Foundation — ✅ BUILT + gate-clean, but INERT
+## Foundation — ✅ BUILT + gate-clean
 `internal/secfindings` (T1) · `advisory` (T3) · `compliancemodel` (T4) ·
-`hardening` (T5, seam-aware) · `threatlane` (T6, MITRE) · `secbus` (T2). Nothing
-emits, engine doesn't ground them, no UI — compile + pass tests only.
+`hardening` (T5, seam-aware) · `threatlane` (T6, MITRE) · `secbus` (T2).
+
+**P3-EMIT (2026-09-02): the producers now EMIT.** `internal/seclane` runs a
+per-tenant, bounded, jittered scan (hardening + offline vendor advisory +
+threatlane device-log/flow detections) → `secbus.FromFinding` → `netops.security`
+keyed by tenant, behind `FEATURE_SECURITY_LANE` (default false). Ops surface:
+`GET /api/security/lane/status`, `POST /api/security/scan`,
+`netops_security_*` metrics. The engine still does not ground them (T2b) and
+there is no UI (T8).
+
+**Honest coverage caveat (carry into T8):** with config capture (T-config) not
+built, every hardening rule emits `Unknown` ("running-config unavailable —
+control not assessed"), and a device with no parsed vendor/version emits an
+`advisory-unassessed` finding. That is deliberate (§5g never false-clear) — the
+UI must render `Unknown` as *unassessed*, never as green.
 
 ## Execution order (build)
 ### Blocking decision (Fable) — ✅ DECIDED 2026-08-28
@@ -33,8 +46,6 @@ access + consumer-side dedup — the telemetry-to-OpenSearch precedent, not
 mutable PG rows. Unblocks T8.
 
 ### Build
-- [ ] **Wire the producers to emit** — call hardening/threatlane/advisory →
-  `secbus.FromFinding` → `netops.security` (behind a feature flag).
 - [ ] **Persist the lane** — vector-router route `netops.security →
   netops-secfindings-<seg>-*` + index mapping (facet keyword fields + full-text
   narrative fields + `Time`/`ScanID`); doc `_id = hash(native_id|scan_id)`
