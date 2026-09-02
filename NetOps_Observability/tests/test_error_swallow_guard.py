@@ -431,6 +431,31 @@ ALLOWLIST: dict[AllowKey, str] = {
     # day: all now route through chown_tree (repair-or-refuse), and the vuln
     # site validates SUDO_UID/SUDO_GID explicitly with a loud warn on a
     # mangled environment. See tests/test_install_data_dirs.py.
+    # ===================================================================
+    # 2026-09-02 — release-qualify.py / scale-rca-tail.py first review, and
+    # the two scale-miniladder.py host-quiet probes (tracker 210) that had
+    # never been through this file.
+    #
+    # THREE of the ten sites were FIXED rather than exempted, because they
+    # were the class this rule exists to kill — an unreadable MEASUREMENT
+    # reported as a measurement:
+    #   * read_environment's os.stat and shutil.disk_usage now go through
+    #     `stat_device` / `disk_headroom`, which raise QualifyError; the
+    #     filesystem reads UNKNOWN, `environment_violations` makes it a V1
+    #     section 8(e) violation and `stage_environment` records INVALID.
+    #   * `env_value` now distinguishes a MISSING .env (meaningful: compose
+    #     supplies its own default) from an UNREADABLE one (escalates), so a
+    #     permission error can no longer be published as "plane unset -> ON".
+    # The seven below return a refusal the caller converts, or are genuinely
+    # best-effort AND loud. None of them can report a failure as a success.
+    # ===================================================================
+    ("release-qualify.py", "run", "03ee0244"): "bounded subprocess shim: returns (127, '', 'cannot execute <cmd>: <exc>') — the error IS the return value, and every caller checks rc and reports stderr into its stage record",
+    ("release-qualify.py", "stream_process", "1c83a298"): "leg launcher Popen failure: returns (127, 'cannot execute <argv0>: <exc>'); stage_leg records the rc + note and grades the leg on it",
+    ("release-qualify.py", "stream_process", "8f245463"): "leg log RELAY only, best-effort by design: the child is an hour of unattended work already running whose evidence is its own report.json — the relay stops, warn()s to stderr and returns 'log relay failed … TRUNCATED' as the leg's note",
+    ("release-qualify.py", "Qualifier.ensure_runid_symlink", "65026927"): "scorer symlink creation: returns 'cannot create <link> -> <target> (<exc>)'; stage_accuracy puts it in ev['reason'] and records INVALID",
+    ("scale-miniladder.py", "read_load1", "2001b246"): "host-quiet loadavg probe: returns (-1.0, 'cannot read <path>: <errno>'); host_quiet_problems turns any load1_error into 'host load is UNKNOWN' and preflight() REFUSES the run (--allow-unquiet stamps host_quiet=UNQUIET into report.json instead). The (value, error) contract is pinned by tests/test_miniladder_host_quiet.py",
+    ("scale-miniladder.py", "disk_free_gib", "6e55da91"): "host-quiet disk probe: returns (-1.0, -1.0, 'cannot stat <path>: <errno>'); host_quiet_problems turns any disk_error into 'headroom is UNKNOWN' and preflight() REFUSES — the s10 clause. Same pinned contract as read_load1",
+    ("scale-rca-tail.py", "engine_cohort_total", "87ac581d"): "OPTIONAL cross-check read of metrics-final.txt in a READ-ONLY analysis tool: logs cohort_metric_unavailable with path+errno and returns None, which the report prints as engine_total 'unavailable' — the reconstruction stands on its own and never claims a cross-check it did not make",
 }
 
 # Rule 1: literal swallows, any text file (catches heredoc Python in .sh too).

@@ -777,6 +777,34 @@ def read_json(path: str) -> dict[str, Any]:
     return data
 
 
+def stat_device(path: str) -> int:
+    """`st_dev` for `path`, or a REFUSAL.
+
+    §16.1: an unstattable path is not a measurement. The OSError is escalated
+    as QualifyError; `read_environment` records it as a filesystem whose
+    headroom is UNKNOWN, which `environment_violations` turns into a V1
+    section 8(e) violation and `stage_environment` records as INVALID.
+    """
+    try:
+        return os.stat(path).st_dev
+    except OSError as exc:
+        raise QualifyError(f"cannot stat {path} ({exc})") from exc
+
+
+def disk_headroom(path: str) -> tuple[float, float]:
+    """(free GiB, total GiB) for the filesystem holding `path`, or a REFUSAL.
+
+    Same escalation as `stat_device`: storm-s10 lost 291,296 evidence docs to a
+    disk gate nobody was measuring, so free space that could not be READ must
+    never read as free space that is FINE.
+    """
+    try:
+        usage = shutil.disk_usage(path)
+    except OSError as exc:
+        raise QualifyError(f"cannot read free space on {path} ({exc})") from exc
+    return round(usage.free / GIB, 2), round(usage.total / GIB, 2)
+
+
 def read_text(path: str) -> str:
     try:
         with open(path, encoding="utf-8") as fh:
@@ -867,21 +895,21 @@ class Qualifier:
             if not path:
                 continue
             try:
-                dev = os.stat(path).st_dev
-            except OSError as exc:
+                dev = stat_device(path)
+            except QualifyError as exc:
                 filesystems.append({"path": path, "error": str(exc)})
                 continue
             if dev in seen:
                 continue
             seen.add(dev)
             try:
-                usage = shutil.disk_usage(path)
-            except OSError as exc:
+                free_gib, total_gib = disk_headroom(path)
+            except QualifyError as exc:
                 filesystems.append({"path": path, "error": str(exc)})
                 continue
             filesystems.append({"path": path, "device": dev,
-                                "free_gib": round(usage.free / GIB, 2),
-                                "total_gib": round(usage.total / GIB, 2)})
+                                "free_gib": free_gib,
+                                "total_gib": total_gib})
         if docker_error:
             filesystems.append({"path": "docker data root",
                                 "error": f"docker info failed: {docker_error}"})
@@ -1526,19 +1554,27 @@ def to_number(value: Any) -> Any:
 
 
 def env_value(env_file: str, key: str) -> str | None:
-    """First `KEY=` value in the compose .env, or None when unset/unreadable.
+    """First `KEY=` value in the compose .env, or None when the key is unset.
 
-    Unset is MEANINGFUL here (compose supplies its own default) and is reported
-    as such by the caller together with the resolved value — this is not a
-    swallowed error, it is a three-valued read.
+    THREE-VALUED, and only three-valued. A MISSING .env is meaningful (compose
+    supplies its own default) and reads as None, which the caller reports
+    together with the resolved value and its source — that is a read, not a
+    swallowed error. An .env that EXISTS and cannot be READ is a different
+    thing entirely: reporting a permission error as "unset -> compose default"
+    would publish a default the file may well contradict, on the very clause
+    (V1 section 7, aggregation plane ON) the evidence is meant to prove. So it
+    escalates (16.1) — `main` turns the QualifyError into a rc-2 refusal.
     """
     try:
         with open(env_file, encoding="utf-8") as fh:
             for line in fh:
                 if line.startswith(key + "="):
                     return line.rstrip("\n").split("=", 1)[1]
-    except OSError:
+    except FileNotFoundError:
         return None
+    except OSError as exc:
+        raise QualifyError(f"cannot read {env_file} for {key} ({exc}) — an "
+                           f"unreadable .env is not an unset key") from exc
     return None
 
 
@@ -1593,7 +1629,14 @@ def stream_process(argv: list[str], log_path: str, timeout: int,
                 sys.stdout.write(line)
                 sys.stdout.flush()
     except OSError as exc:
-        note = f"log relay failed: {exc}"
+        # BEST-EFFORT, deliberately, and LOUD (16.1). The child is an hour of
+        # unattended work that is already running and whose real evidence is
+        # its own report.json, not this relay — killing it because the log
+        # sink broke would destroy more than it protects. So the relay stops,
+        # the reason is warned to stderr AND returned as the leg's `note`,
+        # which lands in the evidence record beside the return code.
+        note = f"log relay failed: {exc} — leg.log is TRUNCATED from here"
+        warn(f"leg: {note}")
     if proc.poll() is None:
         proc.terminate()
         try:
@@ -1727,7 +1770,14 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
             ap.error(f"--extract-baseline {args.extract_baseline!r} is not a "
                      f"directory")
     if not args.project:
-        args.project = env_value(args.env_file, "COMPOSE_PROJECT_NAME") or "netops"
+        # An unreadable .env must not silently become the default project name:
+        # every docker command this tool issues is scoped by it, so guessing
+        # would point the whole qualification at the wrong compose project.
+        try:
+            args.project = env_value(
+                args.env_file, "COMPOSE_PROJECT_NAME") or "netops"
+        except QualifyError as exc:
+            ap.error(str(exc))
     return args
 
 
