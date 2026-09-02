@@ -3,6 +3,8 @@ import { api } from "../services/api";
 import { Group, Panel, MetricLine, MetricTop, MetricStat, fmtNum } from "../components/board/panels";
 import { StatStrip, Stat, StatTone } from "../components/ui";
 import ProtocolDiagnosticsPanel from "./troubleshoot/ProtocolDiagnosticsPanel";
+import InvestigationPage from "./troubleshoot/InvestigationPage";
+import { parseInvestigationHash, type TroubleshootSection } from "./troubleshoot/investigationModel";
 
 // Troubleshooting — health of the collection pipeline itself (collectors, SNMP
 // reachability, NetFlow ingest, traps). Unlike the device boards, the collector
@@ -75,40 +77,53 @@ const snmpReachQuery = [
   `label_replace(sum(collector_targets{collector=~"snmp.*"}),"k","configured","","")`,
 ].join(" or ");
 
-// The page carries two sections: the collection-pipeline board (is the pipeline
-// or the device at fault?) and the operator-initiated protocol diagnostics
-// (capture the evidence myself, right now). They are switched, not stacked, so
-// neither buries the other — and the switch is a deep link
-// (#/investigate/troubleshooting?section=protocol) so a runbook can point
-// straight at the diagnostics.
-export type TroubleshootSection = "pipeline" | "protocol";
+// The page carries THREE sections, switched (never stacked) so none buries the
+// others, each reachable as a deep link (#/investigate/troubleshooting?section=…):
+//
+//  · Investigation (DEFAULT) — the symptom-first operator surface: pick what is
+//    wrong, get a verdict header, then parallel evidence lanes, Iris and a
+//    seam-owned handoff. This is the page's reason to exist (Project 4 §A).
+//  · Protocol diagnostics — operator-initiated BGP/OSPF/IS-IS capture+analyze.
+//  · Collection pipeline — the old June board (is the PIPELINE or the DEVICE at
+//    fault?). Kept reachable for ONE RELEASE while operators migrate; its
+//    step-zero insight now lives beside the investigation lanes.
+export type { TroubleshootSection };
 
 /** Initial section from the hash. Anything unrecognized falls back to the
- *  pipeline board — a deep link never lands on a blank page. */
+ *  investigation surface — a deep link never lands on a blank page. */
 export function sectionFromHash(hash?: string): TroubleshootSection {
   const h = hash ?? (typeof location !== "undefined" ? location.hash : "");
-  const q = String(h).split("?")[1] || "";
-  return new URLSearchParams(q).get("section") === "protocol" ? "protocol" : "pipeline";
+  return parseInvestigationHash(h).section;
 }
 
 export default function Troubleshooting({ rangeMinutes = 60 }: { rangeMinutes?: number } = {}) {
   const m = rangeMinutes;
-  const [section, setSection] = useState<TroubleshootSection>(sectionFromHash);
+  const initial = parseInvestigationHash(typeof location !== "undefined" ? location.hash : "");
+  const [section, setSection] = useState<TroubleshootSection>(initial.section);
   return (
     <div className="dm-board">
       {/* Section switch as a toggle-button group (not ARIA tabs: no tabpanel /
           roving-focus wiring, and plain buttons are fully keyboard operable). */}
       <div className="seg-mini" role="group" aria-label="Troubleshooting section">
-        <button type="button" aria-pressed={section === "pipeline"} className={section === "pipeline" ? "on" : ""}
-          onClick={() => setSection("pipeline")}>Collection pipeline</button>
+        <button type="button" aria-pressed={section === "investigate"} className={section === "investigate" ? "on" : ""}
+          onClick={() => setSection("investigate")}>Investigation</button>
         <button type="button" aria-pressed={section === "protocol"} className={section === "protocol" ? "on" : ""}
           onClick={() => setSection("protocol")}>Protocol diagnostics</button>
+        <button type="button" aria-pressed={section === "pipeline"} className={section === "pipeline" ? "on" : ""}
+          onClick={() => setSection("pipeline")}>Collection pipeline</button>
       </div>
 
-      {section === "protocol" ? (
+      {section === "investigate" ? (
+        <InvestigationPage rangeMinutes={m} initialSymptom={initial.symptom} initialCaseId={initial.caseId} />
+      ) : section === "protocol" ? (
         <ProtocolDiagnosticsPanel />
       ) : (
       <>
+      <p className="mini-meta" style={{ margin: 0 }}>
+        This is the legacy collection-pipeline board. It answers one question — is the PIPELINE or the DEVICE at
+        fault — and stays reachable for one release; day-to-day troubleshooting now starts on Investigation.
+      </p>
+
       <Group title="Fleet counts" hue="#3B82F6">
         <StatStrip>
           <MetricStat label="Monitored devices" query='max(collector_targets{collector="snmpmetrics"}) or vector(0)' minutes={m} fmt={(n) => `${n.toFixed(0)}`} />

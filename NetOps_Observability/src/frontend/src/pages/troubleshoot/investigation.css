@@ -1,0 +1,81 @@
+/* investigation.css — styles for the symptom-first Troubleshooting surface.
+ *
+ * Deliberately small: the page reuses the app's shared primitives (.card,
+ * .chip, .badge, .empty, .mini-meta, .dm-grid, .btn-accent, .chip-btn) and adds
+ * only what has no existing equivalent — the symptom picker, the layer ladder
+ * and the lane row. Everything is scoped under .ts-inv (and .tsl-card, which the
+ * lanes render) so nothing here leaks into another page. Colours come from the
+ * theme tokens, so light and dark both work with no second palette.
+ */
+
+.ts-inv { display: flex; flex-direction: column; gap: 14px; }
+
+/* ── symptom entry ───────────────────────────────────────────────────────── */
+.ts-entry-h { margin: 0 0 10px; font-size: 15px; font-weight: 650; }
+.ts-search input {
+  width: 100%; padding: 8px 10px; border-radius: 8px;
+  border: 1px solid var(--border); background: var(--bg-2, var(--bg)); color: var(--fg);
+}
+.ts-picker { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 14px; margin-top: 12px; }
+.ts-pickh { margin: 0 0 6px; font-size: 11px; letter-spacing: .05em; text-transform: uppercase; color: var(--muted); }
+.ts-symptoms, .ts-cases { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.ts-symptom, .ts-case {
+  width: 100%; text-align: left; cursor: pointer;
+  display: flex; flex-direction: column; gap: 2px;
+  padding: 8px 10px; border-radius: 8px;
+  border: 1px solid var(--border); background: transparent; color: var(--fg);
+}
+.ts-symptom:hover, .ts-case:hover { border-color: var(--accent); }
+.ts-symptom.on, .ts-case.on { border-color: var(--accent); background: var(--accent-soft); }
+.ts-symptom:focus-visible, .ts-case:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.ts-symptom-l { font-weight: 600; font-size: 13px; }
+.ts-symptom-h, .ts-case-h { font-size: 12px; color: var(--muted); }
+.ts-case-id { font-family: var(--font-mono, ui-monospace, monospace); font-size: 12px; font-weight: 600; }
+.ts-case-v { font-size: 11px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); }
+
+/* ── bisecting header + layer ladder ─────────────────────────────────────── */
+.ts-bisect-h { margin: 0 0 4px; font-size: 16px; font-weight: 650; }
+.ts-bisect-sub { margin: 0 0 10px; color: var(--muted); font-size: 13px; }
+.ts-ladder { list-style: none; margin: 10px 0 0; padding: 0; display: flex; flex-wrap: wrap; gap: 6px; }
+.ts-rung {
+  display: flex; flex-direction: column; gap: 1px; min-width: 130px;
+  padding: 6px 9px; border-radius: 8px; border: 1px solid var(--border);
+}
+.ts-rung-l { font-size: 12px; font-weight: 600; }
+.ts-rung-n { font-size: 11px; color: var(--muted); }
+.ts-rung.has_data { border-color: var(--good, #22c55e); }
+.ts-rung.not_connected { border-style: dashed; }
+.ts-rung.not_opened { opacity: .5; }
+.ts-rung.checking { opacity: .7; border-style: dotted; }
+
+/* ── evidence lanes ──────────────────────────────────────────────────────── */
+.tsl-card { display: flex; flex-direction: column; gap: 6px; }
+.tsl-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+.tsl-head-actions { display: flex; gap: 6px; flex-wrap: wrap; }
+.tsl-title { margin: 0; font-size: 13px; font-weight: 650; }
+.tsl-src { font-family: var(--font-mono, ui-monospace, monospace); font-size: 11px; opacity: .75; }
+.tsl-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+.tsl-row { display: grid; grid-template-columns: 10px minmax(0, 1fr) minmax(0, 1fr) auto; gap: 8px; align-items: baseline; font-size: 12.5px; }
+.tsl-row > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tsl-k { font-weight: 600; }
+.tsl-v { color: var(--fg); }
+.tsl-note { color: var(--muted); font-size: 11.5px; }
+.tsl-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); align-self: center; }
+.tsl-dot.good, .tsl-dot.healthy { background: var(--good, #22c55e); }
+.tsl-dot.bad, .tsl-dot.severe { background: var(--bad, #ef4444); }
+.tsl-dot.watch, .tsl-dot.degraded, .tsl-dot.change { background: var(--warn, #f59e0b); }
+.tsl-dot.state { background: var(--accent); }
+.tsl-notwired { display: flex; align-items: center; gap: 8px; justify-content: center; flex-wrap: wrap; font-style: normal; }
+.tsl-foot { margin: 4px 0 0; }
+
+/* ── Iris lane ───────────────────────────────────────────────────────────── */
+.tsl-iris { border-color: var(--accent); }
+.tsl-iris-text { font-size: 13px; line-height: 1.55; white-space: pre-wrap; margin: 6px 0 8px; }
+.tsl-prov { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 4px; }
+.tsl-cites { display: flex; flex-wrap: wrap; gap: 6px; }
+.tsl-cite { display: inline-flex; align-items: center; gap: 4px; }
+
+/* ── handoff ─────────────────────────────────────────────────────────────── */
+.ts-handoff-h { margin: 0 0 8px; font-size: 15px; font-weight: 650; }
+.ts-owner { margin: 0 0 8px; font-size: 13px; }
+.ts-handoff-actions { display: flex; gap: 8px; flex-wrap: wrap; }

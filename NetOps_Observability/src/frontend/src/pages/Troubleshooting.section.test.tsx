@@ -1,18 +1,27 @@
-// Troubleshooting.section.test.tsx — the two-section Troubleshooting page.
+// Troubleshooting.section.test.tsx — the THREE-section Troubleshooting page.
 //
 // What is pinned here:
-//  · the section switch is registered on the page and is a toggle-button group
-//    (aria-pressed), defaulting to the collection-pipeline board
-//  · picking "Protocol diagnostics" mounts the real panel (route/tab
-//    registration — not a stub)
-//  · the deep link #/investigate/troubleshooting?section=protocol lands on the
-//    diagnostics; anything unrecognized falls back to the board
+//  · the section switch is a toggle-button group (aria-pressed) and defaults to
+//    INVESTIGATION — the symptom-first operator surface is the page's reason to
+//    exist (Project 4 §A); the June collection-pipeline board is now the legacy
+//    third section, reachable for one release
+//  · each section is reachable as a deep link
+//    (#/investigate/troubleshooting?section=…), and an unrecognized link falls
+//    back to the investigation surface rather than a blank page
+//  · a symptom / case deep link lands the investigation on that entry point
+//  · picking a section mounts the REAL component (route registration, not a
+//    stub): the investigation surface, the protocol-diagnostics panel, and the
+//    legacy board
 //
-// The metric board itself is stubbed: it is charted elsewhere and its ECharts
-// dependency has nothing to do with the registration this file asserts.
+// The metric board's chart primitives are stubbed: they are charted elsewhere
+// and their ECharts dependency has nothing to do with the registration this
+// file asserts. Everything below the switch — the investigation page, its
+// lanes, IRIS, the diagnostics panel — is the real component against a mocked
+// api, so "the switch mounts a stub" cannot pass here.
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, cleanup, fireEvent, act } from "@testing-library/react";
+import { render, screen, cleanup, fireEvent, act, waitFor, within } from "@testing-library/react";
+import { corrObject, signal, timeline } from "../test/factories";
 
 vi.mock("../components/board/panels", () => ({
   Group: ({ title, children }: { title: string; children?: unknown }) => (
@@ -32,71 +41,198 @@ vi.mock("../components/ui", () => ({
   StatTone: undefined,
 }));
 
-const flowsByType = vi.fn();
-const searchLogs = vi.fn();
-const devices = vi.fn();
-const permissions = vi.fn();
-const protocolDiagCatalog = vi.fn();
-
-vi.mock("../services/api", () => ({
-  api: {
-    flowsByType: (...a: unknown[]) => flowsByType(...a),
-    searchLogs: (...a: unknown[]) => searchLogs(...a),
-    devices: (...a: unknown[]) => devices(...a),
-    permissions: (...a: unknown[]) => permissions(...a),
-    protocolDiagCatalog: (...a: unknown[]) => protocolDiagCatalog(...a),
-    protocolDiagCollect: vi.fn(),
-    protocolDiagAnalyze: vi.fn(),
-  },
+// Every api function the page tree reaches: the legacy board, the protocol
+// diagnostics panel, the investigation page, its seven lanes and IRIS.
+const mocks = vi.hoisted(() => ({
+  flowsByType: vi.fn(), searchLogs: vi.fn(), devices: vi.fn(), permissions: vi.fn(),
+  protocolDiagCatalog: vi.fn(), protocolDiagCollect: vi.fn(), protocolDiagAnalyze: vi.fn(),
+  correlations: vi.fn(), seams: vi.fn(), getSeamOwners: vi.fn(),
+  correlationDetail: vi.fn(), correlationTimeline: vi.fn(),
+  correlationTickets: vi.fn(), correlationTicketCreate: vi.fn(), downloadRcaReport: vi.fn(),
+  pathsHealth: vi.fn(), eventsFeed: vi.fn(), metricNames: vi.fn(), metricsQuery: vi.fn(),
+  probePaths: vi.fn(), topTalkers: vi.fn(), aiAsk: vi.fn(),
 }));
+const errs = vi.hoisted(() => {
+  class FakeNotPromoted extends Error {
+    constructor(public reason: string) { super(reason); this.name = "RcaNotPromotedError"; }
+  }
+  return { FakeNotPromoted };
+});
+vi.mock("../services/api", () => ({ api: { ...mocks }, RcaNotPromotedError: errs.FakeNotPromoted }));
 
 import Troubleshooting, { sectionFromHash } from "./Troubleshooting";
 
+const CASE_ID = "corr-abc1234567890";
+const openCase = () => corrObject({
+  correlation_id: CASE_ID,
+  top_hypothesis: "upstream_link_fault",
+  hypotheses: JSON.stringify({ ranking: { hypotheses: [{ id: "upstream_link_fault", verdict: { owner: "isp", first_steps: [] } }] } }),
+  affected: JSON.stringify({ devices: ["wan-r2"] }),
+});
+
+/** Render, letting every section's async loader settle inside act(). */
+async function show(hash: string) {
+  location.hash = hash;
+  const utils = render(<Troubleshooting rangeMinutes={60} />);
+  await act(async () => { await Promise.resolve(); });
+  return utils;
+}
+
+const pressed = () =>
+  screen.getByRole("group", { name: "Troubleshooting section" })
+    .querySelector('button[aria-pressed="true"]')?.textContent;
+
 beforeEach(() => {
-  for (const m of [flowsByType, searchLogs, devices, permissions, protocolDiagCatalog]) m.mockReset();
-  flowsByType.mockResolvedValue({ data: [] });
-  searchLogs.mockResolvedValue({ hits: { total: { value: 0 } } });
-  devices.mockResolvedValue([]);
-  permissions.mockResolvedValue({ role: "operator", permissions: { infrastructure: 2 } });
-  protocolDiagCatalog.mockResolvedValue({
+  Object.values(mocks).forEach((m) => m.mockReset());
+  mocks.flowsByType.mockResolvedValue({ data: [] });
+  mocks.searchLogs.mockResolvedValue({ hits: { total: { value: 0 } } });
+  mocks.devices.mockResolvedValue([]);
+  mocks.permissions.mockResolvedValue({ role: "operator", permissions: { infrastructure: 2 } });
+  mocks.protocolDiagCatalog.mockResolvedValue({
     ruleset_version: "correlix-protocoldiag-2026-08-27",
     vendor: "cisco-iosxe", vendor_display: "Cisco IOS-XE",
     protocols: ["bgp", "ospf", "isis"],
     issues: { bgp: [], ospf: [], isis: [] },
   });
-  if (typeof location !== "undefined") location.hash = "#/investigate/troubleshooting";
+  mocks.correlations.mockResolvedValue({ data: [openCase()] });
+  mocks.seams.mockResolvedValue([]);
+  mocks.getSeamOwners.mockResolvedValue({ seam_owners: {} });
+  mocks.correlationDetail.mockResolvedValue({ object: openCase(), edges: [] });
+  mocks.correlationTimeline.mockResolvedValue(timeline({
+    correlation_id: CASE_ID,
+    signals: [signal({ kind: "bgp_state_anomaly", entity_id: "wan-r2" })],
+  }));
+  mocks.correlationTickets.mockResolvedValue({ status: { state: "none" }, audit: [] });
+  mocks.pathsHealth.mockResolvedValue({ paths: [], count: 0 });
+  mocks.eventsFeed.mockResolvedValue({ items: [] });
+  mocks.metricNames.mockResolvedValue({ status: "success", data: [] });
+  mocks.metricsQuery.mockResolvedValue({ status: "success", data: { resultType: "vector", result: [] } });
+  mocks.probePaths.mockResolvedValue([]);
+  mocks.topTalkers.mockResolvedValue({ data: [] });
+  mocks.aiAsk.mockResolvedValue({ mode: "grounded", intent: "x", modules: [], text: "", citations: [], disclaimers: [] });
+  location.hash = "#/investigate/troubleshooting";
 });
 afterEach(() => cleanup());
 
+// ── the deep-link parser ─────────────────────────────────────────────────────
+
 describe("sectionFromHash", () => {
-  it("reads the protocol deep link and falls back to the board", () => {
-    expect(sectionFromHash("#/investigate/troubleshooting?section=protocol")).toBe("protocol");
-    expect(sectionFromHash("#/investigate/troubleshooting")).toBe("pipeline");
-    expect(sectionFromHash("#/investigate/troubleshooting?section=nonsense")).toBe("pipeline");
+  it.each([
+    ["#/investigate/troubleshooting", "investigate"],
+    ["#/investigate/troubleshooting?section=investigate", "investigate"],
+    ["#/investigate/troubleshooting?section=protocol", "protocol"],
+    ["#/investigate/troubleshooting?section=pipeline", "pipeline"],
+    ["#/investigate/troubleshooting?section=nonsense", "investigate"],
+    ["#/investigate/troubleshooting?symptom=dns", "investigate"],
+    ["#/investigate/troubleshooting?case=corr-1", "investigate"],
+    ["", "investigate"],
+  ] as const)("%p → %s", (hash, section) => {
+    expect(sectionFromHash(hash)).toBe(section);
+  });
+
+  it("reads the live location hash when given none", () => {
+    location.hash = "#/investigate/troubleshooting?section=pipeline";
+    expect(sectionFromHash()).toBe("pipeline");
   });
 });
 
+// ── the switch ───────────────────────────────────────────────────────────────
+
 describe("the section switch", () => {
-  it("defaults to the collection-pipeline board", async () => {
-    // awaited so the board's own async stat loaders settle inside act()
-    await act(async () => { render(<Troubleshooting rangeMinutes={60} />); });
-    const group = screen.getByRole("group", { name: "Troubleshooting section" });
-    expect(group.querySelector('button[aria-pressed="true"]')?.textContent).toBe("Collection pipeline");
-    expect(screen.getByText("Monitored devices")).toBeInTheDocument();
+  it("defaults to the INVESTIGATION surface", async () => {
+    await show("#/investigate/troubleshooting");
+    expect(pressed()).toBe("Investigation");
+    expect(screen.getByRole("heading", { name: "What's wrong?", level: 2 })).toBeInTheDocument();
+    expect(screen.queryByText("Monitored devices")).toBeNull();
     expect(screen.queryByRole("group", { name: "Protocol" })).toBeNull();
   });
 
-  it("mounts the protocol diagnostics panel when picked", async () => {
-    await act(async () => { render(<Troubleshooting rangeMinutes={60} />); });
-    fireEvent.click(screen.getByRole("button", { name: "Protocol diagnostics" }));
-    expect(await screen.findByRole("group", { name: "Protocol" })).toBeInTheDocument();
-    expect(screen.getByLabelText("Protocol diagnostics")).toBeInTheDocument();
-    expect(screen.queryByText("Monitored devices")).toBeNull();
+  it("offers exactly the three sections as toggle buttons", async () => {
+    await show("#/investigate/troubleshooting");
+    const group = screen.getByRole("group", { name: "Troubleshooting section" });
+    expect(within(group).getAllByRole("button").map((b) => b.textContent))
+      .toEqual(["Investigation", "Protocol diagnostics", "Collection pipeline"]);
+    expect(group.querySelectorAll('button[aria-pressed="true"]')).toHaveLength(1);
   });
 
-  it("opens on the diagnostics from the deep link", async () => {
-    location.hash = "#/investigate/troubleshooting?section=protocol";
-    await act(async () => { render(<Troubleshooting rangeMinutes={60} />); });
+  it("mounts the REAL protocol-diagnostics panel when picked", async () => {
+    await show("#/investigate/troubleshooting");
+    await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Protocol diagnostics" })); });
     expect(await screen.findByRole("group", { name: "Protocol" })).toBeInTheDocument();
+    expect(screen.getByLabelText("Protocol diagnostics")).toBeInTheDocument();
+    expect(mocks.protocolDiagCatalog).toHaveBeenCalled();
+    expect(screen.queryByRole("heading", { name: "What's wrong?" })).toBeNull();
+  });
+
+  it("mounts the legacy collection-pipeline board when picked, and labels it legacy", async () => {
+    await show("#/investigate/troubleshooting");
+    await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Collection pipeline" })); });
+    expect(screen.getByText("Monitored devices")).toBeInTheDocument();
+    expect(screen.getByText(/legacy collection-pipeline board/i)).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "What's wrong?" })).toBeNull();
+  });
+
+  it("switches back to the investigation surface", async () => {
+    await show("#/investigate/troubleshooting?section=pipeline");
+    await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Investigation" })); });
+    expect(pressed()).toBe("Investigation");
+    expect(screen.getByRole("heading", { name: "What's wrong?", level: 2 })).toBeInTheDocument();
+  });
+
+  it("shows only ONE section at a time — never stacked", async () => {
+    await show("#/investigate/troubleshooting?section=pipeline");
+    expect(screen.getByText("Monitored devices")).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "What's wrong?" })).toBeNull();
+    expect(screen.queryByRole("group", { name: "Protocol" })).toBeNull();
+  });
+});
+
+// ── deep links ───────────────────────────────────────────────────────────────
+
+describe("deep links", () => {
+  it("opens on the protocol diagnostics", async () => {
+    await show("#/investigate/troubleshooting?section=protocol");
+    expect(pressed()).toBe("Protocol diagnostics");
+    expect(await screen.findByRole("group", { name: "Protocol" })).toBeInTheDocument();
+  });
+
+  it("opens on the legacy pipeline board", async () => {
+    await show("#/investigate/troubleshooting?section=pipeline");
+    expect(pressed()).toBe("Collection pipeline");
+    expect(screen.getByText("Monitored devices")).toBeInTheDocument();
+  });
+
+  it("opens the investigation on the linked symptom", async () => {
+    await show("#/investigate/troubleshooting?section=investigate&symptom=bgp_upstream");
+    expect(pressed()).toBe("Investigation");
+    expect(screen.getByRole("button", { name: /BGP or an upstream is unstable/ }))
+      .toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByTestId("ts-bisect-header")).toHaveTextContent(/no correlated verdict yet/i);
+  });
+
+  it("opens the investigation on the linked correlation case", async () => {
+    await show(`#/investigate/troubleshooting?case=${CASE_ID}`);
+    expect(pressed()).toBe("Investigation");
+    await waitFor(() => expect(mocks.correlationDetail).toHaveBeenCalledWith(CASE_ID));
+    expect(await screen.findByTestId("ts-rca-header")).toBeInTheDocument();
+  });
+
+  it("ignores a symptom the model does not know, and still opens the surface", async () => {
+    await show("#/investigate/troubleshooting?section=investigate&symptom=made_up");
+    expect(pressed()).toBe("Investigation");
+    expect(screen.queryByTestId("ts-bisect-header")).toBeNull();
+    expect(screen.getByText(/pick a symptom or an open correlation case/i)).toBeInTheDocument();
+  });
+
+  it("ignores a case token that is not an opaque id", async () => {
+    await show("#/investigate/troubleshooting?case=%3Cscript%3E");
+    expect(mocks.correlationDetail).not.toHaveBeenCalled();
+    expect(screen.queryByTestId("ts-rca-header")).toBeNull();
+  });
+
+  it("falls back to the investigation surface on an unrecognized section", async () => {
+    await show("#/investigate/troubleshooting?section=nonsense");
+    expect(pressed()).toBe("Investigation");
+    expect(screen.getByRole("heading", { name: "What's wrong?", level: 2 })).toBeInTheDocument();
   });
 });
