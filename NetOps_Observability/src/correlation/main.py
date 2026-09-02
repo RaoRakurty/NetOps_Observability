@@ -5268,12 +5268,14 @@ async def _ch_emit(table: str, rows: list, dedup_token: str, ctx: dict) -> bool:
     # sink has always used — `<snapshot tok>:archive:<chunk>`, i.e.
     # correlation_id + version + content hash + chunk number. It is stable
     # across every retry of this insert AND across a replay of this version, and
-    # unique per chunk. Inert server-side today (corr_signals_archive has no
-    # non_replicated_deduplication_window — see CH_DEDUP_SAFE_TABLES) and
-    # therefore NOT a licence to retry a transport-unknown outcome on it; what
-    # it buys is that the day a window is added, the token that makes dedup
-    # correct is already on the wire. Only the archive: the other Evidence
-    # tables mint their own tokens at the call site.
+    # unique per chunk. It is LOAD-BEARING since the tracker 189 residual
+    # (2026-09-02): corr_signals_archive now carries
+    # non_replicated_deduplication_window = 1000, so this token is what the
+    # server matches a re-sent chunk against and what puts the table in
+    # CH_DEDUP_SAFE_TABLES. Drop it and an archive insert falls back to no
+    # token, which `ch_insert` correctly treats as NOT retryable on a
+    # transport-unknown outcome. Only the archive: the other Evidence tables
+    # mint their own tokens at the call site.
     if not dedup_token and table == "netops.corr_signals_archive":
         dedup_token = str(ctx.get("member_key", ""))
     ok = await ch_insert(table, rows, dedup_token=dedup_token, **ctx)
@@ -5804,23 +5806,23 @@ async def _write_evidence_inner(item: EvidenceItem, loop_yield, emit) -> bool:
         chunk = (await _offload(_archive_chunk, part, snap.correlation_id, version)
                  if len(part) >= CORR_ROW_PAGE_SIZE
                  else _archive_chunk(part, snap.correlation_id, version))
-        # No dedup token minted HERE (corr_signals_archive is neither
-        # RCA-critical nor dedup-safe): `emit` gets "" and both sinks derive the
-        # deterministic member key below instead — the batched one as its block
-        # member name, the unbatched one as the insert's own token (tracker
-        # 189). The row tally moved into the sink (`_ch_emit`) — under batching
-        # the insert happens later, on behalf of several versions at once, and
-        # only the sink knows when it landed.
+        # No dedup token minted HERE (corr_signals_archive is not RCA-critical,
+        # so there is no Kafka coordinate to mint from): `emit` gets "" and both
+        # sinks derive the deterministic member key below instead — the batched
+        # one as its block member name, the unbatched one as the insert's own
+        # token (tracker 189). The row tally moved into the sink (`_ch_emit`) —
+        # under batching the insert happens later, on behalf of several versions
+        # at once, and only the sink knows when it landed.
         # `member_key`: a content-derived, chunk-numbered key for a write that
         # carries no dedup token of its own. Read by the batched sink as its
         # block member name and, since tracker 189, by the unbatched sink as
         # the insert's dedup token (the BODY and settings are unchanged either
         # way). Without it the batcher fell back to a key scoped to
         # the BUFFER, so two consecutive solo blocks of the same item both
-        # keyed `<tok>:<table>:0` and hashed to the SAME block token — inert
-        # today only because corr_signals_archive is the one Evidence table
-        # with no `non_replicated_deduplication_window` (init.sql:398-401), and
-        # a latent silent drop the moment one is added.
+        # keyed `<tok>:<table>:0` and hashed to the SAME block token — a silent
+        # server-side drop of the second block now that corr_signals_archive
+        # carries `non_replicated_deduplication_window = 1000` (tracker 189
+        # residual, init.sql + the chschema boot converge).
         ok = await emit("netops.corr_signals_archive", chunk, "",
                         {"corr_id": snap.correlation_id, "version": version,
                          "row_count": len(chunk),
@@ -7976,11 +7978,30 @@ CORR_CH_TIMEOUT_S = float(os.environ.get("CORR_CH_TIMEOUT_S", "30.0"))
 #       retry contract, so a transient ClickHouse rejection dropped a wireless
 #       session/roam/episode outright — `ch_insert`'s bool return is ignored at
 #       those four call sites, which made `lost_total++` the entire trace.
+#   corr_signals_archive — non_replicated_deduplication_window = 1000, added
+#       2026-09-02 by the tracker 189 RESIDUAL (init.sql CREATE for fresh
+#       installs, an idempotent MODIFY SETTING in chschema.CorrSchemaDDL for
+#       existing ones). It is deliberately NOT a ReplacingMergeTree: the same
+#       signal is legitimately archived AGAIN under a different
+#       (archived_for, archived_version), and neither column is in ORDER BY
+#       (tenant_id, ts, signal_id) — a key collapse would eat a real second
+#       archival. The identity of an archive INSERT is its content-derived
+#       `member_key` (`<snapshot tok>:archive:<chunk>` = correlation_id +
+#       version + content hash + chunk number), which BOTH sinks already send as
+#       the insert_deduplication_token; the window is what that token is matched
+#       against. Note the token is supplied by the CALLER here — an archive
+#       insert made with no token stays non-idempotent by the `bool(token)` half
+#       of the test below, which is the safe default.
+#   corr_tenant_write_amp — same window, same change, and the re-send carries
+#       `natural_key_token` (ORDER BY (tenant_id, window_start) plus every other
+#       value in the row). One insert holds an ENTIRE per-tenant accounting
+#       window and the flush is a TIMER, so nothing upstream redelivers it: not
+#       retrying an UNKNOWN outcome dropped the window whole.
 #
 # Deliberately ABSENT, and WHY — the previous version of this note said
 # "corr_signals and corr_signals_archive are plain MergeTree with no dedup
 # window", which was true of only one of them (tracker 189 audit, corrected
-# 2026-09-02):
+# 2026-09-02) and is now true of neither:
 #   corr_signals — DOES carry non_replicated_deduplication_window = 1000: the
 #       ALTER in src/backend/internal/chschema/corr_schema.go converges it on
 #       every boot. The real reason it stays out is TOKEN STABILITY, not the
@@ -7988,17 +8009,12 @@ CORR_CH_TIMEOUT_S = float(os.environ.get("CORR_CH_TIMEOUT_S", "30.0"))
 #       a redelivery re-forms the batch differently, so the token moves and
 #       server-side dedup cannot fire. `CHBatcher._insert_batch` therefore
 #       retries the batch itself, parked with its membership (and token) frozen.
-#   corr_signals_archive — genuinely has NO dedup window: it is in neither
-#       init.sql (init.sql:364-408) nor that ALTER list, so a token is inert on
-#       it and re-sending after an UNKNOWN (transport) outcome would DUPLICATE
-#       replay rows in a plain MergeTree. A DEFINITE rejection is still retried
-#       on every table (single-block inserts are atomic — see `_retry_safe`).
-#       What tracker 189 changes for it is the GIVE-UP path, not the retry
-#       path: DLQ-on-loss instead of a silent `lost_total++` (see
-#       CH_DLQ_ON_LOSS_TABLES), plus a stable per-chunk token so the moment a
-#       dedup window IS added the retry becomes safe without another audit.
-#   corr_tenant_write_amp — same DDL story (plain MergeTree, no window,
-#       init.sql:514-535), same treatment: DLQ-on-loss, no transport retry.
+#   corr_path_edges — dormant behind CORR_EDGES_V2=false and outside the
+#       delivery contract entirely (tracker 189 states this explicitly); it has
+#       no window and must not be retried on a transport-unknown outcome.
+#
+# A DEFINITE rejection is still retried on EVERY table, dedup-safe or not —
+# single-block inserts are atomic, so nothing committed (see `_retry_safe`).
 
 # ReplacingMergeTree tables: a duplicate row collapses on merge BY DDL, which is
 # what makes a re-send after an unknown outcome safe without a dedup window.
@@ -8017,6 +8033,14 @@ CH_DEDUP_SAFE_TABLES = frozenset({
     "netops.corr_edges",
     "netops.corr_evidence",
     "netops.findings",
+    # Joined 2026-09-02 (tracker 189 residual) on the WINDOW half of the claim,
+    # not the ReplacingMergeTree half — hence here and not in
+    # CH_REPLACING_TABLES. The DDL landed in the same change
+    # (deployment/docker/clickhouse/init.sql + the boot-converge MODIFY SETTING
+    # in internal/chschema/corr_schema.go), and test_persist_contract_189 reads
+    # that DDL so a revert of it turns this claim red.
+    "netops.corr_signals_archive",
+    "netops.corr_tenant_write_amp",
 }) | CH_REPLACING_TABLES
 
 # ── tracker 189: natural-key dedup tokens ───────────────────────────────────
@@ -8489,8 +8513,12 @@ async def ch_insert(table: str, rows, *, dedup_token: str | None = None, **ctx) 
     Tracker 189: a caller that supplies NO token for a natural-keyed table
     (the four wireless tables, corr_tenant_write_amp) gets `natural_key_token`
     minted here rather than writing untokened. That is what lets those tables
-    join CH_DEDUP_SAFE_TABLES — the DDL half of the retry proof was already
-    true of them (ReplacingMergeTree), only the stable-token half was missing.
+    join CH_DEDUP_SAFE_TABLES — for the wireless four the DDL half of the retry
+    proof was already true (ReplacingMergeTree) and only the stable-token half
+    was missing; corr_tenant_write_amp (and corr_signals_archive, which carries
+    its caller-supplied `member_key` instead) got the DDL half in the tracker
+    189 RESIDUAL, a non_replicated_deduplication_window in init.sql plus the
+    idempotent boot-converge ALTER in chschema.CorrSchemaDDL.
     """
     assert ch is not None
     rows = list(rows)
@@ -8509,7 +8537,11 @@ async def ch_insert(table: str, rows, *, dedup_token: str | None = None, **ctx) 
     #   * UNKNOWN outcome (kind="transport" — timeout mid-flight, the server
     #     may have committed): needs a server-side dedup guarantee AND a
     #     stable token to resend under (CH_DEDUP_SAFE_TABLES). Without both,
-    #     one unknown outcome could turn into two rows.
+    #     one unknown outcome could turn into two rows. `bool(token)` is the
+    #     half that keeps corr_signals_archive honest: the table is dedup-safe
+    #     by DDL since the tracker 189 residual, but its token is supplied by
+    #     the CALLER (the chunk's member_key), so an untokened archive insert is
+    #     still not retried on an unknown outcome.
     #   * DEFINITE rejection (kind="rejected" WITH a ClickHouse error code —
     #     the server answered and refused; our batches are single-block, and
     #     single-block inserts are atomic, so nothing committed): a re-send

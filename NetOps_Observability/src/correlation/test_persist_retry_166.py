@@ -79,7 +79,9 @@ def _rejected(code):
 
 SAFE = "netops.corr_objects"          # dedup window in init.sql
 UNSAFE = "netops.corr_signals"        # critical, but plain MergeTree, no window
-ARCHIVE = "netops.corr_signals_archive"   # not critical, not dedup-safe
+ARCHIVE = "netops.corr_signals_archive"   # not critical; dedup window since
+                                          # tracker 189, but its token is
+                                          # supplied by the caller
 
 
 @pytest.fixture(autouse=True)
@@ -169,8 +171,13 @@ def test_a_table_without_a_dedup_guarantee_is_never_retried(monkeypatch):
 
 def test_the_archive_is_not_retried_and_does_not_raise(monkeypatch):
     """The archive is not RCA-critical: it returns False (the caller's `all_ok`
-    retries the slice whole on the next persist) and is not dedup-safe, so it
-    must neither retry nor escalate."""
+    retries the slice whole on the next persist) rather than escalating.
+
+    It gained a dedup window in the tracker 189 residual, but the token that
+    window matches on is the CHUNK's `member_key`, supplied by the caller — and
+    this insert supplies none, so `bool(token)` still makes it un-retryable on
+    an UNKNOWN outcome. Tokened archive inserts DO retry now; see
+    test_persist_contract_189.py."""
     ch = ScriptedCH([_transport(), _ok()])
     monkeypatch.setattr(main, "ch", ch)
     assert run(main.ch_insert(ARCHIVE, [_row()])) is False
@@ -204,11 +211,26 @@ def test_every_dedup_safe_table_is_rca_critical_or_replacing():
     stood on — so the allowlist is now expressed as CH_REPLACING_TABLES rather
     than a hand-written table name, and the DDL that backs it is asserted in
     test_persist_contract_189.py.
+
+    corr_signals_archive and corr_tenant_write_amp joined on the same day, on
+    the tracker 189 RESIDUAL: they are plain MergeTree and stand on the OTHER
+    half of the claim, a non_replicated_deduplication_window carried by
+    init.sql's CREATE and converged onto existing installs by
+    chschema.CorrSchemaDDL. Both DDL halves are read back by
+    test_persist_contract_189.py, so a revert there fails rather than silently
+    turning a retry into a duplicate row.
     """
+    # The window-backed members: plain MergeTree tables that are retry-safe
+    # ONLY because their DDL carries a non_replicated_deduplication_window.
+    # Every one of them is asserted against that DDL — netops.findings in
+    # tests/test_clickhouse_corr_storage.py, the other two in
+    # test_persist_contract_189.py — so this stays a set membership claim and
+    # not a second, unchecked opinion about the schema.
+    windowed = {"netops.findings", "netops.corr_signals_archive",
+                "netops.corr_tenant_write_amp"}
     assert main.CH_DEDUP_SAFE_TABLES <= (
-        main.CH_CRITICAL_TABLES | main.CH_REPLACING_TABLES | {"netops.findings"})
+        main.CH_CRITICAL_TABLES | main.CH_REPLACING_TABLES | windowed)
     assert "netops.corr_signals" not in main.CH_DEDUP_SAFE_TABLES
-    assert "netops.corr_signals_archive" not in main.CH_DEDUP_SAFE_TABLES
     # A dedup-safe table that is neither RCA-critical nor a ReplacingMergeTree
     # has no upstream replay, so it MUST have a durable fallback.
     for t in main.CH_DEDUP_SAFE_TABLES - main.CH_CRITICAL_TABLES - {"netops.corr_current"}:

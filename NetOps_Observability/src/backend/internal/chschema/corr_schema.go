@@ -475,5 +475,29 @@ SETTINGS index_granularity = 8192, ttl_only_drop_parts = 1`,
 		`ALTER TABLE netops.corr_objects MODIFY SETTING non_replicated_deduplication_window = 1000`,
 		`ALTER TABLE netops.corr_edges MODIFY SETTING non_replicated_deduplication_window = 1000`,
 		`ALTER TABLE netops.corr_evidence MODIFY SETTING non_replicated_deduplication_window = 1000`,
+
+		// Tracker 189 residual (2026-09-02): the same guarantee for the two
+		// correlation-written tables the Phase 3 pass missed. Both are plain
+		// MergeTree, so without a window a re-send after an UNKNOWN transport
+		// outcome APPENDS a duplicate — which is why the correlation service kept
+		// them OUT of its retry set (CH_DEDUP_SAFE_TABLES) and could only
+		// dead-letter them. First live evidence: the 10k rung lost 12
+		// corr_signals_archive batches (~357 rows) to ReadErrors against a
+		// ClickHouse raising MEMORY_LIMIT_EXCEEDED; the sibling tables retried
+		// without loss.
+		//
+		// corr_signals_archive's identity is NOT its ORDER BY (tenant_id, ts,
+		// signal_id): the same signal is legitimately archived again under a
+		// different (archived_for, archived_version), neither of which is in the
+		// key — so a ReplacingMergeTree collapse would eat a real second
+		// archival. The insert's identity is the chunk's content-derived
+		// `member_key` (correlation_id + version + content hash + chunk number),
+		// sent as insert_deduplication_token by both sinks; the window is what
+		// that token is matched against. corr_tenant_write_amp re-sends under
+		// `natural_key_token` (its ORDER BY plus every other value in the row).
+		// MODIFY SETTING is metadata-only and idempotent; init.sql carries it on
+		// the CREATE for fresh installs.
+		`ALTER TABLE netops.corr_signals_archive MODIFY SETTING non_replicated_deduplication_window = 1000`,
+		`ALTER TABLE netops.corr_tenant_write_amp MODIFY SETTING non_replicated_deduplication_window = 1000`,
 	}
 }

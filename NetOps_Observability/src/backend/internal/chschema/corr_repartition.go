@@ -193,8 +193,14 @@ func corrRepartitionTables() []corrRepartitionTable {
 		},
 		{
 			Name: "corr_signals_archive", TimeCol: "ts",
-			OrderBy:  "(tenant_id, ts, signal_id)",
-			Settings: "index_granularity = 8192, ttl_only_drop_parts = 1", ttlDays: archive,
+			OrderBy: "(tenant_id, ts, signal_id)",
+			// Tracker 189 residual: the shadow BECOMES the live table at the
+			// swap, so it must carry the dedup window the live one carries —
+			// otherwise the archive loses its retry guarantee for the window
+			// between the swap and the next boot converge, while the
+			// correlation service is already re-sending on it.
+			Settings: "index_granularity = 8192, non_replicated_deduplication_window = 1000, " +
+				"ttl_only_drop_parts = 1", ttlDays: archive,
 		},
 		{
 			Name: "corr_path_edges", TimeCol: "created_at",
@@ -203,8 +209,10 @@ func corrRepartitionTables() []corrRepartitionTable {
 		},
 		{
 			Name: "corr_tenant_write_amp", TimeCol: "window_start",
-			OrderBy:  "(tenant_id, window_start)",
-			Settings: "index_granularity = 8192, ttl_only_drop_parts = 1", ttlDays: fixed(corrTenantWriteAmpTTLDays),
+			OrderBy: "(tenant_id, window_start)",
+			// Same reason as corr_signals_archive above.
+			Settings: "index_granularity = 8192, non_replicated_deduplication_window = 1000, " +
+				"ttl_only_drop_parts = 1", ttlDays: fixed(corrTenantWriteAmpTTLDays),
 		},
 	}
 }

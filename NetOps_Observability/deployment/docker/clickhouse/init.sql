@@ -403,7 +403,29 @@ CREATE TABLE IF NOT EXISTS netops.corr_signals_archive
 ENGINE = MergeTree
 PARTITION BY (tenant_id, toYYYYMMDD(ts))
 ORDER BY (tenant_id, ts, signal_id)
-SETTINGS index_granularity = 8192,
+-- non_replicated_deduplication_window (2026-09-02, tracker 189 residual): an
+-- archive chunk that ends in an UNKNOWN outcome (transport read error
+-- mid-flight — the 10k rung lost 12 batches, ~357 rows, to exactly that against
+-- a ClickHouse raising MEMORY_LIMIT_EXCEEDED) may or may not have committed, so
+-- the correlation service must be able to re-send it. Without this window the
+-- re-send would APPEND a second copy of the slice, which is why the archive was
+-- the one fire-and-forget lane in the delivery contract.
+--
+-- WHY THE WINDOW AND NOT THE ORDER BY. This table's identity is NOT its sort
+-- key: the SAME signal is legitimately archived again under a different
+-- (archived_for, archived_version) — one signal belongs to the window slice of
+-- several objects and of several versions of one object — and neither column is
+-- in ORDER BY (tenant_id, ts, signal_id). So a key-based collapse
+-- (ReplacingMergeTree) would silently eat a legitimate second archival. The
+-- identity of an INSERT here is the chunk's content-derived `member_key`
+-- (main.py: `<snapshot tok>:archive:<chunk>` = correlation_id + version +
+-- content hash + chunk number), which every archive insert already carries as
+-- its insert_deduplication_token on both the batched and unbatched sinks.
+-- `insert_deduplication_token` + this window dedup on exactly that token: a
+-- RETRY of one chunk is dropped, a genuinely different archival is not.
+-- Mirrored by an idempotent MODIFY SETTING in chschema.CorrSchemaDDL for
+-- installs that predate this line.
+SETTINGS index_granularity = 8192, non_replicated_deduplication_window = 1000,
          max_bytes_to_merge_at_max_space_in_pool = 1073741824, min_age_to_force_merge_seconds = 600, min_age_to_force_merge_on_partition_only = 1;
 
 -- 2.2 Correlation objects — versioned, append-only snapshots. Hot retention is
@@ -529,7 +551,17 @@ ENGINE = MergeTree
 PARTITION BY (tenant_id, toYYYYMMDD(window_start))
 ORDER BY (tenant_id, window_start)
 TTL toDateTime(window_start) + INTERVAL 30 DAY
+-- non_replicated_deduplication_window (2026-09-02, tracker 189 residual): one
+-- insert here carries the ENTIRE per-tenant accounting window and the flush is a
+-- TIMER — nothing upstream redelivers it — so an UNKNOWN outcome that is not
+-- retried drops raw_seen/persisted/damped for every tenant in those 300 s and
+-- leaves the storm-attribution runbook query with a hole no counter names. The
+-- re-send carries `natural_key_token` (the ORDER BY columns plus every other
+-- value in the row) and this window is what makes the server drop the duplicate
+-- block instead of double-counting the window. Mirrored by an idempotent MODIFY
+-- SETTING in chschema.CorrSchemaDDL for installs that predate this line.
 SETTINGS index_granularity = 8192, ttl_only_drop_parts = 1,
+         non_replicated_deduplication_window = 1000,
          max_bytes_to_merge_at_max_space_in_pool = 1073741824, min_age_to_force_merge_seconds = 600, min_age_to_force_merge_on_partition_only = 1;
 
 -- 2.3 Graph edges. The owner's grounded-edges hard constraint is enforced by the

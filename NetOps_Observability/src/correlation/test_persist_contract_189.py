@@ -216,25 +216,48 @@ def test_the_wireless_tables_are_replacing_mergetree_on_their_natural_key(table)
         f"{main.CH_NATURAL_KEY_COLUMNS[table]} the dedup token is built from")
 
 
-def test_archive_and_write_amp_stay_out_of_the_retry_set_and_the_ddl_says_why():
-    """The comment corrected by this tracker, asserted rather than believed.
+@pytest.mark.parametrize("table", (ARCHIVE, WRITE_AMP))
+def test_archive_and_write_amp_are_in_the_retry_set_and_the_ddl_carries_the_window(table):
+    """The tracker 189 RESIDUAL, asserted against the DDL rather than believed.
 
-    Neither table has a `non_replicated_deduplication_window`, in init.sql or in
-    the boot-converge ALTER list, so a token is inert on them and re-sending
-    after a TRANSPORT-unknown outcome could duplicate rows in a plain MergeTree.
-    They get DLQ-on-loss instead of transport retries.
+    Both tables are plain MergeTree, so their retry safety rests entirely on
+    `non_replicated_deduplication_window`: with it, a re-send after a
+    TRANSPORT-unknown outcome carrying a token the server already saw is dropped
+    server-side; without it the same re-send APPENDS a duplicate. The window is
+    stated in TWO places that can drift apart independently — the fresh-install
+    CREATE in init.sql and the idempotent boot-converge MODIFY SETTING that
+    brings existing installs up to it — and the Python retry set is only safe
+    while BOTH hold. This reads all three, so a revert of any one of them turns
+    the claim red instead of leaving a silent duplicate-row path.
+
+    Why a window and not a ReplacingMergeTree key, for the archive: the same
+    signal is legitimately archived AGAIN under a different
+    (archived_for, archived_version), and neither column is in ORDER BY
+    (tenant_id, ts, signal_id) — a key collapse would eat a real second
+    archival. The identity of an archive INSERT is its content-derived
+    `member_key` token, which is exactly what the window dedups on.
     """
-    for table in (ARCHIVE, WRITE_AMP):
-        assert table not in main.CH_DEDUP_SAFE_TABLES
-        name = table.split(".", 1)[1]
-        sql = _INIT_SQL.read_text()
-        m = re.search(rf"CREATE TABLE IF NOT EXISTS netops\.{name}\b(.*?);", sql, re.DOTALL)
-        assert m, f"{table} not found in init.sql"
-        assert "non_replicated_deduplication_window" not in m.group(1), (
-            f"{table} gained a dedup window — it can now join "
-            "CH_DEDUP_SAFE_TABLES, and this guard should say so")
-        assert f"netops.{name} MODIFY SETTING non_replicated_deduplication_window" \
-            not in _CORR_SCHEMA_GO.read_text()
+    assert table in main.CH_DEDUP_SAFE_TABLES, (
+        f"{table} carries the dedup window but is not in the retry set — an "
+        "ambiguous outcome would be thrown away for nothing")
+    assert table not in main.CH_REPLACING_TABLES, (
+        f"{table} is dedup-safe by WINDOW, not by ReplacingMergeTree: a "
+        "key-based collapse would eat a legitimate re-archival / re-flush")
+    name = table.split(".", 1)[1]
+    sql = _INIT_SQL.read_text()
+    m = re.search(rf"CREATE TABLE IF NOT EXISTS netops\.{name}\b(.*?);", sql, re.DOTALL)
+    assert m, f"{table} not found in init.sql"
+    assert re.search(r"ENGINE\s*=\s*MergeTree\b", m.group(1)), (
+        f"{table} is no longer a plain MergeTree — the window argument for its "
+        "retry-set membership must be restated")
+    assert "non_replicated_deduplication_window = 1000" in m.group(1), (
+        f"{table} lost its dedup window on a fresh install — a transport retry "
+        "would now DUPLICATE rows; it must leave CH_DEDUP_SAFE_TABLES with it")
+    assert (f"ALTER TABLE netops.{name} MODIFY SETTING "
+            "non_replicated_deduplication_window = 1000") in _CORR_SCHEMA_GO.read_text(), (
+        f"nothing converges the {table} dedup window — an UPGRADED install "
+        "would retry with no server-side dedup behind it (init.sql only ever "
+        "runs on a virgin volume)")
 
 
 def test_corr_signals_does_have_a_dedup_window_the_old_comment_denied():
@@ -316,15 +339,101 @@ def test_a_transient_rejection_recovers_on_every_named_table(table, monkeypatch)
     assert main.CH_TABLE_OUTCOMES[table]["flushed"] == 1
 
 
-def test_the_archive_does_not_retry_a_transport_unknown(monkeypatch):
-    """corr_signals_archive is a plain MergeTree with NO dedup window: a
-    re-send after an unknown outcome would duplicate a replay row. It must
-    spool instead — durability, not a second copy."""
+class TokenHonouringCH:
+    """A ClickHouse stand-in that behaves like the real server does once the
+    table carries a `non_replicated_deduplication_window`.
+
+    It keeps the tokens it has already committed and DROPS a block that repeats
+    one, exactly as ClickHouse drops a duplicate insert block. `commit_then_fail`
+    reproduces the failure this residual exists for: the server COMMITTED the
+    block and the client then lost the connection (a ReadError mid-flight), so
+    the caller's outcome is UNKNOWN and its retry is a re-send of rows that are
+    already in the table. `stored` is what actually landed.
+    """
+
+    def __init__(self, commit_then_fail: int = 0):
+        self.stored: list[dict] = []
+        self.seen: set[str] = set()
+        self.calls: list[dict] = []
+        self._commit_then_fail = commit_then_fail
+
+    async def insert_detailed(self, table, rows, dedup_token=""):
+        rows = list(rows)
+        self.calls.append({"table": table, "rows": rows, "token": dedup_token})
+        if dedup_token and dedup_token in self.seen:
+            # Deduped server-side: accepted, nothing appended.
+            return main.InsertOutcome(committed=True, kind="committed", rows=len(rows))
+        self.stored.extend(rows)
+        if dedup_token:
+            self.seen.add(dedup_token)
+        if self._commit_then_fail > 0:
+            self._commit_then_fail -= 1
+            return _transport(len(rows))
+        return main.InsertOutcome(committed=True, kind="committed", rows=len(rows))
+
+
+def test_the_archive_retries_a_transport_unknown_and_only_one_row_lands(monkeypatch):
+    """The residual, end to end: with the dedup window in the DDL and the
+    chunk's `member_key` on the wire, an UNKNOWN outcome is RETRIED instead of
+    dead-lettered — and the ambiguity is resolved by the server, not by us.
+
+    The sink commits the first block and then fails the client (the 10k rung's
+    ReadError against a ClickHouse under memory pressure). The retry re-sends
+    the identical rows under the identical token, ClickHouse recognises the
+    token and drops the block, and the archive ends with ONE copy of the slice
+    — which is precisely what the window buys and what its absence forbade.
+    """
+    sink = TokenHonouringCH(commit_then_fail=1)
+    monkeypatch.setattr(main, "ch", sink)
+    row = _row_for(ARCHIVE)
+    assert run(main.ch_insert(ARCHIVE, [row], dedup_token="tok:archive:0")) is True
+    assert len(sink.calls) == 2, "a transport-unknown outcome must now be retried"
+    assert {c["token"] for c in sink.calls} == {"tok:archive:0"}, (
+        "the retry must re-send under the SAME token, or the window cannot fire")
+    assert [c["rows"] for c in sink.calls] == [[row], [row]], (
+        "the retry must re-send the same membership, or the token is a lie")
+    assert sink.stored == [row], (
+        f"the archive slice was duplicated by the retry: {sink.stored}")
+    assert main.CH_INSERT_FAILURES == {}
+    assert main.CH_ROWS_DLQ_SPOOLED == {}
+    assert main.CH_TABLE_OUTCOMES[ARCHIVE] == {"retried": 1, "flushed": 1}
+
+
+def test_the_write_amp_window_survives_a_transport_unknown_without_double_counting(
+        monkeypatch):
+    """Same proof for the rollup, whose token it mints itself from the row.
+
+    Double-counting matters more here than anywhere: one row IS the tenant's
+    raw_seen/persisted/damped for the window, so a duplicate would not be a
+    redundant copy, it would be a wrong answer to the storm-attribution query.
+    """
+    sink = TokenHonouringCH(commit_then_fail=1)
+    monkeypatch.setattr(main, "ch", sink)
+    row = _row_for(WRITE_AMP)
+    assert run(main.ch_insert(WRITE_AMP, [row])) is True
+    assert len(sink.calls) == 2
+    tokens = {c["token"] for c in sink.calls}
+    assert len(tokens) == 1 and tokens != {""}, f"token moved across the retry: {tokens}"
+    assert sink.stored == [row], f"the accounting window was double-counted: {sink.stored}"
+    assert main.CH_INSERT_FAILURES == {}
+
+
+def test_an_untokened_archive_insert_is_still_not_retried_on_an_unknown(monkeypatch):
+    """The `bool(token)` half of `ch_insert`'s idempotency test, kept honest.
+
+    The archive is the one dedup-safe table whose token comes from the CALLER
+    (the chunk's `member_key`) rather than from the row or the coordinate — it
+    is deliberately absent from CH_NATURAL_KEY_COLUMNS, because hashing 10,000
+    rows on the loop thread is the synchronous stretch the P1 pass removed. So a
+    caller that supplies no token has nothing for the window to match, and the
+    re-send WOULD duplicate: that insert must still spool instead of retrying.
+    """
+    assert ARCHIVE not in main.CH_NATURAL_KEY_COLUMNS
     sink = ScriptedCH([_transport()] * 5)
     monkeypatch.setattr(main, "ch", sink)
-    assert run(main.ch_insert(ARCHIVE, [_row_for(ARCHIVE)],
-                              dedup_token="tok:archive:0")) is False
-    assert len(sink.calls) == 1, "an unknown outcome on the archive is not retryable"
+    assert run(main.ch_insert(ARCHIVE, [_row_for(ARCHIVE)])) is False
+    assert len(sink.calls) == 1, "no token means no transport retry, window or not"
+    assert sink.calls[0]["token"] == ""
     assert main.CH_ROWS_DLQ_SPOOLED == {ARCHIVE: 1}
     assert main.CH_INSERT_FAILURES == {}
 
