@@ -221,6 +221,17 @@ freeze holds regardless of how good the throughput calibration turns out.
 
 ---
 
+## Reference-capacity regression lane (V1 qualification)
+
+Separate from the defect classes above: this lane does not prove a class cannot
+return, it proves the **whole reference configuration still qualifies**.
+
+| Guarding test | Gate | GA criterion evidenced |
+|---|---|---|
+| `scripts/release-qualify.py` (unit-tested by `tests/test_release_qualify.py`; harness disk/quiet gate by `tests/test_miniladder_host_quiet.py`) | **G3 pre-release, on the rig** | One command reruns the frozen `CORRELIX_REFERENCE_CAPACITY_V1` qualification on the deployed candidate and grades every clause three-valued (PASS/FAIL/SKIPPED/INVALID): §8(e) environment, §3 digest pins, §8(a) all nine harness gates, §4+§5 accuracy ≥ 0.93 on scorer v2, §7 aggregation accounting on a pre/post delta, §8(b) T1 published-never-gated, and a diff against the `storm-s11` baseline. Runbook: `docs/runbooks/release-qualification.md`. **Rebalance (§8(d)/tracker 155) is reported SKIPPED, not passed.** |
+
+---
+
 ## What this map does NOT claim
 
 The G1/G2 suites prove the defect **classes** cannot silently return; they are

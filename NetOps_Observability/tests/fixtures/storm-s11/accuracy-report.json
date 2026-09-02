@@ -1,0 +1,131 @@
+{
+ "runid": "090121382mk4",
+ "scorer_version": 2,
+ "accuracy_slo": 1.0,
+ "stories_total": 345,
+ "stories_passed": 345,
+ "detection_rate": 1.0,
+ "positive_pass_rate": 1.0,
+ "specificity": 1.0,
+ "per_template": {
+  "upstream_link_failure": {
+   "pass": 20,
+   "fail": 0
+  },
+  "local_link_fault": {
+   "pass": 150,
+   "fail": 0
+  },
+  "bgp_peer_flap": {
+   "pass": 100,
+   "fail": 0
+  },
+  "ospf_adjacency_flap": {
+   "pass": 60,
+   "fail": 0
+  },
+  "enterprise_outage": {
+   "pass": 15,
+   "fail": 0
+  }
+ },
+ "read_bounds": {
+  "window": {
+   "start": "2026-09-01 21:23:35",
+   "end": "2026-09-01 23:36:57",
+   "source": "report.json phase stamps"
+  },
+  "tenants": [
+   "global"
+  ],
+  "clickhouse_queries": 16,
+  "story_batch": 40,
+  "hot_projection_gaps": 0
+ },
+ "notes": [
+  "no events.jsonl (scale-miniladder run): evidence trails are scored WITHOUT emission counts \u2014 every clause verdict is unaffected"
+ ],
+ "stories": [
+  {
+   "story_id": "I0001",
+   "template": "upstream_link_failure",
+   "kind": "positive",
+   "status": "PASS",
+   "fired_at": null,
+   "clauses": [
+    {
+     "clause": "detected",
+     "ok": true,
+     "detail": "2 object(s) touch the story's entities"
+    },
+    {
+     "clause": "verdict_tier_at_least",
+     "ok": true,
+     "detail": "want \u2265 suspected, got suspected"
+    },
+    {
+     "clause": "affected_includes",
+     "ok": true,
+     "detail": "missing from the affected set of all 2 touching object(s): none"
+    }
+   ],
+   "objects": [
+    {
+     "id": "8be93b27-4191-5f7c-ab6a-4d6f49b7661a",
+     "verdict_tier": "suspected",
+     "top_hypothesis": "sig.ent.access.local-link-fault",
+     "conf": 0.5,
+     "node_count": 1
+    },
+    {
+     "id": "cea5fbbb-1da0-5c7e-a8e1-d46fecfa7bbd",
+     "verdict_tier": "suspected",
+     "top_hypothesis": "sig.ent.middle-mile.lastmile-circuit-flap",
+     "conf": 1,
+     "node_count": 48
+    }
+   ]
+  },
+  {
+   "story_id": "I0002",
+   "template": "upstream_link_failure",
+   "kind": "positive",
+   "status": "PASS",
+   "fired_at": null,
+   "clauses": [
+    {
+     "clause": "detected",
+     "ok": true,
+     "detail": "2 object(s) touch the story's entities"
+    },
+    {
+     "clause": "verdict_tier_at_least",
+     "ok": true,
+     "detail": "want \u2265 suspected, got suspected"
+    },
+    {
+     "clause": "affected_includes",
+     "ok": true,
+     "detail": "missing from the affected set of all 2 touching object(s): none"
+    }
+   ],
+   "objects": [
+    {
+     "id": "27fc3a9d-d76e-571f-966a-d077acf5b864",
+     "verdict_tier": "suspected",
+     "top_hypothesis": "sig.ent.access.local-link-fault",
+     "conf": 0.5,
+     "node_count": 1
+    },
+    {
+     "id": "8dff0054-2be0-5f3d-a829-28706a71b1b1",
+     "verdict_tier": "suspected",
+     "top_hypothesis": "sig.ent.middle-mile.lastmile-circuit-flap",
+     "conf": 1,
+     "node_count": 48
+    }
+   ]
+  }
+ ],
+ "_fixture_note": "TRIMMED FIXTURE: the `stories` array of the real storm-s11 accuracy-report.json (345 entries, 300 KB) is truncated to 2 here. Every field release-qualify.py grades on (scorer_version, stories_passed, stories_total, accuracy_slo, detection_rate, specificity) is unchanged and is the leg's own."
+}

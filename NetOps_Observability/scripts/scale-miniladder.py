@@ -145,6 +145,7 @@ import math
 import os
 import random
 import re
+import shutil
 import signal
 import string
 import subprocess
@@ -931,6 +932,109 @@ def env_flag(name: str) -> bool:
     deliberate override is visible to the phase that honours it (and testable
     without reimporting the module)."""
     return os.environ.get(name, "").strip().lower() in ("1", "true", "yes", "on")
+
+
+# ── DISK HEADROOM + HOST QUIET (tracker 210) ────────────────────────────────
+# WHY. `storm-s10` (run 09012025x578) started with 10.8 GiB root-fs free while
+# concurrent CI suites drew ~3.1 GiB and pushed node_load1 to 16-38. The host
+# crossed OpenSearch's flood-stage watermark (5 % of the 77 GiB root = ~3.85
+# GiB) by ~0.4 GiB mid-burst, every index went read-only-allow-delete for 11
+# minutes, and the vector router's OS sink DISCARDED 291,296 syslog evidence
+# docs as retry-exhausted. The Kafka->engine lane was intact, so accounting
+# still balanced and the harness reported gates green — the leg was graded, and
+# only a later diagnosis found the evidence copy was gone. Either factor alone
+# would not have crossed. Preflight let it run.
+#
+# WHAT THIS IS NOT. This gate REFUSES BEFORE THE LEG RUNS. It grades nothing,
+# scores nothing and changes NO gate semantics: every clause of
+# `docs/scale/CORRELIX_REFERENCE_CAPACITY_V1.md` is evaluated exactly as before
+# on any leg that starts. A V1 rerun on a quiet host is byte-for-byte the run
+# it was, so this is not a semantic change and does not require a V2 profile.
+# `--allow-unquiet` proceeds and stamps UNQUIET into the preflight evidence AND
+# into report.json's `parameters`, so a graded verdict can never silently come
+# from an unquiet host.
+HOST_QUIET_FS = "/"                # the root filesystem s10 filled
+MIN_FREE_GIB_DEFAULT = 10.0        # V1 section 8(e)
+MAX_LOAD1_DEFAULT = 6.0            # s11 launched at 2.9; s10 at 16-38
+LOADAVG_PATH = "/proc/loadavg"
+GIB = 1024 ** 3
+
+
+def read_load1(path: str | None = None) -> tuple[float, str]:
+    """(load1, error). An UNREADABLE load average is reported as an error, never
+    as 0.0 — an unmeasured host must not look quiet (16.1).
+
+    The path defaults to the MODULE constant read at CALL time, not to a
+    def-time binding, so a test (and an operator running on a host with a
+    relocated procfs) can point it elsewhere.
+    """
+    path = path or LOADAVG_PATH
+    try:
+        with open(path, encoding="utf-8") as fh:
+            fields = fh.read().split()
+    except OSError as exc:
+        return -1.0, f"cannot read {path}: {exc.strerror or exc}"
+    if not fields:
+        return -1.0, f"{path} is empty"
+    try:
+        return float(fields[0]), ""
+    except ValueError:
+        return -1.0, f"{path} first field {fields[0]!r} is not a number"
+
+
+def disk_free_gib(path: str | None = None) -> tuple[float, float, str]:
+    """(free GiB, total GiB, error) for the filesystem holding `path`.
+
+    Same call-time default as read_load1()."""
+    path = path or HOST_QUIET_FS
+    try:
+        usage = shutil.disk_usage(path)
+    except OSError as exc:
+        return -1.0, -1.0, f"cannot stat {path}: {exc.strerror or exc}"
+    return round(usage.free / GIB, 2), round(usage.total / GIB, 2), ""
+
+
+def host_quiet_readings(min_free_gib: float, max_load1: float,
+                        fs_path: str | None = None,
+                        loadavg_path: str | None = None) -> dict:
+    """The two numbers the gate judges, plus the bounds they are judged against."""
+    fs_path = fs_path or HOST_QUIET_FS
+    free_gib, total_gib, disk_error = disk_free_gib(fs_path)
+    load1, load_error = read_load1(loadavg_path)
+    return {"filesystem": fs_path, "free_gib": free_gib, "total_gib": total_gib,
+            "disk_error": disk_error, "load1": load1, "load1_error": load_error,
+            "min_free_gib": min_free_gib, "max_load1": max_load1}
+
+
+def host_quiet_problems(readings: dict) -> list[str]:
+    """The violations in a reading set (empty = quiet host).
+
+    An UNREADABLE probe is a violation, not a pass: the whole point of the gate
+    is that nobody was measuring when s10 ran.
+    """
+    problems: list[str] = []
+    if readings.get("disk_error"):
+        problems.append(
+            f"root-fs headroom is UNKNOWN ({readings['disk_error']}) — an "
+            f"unmeasured filesystem is not a headroom guarantee")
+    elif float(readings.get("free_gib", -1)) < float(readings["min_free_gib"]):
+        problems.append(
+            f"{readings['filesystem']} has {readings['free_gib']:.1f} GiB free, "
+            f"below the {readings['min_free_gib']:.0f} GiB floor — storm-s10 "
+            f"crossed OpenSearch's flood-stage watermark mid-burst from 10.8 GiB "
+            f"and the router's OS sink discarded 291,296 evidence docs "
+            f"(--min-free-gib / --allow-unquiet)")
+    if readings.get("load1_error"):
+        problems.append(
+            f"host load is UNKNOWN ({readings['load1_error']}) — an unmeasured "
+            f"host is not a quiet one")
+    elif float(readings.get("load1", -1)) > float(readings["max_load1"]):
+        problems.append(
+            f"host load1 {readings['load1']:.2f} exceeds the "
+            f"{readings['max_load1']:.2f} bound — concurrent work distorts every "
+            f"timing clause (storm-s11 launched at 2.9, storm-s10, excluded for "
+            f"environment violation, at 16-38) (--max-load1 / --allow-unquiet)")
+    return problems
 
 
 def run(cmd: list[str], timeout: int, input_text: str | None = None) -> tuple[int, str, str]:
@@ -4880,6 +4984,10 @@ class Harness:
         # profile — which is what keeps t-nominal-2.5k byte-for-byte the
         # workload every recorded 2.5K number was measured on.
         self.scenario: StormScenario | None = None
+        # Tracker 210: "OK" | "UNQUIET" | "unmeasured". Carried into
+        # report.json `parameters` so a verdict can never silently come from an
+        # unquiet host.
+        self.host_quiet = "unmeasured"
 
     # -- plumbing -----------------------------------------------------------
     def phase(self, name: str, status: str, evidence: dict, notes: str = "") -> bool:
@@ -4899,6 +5007,37 @@ class Harness:
     def preflight(self) -> bool:
         ev: dict = {}
         problems: list[str] = []
+
+        # DISK HEADROOM + HOST QUIET (tracker 210) — FIRST, before anything
+        # else is probed, so the refusal is instant and has touched nothing.
+        # See host_quiet_problems(): this refuses BEFORE the leg runs and
+        # changes no gate semantics.
+        quiet = host_quiet_readings(self.args.min_free_gib, self.args.max_load1)
+        quiet_problems = host_quiet_problems(quiet)
+        quiet["violations"] = quiet_problems
+        if not quiet_problems:
+            self.host_quiet = "OK"
+        elif self.args.allow_unquiet:
+            self.host_quiet = "UNQUIET"
+            quiet["allow_unquiet"] = True
+            quiet["verdict"] = "UNQUIET"
+            for problem in quiet_problems:
+                warn(f"--allow-unquiet: {problem}")
+            warn("--allow-unquiet: PROCEEDING on an unquiet host. This leg is "
+                 "NOT accounting-graded evidence — report.json records "
+                 "host_quiet=UNQUIET in its parameters.")
+        else:
+            # EARLY RETURN, deliberately. Unlike the residue/consumer clauses
+            # (which accumulate so the operator sees every problem at once),
+            # this one costs nothing to evaluate and everything after it costs
+            # minutes — the bounded consumer settle alone is 180 s. Refusing
+            # here means the harness has not touched the stack at all.
+            quiet["verdict"] = "REFUSED"
+            self.host_quiet = "UNQUIET"
+            ev["host_quiet"] = quiet
+            self.preflight_ok = False
+            return self.phase("preflight", "FAIL", ev, "; ".join(quiet_problems))
+        ev["host_quiet"] = quiet
 
         states = self.stack.service_states()
         ev["services"] = states
@@ -8189,6 +8328,13 @@ class Harness:
                 "drain_factor": self.args.drain_factor,
                 "lag_epsilon": self.args.lag_epsilon,
                 "mem_factor": self.args.mem_factor,
+                # Tracker 210: the host the numbers were measured on. UNQUIET
+                # means the disk/load gate was overridden with --allow-unquiet
+                # and this run is not accounting-graded evidence.
+                "host_quiet": self.host_quiet,
+                "min_free_gib": self.args.min_free_gib,
+                "max_load1": self.args.max_load1,
+                "allow_unquiet": bool(self.args.allow_unquiet),
                 "tls_variant": self.stack.tls,
                 "base_url": self.stack.base_url,
             },
@@ -8509,6 +8655,23 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
                          "of ITS OWN plan-sized memory cap (#102) — the OOM "
                          "path, self-relative so it holds on any host "
                          "(default 85)")
+    ap.add_argument("--min-free-gib", type=float, default=MIN_FREE_GIB_DEFAULT,
+                    help=f"refuse to start when the root filesystem has less "
+                         f"free space than this (default "
+                         f"{MIN_FREE_GIB_DEFAULT:.0f} GiB, the V1 section 8(e) "
+                         f"floor). storm-s10 started at 10.8 GiB, crossed "
+                         f"OpenSearch's flood-stage watermark mid-burst and lost "
+                         f"291,296 evidence docs (tracker 209/210)")
+    ap.add_argument("--max-load1", type=float, default=MAX_LOAD1_DEFAULT,
+                    help=f"refuse to start when host load1 exceeds this "
+                         f"(default {MAX_LOAD1_DEFAULT}). storm-s11 launched at "
+                         f"2.9; storm-s10, excluded for environment violation, "
+                         f"at 16-38")
+    ap.add_argument("--allow-unquiet", action="store_true",
+                    help="proceed despite a --min-free-gib / --max-load1 "
+                         "violation, recording UNQUIET in the preflight evidence "
+                         "and in report.json parameters. The leg is then NOT "
+                         "accounting-graded evidence")
     ap.add_argument("--consumer-settle-seconds", type=int, default=180,
                     help="bounded wait for the correlation + router consumer "
                          "groups to show a live member at preflight. Bring-up "
@@ -8686,6 +8849,12 @@ def main(argv: list[str]) -> int:
               f"env {args.env_file})")
         print(f"  run lock         : {RUN_LOCK_PATH} (refuses to start while a "
               f"live pid holds it; a stale lock is reclaimed)")
+        _q = host_quiet_readings(args.min_free_gib, args.max_load1)
+        print(f"  host quiet gate  : root-fs {_q['free_gib']} GiB free (floor "
+              f"{args.min_free_gib:.0f}), load1 {_q['load1']} (bound "
+              f"{args.max_load1}) -> "
+              f"{'QUIET' if not host_quiet_problems(_q) else 'REFUSE'}"
+              f"{' [--allow-unquiet: would PROCEED, stamped UNQUIET]' if args.allow_unquiet else ''}")
         print(f"  phase 1 preflight: REFUSES on any leftover {DEVICE_PREFIX_ROOT} "
               f"device of any run id ({ALLOW_FOREIGN_RESIDUE_ENV}=1 overrides), "
               f"{len(REQUIRED_SERVICES)} required services, "

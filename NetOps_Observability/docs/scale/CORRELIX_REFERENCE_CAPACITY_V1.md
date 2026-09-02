@@ -197,6 +197,9 @@ aggregation accounting of §7 exact, and no unexpected replica ejection or
 restart. Both baseline legs (`storm-s11`, and `storm-s09` before it) met all of
 these; tracker 203 wraps this
 document into the rerunnable release regression suite.
+*(Rerun command + the meaning of each stage's PASS/FAIL/INVALID/SKIPPED:
+`docs/runbooks/release-qualification.md`; `scripts/release-qualify.py`,
+baseline `docs/scale/baselines/storm-s11.v1.json`.)*
 
 **(e) Qualification environment (added 2026-09-01):** a V1-graded leg additionally requires **≥ 10 GiB root-fs free at preflight and a quiet host** (no concurrent CI suites/builds during the leg) — motivated by `storm-s10` (run `09012025x578`, **excluded from qualification for environment violation**): concurrent CI disk draw pushed the root-fs through OpenSearch's flood-stage watermark mid-burst and the router's OS sink discarded 291,296 syslog evidence docs (`/var/tmp/scale-runs/storm-s10-09012025/s10-discard-diagnosis.md`; tracker 209/210).
 

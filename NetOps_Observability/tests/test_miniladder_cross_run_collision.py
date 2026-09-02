@@ -288,6 +288,14 @@ def test_run_id_is_recoverable_from_a_device_id():
 
 def _preflight(tmp_path, api, monkeypatch, **over):
     h = _harness(tmp_path, api, **over)
+    # Tracker 210's disk-headroom + host-quiet gate is a SEPARATE preflight
+    # clause with its own suite (tests/test_miniladder_host_quiet.py). Pin it
+    # QUIET here so this suite measures the residue clause rather than however
+    # much spare disk and idle CPU the machine running pytest happens to have.
+    monkeypatch.setattr(ml, "host_quiet_readings", lambda *a, **k: {
+        "filesystem": "/", "free_gib": 40.0, "total_gib": 77.0,
+        "disk_error": "", "load1": 1.0, "load1_error": "",
+        "min_free_gib": 10.0, "max_load1": 6.0})
     monkeypatch.setattr(h, "lag_drain_eta", lambda *a, **k: {"summary": ""})
     _patch_ingress(monkeypatch)
     os.makedirs(h.run_dir, exist_ok=True)
