@@ -3,8 +3,8 @@ import "./Security.css";
 import { api, SecRule } from "../../services/api";
 import DataTable, { Column } from "../../components/DataTable";
 import { Group } from "../../components/board/panels";
-import { fidelityTone, rulesPutPayload } from "./model";
-
+import { fidelityTone, mitreList, rulesPutPayload } from "./model";
+import { operatorError } from "../../lib/errors";
 // Rules — the detection / hardening rule inventory, with enable-disable.
 //
 // The client sends ONLY `{rule_id, enabled}` for the rules that actually
@@ -26,7 +26,7 @@ export default function SecurityRules() {
     let alive = true;
     api.securityRules()
       .then((r) => { if (alive) { setRules(Array.isArray(r) ? r : []); setPending({}); setErr(null); } })
-      .catch((e: Error) => { if (alive) setErr(e.message); })
+      .catch((e: unknown) => { if (alive) setErr(operatorError(e, "Security rules could not be loaded.")); })
       .finally(() => { if (alive) setLoaded(true); });
     return () => { alive = false; };
   };
@@ -82,11 +82,18 @@ export default function SecurityRules() {
       render: (r) => (r.seam_aware ? <span className="badge good">seam-aware</span> : <span className="sec-unassessed">no</span>),
     },
     {
+      // The wire value is normalized (mitreList) rather than read directly: the
+      // field is typed string[] but arrives from an external boundary, and a
+      // scalar "T1071" once took this page down entirely. Rendering degrades to
+      // "—" instead of throwing.
       key: "mitre", header: "Technique", width: 180, sortable: false,
-      text: (r) => (r.mitre ?? []).join(" "),
-      render: (r) => ((r.mitre ?? []).length > 0
-        ? <span className="sec-chips">{r.mitre!.map((m) => <span key={m} className="sec-chip">{m}</span>)}</span>
-        : <span className="sec-unassessed">—</span>),
+      text: (r) => mitreList(r).join(" "),
+      render: (r) => {
+        const techniques = mitreList(r);
+        return techniques.length > 0
+          ? <span className="sec-chips">{techniques.map((m) => <span key={m} className="sec-chip">{m}</span>)}</span>
+          : <span className="sec-unassessed">—</span>;
+      },
     },
   ], [pending, rules]);
 

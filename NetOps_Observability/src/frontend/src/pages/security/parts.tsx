@@ -61,7 +61,7 @@ export function CoverageCard({ coverage }: { coverage: Coverage }) {
       <div className="sec-eyebrow">Assessment coverage</div>
       <div className="sec-cov-num">
         {coverage.pct === null
-          ? <span className="sec-unassessed">n/a</span>
+          ? <span className="sec-unassessed">Not assessed</span>
           : <>{coverage.pct}<small>%</small></>}
       </div>
       <div className="sec-cov-lbl">{coverage.label}</div>

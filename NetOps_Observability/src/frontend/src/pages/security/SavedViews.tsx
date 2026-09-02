@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import "./Security.css";
 import { api, SecFindingQuery, SecSavedView } from "../../services/api";
 import { Group } from "../../components/board/panels";
-
+import { operatorError } from "../../lib/errors";
 // Saved views — named filter sets over the Exposures workbench. A view stores a
 // FILTER, never rows: applying one re-queries under the caller's own token, so
 // a view can never widen what its owner may see (§3a) and can never carry
@@ -38,7 +38,7 @@ export default function SavedViews() {
     let alive = true;
     api.securityViews()
       .then((v) => { if (alive) { setViews(Array.isArray(v) ? v : []); setErr(null); } })
-      .catch((e: Error) => { if (alive) setErr(e.message); })
+      .catch((e: unknown) => { if (alive) setErr(operatorError(e, "Saved views could not be loaded.")); })
       .finally(() => { if (alive) setLoaded(true); });
     return () => { alive = false; };
   };

@@ -15,6 +15,7 @@ package secapi
 
 import (
 	"sort"
+	"strings"
 
 	"netops/backend/internal/advisory"
 	"netops/backend/internal/hardening"
@@ -41,12 +42,45 @@ const (
 
 // Rule is one catalog entry as the API serves it.
 type Rule struct {
-	RuleID    string `json:"rule_id"`
-	Family    string `json:"family"`
-	Enabled   bool   `json:"enabled"`
-	Fidelity  string `json:"fidelity"`
-	MITRE     string `json:"mitre,omitempty"`
-	SeamAware bool   `json:"seam_aware"`
+	RuleID    string   `json:"rule_id"`
+	Family    string   `json:"family"`
+	Enabled   bool     `json:"enabled"`
+	Fidelity  string   `json:"fidelity"`
+	MITRE     []string `json:"mitre,omitempty"`
+	SeamAware bool     `json:"seam_aware"`
+}
+
+// mitreTechniques normalizes a threatlane rule's MITRE tag into the LIST the
+// wire contract carries. The registry stores ONE technique id today, but the
+// field is plural on the wire because a detection can legitimately map to more
+// than one ATT&CK technique — and because a scalar that later grows into a list
+// is a BREAKING contract change for every consumer (the Detection Rules page
+// renders `mitre` as an array and white-screens on a string). Emitting the
+// array from day one makes the shape stable in the direction it can only grow.
+//
+// The source is split on commas and whitespace so a future "T1071, T1571" entry
+// degrades into two chips rather than one nonsense token; sub-technique ids
+// (T1562.001) are preserved intact because the dot is part of the id. Empty
+// segments are dropped — an entry that carries no technique carries no field at
+// all (omitempty), never an array of "".
+func mitreTechniques(technique string) []string {
+	fields := strings.FieldsFunc(technique, func(r rune) bool {
+		return r == ',' || r == ';' || r == ' ' || r == '\t' || r == '\n' || r == '\r'
+	})
+	out := make([]string, 0, len(fields))
+	seen := make(map[string]bool, len(fields))
+	for _, f := range fields {
+		t := strings.TrimSpace(f)
+		if t == "" || seen[t] {
+			continue
+		}
+		seen[t] = true
+		out = append(out, t)
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 // fidelityForVerdict derives fidelity from the verdict a threatlane rule emits.
@@ -98,19 +132,19 @@ func Catalog() []Rule {
 	for _, r := range tc.LogRules() {
 		out = append(out, Rule{
 			RuleID: r.ID, Family: FamilyThreat, Enabled: true,
-			Fidelity: fidelityForVerdict(r.Verdict), MITRE: r.Technique,
+			Fidelity: fidelityForVerdict(r.Verdict), MITRE: mitreTechniques(r.Technique),
 		})
 	}
 	for _, r := range tc.PairRules() {
 		out = append(out, Rule{
 			RuleID: r.ID, Family: FamilyThreat, Enabled: true,
-			Fidelity: fidelityForVerdict(r.Verdict), MITRE: r.Technique,
+			Fidelity: fidelityForVerdict(r.Verdict), MITRE: mitreTechniques(r.Technique),
 		})
 	}
 	for _, r := range tc.SourceRules() {
 		out = append(out, Rule{
 			RuleID: r.ID, Family: FamilyThreat, Enabled: true,
-			Fidelity: fidelityForVerdict(r.Verdict), MITRE: r.Technique,
+			Fidelity: fidelityForVerdict(r.Verdict), MITRE: mitreTechniques(r.Technique),
 		})
 	}
 

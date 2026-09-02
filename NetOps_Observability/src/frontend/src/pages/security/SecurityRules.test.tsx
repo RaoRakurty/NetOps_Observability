@@ -15,7 +15,7 @@ vi.mock("../../services/api", () => ({
 }));
 
 import SecurityRules from "./SecurityRules";
-import { RULES } from "./fixtures";
+import { RULES, RULES_WIRE, RULES_WIRE_LEGACY } from "./fixtures";
 
 afterEach(cleanup);
 beforeEach(() => {
@@ -81,5 +81,47 @@ describe("Detection rules", () => {
     securityRules.mockResolvedValue([]);
     render(<SecurityRules />);
     expect(await screen.findByText(/not looked at/i)).toBeTruthy();
+  });
+});
+
+// ── the production regression ───────────────────────────────────────────────
+//
+// GET /api/security/rules served `"mitre":"T1071"` — a bare STRING — while the
+// client type and this page both treat the field as a list. `r.mitre!.map(...)`
+// threw during render, React unmounted the tree, and the whole Detection Rules
+// screen went blank with no error an operator could read. These two tests mount
+// the page against the EXACT bodies the API returns (fixed) and returned
+// (broken); the second one fails on the pre-fix component.
+describe("Detection rules — the served body", () => {
+  it("renders the current wire body with its technique chips", async () => {
+    securityRules.mockResolvedValue(RULES_WIRE);
+    render(<SecurityRules />);
+    expect(await screen.findByText("flow-beaconing")).toBeTruthy();
+    expect(screen.getByText("bootp-server")).toBeTruthy();
+    expect(screen.getByText("T1071")).toBeTruthy();
+    expect(screen.getByText("T1562.001")).toBeTruthy();
+    expect(screen.getByText(/4 of 4 rules enabled/)).toBeTruthy();
+  });
+
+  it("survives a STRING-valued mitre — the shape that white-screened production", async () => {
+    securityRules.mockResolvedValue(RULES_WIRE_LEGACY);
+    render(<SecurityRules />);
+    // The table renders at all…
+    expect(await screen.findByText("flow-beaconing")).toBeTruthy();
+    expect(screen.getByText("bootp-server")).toBeTruthy();
+    expect(screen.getByText("exposure-ssh")).toBeTruthy();
+    // …and the technique still reads as a chip rather than being lost.
+    expect(screen.getByText("T1071")).toBeTruthy();
+    expect(screen.getByText("T1562.001")).toBeTruthy();
+    // The sub-technique id is NOT split on its dot.
+    expect(screen.queryByText("T1562")).toBeNull();
+    expect(screen.queryByText("001")).toBeNull();
+  });
+
+  it("a rule with no technique renders an explicit dash, never a fabricated tag", async () => {
+    securityRules.mockResolvedValue(RULES_WIRE);
+    render(<SecurityRules />);
+    await screen.findByText("bootp-server");
+    expect(screen.getAllByText("—").length).toBeGreaterThan(0);
   });
 });

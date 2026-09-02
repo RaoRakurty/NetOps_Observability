@@ -123,6 +123,34 @@ export const RULES: SecRule[] = [
   { rule_id: "netrule.logging_disabled", family: "tamper", enabled: true, fidelity: "low", mitre: ["T1562.001"], seam_aware: false },
 ];
 
+// ── /api/security/rules — the CONTRACT PIN ──────────────────────────────────
+//
+// RULES above is a hand-written illustrative set. These two are the real wire
+// bodies, copied from the running backend, and they exist because the page once
+// white-screened on a shape no fixture covered:
+//
+//  · RULES_WIRE is what the API serves TODAY (mitre as an ARRAY, omitted on a
+//    rule that carries none). It is typed SecRule[], so a client-type change
+//    that drifts from the served body fails the TypeScript build, and
+//    secapi/rules_test.go's golden test pins the same bytes on the server side.
+//  · RULES_WIRE_LEGACY is the BROKEN body a production backend actually
+//    returned — `mitre` as a bare string. It is deliberately `unknown[]`
+//    because it does NOT satisfy SecRule: it is the regression input, kept so
+//    the page can be proven to survive the exact payload that took it down.
+export const RULES_WIRE: SecRule[] = [
+  { rule_id: "bootp-server", family: "hardening", enabled: true, fidelity: "high", seam_aware: false },
+  { rule_id: "exposure-ssh", family: "exposure", enabled: true, fidelity: "high", seam_aware: true },
+  { rule_id: "flow-beaconing", family: "threat", enabled: true, fidelity: "medium", mitre: ["T1071"], seam_aware: false },
+  { rule_id: "log-logging-disabled", family: "threat", enabled: true, fidelity: "high", mitre: ["T1562.001"], seam_aware: false },
+];
+
+export const RULES_WIRE_LEGACY: unknown[] = [
+  { rule_id: "bootp-server", family: "hardening", enabled: true, fidelity: "high", seam_aware: false },
+  { rule_id: "exposure-ssh", family: "exposure", enabled: true, fidelity: "high", seam_aware: true },
+  { rule_id: "flow-beaconing", family: "threat", enabled: true, fidelity: "medium", mitre: "T1071", seam_aware: false },
+  { rule_id: "log-logging-disabled", family: "threat", enabled: true, fidelity: "high", mitre: "T1562.001", seam_aware: false },
+];
+
 export const VIEWS: SecSavedView[] = [
   { id: "v1", name: "ISP criticals", filters: { severity: "critical", seam: "ISP", current: true } },
   { id: "v2", name: "Everything ever", filters: { current: false } },

@@ -5,7 +5,7 @@ import { CorrelationDetail } from "../../tabs/Correlations";
 import { Group, Panel } from "../../components/board/panels";
 import { fmtDateTime } from "../../lib/time";
 import { storyConfidence, storyList } from "./model";
-
+import { operatorError } from "../../lib/errors";
 // Exposure Stories — the flagship object: a correlation whose evidence set
 // includes the security lane, grounded on the same entities and seams as the
 // rest of the telemetry (HLD §3). The DETAIL view is the existing RCA
@@ -66,7 +66,7 @@ export default function ExposureStories() {
     let alive = true;
     api.securityExposureStories(25)
       .then((r) => { if (alive) { setStories(storyList(r)); setErr(null); } })
-      .catch((e: Error) => { if (alive) setErr(e.message); })
+      .catch((e: unknown) => { if (alive) setErr(operatorError(e, "Exposures could not be loaded.")); })
       .finally(() => { if (alive) setLoaded(true); });
     return () => { alive = false; };
   }, []);
@@ -79,7 +79,7 @@ export default function ExposureStories() {
     if (!openId) return;
     api.securityExposureStory(openId)
       .then(() => { if (alive) setDetailOk(true); })
-      .catch((e: Error) => { if (alive) setDetailErr(e.message); });
+      .catch((e: unknown) => { if (alive) setDetailErr(operatorError(e, "That exposure could not be opened.")); });
     return () => { alive = false; };
   }, [openId]);
 

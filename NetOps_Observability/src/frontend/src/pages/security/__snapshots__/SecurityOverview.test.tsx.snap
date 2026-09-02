@@ -314,8 +314,6 @@ exports[`Security Overview — snapshot > matches the rendered posture page for 
               >
                 Verdict 
                 suspected
-                 · engine 
-                e-2026.09
               </div>
               <div
                 class="conf"
@@ -827,7 +825,7 @@ exports[`Security Overview — snapshot > matches the rendered posture page for 
         >
           <h3
             class="panel-zoomable"
-            title="Click to enlarge"
+            title="Enlarge"
           >
             Fail / warning / pass per day
           </h3>

@@ -61,7 +61,7 @@ var apiRoutes = []apiRoute{
 	{"GET", "/api/security/posture", "Security", "CTEM funnel, assessment coverage and last scan for the caller's tenant"},
 	{"GET", "/api/security/exposure-stories", "Security", "Correlation objects grounded on security evidence"},
 	{"GET", "/api/security/exposure-stories/{id}", "Security", "One exposure story (delegates to the correlation detail)"},
-	{"GET", "/api/security/rules", "Security", "Detection catalog with the tenant's enable state"},
+	{"GET", "/api/security/rules", "Security", "Detection catalog with the tenant's enable state (mitre is an ARRAY of ATT&CK technique ids, omitted when the rule carries none)"},
 	{"PUT", "/api/security/rules", "Security", "Enable/disable detections for the caller's tenant (administration:write)"},
 	{"GET", "/api/security/views", "Security", "Saved findings filter sets for the caller's tenant"},
 	{"POST", "/api/security/views", "Security", "Save a findings filter set (infrastructure:write)"},

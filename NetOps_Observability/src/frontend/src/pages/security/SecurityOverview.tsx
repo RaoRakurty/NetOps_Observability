@@ -6,6 +6,7 @@ import {
 import { buildCaseEvents, type CaseEvent } from "../../components/rca/rcaCase";
 import { Group, Panel } from "../../components/board/panels";
 import { fmtDateTime } from "../../lib/time";
+import { operatorError } from "../../lib/errors";
 import {
   CoverageCard, CtemFunnel, EvidenceLane, FindingRow, SeamStrip,
 } from "./parts";
@@ -79,7 +80,7 @@ function StoryHero({ story, events, onOpen }: {
             <div className="sec-eyebrow">Ownership</div>
             <div className="seam-name">{story.owner || "unattributed"}</div>
             <div className="who">
-              Verdict {story.verdict_tier || "undetermined"} · engine {story.engine_version || "—"}
+              Verdict {story.verdict_tier || "undetermined"}
             </div>
             <div className="conf">
               Confidence: {conf === null ? <span className="sec-unassessed">not stated</span> : `${conf}%`}
@@ -135,7 +136,7 @@ export default function SecurityOverview() {
       setSeams(sm);
       setErr(null);
     }).catch((e: Error) => {
-      if (alive) setErr(e.message);
+      if (alive) setErr(operatorError(e, "The security overview could not be loaded."));
     }).finally(() => {
       if (alive) setLoaded(true);
     });

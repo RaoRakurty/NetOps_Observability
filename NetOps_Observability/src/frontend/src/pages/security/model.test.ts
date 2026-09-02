@@ -5,13 +5,14 @@
 import { describe, it, expect } from "vitest";
 import {
   appendPage, coverageOf, EMPTY_PAGE, evidenceClassLabel, facetTotal, frameworkScore,
-  funnelStages, groupByNative, historyQuery, isThreatLane, mapFacetRows, rulesPutPayload,
+  funnelStages, groupByNative, historyQuery, isThreatLane, mapFacetRows, mitreList, rulesPutPayload,
   seamCards, severityFacetRows, severityRank, statusFacetRows, storyConfidence, storyList,
   subjectLine, topExposures, trendPoints, verdictOf, verdictTone,
 } from "./model";
 import { secFindingParams } from "../../services/api";
 import {
-  FACETS, FINDINGS, PAGE_1, PAGE_2, POSTURE, POSTURE_UNASSESSED, RULES, SEAMS, STORY, TREND, finding,
+  FACETS, FINDINGS, PAGE_1, PAGE_2, POSTURE, POSTURE_UNASSESSED, RULES, RULES_WIRE,
+  RULES_WIRE_LEGACY, SEAMS, STORY, TREND, finding,
 } from "./fixtures";
 
 describe("verdict mapping (OCSF status_id)", () => {
@@ -308,5 +309,73 @@ describe("labels", () => {
     expect(subjectLine(FINDINGS[0])).toBe("core-01 · Cisco IOS-XE 17.9");
     expect(subjectLine(finding({ resource: { hostname: "h1" } }))).toBe("h1");
     expect(subjectLine(finding({ resource: {} }))).toBe("unknown asset");
+  });
+});
+
+describe("mitre technique normalization", () => {
+  it("takes an array through unchanged (the declared contract)", () => {
+    expect(mitreList({ mitre: ["T1071", "T1562.001"] })).toEqual(["T1071", "T1562.001"]);
+  });
+
+  it("accepts a bare STRING — the shape production actually served", () => {
+    // The regression: `mitre: "T1071"` made the page's r.mitre.map(...) throw
+    // and white-screened the whole Security section.
+    expect(mitreList({ mitre: "T1071" })).toEqual(["T1071"]);
+    expect(mitreList({ mitre: "T1562.001" })).toEqual(["T1562.001"]); // sub-technique intact
+  });
+
+  it("splits a comma/space separated string into separate techniques", () => {
+    expect(mitreList({ mitre: "T1071, T1571" })).toEqual(["T1071", "T1571"]);
+    expect(mitreList({ mitre: "T1071 T1571" })).toEqual(["T1071", "T1571"]);
+    expect(mitreList({ mitre: "T1071;T1571" })).toEqual(["T1071", "T1571"]);
+    expect(mitreList({ mitre: " T1071 ,, T1071 " })).toEqual(["T1071"]); // deduped
+  });
+
+  it("a missing, null or garbage value is an EMPTY list, never a crash", () => {
+    expect(mitreList({})).toEqual([]);
+    expect(mitreList(undefined)).toEqual([]);
+    expect(mitreList(null)).toEqual([]);
+    expect(mitreList({ mitre: undefined })).toEqual([]);
+    expect(mitreList({ mitre: null })).toEqual([]);
+    expect(mitreList({ mitre: 42 })).toEqual([]);
+    expect(mitreList({ mitre: { id: "T1071" } })).toEqual([]);
+    expect(mitreList({ mitre: "" })).toEqual([]);
+    expect(mitreList({ mitre: [] })).toEqual([]);
+  });
+
+  it("keeps only the string members of a mixed array — it never invents a tag", () => {
+    expect(mitreList({ mitre: ["T1071", 7, null, { x: 1 }, "T1046"] })).toEqual(["T1071", "T1046"]);
+  });
+});
+
+describe("/api/security/rules contract pin", () => {
+  // RULES_WIRE is typed SecRule[] at compile time; this asserts the same at
+  // RUNTIME, so a served body that drifts from the TS type is caught by a test
+  // rather than by an operator looking at a blank page.
+  it("the wire fixture matches the SecRule shape exactly", () => {
+    expect(RULES_WIRE.length).toBeGreaterThan(0);
+    for (const r of RULES_WIRE) {
+      expect(typeof r.rule_id).toBe("string");
+      expect(typeof r.family).toBe("string");
+      expect(typeof r.enabled).toBe("boolean");
+      expect(typeof r.fidelity).toBe("string");
+      expect(typeof r.seam_aware).toBe("boolean");
+      const keys = Object.keys(r).sort();
+      const allowed = ["enabled", "family", "fidelity", "mitre", "rule_id", "seam_aware"];
+      expect(keys.every((k) => allowed.includes(k))).toBe(true);
+      if ("mitre" in r) {
+        expect(Array.isArray(r.mitre)).toBe(true);
+        for (const m of r.mitre!) expect(m).toMatch(/^T\d{4}(\.\d{3})?$/);
+      }
+    }
+    // Only threat-family rules carry a technique.
+    for (const r of RULES_WIRE) {
+      if ((r.mitre ?? []).length > 0) expect(r.family).toBe("threat");
+    }
+  });
+
+  it("normalizes the legacy (string-valued) body to the same techniques", () => {
+    expect(RULES_WIRE_LEGACY.map((r) => mitreList(r as { mitre?: unknown })))
+      .toEqual(RULES_WIRE.map((r) => mitreList(r)));
   });
 });

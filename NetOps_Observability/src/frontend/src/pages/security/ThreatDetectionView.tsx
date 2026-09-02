@@ -9,7 +9,7 @@ import { Segmented } from "../../components/ui";
 import { fmtDateTime } from "../../lib/time";
 import { FindingDetail, SeverityBadge } from "./parts";
 import { THREAT_EVIDENCE_CLASS, severityRank, subjectLine } from "./model";
-
+import { operatorError } from "../../lib/errors";
 // Threat Detection — two sub-views over the same question ("is something acting
 // on this estate?"), kept side by side because they answer it from different
 // evidence:
@@ -53,7 +53,7 @@ export default function ThreatDetectionView({ sinceSeconds }: { sinceSeconds?: n
         setTotal(lane.length);
         setErr(null);
       })
-      .catch((e: Error) => { if (alive) setErr(e.message); })
+      .catch((e: unknown) => { if (alive) setErr(operatorError(e, "Threat detections could not be loaded.")); })
       .finally(() => { if (alive) setLoaded(true); });
     return () => { alive = false; };
   }, []);

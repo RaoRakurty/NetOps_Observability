@@ -377,6 +377,38 @@ export function rulesPutPayload(original: SecRule[], pending: Record<string, boo
     .sort((a, b) => a.rule_id.localeCompare(b.rule_id));
 }
 
+/**
+ * mitreList — the ATT&CK technique ids a catalog rule carries, as a LIST, from
+ * whatever the transport actually delivered.
+ *
+ * The contract (and the Go type behind it) is `string[]`, but this is an
+ * external boundary and §3 says never trust the payload: a backend that served
+ * the field as a bare string ("T1071") white-screened the whole Detection Rules
+ * page, because the render did `r.mitre.map(...)` on a string. The type is not a
+ * runtime guarantee — this function is. A string (single id, or a comma/space
+ * separated list) becomes a list; an array is filtered to its string members;
+ * anything else — null, a number, an object, a missing field — is an EMPTY list,
+ * which the page renders as "—" (no technique claimed) rather than crashing.
+ *
+ * It never invents a technique: an unparseable value yields nothing, never a
+ * placeholder chip, because a fabricated ATT&CK tag on a detection screen is a
+ * lie an operator would act on.
+ */
+export function mitreList(r: { mitre?: unknown } | null | undefined): string[] {
+  const raw = r?.mitre;
+  const parts: string[] = Array.isArray(raw)
+    ? raw.filter((m): m is string => typeof m === "string")
+    : typeof raw === "string"
+      ? raw.split(/[\s,;]+/)
+      : [];
+  const out: string[] = [];
+  for (const p of parts) {
+    const t = p.trim();
+    if (t && !out.includes(t)) out.push(t);
+  }
+  return out;
+}
+
 export function fidelityTone(f?: string): Tone {
   switch ((f ?? "").toLowerCase()) {
     case "high": return "good";

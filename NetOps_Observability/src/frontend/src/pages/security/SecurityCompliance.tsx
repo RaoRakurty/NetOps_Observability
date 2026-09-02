@@ -5,7 +5,7 @@ import ComplianceMonitoring from "../ComplianceMonitoring";
 import { Group, Panel } from "../../components/board/panels";
 import { Segmented } from "../../components/ui";
 import { FrameworkScore, frameworkScore, mapFacetRows } from "./model";
-
+import { operatorError } from "../../lib/errors";
 // Compliance — two sub-views:
 //
 //  · Control set — hardening findings on the TAGGED control set, per standard.
@@ -74,7 +74,7 @@ export default function SecurityCompliance() {
         setScores(s.map((x) => ({ ...x, tagged: Number(tagged[x.framework]) || 0 })));
         setErr(null);
       })
-      .catch((e: Error) => { if (alive) setErr(e.message); })
+      .catch((e: unknown) => { if (alive) setErr(operatorError(e, "Compliance status could not be loaded.")); })
       .finally(() => { if (alive) setLoaded(true); });
     return () => { alive = false; };
   }, []);
