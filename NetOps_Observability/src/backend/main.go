@@ -76,6 +76,7 @@ import (
 	"netops/backend/models"
 	"netops/backend/nms"
 	"netops/backend/notify"
+	"netops/backend/parsercov"
 	"netops/backend/processors"
 	"netops/backend/rcafeedback"
 	"netops/backend/reports"
@@ -237,6 +238,11 @@ type server struct {
 	secAPI         *secapi.API
 	secStore       secapi.Store
 	secFindMetrics *secapi.Metrics
+	// Parser coverage (programme A6, parsercov/): platform-admin engine parser
+	// stats + the caller's own unrecognized log shapes. Handlers live in the
+	// subpackage; only the wiring is here (§2, the secapi precedent).
+	parserCov        *parsercov.API
+	parserCovMetrics *parsercov.Metrics
 	// SECURITY-LANE-BEGIN — P3-EMIT removable module; see internal/seclane's
 	// package doc, "REMOVAL RULE". nil unless FEATURE_SECURITY_LANE=true.
 	securityLane *seclane.Lane
@@ -856,11 +862,13 @@ func newServer() *server {
 	srv.cloudMonitors = newCloudMonitorStore(cloudMonitorsPath())
 	srv.rcaPromotions = newRcaPromotionStore(rcaPromotionsPath()) // #113 point 3
 	srv.rcaActionItems = newRcaActionItemStore(rcaActionItemsPath())
-	srv.rcaFeedback = newRcaFeedbackStore()           // Project 2 P7 operator verdicts (migration 0036 / file fallback)
-	srv.rcaFeedbackMetrics = rcafeedback.NewMetrics() // netops_rca_feedback_total{verdict}
-	srv.secStore = newSecurityControlPlaneStore()     // Project 3 P3-API (migration 0037 / file fallback)
-	srv.secFindMetrics = secapi.NewMetrics()          // netops_security_findings_queries_total{op}
-	srv.secAPI = secapi.New(srv.securityAPIDeps())    // handlers over injected seams (§5)
+	srv.rcaFeedback = newRcaFeedbackStore()            // Project 2 P7 operator verdicts (migration 0036 / file fallback)
+	srv.rcaFeedbackMetrics = rcafeedback.NewMetrics()  // netops_rca_feedback_total{verdict}
+	srv.secStore = newSecurityControlPlaneStore()      // Project 3 P3-API (migration 0037 / file fallback)
+	srv.secFindMetrics = secapi.NewMetrics()           // netops_security_findings_queries_total{op}
+	srv.secAPI = secapi.New(srv.securityAPIDeps())     // handlers over injected seams (§5)
+	srv.parserCovMetrics = parsercov.NewMetrics()      // netops_parser_coverage_* counters
+	srv.parserCov = parsercov.New(srv.parserCovDeps()) // handlers over injected seams (§5)
 	srv.rcaRevisions = newRcaRevisionStore(rcaRevisionsPath())
 
 	srv.portStore = newPortStore() // Port Intelligence #94 P5
@@ -1858,6 +1866,14 @@ func (s *server) routes(mux *http.ServeMux) {
 	// SECURITY-LANE-BEGIN
 	s.registerSecurityLaneRoutes(mux)
 	// SECURITY-LANE-END
+	// Parser coverage (A6). /api/admin/parser/stats is platform-GLOBAL plumbing
+	// (whole-process engine counters, not a tenant's rows) and takes the
+	// platform-admin gate; the two /api/telemetry routes are per-tenant DATA,
+	// read through oslog.TenantIndexPattern + TenantFilter. The propose route
+	// APPLIES NOTHING — it returns a drafted catalog row as text.
+	mux.HandleFunc("/api/admin/parser/stats", s.parserCov.HandleStats)
+	mux.HandleFunc("/api/telemetry/unrecognized", s.parserCov.HandleUnrecognized)
+	mux.HandleFunc("/api/telemetry/unrecognized/", s.parserCov.HandlePropose)
 
 	mux.HandleFunc("/api/incidents", s.handleIncidents)     // GET list (tenant-scoped)
 	mux.HandleFunc("/api/incidents/", s.handleIncidentByID) // GET {id}; POST {id}/ack|resolve|note|assign|…
@@ -2731,6 +2747,9 @@ func (s *server) handlePromMetrics(w http.ResponseWriter, _ *http.Request) {
 		s.securityLane.Metrics().Write(w)
 	}
 	// SECURITY-LANE-END
+	if s.parserCovMetrics != nil {
+		s.parserCovMetrics.Write(w)
+	}
 	if s.intMetrics != nil {
 		s.intMetrics.write(w)
 	}
@@ -3195,6 +3214,74 @@ func (s *statusRecorder) Hijack() (net.Conn, *bufio.ReadWriter, error) {
 		return nil, nil, fmt.Errorf("underlying ResponseWriter does not support hijacking")
 	}
 	return hj.Hijack()
+}
+
+// ── Parser coverage wiring (programme A6) ───────────────────────────────────
+//
+// parsercov holds no ambient authority: which permission each abstract gate
+// maps onto, which transports it gets and where the replicas are all arrive
+// here, explicitly (the secapi precedent).
+
+// parserCovAuthz maps parsercov's abstract gates onto this platform's RBAC and
+// resolves the caller's tenant scope.
+//
+// GATE CHOICE (§3a rule 3 — "pick the right gate"):
+//   - STATS is requirePlatformAdmin. Parser counters are process-wide facts
+//     about the whole fleet's parser, not one tenant's rows. A scope-blind
+//     requireAdmin would be satisfied by a tenant admin's full
+//     administration:admin — a privilege leak, not a convenience.
+//   - WRITE (drafting a catalog proposal) is alerts:write: a proposal is
+//     detection-content working state, and it APPLIES NOTHING.
+//   - READ is infrastructure:read, the same gate every other log surface uses;
+//     the tenant filter is applied on top.
+func (s *server) parserCovAuthz(w http.ResponseWriter, r *http.Request, gate parsercov.Gate) (parsercov.Principal, bool) {
+	var claims jwtClaims
+	var ok bool
+	switch gate {
+	case parsercov.GateStats:
+		claims, ok = s.requirePlatformAdmin(w, r)
+	case parsercov.GateWrite:
+		claims, ok = s.requirePerm(w, r, "alerts", LevelWrite)
+	default:
+		claims, ok = s.requirePerm(w, r, "infrastructure", LevelRead)
+	}
+	if !ok {
+		return parsercov.Principal{}, false
+	}
+	tenant, cross := principalTenant(claims)
+	keys, _ := s.visibleDeviceKeys(claims)
+	addrs, _ := s.visibleDeviceAddrs(claims)
+	return parsercov.Principal{
+		Tenant: tenant, Cross: cross, Subject: claims.Sub,
+		DeviceKeys: keys, DeviceAddrs: addrs,
+	}, true
+}
+
+// parserCovDeps assembles the injected collaborators. Called AFTER
+// parserCovMetrics is set, so the API never captures a nil counter set.
+func (s *server) parserCovDeps() parsercov.Deps {
+	return parsercov.Deps{
+		Authz:  s.parserCovAuthz,
+		Search: openSearch,
+		// The fetcher carries the internal-mTLS transport and its own response
+		// cap; the 10s client timeout is the outer bound on a slow replica.
+		Fetch: parsercov.NewFetcher(backendHTTPClient(10 * time.Second)),
+		// Replica topology is CONFIGURATION, not discovery: the endpoints are
+		// TLS-verified by name on the hardened deployment, so an unset
+		// CORRELATION_REPLICA_URLS correctly falls back to the single
+		// CORRELATION_URL rather than fanning out over resolved IPs.
+		Replicas: func(context.Context) []string {
+			return parsercov.ReplicaList(
+				envOr("CORRELATION_URL", "http://correlation:8000"),
+				os.Getenv(parsercov.EnvReplicaURLs))
+		},
+		Metrics:    s.parserCovMetrics,
+		Audit:      s.securityAudit,
+		WriteJSON:  writeJSON,
+		WriteError: writeError,
+		LogWarn:    func(msg string, f map[string]any) { logWarn("parsercov", msg, f) },
+		MaxLines:   envInt(parsercov.EnvMaxLines, parsercov.DefaultMaxLines),
+	}
 }
 
 // ── Security (CTEM) API wiring — Project 3 P3-API ───────────────────────────

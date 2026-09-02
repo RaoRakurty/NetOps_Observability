@@ -124,7 +124,18 @@ var routeIsolationLedger = map[string]string{
 	// Isolation proven by security_lane_isolation_test.go.
 	"/api/security/lane/status": "scoped",
 	"/api/security/scan":        "scoped",
-	"/api/correlations":         "scoped",
+	// Parser coverage (programme A6, parsercov/). The stats route is
+	// platform-GLOBAL plumbing — engine counters for the whole fleet's parser,
+	// not one tenant's rows — so it takes requirePlatformAdmin (§3a rule 3: a
+	// scope-blind requireAdmin would be satisfied by a tenant admin). The two
+	// /api/telemetry routes are per-tenant DATA read through
+	// oslog.TenantIndexPattern + TenantFilter; the propose route drafts a
+	// catalog row as TEXT and applies nothing. Isolation proven by
+	// parsercov/http_test.go.
+	"/api/admin/parser/stats":      "platform",
+	"/api/telemetry/unrecognized":  "scoped",
+	"/api/telemetry/unrecognized/": "scoped",
+	"/api/correlations":            "scoped",
 	// SUBRESOURCE WARNING (2026-08-04): this prefix entry covers MANY handlers,
 	// and a prefix classification is NOT evidence that each one enforces tenant
 	// scope. {id}/replay was classified "scoped" by this very line while
