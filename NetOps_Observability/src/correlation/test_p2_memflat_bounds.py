@@ -34,6 +34,7 @@ import json
 import sys
 import tracemalloc
 import types
+from enum import Enum
 from pathlib import Path
 
 import pytest
@@ -66,15 +67,37 @@ _SKIP_TYPES: tuple[type, ...] = (
 
 
 def reference_deep_bytes(obj: object, seen: set[int] | None = None,
-                         owned: frozenset[int] = frozenset()) -> int:
+                         owned: frozenset[int] = frozenset(), *,
+                         charge_singletons: bool = False) -> int:
     """Deep size by `gc.get_referents` — the instrument `bench_memflat_p2.py`
     uses, and the one that needs NO per-type knowledge, so a container the
     production walk forgot cannot be missed here too.
 
     It is independently anchored: over 400 real storm-shaped results this walk
     read 8,307,634 B against 8,307,450 B that `tracemalloc` saw freed when the
-    same results were dropped — 0.002 % apart. `owned` is the catalog's id set,
-    skipped for the same reason the estimator skips it.
+    same results were dropped — 0.002 % apart. That anchor was taken with ONE
+    shared `seen` set across the whole batch, so every object the batch shares
+    was charged exactly once — which is what makes it agree with tracemalloc,
+    and what B5b (a FRESH `seen` per result) must reproduce by other means.
+
+    TWO ownership rules, and the walk must apply BOTH or it is not measuring
+    what the estimator measures:
+
+    * `owned` — the catalog's id set, skipped for the same reason the estimator
+      skips it (B5c).
+    * **Enum members are process-wide singletons** and are skipped for exactly
+      the same reason. `VerdictTier.CONFIRMED` is one module-level object that
+      every result in the process points at; dropping a memo entry frees none
+      of it, `rank_memo._walk` charges it 0 by an explicit documented rule, and
+      the tracemalloc anchor above never saw it freed either. Charging it to
+      every result is a per-result tax on shared memory — measured at 503 B
+      (3.10.12) and 788 B (3.12.14) per result over the catalog corpus, 11 %
+      and 20 % of the SMALLEST fixture's reading. It is not proportional to the
+      result, so it hits the small fixtures hardest: it is what drove B5b's
+      per-fixture floor to 0.744 on 3.12 (green at 0.800 on 3.10 — the enum
+      members' managed `__dict__` grew from 104 B to 304 B on 3.11+, which is
+      the whole of the local-vs-CI divergence). `charge_singletons=True` runs
+      that mutant, and B5b executes it.
 
     Slower and more exact than the production estimator; it exists only to bound
     the estimator's error (B5b) without paying for a tracemalloc run."""
@@ -86,6 +109,8 @@ def reference_deep_bytes(obj: object, seen: set[int] | None = None,
         item = stack.pop()
         oid = id(item)
         if oid in seen or oid in owned or isinstance(item, _SKIP_TYPES):
+            continue
+        if not charge_singletons and isinstance(item, Enum):
             continue
         seen.add(oid)
         total += sys.getsizeof(item)
@@ -107,7 +132,25 @@ def reference_deep_bytes(obj: object, seen: set[int] | None = None,
 
 
 def catalog_owned() -> frozenset[int]:
-    """The estimator's own ownership set, resolved for the built-in catalog."""
+    """The estimator's own ownership set, resolved for the built-in catalog —
+    and it must be the set the estimator will ACTUALLY use, not merely a
+    non-empty one.
+
+    `_owned_ids` resolves by catalog VERSION over `scoring._CATALOG_PLAN_CACHE`,
+    which is keyed by `id(catalog)` and cleared wholesale at 4 entries. So when
+    another `builtin_catalog()` instance of the same version is cached and
+    `CAT`'s own plan is not, this returns a set that is non-empty and WRONG: it
+    holds that other instance's `inapplicable` HypothesisScore objects, not the
+    ones `rank(CAT, ...)` puts in the results under test. The reference walk
+    then charges what the estimator skips, and B5b reads 0.56x — an
+    order-dependent failure that hides whenever an earlier test in the file
+    happens to have materialized the plan first (`pytest -k B5b` alone was red
+    while the file was green).
+
+    Materializing the plan first is what makes both instruments see one
+    ownership set. It builds nothing the tests do not already build — every
+    `ranking_of` call below goes through this same plan."""
+    scoring._catalog_plan(CAT)
     owned = RM._owned_ids(CAT.version_hash())
     assert owned, "the catalog ownership set did not resolve — B5* prove nothing"
     return owned
@@ -307,18 +350,94 @@ def test_B5_the_estimator_is_calibrated_against_a_tracemalloc_marginal():
 def test_B5b_the_estimator_tracks_the_reference_walk_across_the_whole_corpus():
     """The per-fixture and corpus-wide check that needs no tracemalloc: the
     calibrated estimator against the `gc.get_referents` reference walk with the
-    SAME ownership set. Both must see the same graph, so the band is tight.
+    SAME ownership rules. Both must see the same graph, so the band is tight.
 
-    MUTANT: stop recursing into `hypotheses` and the ratio collapses to ~0.02;
-    charge Enum members their full `getsizeof` and it drifts high."""
+    "The same rules" is the whole content of this test, and it is what it got
+    wrong until 2026-09-03: the reference charged the process-wide Enum
+    singletons to every result while the estimator (correctly, and provably —
+    B5's tracemalloc anchor) charges them 0. That is a per-result tax on memory
+    no eviction ever frees, so it falls hardest on the SMALLEST fixtures, and on
+    CPython 3.11+ — where an Enum member's managed `__dict__` costs 304 B rather
+    than 104 B — it pushed `security-threat-signal-story-confirmed` to
+    est/ref = 4531/6092 = 0.744 and turned the gate red on the 3.12 runner while
+    the 3.10 dev box read 0.800 and stayed green. The band did NOT move; the
+    instrument was corrected (`reference_deep_bytes`, `charge_singletons`).
+
+    MUTANTS, both executed below: stop recursing into `hypotheses` and the ratio
+    collapses to ~0.02 (B11 owns that one); charge the singletons back to the
+    reference and the per-fixture floor drops out of the band again."""
     owned = catalog_owned()
+    results = [ranking_of(p) for p in FIXTURES]
     pairs = [(estimate_result_bytes(r), reference_deep_bytes(r, None, owned))
-             for r in (ranking_of(p) for p in FIXTURES)]
+             for r in results]
     for est, ref in pairs:
         assert 0.75 <= est / ref <= 1.30, (est, ref)
     total_est = sum(e for e, _ in pairs)
     total_ref = sum(r for _, r in pairs)
     assert 0.90 <= total_est / total_ref <= 1.15, (total_est, total_ref)
+
+    # THE MUTANT, executed: charge the shared Enum singletons to every result
+    # and the corpus floor falls materially — the rule is what does the work,
+    # not a band that happens to be wide enough.
+    inflated = [reference_deep_bytes(r, None, owned, charge_singletons=True)
+                for r in results]
+    floor = min(e / r for e, r in pairs)
+    mutant_floor = min(e / m for (e, _), m in zip(pairs, inflated))
+    assert mutant_floor < floor - 0.05, (mutant_floor, floor)
+    assert all(m >= r for (_, r), m in zip(pairs, inflated))
+
+    # ...and the objects that tax buys are the SAME objects every time: far
+    # fewer distinct Enum members exist than the mutant charges for. A cost
+    # that does not grow with the corpus is not a per-entry cost.
+    charged = [{id(m) for m in _enum_members_reached(r, owned)} for r in results]
+    distinct = set().union(*charged)
+    assert len(distinct) * 4 <= sum(len(c) for c in charged), (
+        len(distinct), sum(len(c) for c in charged))
+
+
+def _enum_members_reached(obj: object, owned: frozenset[int]) -> list[Enum]:
+    """Every Enum member `reference_deep_bytes` would reach in `obj` — the
+    shared pool B5b's mutant proves is charged once per result."""
+    seen: set[int] = set()
+    found: list[Enum] = []
+    stack: list = [obj]
+    while stack:
+        item = stack.pop()
+        oid = id(item)
+        if oid in seen or oid in owned or isinstance(item, _SKIP_TYPES):
+            continue
+        seen.add(oid)
+        if isinstance(item, Enum):
+            found.append(item)
+            continue
+        getattr(item, "__dict__", None)
+        stack.extend(gc.get_referents(item))
+    return found
+
+
+def test_B5b2_enum_singletons_are_charged_zero_by_the_estimator():
+    """THE OTHER HALF of B5b's ownership rule, asserted on the production walk
+    directly rather than inferred from a ratio: a module-level Enum member is
+    charged 0 — a memo entry that points at `VerdictTier.CONFIRMED` retains
+    nothing when it is evicted.
+
+    MUTANT: drop `_walk`'s `0 if isinstance(obj, Enum)` and every assertion here
+    goes red. It is asserted here because no BAND can catch it: charging the
+    members lands at 1.17x of B5's tracemalloc marginal on 3.12 — wrong, and
+    still inside the 1.30 band."""
+    from signals import ModalityClass
+    from verdicts import VerdictTier
+    for member in (VerdictTier.CONFIRMED, VerdictTier.SUSPECTED,
+                   ModalityClass.CONTROL_PLANE):
+        assert estimate_result_bytes(member, frozenset()) == 0, member
+        # ...and a container of them costs the container alone.
+        assert estimate_result_bytes((member,), frozenset()) == sys.getsizeof(
+            (member,)), member
+    # A str-subclass Enum member must NOT fall into the `type(obj) is str`
+    # branch — the reason that branch tests `type(obj) is str` and not
+    # `isinstance`. MUTANT: relax it to `isinstance` and this goes red.
+    assert isinstance(VerdictTier.CONFIRMED, str), "fixture assumption changed"
+    assert estimate_result_bytes(VerdictTier.CONFIRMED, frozenset()) == 0
 
 
 def test_B5c_catalog_owned_objects_are_charged_zero():

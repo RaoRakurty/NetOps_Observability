@@ -35,18 +35,23 @@ Every test below is one of five mutant checks:
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import gc
 import json
 import os
+import pathlib
 import random
+import re
 import time
 import tracemalloc
 from datetime import datetime, timedelta, timezone
 
 import pytest
 
+import engine
 import main
 import rank_memo as RM
+import signals
 from catalog import builtin_catalog
 from engine import EngineConfig, run_window
 from evidence_plane import (
@@ -67,6 +72,11 @@ from signals import (
     Signal,
     Source,
 )
+
+# `test_p2_memflat_bounds` owns the `gc.get_referents` REFERENCE walk (and its
+# two ownership rules); E11h needs the same instrument the rank memo's B5b is
+# judged against, so it is imported rather than forked.
+from test_p2_memflat_bounds import reference_deep_bytes
 
 CAT = builtin_catalog()
 CFG = EngineConfig()
@@ -1363,3 +1373,99 @@ def test_E11g_the_bounds_and_the_estimator_mean_are_readable(_stack):
         await main._evidence_stop()
         assert "est_bytes_mean" in main.evidence_stats()
     asyncio.run(go())
+
+
+def _warm_instance_caches(snap) -> None:
+    """Ask for every derived value the engine memoizes on a frozen instance —
+    the state a snapshot is in by the time it has been persisted once."""
+    snap.node_index()
+    snap.content_hash()
+    snap.material_hash()
+    snap.identity_refs()
+    snap.grounded_seam_ids()
+    snap.agg_provenance()
+    # `signal_id` is a PROPERTY whose read is the cache write, so the values are
+    # collected and counted rather than evaluated and dropped.
+    minted = [signal.signal_id for node in snap.nodes for signal in node.signals]
+    assert len(minted) == sum(len(node.signals) for node in snap.nodes)
+    for seam in snap.seams:
+        seam.membership_values()
+
+
+def test_E11h_a_populated_instance_cache_is_charged_and_tracks_the_walk():
+    """THE CACHED PROJECTIONS (rank_memo, `MEMO_CACHED_ATTRS`). An
+    `ObjectSnapshot` memoizes six derived values on itself via
+    `object.__setattr__` — `node_index`, `content_hash`, `material_hash`,
+    `identity_refs`, `grounded_seam_ids`, `agg_provenance` — and its signals and
+    seams memoize one each. None of them is a dataclass field, so until
+    2026-09-03 the walk never reached them and the queue believed a persisted
+    item was CHEAPER than the memory it held: `node_index` alone is a dict of
+    one entry per node, allocated on first use and freed only with the snapshot.
+
+    The claim is exact, not banded: whatever the reference `gc.get_referents`
+    walk gains when the caches are populated, the estimator must gain the SAME
+    number — the caches hold no new leaves, only new containers over strings and
+    nodes the walk had already charged once.
+
+    MUTANT: drop `MEMO_CACHED_ATTRS` from `_walk`'s plan (or the `, None`
+    default that makes an unpopulated cache free) and the estimator's delta
+    falls to 0 while the reference's does not."""
+    snaps = calibration_snapshots(12, base=21_000)
+    owned = RM._owned_ids(snaps[0].ranking.catalog_version)
+    assert owned, "the catalog ownership set did not resolve"
+    cold_est = [RM.estimate_result_bytes(s, owned) for s in snaps]
+    cold_ref = [reference_deep_bytes(s, None, owned) for s in snaps]
+    for snap in snaps:
+        _warm_instance_caches(snap)
+    warm_est = [RM.estimate_result_bytes(s, owned) for s in snaps]
+    warm_ref = [reference_deep_bytes(s, None, owned) for s in snaps]
+
+    gained_est = sum(warm_est) - sum(cold_est)
+    gained_ref = sum(warm_ref) - sum(cold_ref)
+    assert gained_ref > 0, "the fixture populated no cache — the test is vacuous"
+    assert gained_est == gained_ref, (gained_est, gained_ref)
+    # …and the estimate still tracks the walk item by item, warm and cold.
+    for est, ref in list(zip(cold_est, cold_ref)) + list(zip(warm_est, warm_ref)):
+        assert 0.75 <= est / ref <= 1.30, (est, ref)
+    # An UNPOPULATED cache is free: a fresh copy (which by the recompute-on-copy
+    # rule carries none of them) must read the cold number, not the warm one.
+    fresh = dataclasses.replace(snaps[0])
+    assert RM.estimate_result_bytes(fresh, owned) == cold_est[0]
+
+
+def test_E11i_every_instance_cache_is_declared_to_the_byte_meter():
+    """THE DRIFT GUARD for E11h. `MEMO_CACHED_ATTRS` is a hand-written list, so
+    the next `object.__setattr__(self, "_x_c", ...)` cache would be invisible to
+    the meter exactly the way `node_index` was. Every such name in the engine
+    and signal modules must be declared by a class in that module, and every
+    declared name must exist in it — a stale declaration is silently free."""
+    for module in (engine, signals):
+        src = pathlib.Path(module.__file__).read_text(encoding="utf-8")
+        # Every PRIVATE name written through `object.__setattr__` — not just the
+        # `_x_c` convention, so a cache that breaks the convention is caught too.
+        written = set(re.findall(
+            r'object\.__setattr__\(\s*self,\s*"(_[A-Za-z0-9_]+)"', src))
+        assert written, f"{module.__name__}: the source scan found no cache"
+        declared: set[str] = set()
+        fields: set[str] = set()
+        for value in vars(module).values():
+            if not (isinstance(value, type) and value.__module__ == module.__name__):
+                continue
+            if dataclasses.is_dataclass(value):
+                fields |= {f.name for f in dataclasses.fields(value)}
+            if "MEMO_CACHED_ATTRS" in vars(value):
+                names = value.MEMO_CACHED_ATTRS
+                assert isinstance(names, tuple), (value, names)
+                # …and declaring one must not have turned it into a FIELD.
+                assert "MEMO_CACHED_ATTRS" not in {
+                    f.name for f in dataclasses.fields(value)}, value
+                declared |= set(names)
+        # A write to a real FIELD (the __post_init__ cap/normalize pattern) is
+        # already walked as a field; only the non-field writes are caches.
+        cached = written - fields
+        assert cached, f"{module.__name__}: no non-field instance cache found"
+        assert cached <= declared, (
+            f"{module.__name__}: undeclared instance caches {cached - declared} "
+            "— the byte meter cannot see them (rank_memo, THE CACHED PROJECTIONS)")
+        assert declared <= cached, (
+            f"{module.__name__}: declared but never set {declared - cached}")

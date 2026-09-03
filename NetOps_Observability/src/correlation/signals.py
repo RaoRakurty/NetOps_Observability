@@ -731,6 +731,14 @@ CORR_SIGNAL_ID_CACHE = os.environ.get(
 
 @dataclass(frozen=True)
 class Signal:
+    # Names of the derived values this class memoizes on the frozen instance via
+    # `object.__setattr__` (deliberately NOT dataclass fields, so they stay out
+    # of `__eq__`/`__hash__`/`replace()`). Read by `rank_memo._walk` so the byte
+    # meter charges the memory a populated cache really holds — see rank_memo's
+    # THE CACHED PROJECTIONS. Deliberately UNANNOTATED: an annotation here would
+    # make it a dataclass field. `test_E11i` pins it against the source.
+    MEMO_CACHED_ATTRS = ("_signal_id_c",)
+
     tenant_id: str
     ts: datetime                      # event time (source clock), tz-aware UTC
     source: Source

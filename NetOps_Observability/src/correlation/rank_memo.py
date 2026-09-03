@@ -383,6 +383,23 @@ _SCALAR_BYTES = 24
 # field order, with no lazily-added attribute (verified: no `object.__setattr__`
 # and no `cached_property` anywhere in scoring.py / verdicts.py), so the dict's
 # key set — and therefore `getsizeof` — is a property of the type.
+#
+# THE CACHED PROJECTIONS. Outside the ranking graph that is not true: the
+# engine's frozen dataclasses memoize derived values on the instance via
+# `object.__setattr__` under names that are deliberately NOT dataclass fields
+# (so they stay out of `__eq__`/`__hash__`/`replace()`) — `ObjectSnapshot`'s
+# `node_index` / `content_hash` / `material_hash` / `identity_refs` /
+# `grounded_seam_ids` / `agg_provenance`, `SeamView.membership_values`,
+# `Signal.signal_id`. `evidence_plane.estimate_bytes` meters exactly those
+# objects, and that memory is owned by the instance: it is allocated on first
+# use and freed with it, so a bound denominated in marginal retention must
+# charge it. A class declares those names in `MEMO_CACHED_ATTRS` and the plan
+# appends them to the field list, so the walk stays a fixed schema-derived list
+# (O(1) per instance, no per-instance `__dict__` scan) and an unpopulated cache
+# costs 0. Only the container is new: the keys and values a cache holds are the
+# instance's own strings and nodes, already charged once by the id-`seen` walk.
+# `test_p2_evidence_async.py::test_E11i` pins the declarations against the
+# engine source so a new cache cannot be added and silently missed.
 _FIELD_NAMES: dict[type, tuple[tuple[str, ...], int]] = {}
 
 # ── catalog ownership (docstring: THE OWNERSHIP TEST) ────────────────────────
@@ -500,8 +517,19 @@ def _walk(obj: object, seen: set[int], owned: frozenset[int]) -> int:
         # keys are the type's interned attribute names, shared by every
         # instance, and its values are the fields walked below.
         inst = getattr(obj, "__dict__", None)
+        # CACHED PROJECTIONS (`MEMO_CACHED_ATTRS`, docstring: THE CACHED
+        # PROJECTIONS). A dataclass field is not the only thing a frozen
+        # instance can hold: `ObjectSnapshot.node_index()`,
+        # `content_hash()`, `SeamView.membership_values()` and friends memoize
+        # on the instance via `object.__setattr__` under a name that is
+        # deliberately NOT a field. That memory dies with the instance, so a
+        # marginal-retention meter must charge it — and one read off the CLASS
+        # keeps the walk a fixed, schema-derived list rather than a per-instance
+        # `__dict__` scan (which on 3.11+ would MATERIALIZE every managed dict
+        # it touched, allocating memory to measure memory).
         plan = ((tuple(f.name for f in dataclass_fields(obj))
-                 if is_dataclass(obj) and not isinstance(obj, type) else ()),
+                 if is_dataclass(obj) and not isinstance(obj, type) else ())
+                + tuple(getattr(t, "MEMO_CACHED_ATTRS", ())),
                 _getsizeof(inst) if type(inst) is dict else 0)
         _FIELD_NAMES[t] = plan
     names, dict_bytes = plan
@@ -511,7 +539,9 @@ def _walk(obj: object, seen: set[int], owned: frozenset[int]) -> int:
         return 0 if isinstance(obj, Enum) else _getsizeof(obj)
     total = _getsizeof(obj) + dict_bytes
     for name in names:
-        total += _walk(getattr(obj, name), seen, owned)
+        # `None` default, not a bare getattr: a cached projection is absent
+        # until it is asked for, and an unpopulated cache costs nothing.
+        total += _walk(getattr(obj, name, None), seen, owned)
     return total
 
 

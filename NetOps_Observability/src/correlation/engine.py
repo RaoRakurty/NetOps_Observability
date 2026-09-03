@@ -245,6 +245,14 @@ class SeamView:
     """The engine's read-model of one ACTIVE seam instance (#68 §4). Hashable
     and JSON-round-trippable: snapshots embed the views they grounded against."""
 
+    # Names of the derived values this class memoizes on the frozen instance via
+    # `object.__setattr__` (deliberately NOT dataclass fields, so they stay out
+    # of `__eq__`/`__hash__`/`replace()`). Read by `rank_memo._walk` so the byte
+    # meter charges the memory a populated cache really holds — see rank_memo's
+    # THE CACHED PROJECTIONS. Deliberately UNANNOTATED: an annotation here would
+    # make it a dataclass field. `test_E11i` pins it against the source.
+    MEMO_CACHED_ATTRS = ("_membership_c",)
+
     seam_id: str
     tenant_id: str
     seam_type: str
@@ -2190,6 +2198,16 @@ class ObjectSnapshot:
     """One correlation object at one engine evaluation — everything that
     renders into corr_objects/corr_edges/corr_evidence, plus the embedded
     grounding context that makes replay self-contained."""
+
+    # Names of the derived values this class memoizes on the frozen instance via
+    # `object.__setattr__` (deliberately NOT dataclass fields, so they stay out
+    # of `__eq__`/`__hash__`/`replace()`). Read by `rank_memo._walk` so the byte
+    # meter charges the memory a populated cache really holds — see rank_memo's
+    # THE CACHED PROJECTIONS. Deliberately UNANNOTATED: an annotation here would
+    # make it a dataclass field. `test_E11i` pins it against the source.
+    MEMO_CACHED_ATTRS = ("_agg_provenance_c", "_content_hash_c",
+                         "_grounded_seams_c", "_identity_refs_c",
+                         "_material_hash_c", "_node_index_c")
 
     correlation_id: str
     tenant_id: str
