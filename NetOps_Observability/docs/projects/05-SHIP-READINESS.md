@@ -32,8 +32,8 @@ Dates are 2026-09-03 unless stated. Rows are DELETED when shipped (tracker rule)
 | # | Item | Status | Evidence / next step |
 |---|---|---|---|
 | B1 | When was the documentation last updated? | ✅ | docs-portal (71 pages): last change 2026-08-12; **56 of 71 pages last edited 2026-07-01**; README.md 2026-07-27. Engineering docs under `docs/` are current (today). The customer-facing site is ~2 months behind the code. |
-| B2 | Update the website with the diff to today | 🔧 | Agent: per-page gap analysis vs `git log 2026-07-01..HEAD` (Projects 1–4: scale, productization, CTEM, troubleshooting, Iris, BGP depth, alerting), rewrite/extend pages, add new ones. |
-| B3 | Humanize the site (Fortinet / Palo Alto / CrowdStrike bar) | 🔧 | Agent studies the three vendors' doc conventions (task-first titles, one procedure per page, prerequisites, "what you will see", screenshots/captures, plain verbs, no AI-tells), writes `docs-portal/STYLE.md`, applies to every page, adds a denylist guard for AI-tell phrasing like the frontend copy guard. |
+| B2 | Update the website with the diff to today | ✅ | Commit above: 71 → 132 pages; 68 rewritten, 64 new (Deploy, Investigate, BGP operations, Release notes, CTEM 5→16, Iris 3→5); three reference pages generated from source (routes/flags/alert rules) so they cannot drift; every honest state documented with real lab captures (`/reference/honest-states`, 24 rows). Audit: `docs-portal/AUDIT_2026-09-03.md` (14 product defects found, being fixed/filed). Gap left: no screenshots (text captures only). Portal rebuild is baked into the frontend image on the next deploy. |
+| B3 | Humanize the site (Fortinet / Palo Alto / CrowdStrike bar) | ✅ | `docs-portal/STYLE.md` from measured benchmarks (PAN-OS guides extracted and counted; Fortinet median sentence 12 words); enforced by `npm test` (denylist, sentence length, em-dash budget, no emoji, page shapes, imperative titles, terminology). Before: 419 em-dash violations, 34 emoji, 24 "we". Chrome: marketing hero + emoji cards + glow removed; BLOGO5 wordmark. |
 
 ## C. Package, licensing, patching
 
