@@ -4,7 +4,7 @@
   "serialNumber": "urn:uuid:6ee566e3-670b-56fc-8410-5b9cb5da0f3f",
   "version": 1,
   "metadata": {
-    "timestamp": "2026-09-03T03:30:18+00:00",
+    "timestamp": "2026-09-03T06:15:15+00:00",
     "tools": {
       "components": [
         {
@@ -16,9 +16,9 @@
     },
     "component": {
       "type": "application",
-      "bom-ref": "correlix@2026.09.03-g75047efb#pip-correlation",
+      "bom-ref": "correlix@2026.09.03-g1004bcfe#pip-correlation",
       "name": "correlix",
-      "version": "2026.09.03-g75047efb",
+      "version": "2026.09.03-g1004bcfe",
       "description": "Correlix \u2014 pip-correlation dependency inventory"
     },
     "properties": [
