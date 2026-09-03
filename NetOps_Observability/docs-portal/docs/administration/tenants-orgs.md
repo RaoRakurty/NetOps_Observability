@@ -1,106 +1,139 @@
 ---
-title: Tenants & Organizations
-sidebar_label: Tenants & Organizations
-sidebar_position: 5
-description: Create isolated tenants and the organization layer above them.
+title: Create tenants and organizations
+sidebar_label: Tenants & organizations
+description: Create the isolation unit that holds devices and data, group tenants under an organization, and suspend or delete one safely.
+page_type: task
+sidebar_position: 3
 ---
 
-# Tenants & Organizations
+# Create tenants and organizations
 
-Correlix is multi‑tenant. A **tenant** is a fully isolated workspace — its own devices, telemetry, incidents, users and roles. An **organization** is an optional account layer *above* tenants, for operators who manage many customers or business units.
+A tenant is the isolation boundary. Every device, log line, incident, saved object and API key belongs to exactly one tenant. An organization is an optional account layer above tenants, for an operator who runs many customers or business units. This page creates both, and covers the two irreversible actions.
 
-## The model
+## Before you begin
 
-The account hierarchy is a strict tree:
+- **Permission:** platform administrator. The tenant and organization registry is platform-global configuration. `POST /api/tenants`, `PATCH /api/tenants/{id}`, `DELETE /api/tenants/{id}` and every `/api/orgs` route call `requirePlatformAdmin`, so a tenant or organization administrator holding `administration:admin` is refused with `403`.
+- Decide the display name. The slug is derived from it unless you supply one, and the slug is fixed for the life of the object.
+- Decide the data-residency region for the organization. Its tenants inherit it. See [Set a data-residency region](/administration/regions).
 
+## The hierarchy
+
+The account tree is a strict single-parent tree, and containment is the only thing authorization traverses.
+
+```text
+platform            the operator's own realm, the root
+  organization      one customer account, optional
+    tenant          the isolation boundary, required
 ```
-Provider (platform)  →  Organization (optional)  →  Tenant (required)  →  Users & data
-```
 
-- **Tenant** — the isolation boundary and the *required* unit. Devices, telemetry and incidents always belong to exactly one tenant. A tenant never sees another tenant's data, on any surface — search, dashboards, exports, the AI, or the API.
-- **Organization** — groups tenants under one account. Each organization has a home data **region** and an optional sign‑in connection, both inherited by its tenants. If you don't create one, tenants live directly under the Provider realm.
-- **Provider** — the platform operator's own realm; the root organization (shown with a *Parent Organization* badge) and the seed tenant cannot be deleted or suspended.
+- A **tenant** carries a region, an isolation mode, and an operator-restricted flag. It belongs to exactly one organization.
+- An **organization** carries a home region and an optional single sign-on connection, both inherited by its tenants.
+- The **Provider** realm is the platform owner's own space. The `global` tenant holds platform-owned and untagged records. It is visible only to the platform owner, never to a scoped tenant, and it can be neither suspended nor deleted.
 
-A tenant admin holds full administrative rights *inside* their tenant but has no visibility into the platform or other tenants. Isolation is enforced in the backend at every layer, not just hidden in the UI.
+A tenant marked **operator restricted** hides its telemetry from the platform owner: logs, syslog, flows and traps are excluded from the Global view and refused if the operator scopes into that tenant. The tenant's own users are unaffected.
 
-## Names, slugs and IDs
+## Names, slugs and ids
 
-Every organization and tenant has three identifiers — know which is which before you create one:
+Every organization and tenant carries three identifiers. Know which is which before you create one.
 
 | Identifier | Example | Properties |
 | --- | --- | --- |
-| **ID** | `org_…` / `t_…` + 32 hex characters | Opaque, minted by the platform, **immutable**. Never derived from the name. Use it in automation. |
-| **Slug** | `acme-prod` | Human‑friendly handle, **globally unique**, fixed at creation. |
-| **Display name** | `Acme Corp — Production` | The label shown in the UI. |
+| Id | `t_d3d501aa08e2395893b378a453b8af67` | `t_` or `org_` plus 32 hex characters of cryptographic randomness. Opaque, immutable, never derived from the name. Use it in automation. |
+| Slug | `acme-prod` | The human handle. Globally unique across the platform, fixed at creation. |
+| Display name | `Acme Corp Production` | The label the console shows. |
 
-Slug rules (a slug is derived from the name if you don't supply one): 2–40 characters, lowercase letters, digits and hyphens only; no leading/trailing or consecutive hyphens; no underscores or spaces; and reserved words (`admin`, `api`, `global`, `platform`, `provider`, `system`, and similar) are refused.
+Slug rules, applied to a supplied slug and to one derived from the name alike:
 
-:::tip Choose names carefully
-The ID and slug are permanent. For organizations, the name is also fixed after creation — only the note, home region and sign‑in connection can be edited later.
-:::
+- 2 to 40 characters.
+- Lowercase letters, digits and hyphens only. No underscores, no spaces, no uppercase.
+- No leading or trailing hyphen, and no two hyphens in a row.
+- Not a reserved word. The reserved set is `admin`, `api`, `login`, `logout`, `signup`, `support`, `root`, `system`, `internal`, `auth`, `sso`, `billing`, `metrics`, `health`, `status`, `static`, `assets`, `global`, `platform`, `provider`.
 
-## Create an organization and tenant
+## Steps
 
-Creating organizations and tenants is **platform‑operator‑only**.
+To create an organization and its first tenant in one pass:
 
-**Recommended — the guided wizard:** <kbd>Administration → Identity & Access</kbd> → **＋ Add** walks you through organization (optional) → tenant → first user in one pass. See [the guided ＋ Add wizard](/administration/identity-access#guided-add-wizard).
+1. Open **Administration → Identity & Access**.
+2. Select **＋ Add**, then the **Customer organization** card.
+3. Enter the **Organization name**, pick a **Home region**, and leave **SSO connection** blank if you will bind it later.
+4. On the next step, tick **Create a first tenant now** and enter the **Tenant name**. Leave **Region** on the inherited option unless this tenant genuinely differs from its organization.
+5. Optionally tick **Create a first user** and fill in the account.
+6. Read **Review & create**, then select **Create**.
 
-**Onboard a customer in one step:** <kbd>Identity & Access → Organizations</kbd> → **＋ Onboard customer** creates the organization *and* its first tenant together in a single audited action, so a customer is never left as an empty org.
+To add a tenant to an existing organization:
 
-**Individually:**
+1. Open **Administration → Identity & Access → Organizations**.
+2. Select the organization, then its **Tenants** tab.
+3. Add the tenant there. It is pre-bound to that organization.
 
-1. <kbd>Identity & Access → Organizations</kbd> → **＋ Create organization**. Fill in **Name** *(required)*, **Region** *(required — the data‑residency region its tenants inherit)*, optional **Sign‑in connection** and **Note**, then click **Create organization**.
-2. Drill into the organization (click its name or **Manage**) and open its **Tenants** tab to add tenants inside it.
+To read the registry from the API:
 
-The Organizations list shows each org's **Data region**, **Users** (accounts owned by the org), **Tenants** count, **Sign‑in** (its SSO connection or *Platform default*) and note, with **Manage / Edit / Delete** actions per row.
+```bash
+curl -s -H "Authorization: Bearer $TOKEN" \
+  http://localhost:8000/api/tenants
+```
+
+```json
+[
+  {
+    "id": "global",
+    "name": "Provider",
+    "slug": "global",
+    "note": "The provider (platform-owner) realm.",
+    "org_id": "global",
+    "isolation_mode": "shared",
+    "created_at": "2026-08-16T17:16:58.130501624Z"
+  },
+  {
+    "id": "t_d3d501aa08e2395893b378a453b8af67",
+    "name": "lab",
+    "slug": "lab",
+    "note": "Lab fabric — SR Linux spines + EOS leaves (created 2026-09-03 via API)",
+    "org_id": "global",
+    "isolation_mode": "shared",
+    "status": "active",
+    "created_at": "2026-09-03T02:58:15.708334429Z"
+  }
+]
+```
+
+A tenant created before the lifecycle field existed carries no `status`. A blank status is read as `active`.
 
 ## Suspend a tenant {#suspend-a-tenant}
 
-Suspension is the "pause this customer" switch — reversible, immediate, and platform‑operator‑only.
+Suspension is the reversible "pause this customer" switch. It takes effect on the next request, not at the next sign-in.
 
-1. Open the tenant list (its organization's **Tenants** tab under <kbd>Identity & Access → Organizations → *(org)*</kbd>).
-2. Click **Suspend** on the tenant's row.
-3. Confirm the prompt: *"Suspend "\{name\}"? Its users (and API keys) will be unable to sign in or make requests until you reactivate it. The platform operator is unaffected."*
+1. Open the tenant's row under **Administration → Identity & Access → Organizations → (org) → Tenants**.
+2. Select **Suspend**.
+3. Confirm the prompt.
 
-What suspension enforces, instantly and deny‑by‑default:
+What suspension enforces, deny-by-default:
 
-- **Sign‑in is blocked** — the tenant's users are refused at login.
-- **API keys stop working** — the tenant's machine credentials are rejected on every request.
-- **Live sessions are cut** — anyone already signed in loses access on their next request, not at their next login.
+- Sign-in is refused with `403 tenant suspended`.
+- The tenant's API keys are refused on every request with the same status.
+- A session that is already open loses access on its next request.
+- The tenant switcher is closed too. An organization administrator who could reach the tenant through a binding is refused on the effective tenant, not only on the tenant named in their token.
 
-The platform operator is never affected (the Provider realm cannot be suspended), so you can always get back in to reactivate.
+The platform owner is exempt by design, because it has to reach a suspended tenant in order to reactivate it. The `global` tenant can never be suspended.
 
-### Reactivate
+To reactivate, select **Reactivate** on the same row. The status badge returns to **Active** and users sign in again immediately.
 
-Same place: the row's button now reads **Reactivate** — click it and the tenant's **Status** badge flips from **Suspended** back to **Active**. Users can sign in again immediately.
+## Delete, and its guardrails
 
-## Delete — and its guardrails
+Deletion is permanent, and the server enforces the safeguards rather than the console.
 
-Deletion is permanent, so it is deliberately hard to do by accident:
+- **Type-to-confirm.** The exact tenant name must be echoed back. Anything else is refused with `400 deletion not confirmed`.
+- **A populated tenant needs force.** If the tenant still owns users, the delete is refused with `409 tenant still has N user(s)` unless the force option is set.
+- **An organization that still owns tenants cannot be deleted.** The refusal is `409 organization still owns N tenant(s)`. Reassign or remove the tenants first.
+- The `global` tenant and the Provider organization are permanent.
 
-- **A tenant with users requires force.** Deleting a tenant asks you to **type its exact name to confirm**; if it still has users, you must additionally confirm force‑deletion.
-- **An organization that still owns tenants can't be deleted.** Reassign or remove its tenants first — the confirm dialog says so explicitly.
-- The Provider (root) organization and the seed tenant are permanent.
+## Result
 
-## Regions and inheritance
+The new organization and tenant appear in the Organizations tree with the expected region, and `GET /api/tenants` returns the tenant with an opaque `t_` id and `status: active`. After a suspension, the tenant's row shows **Suspended**, a sign-in by one of its users is refused, and the refusal appears in the [audit log](/administration/audit-log) with decision `deny`.
 
-Each organization has a home data region; a tenant inherits it unless you override the region at tenant creation. Regions are data‑residency metadata managed by the platform operator — see [Regions](/administration/regions) for what they do today.
+## Related
 
-## Verify
-
-- After creating: <kbd>Identity & Access</kbd> — the hierarchy map ("How your account is organized") shows the new org → tenant branch with its region.
-- After suspending: the tenant's row shows a red **Suspended** badge; a sign‑in attempt by one of its users is refused, and the attempt appears in the **Audit Log** as a deny.
-- After reactivating: badge back to **Active**; users sign in normally.
-
-## Troubleshooting
-
-- **"organization still owns N tenant(s)"** on delete — move or delete the org's tenants first.
-- **Slug rejected** — check the rules above (lowercase, 2–40 chars, hyphens only, not a reserved word, not already taken). Slugs are unique across the whole platform.
-- **A suspended tenant's user says they're locked out** — that's the feature. Reactivate the tenant, or if only one person should be blocked, keep the tenant active and disable that user instead.
-- **Can't create a tenant** — tenant and organization creation requires the platform operator; a tenant admin manages *inside* a tenant, never the registry itself.
-
-## Next
-
-- **[Identity & Access](/administration/identity-access)** — add users and grant roles in the new tenant.
-- **[Authentication](/administration/authentication)** — bind the customer's SSO.
-- **[Onboard devices](/onboard-devices/overview)** — bring their network in.
+- [Add users and grant access](/administration/identity-access) to populate the new tenant.
+- [Set a data-residency region](/administration/regions) for what a region does and does not do.
+- [Configure authentication](/administration/authentication) to bind the customer's identity provider.
+- [Onboard devices](/onboard-devices/overview) to bring the tenant's network in.

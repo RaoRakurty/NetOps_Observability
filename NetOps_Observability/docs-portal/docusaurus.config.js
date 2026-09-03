@@ -1,33 +1,35 @@
 // @ts-check
-// Correlix documentation portal — Docusaurus config.
-// Content lives in ./docs as portable Markdown (frontmatter: title/description),
-// so it can also be lifted into the marketing website as it comes online.
+// Correlix documentation portal.
+//
+// Content lives in ./docs as portable Markdown with a `page_type` in front
+// matter (task | concept | reference | index | release). The rules those types
+// obey are in STYLE.md, and tests/voice.test.js enforces the mechanical half.
+//
+// The same build serves two homes:
+//   • embedded in the product at same-origin /docs/   (the in-app Help drawer)
+//   • standalone at docs.correlix.io with '/'          (DOCS_BASE_URL=/)
 
 const { themes } = require('prism-react-renderer');
 
-// baseUrl is env-driven so the SAME build serves two homes:
-//   • embedded in the product at same-origin /docs/  (default — the in-app "?" Help panel)
-//   • standalone at docs.correlix.io with '/'         (build with DOCS_BASE_URL=/)
 const baseUrl = process.env.DOCS_BASE_URL || '/docs/';
 
 /** @type {import('@docusaurus/types').Config} */
 const config = {
-  title: 'Correlix Docs',
-  tagline: 'Network observability & AI-driven root-cause — product documentation',
+  title: 'Correlix Documentation',
+  tagline: 'Install, operate and investigate with Correlix',
   favicon: 'img/favicon.svg',
 
-  // Update these when the docs site domain is finalized.
   url: 'https://docs.correlix.io',
   baseUrl,
 
   organizationName: 'correlix',
   projectName: 'correlix-docs',
 
-  // Broken links are a docs-quality bug. While the portal is still being filled
-  // in we warn (so the build succeeds); tighten to 'throw' once every section is
-  // written so a dangling link fails CI.
-  onBrokenLinks: 'warn',
-  onBrokenMarkdownLinks: 'warn',
+  // A dead link in an administration guide costs an operator their time in the
+  // middle of an incident. Both are hard failures.
+  onBrokenLinks: 'throw',
+  onBrokenMarkdownLinks: 'throw',
+  onBrokenAnchors: 'warn',
 
   i18n: { defaultLocale: 'en', locales: ['en'] },
 
@@ -37,9 +39,8 @@ const config = {
       /** @type {import('@docusaurus/preset-classic').Options} */
       ({
         docs: {
-          routeBasePath: '/', // docs are the site root (a pure docs portal)
+          routeBasePath: '/', // a pure documentation portal: docs are the root
           sidebarPath: require.resolve('./sidebars.js'),
-          // "Edit this page" — point at the repo once the docs move to their own repo.
           editUrl: undefined,
           showLastUpdateTime: true,
           breadcrumbs: true,
@@ -56,62 +57,82 @@ const config = {
     /** @type {import('@docusaurus/preset-classic').ThemeConfig} */
     ({
       image: 'img/social-card.png',
-      // Dark-first to match the product's trading-floor NOC aesthetic; the toggle
-      // stays so operators on bright monitors can flip to light.
+      // Dark by default because this portal is also served inside the product's
+      // Help drawer, which is dark. A reader's own OS setting still wins.
       colorMode: {
         defaultMode: 'dark',
         respectPrefersColorScheme: true,
       },
-      // Compact "on this page" so long how-tos stay scannable.
       tableOfContents: { minHeadingLevel: 2, maxHeadingLevel: 3 },
       navbar: {
-        title: 'Correlix',
-        logo: { alt: 'Correlix', src: 'img/logo.svg' },
-        hideOnScroll: true,
+        // The wordmark is the product's own mark (the eye-as-O), copied from
+        // src/frontend/public/brand. No separate title text: the wordmark
+        // already says Correlix, and "Correlix Correlix Documentation" is the
+        // kind of thing nobody notices until a customer screenshots it.
+        title: 'Documentation',
+        logo: {
+          alt: 'Correlix',
+          src: 'img/correlix-wordmark-light.png',
+          srcDark: 'img/correlix-wordmark-dark.png',
+          width: 122,
+          height: 14,
+        },
+        hideOnScroll: false,
         items: [
-          { type: 'docSidebar', sidebarId: 'docs', position: 'left', label: 'Documentation' },
-          { to: '/getting-started/quickstart', label: 'Quickstart', position: 'left' },
-          { to: '/onboard-devices/overview', label: 'Onboard Devices', position: 'left' },
-          { to: '/iris-ai/overview', label: 'Iris AI', position: 'left' },
+          { type: 'docSidebar', sidebarId: 'docs', position: 'left', label: 'Contents' },
+          { to: '/getting-started/quickstart', label: 'Quickstart', position: 'right' },
+          { to: '/reference/api', label: 'API', position: 'right' },
+          { to: '/release-notes/whats-new', label: "What's new", position: 'right' },
         ],
       },
       footer: {
-        style: 'dark',
+        style: 'light',
         links: [
           {
             title: 'Get started',
             items: [
-              { label: 'Introduction', to: '/' },
-              { label: 'Quickstart', to: '/getting-started/quickstart' },
-              { label: 'Onboard network devices', to: '/onboard-devices/overview' },
+              { label: 'What Correlix does', to: '/getting-started/overview' },
+              { label: 'Core concepts', to: '/getting-started/concepts' },
+              { label: 'Onboard your first device', to: '/getting-started/quickstart' },
             ],
           },
           {
-            title: 'Product',
+            title: 'Deploy and operate',
             items: [
-              { label: 'Monitoring & alerting', to: '/monitoring/overview' },
-              { label: 'Incidents & correlation', to: '/incidents/overview' },
-              { label: 'Iris AI', to: '/iris-ai/overview' },
+              { label: 'Install on a Linux host', to: '/deploy/install-linux' },
+              { label: 'Verify a deployment', to: '/deploy/verify-deployment' },
+              { label: 'Upgrade', to: '/deploy/upgrade' },
+              { label: 'Onboard devices', to: '/onboard-devices/overview' },
+            ],
+          },
+          {
+            title: 'Investigate',
+            items: [
+              { label: 'How root-cause analysis works', to: '/investigate/rca-explained' },
+              { label: 'Protocol diagnostics', to: '/investigate/protocol-diagnostics' },
+              { label: 'Iris', to: '/iris-ai/overview' },
+              { label: 'BGP operations', to: '/bgp/overview' },
             ],
           },
           {
             title: 'Reference',
             items: [
-              { label: 'Connectivity requirements', to: '/reference/connectivity-requirements' },
+              { label: 'REST API', to: '/reference/api' },
+              { label: 'Feature flags', to: '/reference/feature-flags' },
               { label: 'Glossary', to: '/reference/glossary' },
-              { label: 'Troubleshooting', to: '/reference/troubleshooting' },
+              { label: 'What an empty result means', to: '/reference/honest-states' },
             ],
           },
         ],
-        copyright: `Correlix — network observability & AI-driven root-cause. Docs built ${new Date().getFullYear()}.`,
+        copyright: `Correlix documentation. Built ${new Date().toISOString().slice(0, 10)}.`,
       },
       prism: {
-        theme: themes.oneLight,
-        darkTheme: themes.oneDark,
-        additionalLanguages: ['bash', 'yaml', 'json', 'promql'],
+        theme: themes.github,
+        darkTheme: themes.vsDark,
+        additionalLanguages: ['bash', 'yaml', 'json', 'ini', 'sql', 'diff'],
       },
       docs: {
-        sidebar: { hideable: true, autoCollapseCategories: true },
+        sidebar: { hideable: true, autoCollapseCategories: false },
       },
     }),
 };

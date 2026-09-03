@@ -1,77 +1,85 @@
 ---
-title: Regions
+title: Set a data-residency region
 sidebar_label: Regions
-sidebar_position: 4
-description: Region configuration for multi-region deployments (platform owner).
+description: Set where an organization's and a tenant's data is meant to live, and read what a region does in this build.
+page_type: task
+sidebar_position: 8
 ---
 
-# Regions
+# Set a data-residency region
 
-Regions record **where each tenant's data is meant to live**. One global control plane (organizations, identity, access, tenant registry) routes tenants to a regional data plane by their assigned region. This entire area is **visible to platform operators only** — open it at <kbd>Administration → Regions</kbd>.
+A region records where a tenant's telemetry is meant to live. One global control plane holds organizations, identity, access and the tenant registry, and routes each tenant to the data plane its region names. Assign regions from the day you create an account, so the residency intent is on record before there is anything to move.
 
-:::info Honest scope — what regions do today
-Today, regions are a **governance and data‑residency attribute** on organizations and tenants, plus the routing model that will act on it. In a single‑region deployment every region routes to the local stack — the Regions page itself says so: *"Single‑region today: every region routes to the local stack. To stand up a real region, point its data plane at a regional deployment — no code change."* Assign regions from day one so residency intent is recorded; lighting up a real second region later is a deployment‑configuration step, not a migration of your account model.
-:::
+## Before you begin
 
-## The region catalog
+- **Permission:** `administration:admin` to read the region catalog at `GET /api/regions`. The catalog is a fixed list and carries no tenant data.
+- **Permission:** platform administrator for everything else. `GET /api/regions/topology` calls `requireCrossTenant`, and assigning a region means creating or patching an organization or tenant, which is platform-global. The console hides **Administration → Platform → Regions** from a tenant administrator.
+- Know which organization the tenant belongs to. A tenant inherits its organization's home region unless you override it.
 
-Regions are a fixed, curated catalog — you assign them, you don't invent them:
+## What a region does in this build
 
-| Region ID | Label |
-| --- | --- |
-| `us-east` | US East *(the default)* |
-| `us-west` | US West |
-| `eu-central` | EU Central |
-| `eu-west` | EU West |
-| `ap-southeast` | Asia Pacific (Southeast) |
+Be precise about this before you use it as a compliance control.
 
-Extending the catalog is a platform change, not a console action — there is deliberately no "create region" button, so a typo can never become a residency destination.
+**A region does** record residency intent on an organization and on each tenant, drive the routing model that resolves a tenant to a data plane, and show which tenants and organizations sit in which region.
 
-## Reading the Regions page
+**A region does not** move data on its own, and it does not enforce residency by itself. Every region resolves to the local in-cluster stack until a regional data plane is configured for it. Lighting up a real region is deployment configuration, one environment variable per region named `REGION_DATAPLANE_<REGION>`, and it changes nothing about organizations, tenants, users or access. That is the point of recording regions early.
 
-The page is an inventory of your deployment's region topology:
+The catalog is fixed and curated. There is deliberately no way to create a region from the console, so a typo can never become a residency destination. Adding one is a platform change, because it asserts that a data plane exists or will exist there.
 
-- **Stat strip** — **Control plane** (*Global*), **Regions in use**, **Tenants**, **Organizations**.
-- **Topology diagram** — the global control plane box (*Orgs · Identity · RBAC · Tenants · Billing*) routing down to a card per region in use, each showing its label, a **Local** or **Dedicated** data‑plane badge, and its tenant/org counts.
-- **Region table** — one row per region: **Region · Data plane · Tenants · Orgs · Endpoint** (*in‑cluster* for the local stack, or the configured regional endpoint for a dedicated one).
+## Steps
 
-## Assign a region
+### Read the catalog
 
-Regions attach at two levels, with inheritance:
+```bash
+curl -s -H "Authorization: Bearer $TOKEN" \
+  http://localhost:8000/api/regions
+```
 
-- An **organization** has a home region — **every tenant inherits it** unless overridden.
-- A **tenant** may override with its own region at creation.
+```json
+[
+  { "id": "ap-southeast", "label": "Asia Pacific (Southeast)" },
+  { "id": "eu-central",   "label": "EU Central" },
+  { "id": "eu-west",      "label": "EU West" },
+  { "id": "us-east",      "label": "US East" },
+  { "id": "us-west",      "label": "US West" }
+]
+```
 
-### Set an organization's region
+Five regions ship, sorted by id. `us-east` is the default assigned when no region is given. A region outside this set is refused on save, never accepted and quietly normalised.
 
-1. When creating the org — <kbd>Administration → Identity & Access → Organizations</kbd> → **＋ Create organization** — the **Region** field is *required*: pick from the catalog. (The guided **＋ Add** wizard and **＋ Onboard customer** ask the same question as **Home region**.)
-2. To change it later, click **Edit** on the organization's row and pick a new region. The Organizations list shows each org's current **Data region** badge.
+### Set an organization's home region
 
-### Set (or inherit) a tenant's region
+1. Open **Administration → Identity & Access → Organizations**.
+2. Create the organization with **＋ Create organization**, or open an existing one and select **Edit**.
+3. Pick the **Region**. It is required on creation. The guided **＋ Add** wizard asks the same question as **Home region**.
+4. Save.
 
-1. In the guided wizard's **Tenant** step, the **Region** dropdown defaults to *"From \{org\} (\{region\})"* — inherited. Leave it to inherit.
-2. Pick an explicit region only when one tenant genuinely needs to differ from its organization (for example, a customer's EU subsidiary under a US‑homed org).
+Every tenant in that organization inherits this region unless it carries its own.
 
-Region assignment composes with tenant isolation — a tenant stays fully isolated *and* carries its residency intent.
+### Set or inherit a tenant's region
 
-## Standing up a real second region
+1. In the wizard's **Tenant** step, the **Region** field defaults to the inherited option, which names the organization and its region.
+2. Leave it inherited unless this one tenant genuinely differs, for example a customer's EU subsidiary under an organization homed in the United States.
+3. To change it later, patch the tenant's region from **Identity & Access → Organizations → (org) → Tenants**.
 
-When you deploy a regional data plane, the platform operator points a region at it through deployment configuration (per‑region data‑plane endpoints); the console then shows that region's data plane as **Dedicated** with its endpoint, and tenants homed there route to it. No changes to organizations, tenants, users, or access are needed — that is the point of recording regions early. Coordinate this step with whoever operates your deployment; it is not a console workflow.
+Region assignment composes with tenant isolation. A tenant stays fully isolated and additionally carries its residency record.
 
-## Verify
+### Read the region topology
 
-- <kbd>Administration → Regions</kbd> — **Regions in use** counts every region you've assigned, and each region card shows the expected tenant/org counts.
-- A new organization appears under its region in the topology diagram immediately after creation.
-- In a single‑region deployment, every row's **Data plane** reads *Local* and **Endpoint** reads *in‑cluster* — that is correct and expected.
+**Administration → Platform → Regions** is an inventory of the deployment's region topology, not a control panel.
 
-## Troubleshooting
+- The stat strip shows the control plane, the regions in use, and the tenant and organization counts.
+- The diagram shows the global control plane routing to a card per region, each with a **Local** or **Dedicated** data-plane badge and its tenant and organization counts.
+- The table lists one row per region with its data plane, tenant count, organization count and endpoint.
 
-- **I don't see Regions in my menu.** It's platform‑operator‑only. Tenant and org admins never manage residency.
-- **I need a region that isn't listed.** The catalog is fixed by the platform; raise it with your platform team rather than picking a "nearest" wrong region — the assignment is your residency record.
-- **A tenant shows the "wrong" region.** Check whether it inherited its org's home region or was overridden at creation; the hierarchy map on [Identity & Access](/administration/identity-access) shows each tenant's effective region.
-- **Two regions, one data plane?** Expected until a dedicated regional data plane is configured — regions record intent first, routing follows deployment.
+`GET /api/regions/topology` returns the same numbers, with a `control_plane` object holding `orgs`, `tenants` and `users`, and a `regions` array. Each region entry carries `id`, `label`, `tenants`, `orgs` and a `data_plane` object. In a single-region deployment every `data_plane` reads `"local": true` and names the in-cluster backends. That response includes internal service endpoints, so treat it as operator-only output.
+
+## Result
+
+The organization appears under its region in the topology diagram immediately after creation, and **Regions in use** counts every region you have assigned. In a single-region deployment every row's data plane reads Local, which is correct and expected. `GET /api/tenants` shows the tenant with the region it inherited or the one you set.
 
 ## Related
 
-- **[Tenants & Organizations](/administration/tenants-orgs)** — where regions are inherited from.
-- **[Identity & Access](/administration/identity-access)** — the hierarchy map shows regions per org and tenant.
+- [Create tenants and organizations](/administration/tenants-orgs) for the objects a region attaches to.
+- [Add users and grant access](/administration/identity-access) for the tree that shows each tenant's effective region.
+- [Deployment overview](/deploy/overview) for what standing up a second data plane involves.

@@ -1,92 +1,77 @@
 ---
-title: Sites & inventory
-sidebar_label: Sites & inventory
+title: Keep sites and inventory in sync
+description: Enable the bundled inventory or point at an external one, choose a sync direction, run a sync or a push, and read the status lines that prove it worked.
+page_type: task
 sidebar_position: 2
-description: Create sites, assign devices to them, and drive the geographic map from declared intent.
 ---
 
-# Sites & inventory
+# Keep sites and inventory in sync
 
-Sites are the unit of *declared* network geography: a name, an optional status and owner, and WGS 84 coordinates. Devices assigned to a site inherit its location, fold into one bubble on the [Device Geomap](/infrastructure/geomap), and roll their health up to the site.
+**Infrastructure → Source of Truth** manages the inventory connector: the bundled inventory service that ships with the platform, or an external instance you already run. The connector exchanges device records. It never becomes the authority over what Correlix monitors.
+
+The ongoing connection is what follows. Declaring sites and placing devices is [Place devices on the map](/infrastructure/geomap), and the one-off file seed is [Import inventory from a source of truth](/automation/import-and-sync).
 
 ## Before you begin
 
-- You need **infrastructure write** permission in your tenant.
-- Devices should already be onboarded (see [Onboard devices](/onboard-devices/overview)) — you can declare sites first, but placement only shows once devices exist.
-- Have decimal latitude/longitude for each location (e.g. `32.78, -96.80`). Correlix never uses GeoIP; if you don't declare coordinates, the site won't appear on the map.
+- Platform-owner access. The leaf is shown to the platform owner only, and the backend enforces the boundary independently.
+- For an external instance, its base URL and an API token with read access to the device inventory.
+- A decision on direction. Nothing moves until you pick one.
 
-## Create a site
+## Steps
 
-1. Go to <kbd>Infrastructure → Device Geomap</kbd>.
-2. Select the **Sites** view (the segmented control at the top; if no sites exist yet, click **Declare sites** on the empty state instead).
-3. In the last table row, fill in the new-site fields:
+### Step 1 - Read the current state
 
-   | Field | Required | Notes |
-   |---|---|---|
-   | **Site** | Yes | Display name, up to 120 characters (e.g. `Dallas Branch`). A URL-safe **slug** is generated automatically (`dallas-branch`) and shown read-only. |
-   | **Status** | No | Free text, e.g. `active`. |
-   | **Owner** | No | Team or business unit responsible, up to 120 characters (e.g. `NetEng NOC`). |
-   | **Latitude** / **Longitude** | No | Decimal WGS 84. Enter **both or neither** — latitude −90…90, longitude −180…180. Leave both blank to register a site that isn't on the map yet. |
+Open **Infrastructure → Source of Truth**. The status badge reads one of four values:
 
-4. Click **Add site**. The site appears in the table with its generated slug.
+| Badge | What it means |
+|---|---|
+| **Connected** | Enabled, and either bundled or configured with a URL and a token. |
+| **Bundled · off** | The bundled inventory exists but is not enabled. |
+| **Disabled** | A URL or a token is configured, and the connector is off. |
+| **Not set up** | Nothing is configured. |
 
-::::info The slug is the site's stable handle
-Device → site assignments, file imports, and the `site` device label all reference the **slug**, not the display name. It is derived from the name at creation and shown in the Sites table.
-::::
+### Step 2 - Set up the connection
 
-## Edit or delete a site
+1. Select **Set up**, or **Manage** where a connection already exists.
+2. The wizard opens with the bundled inventory preselected. It ships wired, with no URL or token to paste. To use your own system instead, choose the external path and complete two more steps:
+   - **Connect**: the inventory base URL.
+   - **Authenticate**: an API token with read access. It is stored encrypted and never shown again.
+3. Enable inventory discovery and set the **Poll interval (seconds)**. The minimum is 15 and the default is 60.
 
-1. In <kbd>Infrastructure → Device Geomap → Sites</kbd>, find the site's row.
-2. Click **Edit**, change the name, status, owner, or coordinates, then click **Save** (or **Cancel**).
-3. To remove a site, click **Delete** and confirm. Devices assigned to that site fall back to *unplaced* — they aren't deleted, they just leave the map until reassigned.
+### Step 3 - Choose the sync direction
 
-Coordinates are attached to the **site**, so moving a site (fixing a wrong latitude, say) instantly moves every device assigned to it.
+The direction decides what crosses, and **Off** is the default.
 
-## Assign devices to sites
+| Direction | What crosses |
+|---|---|
+| **Off** | Nothing. The record stays browsable, discovery neither populates it nor reads from it. Choose this when an external system will sync through its own API. |
+| **Devices → Source of Truth** | One way, upward. Devices found by discovery are written into the record. Nothing is read back, so nothing is duplicated. Choose this to build the record from scratch. |
+| **Source of Truth → Devices** | One way, downward. Externally declared devices are pulled in and appear under **Infrastructure → Devices** beside discovered ones, as additional records rather than as the authority over them. |
+| **Bidirectional** | Both, with records de-duplicated by address, serial and name. |
 
-1. Go to <kbd>Infrastructure → Devices</kbd>.
-2. Find the device row and open the **Site** column — it's an inline picker listing your declared sites.
-3. Pick the site. The assignment saves immediately; the device inherits the site's coordinates and rolls into its map bubble.
-4. To unassign, select **— Unassigned —** in the same picker.
+Select **Save**. The confirmation states when it takes effect: `Saved. The collector picks up changes on its next poll.`
 
-Alternatives to the picker:
+### Step 4 - Force a cycle
 
-- **Bulk**: import a *Device → site placement* file — see [Import & external sync](/automation/import-and-sync).
-- **Label**: give the device a `site` label whose value matches the site's slug; it folds into that site the same way.
+Two on-demand controls sit in the toolbar, and they are different operations:
 
-::::info When the Site column is read-only
-The picker is editable only while the internal Source of Truth is the active provider and at least one site is declared. If an external provider currently supplies sites, they are managed in that system.
-::::
+- **Sync devices** pulls inventory records into **Infrastructure → Devices** now.
+- **Push devices** pushes discovered devices out to the record now. It appears only when the direction includes writing, and it also runs on its own every 5 minutes after a 90-second first delay that lets discovery complete a cycle.
 
-## Set a location for a device without a site
+## Result
 
-For one-off devices that don't belong to a declared site:
+The badge reads **Connected**, and the two status lines under the toolbar carry the evidence.
 
-1. Go to <kbd>Infrastructure → Device Geomap</kbd> and select **Set locations**.
-2. Unplaced devices are listed first. For a device, enter a free-form **Site label**, decimal **Latitude**, and **Longitude** (all in the row), then click **Save**.
-3. Devices sharing the same label fold into one map bubble. Click **Clear** to remove a manual placement.
+The poll line reads `Last sync: <timestamp> · N device(s)`, and where the last poll failed the same line appends `· error: <message>`. A poll that has never run shows a dash for the timestamp rather than a zero-time.
 
-Rows whose placement reads **Source of Truth · &lt;site&gt;** are read-only here — their coordinates come from the site definition and win by precedence. Edit the site instead.
+The push line reads `Last push: <timestamp> · N added · M already present`, or `Last push: not run yet` before the first run, with `· error: <message>` appended on failure.
 
-## How sites drive the geographic map
+Where the direction includes a pull, the pulled devices appear in **Infrastructure → Devices** with the connector as their source, and the drift checks under **Security → Compliance** begin comparing the declared record against the observed one: registration, name, management address, serial and platform.
 
-On the **Map** view of the [Device Geomap](/infrastructure/geomap):
+With the bundled inventory enabled, its console is embedded on the page with **Reload** and **Full screen** controls. An external instance is managed in its own console, and Correlix only exchanges records with it.
 
-- Each site with coordinates renders as a bubble; **size** reflects device count.
-- **Color** reflects health: green when all devices are up, amber when some are down, red when all are down, grey when the site has no devices.
-- Hovering a bubble shows the site name plus its up/down device counts.
+## Related
 
-## Verify
-
-1. Open <kbd>Infrastructure → Device Geomap</kbd> (Map view).
-2. Check the stat strip: **Sites**, **Sites on map**, **Devices placed**, and **Unplaced devices** should match what you declared. Unplaced devices are highlighted when any remain.
-3. Confirm each site bubble sits where you expect and its tooltip shows the right device count.
-4. In the **Sites** table below the map, confirm **Coordinates** is set (not `not set`) for every site you want plotted.
-
-## Troubleshooting
-
-- **A site doesn't appear on the map** — it has no coordinates. Edit the site and add both latitude and longitude (decimal WGS 84).
-- **"Enter both latitude and longitude as decimals (WGS 84), or leave both blank."** — you filled only one coordinate, or used a non-numeric value (e.g. `32°46'N`). Convert to decimal degrees.
-- **A device shows as unplaced** — it has no site assignment and no manual location, or it's assigned to a site that no longer exists. Reassign it in <kbd>Infrastructure → Devices</kbd>.
-- **A device sits in the wrong place** — its site's coordinates are wrong (fix the site), or a stale manual location overrides expectations (**Set locations** → **Clear**).
-- **The empty map says "No sites have coordinates yet."** — you have sites but none carries coordinates; the map fills in only from declared intent.
+- [Import inventory from a source of truth](/automation/import-and-sync) for the one-way file seed.
+- [Work with the device inventory](/infrastructure/devices) for where pulled records land.
+- [Configuration drift](/security/config-drift) for drift in device configuration rather than in inventory records.

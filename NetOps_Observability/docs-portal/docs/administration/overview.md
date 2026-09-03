@@ -1,71 +1,88 @@
 ---
-title: Administration overview
+title: Administration
 sidebar_label: Overview
+description: Users, roles, tenants, authentication, API access, audit and data-collection administration, for whoever runs the deployment.
+page_type: index
 sidebar_position: 1
-description: Configure users, access, authentication, API access, tenants, regions, and audit.
 ---
 
 # Administration
 
-Administration is where you configure *who* can use Correlix and *how*, plus platform‑level settings. It lives in the **Administration** section pinned near the bottom of the icon rail.
+Administration holds the configuration that decides who signs in, what each person may reach, and how telemetry is shaped before it is stored. The section is written for two readers: the platform administrator who owns the whole deployment, and the tenant or organization administrator who owns one workspace inside it.
 
-## Two kinds of administrator
+## The two planes
 
-Correlix distinguishes two administrative audiences, and the console adapts to which one you are:
+Every Administration surface sits on one of two planes, and the plane decides which check opens it.
 
-- **Platform operator** — the cross‑tenant owner of the deployment. Sees the full Administration tree, creates organizations and tenants, and manages platform plumbing (regions, collectors, system network settings).
-- **Tenant / organization admin** — administers *their own* scope. Holds full administrative rights inside their tenant or organization, but never sees another tenant, the platform configuration, or the platform‑operator menu items.
+**Per-tenant data** is gated by a per-tenant permission check plus a tenant filter. The permission is a module and a level, such as `administration:admin` or `infrastructure:read`. The filter restricts the answer to the caller's own tenant. Devices, processors, API keys, security settings and the audit trail are per-tenant.
 
-Menu items reserved for the platform operator are simply hidden from tenant admins. This is a courtesy, not the security boundary — the backend enforces the same rule independently, so a hidden endpoint called directly still returns **403**.
+**Platform-global plumbing** is gated by a platform-admin or cross-tenant check. Authentication providers, LLM provider keys, token policy, notification channels and stack configuration are platform-global. A tenant or organization administrator holds full `administration:admin` inside their own tenant, so a scope-blind admin check on platform-global configuration would be a privilege leak. Those routes call `requirePlatformAdmin` or `requireCrossTenant` instead, which ask an identity question: is the caller the platform owner?
 
-## The Administration menu, mapped
+Every Administration task page names its permission and its plane in the first bullet of `## Before you begin`. A reader should never discover a `403` by trying.
 
-| Area | Console path | What it's for | Who sees it |
-| --- | --- | --- | --- |
-| **[Settings](/administration/system-settings)** | <kbd>Administration → Settings</kbd> | Default landing page, **DNS** and **NTP** (platform operators only), log export limits | All admins (some cards platform‑only) |
-| **Data Sources** | <kbd>Administration → Data Collection → Data Sources</kbd> | Per‑device telemetry status — see [Data sources](/onboard-devices/data-sources) | All admins |
-| **Collectors** | <kbd>Administration → Data Collection → Collectors</kbd> | The ingestion/poller plumbing itself | **Platform operators only** |
-| **SNMP Profile Manager** | <kbd>Administration → Data Collection → SNMP Profile Manager</kbd> | [SNMP credentials and vendor profiles](/onboard-devices/snmp-profiles) | All admins |
-| **[Regions](/administration/regions)** | <kbd>Administration → Regions</kbd> | Data‑residency regions and which tenants live where | **Platform operators only** |
-| **[Identity & Access](/administration/identity-access)** | <kbd>Administration → Identity & Access</kbd> | Organizations, tenants, users, roles, security settings — plus the guided **＋ Add** setup wizard | All admins (scoped to what they own) |
-| **[Assign access](/administration/identity-access#grant-access-bindings)** | <kbd>Administration → Assign access</kbd> | Grant a person a role on an organization; review and revoke grants | All admins (scoped) |
-| **Sessions** | <kbd>Administration → Sessions</kbd> | Live sign‑in sessions with per‑session revoke | **Platform operators only** |
-| **[Authentication](/administration/authentication)** | <kbd>Administration → Authentication</kbd> | Local accounts, SSO (OIDC), LDAP/AD, TACACS+, MFA | All admins |
-| **[API Access](/administration/api-access)** | <kbd>Administration → API Access</kbd> | API keys, token policy, live REST API reference | All admins (scoped) |
-| **Audit Log** | <kbd>Administration → Audit Log</kbd> | Every security‑relevant action, allow and deny | All admins (scoped) |
+## Tenant isolation
 
-The **Stack** section (the platform's self‑observability and raw backend tools) is a separate icon‑rail entry and is also platform‑operator‑only.
+A tenant is the isolation boundary. Every piece of customer data carries exactly one tenant id, and the rules below hold on every data-returning surface.
 
-## The Audit Log
-
-<kbd>Administration → Audit Log</kbd> is the scoped trail of every mutation and every denied request. The platform operator sees all events; a tenant admin sees only their own tenant's.
-
-Each row shows: **Time** · **Actor** · **Tenant** (`platform` for cross‑tenant events) · **Action** (method + API path, e.g. `POST /api/devices`) · **Status** (HTTP code) · **Decision** (**allow** / **deny** pill) · **From** (source IP). Denied requests are highlighted in red. The view shows the most recent 300 events and refreshes automatically every 20 seconds; click a column header to sort.
-
-Use it to answer "who changed this?", "who tried and was refused?", and to verify that a permission change actually took effect.
-
-## Common tasks
-
-| I want to… | Go to |
+| Rule | Behaviour |
 | --- | --- |
-| Onboard a new customer (org + tenant + first user) | [Identity & Access — the guided ＋ Add wizard](/administration/identity-access#guided-add-wizard) |
-| Add a user | [Identity & Access → Users](/administration/identity-access#add-a-user) |
-| Give someone a role in an organization | [Assign access](/administration/identity-access#grant-access-bindings) |
-| Connect our identity provider (SSO / LDAP / TACACS+) | [Authentication](/administration/authentication) |
-| Suspend or reactivate a tenant | [Tenants & Organizations](/administration/tenants-orgs#suspend-a-tenant) |
-| Mint a credential for a script or CI pipeline | [API access](/administration/api-access#generate-an-api-key) |
-| Point the platform at our DNS/NTP servers | [System settings](/administration/system-settings) |
-| Check the platform's clock offset | [System settings → NTP](/administration/system-settings#ntp-time-sources) |
+| Scoped by the principal | Every list, get, search, aggregate and export is filtered to the caller's tenant, default-closed. |
+| Cross-tenant get by id | Returns `404`, identical to an id that does not exist, so another tenant's ids are never revealed. |
+| Cross-tenant write or delete | Refused. |
+| Owner on create and update | Stamped from the authenticated principal. A tenant in the request body is ignored. |
+| One tenant at a time | A cross-tenant principal opens a single tenant through the organization and tenant picker. The choice rides on the `X-Acting-Tenant` header (or the `as_tenant` query parameter) and follows every page, query and export. |
+| Single-tenant principals | Never gated by the picker, and never able to widen their reach with it. |
+| No "all tenants" telemetry view | Deliberate. The platform owner's Global view is the only cross-tenant read, and it is the platform owner's alone. |
 
-## Verify your own scope
+Organization isolation is derived from tenant isolation: an organization is its tenants. There is no separate cross-organization grant.
 
-Not sure which administrator you are? Two quick checks:
+## The Administration pages
 
-1. Look at the icon rail. If you can see **Stack**, and **Regions** / **Sessions** / **Collectors** under Administration, you are the platform operator.
-2. Open <kbd>Administration → Identity & Access</kbd>. The platform operator sees the **Provider / Organizations** tabs and the hierarchy map; a tenant admin sees only *"Users, roles and security settings for your tenant."*
+| Page | What you do there |
+| --- | --- |
+| [Add users and grant access](/administration/identity-access) | Create people, pick their role, and grant a role at an organization scope. |
+| [Create tenants and organizations](/administration/tenants-orgs) | Create the isolation units and the account layer above them, suspend and delete. |
+| [Configure authentication](/administration/authentication) | Local accounts, password and lockout policy, MFA, OIDC single sign-on, LDAP and TACACS+. |
+| [Connect Okta as an identity provider](/administration/okta-sso) | The worked Okta bring-up through the bundled Keycloak broker. |
+| [Mint an API key](/administration/api-access) | Machine credentials, token policy and the generated REST reference. |
+| [Read the audit log](/administration/audit-log) | Who changed what, who was refused, and how to filter it. |
+| [Set a data-residency region](/administration/regions) | Record where a tenant's data is meant to live. |
+| [Configure system settings](/administration/system-settings) | Landing page, time display, DNS, NTP and log-export limits. |
+| [Shape data with a pipeline processor](/administration/processors) | Mask, drop, hash and tag fields before storage, with a dry-run preview. |
+| [Review sensitive-data access](/administration/sensitive-data-access) | The compliance read-back of every attempt to reveal a sealed value. |
+| [Check telemetry parser coverage](/administration/telemetry-coverage) | What the parser recognises, and what your network says that it does not. |
 
-## Troubleshooting
+## The console map
 
-- **A menu item described in these docs isn't in my console.** You're signed in as a tenant or org admin and the item is platform‑operator‑only (Regions, Collectors, Sessions, the Stack section, the DNS/NTP cards in Settings). Ask your platform operator.
-- **I can open a page but saving returns "forbidden".** The backend enforces scope independently of the menu. Some pages render for any admin but only accept changes from the platform operator (for example, log export limits). The denied call appears in the Audit Log with decision **deny**.
-- **I made a change and want to prove it happened.** Every administrative mutation is audited. Open <kbd>Administration → Audit Log</kbd> and look for your username in **Actor** with the matching **Action**.
+The labels below are the ones the console shows. A leaf marked platform-only is hidden from a tenant administrator, and the backend refuses it independently, so calling the route directly still returns `403`.
+
+| Console path | Plane | Who sees it |
+| --- | --- | --- |
+| **Administration → Incident Response → Integrations** | Per-tenant | All administrators |
+| **Administration → Incident Response → Notifications** | Platform-global | Platform administrator only |
+| **Administration → Incident Response → Ticketing & Automation** | Per-tenant | All administrators |
+| **Administration → Data Collection → Data Sources** | Per-tenant | All administrators |
+| **Administration → Data Collection → SNMP Profiles** | Per-tenant | All administrators |
+| **Administration → Data Collection → Sensors** | Platform-global | Platform administrator only |
+| **Administration → Data Collection → Processors** | Per-tenant | All administrators |
+| **Administration → Data Collection → Sensitive Data Access** | Per-tenant | Holders of `sensitive_data:admin` |
+| **Administration → Data Collection → Telemetry Coverage** | Both halves on one page | All administrators, parser statistics are platform-only |
+| **Administration → Identity & Access** | Per-tenant | All administrators, scoped to what they own |
+| **Administration → Platform Security → Authentication** | Platform-global | Platform administrator only |
+| **Administration → Platform Security → Access Explorer** | Per-tenant | All administrators |
+| **Administration → Platform Security → Sessions** | Platform-global | Platform administrator only |
+| **Administration → Platform Security → Audit Log** | Per-tenant | All administrators |
+| **Administration → Platform Security → Transport Security** | Per-tenant | All administrators |
+| **Administration → Platform → Regions · Stack Health · Self-Monitoring · Search Dashboards · GraphQL Explorer** | Platform-global | Platform administrator only |
+| **Administration → API Access** | Mixed | All administrators, token policy is platform-only |
+| **Administration → Settings** | Mixed | All administrators, DNS and NTP are platform-only |
+
+## Which administrator am I?
+
+Open **Administration → Identity & Access**. A platform administrator sees the Organizations tree with the Provider realm as a clickable root row. A tenant administrator sees one page headed "Users, roles and security settings for your tenant", with no tree and no picker. The second check is the icon rail: the **Platform** group under Administration appears only for the platform administrator.
+
+## Related
+
+- [Permissions and honest states](/reference/honest-states) for what an empty answer means on each surface.
+- [Feature flags](/reference/feature-flags) for every `FEATURE_` and `ENABLE_` switch and its shipped default.
+- [Troubleshooting](/reference/troubleshooting) for the symptom index.

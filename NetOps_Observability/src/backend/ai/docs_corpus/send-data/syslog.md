@@ -1,113 +1,194 @@
 ---
-title: Syslog
-sidebar_label: Syslog
+title: Send syslog
+sidebar_label: Send syslog
+description: Point a device's syslog at Correlix, pick a severity threshold, and make the messages attribute to the right device and tenant.
+page_type: task
 sidebar_position: 3
-description: Point your devices' syslog at Correlix so log events land on the timeline and feed correlation.
 ---
 
-# Syslog
+# Send syslog
 
-Syslog turns your devices' own log messages into **searchable events** and into **signals** the correlation engine uses to confirm root cause. It's the highest-value plane to onboard after metrics: link up/down, protocol adjacency changes, hardware alarms, and configuration changes all arrive as first-class events the moment they happen.
+Syslog turns a device's own log messages into searchable events and into
+evidence the correlation engine uses. Link transitions, adjacency changes,
+hardware alarms and configuration changes all arrive at the moment the device
+emits them, which is what a 60-second metric poll cannot give you.
 
-## How it works
-
-- The syslog listener accepts both classic **RFC 3164** and structured **RFC 5424** messages, over **UDP 514** and **TCP 514**.
-- Each message is attributed to a device primarily by the **hostname carried inside the message** (which survives NAT). Messages whose format carries no usable hostname are keyed to the packet's **source IP** instead.
-- Logs from the major vendor families — **Cisco, Arista, Juniper, Nokia, Fortinet, Palo Alto** — are automatically recognized by their log signature and labeled by vendor, so you can filter by vendor in Log Search. Fortinet-format firewall logs (`key="value"` bodies) are additionally parsed **field by field**: the device name, severity, and — on traffic logs — the firewall's own application classification are all extracted and used for attribution and application analytics.
-- When a message body carries its own severity level, that overrides the transport-level severity — so what you see in Log Search reflects what the device actually said.
+This is the highest-value plane to configure after metrics, and it is one or two
+lines of device configuration.
 
 ## Before you begin
 
-1. The device is [onboarded](/onboard-devices/overview), so its events attribute to a known device.
-2. **UDP 514** (or **TCP 514**) is open from the device to Correlix on any firewall/ACL in the path — see [Connectivity requirements](/reference/connectivity-requirements).
-3. You know which source address the device will send from (management IP or loopback) and, ideally, the device's configured hostname matches its name in Correlix's inventory.
+- The device is [in the inventory](/onboard-devices/add-devices-manually), so
+  its events attribute to a known device.
+- UDP or TCP 514 open from the device to Correlix. See
+  [Connectivity requirements](/reference/connectivity-requirements).
+- The address the device will send from. Use the management or loopback address
+  the inventory holds.
+- The device's configured hostname, ideally equal to its name in the Correlix
+  inventory.
 
-## Step 1 — Configure the device
+## Steps
 
-Set Correlix as a syslog destination. Examples for the major vendor families (adapt interface names and addresses to your network; `CORRELIX_IP` is your Correlix instance):
+1. Set the severity threshold on the device. `informational` is the useful
+   setting; see the table below.
+2. Set the source interface, so the device sends from the address Correlix knows.
+3. Set Correlix as a syslog destination on UDP or TCP 514.
+4. Trigger a benign event, or wait for normal activity.
+5. Confirm the message arrived in **Explore → Logs**.
+
+### Device configuration
+
+These blocks are the platform's own documented examples, from
+`docs/INGESTION.md`. Replace `MONITOR_HOST` with the address of the Correlix
+host, and the port with `514` or whatever `SYSLOG_PORT` is set to on your
+deployment.
+
+Cisco IOS and IOS-XE:
 
 ```text
-! Cisco IOS / IOS-XE
 logging trap informational
 logging source-interface Loopback0
-logging host CORRELIX_IP
+logging host MONITOR_HOST transport udp port 5514
 ```
 
+Juniper Junos:
+
 ```text
-! Arista EOS
-logging host CORRELIX_IP
+set system syslog host MONITOR_HOST any info
+set system syslog host MONITOR_HOST port 5514
+```
+
+A Linux host, in `/etc/rsyslog.d/00-netops.conf`:
+
+```text
+*.* @MONITOR_HOST:5514       # UDP
+# or for TCP with reliable delivery:
+*.* @@MONITOR_HOST:5514
+```
+
+Then restart `rsyslog`.
+
+The two blocks below are constructed examples. This repository holds no
+validated syslog configuration for these platforms, so they are the conventional
+syntax rather than something Correlix has tested. Check each against your own OS
+version.
+
+Arista EOS:
+
+```text
+logging host MONITOR_HOST
 logging source-interface Loopback0
 logging trap informational
 ```
 
-```text
-# Juniper Junos
-set system syslog host CORRELIX_IP any info
-set system syslog host CORRELIX_IP source-address <loopback-ip>
-```
+Fortinet FortiOS:
 
 ```text
-# FortiGate (FortiOS)
 config log syslogd setting
     set status enable
-    set server "CORRELIX_IP"
+    set server "MONITOR_HOST"
     set port 514
     set mode udp
 end
 ```
 
-```bash
-# Linux host — rsyslog forwarder (/etc/rsyslog.d/00-correlix.conf)
-*.* @CORRELIX_IP:514        # UDP
-# or, for reliable delivery over TCP:
-*.* @@CORRELIX_IP:514
-# then: systemctl restart rsyslog
-```
+### Choosing a severity threshold
 
-**UDP or TCP?** UDP is the near-universal default and fine for most fleets. Syslog over UDP is lossy by design — on WAN paths or for devices whose logs you can't afford to drop, prefer TCP where the platform supports it.
+The threshold controls what the device sends. Correlix keeps everything it
+receives.
 
-## Step 2 — Choose a severity threshold
+| Threshold | Effect |
+|---|---|
+| `errors` (3) and above | Misses link, protocol and configuration events, many of which log at 4 to 6 |
+| `informational` (6) | Captures link, protocol, hardware and configuration events |
+| `debugging` (7) | Adds debug output. Use during active troubleshooting only |
 
-The threshold controls what the *device* sends; Correlix keeps everything it receives.
+Facility does not matter. Any facility is accepted, so there is no need to
+change the device's default.
 
-| Threshold | Effect | Recommendation |
-| --- | --- | --- |
-| `errors` (3) and above only | Misses link, protocol, and config events (many log at 4–6) | Too strict |
-| **`informational` (6)** | Captures link/protocol/hardware/config events | **Recommended** |
-| `debugging` (7) | Includes debug chatter | Only during active troubleshooting |
+### UDP or TCP
 
-Facility (e.g. Cisco's default `local7`) doesn't matter to Correlix — any facility is accepted; there's no need to change it.
+Both are accepted on port 514. UDP is the near-universal device default and does
+not retransmit, so a congested or policed path drops messages with no error
+anywhere. Where the platform supports it and the logs matter, use TCP. The
+listener accepts up to 1,024 concurrent TCP connections; a fleet larger than
+that needs the limit raised before it grows into it, because a refused
+connection is invisible from the device side.
 
-## Step 3 — Verify
+## Result
 
-1. Trigger a benign event (e.g. enter and exit config mode, or bounce an unused interface), or just wait for normal log activity.
-2. <kbd>Administration → Data Collection → Data Sources</kbd> — the device's **Syslog** column turns green.
-3. <kbd>Logs → Log Search</kbd> — pick the **Syslog (devices)** source, search for the device name, and confirm recent messages appear with the right severity. See [Log Search](/explore/logs).
-4. <kbd>Monitoring → Events</kbd> — notable syslog events (link changes, protocol transitions) show on the event timeline.
+The message appears in **Explore → Logs** with the **Syslog** source selected, attributed
+to the device, with the vendor label and the parsed fields its format supports.
+Within 15 minutes the **Syslog** column for that device turns green on
+[the coverage matrix](/onboard-devices/data-sources).
+
+Both RFC 3164 and RFC 5424 are parsed.
+
+### What Correlix does to the message
+
+| Step | Behaviour |
+|---|---|
+| Hostname | The hostname the sender wrote is kept, never overwritten with the peer address. It is the only device identifier that survives NAT |
+| Timestamp | The device's own timestamp is kept, never replaced with the receive time |
+| Time zone | RFC 3164 carries no zone and no year, so it is read as UTC. Device clocks must run UTC. RFC 5424 messages carry their own offset and are unaffected |
+| Vendor label | Derived from the message signature: `fortinet`, `paloalto`, `juniper`, `arista`, `cisco`, and `nokia` from the SR Linux body shape |
+| Structured parse | `ios_style.v1` for the `%FACILITY-SEVERITY-MNEMONIC` shape used by Cisco IOS, NX-OS and Arista EOS. `srlinux.v1` for Nokia SR Linux. FortiOS key-value bodies are parsed into `fgt.*` |
+| Severity | The level embedded in the body overrides the transport priority when it is stronger, so a `notice` frame carrying `W:` is stored as a warning |
+| Coverage | Every message carries `parser_status`, reading `parsed` or `unparsed` |
+
+An `unparsed` message is still stored, searchable and attributed. Only the
+derived fields are missing.
+
+FortiOS traffic logs additionally carry the firewall's own application
+classification, which is lifted to a vendor-neutral field and feeds application
+analytics.
+
+## Attribution and tenancy
+
+Attribution is by the hostname in the message, falling back to the source
+address. The identity is matched against a table exported from the device
+inventory, keyed by device name and device address.
+
+Three consequences worth knowing before you configure a fleet:
+
+- **A hostname the inventory does not know produces no tenant.** The message is
+  stored untagged and visible only to platform principals. It is never assigned
+  to a guessed tenant.
+- **An identity that maps to more than one tenant is dropped from the table
+  entirely.** NAT can collapse several devices onto one address, so the
+  ambiguous case fails closed rather than picking one.
+- **Message content never sets tenancy.** A FortiGate `devname=` field can
+  refine the device name, and only to a name the inventory already maps to the
+  tenant the hostname resolved to. It cannot move the event to another tenant.
+
+The correlation consumer re-runs the same lookup and refuses any event whose
+tenant it cannot reproduce.
+
+:::caution The listener has no authentication
+Port 514 accepts messages from anything that can route to it, and the hostname
+in a message is an unverified claim by the sender. A sender that both reaches
+the port and knows a real device hostname lands in that device's tenant, because
+the registry legitimately maps that hostname there. No application-layer check
+closes this. The hardening, in order of effort: restrict the published port to
+the management network with a host firewall rule, then move devices to syslog
+over TLS with client certificates.
+:::
 
 ## Troubleshooting
 
-**Nothing arriving at all**
+| Symptom | Cause | What to do |
+|---|---|---|
+| Nothing arrives | The device is not sending | Check the device's own counters, for example `show logging` on Cisco |
+| Nothing arrives | The path is blocked | Confirm UDP 514, or TCP 514 if you configured TCP, on every firewall between the device and Correlix |
+| Nothing arrives | The threshold is too strict | A quiet, healthy device at `errors` legitimately sends nothing. Set `informational` and trigger a test event |
+| Messages arrive but attribute to no device | The hostname matches no inventory name or address | Align the device hostname with the inventory name, or set a source address the inventory holds |
+| Messages arrive but are invisible to a tenant operator | The identity is unknown or ambiguous, so the event is untagged | Add the device to the inventory, or resolve the duplicate address |
+| Gaps under load | UDP loss on the path | Move that device to TCP, or check for congestion and policing |
+| A vendor's fields are missing | No structured parser matches that format | The message is still stored and searchable. `parser_status` reads `unparsed` |
 
-1. Confirm the device is actually sending: most platforms have a counter or debug (e.g. Cisco `show logging` lists configured hosts and message counts).
-2. Check the path: UDP 514 open on every firewall/ACL between the device and Correlix? If you configured TCP, is TCP 514 open?
-3. Check the severity threshold — if it's `errors`, a quiet, healthy device may legitimately send nothing. Set `informational` and trigger a test event.
-4. Verify the destination IP is your Correlix instance (not a stale NMS address).
+## Related
 
-**Messages arrive but attribute to the wrong device (or an unknown one)**
-
-- Correlix keys syslog to the **hostname in the message**. If the device's configured hostname doesn't match its name in the inventory, events won't attach to it. Fix either side so they match.
-- If messages carry no hostname, attribution falls back to the **source IP** — make sure the device sends from the address Correlix knows it by (set a `source-interface` / `source-address` as in the examples above), and account for any NAT in the path.
-
-**Gaps in the log stream**
-
-- UDP loss under load is expected behavior of the protocol, not the platform. Switch that device to TCP, or check for congestion/policing on the path.
-
-**Firewall logs missing fields**
-
-- Fortinet-format logs are parsed field-by-field automatically. Other vendors' firewall logs are ingested and vendor-labeled but shown as message text. On FortiGate, confirm the device is logging the events you expect (e.g. traffic logs require logging enabled on the policy).
-
-## Next
-
-- **[Send SNMP traps](/send-data/traps)** — the second push plane.
-- **[Search and save log queries](/explore/logs)**.
+- [Send SNMP traps](/send-data/traps)
+- [Check the data-source coverage matrix](/onboard-devices/data-sources)
+- [Search logs](/explore/logs)
+- [Connectivity requirements](/reference/connectivity-requirements)

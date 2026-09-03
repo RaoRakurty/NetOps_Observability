@@ -1,154 +1,116 @@
 ---
-title: RCA Time Intelligence
-sidebar_label: RCA Time Intelligence
+title: Incident timing and recovery
+sidebar_label: Incident timing and recovery
+description: How Correlix derives each lifecycle stamp on an incident, which ones are observed rather than inferred, and why a phase reads incomplete instead of zero.
+page_type: concept
 sidebar_position: 5
-description: Definitions and formulas for the incident time decomposition — what each phase metric means, how every timestamp is measured, and what honestly stays unknown.
 ---
 
-# RCA Time Intelligence
+# Incident timing and recovery
 
-RCA Time Intelligence decomposes **every incident into measured time phases** — detection, correlation, root-domain isolation, owner identification, evidence readiness, acknowledgement, mitigation, recovery, resolution — so you can see exactly *where time was saved or lost*.
+Incident timing decomposes one incident's clock into phases and attributes every
+timestamp to its source, so the console never reads an approximation as ground
+truth. It is what the Time Impact card renders, and what the reliability rollups
+aggregate.
 
-Two things it deliberately is **not**:
+## How it works
 
-- It is **not an "MTTR dashboard"**. MTTR is never shown as one ambiguous number; it is split into phases with separate clocks (recovery is not resolution, acknowledgement is not detection).
-- It never claims credit it can't prove. Every timestamp is **source-attributed** (observed, inferred, ITSM, user-entered), and a phase whose start or end was never observed renders as **incomplete, naming the missing event** — never a fabricated zero.
+### The lifecycle stamps
 
-The hero metric is **MTTI — time to isolate**: how long from the first signal until Correlix identified the likely root domain, seam, and owner with evidence-backed confidence. That is the part of the incident clock Correlix itself shrinks.
+Correlix derives the lifecycle from facts it already records. The engine supplies
+the analysis side, and a linked ticket supplies the human side.
 
-## Where you see it
+| Event | Derived from | Source |
+|---|---|---|
+| `first_signal` | The correlation window start, which is the earliest observation onset. | observed |
+| `detected` | The earliest observation ingest time. | observed |
+| `correlation_completed` | The instant the case was persisted. | observed |
+| `root_domain_identified` | The persist instant, once the verdict is `suspected` or `confirmed`. | observed |
+| `owner_identified` | The same instant. The owner is intrinsic to the grounded hypothesis and has no timestamp of its own. | inferred |
+| `evidence_ready` | The persist instant, once nothing is missing from the evidence policy. | observed |
+| `ticket_created`, `acknowledged`, `mitigation_started`, `mitigated`, `resolved`, `closed` | The linked ticket's own timestamps. | itsm |
 
-- **Per incident** — the **Time Impact** card on every incident's detail view (<kbd>Monitoring → Correlations</kbd>, open a row; see [Reading an incident](/incidents/reading-an-incident#step-4--read-the-time-impact-card)). It shows the lifecycle timeline, each phase's elapsed time, and the current bottleneck.
-- **Across the fleet** — the **Recovery Scorecard** (<kbd>Monitoring → Recovery Scorecard</kbd>): percentile rollups (p50/p90/p95), the MTTI trend, MTBF and repeat rate, chronic offenders, and an owner-domain breakdown.
+`impact_started` is left absent on purpose. The true onset of customer impact is
+unobservable, so the calculator stands in `first_signal` for it and flags the
+metric as inferred rather than pretending it measured the onset.
 
-:::note Roles required
-Reading time metrics and the Recovery Scorecard needs infrastructure read access. Supplying manual lifecycle timestamps needs infrastructure write access. Triggering a snapshot backfill is a platform-operator action. All reads are scoped to your tenant.
-:::
+`detected` never precedes the onset. Where clock skew would put it earlier, it is
+clamped to the onset.
 
-## The lifecycle events, and where each timestamp comes from
+### Recovery
 
-Every metric is a difference between two **lifecycle events**. Each event's timestamp is taken from a specific source of truth and labeled with how it was obtained:
+Recovery used to come from ticket facts alone. A deployment that linked no ticket
+read "not measured" forever, which is accurate and useless.
 
-| Event | What it marks | Measured from | Source label |
-| --- | --- | --- | --- |
-| `impact_started` | True onset of user impact | Not directly observable. When absent, the calculator stands in the earliest customer-impacting signal — and flags the result **inferred**. An operator can supply the real onset. | inferred / user_entered |
-| `first_signal` | Earliest signal onset in the incident | The correlation window's start (the minimum signal onset time) | observed |
-| `detected` | When Correlix first saw the incident | The earliest ingest time of the incident's signals. Never earlier than the onset itself (clock-skew guard); when ingest time is unknown it falls back to the onset. | observed |
-| `correlation_completed` | Signals grouped into one incident | The correlation object's persist time | observed |
-| `root_domain_identified` | Root domain / seam isolated ★ | The persist time once the verdict reaches **suspected** or **confirmed** | observed |
-| `owner_identified` | Responsible owner named | The same instant as isolation, when the top hypothesis names an owner — the owner is intrinsic to the grounded hypothesis, so its *timing* is flagged **inferred** | inferred |
-| `evidence_ready` | Evidence policy satisfied | The persist time once the incident's missing-evidence list is empty | observed |
-| `ticket_created`, `acknowledged`, `mitigation_started`, `mitigated`, `recovered`, `resolved`, `closed` | The human / workflow response | The incident's **ticket audit ledger** (see below), or operator-supplied timestamps | itsm / user_entered |
+Recovery now resolves in this order:
 
-Each stamp also carries a **confidence** (0–1). Isolation, owner, and evidence stamps inherit the verdict's confidence; when the engine reports none, confidence floors at 0.5 — a grounded verdict never claims certainty it didn't have.
+1. **A linked ticket wins outright.** Its recovery timestamp is used, with source
+   `itsm` and confidence 1. A proxy can never overwrite a ticket fact.
+2. **Otherwise, a closed case with a window end yields a stamp.** Recovery is set
+   to the window end, with source `INFERRED` and confidence capped at **0.7**.
+3. **A merged case yields no recovery, ever.** It was folded into another case,
+   which carries the real lifecycle. A merged child recovers only in its parent.
+4. **An open case yields nothing.** The incident is still live.
 
-### Where the workflow timestamps come from (ITSM)
+The window end is the last written evidence time of the case, and the engine
+closes a window after a quiet period. "Closed at the window end" therefore means
+the engine saw no further symptoms. That is a proxy for service recovery, not a
+measurement of it.
 
-The human-response events derive from the incident's append-only **ticket audit ledger** — the same history you see on the [External ticket card](/incident-response/rca-ticketing#the-ticket-card-on-an-incident):
+The stamp is still the earliest defensible estimate, because true recovery lies
+at or after the window end. The inferred source and the 0.7 cap are what stop the
+console reading a proxy as ground truth. A stamp that would precede the onset is
+clamped to the onset.
 
-- Only **successful** audit entries count (a failed or retrying action did not move the ticket), and the **first** occurrence of each action wins — the instant that phase began.
-- **Ticket created** and **Resolved** populate from Correlix's own ticketing worker the moment it files or resolves a ServiceNow incident. If the audit row is missing but a live ticket link exists, the link's timestamps stand in.
-- **Acknowledged, mitigation started, mitigated, recovered, closed** populate from the inbound ServiceNow state sync, which polls each live ticket's current state and records a phase **only where ServiceNow provides a real timestamp** (work start, resolved/closed times, or the optional `u_correlix_*` custom fields for precise mitigated/recovered instants). No ServiceNow timestamp → the phase stays unmeasured.
-- The workflow counts as **connected** once a ticket exists for the incident. Before that, the Time Impact card says so honestly instead of pretending a ticket phase is pending.
+Where the case reports no confidence at all, confidence floors at 0.5, so a
+grounded verdict never claims certainty it did not have.
 
-### Operator-supplied timestamps
+### The phase metrics
 
-Operators (infrastructure write access) can record the phases the platform cannot observe — impact onset, ticket created, acknowledged, mitigation started, mitigated, recovered, resolved, closed — directly on the incident. Three rules keep this honest:
+Eight metrics are computed from the stamps: time to detect, to correlate, to
+isolate, to evidence, to acknowledge, to mitigate, to recover, and to resolve.
 
-- **Engine-owned phases are never editable by hand** — first signal, detection, correlation, isolation, owner, evidence. A human must not be able to fake the isolation evidence that MTTI and MTTC measure.
-- **User-entered timestamps win** over derived ones for the same event, and are labeled `user_entered` in the timeline.
-- **Every manual edit is audited** — who, which incident, which phase. Closing an incident additionally records a verification state: *verified clear* (recovery evidence confirmed), or an explicit, labeled override (*signal still present*, *recovery unobserved*, or *partial recovery*). There is no silent or free-text override.
+A metric with a missing start or end is reported **incomplete**, naming the event
+that is missing. It is never reported as a duration of zero. Where clock skew
+produces a negative interval, the duration clamps to zero and the metric stays
+complete, with the uncertainty carried by its source and confidence rather than
+by a nonsensical number.
 
-## The phase metrics — formulas
+Each metric also carries the minimum confidence of its two constituent stamps,
+and is flagged inferred when either end was inferred.
 
-All phases are computed from the lifecycle above. A metric is **complete** only when both its endpoints exist:
+### The current bottleneck
 
-| Metric | Field | Formula | Notes |
-| --- | --- | --- | --- |
-| Time to detect | `ttd` | `detected − impact_started` | With no observed onset, impact is inferred from the first signal → flagged inferred |
-| Time to correlate | `ttc` | `correlation_completed − first_signal` | Correlix's correlation speed |
-| **Time to isolate ★** | `tti` | `root_domain_identified − first_signal` | **The hero metric (MTTI)** — first signal to evidence-backed root domain / seam / owner |
-| Time to evidence | `tte` | `evidence_ready − first_signal` | Until the evidence policy is satisfied |
-| Time to acknowledge | `tta` | `acknowledged − ticket_created` | Deliberately ticket→ack, **not** impact→ack |
-| Time to mitigate | `ttm` | `mitigated − detected` | Impact reduced — not necessarily fully repaired |
-| Recovery time | `ttr_recovery` | `recovered − impact_started` | User impact gone |
-| Resolution time | `ttr_resolution` | `closed − impact_started` | Ticket closed, root cause documented — a **separate** clock from recovery |
+The bottleneck is the earliest incomplete phase, and it is phase-consistent.
+Provider repair is reported only once the seam is isolated, the evidence is
+ready, the ticket exists and it has been acknowledged.
 
-Mechanics that apply to every metric:
+A missing ITSM workflow is a measurement gap, not a bottleneck. When no workflow
+is connected, the downstream phases read **Not measured**, never "workflow
+required", because Correlix finished the RCA and the gap is not a NOC failure.
 
-- **Missing endpoint → incomplete metric.** The result names the missing event (e.g. *missing recovered*) and carries no duration. It is never rendered as zero.
-- **Inferred inputs propagate.** If either endpoint was inferred, the metric is flagged `is_inferred`; its confidence is the *minimum* of the two endpoints' confidences.
-- **Clock skew never yields negative time.** An out-of-order pair clamps to 0 rather than reporting a nonsense negative duration; the source and confidence labels carry the uncertainty.
-- Every result records its `calculation_version`, so a formula change never silently mixes with old numbers.
+## Honest limits
 
-## The current bottleneck
+- **Detection latency is a per-incident figure only.** The reliability rollups
+  exclude it, because the batch path does not run the per-case earliest-ingest
+  query and detection would fall back to the onset, producing a misleading zero.
+  It is shown on the Time Impact card, where that query does run. Every other
+  metric rolls up.
+- **A failed earliest-ingest read is loud.** The store failing to answer is a
+  different fact from a case with no archived observations, and the failure is
+  logged rather than silently blended into the second case.
+- **Planned work is separated, not hidden.** An incident whose onset fell inside
+  a covering [maintenance window](/monitoring/maintenance-windows) is stamped as
+  maintenance and excluded from the mean-time and chronic-offender rollups, so
+  planned work does not pollute the figures.
+- **A merged case contributes nothing.** Merged children are excluded from the
+  rollups, so one event is counted once.
+- **A stamp is never invented to fill a gap.** Where nothing was recorded, the
+  phase stays incomplete and says which event it is waiting for.
 
-Alongside the metrics, each incident reports its **current bottleneck** — the *earliest lifecycle phase that has not completed*, walked in order. It is phase-consistent by construction: a later phase (say, provider repair) can never be blamed while an earlier one (evidence, ticket, acknowledgement) is still unmet.
+## Related
 
-| Bottleneck | Meaning |
-| --- | --- |
-| `root_isolation` | Root domain / seam not yet isolated — correlation still localising the fault |
-| `owner_assignment` | Isolated, but no owner named yet |
-| `evidence_bundle` | Evidence bundle not yet ready |
-| `workflow_not_connected` | Everything Correlix measures is done; ticket / recovery / closure need ITSM or operator workflow evidence — a **visibility gap, not a process failure** |
-| `ticket_creation` | Evidence ready; waiting for the ticket |
-| `acknowledgement` | Ticket filed; waiting for acknowledgement |
-| `provider_repair` | Acknowledged and the isolated seam is provider-owned (ISP, carrier, cloud, SaaS, SD-WAN, colo) — the provider repair clock is the limiting phase. Reported **only** after isolation, evidence, ticket, and acknowledgement |
-| `mitigation` | Acknowledged; mitigation in progress (non-provider owner) |
-| `recovery` | Mitigated; awaiting a service recovery signal |
-| `closure` | Recovered; waiting for ticket closure |
-| `resolved` | Closed — no open bottleneck |
-
-The Recovery Scorecard's **Top time-loss driver** is the most common bottleneck across the window's incidents.
-
-## Fleet rollups — the Recovery Scorecard
-
-The scorecard aggregates per-incident decompositions over a window (7/30/90 days):
-
-- **Percentiles first.** Every phase shows p50 (the normal case) and p90/p95 (the long tail); the mean is secondary only — averages hide the tail that actually hurts the NOC.
-- **Customer-impacting by default.** Incidents whose object is Correlix's own stack (platform self-monitoring) are excluded unless you switch on *Include internal/platform events*. The footnote always states which view you're seeing.
-- **Owner domains.** Each incident is classified ISP / LAN / SD-WAN / Cloud / App / Internal Platform / Unknown from the engine's seam owner, and the breakdown table shows per-domain incident counts, MTTI p90, recovery p90, repeat rate, and top time-loss driver.
-- **MTBF (repeat failure interval)** — the mean gap between successive incidents on the *same object*. The object identity is the most specific stable key available (root entity → seam → device → interface → app path → provider → failure signature). Merged/suppressed child incidents and planned maintenance are excluded; only objects with ≥ 2 qualifying incidents contribute. Shown as *No repeats yet* until a repeat exists.
-- **Repeat rate** — the fraction of qualifying incidents whose object failed more than once in the window.
-- **Chronic offenders** — objects with ≥ 2 unplanned incidents, ranked by incident count (ties broken toward the more frequent, i.e. smaller MTBF), with last-seen time and dominant owner domain. The answer to "which circuit keeps failing".
-- **MTTF** applies to **non-repairable assets only** (optics, modules, circuits explicitly marked non-repairable) — never to logical services. Without asset birth/install times a lifetime cannot be computed, so Correlix reports the count of failed non-repairable assets and **never fabricates an MTTF duration**.
-- **Filters**: owner, provider, device, and failure signature scope every rollup, trend, and offender list.
-
-Two honesty limits specific to the fleet view:
-
-- **Detection time (`ttd`) is per-incident only.** The fleet path has no per-object ingest measurement, where detection would falsely read as zero — so `ttd` is excluded from rollups and shown only on the incident's Time Impact card, where it is truly measured.
-- **Workflow phases roll up only once their evidence exists.** Acknowledgement, recovery, and resolution percentiles populate from incidents that actually carry ITSM or operator timestamps; until then the scorecard shows *Not measured — recovery evidence not connected* or *Not available — ITSM workflow required* rather than inventing numbers.
-
-## Snapshots vs. live scan
-
-Where the scorecard's numbers physically come from matters for what you see:
-
-- **Snapshots (the normal case).** A background worker recomputes every incident's time decomposition on a cycle (every 15 minutes by default, 30-day lookback) and persists one durable snapshot per incident. Rollups read these snapshots — they survive the hot store's retention window, are deduplicated to one row per incident (a calculation-version bump never double-counts), and are bounded at the most recent **20,000** incidents per window. The API reports `source: snapshots`.
-- **Live scan (cold start only).** On a fresh install or before the first backfill pass has run, rollups fall back to deriving directly from the most recent **5,000** correlation objects. The API reports `source: live_scan`.
-- **Capping is disclosed, never silent.** If a window holds more incidents than the bound, the response sets `capped` with the applied `scan_cap`, and the scorecard footnote reads *"Large windows use the most recent N incidents"* — the older excess is excluded, and you're told so.
-
-The per-incident Time Impact card is not affected by any of this: it always derives live from the incident's own record, ticket ledger, and manual events.
-
-## What renders as unknown or not measured — and why
-
-| You see | Why |
-| --- | --- |
-| A phase row reading **Not measured** | No ITSM or operator-workflow evidence is connected for that phase — a visibility gap, not a process failure |
-| **Inferred** tag on a timestamp | The stamp was derived (impact onset from first signal; owner timing at the isolation instant), not directly observed |
-| An incomplete metric naming a **missing event** | One endpoint never occurred or was never observed; no duration is invented |
-| **Insufficient evidence** on MTTI cards | Not enough incidents in the window reached an evidence-backed isolation |
-| **No repeats yet** on MTBF | No object failed twice in the window — MTBF needs at least two incidents on one object |
-| An MTTF count but no MTTF duration | Asset birth times are unknown; a lifetime would be a fabrication |
-| *"Large windows use the most recent N incidents"* | The window exceeded the snapshot (20,000) or live-scan (5,000) bound; capping is disclosed |
-| Internal/platform incidents absent | The default view is customer-impacting only; use *Include internal/platform events* to widen it |
-
-## Troubleshooting
-
-- **The scorecard is empty or much smaller than expected.** On a fresh install the first snapshot backfill hasn't run yet (it runs on a 15-minute cycle); until then a bounded live scan serves the window. A platform operator can trigger a backfill pass immediately.
-- **Recovery and closure columns never populate.** Those phases require ITSM evidence ([connect ServiceNow](/incident-response/integrations#servicenow) and enable [RCA Auto-Ticketing](/incident-response/rca-ticketing)) or operator-entered timestamps on the incident. Correlix will not guess them.
-- **Acknowledged/mitigated timestamps missing even with tickets flowing.** Ticket create/resolve come from Correlix's outbound worker; the granular human phases arrive via the inbound ServiceNow state sync and only where ServiceNow records a real timestamp (work start, resolve/close, or the `u_correlix_*` custom fields).
-- **MTTI looks identical to correlation time.** In the current engine, correlation and isolation are grounded together, so MTTC tracks isolation closely — expected, not a bug.
-
-## The result
-
-One incident clock, split into phases you can act on: proof of how fast detection → correlation → isolation ran, and an honest account of where recovery waited — on evidence, on a ticket, on an owner, or on a provider's repair clock.
+- [Read an incident](/incidents/reading-an-incident#step-4--read-the-time-impact-card)
+- [Open tickets automatically from RCA](/incident-response/rca-ticketing)
+- [Schedule a maintenance window](/monitoring/maintenance-windows)
+- [Honest states](/reference/honest-states)

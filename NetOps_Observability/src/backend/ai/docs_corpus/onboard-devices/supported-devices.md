@@ -1,70 +1,183 @@
 ---
-title: Supported devices & vendors
+title: Supported devices
 sidebar_label: Supported devices
-sidebar_position: 8
-description: What Correlix can monitor out of the box, and how coverage extends to any SNMP-capable device.
+description: The vendors Correlix recognizes, the metric families it reads over each transport, and what support does not include.
+page_type: reference
+sidebar_position: 2
 ---
 
-# Supported devices & vendors
+# Supported devices
 
-Correlix is **vendor-neutral**: it builds on standard protocols (SNMP, syslog, SNMP traps, NetFlow/IPFIX/sFlow, gNMI), so the honest baseline is simple — **anything SNMP-capable works**. On top of that baseline, specific vendors get automatic recognition, richer metric packs, and deeper log parsing. This page tells you exactly which is which.
+Correlix reads devices over SNMP and accepts syslog, SNMP traps and flow
+records from any device that can send them. "Supported" therefore means three
+separate things, and this page separates them: the vendor is recognized
+(Correlix names it from its SNMP identity), the vendor has a metric pack
+(extra OIDs beyond the standard MIBs), and the vendor has a configuration
+template (Correlix can generate its device CLI). A vendor can be recognized
+and have neither of the other two.
 
-## The universal baseline — any SNMP device
+All identifiers below are taken from the shipped source: the vendor profile
+registry in `src/backend/internal/vendorprofile/profiles/`, the SNMP metric
+profiles in `src/backend/collectors/profiles.go`, and the ingest configuration
+in `deployment/docker/`.
 
-Every device with a working SNMP credential gets, with **no profile configuration**:
+## Vendor recognition
 
-- **Identity & inventory** — vendor/model/OS description, uptime, the interface list.
-- **Interface health** — admin/oper status, state-change (flap) timestamps, high-capacity traffic counters, interface speed (feeding utilization), errors, discards, physical-layer FCS errors, and unicast/multicast/broadcast packet mix.
-- **System health** — CPU load and environmental sensors where the device exposes the standard tables.
-- **Protocol state** — BGP peer state, session transitions and updates, and OSPF neighbor/interface state via the standard protocol MIBs.
+On the first poll Correlix reads `sysObjectID` (`1.3.6.1.2.1.1.2.0`) and maps
+its IANA Private Enterprise Number to a vendor. When the enterprise number is
+unclaimed, it falls back to a substring match on `sysDescr`
+(`1.3.6.1.2.1.1.1.0`). A device whose enterprise number and description match
+nothing keeps an empty vendor, which the console shows as unknown. That is an
+honest unknown, not a guess, and it does not affect collection.
 
-These come from the **Universal** profiles (standard MIB families — system, interfaces, host resources, L3), which apply to every device regardless of vendor.
+| Vendor | Enterprise number | `sysDescr` fallback matches |
+|---|---|---|
+| Arista Networks | 30065 | `arista` |
+| Aruba Networks | 14823 | `arubaos`, `aruba` |
+| Check Point | 2620 | `check point`, `gaia`, `checkpoint` |
+| Cisco | 9 | `cisco` |
+| Dell | 674 | none |
+| Extreme Networks | 1916 | none |
+| F5 Networks | 3375 | `big-ip`, `bigip`, `f5 networks` |
+| Fortinet | 12356 | `fortinet`, `fortigate` |
+| HP | 11 | none |
+| Huawei | 2011 | `huawei`, `vrp` |
+| Juniper Networks | 2636 | `junos`, `juniper` |
+| Linux | none | `linux` |
+| MikroTik | 14988 | `mikrotik`, `routeros` |
+| Net-SNMP | 8072 | none |
+| Nokia | 6527 | `nokia`, `timos`, `sr os` |
+| Palo Alto Networks | 25461 | `palo alto`, `pan-os` |
+| Ruckus Wireless | 25053 | `ruckus` |
+| Sophos | 21067, 9789 | `sophos`, `sfos`, `astaro` |
+| Ubiquiti | 41112 | `ubiquiti`, `edgeos`, `edgerouter`, `unifi` |
 
-## Automatic vendor recognition
+The `sysDescr` fallback is ordered, because a BIG-IP description contains
+`Linux`. F5 is tested before the Linux backstop.
 
-On first contact, Correlix fingerprints the device from its SNMP identity and fills in the **Manufacturer** and functional **Type** (router/switch/firewall/…) automatically. Recognized vendor families:
+Correlix also derives a device **type** from the same identity: `router`,
+`switch`, `firewall`, `load-balancer`, `ap`, `wlc`, `cloud-gw` or `generic`. An
+operator can override it with the device label `device_type`.
 
-Cisco · Juniper · Arista · Fortinet · Palo Alto Networks · Nokia · Huawei · MikroTik · Extreme · F5 · Dell · HP · Check Point · Linux/hosts (standard host agents)
+## What every recognized device gets
 
-A device outside this list still monitors fine — it just shows "Unknown" as the manufacturer until you set it on the record.
+The `generic` SNMP profile carries enterprise number 0 and applies to every
+device. It reads 33 objects from standard MIBs. No configuration selects it.
 
-## Built-in vendor metric packs
+| Family | Metrics |
+|---|---|
+| System | `device_sysuptime` |
+| Interface state | `device_if_oper_status`, `device_if_admin_status`, `device_if_last_change`, `device_if_speed` |
+| Interface traffic | `device_if_in_octets`, `device_if_out_octets` (both `ifHC*` 64-bit counters) |
+| Interface errors | `device_if_in_errors`, `device_if_out_errors`, `device_if_in_discards`, `device_if_out_discards`, `device_if_fcs_errors` |
+| Interface packet mix | unicast, multicast and broadcast counters in each direction |
+| Host resources | `device_cpu_percent` (`hrProcessorLoad`) |
+| Environment | `device_sensor_value` (`entPhySensorValue`) |
+| BGP | `device_bgp_peer_state`, `device_bgp_fsm_transitions`, `device_bgp_in_updates` (BGP4-MIB) |
+| OSPF | `device_ospf_nbr_state`, `device_ospf_if_state`, `device_ospf_area`, `device_ospf_lsdb_count`, `device_ospf_spf_runs_total`, `device_ospf_if_hello_seconds`, `device_ospf_if_dead_seconds` |
+| Power over Ethernet | `device_poe_port_detection_status`, `device_poe_port_power_class`, `device_poe_pse_consumption_watts` |
 
-The [SNMP Profile Manager](/onboard-devices/snmp-profiles)'s profile library ships with vendor packs that layer platform-specific health on top of the universal baseline (vendor CPU/memory/temperature tables and the like), matched to devices automatically by their identity fingerprint:
+The three BGP metrics carry `owner: gnmi`. On a device labelled `gnmi: "true"`
+the SNMP collector withholds them and gNMI serves them instead. On every other
+device SNMP serves them. See
+[Set up gNMI streaming telemetry](/onboard-devices/streaming-gnmi).
 
-| Category | Built-in profiles |
-| --- | --- |
-| **Universal** | System, Interfaces, L3 (IP/TCP) — applied to everything |
-| **Routers / Switches** | Cisco IOS / IOS-XE · Juniper JUNOS · Arista EOS · Huawei · MikroTik RouterOS · Extreme EXOS/VOSS · Ubiquiti EdgeOS/EdgeRouter |
-| **Firewalls / SD-WAN** | Fortinet FortiGate · Palo Alto PAN-OS · Palo Alto CloudGenix SD-WAN · Versa FlexVNF |
-| **Servers / Hosts** | Host Resources · Server/Host (standard host agents, Windows) |
-| **Other** | Printer · UPS |
+## Vendor metric packs
 
-All profiles are extensible: add an OID to an existing pack, or create a **Custom** profile for an unlisted platform — see [vendor profiles](/onboard-devices/snmp-profiles#vendor-profiles-oid--metric-library). A missing metric is almost always a profile extension away, not an unsupported device.
+A vendor pack is selected in addition to the generic profile when the device's
+enterprise number matches. Five of the registered vendors carry no extra OIDs;
+they are registered so the device is labelled and so the generic floor applies.
+The source states why in each case.
 
-## Log (syslog) parsing by vendor
+| Vendor | Extra metrics |
+|---|---|
+| Cisco | `device_cpu_percent`, `device_mem_used_bytes`, `device_temp_celsius` |
+| Juniper | `device_cpu_percent`, `device_mem_percent`, `device_temp_celsius` |
+| Huawei | `device_cpu_percent`, `device_mem_percent`, `device_temp_celsius` |
+| Extreme | `device_cpu_percent`, `device_mem_free_kb`, `device_temp_celsius` |
+| MikroTik | `device_temp_celsius`, `device_cpu_temp_celsius`, `device_voltage_dv` |
+| Fortinet | `device_fw_cpu_pct`, `device_fw_mem_pct`, `device_fw_session_active` |
+| Palo Alto | `device_fw_session_active`, `device_fw_session_max`, `device_fw_session_util_pct`, `device_fw_ha_state`, `device_fw_gp_tunnels` |
+| Check Point | `device_fw_cpu_pct`, `device_fw_mem_active_bytes`, `device_fw_conns` |
+| F5 | eight `device_lb_*` metrics: virtual-server and pool-member availability, pool and client connections, trunk status and member counts, memory used |
+| Arista | none. CPU, memory and temperature come from HOST-RESOURCES-MIB and ENTITY-SENSOR-MIB, which the generic profile already reads. |
+| Dell | none. The networking OS families sit under different sub-trees, and 674 also covers iDRAC servers. |
+| Sophos | none. SFOS MIB coverage varies by version, so no OIDs are asserted. |
+| Ubiquiti | none. UniFi device health lives in the controller API, not in device SNMP. |
+| Aruba, Ruckus | none. Wired uplink ports come from the generic floor; wireless radio and client metrics are a separate family. |
 
-Any device can send syslog; every message becomes a searchable, device-attributed event. On top of that, logs from **Cisco, Arista, Juniper, Nokia, Fortinet, and Palo Alto** formats are recognized by their signature and labeled by vendor for filtering. Fortinet-format firewall logs get the deepest treatment: their structured bodies are parsed **field by field**, including the firewall's own **application identification** on traffic logs — which feeds application analytics and the Service View (see [Service View](/incidents/overview)).
+Nokia, HP, Linux and Net-SNMP are recognized as vendors but have no SNMP metric
+pack at all. Those devices get the generic profile only.
 
-## Flow exporters
+To add an OID for a platform, extend a profile from
+**Administration → Data Collection → SNMP Profiles → Profiles**, or supply a
+JSON file at `SNMP_PROFILES_FILE`. A file profile whose name matches a built-in
+replaces it.
 
-NetFlow **v5/v9**, **IPFIX**, and **sFlow** are all accepted, from any exporter that implements them — routers, switches, firewalls, or software exporters. See [Flows](/send-data/flows).
+## Device configuration templates
 
-## Traps
+Correlix generates the device-side SNMP CLI for these eleven vendors. Every
+other vendor gets a real generated credential plus generic guidance, because
+inventing a CLI block for an unvalidated platform would be a claim about a
+device nobody has tested.
 
-SNMP traps are accepted from **any device**; see [SNMP traps](/send-data/traps).
+Arista · Check Point · Cisco · Extreme · F5 · Fortinet · Huawei · Juniper ·
+MikroTik · Palo Alto · Ubiquiti
 
-## Streaming telemetry (gNMI)
+The blocks are in
+[SNMP configuration by vendor](/onboard-devices/vendor-snmp-configs).
 
-Streaming is supported per device on gNMI-capable platforms, with subscription sets validated on **Arista EOS** (OpenConfig models) and **Nokia SR Linux** (native models) — covering interface counters, BGP session state, IS-IS adjacencies, and control-plane health. Other gNMI-capable platforms can be added per device; see [Streaming telemetry](/onboard-devices/streaming-gnmi).
+## Syslog
 
-## Honest expectations
+Any device can send syslog. Correlix labels the vendor from the message
+signature, then runs a structured parser where one exists.
 
-- **"Supported" at baseline means SNMP.** If your device answers SNMP, you get inventory, interfaces, availability, and standard protocol state — full stop.
-- **Vendor packs deepen, they don't gate.** A vendor missing from the tables above loses only the vendor-specific extras (e.g. its proprietary CPU table), never the baseline.
-- **When in doubt, just add it.** Add the device with a credential and check the [Data Sources matrix](/onboard-devices/data-sources) — if SNMP turns green, you're monitored. If a metric you need is missing, extend the profile.
+| Vendor label | How it is recognized | Structured parser |
+|---|---|---|
+| `fortinet` | `devname=` together with `logid=` | Key-value body parsed into `fgt.*`, including the on-box application classification |
+| `paloalto` | A comma-delimited `TRAFFIC`, `THREAT`, `SYSTEM`, `CONFIG` or `HIPMATCH` field | none |
+| `juniper` | `[junos@2636`, `RT_FLOW`, or a Junos daemon in the application name | none |
+| `arista` | An EOS agent name such as `ebra`, `mlag`, `stp`, `lldp` | `ios_style.v1` |
+| `cisco` | The `%FACILITY-SEVERITY-MNEMONIC` shape | `ios_style.v1` |
+| `nokia` | The SR Linux pipe-delimited body | `srlinux.v1` |
 
-## Next
+Every message carries `parser_status`, which reads `parsed` or `unparsed`. An
+unparsed message is still stored, searchable and attributed. Only the derived
+fields are missing.
 
-- **[SNMP profiles & credentials](/onboard-devices/snmp-profiles)**
-- **[Connectivity requirements](/reference/connectivity-requirements)**
+## Flow records
+
+The collector listens for NetFlow on UDP 2055, IPFIX on UDP 4739 and sFlow on
+UDP 6343. NetFlow v5, v9 and IPFIX all arrive through the NetFlow decoder.
+
+## SNMP traps
+
+The receiver decodes SNMP v1, v2c and v3 traps and informs from any vendor. A
+trap OID that is not in the MIB index is recorded as `enterpriseSpecific` at
+`notice` severity with its OID and variable bindings intact.
+
+## Streaming telemetry
+
+The shipped `gnmic` configuration carries subscription sets for two platforms:
+Nokia SR Linux native paths and Arista EOS OpenConfig paths. Adding another
+platform means adding its paths, and no other platform's paths are shipped.
+
+## What is not claimed
+
+- **No agent.** There is nothing to install on a device.
+- **No configuration writes.** SNMP access is read-only, and Correlix never
+  pushes configuration to a device during onboarding.
+- **No device-pushed metric ingest.** There is no endpoint a device can POST
+  metrics to. Metrics are polled or streamed.
+- **The NETCONF collector is a reachability probe.** It opens TCP 830 and reads
+  the SSH banner. It runs no NETCONF RPC and produces no metrics.
+- **A vendor pack is not a guarantee the OIDs answer.** The source comments say
+  which packs are unverified against live hardware. A missing metric shows as
+  no data, never as zero.
+
+## Related
+
+- [Add an SNMP credential](/onboard-devices/snmp-profiles)
+- [SNMP configuration by vendor](/onboard-devices/vendor-snmp-configs)
+- [Connectivity requirements](/reference/connectivity-requirements)
+- [What an empty result means](/reference/honest-states)

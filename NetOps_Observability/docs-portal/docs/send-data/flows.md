@@ -1,118 +1,196 @@
 ---
-title: Flow records (NetFlow / sFlow / IPFIX)
-sidebar_label: Flow records
+title: Send flow records
+sidebar_label: Send flow records
+description: Choose NetFlow, IPFIX or sFlow, configure the exporter to the right port, set a sampling rate, and confirm the records are landing.
+page_type: task
 sidebar_position: 5
-description: Enable flow export on your devices to unlock traffic analytics, top talkers, and application attribution.
 ---
 
-# Flow records (NetFlow / sFlow / IPFIX)
+# Send flow records
 
-Flow records tell you **who is talking to whom, over what, and how much** — the basis of top-talker analysis, conversation views, and application attribution. Correlix's flow collector ingests the standard flow protocols; you enable export on each device where traffic visibility matters (WAN edges, cores, internet borders, firewalls).
+Flow records tell you who is talking to whom, over what, and how much. They are
+the basis of top-talker analysis, conversation views and application
+attribution. Enable export on the devices where traffic visibility matters:
+WAN edges, data-centre cores, internet borders and firewalls.
 
-## Step 1 — Choose a protocol
+The collector accepts NetFlow v5 and v9, IPFIX and sFlow, each on its own UDP
+port. Sending the wrong protocol to a port does not decode.
 
-The collector supports four protocols, each on its own UDP port:
+## Before you begin
 
-| Protocol | Port | Best for | Notes |
-| --- | --- | --- | --- |
-| **NetFlow v9** | UDP **2055** | Routers and firewalls | Template-based; flexible fields |
-| **NetFlow v5** | UDP **2055** | Legacy platforms | Fixed format, IPv4 only — use v9/IPFIX where available |
-| **IPFIX** | UDP **4739** | Modern routers, Junos, SD-WAN | The IETF standard (a.k.a. NetFlow v10) |
-| **sFlow** | UDP **6343** | High-throughput switches | Packet-sampled by design — low device overhead |
+- The device is [in the inventory](/onboard-devices/add-devices-manually), with
+  the management address it will export from.
+- The UDP port for your protocol open from the device to Correlix. See
+  [Connectivity requirements](/reference/connectivity-requirements).
+- A decision about sampling. See the section below before configuring a busy
+  interface.
 
-Rules of thumb:
+## Steps
 
-- **Routers / firewalls** → NetFlow v9 or IPFIX (whichever the platform exports natively).
-- **Data-center / campus switches at high rates** → sFlow.
-- Pick **one** protocol per device; there's no benefit to exporting the same traffic twice.
+1. Choose one protocol for the device. Exporting the same traffic twice gains
+   nothing.
 
-## Step 2 — Configure the exporter
+   | Protocol | Port | Suited to |
+   |---|---|---|
+   | NetFlow v9 | UDP 2055 | Routers and firewalls. Template-based, flexible fields |
+   | NetFlow v5 | UDP 2055 | Legacy platforms. Fixed format, IPv4 only |
+   | IPFIX | UDP 4739 | Modern routers and SD-WAN. The IETF standard |
+   | sFlow | UDP 6343 | High-throughput switches. Packet-sampled by design |
 
-Point the device at Correlix on the port matching your protocol (`CORRELIX_IP` is your Correlix instance):
+2. Configure the exporter with Correlix as the destination on that port.
+3. Set the source interface to the address the inventory holds for the device.
+4. Apply the monitor or sampler to the interfaces you want measured, in both
+   directions where the platform requires it. An input-only monitor shows one
+   half of every conversation.
+5. Set a sampling rate.
+6. Wait a few minutes, then confirm records are arriving.
+
+### Device configuration
+
+These blocks are the platform's own documented examples, from
+`docs/INGESTION.md`. Replace `MONITOR_HOST` with the address of the Correlix
+host.
+
+Cisco IOS and IOS-XE, NetFlow v9:
 
 ```text
-! Cisco IOS / IOS-XE — NetFlow v9 (Flexible NetFlow)
-flow exporter CORRELIX
-  destination CORRELIX_IP
+flow exporter NETOPS
+  destination MONITOR_HOST
   source Loopback0
   transport udp 2055
   template data timeout 60
   export-protocol netflow-v9
 
-flow monitor CORRELIX-FM
-  exporter CORRELIX
+flow monitor NETOPS-FM
+  exporter NETOPS
   record netflow ipv4 original-input
 
 interface GigabitEthernet0/0
-  ip flow monitor CORRELIX-FM input
-  ip flow monitor CORRELIX-FM output
+  ip flow monitor NETOPS-FM input
+  ip flow monitor NETOPS-FM output
 ```
 
+Juniper Junos, IPFIX:
+
 ```text
-# Juniper Junos — IPFIX
 set services flow-monitoring version-ipfix template IPFIX-T template-refresh-rate 30
-set forwarding-options sampling instance CORRELIX family inet output flow-server CORRELIX_IP port 4739 version-ipfix
-set forwarding-options sampling instance CORRELIX input rate 50
-# then apply the sampling instance to the interfaces you want measured
+set forwarding-options sampling instance NETOPS family inet output
+  flow-server MONITOR_HOST port 4739 version-ipfix
 ```
 
+Apply the sampling instance to the interfaces you want measured.
+
+Arista EOS, sFlow:
+
 ```text
-! Arista EOS — sFlow
 sflow source-interface Loopback0
-sflow destination CORRELIX_IP 6343
-sflow sample 1000
+sflow destination MONITOR_HOST 6343
 sflow run
 ```
 
-Apply the monitor/sampling to **both directions** of the interfaces you care about where the platform requires it (as in the Cisco example) — otherwise you'll only see half of each conversation.
+### Sampling
 
-## Step 3 — Set a sampling rate
+sFlow is always sampled; that is the point of the protocol and it is why device
+overhead is near zero. NetFlow and IPFIX can be unsampled, but full flow export
+on a busy link produces a very high record rate on both the device and the
+collector. Sample high-throughput interfaces and keep unsampled export for
+low-rate links where per-flow completeness matters.
 
-Sampling is a trade-off you should make deliberately:
+Correlix reads the sampling rate carried in the record and multiplies byte and
+packet counts by it at query time. A rate of zero is treated as one. Scaled
+totals are sound for top talkers and trends and are estimates, not measurements:
+short flows can be missed entirely at an aggressive rate. Do not treat sampled
+byte counts as billing-grade.
 
-- **sFlow is always sampled** (e.g. `1-in-1000` on 10G+ links is typical). That's the point of the protocol — near-zero device overhead.
-- **NetFlow/IPFIX can be unsampled**, but full flow export on busy links generates very high record volume on both the device and the collector. Prefer sampled export (e.g. `1-in-50` to `1-in-1000` depending on link speed) on high-throughput interfaces; unsampled is fine on low-rate WAN links where per-flow completeness matters.
+## Result
 
-:::warning Sampled volumes are estimates
-Correlix reads the sampling rate carried in the flow stream and **scales volumes accordingly** — a 1-in-1000 sample of a 1 GB transfer displays as ~1 GB, not 1 MB. Scaled numbers are statistically solid for top talkers and trends, but they are estimates: small, short flows may be missed entirely at aggressive sampling rates. Don't treat sampled byte counts as billing-grade.
-:::
+Records reach the flow analytics within a few minutes. NetFlow v9 and IPFIX are
+template-based, so the device must send its templates before any data record can
+be decoded; the first records lag the configuration change by one template
+cycle.
 
-## Step 4 — Verify
+Confirm with the top-talkers query. Captured from the lab stack:
 
-1. Wait a couple of minutes. NetFlow v9 and IPFIX are **template-based**: the device must send its templates before data records can be decoded, so the first records can lag the config change by a template cycle (set `template data timeout 60` as in the example to keep this short).
-2. <kbd>Administration → Data Collection → Data Sources</kbd> — the device's **Flows** column turns green.
-3. <kbd>Flows</kbd> — top talkers, conversations, and service breakdowns populate. See [Flow analytics](/explore/flows).
-4. Sanity-check a known conversation (e.g. a file transfer you start yourself) appears with plausible volume.
+```bash
+curl -s -H "Authorization: Bearer $TOKEN" \
+  "http://localhost:8000/api/flows/top?limit=3"
+```
+
+```json
+{
+  "data": [
+    { "src": "172.16.13.2", "dst": "224.0.0.5", "bytes_total": "38532", "packets_total": "387", "flows": "54" },
+    { "src": "172.16.15.2", "dst": "224.0.0.5", "bytes_total": "36288", "packets_total": "378", "flows": "54" },
+    { "src": "172.16.14.2", "dst": "224.0.0.5", "bytes_total": "36288", "packets_total": "378", "flows": "54" }
+  ],
+  "rows": 3,
+  "rows_before_limit_at_least": 5
+}
+```
+
+Check that your device is one of the exporters:
+
+```bash
+curl -s -H "Authorization: Bearer $TOKEN" \
+  "http://localhost:8000/api/flows/topn?by=device&since=900s&limit=5"
+```
+
+```json
+{
+  "data": [
+    { "k": "172.40.40.52", "bytes_total": "24220", "packets_total": "273", "flows": "39" },
+    { "k": "172.40.40.51", "bytes_total": "18144", "packets_total": "189", "flows": "27" }
+  ],
+  "rows": 2
+}
+```
+
+The **Flows** column for the device turns green on
+[the coverage matrix](/onboard-devices/data-sources) once the exporter address
+in that list matches the device's inventory address.
+
+## Attribution is by exporter address
+
+Flows are tied to a device by the exporter address in the record, and to a
+tenant by the same value. Nothing in the flow payload sets tenancy.
+
+In the capture above, the exporters are `172.40.40.51` and `172.40.40.52`. The
+inventory holds `spine1` at `172.40.40.11` and `spine2` at `172.40.40.12`.
+Neither matches, so both devices show no flows on the coverage matrix while
+records are demonstrably arriving and queryable. A device exporting from a
+loopback the inventory does not know behaves exactly this way. Fix it by setting
+the exporter source address to the inventory address, or by recording the
+exporting address on the device.
+
+## Two stores, two answers
+
+Flow records land in two places and the numbers differ on purpose.
+
+| Store | What it holds | What it is for |
+|---|---|---|
+| The analytics store | Every record, unsampled by Correlix | Top talkers, conversations, volumes. The canonical answer |
+| The log store | A 1-in-50 sample of the records | Free-text flow search alongside logs |
+
+Search, retention and export responses from the log store carry a disclosure
+naming the rate and saying counts there are estimates that need multiplying.
+When two flow numbers in the console disagree, check which store answered.
 
 ## Troubleshooting
 
-**Nothing arriving**
+| Symptom | Cause | What to do |
+|---|---|---|
+| Nothing arrives | Protocol and port mismatch | NetFlow to 2055, IPFIX to 4739, sFlow to 6343. IPFIX sent to 2055 does not decode |
+| Nothing arrives | UDP blocked on the path | Confirm the port you chose is open end to end |
+| Nothing arrives | The monitor or sampler is not applied to any interface | A configured exporter with no interface attachment exports nothing. Check the device's exporter statistics |
+| Records arrive but the device shows no flows | The exporter address does not match the inventory address | Set the exporter source to the management address |
+| Records arrive late or in bursts | Normal. A device exports a flow when it ends or when its active timeout expires | Long-lived flows appear as periodic updates, not a live stream |
+| Volumes are low by a constant factor | The sampling rate is not being announced as expected | Verify the sampler configuration on the device |
+| Only one direction of each conversation | The monitor is applied in one direction | Apply it to both |
+| Many unknown applications | Correlix labels an application only on evidence | Onboarding your firewalls' [syslog](/send-data/syslog) improves this, because FortiOS traffic logs carry the firewall's own application identification |
 
-1. Protocol/port mismatch is the most common cause — NetFlow to **2055**, IPFIX to **4739**, sFlow to **6343**. Sending IPFIX to 2055 or sFlow to 2055 won't decode.
-2. Confirm UDP is open on the path for the port you chose ([Connectivity requirements](/reference/connectivity-requirements)).
-3. Confirm the monitor/sampler is actually **applied to interfaces** — a configured exporter with no interface attachment exports nothing (check platform counters, e.g. Cisco `show flow exporter statistics`).
-4. Check the exporter's source address is one Correlix can associate with the device.
+## Related
 
-**Flows arrive late or in bursts**
-
-- Normal: devices export a flow when it ends or when an active timeout expires (often 60–120 s by default). Long-lived flows appear as periodic updates, not a live stream.
-
-**Volumes look wrong**
-
-- Too low by a large constant factor → the sampling rate isn't being applied/announced as expected; verify the sampler config on the device.
-- Only one direction of conversations visible → the monitor is applied `input`-only (or `output`-only); apply both.
-
-**Lots of "unknown" applications**
-
-- Expected and honest: Correlix labels an application only when it has real evidence (well-known services, cloud/SaaS ranges, DNS correlation, or a firewall's on-box application ID carried in [syslog](/send-data/syslog)). Onboarding your firewalls' logs materially improves attribution.
-
-## What it unlocks
-
-- **Top talkers**, conversations, and busiest services in [Flow analytics](/explore/flows).
-- **Application attribution** across the traffic your exporters see.
-- Traffic context for **correlation** — a spike that aligns with an incident is corroborating evidence.
-
-## Next
-
-- **[Explore flows](/explore/flows)**.
-- **[Verify coverage](/onboard-devices/data-sources)**.
+- [Explore flows](/explore/flows)
+- [Check the data-source coverage matrix](/onboard-devices/data-sources)
+- [Send syslog](/send-data/syslog)
+- [Connectivity requirements](/reference/connectivity-requirements)

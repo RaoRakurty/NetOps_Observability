@@ -1,113 +1,115 @@
 ---
-title: Flow analytics
-sidebar_label: Flow analytics
-sidebar_position: 3
-description: Analyze traffic — top talkers, conversations, ports, protocols, and TCP flags — with filters that apply across every panel.
+title: Analyse flows
+description: Analyse traffic from NetFlow, IPFIX and sFlow records - top talkers, conversations, ports, protocols and TCP flags - with one filter bar across every panel.
+page_type: task
+sidebar_position: 4
 ---
 
-# Flow analytics
+# Analyse flows
 
-Once devices are exporting **[flow records](/send-data/flows)** (NetFlow, IPFIX, or sFlow), analyze traffic at <kbd>Flows</kbd>. The page is a set of themed sections — pick one from the left-hand section list — under a shared filter bar that scopes **every panel at once**.
+**Explore → Flows** reads the unsampled flow store in ClickHouse. It is a set of themed sections under one filter bar that scopes every panel at once, so a filter you set for top talkers also narrows protocols, ports and flags.
 
-:::info Sampling
-Devices usually export *sampled* flows (e.g. 1 in 50 packets). All byte/packet counts on this page are **scaled by each device's sampling rate**, as the note under the filter bar says — so figures are estimates of true volume, accurate in proportion, approximate in the absolute for low-volume conversations.
+## Before you begin
+
+- Devices exporting flow records. Correlix listens on UDP 2055 for NetFlow, UDP 4739 for IPFIX and UDP 6343 for sFlow. See [Send flow data](/send-data/flows).
+- A window chosen in the top-bar range picker. Panels refresh every 30 seconds.
+- An authenticated session. Every flow query is tenant-scoped before it runs.
+
+:::note Sampling
+Devices usually export sampled flows. Byte and packet counts are scaled by each device's sampling rate, so figures are proportionally accurate and approximate in absolute terms for a low-volume conversation. The log-search view of flows reads a separate 1-in-50 sample and says so; this page reads the canonical store.
 :::
 
-## The layout
+## Steps
 
-- **Left section list** — Traffic Volume, Device Health, Flows, Conversations, Autonomous Systems, Geo IP, Source Ports, Destination Ports, Protocols, Flags.
-- **Filter bar (top)** — free-form fields plus a flow-source selector and a direction toggle. Applies to every section.
-- **Panels** — each Top-N panel has a **bar/table toggle** (top right); the table view adds sortable **Bytes / Packets / Flows** columns. Panels refresh automatically every 30 seconds.
+### Step 1 - Choose a section
 
-The **time window** comes from the global range picker in the top bar (e.g. **Last 1 hour**).
+The left-hand list holds ten sections: **Traffic Volume**, **Device Health**, **Flows**, **Conversations**, **Autonomous Systems**, **Geo IP**, **Source Ports**, **Destination Ports**, **Protocols** and **Flags**.
 
-## Filter the view
+Each Top-N panel has a bar-or-table toggle. The table view adds sortable **Bytes**, **Packets** and **Flows** columns.
 
-1. Enter any combination of:
-   - **Source IP** / **Destination IP** — endpoints of the traffic,
-   - **Device (exporter IP)** — only flows reported by one device,
-   - **Ingress if (index)** / **Egress if (index)** — the interface index the traffic entered/left on.
-2. Click **Filter**. Active filters appear as badges under the bar; **Clear** removes them all.
-3. Optionally narrow the **flow source** — **All sources / NetFlow / IPFIX / sFlow** — and switch **Unidirectional / Bidirectional**:
-   - **Unidirectional** counts each direction separately (Initiator → Responder).
-   - **Bidirectional** merges both directions of a conversation into one row (Endpoint A ↔ Endpoint B) — usually what you want for "how much did these two exchange in total".
+### Step 2 - Filter every panel at once
 
-## The sections
+1. Enter any combination of **Source IP**, **Destination IP**, **Device (exporter IP)**, **Ingress if (index)** and **Egress if (index)**.
+2. Select **Filter**. Active filters appear as badges under the bar, and **Clear** removes them all.
+3. Narrow the flow source to **NetFlow**, **IPFIX** or **sFlow**, or leave it on all sources.
+4. Choose a direction:
+   - **Unidirectional** counts each direction separately, as initiator to responder.
+   - **Bidirectional** merges both directions of a conversation into one row, which is what you want for how much two endpoints exchanged in total.
 
-### Traffic Volume
+### Step 3 - Confirm the feed is arriving
 
-The starting point: **Top Devices (exporters)** ranked by bytes, plus **Top Ingress Interfaces** and **Top Egress Interfaces**. Answers "which device and which port carries the load".
+Open the **Flows** section. **Source presence** shows one badge per flow type currently arriving, in the form `TYPE: N flows · M exporters`. A device you configured that is missing here is not exporting to the platform, so fix the export before reading any other panel.
 
-### Flows
+**Volume over time** charts bytes and packets, so you can see when a surge happened rather than only that it did.
 
-Two health views of the feed itself:
+### Step 4 - Follow the traffic
 
-- **Source presence** — one badge per flow type currently arriving (`SFLOW: 12,403 flows · 11 exporters`). If a device you configured is missing here, the export isn't reaching the platform.
-- **Volume over time** — bytes and packets as a time series, so you can see *when* a surge happened, not just that it did.
+- **Traffic Volume** ranks exporters and the ingress and egress interfaces carrying the load.
+- **Conversations** ranks the heaviest pairs, and the initiator and responder endpoints individually.
+- **Autonomous Systems** groups by BGP AS number, where the exporter fills the AS fields.
+- **Geo IP** breaks traffic down by initiator and responder country and states the public-traffic share. Private address space has no geography, so an internal lab honestly reads zero per cent public rather than inventing countries. Where GeoIP enrichment has not been provisioned, the panel says so instead of showing an empty map.
+- **Source Ports**, **Destination Ports** and **Protocols** rank the port and protocol mix.
+- **Flags** reads TCP control bits. Where every TCP flow reports empty flags, the panel states that the exporter is not filling `tcpControlBits` and names how to turn it on, rather than rendering the flags as zero.
 
-### Conversations
+## What you see
 
-- **Top conversations (Initiator → Responder)** — the heaviest pairs, with bytes/packets/flows.
-- **Top Initiator IPs** and **Top Responder IPs** — the endpoints, ranked individually.
+Panels populated from the flow store, and a **Source presence** badge for each protocol actually arriving. The live lab has one flow type arriving from two exporters:
 
-### Autonomous Systems
+```bash
+curl -s -H "Authorization: Bearer $TOKEN" \
+  http://localhost:8000/api/flows/by-type
+```
 
-**Top Initiator AS / Top Responder AS** — traffic grouped by BGP AS number, when your exporters fill the AS fields. Useful at internet edges: "how much of this is going to one provider".
+```json
+{
+  "meta": [
+    {"name": "flow_type", "type": "LowCardinality(String)"},
+    {"name": "bytes_total", "type": "UInt64"},
+    {"name": "packets_total", "type": "UInt64"},
+    {"name": "flows", "type": "UInt64"},
+    {"name": "exporters", "type": "UInt64"}
+  ],
+  "data": [
+    {"flow_type": "ipfix", "bytes_total": "173192", "packets_total": "1893", "flows": "268", "exporters": "2"}
+  ],
+  "rows": 1
+}
+```
 
-### Geo IP
+That response renders as one badge reading `IPFIX: 268 flows · 2 exporters`. A protocol absent from the response has no badge, because no record of that type arrived.
 
-Traffic by **initiator and responder country**, with a **Public traffic share** stat. Private address space (RFC 1918) has no geography, so an internal lab honestly shows 0% public rather than fake countries. If GeoIP enrichment hasn't been provisioned, the panel says so and shows your platform administrator the one-time setup step (licensing prevents bundling GeoIP data, so you bring your own free country dataset).
+Top talkers come from `/api/flows/top`, which returns ClickHouse column metadata alongside the rows so the type of every column is stated:
 
-### Source Ports / Destination Ports
+```bash
+curl -s -H "Authorization: Bearer $TOKEN" \
+  http://localhost:8000/api/flows/top
+```
 
-Top ports by volume, annotated with well-known service names — `443 (HTTPS)`, `22 (SSH)`, `179 (BGP)` — so the destination-port panel reads as applications rather than bare numbers. Richer per-flow application identity (firewall App-ID) appears in [Log Search](/explore/logs) under the **Application** column.
+```json
+{
+  "meta": [
+    {"name": "src", "type": "String"},
+    {"name": "dst", "type": "String"},
+    {"name": "bytes_total", "type": "UInt64"},
+    {"name": "packets_total", "type": "UInt64"},
+    {"name": "flows", "type": "UInt64"}
+  ],
+  "data": [
+    {"src": "172.16.13.2", "dst": "224.0.0.5", "bytes_total": "38420", "packets_total": "385", "flows": "54"},
+    {"src": "172.16.14.2", "dst": "224.0.0.5", "bytes_total": "36288", "packets_total": "378", "flows": "54"},
+    {"src": "172.16.11.2", "dst": "224.0.0.5", "bytes_total": "36288", "packets_total": "378", "flows": "54"},
+    {"src": "172.16.15.2", "dst": "224.0.0.5", "bytes_total": "36288", "packets_total": "378", "flows": "54"},
+    {"src": "172.16.13.1", "dst": "224.0.0.5", "bytes_total": "24952", "packets_total": "364", "flows": "51"}
+  ],
+  "rows": 5,
+  "rows_before_limit_at_least": 5
+}
+```
 
-### Protocols
+The counters arrive as strings because ClickHouse serialises `UInt64` that way. `224.0.0.5` is the OSPF all-routers multicast group, so this lab's heaviest talkers are its routing protocol, which is what an idle fabric looks like.
 
-A donut of traffic by IP protocol — TCP, UDP, ICMP, GRE, ESP, OSPF, SCTP — with share percentages.
+## Related
 
-### Flags
-
-TCP control-flag analysis with built-in heuristics:
-
-- **SYN-only (scan signal)** — a high share of flows that are pure SYN suggests scanning or connection failures.
-- **RST-bearing (resets)** — a high reset share suggests refused/broken connections.
-- The **TCP flag combinations** panel breaks down every observed combination (`SYN·ACK`, `FIN·ACK`, …).
-
-If every flow reports empty flags, the panel tells you: that exporter isn't filling the TCP-flags field — enable full NetFlow v9/IPFIX templates on the device (sFlow carries flags natively).
-
-### Device Health
-
-A compact strip — average CPU, average memory, interfaces up, interfaces with recent errors — for the devices behind the flows, with links to the full **Device Monitoring** and **Interface Performance** views under <kbd>Infrastructure</kbd>.
-
-## Worked example: chase a bandwidth spike
-
-1. Set the top-bar range to cover the spike (e.g. **Last 6 hours**).
-2. Open **Flows** → the volume time series confirms when it happened.
-3. Open **Traffic Volume** → note the top exporter and egress interface.
-4. Put the exporter's IP in **Device (exporter IP)**, click **Filter**.
-5. Open **Conversations** → the top pair is your talker. Toggle **Bidirectional** to see total exchange.
-6. Open **Destination Ports** → what service the traffic was.
-
-## Drill from a flow to a device
-
-Two pivots:
-
-- **Filter down**: put an exporter or endpoint IP in the filter bar — every section now describes only that device's traffic.
-- **Jump across**: paste the IP into the global **Search…** box in the top bar. The dropdown resolves it to the matching **device** (jump to its inventory entry) or offers **Search logs for "…"** to see what that device logged at the same time — see the [overview](/explore/overview#the-global-search-box).
-
-## Troubleshooting
-
-**All panels empty:**
-
-- **No exporters yet** — check the **Flows → Source presence** badges. Nothing there means no flow packets are arriving; configure export per [Send flow data](/send-data/flows).
-- **Time range** — flows are kept for a bounded retention window; very old ranges return nothing.
-- **A filter is too tight** — check the active-filter badges under the bar and **Clear**.
-
-**One device missing** — its export target, source interface, or flow type may be wrong; compare against a working device and confirm its flow type is arriving in **Source presence**.
-
-**Geo IP empty** — either enrichment isn't provisioned (the panel says so) or all traffic is private address space (the page tells you the public share honestly).
-
-**Flags all "none"** — the exporter isn't sending TCP control bits; switch the device to full v9/IPFIX templates.
-
-All flow queries are **tenant-scoped** — you only ever see your own devices' traffic.
+- [Send flow data](/send-data/flows) for configuring the exporters and the listener ports.
+- [Search logs](/explore/logs) for the sampled flow index and its estimate warning.
+- [Trace paths and tunnels](/infrastructure/paths-and-tunnels) for measured paths rather than observed conversations.

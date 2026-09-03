@@ -1,113 +1,92 @@
 ---
-title: Log Search
-sidebar_label: Log Search
-sidebar_position: 2
-description: Search device logs, traps, and flow records with full query syntax; export results; save searches you run often.
+title: Search logs
+description: Search device syslog, traps, firewall logs and sampled flow records, read the retention floor and the exact match count, page a bounded result set, and export it.
+page_type: task
+sidebar_position: 3
 ---
 
-# Log Search
+# Search logs
 
-Once devices are sending **[syslog](/send-data/syslog)**, search everything they say at <kbd>Logs → Log Search</kbd>. The search box accepts anything from bare text to full field-level query syntax, and every result row opens into the complete underlying record.
+**Explore → Logs** is full-text search over the records devices actually sent. It is the only explore plane that returns raw documents, one per row, with the whole document behind each. A **Cloud Logs** sub-tab covers the cloud plane.
 
-## Run a search
+## Before you begin
 
-1. Go to <kbd>Logs → Log Search</kbd>.
-2. Type a query in the search box. `*` matches everything; see [Query syntax](#query-syntax) below for field filters.
-3. Pick a **signal** from the dropdown next to the box — this selects which log family you search:
+- An authenticated session. Every search runs against a tenant-scoped surface, so another tenant's records are never returned.
+- Devices sending syslog or traps. See [Send syslog](/send-data/syslog) and [Send SNMP traps](/send-data/traps).
+- The **App logs** source is the platform's own container and API logs, and is offered to the platform owner only. The backend refuses it for anyone else.
 
-   | Signal | What it searches |
-   | --- | --- |
-   | **All** | Every log family at once |
-   | **Syslog (devices)** | Network-device syslog |
-   | **fw_logs** | Firewall logs only — a convenience filter over device syslog that narrows to records produced by a firewall (FortiGate, Palo Alto, Versa) or carrying an application identity. It is combined with your query automatically. |
-   | **SNMP traps** | Trap events, rendered as readable summaries |
-   | **Flows** | Raw flow records (useful for finding one specific conversation; for aggregate traffic analysis use [Flow analytics](/explore/flows)) |
+## Steps
 
-   Platform operators additionally see **App logs** — the platform's own internal logs. Tenant users don't see (and can't query) that option.
+### Step 1 - Choose a log source and a window
 
-4. Set the **time range** with the global picker in the top bar (e.g. **Last 1 hour**).
-5. Choose how many results to return — **100 / 200 / 500 / 1000 / 5000 hits**.
-6. Click **Search** (or press Enter).
+1. Choose a source from the first dropdown: **All**, **App logs**, **Syslog (devices)**, **Firewall logs**, **SNMP traps** or **Flows**. It sets the `signal` parameter on the search.
+2. Choose a range: **Last 15m**, **Last 1h**, **Last 6h** or **Last 24h**, or let the top-bar range picker drive it.
+3. Choose a page size.
 
-Results are sorted **newest first** and capped at the hit count you chose. The results header shows both numbers: `Results (200 / 14,382 matched)` means 200 rows are loaded out of 14,382 total matches — narrow the query or the time range to converge on what you're after.
+**Firewall logs** is a convenience filter over the syslog index. It narrows to records a firewall vendor parser produced, or that carry the vendor-neutral application contract, so it works across vendors rather than matching a vendor name.
 
-:::tip Search from anywhere
-Typing into the global **Search…** box in the top bar and pressing Enter lands you here with the query pre-filled — see the [overview](/explore/overview#the-global-search-box).
-:::
+### Step 2 - Read the retention floor before you read the results
 
-## Query syntax
+Under the search form, the page states how far back the visible store actually goes, so an empty result can be told apart from a window that predates the data:
 
-The box accepts standard **Lucene query-string syntax**: bare text, field filters, boolean logic, wildcards, and ranges. All of the following work:
+```bash
+curl -s -H "Authorization: Bearer $TOKEN" \
+  "http://localhost:8000/api/logs/retention?signal=syslog"
+```
 
-| Syntax | Example | Matches |
-| --- | --- | --- |
-| Bare text | `bgp` | Any record containing "bgp" in any field |
-| Quoted phrase | `"neighbor down"` | The exact phrase, in order |
-| Field filter | `level:error` | Records whose `level` field is `error` |
-| `AND` | `src_addr:10.0.0.5 AND dst_port:22` | Both conditions |
-| `OR` | `level:error OR level:warn` | Either condition |
-| `NOT` | `bgp NOT keepalive` | First term without the second |
-| Grouping `( )` | `(level:error OR level:warn) AND host:core-sw1` | Boolean logic with explicit precedence |
-| Wildcard `*` / `?` | `host:edge-*` | `*` = any characters, `?` = one character |
-| Field exists | `_exists_:app_id` | Records that have the field at all — e.g. only flows with an identified application |
-| Range | `dst_port:[1024 TO 65535]` or `dst_port:>=1024` | Numeric/date ranges, inclusive with `[ ]` |
+```json
+{"days":13,"oldest":"2026-08-21T00:00:00Z","signal":"syslog","total":2172327}
+```
 
-Field names vary by signal (a syslog record has `host` and `severity`; a flow record has `src_addr`, `dst_addr`, `dst_port`). The reliable way to learn what's available: run a broad search, click a result row, and read the **Document** panel — every field you see there is queryable by name.
+The line reads `This store holds N logs — going back to <timestamp> (N days of history).` The total is an exact count over the same tenant-scoped surface the search reads, not a capped estimate. Each source is its own store with its own retention, so the line is re-read when you change the dropdown. Where a source has nothing stored, it reads `No logs stored yet for this signal.`
 
-Worked examples:
+### Step 3 - Run the search and read the count
 
-- SSH sessions toward one server: `dst_addr:10.0.0.5 AND dst_port:22` (signal: **Flows**)
-- Everything a device said, errors first: `host:core-sw1` (signal: **Syslog (devices)**), then sort by **Level**
-- Firewall traffic identified as a specific app: `app_id:*dropbox*` (signal: **fw_logs**)
+Type a query and run it. The results heading states exactly what you are looking at:
 
-If the query can't be parsed, an **Error:** line appears under the search bar with the reason — fix the syntax and re-run.
+- `Results — showing N of M matched` when the window holds more than the loaded page.
+- `Results (N — all matches)` when every match is loaded.
 
-## Read the results
+The match count is exact. The search asks the store to track total hits rather than accepting the ten-thousand-document estimate cap.
 
-Each row shows five columns:
+The flows source is the one exception, and it says so. It reads a 1-in-50 sample, and a note under the heading states `Flow search reads a 1:N sample — totals are estimates (×N). Exact flow analytics live in the Flows tab (unsampled store).`
 
-- **Time** — record timestamp (sortable).
-- **Source** — where it came from: the device hostname for syslog, the source IP for flow records.
-- **Level** — severity, color-coded; the row's left edge carries the same accent so scanning for red is fast.
-- **Application** — the identified application (from firewall application control or the platform's traffic classifier) when the record carries one; `—` otherwise.
-- **Message** — a normalized, human-readable summary where one exists (traps read as "Arista Layer-2 FDB trap…", not a raw OID), else the raw message.
+### Step 4 - Page through a bounded result set
 
-Click any column header to sort. **Click a row** to open the full record: the headline fields plus the complete **Document** — every field of the underlying record, pretty-printed. This is where you find exact field names to refine your query.
+Every truncated list says it is truncated and offers the rest.
 
-## Export results
+1. Select **Load more**. Its label states the arithmetic: how many rows it will fetch, and how many of the total are already loaded.
+2. Repeat until the button disappears.
 
-Two export modes sit above the results table, in **CSV**, **JSON**, **NDJSON**, or **Excel**:
+Interactive paging ends at 10,000 rows. Past that the page says so and points at the export path for the full set, because the search engine's paging window ends there. Each page is fetched with an offset against the same frozen query and window, so an appended page belongs to the same result set.
 
-- **Export selected** — tick the checkbox on specific rows (or the header checkbox for all loaded rows); export buttons appear as soon as at least one row is selected.
-- **Export all** — exports the **entire matched set** for the current query, signal, and time range, not just the loaded rows. Small sets download immediately; large ones are queued (`Large export (N rows) queued — preparing…`) and download automatically when ready.
+### Step 5 - Export
 
-## Save a search
+- Select rows to export just those, in **CSV**, **JSON**, **NDJSON** or **Excel**.
+- With no selection, use the export-all controls to take the entire result set in any of the same four formats.
 
-1. Get the query, signal, and results the way you want them.
-2. Click **★ Save** next to the Search button.
-3. Name it (e.g. `BGP neighbor down across the fleet`) and confirm.
+A large export is queued rather than blocked, and the page reports it: `Large export (N rows) queued — preparing…`, where `N` is the matched count reported by the export request, or a question mark when the count is not known.
 
-The saved search stores the **query and the signal** — the time range stays live, so reopening it later searches the *current* window, which is what you want for a recurring check.
+### Step 6 - Save the search
 
-## Use saved searches
+Select the save control, name the search, and find it again under **Explore → Saved Searches**.
 
-1. Go to <kbd>Logs → Saved Searches</kbd>. The table lists each search's **Name**, **Query**, **Signal**, and last-updated time.
-2. Click **Open** to apply the query and jump straight back to Log Search with results.
-3. Click **✕** to delete one (with confirmation).
+## What you see
 
-Saved searches are also findable by name from the global search box and the <kbd>⌘K</kbd> palette.
+Rows in time order, each with time, source, level, application and message, and the full document behind the row. Where the search returns nothing, the page reads `No results. Try widening the time range or relaxing the filter.` Read that against the retention floor above: no results inside a window the store does not cover is an artifact of the window, not evidence of a quiet network.
 
-## Troubleshooting
+The routes behind the page:
 
-**No results:**
+| Route | What it does |
+|---|---|
+| `POST /api/logs/search` | Runs the query, bounded by size and offset, and returns hits plus an exact total. `GET` is accepted too. |
+| `GET /api/logs/retention` | The retention floor for one source: exact total, oldest timestamp, days of history. |
+| `GET /api/logs/indices` | The indices behind the sources. |
+| `GET /api/logs/export` | The whole result set, synchronous or queued. |
+| `POST /api/logs/export/rows` | Only the rows you selected. |
 
-- **Time range too narrow** — widen the top-bar range first; it's the most common cause.
-- **Wrong signal** — a `src_addr:` query returns nothing under **Syslog (devices)**; flow fields live under **Flows**.
-- **Devices aren't sending yet** — verify the feed per [Send syslog](/send-data/syslog); a device must be configured to export before anything can match.
-- **Over-exact field filter** — field values are often lowercase-analyzed; try the bare text form (`error` instead of `level:Error`) or a wildcard.
+## Related
 
-**Error under the search bar** — the query didn't parse. Check unbalanced quotes/parentheses and that `AND`/`OR`/`NOT` are uppercase.
-
-**"App logs" option missing** — it's restricted to the platform operator by design; tenant users never search platform-internal logs.
-
-Everything here is **tenant-scoped** — you only ever search your own logs, enforced at query time.
+- [Review the event feed](/explore/events) for syslog and traps merged with active alerts on one timeline.
+- [Analyse flows](/explore/flows) for the unsampled flow store.
+- [Reading logs](/noc-guide/reading-logs) for what the fields mean during an incident.

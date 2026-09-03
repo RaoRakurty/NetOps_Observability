@@ -1,71 +1,110 @@
 ---
-title: Send Data overview
+title: Send data to Correlix
 sidebar_label: Overview
+description: The four telemetry planes, the port each one arrives on, and the order to configure them in.
+page_type: index
 sidebar_position: 1
-description: The telemetry planes you can send to Correlix, the port each one uses, and which to set up first.
 ---
 
-# Send Data
+# Send data to Correlix
 
-Correlix collects four telemetry planes. One is **pulled** (Correlix reaches out to your devices), three are **pushed** (your devices send to Correlix):
+Devices in the inventory produce metrics as soon as SNMP answers. Their events,
+notifications and traffic records need one configuration change each, made on
+the device. The pages below cover that change per plane, plus the port it
+arrives on and the rule that ties each record back to a device.
 
-| Plane | What it gives you | How it moves |
-| --- | --- | --- |
-| **[Metrics](/send-data/metrics)** | Health, interface counters, protocol state as time series | **Pulled** — SNMP polling / streaming telemetry (mostly automatic after onboarding) |
-| **[Syslog](/send-data/syslog)** | Device log messages as searchable events + correlation signals | **Pushed** — point device syslog at Correlix |
-| **[SNMP traps](/send-data/traps)** | Instant device notifications (link down, PSU failure, neighbor loss) | **Pushed** — point device trap destination at Correlix |
-| **[Flow records](/send-data/flows)** | Traffic analytics: top talkers, conversations, application attribution | **Pushed** — enable NetFlow / IPFIX / sFlow export |
+| Page | What it covers |
+|---|---|
+| [Send metrics](/send-data/metrics) | How the pulled plane works, and why there is no push path for it. |
+| [Send syslog](/send-data/syslog) | Point a device's syslog at Correlix, choose a severity threshold, and get attribution right. |
+| [Send SNMP traps](/send-data/traps) | Enable the receiver, set the trap destination, and read what v3 authentication buys you. |
+| [Send flow records](/send-data/flows) | Choose NetFlow, IPFIX or sFlow, configure the exporter, and set a sampling rate. |
 
-Metrics start flowing as soon as a device is [onboarded](/onboard-devices/overview). The other three planes require a small, one-time configuration change **on each device** — that's what this section walks you through, step by step, per vendor family.
+## The four planes
 
-## Ports at a glance
+| Plane | Direction | Transport |
+|---|---|---|
+| Metrics | Correlix polls the device | SNMP on UDP 161, or a gNMI subscription Correlix opens |
+| Syslog | Device sends to Correlix | UDP or TCP 514 |
+| SNMP traps | Device sends to Correlix | UDP 162 |
+| Flow records | Device sends to Correlix | UDP 2055, 4739 or 6343 |
 
-All pushed telemetry arrives on standard UDP ports. Open these on any firewall or ACL between your devices and Correlix. The full matrix (including the pull direction) is in [Connectivity requirements](/reference/connectivity-requirements).
+## Ports
 
-| Plane | Protocol / Port | Direction |
-| --- | --- | --- |
-| SNMP polling (metrics) | UDP **161** | Correlix → device |
-| Streaming telemetry (gNMI) | gRPC, device-configured port (often **57400**) | Correlix → device |
-| Syslog | UDP **514** (TCP **514** also accepted) | device → Correlix |
-| SNMP traps | UDP **162** | device → Correlix |
-| NetFlow v5 / v9 | UDP **2055** | device → Correlix |
-| IPFIX | UDP **4739** | device → Correlix |
-| sFlow | UDP **6343** | device → Correlix |
+These are the ports the shipped Compose deployment publishes. Confirm them
+against your own deployment, because each one is overridable at install time.
+The authoritative table, including the pull direction and the browser
+requirements, is
+[Connectivity requirements](/reference/connectivity-requirements).
 
-:::info Source addresses matter
-For pushed telemetry, Correlix attributes each message to a device in your inventory — by the hostname carried in the message (syslog), by the source IP, or by identity fields inside the packet (traps). Configure devices to send from their **management or loopback address** — the one Correlix knows them by — so events land on the right device. Each plane's page covers the specifics.
-:::
+| Port | Protocol | Direction | Plane |
+|---|---|---|---|
+| 161 | UDP | Correlix to device | SNMP polling and discovery |
+| 514 | UDP and TCP | device to Correlix | Syslog |
+| 5514 | UDP and TCP | device to Correlix | Syslog, the alternate unprivileged port |
+| 162 | UDP | device to Correlix | SNMP traps |
+| 2055 | UDP | device to Correlix | NetFlow v5 and v9 |
+| 4739 | UDP | device to Correlix | IPFIX |
+| 6343 | UDP | device to Correlix | sFlow |
+| 8000 | TCP | operator to Correlix | Console and REST API |
 
-## Which plane should I set up first?
+Syslog is published on both 514 and 5514 so that devices configured with a
+default `logging host <address>` reach the collector with no per-device change.
+Both host ports map to the same listener.
 
-A practical order, once metrics are green:
+The environment variables that move them are `SYSLOG_PORT`, `SNMP_TRAP_PORT`,
+`NETFLOW_PORT`, `IPFIX_PORT`, `SFLOW_PORT` and `BASE_PORT`.
 
-1. **Syslog** — the highest-value plane after metrics. Link flaps, protocol adjacency changes, hardware alarms, and config events arrive as first-class, searchable events, and they feed correlation directly. One or two CLI lines per device.
-2. **SNMP traps** — near-zero-latency notification of faults between polls. Especially valuable for hardware and environment failures that a 1-minute poll can miss the onset of.
-3. **Flow records** — traffic analytics. Set this up on the devices where traffic visibility matters: WAN edges, data-center cores, internet borders, firewalls.
+The shipped deployment serves the console over plain HTTP on 8000. A TLS front
+is an opt-in Compose override and the shipped example uses 8443, not 443. There
+is no HTTPS listener until you configure one.
 
-Use this decision guide when you're deciding what to send from where:
+## Which plane to configure first
 
-| You want to… | Send |
-| --- | --- |
-| Know *when* something broke and what the device said about it | **Syslog** |
-| Be told the *instant* a link, PSU, fan, or neighbor fails | **Traps** |
-| Know *who is talking to whom* and which applications use a link | **Flows** |
-| Trend utilization, errors, CPU/memory over time | **Metrics** (automatic) |
+1. **Syslog.** Link transitions, adjacency changes, hardware alarms and
+   configuration events arrive as searchable events the moment the device emits
+   them, and they feed correlation. One or two lines of device configuration.
+2. **SNMP traps.** Notification between polls, which matters for hardware and
+   environment faults. The receiver is off by default, so confirm
+   `FEATURE_SNMP_TRAPS` before configuring devices.
+3. **Flow records.** Traffic analytics, on the devices where traffic visibility
+   matters: WAN edges, data-centre cores, internet borders and firewalls.
 
-You don't need every plane from every device. Aim for **all four planes on core and edge devices**, and at minimum metrics + syslog everywhere else.
+| To answer | Send |
+|---|---|
+| What did the device say about the fault, and when | Syslog |
+| Did a link, power supply, fan or neighbour fail between polls | Traps |
+| Who is talking to whom, over what, and how much | Flow records |
+| How has utilization, error rate or CPU trended | Metrics, which need no device change |
 
-## Why multiple planes raise root-cause confidence
+You do not need every plane from every device. Metrics plus syslog is a
+reasonable floor everywhere, with all four on core and edge devices.
 
-Correlix's correlation engine treats each plane as an **independent witness**. A fault that appears in one plane (a metric anomaly alone) is a lead; the same fault confirmed across planes — a syslog event *and* a metric anomaly *and* a trap, on the same device at the same time — produces a **confirmed** verdict instead of a guess. Multi-plane coverage on your critical devices is the single biggest lever on root-cause quality.
+## Why more than one plane
 
-## Track your coverage
+Correlation treats each plane as an independent witness. One plane produces a
+lead. The same fault seen on a second plane at the same time on the same device
+is corroboration, and the verdict is stated accordingly. Coverage is therefore
+a direct input to root-cause quality, which is why the
+[coverage matrix](/onboard-devices/data-sources) is per device and per plane.
 
-The **[Data Sources coverage matrix](/onboard-devices/data-sources)** (<kbd>Administration → Data Collection → Data Sources</kbd>) shows one row per device and one column per plane, so you can watch columns turn green as you work through this section — and immediately spot the device where a config change didn't take.
+## Attribution
 
-## In this section
+Every pushed record has to be tied back to an inventory device, and each plane
+does it differently.
 
-- **[Metrics](/send-data/metrics)** — how the pulled plane works, and how to verify it.
-- **[Syslog](/send-data/syslog)** — step-by-step device configuration, severity guidance, verification, troubleshooting.
-- **[SNMP traps](/send-data/traps)** — trap destinations per vendor, which trap families matter, verification.
-- **[Flow records](/send-data/flows)** — choosing a flow protocol, exporter configuration, sampling guidance.
+| Plane | Attributed by |
+|---|---|
+| Syslog | The hostname carried in the message, falling back to the source address |
+| Traps | The source address, with a `sysName` or v1 agent-address rescue that requires proof of identity |
+| Flows | The exporter address |
+
+Configure devices to send from the management address the inventory holds, and
+keep the device hostname equal to the inventory name. Each plane's page has the
+specifics.
+
+## Related
+
+- [Onboard devices](/onboard-devices/overview)
+- [Check the data-source coverage matrix](/onboard-devices/data-sources)
+- [Connectivity requirements](/reference/connectivity-requirements)

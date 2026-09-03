@@ -1,59 +1,73 @@
 ---
-title: Iris AI overview
-sidebar_label: Overview
+title: Iris
+description: The assistant that answers from your own tenant's evidence, names the method it used, and cites every claim.
+page_type: index
 sidebar_position: 1
-description: Ask about your network in plain language and get grounded, cited answers.
 ---
 
-# Iris AI
+# Iris
 
-**Iris AI** is the in‑app assistant. Ask about your network in plain language and get answers grounded in your live, tenant‑scoped data — with clickable evidence, never a black box.
+Iris is the assistant built into Correlix. It answers operational questions from
+your own tenant's data, states which troubleshooting method it ran, cites the
+evidence behind every claim, and says what is missing rather than filling the
+gap. This section is for the operator who asks it questions and for the
+administrator who turns it on.
 
-Open it from the **Iris AI** button pinned near the bottom of the left icon rail, or press <kbd>Ctrl/Cmd + K</kbd> and choose **Open Copilot** from the command palette. It slides in as a panel you can float over the page (overlay) or dock beside it (split screen) — see [Using Iris AI](/iris-ai/using).
+Open it from the button pinned at the foot of the left sidebar, labelled **Iris
+AI**. It opens as a slide-over that you can float over the page or dock beside
+it.
 
-## What you can ask
+| Page | What it gives you |
+|---|---|
+| [Set up Iris](/iris-ai/setup) | The flags, the per-tenant entitlement, and the optional provider key. |
+| [Investigate an incident with Iris](/iris-ai/ask-iris) | Asking, slash commands, and how to read an answer. |
+| [Iris skills and chaining](/iris-ai/skills) | The 13 compiled-in methods, and how one hands off to the next. |
+| [Investigation memory](/iris-ai/memory) | What Iris remembers, when, and why it is never a rule. |
 
-- **Live operations** — *"What's going on right now?"* returns a current operations summary: confirmed / suspected / undetermined incident counts, the recommended focus incident, and why it should be worked first.
-- **Incident triage** — *"Which incident should the NOC focus on first, and why?"* gives a prioritized recommendation with the reasoning spelled out.
-- **Root‑cause explanations** — *"Explain the top incident"* resolves the highest‑priority incident from the queue and explains it: likely root cause, supporting evidence, what evidence is still missing, the recommended owner, and next actions.
-- **Module questions** — *"Show me the top talkers"*, *"any metric anomalies right now?"*, *"integration health?"* — focused reads of flow analytics, telemetry, application identification, and connector health.
-- **Playbooks** — *"How do I troubleshoot a BGP flap?"* returns curated network‑engineering guidance.
-- **Product help and navigation** — *"How do I set up SNMP discovery?"*, *"Where do I configure ServiceNow?"*.
+## How Iris answers
 
-Typing <kbd>/</kbd> in the composer opens a menu of ready‑made commands (`/status`, `/top`, `/focus`, `/explain`, `/playbook`, …) that run the same grounded questions with one keystroke. The full table is in [Using Iris AI](/iris-ai/using#slash-commands).
+Two paths, and Iris always picks one that works.
 
-## Two answer paths
+- **Grounded, no provider key needed.** Questions about your network are
+  answered by a deterministic engine that reads your tenant's data through
+  governed read-only tools and returns a structured, cited card. Navigation,
+  product questions, shift hand-offs, incident lists and time-range summaries
+  never call a model at all.
+- **Provider-backed narrative.** With an AI provider key configured, the
+  reasoning-heavy answers (an RCA explanation, a troubleshooting finding, a
+  current-state summary) get a model-written narrative over the same governed
+  evidence. Those are exactly the answers the grounding verifier runs on.
 
-Iris AI has two ways of answering, and it always picks one that works:
+Answers cite documentation as `/docs/<slug>#<anchor>` and open the page in the
+in-app Help drawer, so a product answer lands on the page that says it.
 
-1. **Grounded answers (no API key required).** Questions about *your network* — live state, incidents, RCA, flows, telemetry — are answered by a deterministic, evidence‑grounded engine that reads your tenant's data directly. Answers come back as a structured card: a narrative, incident counts, a recommended focus, missing evidence, next actions, and **citations that deep‑link into the source view**. This path works out of the box, with no external AI provider configured.
-2. **Free‑form chat (provider key required).** When a platform administrator adds an AI provider API key (Anthropic or OpenAI, selectable in the assistant settings), typed free‑form questions are answered conversationally by that provider — and grounded answers get a model‑written narrative instead of the built‑in phrasing. Slash commands and the built‑in quick actions **always** use the grounded engine, key or no key, so triage answers stay deterministic and cited.
+## Security stance
 
-When no provider is configured, answers carry a small footer note — *"Evidence‑only mode: AI provider not configured."* — so you always know which path produced the answer.
+Iris is designed against the OWASP Top 10 for LLM applications. These properties
+are enforced in code, not requested in a prompt.
 
-## Grounding, scoping, and honesty
+- **The system prompt is server-controlled.** A client-supplied `system` field
+  or a `system`-role message is ignored, so a caller cannot inject an
+  instruction turn.
+- **Model output is data, never markup.** Assistant text, skill names, tool
+  names and citation labels all render as escaped React text. There is no
+  `innerHTML` anywhere on those paths, and a citation renders as a link only
+  when it is a same-origin relative path.
+- **Nothing is auto-injected.** The backend does not put secrets, credentials,
+  another tenant's rows or PII into a prompt. A provider key is write-only and
+  sealed at rest.
+- **Requests and answers are bounded.** The request body is capped at 256 KiB,
+  each principal has a per-minute budget (20 by default), and every provider
+  call caps output at 1024 tokens.
+- **Invented citations are stripped.** A deterministic verifier removes any
+  bracketed evidence id the model produced that is not in the evidence bundle,
+  before the answer is shown. It is a guardrail in code, so the model cannot
+  talk its way past it.
+- **Every tool is read-only.** Iris never changes anything. Draft-style
+  commands produce text only, and nothing is sent or written on your behalf.
 
-- **Tenant‑scoped by design.** Every answer is built only from data your tenant owns, further filtered by your own role's permissions (a user without flow access won't get flow answers). The assistant can never see another tenant's data.
-- **Cited, not asserted.** Grounded answers attach citations — chips at the bottom of the card that link to the incident, device, or view the fact came from. If a model narrative claims something the evidence bundle doesn't contain, the invented citation is stripped before the answer is shown.
-- **Honest about gaps.** Answers show a **Missing evidence** section and *Low evidence* badges when the engine can't confirm a root cause, instead of overclaiming.
-- **Read‑only.** The assistant never changes anything on the platform. Draft‑style commands (for example `/itsm`, which drafts a ticket update) produce text only — nothing is sent or written.
+## Related
 
-## Privacy — what leaves the platform
-
-- **Without a provider key configured: nothing.** All answers are computed inside the platform.
-- **With a provider key:** the question and a compact, redacted evidence summary (or, for free‑form chat, your typed conversation) plus the server‑owned assistant instructions are sent to the provider you configured. Content is passed through a redaction step before it leaves. Nothing is auto‑pulled beyond what the answer needs.
-- The provider **API key is encrypted at rest and never shown again** after you save it — the settings screen only reports that a key is present and where it came from.
-- Audit records for assistant usage capture who asked and the question *category* — never the question text or the retrieved data. Answer feedback (👍/👎) records only the rating and category.
-
-:::warning
-Configuring a provider key means operational data — incident summaries, device names, evidence lines, and anything you type into the chat — is sent to that external AI provider. If your organization restricts data egress, leave the assistant in key‑free grounded mode: triage, RCA explanations, and module summaries all work without any provider.
-:::
-
-## Cost and rate controls
-
-Each provider call is a paid, per‑token request. Correlix bounds the exposure: response length is capped, request size is bounded, and each user is rate‑limited (20 assistant requests per minute by default, tunable by the platform administrator). Provider errors are never echoed to users — the assistant falls back to the next configured provider, then to the grounded engine.
-
-## Next steps
-
-- **[Set up Iris AI](/iris-ai/setup)** — enable the feature, add a provider key, verify it's live.
-- **[Using Iris AI](/iris-ai/using)** — asking questions, slash commands, and reading an answer card.
+- [Investigate](/investigate/overview)
+- [Feature flags](/reference/feature-flags)
+- [Security overview](/security/overview)

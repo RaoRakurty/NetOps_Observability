@@ -1,78 +1,88 @@
 ---
-title: "From signal to ticket: one incident, end to end"
-sidebar_label: From signal to ticket
+title: From observation to ticket
+sidebar_label: From observation to ticket
+description: How one observation becomes an event, a finding, a correlated group, a graded RCA case, a notification and exactly one ticket.
+page_type: concept
 sidebar_position: 4
-description: Follow a single incident through the console — anomaly, correlation, every element of the RCA view, topology verification, and the auto-filed ticket.
 ---
 
-# From signal to ticket: one incident, end to end
+# From observation to ticket
 
-This walkthrough follows **one incident** through every chapter of its story. At each step: the tab, what you look at, and what question it answers. Do it once with a real incident and the console's layout will never feel arbitrary again.
+One fault produces many observations. Correlix moves those observations through a fixed
+sequence of stages, and each stage adds one thing the previous stage could not
+claim. Knowing the sequence tells you which console surface answers the question
+you have, and how much a given surface is entitled to assert.
 
-## Step 1 — The anomaly fires
+## How it works
 
-**Tab:** <kbd>Monitoring → Anomalies</kbd> · **Question:** *is something abnormal?*
+| Stage | Where you see it | What it adds |
+|---|---|---|
+| Collection | Nowhere directly. Inspect the planes on **Explore → Metrics**, **Explore → Logs** and **Explore → Flows**. | The measurements. Everything downstream cites these. |
+| Events | **Explore → Events** | One time-sorted stream of syslog, SNMP traps and firing alerts, with Time, Type, Severity, Source and Event. Nothing is judged here. |
+| Findings | **Investigate → Findings** | A judgement against the device's own baseline. A row carries a severity, a kind, a device, a component, a summary and a score. |
+| Correlation | **Investigate → RCA** | The grouping. Related findings and events become one candidate with a **Linked by** relationship, a count of evidence types and an observation count. |
+| The RCA case | The RCA workspace, opened from a candidate | The verdict, the ranked hypotheses, the evidence matrix, the confidence ladder and the causal path. |
+| Triage | **Overview → Home**, then **Operations → Incidents** | An owner, a next action and a tracked lifecycle. |
+| Delivery | **Administration → Notifications** and **Administration → Ticketing & Automation** | The people who need to know, and one record per root cause. |
 
-1. Open the **Detected Findings** queue. New findings appear at the top as the engine detects deviations from each device's statistical baseline.
-2. Find your incident's first clue: a row with a Severity (say, `critical`), a Kind, a Device, a plain-language Summary, and a Score.
-3. Click the row. You should now see the finding's context — time, device, component — and a **View logs** button. Click it if you want the raw narration ([how to read it](/noc-guide/reading-logs)).
+### The grouping is the point
 
-A finding is one clue, not a verdict. Leave it and move downstream.
+A finding is a clue. The correlation stage decides whether several clues belong
+together, using time proximity and a network relationship, and the **Linked by**
+column names which relationship it used. Grouping is what turns fifty alerts
+into one incident, and it is why a notification pages once rather than fifty
+times.
 
-## Step 2 — The evidence groups
+### The verdict is graded, and the grade is earned
 
-**Tab:** <kbd>Monitoring → Correlations</kbd> · **Question:** *do the clues belong together, and what do they suggest?*
+The RCA case reports one of three tiers. `confirmed` requires at least two
+measurement classes to agree, seen by at least two observers that share no
+measurement authority. `suspected` means supporting observations exist without that
+independence. `undetermined`, shown as **Not confirmed**, means the evidence
+does not place a cause.
 
-1. Open the **RCA Candidates** queue. Each row is a correlation group — anomalies and events bound by time and network relationship.
-2. Find the candidate containing your finding (match device and time window). Read its row: **Status** (Confirmed / Suspected / Not confirmed), **Quality**, **Likely cause** (a named failure pattern, or "Not yet determined"), **Owner**, **Linked by** (Boundary / Boundary + path / Same path), **Evidence types**, and **Signals** — how many raw signals correlated in.
-3. Note the honest bar stated right in the header: *a root cause is confirmed only when independent evidence agrees across at least two signal classes — weaker candidates say exactly what's missing.*
-4. Click the row to open the RCA workspace.
+The workspace shows how the grade was reached. The confidence ladder runs
+Detected, Suspected, Probable, Confirmed, with the rungs still locked stating
+what each one requires. The evidence matrix carries cards for evidence that is
+missing or conflicting, not only for evidence that supports the case. The
+hypothesis ranking lists every cause considered and why each was kept or
+dropped.
 
-## Step 3 — Walk the RCA view
+### One ticket per root cause
 
-**Tab:** the **Root cause analysis** workspace (opened from the row) · **Question:** *what happened, how sure are we, and what do we do?*
+Ticketing policies decide when a case opens a record, gated on the minimum
+verdict, on whether the impact is customer-facing, and on persistence and
+flap-suppression windows. A tenant with no policy gets a safe default:
+customer-facing confirmed faults open a record, and internal, probe-only and
+undetermined cases are held. **Simulate a decision** on the policy page answers
+*Would open a ticket* or *Held*, with the reason.
 
-Read it top to bottom — the order is the argument:
+Because the record is opened against the case rather than against an alert, the
+same fault cannot produce a second ticket while the first is open.
 
-1. **Title, status pills, and confidence.** The case title states the diagnosed problem. Pills show the verdict (**CONFIRMED** or suspected/not confirmed) and **Confidence** (e.g. "Confidence: High"). Below, the **Decision** callout gives the one-sentence operational call, and the line under it records **Observed at** and the **RCA ID**. The side panel names the **root cause object** (the device/link at fault) and the **Likely owner** — the team the evidence points at. *Answers: what and how sure.*
-2. **Executive RCA summary.** A paragraph you could paste into a bridge call, followed by labelled "why" lines and — importantly — **Ruled out**: competing causes the evidence does not support. *Answers: why this cause and not another.*
-3. **Impact & blast radius.** Key/value scope: what's affected and how widely. (The queue-level **Fault domain** classification — LAN, SD-WAN, ISP / Carrier, and so on — lives on the [Command Center](/noc-guide/where-to-start) row for this incident.) *Answers: who feels it.*
-4. **Ask RCA Assistant / Time impact.** When enabled, an AI panel answers questions grounded only in this RCA's facts, and a time-impact card breaks down where the incident's time went. Both are aids, not evidence.
-5. **External ticket.** The live ticket card — we return to it in Step 5.
-6. **Network path & causal topology.** The devices and boundaries involved, drawn as a path with the failure located on it. If there isn't enough routing or path evidence, it says so ("Path location not placed yet") rather than guessing. *Answers: where in the network.*
-7. **Evidence matrix.** One card per evidence stream, each with a status pill, what was found, and — crucially — cards for evidence that is *missing* or *conflicting*. *Answers: what supports (and what would strengthen) the verdict.*
-8. **Confidence ladder.** The promotion steps from raw signal to confirmed cause, with completed steps lit and the still-locked ones showing what's required. *Answers: why the verdict is exactly this strong and no stronger.*
-9. **Evidence timeline.** Lanes per signal group with clickable markers; click any marker and the detail line explains why it was counted as evidence. This is the cascade in time — what happened first, what followed. *Answers: the sequence.*
-10. **Hypothesis ranking.** A table of every cause considered — Rank, Hypothesis, Confidence, Reason. *Answers: what else was on the table.*
-11. **Ticket & escalation decision** and **Next actions.** The engine's recommendation on ticketing/escalation, then a numbered action list with the recommended owner. *Answers: what to do now.*
+## Where the sequence stops short, and says so
 
-:::note
-The **Operator View / Debug View** toggle (top right) switches to the engine's raw accounting — which signals were used or ignored and why, and a deterministic replay. **Export PDF** produces the same case as a report.
-:::
+- **A case can stop at `suspected` for a structural reason.** A case supported
+  only by controller intelligence, or only by security findings, cannot reach
+  `confirmed`, because neither class measures the path. The case says which
+  class is missing rather than promoting itself.
+- **An empty Action Queue means nothing has correlated.** It is not a statement
+  that the network is healthy. Alerts firing without a group are on
+  **Operations → Active Alerts**.
+- **A path that cannot be placed is reported as unplaced.** The causal topology
+  says the fault has not been located rather than drawing a guess.
+- **An unattributed seam is named as unattributed.** The case reads
+  *Not yet narrowed* rather than assigning a party the evidence does not
+  support.
+- **Confidence is a rank, not a probability.** It orders hypotheses against each
+  other and nothing more.
 
-## Step 4 — Verify on the map
+## Related
 
-**Tab:** <kbd>Infrastructure → Topology Canvas</kbd> · **Question:** *does the story match the network's shape?*
-
-1. Open the canvas and switch the workflow selector to **Investigate** ("Triage an incident. Lands on the RCA path; select a node to refocus.").
-2. Investigate auto-pins the most actionable current incident and spotlights its fault path; use the incident dropdown to pin yours if it landed elsewhere.
-3. Read the verdict banner: the same verdict, confidence, summary, recommended action — and an honest *what's missing to confirm* list. The path shows **where**; the banner shows **why**.
-4. Select a node to refocus on its first-degree neighborhood and sanity-check the blast radius against what users report. More in [Topology Canvas](/infrastructure/topology-canvas).
-
-## Step 5 — The ticketing leg
-
-**Tabs:** <kbd>Incident Response → RCA Auto-Ticketing</kbd> and the RCA's **External ticket** card · **Question:** *is this on the record, exactly once?*
-
-1. **The policy decides.** Policies at <kbd>Incident Response → RCA Auto-Ticketing</kbd> govern when an RCA object opens a ServiceNow ticket — **one ticket per root cause, never per raw alert**. Gates include **Minimum verdict** (suspected or confirmed), **Require customer-facing**, **Suspected needs critical**, persistence and flap-suppression windows, plus routing (assignment group, default impact/urgency). With no policy, a safe default applies: customer-facing confirmed faults open an incident; internal, probe-only, and undetermined are held. Use **Simulate a decision** to dry-run a policy — it answers "Would open a ticket" or "Held", with the reason. Full reference: [RCA Auto-Ticketing](/incident-response/rca-ticketing); the ServiceNow connection itself is configured under [Integrations](/incident-response/integrations).
-2. **Watch the ticket appear.** Back on your RCA, the **External ticket** card shows the state, then the ticket number (deep-linked into ServiceNow), **Last synced**, **Verdict at sync**, and a **History** trail of every action and result. Operators with write access get **Create ticket** / **Sync ticket** buttons; actions are queued and completed by a background worker moments later.
-3. **See it everywhere.** The incident row in <kbd>Monitoring → Incidents</kbd> now shows the ticket reference, and the Command Center's **Ticketing gap** panel counts it under *Ticketed*.
-
-## Step 6 — Resolve and close the loop
-
-**Tab:** <kbd>Monitoring → Incidents</kbd> · **Question:** *is the story finished?*
-
-1. Open the incident, click **Resolve** when the fault is fixed (then **Close**, or **Reopen** if it recurs). Add a note — the next shift reads this timeline.
-2. The **Timeline** records every status change, note, and ticket-sync event in order — the incident's complete audit trail.
-3. After a ticket resolves, the policy's **flap suppression** window prevents a brief recurrence from immediately opening a duplicate. Resolved correlations remain reviewable under <kbd>Monitoring → Correlations</kbd> with the state filter set to **Resolved**.
-
-One anomaly became grouped evidence, a graded verdict, a located fault, a single ticket, and an auditable record — and every claim along the way stayed clickable back to the raw signals that support it.
+- [Start a shift](/noc-guide/where-to-start)
+- [Read device logs during an incident](/noc-guide/reading-logs)
+- [How correlation works](/investigate/rca-explained)
+- [Read an RCA case](/investigate/read-an-rca-case)
+- [Notifications](/incident-response/notifications)
+- [RCA ticketing](/incident-response/rca-ticketing)
+- [Honest states](/reference/honest-states)

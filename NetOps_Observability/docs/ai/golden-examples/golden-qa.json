@@ -113,7 +113,7 @@
       "question": "What slash commands does the assistant support?",
       "expect": {
         "slugs": [
-          "iris-ai/using"
+          "iris-ai/ask-iris"
         ]
       }
     },
@@ -300,7 +300,7 @@
       "question": "Fix a failing compliance check finding",
       "expect": {
         "slugs": [
-          "security/compliance-monitoring"
+          "security/compliance"
         ]
       }
     },

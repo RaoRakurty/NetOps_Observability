@@ -1,65 +1,65 @@
 ---
-title: Onboard Network Devices
+title: Onboard devices
 sidebar_label: Overview
+description: The order to work in when bringing a fleet into Correlix, and the page that covers each step.
+page_type: index
 sidebar_position: 1
-description: The complete reference for getting your devices into Correlix — credentials, discovery, manual add, streaming telemetry, and verification.
 ---
 
-# Onboard Network Devices
+# Onboard devices
 
-This section is the complete reference for getting devices into Correlix. Where the [Quickstart](/getting-started/quickstart) walked one device end to end, here each step is documented as a full procedure so you can onboard a whole fleet — and prove it worked.
+Correlix polls devices over SNMP and accepts pushed syslog, traps and flow
+records. Onboarding a fleet is therefore a credential, an inventory entry, and
+one device-side configuration change per push plane. The pages below cover each
+of those for the operator who has a working deployment and a list of management
+addresses.
 
-## The onboarding journey
+Work in this order. Each page states what you need before you start and what
+proves the step worked.
 
-Work through these steps in order. Each links to a page with the full click-by-click procedure.
+| Page | What it covers |
+|---|---|
+| [Supported devices](/onboard-devices/supported-devices) | Which vendors Correlix recognizes, which metric families it reads, and what is not claimed. |
+| [Add an SNMP credential](/onboard-devices/snmp-profiles) | Store a v1/v2c community or an SNMPv3 USM user, and bind it to devices. |
+| [SNMP configuration by vendor](/onboard-devices/vendor-snmp-configs) | The device-side CLI Correlix generates for each vendor it has a template for. |
+| [Configure SNMP discovery](/onboard-devices/snmp-discovery) | Scope a bounded subnet sweep and onboard everything that answers. |
+| [Add a device by hand](/onboard-devices/add-devices-manually) | Add one device by id and management address. |
+| [Set up gNMI streaming telemetry](/onboard-devices/streaming-gnmi) | Add a gnmic subscription for a device, and hand the gNMI-owned families to it. |
+| [Check the data-source coverage matrix](/onboard-devices/data-sources) | See, per device, which of the four planes delivered data in the last 15 minutes. |
+| [Verify a device is being monitored](/onboard-devices/verify-monitoring) | Read the collector pool, the alerts it raises, and the honest empty states. |
 
-1. **Check connectivity.** Correlix monitors agentlessly, so the only hard requirement is network reachability on a handful of standard ports (SNMP UDP 161 outbound; syslog, traps, and flows inbound). Review [Connectivity requirements](/reference/connectivity-requirements) and open the paths on any firewall or ACL between Correlix and your devices.
+## What each step gives you
 
-2. **Create SNMP credentials first.** Every device needs a read credential before it can be polled. Add your SNMP v2c communities and SNMPv3 users in the **[SNMP Profile Manager](/onboard-devices/snmp-profiles)** (<kbd>Administration → Data Collection → SNMP Profile Manager</kbd>). Doing this before adding devices means polling starts the moment a device appears.
+Metrics arrive as soon as a device is in the inventory with a credential that
+answers. The other three planes are configured on the device and covered in
+[Send data to Correlix](/send-data/overview).
 
-3. **Get devices into the inventory.** Pick the method that fits — you can mix them freely:
+| Plane | Direction | Where it is configured |
+|---|---|---|
+| Metrics | Correlix polls the device on UDP 161 | [Add an SNMP credential](/onboard-devices/snmp-profiles) |
+| Syslog | Device sends to Correlix | [Send syslog](/send-data/syslog) |
+| SNMP traps | Device sends to Correlix | [Send SNMP traps](/send-data/traps) |
+| Flow records | Device sends to Correlix | [Send flow records](/send-data/flows) |
 
-   | Method | Best for | Page |
-   | --- | --- | --- |
-   | **SNMP discovery** | Finding many devices on known management subnets automatically | [Discover devices](/onboard-devices/snmp-discovery) |
-   | **Add device manually** | A handful of devices, or ones outside a scanned range | [Add devices manually](/onboard-devices/add-devices-manually) |
-   | **Import / Source of Truth** | You already have an inventory (CSV/JSON import, or an external system of record) | [Source of Truth](/automation/overview) |
+## Before you start
 
-   However a device arrives, it lands in the same inventory at <kbd>Infrastructure → Devices</kbd>, with a **Source** badge showing where it came from.
+- Open the ports in [Connectivity requirements](/reference/connectivity-requirements).
+  Correlix needs UDP 161 outbound to each device; the push planes need their
+  ports inbound.
+- Confirm which collectors are enabled on your deployment. Every collector is
+  an individual flag, listed in [Feature flags](/reference/feature-flags).
+  `ENABLE_SNMP_COLLECTION` and `ENABLE_SNMP_METRICS` default to `true`;
+  `ENABLE_SNMP_DISCOVERY`, `ENABLE_GNMI_COLLECTION`, `FEATURE_SNMP_TRAPS` and
+  the rest default to `false`.
+- Have a read-only SNMP credential ready, or generate one with the
+  [SNMP configuration generator](/onboard-devices/vendor-snmp-configs).
 
-4. **Confirm collection.** Open the **[Data Sources coverage matrix](/onboard-devices/data-sources)** (<kbd>Administration → Data Collection → Data Sources</kbd>). Every onboarded device should turn green in the **SNMP metrics** column within a poll cycle (about a minute).
+## Where the controls live
 
-5. **Add the event and traffic planes.** SNMP polling gives you metrics and inventory. To unlock events, traffic analytics, and — most importantly — multi-plane root-cause correlation, configure your devices to *push* telemetry to Correlix:
-
-   - **[Syslog](/send-data/syslog)** — device log messages become searchable events and correlation signals.
-   - **[SNMP traps](/send-data/traps)** — asynchronous device notifications (link down, hardware alarms).
-   - **[Flow records](/send-data/flows)** — NetFlow/sFlow/IPFIX for traffic and top-talker analytics.
-
-6. **Add streaming telemetry where it's worth it (optional).** On platforms that support **gNMI**, [streaming telemetry](/onboard-devices/streaming-gnmi) adds sub-minute interface counters and on-change protocol state — it catches BGP and IGP flaps that a polling interval can miss.
-
-7. **Verify.** Run the **[verification checklist](/onboard-devices/verify-monitoring)**: device green in the inventory, metrics on dashboards, logs searchable, flows flowing. Done means rendered — don't consider a device onboarded until you've seen its data on screen.
-
-## The four green checks
-
-For each device, you're aiming for:
-
-1. ✅ **Known** — the device exists in <kbd>Infrastructure → Devices</kbd> with an **Up** status dot.
-2. ✅ **Credentialed** — a working SNMP credential is attached ([SNMP profiles & credentials](/onboard-devices/snmp-profiles)).
-3. ✅ **Collecting** — the device is green on the [Data Sources coverage matrix](/onboard-devices/data-sources) for every plane you configured.
-4. ✅ **Rendering** — its dashboards fill in ([Verify a device is monitored](/onboard-devices/verify-monitoring)).
-
-:::tip Aim for multi-plane coverage on critical devices
-Correlation is most confident when a fault shows up in more than one plane — a syslog event *and* a metric anomaly *and* a trap. Prioritize getting syslog and flows onboarded for your core and edge devices, not just SNMP.
-:::
-
-## What onboarding unlocks
-
-Once a device is collecting, it's automatically eligible for [monitors and alerting](/monitoring/overview), anomaly detection, the [Topology Canvas](/infrastructure/topology-canvas), and root-cause correlation — no extra wiring per device.
-
-## Where things live
-
-- **<kbd>Infrastructure → Devices</kbd>** — the inventory: every discovered and declared device, health, type, source.
-- **<kbd>Administration → Data Collection</kbd>** — the collection controls: **SNMP Profile Manager** (credentials and the vendor metric library) and **Data Sources** (per-device coverage).
-- **[Supported devices & vendors](/onboard-devices/supported-devices)** — what works out of the box, and the honest baseline for everything else.
-
-Start with **[SNMP profiles & credentials](/onboard-devices/snmp-profiles)**.
+| Console location | What it does |
+|---|---|
+| **Infrastructure → Devices** | The inventory. Add a device, filter by health, open a device workspace. |
+| **Infrastructure → Discovery & NMS → Subnet Discovery** | Scope the SNMP sweep. Platform administrators only. |
+| **Administration → Data Collection → SNMP Profiles** | Credentials, the vendor OID library, and the configuration generator. |
+| **Administration → Data Collection → Data Sources** | The per-device coverage matrix. |
+| **Administration → Data Collection → Sensors** | Collector pool status. Platform administrators only. |

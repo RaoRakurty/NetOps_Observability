@@ -1,135 +1,148 @@
 ---
-title: Authentication & SSO
-sidebar_label: Authentication & SSO
-sidebar_position: 3
-description: Local accounts, SSO via OIDC, LDAP/Active Directory, TACACS+, MFA, and session behavior.
+title: Configure authentication
+sidebar_label: Authentication
+description: Set the password, lockout and session policy for a scope, and connect OIDC, LDAP or TACACS+ alongside local accounts.
+page_type: task
+sidebar_position: 4
 ---
 
-# Authentication & SSO
+# Configure authentication
 
-Correlix supports local accounts and your existing identity infrastructure, side by side. Configure it at <kbd>Administration → Authentication</kbd> — a tile per method, each opening a short guided form. Local accounts are always on, so an SSO outage can never lock you out.
+Correlix authenticates locally and against your existing identity infrastructure at the same time. Local accounts are always available, so an outage at an identity provider cannot lock every administrator out. This page sets the policy that governs local accounts, then connects an external provider.
 
-| Tile | Use it for |
-| --- | --- |
-| **Local accounts** | Username + password held by Correlix — small teams and break‑glass. Always on. |
-| **Single Sign-On** | Federate sign‑in to your **OIDC** identity provider (Okta, Azure AD, Google, …). |
-| **LDAP / Active Directory** | Bind directly against your directory; groups map onto roles. |
-| **TACACS+** | Authenticate operators against your existing AAA server. |
+## Before you begin
 
-:::note SAML
-There is no native SAML form. If your identity provider is SAML‑only, front it with an OIDC‑capable broker and connect Correlix to the broker via the Single Sign‑On tile. The bundled Keycloak service does exactly this — the **[Okta SSO step‑by‑step guide](/administration/okta-sso)** walks through the whole setup, including the Okta dashboard tile.
-:::
+- **Permission, provider configuration:** platform administrator. Authentication providers are platform-global plumbing. `GET` and `PUT` on `/api/auth/oidc/config`, `/api/auth/ldap/config`, `/api/auth/tacacs/config` and `/api/auth/token-policy` all call `requirePlatformAdmin`, and the console hides **Administration → Platform Security → Authentication** from a tenant administrator for the same reason.
+- **Permission, security policy:** `administration:admin` plus reach over the scope you are editing. `/api/security-settings?scope=<tenant>` accepts the platform administrator or an administrator who reaches that tenant. The `provider` scope is platform administrator only.
+- Keep one local administrator account that is never federated. It is the way back in when single sign-on breaks.
+- For OIDC, have the issuer URL, client id and client secret ready. Correlix appends `/.well-known/openid-configuration` to the issuer, so register the base URL.
 
-Required fields are marked with a red asterisk, and every stored secret is **write‑only** — after saving it shows as `••••••`; leaving it blank on a later edit keeps the existing value.
+## Steps
 
-## Local accounts & password policy
+### Set the password, lockout and session policy
 
-Accounts are managed under [Identity & Access → Users](/administration/identity-access#add-a-user). Policy knobs live in the per‑scope **Security Settings** tab (Provider, organization, or tenant). Defaults:
+Policy is per scope: the Provider realm, an organization, or one tenant. Open **Administration → Identity & Access → (scope) → Security Settings**.
 
-| Policy | Default |
-| --- | --- |
-| Minimum password length | 8 (also the hard floor — a scope can raise it, never lower it) |
-| Character classes | lowercase, uppercase, digit and symbol all required |
-| Password expiry | enabled, 90 days |
-| Reuse | the new password must differ from the current one |
-| Lockout | 3 failed attempts; auto‑unlocks after 15 minutes |
+The shipped defaults:
 
-Users change their own password from the account menu → **Change password** (**Current password**, **New password**, **Confirm new password**, with a live strength meter and policy checklist). Changing a password **revokes all of that user's sessions**. Federated (SSO/LDAP) accounts change their password at the identity provider, not here.
-
-## Multi‑factor authentication (MFA)
-
-Local accounts can add a one‑time code from an authenticator app:
-
-1. Open the account menu → **Two-factor authentication** and click **Enable two-factor**.
-2. **Scan the QR code** with your authenticator app (a *Can't scan?* link reveals the manual entry key).
-3. **Enter the 6‑digit code** it shows and click **Confirm & turn on**.
-
-From then on, sign‑in asks for the password and then a code (the challenge is valid for 5 minutes). To turn it off, enter a current code and click **Turn off two-factor**. An admin can **reset two‑factor** for selected users from the Users page; federated accounts enroll MFA at their identity provider — for OIDC you can *require* it (below).
-
-## Set up Single Sign‑On (OIDC)
-
-1. In your identity provider, create an **OIDC web application** (Authorization Code flow) and register the redirect URI Correlix shows on the form: `https://<your-host>/api/auth/sso/callback`. Note the issuer URL, client ID and client secret.
-2. In Correlix, open <kbd>Administration → Authentication</kbd> → **Single Sign-On**, tick **Enabled**, and complete the three steps:
-
-**Step 1 — Connection**
-
-| Field | Required | Notes |
+| Setting | Field | Default |
 | --- | --- | --- |
-| **Issuer / Discovery URL** | Yes | Base issuer URL; `/.well-known/openid-configuration` is appended |
-| **Client ID** | Yes | |
-| **Client secret** | No | Write‑only; blank for a public client |
-| **Scopes** | No | Defaults like `openid email profile` |
+| Minimum password length | `min_password_length` | 8 |
+| Character classes | `require_uppercase`, `require_lowercase`, `require_number`, `require_special` | All four required |
+| Password expiry | `password_expire_enabled`, `password_expire_days` | Enabled, 90 days |
+| Password history | `password_history` | Off. When enabled, the last 5 hashes are checked. |
+| Failed sign-ins before lockout | `login_attempts_allowed` | 3 |
+| Lockout duration | `unlock_time_seconds` | 900 seconds, which is 15 minutes |
+| Account validity | `account_validity_days` | 180 days |
+| Inactivity cutoff | `account_inactivity_days` | 90 days |
+| Concurrent sign-in | `concurrent_login` | `allow` |
+| Idle timeout | `idle_timeout_minutes` | 30 minutes, floor 5 |
+| Absolute session lifetime | `absolute_timeout_minutes` | 720 minutes, which is 12 hours |
 
-**Step 2 — Role mapping**
+Two facts the form does not state. On save, `min_password_length` is clamped to a floor of **4**, not 8, so a scope can be set below the shipped default. `login_attempts_allowed` is clamped to a floor of 1, and a value of 0 or less disables lockout entirely.
 
-| Field | Notes |
-| --- | --- |
-| **Default role** | Role for signed‑in users with no mapped group |
-| **Default tenant** | Tenant new federated users land in |
-| **Admin roles** | Comma‑separated IdP roles/groups mapped to Super Admin |
-| **Operator roles** | Comma‑separated IdP roles/groups mapped to Operator |
-| **Require multi-factor authentication** | Reject sign‑ins your IdP didn't verify with a second factor |
-| **MFA assurance values** | Optional — the assurance (`acr`/`amr`) values you accept as "MFA done" |
+A new password must always differ from the current one, whether or not history is enabled. Changing a password revokes every session that user holds, and the response says whether the revocation persisted:
 
-**Step 3 — Sign‑in & redirect** — the sign‑in **Providers** buttons shown on the login page, the **Post-login URL**, and an optional **Redirect URL override**.
+```json
+{"status":"ok","sessions_revoked":true}
+```
 
-3. Click **Save**, then test with a real IdP account. The tile's badge flips to **Enabled · Ready**.
+A `sessions_revoked` of `false` means the password did change and the revocation was not written durably, so old sessions may survive a restart. It is reported rather than hidden behind a `500` that would wrongly say the password change failed.
 
-## Set up LDAP / Active Directory
+### Understand the lockout
 
-Open the **LDAP / Active Directory** tile, tick **Enabled**, and complete the three steps:
+Lockout counts consecutive failed sign-ins per account and is enforced before the password is checked, so a locked account cannot be guessed at. A locked sign-in answers `429` with a `Retry-After` header and the message `account temporarily locked due to failed sign-ins; try again later`. A successful sign-in clears the counter.
 
-**Step 1 — Connection**
+The counter is in memory and process-local. It resets when the API restarts, and it is not shared between API replicas. Under a username-spraying attack that fills the tracker with live locks, new sign-ins are refused with `429` and the message `sign-in temporarily unavailable due to failed-login pressure` rather than being silently untracked. Refusing loudly is deliberate: an uncounted failure is an unlimited guess.
 
-| Field | Required | Notes |
-| --- | --- | --- |
-| **Host** | Yes | e.g. `ldap.example.com` |
-| **Port (0 = auto)** | No | Auto‑picks by encryption |
-| **Encryption** | No | *None (389)* / *StartTLS* / *LDAPS (636)* — use StartTLS or LDAPS in production |
-| **Bind DN (service acct)** | No | e.g. `cn=svc,dc=example,dc=com`; blank = anonymous bind |
-| **Bind password** | No | Write‑only |
-| **Base DN** | Yes | e.g. `dc=example,dc=com` |
-| **Skip TLS verify (lab only)** | No | Never in production |
+### Enrol multi-factor authentication
 
-**Step 2 — Users & groups** — **User filter** *(required — `%s` is the username, e.g. `(uid=%s)` or `(sAMAccountName=%s)`)*, **Group base DN** (defaults to Base DN), **Group filter** (`%s` is the user DN, e.g. `(member=%s)`), **Default role**, **Default tenant**.
+A local account adds a time-based one-time code from an authenticator application.
 
-**Step 3 — Roles & test** — add **group DN → role** mapping rows with **+ Add mapping** (highest‑privilege match wins). Then enter a test username/password and click **Test connection** — the result shows each stage, the resolved DN, the user's groups, and the role that *would* be assigned. Click **Save**.
+1. Open the account menu, then **Two-factor authentication**.
+2. Select **Enable two-factor**.
+3. Scan the QR code. A **Can't scan?** link reveals the manual entry key.
+4. Enter the 6-digit code and select **Confirm & turn on**.
 
-## Set up TACACS+
+From then on, sign-in returns `{"mfa_required": true, "mfa_token": "…"}` instead of a session, and the code is completed at `POST /api/auth/mfa/login`. The challenge is valid for 5 minutes. An administrator can reset two-factor for a user from the Users page. A federated account enrols at its identity provider instead.
 
-Open the **TACACS+** tile, tick **Enabled**:
+### Connect an OIDC identity provider
 
-**Step 1 — Connection** — **Host** *(required)*, **Port** (default 49), **Shared secret** (write‑only), **Timeout (s)** (default 5).
+1. At the identity provider, create an OIDC web application using the authorization-code flow, and register the redirect URI `https://<your-host>/api/auth/sso/callback`.
+2. In Correlix, open **Administration → Platform Security → Authentication**, open the **Single Sign-On** tile and tick **Enabled**.
+3. Complete the connection fields:
 
-**Step 2 — Defaults & test** — **Default role**, **Default tenant**, then a test username/password and **Test connection**. Click **Save**.
+   | Field | Required | Notes |
+   | --- | --- | --- |
+   | **Issuer / Discovery URL** | Yes | The base issuer URL. The discovery path is appended. |
+   | **Client ID** | Yes | |
+   | **Client secret** | No | Write-only. Leave blank for a public client. |
+   | **Scopes** | No | Defaults to `openid email profile`. |
 
-## Sessions
+4. Complete the role mapping: **Default role**, **Default tenant**, **Admin roles** and **Operator roles**. Correlix reads roles from the ID token's `realm_access.roles` and `groups` claims and matches them against these lists.
+5. Optionally require multi-factor authentication and name the assurance values you accept.
+6. Set the sign-in **Providers** buttons, the **Post-login URL** and any redirect override.
+7. Select **Save**, then sign in with a real account from the provider.
 
-Sign‑in issues a short‑lived access token (15 minutes by default) plus a rotating, single‑use refresh token — replaying an old refresh token revokes the whole session lineage. On top of that, server‑side limits apply:
+There is no native SAML form. Correlix speaks OIDC to a broker, and the broker speaks SAML to the provider. The bundled Keycloak service is that broker. [Connect Okta as an identity provider](/administration/okta-sso) is the worked bring-up.
 
-| Limit | Default |
-| --- | --- |
-| Idle timeout | 30 minutes — set per scope in **Security Settings → "Sign out after inactivity (min)"** (minimum 5) |
-| Maximum session lifetime | 12 hours — a fixed platform standard, deliberately not a UI knob |
-| Concurrent sessions per user | 5 — the oldest is evicted past that |
+Environment variables prefixed `OIDC_` are a first-boot seed only. Once a configuration has been saved from this page, the saved configuration wins and editing the environment changes nothing.
 
-Per‑role policy can *shorten* these windows, never lengthen them. Changing a password revokes all of the user's sessions.
+### Connect LDAP or Active Directory
 
-**Live session control:** <kbd>Administration → Sessions</kbd> (visible to platform operators only) lists live sign‑ins — **Person · Tenant · IP · Status · Started · Last activity · Idle** — with a per‑row **Revoke** that signs that person out immediately.
+1. Open the **LDAP / Active Directory** tile and tick **Enabled**.
+2. Enter **Host**, and set **Encryption** to StartTLS or LDAPS in production. Leave **Port** at 0 to pick the port from the encryption choice.
+3. Enter the **Bind DN** and **Bind password** for the service account, or leave both blank for an anonymous bind. The password is write-only.
+4. Enter the **Base DN**.
+5. Enter the **User filter**, where `%s` is the username, for example `(uid=%s)` or `(sAMAccountName=%s)`. Add the **Group base DN** and **Group filter** if groups drive roles.
+6. Add group-DN to role mapping rows. The highest-privilege match wins.
+7. Enter a test username and password and select **Test connection**. The result names each stage, the resolved DN, the user's groups, and the role that would be assigned.
+8. Select **Save**.
 
-:::note Break-glass
-Platform operators have a separate, fully audited emergency‑access mechanism: a time‑boxed grant (60 minutes by default, 8 hours max) that requires a written reason and self‑expires. It's for incident response into restricted tenants — not a hidden password.
-:::
+### Connect TACACS+
 
-## Verify
+1. Open the **TACACS+** tile and tick **Enabled**.
+2. Enter **Host**, **Port** (49 by default), the write-only **Shared secret**, and **Timeout** in seconds (5 by default).
+3. Set **Default role** and **Default tenant**.
+4. Run **Test connection**, then select **Save**.
 
-- The provider tile shows **Enabled** (and, for SSO, **Ready**); the **Active** count on the stat strip increments.
-- For LDAP/TACACS+, **Test connection** returns OK with the expected role before you rely on it.
-- A real test login appears in the **Audit Log** and lands with the mapped role and tenant.
+A disabled provider answers its test with the stage `config` and the message `TACACS+ is not enabled`, rather than a connection error.
 
-## Troubleshooting
+### Set the token policy
 
-- **SSO sign‑in loops or errors** — the redirect URI at the IdP must match `…/api/auth/sso/callback` exactly, and the issuer must be the *base* URL (Correlix appends the discovery path).
-- **Directory user gets the wrong role** — mappings are highest‑privilege‑wins; check the test result's group list against your mapping rows.
-- **Locked out after failed attempts** — wait for the auto‑unlock (15 minutes by default) or have an admin intervene; local admin sign‑in keeps working even if a provider is down.
-- **"password is managed by your identity provider"** — the account is federated; change it at the IdP.
+**Administration → API Access → Token Policy** governs interactive session tokens platform-wide. It is platform administrator only.
+
+```bash
+curl -s -H "Authorization: Bearer $TOKEN" \
+  http://localhost:8000/api/auth/token-policy
+```
+
+```json
+{
+  "access_ttl_seconds": 3600,
+  "refresh_ttl_seconds": 604800,
+  "bounds": {
+    "access_min_seconds": 60,
+    "access_max_seconds": 86400,
+    "access_recommended_seconds": 3600,
+    "refresh_min_seconds": 300,
+    "refresh_max_seconds": 7776000,
+    "refresh_recommended_seconds": 2592000
+  }
+}
+```
+
+The shipped defaults are 15 minutes for the access token and 7 days for the refresh token. The capture above is from a deployment that raised the access token to one hour. A value outside `bounds` is clamped on save rather than rejected. Refresh tokens are single-use and rotating: replaying an old refresh token revokes the whole session lineage.
+
+Session limits sit on top of the token lifetimes. A user holds at most 5 concurrent sessions, and the oldest is evicted past that. Setting `concurrent_login` to `deny` on the scope revokes a user's prior sessions when they sign in, so the newest sign-in wins rather than the new one being refused.
+
+## Result
+
+The tile shows **Enabled**, and for single sign-on also **Ready**. `GET /api/auth/methods` reports which sign-in options the login page renders, and a real test sign-in lands with the mapped role and the mapped tenant. The sign-in appears in the [audit log](/administration/audit-log).
+
+## Related
+
+- [Connect Okta as an identity provider](/administration/okta-sso) for the end-to-end broker setup.
+- [Add users and grant access](/administration/identity-access) for accounts and roles.
+- [Mint an API key](/administration/api-access) for unattended clients, which skip passwords and MFA entirely.
+- [Troubleshooting](/reference/troubleshooting#sign-in-problems) for sign-in symptoms.

@@ -1,64 +1,107 @@
 ---
-title: Anomalies & Correlations
-sidebar_label: Anomalies & Correlations
+title: Anomalies and correlation
+sidebar_label: Anomalies and correlation
+description: How Correlix turns raw observations into findings, groups them into an RCA case, and decides what a verdict is allowed to claim.
+page_type: concept
 sidebar_position: 4
-description: How anomaly detection and failure-signature correlation work, and how to use the Anomalies and Correlations console pages.
 ---
 
-# Anomalies & Correlations
+# Anomalies and correlation
 
-Two engines sit between raw telemetry and an actionable incident: **anomaly detection** (is this metric behaving abnormally?) and **correlation** (do these abnormal signals share a cause?). This page explains both at the operator level, and walks their console pages.
+Correlation is the step between a flood of raw observations and one case an
+engineer can act on. It takes what the collectors, syslog, traps, flows, active
+probes and the security lane saw, groups the ones that belong to the same event,
+ranks the causes that would explain the group, and states a verdict with the
+evidence behind it.
 
-## How anomaly detection works
+## How it works
 
-Correlix baselines every **device + metric pair** independently, with no thresholds to configure:
+### Observations
 
-- It keeps a **rolling window** of that pair's most recent samples (up to 200) and continuously computes the window's mean and spread.
-- After a short warm-up (about 20 samples), each new value is scored against the baseline: how many standard deviations away it is (a **rolling z-score**).
-- A value **3 or more standard deviations** from baseline is flagged as a finding — severity **warning**, escalating to **critical** at extreme deviations (5σ and beyond). The deviation is the **Score** column you see in the console.
+Everything that enters the correlation window is an **observation**. The product
+uses that word everywhere, and never the word `signals`, because the count of
+raw rows is not the measure of anything. Repetition shows persistence, not
+additional evidence.
 
-What this means in practice:
+An observation carries the evidence class that saw it, the parser fidelity of
+the rule that recognised it, and its timestamp.
 
-- **The baseline is per-pair and adaptive.** A CPU that always runs at 90% won't alert at 90% — but a jump *out of its own normal* will. A newly monitored device needs a short warm-up before it can produce findings.
-- **Anomalies complement monitors, they don't replace them.** Use [monitors](/monitoring/create-a-monitor) for hard conditions you must be paged on; anomaly detection covers the long tail you'd never write rules for.
-- **A finding is a signal, not a verdict.** Findings feed the correlation engine, which decides whether they add up to something real.
+### Findings
 
-## Use the Anomalies page
+**Investigate → Findings** is titled **Detected Findings**: observations that
+deviate from baseline and may contribute to incidents or RCA candidates. A
+finding is a deviation, not a verdict. It becomes evidence when correlation
+attaches it to a case.
 
-1. Go to <kbd>Monitoring → Anomalies</kbd>. The **Detected Findings** board shows KPIs for the window — **Findings**, **Critical**, **Warning**, **Informational** — and refreshes automatically, most recent first.
-2. Read the queue columns: **Time**, **Severity**, **Kind** (what class of deviation — e.g. an anomaly or an event cluster), **Device**, **Component**, **Summary**, and **Score** (the deviation strength — higher is further from baseline).
-3. Filter by severity with the dropdown (**Info / Warning / Critical**).
-4. Click a row to open the finding's context: full description, timestamps, device, component, and id.
-5. If the finding names a device, click **View logs** to pivot straight into that device's syslog around the event ([Logs](/explore/logs)).
+### Grouping
 
-**Verify:** with devices reporting, an induced deviation (e.g. a sustained traffic spike on a normally quiet interface) appears here within a few polling cycles once the metric's baseline has warmed up.
+The engine opens a window, attaches the observations that share scope and time,
+and closes the window after a quiet period. The window's start is the earliest
+observation onset, and its end is the last written evidence time. A closed window
+means the engine saw no further symptoms, which is a proxy for recovery and not a
+measurement of it.
 
-:::note Findings are deliberately noisy-tolerant
-Expect informational and warning findings during normal operation — that's the detector being sensitive so correlation has raw material. Don't triage findings one by one; let the Correlations page tell you which ones cluster into something actionable.
-:::
+Where two cases turn out to describe the same event, one is merged into the
+other. A merged case has no lifecycle of its own: its recovery, its timing and
+its ticket belong to the case it was folded into.
 
-## How correlation works
+### The independence rule
 
-The correlation engine turns findings and events into **RCA candidates** in three moves:
+A verdict is `confirmed` only when independent evidence classes agree in the same
+window and scope. Two streams that derive from the same collector are one source,
+and the engine counts them that way. This is the rule that stops a single noisy
+collector from producing a confident wrong answer.
 
-1. **Group by time and place.** Signals from four evidence planes — device health, routing/link events, traffic flow, and active checks — are grouped when they align in a time window *and* share a network relationship. The **Linked by** column names that relationship: *Same path* (the signals sit on one forwarding path), *Boundary* (they straddle a responsibility handoff — your ISP edge, a cloud gateway), or both. Signals merely coincident in time, with no such link, are not grouped.
-2. **Match against failure signatures.** Each group is ranked against a catalog of known fault patterns — *BGP peer flap*, *Local link fault*, *WAN edge congestion*, *Routing instability*, *Circuit / optics degradation*, *ISP / DIA egress latency*, *DNS resolution impairment*, *Cloud region degradation*, *Tunnel MTU blackhole*, and more. The best match becomes the **Likely cause**, and brings the signature's recommended owner and first-steps playbook with it.
-3. **Issue an honest verdict.** The candidate is tiered **Confirmed** (independent evidence agrees across at least two signal classes), **Suspected**, or **Not confirmed** — and the detail view accounts for every signal: used, ignored, or missing. See [Reading an incident](/incidents/reading-an-incident) for the full anatomy, and [Working incidents](/incidents/working-incidents#when-to-trust-confirmed-vs-suspected) for how to act on each tier.
+The case header states the count in words: how many distinct symptoms, how many
+independent sources, and over what duration. The raw observation total trails
+behind those, deliberately de-emphasised.
 
-## Use the Correlations page
+### Verdicts
 
-1. Go to <kbd>Monitoring → Correlations</kbd>. Each row in the **Candidate queue** is one correlation group; the list refreshes automatically.
-2. Triage by **Status** and **Quality** first, then read **Likely cause**, **Owner**, and **Linked by** to understand each candidate's shape (column meanings in [Working incidents](/incidents/working-incidents#triage-the-rca-queue)).
-3. Watch the **Evidence source** column: *trusted* means the verdict rests on production telemetry; *weak* means low-authority sources; *test check* marks synthetic/debug signals that must never drive action.
-4. Click a row for the full RCA workspace — evidence matrix, timeline, causal topology, ticket card.
+| Verdict | What it claims |
+|---|---|
+| `confirmed` | Independent evidence classes agree in the same window and scope. |
+| `suspected` | The evidence points at a cause, and no independent pair confirms customer impact yet. |
+| `undetermined` | No cause has enough supporting evidence yet. |
+| `contradicted` | The leading cause was ruled out by discriminating evidence. |
+| `recovered` | The incident has cleared. |
 
-### Signature coverage gaps
+The reason is always in words. A single-source case reads that only that source
+saw it and a second independent source is needed to confirm. A ruled-out case
+reads that the leading cause was ruled out by the evidence, and the sequence
+stays visible for the record rather than as a live explanation.
 
-Below the queue, the **Signature coverage gaps** panel turns "we couldn't tell" into a work list. Each row is a recurring evidence shape the engine *almost* matched but couldn't confirm — showing how often it recurred, the nearest signature, and exactly which evidence clause was missing. Ranked by recurrence, it's your prioritized list of what telemetry to add next: if the same gap says "Missing: active-probe evidence" week after week, deploying a probe on that path will convert those recurring *Not confirmed* rows into verdicts.
+A percentage never stands alone as the reason for a verdict.
 
-## Troubleshooting
+## What correlation does not do
 
-- **No findings at all** — confirm metrics are flowing ([Verify monitoring](/onboard-devices/verify-monitoring)). Newly added devices need baseline warm-up before findings can fire.
-- **Findings but no correlations** — single-plane deployments produce findings that rarely group. Add an independent plane ([syslog](/send-data/syslog), [traps](/send-data/traps), [flows](/send-data/flows)) so signals can corroborate each other.
-- **Everything reads "Not confirmed"** — check the Signature coverage gaps panel; it names the missing evidence per recurring pattern. Confirmation needs two *independent* signal classes, not two signals of the same class.
-- **A candidate you were watching disappeared** — resolved candidates age out of the default window; switch the state filter to **Resolved**.
+- **It does not name a generic owner.** Correlix names the seam and the party
+  that owns it. Where the seam has not been narrowed at all, the case says
+  `Not yet narrowed — NOC triage` rather than blaming a team.
+- **It does not convert one evidence class into another.** Synthetic probe
+  failures and flow-volume changes are never turned into affected-user counts
+  without an identity or transaction mapping. A quantity Correlix cannot source
+  is stated as not measured.
+- **It does not report an unknown blast radius as zero.** Affected scope reads
+  **Not yet determined** when nothing measured it.
+- **It does not treat volume as proof.** An occurrence count never promotes a
+  verdict on its own.
+- **It does not claim a recovery it did not observe.** Where no ticket supplies
+  one, a closed case yields an inferred recovery stamp with capped confidence,
+  and an open case yields nothing at all.
+
+## Where each part appears
+
+| Surface | Console path |
+|---|---|
+| Findings | **Investigate → Findings** |
+| RCA candidates | **Investigate → RCA** |
+| Operational incidents | **Operations → Incidents** |
+| Promoted outage documents | **Analytics → RCA Reports** |
+
+## Related
+
+- [How RCA works](/investigate/rca-explained)
+- [Work the incident queue](/incidents/working-incidents)
+- [Read an incident](/incidents/reading-an-incident)
+- [Honest states](/reference/honest-states)

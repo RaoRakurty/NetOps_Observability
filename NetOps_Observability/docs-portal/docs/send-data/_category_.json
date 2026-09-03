@@ -1,5 +1,0 @@
-{
-  "label": "Send Data",
-  "position": 4,
-  "link": { "type": "generated-index", "description": "Point metrics, flows, logs, and traps at Correlix." }
-}

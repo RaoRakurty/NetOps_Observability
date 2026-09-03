@@ -1,69 +1,103 @@
 ---
-title: Monitoring & Alerting overview
+title: Monitoring and alerting
 sidebar_label: Overview
+description: What Correlix watches, how a rule becomes an alert, and where each part of the alerting chain is configured.
+page_type: index
 sidebar_position: 1
-description: How monitor rules, active alerts, notifications, and link-quality baselines fit together.
 ---
 
-# Monitoring & Alerting
+# Monitoring and alerting
 
-Define what "bad" looks like and get told when it happens. Correlix combines **threshold monitors** you define with **automatic anomaly detection**, so you catch both the conditions you know about and the ones you don't.
+Correlix decides when something is wrong with alert rules, presents the firings
+as a queue an operator works, pauses notifications during planned work, and
+reports on its own health through a separate route. The operator who owns the
+alert queue works all four.
 
-## The monitoring model
+| Page | What it covers |
+|---|---|
+| [Create a monitor](/monitoring/create-a-monitor) | Build a threshold rule from a template, scope it to devices, and set the hold time. |
+| [Work the alert queue](/monitoring/manage-alerts) | Triage alert episodes: acknowledge, assign, mute, snooze, annotate. |
+| [Schedule a maintenance window](/monitoring/maintenance-windows) | Pause notifications for planned work and keep the incident out of reliability statistics. |
+| [Track link quality](/monitoring/link-quality) | Read error and discard ratios, saturation risk, and overlay tunnel health. |
+| [Monitor Correlix itself](/monitoring/host-monitoring) | Route platform self-health alerts to a phone and run the external watchdog. |
 
-Monitoring in Correlix is a pipeline with three stages:
+## The alerting chain
 
-1. **Monitor rules** define a condition over collected telemetry — "CPU above 85% for 5 minutes", "a BGP session left Established". Every rule is evaluated **every 30 seconds** against the metric store.
-2. **Active alerts** are the rules that are firing *right now*. One rule can raise several alerts at once — a "High CPU" rule fires **one alert per matching device**, so the alert queue tells you exactly which devices and interfaces are affected, not just which rules tripped.
-3. **Notifications and incidents** carry the alert to people and tools. When an alert first fires it is dispatched once to your configured [notification channels](/incident-response/notifications) and fed into [correlation](/incidents/overview), where it can combine with logs, events, and other alerts into an incident.
+Correlix ships 154 alert rules and evaluates them continuously.
 
-Alerts **resolve themselves**: when the condition stops holding, the alert clears on the next 30-second evaluation. There is no manual acknowledge/close step to forget.
+| Rule file | Rules | What it covers | Evaluated by |
+|---|---|---|---|
+| `src/config/rules.yaml` | 130 | Device, interface, routing and collector conditions. | The in-API engine and vmalert. |
+| `src/config/rules-scale-slo.yaml` | 24 | Platform self-health and engine liveness. | vmalert only. |
 
-## What's in this section
+The full rule list, with every expression and threshold, is generated from those
+two files onto the [alert rules reference](/reference/alert-rules).
 
-| Page | Console path | What it's for |
-| --- | --- | --- |
-| **Monitor Rules** | <kbd>Monitoring → Monitor Rules</kbd> | Every rule the engine is evaluating — built-in and custom — with delete for custom monitors |
-| **[Create Monitor](/monitoring/create-a-monitor)** | <kbd>Monitoring → Create Monitor</kbd> | Guided three-step wizard: pick a signal, tune the condition, review with a live preview |
-| **[Active Alerts](/monitoring/manage-alerts)** | <kbd>Monitoring → Active Alerts</kbd> | The live alert queue — triage what is firing right now |
-| **[Link Quality](/monitoring/link-quality)** | <kbd>Monitoring → Link Quality</kbd> | Error, discard, saturation, and overlay-tunnel quality across the fleet |
-| **Anomalies** | <kbd>Monitoring → Anomalies</kbd> | Auto-detected deviations from each metric's learned baseline — no threshold to tune |
+The split is deliberate. The second file is read by vmalert alone, so its rules
+keep firing when the api is the component that is down, wedged or drowning.
 
-## Built-in vs. custom monitors
+The in-API engine re-evaluates its rules every 30 seconds. Each vmalert rule
+group carries its own interval of 30 or 60 seconds.
 
-The **Monitor Rules** page (<kbd>Monitoring → Monitor Rules</kbd>) lists two kinds of rules, distinguished by the **Source** badge:
+A rule that starts holding raises an **alert**. Repeated firings of the same rule
+against the same resource fold into one **episode**, which is what
+[Operations → Active Alerts](/monitoring/manage-alerts) renders. An alert clears
+itself on the first evaluation where the condition stops holding.
 
-- **Built-in** rules ship with the platform and cover core hygiene out of the box. They cannot be deleted from the console.
-- **Custom** monitors are yours — created through the [Create Monitor wizard](/monitoring/create-a-monitor) or the quick **Add rule** button on Monitor Rules. Only custom monitors show a **Delete** action.
+## Delivery tiers
 
-Deleting a custom monitor takes effect on the next evaluation: any alerts it raised resolve automatically within about 30 seconds.
+A rule's `tier` label, not its severity, decides who is woken on the platform
+self-health route. There are three values. Product and tenant alerts take a
+different path, described under
+[configure a notification channel](/incident-response/notifications).
 
-## How a rule decides to fire
+| Tier | Rules | Delivery |
+|---|---|---|
+| `page` | 9 rules in the `engine-liveness` group | Pushed to the operator's phone immediately, at high priority. |
+| `heartbeat` | `AlertingHeartbeat` only | Never routed to a person. It stamps a metric that proves the delivery path works. |
+| default (warning) | Everything else, including every rule in `rules.yaml` | Folded into a periodic digest on the platform self-health route. |
 
-Understanding three behaviors will save you tuning time:
+The nine `tier: page` rules are:
 
-- **Evaluation tick.** The engine evaluates every rule every **30 seconds**. Firing and resolving both happen on that tick, so a condition can never be caught faster than 30 seconds after it starts.
-- **"Must hold for" gating.** Each rule has a hold-for duration. A condition that starts matching becomes *pending*; it is promoted to a firing alert only after it has held **continuously** for that long. If the condition drops out even briefly, the clock restarts. This is your main anti-flap control — a 300-second hold-for means a 10-second CPU spike never pages anyone.
-- **Per-series alerts with stable identity.** Each matching device/interface gets its own alert, and an alert keeps its original **Fired** time for as long as it stays firing — the "Aging" figure on Active Alerts is real time-in-breach, not time since the last evaluation.
+| Rule | The condition it pages for |
+|---|---|
+| `CorrelationConsumerDead` | The correlation consumer group has no members. |
+| `CorrelationLagGrowing` | The correlation consumer is in the group but its lag keeps climbing. |
+| `CorrConsumerNotRunning` | The engine reports its consumer is not running. |
+| `CorrConsumerRestartLoop` | The engine consumer is restarting repeatedly. |
+| `RouterConsumerDead` | A `netops-router-*` consumer group has no members. |
+| `RouterConsumerLagGrowing` | A router lane is in the group and falling behind. |
+| `IngestPipelineSilent` | Ingest produced nothing when it should not be silent. |
+| `ClickHouseWritesRejected` | Storage is refusing writes. |
+| `AlertDeliveryBroken` | The alerting heartbeat stopped arriving. |
 
-Notifications are sent **only when an alert first fires** — an alert that stays firing for three hours produces one notification, not one every 30 seconds.
+Those nine cover four page-worthy conditions: an engine consumer is not
+consuming, ingest is silent when it should not be, storage is refusing writes,
+and the alerting heartbeat itself stopped. Everything else that proves an engine
+is working is already covered by the warning and critical rules in
+`rules.yaml`, which is why nothing else is allowed to page.
 
-## Thresholds vs. anomalies
+Reproduce the list against the checked-in source at any time:
 
-You don't have to write a rule for everything:
+```bash
+awk '/- alert: /{a=$3} /tier: page/{print a}' src/config/rules-scale-slo.yaml
+```
 
-- Use **monitors** for the conditions you can name and want a hard contract on — saturation limits, protocol sessions, device reachability, path SLA.
-- Let **anomaly detection** (<kbd>Monitoring → Anomalies</kbd>) cover the long tail. It learns each metric's normal range and flags statistical deviations with no threshold to tune, catching the "this link is suddenly behaving differently" cases you'd never write rules for.
+The command also prints `OpenSearchClusterRed`, because a comment block that
+documents the tiers sits between that rule and the next `- alert:` line. Nine
+rules carry the label.
 
-Both feed the same [correlation and incident pipeline](/incidents/overview), so a monitor breach that lines up with an anomaly and matching log events strengthens the incident's verdict.
+## What an empty alert list means
 
-## Prerequisites
+An empty alert list means no rule is firing right now. It does not mean every
+rule was evaluated. A rules file that fails to load leaves the engine running
+with the rules it already had, and every alert defined in that file is blind
+until the file is fixed. Read [honest states](/reference/honest-states) for how
+Correlix separates *not measured* from *measured as zero* across every surface.
 
-Monitors only fire on telemetry that is actually arriving. Before writing rules, make sure your devices are onboarded and reporting — see [Verify monitoring](/onboard-devices/verify-monitoring). The Create Monitor wizard flags any signal template with a **no live data** badge when its underlying telemetry isn't being collected yet, so you won't silently build a monitor that can never fire.
+## Related
 
-## Where to start
-
-1. Create your first monitor with the wizard: **[Create a monitor](/monitoring/create-a-monitor)**.
-2. Learn to read and triage the queue: **[Work with active alerts](/monitoring/manage-alerts)**.
-3. Baseline the health of your links: **[Link Quality](/monitoring/link-quality)**.
-4. Wire alerts to your team: **[Notifications](/incident-response/notifications)**.
+- [Alert rules reference](/reference/alert-rules)
+- [Configure a notification channel](/incident-response/notifications)
+- [Incidents](/incidents/overview)
+- [Verify a deployment](/deploy/verify-deployment)

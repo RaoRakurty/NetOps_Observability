@@ -1,102 +1,252 @@
 ---
-title: Verify a device is monitored
-sidebar_label: Verify monitoring
-sidebar_position: 7
-description: Confirm a newly onboarded device is discovered, collecting, and rendering on its dashboards — and what to do when nothing arrives.
+title: Verify a device is being monitored
+sidebar_label: Verify a device is monitored
+description: Read the collector pool, the coverage matrix and the alerts they raise to prove a device is answering, and tell a silent device from a silent collector.
+page_type: task
+sidebar_position: 9
 ---
 
-# Verify a device is monitored
+# Verify a device is being monitored
 
-After onboarding, prove the device is fully working — **done means rendered**. Correlix gives you an honest signal at each layer: a panel shows "—" when there's genuinely no data, never a fabricated value, so every check below is trustworthy.
+Verification answers one question: is data from this device arriving and
+rendering. Each layer below has its own evidence, and each has an empty state
+that means something specific. Work through them in order, because a failure at
+one layer explains every layer above it.
 
-## The verification checklist
+## Before you begin
 
-Run these in order; each step depends on the one before it.
+- The device is in the inventory. See
+  [Add a device by hand](/onboard-devices/add-devices-manually).
+- For the collector pool, a platform administrator account. `GET /api/collectors`
+  requires cross-tenant authority, because collector status is a fleet-wide
+  aggregate and a tenant-scoped caller would otherwise learn the fleet size.
 
-### 1. Known — the device is in the inventory
+## Steps
 
-1. Go to <kbd>Infrastructure → Devices</kbd>.
-2. Find the device (use the filter box). Confirm:
-   - the status dot is **Up** (green) — a fresh heartbeat within ~5 minutes;
-   - **Manufacturer** and **Type** are filled in (identified from SNMP, not typed by you);
-   - the **Polled** column shows a recent time.
+### Step 1 — The device is in the inventory
 
-**Degraded** (amber) means the heartbeat is stale or the device has active alerts; **Down** (red) means no heartbeat for 15+ minutes — go to the flowchart below.
+1. Go to **Infrastructure → Devices**.
+2. Find the device and read its status dot.
 
-### 2. Collecting — planes are green
+| State | Condition |
+|---|---|
+| **Up** | Heartbeat within 5 minutes and no active alert on the device |
+| **Degraded** | Heartbeat older than 5 minutes, or an active alert on the device |
+| **Down** | No heartbeat for more than 15 minutes |
 
-1. Go to <kbd>Administration → Data Collection → Data Sources</kbd>.
-2. Find the device's row. **SNMP metrics** should be green; **Syslog**, **Traps**, and **Flows** should be green for whichever planes you configured. (Details of every column: [Data Sources & coverage](/onboard-devices/data-sources).)
+**Up** is a claim about two things: heartbeat freshness and the alert list. When
+the alert query fails, the page says so, and **Up** then means only that the
+heartbeat is fresh.
 
-### 3. Rendering — dashboards fill in
+### Step 2 — The collector that should reach it is running and reaching it
 
-1. Open <kbd>Infrastructure → Device Monitoring</kbd> and select the device. CPU, memory, and interface panels should populate within a couple of poll cycles.
-2. Open <kbd>Infrastructure → Interface Performance</kbd> — per-interface throughput, utilization, and error/discard graphs.
-3. For logs: open <kbd>Logs → Log Search</kbd> and filter on the device's name — its syslog messages should appear as they're emitted.
-4. For traffic: open the **Flows** section — the device should appear among the exporters, with top talkers building up.
+Go to **Administration → Data Collection → Sensors**, or read the pool directly.
+Note that the console tab lists the protocol and trap collectors only; the API
+returns all sixteen.
 
-:::tip Live end-to-end proof
-On <kbd>Infrastructure → WAN Interface Metrics</kbd>, each interface shows a small **live throughput sparkline**. Generate some traffic across a link and watch its graph move — the quickest way to prove the whole telemetry path is live.
+```bash
+curl -s -H "Authorization: Bearer $TOKEN" \
+  http://localhost:8000/api/collectors
+```
+
+Two rows from the lab stack. The first is enabled and failing; the second is
+disabled.
+
+```json
+{
+  "name": "snmpv2c",
+  "kind": "protocol",
+  "enabled": true,
+  "healthy": false,
+  "last_tick": "2026-09-03T03:47:29.378961516Z",
+  "last_error": "2/2 targets did not answer (last error: read udp 172.18.0.9:51458->172.40.40.12:161: i/o timeout)",
+  "targets": 2,
+  "reachable": 0,
+  "last_poll_ms": 6001
+}
+```
+
+```json
+{
+  "name": "lldp",
+  "kind": "discovery",
+  "enabled": false,
+  "healthy": true,
+  "last_tick": "0001-01-01T00:00:00Z",
+  "targets": 0,
+  "reachable": 0
+}
+```
+
+Read the fields in this order.
+
+| Field | What it tells you |
+|---|---|
+| `enabled` | Whether the collector's flag is on. Read this first |
+| `healthy` | Whether the last cycle succeeded |
+| `last_tick` | When the collector last ran. `0001-01-01T00:00:00Z` means never |
+| `targets` | How many devices the collector was given |
+| `reachable` | How many of them answered |
+| `last_error` | The transport error from the last failed cycle, verbatim |
+| `last_poll_ms` | How long the last cycle took |
+
+:::caution A disabled collector reports `"healthy": true`
+`healthy` says nothing failed. Nothing failed because nothing ran. The `lldp`
+row above is disabled, has never ticked, and has no targets. It is not working;
+it is switched off. A collector is only doing something when `enabled` is `true`
+and `last_tick` is recent.
 :::
 
-### 4. On the map
+The `snmpv2c` row is the honest opposite: enabled, ticking every 30 seconds,
+and reporting that both of its targets timed out on UDP 161. The error names
+the source address, the destination address and the port, which is enough to
+take to a firewall team.
 
-- The device appears on the **[Topology Canvas](/infrastructure/topology-canvas)**, with links drawn as neighbors are learned (this can take a few polling cycles after onboarding).
-- If you assigned it to a site, it appears on the **[Device Geomap](/infrastructure/geomap)**.
+The collectors and the flags that enable them:
 
-## Interpreting what you see
+| Collector | Flag | Default |
+|---|---|---|
+| `snmpv2c`, `snmpv3` | `ENABLE_SNMP_COLLECTION` | on |
+| `snmpmetrics` | `ENABLE_SNMP_METRICS` | on |
+| `tunnels` | `ENABLE_TUNNEL_DISCOVERY` | on |
+| `gnmi` | `ENABLE_GNMI_COLLECTION` | off |
+| `netconf` | `ENABLE_NETCONF_COLLECTION` | off |
+| `lldp` | `ENABLE_LLDP_DISCOVERY` | off |
+| `cdp` | `ENABLE_CDP_DISCOVERY` | off |
+| `bgpls` | `ENABLE_BGPLS_DISCOVERY` | off |
+| `snmptrap` | `FEATURE_SNMP_TRAPS` | off |
+| `unifi` | `FEATURE_UNIFI` | off |
+| `stamp-sender` | `FEATURE_ACTIVE_PROBE` | off |
+| `stamp-reflector` | `FEATURE_STAMP_REFLECTOR` | off |
+| `traceroute` | `FEATURE_TRACEROUTE` | off |
+| `synthetics` | `FEATURE_SYNTHETICS` | off |
+| `wan-echo` | `FEATURE_WAN_ECHO` | off |
 
-| Observation | Meaning |
-| --- | --- |
-| Status **Up**, panels filling | Fully onboarded ✅ |
-| Status **Up**, one panel shows "—" | That *specific* metric isn't collected — e.g. utilization needs the interface speed value, a vendor CPU metric needs the vendor profile, or a plane (flows) isn't configured. Honest, not an error. |
-| Status **Degraded** | Reachable recently but stale or alerting — check the device's active alerts and reachability. |
-| Status **Down** / everything empty | Reachability or credential problem — flowchart below. |
+The full list with descriptions is in
+[Feature flags](/reference/feature-flags). `ENABLE_SNMP_COLLECTION` drives both
+SNMP collectors; which one polls a device follows from the version of its
+credential.
 
-## "Nothing is arriving" — the troubleshooting flowchart
+### Step 3 — The planes are delivering
 
-Work top-down; stop at the first test that fails and fix it before moving on.
+Go to **Administration → Data Collection → Data Sources** and read the device's
+row. See
+[Check the data-source coverage matrix](/onboard-devices/data-sources) for what
+each cell claims and what it does not.
 
-1. **Is the device in the inventory at all?**
-   → *No:* it was never added, or discovery didn't find it — see [Discover devices](/onboard-devices/snmp-discovery) troubleshooting.
-   → *Yes:* continue.
+### Step 4 — The alerts agree
 
-2. **Is the status dot Down?**
-   → *Yes:* Correlix can't complete SNMP polls.
-      1. Confirm basic reachability from a host near Correlix: `ping DEVICE_IP`.
-      2. Confirm SNMP answers with your credential (generic example using standard SNMP tools):
-         ```bash
-         snmpwalk -v2c -c MyR0Community -t 2 DEVICE_IP 1.3.6.1.2.1.1
-         ```
-         Timeout → UDP 161 blocked, SNMP disabled, or an SNMP ACL excludes Correlix's address. Answer here but Down in Correlix → the **stored** credential differs (wrong version, rotated secret) — re-save it in the [SNMP Profile Manager](/onboard-devices/snmp-profiles).
-   → *No (Up/Degraded):* continue.
+The collector pool feeds alert rules, so a reachability problem raises an alert
+rather than sitting silently in a status field.
 
-3. **Is "SNMP metrics" green on Data Sources?**
-   → *No:* the device answers identity queries but metric polling fails — usually a v3 auth/privacy protocol mismatch or a too-tight timeout for a WAN device. Check the credential profile's protocols against the device config; raise Timeout/Retries.
-   → *Yes:* continue.
+| Rule | Condition | For | Severity |
+|---|---|---|---|
+| `DeviceUnreachable` | A device's target is down on any collector except `netconf` | 2m | critical |
+| `CollectorAllTargetsUnreachable` | `reachable` is 0 while `targets` is above 0 | 5m | critical |
+| `CollectorPartialReachability` | Under 80% of targets reachable | 10m | warning |
+| `NoSamplesIngested` | The collector produced no samples while it had targets | 10m | warning |
+| `CollectorPollSlow` | A poll took over 10,000 ms | 10m | warning |
 
-4. **Metrics green but no syslog?**
-   1. Confirm the device is configured to log to Correlix on UDP/TCP **514** ([Syslog](/send-data/syslog)).
-   2. Confirm the device's configured **hostname matches its inventory name** — log attribution is by the hostname carried in the message.
-   3. Remember quiet devices legitimately show "—": trigger a harmless event (e.g. log in to the device) and watch <kbd>Logs → Log Search</kbd>.
+`netconf` is excluded from `DeviceUnreachable` on purpose: it probes every
+device's TCP 830 opportunistically, and a device without NETCONF is not
+unreachable.
 
-5. **Metrics green but no flows?**
-   1. Confirm export is configured to the right port: NetFlow **2055**, IPFIX **4739**, sFlow **6343** ([Flows](/send-data/flows)).
-   2. Confirm the device exports **from the address the inventory knows** — flow attribution is by exporter address.
-   3. Flow records batch on the device; allow a few minutes of real traffic before judging.
+The alerts for the failing lab stack above:
 
-6. **Metrics green but no traps?**
-   1. Trap ingestion must be enabled for your instance ([SNMP traps](/send-data/traps)).
-   2. Confirm the device's trap destination is Correlix on UDP **162**, and send a test trap if the platform supports it.
+```bash
+curl -s -H "Authorization: Bearer $TOKEN" \
+  http://localhost:8000/api/alerts
+```
 
-7. **Everything green but a dashboard panel is empty?**
-   → The metric behind that panel isn't in the device's profile — extend the [vendor profile](/onboard-devices/snmp-profiles) with the missing value.
+```json
+[
+  {
+    "id": "CollectorAllTargetsUnreachable|collector=snmpv2c",
+    "rule": "CollectorAllTargetsUnreachable",
+    "severity": "critical",
+    "summary": "Collector snmpv2c cannot reach any target",
+    "labels": { "collector": "snmpv2c", "severity": "critical" },
+    "fired_at": "2026-09-03T03:32:59.379985203Z"
+  },
+  {
+    "id": "DeviceUnreachable|collector=snmpv2c,device=spine1",
+    "rule": "DeviceUnreachable",
+    "severity": "critical",
+    "device_id": "spine1",
+    "summary": "spine1 unreachable from snmpv2c",
+    "labels": { "collector": "snmpv2c", "device": "spine1", "severity": "critical" },
+    "fired_at": "2026-09-03T03:29:59.379975793Z"
+  },
+  {
+    "id": "NoSamplesIngested|collector=snmpmetrics",
+    "rule": "NoSamplesIngested",
+    "severity": "warning",
+    "summary": "Collector snmpmetrics produced 0 samples",
+    "labels": { "collector": "snmpmetrics", "severity": "warning" },
+    "fired_at": "2026-09-03T03:37:29.381596952Z"
+  }
+]
+```
 
-Full port matrix: [Connectivity requirements](/reference/connectivity-requirements). Deeper platform diagnostics: [Troubleshooting](/reference/troubleshooting).
+Three rules fired on one fault, from three angles: the collector reaches
+nothing, a named device is unreachable, and the metric collector produced no
+samples. A tenant-scoped operator sees only alerts on devices in their tenant.
 
-## When it's green
+### Step 5 — The series exist
 
-A collecting device is automatically eligible for **monitors**, **anomaly detection**, **topology**, and **root-cause correlation** — no extra wiring. Continue to:
+1. Go to **Explore → Metrics**.
+2. Query a series for the device, for example `device_sysuptime` or
+   `device_if_in_octets`.
+3. Confirm points are arriving about every 60 seconds, or faster on a streaming
+   device.
 
-- **[Create a monitor](/monitoring/create-a-monitor)**, or
-- **[Onboard more devices](/onboard-devices/overview)**.
+An empty result here, with a healthy collector and a reachable device, means
+that particular series is not in the device's SNMP profile. See
+[Supported devices](/onboard-devices/supported-devices).
+
+### Step 6 — The console renders it
+
+1. Open the device from **Infrastructure → Devices**.
+2. Check **Infrastructure → Interfaces & Optics** for per-interface counters.
+3. Check **Explore → Logs** for its syslog and traps.
+4. Check **Explore → Flows** for its traffic.
+
+## Result
+
+A verified device is enabled on a collector that ticked recently, counted in
+that collector's `reachable`, green for the planes you configured on the
+coverage matrix, and returning points in the metrics explorer. A panel that
+shows nothing at that point is a statement that the series has no data, not an
+error.
+
+## Where an empty result comes from
+
+| What you see | What it means | What it does not mean |
+|---|---|---|
+| Collector `enabled: false`, `healthy: true`, `last_tick` at the zero time | The collector never ran | Not that the collector is working |
+| Collector `enabled: true`, `reachable: 0`, `last_error` set | Every target failed, and the error names how | Not that the devices are absent from the inventory |
+| A coverage cell showing `—` | The store answered and this device was not in the answer | Not that the device is healthy |
+| A coverage cell showing `?` | That plane's query failed | Not that the device is silent |
+| An empty metric query with a healthy collector | That series is not collected for this platform | Not a value of zero |
+| Device **Up** with the alert query failed | The heartbeat is fresh | Not that the device has no active alerts |
+
+The full table for every surface is
+[What an empty result means](/reference/honest-states).
+
+## Troubleshooting
+
+| Layer that failed | Most likely cause | Where to go |
+|---|---|---|
+| Not in the inventory | Never added, or discovery did not reach it | [Configure SNMP discovery](/onboard-devices/snmp-discovery) |
+| Collector disabled | The flag is off | [Feature flags](/reference/feature-flags) |
+| Collector enabled, nothing reachable | UDP 161 blocked, or an SNMP ACL excludes Correlix | [Connectivity requirements](/reference/connectivity-requirements) |
+| Some targets reachable, this one not | Credential mismatch on this device | [Add an SNMP credential](/onboard-devices/snmp-profiles) |
+| Reachable but no samples | The metric collector is off, or no profile OID answered | Check `ENABLE_SNMP_METRICS`, then the vendor profile |
+| Metrics fine, a push plane empty | Device-side configuration or attribution | [Send data to Correlix](/send-data/overview) |
+
+## Related
+
+- [Check the data-source coverage matrix](/onboard-devices/data-sources)
+- [Send data to Correlix](/send-data/overview)
+- [What an empty result means](/reference/honest-states)
+- [Troubleshooting](/reference/troubleshooting)

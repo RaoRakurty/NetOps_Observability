@@ -1,112 +1,171 @@
 ---
-title: Discover devices (SNMP)
-sidebar_label: Discover devices
-sidebar_position: 3
-description: Point Correlix at your management subnets and let it find and inventory devices automatically over SNMP.
+title: Configure SNMP discovery
+sidebar_label: Configure SNMP discovery
+description: Scope a bounded SNMP subnet discovery scan, choose the probe communities it tries, and read what the sweep found or refused.
+page_type: task
+sidebar_position: 5
 ---
 
-# Discover devices (SNMP)
+# Configure SNMP discovery
 
-Instead of adding devices one by one, you can have Correlix **scan your management subnets** and onboard everything that answers SNMP. This is the fastest way to bring a fleet in. Discovery runs continuously once configured and is **idempotent** — re-runs update existing devices and add new ones without creating duplicates.
+SNMP subnet discovery sweeps the management subnets you name and adds every
+host that answers SNMP to the inventory. The scan scope is a platform-level
+decision, so the configuration is restricted to platform administrators and the
+server validates every range before it sweeps anything.
 
-## Step 1 — Enable SNMP on the devices
+Discovery is bounded on purpose: at most 4,096 addresses across at most 32
+ranges, 32 concurrent probes, a two-second budget per host, and one sweep per
+minute. A configuration that exceeds those bounds is refused with an error
+rather than trimmed.
 
-Discovery can only find devices that answer SNMP. Enable a **read-only** credential on each device. The snippets below are **generic examples** for the common CLI families — adapt names, ACLs, and addresses to your platform and security policy. `CORRELIX_IP` is your Correlix instance's address.
+## Before you begin
 
-```text
-! Cisco IOS / IOS-XE style — v2c read-only, restricted by ACL
-access-list 10 permit host CORRELIX_IP
-snmp-server community MyR0Community RO 10
+- A platform administrator account. `GET` and `PUT /api/discovery/config` both
+  require cross-tenant authority, and the console hides the card from
+  tenant-scoped users.
+- `ENABLE_SNMP_DISCOVERY` set to `true`. It defaults to `false`. See
+  [Feature flags](/reference/feature-flags).
+- The management subnets you want swept, in CIDR notation, expanding to no more
+  than 4,096 addresses in total. A `/20` is the widest single range that fits.
+- The read-only community strings the devices answer to. Discovery probes with
+  SNMP v2c only.
+- UDP 161 open from Correlix to those subnets. See
+  [Connectivity requirements](/reference/connectivity-requirements).
 
-! ...or SNMPv3 (recommended)
-snmp-server group CORRELIX-GRP v3 priv
-snmp-server user correlix CORRELIX-GRP v3 auth sha AUTH-PASSPHRASE priv aes 128 PRIV-PASSPHRASE
-```
-
-```text
-! Arista EOS style
-snmp-server community MyR0Community ro
-! ...or SNMPv3
-snmp-server user correlix CORRELIX-GRP v3 auth sha AUTH-PASSPHRASE priv aes PRIV-PASSPHRASE
-```
-
-```text
-# Juniper JunOS style
-set snmp community MyR0Community authorization read-only
-set snmp community MyR0Community clients CORRELIX_IP/32
-```
-
-## Step 2 — Add the matching credential in Correlix
-
-Discovery authenticates with the credentials you've stored:
-
-1. Go to <kbd>Administration → Data Collection → SNMP Profile Manager</kbd> → **Credentials**.
-2. Create a profile matching what you configured on the devices (community or v3 user). See [SNMP profiles & credentials](/onboard-devices/snmp-profiles) for every field.
-
-If most of the fleet shares one community, one profile is enough; add per-group profiles for exceptions.
-
-## Step 3 — Set the discovery scope
-
-Discovery is scoped by **network ranges in CIDR notation**, configured from the console (platform administrator only):
-
-1. Go to <kbd>Administration → Data Collection → Collectors</kbd> → **Subnet discovery** card.
-2. Enter your management subnets, comma-separated — e.g. `10.20.0.0/24, 10.30.5.0/26`.
-3. Enter the **probe communities** — a comma-separated priority list if different device families use different read-only communities (each address is tried in order until one answers). Communities are stored encrypted and never shown again.
-4. Tick **Enabled** and **Save**. A sweep starts immediately; changes apply without a restart.
-
-:::note Discovery probes with SNMP v2c
-The subnet sweep identifies devices with a v2c read-only community. **v3-only devices won't be found by the sweep** — add them manually or via a [Source of Truth import](/automation/overview); once inventoried, their metrics collect with the v3 profile from Step 2 as normal.
+:::caution Narrow the range before you enable discovery
+The shipped Compose default for `SNMP_CIDR_RANGES` is `10.0.0.0/8`, which
+expands to over sixteen million addresses. Correlix refuses it rather than
+sweeping it, and the refusal appears on the card as **Sweep refused**. Replace
+it with your actual management subnets before enabling discovery.
 :::
 
-Guardrails enforced by the server:
+## Steps
 
-- **Private (RFC 1918) ranges only** by default. If your network uses public address space internally, tick **Allow non-private ranges** to acknowledge it — loopback, link-local, and multicast space is always refused.
-- Ranges may expand to at most **4,096 addresses** in total (a `/20` is the widest single range). Oversized ranges are refused with a clear error instead of being swept — scanning too-wide ranges wastes poll capacity, trips IDS/ACL alarms, and can sweep hosts you don't own.
-- Sweeps are rate-limited to **one per minute** regardless of how often a refresh is requested.
+1. Go to **Infrastructure → Discovery & NMS**.
+2. Select **Subnet Discovery**. The same card also appears under
+   **Administration → Data Collection → Sensors**.
+3. In **Scan ranges — CIDR, comma-separated**, enter the subnets to sweep, for
+   example `10.20.0.0/24, 10.30.5.0/26`. The meter under the field counts the
+   addresses against the 4,096 cap and **Save changes** stays disabled while
+   the total is over it.
+4. In **Probe communities, comma-separated**, enter the read-only communities.
+   Each address is tried against them in order until one answers, so put the
+   most common one first. Leave the field blank to keep the communities already
+   stored.
+5. Turn on **Discovery enabled**.
+6. Turn on **Allow non-private ranges** only if your network uses public address
+   space internally. Without it, any range outside RFC 1918 is refused.
+7. Select **Save changes**.
+8. Select **Scan now** to sweep immediately instead of waiting for the next
+   cycle.
 
-On a self-hosted install, `ENABLE_SNMP_DISCOVERY` / `SNMP_CIDR_RANGES` / `SNMP_COMMUNITY` in `deployment/docker/.env` serve as the bootstrap default until a configuration is saved from the console; the console configuration then wins.
+## Result
 
-## Step 4 — Watch devices arrive
+Saving schedules a sweep and the card reports **Saved — a sweep has been
+scheduled.** The state chip moves to **Active**, and the header shows **Last
+sweep**, **Devices discovered** and the number of ranges in scope. While
+enabled, Correlix sweeps every five minutes; a manual **Scan now** is
+rate-limited to one per minute.
 
-1. Go to <kbd>Infrastructure → Devices</kbd>. Discovered devices appear with a **Source** badge of **SNMP** and a status dot as their first heartbeats land.
-2. For every responding device, Correlix reads its **system identity** over SNMP — the device **Type** column (Router/Switch/Firewall/…) and **Manufacturer** are inferred from the device's SNMP identity fingerprint, not guessed. Recognized vendors include Cisco, Juniper, Arista, Fortinet, Palo Alto, Nokia, Huawei, MikroTik, Extreme, F5, Dell, HP, and Check Point; Linux/host agents are recognized too.
-3. Interface inventory and metrics start on the normal poll cycle (about a minute). The [Data Sources coverage matrix](/onboard-devices/data-sources) shows each device turning green for **SNMP metrics**.
-
-The inventory merges discovery with your other sources (manual adds, [Source of Truth import](/automation/overview)) — the same device reported by two sources is de-duplicated into one record, and the first-registered source wins on conflicting facts.
-
-## Neighbor-based topology
-
-As devices are polled, Correlix learns neighbor relationships and draws them on the **[Topology Canvas](/infrastructure/topology-canvas)** automatically — you don't wire the topology by hand. Layer-2 neighbor discovery (LLDP/CDP) is enabled per instance; ask your platform administrator if links you expect aren't appearing.
-
-## Verify
-
-- Every expected device is listed at <kbd>Infrastructure → Devices</kbd> with an **Up** dot.
-- <kbd>Administration → Data Collection → Data Sources</kbd> shows **SNMP metrics** green for each.
-- Spot-check one device: open it from the inventory and confirm interfaces and uptime are populated.
-
-## Troubleshooting — a device didn't appear
-
-Work down this table in order; the causes are listed by how often they're the culprit.
-
-| # | Symptom | Likely cause | How to confirm / fix |
-| --- | --- | --- | --- |
-| 1 | Device absent from inventory | Not reachable on **UDP 161** from Correlix | Firewall/ACL in the path — check [Connectivity requirements](/reference/connectivity-requirements); test with `snmpwalk` from a host beside Correlix (below) |
-| 2 | Device absent | **Credential mismatch** — community/user doesn't match, or the device is v3-only and you stored v2c | Re-check the stored profile against the device config; version must match |
-| 3 | Device absent | **Outside the scanned range** | Add its subnet on the **Subnet discovery** card (<kbd>Administration → Data Collection → Collectors</kbd>) and save |
-| 4 | Device absent | **SNMP not enabled** on the device | Configure it (Step 1) |
-| 5 | Device present but **Down** | Answered once, now unreachable or credential rotated | Check the device's SNMP ACL and the profile's secrets |
-| 6 | Present but vendor/type = Unknown | Device answered but its identity isn't in the recognition table | Cosmetic only — metrics still collect via the Universal profiles; set the vendor manually on the device record if you want |
-
-Quick reachability test from a machine on the same network segment as Correlix (generic example using standard SNMP tools):
+Read the same state over the API. Captured from the lab stack, where discovery
+is off and no ranges are configured:
 
 ```bash
-snmpwalk -v2c -c MyR0Community -t 2 10.20.0.5 1.3.6.1.2.1.1
-# system description, uptime, name should print — if it times out, fix reachability/ACL first
+curl -s -H "Authorization: Bearer $TOKEN" \
+  http://localhost:8000/api/discovery/config
 ```
 
-See [Troubleshooting](/reference/troubleshooting) for the full no-data flowchart.
+```json
+{
+  "config": {
+    "enabled": false,
+    "ranges": [],
+    "community_set": true,
+    "allow_non_private": false,
+    "interval_sec": 0
+  },
+  "limits": {
+    "max_hosts": 4096,
+    "max_ranges": 32
+  },
+  "stats": {
+    "last_poll": "2026-09-03T04:23:06.32218124Z",
+    "devices": 0
+  }
+}
+```
 
-## Next
+`community_set` is the only thing the response says about the communities. The
+values are sealed at rest and the API never returns them.
 
-- **[Add richer telemetry](/send-data/overview)** — syslog, traps, flows.
-- **[Verify a device is monitored](/onboard-devices/verify-monitoring)**.
+`"devices": 0` here means the sweep is disabled, not that the subnets are empty.
+The two are different facts and the card distinguishes them: a disabled scan
+shows the state chip **Off**, and a refused scan shows **Needs attention** with
+the refusal text.
+
+## What a discovered device looks like
+
+For each address that answers, Correlix reads `sysName`, then reads
+`sysObjectID` and `sysDescr` to resolve the vendor. The inventory row carries
+`"source": "snmp"`.
+
+The device id is the sanitized `sysName` with an eight-character hash of the
+address appended, for example `core-sw1-a94f2c1b`. The address suffix is
+deliberate: a factory-default `sysName` repeats across a fleet, and two devices
+that folded to the same id used to overwrite each other silently. The unhashed
+`sysName` is kept as the device **name**, which is what pushed telemetry is
+attributed by.
+
+Addresses already in the inventory from any source are not probed. Discovery
+looks only for devices it does not have, so it cannot duplicate a device you
+added by hand or imported.
+
+Found devices are sticky across sweeps. A device that misses one probe does not
+disappear from the inventory.
+
+## The refusals, in the server's own words
+
+Validation runs before any packet is sent, and the message is what the card
+shows.
+
+| Condition | Message |
+|---|---|
+| Total expansion over the cap | `ranges expand to more than 4096 addresses — narrow them to your management subnets (a /20 is the widest single range)` |
+| A range outside RFC 1918 without the acknowledgement | `"203.0.113.0/24" is not private (RFC 1918) address space — enable "allow non-private ranges" only if your network uses that space internally` |
+| Loopback, link-local, multicast or reserved space | `"127.0.0.0/8" is not a scannable unicast range` |
+| Not CIDR | `"10.20.0.5" is not valid CIDR notation (e.g. 10.20.0.0/24)` |
+| IPv6 | `"2001:db8::/32": only IPv4 ranges are supported` |
+| More than 32 ranges | `at most 32 ranges are allowed` |
+| Enabled with no range | `at least one CIDR range is required to enable discovery` |
+
+Loopback, link-local, multicast and reserved space stay refused even with
+**Allow non-private ranges** on.
+
+## What discovery does not find
+
+- **Devices that answer only SNMPv3.** The sweep probes with v2c. Add those
+  devices with [a manual entry](/onboard-devices/add-devices-manually) or an
+  import; once in the inventory they poll with their v3 credential normally.
+- **Devices outside the configured ranges.** Nothing is scanned that you did not
+  name.
+- **Devices behind an ACL that excludes the Correlix address.** The probe times
+  out and the address is treated as not answering.
+
+An empty result means nothing answered in the ranges you scoped. It does not
+mean the network is empty.
+
+## Troubleshooting
+
+| Symptom | Cause | What to do |
+|---|---|---|
+| The card shows **Sweep refused** | A range failed validation | Read the message on the card and correct the range |
+| The card shows a read failure instead of the form | The saved configuration could not be read or decrypted | Discovery is disabled until it is re-saved. Save the configuration again; a successful save clears the failure |
+| A device is absent and you expect it | Wrong community, v3-only device, outside the range, or SNMP not enabled | Check in that order. The sweep tries each community per address in turn |
+| A device appears with no vendor | Its enterprise number and description matched no vendor profile | Collection is unaffected. The generic SNMP profile still applies |
+
+## Related
+
+- [Add an SNMP credential](/onboard-devices/snmp-profiles)
+- [Add a device by hand](/onboard-devices/add-devices-manually)
+- [Check the data-source coverage matrix](/onboard-devices/data-sources)
+- [Connectivity requirements](/reference/connectivity-requirements)

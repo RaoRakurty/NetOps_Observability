@@ -1,85 +1,162 @@
 ---
-title: Working incidents
-sidebar_label: Working incidents
+title: Work the incident queue
+sidebar_label: Work the incident queue
+description: Work the RCA candidate queue and the operational incident list, from first triage through to an external ticket.
+page_type: task
 sidebar_position: 3
-description: The operator loop — triage the RCA queue, drive the incident lifecycle, file the ticket, and know when to trust a verdict.
 ---
 
-# Working incidents
+# Work the incident queue
 
-This page is the operator loop: start at the queue, drill into what matters, drive it to resolution, and let the scorecard measure how it went. Two queues share the work — **Correlations** (the RCA candidates: *what is wrong and why*) and **Incidents** (the tracked records: *who is doing what about it*).
+Two queues carry a shift. The RCA candidate list ranks what the engine believes
+is happening. The operational incident list tracks what the team is doing about
+it. This page works both, in that order.
 
-## Triage the RCA queue
+## Before you begin
 
-1. Go to <kbd>Monitoring → Correlations</kbd>. The header KPIs give you the room's state at a glance: **Candidates**, **Confirmed**, **Suspected**, **Not confirmed**.
-2. Scan the **Candidate queue** columns:
-   - **Status** — Confirmed / Suspected / Not confirmed.
-   - **Quality** — how openable the row is: `strong` (confirmed, multi-stream), `candidate` (suspected with grounded, multi-plane evidence), `weak` (thin evidence).
-   - **Likely cause** — the matched failure signature (e.g. *BGP peer flap*, *Local link fault*), or "Not yet determined".
-   - **Owner** — the recommended acting party (NetOps, ISP / carrier, cloud provider, …).
-   - **Linked by** — what ties the evidence together: *Boundary* (a responsibility handoff such as your ISP edge), *Same path*, or *Boundary + path*.
-   - **Evidence types** — how many independent signal classes attached.
-   - **Evidence source** — *trusted*, *weak*, or *test check* (a synthetic/debug signal, never actionable).
-   - **Signals** — raw signal count.
-3. Filter with the two dropdowns — state (**Open** / **Resolved**) and status (**Confirmed** / **Suspected** / **Not confirmed**) — and sort by any column. Sort by **Quality** descending to work strongest-first.
-4. Click a row to open the [RCA detail view](/incidents/reading-an-incident).
+- `alerts:read` for both queues, and `alerts:write` to drive an incident's
+  lifecycle. `infrastructure:write` is required for the ticket actions on an RCA
+  case.
+- The Postgres backend, for the operational incident list. On the file backend
+  the incident routes answer `409` with `the incident system requires the
+  Postgres backend`.
 
-:::note Internal objects are hidden by default
-The queue shows customer-network issues. The platform's own self-monitoring objects are hidden; tick **Show internal/stack** only when debugging the platform itself.
-:::
+## Steps
 
-## When to trust "Confirmed" vs "Suspected"
+### Triage the RCA queue {#triage-the-rca-queue}
 
-Correlix applies a hard rule: **a root cause is confirmed only when independent evidence agrees across at least two signal classes.** A routing-or-device event, a traffic-flow change, and an active probe are three independent ways of seeing the same fault — "Confirmed" requires at least two of them, aligned in time and scope. A single stream, however strong, reads as **Suspected**, and the view can never overclaim past the engine.
+1. Go to **Investigate → RCA**. The page is titled **RCA Candidates**.
+2. Use the count chips above the table to narrow: all candidates in the last 24
+   hours with merged duplicates excluded, confirmed, suspected, undetermined, or
+   promoted real outages.
+3. Read the row left to right.
 
-In practice:
+| Column | What it carries |
+|---|---|
+| **ID** | The Problem ID, in the form `P-XXXXXX`. |
+| **Updated** | When the case last changed. |
+| **Status** | The verdict tier. |
+| **RCA doc** | **Promoted** when the case is a real outage with a document in the RCA Reports library. |
+| **Quality** | Whether the case is a planned resilience drill rather than a customer incident. |
+| **Likely cause** | The top hypothesis. |
+| **Owner** | The seam owner. |
+| **Notified via** | The destinations this case was already filed to. |
+| **Linked by** | What grounded the grouping. |
+| **Evidence types** | How many independent evidence classes contributed. |
+| **Evidence source** | The authority behind the evidence. |
+| **Obs.** | Raw observations collected. |
 
-- **Confirmed** → act. Open or escalate the incident; the Decision callout reads **OPEN INCIDENT** and auto-ticketing (if policy allows) will file.
-- **Suspected** → investigate, don't escalate. The detail view's **To confirm** line tells you exactly which evidence would settle it — often the fastest move is to check that source directly (device state, an active probe, [flow data](/explore/flows)).
-- **Not confirmed** → watch. These are gathering evidence; the **Signature coverage gaps** panel below the queue shows which recurring shapes keep falling short of a verdict and what they lacked.
+4. Work confirmed cases first, then suspected cases at critical severity, then
+   the rest.
 
-## Work the incident queue
+The **Obs.** column measures persistence, not evidence. A case with
+400 observations from one source is weaker than a case with 6 observations from
+three sources, and the **Evidence types** column is the one that says so.
 
-Tracked incidents are the system of record — deduplicated (a recurrence folds into the same row and bumps its **Count**), owned, and driven through a lifecycle.
+### When to trust confirmed vs suspected {#when-to-trust-confirmed-vs-suspected}
 
-1. Go to <kbd>Monitoring → Incidents</kbd>. The KPIs show **Open**, **Critical**, **Unassigned**, and **Ticketed** counts.
-2. Filter the **Incident queue** by status (*open, acknowledged, investigating, resolved, closed*) and severity (*critical, high, medium, low, info*). The default view shows open incidents, newest activity first (**Last seen**).
-3. Click a row. The detail pane shows the incident's severity, title, occurrence count, description, and any linked external ticket.
-4. Drive the lifecycle with the action buttons:
-   - **Acknowledge** — you've seen it; it's yours.
-   - **Investigate** — work has started.
-   - **Resolve** — the condition is fixed.
-   - **Close** / **Reopen** — available once resolved.
-5. Use **Add a note to the timeline…** to record findings as you go — notes, status changes, assignments, deduplicated recurrences, and ITSM sync events all appear on the incident's **Timeline**, merged chronologically. Sync entries show the direction (↑ outbound / ↓ inbound), the provider, and the result.
+`confirmed` means independent evidence classes agree in the same window and
+scope. Two sources that both derive from the same collector are one source, and
+the engine counts them that way.
 
-## From incident to ticket
+`suspected` means the evidence points somewhere and no independent pair has
+confirmed customer impact yet. The case header states which single source saw it
+and that a second independent source is needed.
 
-1. Open the RCA detail (<kbd>Monitoring → Correlations</kbd> → click the row) and find the **External ticket** card.
-2. If no ticket exists and you have write permission, click **Create ticket**. The action is queued — "Ticket creation queued — the worker will open it shortly." — and the card updates with the ticket number, deep link, and state.
-3. For an already-open ticket, **Sync ticket** pushes the current verdict and evidence to it.
-4. Every action lands in the card's **History** trail with its result — your compliance record.
+Act on a suspected case when the severity justifies acting before confirmation
+arrives, and treat the named cause as a hypothesis when you talk to the owning
+party. The product phrases it that way on purpose: an unconfirmed case reads
+`Not confirmed — possibly because of X`, never a bare cause.
 
-Correlix files **one ticket per incident**, keyed to the incident id, so re-syncs update rather than duplicate. To make this automatic (e.g. every confirmed verdict files itself), configure a policy under <kbd>Incident Response → RCA Auto-Ticketing</kbd> — see [RCA Auto-Ticketing](/incident-response/rca-ticketing). Notification routing (Slack, PagerDuty, email) is configured under [Notifications](/incident-response/notifications).
+`contradicted` means the leading cause was ruled out by discriminating evidence.
+The sequence stays visible for the record, not as a live explanation. Do not
+escalate a contradicted cause to a provider.
 
-## Measure the loop
+`undetermined` means no cause has enough supporting evidence yet. State the
+symptom and the impact, and do not imply a root cause.
 
-Close the loop weekly on the <kbd>Monitoring → Recovery Scorecard</kbd>:
+Correlix records what you think of a verdict. Rating a case feeds the
+false-positive rate, which is reported honestly as absent until there are
+ratings to compute it from:
 
-1. Pick a window (**7d / 30d / 90d**) and optionally an owner filter (ISP, Cloud, SaaS, App, LAN / Network).
-2. Read the headline cards: **Median root-domain isolation time** (MTTI p50 — Correlix's hero metric: detection to an evidence-backed root domain and owner), its **p90** long tail, correlation time, recovery and ticket-closure time, **MTBF**, **repeat rate**, and the **top time-loss driver**.
-3. Use **Owner Domain Breakdown** to see where the pain lands, and **Recurring Failure Sources** for the objects that keep coming back, each with a recommended action.
+```bash
+curl -s -H "Authorization: Bearer $TOKEN" \
+  http://localhost:8000/api/correlations/feedback/summary
+```
 
-:::note Some metrics need workflow evidence
-Recovery and ticket-closure timing read **"Not measured"** until ITSM or recovery evidence is connected — the scorecard never fabricates an MTTR. The **Evidence coverage** strip shows exactly which phases are measurable.
-:::
+```json
+{
+  "by_template": [],
+  "counts": { "correct": 0, "partial": 0, "wrong": 0 },
+  "days": 30,
+  "false_positive_rate": null,
+  "n": 0,
+  "since": "2026-08-04T03:48:41Z"
+}
+```
 
-## Verify
+`false_positive_rate` is `null`, not `0`. Nobody has rated a case, so nothing was
+measured. See [rate an RCA case](/investigate/rate-an-rca-case).
 
-- A newly acknowledged incident shows a `status_change` entry (`open → acknowledged`) on its timeline, and the queue KPIs update after **Refresh**.
-- A queued ticket action appears in the External ticket card's History within a few seconds, and the ticket number deep-links into your ITSM.
+### Work the operational incident list
 
-## Troubleshooting
+1. Go to **Operations → Incidents**. The page is titled **Operational
+   Incidents**.
+2. Read the row: **ID** (in the form `INC-XXXXXX`), **Severity**, **Status**,
+   **Title**, **Count**, **Source**, **Notified via** and **Last seen**.
+3. Drive the lifecycle. The status ladder is `open`, `acknowledged`,
+   `investigating`, `resolved`, `closed`, and the actions available on an
+   incident are acknowledge, investigate, resolve, close, reopen, assign, note
+   and promote.
 
-- **"Incident management isn't enabled in this environment yet."** — the incidents store isn't provisioned in this deployment; use the Correlations queue and alerts directly.
-- **Ticket stuck in "Creation queued"** — check the ITSM connection under <kbd>Incident Response → Integrations</kbd> ([Integrations](/incident-response/integrations)); failed attempts and their reasons appear in the ticket card's History.
-- **Empty queue** — "No incidents match — quiet is good." If you expected data, confirm devices are reporting under [Verify monitoring](/onboard-devices/verify-monitoring).
+The severity ladder is `info`, `low`, `medium`, `high`, `critical`. A filter
+value outside that ladder is refused with `400` rather than silently mapped to
+`info`, so a query for warnings never returns info incidents labelled as
+warnings.
+
+The **Count** column is the deduplicated occurrence count. Alerts, findings and
+anomalies fold into one incident rather than each opening their own.
+
+### From incident to ticket {#from-incident-to-ticket}
+
+Ticketing is driven off correlated RCA cases, never off raw alerts. A storm of
+57 alerts that correlate into one cause produces one ticket, not 57.
+
+1. Open the RCA case and find the **External ticket** card. With more than one
+   destination it is titled **External tickets & paging**.
+2. Read the state pill. With no ticket, the card reads **No external ticket has
+   been opened for this RCA object yet.**
+3. With `infrastructure:write`, select **Create ticket**. On a case that already
+   has an open ticket the control reads **Sync ticket**, and after a failed
+   attempt it reads **Retry create**.
+4. Read the confirmation. Creating shows
+   `Ticket creation queued — the worker will open it shortly.` and syncing shows
+   `Sync queued — the open ticket will update shortly.` The card re-polls on its
+   own.
+
+The action is enqueued to an outbox and drained by a worker. Ticketing never
+blocks correlation, so a slow or unreachable ITSM system delays the ticket and
+nothing else.
+
+Once a ticket exists, the card shows its state pill, the ticket number as a deep
+link, the destination system, and the last sync time. Below that, **History**
+lists the most recent actions with their result, including a dead-letter result
+when an action exhausted its retries.
+
+A case that does not meet the ticketing policy says why. The blocked reason is
+the policy's own words, for example `undetermined — no grounded cause yet`,
+`internal monitoring only — not customer-impacting`, or
+`suspected but severity below critical — held below threshold`.
+
+## Result
+
+The RCA queue is triaged in verdict order, each operational incident carries a
+status and an owner, and the cases that meet policy have a ticket number and a
+deep link on the card.
+
+## Related
+
+- [Read an incident](/incidents/reading-an-incident)
+- [Open tickets automatically from RCA](/incident-response/rca-ticketing)
+- [Connect ServiceNow or Jira](/incident-response/integrations)
+- [Configure a notification channel](/incident-response/notifications)

@@ -1,114 +1,157 @@
 ---
-title: Identity & Access
+title: Add users and grant access
 sidebar_label: Identity & Access
+description: Create an account at the right scope, give it a role, and read the permission grid the role compiles to.
+page_type: task
 sidebar_position: 2
-description: Organizations, tenants, users and roles — the hierarchy map, the guided ＋ Add wizard, and access grants.
 ---
 
-# Identity & Access
+# Add users and grant access
 
-Identity & Access is the one place where people, roles and security settings are managed. Open it at <kbd>Administration → Identity & Access</kbd>.
+Access in Correlix is a binding: a person is given a role at a scope. Users are accounts, roles are permission grids, and bindings decide where a role applies. This page creates the account, hands it a role, and shows you how to read the grid it resolves to.
 
-What you see depends on who you are: a **tenant admin** gets a focused view — *"Users, roles and security settings for your tenant"* — with their own tenant's tabs (Users, User Roles, Custom User Roles, External SSO Roles, Security Settings); the **platform operator** gets the full page — the hierarchy map, a **Provider / Organizations** scope switch, per‑organization drill‑in, and the guided **＋ Add** wizard.
+## Before you begin
 
-The model in one sentence: access is a **binding** — *a person* is given *a role* at *a scope* (the platform, an organization, or a tenant). Users are accounts; roles define what they can do; bindings define where.
+- **Permission:** `administration:admin`. Creating a user inside your own tenant is per-tenant data. Changing a role definition, and any grant at platform scope, is platform-global and needs the platform administrator.
+- Know the scope the person belongs to: the Provider realm, an organization, or one tenant. See [Create tenants and organizations](/administration/tenants-orgs).
+- Decide whether the account signs in locally or through an identity provider. A federated account is created on first sign-in instead. See [Configure authentication](/administration/authentication).
+- Open **Administration → Identity & Access**. A tenant administrator sees one scope. A platform administrator sees the Organizations tree with the Provider realm as its root row.
 
-## The hierarchy map
+## Steps
 
-At the top of the page, **"How your account is organized"** shows the live account tree:
+### Add a user {#add-a-user}
 
-```
-Provider (you) → Organization (Optional) → Tenant (Required) → User → Assign access
-```
+Create the account where it belongs. The owning scope decides what the person can ever see, and it is stamped from the scope you create them in, never from a field they can edit.
 
-**Provider** is the platform‑owner realm; an **Organization** is an *optional* grouping (a customer, a BU — skip it and things live directly under the Provider); a **Tenant** is the *required* unit that holds devices and data, and the isolation boundary. The chips used throughout mean: **Required** (the tenant), **Optional** (the org — defaults to Provider), **Inherited** (a tenant inherits its org's region). The tree shows each organization, its tenants, regions, user counts, and any `suspended` markers.
-
-## The guided ＋ Add wizard {#guided-add-wizard}
-
-The fastest way to set up a complete workspace — organization (optional), tenant, and a first user — is the wizard. Nothing is created until you click **Create** on the final step, and the objects are then created in order.
-
-1. Go to <kbd>Administration → Identity & Access</kbd> and click **＋ Add** (top right; platform operator only).
-2. **Step 1 — Organization** *(optional)*. Tick **Create a new organization** to group tenants under a customer or BU, or leave it unticked to use the default Provider realm. If ticked, fill in:
-
-   | Field | Required | Notes |
-   | --- | --- | --- |
-   | **Organization name** | Yes | e.g. `Acme Corp` |
-   | **Home region** | — | The data‑residency region its tenants inherit — see [Regions](/administration/regions) |
-   | **SSO connection** | No | Bind later in [Authentication](/administration/authentication) |
-
-3. **Step 2 — Tenant** *(required)*. The workspace that holds devices and data:
-
-   | Field | Required | Notes |
-   | --- | --- | --- |
-   | **Tenant name** | Yes | e.g. `acme-prod` |
-   | **Organization** | — | Fixed: the org from step 1, or *Provider (default)* |
-   | **Region** | — | Defaults to *inherited* from the org/Provider; pick a region to override |
-
-4. **Step 3 — First user** *(recommended)*. Leave **Create a user for this tenant** ticked and fill in **Username** (required), **Email**, **Password** (leave blank to set later or sign in via SSO), and **Role** (defaults to `operator`).
-5. **Step 4 — Review & create**. A numbered summary shows exactly what will be created, in order: ① Organization (or *Provider (default) — skipped*), ② Tenant (name · region), ③ User (name · role, or *skipped*). Click **Create**.
-
-You can also create objects individually: **Organizations tab → ＋ Create organization** (Name and Region required), or **＋ Onboard customer** — a one‑step flow that creates an organization *and* its first tenant together.
-
-## Add a user {#add-a-user}
-
-Users can be owned at three levels — create them where they belong:
-
-| The user is… | Create them under |
+| The person is | Create them under |
 | --- | --- |
-| A platform operator's colleague (no org/tenant) | <kbd>Identity & Access → Provider → Users</kbd> |
-| A customer‑org person (not tied to one tenant) | <kbd>Identity & Access → Organizations → *(org)* → Users</kbd> |
-| A tenant's own operator/admin | The tenant's **Users** tab (via the org's **Tenants** tab → **Manage**), or the tenant admin's own Identity & Access |
+| A platform administrator's colleague, tied to no customer | **Identity & Access → Provider → Users** |
+| An organization's person, not tied to one tenant | **Identity & Access → Organizations → (org) → Users** |
+| A tenant's own operator or administrator | The tenant's **Users** tab, reached from the organization's **Tenants** tab |
 
-Open the **Users** tab at the right scope and add the user: **username** (required), optional **email**, **display name** and initial **password** (blank if they'll sign in through SSO/LDAP), and a **role** — defaults to `read-only` if unset. The account is usable within its scope immediately; broader reach comes from access grants (below). A tenant admin can only create users in their own tenant.
+To add a user:
 
-## Grant access (bindings) {#grant-access-bindings}
+1. Open the **Users** tab at the right scope.
+2. Enter the **Username**. It is required.
+3. Enter **Email**, **Display name** and an initial **Password** if the account signs in locally. Leave the password blank for an account that will sign in through single sign-on, LDAP or TACACS+.
+4. Pick a **Role**. It defaults to `read-only` when unset.
+5. Save. The account works inside its own scope immediately.
 
-Two equivalent surfaces write the same grants:
+A tenant administrator can only create users in their own tenant.
 
-**From Assign access** — <kbd>Administration → Assign access</kbd>:
+### Grant a role at an organization scope {#grant-access-bindings}
 
-1. Click **＋ Assign access**. The *Grant access* dialog opens.
-2. **Person** *(required)* — pick an existing user.
-3. **Organization** *(required)* — the scope of the grant (scope options here are organizations).
-4. **Role** — defaults to `operator`; pick from the table below.
-5. **Effect** — **Allow** or **Deny**. Deny wins over allow, so a targeted Deny carves an exception out of a broader grant.
-6. Click **Grant access**.
+A grant reaches wider than the scope the account lives in. Grants are written from an organization's **Access** tab, or from the guided wizard's **Access grant** path.
 
-**From an organization's Access tab** — <kbd>Identity & Access → Organizations → *(org)* → Access</kbd>: same flow with the scope fixed to that org — pick **User** and **Role**, click **＋ Assign access**.
+To grant access from an organization:
 
-The grants list shows **Person · Role · Scope · Effect · Granted by**, with a per‑row **Revoke**. An org admin can grant and revoke only within their own organization and never `super-admin`; platform‑scope grants require the platform operator.
+1. Open **Administration → Identity & Access → Organizations → (org) → Access**.
+2. Select the **Person**. Grants attach to accounts that already exist.
+3. Select the **Role**.
+4. Select the **Effect**, either **Allow** or **Deny**. Deny wins over allow, so a targeted deny carves an exception out of a wider grant.
+5. Select **＋ Assign access**.
+
+The grants list shows Person, Role, Scope, Effect and Granted by, with a per-row **Revoke**.
+
+Reach follows containment. A binding grants reach when its scope is the target tenant or an ancestor of it. An organization-scope binding confers reach across that organization's tenants only for an organization-manager role, which means `org-admin` and `super-admin`. Other roles bound at an organization scope do not fan out to its tenants, so grant those where they should apply. An organization administrator can never grant `super-admin`.
+
+### Create a whole workspace with the guided wizard {#guided-add-wizard}
+
+The **＋ Add** button at the top right of Identity & Access is one guided path for four objects. It is available to the platform administrator.
+
+1. Select **＋ Add**.
+2. On **What to add**, pick one of four cards:
+
+   | Card | What it creates |
+   | --- | --- |
+   | **Customer organization** | An organization, optionally with its first tenant and first user. |
+   | **Tenant** | A workspace under the Provider or under an organization, optionally with its first user. |
+   | **User** | A person under the Provider, an organization or a tenant, with a role. |
+   | **Access grant** | A role for an existing person on an organization. |
+
+3. Complete the steps the card asks for. **Organization name**, **Tenant name**, **Username**, and for a grant both **Person** and **Organization**, are the required fields.
+4. Read **Review & create**. It lists what will be created, numbered, in the order it will be created.
+5. Select **Create**. Nothing exists until this step.
+
+## The permission grid
+
+A role is a grid of one level per module. `GET /api/auth/permissions` returns the caller's own effective grid, which is what the console uses to decide which sections to render.
+
+```bash
+curl -s -H "Authorization: Bearer $TOKEN" \
+  http://localhost:8000/api/auth/permissions
+```
+
+```json
+{
+  "permissions": {
+    "administration": 3,
+    "alerts": 3,
+    "explore": 3,
+    "infrastructure": 3,
+    "overview": 3,
+    "reports": 3,
+    "sensitive_data": 3,
+    "topology": 3
+  },
+  "role": "admin"
+}
+```
+
+The levels are a four-step ladder, and each level implies the ones below it.
+
+| Value | Level | Means |
+| --- | --- | --- |
+| `0` | none | The section is hidden. |
+| `1` | read | View the module's data. |
+| `2` | write | Act on it: acknowledge or silence an alert, run discovery, edit a dashboard. |
+| `3` | admin | Manage the module's configuration. On `administration`, manage identity. |
+
+The eight modules and what each one gates:
+
+| Module | Gates |
+| --- | --- |
+| `overview` | The Command Center and the home dashboards. |
+| `explore` | Metrics, logs, flows and events. |
+| `alerts` | Alerts, monitors and incident actions. |
+| `infrastructure` | Devices, discovery, interfaces and the parser's unrecognized-shapes view. |
+| `topology` | The topology canvas and the geomap. |
+| `reports` | Report definitions and executions. |
+| `administration` | Everything under Administration: users, roles, tenants, API keys, processors, the audit trail. |
+| `sensitive_data` | Sealed fields. `read` sees that a field is sealed and its masked form, `write` creates and edits `seal` processors, `admin` reveals plaintext through the audited unseal route. |
+
+`sensitive_data` is deliberately its own module rather than a level of `administration`. Revealing a card number is a different capability from configuring the platform, and an infrastructure or alerting administrator must not acquire it by being an administrator of something else.
 
 ## Roles
 
-A role is a grid of permission levels — **none / read / write / admin** — over seven product areas: *overview, explore, alerts, infrastructure, topology, reports, administration*.
+Six built-in roles ship as seeded, non-deletable rows.
 
-| Role | What it can do |
+| Role | Grid |
 | --- | --- |
-| **Super Admin** (`super-admin`) | Full control across all tenants, including identity. Reserved for the platform operator. |
-| **Org Admin** (`org-admin`) | Full admin rights, bounded to one organization's tenants and people. |
-| **Operator** (`operator`) | Read everything, plus write on alerts (acknowledge/silence) and infrastructure (discovery, devices). No administration. |
-| **Read-only** (`read-only`) | View everything, change nothing. The default for new users. |
-| **Auditor** (`auditor`) | Read‑only everywhere **including administration and the audit trail**. |
-| **API Client** (`api-client`) | Least‑privilege machine identity; narrow further with [API‑token scopes](/administration/api-access). |
+| **Super Admin** (`super-admin`) | `admin` on every module. Bound at platform scope it is the platform owner. |
+| **Org Admin** (`org-admin`) | The same grid as Super Admin. The scope is the limiter: bound at an organization, it reaches that organization's tenants and never platform plumbing. |
+| **Operator** (`operator`) | `write` on `alerts` and `infrastructure`, `read` elsewhere, `none` on `administration`. |
+| **Read-only** (`read-only`) | `read` everywhere except `administration`, which is `none`. The default for a new user. |
+| **Auditor** (`auditor`) | `read` on every module including `administration`, so the audit trail is readable. No write anywhere. |
+| **API Client** (`api-client`) | `read` on operational modules. `none` on `reports` and `administration`. Narrow it further with [API key scopes](/administration/api-access). |
 
-An **org‑scoped** grant of Super Admin or Org Admin reaches every tenant inside that org; other roles bound at org scope do not fan out — grant them where they should apply.
+To build a custom role:
 
-### Custom roles
+1. Open **Identity & Access → (scope) → Custom User Roles**.
+2. Select **＋ New custom role** and name it.
+3. Select a cell in the grid to cycle its level through none, read, write and admin. Changes persist as you make them.
 
-1. Open <kbd>Identity & Access → *(scope)* → Custom User Roles</kbd> and click **＋ New custom role** (e.g. *NOC Engineer*).
-2. In the permission grid, click a cell to cycle its level `none → read → write → admin`; changes persist immediately. Built‑in roles are read‑only, and a custom role can never grant *administration* at **admin** level — that is reserved for the built‑in administrators.
+Built-in roles are read-only. Role definitions are platform-wide: a tenant administrator can read them in order to assign them, and only the platform administrator can change them.
 
-The **External SSO Roles** tab shows how roles arriving from your identity provider map in — configure that mapping in [Authentication](/administration/authentication) (the provider's *Role mapping* step).
+The **External SSO Roles** tab shows how roles arriving from an identity provider map onto these. Configure that mapping on the provider itself, in [Configure authentication](/administration/authentication).
 
-## Verify
+## Result
 
-- New user: have them sign in — they land scoped to their tenant, with menus matching their role.
-- New grant: <kbd>Administration → Assign access</kbd> lists it with the right **Role · Scope · Effect**, and the **Audit Log** records it with you as **Actor**.
-- Wizard run: the hierarchy map shows the new org/tenant with a user count of 1.
+The new account signs in and lands scoped to its own tenant, with the sections its role allows and nothing else. `GET /api/auth/permissions` returns the grid you expect for that person. The grant appears in the organization's **Access** list with the right Role, Scope and Effect, and the creation appears in the [audit log](/administration/audit-log) with you as the actor.
 
-## Troubleshooting
+## Related
 
-- **The Person dropdown is empty.** Grants attach to existing users — create the account first under the right Users tab.
-- **"cannot grant super-admin".** Only the platform operator can hand out Super Admin; org admins grant non‑escalating roles inside their org.
-- **A user sees less than their role suggests.** Check for a **Deny** binding (deny always wins), and confirm the grant's scope — an `operator` bound at org scope does not fan out to the org's tenants.
-- **Can't delete a role.** Built‑in roles are fixed; only custom roles can be deleted.
+- [Create tenants and organizations](/administration/tenants-orgs) for the scopes a user can belong to.
+- [Configure authentication](/administration/authentication) for federated accounts, password policy and lockout.
+- [Read the audit log](/administration/audit-log) to prove a permission change took effect.
+- [Mint an API key](/administration/api-access) for a machine identity instead of a person.

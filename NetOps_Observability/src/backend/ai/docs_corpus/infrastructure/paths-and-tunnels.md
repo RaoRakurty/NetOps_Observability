@@ -1,88 +1,124 @@
 ---
-title: Flow Trace & Tunnels
-sidebar_label: Flow Trace & Tunnels
+title: Trace paths and tunnels
+description: Read measured hop-by-hop paths, path SLA probes and active service checks, and read overlay tunnel health.
+page_type: task
 sidebar_position: 6
-description: Measured hop-by-hop paths, path SLA probes, active service checks, and overlay tunnel health.
 ---
 
-# Flow Trace & Tunnels
+# Trace paths and tunnels
 
-The **Paths & Overlays** group answers *how does traffic actually get there*: **Flow Trace** shows measured hop-by-hop paths and path SLAs, and **Tunnels** shows overlay circuit health. Both are evidence pages — every number comes from a real measurement, and empty states say what to enable rather than going blank.
+**Investigate → Paths** groups the three surfaces that answer how traffic actually gets there: **Flow Trace** for measured hop-by-hop paths and path SLA, **Tunnels** for overlay circuit health, and **WAN Paths** for per-circuit SLA on the underlay. Every number on these pages comes from a measurement, and an empty board states what to enable rather than going blank.
 
-## Flow Trace
+## Before you begin
 
-<kbd>Infrastructure → Flow Trace</kbd> visualizes the active-measurement pipeline in four boards, top to bottom.
+- An authenticated session in your tenant. Both pages read tenant-scoped stores, so another tenant's paths and tunnels are never returned.
+- Path discovery is opt-in. `FEATURE_TRACEROUTE` is off by default; an administrator sets it with a target list in `TRACEROUTE_TARGETS` and grants the container `CAP_NET_RAW`.
+- Path SLA needs `FEATURE_ACTIVE_PROBE` plus `STAMP_TARGETS`, and a reflector at the far end via `FEATURE_STAMP_REFLECTOR`.
+- Service checks need `FEATURE_SYNTHETICS` plus the per-check target lists.
 
-### Path Behavior Health
+## Steps
 
-The first board asks: *is each path behaving normally right now, compared with its own typical behavior?* It uses an adaptive baseline (not fixed thresholds), shows a confidence and a likely owner per path, and sorts worst-first — so the path most worth your attention is the first row.
+### Step 1 - Read Path Behavior Health
 
-### Network paths (traceroute)
+Open **Investigate → Paths → Flow Trace**. The first board asks whether each path is behaving normally right now compared with its own typical behaviour. It uses an adaptive baseline rather than a fixed threshold, carries a confidence and a likely owner per path, and sorts worst first.
 
-This board shows the measured hop-by-hop path to each configured destination. Targets are configured by your administrator on the platform (the trace runs *from the platform's measurement point toward each target* — to trace between two of your own devices instead, use the [Topology Canvas → Path Trace mode](/infrastructure/topology-canvas#path-trace--resolve-an-ab-path)).
+### Step 2 - Read a traceroute panel
 
-To read a path:
+The second board shows the measured hop-by-hop path to each configured destination. The trace runs from the platform's measurement point toward each target. To trace between two of your own devices instead, use [Path Trace on the topology canvas](/infrastructure/topology-canvas#path-trace--resolve-an-ab-path).
 
-1. Find the panel for your destination — the title shows the target and its hop count (e.g. `8.8.8.8 — 9 hops`).
-2. Check the badges: **reached** (green) means the trace got to the destination; **incomplete** (amber) means it ran out before arriving. A red **path changed** badge means the route differs from the previously observed one — worth correlating with whatever else changed at that time.
-3. Read the hop table, one row per hop:
-   - **Hop** — the position (TTL) along the path.
-   - **Router** — the responding address, or `* (no reply)` for silent hops (common; many routers rate-limit or drop probe replies).
-   - **RTT** — round-trip time to that hop.
-   - **Loss** — per-hop loss where the prober measures it; "—" where it doesn't.
-4. Look for where RTT jumps between consecutive hops — that segment is where the delay is added.
+1. Find the panel for your destination. Its title is the target followed by the hop count of that trace.
+2. Read the badges. **reached** means the trace arrived. **incomplete** means it ran out first. A **path changed** badge means the route differs from the previously observed one, which is worth correlating with whatever else changed at that time.
+3. Read the hop table:
 
-The trace method is consistent across load-balanced (ECMP) networks, so the path you see is a real single path, not an artifact of per-probe re-hashing.
+| Column | What it shows |
+|---|---|
+| **Hop** | Position along the path, by TTL. |
+| **Router** | The responding address. A silent hop renders as `* (no reply)`, which is common because many routers rate-limit or drop probe replies. |
+| **RTT** | Round-trip time to that hop, or a dash where the hop did not answer. |
+| **Loss** | Per-hop loss where the prober measures it, or a dash where it does not. |
 
-:::note Enabling path discovery
-If the board shows *No active path measurements*, path discovery is off. An administrator enables it on the platform with `FEATURE_TRACEROUTE=true` and a target list (`TRACEROUTE_TARGETS`); a TCP-based method is available for paths where firewalls swallow ICMP. See [connectivity requirements](/reference/connectivity-requirements).
-:::
+4. Look for the jump in RTT between consecutive hops. That segment is where the delay is added.
 
-### Path SLA (probes)
+The trace is Paris-consistent, so on a load-balanced network the path shown is one real path rather than an artifact of per-probe re-hashing.
 
-Below the traces, four leaderboards show the standards-based path SLA per target, from active probes: **round-trip delay**, **one-way delay**, **jitter/PDV**, and **packet loss**. These feed the Path Behavior Health board above. Enabled by your administrator (`FEATURE_ACTIVE_PROBE=true` plus probe targets, and a reflector at the far end).
+With the feature off, the board reads **No paths yet** and names the environment variables to set. `/api/probe/paths` answers with an empty list rather than an error:
 
-### Service checks (synthetics)
+```bash
+curl -s -H "Authorization: Bearer $TOKEN" \
+  http://localhost:8000/api/probe/paths
+```
 
-The last board covers active service-level checks: **HTTP total time** and **time to first byte** (with per-phase timings — DNS, connect, TLS, first byte), **ICMP round-trip**, **TCP connect time**, **TLS certificate days-to-expiry**, and **checks down now**. Enabled with `FEATURE_SYNTHETICS=true` plus per-check target lists.
+```json
+[]
+```
 
-## Tunnels
+### Step 3 - Read path SLA and service checks
 
-<kbd>Infrastructure → Tunnels</kbd> lists overlay circuits — IPsec, SD-WAN, GRE — reported through device telemetry, one row per tunnel. The table refreshes every 15 seconds.
+Below the traces, four charts show the standards-based path SLA per target from active probes: round-trip delay, one-way delay, jitter and PDV, and packet loss. They feed the Path Behavior Health board above.
 
-1. Check the summary tiles: **Tunnels up** (of total), **Tunnels down**, **Avg latency**, **Avg loss**.
-2. Use the search box (**Search tunnels, devices, addresses…**) to narrow by tunnel ID, type, endpoint device, address, or status.
+The last board covers active service checks: HTTP total time and time to first byte with per-phase timings, ICMP round-trip, TCP connect time, TLS certificate days to expiry, and checks down now.
+
+### Step 4 - Read tunnels {#tunnels}
+
+Open **Investigate → Paths → Tunnels**. It lists overlay circuits reported through device telemetry, one row per tunnel, and refreshes every 15 seconds.
+
+1. Read the summary tiles: **Tunnels up** of the total, **Tunnels down**, **Avg latency**, **Avg loss**. With no tunnels reported, latency and loss read as a dash rather than as zero.
+2. Narrow with **Search tunnels, devices, addresses…**, which matches id, type, endpoint device, address and status.
 3. Read the columns:
 
 | Column | What it shows |
-| --- | --- |
-| **Type** | The tunnel type (e.g. IPsec, GRE, SD-WAN overlay). |
-| **Local / Remote** | Each endpoint: device name with its tunnel address. |
-| **Latency** | Heat-tinted: green under 50 ms, amber under 150 ms, red above. |
-| **Jitter** | Green under 30 ms, amber under 60 ms. |
-| **Loss** | Green under 1%, amber under 3%, red above. |
-| **QoE** | A 0–10 experience score: green at 8+, amber at 5+, red below. |
-| **Uptime** | How long the tunnel has been up (e.g. `3d 4h`). |
-| **Status** | `up` (green) or `down` (red). |
+|---|---|
+| **Type** | The tunnel type as the device reports it. |
+| **Local** / **Remote** | Each endpoint, device name with its tunnel address. |
+| **Latency** | Tinted green under 50 ms, amber under 150 ms, red above. |
+| **Jitter** | Green under 30 ms, amber under 60 ms, red above. |
+| **Loss** | Green under 1 per cent, amber under 3 per cent, red above. |
+| **QoE** | A 0 to 10 experience score. Green at 8 and above, amber at 5, red below. |
+| **Uptime** | How long the tunnel has been up, rendered as days and hours, then hours and minutes, then minutes. Zero renders as a dash. |
+| **Status** | `up` or `down`. |
 
-4. Sort by any SLA column to surface the worst tunnel first — the cell tinting makes an impaired overlay readable at a glance even in a long list.
+4. Sort by any SLA column to bring the worst tunnel to the top. The cell tinting keeps an impaired overlay readable in a long list.
 
-If the page shows *No tunnels reported*, no device telemetry is populating tunnel state yet — tunnels appear once your devices or SD-WAN estate export it. Confirm collection with [Verify monitoring](/onboard-devices/verify-monitoring).
+## What you see
 
-## Verify
+Every destination you configured has a traceroute panel, the SLA charts carry your probe targets, and each overlay circuit you operate has a Tunnels row whose status matches reality.
 
-- Each expected destination has a traceroute panel, and it reads **reached**.
-- Path SLA leaderboards show your probe targets with plausible delay/loss numbers.
-- Every overlay circuit you operate has a Tunnels row, and its status matches reality.
+Where no collector populates tunnel state, the page says so rather than implying there are no tunnels, and `/api/tunnels` returns the column metadata with an empty result:
 
-## Troubleshooting
+```bash
+curl -s -H "Authorization: Bearer $TOKEN" \
+  http://localhost:8000/api/tunnels
+```
 
-- **A trace reads "incomplete"** — the destination (or an intermediate hop) never answered. Try the TCP trace method if a firewall sits on the path, or accept it if the destination simply doesn't reply to probes.
-- **"path changed" won't clear** — the route genuinely differs from the prior observation; the badge reflects the latest comparison. Investigate what re-routed (Protocol Monitoring shows adjacency changes).
-- **Hops show "—" for loss** — the prober measures loss end-to-end but not per-hop for that method; it's an honest gap, not a failure.
-- **Tunnels SLA looks frozen** — check the device-side export; rows only update as telemetry arrives.
+```json
+{
+  "meta": [
+    {"name": "id", "type": "String"},
+    {"name": "type", "type": "LowCardinality(String)"},
+    {"name": "local_device", "type": "String"},
+    {"name": "local_addr", "type": "String"},
+    {"name": "remote_device", "type": "String"},
+    {"name": "remote_addr", "type": "String"},
+    {"name": "status", "type": "LowCardinality(String)"},
+    {"name": "latency_ms", "type": "Float32"},
+    {"name": "jitter_ms", "type": "Float32"},
+    {"name": "loss_pct", "type": "Float32"},
+    {"name": "qoe", "type": "Float32"},
+    {"name": "uptime_s", "type": "UInt64"},
+    {"name": "ts", "type": "String"}
+  ],
+  "data": [],
+  "rows": 0,
+  "rows_before_limit_at_least": 0
+}
+```
+
+The page states it as `No tunnels reported. IPsec / SD-WAN tunnel state appears here once a collector populates it from device telemetry.`
+
+Three states to keep apart. A trace reading **incomplete** means the destination or an intermediate hop never answered, which is a fact about the probe rather than a fault. A hop reading a dash for loss means the method measures loss end to end and not per hop. An empty Tunnels table means nothing is exporting tunnel state, not that every tunnel is down.
 
 ## Related
 
-- [WAN Interface Metrics](/infrastructure/wan-interface-metrics) — per-circuit SLA on the underlay.
-- [Monitoring](/monitoring/overview) — alert on path or tunnel degradation.
+- [Measure WAN paths](/infrastructure/wan-interface-metrics) for per-circuit SLA on the underlay.
+- [Read the topology canvas](/infrastructure/topology-canvas) for tracing between two of your own devices.
+- [Create a monitor](/monitoring/create-a-monitor) to alert on path or tunnel degradation.

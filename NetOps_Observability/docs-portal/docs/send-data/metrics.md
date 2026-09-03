@@ -1,73 +1,122 @@
 ---
-title: Metrics
-sidebar_label: Metrics
+title: Send metrics
+sidebar_label: Send metrics
+description: Set up the polling and streaming paths that produce metrics, and confirm the series are arriving. Metrics are pulled, never pushed.
+page_type: task
 sidebar_position: 2
-description: How Correlix collects device and interface metrics, and how to verify them in the Metrics Explorer.
 ---
 
-# Metrics
+# Send metrics
 
-Metrics are the numeric time series behind most of Correlix's dashboards, monitors, and anomaly detection. Unlike the push planes ([syslog](/send-data/syslog), [traps](/send-data/traps), [flows](/send-data/flows)), metrics are **pulled**: Correlix reaches out to your devices, so once a device is onboarded with working credentials there is usually **nothing to configure on the device**.
+Metrics are the one plane a device does not send. Correlix pulls them: the SNMP
+collectors poll each device on UDP 161, and where gNMI is configured the device
+streams into a subscription Correlix opened. There is no agent to install and no
+endpoint a device can POST metrics to.
 
-## How metrics arrive
+This page is therefore about making the pull work. A platform that cannot be
+polled and does not speak gNMI contributes only what it reports through
+[syslog](/send-data/syslog) and [traps](/send-data/traps).
 
-There are two collection paths, and they land in the same metric names — dashboards and monitors don't care which one fed them:
+## Before you begin
 
-| Path | How it works | Resolution | Setup |
-| --- | --- | --- | --- |
-| **SNMP polling** (default) | Correlix polls each device over UDP 161 | ~1 minute | [SNMP profiles & credentials](/onboard-devices/snmp-profiles) — automatic once onboarded |
-| **Streaming telemetry (gNMI)** | The device streams updates over a gRPC session Correlix opens | Sub-minute | [Streaming telemetry](/onboard-devices/streaming-gnmi) — supported platforms only |
+- The device is in the inventory. See
+  [Add a device by hand](/onboard-devices/add-devices-manually) or
+  [Configure SNMP discovery](/onboard-devices/snmp-discovery).
+- A read-only SNMP credential the device answers to. See
+  [Add an SNMP credential](/onboard-devices/snmp-profiles).
+- UDP 161 open from Correlix to the device, and any device-side SNMP ACL
+  permitting the Correlix address. See
+  [Connectivity requirements](/reference/connectivity-requirements).
+- `ENABLE_SNMP_COLLECTION` and `ENABLE_SNMP_METRICS` both `true`. Both default
+  to `true`, and metrics need both: the first runs the reachability pollers,
+  the second runs the collector that reads the OIDs.
 
-There is **no device-pushed metric ingest** (no agent to install, no metrics endpoint for devices to POST to). If a platform can't be polled and doesn't support gNMI, its numeric health lives in whatever it reports via [syslog](/send-data/syslog) and [traps](/send-data/traps).
+## Steps
 
-Correlix also *generates* some metrics itself through **active measurement** — path probes that measure latency, jitter, and loss across circuits. Those are configured in the platform, not on devices; see [WAN interface metrics](/infrastructure/wan-interface-metrics).
+1. Store the credential in
+   **Administration → Data Collection → SNMP Profiles → Credentials**.
+2. Set the device record's `credential_ref` to that profile's id or name. A
+   device with no reference falls back to the deployment-wide `SNMP_COMMUNITY`,
+   which defaults to `public`.
+3. Confirm the device answers on UDP 161 from the Correlix host.
+4. On a gNMI platform, add the subscription. See
+   [Set up gNMI streaming telemetry](/onboard-devices/streaming-gnmi).
 
-## Set up metrics for a device
+That is the whole procedure. Polling starts on the next cycle.
 
-1. Add an SNMP credential (v2c community or v3 user) in [SNMP profiles & credentials](/onboard-devices/snmp-profiles). Read-only access is all Correlix needs.
-2. Onboard the device — via [discovery](/onboard-devices/snmp-discovery) or [manually](/onboard-devices/add-devices-manually).
-3. Confirm UDP **161** is open from Correlix to the device ([Connectivity requirements](/reference/connectivity-requirements)).
-4. Optional, on supported platforms: enable [gNMI streaming](/onboard-devices/streaming-gnmi) for sub-minute resolution on your most important devices.
+## Result
 
-That's the whole procedure — polling starts automatically.
+Two collectors run against the device.
+
+| Collector | Interval | What it does |
+|---|---|---|
+| `snmpv2c` or `snmpv3` | 30 seconds | Reachability probe on UDP 161. Which one is chosen follows from the credential version |
+| `snmpmetrics` | 60 seconds | Reads the OIDs of the generic profile plus any vendor pack matched by the device's enterprise number |
+
+Confirm the series exist in **Explore → Metrics**. On the lab stack, where both
+devices are timing out on UDP 161, the same query returns an empty matrix rather
+than an error:
+
+```bash
+curl -s -H "Authorization: Bearer $TOKEN" \
+  "http://localhost:8000/api/metrics/query_range?query=device_sysuptime&start=1788409339&end=1788410239&step=300"
+```
+
+```json
+{"status":"success","data":{"resultType":"matrix","result":[]},"stats":{"seriesFetched": "0","executionTimeMsec":0}}
+```
+
+An empty matrix is a statement that no series matched, not a claim that the
+value is zero. The reason is on the collector, which reports
+`2/2 targets did not answer`. See
+[Verify a device is being monitored](/onboard-devices/verify-monitoring).
+
+The **SNMP metrics** column on
+[the coverage matrix](/onboard-devices/data-sources) turns green once a
+`device_sysuptime` series exists for the device inside the 15-minute window.
 
 ## What you get
 
-- **Device** — CPU, memory, temperature, uptime, availability.
-- **Interfaces** — in/out throughput, utilization, errors and discards, oper/admin status, speed.
-- **Protocols** — BGP/OSPF/IS-IS neighbor state and transitions.
+The generic profile reads 33 objects from standard MIBs on every device: uptime,
+interface state and traffic and errors and packet mix, `hrProcessorLoad`,
+`entPhySensorValue`, BGP peer state and transitions, OSPF neighbour and area
+state, and Power over Ethernet port status. A vendor pack adds
+platform-specific CPU, memory, temperature, firewall session and load-balancer
+metrics where one exists. The per-vendor detail is in
+[Supported devices](/onboard-devices/supported-devices).
 
-## Verify
+Correlix also produces metrics of its own through active measurement, when the
+matching collectors are enabled: STAMP path probes (`FEATURE_ACTIVE_PROBE`),
+traceroute (`FEATURE_TRACEROUTE`), synthetic HTTP, ICMP and TCP checks
+(`FEATURE_SYNTHETICS`), and WAN circuit echo (`FEATURE_WAN_ECHO`). All four
+default to off and are configured on the platform, not on devices. See
+[WAN interface metrics](/infrastructure/wan-interface-metrics).
 
-1. <kbd>Administration → Data Collection → Data Sources</kbd> — the device's **SNMP metrics** column shows collecting.
-2. <kbd>Metrics</kbd> — the **Metrics Explorer**. Query an interface throughput or CPU series for the device ad hoc and confirm points are arriving about once a minute (or faster on streaming devices).
-3. <kbd>Infrastructure → Device Monitoring</kbd> — CPU/memory/interface panels fill in.
-4. The full four-layer checklist (known → collecting → rendering → on the map) is in [Verify a device is monitored](/onboard-devices/verify-monitoring).
+## Resolution
 
-A panel showing **"—"** means that specific series genuinely has no data yet (for example, utilization needs the interface speed to have been discovered) — Correlix shows honest gaps rather than fabricated values.
+The 60-second metric poll is the default and is right for interface statistics.
+Where you need finer resolution, enable
+[gNMI streaming](/onboard-devices/streaming-gnmi) on that device rather than
+polling harder. Streaming does not change the metric names: the canonical gNMI
+lane renames mapped paths to the same `device_*` names SNMP emits, so dashboards
+and monitors do not care which transport fed them.
 
-## Tuning
-
-- The default **1-minute poll** matches industry practice for interface statistics and keeps device CPU impact negligible.
-- Where you need faster-than-poll resolution (busy WAN edges, microburst-sensitive links), enable **streaming telemetry** on that device rather than polling harder.
+Interfaces, CPU and temperature stay SNMP-owned even on a streaming device. The
+families gNMI serves are BGP state, IS-IS state and Nokia SR Linux memory.
 
 ## Troubleshooting
 
-**No metrics at all for a device**
+| Symptom | Cause | What to do |
+|---|---|---|
+| No series at all for a device | The credential does not match, or UDP 161 is blocked | Check the collector's `last_error` on **Administration → Data Collection → Sensors** |
+| Reachable but no samples | `ENABLE_SNMP_METRICS` is off, or no profile OID answered | Check the flag, then the vendor profile |
+| Some panels populated, others empty | Those series are not in the device's profile, or the platform does not expose them | Extend the profile with the OID. An empty panel is a per-series statement of no data |
+| A streaming device still shows 60-second data | The gNMI subscription is not established | Check the `gnmi` collector's target count. SNMP continues as the floor, so you lose resolution rather than coverage |
+| Utilization is empty while throughput is not | `device_if_speed` has not been read for that interface | Utilization is derived from speed. Nothing is estimated in its absence |
 
-1. Wrong or missing credentials are the usual cause — re-check the [SNMP profile](/onboard-devices/snmp-profiles) (community / v3 user, auth and priv settings) against the device config.
-2. Confirm reachability: UDP 161 from Correlix to the device, and any SNMP ACL on the device permits Correlix's address.
-3. See [Troubleshooting](/reference/troubleshooting) for the full ladder.
+## Related
 
-**Some panels populated, others "—"**
-
-- Normal during the first minutes after onboarding, and normal permanently for series the platform doesn't expose. It is a per-series statement of "no data", not an error.
-
-**Streaming device showing 1-minute data**
-
-- The gNMI session isn't established — check the device-side gNMI/gRPC config and port against [Streaming telemetry](/onboard-devices/streaming-gnmi). Polling continues as the fallback, so you lose resolution, not coverage.
-
-## Next
-
-- **[Send syslog](/send-data/syslog)** and **[traps](/send-data/traps)** to add the event planes.
-- **[Enable flow export](/send-data/flows)** for traffic analytics.
+- [Add an SNMP credential](/onboard-devices/snmp-profiles)
+- [Set up gNMI streaming telemetry](/onboard-devices/streaming-gnmi)
+- [Verify a device is being monitored](/onboard-devices/verify-monitoring)
+- [Explore metrics](/explore/metrics)

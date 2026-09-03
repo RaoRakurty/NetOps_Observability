@@ -1,89 +1,162 @@
 ---
-title: Work with active alerts
-sidebar_label: Work with active alerts
+title: Work the alert queue
+sidebar_label: Work the alert queue
+description: "Work the Active Alerts episode queue: acknowledge, assign, mute, snooze and annotate a repeated firing once."
+page_type: task
 sidebar_position: 3
-description: Read the Active Alerts queue, drill into an alert's context, pivot to device logs, and follow an alert into an incident.
 ---
 
-# Work with active alerts
+# Work the alert queue
 
-<kbd>Monitoring → Active Alerts</kbd> is the live queue of every monitor rule currently firing. It refreshes automatically (about every 10 seconds), so what you see is the network's state now — not a history. Triage here before alerts correlate into incidents.
+**Operations → Active Alerts** renders episodes, not a flat firing dump. Every
+firing of the same rule against the same resource folds into one row with an
+occurrence count, so a link that flaps 40 times is one line to triage rather
+than 40.
 
-## Reading the page
+Use this page to take ownership of a firing condition, pause its notifications
+while you work it, and leave a record for whoever picks it up next.
 
-### The header
+## Before you begin
 
-At the top, a **firing** counter and four KPIs summarize the queue:
+- `alerts:read` to see the queue. Every action on an episode needs
+  `alerts:write`. Check yours on **Administration → Identity & Access**, or
+  read `GET /api/auth/permissions`.
+- A rule that is firing. An empty queue is a state in its own right, and the
+  Result section below says how to read it.
 
-| KPI | Meaning |
-| --- | --- |
-| **Active alerts** | Total rules-instances firing right now |
-| **Critical** | Alerts at critical severity — work these first |
-| **Warning** | Alerts above threshold but not severe |
-| **Aging `>` 1h** | Alerts that have been firing for over an hour — sustained breaches nobody has cleared |
+## Steps
 
-A healthy quiet network shows **0 firing** and the empty state *"No active alerts — all monitored conditions are within threshold."*
+### Step 1: pick the filter
 
-### The alert queue
+1. Go to **Operations → Active Alerts**.
+2. Use the **Episode filter** control to choose **Open**, **Closed** or **All**.
+   **Open** is the default and covers active and recently-cleared episodes.
+   **Closed** shows episodes that stayed quiet past the close window.
 
-Each row is one firing alert. Because monitors fire **per matching series**, one rule breached on three devices produces three rows — the queue tells you *what is affected*, not just *which rules tripped*.
+The strip above the table counts **Active episodes**, **Critical**, **Flapping**
+and **Notifications paused**.
 
-| Column | Meaning |
-| --- | --- |
-| **Rule** | The monitor that fired (the name you gave it, e.g. `HighCPU-Leafs`) |
-| **Severity** | `info` / `warning` / `critical`, color-coded; the row's edge is tinted to match |
-| **Device** | The device this alert instance is about, when the signal carries one (blank for fleet-wide conditions) |
-| **Summary** | Human-readable description of the breach, including the measured value |
-| **Fired** | When this alert *first* started firing. This is preserved across evaluations — it's true time-in-breach |
+### Step 2: read the row
 
-Columns sort by clicking the header; the default sort is newest-fired first. Sort by **Severity** to work criticals top-down, or by **Fired** ascending to find the oldest unresolved breaches.
+The table columns are **Monitor**, **Severity**, **Resource**, **Occurrences**,
+**Status**, **First seen** and **Last seen**. Occurrences renders as `×N`.
 
-## Triage an alert, step by step
+Status carries the lifecycle state and any chips that apply to the row.
 
-1. Go to <kbd>Monitoring → Active Alerts</kbd>.
-2. Sort by **Severity** and start with critical rows.
-3. **Click a row** to open the alert's detail panel (the inspector). It shows:
-   - the severity badge and rule name,
-   - the **summary** and, when the rule defines one, a longer **description**,
-   - **Fired** / **Resolved** timestamps, the **Device**, the alert **ID**,
-   - all **labels** attached to the alert (device, interface, and anything the rule adds) — these tell you exactly which series breached.
-4. If the alert names a device, click **View logs**. This docks that device's recent syslog (last hour) in the drawer, right next to the alert — the fastest way to see *why* an interface went down or a session dropped.
-5. Decide the path:
-   - **Transient / already recovering** — leave it; the alert resolves itself on the next evaluation once the condition clears (within about 30 seconds).
-   - **Real problem** — go fix the underlying cause; use the labels to identify the exact device and interface.
-   - **Part of something bigger** — check <kbd>Monitoring → Incidents</kbd>. Firing alerts feed [correlation](/incidents/overview); if this alert lines up with log events, anomalies, or other alerts, you'll find an incident there with the combined evidence and root-cause analysis.
+| State | Meaning |
+|---|---|
+| Active | The condition is holding now. |
+| Cleared | The condition stopped, and the close window has not yet elapsed. |
+| Closed | The episode stayed quiet past the close window. A new firing opens a new episode. |
 
-## Alert lifecycle — what you can and can't do
+| Chip | Meaning |
+|---|---|
+| **Flapping** | The episode flipped state at least 6 times inside the flap window. |
+| **Notifications paused** | Someone muted the episode. |
+| **Snoozed until** *time* | Notifications are paused until that instant. |
+| **Ack ·** *user* | Acknowledged, and by whom. |
+| **→** *assignee* | Assigned, and to whom. |
 
-Correlix alerts are **condition-driven, not workflow-driven**:
+The close window defaults to 15 minutes and the flap detector to 6 flips in 15
+minutes. Both are set at deployment time with `ALERT_EPISODE_CLOSE_WINDOW`,
+`ALERT_EPISODE_FLAP_FLIPS` and `ALERT_EPISODE_FLAP_WINDOW`.
 
-- An alert exists exactly as long as its condition holds. When the condition clears, the alert **resolves automatically** on the next 30-second evaluation and leaves the queue. There is no manual acknowledge or close button — you can't dismiss an alert while the network condition is still true, and you never have to remember to close one that isn't.
-- **Notifications fire once**, when the alert first starts firing. A three-hour breach produces one notification, not 360. Delivery goes to the channels configured under [Incident Response → Notifications](/incident-response/notifications).
-- To **stop an alert you no longer want**, change or remove its monitor: <kbd>Monitoring → Monitor Rules</kbd> → **Delete** on the custom rule (its alerts resolve on the next evaluation), or recreate it with a higher threshold or longer hold-for via [Create Monitor](/monitoring/create-a-monitor).
+### Step 3: open the triage panel
 
-:::note
-Incident-level workflow — assignment, tickets, status — lives on the [incident](/incidents/overview), not the raw alert. Alerts are the raw signal; incidents are the unit of response.
-:::
+1. Select the row. The panel lists **Resource**, **First seen**, **Last seen**,
+   **Occurrences**, **Acknowledged** and **Assigned to**.
 
-## From an alert to the underlying metric
+### Step 4: take the episode
 
-The alert's **Summary** includes the measured value at fire time, and the labels name the device and interface. To see the metric's behavior around the breach:
+1. Select **Acknowledge** to record that a human has seen it. The control becomes
+   **Undo acknowledge**.
+2. Enter a username in the **Assignee** field and select **Assign**. Usernames
+   accept letters, digits, and `. _ @ + -`, up to 64 characters. With the field
+   empty, the control reads **Clear assignee**.
 
-1. Note the device (and interface, if present) from the alert detail.
-2. Open <kbd>Infrastructure → Device Monitoring</kbd> and locate the device to chart the signal over the alert's **Fired** window.
-3. For link-shaped alerts (errors, discards, utilization), <kbd>Monitoring → Link Quality</kbd> shows the same device ranked against the rest of the fleet — useful for judging whether it's an outlier or a fleet-wide pattern. See [Link Quality](/monitoring/link-quality).
+### Step 5: pause the noise, not the evidence
 
-## Verify it worked
+1. Select **Mute notifications** to stop delivery for this episode alone. The
+   control becomes **Resume notifications**.
+2. To pause for a fixed period instead, choose a duration from **Snooze duration**
+   and select **Snooze**. The presets are **30 minutes**, **2 hours**, **8 hours**
+   and **24 hours**. **2 hours** is preselected. While snoozed, **Clear snooze**
+   ends it early.
 
-After fixing the underlying cause:
+Mute and snooze suppress notifications only. The episode stays in the queue, the
+occurrence count keeps rising, and the alert stays visible to everyone else. To
+pause a whole scope for planned work instead of one episode, use a
+[maintenance window](/monitoring/maintenance-windows).
 
-1. Stay on <kbd>Monitoring → Active Alerts</kbd> — the page refreshes itself.
-2. Within one evaluation tick (up to 30 seconds) plus the rule's hold-for behavior, the alert disappears from the queue.
-3. The KPI counters drop accordingly; **0 firing** means every monitored condition is back within threshold.
+### Step 6: leave a record
 
-## Troubleshooting
+1. Type into **New note** and select **Add note**. Notes are capped at 2,000
+   characters, 50 per episode, and each one records who wrote it and when.
+2. Where the episode names a device, select **View logs** to open the log drawer
+   filtered to that host over the last 60 minutes.
 
-- **An alert won't clear even though the device looks fine.** The condition is still evaluating true — open the alert, read the summary's measured value, and check the metric directly. Remember resolution is tick-grained: allow up to 30 seconds after the condition actually clears.
-- **The same alert keeps re-firing.** The value is oscillating around the threshold. Each re-fire is a *new* alert (new Fired time, new notification). Raise the threshold or lengthen the monitor's **Must hold for** — see [Create a monitor](/monitoring/create-a-monitor).
-- **A row has no Device.** The rule's signal doesn't carry a device label (for example, a fleet-wide custom expression). The labels in the detail panel show whatever identity the series does have.
-- **No notification arrived for a firing alert.** Notifications dispatch only on the *first* fire, and only to configured channels — check [Notifications](/incident-response/notifications) setup and channel test delivery.
+## Result
+
+The row shows the state you set, and the notification channels stop delivering
+for the episodes you muted or snoozed.
+
+The queue itself is a live read. This capture is from a lab stack whose SNMP
+collectors could not reach either spine:
+
+```bash
+curl -s -H "Authorization: Bearer $TOKEN" \
+  http://localhost:8000/api/alerts
+```
+
+```json
+[
+  {
+    "id": "CollectorAllTargetsUnreachable|collector=snmpv2c",
+    "rule": "CollectorAllTargetsUnreachable",
+    "severity": "critical",
+    "summary": "Collector snmpv2c cannot reach any target",
+    "labels": { "collector": "snmpv2c", "severity": "critical" },
+    "fired_at": "2026-09-03T03:32:59.379985203Z"
+  },
+  {
+    "id": "NoSamplesIngested|collector=snmpmetrics",
+    "rule": "NoSamplesIngested",
+    "severity": "warning",
+    "summary": "Collector snmpmetrics produced 0 samples",
+    "labels": { "collector": "snmpmetrics", "severity": "warning" },
+    "fired_at": "2026-09-03T03:37:29.381596952Z"
+  }
+]
+```
+
+An empty response means no rule is firing right now. It does not mean every rule
+was evaluated: a rules file that failed to load leaves its rules blind, and the
+alert list cannot tell you that. [Honest states](/reference/honest-states) sets
+out how Correlix separates the two.
+
+## The episode API
+
+Every console action has a route. The list read needs `alerts:read`; all five
+actions need `alerts:write` and are audited.
+
+| Route | What it does |
+|---|---|
+| `GET /api/alerts/episodes` | List episodes. Accepts `status` (`open`, `active`, `cleared`, `closed`, `all`) and `limit`. |
+| `POST /api/alerts/episodes/{id}/ack` | Body `{"acknowledged": true}`. `false` undoes it. |
+| `POST /api/alerts/episodes/{id}/assign` | Body `{"assignee": "name"}`. An empty string clears the assignee. |
+| `POST /api/alerts/episodes/{id}/mute` | Body `{"muted": true}`. `false` resumes. |
+| `POST /api/alerts/episodes/{id}/snooze` | Body `{"until": "<RFC3339>"}`, capped at 7 days and required to be in the future. An empty string clears it. |
+| `POST /api/alerts/episodes/{id}/notes` | Body `{"text": "…"}`. |
+
+The list returns at most 200 episodes by default and 500 at the hard cap. When
+it truncates, the response sets `"truncated": true` and `total` still carries the
+true count, so a truncated page never reads as a smaller queue. Episodes are
+ordered by `last_seen`, newest first. An episode id belonging to another tenant
+returns `404`, the same answer as an id that does not exist.
+
+## Related
+
+- [Create a monitor](/monitoring/create-a-monitor)
+- [Schedule a maintenance window](/monitoring/maintenance-windows)
+- [Read an incident](/incidents/reading-an-incident)
+- [Search logs](/explore/logs)

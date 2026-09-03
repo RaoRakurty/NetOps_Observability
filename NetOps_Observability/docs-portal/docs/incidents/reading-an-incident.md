@@ -1,101 +1,154 @@
 ---
-title: Reading an incident
-sidebar_label: Reading an incident
+title: Read an incident
+sidebar_label: Read an incident
+description: "Read one RCA case end to end: the verdict header, the evidence summary, the blast radius, the time impact card and the ticket."
+page_type: task
 sidebar_position: 2
-description: A step-by-step walk through the RCA detail view — verdict, evidence matrix, causal topology, evidence timeline, ticket card, and time metrics.
 ---
 
-# Reading an incident
+# Read an incident
 
-Opening an RCA candidate renders the **root cause analysis workspace** — a single-column report that reads top-to-bottom: what happened, how sure we are, what the evidence is, and what to do next. This page walks it section by section.
+An RCA case answers six questions above the fold: what happened, how certain
+Correlix is, what is affected, when it started, which evidence supports it, and
+which case this is. Read them in that order and the rest of the workspace is
+supporting detail.
 
-## Open the detail view
+Use this page the first time you open a case, and any time a verdict does not
+match what you expected.
 
-1. Go to <kbd>Monitoring → Correlations</kbd>.
-2. Click any row in the **Candidate queue**. The detail opens in the side inspector, titled **Root cause analysis**.
-3. Use the tabs at the top right to switch between **Operator View** (default, plain NOC language) and **Debug View** (raw engine data). **⤓ Export PDF** generates a print-ready RCA report of exactly what's on screen.
+## Before you begin
 
-## Step 1 — Read the headline and status pills
+- `alerts:read`, and a case to open. The RCA candidate list is at
+  **Investigate → RCA**.
+- The Problem ID if you were handed one. It has the form `P-XXXXXX` and is the
+  first column of the candidate list.
 
-The case header states *what was observed* — for example "Routing adjacency change" or "Middle-mile latency increase". The title is factual; the certainty is carried by the pills next to it:
+## Steps
 
-- **Verdict pill** — `✓ CONFIRMED`, `NOT CONFIRMED`, `✕ RULED OUT` (the leading cause was contradicted by evidence), or `● RECOVERED` (the incident has cleared).
-- **Confidence** — High / Medium / Low, driven by how many independent signals attached.
-- **RCA state** — the investigation lifecycle: *Under review* (gathering evidence), *Open incident* (confirmed and active), *Recovering* (clear signals arriving), *Recovered*.
+### Step 1: open the case
 
-Below the pills, the **Decision** callout gives the recommended NOC action in one line — one of:
+1. Go to **Investigate → RCA**.
+2. Select a row. The Problem ID opens the same case from the Command Center
+   queue and from a notification.
 
-- **OPEN INCIDENT** — customer impact is confirmed by independent evidence; assign ownership.
-- **INVESTIGATE** — evidence is aligned but not sufficient to confirm; validate the missing signals first.
-- **MONITOR** — the triggering signal has cleared with no impact evidence; auto-close if it doesn't recur.
-- **HOLD** — suspected only; ticketing stays on hold until independent evidence confirms impact.
+### Step 2: read the header pills
 
-The header also shows **Observed at** (UTC) and the **RCA ID** — the incident id you can quote in tickets and hand-offs.
+Four pills sit under the title, and they are four independent dimensions. The
+verdict pill carries the analysis. The incident pill carries the lifecycle.
 
-## Step 2 — Check the summary sidebar
+| Pill | Values |
+|---|---|
+| Verdict | **CONFIRMED**, **RECOVERED**, **RULED OUT**, or **NOT CONFIRMED**. Each carries a glyph in the console. |
+| Confidence | The confidence label in words. |
+| Incident | **Active**, **Recovering** or **Recovered**. |
+| Analysis | **Confirmed**, **Suspected**, **Inconclusive** or **Detected**. |
 
-The right-hand sidebar answers triage at a glance:
+"Recovered" is an incident state and never an analysis state. A case can be
+recovered and still not have a confirmed cause, and the header says both.
 
-- **Root cause object** — the device (and peer, for a routing adjacency) the analysis localizes to.
-- **Likely owner** — who should act: NetOps, ISP / carrier, cloud provider, app team, SD-WAN vendor, colo provider.
-- **Signals** — how many telemetry signals attached as evidence.
-- **Suggested ticket** — *Open P2* when confirmed, *Hold* otherwise.
+Below the pills, the line **Detected at** carries the window start in UTC, and
+**RCA ID** carries the case identity.
 
-## Step 3 — Read the executive summary and the "why" lines
+### Step 3: read the aside
 
-The **Executive RCA summary** panel narrates the case in one paragraph, followed by labeled reasoning lines:
+The right-hand column answers "what is affected" without you scrolling.
 
-- **Why suspected** — what localized the issue.
-- **Why confirmed** / **Why not confirmed** — whether independent evidence aligned, or what single observation the case still rests on.
-- **To confirm** — exactly which additional evidence would raise the verdict (peer-side routing state, traffic-flow loss, downstream impact, an active check from an independent vantage).
-- **Ruled out** — competing causes the evidence does not support, when discriminating evidence exists.
+| Row | What it says |
+|---|---|
+| **Root cause** | The object, when the verdict is confirmed. Otherwise `Not confirmed — possibly because of X`, or `Not identified — no cause hypothesis has supporting evidence yet`. |
+| **Evidence state** | On an unconfirmed case, what the evidence currently amounts to. |
+| **Evidence localizes to** | The device or adjacency the evidence points at, even when the cause is not confirmed. |
+| **Owner** or **Possible owner** | The party that owns the seam. Unconfirmed cases append `unconfirmed`, and a case with no attribution reads `Not yet narrowed — NOC triage`. |
+| **Affected** | The blast radius, or **Not yet determined**. |
+| **Evidence** | Distinct symptoms, independent sources and duration. |
+| **Suggested ticket** | `Open P2`, or `Hold — policy threshold not met`. |
+| **Observations** | The raw observation total, de-emphasised on purpose. |
 
-Next to it, **Impact & blast radius** lists the affected device, peer, scope type, and whether service/application and path impact are confirmed. An unconfirmed case honestly reads "No confirmed customer impact" — the view never promotes a claim the engine didn't make.
+**Affected** is never `0 devices`. Unknown is not zero, and the panel refuses to
+say "no impact" when no impact telemetry existed.
 
-## Step 4 — Read the Time Impact card
+The **Observations** row is the count of raw rows collected. Repetition shows
+persistence, not additional evidence, which is why the evidence row above it
+counts symptoms and independent sources instead.
 
-The **Time Impact** card decomposes this incident's clock into two zones, each row showing elapsed time from the first impact signal:
+### Step 4: read the time impact card {#step-4--read-the-time-impact-card}
 
-- **RCA evidence timeline** (measured by Correlix): *Detected → Correlated → Root / seam isolated ★ → Owner assigned → Evidence bundle ready*. The starred isolation row is the hero metric (MTTI) and carries the isolated boundary and owner inline.
-- **Workflow & recovery timeline** (requires ITSM/recovery evidence): *Ticket created → Acknowledged → Mitigated → Service recovered → Ticket closed*.
+The Time Impact card breaks the incident clock into two zones.
 
-A banner names the **current bottleneck** (a real, measured delay) or a **current measurement gap** — workflow rows read "Not measured" when no ITSM or operator-workflow evidence is connected: a visibility gap, not a process failure. Derived timestamps are tagged **Inferred**.
+The RCA evidence zone is what Correlix proved or inferred on its own:
 
-## Step 5 — Check the External ticket card
+| Phase | What it marks |
+|---|---|
+| **Detected** | Correlix first ingested the onset. |
+| **Correlated** | Related observations were grouped into one case. |
+| **Root / seam isolated** | The likely root domain or seam was isolated with evidence. This is the phase the card treats as the hero. |
+| **Owner assigned** | The responsible owner domain was assigned. |
+| **Evidence bundle ready** | The evidence package is ready for escalation. |
 
-The **External ticket** card shows this incident's ITSM state: a status pill (*No ticket*, *Creation queued*, *Open*, *Updated*, *Resolved*, *Failed*), the ticket number as a deep link, the last sync time and verdict at sync, and a **History** audit trail of every action. Operators with write permission get a **Create ticket** or **Sync ticket** button. See [Working incidents](/incidents/working-incidents#from-incident-to-ticket).
+The workflow and recovery zone needs evidence Correlix does not produce alone:
 
-## Step 6 — Read the causal topology
+| Phase | What it marks |
+|---|---|
+| **Ticket created** | An ITSM or provider ticket exists. |
+| **Acknowledged** | The owner acknowledged it. |
+| **Mitigated** | A mitigation action was recorded. |
+| **Service recovered** | Service recovery was observed or inferred. |
+| **Ticket closed** | The workflow closed. |
 
-**Network path & causal topology** draws the affected chain: the root-cause device (tagged **ROOT CAUSE** when confirmed, **SUSPECTED** otherwise), its routing peer, and each affected path segment with edge labels for the failing measurement. If there isn't enough routing or path evidence to place the issue, the panel says so plainly ("Path location not placed yet") rather than guessing.
+Each phase reads as observed, inferred, completed, pending, current or **Not
+measured**. A phase with no timestamp is reported incomplete, naming the event
+that is missing, rather than as a duration of zero.
 
-When the incident carries cloud or application evidence, additional sections appear here: **Cloud application & resources** (affected cloud resources and configuration changes, and whether an independent network observer corroborates them) and **Application impact** (which applications are affected, with source and confidence band).
+A missing workflow is a measurement gap, not a bottleneck. When no ITSM workflow
+is connected, the downstream phases read **Not measured**, never "workflow
+required", because Correlix finished the RCA and the failure is not the
+operator's.
 
-## Step 7 — Walk the evidence matrix and confidence ladder
+[Incident timing and recovery](/incident-response/rca-time-intelligence) explains
+how each stamp is derived and what confidence it carries.
 
-The **Evidence matrix** shows one card per evidence plane — **Device health**, **Routing / link**, **Traffic flow**, **Active checks** — each pilled as *Main evidence*, *Used*, or *Not observed*. Absent planes are shown deliberately: they tell you exactly what's missing to confirm.
+### Step 5: read the evidence summary
 
-The **Confidence ladder** shows how far the verdict climbed: *Observed → Suspected → Probable → Confirmed*. Locked steps (🔒) name what's still required to advance.
+Under the header, one row per distinct symptom shows a time-density bar across
+the case window, the evidence class that saw it, the parser fidelity behind it,
+and the time it was first seen.
 
-## Step 8 — Walk the evidence timeline
+The verdict reason sits above those rows, in words. For example, a case with a
+single evidence class reads that only that source saw it and a second
+independent source is needed to confirm. A ruled-out case reads that the leading
+cause was ruled out by the evidence.
 
-The **Evidence timeline** plots every signal on one time axis, one lane per signal group. Empty lanes are kept visible on purpose — an empty lane is information.
+Density is rendered as ink rather than as a number, so a symptom that repeated
+200 times does not read as 200 pieces of evidence.
 
-1. Read left to right: what fired first, what followed, which lanes agree.
-2. **Click any marker** for its detail: the signal, the device, and whether it was *counted as evidence* or merely *seen in the window but not linked*.
+### Step 6: read the panels below
 
-## Step 9 — Hypotheses, next actions, and the assistant
+| Panel | What it holds |
+|---|---|
+| **Executive RCA summary** | The case in plain language. |
+| **Impact & blast radius** | Affected device, peer, scope type, service and path impact. Unconfirmed rows read `Not confirmed` rather than a number. |
+| **Hypothesis ranking** | Each candidate cause with its confidence label and the reason for it. |
+| **Ticket & escalation decision** | Whether the case meets the ticketing policy, and why not when it does not. |
+| **Next actions** | The specific checks to run next. |
+| **Evidence accounting** | Which observations were used, and why. |
+| **Promotion logic** | Whether this case qualifies as a promoted real outage. |
+| **Correlation data model** | The raw object behind the case. |
 
-- **Hypothesis ranking** lists the competing explanations with a confidence pill and the reason each ranks where it does.
-- **Ticket & escalation decision** restates the ticket recommendation with its rationale.
-- **Next actions** is a numbered playbook from the matched failure signature — ESCALATE / INVESTIGATE / CHECK / MONITOR steps in priority order.
-- **Ask RCA Assistant** answers questions grounded *only* in this RCA's evidence (e.g. "Why is this not confirmed?"). It requires Iris AI to be connected; otherwise it shows the suggested reasoning inline.
+## Result
 
-## Debug View
+You can state, without opening anything else, what happened, how certain
+Correlix is, who owns the seam, what is affected, and which clock phase the
+incident is currently sitting in.
 
-Switch to **Debug View** for the engine's raw accounting: every signal with its used/ignored status, weight, and reason; the promotion thresholds; the full correlation data model; and a **Replay object** button that deterministically re-runs the analysis and reports whether it reproduces bit-perfect. Use it to defend a verdict, not for day-to-day triage.
+If the case is confirmed and customer-impacting, continue to
+[open a ticket from it](/incidents/working-incidents#from-incident-to-ticket).
+If it is not confirmed, the aside already names what is missing, and the
+[symptom workspace](/investigate/investigate-a-symptom) is where you go looking
+for the source that would confirm it.
 
-## Troubleshooting
+## Related
 
-- **The detail says "Loading…" indefinitely** — the case can't render if the correlation service is unreachable; check the platform's own health under the Stack pages.
-- **A deep link says "RCA not found"** — the linked incident resolved and aged out, or your role doesn't have access to it. The page falls back to the current candidate list.
+- [Work the incident queue](/incidents/working-incidents)
+- [How RCA works](/investigate/rca-explained)
+- [Rate an RCA case](/investigate/rate-an-rca-case)
+- [Incident timing and recovery](/incident-response/rca-time-intelligence)

@@ -1,74 +1,167 @@
 ---
-title: Where to start
-sidebar_label: Where to start
+title: Start a shift
+sidebar_label: Start a shift
+description: Read the Command Center, work the Action Queue in priority order, and follow the decision path for when the queue is empty and a user still reports a problem.
+page_type: task
 sidebar_position: 2
-description: The operator's on-shift entry points — start at the Command Center, work the Action Queue, and know when to drop to Active Alerts, Events, or Log Search instead.
 ---
 
-# Where to start
+# Start a shift
 
-You've just sat down for a shift, or something is reportedly wrong. This page is the routine: one primary entry point, a short ranked queue, and a plain decision path for the cases where the queue doesn't have the answer yet.
+This is the routine for the first ten minutes of a shift, and for the moment
+someone reports that something is wrong. It gives you one entry point, a ranked
+queue, and a decision path for the cases the queue does not yet cover.
 
-## Step 1 — Open the Command Center
+## Before you begin
 
-1. Go to <kbd>Dashboards → Home</kbd>. This is the **Command Center**, and its header answers the first question of any shift: *"What's burning, who owns it, and what still needs human action."*
-2. Read the chip row at the top: **NOC pressure** (Nominal / Watch / Elevated / Severe), the **critical** count, the **owner gap**, the **ticket gap**, and **RCA blocked**. The page is live and refreshes every 30 seconds.
-3. Scan the KPI tiles: **Correlated incidents**, **Critical**, **Untriaged**, **Suspected RCA**, **Confirmed RCA**, **Owner missing**, **RCA blocked**, **Ticketed**. Each tile is a button — clicking it filters the queue below to exactly the rows it counts.
-4. Read the one-line **decision summary** under the tiles. It states, in words, what to work first (for example: "Work confirmed-RCA criticals with missing owners first.").
+- **An account with access to the operations surfaces.** The Action Queue,
+  Active Alerts and Incidents are all tenant-scoped to your account.
+- **Devices already reporting.** If the inventory is empty, start with
+  [Onboard your first device](/getting-started/quickstart).
+- **The handover from the previous shift**, if there is one. In-flight incidents
+  live on **Operations → Incidents** with their timelines.
 
-You should now see the **Action Queue**: one row per *correlated incident* — grouped problems, not raw alerts — sorted by severity, then age.
+## Steps
 
-## Step 2 — Work the Action Queue
+### Step 1 — Read the Command Center header
 
-1. Take the top row. Read it left to right: severity dot, **Problem ID** (a stable handle like `P-5564D1`), the incident title, **RCA state**, **Impact** (devices and sites), **Fault domain** (LAN, SD-WAN, Data Center, ISP / Carrier, Cloud Provider, Application, Security), **Evidence** (Complete / Partial / Single-stream), **Owner**, **Age**, **Ticket**, and the recommended **Next action**.
-2. Click the row to expand it. You should now see three panes: **Impacted entities** (each device links to its live status), **Evidence** (what correlated, with a link to the full evidence ledger), and **Recommended next action**.
-3. Act on the buttons: **Open RCA** for the full case, **View topology** to see it on the map, **Assign owner** if the owner is missing, **Create ticket** if one is needed.
-4. Use the filter bar (RCA / Severity / Fault domain / Evidence / Owner) or the **Needs action** chip to narrow a long queue to rows missing an owner, missing a ticket, or blocked on evidence.
+1. Go to **Overview → Home**. The page is titled **Command Center** and refreshes
+   every 30 seconds.
+2. Read the chip row: **NOC pressure** (Nominal, Watch, Elevated or Severe), the
+   critical count, the owner gap, the ticket gap and the RCA blocked count.
+3. Read the KPI tiles: **Correlated incidents**, **Critical**, **Untriaged**,
+   **Suspected RCA**, **Confirmed RCA**, **Owner missing**, **RCA blocked** and
+   **Ticketed**. Each tile is a button that filters the queue below to exactly
+   the rows it counts.
+4. Read the decision line under the tiles. It states in words what to work
+   first, for example *Work confirmed-RCA criticals with missing owners first*.
 
-Priority order, when the decision line doesn't already say it:
+The pressure chip is derived from counts, not from a judgement: three or more
+criticals reads Severe, one or two reads Elevated, any suspected case with no
+critical reads Watch, and nothing outstanding reads Nominal.
 
-1. **Confirmed** RCA + critical severity + **Owner: Missing** — assign and open the RCA.
-2. **Confirmed** + **Ticket needed** — file the ticket (or let the policy do it; check the **Ticketing gap** panel at the bottom).
-3. **Suspected** — open the RCA and read what evidence is missing. **Hold on ticketing**: suspected means customer impact is *not confirmed*, and the expand pane says so explicitly.
-4. **Blocked / Correlated / RCA running** — still gathering; check back, or investigate manually if users are already complaining (see Step 4).
+### Step 2 — Work the Action Queue
 
-:::note
-The Command Center intentionally hides what hasn't correlated. An empty Action Queue means *no grouped incidents need action* — it does not mean the network is silent. That's what the next steps are for.
-:::
+The queue holds correlated incidents, not raw alerts, sorted by severity and
+then by age.
 
-## Step 3 — When to drop to the other queues
+1. Take the top row and read it across: **Sev**, **Problem ID** (a stable handle
+   such as `P-5564D1`), **Incident / correlation group**, **RCA state**,
+   **Impact**, **Fault domain**, **Evidence**, **Owner**, **Started**, **Age**,
+   **Ticket** and **Next action**.
+2. Select the row to expand it. Three panes open: **Impacted entities**, where
+   each device links to its live status; **Evidence**, which states how many
+   observations correlated across how many nodes and links to the full ledger; and
+   **Recommended next action**.
+3. Act from the buttons on the expanded row: **Open RCA**, **View topology**,
+   **Assign owner** when the owner is missing, and **Open ticket** when one is
+   needed.
+4. Narrow a long queue with the filter bar (RCA, Severity, Fault domain,
+   Evidence, Owner) or the **Needs action** chip, which selects rows with a
+   missing owner, an unticketed confirmed incident, or an RCA blocked on
+   evidence.
 
-Sometimes you don't want the correlated view. Use these entry points instead when:
+Work in this order when the decision line does not already say otherwise:
 
-- **A specific threshold just tripped and you want the live state** → <kbd>Monitoring → Active Alerts</kbd>. Every monitor rule currently firing, refreshed continuously — "triage before they correlate into incidents." Watch the **Aging > 1h** tile: an alert firing for over an hour without an incident deserves a look. Row click gives context and a **View logs** pivot. See [Work with active alerts](/monitoring/manage-alerts).
-- **You want the raw, unjudged timeline** → <kbd>Monitoring → Events</kbd>. Syslog, traps, and alerts merged on one time axis. Best when you know roughly *when* something happened and want to see everything around that moment.
-- **You suspect something the platform hasn't flagged** → <kbd>Logs → Log Search</kbd>. Full query access to everything collected. This is your free-form investigation surface; the whole technique is covered in [Reading logs](/noc-guide/reading-logs).
-- **You want to see abnormality before it groups** → <kbd>Monitoring → Anomalies</kbd>. Individual baseline deviations, newest first, each with severity and score.
+1. **RCA state Confirmed, severity critical, Owner Missing.** Assign the owner
+   and open the RCA.
+2. **Confirmed with Ticket needed.** Open the ticket, or check the **Ticketing
+   gap** panel to confirm the policy has done it.
+3. **Suspected.** Open the RCA and read what evidence is absent. Hold on
+   ticketing: the expanded row states that customer impact is not confirmed and
+   that independent evidence is needed first.
+4. **Blocked, Correlated or RCA running.** Still gathering. Come back to it, or
+   investigate by hand if users are already reporting an effect.
 
-## Step 4 — Triage decision path
+Four columns carry closed vocabularies, and knowing them makes the queue
+scannable.
 
-Follow this numbered path top to bottom; stop at the first step that matches.
+| Column | Values |
+|---|---|
+| RCA state | New, Correlated, RCA running, Suspected, Confirmed, Blocked, Resolved |
+| Evidence | Single-stream, Partial, Complete |
+| Fault domain | LAN, SD-WAN, Data Center, ISP / Carrier, Cloud Provider, Application, Security, Unknown |
+| Owner | Missing, Recommended, Assigned, Escalated |
 
-1. **The Action Queue has rows.** Work them per Step 2. Done.
-2. **The queue is empty but Active Alerts is firing.** Open <kbd>Monitoring → Active Alerts</kbd>, sort by **Fired**, click the newest row, and use **View logs** to see the device's own syslog for the last hour. The alert hasn't correlated (yet) — you're seeing it pre-grouping.
-3. **The queue is empty but users report an issue** → start in Log Search:
-   1. Open <kbd>Logs → Log Search</kbd>.
-   2. Set the signal dropdown to **Syslog (devices)** and the range to **Last 1h**.
-   3. Search for the affected device: `host:"edge-router-01"` (use your device's name), or for the affected service's addresses: `src_addr:10.20.30.5`.
-   4. Look for errors and state changes around the reported time — bursts, link flaps, protocol adjacency messages ([Reading logs](/noc-guide/reading-logs) shows the patterns).
-   5. Found a suspect device? Check <kbd>Monitoring → Anomalies</kbd> filtered to it, then <kbd>Infrastructure → Topology Canvas</kbd> to see its neighborhood.
-4. **Nothing anywhere, but the report persists.** Verify the device is actually being monitored ([verify monitoring](/onboard-devices/verify-monitoring)) — silence from a device that should be talking is itself a finding. Also check <kbd>Monitoring → Events</kbd> with a wider time range; the issue may predate your window.
-5. **You inherited an in-flight incident from the previous shift.** Go to <kbd>Monitoring → Incidents</kbd>, filter status to `investigating`, click the row, and read the **Timeline** — every acknowledgement, note, status change, and ticket sync is there in order.
+Evidence is the fastest read on how much a verdict is worth.
+**Single-stream** means one source only, **Partial** means corroborated with the
+gaps named, and **Complete** means every expected class is present. Fault domain
+decides who the work goes to: **ISP / Carrier** and **Cloud Provider** are
+escalations outward, while **LAN** and **Data Center** are worked internally.
+**Unknown** means the seam has not been narrowed, and it is a prompt to open the
+case rather than to assign it.
 
-## Step 5 — Close the loop before you move on
+### Step 3 — Read the queue's silence correctly
 
-For anything you touched:
+An empty Action Queue means no correlated incident needs action. It does not
+mean the network is quiet, and the page says so: *The queue groups raw alerts
+into incidents, none have correlated.* The surfaces below hold what has not
+grouped yet.
 
-1. Track its lifecycle in <kbd>Monitoring → Incidents</kbd> — **Acknowledge** what you've seen, **Investigate** what you're working, add a note so the next operator inherits your context.
-2. Check the **Ticketing gap** panel back on the Command Center: **Ticket needed** should trend to zero for confirmed incidents, and **Sync failed** should be empty (if it isn't, the ITSM push errored — see [Integrations](/incident-response/integrations)).
+| Question | Where |
+|---|---|
+| Which monitor rules are firing right now? | **Operations → Active Alerts** |
+| What did the network say, in order, unjudged? | **Explore → Events** |
+| What deviated from its own baseline? | **Investigate → Findings** |
+| What exactly did one device log? | **Explore → Logs** |
 
-:::tip
-Make the Command Center your muscle memory, not your prison. The queue ranks what Correlix could *prove*; the drop-down paths (alerts, events, logs) exist precisely for the minutes before proof arrives.
-:::
+Each of these answers a narrower question than the queue, and none of them
+carries a verdict. **Explore → Events** in particular merges syslog, SNMP traps
+and firing alerts onto one timeline with Time, Type, Severity, Source and Event
+columns, and judges nothing. Use it when you know roughly when something
+happened and want everything around that moment in order.
 
-Next: learn to read the raw material itself in [Reading logs](/noc-guide/reading-logs), or follow one incident end to end in [From signal to ticket](/noc-guide/from-signal-to-ticket).
+### Step 4 — Follow the decision path
+
+Stop at the first case that matches.
+
+1. **The Action Queue has rows.** Work them as in Step 2.
+2. **The queue is empty and alerts are firing.** Open **Operations → Active
+   Alerts**. Repeated firings collapse into episodes, so a condition that has
+   fired forty times is one row to triage once. Read the **Active episodes**,
+   **Critical**, **Flapping** and **Notifications paused** counts. A **Flapping**
+   chip on a row means the condition is changing state rapidly, which is usually
+   worse than a clean failure, because everything downstream keeps
+   reconverging. **Notifications paused** counts episodes someone muted or
+   snoozed, so read it before concluding that nobody has been told. Open the
+   newest episode, and use its **View logs** pivot to see what the device itself
+   said. Acknowledge, assign, mute, snooze and note are all available on the
+   episode. If the noise comes from planned work, the right fix is a window on
+   **Operations → Maintenance Windows** rather than a mute.
+3. **The queue is empty and a user reports a problem.** Go to **Explore →
+   Logs**, set the signal selector to **Syslog (devices)** and the range to
+   **Last 1h**, and search for the device by name. The technique is in
+   [Read device logs during an incident](/noc-guide/reading-logs).
+4. **Nothing anywhere, and the report persists.** Confirm the device is actually
+   being read before concluding it is healthy. Silence from a device that
+   normally reports is a finding, not an all-clear. See
+   [Verify monitoring](/onboard-devices/verify-monitoring).
+5. **You inherited an in-flight incident.** Go to **Operations → Incidents**,
+   filter the status to investigating, open the row, and read the timeline.
+   Every acknowledgement, note, status change and ticket sync is recorded there
+   in order.
+
+### Step 5 — Close the loop before you hand over
+
+1. On **Operations → Incidents**, acknowledge what you have seen, mark what you
+   are working as investigating, and add a note so the next operator inherits
+   your context.
+2. Back on the Command Center, read the **Ticketing gap** panel. **Ticket
+   needed** should trend towards zero for confirmed incidents, and **Sync
+   failed** should be empty. A non-empty **Sync failed** means the ITSM push
+   errored; see [Integrations](/incident-response/integrations).
+
+## Result
+
+You have worked every row the queue ranked, know why the rows you left are still
+open, and have left a written trail on each incident you touched. Anything the
+platform could not prove is either being investigated by hand or recorded as an
+open question, not silently closed.
+
+## Related
+
+- [Read device logs during an incident](/noc-guide/reading-logs)
+- [From observation to ticket](/noc-guide/from-signal-to-ticket)
+- [Work with active alerts](/monitoring/manage-alerts)
+- [Work incidents](/incidents/working-incidents)
+- [Read an RCA case](/investigate/read-an-rca-case)

@@ -1,5 +1,0 @@
-{
-  "label": "NOC Operator Guide",
-  "position": 2.5,
-  "link": { "type": "generated-index", "description": "How a NOC operator works Correlix day to day: where to start, how to read logs, and how every tab builds the correlation → RCA → ticketing story." }
-}

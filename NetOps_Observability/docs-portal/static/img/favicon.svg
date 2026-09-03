@@ -1,1 +1,36 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="28" height="28" viewBox="0 0 28 28"><circle cx="14" cy="14" r="12" fill="none" stroke="#5c99f9" stroke-width="2"/><circle cx="14" cy="14" r="4" fill="#5c99f9"/><path d="M14 2v6M14 20v6M2 14h6M20 14h6" stroke="#5c99f9" stroke-width="2"/></svg>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" fill="none">
+  <!-- Correlix tab mark — the interim pulse glyph (the eye artwork is parked
+       while the logo program lands a final mark). Obsidian glass tile with a
+       luminous indigo→cyan correlation pulse; matches the rail's brand glyph
+       (Icon.tsx `logo`: M2 12h4l3 8 4-16 3 8h6, scaled 16×, origin 64,64). -->
+  <defs>
+    <radialGradient id="cxGround" cx="0.5" cy="0.32" r="0.85">
+      <stop offset="0%" stop-color="#141327"/>
+      <stop offset="55%" stop-color="#0b1026"/>
+      <stop offset="100%" stop-color="#05060f"/>
+    </radialGradient>
+    <!-- objectBoundingBox so the ramp tracks the pulse's own box at any scale
+         (the pulse group is drawn inside a scaled <g>). -->
+    <linearGradient id="cxPulse" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#818cf8"/>
+      <stop offset="55%" stop-color="#22d3ee"/>
+      <stop offset="100%" stop-color="#34d399"/>
+    </linearGradient>
+    <filter id="cxGlow" x="-40%" y="-40%" width="180%" height="180%">
+      <!-- glyph-space units (the <g> scales 16×): 0.9 ≈ 14px on the tile -->
+      <feGaussianBlur stdDeviation="0.9"/>
+    </filter>
+  </defs>
+
+  <rect x="8" y="8" width="496" height="496" rx="112" fill="url(#cxGround)"/>
+  <!-- glass edge: a lit hairline around the tile -->
+  <rect x="8" y="8" width="496" height="496" rx="112" stroke="url(#cxPulse)" stroke-opacity="0.35" stroke-width="6"/>
+
+  <!-- pulse — soft luminous underlay, then the crisp stroke -->
+  <g transform="translate(64 64) scale(16)">
+    <path d="M2 12h4l3 8 4-16 3 8h6" stroke="url(#cxPulse)" stroke-width="2.4"
+          stroke-linecap="round" stroke-linejoin="round" opacity="0.85" filter="url(#cxGlow)"/>
+    <path d="M2 12h4l3 8 4-16 3 8h6" stroke="url(#cxPulse)" stroke-width="2.1"
+          stroke-linecap="round" stroke-linejoin="round"/>
+  </g>
+</svg>

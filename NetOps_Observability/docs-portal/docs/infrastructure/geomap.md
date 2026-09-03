@@ -1,78 +1,83 @@
 ---
-title: Device Geomap
-sidebar_label: Device Geomap
-sidebar_position: 4
-description: See sites and devices on a world map, declare and import sites, and set device locations.
+title: Place devices on the map
+description: Create sites with coordinates, place devices on them, set a one-off location, and read the per-site health rollup.
+page_type: task
+sidebar_position: 5
 ---
 
-# Device Geomap
+# Place devices on the map
 
-The **Device Geomap** (<kbd>Infrastructure → Device Geomap</kbd>) places your fleet on a world map so distributed networks are easy to reason about geographically. Placement is **intent data**: sites you declare with coordinates, and devices you assign to those sites. GeoIP is never used — private management addresses don't geolocate, so the map only ever shows what you've declared.
+**Infrastructure → Sites** plots the fleet on a world map. Placement is declared intent: sites you create with coordinates, and devices you assign to them. GeoIP is never used, because a private management address does not geolocate. The map therefore shows exactly what you declared and nothing it guessed.
 
-The page has three views, switched by the selector at the top: **Map**, **Sites**, and **Set locations**.
+## Before you begin
 
-## Read the map
+- `infrastructure:write` in your tenant to create sites or place devices. Reading the map needs `infrastructure:read`.
+- Decimal WGS 84 coordinates for each location, for example `32.78, -96.80`. A site without both values is registered but is not drawn.
+- Devices onboarded, so there is something to place. See [Work with the device inventory](/infrastructure/devices).
 
-1. Open <kbd>Infrastructure → Device Geomap</kbd> (the **Map** view is the default).
-2. Check the stat strip: **Sites**, **Sites on map** (those with coordinates), **Devices placed**, **Unplaced devices**, **Up**, **Down**. A non-zero *Unplaced devices* count is your to-do list — unplaced devices appear in no site rollup.
-3. Read the bubbles. Each site with coordinates is one bubble:
-   - **Size** — device count at the site.
-   - **Color** — the health rollup: green when all devices are up, amber when some are down, red when *all* are down, grey when the site has no devices.
-4. **Hover** a bubble for the rollup tooltip: site name, device count, up/down split. Drag to pan and scroll to zoom.
-5. Below the map, the **Sites table** lists every site with Status, Coordinates, Devices, and Health (`N up · N down`) — including sites not yet on the map (coordinates "not set").
+The page has three tabs. The on-page control labels them **Map**, **Sites** and **Set locations**; the navigation flyout lists the same three as Map, Manage Sites and Set Locations, and each is deep-linkable.
 
-### Drill from a site to its devices
+## Steps
 
-The map rolls health up; the device-level detail lives in the inventory:
+### Step 1 - Declare sites {#declare-sites}
 
-1. Note the site name from the bubble or the Sites table.
-2. Open <kbd>Infrastructure → Devices</kbd> and sort or filter the **Site** column by that name (the filter box matches site names too).
-3. Click a device row to open its workspace — see [Devices](/infrastructure/devices#open-the-device-workspace).
+1. Go to **Infrastructure → Sites** and select the **Sites** tab.
+2. In the entry row at the bottom of the table, enter a **Site** name. This is the only required field.
+3. Optionally set a **Status**, an **Owner**, and **Latitude** and **Longitude** as decimal WGS 84. Enter both coordinates or neither.
+4. Select **Add site**. A URL-safe slug is generated from the name and shown read-only.
+5. Use **Edit** and **Delete** on any row to maintain it. Deleting a site returns its devices to unplaced rather than deleting them.
 
-## Declare sites
+The slug, not the display name, is the site's stable handle. Device-to-site assignments, file imports and the `site` device label all reference it.
 
-Sites are created in the **Sites** view — the platform's own source-of-truth site registry (badge: *Source of truth*).
+Coordinates belong to the site, so correcting a wrong latitude moves every device assigned to it at once.
 
-1. Switch to **Sites**.
-2. In the entry row at the bottom of the table, type a **Site name** (required — e.g. `Dallas Branch`), and optionally a **Status** (e.g. `active`), an **Owner** (e.g. `NetEng NOC`), and **Latitude** / **Longitude** as decimal WGS 84 (e.g. `32.78`, `-96.80`).
-3. Click **Add site**. A URL-safe **slug** is generated automatically — devices can also be folded into a site by carrying a `site` label matching this slug.
-4. Use **Edit** / **Delete** on any row to maintain it. Coordinates may be left blank to register a site that isn't on the map yet; it still works for rollups. Deleting a site returns its devices to *unplaced*.
+### Step 2 - Place devices on a site
 
-Then assign devices to your sites from <kbd>Infrastructure → Devices</kbd> (the **Site** column) — see [Assign a device to a site](/infrastructure/devices#assign-a-device-to-a-site). Devices inherit their site's coordinates and fold into its bubble.
+1. Go to **Infrastructure → Devices**.
+2. Open the picker in the **Site** column and choose the site. The assignment saves immediately and the device inherits the site's coordinates.
+3. To unassign, choose `— Unassigned —` in the same picker.
 
-:::note
-If an external source-of-truth system is the active authority, the Sites view is read-only here and site data is managed in that system — see [Automation & Source of Truth](/automation/overview).
-:::
+Two alternatives to the picker: give the device a `site` label whose value matches the slug, or import a device-to-site placement file, described in [Import inventory from a source of truth](/automation/import-and-sync).
 
-### Import sites in bulk
+### Step 3 - Set a one-off location
 
-To seed sites (or device→site placements) from an existing system:
+For a device that belongs to no declared site:
 
-1. In the **Sites** view, click **Import…**.
-2. Choose what to import — **Sites** or **Device → site placement** — and the format: **CSV**, **JSON**, or (for sites) **GeoJSON**.
-   - Sites columns: `name`, `slug` (optional), `status`, `owner`, `latitude`, `longitude`. GeoJSON: a FeatureCollection of Point features (coordinates are `[lng, lat]`).
-   - Placement columns: `device` (ID, hostname, management IP, or serial — matched against discovered devices) and `site` (slug).
-3. Upload the file or paste its contents. Tick **Overwrite existing** only if the import should *change* existing rows, not just add new ones.
-4. Click **Preview** — a dry run showing per-row actions (create / update / skip / conflict / error) with nothing written yet.
-5. Review the plan, then click **Apply**.
+1. Select the **Set locations** tab. Unplaced devices are listed first, so the tab doubles as a work queue.
+2. Enter a free-form **Site label**, a decimal **Latitude** and a **Longitude** on the device's row, then select **Save**.
+3. Devices sharing a label fold into one bubble. Select **Clear** to remove a manual placement.
 
-The import is a one-way seed of intent: live discovery always stays authoritative for what actually exists.
+A row whose placement came from a declared site is read-only here. Its coordinates come from the site definition and win by precedence, so edit the site instead.
 
-## Set a location on a single device
+### Step 4 - Read the map
 
-The **Set locations** view lists every device with its placement provenance:
+1. Select the **Map** tab.
+2. Read the stat strip: **Sites**, **Sites on map**, **Devices placed**, **Unplaced devices**, **Up**, **Down**. A non-zero **Unplaced devices** count is the remaining placement work, because an unplaced device rolls up into no site.
+3. Read the bubbles. Size is the device count at the site. Colour is the health rollup: green when every device is up, amber when some are down, red when all are down, and grey when the site has no devices at all.
+4. Hover a bubble for the site name and its up and down counts. Drag to pan, scroll to zoom.
+5. Read the **Sites** table below the map. It lists Site, Status, Coordinates, Devices and Health, including sites whose coordinates read `not set`.
 
-- Devices placed via a **declared site** are read-only here — their coordinates come from the site (edit the site instead).
-- For anything else, type a free-form **Site label** plus decimal **Latitude** / **Longitude** and click **Save**. Devices sharing a label fold into one bubble. **Clear** removes a manual placement.
+To go from a site to its devices, open **Infrastructure → Devices** and filter on the site name, then select a row to [open the device workspace](/infrastructure/devices#open-the-device-workspace).
 
-Unplaced devices are listed first, so the view doubles as a work queue.
+## Result
 
-## First run
+Each site you declared with coordinates is a bubble in the right place, its tooltip shows the device count you expect, and **Unplaced devices** is zero for the devices you care about.
 
-On a fresh install the page explains itself instead of showing an empty map: it offers **Declare sites** and **Set device locations** buttons directly. Follow either path above and the map fills in from intent data.
+Before any site exists, the page states why instead of drawing an empty world, and `/api/geomap` says the same thing:
 
-## Troubleshooting
+```bash
+curl -s -H "Authorization: Bearer $TOKEN" \
+  http://localhost:8000/api/geomap
+```
 
-- **"No sites have coordinates yet."** — sites exist but lack latitude/longitude; edit them in the **Sites** view.
-- **A device isn't on the map** — it's unplaced. Assign it a site (<kbd>Infrastructure → Devices</kbd> → Site column) or set a manual location.
-- **A site bubble is grey** — the site has no devices assigned; the site exists but nothing rolls up into it yet.
+```json
+{"geo_enabled":false,"reason":"sot"}
+```
+
+The page then offers **Declare sites** and **Set device locations** directly. Two other honest states are worth recognising: a site with no coordinates is listed but not drawn, and a grey bubble means the site exists with no devices assigned, not that its devices are down.
+
+## Related
+
+- [Work with the device inventory](/infrastructure/devices) for the **Site** column that does the placing.
+- [Import inventory from a source of truth](/automation/import-and-sync) for seeding sites and placements from a file.
+- [Keep sites and inventory in sync](/automation/sites-and-inventory) for when an external system owns the record.

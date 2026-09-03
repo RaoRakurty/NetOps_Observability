@@ -1,113 +1,177 @@
 ---
-title: RCA Auto-Ticketing
-sidebar_label: RCA Auto-Ticketing
+title: Open tickets automatically from RCA
+sidebar_label: Open tickets automatically from RCA
+description: Open one ticket per root cause with an RCA ticketing policy, and read the ticket card on a case.
+page_type: task
 sidebar_position: 4
-description: Automatically file one ticket per incident, carrying the root-cause diagnosis and evidence.
 ---
 
-# RCA Auto-Ticketing
+# Open tickets automatically from RCA
 
-RCA Auto-Ticketing closes the loop: when correlation produces an incident with a root-cause verdict, Correlix files **one ticket per root cause — never per raw alert** — in your connected ITSM (ServiceNow today), carrying the diagnosis, evidence, affected scope, and a deep link back to the incident. **Incident policies**, configured at <kbd>Incident Response → RCA Auto-Ticketing</kbd>, decide *which* incidents qualify.
+RCA ticketing files one ticket per root cause. It is driven off correlated RCA
+cases, never off raw alerts, so a storm of 57 alerts that correlate into one
+cause produces one ticket rather than 57.
 
-This is different from the per-alert ticketing threshold on the [Integrations](/incident-response/integrations) page: that files a ticket per qualifying alert; this files one ticket per *correlated incident*, after the RCA verdict is known.
+The lane is opt-in and dormant by default.
 
-## Prerequisites
+## Before you begin
 
-- A connected **ServiceNow** integration ([set it up first](/incident-response/integrations#servicenow)) — the policy decides *when* to ticket; the connection decides *where*.
-- Auto-ticketing enabled on your deployment (a platform operator setting). Manual **Create ticket** from the incident's ticket card works whenever the connection is up.
+- `FEATURE_RCA_TICKETING=true` in the deployment environment. Without it the
+  outbound worker, the sweeper and the inbound state sync never start, and
+  ticketing never runs unasked.
+- A configured destination. See
+  [connect ServiceNow or Jira](/incident-response/integrations), and
+  [configure a notification channel](/incident-response/notifications) for the
+  PagerDuty and Slack destinations.
+- `administration:read` to view a policy and `administration:write` to change
+  one, in the tenant whose policy you are editing.
 
-:::note Roles required
-Viewing policies needs administration read access; creating, editing, or deleting them needs administration write access (read-only users see the list with a "Read-only" notice). Manual ticket actions on an incident need infrastructure write access. Policies are scoped to your tenant.
-:::
+## Steps
 
-## The default policy
+### Step 1: enable the lane
 
-With no policy configured, a safe default applies: **customer-facing confirmed faults open a ServiceNow incident** (a *suspected* verdict also qualifies, but only at critical severity); internal-monitoring, probe-only, and undetermined objects are held. Create a policy only when you want to tune those gates.
+1. Set `FEATURE_RCA_TICKETING=true`.
+2. Restart the api service.
 
-## Create a ticketing policy
+### Step 2: set the policy
 
-1. Go to <kbd>Incident Response → RCA Auto-Ticketing</kbd>.
-2. Click **+ New policy**.
-3. Fill in the policy fields:
+1. Go to **Administration → Incident Response → Ticketing & Automation**.
+2. Set the destination in **external system**.
+3. Set **minimum verdict** to `suspected` or `confirmed`.
+4. Set the guardrails. The shipped default policy is deliberately narrow:
 
-   | Field | Required | What it is | Example / default |
-   | --- | --- | --- | --- |
-   | **Policy name** | Yes | A label for this policy; shown in the list and audit | `Customer-impacting outages` |
-   | **External system** | Yes | The ticketing system tickets open in — ServiceNow today | `servicenow` |
-   | **Minimum verdict** | Yes | The lowest RCA verdict that may open a ticket: `suspected` or `confirmed` | `suspected` |
-   | **Assignment group** | No | Routes the incident to a ServiceNow assignment group | `Network Operations` |
-   | **Default impact (1–4)** | Yes | ServiceNow impact stamped on new incidents (1 = highest) | `2` |
-   | **Default urgency (1–4)** | Yes | ServiceNow urgency stamped on new incidents (1 = highest) | `2` |
-   | **Min persistence (seconds)** | Yes | Hold a fault this long before ticketing — flap suppression on the way in. `0` = off | `120` |
-   | **Flap suppression (seconds)** | Yes | After a ticket resolves, suppress re-opening within this window. `0` = off | `600` |
+| Setting | Default | What it does |
+|---|---|---|
+| `min_verdict` | `suspected` | The weakest verdict allowed to file. |
+| `require_customer_facing` | on | A case with no meaningful affected entity is held. |
+| `suspected_requires_critical` | on | A suspected case files only at critical severity. |
+| `allow_probe_only` | off | A single low-authority active check is not corroborated evidence. |
+| `allow_internal_monitoring` | off | Internal and debug-only monitoring never opens a customer ticket. |
+| `allow_validation_scenarios` | off | A validation or fault-injection scenario never files a production ticket. |
+| `require_persistence_seconds` | 0 | A case must persist this long before it files. |
+| `default_impact`, `default_urgency` | 2, 2 | The ServiceNow priority mapping for a suspected case. |
 
-4. Set the gate checkboxes:
+5. Save.
 
-   | Gate | Default | What it does |
-   | --- | --- | --- |
-   | **Enabled** | on | When off, this policy never opens tickets (a tenant opt-out) |
-   | **Require customer-facing** | on | Only ticket incidents with a meaningful affected device, path, or application |
-   | **Suspected needs critical** | on | A suspected (not yet confirmed) verdict only tickets at critical severity |
-   | **Allow probe-only** | off | Allow ticketing when the only evidence is an active probe (overrides the two-independent-streams rule) |
-   | **Allow internal monitoring** | off | Allow ticketing internal/debug-only monitoring; off keeps non-customer noise out |
+| Route | Permission | What it does |
+|---|---|---|
+| `GET /api/incident-policies` | `administration:read` | List this tenant's policies. |
+| `POST /api/incident-policies` | `administration:write` | Create or replace one. |
+| `PUT /api/incident-policies/{id}` | `administration:write` | Update one. |
+| `DELETE /api/incident-policies/{id}` | `administration:write` | Remove one. |
+| `POST /api/incident-policies/{id}/test` | `administration:read` | Simulate the policy against a case. It makes no external call and enqueues nothing. |
 
-5. Click **Save policy**. The policy appears in the list with its status, gate summary (e.g. `≥ suspected · suspected needs critical · customer-facing`), and routing group.
+Use the simulator before enabling a policy. It answers the create-or-hold
+question with the same code the worker runs, without filing anything.
 
-### Dry-run it with the Simulator
+Priority escalates automatically unless you pin values. A confirmed critical case
+maps to impact 1 and urgency 1, a confirmed case to urgency 1, and a suspected
+case uses the defaults. An explicit value wins outright.
 
-Before trusting a policy, test it against hypothetical incidents — **no ticket is created**:
+### Step 3: watch the outbox
 
-1. Open the saved policy (click its row) and scroll to **Simulate a decision**. The Simulate button is disabled until the policy is saved.
-2. Describe a hypothetical RCA object: **Verdict** (`undetermined` / `suspected` / `confirmed`), **Peak severity** (`info` / `warn` / `high` / `crit`), **Persistence (seconds)**, and the flags **Internal monitoring**, **Probe-only**, **Low-authority probe**, **Has affected entity**.
-3. Click **Simulate**. The result badge shows **Would open a ticket** or **Held**, with the exact reason — the same operator-readable reason the live decision records.
+An action is enqueued, not sent inline. Ticketing never blocks correlation.
 
-Run at least three cases: your typical confirmed outage (expect a ticket), a suspected fault at `warn` (expect held if *Suspected needs critical* is on), and an internal-only object (expect held).
+| Route | What it shows |
+|---|---|
+| `GET /api/tickets/outbox` | Queued actions with `status` of `pending`, `sent`, `failed`, `retrying` or `dead_letter`, plus the retry count and last error. |
+| `GET /api/tickets/audit` | The action ledger: one row per action with actor, old and new status, and result. |
+| `GET /api/tickets/links` | Every ticket link for the caller's tenant, which is what the RCA queue's **Notified via** column joins against. |
 
-## How it runs, and how dedup behaves
+### The ticket card on an incident
 
-- A background sweep periodically evaluates **recently active incidents** against the owning tenant's policy. Qualifying incidents get a ticket **create** queued; ticketing runs through a reliable queue with retries, so it never delays detection or correlation.
-- **One incident → one ticket.** The link is keyed per incident per external system. While a ticket is open, the sweep enqueues **updates** only when the incident's RCA state actually changes (new verdict, evidence, or scope) — an unchanged incident is a no-op, and a second ticket is never opened.
-- A **failed** create is retried (with backoff) rather than treated as an open ticket; permanently failing actions land in the ticket history with their error.
-- **Flap suppression** works on both edges: *Min persistence* delays ticketing until a fault has lasted long enough, and *Flap suppression* blocks re-opening for a window after a ticket resolves.
+1. Open an RCA case at **Investigate → RCA**.
+2. Find the **External ticket** card. With more than one destination it is
+   titled **External tickets & paging**.
 
-## The ticket card on an incident
+With no ticket, the card reads **No external ticket has been opened for this RCA
+object yet.**
 
-Every incident's detail view carries an **External ticket** panel (open an incident from <kbd>Monitoring → Correlations</kbd>, the <kbd>Incident Response → Command Center</kbd> queue, or <kbd>Monitoring → Incidents</kbd> — see [Working incidents](/incidents/working-incidents)). It shows:
+With one or more, each destination row carries a state pill, the ticket number
+as a deep link, the destination system, and the last sync time. Link status
+values are `pending`, `open`, `updated`, `resolved` and `failed`.
 
-- **Status pill** — the ticket state:
+Actions require `infrastructure:write`:
 
-  | State | Meaning |
-  | --- | --- |
-  | *No ticket* | Nothing filed for this incident yet |
-  | *Pending* | A create is queued, mid-flight |
-  | *Open* / *Updated* | A live ticket exists (updated = re-synced since creation) |
-  | *Resolved* | The ticket was resolved |
-  | *Failed* | The last action failed; it will retry, or you can **Retry create** |
+| Control | When it appears | What it does |
+|---|---|---|
+| **Create ticket** | No ticket exists. | Enqueues a create. |
+| **Retry create** | A previous create failed. | Enqueues another create. |
+| **Sync ticket** | An open or updated ticket exists. | Pushes the current RCA state onto it. |
 
-- The **ticket number** as a deep link into ServiceNow, plus **Last synced** and the **verdict at sync**.
-- **Actions** (infrastructure write access required): **Create ticket** when none exists, **Sync ticket** to push the current RCA state onto an open ticket, **Retry create** after a failure. Actions are queued — you'll see "Ticket creation queued — the worker will open it shortly," and the card refreshes on its own.
-- **History** — the audit trail of every action (Created, Updated, Work note, Resolved, Reopened) with timestamp, result, and any error. These timestamps also feed the incident's time decomposition (ticket filed → resolved).
+The confirmation text is exact. Creating shows
+`Ticket creation queued — the worker will open it shortly.` and syncing shows
+`Sync queued — the open ticket will update shortly.` The card re-polls on its own
+a few seconds later.
 
-## What gets filed
+Below the actions, **History** lists the most recent actions with their result,
+including `dead_letter` when an action exhausted its retries.
 
-Each ticket carries the incident's root-cause **title and summary**, the **verdict** and confidence, the **affected scope** (devices, paths, impacted applications), the recommended **next action**, the policy's **assignment group / impact / urgency**, and a **deep link** back to the incident in Correlix — so the NOC and the ITSM share one handle on the same problem.
+## Result
 
-## Verify it end-to-end
+Each destination carries a stable deduplication identity derived from the tenant
+and the correlation id, in the form `tenant:correlation-id:system`. PagerDuty
+prefixes that with `correlix:` and sends it as the Events v2 `dedup_key`.
 
-1. Confirm the ServiceNow tile under <kbd>Incident Response → Integrations</kbd> shows **Connected**.
-2. Save a policy and **Simulate** your standard outage case — it must read **Would open a ticket**.
-3. When a real qualifying incident occurs (or you stage a fault in a lab), open the incident and watch the **External ticket** panel go *Pending → Open* with a ticket number.
-4. Follow the deep link into ServiceNow and confirm the diagnosis, scope, and link back to Correlix are in the incident body.
-5. Confirm no *second* ticket appears while the incident stays open, even as it re-syncs.
+That identity is what makes the behaviour idempotent:
 
-## Troubleshooting
+- A repeated create is an update at the destination, never a second incident.
+- Retries reuse the same key, so a retry after an ambiguous failure cannot
+  duplicate.
+- One link exists per tenant, correlation object and system.
 
-- **Nothing tickets, ever.** Check, in order: the ServiceNow connection is **Connected**; the policy (or the default) is **Enabled**; the incident actually passes the gates — run the **Simulator** with the incident's real verdict/severity/flags and read the **Held** reason.
-- **"You need administration access to manage incident policies."** Your role lacks administration rights for this tenant — ask an administrator.
-- **Ticket stuck in *Pending*.** The queue retries automatically; a connection problem shows up as *Failed* with the error in **History**. Fix the connection under Integrations, then **Retry create**.
-- **Expected a ticket for a suspected fault, got none.** *Suspected needs critical* is on by default — a suspected verdict below critical severity is held. Turn the gate off, or wait for the verdict to confirm.
-- **Too many tickets from a flapping fault.** Raise **Min persistence** and **Flap suppression** on the policy.
+PagerDuty incidents close automatically when the alerts clear. Correlix sends a
+resolve on the same routing key and deduplication key, with no payload needed.
+Without it, resolved conditions would accumulate as stale open incidents.
 
-## The result
+Correlix to PagerDuty is one-way by design. Telemetry is the resolution
+authority, and the ITSM system records the human response phases.
 
-A measurable, evidence-backed loop — detect → correlate (root cause) → auto-file ticket → measured recovery time — visible on the [Recovery Scorecard](/incidents/overview).
+Human display ids lead every destination's text, so one handle follows the
+incident across systems. RCA cases carry a Problem ID in the form `P-XXXXXX`,
+and the operational incident record carries a display id in the form
+`INC-XXXXXX`. ServiceNow also receives the Problem ID in the
+`u_correlix_problem_id` field. The raw correlation UUID stays canonical inside
+the deduplication key and never appears in operator-facing copy.
+
+### When a case is held
+
+A case that does not meet policy is held, and the reason is the policy's own
+words. These appear verbatim on the case:
+
+- `ticketing policy disabled`
+- `undetermined — no grounded cause yet`
+- `internal monitoring only — not customer-impacting`
+- `validation scenario — production ticket side effects suppressed`
+- `active-check-only (low authority) — awaiting independent corroboration`
+- `single active-probe plane — awaiting independent corroboration`
+- `no meaningful affected entity to scope a ticket to`
+- `suspected but severity below critical — held below threshold`
+- `ticket already open (…)`
+
+A held case is not a failure. It is Correlix declining to file a ticket it cannot
+justify.
+
+### Inbound state sync
+
+Under `FEATURE_RCA_TICKETING`, Correlix also polls ServiceNow for state changes
+and appends each action to the audit ledger at most once. The interval is set by
+`RCA_TICKETING_INBOUND_INTERVAL` and defaults to 45 seconds. This is a poller,
+with no webhook and no shared secret. It is separate from the signed webhook path
+described under
+[two-way sync and webhook secrets](/incident-response/integrations#two-way-sync-and-webhook-secrets).
+
+### The legacy raw-alert path
+
+Filing tickets directly from raw alerts was removed. The legacy incident-to-ITSM
+sync answers that it is deprecated and that tickets file via RCA auto-ticketing
+policies. It is re-enablable only with `FEATURE_LEGACY_ALERT_ITSM`, which is off
+by default and should stay off. Ticketing off raw alerts is what produced 57
+tickets for one cause.
+
+## Related
+
+- [Connect ServiceNow or Jira](/incident-response/integrations)
+- [Incident timing and recovery](/incident-response/rca-time-intelligence)
+- [Work the incident queue](/incidents/working-incidents)
+- [Incidents](/incidents/overview)

@@ -1,110 +1,89 @@
 ---
-title: Import & external sync
-sidebar_label: Import & external sync
+title: Import inventory from a source of truth
+description: Import sites and device-to-site placement from a CSV, JSON or GeoJSON file, read the dry-run reconcile plan, and apply it.
+page_type: task
 sidebar_position: 3
-description: Bulk-seed sites and device placement from a file, and connect an external source-of-truth system.
 ---
 
-# Import & external sync
+# Import inventory from a source of truth
 
-Two ways to bring an existing system of record into Correlix:
+The import panel takes a file that already holds your site list or your device placement and seeds the internal record with it, in one pass, with a mandatory dry run first. It is a one-way seed of declared intent. Live discovery stays authoritative for what actually exists.
 
-- **File import** — a one-way seed of sites and device → site placement from CSV, JSON, or GeoJSON. One-off, dry-run first, tenant-scoped.
-- **External sync** — connect the bundled inventory service or your external source-of-truth system under <kbd>Automation → Source Of Truth</kbd> and exchange device records on a schedule. Platform administrators only.
+For the ongoing connector instead of a file, see [Keep sites and inventory in sync](/automation/sites-and-inventory).
 
-Either way, live discovery stays authoritative — imports and sync add *intent*, never observed state.
+## Before you begin
 
-## Import from a file
+- `infrastructure:write` in your tenant. Records are stamped from the authenticated principal, never from the payload, and an import can never write into another tenant.
+- For a placement file, the sites must already exist. A binding to an unknown slug is rejected per row.
+- A file of at most 1 MiB of text, which is thousands of rows.
 
-### Before you begin
+### Site file columns
 
-- You need **infrastructure write** permission.
-- For device → site placement, import (or create) the **sites first** — a binding to an unknown site slug is rejected per row.
-- Files are read as text, up to **1 MiB** (thousands of rows).
+Accepted as CSV, JSON or GeoJSON.
 
-### File formats
-
-**Sites** (`CSV`, `JSON`, or `GeoJSON`):
-
-| Column / key | Required | Accepted header aliases | Notes |
+| Column or key | Required | Header aliases | Notes |
 |---|---|---|---|
-| `name` | Yes | `site`, `site_name` | Display name (max 120 chars). |
-| `slug` | No | — | Stable handle; generated from the name when omitted. |
-| `status` | No | — | Free text, e.g. `active`. |
-| `owner` | No | `team`, `owner_team` | Responsible team (max 120 chars). |
-| `lat` / `lng` | No | `latitude` / `lon`, `longitude` | Decimal WGS 84; both or neither per row. |
+| `name` | Yes | `site`, `site_name` | The display name. |
+| `slug` | No | none | The stable handle. Generated from the name when omitted. |
+| `status` | No | none | Free text, for example `active`. |
+| `owner` | No | `team`, `owner_team` | The responsible team. |
+| `lat` / `lng` | No | `latitude` / `lon`, `longitude` | Decimal WGS 84. Both or neither, per row. |
 
-- **CSV** — first row is the header; column order doesn't matter.
-- **JSON** — an array of site objects: `[{"name": "Dallas Branch", "lat": 32.78, "lng": -96.80}]`.
-- **GeoJSON** — a `FeatureCollection` of `Point` features; `name`, `slug`, `status`, `owner` are read from each feature's `properties`. Coordinates are `[longitude, latitude]` — **longitude first**, per the GeoJSON standard.
+CSV takes the header row first and ignores column order. JSON is an array of site objects. GeoJSON is a `FeatureCollection` of `Point` features whose `name`, `slug`, `status` and `owner` are read from each feature's properties, and whose coordinates are `[longitude, latitude]`, longitude first, per the standard.
 
-**Device → site placement** (`CSV` or `JSON`):
+### Placement file columns
 
-| Column / key | Required | Accepted header aliases | Notes |
+Accepted as CSV or JSON.
+
+| Column or key | Required | Header aliases | Notes |
 |---|---|---|---|
-| `device` | Yes | `device_id`, `host`, `hostname`, `name`, `ip`, `address`, `serial` | Any stable identifier; matched against your visible inventory as **id → serial → management IP → hostname**. |
-| `site` | Yes | `site_slug`, `slug` | The target site's slug (a name is slugified). |
+| `device` | Yes | `device_id`, `host`, `hostname`, `name`, `ip`, `address`, `serial` | Any stable identifier. |
+| `site` | Yes | `site_slug`, `slug` | The target site's slug. |
 
-### Run the import
+A device row is matched against the inventory you can see, in this order: exact id, then serial, then management address, then hostname. Serial comes before address because an address is not a stable identity. A device in another tenant does not match, which is how a cross-tenant write is made structurally impossible rather than merely refused.
 
-1. Go to <kbd>Infrastructure → Device Geomap</kbd> and select the **Sites** view.
-2. Click **Import…** in the Sites card header. The **Import from a file** panel opens.
-3. Pick the kind: **Sites** or **Device → site placement**.
-4. Pick the format (**CSV**, **JSON**, or — for sites only — **GEOJSON**), then choose the file, or paste its contents into the text box. Picking a `.csv`/`.json`/`.geojson` file sets the format automatically.
-5. Leave **Overwrite existing (apply changes, not just new rows)** unchecked for a first pass — the import is then non-clobbering: it only creates new records.
-6. Click **Preview**. This is a **dry run** — the plan is computed and nothing is written.
-7. Read the plan (next section). Adjust the file or the overwrite checkbox and **Preview** again — any edit clears the plan, so you always apply exactly what you last previewed.
-8. Click **Apply**. Apply stays disabled until you've previewed — the dry run is mandatory.
+## Steps
 
-### Reading the reconcile results
+1. Go to **Infrastructure → Sites** and select the **Sites** tab.
+2. Select **Import…** in the Sites card header.
+3. Choose the kind: **Sites** or **Device → site placement**.
+4. Choose the format, then choose the file or paste its contents. Choosing a `.csv`, `.json` or `.geojson` file sets the format for you.
+5. Leave **Overwrite existing** unchecked for a first pass. The import is then non-clobbering: it creates new records only.
+6. Select **Preview**. This is a dry run. The plan is computed and nothing is written.
+7. Read the plan, described below. Any edit to the file or the overwrite box clears the plan, so you always apply exactly what you last previewed.
+8. Select **Apply**. Apply stays disabled until you have previewed, because the dry run is mandatory.
 
-The plan shows per-action counters and a per-row table (**Line** in the source file, **Key** matched, **Action**, **Detail**):
+### Reading the reconcile plan
 
-| Action | Meaning | Written on Apply? |
+The plan shows per-action counters and a per-row table of the source line, the key matched, the action and a detail.
+
+| Action | What it means | Written on Apply |
 |---|---|---|
-| `create` | No existing record matched; a new one will be created. | Yes |
-| `unchanged` | An existing record matched and is already identical. | No (nothing to do) |
-| `conflict` | An existing record matched but the row would change it (the Detail says what — e.g. `would change coordinates`). Skipped unless **Overwrite existing** is checked. | No |
-| `update` | Overwrite is on: the existing record will be updated (Detail lists the changed fields, or `rebind old → new` for placements). | Yes |
-| `error` | The row is invalid — bad coordinates, missing site, or `no visible device matches "…"`. Never applied; fix the row. | No |
+| `create` | Nothing matched. A new record will be created. | Yes |
+| `unchanged` | An existing record matched and is already identical. | Nothing to do |
+| `conflict` | An existing record matched and the row would change it. The detail names what, for example `exists; would change coordinates (enable overwrite to apply)`. | No, unless overwrite is on |
+| `update` | Overwrite is on. The detail lists the changed fields, or a rebind from the old site to the new one for a placement. | Yes |
+| `error` | The row is invalid and is never applied. Fix the row. | No |
 
-Existing values are preserved where the import row is blank, and a record's owner tenant is never reassigned by an import.
+An import preserves an existing value where the row is blank, and never reassigns a record's owning tenant.
 
-### Verify
+Two error details are worth recognising:
 
-1. After **Apply**, the panel shows **Applied** with final per-action counts; the Sites table refreshes underneath.
-2. Switch to the **Map** view: imported sites with coordinates appear as bubbles, and the **Devices placed** stat rises by the number of applied bindings.
-3. Spot-check a device in <kbd>Infrastructure → Devices</kbd> — its **Site** column should show the imported site.
+- `no visible device matches "…"` means the identifier matched nothing in your tenant by id, serial, management address or hostname. Confirm the device is onboarded and the identifier is exact.
+- `no site "…" visible in this tenant` means the target slug does not exist yet. Import the sites file before the placement file.
 
-### Troubleshooting
+Both strings are produced by the importer itself and appear in the plan's **Detail** column.
 
-- **Apply is greyed out** — you haven't previewed this exact input yet. Click **Preview** first.
-- **Everything is `conflict`** — the records already exist with different values. Re-run with **Overwrite existing** checked *only* if the file should win over what's in the console.
-- **`no visible device matches "…"`** — the identifier doesn't match any device in your tenant by id, serial, management IP, or hostname. Check the device is onboarded and the identifier is exact.
-- **`no site "…" visible in this tenant`** — import the sites file before the placement file.
-- **Sites land in the ocean** — a GeoJSON with `[lat, lng]` order. GeoJSON is `[lng, lat]`; swap the pair.
+## Result
 
-## Connect an external system
+The panel reads **Applied** with final per-action counts, and the Sites table refreshes underneath. Switch to the **Map** tab: imported sites with coordinates appear as bubbles, and **Devices placed** rises by the number of applied bindings. Spot-check one device under **Infrastructure → Devices** and confirm its **Site** column shows the imported site.
 
-<kbd>Automation → Source Of Truth</kbd> manages the inventory connector. The status badge reads **Connected**, **Bundled · off**, **Disabled**, or **Not set up**.
+The same operation is available at `POST /api/sot/import` with a body of `kind` (`sites` or `device_sites`), `format` (`csv`, `json` or `geojson`), the raw file text in `data`, `dry_run`, and `overwrite`. `dry_run` defaults to true, so an API caller that omits it gets the plan rather than a write.
 
-1. Open <kbd>Automation → Source Of Truth</kbd> (platform administrator).
-2. Click **Set up** (or **Manage** if already configured). The wizard opens with the **bundled inventory** preselected — it ships with the platform, already wired, no URL or token. To use your own system, click **Connect an external inventory instead →** and complete two extra steps:
-   - **Connect** — the inventory URL (`https://…`).
-   - **Authenticate** — an API token with read access to the device inventory; stored encrypted, never shown again.
-3. Tick **Enable inventory discovery** and set the **Poll interval (seconds)** — minimum 15, default 60.
-4. Choose the **Sync direction** (default **Off** — nothing moves until you opt in):
-   - **Devices → Source of Truth** — discovered devices are written into the inventory.
-   - **Source of Truth → Devices** — inventory-declared devices are pulled into <kbd>Infrastructure → Devices</kbd> as additional records.
-   - **Bidirectional** — both, de-duplicated by IP / serial / name.
-5. Click **Save**. The collector picks the change up on its next poll.
+Two failures that look alike but are not: a plan that is entirely `conflict` means the records already exist with different values, and a plan that is entirely `error` means the file did not match your inventory at all. Re-run with **Overwrite existing** only where the file should win over what is in the console.
 
-With the bundled inventory enabled, its console is embedded right on the page (**Reload** and **Full screen** controls included). An external instance is managed in its own console; Correlix only exchanges records with it.
+## Related
 
-**On-demand controls:** **Sync devices** polls the inventory into Devices now; **Push to inventory** (shown when the direction includes writing) pushes discovered devices up now — it also runs automatically every 5 minutes.
-
-### Verify
-
-- The status badge reads **Connected**.
-- The poll line under the toolbar shows a recent timestamp and a device count: `Inventory → Devices (poll): … · N device(s)`; after a push, a second line shows `created` / `already present` counts. Any poll or push error appears inline on the same lines.
-- With a pull direction set, pulled devices appear in <kbd>Infrastructure → Devices</kbd>, and drift checks in <kbd>Security → Compliance Monitoring</kbd> activate against the declared records.
+- [Place devices on the map](/infrastructure/geomap) for creating sites by hand.
+- [Keep sites and inventory in sync](/automation/sites-and-inventory) for the ongoing connector.
+- [Work with the device inventory](/infrastructure/devices) for confirming a placement landed.

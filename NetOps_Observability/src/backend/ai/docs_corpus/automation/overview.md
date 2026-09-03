@@ -1,75 +1,53 @@
 ---
-title: Automation & Source of Truth overview
-sidebar_label: Overview
+title: Automation and source of truth
+description: How Correlix separates declared intent from observed state, what the source-of-truth connector does and does not do, and where each task lives.
+page_type: index
 sidebar_position: 1
-description: How Correlix separates intent from observed state, and how the Source of Truth provider model works.
 ---
 
-# Automation & Source of Truth
+# Automation and source of truth
 
-Your **Source of Truth (SoT)** is the authoritative record of what *should* exist on the network — sites, device placement, and ownership. Correlix keeps that record itself, built from two things it already has:
-
-- **Discovered inventory** — the devices Correlix found and monitors (<kbd>Infrastructure → Devices</kbd>). This is *observed state*: what is actually on the wire.
-- **Sites** — locations you declare, with coordinates and ownership (<kbd>Infrastructure → Device Geomap → Sites</kbd>). This is *intent*: what you say the network looks like.
-
-The Automation section adds an optional connector on top: <kbd>Automation → Source Of Truth</kbd> lets you run a bundled inventory console, or connect your external source-of-truth system, and exchange device records with it.
-
-## Intent vs. observed state
-
-Correlix deliberately keeps the two planes separate:
+Correlix keeps two planes apart on purpose. **Observed state** is what discovery and live telemetry found on the wire. **Declared intent** is what you say the network should look like. Neither overwrites the other, and where they disagree the disagreement is surfaced rather than averaged away.
 
 | Plane | Where it comes from | Examples |
 |---|---|---|
-| **Observed** | Discovery and live telemetry | Device up/down, interfaces, serial, management IP, running OS |
-| **Intent** | You (declared in the console or imported) | Sites and their coordinates, device → site placement, site owner |
+| Observed | Discovery and live telemetry | Device up or down, interfaces, serial, management address, running OS |
+| Intent | Declared in the console or imported from a file | Sites and their coordinates, device-to-site placement, site owner |
 
-Observed state is never overwritten by intent, and intent is never inferred from the wire. The map is a good example: the [Device Geomap](/infrastructure/geomap) places devices using **site coordinates you declared** — never GeoIP, because private management addresses don't geolocate. Health (up/down) then rolls up onto those intended locations.
+The map is the clearest case. It places devices from site coordinates you declared, never from GeoIP, because a private management address does not geolocate. Health then rolls up onto those declared locations.
 
-Where the two planes disagree, that disagreement is surfaced rather than hidden: <kbd>Security → Compliance Monitoring</kbd> runs **drift checks** that compare declared records against observed ones (device registered in the Source of Truth, name / management IP / serial / platform match) whenever declared device records are being pulled in.
+| Page | What it covers |
+|---|---|
+| [Keep sites and inventory in sync](/automation/sites-and-inventory) | The inventory connector: choosing a sync direction, running a sync or a push, and reading the drift it exposes. |
+| [Import inventory from a source of truth](/automation/import-and-sync) | The one-way file import that seeds sites and device-to-site placement, dry-run first. |
 
-## The provider model in plain language
+Placing devices and declaring sites in the console is a separate task, covered in [Place devices on the map](/infrastructure/geomap).
 
-The Source of Truth is a **role**, not a product. Three rules govern it:
+## Three rules that govern the source-of-truth role
 
-1. **The internal Source of Truth is always the observability authority.** What Correlix discovered and monitors, plus the sites you declare in the console, decide what is monitored, where it sits on the map, and who owns it. This record is always editable in the app.
-2. **An external system is an automation connector, never a replacement.** Under <kbd>Automation → Source Of Truth</kbd> you can enable the bundled inventory service or point at an external inventory instance. It exchanges *device records* — you choose the direction — but it never supersedes discovery, never drives map placement, and never locks the in-app Sites editor.
-3. **Nothing syncs until you opt in.** The sync direction defaults to **Off**. A fresh install never auto-populates an inventory from discovery, and never pulls declared devices in, until an operator picks a direction.
+The source of truth is a role, not a product.
 
-The available sync directions, in the UI's own words:
-
-- **Off** — no automatic sync (the default).
-- **Devices → Source of Truth** — discovered devices are written into the inventory; build a system of record from scratch, seeded by discovery.
-- **Source of Truth → Devices** — inventory-declared devices are pulled in and appear under <kbd>Infrastructure → Devices</kbd> alongside discovered ones, as additional records — not as the authority over them.
-- **Bidirectional** — both, with records de-duplicated by management IP, serial, and name.
-
-Step-by-step setup is in [Import & external sync](/automation/import-and-sync).
-
-## Seeding from a file
-
-If your site list and device placement already live somewhere — a spreadsheet, a DCIM export, a GeoJSON file — you don't have to retype them. The **Import** panel (<kbd>Infrastructure → Device Geomap → Sites → Import…</kbd>) takes CSV, JSON, or GeoJSON and seeds the internal Source of Truth in one pass:
-
-1. Rows are **identified** against existing records (sites by slug; devices by serial → management IP → hostname).
-2. Changes are **reconciled** conservatively: new records are created, existing records that would change are reported as conflicts and skipped unless you explicitly enable overwrite.
-3. A **dry-run preview is always first** — nothing is written until you click **Apply**.
-
-The full procedure, file formats, and how to read the reconcile plan are in [Import & external sync](/automation/import-and-sync).
+1. **The internal record is always the observability authority.** What Correlix discovered and monitors, plus the sites you declare, decide what is monitored, where it sits and who owns it. That record stays editable in the console.
+2. **An external system is a connector, never a replacement.** It exchanges device records in a direction you choose. It never supersedes discovery, never drives map placement, and never locks the in-console sites editor.
+3. **Nothing syncs until you opt in.** The sync direction defaults to **Off**. A fresh install neither populates an external inventory from discovery nor pulls declared devices in until an operator picks a direction.
 
 ## What lives where
 
-| Task | Where |
+| Task | Console path |
 |---|---|
-| Create / edit / delete sites | <kbd>Infrastructure → Device Geomap → Sites</kbd> |
-| Assign a device to a site | <kbd>Infrastructure → Devices</kbd> — the **Site** column |
-| Set a one-off device location (no site) | <kbd>Infrastructure → Device Geomap → Set locations</kbd> |
-| Import sites / placements from a file | <kbd>Infrastructure → Device Geomap → Sites → Import…</kbd> |
-| Enable the bundled inventory or connect an external one | <kbd>Automation → Source Of Truth</kbd> |
-| See intent-vs-observed drift | <kbd>Security → Compliance Monitoring</kbd> |
+| Create, edit or delete a site | **Infrastructure → Sites → Sites** |
+| Assign a device to a site | **Infrastructure → Devices**, the **Site** column |
+| Set a one-off device location | **Infrastructure → Sites → Set locations** |
+| Import sites or placements from a file | **Infrastructure → Sites → Sites**, then **Import…** |
+| Enable the bundled inventory or connect an external one | **Infrastructure → Source of Truth** |
+| See intent-versus-observed drift | **Security → Compliance** |
 
-::::info Permissions
-Sites, device placement, and file import are tenant-scoped and need **infrastructure write** permission. The Source of Truth connector under <kbd>Automation → Source Of Truth</kbd> is platform-wide plumbing and is reserved for **platform administrators**.
-::::
+:::note Permissions
+Sites, device placement and file import are tenant-scoped and need `infrastructure:write`. The source-of-truth connector under **Infrastructure → Source of Truth** is platform plumbing, and the leaf is shown to the platform owner only.
+:::
 
-## Next steps
+## Related
 
-- [Sites & inventory](/automation/sites-and-inventory) — create sites, assign devices, and light up the geographic map.
-- [Import & external sync](/automation/import-and-sync) — bulk-seed from a file and connect an external system.
+- [Place devices on the map](/infrastructure/geomap) for declaring the sites this section keeps in sync.
+- [Work with the device inventory](/infrastructure/devices) for the observed half of the picture.
+- [Configuration drift](/security/config-drift) for drift in device configuration rather than in inventory records.

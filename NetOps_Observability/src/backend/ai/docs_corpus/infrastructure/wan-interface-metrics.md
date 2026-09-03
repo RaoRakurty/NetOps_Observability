@@ -1,79 +1,78 @@
 ---
-title: WAN Interface Metrics
-sidebar_label: WAN Interface Metrics
-sidebar_position: 5
-description: Per-WAN-interface SLA (latency/jitter/loss/QoE/availability) measured to a derived target, with live throughput.
+title: Measure WAN paths
+description: Read one row per WAN interface - live utilization and status plus a measured SLA to a derived target, with the tier that measured it.
+page_type: task
+sidebar_position: 7
 ---
 
-# WAN Interface Metrics
+# Measure WAN paths
 
-**WAN Interface Metrics** (<kbd>Infrastructure → WAN Interface Metrics</kbd>) gives every WAN interface its own SLA row: live utilization and throughput, plus latency, jitter, loss, QoE, and availability *measured to a target* — with the target and the measurement method shown honestly on every row. The table refreshes every 5 seconds, so the in-row sparkline advances live.
+**Investigate → Paths → WAN Paths** puts one row on screen for every WAN interface, and for every interface directly connected to a WAN device. The page heading reads **WAN Interface Metrics**. Each row carries live utilization and status from the interface itself, and a latency, jitter, loss, QoE and availability SLA measured to a target the platform derived for that interface. An SLA cell with no measurement behind it reads as a dash, never as a number.
 
-## Which interfaces appear
+## Before you begin
 
-- Every interface on a **WAN device**. WAN devices are matched by a name pattern from the measurement policy — by default any device whose name contains `wan`, `edge`, `gw`, or `dmz`.
-- Plus any interface **directly connected to** a WAN device (marked with a `linked` badge) — so a WAN router *and* the core link facing it are both measured.
-- Management interfaces are never included.
+- Devices exporting `device_if_*` interface metrics. See [Verify monitoring](/onboard-devices/verify-monitoring).
+- WAN devices matched by the measurement policy. The default name pattern is `wan|edge|gw|dmz`.
+- At least one measurement source for the SLA columns. Utilization and status populate without one; latency, jitter, loss, QoE and availability do not.
 
-## Read a row
+## Steps
 
-1. Check the summary tiles first: **WAN interfaces** (and how many have a measured SLA), total **Throughput** (with in/out split), **Peak utilization** (the busiest interface), and **Interfaces down**.
-2. Use the search box (**Search devices, interfaces, targets…**) to narrow the table; the default sort is by utilization, busiest first. Click any column header to re-sort.
-3. Read the columns:
+### Step 1 - Read the summary tiles
+
+1. Open **Investigate → Paths → WAN Paths**. The table polls every 5 seconds, so the in-row sparkline advances live.
+2. Read the four tiles: **WAN interfaces** with the count that has a measured SLA, **Throughput** with its inbound and outbound split, **Peak utilization** for the busiest interface, and **Interfaces down**.
+
+With no rows, peak utilization reads as a dash rather than as zero per cent.
+
+### Step 2 - Read a row
 
 | Column | What it shows |
-| --- | --- |
-| **Router / Interface** | The device and interface name (e.g. `Ethernet1`). A `linked` badge means this interface sits on a non-WAN device but faces a WAN device. |
-| **Utilization** | Live utilization with a color bar — green under 70%, amber under 90%, red above. |
-| **↓ In / ↑ Out** | Current throughput in each direction. |
-| **Live** | A small sparkline of recent throughput that advances on every poll; hover for the current and peak values. |
-| **Measured to** | The measurement target: a provenance chip (**Peer**, **Next-hop**, or **Anchor**) plus the remote device, its interface, and the target address. |
-| **Latency / Jitter / Loss / QoE / Avail.** | The resolved SLA, heat-tinted (e.g. latency green under 50 ms, amber under 150 ms; loss green under 1%, amber under 3%; availability red below 95%). Each cell shows "—" until something actually measures it — never a fabricated number. |
-| **Measured by** | Which measurement source won for this row: a tier badge (**T1**–**T5**) plus the method name. |
-| **Status** | The interface's operational state — `up` or `down`. |
+|---|---|
+| **Router** and **Interface** | The device and its interface. An interface marked **linked** is not itself a WAN interface but is directly connected to a WAN device, so both ends of a lab WAN hop are measured. |
+| **Utilization**, **In**, **Out** | Live load as a bar plus a percentage, and the two throughput directions. All three read as a dash where no interface counters arrived. |
+| **Live** | An inline sparkline of recent throughput, redrawn each poll. |
+| **Measured to** | The derived target and how it was derived: **Peer** for a directly connected peer learned over LLDP, **Next-hop** for an ISP next hop, or **Anchor** for a public-DNS reachability anchor. |
+| **Latency**, **Jitter**, **Loss**, **QoE**, **Avail.** | The measured SLA. Each cell is tinted, and each reads as a dash when nothing measured it. |
+| **Measured by** | The winning measurement tier and method for that row. |
+| **Status** | `up` or `down`, or a dash when no operational state was read. |
 
-## How the measurement target is derived
+### Step 3 - Read the measurement tier
 
-Each interface measures to a **derived target** — you don't pair circuits by hand. The first rule that matches wins:
+The SLA columns resolve through a five-tier ranking, and the tier closest to the user experience wins:
 
-1. **Operator override** — a next-hop you've configured for the device (or the specific interface), such as the ISP gateway. Shown as **Next-hop**.
-2. **Directly-connected peer** — the neighbor learned from discovery on that interface (typical inside a lab or private WAN). Shown as **Peer**.
-3. **Reachability anchor** — a well-known public address (defaults are public DNS resolvers), used for internet-facing interfaces where the far end isn't yours to probe. Shown as **Anchor**.
+| Tier | Source |
+|---|---|
+| T1 | Application |
+| T2 | Active path probe |
+| T3 | Device-native measurement, such as STAMP |
+| T4 | Passive measurement |
+| T5 | Flow |
 
-## How the SLA numbers are chosen
+The **Measured by** badge names the winning tier and method per row, so a latency figure always says where it came from. Two rows in the same table can be measured by different tiers, and the badge is how you tell.
 
-Several sources can measure the same target. Correlix ranks them by **closeness to the user experience** and, per field, uses the best available:
+### Step 4 - Narrow the table
 
-**T1** application-level checks → **T2** active path probes → **T3** device-native measurements → **T4** passive measurement → **T5** flow-derived. The **Measured by** column shows the winning tier and method for each row, so a number is never anonymous. If no probe is measuring the target yet, the SLA cells stay "—" while utilization, throughput, and status still populate from interface metrics.
+Use **Search devices, interfaces, targets…** to match on device, interface, remote device, target, target label or measurement method. The counter beside the box states how many of the total rows match. Sort by **Utilization** to bring the busiest circuit to the top, which is the default order.
 
-## Tune the measurement policy
+## What you see
 
-The measurement policy — the WAN device name pattern, the anchor addresses, per-device/per-interface next-hop overrides, and whether connected interfaces are included — is per-tenant. There is currently **no console form** for it; it is read and written through the platform API (`GET`/`PUT /api/wan/policy`) using an [API token](/administration/api-access). For example, setting a next-hop override:
+Every WAN interface you operate has a row, its utilization matches the device, and each SLA column either carries a measured number with a tier badge or an honest dash.
 
-```json
-{
-  "wan_pattern": "wan|edge|gw|dmz",
-  "next_hops": { "edge-router-1/Ethernet1": "203.0.113.1" }
-}
+On a deployment with no WAN interface matched yet, `/api/wan/interfaces` says so with a null list rather than an empty success:
+
+```bash
+curl -s -H "Authorization: Bearer $TOKEN" \
+  http://localhost:8000/api/wan/interfaces
 ```
 
-Overrides take effect on the next refresh — the row's **Measured to** chip changes to **Next-hop**.
+```json
+{"interfaces":null}
+```
 
-Active SLA measurement of the derived targets is an opt-in capability; if every row shows only utilization and "—" SLAs, ask your administrator to enable the WAN echo measurement feature and the active prober.
-
-## Verify
-
-- Every interface you consider a WAN circuit has a row (check the `linked` rows too).
-- Each row's **Measured to** target is sensible — a real next-hop, the true far-end peer, or an anchor for internet-facing links.
-- SLA cells fill within a few probe cycles; **Measured by** shows the tier you expect.
-
-## Troubleshooting
-
-- **The table is empty** — no device names match the WAN pattern, or the devices aren't exporting interface metrics yet. Check the device names against the pattern above (adjust it via the policy API), and confirm collection with [Verify monitoring](/onboard-devices/verify-monitoring).
-- **SLA columns stay "—"** — nothing is probing the derived target yet. Confirm the active measurement features are enabled, and that the target is reachable from the prober ([connectivity requirements](/reference/connectivity-requirements)).
-- **The wrong target is being measured** — set an explicit next-hop override for that device or interface via the policy API; overrides always win over the derived peer/anchor.
+The page states the same thing and names both halves of the fix: the interfaces appear once the matched devices export `device_if_*` metrics, and the SLA columns populate once a probe measures each interface's derived target.
 
 ## Related
 
-- [Flow Trace & Tunnels](/infrastructure/paths-and-tunnels) — hop-by-hop paths and overlay tunnel health.
-- [Topology Canvas → Path Trace](/infrastructure/topology-canvas#path-trace--resolve-an-ab-path) — per-hop metrics along a device-to-device path.
+- [Trace paths and tunnels](/infrastructure/paths-and-tunnels) for the probes that feed the SLA columns.
+- [Read the topology canvas](/infrastructure/topology-canvas#path-trace--resolve-an-ab-path) for resolving a path between two of your own devices.
+- [Link quality](/monitoring/link-quality) for alerting on a degrading circuit.

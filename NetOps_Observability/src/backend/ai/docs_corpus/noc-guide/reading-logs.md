@@ -1,106 +1,205 @@
 ---
-title: Reading logs like an operator
-sidebar_label: Reading logs
+title: Read device logs during an incident
+sidebar_label: Read device logs
+description: Scope a log search to one device and window, read the level honestly, recognise the three shapes that matter, and pivot from a line to the case that contains it.
+page_type: task
 sidebar_position: 3
-description: Scope Log Search to a device and time window, read severity, spot bursts and flaps, pivot from a log line to the incident — and understand how logs feed correlation.
 ---
 
-# Reading logs like an operator
+# Read device logs during an incident
 
-Logs are the network narrating itself, one line at a time. Correlix reads that narration continuously — extracting events from it and feeding them to the correlation engine — but there is no substitute for an operator who can open the stream and read it directly. This page is the technique.
+Logs are the network describing itself in its own words. Correlix reads that
+stream continuously and turns parts of it into correlation input, and an
+operator still needs to open it directly when the correlated view has no answer
+yet. This procedure covers scoping a search, reading it, and getting back out
+to the case. For the search syntax and export options, see
+[Search logs](/explore/logs).
 
-For the full search syntax and export options, see the [Log Search reference](/explore/logs); this page is about *reading*.
+## Before you begin
 
-## Step 1 — Open and scope the search
+- **The device name as Correlix knows it.** The name in the inventory on
+  **Infrastructure → Devices** is the value the `host` field carries.
+- **A time to search around.** A reported symptom time, an alert's fired-at
+  time, or an RCA case's window.
+- **Syslog arriving from that device.** Check the device's **Syslog** cell on
+  **Administration → Data Collection → Data Sources**. If it does not read
+  *receiving*, the absence of log lines says nothing about the device. See
+  [Send syslog](/send-data/syslog).
 
-1. Go to <kbd>Logs → Log Search</kbd>.
-2. In the signal dropdown, choose **Syslog (devices)**. This scopes to what network devices themselves said, excluding other record types (traps, flow records) that share the search surface.
-3. Pick a time range — start with **Last 1h**; widen to **Last 6h** or **Last 24h** only if the hour is quiet.
-4. Scope to the device under suspicion. Type a field query in the search box:
+## Steps
+
+### Step 1 — Scope the search
+
+1. Go to **Explore → Logs**.
+2. Set the signal selector to **Syslog (devices)**. This narrows the search to
+   what network devices said about themselves, and excludes the traps, flow
+   records and application logs that share the surface.
+3. Set the range. Start at **Last 1h**. Widen to **Last 6h** or **Last 24h**
+   only when the hour is quiet.
+4. Enter a field query. The box takes Lucene `query_string` syntax, and the hint
+   under it gives the pattern:
 
    ```
-   host:"edge-router-01"
+   host:"spine1"
    ```
 
-   The search box accepts field-level query syntax — the hint line under the title shows the pattern (e.g. `level:error`, `src_addr:10.0.0.5 AND dst_port:22`).
-5. Click **Search**.
+5. Select **Search**.
 
-You should now see a results table with **Time**, **Source**, **Level**, **Application**, and **Message** columns, newest activity on top, with each row tinted by its severity.
+The results table shows **Time**, **Source**, **Level**, **Application** and
+**Message**, newest first, each row tinted by its level.
 
-:::tip
-Running the same scope every shift? Click **★ Save** and give it a name — it will be waiting under <kbd>Logs → Saved Searches</kbd>.
-:::
+The signal selector decides which record type you are reading, and the choice
+changes the meaning of every result. **Syslog (devices)** is what the devices
+said. **SNMP traps** is what they pushed. **Flows** is a sampled copy of the
+traffic records, held for search; the unsampled store is behind **Explore →
+Flows**. **Firewall logs** narrows syslog to records a firewall vendor parser
+produced. **App logs** covers Correlix's own services and is visible only to the
+platform owner. Leaving the selector on **All** searches across them, which is
+useful for a first sweep and misleading for a count.
 
-## Step 2 — Read severity first
+If you run the same scope every shift, select **Save** and name it. It is then
+waiting under **Explore → Saved Searches**. Selected rows export with the same
+five columns the table shows.
 
-Severity is the fastest filter your eyes have. Device syslog arrives with a level (`error`, `warning`, `notice`, `info`, and vendor variants), and the Level column colors it. Two habits:
+### Step 2 — Read the level, then distrust it
 
-1. **Narrow to what hurts**: add `level:error` (or combine: `host:"edge-router-01" AND level:error`) to strip the routine chatter.
-2. **Don't ignore notices near an incident**: routing protocols often announce topology changes at *notice* level. Severity says how loudly the device spoke, not how important it was.
+The **Level** column shows the level the device itself sent. That is a statement
+about how loudly the device spoke, not about how much the message matters. On
+the lab spines, every line below arrives at `notice`, and two of them are the
+device reporting a real degradation:
 
-## Step 3 — Spot the patterns
-
-Individual lines matter less than shapes in the stream. Three shapes cover most incidents:
-
-**Bursts.** Dozens of lines from one device in seconds, after relative silence. A burst marks a state change — something transitioned, and every subsystem that noticed said so. Read the *first* lines of the burst; they are usually closest to the cause.
-
-**Flaps.** The same pair of messages alternating — up, down, up, down. A flapping interface or protocol session is often worse than a clean failure, because everything downstream keeps re-converging. If you see the same line at 14:02, 14:07, and 14:11, you have a flap, not three problems.
-
-**Protocol messages.** Adjacency and session changes (BGP, OSPF, spanning tree, tunnel state) are the network describing its own topology reshaping. One adjacency change on one device is noise; the same change echoed by neighbors within seconds is a real event with a real blast radius.
-
-## Step 4 — Pivot from a log line
-
-1. Click any row. The full underlying record opens — the headline fields plus the complete document, so you can see every field the collector recorded.
-2. Note the device and timestamp, then pivot outward:
-   - <kbd>Monitoring → Anomalies</kbd> — did this deviate from baseline? Findings for the device carry a severity and score, and their detail view offers **View logs** straight back to where you came from.
-   - <kbd>Monitoring → Correlations</kbd> — has this already been grouped? Check the **RCA Candidates** queue for a group whose window covers your timestamp.
-   - <kbd>Dashboards → Home</kbd> — if it correlated and matters, it is in the Action Queue with an owner and a next action.
-3. Working the other direction — from an alert or finding to logs — use the **View logs** button on the detail view: it opens the device's own syslog for the last hour, pre-scoped.
-
-## How logs feed the correlation engine
-
-You don't have to read logs for Correlix to use them. Every collected log line flows into the same pipeline you triage with:
-
-1. Device syslog and traps are ingested continuously and appear raw under <kbd>Monitoring → Events</kbd> — one time-sorted stream to correlate against metrics and flows.
-2. The correlation engine consumes this stream alongside metric anomalies. Meaningful events — protocol changes, link transitions, error bursts — become correlation input.
-3. When events from the stream group with anomalies (by time and by network relationship), they become the **Signals** counted on an RCA candidate, and appear as markers on the incident's evidence timeline.
-
-This is why log evidence shows up *inside* an RCA: the engine attaches the relevant lines to the case, and the RCA's evidence view tells you what each contributed. A log stream is one signal class — remember the confirmation bar: a root cause is **confirmed** only when independent evidence agrees across at least two signal classes, so logs alone typically yield a *Suspected* verdict until metrics, probes, or flows corroborate.
-
-## Worked mini-scenarios
-
-The log lines below are **illustrative examples** in common vendor formats — your devices' exact wording will differ.
-
-### Scenario A — the link flap
-
-Search: `host:"dist-sw-02" AND level:error`, Last 1h. You see:
-
-```
-14:02:11  %LINK-3-UPDOWN: Interface GigabitEthernet0/1, changed state to down
-14:02:14  %LINEPROTO-5-UPDOWN: Line protocol on Interface GigabitEthernet0/1, changed state to down
-14:07:03  %LINK-3-UPDOWN: Interface GigabitEthernet0/1, changed state to up
-14:11:40  %LINK-3-UPDOWN: Interface GigabitEthernet0/1, changed state to down
+```text
+2026-09-03T04:21:47Z  spine2  notice  sr_license_mgr  - - -  debug|4279|4279|08488|TR||E: licensemgr license_mgr.cc:581     CheckLicenseExpiration  no default license file nor configured license instances, posting license expiry
+2026-09-03T04:21:47Z  spine2  notice  sr_xdp_cpm      - - -  debug|4599|4956|08558|TR||W: csim_pd   csim_platform.cc:2623   UpdateLicenseValidity  No valid license, limiting packet rate to 10000pps
 ```
 
-**Reading:** the same interface cycling within minutes — a flap, likely physical (optic, cable, far-end device). **Next:** check <kbd>Monitoring → Anomalies</kbd> for interface-error findings on `dist-sw-02`, and expect a correlation candidate whose *Linked by* is **Same path** if downstream devices reacted.
+Two habits follow.
 
-### Scenario B — the routing ripple
+1. **Narrow to what hurts when the stream is loud.** Add `level:error`, or
+   combine it: `host:"spine1" AND level:error`.
+2. **Read the record, not just the column.** Select a row and the complete
+   document opens. Correlix records the parser's own reading in
+   `normalized_severity` alongside the device's `severity`, so the two lines
+   above carry `error` and `warning` even though both arrived as `notice`.
+   Routing and adjacency messages in particular are often emitted at notice
+   level on real platforms.
 
-Search: `level:notice OR level:error`, Last 1h, no host filter. You see, across *two* sources within seconds:
+### Step 3 — Recognise the three shapes
 
+Individual lines matter less than the shape the stream makes.
+
+**A repeat is one condition, not many events.** The same line arriving over and
+over is a device restating a condition it is stuck in. On the lab stack, one
+subsystem on `spine1` restates the same warning every second:
+
+```text
+2026-09-03T04:15:55Z  spine1  notice  sr_grpc_server  - - -  debug|5290|5290|2536838|TR||W: common    grpc_server_instance.cc:1965 BuildAndStartServer  Unable to retrieve TLS profile 'EDA'
+2026-09-03T04:15:56Z  spine1  notice  sr_grpc_server  - - -  debug|5290|5290|2536839|TR||W: common    grpc_server_instance.cc:1965 BuildAndStartServer  Unable to retrieve TLS profile 'EDA'
+2026-09-03T04:15:57Z  spine1  notice  sr_grpc_server  - - -  debug|5290|5290|2536840|TR||W: common    grpc_server_instance.cc:1965 BuildAndStartServer  Unable to retrieve TLS profile 'EDA'
 ```
-09:31:22  core-r1   %BGP-5-ADJCHANGE: neighbor 10.0.12.2 Down — hold time expired
-09:31:24  core-r2   %OSPF-5-ADJCHG: Process 1, Nbr 10.0.0.1 on TenGigE0/0/0 from FULL to DOWN
+
+Count the occurrences and find the first one. The first line is closest to the
+cause; the rest are the same fact repeated.
+
+**A burst marks a state change.** Many lines from one device in a few seconds,
+after relative quiet, means something transitioned and every subsystem that
+noticed said so. Read the head of the burst. The lines at the end describe
+consequences the earlier lines caused, and they are the ones most likely to
+send you after a symptom instead of a cause.
+
+**An echo across devices is one event, not several.** When neighbouring devices
+report the same condition within seconds, that is one topology-wide fact. Both
+lab spines report the same licensing condition one second apart, each from two
+subsystems:
+
+```text
+2026-09-03T04:21:47Z  spine2  notice  sr_license_mgr  - - -  debug|4279|4279|08488|TR||E: licensemgr license_mgr.cc:581     CheckLicenseExpiration  no default license file nor configured license instances, posting license expiry
+2026-09-03T04:21:47Z  spine2  notice  sr_xdp_lc_1     - - -  debug|4599|4957|08586|TR||W: csim_pd   csim_platform.cc:2623   UpdateLicenseValidity  No valid license, limiting packet rate to 10000pps
+2026-09-03T04:21:48Z  spine1  notice  sr_license_mgr  - - -  debug|4353|4353|08488|TR||E: licensemgr license_mgr.cc:581     CheckLicenseExpiration  no default license file nor configured license instances, posting license expiry
+2026-09-03T04:21:48Z  spine1  notice  sr_xdp_lc_1     - - -  debug|4666|5039|08590|TR||W: csim_pd   csim_platform.cc:2623   UpdateLicenseValidity  No valid license, limiting packet rate to 10000pps
 ```
 
-**Reading:** two independent devices reporting adjacency loss toward the same neighborhood at the same moment — not two problems, one topology event. **Next:** this is exactly the shape the engine groups; go to <kbd>Monitoring → Correlations</kbd> and look for a fresh candidate naming a routing cause. Verify the blast radius on <kbd>Infrastructure → Topology Canvas</kbd>.
+Four lines, two devices, one condition. Treated as four problems it is noise;
+read as one condition with a blast radius of two devices it is a finding.
 
-### Scenario C — the silent device
+### Step 4 — Read an empty result as a fact, not an all-clear
 
-A user reports a site down. Search: `host:"branch-fw-07"`, Last 6h — **zero results**, when the device normally logs steadily.
+Zero hits is an answer, and it has two possible meanings. Search a device that
+never sent a line and the response is explicit about how much was searched:
 
-**Reading:** silence from a talkative device is evidence. Either the device is down, or its logging path is broken. **Next:** check the device's live status via <kbd>Infrastructure → Devices</kbd>, then [verify its monitoring](/onboard-devices/verify-monitoring). Don't mistake "no logs" for "no problem."
+```bash
+curl -s -H "Authorization: Bearer $TOKEN" \
+  'http://localhost:8000/api/logs/search?signal=syslog&from=now-6h&to=now&query=host:"leaf1"'
+```
 
-## Where to go next
+```json
+{
+  "took": 421,
+  "timed_out": false,
+  "_shards": {"total": 15, "successful": 15, "skipped": 14, "failed": 0},
+  "hits": {"total": {"value": 0, "relation": "eq"}, "max_score": null, "hits": []}
+}
+```
 
-Once you can read the stream, follow it downstream: [From signal to ticket](/noc-guide/from-signal-to-ticket) walks one incident from the first anomaly to the filed ticket, including how the log evidence you just learned to read appears inside the RCA.
+Every shard answered and none held a matching record. That separates
+*queried and empty* from *could not be queried*, which is a different fact. It still does not distinguish a healthy quiet device from a device
+whose logging path is broken, and neither does the console. Resolve it on
+**Administration → Data Collection → Data Sources**: a device whose Syslog cell
+reads *no data* is not sending, and silence from a device that normally reports
+steadily is itself worth investigating.
+
+### Step 5 — Pivot out of the stream
+
+1. Select a row. The complete underlying record opens, with every field the
+   collector wrote. Two of them tell you how much Correlix understood of the
+   line: `parser_id` names the rule that read it, and `parser_status` says
+   whether it parsed. A line the parser did not recognise is still stored and
+   still searchable, and it contributes less to correlation, because the fields
+   that grounding depends on were never extracted. The shapes arriving from your
+   tenant that no rule recognises are listed on **Administration → Data
+   Collection → Telemetry Coverage**, which is where a recurring blind spot gets
+   fixed rather than worked around.
+2. Note the device and the timestamp, then go outward:
+   - **Investigate → Findings** for a baseline deviation on that device around
+     that time. Each finding carries a severity, a kind, a component, a summary
+     and a score, and its detail view offers **View logs** back to where you
+     came from.
+   - **Investigate → RCA** for a candidate whose window covers the timestamp.
+   - **Overview → Home** if it correlated and matters. It is in the Action Queue
+     with an owner and a next action.
+3. Going the other way, from an alert or a finding to the logs, use the **View
+   logs** button on the detail view. It opens that device's syslog pre-scoped.
+
+## Vendor message shapes
+
+The lab stack runs Nokia SR Linux, so the captures above are SR Linux. The
+shapes below are the Cisco-style forms Correlix parses on other platforms. They
+are constructed illustrations of the message grammar, not captures from a
+running device, and the exact wording differs by platform and release.
+
+| What happened | Constructed example |
+|---|---|
+| Interface transition | `%LINK-3-UPDOWN: Interface GigabitEthernet0/1, changed state to down` |
+| Line protocol follows it | `%LINEPROTO-5-UPDOWN: Line protocol on Interface Ethernet1, changed state to down` |
+| BGP session drops on the hold timer | `%BGP-5-ADJCHANGE: neighbor 10.50.0.1 Down Hold timer expired` |
+| BGP session drops after a notification | `%BGP-5-ADJCHANGE: peer 10.0.0.1 (AS 65001) old state Established event RecvNotify new state Idle` |
+| OSPF adjacency drops | `%OSPF-5-ADJCHG: Process 1, Nbr 10.0.0.2 on Ethernet1 from FULL to DOWN` |
+
+An interface transition followed within seconds by a protocol adjacency change
+on the same device is one fault with two witnesses on one plane. The same
+adjacency change reported by the neighbour at the far end is a second observer,
+and that is the difference the confirmation bar measures.
+
+## Result
+
+You can scope the stream to one device and window, tell a repeat from a burst
+from an echo, read an empty result without mistaking it for health, and move
+from a single line to the finding or RCA case that already contains it.
+
+## Related
+
+- [Search logs](/explore/logs)
+- [Start a shift](/noc-guide/where-to-start)
+- [From observation to ticket](/noc-guide/from-signal-to-ticket)
+- [Send syslog](/send-data/syslog)
+- [Honest states](/reference/honest-states)

@@ -1,90 +1,115 @@
 ---
 title: Built-in dashboards
-sidebar_label: Built-in dashboards
+description: Every built-in board, what it answers and its key panels, plus the panel registry and span model behind dashboards you compose yourself.
+page_type: reference
 sidebar_position: 2
-description: A tour of every built-in board — what each answers, its key panels, and how to drill down.
 ---
 
 # Built-in dashboards
 
-<kbd>Dashboards → Dashboard List</kbd> is the directory of every built-in board. Cards are grouped into **Network monitoring**, **Traffic & paths**, and **Health & operations**; clicking a card opens the board it names. The boards in the Network monitoring group are driven by the [global time range](/dashboards-reports/overview#the-global-time-range) in the top bar — set the window before you read the graphs.
+**Analytics → Dashboards → Dashboard List** is the directory of built-in boards, grouped as Network monitoring, Traffic and paths, and Health and operations. Below the directory sits **Your dashboards**, the composer. Boards in the Network monitoring group are driven by the [global time range](/dashboards-reports/overview#the-global-time-range), so set the window before reading the graphs.
 
 ## Network monitoring
 
 ### Device Metrics
 
-*Answers: "How is the fleet doing, device by device?"* Also reachable as <kbd>Infrastructure → Device Monitoring</kbd>; the **Bandwidth Utilization** card opens this same board.
+Answers how the fleet is doing, device by device. Reached from the card, or directly at **Analytics → Metric Dashboards → Device Monitoring**. The **Bandwidth Utilization** card opens the same board.
 
-Key panels, top to bottom:
+| Section | Panels |
+|---|---|
+| Fleet vitals and reachability | Active alerts by severity, and a device inventory and reachability table with a state dot per device |
+| Fleet aggregates | Fleet total throughput, and fleet errors and discards |
+| Device inventory and uptime | Longest device uptime |
+| Device resources | Average CPU and memory over the window, plus the highest-CPU and highest-memory devices |
+| Interfaces | Busiest interfaces inbound and outbound |
+| Flows | Busiest talkers and top flow exporters |
+| Tunnels | Current per-tunnel state |
 
-- **Fleet vitals & reachability** — active alerts by severity, and the **Devices — inventory & reachability** table (a green/red dot per device).
-- **Fleet aggregates** — fleet total throughput (bps) and fleet errors + discards (/s).
-- **Device inventory & uptime** — longest device uptime.
-- **Device resources — CPU & memory** — average CPU and memory utilization over the window, plus the devices with the highest CPU and memory.
-- **Interfaces** — busiest interfaces inbound and outbound (bps).
-- **Flows** — busiest talkers and top flow exporters (bytes).
-- **Tunnels — current state** — per-tunnel status.
-
-**Drill down to one device's interfaces:**
-
-1. Open <kbd>Dashboards → Dashboard List</kbd> and click **Device Metrics**.
-2. In the **Devices — inventory & reachability** table, find the device (the dot shows reachable/unreachable).
-3. Click the device's row link ("Open Interface Performance scoped to this device"). The Interface Metrics board opens pre-scoped to that device.
+To scope to one device's interfaces, find the device in the reachability table and select its row link. The Interface Metrics board opens pre-scoped to that device.
 
 ### Interface Metrics
 
-*Answers: "What is this interface actually doing — throughput, errors, flaps, and who is on it?"* Also reachable as <kbd>Infrastructure → Interface Performance</kbd>.
+Answers what an interface is doing: throughput, errors, flaps and who is on it. Also at **Analytics → Metric Dashboards → Interface Performance**.
 
-The board starts fleet-wide and narrows through the **scope bar** at the top:
+The board starts fleet-wide and narrows through the scope bar: choose a device, then choose one of that device's interfaces to pin every time-series panel to it.
 
-1. In the **Device** dropdown, pick a device (or leave **All devices** for fleet leaders).
-2. Once a device is chosen, the **Interface** dropdown lists that device's interfaces — pick one to pin every time-series panel to it, or leave **All interfaces**.
-
-Panels, in reading order:
-
-- **All interfaces — leaders** — top 10 by inbound and outbound throughput.
-- **Top flapping interfaces** — most operational-state changes in the last 24 h (a flap detector).
-- **Throughput & utilization** — inbound/outbound bits per second and percent-of-speed utilization for the selected scope.
-- **Errors & discards** — the interfaces taking the most errors and discards, plus inbound-vs-outbound trend lines.
-- **Packet mix** — unicast / multicast / broadcast packet rates (a broadcast-storm tell).
-- **Oper & admin status** — operational and administrative state over time (stepped lines make flaps obvious).
-- **NetFlow traffic** — top sources (ingress) and top destinations (egress) crossing the selected device, from flow records.
+| Panel | What it shows |
+|---|---|
+| All interfaces, leaders | Top 10 by inbound and outbound throughput |
+| Top flapping interfaces | Most operational-state changes in the last 24 hours |
+| Throughput and utilization | Bits per second each way, and per cent of interface speed |
+| Errors and discards | The interfaces taking the most of each, with trend lines |
+| Packet mix | Unicast, multicast and broadcast rates, which is the broadcast-storm tell |
+| Oper and admin status | State over time as stepped lines, so a flap is obvious |
+| NetFlow traffic | Top sources and destinations crossing the selected device |
 
 ### BGP Metrics
 
-*Answers: "Is routing converged and stable?"* Also reachable as <kbd>Infrastructure → Protocol Monitoring</kbd>. It covers all three routing planes:
+Answers whether routing is converged and stable. Also at **Analytics → Metric Dashboards → Protocol Monitoring**. It covers three routing planes: BGP session health with peer state, established-state transitions and prefixes received; OSPF neighbor and interface state; and IS-IS adjacency state and adjacency counts per device. A device-context row carries system uptime and interfaces up.
 
-- **Device context** — system uptime and interfaces-up per device.
-- **BGP — session health** — peer state over time, established-state transitions per minute (session flaps), and prefixes received per peer.
-- **OSPF — IGP health** — neighbor state and interface state over time.
-- **IS-IS — fabric IGP** — adjacency state over time and adjacency counts per device.
+The state panels are stepped lines. A flat line at the top value is healthy, and any step down is a session or adjacency event worth correlating against **Explore → Events**.
 
-Reading tip: the state panels are stepped lines — a flat line at the top value is healthy; any step down is a session or adjacency event worth correlating with <kbd>Monitoring → Events</kbd>.
+**Analytics → Metric Dashboards → BGP Operations** is the consolidated routing-outage screen: routing status, RPKI, AS paths, churn and ownership in one place. See [BGP operations](/bgp/overview).
 
 ### WAN Interface Metrics
 
-*Answers: "Is each WAN circuit meeting its SLA?"* A per-WAN-interface table: utilization, in/out throughput and status with a live sparkline, plus latency, jitter, loss, QoE and availability measured to a derived target. It has its own full page — see [WAN Interface Metrics](/infrastructure/wan-interface-metrics).
+Answers whether each WAN circuit is meeting its SLA. The card opens **Investigate → Paths → WAN Paths**, which has its own page: [Measure WAN paths](/infrastructure/wan-interface-metrics).
 
-## Traffic & paths
+## Traffic and paths
 
-- **Flow Analytics** — traffic exploration over flow records (talkers, protocols, filters). See [Flows](/explore/flows).
-- **Network Path** — hop-by-hop path views for tracing where traffic goes and where it degrades.
-- **Quality** — link-quality measurements (also <kbd>Monitoring → Link Quality</kbd>).
+| Card | Opens | What it answers |
+|---|---|---|
+| Flow Analytics | **Explore → Flows** | Who is talking to whom. See [Analyse flows](/explore/flows). |
+| Network Path | **Investigate → Paths → Flow Trace** | Where traffic goes and where it degrades. |
+| Quality | **Operations → Network Health** | Link-quality measurement. |
 
-## Health & operations
+## Health and operations
 
-- **Troubleshooting** — *the platform watching its own collection*: flow sources seen in the last hour (by protocol and exporter), fleet counts, collector reachability and poll timings, SNMP reachable-vs-configured, the flow pipeline, and SNMP traps received. Open this board first when a monitoring board looks empty — it tells you whether data is arriving at all.
-- **Data Sources** — the ingestion inventory (see [Data sources](/onboard-devices/data-sources)).
-- **Events** — the event stream (also <kbd>Monitoring → Events</kbd>).
-- **Threat Detection** — security findings and critical alerts.
+| Card | Opens | What it answers |
+|---|---|---|
+| Troubleshooting | **Investigate → Troubleshooting** | The platform watching its own collection: flow sources seen in the last hour by protocol and exporter, fleet counts, collector reachability and poll timings, SNMP reachable versus configured, the flow pipeline, and traps received. Open this first when a monitoring board looks empty, because it says whether data is arriving at all. |
+| Data Sources | **Administration → Data Collection → Data Sources** | The ingestion inventory. See [Data sources](/onboard-devices/data-sources). |
+| Events | **Explore → Events** | The merged event timeline. See [Review the event feed](/explore/events). |
+| Threat Detection | **Security → Threat Detection** | Security findings and critical alerts. |
 
-## Saved dashboards
+**Analytics → Dashboards → Demo Showcase** renders the same live panel registry with different chrome, as a sales surface.
 
-Below the directory sits the **Saved dashboards** slot — the future home for dashboards you compose yourself from KPI tiles, saved log searches, flow charts, and metric queries. Composable dashboards are not available yet; the built-in boards above are the current catalog.
+## Dashboards you compose yourself
+
+**Your dashboards** sits below the directory. A dashboard is a named, ordered list of panel cells rendered through the same registry the curated boards use, and it is persisted server-side as a saved object of type `dashboard`, scoped to your tenant.
+
+1. Select **+ New dashboard**.
+2. Select **+ Add panel** and pick from the categorised registry. Each entry shows its default width.
+3. Set each panel's width from the span control, reorder with the move controls, and remove with the remove control.
+4. Name the dashboard and select **Save**.
+
+The layout model is a 12-column grid, and a span is the only layout unit. The five valid spans are 3, 4, 6, 8 and 12 columns, and a board holds at most 40 cells. Reordering and resizing cover composition without a drag-layout dependency.
+
+### The panel registry
+
+29 panels in nine categories:
+
+| Category | Panels |
+|---|---|
+| Health and KPIs | KPIs, Site availability, Stack performance |
+| Resources | CPU, Memory, Storage and Bandwidth utilization gauges, plus CPU, memory, storage and temperature saturation trends |
+| Interfaces | Interface utilization, errors and discards, each top-N |
+| Routing | BGP peers, OSPF neighbors |
+| Active measurement | Probe RTT, probe jitter, probe loss |
+| Alerts | Alerts by severity, active alerts, recent incidents |
+| Traffic | WAN interfaces, traffic in and out, top hosts, flows by protocol, tunnel health |
+| Inventory | Devices by vendor |
+| Topology | Topology |
+
+A board saved by a newer version can hold a panel type this version does not know. That cell is **kept in the saved layout untouched**. The editor discloses it above the grid, stating how many panels come from a newer version and cannot render here. It is never silently dropped, so opening and saving an unfamiliar board does not destroy it.
+
+An empty board says so and offers to add the first panel. A board list that fails to load says the load failed rather than showing zero dashboards.
 
 ## Troubleshooting
 
-- **Panels show "no data" on Device or Interface Metrics.** Open the **Troubleshooting** board: if **Collectors** shows zero reachable targets or **SNMP reachability** is flat, the problem is collection, not the dashboard — start at [verify monitoring](/onboard-devices/verify-monitoring).
-- **The Interface dropdown is empty after picking a device.** Interface options are discovered from that device's collected metrics; a freshly added device needs a poll cycle or two before its interfaces appear.
-- **Flow panels are empty while SNMP panels work.** Flow panels need flow export (NetFlow/IPFIX/sFlow) from the device — check the flow-sources panel on the Troubleshooting board, then [flows setup](/send-data/flows).
-- **A graph looks flat or truncated.** Check the top-bar time range; each section remembers its own last-used window, so the board may be on a different range than the one you set elsewhere.
+| Symptom | What it means |
+|---|---|
+| Panels read no data on Device or Interface Metrics | Open the Troubleshooting board. Where collectors show zero reachable targets, the fault is collection rather than the dashboard. Start at [verify monitoring](/onboard-devices/verify-monitoring). |
+| The Interface dropdown is empty after picking a device | Interface options come from that device's collected metrics. A freshly added device needs a poll cycle or two. |
+| Flow panels are empty while SNMP panels work | Flow export is not reaching the platform. Check the flow-sources panel on the Troubleshooting board, then [flows setup](/send-data/flows). |
+| A graph looks flat or truncated | Check the top-bar range. Each section remembers its own last-used window. |

@@ -1,147 +1,167 @@
 ---
-title: Notifications (Slack, PagerDuty, Email, SMS & Push)
-sidebar_label: Notifications
+title: Configure a notification channel
+sidebar_label: Configure a notification channel
+description: Configure email, Slack, PagerDuty, Teams, Amazon SNS, Twilio SMS or ntfy delivery, set a minimum severity, and send a test.
+page_type: task
 sidebar_position: 2
-description: Route alerts to your team's channels — Slack, PagerDuty, email, SMS (Twilio), and phone push — with per-channel severity thresholds and test sends.
 ---
 
-# Notifications
+# Configure a notification channel
 
-Notification channels deliver alerts to where your team already works. Configure them at <kbd>Incident Response → Notifications</kbd> — a gallery of four channel tiles, each opening its own guided setup:
+A notification channel is how an alert reaches a person. Correlix carries seven
+channel types, each with its own credentials, its own minimum severity, and its
+own test button.
 
-| Channel | Delivers via | Typical use |
-| --- | --- | --- |
-| **Email** | Your SMTP relay | NOC distribution lists |
-| **SMS &amp; Push** | Twilio (SMS) and ntfy (free push) | Paging phones on critical alerts |
-| **Slack** | Slack Incoming Webhook | Team channel visibility |
-| **PagerDuty** | PagerDuty Events API v2 | On-call escalation |
+Channels are platform-global plumbing. They are configured once by the platform
+owner, and they carry product and tenant alerts.
 
-Each tile shows its state at a glance — **Not set up**, **On**, or **Off** — and the stat strip at the top counts **Channels**, **Enabled**, and **Contact points**.
+## Before you begin
 
-:::note Platform administrator required
-Notification channels are platform-wide delivery plumbing; configuring them requires a platform administrator. All secrets (passwords, tokens, webhook URLs, routing keys) are **write-only**: they are never displayed after saving, and re-saving with a blank secret field keeps the stored value.
+- **Platform-owner access.** Every channel route is gated by the platform-admin
+  check. An organization or tenant admin receives `403` with
+  `platform administrator required`. See
+  [identity and access](/administration/identity-access).
+- The credential for the channel you are configuring, from the table below.
+- A decision on the minimum severity for that channel.
+
+## Steps
+
+### Step 1: open the channel list
+
+1. Go to **Administration → Incident Response → Notifications**.
+2. Pick a tile. Six tiles cover the seven configurations: **Email**, **SMS &
+   Push**, **Slack**, **PagerDuty**, **Microsoft Teams** and **Amazon SNS**.
+   Twilio and ntfy share the **SMS & Push** tile.
+
+The tiles render only for the platform principal. Contact points below them are
+visible to everyone.
+
+### Step 2: enter the credential
+
+Enter the values for the channel you picked.
+
+| Channel | Route | What it needs |
+|---|---|---|
+| Email | `/api/notify/smtp` | Host, port, security mode, from address, recipients, user and password. |
+| Twilio SMS | `/api/notify/twilio` | Account SID, auth token, from number, to numbers. |
+| ntfy | `/api/notify/ntfy` | Topic, server, token. |
+| Slack | `/api/notify/slack` | Incoming webhook URL. |
+| PagerDuty | `/api/notify/pagerduty` | Events v2 routing key. |
+| Microsoft Teams | `/api/notify/teams` | Incoming webhook URL. |
+| Amazon SNS | `/api/notify/sns` | Topic ARN or phone numbers, and a region. |
+
+Amazon SNS credentials stay in the environment as `AWS_ACCESS_KEY_ID` and
+`AWS_SECRET_ACCESS_KEY`. They are never stored in the channel configuration.
+
+### Step 3: set the minimum severity
+
+Choose a value from `info`, `notice`, `warning`, `error` or `critical`. Anything
+else is refused with `400` and `invalid min_severity`.
+
+The shipped defaults follow one rule: push-class channels gate at critical,
+chatter-class channels gate at warning.
+
+| Channel | Default minimum severity |
+|---|---|
+| Email | `warning` |
+| Slack | `warning` |
+| Microsoft Teams | `warning` |
+| Twilio SMS | `critical` |
+| ntfy | `critical` |
+| PagerDuty | `critical` |
+| Amazon SNS | `critical` |
+
+An alert below the threshold is filtered, not failed. Resolutions are not gated,
+so a channel that was told about a firing alert is always told when it clears.
+
+### Step 4: send a test
+
+1. Select the channel's test control. The console posts to the channel's
+   `/test` route.
+2. Confirm the message arrived.
+
+The test bypasses the severity gate and sends at `critical`, so a test proves the
+transport works regardless of where you set the threshold.
+
+## Result
+
+The channel tile reports it is configured, and the stored secret is never
+returned again. A `GET` on a channel route reads the secret back as a boolean:
+
+| Channel | Field on read |
+|---|---|
+| Email | `pass_set` |
+| Twilio SMS | `token_set` |
+| ntfy | `token_set` |
+| Slack | `webhook_set` |
+| PagerDuty | `routing_set` |
+| Microsoft Teams | `webhook_set` |
+| Amazon SNS | `credentials_set` |
+
+A `PUT` that omits the secret preserves the stored one, which is what lets the
+console mask a value it can never re-read. Secrets are encrypted at rest with the
+platform data key before they are persisted. A Teams or Slack incoming webhook
+URL embeds a bearer token, so the whole URL is treated as the secret and the API
+returns a boolean for it on read, on write and on test.
+
+## Scope filters on the paging channels
+
+Two channels carry a scope setting on top of the severity gate.
+
+| Channel | Default scope | What it means |
+|---|---|---|
+| PagerDuty | `platform` | Only platform self-health alerts page. `all` restores the legacy raw-alert paging. |
+| Amazon SNS | `all` | Every alert the severity gate passes. |
+
+## Environment variables seed the configuration once
+
+A deployment that configures a channel through the environment has that wiring
+migrated into the stored configuration on first run, and then never again. The
+latch is persisted with the configuration, so an operator who disables Teams in
+the console is not overruled at the next boot by a `TEAMS_WEBHOOK_URL` still
+sitting in `.env`.
+
+**The stored configuration is authoritative.** The environment is a bootstrap.
+
+| Channel | Feature flag | Other variables |
+|---|---|---|
+| Email | `FEATURE_EMAIL_NOTIFICATIONS` | `SMTP_HOST`, `SMTP_FROM`, `SMTP_USER`, `SMTP_PASS`, `SMTP_TO`, `SMTP_TLS_ON_CONNECT` |
+| Twilio SMS | `FEATURE_TWILIO_NOTIFICATIONS` | `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_FROM_NUMBER`, `TWILIO_TO_NUMBERS` |
+| Slack | `FEATURE_SLACK_NOTIFICATIONS` | `SLACK_WEBHOOK_URL` |
+| PagerDuty | `FEATURE_PAGERDUTY_NOTIFICATIONS` | `PAGERDUTY_KEY`, `PLATFORM_ENV`, `PLATFORM_REGION` |
+| Microsoft Teams | `FEATURE_TEAMS_NOTIFICATIONS` | `TEAMS_WEBHOOK_URL` |
+| Amazon SNS | `FEATURE_SNS_NOTIFICATIONS` | `SNS_TOPIC_ARN`, `SNS_PHONE_NUMBERS`, `AWS_REGION` |
+| ntfy | `FEATURE_NTFY_NOTIFICATIONS` | `NTFY_ALERT_TOPIC`, `NTFY_ALERT_SERVER`, `NTFY_ALERT_TOKEN` |
+
+The Teams and Amazon SNS environment paths are deprecated and log a warning when
+used. The ntfy environment path is not deprecated: it is the appliance install
+path.
+
+:::caution
+The ntfy topic used for product alerting must not be the external watchdog's
+topic. A `PUT` that sets it to the value of `WATCHDOG_NTFY_TOPIC` is refused with
+`400` and
+`this topic is reserved for the stack watchdog — use a dedicated topic for platform alerts (watchdog independence)`.
+At boot, an `NTFY_ALERT_TOPIC` equal to the watchdog topic refuses to enable ntfy
+and logs an error every boot until the deployment gives product alerting its own
+topic. The watchdog must stay able to report the stack's own death.
 :::
-
-## How delivery works
-
-- An alert is dispatched **once, when it first starts firing** — not on every evaluation. See [Manage alerts](/monitoring/manage-alerts).
-- Every *enabled* channel receives every alert, filtered by that channel's own **Send on severity ≥** selector. Severity levels, lowest to highest: `info`, `notice`, `warning`, `error`, `critical`.
-- Notification channels are separate from [Integrations](/incident-response/integrations) (ServiceNow/Jira ticketing). Use both: page the on-call *and* file the ticket.
-
-## Email (SMTP)
-
-1. Go to <kbd>Incident Response → Notifications</kbd> and click the **Email** tile.
-2. Check **Enable email delivery**.
-3. Fill in the fields:
-
-| Field | Required | What it is | Example |
-| --- | --- | --- | --- |
-| **Host** | Yes | Hostname of your SMTP relay | `smtp.example.com` |
-| **Port** | Yes | SMTP port — 587 for STARTTLS, 465 for TLS-on-connect, 25 for plain relay | `587` |
-| **From** | Yes | The From address alert emails are sent as | `noc@example.com` |
-| **Recipients (comma-separated)** | Yes | One or more addresses that receive alert emails | `oncall@example.com, noc@example.com` |
-| **Username** | No | SMTP auth username; leave blank for an unauthenticated relay | `alerts` |
-| **Password** | No | SMTP auth password (write-only — blank keeps the stored value) | — |
-| **Security** | Yes | Transport encryption: **STARTTLS (587, secure)**, **TLS on connect (465, secure)**, or **None (plain relay, insecure)** | STARTTLS |
-| **Send on severity ≥** | Yes | Only alerts at or above this severity are delivered to this channel | `error` |
-
-4. Click **Save**, then **Send test**.
-
-**Verify it worked:** the page shows "Test sent — check your inbox/phone" and a test email arrives at every recipient. The Email tile now reads **On** with `Relay <your-host>` beneath it.
-
-**Troubleshooting**
-
-- **Test failed** with a connection error — the port and **Security** setting must match your relay (587 ↔ STARTTLS, 465 ↔ TLS on connect); a mismatch is the most common failure.
-- **Test sent but nothing arrives** — check the relay's logs and spam filtering; many relays reject a **From** address outside their own domain.
-- **Auth errors** — re-enter the password (write-only, so you can't visually confirm the stored one).
-
-## SMS & Push
-
-The **SMS &amp; Push** tile holds two phone-delivery methods in one place: metered SMS via **Twilio** and free push via **ntfy**. Use ntfy to rehearse critical-alert paging without SMS cost, then add Twilio for production.
-
-### SMS via Twilio
-
-1. In the Twilio Console, note your **Account SID** (starts with `AC…`), **Auth token**, and a Twilio **sending phone number**.
-2. In Correlix, open the **SMS &amp; Push** tile and check **Enable SMS delivery** under *SMS · Twilio*.
-3. Fill in the fields:
-
-| Field | Required | What it is | Example |
-| --- | --- | --- | --- |
-| **Account SID** | Yes | Your Twilio Account SID, from the Twilio Console dashboard | `ACxxxxxxxx…` |
-| **Auth token** | Yes (first save) | Twilio auth token paired with the SID (write-only) | — |
-| **From number** | Yes | A Twilio phone number in E.164 format that messages are sent from | `+15555550123` |
-| **To numbers (comma-separated)** | Yes | Recipient phone numbers in E.164 format | `+15555550100, +15555550101` |
-| **Send on severity ≥** | Yes | Delivery threshold for this channel | `critical` |
-
-4. Click **Save SMS**, then **Send test**.
-
-### Push via ntfy
-
-1. Install the ntfy app on the phones that should receive pushes and subscribe them to a topic name of your choosing (make it unguessable — on a public server, anyone who knows the topic can subscribe).
-2. In the **SMS &amp; Push** tile, check **Enable push delivery** under *Push · ntfy* and fill in:
-
-| Field | Required | What it is | Example |
-| --- | --- | --- | --- |
-| **Server** | No | ntfy server base URL — the public server or your self-hosted instance | `https://ntfy.sh` |
-| **Topic** | Yes | The topic Correlix publishes to; subscribe to it in the ntfy app | `netops-a1b2c3` |
-| **Token (optional)** | No | Access token for protected topics (write-only) | — |
-| **Send on severity ≥** | Yes | Delivery threshold for this channel | `critical` |
-
-3. Click **Save push**, then **Send test**.
-
-**Verify it worked:** the test SMS arrives on every **To** number, and the push appears on every subscribed device. The tile shows **On** with `SMS · Push` beneath it.
-
-**Troubleshooting**
-
-- **Twilio test failed** — numbers must be in E.164 format (`+` and country code); trial Twilio accounts can only text verified numbers.
-- **No push received** — the topic in Correlix and in the ntfy app must match exactly, and a protected topic needs the token saved.
-- **SMS bills climbing** — raise **Send on severity ≥** to `critical`; Twilio is metered per message per recipient.
-
-## Slack
-
-1. In Slack, create an **Incoming Webhook** for the target channel and copy the webhook URL (it looks like `https://hooks.slack.com/services/…`).
-2. In Correlix, open the **Slack** tile and check **Enable Slack delivery**.
-3. Fill in the fields:
-
-| Field | Required | What it is | Example |
-| --- | --- | --- | --- |
-| **Webhook URL** | Yes (first save) | Slack Incoming Webhook URL — it embeds a secret, so it's write-only | `https://hooks.slack.com/services/…` |
-| **Send on severity ≥** | Yes | Delivery threshold for this channel | `warning` |
-
-4. Click **Save**, then **Send test**.
-
-**Verify it worked:** a test message appears in the Slack channel the webhook targets; the tile reads **On** with "Webhook configured."
-
-**Troubleshooting:** a failed test usually means the webhook was revoked or the app removed from the channel — create a fresh Incoming Webhook and re-save (paste the full URL; the field shows dots afterward because it is write-only).
-
-## PagerDuty
-
-1. In PagerDuty, on the service that should receive alerts, add an **Events API v2** integration and copy its 32-character **integration (routing) key**.
-2. In Correlix, open the **PagerDuty** tile and check **Enable PagerDuty delivery**.
-3. Fill in the fields:
-
-| Field | Required | What it is | Example |
-| --- | --- | --- | --- |
-| **Routing key** | Yes (first save) | Events API v2 integration key from your PagerDuty service (write-only) | 32-char key |
-| **Send on severity ≥** | Yes | Delivery threshold — for a paging channel, usually `critical` | `critical` |
-
-4. Click **Save**, then **Send test**.
-
-Each Correlix alert triggers a PagerDuty event carrying the alert summary, severity, source device, and rule, with a per-alert dedup key so a repeated dispatch of the same alert does not stack duplicate PagerDuty incidents.
-
-**Verify it worked:** a test incident appears (and pages) on the PagerDuty service.
-
-**Troubleshooting:** "invalid routing key" means the key isn't the Events API v2 integration key — service API keys and REST API keys will not work.
-
-### Two-way sync (Slack and PagerDuty)
-
-Inside the Slack and PagerDuty setup panels, a collapsible **Bidirectional sync** section lets the provider push state changes (ack, resolve, reassign) back onto Correlix incidents: set **Sync mode** to `bidirectional`, check **Accept inbound state changes**, enter a **Webhook signing secret** (required; inbound calls are HMAC-verified against it), then copy the displayed **Inbound webhook URL** and register it with the provider — for Slack as the app's Interactivity request URL, for PagerDuty as a v3 webhook subscription — and click **Save sync**. The mechanics are identical to the ITSM sync step described under [Integrations](/incident-response/integrations#two-way-sync-and-webhook-secrets).
 
 ## Contact points
 
-Below the channel gallery, the **Contact points** card manages reusable delivery audiences — email groups, Slack targets, or webhooks — that **Reports** deliver to (they are not the alert path above). Contact points are scoped to the current tenant. To add one: enter a **Name** (e.g. `NOC on-call`), pick a **Type** (`email`, `slack`, or `webhook`), then either the comma-separated **Email recipients** (email type) or the **Target** URL/channel (other types), and click **Add**.
+Below the channel tiles, contact points are reusable, tenant-scoped audiences of
+type `email`, `slack` or `webhook`. Reading them needs `administration:read` and
+creating one needs `administration:admin`, so a tenant admin manages their own
+without touching platform channels.
 
-## Next
+| Route | What it does |
+|---|---|
+| `GET`, `POST` `/api/notify/contact-points` | List and create. |
+| `PUT`, `DELETE` `/api/notify/contact-points/{id}` | Update and remove. |
 
-- **[Integrations (ServiceNow, Jira)](/incident-response/integrations)** — file tickets, not just messages
-- **[RCA Auto-Ticketing](/incident-response/rca-ticketing)** — one ticket per root cause, automatically
+## Related
+
+- [Connect ServiceNow or Jira](/incident-response/integrations)
+- [Open tickets automatically from RCA](/incident-response/rca-ticketing)
+- [Monitor Correlix itself](/monitoring/host-monitoring)
+- [Work the alert queue](/monitoring/manage-alerts)

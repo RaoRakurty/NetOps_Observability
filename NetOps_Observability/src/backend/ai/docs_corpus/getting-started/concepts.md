@@ -1,83 +1,150 @@
 ---
-title: Key concepts
-sidebar_label: Key concepts
-sidebar_position: 3
-description: The core vocabulary of Correlix — devices, telemetry planes, monitors, events, incidents, correlations, and seams.
+title: Core concepts
+sidebar_label: Core concepts
+description: The mental model behind Correlix - what it collects, what correlation does with it, what an RCA case and a seam are, and the honesty principle.
+page_type: concept
+sidebar_position: 2
 ---
 
-# Key concepts
+# Core concepts
 
-This page is the operator's mental model — the handful of ideas the rest of the docs (and the console itself) are built on. Each concept notes **where you'll meet it in the console**, so the vocabulary and the UI reinforce each other. For quick alphabetical lookups, use the [Glossary](/reference/glossary).
+Correlix rests on six ideas. It collects several independent classes of
+measurement about the same network. It correlates them. It produces an RCA case
+with a graded verdict. It attributes the fault to a seam. It isolates everything
+by tenant. And it never states a fact it did not measure. What follows is that
+model. For the definition of a single term, use the
+[Glossary](/reference/glossary).
 
-## Inventory: devices, interfaces, sites
+## What Correlix collects
 
-- **Device** — a network element Correlix monitors: router, switch, firewall, load balancer. Devices enter the inventory by [SNMP discovery](/onboard-devices/snmp-discovery), by being [added manually](/onboard-devices/add-devices-manually), or via a Source-of-Truth import.
-- **Interface** — a port on a device. Interface metrics (throughput, utilization, errors, oper-status) are the backbone of network monitoring.
-- **Site** — a location grouping for devices (a data center, branch, region). Sites scope views and place devices on maps.
+The classes below are independent on purpose. Independence is what makes
+agreement between two of them meaningful.
 
-**Where you'll meet it:** <kbd>Infrastructure → Devices</kbd> is the fleet inventory — live status dot, vendor, type, and discovery source per device. Interfaces render under <kbd>Infrastructure → Interface Performance</kbd>; sites drive the <kbd>Device Geomap</kbd>.
+| Class | What it is | Where it comes from |
+|---|---|---|
+| Metrics | Numeric time series: CPU, memory, interface counters, protocol state. | SNMP polling, and gNMI streaming telemetry delivered into the same metrics plane. |
+| Logs | Syslog the devices emit about themselves. | The syslog receiver. See [Send syslog](/send-data/syslog). |
+| Flows | Traffic records stating who talked to whom and how much. | NetFlow, IPFIX and sFlow exporters. See [Send flow records](/send-data/flows). |
+| Traps | SNMP notifications a device pushes when its state changes. | The trap receiver. See [Send SNMP traps](/send-data/traps). |
+| Active probes | Measurement Correlix originates: ICMP reachability, STAMP, hop-by-hop path trace. | The probe collectors. |
+| Active verification | The device's own answer to a bounded, read-only command battery. | The SSH gateway, on demand. See [Collect from a device](/investigate/collect-from-a-device). |
+| Controller intelligence | What a vendor controller or NMS knows that the device does not report: wireless clients, SD-WAN overlay state, controller events. | Controller and NMS connectors. See [NMS integrations](/infrastructure/nms-integrations). |
+| Security findings | Verdicts about an asset: posture, exposure and detection. | The security scanners. See [Security overview](/security/overview). |
 
-## Telemetry planes
+Two of these carry a limit worth knowing before you rely on them. Controller
+intelligence is a management-plane report rather than a wire measurement, and a
+case supported only by a controller is capped at *suspected*. Security findings
+are verdicts about an asset rather than a measurement of the path, so a
+security-only case can never reach *confirmed* either. Both can corroborate a
+case that a measured class already supports.
 
-Correlix collects several **independent planes** of telemetry about the same network. Independence is the point: when the same fault shows up in more than one plane, confidence in the diagnosis rises sharply.
+## What correlation does
 
-- **Metrics** — numeric time series polled over SNMP (or streamed via [gNMI](/onboard-devices/streaming-gnmi)): CPU, memory, interface counters, protocol state.
-- **Flows** — traffic records (NetFlow / sFlow / IPFIX) describing who talked to whom, and how much.
-- **Logs** — syslog messages the devices themselves emit.
-- **Traps** — SNMP notifications devices push when something changes.
-- **Active measurement** — probes Correlix originates (ICMP, STAMP, path trace) measuring latency, jitter, and loss along real paths.
+Observations that share a time window and a network relationship are grouped into one
+object. The engine matches the group's shape against a catalog of known failure
+patterns, ranks the causes it considered, and grades the result.
 
-**Where you'll meet it:** the **Data** zone of the icon rail — <kbd>Metrics</kbd>, <kbd>Flows</kbd>, <kbd>Logs</kbd> — explores each plane raw. The [Data Sources coverage matrix](/onboard-devices/data-sources) shows, per device, which planes are actually being collected.
+The grade is one of three tiers:
 
-## Detection: monitors, anomalies, alerts, events
+| Tier | What it means | How the console shows it |
+|---|---|---|
+| `confirmed` | At least two measurement classes agree, reported by at least two observers that share no measurement authority and no shared fate, and every class the matched signature requires is present. | **Confirmed** |
+| `suspected` | Supporting observations exist, but the independence bar is not met. | **Suspected** |
+| `undetermined` | Too little evidence to place a cause. | **Not confirmed** |
 
-- **Monitor** — a rule *you* define that watches a metric or condition and raises an alert when breached. Explicit, predictable, yours.
-- **Anomaly** — a deviation from normal that Correlix detects *automatically* from each metric's own history — no threshold required.
-- **Alert** — an active, unresolved monitor breach.
-- **Event** — anything noteworthy on the timeline: a syslog message, a trap, an alert, an anomaly, a change.
+The bar is deliberately harder than "two sources agree". Two readings that come
+from the same collector, or two devices that fail together for the same reason,
+are not independent, and the engine does not count them as corroboration. A case
+that stops short of `confirmed` names the classes it is missing rather than
+rounding up.
 
-Monitors and anomalies are complementary: monitors encode what you already know matters; anomaly detection catches what you didn't think to watch.
+The confidence value attached to a case is a heuristic rank, not a probability.
+Read it as an ordering between hypotheses.
 
-**Where you'll meet it:** everything lives under <kbd>Monitoring</kbd> — **Monitor Rules** and **Create Monitor** for definitions, **Active Alerts** for live breaches, **Anomalies** and **Events** under Event Management.
+Two further states sit alongside those three grades on a case: `contradicted`,
+when the leading cause was ruled out by discriminating evidence, and
+`recovered`, when the incident has cleared. See
+[How root-cause analysis works](/investigate/rca-explained) for the full
+ladder.
 
-## Root cause: incidents, evidence, verdicts, seams
+## What an RCA case is
 
-This is Correlix's center of gravity. Instead of paging you once per symptom, the correlation engine groups related signals — across planes *and* devices — that share a cause and time window into **one incident**.
+An RCA case is the object an operator opens: one problem, with the evidence for
+it. It carries a stable problem identifier, the graded verdict, the ranked
+hypotheses with the reason each was kept or dropped, the affected devices and
+paths, the owner, and an evidence matrix that shows what was found, what is
+missing and what conflicts.
 
-- **Correlation / Incident** — the grouped problem, with a proposed root cause and blast radius.
-- **Verdict** — how sure Correlix is about the incident's **fault domain**:
-  - **Confirmed** — evidence aligned across independent signals.
-  - **Suspected** — multiple supporting signals, not yet fully validated.
-  - **Undetermined** — a low-evidence correlation; a watch item, not yet actionable.
-- **Evidence** — the specific signals (and their sources) supporting or contradicting the verdict. Every conclusion is backed by clickable evidence — nothing is a black box, and a verdict is never stronger than its evidence.
-- **Recommended owner** — the team the fault domain maps to (routing, provider, security…).
-- **Seam** — a responsibility boundary in the path, such as where your network hands off to an ISP or a cloud. Seams let Correlix attribute a fault to the right *side* of a handoff — often the difference between "open an internal ticket" and "call the provider".
+The case is versioned. A verdict that strengthens as evidence arrives is a new
+version of the same case, not a second case, which is why one root cause
+produces one ticket rather than one ticket per alert.
 
-**Where you'll meet it:** <kbd>Monitoring → Incidents</kbd> and <kbd>Monitoring → Correlations</kbd>; the <kbd>Incident Response → Command Center</kbd> puts active incidents, verdicts, and evidence on one operational screen. Routing incidents outward (notifications, tickets) lives under [Incident Response](/incident-response/overview).
+Two rows are worth reading carefully. **Root cause** names an object only when
+the verdict is confirmed; otherwise the case states the honest form, *possibly
+because of X*. **Owner** appears when the seam is attributed, and **Possible
+owner** when it is not.
 
-## The maps: topology and paths
+## Seams and why ownership matters
 
-Correlix learns the network's shape rather than asking you to draw it: neighbor relationships discovered from the devices themselves build the **[Topology Canvas](/infrastructure/topology-canvas)**, and active measurements trace the hop-by-hop paths traffic really takes (<kbd>Infrastructure → Flow Trace</kbd>). Incidents reference this graph — a fault's blast radius is a topological statement, not a list.
+A seam is a transition in who is responsible for forwarding the packet. There
+are five, and the set is closed:
 
-## Access model: tenants, organizations, roles
+| Seam | How the console labels it | Umbrella |
+|---|---|---|
+| `DIA` | **ISP** | WAN |
+| `DX` | **DX** | WAN |
+| `VPN` | **VPN** | WAN |
+| `SDWAN` | **SD-WAN** | WAN |
+| `CLOUD_BACKBONE` | **Cloud backbone** | Cloud |
 
-- **Tenant** — an isolated view of the platform. A tenant only ever sees its own devices, telemetry, and incidents — isolation is enforced on every surface, not by convention.
-- **Organization** — an account layer that groups tenants, for operators running Correlix for multiple customers or business units.
-- **Role** — a named permission set; all access is role-based.
-- **Platform owner** — the cross-tenant super-admin who manages the platform itself. Some console sections (e.g. <kbd>Automation → Source Of Truth</kbd>, <kbd>Stack</kbd>) are visible only to the platform owner.
+LAN and the data center are not seams. Ownership does not change hands inside
+them, because the enterprise owns them end to end.
 
-**Where you'll meet it:** <kbd>Administration → Identity & Access</kbd> manages organizations, tenants, users, and roles; details in [Identity & Access](/administration/identity-access) and [Tenants & organizations](/administration/tenants-orgs).
+Attribution matters because the next action depends on it. A fault at the ISP
+seam is escalated to the provider; a fault inside the LAN is worked internally.
+Correlix names the seam and the party that owns it. Where it cannot narrow the
+seam it says the seam is not narrowed, which is a different statement from
+naming an owner.
 
-## Source of Truth
+## Tenants and organizations
 
-The **Source of Truth (SoT)** is the *intended* inventory — what should exist — as opposed to the *discovered* inventory of what actually answers. Correlix keeps its own internal SoT and can optionally exchange records with an external system. Comparing intent to reality is how drift gets caught.
+A **tenant** is the isolation unit. Devices, telemetry, incidents and findings
+belong to exactly one tenant, and every surface filters by the caller's tenant.
+A request for another tenant's resource by identifier answers 404 rather than
+revealing that the resource exists.
 
-**Where you'll meet it:** <kbd>Automation → Source Of Truth</kbd> (platform owner); see [Automation & Source of Truth](/automation/overview).
+An **organization** is a set of tenants. Every tenant belongs to exactly one
+organization. The organization is where single sign-on, data residency and
+org-level administrators bind. It carries no isolation behaviour of its own:
+isolation stays at the tenant.
 
-:::info Isolation is built in
-Every feature gives each tenant a unique, scoped view. A tenant can never see another tenant's devices, metrics, logs, flows, or incidents — and this holds for every new feature by design.
-:::
+Cross-tenant reading is reserved to the platform owner, and it is derived from
+the token rather than from anything in the request.
 
-## Next
+## The honesty principle
 
-Put the vocabulary to work: **[Quickstart](/getting-started/quickstart)**, then **[Onboard Network Devices](/onboard-devices/overview)**.
+Correlix distinguishes *not measured* from *measured as zero*, and it does so
+everywhere, not as a footnote.
+
+- **A panel with no value means the metric is not collected.** It does not mean
+  the value is zero. Zero adjacencies is a claim about a device; nothing
+  measured it, so nothing reports it.
+- **An empty list means not evaluated, not clean.** The security posture
+  response says this in the payload: unassessed assets are "NOT a pass, nobody
+  looked at those assets".
+- **Not connected and empty are different facts.** A source that was never wired
+  and a source that was wired and quiet are reported separately.
+- **A verdict never outruns its evidence.** *Possibly because of X* is a
+  complete and acceptable answer.
+
+[Honest states](/reference/honest-states) lists every state a surface can
+return and what each one means.
+
+## Related
+
+- [What Correlix does](/getting-started/overview)
+- [Onboard your first device](/getting-started/quickstart)
+- [Glossary](/reference/glossary)
+- [Honest states](/reference/honest-states)
+- [How correlation works](/investigate/rca-explained)
+- [Tenants and organizations](/administration/tenants-orgs)

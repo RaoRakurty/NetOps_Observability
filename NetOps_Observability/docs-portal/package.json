@@ -5,6 +5,7 @@
   "description": "Correlix product documentation portal",
   "scripts": {
     "start": "docusaurus start",
+    "test": "node --test tests/voice.test.js",
     "build": "docusaurus build",
     "serve": "docusaurus serve",
     "clear": "docusaurus clear",
