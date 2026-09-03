@@ -190,14 +190,12 @@ snmp-agent sys-info version v3
 snmp-agent group v3 correlix-grp privacy read-view iso-view
 snmp-agent mib-view included iso-view iso
 snmp-agent usm-user v3 <<sec_name>> group correlix-grp
-snmp-agent usm-user v3 <<sec_name>> authentication-mode sha2-256 cipher <<auth_key>>
+snmp-agent usm-user v3 <<sec_name>> authentication-mode SHA cipher <<auth_key>>
 snmp-agent usm-user v3 <<sec_name>> privacy-mode aes128 cipher <<priv_key>>
 ```
 
-This template configures the device for `sha2-256`, not `SHA`. The provisioned
-profile is created with `SHA`. Change the profile's **Auth protocol** to
-`SHA256` after generating, or change the device line to
-`authentication-mode sha`.
+The template and the provisioned profile both use `SHA` authentication with
+`AES-128` privacy, so no change is needed after generating.
 
 ## Juniper Junos
 
@@ -252,13 +250,6 @@ set service snmp v3 user <<sec_name>> mode ro
 commit ; save
 ```
 
-:::caution The shipped v3 template has a defect on this vendor
-In `profiles/ubiquiti.json` the privacy key line reads
-`set service snmp v3 user <<priv_key>> privacy plaintext-key <<sec_name>>`,
-which puts the privacy key where EdgeOS expects the user name and the user name
-where it expects the key. The block above is the corrected order. Check the
-generated output for this vendor before pasting it.
-:::
 
 UniFi access points and switches report their health through the controller
 API, not device SNMP. That path is the UniFi connector, controlled by
