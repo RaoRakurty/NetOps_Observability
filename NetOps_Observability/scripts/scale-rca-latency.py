@@ -283,9 +283,6 @@ class ClickHouse:
         head = sql.lstrip().split(None, 1)[0].upper() if sql.strip() else ""
         if head not in ("SELECT", "WITH"):
             return False, "", f"refusing non-SELECT statement (starts with {head!r})"
-        cid, err = self.cid()
-        if not cid:
-            return False, "", err
         parts = ["tenant_scope='__all__'"]
         for key in sorted(settings or {}):
             if not SAFE_SETTING_RE.match(key):
@@ -300,6 +297,13 @@ class ClickHouse:
             if not SAFE_FORMAT_RE.match(fmt):
                 return False, "", f"refusing unsafe FORMAT {fmt!r}"
             stmt += " FORMAT " + fmt
+        # Validate everything the caller supplied BEFORE touching Docker: an
+        # unsafe setting/format must be refused identically whether or not a
+        # container is running (CI has none), and refusing is cheaper than a
+        # docker ps. (First CI run of this test, 2026-09-04.)
+        cid, err = self.cid()
+        if not cid:
+            return False, "", err
         rc, out, cherr = run(
             ["docker", "exec", cid, "clickhouse-client", "--query", stmt],
             timeout or self.timeout)
