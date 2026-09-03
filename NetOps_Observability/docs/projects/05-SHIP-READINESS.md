@@ -49,6 +49,14 @@ Dates are 2026-09-03 unless stated. Rows are DELETED when shipped (tracker rule)
 |---|---|---|---|
 | C4 | Free tier vs licensed tiers — which parts of the whole solution go where (owner ask) | 👤 decide | Fable design: `docs/design/TIERING_PLAN_2026-09-03.md` — aligned with the capacity/pricing model (price per device, retention upsell, burst = SLO not billing; security findings as a per-tenant paid service). Owner decision needed on the cut lines. |
 
+## S. Owner asks of 2026-09-04 (morning)
+
+| # | Item | Status | Evidence / next step |
+|---|---|---|---|
+| S1 | OpenSearch snapshot repository: recreate, root-cause the 2026-08-27 emptying, fix for good (restorability probe + warning rule + watchdog class), audit EVERY nightly snapshot/backup mechanism against the GUI toggle the owner disabled, CLI cheat sheet for snapshot management | 🔧 agent | Tracker 225 rewritten with the findings so far (56/74 shard dirs emptied in a two-minute window; eight SUCCESS snapshots silently unrestorable). Owner authorized discarding the 14 restore points and recreating. |
+| S2 | Data Protection page to enterprise grade (protection health + RPO, coverage matrix per engine, recovery points with restore/verify/delete, policies, activity + drills, honest states) | 🔧 agent | Benchmarks: Veeam, Rubrik/Cohesity, Elastic Cloud snapshot UI, NetBackup/Commvault. Backend routes contract-first in openapi.go (S1 agent), page built against it. |
+| S3 | Pipeline debugger `correlix-debug` (CLI): trace a marked record end-to-end (ingress → parser → Kafka → router → OpenSearch/VictoriaMetrics/ClickHouse → correlation → api → UI) with ONE log file per module, bounded debug-level windows with auto-revert, support bundle | 🔧 agent (W1) | Design of record `docs/design/PIPELINE_DEBUGGER_2026-09-04.md` (70dff67b). W1 = syslog + trap trace, logs for api/correlation/vector, bundle, lab integration test. W2 = parser hooks in collectors/VRL, flow + passive gNMI, UI stage, docs-portal page, installer inclusion. W3 = in-GUI trace viewer. |
+
 ## D. Owner-visible status (updated each day)
 
 **2026-09-04 morning (overnight autonomous run, 2026-09-03 23:00 → 2026-09-04 07:30 UTC).**
