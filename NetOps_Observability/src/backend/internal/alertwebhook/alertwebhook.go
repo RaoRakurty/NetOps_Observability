@@ -106,8 +106,52 @@ const (
 )
 
 // tenantLabels are the labels whose presence makes an incoming alert
-// UNDELIVERABLE on this path (§3a). See dispatchAlert.
-var tenantLabels = [...]string{"tenant", "tenant_id", "org"}
+// UNDELIVERABLE on this path (§3a). See handleAlert.
+//
+// The list is deliberately wider than the three spellings our own rule files
+// happen to use: the threat model here is a RULE BUG, and a rule bug is just
+// as likely to write `org_id` as `org`. Matching is case-insensitive on the
+// label KEY (see foldKeys) — `Tenant` must not slip past `tenant`.
+var tenantLabels = [...]string{
+	"tenant", "tenant_id", "tenantid", "tenant_name",
+	"org", "org_id", "orgid", "organization",
+	"customer", "customer_id", "account", "account_id", "client",
+}
+
+// customerIdentityLabels name a CUSTOMER NETWORK object rather than a Correlix
+// component. Their presence makes an alert undeliverable here for exactly the
+// same reason a tenant label does, and this is the check that actually bites:
+// vmalert's rules almost never stamp a tenant label, but 126 of the 130 rules
+// in src/config/rules.yaml are per-device customer telemetry whose annotations
+// interpolate {{ $labels.device }}. A customer router's hostname on the global
+// operator phone is a cross-tenant disclosure (§3a rule 1) — and #103 already
+// ruled that such alerts must page through the tenant-scoped RCA policy lane,
+// never the platform-global key (notify.PlatformScopeFilter).
+var customerIdentityLabels = [...]string{
+	"device", "device_id", "device_name", "hostname",
+	"interface", "ifname", "if_name", "peer", "neighbor", "site", "circuit",
+}
+
+// vmalertSelfHealthLayers is the CLOSED set of `layer` values Correlix's own
+// rule files stamp on platform self-health rules. Only these may be normalized
+// onto notify.PlatformLayers; an unrecognised layer is left alone so the
+// default-closed PlatformScopeFilter keeps rejecting it.
+var vmalertSelfHealthLayers = map[string]bool{
+	"bus": true, "clickhouse": true, "correlation": true, "host": true,
+	"ingest": true, "metrics": true, "platform": true, "stack": true,
+	"storage": true,
+}
+
+// foldKeys returns a case-folded view of a label/annotation set so a refusal
+// cannot be evaded by capitalisation. Values are carried through untouched —
+// only the KEY is normalized, because only the key is being matched.
+func foldKeys(in map[string]string) map[string]string {
+	out := make(map[string]string, len(in))
+	for k, v := range in {
+		out[strings.ToLower(strings.TrimSpace(k))] = v
+	}
+	return out
+}
 
 // validSeverities is notify's severity ladder (notify/servicenow.go
 // severityRank). Anything else is not a severity this platform can route.
@@ -292,7 +336,7 @@ func (r *receiver) serve(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	var received, dispatched, suppressed, dropped, heartbeats int
+	var received, dispatched, suppressed, dropped, droppedCustomer, heartbeats int
 	for _, a := range alerts {
 		received++
 		switch res := r.handleAlert(a); res {
@@ -302,6 +346,8 @@ func (r *receiver) serve(w http.ResponseWriter, req *http.Request) {
 			suppressed++
 		case resultDroppedTenant:
 			dropped++
+		case resultDroppedCustomer:
+			droppedCustomer++
 		case resultHeartbeat:
 			heartbeats++
 		}
@@ -310,16 +356,18 @@ func (r *receiver) serve(w http.ResponseWriter, req *http.Request) {
 	r.deps.Metrics.add(&r.deps.Metrics.dispatched, int64(dispatched))
 	r.deps.Metrics.add(&r.deps.Metrics.suppressed, int64(suppressed))
 	r.deps.Metrics.add(&r.deps.Metrics.droppedTenant, int64(dropped))
+	r.deps.Metrics.add(&r.deps.Metrics.droppedCustomer, int64(droppedCustomer))
 
 	// ALWAYS 200 once authenticated and parsed. vmalert retries a 5xx forever
 	// and would turn a receiver-side bug into a self-inflicted request storm;
 	// the per-alert outcome is reported in the body and in the metrics instead.
 	writeJSON(w, http.StatusOK, map[string]any{
-		"received":   received,
-		"dispatched": dispatched,
-		"suppressed": suppressed,
-		"dropped":    dropped,
-		"heartbeat":  heartbeats,
+		"received":         received,
+		"dispatched":       dispatched,
+		"suppressed":       suppressed,
+		"dropped":          dropped,
+		"dropped_customer": droppedCustomer,
+		"heartbeat":        heartbeats,
 	})
 }
 
@@ -390,6 +438,7 @@ const (
 	resultDispatched result = iota
 	resultSuppressed
 	resultDroppedTenant
+	resultDroppedCustomer
 	resultHeartbeat
 )
 
@@ -401,19 +450,60 @@ func (r *receiver) handleAlert(a wireAlert) result {
 
 	// §3a — REFUSE TO LAUNDER TENANT DATA.
 	//
-	// vmalert evaluates only the two server-controlled, checked-in rule files,
-	// so a tenant label here is a BUG in a rule, not a legitimate scoping
-	// signal. This endpoint fans out onto the platform-GLOBAL operator
-	// channels, which are not principal-scoped and cannot be: forwarding an
-	// alert that carries one tenant's identity onto every operator's phone is a
-	// cross-tenant leak. Default-closed: drop, count, warn — never guess.
+	// vmalert evaluates only the server-controlled, checked-in rule files, so a
+	// tenant label here is a BUG in a rule, not a legitimate scoping signal.
+	// This endpoint fans out onto the platform-GLOBAL operator channels, which
+	// are not principal-scoped and cannot be: forwarding an alert that carries
+	// one tenant's identity onto every operator's phone is a cross-tenant leak.
+	// Default-closed: drop, count, warn — never guess.
+	//
+	// The scan is case-folded and covers ANNOTATION keys as well as label keys,
+	// because summaryOf/descriptionOf copy annotation VALUES verbatim into the
+	// delivered alert — an annotation is a delivery channel, not metadata.
+	folded := foldKeys(a.Labels)
+	foldedAnn := foldKeys(a.Annotations)
 	for _, l := range tenantLabels {
-		if strings.TrimSpace(labels[l]) != "" {
+		if strings.TrimSpace(folded[l]) != "" || strings.TrimSpace(foldedAnn[l]) != "" {
 			r.log("warn", "vmalert alert dropped: tenant-scoped label on a platform-global path", map[string]any{
 				"alertname": labels["alertname"],
 				"label":     l,
 			})
 			return resultDroppedTenant
+		}
+	}
+
+	// §3a — REFUSE TO LAUNDER CUSTOMER NETWORK IDENTITY.
+	//
+	// The check above catches an alert that NAMES a tenant. This one catches
+	// the case that actually occurs: an alert that names a tenant's DEVICE.
+	// A customer router's hostname is tenant-identifying data and these
+	// channels are platform-global, so it may not pass — the same ruling
+	// notify.PlatformScopeFilter already makes ("customer alerts carry no
+	// layer label and are dropped here by default-closed matching", #103).
+	//
+	// The discriminator is the `layer` stamp, and it has to be, because the
+	// label names alone are ambiguous. Measured on the live stack:
+	//
+	//	DeviceUnreachable  device="spine1"                       (no layer)
+	//	DiskHeadroomLow    device="/dev/mapper/ubuntu--vg…"      layer="host"
+	//
+	// Both carry `device`; only the first is a customer router. What separates
+	// them is that our own rule file AUTHORED the second as host self-health.
+	// That stamp is a server-side assertion from a checked-in file (§3a.2 —
+	// classification comes from the server, never from the observed data), so
+	// it is the right thing to trust; the device LABEL VALUE is data and is
+	// not. An alert with no such assertion that nevertheless names a device,
+	// interface, peer or circuit is customer traffic, and customer traffic
+	// belongs to the tenant-scoped RCA policy lane.
+	if !vmalertSelfHealthLayers[folded["layer"]] && !notify.PlatformLayers[folded["layer"]] {
+		for _, l := range customerIdentityLabels {
+			if strings.TrimSpace(folded[l]) != "" {
+				r.log("warn", "vmalert alert dropped: customer-network identity on a platform-global path", map[string]any{
+					"alertname": labels["alertname"],
+					"label":     l,
+				})
+				return resultDroppedCustomer
+			}
 		}
 	}
 
@@ -440,17 +530,25 @@ func (r *receiver) handleAlert(a wireAlert) result {
 	// 2026-09-02 outage — is silently dropped one step before delivery and the
 	// gap this change closes stays open.
 	//
-	// Normalizing is SAFE precisely because of the two facts above: everything
-	// vmalert can emit is platform self-health by construction (the rule files
-	// are server-controlled), and anything carrying a tenant identity was
-	// already refused. An already-platform layer is preserved UNCHANGED so
-	// existing routing does not move; the original is kept as `rule_layer` so
-	// no routing information is destroyed.
+	// Normalizing is safe ONLY for alerts that are platform self-health, and
+	// that is now established by the two refusals above rather than assumed:
+	// an alert naming a tenant, or naming a tenant's device, never reaches
+	// this line. What remains is Correlix's own component health.
+	//
+	// The normalization is nevertheless a CLOSED ALLOWLIST of the layers our
+	// own rule files stamp, plus the layer-less case. An unrecognised layer is
+	// left UNCHANGED so notify.PlatformScopeFilter keeps rejecting it by
+	// default-closed matching — a value we do not recognise is not a value we
+	// may vouch for. An already-platform layer is preserved so existing
+	// routing does not move; the original is kept as `rule_layer` so no
+	// routing information is destroyed.
 	if orig := labels["layer"]; !notify.PlatformLayers[orig] {
-		if orig != "" {
-			labels["rule_layer"] = orig
+		if orig == "" || vmalertSelfHealthLayers[orig] {
+			if orig != "" {
+				labels["rule_layer"] = orig
+			}
+			labels["layer"] = "platform"
 		}
-		labels["layer"] = "platform"
 	}
 
 	if name == "" {

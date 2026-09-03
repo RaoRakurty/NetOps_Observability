@@ -84,10 +84,15 @@ func (s *server) ifgroupLookupDevice(id string) (ifgroup.Device, bool) {
 }
 
 // ifgroupCanSee is the §3a rule-1 boundary, routed through the SAME central
-// policy canSeeDevice uses: a scoped principal sees only its own tenant's
-// devices; global/unassigned devices are platform-owned and visible only
-// cross-tenant. The module renders a false verdict as a 404 identical to an
-// absent device, so existence is never revealed.
+// policy canSeeDevice uses: a TENANTED principal sees only its own tenant's
+// devices, and never another tenant's. The module renders a false verdict as a
+// 404 identical to an absent device, so existence is never revealed.
+//
+// Same honest caveat as igpmonCanSee: rbac.SameTenantStrict("", "") is true, so
+// a token carrying NO tenant matches an untagged, platform-owned device and can
+// read it. Verified live 2026-09-03. Not a cross-tenant leak — no tenant's
+// device reaches another tenant — but it is not what the sentence this replaced
+// claimed, and the fix belongs in rbac.Authorize, not here.
 func ifgroupCanSee(d ifgroup.Device, p ifgroup.Principal) bool {
 	return Authorize(
 		Principal{Tenant: p.Tenant, Cross: p.Cross},

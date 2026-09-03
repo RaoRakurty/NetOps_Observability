@@ -17,16 +17,17 @@ import (
 // Metrics is the receiver's counter set. Every method is nil-safe, so a
 // metric-less deployment (or a test) needs no branching at the call sites.
 type Metrics struct {
-	requests       atomic.Int64
-	unauthorized   atomic.Int64
-	malformed      atomic.Int64
-	alertsReceived atomic.Int64
-	dispatched     atomic.Int64
-	suppressed     atomic.Int64
-	droppedTenant  atomic.Int64
-	heartbeats     atomic.Int64
-	heartbeatAt    atomic.Int64 // unix seconds of the last heartbeat, 0 = never
-	enabled        atomic.Int64 // 0/1 — is the receiver wired at all
+	requests        atomic.Int64
+	unauthorized    atomic.Int64
+	malformed       atomic.Int64
+	alertsReceived  atomic.Int64
+	dispatched      atomic.Int64
+	suppressed      atomic.Int64
+	droppedTenant   atomic.Int64
+	droppedCustomer atomic.Int64
+	heartbeats      atomic.Int64
+	heartbeatAt     atomic.Int64 // unix seconds of the last heartbeat, 0 = never
+	enabled         atomic.Int64 // 0/1 — is the receiver wired at all
 
 	// Host-monitoring route (hostroute.go). The tier label set is CLOSED
 	// (page/warning/resolved) and the route label is a constant, so nothing a
@@ -143,6 +144,7 @@ func (m *Metrics) Write(w io.Writer) {
 	c("netops_alert_webhook_dispatched_total", "Alerts fanned out to the notification channels.", m.dispatched.Load())
 	c("netops_alert_webhook_suppressed_total", "Alerts suppressed by the cool-down window (duplicate of a recent delivery).", m.suppressed.Load())
 	c("netops_alert_webhook_dropped_tenant_total", "Alerts DROPPED for carrying a tenant/org label on the platform-global path (CLAUDE.md 3a).", m.droppedTenant.Load())
+	c("netops_alert_webhook_dropped_customer_total", "Alerts DROPPED for naming a customer-network object (device/interface/peer) on the platform-global path (CLAUDE.md 3a; #103 — those page through the tenant-scoped RCA lane).", m.droppedCustomer.Load())
 	c("netops_alert_webhook_heartbeat_total", "AlertingHeartbeat receipts (delivery-chain probe, never fanned out).", m.heartbeats.Load())
 	// The end-to-end assertion: the api is scraped by VictoriaMetrics (job
 	// netops-api, target api:8080), so this gauge lands in VM automatically and

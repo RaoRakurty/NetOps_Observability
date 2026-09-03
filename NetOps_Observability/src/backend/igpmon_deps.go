@@ -90,10 +90,20 @@ func (s *server) igpmonLookupDevice(id string) (igpmon.Device, bool) {
 }
 
 // igpmonCanSee is the §3a rule-1 boundary, routed through the SAME central
-// policy canSeeDevice uses: a scoped principal sees only its own tenant's
-// devices; global/unassigned devices are platform-owned and visible only
-// cross-tenant. The module renders a false verdict here as a 404 identical to
-// an absent device, so existence is never revealed.
+// policy canSeeDevice uses: a TENANTED principal sees only its own tenant's
+// devices, and never another tenant's. The module renders a false verdict here
+// as a 404 identical to an absent device, so existence is never revealed.
+//
+// One honest caveat about untagged devices, verified on the live stack
+// (2026-09-03) rather than assumed: rbac.SameTenantStrict("", "") is true, so
+// a principal whose token carries NO tenant matches an untagged, platform-owned
+// device and can read it — including through this route. That is the central
+// policy's behaviour (internal/rbac/authz.go), not this module's, and it is not
+// a cross-tenant leak (no tenant's device is ever exposed to another tenant).
+// It is recorded here because the sentence this comment replaced claimed the
+// opposite, and a comment claiming an isolation property the code does not have
+// is worse than no comment. Tightening it belongs in rbac.Authorize, whose
+// blast radius is every tenant-scoped resource.
 func igpmonCanSee(d igpmon.Device, p igpmon.Principal) bool {
 	return Authorize(
 		Principal{Tenant: p.Tenant, Cross: p.Cross},
