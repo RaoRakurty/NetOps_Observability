@@ -2,6 +2,7 @@ package notify
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"math/rand/v2"
@@ -53,6 +54,9 @@ const (
 	deliveryWorkers = 8
 	// deliveryAttempts is the total tries per send (1 initial + 3 retries).
 	deliveryAttempts = 4
+	// rateLimitAttempts is the total tries per send once the destination has
+	// answered 429 (1 initial + 1 retry), and only for a page — see retryPlan.
+	rateLimitAttempts = 2
 	// deliveryRetryBase is the first backoff step; each retry doubles it and
 	// applies ±50% jitter so a recovering provider is not re-stormed in lockstep.
 	deliveryRetryBase = 500 * time.Millisecond
@@ -183,11 +187,17 @@ func (dl *delivery) worker() {
 	}
 }
 
-// deliver runs one job with bounded retries. Retriability is not knowable from
-// the Channel interface (it returns a bare error), so every failure is retried
-// within the attempt/time budget: a duplicate page is a far cheaper mistake
-// than a missing one, and the channels that can dedupe (PagerDuty dedup_key,
-// ServiceNow correlation id) already do.
+// deliver runs one job with bounded, ERROR-AWARE retries.
+//
+// Retriability used to be treated as unknowable from the Channel interface (it
+// returns a bare error), so every failure was retried the full four times. That
+// was actively harmful against a rate limiter, and it showed live on
+// 2026-09-03: fourteen product ntfy pushes in an hour, each `ntfy: status 429`,
+// each retried four times — 56 requests into a server that was already refusing
+// us, spending the very allowance the platform's PAGE route needed. The
+// per-error policy now lives in retryPlan; everything a channel cannot classify
+// keeps the old behaviour (a duplicate page is a far cheaper mistake than a
+// missing one, and the channels that can dedupe already do).
 func (dl *delivery) deliver(j sendJob) {
 	name := j.ch.Name()
 	st := dl.statsFor(name)
@@ -195,8 +205,11 @@ func (dl *delivery) deliver(j sendJob) {
 	ctx, cancel := context.WithTimeout(context.Background(), deliverySendBudget)
 	defer cancel()
 
+	page := channelPages(j.ch, j.alert)
 	var lastErr error
+	attempts := 0
 	for attempt := 1; attempt <= deliveryAttempts; attempt++ {
+		attempts = attempt
 		err := send(j)
 		if err == nil {
 			st.sent.Add(1)
@@ -208,24 +221,96 @@ func (dl *delivery) deliver(j sendJob) {
 			return
 		}
 		lastErr = err
-		if attempt == deliveryAttempts {
+		wait, again := retryPlan(err, attempt, page)
+		if !again {
 			break
 		}
 		st.retries.Add(1)
-		if !dl.sleep(ctx, backoff(attempt)) {
+		if !dl.sleep(ctx, wait) {
 			break // budget exhausted — stop burning the worker
 		}
 	}
 	st.failed.Add(1)
+	// `attempts` is what actually happened, not the ceiling. The old line always
+	// logged the constant, so an operator reading "attempts: 4" could not tell a
+	// genuine four-try failure from a policy that gave up after one (§10).
 	dl.logf("error", "notification delivery FAILED after retries — this page did not go out", map[string]any{
 		"channel":  name,
 		"alert_id": j.alert.ID,
 		"rule":     j.alert.Rule,
 		"severity": j.alert.Severity,
 		"resolve":  j.resolve,
-		"attempts": deliveryAttempts,
+		"attempts": attempts,
+		"page":     page,
+		"reason":   failureReason(lastErr),
 		"err":      errText(lastErr),
 	})
+}
+
+// retryPlan decides whether a failed send may be re-sent, and how long to wait.
+// `page` is the channel's own answer to "is this alert a page" (PageClassifier).
+//
+// THE RATE-LIMIT RULES (the 2026-09-03 defect):
+//
+//   - A LOCAL budget refusal is never retried. The request was not made and the
+//     token has not refilled; re-sending inside the 90s send budget only burns
+//     a worker.
+//   - A 4xx that is not 429 is never retried. A bad token or an unknown topic
+//     will not fix itself, and each retry is a request against an allowance
+//     something else needs.
+//   - A 429 gets ONE bounded retry, and only for a PAGE. A warning-level alert
+//     never retries against a rate limiter: the server has just said "you are
+//     sending too much", and the correct answer to that is to send less.
+//   - The server's own Retry-After wins when it sent one — it is the only party
+//     that knows when its budget refills, and it arrives already clamped by
+//     parseRetryAfter, so a hostile value cannot park a worker.
+//
+// Everything else (5xx, transport failures, channels with untyped errors) keeps
+// the original attempt budget with jittered exponential backoff.
+func retryPlan(err error, attempt int, page bool) (time.Duration, bool) {
+	if errors.Is(err, ErrPushBudgetExhausted) {
+		return 0, false
+	}
+	var se *NtfyStatusError
+	if errors.As(err, &se) {
+		switch {
+		case se.RateLimited():
+			if !page || attempt >= rateLimitAttempts {
+				return 0, false
+			}
+			if se.RetryAfter > 0 {
+				return se.RetryAfter, true
+			}
+		case !se.Retryable():
+			return 0, false
+		}
+	}
+	if attempt >= deliveryAttempts {
+		return 0, false
+	}
+	return backoff(attempt), true
+}
+
+// failureReason classifies a delivery failure for the log line, so "we were
+// rate-limited" and "we refused ourselves" are greppable apart from a generic
+// send error without parsing the message text.
+func failureReason(err error) string {
+	switch {
+	case err == nil:
+		return ""
+	case errors.Is(err, ErrPushBudgetExhausted):
+		return "budget_exhausted"
+	}
+	var se *NtfyStatusError
+	if errors.As(err, &se) {
+		if se.RateLimited() {
+			return "rate_limited"
+		}
+		if !se.Retryable() {
+			return "rejected"
+		}
+	}
+	return "send_error"
 }
 
 func send(j sendJob) error {
@@ -332,4 +417,21 @@ func (d *Dispatcher) WriteMetrics(w io.Writer) {
 	fmt.Fprintf(w, "# HELP netops_notify_queue_depth Notifications queued for delivery.\n")
 	fmt.Fprintf(w, "# TYPE netops_notify_queue_depth gauge\n")
 	fmt.Fprintf(w, "netops_notify_queue_depth %d\n", len(dl.jobs))
+
+	// The SHARED push budget, by push server HOST (pushbudget.go). The label is
+	// the server, not the topic or the route, because that is the granularity
+	// the remote rate limiter enforces at — and the reason a per-topic bucket
+	// could not see the traffic that was actually spending the allowance.
+	d.mu.RLock()
+	budgets := d.budgets
+	d.mu.RUnlock()
+	states := budgets.Snapshot()
+	fmt.Fprintf(w, "# HELP netops_notify_push_budget_remaining Outbound push tokens left this hour for a push server host, shared by the product notification channel and the platform host-monitoring route (-1 = no budget configured; PLATFORM_ALERTS_PUSH_BUDGET).\n")
+	fmt.Fprintf(w, "# TYPE netops_notify_push_budget_remaining gauge\n")
+	fmt.Fprintf(w, "# HELP netops_notify_push_budget_refused_total Pushes refused locally because the shared per-server budget was spent (the request was never made).\n")
+	fmt.Fprintf(w, "# TYPE netops_notify_push_budget_refused_total counter\n")
+	for _, st := range states {
+		fmt.Fprintf(w, "netops_notify_push_budget_remaining{server=%q} %d\n", st.Server, st.Remaining)
+		fmt.Fprintf(w, "netops_notify_push_budget_refused_total{server=%q} %d\n", st.Server, st.Refused)
+	}
 }

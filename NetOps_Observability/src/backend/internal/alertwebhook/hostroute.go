@@ -76,14 +76,20 @@ const (
 	// Invalid or <=0 falls back to DefaultWarningDigestInterval, LOUDLY —
 	// "0" must not silently mean "push every warning again".
 	EnvWarningDigestInterval = "PLATFORM_ALERTS_WARNING_DIGEST_INTERVAL"
-	// EnvPushBudget is the sustained outbound push allowance per hour for this
-	// route's topic (pushbudget.go). 0 or negative DISABLES the guard, which is
-	// the documented escape hatch for a self-hosted ntfy with no limits of its
-	// own.
+	// EnvPushBudget is the sustained outbound push allowance per hour for the
+	// push SERVER HOST this route talks to — SHARED with the product ntfy
+	// notification channel, because ntfy.sh rate-limits per source IP and both
+	// senders leave this box on the same address (notify/pushbudget.go). The
+	// name is unchanged; its scope widened from "this route's topic" on
+	// 2026-09-03. 0 or negative DISABLES the guard, which is the documented
+	// escape hatch for a self-hosted ntfy with no limits of its own.
 	EnvPushBudget = "PLATFORM_ALERTS_PUSH_BUDGET"
-	// EnvPushBudgetPageReserve is how many of those tokens only a PAGE (or the
-	// resolution of one) may spend, so a warning digest can never be the reason
-	// a page is refused. Clamped into [0, budget-1].
+	// EnvPushBudgetPageReserve is how many of those tokens only a PAGE may
+	// spend, so a warning digest — or a chronic product warning — can never be
+	// the reason a page is refused. The reserve is honoured ACROSS both routes:
+	// on this route a page is `tier: page` (or the resolution of one); on the
+	// product side it is a `critical` alert on an ntfy channel the operator
+	// configured as a pager (min_severity=critical). Clamped into [0, budget-1].
 	EnvPushBudgetPageReserve = "PLATFORM_ALERTS_PUSH_BUDGET_PAGE_RESERVE"
 )
 
@@ -225,7 +231,7 @@ func (r *receiver) pushHost(a models.Alert, labels map[string]string, status str
 	// The budget is taken at ENQUEUE, synchronously with the request, so a
 	// refusal is decided (and counted) at a point the operator can correlate
 	// with the alert that caused it rather than inside a drain goroutine.
-	if r.deps.HostRoute != nil && !r.budget.take(j.privileged()) {
+	if r.deps.HostRoute != nil && !r.budget.Take(j.privileged()) {
 		r.deps.Metrics.inc(&r.deps.Metrics.hostBudgetExhausted)
 		// A PAGE that the budget refuses is an ERROR, never a warning: the
 		// operator is not being told about a page-worthy condition and must
@@ -237,6 +243,10 @@ func (r *receiver) pushHost(a models.Alert, labels map[string]string, status str
 		r.log(level, "platform alert push SKIPPED: the outbound push budget for this topic is spent", map[string]any{
 			"route": RouteHostMonitoring, "alertname": j.name, "tier": j.tier,
 			"env": EnvPushBudget, "reserve_env": EnvPushBudgetPageReserve,
+			// The budget is per SERVER and shared with the product channel, so
+			// name the server: "the topic is quiet" is not the same fact as
+			// "this host's whole ntfy allowance is spent" (§10).
+			"server": r.budget.Server(),
 		})
 		return
 	}

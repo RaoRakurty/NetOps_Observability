@@ -34,11 +34,24 @@ type Ntfy struct {
 	topic  string
 	token  string
 	client *http.Client
+
+	// budget is the SHARED per-server-host token bucket (pushbudget.go). nil =
+	// no guard. The PRODUCT channel takes its token here, inside Push, because
+	// this is the only place that knows a request is about to be made; the
+	// HOST route deliberately attaches NO budget to its sender and takes the
+	// token at ENQUEUE instead (internal/alertwebhook/hostroute.go), so its
+	// refusal is decided and counted synchronously with the alert that caused
+	// it. Both take from the SAME bucket when they name the same server.
+	budget *PushBudget
+	// pager records that the operator configured this channel AS A PAGER
+	// (min_severity = critical). Only a critical alert on a pager channel may
+	// spend the budget's page reserve — see Pages.
+	pager bool
 }
 
 func NewNtfy(server, topic, token string) *Ntfy {
 	if server == "" {
-		server = "https://ntfy.sh"
+		server = DefaultNtfyServer
 	}
 	return &Ntfy{
 		server: strings.TrimRight(server, "/"),
@@ -46,6 +59,35 @@ func NewNtfy(server, topic, token string) *Ntfy {
 		token:  token,
 		client: safehttp.Client(10 * time.Second),
 	}
+}
+
+// WithBudget attaches the shared per-server push budget. Returns the receiver
+// so it composes with the constructor at the wiring site.
+func (n *Ntfy) WithBudget(b *PushBudget) *Ntfy {
+	n.budget = b
+	return n
+}
+
+// WithPagePolicy records the channel's configured minimum severity so Pages can
+// tell a PAGER from a FEED. Only `critical` makes this channel a pager; every
+// other threshold (warning, info, unset) leaves it a feed whose alerts may
+// never spend the page reserve. Deliberately narrow — see pushbudget.go.
+func (n *Ntfy) WithPagePolicy(minSeverity string) *Ntfy {
+	n.pager = strings.EqualFold(strings.TrimSpace(minSeverity), "critical")
+	return n
+}
+
+// Server is the configured push server (normalized to its host by
+// PushServerKey when it is used as a budget/metric key).
+func (n *Ntfy) Server() string { return n.server }
+
+// Pages implements PageClassifier: true when this alert is a PAGE on the
+// product side — severity `critical` on a channel configured as a pager. This
+// single definition decides BOTH whether the alert may spend the shared page
+// reserve and whether it earns the one bounded retry against a 429; nothing
+// else widens it.
+func (n *Ntfy) Pages(a models.Alert) bool {
+	return n.pager && strings.EqualFold(strings.TrimSpace(a.Severity), "critical")
 }
 
 // ntfy's priority ladder (1 min … 5 max). Exported so a caller composing its own
@@ -76,6 +118,10 @@ type NtfyPush struct {
 	Body     string
 	Priority string
 	Tags     string
+	// Page marks a push that may spend the shared budget's PAGE RESERVE. Set
+	// by the composer, never by anything on the wire: on the product side it is
+	// Ntfy.Pages, on the host route it is the server-controlled `tier` label.
+	Page bool
 }
 
 func (n *Ntfy) Name() string { return "ntfy" }
@@ -86,13 +132,21 @@ func (n *Ntfy) Send(a models.Alert) error {
 		Body:     smsBody(a),
 		Priority: ntfyPriority(a.Severity),
 		Tags:     "rotating_light",
+		Page:     n.Pages(a),
 	})
 }
 
 // Push publishes a composed message to the configured topic.
+//
+// The SHARED budget (pushbudget.go) is taken FIRST, before any request is
+// built: the whole point of the guard is that the request is never made, and a
+// refusal must not look like a server error. A nil budget always allows.
 func (n *Ntfy) Push(p NtfyPush) error {
 	if n.topic == "" {
 		return errors.New("ntfy: no topic configured")
+	}
+	if !n.budget.Take(p.Page) {
+		return ErrPushBudgetExhausted
 	}
 	body := strings.TrimSpace(p.Body)
 	if len(body) > maxNtfyBody {

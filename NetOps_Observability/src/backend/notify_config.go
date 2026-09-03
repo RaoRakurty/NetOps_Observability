@@ -329,7 +329,7 @@ func (s *notifyConfigStore) apply() {
 	}
 	// ntfy
 	if s.cfg.Ntfy.Enabled && s.cfg.Ntfy.Topic != "" {
-		s.srv.notifier.Replace(notify.BuildNtfyChannel(s.cfg.Ntfy))
+		s.srv.notifier.Replace(notify.BuildNtfyChannel(s.cfg.Ntfy, s.srv.pushBudgets))
 	} else {
 		s.srv.notifier.Remove("ntfy")
 	}
@@ -603,7 +603,11 @@ func (s *server) handleNtfyTest(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, errors.New("configure a topic first"))
 		return
 	}
-	ch := notify.BuildNtfyChannel(c).(interface{ Unguarded() notify.Channel }).Unguarded()
+	// The operator's own test push draws from the shared per-server budget like
+	// any other: it hits the same rate limiter, and a refusal here is the
+	// honest answer ("the allowance for this server is spent"), not a silent
+	// success that teaches the operator the wrong thing.
+	ch := notify.BuildNtfyChannel(c, s.pushBudgets).(interface{ Unguarded() notify.Channel }).Unguarded()
 	if err := ch.Send(testAlert()); err != nil {
 		writeError(w, http.StatusBadGateway, err)
 		return

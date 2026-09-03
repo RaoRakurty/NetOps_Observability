@@ -24,6 +24,26 @@ type ResolveSender interface {
 	SendResolve(a models.Alert) error
 }
 
+// PageClassifier is an optional Channel extension: it declares which alerts
+// this destination treats as a PAGE — the ones a human is expected to be woken
+// by. The delivery layer consults it for its rate-limit retry policy, and the
+// ntfy channel uses the same answer to decide whether an alert may spend the
+// shared push budget's page reserve (pushbudget.go). A channel that does not
+// implement it pages for nothing, which is the safe default: the reserve and
+// the extra retry are both scarce resources.
+type PageClassifier interface {
+	Pages(a models.Alert) bool
+}
+
+// channelPages asks a channel whether this alert is a page, seeing through the
+// wrappers (SeverityGate, PlatformScopeFilter) that decorate it.
+func channelPages(c Channel, a models.Alert) bool {
+	if pc, ok := c.(PageClassifier); ok {
+		return pc.Pages(a)
+	}
+	return false
+}
+
 // Dispatcher holds the registered channels and forwards alerts to each.
 //
 // Delivery itself is owned by the bounded worker pool in delivery.go (F-22):
@@ -34,6 +54,20 @@ type Dispatcher struct {
 	mu       sync.RWMutex
 	channels []Channel
 	delivery *delivery
+
+	// budgets is the process's shared per-push-server token-bucket registry
+	// (pushbudget.go), held here only so WriteMetrics can publish its gauges
+	// next to the delivery counters. Injected, never a package global.
+	budgets *PushBudgets
+}
+
+// SetPushBudgets installs the shared push-budget registry for the metrics
+// surface. The buckets themselves are handed to the senders at wiring time;
+// this is the read side.
+func (d *Dispatcher) SetPushBudgets(b *PushBudgets) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.budgets = b
 }
 
 func NewDispatcher() *Dispatcher { return &Dispatcher{delivery: newDelivery()} }

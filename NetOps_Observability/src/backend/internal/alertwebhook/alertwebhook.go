@@ -194,11 +194,21 @@ type Deps struct {
 	// summarized into one host-route push (digest.go). <=0 uses
 	// DefaultWarningDigestInterval.
 	WarningDigestInterval time.Duration
-	// PushBudget is the host route's outbound allowance per hour for its topic,
-	// and PageReserve is the slice of it only a page may spend (pushbudget.go).
-	// PushBudget <= 0 disables the guard.
+	// PushBudget is the outbound allowance per hour and PageReserve the slice
+	// of it only a page may spend (notify/pushbudget.go). They are the fallback
+	// used when Budgets is nil — a route with no shared registry still gets the
+	// guard. PushBudget <= 0 disables it.
 	PushBudget  int
 	PageReserve int
+	// Budgets is the process's SHARED per-push-server budget registry. When it
+	// is set, this route draws from the bucket of HostServer — the SAME bucket
+	// the product ntfy channel draws from when it names the same host, which is
+	// the whole point: ntfy.sh rate-limits per source IP, not per topic.
+	Budgets *notify.PushBudgets
+	// HostServer is the push server this route's sender is aimed at, used ONLY
+	// as the Budgets key (notify.PushServerKey normalizes it to a host). Empty
+	// means the default public server. It is never logged with the topic.
+	HostServer string
 	// HostRoute is the HOST-MONITORING push destination (hostroute.go): the
 	// phone channel the external watchdog already uses. nil = not configured,
 	// which is COUNTED and warned about once, never an error per alert. This
@@ -269,9 +279,9 @@ type receiver struct {
 	digestLast     time.Time
 	budgetLoggedAt time.Time
 
-	// budget is the per-topic outbound token bucket (pushbudget.go). nil when
-	// the operator disabled it.
-	budget *pushBudget
+	// budget is the SHARED per-push-server outbound token bucket
+	// (notify/pushbudget.go). nil when the operator disabled it.
+	budget *notify.PushBudget
 }
 
 // Handler builds the Alertmanager-v2 receiver. It returns an error rather than
@@ -320,7 +330,15 @@ func Handler(d Deps) (http.HandlerFunc, error) {
 		if reserve == 0 {
 			reserve = DefaultPageReserve
 		}
-		r.budget = newPushBudget(budget, reserve, r.now)
+		// PREFER the shared registry: it is the only bucket that can see the
+		// product channel's traffic against the same server. The local bucket
+		// stays as the fallback so a caller that wires no registry (tests, an
+		// embedder) still gets the guard rather than silently none.
+		if d.Budgets != nil {
+			r.budget = d.Budgets.For(d.HostServer)
+		} else {
+			r.budget = notify.NewPushBudget(d.HostServer, budget, reserve, r.now)
+		}
 	}
 	d.Metrics.setEnabled(true)
 	d.Metrics.setHostRouteEnabled(d.HostRoute != nil)

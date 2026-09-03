@@ -104,8 +104,20 @@ type Engine struct {
 	// went out, so a resolve notification is sent only when its counterpart fire
 	// was — a suppressed firing must not emit a dangling resolve.
 	dispatched map[string]bool
-	healthy    bool
-	lastTick   time.Time
+	// TenantOf derives the OWNING TENANT of an alert for the durable notified
+	// set (notifystate.go). The server wires it to the same device→tenant
+	// derivation the episode fold uses; nil means every alert is platform-owned
+	// (tenant ""), which is the correct default for a stack with no inventory.
+	// It is never derived from the alert's own labels (§3a rule 2).
+	TenantOf func(models.Alert) string
+	// notifyState is the DURABLE half of `dispatched`. Without it a restart
+	// forgot every notification ever sent and re-paged every still-firing alert
+	// on the next tick — observed live 2026-09-03 across two deploys in an
+	// hour. nil = in-memory only (the pre-existing behaviour), which is what
+	// every test that does not care about persistence gets.
+	notifyState *NotifyStateStore
+	healthy     bool
+	lastTick    time.Time
 
 	// ── Self-observability (§10: no silent failures) ────────────────────────
 	// The engine used to be structurally incapable of reporting its own
@@ -168,6 +180,60 @@ func NewEngine(rulesFile string, n *notify.Dispatcher) *Engine {
 		evalFn:           Evaluate,
 		now:              time.Now,
 	}
+}
+
+// SetNotifyState installs the durable notified set and RE-SEEDS the engine from
+// it. Call it once, before Start.
+//
+// Three maps are restored, and all three matter:
+//
+//	active      so a still-firing alert is not seen as NEWLY firing (no re-page)
+//	            — and so one that CLEARED while we were down is still resolved,
+//	            exactly once, by the first tick after boot;
+//	dispatched  so that resolution is actually delivered (a resolve is only sent
+//	            when its fire was);
+//	pending     from the alert's FiredAt, so the `for` clock is not restarted —
+//	            otherwise a restored alert would be dropped from the next active
+//	            set, spuriously RESOLVED, and re-fire one `for` later.
+//
+// Returns the number of alerts restored so the caller can say so in its boot
+// log (§10: a restart that silently suppresses notifications is exactly the
+// kind of invisible behaviour this file exists to replace).
+func (e *Engine) SetNotifyState(s *NotifyStateStore) int {
+	if s == nil {
+		return 0
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.notifyState = s
+	restored := 0
+	for _, tenant := range s.Tenants() {
+		for _, rec := range s.List(tenant) {
+			a := rec.Alert
+			if a.ID == "" {
+				continue
+			}
+			e.active[a.ID] = a
+			e.dispatched[a.ID] = true
+			if !a.FiredAt.IsZero() {
+				// The condition demonstrably held since FiredAt, so the `for`
+				// gate is already satisfied; restarting the clock here would
+				// resolve and re-fire the alert.
+				e.pending[a.ID] = a.FiredAt
+			}
+			restored++
+		}
+	}
+	return restored
+}
+
+// tenantOf derives an alert's owning tenant for the notified set. nil hook =
+// platform-owned, never a guess from the alert's labels.
+func (e *Engine) tenantOf(a models.Alert) string {
+	if e.TenantOf == nil {
+		return ""
+	}
+	return e.TenantOf(a)
 }
 
 // AddRule appends a rule and is safe to call at runtime (e.g. from the API).
@@ -390,9 +456,23 @@ func (e *Engine) evaluateAll() {
 			e.mu.Lock()
 			e.dispatched[id] = true
 			e.mu.Unlock()
+			// DURABLE half: survive the restart that used to re-page this.
+			// A SUPPRESSED firing is deliberately not recorded — nothing went
+			// out, so nothing must be suppressed after a restart either.
+			e.notifyState.MarkNotified(e.tenantOf(a), a)
 		}
 		if e.OnFire != nil {
 			e.OnFire(a) // incident ingest is not a notification — never suppressed
+		}
+	}
+	// Refresh the still-firing records so a chronic alert does not age out of
+	// the notified set and re-page itself. Touch is rate-limited internally, so
+	// this is a map read per active alert per tick and a write once an hour.
+	if e.notifyState != nil {
+		for id, a := range next {
+			if _, existed := prev[id]; existed {
+				e.notifyState.Touch(e.tenantOf(a), id)
+			}
 		}
 	}
 	// Resolution leg: an alert that WAS active and no longer fires has cleared —
@@ -413,6 +493,15 @@ func (e *Engine) evaluateAll() {
 		if wasDispatched && e.notifier != nil {
 			e.notifier.DispatchResolve(a)
 		}
+		// The alert cleared: forget it, so its NEXT firing notifies again.
+		// Unconditional — a record with no live `dispatched` entry (restored,
+		// then resolved) must be cleared too, or it would suppress forever.
+		e.notifyState.Clear(e.tenantOf(a), id)
+	}
+	// ONE blob write per tick, not one per alert: the whole-collection write is
+	// O(N), so per-record flushing would be O(N²) under a storm (§9).
+	if err := e.notifyState.Flush(); err != nil {
+		log.Printf("alerts: could not persist the notified-alert state: %v — alerting continues, but a restart may re-notify still-firing alerts", err)
 	}
 }
 

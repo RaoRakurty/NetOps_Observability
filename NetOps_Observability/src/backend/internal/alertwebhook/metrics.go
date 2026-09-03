@@ -12,6 +12,8 @@ import (
 	"io"
 	"sync/atomic"
 	"time"
+
+	"netops/backend/notify"
 )
 
 // Metrics is the receiver's counter set. Every method is nil-safe, so a
@@ -53,7 +55,7 @@ type Metrics struct {
 	// remaining-tokens gauge refills between pushes instead of freezing at the
 	// value of the last take. atomic because Write runs on the /metrics
 	// goroutine while the receiver's own path takes tokens.
-	budget atomic.Pointer[pushBudget]
+	budget atomic.Pointer[notify.PushBudget]
 }
 
 // NewMetrics builds the counter set. It is constructed even when the receiver
@@ -97,7 +99,7 @@ func (m *Metrics) incHostPushed(tier string) {
 // construction, before the receiver serves anything. A nil bucket means the
 // operator disabled the guard, and the gauge then reads -1 — "not enforced" is
 // a different fact from "empty" and must not look like one.
-func (m *Metrics) attachBudget(b *pushBudget) {
+func (m *Metrics) attachBudget(b *notify.PushBudget) {
 	if m == nil {
 		return
 	}
@@ -110,7 +112,7 @@ func (m *Metrics) PushBudgetRemaining() int {
 	if m == nil {
 		return -1
 	}
-	return m.budget.Load().remaining()
+	return m.budget.Load().Remaining()
 }
 
 func (m *Metrics) setHostRouteEnabled(on bool) {
@@ -232,5 +234,9 @@ func (m *Metrics) Write(w io.Writer) {
 	// The gauge the operator watches when pushes go missing: a floor of the
 	// page reserve means warnings are being held back on purpose; 0 means even
 	// a page would now be refused locally rather than by the server.
-	g("netops_alert_webhook_push_budget_remaining", "Outbound push tokens left for the host-monitoring topic this hour (-1 = no budget configured; PLATFORM_ALERTS_PUSH_BUDGET).", int64(m.budget.Load().remaining()))
+	// SHARED with the product notification channel: this is the budget of the
+	// push SERVER, not of this route's topic (notify/pushbudget.go). The
+	// per-server view, including the product channel's own draw, is
+	// netops_notify_push_budget_remaining{server}.
+	g("netops_alert_webhook_push_budget_remaining", "Outbound push tokens left this hour for the host-monitoring route's push server, SHARED with the product notification channel (-1 = no budget configured; PLATFORM_ALERTS_PUSH_BUDGET).", int64(m.budget.Load().Remaining()))
 }

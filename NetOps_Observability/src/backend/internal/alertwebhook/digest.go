@@ -145,7 +145,7 @@ func (r *receiver) maybeFlushDigest(now time.Time) {
 	}
 	r.digestMu.Unlock()
 
-	if !r.budget.take(false) {
+	if !r.budget.Take(false) {
 		r.deps.Metrics.inc(&r.deps.Metrics.hostBudgetExhausted)
 		r.logBudgetRefusal(tierDigest, "digest", now)
 		return

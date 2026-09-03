@@ -41,6 +41,11 @@ func (g *SeverityGate) SendResolve(a models.Alert) error {
 	return nil
 }
 
+// Pages forwards the PageClassifier question to the wrapped channel, so the
+// gate (which every configured channel is built behind) never hides the inner
+// destination's page policy from the delivery layer.
+func (g *SeverityGate) Pages(a models.Alert) bool { return channelPages(g.inner, a) }
+
 // SeverityAtLeast reports whether sev meets or exceeds min (e.g. "warning"). An
 // empty/unknown min admits everything. Exposes the same ranking the gate uses so
 // non-Channel paths (e.g. incident action posts) can apply the same threshold.

@@ -48,6 +48,11 @@ func NewPlatformScopeFilter(next Channel) *PlatformScopeFilter {
 
 func (f *PlatformScopeFilter) Name() string { return f.next.Name() }
 
+// Pages forwards the PageClassifier question through the scope filter — an
+// alert this filter would drop is never delivered at all, so the answer only
+// ever matters for one it forwards.
+func (f *PlatformScopeFilter) Pages(a models.Alert) bool { return channelPages(f.next, a) }
+
 func (f *PlatformScopeFilter) Send(a models.Alert) error {
 	if !platformScoped(a) {
 		platformScopeRejectedTotal.Add(1)

@@ -465,47 +465,56 @@ func TestBudgetExhaustedPageIsLoggedAtError(t *testing.T) {
 	}
 }
 
-// The bucket itself: clamping, the reserve floor, continuous refill, and the
-// -1 "not enforced" reading. Unit-level because the arithmetic is the contract.
-func TestPushBudgetArithmetic(t *testing.T) {
-	c := &testClock{t: time.Date(2026, 9, 3, 0, 0, 0, 0, time.UTC)}
-	b := newPushBudget(10, 4, c.now)
-	// Non-privileged spends down to the reserve and stops.
-	for i := 0; i < 6; i++ {
-		if !b.take(false) {
-			t.Fatalf("non-privileged take %d refused with %d left", i, b.remaining())
-		}
+// The bucket ARITHMETIC moved to notify/pushbudget_test.go together with the
+// bucket itself (2026-09-03: it is keyed by push SERVER now, shared with the
+// product ntfy channel, so its contract is no longer this package's). What is
+// still asserted HERE is what this route does with it — the reserve floor and
+// the refusal path above, and the wiring test below.
+
+// TestSharedBudgetIsHonouredAcrossRoutes pins the DEFECT this change exists to
+// fix. ntfy.sh rate-limits per SOURCE IP, so the product notification channel
+// and this host route spend ONE allowance. The route must therefore draw from
+// the SHARED per-server bucket — tokens the product channel already spent must
+// be gone here, and the page reserve must survive them.
+func TestSharedBudgetIsHonouredAcrossRoutes(t *testing.T) {
+	c := &testClock{t: time.Date(2026, 9, 3, 12, 0, 0, 0, time.UTC)}
+	reg := notify.NewPushBudgets(3, 2, c.now)
+	// The PRODUCT channel's draw, in a DIFFERENT spelling of the same server:
+	// one non-reserved token spent before this route ever sees an alert.
+	if !reg.For("NTFY.SH").Take(false) {
+		t.Fatal("the product channel could not take its first token")
 	}
-	if b.take(false) {
-		t.Fatal("a warning spent into the page reserve")
+	r := newHostRigWith(t, time.Second, newFakePusher(), func(d *Deps) {
+		d.WarningDigestInterval = time.Millisecond
+		d.Budgets = reg
+		d.HostServer = "https://ntfy.sh/"
+	})
+	// A warning digest now finds only the RESERVED tokens and must be refused —
+	// under the old per-topic bucket it would have found a full bucket and
+	// spent a token the page below needs.
+	if w := r.post(t, warnJSON("WarnA", "chronic", "firing"), bearer); w.Code != http.StatusOK {
+		t.Fatalf("status = %d", w.Code)
 	}
-	// A page spends the reserve.
-	for i := 0; i < 4; i++ {
-		if !b.take(true) {
-			t.Fatalf("page take %d refused with %d left", i, b.remaining())
-		}
+	r.clock.advance(time.Millisecond)
+	r.tick(t)
+	r.push.quiet(t)
+	if !strings.Contains(metricsText(r.mx), `netops_alert_webhook_push_failures_total{route="host_monitoring",reason="budget_exhausted"} 1`) {
+		t.Errorf("the shared-bucket refusal was not counted:\n%s", metricsText(r.mx))
 	}
-	if b.take(true) {
-		t.Fatal("an empty bucket handed out a token")
+	// The reserve is intact for a PAGE — across both routes, which is the point.
+	page := alertJSON("CorrelationConsumerDead", "critical", "correlation", "page", "firing", "consumer group empty")
+	if w := r.post(t, page, bearer); w.Code != http.StatusOK {
+		t.Fatalf("status = %d", w.Code)
 	}
-	// Continuous refill: half an hour at 10/h is 5 tokens.
-	c.advance(30 * time.Minute)
-	if got := b.remaining(); got != 5 {
-		t.Fatalf("remaining after 30m at 10/h = %d, want 5", got)
+	if got := r.push.await(t, 1)[0]; got.Priority != notify.NtfyPriorityHigh {
+		t.Fatalf("the shared reserve did not carry the page: %+v", got)
 	}
-	// Refill is capped at capacity.
-	c.advance(10 * time.Hour)
-	if got := b.remaining(); got != 10 {
-		t.Fatalf("remaining = %d, want the capacity 10", got)
+	// One bucket, two routes: 3 - 1 (product) - 1 (page) = 1.
+	if rem := r.mx.PushBudgetRemaining(); rem != 1 {
+		t.Errorf("remaining = %d, want 1 — the gauge must reflect BOTH routes' draws", rem)
 	}
-	// A reserve that would swallow the bucket is clamped, so the digest lane is
-	// never starved outright.
-	if b := newPushBudget(5, 99, c.now); !b.take(false) {
-		t.Fatal("an over-large reserve starved the non-privileged lane entirely")
-	}
-	// Disabled: nil bucket, always allows, gauge reads -1 (not 0).
-	if nb := newPushBudget(0, 0, c.now); nb != nil || !nb.take(false) || nb.remaining() != -1 {
-		t.Fatal("a disabled budget must allow every push and read -1")
+	if got := reg.For("https://ntfy.sh").Remaining(); got != 1 {
+		t.Errorf("the registry handed out a second bucket for the same host (remaining = %d)", got)
 	}
 }
 

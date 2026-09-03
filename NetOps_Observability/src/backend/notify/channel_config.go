@@ -211,8 +211,18 @@ func BuildTwilioChannel(c TwilioConfig) Channel {
 	return NewSeverityGate(t, c.MinSeverity)
 }
 
-func BuildNtfyChannel(c NtfyConfig) Channel {
-	n := NewNtfy(c.Server, c.Topic, c.Token)
+// BuildNtfyChannel constructs the product ntfy channel.
+//
+// budgets is the process's SHARED per-push-server token-bucket registry
+// (pushbudget.go); a nil registry leaves the channel unguarded, which is what
+// every test that does not care about rate limiting wants. The channel's
+// configured min_severity does double duty: the gate below, and the page policy
+// that decides whether a critical alert on THIS channel may spend the shared
+// budget's page reserve (only a channel gated at `critical` is a pager).
+func BuildNtfyChannel(c NtfyConfig, budgets *PushBudgets) Channel {
+	n := NewNtfy(c.Server, c.Topic, c.Token).
+		WithBudget(budgets.For(c.Server)).
+		WithPagePolicy(c.MinSeverity)
 	return NewSeverityGate(n, c.MinSeverity)
 }
 

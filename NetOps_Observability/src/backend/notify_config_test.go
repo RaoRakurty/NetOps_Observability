@@ -239,7 +239,7 @@ func TestNtfyChannelDefaultsToCriticalGate(t *testing.T) {
 	if c.MinSeverity != "critical" {
 		t.Fatalf("ntfy default min_severity = %q, want critical", c.MinSeverity)
 	}
-	if n := notify.BuildNtfyChannel(notify.NtfyConfig{Topic: "x", MinSeverity: "critical"}).Name(); n != "ntfy" {
+	if n := notify.BuildNtfyChannel(notify.NtfyConfig{Topic: "x", MinSeverity: "critical"}, nil).Name(); n != "ntfy" {
 		t.Fatalf("ntfy channel name = %q, want ntfy", n)
 	}
 }

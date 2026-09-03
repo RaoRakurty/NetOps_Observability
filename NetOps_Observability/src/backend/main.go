@@ -132,9 +132,14 @@ type server struct {
 	processors    processors.Store  // per-tenant pipeline processor rules (item 121): compiled into the router config
 	userRules     *userRulesStore
 	notifier      *notify.Dispatcher
-	selfHeal      *selfheal.Healer
-	users         usersRepo
-	roles         *roleStore
+	// pushBudgets is the process-wide, per-PUSH-SERVER outbound token-bucket
+	// registry (notify/pushbudget.go). Both ntfy senders — the product
+	// notification channel and the platform host-monitoring route — draw from
+	// it, because ntfy.sh rate-limits per source IP and they share one.
+	pushBudgets *notify.PushBudgets
+	selfHeal    *selfheal.Healer
+	users       usersRepo
+	roles       *roleStore
 	// bgpWatch is the BGP ops watchlist (item 10). It is an INTERFACE with two
 	// durable backends — Postgres FORCE-RLS (migration 0035) and the tenant-keyed
 	// bgpwatch.WatchFileStore — and is never nil: the watchlist, the
@@ -1024,6 +1029,23 @@ func newServer() *server {
 	srv.processors = newProcessorStore()
 	engine.OnTransition = srv.observeAlertTransition
 	engine.SuppressNotify = srv.alertNotifySuppressed
+	// DURABLE notified set (alerts/notifystate.go). Without it every api
+	// restart re-paged every still-firing alert, because the engine's "already
+	// notified" record lived only in memory — two deploys inside an hour on
+	// 2026-09-03 produced exactly that burst. Tenant derivation is the same
+	// device→tenant rule the episode fold uses (§3a): never the alert's labels.
+	engine.TenantOf = srv.alertTenant
+	if st, err := alerts.NewNotifyStateStore(envOr("ALERT_NOTIFY_STATE_FILE", "/data/alert_notify_state.json")); err != nil {
+		// NOT fatal: the worst case is the pre-existing behaviour (one
+		// duplicate notification per still-firing alert). Loud, though — a
+		// silently empty store would look identical to a clean boot (§10).
+		logError("alerts", "the notified-alert state could not be loaded — still-firing alerts may be re-notified once after this restart", errf(err))
+	} else if n := engine.SetNotifyState(st); n > 0 {
+		logInfo("alerts", "restored the notified-alert state across the restart", map[string]any{
+			"restored": n,
+			"note":     "still-firing alerts will NOT be re-notified; anything that cleared while down resolves on the first tick",
+		})
+	}
 	srv.reports = newReportScheduler(srv, envOr("REPORT_RUNS_FILE", "/data/report_runs.json"))
 	srv.copilotCfg = newCopilotConfigStore(envOr("COPILOT_CONFIG_FILE", "/data/copilot_config.json"), vault)
 	srv.aiTenantCfg = newAITenantConfigStore(aiTenantConfigPath(), vault)
@@ -1058,6 +1080,19 @@ func newServer() *server {
 	srv.netboxSync = newNetboxSyncer(netboxCfg.effective, srv.discovery.Devices)
 	// UI-configurable email/SMS/push channels (registers live channels into the
 	// dispatcher built above). Must come after notifier is set on srv.
+	// The SHARED per-push-server budget (notify/pushbudget.go). Built BEFORE the
+	// notify config store, because that store's apply() constructs the product
+	// ntfy channel and the channel must be born holding the shared bucket — a
+	// channel wired without one is a sender the page reserve cannot see.
+	// The knobs keep the PLATFORM_ALERTS_PUSH_BUDGET* names; their scope is now
+	// the server host, shared across the product and platform routes.
+	srv.pushBudgets = notify.NewPushBudgets(
+		alertwebhook.ParseCount(os.Getenv(alertwebhook.EnvPushBudget),
+			alertwebhook.DefaultPushBudget, alertwebhook.EnvPushBudget, alertWebhookLog),
+		alertwebhook.ParseCount(os.Getenv(alertwebhook.EnvPushBudgetPageReserve),
+			alertwebhook.DefaultPageReserve, alertwebhook.EnvPushBudgetPageReserve, alertWebhookLog),
+		nil)
+	srv.notifier.SetPushBudgets(srv.pushBudgets)
 	srv.notifyCfg = newNotifyConfigStore(envOr("NOTIFY_CONFIG_FILE", "/data/notify_config.json"), srv)
 	// VMALERT-WEBHOOK-BEGIN — the vmalert delivery path. Must come after the
 	// notifier is on srv (it is the fan-out target).
@@ -1073,9 +1108,16 @@ func newServer() *server {
 			"endpoint": alertwebhook.AlertsPath,
 		})
 	} else {
+		hostRoute, hostServer := platformAlertsHostRoute()
 		h, err := alertwebhook.Handler(alertwebhook.Deps{
 			Dispatcher: srv.notifier,
-			HostRoute:  platformAlertsHostRoute(),
+			HostRoute:  hostRoute,
+			// The SHARED bucket, keyed by the server this route actually talks
+			// to. Without it this route's page reserve could not see the
+			// product channel's traffic against the same ntfy server — the
+			// 2026-09-03 defect.
+			Budgets:    srv.pushBudgets,
+			HostServer: hostServer,
 			Token:      token,
 			Cooldown:   alertwebhook.ParseCooldown(os.Getenv(alertwebhook.EnvCooldown), alertWebhookLog),
 			// Noise + rate-limit control (2026-09-03): the warning tier is
@@ -3593,7 +3635,10 @@ func alertWebhookLog(level, msg string, fields map[string]any) {
 //
 // Returns a nil interface (never a typed nil) when no topic is configured, so
 // the receiver counts the misconfiguration instead of dereferencing it.
-func platformAlertsHostRoute() alertwebhook.HostPusher {
+// It returns the sender and the SERVER it is aimed at; the server is the key
+// into the shared per-server push budget (notify/pushbudget.go) and is safe to
+// log — unlike the topic, which is a credential.
+func platformAlertsHostRoute() (alertwebhook.HostPusher, string) {
 	topic := strings.TrimSpace(os.Getenv(alertwebhook.EnvHostTopic))
 	source := alertwebhook.EnvHostTopic
 	if topic == "" {
@@ -3609,7 +3654,7 @@ func platformAlertsHostRoute() alertwebhook.HostPusher {
 			"route": alertwebhook.RouteHostMonitoring,
 			"env":   alertwebhook.EnvHostTopic,
 		})
-		return nil
+		return nil, ""
 	}
 	server := strings.TrimSpace(firstNonEmpty(os.Getenv(alertwebhook.EnvHostServer), os.Getenv(alertwebhook.EnvProductNtfyServer)))
 	token := strings.TrimSpace(firstNonEmpty(os.Getenv(alertwebhook.EnvHostToken), os.Getenv(alertwebhook.EnvProductNtfyToken)))
@@ -3617,7 +3662,11 @@ func platformAlertsHostRoute() alertwebhook.HostPusher {
 	// published to it and to publish forgeries (§8).
 	logInfo("alertwebhook", "platform self-health alerts route to the host-monitoring push channel",
 		alertwebhook.HostRouteLogFields(server, token != "", source))
-	return notify.NewNtfy(server, topic, token)
+	// NO budget is attached to this sender on purpose: the receiver takes the
+	// token at ENQUEUE (internal/alertwebhook/hostroute.go), so attaching one
+	// here would spend two tokens per push. Both draw from the SAME shared
+	// bucket for this server.
+	return notify.NewNtfy(server, topic, token), server
 }
 
 // handleVMAlertWebhook serves the Alertmanager-v2 receiver vmalert POSTs to.

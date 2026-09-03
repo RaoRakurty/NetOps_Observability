@@ -90,6 +90,38 @@ Platform alerts still reach the product dispatcher as well, unchanged; the host
 route is an **additional** destination, sharing the same cool-down, so nothing
 buzzes twice.
 
+**Both routes share ONE push budget, keyed by the push SERVER (2026-09-03).**
+ntfy.sh rate-limits per **source IP**, not per topic, so the product channel and
+the platform host route spend one allowance. They now draw from one bucket per
+server host, and the page reserve is honoured across both:
+
+| Sender | What may spend the page reserve | Retries against `429` |
+|---|---|---|
+| `internal/alertwebhook` host route | `tier: page` (the four page conditions) and the **resolution** of a page | up to 4, capped backoff + jitter, honours `Retry-After` |
+| product ntfy channel (`notify/ntfy.go`) | severity `critical` on a channel configured as a **pager** (`min_severity = critical`) — a critical on a channel gated at `warning`/`info` is a *feed* and may not | **one** bounded retry for a page, **none** for anything else |
+| product ntfy channel, non-429 4xx | — | none (a bad token will not fix itself) |
+| any sender, local budget refusal | — | none (the request was never made) |
+
+Metrics: `netops_notify_push_budget_remaining{server}` and
+`netops_notify_push_budget_refused_total{server}` are the per-server view (the
+one to watch); `netops_alert_webhook_push_budget_remaining` is the same bucket
+seen from the host route. `PLATFORM_ALERTS_PUSH_BUDGET` and
+`PLATFORM_ALERTS_PUSH_BUDGET_PAGE_RESERVE` keep their names and now govern that
+**shared, per-server-host** allowance rather than one route's topic; a negative
+budget still disables the guard for a self-hosted server with no limits.
+
+**A deploy no longer re-pages what was already paged (2026-09-03).** The
+in-API rules engine's "already notified" record used to live in memory only, so
+every api restart made every still-firing alert look brand new and paged for it
+again — two deploys in an hour produced exactly that burst, which is what
+exhausted the push budget above. The record is now persisted per tenant in
+`ALERT_NOTIFY_STATE_FILE` (default `/data/alert_notify_state.json`,
+`alerts/notifystate.go`): a still-firing alert is **not** re-notified after a
+restart, an alert that cleared while the api was down **is** resolved once on
+the first tick, and the boot log says how many records were restored. Deleting
+that file is safe — the cost is one duplicate notification per still-firing
+alert.
+
 **Warnings do not buzz individually (2026-09-03).** ntfy.sh's free public server
 rate-limits per topic/IP and started answering `429` here while chronic warnings
 were each spending a push — budget a real page needs. The `page` tier and the
