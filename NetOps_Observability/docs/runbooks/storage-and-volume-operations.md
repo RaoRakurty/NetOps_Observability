@@ -9,9 +9,13 @@ Docker build cache). Storage problems creep silently and surface as *other*
 components' bugs: OpenSearch flips every index read-only at its 95% flood
 stage and ingestion stops with no error.
 
-Related: `deployment/docker/clickhouse/system-logs.xml` (#96a),
-`scripts/docker-hygiene.sh` (#96b), `scripts/stack-watchdog.sh` (disk warn 85% /
-auto builder-prune 90% / ingest-liveness probe), TRACKER §G.
+Related: `deployment/docker/clickhouse/system-logs.xml` (#96a, the system.*
+TABLES) and `clickhouse/logger.xml` (2026-09-03, the server's TEXT log inside
+the container layer — §1.1 a), `scripts/docker-hygiene.sh` (#96b),
+`scripts/stack-watchdog.sh` (disk warn 85% / auto builder-prune 90% /
+ingest-liveness probe), TRACKER §G. Guards:
+`tests/test_clickhouse_server_log_bounded.py`,
+`tests/test_compose_logging_bounded.py`.
 
 ---
 
@@ -32,6 +36,45 @@ Default CH writes unbounded `system.*` logs (`text_log`, `trace_log`,
   schema-changed log tables to `*_0` — drop those too.
 - Data files delete ~8 min after DROP (`database_atomic_delay_before_drop_table_sec`,
   default 480) — don't panic when `du` doesn't move instantly.
+
+### 1.1a Bound the server's TEXT log (the copy inside the container layer)
+
+`system-logs.xml` bounds the system.* *tables*, which live in the bind mount.
+It does nothing for `/var/log/clickhouse-server/` — the server's plain-text log
+— and that directory is **not mounted at all**, so its bytes land in the
+container's writable layer under `/var/lib/docker/overlay2`.
+
+Measured 2026-09-03, host at 94% disk (OpenSearch flood stage is 95%):
+
+```
+docker exec netops-clickhouse-1 du -sh /var/log/clickhouse-server
+1.8G     # clickhouse-server.log 924M + .err.log 109M + 10 x ~90M .gz
+```
+
+Two blind spots make this creep silently, and both are worth internalising
+because they generalise to any container that logs to a file:
+
+- **`du -sh data/` cannot see it.** Only `docker system df -v` (or
+  `docker ps -s`, "SIZE ... virtual") accounts for a container's writable layer.
+- **The compose `x-logging` cap cannot see it either.** That cap applies to
+  *stdout*; the ClickHouse image leaves `<console>` commented out in
+  `docker_related_config.xml`, so nothing of substance reaches `docker logs`.
+
+Stock 24.8 defaults are `<level>trace</level>`, `<size>1000M</size>`,
+`<count>10</count>`, applied to the server log **and** the error log — an
+~11 GiB per-server ceiling. This repo ships
+`deployment/docker/clickhouse/logger.xml` (mounted into `config.d/`) with
+`information` / `100M` / `3`, a ~0.3 GiB ceiling.
+
+- Takes effect on **container recreate** (`docker compose up -d clickhouse`),
+  not on `docker restart`.
+- The oversized file is in the OLD container layer; recreating the container
+  reclaims it. To reclaim without a recreate:
+  `docker exec netops-clickhouse-1 sh -c ': > /var/log/clickhouse-server/clickhouse-server.log'`
+  (truncate in place — never `rm`, the server holds the fd).
+- To debug a server-side problem, set `<level>` back to `debug`/`trace` in
+  `logger.xml`, `docker compose up -d clickhouse`, and **put it back**.
+- Guarded by `tests/test_clickhouse_server_log_bounded.py`.
 
 ### 1.2 Schema design that keeps disk (and merges) bounded
 
@@ -105,10 +148,22 @@ Production layout:
 
 ### 2.2 Caps and retention as configuration (not cleanup)
 
-- **Container stdout**: `x-logging` anchor caps json-file logs at 50m×N per
-  service (already in our compose). At fleet scale, set it host-wide in
-  `/etc/docker/daemon.json` (`log-driver: local`, `max-size`, `max-file`) so a
-  service added without the anchor can't regress it.
+- **Container stdout**: the `x-logging: &deflog` anchor caps json-file logs at
+  50m×3 per service. As of 2026-09-03 it is on **every** service in every
+  compose file, enforced by `tests/test_compose_logging_bounded.py` — before
+  that it was on 8 of 35, which is how `opensearch` reached a 1.1 GiB json log
+  and `opensearch-dashboards` 200 MiB on a host at 94%. Two things to know:
+  - **it applies on container RECREATE.** Docker fixes the log driver and its
+    options at create time, so `docker compose up -d` (which recreates on a
+    config change) is what applies a new or changed cap; `docker restart` and
+    `docker compose restart` keep the old, unbounded file. The already-oversized
+    json logs are only reclaimed by that recreate, or by truncating
+    `$(docker inspect --format '{{.LogPath}}' <container>)` in place.
+  - **it caps stdout only** — a container that writes its own log FILE (see
+    §1.1 a, ClickHouse) is not covered by it at all.
+  At fleet scale, also set it host-wide in `/etc/docker/daemon.json`
+  (`log-driver: local`, `max-size`, `max-file`) so a service added without the
+  anchor can't regress it.
 - **Build cache**: structural cap in `daemon.json` (`builder.gc` policy,
   e.g. `defaultKeepStorage: 2GB`) beats cron-only pruning — the cap holds even
   during a heavy build session, which is exactly when the 2026-06-12 outage
@@ -147,6 +202,14 @@ docker exec netops-clickhouse-1 clickhouse-client -q "
 docker exec netops-opensearch-1 curl -s localhost:9200/_cat/indices/netops-*?v'&s=store.size:desc' | head
 docker system df
 df -h /
+
+# growth that lives NOWHERE in data/ — container writable layers + json logs
+docker system df -v | head -30
+for c in $(docker ps -q); do
+  printf '%s\t%s\n' \
+    "$(docker inspect --format '{{.Name}}' "$c")" \
+    "$(sudo du -h "$(docker inspect --format '{{.LogPath}}' "$c")" | cut -f1)"
+done | sort -k2 -h -r | head
 ```
 
 Trend bytes/day per store against retention: `daily_rate × retention_days ×
@@ -161,3 +224,17 @@ add a codec/rollup, or tier to object storage — in that order of effort.
 OpenSearch index blocks (`_cat/indices`, look for `read_only_allow_delete`) →
 Vector router logs for 429s. The two historical causes were disk (build cache,
 unsampled flows); the watchdog now alerts before both.
+
+**Disk climbing and `data/` doesn't explain it?** Three places outside the bind
+mounts, in the order they have actually bitten us:
+
+| Where | Find it | Bound it |
+|---|---|---|
+| Container json logs (stdout) | `sudo du -h $(docker inspect --format '{{.LogPath}}' <container>)` | `logging: *deflog` on the service, then `docker compose up -d` to **recreate** |
+| Container writable layer (a service logging to a file — ClickHouse) | `docker system df -v`; `docker exec <c> du -sh /var/log/...` | ship a config that rotates it (§1.1 a) |
+| Build cache / dangling images | `docker system df` | `docker-hygiene.sh`; `builder.gc` in `daemon.json` |
+
+The watchdog's own log is `data/stack-watchdog.log` (see
+`scripts/stack-watchdog.sh`); it is timestamped and appended by cron, so
+`tail -50 data/stack-watchdog.log` is the fastest read of what the host looked
+like when the alert fired.

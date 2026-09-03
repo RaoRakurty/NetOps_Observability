@@ -128,10 +128,18 @@ $EDITOR scripts/stack-watchdog.env        # set NTFY_TOPIC, HC_PING_URL
 # 2. Confirm phone delivery (subscribe to the topic in the ntfy app first)
 scripts/stack-watchdog.sh --test
 
-# 3. Schedule it
+# 3. Schedule it (the log lives under data/, which is already gitignored;
+#    every line is timestamped, so `tail data/stack-watchdog.log` is readable)
+mkdir -p data
 ( crontab -l 2>/dev/null; \
-  echo "* * * * * $PWD/scripts/stack-watchdog.sh >> $PWD/scripts/stack-watchdog.log 2>&1" ) | crontab -
+  echo "* * * * * $PWD/scripts/stack-watchdog.sh >> $PWD/data/stack-watchdog.log 2>&1" ) | crontab -
 ```
+
+The log grows forever by design (it is the record that survives the stack
+dying); rotate it with logrotate, or truncate it when it gets large —
+`: > data/stack-watchdog.log`. Packaged installs get this for free:
+`scripts/install-watchdog.sh` writes `/var/log/correlix-watchdog.log` **with a
+logrotate stanza**.
 
 For the off-host dead-man's-switch, create a check at
 https://healthchecks.io (period 1m, grace ~3m), point its integration at

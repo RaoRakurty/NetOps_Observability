@@ -229,11 +229,25 @@ Required checks to add before turning automerge on:
 | fresh-install-integrity | `integrity`, `scripts-lint` |
 | renovate | `renovate-config-validator (blocking)` |
 
-> Note: `ci-branch-protection.md` §1 lists the backend test job as
+> **DONE 2026-09-03.** `ci-branch-protection.md` §1 listed the backend test job as
 > `build · vet · test · race · fuzz`. The job's actual `name:` is
 > **`build · vet · test · race`** — live fuzzing was removed from the per-PR gate and moved to
 > `fuzz-nightly.yml`. A required check whose name does not match a real job pins every PR at
-> "Expected" forever. Use the names above; that runbook needs a correction pass (§9).
+> "Expected" forever. That runbook has had its correction pass: §1 now carries all sixteen
+> blocking checks (this table plus `golangci-lint (repo-wide, blocking)`,
+> `ruff · bandit · mypy · pip-audit (blocking)`, `npm audit (blocking)`,
+> `Playwright E2E (blocking)`, `panel↔metric contract (blocking)` and
+> `Third-party licence gate (blocking)`), and §4's `gh api` payload matches it.
+>
+> One correction to the table ABOVE: **`renovate-config-validator (blocking)` must not be
+> required.** `renovate.yml`'s `pull_request` trigger carries a `paths:` filter
+> (`.github/renovate.json`, `.github/workflows/renovate.yml`), so on a PR touching neither file
+> the check never reports and the PR sticks at "Expected" — the exact deadlock this note warns
+> about. Either leave it out or drop that `paths:` filter first. The
+> `fresh-install-integrity` rows are also real but optional: `integrity` declares no `name:`
+> (the check name is the job **id**), `scripts-lint` reports as
+> `ruff (scripts/*.py, blocking)`, and the workflow's third job
+> (`install.py --tls=yes two-phase boot (blocking)`) is the slowest check in the repo.
 
 ---
 

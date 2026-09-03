@@ -11,9 +11,21 @@
 #
 # Pure stdlib Python (no deps); the script lives in scripts/lab/flowgen/flowgen.py.
 
+# Bounded container logs — same cap as docker-compose.yml's x-logging anchor.
+# YAML anchors do NOT cross files, so every compose file that introduces a
+# service of its own has to restate it; services this file merely PATCHES
+# inherit the base file's logging. Enforced by
+# tests/test_compose_logging_bounded.py.
+x-logging: &deflog
+  driver: json-file
+  options:
+    max-size: "50m"
+    max-file: "3"
+
 services:
   flowgen:
     image: python:3.12-slim
+    logging: *deflog
     container_name: netops-flowgen-1
     restart: unless-stopped
     depends_on: [goflow2]

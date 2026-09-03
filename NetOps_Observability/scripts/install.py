@@ -419,13 +419,90 @@ REQUIRED_PATHS = [
     "deployment/docker/grafana/provisioning/datasources/datasources.yaml",
 ]
 
-def validate_scaffold(root: Path) -> None:
+# Web assets the `frontend` image COPYs in. They are BUILD ARTIFACTS, gitignored
+# by design (deployment/docker/Dockerfile.frontend explains why: npm install
+# inside the docker build hangs on container DNS/registry timeouts), so a clean
+# clone has neither. Without this check `docker compose build frontend` fails
+# deep inside BuildKit with
+#     failed to compute cache key: "/src/frontend/dist": not found
+# — which tells an evaluator nothing about what to do. Each entry is
+# (path, what it is, how to build it).
+#
+# Checked ONLY when this run will actually build images: --offline / --bundle
+# start from pre-loaded images (`--no-build`) and --no-start never reaches
+# compose at all, so requiring the assets there would break the CI provisioning
+# path (release-bundle.yml runs `install.py --no-start` on a runner with no npm).
+PREBUILT_WEB_ASSETS = [
+    ("src/frontend/dist",
+     "the compiled React SPA",
+     "cd src/frontend && npm ci --no-audit --no-fund && npm run build"),
+    ("docs-portal/build",
+     "the in-app documentation portal served at /docs/",
+     "cd docs-portal && npm ci --no-audit --no-fund && npm run build"),
+]
+
+
+def validate_scaffold(root: Path, *, will_build: bool = True) -> None:
     missing = [p for p in REQUIRED_PATHS if not (root / p).exists()]
     if missing:
         for m in missing:
             warn(f"missing: {m}")
         fail("scaffold is incomplete — refusing to install. See warnings above.")
     ok(f"scaffold ok ({len(REQUIRED_PATHS)} required paths present)")
+    if will_build:
+        validate_prebuilt_web_assets(root)
+
+
+def _is_populated_dir(path: Path) -> bool:
+    """A directory that exists but is EMPTY fails the docker build identically.
+
+    `npm run build` writing into a half-created tree, or a `rm -rf dist/*`, both
+    leave the directory behind — so existence alone is not the contract.
+    """
+    if not path.is_dir():
+        return False
+    try:
+        return any(path.iterdir())
+    except OSError as exc:
+        # §16.1: an UNREADABLE directory is not "missing". Reporting it as
+        # missing would print an `npm run build` recipe that cannot fix a
+        # permission problem, and the docker build would fail on the same
+        # directory a second time. Refuse and name the real error.
+        fail(f"cannot read {path}: {exc}\n"
+             "The frontend image build reads this directory; fix its "
+             "ownership/permissions and re-run this installer.")
+        return False  # unreachable — fail() exits
+
+
+def validate_prebuilt_web_assets(root: Path) -> None:
+    missing = [(rel, what, how) for rel, what, how in PREBUILT_WEB_ASSETS
+               if not _is_populated_dir(root / rel)]
+    if not missing:
+        ok(f"web assets present ({len(PREBUILT_WEB_ASSETS)} pre-built directories)")
+        return
+    for rel, what, _ in missing:
+        warn(f"missing (or empty): {rel} — {what}")
+    lines = [
+        "pre-built web assets are missing — refusing to build.",
+        "",
+        "The frontend image COPYs these directories in; they are build",
+        "artifacts and are deliberately NOT in git, so a fresh clone has to",
+        "produce them once (needs Node 20+ and npm on this host):",
+        "",
+    ]
+    for rel, _, how in missing:
+        lines.append(f"    # {rel}")
+        lines.append(f"    {how}")
+    lines += [
+        "",
+        f"Run those from {root}, then re-run this installer (it is idempotent).",
+        "",
+        "Alternatives that need no Node:",
+        "  * install from a customer bundle — `install.py --bundle IMAGES.tar.zst`",
+        "    starts from pre-loaded images and never builds;",
+        "  * `install.py --no-start` to generate .env and data/ only.",
+    ]
+    fail("\n".join(lines))
 
 # ---- resource plan (#102) ---------------------------------------------------
 
@@ -1058,6 +1135,15 @@ WATCHDOG_NTFY_TOPIC=
 #FEATURE_BGP_LIVE_FEED=true
 #FEATURE_BGP_ALERTS=true
 #FEATURE_BGP_BOGON_FEED=true
+#
+# BGP_FEED_LOOKBACK is the window the FIRST poll of each resource asks for. It
+# matters because the near-live feed polls a public ARCHIVE, not a stream, and
+# that archive has been measured hours behind real time (3 h 15 m on
+# 2026-09-03): a window shorter than the lag returns only records the cursor
+# already rejects, so the feed buffers nothing forever with no error anywhere.
+# The default (6h) covers the measured lag with room to spare; raise it if the
+# feed page reports an upstream lag larger than the window. Clamped to 1m..24h.
+#BGP_FEED_LOOKBACK=6h
 #
 # Parser-coverage mining bound (one run's OpenSearch scan) and the explicit
 # correlation replica list the per-process parser counters are summed over
@@ -2600,7 +2686,9 @@ def main() -> None:
     check_docker(args.bootstrap_docker)
 
     step("validating scaffold", stage="scaffold")
-    validate_scaffold(root)
+    # A build only happens on the online, starting path: --offline/--bundle pass
+    # --no-build to compose, and --no-start returns before compose runs at all.
+    validate_scaffold(root, will_build=not (args.no_start or args.offline))
 
     step("generating environment", stage="env")
     # --reset-env on a STARTED install is a rotation, not a regeneration: the

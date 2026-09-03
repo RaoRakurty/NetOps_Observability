@@ -426,7 +426,14 @@ collect alerts/vmalert-alerts.json c_vmalert
 
 # ---------- 8. watchdog log --------------------------------------------------
 WD_LOG=""
-for cand in "$WATCHDOG_LOG_FILE" "$SCRIPT_DIR/stack-watchdog.log" "$ROOT/scripts/stack-watchdog.log"; do
+# Order matters: first readable wins. $WATCHDOG_LOG_FILE is the packaged
+# install's path; data/stack-watchdog.log is where the README's repo cron
+# writes. `scripts/stack-watchdog.log` is a LEGACY path the README used to
+# document — kept last so an old host still yields something, but it must
+# never be preferred: on the dev host it survived as a 24 MB orphan, last
+# written 2026-08-22, while the live log was elsewhere (2026-09-03 drill).
+for cand in "$WATCHDOG_LOG_FILE" "$ROOT/data/stack-watchdog.log" \
+            "$SCRIPT_DIR/stack-watchdog.log" "$ROOT/scripts/stack-watchdog.log"; do
   if [ -r "$cand" ]; then WD_LOG="$cand"; break; fi
 done
 if [ -n "$WD_LOG" ]; then

@@ -1,10 +1,20 @@
 name: release-bundle
 
 # #97 Phase 1 CI leg (docs/design/packaging-strategy.md §6): on a version tag,
-# build the offline client installer bundle (make-installer.sh --core), smoke-
-# test it (checksums, archive integrity, docker-load round-trip, extracted-tree
-# install preflight), and attach it to the GitHub Release. Manual dispatch runs
-# the same build + smoke and uploads a workflow artifact instead (no release).
+# build the offline client installer bundle, smoke-test it (checksums, archive
+# integrity, docker-load round-trip, extracted-tree install preflight), and
+# attach it to the GitHub Release. Manual dispatch runs the same build + smoke
+# and uploads a workflow artifact instead (no release).
+#
+# PROFILE: the FULL bundle — base appliance archive PLUS the optional add-on
+# packs (log-search-ui, self-monitoring). `25a6045a` dropped the `--core` flag
+# deliberately when the add-on-pack model landed; the design doc's §6 line
+# ("runs make-installer.sh --core") predates that and is stale. Everything that
+# NAMES the profile was still saying "core" until 2026-09-03 — the MANIFEST
+# line, the release notes, the workflow artifact — which is the drift this
+# comment exists to stop. To publish eval-sized bundles instead, add `--core`
+# HERE and change the three labels below together; the smoke step asserts the
+# MANIFEST agrees, so they cannot drift apart again silently.
 #
 # BUNDLE LOCKSTEP (#97, owner 2026-07-17): the customer package must track the
 # code automatically. Three legs, cheapest always-on:
@@ -101,6 +111,14 @@ jobs:
           # drifted apart, which is the failure this workflow exists to catch.
           grep -q "^git_sha:  $(git rev-parse --short HEAD)\$" MANIFEST
 
+          # The bundle must SAY what it is. This build passes no --core, so the
+          # MANIFEST profile is "full" and the add-on packs must be present —
+          # the label and the contents are asserted together (2026-09-03: the
+          # MANIFEST said "core" unconditionally while packs shipped alongside).
+          grep -q '^profile:  full$' MANIFEST
+          ls correlix-addon-log-search-ui-*.tar.zst >/dev/null
+          ls correlix-addon-self-monitoring-*.tar.zst >/dev/null
+
           # Licensing/broker assertions (#97): the customer bundle ships
           # Apache Kafka + Valkey and must not contain Redpanda anywhere a
           # customer looks — manifest, compose, or the bundle-root docs.
@@ -161,7 +179,7 @@ jobs:
           set -euo pipefail
           gh release view "$TAG" >/dev/null 2>&1 || \
             gh release create "$TAG" --verify-tag --title "Correlix $TAG" \
-              --notes "Offline Correlix installer bundle (core profile). Download all files into one directory and run \`./install-correlix.sh\` — it verifies checksums, rejoins split \`.partNN\` pieces, and installs. See README.md."
+              --notes "Offline Correlix installer bundle (full profile: base appliance + optional add-on packs). Download all files into one directory and run \`./install-correlix.sh\` — it verifies checksums, rejoins split \`.partNN\` pieces, and installs. Add-on packs stay off until \`./install-correlix.sh enable <addon>\`. See README.md."
           gh release upload "$TAG" ./* --clobber
 
       # Dispatch runs (no tag) keep the bundle as a short-lived artifact so a
@@ -170,7 +188,10 @@ jobs:
         if: ${{ !startsWith(github.ref, 'refs/tags/') }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: correlix-bundle-core
+          # Names the PROFILE built above (full = base + add-on packs). It read
+          # "core" until 2026-09-03 while the build had shipped packs since
+          # 25a6045a — the artifact must not lie about its own contents.
+          name: correlix-bundle-full
           path: ${{ steps.build.outputs.dir }}
           retention-days: 7
           compression-level: 0 # members are already zstd/gzip-compressed

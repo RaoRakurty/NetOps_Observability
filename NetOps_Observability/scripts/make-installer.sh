@@ -320,7 +320,13 @@ echo "-- lab-leak guard: clean"
   echo "product:  Correlix (NetOps Observability)"
   echo "version:  $VERSION"
   echo "git_sha:  $GITSHA"
-  echo "profile:  core"
+  # The PROFILE actually built, not a constant. Until 2026-09-03 this line was
+  # hard-coded "core" while the default build (no --core) also produces the
+  # add-on packs listed below it — a MANIFEST that contradicted its own
+  # contents. "core" = base appliance only; "full" = base + add-on packs.
+  # (The base image archive keeps its historical correlix-images-core-* name in
+  # BOTH profiles; install-correlix.sh globs it.)
+  echo "profile:  $PROFILE"
   echo "built:    $(date -Is)"
   echo "images:"
   printf '%s\n' "$IMAGES" | sed 's/^/  - /'

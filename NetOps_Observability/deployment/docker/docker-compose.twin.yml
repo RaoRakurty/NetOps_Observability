@@ -37,10 +37,22 @@
 # per-device responders at demo scale; T2 shards responders (R-3 note in
 # snmpsim_gen.py) before raising them.
 
+# Bounded container logs — same cap as docker-compose.yml's x-logging anchor.
+# YAML anchors do NOT cross files, so every compose file that introduces a
+# service of its own has to restate it; services this file merely PATCHES
+# inherit the base file's logging. Enforced by
+# tests/test_compose_logging_bounded.py.
+x-logging: &deflog
+  driver: json-file
+  options:
+    max-size: "50m"
+    max-file: "3"
+
 services:
   twin:
     build: ../../scripts/lab/twin/docker
     image: netops-twin-tools:t1
+    logging: *deflog
     container_name: netops-twin-1
     restart: unless-stopped
     mem_limit: ${TWIN_MEM_LIMIT:-768m}

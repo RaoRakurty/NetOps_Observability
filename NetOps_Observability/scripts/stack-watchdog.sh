@@ -27,6 +27,44 @@
 set -uo pipefail
 export PATH="/usr/local/bin:/usr/bin:/bin:${PATH:-}"
 
+# ---------------------------------------------------------------------------
+# §16.2 — TIMESTAMP EVERY LINE (2026-09-03).
+#
+# This script's diagnostics are appended by cron to a single ever-growing file
+# (`data/stack-watchdog.log` for the repo cron; /var/log/correlix-watchdog.log
+# for packaged installs). Until now not one line carried a time, so a 13 MB log
+# could say WHAT happened and never WHEN: the 2026-09-03 drill had to
+# reconstruct the outage timeline from container logs instead of from the
+# watchdog's own record, which is the one artefact that is supposed to survive
+# the stack dying.
+#
+# log()/logerr() are the ONLY way this script emits a diagnostic line. They
+# stamp EVERY line of a multi-line message — the DOWN summary carries one line
+# per problem, and an unstamped continuation is what made the old log
+# ungreppable. Format is ISO-8601 local time WITH the UTC offset, so lines
+# stay comparable across a DST change and against `docker logs -t`.
+#
+# Data-carrying `printf`s (function return values captured by `$( )`, state
+# files) deliberately do NOT go through these — stamping those would corrupt
+# the value.
+# ---------------------------------------------------------------------------
+_log_stamped() {
+  local ts line
+  ts="$(date +'%Y-%m-%dT%H:%M:%S%z')"
+  printf '%s\n' "$*" | while IFS= read -r line; do
+    printf '%s %s\n' "$ts" "$line"
+  done
+}
+# Declared as full blocks (not one-liners) so the unit tests that extract a
+# single function with `sed -n '/^name() {/,/^}/p'` can pull these in too —
+# every extracted function calls them.
+log() {
+  _log_stamped "$*"
+}
+logerr() {
+  _log_stamped "$*" >&2
+}
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # Config resolution: explicit WATCHDOG_ENV > sibling env file (the original
 # layout — unchanged) > the packaged-install location install-watchdog.sh
@@ -59,7 +97,7 @@ if command -v timeout >/dev/null 2>&1; then
   dkr()      { timeout "${WATCHDOG_DOCKER_TIMEOUT:-20}" docker "$@"; }
   dkr_slow() { timeout "${WATCHDOG_DOCKER_SLOW_TIMEOUT:-120}" docker "$@"; }
 else
-  echo "watchdog: 'timeout' not on PATH — docker calls run unbounded this run" >&2
+  logerr "watchdog: 'timeout' not on PATH — docker calls run unbounded this run"
   dkr()      { docker "$@"; }
   dkr_slow() { docker "$@"; }
 fi
@@ -92,7 +130,7 @@ push() {  # title, tags, priority, body
     # WATCHDOG_EMAIL alone is therefore a misconfiguration — name it (§16.1)
     # instead of silently delivering nothing.
     [ -n "${WATCHDOG_EMAIL:-}" ] &&
-      echo "watchdog: WATCHDOG_EMAIL is set but NTFY_TOPIC is empty — ntfy requires a topic, notification NOT sent" >&2
+      logerr "watchdog: WATCHDOG_EMAIL is set but NTFY_TOPIC is empty — ntfy requires a topic, notification NOT sent"
     return 0
   fi
   local hdr=(-H "Title: $1" -H "Tags: $2" -H "Priority: $3")
@@ -103,7 +141,7 @@ push() {  # title, tags, priority, body
   [ -n "${WATCHDOG_EMAIL:-}" ] && hdr+=(-H "Email: $WATCHDOG_EMAIL")
   curl -fsS -m 10 "${hdr[@]}" \
     -d "$4" "$NTFY_SERVER/$NTFY_TOPIC" -o /dev/null \
-    || echo "watchdog: ntfy push failed" >&2
+    || logerr "watchdog: ntfy push failed"
 }
 
 json_str() {  # encode $1 as a JSON string literal (incl. surrounding quotes)
@@ -136,7 +174,7 @@ notify_webhook() {  # status, detail
     "$(json_str "$(hostname)")" "$(json_str "$1")" \
     "$(json_str "$2")" "$(json_str "$(date -Is)")")
   curl -fsS -m 10 "${hdr[@]}" -d "$payload" "$WATCHDOG_WEBHOOK_URL" -o /dev/null \
-    || echo "watchdog: webhook notify failed" >&2
+    || logerr "watchdog: webhook notify failed"
 }
 
 # -----------------------------------------------------------------------------
@@ -207,22 +245,22 @@ api_probe_once() {
 if [ "${1:-}" = "--test" ]; then
   push "NetOps watchdog test" "test_tube" "default" \
     "Test alert from $(hostname) at $(date -Is). If you see this, alerting works."
-  echo "Sent test push to topic '${NTFY_TOPIC:-<unset>}' on $NTFY_SERVER"
+  log "Sent test push to topic '${NTFY_TOPIC:-<unset>}' on $NTFY_SERVER"
   if [ -n "${WATCHDOG_WEBHOOK_URL:-}" ]; then
     notify_webhook "test" "Test notification from $(hostname) at $(date -Is). If you see this, the webhook channel works."
-    echo "Sent test webhook POST to $WATCHDOG_WEBHOOK_URL"
+    log "Sent test webhook POST to $WATCHDOG_WEBHOOK_URL"
   fi
   # Tracker 194: also exercise the api liveness probe. A --test that only
   # proves ntfy delivers cannot tell you the probe it arms is pointed at
   # anything real, and this probe is the one that pages for an api outage.
   if t_out=$(api_probe_once); then
     read -r t_rc t_code t_detail <<<"$t_out"
-    echo "api liveness probe OK: $API_PROBE_URL -> HTTP $t_code, non-empty body (curl rc=$t_rc, ${t_detail})"
+    log "api liveness probe OK: $API_PROBE_URL -> HTTP $t_code, non-empty body (curl rc=$t_rc, ${t_detail})"
     exit 0
   fi
   read -r t_rc t_code t_detail <<<"$t_out"
-  echo "api liveness probe FAILED: $API_PROBE_URL -> curl rc=$t_rc HTTP=$t_code: $t_detail" >&2
-  echo "watchdog: sustained past the ${API_BOOT_GRACE_SEC}s cold-boot grace this is classified CRITICAL (urgent push, and the healthy heartbeat stops)" >&2
+  logerr "api liveness probe FAILED: $API_PROBE_URL -> curl rc=$t_rc HTTP=$t_code: $t_detail"
+  logerr "watchdog: sustained past the ${API_BOOT_GRACE_SEC}s cold-boot grace this is classified CRITICAL (urgent push, and the healthy heartbeat stops)"
   exit 1
 fi
 
@@ -235,14 +273,14 @@ LOCK_FILE="${WATCHDOG_LOCK:-${STATE_FILE}.lock}"
 if command -v flock >/dev/null 2>&1; then
   if exec 9>"$LOCK_FILE"; then
     if ! flock -n 9; then
-      echo "watchdog: previous run still holds $LOCK_FILE — skipping this minute (wedged docker?)" >&2
+      logerr "watchdog: previous run still holds $LOCK_FILE — skipping this minute (wedged docker?)"
       exit 0
     fi
   else
-    echo "watchdog: cannot open lock file $LOCK_FILE — running without overlap protection" >&2
+    logerr "watchdog: cannot open lock file $LOCK_FILE — running without overlap protection"
   fi
 else
-  echo "watchdog: 'flock' not on PATH — running without overlap protection" >&2
+  logerr "watchdog: 'flock' not on PATH — running without overlap protection"
 fi
 
 problems=()
@@ -582,17 +620,17 @@ check_syslog_udp_drops() {
   # `timeout` on the host means we degrade to "not measurable", never to an
   # unbounded call.
   if ! command -v timeout >/dev/null 2>&1; then
-    echo "watchdog: syslog UDP-drop check not measurable: no 'timeout' on PATH (docker exec must stay bounded)" >&2
+    logerr "watchdog: syslog UDP-drop check not measurable: no 'timeout' on PATH (docker exec must stay bounded)"
     return 0
   fi
   cid=$(dkr ps -q --filter "label=com.docker.compose.project=$PROJECT" \
                   --filter "label=com.docker.compose.service=syslog-ng" 2>/dev/null | head -1)
   if [ -z "$cid" ]; then
-    echo "watchdog: syslog UDP-drop check not measurable: no running syslog-ng container in project $PROJECT" >&2
+    logerr "watchdog: syslog UDP-drop check not measurable: no running syslog-ng container in project $PROJECT"
     return 0
   fi
   if ! snmp=$(timeout 10 docker exec "$cid" cat /proc/net/snmp 2>&1); then
-    echo "watchdog: syslog UDP-drop check not measurable: docker exec failed: $(printf '%s' "$snmp" | head -1 | cut -c1-120)" >&2
+    logerr "watchdog: syslog UDP-drop check not measurable: docker exec failed: $(printf '%s' "$snmp" | head -1 | cut -c1-120)"
     return 0
   fi
   # /proc/net/snmp: the first `Udp:` line names the columns, the second carries
@@ -603,14 +641,14 @@ check_syslog_udp_drops() {
     $1=="Udp:" && !h { for (i=2; i<=NF; i++) { if ($i=="RcvbufErrors") r=i; if ($i=="InErrors") e=i }; h=1; next }
     $1=="Udp:" && h  { if (r && e) print $r, $e; exit }')"
   if [ -z "${rcv_now:-}" ] || [ -z "${inerr_now:-}" ]; then
-    echo "watchdog: syslog UDP-drop check not measurable: no parsable Udp: RcvbufErrors/InErrors in /proc/net/snmp" >&2
+    logerr "watchdog: syslog UDP-drop check not measurable: no parsable Udp: RcvbufErrors/InErrors in /proc/net/snmp"
     return 0
   fi
   prev_rcv=""; prev_inerr=""; prev_state=""
   # First run has no state file — that is the baseline case, not an error.
   if [ -f "$UDP_STATE" ]; then
     read -r prev_rcv prev_inerr prev_state < "$UDP_STATE" 2>/dev/null ||
-      echo "watchdog: UDP-drop state file $UDP_STATE unreadable — re-baselining" >&2
+      logerr "watchdog: UDP-drop state file $UDP_STATE unreadable — re-baselining"
   fi
   state="${prev_state:-clean}"
   # Delta is only meaningful when BOTH counters moved forward (or held); a
@@ -636,7 +674,7 @@ check_syslog_udp_drops() {
     fi
   fi
   printf '%s %s %s\n' "$rcv_now" "$inerr_now" "$state" > "$UDP_STATE" 2>/dev/null ||
-    echo "watchdog: could not persist UDP-drop state to $UDP_STATE" >&2
+    logerr "watchdog: could not persist UDP-drop state to $UDP_STATE"
   return 0
 }
 check_syslog_udp_drops
@@ -674,9 +712,9 @@ check_api_liveness() {
   local p_out p_rc p_code p_detail now first_fail escalated started anchor elapsed
   if p_out=$(api_probe_once); then
     if [ -f "$API_STATE" ]; then
-      echo "watchdog: api liveness RESTORED — $API_PROBE_URL answers 200 with a body again" >&2
+      logerr "watchdog: api liveness RESTORED — $API_PROBE_URL answers 200 with a body again"
       rm -f "$API_STATE" 2>/dev/null ||
-        echo "watchdog: could not clear $API_STATE — a stale first-failure anchor will shorten the next cold-boot grace" >&2
+        logerr "watchdog: could not clear $API_STATE — a stale first-failure anchor will shorten the next cold-boot grace"
     fi
     return 0
   fi
@@ -687,7 +725,7 @@ check_api_liveness() {
   first_fail=""; escalated=0
   if [ -f "$API_STATE" ]; then
     read -r first_fail escalated < "$API_STATE" 2>/dev/null || {
-      echo "watchdog: api liveness state $API_STATE unreadable — re-baselining the cold-boot grace" >&2
+      logerr "watchdog: api liveness state $API_STATE unreadable — re-baselining the cold-boot grace"
       first_fail=""; escalated=0
     }
   fi
@@ -712,12 +750,12 @@ check_api_liveness() {
     # run-varying text: the transport detail goes to the log, not into the
     # key, or every minute would mint a "new" critical class and re-push.
     problems+=("API_UNRESPONSIVE: the api is not serving $API_PROBE_URL through nginx — the dashboard probe cannot see this, nginx answers / from the SPA whether or not the api is alive. Failing for ${elapsed}s (curl rc=${p_rc}, HTTP ${p_code}); transport detail is in the watchdog log.")
-    echo "watchdog: api liveness CRITICAL after ${elapsed}s: rc=${p_rc} HTTP=${p_code}: ${p_detail}" >&2
+    logerr "watchdog: api liveness CRITICAL after ${elapsed}s: rc=${p_rc} HTTP=${p_code}: ${p_detail}"
   else
-    echo "watchdog: api liveness failing for ${elapsed}s (rc=${p_rc} HTTP=${p_code}: ${p_detail}) — inside the ${API_BOOT_GRACE_SEC}s cold-boot grace, NOT escalated yet; the healthy heartbeat is withheld this run" >&2
+    logerr "watchdog: api liveness failing for ${elapsed}s (rc=${p_rc} HTTP=${p_code}: ${p_detail}) — inside the ${API_BOOT_GRACE_SEC}s cold-boot grace, NOT escalated yet; the healthy heartbeat is withheld this run"
   fi
   printf '%s %s\n' "$first_fail" "$escalated" > "$API_STATE" 2>/dev/null ||
-    echo "watchdog: could not persist api liveness state to $API_STATE — the cold-boot grace cannot accumulate, so an api outage may never escalate" >&2
+    logerr "watchdog: could not persist api liveness state to $API_STATE — the cold-boot grace cannot accumulate, so an api outage may never escalate"
 }
 check_api_liveness
 
@@ -837,14 +875,14 @@ apply_backup_intent() {
   # crontab; a wedged one must not hang the whole watchdog run. No `timeout`
   # on the host degrades to a named skip (§16.2), never to an unbounded call.
   if ! command -v timeout >/dev/null 2>&1; then
-    echo "watchdog: backup-intent apply skipped: no 'timeout' on PATH (the apply must stay bounded)" >&2
+    logerr "watchdog: backup-intent apply skipped: no 'timeout' on PATH (the apply must stay bounded)"
     return 0
   fi
   if out=$(timeout 120 "$BACKUP_APPLY" 2>&1); then
     # Stamp carries the intent's OWN mtime, so -nt stays false until the API
     # writes a genuinely newer intent (its atomic rename bumps the mtime).
     if touch -r "$BACKUP_INTENT" "$BACKUP_STAMP" 2>/dev/null; then
-      echo "watchdog: backup intent applied ($BACKUP_INTENT -> $BACKUP_APPLY): $(printf '%s' "$out" | tail -1)"
+      log "watchdog: backup intent applied ($BACKUP_INTENT -> $BACKUP_APPLY): $(printf '%s' "$out" | tail -1)"
     else
       problems+=("backup intent applied but stamp $BACKUP_STAMP is unwritable — the apply would repeat every minute")
     fi
@@ -1123,7 +1161,7 @@ if [ -n "$os_cid" ]; then
     # run-varying evidence goes to the log, out of problem_key's 160-char hash.
     os_probe_diag
     problems+=("OPENSEARCH_UNVERIFIABLE (self-test: ${os_diag_class}, curl exit ${os_diag_rc}, http ${os_diag_http:-none}): no parsable reply for:${os_blind} — these search-tier checks are BLIND this run, which is not the same as healthy; the self-test detail is in the watchdog log.")
-    echo "watchdog: OpenSearch probe self-test: ${os_diag_class} (curl exit ${os_diag_rc}, http ${os_diag_http:-none}) against $OS_PROBE_URL — ${os_diag_detail}" >&2
+    logerr "watchdog: OpenSearch probe self-test: ${os_diag_class} (curl exit ${os_diag_rc}, http ${os_diag_http:-none}) against $OS_PROBE_URL — ${os_diag_detail}"
   fi
 fi
 
@@ -1357,7 +1395,7 @@ if [ "${ENGINE_CONSUMER_CHECK:-1}" = "1" ]; then
                            --filter "label=com.docker.compose.service=kafka-exporter" 2>/dev/null)" ]; then
         problems+=("engine-consuming probe: kafka-exporter is running but exports NO consumer-group series — every bus-lag and consumer-liveness check is blind (see KafkaLagMetricsMissing)")
       else
-        echo "watchdog: consumer-group checks skipped — kafka-exporter is not running (optional 'self-monitoring' profile); ENGINE_CONSUMER_CHECK=0 to silence this line" >&2
+        logerr "watchdog: consumer-group checks skipped — kafka-exporter is not running (optional 'self-monitoring' profile); ENGINE_CONSUMER_CHECK=0 to silence this line"
       fi
     else
       # The value is a member COUNT, but VM may render it "0" or "0.0", so cut
@@ -1408,7 +1446,7 @@ if [ "${ENGINE_CONSUMER_CHECK:-1}" = "1" ]; then
       # The api build predates the webhook receiver, or the api is not being
       # scraped. Either way the CHAIN IS UNPROVEN — say so once, quietly, and
       # never imply it is healthy.
-      echo "watchdog: alert-delivery heartbeat not checked — netops_alert_webhook_enabled is absent (api predates the vmalert webhook receiver, or is not scraped). Alert delivery is UNPROVEN on this deployment." >&2
+      logerr "watchdog: alert-delivery heartbeat not checked — netops_alert_webhook_enabled is absent (api predates the vmalert webhook receiver, or is not scraped). Alert delivery is UNPROVEN on this deployment."
     elif [ "${eng_hb_on%%.*}" = "0" ]; then
       problems+=("alert delivery is DISABLED: VMALERT_WEBHOOK_TOKEN is unset, so vmalert's alerts are not delivered to the platform. Only this watchdog can page. Set it in deployment/docker/.env (see docs/runbooks/engine-not-consuming.md)")
     else
@@ -1538,15 +1576,15 @@ for k in "${!prev_set[@]}"; do
   [ -z "${cur_set[$k]:-}" ] && cleared=$((cleared + 1))
 done
 [ "$cleared" -gt 0 ] &&
-  echo "watchdog: $cleared problem class(es) cleared since the last run" >&2
+  logerr "watchdog: $cleared problem class(es) cleared since the last run"
 
 write_state() {
   if [ ${#cur_set[@]} -gt 0 ]; then
     printf '%s\n' "${!cur_set[@]}" > "$STATE_FILE" 2>/dev/null ||
-      echo "watchdog: could not persist state to $STATE_FILE" >&2
+      logerr "watchdog: could not persist state to $STATE_FILE"
   else
     : > "$STATE_FILE" 2>/dev/null ||
-      echo "watchdog: could not persist state to $STATE_FILE" >&2
+      logerr "watchdog: could not persist state to $STATE_FILE"
   fi
 }
 
@@ -1558,7 +1596,7 @@ if [ ${#problems[@]} -eq 0 ]; then
     # dead-man's switch — and a RECOVERED all-clear here would be a lie. Stay
     # silent for this run and leave the previous problem set on disk untouched,
     # so a genuine recovery is still announced once the api answers again.
-    echo "watchdog: healthy heartbeat WITHHELD and the all-clear deferred — the api liveness probe is failing (inside its cold-boot grace)" >&2
+    logerr "watchdog: healthy heartbeat WITHHELD and the all-clear deferred — the api liveness probe is failing (inside its cold-boot grace)"
     exit 0
   fi
   [ -n "${HC_PING_URL:-}" ] && curl -fsS -m 10 "$HC_PING_URL" -o /dev/null
@@ -1589,5 +1627,5 @@ elif [ ${#new_adv[@]} -gt 0 ]; then
 fi
 
 write_state
-echo "watchdog: DOWN -> $msg" >&2
+logerr "watchdog: DOWN -> $msg"
 exit 1

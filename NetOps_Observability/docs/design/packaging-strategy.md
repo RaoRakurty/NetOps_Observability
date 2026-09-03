@@ -154,10 +154,15 @@ retention ambition.
 - One **product version** (git tag) stamps bundle name, MANIFEST, and all five
   app images — monorepo lockstep by construction; third-party images stay
   digest-pinned in compose (the bundle is reproducible from a tag).
-- CI addition (Phase 1): a workflow job that runs `make-installer.sh --core`
-  on tag, uploads the bundle as a release artifact, and smoke-tests
-  `install.py --bundle` in a clean VM (extends the existing
-  fresh-install-integrity workflow).
+- CI addition (Phase 1): a workflow job that builds the bundle on tag, uploads
+  it as a release artifact, and smoke-tests `install.py --bundle` in a clean VM
+  (extends the existing fresh-install-integrity workflow).
+  **Amended 2026-09-03:** `.github/workflows/release-bundle.yml` builds the
+  **full** profile (base appliance + add-on packs), not `--core`. `--core`
+  predates the add-on-pack model (`25a6045a`); it is still a supported flag for
+  eval-sized bundles, but the shipped release carries the packs. The workflow's
+  smoke step asserts `profile:  full` in the MANIFEST and that both pack
+  archives exist, so the label and the contents move together.
 - Chart SemVer starts in Phase 2; charts pushed as OCI artifacts next to
   images.
 

@@ -14,6 +14,15 @@ on:
 permissions:
   contents: read
 
+env:
+  # Single source of truth for this workflow's toolchain, same shape as
+  # backend-ci.yml. It was hard-coded at the step until 2026-09-03, which is
+  # how it silently missed a toolchain raise: `go-version` inline is invisible
+  # to the grep that checks every workflow moved together.
+  # MUST match NetOps_Observability/src/backend/go.mod's `toolchain` line —
+  # guarded by tests/test_toolchain_pin.py.
+  GO_VERSION: '1.26.8'
+
 defaults:
   run:
     working-directory: NetOps_Observability/src/backend
@@ -34,7 +43,7 @@ jobs:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
         with:
-          go-version: '1.26.8'
+          go-version: ${{ env.GO_VERSION }}
           cache-dependency-path: NetOps_Observability/src/backend/go.sum
       - name: fuzz ${{ matrix.target }}
         run: go test ${{ matrix.pkg }} -run '^$' -fuzz "^${{ matrix.target }}$" -fuzztime 5m
