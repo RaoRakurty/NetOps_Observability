@@ -5,6 +5,7 @@ import (
 	"math"
 	"regexp"
 	"sort"
+	"strings"
 	"time"
 
 	"netops/backend/internal/secfindings"
@@ -242,15 +243,57 @@ func (c *Catalog) Len() int {
 // (§5 no-globals). A *regexp.Regexp is immutable and safe for concurrent use.
 // ─────────────────────────────────────────────────────────────────────────────
 
-// msgMatch trips when the normalized (mnemonic+message) text matches re.
-func msgMatch(pattern string) func(LogEvent) DetectResult {
-	re := regexp.MustCompile(pattern)
+// msgMatch trips when the normalized (mnemonic+message) text matches ANY of the
+// supplied patterns. Each pattern is ONE DIALECT'S phrasing of the SAME event:
+// a rule is one concept with one id, and a device speaks one dialect, so
+// alternating across dialects widens the rule's PLATFORM coverage without
+// widening what it matches on any single platform. The per-dialect split is
+// deliberate — one merged mega-regexp hides which platform a clause serves and
+// makes the false-positive discipline each rule documents unreviewable.
+//
+// Every pattern is compiled ONCE at catalog-build time and captured in the
+// returned closure (§5 no-globals); a *regexp.Regexp is immutable and safe for
+// concurrent use. Patterns are matched against normalized() — already
+// lower-cased — so they are authored in lower case.
+func msgMatch(patterns ...string) func(LogEvent) DetectResult {
+	res := make([]*regexp.Regexp, 0, len(patterns))
+	for _, p := range patterns {
+		res = append(res, regexp.MustCompile(p))
+	}
 	return func(ev LogEvent) DetectResult {
-		if re.MatchString(ev.normalized()) {
-			return DetectResult{Tripped: true, Evidence: summarize(ev)}
+		norm := ev.normalized()
+		for _, re := range res {
+			if re.MatchString(norm) {
+				return DetectResult{Tripped: true, Evidence: summarize(ev)}
+			}
 		}
 		return DetectResult{Tripped: false}
 	}
+}
+
+// srlSep is the separator SR Linux writes BETWEEN configuration path elements.
+// It is a character class rather than a literal because the same path reaches
+// the log in three spellings, all of them legal and all of them observed:
+//
+//	set / system aaa authentication user bob …   (bare slash, space-separated —
+//	                                              the `info … flat` / commit form)
+//	set /system aaa authentication user bob …    (the commit-audit line captured
+//	                                              on the lab, 2026-09-03)
+//	set /system/aaa/authentication/user/bob      (the gNMI-style path form)
+const srlSep = `[\s/]+`
+
+// srlPath renders an SR Linux configuration path as a regexp FRAGMENT that
+// matches all three spellings above. It is a helper rather than a typed-out
+// literal per rule so the three spellings cannot drift apart between rules —
+// a rule that accidentally matched only one of them would be silently dead on
+// two thirds of this platform's log lines, which is exactly the failure mode
+// (tracker D-02) this dialect coverage exists to close.
+//
+// The leading element is `/\s*` — the slash is always present, the space after
+// it is optional. Segments are joined by srlSep. The caller appends whatever
+// boundary/suffix the rule needs, so a path fragment never asserts its own end.
+func srlPath(segs ...string) string {
+	return `/\s*` + strings.Join(segs, srlSep)
 }
 
 // summarize renders a short, redacted one-line evidence string for a log event.
@@ -278,10 +321,22 @@ func NewCatalog(params Params) *Catalog {
 			Severity: secfindings.SeverityHigh, Verdict: secfindings.StatusFail,
 			Intended:    "Device logging to the central collector stays enabled at all times.",
 			Remediation: "Re-enable logging (logging on / logging host <collector> / logging trap) and investigate who disabled it.",
-			// Targets an ACTIVE disable of centralized logging. Deliberately does
-			// NOT match "no logging console" (a hardening best-practice, not a
-			// tamper) to keep the false-positive rate low.
-			Detect: msgMatch(`\bno logging\s+(on|host|buffered|trap|monitor|server)\b|\blogging\b[^\n]*\bdisabled\b`),
+			Detect: msgMatch(
+				// IOS / IOS-XE / NX-OS / EOS. Targets an ACTIVE disable of
+				// centralized logging. Deliberately does NOT match "no logging
+				// console" (a hardening best-practice, not a tamper) to keep the
+				// false-positive rate low.
+				`\bno logging\s+(on|host|buffered|trap|monitor|server)\b|\blogging\b[^\n]*\bdisabled\b`,
+				// SR Linux (doc_claimed — /system/logging/remote-server is the
+				// documented destination subtree; no live capture of a DISABLE
+				// exists). Destinations live under /system/logging, so removing
+				// one, or administratively disabling it, is the same act as
+				// `no logging host`. `console` is deliberately ABSENT for exactly
+				// the reason `no logging console` is absent above: dropping
+				// console logging is hardening, not tampering.
+				`\bdelete\s+`+srlPath("system", "logging", `(?:remote-server|file|buffer)`)+`\b`,
+				srlPath("system", "logging")+`\b[^\n]*\badmin-state\s+disable\b`,
+			),
 		},
 		{
 			ID: "log-buffer-cleared", Title: "Log buffer cleared",
@@ -289,7 +344,17 @@ func NewCatalog(params Params) *Catalog {
 			Severity: secfindings.SeverityMedium, Verdict: secfindings.StatusFail,
 			Intended:    "Operators do not clear the on-box log buffer; retention is centralized.",
 			Remediation: "Confirm the clear was authorized; ensure logs are shipped off-box so a local clear loses no evidence.",
-			Detect:      msgMatch(`\bclear logging\b|\blogging (buffer )?(has been )?cleared\b`),
+			Detect: msgMatch(
+				// IOS / IOS-XE / NX-OS / EOS (EOS spells it `clear logging` too).
+				`\bclear logging\b|\blogging (buffer )?(has been )?cleared\b`,
+				// SR Linux (doc_claimed). SR Linux has no `clear` command: its
+				// OPERATIONAL actions live in the `tools` mode
+				// (`tools system …`), separate from the configuration tree, and a
+				// clear/purge of the logging subsystem is the analogue. Removing
+				// a logging DESTINATION is a different act and belongs to
+				// log-logging-disabled, so it is deliberately not matched here.
+				`\btools\s+system`+srlSep+`logging\b[^\n]*\b(?:clear|purge)\b`,
+			),
 		},
 		{
 			ID: "log-offhours-config-change", Title: "Configuration change outside the change window",
@@ -305,7 +370,24 @@ func NewCatalog(params Params) *Catalog {
 			Severity: secfindings.SeverityHigh, Verdict: secfindings.StatusFail,
 			Intended:    "Local accounts are managed centrally (TACACS+/RADIUS); ad-hoc local users are not added.",
 			Remediation: "Verify the account is authorized; remove unexpected local users and prefer centralized AAA.",
-			Detect:      msgMatch(`\busername\s+\S+[^\n]*\b(secret|password)\b`),
+			Detect: msgMatch(
+				// IOS / IOS-XE / NX-OS / EOS: `username <name> secret|password …`.
+				// LIVE-VALIDATED against the real injected line of the 2026-09-03
+				// security-ops run (docs/qa/scenarios/security-ops-2026-09-03.md
+				// §1 line A) — this is the clause that fired there.
+				`\busername\s+\S+[^\n]*\b(secret|password)\b`,
+				// SR Linux: `set /system aaa authentication user <name> password
+				// <hash>`. SR Linux says `user`, NEVER `username`, which is why
+				// the clause above matched nothing on the lab fabric (D-02).
+				// LIVE-VALIDATED against the real line B of the same run.
+				srlPath("system", "aaa", "authentication", "user")+srlSep+`\S+[^\n]*\bpassword\b`,
+				// SR Linux built-in account: `/system aaa authentication
+				// admin-user password …` is its own leaf (it is NOT reached by the
+				// `user` clause above, whose separator cannot match "admin-user").
+				// Resetting the built-in admin credential is the same class of
+				// act. doc_claimed.
+				srlPath("system", "aaa", "authentication", "admin-user")+`[^\n]*\bpassword\b`,
+			),
 		},
 		{
 			ID: "log-privilege-escalation", Title: "Privilege level elevated",
@@ -313,7 +395,22 @@ func NewCatalog(params Params) *Catalog {
 			Severity: secfindings.SeverityHigh, Verdict: secfindings.StatusFail,
 			Intended:    "Privilege-15 access is granted only to designated administrators.",
 			Remediation: "Confirm the elevation is authorized; revoke unexpected privilege-15 grants.",
-			Detect:      msgMatch(`\bprivilege\s+1[5-9]\b|\bprivilege level[^\n]*\bchanged\b`),
+			Detect: msgMatch(
+				// IOS / IOS-XE / NX-OS / EOS numeric privilege levels.
+				// LIVE-VALIDATED (2026-09-03 run §1 line A, which carried
+				// `privilege 15`).
+				`\bprivilege\s+1[5-9]\b|\bprivilege level[^\n]*\bchanged\b`,
+				// SR Linux has NO numeric privilege levels — authority is a ROLE.
+				// The documented escalation is the role's `superuser true` leaf,
+				// or binding a user to the built-in `admin` role. Granting an
+				// ORDINARY (non-superuser) role is normal operation and
+				// deliberately does not match. doc_claimed
+				// (documentation.nokia.com/srlinux 26-3, config-basics/
+				// secur-access: `system aaa authorization role <r> superuser
+				// [true|false]`).
+				srlPath("system", "aaa", "authorization", "role")+`[^\n]*\bsuperuser\s+true\b`,
+				srlPath("system", "aaa", "authentication", "user")+`[^\n]*\brole\s*\[?\s*admin\b`,
+			),
 		},
 		{
 			ID: "log-gre-tunnel", Title: "GRE/tunnel interface created",
@@ -321,7 +418,20 @@ func NewCatalog(params Params) *Catalog {
 			Severity: secfindings.SeverityHigh, Verdict: secfindings.StatusFail,
 			Intended:    "Tunnel interfaces exist only where an approved design calls for them.",
 			Remediation: "Verify the tunnel against the approved topology; an unexpected tunnel can exfiltrate traffic past controls — remove it.",
-			Detect:      msgMatch(`\binterface\s+tunnel\d+\b|\btunnel\s+mode\s+gre\b`),
+			Detect: msgMatch(
+				// IOS / IOS-XE / NX-OS / EOS (EOS spells it `interface Tunnel0`
+				// too).
+				`\binterface\s+tunnel\d+\b|\btunnel\s+mode\s+gre\b`,
+				// SR Linux (doc_claimed). The GRE anchor is LOAD-BEARING, not
+				// decoration: SR Linux configures EVPN-VXLAN through
+				// `tunnel-interface vxlan<N>`, which is ordinary fabric
+				// configuration on exactly the lab spines this rule now covers.
+				// Matching `tunnel-interface` alone would fire on every healthy
+				// VXLAN leaf/spine in the estate, so an explicit GRE tell is
+				// required — the same discipline that keeps the clause above off
+				// a plain `interface Vlan10`.
+				`\bgre-tunnel\b|\btunnel-interface\b[^\n]*\bgre\b|\bencapsulation\b[^\n]*\bgre\b`,
+			),
 		},
 		{
 			ID: "log-aaa-tampering", Title: "Authentication weakened or bypassed",
@@ -329,7 +439,21 @@ func NewCatalog(params Params) *Catalog {
 			Severity: secfindings.SeverityHigh, Verdict: secfindings.StatusFail,
 			Intended:    "AAA enforces authentication on every access method; no login method is set to none.",
 			Remediation: "Restore an authenticating AAA method list; never leave 'authentication ... none' on a reachable line.",
-			Detect:      msgMatch(`\baaa authentication\b[^\n]*\bnone\b|\bno aaa authentication\b|\bauthentication\b[^\n]*\b(bypass|disabled)\b`),
+			Detect: msgMatch(
+				// IOS / IOS-XE / NX-OS / EOS.
+				`\baaa authentication\b[^\n]*\bnone\b|\bno aaa authentication\b|\bauthentication\b[^\n]*\b(bypass|disabled)\b`,
+				// SR Linux (doc_claimed). `system aaa authentication
+				// authentication-method [<server-group>…]` is the method list;
+				// deleting it drops the remote authenticator and leaves the local
+				// fallback. The path is spelled out to its LAST element on
+				// purpose: a bare `delete /system aaa authentication …` also
+				// covers `… user <rogue>`, i.e. REMOVING a backdoor account,
+				// which is a remediation and must never be reported as tampering.
+				`\bdelete\s+`+srlPath("system", "aaa", "authentication", "authentication-method")+`\b`,
+				// Disabling a AAA server-group takes the authenticating method
+				// out of the path without deleting anything.
+				srlPath("system", "aaa", "server-group")+`\b[^\n]*\badmin-state\s+disable\b`,
+			),
 		},
 		{
 			ID: "log-boot-image-change", Title: "Boot image / system image changed",
@@ -337,7 +461,20 @@ func NewCatalog(params Params) *Catalog {
 			Severity: secfindings.SeverityHigh, Verdict: secfindings.StatusFail,
 			Intended:    "The boot image is pinned and changes only through the approved upgrade process.",
 			Remediation: "Verify the image hash against the approved release; an unexpected boot-image change can be a persistent implant.",
-			Detect:      msgMatch(`\bboot system\b|\bboot\b[^\n]*\bflash[^\n]*\.bin\b`),
+			Detect: msgMatch(
+				// IOS / IOS-XE / NX-OS, and EOS' `boot system flash:EOS.swi`.
+				`\bboot system\b|\bboot\b[^\n]*\bflash[^\n]*\.bin\b`,
+				// Arista EOS also installs images with `install source …` (EOS
+				// 4.24+), which carries no `boot system` and so was invisible to
+				// the clause above. doc_claimed. The `.swi` anchor keeps it off
+				// any other product's `install` verb.
+				`\binstall\s+source\b[^\n]*\.swi\b`,
+				// SR Linux (doc_claimed): an image change is a `tools` action —
+				// `tools system deploy-image <img>` stages the ISSU image and
+				// `tools system boot image <img>` repoints the boot list
+				// (documentation.nokia.com/srlinux, Software Install Guide).
+				`\btools\s+system`+srlSep+`(?:deploy-image|boot`+srlSep+`image)\b`,
+			),
 		},
 	}
 
@@ -378,9 +515,27 @@ func NewCatalog(params Params) *Catalog {
 // when the event is a configuration-change event AND its time is outside the
 // business window. It compiles its config-change matcher once and captures p.
 func offHoursConfigChange(p Params) func(LogEvent) DetectResult {
-	re := regexp.MustCompile(`\bconfig_i\b|\bcfglog_loggedcmd\b|\bconfigured from\b|\bconfigured by\b`)
+	// One matcher per dialect, same contract as msgMatch (see its comment).
+	// IOS / IOS-XE / NX-OS / EOS announce a change with a CONFIG_I-family
+	// mnemonic or the "Configured from/by" phrasing. SR Linux has no such
+	// mnemonic: a change lands ONLY when a candidate is COMMITTED, which is the
+	// event its commit-audit line reports (LIVE-VALIDATED against line B of the
+	// 2026-09-03 security-ops run, docs/qa/scenarios/security-ops-2026-09-03.md
+	// §1: "User 'admin' committed candidate: set /system aaa …").
+	res := []*regexp.Regexp{
+		regexp.MustCompile(`\bconfig_i\b|\bcfglog_loggedcmd\b|\bconfigured from\b|\bconfigured by\b`),
+		regexp.MustCompile(`\bcommitted\s+(?:the\s+)?candidate\b|\bcommitted\s+configuration\b|\bcommit\b[^\n]*\bsuccess`),
+	}
 	return func(ev LogEvent) DetectResult {
-		if !re.MatchString(ev.normalized()) {
+		norm := ev.normalized()
+		matched := false
+		for _, re := range res {
+			if re.MatchString(norm) {
+				matched = true
+				break
+			}
+		}
+		if !matched {
 			return DetectResult{Tripped: false}
 		}
 		if ev.Time.IsZero() || !p.offHours(ev.Time) {

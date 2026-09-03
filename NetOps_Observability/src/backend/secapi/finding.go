@@ -256,7 +256,7 @@ func DecodeFinding(raw json.RawMessage, docID string) (Finding, error) {
 	// attrs.status_detail; see the file header.
 	f.Observed = s.str("observed")
 	f.Intended = s.str("intended")
-	f.Detail = s.first("status_detail", "detail", "attrs.status_detail")
+	f.Detail = s.first("status_detail", "detail", FieldStatusDetail)
 	f.Remediation = s.str("remediation")
 
 	if ref := decodeEvidenceRef(s); ref != nil {

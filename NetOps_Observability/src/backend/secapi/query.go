@@ -27,9 +27,22 @@ import (
 
 // Indexed field names, in one place so a mapping change is a single edit.
 const (
-	FieldTime          = "ts"            // canonical event time, epoch millis (the &log_lane contract)
-	FieldDocID         = "cx_finding_id" // sha2(native_id|scan_id) — the document _id
-	FieldNativeID      = "native_id"     // the producer's deterministic verdict identity
+	FieldTime = "ts" // canonical event time, epoch millis (the &log_lane contract)
+	// FieldDocID is sha2(native_id|scan_id) — the value the router computes and
+	// the OpenSearch document `_id` it becomes.
+	//
+	// D-09 (2026-09-03): it is the `_id`, NOT (today) a field of `_source`. The
+	// router sink is configured `id_key: cx_finding_id`, and Vector's
+	// elasticsearch sink CONSUMES that key — it is lifted into the bulk action's
+	// `_id` and removed from the document body. Live proof: a secfindings
+	// `_source` carries `cx_event_id` (that sink's id_key is cx_finding_id, so
+	// cx_event_id survives) and carries no `cx_finding_id` at all. A `term` on
+	// this field therefore matched NOTHING, which is why every by-id GET 404'd;
+	// GetBody now resolves by `_id` and accepts the term as the second, forward-
+	// compatible path. The name is still the right constant for the SORT
+	// tie-break and for a writer that keeps the field in the body.
+	FieldDocID         = "cx_finding_id"
+	FieldNativeID      = "native_id" // the producer's deterministic verdict identity
 	FieldSeverity      = "severity"
 	FieldStatus        = "attrs.status"
 	FieldStatusID      = "attrs.status_id"
@@ -43,6 +56,12 @@ const (
 	FieldRawRuleID     = "attrs.raw_rule_id"
 	FieldEntityID      = "entity_id"
 	FieldEntityTokens  = "entity_tokens"
+	// FieldStatusDetail is the verdict REASON as it rides the bus (a keyword
+	// facet); FieldStatusDetailText is its analysed sub-field, which is what a
+	// free-text `q` has to name — a simple_query_string against the keyword
+	// parent would only ever match the whole reason verbatim.
+	FieldStatusDetail     = "attrs.status_detail"
+	FieldStatusDetailText = FieldStatusDetail + ".text"
 )
 
 // searchFields is the bounded field list free text searches. It spans the
@@ -52,18 +71,22 @@ const (
 //
 // HONESTY: observed/intended/remediation are declared in the mapping but are NOT
 // on the bus wire — secbus deliberately keeps raw evidence and the fix text OFF
-// the bus (§5c by-reference, LLM06 no payloads). status_detail (the verdict
-// REASON) IS on the wire since 2026-09-03, but as `attrs.status_detail`, which
-// the index template does not declare — under the template's dynamic:false it
-// stays in _source (so DecodeFinding returns it and the UI renders it) without
-// being indexed, so it is not searchable either. Until a direct-Finding writer
-// exists, or attrs.status_detail is declared in the template, `q` matches
-// control ids/titles, rule ids and the device, not the narrative.
+// the bus (§5c by-reference, LLM06 no payloads), so those three match nothing
+// until a direct-Finding writer exists.
+//
+// status_detail (the verdict REASON) IS on the wire since 2026-09-03, as
+// `attrs.status_detail`. The index template declares it (2026-09-03, D-06) as a
+// keyword facet with an analysed `.text` sub-field, so the prose form is
+// searched through `attrs.status_detail.text` and the exact reason stays
+// aggregatable. An index template only applies to indices created AFTER it is
+// registered, so on already-rolled indices the field is still unmapped and
+// contributes nothing — lenient:true keeps that a quiet miss, never a 400.
 var searchFields = []string{
 	FieldControlTitle,
 	FieldControlID,
 	FieldRawRuleID,
 	FieldEntityID,
+	FieldStatusDetailText,
 	"title",
 	"control_title",
 	"observed",
@@ -220,8 +243,18 @@ type PagePos struct {
 // CURRENT-STATE COLLAPSE (the decision record's "Doc identity" section): every
 // scan's verdict is RETAINED, so the list of "what is true now" is a QUERY-TIME
 // collapse, not a mutable upsert. `collapse: {field: native_id}` with the
-// (ts desc, doc id desc) sort returns exactly the newest verdict per verdict
-// identity in one pass. The exact total then has to come from a cardinality
+// (ts desc, doc id desc) sort returns exactly the newest verdict per FINDING
+// identity in one pass.
+//
+// That only works because native_id is the identity of the FINDING (tenant,
+// class, control, device, rule) and NOT of the scan run — see
+// secbus.nativeIDOf. It folded in the scan id until 2026-09-03, which made every
+// scan its own collapse group: `current=true` returned all 572 retained verdicts
+// with 444 stale Unknowns among them, and superseding was impossible by
+// construction (L-01). The scan run rides in attrs.scan_id and in the document
+// _id, so the history this collapse hides is still there for the trend views.
+//
+// The exact total then has to come from a cardinality
 // aggregation over native_id — hits.total counts DOCUMENTS, i.e. every
 // historical verdict, and would inflate the number the CTEM page is built on.
 // precision_threshold is set above any page this API will serve, so the count
@@ -262,10 +295,42 @@ func ListBody(f Filters, tenantClause map[string]any, size int, pos PagePos) map
 // caller does not know) or scan every one (which would reach another tenant's).
 // Zero hits is the ONLY answer for both "no such finding" and "another
 // tenant's finding" — the handler turns it into 404 either way.
+//
+// WHICH IDENTITY IT RESOLVES (D-09, 2026-09-03). The list hands the client each
+// row's OpenSearch `_id` (DecodeFinding takes it from the hit), so the detail
+// lookup has to resolve THAT id. It accepts two spellings, OR'd together:
+//
+//	ids  — the document `_id`. This is the shape every indexed document has
+//	       today: the router's sink is `id_key: cx_finding_id`, and Vector lifts
+//	       that key into the bulk action's `_id` and REMOVES it from the body,
+//	       so no document carries the field in _source and the old bare `term`
+//	       below matched nothing — every by-id GET answered 404.
+//	term — `cx_finding_id` carried IN the document, for a writer that keeps it
+//	       there (secbus now stamps the same value onto the bus event; a future
+//	       direct-Finding writer or a sink without id_key would land it).
+//
+// The OR is a bool/should nested INSIDE the outer filter array, so it narrows
+// and never widens: the tenant clause and the retention window still apply to
+// both spellings.
+//
+// §3 zero-trust: id MUST already be a validated token (the handler answers 400
+// on anything else). The builder re-checks rather than assume — a programmatic
+// caller that skipped validation gets a body that matches NOTHING (→ 404),
+// never a query built from an unvetted string. It cannot inject either way:
+// both clauses are Go values that encoding/json escapes, not spliced text.
 func GetBody(id string, tenantClause map[string]any, since, until time.Time) map[string]any {
 	f := Filters{Since: since, Until: until}
-	clauses := append(BuildFilters(f, tenantClause),
-		map[string]any{"term": map[string]any{FieldDocID: id}})
+	var idClause map[string]any
+	if isSafeToken(id) {
+		idClause = anyOf(
+			map[string]any{"ids": map[string]any{"values": []string{id}}},
+			map[string]any{"term": map[string]any{FieldDocID: id}},
+		)
+	} else {
+		// Fail CLOSED: an unvalidated id resolves to nothing at all.
+		idClause = map[string]any{"match_none": map[string]any{}}
+	}
+	clauses := append(BuildFilters(f, tenantClause), idClause)
 	return map[string]any{
 		"size":             1,
 		"track_total_hits": false,

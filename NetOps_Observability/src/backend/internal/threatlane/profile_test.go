@@ -59,7 +59,12 @@ func TestUnassessedCoverageIsHonest(t *testing.T) {
 	reg := vendorprofile.Default()
 	cat := DefaultCatalog()
 	for _, c := range []struct{ vendor, platform string }{
-		{"juniper", "junos"}, {"nokia", "srlinux"}, {"nokia", "sros"},
+		// nokia/srlinux moved OUT of this list on 2026-09-03: it is the
+		// reference lab's platform and now declares real coverage (see
+		// TestSRLinuxIsBoundToEveryLogRule). nokia/sros stays: no SR OS device
+		// exists to validate against, and its classic-CLI phrasing is neither
+		// of the two dialects the catalog authors.
+		{"juniper", "junos"}, {"nokia", "sros"},
 		{"sonicwall", "sonicos"}, {"", ""},
 	} {
 		rules, err := AssessedLogRules(reg, cat, c.vendor, c.platform)
@@ -75,5 +80,45 @@ func TestUnassessedCoverageIsHonest(t *testing.T) {
 	}
 	if _, err := AssessedLogRules(reg, nil, "cisco", "ios"); !errors.Is(err, ErrNoCoverage) {
 		t.Errorf("nil catalog = %v, want ErrNoCoverage", err)
+	}
+}
+
+// TestSRLinuxIsBoundToEveryLogRule is the binding half of tracker D-02. The
+// regex half (catalog_test.go) is worth nothing if the platform still claims no
+// coverage: on the 2026-09-03 lab run nokia declared "threat": {} for BOTH its
+// platforms, so the reference fabric's coverage claim was "unassessed" while the
+// lane reported itself enabled.
+func TestSRLinuxIsBoundToEveryLogRule(t *testing.T) {
+	reg := vendorprofile.Default()
+	cat := DefaultCatalog()
+	rules, err := AssessedLogRules(reg, cat, "nokia", "srlinux")
+	if err != nil {
+		t.Fatalf("AssessedLogRules(nokia/srlinux): %v", err)
+	}
+	if len(rules) != len(cat.LogRules()) {
+		t.Errorf("nokia/srlinux assessed %d rules, catalog ships %d", len(rules), len(cat.LogRules()))
+	}
+	for i, r := range rules {
+		if r.ID != cat.LogRules()[i].ID {
+			t.Errorf("rule %d = %q, want catalog order %q", i, r.ID, cat.LogRules()[i].ID)
+		}
+	}
+	// SR Linux emits no Cisco-style %FACILITY-SEV-MNEMONIC tag, so its honest
+	// log tag is the RFC5424 APP-NAME. These two are the processes observed
+	// carrying config-commit and AAA events on the lab spines.
+	mn, err := MnemonicPrefixesFor(reg, "nokia", "srlinux")
+	if err != nil {
+		t.Fatalf("MnemonicPrefixesFor(nokia/srlinux): %v", err)
+	}
+	want := map[string]bool{"sr_cli": false, "sr_aaa_mgr": false}
+	for _, m := range mn {
+		if _, ok := want[m]; ok {
+			want[m] = true
+		}
+	}
+	for tag, seen := range want {
+		if !seen {
+			t.Errorf("nokia/srlinux declares no %q log tag; got %v", tag, mn)
+		}
 	}
 }

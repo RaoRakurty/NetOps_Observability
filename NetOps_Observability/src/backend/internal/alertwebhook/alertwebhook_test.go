@@ -102,7 +102,11 @@ func bearer(req *http.Request)      { req.Header.Set("Authorization", "Bearer "+
 func basicAuth(req *http.Request)   { req.SetBasicAuth("vmalert", testToken) }
 func wrongBearer(req *http.Request) { req.Header.Set("Authorization", "Bearer nope-nope-nope") }
 
-// bareArray is vmalert's REAL wire shape: the Alertmanager v2 API body.
+// bareArray is the Alertmanager v2 API body shape. NOTE the `status` key: it
+// is what a CLASSIC webhook sender puts on the wire, and this fixture keeps it
+// so the explicit-status path stays covered — but vmalert itself never sends
+// one. The captured, status-free vmalert bodies are vmalertFiringV2 /
+// vmalertResolvedV2 at the foot of this file (D-12).
 const bareArray = `[
  {"status":"firing",
   "labels":{"alertname":"CorrelationConsumerDead","severity":"critical","layer":"correlation","tier":"page"},
@@ -594,4 +598,157 @@ func metricsText(m *Metrics) string {
 	var b bytes.Buffer
 	m.Write(&b)
 	return b.String()
+}
+
+// ── D-12: the resolved leg (QA run 2026-09-03) ──────────────────────────────
+//
+// `netops_alert_webhook_pushed_total{tier="resolved"}` had never been non-zero
+// on any stack, and the api log contained no line mentioning "resolved" at all.
+// The cause was not upstream: the Alertmanager v2 PUSH api vmalert speaks
+// carries NO `status` field, and this receiver classified resolution from that
+// field alone. The two constants below are the VERBATIM bodies vmalert
+// v1.101.0 sent to a probe receiver on 2026-09-03 (only the timestamps are
+// re-based onto the test clock, and the generatorURL host shortened) — the
+// firing leg carries endsAt in the FUTURE (now + resolveDuration) and the
+// resolve leg carries endsAt in the PAST. Note what is absent from both.
+
+// vmalertFiringV2 — captured firing leg. No "status" key anywhere.
+const vmalertFiringV2 = `[{"startsAt":"2026-09-02T11:45:00Z",` +
+	`"generatorURL":"http://vmalert:8880/vmalert/alert?group_id=42&alert_id=99",` +
+	`"endsAt":"2026-09-02T12:20:00Z",` +
+	`"labels": {"alertgroup":"engine-liveness","alertname":"CorrelationConsumerDead","severity":"critical","layer":"correlation","tier":"page"},` +
+	`"annotations": {"summary":"correlation consumer group has zero members"}}]`
+
+// vmalertResolvedV2 — captured resolve leg. Still no "status" key; endsAt is
+// the moment the alert went inactive, i.e. in the past.
+const vmalertResolvedV2 = `[{"startsAt":"2026-09-02T11:45:00Z",` +
+	`"generatorURL":"http://vmalert:8880/vmalert/alert?group_id=42&alert_id=99",` +
+	`"endsAt":"2026-09-02T11:58:00Z",` +
+	`"labels": {"alertgroup":"engine-liveness","alertname":"CorrelationConsumerDead","severity":"critical","layer":"correlation","tier":"page"},` +
+	`"annotations": {"summary":"correlation consumer group has zero members"}}]`
+
+func TestVmalertV2FiringHasNoStatusFieldAndIsNotMistakenForAResolve(t *testing.T) {
+	r := newRig(t, 30*time.Minute)
+	if w := r.post(t, vmalertFiringV2, bearer); w.Code != http.StatusOK {
+		t.Fatalf("status = %d (%s)", w.Code, w.Body.String())
+	}
+	fired, resolved := r.disp.counts()
+	if fired != 1 || resolved != 0 {
+		t.Fatalf("fired/resolved = %d/%d, want 1/0 — a firing v2 alert (endsAt in the FUTURE) "+
+			"must not be read as a resolution", fired, resolved)
+	}
+}
+
+func TestVmalertV2ResolveIsRecognisedFromEndsAt(t *testing.T) {
+	r := newRig(t, 30*time.Minute)
+	if w := r.post(t, vmalertFiringV2, bearer); w.Code != http.StatusOK {
+		t.Fatalf("firing post: %d", w.Code)
+	}
+	if w := r.post(t, vmalertResolvedV2, bearer); w.Code != http.StatusOK {
+		t.Fatalf("resolve post: %d", w.Code)
+	}
+	fired, resolved := r.disp.counts()
+	if fired != 1 || resolved != 1 {
+		t.Fatalf("fired/resolved = %d/%d, want 1/1 — this is D-12: the resolve arrived "+
+			"inside the trigger's cool-down and with no status field, and was swallowed", fired, resolved)
+	}
+	got := r.disp.resolved[0]
+	if got.ResolvedAt == nil {
+		t.Fatal("ResolvedAt must be set from endsAt")
+	}
+	want := time.Date(2026, 9, 2, 11, 58, 0, 0, time.UTC)
+	if !got.ResolvedAt.Equal(want) {
+		t.Errorf("ResolvedAt = %v, want %v (the endsAt vmalert sent)", *got.ResolvedAt, want)
+	}
+}
+
+// The resolve must CLOSE the incident the trigger opened, so both legs carry
+// the same models.Alert.ID (notify/pagerduty.go dedupFor keys on it). The
+// cool-down key still differs — proven by the previous test delivering both.
+func TestResolveCarriesTheSameIdentityAsItsTrigger(t *testing.T) {
+	r := newRig(t, 30*time.Minute)
+	if w := r.post(t, vmalertFiringV2, bearer); w.Code != http.StatusOK {
+		t.Fatalf("firing post: %d", w.Code)
+	}
+	if w := r.post(t, vmalertResolvedV2, bearer); w.Code != http.StatusOK {
+		t.Fatalf("resolve post: %d", w.Code)
+	}
+	if len(r.disp.fired) != 1 || len(r.disp.resolved) != 1 {
+		t.Fatalf("want one of each, got %d/%d", len(r.disp.fired), len(r.disp.resolved))
+	}
+	if got, want := r.disp.resolved[0].ID, r.disp.fired[0].ID; got != want {
+		t.Errorf("resolve ID = %q, trigger ID = %q — a destination with resolution "+
+			"semantics would open a second incident instead of closing the first", got, want)
+	}
+	if r.disp.fired[0].ID == "" {
+		t.Error("the identity must not be empty")
+	}
+}
+
+// The regression the strict parse exists to prevent: parseTime substitutes
+// `now` for an absent timestamp, so reusing it here would read every
+// timestamp-less firing alert as "endsAt == now" and resolve it on arrival.
+func TestAlertWithNoEndsAtIsFiringNotResolved(t *testing.T) {
+	r := newRig(t, 30*time.Minute)
+	body := `[{"labels":{"alertname":"NoEndsAt","severity":"critical","layer":"stack"},` +
+		`"annotations":{"summary":"no endsAt on the wire"},"startsAt":"2026-09-02T11:45:00Z"}]`
+	if w := r.post(t, body, bearer); w.Code != http.StatusOK {
+		t.Fatalf("status = %d", w.Code)
+	}
+	if fired, resolved := r.disp.counts(); fired != 1 || resolved != 0 {
+		t.Fatalf("fired/resolved = %d/%d, want 1/0", fired, resolved)
+	}
+}
+
+func TestUnparseableEndsAtIsFiringNotResolved(t *testing.T) {
+	r := newRig(t, 30*time.Minute)
+	body := `[{"labels":{"alertname":"BadEndsAt","severity":"critical","layer":"stack"},` +
+		`"annotations":{"summary":"garbage endsAt"},"startsAt":"2026-09-02T11:45:00Z","endsAt":"not-a-time"}]`
+	if w := r.post(t, body, bearer); w.Code != http.StatusOK {
+		t.Fatalf("status = %d", w.Code)
+	}
+	if fired, resolved := r.disp.counts(); fired != 1 || resolved != 0 {
+		t.Fatalf("fired/resolved = %d/%d, want 1/0 — an unusable endsAt must fail towards firing", fired, resolved)
+	}
+}
+
+// An EXPLICIT status is authoritative in both directions: the classic webhook
+// envelope carries one, and it must win over whatever endsAt says.
+func TestExplicitStatusWinsOverEndsAt(t *testing.T) {
+	t.Run("explicit resolved with a future endsAt", func(t *testing.T) {
+		r := newRig(t, 30*time.Minute)
+		body := `[{"status":"resolved","labels":{"alertname":"E1","severity":"critical","layer":"stack"},` +
+			`"startsAt":"2026-09-02T11:45:00Z","endsAt":"2026-09-02T23:00:00Z"}]`
+		if w := r.post(t, body, bearer); w.Code != http.StatusOK {
+			t.Fatalf("status = %d", w.Code)
+		}
+		if fired, resolved := r.disp.counts(); fired != 0 || resolved != 1 {
+			t.Fatalf("fired/resolved = %d/%d, want 0/1", fired, resolved)
+		}
+	})
+	t.Run("explicit firing with a past endsAt", func(t *testing.T) {
+		r := newRig(t, 30*time.Minute)
+		body := `[{"status":"firing","labels":{"alertname":"E2","severity":"critical","layer":"stack"},` +
+			`"startsAt":"2026-09-02T11:00:00Z","endsAt":"2026-09-02T11:30:00Z"}]`
+		if w := r.post(t, body, bearer); w.Code != http.StatusOK {
+			t.Fatalf("status = %d", w.Code)
+		}
+		if fired, resolved := r.disp.counts(); fired != 1 || resolved != 0 {
+			t.Fatalf("fired/resolved = %d/%d, want 1/0", fired, resolved)
+		}
+	})
+}
+
+// endsAt exactly at `now` is resolved, matching Alertmanager's own
+// Alert.Resolved() (!EndsAt.After(ts)) rather than inventing a third rule.
+func TestEndsAtExactlyNowIsResolved(t *testing.T) {
+	r := newRig(t, 30*time.Minute)
+	body := `[{"labels":{"alertname":"Boundary","severity":"critical","layer":"stack"},` +
+		`"startsAt":"2026-09-02T11:00:00Z","endsAt":"2026-09-02T12:00:00Z"}]`
+	if w := r.post(t, body, bearer); w.Code != http.StatusOK {
+		t.Fatalf("status = %d", w.Code)
+	}
+	if fired, resolved := r.disp.counts(); fired != 0 || resolved != 1 {
+		t.Fatalf("fired/resolved = %d/%d, want 0/1", fired, resolved)
+	}
 }

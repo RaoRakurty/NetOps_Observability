@@ -1058,19 +1058,42 @@ func (s *server) handleRcaFeedbackSummary(w http.ResponseWriter, r *http.Request
 // the UI sees it", and the security page would drift away from the RCA page's
 // triage badges the first time either changed.
 //
-// The predicate walks corr_evidence → corr_signals and keeps objects with at
-// least one attached signal whose kind is in the security vocabulary
-// (secapi.SecuritySignalKinds). Both halves are time-bounded by the SAME window
-// as the outer pick, so the subquery cannot become an unbounded scan of the
-// evidence/signal history (#100 budget rules).
+// The predicate keeps an object when ANY of its corr_evidence rows names the
+// security class, and it says that TWO ways because the evidence table records
+// it two ways:
 //
-// HONEST EMPTINESS: the engine-side grounding that lands security signals in
-// corr_signals is a separate task (T2b). Until it ships — or when it has simply
-// not correlated anything — this list is legitimately EMPTY. That is returned as
-// an empty list, never an error: "no exposure stories" and "the query failed"
-// must not look the same to the page.
+//	branch 1 — signal join. ev.signal_id → corr_signals.kind ∈ the security
+//	vocabulary (secapi.SecuritySignalKinds). This is the precise statement and
+//	the one to prefer: the row points at the actual signal.
+//
+//	branch 2 — node-key suffix. An EDGE evidence row's subject_id is literally
+//	"<from_node>-><to_node>", and an engine node key is
+//	"<entity_type>:<entity_id>:<kind>" — so an edge that touches a security
+//	node has a half ending in ":security_posture" / ":security_exposure" /
+//	":security_signal". Matched with endsWith() on the split halves, never a
+//	substring LIKE: a device actually NAMED "security" must not match.
+//
+// WHY BRANCH 2 EXISTS (QA 2026-09-03, D-01). Until 2026-09-03 the engine's
+// _edge_evidence_row hardcoded signal_id to the nil UUID, so branch 1 matched
+// NOTHING: every one of the ~61 M rows then in netops.corr_evidence carried
+// 00000000-…-000000000000 and this list could never return a row, while the
+// detail route (which does not use this predicate) rendered the same objects
+// fine. engine.py now stamps a real representative endpoint signal id, but the
+// historical rows are never rewritten — branch 2 is what keeps them readable,
+// and it stays useful afterwards for an edge whose from_node signal happens to
+// be the NETWORK half of a mixed security/network story.
+//
+// Both branches are time-bounded by the SAME window as the outer pick (the
+// evidence side by sinceCond, the signal side by securityStoryWindowSeconds),
+// so neither can become an unbounded scan of the evidence/signal history (#100
+// budget rules). Isolation is unchanged: chTenantScope plus the ClickHouse row
+// policies bound the rows regardless of this SQL.
+//
+// An empty result is still returned as an empty list, never an error: "no
+// exposure stories" and "the query failed" must not look the same to the page.
 func securityExposureStoriesCond(sinceCond string) string {
 	kinds := make([]string, 0, len(secapi.SecuritySignalKinds))
+	suffixes := make([]string, 0, len(secapi.SecuritySignalKinds))
 	for _, k := range secapi.SecuritySignalKinds {
 		// The vocabulary is a package-level constant list of plain identifiers,
 		// never caller input; the guard is here so it stays that way if the
@@ -1079,6 +1102,7 @@ func securityExposureStoriesCond(sinceCond string) string {
 			continue
 		}
 		kinds = append(kinds, "'"+k+"'")
+		suffixes = append(suffixes, "endsWith(n, ':"+k+"')")
 	}
 	if len(kinds) == 0 {
 		return "0" // fail closed: no vocabulary means no stories, never all of them
@@ -1087,10 +1111,13 @@ func securityExposureStoriesCond(sinceCond string) string {
 	     SELECT ev.correlation_id, ev.version
 	       FROM netops.corr_evidence AS ev
 	      WHERE ev.` + sinceCond + `
-	        AND ev.signal_id IN (
-	            SELECT sig.signal_id FROM netops.corr_signals AS sig
-	             WHERE sig.ts >= now() - INTERVAL ` + intToString(int(securityStoryWindowSeconds)) + ` SECOND
-	               AND sig.kind IN (` + strings.Join(kinds, ",") + `)))`
+	        AND (ev.signal_id IN (
+	                SELECT sig.signal_id FROM netops.corr_signals AS sig
+	                 WHERE sig.ts >= now() - INTERVAL ` + intToString(int(securityStoryWindowSeconds)) + ` SECOND
+	                   AND sig.kind IN (` + strings.Join(kinds, ",") + `))
+	             OR (ev.subject_kind = 'edge'
+	                 AND arrayExists(n -> ` + strings.Join(suffixes, " OR ") + `,
+	                                 splitByString('->', ev.subject_id)))))`
 }
 
 // securityStoryWindowSeconds bounds the SIGNAL side of the exposure-story

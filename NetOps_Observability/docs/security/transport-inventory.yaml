@@ -1580,7 +1580,7 @@
         "transport": "plaintext",
         "authn": "token",
         "authz": "route-gate",
-        "notes": "base-compose (plaintext baseline): vmalert's notifier POSTs evaluated alerts to the Alertmanager-v2 receiver at /api/internal/vmalert/api/v2/alerts, authenticated by the VMALERT_WEBHOOK_TOKEN shared secret carried in the url userinfo (Basic) and constant-time compared. The route is NOT registered when that secret is unset (fail-closed). Added 2026-09-02 to close the alert-DELIVERY gap: vmalert previously ran -notifier.blackhole, so every rule it evaluated was delivered nowhere."
+        "notes": "base-compose (plaintext baseline): vmalert's notifier POSTs evaluated alerts to the Alertmanager-v2 receiver at /api/internal/vmalert/api/v2/alerts, authenticated by the VMALERT_WEBHOOK_TOKEN shared secret, presented as Basic auth from a mounted compose secret (-notifier.basicAuth.username/passwordFile) and constant-time compared. It moved out of the url userinfo on 2026-09-03 (D-16): argv is disclosed verbatim by `docker inspect` to any account in the docker group. The route is NOT registered when that secret is unset (fail-closed). Added 2026-09-02 to close the alert-DELIVERY gap: vmalert previously ran -notifier.blackhole, so every rule it evaluated was delivered nowhere."
       },
       "target": {
         "transport": "mtls",

@@ -208,6 +208,11 @@ func TestGoldenWireShape(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Exact wire shape T2b (the Python consume-and-ground adapter) relies on.
+	// native_id carries NO scan id (L-01, 2026-09-03): it is the identity of the
+	// finding, stable across scans, so `current=true` and the compliance fold
+	// can collapse a rule's history onto its newest verdict. The scan run rides
+	// in attrs.scan_id and in cx_finding_id = sha2(native_id|scan_id), which
+	// stays per-scan-unique so every verdict keeps its own retained document.
 	// Struct fields serialize in declaration order; Go sorts map keys, so attrs
 	// order is deterministic. A change here is a wire-contract change — bump
 	// SchemaVersion deliberately, never re-baseline this silently.
@@ -224,7 +229,8 @@ func TestGoldenWireShape(t *testing.T) {
     "seam:seam-isp-1"
   ],
   "severity": "critical",
-  "native_id": "security|security_exposure|exposure|expose-telnet|wan-gw|scan-999|",
+  "native_id": "security|security_exposure|exposure|tenant-B|expose-telnet|wan-gw|",
+  "cx_finding_id": "16010705b1a7dfcc67df4a3a2804df0a9baf72d46888a9bb14f84f7dce9fe830",
   "seam_id": "seam-isp-1",
   "seam_type": "ISP",
   "internet_facing": true,
@@ -252,10 +258,17 @@ func TestGoldenWireShape(t *testing.T) {
 	if back.SchemaVersion != "1" || back.Kind != KindExposure || back.EntityID != "wan-gw" {
 		t.Errorf("round-trip lost fields: %+v", back)
 	}
-	if back.NativeID != "security|security_exposure|exposure|expose-telnet|wan-gw|scan-999|" {
+	if back.NativeID != "security|security_exposure|exposure|tenant-B|expose-telnet|wan-gw|" {
 		t.Errorf("native_id = %q", back.NativeID)
 	}
 	if back.TS != "2026-08-27T13:30:00Z" {
 		t.Errorf("ts = %q, want RFC3339 UTC", back.TS)
+	}
+	// D-09: the STORAGE identity rides the wire too — sha256(native_id|scan_id),
+	// the same value the router computes and the sink turns into the document
+	// _id. It survives the round trip under the exact name the mapping and
+	// secapi.FieldDocID use.
+	if back.FindingID != "16010705b1a7dfcc67df4a3a2804df0a9baf72d46888a9bb14f84f7dce9fe830" {
+		t.Errorf("cx_finding_id = %q", back.FindingID)
 	}
 }

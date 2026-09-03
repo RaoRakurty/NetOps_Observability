@@ -1,7 +1,10 @@
 package secbus
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -381,5 +384,194 @@ func TestFromFinding_ReasonIsNotAnEvidenceLeak(t *testing.T) {
 	}
 	if !strings.Contains(string(blob), "fail-closed") {
 		t.Errorf("wire event dropped the verdict reason: %s", blob)
+	}
+}
+
+// TestFindingIDMatchesTheRouterFormula is the D-09 producer half.
+//
+// The OpenSearch document `_id` is NOT assigned by Go: the vector-router's
+// `security_identity` transform computes sha2(native_id | attrs.scan_id) into
+// `.cx_finding_id`, and the secfindings sink (`id_key: cx_finding_id`) lifts it
+// into the bulk action's `_id` and strips it from the body. FromFinding
+// recomputes the SAME value from the SAME two inputs so the field also exists
+// on the bus — this test pins that it is byte-identical to the router's
+// formula, because a producer id that differed from the storage id would be
+// worse than no id at all.
+func TestFindingIDMatchesTheRouterFormula(t *testing.T) {
+	ev, err := FromFinding(postureFinding())
+	if err != nil {
+		t.Fatal(err)
+	}
+	scanID, _ := ev.Attrs["scan_id"].(string)
+	if scanID == "" {
+		t.Fatal("attrs.scan_id is empty — the id formula has no second half")
+	}
+	// The router's expression, spelled out independently of the implementation.
+	sum := sha256.Sum256([]byte(ev.NativeID + "|" + scanID))
+	want := hex.EncodeToString(sum[:])
+	if ev.FindingID != want {
+		t.Errorf("cx_finding_id = %q, want sha256(native_id|scan_id) = %q", ev.FindingID, want)
+	}
+	if !regexp.MustCompile(`^[0-9a-f]{64}$`).MatchString(ev.FindingID) {
+		t.Errorf("cx_finding_id = %q, want 64 lowercase hex chars (the router emits sha2 SHA-256)", ev.FindingID)
+	}
+	// It rides the wire under the name the router, the mapping and secapi's
+	// FieldDocID all use.
+	blob, err := json.Marshal(ev)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var wire map[string]any
+	if err := json.Unmarshal(blob, &wire); err != nil {
+		t.Fatal(err)
+	}
+	if wire["cx_finding_id"] != want {
+		t.Errorf("wire cx_finding_id = %v, want %q", wire["cx_finding_id"], want)
+	}
+}
+
+// TestFindingIDIsDeterministicAndScanScoped: same finding ⇒ same id (a replay
+// UPSERTS instead of duplicating a verdict), a new scan ⇒ a new id (every
+// scan's verdict is RETAINED, which is what makes trend/drift possible).
+func TestFindingIDIsDeterministicAndScanScoped(t *testing.T) {
+	f := postureFinding()
+	a, err := FromFinding(f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := FromFinding(f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if a.FindingID != b.FindingID {
+		t.Errorf("cx_finding_id not deterministic: %q vs %q", a.FindingID, b.FindingID)
+	}
+	next := postureFinding()
+	next.ScanID = "scan-124"
+	c, err := FromFinding(next)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.FindingID == a.FindingID {
+		t.Error("a second scan reused the first scan's document id — the newer verdict would overwrite the older one")
+	}
+}
+
+// TestFindingIDIsOmittedWhenIdentityIsIncomplete mirrors the router: with
+// native_id or attrs.scan_id missing the record is QUARANTINED rather than
+// indexed under an invented id, so the producer must not hash an empty half
+// either (that would mint an id the storage layer never uses).
+func TestFindingIDIsOmittedWhenIdentityIsIncomplete(t *testing.T) {
+	noScan := postureFinding()
+	noScan.ScanID = ""
+	ev, err := FromFinding(noScan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := ev.Attrs["scan_id"]; ok {
+		t.Fatal("attrs.scan_id should be omitted when blank")
+	}
+	if ev.FindingID != "" {
+		t.Errorf("cx_finding_id = %q, want empty — the router would have quarantined this record", ev.FindingID)
+	}
+	blob, err := json.Marshal(ev)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(blob), "cx_finding_id") {
+		t.Errorf("an incomplete identity still put cx_finding_id on the wire: %s", blob)
+	}
+	// Direct unit check of the helper's two guards.
+	if got := findingDocIDOf("", map[string]any{"scan_id": "s"}); got != "" {
+		t.Errorf("no native_id → %q, want empty", got)
+	}
+	if got := findingDocIDOf("n", map[string]any{"scan_id": 7}); got != "" {
+		t.Errorf("non-string scan_id → %q, want empty", got)
+	}
+}
+
+// ---- L-01: native_id is the FINDING identity, not the verdict identity ------
+
+// TestNativeIDIsStableAcrossScans is L-01's core property. `current=true` and
+// the compliance scorecards are a COLLAPSE on native_id, so a second scan of
+// the same rule on the same device must reuse the first scan's native_id — or
+// nothing is ever superseded and the Findings page accumulates every verdict
+// ever recorded (measured live: 572 rows, 444 of them stale Unknowns).
+func TestNativeIDIsStableAcrossScans(t *testing.T) {
+	first := postureFinding()
+	first.ScanID = "scan-100"
+	first.Time = time.Date(2026, 9, 3, 4, 0, 0, 0, time.UTC)
+	first.SetStatus(secfindings.StatusFail)
+
+	second := postureFinding()
+	second.ScanID = "scan-200"
+	second.Time = time.Date(2026, 9, 3, 5, 0, 0, 0, time.UTC)
+	second.SetStatus(secfindings.StatusNotApplicable)
+
+	a, err := FromFinding(first)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := FromFinding(second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if a.NativeID != b.NativeID {
+		t.Fatalf("L-01 REGRESSION: two scans of the same finding minted different native_ids:\n %q\n %q\n"+
+			"the newer verdict can never supersede the older one under the collapse", a.NativeID, b.NativeID)
+	}
+	if strings.Contains(a.NativeID, "scan-") {
+		t.Errorf("native_id still carries a scan id: %q", a.NativeID)
+	}
+	// The scan identity is NOT lost — it rides in attrs, which is where the
+	// per-run identity belongs and where the QA run keys scans on.
+	if a.Attrs["scan_id"] != "scan-100" || b.Attrs["scan_id"] != "scan-200" {
+		t.Errorf("the scan identity was lost: %v / %v", a.Attrs["scan_id"], b.Attrs["scan_id"])
+	}
+	// And the STORAGE identity stays per-scan-unique, so both verdicts are
+	// retained (trend/drift read that history) and only the VIEW collapses.
+	if a.FindingID == b.FindingID {
+		t.Fatalf("two scans collapsed onto ONE document id %q — the older verdict would be overwritten "+
+			"and the retained history the trend view reads would be destroyed", a.FindingID)
+	}
+}
+
+// TestNativeIDDiscriminatesTenantDeviceAndRule: stable is only half the
+// contract. Two findings that are genuinely different must NOT share an
+// identity, or one would silently supersede the other under the collapse — and
+// for the tenant segment, the cross-tenant platform view (which collapses with
+// no tenant filter under it) would fold two tenants' devices into one row.
+func TestNativeIDDiscriminatesTenantDeviceAndRule(t *testing.T) {
+	base := postureFinding()
+	baseEv, err := FromFinding(base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mutate := map[string]func(*secfindings.Finding){
+		"tenant":         func(f *secfindings.Finding) { f.TenantID = "tenant-Z" },
+		"device":         func(f *secfindings.Finding) { f.Resource.DeviceID = "dev-78" },
+		"rule (f.ID)":    func(f *secfindings.Finding) { f.ID = "another-rule" },
+		"control":        func(f *secfindings.Finding) { f.ControlID = "xccdf_other" },
+		"evidence class": func(f *secfindings.Finding) { f.EvidenceClass = secfindings.EvidenceExposure },
+	}
+	for name, mut := range mutate {
+		f := postureFinding()
+		mut(&f)
+		ev, err := FromFinding(f)
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if ev.NativeID == baseEv.NativeID {
+			t.Errorf("a different %s reused native_id %q — the two findings would collapse onto one row",
+				name, ev.NativeID)
+		}
+	}
+	// Re-deriving the untouched finding is byte-stable (§9 idempotency).
+	again, err := FromFinding(postureFinding())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if again.NativeID != baseEv.NativeID {
+		t.Errorf("native_id is not byte-stable: %q vs %q", again.NativeID, baseEv.NativeID)
 	}
 }

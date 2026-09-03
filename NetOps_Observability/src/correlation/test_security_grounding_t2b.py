@@ -182,11 +182,18 @@ def test_signal_id_is_idempotent_on_redelivery():
     ts_ms = int(a.ts.timestamp() * 1000)
     assert a.signal_id == uuid.uuid5(
         signals.SIGNAL_NS, f"security|{a.native_id}|{ts_ms}")
-    # the native_id already carries the scan id (secbus.nativeIDOf), so a NEW
-    # scan of the same finding is a NEW signal, not a dedup'd redelivery.
+    # A NEW scan of the same finding is a NEW signal, not a dedup'd redelivery.
+    # Since 2026-09-03 (L-01) the native_id is STABLE per (tenant, device, rule)
+    # — the scan id was removed from it so the findings list's native_id
+    # collapse can actually supersede — so the discriminator here is the
+    # TIMESTAMP, which uuid5 already folds in above. Both halves are asserted:
+    # a different native_id is a different signal, AND the same native_id
+    # observed at a different instant is a different signal.
     other = envelope()
-    other["native_id"] = other["native_id"].replace("scan-99", "scan-100")
+    other["native_id"] = other["native_id"].replace("|f-1", "|f-2")
     assert evidence_signal_from_event(other, "acme").signal_id != a.signal_id
+    later = envelope(ts="2026-09-02T12:05:00.123456789Z")
+    assert evidence_signal_from_event(later, "acme").signal_id != a.signal_id
 
 
 def test_evidence_refs_are_bounded():
@@ -317,6 +324,42 @@ def test_two_verdicts_from_the_same_lane_still_cannot_confirm():
               security_signal(kind="security_posture", secs=10)]
     for snap in run_window(window, CAT, (), EngineConfig()):
         assert snap.ranking.verdict_tier is not VerdictTier.CONFIRMED
+
+
+NIL_UUID = str(uuid.UUID(int=0))
+
+
+def test_edge_evidence_joins_back_to_the_security_signals():
+    """QA D-01: the Exposure Story LIST joins corr_evidence.signal_id ->
+    corr_signals.signal_id and keeps objects whose attached signal kind is in
+    the security vocabulary. `_edge_evidence_row` used to hardcode the nil UUID,
+    so that join returned nothing and the list could NEVER return a row while
+    the detail route (which does not use the predicate) worked.
+
+    This pins the engine half: an all-security object's edge evidence carries a
+    real signal id that belongs to one of the edge's endpoint nodes AND resolves
+    to a signal of a security kind — i.e. the backend predicate is productive."""
+    window = [security_signal(kind="security_exposure", secs=0),
+              security_signal(kind="security_posture", secs=10)]
+    snaps = run_window(window, CAT, (), EngineConfig())
+    assert len(snaps) == 1
+    snap = snaps[0]
+    assert snap.edges, "the two verdicts must be joined by an edge to have a row"
+    # corr_signals, as the engine would have written it: id -> kind
+    kind_of = {str(s.signal_id): s.kind for n in snap.nodes for s in n.signals}
+    assert set(kind_of.values()) <= SECURITY_KINDS
+    rows = [r for r in snap.to_evidence_rows(1) if r["subject_kind"] == "edge"]
+    assert len(rows) == len(snap.edges)
+    for r in rows:
+        assert r["signal_id"] != NIL_UUID, "the D-01 nil UUID is back"
+        # the backend predicate, evaluated in Python
+        assert kind_of.get(r["signal_id"]) in SECURITY_KINDS
+    # ...and the subject_id the backend's SECOND branch reads is still the
+    # literal "<from_node>-><to_node>", with node keys ending in ":<kind>".
+    for e, r in zip(snap.edges, rows):
+        assert r["subject_id"] == f"{e.from_node}->{e.to_node}"
+        halves = r["subject_id"].split("->")
+        assert any(h.endswith(f":{k}") for h in halves for k in SECURITY_KINDS)
 
 
 # ══ 5. the removable-module proof ═══════════════════════════════════════════

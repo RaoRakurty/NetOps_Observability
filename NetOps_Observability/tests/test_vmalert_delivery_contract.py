@@ -114,18 +114,122 @@ def test_blackhole_remains_a_documented_opt_out() -> None:
     )
 
 
+def _secrets_of(path: Path, name: str) -> list[str]:
+    """The secret NAMES a service mounts (compose accepts short or long form)."""
+    out = []
+    for item in _svc(path, name).get("secrets") or []:
+        out.append(item if isinstance(item, str) else str(item.get("source")))
+    return out
+
+
+def _top_level_secrets(path: Path) -> dict:
+    return (_compose_yaml(path.read_text(encoding="utf-8")) or {}).get("secrets") or {}
+
+
 def test_both_variants_keep_the_shared_secret() -> None:
     """The app-layer credential must survive on BOTH paths.
 
     mTLS authenticates the connection; the token authenticates the request.
     Dropping the token because 'mTLS already authenticates' collapses two
     independent controls into one.
+
+    Since D-16 (QA 2026-09-03) the token is no longer in the url userinfo — it
+    is read from a mounted secret file — so the assertion is that the
+    basicAuth pair is present and wired, not that the argv carries the value.
     """
     for path in (COMPOSE, COMPOSE_TLS):
-        flag = _notifier_flag(_vmalert_command(path))
-        assert "${VMALERT_WEBHOOK_TOKEN}" in flag, (
-            f"{path.name}: the notifier url no longer carries VMALERT_WEBHOOK_TOKEN"
+        cmd = _vmalert_command(path)
+        user = [c for c in cmd if c.startswith("-notifier.basicAuth.username=")]
+        pwf = [c for c in cmd if c.startswith("-notifier.basicAuth.passwordFile=")]
+        assert len(user) == 1 and len(pwf) == 1, (
+            f"{path.name}: vmalert no longer presents an app-layer credential to the "
+            f"receiver (username={user}, passwordFile={pwf}). mTLS alone is ONE control, "
+            "and VMALERT_WEBHOOK_TOKEN unset makes the api refuse the route outright."
         )
+        target = pwf[0].split("=", 1)[1]
+        mounted = {
+            (item if isinstance(item, str) else str(item.get("source")))
+            for item in (_svc(path, "vmalert").get("secrets") or [])
+        }
+        assert target == "/run/secrets/vmalert_notifier_password", (
+            f"{path.name}: unexpected passwordFile path {target!r}"
+        )
+        assert "vmalert_notifier_password" in mounted, (
+            f"{path.name}: -notifier.basicAuth.passwordFile points at {target}, but the "
+            f"vmalert service mounts no such secret (mounts: {sorted(mounted)}) — the file "
+            "would not exist and vmalert would present nothing."
+        )
+
+
+# ── D-16: no credential may appear in the container's argv ──────────────────
+#
+# `docker inspect netops-vmalert-1` reports Config.Cmd verbatim, and reading it
+# needs only membership of the `docker` group — not access to .env. Anything
+# interpolated into a flag is therefore disclosed. Measured on the live stack
+# on 2026-09-03: -datasource.url, -remoteWrite.url and -notifier.url all
+# carried inline `user:password@host` credentials.
+
+_CREDENTIAL_VARS = (
+    "VMALERT_WEBHOOK_TOKEN",
+    "VMAUTH_VMALERT_PASSWORD",
+)
+
+
+def test_no_credential_is_interpolated_into_vmalert_argv() -> None:
+    for path in (COMPOSE, COMPOSE_TLS):
+        for flag in _vmalert_command(path):
+            for var in _CREDENTIAL_VARS:
+                assert "${" + var not in flag, (
+                    f"{path.name}: {var} is interpolated into vmalert's command line "
+                    f"({flag!r}). `docker inspect` discloses it to the whole docker group "
+                    "(D-16). Pass it with -*.basicAuth.passwordFile from a compose secret."
+                )
+
+
+def test_no_url_userinfo_in_vmalert_argv() -> None:
+    """The shape, not just the variable name: `scheme://user:pw@host` in argv."""
+    userinfo = re.compile(r"=\w+://[^/\s]*:[^/\s@]*@")
+    for path in (COMPOSE, COMPOSE_TLS):
+        for flag in _vmalert_command(path):
+            assert not userinfo.search(flag), (
+                f"{path.name}: {flag!r} carries URL userinfo. Credentials in argv are "
+                "readable with `docker inspect` (D-16)."
+            )
+
+
+def test_every_password_file_is_backed_by_a_declared_secret() -> None:
+    """A passwordFile that no secret mounts is a vmalert that starts and then
+    presents nothing — delivery fails at the first POST with no obvious cause."""
+    for path, extra in ((COMPOSE, None), (COMPOSE_TLS, COMPOSE)):
+        cmd = _vmalert_command(path)
+        wanted = {c.split("=", 1)[1] for c in cmd if ".basicAuth.passwordFile=" in c}
+        assert wanted, f"{path.name}: vmalert declares no passwordFile at all"
+        mounted = {
+            (item if isinstance(item, str) else str(item.get("source")))
+            for item in (_svc(path, "vmalert").get("secrets") or [])
+        }
+        declared = dict(_top_level_secrets(path))
+        if extra is not None:
+            declared.update(_top_level_secrets(extra))
+        for target in sorted(wanted):
+            assert target.startswith("/run/secrets/"), (
+                f"{path.name}: {target} is not a compose secret mount point"
+            )
+            name = target[len("/run/secrets/"):]
+            assert name in mounted, (
+                f"{path.name}: passwordFile {target} has no matching entry in the "
+                f"service's secrets list ({sorted(mounted)})"
+            )
+            assert name in declared, (
+                f"{path.name}: secret {name!r} is mounted but never declared at the "
+                f"top level (declared: {sorted(declared)})"
+            )
+            src = declared[name]
+            assert isinstance(src, dict) and src.get("environment"), (
+                f"{path.name}: secret {name!r} must be sourced from an environment "
+                f"variable so nothing new has to be written to disk at install time; "
+                f"got {src!r}"
+            )
 
 
 # ── 2. mTLS wiring on the TLS variant ───────────────────────────────────────

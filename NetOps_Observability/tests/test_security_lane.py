@@ -410,6 +410,35 @@ def test_template_declares_the_bus_envelope_fields_the_producer_emits():
             f"evidence_refs.{field} is not declared (§5c by-reference evidence)"
 
 
+def test_attrs_status_detail_is_declared_and_both_searchable_and_facetable():
+    """D-06 (2026-09-03): the verdict REASON rides the bus as attrs.status_detail
+    (secbus.attrsOf), and under the template's dynamic:false an UNDECLARED key
+    stays in _source but is never indexed — so "show me every device unassessed
+    because the OS version was not in sysDescr" could not be asked at all.
+
+    Shape: KEYWORD with an analysed `text` sub-field, not plain text like the
+    top-level narrative fields. The reason is short, producer-authored and
+    largely canned, and its primary use is EXACT (facet/filter every finding
+    carrying the same reason) which a `text` mapping cannot answer; the `.text`
+    sub-field still gives the findings `q` a prose match. It also keeps the
+    field consistent with every other attrs.* facet.
+
+    NOTE: an index template applies only to indices created AFTER it is
+    registered — already-rolled netops-secfindings-* indices keep the old
+    mapping until they roll."""
+    attrs = secfindings_props()["attrs"]["properties"]
+    detail = attrs.get("status_detail")
+    assert detail, "attrs.status_detail is not declared — the verdict reason is unsearchable (D-06)"
+    assert detail["type"] == "keyword", \
+        f"attrs.status_detail is {detail['type']}, not keyword — the reason could not be faceted"
+    assert detail.get("fields", {}).get("text", {}).get("type") == "text", \
+        "attrs.status_detail has no analysed `text` sub-field — free-text `q` could not match the prose"
+    # ignore_above must sit ABOVE secbus.StatusDetailMax (512 runes + ellipsis),
+    # or a legitimate producer reason would silently not be indexed.
+    assert detail.get("ignore_above", 0) > 513, \
+        "ignore_above must exceed secbus.StatusDetailMax so a full-length reason is still indexed"
+
+
 def test_bootstrap_registers_the_template_from_the_json():
     """F-06/F-15/F-53: the applier enumerates index-templates.json rather than
     carrying a hardcoded list — which is how two lanes once stayed 100%

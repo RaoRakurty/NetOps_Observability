@@ -16,6 +16,18 @@ import (
 // per-vendor ParseOS regexps) before any of it moved into
 // internal/vendorprofile. Every row here must still produce the byte-identical
 // answer now that those three tables are declarative profile data.
+//
+// ONE ROW HAS BEEN DELIBERATELY RE-BASELINED (2026-09-03, defect D-06):
+// ParseOS("nokia", "Nokia SR Linux srlinux 24.10.1") used to answer product
+// "sros" because nokia.json declared os_parse for the SR OS product only, and
+// every SR Linux box therefore resolved to a DIFFERENT operating system with an
+// empty version — which made advisory assessment structurally impossible for
+// the whole platform (measured live: assessed 0/2, "OS version not present in
+// sysDescr", even against an unbounded sros feed row). The pre-migration answer
+// was the defect, so preserving it would have pinned the bug. The row now reads
+// product "srlinux"; the version stays "" for THIS string because it carries no
+// SRLinux-v<version> token. Every other row is untouched, and the corpus is
+// still the byte-parity gate for them.
 
 type parityCorpus struct {
 	ParseOS []struct {

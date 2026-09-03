@@ -2875,18 +2875,67 @@ class ObjectSnapshot:
         return [e.to_ch_row(self.tenant_id, self.correlation_id, version)
                 for e in self.edges[start:stop]]
 
+    def node_index(self) -> dict[str, Node]:
+        """`Node.key` -> Node for this snapshot's nodes, built ONCE.
+
+        Exists so `_edge_evidence_row` can resolve an edge endpoint in O(1):
+        `evidence_row_page` is called once per PAGE over a storm object's edges,
+        and a linear scan of `self.nodes` per row would make paged emission
+        quadratic in (nodes x edges) — the exact shape the P0 boundedness pass
+        exists to keep bounded.
+
+        Cached exactly like `content_hash` / `identity_refs`: stored via
+        `object.__setattr__` and deliberately NOT a dataclass field, so it never
+        enters `__eq__`/`__hash__`/`replace()` (a `dc_replace` copy is a fresh,
+        uncached object and rebuilds — the conservative reading). Thread-safe by
+        idempotence: a race rebuilds the same mapping over the same frozen
+        tuple, and holds no new objects — just one pointer dict per snapshot."""
+        cached = getattr(self, "_node_index_c", None)
+        if cached is not None:
+            return cached
+        value = {n.key: n for n in self.nodes}
+        object.__setattr__(self, "_node_index_c", value)
+        return value
+
+    def _edge_signal_id(self, e: Edge) -> str:
+        """The REPRESENTATIVE signal id stamped on an edge's evidence row: the
+        earliest signal of the edge's `from_node`, else of its `to_node`.
+
+        DETERMINISTIC by construction — `Node.signals` is sorted by
+        `(ts, signal_id)`, so "the first signal of the from endpoint" is a pure
+        function of the snapshot and replays identically.
+
+        Falls back to the nil UUID only when NEITHER endpoint resolves to a node
+        that holds a signal (a synthetic or carried edge whose endpoint aged out
+        of the window). A missing node must never break persistence — an
+        unattributable edge row is still an honest evidence row."""
+        idx = self.node_index()
+        for key in (e.from_node, e.to_node):
+            n = idx.get(key)
+            if n is not None and n.signals:
+                return str(n.signals[0].signal_id)
+        return str(uuid.UUID(int=0))
+
     def _edge_evidence_row(self, e: Edge, version: int) -> dict:
         """The single corr_evidence row for one edge. Factored out (from
         to_evidence_rows) so the monolithic builder and the paged builder
         (evidence_row_page) share ONE source of truth — the paged path cannot
-        drift from the byte-exact row the replay/golden suites pin."""
+        drift from the byte-exact row the replay/golden suites pin.
+
+        `signal_id` is PROVENANCE, not identity: it names ONE representative
+        signal this edge was built over (`_edge_signal_id` — the earliest signal
+        of `from_node`, else `to_node`, else the nil UUID), so a reader can join
+        an edge back to the evidence class it came from. It was hardcoded to the
+        nil UUID until 2026-09-03, which made every `corr_evidence` ->
+        `corr_signals` join return nothing: the security Exposure Story LIST
+        read empty for its whole life (QA D-01) while the detail route worked."""
         return {
             "tenant_id": self.tenant_id,
             "correlation_id": self.correlation_id,
             "version": version,
             "subject_kind": "edge",
             "subject_id": f"{e.from_node}->{e.to_node}",
-            "signal_id": str(uuid.UUID(int=0)),
+            "signal_id": self._edge_signal_id(e),
             "role": "supports",
             "note": (f"grounded {e.grounding.kind}:{e.grounding.ref} "
                      f"w={e.weight:.2f} (t={e.w_temporal:.2f} topo={e.w_topo:.2f} "

@@ -1000,7 +1000,14 @@ services:
       # Hot-reload rules.yaml without a restart.
       - "-configCheckInterval=60s"
       - "-external.label=stack=${COMPOSE_PROJECT_NAME:-netops}"
-      - "${VMALERT_NOTIFIER_FLAG:--notifier.url=http://vmalert:${VMALERT_WEBHOOK_TOKEN}@api:8080/api/internal/vmalert}"
+      # D-16: the shared secret is read from the mounted secret file, NOT from
+      # the url userinfo. The username is arbitrary (the receiver compares the
+      # PASSWORD in constant time and accepts any user).
+      - "-notifier.basicAuth.username=vmalert"
+      - "-notifier.basicAuth.passwordFile=/run/secrets/vmalert_notifier_password"
+      - "${VMALERT_NOTIFIER_FLAG:--notifier.url=http://api:8080/api/internal/vmalert}"
+    secrets:
+      - vmalert_notifier_password
     volumes:
       - ../../src/config:/etc/vmalert/config:ro
     healthcheck:
@@ -2531,3 +2538,22 @@ services:
 networks:
   netops:
     driver: bridge
+
+# =========================================================================
+# SECRETS  (D-16, 2026-09-03)
+# =========================================================================
+#
+# Credentials that a service must PRESENT (so they cannot be vault-sealed) are
+# handed over as files rather than as command-line flags or environment
+# variables. Both of those are readable with `docker inspect`, which needs only
+# membership of the `docker` group — no access to .env at all.
+#
+# `environment:` sources the value from the named variable at `compose up`
+# time; compose materialises it inside the container at /run/secrets/<name> and
+# it appears in NO field of `docker inspect` (verified 2026-09-03: Config.Cmd,
+# Config.Env and Mounts are all clean). The variable must be set — compose
+# fails loudly, naming it, rather than starting with an empty credential.
+secrets:
+  # vmalert -> api Alertmanager-v2 receiver (internal/alertwebhook).
+  vmalert_notifier_password:
+    environment: VMALERT_WEBHOOK_TOKEN

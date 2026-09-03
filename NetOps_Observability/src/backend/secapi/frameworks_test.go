@@ -243,3 +243,38 @@ func TestBenchmarkCitationsAreCitationsNotFrameworks(t *testing.T) {
 		}
 	}
 }
+
+// ---- L-01: the scorecards are a CURRENT-state fold -------------------------
+
+// TestComplianceFoldBodyIsPinnedToTheCurrentState is the query half of L-01.
+//
+// The scorecards must score what is true NOW, not every verdict ever recorded —
+// a control that failed in thirty scans is ONE failing control, not thirty. The
+// body enforces that structurally: one bucket per finding identity (native_id)
+// and, inside each, `top_hits size 1` sorted by ts descending, so exactly one —
+// the NEWEST — verdict per identity reaches the projection.
+//
+// That shape was already correct; what made the live scorecard read AC-17 as
+// Fail/168 while the current scan said NotApplicable was the KEY: native_id used
+// to fold in the scan id, so every scan was its own bucket. secbus.nativeIDOf
+// now omits it. Pinning the body keeps this half from drifting back.
+func TestComplianceFoldBodyIsPinnedToTheCurrentState(t *testing.T) {
+	f := Filters{Since: pinSince, Until: pinUntil, Current: true}
+	want := `{"aggs":{"by_native":{"aggs":{"latest":{"top_hits":{"_source":{"includes":["attrs.control_id","attrs.raw_rule_id","attrs.status","attrs.status_id","ts"]},"size":1,"sort":[{"ts":{"order":"desc"}}]}}},` +
+		`"terms":{"field":"native_id","order":[{"_key":"asc"}],"size":5000}},` +
+		`"native_total":{"cardinality":{"field":"native_id","precision_threshold":40000}}},` +
+		`"query":{"bool":{"filter":[` + pinnedTenantScope + `,` + pinnedRange + `]}},"size":0,"track_total_hits":false}`
+	got := mustJSON(t, ComplianceFoldBody(f, pinTenantClause(), MaxCurrentGroups))
+	if got != want {
+		t.Errorf("compliance fold body changed.\n got: %s\nwant: %s", got, want)
+	}
+	if !strings.Contains(got, `"field":"native_id"`) {
+		t.Error("L-01 REGRESSION: the scorecards no longer group by finding identity — every historical verdict would be scored")
+	}
+	if !strings.Contains(got, `"size":1,"sort":[{"ts":{"order":"desc"}}]`) {
+		t.Error("L-01 REGRESSION: the fold no longer takes only the NEWEST verdict per identity")
+	}
+	if !strings.Contains(got, `{"term":{"tenant_id":"acme"}}`) {
+		t.Error("TENANT LEAK: the compliance fold lost its isolation clause")
+	}
+}

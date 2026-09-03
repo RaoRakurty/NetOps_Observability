@@ -34,7 +34,7 @@
       "edge": "vmalert-api-alert-delivery",
       "endpoint": "api:8080 /api/internal/vmalert/api/v2/alerts (vmalert appends /api/v2/alerts to the -notifier.url base)",
       "server_identity": "spiffe://netops/ns/default/sa/api",
-      "client_auth": "required \u2014 registry-minted vmalert SVID (-notifier.tlsCertFile/tlsKeyFile/tlsCAFile) AND the VMALERT_WEBHOOK_TOKEN shared secret in the url userinfo. TWO independent credentials: neither alone opens the endpoint.",
+      "client_auth": "required \u2014 registry-minted vmalert SVID (-notifier.tlsCertFile/tlsKeyFile/tlsCAFile) AND the VMALERT_WEBHOOK_TOKEN shared secret, presented as Basic auth via -notifier.basicAuth.username/passwordFile from a compose secret (D-16, 2026-09-03: it used to ride the url userinfo, which put it in the container argv that `docker inspect` discloses). TWO independent credentials: neither alone opens the endpoint.",
       "allowed_clients": ["spiffe://netops/ns/default/sa/vmalert"],
       "verify": "netops_alert_webhook_heartbeat_timestamp_seconds advances (the AlertingHeartbeat rule fires always and the receiver stamps its arrival) \u2014 end-to-end proof of evaluate -> deliver -> receive, which no other signal in the stack provides",
       "negative": [

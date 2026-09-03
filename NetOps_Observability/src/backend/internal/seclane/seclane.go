@@ -595,9 +595,15 @@ func (l *Lane) finish(st *ScanStatus, start time.Time) {
 	l.metrics.RecordRun(st.TenantSeg, st.Outcome, end, end.Sub(start))
 }
 
-// ScanID mints the assessment-run id. It is stamped on every finding and folded
-// into the deterministic native_id, and the router uses hash(native_id|scan_id)
-// as the OpenSearch _id — so it must be UNIQUE per run and STABLE within one.
+// ScanID mints the assessment-run id. It is stamped on every finding, rides the
+// bus as attrs.scan_id, and the router uses hash(native_id|scan_id) as the
+// OpenSearch _id — so it must be UNIQUE per run and STABLE within one.
+//
+// It is deliberately NOT part of native_id (L-01, 2026-09-03): native_id is the
+// identity of the FINDING and has to stay stable across scans so `current=true`
+// and the compliance scorecards can collapse a rule's history onto its newest
+// verdict. The scan run is the VERDICT's identity, and it reaches storage
+// through the _id — which is why uniqueness per run still matters here.
 func ScanID(seg string, at time.Time) string {
 	return "scan-" + seg + "-" + at.UTC().Format("20060102T150405.000Z")
 }

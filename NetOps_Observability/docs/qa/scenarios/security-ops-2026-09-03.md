@@ -527,6 +527,17 @@ date its own findings cannot be used in a post-incident timeline. (Separately, t
 brief — `scripts/stack-watchdog.log` — is a **stale orphan** last written 2026-08-22; cron writes to
 `data/stack-watchdog.log`. The orphan should be deleted so nobody reads it as current.)
 
+**FIXED 2026-09-03.** `stack-watchdog.sh` now emits every diagnostic through
+`log()`/`logerr()`, which stamp `%Y-%m-%dT%H:%M:%S%z` on **each** line — including every
+continuation line of the multi-line `DOWN ->` summary. The stale path is corrected in
+`README.md` (the documented cron now writes `data/stack-watchdog.log`) and in
+`scripts/support-bundle.sh`, whose candidate list preferred the orphan over the live log; the
+orphan file itself is untracked and still needs deleting on the dev host
+(`rm NetOps_Observability/scripts/stack-watchdog.log`, ~24 MB). Guarded by
+`tests/test_watchdog_transitions.py::test_every_diagnostic_line_is_timestamped_on_a_healthy_run`,
+`::test_every_line_of_the_multiline_down_summary_is_timestamped` and
+`::test_no_bare_echo_writes_a_diagnostic_line`.
+
 ### D-16 — `docker inspect` exposes the vmalert basic-auth secret (Medium · deployment)
 
 `netops-vmalert-1`'s `Config.Cmd` carries `-datasource.url`, `-remoteWrite.url` and `-notifier.url`

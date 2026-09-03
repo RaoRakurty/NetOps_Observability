@@ -335,6 +335,9 @@ func Handler(d Deps) (http.HandlerFunc, error) {
 // notifier is free to send more than we consume, and a receiver that rejects
 // what it does not recognise breaks on the next upstream version.
 type wireAlert struct {
+	// OPTIONAL. The Alertmanager v2 PUSH api that vmalert speaks does not send
+	// this field at all — only the classic webhook envelope does. statusOf
+	// falls back to endsAt, which is how v2 signals a resolution. See D-12.
 	Status      string            `json:"status"`
 	Labels      map[string]string `json:"labels"`
 	Annotations map[string]string `json:"annotations"`
@@ -613,7 +616,7 @@ func (r *receiver) handleAlert(a wireAlert) result {
 	if name == "" {
 		name = "vmalert"
 	}
-	status := strings.ToLower(strings.TrimSpace(a.Status))
+	status := r.statusOf(a)
 	fp := fingerprint(name, labels, status)
 
 	// Dedup applies to both legs. firing and resolved hash differently by
@@ -624,7 +627,14 @@ func (r *receiver) handleAlert(a wireAlert) result {
 	}
 
 	alert := models.Alert{
-		ID:          fp,
+		// IDENTITY, not occurrence: the status is deliberately NOT in the id a
+		// destination sees. models.Alert.ID is the dedup key a destination with
+		// resolution semantics keys on (notify/pagerduty.go dedupFor), so a
+		// resolve must carry the SAME id as the trigger it closes — otherwise
+		// DispatchResolve opens a second incident instead of closing the first.
+		// The cool-down key `fp` above still includes the status, which is what
+		// keeps a resolution from being suppressed by its own trigger.
+		ID:          fingerprint(name, labels, ""),
 		Rule:        name,
 		Severity:    severityOf(labels["severity"]),
 		Summary:     summaryOf(a.Annotations, name),
@@ -632,7 +642,7 @@ func (r *receiver) handleAlert(a wireAlert) result {
 		Labels:      labels,
 		FiredAt:     r.parseTime(a.StartsAt),
 	}
-	if status == "resolved" {
+	if status == statusResolved {
 		at := r.parseTime(a.EndsAt)
 		alert.ResolvedAt = &at
 		r.deps.Dispatcher.DispatchResolve(alert)
@@ -682,11 +692,76 @@ func (r *receiver) admit(fp string) bool {
 	return true
 }
 
-// fingerprint is the stable identity of an alert occurrence: the rule name, the
-// full sorted label set, and the status. It is used both as the cool-down key
-// and as models.Alert.ID, which is what destinations with resolution semantics
-// key on (notify/pagerduty.go dedupFor) — so the same alert reopens the same
-// incident instead of accumulating new ones.
+// The two states this receiver recognises. They are the values that reach
+// hostTier and the destination dispatcher, never raw wire text.
+const (
+	statusFiring   = "firing"
+	statusResolved = "resolved"
+)
+
+// statusOf derives firing/resolved from the wire.
+//
+// THIS IS D-12 (QA run 2026-09-03). The receiver used to read `a.Status`
+// alone, and `netops_alert_webhook_pushed_total{tier="resolved"}` had
+// therefore NEVER been non-zero on any stack: the Alertmanager v2 PUSH api
+// (POST /api/v2/alerts) — which is exactly what vmalert's `-notifier.url`
+// speaks — has NO `status` field at all. Captured verbatim from
+// vmalert v1.101.0 against a probe receiver on 2026-09-03:
+//
+//	[{"startsAt":"2026-09-03T05:06:40Z","generatorURL":"…",
+//	  "endsAt":"2026-09-03T05:27:12.291781629Z",
+//	  "labels":{…},"annotations":{…}}]
+//
+// Resolution is signalled by `endsAt`, exactly as Alertmanager's own
+// Alert.Resolved() defines it: an alert is resolved iff endsAt is set and is
+// not in the future. vmalert sends a FIRING alert with endsAt = now +
+// resolveDuration (4 × max(group interval, -rule.resendDelay); 4 m on this
+// stack) and a RESOLVED alert with endsAt = the moment it went inactive.
+// So every resolve was being classified as a fresh firing, hashing to the
+// firing fingerprint, and swallowed by its own trigger's cool-down — which is
+// why the api log contained no line mentioning "resolved" either. Operationally
+// that meant every page left a stuck alert on the phone with no all-clear.
+//
+// The CLASSIC webhook envelope (Alertmanager's own outbound notification, the
+// other shape readAlerts accepts) does carry `status`; an explicit value is
+// therefore authoritative and is taken first. Only when the wire is silent do
+// we read the timestamp.
+func (r *receiver) statusOf(a wireAlert) string {
+	if s := strings.ToLower(strings.TrimSpace(a.Status)); s != "" {
+		return s
+	}
+	// NOT r.parseTime: that one falls back to the clock for an absent or
+	// malformed value, which here would read as "endsAt == now" and classify
+	// every timestamp-less firing alert as resolved. An unusable endsAt means
+	// "no resolution was signalled" — fail towards firing, the safe direction.
+	end, ok := parseWireTime(a.EndsAt)
+	if ok && !end.After(r.now()) {
+		return statusResolved
+	}
+	return statusFiring
+}
+
+// parseWireTime is the STRICT reading of an RFC3339 wire timestamp: it reports
+// whether a usable instant was actually present, and never substitutes one.
+func parseWireTime(raw string) (time.Time, bool) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return time.Time{}, false
+	}
+	t, err := time.Parse(time.RFC3339, raw)
+	if err != nil || t.IsZero() {
+		return time.Time{}, false
+	}
+	return t, true
+}
+
+// fingerprint is the stable identity of an alert OCCURRENCE: the rule name, the
+// full sorted label set, and the status. It is the cool-down key — firing and
+// resolved hash differently so a resolution is never suppressed by its own
+// trigger. Called with an empty status it yields the status-independent alert
+// IDENTITY, which is what models.Alert.ID carries so that destinations with
+// resolution semantics (notify/pagerduty.go dedupFor) close the incident the
+// trigger opened instead of accumulating a new one.
 func fingerprint(name string, labels map[string]string, status string) string {
 	keys := make([]string, 0, len(labels))
 	for k := range labels {

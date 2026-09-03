@@ -65,7 +65,7 @@ func TestListBodyIsPinned(t *testing.T) {
 		`{"bool":{"minimum_should_match":1,"should":[{"terms":{"seam_type":["ISP"]}},{"terms":{"seam_id":["ISP"]}}]}},` +
 		`{"terms":{"attrs.standards":["CIS"]}},` +
 		`{"bool":{"minimum_should_match":1,"should":[{"terms":{"entity_id":["rtr-1"]}},{"terms":{"entity_tokens":["rtr-1"]}}]}},` +
-		`{"simple_query_string":{"default_operator":"and","fields":["attrs.control_title","attrs.control_id","attrs.raw_rule_id","entity_id","title","control_title","observed","intended","detail","status_detail","remediation"],"lenient":true,"query":"telnet"}}]}},` +
+		`{"simple_query_string":{"default_operator":"and","fields":["attrs.control_title","attrs.control_id","attrs.raw_rule_id","entity_id","attrs.status_detail.text","title","control_title","observed","intended","detail","status_detail","remediation"],"lenient":true,"query":"telnet"}}]}},` +
 		`"size":100,"sort":[{"ts":{"order":"desc","unmapped_type":"date"}},{"cx_finding_id":{"order":"desc","unmapped_type":"keyword"}}],"track_total_hits":true}`
 	if got := mustJSON(t, ListBody(pinFullFilters(), pinTenantClause(), 100, PagePos{})); got != want {
 		t.Errorf("list body changed.\n got: %s\nwant: %s", got, want)
@@ -125,12 +125,103 @@ func TestTrendBodyIsPinned(t *testing.T) {
 	}
 }
 
+// pinnedIDResolution is D-09's fix, spelled out once: the by-id lookup resolves
+// the OpenSearch `_id` (what the list actually hands the client, because the
+// router's `id_key: cx_finding_id` sink lifts that field OUT of the body) OR a
+// `cx_finding_id` carried IN the document (a direct-Finding writer, or the bus
+// value secbus now stamps). It is a bool/should nested INSIDE the outer filter
+// array, so it can only narrow: the tenant clause and the window still apply.
+const pinnedIDResolution = `{"bool":{"minimum_should_match":1,"should":[{"ids":{"values":["deadbeef"]}},{"term":{"cx_finding_id":"deadbeef"}}]}}`
+
 func TestGetBodyIsPinnedAndTenantScoped(t *testing.T) {
 	want := `{"query":{"bool":{"filter":[` + pinnedTenantScope + `,` + pinnedRange +
-		`,{"term":{"cx_finding_id":"deadbeef"}}]}},"size":1,` +
+		`,` + pinnedIDResolution + `]}},"size":1,` +
 		`"sort":[{"ts":{"order":"desc","unmapped_type":"date"}}],"track_total_hits":false}`
-	if got := mustJSON(t, GetBody("deadbeef", pinTenantClause(), pinSince, pinUntil)); got != want {
+	got := mustJSON(t, GetBody("deadbeef", pinTenantClause(), pinSince, pinUntil))
+	if got != want {
 		t.Errorf("get body changed.\n got: %s\nwant: %s", got, want)
+	}
+	// The two halves the pin exists to protect, asserted by name so a future
+	// re-baseline of the string cannot quietly drop either.
+	if !strings.Contains(got, `{"ids":{"values":["deadbeef"]}}`) {
+		t.Error("D-09 REGRESSION: the by-id lookup no longer resolves the document _id — every GET would 404 again")
+	}
+	if !strings.Contains(got, `{"term":{"tenant_id":"acme"}}`) {
+		t.Error("TENANT LEAK: the by-id lookup lost its isolation clause")
+	}
+	if !strings.Contains(got, `{"term":{"cx_finding_id":"deadbeef"}}`) {
+		t.Error("the in-document cx_finding_id path was dropped — a direct-Finding writer's rows would be unreachable")
+	}
+	// The id resolution must sit inside the FILTER array. A should at the top
+	// of the bool (instead of nested) would make the tenant clause optional.
+	if strings.Contains(got, `"should"`) && !strings.Contains(got, `"filter":[`) {
+		t.Error("the id clause escaped the filter array")
+	}
+}
+
+// TestGetBodyIsFailClosedForAnUnvalidatedID — §3 zero-trust at the builder, not
+// only at the handler. HandleFindingByID answers 400 for anything isSafeToken
+// rejects (a native_id, with its `|` separators, is the live example); a
+// programmatic caller that skipped that check must still not get a query built
+// from an unvetted string. It gets one that matches nothing → 404.
+func TestGetBodyIsFailClosedForAnUnvalidatedID(t *testing.T) {
+	for _, bad := range []string{
+		"",
+		"security|security_posture|posture|x|dev|scan|", // a native_id, not a doc id
+		`x"}],"must_not":[{"match_all":{}}`,             // splice attempt
+		"*",
+		strings.Repeat("a", MaxTokenLen+1),
+	} {
+		got := mustJSON(t, GetBody(bad, pinTenantClause(), pinSince, pinUntil))
+		if !strings.Contains(got, `"match_none":{}`) {
+			t.Errorf("GetBody(%q) did not fail closed: %s", bad, got)
+		}
+		if strings.Contains(got, `"ids"`) || strings.Contains(got, `"cx_finding_id":"`) {
+			t.Errorf("GetBody(%q) put an unvalidated id into a clause: %s", bad, got)
+		}
+		if !strings.Contains(got, `{"term":{"tenant_id":"acme"}}`) {
+			t.Errorf("GetBody(%q) lost the tenant clause: %s", bad, got)
+		}
+	}
+}
+
+// TestListIDResolvesInGetBody is the D-09 ROUND TRIP, end to end over the two
+// halves that disagreed: what the list hands out as `id`, and what the detail
+// lookup searches for.
+//
+// The hit below is the LIVE shape — an `_id` and a `_source` with no
+// `cx_finding_id` anywhere in it, because the router's sink consumes that field
+// on the way in. DecodeFinding must surface the `_id` as the finding's id, and
+// GetBody of that id must produce a query that selects that document.
+func TestListIDResolvesInGetBody(t *testing.T) {
+	const docID = "3f2a9c1e5b7d0a4f6e8c2b1d9a7f5e3c1b0d8a6f4e2c0b9d7a5f3e1c9b7d5a30"
+	const source = `{"tenant_id":"acme","ts":1756684800000,"severity":"high",` +
+		`"entity_id":"rtr-1","native_id":"security|security_posture|posture|AC-17|rtr-1|scan-1|",` +
+		`"attrs":{"status":"Fail","scan_id":"scan-1","evidence_class":"posture"}}`
+	if strings.Contains(source, FieldDocID) {
+		t.Fatal("the fixture is not the live shape: an indexed _source carries no cx_finding_id")
+	}
+	fn, err := DecodeFinding(json.RawMessage(source), docID)
+	if err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if fn.DocID != docID {
+		t.Fatalf("the list would hand out id %q, not the document _id %q", fn.DocID, docID)
+	}
+	// Now the detail lookup for exactly that id.
+	body := GetBody(fn.DocID, pinTenantClause(), pinSince, pinUntil)
+	blob := mustJSON(t, body)
+	if !strings.Contains(blob, `{"ids":{"values":["`+docID+`"]}}`) {
+		t.Fatalf("the detail query cannot select the row the list returned: %s", blob)
+	}
+	// And the by-id response decodes back to the same identity, so the round
+	// trip is closed rather than merely queryable.
+	back, err := DecodeFinding(json.RawMessage(source), docID)
+	if err != nil {
+		t.Fatalf("decode by-id hit: %v", err)
+	}
+	if back.DocID != fn.DocID || back.Native != fn.Native {
+		t.Fatalf("round trip changed identity: %+v vs %+v", back, fn)
 	}
 }
 

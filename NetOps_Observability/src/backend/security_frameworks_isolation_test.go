@@ -413,3 +413,86 @@ func TestSecurityComplianceUnassessedIsNeverZeroPercent(t *testing.T) {
 		t.Errorf("current_findings = %d, want 0", b.Findings)
 	}
 }
+
+// ---- L-01: the scorecard reflects the NEWEST verdict, not the accumulation --
+
+// fwSupersededAggs is the AC-17 case measured live on 2026-09-03: the same
+// finding identity assessed many times, most recently NotApplicable (SR Linux
+// implements no telnet server), earlier Fail. Because native_id is now stable
+// across scans, all of those verdicts land in ONE bucket, and `top_hits size 1
+// sorted ts desc` puts the NEWEST first. The older Fail is included in the
+// bucket on purpose: it proves the fold consumer reads exactly one verdict per
+// identity rather than everything the bucket happens to carry.
+const fwSupersededAggs = `{"native_total":{"value":1},"by_native":{"buckets":[` +
+	`{"key":"security|security_posture|posture|acme|AC-17|spine1|telnet-vty-enabled","doc_count":168,` +
+	`"latest":{"hits":{"hits":[` +
+	`{"_id":"newest","_source":{"ts":1756873600000,"attrs":{"control_id":"AC-17","raw_rule_id":"telnet-vty-enabled","status":"NotApplicable"}}},` +
+	`{"_id":"older","_source":{"ts":1756684800000,"attrs":{"control_id":"AC-17","raw_rule_id":"telnet-vty-enabled","status":"Fail"}}}` +
+	`]}}}]}}`
+
+// TestSecurityComplianceScoresTheNewestVerdictPerFinding is L-01's scorecard
+// half. Live symptom: `AC-17` reported Fail with 168 findings while the current
+// scan said NotApplicable, and `current_findings` read 602 — an accumulation of
+// every scan ever run, because each scan minted its own native_id and therefore
+// its own bucket.
+//
+// The invariant proven here is the one that makes the fix land: whatever a
+// bucket carries, exactly ONE verdict per finding identity is scored, it is the
+// newest, and `current_findings` counts IDENTITIES rather than documents.
+func TestSecurityComplianceScoresTheNewestVerdictPerFinding(t *testing.T) {
+	secStartFakeOS(t, &secFakeOS{aggs: fwSupersededAggs})
+	s := secFwServer(t)
+
+	w := httptest.NewRecorder()
+	s.secAPI.HandleCompliance(w, req(http.MethodGet, "/api/security/compliance", "", acme()))
+	if w.Code != http.StatusOK {
+		t.Fatalf("compliance = %d (%s)", w.Code, w.Body.String())
+	}
+	var b complianceBody
+	if err := json.Unmarshal(w.Body.Bytes(), &b); err != nil {
+		t.Fatalf("decode: %v (%s)", err, w.Body.String())
+	}
+	// One identity in, one current finding out — never the 168 documents behind
+	// it, and never the two hits the bucket carried.
+	if b.Findings != 1 {
+		t.Errorf("current_findings = %d, want 1 — the scorecard counted verdicts, not finding identities", b.Findings)
+	}
+	// NotApplicable is UNASSESSED (§5g: never a false clear, never a failure).
+	// The superseded Fail must not be scored against any framework.
+	for _, f := range b.Frameworks {
+		if f.Failed != 0 {
+			t.Errorf("%q reports %d failed control(s) from a verdict that a later scan superseded "+
+				"with NotApplicable", f.Framework, f.Failed)
+		}
+		// `assessed` deliberately means "a finding touched this control this
+		// run", which a NotApplicable verdict does; the SCORE is what must stay
+		// honest, and it is null because nothing passed, warned or failed —
+		// never 0% (total failure) and never 100% (a false clear).
+		if f.ScorePercent != nil {
+			t.Errorf("%q scored %v from a NotApplicable-only control — an unassessed control is unknown, never a pass",
+				f.Framework, *f.ScorePercent)
+		}
+	}
+
+	// Control: the SAME identity whose newest verdict is Fail IS scored, so the
+	// assertions above prove supersession rather than a scorecard that counts
+	// nothing at all.
+	secStartFakeOS(t, &secFakeOS{aggs: fwFoldAggs})
+	s2 := secFwServer(t)
+	w = httptest.NewRecorder()
+	s2.secAPI.HandleCompliance(w, req(http.MethodGet, "/api/security/compliance", "", acme()))
+	if w.Code != http.StatusOK {
+		t.Fatalf("control run = %d (%s)", w.Code, w.Body.String())
+	}
+	b = complianceBody{}
+	if err := json.Unmarshal(w.Body.Bytes(), &b); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	failed := 0
+	for _, f := range b.Frameworks {
+		failed += f.Failed
+	}
+	if failed == 0 {
+		t.Fatal("the control run scored no failure at all — the supersession assertions above would pass vacuously")
+	}
+}

@@ -32,6 +32,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -652,10 +653,16 @@ func TestSecurityFindingsCursorRoundTripsThroughTheAPI(t *testing.T) {
 	}
 }
 
-// TestSecurityExposureStoriesEmptyIsNotAnError — the engine-side grounding
-// (T2b) that lands security signals in corr_signals is a separate task. Until
-// it ships, this list is legitimately empty, and an empty list must not look
-// like a failure.
+// TestSecurityExposureStoriesEmptyIsNotAnError — a store that matched nothing
+// must answer an empty array, not an error: "no exposure stories" and "the
+// query failed" must not look the same to the page.
+//
+// The comment here used to say the list was legitimately empty because the
+// engine-side grounding (T2b) had not shipped. It HAD shipped, and the list was
+// empty for an entirely different reason — the engine stamped the nil UUID on
+// every edge-evidence row, so the signal-id join matched nothing (QA
+// 2026-09-03, D-01). Both halves are fixed; the SQL assertions below now cover
+// both branches of the predicate.
 func TestSecurityExposureStoriesEmptyIsNotAnError(t *testing.T) {
 	secStartFakeOS(t, &secFakeOS{})
 	sqls, scopes := corrFakeCH(t)
@@ -680,6 +687,12 @@ func TestSecurityExposureStoriesEmptyIsNotAnError(t *testing.T) {
 		"'security_posture'",
 		"'security_exposure'",
 		"'security_signal'",
+		// branch 2 (D-01): the exact node-key suffix over subject_id's halves,
+		// which is what reads the historical nil-UUID rows.
+		"splitByString('->', ev.subject_id)",
+		"endsWith(n, ':security_posture')",
+		"endsWith(n, ':security_exposure')",
+		"endsWith(n, ':security_signal')",
 	} {
 		if !strings.Contains(sql, want) {
 			t.Errorf("the exposure-story predicate lost %q:\n%s", want, sql)
@@ -828,5 +841,309 @@ func TestSecurityExposureStoryDetailIsTenantScoped(t *testing.T) {
 	s.handleSecurityExposureStory(w, req(http.MethodGet, "/api/security/exposure-stories/"+storyID, "", acme()))
 	if w.Code == http.StatusNotFound {
 		t.Fatalf("the owner was denied its own exposure story — the delegation is not reaching the correlation detail handler (%s)", w.Body.String())
+	}
+}
+
+// ---- D-09: by-id resolution ------------------------------------------------
+
+// secIDAwareOS is a stand-in that, unlike secFakeOS, actually HONOURS the query:
+// it returns a document only when the request body selects it BY DOCUMENT ID
+// and the index pattern is one that may see it. That distinction is the whole
+// of D-09 — the previous by-id query filtered `term { cx_finding_id: … }`, a
+// field no indexed document carries (the router's `id_key: cx_finding_id` sink
+// lifts it into the `_id` and strips it from the body), so every real GET
+// answered 404 while a pattern-only test double answered 200.
+type secIDAwareOS struct {
+	mu   sync.Mutex
+	docs map[string]map[string]string // index pattern → doc id → _source JSON
+	last string                       // the last query body, for assertions
+}
+
+// selects reports whether an OpenSearch query body would match a document whose
+// `_id` is id. It walks query.bool.filter and looks for the id resolution
+// clause, exactly as the cluster would: an `ids` values entry naming the doc.
+func (f *secIDAwareOS) selects(body, id string) bool {
+	var q struct {
+		Query struct {
+			Bool struct {
+				Filter []json.RawMessage `json:"filter"`
+			} `json:"bool"`
+		} `json:"query"`
+	}
+	if err := json.Unmarshal([]byte(body), &q); err != nil {
+		return false
+	}
+	for _, clause := range q.Query.Bool.Filter {
+		var c struct {
+			IDs struct {
+				Values []string `json:"values"`
+			} `json:"ids"`
+			Bool struct {
+				Should []struct {
+					IDs struct {
+						Values []string `json:"values"`
+					} `json:"ids"`
+				} `json:"should"`
+			} `json:"bool"`
+		}
+		if err := json.Unmarshal(clause, &c); err != nil {
+			continue
+		}
+		for _, v := range c.IDs.Values {
+			if v == id {
+				return true
+			}
+		}
+		for _, s := range c.Bool.Should {
+			for _, v := range s.IDs.Values {
+				if v == id {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
+// lastBody returns the most recent query body under the lock, so a -race build
+// sees the same happens-before edge the handler wrote it behind.
+func (f *secIDAwareOS) lastBody() string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.last
+}
+
+func secStartIDAwareOS(t *testing.T, fake *secIDAwareOS) {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		raw, _ := io.ReadAll(io.LimitReader(r.Body, 1<<20)) // test double: a short read fails the assertions below
+		body := string(raw)
+		index := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/"), "/_search")
+		fake.mu.Lock()
+		fake.last = body
+		hits := ""
+		for id, source := range fake.docs[index] {
+			if fake.selects(body, id) {
+				hits = `{"_index":"` + strings.SplitN(index, "-*", 2)[0] + `-2026.09.01","_id":"` + id +
+					`","_source":` + source + `,"sort":[1756684800000,"` + id + `"]}`
+				break
+			}
+		}
+		fake.mu.Unlock()
+		total := 0
+		if hits != "" {
+			total = 1
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"took":1,"timed_out":false,"hits":{"total":{"value":` +
+			strconv.Itoa(total) + `,"relation":"eq"},"hits":[` + hits + `]}}`))
+	}))
+	t.Cleanup(srv.Close)
+	t.Setenv("OPENSEARCH_URL", srv.URL)
+}
+
+// secLiveSource is the LIVE indexed shape: no cx_finding_id anywhere in
+// _source, because the router's sink consumed it into the `_id`.
+func secLiveSource(tenant, device string) string {
+	return `{"tenant_id":"` + tenant + `","ts":1756684800000,"severity":"high",` +
+		`"entity_id":"` + device + `","native_id":"security|security_posture|posture|AC-17|` + device + `|scan-1|",` +
+		`"attrs":{"status":"Fail","scan_id":"scan-1","evidence_class":"posture",` +
+		`"status_detail":"OS version not present in sysDescr"}}`
+}
+
+// TestSecurityFindingByIDResolvesTheDocumentID is D-09's regression test, at the
+// HTTP boundary and against a backend that answers the query rather than the
+// index pattern. The owner reads its own finding (200) and the neighbouring
+// tenant gets the same 404 a nonexistent id gets — the isolation half of §3a.5.
+func TestSecurityFindingByIDResolvesTheDocumentID(t *testing.T) {
+	const acmeDoc = "3f2a9c1e5b7d0a4f6e8c2b1d9a7f5e3c1b0d8a6f4e2c0b9d7a5f3e1c9b7d5a30"
+	const globexDoc = "9b7d5a301b0d8a6f4e2c0b9d3f2a9c1e5b7d0a4f6e8c2b1d7a5f3e1c9b7d5a31"
+	fake := &secIDAwareOS{docs: map[string]map[string]string{
+		secPatternFor("acme"):   {acmeDoc: secLiveSource("acme", "acme-core")},
+		secPatternFor("globex"): {globexDoc: secLiveSource("globex", "globex-core")},
+	}}
+	secStartIDAwareOS(t, fake)
+	s := secTestServer(t)
+
+	// Own finding, by the id the LIST hands out (the document `_id`) → 200.
+	w := httptest.NewRecorder()
+	s.secAPI.HandleFindingByID(w, req(http.MethodGet, "/api/security/findings/"+acmeDoc, "", acme()))
+	if w.Code != http.StatusOK {
+		t.Fatalf("own finding by id = %d (%s), want 200 — D-09 REGRESSION", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), `"id":"`+acmeDoc+`"`) {
+		t.Fatalf("the detail response does not carry the id it was asked for: %s", w.Body.String())
+	}
+	// The reason survives the bus and the decoder (the D-06 field).
+	if !strings.Contains(w.Body.String(), "OS version not present in sysDescr") {
+		t.Errorf("attrs.status_detail did not reach the detail response: %s", w.Body.String())
+	}
+	if body := fake.lastBody(); !strings.Contains(body, `{"term":{"tenant_id":"acme"}}`) {
+		t.Fatalf("TENANT LEAK: the by-id query carried no isolation clause: %s", body)
+	}
+
+	// Another tenant's finding id → 404, indistinguishable from a missing one.
+	w = httptest.NewRecorder()
+	s.secAPI.HandleFindingByID(w, req(http.MethodGet, "/api/security/findings/"+globexDoc, "", acme()))
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("cross-tenant get = %d (%s), want 404", w.Code, w.Body.String())
+	}
+	if strings.Contains(w.Body.String(), "globex") || strings.Contains(w.Body.String(), globexDoc) {
+		t.Fatalf("the 404 revealed the other tenant's finding: %s", w.Body.String())
+	}
+	w = httptest.NewRecorder()
+	s.secAPI.HandleFindingByID(w, req(http.MethodGet,
+		"/api/security/findings/0000000000000000000000000000000000000000000000000000000000000000", "", acme()))
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("missing id = %d, want the same 404 as a cross-tenant id", w.Code)
+	}
+
+	// Its owner still reads it — so the 404 above was isolation, not breakage.
+	w = httptest.NewRecorder()
+	s.secAPI.HandleFindingByID(w, req(http.MethodGet, "/api/security/findings/"+globexDoc, "", globex()))
+	if w.Code != http.StatusOK {
+		t.Fatalf("owner get = %d (%s), want 200", w.Code, w.Body.String())
+	}
+
+	// ?as_tenant= into another org is ignored for a non-owner (§3a.5).
+	w = httptest.NewRecorder()
+	s.secAPI.HandleFindingByID(w, req(http.MethodGet,
+		"/api/security/findings/"+globexDoc+"?as_tenant=globex", "", acme()))
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("as_tenant escape = %d (%s), want 404", w.Code, w.Body.String())
+	}
+
+	// A native_id is not a document id: refused at the boundary (§3 zero-trust),
+	// never passed into the query.
+	w = httptest.NewRecorder()
+	s.secAPI.HandleFindingByID(w, req(http.MethodGet,
+		"/api/security/findings/security%7Csecurity_posture%7Cposture", "", acme()))
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("native_id-shaped id = %d (%s), want 400", w.Code, w.Body.String())
+	}
+}
+
+// ---- L-01: current=true must actually supersede -----------------------------
+
+// secCollapseOS emulates the one OpenSearch behaviour `current=true` is built
+// on: `collapse: {field: native_id}` over a (ts desc) sort returns the NEWEST
+// document per group, and `current_total` is the number of GROUPS. Everything
+// else about it is a stub — this exists to prove the Go side asks for the
+// collapse and reports group counts, which no pattern-only double can show.
+type secCollapseOS struct {
+	docs []secCollapseDoc
+}
+
+type secCollapseDoc struct {
+	ID       string
+	NativeID string
+	TSMillis int64
+	Status   string
+	Device   string
+}
+
+func secStartCollapseOS(t *testing.T, fake *secCollapseOS) {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		raw, _ := io.ReadAll(io.LimitReader(r.Body, 1<<20)) // test double: a short read fails the assertions below
+		var q struct {
+			Collapse struct {
+				Field string `json:"field"`
+			} `json:"collapse"`
+		}
+		_ = json.Unmarshal(raw, &q)
+		keep := fake.docs
+		if q.Collapse.Field == "native_id" {
+			newest := map[string]secCollapseDoc{}
+			for _, d := range fake.docs {
+				if cur, ok := newest[d.NativeID]; !ok || d.TSMillis > cur.TSMillis {
+					newest[d.NativeID] = d
+				}
+			}
+			keep = keep[:0:0]
+			for _, d := range newest {
+				keep = append(keep, d)
+			}
+		}
+		sort.Slice(keep, func(i, j int) bool { return keep[i].TSMillis > keep[j].TSMillis })
+		hits := make([]string, 0, len(keep))
+		for _, d := range keep {
+			hits = append(hits, `{"_index":"netops-secfindings-acme-2026.09.03","_id":"`+d.ID+`",`+
+				`"_source":{"tenant_id":"acme","ts":`+strconv.FormatInt(d.TSMillis, 10)+`,"severity":"high",`+
+				`"entity_id":"`+d.Device+`","native_id":"`+d.NativeID+`",`+
+				`"attrs":{"status":"`+d.Status+`","scan_id":"scan-`+d.ID+`","evidence_class":"posture",`+
+				`"control_id":"AC-17","raw_rule_id":"telnet-vty-enabled"}},`+
+				`"sort":[`+strconv.FormatInt(d.TSMillis, 10)+`,"`+d.ID+`"]}`)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"took":1,"timed_out":false,"hits":{"total":{"value":` +
+			strconv.Itoa(len(fake.docs)) + `,"relation":"eq"},"hits":[` + strings.Join(hits, ",") + `]},` +
+			`"aggregations":{"current_total":{"value":` + strconv.Itoa(len(keep)) + `}}}`))
+	}))
+	t.Cleanup(srv.Close)
+	t.Setenv("OPENSEARCH_URL", srv.URL)
+}
+
+// TestSecurityFindingsCurrentSupersedesOlderScans is L-01 at the API boundary.
+//
+// Live symptom (2026-09-03): `current=true` returned 572 rows spanning nine
+// scans, 444 of them stale Unknowns, because native_id folded in the scan id and
+// every scan was therefore its own collapse group. secbus.nativeIDOf no longer
+// does; the two documents below are two scans of the SAME finding and share one
+// native_id (the shape TestNativeIDIsStableAcrossScans pins on the producer
+// side). The current view must return ONE row — the newest — and count groups,
+// not documents.
+func TestSecurityFindingsCurrentSupersedesOlderScans(t *testing.T) {
+	// The stable, scan-free identity: tenant, control, device, rule.
+	const native = "security|security_posture|posture|acme|AC-17|spine1|telnet-vty-enabled"
+	if strings.Contains(native, "scan-") {
+		t.Fatal("the fixture identity carries a scan id — that is the bug, not the fixture")
+	}
+	fake := &secCollapseOS{docs: []secCollapseDoc{
+		{ID: "older", NativeID: native, TSMillis: 1756684800000, Status: "Fail", Device: "spine1"},
+		{ID: "newest", NativeID: native, TSMillis: 1756873600000, Status: "NotApplicable", Device: "spine1"},
+	}}
+	secStartCollapseOS(t, fake)
+	s := secTestServer(t)
+
+	w := httptest.NewRecorder()
+	s.secAPI.HandleFindings(w, req(http.MethodGet, "/api/security/findings?current=true", "", acme()))
+	if w.Code != http.StatusOK {
+		t.Fatalf("current list = %d (%s)", w.Code, w.Body.String())
+	}
+	var page struct {
+		Items []struct {
+			ID     string `json:"id"`
+			Status string `json:"status"`
+		} `json:"items"`
+		Total int64 `json:"total"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &page); err != nil {
+		t.Fatalf("decode: %v (%s)", err, w.Body.String())
+	}
+	if len(page.Items) != 1 {
+		t.Fatalf("L-01 REGRESSION: current=true returned %d rows for ONE finding identity — "+
+			"the newer verdict never supersedes the older one: %s", len(page.Items), w.Body.String())
+	}
+	if page.Items[0].ID != "newest" || page.Items[0].Status != "NotApplicable" {
+		t.Errorf("the surviving row is %+v, want the NEWEST verdict (NotApplicable)", page.Items[0])
+	}
+	if page.Total != 1 {
+		t.Errorf("total = %d, want 1 — the current view counts finding identities, not documents", page.Total)
+	}
+
+	// The history is NOT destroyed: current=false still returns both retained
+	// verdicts, which is what the trend/drift views read.
+	w = httptest.NewRecorder()
+	s.secAPI.HandleFindings(w, req(http.MethodGet, "/api/security/findings", "", acme()))
+	if w.Code != http.StatusOK {
+		t.Fatalf("history list = %d (%s)", w.Code, w.Body.String())
+	}
+	page.Items = nil
+	if err := json.Unmarshal(w.Body.Bytes(), &page); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(page.Items) != 2 {
+		t.Fatalf("the retained verdict history was lost: %d rows, want 2 (%s)", len(page.Items), w.Body.String())
 	}
 }

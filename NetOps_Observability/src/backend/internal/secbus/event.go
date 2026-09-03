@@ -81,6 +81,7 @@ type EvidenceRef struct {
 //	                                         severity aliases already map
 //	                                         critical/high/medium/low/info)
 //	NativeID       → Signal.native_id       (deterministic → stable signal_id)
+//	FindingID      → (storage identity; not a Signal field — see findingDocIDOf)
 //	SeamID/Type/…  → Signal.attrs           (seam attribution, opaque to engine)
 //	EvidenceRefs   → Signal.attrs           (by-reference pointers only)
 //	Attrs          → Signal.attrs           (control id, standards, verdict,
@@ -95,6 +96,7 @@ type EvidenceEvent struct {
 	EntityTokens   []string       `json:"entity_tokens,omitempty"`
 	Severity       string         `json:"severity"`
 	NativeID       string         `json:"native_id"`
+	FindingID      string         `json:"cx_finding_id,omitempty"`
 	SeamID         string         `json:"seam_id,omitempty"`
 	SeamType       string         `json:"seam_type,omitempty"`
 	InternetFacing bool           `json:"internet_facing,omitempty"`
@@ -165,28 +167,93 @@ func entityTokensOf(entityID string, r secfindings.Resource, seam *secfindings.S
 	return out
 }
 
-// nativeIDOf builds the deterministic native id the engine hashes (with ts) into
-// a stable signal_id. Same finding ⇒ same native_id ⇒ a re-emission dedups
-// (§9 idempotency). It is the identity of the verdict: evidence-class, control,
-// subject, scan run AND the finding's own id (f.ID) — the per-finding
-// discriminator. Without f.ID, a rule that legitimately fires more than once
-// for one device in one scan (e.g. threatlane's per-conversation and per-source
-// detections) would collide onto ONE native_id, and every finding after the
-// first would dedup away downstream as a redelivery — silent evidence loss.
-// A producer that emits at most one finding per (rule, device, scan) may leave
-// ID empty: the segment is then empty and identity degrades to the assessment
-// scope. Kept < the engine's 256-char id cap by hashing when the joined form
-// would overflow (deterministic, collision-resistant), so a long control id or
-// scan id can never silently truncate to a colliding id at the model boundary.
+// nativeIDOf builds the deterministic native id: the identity of the THING
+// ASSESSED — tenant, evidence class, control, subject device and the producing
+// rule — NOT of the assessment run that produced this verdict.
+//
+// TWO IDENTITIES, ONE PER QUESTION (L-01, 2026-09-03 — read before editing):
+//
+//	native_id — "which finding is this?"  STABLE across scans. It is the
+//	            collapse key behind `current=true` and behind the compliance
+//	            scorecards' current-state fold, so two scans of the same rule on
+//	            the same device MUST produce the same value or the newer verdict
+//	            can never supersede the older one.
+//	_id       — "which verdict is this?"  sha2(native_id | attrs.scan_id),
+//	            computed by the router. The scan id is STILL the second half, so
+//	            every scan keeps its own retained document and the history the
+//	            trend/drift views read is untouched. Only the VIEW collapses.
+//
+// f.ScanID was folded into native_id until 2026-09-03. That made every scan its
+// own collapse group: `current=true` returned every verdict ever recorded, the
+// Findings page showed 444 stale Unknowns from rules that no longer exist, and
+// the compliance scorecard read AC-17 as Fail/168 while the current scan said
+// NotApplicable. The scan run is carried in attrs.scan_id (and in the `_id`),
+// which is where a per-run identity belongs.
+//
+// TenantID leads the discriminators so the identity is tenant-scoped: device
+// ids are unique within a tenant, not across the platform, and the cross-tenant
+// platform view collapses on this field without a tenant filter under it —
+// without the tenant segment two tenants' "spine1" would fold into one row.
+//
+// f.ID is the per-finding discriminator. Without it, a rule that legitimately
+// fires more than once for one device in one scan (e.g. threatlane's
+// per-conversation and per-source detections) would collide onto ONE native_id
+// and every finding after the first would be indistinguishable — the router
+// would hash them to ONE _id and one would overwrite the other. A producer that
+// emits at most one finding per (rule, device, scan) may leave ID empty: the
+// segment is then empty and identity degrades to the assessment scope.
+//
+// Engine-side, signal_id is uuid5(source|native_id|ts_ms) — the verdict INSTANT
+// is already part of it — so a stable native_id does not make a later scan
+// dedup away as a redelivery; only a genuine re-delivery of the SAME verdict
+// (same native_id AND same ts) collapses, which is the §9 idempotency intent.
+//
+// Kept < the engine's 256-char id cap by hashing when the joined form would
+// overflow (deterministic, collision-resistant), so a long control id or rule
+// id can never silently truncate to a colliding id at the model boundary.
 func nativeIDOf(f secfindings.Finding, entityID, kind string) string {
 	raw := strings.Join([]string{
-		"security", kind, f.EvidenceClass, f.ControlID, entityID, f.ScanID, f.ID,
+		"security", kind, f.EvidenceClass, f.TenantID, f.ControlID, entityID, f.ID,
 	}, "|")
 	if len(raw) <= 256 {
 		return raw
 	}
 	sum := sha256.Sum256([]byte(raw))
 	return "security|" + kind + "|" + hex.EncodeToString(sum[:])
+}
+
+// findingDocIDOf computes the STORAGE identity of a verdict:
+// sha256(native_id | attrs.scan_id), lowercase hex.
+//
+// WHO REALLY ASSIGNS THE _id (D-09, 2026-09-03 — read this before changing it).
+// Go does NOT assign the OpenSearch document id. The router does: the
+// vector-router's `security_identity` transform computes
+// `sha2(native_id + "|" + attrs.scan_id, variant: "SHA-256")` into
+// `.cx_finding_id`, and the secfindings sink is configured `id_key:
+// cx_finding_id`, which lifts that key into the bulk action's `_id` AND removes
+// it from the document body (which is why no indexed `_source` carries the
+// field, and why a `term` on it matched nothing).
+//
+// This function therefore does not MINT a second identity — it recomputes the
+// SAME one, byte-for-byte, from the SAME two inputs, so the field exists on the
+// bus for every consumer that is not the router (the Python grounding step, a
+// future direct-Finding writer, an operator replaying the topic). The router
+// still overwrites it unconditionally on its good path and deletes it on the
+// quarantine path, so a bus producer cannot forge a document id with it.
+//
+// The scan id is read back OUT of the assembled attrs rather than off the
+// finding, so it is exactly the string the router will hash — attrsOf omits a
+// blank scan_id, and a value that differed by so much as trimmed whitespace
+// would produce a second, silently-wrong id. Identity requires BOTH halves:
+// with either missing the router quarantines the record instead of indexing it,
+// so we return "" (the field is omitempty) rather than hash an empty half.
+func findingDocIDOf(nativeID string, attrs map[string]any) string {
+	scanID, _ := attrs["scan_id"].(string)
+	if nativeID == "" || scanID == "" {
+		return ""
+	}
+	sum := sha256.Sum256([]byte(nativeID + "|" + scanID))
+	return hex.EncodeToString(sum[:])
 }
 
 // StatusDetailMax bounds the verdict REASON carried in attrs.status_detail. The
@@ -295,6 +362,9 @@ func FromFinding(f secfindings.Finding) (EvidenceEvent, error) {
 		})
 	}
 
+	nativeID := nativeIDOf(f, entityID, kind)
+	attrs := attrsOf(f, f.SeamContext)
+
 	ev := EvidenceEvent{
 		SchemaVersion: SchemaVersion,
 		TenantID:      f.TenantID,
@@ -304,9 +374,10 @@ func FromFinding(f secfindings.Finding) (EvidenceEvent, error) {
 		EntityType:    EntityTypeDevice,
 		EntityTokens:  entityTokensOf(entityID, f.Resource, f.SeamContext),
 		Severity:      f.Severity,
-		NativeID:      nativeIDOf(f, entityID, kind),
+		NativeID:      nativeID,
+		FindingID:     findingDocIDOf(nativeID, attrs),
 		EvidenceRefs:  refs,
-		Attrs:         attrsOf(f, f.SeamContext),
+		Attrs:         attrs,
 	}
 	if f.SeamContext != nil {
 		ev.SeamID = f.SeamContext.SeamID

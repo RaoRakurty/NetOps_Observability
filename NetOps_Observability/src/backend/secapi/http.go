@@ -372,6 +372,12 @@ func cursorFromSort(sortVals []any) (string, bool) {
 // pattern names only the caller's own indices) and answers 404 — the same
 // answer a genuinely missing id gets, so another tenant's id is never confirmed
 // to exist.
+//
+// The {id} it accepts is the SAME id the list hands out: the OpenSearch
+// document `_id` (DecodeFinding takes it from the hit). GetBody resolves it by
+// `_id`, not by a `cx_finding_id` field — see the D-09 note there for why the
+// two disagreed and every lookup 404'd. isSafeToken below is the §3 boundary
+// check: a native_id (with its `|` separators) is a 400, never a query.
 func (a *API) HandleFindingByID(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		w.Header().Set("Allow", "GET")

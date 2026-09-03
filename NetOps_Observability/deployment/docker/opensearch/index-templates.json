@@ -617,7 +617,7 @@
       }
     },
     "netops-secfindings": {
-      "_comment": "P3-L1 security findings lane (SECURITY_FINDINGS_STORE_DECISION 2026-08-28). The durable, append-only findings store: one document per (native_id, scan_id) verdict, _id = sha2(native_id|scan_id) stamped by the router's security_identity transform, so a replay UPSERTS and every scan's verdict is retained for trend/drift while \"current state\" is a query-time collapse (latest-by-ts per native_id). Facet fields (severity/status/status_id/standards/control_id/evidence_class/source/scan_id/native_id/seam_*/resource.*) are KEYWORD because the CTEM funnel, the compliance-%-by-framework and the severity breakdown are all terms aggregations; the narrative fields (title/observed/intended/detail/remediation) are TEXT because the T8 UI does full-text search over them. status_id is keyword deliberately: it is a 1-5 OCSF enum that is only ever faceted, never range-queried, and OpenSearch coerces the wire integer to its string form. The lane carries BOTH shapes on purpose: the secbus EvidenceEvent wire fields (native_id, entity_id, attrs.*, evidence_refs) that the producer emits today, and the secfindings.Finding json names (resource.*, observed/intended/status_detail/remediation) so a future direct-Finding writer cannot land unmapped. dynamic:false is the F-05 field wall \u2014 with attrs and evidence_refs being producer-shaped objects, an undeclared (or dotted, the del(.label) gotcha) key stays in _source and can never grow the mapping or reject a doc. Retention rides the shared netops-retention ISM policy (OPENSEARCH_LOG_RETENTION_DAYS), like every other lane.",
+      "_comment": "P3-L1 security findings lane (SECURITY_FINDINGS_STORE_DECISION 2026-08-28). The durable, append-only findings store: one document per (native_id, scan_id) verdict, _id = sha2(native_id|scan_id) stamped by the router's security_identity transform, so a replay UPSERTS and every scan's verdict is retained for trend/drift while \"current state\" is a query-time collapse (latest-by-ts per native_id). Facet fields (severity/status/status_id/standards/control_id/evidence_class/source/scan_id/native_id/seam_*/resource.*) are KEYWORD because the CTEM funnel, the compliance-%-by-framework and the severity breakdown are all terms aggregations; the narrative fields (title/observed/intended/detail/remediation) are TEXT because the T8 UI does full-text search over them. status_id is keyword deliberately: it is a 1-5 OCSF enum that is only ever faceted, never range-queried, and OpenSearch coerces the wire integer to its string form. The lane carries BOTH shapes on purpose: the secbus EvidenceEvent wire fields (native_id, entity_id, attrs.*, evidence_refs) that the producer emits today, and the secfindings.Finding json names (resource.*, observed/intended/status_detail/remediation) so a future direct-Finding writer cannot land unmapped. dynamic:false is the F-05 field wall \u2014 with attrs and evidence_refs being producer-shaped objects, an undeclared (or dotted, the del(.label) gotcha) key stays in _source and can never grow the mapping or reject a doc. attrs.status_detail (the verdict REASON, on the wire since 2026-09-03) is declared as a KEYWORD with an analysed `text` sub-field, not as plain text like the top-level narrative fields: it is a short, producer-authored, largely canned reason (\"OS version not present in sysDescr\") whose primary use is EXACT — facet/filter every device unassessed for the same reason, the D-06 question — which a `text` mapping cannot answer, while the `.text` sub-field still gives the findings `q` a prose match; ignore_above 1024 chars sits above secbus.StatusDetailMax (512 runes + ellipsis) so a producer reason is always indexed and only a pathological direct-writer value is skipped, and keyword keeps it consistent with every other attrs.* facet. NOTE: index templates apply only to indices created AFTER they are registered, so already-rolled netops-secfindings-* indices keep the old mapping until they roll. Retention rides the shared netops-retention ISM policy (OPENSEARCH_LOG_RETENTION_DAYS), like every other lane.",
       "index_patterns": [
         "netops-secfindings-*"
       ],
@@ -876,6 +876,15 @@
                 },
                 "standards": {
                   "type": "keyword"
+                },
+                "status_detail": {
+                  "type": "keyword",
+                  "ignore_above": 1024,
+                  "fields": {
+                    "text": {
+                      "type": "text"
+                    }
+                  }
                 }
               }
             },

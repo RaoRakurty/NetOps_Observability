@@ -533,3 +533,98 @@ func TestHostTitleIsBounded(t *testing.T) {
 		t.Fatalf("title length = %d, want <= %d", len(title), maxHostTitle)
 	}
 }
+
+// ── D-12 on the phone route (QA run 2026-09-03) ─────────────────────────────
+//
+// The measured symptom was operational, not theoretical: one page-tier alert
+// was delivered during the engine-down drill and the operator never got an
+// all-clear, because vmalert's Alertmanager-v2 body carries no `status` field
+// and the resolve was classified as a repeat firing (then swallowed by the
+// trigger's own cool-down). This drives the real HTTP surface with the wire
+// shape vmalert actually sends.
+
+// vmalertV2 renders the captured vmalert body: no `status` key, resolution
+// signalled purely by endsAt. The host rig's clock is 2026-09-03T12:00:00Z.
+func vmalertV2(name, tier, endsAt, summary string) string {
+	return fmt.Sprintf(`[{"startsAt":"2026-09-03T11:45:00Z",`+
+		`"generatorURL":"http://vmalert:8880/vmalert/alert?group_id=42&alert_id=99",`+
+		`"endsAt":%q,"labels":{"alertname":%q,"severity":"critical","layer":"correlation","tier":%q},`+
+		`"annotations":{"summary":%q,"description":"detail line"}}]`,
+		endsAt, name, tier, summary)
+}
+
+func TestVmalertResolveReachesThePhoneAsAnAllClear(t *testing.T) {
+	r := newHostRig(t, 30*time.Minute, newFakePusher())
+
+	firing := vmalertV2("CorrelationConsumerDead", "page", "2026-09-03T12:04:00Z",
+		"correlation consumer group has zero members")
+	if w := r.post(t, firing, bearer); w.Code != http.StatusOK {
+		t.Fatalf("firing post: %d (%s)", w.Code, w.Body.String())
+	}
+	page := r.push.await(t, 1)[0]
+	if page.Priority != notify.NtfyPriorityHigh {
+		t.Fatalf("the firing leg must page: priority = %q", page.Priority)
+	}
+
+	resolve := vmalertV2("CorrelationConsumerDead", "page", "2026-09-03T11:58:00Z",
+		"correlation consumer group has zero members")
+	if w := r.post(t, resolve, bearer); w.Code != http.StatusOK {
+		t.Fatalf("resolve post: %d (%s)", w.Code, w.Body.String())
+	}
+	clear := r.push.await(t, 1)[0]
+	if clear.Priority != notify.NtfyPriorityLow {
+		t.Errorf("Priority = %q, want %q (an all-clear must not buzz like a page)",
+			clear.Priority, notify.NtfyPriorityLow)
+	}
+	if !strings.Contains(clear.Title, "RESOLVED") {
+		t.Errorf("the all-clear must say so on the lock screen: %q", clear.Title)
+	}
+	r.push.quiet(t)
+	txt := metricsText(r.mx)
+	for _, want := range []string{
+		`netops_alert_webhook_pushed_total{route="host_monitoring",tier="page"} 1`,
+		`netops_alert_webhook_pushed_total{route="host_monitoring",tier="resolved"} 1`,
+	} {
+		if !strings.Contains(txt, want) {
+			t.Errorf("missing %s in:\n%s", want, txt)
+		}
+	}
+}
+
+// A warning-tier resolution is still folded, not pushed — the tier ladder is
+// unchanged by the status derivation.
+func TestVmalertWarningResolveIsStillDigested(t *testing.T) {
+	r := newHostRig(t, 30*time.Minute, newFakePusher())
+	body := vmalertV2("VectorComponentErrors", "watch", "2026-09-03T11:58:00Z", "component errors cleared")
+	if w := r.post(t, body, bearer); w.Code != http.StatusOK {
+		t.Fatalf("status = %d", w.Code)
+	}
+	r.push.quiet(t)
+	if n := r.push.count(); n != 0 {
+		t.Fatalf("pushes = %d, want 0 — a warning resolution belongs in the digest", n)
+	}
+	if _, resolved := r.disp.counts(); resolved != 1 {
+		t.Error("the product dispatcher must still receive the resolution")
+	}
+}
+
+func TestStatusOfDerivation(t *testing.T) {
+	now := time.Date(2026, 9, 3, 12, 0, 0, 0, time.UTC)
+	r := &receiver{now: func() time.Time { return now }}
+	for _, tc := range []struct {
+		name, status, endsAt, want string
+	}{
+		{"explicit firing wins", "firing", "2026-09-03T11:00:00Z", statusFiring},
+		{"explicit resolved wins", "RESOLVED", "2026-09-03T23:00:00Z", statusResolved},
+		{"v2 future endsAt is firing", "", "2026-09-03T12:04:00Z", statusFiring},
+		{"v2 past endsAt is resolved", "", "2026-09-03T11:58:00Z", statusResolved},
+		{"v2 endsAt == now is resolved", "", "2026-09-03T12:00:00Z", statusResolved},
+		{"absent endsAt is firing", "", "", statusFiring},
+		{"unparseable endsAt is firing", "", "whenever", statusFiring},
+	} {
+		if got := r.statusOf(wireAlert{Status: tc.status, EndsAt: tc.endsAt}); got != tc.want {
+			t.Errorf("%s: statusOf(status=%q, endsAt=%q) = %q, want %q",
+				tc.name, tc.status, tc.endsAt, got, tc.want)
+		}
+	}
+}

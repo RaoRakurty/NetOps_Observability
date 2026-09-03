@@ -6,10 +6,11 @@ package alertwebhook
 // monitoring." There are two alert AUDIENCES and they are not the same people:
 //
 //   1. PLATFORM self-health — everything vmalert sends through this receiver
-//      (layers stack/host/clickhouse/platform, the four page conditions, the
-//      warning tier). This is the stack reporting on ITSELF, and it belongs on
-//      the same phone channel the external watchdog already uses
-//      (scripts/stack-watchdog.sh → ntfy). That is the route in this file.
+//      (layers stack/host/clickhouse/platform, the four page conditions listed
+//      at pageRuleCount below, the warning tier). This is the stack reporting
+//      on ITSELF, and it belongs on the same phone channel the external
+//      watchdog already uses (scripts/stack-watchdog.sh → ntfy). That is the
+//      route in this file.
 //   2. PRODUCT/tenant alerts — monitor rules, BGP watch, per-tenant security
 //      findings. Those keep the configured notify channels, including the
 //      refusal to reuse the watchdog topic (notify_config.go). Untouched.
@@ -117,9 +118,9 @@ const RouteHostMonitoring = "host_monitoring"
 // Push tiers. A CLOSED set — it is a metric label, and an open label set on a
 // counter is a cardinality bomb (§10).
 //
-//	tierPage     the four page-worthy conditions (label tier="page") → high
-//	tierWarning  every other firing alert                            → default
-//	tierResolved a resolution of either                              → low
+//	tierPage     a page-worthy condition (label tier="page") → high
+//	tierWarning  every other firing alert                    → default
+//	tierResolved a resolution of either                      → low
 //
 // The heartbeat is NOT a tier: it is never pushed at all (see handleAlert).
 const (
@@ -127,6 +128,32 @@ const (
 	tierWarning  = "warning"
 	tierResolved = "resolved"
 )
+
+// FOUR PAGE CONDITIONS, NINE RULES — and that is not a contradiction.
+//
+// The owner ruling (CLAUDE.md "Monitoring") is that page fires on exactly FOUR
+// conditions. `grep -c 'tier: page' src/config/rules-scale-slo.yaml` returns
+// NINE, because one condition is implemented by several per-engine/per-lane
+// rules whose first response differs — the rules are the same condition seen
+// from a different vantage point, not extra conditions:
+//
+//	(1) an engine consumer is not consuming   — 6 rules
+//	      CorrelationConsumerDead    broker view: the correlation group has zero members
+//	      CorrelationLagGrowing      joined but draining nothing (the stuck shape)
+//	      RouterConsumerDead         the same pair `by (consumergroup)` over the
+//	      RouterConsumerLagGrowing     netops-router-* lanes, so a new lane is covered
+//	      CorrConsumerNotRunning     the engine's OWN corr_consumer_running gauge
+//	      CorrConsumerRestartLoop    a supervision loop that never stays up
+//	(2) ingest silent when it should not be    — 1 rule: IngestPipelineSilent
+//	(3) storage refusing writes                — 1 rule: ClickHouseWritesRejected
+//	(4) the alerting heartbeat missing         — 1 rule: AlertDeliveryBroken
+//
+// The page tier lives ENTIRELY in rules-scale-slo.yaml (vmalert-only, so it
+// keeps firing when the api is the thing that is down); rules.yaml carries no
+// `tier: page` rule at all. Both claims are pinned mechanically by
+// TestPageTierRuleCountMatchesTheComment in pagetier_test.go, so this comment
+// fails the build rather than rotting the next time a rule is added.
+const pageRuleCount = 9
 
 // hostQueueSize bounds the pending pushes. Beyond it, enqueue fails LOUDLY
 // (counted + logged) rather than blocking vmalert's request or growing forever.
@@ -228,7 +255,8 @@ func hostDigested(tierLabel string) bool {
 
 // hostTier classifies an alert for this route. Only the server-controlled
 // `tier` label promotes to page — NOT severity: the rule files carry ~140
-// critical/warning rules and only four conditions are page-worthy (see
+// critical/warning rules and only four conditions are page-worthy, carried by
+// the pageRuleCount rules enumerated above (see also
 // docs/runbooks/engine-liveness-matrix.md). Promoting on severity would page
 // for all of them, and a pager that cries wolf gets muted.
 func hostTier(status, tierLabel string) string {

@@ -20,6 +20,7 @@ from __future__ import annotations
 import asyncio
 import dataclasses
 import math
+import uuid
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -268,3 +269,92 @@ def test_empty_object_emits_no_child_rows(monkeypatch):
     assert ch.inserts_for("netops.corr_edges") == []
     assert ch.inserts_for(main.CORR_PATH_EDGES_TABLE) == []
     assert ch.rows_for("netops.corr_evidence") == snap.to_evidence_rows(3)
+
+
+# ── edge-evidence provenance (QA D-01) ──────────────────────────────────────
+#
+# `_edge_evidence_row` hardcoded `signal_id` to the nil UUID, so every
+# `corr_evidence` -> `corr_signals` join returned nothing and the security
+# Exposure Story LIST could never return a row. The row now carries a REAL,
+# deterministic representative signal id from one of the edge's endpoint nodes.
+# These live here because this file owns the evidence-row emission contract:
+# the id must be real AND the byte-for-byte paging identity above must survive.
+
+NIL_UUID = str(uuid.UUID(int=0))
+
+
+def _edge_rows(snap, version=7):
+    return [r for r in snap.to_evidence_rows(version) if r["subject_kind"] == "edge"]
+
+
+def test_edge_evidence_carries_a_real_endpoint_signal_id():
+    snap = _fixture_snapshot()
+    by_key = {n.key: n for n in snap.nodes}
+    rows = _edge_rows(snap)
+    assert rows, "the fixture object must have at least one edge"
+    for e, row in zip(snap.edges, rows):
+        assert row["signal_id"] != NIL_UUID
+        # it belongs to ONE of this edge's endpoint nodes — never a stranger
+        owned = {str(s.signal_id)
+                 for k in (e.from_node, e.to_node)
+                 for s in (by_key[k].signals if k in by_key else ())}
+        assert row["signal_id"] in owned
+        # and specifically the earliest signal of from_node (the stated rule)
+        assert row["signal_id"] == str(by_key[e.from_node].signals[0].signal_id)
+
+
+def test_edge_evidence_signal_id_is_deterministic_across_builds():
+    a, b = _fixture_snapshot(), _fixture_snapshot()
+    assert a.content_hash() == b.content_hash()          # same object, twice
+    assert a.to_evidence_rows(7) == b.to_evidence_rows(7)
+    ids = [r["signal_id"] for r in _edge_rows(a)]
+    assert ids == [r["signal_id"] for r in _edge_rows(b)]
+    assert NIL_UUID not in ids
+    # stable across repeated calls on ONE snapshot too (the node_index cache
+    # must not make the second call differ from the first)
+    assert a.to_evidence_rows(7) == a.to_evidence_rows(7)
+
+
+def test_node_index_is_cached_and_never_a_dataclass_field():
+    snap = _fixture_snapshot()
+    first = snap.node_index()
+    assert snap.node_index() is first                    # cached on the instance
+    assert first == {n.key: n for n in snap.nodes}
+    # NOT a field: it must not enter __eq__/__hash__/replace(), and a copy
+    # rebuilds rather than inheriting a stale index.
+    assert "_node_index_c" not in {f.name for f in dataclasses.fields(snap)}
+    copy = dataclasses.replace(snap, edges=snap.edges)
+    assert copy.node_index() is not first
+    assert copy.node_index() == first
+
+
+def test_an_unresolvable_endpoint_falls_back_instead_of_raising():
+    """A synthetic/carried edge whose endpoint node aged out of the window must
+    still persist — it degrades to the nil UUID, it does not crash."""
+    snap = _scaled(_fixture_snapshot(), 3)               # nodes d0..d3 do not exist
+    rows = _edge_rows(snap)
+    assert len(rows) == 3
+    assert {r["signal_id"] for r in rows} == {NIL_UUID}
+    # the identity rows on the same object still carry their real ids
+    ident = [r for r in snap.to_evidence_rows(7) if r["subject_kind"] == "app"]
+    assert ident and all(r["signal_id"] != NIL_UUID for r in ident)
+    # a node present but holding no signals also falls back, never raises
+    empty = dataclasses.replace(
+        snap,
+        nodes=tuple(dataclasses.replace(n, signals=()) for n in snap.nodes),
+        edges=snap.edges[:1] + (Edge(
+            from_node=snap.nodes[0].key, to_node=snap.nodes[1].key,
+            grounding=Grounding("topo", "shared:tok", None),
+            weight=0.5, w_temporal=0.4, w_topo=0.3, w_reinforce=0.2,
+            direction_conf=0.0, direction_basis="none"),))
+    assert _edge_rows(empty)[-1]["signal_id"] == NIL_UUID
+
+
+@pytest.mark.parametrize("page_size", [1, 2, 5, 999999])
+def test_paging_identity_holds_for_real_signal_ids(page_size):
+    """The byte-for-byte paging contract on an object whose edge rows carry
+    REAL ids (the scaled fixture above only exercises the fallback)."""
+    snap = _fixture_snapshot()
+    assert _reassemble(snap.evidence_row_page, snap.evidence_row_count(),
+                       page_size) == snap.to_evidence_rows(7)
+    assert NIL_UUID not in {r["signal_id"] for r in _edge_rows(snap)}

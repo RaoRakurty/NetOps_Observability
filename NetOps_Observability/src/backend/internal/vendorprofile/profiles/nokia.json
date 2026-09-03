@@ -2,7 +2,7 @@
   "schema_version": 1,
   "vendor": "nokia",
   "display_name": "Nokia",
-  "notes": "SR OS is identified from the TiMOS sysDescr; SR Linux is a gNMI-native platform whose identity does not come from sysDescr, so it declares NO os_parse (an unconditional default would mislabel every SR OS box as SR Linux). Nokia ships TWO CLIs, so config capture declares a sibling dialect: `nokia` is SR OS (admin display-config, TiMOS classic CLI) and `srlinux` is SR Linux (info from running flat). SR Linux pager_off_cmds and prompt_regex stay EMPTY, but the reason has changed from unestablished to VERIFIED (2026-09-02, lab spine1 172.40.40.11, SR Linux v26.3.2): the capture path is one non-interactive SSH exec, which SR Linux answers with no pager and no prompt echo at all, so there is nothing to turn off and no prompt to match. SR OS remains doc_claimed. The srlinux profile's platform_rank moved 31 \u2192 29 (ahead of sros at 30) to fix a real misresolution: the label \"Nokia SR Linux\" contains \"nokia\", so the broader sros row was claiming it and every SR Linux box was being described, bound and advisory-keyed as an SR OS router. The more specific row must be tested first.",
+  "notes": "SR OS is identified from the TiMOS sysDescr. SR Linux IS identified from a sysDescr too, and the earlier claim here that it \"is a gNMI-native platform whose identity does not come from sysDescr, so it declares NO os_parse\" was WRONG: it is corrected below with the live string. Nokia ships TWO CLIs, so config capture declares a sibling dialect: `nokia` is SR OS (admin display-config, TiMOS classic CLI) and `srlinux` is SR Linux (info from running flat). SR Linux pager_off_cmds and prompt_regex stay EMPTY, but the reason has changed from unestablished to VERIFIED (2026-09-02, lab spine1 172.40.40.11, SR Linux v26.3.2): the capture path is one non-interactive SSH exec, which SR Linux answers with no pager and no prompt echo at all, so there is nothing to turn off and no prompt to match. SR OS remains doc_claimed. The srlinux profile's platform_rank moved 31 \u2192 29 (ahead of sros at 30) to fix a real misresolution: the label \"Nokia SR Linux\" contains \"nokia\", so the broader sros row was claiming it and every SR Linux box was being described, bound and advisory-keyed as an SR OS router. The more specific row must be tested first. OS IDENTITY / os_parse (LIVE-VALIDATED 2026-09-03, tracker D-06). The srlinux profile now declares os_parse (product srlinux, rank 5 \u2014 ahead of the sros row at rank 10, which is the vendor's UNCONDITIONAL default and therefore claimed every SR Linux box and gave it the product `sros` with an EMPTY version; internal/vuln.versionMatches correctly refuses to match an empty version, so every SR Linux device took the advisory-unassessed branch forever). The vendor os_version_pattern gained the `SRLinux-v` alternative beside `TiMOS-<X>-`; the pattern is VENDOR-level (one regexp per vendor document, see registry.build), so the two OS families share one capture group. Evidence: a read-only gNMI Get of /system/information on lab spine1 172.40.40.11 AND spine2 172.40.40.12 returns the byte-identical description leaf \u2014 the leaf SR Linux serves as SNMP sysDescr.0 \u2014 `SRLinux-v26.3.2-426-g2b38957bbca 7220 IXR-D3L Copyright (c) 2000-2026 Nokia. Kernel 5.15.0-186-generic #196-Ubuntu SMP ...`, with version `v26.3.2-426-g2b38957bbca`. The pattern captures `26.3.2` from it (the capture stops at the first hyphen, so the build suffix is not carried into a CVE range comparison). RESIDUAL, and it is NOT in this file: on the reference lab the two spines are MANUAL device rows carrying os=\"SR Linux\" and no sysDescr at all (data/api/snmp_profiles.json is empty and the platform ACL does not admit the collector host), and vulns_http.go assesses collectors.ParseOS(d.Vendor, d.OS). Against that truncated label this profile now resolves the PRODUCT correctly (srlinux, via the `sr linux` marker) but there is still no version to parse, so `/api/vulns` will keep reporting these two devices unassessed until discovery writes the description/version leaf onto the device row. That is a collector gap, reported separately; the registry side of D-06 is closed. CLI SHOW GRAMMAR (tracker D-02/D-2, 2026-09-03). srlinux declares NO cli binding. It previously declared dialect `nokia` / display \"Nokia SR OS\", which is the SAME mistake config_capture's sibling dialect exists to prevent: SR Linux does not speak the TiMOS show grammar, and the lab proved it \u2014 20/20 protocol-diagnostic commands came back `Parsing error: Unknown token 'router'` (the device's own sr_cli reply lists its actual top-level tokens: acl, arpnd, interface, lag, network-instance, platform, qos, system, tunnel, tunnel-interface, version), and the TAC bundle header read \"Vendor: Nokia SR OS\" for a \"Platform: nokia SR Linux\". An EMPTY cli block is the honest value the schema defines: CLIDialectForPlatform returns ok=false, protocoldiag.VendorFromPlatform returns VendorUnknown, and its renderer records the fallback it used in RenderedVendor instead of silently claiming a dialect. The loader requires cli.dialect and cli.display to be set TOGETHER, so no display can be carried here; the operator-facing name for this platform is display_name (\"Nokia SR Linux\"), reachable via ProfileForPlatformText. Authoring a REAL srlinux show dialect is the follow-up feature and belongs in internal/protocoldiag, not here. THREAT LOG COVERAGE (tracker D-02). srlinux now binds all eight internal/threatlane log-* rules. Before this, nokia bound none, and the rules themselves were IOS/NX-OS-phrased only: the 2026-09-03 security-ops run injected two syslog lines describing the SAME rogue-account event at spine1 and the IOS-phrased one fired two rules while the SR Linux-phrased one (`User 'admin' committed candidate: set /system aaa authentication user backdoor password ...`) fired NONE. The catalog rules carry an SR Linux clause each now; the account-creation and config-commit clauses are LIVE-VALIDATED against those two captured lines, the remainder are doc_claimed against documentation.nokia.com/srlinux 26-3 and are labelled as such in internal/threatlane/catalog.go. mnemonic_prefixes carries sr_cli and sr_aaa_mgr: SR Linux emits no Cisco-style %FACILITY-SEV-MNEMONIC tag at all (internal/seclane leaves LogEvent.Mnemonic empty for it and the rules match on message text), so the honest tag is the RFC5424 APP-NAME, and those two are the processes observed carrying config-commit and AAA events on the lab; detection.syslog_appnames records the wider observed set. sros is deliberately left UNASSESSED (\"threat\": {}): no SR OS device exists to validate against and its classic-CLI phrasing differs from both dialects authored here, so claiming coverage would be a false claim.",
   "detection": {
     "sysobjectid_prefixes": [
       "1.3.6.1.4.1.6527"
@@ -13,7 +13,7 @@
       "sr os"
     ],
     "sysdescr_rank": 60,
-    "os_version_pattern": "(?i)\\bTiMOS-[A-Z]+-([0-9][0-9A-Za-z.]*)"
+    "os_version_pattern": "(?i)\\b(?:TiMOS-[A-Z]+-|SRLinux-v)([0-9][0-9A-Za-z.]*)"
   },
   "dialect": {
     "vrf_term": "VPRN",
@@ -139,11 +139,26 @@
       ],
       "fidelity": "live_validated",
       "detection": {
+        "os_parse": {
+          "product": "srlinux",
+          "rank": 5,
+          "sysdescr_contains_any": [
+            "srlinux",
+            "sr linux"
+          ]
+        },
         "platform_contains": [
           "sr linux",
           "srlinux"
         ],
-        "platform_rank": 29
+        "platform_rank": 29,
+        "syslog_appnames": [
+          "sr_cli",
+          "sr_aaa_mgr",
+          "sr_grpc_server",
+          "sr_license_mgr",
+          "sr_xdp_cpm"
+        ]
       },
       "capture": {
         "running_config_cmd": "info from running flat",
@@ -161,11 +176,23 @@
         "binding": "srlinux",
         "display": "Nokia SR Linux"
       },
-      "cli": {
-        "dialect": "nokia",
-        "display": "Nokia SR OS"
-      },
-      "threat": {}
+      "cli": {},
+      "threat": {
+        "log_rule_ids": [
+          "log-logging-disabled",
+          "log-buffer-cleared",
+          "log-offhours-config-change",
+          "log-new-local-user",
+          "log-privilege-escalation",
+          "log-gre-tunnel",
+          "log-aaa-tampering",
+          "log-boot-image-change"
+        ],
+        "mnemonic_prefixes": [
+          "sr_cli",
+          "sr_aaa_mgr"
+        ]
+      }
     }
   ]
 }
