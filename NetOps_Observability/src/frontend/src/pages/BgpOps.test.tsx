@@ -104,6 +104,10 @@ const bgpUpdates = vi.fn();
 const bgpWhois = vi.fn();
 const bgpWatchAdd = vi.fn();
 const bgpWatchDelete = vi.fn();
+// Tracker #10: the page also loads the alert history, independently of the
+// watchlist. It is stubbed here so this file keeps testing the PAGE; the
+// alerting contracts live in src/pages/bgp/alertPanels.test.tsx.
+const bgpAlerts = vi.fn();
 
 vi.mock("../services/api", () => ({
   api: {
@@ -113,6 +117,7 @@ vi.mock("../services/api", () => ({
     bgpWhois: (...a: unknown[]) => bgpWhois(...a),
     bgpWatchAdd: (...a: unknown[]) => bgpWatchAdd(...a),
     bgpWatchDelete: (...a: unknown[]) => bgpWatchDelete(...a),
+    bgpAlerts: (...a: unknown[]) => bgpAlerts(...a),
   },
 }));
 
@@ -125,6 +130,9 @@ vi.mock("./bgp/AspaCard", () => ({ default: () => <div data-testid="aspa-card" /
 vi.mock("./bgp/GeofeedPanel", () => ({ default: () => <div data-testid="geofeed-panel" /> }));
 vi.mock("./bgp/LiveFeedPanel", () => ({ default: () => <div data-testid="live-feed-panel" /> }));
 vi.mock("./bgp/AsPathGraphPanel", () => ({ default: () => <div data-testid="aspath-panel" /> }));
+vi.mock("./bgp/PrefixesPanel", () => ({ default: () => <div data-testid="prefixes-panel" /> }));
+vi.mock("./bgp/PeersPanel", () => ({ default: () => <div data-testid="peers-panel" /> }));
+vi.mock("./bgp/BogonsPanel", () => ({ default: () => <div data-testid="bogons-panel" /> }));
 
 function deferred<T>() {
   let resolve!: (v: T) => void;
@@ -143,8 +151,9 @@ function submitQuery(value: string) {
 }
 
 beforeEach(() => {
-  for (const m of [bgpWatchlist, bgpStatus, bgpUpdates, bgpWhois, bgpWatchAdd, bgpWatchDelete]) m.mockReset();
+  for (const m of [bgpWatchlist, bgpStatus, bgpUpdates, bgpWhois, bgpWatchAdd, bgpWatchDelete, bgpAlerts]) m.mockReset();
   bgpWatchlist.mockResolvedValue({ watchlist: [] });
+  bgpAlerts.mockResolvedValue({ alerts: [], incidents: [], classes: [], status: { enabled: false } });
   bgpUpdates.mockResolvedValue({ resource: "x", kind: "asn", updates: { updates: [] } });
   bgpWhois.mockResolvedValue({ rdap: null });
 });

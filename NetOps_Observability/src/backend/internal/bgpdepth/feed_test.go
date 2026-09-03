@@ -370,3 +370,37 @@ func TestJitterStaysInBand(t *testing.T) {
 		}
 	}
 }
+
+// TestPeekReadsWithoutStartingOrRefreshingAPoller pins the property Peek exists
+// for: a background consumer must not be able to keep a poller alive.
+func TestPeekReadsWithoutStartingOrRefreshingAPoller(t *testing.T) {
+	rt := NewRuntime(newFake(), Options{Enabled: true, Now: fixedNow(), Rand: func() float64 { return 0.5 }})
+	if got := rt.Peek("acme", 10); len(got) != 0 {
+		t.Fatalf("a tenant with no ring must Peek empty, got %d", len(got))
+	}
+	if len(rt.pollers) != 0 || len(rt.rings) != 0 {
+		t.Fatal("Peek must not create a ring or start a poller")
+	}
+	// Seed a ring directly and read it back newest-first.
+	r := &ring{}
+	rt.rings["acme"] = r
+	for i := 0; i < 5; i++ {
+		r.append(Update{Prefix: "10.0.0.0/8", Peer: "p"})
+	}
+	got := rt.Peek("acme", 3)
+	if len(got) != 3 {
+		t.Fatalf("Peek(3) returned %d", len(got))
+	}
+	if got[0].Seq != 4 || got[2].Seq != 2 {
+		t.Fatalf("Peek must return newest-first, got seqs %d..%d", got[0].Seq, got[2].Seq)
+	}
+	// Scopeless / wildcard reads return nothing, never everything.
+	for _, bad := range []string{"", "*", "  "} {
+		if len(rt.Peek(bad, 10)) != 0 {
+			t.Fatalf("Peek(%q) must return nothing", bad)
+		}
+	}
+	if len(rt.Peek("globex", 10)) != 0 {
+		t.Fatal("Peek must not cross tenants")
+	}
+}

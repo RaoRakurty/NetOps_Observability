@@ -306,6 +306,40 @@ func (rt *Runtime) Page(ctx context.Context, tenant string, resources []string, 
 	return FeedPage{Updates: ups, Next: next, Gap: gap, Status: st}, nil
 }
 
+// Peek returns up to limit of ONE tenant's buffered updates, newest first,
+// WITHOUT starting a poller and WITHOUT refreshing its idle timer. It exists so
+// a background consumer (the BGP watchlist evaluator's bogon check) can read
+// what the feed already buffered without silently keeping a poller alive that
+// no operator is watching — Page is the READER's path and deliberately does
+// refresh the timer; this one is not a read by a person.
+//
+// A tenant with no ring returns an empty slice, never another tenant's rows.
+func (rt *Runtime) Peek(tenant string, limit int) []Update {
+	tenant = strings.ToLower(strings.TrimSpace(tenant))
+	if tenant == "" || tenant == "*" || limit <= 0 {
+		return nil
+	}
+	if limit > FeedPageMax {
+		limit = FeedPageMax
+	}
+	rt.mu.Lock()
+	r := rt.rings[tenant]
+	rt.mu.Unlock()
+	if r == nil {
+		return nil
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	out := make([]Update, 0, limit)
+	for s := r.next; s > 0 && len(out) < limit; s-- {
+		if r.next > RingSize && s <= r.next-RingSize {
+			break // fell out of the window
+		}
+		out = append(out, r.buf[(s-1)%RingSize])
+	}
+	return out
+}
+
 // ensure starts or refreshes the tenant's poller. Returns the ring and whether
 // the global cap prevented polling.
 func (rt *Runtime) ensure(tenant string, res []string) (*ring, bool) {

@@ -2121,6 +2121,190 @@ export type BgpFeedResp = {
   metrics?: Record<string, number>;
 };
 
+// ---- BGP alerting · incident classes · bogons (tracker #1/#5/#10) ----------
+// Wire shapes of internal/bgpwatch. Two honesty rules run through all of them
+// and the UI must preserve both:
+//   * "unknown" is NOT "none". An unmeasured prefix is an ABSENT measurement,
+//     never a clean one, and must never render green.
+//   * with FEATURE_BGP_ALERTS off, `status.enabled` is false and `status.note`
+//     explains it — an empty alert list is "not evaluated", not "all clear".
+
+/** The closed incident vocabulary the API promises. */
+export type BgpIncidentClass =
+  | "none" | "unknown" | "visibility_loss" | "origin_change"
+  | "rpki_invalid" | "route_leak" | "bogon";
+
+export type BgpBogonEntry = { block: string; reason: string; rfc?: string; why: string };
+
+/** WHY a class was asserted, in the operator's terms. `vantages` are the
+ *  collector peers that AGREE — the corroboration a path-derived verdict needs. */
+export type BgpIncidentEvidence = {
+  vantages?: string[];
+  paths?: number[][];
+  detail: string;
+  origins?: Record<string, number>;
+  bogon?: BgpBogonEntry;
+  peers_seeing?: number;
+  peers_total?: number;
+};
+
+export type BgpIncident = {
+  prefix: string;
+  class: BgpIncidentClass;
+  also?: BgpIncidentClass[];
+  severity: string;
+  summary: string;
+  evidence: BgpIncidentEvidence;
+  /** true when the origin baseline was LEARNED rather than declared — weaker
+   *  evidence, and the UI has to say so. */
+  learned_origin?: boolean;
+  /** A class that ALMOST fired but lacked corroboration. Shown, never hidden. */
+  corroboration_shortfall?: string;
+  first_seen: string;
+  last_seen: string;
+  /** When the CURRENT class started (resets when the class changes). */
+  since: string;
+  error?: string;
+};
+
+export type BgpAlert = {
+  id: string;
+  rule: string;
+  severity: string;
+  resource: string;
+  class: BgpIncidentClass;
+  summary: string;
+  detail?: string;
+  labels?: Record<string, string>;
+  fired_at: string;
+  resolved?: boolean;
+  resolved_at?: string;
+};
+
+export type BgpAlertStatus = {
+  enabled: boolean;
+  interval?: string;
+  cooldown?: string;
+  evidence_topic?: string;
+  last_run?: string;
+  runs?: number;
+  last_error?: string;
+  peer_rule_enabled?: boolean;
+  notify_wired?: boolean;
+  evidence_wired?: boolean;
+  note?: string;
+};
+
+export type BgpAlertsResp = {
+  alerts: BgpAlert[];
+  incidents: BgpIncident[];
+  classes: BgpIncidentClass[];
+  status: BgpAlertStatus;
+  metrics?: Record<string, number>;
+};
+
+/** ASNs travel as STRINGS ("AS64500") so the operator's notation survives the
+ *  round trip; the backend parses every one at its boundary. */
+export type BgpAlertPolicyConfig = {
+  expected_origins?: string[];
+  upstreams?: string[];
+  min_visibility?: number;
+  min_vantages?: number;
+};
+export type BgpAlertPolicy = {
+  default: BgpAlertPolicyConfig;
+  prefixes?: Record<string, BgpAlertPolicyConfig>;
+};
+export type BgpAlertConfigResp = {
+  config: BgpAlertPolicy;
+  defaults: { min_visibility: number; min_vantages: number; max_prefixes: number; max_asns_per_set: number };
+  updated_by?: string;
+  updated_at?: string;
+  note?: string;
+};
+
+export type BgpBogonSighting = {
+  prefix: string;
+  entry: BgpBogonEntry;
+  source: string;
+  peer?: string;
+  origin?: number;
+  first_seen: string;
+  last_seen: string;
+  count: number;
+};
+export type BgpBogonFeedStatus = {
+  enabled: boolean;
+  url?: string;
+  entries: number;
+  fetched_at?: string;
+  error?: string;
+  note?: string;
+};
+export type BgpBogonsResp = {
+  sightings: BgpBogonSighting[];
+  set: { source: string; date: string; blocks: number; note: string };
+  feed: BgpBogonFeedStatus;
+  note?: string;
+};
+
+// ---- BMP receiver (internal/bmp) — the Peers tab's first source ------------
+// The receiver REPORTS ONLY WHAT A ROUTER SENT IT. `coverage` is the honesty
+// block: with no session up, an empty list means "nothing is exporting to us",
+// never "your peers are fine".
+export type BgpBmpPeer = {
+  address: string;
+  as: number;
+  bgp_id?: string;
+  rib: string;
+  /** "up" | "down" | "unknown" — unknown means no Peer Up/Down was ever seen,
+   *  so an assumed state is never shown as a measured one. */
+  state: string;
+  changed_at?: string;
+  down_reason?: string;
+  announced_prefixes: number;
+  withdrawn_prefixes: number;
+};
+export type BgpBmpSession = {
+  id: string;
+  device_id: string;
+  remote_addr: string;
+  router?: string;
+  router_descr?: string;
+  state: string; // "up" | "closed"
+  opened_at: string;
+  closed_at?: string;
+  close_reason?: string;
+  peers: BgpBmpPeer[];
+  peers_partial: boolean;
+  messages: Record<string, number>;
+  updates_held: number;
+  updates_dropped: number;
+  parse_errors: number;
+  unsupported_elements: number;
+};
+export type BgpBmpCoverage = {
+  receiver_enabled: boolean;
+  sessions_up: number;
+  complete: boolean;
+  notes: string[];
+};
+export type BgpBmpSessionsResp = {
+  sessions: BgpBmpSession[];
+  count: number;
+  coverage: BgpBmpCoverage;
+};
+
+/** The watchlist response carries the incident class per watched prefix, so the
+ *  Prefixes view and the pager read the same verdict. `incidents_note` is the
+ *  honest stand-in when the evaluator is off. */
+export type BgpWatchlistResp = {
+  watchlist: BgpWatchEntry[];
+  incidents?: Record<string, BgpIncident>;
+  incidents_note?: string;
+  incidents_status?: BgpAlertStatus;
+};
+
 // ---- Telemetry coverage / parser stats (parser programme A6) ---------------
 // Three endpoints, exactly as contracted — nothing invented beyond them.
 //   GET  /api/admin/parser/stats                          (platform admin only)
@@ -2764,7 +2948,7 @@ export interface VrfInterfacesResponse {
 
 export const api = {
   // ---- BGP Operations (item 10) ----
-  bgpWatchlist: () => request<{ watchlist: BgpWatchEntry[] }>("/api/bgp/watchlist"),
+  bgpWatchlist: () => request<BgpWatchlistResp>("/api/bgp/watchlist"),
   bgpWatchAdd: (resource: string, note = "") =>
     request<{ ok: boolean; resource: string; kind: string }>("/api/bgp/watchlist", {
       method: "POST", body: JSON.stringify({ resource, note }),
@@ -2790,6 +2974,20 @@ export const api = {
   /** `since` is the cursor from the previous page's `next`. */
   bgpFeed: (since = 0, limit = 200) =>
     request<BgpFeedResp>(`/api/bgp/feed?since=${since}&limit=${limit}`),
+  // ---- BGP alerting · incident classes · bogons (tracker #1/#5/#10) ----
+  bgpAlerts: (limit = 100) =>
+    request<BgpAlertsResp>(`/api/bgp/alerts?limit=${limit}`),
+  bgpAlertConfig: () => request<BgpAlertConfigResp>("/api/bgp/alerts/config"),
+  setBgpAlertConfig: (config: BgpAlertPolicy) =>
+    request<{ ok: boolean; config: BgpAlertPolicy }>("/api/bgp/alerts/config", {
+      method: "PUT",
+      body: JSON.stringify(config),
+    }),
+  bgpBogons: (limit = 100) =>
+    request<BgpBogonsResp>(`/api/bgp/bogons?limit=${limit}`),
+  /** BMP sessions (FEATURE_BMP). A 404 means the receiver is not running — the
+   *  Peers tab renders that as its own state, never as "no peer is down". */
+  bgpBmpSessions: () => request<BgpBmpSessionsResp>("/api/bgp/bmp/sessions"),
 
   // ---- tenant display preferences (Wave 4 #11: time display, per-tenant) ----
   getDisplaySettings: () =>
@@ -3529,10 +3727,19 @@ export const api = {
   // Slash-command registry (the "/" menu) — single source of truth on the server.
   aiCommands: () => request<{ commands: AiCommand[] }>("/api/ai/commands"),
   // Answer feedback (thumbs up/down) — privacy-safe (rating + intent only). 204.
-  aiFeedback: (rating: "up" | "down", intent?: string, conversationId?: string) =>
+  // `answerId` (AiAnswer.answer_id) names the answer being judged, so the rating
+  // lands on exactly that concluded investigation instead of the server's
+  // "most recent conclusion" fallback. An absent OR empty id is omitted from the
+  // body entirely — "" is not an id and must never be sent as one.
+  aiFeedback: (rating: "up" | "down", intent?: string, conversationId?: string, answerId?: string) =>
     request<void>("/api/ai/feedback", {
       method: "POST",
-      body: JSON.stringify({ rating, intent, conversation_id: conversationId }),
+      body: JSON.stringify({
+        rating,
+        intent,
+        conversation_id: conversationId,
+        ...(answerId ? { answer_id: answerId } : {}),
+      }),
     }),
   // (Re)issue the embedded-console gate cookie for the current session so a raw
   // iframe (/netbox, /search) carries a fresh, correctly-pathed cookie. 204.
@@ -5764,6 +5971,12 @@ export type AiAnswer = {
   module?: AiModuleHealth;
   navigation?: AiNavEntry[];
   citations: AiCitation[];
+  // IRIS Phase B — the id stamped on THIS answer. Optional: it is present only
+  // when the answer concluded an investigation that can be remembered. Send it
+  // back on POST /api/ai/feedback so the rating judges exactly this answer; a
+  // backend that does not stamp one leaves the server to fall back to the
+  // principal's most recent conclusion.
+  answer_id?: string;
   // IRIS Phase A — the answering skill's identity. Optional: a backend that
   // does not send it renders no skill chip (never an invented one).
   skill?: AiSkill;

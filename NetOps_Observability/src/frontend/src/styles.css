@@ -6014,3 +6014,23 @@ button.cc-kpi-btn.on::after { content: "filtered"; display: block; margin-top: 5
 .igp-tick[data-state="down"] { color: var(--bad, #dc2626); }
 .igp-tick[data-state="unknown"] { color: var(--muted); }
 .ds-table td[data-tone="bad"] { color: var(--bad, #dc2626); }
+
+/* ── Shell error boundary (components/ErrorBoundary.tsx) ─────────────────────
+   The panel an operator sees instead of a white screen when a route throws.
+   Instrument-panel voice, not an alarm: bordered card, warn-toned rule, the
+   report collapsed until asked for. Tokens only — theme-safe in light/dark. */
+.eb-panel {
+  margin: var(--sp-4, 20px) auto; max-width: 760px; padding: 18px 20px;
+  border: 1px solid var(--border); border-left: 4px solid var(--warn);
+  border-radius: var(--r-1, 10px); background: var(--surface);
+}
+.eb-title { margin: 0 0 6px; font-size: var(--fs-h3, 1.05rem); font-weight: 650; color: var(--fg); }
+.eb-body { margin: 0 0 14px; color: var(--muted); font-size: 13px; line-height: 1.5; max-width: 62ch; }
+.eb-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }
+.eb-report > summary { cursor: pointer; color: var(--muted); font-size: 12px; }
+.eb-report-text {
+  margin: 8px 0 0; padding: 10px 12px; white-space: pre-wrap; word-break: break-word;
+  border: 1px solid var(--border); border-radius: var(--r-1, 8px);
+  background: var(--bg); color: var(--fg); font-size: 12px; line-height: 1.45;
+  font-family: var(--font-mono, ui-monospace, "IBM Plex Mono", monospace);
+}

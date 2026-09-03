@@ -11,7 +11,8 @@
 
 import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  api, type BgpStatusResp, type BgpUpdatesResp, type BgpWatchEntry,
+  api, type BgpAlert, type BgpAlertStatus, type BgpIncident,
+  type BgpStatusResp, type BgpUpdatesResp, type BgpWatchEntry,
 } from "../services/api";
 import { NocHeader, Chip } from "../components/noc";
 import Icon from "../components/Icon";
@@ -24,6 +25,16 @@ const AspaCard = lazy(() => import("./bgp/AspaCard"));
 const GeofeedPanel = lazy(() => import("./bgp/GeofeedPanel"));
 const LiveFeedPanel = lazy(() => import("./bgp/LiveFeedPanel"));
 const AsPathGraphPanel = lazy(() => import("./bgp/AsPathGraphPanel"));
+// Tracker #1/#4/#5: the Prefixes (watchlist + incident class), Peers and Bogons
+// tabs. Lazy for the same reason as the graph — none of them rides in this
+// route's first chunk.
+const PrefixesPanel = lazy(() => import("./bgp/PrefixesPanel"));
+const PeersPanel = lazy(() => import("./bgp/PeersPanel"));
+const BogonsPanel = lazy(() => import("./bgp/BogonsPanel"));
+
+/** The page's three views. "Prefixes" IS the watchlist view — there is no
+ *  second prefix list anywhere. */
+type BgpTab = "prefixes" | "peers" | "bogons";
 
 /** A panel that has not loaded its chunk yet says so — never an empty gap. */
 function PanelFallback({ label }: { label: string }) {
@@ -123,7 +134,12 @@ export function rdapContacts(rdap: unknown): { name: string; roles: string[] }[]
 const panelCss: React.CSSProperties = { marginTop: 12 };
 
 export default function BgpOps() {
+  const [tab, setTab] = useState<BgpTab>("prefixes");
   const [watch, setWatch] = useState<BgpWatchEntry[]>([]);
+  const [incidents, setIncidents] = useState<Record<string, BgpIncident>>({});
+  const [incidentsNote, setIncidentsNote] = useState<string | undefined>();
+  const [alerts, setAlerts] = useState<BgpAlert[]>([]);
+  const [alertStatus, setAlertStatus] = useState<BgpAlertStatus | undefined>();
   const [query, setQuery] = useState("");
   const [active, setActive] = useState("");
   const [status, setStatus] = useState<BgpStatusResp | null>(null);
@@ -133,7 +149,20 @@ export default function BgpOps() {
   const [err, setErr] = useState("");
 
   const loadWatch = useCallback(() => {
-    api.bgpWatchlist().then((r) => setWatch(r.watchlist)).catch(() => setWatch([]));
+    // The watchlist call carries the incident class per prefix (tracker #5), so
+    // one request feeds both the chip row and the Prefixes view.
+    api.bgpWatchlist()
+      .then((r) => {
+        setWatch(r.watchlist);
+        setIncidents(r.incidents ?? {});
+        setIncidentsNote(r.incidents_note);
+      })
+      .catch(() => { setWatch([]); setIncidents({}); });
+    // The alert history is its own request and fails independently — a dead
+    // evaluator must not blank the watchlist.
+    api.bgpAlerts()
+      .then((r) => { setAlerts(r.alerts); setAlertStatus(r.status); })
+      .catch(() => { setAlerts([]); setAlertStatus(undefined); });
   }, []);
   useEffect(loadWatch, [loadWatch]);
 
@@ -170,6 +199,7 @@ export default function BgpOps() {
   const churn = useMemo(() => bucketUpdates(updates?.updates), [updates]);
   const contacts = useMemo(() => rdapContacts(whois), [whois]);
   const watched = watch.some((w) => w.resource === status?.resource);
+  const incidentList = useMemo(() => Object.values(incidents), [incidents]);
   // ASPA is a property of an AS, so for a prefix lookup we ask about the AS that
   // is ACTUALLY announcing it (from the live routing status) — never a guess.
   const aspaAsn = useMemo(() => {
@@ -186,6 +216,28 @@ export default function BgpOps() {
         chips={<Chip label={`${watch.length} watched`} />}
       />
 
+      {/* The three views. Prefixes is the default because the watchlist is what
+          an operator is on this page for. */}
+      <div className="ddp-tabs" role="tablist" style={{ marginTop: 10 }}>
+        {([["prefixes", "Prefixes"], ["peers", "Peers"], ["bogons", "Bogons"]] as [BgpTab, string][]).map(([id, label]) => (
+          <button key={id} role="tab" aria-selected={tab === id} className={tab === id ? "on" : ""}
+            onClick={() => setTab(id)}>{label}</button>
+        ))}
+      </div>
+
+      {tab === "peers" && (
+        <Suspense fallback={<PanelFallback label="the peers table" />}>
+          <PeersPanel incidents={incidentList} />
+        </Suspense>
+      )}
+
+      {tab === "bogons" && (
+        <Suspense fallback={<PanelFallback label="the bogon listing" />}>
+          <BogonsPanel />
+        </Suspense>
+      )}
+
+      {tab === "prefixes" && <>
       {/* entry row: search + watchlist */}
       <div className="card" style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
         <form
@@ -215,6 +267,16 @@ export default function BgpOps() {
       </div>
 
       {err && <div className="empty" role="alert" style={{ color: "var(--bad)" }}>{err}</div>}
+
+      {/* Tracker #5: the watchlist WITH its incident class and evidence. This
+          is the Prefixes view — the investigation below drills into one of it. */}
+      <Suspense fallback={<PanelFallback label="the watchlist" />}>
+        <PrefixesPanel
+          watch={watch} incidents={incidents} incidentsNote={incidentsNote}
+          status={alertStatus} alerts={alerts} active={active}
+          onInvestigate={(r) => { setQuery(r); investigate(r); }}
+        />
+      </Suspense>
 
       {status && (
         <>
@@ -369,6 +431,7 @@ export default function BgpOps() {
           Enter a prefix or ASN — or pick a watched resource — to see its global routing story.
         </div>
       )}
+      </>}
 
       {/* RIPE attribution: a LICENSE CONDITION of the RIS/RIPEstat data, not decoration. */}
       <p className="mini-meta" style={{ marginTop: 16 }}>

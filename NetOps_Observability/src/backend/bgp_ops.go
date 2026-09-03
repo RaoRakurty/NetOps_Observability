@@ -452,7 +452,15 @@ func (s *server) handleBGPWatchlist(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusInternalServerError, err)
 			return
 		}
-		writeJSON(w, http.StatusOK, map[string]any{"watchlist": list})
+		out := map[string]any{"watchlist": list}
+		// BGP-WATCH-BEGIN — the Prefixes view IS this list, so the incident
+		// class per watched prefix (tracker #5) rides on it rather than on a
+		// second, divergent endpoint. Nil-safe and honest: with the evaluator
+		// off the key carries a note instead of an empty map that would read as
+		// "nothing wrong". Remove this one call with the rest of BGP-WATCH.
+		s.bgpWatchAnnotateWatchlist(out, tenant, cross)
+		// BGP-WATCH-END
+		writeJSON(w, http.StatusOK, out)
 	case http.MethodPost:
 		var req struct {
 			Resource string `json:"resource"`
