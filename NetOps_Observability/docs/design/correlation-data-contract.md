@@ -152,6 +152,46 @@ Every NEW signal lane MUST, before shipping (`make release-gate`):
 5. Update the enum trio in lockstep if it adds a signal class
    (`TestCorrSignalEnumsConsistent`).
 
+   The trio is: the `source` Enum8 on `corr_signals` AND `corr_signals_archive`
+   in `deployment/docker/clickhouse/init.sql` (fresh installs only), the same
+   enum inside `signalColumns` in
+   `src/backend/internal/chschema/corr_schema.go`, and the two
+   `ALTER TABLE netops.corr_signals[_archive] MODIFY COLUMN source Enum8(…)`
+   strings in that same file — the ALTERs are what an ALREADY-INSTALLED stack
+   converges on at API boot (`ensureCHRowPolicies` → `chschema.ConvergeStmts`),
+   because init.sql never re-runs on an existing data dir. Each ALTER always
+   lists the FULL superset, so it widens a live column that lacks the value and
+   is a metadata no-op on one that has it; it must NEVER drop a value
+   (ClickHouse refuses that on a key column and the whole converge list stalls
+   behind it — the 2026-07-09 outage). Current `source` values, in lockstep with
+   `Source` in `src/correlation/signals.py`:
+
+   | # | value | # | value | # | value |
+   |---|---|---|---|---|---|
+   | 1 | `flow` | 6 | `syslog` | 11 | `controller` |
+   | 2 | `probe` | 7 | `sot_drift` | 12 | `verification` |
+   | 3 | `metric` | 8 | `trap` | 13 | `audit` |
+   | 4 | `alert` | 9 | `cloud` | 14 | `security` |
+   | 5 | `topology` | 10 | `app_identity` | 15 | `bgp` |
+
+### 6a. Registered EVIDENCE CLASSES (T2b bus lanes)
+
+An evidence class is a lane whose records are ALREADY canonical (entity + ts +
+identity + attrs), so it needs no parser and gets no lane handler: one generic
+intake maps the envelope onto a `Signal` by field name. Everything the engine
+knows about a class is ONE frozen row in `src/correlation/signals.py`
+`EVIDENCE_CLASSES` — adding or deleting a class is a data edit, and its topic is
+an OPTIONAL lane (absent ⇒ dropped and re-probed, never a startup gate).
+
+| Class | Topic | Kinds | Source | Modality | Default entity | Notes |
+|---|---|---|---|---|---|---|
+| `security` | `netops.security` | `security_posture`, `security_exposure`, `security_signal` | `security` | `security` (its own verdict plane) | `device` | Consumed by the Exposure Story templates; producer `internal/secbus`. |
+| `bgp` | `netops.bgp` | `bgp_rpki_invalid`, `bgp_visibility_loss`, `bgp_origin_change`, `bgp_transit_change`, `bgp_bogon_seen`, `bgp_peer_down` | `bgp` | `control_plane` (REUSED, not minted — bgpwatch reads the routing control plane and shares its blind spot, so it must not "confirm" against a device's own BGP syslog) | `prefix` (peer-down grounds on the device) | Producer `internal/bgpwatch` (`FEATURE_BGP_ALERTS`, default off). No catalog signature consumes these yet — declared in `coverage.INTENTIONAL_BLIND` so the gate says so on purpose; a BGP-only object caps at `suspected` (§10a). `'bgp'=15` is in the `source` enum trio (rule 5 above), so bgp signals persist. |
+
+Both lanes need a Kafka Read+Describe grant for the correlation principal
+(`deployment/docker/kafka/apply-acls.sh`) and a `kafka-init` topic entry in BOTH
+compose files; the produce side rides the aggregator's prefixed `netops.` grant.
+
 ## 7. Chaos fixtures
 
 An intentional storm source (e.g. lab target 10.70.245.120 kept dead) is

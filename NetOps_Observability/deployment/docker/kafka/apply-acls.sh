@@ -39,10 +39,11 @@
 #                      findings lane); produce netops.deadletter AND
 #                      netops.flows (the tenant-keyed flow feed);
 #                      groups netops-router-* (prefixed)
-#   correlation        consume  its 14 topics (incl. netops.security — the
+#   correlation        consume  its 15 topics (incl. netops.security — the
 #                      P3-L1 findings lane it grounds itself, and whose absence
-#                      would have failed its entire subscription — plus
-#                      netops.syslog.control,
+#                      would have failed its entire subscription — and
+#                      netops.bgp, the bgpwatch routing-evidence lane the engine
+#                      grounds the same way, plus netops.syslog.control,
 #                      the A4 pre-screened syslog lane — granted now so the
 #                      engine can be switched onto it by env alone, with no
 #                      second ACL-and-restart step in the change window);
@@ -122,10 +123,31 @@ $ACLS --add --allow-principal "$ROUTER" --operation Read \
 # the WHOLE subscription, not just that lane — under enforced ACLs the engine
 # would have been auth-dead across all 13 topics while every healthcheck stayed
 # green (the 2026-08-16 incident shape, one lane later).
-echo "acls: correlation — consume-only on its 14 topics + its one group" >&2
+#
+# netops.bgp is the SECOND evidence lane (internal/bgpwatch → the `bgp` class in
+# signals.EVIDENCE_CLASSES). It joins this loop for exactly the reason above —
+# the engine now subscribes to it, so a missing Read/Describe would take the
+# whole subscription down, not just BGP. Since 2026-09-02 an absent/ungranted
+# OPTIONAL evidence topic is dropped-and-re-probed rather than fatal, but the
+# grant is still required for the lane to ground at all, and
+# tests/test_architecture_contract.py asserts the SET (every topic
+# correlation subscribes to must appear here).
+#
+# PRODUCE SIDE — deliberately NOT granted here. bgpwatch publishes through
+# `produceJSON`, the same Vector bus-bridge path every other Go producer uses
+# (no Kafka client in the backend, §6 allowlist), so the record is written by
+# vector-aggregator under its `--producer --topic netops. --resource-pattern-type
+# prefixed` grant above — exactly as netops.security's producer is covered.
+# Adding a redundant literal ACL would imply the prefixed one does not apply.
+# vector-router is NOT granted Read on netops.bgp either: unlike netops.security
+# (which it indexes into netops-secfindings-*), nothing routes BGP evidence to
+# OpenSearch, and granting a topic nothing consumes would imply a consumer that
+# does not exist.
+echo "acls: correlation — consume-only on its 15 topics + its one group" >&2
 for t in netops.syslog netops.syslog.control \
          netops.flows netops.metrics netops.probes \
-         netops.snmptrap netops.security netops.cloud netops.app.identities.v1 \
+         netops.snmptrap netops.security netops.bgp \
+         netops.cloud netops.app.identities.v1 \
          netops.controller_events netops.app.edge netops.verification \
          netops.wireless_sessions netops.wireless_events; do
     $ACLS --add --allow-principal "$CORR" \

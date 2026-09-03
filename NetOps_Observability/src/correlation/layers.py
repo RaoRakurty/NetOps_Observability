@@ -148,6 +148,18 @@ _KIND_LAYER: dict[str, CausalLayer] = {
     # onset ordering still decides between them.
     "security_exposure": CausalLayer.DEVICE,
     "security_posture": CausalLayer.DEVICE,
+    # BGP routing observatory (internal/bgpwatch → netops.bgp). Every one of the
+    # six is a statement about L3 REACHABILITY — who originates a prefix, who
+    # transits it, whether the collectors still see it, whether it validates,
+    # whether the session carrying it is up — so they take the same NETWORK
+    # layer the IGP/BGP adjacency kinds already take, and tie with them. No new
+    # layer, and no guess: this is the layer these events are ABOUT.
+    "bgp_rpki_invalid": CausalLayer.NETWORK,
+    "bgp_visibility_loss": CausalLayer.NETWORK,
+    "bgp_origin_change": CausalLayer.NETWORK,
+    "bgp_transit_change": CausalLayer.NETWORK,
+    "bgp_bogon_seen": CausalLayer.NETWORK,
+    "bgp_peer_down": CausalLayer.NETWORK,
     # `security_signal` is INTENTIONALLY unmapped, for the same reason
     # `cloud_change` / `device_alarm` are: a detection is a classification of an
     # observation, not a fault at a fixed layer (a beaconing flow is L4, a new

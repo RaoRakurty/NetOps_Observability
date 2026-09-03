@@ -16,6 +16,13 @@ from catalog import builtin_catalog
 from coverage import (
     _NORM_FIELDS,
     COLLECTION_PENDING,
+    # coverage.EMITTED_KINDS, NOT producers.EMITTED_KINDS: the module defines
+    # "emitted" ONCE as the producer pipeline's kinds UNION the evidence-class
+    # bus kinds (T2b), precisely so a new intake style cannot open a hole in
+    # this gate. Reading the narrower producer set here made a declared blind
+    # spot for a bus-emitted kind look stale — the hole the union exists to
+    # close.
+    EMITTED_KINDS,
     INTENTIONAL_BLIND,
     KNOWN_PENDING,
     NORMALIZATION_PENDING,
@@ -27,7 +34,6 @@ from coverage import (
     normalization_gap_message,
     orphan_producer_kinds,
 )
-from producers import EMITTED_KINDS
 
 CAT = builtin_catalog()
 

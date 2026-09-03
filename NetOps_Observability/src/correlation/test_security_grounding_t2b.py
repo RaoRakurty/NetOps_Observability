@@ -60,6 +60,9 @@ from verdicts import VerdictTier
 
 T0 = datetime(2026, 9, 2, 12, 0, 0, tzinfo=timezone.utc)
 NEW_TEMPLATE_IDS = {t["id"] for t in EXPOSURE_STORY_TEMPLATES}
+# This suite is about the SECURITY class specifically. Read from the
+# registry row so it can never drift from what the engine registered.
+SECURITY_KINDS = set(signals.EVIDENCE_CLASSES["security"].kinds)
 
 
 # ── the exact wire shape secbus.EvidenceEvent marshals ───────────────────────
@@ -194,9 +197,14 @@ def test_evidence_refs_are_bounded():
 
 # ══ 2. registration ═════════════════════════════════════════════════════════
 def test_kinds_modality_and_layer_are_registered():
-    assert signals.EVIDENCE_BUS_KINDS == {
+    # The SECURITY class's own vocabulary. Scoped to the class deliberately:
+    # the bus registry is shared, and a second class registering its kinds must
+    # not make this suite red (it must not make it PASS vacuously either, which
+    # is why the row is read from the registry rather than restated).
+    assert SECURITY_KINDS == {
         "security_posture", "security_exposure", "security_signal"}
-    for kind in signals.EVIDENCE_BUS_KINDS:
+    assert SECURITY_KINDS <= signals.EVIDENCE_BUS_KINDS
+    for kind in SECURITY_KINDS:
         assert kind in EMITTED_KINDS
         assert KIND_MODALITY[kind] is ModalityClass.SECURITY
         # consumed by the Exposure Story family -> never a dead template/orphan
@@ -296,7 +304,7 @@ def test_verdict_grounds_with_network_evidence_on_the_same_device():
 def test_a_verdict_alone_is_never_confirmed():
     """One plane, one witness — the honest cap. INVARIANTS §10a: prefer still
     analyzing over an unsupported cause."""
-    for kind in sorted(signals.EVIDENCE_BUS_KINDS):
+    for kind in sorted(SECURITY_KINDS):
         snaps = run_window([security_signal(kind=kind)], CAT, (), EngineConfig())
         for snap in snaps:
             assert snap.ranking.verdict_tier is not VerdictTier.CONFIRMED, kind
@@ -345,7 +353,9 @@ def test_dropping_the_topic_makes_the_registration_inert(monkeypatch, rig):
     """The run-time half: `CORR_EVIDENCE_TOPICS=""` unsubscribes the class and
     the engine consumes exactly the lanes it consumed before it existed."""
     assert main.evidence_topics_from_env("") == ()
-    assert main.evidence_topics_from_env(None) == ("netops.security",)
+    # unset = EVERY registered class's topic (today: bgp + security, sorted)
+    assert main.evidence_topics_from_env(None) == signals.EVIDENCE_TOPICS
+    assert "netops.security" in main.evidence_topics_from_env(None)
     assert main.evidence_topics_from_env("netops.other") == ("netops.other",)
     # with nothing subscribed, the lane dispatch does not reach the handler …
     monkeypatch.setattr(main, "EVIDENCE_TOPIC_SET", frozenset())
@@ -364,7 +374,7 @@ def test_the_class_is_one_row_of_data():
     spec = signals.EVIDENCE_CLASSES["security"]
     assert spec.topic == "netops.security"
     assert spec.source is Source.SECURITY and spec.modality is ModalityClass.SECURITY
-    assert signals.EVIDENCE_TOPICS == ("netops.security",)
+    assert "netops.security" in signals.EVIDENCE_TOPICS
     src = pathlib.Path(main.__file__).read_text()
     body = src.split("async def handle_evidence_event", 1)[1].split(
         "\nasync def ", 1)[0]
@@ -497,11 +507,14 @@ def test_counters_reach_healthz_and_metrics(rig):
     drive(envelope())
     health = main._health_payload()
     ingest = health["ingest"]
-    assert ingest["evidence_topics"] == ["netops.security"]
+    assert "netops.security" in ingest["evidence_topics"]
+    assert ingest["evidence_topics"] == list(main.CORR_EVIDENCE_TOPICS)
     assert ingest["evidence_received"] >= 1 and ingest["evidence_signals"] >= 1
+    # One pre-seeded key per REGISTERED class x outcome, plus the fixed
+    # "unknown" bucket — bounded by the registry, never by traffic (§9).
     assert set(ingest["evidence_by_class"]) == {
         f"{cls}|{outcome}"
-        for cls in ("security", "unknown")
+        for cls in list(signals.EVIDENCE_CLASSES) + ["unknown"]
         for outcome in main.EVIDENCE_EVENT_OUTCOMES}
     text = main._metrics_text(health)
     for outcome in main.EVIDENCE_EVENT_OUTCOMES:

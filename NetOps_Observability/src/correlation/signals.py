@@ -143,6 +143,19 @@ class Source(str, Enum):
     # DATA, not a code path: the engine has no branch on it, and deleting the
     # producing module leaves an unused enum value, nothing to unwind.
     SECURITY = "security"
+    # The BGP routing-observatory lane (internal/bgpwatch → netops.bgp). A
+    # SECOND evidence class, registered exactly like the first: its own wire
+    # lane, therefore its own Source value. It reuses ModalityClass.CONTROL_PLANE
+    # (see the EVIDENCE_CLASSES row) — Source names the LANE, modality names the
+    # measurement plane, and the two are deliberately independent choices.
+    #
+    # ClickHouse lockstep (correlation-data-contract.md §6.5,
+    # TestCorrSignalEnumsConsistent): the `source` Enum8 in
+    # deployment/docker/clickhouse/init.sql AND the converge ALTERs in
+    # src/backend/internal/chschema/corr_schema.go must carry 'bgp'=15 before a
+    # bgp signal can be PERSISTED. Grounding, verdicts and every in-process
+    # surface work without it; the CH write is the one step that does not.
+    BGP = "bgp"
 
 
 class ObserverType(str, Enum):
@@ -1081,6 +1094,50 @@ EVIDENCE_CLASSES: dict[str, EvidenceClassSpec] = {
         observer_type=ObserverType.PLATFORM,
         default_entity_type=EntityType.DEVICE,
         rule_id_fields=("rule_id", "raw_rule_id", "control_id"),
+        observer_fields=("provider_source", "source"),
+    ),
+    # The BGP routing-observatory lane (src/backend/internal/bgpwatch,
+    # `FEATURE_BGP_ALERTS`, default off). Its kinds are the six alertable
+    # conditions bgpwatch emits (evidence.go Kind*) — one per condition, with
+    # the per-prefix specifics (vantages, observed origins, RIS fraction, bogon
+    # block, origin baseline) in attrs, so the kind space stays small and stable
+    # exactly as the security class keeps its control ids out of the kind.
+    #
+    # MODALITY — CONTROL_PLANE, deliberately NOT a new plane. bgpwatch reads the
+    # GLOBAL ROUTING CONTROL PLANE (RIS collector vantages, RPKI validity, BMP
+    # peer state); it shares that plane's blind spot exactly — the control plane
+    # reports what routers SAY, not what packets do. A device's own BGP syslog
+    # is therefore the SAME modality and cannot pair with it to confirm, which
+    # is the conservative and honest reading: a route the collectors lost and a
+    # syslog line about the same session are ONE kind of observation seen twice.
+    # A BGP-only object consequently caps at `suspected` (verdicts.py:
+    # MIN_MODALITIES = 2 — "every modality class has a blind spot"), and
+    # confirmation still needs an independently MEASURED plane (a probe, a
+    # flow, device telemetry). Same §10a cap as the security class, reached
+    # through the existing plane rather than by minting one.
+    #
+    # ENTITY — PREFIX by default: a routing incident grounds on the prefix, not
+    # on any one device (no single device "is" a hijacked prefix, and picking
+    # one would be a fabricated attribution). A BMP peer-down carries
+    # entity_type=device on the wire and grounds there, which really is one box.
+    "bgp": EvidenceClassSpec(
+        name="bgp",
+        topic="netops.bgp",
+        kinds=frozenset({
+            "bgp_rpki_invalid", "bgp_visibility_loss", "bgp_origin_change",
+            "bgp_transit_change", "bgp_bogon_seen", "bgp_peer_down",
+        }),
+        source=Source.BGP,
+        modality=ModalityClass.CONTROL_PLANE,
+        # The witness is the platform's routing evaluator (external collectors +
+        # BMP), never the device whose session is in question — so a peer-down
+        # verdict can never corroborate that device's own telemetry.
+        observer_type=ObserverType.PLATFORM,
+        default_entity_type=EntityType.PREFIX,
+        # bgpwatch stamps `rule_id` (the incident class) on every event and
+        # `incident_class` on prefix incidents; both are listed so a lane that
+        # only carries the latter still lands a provenance id.
+        rule_id_fields=("rule_id", "incident_class"),
         observer_fields=("provider_source", "source"),
     ),
 }

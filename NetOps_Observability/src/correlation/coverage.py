@@ -83,6 +83,61 @@ INTENTIONAL_BLIND: dict[str, dict] = {
                   "|bgp_route_churn, or an optional churn corroborator).",
         "owner": "correlix", "date_added": "2026-09-02",
     },
+    # BGP routing-observatory lane (internal/bgpwatch → netops.bgp; the `bgp`
+    # evidence class, signals.EVIDENCE_CLASSES). These six GROUND and CO-LOCATE
+    # today — they attach to the prefix/device object, carry their evidence into
+    # the log, and can raise an object to `suspected` — but no catalog signature
+    # REQUIRES one yet, so the static gate must be told that on purpose rather
+    # than discover it. Two reasons, both stated so neither rots into folklore:
+    #   1. Authoring signatures for them is a CATALOG edit, which moves
+    #      `catalog_version` and therefore the V1 replay pin (`FIXTURE_GOLDEN`).
+    #      The grounding wave is deliberately golden-neutral; the narrative wave
+    #      (a "prefix hijacked / withdrawn / RPKI-invalid" story family, the
+    #      Exposure Story shape) is its own change with its own re-freeze proof.
+    #   2. A routing verdict is control-plane evidence about a PREFIX. Until a
+    #      signature exists it corroborates whatever measured evidence shares the
+    #      object; it must never be a lone root cause, exactly like
+    #      `bgp_route_churn` and `lldp_neighbor_change` above.
+    # When the story family lands, these entries MUST be deleted — `classify_kind`
+    # puts connection ahead of declaration, and test_coverage's staleness gate
+    # fails the build until they are.
+    "bgp_rpki_invalid": {
+        "reason": "bgp evidence class (netops.bgp) — RPKI-invalid announcement "
+                  "for a watched prefix; grounds + corroborates, consumed by no "
+                  "catalog signature until the BGP story family is authored",
+        "owner": "correlix", "date_added": "2026-09-02",
+    },
+    "bgp_visibility_loss": {
+        "reason": "bgp evidence class (netops.bgp) — the watched prefix fell "
+                  "below the RIS collector-visibility threshold; grounds + "
+                  "corroborates, no signature requires it yet",
+        "owner": "correlix", "date_added": "2026-09-02",
+    },
+    "bgp_origin_change": {
+        "reason": "bgp evidence class (netops.bgp) — the prefix is announced "
+                  "from an origin AS outside its declared/learned baseline; "
+                  "grounds + corroborates, no signature requires it yet",
+        "owner": "correlix", "date_added": "2026-09-02",
+    },
+    "bgp_transit_change": {
+        "reason": "bgp evidence class (netops.bgp) — the upstream/transit set "
+                  "for the prefix changed (route-leak class); grounds + "
+                  "corroborates, no signature requires it yet",
+        "owner": "correlix", "date_added": "2026-09-02",
+    },
+    "bgp_bogon_seen": {
+        "reason": "bgp evidence class (netops.bgp) — a bogon/special-purpose "
+                  "block was seen announced; grounds + corroborates, no "
+                  "signature requires it yet",
+        "owner": "correlix", "date_added": "2026-09-02",
+    },
+    "bgp_peer_down": {
+        "reason": "bgp evidence class (netops.bgp) — a BMP-observed peer "
+                  "session went down, grounded on the reporting DEVICE; it is "
+                  "the same control-plane modality as the device's own BGP "
+                  "syslog, so it corroborates and never confirms alone",
+        "owner": "correlix", "date_added": "2026-09-02",
+    },
     "lb_4xx_high": {
         "reason": "app-edge 4xx spike is an auth/config/client-side indicator "
                   "(#98 P5) — deliberately consumed by NO outage signature so "

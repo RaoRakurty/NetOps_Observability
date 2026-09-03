@@ -47,6 +47,11 @@ ROOT = os.path.normpath(os.path.join(os.path.dirname(__file__), ".."))
 VECTOR_IMAGE = "timberio/vector:0.40.0-alpine"  # pinned: docker-compose.yml + preflight-configs.sh
 
 TOPIC = "netops.security"
+# The SECOND evidence-class lane (internal/bgpwatch → the `bgp` class in
+# signals.EVIDENCE_CLASSES, grounded 2026-09-02). It is asserted here, in the
+# suite that already owns the compose/ACL contract for an evidence topic, so
+# both lanes are guarded by ONE set of rules instead of two.
+BGP_TOPIC = "netops.bgp"
 INDEX_PATTERN = "netops-secfindings-{{ tenant_seg }}-%Y.%m.%d"
 TEMPLATE = "netops-secfindings"
 
@@ -506,11 +511,67 @@ def test_correlation_lane_topics_are_unchanged():
 
 
 def test_correlation_grounds_the_findings_lane_as_evidence():
-    """T2b: the engine consumes netops.security itself, as its ONE evidence
-    topic, and it composes into TOPICS after the lanes."""
+    """T2b: the engine consumes netops.security itself, as an evidence topic
+    that composes into TOPICS after the lanes.
+
+    2026-09-02: `netops.bgp` (the bgpwatch routing-evidence lane) joined it as
+    the SECOND registered class, so this asserts membership + composition rather
+    than a one-element tuple. `evidence_topics_from_env(None)` derives the
+    default from the registry, so both are here or neither is."""
     main = _correlation_main()
-    assert main.CORR_EVIDENCE_TOPICS == (TOPIC,)
+    assert TOPIC in main.CORR_EVIDENCE_TOPICS
+    assert BGP_TOPIC in main.CORR_EVIDENCE_TOPICS
+    assert main.CORR_EVIDENCE_TOPICS == main.evidence_topics_from_env(None)
     assert main.TOPICS == main.LANE_TOPICS + list(main.CORR_EVIDENCE_TOPICS)
+    # neither evidence lane may become a telemetry lane: they are OPTIONAL, and
+    # an absent one is dropped-and-re-probed instead of failing the whole
+    # subscription (the 2026-09-02 outage partition).
+    for topic in (TOPIC, BGP_TOPIC):
+        assert topic in main.OPTIONAL_TOPICS
+        assert topic not in main.REQUIRED_TOPICS
+
+
+def test_the_bgp_evidence_topic_is_created_on_both_compose_variants():
+    """The BGP lane gets the same SEC-006.1 treatment as the findings lane:
+    auto-create is off, so a topic missing from kafka-init silently never
+    exists on a fresh install — and it must carry the same BUS_PARTITIONS
+    count as every other topic, or a tenant's keyed records land on a
+    partition its correlation instance does not own."""
+    for compose in ("docker-compose.yml", "compose.tls.yml"):
+        text = read("deployment", "docker", compose)
+        m = re.search(r"for t in (netops\..*?)\s*;\s*do", text, re.S)
+        assert m, f"{compose} no longer enumerates topics in a `for t in ...; do` loop"
+        topics = m.group(1).split()
+        assert BGP_TOPIC in topics, f"{compose} kafka-init does not create {BGP_TOPIC}"
+        # one loop, one --partitions "$p" — the same count for every topic
+        assert TOPIC in topics, f"{compose} kafka-init does not create {TOPIC}"
+
+
+def test_correlation_holds_read_on_the_bgp_evidence_topic():
+    """SEC-007 + the T2b blocker, one lane later: the engine subscribes to
+    netops.bgp, and a consumer that may not Describe a topic it subscribes to
+    fails the WHOLE subscription."""
+    acls = read("deployment", "docker", "kafka", "apply-acls.sh")
+    m = re.search(r'echo "acls: correlation.*?\ndone', acls, re.S)
+    assert m, "apply-acls.sh no longer applies the correlation topic loop in one block"
+    block = m.group(0)
+    assert BGP_TOPIC in block, f"correlation has no READ grant on {BGP_TOPIC}"
+    assert "--operation Read" in block and "--operation Describe" in block
+
+
+def test_nothing_else_is_granted_on_the_bgp_evidence_topic():
+    """Least privilege. The engine CONSUMES netops.bgp; bgpwatch WRITES it
+    through the aggregator's prefixed `netops.` bus-bridge grant, so no literal
+    producer ACL exists — and vector-router is not granted Read, because
+    nothing indexes BGP evidence into OpenSearch."""
+    acls = read("deployment", "docker", "kafka", "apply-acls.sh")
+    assert not re.search(
+        r'--producer\s*\\?\s*\n?\s*--topic %s\b' % re.escape(BGP_TOPIC), acls), \
+        "no principal may hold a literal producer grant on the BGP evidence topic"
+    m = re.search(r'echo "acls: router.*?\ndone', acls, re.S)
+    assert m and BGP_TOPIC not in m.group(0), (
+        "vector-router must NOT be granted Read on netops.bgp — nothing routes "
+        "BGP evidence to OpenSearch, and a grant would imply a consumer")
 
 
 def test_evidence_topics_default_to_nothing_on_an_empty_setting():

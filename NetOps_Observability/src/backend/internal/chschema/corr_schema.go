@@ -62,7 +62,7 @@ func CorrSchemaDDL() []string {
     ingest_ts      DateTime64(3) DEFAULT now64(3),
     source         Enum8('flow'=1,'probe'=2,'metric'=3,'alert'=4,
                          'topology'=5,'syslog'=6,'sot_drift'=7,'trap'=8,'cloud'=9,
-                         'app_identity'=10,'controller'=11,'verification'=12,'audit'=13,'security'=14),
+                         'app_identity'=10,'controller'=11,'verification'=12,'audit'=13,'security'=14,'bgp'=15),
     kind           LowCardinality(String),
     observer_id    LowCardinality(String),
     observer_type  Enum8('device'=1,'vantage_agent'=2,'cloud_api'=3,
@@ -165,6 +165,17 @@ SETTINGS index_granularity = 8192`,
 		// value is DATA, not a dependency: nothing in the backend imports the
 		// security packages because of it, and deleting the security producers
 		// leaves an unused value, exactly like any other retired lane would.
+		// BGP routing observatory (second evidence class, correlation-data-
+		// contract.md §6a): source gains 'bgp'=15 — the wire lane the verdict
+		// arrived on (internal/bgpwatch → netops.bgp), matching
+		// src/correlation/signals.py Source.BGP. modality_class gains NOTHING:
+		// the lane REUSES 'control_plane'=3 on purpose, because bgpwatch reads
+		// the routing control plane and shares its blind spot, so it must not
+		// "confirm" against a device's own BGP syslog. Additive Enum8 value-add,
+		// same safety argument as above, and the same DATA-not-dependency note:
+		// deleting the bgpwatch producer leaves an unused value, nothing to
+		// unwind. This ALTER is what carries the value onto ALREADY-INSTALLED
+		// stacks — init.sql only runs on a fresh data dir.
 		//
 		// HARD RULE (2026-07-09 outage): these ALTERs must always list the FULL
 		// enum — the superset of every value any deployment has ever had, kept
@@ -173,11 +184,11 @@ SETTINGS index_granularity = 8192`,
 		// a stale (subset) ALTER fails on EVERY boot against a live table that
 		// already learned the newer value — and stalls the converge list behind it
 		// (this is how corr_current failed to be created on 2026-07-09).
-		`ALTER TABLE netops.corr_signals MODIFY COLUMN source Enum8('flow'=1,'probe'=2,'metric'=3,'alert'=4,'topology'=5,'syslog'=6,'sot_drift'=7,'trap'=8,'cloud'=9,'app_identity'=10,'controller'=11,'verification'=12,'audit'=13,'security'=14)`,
+		`ALTER TABLE netops.corr_signals MODIFY COLUMN source Enum8('flow'=1,'probe'=2,'metric'=3,'alert'=4,'topology'=5,'syslog'=6,'sot_drift'=7,'trap'=8,'cloud'=9,'app_identity'=10,'controller'=11,'verification'=12,'audit'=13,'security'=14,'bgp'=15)`,
 		`ALTER TABLE netops.corr_signals MODIFY COLUMN observer_type Enum8('device'=1,'vantage_agent'=2,'cloud_api'=3,'flow_exporter'=4,'platform'=5,'controller'=6)`,
 		`ALTER TABLE netops.corr_signals MODIFY COLUMN entity_type Enum8('device'=1,'interface'=2,'path'=3,'segment'=4,'site'=5,'service'=6,'prefix'=7,'app'=8,'cloud_resource'=9,'wireless_controller'=10,'access_point'=11,'radio'=12,'bssid'=13,'wlan'=14,'wireless_client'=15,'wireless_session'=16)`,
 		`ALTER TABLE netops.corr_signals MODIFY COLUMN modality_class Enum8('active_probe'=1,'passive_flow'=2,'control_plane'=3,'device_telemetry'=4,'management_plane'=5,'active_verification'=6,'security'=7)`,
-		`ALTER TABLE netops.corr_signals_archive MODIFY COLUMN source Enum8('flow'=1,'probe'=2,'metric'=3,'alert'=4,'topology'=5,'syslog'=6,'sot_drift'=7,'trap'=8,'cloud'=9,'app_identity'=10,'controller'=11,'verification'=12,'audit'=13,'security'=14)`,
+		`ALTER TABLE netops.corr_signals_archive MODIFY COLUMN source Enum8('flow'=1,'probe'=2,'metric'=3,'alert'=4,'topology'=5,'syslog'=6,'sot_drift'=7,'trap'=8,'cloud'=9,'app_identity'=10,'controller'=11,'verification'=12,'audit'=13,'security'=14,'bgp'=15)`,
 		`ALTER TABLE netops.corr_signals_archive MODIFY COLUMN observer_type Enum8('device'=1,'vantage_agent'=2,'cloud_api'=3,'flow_exporter'=4,'platform'=5,'controller'=6)`,
 		`ALTER TABLE netops.corr_signals_archive MODIFY COLUMN entity_type Enum8('device'=1,'interface'=2,'path'=3,'segment'=4,'site'=5,'service'=6,'prefix'=7,'app'=8,'cloud_resource'=9,'wireless_controller'=10,'access_point'=11,'radio'=12,'bssid'=13,'wlan'=14,'wireless_client'=15,'wireless_session'=16)`,
 		`ALTER TABLE netops.corr_signals_archive MODIFY COLUMN modality_class Enum8('active_probe'=1,'passive_flow'=2,'control_plane'=3,'device_telemetry'=4,'management_plane'=5,'active_verification'=6,'security'=7)`,

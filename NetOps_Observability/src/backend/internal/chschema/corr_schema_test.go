@@ -263,3 +263,148 @@ func TestCorrSchemaNoMaterializedViews(t *testing.T) {
 		}
 	}
 }
+
+// ── boot-reconcile decision for the `source` enum ───────────────────────────
+// The reconcile mechanism for an ALREADY-INSTALLED stack is the unconditional
+// `ALTER TABLE … MODIFY COLUMN source Enum8(<full superset>)` in CorrSchemaDDL,
+// applied on every API boot by ensureCHRowPolicies → ConvergeStmts. init.sql
+// runs only on a fresh data dir, so the ALTER is the ONLY thing that carries a
+// new signal class onto an upgraded deployment. ClickHouse has no
+// `MODIFY COLUMN IF NOT EXISTS`, so idempotence is structural rather than
+// syntactic: the statement always names the full superset, therefore
+//
+//	live enum LACKS the value  → the ALTER WIDENS it (value learned)
+//	live enum HAS the value    → the ALTER is type-identical (metadata no-op)
+//
+// and it can never DROP a value (which ClickHouse refuses on a key column, and
+// which is how the 2026-07-09 outage stalled the whole converge list).
+// These are the two arms of that decision, asserted over the exact strings the
+// boot path emits — no ClickHouse needed, and no live ALTER is ever run here.
+
+var enum8ValueRe = regexp.MustCompile(`'([^']+)'\s*=\s*(-?\d+)`)
+
+// parseEnum8 renders an Enum8 body as value→number, the shape ClickHouse
+// compares when it decides whether a MODIFY COLUMN is a widening or a drop.
+func parseEnum8(t *testing.T, body string) map[string]string {
+	t.Helper()
+	out := map[string]string{}
+	for _, m := range enum8ValueRe.FindAllStringSubmatch(body, -1) {
+		if prev, dup := out[m[1]]; dup {
+			t.Fatalf("enum body lists %q twice (=%s and =%s)", m[1], prev, m[2])
+		}
+		out[m[1]] = m[2]
+	}
+	if len(out) == 0 {
+		t.Fatalf("no Enum8 values parsed from %q", body)
+	}
+	return out
+}
+
+// sourceEnumOf pulls the `source` Enum8 body out of one DDL statement.
+func sourceEnumOf(t *testing.T, stmt string) map[string]string {
+	t.Helper()
+	m := regexp.MustCompile(`source\s+Enum8\(([^)]*)\)`).FindStringSubmatch(stmt)
+	if m == nil {
+		t.Fatalf("no `source` Enum8 in statement: %.120s", stmt)
+	}
+	return parseEnum8(t, m[1])
+}
+
+func TestCorrSignalSourceEnumConvergeDecision(t *testing.T) {
+	// The pre-bgp shape: what a deployment installed before this change is
+	// running live right now. Frozen literal on purpose — reading it back out
+	// of the code under test would assert nothing.
+	live := map[string]string{
+		"flow": "1", "probe": "2", "metric": "3", "alert": "4", "topology": "5",
+		"syslog": "6", "sot_drift": "7", "trap": "8", "cloud": "9",
+		"app_identity": "10", "controller": "11", "verification": "12",
+		"audit": "13", "security": "14",
+	}
+
+	for _, table := range []string{"corr_signals", "corr_signals_archive"} {
+		var alter string
+		for _, s := range CorrSchemaDDL() {
+			if strings.HasPrefix(s, "ALTER TABLE netops."+table+" MODIFY COLUMN source ") {
+				if alter != "" {
+					t.Fatalf("%s: more than one source MODIFY COLUMN in the converge list", table)
+				}
+				alter = s
+			}
+		}
+		if alter == "" {
+			t.Fatalf("%s: no `MODIFY COLUMN source` in the converge list — an upgraded stack would never learn a new signal class (init.sql runs only on a fresh data dir)", table)
+		}
+		converge := sourceEnumOf(t, alter)
+
+		// ARM 1 — value ABSENT live → the ALTER widens, and widens ONLY.
+		if converge["bgp"] != "15" {
+			t.Errorf("%s: converge ALTER must carry 'bgp'=15 (got %q) — signals.py Source.BGP cannot be persisted without it", table, converge["bgp"])
+		}
+		for name, num := range live {
+			got, ok := converge[name]
+			if !ok {
+				t.Errorf("%s: converge ALTER DROPS '%s' — ClickHouse refuses a value-dropping enum ALTER on a key column and the whole converge list stalls behind it (2026-07-09)", table, name)
+				continue
+			}
+			if got != num {
+				t.Errorf("%s: '%s' remapped %s → %s; an existing row's stored ordinal would change meaning", table, name, num, got)
+			}
+		}
+
+		// ARM 2 — value PRESENT live → re-applying is a type-identical no-op.
+		// "Live" here is the state ARM 1 leaves behind: the converge enum itself.
+		alreadyConverged := sourceEnumOf(t, alter)
+		if len(alreadyConverged) != len(converge) {
+			t.Fatalf("%s: enum parse is not deterministic", table)
+		}
+		for name, num := range converge {
+			if alreadyConverged[name] != num {
+				t.Errorf("%s: re-applying the converge ALTER would change '%s' (%s → %s) — it must be a metadata no-op on an already-converged table", table, name, num, alreadyConverged[name])
+			}
+		}
+
+		// The CREATE (fresh install) and the ALTER (upgrade) must land the same
+		// type, or the two install paths diverge on the very next boot.
+		if fresh := sourceEnumOf(t, corrStmt(t, table)); len(fresh) != len(converge) {
+			t.Errorf("%s: CREATE has %d source values, converge ALTER %d", table, len(fresh), len(converge))
+		} else {
+			for name, num := range fresh {
+				if converge[name] != num {
+					t.Errorf("%s: CREATE and converge ALTER disagree on '%s' (%s vs %s)", table, name, num, converge[name])
+				}
+			}
+		}
+	}
+}
+
+// TestCorrSignalSourceEnumMatchesEvidenceClasses — the Go half of the enum-trio
+// lockstep (correlation-data-contract.md §6a): every registered evidence class's
+// Source value must exist in the ClickHouse `source` enum, or that lane grounds
+// and reaches a verdict in process but cannot PERSIST. The Python half is
+// src/correlation/test_bgp_grounding.py::
+// test_every_registered_evidence_source_is_in_the_clickhouse_enum.
+func TestCorrSignalSourceEnumMatchesEvidenceClasses(t *testing.T) {
+	src, err := os.ReadFile(repoFile(t, "src/correlation/signals.py"))
+	if err != nil {
+		t.Skipf("correlation source not available: %v", err)
+	}
+	body := string(src)
+	start := strings.Index(body, "class Source(str, Enum):")
+	if start < 0 {
+		t.Fatal("signals.py: `class Source(str, Enum)` not found")
+	}
+	rest := body[start+len("class Source(str, Enum):"):]
+	if end := strings.Index(rest, "\nclass "); end >= 0 {
+		rest = rest[:end]
+	}
+	want := regexp.MustCompile(`(?m)^\s{4}[A-Z0-9_]+\s*=\s*"([a-z0-9_]+)"`).FindAllStringSubmatch(rest, -1)
+	if len(want) == 0 {
+		t.Fatal("signals.py: no Source members parsed")
+	}
+	have := sourceEnumOf(t, corrStmt(t, "corr_signals"))
+	for _, m := range want {
+		if _, ok := have[m[1]]; !ok {
+			t.Errorf("signals.py Source has %q but the ClickHouse `source` enum does not — that lane cannot persist a signal", m[1])
+		}
+	}
+}
