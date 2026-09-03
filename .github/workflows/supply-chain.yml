@@ -97,3 +97,32 @@ jobs:
           name: sbom-cyclonedx
           path: sbom.cdx.json
           if-no-files-found: error
+
+  license-gate:
+    name: Third-party licence gate (blocking)
+    runs-on: ubuntu-latest
+    # Complements Trivy/gitleaks with the LEGAL side of supply chain: a new
+    # dependency whose licence nobody reviewed, or any strong-copyleft component
+    # linked into a Correlix artifact, fails the build. The audit is stdlib-only
+    # and fully offline — every discovery source (vendor/modules.txt, the npm
+    # lockfiles, requirements.txt, compose files, Dockerfiles) is checked in, so
+    # this needs no npm/pip install and no registry access.
+    # Findings and owner decisions: docs/security/LICENSE_AUDIT_2026-09-03.md
+    env:
+      # Pinned like every other scanner here (SC-010): an unpinned test runner
+      # can change collection behaviour and turn a blocking gate green.
+      PYTEST_VERSION: '9.1.1'
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: '3.12'
+      - name: Install pytest (pinned)
+        run: pip install --no-cache-dir "pytest==${PYTEST_VERSION}"
+      - name: Licence inventory + gate
+        working-directory: NetOps_Observability
+        run: python3 -m pytest tests/test_license_audit.py -v
+      - name: Inventory summary (always shown)
+        if: always()
+        working-directory: NetOps_Observability
+        run: python3 scripts/license-audit.py --report

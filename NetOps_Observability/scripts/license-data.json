@@ -1,0 +1,4083 @@
+{
+  "_comment": "Human-reviewed licence facts for scripts/license-audit.py. Regenerate the derivable parts with --write; the `images` and `exceptions` maps are hand-maintained and require review.",
+  "exceptions": {
+    "@fontsource-variable/manrope": {
+      "license": "OFL-1.1",
+      "obligation": "OFL-1.1 text + copyright notice",
+      "owner_decision": "none needed",
+      "posture": "Font binaries shipped in the SPA bundle."
+    },
+    "@fontsource/ibm-plex-mono": {
+      "license": "OFL-1.1",
+      "obligation": "OFL-1.1 text + copyright notice",
+      "owner_decision": "none needed",
+      "posture": "Font binaries shipped in the SPA bundle."
+    },
+    "@fontsource/inter": {
+      "license": "OFL-1.1",
+      "obligation": "OFL-1.1 text + copyright notice must accompany the fonts; the fonts must not be sold on their own and Reserved Font Names must not be reused",
+      "owner_decision": "none needed",
+      "posture": "Font binaries shipped in the SPA bundle."
+    },
+    "@fontsource/space-grotesk": {
+      "license": "OFL-1.1",
+      "obligation": "OFL-1.1 text + copyright notice",
+      "owner_decision": "none needed",
+      "posture": "Font binaries shipped in the SPA bundle."
+    },
+    "arista-mibs": {
+      "license": "LicenseRef-Arista-MIB-NoGrant",
+      "obligation": "no stated grant; industry practice treats vendor MIBs as freely redistributable for interop, but that is practice, not licence",
+      "owner_decision": "REQUIRED \u2014 either fetch them at build time like the other ~55 vendor MIBs already are (the gen_index.py pattern, which leaves nothing in the tree), or obtain and record Arista's redistribution position",
+      "posture": "Two Arista enterprise MIB modules ship inside the customer source tarball, sourced from the LibreNMS mirror.",
+      "status": "OPEN"
+    },
+    "balabit/syslog-ng": {
+      "license": "GPL-2.0-or-later",
+      "obligation": "ship the GPL-2.0 + LGPL-2.1 texts and a written offer for syslog-ng's Corresponding Source",
+      "owner_decision": "REQUIRED \u2014 confirm we can honour a source request for syslog-ng 4.7.1 OSE (mirror the upstream tarball with the release), and note there is NO OpenSSL linking exception",
+      "posture": "Core archive, unmodified upstream container. Receives syslog over the network and writes to Kafka; no Correlix code is linked into it, and it links to none of ours. GPL-2.0-or-later applies to the syslog-ng combination only."
+    },
+    "busybox": {
+      "license": "GPL-2.0-only",
+      "obligation": "source availability for the unmodified BusyBox in redistributed base images",
+      "owner_decision": "REQUIRED \u2014 decide whether to mirror base-image sources or rely on the upstream registries",
+      "posture": "Present only as a local dev helper image and inside Alpine/BusyBox bases of third-party images we redistribute unmodified."
+    },
+    "certifi": {
+      "license": "MPL-2.0",
+      "obligation": "licence text + upstream source pointer in the shipped notices",
+      "owner_decision": "none needed",
+      "posture": "Installed unmodified into site-packages in netops-correlation. MPL-2.0 file-level copyleft; we modify nothing, so only the notice + source-availability pointer applies."
+    },
+    "cisco-mib-extracts": {
+      "license": "LicenseRef-Cisco-MIB-NoGrant",
+      "obligation": "none we can satisfy from the file itself \u2014 there is no grant to comply with",
+      "owner_decision": "REQUIRED \u2014 replace SNMPv2-TC / SNMPv2-CONF with the canonical IETF RFC 1903/1904 module text (removes the ambiguity outright), or accept the risk in writing",
+      "posture": "Two Cisco-headered extracts of RFC 1903/1904 ship inside the customer SOURCE TARBALL. They are build-time inputs to the OID index; no MIB prose reaches the shipped binary (oididx.json is bare OID->name facts).",
+      "status": "OPEN"
+    },
+    "cloud-vendor-marks": {
+      "license": "LicenseRef-Trademark-ToU",
+      "obligation": "trademark terms of use, not a copyright licence; the AWS asset is the AWS Cloud LOGO, which is additionally governed by AWS trademark guidelines rather than the Architecture Icons ToU alone",
+      "owner_decision": "REQUIRED \u2014 confirm logo (not service-icon) use is intended and permitted, and move the terms from the asset READMEs into NOTICE so they travel with the binary",
+      "posture": "AWS/Azure/GCP marks go:embed'd into the shipped backend binary and rendered in RCA reports. Asset READMEs already record the source package, the terms URL and the render-as-is rule.",
+      "status": "OPEN"
+    },
+    "connector-marks": {
+      "license": "LicenseRef-Trademark-ToU",
+      "obligation": "none while unused, but they still ship in the source tarball",
+      "owner_decision": "REQUIRED \u2014 delete both files (nothing references them), or document their terms if a connector UI is planned",
+      "posture": "Unreferenced Jira and ServiceNow marks sitting in the frontend source tree with no terms recorded.",
+      "status": "OPEN"
+    },
+    "elkjs": {
+      "license": "EPL-2.0",
+      "obligation": "licence text + written source offer (upstream URL) in the shipped notices",
+      "owner_decision": "none needed \u2014 permissive-compatible for our use",
+      "posture": "BUNDLED VERBATIM into the SPA (dist/assets/elk.bundled-*.js). EPL-2.0 is file-level copyleft: we do not modify elkjs, so no source-disclosure of OUR code is triggered. EPL-2.0 \u00a73.2 DOES require that recipients of the Object Code be told the licence and how to obtain Source. Vite strips the banner, so the notice MUST be carried by THIRD_PARTY_LICENSES.md shipped with the frontend image."
+    },
+    "gotenberg/gotenberg": {
+      "license": "MIT",
+      "obligation": "none today \u2014 not distributed",
+      "owner_decision": "REQUIRED \u2014 keep the `pdf` profile permanently out of customer bundles, or switch to a slim Gotenberg variant without msttcorefonts/PDFtk before ever shipping it",
+      "posture": "Gotenberg's own code is MIT, but the image bundles PDFtk (GPL-2.0-or-later), LibreOffice (MPL-2.0), ttf-mscorefonts-installer (PROPRIETARY Microsoft EULA restricting redistribution) and, on amd64, Google Chrome (proprietary). It is NOT in any bundle today (the `pdf` profile is excluded from BASE_PROFILES), so no obligation is currently carried.",
+      "status": "OPEN"
+    },
+    "grafana/grafana": {
+      "license": "AGPL-3.0-only",
+      "obligation": "ship the AGPL-3.0 text + a written offer for Grafana's Corresponding Source (upstream URL); state prominently that Grafana is unmodified",
+      "owner_decision": "REQUIRED \u2014 confirm the add-on-pack posture, or drop Grafana from the customer bundle entirely",
+      "posture": "Ships ONLY in the optional `self-monitoring` add-on pack, as an unmodified upstream container, reached on its own port/route. No Correlix code links to, embeds, or derives from Grafana; we do not modify it, so AGPL \u00a713 imposes no obligation to offer OUR source."
+    },
+    "quay.io/keycloak/keycloak": {
+      "license": "Apache-2.0",
+      "obligation": "Red Hat UBI EULA terms on redistribution (permitted, with conditions)",
+      "owner_decision": "REQUIRED \u2014 review the UBI EULA redistribution conditions for an on-prem appliance bundle, or rebase Keycloak onto a non-UBI image",
+      "posture": "Keycloak itself is Apache-2.0, but its base is Red Hat ubi9-micro, governed by the Red Hat Universal Base Image EULA rather than an OSS licence. The `sso` profile IS in BASE_PROFILES, so this image ships in the core bundle.",
+      "status": "OPEN"
+    },
+    "require-like": {
+      "license": "UNDECLARED",
+      "obligation": "none (not distributed)",
+      "owner_decision": "none needed while it stays build-only",
+      "posture": "Transitive build-only dependency of the Docusaurus dev toolchain (docs-portal). Never distributed \u2014 only the BUILT static HTML ships. No licence grant is needed to run a build tool we do not redistribute.",
+      "status": "ACCEPTED"
+    },
+    "timberio/vector": {
+      "license": "MPL-2.0",
+      "obligation": "licence text + upstream source pointer",
+      "owner_decision": "none needed",
+      "posture": "Separate container, unmodified upstream image. Our vector.yaml/VRL are configuration under MPL \u00a71.10/\u00a73.3 Larger Work, not modifications."
+    }
+  },
+  "go": {
+    "github.com/jackc/pgpassfile": {
+      "license": "MIT"
+    },
+    "github.com/jackc/pgservicefile": {
+      "license": "MIT"
+    },
+    "github.com/jackc/pgx/v5": {
+      "license": "MIT"
+    },
+    "github.com/jackc/puddle/v2": {
+      "license": "MIT"
+    },
+    "golang.org/x/crypto": {
+      "license": "BSD-3-Clause"
+    },
+    "golang.org/x/net": {
+      "license": "BSD-3-Clause"
+    },
+    "golang.org/x/sync": {
+      "license": "BSD-3-Clause"
+    },
+    "golang.org/x/sys": {
+      "license": "BSD-3-Clause"
+    },
+    "golang.org/x/text": {
+      "license": "BSD-3-Clause"
+    }
+  },
+  "images": {
+    "alpine": {
+      "license": "MIT",
+      "note": "Alpine base distro packages are mostly MIT/BSD; busybox and apk-tools are GPL-2.0-only, shipped unmodified.",
+      "unit": "misc build/lab helper images",
+      "usage": "separate-container"
+    },
+    "apache/kafka": {
+      "license": "Apache-2.0",
+      "note": "Alpine/Temurin-21 base. LICENSE-binary adds EPL-2.0, EDL-1.0, CDDL-1.1 and GPL-2.0-with-Classpath-exception (Jakarta/Jersey) plus the JRE; all separate-process, unmodified.",
+      "unit": "compose bundle \u2014 core archive",
+      "usage": "separate-container"
+    },
+    "balabit/syslog-ng": {
+      "license": "GPL-2.0-or-later",
+      "note": "syslog-ng OSE 4.7.1 split licence: core (lib/, syslog-ng/, syslog-ng-ctl/) LGPL-2.1-or-later; modules/ and scl/ GPL-2.0-or-later. The stock image loads all modules, so the running combination is effectively GPL-2.0-or-later. NO OpenSSL linking exception exists. Run unmodified, separate process, no linking to our code.",
+      "unit": "compose bundle \u2014 core archive",
+      "usage": "separate-container"
+    },
+    "busybox": {
+      "license": "GPL-2.0-only",
+      "note": "BusyBox is GPL-2.0-only (not or-later). Unmodified, separate container.",
+      "unit": "NOT SHIPPED \u2014 local dev helper only",
+      "usage": "separate-container"
+    },
+    "clickhouse/clickhouse-server": {
+      "license": "Apache-2.0",
+      "note": "Alpine base.",
+      "unit": "compose bundle \u2014 core archive",
+      "usage": "separate-container"
+    },
+    "curlimages/curl": {
+      "license": "curl",
+      "note": "SPDX id is literally `curl` (MIT/X11 derivative), NOT MIT. Alpine base.",
+      "unit": "compose bundle \u2014 core archive (one-shot init job)",
+      "usage": "separate-container"
+    },
+    "danielqsj/kafka-exporter": {
+      "license": "Apache-2.0",
+      "note": "BusyBox base (BusyBox itself GPL-2.0-only, unmodified).",
+      "unit": "add-on pack: self-monitoring",
+      "usage": "separate-container"
+    },
+    "debian": {
+      "license": "PSF-2.0",
+      "note": "Placeholder: the base is a Debian rootfs (mixed licences, incl. GPL utilities). swtpm/libtpms are BSD-3-Clause. Not in any customer bundle.",
+      "unit": "swtpm-sidecar image (dev/lab `seal` profile)",
+      "usage": "separate-container"
+    },
+    "gcr.io/cadvisor/cadvisor": {
+      "license": "Apache-2.0",
+      "note": "Alpine 3.18 base.",
+      "unit": "add-on pack: self-monitoring",
+      "usage": "separate-container"
+    },
+    "gcr.io/distroless/static-debian12": {
+      "license": "Apache-2.0",
+      "note": "distroless tooling Apache-2.0; contents are ca-certificates, tzdata, passwd from Debian.",
+      "unit": "api image (netops-api, netops-prober) runtime base",
+      "usage": "separate-container"
+    },
+    "ghcr.io/openconfig/gnmic": {
+      "license": "Apache-2.0",
+      "note": "Alpine base.",
+      "unit": "compose bundle \u2014 core archive",
+      "usage": "separate-container"
+    },
+    "golang": {
+      "license": "BSD-3-Clause",
+      "note": "Go toolchain; build stage only, not in the final distroless image.",
+      "unit": "api image build stage",
+      "usage": "build-only"
+    },
+    "gotenberg/gotenberg": {
+      "license": "MIT",
+      "note": "FLAG: Gotenberg's own Go code is MIT, but the debian:12-slim image bundles PDFtk (GPL-2.0-or-later), LibreOffice (MPL-2.0), ttf-mscorefonts-installer (PROPRIETARY Microsoft EULA with redistribution restrictions) and, on amd64, Google Chrome (proprietary). Must not enter a customer bundle without owner sign-off. The `:8` tag is a floating major tag.",
+      "unit": "NOT SHIPPED \u2014 optional `pdf` profile, excluded from every bundle",
+      "usage": "separate-container"
+    },
+    "grafana/grafana": {
+      "license": "AGPL-3.0-only",
+      "note": "AGPL-3.0-only per upstream package.json + LICENSING.md (relicensed from Apache-2.0 at v9.0). Shipped UNMODIFIED as a separate container; no Correlix code links to or derives from it. AGPL \u00a713 network clause applies to Grafana's own UI, which we neither modify nor proxy-rebrand.",
+      "unit": "add-on pack: self-monitoring",
+      "usage": "separate-container"
+    },
+    "netboxcommunity/netbox": {
+      "license": "Apache-2.0",
+      "note": "App (netbox) and image build (netbox-docker) both Apache-2.0. Ubuntu 24.04 base; its transitive Python/Django tree is UNAUDITED because the image never ships.",
+      "unit": "NOT SHIPPED \u2014 optional `netbox` profile, excluded from every bundle",
+      "usage": "separate-container"
+    },
+    "netsampler/goflow2": {
+      "license": "BSD-3-Clause",
+      "note": "",
+      "unit": "compose bundle \u2014 core archive",
+      "usage": "separate-container"
+    },
+    "nginx": {
+      "license": "BSD-2-Clause",
+      "note": "Base image for our own frontend/nginx images. Alpine base.",
+      "unit": "frontend + nginx images (netops-frontend, netops-nginx)",
+      "usage": "separate-container"
+    },
+    "node": {
+      "license": "MIT",
+      "note": "",
+      "unit": "frontend build stage (Dockerfile.frontend.full, unused by default)",
+      "usage": "build-only"
+    },
+    "opensearchproject/opensearch": {
+      "license": "Apache-2.0",
+      "note": "Apache-2.0, NOT SSPL/Elastic. Bundles an Adoptium JDK (GPL-2.0-only WITH Classpath-exception-2.0). We MODIFY it (plugin strip in deployment/docker/opensearch/Dockerfile) -> Apache-2.0 \u00a74 duty to carry prominent notice of changes.",
+      "unit": "compose bundle \u2014 core archive (rebuilt as netops-opensearch)",
+      "usage": "separate-container"
+    },
+    "opensearchproject/opensearch-dashboards": {
+      "license": "Apache-2.0",
+      "note": "Apache-2.0, NOT SSPL/Elastic.",
+      "unit": "add-on pack: log-search-ui",
+      "usage": "separate-container"
+    },
+    "postgres": {
+      "license": "PostgreSQL",
+      "note": "PostgreSQL Licence (BSD/MIT-like). Alpine base.",
+      "unit": "compose bundle \u2014 core archive",
+      "usage": "separate-container"
+    },
+    "prom/node-exporter": {
+      "license": "Apache-2.0",
+      "note": "BusyBox base.",
+      "unit": "add-on pack: self-monitoring",
+      "usage": "separate-container"
+    },
+    "python": {
+      "license": "PSF-2.0",
+      "note": "CPython under PSF-2.0 on a debian:12-slim rootfs; the Debian userland carries GPL-2.0/GPL-3.0 utilities, unmodified, source available from Debian.",
+      "unit": "correlation + cloud-ingest images runtime base",
+      "usage": "separate-container"
+    },
+    "quay.io/keycloak/keycloak": {
+      "license": "Apache-2.0",
+      "note": "FLAG: Keycloak is Apache-2.0, but the image base is Red Hat ubi9-micro, governed by the Red Hat UBI EULA (not an OSS licence). Redistribution is permitted under the UBI terms but needs its own review line.",
+      "unit": "compose bundle \u2014 core archive (`sso` profile is in BASE_PROFILES)",
+      "usage": "separate-container"
+    },
+    "telegraf": {
+      "license": "MIT",
+      "note": "MIT (unchanged at 1.31). Its Go dependency tree carries MPL-2.0 (HashiCorp) and EPL-2.0 (Eclipse Paho); irrelevant while the image does not ship.",
+      "unit": "NOT SHIPPED \u2014 `legacy` profile, excluded from every bundle",
+      "usage": "separate-container"
+    },
+    "timberio/vector": {
+      "license": "MPL-2.0",
+      "note": "MPL-2.0 is file-level copyleft. We run it UNMODIFIED (vector-router only layers `apk add curl` on top; no Vector source is touched) and our vector.yaml/VRL are configuration, not modifications. Obligation is notice + a pointer to upstream source only.",
+      "unit": "compose bundle \u2014 core archive",
+      "usage": "separate-container"
+    },
+    "ubuntu": {
+      "license": "MIT",
+      "note": "Placeholder for a mixed-licence Debian/Ubuntu rootfs; operator tooling only.",
+      "unit": "vm-image-builder (operator tooling, not shipped)",
+      "usage": "build-only"
+    },
+    "valkey/valkey": {
+      "license": "BSD-3-Clause",
+      "note": "Replaced Redis (RSALv2/SSPL) \u2014 see LICENSES.md resolved history. Alpine base.",
+      "unit": "compose bundle \u2014 core archive",
+      "usage": "separate-container"
+    },
+    "victoriametrics/victoria-metrics": {
+      "license": "Apache-2.0",
+      "note": "OSS build: enterprise images carry an `-enterprise` tag suffix, which this does not.",
+      "unit": "compose bundle \u2014 core archive",
+      "usage": "separate-container"
+    },
+    "victoriametrics/vmalert": {
+      "license": "Apache-2.0",
+      "note": "OSS build (no `-enterprise` suffix).",
+      "unit": "compose bundle \u2014 core archive",
+      "usage": "separate-container"
+    },
+    "victoriametrics/vmauth": {
+      "license": "Apache-2.0",
+      "note": "OSS build (no `-enterprise` suffix).",
+      "unit": "NOT SHIPPED \u2014 optional `vmauth` profile",
+      "usage": "separate-container"
+    }
+  },
+  "license_texts": {
+    "Feather icons (MIT) and Lucide (ISC)": "Portions of the Correlix icon set reproduce path data from Feather and Lucide.\n\nFeather - Copyright (c) 2013-2023 Cole Bemis - MIT License\nLucide  - Copyright (c) Lucide Contributors - ISC License\n          (Lucide retains Feather's MIT notice for icons derived from it)\n\nPermission is hereby granted, free of charge, to any person obtaining a copy\nof this software and associated documentation files (the \"Software\"), to deal\nin the Software without restriction, including without limitation the rights\nto use, copy, modify, merge, publish, distribute, sublicense, and/or sell\ncopies of the Software, and to permit persons to whom the Software is\nfurnished to do so, subject to the following conditions:\n\nThe above copyright notice and this permission notice shall be included in\nall copies or substantial portions of the Software.\n\nTHE SOFTWARE IS PROVIDED \"AS IS\", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR\nIMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,\nFITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE\nAUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER\nLIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,\nOUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE\nSOFTWARE.",
+    "IETF RFC MIB modules": "MIB modules reproduced from IETF RFCs are Code Components as defined by the\nIETF Trust Legal Provisions and are licensed under the Simplified BSD terms\nset out therein. P-BRIDGE-MIB and Q-BRIDGE-MIB carry the Internet Society\n(2006) notice for RFC 4363 inline in the module text.",
+    "Natural Earth": "Country boundary geometry is derived from Natural Earth (1:110m Admin-0),\nwhich is released into the public domain. No permission or attribution is\nrequired; this credit is offered as a courtesy.",
+    "SIL Open Font License 1.1 \u2014 Inter, IBM Plex Mono, Space Grotesk, Manrope": "Copyright (c) The Inter Project Authors (https://github.com/rsms/inter)\nCopyright (c) IBM Corporation (IBM Plex Mono)\nCopyright (c) Florian Karsten (Space Grotesk)\nCopyright (c) The Manrope Project Authors (https://github.com/sharanda/manrope)\n\nThese fonts are licensed under the SIL Open Font License, Version 1.1.\nThe full licence is available at https://openfontlicense.org and is\ndistributed alongside the font files in this product. The fonts may be\nfreely used, embedded and redistributed, but may not be sold on their own,\nand any Reserved Font Name may not be reused in a modified version.",
+    "Written offer for Corresponding Source (GPL / AGPL / MPL / EPL components)": "Correlix redistributes the following components UNMODIFIED, as separate\ncontainers or as separate files. For each, the complete corresponding source\nfor the exact version shipped is available from the upstream project, and\nCorrelix will additionally provide it on written request for three years:\n\n  syslog-ng OSE 4.7.1   GPL-2.0-or-later / LGPL-2.1-or-later\n                        https://github.com/syslog-ng/syslog-ng (tag syslog-ng-4.7.1)\n  Grafana 11.2.0        AGPL-3.0-only (self-monitoring add-on pack only)\n                        https://github.com/grafana/grafana (tag v11.2.0)\n  Vector 0.40.0         MPL-2.0\n                        https://github.com/vectordotdev/vector (tag v0.40.0)\n  elkjs 0.11.1          EPL-2.0 (bundled in the web UI)\n                        https://github.com/kieler/elkjs (tag v0.11.1)\n  certifi 2026.5.20     MPL-2.0\n                        https://github.com/certifi/python-certifi\n\nNone of these components is modified by Correlix, and no Correlix code is\nlinked into, derived from, or combined with them beyond running them as\nseparate processes configured through their own public interfaces."
+  },
+  "npm": {
+    "@adobe/css-tools": {
+      "license": "MIT"
+    },
+    "@algolia/abtesting": {
+      "license": "MIT"
+    },
+    "@algolia/autocomplete-core": {
+      "license": "MIT"
+    },
+    "@algolia/autocomplete-plugin-algolia-insights": {
+      "license": "MIT"
+    },
+    "@algolia/autocomplete-preset-algolia": {
+      "license": "MIT"
+    },
+    "@algolia/autocomplete-shared": {
+      "license": "MIT"
+    },
+    "@algolia/cache-browser-local-storage": {
+      "license": "MIT"
+    },
+    "@algolia/cache-common": {
+      "license": "MIT"
+    },
+    "@algolia/cache-in-memory": {
+      "license": "MIT"
+    },
+    "@algolia/client-abtesting": {
+      "license": "MIT"
+    },
+    "@algolia/client-account": {
+      "license": "MIT"
+    },
+    "@algolia/client-analytics": {
+      "license": "MIT"
+    },
+    "@algolia/client-common": {
+      "license": "MIT"
+    },
+    "@algolia/client-insights": {
+      "license": "MIT"
+    },
+    "@algolia/client-personalization": {
+      "license": "MIT"
+    },
+    "@algolia/client-query-suggestions": {
+      "license": "MIT"
+    },
+    "@algolia/client-search": {
+      "license": "MIT"
+    },
+    "@algolia/events": {
+      "license": "MIT"
+    },
+    "@algolia/ingestion": {
+      "license": "MIT"
+    },
+    "@algolia/logger-common": {
+      "license": "MIT"
+    },
+    "@algolia/logger-console": {
+      "license": "MIT"
+    },
+    "@algolia/monitoring": {
+      "license": "MIT"
+    },
+    "@algolia/recommend": {
+      "license": "MIT"
+    },
+    "@algolia/requester-browser-xhr": {
+      "license": "MIT"
+    },
+    "@algolia/requester-common": {
+      "license": "MIT"
+    },
+    "@algolia/requester-fetch": {
+      "license": "MIT"
+    },
+    "@algolia/requester-node-http": {
+      "license": "MIT"
+    },
+    "@algolia/transporter": {
+      "license": "MIT"
+    },
+    "@asamuzakjp/css-color": {
+      "license": "MIT"
+    },
+    "@asamuzakjp/dom-selector": {
+      "license": "MIT"
+    },
+    "@asamuzakjp/generational-cache": {
+      "license": "MIT"
+    },
+    "@asamuzakjp/nwsapi": {
+      "license": "MIT"
+    },
+    "@babel/code-frame": {
+      "license": "MIT"
+    },
+    "@babel/compat-data": {
+      "license": "MIT"
+    },
+    "@babel/core": {
+      "license": "MIT"
+    },
+    "@babel/generator": {
+      "license": "MIT"
+    },
+    "@babel/helper-annotate-as-pure": {
+      "license": "MIT"
+    },
+    "@babel/helper-compilation-targets": {
+      "license": "MIT"
+    },
+    "@babel/helper-create-class-features-plugin": {
+      "license": "MIT"
+    },
+    "@babel/helper-create-regexp-features-plugin": {
+      "license": "MIT"
+    },
+    "@babel/helper-define-polyfill-provider": {
+      "license": "MIT"
+    },
+    "@babel/helper-globals": {
+      "license": "MIT"
+    },
+    "@babel/helper-member-expression-to-functions": {
+      "license": "MIT"
+    },
+    "@babel/helper-module-imports": {
+      "license": "MIT"
+    },
+    "@babel/helper-module-transforms": {
+      "license": "MIT"
+    },
+    "@babel/helper-optimise-call-expression": {
+      "license": "MIT"
+    },
+    "@babel/helper-plugin-utils": {
+      "license": "MIT"
+    },
+    "@babel/helper-remap-async-to-generator": {
+      "license": "MIT"
+    },
+    "@babel/helper-replace-supers": {
+      "license": "MIT"
+    },
+    "@babel/helper-skip-transparent-expression-wrappers": {
+      "license": "MIT"
+    },
+    "@babel/helper-string-parser": {
+      "license": "MIT"
+    },
+    "@babel/helper-validator-identifier": {
+      "license": "MIT"
+    },
+    "@babel/helper-validator-option": {
+      "license": "MIT"
+    },
+    "@babel/helper-wrap-function": {
+      "license": "MIT"
+    },
+    "@babel/helpers": {
+      "license": "MIT"
+    },
+    "@babel/parser": {
+      "license": "MIT"
+    },
+    "@babel/plugin-bugfix-firefox-class-in-computed-class-key": {
+      "license": "MIT"
+    },
+    "@babel/plugin-bugfix-safari-class-field-initializer-scope": {
+      "license": "MIT"
+    },
+    "@babel/plugin-bugfix-safari-id-destructuring-collision-in-function-expression": {
+      "license": "MIT"
+    },
+    "@babel/plugin-bugfix-safari-rest-destructuring-rhs-array": {
+      "license": "MIT"
+    },
+    "@babel/plugin-bugfix-v8-spread-parameters-in-optional-chaining": {
+      "license": "MIT"
+    },
+    "@babel/plugin-bugfix-v8-static-class-fields-redefine-readonly": {
+      "license": "MIT"
+    },
+    "@babel/plugin-proposal-private-property-in-object": {
+      "license": "MIT"
+    },
+    "@babel/plugin-syntax-dynamic-import": {
+      "license": "MIT"
+    },
+    "@babel/plugin-syntax-import-assertions": {
+      "license": "MIT"
+    },
+    "@babel/plugin-syntax-import-attributes": {
+      "license": "MIT"
+    },
+    "@babel/plugin-syntax-jsx": {
+      "license": "MIT"
+    },
+    "@babel/plugin-syntax-typescript": {
+      "license": "MIT"
+    },
+    "@babel/plugin-syntax-unicode-sets-regex": {
+      "license": "MIT"
+    },
+    "@babel/plugin-transform-arrow-functions": {
+      "license": "MIT"
+    },
+    "@babel/plugin-transform-async-generator-functions": {
+      "license": "MIT"
+    },
+    "@babel/plugin-transform-async-to-generator": {
+      "license": "MIT"
+    },
+    "@babel/plugin-transform-block-scoped-functions": {
+      "license": "MIT"
+    },
+    "@babel/plugin-transform-block-scoping": {
+      "license": "MIT"
+    },
+    "@babel/plugin-transform-class-properties": {
+      "license": "MIT"
+    },
+    "@babel/plugin-transform-class-static-block": {
+      "license": "MIT"
+    },
+    "@babel/plugin-transform-classes": {
+      "license": "MIT"
+    },
+    "@babel/plugin-transform-computed-properties": {
+      "license": "MIT"
+    },
+    "@babel/plugin-transform-destructuring": {
+      "license": "MIT"
+    },
+    "@babel/plugin-transform-dotall-regex": {
+      "license": "MIT"
+    },
+    "@babel/plugin-transform-duplicate-keys": {
+      "license": "MIT"
+    },
+    "@babel/plugin-transform-duplicate-named-capturing-groups-regex": {
+      "license": "MIT"
+    },
+    "@babel/plugin-transform-dynamic-import": {
+      "license": "MIT"
+    },
+    "@babel/plugin-transform-explicit-resource-management": {
+      "license": "MIT"
+    },
+    "@babel/plugin-transform-exponentiation-operator": {
+      "license": "MIT"
+    },
+    "@babel/plugin-transform-export-namespace-from": {
+      "license": "MIT"
+    },
+    "@babel/plugin-transform-for-of": {
+      "license": "MIT"
+    },
+    "@babel/plugin-transform-function-name": {
+      "license": "MIT"
+    },
+    "@babel/plugin-transform-json-strings": {
+      "license": "MIT"
+    },
+    "@babel/plugin-transform-literals": {
+      "license": "MIT"
+    },
+    "@babel/plugin-transform-logical-assignment-operators": {
+      "license": "MIT"
+    },
+    "@babel/plugin-transform-member-expression-literals": {
+      "license": "MIT"
+    },
+    "@babel/plugin-transform-modules-amd": {
+      "license": "MIT"
+    },
+    "@babel/plugin-transform-modules-commonjs": {
+      "license": "MIT"
+    },
+    "@babel/plugin-transform-modules-systemjs": {
+      "license": "MIT"
+    },
+    "@babel/plugin-transform-modules-umd": {
+      "license": "MIT"
+    },
+    "@babel/plugin-transform-named-capturing-groups-regex": {
+      "license": "MIT"
+    },
+    "@babel/plugin-transform-new-target": {
+      "license": "MIT"
+    },
+    "@babel/plugin-transform-nullish-coalescing-operator": {
+      "license": "MIT"
+    },
+    "@babel/plugin-transform-numeric-separator": {
+      "license": "MIT"
+    },
+    "@babel/plugin-transform-object-rest-spread": {
+      "license": "MIT"
+    },
+    "@babel/plugin-transform-object-super": {
+      "license": "MIT"
+    },
+    "@babel/plugin-transform-optional-catch-binding": {
+      "license": "MIT"
+    },
+    "@babel/plugin-transform-optional-chaining": {
+      "license": "MIT"
+    },
+    "@babel/plugin-transform-parameters": {
+      "license": "MIT"
+    },
+    "@babel/plugin-transform-private-methods": {
+      "license": "MIT"
+    },
+    "@babel/plugin-transform-private-property-in-object": {
+      "license": "MIT"
+    },
+    "@babel/plugin-transform-property-literals": {
+      "license": "MIT"
+    },
+    "@babel/plugin-transform-react-constant-elements": {
+      "license": "MIT"
+    },
+    "@babel/plugin-transform-react-display-name": {
+      "license": "MIT"
+    },
+    "@babel/plugin-transform-react-jsx": {
+      "license": "MIT"
+    },
+    "@babel/plugin-transform-react-jsx-development": {
+      "license": "MIT"
+    },
+    "@babel/plugin-transform-react-jsx-self": {
+      "license": "MIT"
+    },
+    "@babel/plugin-transform-react-jsx-source": {
+      "license": "MIT"
+    },
+    "@babel/plugin-transform-react-pure-annotations": {
+      "license": "MIT"
+    },
+    "@babel/plugin-transform-regenerator": {
+      "license": "MIT"
+    },
+    "@babel/plugin-transform-regexp-modifiers": {
+      "license": "MIT"
+    },
+    "@babel/plugin-transform-reserved-words": {
+      "license": "MIT"
+    },
+    "@babel/plugin-transform-runtime": {
+      "license": "MIT"
+    },
+    "@babel/plugin-transform-shorthand-properties": {
+      "license": "MIT"
+    },
+    "@babel/plugin-transform-spread": {
+      "license": "MIT"
+    },
+    "@babel/plugin-transform-sticky-regex": {
+      "license": "MIT"
+    },
+    "@babel/plugin-transform-template-literals": {
+      "license": "MIT"
+    },
+    "@babel/plugin-transform-typeof-symbol": {
+      "license": "MIT"
+    },
+    "@babel/plugin-transform-typescript": {
+      "license": "MIT"
+    },
+    "@babel/plugin-transform-unicode-escapes": {
+      "license": "MIT"
+    },
+    "@babel/plugin-transform-unicode-property-regex": {
+      "license": "MIT"
+    },
+    "@babel/plugin-transform-unicode-regex": {
+      "license": "MIT"
+    },
+    "@babel/plugin-transform-unicode-sets-regex": {
+      "license": "MIT"
+    },
+    "@babel/preset-env": {
+      "license": "MIT"
+    },
+    "@babel/preset-modules": {
+      "license": "MIT"
+    },
+    "@babel/preset-react": {
+      "license": "MIT"
+    },
+    "@babel/preset-typescript": {
+      "license": "MIT"
+    },
+    "@babel/runtime": {
+      "license": "MIT"
+    },
+    "@babel/runtime-corejs3": {
+      "license": "MIT"
+    },
+    "@babel/template": {
+      "license": "MIT"
+    },
+    "@babel/traverse": {
+      "license": "MIT"
+    },
+    "@babel/types": {
+      "license": "MIT"
+    },
+    "@bramus/specificity": {
+      "license": "MIT"
+    },
+    "@colors/colors": {
+      "license": "MIT"
+    },
+    "@csstools/color-helpers": {
+      "license": "MIT-0"
+    },
+    "@csstools/css-calc": {
+      "license": "MIT"
+    },
+    "@csstools/css-color-parser": {
+      "license": "MIT"
+    },
+    "@csstools/css-parser-algorithms": {
+      "license": "MIT"
+    },
+    "@csstools/css-syntax-patches-for-csstree": {
+      "license": "MIT-0"
+    },
+    "@csstools/css-tokenizer": {
+      "license": "MIT"
+    },
+    "@discoveryjs/json-ext": {
+      "license": "MIT"
+    },
+    "@docsearch/css": {
+      "license": "MIT"
+    },
+    "@docsearch/react": {
+      "license": "MIT"
+    },
+    "@docusaurus/core": {
+      "license": "MIT"
+    },
+    "@docusaurus/cssnano-preset": {
+      "license": "MIT"
+    },
+    "@docusaurus/logger": {
+      "license": "MIT"
+    },
+    "@docusaurus/mdx-loader": {
+      "license": "MIT"
+    },
+    "@docusaurus/module-type-aliases": {
+      "license": "MIT"
+    },
+    "@docusaurus/plugin-content-blog": {
+      "license": "MIT"
+    },
+    "@docusaurus/plugin-content-docs": {
+      "license": "MIT"
+    },
+    "@docusaurus/plugin-content-pages": {
+      "license": "MIT"
+    },
+    "@docusaurus/plugin-debug": {
+      "license": "MIT"
+    },
+    "@docusaurus/plugin-google-analytics": {
+      "license": "MIT"
+    },
+    "@docusaurus/plugin-google-gtag": {
+      "license": "MIT"
+    },
+    "@docusaurus/plugin-google-tag-manager": {
+      "license": "MIT"
+    },
+    "@docusaurus/plugin-sitemap": {
+      "license": "MIT"
+    },
+    "@docusaurus/preset-classic": {
+      "license": "MIT"
+    },
+    "@docusaurus/theme-classic": {
+      "license": "MIT"
+    },
+    "@docusaurus/theme-common": {
+      "license": "MIT"
+    },
+    "@docusaurus/theme-search-algolia": {
+      "license": "MIT"
+    },
+    "@docusaurus/theme-translations": {
+      "license": "MIT"
+    },
+    "@docusaurus/tsconfig": {
+      "license": "MIT"
+    },
+    "@docusaurus/types": {
+      "license": "MIT"
+    },
+    "@docusaurus/utils": {
+      "license": "MIT"
+    },
+    "@docusaurus/utils-common": {
+      "license": "MIT"
+    },
+    "@docusaurus/utils-validation": {
+      "license": "MIT"
+    },
+    "@esbuild/aix-ppc64": {
+      "license": "MIT",
+      "note": "optional platform binary of esbuild (MIT); not installed on this platform"
+    },
+    "@esbuild/android-arm": {
+      "license": "MIT",
+      "note": "optional platform binary of esbuild (MIT); not installed on this platform"
+    },
+    "@esbuild/android-arm64": {
+      "license": "MIT",
+      "note": "optional platform binary of esbuild (MIT); not installed on this platform"
+    },
+    "@esbuild/android-x64": {
+      "license": "MIT",
+      "note": "optional platform binary of esbuild (MIT); not installed on this platform"
+    },
+    "@esbuild/darwin-arm64": {
+      "license": "MIT",
+      "note": "optional platform binary of esbuild (MIT); not installed on this platform"
+    },
+    "@esbuild/darwin-x64": {
+      "license": "MIT",
+      "note": "optional platform binary of esbuild (MIT); not installed on this platform"
+    },
+    "@esbuild/freebsd-arm64": {
+      "license": "MIT",
+      "note": "optional platform binary of esbuild (MIT); not installed on this platform"
+    },
+    "@esbuild/freebsd-x64": {
+      "license": "MIT",
+      "note": "optional platform binary of esbuild (MIT); not installed on this platform"
+    },
+    "@esbuild/linux-arm": {
+      "license": "MIT",
+      "note": "optional platform binary of esbuild (MIT); not installed on this platform"
+    },
+    "@esbuild/linux-arm64": {
+      "license": "MIT",
+      "note": "optional platform binary of esbuild (MIT); not installed on this platform"
+    },
+    "@esbuild/linux-ia32": {
+      "license": "MIT",
+      "note": "optional platform binary of esbuild (MIT); not installed on this platform"
+    },
+    "@esbuild/linux-loong64": {
+      "license": "MIT",
+      "note": "optional platform binary of esbuild (MIT); not installed on this platform"
+    },
+    "@esbuild/linux-mips64el": {
+      "license": "MIT",
+      "note": "optional platform binary of esbuild (MIT); not installed on this platform"
+    },
+    "@esbuild/linux-ppc64": {
+      "license": "MIT",
+      "note": "optional platform binary of esbuild (MIT); not installed on this platform"
+    },
+    "@esbuild/linux-riscv64": {
+      "license": "MIT",
+      "note": "optional platform binary of esbuild (MIT); not installed on this platform"
+    },
+    "@esbuild/linux-s390x": {
+      "license": "MIT",
+      "note": "optional platform binary of esbuild (MIT); not installed on this platform"
+    },
+    "@esbuild/linux-x64": {
+      "license": "MIT"
+    },
+    "@esbuild/netbsd-arm64": {
+      "license": "MIT",
+      "note": "optional platform binary of esbuild (MIT); not installed on this platform"
+    },
+    "@esbuild/netbsd-x64": {
+      "license": "MIT",
+      "note": "optional platform binary of esbuild (MIT); not installed on this platform"
+    },
+    "@esbuild/openbsd-arm64": {
+      "license": "MIT",
+      "note": "optional platform binary of esbuild (MIT); not installed on this platform"
+    },
+    "@esbuild/openbsd-x64": {
+      "license": "MIT",
+      "note": "optional platform binary of esbuild (MIT); not installed on this platform"
+    },
+    "@esbuild/openharmony-arm64": {
+      "license": "MIT",
+      "note": "optional platform binary of esbuild (MIT); not installed on this platform"
+    },
+    "@esbuild/sunos-x64": {
+      "license": "MIT",
+      "note": "optional platform binary of esbuild (MIT); not installed on this platform"
+    },
+    "@esbuild/win32-arm64": {
+      "license": "MIT",
+      "note": "optional platform binary of esbuild (MIT); not installed on this platform"
+    },
+    "@esbuild/win32-ia32": {
+      "license": "MIT",
+      "note": "optional platform binary of esbuild (MIT); not installed on this platform"
+    },
+    "@esbuild/win32-x64": {
+      "license": "MIT",
+      "note": "optional platform binary of esbuild (MIT); not installed on this platform"
+    },
+    "@exodus/bytes": {
+      "license": "MIT"
+    },
+    "@fontsource-variable/manrope": {
+      "license": "OFL-1.1"
+    },
+    "@fontsource/ibm-plex-mono": {
+      "license": "OFL-1.1"
+    },
+    "@fontsource/inter": {
+      "license": "OFL-1.1"
+    },
+    "@fontsource/space-grotesk": {
+      "license": "OFL-1.1"
+    },
+    "@hapi/hoek": {
+      "license": "BSD-3-Clause"
+    },
+    "@hapi/topo": {
+      "license": "BSD-3-Clause"
+    },
+    "@jest/schemas": {
+      "license": "MIT"
+    },
+    "@jest/types": {
+      "license": "MIT"
+    },
+    "@jridgewell/gen-mapping": {
+      "license": "MIT"
+    },
+    "@jridgewell/remapping": {
+      "license": "MIT"
+    },
+    "@jridgewell/resolve-uri": {
+      "license": "MIT"
+    },
+    "@jridgewell/source-map": {
+      "license": "MIT"
+    },
+    "@jridgewell/sourcemap-codec": {
+      "license": "MIT"
+    },
+    "@jridgewell/trace-mapping": {
+      "license": "MIT"
+    },
+    "@leichtgewicht/ip-codec": {
+      "license": "MIT"
+    },
+    "@mdx-js/mdx": {
+      "license": "MIT"
+    },
+    "@mdx-js/react": {
+      "license": "MIT"
+    },
+    "@nodelib/fs.scandir": {
+      "license": "MIT"
+    },
+    "@nodelib/fs.stat": {
+      "license": "MIT"
+    },
+    "@nodelib/fs.walk": {
+      "license": "MIT"
+    },
+    "@playwright/test": {
+      "license": "Apache-2.0"
+    },
+    "@pnpm/config.env-replace": {
+      "license": "MIT"
+    },
+    "@pnpm/network.ca-file": {
+      "license": "MIT"
+    },
+    "@pnpm/npm-conf": {
+      "license": "MIT"
+    },
+    "@polka/url": {
+      "license": "MIT"
+    },
+    "@rolldown/pluginutils": {
+      "license": "MIT"
+    },
+    "@rollup/rollup-android-arm-eabi": {
+      "license": "MIT"
+    },
+    "@rollup/rollup-android-arm64": {
+      "license": "MIT"
+    },
+    "@rollup/rollup-darwin-arm64": {
+      "license": "MIT"
+    },
+    "@rollup/rollup-darwin-x64": {
+      "license": "MIT"
+    },
+    "@rollup/rollup-freebsd-arm64": {
+      "license": "MIT"
+    },
+    "@rollup/rollup-freebsd-x64": {
+      "license": "MIT"
+    },
+    "@rollup/rollup-linux-arm-gnueabihf": {
+      "license": "MIT"
+    },
+    "@rollup/rollup-linux-arm-musleabihf": {
+      "license": "MIT"
+    },
+    "@rollup/rollup-linux-arm64-gnu": {
+      "license": "MIT"
+    },
+    "@rollup/rollup-linux-arm64-musl": {
+      "license": "MIT"
+    },
+    "@rollup/rollup-linux-loong64-gnu": {
+      "license": "MIT"
+    },
+    "@rollup/rollup-linux-loong64-musl": {
+      "license": "MIT"
+    },
+    "@rollup/rollup-linux-ppc64-gnu": {
+      "license": "MIT"
+    },
+    "@rollup/rollup-linux-ppc64-musl": {
+      "license": "MIT"
+    },
+    "@rollup/rollup-linux-riscv64-gnu": {
+      "license": "MIT"
+    },
+    "@rollup/rollup-linux-riscv64-musl": {
+      "license": "MIT"
+    },
+    "@rollup/rollup-linux-s390x-gnu": {
+      "license": "MIT"
+    },
+    "@rollup/rollup-linux-x64-gnu": {
+      "license": "MIT"
+    },
+    "@rollup/rollup-linux-x64-musl": {
+      "license": "MIT"
+    },
+    "@rollup/rollup-openbsd-x64": {
+      "license": "MIT"
+    },
+    "@rollup/rollup-openharmony-arm64": {
+      "license": "MIT"
+    },
+    "@rollup/rollup-win32-arm64-msvc": {
+      "license": "MIT"
+    },
+    "@rollup/rollup-win32-ia32-msvc": {
+      "license": "MIT"
+    },
+    "@rollup/rollup-win32-x64-gnu": {
+      "license": "MIT"
+    },
+    "@rollup/rollup-win32-x64-msvc": {
+      "license": "MIT"
+    },
+    "@sideway/address": {
+      "license": "BSD-3-Clause"
+    },
+    "@sideway/formula": {
+      "license": "BSD-3-Clause"
+    },
+    "@sideway/pinpoint": {
+      "license": "BSD-3-Clause"
+    },
+    "@sinclair/typebox": {
+      "license": "MIT"
+    },
+    "@sindresorhus/is": {
+      "license": "MIT"
+    },
+    "@slorber/remark-comment": {
+      "license": "MIT"
+    },
+    "@svgr/babel-plugin-add-jsx-attribute": {
+      "license": "MIT"
+    },
+    "@svgr/babel-plugin-remove-jsx-attribute": {
+      "license": "MIT"
+    },
+    "@svgr/babel-plugin-remove-jsx-empty-expression": {
+      "license": "MIT"
+    },
+    "@svgr/babel-plugin-replace-jsx-attribute-value": {
+      "license": "MIT"
+    },
+    "@svgr/babel-plugin-svg-dynamic-title": {
+      "license": "MIT"
+    },
+    "@svgr/babel-plugin-svg-em-dimensions": {
+      "license": "MIT"
+    },
+    "@svgr/babel-plugin-transform-react-native-svg": {
+      "license": "MIT"
+    },
+    "@svgr/babel-plugin-transform-svg-component": {
+      "license": "MIT"
+    },
+    "@svgr/babel-preset": {
+      "license": "MIT"
+    },
+    "@svgr/core": {
+      "license": "MIT"
+    },
+    "@svgr/hast-util-to-babel-ast": {
+      "license": "MIT"
+    },
+    "@svgr/plugin-jsx": {
+      "license": "MIT"
+    },
+    "@svgr/plugin-svgo": {
+      "license": "MIT"
+    },
+    "@svgr/webpack": {
+      "license": "MIT"
+    },
+    "@szmarczak/http-timer": {
+      "license": "MIT"
+    },
+    "@testing-library/dom": {
+      "license": "MIT"
+    },
+    "@testing-library/jest-dom": {
+      "license": "MIT"
+    },
+    "@testing-library/react": {
+      "license": "MIT"
+    },
+    "@types/aria-query": {
+      "license": "MIT"
+    },
+    "@types/babel__core": {
+      "license": "MIT"
+    },
+    "@types/babel__generator": {
+      "license": "MIT"
+    },
+    "@types/babel__template": {
+      "license": "MIT"
+    },
+    "@types/babel__traverse": {
+      "license": "MIT"
+    },
+    "@types/body-parser": {
+      "license": "MIT"
+    },
+    "@types/bonjour": {
+      "license": "MIT"
+    },
+    "@types/chai": {
+      "license": "MIT"
+    },
+    "@types/connect": {
+      "license": "MIT"
+    },
+    "@types/connect-history-api-fallback": {
+      "license": "MIT"
+    },
+    "@types/d3-color": {
+      "license": "MIT"
+    },
+    "@types/d3-drag": {
+      "license": "MIT"
+    },
+    "@types/d3-interpolate": {
+      "license": "MIT"
+    },
+    "@types/d3-selection": {
+      "license": "MIT"
+    },
+    "@types/d3-transition": {
+      "license": "MIT"
+    },
+    "@types/d3-zoom": {
+      "license": "MIT"
+    },
+    "@types/debug": {
+      "license": "MIT"
+    },
+    "@types/deep-eql": {
+      "license": "MIT"
+    },
+    "@types/eslint": {
+      "license": "MIT"
+    },
+    "@types/eslint-scope": {
+      "license": "MIT"
+    },
+    "@types/estree": {
+      "license": "MIT"
+    },
+    "@types/estree-jsx": {
+      "license": "MIT"
+    },
+    "@types/express": {
+      "license": "MIT"
+    },
+    "@types/express-serve-static-core": {
+      "license": "MIT"
+    },
+    "@types/gtag.js": {
+      "license": "MIT"
+    },
+    "@types/hast": {
+      "license": "MIT"
+    },
+    "@types/history": {
+      "license": "MIT"
+    },
+    "@types/html-minifier-terser": {
+      "license": "MIT"
+    },
+    "@types/http-cache-semantics": {
+      "license": "MIT"
+    },
+    "@types/http-errors": {
+      "license": "MIT"
+    },
+    "@types/http-proxy": {
+      "license": "MIT"
+    },
+    "@types/istanbul-lib-coverage": {
+      "license": "MIT"
+    },
+    "@types/istanbul-lib-report": {
+      "license": "MIT"
+    },
+    "@types/istanbul-reports": {
+      "license": "MIT"
+    },
+    "@types/json-schema": {
+      "license": "MIT"
+    },
+    "@types/mdast": {
+      "license": "MIT"
+    },
+    "@types/mdx": {
+      "license": "MIT"
+    },
+    "@types/mime": {
+      "license": "MIT"
+    },
+    "@types/ms": {
+      "license": "MIT"
+    },
+    "@types/node": {
+      "license": "MIT"
+    },
+    "@types/node-forge": {
+      "license": "MIT"
+    },
+    "@types/parse-json": {
+      "license": "MIT"
+    },
+    "@types/prismjs": {
+      "license": "MIT"
+    },
+    "@types/prop-types": {
+      "license": "MIT"
+    },
+    "@types/qs": {
+      "license": "MIT"
+    },
+    "@types/range-parser": {
+      "license": "MIT"
+    },
+    "@types/react": {
+      "license": "MIT"
+    },
+    "@types/react-dom": {
+      "license": "MIT"
+    },
+    "@types/react-router": {
+      "license": "MIT"
+    },
+    "@types/react-router-config": {
+      "license": "MIT"
+    },
+    "@types/react-router-dom": {
+      "license": "MIT"
+    },
+    "@types/retry": {
+      "license": "MIT"
+    },
+    "@types/sax": {
+      "license": "MIT"
+    },
+    "@types/send": {
+      "license": "MIT"
+    },
+    "@types/serve-index": {
+      "license": "MIT"
+    },
+    "@types/serve-static": {
+      "license": "MIT"
+    },
+    "@types/sockjs": {
+      "license": "MIT"
+    },
+    "@types/unist": {
+      "license": "MIT"
+    },
+    "@types/whatwg-mimetype": {
+      "license": "MIT"
+    },
+    "@types/ws": {
+      "license": "MIT"
+    },
+    "@types/yargs": {
+      "license": "MIT"
+    },
+    "@types/yargs-parser": {
+      "license": "MIT"
+    },
+    "@ungap/structured-clone": {
+      "license": "ISC"
+    },
+    "@vitejs/plugin-react": {
+      "license": "MIT"
+    },
+    "@vitest/expect": {
+      "license": "MIT"
+    },
+    "@vitest/mocker": {
+      "license": "MIT"
+    },
+    "@vitest/pretty-format": {
+      "license": "MIT"
+    },
+    "@vitest/runner": {
+      "license": "MIT"
+    },
+    "@vitest/snapshot": {
+      "license": "MIT"
+    },
+    "@vitest/spy": {
+      "license": "MIT"
+    },
+    "@vitest/utils": {
+      "license": "MIT"
+    },
+    "@webassemblyjs/ast": {
+      "license": "MIT"
+    },
+    "@webassemblyjs/floating-point-hex-parser": {
+      "license": "MIT"
+    },
+    "@webassemblyjs/helper-api-error": {
+      "license": "MIT"
+    },
+    "@webassemblyjs/helper-buffer": {
+      "license": "MIT"
+    },
+    "@webassemblyjs/helper-numbers": {
+      "license": "MIT"
+    },
+    "@webassemblyjs/helper-wasm-bytecode": {
+      "license": "MIT"
+    },
+    "@webassemblyjs/helper-wasm-section": {
+      "license": "MIT"
+    },
+    "@webassemblyjs/ieee754": {
+      "license": "MIT"
+    },
+    "@webassemblyjs/leb128": {
+      "license": "Apache-2.0"
+    },
+    "@webassemblyjs/utf8": {
+      "license": "MIT"
+    },
+    "@webassemblyjs/wasm-edit": {
+      "license": "MIT"
+    },
+    "@webassemblyjs/wasm-gen": {
+      "license": "MIT"
+    },
+    "@webassemblyjs/wasm-opt": {
+      "license": "MIT"
+    },
+    "@webassemblyjs/wasm-parser": {
+      "license": "MIT"
+    },
+    "@webassemblyjs/wast-printer": {
+      "license": "MIT"
+    },
+    "@xterm/addon-fit": {
+      "license": "MIT"
+    },
+    "@xterm/xterm": {
+      "license": "MIT"
+    },
+    "@xtuc/ieee754": {
+      "license": "BSD-3-Clause"
+    },
+    "@xtuc/long": {
+      "license": "Apache-2.0"
+    },
+    "@xyflow/react": {
+      "license": "MIT"
+    },
+    "@xyflow/system": {
+      "license": "MIT"
+    },
+    "accepts": {
+      "license": "MIT"
+    },
+    "acorn": {
+      "license": "MIT"
+    },
+    "acorn-import-assertions": {
+      "license": "MIT"
+    },
+    "acorn-jsx": {
+      "license": "MIT"
+    },
+    "acorn-walk": {
+      "license": "MIT"
+    },
+    "address": {
+      "license": "MIT"
+    },
+    "aggregate-error": {
+      "license": "MIT"
+    },
+    "ajv": {
+      "license": "MIT"
+    },
+    "ajv-formats": {
+      "license": "MIT"
+    },
+    "ajv-keywords": {
+      "license": "MIT"
+    },
+    "algoliasearch": {
+      "license": "MIT"
+    },
+    "algoliasearch-helper": {
+      "license": "MIT"
+    },
+    "ansi-align": {
+      "license": "ISC"
+    },
+    "ansi-html-community": {
+      "license": "Apache-2.0"
+    },
+    "ansi-regex": {
+      "license": "MIT"
+    },
+    "ansi-styles": {
+      "license": "MIT"
+    },
+    "anymatch": {
+      "license": "ISC"
+    },
+    "arg": {
+      "license": "MIT"
+    },
+    "argparse": {
+      "license": "Python-2.0"
+    },
+    "aria-query": {
+      "license": "Apache-2.0"
+    },
+    "array-flatten": {
+      "license": "MIT"
+    },
+    "array-union": {
+      "license": "MIT"
+    },
+    "assertion-error": {
+      "license": "MIT"
+    },
+    "astring": {
+      "license": "MIT"
+    },
+    "at-least-node": {
+      "license": "ISC"
+    },
+    "autoprefixer": {
+      "license": "MIT"
+    },
+    "babel-loader": {
+      "license": "MIT"
+    },
+    "babel-plugin-dynamic-import-node": {
+      "license": "MIT"
+    },
+    "babel-plugin-polyfill-corejs2": {
+      "license": "MIT"
+    },
+    "babel-plugin-polyfill-corejs3": {
+      "license": "MIT"
+    },
+    "babel-plugin-polyfill-regenerator": {
+      "license": "MIT"
+    },
+    "bail": {
+      "license": "MIT"
+    },
+    "balanced-match": {
+      "license": "MIT"
+    },
+    "baseline-browser-mapping": {
+      "license": "Apache-2.0"
+    },
+    "batch": {
+      "license": "MIT"
+    },
+    "bidi-js": {
+      "license": "MIT"
+    },
+    "big.js": {
+      "license": "MIT"
+    },
+    "binary-extensions": {
+      "license": "MIT"
+    },
+    "body-parser": {
+      "license": "MIT"
+    },
+    "bonjour-service": {
+      "license": "MIT"
+    },
+    "boolbase": {
+      "license": "ISC"
+    },
+    "boxen": {
+      "license": "MIT"
+    },
+    "brace-expansion": {
+      "license": "MIT"
+    },
+    "braces": {
+      "license": "MIT"
+    },
+    "browserslist": {
+      "license": "MIT"
+    },
+    "buffer-from": {
+      "license": "MIT"
+    },
+    "buffer-image-size": {
+      "license": "MIT"
+    },
+    "bytes": {
+      "license": "MIT"
+    },
+    "cac": {
+      "license": "MIT"
+    },
+    "cacheable-lookup": {
+      "license": "MIT"
+    },
+    "cacheable-request": {
+      "license": "MIT"
+    },
+    "call-bind": {
+      "license": "MIT"
+    },
+    "call-bind-apply-helpers": {
+      "license": "MIT"
+    },
+    "call-bound": {
+      "license": "MIT"
+    },
+    "callsites": {
+      "license": "MIT"
+    },
+    "camel-case": {
+      "license": "MIT"
+    },
+    "camelcase": {
+      "license": "MIT"
+    },
+    "caniuse-api": {
+      "license": "MIT"
+    },
+    "caniuse-lite": {
+      "license": "CC-BY-4.0"
+    },
+    "ccount": {
+      "license": "MIT"
+    },
+    "chai": {
+      "license": "MIT"
+    },
+    "chalk": {
+      "license": "MIT"
+    },
+    "char-regex": {
+      "license": "MIT"
+    },
+    "character-entities": {
+      "license": "MIT"
+    },
+    "character-entities-html4": {
+      "license": "MIT"
+    },
+    "character-entities-legacy": {
+      "license": "MIT"
+    },
+    "character-reference-invalid": {
+      "license": "MIT"
+    },
+    "check-error": {
+      "license": "MIT"
+    },
+    "cheerio": {
+      "license": "MIT"
+    },
+    "cheerio-select": {
+      "license": "BSD-2-Clause"
+    },
+    "chokidar": {
+      "license": "MIT"
+    },
+    "chrome-trace-event": {
+      "license": "MIT"
+    },
+    "ci-info": {
+      "license": "MIT"
+    },
+    "classcat": {
+      "license": "MIT"
+    },
+    "clean-css": {
+      "license": "MIT"
+    },
+    "clean-stack": {
+      "license": "MIT"
+    },
+    "cli-boxes": {
+      "license": "MIT"
+    },
+    "cli-table3": {
+      "license": "MIT"
+    },
+    "clone-deep": {
+      "license": "MIT"
+    },
+    "clsx": {
+      "license": "MIT"
+    },
+    "collapse-white-space": {
+      "license": "MIT"
+    },
+    "color-convert": {
+      "license": "MIT"
+    },
+    "color-name": {
+      "license": "MIT"
+    },
+    "colord": {
+      "license": "MIT"
+    },
+    "colorette": {
+      "license": "MIT"
+    },
+    "combine-promises": {
+      "license": "MIT"
+    },
+    "comma-separated-tokens": {
+      "license": "MIT"
+    },
+    "commander": {
+      "license": "MIT"
+    },
+    "common-path-prefix": {
+      "license": "ISC"
+    },
+    "compressible": {
+      "license": "MIT"
+    },
+    "compression": {
+      "license": "MIT"
+    },
+    "config-chain": {
+      "license": "MIT"
+    },
+    "configstore": {
+      "license": "BSD-2-Clause"
+    },
+    "connect-history-api-fallback": {
+      "license": "MIT"
+    },
+    "consola": {
+      "license": "MIT"
+    },
+    "content-disposition": {
+      "license": "MIT"
+    },
+    "content-type": {
+      "license": "MIT"
+    },
+    "convert-source-map": {
+      "license": "MIT"
+    },
+    "cookie": {
+      "license": "MIT"
+    },
+    "cookie-signature": {
+      "license": "MIT"
+    },
+    "copy-text-to-clipboard": {
+      "license": "MIT"
+    },
+    "copy-webpack-plugin": {
+      "license": "MIT"
+    },
+    "core-js": {
+      "license": "MIT"
+    },
+    "core-js-compat": {
+      "license": "MIT"
+    },
+    "core-js-pure": {
+      "license": "MIT"
+    },
+    "core-util-is": {
+      "license": "MIT"
+    },
+    "cosmiconfig": {
+      "license": "MIT"
+    },
+    "cross-spawn": {
+      "license": "MIT"
+    },
+    "crypto-random-string": {
+      "license": "MIT"
+    },
+    "css-declaration-sorter": {
+      "license": "ISC"
+    },
+    "css-loader": {
+      "license": "MIT"
+    },
+    "css-minimizer-webpack-plugin": {
+      "license": "MIT"
+    },
+    "css-select": {
+      "license": "BSD-2-Clause"
+    },
+    "css-tree": {
+      "license": "MIT"
+    },
+    "css-what": {
+      "license": "BSD-2-Clause"
+    },
+    "css.escape": {
+      "license": "MIT"
+    },
+    "cssesc": {
+      "license": "MIT"
+    },
+    "cssnano": {
+      "license": "MIT"
+    },
+    "cssnano-preset-advanced": {
+      "license": "MIT"
+    },
+    "cssnano-preset-default": {
+      "license": "MIT"
+    },
+    "cssnano-utils": {
+      "license": "MIT"
+    },
+    "csso": {
+      "license": "MIT"
+    },
+    "csstype": {
+      "license": "MIT"
+    },
+    "d3-color": {
+      "license": "ISC"
+    },
+    "d3-dispatch": {
+      "license": "ISC"
+    },
+    "d3-drag": {
+      "license": "ISC"
+    },
+    "d3-ease": {
+      "license": "BSD-3-Clause"
+    },
+    "d3-interpolate": {
+      "license": "ISC"
+    },
+    "d3-selection": {
+      "license": "ISC"
+    },
+    "d3-timer": {
+      "license": "ISC"
+    },
+    "d3-transition": {
+      "license": "ISC"
+    },
+    "d3-zoom": {
+      "license": "ISC"
+    },
+    "data-urls": {
+      "license": "MIT"
+    },
+    "debounce": {
+      "license": "MIT"
+    },
+    "debug": {
+      "license": "MIT"
+    },
+    "decimal.js": {
+      "license": "MIT"
+    },
+    "decode-named-character-reference": {
+      "license": "MIT"
+    },
+    "decompress-response": {
+      "license": "MIT"
+    },
+    "deep-eql": {
+      "license": "MIT"
+    },
+    "deep-extend": {
+      "license": "MIT"
+    },
+    "deepmerge": {
+      "license": "MIT"
+    },
+    "default-gateway": {
+      "license": "BSD-2-Clause"
+    },
+    "defer-to-connect": {
+      "license": "MIT"
+    },
+    "define-data-property": {
+      "license": "MIT"
+    },
+    "define-lazy-prop": {
+      "license": "MIT"
+    },
+    "define-properties": {
+      "license": "MIT"
+    },
+    "del": {
+      "license": "MIT"
+    },
+    "depd": {
+      "license": "MIT"
+    },
+    "dequal": {
+      "license": "MIT"
+    },
+    "destroy": {
+      "license": "MIT"
+    },
+    "detect-node": {
+      "license": "MIT"
+    },
+    "detect-port": {
+      "license": "MIT"
+    },
+    "detect-port-alt": {
+      "license": "MIT"
+    },
+    "devlop": {
+      "license": "MIT"
+    },
+    "dir-glob": {
+      "license": "MIT"
+    },
+    "dns-packet": {
+      "license": "MIT"
+    },
+    "dom-accessibility-api": {
+      "license": "MIT"
+    },
+    "dom-converter": {
+      "license": "MIT"
+    },
+    "dom-serializer": {
+      "license": "MIT"
+    },
+    "domelementtype": {
+      "license": "BSD-2-Clause"
+    },
+    "domhandler": {
+      "license": "BSD-2-Clause"
+    },
+    "domutils": {
+      "license": "BSD-2-Clause"
+    },
+    "dot-case": {
+      "license": "MIT"
+    },
+    "dot-prop": {
+      "license": "MIT"
+    },
+    "dunder-proto": {
+      "license": "MIT"
+    },
+    "duplexer": {
+      "license": "MIT"
+    },
+    "eastasianwidth": {
+      "license": "MIT"
+    },
+    "echarts": {
+      "license": "Apache-2.0"
+    },
+    "ee-first": {
+      "license": "MIT"
+    },
+    "electron-to-chromium": {
+      "license": "ISC"
+    },
+    "elkjs": {
+      "license": "EPL-2.0"
+    },
+    "emoji-regex": {
+      "license": "MIT"
+    },
+    "emojilib": {
+      "license": "MIT"
+    },
+    "emojis-list": {
+      "license": "MIT"
+    },
+    "emoticon": {
+      "license": "MIT"
+    },
+    "encodeurl": {
+      "license": "MIT"
+    },
+    "enhanced-resolve": {
+      "license": "MIT"
+    },
+    "entities": {
+      "license": "BSD-2-Clause"
+    },
+    "error-ex": {
+      "license": "MIT"
+    },
+    "es-define-property": {
+      "license": "MIT"
+    },
+    "es-errors": {
+      "license": "MIT"
+    },
+    "es-module-lexer": {
+      "license": "MIT"
+    },
+    "es-object-atoms": {
+      "license": "MIT"
+    },
+    "esast-util-from-estree": {
+      "license": "MIT"
+    },
+    "esast-util-from-js": {
+      "license": "MIT"
+    },
+    "esbuild": {
+      "license": "MIT"
+    },
+    "escalade": {
+      "license": "MIT"
+    },
+    "escape-goat": {
+      "license": "MIT"
+    },
+    "escape-html": {
+      "license": "MIT"
+    },
+    "escape-string-regexp": {
+      "license": "MIT"
+    },
+    "eslint-scope": {
+      "license": "BSD-2-Clause"
+    },
+    "esprima": {
+      "license": "BSD-2-Clause"
+    },
+    "esrecurse": {
+      "license": "BSD-2-Clause"
+    },
+    "estraverse": {
+      "license": "BSD-2-Clause"
+    },
+    "estree-util-attach-comments": {
+      "license": "MIT"
+    },
+    "estree-util-build-jsx": {
+      "license": "MIT"
+    },
+    "estree-util-is-identifier-name": {
+      "license": "MIT"
+    },
+    "estree-util-scope": {
+      "license": "MIT"
+    },
+    "estree-util-to-js": {
+      "license": "MIT"
+    },
+    "estree-util-value-to-estree": {
+      "license": "MIT"
+    },
+    "estree-util-visit": {
+      "license": "MIT"
+    },
+    "estree-walker": {
+      "license": "MIT"
+    },
+    "esutils": {
+      "license": "BSD-2-Clause"
+    },
+    "eta": {
+      "license": "MIT"
+    },
+    "etag": {
+      "license": "MIT"
+    },
+    "eval": {
+      "license": "MIT"
+    },
+    "eventemitter3": {
+      "license": "MIT"
+    },
+    "events": {
+      "license": "MIT"
+    },
+    "execa": {
+      "license": "MIT"
+    },
+    "expect-type": {
+      "license": "Apache-2.0"
+    },
+    "express": {
+      "license": "MIT"
+    },
+    "extend": {
+      "license": "MIT"
+    },
+    "extend-shallow": {
+      "license": "MIT"
+    },
+    "fast-deep-equal": {
+      "license": "MIT"
+    },
+    "fast-glob": {
+      "license": "MIT"
+    },
+    "fast-json-stable-stringify": {
+      "license": "MIT"
+    },
+    "fast-uri": {
+      "license": "BSD-3-Clause"
+    },
+    "fastq": {
+      "license": "ISC"
+    },
+    "fault": {
+      "license": "MIT"
+    },
+    "faye-websocket": {
+      "license": "Apache-2.0"
+    },
+    "fdir": {
+      "license": "MIT"
+    },
+    "feed": {
+      "license": "MIT"
+    },
+    "file-loader": {
+      "license": "MIT"
+    },
+    "filesize": {
+      "license": "BSD-3-Clause"
+    },
+    "fill-range": {
+      "license": "MIT"
+    },
+    "finalhandler": {
+      "license": "MIT"
+    },
+    "find-cache-dir": {
+      "license": "MIT"
+    },
+    "find-up": {
+      "license": "MIT"
+    },
+    "flat": {
+      "license": "BSD-3-Clause"
+    },
+    "follow-redirects": {
+      "license": "MIT"
+    },
+    "fork-ts-checker-webpack-plugin": {
+      "license": "MIT"
+    },
+    "form-data-encoder": {
+      "license": "MIT"
+    },
+    "format": {
+      "license": "MIT"
+    },
+    "forwarded": {
+      "license": "MIT"
+    },
+    "fraction.js": {
+      "license": "MIT"
+    },
+    "fresh": {
+      "license": "MIT"
+    },
+    "fs-extra": {
+      "license": "MIT"
+    },
+    "fs-monkey": {
+      "license": "Unlicense"
+    },
+    "fs.realpath": {
+      "license": "ISC"
+    },
+    "fsevents": {
+      "license": "MIT"
+    },
+    "function-bind": {
+      "license": "MIT"
+    },
+    "gensync": {
+      "license": "MIT"
+    },
+    "get-intrinsic": {
+      "license": "MIT"
+    },
+    "get-own-enumerable-property-symbols": {
+      "license": "ISC"
+    },
+    "get-proto": {
+      "license": "MIT"
+    },
+    "get-stream": {
+      "license": "MIT"
+    },
+    "github-slugger": {
+      "license": "ISC"
+    },
+    "glob": {
+      "license": "ISC"
+    },
+    "glob-parent": {
+      "license": "ISC"
+    },
+    "glob-to-regexp": {
+      "license": "BSD-2-Clause"
+    },
+    "global-dirs": {
+      "license": "MIT"
+    },
+    "global-modules": {
+      "license": "MIT"
+    },
+    "global-prefix": {
+      "license": "MIT"
+    },
+    "globby": {
+      "license": "MIT"
+    },
+    "gopd": {
+      "license": "MIT"
+    },
+    "got": {
+      "license": "MIT"
+    },
+    "graceful-fs": {
+      "license": "ISC"
+    },
+    "graphology": {
+      "license": "MIT"
+    },
+    "graphology-layout": {
+      "license": "MIT"
+    },
+    "graphology-layout-forceatlas2": {
+      "license": "MIT"
+    },
+    "graphology-types": {
+      "license": "MIT"
+    },
+    "graphology-utils": {
+      "license": "MIT"
+    },
+    "gray-matter": {
+      "license": "MIT"
+    },
+    "gzip-size": {
+      "license": "MIT"
+    },
+    "handle-thing": {
+      "license": "MIT"
+    },
+    "happy-dom": {
+      "license": "MIT"
+    },
+    "has-flag": {
+      "license": "MIT"
+    },
+    "has-property-descriptors": {
+      "license": "MIT"
+    },
+    "has-symbols": {
+      "license": "MIT"
+    },
+    "has-yarn": {
+      "license": "MIT"
+    },
+    "hasown": {
+      "license": "MIT"
+    },
+    "hast-util-from-parse5": {
+      "license": "MIT"
+    },
+    "hast-util-parse-selector": {
+      "license": "MIT"
+    },
+    "hast-util-raw": {
+      "license": "MIT"
+    },
+    "hast-util-to-estree": {
+      "license": "MIT"
+    },
+    "hast-util-to-jsx-runtime": {
+      "license": "MIT"
+    },
+    "hast-util-to-parse5": {
+      "license": "MIT"
+    },
+    "hast-util-whitespace": {
+      "license": "MIT"
+    },
+    "hastscript": {
+      "license": "MIT"
+    },
+    "he": {
+      "license": "MIT"
+    },
+    "history": {
+      "license": "MIT"
+    },
+    "hoist-non-react-statics": {
+      "license": "BSD-3-Clause"
+    },
+    "hpack.js": {
+      "license": "MIT"
+    },
+    "html-encoding-sniffer": {
+      "license": "MIT"
+    },
+    "html-entities": {
+      "license": "MIT"
+    },
+    "html-escaper": {
+      "license": "MIT"
+    },
+    "html-minifier-terser": {
+      "license": "MIT"
+    },
+    "html-tags": {
+      "license": "MIT"
+    },
+    "html-void-elements": {
+      "license": "MIT"
+    },
+    "html-webpack-plugin": {
+      "license": "MIT"
+    },
+    "htmlparser2": {
+      "license": "MIT"
+    },
+    "http-cache-semantics": {
+      "license": "BSD-2-Clause"
+    },
+    "http-deceiver": {
+      "license": "MIT"
+    },
+    "http-errors": {
+      "license": "MIT"
+    },
+    "http-parser-js": {
+      "license": "MIT"
+    },
+    "http-proxy": {
+      "license": "MIT"
+    },
+    "http-proxy-middleware": {
+      "license": "MIT"
+    },
+    "http2-wrapper": {
+      "license": "MIT"
+    },
+    "human-signals": {
+      "license": "Apache-2.0"
+    },
+    "iconv-lite": {
+      "license": "MIT"
+    },
+    "icss-utils": {
+      "license": "ISC"
+    },
+    "ignore": {
+      "license": "MIT"
+    },
+    "image-size": {
+      "license": "MIT"
+    },
+    "immer": {
+      "license": "MIT"
+    },
+    "import-fresh": {
+      "license": "MIT"
+    },
+    "import-lazy": {
+      "license": "MIT"
+    },
+    "imurmurhash": {
+      "license": "MIT"
+    },
+    "indent-string": {
+      "license": "MIT"
+    },
+    "infima": {
+      "license": "MIT"
+    },
+    "inflight": {
+      "license": "ISC"
+    },
+    "inherits": {
+      "license": "ISC"
+    },
+    "ini": {
+      "license": "ISC"
+    },
+    "inline-style-parser": {
+      "license": "MIT"
+    },
+    "interpret": {
+      "license": "MIT"
+    },
+    "invariant": {
+      "license": "MIT"
+    },
+    "ipaddr.js": {
+      "license": "MIT"
+    },
+    "is-alphabetical": {
+      "license": "MIT"
+    },
+    "is-alphanumerical": {
+      "license": "MIT"
+    },
+    "is-arrayish": {
+      "license": "MIT"
+    },
+    "is-binary-path": {
+      "license": "MIT"
+    },
+    "is-ci": {
+      "license": "MIT"
+    },
+    "is-core-module": {
+      "license": "MIT"
+    },
+    "is-decimal": {
+      "license": "MIT"
+    },
+    "is-docker": {
+      "license": "MIT"
+    },
+    "is-extendable": {
+      "license": "MIT"
+    },
+    "is-extglob": {
+      "license": "MIT"
+    },
+    "is-fullwidth-code-point": {
+      "license": "MIT"
+    },
+    "is-glob": {
+      "license": "MIT"
+    },
+    "is-hexadecimal": {
+      "license": "MIT"
+    },
+    "is-installed-globally": {
+      "license": "MIT"
+    },
+    "is-npm": {
+      "license": "MIT"
+    },
+    "is-number": {
+      "license": "MIT"
+    },
+    "is-obj": {
+      "license": "MIT"
+    },
+    "is-path-cwd": {
+      "license": "MIT"
+    },
+    "is-path-inside": {
+      "license": "MIT"
+    },
+    "is-plain-obj": {
+      "license": "MIT"
+    },
+    "is-plain-object": {
+      "license": "MIT"
+    },
+    "is-potential-custom-element-name": {
+      "license": "MIT"
+    },
+    "is-regexp": {
+      "license": "MIT"
+    },
+    "is-root": {
+      "license": "MIT"
+    },
+    "is-stream": {
+      "license": "MIT"
+    },
+    "is-typedarray": {
+      "license": "MIT"
+    },
+    "is-wsl": {
+      "license": "MIT"
+    },
+    "is-yarn-global": {
+      "license": "MIT"
+    },
+    "isarray": {
+      "license": "MIT"
+    },
+    "isexe": {
+      "license": "ISC"
+    },
+    "isobject": {
+      "license": "MIT"
+    },
+    "jest-util": {
+      "license": "MIT"
+    },
+    "jest-worker": {
+      "license": "MIT"
+    },
+    "jiti": {
+      "license": "MIT"
+    },
+    "joi": {
+      "license": "BSD-3-Clause"
+    },
+    "js-tokens": {
+      "license": "MIT"
+    },
+    "js-yaml": {
+      "license": "MIT"
+    },
+    "jsdom": {
+      "license": "MIT"
+    },
+    "jsesc": {
+      "license": "MIT"
+    },
+    "json-buffer": {
+      "license": "MIT"
+    },
+    "json-parse-even-better-errors": {
+      "license": "MIT"
+    },
+    "json-schema-traverse": {
+      "license": "MIT"
+    },
+    "json5": {
+      "license": "MIT"
+    },
+    "jsonfile": {
+      "license": "MIT"
+    },
+    "keyv": {
+      "license": "MIT"
+    },
+    "kind-of": {
+      "license": "MIT"
+    },
+    "kleur": {
+      "license": "MIT"
+    },
+    "latest-version": {
+      "license": "MIT"
+    },
+    "launch-editor": {
+      "license": "MIT"
+    },
+    "leven": {
+      "license": "MIT"
+    },
+    "lilconfig": {
+      "license": "MIT"
+    },
+    "lines-and-columns": {
+      "license": "MIT"
+    },
+    "loader-runner": {
+      "license": "MIT"
+    },
+    "loader-utils": {
+      "license": "MIT"
+    },
+    "locate-path": {
+      "license": "MIT"
+    },
+    "lodash": {
+      "license": "MIT"
+    },
+    "lodash.debounce": {
+      "license": "MIT"
+    },
+    "lodash.memoize": {
+      "license": "MIT"
+    },
+    "lodash.uniq": {
+      "license": "MIT"
+    },
+    "longest-streak": {
+      "license": "MIT"
+    },
+    "loose-envify": {
+      "license": "MIT"
+    },
+    "loupe": {
+      "license": "MIT"
+    },
+    "lower-case": {
+      "license": "MIT"
+    },
+    "lowercase-keys": {
+      "license": "MIT"
+    },
+    "lru-cache": {
+      "license": "ISC"
+    },
+    "lz-string": {
+      "license": "MIT"
+    },
+    "magic-string": {
+      "license": "MIT"
+    },
+    "markdown-extensions": {
+      "license": "MIT"
+    },
+    "markdown-table": {
+      "license": "MIT"
+    },
+    "math-intrinsics": {
+      "license": "MIT"
+    },
+    "mdast-util-directive": {
+      "license": "MIT"
+    },
+    "mdast-util-find-and-replace": {
+      "license": "MIT"
+    },
+    "mdast-util-from-markdown": {
+      "license": "MIT"
+    },
+    "mdast-util-frontmatter": {
+      "license": "MIT"
+    },
+    "mdast-util-gfm": {
+      "license": "MIT"
+    },
+    "mdast-util-gfm-autolink-literal": {
+      "license": "MIT"
+    },
+    "mdast-util-gfm-footnote": {
+      "license": "MIT"
+    },
+    "mdast-util-gfm-strikethrough": {
+      "license": "MIT"
+    },
+    "mdast-util-gfm-table": {
+      "license": "MIT"
+    },
+    "mdast-util-gfm-task-list-item": {
+      "license": "MIT"
+    },
+    "mdast-util-mdx": {
+      "license": "MIT"
+    },
+    "mdast-util-mdx-expression": {
+      "license": "MIT"
+    },
+    "mdast-util-mdx-jsx": {
+      "license": "MIT"
+    },
+    "mdast-util-mdxjs-esm": {
+      "license": "MIT"
+    },
+    "mdast-util-phrasing": {
+      "license": "MIT"
+    },
+    "mdast-util-to-hast": {
+      "license": "MIT"
+    },
+    "mdast-util-to-markdown": {
+      "license": "MIT"
+    },
+    "mdast-util-to-string": {
+      "license": "MIT"
+    },
+    "mdn-data": {
+      "license": "CC0-1.0"
+    },
+    "media-typer": {
+      "license": "MIT"
+    },
+    "memfs": {
+      "license": "Unlicense"
+    },
+    "merge-descriptors": {
+      "license": "MIT"
+    },
+    "merge-stream": {
+      "license": "MIT"
+    },
+    "merge2": {
+      "license": "MIT"
+    },
+    "methods": {
+      "license": "MIT"
+    },
+    "micromark": {
+      "license": "MIT"
+    },
+    "micromark-core-commonmark": {
+      "license": "MIT"
+    },
+    "micromark-extension-directive": {
+      "license": "MIT"
+    },
+    "micromark-extension-frontmatter": {
+      "license": "MIT"
+    },
+    "micromark-extension-gfm": {
+      "license": "MIT"
+    },
+    "micromark-extension-gfm-autolink-literal": {
+      "license": "MIT"
+    },
+    "micromark-extension-gfm-footnote": {
+      "license": "MIT"
+    },
+    "micromark-extension-gfm-strikethrough": {
+      "license": "MIT"
+    },
+    "micromark-extension-gfm-table": {
+      "license": "MIT"
+    },
+    "micromark-extension-gfm-tagfilter": {
+      "license": "MIT"
+    },
+    "micromark-extension-gfm-task-list-item": {
+      "license": "MIT"
+    },
+    "micromark-extension-mdx-expression": {
+      "license": "MIT"
+    },
+    "micromark-extension-mdx-jsx": {
+      "license": "MIT"
+    },
+    "micromark-extension-mdx-md": {
+      "license": "MIT"
+    },
+    "micromark-extension-mdxjs": {
+      "license": "MIT"
+    },
+    "micromark-extension-mdxjs-esm": {
+      "license": "MIT"
+    },
+    "micromark-factory-destination": {
+      "license": "MIT"
+    },
+    "micromark-factory-label": {
+      "license": "MIT"
+    },
+    "micromark-factory-mdx-expression": {
+      "license": "MIT"
+    },
+    "micromark-factory-space": {
+      "license": "MIT"
+    },
+    "micromark-factory-title": {
+      "license": "MIT"
+    },
+    "micromark-factory-whitespace": {
+      "license": "MIT"
+    },
+    "micromark-util-character": {
+      "license": "MIT"
+    },
+    "micromark-util-chunked": {
+      "license": "MIT"
+    },
+    "micromark-util-classify-character": {
+      "license": "MIT"
+    },
+    "micromark-util-combine-extensions": {
+      "license": "MIT"
+    },
+    "micromark-util-decode-numeric-character-reference": {
+      "license": "MIT"
+    },
+    "micromark-util-decode-string": {
+      "license": "MIT"
+    },
+    "micromark-util-encode": {
+      "license": "MIT"
+    },
+    "micromark-util-events-to-acorn": {
+      "license": "MIT"
+    },
+    "micromark-util-html-tag-name": {
+      "license": "MIT"
+    },
+    "micromark-util-normalize-identifier": {
+      "license": "MIT"
+    },
+    "micromark-util-resolve-all": {
+      "license": "MIT"
+    },
+    "micromark-util-sanitize-uri": {
+      "license": "MIT"
+    },
+    "micromark-util-subtokenize": {
+      "license": "MIT"
+    },
+    "micromark-util-symbol": {
+      "license": "MIT"
+    },
+    "micromark-util-types": {
+      "license": "MIT"
+    },
+    "micromatch": {
+      "license": "MIT"
+    },
+    "mime": {
+      "license": "MIT"
+    },
+    "mime-db": {
+      "license": "MIT"
+    },
+    "mime-types": {
+      "license": "MIT"
+    },
+    "mimic-fn": {
+      "license": "MIT"
+    },
+    "mimic-response": {
+      "license": "MIT"
+    },
+    "min-indent": {
+      "license": "MIT"
+    },
+    "mini-css-extract-plugin": {
+      "license": "MIT"
+    },
+    "minimalistic-assert": {
+      "license": "ISC"
+    },
+    "minimatch": {
+      "license": "ISC"
+    },
+    "minimist": {
+      "license": "MIT"
+    },
+    "mnemonist": {
+      "license": "MIT"
+    },
+    "mrmime": {
+      "license": "MIT"
+    },
+    "ms": {
+      "license": "MIT"
+    },
+    "multicast-dns": {
+      "license": "MIT"
+    },
+    "nanoid": {
+      "license": "MIT"
+    },
+    "negotiator": {
+      "license": "MIT"
+    },
+    "neo-async": {
+      "license": "MIT"
+    },
+    "no-case": {
+      "license": "MIT"
+    },
+    "node-emoji": {
+      "license": "MIT"
+    },
+    "node-forge": {
+      "license": "(BSD-3-Clause OR GPL-2.0)"
+    },
+    "node-releases": {
+      "license": "MIT"
+    },
+    "normalize-path": {
+      "license": "MIT"
+    },
+    "normalize-url": {
+      "license": "MIT"
+    },
+    "npm-run-path": {
+      "license": "MIT"
+    },
+    "nprogress": {
+      "license": "MIT"
+    },
+    "nth-check": {
+      "license": "BSD-2-Clause"
+    },
+    "object-assign": {
+      "license": "MIT"
+    },
+    "object-inspect": {
+      "license": "MIT"
+    },
+    "object-keys": {
+      "license": "MIT"
+    },
+    "object.assign": {
+      "license": "MIT"
+    },
+    "obliterator": {
+      "license": "MIT"
+    },
+    "obuf": {
+      "license": "MIT"
+    },
+    "on-finished": {
+      "license": "MIT"
+    },
+    "on-headers": {
+      "license": "MIT"
+    },
+    "once": {
+      "license": "ISC"
+    },
+    "onetime": {
+      "license": "MIT"
+    },
+    "open": {
+      "license": "MIT"
+    },
+    "opener": {
+      "license": "(WTFPL OR MIT)"
+    },
+    "p-cancelable": {
+      "license": "MIT"
+    },
+    "p-limit": {
+      "license": "MIT"
+    },
+    "p-locate": {
+      "license": "MIT"
+    },
+    "p-map": {
+      "license": "MIT"
+    },
+    "p-retry": {
+      "license": "MIT"
+    },
+    "p-try": {
+      "license": "MIT"
+    },
+    "package-json": {
+      "license": "MIT"
+    },
+    "pandemonium": {
+      "license": "MIT"
+    },
+    "param-case": {
+      "license": "MIT"
+    },
+    "parent-module": {
+      "license": "MIT"
+    },
+    "parse-entities": {
+      "license": "MIT"
+    },
+    "parse-json": {
+      "license": "MIT"
+    },
+    "parse-numeric-range": {
+      "license": "ISC"
+    },
+    "parse5": {
+      "license": "MIT"
+    },
+    "parse5-htmlparser2-tree-adapter": {
+      "license": "MIT"
+    },
+    "parseurl": {
+      "license": "MIT"
+    },
+    "pascal-case": {
+      "license": "MIT"
+    },
+    "path-exists": {
+      "license": "MIT"
+    },
+    "path-is-absolute": {
+      "license": "MIT"
+    },
+    "path-is-inside": {
+      "license": "(WTFPL OR MIT)"
+    },
+    "path-key": {
+      "license": "MIT"
+    },
+    "path-parse": {
+      "license": "MIT"
+    },
+    "path-to-regexp": {
+      "license": "MIT"
+    },
+    "path-type": {
+      "license": "MIT"
+    },
+    "pathe": {
+      "license": "MIT"
+    },
+    "pathval": {
+      "license": "MIT"
+    },
+    "picocolors": {
+      "license": "ISC"
+    },
+    "picomatch": {
+      "license": "MIT"
+    },
+    "pkg-dir": {
+      "license": "MIT"
+    },
+    "pkg-up": {
+      "license": "MIT"
+    },
+    "playwright": {
+      "license": "Apache-2.0"
+    },
+    "playwright-core": {
+      "license": "Apache-2.0"
+    },
+    "postcss": {
+      "license": "MIT"
+    },
+    "postcss-calc": {
+      "license": "MIT"
+    },
+    "postcss-colormin": {
+      "license": "MIT"
+    },
+    "postcss-convert-values": {
+      "license": "MIT"
+    },
+    "postcss-discard-comments": {
+      "license": "MIT"
+    },
+    "postcss-discard-duplicates": {
+      "license": "MIT"
+    },
+    "postcss-discard-empty": {
+      "license": "MIT"
+    },
+    "postcss-discard-overridden": {
+      "license": "MIT"
+    },
+    "postcss-discard-unused": {
+      "license": "MIT"
+    },
+    "postcss-loader": {
+      "license": "MIT"
+    },
+    "postcss-merge-idents": {
+      "license": "MIT"
+    },
+    "postcss-merge-longhand": {
+      "license": "MIT"
+    },
+    "postcss-merge-rules": {
+      "license": "MIT"
+    },
+    "postcss-minify-font-values": {
+      "license": "MIT"
+    },
+    "postcss-minify-gradients": {
+      "license": "MIT"
+    },
+    "postcss-minify-params": {
+      "license": "MIT"
+    },
+    "postcss-minify-selectors": {
+      "license": "MIT"
+    },
+    "postcss-modules-extract-imports": {
+      "license": "ISC"
+    },
+    "postcss-modules-local-by-default": {
+      "license": "MIT"
+    },
+    "postcss-modules-scope": {
+      "license": "ISC"
+    },
+    "postcss-modules-values": {
+      "license": "ISC"
+    },
+    "postcss-normalize-charset": {
+      "license": "MIT"
+    },
+    "postcss-normalize-display-values": {
+      "license": "MIT"
+    },
+    "postcss-normalize-positions": {
+      "license": "MIT"
+    },
+    "postcss-normalize-repeat-style": {
+      "license": "MIT"
+    },
+    "postcss-normalize-string": {
+      "license": "MIT"
+    },
+    "postcss-normalize-timing-functions": {
+      "license": "MIT"
+    },
+    "postcss-normalize-unicode": {
+      "license": "MIT"
+    },
+    "postcss-normalize-url": {
+      "license": "MIT"
+    },
+    "postcss-normalize-whitespace": {
+      "license": "MIT"
+    },
+    "postcss-ordered-values": {
+      "license": "MIT"
+    },
+    "postcss-reduce-idents": {
+      "license": "MIT"
+    },
+    "postcss-reduce-initial": {
+      "license": "MIT"
+    },
+    "postcss-reduce-transforms": {
+      "license": "MIT"
+    },
+    "postcss-selector-parser": {
+      "license": "MIT"
+    },
+    "postcss-sort-media-queries": {
+      "license": "MIT"
+    },
+    "postcss-svgo": {
+      "license": "MIT"
+    },
+    "postcss-unique-selectors": {
+      "license": "MIT"
+    },
+    "postcss-value-parser": {
+      "license": "MIT"
+    },
+    "postcss-zindex": {
+      "license": "MIT"
+    },
+    "pretty-error": {
+      "license": "MIT"
+    },
+    "pretty-format": {
+      "license": "MIT"
+    },
+    "pretty-time": {
+      "license": "MIT"
+    },
+    "prism-react-renderer": {
+      "license": "MIT"
+    },
+    "prismjs": {
+      "license": "MIT"
+    },
+    "process-nextick-args": {
+      "license": "MIT"
+    },
+    "prompts": {
+      "license": "MIT"
+    },
+    "prop-types": {
+      "license": "MIT"
+    },
+    "property-information": {
+      "license": "MIT"
+    },
+    "proto-list": {
+      "license": "ISC"
+    },
+    "proxy-addr": {
+      "license": "MIT"
+    },
+    "punycode": {
+      "license": "MIT"
+    },
+    "pupa": {
+      "license": "MIT"
+    },
+    "qs": {
+      "license": "BSD-3-Clause"
+    },
+    "queue": {
+      "license": "MIT"
+    },
+    "queue-microtask": {
+      "license": "MIT"
+    },
+    "quick-lru": {
+      "license": "MIT"
+    },
+    "randombytes": {
+      "license": "MIT"
+    },
+    "range-parser": {
+      "license": "MIT"
+    },
+    "raw-body": {
+      "license": "MIT"
+    },
+    "rc": {
+      "license": "(BSD-2-Clause OR MIT OR Apache-2.0)"
+    },
+    "react": {
+      "license": "MIT"
+    },
+    "react-dev-utils": {
+      "license": "MIT"
+    },
+    "react-dom": {
+      "license": "MIT"
+    },
+    "react-error-overlay": {
+      "license": "MIT"
+    },
+    "react-fast-compare": {
+      "license": "MIT"
+    },
+    "react-helmet-async": {
+      "license": "Apache-2.0"
+    },
+    "react-is": {
+      "license": "MIT"
+    },
+    "react-json-view-lite": {
+      "license": "MIT"
+    },
+    "react-loadable": {
+      "license": "MIT"
+    },
+    "react-loadable-ssr-addon-v5-slorber": {
+      "license": "MIT"
+    },
+    "react-refresh": {
+      "license": "MIT"
+    },
+    "react-router": {
+      "license": "MIT"
+    },
+    "react-router-config": {
+      "license": "MIT"
+    },
+    "react-router-dom": {
+      "license": "MIT"
+    },
+    "readable-stream": {
+      "license": "MIT"
+    },
+    "readdirp": {
+      "license": "MIT"
+    },
+    "reading-time": {
+      "license": "MIT"
+    },
+    "rechoir": {
+      "license": "MIT"
+    },
+    "recma-build-jsx": {
+      "license": "MIT"
+    },
+    "recma-jsx": {
+      "license": "MIT"
+    },
+    "recma-parse": {
+      "license": "MIT"
+    },
+    "recma-stringify": {
+      "license": "MIT"
+    },
+    "recursive-readdir": {
+      "license": "MIT"
+    },
+    "redent": {
+      "license": "MIT"
+    },
+    "regenerate": {
+      "license": "MIT"
+    },
+    "regenerate-unicode-properties": {
+      "license": "MIT"
+    },
+    "regexpu-core": {
+      "license": "MIT"
+    },
+    "registry-auth-token": {
+      "license": "MIT"
+    },
+    "registry-url": {
+      "license": "MIT"
+    },
+    "regjsgen": {
+      "license": "MIT"
+    },
+    "regjsparser": {
+      "license": "BSD-2-Clause"
+    },
+    "rehype-raw": {
+      "license": "MIT"
+    },
+    "rehype-recma": {
+      "license": "MIT"
+    },
+    "relateurl": {
+      "license": "MIT"
+    },
+    "remark-directive": {
+      "license": "MIT"
+    },
+    "remark-emoji": {
+      "license": "MIT"
+    },
+    "remark-frontmatter": {
+      "license": "MIT"
+    },
+    "remark-gfm": {
+      "license": "MIT"
+    },
+    "remark-mdx": {
+      "license": "MIT"
+    },
+    "remark-parse": {
+      "license": "MIT"
+    },
+    "remark-rehype": {
+      "license": "MIT"
+    },
+    "remark-stringify": {
+      "license": "MIT"
+    },
+    "renderkid": {
+      "license": "MIT"
+    },
+    "require-from-string": {
+      "license": "MIT"
+    },
+    "require-like": {
+      "license": "UNDECLARED",
+      "note": "no licence declared upstream; build-only (docs-portal dev server), never distributed"
+    },
+    "requires-port": {
+      "license": "MIT"
+    },
+    "resolve": {
+      "license": "MIT"
+    },
+    "resolve-alpn": {
+      "license": "MIT"
+    },
+    "resolve-from": {
+      "license": "MIT"
+    },
+    "resolve-pathname": {
+      "license": "MIT"
+    },
+    "responselike": {
+      "license": "MIT"
+    },
+    "retry": {
+      "license": "MIT"
+    },
+    "reusify": {
+      "license": "MIT"
+    },
+    "rimraf": {
+      "license": "ISC"
+    },
+    "rollup": {
+      "license": "MIT"
+    },
+    "rtl-detect": {
+      "license": "BSD-3-Clause"
+    },
+    "rtlcss": {
+      "license": "MIT"
+    },
+    "run-parallel": {
+      "license": "MIT"
+    },
+    "safe-buffer": {
+      "license": "MIT"
+    },
+    "safer-buffer": {
+      "license": "MIT"
+    },
+    "sax": {
+      "license": "BlueOak-1.0.0"
+    },
+    "saxes": {
+      "license": "ISC"
+    },
+    "scheduler": {
+      "license": "MIT"
+    },
+    "schema-utils": {
+      "license": "MIT"
+    },
+    "search-insights": {
+      "license": "MIT"
+    },
+    "section-matter": {
+      "license": "MIT"
+    },
+    "select-hose": {
+      "license": "MIT"
+    },
+    "selfsigned": {
+      "license": "MIT"
+    },
+    "semver": {
+      "license": "ISC"
+    },
+    "semver-diff": {
+      "license": "MIT"
+    },
+    "send": {
+      "license": "MIT"
+    },
+    "serialize-javascript": {
+      "license": "BSD-3-Clause"
+    },
+    "serve-handler": {
+      "license": "MIT"
+    },
+    "serve-index": {
+      "license": "MIT"
+    },
+    "serve-static": {
+      "license": "MIT"
+    },
+    "set-function-length": {
+      "license": "MIT"
+    },
+    "setprototypeof": {
+      "license": "ISC"
+    },
+    "shallow-clone": {
+      "license": "MIT"
+    },
+    "shallowequal": {
+      "license": "MIT"
+    },
+    "shebang-command": {
+      "license": "MIT"
+    },
+    "shebang-regex": {
+      "license": "MIT"
+    },
+    "shell-quote": {
+      "license": "MIT"
+    },
+    "shelljs": {
+      "license": "BSD-3-Clause"
+    },
+    "side-channel": {
+      "license": "MIT"
+    },
+    "side-channel-list": {
+      "license": "MIT"
+    },
+    "side-channel-map": {
+      "license": "MIT"
+    },
+    "side-channel-weakmap": {
+      "license": "MIT"
+    },
+    "siginfo": {
+      "license": "ISC"
+    },
+    "sigma": {
+      "license": "MIT"
+    },
+    "signal-exit": {
+      "license": "ISC"
+    },
+    "sirv": {
+      "license": "MIT"
+    },
+    "sisteransi": {
+      "license": "MIT"
+    },
+    "sitemap": {
+      "license": "MIT"
+    },
+    "skin-tone": {
+      "license": "MIT"
+    },
+    "slash": {
+      "license": "MIT"
+    },
+    "snake-case": {
+      "license": "MIT"
+    },
+    "sockjs": {
+      "license": "MIT"
+    },
+    "sort-css-media-queries": {
+      "license": "MIT"
+    },
+    "source-map": {
+      "license": "BSD-3-Clause"
+    },
+    "source-map-js": {
+      "license": "BSD-3-Clause"
+    },
+    "source-map-support": {
+      "license": "MIT"
+    },
+    "space-separated-tokens": {
+      "license": "MIT"
+    },
+    "spdy": {
+      "license": "MIT"
+    },
+    "spdy-transport": {
+      "license": "MIT"
+    },
+    "sprintf-js": {
+      "license": "BSD-3-Clause"
+    },
+    "srcset": {
+      "license": "MIT"
+    },
+    "stackback": {
+      "license": "MIT"
+    },
+    "statuses": {
+      "license": "MIT"
+    },
+    "std-env": {
+      "license": "MIT"
+    },
+    "string-width": {
+      "license": "MIT"
+    },
+    "string_decoder": {
+      "license": "MIT"
+    },
+    "stringify-entities": {
+      "license": "MIT"
+    },
+    "stringify-object": {
+      "license": "BSD-2-Clause"
+    },
+    "strip-ansi": {
+      "license": "MIT"
+    },
+    "strip-bom-string": {
+      "license": "MIT"
+    },
+    "strip-final-newline": {
+      "license": "MIT"
+    },
+    "strip-indent": {
+      "license": "MIT"
+    },
+    "strip-json-comments": {
+      "license": "MIT"
+    },
+    "strip-literal": {
+      "license": "MIT"
+    },
+    "style-to-js": {
+      "license": "MIT"
+    },
+    "style-to-object": {
+      "license": "MIT"
+    },
+    "stylehacks": {
+      "license": "MIT"
+    },
+    "supports-color": {
+      "license": "MIT"
+    },
+    "supports-preserve-symlinks-flag": {
+      "license": "MIT"
+    },
+    "svg-parser": {
+      "license": "MIT"
+    },
+    "svgo": {
+      "license": "MIT"
+    },
+    "symbol-tree": {
+      "license": "MIT"
+    },
+    "tapable": {
+      "license": "MIT"
+    },
+    "terser": {
+      "license": "BSD-2-Clause"
+    },
+    "terser-webpack-plugin": {
+      "license": "MIT"
+    },
+    "text-table": {
+      "license": "MIT"
+    },
+    "thunky": {
+      "license": "MIT"
+    },
+    "tiny-invariant": {
+      "license": "MIT"
+    },
+    "tiny-warning": {
+      "license": "MIT"
+    },
+    "tinybench": {
+      "license": "MIT"
+    },
+    "tinyexec": {
+      "license": "MIT"
+    },
+    "tinyglobby": {
+      "license": "MIT"
+    },
+    "tinypool": {
+      "license": "MIT"
+    },
+    "tinyrainbow": {
+      "license": "MIT"
+    },
+    "tinyspy": {
+      "license": "MIT"
+    },
+    "tldts": {
+      "license": "MIT"
+    },
+    "tldts-core": {
+      "license": "MIT"
+    },
+    "to-regex-range": {
+      "license": "MIT"
+    },
+    "toidentifier": {
+      "license": "MIT"
+    },
+    "totalist": {
+      "license": "MIT"
+    },
+    "tough-cookie": {
+      "license": "BSD-3-Clause"
+    },
+    "tr46": {
+      "license": "MIT"
+    },
+    "trim-lines": {
+      "license": "MIT"
+    },
+    "trough": {
+      "license": "MIT"
+    },
+    "tslib": {
+      "license": "0BSD"
+    },
+    "type-fest": {
+      "license": "(MIT OR CC0-1.0)"
+    },
+    "type-is": {
+      "license": "MIT"
+    },
+    "typedarray-to-buffer": {
+      "license": "MIT"
+    },
+    "typescript": {
+      "license": "Apache-2.0"
+    },
+    "undici": {
+      "license": "MIT"
+    },
+    "undici-types": {
+      "license": "MIT"
+    },
+    "unicode-canonical-property-names-ecmascript": {
+      "license": "MIT"
+    },
+    "unicode-emoji-modifier-base": {
+      "license": "MIT"
+    },
+    "unicode-match-property-ecmascript": {
+      "license": "MIT"
+    },
+    "unicode-match-property-value-ecmascript": {
+      "license": "MIT"
+    },
+    "unicode-property-aliases-ecmascript": {
+      "license": "MIT"
+    },
+    "unified": {
+      "license": "MIT"
+    },
+    "unique-string": {
+      "license": "MIT"
+    },
+    "unist-util-is": {
+      "license": "MIT"
+    },
+    "unist-util-position": {
+      "license": "MIT"
+    },
+    "unist-util-position-from-estree": {
+      "license": "MIT"
+    },
+    "unist-util-stringify-position": {
+      "license": "MIT"
+    },
+    "unist-util-visit": {
+      "license": "MIT"
+    },
+    "unist-util-visit-parents": {
+      "license": "MIT"
+    },
+    "universalify": {
+      "license": "MIT"
+    },
+    "unpipe": {
+      "license": "MIT"
+    },
+    "update-browserslist-db": {
+      "license": "MIT"
+    },
+    "update-notifier": {
+      "license": "BSD-2-Clause"
+    },
+    "uri-js": {
+      "license": "BSD-2-Clause"
+    },
+    "url-loader": {
+      "license": "MIT"
+    },
+    "use-sync-external-store": {
+      "license": "MIT"
+    },
+    "util-deprecate": {
+      "license": "MIT"
+    },
+    "utila": {
+      "license": "MIT"
+    },
+    "utility-types": {
+      "license": "MIT"
+    },
+    "utils-merge": {
+      "license": "MIT"
+    },
+    "uuid": {
+      "license": "MIT"
+    },
+    "value-equal": {
+      "license": "MIT"
+    },
+    "vary": {
+      "license": "MIT"
+    },
+    "vfile": {
+      "license": "MIT"
+    },
+    "vfile-location": {
+      "license": "MIT"
+    },
+    "vfile-message": {
+      "license": "MIT"
+    },
+    "vite": {
+      "license": "MIT"
+    },
+    "vite-node": {
+      "license": "MIT"
+    },
+    "vitest": {
+      "license": "MIT"
+    },
+    "w3c-xmlserializer": {
+      "license": "MIT"
+    },
+    "watchpack": {
+      "license": "MIT"
+    },
+    "wbuf": {
+      "license": "MIT"
+    },
+    "web-namespaces": {
+      "license": "MIT"
+    },
+    "webidl-conversions": {
+      "license": "BSD-2-Clause"
+    },
+    "webpack": {
+      "license": "MIT"
+    },
+    "webpack-bundle-analyzer": {
+      "license": "MIT"
+    },
+    "webpack-dev-middleware": {
+      "license": "MIT"
+    },
+    "webpack-dev-server": {
+      "license": "MIT"
+    },
+    "webpack-merge": {
+      "license": "MIT"
+    },
+    "webpack-sources": {
+      "license": "MIT"
+    },
+    "webpackbar": {
+      "license": "MIT"
+    },
+    "websocket-driver": {
+      "license": "Apache-2.0"
+    },
+    "websocket-extensions": {
+      "license": "Apache-2.0"
+    },
+    "whatwg-mimetype": {
+      "license": "MIT"
+    },
+    "whatwg-url": {
+      "license": "MIT"
+    },
+    "which": {
+      "license": "ISC"
+    },
+    "why-is-node-running": {
+      "license": "MIT"
+    },
+    "widest-line": {
+      "license": "MIT"
+    },
+    "wildcard": {
+      "license": "MIT"
+    },
+    "wrap-ansi": {
+      "license": "MIT"
+    },
+    "wrappy": {
+      "license": "ISC"
+    },
+    "write-file-atomic": {
+      "license": "ISC"
+    },
+    "ws": {
+      "license": "MIT"
+    },
+    "xdg-basedir": {
+      "license": "MIT"
+    },
+    "xml-js": {
+      "license": "MIT"
+    },
+    "xml-name-validator": {
+      "license": "Apache-2.0"
+    },
+    "xmlchars": {
+      "license": "MIT"
+    },
+    "yallist": {
+      "license": "ISC"
+    },
+    "yaml": {
+      "license": "ISC"
+    },
+    "yocto-queue": {
+      "license": "MIT"
+    },
+    "zrender": {
+      "license": "BSD-3-Clause"
+    },
+    "zustand": {
+      "license": "MIT"
+    },
+    "zwitch": {
+      "license": "MIT"
+    }
+  },
+  "python": {
+    "aiokafka": {
+      "license": "Apache-2.0"
+    },
+    "annotated-doc": {
+      "license": "MIT"
+    },
+    "annotated-types": {
+      "license": "MIT"
+    },
+    "anyio": {
+      "license": "MIT"
+    },
+    "async-timeout": {
+      "license": "Apache-2.0"
+    },
+    "asyncpg": {
+      "license": "Apache-2.0"
+    },
+    "boto3": {
+      "license": "Apache-2.0"
+    },
+    "certifi": {
+      "license": "MPL-2.0"
+    },
+    "click": {
+      "license": "BSD-3-Clause"
+    },
+    "cramjam": {
+      "license": "MIT"
+    },
+    "fastapi": {
+      "license": "MIT"
+    },
+    "google-auth": {
+      "license": "Apache-2.0"
+    },
+    "h11": {
+      "license": "MIT"
+    },
+    "httpcore": {
+      "license": "BSD-3-Clause"
+    },
+    "httptools": {
+      "license": "MIT"
+    },
+    "httpx": {
+      "license": "BSD-3-Clause"
+    },
+    "idna": {
+      "license": "BSD-3-Clause"
+    },
+    "kafka-python-ng": {
+      "license": "Apache-2.0"
+    },
+    "packaging": {
+      "license": "Apache-2.0 OR BSD-2-Clause"
+    },
+    "pip": {
+      "license": "MIT"
+    },
+    "pydantic": {
+      "license": "MIT"
+    },
+    "pydantic-core": {
+      "license": "MIT"
+    },
+    "python-dotenv": {
+      "license": "BSD-3-Clause"
+    },
+    "pyyaml": {
+      "license": "MIT"
+    },
+    "requests": {
+      "license": "Apache-2.0"
+    },
+    "sniffio": {
+      "license": "MIT OR Apache-2.0"
+    },
+    "starlette": {
+      "license": "BSD-3-Clause"
+    },
+    "typing-extensions": {
+      "license": "PSF-2.0"
+    },
+    "typing-inspection": {
+      "license": "MIT"
+    },
+    "uvicorn": {
+      "license": "BSD-3-Clause"
+    },
+    "uvloop": {
+      "license": "MIT"
+    },
+    "watchfiles": {
+      "license": "MIT"
+    },
+    "websockets": {
+      "license": "BSD-3-Clause"
+    }
+  },
+  "vendored": {
+    "arista-mibs": {
+      "license": "LicenseRef-Arista-MIB-NoGrant",
+      "note": "'Copyright (c) 2008 Arista Networks, Inc. All rights reserved.' with no licence text. Vendors publish enterprise MIBs for management-tool interop, but no explicit redistribution grant accompanies the files.",
+      "paths": [
+        "src/backend/collectors/mibs/vendored/ARISTA-SMI-MIB",
+        "src/backend/collectors/mibs/vendored/ARISTA-BRIDGE-EXT-MIB"
+      ],
+      "unit": "source tarball (correlix-source-*.tar.gz)",
+      "usage": "data",
+      "version": "in-tree copy"
+    },
+    "cisco-mib-extracts": {
+      "license": "LicenseRef-Cisco-MIB-NoGrant",
+      "note": "Cisco's edited extracts of RFC 1903/1904, headed 'Copyright (c) 1994,1996 by cisco Systems, Inc. All rights reserved.' with NO licence grant. The underlying RFC text is freely reproducible; Cisco's particular files are not obviously licensed for redistribution.",
+      "paths": [
+        "src/backend/collectors/mibs/vendored/SNMPv2-TC",
+        "src/backend/collectors/mibs/vendored/SNMPv2-CONF"
+      ],
+      "unit": "source tarball (correlix-source-*.tar.gz)",
+      "usage": "data",
+      "version": "SNMPv2-TC.my / SNMPv2-CONF.my"
+    },
+    "cloud-vendor-marks": {
+      "license": "LicenseRef-Trademark-ToU",
+      "note": "Official AWS Architecture Icons (the AWS Cloud LOGO, not a service icon), Azure Public Service Icons and the Google Cloud symbol. Governed by each vendor's trademark/icon terms of use, not by copyright licence. Terms are recorded in the asset READMEs; they are go:embed'd into the shipped backend binary, so the terms must travel with it.",
+      "paths": [
+        "src/backend/internal/rca/cloudicons/aws.svg",
+        "src/backend/internal/rca/cloudicons/azure.svg",
+        "src/backend/internal/rca/cloudicons/gcp.svg",
+        "src/frontend/src/assets/cloud/aws.svg"
+      ],
+      "unit": "api image (netops-api) \u2014 go:embed'd into the binary",
+      "usage": "linked",
+      "version": "AWS / Azure / GCP marks"
+    },
+    "connector-marks": {
+      "license": "LicenseRef-Trademark-ToU",
+      "note": "Atlassian and ServiceNow marks with no terms documented. Grepping src/frontend/src finds zero references \u2014 they are unused files that still ship in the source tarball.",
+      "paths": [
+        "src/frontend/src/assets/connectors/jira.svg",
+        "src/frontend/src/assets/connectors/servicenow.svg"
+      ],
+      "unit": "NOT REFERENCED \u2014 dead assets in the frontend source tree",
+      "usage": "build-only",
+      "version": "Jira / ServiceNow marks"
+    },
+    "feather-icons": {
+      "license": "MIT",
+      "note": "~20 icons in Icon.tsx carry Feather's verbatim path coordinates (compass/activity/sliders/shield/lock/unlock/file-text/grid/x/arrow-*/maximize/log-out). Feather is MIT, (c) 2013-2023 Cole Bemis. MIT REQUIRES the copyright notice and permission text be retained in redistributions.",
+      "paths": [
+        "src/frontend/src/components/Icon.tsx"
+      ],
+      "unit": "frontend image (netops-frontend) \u2014 SPA bundle",
+      "usage": "bundled-runtime",
+      "version": "path data, in-tree copy"
+    },
+    "ietf-rfc-mibs": {
+      "license": "BSD-3-Clause",
+      "note": "MIB modules are RFC Code Components; the IETF Trust Legal Provisions license them under the Simplified/Modified BSD terms, so redistribution is permitted with the notice. P-BRIDGE-MIB and Q-BRIDGE-MIB carry the Internet Society (2006) / RFC 4363 notice inline.",
+      "paths": [
+        "src/backend/collectors/mibs/vendored/IF-MIB",
+        "src/backend/collectors/mibs/vendored/IANAifType-MIB",
+        "src/backend/collectors/mibs/vendored/BRIDGE-MIB",
+        "src/backend/collectors/mibs/vendored/P-BRIDGE-MIB",
+        "src/backend/collectors/mibs/vendored/Q-BRIDGE-MIB",
+        "src/backend/collectors/mibs/vendored/RMON-MIB",
+        "src/backend/collectors/mibs/vendored/RMON2-MIB",
+        "src/backend/collectors/mibs/vendored/TOKEN-RING-RMON-MIB",
+        "src/backend/collectors/mibs/vendored/RFC1213-MIB",
+        "src/backend/collectors/mibs/vendored/RFC1155-SMI",
+        "src/backend/collectors/mibs/vendored/RFC-1212",
+        "src/backend/collectors/mibs/vendored/SNMPv2-SMI"
+      ],
+      "unit": "source tarball (correlix-source-*.tar.gz)",
+      "usage": "data",
+      "version": "RFC code components"
+    },
+    "lucide-icons": {
+      "license": "ISC",
+      "note": "check / chevron family / external-link / mail / sliders-horizontal follow Lucide's coordinates. Lucide is ISC and itself retains Feather's MIT notice. ISC requires notice retention.",
+      "paths": [
+        "src/frontend/src/components/Icon.tsx"
+      ],
+      "unit": "frontend image (netops-frontend) \u2014 SPA bundle",
+      "usage": "bundled-runtime",
+      "version": "path data, in-tree copy"
+    },
+    "natural-earth-110m": {
+      "license": "CC0-1.0",
+      "note": "Natural Earth is explicitly public domain; no permission or attribution required (a credit is a courtesy). Packaging pipeline (world-atlas) is ISC.",
+      "paths": [
+        "src/frontend/src/assets/world-110m.geo.json"
+      ],
+      "unit": "frontend image (netops-frontend) \u2014 SPA bundle",
+      "usage": "bundled-runtime",
+      "version": "Natural Earth 1:110m Admin-0"
+    },
+    "netclaw-knowledge": {
+      "license": "Apache-2.0",
+      "note": "Troubleshooting PROCEDURES mined from the NetClaw project (Apache-2.0, John Capobianco), re-expressed as this project's own command tables and deterministic parsers. No NetClaw code, runtime or LLM component is present. Already attributed in NOTICE and in the file header.",
+      "paths": [
+        "src/backend/internal/verify/modules.go"
+      ],
+      "unit": "source tarball + api image (knowledge only, no code)",
+      "usage": "data",
+      "version": "commit 49332542f43390955e758b69855a111b5ba0ff4c"
+    }
+  }
+}
