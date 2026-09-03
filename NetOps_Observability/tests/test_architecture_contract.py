@@ -442,6 +442,17 @@ def test_transport_is_deny_by_default():
         # Device-side protocols — the transport-encryption device programme
         # (P0–P4), phase 2+: cannot be closed intra-stack.
         "device-syslog-ng", "device-snmp-poll", "device-snmp-trap",
+        # The pipeline debugger's synthetic-record injection
+        # (docs/design/PIPELINE_DEBUGGER_2026-09-04.md §2/§5, W1). It writes to
+        # the SAME syslog-ng :514 socket device-syslog-ng already describes —
+        # no second listener, no new exposure, and it inherits that lane's
+        # posture whatever it becomes. It is here rather than encrypted because
+        # closing it means closing device-syslog-ng, which is the phase-2 item
+        # directly above. Authorization is at the api (requirePlatformAdmin +
+        # audit) before the datagram exists; the frame carries no credential
+        # and every record is tagged cx_synthetic=true. Dormant unless an
+        # operator runs `correlix-debug trace`.
+        "api-syslog-ng-debug",
         # gnmic dials devices with skip-verify:true — tls-UNVERIFIED, i.e.
         # plaintext-equivalent against an active MITM, so it registers here
         # like plaintext until SEC-016 (phase 2+) makes prod refuse insecure.

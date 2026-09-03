@@ -182,6 +182,13 @@ var apiRoutes = []apiRoute{
 	// TenantIndexPattern + TenantFilter. The propose route APPLIES NOTHING: it
 	// returns a drafted catalog row as text, which a human lands by pull
 	// request against telemetry-catalog/events.yaml.
+	// Pipeline debugger (design PIPELINE_DEBUGGER_2026-09-04). Platform admin
+	// only; every trace record is tagged synthetic and excluded from the
+	// customer-facing log search.
+	{"POST", "/api/debug/trace", "Telemetry", "Inject ONE marked synthetic record (kind=syslog|trap) into the stack's own ingress — never a device — and start the async follow; returns the marker and an injection receipt (platform admin)"},
+	{"GET", "/api/debug/trace/{marker}", "Telemetry", "Poll a trace's per-stage status: seen | not_seen | not_observable (with the reason) for the bus, the three stores, correlation and the api (platform admin)"},
+	{"PUT", "/api/debug/loglevel", "Telemetry", "Raise one module to debug for a BOUNDED window (hard cap 30 minutes) with an auto-revert armed in the module's own process; a module with no runtime switch answers applied:false and says why, never a faked success (platform admin)"},
+	{"GET", "/api/debug/stage/{stage}", "Telemetry", "One stage's evidence for a marker (kafka|opensearch|victoria|clickhouse|correlation|api), with the exact query used (platform admin)"},
 	{"GET", "/api/admin/parser/stats", "Telemetry", "Parser rule corpus, per-rule hit counts, promotion rate and ingest pre-filter split, summed across the correlation replicas (platform admin)"},
 	{"GET", "/api/telemetry/unrecognized", "Telemetry", "Mined templates of the caller's log lines the parser would not admit (days, limit, lane)"},
 	{"POST", "/api/telemetry/unrecognized/{template_id}/propose", "Telemetry", "Draft a telemetry-catalog rule row and fixture for one unrecognized template — returned as text, applied nowhere (alerts:write)"},

@@ -1418,6 +1418,21 @@ services:
       # evidence class. Compose omits the variable entirely when it is absent
       # from .env and the environment.
       CORR_EVIDENCE_TOPICS:
+      # DEBUG-ROUTES-BEGIN
+      # Pipeline debugger (docs/design/PIPELINE_DEBUGGER_2026-09-04.md §2/§4).
+      # The correlation container is the only place in the stack that speaks
+      # Kafka from a language we ship a client for (Go has none, by CLAUDE.md
+      # §6), so the bounded read-only bus PEEK and this service's runtime
+      # log-level control live on its health sidecar and the api proxies them.
+      #
+      # DEFAULT-CLOSED AND EMPTY ON PURPOSE: with no shared secret the two debug
+      # routes answer 503 and say they are not configured, and the api's trace
+      # reports the bus stage as "not observable" WITH that reason. Set
+      # CORR_DEBUG_TOKEN in .env (same value on the api service below) to turn
+      # them on. "The port is only on the internal network" is exactly the
+      # implicit trust §3 forbids, so there is no unauthenticated mode.
+      CORR_DEBUG_TOKEN: ${CORR_DEBUG_TOKEN:-}
+      # DEBUG-ROUTES-END
     volumes:
       - ../../data/correlation/deadletter:/data/deadletter
       - ../../data/api/enrichment:/data/enrichment:ro
@@ -1622,6 +1637,28 @@ services:
       PLATFORM_ALERTS_PUSH_BUDGET: ${PLATFORM_ALERTS_PUSH_BUDGET:-30}
       PLATFORM_ALERTS_PUSH_BUDGET_PAGE_RESERVE: ${PLATFORM_ALERTS_PUSH_BUDGET_PAGE_RESERVE:-10}
       CORRELATION_URL: "http://correlation:8000"
+      # DEBUG-ROUTES-BEGIN
+      # Pipeline debugger (docs/design/PIPELINE_DEBUGGER_2026-09-04.md §4). The
+      # api proxies the bounded Kafka peek and the correlation log-level change
+      # to the correlation container's health sidecar; this is the shared secret
+      # for that hop. EMPTY BY DEFAULT = the bus stage reports "not observable"
+      # with the reason, and the correlation log level reports "not switchable"
+      # with the reason — never a silent degradation and never an
+      # unauthenticated internal call (§3). Set the SAME value here and on the
+      # correlation service to enable it.
+      #
+      # CORR_DEBUG_SIDECAR_URL is only needed when the sidecar is not reachable
+      # at CORRELATION_URL's host on CORR_HEALTH_SIDECAR_PORT (8094), which is
+      # the derivation the api uses when this is unset.
+      CORR_DEBUG_TOKEN: ${CORR_DEBUG_TOKEN:-}
+      CORR_DEBUG_SIDECAR_URL: ${CORR_DEBUG_SIDECAR_URL:-}
+      CORR_HEALTH_SIDECAR_PORT: ${CORR_HEALTH_SIDECAR_PORT:-8094}
+      # Where a trace injects its ONE marked synthetic record. Both are the
+      # STACK's own ingress, never a device (design §5): the syslog collector,
+      # and this container's own SNMP trap receiver.
+      DEBUG_SYSLOG_TARGET: ${DEBUG_SYSLOG_TARGET:-syslog-ng:514}
+      DEBUG_TRAP_TARGET: ${DEBUG_TRAP_TARGET:-127.0.0.1:1162}
+      # DEBUG-ROUTES-END
       # #20: export the device→tenant map (under the api's /data volume) so the
       # Vector aggregator + correlation can stamp tenant_id onto telemetry.
       TENANT_ENRICHMENT_DIR: /data/enrichment

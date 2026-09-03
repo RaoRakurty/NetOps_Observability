@@ -690,6 +690,24 @@ var routeIsolationLedger = map[string]string{
 	// internal/configstore/{http,store}_test.go and internal/configdrift/http_test.go.
 	"/api/config/drift": "scoped",
 	"/api/openapi.json": "public",
+	// Pipeline debugger (docs/design/PIPELINE_DEBUGGER_2026-09-04.md §4). All
+	// four are PLATFORM plumbing, requirePlatformAdmin (s.debugAuthz), NOT
+	// requireAdmin: a trace injects a marked synthetic record into the stack's
+	// own ingress and reads it back out of the SHARED stores, and a log-level
+	// change alters every tenant's service. A tenant/org admin holds full
+	// administration:admin, so a scope-blind gate here would be a privilege
+	// leak (§3a rule 3), which is why these are not "scoped".
+	//
+	// The `tenant` selector on /api/debug/trace and /api/debug/stage NARROWS a
+	// cross-tenant principal (the as_tenant shape) and can never widen a scoped
+	// one: effectiveTenant refuses a request naming a tenant other than the
+	// caller's own, and the trace status route 404s a marker outside the
+	// caller's scope rather than confirming it exists. Proven by
+	// internal/pipedebug/http_test.go.
+	"/api/debug/trace":    "platform",
+	"/api/debug/trace/":   "platform",
+	"/api/debug/loglevel": "platform",
+	"/api/debug/stage/":   "platform",
 }
 
 var validRouteCategories = map[string]bool{

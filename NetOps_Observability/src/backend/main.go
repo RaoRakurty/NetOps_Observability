@@ -55,6 +55,10 @@ import (
 	// PACKET-CAPTURE-BEGIN
 	"netops/backend/internal/pcap"
 	// PACKET-CAPTURE-END
+	// DEBUG-ROUTES-BEGIN
+	"netops/backend/internal/oslog"
+	"netops/backend/internal/pipedebug"
+	// DEBUG-ROUTES-END
 	"netops/backend/internal/platformdb"
 	"netops/backend/internal/protocoldiag"
 	"netops/backend/internal/quarantine"
@@ -314,6 +318,23 @@ type server struct {
 	// subpackage; only the wiring is here (§2, the secapi precedent).
 	parserCov        *parsercov.API
 	parserCovMetrics *parsercov.Metrics
+	// DEBUG-ROUTES-BEGIN
+	// Pipeline debugger (docs/design/PIPELINE_DEBUGGER_2026-09-04.md). The
+	// handlers live in internal/pipedebug over injected seams; only the wiring
+	// is here (§2, the secapi precedent), and it is deletable as a unit —
+	// removing the five DEBUG-ROUTES marker blocks in this file (import, this
+	// struct hunk, the newServer wiring, the four mux registrations and the
+	// debugDeps builder), the three in logs.go / correlation/main.py, and the
+	// internal/pipedebug package removes the whole feature and nothing else.
+	debugAPI *pipedebug.API
+	// debugRing is the bounded, per-marker in-memory log buffer that serves a
+	// trace's `api` stage WITHOUT reading the applogs index — a debugger must
+	// not depend on the pipeline it is debugging.
+	debugRing *pipedebug.Ring
+	// debugAPILevel owns this process's runtime log level with the auto-revert
+	// armed HERE, so a module never stays at debug because a caller died.
+	debugAPILevel *pipedebug.LevelSwitch
+	// DEBUG-ROUTES-END
 	// SECURITY-LANE-BEGIN — P3-EMIT removable module; see internal/seclane's
 	// package doc, "REMOVAL RULE". nil unless FEATURE_SECURITY_LANE=true.
 	securityLane *seclane.Lane
@@ -1070,6 +1091,27 @@ func newServer() *server {
 	srv.secAPI = secapi.New(srv.securityAPIDeps())     // handlers over injected seams (§5)
 	srv.parserCovMetrics = parsercov.NewMetrics()      // netops_parser_coverage_* counters
 	srv.parserCov = parsercov.New(srv.parserCovDeps()) // handlers over injected seams (§5)
+	// DEBUG-ROUTES-BEGIN
+	// The ring is installed as the applog OBSERVER, so any log line carrying a
+	// `cx_debug=<ulid>` marker is retained in memory for the trace that owns it.
+	// Off-path cost when no trace is running is one map lookup per log line; the
+	// ring itself is bounded at pipedebug.RingCapacity lines.
+	srv.debugRing = pipedebug.NewRing()
+	applog.SetObserver(func(level, component, msg string, fields map[string]any) {
+		marker := pipedebug.MarkerIn(msg, fields)
+		if marker == "" {
+			return
+		}
+		srv.debugRing.Append(marker, pipedebug.RingLine{
+			Level: level, Component: component, Msg: msg, Fields: fields,
+		})
+	})
+	srv.debugAPILevel = pipedebug.NewLevelSwitch(pipedebug.ModuleAPI, func(l pipedebug.Level) error {
+		applog.SetLevel(string(l))
+		return nil
+	})
+	srv.debugAPI = pipedebug.New(srv.debugDeps()) // handlers over injected seams (§5)
+	// DEBUG-ROUTES-END
 	srv.rcaRevisions = newRcaRevisionStore(rcaRevisionsPath())
 
 	srv.portStore = newPortStore() // Port Intelligence #94 P5
@@ -2280,6 +2322,18 @@ func (s *server) routes(mux *http.ServeMux) {
 	// SEC-FRAMEWORKS-END
 	mux.HandleFunc("/api/security/views", s.secAPI.HandleViews)
 	mux.HandleFunc("/api/security/views/", s.secAPI.HandleViews)
+	// DEBUG-ROUTES-BEGIN
+	// Pipeline debugger (design §4). requirePlatformAdmin on all four — a trace
+	// reads one tenant's telemetry out of the shared stores and a log-level
+	// change is stack-wide plumbing, so a tenant admin's full
+	// administration:admin must NOT reach them (§3a rule 3). Every route is
+	// audited by the withAudit chokepoint (all four are mutating or carry an
+	// explicit pdAudit-style record) and body-capped inside the handlers.
+	mux.HandleFunc("/api/debug/trace", s.debugAPI.HandleTrace)
+	mux.HandleFunc("/api/debug/trace/", s.debugAPI.HandleTraceStatus)
+	mux.HandleFunc("/api/debug/loglevel", s.debugAPI.HandleLogLevel)
+	mux.HandleFunc("/api/debug/stage/", s.debugAPI.HandleStage)
+	// DEBUG-ROUTES-END
 	// SECURITY-LANE-BEGIN
 	s.registerSecurityLaneRoutes(mux)
 	// SECURITY-LANE-END
@@ -3821,6 +3875,113 @@ func (s *server) parserCovDeps() parsercov.Deps {
 		MaxLines:   envInt(parsercov.EnvMaxLines, parsercov.DefaultMaxLines),
 	}
 }
+
+// DEBUG-ROUTES-BEGIN
+// ── Pipeline debugger wiring (design PIPELINE_DEBUGGER_2026-09-04 §4) ───────
+//
+// internal/pipedebug holds NO ambient authority: the gate, the store clients,
+// the injection sockets, the sidecar transport and the clock all arrive here,
+// explicitly (the secapi/parsercov precedent). Deleting this function, the four
+// other DEBUG-ROUTES marker blocks in this file and the internal/pipedebug
+// package removes the debugger without touching anything else.
+
+// debugAuthz is the ONE gate for every debug route.
+//
+// GATE CHOICE (§3a rule 3). requirePlatformAdmin, never requireAdmin: a trace
+// reads a tenant's telemetry back out of the SHARED stores, and a log-level
+// change is stack-wide plumbing that affects every tenant's service. A tenant
+// or org admin holds full administration:admin, so a scope-blind requireAdmin
+// here would be a privilege leak, not a convenience.
+func (s *server) debugAuthz(w http.ResponseWriter, r *http.Request) (pipedebug.Principal, bool) {
+	claims, ok := s.requirePlatformAdmin(w, r)
+	if !ok {
+		return pipedebug.Principal{}, false
+	}
+	tenant, cross := principalTenant(claims)
+	return pipedebug.Principal{Subject: claims.Sub, Tenant: tenant, Cross: cross}, true
+}
+
+// debugDeps assembles the injected collaborators.
+func (s *server) debugDeps() pipedebug.Deps {
+	client := backendHTTPClient(20 * time.Second)
+	corrURL := envOr("CORRELATION_URL", "http://correlation:8000")
+	sidecar, err := pipedebug.SidecarBase(
+		os.Getenv(pipedebug.EnvSidecarURL), corrURL,
+		envInt(pipedebug.EnvSidecarPort, pipedebug.DefaultSidecarPort))
+	if err != nil {
+		// MISCONFIGURED is not the same as NOT CONFIGURED (§10): an unusable
+		// CORRELATION_URL is an operator mistake, and it must be named at boot
+		// rather than surfacing later as "the bus stage is not observable".
+		logError("pipedebug", "cannot derive the correlation debug sidecar URL — the Kafka peek and the correlation log-level control will report as unavailable", map[string]any{"err": err.Error()})
+	}
+	// UNSET IS THE SHIPPED DEFAULT: with no token the bus peek and the
+	// correlation log-level control report "not observable / not switchable"
+	// WITH THE REASON, rather than being silently open on the internal network
+	// (§3 — no implicit trust between services).
+	token := os.Getenv(pipedebug.EnvSidecarToken)
+
+	return pipedebug.Deps{
+		Authz:          s.debugAuthz,
+		Search:         openSearch,
+		OSIndexPattern: oslog.TenantIndexPattern,
+		CHSelect:       chSelect,
+		CHScopeFor: func(p pipedebug.Principal) string {
+			if p.Cross {
+				return "__all__"
+			}
+			if p.Tenant == "" {
+				return "__none__"
+			}
+			return p.Tenant
+		},
+		VictoriaExport: pipedebug.NewVictoriaExport(client,
+			envOr("VICTORIA_URL", envOr("METRICS_URL", "http://victoria:8428"))),
+		KafkaPeek:    pipedebug.NewKafkaPeek(client, sidecar, token),
+		CorrLogLevel: pipedebug.NewCorrLogLevel(client, sidecar, token),
+		CorrHealth:   pipedebug.NewCorrHealth(client, strings.TrimRight(corrURL, "/")),
+		SetAPILevel:  s.debugAPILevel.Set,
+		// Vector is deliberately NOT wired: it reads VECTOR_LOG at process start
+		// and exposes no log-level mutation on its API, so there is nothing
+		// honest to call. The handler answers with pipedebug.VectorLevelReason,
+		// which names the substitute (`vector tap`) instead of faking a switch.
+		VectorLogLevel: nil,
+		InjectSyslog: func(ctx context.Context, frame string) error {
+			return pipedebug.NewUDPInjector(
+				envOr(pipedebug.EnvSyslogTarget, pipedebug.DefaultSyslogTarget),
+				5*time.Second)(ctx, []byte(frame))
+		},
+		InjectTrap: pipedebug.NewUDPInjector(
+			envOr(pipedebug.EnvTrapTarget, pipedebug.DefaultTrapTarget), 5*time.Second),
+		Ring:       s.debugRing,
+		Audit:      s.debugAudit,
+		WriteJSON:  writeJSON,
+		WriteError: writeError,
+		Now:        func() time.Time { return time.Now().UTC() },
+	}
+}
+
+// debugAudit records a debug action into the immutable trail with the
+// `sensitive` tag — the pdAudit shape, so the two operator-initiated features
+// that touch tenant telemetry read identically in the compliance view.
+func (s *server) debugAudit(r *http.Request, tenant, action string, detail map[string]any) {
+	if s.audit == nil {
+		return
+	}
+	claims, _ := userFrom(r.Context())
+	_, cross := principalTenant(claims)
+	if detail == nil {
+		detail = map[string]any{}
+	}
+	detail["action"] = action
+	detail["sensitive"] = true
+	s.audit.Record(AuditEvent{
+		Actor: claims.Sub, Tenant: tenant, Cross: cross,
+		Method: r.Method, Path: r.URL.Path, Status: http.StatusOK, Decision: "allow",
+		Remote: auditClientIP(r), Detail: detail,
+	})
+}
+
+// DEBUG-ROUTES-END
 
 // ── Security (CTEM) API wiring — Project 3 P3-API ───────────────────────────
 //

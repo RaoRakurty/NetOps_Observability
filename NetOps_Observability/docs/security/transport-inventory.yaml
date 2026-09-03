@@ -563,6 +563,34 @@
       ]
     },
     {
+      "id": "api-syslog-ng-debug",
+      "source": "api",
+      "destination": "syslog-ng",
+      "channel": "syslog",
+      "protocol": "udp",
+      "port": 514,
+      "current": {
+        "transport": "plaintext",
+        "authn": "none",
+        "authz": "platform-admin-at-the-api",
+        "notes": "DEBUG-ROUTES (docs/design/PIPELINE_DEBUGGER_2026-09-04.md \u00a72/\u00a75). The pipeline debugger's `trace` verb injects ONE marked synthetic syslog record into the stack's OWN ingress so the real path is exercised end to end; DEBUG_SYSLOG_TARGET (default syslog-ng:514) names it. It is the SAME wire as device-syslog-ng and inherits that lane's posture exactly \u2014 there is no second listener and no new exposure. Authorization happens at the api (requirePlatformAdmin + audit) before the datagram is built; the frame itself carries no credential and every record is tagged cx_synthetic=true so it is excluded from customer-facing views. Dormant unless an operator runs a trace."
+      },
+      "target": {
+        "transport": "tls-rfc5425-mtls",
+        "authn": "service-cert",
+        "authz": "platform-admin-at-the-api",
+        "notes": "Follows device-syslog-ng: whatever that lane becomes, this hop is the same socket"
+      },
+      "trust_domain": "internal",
+      "owning_epic": "SEC-014",
+      "priority": "P0-deferred-phase2",
+      "evidence": [
+        "deployment/docker/docker-compose.yml",
+        "src/backend/internal/pipedebug/inject.go",
+        "src/backend/internal/pipedebug/http.go"
+      ]
+    },
+    {
       "id": "device-goflow2",
       "source": "device",
       "destination": "goflow2",

@@ -51,10 +51,12 @@ import functools
 import gc
 import glob
 import hashlib
+import hmac
 import json
 import logging
 import math
 import os
+import re
 import threading
 import time
 import uuid
@@ -13470,6 +13472,272 @@ def _sidecar_response(path: str) -> tuple[int, str, bytes]:
     return 404, "application/json", b'{"detail":"sidecar serves /healthz and /metrics only"}'
 
 
+# DEBUG-ROUTES-BEGIN
+# ── Pipeline debugger: the correlation container's bounded debug endpoints ──
+#
+# docs/design/PIPELINE_DEBUGGER_2026-09-04.md §2/§4. TWO routes, both POST, both
+# on the loop-INDEPENDENT health sidecar:
+#
+#   POST /debug/kafka-peek  — stage 3 of a trace. Go has no Kafka client BY
+#       DESIGN (CLAUDE.md §6), so the API cannot look at the bus itself; this
+#       container already speaks aiokafka, so the peek lives here and the API
+#       proxies it with the service identity.
+#   POST /debug/loglevel    — raise THIS service to debug for a bounded window
+#       with an auto-revert armed HERE, so the level comes back down even if the
+#       caller is killed.
+#
+# DEFAULT-CLOSED (§3, zero trust). Both routes require a bearer token equal to
+# CORR_DEBUG_TOKEN, compared in constant time. With the variable unset — the
+# shipped default — they answer 503 and explain that they are not configured.
+# They are NEVER open: the sidecar port is unpublished, but "it is only on the
+# internal network" is exactly the implicit trust §3 forbids.
+#
+# BOUNDED IN EVERY DIMENSION (§9). The peek runs an EPHEMERAL consumer with no
+# group id (it can neither join the engine's group nor move its offsets), reads
+# for at most CORR_DEBUG_PEEK_MAX_S seconds, returns at most 20 records, and
+# truncates every payload excerpt. It seeks to a bounded lookback, never to the
+# beginning of a topic.
+
+CORR_DEBUG_TOKEN = os.environ.get("CORR_DEBUG_TOKEN", "")
+CORR_DEBUG_PEEK_MAX_S = float(os.environ.get("CORR_DEBUG_PEEK_MAX_S", "10"))
+CORR_DEBUG_MAX_RECORDS = 20
+CORR_DEBUG_MAX_EXCERPT = 4096
+CORR_DEBUG_MAX_LOOKBACK_S = 3600
+CORR_DEBUG_MAX_BODY = 8192
+CORR_DEBUG_MARKER_LEN = 26
+# Crockford base32, lower case — the shape internal/pipedebug mints and
+# validates. Kept as an explicit set so the two implementations can be diffed.
+CORR_DEBUG_MARKER_CHARS = frozenset("0123456789abcdefghjkmnpqrstvwxyz")
+_DEBUG_TOPIC_RE = re.compile(r"^[A-Za-z0-9._-]{1,200}$")
+
+DEBUG_LEVEL_REVERT_TIMER: threading.Timer | None = None
+DEBUG_PEEKS_TOTAL = 0
+DEBUG_PEEK_ERRORS = 0
+
+
+def _debug_configured() -> bool:
+    return bool(CORR_DEBUG_TOKEN)
+
+
+def _debug_authorized(auth_header: str | None) -> bool:
+    """Constant-time bearer check. An unconfigured token authorizes NOTHING —
+    the empty string is not a password."""
+    if not CORR_DEBUG_TOKEN:
+        return False
+    value = (auth_header or "").strip()
+    prefix = "bearer "
+    if value[:len(prefix)].lower() != prefix:
+        return False
+    return hmac.compare_digest(value[len(prefix):], CORR_DEBUG_TOKEN)
+
+
+def _valid_debug_marker(marker: str) -> bool:
+    return (len(marker) == CORR_DEBUG_MARKER_LEN
+            and all(c in CORR_DEBUG_MARKER_CHARS for c in marker))
+
+
+def _debug_peek_params(body: bytes) -> dict:
+    """Validate + CLAMP an untrusted peek request. Raises ValueError with an
+    operator-readable reason; never returns an unbounded value."""
+    if len(body) > CORR_DEBUG_MAX_BODY:
+        raise ValueError("request body too large")
+    try:
+        req = json.loads(body or b"{}")
+    except Exception as exc:                       # noqa: BLE001 — untrusted input
+        raise ValueError(f"body is not JSON: {exc}") from None
+    if not isinstance(req, dict):
+        raise ValueError("body must be a JSON object")
+
+    topic = str(req.get("topic", "")).strip()
+    if not _DEBUG_TOPIC_RE.match(topic):
+        raise ValueError("topic must match [A-Za-z0-9._-]{1,200}")
+    marker = str(req.get("marker", "")).strip().lower()
+    if not _valid_debug_marker(marker):
+        raise ValueError(f"marker must be {CORR_DEBUG_MARKER_LEN} Crockford base32 characters")
+
+    def _clamp(name: str, default: float, lo: float, hi: float) -> float:
+        raw = req.get(name, default)
+        try:
+            val = float(raw)
+        except (TypeError, ValueError):
+            raise ValueError(f"{name} must be a number") from None
+        return max(lo, min(hi, val))
+
+    return {
+        "topic": topic,
+        "marker": marker,
+        "max_seconds": _clamp("max_seconds", CORR_DEBUG_PEEK_MAX_S, 1.0, CORR_DEBUG_PEEK_MAX_S),
+        "max_records": int(_clamp("max_records", 5, 1, CORR_DEBUG_MAX_RECORDS)),
+        "lookback_seconds": int(_clamp("lookback_seconds", 900, 1, CORR_DEBUG_MAX_LOOKBACK_S)),
+    }
+
+
+async def _debug_kafka_peek(params: dict) -> dict:
+    """Read-only, group-less, time-bounded scan of one topic for one marker.
+
+    NO group_id: the consumer never joins netops-correlation, never triggers a
+    rebalance and cannot commit an offset — a debug read must not be able to
+    perturb the engine it is debugging.
+    """
+    started = time.monotonic()
+    deadline = started + params["max_seconds"]
+    needle = ("cx_debug=" + params["marker"]).encode()
+    consumer = AIOKafkaConsumer(
+        bootstrap_servers=KAFKA_BOOTSTRAP,
+        enable_auto_commit=False,
+        auto_offset_reset="latest",
+        **KAFKA_SECURITY,
+    )
+    records: list[dict] = []
+    scanned = 0
+    truncated = False
+    await consumer.start()
+    try:
+        parts = consumer.partitions_for_topic(params["topic"])
+        if not parts:
+            return {"records": [], "scanned": 0,
+                    "elapsed_s": round(time.monotonic() - started, 3),
+                    "truncated": False,
+                    "detail": f"topic {params['topic']} has no partitions visible to this principal"}
+        tps = [TopicPartition(params["topic"], p) for p in sorted(parts)]
+        consumer.assign(tps)
+        # Seek by TIME, not to the beginning: a debug peek must never replay a
+        # retention window's worth of a production topic.
+        since_ms = int((time.time() - params["lookback_seconds"]) * 1000)
+        offsets = await consumer.offsets_for_times({tp: since_ms for tp in tps})
+        for tp in tps:
+            found = offsets.get(tp)
+            if found is None:
+                await consumer.seek_to_end(tp)
+            else:
+                consumer.seek(tp, found.offset)
+        while time.monotonic() < deadline and len(records) < params["max_records"]:
+            batch = await consumer.getmany(
+                timeout_ms=int(max(0.0, deadline - time.monotonic()) * 1000))
+            if not batch:
+                break
+            for msgs in batch.values():
+                for msg in msgs:
+                    scanned += 1
+                    payload = msg.value or b""
+                    if needle not in payload:
+                        continue
+                    excerpt = payload[:CORR_DEBUG_MAX_EXCERPT]
+                    if len(payload) > CORR_DEBUG_MAX_EXCERPT:
+                        truncated = True
+                    records.append({
+                        "topic": msg.topic,
+                        "partition": msg.partition,
+                        "offset": msg.offset,
+                        "timestamp_ms": msg.timestamp,
+                        "excerpt": excerpt.decode("utf-8", "replace"),
+                    })
+                    if len(records) >= params["max_records"]:
+                        break
+                if len(records) >= params["max_records"]:
+                    break
+    finally:
+        await consumer.stop()
+    return {"records": records, "scanned": scanned,
+            "elapsed_s": round(time.monotonic() - started, 3),
+            "truncated": truncated}
+
+
+def _debug_level_params(body: bytes) -> dict:
+    if len(body) > CORR_DEBUG_MAX_BODY:
+        raise ValueError("request body too large")
+    try:
+        req = json.loads(body or b"{}")
+    except Exception as exc:                       # noqa: BLE001 — untrusted input
+        raise ValueError(f"body is not JSON: {exc}") from None
+    if not isinstance(req, dict):
+        raise ValueError("body must be a JSON object")
+    level = str(req.get("level", "")).strip().lower()
+    if level not in ("debug", "info"):
+        raise ValueError("level must be debug or info")
+    try:
+        window = float(req.get("for_seconds", 300))
+    except (TypeError, ValueError):
+        raise ValueError("for_seconds must be a number") from None
+    # 30 minutes is the hard cap the design sets for ANY debug window.
+    window = max(1.0, min(1800.0, window))
+    return {"level": level, "for_seconds": window}
+
+
+def _debug_set_level(level: str, for_seconds: float) -> dict:
+    """Move the root logger and arm the auto-revert HERE.
+
+    The revert timer lives in this process on purpose: a caller that dies — the
+    CLI killed, the API restarted, the operator's laptop closed — must not be
+    able to leave this service at debug (design §5)."""
+    global DEBUG_LEVEL_REVERT_TIMER
+    previous = logging.getLevelName(logging.getLogger().level).lower()
+    if DEBUG_LEVEL_REVERT_TIMER is not None:
+        DEBUG_LEVEL_REVERT_TIMER.cancel()
+        DEBUG_LEVEL_REVERT_TIMER = None
+    logging.getLogger().setLevel(level.upper())
+    log.setLevel(level.upper())
+    revert_at = None
+    if level == "debug":
+
+        def _revert() -> None:
+            global DEBUG_LEVEL_REVERT_TIMER
+            logging.getLogger().setLevel(LOG_LEVEL)
+            log.setLevel(LOG_LEVEL)
+            DEBUG_LEVEL_REVERT_TIMER = None
+            log.warning("debug log level auto-reverted to %s after its window", LOG_LEVEL)
+
+        timer = threading.Timer(for_seconds, _revert)
+        timer.daemon = True
+        timer.start()
+        DEBUG_LEVEL_REVERT_TIMER = timer
+        revert_at = time.time() + for_seconds
+    return {"module": "correlation", "applied": True, "level": level,
+            "previous": previous, "revert_at_unix": revert_at,
+            "reason": "auto-reverts in this process even if the caller dies"}
+
+
+def _sidecar_debug_response(path: str, body: bytes, auth_header: str | None,
+                            peek_runner=None) -> tuple[int, str, bytes]:
+    """(status, content_type, body) for one POST — PURE except for the runner it
+    is handed, so every branch is testable with no broker and no server."""
+    global DEBUG_PEEKS_TOTAL, DEBUG_PEEK_ERRORS
+    if not _debug_configured():
+        return 503, "application/json", json.dumps({
+            "detail": "the correlation debug endpoints are not configured on this "
+                      "deployment: set CORR_DEBUG_TOKEN to enable them"}).encode()
+    if not _debug_authorized(auth_header):
+        return 401, "application/json", b'{"detail":"bearer token required"}'
+    if path == "/debug/kafka-peek":
+        try:
+            params = _debug_peek_params(body)
+        except ValueError as exc:
+            return 400, "application/json", json.dumps({"detail": str(exc)}).encode()
+        runner = peek_runner or (lambda p: asyncio.run(_debug_kafka_peek(p)))
+        DEBUG_PEEKS_TOTAL += 1
+        try:
+            result = runner(params)
+        except Exception as exc:                   # noqa: BLE001 — a broker fault
+            # must be REPORTED, never rendered as "the marker was not on the bus"
+            # (that inversion is the whole defect class this feature exists for).
+            DEBUG_PEEK_ERRORS += 1
+            log.warning("debug kafka peek failed (%s): %s", type(exc).__name__, exc)
+            return 502, "application/json", json.dumps({
+                "detail": f"kafka peek failed: {type(exc).__name__}: {exc}"}).encode()
+        return 200, "application/json", json.dumps(result).encode()
+    if path == "/debug/loglevel":
+        try:
+            params = _debug_level_params(body)
+        except ValueError as exc:
+            return 400, "application/json", json.dumps({"detail": str(exc)}).encode()
+        return 200, "application/json", json.dumps(
+            _debug_set_level(params["level"], params["for_seconds"])).encode()
+    return 404, "application/json", b'{"detail":"sidecar POST serves /debug/kafka-peek and /debug/loglevel only"}'
+
+
+# DEBUG-ROUTES-END
+
+
 def _start_health_sidecar() -> object | None:
     """Start the daemon-thread server; returns it (tests) or None (disabled)."""
     if CORR_HEALTH_SIDECAR_PORT <= 0:
@@ -13494,6 +13762,33 @@ def _start_health_sidecar() -> object | None:
                 HEALTH_SIDECAR_ERRORS += 1
                 log.warning("health sidecar request failed (%s): %s — total=%d",
                             type(exc).__name__, exc, HEALTH_SIDECAR_ERRORS)
+
+        # DEBUG-ROUTES-BEGIN
+        def do_POST(self):
+            # The pipeline debugger's two bounded, token-gated routes. Same
+            # never-kill-the-thread contract as do_GET: reachability of the
+            # health surface is the sidecar's reason to exist, and a debug
+            # request must not be able to take it down.
+            try:
+                length = int(self.headers.get("Content-Length") or 0)
+                if length < 0 or length > CORR_DEBUG_MAX_BODY:
+                    status, ctype, body = 413, "application/json", b'{"detail":"request body too large"}'
+                else:
+                    raw = self.rfile.read(length) if length else b""
+                    status, ctype, body = _sidecar_debug_response(
+                        self.path.split("?")[0], raw, self.headers.get("Authorization"))
+                self.send_response(status)
+                self.send_header("Content-Type", ctype)
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+            except Exception as exc:  # noqa: BLE001 — see do_GET
+                global HEALTH_SIDECAR_ERRORS
+                HEALTH_SIDECAR_ERRORS += 1
+                log.warning("health sidecar POST failed (%s): %s — total=%d",
+                            type(exc).__name__, exc, HEALTH_SIDECAR_ERRORS)
+
+        # DEBUG-ROUTES-END
 
         def log_message(self, *_a):                        # probes are not access-log noise
             return

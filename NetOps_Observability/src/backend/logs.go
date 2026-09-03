@@ -15,6 +15,9 @@ import (
 	"netops/backend/internal/applog"
 
 	"netops/backend/internal/oslog"
+	// DEBUG-ROUTES-BEGIN
+	"netops/backend/internal/pipedebug"
+	// DEBUG-ROUTES-END
 )
 
 // ----------------------------------------------------------------------------
@@ -126,8 +129,34 @@ func (s *server) logsScope(r *http.Request, signal string) (index string, filter
 	} else if len(exclude) > 0 {
 		mustNot = append(mustNot, map[string]any{"terms": map[string]any{"tenant_id": exclude}})
 	}
+	// DEBUG-ROUTES-BEGIN
+	// Synthetic pipeline-debug probes never appear in a customer-facing view
+	// (docs/design/PIPELINE_DEBUGGER_2026-09-04.md §4). correlix-debug injects a
+	// real record through the real ingress so the real path is exercised — which
+	// means the record IS in the tenant's index, and the only thing standing
+	// between it and an operator's log search is this clause.
+	//
+	// It sits in logsScope, the ONE chokepoint both the interactive search and
+	// the retention read resolve through, so a future log surface inherits the
+	// exclusion instead of having to remember it. match_phrase on the analysed
+	// `message` field: the standard analyser splits `cx_synthetic=true` into two
+	// adjacent tokens, so the phrase form matches exactly that pair (a term
+	// query on an analysed field would never match at all).
+	mustNot = append(mustNot, syntheticDebugExclusion())
+	// DEBUG-ROUTES-END
 	return index, filters, mustNot, denyAll, false
 }
+
+// DEBUG-ROUTES-BEGIN
+// syntheticDebugExclusion is the must_not clause that keeps correlix-debug's
+// marked probes out of every customer-facing log query. `cx_synthetic=true` is
+// a RESERVED token: a genuine device log containing it is hidden too, which is
+// the safe direction for a debug tag.
+func syntheticDebugExclusion() map[string]any {
+	return map[string]any{"match_phrase": map[string]any{"message": pipedebug.SyntheticTag}}
+}
+
+// DEBUG-ROUTES-END
 
 func (s *server) handleLogsSearch(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost && r.Method != http.MethodGet {
