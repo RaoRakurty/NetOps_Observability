@@ -291,6 +291,19 @@ export default function IconRail({ nav, activeSection, activeLeaf, user, onLogou
               {onChangePassword && (
                 <button onClick={() => { setAcctOpen(false); onChangePassword(); }}>Change password</button>
               )}
+              {/* Third-party attribution must be REACHABLE from the running product,
+                  not just present in the image (2026-09-03 licence audit §2). The page
+                  is static, served by the SPA nginx at /licenses/, so it opens in a new
+                  tab rather than through the router. */}
+              <a
+                className="menu-link"
+                href="/licenses/"
+                target="_blank"
+                rel="noreferrer noopener"
+                onClick={() => setAcctOpen(false)}
+              >
+                Third-party licences
+              </a>
               <button onClick={onLogout}>Sign out</button>
             </div>
           )}

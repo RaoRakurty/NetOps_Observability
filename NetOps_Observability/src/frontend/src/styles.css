@@ -1712,6 +1712,13 @@ code, kbd, pre, .mono, td.mono {
   cursor: pointer; font-size: 13px;
 }
 .menu-pop button:hover { background: var(--hover); }
+/* The third-party-licences entry is a real link (it opens a static page served
+   outside the SPA router), so it needs the menu-item look the buttons get. */
+.menu-pop a.menu-link {
+  display: block; width: 100%; text-align: left; color: var(--fg);
+  padding: 8px 10px; border-radius: 6px; font-size: 13px; text-decoration: none;
+}
+.menu-pop a.menu-link:hover { background: var(--hover); }
 
 /* ----- Sidebar: dark full-height nav rail (reference-grade) ----- */
 .sidebar {

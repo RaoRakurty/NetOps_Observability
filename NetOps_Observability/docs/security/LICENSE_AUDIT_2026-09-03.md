@@ -13,6 +13,21 @@ But the audit is not clean. It found **five distinct attribution obligations we
 are currently carrying and NOT meeting**, and **six items needing an owner
 decision**. None is an emergency; all are cheap to fix. Details below.
 
+> **STATUS UPDATE (later the same day).** All five attribution obligations in
+> §2 are now CLOSED — the notices ship with every distribution unit: the
+> frontend image serves `/licenses/` (rendered inventory + the EPL-2.0 text and
+> source pointer for elkjs, the four OFL-1.1 font licences, the Feather/Lucide
+> notice), reachable from the account menu; the correlation image carries the
+> notices at `/app/licenses`; `make-installer.sh` now GENERATES the bundle's
+> `LICENSES.md` from `docs/THIRD_PARTY_LICENSES.md` and fails the build if the
+> licence gate is not green; NOTICE gained the four missing attributions; and
+> the housekeeping items (dead Jira/ServiceNow marks, the stale
+> `verify_modules.go` path, the CLAUDE.md §6 x/crypto version) are done. Those
+> five exceptions are recorded `status: FIXED` with evidence paths in
+> `scripts/license-data.json`, so the gate no longer prints them.
+> **The six owner decisions in §4 (D1–D6) remain OPEN** and are still printed by
+> every audit run (tracker #227).
+
 Scope: `NetOps_Observability/` at `feat/observability-platform`. Method and
 tooling: `scripts/license-audit.py` (re-runnable, offline), backed by the
 human-reviewed facts in `scripts/license-data.json`. Container-image and

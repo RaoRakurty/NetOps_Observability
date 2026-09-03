@@ -20,6 +20,15 @@ WORKDIR /app
 COPY --from=build /usr/local/lib/python3.12/site-packages /usr/local/lib/python3.12/site-packages
 COPY --from=build /usr/local/bin /usr/local/bin
 COPY src/correlation/ ./
+
+# Third-party notices for everything installed into site-packages above
+# (2026-09-03 licence audit §2.4): certifi is MPL-2.0 — file-level copyleft we
+# do not modify, so what we owe is the notice plus a pointer to upstream
+# source, and MPL §3.1/§3.2 require the recipient of the image be told. The
+# generated notices file carries every Python package's licence and the written
+# source offer; NOTICE carries the per-component attributions. certifi's own
+# LICENSE also remains in its dist-info under site-packages.
+COPY docs/THIRD_PARTY_LICENSES.md NOTICE /app/licenses/
 ENV PYTHONUNBUFFERED=1
 # SC-008: drop to a non-root system user. The app reads world-readable code and
 # binds an unprivileged port (8000), so it needs no root.

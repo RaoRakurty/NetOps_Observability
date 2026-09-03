@@ -17,10 +17,10 @@ Active Verification troubleshooting modules — knowledge mined from NetClaw
 --------------------------------------------------------------------------------
 
 The troubleshooting KNOWLEDGE behind the Active Verification modules
-(src/backend/verify_modules.go — per-vendor read-only command selection and the
-fault indicators the deterministic parsers look for: CRC/input-error semantics,
-duplex-mismatch and interface-flap indicators, BGP session-reset / prefix-
-collapse diagnosis, and config-change-before-incident causality) is derived
+(src/backend/internal/verify/modules.go — per-vendor read-only command selection
+and the fault indicators the deterministic parsers look for: CRC/input-error
+semantics, duplex-mismatch and interface-flap indicators, BGP session-reset /
+prefix-collapse diagnosis, and config-change-before-incident causality) is derived
 from the skill procedures of the NetClaw project:
 
   Project : NetClaw, by John Capobianco
@@ -35,3 +35,88 @@ the distilled troubleshooting procedures, re-expressed as this project's own
 closed command tables and deterministic parsers. The Arista EOS, Nokia SR OS
 and Huawei VRP command profiles are original to this project (NetClaw does not
 cover those CLIs).
+
+--------------------------------------------------------------------------------
+elkjs — Eclipse Public License 2.0
+--------------------------------------------------------------------------------
+
+The web UI bundles elkjs (https://github.com/kieler/elkjs) UNMODIFIED into its
+JavaScript assets for topology layout.
+
+  License : Eclipse Public License, Version 2.0
+  Source  : https://github.com/kieler/elkjs (tag v0.11.1)
+  Text    : shipped with the product at /licenses/elkjs/LICENSE-EPL-2.0.txt
+
+EPL-2.0 is file-level copyleft and governs elkjs's own files only; no Correlix
+source is placed under it. EPL-2.0 section 3.2 requires recipients of the
+Object Code be told the licence and how to obtain the Source — the pointer
+above, restated in /licenses/elkjs/SOURCE.txt and in
+docs/THIRD_PARTY_LICENSES.md, is that notice.
+
+--------------------------------------------------------------------------------
+Fonts — SIL Open Font License 1.1
+--------------------------------------------------------------------------------
+
+The web UI redistributes the following font families UNMODIFIED as .woff/.woff2
+files. Each is licensed under the SIL Open Font License, Version 1.1, whose
+section 2 requires this notice and the licence to accompany the fonts; the full
+text for each ships at /licenses/fonts/.
+
+  Inter          Copyright 2016 The Inter Project Authors
+                 https://github.com/rsms/inter
+  IBM Plex Mono  Copyright 2017 IBM Corp.
+                 https://github.com/IBM/plex
+  Space Grotesk  Copyright 2020 The Space Grotesk Project Authors
+                 https://github.com/floriankarsten/space-grotesk
+  Manrope        Copyright 2019 The Manrope Project Authors
+                 https://github.com/sharanda/manrope
+
+Correlix does not sell these fonts on their own and does not reuse any Reserved
+Font Name in a modified version.
+
+--------------------------------------------------------------------------------
+Icon path data — Feather (MIT) and Lucide (ISC)
+--------------------------------------------------------------------------------
+
+Part of the Correlix icon set (src/frontend/src/components/Icon.tsx, minified
+into the shipped JavaScript) reproduces path data from the Feather and Lucide
+icon sets. Both licences require the notice be retained in redistributions.
+
+  Feather  Copyright (c) 2013-2023 Cole Bemis — MIT License
+           https://github.com/feathericons/feather
+  Lucide   Copyright (c) for portions held by Cole Bemis 2013-2022 as part of
+           Feather (MIT); all other copyright held by Lucide Contributors 2022
+           — ISC License
+           https://github.com/lucide-icons/lucide
+
+The full MIT and ISC texts ship at /licenses/icons/feather-lucide-NOTICE.txt and
+are repeated in the Icon.tsx header, which also records the per-icon provenance
+of the glyphs verified as verbatim.
+
+--------------------------------------------------------------------------------
+certifi — Mozilla Public License 2.0
+--------------------------------------------------------------------------------
+
+The correlation image installs certifi (https://github.com/certifi/python-certifi)
+UNMODIFIED into site-packages; it supplies the CA bundle used for outbound TLS.
+
+  License : Mozilla Public License, Version 2.0 — https://mozilla.org/MPL/2.0/
+  Source  : https://github.com/certifi/python-certifi
+  Text    : certifi's own LICENSE inside the image's site-packages, and
+            /app/licenses/THIRD_PARTY_LICENSES.md
+
+MPL-2.0 is file-level copyleft: Correlix modifies no MPL-covered file, so what
+is owed is this notice plus the source pointer (MPL sections 3.1/3.2). The same
+applies to Vector (MPL-2.0), which runs unmodified in its own container —
+vector.yaml and the VRL transforms are configuration (MPL 1.10/3.3 Larger
+Work), not modifications.
+
+--------------------------------------------------------------------------------
+Complete inventory
+--------------------------------------------------------------------------------
+
+docs/THIRD_PARTY_LICENSES.md lists every third-party component Correlix
+distributes, grouped by the image or archive it ships in, together with the
+licence texts and the written offer of Corresponding Source. It is GENERATED by
+`python3 scripts/license-audit.py --notices` — edit scripts/license-data.json
+and regenerate rather than editing it by hand.

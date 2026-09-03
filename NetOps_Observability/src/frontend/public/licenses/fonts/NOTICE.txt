@@ -1,0 +1,21 @@
+SIL Open Font License 1.1 — fonts distributed with the Correlix web UI
+================================================================================
+
+The Correlix web UI ships the following font families as .woff/.woff2 files.
+All four are licensed under the SIL Open Font License, Version 1.1. OFL-1.1
+section 2 requires this notice and the licence to accompany the fonts, so the
+complete licence text for each family sits beside this file.
+
+  Inter           Copyright 2016 The Inter Project Authors
+                  https://github.com/rsms/inter            inter-OFL-1.1.txt
+  IBM Plex Mono   Copyright 2017 IBM Corp.
+                  https://github.com/IBM/plex              ibm-plex-mono-OFL-1.1.txt
+  Space Grotesk   Copyright 2020 The Space Grotesk Project Authors
+                  https://github.com/floriankarsten/space-grotesk
+                                                           space-grotesk-OFL-1.1.txt
+  Manrope         Copyright 2019 The Manrope Project Authors
+                  https://github.com/sharanda/manrope      manrope-OFL-1.1.txt
+
+The fonts are redistributed UNMODIFIED. Correlix does not sell them on their
+own and does not reuse any Reserved Font Name in a modified version, the two
+things OFL-1.1 forbids.

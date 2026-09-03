@@ -16,6 +16,8 @@
 #     ADVANCED.md                        external-Kafka + advanced settings
 #     TROUBLESHOOTING.md                 customer-safe fixes
 #     LICENSES.md                        third-party distribution notices
+#                                        (GENERATED from docs/THIRD_PARTY_LICENSES.md
+#                                         by scripts/license-audit.py — never hand-written)
 #
 # Client install (the whole thing):
 #   ./install-correlix.sh
@@ -25,9 +27,13 @@
 #     --core   base appliance archive ONLY (skip the add-on packs) — smallest
 #              possible bundle for demo/eval. Default builds base + all packs.
 #     --out    output directory (default: <repo>/dist)
+#     --licenses-only
+#              regenerate + gate the third-party notices, write LICENSES.md and
+#              stop (no images, no tarballs). What CI runs to prove the customer
+#              notice matches the tree.
 #
 # Prereqs on the BUILD host: docker+compose v2, zstd, node/npm (frontend dist),
-# git. The frontend dist/ and docs portal are built if missing (they are
+# python3 (licence notices), git. The frontend dist/ and docs portal are built if missing (they are
 # gitignored — the classic stale-dist trap — so the bundle never depends on a
 # developer having built them recently: REBUILD_FRONTEND=1 forces both).
 #
@@ -42,15 +48,22 @@ export PATH="/usr/local/bin:/usr/bin:/bin:${PATH:-}"
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 OUT="$ROOT/dist"
 PROFILE="full"
+LICENSES_ONLY=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --core) PROFILE="core"; shift ;;
     --out)  OUT="$2"; shift 2 ;;
+    # Dry-run for the licence path: regenerate + gate the third-party notices
+    # and write the bundle's LICENSES.md, then stop. No Docker, no npm, no
+    # tarballs — so CI can assert the customer notice is correct on every
+    # commit instead of only when someone cuts a bundle.
+    --licenses-only) LICENSES_ONLY=1; shift ;;
     *) echo "unknown arg: $1" >&2; exit 2 ;;
   esac
 done
 
-command -v zstd >/dev/null || { echo "zstd is required (apt-get install zstd)" >&2; exit 1; }
+# python3 generates the third-party notices (and gates their licences) below.
+command -v python3 >/dev/null || { echo "python3 is required (third-party licence notices)" >&2; exit 1; }
 # date+sha, not `git describe` — the repo's tags are milestone markers, not
 # release tags, and produce unusable bundle names. Product release tags
 # (v-prefixed) win when present.
@@ -60,6 +73,92 @@ GITSHA="$(git -C "$ROOT" rev-parse --short HEAD 2>/dev/null || echo unknown)"
 BUNDLE_DIR="$OUT/correlix-$VERSION"
 COMPOSE_DIR="$ROOT/deployment/docker"
 mkdir -p "$BUNDLE_DIR"
+
+# --- Third-party notices: GENERATED, never hand-written -----------------------
+# What used to live here was a hand-maintained heredoc, and it had rotted
+# exactly the way hand-maintained licence lists do: it listed 14 container
+# images and ZERO of the libraries actually linked into our own artifacts (no
+# Go module, no npm package, no Python package — including elkjs (EPL-2.0),
+# four OFL-1.1 font families and certifi (MPL-2.0), all three carrying real
+# notice obligations), it omitted Keycloak (which SHIPS — `sso` is in
+# BASE_PROFILES), curl and kafka-exporter, and it misstated syslog-ng as
+# GPL-3.0. syslog-ng OSE 4.7.1 is LGPL-2.1-or-later for the core and
+# GPL-2.0-or-later for modules/ and scl/ (verified against COPYING at tag
+# syslog-ng-4.7.1), with NO OpenSSL linking exception. See
+# docs/security/LICENSE_AUDIT_2026-09-03.md §2.5.
+#
+# The inventory is now DERIVED from the tree by scripts/license-audit.py and
+# regenerated on every bundle build, so the customer notice cannot drift from
+# what the bundle actually contains.
+write_licenses() {
+  echo "-- regenerating third-party licence notices"
+  python3 "$ROOT/scripts/license-audit.py" --notices \
+    || { echo "FATAL: could not regenerate docs/THIRD_PARTY_LICENSES.md" >&2; exit 1; }
+  # The gate must be GREEN before we ship: a component whose licence nobody has
+  # reviewed, or one that is source-available/forbidden, must never leave here.
+  python3 "$ROOT/scripts/license-audit.py" --check \
+    || { echo "FATAL: licence audit is not green — a bundle must never ship a component whose licence is unreviewed or forbidden (CLAUDE.md §6). Run: python3 scripts/license-audit.py --check" >&2; exit 1; }
+
+{
+printf '# Correlix %s — Third-party distribution notices\n\n' "$VERSION"
+cat <<'HDR'
+Exact pinned image versions/digests: see MANIFEST. The full licence texts for
+the components that require them also ship inside the images themselves and are
+served by the running product at `/licenses/`.
+
+HDR
+# Drop the generator's editor-facing "do not hand-edit" banner (the leading
+# blockquote) and its own H1, which this file already carries with the version
+# in it. Only that banner uses blockquote syntax, and a changed H1 would simply
+# reappear as a duplicate heading rather than losing content; the content guard
+# below fails the build if anything substantive goes missing.
+grep -v -e '^> ' -e '^# Correlix — Third-party licences$' "$ROOT/docs/THIRD_PARTY_LICENSES.md"
+cat <<'FTR'
+
+## Resolved licensing history
+
+| Component | Status |
+|---|---|
+| Redis | **removed** — replaced by Valkey (BSD-3-Clause). Redis >= 7.4 is RSALv2/SSPL-licensed and is not distributed with Correlix. Closed. |
+| Redpanda | **removed from customer distribution** — the event bus is Apache Kafka. Redpanda (BSL) is not shipped in any Correlix bundle. |
+| Prometheus | **removed** — metrics are stored in VictoriaMetrics; no Prometheus image ships in any bundle. |
+
+## Correlix's own code
+
+Correlix application code and this bundle's install tooling are proprietary to
+Correlix. No component above places any disclosure, relicensing or network-use
+obligation on it: nothing under a copyleft licence is linked into, or bundled
+into, any binary Correlix builds.
+FTR
+} > "$BUNDLE_DIR/LICENSES.md"
+
+  # Content guard (§16.1 — a silently shorter notice file is the exact defect
+  # this replaced). Each string below is one of the things the old hand-written
+  # file got wrong or left out; if the generator or the grep above ever drops
+  # them, the build stops instead of shipping incomplete attribution.
+  for want in 'syslog-ng' 'keycloak' 'elkjs' 'certifi' 'fontsource' 'jackc/pgx' 'Written offer'; do
+    grep -qi -- "$want" "$BUNDLE_DIR/LICENSES.md" \
+      || { echo "FATAL: bundle LICENSES.md is missing '$want' — the generated third-party notices are incomplete" >&2; exit 1; }
+  done
+  # syslog-ng is LGPL-2.1-or-later / GPL-2.0-or-later. The only GPL-3 family
+  # licence in the product is Grafana's AGPL-3.0 in the optional add-on pack;
+  # a GPL-3.0 claim with no Grafana behind it is the old misstatement returning.
+  if grep -q 'GPL-3.0' "$BUNDLE_DIR/LICENSES.md" && ! grep -qi 'grafana' "$BUNDLE_DIR/LICENSES.md"; then
+    echo "FATAL: bundle LICENSES.md claims a GPL-3.0 licence with no component to justify it (syslog-ng is LGPL-2.1+/GPL-2.0+, NOT GPL-3.0)" >&2; exit 1
+  fi
+  echo "   third-party notices generated ($(wc -l < "$BUNDLE_DIR/LICENSES.md") lines, licence gate green)"
+}
+
+if [ "$LICENSES_ONLY" = "1" ]; then
+  write_licenses
+  echo "== licences-only run: $BUNDLE_DIR/LICENSES.md"
+  exit 0
+fi
+
+# Everything past here builds real archives. (--licenses-only exits above and
+# needs no compressor, so the zstd requirement is checked here, not earlier.)
+command -v zstd >/dev/null || { echo "zstd is required (apt-get install zstd)" >&2; exit 1; }
+
 
 echo "== correlix installer bundle $VERSION ($PROFILE) -> $BUNDLE_DIR"
 
@@ -384,40 +483,7 @@ collected data but keeps your URL and login.
 16 GB / 4 vCPU for real use.
 EOF
 
-cat > "$BUNDLE_DIR/LICENSES.md" <<EOF
-# Correlix $VERSION — Third-party distribution notices
-
-Correlix bundles the following third-party components as container images.
-Exact pinned versions/digests: see MANIFEST.
-
-| Component | Role | License | Distribution status |
-|---|---|---|---|
-| Apache Kafka | embedded event bus | Apache-2.0 | included — allowed with notices (this file + upstream NOTICE inside the image) |
-| Valkey | cache | BSD-3-Clause | included — allowed |
-| PostgreSQL | app database | PostgreSQL License | included — allowed |
-| OpenSearch | log search | Apache-2.0 | included — allowed |
-| OpenSearch Dashboards (log-search-ui add-on) | log forensics UI | Apache-2.0 | add-on pack — allowed |
-| ClickHouse | analytics store | Apache-2.0 | included — allowed |
-| VictoriaMetrics | metrics store | Apache-2.0 | included — allowed |
-
-| Vector | telemetry pipeline | MPL-2.0 | included — allowed |
-| goflow2 | flow receiver | BSD-3-Clause | included — allowed |
-| syslog-ng | syslog receiver | GPL-3.0 (unmodified) | included — allowed |
-| gnmic | gNMI collector | Apache-2.0 | included — allowed |
-| nginx | web front door | BSD-2-Clause | included — allowed |
-| Grafana (self-monitoring add-on) | self-observability | AGPL-3.0 | add-on pack, unmodified — allowed with source availability obligations |
-| cadvisor / node-exporter (self-monitoring add-on) | container/host metrics | Apache-2.0 | add-on pack — allowed |
-
-Resolved licensing history:
-
-| Component | Status |
-|---|---|
-| Redis | **removed** — replaced by Valkey (BSD-3-Clause). Redis ≥7.4 is RSALv2/SSPL-licensed and is not distributed with Correlix. Closed. |
-| Redpanda | **removed from customer distribution** — the event bus is Apache Kafka. Redpanda (BSL) is not shipped in any Correlix bundle. |
-
-Correlix application code and this bundle's install tooling are proprietary
-to Correlix.
-EOF
+write_licenses
 
 # Customer-doc licensing guard: nothing customer-facing mentions Redpanda
 # outside LICENSES.md's "not shipped" statement.
