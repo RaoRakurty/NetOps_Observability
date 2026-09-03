@@ -254,3 +254,45 @@ describe("AsPathGraphPanel", () => {
     expect(bgpAsPathGraph).not.toHaveBeenCalled();
   });
 });
+
+// ── section identity (one-page outage view, 2026-09-03) ─────────────────────
+//
+// BgpOps.test.tsx asserts the ORDER of the page's sections against stubs. That
+// test is only worth anything if the stubs carry the same `data-section` id the
+// real panel emits, so this case pins the ids on the REAL components. Change an
+// id here and the page's ordering test is telling the truth about a mock, not
+// about the product — which is the failure mode this guards.
+
+describe("section identity", () => {
+  it("each depth panel is a section with the id the page lays out by", async () => {
+    bgpRpki.mockResolvedValue({ results: [], from_watchlist: true, truncated: false, max_prefixes: 50 });
+    bgpAspa.mockResolvedValue({ resource: "AS3333", status: { configured: false, reason: "none configured" } });
+    bgpGeofeed.mockResolvedValue({ resource: "193.0.0.0/21", published: false, entries: [], rows_scanned: 0, rows_kept: 0, rows_dropped: 0, truncated: false, fetched_at: "" });
+    bgpFeed.mockResolvedValue({ updates: [], status: { enabled: false, ring_size: 2000, producer: "ripestat" } });
+
+    const cases: [string, React.ReactElement][] = [
+      ["rpki", <RpkiPanel key="r" />],
+      ["aspa", <AspaCard key="a" asn="AS3333" />],
+      ["geofeed", <GeofeedPanel key="g" resource="193.0.0.0/21" />],
+      ["updates-feed", <LiveFeedPanel key="f" />],
+      ["aspath-graph", <AsPathGraphPanel key="p" />],
+    ];
+    for (const [id, el] of cases) {
+      const { container, unmount } = render(el);
+      await waitFor(() => expect(container.querySelector(`[data-section="${id}"]`)).toBeTruthy());
+      unmount();
+    }
+  });
+
+  it("the graph and the feed drop their own shell in `bare` mode — the page owns that heading", async () => {
+    bgpFeed.mockResolvedValue({ updates: [], status: { enabled: false, ring_size: 2000, producer: "ripestat" } });
+    const feed = render(<LiveFeedPanel bare />);
+    await waitFor(() => expect(feed.container.querySelector("[data-section]")).toBeNull());
+    expect(feed.container.querySelector(".bgp-sub")).toBeTruthy();
+    feed.unmount();
+
+    const graph = render(<AsPathGraphPanel bare />);
+    expect(graph.container.querySelector("[data-section]")).toBeNull();
+    expect(graph.container.querySelector(".bgp-sub")).toBeTruthy();
+  });
+});

@@ -5885,6 +5885,117 @@ button.cc-kpi-btn.on::after { content: "filtered"; display: block; margin-top: 5
 .chip-btn:hover { border-color: var(--accent); color: var(--fg); }
 .chip-btn-on { border-color: var(--accent); color: var(--accent); font-weight: 600; }
 
+/* ── BGP Operations — SINGLE-SCREEN outage view (owner, 2026-09-03) ──────────
+   "Put all the data into one page so that a NOC admin gets a single view during
+   an outage without clicking so much."  The tab switcher is gone; every panel
+   is a SECTION on one dense screen, laid out in the order of the design of
+   record (research §(b)): verdict pinned at the top, then a two-column grid —
+   left is the outage narrative in time order (paths, then updates), right is
+   the standing evidence (RPKI, incidents, peers, bogons, ownership, geofeed,
+   ASPA).
+
+   The type scale is deliberately one step below the rest of the product. This
+   screen is read at 2am with someone on a bridge call: the value is how much
+   true evidence fits above the fold, not how comfortable the leading is. Every
+   number that can be compared down a column is tabular and right-aligned, and
+   every section header carries when it last read its data. */
+.bgp-page { font-size: 12.5px; }
+.bgp-page .mini-meta { font-size: 11px; }
+.bgp-page .empty { padding: 8px 6px; font-size: 12px; font-style: normal; }
+
+/* selector: watched resources as chips + the free-form lookup */
+.bgp-selector {
+  display: flex; gap: 10px; align-items: center; flex-wrap: wrap;
+  background: var(--panel); border: 1px solid var(--panel-border);
+  border-radius: var(--r-4); padding: 7px 10px; margin: 8px 0;
+}
+.bgp-find { display: flex; gap: 6px; flex: 1 1 320px; }
+.bgp-chips { display: flex; gap: 5px; flex-wrap: wrap; }
+.bgp-chip-dot {
+  display: inline-block; width: 6px; height: 6px; border-radius: 50%;
+  margin-left: 6px; vertical-align: middle;
+}
+
+/* 1. verdict bar — pinned, so the conclusion never scrolls away from evidence */
+.bgp-verdict-wrap { position: sticky; top: 0; z-index: 4; margin-bottom: 8px; }
+.bgp-verdict-wrap .bgp-sec { border-color: var(--accent); box-shadow: var(--shadow-1); }
+.bgp-verdict { display: flex; gap: 12px; align-items: baseline; flex-wrap: wrap; }
+.bgp-verdict .device-name { font-size: 18px; font-weight: 700; }
+
+/* the grid */
+.bgp-grid {
+  display: grid; grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr);
+  gap: 8px; align-items: start;
+}
+@media (max-width: 1180px) { .bgp-grid { grid-template-columns: minmax(0, 1fr); } }
+.bgp-col { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+
+/* the section shell (pages/bgp/Section.tsx) */
+.bgp-sec {
+  background: var(--panel); border: 1px solid var(--panel-border);
+  border-radius: var(--r-4); padding: 8px 10px; min-width: 0;
+}
+.bgp-sec-hd {
+  display: flex; align-items: baseline; gap: 8px;
+  border-bottom: 1px solid var(--panel-border); padding-bottom: 5px; margin-bottom: 6px;
+}
+.bgp-sec-hd h2 {
+  margin: 0; font-size: 12px; font-weight: 700; letter-spacing: 0.04em;
+  text-transform: uppercase; color: var(--fg);
+}
+.bgp-sec-note { font-size: 11px; color: var(--muted); }
+.bgp-sec-sp { flex: 1 1 auto; }
+.bgp-sec-stamp {
+  font-size: 10px; color: var(--fg-subtle); font-family: var(--font-mono); white-space: nowrap;
+}
+.bgp-sec-bd > *:last-child { margin-bottom: 0; }
+.bgp-sub + .bgp-sub { margin-top: 8px; border-top: 1px dashed var(--panel-border); padding-top: 6px; }
+.bgp-sub-hd { display: flex; align-items: baseline; gap: 8px; }
+.bgp-sub-hd h3 {
+  margin: 0 0 4px; font-size: 11px; font-weight: 600; color: var(--muted);
+  text-transform: uppercase; letter-spacing: 0.04em;
+}
+.bgp-honest { text-align: left; line-height: 1.5; }
+
+/* rows, tables, and the "show all" control that bounds every long list */
+.bgp-row {
+  display: flex; gap: 8px; align-items: center; flex-wrap: wrap;
+  padding: 3px 6px; border: 1px solid var(--border); border-radius: 5px;
+}
+.bgp-scroll { max-height: 260px; overflow: auto; }
+.bgp-tbl { font-size: 11.5px; }
+.bgp-tbl th, .bgp-tbl td { padding: 2px 7px; }
+.bgp-tbl td.num, .bgp-tbl th.num { text-align: right; font-variant-numeric: tabular-nums; }
+.bgp-more {
+  border: 0; background: transparent; color: var(--accent); font-size: 11px;
+  cursor: pointer; padding: 4px 2px; align-self: flex-start;
+}
+.bgp-more:hover { text-decoration: underline; }
+
+/* 2. AS paths as pills inside the grouped path table */
+.bgp-path { display: inline-flex; align-items: center; flex-wrap: wrap; gap: 4px; }
+.bgp-hop-wrap { display: inline-flex; align-items: center; gap: 4px; }
+.bgp-arrow { color: var(--muted); }
+.bgp-hop {
+  font-family: var(--font-mono); font-size: 11px; padding: 1px 6px; border-radius: 999px;
+  border: 1px solid var(--border); background: var(--surface);
+}
+.bgp-hop.origin { background: color-mix(in srgb, var(--accent) 14%, transparent); border-color: var(--accent); }
+
+/* 3. update churn strip */
+.bgp-churn { display: flex; align-items: flex-end; gap: 3px; height: 72px; overflow-x: auto; padding-top: 4px; }
+.bgp-churn-col {
+  display: flex; flex-direction: column; justify-content: flex-end; gap: 1px;
+  min-width: 20px; height: 100%;
+}
+.bgp-churn-w { background: var(--crit); border-radius: 2px; opacity: 0.85; }
+.bgp-churn-a { background: var(--accent); border-radius: 2px; opacity: 0.85; }
+.bgp-churn-l { font-size: 9px; color: var(--muted); text-align: center; }
+
+/* 8. ownership */
+.bgp-contacts { margin: 0; padding-left: 16px; }
+.bgp-footer { margin-top: 10px; }
+
 /* Verdict feedback tile (Project 2 P7) — engine quality on the NOC scorecard. */
 .rsc-fb { margin-top: 16px; }
 .rsc-fb-split { display: flex; align-items: baseline; gap: 6px; }

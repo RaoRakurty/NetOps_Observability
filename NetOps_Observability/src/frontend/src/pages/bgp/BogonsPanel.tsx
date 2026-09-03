@@ -18,17 +18,58 @@ import { useEffect, useState } from "react";
 import { api, type BgpBogonsResp } from "../../services/api";
 import { Chip } from "../../components/noc";
 import { groupSightings } from "./bgpAlerts.model";
+import { Section, ShowAll, SubBlock, useCap } from "./Section";
+
+/** Rows shown before the operator asks for the rest (one-page view, 2026-09-03). */
+const FIRST_SIGHTINGS = 8;
+
+/** One matched reserved block and the prefixes seen inside it. Its own component
+ *  so each group owns its own row cap (a hook cannot live inside a map). */
+function BogonGroup({ g }: { g: ReturnType<typeof groupSightings>[number] }) {
+  const cap = useCap(g.rows, FIRST_SIGHTINGS);
+  return (
+    <div style={{ marginBottom: 10 }}>
+      <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+        <span className="mono" style={{ fontWeight: 600 }}>{g.block}</span>
+        <Chip label={`${g.rows.length} prefix${g.rows.length === 1 ? "" : "es"}`} tone="var(--crit)" />
+        <span className="mini-meta">{g.why}</span>
+      </div>
+      <div className="bgp-scroll">
+        <table className="tbl bgp-tbl" style={{ width: "100%" }}>
+          <thead>
+            <tr><th>Prefix</th><th>Source</th><th>Peer</th><th>Origin</th><th>First seen</th><th>Last seen</th><th>Times</th></tr>
+          </thead>
+          <tbody>
+            {cap.rows.map((r) => (
+              <tr key={`${r.prefix}|${r.source}|${r.peer ?? ""}`}>
+                <td className="mono">{r.prefix}</td>
+                <td className="mini-meta">{r.source}</td>
+                <td className="mono">{r.peer || "—"}</td>
+                <td className="mono">{r.origin ? `AS${r.origin}` : "—"}</td>
+                <td className="mini-meta">{new Date(r.first_seen).toLocaleString()}</td>
+                <td className="mini-meta">{new Date(r.last_seen).toLocaleString()}</td>
+                <td className="mono num">{r.count}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <ShowAll cap={cap} noun="sightings" />
+    </div>
+  );
+}
 
 export function BogonsPanel() {
   const [data, setData] = useState<BgpBogonsResp | null>(null);
   const [err, setErr] = useState("");
   const [busy, setBusy] = useState(true);
+  const [at, setAt] = useState<number | null>(null);
 
   useEffect(() => {
     let alive = true;
     setBusy(true); setErr("");
     api.bgpBogons()
-      .then((d) => { if (alive) setData(d); })
+      .then((d) => { if (alive) { setData(d); setAt(Date.now()); } })
       .catch((e: Error) => { if (alive) setErr(e.message || "The bogon listing could not be read."); })
       .finally(() => { if (alive) setBusy(false); });
     return () => { alive = false; };
@@ -37,9 +78,8 @@ export function BogonsPanel() {
   const groups = data ? groupSightings(data.sightings) : [];
 
   return (
-    <>
-      <div className="card" style={{ marginTop: 12 }}>
-        <h2>Bogon set in force</h2>
+    <Section id="bogons" title="Bogons — set in force and sightings" updatedAt={at}>
+      <SubBlock title="Bogon set in force">
         {busy && <div className="empty">Reading the bogon set…</div>}
         {err && <p className="mini-meta" role="alert" style={{ color: "var(--bad)" }}>{err}</p>}
         {data && (
@@ -72,10 +112,9 @@ export function BogonsPanel() {
             )}
           </>
         )}
-      </div>
+      </SubBlock>
 
-      <div className="card" style={{ marginTop: 12 }}>
-        <h2>Bogons seen</h2>
+      <SubBlock title="Bogons seen">
         {data && data.note && <p className="mini-meta" style={{ color: "var(--warn)" }}>{data.note}</p>}
         {data && groups.length === 0 && (
           <div className="empty">
@@ -84,41 +123,13 @@ export function BogonsPanel() {
               : "No bogon prefix has been seen on this tenant's BMP feed or update ring. That is the healthy answer — and it is a measured one."}
           </div>
         )}
-        {groups.map((g) => (
-          <div key={g.block} style={{ marginBottom: 12 }}>
-            <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-              <span className="mono" style={{ fontWeight: 600 }}>{g.block}</span>
-              <Chip label={`${g.rows.length} prefix${g.rows.length === 1 ? "" : "es"}`} tone="var(--crit)" />
-              <span className="mini-meta">{g.why}</span>
-            </div>
-            <div style={{ overflowX: "auto" }}>
-              <table className="tbl" style={{ width: "100%" }}>
-                <thead>
-                  <tr><th>Prefix</th><th>Source</th><th>Peer</th><th>Origin</th><th>First seen</th><th>Last seen</th><th>Times</th></tr>
-                </thead>
-                <tbody>
-                  {g.rows.map((r) => (
-                    <tr key={`${r.prefix}|${r.source}|${r.peer ?? ""}`}>
-                      <td className="mono">{r.prefix}</td>
-                      <td className="mini-meta">{r.source}</td>
-                      <td className="mono">{r.peer || "—"}</td>
-                      <td className="mono">{r.origin ? `AS${r.origin}` : "—"}</td>
-                      <td className="mini-meta">{new Date(r.first_seen).toLocaleString()}</td>
-                      <td className="mini-meta">{new Date(r.last_seen).toLocaleString()}</td>
-                      <td className="mono">{r.count}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        ))}
+        {groups.map((g) => <BogonGroup key={g.block} g={g} />)}
         <p className="mini-meta" style={{ marginBottom: 0 }}>
           Sightings come from this tenant's OWN feeds only. A bogon here is either a leak into your network or a
           misconfigured neighbour — it is never normal.
         </p>
-      </div>
-    </>
+      </SubBlock>
+    </Section>
   );
 }
 

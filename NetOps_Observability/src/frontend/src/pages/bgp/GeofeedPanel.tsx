@@ -13,28 +13,33 @@ import { useEffect, useState } from "react";
 import { api, type BgpGeofeedResp } from "../../services/api";
 import { Chip } from "../../components/noc";
 import { geofeedCountries } from "./bgpDepth.model";
+import { Section, ShowAll, useCap } from "./Section";
+
+/** Rows shown before the operator asks for the rest (one-page view, 2026-09-03). */
+const FIRST_ROWS = 8;
 
 export function GeofeedPanel({ resource }: { resource?: string }) {
   const [data, setData] = useState<BgpGeofeedResp | null>(null);
   const [err, setErr] = useState("");
   const [busy, setBusy] = useState(false);
+  const [at, setAt] = useState<number | null>(null);
 
   useEffect(() => {
     if (!resource) { setData(null); setErr(""); return; }
     let alive = true;
     setBusy(true); setErr(""); setData(null);
     api.bgpGeofeed(resource)
-      .then((d) => { if (alive) setData(d); })
+      .then((d) => { if (alive) { setData(d); setAt(Date.now()); } })
       .catch((e: Error) => { if (alive) setErr(e.message || "geofeed lookup failed"); })
       .finally(() => { if (alive) setBusy(false); });
     return () => { alive = false; };
   }, [resource]);
 
   const countries = data ? geofeedCountries(data) : [];
+  const cap = useCap(data?.entries ?? [], FIRST_ROWS);
 
   return (
-    <div className="card" style={{ marginTop: 12 }}>
-      <h2>Geofeed (RFC 8805)</h2>
+    <Section id="geofeed" title="Geofeed (RFC 8805)" updatedAt={at}>
       {!resource && <div className="empty">Look up a prefix or ASN to see the geofeed its holder publishes.</div>}
       {busy && <div className="empty">Looking for a published geofeed…</div>}
       {err && <p className="mini-meta" style={{ color: "var(--bad)" }} role="alert">{err}</p>}
@@ -73,13 +78,13 @@ export function GeofeedPanel({ resource }: { resource?: string }) {
               Published at <a href={data.source_url} target="_blank" rel="noreferrer" className="mono">{data.source_url}</a>
             </p>
           )}
-          <div style={{ maxHeight: 260, overflowY: "auto", overflowX: "auto" }}>
-            <table className="dm-table" style={{ width: "100%" }}>
+          <div className="bgp-scroll">
+            <table className="dm-table bgp-tbl" style={{ width: "100%" }}>
               <thead>
                 <tr><th>Prefix</th><th>Country</th><th>Region</th><th>City</th><th>Postal</th></tr>
               </thead>
               <tbody>
-                {data.entries.map((e) => (
+                {cap.rows.map((e) => (
                   <tr key={e.prefix + (e.city ?? "")}>
                     <td className="mono">{e.prefix}</td>
                     <td>{e.country || "—"}</td>
@@ -91,10 +96,11 @@ export function GeofeedPanel({ resource }: { resource?: string }) {
               </tbody>
             </table>
           </div>
+          <ShowAll cap={cap} noun="rows" />
           {data.note && <p className="mini-meta" style={{ marginBottom: 0 }}>{data.note}</p>}
         </>
       )}
-    </div>
+    </Section>
   );
 }
 

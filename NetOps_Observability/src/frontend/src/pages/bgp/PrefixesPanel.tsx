@@ -15,11 +15,16 @@
 import { Chip } from "../../components/noc";
 import type { BgpAlert, BgpAlertStatus, BgpIncident, BgpWatchEntry } from "../../services/api";
 import { alertStatusLine, incidentSummary, incidentTone, pathLabel } from "./bgpAlerts.model";
+import { Section, ShowAll, SubBlock, useCap } from "./Section";
+
+/** Rows shown before the operator asks for the rest (one-page view, 2026-09-03). */
+const FIRST_WATCHED = 8;
+const FIRST_ALERTS = 8;
 
 const ORDER = ["origin_change", "rpki_invalid", "bogon", "route_leak", "visibility_loss", "unknown", "none"] as const;
 
 export function PrefixesPanel({
-  watch, incidents, incidentsNote, status, alerts, onInvestigate, active,
+  watch, incidents, incidentsNote, status, alerts, onInvestigate, active, updatedAt,
 }: {
   watch: BgpWatchEntry[];
   incidents: Record<string, BgpIncident>;
@@ -28,15 +33,18 @@ export function PrefixesPanel({
   alerts: BgpAlert[];
   onInvestigate: (resource: string) => void;
   active: string;
+  /** When the page last read the watchlist + alert history. */
+  updatedAt?: string | number | null;
 }) {
   const list = Object.values(incidents);
   const summary = incidentSummary(list);
   const statusLine = alertStatusLine(status);
+  const watchCap = useCap(watch, FIRST_WATCHED);
+  const alertCap = useCap(alerts, FIRST_ALERTS);
 
   return (
-    <>
-      <div className="card" style={{ marginTop: 12 }}>
-        <h2>Watched prefixes</h2>
+    <Section id="incidents" title="Incidents — watched prefixes" updatedAt={updatedAt}>
+      <SubBlock title="Watched prefixes">
 
         {incidentsNote && <p className="mini-meta" style={{ color: "var(--warn)" }}>{incidentsNote}</p>}
         {statusLine && <p className="mini-meta" style={{ color: "var(--warn)" }}>{statusLine}</p>}
@@ -57,8 +65,8 @@ export function PrefixesPanel({
           </div>
         )}
 
-        <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-          {watch.map((wentry) => {
+        <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+          {watchCap.rows.map((wentry) => {
             const inc = incidents[wentry.resource];
             const t = incidentTone(inc?.class);
             return (
@@ -123,11 +131,11 @@ export function PrefixesPanel({
               </div>
             );
           })}
+          <ShowAll cap={watchCap} noun="watched resources" />
         </div>
-      </div>
+      </SubBlock>
 
-      <div className="card" style={{ marginTop: 12 }}>
-        <h2>Alert history</h2>
+      <SubBlock title="Alert history">
         {alerts.length === 0 ? (
           <div className="empty">
             {status?.enabled
@@ -135,13 +143,13 @@ export function PrefixesPanel({
               : (status?.note || "BGP alerting is off, so nothing has been evaluated.")}
           </div>
         ) : (
-          <div style={{ overflowX: "auto" }}>
-            <table className="tbl" style={{ width: "100%" }}>
+          <div className="bgp-scroll">
+            <table className="tbl bgp-tbl" style={{ width: "100%" }}>
               <thead>
                 <tr><th>When</th><th>Resource</th><th>Class</th><th>Severity</th><th>Summary</th></tr>
               </thead>
               <tbody>
-                {alerts.map((a, i) => {
+                {alertCap.rows.map((a, i) => {
                   const t = incidentTone(a.class);
                   return (
                     <tr key={`${a.id}-${a.fired_at}-${i}`}>
@@ -161,14 +169,15 @@ export function PrefixesPanel({
             </table>
           </div>
         )}
+        <ShowAll cap={alertCap} noun="alerts" />
         {status?.enabled && (
           <p className="mini-meta" style={{ marginBottom: 0 }}>
             Evaluated every {status.interval}; a repeat of the same incident is held for {status.cooldown} before it
             pages again (suppressed alerts are counted, not lost).
           </p>
         )}
-      </div>
-    </>
+      </SubBlock>
+    </Section>
   );
 }
 

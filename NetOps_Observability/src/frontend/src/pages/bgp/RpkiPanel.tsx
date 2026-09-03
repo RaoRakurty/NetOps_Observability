@@ -10,6 +10,10 @@ import { useEffect, useState } from "react";
 import { api, type BgpRpkiResp, type BgpRpkiState } from "../../services/api";
 import { Chip } from "../../components/noc";
 import { rpkiStateTone, rpkiSummary } from "./bgpDepth.model";
+import { Section, ShowAll, useCap } from "./Section";
+
+/** Rows shown before the operator asks for the rest (one-page view, 2026-09-03). */
+const FIRST_ROWS = 8;
 
 const ORDER: BgpRpkiState[] = ["invalid", "unavailable", "unknown", "valid"];
 
@@ -17,22 +21,23 @@ export function RpkiPanel({ resource }: { resource?: string }) {
   const [data, setData] = useState<BgpRpkiResp | null>(null);
   const [err, setErr] = useState("");
   const [busy, setBusy] = useState(true);
+  const [at, setAt] = useState<number | null>(null);
 
   useEffect(() => {
     let alive = true;
     setBusy(true); setErr(""); setData(null);
     api.bgpRpki(resource)
-      .then((d) => { if (alive) setData(d); })
+      .then((d) => { if (alive) { setData(d); setAt(Date.now()); } })
       .catch((e: Error) => { if (alive) setErr(e.message || "RPKI lookup failed"); })
       .finally(() => { if (alive) setBusy(false); });
     return () => { alive = false; };
   }, [resource]);
 
   const summary = data ? rpkiSummary(data.results) : null;
+  const cap = useCap(data?.results ?? [], FIRST_ROWS);
 
   return (
-    <div className="card" style={{ marginTop: 12 }}>
-      <h2>RPKI origin validation</h2>
+    <Section id="rpki" title="RPKI origin validation" updatedAt={at}>
       {busy && <div className="empty">Checking ROAs…</div>}
       {err && <p className="mini-meta" style={{ color: "var(--bad)" }} role="alert">{err}</p>}
 
@@ -61,14 +66,11 @@ export function RpkiPanel({ resource }: { resource?: string }) {
           )}
 
           {data.results.length > 0 && (
-            <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-              {data.results.map((r) => {
+            <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+              {cap.rows.map((r) => {
                 const t = rpkiStateTone(r.state, r.reason, r.error);
                 return (
-                  <div key={r.prefix} style={{
-                    display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap",
-                    padding: "6px 8px", borderRadius: 6, border: "1px solid var(--border)",
-                  }}>
+                  <div key={r.prefix} className="bgp-row">
                     <span className="mono" style={{ minWidth: 160 }}>{r.prefix}</span>
                     <Chip label={t.label} tone={t.tone} title={t.detail} />
                     {r.origin && <span className="mini-meta">origin {r.origin}</span>}
@@ -85,6 +87,7 @@ export function RpkiPanel({ resource }: { resource?: string }) {
                   </div>
                 );
               })}
+              <ShowAll cap={cap} noun="prefixes" />
             </div>
           )}
           <p className="mini-meta" style={{ marginBottom: 0 }}>
@@ -93,7 +96,7 @@ export function RpkiPanel({ resource }: { resource?: string }) {
           </p>
         </>
       )}
-    </div>
+    </Section>
   );
 }
 

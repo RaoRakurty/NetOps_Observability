@@ -253,3 +253,33 @@ describe("BogonsPanel", () => {
     await waitFor(() => expect(screen.getByText(/No sighting register is running/i)).toBeTruthy());
   });
 });
+
+// ── section identity (one-page outage view, 2026-09-03) ─────────────────────
+//
+// The page's ordering test (BgpOps.test.tsx) runs against stubs; these three
+// cases pin the same ids on the REAL components so the stubs cannot drift away
+// from the product.
+
+describe("section identity", () => {
+  it("the incidents, peers and bogons panels carry the ids the page lays out by", async () => {
+    bgpBmpSessions.mockRejectedValue(new Error("off"));
+    metricsQuery.mockResolvedValue({ status: "success", data: { resultType: "vector", result: [] } });
+    bgpBogons.mockResolvedValue({
+      sightings: [], set: { source: "IANA", date: "2026-09-02", blocks: 1, note: "" },
+      feed: { enabled: false, entries: 0, note: "off" },
+    });
+
+    const prefixes = render(
+      <PrefixesPanel watch={[]} incidents={{}} alerts={[]} active="" onInvestigate={() => {}} />,
+    );
+    expect(prefixes.container.querySelector('[data-section="incidents"]')).toBeTruthy();
+    prefixes.unmount();
+
+    const peers = render(<PeersPanel />);
+    await waitFor(() => expect(peers.container.querySelector('[data-section="peers"]')).toBeTruthy());
+    peers.unmount();
+
+    const bogons = render(<BogonsPanel />);
+    await waitFor(() => expect(bogons.container.querySelector('[data-section="bogons"]')).toBeTruthy());
+  });
+});

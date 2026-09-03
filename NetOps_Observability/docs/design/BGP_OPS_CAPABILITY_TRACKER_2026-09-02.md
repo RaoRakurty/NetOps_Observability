@@ -26,9 +26,66 @@ Statuses verified against code at `c96b55da` (routes in `main.go`, page
 | 16 | Near-live BGP feed | ✅ | Per-tenant 2000-entry ring over a bounded RIPEstat poller (`FEATURE_BGP_LIVE_FEED`). RIS Live (WebSocket) not used: no websocket module on the §6 allowlist. | Surface BMP updates in the same panel when `FEATURE_BMP` is on. |
 | 17 | BMP receiver (RFC 7854) | ✅ backend | Parser + listener + per-tenant store + 3 read routes; dormant by default. | UI (see #4). |
 | 18 | AI over BGP tools | 🟡 | Iris BGP read tools being added (wave 2). | — |
+| 19 | One-page outage view (research §(b)) | ✅ | **Rebuilt 2026-09-03 (owner: "put all the data into one page so that a NOC admin gets a single view during an outage without clicking so much").** The tab switcher is GONE. `src/pages/BgpOps.tsx` is one screen: a PINNED verdict bar (resource, incident class + since, announced/origin, visibility gauge, RPKI verdict, watch toggle), then a dense two-column grid — left `paths` (AS-path graph + grouped collector-path table) and `updates` (churn strip + near-live feed); right `rpki`, `incidents` (watchlist with class/evidence + alert history), `peers` (BMP + device peer state + transit), `bogons` (set in force + sightings), `ownership` (RDAP), `geofeed`, `aspa`. That is exactly the ordering of research §(b) with the 2026-09-02 panels slotted into the right column. Every section renders ON LOAD — nothing is behind a tab — and the page auto-opens on the WORST-classified watched resource (`pickInitial`, worst-first, `unknown` ranked above `none`); the watchlist stays the selector (chips + the free-form lookup) and picking one drives every section. The panels are now section components over one shared shell (`pages/bgp/Section.tsx`: `role="region"` + a stable `data-section` id, a per-section "last updated" stamp, and `useCap`/`ShowAll` so a long list shows its first N rows with an explicit control for the rest); the graph and the feed render `bare` inside the page-owned `paths`/`updates` sections. Tenant scope, every honest state and every panel's independent failure are unchanged. Perf: a new `bgp-ops` render-budget scenario (50 watched prefixes · 500 buffered updates · 30 peers · 20 sightings) — the whole screen is **1 571 DOM nodes vs 4 727** for the old page's DEFAULT TAB ALONE, and 45 ms vs 153 ms per refresh, because the row caps replaced "render everything". Tests: `BgpOps.test.tsx` (section order, verdict content, selector drives sections, honest states, `pickInitial`) plus section-identity guards on the real panels in `panels.test.tsx` / `alertPanels.test.tsx` so the page's ordering test cannot drift onto a mock. | **Three items of research §(b) are deliberately ABSENT rather than faked, and the page footer says so:** §(b)6 the IRR consistency strip (no IRR mirror is built — row 11-adjacent; there is nothing to be consistent with), §(b)7 on-demand looking-glass verification (row 6, not built), and §(b)9 third-party corroboration (Cloudflare Radar is NC-licensed, Qrator/bgp.tools need written permission — see research §(a)). Also still missing: the visibility GAUGE and path-length HISTOGRAM from the visualization addendum (row 2), and §(b)10 the AI narrative (row 18). |
 
 **Recommended build order for the gaps:** ~~10 (alerting) → 5 (leak/hijack
 classes) → 4 (Peers tab) → 1 (bogons)~~ — **all four built (`internal/bgpwatch`
 + the Prefixes/Peers/Bogons tabs); see rows 1/4/5/10 for what is proven and what
 is still engine-side.** Remaining: 9 (flow↔path map) → 3 (asymmetry) → 7 (MTR +
 trace from page) → 6 (looking glasses) → 11 (Route Views) → 2 (v4/v6 polish).
+
+---
+
+## Storage backends and deployment shape (2026-09-03)
+
+**The watchlist is durable on BOTH backends.** It used to be Postgres-only:
+`main.go` built the store only under `platformdb.ActivePG()`, so a single-box
+install with no `DATABASE_URL` answered `GET /api/bgp/watchlist` with a 503
+("requires the relational store"), the RPKI-over-watchlist and near-live-feed
+views had nothing to read, and the whole evaluator in row 10 could never see a
+prefix — the feature was dead on exactly the deployment most people run first.
+
+`bgpWatchStore` is now an interface with two implementations, chosen the same
+way the alert-policy store (row 10) chooses its own:
+
+| backend | store | selected when |
+|---|---|---|
+| Postgres | `bgpWatchPGStore` (migration `0035_bgp_watchlist.sql`, `tenant_iso` FORCE-RLS, scoped through `WithTenant`) | `platformdb.ActivePG()` |
+| file | `bgpwatch.WatchFileStore` — tenant-keyed JSON via the platform KV seam (atomic temp-file + rename), `BGP_WATCHLIST_FILE`, default `/data/bgp_watchlist.json` | everything else |
+
+It is never nil. §3a rule 4 is held by EACH implementation, not by the handler:
+Postgres by RLS plus an explicit `tenant_id` predicate, the file store by its
+tenant-keyed map. Neither exposes an unscoped list — the only cross-tenant read
+is `List(..., cross=true)`, which the API boundary sets solely for the platform
+owner's Global view (the mirror of the `app.tenant_id = '*'` RLS scope) — and
+both refuse `""` and `"*"` on every write. A resource another tenant watches is
+a 404, not a deletion. The cross-backend contract is asserted by one table in
+`bgp_watchlist_isolation_test.go` that runs against every implementation the
+environment can construct (Postgres joins when `DATABASE_URL_TEST` is set).
+
+The file backend caps one tenant at `MaxWatchEntriesPerTenant` (500) — the
+evaluator makes one bounded outbound measurement per watched prefix per pass, so
+an unbounded list is an unbounded work queue. A corrupt file starts EMPTY and
+says so in the log; it is never silently treated as "nothing watched".
+
+**Feature flags are now actually passed to the api.** `docker-compose.yml`
+carried only a COMMENT naming `FEATURE_BGP_LIVE_FEED` / `FEATURE_BGP_ALERTS` /
+`FEATURE_BGP_BOGON_FEED`, so no `.env` value could enable any of them. All three
+are passthroughs (default `false`), templated commented-out by `install.py`,
+reconciled by `update.sh`, and guarded by
+`tests/test_compose_new_modules.py::test_bgp_feature_flags_are_fully_plumbed_to_the_api`,
+which reads the packages' own `Env*` constants so a renamed flag cannot go
+un-plumbed.
+
+**Bogon sightings are registered on arrival, not on the tick.** `NoteSighting`
+had no callers: sightings reached `/api/bgp/bogons` only through the evaluator's
+sweep, and that sweep sat AFTER two per-tenant reads that both return on error —
+so on a stack whose watchlist read failed it never ran once (observed live:
+real BMP bytes for a bogon prefix in the store, "bogons seen" empty). Two fixes:
+the sweep now runs first and unconditionally (it depends on neither the policy
+nor the watchlist), and both live sources push directly —
+`internal/bmp` reports announced prefixes tenant-stamped through
+`Applied.Announced` → `Deps.OnAnnounce`, and `internal/bgpdepth` reports each
+poll's new ring entries through `Options.OnUpdates`. Both paths write the same
+`(prefix, source, peer)` key the sweep writes, so an update seen twice is ONE
+sighting with a bumped count, and neither path is load-bearing for the other.

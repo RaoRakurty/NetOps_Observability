@@ -24,6 +24,11 @@ import {
   mergePeerRows, peerRowsFromMetrics, peerRowsFromSessions, peersState,
   transitSet, type PeerRow,
 } from "./bgpAlerts.model";
+import { Section, ShowAll, SubBlock, useCap } from "./Section";
+
+/** Rows shown before the operator asks for the rest (one-page view, 2026-09-03). */
+const FIRST_PEERS = 12;
+const FIRST_TRANSIT = 6;
 
 const PEER_QUERY = "device_bgp_peer_state";
 
@@ -45,6 +50,7 @@ export function PeersPanel({ incidents }: { incidents?: BgpIncident[] }) {
   const [metrics, setMetrics] = useState<PromInstantResponse | null>(null);
   const [err, setErr] = useState("");
   const [busy, setBusy] = useState(true);
+  const [at, setAt] = useState<number | null>(null);
 
   const load = useCallback(() => {
     let alive = true;
@@ -57,7 +63,7 @@ export function PeersPanel({ incidents }: { incidents?: BgpIncident[] }) {
     api.metricsQuery(PEER_QUERY)
       .then((d) => { if (alive) setMetrics(d); })
       .catch((e: Error) => { if (alive) setErr(e.message || "The device peer-state query failed."); })
-      .finally(() => { if (alive) setBusy(false); });
+      .finally(() => { if (alive) { setBusy(false); setAt(Date.now()); } });
     return () => { alive = false; };
   }, []);
   useEffect(load, [load]);
@@ -73,11 +79,12 @@ export function PeersPanel({ incidents }: { incidents?: BgpIncident[] }) {
   });
 
   const withTransit = (incidents ?? []).filter((i) => transitSet(i).length > 0);
+  const peerCap = useCap(rows, FIRST_PEERS);
+  const transitCap = useCap(withTransit, FIRST_TRANSIT);
 
   return (
-    <>
-      <div className="card" style={{ marginTop: 12 }}>
-        <h2>BGP peers</h2>
+    <Section id="peers" title="Peers — sessions and transit" updatedAt={at}>
+      <SubBlock title="BGP peers">
 
         {busy && rows.length === 0 && <div className="empty">Reading peer state…</div>}
 
@@ -107,8 +114,8 @@ export function PeersPanel({ incidents }: { incidents?: BgpIncident[] }) {
         )}
 
         {rows.length > 0 && (
-          <div style={{ overflowX: "auto" }}>
-            <table className="tbl" style={{ width: "100%" }}>
+          <div className="bgp-scroll">
+            <table className="tbl bgp-tbl" style={{ width: "100%" }}>
               <thead>
                 <tr>
                   <th>Device</th><th>Peer</th><th>AS</th><th>State</th>
@@ -116,7 +123,7 @@ export function PeersPanel({ incidents }: { incidents?: BgpIncident[] }) {
                 </tr>
               </thead>
               <tbody>
-                {rows.map((r) => (
+                {peerCap.rows.map((r) => (
                   <tr key={r.key}>
                     <td className="mono">{r.device || "—"}</td>
                     <td className="mono">{r.peer || "—"}</td>
@@ -129,8 +136,8 @@ export function PeersPanel({ incidents }: { incidents?: BgpIncident[] }) {
                         {r.source === "bmp" ? "BMP" : "device metric"}
                       </span>
                     </td>
-                    <td className="mono">{r.announced ?? "—"}</td>
-                    <td className="mono">{r.withdrawn ?? "—"}</td>
+                    <td className="mono num">{r.announced ?? "—"}</td>
+                    <td className="mono num">{r.withdrawn ?? "—"}</td>
                     <td className="mini-meta">{r.changedAt ? new Date(r.changedAt).toLocaleString() : "—"}</td>
                   </tr>
                 ))}
@@ -138,24 +145,24 @@ export function PeersPanel({ incidents }: { incidents?: BgpIncident[] }) {
             </table>
           </div>
         )}
+        <ShowAll cap={peerCap} noun="peers" />
 
         {sessions?.coverage?.notes?.length ? (
           <ul className="mini-meta" style={{ marginBottom: 0, paddingLeft: 18 }}>
             {sessions.coverage.notes.map((n, i) => <li key={i}>{n}</li>)}
           </ul>
         ) : null}
-      </div>
+      </SubBlock>
 
-      <div className="card" style={{ marginTop: 12 }}>
-        <h2>Transit per watched prefix</h2>
+      <SubBlock title="Transit per watched prefix">
         {withTransit.length === 0 ? (
           <div className="empty">
             No AS paths have been observed for the watched prefixes yet. The transit set is derived from the paths the
             evaluator measured — with no measurement there is nothing to show, and nothing is assumed.
           </div>
         ) : (
-          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-            {withTransit.map((inc) => (
+          <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+            {transitCap.rows.map((inc) => (
               <div key={inc.prefix} style={{
                 display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap",
                 padding: "6px 8px", borderRadius: 6, border: "1px solid var(--border)",
@@ -180,14 +187,15 @@ export function PeersPanel({ incidents }: { incidents?: BgpIncident[] }) {
                 ))}
               </div>
             ))}
+            <ShowAll cap={transitCap} noun="prefixes" />
           </div>
         )}
         <p className="mini-meta" style={{ marginBottom: 0 }}>
           The upstream chip is the hop adjacent to the origin. A transit set that changed without a maintenance window
-          is the route-leak signature the Prefixes tab classifies.
+          is the route-leak signature the incidents section classifies.
         </p>
-      </div>
-    </>
+      </SubBlock>
+    </Section>
   );
 }
 

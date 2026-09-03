@@ -22,6 +22,7 @@ import "@xyflow/react/dist/style.css";
 import { api, type BgpAsPathGraph, type BgpGraphNode } from "../../services/api";
 import { Chip } from "../../components/noc";
 import { NODE_H, NODE_W, edgeWidth, layoutAsPathGraph, nodeLabel, nodeSubLabel, pathLengthHint } from "./bgpDepth.model";
+import { Section, SubBlock } from "./Section";
 
 // ── node renderer ───────────────────────────────────────────────────────────
 
@@ -68,17 +69,24 @@ const nodeTypes = { asnode: AsNode };
 
 // ── panel ───────────────────────────────────────────────────────────────────
 
-export function AsPathGraphPanel({ prefix }: { prefix?: string }) {
+/**
+ * `bare` drops the section shell so the page can nest the graph inside its
+ * "Current paths" section beside the grouped path table — the graph and the
+ * table are two renderings of ONE measurement (research §(b)2) and belong under
+ * one heading rather than in two cards an operator has to correlate by eye.
+ */
+export function AsPathGraphPanel({ prefix, bare = false }: { prefix?: string; bare?: boolean }) {
   const [g, setG] = useState<BgpAsPathGraph | null>(null);
   const [err, setErr] = useState("");
   const [busy, setBusy] = useState(false);
+  const [at, setAt] = useState<number | null>(null);
 
   useEffect(() => {
     if (!prefix) { setG(null); setErr(""); return; }
     let alive = true;
     setBusy(true); setErr(""); setG(null);
     api.bgpAsPathGraph(prefix)
-      .then((d) => { if (alive) setG(d); })
+      .then((d) => { if (alive) { setG(d); setAt(Date.now()); } })
       .catch((e: Error) => { if (alive) setErr(e.message || "AS-path graph unavailable"); })
       .finally(() => { if (alive) setBusy(false); });
     return () => { alive = false; };
@@ -112,9 +120,8 @@ export function AsPathGraphPanel({ prefix }: { prefix?: string }) {
   const hint = g ? pathLengthHint(g) : null;
   const height = laid ? Math.min(520, Math.max(220, laid.height + 80)) : 220;
 
-  return (
-    <div className="card" style={{ marginTop: 12 }}>
-      <h2>AS-path graph</h2>
+  const body = (
+    <>
       {!prefix && <div className="empty">Look up a prefix to see how the internet reaches it.</div>}
       {busy && <div className="empty">Building the path graph…</div>}
       {err && <p className="mini-meta" style={{ color: "var(--bad)" }} role="alert">{err}</p>}
@@ -175,8 +182,12 @@ export function AsPathGraphPanel({ prefix }: { prefix?: string }) {
           </p>
         </>
       )}
-    </div>
+    </>
   );
+
+  return bare
+    ? <SubBlock title="AS-path graph" updatedAt={at}>{body}</SubBlock>
+    : <Section id="aspath-graph" title="AS-path graph" updatedAt={at}>{body}</Section>;
 }
 
 export default AsPathGraphPanel;

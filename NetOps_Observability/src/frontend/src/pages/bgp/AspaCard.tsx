@@ -11,34 +11,33 @@
 import { useEffect, useState } from "react";
 import { api, type BgpAspaResp } from "../../services/api";
 import { Chip } from "../../components/noc";
+import { Section } from "./Section";
 
 export function AspaCard({ asn }: { asn?: string }) {
   const [data, setData] = useState<BgpAspaResp | null>(null);
   const [err, setErr] = useState("");
+  const [at, setAt] = useState<number | null>(null);
 
   useEffect(() => {
     if (!asn) { setData(null); setErr(""); return; }
     let alive = true;
     setErr(""); setData(null);
     api.bgpAspa(asn)
-      .then((d) => { if (alive) setData(d); })
+      .then((d) => { if (alive) { setData(d); setAt(Date.now()); } })
       .catch((e: Error) => { if (alive) setErr(e.message || "ASPA lookup failed"); })
       .finally(() => { /* no busy state: this card is never the slow one */ });
     return () => { alive = false; };
   }, [asn]);
 
   return (
-    <div className="card" style={{ marginTop: 12 }}>
-      <h2>ASPA — AS provider authorization</h2>
+    <Section id="aspa" title="ASPA — AS provider authorization" updatedAt={at}>
       {!asn && <div className="empty">Look up an ASN (or a prefix with a determinable origin) to see its ASPA record.</div>}
       {err && <p className="mini-meta" style={{ color: "var(--bad)" }} role="alert">{err}</p>}
 
       {data && !data.status.configured && (
-        <div className="empty" style={{ textAlign: "left", lineHeight: 1.55 }}>
-          <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 6 }}>
-            <Chip label="NO ASPA DATA SOURCE" tone="var(--muted)" />
-          </div>
-          <p style={{ margin: "0 0 6px" }}>{data.status.reason}</p>
+        <div className="empty bgp-honest">
+          <Chip label="NO ASPA DATA SOURCE" tone="var(--muted)" />
+          <p style={{ margin: "6px 0 0" }}>{data.status.reason}</p>
           {data.status.how_to && <p className="mini-meta" style={{ margin: 0 }}>{data.status.how_to}</p>}
         </div>
       )}
@@ -78,7 +77,7 @@ export function AspaCard({ asn }: { asn?: string }) {
           </p>
         </>
       )}
-    </div>
+    </Section>
   );
 }
 

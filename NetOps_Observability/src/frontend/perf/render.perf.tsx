@@ -20,6 +20,7 @@ import Events from "../src/pages/Events";
 import Correlations from "../src/tabs/Correlations";
 import Logs from "../src/tabs/Logs";
 import Devices from "../src/pages/Devices";
+import BgpOps from "../src/pages/BgpOps";
 import { TopologyInventoryPanel } from "../src/features/topology/components/TopologyInventoryPanel";
 
 // ── payloads, built ONCE (outside every timed region) ────────────────────────
@@ -31,6 +32,22 @@ const CORR_ROWS = synth.correlations(2000);
 const LOG_HITS = synth.syslogHits(20000);
 const DEVICE_ROWS = synth.devices(2000);
 const TOPO_VIEW = synth.topologyView(1000);
+// BGP single-screen outage view: 50 watched prefixes, a full 500-update
+// near-live buffer, 30 BGP peers and 20 bogon sightings, all on ONE page.
+const BGP_PREFIXES = synth.bgpPrefixes(50);
+const BGP_WATCHLIST = synth.bgpWatchlist(BGP_PREFIXES);
+const BGP_ALERTS = synth.bgpAlerts(BGP_PREFIXES);
+const BGP_SELECTED = BGP_PREFIXES[0];
+const BGP_STATUS = synth.bgpStatus(BGP_SELECTED);
+const BGP_UPDATES = synth.bgpUpdates(BGP_SELECTED, 480);
+const BGP_FEED = synth.bgpFeed(BGP_PREFIXES, 500);
+const BGP_BMP = synth.bgpBmpSessions(30);
+const BGP_PEER_METRICS = synth.bgpPeerMetrics(30);
+const BGP_BOGONS = synth.bgpBogons(20);
+const BGP_RPKI = synth.bgpRpki(BGP_PREFIXES);
+const BGP_GRAPH = synth.bgpAsPathGraph(BGP_SELECTED);
+const BGP_GEOFEED = synth.bgpGeofeed(BGP_SELECTED);
+const BGP_WHOIS = synth.bgpWhois(BGP_SELECTED);
 // A second identity of the SAME data — what a poll tick hands the component.
 const TOPO_VIEW_TICK = { ...TOPO_VIEW, nodes: [...TOPO_VIEW.nodes], edges: [...TOPO_VIEW.edges] };
 
@@ -67,6 +84,26 @@ beforeEach(() => {
     if (opts?.signal === "snmptrap") return Promise.resolve(synth.osEnvelope(EVENT_TRAPS));
     return Promise.resolve(synth.osEnvelope(EVENT_SYSLOG));                 // Events feed
   }) as never);
+
+  // BGP operations — a dozen independent panels on one screen, each stubbed at
+  // its own volume. The page auto-selects the worst-classified watched prefix
+  // on load, so the per-resource panels are fed as if that lookup resolved.
+  vi.spyOn(api, "bgpWatchlist").mockResolvedValue(BGP_WATCHLIST as never);
+  vi.spyOn(api, "bgpAlerts").mockResolvedValue(BGP_ALERTS as never);
+  vi.spyOn(api, "bgpStatus").mockResolvedValue(BGP_STATUS as never);
+  vi.spyOn(api, "bgpUpdates").mockResolvedValue(BGP_UPDATES as never);
+  vi.spyOn(api, "bgpWhois").mockResolvedValue(BGP_WHOIS as never);
+  vi.spyOn(api, "bgpRpki").mockResolvedValue(BGP_RPKI as never);
+  vi.spyOn(api, "bgpAspa").mockResolvedValue({
+    resource: "AS64500",
+    status: { configured: false, reason: "No ASPA data source is configured." },
+  } as never);
+  vi.spyOn(api, "bgpGeofeed").mockResolvedValue(BGP_GEOFEED as never);
+  vi.spyOn(api, "bgpAsPathGraph").mockResolvedValue(BGP_GRAPH as never);
+  vi.spyOn(api, "bgpFeed").mockResolvedValue(BGP_FEED as never);
+  vi.spyOn(api, "bgpBogons").mockResolvedValue(BGP_BOGONS as never);
+  vi.spyOn(api, "bgpBmpSessions").mockResolvedValue(BGP_BMP as never);
+  vi.spyOn(api, "metricsQuery").mockResolvedValue(BGP_PEER_METRICS as never);
 });
 
 afterEach(() => {
@@ -162,5 +199,23 @@ describe("frontend render budgets (high-EPS payloads)", () => {
       },
     ),
     120_000,
+  );
+
+  it(
+    "BGP operations — 50 watched prefixes, 500 updates, 30 peers, 20 sightings on ONE screen",
+    scenario(
+      "bgp-ops",
+      "50 prefixes · 500 updates · 30 peers · 20 sightings",
+      () => <BgpOps />,
+      {
+        update: () => <BgpOps />,
+        // Proves the page really assembled the whole screen: the pinned verdict
+        // for the auto-selected prefix, a section that only exists once the
+        // watchlist arrived, and the near-live feed's own counters. Without this
+        // a broken stub would render ten honest empty states and "pass".
+        verify: showsAll(BGP_SELECTED, "Alert history", "BGP peers", "Bogons seen", "announce"),
+      },
+    ),
+    180_000,
   );
 });

@@ -8,19 +8,31 @@
 // dropped). Calling it "live" when it is one poll interval behind would be the
 // dishonest choice.
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, type BgpFeedResp, type BgpFeedUpdate } from "../../services/api";
 import { Chip } from "../../components/noc";
 import { feedCounts, mergeFeed } from "./bgpDepth.model";
+import { Section, ShowAll, SubBlock, useCap } from "./Section";
 
 const POLL_MS = 20_000;
 const CLIENT_BUFFER = 500;
+/** Rows shown before the operator asks for the rest (one-page view, 2026-09-03).
+ *  The buffer holds up to CLIENT_BUFFER updates; rendering all of them on load
+ *  is what would blow this page's DOM budget, so the newest N are on screen and
+ *  the rest are one control away. */
+const FIRST_ROWS = 25;
 
-export function LiveFeedPanel() {
+/**
+ * `bare` drops the section shell so the page can nest the feed inside its
+ * "Updates timeline" section beside the churn strip — the two halves of the
+ * research doc's §(b)3 belong under one heading, not in two competing cards.
+ */
+export function LiveFeedPanel({ bare = false }: { bare?: boolean } = {}) {
   const [updates, setUpdates] = useState<BgpFeedUpdate[]>([]);
   const [status, setStatus] = useState<BgpFeedResp["status"] | null>(null);
   const [gap, setGap] = useState(false);
   const [err, setErr] = useState("");
+  const [at, setAt] = useState<number | null>(null);
   const cursor = useRef(0);
 
   const poll = useCallback(async (alive: () => boolean) => {
@@ -29,6 +41,7 @@ export function LiveFeedPanel() {
       if (!alive()) return;
       setStatus(page.status);
       setErr("");
+      setAt(Date.now());
       if (page.gap) setGap(true);
       if (typeof page.next === "number") cursor.current = page.next;
       if (page.updates?.length) setUpdates((prev) => mergeFeed(prev, page.updates, CLIENT_BUFFER));
@@ -46,11 +59,12 @@ export function LiveFeedPanel() {
   }, [poll]);
 
   const counts = feedCounts(updates);
+  // Newest first: during an outage the last thirty seconds are the story.
+  const newest = useMemo(() => [...updates].reverse(), [updates]);
+  const cap = useCap(newest, FIRST_ROWS);
 
-  return (
-    <div className="card" style={{ marginTop: 12 }}>
-      <h2>Near-live update feed</h2>
-
+  const body = (
+    <>
       {err && <p className="mini-meta" style={{ color: "var(--bad)" }} role="alert">{err}</p>}
 
       {status && !status.enabled && (
@@ -93,13 +107,13 @@ export function LiveFeedPanel() {
           ) : null}
 
           {updates.length > 0 && (
-            <div style={{ maxHeight: 300, overflowY: "auto", overflowX: "auto" }}>
-              <table className="dm-table" style={{ width: "100%" }}>
+            <div className="bgp-scroll">
+              <table className="dm-table bgp-tbl" style={{ width: "100%" }}>
                 <thead>
                   <tr><th>Time (UTC)</th><th>Type</th><th>Prefix</th><th>AS path</th><th>Collector peer</th></tr>
                 </thead>
                 <tbody>
-                  {[...updates].reverse().map((u) => (
+                  {cap.rows.map((u) => (
                     <tr key={u.seq}>
                       <td className="mono">{u.time ? new Date(u.time).toISOString().slice(11, 19) : "—"}</td>
                       <td>
@@ -116,6 +130,7 @@ export function LiveFeedPanel() {
               </table>
             </div>
           )}
+          <ShowAll cap={cap} noun="updates" />
 
           <p className="mini-meta" style={{ marginBottom: 0 }}>
             <strong>Near-live, not live.</strong> RIS Live is WebSocket-only and no WebSocket client is on this
@@ -125,8 +140,12 @@ export function LiveFeedPanel() {
           </p>
         </>
       )}
-    </div>
+    </>
   );
+
+  return bare
+    ? <SubBlock title="Near-live update feed" updatedAt={at}>{body}</SubBlock>
+    : <Section id="updates-feed" title="Near-live update feed" updatedAt={at}>{body}</Section>;
 }
 
 export default LiveFeedPanel;

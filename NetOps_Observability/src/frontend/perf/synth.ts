@@ -215,3 +215,250 @@ export function topologyView(n: number): TopologyView {
     overlays: [],
   };
 }
+
+// ── BGP operations (single-screen outage view, 2026-09-03) ───────────────────
+//
+// The BGP page is not fed by ONE endpoint: it is a dozen independent panels on
+// one screen, and its render cost is the SUM of them. So the scenario builds
+// the whole set at the volume an operator with a real watchlist sees during an
+// outage — 50 watched prefixes, a 500-update near-live buffer, 30 BGP peers and
+// 20 bogon sightings — and the budget covers the page with all of it on screen
+// at once. That is the property the tab layout used to hide: three tabs each
+// paid for a third of this, and no single view ever paid for all of it.
+
+const BGP_CLASSES = ["origin_change", "rpki_invalid", "route_leak", "visibility_loss", "bogon", "none"] as const;
+const BGP_RPKI_STATES = ["invalid", "unavailable", "unknown", "valid"] as const;
+
+/** `n` watched prefixes, deterministic and CIDR-valid. */
+export function bgpPrefixes(n: number): string[] {
+  const out: string[] = new Array(n);
+  for (let i = 0; i < n; i++) out[i] = `198.${18 + (i >> 8)}.${i & 255}.0/24`;
+  return out;
+}
+
+/** The watchlist response: entries plus one incident per prefix. */
+export function bgpWatchlist(prefixes: string[]) {
+  const incidents: Record<string, unknown> = {};
+  prefixes.forEach((prefix, i) => {
+    const cls = BGP_CLASSES[i % BGP_CLASSES.length];
+    incidents[prefix] = {
+      prefix,
+      class: cls,
+      severity: cls === "none" ? "info" : "warning",
+      summary: `${prefix} is announced by AS${64500 + (i % 7)} and seen by ${200 + (i % 90)} collector peers.`,
+      evidence: {
+        detail: `Measured across ${3 + (i % 4)} route-collector vantage points.`,
+        vantages: [`rrc0${i % 10}`, `rrc1${i % 10}`],
+        paths: [[3333, 1299, 64500 + (i % 7)], [6939, 174, 64500 + (i % 7)]],
+        peers_seeing: 200 + (i % 90),
+        peers_total: 335,
+      },
+      learned_origin: i % 5 === 0,
+      first_seen: new Date(T0 - 86_400_000).toISOString(),
+      last_seen: new Date(T0).toISOString(),
+      since: new Date(T0 - (i % 12) * 3_600_000).toISOString(),
+    };
+  });
+  return {
+    watchlist: prefixes.map((resource, i) => ({
+      resource, kind: "prefix" as const, note: `site ${i % 9}`,
+      added_by: "perf", created_at: new Date(T0 - i * 60_000).toISOString(),
+    })),
+    incidents,
+  };
+}
+
+/** The alert history the incidents section renders beneath the watchlist. */
+export function bgpAlerts(prefixes: string[]) {
+  return {
+    alerts: prefixes.map((resource, i) => ({
+      id: `a-${i}`, rule: "bgp.visibility", severity: i % 3 ? "warning" : "critical",
+      resource, class: BGP_CLASSES[i % BGP_CLASSES.length],
+      summary: `Visibility for ${resource} fell to ${40 + (i % 50)}% of full-feed peers.`,
+      fired_at: new Date(T0 - i * 300_000).toISOString(),
+      resolved: i % 4 === 0, resolved_at: new Date(T0 - i * 290_000).toISOString(),
+    })),
+    incidents: [],
+    classes: [],
+    status: { enabled: true, interval: "5m", cooldown: "30m", runs: 120 },
+  };
+}
+
+/** RIPEstat routing-status + rpki + collector paths for the selected prefix. */
+export function bgpStatus(resource: string, rrcs = 12, peersPerRrc = 8) {
+  return {
+    resource, kind: "prefix" as const,
+    routing_status: {
+      announced: true,
+      last_seen: { origin: "AS64500", prefix: resource, time: new Date(T0).toISOString() },
+      visibility: {
+        v4: { total_ris_peers: 335, ris_peers_seeing: 214 },
+        v6: { total_ris_peers: 120, ris_peers_seeing: 96 },
+      },
+    },
+    rpki: { status: "invalid_asn" },
+    rpki_origin: "AS64500",
+    paths: {
+      rrcs: Array.from({ length: rrcs }, (_, r) => ({
+        rrc: `RRC${String(r).padStart(2, "0")}`,
+        peers: Array.from({ length: peersPerRrc }, (_, p) => ({
+          as_path: `${3333 + p} ${1299 + (r % 5)} ${174} 64500`,
+        })),
+      })),
+    },
+  };
+}
+
+/** RIPEstat bgp-updates for the churn strip. */
+export function bgpUpdates(resource: string, n: number) {
+  return {
+    resource,
+    updates: {
+      nr_updates: n,
+      updates: Array.from({ length: n }, (_, i) => ({
+        type: i % 3 === 0 ? "W" : "A",
+        timestamp: new Date(T0 - i * 60_000).toISOString(),
+        attrs: { path: [3333, 1299, 64500], source_id: `rrc0${i % 10}` },
+      })),
+    },
+  };
+}
+
+/** `n` buffered near-live updates (the client ring's full capacity). */
+export function bgpFeed(prefixes: string[], n: number) {
+  return {
+    updates: Array.from({ length: n }, (_, i) => ({
+      seq: i,
+      time: new Date(T0 - (n - i) * 1_000).toISOString(),
+      type: i % 4 === 0 ? "W" : "A",
+      resource: prefixes[i % prefixes.length],
+      prefix: prefixes[i % prefixes.length],
+      peer: `10.0.${i % 250}.1`,
+      path: [3333, 1299, 174, 64500 + (i % 7)],
+      origin: 64500 + (i % 7),
+    })),
+    next: n,
+    status: {
+      enabled: true, polling: true, resources: prefixes,
+      buffered: n, written: n, dropped: 0, ring_size: 2000,
+      interval: "60s", producer: "ripestat",
+    },
+  };
+}
+
+/** One BMP session carrying `n` peers — the Peers section's first witness. */
+export function bgpBmpSessions(n: number) {
+  return {
+    sessions: [{
+      id: "sess-1", device_id: "lon-dc1-core-01", remote_addr: "10.0.0.1",
+      router: "lon-dc1-core-01", state: "up",
+      opened_at: new Date(T0 - 3_600_000).toISOString(),
+      peers: Array.from({ length: n }, (_, i) => ({
+        address: `10.10.${i}.1`, as: 64500 + i, rib: "adj-rib-in",
+        state: i % 6 === 0 ? "down" : "up",
+        changed_at: new Date(T0 - i * 60_000).toISOString(),
+        down_reason: i % 6 === 0 ? "hold timer expired" : undefined,
+        announced_prefixes: 1000 + i * 7,
+        withdrawn_prefixes: i * 3,
+      })),
+      peers_partial: false, messages: {}, updates_held: 0, updates_dropped: 0,
+      parse_errors: 0, unsupported_elements: 0,
+    }],
+    count: 1,
+    coverage: { receiver_enabled: true, sessions_up: 1, complete: true, notes: [] },
+  };
+}
+
+/** `device_bgp_peer_state` samples — the Peers section's second witness. */
+export function bgpPeerMetrics(n: number) {
+  return {
+    status: "success",
+    data: {
+      resultType: "vector",
+      result: Array.from({ length: n }, (_, i) => ({
+        metric: { device: `fra-dc2-wan-edge-0${i % 9}`, peer: `10.20.${i}.1` },
+        value: [T0 / 1000, i % 5 === 0 ? "3" : "6"] as [number, string],
+      })),
+    },
+  };
+}
+
+/** `n` bogon sightings across a handful of reserved blocks. */
+export function bgpBogons(n: number) {
+  const blocks = [
+    { block: "10.0.0.0/8", reason: "private-use", rfc: "RFC 1918", why: "Private space must never appear in the global table." },
+    { block: "192.168.0.0/16", reason: "private-use", rfc: "RFC 1918", why: "Private space must never appear in the global table." },
+    { block: "100.64.0.0/10", reason: "shared-address-space", rfc: "RFC 6598", why: "Carrier-grade NAT space is not globally routable." },
+  ];
+  return {
+    sightings: Array.from({ length: n }, (_, i) => {
+      const e = blocks[i % blocks.length];
+      return {
+        prefix: `${e.block.split("/")[0].split(".").slice(0, 2).join(".")}.${i}.0/24`,
+        entry: e, source: i % 2 ? "bmp" : "feed", peer: `10.0.${i}.1`, origin: 64500 + i,
+        first_seen: new Date(T0 - i * 600_000).toISOString(),
+        last_seen: new Date(T0 - i * 60_000).toISOString(),
+        count: 1 + i,
+      };
+    }),
+    set: { source: "IANA special-purpose registries", date: "2026-09-02", blocks: 42, note: "Embedded set, transcribed from the IANA registries." },
+    feed: { enabled: false, entries: 0, note: "The optional full-bogons feed is off." },
+  };
+}
+
+/** RPKI validation results for the whole watchlist. */
+export function bgpRpki(prefixes: string[]) {
+  return {
+    results: prefixes.map((prefix, i) => ({
+      prefix, origin: `AS${64500 + (i % 7)}`,
+      state: BGP_RPKI_STATES[i % BGP_RPKI_STATES.length],
+      reason: i % 4 === 0 ? "origin_as" : undefined,
+      validator: "routinator",
+      roas: [{ origin: `AS${64500 + (i % 7)}`, prefix, max_length: 24, validity: "valid" }],
+      fetched_at: new Date(T0 - i * 1_000).toISOString(),
+    })),
+    from_watchlist: true, truncated: false, max_prefixes: 50,
+  };
+}
+
+/** The AS-path graph for the selected prefix. */
+export function bgpAsPathGraph(prefix: string, nodes = 24) {
+  return {
+    prefix,
+    nodes: Array.from({ length: nodes }, (_, i) => ({
+      asn: 3000 + i, name: `Transit ${i}`, depth: i % 4,
+      origin: i === nodes - 1, vantage: i % 4 === 0, paths: 1 + (i % 9),
+    })),
+    edges: Array.from({ length: nodes - 1 }, (_, i) => ({ from: 3000 + i, to: 3001 + i, peers: 1 + (i % 5) })),
+    origins: [3000 + nodes - 1], paths: 96, paths_seen: 96,
+    max_edges: 200, edges_capped: false, nodes_capped: false,
+    source: "bgp-state", fetched_at: new Date(T0).toISOString(),
+  };
+}
+
+/** A published geofeed for the selected prefix. */
+export function bgpGeofeed(resource: string, rows = 40) {
+  return {
+    resource, published: true, source_url: "https://example.net/geofeed.csv",
+    entries: Array.from({ length: rows }, (_, i) => ({
+      prefix: `198.51.${i}.0/24`, country: ["GB", "DE", "US", "SG"][i % 4],
+      region: `R${i % 6}`, city: `City ${i % 12}`, postal: `PC${i}`,
+    })),
+    rows_scanned: rows + 3, rows_kept: rows, rows_dropped: 3, truncated: false,
+    fetched_at: new Date(T0).toISOString(),
+  };
+}
+
+/** RDAP ownership for the selected prefix. */
+export function bgpWhois(resource: string) {
+  return {
+    resource,
+    rdap: {
+      name: "EXAMPLE-NET",
+      entities: Array.from({ length: 6 }, (_, i) => ({
+        roles: [["registrant", "abuse", "technical", "noc"][i % 4]],
+        vcardArray: ["vcard", [["fn", {}, "text", `Example Contact ${i}`]]],
+      })),
+    },
+  };
+}

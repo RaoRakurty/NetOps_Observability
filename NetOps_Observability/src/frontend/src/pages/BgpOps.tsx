@@ -1,44 +1,64 @@
 // BgpOps — the consolidated BGP operations page (product wave item 10,
-// 2026-08-25). One screen for the outage call: global verdict, RPKI, AS-paths
-// from RIPE's route collectors, update churn, and registry ownership — the
-// five browser tabs a NOC engineer used to juggle. Design authority:
-// docs/design/research/BGP_OPS_CONSOLIDATION_RESEARCH_2026-08-25.md.
+// 2026-08-25), rebuilt as a SINGLE-SCREEN outage view (owner, 2026-09-03:
+// "put all the data into one page so that a NOC admin gets a single view during
+// an outage without clicking so much").
 //
-// v0.9 data spine = the api's cached RIPEstat/RDAP proxy. The RIS Live local
-// buffer upgrades the timeline to realtime later WITHOUT changing this page's
-// shape. Honest by construction: each panel fails independently and SAYS so
+// LAYOUT IS THE FEATURE. The design of record is
+// docs/design/research/BGP_OPS_CONSOLIDATION_RESEARCH_2026-08-25.md §(b) "The
+// one-page incident view (top to bottom)", and its ordering is implemented
+// literally:
+//
+//   1 verdict bar (prefix + origin, incident class, visibility, RPKI)  — pinned
+//   2 current paths from N vantage points (AS-path graph + path table)  ┐ left
+//   3 updates timeline (churn + near-live feed)                        ┘ column
+//   4 RPKI · 5 incidents · 6 peers · 7 bogons · 8 ownership (RDAP)     ┐ right
+//   9 geofeed · 10 ASPA                                                ┘ column
+//
+// Three items of that list are DELIBERATELY ABSENT rather than faked: the IRR
+// consistency strip (no IRR mirror is built, so there is no data to be
+// consistent with), on-demand looking-glass verification (not built), and
+// third-party corroboration (license-blocked / not built). The page says so in
+// its footer instead of showing an empty box that reads as "clean".
+//
+// EVERY SECTION RENDERS ON LOAD. There is no tab switcher any more — during an
+// outage a tab is a question the operator has to answer before they can see the
+// evidence. Long lists are capped to their first N rows with an explicit "show
+// all" (pages/bgp/Section.tsx), which is also what keeps this page's DOM inside
+// its render budget (perf/budgets.json, `bgp-ops`).
+//
+// Honest by construction, unchanged: each panel fails independently and SAYS so
 // (never blank, never fabricated).
 
 import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  api, type BgpAlert, type BgpAlertStatus, type BgpIncident,
+  api, type BgpAlert, type BgpAlertStatus, type BgpIncident, type BgpIncidentClass,
   type BgpStatusResp, type BgpUpdatesResp, type BgpWatchEntry,
 } from "../services/api";
 import { NocHeader, Chip } from "../components/noc";
 import Icon from "../components/Icon";
 import { operatorError } from "../lib/errors";
-// BGP depth (item 10 completion) — each panel owns its own fetch and its own
-// failure, so a dead geofeed or an unreachable validator never blanks the page.
-// Lazy so the React Flow graph never rides in this route's first chunk.
+import { Section, SubBlock } from "./bgp/Section";
+import { incidentTone } from "./bgp/bgpAlerts.model";
+// Each panel owns its own fetch and its own failure, so a dead geofeed or an
+// unreachable validator never blanks the page. Lazy so the React Flow graph and
+// the heavy tables never ride in this route's first chunk.
 const RpkiPanel = lazy(() => import("./bgp/RpkiPanel"));
 const AspaCard = lazy(() => import("./bgp/AspaCard"));
 const GeofeedPanel = lazy(() => import("./bgp/GeofeedPanel"));
 const LiveFeedPanel = lazy(() => import("./bgp/LiveFeedPanel"));
 const AsPathGraphPanel = lazy(() => import("./bgp/AsPathGraphPanel"));
-// Tracker #1/#4/#5: the Prefixes (watchlist + incident class), Peers and Bogons
-// tabs. Lazy for the same reason as the graph — none of them rides in this
-// route's first chunk.
 const PrefixesPanel = lazy(() => import("./bgp/PrefixesPanel"));
 const PeersPanel = lazy(() => import("./bgp/PeersPanel"));
 const BogonsPanel = lazy(() => import("./bgp/BogonsPanel"));
 
-/** The page's three views. "Prefixes" IS the watchlist view — there is no
- *  second prefix list anywhere. */
-type BgpTab = "prefixes" | "peers" | "bogons";
+/** Watchlist + alert-history refresh cadence. Matches the near-live feed's own
+ *  bounded poll in spirit: slow enough to be free, fast enough that an operator
+ *  watching the screen sees a class change without reloading. */
+const WATCH_POLL_MS = 30_000;
 
 /** A panel that has not loaded its chunk yet says so — never an empty gap. */
 function PanelFallback({ label }: { label: string }) {
-  return <div className="card" style={{ marginTop: 12 }}><div className="empty">Loading {label}…</div></div>;
+  return <div className="bgp-sec"><div className="empty">Loading {label}…</div></div>;
 }
 
 // ── small pure helpers (exported for tests) ──────────────────────────────────
@@ -129,33 +149,68 @@ export function rdapContacts(rdap: unknown): { name: string; roles: string[] }[]
   return out.slice(0, 8);
 }
 
+/**
+ * Worst-first ordering of the incident vocabulary. An operator opening this page
+ * mid-outage should land on the prefix that is actually broken, not on whichever
+ * one happens to sort first alphabetically.
+ *
+ * `unknown` deliberately ranks ABOVE `none`: an unmeasured prefix is an absent
+ * measurement, not a clean one, and is worth looking at before a measured-quiet
+ * one.
+ */
+const CLASS_RANK: Record<BgpIncidentClass, number> = {
+  origin_change: 0, rpki_invalid: 1, bogon: 2, route_leak: 3,
+  visibility_loss: 4, unknown: 5, none: 6,
+};
+
+/**
+ * Which watched resource the page opens on: the worst-classified one, else the
+ * first watched entry, else nothing. Pure so the choice is testable and so the
+ * page never "helpfully" moves an operator off the resource they picked.
+ */
+export function pickInitial(
+  watch: BgpWatchEntry[],
+  incidents: Record<string, BgpIncident>,
+): string {
+  let best = "";
+  let bestRank = Number.POSITIVE_INFINITY;
+  for (const w of watch) {
+    const cls = incidents[w.resource]?.class;
+    const rank = cls ? CLASS_RANK[cls] : CLASS_RANK.unknown;
+    if (rank < bestRank) { bestRank = rank; best = w.resource; }
+  }
+  return best || watch[0]?.resource || "";
+}
+
 // ── page ─────────────────────────────────────────────────────────────────────
 
-const panelCss: React.CSSProperties = { marginTop: 12 };
-
 export default function BgpOps() {
-  const [tab, setTab] = useState<BgpTab>("prefixes");
   const [watch, setWatch] = useState<BgpWatchEntry[]>([]);
   const [incidents, setIncidents] = useState<Record<string, BgpIncident>>({});
   const [incidentsNote, setIncidentsNote] = useState<string | undefined>();
   const [alerts, setAlerts] = useState<BgpAlert[]>([]);
   const [alertStatus, setAlertStatus] = useState<BgpAlertStatus | undefined>();
+  const [watchAt, setWatchAt] = useState<number | null>(null);
   const [query, setQuery] = useState("");
   const [active, setActive] = useState("");
   const [status, setStatus] = useState<BgpStatusResp | null>(null);
+  const [statusAt, setStatusAt] = useState<number | null>(null);
   const [updates, setUpdates] = useState<BgpUpdatesResp | null>(null);
+  const [updatesAt, setUpdatesAt] = useState<number | null>(null);
   const [whois, setWhois] = useState<unknown>(null);
+  const [whoisAt, setWhoisAt] = useState<number | null>(null);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
 
   const loadWatch = useCallback(() => {
     // The watchlist call carries the incident class per prefix (tracker #5), so
-    // one request feeds both the chip row and the Prefixes view.
+    // one request feeds both the chip row and the incidents section.
     api.bgpWatchlist()
       .then((r) => {
         setWatch(r.watchlist);
         setIncidents(r.incidents ?? {});
         setIncidentsNote(r.incidents_note);
+        setWatchAt(Date.now());
       })
       .catch(() => { setWatch([]); setIncidents({}); });
     // The alert history is its own request and fails independently — a dead
@@ -165,6 +220,14 @@ export default function BgpOps() {
       .catch(() => { setAlerts([]); setAlertStatus(undefined); });
   }, []);
   useEffect(loadWatch, [loadWatch]);
+
+  // Auto-refresh: a NOC screen left open during an outage must not go stale in
+  // silence. Every section carries its own "upd HH:MM:SS" stamp so the operator
+  // can see exactly how old each answer is.
+  useEffect(() => {
+    const id = window.setInterval(loadWatch, WATCH_POLL_MS);
+    return () => window.clearInterval(id);
+  }, [loadWatch]);
 
   // Latest-wins guard: each investigation bumps the sequence, and every setter
   // (including the secondary panel loads) checks it before touching state — a
@@ -182,24 +245,47 @@ export default function BgpOps() {
     api.bgpStatus(r)
       .then((s) => {
         if (!fresh()) return;
-        setStatus(s);
+        setStatus(s); setStatusAt(Date.now());
         // Secondary panels load after the verdict — independent failures stay quiet
         // in the corner of their own panel, never on the page.
-        api.bgpUpdates(r, 8).then((u) => { if (fresh()) setUpdates(u); }).catch(() => { if (fresh()) setUpdates(null); });
-        api.bgpWhois(r).then((w) => { if (fresh()) setWhois(w.rdap); }).catch(() => { if (fresh()) setWhois(null); });
+        api.bgpUpdates(r, 8)
+          .then((u) => { if (fresh()) { setUpdates(u); setUpdatesAt(Date.now()); } })
+          .catch(() => { if (fresh()) setUpdates(null); });
+        api.bgpWhois(r)
+          .then((w) => { if (fresh()) { setWhois(w.rdap); setWhoisAt(Date.now()); } })
+          .catch(() => { if (fresh()) setWhois(null); });
       })
       .catch((e: Error) => { if (fresh()) setErr(operatorError(e, "The lookup could not be completed.")); })
       .finally(() => { if (fresh()) setBusy(false); });
   }, []);
+
+  // Open on the worst watched resource, ONCE. After that the selection is the
+  // operator's — a later poll must never move them off what they are reading.
+  const autoPicked = useRef(false);
+  useEffect(() => {
+    if (autoPicked.current || active || watch.length === 0) return;
+    const pick = pickInitial(watch, incidents);
+    if (!pick) return;
+    autoPicked.current = true;
+    setQuery(pick);
+    investigate(pick);
+  }, [watch, incidents, active, investigate]);
 
   const rs = status?.routing_status;
   const vis = useMemo(() => visibilityFraction(rs), [rs]);
   const rpki = useMemo(() => rpkiVerdict(status?.rpki?.status, status?.rpki_origin), [status]);
   const pathGroups = useMemo(() => groupPaths(status?.paths).slice(0, 8), [status]);
   const churn = useMemo(() => bucketUpdates(updates?.updates), [updates]);
+  const churnMax = useMemo(() => Math.max(...churn.map(([, a, w]) => a + w), 1), [churn]);
   const contacts = useMemo(() => rdapContacts(whois), [whois]);
   const watched = watch.some((w) => w.resource === status?.resource);
   const incidentList = useMemo(() => Object.values(incidents), [incidents]);
+  const openIncidents = useMemo(
+    () => incidentList.filter((i) => i.class !== "none").length,
+    [incidentList],
+  );
+  const activeIncident = active ? incidents[active] : undefined;
+  const activeTone = activeIncident ? incidentTone(activeIncident.class) : null;
   // ASPA is a property of an AS, so for a prefix lookup we ask about the AS that
   // is ACTUALLY announcing it (from the live routing status) — never a guess.
   const aspaAsn = useMemo(() => {
@@ -207,41 +293,24 @@ export default function BgpOps() {
     const origin = status?.rpki_origin ?? (rs?.last_seen?.origin ? `AS${String(rs.last_seen.origin).replace(/^AS/i, "").split(/[{},]/).filter(Boolean)[0]}` : "");
     return origin || undefined;
   }, [status, rs]);
+  const prefixResource = status?.kind === "prefix" ? status.resource : undefined;
 
   return (
-    <div className="dm-board cc-board">
+    <div className="dm-board cc-board bgp-page">
       <NocHeader
         title="BGP Operations"
-        subtitle="Routing status, RPKI, AS-paths, update churn and registry ownership — one screen for the outage call."
-        chips={<Chip label={`${watch.length} watched`} />}
+        subtitle="One screen for the outage call — verdict, paths, updates, RPKI, incidents, peers, bogons and registry ownership, all on load."
+        chips={<>
+          <Chip label={`${watch.length} watched`} />
+          {openIncidents > 0 && <Chip label={`${openIncidents} with an open class`} tone="var(--warn)" />}
+        </>}
       />
 
-      {/* The three views. Prefixes is the default because the watchlist is what
-          an operator is on this page for. */}
-      <div className="ddp-tabs" role="tablist" style={{ marginTop: 10 }}>
-        {([["prefixes", "Prefixes"], ["peers", "Peers"], ["bogons", "Bogons"]] as [BgpTab, string][]).map(([id, label]) => (
-          <button key={id} role="tab" aria-selected={tab === id} className={tab === id ? "on" : ""}
-            onClick={() => setTab(id)}>{label}</button>
-        ))}
-      </div>
-
-      {tab === "peers" && (
-        <Suspense fallback={<PanelFallback label="the peers table" />}>
-          <PeersPanel incidents={incidentList} />
-        </Suspense>
-      )}
-
-      {tab === "bogons" && (
-        <Suspense fallback={<PanelFallback label="the bogon listing" />}>
-          <BogonsPanel />
-        </Suspense>
-      )}
-
-      {tab === "prefixes" && <>
-      {/* entry row: search + watchlist */}
-      <div className="card" style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+      {/* Selector: the watchlist as chips plus the free-form lookup. Picking a
+          chip drives EVERY section below — that is the whole point of the page. */}
+      <div className="bgp-selector">
         <form
-          style={{ display: "flex", gap: 8, flex: "1 1 320px" }}
+          className="bgp-find"
           onSubmit={(e) => { e.preventDefault(); investigate(query); }}
         >
           <input
@@ -256,147 +325,203 @@ export default function BgpOps() {
             <Icon name="search" size={14} /> {busy ? "Checking…" : "Investigate"}
           </button>
         </form>
-        <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-          {watch.map((w) => (
-            <button key={w.resource} className={`chip-btn ${w.resource === active ? "chip-btn-on" : ""}`}
-              title={w.note || w.resource} onClick={() => { setQuery(w.resource); investigate(w.resource); }}>
-              <span className="mono">{w.resource}</span>
-            </button>
-          ))}
+        <div className="bgp-chips" aria-label="Watched resources">
+          {watch.length === 0 && (
+            <span className="mini-meta">Nothing is watched yet — investigate a resource and watch it to pin it here.</span>
+          )}
+          {watch.map((w) => {
+            const t = incidents[w.resource] ? incidentTone(incidents[w.resource].class) : null;
+            return (
+              <button key={w.resource} className={`chip-btn ${w.resource === active ? "chip-btn-on" : ""}`}
+                title={w.note || w.resource} onClick={() => { setQuery(w.resource); investigate(w.resource); }}>
+                <span className="mono">{w.resource}</span>
+                {t && t.label !== "OK" && <span className="bgp-chip-dot" style={{ background: t.tone }} title={t.detail} />}
+              </button>
+            );
+          })}
         </div>
       </div>
 
       {err && <div className="empty" role="alert" style={{ color: "var(--bad)" }}>{err}</div>}
 
-      {/* Tracker #5: the watchlist WITH its incident class and evidence. This
-          is the Prefixes view — the investigation below drills into one of it. */}
-      <Suspense fallback={<PanelFallback label="the watchlist" />}>
-        <PrefixesPanel
-          watch={watch} incidents={incidents} incidentsNote={incidentsNote}
-          status={alertStatus} alerts={alerts} active={active}
-          onInvestigate={(r) => { setQuery(r); investigate(r); }}
-        />
-      </Suspense>
-
-      {status && (
-        <>
-          {/* verdict hero */}
-          <div className="card" style={panelCss}>
-            <div style={{ display: "flex", gap: 18, alignItems: "baseline", flexWrap: "wrap" }}>
-              <span className="device-name" style={{ fontSize: 22 }}>{status.resource}</span>
-              {rs?.announced === false && <Chip label="NOT ANNOUNCED" tone="var(--crit)" title="No RIS peer currently sees this prefix" />}
-              {rs?.announced && rs.last_seen?.origin && (
-                <Chip label={`origin AS${String(rs.last_seen.origin).replace(/^AS/i, "")}`} title={`Last seen ${rs.last_seen.time ?? ""}`} />
-              )}
-              {vis !== null && (
-                <Chip
-                  label={`visibility ${(vis * 100).toFixed(0)}%`}
-                  tone={vis > 0.9 ? "var(--ok)" : vis > 0.5 ? "var(--warn)" : "var(--crit)"}
-                  title="Share of RIPE RIS full-feed peers currently seeing this resource"
-                />
-              )}
-              {status.kind === "prefix" && <Chip label={rpki.label} tone={rpki.tone} title={rpki.detail} />}
-            </div>
-            {(status.routing_status_error || status.rpki_error) && (
-              <p className="mini-meta" style={{ color: "var(--warn)", marginBottom: 0 }}>
-                {status.routing_status_error && <>Routing status unavailable: {status.routing_status_error}. </>}
-                {status.rpki_error && <>RPKI verdict unavailable: {status.rpki_error}.</>}
-              </p>
-            )}
-            <div style={{ marginTop: 8 }}>
-              {watched ? (
-                <button className="btn-ghost" style={{ fontSize: 11 }}
-                  onClick={() => api.bgpWatchDelete(status.resource).then(loadWatch)
-                    .catch((e: Error) => setErr(`Watchlist update failed: ${e.message || "error"}`))}>
-                  <Icon name="check" size={12} /> Watching — remove
-                </button>
-              ) : (
-                <button className="btn-ghost" style={{ fontSize: 11 }}
-                  onClick={() => api.bgpWatchAdd(status.resource).then(loadWatch)
-                    .catch((e: Error) => setErr(`Watchlist update failed: ${e.message || "error"}`))}>
-                  <Icon name="alerts" size={12} /> Watch this {status.kind === "asn" ? "ASN" : "prefix"}
-                </button>
-              )}
-            </div>
-          </div>
-
-          {/* AS paths */}
-          {status.kind === "prefix" && (
-            <div className="card" style={panelCss}>
-              <h2>Paths seen by route collectors</h2>
-              {status.paths_error && <p className="mini-meta" style={{ color: "var(--warn)" }}>Path data unavailable: {status.paths_error}</p>}
-              {!status.paths_error && pathGroups.length === 0 && <div className="empty">No paths observed.</div>}
-              <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-                {pathGroups.map((g) => (
-                  <div key={g.path.join(" ")} style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-                    <span className="badge" title="Route-collector peers seeing this exact path">{g.count}×</span>
-                    {g.path.map((asn, i) => (
-                      <span key={`${asn}-${i}`} style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
-                        {i > 0 && <span style={{ color: "var(--muted)" }}>→</span>}
-                        <span className="mono" style={{
-                          padding: "2px 8px", borderRadius: 999, border: "1px solid var(--border)",
-                          background: i === g.path.length - 1 ? "color-mix(in srgb, var(--accent) 14%, transparent)" : "var(--surface)",
-                          fontSize: 12,
-                        }} title={i === g.path.length - 1 ? "Origin AS" : undefined}>
-                          AS{asn}
-                        </span>
-                      </span>
-                    ))}
-                  </div>
-                ))}
-              </div>
+      {/* ── 1. VERDICT BAR — pinned. Everything below is evidence for it. ──── */}
+      <div className="bgp-verdict-wrap">
+        <Section
+          id="verdict"
+          title="Verdict"
+          updatedAt={statusAt}
+          actions={status && (
+            watched ? (
+              <button className="btn-ghost" style={{ fontSize: 11 }}
+                onClick={() => api.bgpWatchDelete(status.resource).then(loadWatch)
+                  .catch((e: Error) => setErr(`Watchlist update failed: ${e.message || "error"}`))}>
+                <Icon name="check" size={12} /> Watching — remove
+              </button>
+            ) : (
+              <button className="btn-ghost" style={{ fontSize: 11 }}
+                onClick={() => api.bgpWatchAdd(status.resource).then(loadWatch)
+                  .catch((e: Error) => setErr(`Watchlist update failed: ${e.message || "error"}`))}>
+                <Icon name="alerts" size={12} /> Watch this {status.kind === "asn" ? "ASN" : "prefix"}
+              </button>
+            )
+          )}
+        >
+          {!status && !busy && (
+            <div className="empty">
+              No resource is selected. Pick a watched resource above, or investigate one — every section below then
+              answers about that resource.
             </div>
           )}
+          {!status && busy && <div className="empty">Reading the global routing story for {active}…</div>}
 
-          {/* ── BGP depth (item 10 completion) ───────────────────────────── */}
+          {status && (
+            <>
+              <div className="bgp-verdict">
+                <span className="device-name">{status.resource}</span>
+                {activeTone && <Chip label={activeTone.label} tone={activeTone.tone} title={activeTone.detail} />}
+                {activeIncident && (
+                  <span className="mini-meta" title="When this class started">
+                    since {new Date(activeIncident.since).toLocaleString()}
+                  </span>
+                )}
+                {rs?.announced === false && <Chip label="NOT ANNOUNCED" tone="var(--crit)" title="No RIS peer currently sees this prefix" />}
+                {rs?.announced && rs.last_seen?.origin && (
+                  <Chip label={`origin AS${String(rs.last_seen.origin).replace(/^AS/i, "")}`} title={`Last seen ${rs.last_seen.time ?? ""}`} />
+                )}
+                {vis !== null && (
+                  <Chip
+                    label={`visibility ${(vis * 100).toFixed(0)}%`}
+                    tone={vis > 0.9 ? "var(--ok)" : vis > 0.5 ? "var(--warn)" : "var(--crit)"}
+                    title="Share of RIPE RIS full-feed peers currently seeing this resource"
+                  />
+                )}
+                {status.kind === "prefix" && <Chip label={rpki.label} tone={rpki.tone} title={rpki.detail} />}
+              </div>
+              {activeIncident?.summary && <p className="mini-meta" style={{ margin: "4px 0 0" }}>{activeIncident.summary}</p>}
+              {(status.routing_status_error || status.rpki_error) && (
+                <p className="mini-meta" style={{ color: "var(--warn)", margin: "4px 0 0" }}>
+                  {status.routing_status_error && <>Routing status unavailable: {status.routing_status_error}. </>}
+                  {status.rpki_error && <>RPKI verdict unavailable: {status.rpki_error}.</>}
+                </p>
+              )}
+            </>
+          )}
+        </Section>
+      </div>
 
-          {status.kind === "prefix" && (
-            <Suspense fallback={<PanelFallback label="the AS-path graph" />}>
-              <AsPathGraphPanel prefix={status.resource} />
+      {/* ── the dense two-column grid. Left = the outage narrative in time
+             order; right = the standing evidence panels. ────────────────────── */}
+      <div className="bgp-grid">
+        <div className="bgp-col">
+
+          {/* 2. Current paths from N vantage points */}
+          <Section id="paths" title="Current paths from route collectors" updatedAt={statusAt}>
+            <Suspense fallback={<div className="empty">Loading the AS-path graph…</div>}>
+              <AsPathGraphPanel bare prefix={prefixResource} />
             </Suspense>
-          )}
 
-          <Suspense fallback={<PanelFallback label="RPKI" />}>
-            <RpkiPanel resource={status.kind === "prefix" ? status.resource : undefined} />
-          </Suspense>
+            <SubBlock title="Paths seen by route collectors">
+              {!status && <div className="empty">No resource is selected.</div>}
+              {status && status.kind !== "prefix" && (
+                <div className="empty">Route-collector paths are per PREFIX. Look up one of this AS's prefixes to see them.</div>
+              )}
+              {status?.paths_error && (
+                <p className="mini-meta" style={{ color: "var(--warn)" }}>Path data unavailable: {status.paths_error}</p>
+              )}
+              {status?.kind === "prefix" && !status.paths_error && pathGroups.length === 0 && (
+                <div className="empty">No paths observed.</div>
+              )}
+              {pathGroups.length > 0 && (
+                <div className="bgp-scroll">
+                  <table className="tbl bgp-tbl" style={{ width: "100%" }}>
+                    <thead>
+                      <tr><th className="num">Peers</th><th>AS path (collector → origin)</th></tr>
+                    </thead>
+                    <tbody>
+                      {pathGroups.map((g) => (
+                        <tr key={g.path.join(" ")}>
+                          <td className="mono num" title="Route-collector peers seeing this exact path">{g.count}</td>
+                          <td>
+                            <span className="bgp-path">
+                              {g.path.map((asn, i) => (
+                                <span key={`${asn}-${i}`} className="bgp-hop-wrap">
+                                  {i > 0 && <span className="bgp-arrow">→</span>}
+                                  <span className={`bgp-hop${i === g.path.length - 1 ? " origin" : ""}`}
+                                    title={i === g.path.length - 1 ? "Origin AS" : undefined}>AS{asn}</span>
+                                </span>
+                              ))}
+                            </span>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </SubBlock>
+          </Section>
 
-          <Suspense fallback={<PanelFallback label="ASPA" />}>
-            <AspaCard asn={aspaAsn} />
-          </Suspense>
-
-          <Suspense fallback={<PanelFallback label="the geofeed" />}>
-            <GeofeedPanel resource={status.resource} />
-          </Suspense>
-
-          {/* update churn */}
-          <div className="card" style={panelCss}>
-            <h2>Update churn — last 8h</h2>
-            {!updates && <div className="empty">Loading updates…</div>}
-            {updates && churn.length === 0 && <div className="empty">Quiet — no BGP updates for this resource in the window. That is good news.</div>}
-            {churn.length > 0 && (
-              <div style={{ display: "flex", alignItems: "flex-end", gap: 4, height: 90, overflowX: "auto", paddingTop: 6 }}>
-                {churn.map(([hour, a, w]) => {
-                  const max = Math.max(...churn.map(([, x, y]) => x + y), 1);
-                  return (
-                    <div key={hour} title={`${hour}:00Z — ${a} announce, ${w} withdraw`}
-                      style={{ display: "flex", flexDirection: "column", justifyContent: "flex-end", gap: 1, minWidth: 22, height: "100%" }}>
-                      <div style={{ height: `${(w / max) * 100}%`, background: "var(--crit)", borderRadius: 2, opacity: 0.85 }} />
-                      <div style={{ height: `${(a / max) * 100}%`, background: "var(--accent)", borderRadius: 2, opacity: 0.85 }} />
-                      <span className="mini-meta" style={{ fontSize: 9, textAlign: "center" }}>{hour.slice(11)}h</span>
+          {/* 3. Updates timeline — churn over the local window, then the feed */}
+          <Section id="updates" title="Updates timeline" updatedAt={updatesAt}>
+            <SubBlock title="Update churn — last 8h">
+              {!status && <div className="empty">No resource is selected.</div>}
+              {status && !updates && <div className="empty">Reading updates…</div>}
+              {updates && churn.length === 0 && (
+                <div className="empty">Quiet — no BGP updates for this resource in the window. That is good news.</div>
+              )}
+              {churn.length > 0 && (
+                <div className="bgp-churn">
+                  {churn.map(([hour, a, w]) => (
+                    <div key={hour} className="bgp-churn-col"
+                      title={`${hour}:00Z — ${a} announce, ${w} withdraw`}>
+                      <div className="bgp-churn-w" style={{ height: `${(w / churnMax) * 100}%` }} />
+                      <div className="bgp-churn-a" style={{ height: `${(a / churnMax) * 100}%` }} />
+                      <span className="bgp-churn-l">{hour.slice(11)}h</span>
                     </div>
-                  );
-                })}
-              </div>
-            )}
-            <p className="mini-meta" style={{ marginBottom: 0 }}>
-              <span style={{ color: "var(--accent)" }}>■</span> announcements · <span style={{ color: "var(--crit)" }}>■</span> withdrawals — bursts of withdrawals across many peers are the signature of an outage or a flap.
-            </p>
-          </div>
+                  ))}
+                </div>
+              )}
+              <p className="mini-meta" style={{ marginBottom: 0 }}>
+                <span style={{ color: "var(--accent)" }}>■</span> announcements · <span style={{ color: "var(--crit)" }}>■</span> withdrawals — bursts of withdrawals across many peers are the signature of an outage or a flap.
+              </p>
+            </SubBlock>
 
-          {/* ownership */}
-          <div className="card" style={panelCss}>
-            <h2>Ownership & contacts</h2>
-            {!whois && <div className="empty">Registry lookup…</div>}
+            <Suspense fallback={<div className="empty">Loading the near-live feed…</div>}>
+              <LiveFeedPanel bare />
+            </Suspense>
+          </Section>
+        </div>
+
+        <div className="bgp-col">
+          {/* 4. RPKI */}
+          <Suspense fallback={<PanelFallback label="RPKI" />}>
+            <RpkiPanel resource={prefixResource} />
+          </Suspense>
+
+          {/* 5. Incidents — the watchlist WITH its class and evidence, plus the
+                 alert history. ONE classifier drives this and the pager. */}
+          <Suspense fallback={<PanelFallback label="the incident list" />}>
+            <PrefixesPanel
+              watch={watch} incidents={incidents} incidentsNote={incidentsNote}
+              status={alertStatus} alerts={alerts} active={active} updatedAt={watchAt}
+              onInvestigate={(r) => { setQuery(r); investigate(r); }}
+            />
+          </Suspense>
+
+          {/* 6. Peers */}
+          <Suspense fallback={<PanelFallback label="the peers table" />}>
+            <PeersPanel incidents={incidentList} />
+          </Suspense>
+
+          {/* 7. Bogons */}
+          <Suspense fallback={<PanelFallback label="the bogon listing" />}>
+            <BogonsPanel />
+          </Suspense>
+
+          {/* 8. Ownership & contacts (RDAP) */}
+          <Section id="ownership" title="Ownership & contacts" updatedAt={whoisAt}>
+            {!status && <div className="empty">No resource is selected.</div>}
+            {status && whois == null && <div className="empty">Registry lookup…</div>}
             {whois != null && (
               <>
                 {(whois as { name?: string }).name && (
@@ -405,7 +530,7 @@ export default function BgpOps() {
                 {contacts.length === 0 ? (
                   <div className="empty">The registry returned no contact entities.</div>
                 ) : (
-                  <ul style={{ margin: 0, paddingLeft: 18 }}>
+                  <ul className="bgp-contacts">
                     {contacts.map((c, i) => (
                       <li key={i}>
                         {c.name} {c.roles.length > 0 && <span className="mini-meta">({c.roles.join(", ")})</span>}
@@ -416,25 +541,30 @@ export default function BgpOps() {
                 <p className="mini-meta" style={{ marginBottom: 0 }}>Authoritative registry data via RDAP.</p>
               </>
             )}
-          </div>
-        </>
-      )}
+          </Section>
 
-      {/* The near-live feed follows the WATCHLIST, not the current lookup, so it
-          renders whether or not an investigation is open. */}
-      <Suspense fallback={<PanelFallback label="the live feed" />}>
-        <LiveFeedPanel />
-      </Suspense>
+          {/* 9. Geofeed */}
+          <Suspense fallback={<PanelFallback label="the geofeed" />}>
+            <GeofeedPanel resource={status?.resource} />
+          </Suspense>
 
-      {!status && !err && (
-        <div className="empty" style={{ marginTop: 16 }}>
-          Enter a prefix or ASN — or pick a watched resource — to see its global routing story.
+          {/* 10. ASPA */}
+          <Suspense fallback={<PanelFallback label="ASPA" />}>
+            <AspaCard asn={aspaAsn} />
+          </Suspense>
         </div>
-      )}
-      </>}
+      </div>
+
+      {/* What this screen deliberately does NOT show. Naming the gaps is the
+          honest alternative to an empty panel that reads as a clean result. */}
+      <p className="mini-meta bgp-footer">
+        Not on this screen, because the data does not exist here yet: IRR route-object consistency (no IRR mirror is
+        built), on-demand looking-glass verification, and third-party corroboration feeds. They are absent rather than
+        empty — see the BGP capability tracker.
+      </p>
 
       {/* RIPE attribution: a LICENSE CONDITION of the RIS/RIPEstat data, not decoration. */}
-      <p className="mini-meta" style={{ marginTop: 16 }}>
+      <p className="mini-meta">
         Routing data from <a href="https://www.ripe.net/analyse/internet-measurements/routing-information-service-ris/" target="_blank" rel="noreferrer">RIPE NCC RIS / RIPEstat</a>.
       </p>
     </div>

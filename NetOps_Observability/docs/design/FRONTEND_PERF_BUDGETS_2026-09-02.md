@@ -73,7 +73,7 @@ the one way a perf gate can lie.
 
 ## 2. Before → after
 
-Same machine, same harness, five surfaces, medians.
+Same machine, same harness, six surfaces, medians.
 
 | Surface | Payload | mount ms | | poll ms | | DOM nodes | |
 |---|---|---:|---|---:|---|---:|---|
@@ -83,6 +83,7 @@ Same machine, same harness, five surfaces, medians.
 | Device inventory | 2 000 devices | 428.0 | 272.9 | — | 32.7 | 1 078 | 1 078 |
 | Log search | 20 000 hits | 357.8 | 254.4 | — | 66.5 | 778 | 778 |
 | Events feed | 5 000 events | 300.6 | 222.2 | — | 49.9 | 713 | 713 |
+| BGP operations | 50 prefixes · 500 updates · 30 peers · 20 sightings | **770.3** | **673.8** | **153.4** | **45.3** | **4 727** | **1 571** |
 
 Both columns are single runs of the same harness on the same machine; the ms
 carry the ±15 % run-to-run variance described in §1.2, so read them as a ratio,
@@ -102,6 +103,18 @@ to change. Their gains came from removing redundant passes and serialized commit
 to the harness after the first baseline, so their only honest before/after pair is the mount
 column. The topology panel's poll number is a true before/after.)*
 
+**BGP operations (added 2026-09-03)** is the one row where "before" and "after" are not the
+same screen, and the comparison is only fair once that is stated. *Before* is the tabbed
+page **on its default tab with no investigation open** — i.e. the watchlist and the alert
+history and nothing else, roughly a third of the evidence. *After* is the single-screen
+outage view with **every** section rendered: verdict, AS-path graph, collector paths, update
+churn, near-live feed, RPKI, incidents, peers, transit, bogons, ownership, geofeed and ASPA,
+for an auto-selected prefix. It shows strictly more and costs **3.0× fewer DOM nodes and
+3.4× less per refresh**, because the old page rendered all 50 watchlist rows with full
+evidence, all 50 alert rows and the whole feed buffer, while every long list on the new one
+is capped to its first N rows behind an explicit "show all" (`pages/bgp/Section.tsx`). The
+same payload was fed to both, from the same generators, in one harness file.
+
 ---
 
 ## 3. The budgets
@@ -115,6 +128,7 @@ column. The topology panel's poll number is a true before/after.)*
 | `log-search` | 500 | 120 | 1 000 |
 | `device-inventory` | 600 | 110 | 1 350 |
 | `topology-device-list` | 250 | 40 | 600 |
+| `bgp-ops` | 900 | 150 | 2 000 |
 
 Rationale: **node budgets sit ~25 % above the measured value** — tight, because the number is
 exact and because the failure they guard against (de-virtualizing a list) multiplies it by
