@@ -212,6 +212,14 @@ EXPECTED = {
     # Byte-identical to the docker-compose default and to
     # alertwebhook.DefaultCooldown.
     "VMALERT_WEBHOOK_COOLDOWN":      "30m",
+    # Platform self-health alerts -> the HOST-MONITORING ntfy topic
+    # (internal/alertwebhook hostroute.go). EMPTY is the intended default and is
+    # byte-identical to compose: empty topic means "use WATCHDOG_NTFY_TOPIC",
+    # which an existing install already has. Materializing the keys only makes
+    # the split-topic knob discoverable after an upgrade.
+    "PLATFORM_ALERTS_NTFY_TOPIC":    "",
+    "PLATFORM_ALERTS_NTFY_SERVER":   "",
+    "PLATFORM_ALERTS_NTFY_TOKEN":    "",
 }
 
 alphabet = string.ascii_letters + string.digits + "!@#%^&*-_=+"

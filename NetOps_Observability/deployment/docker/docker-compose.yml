@@ -1537,6 +1537,17 @@ services:
       NTFY_ALERT_SERVER: ${NTFY_ALERT_SERVER:-}
       NTFY_ALERT_TOKEN: ${NTFY_ALERT_TOKEN:-}
       WATCHDOG_NTFY_TOPIC: ${WATCHDOG_NTFY_TOPIC:-}
+      # PLATFORM self-health alerts (vmalert -> internal/alertwebhook) are pushed
+      # to the HOST-MONITORING channel — the same phone topic the external
+      # watchdog uses — because that route must work on an install where nobody
+      # has configured a product notification channel yet: it is how the stack
+      # reports on ITSELF. Empty topic ⇒ falls back to WATCHDOG_NTFY_TOPIC above;
+      # empty server/token ⇒ fall back to NTFY_ALERT_SERVER / NTFY_ALERT_TOKEN,
+      # then to https://ntfy.sh. The watchdog-topic REFUSAL still stands for the
+      # PRODUCT ntfy channel (notify_config.go) — that is a tenant-facing surface.
+      PLATFORM_ALERTS_NTFY_TOPIC: ${PLATFORM_ALERTS_NTFY_TOPIC:-}
+      PLATFORM_ALERTS_NTFY_SERVER: ${PLATFORM_ALERTS_NTFY_SERVER:-}
+      PLATFORM_ALERTS_NTFY_TOKEN: ${PLATFORM_ALERTS_NTFY_TOKEN:-}
       CORRELATION_URL: "http://correlation:8000"
       # #20: export the device→tenant map (under the api's /data volume) so the
       # Vector aggregator + correlation can stamp tenant_id onto telemetry.

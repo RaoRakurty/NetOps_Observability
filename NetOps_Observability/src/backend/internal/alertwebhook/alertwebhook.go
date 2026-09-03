@@ -141,6 +141,12 @@ type Deps struct {
 	// Now is the injected clock, so the cool-down is testable without sleeping.
 	// nil uses time.Now.
 	Now func() time.Time
+	// HostRoute is the HOST-MONITORING push destination (hostroute.go): the
+	// phone channel the external watchdog already uses. nil = not configured,
+	// which is COUNTED and warned about once, never an error per alert. This
+	// route is deliberately independent of the product notification channels —
+	// it is how the stack reports on ITSELF.
+	HostRoute HostPusher
 	// Metrics is the counter set surfaced on /metrics. nil is safe (every
 	// method is nil-safe) but loses the observability §10 asks for.
 	Metrics *Metrics
@@ -184,6 +190,15 @@ type receiver struct {
 
 	mu   sync.Mutex
 	seen map[string]time.Time // fingerprint → time it was last delivered
+
+	// Host-monitoring route state (hostroute.go). hostQ is the BOUNDED pending
+	// queue; hostRunning says whether a drain goroutine currently owns it, so an
+	// idle receiver holds none. hostOnce keeps "no topic configured" to a single
+	// log line for the process's life.
+	hostMu      sync.Mutex
+	hostRunning bool
+	hostQ       chan hostJob
+	hostOnce    sync.Once
 }
 
 // Handler builds the Alertmanager-v2 receiver. It returns an error rather than
@@ -209,7 +224,11 @@ func Handler(d Deps) (http.HandlerFunc, error) {
 	if r.now == nil {
 		r.now = time.Now
 	}
+	if d.HostRoute != nil {
+		r.hostQ = make(chan hostJob, hostQueueSize)
+	}
 	d.Metrics.setEnabled(true)
+	d.Metrics.setHostRouteEnabled(d.HostRoute != nil)
 	return r.serve, nil
 }
 
@@ -463,6 +482,13 @@ func (r *receiver) handleAlert(a wireAlert) result {
 	} else {
 		r.deps.Dispatcher.Dispatch(alert)
 	}
+	// TWO AUDIENCES, TWO ROUTES (hostroute.go). The product dispatcher above
+	// carries this alert to whatever channels an operator configured; the host
+	// route below carries it to the host-monitoring phone channel whether or
+	// not anything was ever configured. Both legs are downstream of the SAME
+	// tenant refusal and the SAME cool-down, so the second route adds a
+	// destination, never a second buzz.
+	r.pushHost(alert, labels, status)
 	return resultDispatched
 }
 

@@ -946,6 +946,22 @@ NTFY_ALERT_SERVER=
 NTFY_ALERT_TOKEN=
 WATCHDOG_NTFY_TOPIC=
 
+# ---- Platform self-health alerts -> HOST MONITORING ---------------------
+# The stack's OWN alerts (vmalert: engines not consuming, storage refusing
+# writes, ingest silent, the alerting heartbeat) are pushed to the
+# host-monitoring phone channel, NOT to the product notification channels:
+# that route has to work on an install where nobody configured a channel
+# yet, because it is how the stack reports on itself.
+# Leave EMPTY to use WATCHDOG_NTFY_TOPIC above (the recommended setup — the
+# same phone channel that already carries the watchdog's dead-man's-switch).
+# Server/token fall back to NTFY_ALERT_SERVER / NTFY_ALERT_TOKEN, then to
+# https://ntfy.sh. Set these only to split the platform alerts onto their own
+# topic. NOTE: the product ntfy channel still REFUSES the watchdog topic —
+# that refusal is about tenant-facing alerting and is unchanged.
+#PLATFORM_ALERTS_NTFY_TOPIC=
+#PLATFORM_ALERTS_NTFY_SERVER=
+#PLATFORM_ALERTS_NTFY_TOKEN=
+
 # ---- Optional modules (default OFF — uncomment to enable) ---------------
 # Each block below is DORMANT unless its flag is uncommented: nothing is
 # constructed, scheduled or routed, no route is registered and no metric

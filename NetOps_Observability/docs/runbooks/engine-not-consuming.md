@@ -70,6 +70,26 @@ alarm**, and it is checked in two independent places: `AlertDeliveryBroken`
 (in-stack) and the watchdog (over its own channel — because an alert about
 broken alert delivery obviously cannot rely on alert delivery).
 
+### Where an alert goes (two audiences, two routes)
+
+| Alert class | Route | Destination | Depends on |
+|---|---|---|---|
+| **Platform self-health** — everything vmalert sends through the receiver (layers stack/host/clickhouse/platform, the four page conditions, the warning tier) | `internal/alertwebhook` host route | the **host-monitoring ntfy topic** — the same phone channel `scripts/stack-watchdog.sh` uses (`PLATFORM_ALERTS_NTFY_TOPIC`, default `WATCHDOG_NTFY_TOPIC`) | nothing but the topic. It works on an install with **no** notification channel configured, because it is how the stack reports on itself |
+| **Product / tenant** — monitor rules, BGP watch, per-tenant security findings | `notify.Dispatcher` | the channels configured in Settings → Notification channels | operator configuration; still **refuses** the watchdog topic (watchdog independence, #101) |
+
+Tier → push priority on the host route: `tier: page` → **high**, everything
+else firing → **default**, a resolution → **low**. The `AlertingHeartbeat` is
+**never** pushed — it exists for the freshness probe, and a heartbeat on the
+phone every 30 minutes is how a pager gets muted. Delivery is counted in
+`netops_alert_webhook_pushed_total{route="host_monitoring",tier}` and
+`netops_alert_webhook_push_failures_total{route,reason}`
+(`reason="not_configured"` means no topic is set — see
+`netops_alert_webhook_host_route_enabled`).
+
+Platform alerts still reach the product dispatcher as well, unchanged; the host
+route is an **additional** destination, sharing the same cool-down, so nothing
+buzzes twice.
+
 ---
 
 ## 3. Triage — in this order
@@ -194,6 +214,8 @@ docker compose logs --tail=50 vmalert | grep -i notifier
 | `netops_alert_webhook_enabled` absent | api predates the receiver, or is not scraped | upgrade / check the `netops-api` scrape job |
 | `enabled == 0` | `VMALERT_WEBHOOK_TOKEN` unset → route not registered (fail-closed, by design) | set it in `deployment/docker/.env`; `scripts/install.py` generates it |
 | `enabled == 1`, heartbeat stale | vmalert down/wedged, flag reverted to `-notifier.blackhole`, or a token mismatch | check `netops_alert_webhook_unauthorized_total`; compare the token on both sides |
+| `netops_alert_webhook_host_route_enabled == 0` | no host-monitoring topic: platform alerts reach the configured product channels only, and an install with none configured is silent | set `PLATFORM_ALERTS_NTFY_TOPIC` (or `WATCHDOG_NTFY_TOPIC`) in `deployment/docker/.env` |
+| `netops_alert_webhook_push_failures_total{reason="send_error"}` rising | the ntfy server/token is wrong, or ntfy is unreachable from the api | check the api log line `platform alert push to host monitoring FAILED` (it never carries the topic) |
 
 To deliberately turn delivery off, set
 `VMALERT_NOTIFIER_FLAG=-notifier.blackhole` — that is the supported opt-out and

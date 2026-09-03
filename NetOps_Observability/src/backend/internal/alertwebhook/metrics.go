@@ -27,6 +27,18 @@ type Metrics struct {
 	heartbeats     atomic.Int64
 	heartbeatAt    atomic.Int64 // unix seconds of the last heartbeat, 0 = never
 	enabled        atomic.Int64 // 0/1 — is the receiver wired at all
+
+	// Host-monitoring route (hostroute.go). The tier label set is CLOSED
+	// (page/warning/resolved) and the route label is a constant, so nothing a
+	// notifier sends can drive cardinality — the same rule the label-free
+	// counters above follow.
+	hostPushedPage     atomic.Int64
+	hostPushedWarning  atomic.Int64
+	hostPushedResolved atomic.Int64
+	hostFailed         atomic.Int64 // the push was attempted and errored
+	hostNotConfigured  atomic.Int64 // no topic wired: nothing was attempted
+	hostQueueFull      atomic.Int64 // bounded queue full: the push was dropped
+	hostRouteEnabled   atomic.Int64 // 0/1 — is the host route wired at all
 }
 
 // NewMetrics builds the counter set. It is constructed even when the receiver
@@ -45,6 +57,43 @@ func (m *Metrics) add(c *atomic.Int64, n int64) {
 	if m != nil && n != 0 {
 		c.Add(n)
 	}
+}
+
+// incHostPushed counts one delivered push under its tier. An unknown tier is
+// counted as warning rather than minting a new series — the label set stays
+// closed even if a caller drifts.
+func (m *Metrics) incHostPushed(tier string) {
+	if m == nil {
+		return
+	}
+	switch tier {
+	case tierPage:
+		m.hostPushedPage.Add(1)
+	case tierResolved:
+		m.hostPushedResolved.Add(1)
+	default:
+		m.hostPushedWarning.Add(1)
+	}
+}
+
+func (m *Metrics) setHostRouteEnabled(on bool) {
+	if m == nil {
+		return
+	}
+	if on {
+		m.hostRouteEnabled.Store(1)
+		return
+	}
+	m.hostRouteEnabled.Store(0)
+}
+
+// HostPushed returns the per-tier delivered-push counts (page, warning,
+// resolved). Exported for tests and any future in-process health surface.
+func (m *Metrics) HostPushed() (int64, int64, int64) {
+	if m == nil {
+		return 0, 0, 0
+	}
+	return m.hostPushedPage.Load(), m.hostPushedWarning.Load(), m.hostPushedResolved.Load()
 }
 
 func (m *Metrics) setEnabled(on bool) {
@@ -104,4 +153,34 @@ func (m *Metrics) Write(w io.Writer) {
 	// months without anything noticing.
 	g("netops_alert_webhook_heartbeat_timestamp_seconds", "Unix time of the last AlertingHeartbeat received (0 = never).", m.heartbeatAt.Load())
 	g("netops_alert_webhook_enabled", "1 when the vmalert webhook receiver is wired and serving, 0 when it is not (VMALERT_WEBHOOK_TOKEN unset).", m.enabled.Load())
+
+	// ── host-monitoring route (hostroute.go) ────────────────────────────────
+	// Labelled families, emitted by hand for the same reason the rest of this
+	// file is: stdlib only, one HELP/TYPE header per family, every series
+	// present from the first scrape so "0 pushes" is a value and not a gap.
+	fmt.Fprintf(w, "# HELP netops_alert_webhook_pushed_total Platform alerts pushed to a self-health route (the host-monitoring phone channel), by tier.\n")
+	fmt.Fprintf(w, "# TYPE netops_alert_webhook_pushed_total counter\n")
+	for _, s := range []struct {
+		tier string
+		v    int64
+	}{
+		{tierPage, m.hostPushedPage.Load()},
+		{tierWarning, m.hostPushedWarning.Load()},
+		{tierResolved, m.hostPushedResolved.Load()},
+	} {
+		fmt.Fprintf(w, "netops_alert_webhook_pushed_total{route=%q,tier=%q} %d\n", RouteHostMonitoring, s.tier, s.v)
+	}
+	fmt.Fprintf(w, "# HELP netops_alert_webhook_push_failures_total Platform alert pushes that did not reach the self-health route, by reason.\n")
+	fmt.Fprintf(w, "# TYPE netops_alert_webhook_push_failures_total counter\n")
+	for _, s := range []struct {
+		reason string
+		v      int64
+	}{
+		{"send_error", m.hostFailed.Load()},
+		{"not_configured", m.hostNotConfigured.Load()},
+		{"queue_full", m.hostQueueFull.Load()},
+	} {
+		fmt.Fprintf(w, "netops_alert_webhook_push_failures_total{route=%q,reason=%q} %d\n", RouteHostMonitoring, s.reason, s.v)
+	}
+	g("netops_alert_webhook_host_route_enabled", "1 when platform alerts are pushed to the host-monitoring channel, 0 when no topic is configured (PLATFORM_ALERTS_NTFY_TOPIC / WATCHDOG_NTFY_TOPIC unset).", m.hostRouteEnabled.Load())
 }

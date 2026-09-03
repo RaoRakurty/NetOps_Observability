@@ -49,6 +49,7 @@ INSTALL_PY = ROOT / "scripts" / "install.py"
 FIX_PERMS = ROOT / "scripts" / "fix-permissions.sh"
 UPDATE_SH = ROOT / "scripts" / "update.sh"
 PCAP_PKG = ROOT / "src" / "backend" / "internal" / "pcap"
+ALERTWEBHOOK_PKG = ROOT / "src" / "backend" / "internal" / "alertwebhook"
 
 # The sealed device-configuration blob store: container path (configstore
 # DefaultDir) → the bind-mount source under data/ that must back it.
@@ -107,6 +108,13 @@ API_ENV_DEFAULTS = {
     # deliberately NOT in this table — it is a secret with no code default (see
     # test_vmalert_webhook_token_is_passed_through_and_fail_closed).
     "VMALERT_WEBHOOK_COOLDOWN": "${VMALERT_WEBHOOK_COOLDOWN:-30m}",
+    # Platform self-health alerts → the host-monitoring push topic
+    # (alertwebhook hostroute.go). EMPTY is a real setting, not a placeholder:
+    # the code then falls back to WATCHDOG_NTFY_TOPIC for the topic and to
+    # NTFY_ALERT_SERVER / NTFY_ALERT_TOKEN for the transport.
+    "PLATFORM_ALERTS_NTFY_TOPIC": "${PLATFORM_ALERTS_NTFY_TOPIC:-}",
+    "PLATFORM_ALERTS_NTFY_SERVER": "${PLATFORM_ALERTS_NTFY_SERVER:-}",
+    "PLATFORM_ALERTS_NTFY_TOKEN": "${PLATFORM_ALERTS_NTFY_TOKEN:-}",
 }
 
 
@@ -360,7 +368,9 @@ def test_update_reconciliation_enumerates_the_new_keys():
                 "CONFIG_BACKUP_SSH_USER", "CONFIG_BACKUP_SSH_PORT",
                 "PARSERCOV_MAX_LINES", "CORRELATION_REPLICA_URLS",
                 "CORR_SYSLOG_TOPIC", "CORR_FIDELITY_WEIGHTING",
-                "VMALERT_WEBHOOK_TOKEN", "VMALERT_WEBHOOK_COOLDOWN"):
+                "VMALERT_WEBHOOK_TOKEN", "VMALERT_WEBHOOK_COOLDOWN",
+                "PLATFORM_ALERTS_NTFY_TOPIC", "PLATFORM_ALERTS_NTFY_SERVER",
+                "PLATFORM_ALERTS_NTFY_TOKEN"):
         assert f'"{key}":' in src, (
             f"{key} is missing from update.sh's EXPECTED list — an upgraded "
             f"install would never learn the knob exists.")
@@ -444,3 +454,39 @@ def test_packet_capture_module_lands_with_its_compose_plumbing():
             f"{var} ({name}) names a directory that is not a bind mount — "
             f"captures would be written to the container filesystem and lost "
             f"on the next recreate.")
+
+
+def test_alert_webhook_env_contract_is_fully_plumbed_to_the_api():
+    """Every `Env… = "…"` constant internal/alertwebhook declares must be
+    passed through on the api.
+
+    The package owns TWO routes: the vmalert receiver itself and the
+    host-monitoring push route platform self-health alerts go out on. Both are
+    env-wired, and an unplumbed variable there is invisible — the stack keeps
+    running and simply never tells anyone it is broken, which is the exact
+    defect the module exists to end.
+    """
+    consts = _go_env_consts(ALERTWEBHOOK_PKG)
+    assert consts, "internal/alertwebhook declares no Env* constant"
+    env = service_env("api")
+    missing = sorted(v for v in consts.values() if v not in env)
+    assert not missing, (
+        f"internal/alertwebhook reads {missing} but docker-compose.yml never "
+        f"passes them to the api — the route cannot be configured through the "
+        f"supported install path.")
+    # The host route's topic defaults to the watchdog's own topic IN CODE, so
+    # compose must not invent a different default for either key.
+    for var in ("PLATFORM_ALERTS_NTFY_TOPIC", "WATCHDOG_NTFY_TOPIC"):
+        assert str(env[var]) == "${%s:-}" % var, (
+            f"{var}: compose must pass the value through empty-by-default; the "
+            f"topic fallback chain lives in the code, not in the YAML.")
+
+
+def test_env_template_ships_the_platform_alert_topic_commented_out():
+    """Empty/absent = 'use the watchdog topic'. Shipping it SET would silently
+    split platform alerts onto a topic nobody is subscribed to."""
+    src = INSTALL_PY.read_text()
+    for var in ("PLATFORM_ALERTS_NTFY_TOPIC", "PLATFORM_ALERTS_NTFY_SERVER",
+                "PLATFORM_ALERTS_NTFY_TOKEN"):
+        assert f"#{var}=" in src, f"{var} must be discoverable (commented) in the .env template"
+        assert f"\n{var}=" not in src, f"{var} must not ship with a value"

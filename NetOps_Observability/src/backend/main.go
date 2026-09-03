@@ -1033,6 +1033,7 @@ func newServer() *server {
 	} else {
 		h, err := alertwebhook.Handler(alertwebhook.Deps{
 			Dispatcher: srv.notifier,
+			HostRoute:  platformAlertsHostRoute(),
 			Token:      token,
 			Cooldown:   alertwebhook.ParseCooldown(os.Getenv(alertwebhook.EnvCooldown), alertWebhookLog),
 			Metrics:    srv.vmalertWebhookMetrics,
@@ -3493,6 +3494,46 @@ func isPublicPath(p string) bool {
 // app log (§10). The receiver NEVER passes a credential in these fields.
 func alertWebhookLog(level, msg string, fields map[string]any) {
 	applog.Log(level, "alertwebhook", msg, fields)
+}
+
+// platformAlertsHostRoute builds the HOST-MONITORING push destination for
+// PLATFORM self-health alerts (owner decision, 2026-09-03: "Correlix alerts
+// should be alerted to the host monitoring").
+//
+// Env is read HERE, in the wiring layer, and the built sender is injected — the
+// package stays env-free (the seclane/configstore precedent). The topic
+// defaults to the external watchdog's own topic, which is already passed into
+// this container so notify_config.go can REFUSE it for PRODUCT alerting: the
+// platform's self-health alerts and the watchdog's death notice belong on the
+// same phone channel, while a tenant-facing channel still may not point at it.
+//
+// Returns a nil interface (never a typed nil) when no topic is configured, so
+// the receiver counts the misconfiguration instead of dereferencing it.
+func platformAlertsHostRoute() alertwebhook.HostPusher {
+	topic := strings.TrimSpace(os.Getenv(alertwebhook.EnvHostTopic))
+	source := alertwebhook.EnvHostTopic
+	if topic == "" {
+		topic = strings.TrimSpace(os.Getenv(alertwebhook.EnvWatchdogTopic))
+		source = alertwebhook.EnvWatchdogTopic
+	}
+	if topic == "" {
+		// LOUD, not silent (§10): with no topic the stack keeps every alert to
+		// itself, which is the failure mode the whole delivery path exists to
+		// end. Name both variables so the fix is one line away.
+		logWarn("alertwebhook", "platform self-health alerts will NOT reach the host-monitoring phone channel: neither "+
+			alertwebhook.EnvHostTopic+" nor "+alertwebhook.EnvWatchdogTopic+" is set", map[string]any{
+			"route": alertwebhook.RouteHostMonitoring,
+			"env":   alertwebhook.EnvHostTopic,
+		})
+		return nil
+	}
+	server := strings.TrimSpace(firstNonEmpty(os.Getenv(alertwebhook.EnvHostServer), os.Getenv(alertwebhook.EnvProductNtfyServer)))
+	token := strings.TrimSpace(firstNonEmpty(os.Getenv(alertwebhook.EnvHostToken), os.Getenv(alertwebhook.EnvProductNtfyToken)))
+	// The TOPIC is never logged — knowing it is enough to read every alert
+	// published to it and to publish forgeries (§8).
+	logInfo("alertwebhook", "platform self-health alerts route to the host-monitoring push channel",
+		alertwebhook.HostRouteLogFields(server, token != "", source))
+	return notify.NewNtfy(server, topic, token)
 }
 
 // handleVMAlertWebhook serves the Alertmanager-v2 receiver vmalert POSTs to.
