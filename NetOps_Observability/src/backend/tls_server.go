@@ -46,12 +46,25 @@ type tlsMetrics struct {
 // logs "http: TLS handshake error from <addr>: <reason>" there; we count those
 // (a downgrade attempt / cert problem / scanner) and emit a structured log,
 // rather than letting them vanish into the default logger.
+//
+// §10 (no silent failures): ErrorLog is ALSO where net/http writes a recovered
+// handler panic ("http: panic serving <addr>: ..." plus the stack). Dropping
+// everything that is not a handshake error made those invisible — the process
+// stayed up, the connection was torn down, the client saw a bare 502 and the
+// stack trace went nowhere. Every other line is therefore forwarded as a
+// structured error too, so a panic is observable rather than silent.
 type handshakeErrLog struct{ m *tlsMetrics }
 
 func (h handshakeErrLog) Write(p []byte) (int, error) {
-	if bytes.Contains(p, []byte("TLS handshake error")) {
+	detail := strings.TrimSpace(string(p))
+	switch {
+	case bytes.Contains(p, []byte("TLS handshake error")):
 		h.m.handshakeErrors.Add(1)
-		logError("tls", "handshake error", map[string]any{"detail": strings.TrimSpace(string(p))})
+		logError("tls", "handshake error", map[string]any{"detail": detail})
+	case detail != "":
+		// Anything else net/http reports here is a server-side fault (most
+		// importantly a recovered handler panic). Never swallow it.
+		logError("http", "server error", map[string]any{"detail": detail})
 	}
 	return len(p), nil
 }

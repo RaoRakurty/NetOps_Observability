@@ -88,3 +88,34 @@ func TestSplitCSV(t *testing.T) {
 		t.Fatal("empty string should yield nil")
 	}
 }
+
+// TestHandshakeErrLogDoesNotSwallowPanics pins §10: http.Server.ErrorLog is the
+// ONLY place net/http reports a recovered handler panic, and this writer is what
+// is wired to it under TLS. It used to drop every line that was not a TLS
+// handshake error, which is how a nil-map panic in POST /api/ai/feedback stayed
+// invisible while nginx returned a bare 502. Both classes must be reported.
+func TestHandshakeErrLogDoesNotSwallowPanics(t *testing.T) {
+	m := &tlsMetrics{}
+	w := handshakeErrLog{m: m}
+
+	hs := []byte("http: TLS handshake error from 10.0.0.1:5000: remote error: tls: bad certificate\n")
+	if n, err := w.Write(hs); err != nil || n != len(hs) {
+		t.Fatalf("Write(handshake) = %d, %v", n, err)
+	}
+	if got := m.handshakeErrors.Load(); got != 1 {
+		t.Fatalf("handshakeErrors = %d, want 1", got)
+	}
+
+	pan := []byte("http: panic serving 10.0.0.1:5001: assignment to entry in nil map\ngoroutine 42 [running]:\n")
+	if n, err := w.Write(pan); err != nil || n != len(pan) {
+		t.Fatalf("Write(panic) = %d, %v", n, err)
+	}
+	// A panic is NOT a handshake failure and must not be counted as one…
+	if got := m.handshakeErrors.Load(); got != 1 {
+		t.Fatalf("panic line counted as a handshake error: %d", got)
+	}
+	// …and a blank write must not manufacture a log line.
+	if n, err := w.Write([]byte("   \n")); err != nil || n != 4 {
+		t.Fatalf("Write(blank) = %d, %v", n, err)
+	}
+}

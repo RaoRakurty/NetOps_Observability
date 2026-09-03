@@ -74,8 +74,11 @@ type FeedbackDB interface {
 	WithTenant(ctx context.Context, tenant string, cross bool, fn func(pgx.Tx) error) error
 }
 
-// NewMemFeedbackStore / NewPGFeedbackStore build the two backends.
-func NewMemFeedbackStore() *memFeedbackStore { return &memFeedbackStore{} }
+// NewMemFeedbackStore builds the in-memory (file-backend) rating store. The map
+// MUST be constructed here: memFeedbackStore's zero value has a nil map and
+// Put would panic on the first write ("assignment to entry in nil map"), which
+// is not a recoverable error path but a crashed request.
+func NewMemFeedbackStore() *memFeedbackStore { return &memFeedbackStore{by: map[string]FeedbackRow{}} }
 
 func NewPGFeedbackStore(db FeedbackDB) *pgFeedbackStore { return &pgFeedbackStore{db: db} }
 
@@ -87,6 +90,9 @@ type memFeedbackStore struct {
 func (m *memFeedbackStore) Put(_ context.Context, row FeedbackRow) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if m.by == nil { // belt-and-braces: a zero-value store must never panic
+		m.by = map[string]FeedbackRow{}
+	}
 	row.TenantID = normTenant(row.TenantID)
 	m.by[row.TenantID+"\x1f"+row.ID] = row
 	return nil

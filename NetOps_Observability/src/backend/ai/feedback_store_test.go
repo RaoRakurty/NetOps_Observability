@@ -42,3 +42,34 @@ func TestMemAIFeedbackStoreIsolationAndAgg(t *testing.T) {
 		t.Errorf("2h-old feedback should be outside a 1h window, got down=%d", recent.Down)
 	}
 }
+
+// TestNewMemFeedbackStorePutDoesNotPanic pins the CONSTRUCTOR, not a hand-built
+// struct literal. The shipped bug was that NewMemFeedbackStore returned a store
+// with a nil map, so the first Put panicked ("assignment to entry in nil map")
+// and every POST /api/ai/feedback tore down its connection. The pre-existing
+// isolation test built `&memFeedbackStore{by: ...}` directly and therefore could
+// never have caught it — this one exercises the exported path the server uses.
+func TestNewMemFeedbackStorePutDoesNotPanic(t *testing.T) {
+	m := NewMemFeedbackStore()
+	ctx := context.Background()
+	now := time.Now().UTC()
+	if err := m.Put(ctx, FeedbackRow{TenantID: "acme", ID: "1", Intent: "capability", Rating: "up", At: now}); err != nil {
+		t.Fatalf("Put on a freshly constructed store: %v", err)
+	}
+	st, err := m.Stats(ctx, "acme", false, 3600)
+	if err != nil {
+		t.Fatalf("Stats: %v", err)
+	}
+	if st.Up != 1 || st.Down != 0 {
+		t.Fatalf("up/down = %d/%d, want 1/0", st.Up, st.Down)
+	}
+}
+
+// TestZeroValueMemFeedbackStorePutDoesNotPanic covers the same trap reached
+// through the zero value rather than the constructor.
+func TestZeroValueMemFeedbackStorePutDoesNotPanic(t *testing.T) {
+	var m memFeedbackStore
+	if err := m.Put(context.Background(), FeedbackRow{TenantID: "acme", ID: "1", Rating: "down", At: time.Now().UTC()}); err != nil {
+		t.Fatalf("Put on a zero-value store: %v", err)
+	}
+}
