@@ -148,6 +148,12 @@ from path_assembly import (
 )
 from path_direction import resolve_path_order, traceroute_direction_source
 from path_graph import PathGraphView
+from proactive import (
+    ProactiveEvent,
+    ProactiveMonitor,
+    proactive_signal,
+    proactive_stats,
+)
 from producers import (
     clock_skew_signal,
     episode_signal,
@@ -161,12 +167,6 @@ from producers import (
     syslog_promotable,
     trap_control_signal,
     ts_invalid_count,
-)
-from proactive import (
-    ProactiveEvent,
-    ProactiveMonitor,
-    proactive_signal,
-    proactive_stats,
 )
 from rank_memo import RankMemo
 from replay import replay_object

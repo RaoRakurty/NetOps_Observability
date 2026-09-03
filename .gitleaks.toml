@@ -26,4 +26,20 @@ regexes = [
   # generic-api-key heuristic because it follows the word "secrets" — a log
   # string / flag name, never a secret value.
   '''VAULT_MIGRATE_LEGACY_WRAPPED''',
+  # docs placeholder for the API-key examples (docs-portal + its ai/docs_corpus mirror)
+  '''ntk_YOUR_KEY''',
+]
+# Test fixtures that DELIBERATELY look like secrets — reviewed 2026-09-04:
+#   ErrorBoundary.test.tsx: a synthetic error string carrying a fake token/api_key
+#     to prove the boundary REDACTS it (the assertion is that it never renders);
+#   pcap/bpf_test.go: an opaque hex token in the closed-BPF-grammar rejection table;
+#   configdrift/fixture_test.go: canarySecret — the planted enable secret the drift
+#     redaction test must mask;
+#   configstore/dialect_test.go: a fixture RSA private key + cert blob that the
+#     dialect redactor must strip from captured configs.
+paths = [
+  '''NetOps_Observability/src/frontend/src/components/ErrorBoundary\.test\.tsx''',
+  '''NetOps_Observability/src/backend/internal/pcap/bpf_test\.go''',
+  '''NetOps_Observability/src/backend/internal/configdrift/fixture_test\.go''',
+  '''NetOps_Observability/src/backend/internal/configstore/dialect_test\.go''',
 ]
