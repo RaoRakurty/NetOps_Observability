@@ -26,6 +26,7 @@ membership to the COMPONENT. These tests pin:
 from __future__ import annotations
 
 import asyncio
+import uuid
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -358,3 +359,114 @@ def test_clipping_a_component_node_is_replay_visible(monkeypatch):
     assert not report.clean, (
         "a clipped component node replayed clean — node-completeness is no "
         "longer enforced by the replay contract")
+
+
+# ── recycled-id regression (main._archive_slice's final sort) ───────────────
+# The slice's canonical order came out of `_WindowIndex.ordinal`, which used to
+# be keyed by `id(signal)`. An address is unique only among LIVE objects: once
+# the previous cycle's window is collected, CPython hands the same address to a
+# new Signal, and the ordinal recorded for the dead object is then looked up for
+# the live one. `keep.sort(key=lambda s: order[id(s)])` therefore raised
+# KeyError at random — 4 different tests in THIS file failed over 5 runs, each
+# with a different bare integer address in the message.
+#
+# The scenario is reproduced DETERMINISTICALLY rather than by waiting on the
+# allocator: build the index over one window, then plant it under a second,
+# logically identical window's cache key. Those are exactly the contents a
+# recycled id() serves (same length, same signal_ids, different objects), and
+# the length guard in `_window_index` cannot tell the difference — that guard is
+# documented as belt-and-braces, not the correctness argument.
+
+def _index_cache_cleared():
+    main._WINDOW_INDEX_CACHE.clear()
+
+
+def test_slice_order_survives_a_recycled_window_id():
+    _index_cache_cleared()
+    old_window, _ = _window()
+    new_window, _ = _window()          # distinct objects, identical signal_ids
+    assert all(a is not b for a, b in zip(old_window, new_window))
+    assert ([s.signal_id for s in old_window] ==
+            [s.signal_id for s in new_window]), "fixture must be deterministic"
+
+    stale = main._window_index(old_window)
+    del old_window
+    # Exactly what a recycled address produces: new_window's key, old objects'
+    # index, matching length.
+    main._WINDOW_INDEX_CACHE.clear()
+    main._WINDOW_INDEX_CACHE[id(new_window)] = (len(new_window), stale)
+
+    snap = _dallas_snapshot(new_window)
+    got = main._archive_slice(snap, new_window)     # used to raise KeyError
+
+    _index_cache_cleared()
+    want = main._archive_slice(snap, new_window)    # freshly built index
+    assert [s.signal_id_str for s in got] == [s.signal_id_str for s in want]
+    assert got, "regression fixture produced an empty slice — it proves nothing"
+    _index_cache_cleared()
+
+
+def test_slice_order_key_is_the_signals_own_id_not_an_address():
+    """The invariant behind the fix: nothing on the ordering path may key on
+    `id()`. Addresses are reissued; a signal_id is not."""
+    _index_cache_cleared()
+    window, _ = _window()
+    idx = main._window_index(window)
+    assert set(idx.ordinal) == {s.signal_id for s in window}, (
+        "_WindowIndex.ordinal must be keyed by the signal's own id — an "
+        "address key is only valid while that exact object is alive")
+    assert all(isinstance(k, uuid.UUID) for k in idx.ordinal)
+    assert not any(isinstance(k, int) for k in idx.ordinal), (
+        "an int key on the ordering path is an address by another name")
+    # and the order it encodes is still the canonical (ts, signal_id) one
+    canonical = [s.signal_id for s in
+                 sorted(window, key=lambda s: (s.ts, s.signal_id_str))]
+    assert [k for k, _ in sorted(idx.ordinal.items(), key=lambda kv: kv[1])] == canonical
+    _index_cache_cleared()
+
+
+def test_window_index_cache_hit_is_an_identity_test():
+    """The other half of the fix, and the actual root cause: the cache keyed on
+    `id(window)` with only a length guard, and the index kept no reference to
+    the window LIST — so a collected window's address was reissued to the next
+    one and its index was served for a window it was never built from. The
+    cached value now pins the list (its address cannot be reissued while the
+    entry lives) and the hit test compares identity."""
+    _index_cache_cleared()
+    w1, _ = _window()
+    idx1 = main._window_index(w1)
+    assert idx1.owner is w1
+    assert main._window_index(w1) is idx1, "same list must reuse the index"
+
+    w2, _ = _window()                       # same length, same signal_ids
+    assert len(w2) == len(w1)
+    main._WINDOW_INDEX_CACHE.clear()
+    main._WINDOW_INDEX_CACHE[id(w2)] = (len(w2), idx1)   # what a reissued id does
+    idx2 = main._window_index(w2)
+    assert idx2 is not idx1, (
+        "a foreign index passed the cache guard — length alone cannot tell two "
+        "same-sized windows apart")
+    assert idx2.owner is w2
+    # every object the index hands back belongs to THIS window
+    live = {id(s) for s in w2}
+    for _key, sigs, _lo, _hi in idx2.nodes:
+        assert all(id(s) in live for s in sigs)
+    assert all(id(s) in live for s, _sid in idx2.loose)
+    _index_cache_cleared()
+
+
+def test_slice_still_fails_loudly_when_the_snapshot_diverges():
+    """The KeyError contract that the id() bug was masquerading as: a signal in
+    snap.nodes that is genuinely absent from the window must raise, not shrink
+    the replay slice silently."""
+    _index_cache_cleared()
+    window, _ = _window()
+    snap = _dallas_snapshot(window)
+    alien = sig("if_errors", EntityType.INTERFACE, "houston-edge:Gi9/9",
+                offset_s=1)
+    assert alien.signal_id not in {s.signal_id for s in window}
+    victim = snap.nodes[0]
+    object.__setattr__(victim, "signals", tuple(victim.signals) + (alien,))
+    with pytest.raises(KeyError):
+        main._archive_slice(snap, window)
+    _index_cache_cleared()

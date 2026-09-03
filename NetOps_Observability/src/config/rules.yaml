@@ -771,13 +771,69 @@ groups:
         annotations:
           summary: "Collector {{ $labels.collector }} produced 0 samples"
 
-      - alert: StorageBackendDown   # [NEEDS METRIC] up{job=...} for stack services
-        expr: up{job=~"opensearch|clickhouse|victoria|postgres|redis"} == 0
+      # G1 (2026-09-02): THIS RULE USED TO LIE ABOUT ITS OWN COVERAGE.
+      #
+      # It selected up{job=~"opensearch|clickhouse|victoria|postgres|redis"},
+      # which reads as "all five stores are watched". Only TWO of those jobs
+      # exist in src/config/vmscrape.yml — `clickhouse` and `victoria`. There
+      # is no opensearch, postgres or redis scrape job, so those three names
+      # matched nothing, contributed nothing, and made the rule look three
+      # stores broader than it was. A selector that silently matches nothing is
+      # the same defect class as the blackholed notifier: the control appears to
+      # exist, and it is not there.
+      #
+      # The selector is now exactly the jobs that are scraped. What covers the
+      # other three today (see docs/runbooks/engine-liveness-matrix.md):
+      #   * opensearch — NOT `up`, but its real health signals:
+      #     OpenSearchClusterRed / …NotGreen (opensearch_cluster_status, polled
+      #     by vector) and OpenSearchStatsMissing, which is the meta-alert for
+      #     that lane going away. Stronger than `up` would be: it reports
+      #     cluster state, not just TCP reachability.
+      #   * postgres, redis — container healthcheck + the compose service loop
+      #     in scripts/stack-watchdog.sh ONLY. Neither has an exporter. That is
+      #     a real gap and it is recorded as such in the matrix; it is NOT
+      #     papered over with a selector that cannot fire.
+      - alert: StorageBackendDown
+        expr: up{job=~"clickhouse|victoria"} == 0
         for: 2m
         labels:
           severity: critical
         annotations:
-          summary: "Stack backend {{ $labels.job }} down"
+          summary: "Stack backend {{ $labels.job }} is DOWN (scrape target unreachable) — writes to it are failing"
+          description: >-
+            Covers ONLY the stores with a scrape job: clickhouse and victoria.
+            OpenSearch is covered by OpenSearchClusterRed / OpenSearchStatsMissing
+            instead; postgres and redis have no exporter and rest on their
+            container healthcheck plus the external watchdog. Do not widen this
+            selector to job names that are not in vmscrape.yml — an unmatched
+            name is not coverage.
+
+      # The companion meta-alert. `up == 0` means "scraped and failed"; it
+      # CANNOT fire when there is no `up` series at all, which is what a
+      # deleted or renamed scrape job produces. Same reasoning as
+      # ContainerMetricsMissing and KafkaLagMetricsMissing above: the absence of
+      # a signal has to be its own signal, or config drift silently disarms the
+      # rule that depends on it.
+      #
+      # This is deliberately NOT a standing "postgres has no exporter" advisory.
+      # A rule that fires forever is how an operator learns to ignore the pager
+      # — the un-scraped stores are documented in the matrix instead. This one
+      # is quiet until something that IS scraped stops being scraped.
+      - alert: StorageExporterAbsent
+        expr: |
+          absent_over_time(up{job="clickhouse"}[10m])
+          or absent_over_time(up{job="victoria"}[10m])
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "No scrape target for stack backend {{ $labels.job }} — StorageBackendDown is BLIND for it"
+          description: >-
+            The job vanished from the metrics store entirely (not "up == 0",
+            which would mean scraped-and-failing). Usual cause is an edit to
+            src/config/vmscrape.yml, or victoria running the mTLS variant
+            (vmscrape-mtls.yml) with this job dropped. Until it returns, that
+            store's liveness is unwatched by this rule set.
 
   # ===========================================================================
   # STACK RESILIENCE — self-monitoring of the platform's own containers + host.
@@ -1085,6 +1141,17 @@ groups:
         labels: { severity: warning, layer: correlation }
         annotations:
           summary: "Correlation lane {{ $labels.counter }} rising ({{ $value }} in 15m) — events are being rejected (tenancy/normalization); check correlation logs"
+          description: >-
+            Usual cause is per-event: a tenancy or normalization rejection, i.e.
+            the engine IS consuming and is throwing individual events away.
+            But read this alongside CorrelationConsumerDead
+            (rules-scale-slo.yaml) before concluding that. Drops spiking as the
+            engine RECOVERS — the shape seen on 2026-09-02, when this fired on
+            the recovery edge of a 3h outage — mean the backlog that piled up
+            while the consumer was not joined is now being replayed and
+            partially rejected. In that case the drop counter is a SYMPTOM of
+            the outage, not the fault: fix the consumer first
+            (docs/runbooks/engine-not-consuming.md), then re-read this.
 
       - alert: CorrProbeLaneFlatlined
         # The prober ticks 24/7 (30-60s interval), so probes_received must always
@@ -1094,7 +1161,20 @@ groups:
         for: 15m
         labels: { severity: critical, layer: correlation }
         annotations:
-          summary: "Correlation probe intake flat-lined 30m — bus→engine ingest is dead (check kafka, vector, correlation consumer)"
+          summary: "Correlation probe intake flat-lined 30m — bus→engine ingest is dead; MOST LIKELY the engine is not consuming (dead Kafka consumer), then vector, then kafka"
+          description: >-
+            The single most common cause is THE ENGINE IS NOT CONSUMING: its
+            Kafka consumer never joined the group, or joined and died. That is
+            what happened on 2026-09-02 (a failed multi-topic subscribe took all
+            14 lanes down for one optional topic) and this alert fired at 19:18
+            — into a blackhole notifier, so nobody saw it. Check
+            CorrelationConsumerDead and
+            kafka_consumergroup_members{consumergroup="netops-correlation"}
+            FIRST; the container healthcheck will read "healthy" throughout and
+            is not evidence of anything here. Only after ruling the consumer out
+            should you work back up the pipe: vector-router, then the broker,
+            then the prober itself.
+          runbook: "docs/runbooks/engine-not-consuming.md"
 
       - alert: CorrSyslogLaneFlatlined
         expr: increase(corr_ingest_events{counter="flows_received"}[30m]) == 0 and increase(corr_ingest_events{counter="metrics_received"}[30m]) == 0

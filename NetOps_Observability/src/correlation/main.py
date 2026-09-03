@@ -8,7 +8,9 @@ forever); this module owns everything that touches the world:
     verification / wireless sessions + events) PLUS the generic evidence-class
     topics (``CORR_EVIDENCE_TOPICS``) under a supervised consumer — offsets
     commit only after the ClickHouse flush succeeds, so a crash replays instead
-    of losing signals.
+    of losing signals. The subscription is PARTITIONED into REQUIRED lanes
+    (fail-loud) and OPTIONAL evidence lanes (dropped + re-probed, never a
+    startup gate) — see REQUIRED_TOPICS/OPTIONAL_TOPICS.
 
     Two lane knobs, both DEFAULT-UNCHANGED and both a per-deployment override
     rather than a shipped behaviour change:
@@ -262,10 +264,13 @@ LANE_TOPICS = ["netops.syslog", "netops.flows", "netops.metrics", "netops.probes
 # time as well as at build time, with nothing else in the engine to change.
 #
 # OPERATIONAL PRECONDITION: the correlation principal needs a Kafka Read ACL on
-# every topic listed here (deployment/docker/kafka/apply-acls.sh). A topic the
-# principal cannot read fails the whole SUBSCRIPTION, not just that lane — set
-# CORR_EVIDENCE_TOPICS="" to drop back to the network lanes if a broker has not
-# been granted it yet.
+# every topic listed here (deployment/docker/kafka/apply-acls.sh), and the topic
+# has to exist. NEITHER IS A STARTUP GATE ANY MORE (2026-09-02): a topic that is
+# absent or ungranted is DROPPED from the subscription with a named error line,
+# a /healthz field and a `corr_evidence_topic_dropped` gauge, and re-probed
+# until it appears — see REQUIRED_TOPICS / OPTIONAL_TOPICS below for the outage
+# that made an ungranted evidence lane fail the WHOLE subscription for 3 hours.
+# `CORR_EVIDENCE_TOPICS=""` remains the way to unsubscribe a class outright.
 
 
 def evidence_topics_from_env(raw: str | None) -> tuple[str, ...]:
@@ -314,6 +319,43 @@ def apply_syslog_topic(topics: list[str], syslog_topic: str) -> list[str]:
 # (deployment/docker/kafka/apply-acls.sh).
 CORR_SYSLOG_TOPIC = os.environ.get("CORR_SYSLOG_TOPIC", "netops.syslog")
 TOPICS = apply_syslog_topic(TOPICS, CORR_SYSLOG_TOPIC)
+
+# ── REQUIRED vs OPTIONAL lanes (availability defect, 2026-09-02) ─────────────
+#
+# THE MEASURED FAILURE. The engine subscribed to all 13 topics as ONE
+# indivisible set. `netops.security` (an OPTIONAL evidence lane — the security
+# module was off and broker auto-create disabled) did not exist, so aiokafka's
+# `consumer.start()` -> `_wait_topics()` -> `_wait_on_metadata()` raised
+# UnknownTopicOrPartitionError (and, on 2026-08-16 with the Read ACL missing,
+# TopicAuthorizationFailedError). The supervisor caught it, backed off and
+# restarted every 60s: ONE absent optional topic starved ALL TWELVE required
+# lanes for ~3h while /healthz stayed green.
+#
+# THE PARTITION. `_wait_topics` is all-or-nothing, so the fix is to stop asking
+# it about lanes whose absence is a legitimate deployment state:
+#
+#   REQUIRED_TOPICS — the core lanes. Their absence is a MISCONFIGURATION (the
+#     kafka-init job did not run, or the principal was never granted Read), so
+#     they keep today's fail-loud behaviour: start() raises, the supervisor
+#     backs off and retries, and the operator gets a restart loop. What changes
+#     is only that the log line now NAMES the topic and the reason — the old
+#     traceback named the error class and, for an authorization failure, not
+#     even the topic.
+#   OPTIONAL_TOPICS — the flag-gated evidence lanes (`CORR_EVIDENCE_TOPICS`,
+#     T2b). An evidence class is REMOVABLE by construction, so "its topic is
+#     not on the broker yet" is a normal state, not a fault. These are resolved
+#     against cluster metadata AFTER start() and any that is absent or
+#     unauthorized is DROPPED from the subscription (one structured error line
+#     per drop, a /healthz field and a `corr_evidence_topic_dropped` gauge),
+#     then re-probed on a bounded jittered interval so a later-enabled lane
+#     starts grounding WITHOUT a restart.
+#
+# The syslog lane belongs to REQUIRED whichever topic CORR_SYSLOG_TOPIC names:
+# pointing it at a topic that does not exist is a misconfiguration of a core
+# lane, and silently degrading it would hide exactly the accounting change the
+# A4 switch is qualification-gated for.
+REQUIRED_TOPICS: list[str] = apply_syslog_topic(list(LANE_TOPICS), CORR_SYSLOG_TOPIC)
+OPTIONAL_TOPICS: tuple[str, ...] = tuple(t for t in TOPICS if t not in REQUIRED_TOPICS)
 
 # #81 P3B runtime source — a file-based cloud-log tailer (dev/demo + on-host log
 # drops). Reads *.alb / *.vpc files from CLOUD_LOGS_DIR, parses them with the P3B
@@ -5204,14 +5246,43 @@ class _WindowIndex:
     # typed `object`, which cost the overlap test below its type checking.
     nodes: tuple[tuple[str, list[Signal], datetime, datetime], ...]
     loose: tuple[tuple[Signal, str], ...]
-    # id(signal) -> str(signal_id), and id(signal) -> position in the window's
+    # id(signal) -> str(signal_id), and signal_id -> position in the window's
     # canonical (ts, signal_id) order. Both are computed ONCE per cycle here
     # instead of once per object: stringifying a UUID and re-sorting the slice
-    # were 1.08M calls and 120 full sorts in one profiled cycle. Keying by id()
-    # is safe because the window list holds a strong reference to every signal
-    # for the whole life of the index, and the index dies with the cycle.
+    # were 1.08M calls and 120 full sorts in one profiled cycle.
+    #
+    # `ordinal` is keyed by the signal's OWN identity (its UUID `signal_id`),
+    # never by id(). An ADDRESS is not an identity: it is unique only among LIVE
+    # objects, and `_archive_slice`'s final sort — `order[id(s)]` — raised a bare
+    # `KeyError: 140474486492560` at random, 4 different test_archive_slice.py
+    # tests over 5 runs. Mechanism: this index is cached under `id(window)`
+    # (see `_window_index`), the index does NOT retain the window LIST, so once
+    # a window list is collected CPython reissues its address to the next one;
+    # with a colliding length the guard passed and a PREVIOUS window's index was
+    # served, whose ordinals belong to objects the caller has never seen. In
+    # production, where the cache is cleared per cycle, that surfaces as a
+    # sweeper KeyError = a failed engine cycle.
+    #
+    # Both halves of that are fixed: `owner` below makes serving a foreign index
+    # impossible, and a signal_id key stays correct even if it ever did. UUID,
+    # not str(UUID): `Signal.signal_id` is memoised (CORR_SIGNAL_ID_CACHE) while
+    # `signal_id_str` re-stringifies on every access — measured over a
+    # 50-signal slice, sorting on the UUID costs 23 us against 12.8 us for the
+    # address, where the string costs 146 us.
+    #
+    # `sid` stays id()-keyed: it is a pure MEMO for a value every Signal can
+    # recompute (`_sid_of` falls back to `sig.signal_id_str` on a miss), and
+    # keying a signal_id -> signal_id map by signal_id would be vacuous. It is
+    # sound now for the same reason — `owner` pins it to one window.
     sid: dict[int, str]
-    ordinal: dict[int, int]
+    ordinal: dict[uuid.UUID, int]
+    # The exact window list this index was built from. Two jobs: it makes the
+    # `_window_index` cache hit an IDENTITY test rather than an address-plus-
+    # length guess, and, by holding the list alive for as long as the cache
+    # entry, it stops `id(window)` from ever being reissued while that entry
+    # lives. Defaulted so the field is additive for constructors that pass only
+    # the four data fields.
+    owner: object = None
 
 
 _WINDOW_INDEX_CACHE: dict[int, tuple[int, _WindowIndex]] = {}
@@ -5284,18 +5355,30 @@ def _archive_chunk(sigs: Sequence[Signal], corr_id: str, version: int) -> list[d
 def _window_index(window: Sequence[Signal]) -> _WindowIndex:
     """Build (or reuse) the per-cycle index for `window`.
 
-    Keyed by id() AND length: engine_cycle hands the same list object to every
-    object version of one tenant within a cycle, and the list is rebuilt each
-    cycle. The length guard means a recycled id() cannot serve a stale index for
-    a different window; the cache is cleared per cycle regardless (see
-    engine_cycle) so this is belt-and-braces, not the correctness argument.
+    Bucketed by id() and confirmed by IDENTITY: engine_cycle hands the same list
+    object to every object version of one tenant within a cycle, and the list is
+    rebuilt each cycle.
+
+    The hit test used to be `id(window)` plus a length guard, and that is not
+    sound: the index does not retain the window LIST, so once a window is
+    collected CPython reissues its address, and any next window of the same
+    length claimed the previous one's index — foreign nodes, foreign loose
+    tuples, foreign ordinals (see _WindowIndex.ordinal for the KeyError this
+    produced). `idx.owner is window` is exact instead of probable, and holding
+    the list in the cached value means the address cannot be reissued while the
+    entry lives, so a false hit is now impossible rather than unlikely. The
+    length is still stored — it is the cache-entry shape callers assert on, and
+    a mismatch still forces a rebuild.
     """
     key = id(window)
     hit = _WINDOW_INDEX_CACHE.get(key)
-    if hit is not None and hit[0] == len(window):
+    if hit is not None and hit[0] == len(window) and hit[1].owner is window:
         return hit[1]
     sid = {id(s): s.signal_id_str for s in window}
-    ordinal = {id(s): i for i, s in enumerate(
+    # Keyed by the signal's own UUID, NOT by id(): see _WindowIndex.ordinal. The
+    # id() lookups into `sid` here are safe — they never outlive this
+    # expression, and `window` holds every signal alive for its whole duration.
+    ordinal = {s.signal_id: i for i, s in enumerate(
         sorted(window, key=lambda s: (s.ts, sid[id(s)])))}
     by_node: dict[str, list[Signal]] = {}
     loose: list[tuple[Signal, str]] = []
@@ -5308,7 +5391,8 @@ def _window_index(window: Sequence[Signal]) -> _WindowIndex:
     for k in sorted(by_node):
         sigs = by_node[k]
         nodes.append((k, sigs, min(s.ts for s in sigs), max(s.ts for s in sigs)))
-    idx = _WindowIndex(nodes=tuple(nodes), loose=tuple(loose), sid=sid, ordinal=ordinal)
+    idx = _WindowIndex(nodes=tuple(nodes), loose=tuple(loose), sid=sid,
+                       ordinal=ordinal, owner=window)
     _WINDOW_INDEX_CACHE[key] = (len(window), idx)
     return idx
 
@@ -5357,16 +5441,19 @@ def _archive_slice(snap: ObjectSnapshot, window: Sequence[Signal]) -> list[Signa
         if (ws <= s.ts <= we) or sid in matched_identities:
             keep.append(s)
     # COMPONENT nodes only — every signal of every node this object is made of.
-    # snap.nodes are built from this same window's Signal objects (build_nodes
-    # over the epoch's frozen tuple), so the ordinal lookup is total; a missing
-    # id would mean the snapshot and window diverged, which must fail LOUDLY
-    # (KeyError -> engine cycle failed, observable) rather than shrink a replay
-    # slice silently.
+    # snap.nodes are built from this same window's signals (build_nodes over the
+    # epoch's frozen tuple), so the ordinal lookup is total; a missing SIGNAL_ID
+    # would mean the snapshot and window genuinely diverged, which must fail
+    # LOUDLY (KeyError -> engine cycle failed, observable) rather than shrink a
+    # replay slice silently.
     for node in snap.nodes:
         keep.extend(node.signals)
     # Same order as sorting by (ts, signal_id) — the ordinal IS that order,
-    # computed once per cycle rather than once per object.
-    keep.sort(key=lambda s: order[id(s)])
+    # computed once per cycle rather than once per object. Keyed by the signal's
+    # own UUID, never by id(s): an address is unique only among LIVE objects, so
+    # a reissued one made this line raise a bare KeyError at random (see
+    # _WindowIndex.ordinal, and test_archive_slice.py's regression tests).
+    keep.sort(key=lambda s: order[s.signal_id])
     return keep
 
 
@@ -9938,6 +10025,250 @@ CONSUMER_PARTITION_ACQUIRED_AT: dict[str, float] = {}
 # dedup absorbs it). Rising = rebalances are landing on a slow ClickHouse.
 CONSUMER_REVOKE_SKIPPED = 0
 
+# ── subscription liveness + optional-lane resolution (2026-09-02) ────────────
+#
+# `CONSUMER_RUNNING` is the ONE fact /healthz was missing during the 3h outage:
+# the process was up, the loop was looping, the payload said "ok", and nothing
+# in it distinguished "consuming" from "failing start() every 60s". It is set
+# only between a SUCCESSFUL start() and the end of that supervision round.
+CONSUMER_RUNNING = False
+CONSUMER_STARTS = 0                 # successful consumer.start() calls
+CONSUMER_START_FAILURES = 0         # start() raised (bad broker, missing REQUIRED topic)
+CONSUMER_RESTARTS = 0               # supervision rounds that ended in a failure
+CONSUMER_LAST_ERROR = ""            # "<ExcType>: <topic-or-detail>", never a payload
+# What the LIVE consumer actually holds — REQUIRED_TOPICS plus whichever
+# optional lanes resolved. Distinct from TOPICS (what is DECLARED): the gap
+# between the two is the thing that has to be visible.
+SUBSCRIBED_TOPICS: list[str] = list(TOPICS)
+# topic -> "absent" | "unauthorized" | "unreachable". A GA-contract dict
+# counter (name ends in _DROPPED): it is surfaced on /healthz and as the
+# `corr_evidence_topic_dropped` gauge, so a lane that is NOT grounded can never
+# be a silence.
+EVIDENCE_TOPICS_DROPPED: dict[str, str] = {}
+EVIDENCE_TOPIC_REPROBES = 0         # bounded re-probe passes over the dropped set
+EVIDENCE_TOPIC_RESUBSCRIBES = 0     # re-probes that recovered a lane (no restart)
+
+# Bounds for the metadata probe and its retry cadence (§9: all IO has a
+# timeout; all retries are backed off + jittered).
+CORR_TOPIC_PROBE_TIMEOUT_S = float(os.environ.get("CORR_TOPIC_PROBE_TIMEOUT_S", "15"))
+CORR_EVIDENCE_REPROBE_S = float(os.environ.get("CORR_EVIDENCE_REPROBE_S", "90"))
+# +/- fraction applied to the re-probe period. Jittered so N replicas do not
+# hit the coordinator's metadata path in lockstep every period.
+CORR_EVIDENCE_REPROBE_JITTER = 0.25
+
+
+def classify_topic_metadata(topics: Iterable[str], known: Iterable[str],
+                            unauthorized: Iterable[str]) -> dict[str, str]:
+    """PURE: `topic -> reason` for every topic that CANNOT be subscribed.
+
+    A topic that is present and authorized is simply absent from the result.
+    `unauthorized` wins over `absent` because a broker that denies Describe
+    also reports no partitions — calling that "absent" would send an operator
+    to `kafka-topics --create` for an ACL problem (the 2026-08-16 shape).
+    Pure, so the reason mapping is testable with no broker at all."""
+    unauth = set(unauthorized)
+    have = set(known)
+    out: dict[str, str] = {}
+    for topic in topics:
+        if topic in unauth:
+            out[topic] = "unauthorized"
+        elif topic not in have:
+            out[topic] = "absent"
+    return out
+
+
+async def probe_topics(consumer: AIOKafkaConsumer, topics: Sequence[str], *,
+                       timeout: float) -> dict[str, str]:
+    """Resolve `topics` against CLUSTER METADATA; return the un-subscribable
+    ones as `topic -> reason` (see classify_topic_metadata).
+
+    This is deliberately the same metadata that `consumer.start()` consults —
+    `AIOKafkaClient.cluster.partitions_for_topic` / `.unauthorized_topics`,
+    which `_wait_on_metadata` raises from — so the verdict here and the verdict
+    start() would have reached can never disagree. It costs ONE metadata round
+    trip for the whole set, instead of `_wait_on_metadata`'s per-topic
+    request-timeout wait on an absent topic.
+
+    Bounded by `timeout` (§9). Raises only if the metadata refresh itself
+    fails; the caller decides what an unreachable broker means."""
+    if not topics:
+        return {}
+    client = consumer._client  # the consumer's own client, same object start() uses
+    # add_topic() puts each name in the tracked set so the NEXT metadata
+    # request asks the broker about it BY NAME — which is what makes an
+    # unauthorized topic reportable at all (a "give me everything" request
+    # simply omits topics the principal cannot Describe).
+    pending = [client.add_topic(topic) for topic in topics]
+    await asyncio.wait_for(
+        asyncio.gather(*pending, client.force_metadata_update()), timeout=timeout)
+    cluster = client.cluster
+    known = [t for t in topics if cluster.partitions_for_topic(t)]
+    return classify_topic_metadata(topics, known, set(cluster.unauthorized_topics))
+
+
+def _topic_failure_reason(exc: BaseException) -> str:
+    """Map a start()-time failure onto the same vocabulary the probe uses, so
+    the REQUIRED fail-loud line and the OPTIONAL drop line read alike."""
+    name = type(exc).__name__
+    if name == "TopicAuthorizationFailedError":
+        return "unauthorized"
+    if name == "UnknownTopicOrPartitionError":
+        return "absent"
+    return "unreachable"
+
+
+async def _log_required_topic_failure(consumer: AIOKafkaConsumer,
+                                      exc: BaseException) -> None:
+    """Name WHICH required topic failed and WHY, then let the caller re-raise.
+
+    aiokafka's `_wait_on_metadata` raises `UnknownTopicOrPartitionError()` with
+    no arguments at all, and `TopicAuthorizationFailedError(topic)` whose repr
+    the supervisor's traceback did not surface — so the 3h outage's logs said
+    only that A topic was missing. We re-resolve the required set (bounded,
+    best-effort) so the line names the topic and the remedy. NEVER raises: a
+    diagnostic must not replace the failure it is diagnosing."""
+    reason = _topic_failure_reason(exc)
+    named: dict[str, str] = {}
+    try:
+        named = await probe_topics(consumer, tuple(REQUIRED_TOPICS),
+                                   timeout=CORR_TOPIC_PROBE_TIMEOUT_S)
+    except asyncio.CancelledError:
+        raise
+    except Exception as probe_exc:  # noqa: BLE001 — diagnosis is best-effort
+        log.warning("could not resolve WHICH required topic failed (%s); the "
+                    "start() error is reported unqualified below",
+                    type(probe_exc).__name__)
+    if named:
+        for topic, why in sorted(named.items()):
+            log.error(
+                "REQUIRED lane unavailable: topic=%s reason=%s lane=required "
+                "— the engine consumes NOTHING until this is fixed. absent: "
+                "run the kafka-init job (BUS_PARTITIONS) or create the topic; "
+                "unauthorized: grant the correlation principal Read "
+                "(deployment/docker/kafka/apply-acls.sh)", topic, why)
+    else:
+        log.error("consumer.start() failed with %s (reason=%s) but every "
+                  "required topic resolves — treating it as a broker/transport "
+                  "fault: %s", type(exc).__name__, reason, exc)
+
+
+def _record_start_failure(exc: BaseException) -> None:
+    """One place that stamps the supervisor's failure state for /healthz."""
+    global CONSUMER_START_FAILURES, CONSUMER_LAST_ERROR
+    CONSUMER_START_FAILURES += 1
+    CONSUMER_LAST_ERROR = f"{type(exc).__name__}: {_topic_failure_reason(exc)}"
+
+
+async def resolve_optional_lanes(consumer: AIOKafkaConsumer,
+                                 listener: ConsumerRebalanceListener | None,
+                                 ) -> list[str]:
+    """Resolve the OPTIONAL lanes against the broker and subscribe to the ones
+    that are grounded. Returns the topic list the consumer now holds.
+
+    Called AFTER a successful start() on the REQUIRED set, which is the whole
+    point: whatever this finds, the required lanes are already consuming. A
+    metadata refresh that itself fails degrades to "drop them all this round" —
+    the re-probe loop picks them back up — because the alternative is the
+    defect being fixed here (an optional lane deciding whether the engine runs).
+    """
+    global EVIDENCE_TOPIC_RESUBSCRIBES
+    dropped: dict[str, str] = {}
+    if OPTIONAL_TOPICS:
+        try:
+            dropped = await probe_topics(consumer, OPTIONAL_TOPICS,
+                                         timeout=CORR_TOPIC_PROBE_TIMEOUT_S)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:  # noqa: BLE001 — never fatal to the required lanes
+            dropped = {t: "unreachable" for t in OPTIONAL_TOPICS}
+            log.warning("optional-lane metadata probe failed (%s) — every "
+                        "optional lane is dropped for this round and re-probed "
+                        "in ~%.0fs", type(exc).__name__, CORR_EVIDENCE_REPROBE_S)
+    _note_dropped_lanes(dropped)
+    subscribed = list(REQUIRED_TOPICS) + [t for t in OPTIONAL_TOPICS if t not in dropped]
+    SUBSCRIBED_TOPICS[:] = subscribed
+    if len(subscribed) > len(REQUIRED_TOPICS):
+        # Only re-subscribe when there is something to ADD: with every optional
+        # lane dropped the required-only subscription start() already
+        # established is exactly right, and a needless subscribe() would cost
+        # the group a rebalance at every restart.
+        consumer.subscribe(topics=subscribed, listener=listener)
+        EVIDENCE_TOPIC_RESUBSCRIBES += 1
+    return subscribed
+
+
+def _note_dropped_lanes(dropped: Mapping[str, str]) -> None:
+    """Publish the drop set: ONE structured error line per newly dropped topic,
+    plus the /healthz + /metrics state. Re-logging an ALREADY-dropped topic on
+    every re-probe would turn a standing condition into log spam, so a topic is
+    announced when it is dropped and again only if its REASON changes."""
+    for topic, reason in sorted(dropped.items()):
+        if EVIDENCE_TOPICS_DROPPED.get(topic) == reason:
+            continue
+        log.error(
+            "optional lane DROPPED from the subscription: topic=%s reason=%s "
+            "lane=evidence — evidence lane NOT grounded (nothing on this topic "
+            "reaches correlation). The required lanes are UNAFFECTED and "
+            "consuming; the topic is re-probed every ~%.0fs and subscribed "
+            "without a restart the moment it appears. absent: the lane's "
+            "producer is off or the topic was never created; unauthorized: "
+            "grant the correlation principal Read "
+            "(deployment/docker/kafka/apply-acls.sh)",
+            topic, reason, CORR_EVIDENCE_REPROBE_S)
+    for topic in [t for t in EVIDENCE_TOPICS_DROPPED if t not in dropped]:
+        log.info("optional lane RECOVERED: topic=%s — re-subscribed without a "
+                 "restart; the evidence lane is grounded again", topic)
+        del EVIDENCE_TOPICS_DROPPED[topic]
+    EVIDENCE_TOPICS_DROPPED.update(dropped)
+
+
+def _reprobe_delay(rnd=None) -> float:
+    """The jittered re-probe period (§9). Injectable RNG so the cadence is
+    assertable, exactly like `ch_retry_delay`."""
+    import random as _random
+    jitter = CORR_EVIDENCE_REPROBE_JITTER
+    draw = (rnd or _random.random)()
+    return max(1.0, CORR_EVIDENCE_REPROBE_S * (1.0 + (2.0 * draw - 1.0) * jitter))
+
+
+async def evidence_reprobe_loop(consumer: AIOKafkaConsumer,
+                                listener: ConsumerRebalanceListener | None,
+                                ) -> None:
+    """Bounded, jittered re-probe of the DROPPED optional lanes.
+
+    The half that makes the drop recoverable: a security lane enabled at 14:00
+    must start grounding at ~14:01, not at the next restart of a service that
+    has no reason to restart. Never raises into the supervisor — a failed probe
+    is logged and retried on the next tick (§10)."""
+    global EVIDENCE_TOPIC_REPROBES, EVIDENCE_TOPIC_RESUBSCRIBES
+    while True:
+        await asyncio.sleep(_reprobe_delay())
+        pending = tuple(sorted(EVIDENCE_TOPICS_DROPPED))
+        if not pending:
+            continue
+        EVIDENCE_TOPIC_REPROBES += 1
+        try:
+            still = await probe_topics(consumer, pending,
+                                       timeout=CORR_TOPIC_PROBE_TIMEOUT_S)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:  # noqa: BLE001 — the consumer must not die for this
+            log.warning("optional-lane re-probe failed (%s); retrying in ~%.0fs",
+                        type(exc).__name__, CORR_EVIDENCE_REPROBE_S)
+            continue
+        if still == {t: EVIDENCE_TOPICS_DROPPED[t] for t in pending}:
+            continue                              # nothing moved
+        _note_dropped_lanes(still)
+        subscribed = list(REQUIRED_TOPICS) + [
+            t for t in OPTIONAL_TOPICS if t not in EVIDENCE_TOPICS_DROPPED]
+        if subscribed == SUBSCRIBED_TOPICS:
+            continue
+        SUBSCRIBED_TOPICS[:] = subscribed
+        EVIDENCE_TOPIC_RESUBSCRIBES += 1
+        log.info("re-subscribing after an optional-lane change: topics=%s "
+                 "(dropped=%s)", subscribed, dict(sorted(EVIDENCE_TOPICS_DROPPED.items())))
+        consumer.subscribe(topics=subscribed, listener=listener)
+
 
 def tenant_partition(tenant: str, num_partitions: int) -> int:
     """The partition a tenant's records land on — mirrors every producer's
@@ -11521,6 +11852,42 @@ def cold_partitions(now_mono: float | None = None) -> list[str]:
                   if (now_mono - t) < RETENTION_REQUIRED_S)
 
 
+def subscription_health() -> tuple[str, list[str]]:
+    """(`status`, `reasons`) for /healthz — "ok" ONLY while the REQUIRED
+    subscription is live.
+
+    THE DEFECT THIS CLOSES. `status` was the literal "ok". Through the
+    2026-09-02 outage the consumer failed `start()` and restarted every 60s for
+    three hours; /healthz answered `{"status": "ok", ...}` the whole time, so
+    nothing that reads health — a human, the watchdog, an alert rule — could
+    tell a consuming engine from a starving one.
+
+    WHAT DEGRADES IT. Exactly one condition: the supervisor has tried and is
+    not currently consuming (`start()` failed, or a round ended and the next
+    has not come up). That is the honest reading of "the required subscription
+    is live" and it is the state a restart loop produces.
+
+    WHAT DOES NOT. (a) A DROPPED OPTIONAL LANE. Reporting an off-by-design
+    evidence lane as unhealthy would re-create the defect from the other side —
+    the drop is a named field, a log line and the `corr_evidence_topic_dropped`
+    gauge, which is where a "should this be on?" question belongs. (b) A
+    process that has NEVER started a consumer (`consume()` not running: unit
+    tests, and the window before lifespan starts the task) — the sidecar
+    already answers 503 "starting" until the first snapshot exists, and
+    inventing a degraded state for a consumer nobody asked for would make every
+    health assertion in the suite a lie in the other direction.
+
+    ALSO NOT A DOCKER-HEALTH SIGNAL — tracker 174 stands. The sidecar keeps
+    answering HTTP 200 and the compose healthcheck keeps testing only for 200,
+    so nothing here can flap a container. Degradation is carried in the BODY
+    and in /metrics, for vmalert and for whoever is reading."""
+    reasons: list[str] = []
+    attempted = CONSUMER_STARTS or CONSUMER_START_FAILURES or CONSUMER_RESTARTS
+    if attempted and not CONSUMER_RUNNING:
+        reasons.append("consumer_not_running")
+    return ("degraded" if reasons else "ok"), reasons
+
+
 def owns_tenant(tenant: str, *, topic: str = "netops.cloud") -> bool:
     """Does THIS instance own `tenant`'s partition of `topic`?
 
@@ -11534,11 +11901,16 @@ def owns_tenant(tenant: str, *, topic: str = "netops.cloud") -> bool:
     return tenant_partition(tenant, total) in CONSUMER_ASSIGNMENT.get(topic, [])
 
 
-def build_consumer() -> AIOKafkaConsumer:
+def build_consumer(topics: Sequence[str] | None = None) -> AIOKafkaConsumer:
     """Construct (but do not start) the co-partitioned group consumer.
 
     A factory so tests can pin the wiring: range assignor (co-partitioning),
-    manual commit, no deserializer, subscription with the rebalance listener."""
+    manual commit, no deserializer, subscription with the rebalance listener.
+
+    `topics` defaults to the full DECLARED set (unchanged); `consume()` passes
+    `REQUIRED_TOPICS` so that start()'s all-or-nothing `_wait_topics` can only
+    ever be blocked by a lane whose absence really is a misconfiguration — the
+    optional evidence lanes are resolved and added afterwards."""
     consumer = AIOKafkaConsumer(
         bootstrap_servers=KAFKA_BOOTSTRAP,
         group_id="netops-correlation",
@@ -11576,7 +11948,8 @@ def build_consumer() -> AIOKafkaConsumer:
     # Topics via subscribe() (not the constructor) so the rebalance listener
     # sees every assignment — the ownership log/check above.
     listener = _AssignmentLogger(consumer)
-    consumer.subscribe(topics=list(TOPICS), listener=listener)
+    consumer.subscribe(topics=list(TOPICS if topics is None else topics),
+                       listener=listener)
     # Same-module wiring point for consume()'s revoke hook (the closure over
     # the commit ledger cannot exist before the consumer does).
     consumer._corr_listener = listener  # our own consumer instance, same module
@@ -11589,10 +11962,20 @@ async def consume() -> None:
     pre-build-⑥ consumer died unobserved on a snappy-compressed batch and
     starved the whole engine; this loop is the guarantee that can't recur).
     Every broker-facing await is BOUNDED so the guarantee holds even when the
-    broker itself is wedged (see CONSUMER_*_TIMEOUT_S above)."""
+    broker itself is wedged (see CONSUMER_*_TIMEOUT_S above).
+
+    The subscription is PARTITIONED (see REQUIRED_TOPICS / OPTIONAL_TOPICS):
+    start() is asked only about the required lanes, so an absent or ungranted
+    OPTIONAL evidence topic can no longer hold the whole engine in a restart
+    loop — the exact 2026-09-02 (and 2026-08-16) outage."""
+    global CONSUMER_RUNNING, CONSUMER_STARTS, CONSUMER_RESTARTS, CONSUMER_LAST_ERROR
     backoff = 1.0
     while True:
-        consumer = build_consumer()
+        # REQUIRED lanes only: `consumer.start()` -> `_wait_topics()` is
+        # all-or-nothing over the subscription, so this is what keeps one
+        # optional lane from deciding whether the other twelve run.
+        consumer = build_consumer(REQUIRED_TOPICS)
+        reprobe_task: asyncio.Task | None = None
         # Batched manual commit: per-message commits would round-trip the broker
         # on every event. Committing every N/T bounds replay after a crash to at
         # most N already-handled messages — which dedup absorbs.
@@ -11672,9 +12055,33 @@ async def consume() -> None:
             listener.revoke_hook = _revoke_commit
 
         try:
-            await asyncio.wait_for(consumer.start(), timeout=CONSUMER_START_TIMEOUT_S)
-            log.info("consuming topics=%s bootstrap=%s (manual commit, N=%d/T=%.0fs)",
-                     TOPICS, KAFKA_BOOTSTRAP, CORR_COMMIT_EVERY_N, CORR_COMMIT_EVERY_S)
+            try:
+                await asyncio.wait_for(consumer.start(),
+                                       timeout=CONSUMER_START_TIMEOUT_S)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                # FAIL-LOUD, but NAMED. Unchanged behaviour (re-raised to the
+                # supervisor, backoff, retry); what is new is that the log line
+                # says WHICH required topic and WHY — the 3h outage's traceback
+                # named neither.
+                _record_start_failure(exc)
+                await _log_required_topic_failure(consumer, exc)
+                raise
+            CONSUMER_STARTS += 1
+            CONSUMER_RUNNING = True
+            CONSUMER_LAST_ERROR = ""
+            # The required lanes are already live at this point — whatever the
+            # optional resolution decides, the engine consumes.
+            subscribed = await resolve_optional_lanes(consumer, listener)
+            reprobe_task = asyncio.create_task(
+                evidence_reprobe_loop(consumer, listener))
+            log.info("consuming topics=%s (required=%d optional_subscribed=%d "
+                     "optional_dropped=%s) bootstrap=%s (manual commit, N=%d/T=%.0fs)",
+                     subscribed, len(REQUIRED_TOPICS),
+                     len(subscribed) - len(REQUIRED_TOPICS),
+                     dict(sorted(EVIDENCE_TOPICS_DROPPED.items())),
+                     KAFKA_BOOTSTRAP, CORR_COMMIT_EVERY_N, CORR_COMMIT_EVERY_S)
             backoff = 1.0
             consecutive_failures = 0
             async for msg in consumer:
@@ -11741,10 +12148,22 @@ async def consume() -> None:
                 await _commit(force=True)  # clean shutdown: nothing replays
             await _stop_bounded(consumer)
             raise
-        except Exception:
+        except Exception as exc:
+            CONSUMER_RESTARTS += 1
+            CONSUMER_LAST_ERROR = f"{type(exc).__name__}: {_topic_failure_reason(exc)}"
             log.exception("consumer failed; restarting in %.0fs", backoff)
             # NO commit here beyond what _commit already advanced: an offset
             # whose handler did not return stays unacknowledged, by design.
+        finally:
+            # The round is over however it ended: /healthz must stop claiming a
+            # live subscription BEFORE the backoff sleep, not after the next
+            # successful start (that gap is what let three hours of restarts
+            # render as "ok").
+            CONSUMER_RUNNING = False
+            if reprobe_task is not None:
+                reprobe_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError, Exception):
+                    await reprobe_task
         await _stop_bounded(consumer)
         await asyncio.sleep(backoff)
         backoff = min(backoff * 2, 60.0)
@@ -13538,6 +13957,40 @@ def _metrics_text(health: dict | None = None) -> str:
           for s in ("pending", "idle", "cold_window", "active")),
         "# TYPE corr_consumer_cold_partitions gauge",
         f"corr_consumer_cold_partitions {len(cold_partitions())}",
+        # ── subscription liveness + optional-lane drops (2026-09-02) ────────
+        # `corr_consumer_running` 0 while `corr_consumer_start_failures_total`
+        # or `corr_consumer_restarts_total` climbs IS the restart loop that hid
+        # behind a green /healthz for three hours. Alert on it.
+        "# HELP corr_consumer_running 1 while the REQUIRED subscription is live and consuming.",
+        "# TYPE corr_consumer_running gauge",
+        f"corr_consumer_running {int(CONSUMER_RUNNING)}",
+        "# HELP corr_consumer_starts_total Successful consumer.start() calls.",
+        "# TYPE corr_consumer_starts_total counter",
+        f"corr_consumer_starts_total {CONSUMER_STARTS}",
+        "# HELP corr_consumer_start_failures_total consumer.start() failures (missing/ungranted REQUIRED topic, broker down).",
+        "# TYPE corr_consumer_start_failures_total counter",
+        f"corr_consumer_start_failures_total {CONSUMER_START_FAILURES}",
+        "# HELP corr_consumer_restarts_total Supervision rounds that ended in a failure.",
+        "# TYPE corr_consumer_restarts_total counter",
+        f"corr_consumer_restarts_total {CONSUMER_RESTARTS}",
+        "# HELP corr_health_degraded 1 when /healthz status is not ok (see health_reasons).",
+        "# TYPE corr_health_degraded gauge",
+        f"corr_health_degraded {int(h['status'] != 'ok')}",
+        # One series per DROPPED optional evidence lane. Present only while a
+        # lane is dropped, so `corr_evidence_topic_dropped > 0` means exactly
+        # "this evidence lane is NOT grounded" — bounded cardinality (at most
+        # one series per CORR_EVIDENCE_TOPICS entry).
+        "# HELP corr_evidence_topic_dropped An OPTIONAL evidence lane dropped from the subscription (NOT grounded).",
+        "# TYPE corr_evidence_topic_dropped gauge",
+        *(f'corr_evidence_topic_dropped{{topic="{_prom_label(t)}",'
+          f'reason="{_prom_label(r)}"}} 1'
+          for t, r in sorted(EVIDENCE_TOPICS_DROPPED.items())),
+        "# HELP corr_evidence_topic_reprobes_total Bounded re-probe passes over the dropped optional lanes.",
+        "# TYPE corr_evidence_topic_reprobes_total counter",
+        f"corr_evidence_topic_reprobes_total {EVIDENCE_TOPIC_REPROBES}",
+        "# HELP corr_evidence_topic_resubscribes_total Subscription changes applied without a restart.",
+        "# TYPE corr_evidence_topic_resubscribes_total counter",
+        f"corr_evidence_topic_resubscribes_total {EVIDENCE_TOPIC_RESUBSCRIBES}",
         # Tracker 155 — durable continuation seeding across a partition handoff.
         # READ THEM TOGETHER: `seeded_objects` is how many identities this
         # replica reconstructed on assignment, `adoptions` how many of them
@@ -14317,8 +14770,19 @@ def _health_payload() -> dict:
     in an orchestrator that acts on health is a self-inflicted restart. The
     route above and the snapshot publisher both call THIS, so the two
     surfaces can never drift."""
+    status, health_reasons = subscription_health()
     return {
-        "status": "ok",
+        # NOT a constant any more. "ok" requires the REQUIRED subscription to
+        # be LIVE: during the 2026-09-02 outage this field read "ok" for three
+        # hours while the consumer failed start() every 60s and the engine
+        # consumed nothing. See subscription_health() for what degrades it —
+        # and, deliberately, for what does NOT (a dropped OPTIONAL lane is a
+        # named, gauged fact, not an unhealthy engine).
+        "status": status,
+        # Empty exactly when status is "ok". Named causes, so an operator
+        # reading the body does not have to diff the consumer block to find out
+        # which of them fired.
+        "health_reasons": health_reasons,
         # Scale P0: per-instance partition ownership (co-partitioned tenant
         # slices). PER-INSTANCE diagnostics by design — with --scale
         # correlation=N, Docker DNS round-robins correlation:8000, so this
@@ -14350,6 +14814,26 @@ def _health_payload() -> dict:
             # flush exceeded CORR_REVOKE_BUDGET_S. Replay-safe, but rising means
             # rebalances are landing on a slow ClickHouse.
             "revoke_skipped": CONSUMER_REVOKE_SKIPPED,
+            # The subscription itself (2026-09-02). `running` is the fact the
+            # payload was missing: up + looping + "ok" said nothing about
+            # whether start() had ever succeeded. `required` vs
+            # `optional_subscribed` / `optional_dropped` is the partition that
+            # keeps one absent evidence topic from starving twelve core lanes.
+            "subscription": {
+                "running": CONSUMER_RUNNING,
+                "starts": CONSUMER_STARTS,
+                "start_failures": CONSUMER_START_FAILURES,
+                "restarts": CONSUMER_RESTARTS,
+                "last_error": CONSUMER_LAST_ERROR,
+                "required": list(REQUIRED_TOPICS),
+                "declared": list(TOPICS),
+                "subscribed": list(SUBSCRIBED_TOPICS),
+                "optional_declared": list(OPTIONAL_TOPICS),
+                "optional_dropped": dict(sorted(EVIDENCE_TOPICS_DROPPED.items())),
+                "reprobes": EVIDENCE_TOPIC_REPROBES,
+                "resubscribes": EVIDENCE_TOPIC_RESUBSCRIBES,
+                "reprobe_interval_s": CORR_EVIDENCE_REPROBE_S,
+            },
             # Tracker 155: what the last assignments reconstructed. Named on
             # /healthz as well as /metrics because the ownership arm reads this
             # endpoint directly at the moment of the move.
@@ -14576,6 +15060,19 @@ def _health_payload() -> dict:
             # topics are consumed, and where records are refused. `by_class` is
             # the (class, outcome) split — the same numbers /metrics labels.
             "evidence_topics": list(CORR_EVIDENCE_TOPICS),
+            # WHICH of those are actually grounded (2026-09-02). Additive
+            # beside the DECLARED list above rather than a reshape of it: the
+            # declared set is a configuration fact and the T2b removability
+            # contract reads it, while this is a runtime fact about the broker.
+            # `dropped` non-empty means those lanes contribute NO evidence —
+            # the same map as consumer.subscription.optional_dropped and the
+            # `corr_evidence_topic_dropped` gauge.
+            "evidence_subscription": {
+                "declared": list(OPTIONAL_TOPICS),
+                "subscribed": [t for t in OPTIONAL_TOPICS
+                               if t not in EVIDENCE_TOPICS_DROPPED],
+                "dropped": dict(sorted(EVIDENCE_TOPICS_DROPPED.items())),
+            },
             "evidence_received": EVIDENCE_EVENTS_RECEIVED,
             "evidence_signals": EVIDENCE_EVENTS_SIGNALS,
             "evidence_dropped": EVIDENCE_EVENTS_DROPPED,

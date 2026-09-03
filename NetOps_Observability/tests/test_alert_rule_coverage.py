@@ -115,3 +115,85 @@ def test_each_test_file_names_at_least_one_alert() -> None:
         "rule unit test file(s) assert on no alertname at all — they pass "
         f"vacuously: {barren}"
     )
+
+
+# ── page-tier guards (2026-09-02) ───────────────────────────────────────────
+#
+# The `tier` label is the routing contract: `tier: page` means "this wakes a
+# human", and the owner ruling fixes that set at FOUR conditions. A tier that
+# can grow without anyone noticing is how a pager becomes noise and then gets
+# muted — which is the failure mode that turned a 5-minute incident into a
+# 3-hour one on 2026-09-02. These two guards are cheap, static, and bite the
+# moment the page tier grows without its evidence.
+#
+# Deliberately NOT asserted: how many page rules there are. Pinning a count
+# turns every legitimate addition into a merge conflict and teaches people to
+# bump the number without thinking. What is pinned is that each one must (a)
+# tell the operator what to do and (b) be PROVEN to fire.
+
+import yaml  # noqa: E402  (kept next to the tests that need it)
+
+
+def _rules_with_tier(tier: str) -> dict[str, dict]:
+    """Every alert rule carrying labels.tier == `tier`, by alertname."""
+    found: dict[str, dict] = {}
+    for f in _rule_files():
+        doc = yaml.safe_load(f.read_text(encoding="utf-8")) or {}
+        for group in doc.get("groups", []):
+            for rule in group.get("rules", []):
+                if "alert" not in rule:
+                    continue
+                if (rule.get("labels") or {}).get("tier") == tier:
+                    found[rule["alert"]] = rule
+    return found
+
+
+def test_page_tier_rules_carry_an_actionable_runbook() -> None:
+    """A page must say what to do about itself, and the target must exist.
+
+    A 3 a.m. alert whose runbook annotation is missing — or points at a file
+    somebody moved — is an alert the operator cannot act on.
+    """
+    root = Path(__file__).resolve().parents[1]
+    page = _rules_with_tier("page")
+    assert page, "no `tier: page` rules found — the label or the parse drifted"
+
+    missing, dangling = [], []
+    for name, rule in sorted(page.items()):
+        runbook = (rule.get("annotations") or {}).get("runbook", "")
+        if not runbook:
+            missing.append(name)
+            continue
+        if not (root / runbook.split("#", 1)[0]).exists():
+            dangling.append(f"{name} -> {runbook}")
+    assert not missing, f"`tier: page` rule(s) with no runbook annotation: {missing}"
+    assert not dangling, f"runbook annotation(s) pointing at a missing file: {dangling}"
+
+
+def test_page_tier_rules_are_proven_to_fire() -> None:
+    """Every `tier: page` alert must have a promtool test that FIRES it.
+
+    `test_referenced_alerts_all_exist` above proves a test's alertname resolves
+    to a real rule. This proves the converse for the tier that matters: that the
+    rule has been driven into the firing state by synthetic series at least
+    once. A page rule with only silence assertions — or with none at all — is
+    exactly the "green test proving nothing" this module exists to prevent, and
+    for the page tier the cost of that is a missed outage.
+    """
+    page = set(_rules_with_tier("page"))
+    fires: set[str] = set()
+    for tf in sorted(RULES_TESTS.glob("*.test.yaml")):
+        doc = yaml.safe_load(tf.read_text(encoding="utf-8")) or {}
+        for case in doc.get("tests", []):
+            for assertion in case.get("alert_rule_test", []) or []:
+                # exp_alerts absent or [] == "must stay silent". Only a
+                # non-empty expectation proves the rule can actually fire.
+                if assertion.get("exp_alerts"):
+                    fires.add(assertion.get("alertname", ""))
+
+    unproven = sorted(page - fires)
+    assert not unproven, (
+        "`tier: page` rule(s) with no promtool test asserting they FIRE: "
+        f"{unproven}. Add a firing case (and its all-clear sibling) to "
+        f"{RULES_TESTS.relative_to(Path(__file__).resolve().parents[1])}/."
+    )

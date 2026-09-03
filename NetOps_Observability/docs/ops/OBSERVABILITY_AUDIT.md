@@ -413,6 +413,19 @@ is queryable: `ALERTS{alertstate="firing", slo="scale"}`.
 Each alert's `runbook` annotation anchors below. Plays are first-response —
 minutes, not projects.
 
+> **Engine liveness (2026-09-02).** The `engine-liveness` group in the same
+> file answers a different question from the scale SLOs above: not "is this
+> fast enough" but **"is this engine doing any work at all"**. Its rules anchor
+> into two dedicated runbooks instead of this section:
+>
+> * [`docs/runbooks/engine-not-consuming.md`](../runbooks/engine-not-consuming.md)
+>   — first response for a service that is *running and healthy and doing
+>   nothing*: the 3-hour silent outage of 2026-09-02, the three alerting layers,
+>   and the ACL/topic bootstrap commands.
+> * [`docs/runbooks/engine-liveness-matrix.md`](../runbooks/engine-liveness-matrix.md)
+>   — the per-service inventory of what "doing its job" means, the metric that
+>   proves it, the expected-idle guard, the tier, and the known gaps.
+
 ### Runbook: correlation consumer lag
 
 `CorrelationRcaLagBudgetWarning` (>60k) / `CorrelationRcaLagBudgetBreached`

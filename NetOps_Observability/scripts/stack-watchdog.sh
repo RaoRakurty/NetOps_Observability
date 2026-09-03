@@ -1194,6 +1194,161 @@ drift_check nginx             deployment/docker/nginx/default.conf        /etc/n
 drift_check nginx             deployment/docker/nginx/nginx.conf          /etc/nginx/nginx.conf
 
 # -----------------------------------------------------------------------------
+# ENGINE-CONSUMING probe (2026-09-02 incident).
+#
+# THE GAP THIS CLOSES. For three hours the correlation engine's Kafka consumer
+# never started (a failed multi-topic subscribe abandoned all 14 lanes over one
+# optional topic). The container healthcheck said "healthy" — it polls a
+# sidecar thread that outlives the consumer BY DESIGN. This watchdog said
+# green — it checked services running/healthy, :8000 and api liveness, none of
+# which can tell "running" from "doing work". kafka-exporter had the proof in
+# VictoriaMetrics the whole time and nothing read it.
+#
+# So this probe asks the ONE question the rest of the file cannot: is the
+# engine actually consuming? It is deliberately kept HERE, in the external
+# watchdog, rather than left to the new vmalert rules alone — the stack's own
+# alerting cannot report its own death, which is the same reason the ntfy
+# channel exists at all. The vmalert rules (CorrelationConsumerDead,
+# RouterConsumerDead, ...) are the in-stack layer; this is the independent one.
+#
+# THREE checks, all read-only, all bounded:
+#   1. correlation consumer group has members;
+#   2. every netops-router-* lane has members;
+#   3. the alert-delivery heartbeat is arriving (see below).
+# Set ENGINE_CONSUMER_CHECK=0 to disable the lot.
+#
+# Queries are PRE-URL-ENCODED constants: the victoria image is minimal (wget,
+# no curl, and it does not resolve "localhost" — 127.0.0.1 only), and encoding
+# PromQL braces/quotes at runtime in bash is a bug farm. The readable form is
+# in the comment above each one; keep the two in step.
+# -----------------------------------------------------------------------------
+if [ "${ENGINE_CONSUMER_CHECK:-1}" = "1" ]; then
+  eng_cid=$(dkr ps -q --filter "label=com.docker.compose.project=$PROJECT" \
+                      --filter "label=com.docker.compose.service=victoria" 2>/dev/null | head -1)
+  if [ -z "$eng_cid" ]; then
+    # Advisory, not critical: a missing victoria container is ALREADY reported
+    # as a critical by the service loop above, and a second page for one fault
+    # is noise. What must not happen is silence about the probe not running.
+    problems+=("engine-consuming probe SKIPPED: no running victoria container in project '$PROJECT' — the consumer-group and alert-delivery checks did NOT run this minute")
+  else
+    eng_err=""
+
+    # Query VictoriaMetrics for ONE scalar. Prints the value and returns 0; on
+    # any failure prints nothing, returns non-zero, and leaves the diagnostic
+    # in $eng_err for the caller to REPORT. A probe that cannot run must never
+    # read as a pass (§16.1) — that swallow is what this whole section exists
+    # to make impossible.
+    eng_query() {  # $1 = url-encoded promql -> stdout: first sample value
+      local out rc
+      eng_err=""
+      # rc is captured on its OWN line: inside `if ! cmd; then`, $? is the
+      # status of the negated test (always 0), so reporting $? there would
+      # print a confident, wrong "rc=0" for every real failure.
+      out=$(dkr exec "$eng_cid" wget -qO- --timeout=5 \
+              "http://127.0.0.1:8428/api/v1/query?query=$1" 2>&1)
+      rc=$?
+      if [ "$rc" -ne 0 ]; then
+        eng_err="victoria query failed (rc=$rc): $(printf '%s' "$out" | tr '\n' ' ' | cut -c1-140)"
+        return 1
+      fi
+      case "$out" in
+        *'"status":"success"'*) : ;;
+        *) eng_err="victoria returned a non-success body: $(printf '%s' "$out" | tr '\n' ' ' | cut -c1-140)"
+           return 1 ;;
+      esac
+      printf '%s\n' "$out" | sed -n 's/.*"value":\[[^,]*,"\([-0-9.e+]*\)".*/\1/p' | head -1
+      return 0
+    }
+
+    # -- 1/2. Consumer-group membership -------------------------------------
+    # min(kafka_consumergroup_members{consumergroup="netops-correlation"})
+    eng_corr=$(eng_query 'min%28kafka_consumergroup_members%7Bconsumergroup%3D%22netops-correlation%22%7D%29') || true
+    if [ -n "$eng_err" ]; then
+      problems+=("engine-consuming probe SKIPPED: $eng_err")
+    elif [ -z "$eng_corr" ]; then
+      # No series at all. kafka-exporter lives behind the optional
+      # self-monitoring profile, so on a base install this is EXPECTED and must
+      # be a named skip, not a fake pass and not a false page. Distinguish the
+      # two by whether the exporter container is actually running.
+      if [ -n "$(dkr ps -q --filter "label=com.docker.compose.project=$PROJECT" \
+                           --filter "label=com.docker.compose.service=kafka-exporter" 2>/dev/null)" ]; then
+        problems+=("engine-consuming probe: kafka-exporter is running but exports NO consumer-group series — every bus-lag and consumer-liveness check is blind (see KafkaLagMetricsMissing)")
+      else
+        echo "watchdog: consumer-group checks skipped — kafka-exporter is not running (optional 'self-monitoring' profile); ENGINE_CONSUMER_CHECK=0 to silence this line" >&2
+      fi
+    else
+      # The value is a member COUNT, but VM may render it "0" or "0.0", so cut
+      # the fraction off. Validate the SHAPE before comparing: `[ x -le 0 ]` on
+      # a non-numeric value errors, and suppressing that error would report a
+      # malformed reply as "members > 0" — i.e. as healthy. That is exactly the
+      # swallow-and-look-fine defect this whole probe exists to undo (§16.1).
+      eng_corr_i=${eng_corr%%.*}
+      if ! printf '%s' "$eng_corr_i" | grep -qE '^-?[0-9]+$'; then
+        problems+=("engine-consuming probe SKIPPED: correlation member count is not a number (got '${eng_corr}') — treating as UNKNOWN, not as healthy")
+      elif [ "$eng_corr_i" -le 0 ]; then
+        eng_lag=$(eng_query 'sum%28kafka_consumergroup_lag_sum%7Bconsumergroup%3D%22netops-correlation%22%7D%29') || true
+        problems+=("ENGINE_NOT_CONSUMING: correlation consumer group has ZERO members (bus backlog ${eng_lag:-unknown}) — RCA has stopped; containers will still read healthy. Runbook: docs/runbooks/engine-not-consuming.md")
+      fi
+
+      # Router lanes. One query both DETECTS and NAMES the dead ones.
+      # kafka_consumergroup_members{consumergroup=~"netops-router-.*"} == 0
+      eng_dead_raw=$(dkr exec "$eng_cid" wget -qO- --timeout=5 \
+        'http://127.0.0.1:8428/api/v1/query?query=kafka_consumergroup_members%7Bconsumergroup%3D~%22netops-router-.%2A%22%7D%20%3D%3D%200' 2>&1) || eng_dead_raw=""
+      case "$eng_dead_raw" in
+        *'"status":"success"'*)
+          eng_dead=$(printf '%s' "$eng_dead_raw" | grep -oE '"consumergroup":"[^"]+"' | cut -d'"' -f4 | sort -u | tr '\n' ' ')
+          [ -n "${eng_dead// /}" ] &&
+            problems+=("ENGINE_NOT_CONSUMING: router lane(s) with ZERO consumers: ${eng_dead}— vector-router is not draining them; that data reaches no store and is lost once bus retention passes. Runbook: docs/runbooks/engine-not-consuming.md")
+          ;;
+        *)
+          problems+=("engine-consuming probe SKIPPED: router consumer-group query returned no usable body: $(printf '%s' "$eng_dead_raw" | tr '\n' ' ' | cut -c1-140)")
+          ;;
+      esac
+    fi
+
+    # -- 3. Alert-delivery heartbeat ----------------------------------------
+    # THE POINT: an alerting stack that cannot prove its own delivery path is
+    # not an alerting stack. On 2026-09-02 thirteen alerts were firing, some
+    # since 2026-08-27, and NOT ONE had ever been delivered — vmalert shipped
+    # with -notifier.blackhole. The AlertingHeartbeat rule now fires always and
+    # the api's webhook receiver stamps the arrival time into
+    # netops_alert_webhook_heartbeat_timestamp_seconds. A fresh timestamp is
+    # end-to-end proof of: vmalert evaluates -> notifier delivers -> api
+    # receives. Checking it from HERE, over the watchdog's own independent
+    # channel, is the only check that survives the delivery path being the
+    # thing that is broken.
+    # max(netops_alert_webhook_enabled)
+    eng_hb_on=$(eng_query 'max%28netops_alert_webhook_enabled%29') || true
+    if [ -n "$eng_err" ]; then
+      problems+=("alert-delivery probe SKIPPED: $eng_err")
+    elif [ -z "$eng_hb_on" ]; then
+      # The api build predates the webhook receiver, or the api is not being
+      # scraped. Either way the CHAIN IS UNPROVEN — say so once, quietly, and
+      # never imply it is healthy.
+      echo "watchdog: alert-delivery heartbeat not checked — netops_alert_webhook_enabled is absent (api predates the vmalert webhook receiver, or is not scraped). Alert delivery is UNPROVEN on this deployment." >&2
+    elif [ "${eng_hb_on%%.*}" = "0" ]; then
+      problems+=("alert delivery is DISABLED: VMALERT_WEBHOOK_TOKEN is unset, so vmalert's alerts are not delivered to the platform. Only this watchdog can page. Set it in deployment/docker/.env (see docs/runbooks/engine-not-consuming.md)")
+    else
+      # max(time() - netops_alert_webhook_heartbeat_timestamp_seconds)
+      eng_hb_age=$(eng_query 'max%28time%28%29%20-%20netops_alert_webhook_heartbeat_timestamp_seconds%29') || true
+      if [ -n "$eng_err" ]; then
+        problems+=("alert-delivery probe SKIPPED: $eng_err")
+      elif [ -z "$eng_hb_age" ]; then
+        problems+=("ALERT_DELIVERY_BROKEN: the webhook receiver is enabled but exports no heartbeat timestamp — vmalert has never delivered an alert to it. Runbook: docs/runbooks/engine-not-consuming.md")
+      else
+        eng_hb_age_i=${eng_hb_age%%.*}
+        eng_hb_max="${ALERT_HEARTBEAT_MAX_SEC:-900}"
+        if ! printf '%s' "$eng_hb_age_i" | grep -qE '^-?[0-9]+$'; then
+          problems+=("alert-delivery probe SKIPPED: heartbeat age is not a number (got '${eng_hb_age}') — treating as UNKNOWN, not as healthy")
+        elif [ "$eng_hb_age_i" -gt "$eng_hb_max" ]; then
+          problems+=("ALERT_DELIVERY_BROKEN: no alert has reached the platform for $(( eng_hb_age_i / 60 ))m (limit $(( eng_hb_max / 60 ))m) — vmalert is evaluating into a void and every 'quiet' alert is unproven. Runbook: docs/runbooks/engine-not-consuming.md")
+        fi
+      fi
+    fi
+  fi
+fi
+
+# -----------------------------------------------------------------------------
 # F-16: surface what the alerting engine is actually firing.
 #
 # vmalert evaluates rules.yaml and writes the firing state back into
@@ -1254,6 +1409,7 @@ problem_is_critical() {
     *PID_LIMIT_REACHED*|*CONTAINER_RUNTIME_EXEC_FAILURE*|\
     *CLICKHOUSE_UNREACHABLE*|*CLICKHOUSE_TLS_FAILURE*|*"CANNOT PROBE"*|\
     *API_UNRESPONSIVE*|\
+    *ENGINE_NOT_CONSUMING*|*ALERT_DELIVERY_BROKEN*|\
     *"log ingest stalled"*)
       return 0 ;;
   esac

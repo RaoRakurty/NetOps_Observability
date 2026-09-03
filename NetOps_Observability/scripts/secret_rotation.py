@@ -96,6 +96,17 @@ POLICY: dict[str, Policy] = {
         FREE, "", "", ""),
     "INGEST_TOKEN_BUS": Policy(
         FREE, "", "", ""),
+    # vmalert -> api alert-delivery shared secret (internal/alertwebhook).
+    # FREE: BOTH ends read it at process start — the api from its environment,
+    # vmalert from the -notifier.url compose substitution baked into its command
+    # at container create. No live store holds it, so a reset-env plus a
+    # recreate of `api` and `vmalert` completes the rotation. NOTE the ordering
+    # consequence: until BOTH are recreated the token halves disagree and
+    # delivery 401s, which surfaces as netops_alert_webhook_unauthorized_total
+    # climbing and the AlertingHeartbeat gauge going stale (AlertDeliveryBroken)
+    # — loud, self-healing on the second recreate, and never silent.
+    "VMALERT_WEBHOOK_TOKEN": Policy(
+        FREE, "", "", ""),
     "NETBOX_SECRET_KEY": Policy(
         FREE, "", "", ""),
     # SEC-010 vmauth per-service credentials: vmauth expands them from env at

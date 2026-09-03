@@ -523,6 +523,18 @@ def generate_secrets() -> dict[str, str]:
         "NETBOX_TOKEN":              secrets.token_hex(20),  # 40-hex NetBox API token
         # F-08 ingest credential shared by every in-stack telemetry producer.
         "INGEST_TOKEN":              generate_token(32),
+        # vmalert -> api alert-delivery shared secret (internal/alertwebhook).
+        # URL-safe by construction (generate_token = secrets.token_urlsafe), and
+        # that matters: docker-compose.yml's default notifier flag embeds it in
+        # URL userinfo (http://vmalert:<token>@api:8080/...), where a stray
+        # @ # % would break the url vmalert parses.
+        #
+        # PLAINTEXT in .env, deliberately NOT vault-sealed: the vmalert
+        # container must be able to SEND this value, so compose has to be able
+        # to interpolate it in cleartext — exactly like INGEST_TOKEN. Sealing it
+        # would leave vmalert with nothing to present and silently restore the
+        # "13 alerts firing, none delivered" state this credential exists to end.
+        "VMALERT_WEBHOOK_TOKEN":     generate_token(32),
         # SEC-010: per-service credentials for the vmauth metrics front
         # (profile `vmauth`; src/config/vmauth.yml expands them via %{ENV}).
         # URL-safe: every consumer embeds them in URL userinfo
@@ -598,6 +610,17 @@ def write_env(env_path: Path, port: int, *, force: bool,
         if "INGEST_TOKEN" not in env:
             additions.append("INGEST_USER=netops-ingest")
             additions.append(f"INGEST_TOKEN={generate_token(32)}")
+        # Migration (vmalert delivery): a pre-webhook .env has no shared secret,
+        # and without one the api refuses to register the receiver (fail-closed)
+        # — i.e. the upgrade would keep delivering nothing. Seed it so an
+        # upgraded install converges on the same behaviour as a fresh one. Same
+        # generator as INGEST_TOKEN: URL-safe, because it rides URL userinfo.
+        if "VMALERT_WEBHOOK_TOKEN" not in env:
+            additions.append(f"VMALERT_WEBHOOK_TOKEN={generate_token(32)}")
+        if "VMALERT_WEBHOOK_COOLDOWN" not in env:
+            # Byte-identical to the docker-compose default and to
+            # alertwebhook.DefaultCooldown.
+            additions.append("VMALERT_WEBHOOK_COOLDOWN=30m")
         # Migration (F-07/F-59): search-tier durability posture.
         if "OPENSEARCH_REPLICAS" not in env:
             additions.append("OPENSEARCH_REPLICAS=0")
@@ -716,6 +739,24 @@ ENCRYPTION_KEY={secrets_map["ENCRYPTION_KEY"]}
 # gate (vector-router -> api, internalStackCaller).
 INGEST_USER=netops-ingest
 INGEST_TOKEN={secrets_map["INGEST_TOKEN"]}
+
+# vmalert alert DELIVERY (src/backend/internal/alertwebhook).
+#   VMALERT_WEBHOOK_TOKEN    the shared secret vmalert's notifier presents to
+#                            POST /api/internal/vmalert/api/v2/alerts. EMPTY
+#                            disables the receiver entirely (fail-closed: the
+#                            api does not register the route and logs a loud
+#                            warning) — which means vmalert rules fire and
+#                            NOTHING is delivered to any channel. That was the
+#                            shipped state until this landed: 13 alerts firing,
+#                            zero delivered, and a 3h correlation outage on
+#                            2026-09-02 that nobody saw.
+#                            PLAINTEXT on purpose, not vault-sealed: the
+#                            vmalert container has to send it, so compose must
+#                            be able to interpolate it (same as INGEST_TOKEN).
+#   VMALERT_WEBHOOK_COOLDOWN suppression window for a repeat of an identical
+#                            alert. Must match the compose default (30m).
+VMALERT_WEBHOOK_TOKEN={secrets_map["VMALERT_WEBHOOK_TOKEN"]}
+VMALERT_WEBHOOK_COOLDOWN=30m
 
 # Search-tier durability posture.
 #   OPENSEARCH_REPLICAS      F-07 — 0 is correct for the single-node appliance

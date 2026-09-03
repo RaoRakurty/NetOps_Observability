@@ -17,7 +17,7 @@
       "endpoint": "api:8080 (TLS-on-listener when TLS_CERT_FILE set)",
       "server_identity": "spiffe://netops/ns/default/sa/api",
       "client_auth": "required — TLS_CLIENT_ALLOWED_URIS allowlist",
-      "allowed_clients": ["spiffe://netops/ns/default/sa/nginx", "spiffe://netops/ns/default/sa/victoria", "spiffe://netops/ns/default/sa/vector-router"],
+      "allowed_clients": ["spiffe://netops/ns/default/sa/nginx", "spiffe://netops/ns/default/sa/victoria", "spiffe://netops/ns/default/sa/vector-router", "spiffe://netops/ns/default/sa/vmalert"],
       "verify": "netops_tls_identity_rejected_total stays flat under normal traffic; nginx upstream healthy",
       "negative": ["no client cert -> handshake refused", "trusted chain + identity NOT in allowlist -> refused AND netops_tls_identity_rejected_total increments (TLSIdentityRejected alert)"]
     },
@@ -29,6 +29,20 @@
       "allowed_clients": ["spiffe://netops/ns/default/sa/victoria"],
       "verify": "up{job=~\".*api.*\"} == 1 via the mtls scrape variant (vmscrape-mtls.yml)",
       "negative": ["scrape without SVID -> target down, not silently plaintext"]
+    },
+    {
+      "edge": "vmalert-api-alert-delivery",
+      "endpoint": "api:8080 /api/internal/vmalert/api/v2/alerts (vmalert appends /api/v2/alerts to the -notifier.url base)",
+      "server_identity": "spiffe://netops/ns/default/sa/api",
+      "client_auth": "required \u2014 registry-minted vmalert SVID (-notifier.tlsCertFile/tlsKeyFile/tlsCAFile) AND the VMALERT_WEBHOOK_TOKEN shared secret in the url userinfo. TWO independent credentials: neither alone opens the endpoint.",
+      "allowed_clients": ["spiffe://netops/ns/default/sa/vmalert"],
+      "verify": "netops_alert_webhook_heartbeat_timestamp_seconds advances (the AlertingHeartbeat rule fires always and the receiver stamps its arrival) \u2014 end-to-end proof of evaluate -> deliver -> receive, which no other signal in the stack provides",
+      "negative": [
+        "no client cert -> handshake refused ('certificate required'; verified live 2026-09-02)",
+        "trusted chain + identity NOT in TLS_CLIENT_ALLOWED_URIS -> refused ('bad certificate'; verified live 2026-09-02 with the vmalert SVID before the allowlist row was added, while vector-router's got 200 on the same listener)",
+        "valid SVID but wrong/absent VMALERT_WEBHOOK_TOKEN -> 401 and netops_alert_webhook_unauthorized_total increments; the token must never appear in the response or the log",
+        "notifier reverted to -notifier.blackhole -> heartbeat goes stale and AlertDeliveryBroken fires (silence must never be the failure mode)"
+      ]
     },
     {
       "edge": "api-postgres",

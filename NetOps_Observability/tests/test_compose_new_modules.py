@@ -103,6 +103,10 @@ API_ENV_DEFAULTS = {
     "PROTOCOL_DIAG_SSH_PASSWORD": "${PROTOCOL_DIAG_SSH_PASSWORD:-}",
     "PROTOCOL_DIAG_SSH_KEY": "${PROTOCOL_DIAG_SSH_KEY:-}",
     "PROTOCOL_DIAG_SSH_PORT": "${PROTOCOL_DIAG_SSH_PORT:-22}",
+    # vmalert alert delivery: alertwebhook.DefaultCooldown = 30m. The TOKEN is
+    # deliberately NOT in this table — it is a secret with no code default (see
+    # test_vmalert_webhook_token_is_passed_through_and_fail_closed).
+    "VMALERT_WEBHOOK_COOLDOWN": "${VMALERT_WEBHOOK_COOLDOWN:-30m}",
 }
 
 
@@ -168,6 +172,107 @@ def test_security_deadletter_spool_stays_inside_the_api_data_mount():
     path must be under a mounted, writable tree — /data is the api's bind."""
     env = service_env("api")
     assert str(env["SECURITY_DEADLETTER_FILE"]).startswith("/data/")
+
+
+# ── vmalert alert delivery (internal/alertwebhook) ──────────────────────────
+#
+# vmalert ran with `-notifier.blackhole`: every rule evaluated, nothing ever
+# delivered. These guard the DELIVERY plumbing specifically, because it is the
+# one class of defect the stack cannot report about itself.
+
+ALERTWEBHOOK_PKG = ROOT / "src" / "backend" / "internal" / "alertwebhook"
+
+
+def test_vmalert_webhook_token_is_passed_through_and_fail_closed():
+    """The shared secret must reach the api, and its compose default must be
+    EMPTY — empty is the fail-closed state (the api refuses to register the
+    receiver rather than serving an unauthenticated alert fan-out). It is
+    kept out of API_ENV_DEFAULTS because it has no code default to match:
+    install.py mints it and update.sh backfills it."""
+    env = service_env("api")
+    assert env["VMALERT_WEBHOOK_TOKEN"] == "${VMALERT_WEBHOOK_TOKEN:-}", (
+        "VMALERT_WEBHOOK_TOKEN must be a defaulted pass-through on the api; "
+        f"got {env.get('VMALERT_WEBHOOK_TOKEN')!r}")
+
+
+def test_vmalert_cooldown_default_matches_the_package_constant():
+    """Read alertwebhook.DefaultCooldown out of the package so a change on
+    either side fails here instead of drifting."""
+    src = (ALERTWEBHOOK_PKG / "alertwebhook.go").read_text()
+    m = re.search(r"DefaultCooldown\s*=\s*(\d+)\s*\*\s*time\.Minute", src)
+    assert m, "could not find alertwebhook.DefaultCooldown"
+    assert service_env("api")["VMALERT_WEBHOOK_COOLDOWN"] == \
+        "${VMALERT_WEBHOOK_COOLDOWN:-%sm}" % m.group(1)
+
+
+def test_vmalert_notifier_default_is_delivery_not_blackhole():
+    """The default must POST to the api's receiver. `-notifier.blackhole` stays
+    supported as an EXPLICIT opt-out via VMALERT_NOTIFIER_FLAG, but it must
+    never be what an operator gets by doing nothing."""
+    cmd = compose()["services"]["vmalert"]["command"]
+    flags = [c for c in cmd if "VMALERT_NOTIFIER_FLAG" in str(c)]
+    assert len(flags) == 1, f"expected exactly one notifier slot, got {flags}"
+    flag = str(flags[0])
+    assert ":--notifier.blackhole}" not in flag, (
+        "the vmalert notifier default is blackhole again — rules evaluate and "
+        "nothing is ever delivered to a human, which is the defect this "
+        "plumbing exists to close.")
+    # vmalert appends /api/v2/alerts itself: -notifier.url is a BASE url.
+    assert "-notifier.url=http://vmalert:${VMALERT_WEBHOOK_TOKEN}@api:8080/api/internal/vmalert}" in flag, (
+        f"unexpected notifier default {flag!r}")
+
+
+def test_tls_variant_restates_the_notifier_flag():
+    """compose.tls.yml REPLACES vmalert's whole command list, so a base-file
+    flag that is not restated there is silently gone on a TLS install.
+
+    NOT a verbatim comparison. The two variants intentionally differ in ONE
+    way: the base file posts over http, and the TLS variant must use https
+    because the api's :8080 is HTTPS with RequireClientCert once TLS_CERT_FILE
+    is set (a plaintext POST is refused at the handshake — verified live
+    2026-09-02). What must hold on BOTH is the invariant this test exists for:
+    the flag is present, its default is not the blackhole, and it points at the
+    receiver. The mTLS specifics are pinned in
+    tests/test_vmalert_delivery_contract.py.
+    """
+    tls_src = (ROOT / "deployment" / "docker" / "compose.tls.yml").read_text()
+    base = compose()["services"]["vmalert"]["command"]
+    base_notifier = [str(c) for c in base if "VMALERT_NOTIFIER_FLAG" in str(c)][0]
+    # compose.tls.yml carries compose's own `!override` tag, which yaml.safe_load
+    # cannot construct — match as TEXT rather than parsing the document.
+    tls_notifier = [
+        ln.strip() for ln in tls_src.splitlines() if "VMALERT_NOTIFIER_FLAG" in ln
+    ]
+    assert tls_notifier, (
+        "the TLS variant does not restate the notifier flag at all — a TLS "
+        "install would fall back to the image default and deliver nothing.")
+    flag = tls_notifier[0]
+    assert "blackhole" not in flag.split(":-", 1)[-1], (
+        "the TLS variant defaults to the blackhole — alerts evaluated, "
+        "delivered nowhere, on the very install the customer runs.")
+    # Same receiver path and same shared secret on both variants; only the
+    # scheme may differ.
+    for token in ("/api/internal/vmalert", "${VMALERT_WEBHOOK_TOKEN}"):
+        assert token in flag, f"TLS notifier flag lost {token!r}: {flag}"
+        assert token in base_notifier, f"base notifier flag lost {token!r}"
+    assert "https://" in flag, (
+        "compose.tls.yml must post over https — the api requires a client cert "
+        f"on that listener. Got: {flag}")
+
+
+def test_webhook_route_is_registered_and_jwt_exempt():
+    """The three halves that must move together: the receiver package exists,
+    main.go registers the subtree with the literal the route-isolation ledger
+    greps for, and withAuth has the matching JWT escape."""
+    assert (ALERTWEBHOOK_PKG / "alertwebhook.go").is_file()
+    main_go = (ROOT / "src" / "backend" / "main.go").read_text()
+    assert 'mux.HandleFunc("/api/internal/vmalert/"' in main_go, (
+        "the webhook subtree is not registered in main.go — vmalert would POST "
+        "into a 404 and alerts would go nowhere again.")
+    auth_go = (ROOT / "src" / "backend" / "auth.go").read_text()
+    assert 'strings.HasPrefix(r.URL.Path, "/api/internal/vmalert/")' in auth_go, (
+        "withAuth has no escape for the webhook subtree — vmalert holds no JWT, "
+        "so every alert POST would be rejected before reaching the handler.")
 
 
 # ── correlation: the three lane switches ────────────────────────────────────
@@ -254,10 +359,23 @@ def test_update_reconciliation_enumerates_the_new_keys():
                 "CONFIG_BACKUP_INTERVAL", "CONFIG_BACKUP_KEEP_VERSIONS",
                 "CONFIG_BACKUP_SSH_USER", "CONFIG_BACKUP_SSH_PORT",
                 "PARSERCOV_MAX_LINES", "CORRELATION_REPLICA_URLS",
-                "CORR_SYSLOG_TOPIC", "CORR_FIDELITY_WEIGHTING"):
+                "CORR_SYSLOG_TOPIC", "CORR_FIDELITY_WEIGHTING",
+                "VMALERT_WEBHOOK_TOKEN", "VMALERT_WEBHOOK_COOLDOWN"):
         assert f'"{key}":' in src, (
             f"{key} is missing from update.sh's EXPECTED list — an upgraded "
             f"install would never learn the knob exists.")
+    # The secret is the one key that must NOT be reconciled to the compose
+    # default: compose defaults it to EMPTY (fail-closed), and materializing an
+    # empty value would leave an upgraded install delivering nothing forever.
+    # update.sh mints a URL-safe token instead (it rides URL userinfo).
+    assert '"VMALERT_WEBHOOK_TOKEN":         "__URLSAFE__",' in src, (
+        "VMALERT_WEBHOOK_TOKEN must be reconciled as a GENERATED url-safe "
+        "secret, not as the empty compose default — empty means the api never "
+        "registers the receiver and the upgrade silently keeps delivering "
+        "nothing.")
+    assert "urlsafe_alphabet" in src and '"-_"' in src, (
+        "the __URLSAFE__ generator is gone; a token containing @ # % would "
+        "break the notifier URL's userinfo and every alert POST with it.")
     assert '"CORR_EVIDENCE_TOPICS":' not in src, (
         "CORR_EVIDENCE_TOPICS must NOT be reconciled: appending it with an "
         "empty default would unsubscribe every evidence class on the next "

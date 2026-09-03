@@ -131,7 +131,17 @@ services:
       # SEC-018.1: + vector-router — TLS-layer admission only; the sealing
       # endpoint additionally requires exactly that identity, and every other
       # route still demands app-layer auth the router does not hold.
-      TLS_CLIENT_ALLOWED_URIS: spiffe://netops/ns/default/sa/nginx,spiffe://netops/ns/default/sa/victoria,spiffe://netops/ns/default/sa/vector-router
+      # 2026-09-02: + vmalert — it POSTs evaluated alerts to the
+      # Alertmanager-v2 receiver (/api/internal/vmalert/api/v2/alerts). Same
+      # narrow shape as vector-router: this admits the TLS handshake ONLY, and
+      # the receiver still demands the VMALERT_WEBHOOK_TOKEN shared secret
+      # before it parses a body (defence in depth — a stolen SVID is not a
+      # delivery credential, and a stolen token is not a network credential).
+      # Every other route continues to demand app-layer auth vmalert does not
+      # hold. Its identity is minted from the workloadid registry
+      # (internal/workloadid: {Service: "vmalert", Client: true}) — no new
+      # workload, no new CA surface.
+      TLS_CLIENT_ALLOWED_URIS: spiffe://netops/ns/default/sa/nginx,spiffe://netops/ns/default/sa/victoria,spiffe://netops/ns/default/sa/vector-router,spiffe://netops/ns/default/sa/vmalert
       # Additive trust for the self-signed/private-CA front cert (Go consults
       # SSL_CERT_DIR alongside the image's default CA bundle — never
       # SSL_CERT_FILE here, which would REPLACE the root store).
@@ -285,9 +295,39 @@ services:
       - "-evaluationInterval=${VMALERT_EVAL_INTERVAL:-30s}"
       - "-configCheckInterval=60s"
       - "-external.label=stack=${COMPOSE_PROJECT_NAME:-netops}"
-      - "${VMALERT_NOTIFIER_FLAG:--notifier.blackhole}"
+      # Notifier target: the api's Alertmanager-v2 receiver on the compose
+      # network (NOT vmauth — vmauth fronts the metrics store, not the API).
+      # This command list REPLACES the base one, so the base default must be
+      # restated here or a TLS install silently reverts to blackhole — alerts
+      # evaluated, delivered nowhere, which is the exact regression the base
+      # change removes.
+      #
+      # mTLS (2026-09-02). With TLS_CERT_FILE set the api's :8080 listener is
+      # HTTPS with RequireClientCert, so the scheme here is https and vmalert
+      # presents its own SVID — the SAME identity it already holds for the
+      # vmauth hops above (internal/workloadid registers it Client:true, so
+      # data/tls/services/vmalert is minted and rotated with every other
+      # service cert; nothing new is issued for this). The api admits the
+      # principal via TLS_CLIENT_ALLOWED_URIS above.
+      #
+      # TWO independent credentials, on purpose (defence in depth):
+      #   * the SVID authenticates the CONNECTION at the TLS layer;
+      #   * VMALERT_WEBHOOK_TOKEN (in the URL userinfo, below) authenticates
+      #     the REQUEST at the application layer.
+      # Neither alone opens the endpoint. Keep both.
+      #
+      # No -notifier.tlsServerName: the url host is `api` and the api's cert
+      # carries DNS:api (verified 2026-09-02), so SNI/verification match
+      # without an override. Add one only if that SAN ever changes.
+      - "-notifier.tlsCAFile=/tls/ca.pem"
+      - "-notifier.tlsCertFile=/tls/svid/vmalert.crt"
+      - "-notifier.tlsKeyFile=/tls/svid/vmalert.key"
+      - "${VMALERT_NOTIFIER_FLAG:--notifier.url=https://vmalert:${VMALERT_WEBHOOK_TOKEN}@api:8080/api/internal/vmalert}"
     volumes:
       - ../../data/tls/ca.pem:/tls/ca.pem:ro
+      # The client SVID vmalert presents to the api's mTLS listener. Same
+      # mount shape as vector-router's sealing hop (:/tls/svid:ro).
+      - ../../data/tls/services/vmalert:/tls/svid:ro
 
   # SEC-010 slice C: grafana's VM datasources via vmauth (read-only
   # svc-grafana credential, mesh CA). Variant file over the base one.
@@ -553,7 +593,7 @@ services:
         netops.controller_events netops.app.edge netops.verification
         netops.cloudlogs netops.cloudcosts netops.deadletter
         netops.wireless_sessions netops.wireless_events
-        netops.security; do
+        netops.security netops.bgp; do
         /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9094
         --command-config /tmp/admin.properties
         --create --if-not-exists --topic "$$t"

@@ -48,6 +48,19 @@ first boot only. `docker compose restart` does **not** pick up a new `.env`; use
 
 Full matrix and the per-secret manual paths: `docs/runbooks/secret-rotation.md`.
 
+## Something is "healthy" but nothing is happening
+
+`docker compose ps` proves a container is running, not that it is doing work —
+on 2026-09-02 the correlation engine consumed nothing for three hours with
+every healthcheck green. Start here:
+
+* `docs/runbooks/engine-not-consuming.md` — triage, the ACL/topic bootstrap,
+  and how to tell "joined but stuck" from "never joined".
+* `docs/runbooks/engine-liveness-matrix.md` — what proves each service is
+  working, per service.
+* `scripts/deploy-qualify.sh` — run after every `compose up`; it asserts the
+  engines are actually consuming instead of trusting exit code 0.
+
 ## Adding a device manually
 
 ```

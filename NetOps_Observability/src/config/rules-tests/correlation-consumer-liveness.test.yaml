@@ -1,0 +1,513 @@
+# promtool unit tests for the correlation-consumer-liveness group
+# (rules-scale-slo.yaml), added after the 2026-09-02 three-hour silent outage:
+# the engine's Kafka consumer never joined its group, every container read
+# "healthy", and the only rule that did fire was delivered to a blackhole.
+#
+# Acceptance criterion, same as the sibling files: each rule must FIRE on the
+# real failure shape AND stay SILENT on every look-alike. The silences bought
+# here are the ones that would get the page muted, and each maps to a real
+# operational event:
+#   * a rolling restart / rebalance briefly empties the group  -> no page;
+#   * kafka-exporter itself goes away, so the series vanishes  -> no page
+#     (KafkaLagMetricsMissing in rules.yaml owns that fault);
+#   * lag is HIGH but flat (a drained backlog holding steady)  -> no page,
+#     because these rules are about liveness, not about the absolute lag
+#     budget that CorrelationRcaLagBudget* already owns;
+#   * lag grows with ZERO members -> CorrelationLagGrowing must stay silent,
+#     because CorrelationConsumerDead is the correct (and different) page.
+rule_files:
+  - /etc/prometheus/rules-scale-slo.yaml
+
+evaluation_interval: 1m
+
+tests:
+  # ==========================================================================
+  # 1) CorrelationConsumerDead — branch 1: the group exists and is EMPTY.
+  #    This is the 2026-09-02 shape exactly.
+  # ==========================================================================
+  - interval: 1m
+    input_series:
+      - series: 'kafka_consumergroup_members{consumergroup="netops-correlation",instance="kafka-exporter:9308",job="kafka"}'
+        values: "0x30"
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: CorrelationConsumerDead
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              layer: correlation
+              tier: page
+            exp_annotations:
+              summary: "Correlation engine is NOT consuming: the netops-correlation consumer group has ZERO members — RCA has stopped and the containers all read healthy"
+              description: "No process is joined to the netops-correlation consumer group, so nothing is draining the bus into the correlation engine. Incidents are not being detected and the UI shows an honestly empty incident list that reads as \"a quiet network\". The container healthcheck CANNOT see this — it polls a sidecar thread that outlives the consumer on purpose — so treat \"healthy\" as no evidence here. FIRST CHECK the engine's subscribe path: a broker ACL gap or a missing topic makes the whole multi-topic subscription fail, taking all 14 lanes down for one optional lane (the 2026-09-02 outage was netops.security: TopicAuthorizationFailedError, then UnknownTopicOrPartitionError). Run the ACL and topic bootstrap in the runbook before restarting anything — a restart without them reproduces the same failure in a fresh container."
+              runbook: "docs/runbooks/engine-not-consuming.md"
+
+  # 1a) THE HEALTHY PATH MUST BE SILENT.
+  - interval: 1m
+    input_series:
+      - series: 'kafka_consumergroup_members{consumergroup="netops-correlation",instance="kafka-exporter:9308",job="kafka"}'
+        values: "1x30"
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: CorrelationConsumerDead
+        exp_alerts: []
+
+  # 1b) A REBALANCE / ROLLING RESTART MUST NOT PAGE. One minute at zero members
+  #     is what a restart looks like from the exporter's side; `for: 2m` exists
+  #     precisely to absorb it.
+  - interval: 1m
+    input_series:
+      - series: 'kafka_consumergroup_members{consumergroup="netops-correlation",instance="kafka-exporter:9308",job="kafka"}'
+        values: "1x10 0 1x20"
+    alert_rule_test:
+      - eval_time: 25m
+        alertname: CorrelationConsumerDead
+        exp_alerts: []
+
+  # ==========================================================================
+  # 2) CorrelationConsumerDead — branch 2: the SERIES ITSELF disappears (the
+  #    group aged out of the broker), while both scrape targets are up. Branch 1
+  #    cannot see this: there is no sample to compare against 0.
+  #    The series stops at t=10m; absent_over_time([5m]) turns true just after
+  #    t=15m and the 2m `for` pages at ~t=18m.
+  # ==========================================================================
+  - interval: 1m
+    input_series:
+      - series: 'kafka_consumergroup_members{consumergroup="netops-correlation",instance="kafka-exporter:9308",job="kafka"}'
+        values: "1x10"
+      - series: 'up{job="correlation",instance="correlation:8000"}'
+        values: "1x40"
+      - series: 'up{job="kafka",instance="kafka-exporter:9308"}'
+        values: "1x40"
+    alert_rule_test:
+      - eval_time: 25m
+        alertname: CorrelationConsumerDead
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              layer: correlation
+              tier: page
+              consumergroup: netops-correlation
+            exp_annotations:
+              summary: "Correlation engine is NOT consuming: the netops-correlation consumer group has ZERO members — RCA has stopped and the containers all read healthy"
+              description: "No process is joined to the netops-correlation consumer group, so nothing is draining the bus into the correlation engine. Incidents are not being detected and the UI shows an honestly empty incident list that reads as \"a quiet network\". The container healthcheck CANNOT see this — it polls a sidecar thread that outlives the consumer on purpose — so treat \"healthy\" as no evidence here. FIRST CHECK the engine's subscribe path: a broker ACL gap or a missing topic makes the whole multi-topic subscription fail, taking all 14 lanes down for one optional lane (the 2026-09-02 outage was netops.security: TopicAuthorizationFailedError, then UnknownTopicOrPartitionError). Run the ACL and topic bootstrap in the runbook before restarting anything — a restart without them reproduces the same failure in a fresh container."
+              runbook: "docs/runbooks/engine-not-consuming.md"
+
+  # 2a) SAME DISAPPEARANCE, but kafka-exporter is the thing that died. The
+  #     series is gone for a reason that says nothing about the engine, and
+  #     KafkaLagMetricsMissing (rules.yaml) already pages for it. Accusing the
+  #     engine here would be a second page for one fault, and the wrong one.
+  - interval: 1m
+    input_series:
+      - series: 'kafka_consumergroup_members{consumergroup="netops-correlation",instance="kafka-exporter:9308",job="kafka"}'
+        values: "1x10"
+      - series: 'up{job="correlation",instance="correlation:8000"}'
+        values: "1x40"
+      - series: 'up{job="kafka",instance="kafka-exporter:9308"}'
+        values: "1x10 0x30"
+    alert_rule_test:
+      - eval_time: 25m
+        alertname: CorrelationConsumerDead
+        exp_alerts: []
+
+  # 2b) SAME DISAPPEARANCE, but the correlation scrape target is down too. That
+  #     is a container-down page (stack-resilience), not an engine-logic page.
+  - interval: 1m
+    input_series:
+      - series: 'kafka_consumergroup_members{consumergroup="netops-correlation",instance="kafka-exporter:9308",job="kafka"}'
+        values: "1x10"
+      - series: 'up{job="correlation",instance="correlation:8000"}'
+        values: "1x10 0x30"
+      - series: 'up{job="kafka",instance="kafka-exporter:9308"}'
+        values: "1x40"
+    alert_rule_test:
+      - eval_time: 25m
+        alertname: CorrelationConsumerDead
+        exp_alerts: []
+
+  # ==========================================================================
+  # 3) CorrelationLagGrowing — joined but not draining. Members stay at 1 the
+  #    whole time, so CorrelationConsumerDead is silent and this is the only
+  #    page: the operator is sent to the "stuck consumer" half of the fault
+  #    tree, not the "dead consumer" half.
+  # ==========================================================================
+  - interval: 1m
+    input_series:
+      - series: 'kafka_consumergroup_lag_sum{consumergroup="netops-correlation",topic="netops.syslog",instance="kafka-exporter:9308",job="kafka"}'
+        values: "0+500x40"
+      - series: 'kafka_consumergroup_members{consumergroup="netops-correlation",instance="kafka-exporter:9308",job="kafka"}'
+        values: "1x40"
+    alert_rule_test:
+      - eval_time: 25m
+        alertname: CorrelationLagGrowing
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              layer: correlation
+              tier: page
+            exp_annotations:
+              # NOTE: the +5000 is the exact delta() over the 500/min synthetic ramp;
+              # it pins that the summary really renders $value (a rule that lost the
+              # template would still "fire" and still pass a labels-only test).
+              summary: "Correlation lag is GROWING (+5000 in 10m) while the consumer group still has members — the engine is joined but not draining"
+              description: "The consumer holds its partitions and is heartbeating, so this is NOT the dead-consumer shape (CorrelationConsumerDead covers that and cannot fire at the same time). The engine is falling behind and will not catch up unaided. Work down in this order: corr_loop_lag_stalls_total and corr_loop_lag_max_ms (event-loop starvation — see CorrelationEventLoopStalling), the downstream persistence path (ClickHouse / OpenSearch insert latency), per-partition lag skew (one hot tenant pins one partition), then broker health. Do NOT raise session/heartbeat timeouts: that converts a visible backlog into a silent one."
+              runbook: "docs/runbooks/engine-not-consuming.md"
+      # And the dead-consumer rule must NOT also fire: the two are mutually
+      # exclusive by construction (members == 0 vs members >= 1).
+      - eval_time: 25m
+        alertname: CorrelationConsumerDead
+        exp_alerts: []
+
+  # 3a) LAG GROWING WITH ZERO MEMBERS. CorrelationLagGrowing must stay silent —
+  #     this is the dead-consumer shape and CorrelationConsumerDead owns it.
+  #     Without the `members >= 1` qualifier both would page for one fault and
+  #     the operator would not know which half of the tree to enter.
+  - interval: 1m
+    input_series:
+      - series: 'kafka_consumergroup_lag_sum{consumergroup="netops-correlation",topic="netops.syslog",instance="kafka-exporter:9308",job="kafka"}'
+        values: "0+500x40"
+      - series: 'kafka_consumergroup_members{consumergroup="netops-correlation",instance="kafka-exporter:9308",job="kafka"}'
+        values: "0x40"
+    alert_rule_test:
+      - eval_time: 25m
+        alertname: CorrelationLagGrowing
+        exp_alerts: []
+
+  # 3b) LAG HIGH BUT FLAT. A backlog that stopped growing is being held, not
+  #     lost — the absolute-budget rules (CorrelationRcaLagBudget*) own that
+  #     judgement. A liveness rule that fired on a steady level would duplicate
+  #     them and page twice for one condition.
+  - interval: 1m
+    input_series:
+      - series: 'kafka_consumergroup_lag_sum{consumergroup="netops-correlation",topic="netops.syslog",instance="kafka-exporter:9308",job="kafka"}'
+        values: "80000x40"
+      - series: 'kafka_consumergroup_members{consumergroup="netops-correlation",instance="kafka-exporter:9308",job="kafka"}'
+        values: "1x40"
+    alert_rule_test:
+      - eval_time: 25m
+        alertname: CorrelationLagGrowing
+        exp_alerts: []
+
+  # ==========================================================================
+  # 4) RouterConsumerDead — the same fault on the OTHER engine. One rule
+  #    pattern covers all nine netops-router-* lanes via by(consumergroup), so
+  #    a lane added tomorrow is covered without anyone writing a rule.
+  # ==========================================================================
+  - interval: 1m
+    input_series:
+      - series: 'kafka_consumergroup_members{consumergroup="netops-router-syslog",instance="kafka-exporter:9308",job="kafka"}'
+        values: "0x30"
+      # A HEALTHY sibling lane must not be swept in by the regex.
+      - series: 'kafka_consumergroup_members{consumergroup="netops-router-flows",instance="kafka-exporter:9308",job="kafka"}'
+        values: "1x30"
+      # Nor may the correlation group leak into the router rule: it has its own
+      # pair with its own first-response, and a double page is a wrong page.
+      - series: 'kafka_consumergroup_members{consumergroup="netops-correlation",instance="kafka-exporter:9308",job="kafka"}'
+        values: "0x30"
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: RouterConsumerDead
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              layer: bus
+              tier: page
+              consumergroup: netops-router-syslog
+            exp_annotations:
+              summary: "Router lane netops-router-syslog has ZERO consumers — vector-router is not draining it; logs/flows/traps on that lane are accumulating on the bus and reaching no store"
+              description: "The group exists (it has committed offsets) and nobody is in it. Nothing on this lane is reaching OpenSearch or ClickHouse, so the UI's log, flow and trap views are silently incomplete for as long as it lasts — the bus retains the data (bounded, see BUS_RETENTION_MS) but a lane that stays dead past retention loses it for good. Check broker authorization FIRST: an empty KRaft ACL store denies every non-super-user principal while every healthcheck stays green. The runbook has the apply-acls.sh and kafka-init bootstrap."
+              runbook: "docs/runbooks/engine-not-consuming.md"
+
+  # 4a) ALL ROUTER LANES HEALTHY -> silent.
+  - interval: 1m
+    input_series:
+      - series: 'kafka_consumergroup_members{consumergroup="netops-router-syslog",instance="kafka-exporter:9308",job="kafka"}'
+        values: "1x30"
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: RouterConsumerDead
+        exp_alerts: []
+
+  # ==========================================================================
+  # 5) IngestPipelineSilent — THE EXPECTED-ACTIVITY CONTRACT.
+  #    Fires only when the aggregator is silent AND an independent producer
+  #    (the api's own collectors) says there is data to carry.
+  # ==========================================================================
+  - interval: 1m
+    input_series:
+      - series: 'vector_component_sent_events_total{component_kind="sink",component_id="kafka_syslog",instance="vector-aggregator:9598"}'
+        values: "5000x40"
+      - series: 'collector_targets_reachable{collector="snmpv2c"}'
+        values: "4x40"
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: IngestPipelineSilent
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              layer: ingest
+              tier: page
+            exp_annotations:
+              summary: "Ingest funnel is SILENT: vector-aggregator emitted zero events in 15m while the collectors can still reach devices — telemetry is being produced and is not arriving"
+              description: "Every non-flow lane (syslog, SNMP traps, collector metrics, probes, docker applogs) crosses vector-aggregator on its way to the bus, so this is total ingest loss for those lanes, not a degradation. The guard clause means this is NOT an idle lab: at least one collector target is reachable, so data exists to carry. Check the aggregator's container first (it may be up and wedged rather than down), then its kafka sinks — a broker that refuses the aggregator's produce ACL looks exactly like this and is the 2026-08-16 fault seen from the producer side."
+              runbook: "docs/runbooks/engine-not-consuming.md"
+
+  # 5a) THE IDLE LAB MUST NOT PAGE. Identical silence, but no collector can
+  #     reach a device, so there is nothing to carry. This is the exact live
+  #     state of the lab on 2026-09-02 (collector_targets_reachable == 0) and
+  #     the single most important silence in this file: a rule that pages here
+  #     gets muted within a week, and the platform is blind again.
+  - interval: 1m
+    input_series:
+      - series: 'vector_component_sent_events_total{component_kind="sink",component_id="kafka_syslog",instance="vector-aggregator:9598"}'
+        values: "5000x40"
+      - series: 'collector_targets_reachable{collector="snmpv2c"}'
+        values: "0x40"
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: IngestPipelineSilent
+        exp_alerts: []
+
+  # 5b) FLOWING NORMALLY -> silent.
+  - interval: 1m
+    input_series:
+      - series: 'vector_component_sent_events_total{component_kind="sink",component_id="kafka_syslog",instance="vector-aggregator:9598"}'
+        values: "0+120x40"
+      - series: 'collector_targets_reachable{collector="snmpv2c"}'
+        values: "4x40"
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: IngestPipelineSilent
+        exp_alerts: []
+
+  # ==========================================================================
+  # 6) AlertDeliveryBroken — the dead-man's switch on the delivery chain.
+  #    The gauge is 0 when a heartbeat has NEVER arrived, which is the
+  #    2026-09-02 state (blackhole notifier, 13 alerts firing, none delivered).
+  # ==========================================================================
+  - interval: 1m
+    input_series:
+      - series: 'netops_alert_webhook_enabled{instance="api:8080",job="netops-api"}'
+        values: "1x40"
+      - series: 'netops_alert_webhook_heartbeat_timestamp_seconds{instance="api:8080",job="netops-api"}'
+        values: "0x40"
+    alert_rule_test:
+      - eval_time: 25m
+        alertname: AlertDeliveryBroken
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              layer: platform
+              tier: page
+              instance: "api:8080"
+              job: netops-api
+            exp_annotations:
+              summary: "ALERT DELIVERY IS BROKEN: no AlertingHeartbeat has reached the api webhook for over 15m — every other alert in this stack is going nowhere"
+              description: "The webhook receiver is configured (netops_alert_webhook_enabled is 1) but has not been fed. Something between vmalert's rule evaluation and the api's receiver is broken: vmalert down or wedged, the notifier flag reset to -notifier.blackhole, a wrong or rotated VMALERT_WEBHOOK_TOKEN (look for netops_alert_webhook_unauthorized_total climbing), or the api refusing the POST. Treat every currently \"quiet\" alert as unproven until this clears. NOTE the obvious limitation and why it is acceptable: this alert travels the very path it is reporting on, so it may not reach you either — which is exactly why scripts/stack-watchdog.sh checks the same gauge over its own independent ntfy path."
+              runbook: "docs/runbooks/engine-not-consuming.md"
+
+  # 6a) DELIVERY DELIBERATELY OFF (no VMALERT_WEBHOOK_TOKEN, route not
+  #     registered, enabled == 0) must be SILENT. Reporting a feature that is
+  #     switched off as "broken" is a lie, and a standing-red advisory is how an
+  #     operator is trained to ignore the pager.
+  - interval: 1m
+    input_series:
+      - series: 'netops_alert_webhook_enabled{instance="api:8080",job="netops-api"}'
+        values: "0x40"
+      - series: 'netops_alert_webhook_heartbeat_timestamp_seconds{instance="api:8080",job="netops-api"}'
+        values: "0x40"
+    alert_rule_test:
+      - eval_time: 25m
+        alertname: AlertDeliveryBroken
+        exp_alerts: []
+
+  # ==========================================================================
+  # 7) CorrConsumerNotRunning — the engine's SELF-report (tracker 224).
+  # ==========================================================================
+  - interval: 1m
+    input_series:
+      - series: 'corr_consumer_running{instance="correlation:8000"}'
+        values: "0x30"
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: CorrConsumerNotRunning
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              layer: correlation
+              tier: page
+              instance: "correlation:8000"
+            exp_annotations:
+              summary: "Correlation engine reports its REQUIRED subscription is NOT live (corr_consumer_running == 0) — the engine is up and consuming nothing"
+              description: "This is the engine's own account of the 2026-09-02 fault: the required-lane subscription is not running. Read it WITH corr_consumer_start_failures_total and the /healthz health_reasons field, which name the specific topic and broker error — that precision is the whole reason this gauge exists and is why it is kept alongside, not instead of, the broker-side CorrelationConsumerDead. Docker health stays HTTP-200-only on purpose (tracker 174: a busy loop must not read as a dead service), so this alert and its twin are the ONLY things that act on the degraded state. Bootstrap remedies are in the runbook."
+              runbook: "docs/runbooks/engine-not-consuming.md"
+
+  # 7a) THE PRE-UPGRADE IMAGE MUST BE SILENT. corr_consumer_running ships with
+  #     this branch's correlation build. On an older deployed image the series
+  #     never existed, the scrape target is perfectly up, and a bare absent()
+  #     would page every minute for a VERSION SKEW rather than an outage. The
+  #     count_over_time guard requires the series to have EXISTED recently, so
+  #     the absent branch means "it disappeared", never "it was never here".
+  - interval: 1m
+    input_series:
+      - series: 'up{job="correlation",instance="correlation:8000"}'
+        values: "1x40"
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: CorrConsumerNotRunning
+        exp_alerts: []
+
+  # 7b) HEALTHY ENGINE -> silent.
+  - interval: 1m
+    input_series:
+      - series: 'corr_consumer_running{instance="correlation:8000"}'
+        values: "1x40"
+      - series: 'up{job="correlation",instance="correlation:8000"}'
+        values: "1x40"
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: CorrConsumerNotRunning
+        exp_alerts: []
+
+  # ==========================================================================
+  # 8) CorrConsumerRestartLoop — a supervisor that keeps restarting looks
+  #    briefly alive to every point-in-time probe.
+  # ==========================================================================
+  - interval: 1m
+    input_series:
+      - series: 'corr_consumer_restarts_total{instance="correlation:8000"}'
+        values: "0+1x40"
+    alert_rule_test:
+      - eval_time: 25m
+        alertname: CorrConsumerRestartLoop
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              layer: correlation
+              tier: page
+              instance: "correlation:8000"
+            exp_annotations:
+              # The 10 pins that $value renders: a rule that lost the template would
+              # still fire and still pass a labels-only assertion.
+              summary: "Correlation consumer is in a RESTART LOOP: 10 supervision rounds ended in failure in 10m on correlation:8000"
+              description: "The supervisor is doing its job and the underlying fault is not clearing. Each round re-subscribes, so point-in-time probes can catch a live consumer and read healthy — do not trust a single green sample while this is firing. Check corr_consumer_start_failures_total and the engine log for the named topic and broker error; a REQUIRED topic that is missing or un-granted cannot be fixed by more restarts and needs the ACL/topic bootstrap in the runbook. Restarting the container is NOT the remedy — it reproduces the same failure in a fresh process."
+              runbook: "docs/runbooks/engine-not-consuming.md"
+
+  # 8a) A SINGLE clean restart (a deploy, a config reload) is not a loop.
+  - interval: 1m
+    input_series:
+      - series: 'corr_consumer_restarts_total{instance="correlation:8000"}'
+        values: "0x10 1x30"
+    alert_rule_test:
+      - eval_time: 25m
+        alertname: CorrConsumerRestartLoop
+        exp_alerts: []
+
+  # ==========================================================================
+  # 9) CorrEvidenceLaneNotGrounded — WARNING, never a page. netops.security is
+  #    the exact lane whose failure used to take the whole subscription down.
+  # ==========================================================================
+  - interval: 1m
+    input_series:
+      - series: 'corr_evidence_topic_dropped{topic="netops.security",reason="TopicAuthorizationFailedError",instance="correlation:8000"}'
+        values: "1x40"
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: CorrEvidenceLaneNotGrounded
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              layer: correlation
+              tier: watch
+              topic: "netops.security"
+              reason: TopicAuthorizationFailedError
+              instance: "correlation:8000"
+            exp_annotations:
+              summary: "Evidence lane netops.security is NOT grounded (reason: TopicAuthorizationFailedError) — correlation is running without it"
+              description: "An optional CORR_EVIDENCE_TOPICS lane was dropped from the subscription and re-probing has not recovered it, so RCA for that evidence class is thinner than configured. Correlation is otherwise healthy — this is intentionally NOT a page. Remedy depends on the reason label: an authorization failure needs the Kafka ACL matrix applied (pipe deployment/docker/kafka/apply-acls.sh into the broker); an unknown topic needs kafka-init to create it (broker auto-create is OFF by design). Both are in the runbook. If the lane is genuinely not wanted on this deployment, remove it from CORR_EVIDENCE_TOPICS rather than leaving this standing — a permanently-firing advisory is how a real one gets ignored."
+              runbook: "docs/runbooks/engine-not-consuming.md"
+
+  # 9a) A lane that recovers on re-probe clears well inside the 15m window.
+  - interval: 1m
+    input_series:
+      - series: 'corr_evidence_topic_dropped{topic="netops.security",reason="UnknownTopicOrPartitionError",instance="correlation:8000"}'
+        values: "1x6 0x40"
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: CorrEvidenceLaneNotGrounded
+        exp_alerts: []
+
+  # ==========================================================================
+  # 10) RouterConsumerLagGrowing — joined but not draining, per lane.
+  # ==========================================================================
+  - interval: 1m
+    input_series:
+      - series: 'kafka_consumergroup_lag_sum{consumergroup="netops-router-flows",topic="netops.flows",instance="kafka-exporter:9308",job="kafka"}'
+        values: "0+500x40"
+      - series: 'kafka_consumergroup_members{consumergroup="netops-router-flows",instance="kafka-exporter:9308",job="kafka"}'
+        values: "1x40"
+    alert_rule_test:
+      - eval_time: 25m
+        alertname: RouterConsumerLagGrowing
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              layer: bus
+              tier: page
+              consumergroup: netops-router-flows
+            exp_annotations:
+              summary: "Router lane netops-router-flows lag is GROWING (+5000 in 10m) with a consumer still joined — vector-router is joined but not draining this lane"
+              description: "Joined, heartbeating, and falling behind — the mirror of RouterConsumerDead, and mutually exclusive with it by construction. The router's downstream is the usual cause: OpenSearch rejecting or back-pressuring (see OpenSearchDocumentsRejected, VectorSinkBufferFilling, OpenSearchClusterRed) or the ClickHouse flows sink. Check the router's own component errors (VectorComponentErrors) before touching the broker."
+              runbook: "docs/runbooks/engine-not-consuming.md"
+      # The dead-consumer rule must NOT also fire — one fault, one page.
+      - eval_time: 25m
+        alertname: RouterConsumerDead
+        exp_alerts: []
+
+  # 10a) Lag growing with ZERO members is RouterConsumerDead's business.
+  - interval: 1m
+    input_series:
+      - series: 'kafka_consumergroup_lag_sum{consumergroup="netops-router-flows",topic="netops.flows",instance="kafka-exporter:9308",job="kafka"}'
+        values: "0+500x40"
+      - series: 'kafka_consumergroup_members{consumergroup="netops-router-flows",instance="kafka-exporter:9308",job="kafka"}'
+        values: "0x40"
+    alert_rule_test:
+      - eval_time: 25m
+        alertname: RouterConsumerLagGrowing
+        exp_alerts: []
+
+  # ==========================================================================
+  # 11) ClickHouseWritesRejected — a REJECTED batch is terminal, not a retry.
+  # ==========================================================================
+  - interval: 1m
+    input_series:
+      - series: 'netops_clickhouse_write_outcomes_total{outcome="rejected",instance="api:8080",job="netops-api"}'
+        values: "0+2x40"
+    alert_rule_test:
+      - eval_time: 25m
+        alertname: ClickHouseWritesRejected
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              layer: clickhouse
+              tier: page
+              outcome: rejected
+              instance: "api:8080"
+              job: netops-api
+            exp_annotations:
+              summary: "ClickHouse REJECTED 30 write batch(es) in 15m — analytics rows are being refused, not retried"
+              description: "The api's ClickHouse writer recorded a rejected outcome. Unlike a timeout, a rejection is terminal for that batch: those rows are absent from the OLAP store until someone replays them. Usual causes are a schema/type mismatch after a migration, a quota or max-memory-usage refusal, or a full disk. Check CHMemoryLimitExceeded / CHFailedQueriesRising and DiskHeadroomLow alongside this, and see CorrSignalRowsQuarantined for the correlation-engine equivalent on its own write path."
+              runbook: "docs/runbooks/engine-not-consuming.md"
+
+  # 11a) HEALTHY WRITES MUST BE SILENT. `committed` climbing while `rejected`
+  #      stays flat is the normal path — the selector must not catch it.
+  - interval: 1m
+    input_series:
+      - series: 'netops_clickhouse_write_outcomes_total{outcome="committed",instance="api:8080",job="netops-api"}'
+        values: "0+500x40"
+      - series: 'netops_clickhouse_write_outcomes_total{outcome="rejected",instance="api:8080",job="netops-api"}'
+        values: "0x40"
+    alert_rule_test:
+      - eval_time: 25m
+        alertname: ClickHouseWritesRejected
+        exp_alerts: []

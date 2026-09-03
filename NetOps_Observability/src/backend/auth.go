@@ -874,6 +874,22 @@ func (s *server) withAuth(next http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 			return
 		}
+		// vmalert's notifier POSTs alerts here with no JWT (it is a Go
+		// evaluator, not a browser session). The handler authenticates via the
+		// VMALERT_WEBHOOK_TOKEN shared secret — Bearer or Basic, constant-time
+		// compared — BEFORE it parses a body or touches any state, and the
+		// route is not registered at all when that secret is unset
+		// (fail-closed). publicPaths cannot be used: it is an EXACT match and
+		// vmalert appends /api/v2/alerts to the base url it is given.
+		//
+		// Body cap: a HasPrefix escape does NOT get requestBodyLimit's
+		// pre-auth route-class cap (isPublicPath is exact-match too), so the
+		// handler's own http.MaxBytesReader (1 MiB, alertwebhook.maxBodyBytes)
+		// is the ONLY bound on this body. Do not remove it.
+		if strings.HasPrefix(r.URL.Path, "/api/internal/vmalert/") {
+			next.ServeHTTP(w, r)
+			return
+		}
 		// Anything outside /api/ and /admin/ (i.e. /metrics is the only
 		// odd duck, already handled above) is fronted by the SPA / iframes
 		// and doesn't go through this Go server.

@@ -1570,6 +1570,37 @@
       }
     },
     {
+      "id": "vmalert-api-alert-delivery",
+      "source": "vmalert",
+      "destination": "api",
+      "channel": "control",
+      "protocol": "https",
+      "port": 8080,
+      "current": {
+        "transport": "plaintext",
+        "authn": "token",
+        "authz": "route-gate",
+        "notes": "base-compose (plaintext baseline): vmalert's notifier POSTs evaluated alerts to the Alertmanager-v2 receiver at /api/internal/vmalert/api/v2/alerts, authenticated by the VMALERT_WEBHOOK_TOKEN shared secret carried in the url userinfo (Basic) and constant-time compared. The route is NOT registered when that secret is unset (fail-closed). Added 2026-09-02 to close the alert-DELIVERY gap: vmalert previously ran -notifier.blackhole, so every rule it evaluated was delivered nowhere."
+      },
+      "target": {
+        "transport": "mtls",
+        "authn": "svid-dedicated",
+        "authz": "route-gate"
+      },
+      "trust_domain": "workload",
+      "owning_epic": "SEC-010",
+      "priority": "P1",
+      "evidence": [
+        "deployment/docker/compose.tls.yml",
+        "src/backend/internal/alertwebhook/alertwebhook.go",
+        "docs/runbooks/engine-not-consuming.md"
+      ],
+      "security_profile": {
+        "transport": "mtls",
+        "notes": "TLS variant (2026-09-02): https to api:8080 presenting the registry-minted vmalert client SVID (internal/workloadid {Service: vmalert, Client: true}; -notifier.tlsCertFile/tlsKeyFile/tlsCAFile), with spiffe://netops/ns/default/sa/vmalert added to the api's TLS_CLIENT_ALLOWED_URIS. TWO independent credentials by design: the SVID authenticates the connection, VMALERT_WEBHOOK_TOKEN authenticates the request. Allowlist mechanism verified live 2026-09-02 against the running api: vector-router SVID -> HTTP 200, vmalert SVID (valid, CA-signed, not yet allowlisted) -> TLS 'bad certificate', no client cert -> 'certificate required'."
+      }
+    },
+    {
       "id": "victoria-cadvisor",
       "source": "victoria",
       "destination": "cadvisor",

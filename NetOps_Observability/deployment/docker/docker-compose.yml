@@ -262,6 +262,17 @@ services:
   # auto-creation races its first consumer on a fresh install — the same
   # "works until it doesn't, silently" shape as the rest of this audit.
   #
+  # netops.bgp is the BGP watchlist evaluator's evidence lane (bgpwatch,
+  # FEATURE_BGP_ALERTS). It is created here for the same reason as the others —
+  # never left to auto-creation — and it carries the same partition count, so
+  # tenant-keyed records land on the partition that tenant already owns.
+  # CONSUMED since 2026-09-02: the engine grounds it as the `bgp` evidence class
+  # (signals.EVIDENCE_CLASSES), it is in the default CORR_EVIDENCE_TOPICS
+  # derivation as an OPTIONAL lane, and the correlation principal holds
+  # Read+Describe on it (kafka/apply-acls.sh). Optional means an absent topic is
+  # dropped-and-re-probed, never a startup gate — but pre-creating it here is
+  # what makes the lane ground on the first pass instead of the next re-probe.
+  #
   # netops.syslog.control (A4 Phase 1) is the PRE-SCREENED syslog lane the
   # aggregator publishes alongside netops.syslog. It is created here — not left
   # to auto-creation — for the co-partitioning reason above: it must carry the
@@ -296,7 +307,7 @@ services:
         netops.controller_events netops.app.edge netops.verification
         netops.cloudlogs netops.cloudcosts netops.deadletter
         netops.wireless_sessions netops.wireless_events
-        netops.security; do
+        netops.security netops.bgp; do
         /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9092
         --create --if-not-exists --topic "$$t"
         --partitions "$$p" --replication-factor 1 || exit 1;
@@ -344,6 +355,42 @@ services:
       - "${SYSLOG_PORT:-5514}:514/tcp"
       - "514:514/udp"
       - "514:514/tcp"
+    # G3 (2026-09-02): SOCKET-LEVEL health, replacing the image's baked-in
+    # `syslog-ng-ctl healthcheck --timeout 5`.
+    #
+    # WHY. syslog-ng is the ingest EDGE: if it is marked unhealthy the watchdog
+    # pages and an operator starts restarting the thing devices are logging to.
+    # The image's probe fork/execs the vendor CLI, which then round-trips the
+    # control socket — a chain that can fail for reasons that have nothing to do
+    # with whether syslog is being received. That is not theoretical here: this
+    # stack has already had a container sit at pids.max, unable to fork
+    # ANYTHING, reading "unhealthy" while serving every request perfectly (the
+    # 2026-08-15 ClickHouse incident that `check_pid_capacity` in
+    # scripts/stack-watchdog.sh exists to name). A probe that spawns processes
+    # inherits every one of those failure modes.
+    #
+    # WHAT THIS DOES INSTEAD — it tests the two things that ARE the job:
+    #   1. `exec 3<>/dev/tcp/...` — a real TCP connect to the :514 listener,
+    #      performed by a bash BUILTIN. No second binary is fork/exec'd.
+    #   2. `/proc/net/udp` — confirms the UDP socket is still BOUND. UDP is the
+    #      lane most devices actually use and it cannot be connect-tested, so
+    #      the bound-socket check is the strongest probe available without
+    #      injecting synthetic traffic into the real ingest path. `0202` is hex
+    #      514; udp6 is checked too so an IPv6-only bind still passes.
+    #
+    # `CMD`, NOT `CMD-SHELL`: CMD-SHELL runs `/bin/sh -c`, and /bin/sh in this
+    # image is **dash**, which has no /dev/tcp (verified — it fails with
+    # "Directory nonexistent"). bash 5.2 is present at /usr/bin/bash and does.
+    # Both halves were verified against the running container on 2026-09-02,
+    # including negative controls: an unlistened TCP port and an unbound UDP
+    # port each fail the probe as they must.
+    healthcheck:
+      test: ["CMD", "bash", "-c",
+             "exec 3<>/dev/tcp/127.0.0.1/514 && exec 3>&- && grep -qi ':0202 ' /proc/net/udp /proc/net/udp6"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
     depends_on: [vector-aggregator]
     networks: [netops]
     restart: *restart
@@ -852,15 +899,43 @@ services:
   # evaluator with its own process, its own lifecycle and its own container
   # limits. The two read the SAME rules.yaml, so there is one source of truth.
   #
-  # Notification path: `-notifier.blackhole` by default because this stack ships
-  # no Alertmanager. That is NOT "alerts go nowhere" — `-remoteWrite.url` writes
-  # the firing state back into VictoriaMetrics as the standard ALERTS /
-  # ALERTS_FOR_STATE series, so `ALERTS{alertstate="firing"}` is queryable by
-  # Grafana, by the in-app boards, and by scripts/stack-watchdog.sh, which turns
-  # it into an actual phone push over the existing independent ntfy channel.
-  # To attach a real Alertmanager later, override the flag — the two are
-  # mutually exclusive in vmalert:
+  # Notification path: the api's OWN Alertmanager-v2 receiver, by default.
+  #
+  # This used to be `-notifier.blackhole`, justified by "the firing state is
+  # remote-written back into VictoriaMetrics as the ALERTS / ALERTS_FOR_STATE
+  # series, so it is queryable". Queryable is not delivered. On 2026-09-02 a
+  # three-hour correlation-engine outage passed unnoticed with THIRTEEN alerts
+  # standing firing the whole time, because nothing was watching the query and
+  # no rule had ever reached a human. `-remoteWrite.url` below still writes
+  # those series (Grafana, the in-app boards and scripts/stack-watchdog.sh all
+  # read them) — but the series is now the RECORD, not the delivery mechanism.
+  #
+  # vmalert's `-notifier.url` is an Alertmanager BASE url: the notifier appends
+  # `/api/v2/alerts` itself, so the flag below produces
+  # `POST /api/internal/vmalert/api/v2/alerts` against the api on :8080. The
+  # receiver (src/backend/internal/alertwebhook) authenticates the shared
+  # secret, refuses anything carrying a tenant label, and fans the rest into the
+  # notify.Dispatcher channels the operator has already configured.
+  #
+  # The credential rides URL userinfo (Basic auth, any username) — the same
+  # shape the TLS variant already uses for the vmauth datasource. It is a
+  # PLAINTEXT value in .env on purpose: this container must be able to send it,
+  # so it cannot be vault-sealed (exactly like INGEST_TOKEN).
+  # VMALERT_WEBHOOK_TOKEN unset ⇒ the api does not register the route at all
+  # (fail-closed) and logs a loud warning naming the variable.
+  #
+  # No `depends_on: api`. It would not create a cycle (the api depends on the
+  # storage tier only), but it would transitively block the alert EVALUATOR
+  # behind postgres/redis healthchecks — down for exactly the window it should
+  # be watching. Delivery is idempotent and repeated: an active alert is
+  # re-posted every evaluation interval, so a POST that lands while the api is
+  # still booting is retried 30s later at no cost.
+  #
+  # Explicit opt-outs, both still supported:
+  #   VMALERT_NOTIFIER_FLAG=-notifier.blackhole            (deliver nothing)
   #   VMALERT_NOTIFIER_FLAG=-notifier.url=http://alertmanager:9093
+  # The notifier flags are mutually exclusive in vmalert, which is why this is
+  # ONE overridable slot rather than a list.
   vmalert:
     image: victoriametrics/vmalert:v1.101.0@sha256:83137300d1451461884093697fbbeea56529cc8201d3b31cdce3b530e8d5af6f
     mem_limit: ${VMALERT_MEM_LIMIT:-256m}
@@ -882,7 +957,7 @@ services:
       # Hot-reload rules.yaml without a restart.
       - "-configCheckInterval=60s"
       - "-external.label=stack=${COMPOSE_PROJECT_NAME:-netops}"
-      - "${VMALERT_NOTIFIER_FLAG:--notifier.blackhole}"
+      - "${VMALERT_NOTIFIER_FLAG:--notifier.url=http://vmalert:${VMALERT_WEBHOOK_TOKEN}@api:8080/api/internal/vmalert}"
     volumes:
       - ../../src/config:/etc/vmalert/config:ro
     healthcheck:
@@ -1391,6 +1466,26 @@ services:
       INGEST_TOKEN_PROBES: ${INGEST_TOKEN_PROBES:-}
       INGEST_TOKEN_METRICS: ${INGEST_TOKEN_METRICS:-}
       INGEST_TOKEN_BUS: ${INGEST_TOKEN_BUS:-}
+      # vmalert alert DELIVERY (internal/alertwebhook). vmalert's notifier
+      # POSTs Alertmanager-v2 alerts to /api/internal/vmalert/api/v2/alerts and
+      # authenticates with this shared secret (Bearer, or Basic with the token
+      # as the password — which is what lets the compose default carry it in
+      # the notifier URL's userinfo).
+      #
+      # PLAINTEXT in .env on purpose, NOT vault-sealed: the vmalert container
+      # has to be able to SEND this value, so it must exist in cleartext where
+      # compose can interpolate it — exactly like INGEST_TOKEN. Sealing it
+      # would leave vmalert with nothing to present and put alert delivery
+      # back where it started.
+      #
+      # Empty is FAIL-CLOSED: the api does not register the route at all and
+      # logs a loud warning naming the variable (never an unauthenticated
+      # alert fan-out). install.py mints it; update.sh backfills it.
+      VMALERT_WEBHOOK_TOKEN: ${VMALERT_WEBHOOK_TOKEN:-}
+      # Suppression window for a repeat of an identical alert. MUST match
+      # alertwebhook.DefaultCooldown — a compose default that drifts from the
+      # code default is a lie told to whoever reads either one.
+      VMALERT_WEBHOOK_COOLDOWN: ${VMALERT_WEBHOOK_COOLDOWN:-30m}
       VICTORIA_URL: "http://victoria:8428"
       # Set (by install tooling) only when the self-monitoring add-on is
       # enabled — gates the Grafana stack-health probe.

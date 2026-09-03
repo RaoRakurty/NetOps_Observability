@@ -1,0 +1,213 @@
+# Runbook — "the engine is not consuming"
+
+**Symptom class:** a pipeline service is *running and healthy* and is *doing no
+work*. Nothing is obviously broken. The UI shows an honestly empty incident
+list, which reads as "a quiet network".
+
+**Alerts that route here:** `CorrelationConsumerDead`, `CorrelationLagGrowing`,
+`CorrConsumerNotRunning`, `CorrConsumerRestartLoop`, `RouterConsumerDead`,
+`RouterConsumerLagGrowing`, `IngestPipelineSilent`, `ClickHouseWritesRejected`,
+`AlertDeliveryBroken`, `CorrEvidenceLaneNotGrounded`, `CorrProbeLaneFlatlined`.
+
+---
+
+## 1. What happened on 2026-09-02 (why this file exists)
+
+Between **19:04 and 22:10 UTC the correlation engine's Kafka consumer never
+started.** Its `subscribe()` raised `TopicAuthorizationFailedError` and then
+`UnknownTopicOrPartitionError` on the **optional** `netops.security` topic, and
+that abandoned the *whole* 14-topic subscription. For three hours the engine
+correlated nothing.
+
+Every control that should have caught it was green:
+
+| Control | What it said | Why it was wrong |
+|---|---|---|
+| container healthcheck | `healthy` | It polls the `:8094` sidecar, a daemon **thread** that outlives the consumer *by design* (tracker 174: a busy loop must not read as a dead service). |
+| `scripts/stack-watchdog.sh` | green | It checked services running/healthy, `:8000`, and api liveness. None of those distinguishes *running* from *doing work*. |
+| `vmalert` | `CorrProbeLaneFlatlined` fired at 19:18 | Delivered **nowhere**. vmalert shipped with `-notifier.blackhole`; 13 alerts were firing, some since 2026-08-27, and not one had ever been delivered. |
+
+`kafka-exporter` had the proof in VictoriaMetrics the entire time —
+`kafka_consumergroup_members{consumergroup="netops-correlation"}` was `0` and
+the group's lag climbed to ~23k — and **no rule read it**.
+
+A near-identical incident on **2026-08-16** hit `vector-router` *and*
+correlation for ~80 minutes: a `data/kafka` wipe emptied the KRaft ACL store,
+every non-super-user principal was denied, lag froze, and every container
+stayed `healthy`.
+
+**The lesson, in one line:** *"the container is up" and "the process is
+consuming" are different claims, and only the second one matters.*
+
+---
+
+## 2. The three layers that now cover it
+
+Each layer works **without the other two**. That is the design requirement, not
+a nicety — the 2026-09-02 outage is what one-layer coverage looks like.
+
+| # | Layer | Where | Fails when | Independent of |
+|---|---|---|---|---|
+| 1 | **vmalert rules** | `src/config/rules-scale-slo.yaml`, group `engine-liveness` | rules are wrong, or vmalert is down | the api |
+| 2 | **Delivery** | vmalert `-notifier.url` → `POST /api/internal/vmalert/api/v2/alerts` → `notify.Dispatcher` | the api is down, or the token is wrong | — (this is the layer that was missing entirely) |
+| 3 | **External watchdog** | `scripts/stack-watchdog.sh`, `ENGINE_CONSUMER_CHECK` block → ntfy | the host is dead (healthchecks.io dead-man's-switch catches that) | **the whole stack**, including its own alerting |
+
+Layer 3 exists because *a stack cannot report its own death*. It queries
+VictoriaMetrics directly and pages over ntfy, which is deliberately not one of
+the platform's own notifiers.
+
+### The heartbeat (how layer 2 proves itself)
+
+`AlertingHeartbeat` fires **always** (`expr: vector(1)`, `severity: info`,
+`tier: heartbeat`). The api's receiver recognises it by name, records the
+arrival time in `netops_alert_webhook_heartbeat_timestamp_seconds`, and
+deliberately does **not** fan it out to any channel — a heartbeat on your phone
+every 30 minutes is pure noise.
+
+A fresh timestamp is end-to-end proof of
+`vmalert evaluates → notifier delivers → api receives`. **Its absence is the
+alarm**, and it is checked in two independent places: `AlertDeliveryBroken`
+(in-stack) and the watchdog (over its own channel — because an alert about
+broken alert delivery obviously cannot rely on alert delivery).
+
+---
+
+## 3. Triage — in this order
+
+### 3.1 Is it consuming? (30 seconds, no guessing)
+
+```bash
+# Broker's view: does the group have members? 0 = not consuming.
+docker exec "$(docker ps -qf label=com.docker.compose.service=victoria)" \
+  wget -qO- --timeout=5 \
+  'http://127.0.0.1:8428/api/v1/query?query=kafka_consumergroup_members'
+
+# Ground truth from the broker itself (works with no exporter):
+docker compose -f deployment/docker/docker-compose.yml exec kafka \
+  /opt/kafka/bin/kafka-consumer-groups.sh --bootstrap-server localhost:9092 \
+  --describe --group netops-correlation
+```
+
+Read `--describe` carefully:
+
+* **`Consumer group has no active members`** → the consumer is not joined.
+  Continue to §3.2.
+* **members present, `LAG` large and not falling** → joined but not draining.
+  Go to §3.4.
+* **`CURRENT-OFFSET` blank / `-`** → the group has never committed. This is a
+  first-boot or post-wipe bootstrap problem: §3.3.
+
+### 3.2 Why did the subscription fail?
+
+```bash
+docker compose -f deployment/docker/docker-compose.yml logs --tail=200 correlation \
+  | grep -Ei 'TopicAuthorizationFailed|UnknownTopicOrPartition|GroupAuthorizationFailed|subscribe'
+curl -s localhost:8000/../healthz   # or: docker exec <correlation> wget -qO- 127.0.0.1:8094/healthz
+```
+
+`/healthz` now carries `status`, `health_reasons` and `consumer.subscription`,
+and the engine exports `corr_consumer_running`,
+`corr_consumer_start_failures_total`, `corr_consumer_restarts_total` and
+`corr_evidence_topic_dropped{topic,reason}`. **These name the exact topic and
+error.** Two shapes:
+
+* **authorization** (`TopicAuthorizationFailedError`) → §3.3, ACLs.
+* **missing topic** (`UnknownTopicOrPartitionError`) → §3.3, `kafka-init`.
+  Broker auto-create is **OFF by design** (SEC-006.1), so a missing topic never
+  fixes itself.
+
+> Since the 2026-09-02 fix, an **optional** `CORR_EVIDENCE_TOPICS` lane failing
+> no longer takes the subscription down: it is dropped, re-probed, and reported
+> via `corr_evidence_topic_dropped` / `CorrEvidenceLaneNotGrounded` (warning,
+> not a page). Only a **REQUIRED** lane is fatal.
+
+### 3.3 Bootstrap: ACLs and topics
+
+Both are **idempotent** — safe to re-run, safe after every rebuild, and safe
+after a `data/kafka` wipe (which is exactly when they are needed, because the
+KRaft ACL store *is* the authorization state and a wipe empties it).
+
+```bash
+cd deployment/docker
+
+# 1. ACL matrix. The script lives in the repo, not in the image; on a non-TLS
+#    lab broker there is no /acls mount, so PIPE it in rather than exec a path
+#    that may not exist.
+docker compose exec -T kafka sh -s < kafka/apply-acls.sh
+#    (TLS deployments: it auto-detects /tmp/kafka-tls/admin.properties and uses
+#     the mTLS listener kafka:9094. install.py runs it after TLS phase B.)
+
+# 2. Canonical topics. kafka-init is a `restart: "no"` one-shot in the
+#    embedded-bus profile; re-running it re-creates nothing that exists.
+docker compose --profile embedded-bus up kafka-init
+
+# 3. Verify — the ONLY step that proves anything.
+docker compose exec kafka /opt/kafka/bin/kafka-consumer-groups.sh \
+  --bootstrap-server localhost:9092 --describe --group netops-correlation
+docker compose exec kafka /opt/kafka/bin/kafka-topics.sh \
+  --bootstrap-server localhost:9092 --list | grep '^netops\.'
+```
+
+Then let the consumer re-join (the supervisor retries on its own). **Restarting
+the container is not the remedy** — without the bootstrap it reproduces the
+same failure in a fresh process, which is what `CorrConsumerRestartLoop`
+detects.
+
+The full principal matrix (who may produce/consume what, and why goflow2 is
+`ANONYMOUS`) is in the header of `deployment/docker/kafka/apply-acls.sh`.
+
+### 3.4 Joined but not draining
+
+Membership is not liveness. Work down in this order:
+
+1. `corr_loop_lag_stalls_total` / `corr_loop_lag_max_ms` — event-loop
+   starvation (`CorrelationEventLoopStalling`; known residual ~1.0–1.3 s,
+   tracker 156).
+2. Downstream persistence — `ClickHouseWritesRejected`,
+   `CorrSignalRowsQuarantined`, `OpenSearchDocumentsRejected`,
+   `VectorSinkBufferFilling`, `OpenSearchClusterRed`.
+3. Per-partition lag skew — one hot tenant pins one partition, and more
+   partitions will not move it.
+4. `corr_consumer_revoke_commits_total{outcome!="ok"}` — rebalance churn.
+
+**Do not** raise session/heartbeat/max-poll timeouts. That converts a visible
+backlog into a silent one.
+
+### 3.5 Alert delivery itself
+
+```bash
+# Is the receiver configured and being fed?
+docker exec "$(docker ps -qf label=com.docker.compose.service=victoria)" \
+  wget -qO- --timeout=5 \
+  'http://127.0.0.1:8428/api/v1/query?query=netops_alert_webhook_enabled'
+docker exec "$(docker ps -qf label=com.docker.compose.service=victoria)" \
+  wget -qO- --timeout=5 \
+  'http://127.0.0.1:8428/api/v1/query?query=time()-netops_alert_webhook_heartbeat_timestamp_seconds'
+
+# What does vmalert think it is doing?
+docker compose exec vmalert wget -qO- 127.0.0.1:8880/api/v1/alerts
+docker compose logs --tail=50 vmalert | grep -i notifier
+```
+
+| Reading | Meaning | Fix |
+|---|---|---|
+| `netops_alert_webhook_enabled` absent | api predates the receiver, or is not scraped | upgrade / check the `netops-api` scrape job |
+| `enabled == 0` | `VMALERT_WEBHOOK_TOKEN` unset → route not registered (fail-closed, by design) | set it in `deployment/docker/.env`; `scripts/install.py` generates it |
+| `enabled == 1`, heartbeat stale | vmalert down/wedged, flag reverted to `-notifier.blackhole`, or a token mismatch | check `netops_alert_webhook_unauthorized_total`; compare the token on both sides |
+
+To deliberately turn delivery off, set
+`VMALERT_NOTIFIER_FLAG=-notifier.blackhole` — that is the supported opt-out and
+it makes `AlertDeliveryBroken` silent rather than lying.
+
+---
+
+## 4. Prevention
+
+* **`scripts/deploy-qualify.sh`** — run it after every `compose up`. It runs the
+  bootstraps above and then *proves* the consumers joined, lag is draining, the
+  aggregator and router are emitting, and no `TopicAuthorizationFailedError` /
+  `UnknownTopicOrPartitionError` appears in the engine or router logs.
+  `docker compose up` exiting 0 is not evidence of anything.
+* **`docs/runbooks/engine-liveness-matrix.md`** — what "doing its job" means for
+  every service, the metric that proves it, and which layer covers it.
+* Never wipe `data/kafka` without re-running §3.3 immediately afterwards.

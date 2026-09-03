@@ -199,10 +199,29 @@ EXPECTED = {
     "CORRELATION_REPLICA_URLS":      "",
     "CORR_SYSLOG_TOPIC":             "netops.syslog",
     "CORR_FIDELITY_WEIGHTING":       "0",
+    # vmalert alert DELIVERY (internal/alertwebhook). An upgraded install must
+    # get a REAL secret here, not the compose fallback: the compose default is
+    # empty, and empty means the api refuses to register the receiver
+    # (fail-closed) — i.e. the upgrade would keep delivering nothing, which is
+    # the whole defect. __URLSAFE__ (not __RANDOM__) because the default
+    # notifier flag embeds this value in URL userinfo
+    # (http://vmalert:<token>@api:8080/...), where randpw's @ # % + = would
+    # break the url vmalert parses. Plaintext by design — vmalert has to send
+    # it, so it can never be vault-sealed (same as INGEST_TOKEN).
+    "VMALERT_WEBHOOK_TOKEN":         "__URLSAFE__",
+    # Byte-identical to the docker-compose default and to
+    # alertwebhook.DefaultCooldown.
+    "VMALERT_WEBHOOK_COOLDOWN":      "30m",
 }
 
 alphabet = string.ascii_letters + string.digits + "!@#%^&*-_=+"
 def randpw(n=24): return "".join(secrets.choice(alphabet) for _ in range(n))
+
+# Credentials that ride URL userinfo (http://user:pw@host) must not contain
+# @ # % ^ & + = — see install.py's _URLSAFE_PASSWORD_ALPHABET note. Mirrors
+# install.py's generate_token (secrets.token_urlsafe) alphabet.
+urlsafe_alphabet = string.ascii_letters + string.digits + "-_"
+def randtoken(n=43): return "".join(secrets.choice(urlsafe_alphabet) for _ in range(n))
 
 def kafka_uuid():
     # kafka-storage random-uuid format: 22-char base64url uuid, no padding.
@@ -215,6 +234,8 @@ for k, default in EXPECTED.items():
         continue
     if default == "__RANDOM__":
         v = randpw(20)
+    elif default == "__URLSAFE__":
+        v = randtoken(43)
     elif default == "__KAFKA_UUID__":
         v = kafka_uuid()
     elif default == "__UID__":

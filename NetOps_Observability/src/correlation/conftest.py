@@ -94,3 +94,32 @@ def _hermetic_stream_clock():
     main._TENANT_EDGES.clear()
     main.COPARTITION_OK = True
     main._STORM_ACTIVE = False
+
+
+@pytest.fixture(autouse=True)
+def _hermetic_consumer_supervision():
+    """The consumer-supervision counters are module state with the same
+    cross-test hazard as the window above — and, since 2026-09-02, they DECIDE
+    /healthz `status`.
+
+    Any suite that drives `main.consume()` (test_consumer_supervisor,
+    test_optional_lane_subscription, ...) leaves CONSUMER_STARTS/RESTARTS
+    non-zero and CONSUMER_RUNNING False, i.e. "the consumer was started and is
+    not consuming" — which is exactly what `subscription_health()` reports as
+    degraded. A later suite asserting a healthy payload would then fail for a
+    reason that has nothing to do with it. Reset on entry AND exit, every test,
+    like every other module-level structure here.
+    """
+    def clear():
+        main.CONSUMER_RUNNING = False
+        main.CONSUMER_STARTS = 0
+        main.CONSUMER_START_FAILURES = 0
+        main.CONSUMER_RESTARTS = 0
+        main.CONSUMER_LAST_ERROR = ""
+        main.EVIDENCE_TOPIC_REPROBES = 0
+        main.EVIDENCE_TOPIC_RESUBSCRIBES = 0
+        main.EVIDENCE_TOPICS_DROPPED.clear()
+        main.SUBSCRIBED_TOPICS[:] = list(main.TOPICS)
+    clear()
+    yield
+    clear()

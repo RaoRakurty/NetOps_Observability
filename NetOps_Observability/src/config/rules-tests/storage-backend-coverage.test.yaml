@@ -1,0 +1,120 @@
+# promtool unit tests for the G1 fix (2026-09-02): StorageBackendDown must not
+# claim coverage it does not have, and the absence of a scrape job must itself
+# be a signal.
+#
+# THE DEFECT. StorageBackendDown selected
+# up{job=~"opensearch|clickhouse|victoria|postgres|redis"} — five stores. Only
+# `clickhouse` and `victoria` are job names in src/config/vmscrape.yml (and in
+# the mTLS variant; both were checked). The other three matched NOTHING, so the
+# rule read three stores broader than it was and nobody could tell from the
+# expression. A selector that silently matches nothing is the same class as the
+# blackholed notifier: the control looks present and is not there.
+#
+# These tests pin BOTH halves of the fix — that the narrowed selector still
+# fires for what it does cover, and that it no longer pretends to cover the
+# rest. The second is the one that matters: it fails the day somebody widens
+# the regex back to a job name that is not scraped.
+rule_files:
+  - /etc/prometheus/rules.yaml
+
+evaluation_interval: 1m
+
+tests:
+  # 1) A scraped store that is down still pages.
+  - interval: 1m
+    input_series:
+      - series: 'up{job="clickhouse",instance="clickhouse:9363"}'
+        values: "0x20"
+      - series: 'up{job="victoria",instance="localhost:8428"}'
+        values: "1x20"
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: StorageBackendDown
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              job: clickhouse
+              instance: "clickhouse:9363"
+            exp_annotations:
+              summary: "Stack backend clickhouse is DOWN (scrape target unreachable) — writes to it are failing"
+              description: "Covers ONLY the stores with a scrape job: clickhouse and victoria. OpenSearch is covered by OpenSearchClusterRed / OpenSearchStatsMissing instead; postgres and redis have no exporter and rest on their container healthcheck plus the external watchdog. Do not widen this selector to job names that are not in vmscrape.yml — an unmatched name is not coverage."
+
+  # 1a) Both scraped stores healthy -> silent.
+  - interval: 1m
+    input_series:
+      - series: 'up{job="clickhouse",instance="clickhouse:9363"}'
+        values: "1x20"
+      - series: 'up{job="victoria",instance="localhost:8428"}'
+        values: "1x20"
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: StorageBackendDown
+        exp_alerts: []
+
+  # 1b) THE G1 REGRESSION GUARD. If somebody re-adds postgres/redis/opensearch
+  #     to the selector, this synthetic `up{job="postgres"} == 0` starts
+  #     matching and the test fails — forcing the question "is there actually a
+  #     postgres scrape job now?". If one is genuinely added, this case should
+  #     be updated deliberately, not by accident.
+  - interval: 1m
+    input_series:
+      - series: 'up{job="postgres",instance="postgres:9187"}'
+        values: "0x20"
+      - series: 'up{job="redis",instance="redis:9121"}'
+        values: "0x20"
+      - series: 'up{job="opensearch",instance="opensearch:9200"}'
+        values: "0x20"
+      - series: 'up{job="clickhouse",instance="clickhouse:9363"}'
+        values: "1x20"
+      - series: 'up{job="victoria",instance="localhost:8428"}'
+        values: "1x20"
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: StorageBackendDown
+        exp_alerts: []
+
+  # 2) StorageExporterAbsent — the meta-alert. `up == 0` cannot fire when there
+  #    is no `up` series at all, which is exactly what a deleted or renamed
+  #    scrape job produces. Here victoria is scraped and clickhouse is not.
+  - interval: 1m
+    input_series:
+      - series: 'up{job="victoria",instance="localhost:8428"}'
+        values: "1x20"
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: StorageExporterAbsent
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              job: clickhouse
+            exp_annotations:
+              summary: "No scrape target for stack backend clickhouse — StorageBackendDown is BLIND for it"
+              description: "The job vanished from the metrics store entirely (not \"up == 0\", which would mean scraped-and-failing). Usual cause is an edit to src/config/vmscrape.yml, or victoria running the mTLS variant (vmscrape-mtls.yml) with this job dropped. Until it returns, that store's liveness is unwatched by this rule set."
+
+  # 2a) Both jobs present -> silent. This is the normal state, and it must NOT
+  #     be a standing advisory: a rule that fires forever is how the pager gets
+  #     ignored (which is why "postgres has no exporter" is documented in
+  #     docs/runbooks/engine-liveness-matrix.md rather than alerted here).
+  - interval: 1m
+    input_series:
+      - series: 'up{job="clickhouse",instance="clickhouse:9363"}'
+        values: "1x20"
+      - series: 'up{job="victoria",instance="localhost:8428"}'
+        values: "1x20"
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: StorageExporterAbsent
+        exp_alerts: []
+
+  # 2b) A store that is scraped and FAILING must not read as "not scraped" —
+  #     the two conditions are different faults with different remedies.
+  - interval: 1m
+    input_series:
+      - series: 'up{job="clickhouse",instance="clickhouse:9363"}'
+        values: "0x20"
+      - series: 'up{job="victoria",instance="localhost:8428"}'
+        values: "1x20"
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: StorageExporterAbsent
+        exp_alerts: []

@@ -60,12 +60,44 @@ python3 scripts/install.py --reset-env  # rotate all secrets
   `FEATURE_SLACK_NOTIFICATIONS`, etc.) — see `newServer()` in `main.go`.
 
 ### Monitoring
-- `scripts/stack-watchdog.sh` — external cron watchdog (every 1m). Checks all 18
-  compose services running/healthy + probes `:8000`, pings healthchecks.io
-  (dead-man's-switch) when healthy, and pushes an ntfy.sh phone alert on
-  up↔down transitions. Config in gitignored `scripts/stack-watchdog.env`
-  (`NTFY_TOPIC`, `HC_PING_URL`); `--test` sends a probe push. Kept independent
-  of the stack's own notifiers on purpose — they can't report their own death.
+Three layers, and **each must work without the other two** — that requirement
+comes from the 2026-09-02 outage, where the correlation engine consumed nothing
+for 3 h while every container read `healthy` and the one alert that did fire was
+delivered nowhere. `docs/runbooks/engine-not-consuming.md` is the post-mortem +
+first response; `docs/runbooks/engine-liveness-matrix.md` is the per-service
+inventory of what "doing its job" actually means.
+
+1. **vmalert rules** — `src/config/rules.yaml` (also read by the in-API engine)
+   and `src/config/rules-scale-slo.yaml` (**vmalert only**, so it keeps firing
+   when the api is the thing that is down). The `engine-liveness` group there
+   carries a `tier` label: exactly four conditions are `tier: page` (an engine
+   consumer not consuming · ingest silent when it should not be · storage
+   refusing writes · the alerting heartbeat missing); everything else is
+   `warning`. Rules are unit-tested with promtool — `src/config/rules-tests/*.test.yaml`,
+   run by `scripts/preflight-configs.sh`; `tests/test_alert_rule_coverage.py`
+   guards that the harness is actually aimed at them.
+2. **Delivery** — vmalert POSTs to the api's Alertmanager-v2 receiver
+   (`/api/internal/vmalert/api/v2/alerts`), which fans into `notify.Dispatcher`.
+   Platform-global, shared-secret authed (`VMALERT_WEBHOOK_TOKEN`).
+   `VMALERT_NOTIFIER_FLAG=-notifier.blackhole` is the explicit opt-out.
+   The always-firing `AlertingHeartbeat` rule is **not** routed to a human — the
+   receiver just stamps `netops_alert_webhook_heartbeat_timestamp_seconds`,
+   which is the only end-to-end proof that the delivery chain works.
+3. **`scripts/stack-watchdog.sh`** — external cron watchdog (every 1m), the only
+   layer that survives the whole stack dying. Checks every compose service
+   running/healthy + probes `:8000` + api liveness, and (2026-09-02) queries
+   VictoriaMetrics directly for **consumer-group membership** (correlation and
+   every `netops-router-*` lane) and the **alert-delivery heartbeat** —
+   `ENGINE_CONSUMER_CHECK=0` disables that block. Pings healthchecks.io
+   (dead-man's-switch) when healthy and pushes an ntfy.sh phone alert on
+   per-problem-class transitions. Config in gitignored `scripts/stack-watchdog.env`
+   (`NTFY_TOPIC`, `HC_PING_URL`); **`--test` sends a real push to the owner's
+   phone** — don't run it casually. Kept independent of the stack's own
+   notifiers on purpose: they can't report their own death.
+
+`scripts/deploy-qualify.sh` runs the bootstraps (Kafka ACLs, `kafka-init`,
+`opensearch-init`) after a `compose up` and then *proves* the engines are
+consuming. `docker compose up` exiting 0 is not evidence of anything.
 
 ### Known gotcha (fixed)
 - OpenSearch rejects docs whose fields contain dots it reads as object paths.
