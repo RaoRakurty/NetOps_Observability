@@ -3,6 +3,8 @@ package hardening
 import (
 	"context"
 	"os"
+	"reflect"
+	"sort"
 	"strings"
 	"testing"
 
@@ -131,25 +133,45 @@ func TestAristaLeafAsFoundVerdicts(t *testing.T) {
 		"weak-enable-password":   secfindings.StatusPass, // no `enable password`
 		"local-user-weak-secret": secfindings.StatusPass, // secret sha512
 		"ntp-no-authentication":  secfindings.StatusPass, // no NTP server → nothing unauthenticated
-		"tls-no-client-auth":     secfindings.StatusNotApplicable,
 
 		// NOT APPLICABLE with a stated reason — the concept has no EOS form.
 		"ssh-not-v2":                     secfindings.StatusNotApplicable,
 		"no-service-password-encryption": secfindings.StatusNotApplicable,
-
-		// NOT APPLICABLE because no EOS binding is authored (IOS-only legacy
-		// services). Listed so a future binding has to update this table.
-		"ftp-server-enabled":          secfindings.StatusNotApplicable,
-		"vty-no-access-class":         secfindings.StatusNotApplicable,
-		"no-aaa-new-model":            secfindings.StatusNotApplicable,
-		"no-control-plane-protection": secfindings.StatusNotApplicable,
-		"cdp-run-global":              secfindings.StatusNotApplicable,
-		"http-no-source-acl":          secfindings.StatusNotApplicable,
 	}
 	for rule, status := range want {
 		if got := statusOf(t, fs, rule); got != status {
 			t.Errorf("EOS rule %q = %s, want %s", rule, got, status)
 		}
+	}
+
+	// NOT EMITTED AT ALL: rules with no EOS binding (IOS-only legacy services
+	// and IOS-grammar access-control checks). They are not EOS controls, so
+	// they are not EOS verdicts either — before 2026-09-03 each of these
+	// produced a per-device NotApplicable that rendered OUR coverage gap as a
+	// statement about the device. Listed so authoring an EOS binding has to
+	// move the row up into `want`.
+	for _, rule := range []string{
+		"ftp-server-enabled", "tftp-server-enabled", "tcp-small-servers", "udp-small-servers",
+		"finger-service", "bootp-server", "pad-service", "cdp-run-global",
+		"vty-no-access-class", "http-no-source-acl", "no-aaa-new-model",
+		"no-control-plane-protection",
+		// tls-no-client-auth is SR Linux-only: EOS binds its TLS client
+		// authentication elsewhere and we have authored no detection for it.
+		"tls-no-client-auth",
+	} {
+		if f, ok := findingFor(fs, rule); ok {
+			t.Errorf("EOS emitted unbound rule %q (%s) — a rule with no binding is not this platform's control",
+				rule, f.StatusID)
+		}
+	}
+
+	// leaf1's whole emitted set is its control set and nothing else.
+	got := map[string]bool{}
+	for _, f := range fs {
+		got[f.RawRuleID] = true
+	}
+	if len(got) != len(want) {
+		t.Errorf("EOS emitted %d checks (%v), want exactly the %d bound ones", len(got), got, len(want))
 	}
 }
 
@@ -181,6 +203,41 @@ func TestSRLinuxSpineAsFoundVerdicts(t *testing.T) {
 		if got := statusOf(t, fs, rule); got != status {
 			t.Errorf("SR Linux rule %q = %s, want %s", rule, got, status)
 		}
+	}
+
+	// The scan's WHOLE emitted set is spine1's control set — nothing more. The
+	// lab defect of 2026-09-03 emitted 32 checks per spine (the entire catalog,
+	// Cisco IOS rules included); the correct answer is these 14.
+	got := map[string]secfindings.StatusID{}
+	for _, f := range fs {
+		got[f.RawRuleID] = f.StatusID
+	}
+	if len(got) != len(want) {
+		t.Errorf("SR Linux emitted %d checks, want exactly the %d bound ones; emitted=%v", len(got), len(want), got)
+	}
+	for rule := range got {
+		if _, ok := want[rule]; !ok {
+			t.Errorf("SR Linux emitted %q, which has no srlinux binding", rule)
+		}
+	}
+
+	// The FAIL list a lab scan of spine1 must produce, asserted as a SET so a
+	// rule that stops firing is caught as loudly as one that starts.
+	wantFail := []string{
+		"http-server-nontls", "mgmt-api-unencrypted", "tls-no-client-auth",
+		"snmp-v1v2c-community", "no-remote-aaa", "no-ntp-server",
+	}
+	fails := []string{}
+	for rule, st := range got {
+		if st == secfindings.StatusFail {
+			fails = append(fails, rule)
+		}
+	}
+	sort.Strings(fails)
+	sorted := append([]string(nil), wantFail...)
+	sort.Strings(sorted)
+	if !reflect.DeepEqual(fails, sorted) {
+		t.Errorf("spine1 FAIL set = %v, want %v", fails, sorted)
 	}
 }
 

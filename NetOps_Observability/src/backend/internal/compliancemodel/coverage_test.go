@@ -59,20 +59,30 @@ func TestHIPAAvsPCIIndependence(t *testing.T) {
 		t.Errorf("SC-8 should FAIL under PCI, got %v", statusOf(pci, ControlSC8))
 	}
 
-	// ── independent COVERAGE % (honest, < 100% via unverified controls) ──────
-	// HIPAA: 5 in scope (SC-8, IA-5, AC-3, AU-2, SI-7), 2 check-covered → 40%.
-	if hipaa.ControlsInScope != 5 || hipaa.ControlsWithCheck != 2 {
-		t.Errorf("HIPAA coverage counts = %d/%d, want 2/5", hipaa.ControlsWithCheck, hipaa.ControlsInScope)
+	// ── independent COVERAGE % (honest, < 100% via uncovered controls) ───────
+	// The denominator is the framework's OWN scope, the numerator is the
+	// controls the LEGACY 9 checks evidence (this catalog carries no hardening
+	// mappings — a caller composes those in with Catalog.With, which is what
+	// raises the numerator without touching the scope).
+	//
+	// HIPAA §164.312 technical safeguards: 10 in scope, 2 check-covered → 20%.
+	if hipaa.ControlsInScope != 10 || hipaa.ControlsWithCheck != 2 {
+		t.Errorf("HIPAA coverage counts = %d/%d, want 2/10", hipaa.ControlsWithCheck, hipaa.ControlsInScope)
 	}
-	if hipaa.CoveragePercent != 40 {
-		t.Errorf("HIPAA coverage = %.1f%%, want 40%%", hipaa.CoveragePercent)
+	if hipaa.CoveragePercent != 20 {
+		t.Errorf("HIPAA coverage = %.1f%%, want 20%%", hipaa.CoveragePercent)
 	}
-	// PCI: 7 in scope (SC-8, IA-5, CM-8, CM-2, SI-2, AC-3, AU-2), 5 covered → ~71.4%.
-	if pci.ControlsInScope != 7 || pci.ControlsWithCheck != 5 {
-		t.Errorf("PCI coverage counts = %d/%d, want 5/7", pci.ControlsWithCheck, pci.ControlsInScope)
+	// PCI technical requirements: 18 in scope, 5 check-covered → ~27.8%. PCI's
+	// scope is BROADER than HIPAA's from the same owned catalog, which is the
+	// point — the two frameworks are not two labels on one number.
+	if pci.ControlsInScope != 18 || pci.ControlsWithCheck != 5 {
+		t.Errorf("PCI coverage counts = %d/%d, want 5/18", pci.ControlsWithCheck, pci.ControlsInScope)
 	}
-	if pci.CoveragePercent < 71.0 || pci.CoveragePercent > 71.5 {
-		t.Errorf("PCI coverage = %.2f%%, want ~71.43%%", pci.CoveragePercent)
+	if pci.ControlsInScope <= hipaa.ControlsInScope {
+		t.Errorf("PCI scope (%d) must be broader than HIPAA's (%d)", pci.ControlsInScope, hipaa.ControlsInScope)
+	}
+	if pci.CoveragePercent < 27.5 || pci.CoveragePercent > 28.0 {
+		t.Errorf("PCI coverage = %.2f%%, want ~27.78%%", pci.CoveragePercent)
 	}
 
 	// Both frameworks reach a Fail verdict (each from ITS OWN in-scope findings)

@@ -188,6 +188,8 @@ var routeIsolationLedger = map[string]string{
 	"/api/security/exposure-stories":  "scoped",
 	"/api/security/exposure-stories/": "scoped", // delegates to handleCorrelationByID (ownership pre-read)
 	"/api/security/rules":             "scoped", // GET catalog + tenant state; PUT administration:write, owner from the token
+	"/api/security/frameworks":        "scoped", // GET catalogue + tenant selection; PUT administration:write, owner from the token
+	"/api/security/compliance":        "scoped", // per-framework scorecards over the caller's own findings
 	"/api/security/views":             "scoped",
 	"/api/security/views/":            "scoped", // DELETE {id}; cross-tenant id -> 404
 	// P3-EMIT producer lane (internal/seclane). Both are per-tenant: the status

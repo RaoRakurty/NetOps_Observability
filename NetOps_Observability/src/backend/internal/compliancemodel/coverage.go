@@ -44,9 +44,24 @@ type FrameworkCoverage struct {
 	Unassessed        int                  `json:"unassessed"` // in-scope controls with a check but no finding
 	Verdict           secfindings.StatusID `json:"verdict_id"` // worst assessed control status; Unknown = nothing assessed
 	VerdictName       string               `json:"verdict"`
-	Controls          []ControlResult      `json:"controls"` // per in-scope control, sorted by id
-	Caption           string               `json:"caption"`  // the §5d honesty caption
+	// ScorePercent is 100 * Passed / (Passed+Warned+Failed) over the controls
+	// that were actually ASSESSED. It is a POINTER so "nothing was assessed"
+	// serializes as null and can never be rendered as 0 % (which reads as a
+	// total failure) or 100 % (which reads as a clean bill) — the §5g rule that
+	// an unassessed control is unknown, never a pass.
+	ScorePercent *float64        `json:"score_percent"`
+	Controls     []ControlResult `json:"controls"` // per in-scope control, sorted by id
+	Caption      string          `json:"caption"`  // the §5d honesty caption
+	// Note is the honest empty-state sentence when nothing in this framework's
+	// scope was assessed. Empty when there is a score to report.
+	Note string `json:"note,omitempty"`
 }
+
+// unassessedNote is what a framework with no assessed control says. It is a
+// SENTENCE, not a percentage, because there is no honest number: enabling PCI
+// on an estate whose findings all map to controls PCI does not cover must read
+// as "nothing here speaks to PCI yet", never as 0 %.
+const unassessedNote = "No assessed control maps to this framework yet — this is an absence of assessment, not a passing or failing result."
 
 // worstRank orders verdicts so a rollup keeps the most severe. Fail dominates,
 // then Error, Warning, Pass, NotApplicable; Unknown (no verdict) is lowest so it
@@ -95,15 +110,14 @@ func ProjectFramework(findings []secfindings.Finding, cat *Catalog, fp Framework
 	}
 	byControl := make(map[string]*acc, len(scope))
 	for _, f := range findings {
-		refs := cat.ControlsForCheck(f.RawRuleID)
-		for _, r := range refs {
-			if !inScope[r.ControlID] {
+		for _, controlID := range controlsForFinding(cat, f) {
+			if !inScope[controlID] {
 				continue // out of THIS framework's scope — the independence boundary
 			}
-			a := byControl[r.ControlID]
+			a := byControl[controlID]
 			if a == nil {
 				a = &acc{worst: secfindings.StatusUnknown}
-				byControl[r.ControlID] = a
+				byControl[controlID] = a
 			}
 			a.count++
 			if worstRank(f.StatusID) > worstRank(a.worst) {
@@ -167,7 +181,48 @@ func ProjectFramework(findings []secfindings.Finding, cat *Catalog, fp Framework
 		cov.CoveragePercent = 100 * float64(cov.ControlsWithCheck) / float64(cov.ControlsInScope)
 	}
 	cov.VerdictName = cov.Verdict.String()
+	if scored := cov.Passed + cov.Warned + cov.Failed; scored > 0 {
+		pct := 100 * float64(cov.Passed) / float64(scored)
+		cov.ScorePercent = &pct
+	} else {
+		cov.Note = unassessedNote
+	}
 	return cov
+}
+
+// controlsForFinding resolves the canonical 800-53 control ids one finding
+// evidences, and is the ONE place that decision is made.
+//
+// The OWNED check→control mapping wins: it is Correlix IP, it is version-pinned
+// (CatalogVersion) and it can express the M:N case a single stamped field
+// cannot. A finding whose check has no mapping falls back to the control the
+// PRODUCER stamped on it — which is how the hardening catalogue's rules reach a
+// framework at all without this package importing that catalogue (a caller that
+// wants the mapping treated as owned composes it in via Catalog.With).
+//
+// A finding with neither maps to NOTHING and contributes to no framework. That
+// is deliberate: attributing an unmapped verdict to a framework would be
+// inventing evidence.
+func controlsForFinding(cat *Catalog, f secfindings.Finding) []string {
+	return cat.ControlsForFinding(f)
+}
+
+// ControlsForFinding is controlsForFinding as public API: a caller outside this
+// package (a handler counting how many findings reached ANY enabled framework)
+// must resolve a finding to controls exactly the way the projection does, or the
+// count under the cards disagrees with the cards.
+func (cat *Catalog) ControlsForFinding(f secfindings.Finding) []string {
+	if refs := cat.ControlsForCheck(f.RawRuleID); len(refs) > 0 {
+		out := make([]string, 0, len(refs))
+		for _, r := range refs {
+			out = append(out, r.ControlID)
+		}
+		return out
+	}
+	if f.ControlID != "" {
+		return []string{f.ControlID}
+	}
+	return nil
 }
 
 // ProjectFrameworks scores EACH selected framework independently from the SAME

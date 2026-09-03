@@ -12,8 +12,8 @@
 // tempt the UI into claiming "clear".
 
 import type {
-  CorrObject, SecFacets, SecFinding, SecFindingsPage, SecPosture, SecRule,
-  SecSavedView, SecTrend, Seam,
+  CorrObject, SecCompliance, SecFacets, SecFinding, SecFindingsPage,
+  SecFrameworkCatalog, SecPosture, SecRule, SecSavedView, SecTrend, Seam,
 } from "../../services/api";
 
 export const finding = (over: Partial<SecFinding> = {}): SecFinding => ({
@@ -58,11 +58,13 @@ export const FINDINGS: SecFinding[] = [
   }),
   finding({
     // NotApplicable — the trap: status_id 4 is NOT a pass and must never colour
-    // a screen green or be counted as a clean control.
+    // a screen green or be counted as a clean control. Its status_detail is the
+    // provider's REASON (secbus attrs.status_detail), not narrative colour.
     id: "doc-4", native_id: "nat-4", severity: "", status: "NotApplicable", status_id: 4,
     evidence_class: "posture", control_title: "AAA / TACACS+ posture", control: "NDM-4.1",
     resource: { uid: "d-fw-01", name: "fw-01" },
     observed: "", intended: "", remediation: "", standards: [], evidence_ref: undefined,
+    status_detail: "SR Linux has no telnet server in its model — SSHv2 only",
   }),
   finding({
     id: "doc-5", native_id: "nat-5", severity: "high", status: "Fail", status_id: 3,
@@ -175,4 +177,161 @@ export const STORY: CorrObject = {
   owner: "isp",
   grounding: "seam+topo",
   plane_count: 3,
+};
+
+/**
+ * The unassessed slice, one entry per REASON the producer can state, plus the
+ * one that states none. These are the exact strings the hardening engine emits
+ * (internal/hardening/engine.go) — the fixture is the contract between the
+ * producer's wording and what the screens promise to show.
+ */
+export const UNASSESSED_FINDINGS: SecFinding[] = [
+  finding({
+    id: "u-1", native_id: "u-1", status: "Unknown", status_id: 0, severity: "high",
+    evidence_class: "posture", control_title: "No NTP time source configured",
+    raw_rule_id: "no-ntp-server", resource: { uid: "spine1", name: "spine1", platform: "nokia SR Linux" },
+    observed: "", intended: "", remediation: "", evidence_ref: undefined, seam: undefined,
+    status_detail: "running-config unavailable — control not assessed (fail-closed)",
+  }),
+  finding({
+    id: "u-2", native_id: "u-2", status: "Unknown", status_id: 0, severity: "high",
+    evidence_class: "posture", control_title: "Management TLS profile does not authenticate the client",
+    raw_rule_id: "tls-no-client-auth", resource: { uid: "spine2", name: "spine2", platform: "nokia SR Linux" },
+    observed: "", intended: "", remediation: "", evidence_ref: undefined, seam: undefined,
+    status_detail: "running-config unavailable — control not assessed (fail-closed)",
+  }),
+  finding({
+    id: "u-3", native_id: "u-3", status: "NotApplicable", status_id: 4, severity: "",
+    evidence_class: "posture", control_title: "Telnet permitted on management lines",
+    raw_rule_id: "telnet-vty-enabled", resource: { uid: "spine1", name: "spine1", platform: "nokia SR Linux" },
+    observed: "", intended: "", remediation: "", evidence_ref: undefined, seam: undefined,
+    status_detail: "SR Linux has no telnet server in its model — SSHv2 only",
+  }),
+  finding({
+    id: "u-4", native_id: "u-4", status: "Unknown", status_id: 0, severity: "info",
+    evidence_class: "posture", control_title: "Device platform unresolved — no hardening control assessed",
+    raw_rule_id: "platform-unresolved", resource: { uid: "mystery", name: "mystery", platform: "acme WidgetOS 1.0" },
+    observed: "acme WidgetOS 1.0", intended: "", remediation: "", evidence_ref: undefined, seam: undefined,
+    status_detail: 'unassessed: platform unresolved — the platform label "acme WidgetOS 1.0" matches no vendor profile, so NO hardening control was evaluated for this device',
+  }),
+  finding({
+    // A provider that stated NO reason — the case the UI must NOT paper over.
+    id: "u-5", native_id: "u-5", status: "Unknown", status_id: 0, severity: "",
+    evidence_class: "posture", control_title: "Legacy check from an older producer",
+    raw_rule_id: "legacy", resource: { uid: "d-old-01", name: "old-01" },
+    observed: "", intended: "", remediation: "", evidence_ref: undefined, seam: undefined,
+    status_detail: undefined,
+  }),
+];
+
+export const UNASSESSED_PAGE: SecFindingsPage = {
+  items: UNASSESSED_FINDINGS, next_cursor: null, total: UNASSESSED_FINDINGS.length,
+};
+
+/**
+ * The framework catalogue as a tenant that has NOT chosen reads it: the shipped
+ * default set on (NIST 800-53 + CIS Controls), the regulatory three off, and the
+ * benchmarks in their own list with the citation join onto controls.
+ *
+ * The awkward parts are the point: one benchmark whose section taxonomy was
+ * never verified (so nothing may cite it), and a framework whose scope this
+ * platform cannot fully evidence.
+ */
+export const FRAMEWORK_CATALOG: SecFrameworkCatalog = {
+  configured: false,
+  frameworks: [
+    {
+      id: "nist-800-53-r5", name: "NIST SP 800-53 Rev5", version: "Rev 5 (Release 5.2.0)",
+      source: "base", default_on: true, enabled: true,
+      scope: "The control catalogue this platform models directly.",
+    },
+    {
+      id: "cis-controls-v8", name: "CIS Controls v8.1", version: "8.1",
+      source: "projection-of-800-53", default_on: true, enabled: true,
+      scope: "The vendor-neutral CIS Critical Security Controls.",
+    },
+    {
+      id: "hipaa-security-rule", name: "HIPAA Security Rule", version: "45 CFR 164.312",
+      source: "projection-of-800-53", default_on: false, enabled: false,
+      scope: "The §164.312 technical safeguards only.",
+    },
+    {
+      id: "pci-dss-v4", name: "PCI DSS v4.0.1", version: "4.0.1",
+      source: "projection-of-800-53", default_on: false, enabled: false,
+      scope: "The PCI DSS technical requirements a network device is in scope for.",
+    },
+  ],
+  benchmarks: [
+    {
+      id: "cis-cisco-ios-xe-17", title: "CIS Cisco IOS XE 17.x Benchmark", version: "v2.2.1",
+      platform: "Cisco IOS-XE 17.x", sections_verified: true,
+    },
+    {
+      id: "cis-arista-eos", title: "CIS Arista EOS Benchmark", version: "v1.0.0",
+      platform: "Arista EOS", sections_verified: false,
+      note: "Its section taxonomy could not be read from a published document, so no rule cites a section of it.",
+    },
+  ],
+  benchmark_citations: [
+    {
+      rule_id: "telnet-vty-enabled", benchmark_id: "cis-cisco-ios-xe-17", section: "1.2",
+      title: "Access Rules", controls: ["AC-17", "SC-8"],
+      label: "CIS Cisco IOS XE 17.x Benchmark v2.2.1 §1.2 Access Rules",
+    },
+  ],
+};
+
+/**
+ * One scorecard with a real verdict and one with NOTHING assessed — the pair
+ * that proves an unassessed framework renders its sentence rather than 0%.
+ */
+export const COMPLIANCE: SecCompliance = {
+  configured: false,
+  enabled: ["nist-800-53-r5", "cis-controls-v8"],
+  assessed_findings: 1,
+  current_findings: 1,
+  frameworks: [
+    {
+      framework: "NIST SP 800-53 Rev5", version: "Rev 5 (Release 5.2.0)",
+      controls_in_scope: 4, controls_with_check: 2, coverage_percent: 50,
+      assessed: 2, passed: 1, warned: 0, failed: 1, unassessed: 0,
+      verdict_id: 3, verdict: "Fail", score_percent: 50,
+      caption: "Audit-ready control evidence mapped to framework controls — not certified compliance.",
+      controls: [
+        {
+          control_id: "AC-17", family: "AC", title: "Remote Access", has_check: true,
+          status_id: 3, status: "Fail", findings: 1,
+          requirements: [{ framework: "NIST SP 800-53 Rev5", requirement_id: "AC-17", title: "Remote Access" }],
+        },
+        {
+          control_id: "SC-8", family: "SC", title: "Transmission Confidentiality and Integrity",
+          has_check: true, status_id: 1, status: "Pass", findings: 1,
+          requirements: [{ framework: "NIST SP 800-53 Rev5", requirement_id: "SC-8" }],
+        },
+        {
+          control_id: "SI-7", family: "SI", title: "Software, Firmware, and Information Integrity",
+          has_check: false, status_id: 0, status: "Unknown", findings: 0, requirements: [],
+        },
+        {
+          control_id: "AU-2", family: "AU", title: "Event Logging", has_check: true,
+          status_id: 0, status: "Unknown", findings: 0, requirements: [],
+        },
+      ],
+    },
+    {
+      framework: "CIS Controls v8.1", version: "8.1",
+      controls_in_scope: 3, controls_with_check: 1, coverage_percent: 33.3,
+      assessed: 0, passed: 0, warned: 0, failed: 0, unassessed: 1,
+      verdict_id: 0, verdict: "Unknown", score_percent: null,
+      caption: "Audit-ready control evidence mapped to framework controls — not certified compliance.",
+      note: "No assessed control maps to this framework yet — this is an absence of assessment, not a passing or failing result.",
+      controls: [
+        {
+          control_id: "CM-7", family: "CM", title: "Least Functionality", has_check: true,
+          status_id: 0, status: "Unknown", findings: 0,
+          requirements: [{ framework: "CIS Controls v8.1", requirement_id: "CIS-4" }],
+        },
+      ],
+    },
+  ],
 };

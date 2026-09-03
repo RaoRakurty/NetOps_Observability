@@ -206,3 +206,12 @@
 .sec-oi h4 { margin: 0 0 4px; font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--fg-subtle); }
 .sec-oi p { margin: 0; font-size: 12.5px; overflow-wrap: anywhere; }
 .sec-mono { font-family: var(--font-mono); font-size: 12px; overflow-wrap: anywhere; }
+
+/* The "why unassessed" block. Deliberately in the NEUTRAL ramp with a plain
+   left rule: a non-verdict must read as unresolved, not as a warning (amber
+   would claim a severity we did not measure) and never as clear. */
+.sec-why {
+  border-left: 3px solid var(--border); background: var(--surface-2);
+  border-radius: var(--radius-sm, 4px); padding: 8px 10px;
+}
+.sec-why p { overflow-wrap: anywhere; }

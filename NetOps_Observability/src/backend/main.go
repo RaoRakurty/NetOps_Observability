@@ -36,6 +36,10 @@ import (
 	// BGP-WATCH-BEGIN
 	"netops/backend/internal/bgpwatch"
 	// BGP-WATCH-END
+	// SECURITY-LANE-BEGIN — used only by securityComplianceInputs, which goes
+	// with internal/hardening.
+	"netops/backend/internal/compliancemodel"
+	// SECURITY-LANE-END
 	// CONFIG-BACKUP-BEGIN
 	"netops/backend/internal/configdrift"
 	"netops/backend/internal/configstore"
@@ -293,6 +297,13 @@ type server struct {
 	secAPI         *secapi.API
 	secStore       secapi.Store
 	secFindMetrics *secapi.Metrics
+	// SEC-FRAMEWORKS-BEGIN
+	// Which compliance frameworks a tenant has opted into (owner, 2026-09-03:
+	// compliance is analyzed per customer requirement, not run for everybody).
+	// PG under the Postgres backend (migration 0042, tenant_iso FORCE-RLS),
+	// tenant-keyed file store otherwise.
+	secFrameworks secapi.FrameworkStore
+	// SEC-FRAMEWORKS-END
 	// Parser coverage (programme A6, parsercov/): platform-admin engine parser
 	// stats + the caller's own unrecognized log shapes. Handlers live in the
 	// subpackage; only the wiring is here (§2, the secapi precedent).
@@ -1021,9 +1032,12 @@ func newServer() *server {
 	srv.cloudMonitors = newCloudMonitorStore(cloudMonitorsPath())
 	srv.rcaPromotions = newRcaPromotionStore(rcaPromotionsPath()) // #113 point 3
 	srv.rcaActionItems = newRcaActionItemStore(rcaActionItemsPath())
-	srv.rcaFeedback = newRcaFeedbackStore()            // Project 2 P7 operator verdicts (migration 0036 / file fallback)
-	srv.rcaFeedbackMetrics = rcafeedback.NewMetrics()  // netops_rca_feedback_total{verdict}
-	srv.secStore = newSecurityControlPlaneStore()      // Project 3 P3-API (migration 0037 / file fallback)
+	srv.rcaFeedback = newRcaFeedbackStore()           // Project 2 P7 operator verdicts (migration 0036 / file fallback)
+	srv.rcaFeedbackMetrics = rcafeedback.NewMetrics() // netops_rca_feedback_total{verdict}
+	srv.secStore = newSecurityControlPlaneStore()     // Project 3 P3-API (migration 0037 / file fallback)
+	// SEC-FRAMEWORKS-BEGIN
+	srv.secFrameworks = newSecurityFrameworkStore() // per-tenant framework opt-in (migration 0042 / file fallback)
+	// SEC-FRAMEWORKS-END
 	srv.secFindMetrics = secapi.NewMetrics()           // netops_security_findings_queries_total{op}
 	srv.secAPI = secapi.New(srv.securityAPIDeps())     // handlers over injected seams (§5)
 	srv.parserCovMetrics = parsercov.NewMetrics()      // netops_parser_coverage_* counters
@@ -1562,23 +1576,6 @@ func Run() {
 	if envOr("FUSION_WORKER_ENABLED", "") == "true" {
 		srv.fusion.start(ctx)
 	}
-	// SECURITY-LANE-BEGIN — Security evidence producer (Project 3, P3-EMIT):
-	// hardening + vendor-advisory + threat detections → secbus.FromFinding →
-	// netops.security, per tenant, on a bounded jittered ticker. Opt-in and
-	// default-off (FEATURE_SECURITY_LANE=true); with the flag off NOTHING is
-	// constructed, started or routed.
-	if envBool(seclane.EnvFeatureFlag) {
-		lane, err := seclane.New(srv.securityLaneDeps())
-		if err != nil {
-			// Fail LOUD, not silently dormant: the operator asked for the lane.
-			logError("security.lane", "security evidence lane could not be constructed — NOTHING will be emitted",
-				errf(err))
-		} else {
-			srv.securityLane = lane
-			workers.start("security-lane", func() { lane.Run(ctx) })
-		}
-	}
-	// SECURITY-LANE-END
 	// BGP-WATCH-BEGIN — the BGP watchlist evaluator (tracker #5/#10): per
 	// tenant, on a bounded jittered ticker, classifying each watched prefix and
 	// emitting notifications + evidence on the TRANSITIONS. Opt-in and
@@ -1602,6 +1599,33 @@ func Run() {
 		}
 	}
 	// CONFIG-BACKUP-END
+	// SECURITY-LANE-BEGIN — Security evidence producer (Project 3, P3-EMIT):
+	// hardening + vendor-advisory + threat detections → secbus.FromFinding →
+	// netops.security, per tenant, on a bounded jittered ticker. Opt-in and
+	// default-off (FEATURE_SECURITY_LANE=true); with the flag off NOTHING is
+	// constructed, started or routed.
+	//
+	// ORDER IS LOAD-BEARING, and this is where it was got wrong (lab, 2026-09-03).
+	// securityLaneDeps() RESOLVES Deps.ConfigSource ONCE, here, by calling
+	// configHardeningSource() — which reads s.configDrift. This block used to sit
+	// ABOVE the CONFIG-BACKUP block that assigns that field, so the lane captured
+	// a nil ConfigSource on every boot and every §5e hardening rule reported
+	// "running-config unavailable — control not assessed (fail-closed)" even
+	// though the lab spines each had a captured, unsealable running-config on
+	// file. The lane MUST be constructed after every module whose value it
+	// injects; keep it BELOW config backup.
+	if envBool(seclane.EnvFeatureFlag) {
+		lane, err := seclane.New(srv.securityLaneDeps())
+		if err != nil {
+			// Fail LOUD, not silently dormant: the operator asked for the lane.
+			logError("security.lane", "security evidence lane could not be constructed — NOTHING will be emitted",
+				errf(err))
+		} else {
+			srv.securityLane = lane
+			workers.start("security-lane", func() { lane.Run(ctx) })
+		}
+	}
+	// SECURITY-LANE-END
 	// PACKET-CAPTURE-BEGIN — Packet Capture: bounded, per-interface, on-device
 	// capture over the SSH gateway → sealed capture store. There is NO scheduler
 	// and NO worker: every capture is an explicit, audited operator action.
@@ -2180,6 +2204,14 @@ func (s *server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/security/exposure-stories", s.secAPI.HandleExposureStories)
 	mux.HandleFunc("/api/security/exposure-stories/", s.handleSecurityExposureStory)
 	mux.HandleFunc("/api/security/rules", s.secAPI.HandleRules)
+	// SEC-FRAMEWORKS-BEGIN
+	// Per-tenant compliance framework selection (GET|PUT) and the scorecards
+	// that follow from it. Both are per-tenant DATA: the read is scoped by the
+	// same index-pattern + tenant-clause chokepoint, and the write takes the
+	// per-tenant administration gate with the owner stamped from the token.
+	mux.HandleFunc("/api/security/frameworks", s.secAPI.HandleFrameworks)
+	mux.HandleFunc("/api/security/compliance", s.secAPI.HandleCompliance)
+	// SEC-FRAMEWORKS-END
 	mux.HandleFunc("/api/security/views", s.secAPI.HandleViews)
 	mux.HandleFunc("/api/security/views/", s.secAPI.HandleViews)
 	// SECURITY-LANE-BEGIN
@@ -3744,6 +3776,28 @@ func newSecurityControlPlaneStore() secapi.Store {
 	return fs
 }
 
+// SEC-FRAMEWORKS-BEGIN
+// newSecurityFrameworkStore selects the Postgres register under the Postgres
+// backend (migration 0042, tenant_iso FORCE-RLS), else the tenant-keyed file
+// store so the default build works unchanged (the secStore precedent).
+func newSecurityFrameworkStore() secapi.FrameworkStore {
+	if ps, ok := platformdb.ActivePG(); ok {
+		return secapi.NewFrameworkPGStore(ps.DB())
+	}
+	fs := secapi.NewFrameworkFileStore(envOr("SECURITY_FRAMEWORK_STATE_FILE", "/data/security_frameworks.json"))
+	if err := fs.LoadErr(); err != nil {
+		// The store still SERVES (the shipped default framework set) rather
+		// than refusing to boot over a preferences file — but a tenant whose
+		// HIPAA/PCI selection did not load must not be shown the defaults as
+		// though it had chosen them (§10 no silent failures).
+		logError("security", "security framework selection could not be read — serving the SHIPPED default framework set; a tenant's stored selection is NOT applied",
+			map[string]any{"err": err.Error()})
+	}
+	return fs
+}
+
+// SEC-FRAMEWORKS-END
+
 // securityAuthz maps secapi's abstract gates onto this platform's RBAC modules
 // and resolves the caller's tenant scope.
 //
@@ -3822,14 +3876,86 @@ func (s *server) securityAPIDeps() secapi.Deps {
 		ExposureStories: s.securityExposureStories,
 		RegistryDevices: s.securityRegistryDevices,
 		Store:           s.secStore,
-		Metrics:         s.secFindMetrics,
-		Audit:           s.securityAudit,
-		WriteJSON:       writeJSON,
-		WriteError:      writeError,
+		// SEC-FRAMEWORKS-BEGIN
+		FrameworkStore: s.secFrameworks,
+		// SEC-FRAMEWORKS-END
+		// SECURITY-LANE-BEGIN
+		// The ONLY producer-derived input the compliance view takes. It sits in
+		// the SECURITY-LANE markers (not the SEC-FRAMEWORKS ones) because it is
+		// the one line that goes when internal/hardening does: with it removed
+		// the field is nil, secapi falls back to the seed catalog, and the
+		// framework selection + scorecards keep answering.
+		ComplianceInputs: securityComplianceInputs,
+		// SECURITY-LANE-END
+		Metrics:    s.secFindMetrics,
+		Audit:      s.securityAudit,
+		WriteJSON:  writeJSON,
+		WriteError: writeError,
 	}
 }
 
 // SECURITY-LANE-BEGIN
+// securityComplianceInputs adapts the shipped hardening catalogue into the
+// producer-derived half of the compliance view: the rule→control mapping the
+// framework projection composes onto the owned control catalog, and the
+// published CIS device benchmarks with the section each rule cites.
+//
+// It lives HERE, in the wiring, because internal/hardening is a removable module
+// and secapi is a read API that must survive its deletion
+// (security_lane_removability_test.go). Deleting the SECURITY-LANE block that
+// carries it leaves secapi.Deps.ComplianceInputs nil, which is a SUPPORTED
+// state: the frameworks endpoint then serves the catalogue with no benchmark
+// list and says so, and the scorecards project the legacy compliance checks
+// only.
+//
+// A rule contributes at the honest "supports" strength (§5d): one config-audit
+// check evidences a control without fully demonstrating it.
+func securityComplianceInputs() secapi.ComplianceInputs {
+	hc := hardening.DefaultCatalog()
+
+	labels := map[string]string{}
+	benchmarks := make([]secapi.BenchmarkView, 0, 8)
+	for _, b := range hardening.Benchmarks() {
+		labels[b.ID] = b.Label()
+		benchmarks = append(benchmarks, secapi.BenchmarkView{
+			ID: b.ID, Title: b.Title, Version: b.Version, Platform: b.Platform,
+			SectionsVerified: b.SectionsVerified, Note: b.Note,
+		})
+	}
+
+	mappings := make([]compliancemodel.ControlMapping, 0, 64)
+	controls := map[string][]string{}
+	ids := make([]string, 0, 64)
+	add := func(id string, tags []string) {
+		ids = append(ids, id)
+		controls[id] = tags
+		if len(tags) > 0 {
+			mappings = append(mappings, compliancemodel.ControlMapping{
+				Check: id, Controls: secapi.SupportsControls(tags),
+			})
+		}
+	}
+	for _, r := range hc.Rules() {
+		add(r.ID, r.Controls)
+	}
+	for _, p := range hc.Probes() {
+		add(p.ID, p.Controls)
+	}
+	sort.Strings(ids)
+
+	citations := make([]secapi.BenchmarkCitation, 0, 64)
+	for _, id := range ids {
+		for _, ref := range hardening.BenchmarkSections(id) {
+			citations = append(citations, secapi.BenchmarkCitation{
+				RuleID: id, BenchmarkID: ref.BenchmarkID, Section: ref.Section, Title: ref.Title,
+				Label:    labels[ref.BenchmarkID] + " §" + ref.Section + " " + ref.Title,
+				Controls: append([]string(nil), controls[id]...),
+			})
+		}
+	}
+	return secapi.ComplianceInputs{Mappings: mappings, Benchmarks: benchmarks, Citations: citations}
+}
+
 // registerSecurityLaneRoutes registers the producer lane's two operator
 // surfaces — ONLY when the lane is on. A flag-off deployment answers 404 rather
 // than advertising a dormant surface (and a 404 is also what a would-be prober
@@ -4265,6 +4391,16 @@ func (s *server) buildConfigBackup() error {
 // configHardeningSource is the seam internal/seclane's Deps.ConfigSource takes.
 // nil while config backup is off, which keeps the hardening lane's honest
 // "control not assessed (fail-closed)" verdicts.
+//
+// CALL-ORDER CONTRACT (the lab defect of 2026-09-03): this resolves s.configDrift
+// EAGERLY and its result is captured once, in seclane.Deps. It therefore returns
+// nil for any caller that runs before buildConfigBackup has assigned that field —
+// which is exactly what happened when newServer constructed the security lane
+// above the CONFIG-BACKUP block: every §5e rule reported the config unavailable
+// while two lab spines had a sealed running-config on file. The nil answer stays
+// EAGER on purpose (a lazily-resolving source would be an unsynchronized read of
+// s.configDrift from the lane's goroutine, i.e. a data race); the ordering is
+// asserted in newServer instead, and the SECURITY-LANE block carries the note.
 func (s *server) configHardeningSource() hardening.ConfigSource {
 	if s.configDrift == nil {
 		return nil

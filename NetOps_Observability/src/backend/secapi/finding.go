@@ -14,11 +14,20 @@ package secapi
 // as missing, not as an empty finding that looks assessed-and-clean.
 //
 // KNOWN GAPS (not defects — properties of the bus contract, reported with the
-// feature): `observed`, `intended`, `status_detail` and `remediation` are NOT on
-// the bus (secbus keeps narrative and raw evidence off the wire by design, §5c /
-// LLM06), so they decode empty and are omitted from the JSON. `uid` (the
-// producer's own finding id) is likewise absent — it survives only INSIDE
-// native_id, which IS returned.
+// feature): `observed`, `intended` and `remediation` are NOT on the bus (secbus
+// keeps raw evidence and the fix text off the wire by design, §5c / LLM06), so
+// they decode empty and are omitted from the JSON. `uid` (the producer's own
+// finding id) is likewise absent — it survives only INSIDE native_id, which IS
+// returned.
+//
+// `status_detail` LEFT that list on 2026-09-03. It is the verdict REASON, and
+// §5g's "never a false clear" is only half a rule without it: an Unknown whose
+// reason does not survive the bus reaches the operator as a bare grey chip, and
+// "the running-config was unavailable", "this control has no realization on this
+// platform" and "we could not resolve the platform at all" are three different
+// facts with three different fixes. secbus.attrsOf now carries it in
+// attrs.status_detail, which is the fallback read below — the direct
+// `status_detail` field still wins when a direct-Finding writer sets it.
 
 import (
 	"encoding/json"
@@ -241,11 +250,13 @@ func DecodeFinding(raw json.RawMessage, docID string) (Finding, error) {
 		f.Resource.Hostname = hostFromTokens(s)
 	}
 
-	// Narrative: present only if a direct-Finding writer put it there. Absent
-	// from the bus shape by design — see the file header.
+	// Narrative: observed/intended/remediation are present only if a
+	// direct-Finding writer put them there — absent from the bus shape by
+	// design. status_detail (the verdict REASON) IS on the bus, in
+	// attrs.status_detail; see the file header.
 	f.Observed = s.str("observed")
 	f.Intended = s.str("intended")
-	f.Detail = s.first("status_detail", "detail")
+	f.Detail = s.first("status_detail", "detail", "attrs.status_detail")
 	f.Remediation = s.str("remediation")
 
 	if ref := decodeEvidenceRef(s); ref != nil {

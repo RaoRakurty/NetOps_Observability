@@ -4075,6 +4075,18 @@ export const api = {
       method: "PUT",
       body: JSON.stringify(updates.map((u) => ({ rule_id: u.rule_id, enabled: u.enabled }))),
     }),
+  // Compliance frameworks are PER-TENANT and opt-in (owner, 2026-09-03:
+  // compliance is analyzed per customer requirement). The catalogue read is
+  // open to any operator; the selection write is admin-gated server-side and
+  // carries enablement ONLY — id, name, version and scope are server-owned
+  // facts a client must not be able to assert.
+  securityFrameworks: () => request<SecFrameworkCatalog>("/api/security/frameworks"),
+  securityFrameworksUpdate: (updates: SecFrameworkToggle[]) =>
+    request<SecFrameworkCatalog>("/api/security/frameworks", {
+      method: "PUT",
+      body: JSON.stringify(updates.map((u) => ({ framework_id: u.framework_id, enabled: u.enabled }))),
+    }),
+  securityCompliance: () => request<SecCompliance>("/api/security/compliance"),
   securityViews: () => request<SecSavedView[]>("/api/security/views"),
   securityViewCreate: (name: string, filters: SecFindingQuery) =>
     request<SecSavedView>("/api/security/views", {
@@ -5858,6 +5870,102 @@ export type SecRule = {
 };
 /** PUT body — enablement only; the server owns every other field. */
 export type SecRuleToggle = { rule_id: string; enabled: boolean };
+
+/**
+ * GET/PUT /api/security/frameworks — the compliance framework catalogue with
+ * this tenant's selection, plus the published device benchmarks.
+ *
+ * A FRAMEWORK is scored (NIST 800-53, CIS Controls, NIST CSF, HIPAA, PCI DSS).
+ * A BENCHMARK is a citation on a finding (CIS Cisco IOS XE 17.x Benchmark
+ * v2.2.1 §1.5) and is never listed as a framework — that conflation is what put
+ * thirty invented "CIS versions" on the Compliance page.
+ */
+export type SecFramework = {
+  id: string;
+  name: string;
+  version: string;
+  /** "base" (the 800-53 catalogue itself) or "projection-of-800-53". */
+  source: string;
+  scope: string;
+  default_on: boolean;
+  enabled: boolean;
+};
+export type SecBenchmark = {
+  id: string;
+  title: string;
+  version: string;
+  platform: string;
+  /** False = the section taxonomy was never verified, so nothing cites it. */
+  sections_verified: boolean;
+  note?: string;
+};
+export type SecBenchmarkCitation = {
+  rule_id: string;
+  benchmark_id: string;
+  section: string;
+  title: string;
+  /** Pre-rendered chip text, e.g. "CIS Cisco IOS XE 17.x Benchmark v2.2.1 §1.5 SNMP Rules". */
+  label: string;
+  /** The 800-53 controls the citing rule evidences (the control-row join). */
+  controls?: string[];
+};
+export type SecFrameworkCatalog = {
+  frameworks: SecFramework[];
+  benchmarks: SecBenchmark[];
+  benchmark_citations: SecBenchmarkCitation[];
+  /** False = this tenant has not chosen; the shipped default set is shown. */
+  configured: boolean;
+  notes?: Record<string, string>;
+};
+/** PUT body — enablement only; the server owns every other field. */
+export type SecFrameworkToggle = { framework_id: string; enabled: boolean };
+
+/**
+ * GET /api/security/compliance — one independent scorecard per ENABLED
+ * framework, computed by projecting a finding's canonical 800-53 control onto
+ * that framework's requirements.
+ *
+ * `score_percent` is NULL (never 0, never 100) when nothing in the framework's
+ * scope was assessed — an unassessed control is unknown, not a pass.
+ */
+export type SecFrameworkRequirement = { framework: string; requirement_id: string; title?: string };
+export type SecControlResult = {
+  control_id: string;
+  family?: string;
+  title?: string;
+  has_check: boolean;
+  status_id: number;
+  status: string;
+  findings: number;
+  requirements?: SecFrameworkRequirement[];
+};
+export type SecFrameworkCoverage = {
+  framework: string;
+  version: string;
+  controls_in_scope: number;
+  controls_with_check: number;
+  coverage_percent: number;
+  assessed: number;
+  passed: number;
+  warned: number;
+  failed: number;
+  unassessed: number;
+  verdict_id: number;
+  verdict: string;
+  score_percent: number | null;
+  controls: SecControlResult[];
+  caption: string;
+  note?: string;
+};
+export type SecCompliance = {
+  frameworks: SecFrameworkCoverage[];
+  enabled: string[];
+  configured: boolean;
+  assessed_findings: number;
+  current_findings: number;
+  truncated?: boolean;
+  notes?: Record<string, string>;
+};
 
 /** GET/POST/DELETE /api/security/views — a named, saved filter set. */
 export type SecSavedView = {

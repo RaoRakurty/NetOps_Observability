@@ -17,8 +17,9 @@
 // caller's own rows and never widen a query. There is no "all tenants" path.
 
 import type {
-  SecFacets, SecFinding, SecFindingQuery, SecFindingsPage, SecPosture,
-  SecRule, SecRuleToggle, SecTrend, CorrObject, Seam,
+  SecBenchmarkCitation, SecCompliance, SecFacets, SecFinding, SecFindingQuery,
+  SecFindingsPage, SecFramework, SecFrameworkCatalog, SecFrameworkCoverage,
+  SecFrameworkToggle, SecPosture, SecRule, SecRuleToggle, SecTrend, CorrObject, Seam,
 } from "../../services/api";
 
 // ── verdict / severity vocabulary ───────────────────────────────────────────
@@ -224,6 +225,140 @@ export function mapFacetRows(
 /** Total findings a facet map accounts for (used for "n of m" copy). */
 export const facetTotal = (m: Record<string, number> | undefined | null): number =>
   Object.values(m ?? {}).reduce((s, n) => s + num(n), 0);
+
+// ── compliance: per-tenant framework SELECTION and its scorecards ───────────
+//
+// Owner direction, 2026-09-03: "we shouldn\'t be checking all compliances by
+// default; compliance is analyzed per customer requirement." The page used to
+// derive its framework list from the distinct standards TAGS on findings, which
+// is why it showed thirty invented CIS-NET sections as frameworks and could
+// never show HIPAA (a projection, never a tag). The list now comes from the
+// framework catalogue, and the numbers from the server-side projection.
+
+export type FrameworkRow = {
+  id: string;
+  name: string;
+  version: string;
+  /** "Base catalogue" or "Projected from NIST 800-53" — never the wire word. */
+  origin: string;
+  scope: string;
+  enabled: boolean;
+  defaultOn: boolean;
+};
+
+/** The catalogue split into what this tenant runs and what it may add. */
+export function frameworkRows(cat: SecFrameworkCatalog | null): FrameworkRow[] {
+  return (cat?.frameworks ?? [])
+    .filter((f): f is SecFramework => !!f && typeof f.id === "string" && f.id.length > 0)
+    .map((f) => ({
+      id: f.id,
+      name: String(f.name ?? f.id),
+      version: String(f.version ?? ""),
+      origin: f.source === "base" ? "Base catalogue" : "Projected from NIST 800-53",
+      scope: String(f.scope ?? ""),
+      enabled: !!f.enabled,
+      defaultOn: !!f.default_on,
+    }));
+}
+
+/**
+ * The PUT body: `{framework_id, enabled}` for the CHANGED frameworks only, in a
+ * stable id order. An empty result means "nothing to save" and the caller skips
+ * the request. Server-owned facts (name, version, source, scope) are absent —
+ * a client must not be able to assert them.
+ */
+export function frameworksPutPayload(
+  original: FrameworkRow[],
+  pending: Record<string, boolean>,
+): SecFrameworkToggle[] {
+  const byId = new Map(original.map((f) => [f.id, f]));
+  return Object.entries(pending)
+    .filter(([id, enabled]) => byId.has(id) && byId.get(id)!.enabled !== enabled)
+    .map(([framework_id, enabled]) => ({ framework_id, enabled }))
+    .sort((a, b) => a.framework_id.localeCompare(b.framework_id));
+}
+
+export type FrameworkCard = {
+  framework: string;
+  version: string;
+  /** Passing share over ASSESSED controls, or null when nothing was assessed. */
+  pct: number | null;
+  tone: Tone;
+  passed: number;
+  warned: number;
+  failed: number;
+  assessed: number;
+  unassessed: number;
+  inScope: number;
+  withCheck: number;
+  coveragePct: number | null;
+  /** The sentence to show INSTEAD of a percentage when nothing was assessed. */
+  emptyNote: string;
+  caption: string;
+  controls: SecFrameworkCoverage["controls"];
+};
+
+const UNASSESSED_FALLBACK =
+  "No assessed control maps to this framework yet — this is an absence of assessment, not a passing or failing result.";
+
+/**
+ * One scorecard, stated honestly. `pct` is null whenever the server declined to
+ * state a score, and a null is rendered as the sentence rather than as 0% (which
+ * reads as total failure) or 100% (which reads as a clean bill).
+ */
+export function frameworkCard(c: SecFrameworkCoverage): FrameworkCard {
+  const passed = num(c?.passed), warned = num(c?.warned), failed = num(c?.failed);
+  const scored = passed + warned + failed;
+  const raw = c?.score_percent;
+  const pct = typeof raw === "number" && Number.isFinite(raw) && scored > 0 ? Math.round(raw) : null;
+  const inScope = num(c?.controls_in_scope);
+  return {
+    framework: String(c?.framework ?? ""),
+    version: String(c?.version ?? ""),
+    pct,
+    tone: pct === null ? "" : pct >= 90 ? "good" : pct >= 70 ? "warn" : "bad",
+    passed, warned, failed,
+    assessed: num(c?.assessed),
+    unassessed: num(c?.unassessed),
+    inScope,
+    withCheck: num(c?.controls_with_check),
+    coveragePct: inScope > 0 ? Math.round(num(c?.coverage_percent)) : null,
+    emptyNote: (c?.note && String(c.note)) || UNASSESSED_FALLBACK,
+    caption: String(c?.caption ?? ""),
+    controls: Array.isArray(c?.controls) ? c.controls : [],
+  };
+}
+
+export function frameworkCards(cmp: SecCompliance | null): FrameworkCard[] {
+  return (cmp?.frameworks ?? []).filter(Boolean).map(frameworkCard);
+}
+
+/**
+ * Benchmark citations grouped by the 800-53 control they hang off, so a control
+ * row can carry its published benchmark references. A citation is a CITATION —
+ * benchmark title, version and section heading — and never a framework.
+ */
+export function benchmarkChipsByControl(
+  citations: SecBenchmarkCitation[] | undefined | null,
+): Record<string, string[]> {
+  const out: Record<string, string[]> = {};
+  for (const c of citations ?? []) {
+    const label = typeof c?.label === "string" ? c.label.trim() : "";
+    if (!label) continue;
+    for (const control of Array.isArray(c?.controls) ? c.controls : []) {
+      if (typeof control !== "string" || !control) continue;
+      const list = out[control] ?? (out[control] = []);
+      if (!list.includes(label)) list.push(label);
+    }
+  }
+  for (const k of Object.keys(out)) out[k].sort((a, b) => a.localeCompare(b));
+  return out;
+}
+
+/** OCSF status_id → the verdict word a control row shows. 4/5 are unassessed. */
+export function controlVerdict(statusID: unknown): Verdict {
+  return verdictOf({ status_id: Number(statusID) } as Pick<SecFinding, "status_id">);
+}
 
 // ── compliance: hardening findings on the TAGGED control set ────────────────
 //
@@ -484,3 +619,57 @@ export function subjectLine(f: SecFinding): string {
  * transport type — the two are free to diverge if the wire shape ever does.
  */
 export type SecFindingLike = SecFinding;
+
+// ── §5g: an unassessed verdict must carry its WHY ───────────────────────────
+//
+// "Unassessed" on its own is only half the honesty rule. The three reasons a
+// hardening control reaches no verdict are entirely different problems with
+// entirely different fixes — the running-config was not available, the control
+// has no realization on this platform, or the platform itself did not resolve —
+// and an operator who cannot tell them apart cannot act on any of them. The
+// producer states the reason (secfindings.Finding.Detail → the bus's
+// attrs.status_detail → the API's `status_detail`); these adapters are the one
+// place the UI decides how to present its presence and its ABSENCE.
+
+/** The reason an unassessed verdict gives, or null when it gave none. */
+export function unassessedReason(f: Pick<SecFinding, "status_id" | "status_detail">): string | null {
+  if (verdictOf(f) !== "unassessed") return null;
+  const why = (f.status_detail ?? "").trim();
+  return why === "" ? null : why;
+}
+
+/**
+ * The sentence shown where a reason is expected. A missing reason is named as
+ * missing — never blank, and never a soothing default: "no verdict" with no
+ * explanation is precisely the shape an operator reads as "probably fine".
+ */
+export const NO_REASON_RECORDED =
+  "No reason recorded — the provider did not state why this control could not be assessed.";
+
+export function unassessedReasonText(f: Pick<SecFinding, "status_id" | "status_detail">): string {
+  return unassessedReason(f) ?? NO_REASON_RECORDED;
+}
+
+/** One distinct unassessed reason and how many findings gave it. */
+export type ReasonCount = { reason: string; count: number; recorded: boolean };
+
+/**
+ * Group unassessed findings by their reason, commonest first (ties broken
+ * alphabetically so the order is stable across renders). Assessed findings are
+ * ignored; findings that gave no reason collapse into ONE row that says so,
+ * because "42 controls were unassessed and we cannot say why" is itself the
+ * finding an operator needs to see.
+ */
+export function unassessedReasons(findings: SecFinding[]): ReasonCount[] {
+  const counts = new Map<string, ReasonCount>();
+  for (const f of findings ?? []) {
+    if (verdictOf(f) !== "unassessed") continue;
+    const why = unassessedReason(f);
+    const key = why ?? NO_REASON_RECORDED;
+    const row = counts.get(key);
+    if (row) row.count += 1;
+    else counts.set(key, { reason: key, count: 1, recorded: why !== null });
+  }
+  return [...counts.values()].sort((a, b) =>
+    b.count - a.count || a.reason.localeCompare(b.reason));
+}

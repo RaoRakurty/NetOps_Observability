@@ -95,6 +95,17 @@ type Deps struct {
 	RegistryDevices func(r *http.Request) int
 	// Store is the PG/file control-plane register.
 	Store Store
+	// ComplianceInputs supplies the parts of the compliance view that come from
+	// the REMOVABLE security producer (internal/hardening): the rule→control
+	// mapping and the published benchmark citations. Injected, and nil-safe, so
+	// this read API keeps answering with the producer deleted
+	// (security_lane_removability_test.go).
+	ComplianceInputs func() ComplianceInputs
+	// FrameworkStore is the PG/file register for WHICH compliance frameworks a
+	// tenant has opted into (frameworks.go). Optional: a nil store means the
+	// deployment cannot persist a selection, so every tenant reads the shipped
+	// default set and a write is refused with 503 rather than silently accepted.
+	FrameworkStore FrameworkStore
 	// Metrics counts queries by op.
 	Metrics *Metrics
 	// Audit records an accepted control-plane write. Optional (nil = no audit

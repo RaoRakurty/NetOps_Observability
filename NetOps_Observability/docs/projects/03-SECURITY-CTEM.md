@@ -207,6 +207,19 @@ mutable PG rows. Unblocks T8.
   launched for this project; I cannot launch it. Everything above is
   gate-clean but unreviewed at that depth.
 
+## Live attestation on the lab stack (2026-09-03 03:2x UTC) — FIRST FINDINGS FLOWING
+
+Tenant `lab` created via API (`POST /api/tenants`), spine1/spine2 added with
+`tenant_id` (`POST /api/devices`). Scan → 64 findings per pass → `netops.security`
+→ vector-router → `netops-secfindings-<tenant>-2026.09.03` (template applied,
+`dynamic:false`, keyword facets) → `/api/security/findings` 200 with facets
+critical 2 · high 26 · medium 16 · low 18 · info 2 → the engine grounded
+security_posture signals on both spines (class=security, 256 grounded). Config
+capture stored both running configs (728 lines each, sealed). Two upgrade-path
+defects fixed live and filed for the repo: the router's OpenSearch role lacked
+`netops-secfindings-*` (403 on every bulk write) and `bootstrap-opensearch.sh`
+is blind on TLS installs (no template → dynamic text mappings → dashboard 400/502).
+
 ## Live state on the lab stack (2026-09-03 01:10 UTC)
 
 - `FEATURE_SECURITY_LANE=true` and `FEATURE_CONFIG_BACKUP=true` are ON (read-only
@@ -279,6 +292,80 @@ images are all unbuilt at HEAD. Until they are:
   no-flap contract is intact). **This changes nothing about grounding**: until a
   scan actually produces onto `netops.security`, the lane is still ungrounded —
   it is now merely visible as such instead of taking the engine down.
-- **No compliance claim is measured.** The Compliance view renders a tagged
-  control set; with hardening unassessed, none of it is evidence of a control
-  passing.
+- **No compliance claim is measured.** The Compliance view renders control
+  EVIDENCE for the frameworks a tenant has opted into; with hardening
+  unassessed, none of it is evidence of a control passing. Every scorecard
+  carries the §5d caption saying so, and a framework with no assessed control
+  reports a null score and a sentence, never 0 % or 100 %.
+
+---
+
+## Compliance frameworks are per-tenant and opt-in (2026-09-03)
+
+Owner direction: *"we shouldn't be checking all compliances by default;
+compliance is analyzed per customer requirement."*
+
+**Frameworks (`GET|PUT /api/security/frameworks`).** A closed, VERSIONED
+vocabulary in `internal/compliancemodel/registry.go`:
+
+| id | framework | version | source | default |
+|----|-----------|---------|--------|---------|
+| `nist-800-53-r5` | NIST SP 800-53 Rev5 | Rev 5 (Release 5.2.0) | base | **on** |
+| `cis-controls-v8` | CIS Controls v8.1 | 8.1 | projection-of-800-53 | **on** |
+| `nist-csf-2.0` | NIST CSF 2.0 | 2.0 | projection-of-800-53 | off |
+| `hipaa-security-rule` | HIPAA Security Rule | 45 CFR 164.312 | projection-of-800-53 | off |
+| `pci-dss-v4` | PCI DSS v4.0.1 | 4.0.1 | projection-of-800-53 | off |
+
+The default set is deliberately small: the 800-53 base is the catalogue the
+platform already models (no crosswalk hop), CIS Controls is the vendor-neutral
+baseline a network team is expected to speak to, and the three regulatory
+frameworks describe a position a customer either has or does not — rendering a
+HIPAA scorecard for an organisation that handles no PHI is an implied compliance
+claim. Selection is per-tenant state (migration `0042_security_framework_state`,
+`tenant_iso` FORCE-RLS + `withTenant`, file-store fallback), gated
+`requirePerm(administration, LevelWrite)` — **not** a platform gate: a tenant's
+compliance scope is that tenant's configuration. A save writes a row for every
+known framework so "has not chosen" (→ defaults) stays distinguishable from
+"deliberately chose nothing".
+
+**Scoring (`GET /api/security/compliance`).** One INDEPENDENT scorecard per
+enabled framework, computed by projecting the tenant's CURRENT findings:
+
+    finding → canonical 800-53 control → framework requirement
+
+The control comes from the owned check→control mapping when there is one, else
+from the control the producer stamped. `secapi.ComplianceCatalog()` composes the
+hardening catalogue's rule→control mapping onto `compliancemodel.DefaultCatalog()`
+(`Catalog.With`), so `internal/compliancemodel` still imports no producer.
+Because the projection is the mechanism, **HIPAA and PCI report even though no
+finding ever carries a HIPAA or PCI tag** — which is exactly why they could not
+appear before.
+
+**Benchmark sections are NOT frameworks.** The hardening rules used to carry
+tags like `CIS-NET-5.1` … `CIS-NET-9.3` in `Rule.Controls`; the Compliance page
+built its framework list from the distinct `standards` tags on findings, so every
+one of those rendered as its own "framework". They were invented — the CIS Cisco
+IOS / IOS-XE benchmark taxonomy is three planes (1 Management Plane, 2 Control
+Plane, 3 Data Plane) and never exceeds top-level 3, so there is no §5.1 or §9.3
+to be truncated from. They are gone: `Rule.Controls` now carries canonical
+800-53 control ids ONLY (`TestControlTagsAreCanonical800_53Only` guards it), and
+benchmark provenance lives in `internal/hardening/benchmark.go` as an explicit
+citation — benchmark id, published title, pinned version, section heading —
+rendered inside a control row as
+`CIS Cisco IOS XE 17.x Benchmark v2.2.1 §1.2 Access Rules`.
+
+Benchmarks pinned 2026-09-03 from the CIS catalogue (`cisecurity.org`):
+
+| benchmark | version | sections verified |
+|-----------|---------|-------------------|
+| CIS Cisco IOS XE 17.x Benchmark | v2.2.1 | ✅ (TOC read) |
+| CIS Cisco IOS 17.x Benchmark | v2.0.0 | ✅ (same three-plane taxonomy) |
+| CIS Cisco NX-OS Benchmark | v1.2.0 | ❌ unverified — cites nothing |
+| CIS Arista EOS Benchmark | v1.0.0 | ❌ unverified — cites nothing |
+| CIS Juniper OS Benchmark | v2.1.0 | ❌ unverified — cites nothing; CIS announced (Aug 2025) an intent to archive the Juniper benchmarks |
+
+There is no current CIS Cisco IOS 15 benchmark (v4.1.0, 2021, archived), so
+nothing references one. A benchmark whose section taxonomy could not be read from
+a published document is LISTED (so the coverage gap is visible) but cites no
+section — an unverified section number is the same invention the `CIS-NET` tags
+were. `TestBenchmarkCitationsResolve` enforces both halves.

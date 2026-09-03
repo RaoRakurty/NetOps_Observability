@@ -26,6 +26,8 @@ var Ops = []string{
 	"exposure_stories",
 	"rules",
 	"views",
+	"frameworks",
+	"compliance",
 }
 
 // Metrics counts findings queries by operation. Safe for concurrent use.

@@ -14,6 +14,12 @@ const (
 	CategoryCredential  = "credential"     // credential & auth hygiene
 	CategoryCrypto      = "crypto"         // transport crypto hygiene
 	CategoryPlane       = "plane"          // logging / NTP / control-plane
+	// CategoryCoverage is NOT a plane of hardening: it groups the findings that
+	// describe our ABILITY to assess a device at all (today: a platform label
+	// that resolves to no dialect). It is deliberately its own category so a
+	// coverage gap can never be counted, faceted or scored as a hardening
+	// verdict on the device.
+	CategoryCoverage = "coverage"
 )
 
 // DetectResult is the outcome of running one rule's detection against a config.

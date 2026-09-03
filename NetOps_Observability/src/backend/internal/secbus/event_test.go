@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"netops/backend/internal/secfindings"
 )
@@ -270,5 +271,115 @@ func TestNativeID_OverflowStaysDiscriminated(t *testing.T) {
 	}
 	if evA.NativeID == evB.NativeID {
 		t.Fatal("hashed native ids collided across distinct finding ids")
+	}
+}
+
+// ── §5g: the verdict REASON survives the bus ────────────────────────────────
+
+// TestFromFinding_UnknownCarriesItsReason is the producer half of the
+// 2026-09-03 "Unknown with no WHY" defect. On the lab stack every hardening
+// verdict was Unknown and the indexed document carried only attrs.status — so
+// the UI could say "unassessed" but never why, and the three reasons an
+// operator has to tell apart (config unavailable / control not applicable on
+// this platform / platform unresolved) were indistinguishable on the wire.
+func TestFromFinding_UnknownCarriesItsReason(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		status secfindings.StatusID
+		detail string
+	}{
+		{"config unavailable", secfindings.StatusUnknown,
+			"running-config unavailable — control not assessed (fail-closed)"},
+		{"control not applicable", secfindings.StatusNotApplicable,
+			"SR Linux has no telnet server in its model — SSHv2 only"},
+		{"platform unresolved", secfindings.StatusUnknown,
+			`unassessed: platform unresolved — the platform label "Acme WidgetOS 1.0" matches no vendor profile`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := postureFinding()
+			f.Observed, f.Remediation = "", ""
+			f.EvidenceRef = nil
+			f.Detail = tc.detail
+			f.SetStatus(tc.status)
+
+			ev, err := FromFinding(f)
+			if err != nil {
+				t.Fatalf("FromFinding: %v", err)
+			}
+			if got := ev.Attrs["status_detail"]; got != tc.detail {
+				t.Errorf("attrs.status_detail = %v, want %q", got, tc.detail)
+			}
+			if ev.Attrs["status"] != tc.status.String() {
+				t.Errorf("attrs.status = %v, want %q", ev.Attrs["status"], tc.status)
+			}
+			// It must survive JSON encoding — this is what the router indexes.
+			blob, err := json.Marshal(ev)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var back EvidenceEvent
+			if err := json.Unmarshal(blob, &back); err != nil {
+				t.Fatal(err)
+			}
+			if back.Attrs["status_detail"] != tc.detail {
+				t.Errorf("status_detail did not round-trip: %v", back.Attrs["status_detail"])
+			}
+		})
+	}
+}
+
+// TestFromFinding_NoReasonEmitsNoField: an empty Detail is omitted rather than
+// written as "" — an absent reason must read as absent, never as a blank one.
+func TestFromFinding_NoReasonEmitsNoField(t *testing.T) {
+	f := postureFinding()
+	f.Detail = "   "
+	ev, err := FromFinding(f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := ev.Attrs["status_detail"]; ok {
+		t.Errorf("attrs.status_detail present for an empty reason: %v", ev.Attrs["status_detail"])
+	}
+}
+
+// TestFromFinding_ReasonIsBoundedAndUTF8Safe: producer prose is external input
+// (§9 bounded IO), and these reasons are full of 3-byte em-dashes, so the cut
+// must land on a rune boundary.
+func TestFromFinding_ReasonIsBoundedAndUTF8Safe(t *testing.T) {
+	f := postureFinding()
+	f.Detail = strings.Repeat("— unassessed ", 200)
+	ev, err := FromFinding(f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, _ := ev.Attrs["status_detail"].(string)
+	if utf8.RuneCountInString(got) != StatusDetailMax+1 { // +1 for the ellipsis
+		t.Errorf("reason length = %d runes, want %d + ellipsis", utf8.RuneCountInString(got), StatusDetailMax)
+	}
+	if !utf8.ValidString(got) {
+		t.Errorf("truncated reason is not valid UTF-8: %q", got)
+	}
+	if !strings.HasSuffix(got, "…") {
+		t.Errorf("truncated reason does not say it was truncated: %q", got)
+	}
+}
+
+// TestFromFinding_ReasonIsNotAnEvidenceLeak: the reason rides the wire, the raw
+// evidence still does not. Finding.Observed IS the offending config excerpt and
+// must stay off the bus (§5c / LLM06).
+func TestFromFinding_ReasonIsNotAnEvidenceLeak(t *testing.T) {
+	f := postureFinding()
+	f.Detail = "running-config unavailable — control not assessed (fail-closed)"
+	f.Observed = "snmp-server community s3cr3t RO"
+	ev, err := FromFinding(f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	blob, _ := json.Marshal(ev)
+	if strings.Contains(string(blob), "s3cr3t") {
+		t.Errorf("wire event leaked the observed config excerpt: %s", blob)
+	}
+	if !strings.Contains(string(blob), "fail-closed") {
+		t.Errorf("wire event dropped the verdict reason: %s", blob)
 	}
 }

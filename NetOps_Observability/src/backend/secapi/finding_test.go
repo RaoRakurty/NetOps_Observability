@@ -74,10 +74,11 @@ func TestDecodeFindingFromBusShape(t *testing.T) {
 	}
 }
 
-// TestDecodeFindingNeverInventsNarrative pins the KNOWN GAP as behaviour: the
-// bus carries no narrative (secbus keeps it off the wire by design), so those
-// fields decode EMPTY and are omitted from the JSON. An empty string is honest;
-// a fabricated summary would not be.
+// TestDecodeFindingNeverInventsNarrative pins the KNOWN GAP as behaviour:
+// observed/intended/remediation are not on the bus (secbus keeps raw evidence
+// and the fix text off the wire by design), and this document also predates the
+// status_detail reason — so all four decode EMPTY and are omitted from the JSON.
+// An empty string is honest; a fabricated summary would not be.
 func TestDecodeFindingNeverInventsNarrative(t *testing.T) {
 	f, err := DecodeFinding(json.RawMessage(busDoc), "abc123")
 	if err != nil {
@@ -173,5 +174,93 @@ func TestDecodeFindingDerivesStatusIDFromName(t *testing.T) {
 	}
 	if f.StatusID != secfindings.StatusNotApplicable {
 		t.Fatalf("status_id = %d, want NotApplicable derived from the name", f.StatusID)
+	}
+}
+
+// ── §5g: the API item carries the WHY of an unassessed verdict ──────────────
+
+// TestDecodeFindingReadsTheReasonFromAttrs is the API half of the 2026-09-03
+// "Unknown with no WHY" defect. The producer now puts the verdict reason in
+// attrs.status_detail (secbus.attrsOf); this is the read side of that contract,
+// and without it the Exposures inspector and the Compliance view can only show
+// a bare grey "Unassessed" chip.
+func TestDecodeFindingReadsTheReasonFromAttrs(t *testing.T) {
+	for _, tc := range []struct {
+		name, status, detail string
+		statusID             secfindings.StatusID
+	}{
+		{
+			name: "config unavailable", status: "Unknown", statusID: secfindings.StatusUnknown,
+			detail: "running-config unavailable — control not assessed (fail-closed)",
+		},
+		{
+			name: "control not applicable", status: "NotApplicable", statusID: secfindings.StatusNotApplicable,
+			detail: "SR Linux has no telnet server in its model — SSHv2 only",
+		},
+		{
+			name: "platform unresolved", status: "Unknown", statusID: secfindings.StatusUnknown,
+			detail: `unassessed: platform unresolved — the platform label "Acme WidgetOS 1.0" matches no vendor profile`,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			doc, err := json.Marshal(map[string]any{
+				"ts": 1756684800000, "entity_id": "spine1", "severity": "info",
+				"native_id": "n-1",
+				"attrs": map[string]any{
+					"evidence_class": "posture", "provider_source": "correlix-netrule",
+					"control_id": "AC-17", "raw_rule_id": "telnet-vty-enabled", "scan_id": "scan-9",
+					"status": tc.status, "status_id": int(tc.statusID),
+					"status_detail": tc.detail,
+				},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			f, err := DecodeFinding(doc, "d1")
+			if err != nil {
+				t.Fatalf("decode: %v", err)
+			}
+			if f.Detail != tc.detail {
+				t.Errorf("Detail = %q, want %q", f.Detail, tc.detail)
+			}
+			if f.StatusID != tc.statusID {
+				t.Errorf("status_id = %d, want %d", f.StatusID, tc.statusID)
+			}
+			// …and it must reach the CLIENT, under the contract's json name.
+			b, err := json.Marshal(f)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var out map[string]any
+			if err := json.Unmarshal(b, &out); err != nil {
+				t.Fatal(err)
+			}
+			if out["status_detail"] != tc.detail {
+				t.Errorf("serialized status_detail = %v, want %q", out["status_detail"], tc.detail)
+			}
+			// Attrs is a FALLBACK: raw evidence is still not on the bus, so
+			// nothing else in the narrative may be conjured from it.
+			if f.Observed != "" || f.Remediation != "" {
+				t.Errorf("narrative invented from a reason-only document: %+v", f)
+			}
+		})
+	}
+}
+
+// TestDecodeFindingPrefersDirectStatusDetailOverAttrs keeps the file's ONE
+// tolerance rule intact: a direct-Finding writer's field wins over the attrs
+// fallback, never the other way round.
+func TestDecodeFindingPrefersDirectStatusDetailOverAttrs(t *testing.T) {
+	const doc = `{
+	  "ts":1756684800000,"entity_id":"spine1","native_id":"n-1",
+	  "status":"Unknown","status_id":0,"status_detail":"direct writer reason",
+	  "attrs":{"evidence_class":"posture","status":"Unknown","status_detail":"bus reason"}
+	}`
+	f, err := DecodeFinding(json.RawMessage(doc), "d1")
+	if err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if f.Detail != "direct writer reason" {
+		t.Errorf("Detail = %q, want the direct field to win", f.Detail)
 	}
 }

@@ -3,6 +3,7 @@ package hardening
 import (
 	"context"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -56,19 +57,49 @@ func NewEngine(catalog *Catalog, cfgSrc ConfigSource, seams SeamResolver, opts .
 	return e
 }
 
-// Evaluate runs the full catalog (posture rules + seam-aware exposure probes)
-// against one device and returns the findings in a deterministic order.
+// Evaluate runs the device's OWN control set — the catalog rules and seam-aware
+// exposure probes that carry a binding for the device's resolved dialect — and
+// returns the findings in a deterministic order.
 //
-// Fail-closed guarantees:
-//   - running-config unavailable → every check emits StatusUnknown (never Pass).
-//   - a rule/probe with no binding for the device's vendor → StatusNotApplicable
-//     (honest non-verdict, never a false Pass).
+// THE BINDING IS THE GATE, AND IT IS RESOLVED FIRST (the 2026-09-03 lab defect).
+// Evaluate used to iterate the WHOLE catalog for every device and decide the
+// verdict afterwards, with the missing-config test ahead of the binding test.
+// Two consequences, both wrong and both observed on the lab fabric:
+//
+//   - With no config on file, an SR Linux spine was reported against all 27
+//     posture rules + 4 exposure probes — cdp-run-global, pad-service,
+//     no-aaa-new-model, vty-no-access-class and the rest of the Cisco IOS
+//     catalogue — as 32 Unknowns. Those controls do not exist on the platform:
+//     the device was never in scope for them, so "not assessed" is not the
+//     honest word for them, it is noise that buries the 14 controls that ARE
+//     the device's control set.
+//   - With a config on file it was no better, only quieter: the same 18
+//     unbound checks each emitted a NotApplicable whose Detail said "no
+//     detection binding for Nokia SR Linux" — our coverage gap rendered as a
+//     per-device verdict, once per device, forever.
+//
+// So: a rule or probe with NO binding for the resolved dialect is NOT this
+// device's control and is not emitted at all. What IS emitted is honest about
+// every remaining case:
+//
+//   - platform unresolved (no vendor profile matches the label) → NOTHING is
+//     evaluated and exactly ONE finding says so (RulePlatformUnresolved,
+//     StatusUnknown). Never a fallback dialect, never the IOS catalogue.
+//   - running-config unavailable, rule bound → StatusUnknown (never Pass).
+//   - bound, but the control has no realization on the platform
+//     (DetectResult.NotApplicable) → StatusNotApplicable WITH the reason.
 //   - seam model unavailable for an exposure probe → StatusUnknown.
 //
 // Every emitted finding carries the ruleset version stamp and, where the
 // evaluation touched a real config, a by-reference EvidenceRef.
 func (e *Engine) Evaluate(ctx context.Context, dev Device) ([]secfindings.Finding, error) {
 	vendor := VendorFromPlatform(dev.Platform)
+	if vendor == VendorUnknown {
+		// No dialect ⇒ no control set. Emitting the catalogue here would score
+		// the device against SOME OTHER platform's grammar; emitting nothing
+		// would read as "clear". One honest finding is the only correct answer.
+		return []secfindings.Finding{e.platformUnresolved(dev)}, nil
+	}
 
 	raw, haveCfg, err := e.cfgSrc.RunningConfig(ctx, dev.ID)
 	if err != nil {
@@ -83,6 +114,12 @@ func (e *Engine) Evaluate(ctx context.Context, dev Device) ([]secfindings.Findin
 
 	// ── posture rules ────────────────────────────────────────────────────────
 	for _, rule := range e.catalog.Rules() {
+		binding, bound := rule.Binding(vendor)
+		if !bound {
+			// Not one of this platform's controls — see the header. A gap in
+			// OUR coverage is a catalog property, not a per-device verdict.
+			continue
+		}
 		f := e.base(dev, secfindings.EvidencePosture)
 		f.RawRuleID = rule.ID
 		// ID is the PER-FINDING discriminator secbus.nativeIDOf folds into the
@@ -99,25 +136,20 @@ func (e *Engine) Evaluate(ctx context.Context, dev Device) ([]secfindings.Findin
 		f.Category = rule.Category
 		f.Intended = rule.Intended
 
-		binding, bound := rule.Binding(vendor)
-		var res DetectResult
-		if haveCfg && bound {
-			res = binding.Detect(cfg)
-		}
-		switch {
-		case !haveCfg:
+		if !haveCfg {
 			f.Severity = rule.Severity
 			f.Detail = "running-config unavailable — control not assessed (fail-closed)"
 			f.SetStatus(secfindings.StatusUnknown)
-		case !bound:
-			f.Detail = "no detection binding for " + DisplayVendor(vendor) + " — control not assessed for this platform"
-			f.SetStatus(secfindings.StatusNotApplicable)
+			out = append(out, f)
+			continue
+		}
+		res := binding.Detect(cfg)
+		switch {
 		case res.NotApplicable:
 			// The control has no realization on this platform (see
-			// DetectResult.NotApplicable). Say WHY it cannot apply, rather than
-			// the generic "not assessed" an UNBOUND vendor gets — the two look
-			// the same to an operator otherwise, and only one of them is a gap
-			// in our coverage.
+			// DetectResult.NotApplicable). Say WHY it cannot apply — an
+			// operator must be able to tell a structural non-verdict from a
+			// gap in our coverage.
 			f.Detail = res.Evidence
 			f.SetStatus(secfindings.StatusNotApplicable)
 		default:
@@ -138,11 +170,62 @@ func (e *Engine) Evaluate(ctx context.Context, dev Device) ([]secfindings.Findin
 
 	// ── seam-aware exposure probes (the differentiator) ──────────────────────
 	for _, probe := range e.catalog.Probes() {
+		if _, bound := probe.Binding(vendor); !bound {
+			continue // not this platform's probe — same rule as the rules above
+		}
 		out = append(out, e.evaluateExposure(ctx, dev, vendor, cfg, haveCfg, probe))
 	}
 
 	sortFindings(out)
 	return out, nil
+}
+
+// RulePlatformUnresolved is the RawRuleID/ControlID of the single finding a
+// device with an unresolvable platform label produces. It is deliberately NOT a
+// catalog rule: it is a statement about our ability to assess the device at all,
+// which is why it carries no standards tag and no severity above info.
+const RulePlatformUnresolved = "platform-unresolved"
+
+// platformLabelMax bounds the operator-supplied platform label echoed into the
+// finding narrative (§9 bounded, §8 no unbounded external string on the bus).
+const platformLabelMax = 120
+
+// platformUnresolved is the ONE honest finding for a device whose platform label
+// matches no vendor profile: nothing was evaluated, and the finding says exactly
+// that and why, so the UI can render an unassessed device instead of a clear one.
+func (e *Engine) platformUnresolved(dev Device) secfindings.Finding {
+	f := e.base(dev, secfindings.EvidencePosture)
+	f.ID = RulePlatformUnresolved
+	f.RawRuleID = RulePlatformUnresolved
+	f.ControlID = RulePlatformUnresolved
+	f.ControlTitle = "Device platform unresolved — no hardening control assessed"
+	f.Category = CategoryCoverage
+	f.Severity = secfindings.SeverityInfo
+	f.Intended = "Every device resolves to a vendor dialect whose hardening controls can be evaluated."
+	f.Observed = truncateLabel(dev.Platform)
+	f.Detail = "unassessed: platform unresolved — " + describePlatform(dev.Platform) +
+		", so NO hardening control was evaluated for this device"
+	f.Remediation = "Complete device discovery (vendor + OS, or SNMP sysDescr) or add a vendor profile " +
+		"whose detection.platform_contains recognizes this platform label."
+	f.SetStatus(secfindings.StatusUnknown)
+	return f
+}
+
+// describePlatform renders the platform clause of the narrative, naming an
+// ABSENT label explicitly rather than quoting an empty string at the operator.
+func describePlatform(platform string) string {
+	if label := truncateLabel(platform); label != "" {
+		return "the platform label " + strconv.Quote(label) + " matches no vendor profile"
+	}
+	return "this device carries no platform label at all (no vendor/OS on its inventory row)"
+}
+
+func truncateLabel(platform string) string {
+	label := strings.TrimSpace(platform)
+	if len(label) > platformLabelMax {
+		return label[:platformLabelMax] + "…"
+	}
+	return label
 }
 
 // evaluateExposure runs one seam-aware probe. This is the wedge: the verdict

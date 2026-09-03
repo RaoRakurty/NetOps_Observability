@@ -160,15 +160,34 @@ func (c *Catalog) HasCheckForControl(controlID string) bool {
 	return false
 }
 
-// Seed control ids — the 800-53 hub controls the existing 9 compliance checks
-// tag (NIST CSF / CIS / 800-53). These are the ONLY controls the seed mapping
-// covers (Q4: no broad catalog import).
+// Owned control ids — the 800-53 Rev5 hub controls this platform can reason
+// about. The first five are the ones the 9 legacy compliance checks tag and are
+// the ONLY ones the seed check→control MAPPING covers; the rest are the controls
+// the hardening catalog tags, declared here so a framework provider can put them
+// in scope (and so a projection can report them as check-covered once a caller
+// composes the hardening mappings in via Catalog.With).
+//
+// Declaring a control is NOT claiming a check for it: HasCheckForControl is the
+// coverage primitive and answers from the MAPPING, never from this list.
 const (
-	ControlCM8 = "CM-8" // System Component Inventory  (asset inventory / drift)
-	ControlCM2 = "CM-2" // Baseline Configuration      (golden-version baseline)
-	ControlIA5 = "IA-5" // Authenticator Management    (SNMP community / credential)
-	ControlSC8 = "SC-8" // Transmission Confidentiality & Integrity (SNMPv3 crypto)
-	ControlSI2 = "SI-2" // Flaw Remediation            (known-exploited CVEs)
+	ControlAC2  = "AC-2"  // Account Management
+	ControlAC3  = "AC-3"  // Access Enforcement
+	ControlAC4  = "AC-4"  // Information Flow Enforcement
+	ControlAC17 = "AC-17" // Remote Access
+	ControlAU2  = "AU-2"  // Event Logging
+	ControlAU6  = "AU-6"  // Audit Record Review, Analysis and Reporting
+	ControlAU8  = "AU-8"  // Time Stamps
+	ControlCM2  = "CM-2"  // Baseline Configuration      (golden-version baseline)
+	ControlCM7  = "CM-7"  // Least Functionality
+	ControlCM8  = "CM-8"  // System Component Inventory  (asset inventory / drift)
+	ControlIA2  = "IA-2"  // Identification and Authentication (Organizational Users)
+	ControlIA3  = "IA-3"  // Device Identification and Authentication
+	ControlIA5  = "IA-5"  // Authenticator Management    (SNMP community / credential)
+	ControlSC5  = "SC-5"  // Denial-of-Service Protection
+	ControlSC7  = "SC-7"  // Boundary Protection
+	ControlSC8  = "SC-8"  // Transmission Confidentiality & Integrity (SNMPv3 crypto)
+	ControlSI2  = "SI-2"  // Flaw Remediation            (known-exploited CVEs)
+	ControlSI7  = "SI-7"  // Software, Firmware and Information Integrity
 )
 
 // Legacy compliance check ids (mirrored from internal/compliance's stable API
@@ -187,16 +206,30 @@ const (
 	checkKEV           = "kev-exposure"
 )
 
-// seedControls returns the owned control layer for the seed mapping. Fresh slice
-// per call (no shared mutable state).
+// seedControls returns the owned control layer: every 800-53 Rev5 control this
+// platform's checks or framework projections reference, with its published
+// family and title. Fresh slice per call (no shared mutable state).
 func seedControls() []Control {
 	v := controlCatalogVersion
 	return []Control{
-		{ID: ControlCM8, Family: "CM", Title: "System Component Inventory", Version: v},
+		{ID: ControlAC2, Family: "AC", Title: "Account Management", Version: v},
+		{ID: ControlAC3, Family: "AC", Title: "Access Enforcement", Version: v},
+		{ID: ControlAC4, Family: "AC", Title: "Information Flow Enforcement", Version: v},
+		{ID: ControlAC17, Family: "AC", Title: "Remote Access", Version: v},
+		{ID: ControlAU2, Family: "AU", Title: "Event Logging", Version: v},
+		{ID: ControlAU6, Family: "AU", Title: "Audit Record Review, Analysis, and Reporting", Version: v},
+		{ID: ControlAU8, Family: "AU", Title: "Time Stamps", Version: v},
 		{ID: ControlCM2, Family: "CM", Title: "Baseline Configuration", Version: v},
+		{ID: ControlCM7, Family: "CM", Title: "Least Functionality", Version: v},
+		{ID: ControlCM8, Family: "CM", Title: "System Component Inventory", Version: v},
+		{ID: ControlIA2, Family: "IA", Title: "Identification and Authentication (Organizational Users)", Version: v},
+		{ID: ControlIA3, Family: "IA", Title: "Device Identification and Authentication", Version: v},
 		{ID: ControlIA5, Family: "IA", Title: "Authenticator Management", Version: v},
+		{ID: ControlSC5, Family: "SC", Title: "Denial-of-Service Protection", Version: v},
+		{ID: ControlSC7, Family: "SC", Title: "Boundary Protection", Version: v},
 		{ID: ControlSC8, Family: "SC", Title: "Transmission Confidentiality and Integrity", Version: v},
 		{ID: ControlSI2, Family: "SI", Title: "Flaw Remediation", Version: v},
+		{ID: ControlSI7, Family: "SI", Title: "Software, Firmware, and Information Integrity", Version: v},
 	}
 }
 
@@ -235,4 +268,38 @@ func seedMappings() []ControlMapping {
 // mapping for the 9 existing checks. Fresh instance per call (no globals).
 func DefaultCatalog() *Catalog {
 	return NewCatalog(seedControls(), seedMappings())
+}
+
+// With returns a NEW catalog carrying this catalog's controls and mappings plus
+// the supplied ones. It is the composition seam for check→control mappings that
+// live OUTSIDE this package: the hardening catalog owns its own rule ids and
+// their 800-53 tags, and importing it here would invert the dependency (§2 — a
+// domain package must not reach into another domain's catalog). A caller that
+// has both composes them; this package stays a leaf.
+//
+// The receiver is not modified — a catalog is immutable once built — and a
+// mapping for a check already present REPLACES the existing one, so a composed
+// catalog has exactly one answer per check id.
+func (c *Catalog) With(controls []Control, mappings []ControlMapping) *Catalog {
+	out := &Catalog{
+		controls: make(map[string]Control, len(c.controls)+len(controls)),
+		byCheck:  make(map[string][]ControlRef, len(c.byCheck)+len(mappings)),
+	}
+	for id, ctrl := range c.controls {
+		out.controls[id] = ctrl
+	}
+	for check, refs := range c.byCheck {
+		cp := make([]ControlRef, len(refs))
+		copy(cp, refs)
+		out.byCheck[check] = cp
+	}
+	for _, ctrl := range controls {
+		out.controls[ctrl.ID] = ctrl
+	}
+	for _, m := range mappings {
+		refs := make([]ControlRef, len(m.Controls))
+		copy(refs, m.Controls)
+		out.byCheck[m.Check] = refs
+	}
+	return out
 }

@@ -167,22 +167,142 @@ func TestServiceOffIsPassNotExposed(t *testing.T) {
 	}
 }
 
-// TestUnknownVendorNotApplicable: an unrecognized platform yields NotApplicable
-// (honest), never a false Pass.
-func TestUnknownVendorNotApplicable(t *testing.T) {
+// TestUnresolvedPlatformYieldsExactlyOneUnassessedFinding: a platform label no
+// vendor profile recognizes evaluates NOTHING. Before the 2026-09-03 fix an
+// unresolvable device was scored against the WHOLE catalog (the Cisco IOS rule
+// ids among them) and answered NotApplicable 32 times; a lab SR Linux spine with
+// no config on file got the same treatment as 32 Unknowns. The honest answer is
+// one finding that says the platform is unresolved and names the label.
+func TestUnresolvedPlatformYieldsExactlyOneUnassessedFinding(t *testing.T) {
 	dev := Device{ID: "d1", Platform: "Acme WidgetOS 1.0", TenantID: "acme"}
 	eng := NewEngine(DefaultCatalog(),
 		MemConfigSource{"d1": "some config\n"},
 		MemSeamResolver{"d1": {{SeamID: "s", SeamType: "ISP", Untrusted: true}}},
 		WithClock(fixedClock()))
-	fs, _ := eng.Evaluate(context.Background(), dev)
-	for _, f := range fs {
-		if f.StatusID == secfindings.StatusPass || f.StatusID == secfindings.StatusFail {
-			t.Errorf("rule %q reached a real verdict %v on an unbound vendor", f.RawRuleID, f.StatusID)
+	fs, err := eng.Evaluate(context.Background(), dev)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(fs) != 1 {
+		ids := make([]string, 0, len(fs))
+		for _, f := range fs {
+			ids = append(ids, f.RawRuleID)
 		}
-		if f.StatusID != secfindings.StatusNotApplicable {
-			t.Errorf("rule %q = %v on unknown vendor, want NotApplicable", f.RawRuleID, f.StatusID)
+		t.Fatalf("unresolved platform produced %d findings (%v), want exactly 1", len(fs), ids)
+	}
+	f := fs[0]
+	if f.RawRuleID != RulePlatformUnresolved || f.ControlID != RulePlatformUnresolved {
+		t.Errorf("rule id = %q/%q, want %q", f.RawRuleID, f.ControlID, RulePlatformUnresolved)
+	}
+	if f.StatusID != secfindings.StatusUnknown {
+		t.Errorf("status = %v, want Unknown (unassessed, never a verdict)", f.StatusID)
+	}
+	if !strings.Contains(f.Detail, "unassessed: platform unresolved") {
+		t.Errorf("detail %q does not carry the unassessed reason", f.Detail)
+	}
+	if !strings.Contains(f.Detail, "Acme WidgetOS 1.0") {
+		t.Errorf("detail %q does not name the platform label that failed to resolve", f.Detail)
+	}
+	if f.Category != CategoryCoverage {
+		t.Errorf("category = %q, want %q — a coverage gap is not a hardening plane", f.Category, CategoryCoverage)
+	}
+	if len(f.Standards) != 0 {
+		t.Errorf("an unresolved platform must claim no standards tag, got %v", f.Standards)
+	}
+	if f.Severity != secfindings.SeverityInfo {
+		t.Errorf("severity = %q, want info", f.Severity)
+	}
+}
+
+// TestUnresolvedPlatformNeverBorrowsAnotherDialectsRules is the false-clear leg
+// of the same defect: the emitted set must contain NOTHING from the IOS
+// catalogue, however the label is shaped (including an empty one).
+func TestUnresolvedPlatformNeverBorrowsAnotherDialectsRules(t *testing.T) {
+	iosOnly := []string{"cdp-run-global", "pad-service", "vty-no-access-class", "no-aaa-new-model",
+		"tcp-small-servers", "exposure-telnet", "exposure-ssh", "exposure-snmp", "exposure-http"}
+	for _, platform := range []string{"Acme WidgetOS 1.0", "", "   ", "switch"} {
+		dev := Device{ID: "d1", Platform: platform, TenantID: "acme"}
+		eng := NewEngine(DefaultCatalog(),
+			MemConfigSource{"d1": "cdp run\nservice pad\nline vty 0 4\n transport input telnet\n"},
+			MemSeamResolver{"d1": {{SeamID: "s", SeamType: "ISP", Untrusted: true}}},
+			WithClock(fixedClock()))
+		fs, err := eng.Evaluate(context.Background(), dev)
+		if err != nil {
+			t.Fatal(err)
 		}
+		for _, rule := range iosOnly {
+			if _, ok := findingFor(fs, rule); ok {
+				t.Errorf("platform %q produced the IOS rule %q — a foreign dialect was applied", platform, rule)
+			}
+		}
+		if _, ok := findingFor(fs, RulePlatformUnresolved); !ok {
+			t.Errorf("platform %q produced no %q finding — silence reads as clear", platform, RulePlatformUnresolved)
+		}
+	}
+}
+
+// TestOnlyBoundRulesAreEvaluated: a device evaluates ITS OWN control set and
+// nothing else. The set is derived from the catalog's bindings, so a new rule or
+// a new binding updates the expectation automatically — what is pinned is the
+// INVARIANT (emitted == bound), which is exactly what broke on the lab fabric.
+func TestOnlyBoundRulesAreEvaluated(t *testing.T) {
+	cat := DefaultCatalog()
+	for _, tc := range []struct {
+		name     string
+		platform string
+		vendor   Vendor
+	}{
+		{"srlinux", "nokia SR Linux", VendorSRLinux},
+		{"arista", "Arista EOS 4.36.0.1F", VendorArista},
+		{"cisco", "Cisco IOS-XE 17.9", VendorCiscoIOSXE},
+		{"juniper", "Juniper Junos 21.4", VendorJuniper},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := VendorFromPlatform(tc.platform); got != tc.vendor {
+				t.Fatalf("VendorFromPlatform(%q) = %q, want %q", tc.platform, got, tc.vendor)
+			}
+			want := map[string]bool{}
+			for _, r := range cat.Rules() {
+				if _, ok := r.Binding(tc.vendor); ok {
+					want[r.ID] = true
+				}
+			}
+			for _, p := range cat.Probes() {
+				if _, ok := p.Binding(tc.vendor); ok {
+					want[p.ID] = true
+				}
+			}
+			if len(want) == 0 {
+				t.Fatalf("%s has no bindings at all — the fixture is wrong", tc.vendor)
+			}
+			// Both with and without a config on file: the emitted SET is the
+			// binding set either way, only the verdicts differ.
+			for _, cfg := range []ConfigSource{
+				MemConfigSource{"d1": "hostname lab\n"},
+				MemConfigSource{}, // fail-closed leg
+			} {
+				eng := NewEngine(cat, cfg, MemSeamResolver{"d1": {{SeamID: "s", SeamType: "mgmt"}}},
+					WithClock(fixedClock()))
+				fs, err := eng.Evaluate(context.Background(), Device{ID: "d1", Platform: tc.platform, TenantID: "acme"})
+				if err != nil {
+					t.Fatal(err)
+				}
+				got := map[string]bool{}
+				for _, f := range fs {
+					got[f.RawRuleID] = true
+				}
+				for id := range want {
+					if !got[id] {
+						t.Errorf("bound rule %q was NOT evaluated", id)
+					}
+				}
+				for id := range got {
+					if !want[id] {
+						t.Errorf("rule %q was evaluated with NO binding for %q — a foreign dialect leaked in", id, tc.vendor)
+					}
+				}
+			}
+		})
 	}
 }
 

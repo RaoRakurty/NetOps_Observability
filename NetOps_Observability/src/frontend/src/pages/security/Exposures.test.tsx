@@ -22,7 +22,7 @@ vi.mock("../../context/workspace", () => ({
 }));
 
 import Exposures, { buildQuery } from "./Exposures";
-import { FACETS, FINDINGS, PAGE_1, PAGE_2, VIEWS } from "./fixtures";
+import { FACETS, FINDINGS, PAGE_1, PAGE_2, UNASSESSED_FINDINGS, VIEWS } from "./fixtures";
 
 afterEach(cleanup);
 
@@ -170,6 +170,62 @@ describe("Exposures — Inspector detail", () => {
     expect(screen.getByText(/cannot be replayed against the raw artifact/i)).toBeTruthy();
     expect(screen.getByText("untagged")).toBeTruthy();
     expect(screen.getAllByText("not recorded").length).toBe(2);
+  });
+});
+
+// ── §5g: an unassessed verdict must show its WHY ────────────────────────────
+//
+// The lab scan of 2026-09-03 returned 64 findings, ALL Unknown, and the
+// inspector could say nothing beyond the grey chip: the reason never left the
+// producer. These pin the reason onto the screen, in the producer's own words,
+// and pin the ABSENCE of one as an explicit statement rather than a blank.
+
+describe("Exposures — the reason an unassessed verdict gives", () => {
+  const openDetail = async (finding: (typeof UNASSESSED_FINDINGS)[number]) => {
+    securityFindings.mockResolvedValue({ items: [finding], next_cursor: null, total: 1 });
+    render(<Exposures />);
+    fireEvent.click(await screen.findByText(finding.control_title!));
+    await waitFor(() => expect(openInspector).toHaveBeenCalled());
+    cleanup();
+    render(openInspector.mock.calls[0][0] as JSX.Element);
+  };
+
+  it.each([
+    ["config unavailable", 0, /running-config unavailable — control not assessed \(fail-closed\)/],
+    ["control not applicable", 2, /SR Linux has no telnet server in its model/],
+    ["platform unresolved", 3, /unassessed: platform unresolved — the platform label/],
+  ])("renders the %s reason under a Why unassessed heading", async (_name, idx, wanted) => {
+    await openDetail(UNASSESSED_FINDINGS[idx as number]);
+    const why = screen.getByRole("heading", { name: "Why unassessed", level: 4 }).parentElement!;
+    expect(within(why).getByText(wanted as RegExp)).toBeTruthy();
+    expect(screen.getAllByText("Unassessed").length).toBeGreaterThan(0);
+  });
+
+  it("says so when the provider recorded NO reason, instead of rendering blank", async () => {
+    await openDetail(UNASSESSED_FINDINGS[4]);
+    const why = screen.getByRole("heading", { name: "Why unassessed", level: 4 }).parentElement!;
+    expect(within(why).getByText(/No reason recorded/i)).toBeTruthy();
+  });
+
+  it("shows no Why block for an ASSESSED verdict — there status_detail is narrative", async () => {
+    securityFindings.mockResolvedValue({ items: [FINDINGS[0]], next_cursor: null, total: 1 });
+    render(<Exposures />);
+    fireEvent.click(await screen.findByText("Telnet on VTY — ISP seam"));
+    await waitFor(() => expect(openInspector).toHaveBeenCalled());
+    cleanup();
+    render(openInspector.mock.calls[0][0] as JSX.Element);
+    expect(screen.queryByRole("heading", { name: "Why unassessed" })).toBeNull();
+    expect(screen.getByRole("heading", { name: "Detail", level: 4 })).toBeTruthy();
+    expect(screen.getByText("Management services reachable from the ISP seam.")).toBeTruthy();
+  });
+
+  it("renders the reason as escaped TEXT, never as markup (§15 LLM02)", async () => {
+    const hostile = { ...UNASSESSED_FINDINGS[0], id: "u-x", native_id: "u-x",
+      status_detail: "<img src=x onerror=alert(1)> platform unresolved" };
+    await openDetail(hostile);
+    const why = screen.getByRole("heading", { name: "Why unassessed", level: 4 }).parentElement!;
+    expect(why.querySelector("img")).toBeNull();
+    expect(within(why).getByText(/<img src=x onerror=alert\(1\)> platform unresolved/)).toBeTruthy();
   });
 });
 

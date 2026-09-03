@@ -14,6 +14,8 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -770,5 +772,270 @@ func TestMetricsSnapshotIsNilSafe(t *testing.T) {
 	m.RecordRun("acme", OutcomeOK, fixedNow, 0)
 	if m.RunsFor("acme", OutcomeOK) != 0 {
 		t.Fatal("nil metrics recorded a run")
+	}
+}
+
+// ── the platform token: inventory row → dialect → the device's control set ──
+
+// TestDevicePlatformTokenBindsTheRightDialect walks the WHOLE binding chain the
+// lab defect of 2026-09-03 broke, over the inventory shapes that actually exist
+// on this platform:
+//
+//	inventory row (vendor, os, model) → seclane.Device.Platform()
+//	  → hardening.VendorFromPlatform (vendorprofile's ranked platform_contains)
+//	    → the rules that carry a binding for that dialect
+//
+// The manual "nokia" + "SR Linux" row is the one that mattered: it must reach
+// the srlinux dialect and NOT the SR OS one (rank 29 beats rank 30, which is
+// why the rank is data and not code), and the emitted control set must be the
+// srlinux bindings — never the Cisco IOS catalogue.
+func TestDevicePlatformTokenBindsTheRightDialect(t *testing.T) {
+	cat := hardening.DefaultCatalog()
+	// A rule id that exists ONLY in the IOS catalogue: its presence on any
+	// non-Cisco device is the exact regression this test guards.
+	const iosOnlyRule = "cdp-run-global"
+
+	cases := []struct {
+		name        string
+		dev         Device
+		wantToken   string
+		wantVendor  hardening.Vendor
+		wantMustSee []string // rule ids the device's own control set must contain
+	}{
+		{
+			// The lab spines: added by hand, no sysDescr, no model.
+			name:        "manual nokia + SR Linux (lab spine1/spine2)",
+			dev:         Device{ID: "spine1", Name: "spine1", Vendor: "nokia", OS: "SR Linux", TenantID: "t1"},
+			wantToken:   "nokia SR Linux",
+			wantVendor:  hardening.VendorSRLinux,
+			wantMustSee: []string{"mgmt-api-unencrypted", "tls-no-client-auth", "no-ntp-server"},
+		},
+		{
+			// SNMP discovery: OS is the (truncated) sysDescr, model from the
+			// entity MIB.
+			name: "discovered SNMP sysDescr (Cisco IOS-XE)",
+			dev: Device{ID: "d2", Name: "core-1", Vendor: "cisco",
+				OS:    "Cisco IOS Software [Cupertino], Catalyst L3 Switch Software (CAT9K_IOSXE), Version 17.9.4a, RELEASE SOFTWARE",
+				Model: "C9300-48P", TenantID: "t1"},
+			wantVendor:  hardening.VendorCiscoIOSXE,
+			wantMustSee: []string{iosOnlyRule, "vty-no-access-class", "exposure-telnet"},
+		},
+		{
+			name:        "Arista EOS release string",
+			dev:         Device{ID: "leaf1", Name: "leaf1", Vendor: "arista", OS: "Arista EOS 4.36.0.1F", TenantID: "t1"},
+			wantToken:   "arista Arista EOS 4.36.0.1F",
+			wantVendor:  hardening.VendorArista,
+			wantMustSee: []string{"mgmt-api-unencrypted", "no-remote-aaa"},
+		},
+		{
+			name:       "unknown platform",
+			dev:        Device{ID: "d4", Name: "mystery", Vendor: "acme", OS: "WidgetOS 1.0", TenantID: "t1"},
+			wantToken:  "acme WidgetOS 1.0",
+			wantVendor: hardening.VendorUnknown,
+		},
+		{
+			name:       "no vendor and no OS at all",
+			dev:        Device{ID: "d5", Name: "bare", TenantID: "t1"},
+			wantToken:  "",
+			wantVendor: hardening.VendorUnknown,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			token := tc.dev.Platform()
+			if tc.wantToken != "" || tc.dev.Vendor == "" {
+				if token != tc.wantToken {
+					t.Fatalf("Platform() = %q, want %q", token, tc.wantToken)
+				}
+			}
+			vendor := hardening.VendorFromPlatform(token)
+			if vendor != tc.wantVendor {
+				t.Fatalf("VendorFromPlatform(%q) = %q, want %q", token, vendor, tc.wantVendor)
+			}
+
+			eng := hardening.NewEngine(cat,
+				hardening.MemConfigSource{tc.dev.ID: "hostname " + tc.dev.Name + "\n"},
+				hardening.MemSeamResolver{tc.dev.ID: {{SeamID: "s", SeamType: "mgmt"}}})
+			fs, err := eng.Evaluate(context.Background(), hardening.Device{
+				ID: tc.dev.ID, Hostname: tc.dev.Name, Platform: token, TenantID: tc.dev.TenantID,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			emitted := map[string]secfindings.StatusID{}
+			for _, f := range fs {
+				emitted[f.RawRuleID] = f.StatusID
+			}
+
+			if vendor == hardening.VendorUnknown {
+				if len(emitted) != 1 {
+					t.Fatalf("unresolved platform emitted %d checks (%v), want exactly the unassessed one", len(emitted), emitted)
+				}
+				st, ok := emitted[hardening.RulePlatformUnresolved]
+				if !ok {
+					t.Fatalf("unresolved platform did not emit %q: %v", hardening.RulePlatformUnresolved, emitted)
+				}
+				if st != secfindings.StatusUnknown {
+					t.Fatalf("%q = %v, want Unknown", hardening.RulePlatformUnresolved, st)
+				}
+				return
+			}
+
+			for _, id := range tc.wantMustSee {
+				if _, ok := emitted[id]; !ok {
+					t.Errorf("%q is bound for %q but was not evaluated; emitted=%v", id, vendor, emitted)
+				}
+			}
+			if vendor != hardening.VendorCiscoIOSXE {
+				if _, ok := emitted[iosOnlyRule]; ok {
+					t.Errorf("the Cisco IOS rule %q was evaluated against a %q device", iosOnlyRule, vendor)
+				}
+			}
+			if _, ok := emitted[hardening.RulePlatformUnresolved]; ok {
+				t.Errorf("a RESOLVED platform (%q) emitted the platform-unresolved finding", vendor)
+			}
+			// Every emitted id must actually be bound for this dialect.
+			for id := range emitted {
+				bound := false
+				for _, r := range cat.Rules() {
+					if r.ID == id {
+						_, bound = r.Binding(vendor)
+					}
+				}
+				for _, p := range cat.Probes() {
+					if p.ID == id {
+						_, bound = p.Binding(vendor)
+					}
+				}
+				if !bound {
+					t.Errorf("emitted %q, which has no %q binding", id, vendor)
+				}
+			}
+		})
+	}
+}
+
+// srlinuxFixture is the REAL spine1 capture that internal/hardening scores its
+// dialect against (testdata provenance is documented in
+// internal/hardening/dialect_fabric_test.go). It is read across the package
+// boundary on purpose: this test's whole point is that the LANE, wired end to
+// end, produces on the bus what the rule engine predicts on that exact file —
+// a second copy would be free to drift from the thing under test.
+func srlinuxFixture(t *testing.T) string {
+	t.Helper()
+	b, err := os.ReadFile(filepath.Join("..", "hardening", "testdata", "srlinux_spine1_running.txt"))
+	if err != nil {
+		t.Fatalf("read SR Linux fixture: %v", err)
+	}
+	return string(b)
+}
+
+func srlinuxDevice(id, tenant string) Device {
+	return Device{ID: id, Name: id, Address: "172.40.40.11",
+		Vendor: "nokia", OS: "SR Linux", TenantID: tenant}
+}
+
+// TestLaneEmitsTheSRLinuxControlSetWithRealVerdicts is the end-to-end shape of
+// the 2026-09-03 lab defect, from the inventory row to the bus record.
+//
+// As observed: a lane whose Deps.ConfigSource was nil (main.go constructed the
+// lane ABOVE the config-backup module that assigns it) emitted 32 checks per
+// spine — the whole catalog, Cisco IOS rules included — every one of them
+// Unknown. With the source wired and the binding gate resolved first, one SR
+// Linux spine emits its OWN 14 controls and the six FAILs the fixture predicts.
+func TestLaneEmitsTheSRLinuxControlSetWithRealVerdicts(t *testing.T) {
+	cfg := hardening.MemConfigSource{"spine1": srlinuxFixture(t)}
+	fx := newFixture(t, func(d *Deps) { d.ConfigSource = cfg })
+	fx.devices["acme"] = []Device{srlinuxDevice("spine1", "acme")}
+
+	fx.lane.ScanTenant(context.Background(), "acme", "manual")
+
+	fails, emitted := map[string]bool{}, map[string]string{}
+	for _, r := range fx.pub.on(secbus.TopicSecurityEvidence) {
+		ev := r.Value.(secbus.EvidenceEvent)
+		if ev.Kind != secbus.KindPosture {
+			continue // the advisory lane's exposure finding is not this test's subject
+		}
+		id, _ := ev.Attrs["raw_rule_id"].(string)
+		status, _ := ev.Attrs["status"].(string)
+		emitted[id] = status
+		if status == secfindings.StatusFail.String() {
+			fails[id] = true
+		}
+	}
+
+	wantFail := []string{
+		"http-server-nontls", "mgmt-api-unencrypted", "tls-no-client-auth",
+		"snmp-v1v2c-community", "no-remote-aaa", "no-ntp-server",
+	}
+	for _, id := range wantFail {
+		if !fails[id] {
+			t.Errorf("spine1 did not FAIL %q (got %q); emitted=%v", id, emitted[id], emitted)
+		}
+	}
+	if len(fails) != len(wantFail) {
+		t.Errorf("spine1 FAIL count = %d (%v), want %d", len(fails), fails, len(wantFail))
+	}
+	// Not one Cisco IOS rule may appear on an SR Linux spine.
+	for _, iosOnly := range []string{"cdp-run-global", "pad-service", "vty-no-access-class",
+		"no-aaa-new-model", "no-control-plane-protection", "ftp-server-enabled"} {
+		if st, ok := emitted[iosOnly]; ok {
+			t.Errorf("the Cisco IOS rule %q was evaluated against an SR Linux spine (%s)", iosOnly, st)
+		}
+	}
+	if len(emitted) != 14 {
+		t.Errorf("spine1 emitted %d posture checks, want its 14 srlinux-bound controls: %v", len(emitted), emitted)
+	}
+}
+
+// TestUnassessedFindingsCarryTheirReasonOnTheBus: every non-verdict the lane
+// publishes must say WHY on the wire. Before the fix the indexed document
+// carried only attrs.status, so "Unknown" reached the operator with no reason
+// at all — §5g's never-false-clear rule without the half that makes it
+// actionable.
+func TestUnassessedFindingsCarryTheirReasonOnTheBus(t *testing.T) {
+	// Two devices, two DIFFERENT reasons: one SR Linux spine with no config on
+	// file, one device whose platform resolves to no dialect at all.
+	fx := newFixture(t, nil) // ConfigSource nil → nothing captured
+	fx.devices["acme"] = []Device{
+		srlinuxDevice("spine1", "acme"),
+		{ID: "mystery", Name: "mystery", Vendor: "acme", OS: "WidgetOS 1.0", TenantID: "acme"},
+	}
+
+	fx.lane.ScanTenant(context.Background(), "acme", "manual")
+
+	reasons := map[string]map[string]string{} // device → rule → reason
+	for _, r := range fx.pub.on(secbus.TopicSecurityEvidence) {
+		ev := r.Value.(secbus.EvidenceEvent)
+		if ev.Kind != secbus.KindPosture {
+			continue
+		}
+		status, _ := ev.Attrs["status"].(string)
+		if status == secfindings.StatusPass.String() || status == secfindings.StatusFail.String() {
+			continue
+		}
+		id, _ := ev.Attrs["raw_rule_id"].(string)
+		detail, ok := ev.Attrs["status_detail"].(string)
+		if !ok || strings.TrimSpace(detail) == "" {
+			t.Errorf("%s/%s is %s with NO reason on the wire — a bare grey chip for the operator",
+				ev.EntityID, id, status)
+			continue
+		}
+		if reasons[ev.EntityID] == nil {
+			reasons[ev.EntityID] = map[string]string{}
+		}
+		reasons[ev.EntityID][id] = detail
+	}
+
+	if got := reasons["spine1"]["no-ntp-server"]; !strings.Contains(got, "running-config unavailable") {
+		t.Errorf("spine1/no-ntp-server reason = %q, want the config-unavailable reason", got)
+	}
+	if got := reasons["mystery"][hardening.RulePlatformUnresolved]; !strings.Contains(got, "unassessed: platform unresolved") {
+		t.Errorf("mystery reason = %q, want the platform-unresolved reason", got)
+	}
+	if n := len(reasons["mystery"]); n != 1 {
+		t.Errorf("an unresolvable platform produced %d posture findings (%v), want exactly 1",
+			n, reasons["mystery"])
 	}
 }

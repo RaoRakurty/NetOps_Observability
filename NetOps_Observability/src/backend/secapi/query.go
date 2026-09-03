@@ -50,11 +50,15 @@ const (
 // wire shape actually carries today, with lenient:true so a keyword field in
 // the list can never turn a search into a 400.
 //
-// HONESTY: observed/intended/status_detail/remediation are declared in the
-// mapping but are NOT on the bus wire — secbus deliberately keeps narrative and
-// raw evidence OFF the bus (§5c by-reference, LLM06 no payloads). Until a
-// direct-Finding writer exists, `q` matches control ids/titles, rule ids and the
-// device, not the narrative.
+// HONESTY: observed/intended/remediation are declared in the mapping but are NOT
+// on the bus wire — secbus deliberately keeps raw evidence and the fix text OFF
+// the bus (§5c by-reference, LLM06 no payloads). status_detail (the verdict
+// REASON) IS on the wire since 2026-09-03, but as `attrs.status_detail`, which
+// the index template does not declare — under the template's dynamic:false it
+// stays in _source (so DecodeFinding returns it and the UI renders it) without
+// being indexed, so it is not searchable either. Until a direct-Finding writer
+// exists, or attrs.status_detail is declared in the template, `q` matches
+// control ids/titles, rule ids and the device, not the narrative.
 var searchFields = []string{
 	FieldControlTitle,
 	FieldControlID,

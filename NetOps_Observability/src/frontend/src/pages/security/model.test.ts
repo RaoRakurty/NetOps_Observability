@@ -4,15 +4,19 @@
 
 import { describe, it, expect } from "vitest";
 import {
-  appendPage, coverageOf, EMPTY_PAGE, evidenceClassLabel, facetTotal, frameworkScore,
+  appendPage, benchmarkChipsByControl, controlVerdict, coverageOf, EMPTY_PAGE,
+  evidenceClassLabel, facetTotal, frameworkCard, frameworkCards, frameworkRows,
+  frameworksPutPayload, frameworkScore,
   funnelStages, groupByNative, historyQuery, isThreatLane, mapFacetRows, mitreList, rulesPutPayload,
   seamCards, severityFacetRows, severityRank, statusFacetRows, storyConfidence, storyList,
-  subjectLine, topExposures, trendPoints, verdictOf, verdictTone,
+  subjectLine, topExposures, trendPoints, unassessedReason, unassessedReasonText,
+  unassessedReasons, verdictOf, verdictTone, NO_REASON_RECORDED,
 } from "./model";
 import { secFindingParams } from "../../services/api";
 import {
-  FACETS, FINDINGS, PAGE_1, PAGE_2, POSTURE, POSTURE_UNASSESSED, RULES, RULES_WIRE,
-  RULES_WIRE_LEGACY, SEAMS, STORY, TREND, finding,
+  COMPLIANCE, FACETS, FINDINGS, FRAMEWORK_CATALOG, PAGE_1, PAGE_2, POSTURE,
+  POSTURE_UNASSESSED, RULES, RULES_WIRE, RULES_WIRE_LEGACY, SEAMS, STORY, TREND,
+  UNASSESSED_FINDINGS, finding,
 } from "./fixtures";
 
 describe("verdict mapping (OCSF status_id)", () => {
@@ -377,5 +381,174 @@ describe("/api/security/rules contract pin", () => {
   it("normalizes the legacy (string-valued) body to the same techniques", () => {
     expect(RULES_WIRE_LEGACY.map((r) => mitreList(r as { mitre?: unknown })))
       .toEqual(RULES_WIRE.map((r) => mitreList(r)));
+  });
+});
+
+// ── the WHY behind an unassessed verdict ────────────────────────────────────
+//
+// On the lab stack (2026-09-03) every hardening verdict came back Unknown with
+// no reason on the document at all, so the UI could only render a grey chip.
+// These pin the adapter side of the fix: the reason is surfaced when present,
+// named as MISSING when absent, and never invented.
+
+describe("unassessedReason", () => {
+  it("returns the provider's reason for an unassessed verdict", () => {
+    expect(unassessedReason({ status_id: 0, status_detail: "running-config unavailable" }))
+      .toBe("running-config unavailable");
+    expect(unassessedReason({ status_id: 4, status_detail: "no telnet server in its model" }))
+      .toBe("no telnet server in its model");
+    expect(unassessedReason({ status_id: 5, status_detail: "provider errored" })).toBe("provider errored");
+  });
+
+  it("is null for an ASSESSED verdict — status_detail there is narrative, not a reason", () => {
+    for (const id of [1, 2, 3]) {
+      expect(unassessedReason({ status_id: id, status_detail: "reachable from the ISP seam" })).toBeNull();
+    }
+  });
+
+  it("is null — never an empty string — when the provider stated nothing", () => {
+    expect(unassessedReason({ status_id: 0 })).toBeNull();
+    expect(unassessedReason({ status_id: 0, status_detail: "   " })).toBeNull();
+  });
+
+  it("names a missing reason as missing rather than rendering blank", () => {
+    expect(unassessedReasonText({ status_id: 0 })).toBe(NO_REASON_RECORDED);
+    expect(unassessedReasonText({ status_id: 0, status_detail: "platform unresolved" }))
+      .toBe("platform unresolved");
+  });
+});
+
+describe("unassessedReasons", () => {
+  it("groups the unassessed findings by reason, commonest first", () => {
+    const rows = unassessedReasons(UNASSESSED_FINDINGS);
+    expect(rows[0]).toMatchObject({
+      reason: "running-config unavailable — control not assessed (fail-closed)",
+      count: 2, recorded: true,
+    });
+    const byReason = Object.fromEntries(rows.map((r) => [r.reason, r.count]));
+    expect(byReason["SR Linux has no telnet server in its model — SSHv2 only"]).toBe(1);
+    expect(Object.keys(byReason).some((r) => r.startsWith("unassessed: platform unresolved"))).toBe(true);
+    // The reasonless finding is its OWN row, explicitly labelled.
+    const none = rows.find((r) => !r.recorded);
+    expect(none).toMatchObject({ reason: NO_REASON_RECORDED, count: 1 });
+  });
+
+  it("counts NO assessed finding, whatever its status_detail says", () => {
+    // FINDINGS carries Pass/Warning/Fail rows with narrative status_detail.
+    const assessed = FINDINGS.filter((f) => [1, 2, 3].includes(f.status_id));
+    expect(unassessedReasons(assessed)).toEqual([]);
+  });
+
+  it("is stable: equal counts sort alphabetically, and an empty input is empty", () => {
+    const rows = unassessedReasons([
+      finding({ status_id: 0, status_detail: "zeta reason" }),
+      finding({ status_id: 0, status_detail: "alpha reason" }),
+    ]);
+    expect(rows.map((r) => r.reason)).toEqual(["alpha reason", "zeta reason"]);
+    expect(unassessedReasons([])).toEqual([]);
+  });
+});
+
+// ── per-tenant framework selection ──────────────────────────────────────────
+//
+// Owner direction, 2026-09-03: compliance is analyzed per customer requirement.
+// These adapters are where "which frameworks does this tenant run" and "what may
+// this page legitimately claim about each" are decided.
+
+describe("framework catalogue", () => {
+  it("names the origin in the operator's words, never the wire value", () => {
+    const rows = frameworkRows(FRAMEWORK_CATALOG);
+    expect(rows.find((r) => r.id === "nist-800-53-r5")!.origin).toBe("Base catalogue");
+    expect(rows.find((r) => r.id === "hipaa-security-rule")!.origin).toBe("Projected from NIST 800-53");
+    for (const r of rows) expect(r.version).not.toBe("");
+  });
+
+  it("survives a malformed payload rather than crashing the page", () => {
+    expect(frameworkRows(null)).toEqual([]);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const junk = { frameworks: [null, { id: "" }, { id: "ok" }] } as any;
+    expect(frameworkRows(junk).map((r) => r.id)).toEqual(["ok"]);
+  });
+
+  it("sends only the frameworks that CHANGED, enablement only, id-ordered", () => {
+    const rows = frameworkRows(FRAMEWORK_CATALOG);
+    expect(frameworksPutPayload(rows, {})).toEqual([]);
+    // Re-asserting a value that is already set is not a change.
+    expect(frameworksPutPayload(rows, { "cis-controls-v8": true })).toEqual([]);
+    expect(frameworksPutPayload(rows, {
+      "pci-dss-v4": true, "hipaa-security-rule": true, "cis-controls-v8": false,
+      "not-a-framework": true,
+    })).toEqual([
+      { framework_id: "cis-controls-v8", enabled: false },
+      { framework_id: "hipaa-security-rule", enabled: true },
+      { framework_id: "pci-dss-v4", enabled: true },
+    ]);
+  });
+});
+
+describe("framework scorecards", () => {
+  it("scores the base framework over its ASSESSED controls only", () => {
+    const [base] = frameworkCards(COMPLIANCE);
+    expect(base.pct).toBe(50);           // 1 pass of 2 assessed
+    expect(base.tone).toBe("bad");
+    expect(base.coveragePct).toBe(50);   // 2 of 4 controls evidenceable
+  });
+
+  it("a framework with nothing assessed reports NULL and a sentence, never 0% or 100%", () => {
+    const cis = frameworkCards(COMPLIANCE)[1];
+    expect(cis.pct).toBeNull();
+    expect(cis.emptyNote).toMatch(/absence of assessment/i);
+  });
+
+  it("refuses a score the server did not state, even if it sent a number", () => {
+    // Nothing assessed but a stray 100 on the wire: the adapter trusts the
+    // COUNTS, not the number, so a transport quirk cannot paint the page green.
+    const card = frameworkCard({
+      framework: "X", version: "1", controls_in_scope: 2, controls_with_check: 0,
+      coverage_percent: 0, assessed: 0, passed: 0, warned: 0, failed: 0, unassessed: 2,
+      verdict_id: 0, verdict: "Unknown", score_percent: 100, controls: [], caption: "c",
+    });
+    expect(card.pct).toBeNull();
+    expect(card.emptyNote).toMatch(/absence of assessment/i);
+  });
+
+  it("states no coverage percentage when the framework has no control in scope", () => {
+    const card = frameworkCard({
+      framework: "X", version: "1", controls_in_scope: 0, controls_with_check: 0,
+      coverage_percent: 0, assessed: 0, passed: 0, warned: 0, failed: 0, unassessed: 0,
+      verdict_id: 0, verdict: "Unknown", score_percent: null, controls: [], caption: "c",
+    });
+    expect(card.coveragePct).toBeNull();
+  });
+
+  it("a NotApplicable or Error control row is UNASSESSED, never a pass", () => {
+    expect(controlVerdict(4)).toBe("unassessed");
+    expect(controlVerdict(5)).toBe("unassessed");
+    expect(controlVerdict(0)).toBe("unassessed");
+    expect(controlVerdict(1)).toBe("pass");
+  });
+});
+
+describe("benchmark citations", () => {
+  it("groups a citation under every control the citing rule evidences", () => {
+    const chips = benchmarkChipsByControl(FRAMEWORK_CATALOG.benchmark_citations);
+    expect(chips["AC-17"]).toEqual([
+      "CIS Cisco IOS XE 17.x Benchmark v2.2.1 §1.2 Access Rules",
+    ]);
+    expect(chips["SC-8"]).toHaveLength(1);
+    expect(chips["CM-7"]).toBeUndefined();
+  });
+
+  it("drops a citation with no label or no control rather than inventing one", () => {
+    expect(benchmarkChipsByControl([
+      { rule_id: "r", benchmark_id: "b", section: "1.1", title: "t", label: "   ", controls: ["AC-2"] },
+      { rule_id: "r2", benchmark_id: "b", section: "1.2", title: "t", label: "real" },
+    ])).toEqual({});
+    expect(benchmarkChipsByControl(null)).toEqual({});
+  });
+
+  it("does not repeat the same citation on one control", () => {
+    const chip = { rule_id: "r", benchmark_id: "b", section: "1.1", title: "t", label: "same", controls: ["AC-2"] };
+    expect(benchmarkChipsByControl([chip, { ...chip, rule_id: "r2" }])["AC-2"]).toEqual(["same"]);
   });
 });

@@ -26,13 +26,15 @@ import (
 //	and every one of those rules answered "not enabled" against a grammar the
 //	device does not use.
 //
-// CONTROL-CATALOGUE PROVENANCE. Arista publishes a CIS EOS Benchmark, so the
-// EOS-side concepts here have an industry catalogue behind them; the control
-// tags on the shared rules are the generic CIS-NET ids the catalog already
-// uses, and no benchmark section number is invented. Nokia SR Linux has NO CIS
-// benchmark and no equivalent published hardening standard, so its rules map to
-// NIST 800-53 controls ONLY, and that is a statement about the state of the
-// industry, not an omission in this file.
+// CONTROL-CATALOGUE PROVENANCE. Arista publishes a CIS Arista EOS Benchmark
+// (v1.0.0 as of 2026-09-03), so the EOS-side concepts here have an industry
+// catalogue behind them — but its section taxonomy could not be read from a
+// published document, so benchmark.go records the benchmark and cites NO section
+// of it. Nokia SR Linux has no CIS benchmark and no equivalent published
+// hardening standard at all. Both therefore map to NIST 800-53 controls ONLY,
+// and that is a statement about the state of the industry, not an omission in
+// this file. (Before 2026-09-03 the shared rules carried invented `CIS-NET-x.y`
+// tags; benchmark.go explains why they are gone.)
 //
 // WHAT IS DELIBERATELY NOT DETECTED. A default admin password: neither platform
 // exposes anything in the running configuration that distinguishes a shipped

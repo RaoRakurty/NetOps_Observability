@@ -83,7 +83,8 @@ type EvidenceRef struct {
 //	NativeID       → Signal.native_id       (deterministic → stable signal_id)
 //	SeamID/Type/…  → Signal.attrs           (seam attribution, opaque to engine)
 //	EvidenceRefs   → Signal.attrs           (by-reference pointers only)
-//	Attrs          → Signal.attrs           (control id, standards, verdict, …)
+//	Attrs          → Signal.attrs           (control id, standards, verdict,
+//	                                         status_detail — the verdict REASON, …)
 type EvidenceEvent struct {
 	SchemaVersion  string         `json:"schema_version"`
 	TenantID       string         `json:"tenant_id"`
@@ -188,11 +189,27 @@ func nativeIDOf(f secfindings.Finding, entityID, kind string) string {
 	return "security|" + kind + "|" + hex.EncodeToString(sum[:])
 }
 
-// attrsOf assembles Signal.attrs: the security CLASSIFICATION and evidence
-// POINTERS only. It deliberately inlines NO raw evidence, config snippet,
-// narrative or secret (§5c by-reference, §3a/LLM06 no payloads on the bus) —
-// the raw artifact stays behind EvidenceRefs. Empty values are omitted to keep
-// the wire lean and the consumer's honest defaults intact.
+// StatusDetailMax bounds the verdict REASON carried in attrs.status_detail. The
+// reason is producer-authored prose, so it is bounded like every other external
+// string that reaches the bus (§9 bounded IO); a longer one is truncated with an
+// ellipsis rather than dropped, because a clipped reason still explains more
+// than no reason at all.
+const StatusDetailMax = 512
+
+// attrsOf assembles Signal.attrs: the security CLASSIFICATION, the verdict
+// REASON, and evidence POINTERS only. It deliberately inlines NO raw evidence,
+// config snippet or secret (§5c by-reference, §3a/LLM06 no payloads on the bus)
+// — the raw artifact stays behind EvidenceRefs, and Finding.Observed (which IS
+// the offending config excerpt) is deliberately NOT carried here. Empty values
+// are omitted to keep the wire lean and the consumer's honest defaults intact.
+//
+// status_detail is the ONE narrative field that does ride the wire, and it does
+// so because §5g's "never a false clear" is only half a rule without it: an
+// Unknown/NotApplicable verdict whose REASON does not survive the bus reaches
+// the operator as a bare grey chip, and "we could not read the running-config",
+// "this control does not exist on this platform" and "we could not even tell
+// what platform this is" are three different facts with three different fixes.
+// It is a classification of the verdict, not evidence about the device.
 func attrsOf(f secfindings.Finding, seam *secfindings.SeamContext) map[string]any {
 	attrs := map[string]any{
 		"evidence_class": f.EvidenceClass,
@@ -208,6 +225,7 @@ func attrsOf(f secfindings.Finding, seam *secfindings.SeamContext) map[string]an
 	put("category", f.Category)
 	put("raw_rule_id", f.RawRuleID)
 	put("scan_id", f.ScanID)
+	put("status_detail", clampDetail(f.Detail))
 	if f.Status != "" {
 		attrs["status"] = f.Status
 	}
@@ -227,6 +245,20 @@ func attrsOf(f secfindings.Finding, seam *secfindings.SeamContext) map[string]an
 		}
 	}
 	return attrs
+}
+
+// clampDetail trims and bounds the verdict reason. The budget is counted in
+// RUNES and the cut lands on a rune boundary, so a truncated multi-byte reason
+// can never be written as invalid UTF-8 (the em-dashes in these strings are
+// three bytes each, so a byte-wise cut would be a live hazard, not a theoretical
+// one).
+func clampDetail(detail string) string {
+	detail = strings.TrimSpace(detail)
+	runes := []rune(detail)
+	if len(runes) <= StatusDetailMax {
+		return detail
+	}
+	return string(runes[:StatusDetailMax]) + "…"
 }
 
 // FromFinding converts one owned, normalized secfindings.Finding into the

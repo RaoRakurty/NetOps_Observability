@@ -9,7 +9,8 @@
 import { ReactNode } from "react";
 import {
   Coverage, FacetRow, FunnelStage, SeamCard, SecFindingLike, Tone, Verdict,
-  VERDICT_LABEL, evidenceClassLabel, severityTone, subjectLine, verdictOf, verdictTone,
+  VERDICT_LABEL, evidenceClassLabel, severityTone, subjectLine, unassessedReason,
+  unassessedReasonText, verdictOf, verdictTone,
 } from "./model";
 import { fmtDateTime } from "../../lib/time";
 
@@ -211,6 +212,21 @@ export function FindingDetail({ finding }: { finding: SecFindingLike }) {
         {finding.control_title || finding.control || finding.raw_rule_id || "Untitled check"}
       </h3>
 
+      {v === "unassessed" && (
+        // The WHY comes FIRST for a non-verdict: with no reason, "Unassessed"
+        // is a grey chip an operator can only read as "probably fine". The
+        // reason is provider-authored text, rendered as escaped React text.
+        <div className="sec-why">
+          <h4 className="sec-facet-h">Why unassessed</h4>
+          <p
+            className={unassessedReason(finding) ? undefined : "sec-unassessed"}
+            style={{ margin: 0, fontSize: 12.5 }}
+          >
+            {unassessedReasonText(finding)}
+          </p>
+        </div>
+      )}
+
       <div className="sec-oi">
         <div>
           <h4>Observed</h4>
@@ -222,7 +238,10 @@ export function FindingDetail({ finding }: { finding: SecFindingLike }) {
         </div>
       </div>
 
-      {finding.status_detail && (
+      {v !== "unassessed" && finding.status_detail && (
+        // For an ASSESSED verdict the same field is narrative detail, not a
+        // reason — it keeps its own heading and does not duplicate the block
+        // above.
         <div>
           <h4 className="sec-facet-h">Detail</h4>
           <p style={{ margin: 0, fontSize: 12.5 }}>{finding.status_detail}</p>
