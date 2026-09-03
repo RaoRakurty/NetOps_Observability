@@ -135,6 +135,7 @@ ENV_FILE="${SUPPORT_ENV_FILE:-$COMPOSE_DIR/.env}"
 
 env_get() { sed -n "s/^$1=//p" "$ENV_FILE" 2>/dev/null | head -1; }
 
+# shellcheck disable=SC2317  # invoked indirectly (through the timeout/collect wrappers below), which newer shellcheck reports as unreachable
 dcompose() { ( cd "$COMPOSE_DIR" && dkr compose "$@" ); }
 
 PROJECT="${COMPOSE_PROJECT:-$(env_get COMPOSE_PROJECT_NAME)}"
