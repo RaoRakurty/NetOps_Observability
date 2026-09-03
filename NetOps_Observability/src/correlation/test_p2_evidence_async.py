@@ -52,6 +52,7 @@ import engine
 import main
 import rank_memo as RM
 import signals
+import timing_gate
 from catalog import builtin_catalog
 from engine import EngineConfig, run_window
 from evidence_plane import (
@@ -838,6 +839,21 @@ async def _sweep(components: int, cohorts: int, cohort_size: int) -> None:
     await main._drain_epoch_sweep()
 
 
+# E10's sweep: `_E10_COHORTS` back-to-back cohorts of `_E10_COHORT_SIZE`
+# components each. The invariant is PER COHORT (≥ `_E10_PER_COHORT_FLOOR`
+# items materialized, against the one-per-cohort starvation the generational
+# hold fixed), and what the consumer can drain inside a cohort's own I/O waits
+# is proportional to the items that cohort produces — so the COHORT SIZE is the
+# size knob, and a bigger one only moves the measurement away from the floor,
+# never the floor away from the measurement. 20 (measured ~10 per cohort on the
+# lab box, 2.5x the floor) replaces the original 8, which measured 4.1-5.4 on
+# the lab box and 3.6 on a hosted runner — i.e. straddled its own floor.
+_E10_COHORTS = 8
+_E10_COHORT_SIZE = 20
+_E10_MAX_COHORT_SIZE = 60
+_E10_PER_COHORT_FLOOR = 4
+
+
 def test_E10_the_consumer_drains_between_cohorts_without_the_queue_being_full(_stack):
     """THE regression. Eight back-to-back cohorts, a queue bound far above the
     workload (so a bound can never be what lets the consumer run) and a sink with
@@ -846,22 +862,53 @@ def test_E10_the_consumer_drains_between_cohorts_without_the_queue_being_full(_s
 
     Before the generational hold this materialized 7 items out of 61 and the
     depth climbed monotonically; the bound was the only thing that ever released
-    the consumer."""
-    _reset_engine_state()
+    the consumer.
+
+    THE COHORT IS SIZED TO THE MACHINE (timing_gate.py). How much the consumer
+    gets through inside the decision path's own I/O waits is a race between two
+    coroutines on a 2 ms sink, and a hosted runner on 2026-09-03 landed 29
+    against a floor of 32 on the original 8-component cohort — the floor was
+    inside the measurement's spread rather than below it. The floor itself is
+    unchanged (≥ 4 per cohort); the cohort is grown until the measurement is
+    clear of it."""
     _stack.setattr(main, "ch", _SlowCH())
     _stack.setattr(main, "CORR_EVIDENCE_QUEUE_MAX", 100_000)
-    asyncio.run(_sweep(components=40, cohorts=8, cohort_size=8))
+    # `produced` is read below as this sweep's own output, so the process-wide
+    # counter has to start at zero — it is not otherwise reset between tests in
+    # this file, which made the reported "N of 451" a running total.
+    _stack.setattr(main, "VERSIONS_PERSISTED", 0)
+
+    def sweep(cohort_size: int) -> float:
+        _reset_engine_state()
+        main._EVIDENCE_QUEUE = None
+        main._EVIDENCE_TASK = None
+        main._EVIDENCE_LOOP = None
+        main.EVIDENCE_ITEMS_MATERIALIZED = 0
+        main.VERSIONS_PERSISTED = 0
+        asyncio.run(_sweep(components=cohort_size * _E10_COHORTS,
+                           cohorts=_E10_COHORTS, cohort_size=cohort_size))
+        return float(main.EVIDENCE_ITEMS_MATERIALIZED)
+
+    gate = timing_gate.calibrated_stall(
+        sweep, size=_E10_COHORT_SIZE,
+        floor=float(_E10_PER_COHORT_FLOOR * _E10_COHORTS),
+        max_size=_E10_MAX_COHORT_SIZE, unit="items",
+        name="Evidence drained between cohorts")
+
     q = main._EVIDENCE_QUEUE
     assert q is not None
     assert q.backpressure_total == 0, (
         "the bound must never be reached — otherwise this test proves only that "
         "pressure lifts the hold, which was never in doubt")
     produced = main.VERSIONS_PERSISTED
-    assert produced >= 40, "the fixture must actually produce Evidence items"
-    assert main.EVIDENCE_ITEMS_MATERIALIZED >= 4 * 8, (
+    assert produced >= gate.size * _E10_COHORTS, (
+        f"the fixture must actually produce Evidence items — {produced} "
+        f"versions for {gate.size * _E10_COHORTS} components")
+    assert main.EVIDENCE_ITEMS_MATERIALIZED >= _E10_PER_COHORT_FLOOR * _E10_COHORTS, (
         f"the consumer drained only {main.EVIDENCE_ITEMS_MATERIALIZED} of "
-        f"{produced} items across 8 cohorts — that is the one-item-per-cohort "
-        f"starvation the generational hold exists to fix")
+        f"{produced} items across {_E10_COHORTS} cohorts of {gate.size} — that "
+        f"is the one-item-per-cohort starvation the generational hold exists to "
+        f"fix ({gate.report()})")
     assert q.held is False and q.hold_expired_total == 0
 
 

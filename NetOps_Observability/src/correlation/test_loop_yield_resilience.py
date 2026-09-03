@@ -43,14 +43,32 @@ import pytest
 
 import main
 import signals as S
+import timing_gate
 from test_prune_buffer_156 import T0
 
 # A "disabled" budget: the wall-time deadline is never reached, so the loop
 # behaves exactly as it did before the fix (per-tenant yield only). This is the
 # BEFORE baseline every assertion is measured against.
 _YIELD_DISABLED_MS = 10 ** 9
-_STORM_DEVICES = 700   # folds to ~500 open objects — a real single-tenant storm
+# The shipped budget, and the ON leg of every A/B below.
+_YIELD_BUDGET_MS = 50.0
+# The storm cohort, in DEVICES at a fixed 1 s spacing (one device folds to one
+# incident). 700 is the live single-tenant shape and the STARTING size only:
+# `timing_gate` grows it when this machine grinds through it too fast to hold
+# the loop long enough to witness anything (see the module docstring there).
+# Growing the DEVICE COUNT is the axis that keeps the per-device shape — the
+# pair of signals, their 1 s gap, the fold to one object — exactly as it is.
+_STORM_DEVICES = 700
+_STORM_MAX_DEVICES = 2_500     # ~11 s of grind on the 4-core lab box; the cap
 _DET_DEVICES = 300     # equality needs no scale; keep the determinism run quick
+
+# The un-yielded baseline must freeze the heartbeat proxy for at least this long
+# or the grind is too short to measure the fix against.
+_BASELINE_STALL_FLOOR_S = 0.4
+# …and by enough more than the ON leg that the asserted 4x reduction cannot be
+# flipped by scheduler noise on the ON leg. 8x = twice the asserted ratio; the
+# hosted-runner failure (467 ms off vs 150 ms on) was 3.1x.
+_RATIO_MARGIN = 8.0
 
 
 class _StubCH:
@@ -122,6 +140,17 @@ def _quiet_and_isolated(monkeypatch):
     #     CORR_TOPO_STALE_S=3 pytest test_loop_yield_resilience.py
     # Pinning it here keeps the comparison about the only variable under test.
     monkeypatch.setattr(main, "_topology_stale", lambda _now: False)
+    # …and a retention horizon that spans the whole synthetic storm. The window
+    # expires on STREAM time (tracker 165), and `_pair` stamps one second per
+    # device, so past ~516 devices (RETENTION_REQUIRED_S) the engine cycle
+    # prunes the oldest signals mid-fixture: the cohort stopped growing at 533
+    # objects however many devices were loaded, which is precisely what left the
+    # hosted runner unable to grind long enough to witness the defect. Retention
+    # is not what this file tests — every leg loads its window in one shot and
+    # drives ONE cycle — so the horizon is lifted off the fixture and the
+    # device count becomes the honest size knob it reads as.
+    monkeypatch.setattr(main, "RETENTION_REQUIRED_S",
+                        float(_STORM_MAX_DEVICES) + 120.0)
     main._ARCHIVE_SLICE_HASH.clear()
     main.VERSIONS_PERSISTED = 0
     main.VERSIONS_DAMPED = 0
@@ -176,18 +205,50 @@ def _measure(yield_ms: float, devices: int):
 def test_reconciliation_loop_yields_under_single_tenant_storm():
     """The resilience invariant: a single-tenant storm cohort cannot hold the
     event loop past the budget. The heartbeat proxy keeps getting scheduled, so
-    aiokafka's real heartbeat would too — no session expiry, no ejection."""
-    worst_off, objs_off = _measure(_YIELD_DISABLED_MS, _STORM_DEVICES)
-    worst_on, objs_on = _measure(50.0, _STORM_DEVICES)
+    aiokafka's real heartbeat would too — no session expiry, no ejection.
+
+    THE STORM IS SIZED TO THE MACHINE. The invariant a fast box can silently
+    hollow out is the RATIO against the un-yielded baseline (the `worst_on < 1 s`
+    SLO beside it is absolute and untouched), and the baseline is the only half
+    of that pair a fast box shrinks: the ON leg is pinned near the 50 ms budget
+    (measured ~148 ms on the 4-core lab box and ~150 ms on the hosted runner —
+    one un-splittable stretch plus ticker resolution, not machine speed), while the
+    OFF leg is pure grind and collapses with CPU speed. On 2026-09-03 a hosted
+    runner ground through the 700-device cohort in 467 ms against a 150 ms ON
+    leg — 3.1x, under the asserted 4x, with nothing wrong with the fix. So the
+    baseline is calibrated up until it is `_RATIO_MARGIN` x the ON leg (and
+    never under `_BASELINE_STALL_FLOOR_S`), which is twice the ratio actually
+    asserted. See timing_gate.py.
+    """
+    worst_on, objs_on = _measure(_YIELD_BUDGET_MS, _STORM_DEVICES)
+    # The adequacy floor is stated against THIS machine's ON leg, so the 4x
+    # assertion below can never be decided by noise on a 50 ms measurement.
+    floor = max(_BASELINE_STALL_FLOOR_S, _RATIO_MARGIN * worst_on)
+
+    objs: dict[int, int] = {}
+
+    def grind(devices: int) -> float:
+        worst, count = _measure(_YIELD_DISABLED_MS, devices)
+        objs[devices] = count
+        return worst
+
+    gate = timing_gate.calibrated_stall(
+        grind, size=_STORM_DEVICES, floor=floor, max_size=_STORM_MAX_DEVICES,
+        name="single-tenant storm grind (yield budget disabled)", unit="s")
+    assert gate.ok, gate.report()
+    worst_off, objs_off = gate.value, objs[gate.size]
+
+    # The ratio compares ONE workload with the budget on and off, so a
+    # calibrated grow invalidates the ON leg measured at the base size.
+    if gate.calibrated:
+        worst_on, objs_on = _measure(_YIELD_BUDGET_MS, gate.size)
 
     # Teeth: the workload must actually be a storm, and the un-yielded loop must
-    # actually freeze the heartbeat proxy — otherwise the test proves nothing.
+    # actually freeze the heartbeat proxy (gate.ok, above) — otherwise the test
+    # proves nothing.
     assert objs_off >= 200 and objs_on >= 200, (
         f"the storm cohort collapsed to {objs_off}/{objs_on} objects — too "
         f"small to exercise the reconciliation grind")
-    assert worst_off > 0.4, (
-        f"the BEFORE baseline did not freeze the loop (worst gap "
-        f"{worst_off*1000:.0f}ms) — the grind is too short to measure the fix")
 
     # The fix: the worst scheduling gap collapses to a small fraction of the
     # frozen baseline, and stays far under the 30s Kafka session timeout (the
@@ -195,10 +256,12 @@ def test_reconciliation_loop_yields_under_single_tenant_storm():
     assert worst_on < 1.0, (
         f"the reconciliation loop still held the event loop for "
         f"{worst_on*1000:.0f}ms with the yield budget on — a storm this size "
-        f"must never approach the session timeout")
+        f"({gate.size} devices, {objs_on} objects) must never approach the "
+        f"session timeout")
     assert worst_off > 4 * worst_on, (
         f"the yield budget did not materially reduce the stall: "
-        f"{worst_off*1000:.0f}ms (off) vs {worst_on*1000:.0f}ms (on)")
+        f"{worst_off*1000:.0f}ms (off) vs {worst_on*1000:.0f}ms (on) over "
+        f"{gate.size} devices")
 
 
 def _digest_after_open_then_damped(yield_ms: float, devices: int) -> str:
@@ -248,7 +311,7 @@ def test_yields_do_not_change_results():
     budget on (50 ms) and effectively off — proving the yields changed WHEN the
     loop reschedules, never WHAT it computed, in what order, or which versions
     it persisted."""
-    on = _digest_after_open_then_damped(50.0, _DET_DEVICES)
+    on = _digest_after_open_then_damped(_YIELD_BUDGET_MS, _DET_DEVICES)
     off = _digest_after_open_then_damped(_YIELD_DISABLED_MS, _DET_DEVICES)
     assert on == off, (
         "the yield budget changed the engine's output — determinism/replay "

@@ -54,6 +54,7 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 import main
+import timing_gate
 from catalog import builtin_catalog
 from engine import run_window
 from signals import EntityType, Severity
@@ -75,6 +76,11 @@ BUDGET_S = 0.5
 # marginal call) and several seconds on the 4-core lab box. The SHAPE
 # (open:closing ratio, signals per object) is the live one.
 OPEN, STALE = 6_500, 2_000
+# …and the cap the mutant's close batch may be grown to when a machine
+# closes 2,000 objects inside the budget (timing_gate.py). Doubling the
+# batch costs ~0.6 GB of fixture and ~6 s of build, paid ONLY on a leg
+# that would otherwise have gone red for being too small to witness.
+STALE_MAX = 4_000
 # Signals per closing object. Sized from measurement, not taste: at 240 signals
 # one close costs ~4 ms on the lab box (~0.77 ms on the 2026-09 hosted
 # runner), while the bounded leg's worst stretch stays at ~70 ms, a 7x margin.
@@ -332,18 +338,43 @@ def test_storm_close_batch_never_holds_the_loop_past_the_budget(storm_close_batc
         f"heartbeat runs on exactly this budget")
 
 
-def test_mutant_without_the_yield_budget_breaches_the_bound(storm_close_batch):
+def test_mutant_without_the_yield_budget_breaches_the_bound(_proto,
+                                                            storm_close_batch):
     """Remove the cooperative yield (budget past reach) and the SAME batch
     holds the loop for the whole grind. Without this the bound above could pass
-    on a workload that was simply too small."""
+    on a workload that was simply too small.
+
+    THE CLOSE BATCH IS SIZED TO THE MACHINE (timing_gate.py). This file already
+    carries one hand-applied x5 rescale (2026-09-01) for exactly this reason —
+    the runner got fast enough to close the old 400-object batch inside the
+    budget — and on 2026-09-03 two sibling gates went red on a hosted runner
+    from the same cause. The measured margin here is wide (9,138 ms against the
+    500 ms budget on the 4-core lab box, 18x), so on today's hardware this
+    calibrates to exactly one leg and costs nothing; the growth is the CLOSE
+    COUNT, which is this file's own documented safe axis (see STALE_SIGNALS:
+    signals per object would grow the BOUNDED leg's single-builder block toward
+    the budget instead)."""
     stale, live = storm_close_batch
-    worst, _tick, dur, _ch, _reg = _run_close_batch(
-        stale, live, yield_ms=_YIELD_DISABLED_MS)
-    assert len(main.OPEN_OBJECTS) == OPEN - STALE
-    assert worst >= BUDGET_S, (
-        f"the mutant only stalled {worst*1000:.0f} ms — it is not reproducing "
-        f"the defect, so the bound assertion proves nothing (pass took "
-        f"{dur*1000:.0f} ms)")
+    built = {STALE: stale}
+    passes: dict[int, float] = {}
+
+    def grind(closes: int) -> float:
+        if closes not in built:
+            built[closes] = _objects(_proto, closes, STALE_SIGNALS,
+                                     prefix="c", nodes=6)
+        worst, _tick, dur, _ch, _reg = _run_close_batch(
+            built[closes], live, yield_ms=_YIELD_DISABLED_MS)
+        passes[closes] = dur
+        assert len(main.OPEN_OBJECTS) == len(live)
+        return worst
+
+    gate = timing_gate.calibrated_stall(
+        grind, size=STALE, floor=BUDGET_S, max_size=STALE_MAX, unit="s",
+        name="storm close batch with the cooperative yield removed")
+    assert gate.ok, (
+        f"the mutant only stalled {gate.value*1000:.0f} ms — it is not "
+        f"reproducing the defect, so the bound assertion proves nothing (pass "
+        f"took {passes[gate.size]*1000:.0f} ms) [{gate.report()}]")
 
 
 # ── 2. identity: the yields and the rate gate are scheduling ────────────────

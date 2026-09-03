@@ -62,6 +62,7 @@ from datetime import timedelta
 import pytest
 
 import main
+import timing_gate
 from evidence_plane import EvidenceItem, RowBatcher, batch_token
 from signals import EntityType, Severity
 from test_engine import T0 as ENGINE_T0
@@ -692,12 +693,23 @@ def _storm_fixture(*, nodes: int, edges: int, ambient: int):
     return snap, window
 
 
+# The live-sized window, and the STARTING size for B10's mutant only: the
+# `_window_index` build the mutant runs on the loop thread is linear in the
+# window (measured on the lab box: 21 ms per 1,000 signals, 1,086 ms at 50k;
+# the hosted runner did the same 50k in ~407 ms and could not witness the
+# 500 ms defect). `timing_gate` grows the AMBIENT count — never the object,
+# which must stay two nodes for the slice to be what is isolated.
+_B10_AMBIENT = 50_000
+_B10_MAX_AMBIENT = 400_000     # ~8 s of grind on the lab box; the cap
+_LOOP_BUDGET_MS = 500.0        # §4's budget: the number the watchdog warns at
+
+
 @pytest.fixture(scope="module")
 def wide_window():
     """A TINY object against a live-sized 50k-signal window — the shape that
     isolates the archive slice, because everything else in the Decision write is
     proportional to the object and this object is two nodes."""
-    return _storm_fixture(nodes=1, edges=1, ambient=50_000)
+    return _storm_fixture(nodes=1, edges=1, ambient=_B10_AMBIENT)
 
 
 async def _watchdog_lag_while(work) -> float:
@@ -717,7 +729,7 @@ async def _watchdog_lag_while(work) -> float:
 def _persist_under_watchdog(_stack, snap, window, *, offload: bool) -> float:
     _stack.setattr(main, "CORR_DECISION_OFFLOAD", offload)
     _stack.setattr(main, "CORR_LOOP_LAG_SAMPLE_S", 0.02)
-    _stack.setattr(main, "CORR_LOOP_LAG_WARN_MS", 500.0)
+    _stack.setattr(main, "CORR_LOOP_LAG_WARN_MS", _LOOP_BUDGET_MS)
     _stack.setattr(main, "ch", _RecCH())
     main._WINDOW_INDEX_CACHE.clear()
     main._ARCHIVE_SLICE_HASH.clear()
@@ -737,18 +749,36 @@ def test_B10_the_decision_write_never_holds_the_loop_past_the_budget(_stack,
 
     MUTANT (`CORR_DECISION_OFFLOAD=0`) — the shipped-before state: `_archive_slice`
     builds `_window_index` over a 50,000-signal window on the loop thread, one
-    uninterruptible ~1 s stretch, and the watchdog counts a stall."""
-    snap, window = wide_window
+    uninterruptible ~1 s stretch, and the watchdog counts a stall.
+
+    THE WINDOW IS SIZED TO THE MACHINE (timing_gate.py). 500 ms is the budget
+    the FIXED leg is held to — that is the design SLO and it is absolute. The
+    same number on the mutant leg is not an SLO, it is the proof that the
+    workload was big enough to make the SLO assertion mean something, and a
+    hosted runner on 2026-09-03 ground the 50k window in 407 ms and so proved
+    nothing. Only the ambient window count moves; the object stays two nodes."""
+    built = {_B10_AMBIENT: wide_window}
+
+    def grind(ambient: int) -> float:
+        if ambient not in built:
+            built[ambient] = _storm_fixture(nodes=1, edges=1, ambient=ambient)
+        return _persist_under_watchdog(_stack, *built[ambient], offload=False)
+
+    gate = timing_gate.calibrated_stall(
+        grind, size=_B10_AMBIENT, floor=_LOOP_BUDGET_MS,
+        max_size=_B10_MAX_AMBIENT,
+        name="Decision write with the window index on the loop thread")
+    assert gate.ok, gate.report()
+    mutant = gate.value
+    snap, window = built[gate.size]
     assert len(window) >= 50_000
-    mutant = _persist_under_watchdog(_stack, snap, window, offload=False)
-    assert mutant >= 500.0, (
-        f"the mutant must reproduce the defect (worst lag {mutant:.0f} ms) — if "
-        f"it does not, the window is too small for this test to prove anything")
     assert main.LOOP_LAG_STALLS >= 1, "the watchdog must count the mutant's stall"
+    # The FIXED leg runs against the SAME window the mutant breached on.
     fixed = _persist_under_watchdog(_stack, snap, window, offload=True)
-    assert fixed < 500.0, (
-        f"the Decision write still froze the loop for {fixed:.0f} ms — the "
-        f"window-sized work is back on the event loop")
+    assert fixed < _LOOP_BUDGET_MS, (
+        f"the Decision write still froze the loop for {fixed:.0f} ms over "
+        f"{len(window)} signals — the window-sized work is back on the event "
+        f"loop")
     assert main.LOOP_LAG_STALLS == 0
     assert fixed < mutant / 2
 
@@ -900,6 +930,30 @@ def test_B11b_a_raising_sink_is_reported_not_propagated(_stack):
 @pytest.fixture(scope="module")
 def storm_aggregate():
     """A storm-NOISE aggregate: ~950 nodes, NO edges, ~85k signals — and the
+    window those signals came from, so the archive slice is the whole flood."""
+    return _aggregate_fixture()
+
+
+# The shipped sizer, captured at import: every leg that installs the mutant's
+# `_snap_elements` needs something to put back, and by the time a leg runs
+# `main._snap_cost` may already be the mutant's.
+_SHIPPED_SNAP_COST = main._snap_cost
+
+# The live aggregate's shape: 950 folded entities (`bb1e46d6` had 922) carrying
+# 90 signals each. The NODE COUNT is load-bearing and must never be the growth
+# axis — `_snap_elements` is `len(nodes) + len(edges)` and the whole defect is
+# that it reads BELOW `CORR_OFFLOAD_MIN_ELEMENTS` (2,000) for the costliest
+# object in the process. Measured: at 2,375 nodes the mutant's worst lag fell
+# from 2,418 ms to 339 ms, because past the threshold the mutant sizer offloads
+# too and there is no mutant left. SIGNALS PER NODE is the axis that grows the
+# serialize-and-hash cost while keeping the shape (B12 calibrates on it).
+_AGG_NODES = 950
+_AGG_SIGNALS_PER_NODE = 90
+_AGG_MAX_SIGNALS_PER_NODE = 360
+
+
+def _aggregate_fixture(per_node: int = _AGG_SIGNALS_PER_NODE):
+    """`_AGG_NODES` folded entities carrying `per_node` signals each, plus the
     window those signals came from, so the archive slice is the whole flood.
 
     Deliberately built by hand rather than driven through `run_window`'s storm
@@ -916,14 +970,14 @@ def storm_aggregate():
                     severity=Severity.CRIT, offset_s=1)], cat, ())[0]
     proto = base.nodes[0]
     nodes, window = [], []
-    for i in range(950):
+    for i in range(_AGG_NODES):
         sigs = tuple(engine_sig("link_state_change", EntityType.DEVICE, f"agg{i}",
                                 severity=Severity.WARN, offset_s=j * 0.25 + i * 0.001)
-                     for j in range(90))
+                     for j in range(per_node))
         nodes.append(dataclasses.replace(
             proto, key=f"device:agg{i}:link_state_change", entity_id=f"agg{i}",
             signals=sigs, onset=sigs[0].ts, peak_severity=Severity.WARN,
-            occurrences=90))
+            occurrences=per_node))
         window.extend(sigs)
     snap = dataclasses.replace(
         base, correlation_id="a1b2c3d4-0000-0000-0000-00000000000f",
@@ -981,7 +1035,7 @@ def _aggregate_lag(_stack, snap, window, *, cost_gate: bool) -> float:
     """
     _aggregate_stack(_stack, batch=True)
     _stack.setattr(main, "CORR_LOOP_LAG_SAMPLE_S", 0.02)
-    _stack.setattr(main, "CORR_LOOP_LAG_WARN_MS", 500.0)
+    _stack.setattr(main, "CORR_LOOP_LAG_WARN_MS", _LOOP_BUDGET_MS)
     # The SIZER is the variable here, so the OTHER offload gate is held off in
     # BOTH legs: `_snap_call`'s projected-milliseconds rule (CORR_SYNC_OFFLOAD,
     # 2026-08-29) would also route the aggregate to the executor — it is the
@@ -990,8 +1044,15 @@ def _aggregate_lag(_stack, snap, window, *, cost_gate: bool) -> float:
     # this test would silently stop proving anything about `_snap_cost`.
     _stack.setattr(main, "CORR_SYNC_OFFLOAD", False)
     _stack.setattr(main, "_SYNC_RATE", {})
-    if not cost_gate:
-        _stack.setattr(main, "_snap_cost", main._snap_elements)
+    # Set on BOTH legs, explicitly. `monkeypatch.setattr` does not undo between
+    # calls inside one test, so `if not cost_gate: setattr(...)` left the mutant
+    # sizer installed for the FIXED leg that ran after it — the "fixed" number
+    # was a warm-cache re-run of the mutant (302 ms against the mutant's
+    # 1,321 ms, where the genuinely fixed path measures 94 ms on the same box),
+    # and `fixed < budget` was not asserting what it names. B12b's `leg()`
+    # already restored it this way; this is that fix in the lag harness.
+    _stack.setattr(main, "_snap_cost",
+                   _SHIPPED_SNAP_COST if cost_gate else main._snap_elements)
     # The digests are memoized on the frozen snapshot, so a second leg over the
     # same module-scoped fixture would measure a cache hit, not the serialize.
     for attr in ("_content_hash_c", "_material_hash_c"):
@@ -1019,24 +1080,44 @@ def test_B12_the_storm_aggregate_never_holds_the_loop_past_the_budget(
 
     MUTANT (`_snap_cost` = `_snap_elements`, the shipped-before sizer): the
     aggregate's ~85k signals are serialized and hashed on the loop thread and
-    the watchdog counts a stall above the 500 ms budget."""
-    snap, window = storm_aggregate
-    assert len(snap.nodes) >= 900 and not snap.edges, "fixture must be an aggregate"
-    assert snap.signal_count() >= 50_000, "fixture must carry the flood"
-    assert main._snap_elements(snap) < main.CORR_OFFLOAD_MIN_ELEMENTS, (
-        "the graph-sized reading must be BELOW the threshold — that is the defect")
-    assert main._snap_cost(snap) >= main.CORR_OFFLOAD_MIN_ELEMENTS
+    the watchdog counts a stall above the 500 ms budget.
 
-    mutant = _aggregate_lag(_stack, snap, window, cost_gate=False)
-    assert mutant >= 500.0, (
-        f"the mutant must reproduce the defect (worst lag {mutant:.0f} ms) — if "
-        f"it does not, the fixture is too small to prove anything")
+    THE FLOOD IS SIZED TO THE MACHINE (timing_gate.py). `fixed < 500 ms` is the
+    §4 budget and stays absolute; the same number on the mutant leg is only the
+    proof that the flood was big enough for that budget to be a real test, and
+    a hosted runner on 2026-09-03 serialized this one in 466 ms and so proved
+    nothing. Signals per node is the only axis grown — see `_aggregate_fixture`
+    for why the node count must not be."""
+    built = {_AGG_SIGNALS_PER_NODE: storm_aggregate}
+
+    def grind(per_node: int) -> float:
+        if per_node not in built:
+            built[per_node] = _aggregate_fixture(per_node)
+        snap, window = built[per_node]
+        assert len(snap.nodes) >= 900 and not snap.edges, (
+            "fixture must be an aggregate")
+        assert snap.signal_count() >= 50_000, "fixture must carry the flood"
+        assert main._snap_elements(snap) < main.CORR_OFFLOAD_MIN_ELEMENTS, (
+            "the graph-sized reading must be BELOW the threshold — that is the "
+            "defect")
+        assert _SHIPPED_SNAP_COST(snap) >= main.CORR_OFFLOAD_MIN_ELEMENTS
+        return _aggregate_lag(_stack, snap, window, cost_gate=False)
+
+    gate = timing_gate.calibrated_stall(
+        grind, size=_AGG_SIGNALS_PER_NODE, floor=_LOOP_BUDGET_MS,
+        max_size=_AGG_MAX_SIGNALS_PER_NODE,
+        name="storm aggregate serialized on the loop thread")
+    assert gate.ok, gate.report()
+    mutant = gate.value
     assert main.LOOP_LAG_STALLS >= 1, "the watchdog must count the mutant's stall"
 
+    # The FIXED leg runs against the SAME flood the mutant breached on.
+    snap, window = built[gate.size]
     fixed = _aggregate_lag(_stack, snap, window, cost_gate=True)
-    assert fixed < 500.0, (
-        f"a storm aggregate still froze the loop for {fixed:.0f} ms — its "
-        f"signal-sized work is back on the event loop")
+    assert fixed < _LOOP_BUDGET_MS, (
+        f"a storm aggregate still froze the loop for {fixed:.0f} ms over "
+        f"{snap.signal_count()} signals — its signal-sized work is back on the "
+        f"event loop")
     assert main.LOOP_LAG_STALLS == 0
     assert fixed < mutant / 2
 
@@ -1460,7 +1541,7 @@ def _gc_leg(_stack, snap, window, *, tune: bool, ballast: list) -> tuple[float, 
     assert ballast, "the heap the collector has to walk must actually exist"
     _aggregate_stack(_stack, batch=True)
     _stack.setattr(main, "CORR_LOOP_LAG_SAMPLE_S", 0.02)
-    _stack.setattr(main, "CORR_LOOP_LAG_WARN_MS", 500.0)
+    _stack.setattr(main, "CORR_LOOP_LAG_WARN_MS", _LOOP_BUDGET_MS)
     _stack.setattr(main, "CORR_GC_TUNE", tune)
     for attr in ("_content_hash_c", "_material_hash_c"):
         with contextlib.suppress(AttributeError):
@@ -1499,7 +1580,7 @@ def test_B15_the_aggregate_stays_inside_the_budget_with_the_collector_on(
     ballast = [{"a": i, "b": str(i)} for i in range(300_000)]
     lag, _counts = _gc_leg(_stack, snap, window, tune=True, ballast=ballast)
     assert gc.isenabled()
-    assert lag < 500.0, (
+    assert lag < _LOOP_BUDGET_MS, (
         f"the aggregate held the loop for {lag:.0f} ms with the collector on "
         f"(gc pause max {main.GC_PAUSE_MAX_S * 1000:.0f} ms) — read those two "
         f"together: a stall with a matching gc pause is the heap, one without "

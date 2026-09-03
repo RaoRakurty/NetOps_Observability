@@ -57,6 +57,7 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 import main
+import timing_gate
 from catalog import builtin_catalog
 from engine import (
     ContinuationIndex,
@@ -123,20 +124,33 @@ def _storm_population(n: int, devices: int, seams: tuple[SeamView, ...]):
 # while the fix takes 13 ms — a 90x margin, so neither assertion is marginal on
 # a slow CI runner. Building it costs ~3 s, once, module-scoped.
 POP, DEVICES, SEAMS = 1800, 500, 500
+# …and the cap the EV mutant may be grown to when a machine is fast enough to
+# finish the cross-product inside the budget (timing_gate.py). The mutant is
+# quadratic in POP and every other test here is linear in it, so this axis buys
+# the witness a lot of stall for a little fixture: measured on the 4-core lab
+# box, POP 1,800 → 2,671 ms and POP 3,000 → 5,502 ms on the loop, while the
+# grounded index stayed at 65 ms and 86 ms. The 1,177 ms in the header was
+# measured on a different box, which is exactly the point.
+POP_MAX = 3_600
 # The bound this file exists to defend. Well under the 30 s Kafka session
 # timeout that storm-s02 breached, so a breach is caught long before ejection.
 LOOP_BUDGET_S = 0.5
 
 
-@pytest.fixture(scope="module")
-def storm():
+def _storm_pair(pop: int):
     """(survivors, candidates) in the live gauges' proportion — 2:1, every
     object embedding a seam inventory that makes every device an endpoint."""
-    pop = _storm_population(POP, DEVICES, _seam_inventory(SEAMS))
+    population = _storm_population(pop, DEVICES, _seam_inventory(SEAMS))
     rng = random.Random(20260829)
-    rng.shuffle(pop)
-    cut = (len(pop) * 2) // 3
-    return pop[:cut], pop[cut:]
+    rng.shuffle(population)
+    cut = (len(population) * 2) // 3
+    return population[:cut], population[cut:]
+
+
+@pytest.fixture(scope="module")
+def storm():
+    """The live-shaped population, built once for the whole module."""
+    return _storm_pair(POP)
 
 
 # ── the EV-keyed index: the shipped shape, kept as an executable witness ─────
@@ -337,14 +351,33 @@ def test_mutant_ev_index_breaches_the_loop_bound(storm, monkeypatch):
     """THE WITNESS. Put the old EV keying back, with the offload still off, and
     the identical population blows through the budget — which is precisely what
     it did in production. Drop the grounded restriction and this goes red while
-    every oracle in this file stays green, because the RESULTS never changed."""
+    every oracle in this file stays green, because the RESULTS never changed.
+
+    THE POPULATION IS SIZED TO THE MACHINE (timing_gate.py): "grow the fixture"
+    used to be advice in a failure message, and hand-sizing a wall-clock witness
+    is what put two sibling gates red on a hosted runner on 2026-09-03. The
+    budget the bound tests assert against is untouched — only the size of the
+    cross-product this witness has to chew through."""
     monkeypatch.setattr(main, "CORR_LIFECYCLE_MERGE_OFFLOAD_PAIRS", 0)
     monkeypatch.setattr(main, "ContinuationIndex", _EVKeyedIndex)
-    lag, dur = _merge_lag(storm)
-    assert dur > LOOP_BUDGET_S and lag > LOOP_BUDGET_S, (
-        f"the EV-keyed mutant only stalled {lag*1000:.0f} ms (work "
-        f"{dur*1000:.0f} ms) — it is not reproducing the regression, so "
-        "test_index_alone_holds_the_loop_bound proves nothing; grow the fixture")
+    built = {POP: storm}
+    work: dict[int, float] = {}
+
+    def grind(pop: int) -> float:
+        if pop not in built:
+            built[pop] = _storm_pair(pop)
+        lag, dur = _merge_lag(built[pop])
+        work[pop] = dur
+        return lag
+
+    gate = timing_gate.calibrated_stall(
+        grind, size=POP, floor=LOOP_BUDGET_S, max_size=POP_MAX, unit="s",
+        name="EV-keyed merge index on the loop thread")
+    assert gate.ok and work[gate.size] > LOOP_BUDGET_S, (
+        f"the EV-keyed mutant only stalled {gate.value*1000:.0f} ms (work "
+        f"{work[gate.size]*1000:.0f} ms) — it is not reproducing the "
+        f"regression, so test_index_alone_holds_the_loop_bound proves nothing "
+        f"({gate.report()})")
 
 
 def test_offload_keeps_the_loop_alive_and_inline_does_not():
