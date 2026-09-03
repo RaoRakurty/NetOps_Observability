@@ -1842,6 +1842,13 @@ services:
       # that can raise "max message size" is the unbounded read the design
       # forbids, wearing a config file.
       FEATURE_BMP: ${FEATURE_BMP:-false}
+      # BGP depth/alerting flags (item 10, 2026-09-03): default OFF; .env turns them on.
+      # LIVE_FEED = bounded RIPEstat poller ring; ALERTS = the watchlist evaluator
+      # (transition alerts + evidence on netops.bgp); BOGON_FEED = optional Team
+      # Cymru full-bogons overlay on the embedded IANA set.
+      FEATURE_BGP_LIVE_FEED: ${FEATURE_BGP_LIVE_FEED:-false}
+      FEATURE_BGP_ALERTS: ${FEATURE_BGP_ALERTS:-false}
+      FEATURE_BGP_BOGON_FEED: ${FEATURE_BGP_BOGON_FEED:-false}
       BMP_LISTEN: ${BMP_LISTEN:-:11019}
       # Parser-coverage mining (parsercov): ONE mining run scans at most this
       # many OpenSearch documents — the bound that keeps a coverage query off
