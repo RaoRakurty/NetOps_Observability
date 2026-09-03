@@ -215,7 +215,18 @@ func NormalizeInvestigation(row InvestigationRow) (InvestigationRow, error) {
 	if row.ResolvedAt.IsZero() {
 		row.ResolvedAt = time.Now().UTC()
 	}
-	row.CreatedAt, row.ResolvedAt = row.CreatedAt.UTC(), row.ResolvedAt.UTC()
+	// Both stamps are normalized to UTC and TRUNCATED TO MICROSECONDS, the
+	// resolution of the Postgres backend's TIMESTAMPTZ column (pgx encodes a
+	// time.Time as microseconds since the epoch and drops the remaining
+	// nanoseconds). Without this the two backends would not store the same
+	// instant: the file store would keep the caller's nanoseconds while the
+	// same row read back from Postgres came back truncated, so a recorded row
+	// would not compare equal to itself after a round trip. Truncating once, at
+	// the single point that defines a well-formed row, keeps `Record` →
+	// `Recall` exact on BOTH backends and keeps the ordering/eviction key
+	// identical in each.
+	row.CreatedAt = row.CreatedAt.UTC().Truncate(time.Microsecond)
+	row.ResolvedAt = row.ResolvedAt.UTC().Truncate(time.Microsecond)
 	if row.ID == "" {
 		id, err := newInvestigationID()
 		if err != nil {
@@ -331,13 +342,21 @@ type persistedInvestigation struct {
 
 // evictLocked enforces the per-tenant retention cap, oldest first (call with mu
 // held, or during construction before the store is shared).
+//
+// The sort is the EXACT REVERSE of newestConcluded (resolved_at asc, then id
+// DESC), so keeping the tail keeps precisely the rows a recall would call the
+// newest — including when two conclusions share an instant, where the smaller
+// id sorts newer. That is also what the Postgres sweep keeps (`ORDER BY
+// resolved_at DESC, id ASC OFFSET cap`), so a tie at the cap boundary evicts
+// the same row on both backends. Tie-breaking the other way here would evict
+// the very row recall returns first.
 func (s *InvestigationFileStore) evictLocked(tenant string) {
 	rows := s.rows[tenant]
 	sort.Slice(rows, func(i, j int) bool {
 		if !rows[i].ResolvedAt.Equal(rows[j].ResolvedAt) {
 			return rows[i].ResolvedAt.Before(rows[j].ResolvedAt)
 		}
-		return rows[i].ID < rows[j].ID
+		return rows[i].ID > rows[j].ID
 	})
 	if len(rows) > MaxInvestigationsPerTenant {
 		rows = rows[len(rows)-MaxInvestigationsPerTenant:]

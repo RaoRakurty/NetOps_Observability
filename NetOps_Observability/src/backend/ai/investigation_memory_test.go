@@ -172,6 +172,59 @@ func TestInvestigationMemoryRetentionCapEvictsOldestFirst(t *testing.T) {
 	}
 }
 
+// TestInvestigationMemoryTieBreakOnEqualResolvedAt pins the ordering rule the
+// two backends MUST share: conclusions that land in the same instant (the
+// storage resolution is one microsecond, so a tie is not hypothetical) order by
+// id, smallest first, and retention keeps exactly the rows that order calls the
+// newest — never whichever happened to be written last. The Postgres sweep
+// (`ORDER BY resolved_at DESC, id ASC OFFSET cap`) keeps the same set, so a tie
+// at the cap boundary evicts the same row on either backend.
+func TestInvestigationMemoryTieBreakOnEqualResolvedAt(t *testing.T) {
+	st := NewInvestigationFileStore("")
+	ctx := context.Background()
+	at := memDay(1)
+	total := MaxInvestigationsPerTenant + 3
+	// Written NEWEST-ID-FIRST, so insertion order is the opposite of the order
+	// the store must return: nothing may depend on append order.
+	for i := total - 1; i >= 0; i-- {
+		mustRecord(t, st, InvestigationRow{
+			TenantID: "acme", ID: memTieID(i), DeviceName: "edge-1",
+			Verdict: "conclusion " + itoa(i), CreatedAt: at, ResolvedAt: at,
+		})
+	}
+	got, err := st.Recall(ctx, "acme", false, InvestigationQuery{Device: "edge-1", Limit: 3})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 3 {
+		t.Fatalf("recall returned %d rows, want 3", len(got))
+	}
+	for i, r := range got {
+		if r.ID != memTieID(i) {
+			t.Fatalf("tie-break: rows[%d] = %s, want %s (resolved_at desc, id asc)", i, r.ID, memTieID(i))
+		}
+	}
+	// The cap holds, and the three rows it dropped are the three the recall
+	// order ranks LAST — the largest ids, not the ones written last.
+	st.mu.RLock()
+	held := append([]InvestigationRow{}, st.rows["acme"]...)
+	st.mu.RUnlock()
+	if len(held) != MaxInvestigationsPerTenant {
+		t.Fatalf("acme holds %d rows, want the cap of %d", len(held), MaxInvestigationsPerTenant)
+	}
+	for _, r := range held {
+		if r.ID >= memTieID(MaxInvestigationsPerTenant) {
+			t.Fatalf("eviction kept %s: on a tie it must keep the ids the recall order calls newest", r.ID)
+		}
+	}
+}
+
+// memTieID mints a fixed, ascending uuid (the Postgres column is UUID) so a
+// test can pin the id tie-break without depending on the store's random ids.
+func memTieID(n int) string {
+	return "00000000-0000-4000-8000-" + strings.Repeat("0", 12-len(itoa(n))) + itoa(n)
+}
+
 func TestNormalizeInvestigationClipsAndRefuses(t *testing.T) {
 	// Refusals: a row with no entity key, and a row with no verdict, could never
 	// be recalled or narrated — both are errors, not silently stored.
@@ -217,6 +270,24 @@ func TestNormalizeInvestigationClipsAndRefuses(t *testing.T) {
 	}
 	if row.CreatedAt.IsZero() {
 		t.Error("created_at must be stamped")
+	}
+
+	// Both stamps are truncated to the storage resolution (Postgres TIMESTAMPTZ
+	// keeps microseconds; pgx drops the rest). Without this a row recorded with
+	// a nanosecond-precision clock reading would not compare equal to itself
+	// once read back, and the two backends would hold different instants for
+	// the same conclusion.
+	ns := time.Date(2026, 8, 1, 12, 0, 0, 123456789, time.UTC)
+	row, err = NormalizeInvestigation(InvestigationRow{
+		TenantID: "acme", DeviceID: "d", Verdict: "v", CreatedAt: ns, ResolvedAt: ns,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := time.Date(2026, 8, 1, 12, 0, 0, 123456000, time.UTC)
+	if !row.CreatedAt.Equal(want) || !row.ResolvedAt.Equal(want) {
+		t.Errorf("timestamps must be truncated to microseconds, got created=%s resolved=%s want %s",
+			row.CreatedAt, row.ResolvedAt, want)
 	}
 }
 

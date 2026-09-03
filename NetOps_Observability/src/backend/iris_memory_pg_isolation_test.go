@@ -9,7 +9,9 @@ package backend
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
+	"strconv"
 	"testing"
 	"time"
 
@@ -143,7 +145,11 @@ func TestIrisInvestigationsRetentionCapPG(t *testing.T) {
 	defer ps.DB().Close()
 	st := ai.NewPGInvestigationStore(ps.DB())
 
-	base := time.Now().UTC().Add(-24 * time.Hour)
+	// Microsecond-aligned on purpose: TIMESTAMPTZ keeps microseconds, so a
+	// nanosecond-precision fixture could never compare equal to what the column
+	// hands back (NormalizeInvestigation truncates a recorded row to the same
+	// resolution — this keeps the EXPECTATION in step with it).
+	base := time.Now().UTC().Truncate(time.Microsecond).Add(-24 * time.Hour)
 	total := ai.MaxInvestigationsPerTenant + 5
 	for i := 0; i < total; i++ {
 		at := base.Add(time.Duration(i) * time.Minute)
@@ -183,4 +189,48 @@ func TestIrisInvestigationsRetentionCapPG(t *testing.T) {
 	if len(rows) != 1 || !rows[0].ResolvedAt.Equal(base.Add(time.Duration(total-1)*time.Minute)) {
 		t.Fatalf("newest conclusion = %+v", rows)
 	}
+
+	// TIE-BREAK. Two conclusions can land in the SAME microsecond, so neither
+	// the recall order nor the retention sweep may fall back on insertion
+	// order: both are `resolved_at DESC, id ASC`, and the file backend's
+	// eviction is the exact reverse of the same order. Three rows share one
+	// instant, newer than every row above, with ids that sort ascending.
+	tie := base.Add(time.Duration(total) * time.Minute)
+	for i := 0; i < 3; i++ {
+		if err := st.Record(ctx, ai.InvestigationRow{
+			TenantID: "acme", ID: tieID(i), DeviceName: "edge-1",
+			Verdict: "tie " + strconv.Itoa(i), CreatedAt: tie, ResolvedAt: tie,
+		}); err != nil {
+			t.Fatalf("record tie %d: %v", i, err)
+		}
+	}
+	rows, err = st.Recall(ctx, "acme", false, ai.InvestigationQuery{Device: "edge-1", Limit: 3})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 3 {
+		t.Fatalf("the three tied conclusions must all be recallable, got %d", len(rows))
+	}
+	for i, r := range rows {
+		if r.ID != tieID(i) || !r.ResolvedAt.Equal(tie) {
+			t.Fatalf("tie-break: rows[%d] = %s @ %s, want %s @ %s (resolved_at DESC, id ASC)",
+				i, r.ID, r.ResolvedAt, tieID(i), tie)
+		}
+	}
+	// The cap still holds after the tie, and it evicted the OLDEST rows rather
+	// than any member of the tie.
+	if err := ps.DB().WithTenant(ctx, "", true, func(tx pgx.Tx) error {
+		return tx.QueryRow(ctx, `SELECT count(*) FROM iris_investigations WHERE tenant_id='acme'`).Scan(&held)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if held != ai.MaxInvestigationsPerTenant {
+		t.Fatalf("acme holds %d rows after the tie, want the cap of %d", held, ai.MaxInvestigationsPerTenant)
+	}
+}
+
+// tieID mints a fixed, ascending uuid so a test can pin the id tie-break
+// without depending on the store's random ids.
+func tieID(n int) string {
+	return fmt.Sprintf("00000000-0000-4000-8000-%012d", n)
 }
