@@ -697,6 +697,77 @@ func alertKey(tenant, prefix string, class IncidentClass) string {
 	return "bgp:" + tenant + ":" + prefix + ":" + string(class)
 }
 
+// ForgetPrefix drops ONE tenant's evaluator state for ONE prefix. It is what
+// "stop watching this" has to mean end-to-end: without it, removing a prefix
+// from the watchlist deleted the row but left its verdict behind, so the
+// Prefixes view kept rendering an `incidents` entry — a live-looking hijack or
+// leak classification for a resource nothing was measuring any more (found on
+// the 2026-09-03 live proof).
+//
+// What it clears, and what it deliberately does NOT:
+//
+//   - incidents[prefix]      CLEARED — a verdict with no measurement behind it
+//     is the definition of a stale claim (§10).
+//   - cooldown for that prefix  CLEARED — otherwise re-adding the prefix inside
+//     the cool-down would silently suppress its first real alert.
+//   - history                KEPT — the alert ring is the record of what was
+//     actually raised. Un-watching a prefix must not rewrite that.
+//   - sightings              KEPT — a bogon sighting is a fact about what
+//     arrived on the tenant's live feeds, not a watchlist verdict.
+//
+// An alert that was OPEN is resolved, because the destination that was paged
+// has no other way to close it. The resolve text says the prefix was removed
+// from the watchlist — it does NOT claim the condition cleared, which would be
+// a false statement about the network.
+func (e *Evaluator) ForgetPrefix(tenant, prefix string) (bool, error) {
+	t, err := concreteTenant(tenant)
+	if err != nil {
+		return false, err
+	}
+	key := strings.TrimSpace(prefix)
+	if p, perr := parsePrefix(key); perr == nil {
+		key = p.String() // canonical form, exactly as the evaluator stores it
+	}
+	if key == "" {
+		return false, errors.New("bgpwatch: a prefix is required")
+	}
+
+	e.mu.Lock()
+	st := e.state[t]
+	if st == nil {
+		e.mu.Unlock()
+		return false, nil
+	}
+	prev, had := st.incidents[key]
+	if had {
+		delete(st.incidents, key)
+	}
+	// classRank is the ONE enumeration of every class (classify.go), so a class
+	// added later is covered here automatically rather than by a second list
+	// that would silently drift out of date.
+	for class := range classRank {
+		delete(st.cooldown, alertKey(t, key, class))
+	}
+	e.mu.Unlock()
+
+	if !had || prev.Class == ClassNone || prev.Class == ClassUnknown || e.deps.Resolve == nil {
+		return had, nil
+	}
+	now := e.deps.Now().UTC()
+	a := Alert{
+		ID: alertKey(t, key, prev.Class), Rule: "bgp_" + string(prev.Class), Severity: prev.Severity,
+		Tenant: t, Resource: key, Class: prev.Class,
+		Summary: fmt.Sprintf("Closed: %s was removed from the watchlist while classified %s. "+
+			"This is NOT a statement that the condition cleared — it is no longer being measured.",
+			key, prev.Class),
+		FiredAt: prev.Since, Resolved: true, ResolvedAt: &now,
+	}
+	e.recordAlert(st, a)
+	e.deps.Resolve(a)
+	e.bump(st, "alerts_resolved_total", &e.metrics.AlertsResolved)
+	return had, nil
+}
+
 // ── read surfaces (per tenant, no unscoped variant) ─────────────────────────
 
 // Incidents returns ONE tenant's current verdicts, worst first.

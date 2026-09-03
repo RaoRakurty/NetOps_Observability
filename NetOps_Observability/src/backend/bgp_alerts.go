@@ -523,6 +523,27 @@ func (s *server) bgpWatchNoteFeedUpdates(tenant string, ups []bgpdepth.Update) {
 	}
 }
 
+// bgpWatchForgetPrefix drops the evaluator's state for a prefix the tenant just
+// stopped watching. Nil-safe (the evaluator is off by default) and scoped to the
+// ONE tenant the handler already resolved and whose row it already deleted — it
+// can only ever reach state the caller owns.
+//
+// A failure is logged, never returned to the caller: the watchlist row IS
+// deleted at this point, and turning a stale-cache cleanup into a 500 would
+// tell the operator their delete failed when it did not.
+func (s *server) bgpWatchForgetPrefix(tenant, resource string) {
+	if s.bgpWatchEval == nil {
+		return
+	}
+	if _, kind := bgpNormalizeResource(resource); kind != "prefix" {
+		return // an ASN carries no per-prefix verdict
+	}
+	if _, err := s.bgpWatchEval.ForgetPrefix(tenant, resource); err != nil {
+		logWarn("bgp-watch", "the watchlist row was deleted but its incident state could not be cleared — the Prefixes view may show a stale class until the next evaluation",
+			map[string]any{"err": err.Error()})
+	}
+}
+
 // bgpWatchAnnotateWatchlist adds the incident class per watched prefix to the
 // watchlist response (tracker #5). It is the ONLY place the Prefixes view gets
 // its verdicts, so the page and the pager can never disagree: both read what

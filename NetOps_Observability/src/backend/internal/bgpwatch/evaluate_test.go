@@ -505,3 +505,146 @@ func (p policyStoreFunc) Policy(context.Context, string) (TenantPolicy, error) {
 func (p policyStoreFunc) SetPolicy(context.Context, string, string, TenantPolicy) error {
 	return p.err
 }
+
+// ── L-05: un-watching a prefix must take its verdict with it ───────────────
+
+// The live 2026-09-03 finding: deleting a watchlist prefix left its `incidents`
+// entry behind, so the Prefixes view kept showing a hijack/leak class for a
+// resource nothing was measuring any more.
+func TestForgetPrefixClearsTheVerdictAndCooldown(t *testing.T) {
+	h := newHarness(t)
+	// A bogon on the watchlist classifies immediately, with no network.
+	h.watch["acme"] = []string{"10.9.0.0/16"}
+	h.obs["10.9.0.0/16"] = healthy()
+	h.eval.RunOnce(context.Background())
+
+	incidents, err := h.eval.Incidents("acme")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var open Incident
+	for _, inc := range incidents {
+		if inc.Prefix == "10.9.0.0/16" {
+			open = inc
+		}
+	}
+	if open.Prefix == "" || open.Class == ClassNone {
+		t.Fatalf("the fixture did not produce a verdict to forget: %+v", incidents)
+	}
+
+	had, err := h.eval.ForgetPrefix("acme", "10.9.0.0/16")
+	if err != nil {
+		t.Fatalf("ForgetPrefix: %v", err)
+	}
+	if !had {
+		t.Fatal("ForgetPrefix reported nothing to clear when a verdict was open")
+	}
+	after, err := h.eval.Incidents("acme")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, inc := range after {
+		if inc.Prefix == "10.9.0.0/16" {
+			t.Fatalf("the verdict outlived the watchlist row: %+v", inc)
+		}
+	}
+
+	// The history is the record of what was RAISED and must survive: forgetting
+	// a prefix is not permission to rewrite what already happened.
+	hist, err := h.eval.Alerts("acme", 50)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sawOriginal := false
+	for _, a := range hist {
+		if a.Resource == "10.9.0.0/16" && !a.Resolved {
+			sawOriginal = true
+		}
+	}
+	if !sawOriginal {
+		t.Fatal("the original alert was erased from the history ring")
+	}
+
+	// The destination that was paged is CLOSED, and the text does not claim the
+	// condition cleared — it says the prefix stopped being measured.
+	h.mu.Lock()
+	resolved := append([]Alert(nil), h.resolved...)
+	h.mu.Unlock()
+	var closer *Alert
+	for i := range resolved {
+		if resolved[i].Resource == "10.9.0.0/16" {
+			closer = &resolved[i]
+		}
+	}
+	if closer == nil {
+		t.Fatal("an OPEN alert was left with no evaluator that could ever resolve it")
+	}
+	if !strings.Contains(closer.Summary, "removed from the watchlist") ||
+		!strings.Contains(closer.Summary, "NOT a statement that the condition cleared") {
+		t.Fatalf("the close text claims something we did not measure: %q", closer.Summary)
+	}
+
+	// Re-adding inside the cool-down must be able to alert again: a stale
+	// cool-down entry would silently swallow the first real verdict.
+	h.watch["acme"] = []string{"10.9.0.0/16"}
+	h.mu.Lock()
+	h.fired = nil
+	h.mu.Unlock()
+	h.eval.RunOnce(context.Background())
+	h.mu.Lock()
+	fired := len(h.fired)
+	h.mu.Unlock()
+	if fired == 0 {
+		t.Fatal("a re-added prefix was suppressed by the cool-down of the watch that was deleted")
+	}
+}
+
+// §3a: forgetting is scoped to one tenant, and refuses a non-concrete one.
+func TestForgetPrefixIsTenantScopedAndFailsClosed(t *testing.T) {
+	h := newHarness(t)
+	h.tenants = []string{"acme", "globex"}
+	h.watch["acme"] = []string{"10.9.0.0/16"}
+	h.watch["globex"] = []string{"10.9.0.0/16"}
+	h.obs["10.9.0.0/16"] = healthy()
+	h.eval.RunOnce(context.Background())
+
+	if _, err := h.eval.ForgetPrefix("acme", "10.9.0.0/16"); err != nil {
+		t.Fatal(err)
+	}
+	gx, err := h.eval.Incidents("globex")
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, inc := range gx {
+		if inc.Prefix == "10.9.0.0/16" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("acme's delete cleared GLOBEX's verdict for the same prefix")
+	}
+	for _, tenant := range []string{"", "  ", "*"} {
+		if _, err := h.eval.ForgetPrefix(tenant, "10.9.0.0/16"); err == nil {
+			t.Errorf("ForgetPrefix(%q) accepted a non-concrete tenant", tenant)
+		}
+	}
+	// An unknown prefix (or a tenant with no state) is not an error — deleting
+	// a watch that never classified anything is a normal, successful no-op.
+	if had, err := h.eval.ForgetPrefix("acme", "203.0.113.0/24"); err != nil || had {
+		t.Fatalf("unknown prefix: had=%v err=%v, want false/nil", had, err)
+	}
+	if had, err := h.eval.ForgetPrefix("initech", "203.0.113.0/24"); err != nil || had {
+		t.Fatalf("unknown tenant: had=%v err=%v, want false/nil", had, err)
+	}
+	// A non-canonical spelling of the same prefix still finds the verdict.
+	if _, err := h.eval.ForgetPrefix("globex", "10.9.0.1/16"); err != nil {
+		t.Fatal(err)
+	}
+	after, _ := h.eval.Incidents("globex")
+	for _, inc := range after {
+		if inc.Prefix == "10.9.0.0/16" {
+			t.Fatal("a non-canonical prefix spelling failed to match the stored verdict")
+		}
+	}
+}

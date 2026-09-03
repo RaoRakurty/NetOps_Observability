@@ -940,6 +940,11 @@ func newServer() *server {
 	if envBool(bgpdepth.EnvFeatureFlag) {
 		srv.bgpFeed = bgpdepth.NewRuntime(srv.bgpFetch, bgpdepth.Options{
 			Enabled: true,
+			// The first poll's window. The producer polls an ARCHIVE that has
+			// been measured hours behind real time, so a window shorter than
+			// that lag buffers nothing forever; the package clamps a bad value
+			// rather than honouring one that would silence the feed.
+			Lookback: durationOr(bgpdepth.EnvFeedLookback, bgpdepth.DefaultFeedLookback),
 			Log: func(msg string, fields map[string]any) {
 				logInfo("bgp-feed", msg, fields)
 			},
@@ -950,6 +955,7 @@ func newServer() *server {
 		})
 		logInfo("bgp-feed", "near-live BGP update feed enabled (RIPEstat poller; RIS Live is WebSocket-only and no websocket module is on the §6 allowlist)", map[string]any{
 			"ring_size": bgpdepth.RingSize, "max_pollers": bgpdepth.MaxPollers,
+			"lookback": srv.bgpFeed.Lookback().String(),
 		})
 	}
 	// BGP-DEPTH-END

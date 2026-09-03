@@ -203,6 +203,9 @@ EXPECTED = {
     "FEATURE_BGP_LIVE_FEED":         "false",
     "FEATURE_BGP_ALERTS":            "false",
     "FEATURE_BGP_BOGON_FEED":        "false",
+    # Byte-identical to the docker-compose default and to
+    # bgpdepth.DefaultFeedLookback.
+    "BGP_FEED_LOOKBACK":             "6h",
     "PARSERCOV_MAX_LINES":           "200000",
     "CORRELATION_REPLICA_URLS":      "",
     "CORR_SYSLOG_TOPIC":             "netops.syslog",

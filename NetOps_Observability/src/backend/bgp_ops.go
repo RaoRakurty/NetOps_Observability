@@ -529,6 +529,11 @@ func (s *server) handleBGPWatchlist(w http.ResponseWriter, r *http.Request) {
 			http.NotFound(w, r)
 			return
 		}
+		// BGP-WATCH-BEGIN — the row is gone, so its VERDICT must go with it.
+		// Without this the Prefixes view kept rendering an incident class for a
+		// prefix nothing was measuring any more (live proof, 2026-09-03).
+		s.bgpWatchForgetPrefix(tenant, resource)
+		// BGP-WATCH-END
 		writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 	default:
 		writeError(w, http.StatusMethodNotAllowed, errors.New("GET, POST or DELETE"))

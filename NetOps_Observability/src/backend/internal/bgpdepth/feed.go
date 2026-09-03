@@ -57,8 +57,26 @@ const (
 	DefaultPollerIdle = 15 * time.Minute
 	// maxBackoff caps the error backoff.
 	maxBackoff = 10 * time.Minute
-	// feedLookback is the first poll's window.
-	feedLookback = 30 * time.Minute
+	// DefaultFeedLookback is the FIRST poll's window, and the single most
+	// consequential constant in this file.
+	//
+	// It was 30m, and on 2026-09-03 that made the feed structurally incapable of
+	// emitting anything on this host: RIPEstat's bgp-updates archive was
+	// 3 h 15 m behind real time (newest record 01:59:52Z at 05:17Z), so every
+	// poll fetched a payload in which EVERY record was older than now-30m, the
+	// cursor filter dropped all of them, and 9 polls produced 0 errors and 0
+	// updates. Nothing was wrong and nothing said so.
+	//
+	// 6 h covers the measured lag with room for it to double. It is a WINDOW,
+	// not a buffer: the per-resource cursor still advances past what was
+	// buffered, so a longer window replays nothing, and maxUpdatesPerPoll still
+	// bounds one poll's contribution.
+	DefaultFeedLookback = 6 * time.Hour
+	// MinFeedLookback / MaxFeedLookback bound the operator knob. A lookback
+	// under a minute cannot span a poll interval; one over a day asks the
+	// upstream for an archive query on every poller start.
+	MinFeedLookback = time.Minute
+	MaxFeedLookback = 24 * time.Hour
 	// maxUpdatesPerPoll bounds what one poll may append per resource.
 	maxUpdatesPerPoll = 500
 	// FeedPageMax bounds one API page.
@@ -99,6 +117,37 @@ type ring struct {
 	polls      uint64 // polls attempted for THIS tenant
 	pollErrors uint64 // …of which failed
 	buffered   uint64 // entries this tenant's polls appended, ever
+
+	// upstreamNewest is the newest timestamp the UPSTREAM returned for any of
+	// this tenant's resources, regardless of the cursor — i.e. how current the
+	// archive itself is. It is deliberately NOT the cursor: the cursor only ever
+	// moves to records we accepted, so when the whole payload is older than the
+	// window the cursor learns nothing and the operator is told nothing. This
+	// field is what makes "the feed is on, the upstream is N hours behind" a
+	// sayable sentence (§10).
+	upstreamNewest time.Time
+	upstreamSeenAt time.Time
+}
+
+// noteUpstream records how current the upstream archive was on this poll,
+// keeping the newest observation across the tenant's resources.
+func (r *ring) noteUpstream(newest, at time.Time) {
+	if newest.IsZero() {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if newest.After(r.upstreamNewest) {
+		r.upstreamNewest, r.upstreamSeenAt = newest.UTC(), at.UTC()
+	}
+}
+
+// upstream reports the newest upstream timestamp seen and when it was seen.
+// A zero newest means NOT MEASURED — never "the upstream is at epoch".
+func (r *ring) upstream() (newest, seenAt time.Time) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.upstreamNewest, r.upstreamSeenAt
 }
 
 // notePoll records one poll attempt for this tenant.
@@ -171,6 +220,11 @@ type Options struct {
 	Enabled  bool
 	Interval time.Duration
 	Idle     time.Duration
+	// Lookback is the first poll's window (EnvFeedLookback). Zero takes
+	// DefaultFeedLookback; anything outside [MinFeedLookback, MaxFeedLookback]
+	// is CLAMPED to the nearer bound rather than silently honoured — a
+	// mistyped knob must not be able to disable the feed.
+	Lookback time.Duration
 	Now      func() time.Time
 	// Rand supplies jitter. Injectable so tests are deterministic.
 	Rand func() float64
@@ -191,6 +245,7 @@ type Runtime struct {
 	enabled  bool
 	interval time.Duration
 	idle     time.Duration
+	lookback time.Duration
 	now      func() time.Time
 	rnd      func() float64
 	log      func(string, map[string]any)
@@ -225,6 +280,7 @@ func NewRuntime(f Fetcher, o Options) *Runtime {
 	if o.Idle <= 0 {
 		o.Idle = DefaultPollerIdle
 	}
+	o.Lookback = clampLookback(o.Lookback)
 	if o.Now == nil {
 		o.Now = time.Now
 	}
@@ -239,14 +295,35 @@ func NewRuntime(f Fetcher, o Options) *Runtime {
 	}
 	return &Runtime{
 		f: f, enabled: o.Enabled && f != nil,
-		interval: o.Interval, idle: o.Idle, now: o.Now, rnd: o.Rand, log: o.Log,
+		interval: o.Interval, idle: o.Idle, lookback: o.Lookback,
+		now: o.Now, rnd: o.Rand, log: o.Log,
 		observe: o.OnUpdates,
 		rings:   map[string]*ring{}, pollers: map[string]*poller{}, slots: MaxPollers,
 	}
 }
 
+// clampLookback applies the knob's bounds. Zero (unset) takes the default;
+// an out-of-range value is pulled to the nearer bound, because the failure this
+// window guards against — a lag longer than the window, so nothing is ever
+// buffered — is exactly what a fat-fingered "30s" would reintroduce.
+func clampLookback(d time.Duration) time.Duration {
+	switch {
+	case d <= 0:
+		return DefaultFeedLookback
+	case d < MinFeedLookback:
+		return MinFeedLookback
+	case d > MaxFeedLookback:
+		return MaxFeedLookback
+	default:
+		return d
+	}
+}
+
 // Enabled reports the feature-flag state.
 func (rt *Runtime) Enabled() bool { return rt.enabled }
+
+// Lookback reports the first-poll window in force (after clamping).
+func (rt *Runtime) Lookback() time.Duration { return rt.lookback }
 
 // Metrics is the counter snapshot (§10).
 func (rt *Runtime) Metrics() map[string]int64 {
@@ -369,6 +446,17 @@ type FeedStatus struct {
 	Producer  string    `json:"producer"`
 	Note      string    `json:"note,omitempty"`
 	Now       time.Time `json:"now"`
+
+	// Lookback is the first-poll window in force. It is published so the page
+	// can put the window and the lag side by side instead of leaving a reader
+	// to guess why an enabled feed is empty.
+	Lookback string `json:"lookback"`
+	// UpstreamNewest / UpstreamLagSeconds describe how current the UPSTREAM
+	// ARCHIVE is — not how current we are. They are POINTERS so "not measured
+	// yet" (no poll has completed) stays distinguishable from "lag 0"; a zero
+	// rendered as a number would be a claim we have not earned (§10).
+	UpstreamNewest     *time.Time `json:"upstream_newest_ts,omitempty"`
+	UpstreamLagSeconds *int64     `json:"upstream_lag_seconds,omitempty"`
 }
 
 // FeedPage is one read of a tenant's ring.
@@ -410,6 +498,7 @@ func (rt *Runtime) Page(ctx context.Context, tenant string, resources []string, 
 	st := FeedStatus{
 		Enabled: rt.enabled, Resources: res, RingSize: RingSize,
 		Interval: rt.interval.String(), Producer: "ripestat-poll", Now: rt.now(),
+		Lookback: rt.lookback.String(),
 	}
 	if !rt.enabled {
 		st.Note = "The near-live feed is off. Set " + EnvFeatureFlag + "=true to enable it."
@@ -432,10 +521,40 @@ func (rt *Runtime) Page(ctx context.Context, tenant string, resources []string, 
 	ups, next, gap := r.since(since, limit)
 	buffered, written, dropped := r.stats()
 	st.Buffered, st.Written, st.Dropped = buffered, written, dropped
+	rt.describeUpstream(&st, r)
 	if ups == nil {
 		ups = []Update{}
 	}
 	return FeedPage{Updates: ups, Next: next, Gap: gap, Status: st}, nil
+}
+
+// describeUpstream fills in how far behind the upstream archive is, and — when
+// that lag EXCEEDS the window we ask for — says so in plain words.
+//
+// This is the fix for the silent-dead-feed class: an enabled, erroring-free,
+// permanently empty feed used to be indistinguishable from a quiet internet.
+// Now the page can render "feed on, upstream 3 h 15 m behind" from facts, and
+// when the lag is past the window it is told the ONE thing that would fix it.
+func (rt *Runtime) describeUpstream(st *FeedStatus, r *ring) {
+	newest, seenAt := r.upstream()
+	if newest.IsZero() || seenAt.IsZero() {
+		return // no poll has completed yet: unknown stays unknown
+	}
+	lag := seenAt.Sub(newest)
+	if lag < 0 {
+		lag = 0 // an upstream stamp ahead of our clock is not a negative lag
+	}
+	secs := int64(lag / time.Second)
+	n := newest
+	st.UpstreamNewest, st.UpstreamLagSeconds = &n, &secs
+	if lag <= rt.lookback || st.Note != "" {
+		return
+	}
+	st.Note = "The feed is running and the upstream answered, but its newest " +
+		"published update is " + lag.Round(time.Minute).String() + " old — further behind than the " +
+		rt.lookback.String() + " window each poll asks for, so nothing lands in the buffer. " +
+		"Raise " + EnvFeedLookback + " past that lag (or wait for the upstream to catch up). " +
+		"This is an upstream publishing delay, NOT an outage on your network."
 }
 
 // Peek returns up to limit of ONE tenant's buffered updates, newest first,
@@ -588,7 +707,7 @@ func (rt *Runtime) run(ctx context.Context, tenant string, p *poller, r *ring) {
 func (rt *Runtime) pollOne(ctx context.Context, resource string, cursor map[string]time.Time, r *ring) ([]Update, error) {
 	from, ok := cursor[resource]
 	if !ok {
-		from = rt.now().UTC().Add(-feedLookback)
+		from = rt.now().UTC().Add(-rt.lookback)
 	}
 	extra := "starttime=" + urlEscape(from.UTC().Format("2006-01-02T15:04:05"))
 	// TTL 0: the feed must not be served a cached window, or it would stall.
@@ -596,14 +715,34 @@ func (rt *Runtime) pollOne(ctx context.Context, resource string, cursor map[stri
 	if err != nil {
 		return nil, err
 	}
-	ups, newest := ParseBGPUpdates(data, resource, from, maxUpdatesPerPoll)
-	for _, u := range ups {
+	parsed := ParseBGPUpdates(data, resource, from, maxUpdatesPerPoll)
+	for _, u := range parsed.Updates {
 		r.append(u)
 	}
-	if newest.After(from) {
-		cursor[resource] = newest
+	if parsed.Cursor.After(from) {
+		cursor[resource] = parsed.Cursor
 	}
-	return ups, nil
+	// Recorded on EVERY poll, including the one that buffered nothing — that is
+	// the poll whose silence needs explaining.
+	r.noteUpstream(parsed.UpstreamNewest, rt.now().UTC())
+	return parsed.Updates, nil
+}
+
+// ParsedUpdates is one payload's two DIFFERENT time facts, kept apart on
+// purpose because conflating them is what hid the 2026-09-03 dead feed:
+//
+//   - Cursor is how far the READER got — the newest record we ACCEPTED. It
+//     never moves past `after`, so when the whole payload is stale it says
+//     nothing at all.
+//   - UpstreamNewest is how current the ARCHIVE is — the newest record in the
+//     payload, cursor-independent. It is the only value that can distinguish
+//     "nothing is happening" from "the upstream is hours behind".
+//
+// Both are zero-valued when unknown; neither is ever guessed.
+type ParsedUpdates struct {
+	Updates        []Update
+	Cursor         time.Time
+	UpstreamNewest time.Time
 }
 
 // ParseBGPUpdates normalizes a RIPEstat bgp-updates payload into ring entries
@@ -612,7 +751,7 @@ func (rt *Runtime) pollOne(ctx context.Context, resource string, cursor map[stri
 //	data.updates[] = {"seq":…, "timestamp":"2026-08-31T14:07:34", "type":"A",
 //	                  "attrs":{"source_id":"15-187.16.222.156",
 //	                           "target_prefix":"193.0.0.0/21","path":[…]}}
-func ParseBGPUpdates(data json.RawMessage, resource string, after time.Time, limit int) ([]Update, time.Time) {
+func ParseBGPUpdates(data json.RawMessage, resource string, after time.Time, limit int) ParsedUpdates {
 	var body struct {
 		Updates []struct {
 			Timestamp string `json:"timestamp"`
@@ -625,19 +764,25 @@ func ParseBGPUpdates(data json.RawMessage, resource string, after time.Time, lim
 		} `json:"updates"`
 	}
 	if json.Unmarshal(data, &body) != nil {
-		return nil, after
+		return ParsedUpdates{Cursor: after}
 	}
-	newest := after
+	res := ParsedUpdates{Cursor: after}
 	out := make([]Update, 0, min(len(body.Updates), limit))
 	for _, e := range body.Updates {
-		if len(out) >= limit {
-			break
-		}
 		ts, err := time.Parse("2006-01-02T15:04:05", strings.TrimSpace(e.Timestamp))
 		if err != nil {
 			continue
 		}
 		ts = ts.UTC()
+		// The archive's own currency is measured BEFORE the cursor filter and
+		// before the limit — a record we skip still proves how far behind the
+		// upstream is, which is the whole point of measuring it.
+		if ts.After(res.UpstreamNewest) {
+			res.UpstreamNewest = ts
+		}
+		if len(out) >= limit {
+			continue
+		}
 		if !ts.After(after) {
 			continue // already buffered on an earlier poll
 		}
@@ -665,12 +810,13 @@ func ParseBGPUpdates(data json.RawMessage, resource string, after time.Time, lim
 			u.Origin = u.Path[len(u.Path)-1]
 		}
 		out = append(out, u)
-		if ts.After(newest) {
-			newest = ts
+		if ts.After(res.Cursor) {
+			res.Cursor = ts
 		}
 	}
 	sort.SliceStable(out, func(i, j int) bool { return out[i].Time.Before(out[j].Time) })
-	return out, newest
+	res.Updates = out
+	return res
 }
 
 // Stop cancels every poller. Called on shutdown.

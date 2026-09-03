@@ -133,6 +133,12 @@ API_ENV_DEFAULTS = {
     "FEATURE_BGP_LIVE_FEED": "${FEATURE_BGP_LIVE_FEED:-false}",
     "FEATURE_BGP_ALERTS": "${FEATURE_BGP_ALERTS:-false}",
     "FEATURE_BGP_BOGON_FEED": "${FEATURE_BGP_BOGON_FEED:-false}",
+    # bgpdepth.DefaultFeedLookback = 6h — the FIRST poll's window. It is an
+    # operator knob rather than a code constant because the upstream archive's
+    # publishing lag is a property of the internet on the day, not of our
+    # build: when the lag exceeds the window the feed buffers nothing at all,
+    # with no error anywhere (measured 3 h 15 m on 2026-09-03).
+    "BGP_FEED_LOOKBACK": "${BGP_FEED_LOOKBACK:-6h}",
 }
 
 
@@ -244,8 +250,17 @@ def test_vmalert_notifier_default_is_delivery_not_blackhole():
         "nothing is ever delivered to a human, which is the defect this "
         "plumbing exists to close.")
     # vmalert appends /api/v2/alerts itself: -notifier.url is a BASE url.
-    assert "-notifier.url=http://vmalert:${VMALERT_WEBHOOK_TOKEN}@api:8080/api/internal/vmalert}" in flag, (
+    # Since D-16 (2026-09-03) the shared secret is NOT in the url — it is read
+    # from a mounted compose secret, because argv is disclosed by
+    # `docker inspect` to anyone in the docker group.
+    assert "-notifier.url=http://api:8080/api/internal/vmalert}" in flag, (
         f"unexpected notifier default {flag!r}")
+    assert "${VMALERT_WEBHOOK_TOKEN}" not in flag, (
+        "the shared secret is interpolated into vmalert's argv again (D-16) — "
+        "pass it with -notifier.basicAuth.passwordFile from the compose secret.")
+    assert "-notifier.basicAuth.passwordFile=/run/secrets/vmalert_notifier_password" in cmd, (
+        "the notifier presents no app-layer credential at all — the api's "
+        "receiver would answer 401 for every alert.")
 
 
 def test_tls_variant_restates_the_notifier_flag():
@@ -276,11 +291,18 @@ def test_tls_variant_restates_the_notifier_flag():
     assert "blackhole" not in flag.split(":-", 1)[-1], (
         "the TLS variant defaults to the blackhole — alerts evaluated, "
         "delivered nowhere, on the very install the customer runs.")
-    # Same receiver path and same shared secret on both variants; only the
-    # scheme may differ.
-    for token in ("/api/internal/vmalert", "${VMALERT_WEBHOOK_TOKEN}"):
-        assert token in flag, f"TLS notifier flag lost {token!r}: {flag}"
-        assert token in base_notifier, f"base notifier flag lost {token!r}"
+    # Same receiver path on both variants; only the scheme may differ. The
+    # shared secret is deliberately NOT in either url since D-16 — it rides
+    # -notifier.basicAuth.passwordFile, asserted just below.
+    assert "/api/internal/vmalert" in flag, f"TLS notifier flag lost the receiver path: {flag}"
+    assert "/api/internal/vmalert" in base_notifier, "base notifier flag lost the receiver path"
+    for src, label in ((tls_src, "compose.tls.yml"), (COMPOSE.read_text(), "docker-compose.yml")):
+        assert "-notifier.basicAuth.passwordFile=/run/secrets/vmalert_notifier_password" in src, (
+            f"{label}: the notifier presents no app-layer credential — mTLS alone is "
+            "one control, and the api refuses an unauthenticated POST.")
+        assert "${VMALERT_WEBHOOK_TOKEN}@" not in src, (
+            f"{label}: the shared secret is back in a url userinfo (D-16) — "
+            "`docker inspect` discloses it to the whole docker group.")
     assert "https://" in flag, (
         "compose.tls.yml must post over https — the api requires a client cert "
         f"on that listener. Got: {flag}")
@@ -393,7 +415,7 @@ def test_update_reconciliation_enumerates_the_new_keys():
                 "PLATFORM_ALERTS_WARNING_DIGEST_INTERVAL",
                 "PLATFORM_ALERTS_PUSH_BUDGET",
                 "PLATFORM_ALERTS_PUSH_BUDGET_PAGE_RESERVE", "FEATURE_BGP_LIVE_FEED",
-                "FEATURE_BGP_ALERTS", "FEATURE_BGP_BOGON_FEED"):
+                "FEATURE_BGP_ALERTS", "FEATURE_BGP_BOGON_FEED", "BGP_FEED_LOOKBACK"):
         assert f'"{key}":' in src, (
             f"{key} is missing from update.sh's EXPECTED list — an upgraded "
             f"install would never learn the knob exists.")

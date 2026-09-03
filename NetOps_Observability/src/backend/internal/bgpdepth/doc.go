@@ -63,6 +63,18 @@ const (
 	// leaves the poller dormant and /api/bgp/feed answering "not enabled".
 	EnvFeatureFlag = "FEATURE_BGP_LIVE_FEED"
 
+	// EnvFeedLookback sets the FIRST poll's window (a Go duration). It exists
+	// because the producer is a POLLER over an archive, not a stream: RIPEstat's
+	// bgp-updates data has been measured lagging real time by hours (3 h 15 m on
+	// 2026-09-03), so a window shorter than the lag returns a payload in which
+	// EVERY record is older than the cursor — the poll succeeds, buffers
+	// nothing, and the feature looks broken with no error anywhere. Bounded to
+	// [MinFeedLookback, MaxFeedLookback]; unset or unparseable = the code
+	// default (DefaultFeedLookback). Raising it costs one longer first payload
+	// per resource, still bounded by maxUpdatesPerPoll, and the per-resource
+	// cursor stops a replay being buffered twice.
+	EnvFeedLookback = "BGP_FEED_LOOKBACK"
+
 	// EnvASPAProviderURL points at an operator-run ASPA source. The URL is
 	// called as <url>?asn=<n> and must answer the JSON shape documented in
 	// aspa.go. Unset (the default) = the honest "not configured" card.

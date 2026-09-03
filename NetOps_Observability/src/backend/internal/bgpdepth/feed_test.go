@@ -17,7 +17,8 @@ const realUpdates = `{"resource":"193.0.0.0/21","updates":[
  {"seq":316017778622466,"timestamp":"2026-08-31T16:03:50","type":"A","attrs":{"source_id":"10-217.29.67.54","target_prefix":"193.0.0.0/21","path":[20912,9002,3333],"community":[]}}]}`
 
 func TestParseBGPUpdatesNormalizesTheRealPayload(t *testing.T) {
-	ups, newest := ParseBGPUpdates(json.RawMessage(realUpdates), "193.0.0.0/21", time.Time{}, 100)
+	parsed := ParseBGPUpdates(json.RawMessage(realUpdates), "193.0.0.0/21", time.Time{}, 100)
+	ups, newest := parsed.Updates, parsed.Cursor
 	if len(ups) != 3 {
 		t.Fatalf("got %d updates", len(ups))
 	}
@@ -34,6 +35,9 @@ func TestParseBGPUpdatesNormalizesTheRealPayload(t *testing.T) {
 	if !newest.Equal(time.Date(2026, 8, 31, 16, 3, 50, 0, time.UTC)) {
 		t.Fatalf("newest = %v", newest)
 	}
+	if !parsed.UpstreamNewest.Equal(time.Date(2026, 8, 31, 16, 3, 50, 0, time.UTC)) {
+		t.Fatalf("upstream newest = %v", parsed.UpstreamNewest)
+	}
 	// Chronological order is the ring's contract.
 	for i := 1; i < len(ups); i++ {
 		if ups[i].Time.Before(ups[i-1].Time) {
@@ -45,26 +49,49 @@ func TestParseBGPUpdatesNormalizesTheRealPayload(t *testing.T) {
 // The cursor is what stops a poll re-buffering the window it already saw.
 func TestParseBGPUpdatesSkipsWhatTheCursorAlreadyCovered(t *testing.T) {
 	after := time.Date(2026, 8, 31, 16, 3, 24, 0, time.UTC)
-	ups, _ := ParseBGPUpdates(json.RawMessage(realUpdates), "193.0.0.0/21", after, 100)
-	if len(ups) != 1 || ups[0].Type != "A" {
-		t.Fatalf("re-buffered old updates: %+v", ups)
+	parsed := ParseBGPUpdates(json.RawMessage(realUpdates), "193.0.0.0/21", after, 100)
+	if len(parsed.Updates) != 1 || parsed.Updates[0].Type != "A" {
+		t.Fatalf("re-buffered old updates: %+v", parsed.Updates)
+	}
+	// The cursor filter must NOT blind the upstream-age measurement: the
+	// skipped records still prove how current the archive is. This is the
+	// 2026-09-03 dead-feed lesson in one assertion.
+	if !parsed.UpstreamNewest.Equal(time.Date(2026, 8, 31, 16, 3, 50, 0, time.UTC)) {
+		t.Fatalf("the cursor filter swallowed the upstream age: %v", parsed.UpstreamNewest)
+	}
+}
+
+// The case that was live on 2026-09-03: EVERY record is older than the window,
+// so nothing is buffered — and the parser must still report how far behind the
+// archive is, or the caller has nothing to explain the silence with.
+func TestParseBGPUpdatesReportsUpstreamAgeWhenEverythingIsStale(t *testing.T) {
+	after := time.Date(2026, 9, 3, 5, 17, 0, 0, time.UTC) // long past every record
+	parsed := ParseBGPUpdates(json.RawMessage(realUpdates), "193.0.0.0/21", after, 100)
+	if len(parsed.Updates) != 0 {
+		t.Fatalf("stale records were buffered: %+v", parsed.Updates)
+	}
+	if !parsed.Cursor.Equal(after) {
+		t.Fatalf("cursor moved on a payload that contributed nothing: %v", parsed.Cursor)
+	}
+	if !parsed.UpstreamNewest.Equal(time.Date(2026, 8, 31, 16, 3, 50, 0, time.UTC)) {
+		t.Fatalf("upstream age unknown on the poll that most needed it: %v", parsed.UpstreamNewest)
 	}
 }
 
 func TestParseBGPUpdatesIsBoundedAndDropsGarbage(t *testing.T) {
-	ups, _ := ParseBGPUpdates(json.RawMessage(realUpdates), "x", time.Time{}, 1)
+	ups := ParseBGPUpdates(json.RawMessage(realUpdates), "x", time.Time{}, 1).Updates
 	if len(ups) != 1 {
 		t.Fatalf("limit ignored: %d", len(ups))
 	}
 	bad := `{"updates":[{"timestamp":"not-a-time","type":"A","attrs":{}},{"timestamp":"2026-08-31T14:07:34","type":"X","attrs":{}},{"timestamp":"2026-08-31T14:07:34","type":"A","attrs":{"path":[0,-5,"x",3333]}}]}`
-	ups, _ = ParseBGPUpdates(json.RawMessage(bad), "x", time.Time{}, 100)
+	ups = ParseBGPUpdates(json.RawMessage(bad), "x", time.Time{}, 100).Updates
 	if len(ups) != 1 {
 		t.Fatalf("garbage rows were not dropped: %+v", ups)
 	}
 	if len(ups[0].Path) != 1 || ups[0].Path[0] != 3333 {
 		t.Fatalf("invalid ASNs survived the path: %v", ups[0].Path)
 	}
-	if got, _ := ParseBGPUpdates(json.RawMessage(`nope`), "x", time.Time{}, 10); got != nil {
+	if got := ParseBGPUpdates(json.RawMessage(`nope`), "x", time.Time{}, 10); got.Updates != nil {
 		t.Fatal("unparsable payload yielded updates")
 	}
 }
@@ -477,6 +504,148 @@ func TestTenantMetricsRevealNothingAboutOtherTenants(t *testing.T) {
 	for _, want := range []string{"netops_bgpfeed_rings", "netops_bgpfeed_polls_total", "# TYPE netops_bgpfeed_rings gauge"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("/metrics exposition is missing %q:\n%s", want, out)
+		}
+	}
+}
+
+// ── L-03: the window must cover the upstream's publishing lag ──────────────
+
+func TestFeedLookbackDefaultsAndClamps(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		in   time.Duration
+		want time.Duration
+	}{
+		{"unset takes the code default", 0, DefaultFeedLookback},
+		{"negative takes the code default", -time.Hour, DefaultFeedLookback},
+		{"too small is pulled up", time.Second, MinFeedLookback},
+		{"too large is pulled down", 72 * time.Hour, MaxFeedLookback},
+		{"in range is honoured", 8 * time.Hour, 8 * time.Hour},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rt := NewRuntime(newFake(), Options{Enabled: true, Lookback: tc.in})
+			defer rt.Stop()
+			if got := rt.Lookback(); got != tc.want {
+				t.Fatalf("lookback = %v, want %v", got, tc.want)
+			}
+		})
+	}
+	// The default must actually cover the lag measured on the live host
+	// (3 h 15 m on 2026-09-03) — the whole reason it is not 30m any more.
+	if DefaultFeedLookback < 4*time.Hour {
+		t.Fatalf("DefaultFeedLookback = %v; the measured upstream lag was 3h15m and a "+
+			"window that does not cover it makes the feed structurally unable to emit",
+			DefaultFeedLookback)
+	}
+}
+
+// feedRuntimeAt builds a runtime whose clock is pinned to `now`, polls once for
+// acme, and returns the status the API would serve.
+func feedRuntimeAt(t *testing.T, now time.Time, lookback time.Duration) FeedStatus {
+	t.Helper()
+	f := newFake()
+	f.put("bgp-updates", "193.0.0.0/21", realUpdates)
+	rt := NewRuntime(f, Options{
+		Enabled: true, Interval: time.Millisecond, Idle: time.Hour, Lookback: lookback,
+		Now:  func() time.Time { return now },
+		Rand: func() float64 { return 0.5 },
+	})
+	t.Cleanup(rt.Stop)
+	ctx := context.Background()
+	if _, err := rt.Page(ctx, "acme", []string{"193.0.0.0/21"}, 0, 100); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if rt.TenantMetrics("acme")["polls_total"] > 0 {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	page, err := rt.Page(ctx, "acme", []string{"193.0.0.0/21"}, 0, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return page.Status
+}
+
+// The upstream's own currency is REPORTED, so a page can say "feed on, upstream
+// N behind" instead of rendering an empty list with no explanation.
+func TestFeedStatusReportsUpstreamLag(t *testing.T) {
+	// The fixture's newest record is 2026-08-31T16:03:50Z; pin the clock 3 h
+	// later, which is the lag actually measured on the live host.
+	now := time.Date(2026, 8, 31, 19, 3, 50, 0, time.UTC)
+	st := feedRuntimeAt(t, now, DefaultFeedLookback)
+
+	if st.Lookback != DefaultFeedLookback.String() {
+		t.Fatalf("status does not publish the window in force: %q", st.Lookback)
+	}
+	if st.UpstreamNewest == nil || st.UpstreamLagSeconds == nil {
+		t.Fatal("the upstream age is not reported — an empty feed would be unexplainable")
+	}
+	if !st.UpstreamNewest.Equal(time.Date(2026, 8, 31, 16, 3, 50, 0, time.UTC)) {
+		t.Fatalf("upstream_newest_ts = %v", st.UpstreamNewest)
+	}
+	if *st.UpstreamLagSeconds != int64(3*time.Hour/time.Second) {
+		t.Fatalf("upstream_lag_seconds = %d, want %d", *st.UpstreamLagSeconds, int64(3*time.Hour/time.Second))
+	}
+	// A lag INSIDE the window is not a problem and must not be narrated as one.
+	if st.Note != "" {
+		t.Fatalf("a lag inside the window produced an alarming note: %q", st.Note)
+	}
+	// …and the window covering the lag means the feed actually buffers.
+	if st.Written == 0 {
+		t.Fatal("nothing was buffered even though the window covers the upstream lag")
+	}
+}
+
+// The live 2026-09-03 shape: lag beyond the window, nothing buffered, 0 errors.
+// The status must SAY why, name the knob, and not blame the operator's network.
+func TestFeedStatusExplainsALagBeyondTheWindow(t *testing.T) {
+	now := time.Date(2026, 9, 3, 5, 17, 0, 0, time.UTC) // ~2.5 days past the fixture
+	st := feedRuntimeAt(t, now, 6*time.Hour)
+
+	if st.Written != 0 {
+		t.Fatalf("records older than the window were buffered: %d", st.Written)
+	}
+	if st.UpstreamLagSeconds == nil || *st.UpstreamLagSeconds < int64(6*time.Hour/time.Second) {
+		t.Fatalf("the lag that explains the empty feed was not reported: %+v", st.UpstreamLagSeconds)
+	}
+	if st.Note == "" {
+		t.Fatal("an enabled, error-free, permanently EMPTY feed said nothing — the exact 2026-09-03 defect")
+	}
+	for _, want := range []string{EnvFeedLookback, "behind", "upstream"} {
+		if !strings.Contains(st.Note, want) {
+			t.Errorf("the note does not mention %q; it must name the cause and the knob:\n%s", want, st.Note)
+		}
+	}
+	if !strings.Contains(st.Note, "NOT an outage on your network") {
+		t.Errorf("the note must not let an operator read an upstream delay as their own outage:\n%s", st.Note)
+	}
+}
+
+// Before any poll completes, the upstream age is UNKNOWN and must be omitted —
+// never rendered as a lag of zero, which would read as "perfectly current".
+func TestFeedStatusOmitsUpstreamAgeBeforeTheFirstPoll(t *testing.T) {
+	rt := NewRuntime(newFake(), Options{
+		Enabled: true, Interval: time.Hour, Idle: time.Hour,
+		Now: fixedNow(), Rand: func() float64 { return 0.5 },
+	})
+	defer rt.Stop()
+	page, err := rt.Page(context.Background(), "acme", []string{"193.0.0.0/21"}, 0, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if page.Status.UpstreamNewest != nil || page.Status.UpstreamLagSeconds != nil {
+		t.Fatalf("an unmeasured upstream was reported as measured: %+v", page.Status)
+	}
+	body, err := json.Marshal(page.Status)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range []string{"upstream_newest_ts", "upstream_lag_seconds"} {
+		if strings.Contains(string(body), key) {
+			t.Errorf("%s is serialized before it was ever measured: %s", key, body)
 		}
 	}
 }

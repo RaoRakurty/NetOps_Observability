@@ -89,3 +89,37 @@ nor the watchlist), and both live sources push directly —
 poll's new ring entries through `Options.OnUpdates`. Both paths write the same
 `(prefix, source, peer)` key the sweep writes, so an update seen twice is ONE
 sighting with a bumped count, and neither path is load-bearing for the other.
+
+### Live-proof follow-ups (2026-09-03)
+
+**L-03 — the near-live feed could not emit on this host.** `feedLookback` was
+30 m while the RIPEstat `bgp-updates` archive was **3 h 15 m** behind real time
+(newest record 01:59:52Z at 05:17Z). Every poll fetched a payload in which every
+record was older than the cursor, so 9 polls produced 0 errors and 0 updates and
+nothing anywhere said why. Two changes:
+
+- `DefaultFeedLookback = 6h`, overridable with `BGP_FEED_LOOKBACK` (clamped to
+  `1m…24h` — a mistyped window must not be able to silence the feed again). The
+  per-resource cursor is unchanged, so a longer window replays nothing and
+  `maxUpdatesPerPoll` still bounds one poll.
+- The feed status now reports the upstream's own currency: `lookback`,
+  `upstream_newest_ts` and `upstream_lag_seconds` (both **omitted** until a poll
+  has actually measured them — unknown is not zero), plus a plain-language
+  `note` when the lag exceeds the window that names the knob and states this is
+  an upstream publishing delay, **not** an outage on the operator's network.
+  `ParseBGPUpdates` returns `ParsedUpdates{Updates, Cursor, UpstreamNewest}`,
+  keeping "how far the reader got" and "how current the archive is" apart —
+  conflating them is what made the dead feed invisible.
+
+**L-05 — a deleted watch left its verdict behind.** Removing a prefix deleted the
+row but not the evaluator's classification, so the Prefixes view kept rendering a
+live-looking incident class for a resource nothing was measuring.
+`Evaluator.ForgetPrefix(tenant, prefix)` now clears that tenant's
+`incidents[prefix]` **and** its per-class cool-down entries (a stale cool-down
+would have suppressed the first real alert if the prefix were re-added), and the
+watchlist DELETE handler calls it. The alert **history ring is kept** —
+un-watching must not rewrite what was actually raised — and so are bogon
+sightings, which are facts about the tenant's live feeds rather than watchlist
+verdicts. An alert that was open is resolved with text that says the prefix was
+removed from the watchlist and explicitly **not** that the condition cleared,
+because the destination that was paged has no other way to close it.
