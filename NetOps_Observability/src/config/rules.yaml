@@ -1157,7 +1157,46 @@ groups:
         # The prober ticks 24/7 (30-60s interval), so probes_received must always
         # advance — a flat line means bus→consumer ingest is dead even if every
         # container looks healthy (the failure mode that hid the July lab outage).
-        expr: increase(corr_ingest_events{counter="probes_received"}[15m]) == 0
+        #
+        # DEFECT (first real delivery run, 2026-09-03): "the prober ticks 24/7"
+        # is FALSE on a deployment where the prober has no targets. The prober
+        # is a `prober` COMPOSE PROFILE whose every active-measurement feature
+        # (FEATURE_ACTIVE_PROBE / FEATURE_SYNTHETICS / FEATURE_WAN_ECHO /
+        # FEATURE_TRACEROUTE) is off by default with empty *_TARGETS, so on this
+        # lab the container is up and emits NOTHING —
+        # `corr_ingest_events{counter="probes_received"}` reads a hard 0 and this
+        # CRITICAL fires forever. That is the cries-wolf shape the whole
+        # engine-liveness programme exists to prevent: a pager that is always red
+        # gets muted, and then the 2026-09-02 outage (which this very rule caught,
+        # at 19:18, into a blackhole notifier) goes unseen next time.
+        #
+        # GUARD — expected activity, same house pattern as NoSamplesIngested's
+        # `and collector_targets > 0` / CollectorAllTargetsUnreachable's
+        # `collector_targets_reachable == 0 and collector_targets > 0`. A
+        # prober-side "configured targets" gauge would be the better guard, but
+        # NONE EXISTS: the prober is not a vmscrape job at all (job labels in the
+        # live store are cadvisor/clickhouse/cloud-ingest/correlation/grafana/
+        # kafka/netops-api/node/vector/victoria — no prober), so it exports no
+        # gauge any rule can read. The only honest evidence that this lane is
+        # SUPPOSED to be live here is the lane's own trailing history, so the
+        # guard is "it ran in the last 24h and then stopped".
+        #
+        # THE TRADE, stated plainly: this buys a COLD-START BLIND SPOT — a brand
+        # new install whose probe lane has NEVER once delivered will not fire
+        # this rule, because there is no history to distinguish "never
+        # configured" from "configured and dead". That window is covered by
+        # CorrelationConsumerDead (rules-scale-slo.yaml, tier: page, consumer
+        # group membership — independent of whether any probe exists) and by
+        # stack-watchdog.sh's consumer-group probe, which run off Kafka
+        # membership rather than lane traffic. Sensitivity for a lab that DOES
+        # have probe traffic is unchanged: 15m flat, still critical, still the
+        # first thing to look at.
+        # NOT weakened to `warning`: when the guard passes, a flat probe lane is
+        # a dead bus→engine path and nothing else.
+        expr: >
+          increase(corr_ingest_events{counter="probes_received"}[15m]) == 0
+          and
+          increase(corr_ingest_events{counter="probes_received"}[24h]) > 0
         for: 15m
         labels: { severity: critical, layer: correlation }
         annotations:
@@ -1372,9 +1411,43 @@ groups:
         # sent_events series is ABSENT, not zero, and `== 0` would match
         # nothing — the F-35 "selector that matches nothing reads as coverage"
         # trap. 10m window + for:2m ⇒ fires after ~12 minutes of solid retrying.
+        #
+        # DEFECT (first real delivery run, 2026-09-03): this fired continuously
+        # with activeAt 2026-09-02T01:02 — the moment the notifier stopped being
+        # a blackhole — while vector-router had had NO OpenSearch errors for
+        # hours. It was never latched by the window and never re-armed by state
+        # restoration; BOTH of those hypotheses are wrong and worth writing down
+        # so nobody re-tests them:
+        #   · `increase(...[10m])` over a counter that stopped moving decays to
+        #     0 within 10 minutes, so an ENDED storm does resolve on its own.
+        #   · vmalert's ALERTS_FOR_STATE restore only replays `activeAt` so the
+        #     `for:` clock is not restarted across a restart; it does not hold an
+        #     alert whose expression has gone empty. The rule still has to
+        #     evaluate truthy every interval, and this one did.
+        # The actual fault is a SELECTOR MISMATCH between the two legs. The LHS
+        # said only `component_id=~"opensearch_.*"`, which on the live store
+        # matches vector-aggregator's two OpenSearch http_client *SOURCES* —
+        #   vector_http_client_requests_sent_total{component_id="opensearch_cluster_health",
+        #     component_kind="source",method="GET",instance="vector-aggregator:9598"}
+        #   …{component_id="opensearch_indexing_stats",component_kind="source",…}
+        # — the health/stats pollers, which issue a GET every 15 s forever. The
+        # RHS is pinned to `component_kind="sink"`, so those two source series
+        # can NEVER have a right-hand partner to subtract, `unless` never removes
+        # them, and the rule fires 24/7 on a perfectly healthy stack. Confirmed
+        # by evaluating the old expression against the live store: it returned
+        # exactly those two source series and nothing else, and ALERTS carried
+        # component_kind="source" on both firing instances.
+        # FIX: pin BOTH legs to `component_kind="sink"` so the rule only ever
+        # measures the thing it is about — a bulk sink issuing requests and
+        # delivering nothing. Sensitivity is untouched: during a real storm the
+        # sink's requests counter still climbs while its sent_events series goes
+        # absent, so the `unless` still yields the sink (the poison-stall test in
+        # rules-tests/os-flood-stage-block.test.yaml already drives exactly that
+        # shape with component_kind="sink" on the fixture). No window was
+        # lengthened; a storm that ends now resolves within 10m + 2m.
         # ####################################################################
         expr: >
-          increase(vector_http_client_requests_sent_total{component_id=~"opensearch_.*"}[10m]) > 0
+          increase(vector_http_client_requests_sent_total{component_id=~"opensearch_.*",component_kind="sink"}[10m]) > 0
           unless on (component_id, instance)
           increase(vector_component_sent_events_total{component_id=~"opensearch_.*",component_kind="sink"}[10m]) > 0
         for: 2m
@@ -1394,17 +1467,63 @@ groups:
         # "ingesting with a 5% hole" are identical under a zero-test.
         #
         # This compares the current 15m indexing rate against the trailing 6h
-        # baseline of itself. The clamp_min floor stops an idle lab (where the
+        # baseline of itself. The `> 100` floor stops an idle lab (where the
         # baseline is legitimately near zero) from firing continuously — the
         # rule is deliberately silent below a real traffic level rather than
         # noisy, because an alert nobody trusts is worse than none.
+        #
+        # DEFECT (first real delivery run, 2026-09-03): two syslog-ng restarts
+        # put this into a 4-hour continuous CRITICAL on a healthy pipeline. The
+        # mechanism is NOT the dip — it is the RECOVERY. Measured on the live
+        # store, sum(delta(...[15m])) across the restart:
+        #   19:05  9,601   ← steady state
+        #   20:05  1,191
+        #   20:20      0   ← pipeline stopped
+        #   20:35      0
+        #   20:50 200,429  ← Kafka backlog drains in one 15m bucket
+        #   21:05 114,389
+        #   21:20  5,845   ← healthy steady state again … and firing
+        # `avg_over_time` is a MEAN, so those two catch-up buckets alone add
+        # ~13,100 to a 24-point baseline: the baseline read 17,693 while the
+        # actual healthy rate was ~5,400, i.e. 30% of "baseline", so the rule
+        # screamed partial-loss at a pipeline that was fine — for the full 6h
+        # the poisoned sample stayed in the window. A restart therefore
+        # guarantees hours of false CRITICAL, which is precisely how a pager
+        # gets muted. (The dip itself is the smaller half: a 1–2 min stop only
+        # removes ~13% of a 15m delta and cannot cross the 50% line on its own,
+        # but the ~30 min of genuine zero seen here does cross it.)
+        #
+        # FIX, two parts, and deliberately NOT a wider window (a wider mean is
+        # more poisoned, not less):
+        #  1. quantile_over_time(0.5, …) — a MEDIAN baseline. Robust to both
+        #     tails by construction: the drain spike and the zero buckets are
+        #     each just one order statistic and cannot move the centre. On the
+        #     measured series above the median baseline is ~5,500 against the
+        #     mean's 17,693, so the post-restart steady state reads as normal.
+        #  2. for: 20m → 45m. The restart's own zero window was true for ~30 min;
+        #     45m outlives it. That does NOT create a hole: a TOTAL stop is
+        #     LogIngestStalled's job (`== 0`, for: 15m, critical) and it fires
+        #     inside that same window. This rule's job is the F-19 shape —
+        #     PARTIAL, SUSTAINED loss, measured over weeks at ~5% — for which 45
+        #     extra minutes of latency costs nothing.
+        # Severity critical → warning: this is a heuristic self-baseline
+        # comparison, not a proven outage; total stalls and refused writes keep
+        # their critical rules. The trade being accepted: a degradation that
+        # persists long enough to become the median itself (roughly >3h at the
+        # new rate) stops being visible to this rule — a self-baseline cannot
+        # see a new normal, and pretending otherwise with a longer window only
+        # trades that blind spot for more restart noise.
         # ####################################################################
-        expr: sum(delta(opensearch_indexing_doc_status{code="2xx"}[15m])) < 0.5 * sum(avg_over_time(delta(opensearch_indexing_doc_status{code="2xx"}[15m])[6h:15m])) and sum(avg_over_time(delta(opensearch_indexing_doc_status{code="2xx"}[15m])[6h:15m])) > 100
-        for: 20m
-        labels: { severity: critical, layer: ingest }
+        expr: >
+          sum(delta(opensearch_indexing_doc_status{code="2xx"}[15m]))
+            < 0.5 * sum(quantile_over_time(0.5, delta(opensearch_indexing_doc_status{code="2xx"}[15m])[6h:15m]))
+          and
+          sum(quantile_over_time(0.5, delta(opensearch_indexing_doc_status{code="2xx"}[15m])[6h:15m])) > 100
+        for: 45m
+        labels: { severity: warning, layer: ingest }
         annotations:
-          summary: "Log indexing rate is under half its 6h baseline ({{ $value }} docs/15m) — partial ingest loss, not a stall"
-          description: "A total stall is caught by the watchdog; this is the shape that hid for weeks. Check vector-router discards, Kafka consumer lag, and OpenSearch rejections."
+          summary: "Log indexing rate has been under half its 6h MEDIAN baseline for 45m ({{ $value }} docs/15m) — sustained partial ingest loss, not a stall"
+          description: "A total stall is caught by LogIngestStalled and the watchdog; this is the PARTIAL shape that hid for weeks. Baseline is a MEDIAN on purpose — a restart's Kafka-backlog drain spike used to poison a mean baseline for 6h and fire this on a healthy pipeline (2026-09-03), so if you are reading this within an hour of a syslog-ng/router restart, confirm against the raw series before chasing it. Check vector-router discards, Kafka consumer lag, and OpenSearch rejections."
 
       - alert: LogIngestStalled
         expr: sum(delta(opensearch_indexing_doc_status{code="2xx"}[15m])) == 0

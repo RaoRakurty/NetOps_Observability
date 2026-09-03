@@ -243,3 +243,183 @@ func TestNtfyChannelDefaultsToCriticalGate(t *testing.T) {
 		t.Fatalf("ntfy channel name = %q, want ntfy", n)
 	}
 }
+
+// ---- #101 on the UPGRADE path ------------------------------------------------
+//
+// The seed runs only when there is no stored config. An appliance UPGRADED in
+// place always has one, so until migrateNtfyFromEnv() existed an operator could
+// set FEATURE_NTFY_NOTIFICATIONS + NTFY_ALERT_TOPIC in .env, restart, and get
+// nothing at all — no channel, no log line. These tests pin both boot paths to
+// the SAME semantics and the same once-and-only-once latch.
+
+// storedNotifyConfig writes a config file the way a pre-upgrade deployment would
+// have left one, and returns its path.
+func storedNotifyConfig(t *testing.T, mutate func(*notifyConfigStore)) string {
+	t.Helper()
+	path := t.TempDir() + "/notify.json"
+	pre := newTestNotifyStore(t, path)
+	if mutate != nil {
+		mutate(pre)
+	}
+	if err := pre.save(); err != nil {
+		t.Fatal(err)
+	}
+	if pre.cfg.IsEnvSeeded("ntfy") {
+		t.Fatal("precondition: ntfy must not be latched yet")
+	}
+	return path
+}
+
+func ntfyEnv(t *testing.T, topic string) {
+	t.Helper()
+	t.Setenv("FEATURE_NTFY_NOTIFICATIONS", "true")
+	t.Setenv("NTFY_ALERT_TOPIC", topic)
+	t.Setenv("NTFY_ALERT_SERVER", "https://ntfy.example.invalid")
+	t.Setenv("NTFY_ALERT_TOKEN", "tk_upgrade")
+	t.Setenv("WATCHDOG_NTFY_TOPIC", "")
+}
+
+// TestNtfyEnvSeedOnFirstRunLatchesAndPersists: a FRESH install still seeds, and
+// now records the latch so the second boot is a no-op rather than a re-seed.
+func TestNtfyEnvSeedOnFirstRunLatchesAndPersists(t *testing.T) {
+	ntfyEnv(t, "correlix-critical-fresh")
+	path := t.TempDir() + "/notify.json"
+
+	first := newNotifyConfigStore(path, nil)
+	if !first.cfg.Ntfy.Enabled || first.cfg.Ntfy.Topic != "correlix-critical-fresh" {
+		t.Fatalf("first run did not seed ntfy: %+v", first.cfg.Ntfy)
+	}
+	if first.cfg.Ntfy.Server != "https://ntfy.example.invalid" || first.cfg.Ntfy.Token != "tk_upgrade" {
+		t.Errorf("server/token not seeded: %+v", first.cfg.Ntfy)
+	}
+	if first.cfg.Ntfy.MinSeverity != "critical" {
+		t.Errorf("seeded ntfy floor = %q, want critical (#101)", first.cfg.Ntfy.MinSeverity)
+	}
+	if !first.cfg.IsEnvSeeded("ntfy") {
+		t.Fatal("the first-run seed must latch — it is the same code path as the upgrade")
+	}
+	// The latch has to be on disk, or "once" means once per process.
+	if second := newNotifyConfigStore(path, nil); !second.cfg.IsEnvSeeded("ntfy") {
+		t.Fatal("latch did not persist across a restart")
+	}
+}
+
+// TestNtfyEnvMigratesOnTheUpgradePath is the defect itself: a stored config
+// exists (so the seed never fires) and the .env wiring must still take effect.
+func TestNtfyEnvMigratesOnTheUpgradePath(t *testing.T) {
+	path := storedNotifyConfig(t, func(pre *notifyConfigStore) {
+		pre.cfg.Slack.Enabled = true
+		pre.cfg.Slack.WebhookURL = "https://hooks.slack.example/T/B/C"
+	})
+	ntfyEnv(t, "correlix-critical-upgrade")
+
+	up := newNotifyConfigStore(path, nil)
+	if !up.cfg.Ntfy.Enabled || up.cfg.Ntfy.Topic != "correlix-critical-upgrade" {
+		t.Fatalf("upgrade path did not enable ntfy from env: %+v", up.cfg.Ntfy)
+	}
+	if up.cfg.Ntfy.Server != "https://ntfy.example.invalid" || up.cfg.Ntfy.Token != "tk_upgrade" {
+		t.Errorf("server/token not migrated: %+v", up.cfg.Ntfy)
+	}
+	if up.cfg.Ntfy.MinSeverity != "critical" {
+		t.Errorf("migrated ntfy floor = %q, want critical", up.cfg.Ntfy.MinSeverity)
+	}
+	if !up.cfg.IsEnvSeeded("ntfy") {
+		t.Fatal("migration must latch")
+	}
+	if !up.cfg.Slack.Enabled {
+		t.Fatal("migration must not disturb existing channels")
+	}
+}
+
+// TestNtfyEnvMigrationIsOnceAndOnlyOnce: the operator turns ntfy off in the UI
+// with NTFY_ALERT_TOPIC still in .env. The next boot must not resurrect it.
+func TestNtfyEnvMigrationIsOnceAndOnlyOnce(t *testing.T) {
+	path := storedNotifyConfig(t, nil)
+	ntfyEnv(t, "correlix-critical-once")
+
+	up := newNotifyConfigStore(path, nil)
+	if !up.cfg.Ntfy.Enabled {
+		t.Fatalf("precondition: first migration must enable ntfy: %+v", up.cfg.Ntfy)
+	}
+	if up.migrateEnvChannels() {
+		t.Fatal("migration must be idempotent — a second run must report no change")
+	}
+
+	// Admin disables the channel; the env is untouched.
+	up.cfg.Ntfy.Enabled = false
+	if err := up.save(); err != nil {
+		t.Fatal(err)
+	}
+	again := newNotifyConfigStore(path, nil)
+	if again.cfg.Ntfy.Enabled {
+		t.Fatal("the persisted latch must stop .env from re-enabling a channel the operator disabled")
+	}
+	if !again.cfg.IsEnvSeeded("ntfy") {
+		t.Fatal("latch did not persist")
+	}
+}
+
+// TestNtfyEnvMigrationDoesNotOverwriteAUIConfiguredChannel: an operator who
+// already pointed ntfy somewhere from the admin UI owns that setting. The env is
+// latched (it stops being consulted) but must change NOTHING.
+func TestNtfyEnvMigrationDoesNotOverwriteAUIConfiguredChannel(t *testing.T) {
+	path := storedNotifyConfig(t, func(pre *notifyConfigStore) {
+		pre.cfg.Ntfy.Enabled = true
+		pre.cfg.Ntfy.Topic = "operator-chosen"
+		pre.cfg.Ntfy.Server = "https://ntfy.operator.invalid"
+		pre.cfg.Ntfy.Token = "operator-token"
+		pre.cfg.Ntfy.MinSeverity = "warning"
+	})
+	ntfyEnv(t, "env-topic-that-must-lose")
+
+	up := newNotifyConfigStore(path, nil)
+	got := up.cfg.Ntfy
+	if got.Topic != "operator-chosen" || got.Server != "https://ntfy.operator.invalid" ||
+		got.Token != "operator-token" || got.MinSeverity != "warning" || !got.Enabled {
+		t.Fatalf("env overwrote an admin-configured ntfy channel: %+v", got)
+	}
+	if !up.cfg.IsEnvSeeded("ntfy") {
+		t.Fatal("an already-configured channel must still latch, so the env stops being consulted")
+	}
+}
+
+// TestNtfyEnvMigrationRefusesTheWatchdogTopicOnUpgrade: watchdog independence is
+// not a first-run-only rule. The refusal must NOT latch — it is an operator-
+// fixable env defect and has to stay loud every boot.
+func TestNtfyEnvMigrationRefusesTheWatchdogTopicOnUpgrade(t *testing.T) {
+	path := storedNotifyConfig(t, nil)
+	ntfyEnv(t, "wd-topic")
+	t.Setenv("WATCHDOG_NTFY_TOPIC", "wd-topic")
+
+	up := newNotifyConfigStore(path, nil)
+	if up.cfg.Ntfy.Enabled || up.cfg.Ntfy.Topic != "" {
+		t.Fatalf("the watchdog topic must never become the product channel: %+v", up.cfg.Ntfy)
+	}
+	if up.cfg.IsEnvSeeded("ntfy") {
+		t.Fatal("a refused migration must stay loud, not latch")
+	}
+	// Operator fixes .env → the migration then works, proving the refusal did
+	// not silently burn the one-shot.
+	t.Setenv("NTFY_ALERT_TOPIC", "correlix-critical-fixed")
+	fixed := newNotifyConfigStore(path, nil)
+	if !fixed.cfg.Ntfy.Enabled || fixed.cfg.Ntfy.Topic != "correlix-critical-fixed" {
+		t.Fatalf("a corrected env must migrate on the next boot: %+v", fixed.cfg.Ntfy)
+	}
+}
+
+// TestNtfyEnvMigrationRequiresTheFeatureFlag: a topic alone must not enable a
+// push channel — the flag is the opt-in, on both paths.
+func TestNtfyEnvMigrationRequiresTheFeatureFlag(t *testing.T) {
+	path := storedNotifyConfig(t, nil)
+	t.Setenv("FEATURE_NTFY_NOTIFICATIONS", "false")
+	t.Setenv("NTFY_ALERT_TOPIC", "correlix-critical-noflag")
+	t.Setenv("WATCHDOG_NTFY_TOPIC", "")
+
+	up := newNotifyConfigStore(path, nil)
+	if up.cfg.Ntfy.Enabled || up.cfg.Ntfy.Topic != "" {
+		t.Fatalf("ntfy must stay off without FEATURE_NTFY_NOTIFICATIONS: %+v", up.cfg.Ntfy)
+	}
+	if up.cfg.IsEnvSeeded("ntfy") {
+		t.Fatal("nothing was migrated — the latch must stay open")
+	}
+}

@@ -41,10 +41,11 @@
 #            correlation nor vector-router logged a bootstrap-class Kafka
 #            authorization/topic error, and that the API is serving.
 #
-# SAFETY: this script never restarts, recreates, scales or deletes anything,
-# and never touches a data volume. Phase 1 uses `docker compose run --rm`,
-# which spawns a throwaway container and removes it — the long-lived service
-# containers are not touched. Everything else only READS.
+# SAFETY: this script never restarts, recreates, scales or deletes any
+# LONG-LIVED service, and never touches a data volume. Phase 1 recreates only
+# the `restart: "no"` ONE-SHOT bootstrap containers (kafka-init,
+# opensearch-init) — whose entire purpose is to run once and exit — and only
+# when their work is actually outstanding. Everything else only READS.
 #
 # USAGE / EXIT CODES: see --help.
 #
@@ -138,8 +139,12 @@ WHAT IT DOES
                                 partition increase-only).
     B3  OpenSearch ISM policy   one-shot opensearch-init (apply-ism.sh; PUTs
                                 replace, so re-running converges).
-    Each runs as `docker compose run --rm` — a throwaway container. No existing
-    container is restarted, recreated or removed; no data volume is touched.
+    B2 is CHECK-FIRST: it reads the topic list and re-runs the one-shot only
+    when a topic is actually missing (an unconditional re-run costs ~40 JVM
+    starts to change nothing). Verdicts come from the topic list, never from
+    the exit code alone. One-shots run detached + `docker wait` so the bound is
+    enforceable and no orphan container survives a killed run. No long-lived
+    container is restarted or removed; no data volume is touched.
 
   PHASE 2 (qualification)
     REQUIRED
@@ -241,7 +246,18 @@ LAG_SAMPLES="${DQ_LAG_SAMPLES:-3}"
 LAG_INTERVAL="${DQ_LAG_INTERVAL:-20}"
 LOG_WINDOW="${DQ_LOG_WINDOW:-20m}"
 LOG_TAIL="${DQ_LOG_TAIL:-4000}"
-BOOTSTRAP_TIMEOUT="${DQ_BOOTSTRAP_TIMEOUT:-600}"
+# Per-bootstrap ceiling. Lowered 600 -> 240 on 2026-09-03: the old value was
+# large enough that a slow-but-progressing bootstrap looked like a hang, and
+# three of them in series could hold a deploy for 30 minutes. B2 no longer
+# re-runs the expensive loop when the topics are already correct (see below),
+# so 240s is generous for the case that genuinely has work to do.
+BOOTSTRAP_TIMEOUT="${DQ_BOOTSTRAP_TIMEOUT:-240}"
+# B1 only. apply-acls.sh issues 13 kafka-acls.sh --add calls plus two read-backs
+# and each one is a JVM start against the mTLS listener (~5-6s measured), so it
+# is structurally the slowest bootstrap. It is normally SKIPPED outright by the
+# check-first read below; this bound applies only when the matrix really has to
+# be (re)applied.
+ACL_TIMEOUT="${DQ_ACL_TIMEOUT:-600}"
 DOCKER_TIMEOUT="${DQ_DOCKER_TIMEOUT:-30}"
 AGG_INSTANCE="${DQ_AGG_INSTANCE:-vector-aggregator:9598}"
 ROUTER_INSTANCE="${DQ_ROUTER_INSTANCE:-vector-router:9598}"
@@ -258,7 +274,12 @@ API_PROBE_TIMEOUT="${API_PROBE_TIMEOUT:-10}"
 # ---------------------------------------------------------------------------
 if command -v timeout >/dev/null 2>&1; then
   HAVE_TIMEOUT=1
-  bound() { timeout "$@"; }
+  # `-k`: plain `timeout N cmd` sends SIGTERM and then WAITS FOREVER if the
+  # child ignores it. `docker compose` traps SIGTERM to run its own graceful
+  # shutdown, so the bound was advisory, not binding — the 2026-09-03 B2 hang
+  # ran ~15 minutes against a 600s "timeout". SIGKILL 10s later makes the bound
+  # real. Every caller passes the duration as $1, so -k must precede "$@".
+  bound() { timeout -k 10s "$@"; }
 else
   HAVE_TIMEOUT=0
   warn "'timeout' is not on PATH — docker calls will run UNBOUNDED this run, and PHASE 1 will be skipped (apply-ism.sh waits for OpenSearch in an unbounded loop)."
@@ -266,6 +287,44 @@ else
 fi
 
 dkr() { bound "$DOCKER_TIMEOUT" docker "$@"; }
+
+# ---------------------------------------------------------------------------
+# GLOBAL DEADLINE (§9/§16.1). A deploy gate that can hang IS the outage it is
+# meant to catch: CI blocks, an operator kills it, and the deploy ships
+# unqualified — which is worse than not running it, because someone believes it
+# ran. Every bound below is additionally clamped to what is left of this budget,
+# so the WHOLE script is bounded, not just each call inside it.
+#
+# Budget = the qualification window (--timeout) + the bootstrap allowance +
+# slack for docker itself. DQ_GLOBAL_TIMEOUT overrides it outright.
+# ---------------------------------------------------------------------------
+GLOBAL_BUDGET="${DQ_GLOBAL_TIMEOUT:-$(( TIMEOUT_SEC + ACL_TIMEOUT + BOOTSTRAP_TIMEOUT * 2 + 120 ))}"
+START_EPOCH="$(date +%s)"
+GLOBAL_DEADLINE=$(( START_EPOCH + GLOBAL_BUDGET ))
+
+remaining() {  # seconds left in the global budget; never negative
+  local left=$(( GLOBAL_DEADLINE - $(date +%s) ))
+  [ "$left" -lt 0 ] && left=0
+  printf '%s' "$left"
+}
+
+# Clamp a requested bound to the global budget. A phase may be given less time
+# than it asked for; it may never be given more.
+clamp() {  # $1 = requested seconds -> the smaller of it and what remains
+  local want="$1" left
+  left="$(remaining)"
+  if [ "$left" -lt "$want" ]; then printf '%s' "$left"; else printf '%s' "$want"; fi
+}
+
+# Returns 0 while there is usable time left. Callers that get non-zero must
+# record SKIP REQUIRED — "we ran out of time" is NOT "it passed" (the summary
+# turns any required SKIP into exit 2).
+have_time() { [ "$(remaining)" -gt 5 ]; }
+
+deadline_skip() {  # $1 = label
+  record SKIP REQUIRED "$1" \
+    "global ${GLOBAL_BUDGET}s deadline reached before this check could run — raise --timeout / DQ_GLOBAL_TIMEOUT, or fix what is slow. Not evaluated is not passed."
+}
 
 COMPOSE_ARGS=()
 dc() {  # $1 = wall-clock bound (seconds); rest = docker compose arguments
@@ -385,34 +444,155 @@ EXPORTER_CID="$(svc_cid kafka-exporter)"
 #     replaces; add is best-effort)"; the policy/template/snapshot writes are
 #     all PUTs. `restart: "no"`.
 #
-# All three are invoked with `docker compose run --rm --no-deps -T`, which
-# creates a NEW throwaway container and deletes it on exit. The long-lived
-# service containers are never restarted or recreated, and --no-deps keeps
-# compose from starting anything else.
+# B1 is piped into the RUNNING broker (docker exec). B2/B3 recreate their own
+# `restart: "no"` one-shot container detached (`up -d --no-deps
+# --force-recreate`) and then `docker wait` on it under a bound. That is
+# deliberately NOT `docker compose run --rm`: `run` creates a SECOND,
+# differently-named container that KEEPS RUNNING when the CLI is killed, which
+# is exactly the orphan found on the box after the 2026-09-03 hang. --no-deps
+# keeps compose from starting anything else.
 # ===========================================================================
-run_bootstrap() {  # $1 = id, $2 = label, $3 = compose service, $4.. = TOP-LEVEL compose flags
-  local id="$1" label="$2" service="$3"; shift 3
-  local out rc=0
-  say "  running $id ($label) ..."
-  # `$@` here carries TOP-LEVEL flags (e.g. --profile) and must precede the
-  # `run` subcommand: `docker compose run` has no --profile of its own, and
-  # older Compose releases do not auto-enable a target service's profile.
-  out="$(dc "$BOOTSTRAP_TIMEOUT" "$@" run --rm --no-deps -T "$service" 2>&1)" || rc=$?
-  if [ "$rc" -eq 0 ]; then
-    record PASS REQUIRED "$id $label" "completed (idempotent re-run is a no-op)"
-    return 0
-  fi
-  # §16.1: the output is the evidence. Print it — never discard it — and say
-  # explicitly when the bound, not the command, ended the run.
-  if [ "$rc" -eq 124 ]; then
-    record FAIL REQUIRED "$id $label" "TIMED OUT after ${BOOTSTRAP_TIMEOUT}s"
+# ---------------------------------------------------------------------------
+# The canonical netops.* topic set. MUST match kafka-init's entrypoint list in
+# deployment/docker/docker-compose.yml (and the compose.tls.yml override, which
+# restates it). tests/test_deploy_qualify.py pins the two against each other so
+# this copy cannot drift silently — a topic added there and missed here would
+# make B2 report a green "all topics present" while a lane is unbootstrapped.
+# ---------------------------------------------------------------------------
+CANONICAL_TOPICS=(
+  netops.applogs netops.syslog netops.syslog.control
+  netops.flows netops.flows.raw
+  netops.snmptrap
+  netops.probes netops.metrics netops.cloud netops.app.identities.v1
+  netops.controller_events netops.app.edge netops.verification
+  netops.cloudlogs netops.cloudcosts netops.deadletter
+  netops.wireless_sessions netops.wireless_events
+  netops.security netops.bgp
+)
+
+# Names the topics that are absent, one line, space separated. Prints the
+# broker error and returns 1 when the list cannot be read at all — "I could not
+# look" must never be reported as "nothing is missing" (§16.1).
+kafka_missing_topics() {
+  local t out rc=0 missing='' topic
+  local -a cfg=()
+  t="$(clamp "$DOCKER_TIMEOUT")"
+  [ "$t" -le 5 ] && { printf 'global deadline reached before the topic list could be read'; return 1; }
+  # Same connection choice apply-acls.sh makes: the admin properties staged by
+  # tls-entrypoint.sh mean the mTLS listener; without them this is a pre-TLS
+  # plaintext lab broker.
+  if dkr exec "$KAFKA_CID" test -f /tmp/kafka-tls/admin.properties >/dev/null 2>&1; then
+    cfg=(--bootstrap-server kafka:9094 --command-config /tmp/kafka-tls/admin.properties)
   else
-    record FAIL REQUIRED "$id $label" "exit $rc: $(oneline "$out")"
+    cfg=(--bootstrap-server localhost:9092)
   fi
-  say "    ---- $id output (redacted) ----"
-  printf '%s\n' "$out" | tail -40 | redact | sed 's/^/    | /'
-  say "    ---- end $id output ----"
-  return 1
+  out="$(bound "$t" docker exec "$KAFKA_CID" /opt/kafka/bin/kafka-topics.sh "${cfg[@]}" --list 2>&1)" || rc=$?
+  if [ "$rc" -ne 0 ]; then
+    printf '%s' "$(oneline "$out")"
+    return 1
+  fi
+  for topic in "${CANONICAL_TOPICS[@]}"; do
+    printf '%s\n' "$out" | grep -qx -- "$topic" || missing="$missing $topic"
+  done
+  printf '%s' "${missing# }"
+  return 0
+}
+
+# Is the ACL matrix already applied? Mirrors apply-acls.sh's OWN definition of
+# "verified" (it reads the store back and asserts the router grant plus a >=40
+# entry floor), so this cannot drift into a weaker claim than the applier makes.
+# Prints "<count>" on success; prints the broker error and returns 1 when the
+# store cannot be read; returns 2 when it is readable but NOT yet applied.
+KAFKA_ACL_FLOOR="${DQ_KAFKA_ACL_FLOOR:-40}"
+kafka_acl_applied() {
+  local t out rc=0 count
+  local -a cfg=()
+  t="$(clamp "$DOCKER_TIMEOUT")"
+  [ "$t" -le 5 ] && { printf 'global deadline reached before the ACL store could be read'; return 1; }
+  cfg=(--bootstrap-server kafka:9094 --command-config /tmp/kafka-tls/admin.properties)
+  out="$(bound "$t" docker exec "$KAFKA_CID" /opt/kafka/bin/kafka-acls.sh "${cfg[@]}" --list 2>&1)" || rc=$?
+  if [ "$rc" -ne 0 ]; then
+    printf '%s' "$(oneline "$out")"
+    return 1
+  fi
+  count="$(printf '%s\n' "$out" | grep -c 'principal=' || true)"
+  printf '%s' "$count"
+  # Both conditions, exactly as the applier asserts them: a count floor over the
+  # whole store AND the load-bearing router grant actually present. A high count
+  # with no router grant is a partial matrix, and a partial matrix is an
+  # auth-dead bus (the 2026-08-16 incident).
+  [ "$count" -ge "$KAFKA_ACL_FLOOR" ] || return 2
+  printf '%s\n' "$out" | grep -q 'vector-router' || return 2
+  return 0
+}
+
+# A killed `docker compose run` leaves its container RUNNING and orphaned
+# (`<project>-<service>-run-<hash>`). One was found alive on the box after the
+# 2026-09-03 incident. Sweep them, and SAY SO — a silent cleanup would hide the
+# very evidence that a previous gate run was killed.
+kafka_sweep_orphans() {  # $1 = id, for the log line
+  local ids
+  ids="$(dkr ps -aq --filter "label=com.docker.compose.project=$PROJECT" \
+                    --filter "label=com.docker.compose.service=kafka-init" \
+                    --filter "name=-run-" 2>/dev/null || true)"
+  [ -z "$ids" ] && return 0
+  warn "$1: found orphaned kafka-init 'compose run' container(s) from a previous killed run — removing: $(printf '%s' "$ids" | tr '\n' ' ')"
+  printf '%s\n' "$ids" | while IFS= read -r oid; do
+    [ -n "$oid" ] || continue
+    dkr rm -f "$oid" >/dev/null 2>&1 ||
+      warn "$1: could not remove orphan container $oid — remove it by hand before the next run"
+  done
+  return 0
+}
+
+# Run a `restart: "no"` one-shot service to completion, BOUNDED, with no
+# orphan. Deliberately NOT `docker compose run --rm`: that creates a second,
+# differently-named container which survives the CLI being killed. Starting the
+# service container detached and then `docker wait`-ing on it means the bound is
+# enforced on a container we can name, stop and report on.
+run_oneshot() {  # $1 = id, $2 = label, $3 = compose service, $4.. = TOP-LEVEL compose flags
+  local id="$1" label="$2" service="$3"; shift 3
+  local t out rc=0 cid wait_rc
+  t="$(clamp "$BOOTSTRAP_TIMEOUT")"
+  if [ "$t" -le 5 ]; then
+    record SKIP REQUIRED "$id $label" \
+      "global ${GLOBAL_BUDGET}s deadline reached before the bootstrap could start — not evaluated is not passed"
+    return 1
+  fi
+  # --force-recreate: the one-shot has usually already exited from install; a
+  # plain `up -d` would consider it satisfied and do nothing.
+  if ! out="$(dc "$t" "$@" up -d --no-deps --force-recreate "$service" 2>&1)"; then
+    record FAIL REQUIRED "$id $label" "could not start the one-shot: $(oneline "$out")"
+    return 1
+  fi
+  cid="$(dc "$(clamp "$DOCKER_TIMEOUT")" "$@" ps -aq "$service" 2>/dev/null | head -1)"
+  if [ -z "$cid" ]; then
+    record FAIL REQUIRED "$id $label" "started the one-shot but could not resolve its container id"
+    return 1
+  fi
+  # `docker wait` prints the container's exit code on stdout and blocks until
+  # it stops — the bound is what makes that safe.
+  wait_rc="$(bound "$t" docker wait "$cid" 2>&1)" || rc=$?
+  if [ "$rc" -ne 0 ]; then
+    # Timed out (or wait failed). STOP the container: leaving it running is the
+    # orphan bug in a different costume.
+    dkr stop -t 5 "$cid" >/dev/null 2>&1 ||
+      warn "$id: could not stop container $cid after the bound expired — check it by hand"
+    record FAIL REQUIRED "$id $label" "TIMED OUT after ${t}s (container stopped)"
+    say "    ---- $id output (redacted) ----"
+    dkr logs --tail 40 "$cid" 2>&1 | redact | sed 's/^/    | /' || true
+    say "    ---- end $id output ----"
+    return 1
+  fi
+  case "$wait_rc" in
+    0) return 0 ;;
+    *)
+      record FAIL REQUIRED "$id $label" "one-shot exited $wait_rc"
+      say "    ---- $id output (redacted) ----"
+      dkr logs --tail 40 "$cid" 2>&1 | redact | sed 's/^/    | /' || true
+      say "    ---- end $id output ----"
+      return 1 ;;
+  esac
 }
 
 say "${C_BOLD}PHASE 1 — bootstraps${C_OFF}"
@@ -429,7 +609,9 @@ elif [ "$HAVE_TIMEOUT" -eq 0 ]; then
   record SKIP REQUIRED "B3 opensearch-init ISM" "'timeout' not on PATH — refusing to run an unbounded bootstrap"
 else
   # ---- B1: the Kafka ACL matrix -------------------------------------------
-  if [ -z "$KAFKA_CID" ]; then
+  if ! have_time; then
+    deadline_skip "B1 kafka ACL matrix"
+  elif [ -z "$KAFKA_CID" ]; then
     record SKIP ADVISORY "B1 kafka ACL matrix" \
       "no running 'kafka' container in project '$PROJECT' — this stack uses an external broker (BROKER_URLS) or the embedded-bus profile is off; the ACL matrix belongs to that broker's operator"
   elif [ ! -r "$ACL_SCRIPT" ]; then
@@ -448,14 +630,28 @@ else
     # exec'ing that path is a bet on the deployment variant. `sh -s` reads the
     # repo copy — one code path for every layout. Connection defaults are the
     # script's own (admin.properties present => mTLS listener kafka:9094).
-    say "  running B1 (kafka ACL matrix, piped into container $KAFKA_CID) ..."
+    # CHECK FIRST, same lesson as B2 (2026-09-03): re-applying an idempotent
+    # matrix costs 13 kafka-acls.sh JVM starts (~240s+ measured, which is what
+    # timed this phase out) to change nothing. One read tells us whether there
+    # is anything to do, and it uses the applier's own success criteria.
+    b1_state=0
+    b1_count="$(kafka_acl_applied)" || b1_state=$?
+    if [ "$b1_state" -eq 0 ]; then
+      record PASS REQUIRED "B1 kafka ACL matrix" \
+        "already applied and verified — $b1_count ACL entries live (>= ${KAFKA_ACL_FLOOR} floor) including the load-bearing vector-router grant; the matrix was NOT re-applied (idempotent, and a re-apply costs 13 JVM starts to change nothing)"
+    elif [ "$b1_state" -eq 1 ]; then
+      record FAIL REQUIRED "B1 kafka ACL matrix" \
+        "could not read the ACL store: $b1_count"
+    else
+    say "  ACL matrix not yet applied ($b1_count entries) — running B1 (piped into container $KAFKA_CID) ..."
     b1_rc=0
-    b1_out="$(bound "$BOOTSTRAP_TIMEOUT" docker exec -i "$KAFKA_CID" sh -s < "$ACL_SCRIPT" 2>&1)" || b1_rc=$?
+    b1_bound="$(clamp "$ACL_TIMEOUT")"
+    b1_out="$(bound "$b1_bound" docker exec -i "$KAFKA_CID" sh -s < "$ACL_SCRIPT" 2>&1)" || b1_rc=$?
     if [ "$b1_rc" -eq 0 ]; then
       record PASS REQUIRED "B1 kafka ACL matrix" \
         "applied and verified: $(oneline "$(printf '%s\n' "$b1_out" | grep -i 'matrix applied' | tail -1)" 120)"
     elif [ "$b1_rc" -eq 124 ]; then
-      record FAIL REQUIRED "B1 kafka ACL matrix" "TIMED OUT after ${BOOTSTRAP_TIMEOUT}s"
+      record FAIL REQUIRED "B1 kafka ACL matrix" "TIMED OUT after ${b1_bound}s"
     else
       record FAIL REQUIRED "B1 kafka ACL matrix" "exit $b1_rc: $(oneline "$b1_out")"
     fi
@@ -464,26 +660,85 @@ else
       printf '%s\n' "$b1_out" | tail -40 | redact | sed 's/^/    | /'
       say "    ---- end B1 output ----"
     fi
+    fi
   fi
 
   # ---- B2: canonical topic pre-creation ------------------------------------
+  #
+  # 2026-09-03 BUG FIX. This used to be a bare
+  #   docker compose run --rm --no-deps -T kafka-init
+  # and it appeared to HANG a real deploy (killed at ~15 min). Diagnosis, from
+  # measurement rather than inspection:
+  #
+  #   * kafka-init's entrypoint runs kafka-topics.sh TWICE per topic (--create
+  #     then --describe) over 20 canonical topics = 40 JVM starts. On this stack
+  #     one such call is ~5 s (JVM boot + mTLS handshake to kafka:9094), so an
+  #     unconditional run costs 200 s MINIMUM and considerably more under load.
+  #     It was never hung. It was doing 40 JVM starts to discover that all 20
+  #     topics already existed.
+  #   * `timeout` without `-k` sent SIGTERM, which the compose CLI traps, so the
+  #     600 s bound never actually fired (fixed in bound(), above).
+  #   * killing the compose CLI does NOT stop the container it started:
+  #     `compose run` leaves a `<project>-kafka-init-run-<hash>` container
+  #     RUNNING and then orphaned. One was found alive on the box afterwards.
+  #
+  # The fix is to stop treating "run the bootstrap" as the check. The CHECK is
+  # the topic list; the run is only the remedy when the check fails. So:
+  #   1. read the topic list (ONE kafka-topics.sh call, ~5 s);
+  #   2. if every canonical topic is present -> PASS without re-running. The
+  #      entrypoint is documented-idempotent, so re-running it is a guaranteed
+  #      no-op that costs minutes;
+  #   3. only if something is missing, run the one-shot BOUNDED, then re-read
+  #      the list and judge on THAT. The exit code alone is never the verdict —
+  #      it is exactly what "up succeeded but nothing works" hides behind.
   if [ -z "$KAFKA_CID" ]; then
     record SKIP ADVISORY "B2 kafka-init topics" \
       "no running 'kafka' container in project '$PROJECT' — topics live on the external broker"
+  elif ! have_time; then
+    deadline_skip "B2 kafka-init topics"
   else
-    # --profile embedded-bus: kafka-init is profile-gated. `|| true` only stops
-    # `set -e` from aborting the remaining bootstraps — the failure is already
-    # recorded as FAIL and its captured output printed inside run_bootstrap.
-    run_bootstrap "B2" "kafka-init topics" kafka-init --profile embedded-bus || true
+    kafka_sweep_orphans "B2"
+    b2_missing="$(kafka_missing_topics)"; b2_rc=$?
+    if [ "$b2_rc" -ne 0 ]; then
+      record FAIL REQUIRED "B2 kafka-init topics" \
+        "could not read the topic list from the broker: $(oneline "$b2_missing")"
+    elif [ -z "$b2_missing" ]; then
+      record PASS REQUIRED "B2 kafka-init topics" \
+        "all ${#CANONICAL_TOPICS[@]} canonical topics present on the broker — the one-shot is a documented no-op here and was NOT re-run (it costs ~40 JVM starts to change nothing)"
+    else
+      say "  missing topic(s): $b2_missing"
+      say "  running B2 (kafka-init one-shot) ..."
+      if run_oneshot "B2" "kafka-init topics" kafka-init --profile embedded-bus; then :; fi
+      # Judge on the LIST, not on the exit code — always, including after a
+      # "successful" run.
+      b2_missing="$(kafka_missing_topics)"; b2_rc=$?
+      if [ "$b2_rc" -ne 0 ]; then
+        record FAIL REQUIRED "B2 kafka-init topics" \
+          "topic list unreadable after the bootstrap ran: $(oneline "$b2_missing")"
+      elif [ -n "$b2_missing" ]; then
+        record FAIL REQUIRED "B2 kafka-init topics" \
+          "still missing after the bootstrap ran: $b2_missing — producers to these topics fail LOUD (broker auto-create is OFF by design)"
+      else
+        record PASS REQUIRED "B2 kafka-init topics" \
+          "bootstrap ran; all ${#CANONICAL_TOPICS[@]} canonical topics now present (verified by kafka-topics --list, not by exit code)"
+      fi
+    fi
   fi
 
   # ---- B3: OpenSearch ISM retention + snapshot policy ----------------------
   if [ -z "$OPENSEARCH_CID" ]; then
     record SKIP REQUIRED "B3 opensearch-init ISM" \
       "no running 'opensearch' container in project '$PROJECT' — apply-ism.sh would block waiting for a cluster that is not there"
+  elif ! have_time; then
+    deadline_skip "B3 opensearch-init ISM"
   else
-    # `|| true`: see the B2 note — the FAIL verdict is already recorded.
-    run_bootstrap "B3" "opensearch-init ISM" opensearch-init || true
+    # Same one-shot machinery as B2: `compose run` would leak an orphaned
+    # container if this gate is killed, and apply-ism.sh has no ceiling of its
+    # own (it blocks in `until curl -sf .../_cluster/health`). Unlike B2 there is
+    # no cheap "already applied?" read — the ISM/template/snapshot writes are
+    # PUTs with no single queryable summary — so this one always runs, bounded.
+    # `|| true`: the FAIL verdict is already recorded inside run_oneshot.
+    run_oneshot "B3" "opensearch-init ISM" opensearch-init || true
   fi
 fi
 say ""
@@ -491,7 +746,12 @@ say ""
 # ===========================================================================
 # PHASE 2 — QUALIFICATION
 # ===========================================================================
+# Phase 2's own polling window, clamped to the GLOBAL budget. If Phase 1 ate
+# most of the budget, Phase 2 gets what is left rather than extending past it —
+# a gate that overruns its stated window is a gate someone will kill, and a
+# killed gate is a deploy that ships unqualified.
 DEADLINE=$(( $(date +%s) + TIMEOUT_SEC ))
+[ "$DEADLINE" -gt "$GLOBAL_DEADLINE" ] && DEADLINE="$GLOBAL_DEADLINE"
 PROBE_DETAIL=''
 
 # ---- VictoriaMetrics query plumbing ---------------------------------------

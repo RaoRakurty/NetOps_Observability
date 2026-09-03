@@ -207,6 +207,24 @@ mutable PG rows. Unblocks T8.
   launched for this project; I cannot launch it. Everything above is
   gate-clean but unreviewed at that depth.
 
+## Live state on the lab stack (2026-09-03 01:10 UTC)
+
+- `FEATURE_SECURITY_LANE=true` and `FEATURE_CONFIG_BACKUP=true` are ON (read-only
+  SSH credential staged in the gitignored `.env`; capture dialects for SR Linux and
+  EOS device-verified in `4c6ee238`). The `netops.security` topic exists, the
+  correlation principal holds Read+Describe on it, the router indexes it, the
+  findings index template is applied, and the engine's consumer is active on the
+  lane with lag 0 (engine tolerance for absent optional lanes shipped in
+  `ee218028` after the 2026-09-02 outage).
+- **Both lanes have NOTHING in scope:** the lab has one tenant (`global`) and
+  spine1/spine2 are platform-owned; the lane scans tenant-owned devices only, by
+  design. The first finding flows the moment a tenant owns the spines — an owner
+  action (Administration → Tenants, assign devices). Expected first verdicts from
+  the real captures: leaf/spine `mgmt-api-unencrypted`, `no-remote-aaa`,
+  `no-ntp-server`, `snmp-v1v2c-community` (see `4c6ee238`).
+- Alert delivery is PROVEN on this TLS install: vmalert → api webhook over mTLS →
+  ntfy (synthetic page-tier alert dispatched and sent, 2026-09-03 00:58 UTC).
+
 ## Not live-attested — what is BUILT but UNPROVEN on a running stack
 
 Honest counterpart to the ticks above. Nothing in this project has been

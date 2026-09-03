@@ -131,20 +131,28 @@ type ChannelConfig struct {
 // EnvSeededChannels is the per-channel migration latch. A STRUCT of bools, not
 // a map, on purpose: ChannelConfig must stay comparable (secrets_config_test
 // and the config round-trip guards compare whole configs with ==), and the set
-// of legacy env-only channels is closed and known.
+// of env-wired channels is closed and known.
+//
+// Ntfy joined Teams/SNS here because its env wiring (FEATURE_NTFY_NOTIFICATIONS
+// + NTFY_ALERT_*) used to be applied ONLY on a first run, so an appliance
+// upgraded in place could never enable it from .env. It now runs on both boot
+// paths and therefore needs the same once-and-only-once latch.
 type EnvSeededChannels struct {
 	Teams bool `json:"teams,omitempty"`
 	SNS   bool `json:"sns,omitempty"`
+	Ntfy  bool `json:"ntfy,omitempty"`
 }
 
 // MarkEnvSeeded latches a channel as env-migrated (idempotent). An unknown
-// channel name is a no-op: only the two legacy env-only channels have a latch.
+// channel name is a no-op: only the env-wired channels have a latch.
 func (c *ChannelConfig) MarkEnvSeeded(channel string) {
 	switch channel {
 	case "teams":
 		c.EnvSeeded.Teams = true
 	case "sns":
 		c.EnvSeeded.SNS = true
+	case "ntfy":
+		c.EnvSeeded.Ntfy = true
 	}
 }
 
@@ -156,6 +164,8 @@ func (c ChannelConfig) IsEnvSeeded(channel string) bool {
 		return c.EnvSeeded.Teams
 	case "sns":
 		return c.EnvSeeded.SNS
+	case "ntfy":
+		return c.EnvSeeded.Ntfy
 	}
 	return false
 }

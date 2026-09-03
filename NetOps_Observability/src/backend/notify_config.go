@@ -35,6 +35,12 @@ import (
 // as deprecated. The latch is what makes it once-and-only-once: an operator
 // who then disables Teams in the UI is not overruled at the next boot by a
 // TEAMS_WEBHOOK_URL still sitting in .env.
+//
+// ntfy (#101) now rides that same one-shot migration. Its env wiring is not
+// deprecated — it is the documented appliance install path — but it used to be
+// applied only by the first-run seed, so an UPGRADED stack (which always has a
+// stored config) could set FEATURE_NTFY_NOTIFICATIONS + NTFY_ALERT_TOPIC and get
+// nothing, with no log line. One function, both boot paths, one latch.
 
 type notifyConfigStore struct {
 	mu   sync.RWMutex
@@ -57,8 +63,11 @@ func newNotifyConfigStore(path string, srv *server) *notifyConfigStore {
 			s.cfg = dec
 		}
 		// G10: an EXISTING deployment already has a stored config, so the
-		// first-run seed below never runs for it. Carry the legacy env-only
-		// channels (Teams/SNS) across here instead — once, latched, persisted.
+		// first-run seed below never runs for it. Carry the env-wired channels
+		// (Teams/SNS/ntfy) across here instead — once, latched, persisted.
+		// ntfy was missing from this path until 2026-09-03: an appliance
+		// upgraded in place could set FEATURE_NTFY_NOTIFICATIONS in .env and
+		// have nothing happen at all, silently.
 		if s.migrateEnvChannels() {
 			if err := s.save(); err != nil {
 				// Not fatal: the channel is live in memory for this process. But
@@ -69,8 +78,8 @@ func newNotifyConfigStore(path string, srv *server) *notifyConfigStore {
 	} else {
 		// First run (no stored config): seed Slack/PagerDuty from the legacy
 		// env wiring so an existing env-driven deployment keeps working, then
-		// becomes editable from the admin UI. (SMTP/Twilio/ntfy predate this and
-		// have always defaulted off; only Slack/PagerDuty were env-only.)
+		// becomes editable from the admin UI. (SMTP/Twilio predate this and have
+		// always defaulted off; ntfy rides the shared migration below.)
 		s.seedFromEnv()
 		if err := s.save(); err != nil {
 			// Boot-time seed: log loudly, but a failed seed must not stop the
@@ -93,29 +102,10 @@ func (s *notifyConfigStore) seedFromEnv() {
 		s.cfg.PagerDuty.Enabled = true
 		s.cfg.PagerDuty.RoutingKey = os.Getenv("PAGERDUTY_KEY")
 	}
-	// #101 first-customer gate: critical alerts must LEAVE the app — ntfy is
-	// the recommended push channel, so appliance installs can arrive with it
-	// already wired from .env (then UI-editable like Slack/PagerDuty). The
-	// topic is deployment config, never hardcoded. min_severity keeps its
-	// critical default. The watchdog topic is refused: watchdog independence
-	// is intentional (it must be able to report the stack's own death).
-	if os.Getenv("FEATURE_NTFY_NOTIFICATIONS") == "true" {
-		topic := os.Getenv("NTFY_ALERT_TOPIC")
-		if wd := os.Getenv("WATCHDOG_NTFY_TOPIC"); wd != "" && topic == wd {
-			logError("notify.config", "NTFY_ALERT_TOPIC equals the watchdog topic — refusing to seed (product alerting must stay independent of the watchdog)", nil)
-			topic = ""
-		}
-		if topic != "" {
-			s.cfg.Ntfy.Enabled = true
-			s.cfg.Ntfy.Topic = topic
-			if v := os.Getenv("NTFY_ALERT_SERVER"); v != "" {
-				s.cfg.Ntfy.Server = v
-			}
-			s.cfg.Ntfy.Token = os.Getenv("NTFY_ALERT_TOKEN")
-		}
-	}
-	// G10: Teams/SNS use the same one-shot migration on a first run as they do
-	// on an upgrade — one code path, so "seeded" means the same thing either way.
+	// G10: Teams/SNS/ntfy use the same one-shot migration on a first run as
+	// they do on an upgrade — one code path, so "seeded" means the same thing
+	// either way. ntfy (#101) used to be seeded by a copy of that logic inlined
+	// HERE, which is exactly why it never reached the upgrade path.
 	s.migrateEnvChannels()
 }
 
@@ -127,12 +117,77 @@ func (s *notifyConfigStore) seedFromEnv() {
 // migrated and is persisted with the config, so the env can never re-assert
 // itself over a later admin decision. A channel whose env is not set is NOT
 // latched — nothing was migrated, so there is nothing to protect against.
+//
+// Both boot paths call this (first-run seed AND upgrade), so every channel here
+// behaves identically whichever way the appliance arrived at it.
 func (s *notifyConfigStore) migrateEnvChannels() bool {
 	changed := s.migrateTeamsFromEnv()
 	if s.migrateSNSFromEnv() {
 		changed = true
 	}
+	if s.migrateNtfyFromEnv() {
+		changed = true
+	}
 	return changed
+}
+
+// migrateNtfyFromEnv carries the FEATURE_NTFY_NOTIFICATIONS + NTFY_ALERT_* wiring
+// into the managed config. Unlike Teams/SNS this env path is NOT deprecated — it
+// is the documented appliance install wiring (#101 first-customer gate: critical
+// alerts must LEAVE the app, and ntfy is the recommended push channel) — but it
+// gets the SAME one-shot latch, so an operator who later turns ntfy off or
+// re-points it in the admin UI is never overruled at the next boot by an
+// NTFY_ALERT_TOPIC still sitting in .env.
+//
+// The defect it fixes: this logic lived inline in seedFromEnv(), which runs ONLY
+// when there is no stored config. An UPGRADED appliance (which always has one)
+// could set the env vars and get nothing — no channel, and no line saying why.
+//
+// Semantics are the seed's, unchanged: enable only on FEATURE_NTFY_NOTIFICATIONS
+// =true WITH a topic, refuse the watchdog topic (watchdog independence is
+// intentional — it must stay able to report the stack's own death), and keep the
+// critical min_severity default.
+func (s *notifyConfigStore) migrateNtfyFromEnv() bool {
+	if s.cfg.IsEnvSeeded("ntfy") {
+		return false
+	}
+	if os.Getenv("FEATURE_NTFY_NOTIFICATIONS") != "true" {
+		return false // not opted in; leave the latch open
+	}
+	topic := strings.TrimSpace(os.Getenv("NTFY_ALERT_TOPIC"))
+	if topic == "" {
+		return false // nothing to migrate; leave the latch open
+	}
+	if wd := strings.TrimSpace(os.Getenv("WATCHDOG_NTFY_TOPIC")); wd != "" && topic == wd {
+		// Deliberately NOT latched: an operator-fixable env defect must stay loud
+		// every boot until the deployment gives product alerting its own topic.
+		logError("notify.config", "NTFY_ALERT_TOPIC equals the watchdog topic — refusing to enable ntfy (product alerting must stay independent of the watchdog)", nil)
+		return false
+	}
+	if s.cfg.Ntfy.Topic != "" {
+		// Already configured (admin UI, or an earlier boot). Latch so the env
+		// stops being consulted, but change nothing the operator set.
+		s.cfg.MarkEnvSeeded("ntfy")
+		return true
+	}
+	s.cfg.Ntfy.Enabled = true
+	s.cfg.Ntfy.Topic = topic
+	if v := strings.TrimSpace(os.Getenv("NTFY_ALERT_SERVER")); v != "" {
+		s.cfg.Ntfy.Server = v
+	}
+	s.cfg.Ntfy.Token = os.Getenv("NTFY_ALERT_TOKEN")
+	if s.cfg.Ntfy.MinSeverity == "" {
+		s.cfg.Ntfy.MinSeverity = "critical"
+	}
+	s.cfg.MarkEnvSeeded("ntfy")
+	// §10: no silent failures — and no silent successes on a boot-time config
+	// change either. The TOPIC IS NOT LOGGED: knowing an ntfy topic is enough to
+	// subscribe to it, so it is treated as a credential (§8 log sanitization).
+	logInfo("notify.config", "enabled the ntfy push channel from the FEATURE_NTFY_NOTIFICATIONS/NTFY_ALERT_* env wiring — manage this channel in Settings → Notification channels", map[string]any{
+		"channel": "ntfy", "enabled": true, "server": s.cfg.Ntfy.Server,
+		"min_severity": s.cfg.Ntfy.MinSeverity, "token_set": s.cfg.Ntfy.Token != "",
+	})
+	return true
 }
 
 // migrateTeamsFromEnv seeds Teams from TEAMS_WEBHOOK_URL /

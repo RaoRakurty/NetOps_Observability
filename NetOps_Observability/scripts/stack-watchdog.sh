@@ -885,7 +885,14 @@ if [ -n "$os_cid" ]; then
   OS_MON_PW=""
   if [ -r "$CH_ENV_FILE" ] && grep -q '^COMPOSE_FILE=.*compose\.tls\.yml' "$CH_ENV_FILE"; then
     OS_TLS=1
-    OS_PROBE_URL="https://localhost:9200"
+    # Host MUST be a name the wire cert actually carries. The issued SAN set is
+    # `DNS:opensearch` + the SPIFFE URI and nothing else, so https://localhost
+    # fails hostname verification (curl exit 60, http 000) and blinded every
+    # search-tier check on TLS installs. `opensearch` resolves in-container via
+    # compose DNS and verifies against the same CA. The fix is the correct NAME,
+    # never -k/--insecure: riding insecure here would turn a real MITM or a
+    # misissued cert into a silent pass, which is the §16.1 defect class itself.
+    OS_PROBE_URL="https://opensearch:9200"
     # svc_api: read netops-*, cluster health, snapshot get. svc_aggregator:
     # cluster:monitor/nodes/stats (the doc-reject counter). One user per
     # probe, matching the SEC-008 role model — no shared/admin credential.
@@ -893,6 +900,9 @@ if [ -n "$os_cid" ]; then
     OS_MON_PW=$(sed -n 's/^OS_AGGREGATOR_PASSWORD=//p' "$CH_ENV_FILE" | head -1)
   fi
   os_blind=""
+  # Bare host of the probe URL — quoted back by the TLS self-test so the message
+  # names the host that actually failed verification, not a hard-coded guess.
+  os_probe_host=$(printf '%s' "$OS_PROBE_URL" | sed -e 's#^[a-z]*://##' -e 's#[:/].*##')
 
   # os_fetch <user> <password> <path+query> [json-body] — one bounded curl in
   # the opensearch container. TLS installs add CA verification + basic auth
@@ -911,6 +921,74 @@ if [ -n "$os_cid" ]; then
       cfg="$cfg"$'\n'"header = \"Content-Type: application/json\""$'\n'"data = \"$body\""
     fi
     printf '%s' "$cfg" | dkr exec -i "$os_cid" curl --config - 2>/dev/null
+  }
+
+  # os_probe_diag — self-test for a BLIND run. os_fetch deliberately discards
+  # transport detail (its callers only want a body), so "no parsable reply" was
+  # reported with the guess "(TLS/auth mismatch? probe fault?)" — worthless at
+  # 03:00, and in this lab actively wrong. This runs ONE extra bounded curl
+  # against the cluster root with the SAME config the real probes use and
+  # classifies the failure from EVIDENCE: curl's own exit code plus the HTTP
+  # status. It NEVER guesses — an unrecognised pair is reported raw.
+  #
+  # Sets (not echoes, so the caller keeps them): os_diag_class os_diag_rc
+  # os_diag_http os_diag_detail. Only the stable CLASS + the raw codes go into
+  # the problem text; the run-varying curl message goes to the log, because
+  # problem_key hashes the first 160 characters and run-varying text there
+  # would mint a "new" problem class every minute and re-push (same discipline
+  # as API_UNRESPONSIVE above).
+  os_diag_class=""; os_diag_rc=""; os_diag_http=""; os_diag_detail=""
+  os_probe_diag() {
+    local cfg out pw
+    cfg=$(printf '%s\n' \
+      "url = \"$OS_PROBE_URL/\"" \
+      "max-time = 8" "silent" "show-error" \
+      "output = \"/dev/null\"" \
+      "write-out = \"os_http=%{http_code}\"")
+    if [ "$OS_TLS" = 1 ]; then
+      cfg="$cfg"$'\n'"cacert = \"$OS_PROBE_CACERT\""$'\n'"user = \"svc_api:$OS_API_PW\""
+    fi
+    # stderr is KEPT on purpose (§16.1): curl's own message IS the evidence this
+    # self-test exists to surface. Suppressing it is what made the run blind.
+    out=$(printf '%s' "$cfg" | dkr exec -i "$os_cid" curl --config - 2>&1)
+    os_diag_rc=$?   # OWN LINE. Inside `if ! out=$(...)` this would be the *if*'s
+                    # status (always 0) — a trap that has already bitten this repo.
+    # Read the status BEFORE truncating: --show-error puts curl's (possibly long)
+    # stderr first and the write-out marker last, so a truncated buffer can lose
+    # the very code we classify on.
+    os_diag_http=$(printf '%s' "$out" | grep -oE 'os_http=[0-9]{3}' | tail -1 | cut -d= -f2)
+    # §8: a credential must never reach a log line, a state file or a phone push.
+    for pw in "$OS_API_PW" "$OS_MON_PW"; do
+      [ -n "$pw" ] && out=${out//"$pw"/***}
+    done
+    out=$(printf '%s' "$out" | tr '\n' ' ' | cut -c1-240)
+    if [ "$os_diag_rc" = 60 ]; then
+      # curl(60) is CERTIFICATE VERIFICATION — never auth, never reachability:
+      # the TCP connect succeeded and the peer answered with a cert we rejected.
+      # curl distinguishes the two sub-causes in its own text; so do we, rather
+      # than asserting a SAN mismatch when the CA is what is actually wrong.
+      if printf '%s' "$out" | grep -qiE 'subject name|host ?name'; then
+        os_diag_class="TLS_HOSTNAME"
+        os_diag_detail="the certificate is trusted but its names do not cover the probe host '$os_probe_host'. This stack issues OpenSearch the SAN set 'DNS:opensearch' + a SPIFFE URI and NOTHING else — no localhost — so any other host name fails hostname verification. Point OS_PROBE_URL at 'opensearch' or add the name to the SAN. Do NOT add -k: that converts a real MITM or a misissued cert into a silent pass."
+      else
+        os_diag_class="TLS_CA"
+        os_diag_detail="the certificate chain did not verify against the CA file in use ($OS_PROBE_CACERT). The names are not the problem; the trust anchor is — wrong/rotated CA, or the bundle is not the one that signed this leaf. Do NOT add -k."
+      fi
+      os_diag_detail="$os_diag_detail curl said: $out"
+    elif [ "$os_diag_http" = 401 ] || [ "$os_diag_http" = 403 ]; then
+      # An HTTP status came back at all, so the handshake COMPLETED: not TLS.
+      os_diag_class="AUTH"
+      os_diag_detail="the certificate verified and the node answered, so this is authentication/authorization, NOT TLS. Check OS_API_PASSWORD / OS_AGGREGATOR_PASSWORD in $CH_ENV_FILE and the svc_api / svc_aggregator roles."
+    elif { [ "$os_diag_rc" = 7 ] || [ "$os_diag_http" = "000" ]; } &&
+         ! printf '%s' "$out" | grep -qiE 'ssl|tls|certificate'; then
+      os_diag_class="UNREACHABLE"
+      os_diag_detail="nothing accepted a connection at $OS_PROBE_URL from inside the opensearch container, and curl reported no TLS error — the node is down, still starting, or bound elsewhere. Not TLS, not auth. curl said: $out"
+    else
+      # Anything else is reported RAW. A named guess we cannot evidence would be
+      # worse than the numbers.
+      os_diag_class="UNCLASSIFIED"
+      os_diag_detail="no recognised failure signature (tls=$OS_TLS, cacert=$OS_PROBE_CACERT). Raw curl output: ${out:-<empty>}"
+    fi
   }
 
   if [ "$OS_TLS" = 1 ] && [ -z "$OS_API_PW" ]; then
@@ -1040,7 +1118,12 @@ if [ -n "$os_cid" ]; then
   fi  # end of the OS_TLS credentialed-probe guard
 
   if [ -n "$os_blind" ]; then
-    problems+=("OPENSEARCH_UNVERIFIABLE: no parsable reply for:${os_blind} — these search-tier checks are BLIND this run (TLS/auth mismatch? probe fault?), which is not the same as healthy")
+    # Do not GUESS at the cause — measure it once, then name it (os_probe_diag).
+    # The stable class + raw codes ride the problem text (and so the push); the
+    # run-varying evidence goes to the log, out of problem_key's 160-char hash.
+    os_probe_diag
+    problems+=("OPENSEARCH_UNVERIFIABLE (self-test: ${os_diag_class}, curl exit ${os_diag_rc}, http ${os_diag_http:-none}): no parsable reply for:${os_blind} — these search-tier checks are BLIND this run, which is not the same as healthy; the self-test detail is in the watchdog log.")
+    echo "watchdog: OpenSearch probe self-test: ${os_diag_class} (curl exit ${os_diag_rc}, http ${os_diag_http:-none}) against $OS_PROBE_URL — ${os_diag_detail}" >&2
   fi
 fi
 

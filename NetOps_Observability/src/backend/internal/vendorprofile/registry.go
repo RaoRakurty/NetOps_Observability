@@ -36,10 +36,10 @@ type Registry struct {
 	// a consumer's closed-table test iterates so a family that gains a command
 	// with no golden fails the build.
 	configFamilies []string
-	snmpGen     map[string]SNMPConfigGen      // vendor → onboarding templates
-	snmpGenIDs  []string                      // sorted vendor ids declaring one
-	devTypeText map[string][]string           // device type → text hints (union)
-	devTypeVend map[string]string             // exact vendor token → device type
+	snmpGen        map[string]SNMPConfigGen // vendor → onboarding templates
+	snmpGenIDs     []string                 // sorted vendor ids declaring one
+	devTypeText    map[string][]string      // device type → text hints (union)
+	devTypeVend    map[string]string        // exact vendor token → device type
 
 	// ── packet-capture families (profile level) ─────────────────────────────
 	pcapFamily map[string]string // capture family key → profile id

@@ -317,7 +317,12 @@ def test_h17_tls_install_probes_with_https_auth_and_cacert(tmp_path):
     r, _ = _run(tmp_path, etc, "tls-probe", OS_CFG_LOG=cfg_log)
     assert r.returncode == 0, r.stderr
     cfg = cfg_log.read_text()
-    assert 'url = "https://localhost:9200' in cfg, f"OS probes must go https on TLS installs:\n{cfg}"
+    assert 'url = "https://opensearch:9200' in cfg, (
+        "OS probes must go https to the SAN name on TLS installs:\n" + cfg)
+    assert 'url = "https://localhost:9200' not in cfg, (
+        "the OpenSearch wire cert carries DNS:opensearch + a SPIFFE URI and NO "
+        "localhost, so a localhost probe fails hostname verification (curl 60, "
+        f"http 000) and blinds the whole search tier:\n{cfg}")
     assert 'user = "svc_api:fake-os-api-pw"' in cfg, "count/health/snapshots ride svc_api"
     assert 'user = "svc_aggregator:fake-os-mon-pw"' in cfg, "nodes/stats rides svc_aggregator"
     assert "cacert" in cfg, "TLS probes must VERIFY the CA, never ride -k"
@@ -335,6 +340,80 @@ def test_h16c_plaintext_install_probes_clickhouse_on_8123(tmp_path):
         "plaintext installs must probe CH over http:8123 — the old https:8443 "
         f"default was a permanent false CLICKHOUSE_TLS_FAILURE:\n{cfg}")
     assert "CLICKHOUSE_TLS_FAILURE" not in r.stderr
+
+
+def test_os_probe_url_host_is_never_localhost_on_tls_and_never_insecure():
+    """Static guard for the 2026-09-03 blindness: the watchdog probed
+    https://localhost:9200 from inside the opensearch container, but the issued
+    cert's SANs are `DNS:opensearch` + the SPIFFE URI ONLY. curl exited 60 with
+    http 000 on every run, so ingest-stall / doc-rejects / cluster-status /
+    backup-freshness were permanently BLIND on exactly the TLS installs that
+    carry customer data — reported as the useless guess "TLS/auth mismatch?".
+
+    Pinned here rather than in a run-test because the tempting "fix" (-k) makes
+    the symptom disappear while converting a real MITM or a misissued cert into
+    a silent pass — the §16.1 defect class this repo exists to kill.
+    """
+    text = WATCHDOG.read_text()
+
+    tls_urls = re.findall(r'OS_PROBE_URL="(https://[^"]+)"', text)
+    assert tls_urls, "the TLS OpenSearch probe URL assignment disappeared"
+    for url in tls_urls:
+        host = url.split("://", 1)[1].split(":")[0].split("/")[0]
+        assert host == "opensearch", (
+            f"OS_PROBE_URL {url!r} uses host {host!r}; the OpenSearch cert's "
+            "SAN set is DNS:opensearch + a SPIFFE URI, so any other name fails "
+            "hostname verification (curl 60 / http 000)")
+
+    # The plaintext default must survive: the probe must not become TLS-only.
+    assert 'OS_PROBE_URL="http://' in text, \
+        "plaintext installs still need a plain http OpenSearch probe"
+
+    # No insecure escape hatch anywhere in the watchdog, in ANY of its three
+    # spellings: the `-k`/`--insecure` flags and the `insecure` curl --config
+    # directive (the probes are built as config files, so the directive is the
+    # form that would actually be reached for).
+    for ln in text.splitlines():
+        if ln.strip().startswith("#"):
+            continue
+        assert "insecure" not in ln, (
+            "-k/--insecure/`insecure` must never appear in a probe — it turns a "
+            "real MITM or a misissued cert into a silent pass (§16.1): "
+            f"{ln.strip()}")
+        assert not re.search(r'curl\b[^|;#]*(^|\s)-[A-Za-z]*k(\s|$)', ln), \
+            f"curl -k must never appear in a probe: {ln.strip()}"
+
+
+def test_os_blind_run_names_the_evidenced_cause_not_a_guess():
+    """A BLIND run must self-test and report WHICH failure it is, from curl's
+    own exit code + http status — not the old "(TLS/auth mismatch? probe
+    fault?)" guess. All four branches must exist and be evidence-keyed."""
+    text = WATCHDOG.read_text()
+    assert "os_probe_diag" in text, "the blind-run self-test is gone"
+    code = "\n".join(ln for ln in text.splitlines()
+                     if not ln.strip().startswith("#"))
+    assert "TLS/auth mismatch?" not in code, \
+        "the guess must stay replaced by a measured cause"
+    for token in ("TLS_HOSTNAME", "TLS_CA", "AUTH", "UNREACHABLE", "UNCLASSIFIED"):
+        assert f'os_diag_class="{token}"' in text, \
+            f"os_probe_diag lost its {token} branch"
+    # The $? trap: the exit code must be captured on its own line, never read
+    # after an `if ! out=$(...)` (where it is the *if*'s status, always 0).
+    assert re.search(r'^\s*os_diag_rc=\$\?', text, re.M), \
+        "curl's exit code must be captured explicitly on its own line"
+    assert not re.search(r'if\s*!\s*out=\$\(.*\)\s*;?\s*then', text)
+    # problem_key hashes the first 160 chars with digits stripped. The self-test
+    # CLASS and the raw codes may ride the problem text (a change of cause SHOULD
+    # mint a new class); the run-varying curl message must NOT, or every minute
+    # of a standing outage would re-push. Same discipline as API_UNRESPONSIVE.
+    blind = next(ln for ln in text.splitlines()
+                 if "OPENSEARCH_UNVERIFIABLE (self-test:" in ln)
+    assert "os_diag_detail" not in blind, \
+        "run-varying self-test detail must go to the log, not the problem text"
+    assert "os_diag_class" in blind and "os_diag_rc" in blind
+    head = blind.split("no parsable reply", 1)[0]
+    assert "os_diag_class" in head, \
+        "the cause class must land inside problem_key's 160-char window"
 
 
 # ---------------------------------------------------------------------------

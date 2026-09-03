@@ -1,0 +1,218 @@
+# promtool unit tests for the three false-positive fixes of 2026-09-03.
+#
+# WHY THIS FILE EXISTS. vmalert ran `-notifier.blackhole` until 2026-09-02, so
+# no rule in rules.yaml had ever been judged by whether a HUMAN would accept
+# being woken by it. The first real delivery run produced three permanent
+# CRITICALs on a healthy lab:
+#
+#   · CorrProbeLaneFlatlined     — the prober has no targets here, so the lane
+#                                  is legitimately flat and the rule's premise
+#                                  ("the prober ticks 24/7") was false.
+#   · VectorOpenSearchRetryStorm — the LHS selector caught vector-aggregator's
+#                                  two OpenSearch http_client SOURCES, which by
+#                                  construction can never have the sink-side
+#                                  partner the `unless` needs, so it fired 24/7.
+#   · LogIngestRateDegraded      — a syslog-ng restart's Kafka-backlog drain
+#                                  spike poisoned the MEAN baseline for 6 h and
+#                                  fired the rule on a healthy pipeline.
+#
+# Every one of those is the cries-wolf → pager-muted → platform-blind failure
+# mode the whole engine-liveness programme exists to prevent, so each fix is
+# proved in BOTH directions here: it still FIRES on the real fault, and it stays
+# SILENT on the exact false-positive shape that prompted the change. Run by
+# scripts/preflight-configs.sh (promtool test rules); paths are as mounted by
+# that docker run.
+rule_files:
+  - /etc/prometheus/rules.yaml
+  - /etc/prometheus/rules-scale-slo.yaml
+
+evaluation_interval: 1m
+
+tests:
+  # ==========================================================================
+  # 1) CorrProbeLaneFlatlined — expected-activity guard
+  # ==========================================================================
+
+  # 1a) STILL FIRES on the real fault: a lane that WAS delivering probes and
+  #     then stopped dead. This is the 2026-09-02 shape (the engine's Kafka
+  #     consumer never rejoined the group after a failed multi-topic subscribe),
+  #     and it must stay a 15-minute critical — the guard is not allowed to cost
+  #     any sensitivity on a deployment that genuinely probes.
+  - interval: 1m
+    input_series:
+      # 40 min of a healthy prober (one probe every ~6 s → +10/min), then flat.
+      - series: 'corr_ingest_events{counter="probes_received",instance="172.18.0.6:8443",job="correlation"}'
+        values: "0+10x40 400x45"
+    alert_rule_test:
+      # Still healthy at 30m — nothing may fire while the counter is moving.
+      - eval_time: 30m
+        alertname: CorrProbeLaneFlatlined
+        exp_alerts: []
+      # Flat since t=40m; increase[15m] hits 0 at ~t=55m, for:15m ⇒ firing by
+      # t=70m. The 24h guard passes because the lane delivered 400 probes.
+      - eval_time: 80m
+        alertname: CorrProbeLaneFlatlined
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              layer: correlation
+              counter: probes_received
+              instance: "172.18.0.6:8443"
+              job: correlation
+            exp_annotations:
+              summary: "Correlation probe intake flat-lined 30m — bus→engine ingest is dead; MOST LIKELY the engine is not consuming (dead Kafka consumer), then vector, then kafka"
+              description: "The single most common cause is THE ENGINE IS NOT CONSUMING: its Kafka consumer never joined the group, or joined and died. That is what happened on 2026-09-02 (a failed multi-topic subscribe took all 14 lanes down for one optional topic) and this alert fired at 19:18 — into a blackhole notifier, so nobody saw it. Check CorrelationConsumerDead and kafka_consumergroup_members{consumergroup=\"netops-correlation\"} FIRST; the container healthcheck will read \"healthy\" throughout and is not evidence of anything here. Only after ruling the consumer out should you work back up the pipe: vector-router, then the broker, then the prober itself."
+              runbook: "docs/runbooks/engine-not-consuming.md"
+
+  # 1b) STAYS SILENT on the false positive: the idle lab. The prober container
+  #     is UP (so the counter series exists and is scraped) but every
+  #     active-measurement feature is off with empty *_TARGETS, so the counter
+  #     is a hard 0 forever — exactly what the live store reads today. Without
+  #     the trailing-24h guard this is a permanent CRITICAL on a healthy stack.
+  - interval: 1m
+    input_series:
+      - series: 'corr_ingest_events{counter="probes_received",instance="172.18.0.6:8443",job="correlation"}'
+        values: "0x120"
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: CorrProbeLaneFlatlined
+        exp_alerts: []
+      - eval_time: 80m
+        alertname: CorrProbeLaneFlatlined
+        exp_alerts: []
+      - eval_time: 115m
+        alertname: CorrProbeLaneFlatlined
+        exp_alerts: []
+
+  # ==========================================================================
+  # 2) VectorOpenSearchRetryStorm — selector pinned to the sink
+  # ==========================================================================
+
+  # 2a) STILL FIRES on the real poison-stall: a bulk SINK issuing requests for
+  #     10m while delivering nothing (sent_events ABSENT, not zero — `unless`
+  #     must survive that, `== 0` would match nothing and read as coverage).
+  - interval: 1m
+    input_series:
+      - series: 'vector_http_client_requests_sent_total{component_id="opensearch_applogs",component_kind="sink",component_type="elasticsearch",method="POST",instance="vector-router:9598"}'
+        values: "0+1100x30"
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: VectorOpenSearchRetryStorm
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              layer: ingest
+              component_id: opensearch_applogs
+              component_kind: sink
+              component_type: elasticsearch
+              method: POST
+              instance: "vector-router:9598"
+            exp_annotations:
+              summary: "Vector sink opensearch_applogs has been issuing bulk requests for 10m and delivering NOTHING — it is stuck retrying"
+              description: "Either OpenSearch is refusing writes (see OpenSearchFloodStageBlock and disk headroom) or a permanently-rejected document is poisoning the batch: request_retry_partial retries the whole batch and cannot tell a transient 429 from a per-item 400. The lane is STALLED, not losing — Kafka holds 72h and the batch is dropped after the ~43min retry envelope. Identify the poison with GET _nodes/stats/indices/indexing (doc_status.4xx) and the router's bulk error log, then fix the lane's template or drop the offending key in its transform (the del(.label) precedent in vector/vector.yaml)."
+
+  # 2b) STAYS SILENT on the false positive that caused the 2026-09-02T01:02
+  #     permanent firing: vector-aggregator's OpenSearch http_client SOURCES.
+  #     These are the cluster-health and indexing-stats pollers — they GET every
+  #     15 s forever and their sent_events series carries component_kind=
+  #     "source", so the sink-pinned RHS could never subtract them. Verbatim
+  #     label sets from the live store.
+  - interval: 1m
+    input_series:
+      - series: 'vector_http_client_requests_sent_total{component_id="opensearch_cluster_health",component_kind="source",component_type="http_client",method="GET",instance="vector-aggregator:9598",host="de6eed2b32b8",job="vector"}'
+        values: "0+4x40"
+      - series: 'vector_component_sent_events_total{component_id="opensearch_cluster_health",component_kind="source",component_type="http_client",output="_default",instance="vector-aggregator:9598",host="de6eed2b32b8",job="vector"}'
+        values: "0+4x40"
+      - series: 'vector_http_client_requests_sent_total{component_id="opensearch_indexing_stats",component_kind="source",component_type="http_client",method="GET",instance="vector-aggregator:9598",host="de6eed2b32b8",job="vector"}'
+        values: "0+4x40"
+      - series: 'vector_component_sent_events_total{component_id="opensearch_indexing_stats",component_kind="source",component_type="http_client",output="_default",instance="vector-aggregator:9598",host="de6eed2b32b8",job="vector"}'
+        values: "0+4x40"
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: VectorOpenSearchRetryStorm
+        exp_alerts: []
+      - eval_time: 35m
+        alertname: VectorOpenSearchRetryStorm
+        exp_alerts: []
+
+  # 2c) A storm that ENDED must RESOLVE. The sink retries hard for 15m and then
+  #     the lane goes quiet (OpenSearch recovered and the router has nothing
+  #     left to push, or the batch was finally dropped): increase() over the 10m
+  #     window decays to 0 and the alert must be gone — it must NOT stay latched
+  #     the way the live one appeared to. Asserted at 30m, i.e. 15m of quiet.
+  - interval: 1m
+    input_series:
+      - series: 'vector_http_client_requests_sent_total{component_id="opensearch_syslog",component_kind="sink",component_type="elasticsearch",method="POST",instance="vector-router:9598"}'
+        values: "0+1100x15 16500x30"
+    alert_rule_test:
+      # mid-storm: firing, so the "resolved" assertion below is not vacuous.
+      - eval_time: 14m
+        alertname: VectorOpenSearchRetryStorm
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              layer: ingest
+              component_id: opensearch_syslog
+              component_kind: sink
+              component_type: elasticsearch
+              method: POST
+              instance: "vector-router:9598"
+            exp_annotations:
+              summary: "Vector sink opensearch_syslog has been issuing bulk requests for 10m and delivering NOTHING — it is stuck retrying"
+              description: "Either OpenSearch is refusing writes (see OpenSearchFloodStageBlock and disk headroom) or a permanently-rejected document is poisoning the batch: request_retry_partial retries the whole batch and cannot tell a transient 429 from a per-item 400. The lane is STALLED, not losing — Kafka holds 72h and the batch is dropped after the ~43min retry envelope. Identify the poison with GET _nodes/stats/indices/indexing (doc_status.4xx) and the router's bulk error log, then fix the lane's template or drop the offending key in its transform (the del(.label) precedent in vector/vector.yaml)."
+      - eval_time: 30m
+        alertname: VectorOpenSearchRetryStorm
+        exp_alerts: []
+
+  # ==========================================================================
+  # 3) LogIngestRateDegraded — median baseline + for: 45m
+  # ==========================================================================
+
+  # 3a) STILL FIRES on the real F-19 fault: a SUSTAINED partial hole. 3 h of
+  #     healthy ~9,000 docs/15m, then the rate drops to ~3,000/15m (a third) and
+  #     STAYS there. The median baseline is still ~9,000, so the rule crosses
+  #     the 50% line at ~3h15m and, after for:45m, is firing by 4h.
+  - interval: 5m
+    input_series:
+      # 600 docs/min for 3 h (36 x 5m), then 200 docs/min for 2 h.
+      - series: 'opensearch_indexing_doc_status{code="2xx",node="172.18.0.15"}'
+        values: "0+3000x36 108000+1000x24"
+    alert_rule_test:
+      - eval_time: 2h
+        alertname: LogIngestRateDegraded
+        exp_alerts: []
+      - eval_time: 4h30m
+        alertname: LogIngestRateDegraded
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              layer: ingest
+            exp_annotations:
+              summary: "Log indexing rate has been under half its 6h MEDIAN baseline for 45m (3000 docs/15m) — sustained partial ingest loss, not a stall"
+              description: "A total stall is caught by LogIngestStalled and the watchdog; this is the PARTIAL shape that hid for weeks. Baseline is a MEDIAN on purpose — a restart's Kafka-backlog drain spike used to poison a mean baseline for 6h and fire this on a healthy pipeline (2026-09-03), so if you are reading this within an hour of a syslog-ng/router restart, confirm against the raw series before chasing it. Check vector-router discards, Kafka consumer lag, and OpenSearch rejections."
+
+  # 3b) STAYS SILENT on the false positive: the syslog-ng restart, replayed from
+  #     the live-store measurement of 2026-09-02/03.
+  #       0h–2h    ~9,000 docs/15m   steady state
+  #       2h–2h30  0                 restart + stall (LogIngestStalled owns this)
+  #       2h30–2h45 ~200,000/15m     Kafka backlog drains in one bucket
+  #       2h45–5h  ~5,400/15m        healthy steady state again
+  #     Two assertions, one per half of the defect:
+  #       · at 2h40 the DIP must not have paged — it was true for only ~30 min
+  #         and for:45m outlives it (the total stop is LogIngestStalled's job).
+  #       · at 5h the RECOVERY must not be paging — under the old mean baseline
+  #         the drain spike alone lifted the baseline to ~17,700 against a real
+  #         rate of ~5,400 and this fired for 4 h on a healthy pipeline. The
+  #         median is unmoved by a single outlier bucket, so it stays silent.
+  - interval: 5m
+    input_series:
+      # 600/min x 2h | 0/min x 30m | 13,333/min x 15m | 360/min x 2h15m
+      - series: 'opensearch_indexing_doc_status{code="2xx",node="172.18.0.15"}'
+        values: "0+3000x24 72000x6 72000+66665x3 272000+1800x27"
+    alert_rule_test:
+      - eval_time: 2h40m
+        alertname: LogIngestRateDegraded
+        exp_alerts: []
+      - eval_time: 5h
+        alertname: LogIngestRateDegraded
+        exp_alerts: []
