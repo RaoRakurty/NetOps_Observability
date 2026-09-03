@@ -51,4 +51,22 @@ Dates are 2026-09-03 unless stated. Rows are DELETED when shipped (tracker rule)
 
 ## D. Owner-visible status (updated each day)
 
-**2026-09-03 end of day:** A1–A3, A5, B2–B3, C1–C3 in flight; A4, A6 queued behind them; A7 and the release tag/publish are yours. Owner 2026-09-03 night: **commit + push + CI green authorized at end of work**; running autonomously overnight; scenario tests (docs/qa/scenarios/) gate every closure. First status report due 2026-09-04.
+**2026-09-04 morning (overnight autonomous run, 2026-09-03 23:00 → 2026-09-04 07:30 UTC).**
+
+Landed on `feat/observability-platform` and PUSHED (remote moved 88ee2947 → a7c6c5a3, 30 commits, ~120 including the day's earlier work). Deployed to the lab three times from clean checkouts; final deploy qualified 10/10 by `deploy-qualify.sh`. Full gate on the pushed tree, run in an isolated worktree: Go build/vet/all tests/staticcheck/govulncheck/golangci-lint 2.12.2 (0 issues), pytest 1 749, correlation pytest 3 596, tsc, vitest 2 242, docs-portal 13/13 — all green. GitHub Actions: see the line at the bottom.
+
+What you asked for, where it stands:
+- **BGP page tested** → ✅ one-page outage screen shipped; live proof (`docs/qa/scenarios/live-proof-2026-09-03.md`): watched RIPE invalid prefix → one `rpki_invalid` alert → Kafka → correlation row under the lab tenant; bogon sighting sub-second from a synthetic BMP session; second tenant sees nothing. Feed lookback fixed (RIPEstat runs ~3 h behind; status now says so).
+- **Security tested, all elements** → ✅ chain proven wire→finding→grounded→correlated story in 73 s; verdicts are real (15 findings/spine with the predicted 6 FAILs, was 32 Unknown); compliance is a per-tenant opt-in catalogue with HIPAA; every High defect the run found is fixed (exposure-stories list, findings detail, stale-finding supersession, SR Linux threat patterns + advisory + CLI dialect, vmalert secret in `docker inspect`, resolved alerts never recognised). Open: tracker 228–233.
+- **`/code-review ultra`** → 👤 yours to launch (A7). Local `/code-review` (A6) not run — the branch changed until 07:20; run it on the pushed head.
+- **Docs: last updated / diff / humanized** → ✅ portal was 64 days stale (56 of 71 pages from 2026-07-01); now 132 pages in a measured Fortinet/PAN-OS/CrowdStrike voice with real captures, enforced by tests. No screenshots yet.
+- **Package ready to ship + release docs** → ✅ answered: NOT ready for a final tag; ready for `v0.9.0-rc1` after three small items (C1). Release checklist, CHANGELOG, release notes, SBOMs committed. **No LICENSE file at either root — your decision.**
+- **Open-source licence obligations** → ✅ none that bind Correlix's code; five attribution gaps fixed and shipped in every artifact; six decisions for you (tracker 227).
+- **Automate patching** → ✅ plan + Renovate config + offline-build gate + patch-train runbook; you enable it (`RENOVATE_TOKEN`, delete dependabot.yml).
+- **Free vs licensed tiers** → 👤 `docs/design/TIERING_PLAN_2026-09-03.md`, cut lines marked for you.
+
+Found and fixed along the way (none were on the list): the Iris feedback store panicked on every rating (P0, memory loop dead); every deploy re-paged all still-firing alerts and the product channel's retries starved the host-monitoring page reserve (ntfy limits per source IP); host disk at 94 % (log bounds on 8 of 37 services, ClickHouse logging inside its container layer) → 85 % and bounded; audit trail lost events to a temp-file race; docs retrieval answered off-topic questions.
+
+Needs you: tracker 227 (licence decisions), 232–233 (lab SNMP + stale Unknowns), C4 tiering, LICENSE file, the rc1 tag, `/code-review ultra`, OpenSearch snapshot repository recreate (tracker 225 — the last 14 restore points are silently unrestorable).
+
+**CI on a7c6c5a3:** (filled in below when the runs finish)
