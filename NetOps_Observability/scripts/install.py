@@ -2199,126 +2199,55 @@ def apply_bus_authorization(compose_dir: Path, env_path: Path,
 
 
 def bootstrap_opensearch(root: Path, tls: bool = False) -> None:
-    """Apply index templates after the stack is up. Non-fatal on error —
-    OpenSearch may still be starting; the user can re-run the script.
+    """Apply index templates after the stack is up, by CALLING the one owner:
+    scripts/bootstrap-opensearch.sh. Non-fatal on error — OpenSearch may still
+    be starting; the operator can re-run the script.
 
-    TLS installs (SEC-008): the security plugin is on, so the probe and every
-    template PUT ride https with the svc_bootstrap credential. The credential
-    is read from the CONTAINER's own environment inside `sh -c` (never argv —
-    argv is world-readable in /proc). Readiness must wait for the SEEDED
-    security config (the opensearch-security-init one-shot), not just the TLS
-    listener: an authenticated 200 proves both."""
+    2026-09-03: this function used to carry its OWN copy of the template-PUT
+    loop (`_bootstrap_opensearch_via_exec`) alongside the script's. The copies
+    drifted — install.py learned the SEC-008 https/svc_bootstrap path and the
+    script did not, so `bootstrap-opensearch.sh` (which update.sh and every
+    upgrade runbook call) was BLIND on TLS installs and reported all nine
+    templates "NOT applied". One owner now: the script detects the variant from
+    COMPOSE_FILE, authenticates the same way this code did, and fails loud.
+    """
     script = root / "scripts" / "bootstrap-opensearch.sh"
     if not script.exists():
         warn("bootstrap-opensearch.sh missing; skipping")
         return
-    # Hit the cluster from inside via docker exec since :9200 isn't exposed.
     compose_dir = root / "deployment" / "docker"
-    if tls:
-        # opensearch-security-init needs OS healthy + securityadmin runtime
-        # (~40s); 90 attempts x 2s bounds the wait at 3 minutes.
-        ready_sh = (
-            "for i in $(seq 1 90); do "
-            'curl -sf --cacert /usr/share/opensearch/config/tls/ca.pem '
-            '-u "svc_bootstrap:$OS_BOOTSTRAP_PASSWORD" '
-            "https://opensearch:9200/_cluster/health >/dev/null && exit 0; "
-            "sleep 2; done; exit 1"
-        )
-        cmd = ["docker", "compose", "exec", "-T",
-               "--env", "OS_BOOTSTRAP_PASSWORD",
-               "opensearch", "bash", "-c", ready_sh]
-    else:
-        cmd = [
-            "docker", "compose", "exec", "-T", "opensearch",
-            "bash", "-lc",
-            ("for i in $(seq 1 30); do "
-             "curl -sf http://localhost:9200/_cluster/health >/dev/null && break; "
-             "sleep 2; done; echo opensearch ready"),
-        ]
     env = {**os.environ}
-    if tls:
-        env["OS_BOOTSTRAP_PASSWORD"] = _parse_env(
-            compose_dir / ".env").get("OS_BOOTSTRAP_PASSWORD", "")
-        if not env["OS_BOOTSTRAP_PASSWORD"]:
-            warn("OS_BOOTSTRAP_PASSWORD missing from .env — cannot bootstrap "
-                 "templates on a secured cluster; re-run the installer")
-            return
-    res = subprocess.run(cmd, cwd=str(compose_dir), env=env,
-                         capture_output=True, text=True, check=False)
-    if res.returncode != 0:
-        warn(f"opensearch not ready (skipping templates): {res.stderr.strip()}")
+    # The script re-detects TLS from .env itself; drop any inherited
+    # OPENSEARCH_URL so a stale plaintext value cannot steer it.
+    env.pop("OPENSEARCH_URL", None)
+    env["OPENSEARCH_REPLICAS"] = _parse_env(compose_dir / ".env").get(
+        "OPENSEARCH_REPLICAS", "0")
+    # §9: bounded. The script's own readiness wait is 60s and nine PUTs are
+    # fast, so 10 minutes is generous; a wedged docker must not hang install.
+    try:
+        res = subprocess.run(["bash", str(script)], cwd=str(root), env=env,
+                             capture_output=True, text=True, check=False,
+                             timeout=600)
+    except subprocess.TimeoutExpired:
+        warn("bootstrap-opensearch.sh did not finish within 600s — index "
+             "templates were NOT applied")
         info("re-run after a minute: scripts/bootstrap-opensearch.sh")
         return
-    if tls:
-        _bootstrap_opensearch_via_exec(root, tls=True)
-        return
-    # Run the bootstrap from the host (it shells curl + python3 inline).
-    res = subprocess.run(
-        ["bash", str(script)],
-        env={**os.environ, "OPENSEARCH_URL": "http://localhost:9200"},
-        # OpenSearch isn't reachable on the host by default — we need
-        # docker compose port forwarding OR we copy templates from inside.
-        # For now, do it from inside the container.
-        capture_output=True, text=True, check=False,
-    )
+    # The script names the transport it chose and every template it applied;
+    # surface that verdict rather than a bare ok/warn (§16.1 — a bare "Done."
+    # has hidden a fully-failed run before). `tls` is not passed down: the
+    # script re-detects the variant from COMPOSE_FILE, which is the single
+    # on-disk statement of it, so the two can never disagree.
+    for line in (res.stdout or "").splitlines():
+        if line.startswith(("APPLIED", "FAILED", "Transport:", "!!")):
+            info(line)
     if res.returncode != 0:
-        # Fallback: apply each template via docker exec curl.
-        warn("host-side bootstrap failed; falling back to docker exec")
-        _bootstrap_opensearch_via_exec(root)
+        detail = (res.stderr or "").strip() or (res.stdout or "").strip()
+        last = detail.splitlines()[-1] if detail else "see the output above"
+        warn(f"index templates NOT fully applied (tls={tls}): {last}")
+        info("re-run after a minute: scripts/bootstrap-opensearch.sh")
         return
     ok("index templates applied")
-
-
-def _bootstrap_opensearch_via_exec(root: Path, tls: bool = False) -> None:
-    """Apply index templates from inside the opensearch container.
-
-    TLS (SEC-008): https + svc_bootstrap basic auth, CA-validated. The
-    credential is expanded from the exec's OWN environment inside `sh -c`
-    (never on argv), and the template body arrives on stdin (`-d @-`)."""
-    import json as _json
-    compose_dir = root / "deployment" / "docker"
-    tpl_path = root / "deployment" / "docker" / "opensearch" / "index-templates.json"
-    if not tpl_path.exists():
-        warn("index-templates.json missing")
-        return
-    env = {**os.environ}
-    if tls:
-        env["OS_BOOTSTRAP_PASSWORD"] = _parse_env(
-            compose_dir / ".env").get("OS_BOOTSTRAP_PASSWORD", "")
-    data = _json.loads(tpl_path.read_text())
-    for name, body in (data.get("templates") or {}).items():
-        # §3: the name is interpolated into a shell line below — refuse
-        # anything that isn't a plain index-template identifier.
-        if not re.fullmatch(r"[A-Za-z0-9._-]+", name):
-            warn(f"template name {name!r} is not a valid identifier; skipping")
-            continue
-        body_json = _json.dumps(body)
-        if tls:
-            put_sh = (
-                'curl -sf --cacert /usr/share/opensearch/config/tls/ca.pem '
-                '-u "svc_bootstrap:$OS_BOOTSTRAP_PASSWORD" -X PUT '
-                f'"https://opensearch:9200/_index_template/{name}" '
-                '-H "Content-Type: application/json" -d @-'
-            )
-            cmd = ["docker", "compose", "exec", "-T",
-                   "--env", "OS_BOOTSTRAP_PASSWORD",
-                   "opensearch", "sh", "-c", put_sh]
-            res = subprocess.run(cmd, cwd=str(compose_dir), env=env,
-                                 input=body_json, capture_output=True, text=True, check=False)
-        else:
-            cmd = [
-                "docker", "compose", "exec", "-T", "opensearch",
-                "curl", "-sf", "-X", "PUT",
-                f"http://localhost:9200/_index_template/{name}",
-                "-H", "Content-Type: application/json",
-                "-d", body_json,
-            ]
-            res = subprocess.run(cmd, cwd=str(compose_dir),
-                                 capture_output=True, text=True, check=False)
-        if res.returncode == 0:
-            ok(f"template applied: {name}")
-        else:
-            warn(f"template {name}: {res.stderr.strip()}")
 
 
 # Postgres identifiers this installer will interpolate into SQL/shell. Both

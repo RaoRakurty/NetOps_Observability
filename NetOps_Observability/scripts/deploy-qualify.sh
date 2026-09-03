@@ -139,6 +139,14 @@ WHAT IT DOES
                                 partition increase-only).
     B3  OpenSearch ISM policy   one-shot opensearch-init (apply-ism.sh; PUTs
                                 replace, so re-running converges).
+    B4  Router lanes writable   READ-ONLY audit (bootstrap-opensearch.sh
+                                --verify): every index pattern vector-router
+                                sinks to is covered by svc_router's
+                                `netops_writer` role, and every declared index
+                                template exists in the live cluster. Writes
+                                nothing. An upgrade that adds a lane but not
+                                its role entry makes that lane silently
+                                write-dead (netops-secfindings, 2026-09-03).
     B2 is CHECK-FIRST: it reads the topic list and re-runs the one-shot only
     when a topic is actually missing (an unconditional re-run costs ~40 JVM
     starts to change nothing). Verdicts come from the topic list, never from
@@ -600,6 +608,7 @@ if [ "$RUN_BOOTSTRAP" -eq 0 ]; then
   record SKIP ADVISORY "B1 kafka ACL matrix"    "--no-bootstrap was passed"
   record SKIP ADVISORY "B2 kafka-init topics"   "--no-bootstrap was passed"
   record SKIP ADVISORY "B3 opensearch-init ISM" "--no-bootstrap was passed"
+  record SKIP ADVISORY "B4 router lanes writable" "--no-bootstrap was passed"
 elif [ "$HAVE_TIMEOUT" -eq 0 ]; then
   # apply-ism.sh blocks in `until curl -sf .../_cluster/health; do sleep 5; done`
   # with no ceiling of its own. Without `timeout` there is nothing to bound it,
@@ -607,6 +616,7 @@ elif [ "$HAVE_TIMEOUT" -eq 0 ]; then
   record SKIP REQUIRED "B1 kafka ACL matrix"    "'timeout' not on PATH — refusing to run an unbounded bootstrap"
   record SKIP REQUIRED "B2 kafka-init topics"   "'timeout' not on PATH — refusing to run an unbounded bootstrap"
   record SKIP REQUIRED "B3 opensearch-init ISM" "'timeout' not on PATH — refusing to run an unbounded bootstrap"
+  record SKIP REQUIRED "B4 router lanes writable" "'timeout' not on PATH — refusing to run an unbounded check"
 else
   # ---- B1: the Kafka ACL matrix -------------------------------------------
   if ! have_time; then
@@ -739,6 +749,50 @@ else
     # PUTs with no single queryable summary — so this one always runs, bounded.
     # `|| true`: the FAIL verdict is already recorded inside run_oneshot.
     run_oneshot "B3" "opensearch-init ISM" opensearch-init || true
+  fi
+
+  # ---- B4: every router sink lane is WRITABLE and has its template ---------
+  # 2026-09-03, found on the lab while attesting the security findings lane:
+  # an UPGRADE that adds a lane adds a vector-router sink and an index template,
+  # but the OpenSearch ROLE that lets svc_router create that index is a separate
+  # file applied by a separate one-shot. netops-secfindings-* was missing from
+  # `netops_writer`, so every bulk write 403'd on `indices:admin/create`, Vector
+  # classed it non-retriable and DROPPED the batch — no index, no consumer lag,
+  # nothing red. B1/B2/B3 all passed on that stack. This is the check that would
+  # not have.
+  #
+  # READ-ONLY: it PUTs nothing and restarts nothing. The work lives in
+  # bootstrap-opensearch.sh --verify so the gate and the bootstrap cannot
+  # disagree about what a healthy lane looks like; that script detects the TLS
+  # variant from COMPOSE_FILE and authenticates as svc_bootstrap, CA-verified.
+  # Bounded like B1/B2 (`bound`, clamped to the global budget).
+  OS_VERIFY="$REPO_ROOT/scripts/bootstrap-opensearch.sh"
+  if [ -z "$OPENSEARCH_CID" ]; then
+    record SKIP REQUIRED "B4 router lanes writable" \
+      "no running 'opensearch' container in project '$PROJECT' — lane writability is UNKNOWN, not proven"
+  elif [ ! -f "$OS_VERIFY" ]; then
+    record SKIP REQUIRED "B4 router lanes writable" \
+      "scripts/bootstrap-opensearch.sh is missing from $REPO_ROOT — cannot audit lane writability"
+  elif ! have_time; then
+    deadline_skip "B4 router lanes writable"
+  else
+    b4_bound="$(clamp 120)"
+    set +e
+    b4_out="$(bound "$b4_bound" bash "$OS_VERIFY" --verify 2>&1)"
+    b4_rc=$?
+    set -e
+    if [ "$b4_rc" -eq 0 ]; then
+      record PASS REQUIRED "B4 router lanes writable" \
+        "$(printf '%s' "$b4_out" | grep -c '^  role: COVERED') lane(s) covered by netops_writer; $(printf '%s' "$b4_out" | grep -c '^  template: PRESENT') template(s) present"
+    elif [ "$b4_rc" -eq 124 ] || [ "$b4_rc" -eq 137 ]; then
+      record FAIL REQUIRED "B4 router lanes writable" "TIMED OUT after ${b4_bound}s"
+    else
+      record FAIL REQUIRED "B4 router lanes writable" \
+        "exit $b4_rc: $(oneline "$(printf '%s' "$b4_out" | grep -E '^(  role: UNCOVERED|  template: MISSING|!!|FATAL)' | head -4)")"
+      say "    ---- B4 output (redacted) ----"
+      printf '%s\n' "$b4_out" | redact | sed 's/^/    /'
+      say "    ---- end B4 output ----"
+    fi
   fi
 fi
 say ""

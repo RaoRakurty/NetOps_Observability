@@ -94,6 +94,17 @@ buzzes twice.
 
 ## 3. Triage — in this order
 
+> **Did a deploy just add or change a lane?** Then start at
+> [`upgrade-bootstraps.md`](upgrade-bootstraps.md) instead. A lane can be
+> *silent* rather than *stalled*: on 2026-09-03 the security-findings lane wrote
+> nothing because `netops-secfindings-*` was missing from the `netops_writer`
+> OpenSearch role — every bulk write 403'd on `indices:admin/create`, Vector
+> dropped the batch as non-retriable, and there was no lag, no rejected-doc
+> counter and no red healthcheck to see. That file lists every bootstrap an
+> upgraded stack must re-run (Kafka ACLs, kafka-init, opensearch-security-init,
+> index templates, ISM) and the one-command read-only audit
+> (`bash scripts/bootstrap-opensearch.sh --verify`).
+
 ### 3.1 Is it consuming? (30 seconds, no guessing)
 
 ```bash
@@ -232,4 +243,8 @@ it makes `AlertDeliveryBroken` silent rather than lying.
   `docker compose up` exiting 0 is not evidence of anything.
 * **`docs/runbooks/engine-liveness-matrix.md`** — what "doing its job" means for
   every service, the metric that proves it, and which layer covers it.
+* **`docs/runbooks/upgrade-bootstraps.md`** — the bootstraps an UPGRADED stack
+  must re-run when a deploy adds a lane, and `deploy-qualify.sh`'s B4 audit that
+  a lane is actually writable. A lane whose OpenSearch role was never updated is
+  silent, not stalled: none of the consumer/lag checks above will see it.
 * Never wipe `data/kafka` without re-running §3.3 immediately afterwards.

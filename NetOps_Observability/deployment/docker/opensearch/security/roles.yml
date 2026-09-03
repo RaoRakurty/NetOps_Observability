@@ -72,6 +72,15 @@ netops_writer:
         - "netops-snmptrap-*"
         - "netops-cloudlogs-*"
         - "netops-flows-*"
+        # P3-L1 security findings (netops.security → opensearch_secfindings).
+        # Missing from this list until 2026-09-03, which made the whole lane
+        # WRITE-DEAD on every TLS install: the bulk request 403'd with
+        # `no permissions for [indices:admin/create]`, Vector classed it
+        # non-retriable and DROPPED the batch — no index, no error anyone
+        # looked at, and the CTEM funnel silently empty. Same three actions as
+        # every other lane: write + create the daily index + let the template's
+        # mapping be installed on first write.
+        - "netops-secfindings-*"
         - "netops-deadletter-*"
         # F-11: TENANT_UNATTRIBUTABLE envelopes (payload sealed under the
         # quarantine key). Absent from this list, the sink 403s and

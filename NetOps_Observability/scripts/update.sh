@@ -311,15 +311,15 @@ step "recreating containers"
 
 if [[ -x "$ROOT/scripts/bootstrap-opensearch.sh" ]]; then
     step "applying OpenSearch index templates"
-    # Run via docker exec since OpenSearch isn't on the host network.
-    (cd "$COMPOSE_DIR" && docker compose exec -T opensearch bash -lc '
-        for i in $(seq 1 30); do
-            curl -sf http://localhost:9200/_cluster/health >/dev/null && break
-            sleep 2
-        done
-    ') || warn "OpenSearch not ready in time; re-run scripts/bootstrap-opensearch.sh later."
-    OPENSEARCH_URL=http://localhost:9200 bash "$ROOT/scripts/bootstrap-opensearch.sh" \
-        || warn "template apply failed; check manually."
+    # ONE owner (2026-09-03): bootstrap-opensearch.sh detects the variant from
+    # COMPOSE_FILE, waits for an AUTHENTICATED /_cluster/health, and applies
+    # every template in index-templates.json. The readiness loop and the
+    # `OPENSEARCH_URL=http://localhost:9200` override that used to live here
+    # were both plaintext-only, so on a TLS install this step probed a port
+    # that does not exist and then failed all nine templates — the exact
+    # blindness the script now owns and reports.
+    bash "$ROOT/scripts/bootstrap-opensearch.sh" \
+        || warn "template apply failed; see the APPLIED/FAILED lines above and re-run scripts/bootstrap-opensearch.sh"
 fi
 
 # ---- 8: reclaim superseded images --------------------------------------------
