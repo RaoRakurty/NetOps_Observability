@@ -128,34 +128,58 @@ def purl_quote(text: str) -> str:
     return "".join(out)
 
 
-def _git(*args: str) -> str | None:
-    """Run a git command with a fixed argv. Returns None if git cannot answer.
+def _git_in(root: Path, *args: str) -> str | None:
+    """Run a git command in `root` with a fixed argv. None if git cannot answer.
 
     No shell, no user-supplied arguments (CLAUDE.md §8). A missing git or a
-    non-repo directory is an expected condition, not an error — the caller
-    falls back — but any OTHER failure is surfaced by returning None and letting
-    the caller decide loudly.
+    non-repo directory is an expected condition, not an error — the caller falls
+    back — but any OTHER failure is surfaced by returning None and letting the
+    caller decide loudly.
     """
     try:
         res = subprocess.run(  # nosec B603 - fixed argv, shell=False
-            ["git", "-C", str(ROOT), *args],
+            ["git", "-C", str(root), *args],
             capture_output=True,
             text=True,
             timeout=30,
             check=False,
         )
-    except (OSError, subprocess.SubprocessError) as exc:
-        # Not swallowed (§16.1): the reason is named on stderr before the
-        # probe answers "no". A missing git or a non-repo directory is an
-        # EXPECTED condition the callers already handle by falling back — but a
-        # timeout, an exec failure or a resource limit is not, and the operator
-        # must be able to tell which of the two produced an unreproducible
-        # timestamp or a "0.0.0-unknown" version.
-        print(f"sbom: git {' '.join(args)} unavailable: {exc!r}", file=sys.stderr)
+    except (OSError, subprocess.SubprocessError):
         return None
     if res.returncode != 0:
         return None
     return res.stdout.strip() or None
+
+
+def _git(*args: str) -> str | None:
+    """`_git_in`, scoped to the product tree."""
+    return _git_in(ROOT, *args)
+
+
+def tracked_files(root: Path) -> set[str] | None:
+    """Every git-TRACKED path under `root`, relative and posix-style.
+
+    THE SBOM DESCRIBES THE TRACKED TREE, NOT THE WORKING DIRECTORY. That is not a
+    detail; it is the difference between a document that reproduces and one that
+    does not. Three compose overlays in this repo are gitignored generated/local
+    files — `compose.offline-images.yml`, `compose.lab.yml` and
+    `docker-compose.override.yml` — and between them carry 25 `image:` lines that
+    exist on a developer's box and in NO clean clone. Scanning them made the
+    committed SBOM describe one machine's working directory, so `--check` passed
+    locally and failed in CI on the very same commit.
+
+    This is the CORRECTNESS filter; SKIP_TREES below is a speed/robustness one.
+    Keep both: pruning `data/` also avoids racing a live storage volume, and a
+    tracked-file check alone would still walk it.
+
+    Returns None when git cannot answer (a source tarball, a vendored copy). The
+    caller then falls back to walking the tree AND SAYS SO on stderr, because a
+    silently different scan scope is precisely the failure this exists to remove.
+    """
+    out = _git_in(root, "ls-files", "-z")
+    if out is None:
+        return None
+    return {entry for entry in out.split("\x00") if entry}
 
 
 # The files whose CONTENT this SBOM describes. Provenance is derived from the
@@ -484,7 +508,11 @@ def _image_component(ref: str, class_name: str, origin: str) -> dict[str, Any]:
 
 
 def collect_images(root: Path = ROOT) -> list[dict[str, Any]]:
-    """Every image reference in the compose files and every Dockerfile FROM.
+    """Every image reference in the TRACKED compose files and Dockerfile FROMs.
+
+    Only git-tracked files are scanned (see `tracked_files`): a gitignored
+    overlay exists on one developer's machine and in no clean clone, so including
+    it would make the committed SBOM unreproducible.
 
     Locally-built images (`netops-*`, no registry) are included and flagged:
     they are not third-party supply chain, but omitting them would make the SBOM
@@ -493,6 +521,21 @@ def collect_images(root: Path = ROOT) -> list[dict[str, Any]]:
     docker_dir = root / "deployment" / "docker"
     if not docker_dir.is_dir():
         raise SbomError(f"required input missing: {docker_dir}")
+
+    tracked = tracked_files(root)
+    if tracked is None:
+        print(
+            "sbom: WARNING git unavailable \u2014 scanning the WORKING TREE, so "
+            "gitignored overlays may be included and the result may not "
+            "reproduce from a clean clone",
+            file=sys.stderr,
+        )
+
+    def scannable(path: Path) -> bool:
+        """True when git tracks `path` (or when git could not tell us)."""
+        if tracked is None:
+            return True
+        return path.relative_to(root).as_posix() in tracked
 
     seen: dict[str, dict[str, Any]] = {}
 
@@ -511,7 +554,7 @@ def collect_images(root: Path = ROOT) -> list[dict[str, Any]]:
                 prop["value"] = f"{prop['value']},{origin}"
 
     for path in sorted(docker_dir.glob("*.yml")):
-        if not _COMPOSE_RE.match(path.name):
+        if not _COMPOSE_RE.match(path.name) or not scannable(path):
             continue
         service = "?"
         for line in path.read_text(encoding="utf-8").splitlines():
@@ -537,6 +580,8 @@ def collect_images(root: Path = ROOT) -> list[dict[str, Any]]:
     for path in sorted(dockerfiles):
         if not path.is_file():
             continue  # a dangling symlink; the sorted list above is the truth
+        if not scannable(path):
+            continue
         rel = path.relative_to(root)
         for line in path.read_text(encoding="utf-8").splitlines():
             if match := _FROM_RE.match(line):

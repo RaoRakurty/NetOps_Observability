@@ -343,6 +343,66 @@ def test_images_flag_digest_pinning_honestly(fake_repo: Path):
     assert pinned["postgres:16-alpine"] == "false"
 
 
+def _git_init_and_add(root: Path, *paths: str) -> None:
+    """A real git repo whose INDEX is the tracked set. No commit is needed —
+    `git ls-files` reads the index, which is what `tracked_files` queries."""
+    def run(*a: str) -> None:
+        subprocess.run(
+            ["git", "-C", str(root), *a], check=True, capture_output=True, text=True
+        )
+
+    run("init", "-q")
+    run("config", "user.email", "t@t")
+    run("config", "user.name", "t")
+    run("add", "--", *paths)
+
+
+def test_scan_ignores_an_untracked_compose_overlay(fake_repo: Path):
+    """The regression that made CI red while `--check` passed locally.
+
+    `compose.offline-images.yml`, `compose.lab.yml` and
+    `docker-compose.override.yml` are all GITIGNORED in the real repo — generated
+    or site-local files that exist on a developer's box and in no clean clone.
+    Scanning them made the committed SBOM describe one working directory.
+    """
+    docker = fake_repo / "deployment" / "docker"
+    (docker / "compose.offline-images.yml").write_text(
+        "services:\n  ghost:\n    image: ghost/only-in-a-working-tree:v9\n"
+    )
+    _git_init_and_add(
+        fake_repo,
+        "deployment/docker/docker-compose.yml",
+        "deployment/docker/Dockerfile.backend",
+    )
+
+    refs = {
+        p["value"]
+        for c in sbom.collect_images(fake_repo)
+        for p in c["properties"]
+        if p["name"] == "correlix:image:ref"
+    }
+    assert not any("only-in-a-working-tree" in r for r in refs), (
+        "an untracked overlay reached the SBOM"
+    )
+    # The tracked files are still scanned.
+    assert any(r.startswith("postgres:16-alpine@sha256:") for r in refs)
+    assert any(r.startswith("apache/kafka:") for r in refs)
+
+
+def test_tracked_files_returns_none_outside_a_git_checkout(tmp_path: Path):
+    """A source tarball has no git. The scan must fall back, not crash."""
+    assert sbom.tracked_files(tmp_path) is None
+
+
+def test_scan_falls_back_to_the_walk_without_git(fake_repo: Path, capsys):
+    """No git => every file is scanned, and the WARNING says so (§16.1: a
+    silently different scan scope is the failure this guard exists to remove)."""
+    assert sbom.tracked_files(fake_repo) is None
+    components = sbom.collect_images(fake_repo)
+    assert components
+    assert "WARNING git unavailable" in capsys.readouterr().err
+
+
 def test_images_skip_scratch_and_compose_variables(fake_repo: Path):
     refs = {
         p["value"]

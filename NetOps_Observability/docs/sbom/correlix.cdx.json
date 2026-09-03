@@ -1,10 +1,10 @@
 {
   "bomFormat": "CycloneDX",
   "specVersion": "1.6",
-  "serialNumber": "urn:uuid:a28adc7e-c939-5638-af3b-06ba6c93367d",
+  "serialNumber": "urn:uuid:5421382a-8bdc-5a3a-9707-1648d699eb06",
   "version": 1,
   "metadata": {
-    "timestamp": "2026-09-03T06:15:15+00:00",
+    "timestamp": "2026-09-03T07:28:26+00:00",
     "tools": {
       "components": [
         {
@@ -16,9 +16,9 @@
     },
     "component": {
       "type": "application",
-      "bom-ref": "correlix@2026.09.03-g1004bcfe#correlix",
+      "bom-ref": "correlix@2026.09.03-gffbb1e5a#correlix",
       "name": "correlix",
-      "version": "2026.09.03-g1004bcfe",
+      "version": "2026.09.03-gffbb1e5a",
       "description": "Correlix \u2014 correlix dependency inventory"
     },
     "properties": [
@@ -29,35 +29,6 @@
     ]
   },
   "components": [
-    {
-      "type": "container",
-      "bom-ref": "container:apache/kafka:4.1.1",
-      "name": "apache/kafka",
-      "version": "4.1.1",
-      "purl": "pkg:oci/kafka@4.1.1?repository_url=apache/kafka&tag=4.1.1",
-      "properties": [
-        {
-          "name": "correlix:class",
-          "value": "container-images"
-        },
-        {
-          "name": "correlix:image:ref",
-          "value": "apache/kafka:4.1.1"
-        },
-        {
-          "name": "correlix:image:tag",
-          "value": "4.1.1"
-        },
-        {
-          "name": "correlix:image:digest-pinned",
-          "value": "false"
-        },
-        {
-          "name": "correlix:origin",
-          "value": "compose.offline-images.yml(kafka),compose.offline-images.yml(kafka-init)"
-        }
-      ]
-    },
     {
       "type": "container",
       "bom-ref": "container:apache/kafka:4.1.1@sha256:0bc1bb2478f45b6cea78864df86acdc11e8df2c5172477819a4d12942cbe5d40",
@@ -90,35 +61,6 @@
         {
           "alg": "SHA-256",
           "content": "0bc1bb2478f45b6cea78864df86acdc11e8df2c5172477819a4d12942cbe5d40"
-        }
-      ]
-    },
-    {
-      "type": "container",
-      "bom-ref": "container:balabit/syslog-ng:4.7.1",
-      "name": "balabit/syslog-ng",
-      "version": "4.7.1",
-      "purl": "pkg:oci/syslog-ng@4.7.1?repository_url=balabit/syslog-ng&tag=4.7.1",
-      "properties": [
-        {
-          "name": "correlix:class",
-          "value": "container-images"
-        },
-        {
-          "name": "correlix:image:ref",
-          "value": "balabit/syslog-ng:4.7.1"
-        },
-        {
-          "name": "correlix:image:tag",
-          "value": "4.7.1"
-        },
-        {
-          "name": "correlix:image:digest-pinned",
-          "value": "false"
-        },
-        {
-          "name": "correlix:origin",
-          "value": "compose.offline-images.yml(syslog-ng)"
         }
       ]
     },
@@ -159,35 +101,6 @@
     },
     {
       "type": "container",
-      "bom-ref": "container:clickhouse/clickhouse-server:24.8-alpine",
-      "name": "clickhouse/clickhouse-server",
-      "version": "24.8-alpine",
-      "purl": "pkg:oci/clickhouse-server@24.8-alpine?repository_url=clickhouse/clickhouse-server&tag=24.8-alpine",
-      "properties": [
-        {
-          "name": "correlix:class",
-          "value": "container-images"
-        },
-        {
-          "name": "correlix:image:ref",
-          "value": "clickhouse/clickhouse-server:24.8-alpine"
-        },
-        {
-          "name": "correlix:image:tag",
-          "value": "24.8-alpine"
-        },
-        {
-          "name": "correlix:image:digest-pinned",
-          "value": "false"
-        },
-        {
-          "name": "correlix:origin",
-          "value": "compose.offline-images.yml(clickhouse)"
-        }
-      ]
-    },
-    {
-      "type": "container",
       "bom-ref": "container:clickhouse/clickhouse-server:24.8-alpine@sha256:b002e56ed5c16e224c312527f6fcba7e77216fec5d7a88a7828f59efc614feb5",
       "name": "clickhouse/clickhouse-server",
       "version": "sha256:b002e56ed5c16e224c312527f6fcba7e77216fec5d7a88a7828f59efc614feb5",
@@ -223,35 +136,6 @@
     },
     {
       "type": "container",
-      "bom-ref": "container:curlimages/curl:8.10.1",
-      "name": "curlimages/curl",
-      "version": "8.10.1",
-      "purl": "pkg:oci/curl@8.10.1?repository_url=curlimages/curl&tag=8.10.1",
-      "properties": [
-        {
-          "name": "correlix:class",
-          "value": "container-images"
-        },
-        {
-          "name": "correlix:image:ref",
-          "value": "curlimages/curl:8.10.1"
-        },
-        {
-          "name": "correlix:image:tag",
-          "value": "8.10.1"
-        },
-        {
-          "name": "correlix:image:digest-pinned",
-          "value": "false"
-        },
-        {
-          "name": "correlix:origin",
-          "value": "compose.offline-images.yml(opensearch-init)"
-        }
-      ]
-    },
-    {
-      "type": "container",
       "bom-ref": "container:curlimages/curl:8.10.1@sha256:d9b4541e214bcd85196d6e92e2753ac6d0ea699f0af5741f8c6cccbfcf00ef4b",
       "name": "curlimages/curl",
       "version": "sha256:d9b4541e214bcd85196d6e92e2753ac6d0ea699f0af5741f8c6cccbfcf00ef4b",
@@ -275,42 +159,13 @@
         },
         {
           "name": "correlix:origin",
-          "value": "compose.tls.yml(gotenberg-tls-init),docker-compose.override.yml(gotenberg-tls-init),docker-compose.yml(opensearch-init)"
+          "value": "compose.tls.yml(gotenberg-tls-init),docker-compose.yml(opensearch-init)"
         }
       ],
       "hashes": [
         {
           "alg": "SHA-256",
           "content": "d9b4541e214bcd85196d6e92e2753ac6d0ea699f0af5741f8c6cccbfcf00ef4b"
-        }
-      ]
-    },
-    {
-      "type": "container",
-      "bom-ref": "container:danielqsj/kafka-exporter:v1.7.0",
-      "name": "danielqsj/kafka-exporter",
-      "version": "v1.7.0",
-      "purl": "pkg:oci/kafka-exporter@v1.7.0?repository_url=danielqsj/kafka-exporter&tag=v1.7.0",
-      "properties": [
-        {
-          "name": "correlix:class",
-          "value": "container-images"
-        },
-        {
-          "name": "correlix:image:ref",
-          "value": "danielqsj/kafka-exporter:v1.7.0"
-        },
-        {
-          "name": "correlix:image:tag",
-          "value": "v1.7.0"
-        },
-        {
-          "name": "correlix:image:digest-pinned",
-          "value": "false"
-        },
-        {
-          "name": "correlix:origin",
-          "value": "compose.offline-images.yml(kafka-exporter)"
         }
       ]
     },
@@ -386,35 +241,6 @@
     },
     {
       "type": "container",
-      "bom-ref": "container:gcr.io/cadvisor/cadvisor:v0.52.1",
-      "name": "gcr.io/cadvisor/cadvisor",
-      "version": "v0.52.1",
-      "purl": "pkg:oci/cadvisor@v0.52.1?repository_url=gcr.io/cadvisor/cadvisor&tag=v0.52.1",
-      "properties": [
-        {
-          "name": "correlix:class",
-          "value": "container-images"
-        },
-        {
-          "name": "correlix:image:ref",
-          "value": "gcr.io/cadvisor/cadvisor:v0.52.1"
-        },
-        {
-          "name": "correlix:image:tag",
-          "value": "v0.52.1"
-        },
-        {
-          "name": "correlix:image:digest-pinned",
-          "value": "false"
-        },
-        {
-          "name": "correlix:origin",
-          "value": "compose.offline-images.yml(cadvisor)"
-        }
-      ]
-    },
-    {
-      "type": "container",
       "bom-ref": "container:gcr.io/cadvisor/cadvisor:v0.52.1@sha256:f40e65878e25c2e78ea037f73a449527a0fb994e303dc3e34cb6b187b4b91435",
       "name": "gcr.io/cadvisor/cadvisor",
       "version": "sha256:f40e65878e25c2e78ea037f73a449527a0fb994e303dc3e34cb6b187b4b91435",
@@ -480,35 +306,6 @@
         {
           "alg": "SHA-256",
           "content": "d093aa3e30dbadd3efe1310db061a14da60299baff8450a17fe0ccc514a16639"
-        }
-      ]
-    },
-    {
-      "type": "container",
-      "bom-ref": "container:ghcr.io/openconfig/gnmic:0.46.0",
-      "name": "ghcr.io/openconfig/gnmic",
-      "version": "0.46.0",
-      "purl": "pkg:oci/gnmic@0.46.0?repository_url=ghcr.io/openconfig/gnmic&tag=0.46.0",
-      "properties": [
-        {
-          "name": "correlix:class",
-          "value": "container-images"
-        },
-        {
-          "name": "correlix:image:ref",
-          "value": "ghcr.io/openconfig/gnmic:0.46.0"
-        },
-        {
-          "name": "correlix:image:tag",
-          "value": "0.46.0"
-        },
-        {
-          "name": "correlix:image:digest-pinned",
-          "value": "false"
-        },
-        {
-          "name": "correlix:origin",
-          "value": "compose.offline-images.yml(gnmic)"
         }
       ]
     },
@@ -584,35 +381,6 @@
     },
     {
       "type": "container",
-      "bom-ref": "container:gotenberg/gotenberg:8",
-      "name": "gotenberg/gotenberg",
-      "version": "8",
-      "purl": "pkg:oci/gotenberg@8?repository_url=gotenberg/gotenberg&tag=8",
-      "properties": [
-        {
-          "name": "correlix:class",
-          "value": "container-images"
-        },
-        {
-          "name": "correlix:image:ref",
-          "value": "gotenberg/gotenberg:8"
-        },
-        {
-          "name": "correlix:image:tag",
-          "value": "8"
-        },
-        {
-          "name": "correlix:image:digest-pinned",
-          "value": "false"
-        },
-        {
-          "name": "correlix:origin",
-          "value": "compose.offline-images.yml(gotenberg)"
-        }
-      ]
-    },
-    {
-      "type": "container",
       "bom-ref": "container:gotenberg/gotenberg:8@sha256:bddd8ea9d076e2d08b6ddaa6efae6403185202c6dab65a6488ed0a6923d6d8e8",
       "name": "gotenberg/gotenberg",
       "version": "sha256:bddd8ea9d076e2d08b6ddaa6efae6403185202c6dab65a6488ed0a6923d6d8e8",
@@ -648,35 +416,6 @@
     },
     {
       "type": "container",
-      "bom-ref": "container:grafana/grafana:11.2.0",
-      "name": "grafana/grafana",
-      "version": "11.2.0",
-      "purl": "pkg:oci/grafana@11.2.0?repository_url=grafana/grafana&tag=11.2.0",
-      "properties": [
-        {
-          "name": "correlix:class",
-          "value": "container-images"
-        },
-        {
-          "name": "correlix:image:ref",
-          "value": "grafana/grafana:11.2.0"
-        },
-        {
-          "name": "correlix:image:tag",
-          "value": "11.2.0"
-        },
-        {
-          "name": "correlix:image:digest-pinned",
-          "value": "false"
-        },
-        {
-          "name": "correlix:origin",
-          "value": "compose.offline-images.yml(grafana)"
-        }
-      ]
-    },
-    {
-      "type": "container",
       "bom-ref": "container:grafana/grafana:11.2.0@sha256:408afb9726de5122b00a2576763a8a57a3c86d5b0eff5305bc994ceb3eb96c3f",
       "name": "grafana/grafana",
       "version": "sha256:408afb9726de5122b00a2576763a8a57a3c86d5b0eff5305bc994ceb3eb96c3f",
@@ -707,35 +446,6 @@
         {
           "alg": "SHA-256",
           "content": "408afb9726de5122b00a2576763a8a57a3c86d5b0eff5305bc994ceb3eb96c3f"
-        }
-      ]
-    },
-    {
-      "type": "container",
-      "bom-ref": "container:netboxcommunity/netbox:v4.1-3.0.2",
-      "name": "netboxcommunity/netbox",
-      "version": "v4.1-3.0.2",
-      "purl": "pkg:oci/netbox@v4.1-3.0.2?repository_url=netboxcommunity/netbox&tag=v4.1-3.0.2",
-      "properties": [
-        {
-          "name": "correlix:class",
-          "value": "container-images"
-        },
-        {
-          "name": "correlix:image:ref",
-          "value": "netboxcommunity/netbox:v4.1-3.0.2"
-        },
-        {
-          "name": "correlix:image:tag",
-          "value": "v4.1-3.0.2"
-        },
-        {
-          "name": "correlix:image:digest-pinned",
-          "value": "false"
-        },
-        {
-          "name": "correlix:origin",
-          "value": "compose.offline-images.yml(netbox)"
         }
       ]
     },
@@ -799,7 +509,7 @@
         },
         {
           "name": "correlix:origin",
-          "value": "docker-compose.override.yml(cloud-ingest),docker-compose.yml(cloud-ingest)"
+          "value": "docker-compose.yml(cloud-ingest)"
         }
       ]
     },
@@ -887,35 +597,6 @@
         {
           "name": "correlix:origin",
           "value": "docker-compose.yml(vector-router)"
-        }
-      ]
-    },
-    {
-      "type": "container",
-      "bom-ref": "container:netsampler/goflow2:v2.2.1",
-      "name": "netsampler/goflow2",
-      "version": "v2.2.1",
-      "purl": "pkg:oci/goflow2@v2.2.1?repository_url=netsampler/goflow2&tag=v2.2.1",
-      "properties": [
-        {
-          "name": "correlix:class",
-          "value": "container-images"
-        },
-        {
-          "name": "correlix:image:ref",
-          "value": "netsampler/goflow2:v2.2.1"
-        },
-        {
-          "name": "correlix:image:tag",
-          "value": "v2.2.1"
-        },
-        {
-          "name": "correlix:image:digest-pinned",
-          "value": "false"
-        },
-        {
-          "name": "correlix:origin",
-          "value": "compose.offline-images.yml(goflow2)"
         }
       ]
     },
@@ -1026,35 +707,6 @@
     },
     {
       "type": "container",
-      "bom-ref": "container:opensearchproject/opensearch-dashboards:2.16.0",
-      "name": "opensearchproject/opensearch-dashboards",
-      "version": "2.16.0",
-      "purl": "pkg:oci/opensearch-dashboards@2.16.0?repository_url=opensearchproject/opensearch-dashboards&tag=2.16.0",
-      "properties": [
-        {
-          "name": "correlix:class",
-          "value": "container-images"
-        },
-        {
-          "name": "correlix:image:ref",
-          "value": "opensearchproject/opensearch-dashboards:2.16.0"
-        },
-        {
-          "name": "correlix:image:tag",
-          "value": "2.16.0"
-        },
-        {
-          "name": "correlix:image:digest-pinned",
-          "value": "false"
-        },
-        {
-          "name": "correlix:origin",
-          "value": "compose.offline-images.yml(opensearch-dashboards)"
-        }
-      ]
-    },
-    {
-      "type": "container",
       "bom-ref": "container:opensearchproject/opensearch-dashboards:2.16.0@sha256:14fd4d7882d1adf71fcb01142e38b571add4d7e65dedcd8beffc444520b22a8b",
       "name": "opensearchproject/opensearch-dashboards",
       "version": "sha256:14fd4d7882d1adf71fcb01142e38b571add4d7e65dedcd8beffc444520b22a8b",
@@ -1125,35 +777,6 @@
     },
     {
       "type": "container",
-      "bom-ref": "container:postgres:16-alpine",
-      "name": "postgres",
-      "version": "16-alpine",
-      "purl": "pkg:oci/postgres@16-alpine?tag=16-alpine",
-      "properties": [
-        {
-          "name": "correlix:class",
-          "value": "container-images"
-        },
-        {
-          "name": "correlix:image:ref",
-          "value": "postgres:16-alpine"
-        },
-        {
-          "name": "correlix:image:tag",
-          "value": "16-alpine"
-        },
-        {
-          "name": "correlix:image:digest-pinned",
-          "value": "false"
-        },
-        {
-          "name": "correlix:origin",
-          "value": "compose.offline-images.yml(netbox-postgres),compose.offline-images.yml(postgres)"
-        }
-      ]
-    },
-    {
-      "type": "container",
       "bom-ref": "container:postgres:16-alpine@sha256:16bc17c64a573ef34162af9298258d1aec548232985b33ed7b1eac33ba35c229",
       "name": "postgres",
       "version": "sha256:16bc17c64a573ef34162af9298258d1aec548232985b33ed7b1eac33ba35c229",
@@ -1184,35 +807,6 @@
         {
           "alg": "SHA-256",
           "content": "16bc17c64a573ef34162af9298258d1aec548232985b33ed7b1eac33ba35c229"
-        }
-      ]
-    },
-    {
-      "type": "container",
-      "bom-ref": "container:prom/node-exporter:v1.8.2",
-      "name": "prom/node-exporter",
-      "version": "v1.8.2",
-      "purl": "pkg:oci/node-exporter@v1.8.2?repository_url=prom/node-exporter&tag=v1.8.2",
-      "properties": [
-        {
-          "name": "correlix:class",
-          "value": "container-images"
-        },
-        {
-          "name": "correlix:image:ref",
-          "value": "prom/node-exporter:v1.8.2"
-        },
-        {
-          "name": "correlix:image:tag",
-          "value": "v1.8.2"
-        },
-        {
-          "name": "correlix:image:digest-pinned",
-          "value": "false"
-        },
-        {
-          "name": "correlix:origin",
-          "value": "compose.offline-images.yml(node-exporter)"
         }
       ]
     },
@@ -1352,35 +946,6 @@
     },
     {
       "type": "container",
-      "bom-ref": "container:quay.io/keycloak/keycloak:25.0",
-      "name": "quay.io/keycloak/keycloak",
-      "version": "25.0",
-      "purl": "pkg:oci/keycloak@25.0?repository_url=quay.io/keycloak/keycloak&tag=25.0",
-      "properties": [
-        {
-          "name": "correlix:class",
-          "value": "container-images"
-        },
-        {
-          "name": "correlix:image:ref",
-          "value": "quay.io/keycloak/keycloak:25.0"
-        },
-        {
-          "name": "correlix:image:tag",
-          "value": "25.0"
-        },
-        {
-          "name": "correlix:image:digest-pinned",
-          "value": "false"
-        },
-        {
-          "name": "correlix:origin",
-          "value": "compose.offline-images.yml(keycloak)"
-        }
-      ]
-    },
-    {
-      "type": "container",
       "bom-ref": "container:quay.io/keycloak/keycloak:25.0@sha256:82c5b7a110456dbd42b86ea572e728878549954cc8bd03cd65410d75328095d2",
       "name": "quay.io/keycloak/keycloak",
       "version": "sha256:82c5b7a110456dbd42b86ea572e728878549954cc8bd03cd65410d75328095d2",
@@ -1416,35 +981,6 @@
     },
     {
       "type": "container",
-      "bom-ref": "container:telegraf:1.31-alpine",
-      "name": "telegraf",
-      "version": "1.31-alpine",
-      "purl": "pkg:oci/telegraf@1.31-alpine?tag=1.31-alpine",
-      "properties": [
-        {
-          "name": "correlix:class",
-          "value": "container-images"
-        },
-        {
-          "name": "correlix:image:ref",
-          "value": "telegraf:1.31-alpine"
-        },
-        {
-          "name": "correlix:image:tag",
-          "value": "1.31-alpine"
-        },
-        {
-          "name": "correlix:image:digest-pinned",
-          "value": "false"
-        },
-        {
-          "name": "correlix:origin",
-          "value": "compose.offline-images.yml(telegraf)"
-        }
-      ]
-    },
-    {
-      "type": "container",
       "bom-ref": "container:telegraf:1.31-alpine@sha256:bf274ea9fbf49a62ed19478ea0badb0f040ee9db09725a94175fa5ffecd8b7ab",
       "name": "telegraf",
       "version": "sha256:bf274ea9fbf49a62ed19478ea0badb0f040ee9db09725a94175fa5ffecd8b7ab",
@@ -1475,35 +1011,6 @@
         {
           "alg": "SHA-256",
           "content": "bf274ea9fbf49a62ed19478ea0badb0f040ee9db09725a94175fa5ffecd8b7ab"
-        }
-      ]
-    },
-    {
-      "type": "container",
-      "bom-ref": "container:timberio/vector:0.40.0-alpine",
-      "name": "timberio/vector",
-      "version": "0.40.0-alpine",
-      "purl": "pkg:oci/vector@0.40.0-alpine?repository_url=timberio/vector&tag=0.40.0-alpine",
-      "properties": [
-        {
-          "name": "correlix:class",
-          "value": "container-images"
-        },
-        {
-          "name": "correlix:image:ref",
-          "value": "timberio/vector:0.40.0-alpine"
-        },
-        {
-          "name": "correlix:image:tag",
-          "value": "0.40.0-alpine"
-        },
-        {
-          "name": "correlix:image:digest-pinned",
-          "value": "false"
-        },
-        {
-          "name": "correlix:origin",
-          "value": "compose.offline-images.yml(vector-aggregator)"
         }
       ]
     },
@@ -1573,35 +1080,6 @@
     },
     {
       "type": "container",
-      "bom-ref": "container:valkey/valkey:8-alpine",
-      "name": "valkey/valkey",
-      "version": "8-alpine",
-      "purl": "pkg:oci/valkey@8-alpine?repository_url=valkey/valkey&tag=8-alpine",
-      "properties": [
-        {
-          "name": "correlix:class",
-          "value": "container-images"
-        },
-        {
-          "name": "correlix:image:ref",
-          "value": "valkey/valkey:8-alpine"
-        },
-        {
-          "name": "correlix:image:tag",
-          "value": "8-alpine"
-        },
-        {
-          "name": "correlix:image:digest-pinned",
-          "value": "false"
-        },
-        {
-          "name": "correlix:origin",
-          "value": "compose.offline-images.yml(redis)"
-        }
-      ]
-    },
-    {
-      "type": "container",
       "bom-ref": "container:valkey/valkey:8-alpine@sha256:cfe71288f087704b06be45e270afa7a2abbf820093d6b11a23762081f5ff321d",
       "name": "valkey/valkey",
       "version": "sha256:cfe71288f087704b06be45e270afa7a2abbf820093d6b11a23762081f5ff321d",
@@ -1632,35 +1110,6 @@
         {
           "alg": "SHA-256",
           "content": "cfe71288f087704b06be45e270afa7a2abbf820093d6b11a23762081f5ff321d"
-        }
-      ]
-    },
-    {
-      "type": "container",
-      "bom-ref": "container:victoriametrics/victoria-metrics:v1.101.0",
-      "name": "victoriametrics/victoria-metrics",
-      "version": "v1.101.0",
-      "purl": "pkg:oci/victoria-metrics@v1.101.0?repository_url=victoriametrics/victoria-metrics&tag=v1.101.0",
-      "properties": [
-        {
-          "name": "correlix:class",
-          "value": "container-images"
-        },
-        {
-          "name": "correlix:image:ref",
-          "value": "victoriametrics/victoria-metrics:v1.101.0"
-        },
-        {
-          "name": "correlix:image:tag",
-          "value": "v1.101.0"
-        },
-        {
-          "name": "correlix:image:digest-pinned",
-          "value": "false"
-        },
-        {
-          "name": "correlix:origin",
-          "value": "compose.offline-images.yml(victoria)"
         }
       ]
     },
@@ -1701,35 +1150,6 @@
     },
     {
       "type": "container",
-      "bom-ref": "container:victoriametrics/vmalert:v1.101.0",
-      "name": "victoriametrics/vmalert",
-      "version": "v1.101.0",
-      "purl": "pkg:oci/vmalert@v1.101.0?repository_url=victoriametrics/vmalert&tag=v1.101.0",
-      "properties": [
-        {
-          "name": "correlix:class",
-          "value": "container-images"
-        },
-        {
-          "name": "correlix:image:ref",
-          "value": "victoriametrics/vmalert:v1.101.0"
-        },
-        {
-          "name": "correlix:image:tag",
-          "value": "v1.101.0"
-        },
-        {
-          "name": "correlix:image:digest-pinned",
-          "value": "false"
-        },
-        {
-          "name": "correlix:origin",
-          "value": "compose.offline-images.yml(vmalert)"
-        }
-      ]
-    },
-    {
-      "type": "container",
       "bom-ref": "container:victoriametrics/vmalert:v1.101.0@sha256:83137300d1451461884093697fbbeea56529cc8201d3b31cdce3b530e8d5af6f",
       "name": "victoriametrics/vmalert",
       "version": "sha256:83137300d1451461884093697fbbeea56529cc8201d3b31cdce3b530e8d5af6f",
@@ -1760,35 +1180,6 @@
         {
           "alg": "SHA-256",
           "content": "83137300d1451461884093697fbbeea56529cc8201d3b31cdce3b530e8d5af6f"
-        }
-      ]
-    },
-    {
-      "type": "container",
-      "bom-ref": "container:victoriametrics/vmauth:v1.101.0",
-      "name": "victoriametrics/vmauth",
-      "version": "v1.101.0",
-      "purl": "pkg:oci/vmauth@v1.101.0?repository_url=victoriametrics/vmauth&tag=v1.101.0",
-      "properties": [
-        {
-          "name": "correlix:class",
-          "value": "container-images"
-        },
-        {
-          "name": "correlix:image:ref",
-          "value": "victoriametrics/vmauth:v1.101.0"
-        },
-        {
-          "name": "correlix:image:tag",
-          "value": "v1.101.0"
-        },
-        {
-          "name": "correlix:image:digest-pinned",
-          "value": "false"
-        },
-        {
-          "name": "correlix:origin",
-          "value": "compose.offline-images.yml(vmauth)"
         }
       ]
     },
