@@ -51,6 +51,7 @@
 # see their call sites.
 # shellcheck disable=SC2329
 set -euo pipefail
+# shellcheck disable=SC2317  # collectors, dcompose and cleanup are invoked indirectly (collector table, timeout wrappers, the EXIT trap); shellcheck on the CI runner reports each as unreachable, one per run
 export PATH="/usr/local/bin:/usr/bin:/bin:${PATH:-}"
 
 SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
@@ -135,7 +136,6 @@ ENV_FILE="${SUPPORT_ENV_FILE:-$COMPOSE_DIR/.env}"
 
 env_get() { sed -n "s/^$1=//p" "$ENV_FILE" 2>/dev/null | head -1; }
 
-# shellcheck disable=SC2317  # invoked indirectly (through the timeout/collect wrappers below), which newer shellcheck reports as unreachable
 dcompose() { ( cd "$COMPOSE_DIR" && dkr compose "$@" ); }
 
 PROJECT="${COMPOSE_PROJECT:-$(env_get COMPOSE_PROJECT_NAME)}"

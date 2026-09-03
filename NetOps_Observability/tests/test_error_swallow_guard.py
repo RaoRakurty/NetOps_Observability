@@ -472,7 +472,7 @@ ALLOWLIST: dict[AllowKey, str] = {
     # operator can observe, so they are pinned as reviewed instead of
     # reshaped to please the checker.
     #
-    # The FOURTH (sbom.py `_git`) is a genuine probe, and it was FIXED
+    # The FOURTH (sbom.py `_git`, since renamed `_git_in` when the scan moved to git-tracked files) is a genuine probe, and it was FIXED
     # rather than pinned as-is: it used to return None with no output for
     # any OSError/SubprocessError, so "git is not installed" and "git timed
     # out" produced the same silence behind an unreproducible timestamp or a
@@ -484,7 +484,7 @@ ALLOWLIST: dict[AllowKey, str] = {
     ("license-audit.py", "main", "d40d4b03"): "--write of scripts/license-data.json: prints 'cannot write <path>: <errno>' to stderr and returns 2, which IS the escalation — main()'s return value is the process exit status (sys.exit(main())), and 2 is the script's documented 'the audit itself could not run' code",
     ("license-audit.py", "main", "22e5612b"): "--notices write of docs/THIRD_PARTY_LICENSES.md: same contract — stderr names path+errno, exit 2 propagates, and make-installer.sh's write_licenses() hard-fails the bundle on a non-zero audit exit rather than shipping a stale notice",
     ("bmp-synthetic-session.py", "run", "0c2ffe3b"): "BMP connect failure in a lab traffic generator: prints 'connect to <host>:<port> failed: <exc>' to stderr and returns 1, which main() returns and sys.exit(main()) makes the process exit code — the run is over, not continued",
-    ("sbom.py", "_git", "3d2fa830"): "git probe for build provenance: prints 'git <argv> unavailable: <exc>' to stderr, then returns None so the documented fallbacks run (build_timestamp warns the timestamp is NOT reproducible; product_version yields 0.0.0-unknown). A missing git or non-repo dir is expected and must not fail an SBOM of the dependency tree",
+    ("sbom.py", "_git_in", "4f8b5435"): "git probe for build provenance: prints 'git <argv> unavailable: <exc>' to stderr, then returns None so the documented fallbacks run (build_timestamp warns the timestamp is NOT reproducible; product_version yields 0.0.0-unknown). A missing git or non-repo dir is expected and must not fail an SBOM of the dependency tree",
 }
 
 # Rule 1: literal swallows, any text file (catches heredoc Python in .sh too).
