@@ -90,6 +90,20 @@ Platform alerts still reach the product dispatcher as well, unchanged; the host
 route is an **additional** destination, sharing the same cool-down, so nothing
 buzzes twice.
 
+**Warnings do not buzz individually (2026-09-03).** ntfy.sh's free public server
+rate-limits per topic/IP and started answering `429` here while chronic warnings
+were each spending a push — budget a real page needs. The `page` tier and the
+resolution of a page stay immediate (and a page now retries on 429/5xx with
+capped backoff + jitter, honouring `Retry-After`); everything else is folded
+into a **digest** sent at most once per
+`PLATFORM_ALERTS_WARNING_DIGEST_INTERVAL` (default `30m`), including any warning
+that resolved inside the window. An hourly token budget
+(`PLATFORM_ALERTS_PUSH_BUDGET`, default 30) reserves
+`PLATFORM_ALERTS_PUSH_BUDGET_PAGE_RESERVE` (default 10) tokens that only a page
+may spend. So a *missing* warning push within the window is expected behaviour,
+not a delivery fault — see `netops_alert_webhook_digest_alerts_total` and
+`docs/runbooks/engine-liveness-matrix.md` for the full per-tier table.
+
 ---
 
 ## 3. Triage — in this order
@@ -227,6 +241,9 @@ docker compose logs --tail=50 vmalert | grep -i notifier
 | `enabled == 1`, heartbeat stale | vmalert down/wedged, flag reverted to `-notifier.blackhole`, or a token mismatch | check `netops_alert_webhook_unauthorized_total`; compare the token on both sides |
 | `netops_alert_webhook_host_route_enabled == 0` | no host-monitoring topic: platform alerts reach the configured product channels only, and an install with none configured is silent | set `PLATFORM_ALERTS_NTFY_TOPIC` (or `WATCHDOG_NTFY_TOPIC`) in `deployment/docker/.env` |
 | `netops_alert_webhook_push_failures_total{reason="send_error"}` rising | the ntfy server/token is wrong, or ntfy is unreachable from the api | check the api log line `platform alert push to host monitoring FAILED` (it never carries the topic) |
+| `..._push_failures_total{reason="rate_limited"}` rising | the ntfy server is refusing (429) even after the bounded retry ladder — the free public server limits per topic/IP | check `netops_alert_webhook_push_retries_total`; move to a self-hosted/paid ntfy, or lengthen `PLATFORM_ALERTS_WARNING_DIGEST_INTERVAL` |
+| `..._push_failures_total{reason="budget_exhausted"}` rising | *we* refused locally: the hourly push budget is spent. Warnings stop at the page reserve; only a `tier="page"` refusal is logged at ERROR | inspect `netops_alert_webhook_push_budget_remaining` (`-1` = guard disabled); raise `PLATFORM_ALERTS_PUSH_BUDGET` only after confirming the server itself is not rate-limiting |
+| `netops_alert_webhook_push_budget_remaining` pinned at the reserve | normal under a warning storm — warnings are being held back so a page can still go out | nothing; confirm with `netops_alert_webhook_digest_alerts_total` |
 
 To deliberately turn delivery off, set
 `VMALERT_NOTIFIER_FLAG=-notifier.blackhole` — that is the supported opt-out and
