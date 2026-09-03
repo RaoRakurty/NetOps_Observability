@@ -52,7 +52,7 @@ curl -s -H "Authorization: Bearer $TOKEN" \
       "raw_rule_id": "exposure-http",
       "id": "a47da10d334064755833b13ed99ceb67ffb6b515793cae4f9089c4cac8d8119b",
       "scan_id": "scan-t_d3d501aa08e2395893b378a453b8af67-20260903T040523.613Z",
-      "native_id": "security|security_exposure|exposure|AC-4|spine1|scan-t_d3d501aa08e2395893b378a453b8af67-20260903T040523.613Z|exposure-http"
+      "native_id": "security|security_exposure|exposure|t_d3d501aa08e2395893b378a453b8af67|AC-4|spine1|exposure-http"
     }
   ],
   "next_cursor": null,

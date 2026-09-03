@@ -214,10 +214,11 @@ EXPECTED = {
     # get a REAL secret here, not the compose fallback: the compose default is
     # empty, and empty means the api refuses to register the receiver
     # (fail-closed) — i.e. the upgrade would keep delivering nothing, which is
-    # the whole defect. __URLSAFE__ (not __RANDOM__) because the default
-    # notifier flag embeds this value in URL userinfo
-    # (http://vmalert:<token>@api:8080/...), where randpw's @ # % + = would
-    # break the url vmalert parses. Plaintext by design — vmalert has to send
+    # the whole defect. __URLSAFE__ (not __RANDOM__) kept for compatibility:
+    # since 2026-09-03 vmalert reads this value from a basicAuth.passwordFile
+    # (compose secret) rather than URL userinfo, but an installation that
+    # pins an older compose still embeds it in the notifier URL, where
+    # randpw's @ # % + = would break the url vmalert parses. Plaintext by design — vmalert has to send
     # it, so it can never be vault-sealed (same as INGEST_TOKEN).
     "VMALERT_WEBHOOK_TOKEN":         "__URLSAFE__",
     # Byte-identical to the docker-compose default and to
