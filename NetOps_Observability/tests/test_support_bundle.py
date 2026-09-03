@@ -565,6 +565,11 @@ def test_bash_syntax_is_clean():
 
 @pytest.mark.skipif(shutil.which("shellcheck") is None, reason="shellcheck not installed")
 def test_shellcheck_is_clean():
+    # The script carries ONE file-level `# shellcheck disable=SC2317` directly
+    # under its shebang (a file-level directive placed after the first command
+    # applies to that command only): collectors, dcompose and cleanup are
+    # invoked indirectly (collector table, timeout wrappers, the EXIT trap) and
+    # the CI runner's shellcheck reports each as unreachable, one per run.
     r = subprocess.run(["shellcheck", str(SUPPORT)], capture_output=True,
                        text=True, check=False)
     assert r.returncode == 0, r.stdout + r.stderr
