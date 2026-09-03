@@ -1,8 +1,10 @@
 # Correlix tiering plan — what is free, what is licensed (draft for owner decision, 2026-09-03)
 
 **Owner ask:** "Which items of the whole solution should be free tier, and licensed
-tiers. Come up with a plan." This is Fable's proposal; the cut lines marked **[owner]**
-need a decision. It follows the pricing model already on record: **price per device,
+tiers. Come up with a plan." Cut lines decided by the owner on 2026-09-04 (Community: 25
+devices, 5 watched prefixes; security findings in Team; dialects + SIEM export in
+Enterprise). Licensing model: **Apache-2.0 open core + source-available commercial
+add-ons** — see `LICENSING.md`. It follows the pricing model already on record: **price per device,
 retention as the upsell, burst is an SLO not a billing event**, and security as a
 per-tenant paid service (see the capacity-and-pricing memo and the VulnHunter note).
 
@@ -25,7 +27,7 @@ per-tenant paid service (see the capacity-and-pricing memo and the VulnHunter no
 
 | Capability (as built today) | Community (free) | Team | Enterprise | Notes |
 |---|---|---|---|---|
-| Discovery + multi-protocol telemetry (SNMP, gNMI, syslog, traps, flows, probes) | ✅ up to **25 devices** [owner] | up to 250 | unlimited per licence | device = the priced unit |
+| Discovery + multi-protocol telemetry (SNMP, gNMI, syslog, traps, flows, probes) | ✅ up to **25 devices** (owner ✅ 2026-09-04) | up to 250 | unlimited per licence | device = the priced unit |
 | Correlation engine + RCA (verdicts, causality path, seams, evidence classes) | ✅ full engine | ✅ | ✅ | never tiered — it is the product |
 | Retention (logs/flows/metrics/findings) | 7 days | 30 days | 90 days + archive | the upsell axis on record |
 | Tenants / organisations | 1 tenant | 1 org, 5 tenants | unlimited, org hierarchy | MSP/design-partner cut |
@@ -35,8 +37,8 @@ per-tenant paid service (see the capacity-and-pricing memo and the VulnHunter no
 | Owner-doc ingestion (skills from customer runbooks) | — | ✅ 10 skills | ✅ unlimited + services | services attach here |
 | IGP depth, VRF views, interface intelligence | ✅ | ✅ | ✅ | monitoring depth stays free |
 | BGP operations: looking glass (RIS), RPKI, AS-path graph, geofeed | ✅ | ✅ | ✅ | public data; keep free |
-| BGP watchlist + alerting (leak/hijack/visibility/bogon classes), near-live feed, BMP receiver | 5 watched prefixes, evaluator on | 100 prefixes + BMP | unlimited + Route Views/LG queries when built | internet-intelligence tier line **[owner]** |
-| Security CTEM: findings lane, exposures, hardening dialects, compliance frameworks, config drift, packet capture, threat detection, advisory | Hardening + exposure for the device ceiling, 800-53 + CIS v8 only | + HIPAA/PCI/CSF frameworks, drift, pcap, threat lane, advisory feed | + all frameworks, multi-vendor dialects, findings export to SIEM, retention 90d | "security as a per-tenant paid service" — the strongest paid line **[owner]** |
+| BGP watchlist + alerting (leak/hijack/visibility/bogon classes), near-live feed, BMP receiver | 5 watched prefixes, evaluator on (owner ✅ 2026-09-04) | 100 prefixes + BMP | unlimited + Route Views/LG queries when built | internet-intelligence tier line |
+| Security CTEM: findings lane, exposures, hardening dialects, compliance frameworks, config drift, packet capture, threat detection, advisory | Hardening + exposure for the device ceiling, 800-53 + CIS v8 only | + HIPAA/PCI/CSF frameworks, drift, pcap, threat lane, advisory feed | + all frameworks, multi-vendor dialects, findings export to SIEM, retention 90d | owner ✅ 2026-09-04: **findings in Team; dialects + SIEM export in Enterprise** |
 | Alerting delivery (ntfy/Slack/Teams/SNS/webhook), host-monitoring page | ✅ ntfy + webhook | ✅ all channels | ✅ + digest/escalation policies | |
 | Reports, scheduled exports, PDF | — | ✅ | ✅ | |
 | SSO (OIDC/SAML), LDAP, session policies | local users + OIDC | + LDAP | + SAML, SCIM when built | |

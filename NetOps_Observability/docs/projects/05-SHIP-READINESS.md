@@ -47,7 +47,7 @@ Dates are 2026-09-03 unless stated. Rows are DELETED when shipped (tracker rule)
 
 | # | Item | Status | Evidence / next step |
 |---|---|---|---|
-| C4 | Free tier vs licensed tiers — which parts of the whole solution go where (owner ask) | 👤 decide | Fable design: `docs/design/TIERING_PLAN_2026-09-03.md` — aligned with the capacity/pricing model (price per device, retention upsell, burst = SLO not billing; security findings as a per-tenant paid service). Owner decision needed on the cut lines. |
+| C4 | Free tier vs licensed tiers — which parts of the whole solution go where (owner ask) | ✅ decided 2026-09-04 | Fable design: `docs/design/TIERING_PLAN_2026-09-03.md` — aligned with the capacity/pricing model (price per device, retention upsell, burst = SLO not billing; security findings as a per-tenant paid service). Owner decision needed on the cut lines. |
 
 ## S. Owner asks of 2026-09-04 (morning)
 
