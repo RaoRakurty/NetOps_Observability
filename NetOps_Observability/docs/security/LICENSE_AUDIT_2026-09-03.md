@@ -1,5 +1,7 @@
 # Correlix — Open-source licence audit, 2026-09-03
 
+> **Correction 2026-09-04:** the "brand glyph is Feather's `activity` icon" finding was wrong. The verbatim path was an unused `logo` entry in `Icon.tsx` (nothing rendered it: the top bar shows the BLOGO5 artwork, the favicon is the original network-eye SVG). The entry was deleted; no brand decision is needed.
+
 **Question asked:** *"Ensure all the package-related items have no obligations
 with open-source licensing."*
 

@@ -168,8 +168,6 @@ const PATHS: Record<string, JSX.Element> = {
       <line x1="16" y1="17" x2="16" y2="21" />
     </>
   ),
-  // upstream: Feather `activity` (MIT) — verbatim path data.
-  logo: <path d="M2 12h4l3 8 4-16 3 8h6" />,
   // Monitoring — a gauge/speedometer (active health watching).
   monitoring: (
     <>
