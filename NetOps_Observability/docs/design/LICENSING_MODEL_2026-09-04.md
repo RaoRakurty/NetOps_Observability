@@ -4,16 +4,27 @@ Owner decisions this document implements: root licence = **Apache-2.0 open core 
 clearly separated commercial add-ons**; tiers Community / Team / Enterprise with the cut
 lines in `TIERING_PLAN_2026-09-03.md`; the licensing story must be identical in the source
 tree, the container manifests, the About/licences UI and the shipped third-party notices.
-Companion documents: `LICENSING.md` (directory → licence map), `LICENSE` (Apache-2.0),
-`LICENSE-ENTERPRISE.md` (source-available commercial terms), `TIERING_PLAN_2026-09-03.md`
-(what each tier gets), `docs/security/LICENSE_AUDIT_2026-09-03.md` (third-party).
+Owner spec of 2026-09-04 (afternoon) is BINDING and refines this document: one repository,
+one binary, a REAL directory boundary (`enterprise/`), SPDX headers (`Apache-2.0` /
+`LicenseRef-Correlix-Enterprise`), core never imports enterprise (stdlib import checker in
+CI, fail closed on unclassified directories), a machine-readable `licensing-policy.json`
+that `LICENSING.md` mirrors, a concise mixed-licence root `LICENSE` (never the bare Apache
+text), `LICENSES/Apache-2.0.txt` + `LICENSES/Correlix-Enterprise.txt` (the latter ONLY when
+lawyer-approved — **no invented legal text**, same for the CLA), central semantic
+entitlements (FeatureSAML, FeatureSCIM, FeatureLDAP, FeatureSIEMExport,
+FeatureSecurityDialects, FeatureMSPManagement, FeatureSecurityFindings) instead of tier
+checks, and the invariant that a licence problem can never weaken isolation, RLS, authz,
+integrity or core authentication (OIDC stays core).
+Companion documents: `LICENSING.md` (generated from `licensing-policy.json`), `LICENSE`
+(mixed-licence notice), `LICENSES/`, `NOTICE`, `THIRD_PARTY_NOTICES`,
+`TIERING_PLAN_2026-09-03.md` (tiers), `docs/security/LICENSE_AUDIT_2026-09-03.md`.
 
 ## 1. Two licences, one repository, one binary
 | | Core | Commercial add-ons |
 |---|---|---|
-| Licence | Apache-2.0 | Correlix Enterprise License (source-available: read, build, evaluate; no production use without a commercial licence; no redistribution) |
-| Where | everything not listed as commercial in `LICENSING.md` | directories listed in `LICENSING.md` with their own `LICENSE` notice file and file headers |
-| What | discovery, telemetry ingestion, storage, correlation/RCA, investigation surface, protocol diagnostics, Iris evidence-only, IGP/VRF/interface depth, BGP public-data views, **tenant isolation**, local auth + OIDC, alerting delivery, Community ceilings | security dialects + frameworks beyond the default two, SIEM/findings export, BGP watchlist/alerting beyond the Community caps + BMP, SAML/SCIM/LDAP, MSP/org-hierarchy management, reports/PDF, owner-doc skills beyond 10, hosted provider quota, support entitlements |
+| Licence | Apache-2.0 (`SPDX-License-Identifier: Apache-2.0`) | Correlix Enterprise (`SPDX-License-Identifier: LicenseRef-Correlix-Enterprise`) — **text to be approved by counsel; not written here** |
+| Where | every path `licensing-policy.json` maps to Apache-2.0 | `enterprise/**` (physically bounded); core → enterprise imports are forbidden and CI-checked; only the assembly layer (`cmd/`, root wiring) imports both |
+| What (LOCKED) | collection, correlation and topology fundamentals, **tenant isolation + RLS/data separation (safety property, never entitlement-gated)**, OIDC, normal single-tenant operation, the entitlement abstractions, Community ceilings (25 devices, 5 watched prefixes — product limits inside Apache code) | Team: security findings. Enterprise: security dialects, SIEM export, MSP/fleet management of many tenants, SAML, SCIM, LDAP. Everything else in the tiering plan is a PROPOSAL, not gated until decided. |
 | Build | one binary, one image set (tiers are data, not builds) | same binary; the code is present but gated by the licence file (§3) |
 | Contributions | CLA required (keeps relicensing rights) | same CLA |
 
@@ -31,6 +42,12 @@ lane + advisory, BYO provider key. Enterprise: unlimited per licence, org hierar
 archive, unlimited prefixes, all dialects + SIEM export + 90-day findings retention, hosted
 provider quota, SAML/SCIM, reports, 24×7 support. (Full table in the tiering plan.)
 
+## 2a. Tiering is not licensing
+Source licence (Apache-2.0 / Correlix Enterprise) and runtime entitlement (Community /
+Team / Enterprise) are separate axes: Apache code carries Community product limits; an
+Enterprise-licensed file may implement a Team feature. Business code asks "is feature X
+entitled?" through one central entitlement service, never "is this Enterprise?".
+
 ## 3. The licence file (mechanism)
 - **Format:** JSON, signed with ed25519 (Go stdlib `crypto/ed25519`), detached signature
   base64 in the same file. Fields: `licence_id`, `customer`, `tier`, `issued_at`, `expires_at`,
@@ -44,10 +61,11 @@ provider quota, SAML/SCIM, reports, 24×7 support. (Full table in the tiering pl
   ceilings, expiry, and what the current usage is against each ceiling.
 - **No licence file = Community**, no key needed, no phone-home. Trials are a Team/Enterprise
   file with a short `expires_at`.
-- **Expiry and grace:** at `expires_at` the product keeps running at the licensed tier for
-  `grace_days` (default 30) with a banner and a warning alert; after grace it degrades to
-  Community ceilings **honestly**: over-ceiling devices are listed as "not monitored: licence
-  ceiling", nothing is deleted, nothing is hidden silently.
+- **Expiry and grace: OWNER DECISION PENDING** — no commercial policy is invented here. The
+  mechanism carries `expires_at` and an issuer-set `grace_days` (no built-in default) and,
+  whatever the policy becomes, it is technically impossible for expiry to touch isolation,
+  RLS, authorization, integrity or OIDC; degradation of commercial capabilities is always
+  honest (listed, never hidden).
 - **Offline:** everything above works with no network. There is no activation server.
 
 ## 4. Enforcement points (all existing chokepoints)
@@ -58,7 +76,7 @@ provider quota, SAML/SCIM, reports, 24×7 support. (Full table in the tiering pl
 | retention | ISM/TTL bootstrap values (already env-driven) |
 | watched prefixes | watchlist store `Add` |
 | frameworks / dialects | per-tenant framework enablement API; dialect registry |
-| SIEM export, reports, SAML/SCIM/LDAP, hosted provider quota | feature switch read from the licence at the route (`requireFeature("siem_export")`) |
+| security findings (Team), dialects, SIEM export, MSP management, SAML/SCIM/LDAP (Enterprise) | central entitlement service: `Entitled(FeatureX)`; the route/handler asks for the semantic feature, never the tier |
 | Iris skills | skill ingestion cap |
 Every refusal returns a structured 402-style error naming the ceiling and the tier that lifts
 it; the UI renders it as an upgrade card, never as a broken page.
@@ -77,8 +95,13 @@ About/licences page, README's licence section, the generated `THIRD_PARTY_LICENS
 header, and the installer bundle's `LICENSES.md`.
 
 ## 7. Build order
-1. Legal structure: `LICENSE`, `LICENSE-ENTERPRISE.md`, `LICENSING.md`, CLA note, consistency
-   test (in flight, 2026-09-04).
+1. Legal + boundary structure: mixed-licence `LICENSE`, `LICENSES/Apache-2.0.txt`, placeholder
+   slot for `LICENSES/Correlix-Enterprise.txt` (approved text pending — blocker),
+   `licensing-policy.json` → generated `LICENSING.md`, SPDX headers, stdlib import checker +
+   CI boundary gate (A–H of the owner spec), CONTRIBUTING CLA requirement (text pending —
+   blocker), release-artifact inclusion checks (in flight, 2026-09-04).
+1b. Physical `enterprise/` move of the commercial implementations (dialects, SIEM export,
+   MSP management, SAML/SCIM/LDAP) — its own wave after the current builds land.
 2. Licence file: package `internal/licence` (parse, verify, ceilings, grace), boot + page,
    `requireFeature`, the seven enforcement points, Community defaults with no file.
 3. Metering + signed usage report + Licence page usage bars.
