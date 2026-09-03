@@ -24,6 +24,7 @@ decisions:
   - next=bgp-session-down when state:bgp_peer=active the device reports the peer Active, so the session is not up and policy cannot be the cause yet
   - next=bgp-session-down when the session is not Established
   - next=path-seam-handoff when the missing prefix belongs to a partner or provider we do not control
+  - next=log-confirmation when signature=uncollected the device rejected every read-only command, so NOTHING was captured and the device's own words are the only evidence left
   - next=log-confirmation when signature=none the prefix diagnostic ran and no known signature matched, so a maximum-prefix or policy event must be pinned from the device's own words
   - verdict=state which of the three cases applies — never received, received and filtered, or received and not best — and name the policy or next hop responsible
   - escalate=the advertising party when the prefix was never received and our inbound policy is clean

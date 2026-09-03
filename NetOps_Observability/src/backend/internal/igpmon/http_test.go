@@ -466,7 +466,7 @@ func TestAbsentSourcesAreNullWithANoteNeverZero(t *testing.T) {
 	if src, _ := body["source"].(string); src != "events" {
 		t.Errorf("source = %q, want events (the only class that answered)", src)
 	}
-	if !hasNote(body, "no live series collected for this device") {
+	if !hasNote(body, "no live series collected for these devices") {
 		t.Errorf("no honest live-series note: %v", notesOf(body))
 	}
 	if !hasNote(body, "OSPF area membership is not collected") {

@@ -16,6 +16,7 @@
 
 import type {
   ProtocolDiagAnalyzeRequest,
+  ProtocolDiagCollectedCommand,
   ProtocolDiagCollectRequest,
   ProtocolDiagIssue,
 } from "../../services/api";
@@ -75,6 +76,112 @@ export const NOTHING_TO_ANALYZE_MESSAGE =
   "There is no output to analyze yet — collect it from the device, or paste at least one command's output.";
 export const NO_ANALYSIS_FOR_TAC_MESSAGE =
   "Analyze the output first — the TAC bundle is built from the redacted capture plus the analysis.";
+
+// ── collection outcome (D-4) ────────────────────────────────────────────────
+
+/**
+ * What a finished collection actually produced. The live run of 2026-09-03
+ * found that a capture in which the device REJECTED EVERY command — 7 of 7,
+ * zero bytes — was announced as "Captured 7 command(s)…" in the success tone,
+ * and then analyzed into "no known signature matched". Both sentences told the
+ * operator the platform had looked. It had not.
+ *
+ *  · "captured" — every command produced output.
+ *  · "partial"  — some produced output, some were rejected. Analysable, but the
+ *                 verdict rests on less than the bundle, and that is said.
+ *  · "failed"   — nothing produced output. NOT a result: the protocol's state
+ *                 is unknown, and the per-command reasons are what to read next.
+ */
+export type CollectionOutcome = "captured" | "partial" | "failed";
+
+export type CollectionSummary = {
+  outcome: CollectionOutcome;
+  tone: "good" | "bad";
+  /** Operator-facing sentence for the notice line. */
+  text: string;
+  total: number;
+  /** Commands that produced output. */
+  captured: number;
+  /** Commands that produced none (rejected, or empty). */
+  failed: number;
+};
+
+/** Commands that produced no output, with the device's own reason where it gave one. */
+export function failedCommands(
+  col: { commands?: ProtocolDiagCollectedCommand[] } | null | undefined,
+): ProtocolDiagCollectedCommand[] {
+  return (col?.commands ?? []).filter((c) => String(c.output ?? "").trim() === "");
+}
+
+/** `1 command` / `3 commands` — the notice sentences are read by people. */
+function plural(n: number, word: string): string {
+  return `${n} ${word}${n === 1 ? "" : "s"}`;
+}
+
+/** Classifies a finished collection and writes the one sentence that describes it. */
+export function summarizeCollection(
+  col: {
+    commands?: ProtocolDiagCollectedCommand[];
+    hostname?: string;
+    device_id?: string;
+    rendered_vendor?: string;
+  } | null | undefined,
+): CollectionSummary {
+  const commands = col?.commands ?? [];
+  const total = commands.length;
+  const failed = failedCommands(col).length;
+  const captured = total - failed;
+  const where = String(col?.hostname ?? "").trim() || String(col?.device_id ?? "").trim() || "the device";
+  const dialect = String(col?.rendered_vendor ?? "").trim();
+  const inDialect = dialect ? ` in the ${dialect} dialect` : "";
+
+  if (total === 0 || captured === 0) {
+    return {
+      outcome: "failed",
+      tone: "bad",
+      total,
+      captured,
+      failed,
+      text:
+        total === 0
+          ? `No commands ran on ${where}, so nothing was captured — its state is unknown, not healthy.`
+          : `${where} rejected all ${plural(total, "read-only command")}${inDialect} — nothing was captured. ` +
+            `Its state is unknown, not healthy: read the per-command errors below, or paste output you already have.`,
+    };
+  }
+  if (failed > 0) {
+    return {
+      outcome: "partial",
+      tone: "bad",
+      total,
+      captured,
+      failed,
+      text:
+        `Captured ${captured} of ${plural(total, "command")} from ${where}${inDialect} — ` +
+        `${failed === 1 ? "1 was" : `${failed} were`} rejected. ` +
+        `Anything analyzed from this rests on less than the full bundle.`,
+    };
+  }
+  return {
+    outcome: "captured",
+    tone: "good",
+    total,
+    captured,
+    failed,
+    text: `Captured ${plural(total, "command")} from ${where}${inDialect}.`,
+  };
+}
+
+/** Heading + fallback body for the server's `analyzed:false` state. */
+export const NOTHING_ANALYZED_HEADING = "Nothing was analyzed";
+export const NOTHING_ANALYZED_MESSAGE =
+  "No command output was supplied, so no signature was scored. This is not \u201cno signature matched\u201d — " +
+  "the protocol's state is unknown. Collect from the device, or paste the output you already have.";
+
+/** True when the server says it scored nothing (see ProtocolDiagAnalysis.analyzed). */
+export function analysisWasScored(a: { analyzed?: boolean } | null | undefined): boolean {
+  return !!a && a.analyzed !== false;
+}
 
 /** The server's own reason, when it sent one, from `"<code> <text>: <body>"`. */
 export function serverReason(e: unknown): string | null {

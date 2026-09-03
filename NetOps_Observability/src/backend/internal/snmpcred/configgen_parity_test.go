@@ -20,16 +20,43 @@ package snmpcred
 // it, and when a profile deliberately changes a block the golden is updated in
 // the same commit as the profile — deliberately, and visibly in the diff.
 //
-// KNOWN, PRESERVED DEFECT (ubiquiti v3). The fourth line of the hand-written
-// Ubiquiti block renders the PRIVACY KEY where the user name belongs and the
-// user name where the privacy key belongs — a positional-argument slip in the
-// Sprintf table (…, secName, privKey, secName, secName), not a Ubiquiti syntax
-// quirk. The move reproduces it BYTE FOR BYTE on purpose: this change is a
-// vocabulary move, and silently correcting a device-facing block inside it would
-// make the parity assertion meaningless and hide the fix from review. The named
-// placeholders now make the defect legible in ubiquiti.json (which records it in
-// its notes) instead of invisible in an argument list; correcting it is a
-// one-line profile edit and belongs on its own row, with its own golden update.
+// ─── DELIBERATE GOLDEN UPDATES ───────────────────────────────────────────────
+//
+// The golden below is NO LONGER byte-identical to the original hand-written
+// table in two places. Both are corrections of device-facing defects that the
+// vocabulary move deliberately carried across unchanged so they would be fixed
+// visibly, on their own row, rather than silently inside a refactor. Each is
+// listed here with the exact bytes that changed and why.
+//
+// 1. ubiquiti v3, fourth line — TRANSPOSED PLACEHOLDERS (fixed).
+//
+//	was:  set service snmp v3 user %s privacy plaintext-key %s   ← privKey, secName
+//	now:  set service snmp v3 user %s privacy plaintext-key %s   ← secName, privKey
+//
+// i.e. the Sprintf argument list changed from
+// (secName, secName, authKey, secName, privKey, secName, secName) to
+// (secName, secName, authKey, secName, secName, privKey, secName): arguments 5
+// and 6 were swapped. The old block named the SNMP user with the MINTED PRIVACY
+// KEY and set that user's privacy key to the security name — a positional
+// argument slip, not EdgeOS syntax (every other line, and every other vendor
+// profile, orders the same fields user-then-key). An operator pasting it created
+// a user Correlix never polls and leaked the privacy key into a user name.
+// ubiquiti.json is the fix; this golden is updated to the CORRECT config, and
+// TestUbiquitiV3NamesTheUserAtTheUserPositionAndTheKeyOnlyAfterThePrivKeyword
+// pins the positions so the transposition cannot silently return.
+//
+// 2. huawei v3, fifth line — AUTH PROTOCOL DISAGREED WITH THE BUILDER (fixed).
+//
+//	was:  snmp-agent usm-user v3 %s authentication-mode sha2-256 cipher %s
+//	now:  snmp-agent usm-user v3 %s authentication-mode sha cipher %s
+//
+// The block told the operator to configure HMAC-SHA-256 while
+// BuildGeneratedCredential provisioned GeneratedAuthProtocol ("SHA", HMAC-SHA-1)
+// on the credential minted in the same call — so the generated pair could never
+// authenticate. The builder is authoritative (it is what the poller uses, and
+// SHA/AES128 is the pairing the generator commits to), so the TEMPLATE moved.
+// TestGeneratedV3TemplatesNameTheProtocolTheBuilderProvisions pins the two sides
+// to the one constant.
 
 import (
 	"fmt"
@@ -123,7 +150,7 @@ end`, community, orDefaultGen(mgmtSubnet, "0.0.0.0"), orDefaultGen(mask, "0.0.0.
 snmp-agent group v3 correlix-grp privacy read-view iso-view
 snmp-agent mib-view included iso-view iso
 snmp-agent usm-user v3 %s group correlix-grp
-snmp-agent usm-user v3 %s authentication-mode sha2-256 cipher %s
+snmp-agent usm-user v3 %s authentication-mode sha cipher %s
 snmp-agent usm-user v3 %s privacy-mode aes128 cipher %s`, secName, secName, authKey, secName, privKey)
 		}
 		return fmt.Sprintf("snmp-agent\nsnmp-agent community read cipher %s\nsnmp-agent sys-info version v2c", community)
@@ -142,7 +169,7 @@ set service snmp v3 user %s auth plaintext-key %s
 set service snmp v3 user %s privacy type aes
 set service snmp v3 user %s privacy plaintext-key %s
 set service snmp v3 user %s mode ro
-commit ; save`, secName, secName, authKey, secName, privKey, secName, secName)
+commit ; save`, secName, secName, authKey, secName, secName, privKey, secName)
 		}
 		return fmt.Sprintf("set service snmp community %s authorization ro\ncommit ; save", community)
 	}

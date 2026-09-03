@@ -51,6 +51,33 @@ const TEMPLATES: Template[] = [
 
 const CATEGORIES = [...new Set(TEMPLATES.map((t) => t.category))];
 
+// ── Where this page sends the operator next ─────────────────────────────────
+// Every destination named in this page's copy is declared here as a REAL hash
+// route plus the nav tree's OWN wording for it, and the copy is rendered from
+// this table — so an operator is never told to open a screen that does not
+// exist, and the instruction can never drift out of tone with the sidebar.
+//
+// It exists because it already rotted once: the 2026-08 nav redesign dissolved
+// the "Monitoring" and "Incident Response" rail sections (nav.tsx
+// LEGACY_ROUTE_ALIAS), and this page kept telling people to open
+// "Monitoring → Triggered" and "Incident Response → Notifications" long after
+// both were gone. Triggered became Operations → Active Alerts; Notifications
+// moved under Administration (where it keeps an "Incident Response" group
+// heading). NewMonitor.navPaths.test.tsx asserts every entry below still
+// resolves in nav.tsx, with that exact label, so the next rename fails the
+// build instead of the operator.
+export type NavPointer = { route: string; section: string; leaf: string };
+export const NAV_POINTERS: Record<"alerts" | "notifications" | "monitors", NavPointer> = {
+  alerts: { route: "operations/alerts", section: "Operations", leaf: "Active Alerts" },
+  notifications: { route: "admin/notifications", section: "Administration", leaf: "Notifications" },
+  monitors: { route: "operations/rules", section: "Operations", leaf: "Monitor Rules" },
+};
+
+// navPath renders a pointer the way the operator reads the sidebar.
+export function navPath(p: NavPointer): string {
+  return `${p.section} → ${p.leaf}`;
+}
+
 // Underlying metric each template watches — used to flag a template whose signal
 // the stack isn't currently collecting (so "nothing happens" is explained, not a
 // silent dead end). Custom has no fixed base.
@@ -115,7 +142,7 @@ export default function NewMonitor() {
           </div>
         </div>
         <div style={{ display: "flex", gap: 8 }}>
-          <button className="btn-accent" onClick={() => navigate("operations/rules")}>View monitors →</button>
+          <button className="btn-accent" onClick={() => navigate(NAV_POINTERS.monitors.route)}>View monitors →</button>
           <button className="btn-ghost" onClick={() => { setCreated(null); setTpl(null); }}>Create another</button>
         </div>
       </div>
@@ -246,8 +273,9 @@ export default function NewMonitor() {
                   <LivePreview expr={expr} />
                 </div>
                 <p className="mini-meta wide" style={{ margin: 0 }}>
-                  Firing alerts appear under <b>Monitoring → Triggered</b> and route through your configured
-                  notification channels and incident pipeline (see Incident Response → Notifications).
+                  Firing alerts appear under <b>{navPath(NAV_POINTERS.alerts)}</b> and route through your
+                  configured notification channels and incident pipeline (see{" "}
+                  <b>{navPath(NAV_POINTERS.notifications)}</b>).
                 </p>
               </div>
             ),

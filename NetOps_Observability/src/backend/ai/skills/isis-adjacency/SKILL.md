@@ -22,6 +22,7 @@ decisions:
   - next=log-confirmation when state:collect=not_wired the adjacency table could not be read live, so the transition times must come from the device's own words
   - next=interface-down when verdict:phrase=link the RCA verdict names the circuit beneath the adjacency
   - next=optics-degraded when the link is up but padded hellos could be corrupted
+  - next=log-confirmation when signature=uncollected the device rejected every read-only command, so NOTHING was captured and the device's own words are the only evidence left
   - next=log-confirmation when signature=none the adjacency diagnostic ran and no known signature matched, so the transition times must be pinned from the device's own words
   - verdict=name the neighbour system id, the level, the state and the mismatch the signature identified
   - escalate=the routing owner with both ends' level and area named when the mismatch is on the far end

@@ -119,8 +119,8 @@ var apiRoutes = []apiRoute{
 	// (infrastructure:write, cross-tenant id → 404, audited `sensitive`) and
 	// returns SECRET-REDACTED output; analyze and export are stateless
 	// computations over operator-supplied text.
-	{"GET", "/api/troubleshoot/protocol-diagnostics/catalog", "Troubleshooting", "The 15-issue BGP/OSPF/IS-IS matrix: symptoms, dialect coverage and the per-issue read-only command bundle (?vendor= picks the rendered dialect)"},
-	{"POST", "/api/troubleshoot/protocol-diagnostics/analyze", "Troubleshooting", "Run the failure signatures over supplied `show` output; returns the verdict + cause + remediation, or an honest \"no known signature matched\" (infrastructure:read)"},
+	{"GET", "/api/troubleshoot/protocol-diagnostics/catalog", "Troubleshooting", "The 15-issue BGP/OSPF/IS-IS matrix: symptoms, dialect coverage and the per-issue read-only command bundle. The rendered CLI dialect is chosen by ?vendor=<platform string> OR by ?device=<id> resolved in the caller's own inventory (cross-tenant/unknown id → 404); supplying both, or any other query parameter, is a 400 — a selector that changes which commands an operator is shown is never silently ignored"},
+	{"POST", "/api/troubleshoot/protocol-diagnostics/analyze", "Troubleshooting", "Run the failure signatures over supplied `show` output; returns the verdict + cause + remediation, or an honest \"no known signature matched\" (infrastructure:read). `analyzed:false` with `not_analyzed` set is the DISTINCT state for a request that carried no output at all — nothing was scored, so the protocol's state is unknown rather than clean"},
 	{"POST", "/api/troubleshoot/protocol-diagnostics/collect", "Troubleshooting", "Run an issue's read-only command bundle against one of the caller's own devices; output is secret-redacted (infrastructure:write; 503 when no command source is wired)"},
 	{"POST", "/api/troubleshoot/protocol-diagnostics/export", "Troubleshooting", "Assemble the redacted \"Send to TAC\" bundle from supplied outputs, optionally with the signature analysis folded in (infrastructure:read; audited)"},
 	// OSPF / IS-IS advanced monitoring (Project 4 D item 11, internal/igpmon).

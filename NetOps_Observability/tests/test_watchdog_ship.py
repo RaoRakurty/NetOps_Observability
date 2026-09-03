@@ -213,9 +213,21 @@ def test_installer_uninstall_print_only():
 # Publish path: execute the real functions with a fake curl on PATH
 # ---------------------------------------------------------------------------
 
+# Every extracted function emits its diagnostics through log()/logerr(), so
+# those (and their _log_stamped helper) come along or the snippet dies with
+# "logerr: command not found" — which is how the 2026-09-03 timestamping change
+# was caught here rather than in production.
+_LOG_HELPERS = (
+    "-e", "/^_log_stamped() {/,/^}/p",
+    "-e", "/^log() {/,/^}/p",
+    "-e", "/^logerr() {/,/^}/p",
+)
+
+
 def _extract_notify_functions() -> str:
     return subprocess.run(
         ["sed", "-n",
+         *_LOG_HELPERS,
          "-e", "/^push() {/,/^}/p",
          "-e", "/^json_str() {/,/^}/p",
          "-e", "/^notify_webhook() {/,/^}/p",
@@ -352,7 +364,10 @@ def _snmp_content(in_errors, rcvbuf_errors):
 
 def _extract_udp_check() -> str:
     return subprocess.run(
-        ["sed", "-n", "/^check_syslog_udp_drops() {/,/^}/p", str(WATCHDOG)],
+        ["sed", "-n",
+         *_LOG_HELPERS,
+         "-e", "/^check_syslog_udp_drops() {/,/^}/p",
+         str(WATCHDOG)],
         check=True, capture_output=True, text=True,
     ).stdout
 

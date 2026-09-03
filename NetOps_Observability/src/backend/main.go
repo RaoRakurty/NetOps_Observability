@@ -2078,6 +2078,14 @@ func (s *server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/troubleshoot/protocol-diagnostics/catalog", s.handleProtocolDiagCatalog)
 	mux.HandleFunc("/api/troubleshoot/protocol-diagnostics/analyze", s.handleProtocolDiagAnalyze)
 	mux.HandleFunc("/api/troubleshoot/protocol-diagnostics/collect", s.handleProtocolDiagCollect)
+	// The "Send to TAC" bundle. The handler, its validation path and its tests
+	// have always existed and the file header + openapi.go have always
+	// documented the route — it was simply never registered, so a documented
+	// endpoint 404'd (QA 2026-09-03, D-12). Registering it is the honest fix:
+	// the alternative (deleting the documentation) would take away the only way
+	// to export a capture no signature could explain, which is the case the
+	// feature exists for.
+	mux.HandleFunc("/api/troubleshoot/protocol-diagnostics/export", s.handleProtocolDiagExport)
 	// IGP-MONITORING-BEGIN — OSPF/IS-IS advanced monitoring (Project 4 D item
 	// 11, internal/igpmon). READ-ONLY over telemetry the platform already
 	// collects; every response carries an honest coverage block. Each route is

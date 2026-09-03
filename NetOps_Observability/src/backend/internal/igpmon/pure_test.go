@@ -342,6 +342,15 @@ func TestHonestNotesNameTheAbsentSource(t *testing.T) {
 		if !strings.Contains(s, p.AdjMetric()) || !strings.Contains(s, "syslog/trap events only") {
 			t.Errorf("%s noSeriesNote is not honest: %q", p, s)
 		}
+		// fetchLive serves the FLEET roll-up too (handleSummary passes no device
+		// ids), so this note may not claim a single device — and it must match
+		// the plural subject the other four coverage notes use.
+		if strings.Contains(s, "this device") {
+			t.Errorf("%s noSeriesNote is per-device wording on a note the fleet roll-up also renders: %q", p, s)
+		}
+		if !strings.Contains(s, "these devices") {
+			t.Errorf("%s noSeriesNote must use the same plural subject as the lsdb/spf/area/timer notes: %q", p, s)
+		}
 	}
 	if !strings.Contains(noSeriesNote(ProtoOSPF), "SNMP-owned") {
 		t.Error("the OSPF note must name why no live series exists")

@@ -45,6 +45,12 @@ func SummariesFromSnapshots(rows []MetricRow, f Filters, includeInternal bool) [
 		}
 		durs := map[MetricName]int64{}
 		for _, m := range row.Metrics {
+			// TTD is excluded from rollups: the snapshot (backfill) path does not run
+			// the per-object min(ingest_ts) query (N+1), so it derives no `detected`
+			// stamp at all and ttd is already INCOMPLETE (DeriveLifecycle no longer
+			// falls back to the onset, which used to make it a misleading complete 0).
+			// The name check is kept as belt-and-braces: it states the exclusion
+			// instead of relying on another package's incompleteness to imply it.
 			if m.Complete && m.Name != MetricTTD {
 				durs[m.Name] = m.DurationMs
 			}

@@ -72,9 +72,29 @@ func titleVendor(v string) string {
 	return strings.ToUpper(v[:1]) + v[1:]
 }
 
+// GeneratedAuthProtocol / GeneratedPrivProtocol are the v3 protocols the
+// onboarding generator PROVISIONS on the credential it mints. They are the ONE
+// source of truth for that pairing: the vendor `snmp_configgen.v3_template`
+// blocks must name the same protocols, because the operator pastes the block
+// into the device and Correlix then polls it with this credential. A device
+// configured for one auth protocol and a poller credential built for another
+// simply fails to authenticate, and nothing in the generated pair says why —
+// so the agreement is asserted against these constants
+// (TestGeneratedV3TemplatesNameTheProtocolTheBuilderProvisions), never against
+// two hand-copied strings.
+//
+// SHA is HMAC-SHA-1 (USM's original auth protocol) and AES128 is CFB128-AES-128:
+// the widest interoperable pairing Correlix supports. AuthProtocols in store.go
+// carries the full set a hand-authored credential may use; this pair is what the
+// GENERATOR picks, and raising it means updating every v3 template with it.
+const (
+	GeneratedAuthProtocol = "SHA"
+	GeneratedPrivProtocol = "AES128"
+)
+
 // buildSNMPCredential builds the credential profile that matches a generated
-// config (pure; the caller persists it). v3 uses SHA + AES128 (the widest
-// interoperable pairing Correlix supports).
+// config (pure; the caller persists it). v3 uses GeneratedAuthProtocol +
+// GeneratedPrivProtocol (SHA + AES128).
 func BuildGeneratedCredential(vendor, version, community, secName, authKey, privKey string) Credential {
 	c := Credential{
 		ID:      fmt.Sprintf("%s-%s-gen", vendor, version),
@@ -87,9 +107,9 @@ func BuildGeneratedCredential(vendor, version, community, secName, authKey, priv
 	} else {
 		c.SecurityName = secName
 		c.SecurityLevel = "authPriv"
-		c.AuthProtocol = "SHA"
+		c.AuthProtocol = GeneratedAuthProtocol
 		c.AuthKey = authKey
-		c.PrivProtocol = "AES128"
+		c.PrivProtocol = GeneratedPrivProtocol
 		c.PrivKey = privKey
 	}
 	return c

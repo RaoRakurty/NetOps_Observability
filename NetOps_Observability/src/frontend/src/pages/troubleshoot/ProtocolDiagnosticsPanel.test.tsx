@@ -192,7 +192,10 @@ describe("collect", () => {
       issue_id: "bgp-session-down",
       target: { interface: "", peer: "10.0.0.2", prefix: "", vrf: "" },
     });
-    expect(await screen.findByText(/Captured 2 command\(s\) from leaf1/)).toBeInTheDocument();
+    // D-4: this fixture is a PARTIAL capture (1 of 2 commands answered), and the
+    // notice says so rather than claiming both were captured.
+    expect(await screen.findByText(/Captured 1 of 2 commands from leaf1/)).toBeInTheDocument();
+    expect(screen.getByText(/1 was rejected/)).toBeInTheDocument();
     // a per-command transport failure is reported, not hidden
     expect(screen.getByText(/Command error: transport timeout/)).toBeInTheDocument();
   });

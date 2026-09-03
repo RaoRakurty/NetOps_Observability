@@ -263,8 +263,17 @@ const (
 	// does not gather.
 	CondStatePrefix = "state:"
 	// CondSignatureNone is the reserved CondSignature value: a protocol
-	// diagnostic RAN this turn and no known signature matched its output.
+	// diagnostic RAN this turn, CAPTURED OUTPUT, and no known signature matched
+	// it. "Captured output" is load-bearing — see CondSignatureUncollected.
 	CondSignatureNone = "none"
+	// CondSignatureUncollected is the reserved CondSignature value for the
+	// OTHER empty outcome: the diagnostic ran, every read-only command was
+	// rejected by the device and NOTHING was captured. Before it existed both
+	// outcomes collapsed into `signature=none`, so "7 of 7 commands failed, 0
+	// bytes" was narrated as "we looked and no signature matched" — which an
+	// operator reads as "we looked, it is fine" (QA 2026-09-03, D-4). The two
+	// are now distinct facts and route differently.
+	CondSignatureUncollected = "uncollected"
 )
 
 // skillToolOutcomes is the closed outcome vocabulary of a `tool:<name>=` condition.
@@ -438,6 +447,8 @@ func (c SkillCondition) Human() string {
 	switch {
 	case c.Key == CondSignature && c.Value == CondSignatureNone:
 		return "the protocol diagnostic ran and no known signature matched"
+	case c.Key == CondSignature && c.Value == CondSignatureUncollected:
+		return "the protocol diagnostic ran but the device rejected every read-only command, so nothing was captured"
 	case c.Key == CondSignature:
 		return "the " + c.Value + " signature fired"
 	case c.Key == CondEvidenceKind:
@@ -481,8 +492,9 @@ func parseSkillCondition(raw string, declared map[string]bool) (SkillCondition, 
 	}
 	switch {
 	case key == CondSignature:
-		if value != CondSignatureNone && !reCondSignature.MatchString(value) {
-			return SkillCondition{}, fmt.Errorf("signature %q must be %q or a signature id matching %s", value, CondSignatureNone, reCondSignature)
+		if value != CondSignatureNone && value != CondSignatureUncollected && !reCondSignature.MatchString(value) {
+			return SkillCondition{}, fmt.Errorf("signature %q must be %q, %q or a signature id matching %s",
+				value, CondSignatureNone, CondSignatureUncollected, reCondSignature)
 		}
 	case key == CondEvidenceKind:
 		if !skillEvidenceKinds[value] {

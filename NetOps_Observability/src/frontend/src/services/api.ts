@@ -2569,6 +2569,11 @@ export type ProtocolDiagCatalog = {
   ruleset_version: string;
   vendor: string;
   vendor_display: string;
+  /** Echoed only when the dialect was chosen by `?device=`: the resolved device
+   *  id and the platform string the dialect was derived FROM, so an operator can
+   *  see which platform produced these commands rather than trust the selector. */
+  device?: string;
+  device_platform?: string;
   protocols: string[];
   /** protocol id → its issues, in catalog order. */
   issues: Record<string, ProtocolDiagIssue[]>;
@@ -2603,9 +2608,22 @@ export type ProtocolDiagAnalysis = {
   issue_id: string;
   issue_title: string;
   ruleset_version: string;
+  /** False when the request carried NO command output at all: nothing was
+   *  scored, so the protocol's state is unknown rather than clean. This is the
+   *  state that used to be reported as `matched:false` + "no known signature
+   *  matched" — the sentence that made a total collection failure read as a
+   *  clean bill of health (QA 2026-09-03, D-4). Older servers omit the field;
+   *  `analyzed !== false` therefore means "scored", which is the safe default. */
+  analyzed?: boolean;
+  /** How many outputs the request carried, and how many of those had content. */
+  outputs_received?: number;
+  outputs_supplied?: number;
   matched: boolean;
   findings: ProtocolDiagFinding[];
+  /** Set only when the signatures RAN and none fired. Empty when `analyzed` is false. */
   unmatched: string;
+  /** Set only when `analyzed` is false: why there was nothing to score. */
+  not_analyzed?: string;
   tac_export: string;
 };
 
@@ -4424,10 +4442,18 @@ export const api = {
   // server is the authority and its 403 is rendered inline.
   /** The 15-issue matrix. `vendor` is a free-form platform string ("Cisco
    *  IOS-XE 17.9") the server normalizes to a dialect for the command text. */
-  protocolDiagCatalog: (vendor?: string) =>
-    request<ProtocolDiagCatalog>(
-      `/api/troubleshoot/protocol-diagnostics/catalog${vendor ? `?vendor=${encodeURIComponent(vendor)}` : ""}`,
-    ),
+  /** The issue matrix. The rendered CLI dialect is chosen EITHER by a free-form
+   *  platform string (`vendor`) OR by a device id resolved in the caller's own
+   *  inventory (`device`) — never both, which the server refuses with a 400. */
+  protocolDiagCatalog: (vendor?: string, device?: string) => {
+    const qs = new URLSearchParams();
+    if (device) qs.set("device", device);
+    else if (vendor) qs.set("vendor", vendor);
+    const q = qs.toString();
+    return request<ProtocolDiagCatalog>(
+      `/api/troubleshoot/protocol-diagnostics/catalog${q ? `?${q}` : ""}`,
+    );
+  },
   /** Runs the failure signatures over collected/pasted output. Touches no
    *  device, persists nothing, and returns the redacted TAC export. */
   protocolDiagAnalyze: (req: ProtocolDiagAnalyzeRequest) =>

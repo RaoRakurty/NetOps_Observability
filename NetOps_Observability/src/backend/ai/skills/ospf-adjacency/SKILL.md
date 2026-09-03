@@ -23,6 +23,7 @@ decisions:
   - next=interface-down when signature=ospf-flap-l1 the adjacency is flapping with L1 errors on the interface beneath it
   - next=interface-down when verdict:phrase=link the RCA verdict names the link beneath the adjacency
   - next=optics-degraded when the link is up but errors could be dropping the larger database packets
+  - next=log-confirmation when signature=uncollected the device rejected every read-only command, so NOTHING was captured and the device's own words are the only evidence left
   - next=log-confirmation when signature=none the adjacency diagnostic ran and no known signature matched, so the transition times must be pinned from the device's own words
   - verdict=name the neighbour, the stuck state and the mismatch the signature identified
   - escalate=the routing owner with both ends' parameters named when the mismatch is on the far end

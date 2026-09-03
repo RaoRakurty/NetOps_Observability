@@ -296,6 +296,93 @@ def test_h16_critical_clear_with_standing_advisory_pushes_all_clear(tmp_path):
 
 
 # ---------------------------------------------------------------------------
+# 2026-09-03 — EVERY emitted line carries a timestamp
+#
+# The watchdog's output is appended by cron into one ever-growing file
+# (`data/stack-watchdog.log`; /var/log/correlix-watchdog.log for packaged
+# installs). It reached 13 MB WITHOUT A SINGLE TIME on any line, so during the
+# 2026-09-03 drill the one artefact designed to survive the stack dying could
+# say WHAT happened and never WHEN — the timeline had to be rebuilt from
+# container logs. §16.2: a cron log that cannot be correlated is not evidence.
+#
+# The DOWN summary is multi-line (one line per problem), so "the first line is
+# stamped" is not the contract: EVERY line is.
+# ---------------------------------------------------------------------------
+
+# 2026-09-03T04:53:11+0530 — ISO-8601 local time WITH offset, so lines stay
+# ordered and comparable across a DST change and against `docker logs -t`.
+TS_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}[+-]\d{4} ")
+
+
+def _unstamped(stream: str) -> list[str]:
+    return [l for l in stream.splitlines() if l.strip() and not TS_RE.match(l)]
+
+
+def test_every_diagnostic_line_is_timestamped_on_a_healthy_run(tmp_path):
+    _, etc, _, _, _ = _installed_layout(tmp_path)
+    r, _ = _run(tmp_path, etc, "ts-healthy")
+    assert r.returncode == 0, r.stderr
+    bad = _unstamped(r.stderr) + _unstamped(r.stdout)
+    assert not bad, (
+        "these lines would land in the cron log with no time on them "
+        f"(use log()/logerr(), never a bare echo): {bad}"
+    )
+
+
+def test_every_line_of_the_multiline_down_summary_is_timestamped(tmp_path):
+    """`watchdog: DOWN -> $msg` holds one line per problem — stamp them all."""
+    _, etc, _, _, _ = _installed_layout(tmp_path)
+    r, _ = _run(tmp_path, etc, "ts-down", FAKE_DOWN_SVC="api", FAKE_SNAP_OLD=1)
+    assert r.returncode == 1, r.stderr
+    assert "DOWN ->" in r.stderr, r.stderr
+    # Two problems, so the summary itself spans at least two lines.
+    summary = [l for l in r.stderr.splitlines() if "DOWN ->" in l or "backup STALE" in l]
+    assert len(summary) >= 2, f"expected a multi-line summary, got: {summary}"
+    bad = _unstamped(r.stderr) + _unstamped(r.stdout)
+    assert not bad, (
+        "a continuation line of the DOWN summary is unstamped — this is the "
+        f"exact shape that made the old log ungreppable: {bad}"
+    )
+
+
+def test_no_bare_echo_writes_a_diagnostic_line(tmp_path):
+    """Static guard: a new `echo ... >&2` would silently reintroduce the defect.
+
+    Data-carrying printf (function return values captured by `$( )`, state
+    files) is deliberately untouched — only stdout/stderr DIAGNOSTICS are
+    required to go through log()/logerr().
+    """
+    offenders = []
+    for n, line in enumerate(WATCHDOG.read_text().splitlines(), 1):
+        stripped = line.strip()
+        if stripped.startswith("#"):
+            continue
+        if re.match(r"^(\|\|\s+)?echo .+ >&2$", stripped):
+            offenders.append(f"{n}: {stripped}")
+    assert not offenders, (
+        "these emit an unstamped diagnostic line; route them through "
+        f"logerr(): {offenders}"
+    )
+
+
+def test_log_helpers_are_defined_before_the_first_use(tmp_path):
+    """`set -uo pipefail` does not catch a call to an undefined function early."""
+    lines = WATCHDOG.read_text().splitlines()
+    define = next(i for i, l in enumerate(lines) if l.startswith("_log_stamped() {"))
+    call_re = re.compile(r'(?<![-\w])log(err)?\s+"')
+    uses = [
+        i
+        for i, l in enumerate(lines)
+        if call_re.search(l) and not l.strip().startswith("#")
+    ]
+    assert uses, "no log()/logerr() call sites found — did the helpers get renamed?"
+    assert define < min(uses), (
+        f"log()/logerr() are called at line {min(uses) + 1} but _log_stamped is "
+        f"defined at {define + 1}"
+    )
+
+
+# ---------------------------------------------------------------------------
 # H17 — OpenSearch blindness is named, and TLS probes carry CA + credentials
 # ---------------------------------------------------------------------------
 

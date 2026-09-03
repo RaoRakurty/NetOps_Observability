@@ -2,7 +2,7 @@
   "schema_version": 1,
   "vendor": "huawei",
   "display_name": "Huawei",
-  "notes": "VRP declares NO cli dialect: the protocol-diagnostics catalog ships no Huawei command bindings, so a Huawei device's dialect is honestly unknown there (the caller records the fallback it renders). The vendor-level verify.commands block IS established — the active-verification battery has authored VRP display-command rows.",
+  "notes": "VRP declares NO cli dialect: the protocol-diagnostics catalog ships no Huawei command bindings, so a Huawei device's dialect is honestly unknown there (the caller records the fallback it renders). The vendor-level verify.commands block IS established — the active-verification battery has authored VRP display-command rows. snmp_configgen.v3_template declares authentication-mode SHA (VRP's HMAC-SHA-1 keyword) because that is what snmpcred.BuildGeneratedCredential provisions on the credential it mints alongside the block (snmpcred.GeneratedAuthProtocol = \"SHA\"); it previously declared sha2-256, so an operator who pasted the generated config got a device the generated poller credential could not authenticate to. snmpcred.TestGeneratedV3TemplatesNameTheProtocolTheBuilderProvisions pins the two sides to that one constant.",
   "detection": {
     "sysobjectid_prefixes": [
       "1.3.6.1.4.1.2011"
@@ -57,7 +57,7 @@
   },
   "snmp_configgen": {
     "v2c_template": "snmp-agent\nsnmp-agent community read cipher <<community>>\nsnmp-agent sys-info version v2c",
-    "v3_template": "snmp-agent sys-info version v3\nsnmp-agent group v3 correlix-grp privacy read-view iso-view\nsnmp-agent mib-view included iso-view iso\nsnmp-agent usm-user v3 <<sec_name>> group correlix-grp\nsnmp-agent usm-user v3 <<sec_name>> authentication-mode sha2-256 cipher <<auth_key>>\nsnmp-agent usm-user v3 <<sec_name>> privacy-mode aes128 cipher <<priv_key>>"
+    "v3_template": "snmp-agent sys-info version v3\nsnmp-agent group v3 correlix-grp privacy read-view iso-view\nsnmp-agent mib-view included iso-view iso\nsnmp-agent usm-user v3 <<sec_name>> group correlix-grp\nsnmp-agent usm-user v3 <<sec_name>> authentication-mode sha cipher <<auth_key>>\nsnmp-agent usm-user v3 <<sec_name>> privacy-mode aes128 cipher <<priv_key>>"
   },
   "profiles": [
     {

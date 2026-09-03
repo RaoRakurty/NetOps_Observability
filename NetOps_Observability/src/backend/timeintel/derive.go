@@ -12,7 +12,9 @@ import (
 // UI never reads an approximation as ground truth.
 //
 // Mapping (v1, documented so it can be refined): first_signal = window_start (min
-// signal onset); detected = earliest ingest (Correlix's detection latency); correlation
+// signal onset); detected = earliest ingest (Correlix's detection latency), and it is
+// ABSENT — never defaulted to the onset — when that ingest time is unknown, because a
+// detection stamped at the onset makes time-to-detect a fabricated 0 ms; correlation
 // _completed = object persist time; root_domain_identified = persist time once the
 // verdict is grounded (suspected/confirmed); owner_identified = same instant (owner is
 // intrinsic to the grounded hypothesis → timing INFERRED); evidence_ready = persist
@@ -49,8 +51,11 @@ const inferredRecoveryMaxConfidence = 0.7
 
 // CorrTimeFacts are the engine-side facts pulled from a correlation object.
 type CorrTimeFacts struct {
-	WindowStart     time.Time // min signal ts (onset) — first_signal
-	FirstIngest     time.Time // min signal ingest_ts — detection (zero if unknown)
+	WindowStart time.Time // min signal ts (onset) — first_signal
+	// FirstIngest is the min signal ingest_ts — the detection instant. ZERO means
+	// UNKNOWN: no `detected` stamp is produced and ttd/ttm report INCOMPLETE. It is
+	// never defaulted to WindowStart, which would fabricate a complete 0 ms detection.
+	FirstIngest     time.Time
 	CreatedAt       time.Time // object persisted — correlation completed
 	VerdictTier     string    // undetermined | suspected | confirmed
 	Owner           string    // seam owner from the top hypothesis (may be "")
@@ -107,13 +112,31 @@ func DeriveLifecycle(c CorrTimeFacts, t ITSMTimeFacts) Lifecycle {
 
 	if !c.WindowStart.IsZero() {
 		put(EvFirstSignal, c.WindowStart, SrcObserved, 1)
-		// Detection = when Correlix first ingested the onset. Never before the onset
-		// itself (clock skew guard); fall back to the onset when ingest is unknown.
-		det := c.FirstIngest
-		if det.IsZero() || det.Before(c.WindowStart) {
-			det = c.WindowStart
+		// Detection = when Correlix first INGESTED the onset.
+		//
+		// When the ingest time is UNKNOWN (FirstIngest zero — the caller's
+		// minIngestTS could not read the signal archive, or the object has no
+		// archived signals; it logs the fault and returns the zero time, which it
+		// documents as "left INCOMPLETE, never zero") detection is NOT stamped.
+		// Falling back to the onset used to look harmless, but the onset IS the
+		// start of time-to-detect: detected = first_signal makes ttd compute as a
+		// COMPLETE 0 ms — a fabricated measurement rendered exactly like a real
+		// one (§10 no silent failures; unknown is null, never zero).
+		//
+		// Absent from the Lifecycle map is this package's ONE way of saying "not
+		// measured" (see the honesty rules in types.go): ComputeTimeMetrics then
+		// reports ttd as Complete=false with missing_event=detected, and every
+		// consumer that keys on Complete / on the presence of the stamp shows the
+		// phase as unmeasured instead of instantaneous.
+		if det := c.FirstIngest; !det.IsZero() {
+			// Clock-skew guard: a real ingest stamp that predates the onset is
+			// clamped to the onset. A measurement EXISTS here — only its ordering
+			// is corrupt — so it stays complete, unlike the unknown case above.
+			if det.Before(c.WindowStart) {
+				det = c.WindowStart
+			}
+			put(EvDetected, det, SrcObserved, 1)
 		}
-		put(EvDetected, det, SrcObserved, 1)
 	}
 	if !c.CreatedAt.IsZero() {
 		put(EvCorrelationCompleted, c.CreatedAt, SrcObserved, 1)

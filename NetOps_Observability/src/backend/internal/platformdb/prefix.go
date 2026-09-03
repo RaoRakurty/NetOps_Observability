@@ -86,7 +86,9 @@ func Delete(key string) error {
 // in "/" is the directory itself; otherwise the walk starts at the parent
 // directory and filters on the full prefix. A directory that does not exist
 // yet is an empty store, not an error. In-flight atomic-write temporaries
-// (Save's "<key>.tmp") are never committed records and are skipped.
+// (Save's uniquely-named "<key>.<random>.tmp") are never committed records and
+// are skipped — matched on the ".tmp" SUFFIX, which Save's os.CreateTemp
+// pattern preserves.
 //
 // The walk and every read are ROOT-SCOPED (os.OpenRoot): a symlink planted
 // inside the subtree cannot pull the scan outside it (TOCTOU traversal,

@@ -364,3 +364,91 @@ func TestBGPFeedMetricsAreTenantScoped(t *testing.T) {
 		}
 	}
 }
+
+// ── L-05: deleting a watch clears its verdict, end to end ──────────────────
+//
+// Live proof, 2026-09-03: the row was deleted and the Prefixes view kept
+// rendering its `incidents` entry — a hijack/leak class for a resource nothing
+// was measuring any more. This drives the REAL handler against the REAL
+// evaluator, which is where the two halves have to agree.
+func TestDeletingAWatchClearsItsIncident(t *testing.T) {
+	s := bgpWatchTestServer(t, true) // evaluator has run once; globex watches a bogon
+	s.bgpWatch = bgpwatch.NewWatchFileStore(filepath.Join(t.TempDir(), "bgp_watchlist.json"))
+
+	const bogon = "10.9.0.0/16"
+	bgpWatchAddVia(t, s, globex(), bogon)
+
+	incidentsFor := func(claims jwtClaims) map[string]bgpwatch.Incident {
+		t.Helper()
+		w := httptest.NewRecorder()
+		s.handleBGPWatchlist(w, req(http.MethodGet, "/api/bgp/watchlist", "", claims))
+		if w.Code != http.StatusOK {
+			t.Fatalf("GET watchlist: %d %s", w.Code, w.Body.String())
+		}
+		var out struct {
+			Incidents map[string]bgpwatch.Incident `json:"incidents"`
+		}
+		if err := json.Unmarshal(w.Body.Bytes(), &out); err != nil {
+			t.Fatalf("decode: %v (%s)", err, w.Body.String())
+		}
+		return out.Incidents
+	}
+
+	before := incidentsFor(globex())
+	inc, ok := before[bogon]
+	if !ok || inc.Class == "" {
+		t.Fatalf("the fixture produced no verdict to clear: %+v", before)
+	}
+
+	w := httptest.NewRecorder()
+	s.handleBGPWatchlist(w, req(http.MethodDelete, "/api/bgp/watchlist?resource="+bogon, "", globex()))
+	if w.Code != http.StatusOK {
+		t.Fatalf("DELETE: %d %s", w.Code, w.Body.String())
+	}
+
+	if got := bgpWatchListVia(t, s, globex()); len(got) != 0 {
+		t.Fatalf("the row survived the delete: %v", got)
+	}
+	if after := incidentsFor(globex()); len(after) != 0 {
+		t.Fatalf("the verdict outlived the row it described: %+v", after)
+	}
+}
+
+// Deleting an ASN touches no verdict (verdicts are per-prefix), and one tenant's
+// delete never reaches another tenant's evaluator state.
+func TestDeletingAWatchDoesNotReachAnotherTenantsIncidents(t *testing.T) {
+	s := bgpWatchTestServer(t, true)
+	s.bgpWatch = bgpwatch.NewWatchFileStore(filepath.Join(t.TempDir(), "bgp_watchlist.json"))
+
+	// acme deletes the SAME prefix globex has a verdict for. acme never watched
+	// it, so the delete is a 404 and globex's verdict must be untouched.
+	bgpWatchAddVia(t, s, acme(), "AS64500")
+	w := httptest.NewRecorder()
+	s.handleBGPWatchlist(w, req(http.MethodDelete, "/api/bgp/watchlist?resource=10.9.0.0/16", "", acme()))
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("acme deleting a resource it does not watch: want 404, got %d", w.Code)
+	}
+	gx, err := s.bgpWatchEval.Incidents("globex")
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, inc := range gx {
+		if inc.Prefix == "10.9.0.0/16" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("CROSS-TENANT: acme's delete cleared globex's verdict")
+	}
+
+	// An ASN delete is a normal success and clears nothing (no per-prefix state).
+	w = httptest.NewRecorder()
+	s.handleBGPWatchlist(w, req(http.MethodDelete, "/api/bgp/watchlist?resource=AS64500", "", acme()))
+	if w.Code != http.StatusOK {
+		t.Fatalf("acme deleting its own ASN: %d %s", w.Code, w.Body.String())
+	}
+	if gx2, _ := s.bgpWatchEval.Incidents("globex"); len(gx2) != len(gx) {
+		t.Fatal("an ASN delete disturbed another tenant's verdicts")
+	}
+}

@@ -296,6 +296,39 @@ func (s *server) aiProtocolDiagnostic(r *http.Request, claims jwtClaims) func(co
 			"commands": len(col.Commands), "via": "ai_assistant",
 		})
 
+		// D-4 — REPORT WHAT ACTUALLY HAPPENED. A collection can come back with
+		// every command errored and zero bytes captured (proven live on the lab
+		// spines: 20 of 20 read-only commands rejected). Setting Collected=true
+		// unconditionally turned that into "the diagnostic ran and no known
+		// signature matched", which an operator reads as "we looked, the
+		// protocol is fine". The per-command outcome is carried onto the report
+		// so a PARTIAL capture degrades honestly too (§10: no silent failures).
+		rep.Commands = rep.Commands[:0]
+		captured := 0
+		for _, cc := range col.Commands {
+			cmd := ai.DiagnosticCommand{
+				SpecID:  cc.SpecID,
+				Purpose: cc.Purpose,
+				Command: cc.Command,
+				Error:   clampString(cc.Err, pdMaxTargetField),
+			}
+			if strings.TrimSpace(cc.Output) != "" {
+				captured++
+			}
+			rep.Commands = append(rep.Commands, cmd)
+		}
+		rep.Attempted = true
+		rep.Total = len(col.Commands)
+		rep.Failed = rep.Total - captured
+		if captured == 0 {
+			rep.CollectFailed = pdNothingCapturedReason(col)
+			logWarn("ai", "protocol diagnostic captured no output", map[string]any{
+				"device_id": dev.ID, "issue_id": issue.ID,
+				"commands": rep.Total, "failed": rep.Failed,
+			})
+			return rep, nil
+		}
+
 		res := s.pdAnalyzer().Analyze(col)
 		rep.Collected = true
 		rep.Unmatched = res.Unmatched
@@ -308,6 +341,31 @@ func (s *server) aiProtocolDiagnostic(r *http.Request, claims jwtClaims) func(co
 		}
 		return rep, nil
 	}
+}
+
+// pdNothingCapturedReason is the honest sentence for a live capture in which no
+// command produced output. It counts the failures and names the FIRST distinct
+// device error, which is what tells an operator "the command set is wrong for
+// this OS" apart from "the box is unreachable".
+func pdNothingCapturedReason(col *protocoldiag.Collection) string {
+	total, failed, first := len(col.Commands), 0, ""
+	for _, cc := range col.Commands {
+		if strings.TrimSpace(cc.Err) != "" {
+			failed++
+			if first == "" {
+				first = strings.TrimSpace(cc.Err)
+			}
+		}
+	}
+	msg := fmt.Sprintf("the read-only commands were rejected by the device (%d of %d failed); no output was captured, so nothing was analysed",
+		failed, total)
+	if total > 0 && failed == 0 {
+		msg = fmt.Sprintf("all %d read-only commands returned empty output; nothing was captured, so nothing was analysed", total)
+	}
+	if first != "" {
+		msg += " — first error: " + clampString(first, pdMaxTargetField)
+	}
+	return msg
 }
 
 // aiPickDiagIssue resolves the catalog issue for a (protocol, optional issue id)

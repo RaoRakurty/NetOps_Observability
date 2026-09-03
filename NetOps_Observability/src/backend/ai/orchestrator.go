@@ -199,6 +199,14 @@ func Classify(question string, uiContext map[string]string) Plan {
 	} else if m := rePID.FindString(question); m != "" {
 		ent["problem_id"] = m
 	}
+	// The device the UI has open, when it passed one. Skill selection reads it to
+	// tell a DEVICE-scoped health question ("what is the health of spine1") from
+	// the generic one the product knowledge base answers (D-3). The authoritative,
+	// tenant-checked device binding still happens later in resolveSkillEntities —
+	// this is a routing hint from the client, never an inventory fact.
+	if d := strings.TrimSpace(firstNonEmpty(uiContext["device_id"], uiContext["device"])); d != "" {
+		ent["device"] = d
+	}
 
 	switch {
 	case ent["problem_id"] != "":

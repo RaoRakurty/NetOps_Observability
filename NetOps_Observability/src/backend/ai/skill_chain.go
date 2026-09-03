@@ -105,6 +105,11 @@ type chainFacts struct {
 	// "facet=value" (IRIS Phase A4). Each is derived by the SERVER from a typed
 	// showparse field and re-validated here against the closed vocabulary.
 	states map[string]bool
+	// diagUncollected records the reserved `signature=uncollected` fact: a
+	// protocol diagnostic ran and captured NOTHING. It is kept out of
+	// `signatures` on purpose — it is not a signature that fired, it is the
+	// statement that there was nothing to fire against.
+	diagUncollected bool
 }
 
 func newChainFacts() *chainFacts {
@@ -135,7 +140,12 @@ func (f *chainFacts) addSignals(signals []string) {
 		key, value = strings.TrimSpace(key), strings.TrimSpace(value)
 		switch key {
 		case CondSignature:
-			if value != CondSignatureNone && reCondSignature.MatchString(value) {
+			switch {
+			case value == CondSignatureUncollected:
+				f.diagUncollected = true
+			case value == CondSignatureNone:
+				// Reserved: derived below from the tool outcome, never asserted.
+			case reCondSignature.MatchString(value):
 				f.signatures[value] = true
 			}
 		case CondVerdictTier:
@@ -222,10 +232,15 @@ func (f *chainFacts) recordTool(tool, outcome string) {
 func (f *chainFacts) holds(c SkillCondition) bool {
 	switch {
 	case c.Key == CondSignature && c.Value == CondSignatureNone:
-		// "The diagnostic ran and nothing matched" — deliberately NOT "no
-		// signature fired", which would be trivially true on a turn that never
-		// ran a diagnostic at all.
-		return f.toolOutcome["run_protocol_diagnostic"] == "ok" && len(f.signatures) == 0
+		// "The diagnostic ran, captured output and nothing matched" —
+		// deliberately NOT "no signature fired", which would be trivially true
+		// on a turn that never ran a diagnostic at all, and deliberately NOT
+		// true when the device rejected every command: a capture that produced
+		// zero bytes was never scored, so "nothing matched" would be a lie
+		// (D-4). That case is its own condition, below.
+		return f.toolOutcome["run_protocol_diagnostic"] == "ok" && len(f.signatures) == 0 && !f.diagUncollected
+	case c.Key == CondSignature && c.Value == CondSignatureUncollected:
+		return f.toolOutcome["run_protocol_diagnostic"] == "ok" && f.diagUncollected
 	case c.Key == CondSignature:
 		return f.signatures[c.Value]
 	case c.Key == CondEvidenceKind:

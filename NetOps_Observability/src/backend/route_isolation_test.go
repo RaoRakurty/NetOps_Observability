@@ -138,9 +138,18 @@ var routeIsolationLedger = map[string]string{
 	// (cross-tenant/unknown id → 404, existence never revealed) and stamps the
 	// Collection's tenant from the RESOLVED device; cross-org isolation proven
 	// by protocol_diagnostics_isolation_test.go.
-	"/api/troubleshoot/protocol-diagnostics/catalog": "globalRef",
+	// The catalog itself is version-pinned reference data identical for every
+	// tenant, but ?device= now resolves through the CALLER'S OWN inventory to
+	// pick the dialect (D-5) and echoes that device's platform string — so the
+	// route is tenant-scoped and carries a cross-org isolation test
+	// (TestProtocolDiagCatalogDeviceCrossOrgIsolation).
+	"/api/troubleshoot/protocol-diagnostics/catalog": "scoped",
 	"/api/troubleshoot/protocol-diagnostics/analyze": "globalRef",
 	"/api/troubleshoot/protocol-diagnostics/collect": "scoped",
+	// Export is request-scoped over operator-SUPPLIED text, exactly like
+	// analyze: it reads no store, resolves no device and reveals nothing the
+	// caller did not send. Same classification for the same reason.
+	"/api/troubleshoot/protocol-diagnostics/export": "globalRef",
 	// OSPF / IS-IS advanced monitoring (Project 4 D item 11, internal/igpmon).
 	// All six are per-tenant DATA and read NOTHING that is not already
 	// collected. The chain is the pcap/configstore one: requirePerm

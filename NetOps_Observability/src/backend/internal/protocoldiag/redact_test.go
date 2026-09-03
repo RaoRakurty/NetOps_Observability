@@ -296,3 +296,50 @@ func TestRedact_RoutingProtocolSecretCanaries(t *testing.T) {
 		t.Error("Redact mutated the original capture")
 	}
 }
+
+// TestTACExport_UnknownDialectIsNotClaimedAsAVendor is the D-2 half of the
+// 2026-09-03 live run that lands in THIS package: an SR Linux spine's bundle
+// carried the header `Vendor : Nokia SR OS` over `Platform : nokia SR Linux`,
+// and attributed real SR Linux output to `$ show router isis adjacency` — a
+// command that box cannot parse. A bundle handed to a vendor TAC must never
+// name an operating system the device is not running.
+//
+// With no authored srlinux CLI dialect the platform now resolves to
+// VendorUnknown, so the header states the fallback instead of a vendor.
+func TestTACExport_UnknownDialectIsNotClaimedAsAVendor(t *testing.T) {
+	srl := Device{ID: "spine1", Hostname: "spine1", Platform: "nokia SR Linux", TenantID: "acme"}
+	if got := srl.Vendor(); got != VendorUnknown {
+		t.Fatalf("precondition: SR Linux must have no authored dialect, got %q", got)
+	}
+	col := collectFor(t, DefaultCatalog(), srl, Target{}, "isis-adjacency-down", map[string]string{
+		"isis-neighbors": "| ethernet-1/1.0 | 0100.0000.0011 | L2 | 10.0.1.1 | :: | up | 30 |",
+	})
+	blob := TACExport(col, DefaultAnalyzer().Analyze(col))
+
+	if strings.Contains(blob, "Nokia SR OS") {
+		t.Fatalf("the export names an operating system this device is not running:\n%s", blob)
+	}
+	if !strings.Contains(blob, "Platform    : nokia SR Linux") {
+		t.Errorf("the export must state the platform it actually captured from:\n%s", blob)
+	}
+	// It must say WHY the commands look the way they do — a TAC engineer reading
+	// `show ip ...` against an SR Linux box needs to know we fell back.
+	for _, want := range []string{"no authored CLI dialect", "fallback", "may not be valid here"} {
+		if !strings.Contains(blob, want) {
+			t.Errorf("the header does not disclose the dialect fallback (%q missing):\n%s", want, blob)
+		}
+	}
+
+	// Control: a device WITH an authored dialect keeps the plain, unqualified
+	// header — the disclosure must not become noise on every export.
+	plain := TACExport(
+		collectFor(t, DefaultCatalog(), ciscoDev, stdTarget, "isis-adjacency-down", nil),
+		AnalyzeResult{Unmatched: "n/a"},
+	)
+	if strings.Contains(plain, "no authored CLI dialect") {
+		t.Errorf("a known dialect must not carry the fallback disclosure:\n%s", plain)
+	}
+	if !strings.Contains(plain, "Vendor      : "+DisplayVendor(VendorCiscoIOSXE)+"\n") {
+		t.Errorf("a known dialect must render its own name plainly:\n%s", plain)
+	}
+}

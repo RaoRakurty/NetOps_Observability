@@ -127,10 +127,20 @@ type Event struct {
 }
 
 type FileStore struct {
-	mu     sync.RWMutex
-	path   string
-	kv     KV
-	events []Event // append-only, capped at MaxEvents
+	// flushMu serializes the whole append→marshal→Save sequence, so two
+	// concurrent Records can never persist two snapshots OUT OF ORDER (an
+	// older, shorter snapshot overwriting a newer one — a silently truncated
+	// trail). It is deliberately NOT mu: mu is held only for the in-memory
+	// append and marshal and is released before the blocking kv IO, so List /
+	// Count never wait on a disk write.
+	//
+	// Lock order is always flushMu → mu, and nothing takes mu before flushMu,
+	// so the pair cannot deadlock.
+	flushMu sync.Mutex
+	mu      sync.RWMutex
+	path    string
+	kv      KV
+	events  []Event // append-only, capped at MaxEvents
 }
 
 // NewFileStore opens the bounded in-memory ring mirrored to the kv layer
@@ -169,6 +179,11 @@ func (s *FileStore) record(e Event) error {
 	if e.ID == "" {
 		e.ID = randHex8()
 	}
+	// One writer at a time through append→marshal→Save (see flushMu): the
+	// snapshot that lands on disk is always the newest one taken.
+	s.flushMu.Lock()
+	defer s.flushMu.Unlock()
+
 	s.mu.Lock()
 	s.events = append(s.events, e)
 	if len(s.events) > MaxEvents {

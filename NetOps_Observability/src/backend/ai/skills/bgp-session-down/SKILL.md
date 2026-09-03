@@ -26,6 +26,7 @@ decisions:
   - next=interface-down when signature=bgp-idle-unreachable the peering address is unreachable from this device, so the interface carrying the session is the next check
   - next=path-seam-handoff when the peer sits across a provider or partner handoff
   - next=bgp-prefix-missing when signature=bgp-nothing-advertised the session is Established but nothing is being advertised to the peer
+  - next=log-confirmation when signature=uncollected the device rejected every read-only command, so NOTHING was captured and the device's own words are the only evidence left
   - next=log-confirmation when signature=none the session diagnostic ran and no known signature matched, so the reset reason must be read from the device's own words
   - verdict=name the peer, the FSM state, the reset reason if captured, and whether reachability to the peer is intact
   - escalate=the peer's owner, named from the seam, with the state and last reason quoted

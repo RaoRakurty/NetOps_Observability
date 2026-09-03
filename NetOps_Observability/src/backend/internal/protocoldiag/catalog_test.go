@@ -96,7 +96,16 @@ func TestVendorFromPlatform(t *testing.T) {
 		"Arista EOS":        VendorCiscoIOSXE,
 		"Juniper Junos 22":  VendorJuniper,
 		"Nokia SR OS 23":    VendorNokia,
-		"srlinux":           VendorNokia,
+		// SR Linux is NOT SR OS. It has no authored CLI dialect (nokia.json's
+		// srlinux platform carries an empty `cli` block), so it resolves to
+		// VendorUnknown and the renderer falls back to the primary dialect —
+		// recording that fallback in RenderedVendor rather than claiming the
+		// device speaks SR OS. Issuing `show router …` at an SR Linux prompt is
+		// a parse error, which is exactly what the live run of 2026-09-03 saw
+		// (7 of 7 commands rejected). A real srlinux dialect is a feature, not a
+		// mapping entry.
+		"srlinux":           VendorUnknown,
+		"Nokia SR Linux":    VendorUnknown,
 		"":                  VendorUnknown,
 		"MikroTik RouterOS": VendorUnknown,
 	}

@@ -159,6 +159,22 @@ func RedactOutput(raw string) string {
 // The tenant id is deliberately NOT written into the export: the blob is meant to
 // leave the operator's hands (to a vendor TAC or a peer), and the org identifier
 // is not TAC's business. Device hostname/id (operational, not secret) are kept.
+// vendorHeaderLine writes the export's vendor/dialect line. When the platform
+// resolved to a KNOWN dialect the two agree and the line is unremarkable. When
+// it did not — an SR Linux box, a MikroTik, anything without an authored show
+// dialect — the bundle must not let a TAC engineer assume the commands below
+// were the right ones for their operating system: it says plainly that no
+// dialect is authored for this platform and which dialect was attempted
+// instead. A bundle that names the wrong operating system is worse than one
+// that admits it does not know (QA 2026-09-03, D-2).
+func vendorHeaderLine(vendor, rendered Vendor) string {
+	if vendor == rendered {
+		return DisplayVendor(vendor)
+	}
+	return fmt.Sprintf("%s — no authored CLI dialect for this platform; the commands below were rendered in the fallback %s dialect and may not be valid here",
+		DisplayVendor(vendor), DisplayVendor(rendered))
+}
+
 func TACExport(col *Collection, res AnalyzeResult) string {
 	if col == nil {
 		return ""
@@ -170,7 +186,7 @@ func TACExport(col *Collection, res AnalyzeResult) string {
 	fmt.Fprintf(&b, "=====================================================\n")
 	fmt.Fprintf(&b, "Device      : %s (%s)\n", red.Hostname, red.DeviceID)
 	fmt.Fprintf(&b, "Platform    : %s\n", red.Platform)
-	fmt.Fprintf(&b, "Vendor      : %s (dialect: %s)\n", DisplayVendor(red.Vendor), DisplayVendor(red.RenderedVendor))
+	fmt.Fprintf(&b, "Vendor      : %s\n", vendorHeaderLine(red.Vendor, red.RenderedVendor))
 	fmt.Fprintf(&b, "Protocol    : %s\n", strings.ToUpper(string(red.Protocol)))
 	fmt.Fprintf(&b, "Issue       : %s [%s]\n", red.IssueTitle, red.IssueID)
 	fmt.Fprintf(&b, "Ruleset     : %s\n", red.RulesetVersion)

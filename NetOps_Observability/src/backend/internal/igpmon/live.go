@@ -137,11 +137,18 @@ func (a *API) fetchLive(ctx context.Context, r *http.Request, p Principal, proto
 // noSeriesNote is the honest sentence a UI renders when a protocol has no live
 // series here. It names the transport that would carry it, so the reader can
 // tell "not collected" from "collected and healthy".
+//
+// The subject is "these devices" — plural — because fetchLive serves BOTH the
+// per-device handlers AND the fleet roll-up (handleSummary passes no device
+// ids). Saying "this device" on a fleet answer misattributes the gap to one
+// box, and it is the only one of the five coverage notes that ever did: the
+// LSDB/SPF/area/timer notes in advanced.go all say "these devices". All five
+// agree now, and copy_denylist_test.go keeps them that way.
 func noSeriesNote(proto Proto) string {
 	if proto == ProtoOSPF {
-		return "no live series collected for this device; adjacency history is from syslog/trap events only " +
+		return "no live series collected for these devices; adjacency history is from syslog/trap events only " +
 			"(device_ospf_nbr_state is SNMP-owned via OSPF-MIB ospfNbrTable and the OpenConfig ospfv2 gNMI path is unvalidated)"
 	}
-	return "no live series collected for this device; adjacency history is from syslog/trap events only " +
+	return "no live series collected for these devices; adjacency history is from syslog/trap events only " +
 		"(device_isis_adj_state is carried by gNMI on gNMI-capable devices)"
 }

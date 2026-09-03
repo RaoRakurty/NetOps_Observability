@@ -36,6 +36,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 )
 
 const (
@@ -615,19 +617,97 @@ func skillNextActions(sk *Skill) []string {
 				continue
 			}
 			seen[d.Target] = true
-			if d.Reason != "" {
-				out = append(out, "Check "+humanizeSkillName(d.Target)+" — when "+d.Reason+".")
+			if reason := strings.TrimSpace(d.Reason); reason != "" {
+				out = append(out, sentence("Check "+humanizeSkillName(d.Target)+" — when "+reason))
 			} else {
-				out = append(out, "Check "+humanizeSkillName(d.Target)+".")
+				out = append(out, sentence("Check "+humanizeSkillName(d.Target)))
 			}
 		case DecisionEscalate:
-			out = append(out, "Escalate to "+d.Reason+".")
+			if a := escalateAction(d.Reason); a != "" {
+				out = append(out, a)
+			}
 		}
 	}
 	if len(out) > 6 {
 		out = out[:6]
 	}
 	return out
+}
+
+// ── rendering an authored reason as English ─────────────────────────────────
+//
+// A skill authors `escalate=<reason>` in its own words, and those words come in
+// two shapes the renderer has to tell apart (D-9):
+//
+//	an OWNER   — "the peer's owner, named from the seam, …"   → "Escalate to …"
+//	a QUALIFIER — "only with the quoted lines … attached"      → "Escalate — …"
+//
+// The old template assumed every reason named an owner and pasted it after
+// "Escalate to ", so log-confirmation's qualifier rendered as the broken
+// "Escalate to only with the quoted lines and their timestamps attached." —
+// which reads to an operator like an empty substitution.
+//
+// The classifier is a POSITIVE test for an owner phrase, and the dash form is
+// the default, because that is the safe failure direction: a dash is
+// grammatical in front of ANY fragment, so an owner shape this test does not
+// recognise degrades to plainer English, while an unrecognised qualifier under
+// the opposite default degrades to the broken sentence above.
+
+// escalationOwnerHeads is the closed set of first words that mark the reason as
+// an owner NOUN PHRASE. Determiners and possessives are a closed class; the
+// bare role nouns are the ones the authored skills actually use ("field
+// engineering", "field or provider") plus their immediate siblings. Anything
+// else is treated as a qualifier — see the note above on the failure direction.
+var escalationOwnerHeads = map[string]bool{
+	// determiners / possessives
+	"the": true, "a": true, "an": true, "our": true, "their": true, "its": true,
+	"his": true, "her": true, "this": true, "that": true, "both": true, "all": true,
+	"every": true, "each": true,
+	// bare role nouns that name a party rather than describing the handoff
+	"field": true, "provider": true, "vendor": true, "carrier": true, "isp": true,
+	"partner": true, "customer": true, "site": true, "noc": true, "tac": true,
+}
+
+// startsWithOwnerPhrase reports whether the authored reason opens with a party
+// the escalation can be addressed TO: a determiner/possessive, a known bare
+// role noun, or a capitalised proper noun (a named team, ISP or partner).
+func startsWithOwnerPhrase(reason string) bool {
+	first := reason
+	if i := strings.IndexFunc(reason, unicode.IsSpace); i >= 0 {
+		first = reason[:i]
+	}
+	if r, _ := utf8.DecodeRuneInString(first); unicode.IsUpper(r) {
+		return true
+	}
+	return escalationOwnerHeads[strings.ToLower(strings.Trim(first, `,;:.'"`))]
+}
+
+// escalateAction renders one authored escalate reason as a sentence. An empty
+// reason renders "Escalate." — never "Escalate to ." — because a dangling
+// preposition in front of nothing is the defect, not a degraded message.
+func escalateAction(reason string) string {
+	r := strings.TrimSpace(reason)
+	switch {
+	case r == "":
+		return "Escalate."
+	case startsWithOwnerPhrase(r):
+		return sentence("Escalate to " + r)
+	default:
+		return sentence("Escalate — " + r)
+	}
+}
+
+// sentence terminates an action with a single period, leaving an authored
+// terminator alone so no line can end in "..".
+func sentence(s string) string {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return ""
+	}
+	if strings.HasSuffix(s, ".") || strings.HasSuffix(s, "!") || strings.HasSuffix(s, "?") {
+		return s
+	}
+	return s + "."
 }
 
 // skillMissingEvidence lifts the collection notes that describe a GAP into the

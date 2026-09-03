@@ -198,9 +198,12 @@ SELECT toString(o.correlation_id) AS correlation_id,
 		durs := map[timeintel.MetricName]int64{}
 		for _, m := range metrics {
 			// TTD is excluded from rollups: the batch path doesn't run the per-object
-			// min(ingest_ts) query (N+1), so detection falls back to onset → a
-			// misleading 0. Detection latency is shown per-incident (Time Impact card),
-			// where the ingest query runs. Everything else rolls up honestly.
+			// min(ingest_ts) query (N+1), so facts.FirstIngest is unknown here and
+			// DeriveLifecycle stamps no `detected` — ttd is already INCOMPLETE (it used
+			// to fall back to the onset and report a misleading complete 0). Detection
+			// latency is shown per-incident (Time Impact card), where the ingest query
+			// runs. The name check is kept as belt-and-braces: it states the exclusion
+			// rather than relying on another package's incompleteness to imply it.
 			if m.Complete && m.Name != timeintel.MetricTTD {
 				durs[m.Name] = m.DurationMs
 			}

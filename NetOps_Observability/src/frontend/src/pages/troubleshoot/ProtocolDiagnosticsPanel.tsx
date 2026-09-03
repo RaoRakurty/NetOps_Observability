@@ -17,6 +17,10 @@
 //    this panel.
 //  · When no signature fires, the panel says so in the server's own words and
 //    still offers the raw output for TAC. A verdict is never invented.
+//  · A capture in which the device REJECTED every command is not a success and
+//    is not "no signature matched": it is reported as nothing captured, with
+//    each command's own error, and the protocol's state called unknown. The two
+//    were conflated until the live run of 2026-09-03 (D-4).
 //  · The collected output is shown AS CAPTURED; the redaction pass runs on the
 //    TAC export, which is why the bundle is labelled "redacted" and the capture
 //    on screen is not.
@@ -43,15 +47,20 @@ import {
 import {
   MAX_OUTPUT_CHARS,
   NO_ANALYSIS_FOR_TAC_MESSAGE,
+  NOTHING_ANALYZED_HEADING,
+  NOTHING_ANALYZED_MESSAGE,
   PROTOCOL_TABS,
   VENDORS_COVERED,
+  analysisWasScored,
   buildAnalyzeRequest,
   buildCollectRequest,
   confidenceLabel,
   confidenceTone,
+  failedCommands,
   platformOf,
   protocolDiagErrorMessage,
   protocolLabel,
+  summarizeCollection,
   tacFileName,
 } from "./protocolDiagModel";
 
@@ -158,10 +167,10 @@ export default function ProtocolDiagnosticsPanel() {
       const next: Record<string, string> = {};
       for (const c of col.commands ?? []) next[c.spec_id] = c.output ?? "";
       setOutputs(next);
-      setNotice({
-        tone: "good",
-        text: `Captured ${(col.commands ?? []).length} command(s) from ${col.hostname || col.device_id} in the ${col.rendered_vendor} dialect.`,
-      });
+      // D-4: a capture in which the device rejected every command is NOT a
+      // success. Say what actually came back, in the tone that matches.
+      const summary = summarizeCollection(col);
+      setNotice({ tone: summary.tone, text: summary.text });
     } catch (e) {
       if (alive.current) setNotice({ tone: "bad", text: protocolDiagErrorMessage(e) });
     } finally {
@@ -341,7 +350,9 @@ export default function ProtocolDiagnosticsPanel() {
           <h4 className="cfg-h">Command output</h4>
           <p className="mini-meta cfg-note">
             {collection
-              ? `Captured ${collection.collected_at} from ${collection.hostname || collection.device_id}, shown as captured — the redaction pass runs on the TAC bundle.`
+              ? summarizeCollection(collection).outcome === "failed"
+                ? `Nothing was captured at ${collection.collected_at} from ${collection.hostname || collection.device_id}. Each command's own error is shown below; paste output you already have to analyze it instead.`
+                : `Captured ${collection.collected_at} from ${collection.hostname || collection.device_id}, shown as captured — the redaction pass runs on the TAC bundle.`
               : "Paste each command's output from your own session. Anything you leave empty is simply not analyzed."}
           </p>
           {issue.commands.map((c) => {
@@ -402,6 +413,28 @@ export default function ProtocolDiagnosticsPanel() {
                 </div>
               ))}
               <p className="mini-meta cfg-note">Scored using rule set {analysis.ruleset_version}.</p>
+            </>
+          ) : !analysisWasScored(analysis) ? (
+            // D-4: the server scored NOTHING. "No signature matched" would claim
+            // the signatures ran, which is the sentence that made a total
+            // collection failure read as a clean bill of health.
+            <>
+              <h4 className="cfg-h">{NOTHING_ANALYZED_HEADING}</h4>
+              <p className="mini-meta cfg-note cfg-bad">
+                {analysis.not_analyzed || NOTHING_ANALYZED_MESSAGE}
+              </p>
+              {failedCommands(collection).length > 0 && (
+                <>
+                  <p className="mini-meta cfg-note">Why each command produced nothing:</p>
+                  <ul className="mini-meta cfg-note">
+                    {failedCommands(collection).map((c) => (
+                      <li key={c.spec_id}>
+                        <code>{c.command}</code> — {c.error || "returned no output"}
+                      </li>
+                    ))}
+                  </ul>
+                </>
+              )}
             </>
           ) : (
             <>

@@ -83,6 +83,10 @@ func TestResolveOSOverCollectorFixtures(t *testing.T) {
 		{"juniper", "Juniper Networks, Inc. mx240 internet router, kernel JUNOS 21.4R3-S4.9, Build date: 2023-06-15", "junos", "21.4R3-S4.9"},
 		{"arista", "Arista Networks EOS version 4.33.1F running on an Arista cEOSLab", "eos", "4.33.1F"},
 		{"nokia", "TiMOS-B-21.10.R6 both/x86_64 Nokia 7750 SR Copyright (c) 2000-2021 Nokia.", "sros", "21.10.R6"},
+		// The REAL SR Linux sysDescr, read live from lab spine1/spine2 over gNMI
+		// (/system/information description — the leaf SR Linux serves as SNMP
+		// sysDescr.0), 2026-09-03. See TestSRLinuxOSParse for the full contract.
+		{"nokia", "SRLinux-v26.3.2-426-g2b38957bbca 7220 IXR-D3L Copyright (c) 2000-2026 Nokia. Kernel 5.15.0-186-generic #196-Ubuntu SMP Sat Jun 20 16:09:34 UTC 2026", "srlinux", "26.3.2"},
 		{"fortinet", "FortiGate-60F v7.2.8,build1639,240228 (GA.M)", "fortios", "7.2.8"},
 		{"paloalto", "Palo Alto Networks PA-220 series firewall", "pan-os", ""},
 		{"huawei", "Huawei Versatile Routing Platform Software VRP (R) software, Version 8.180 (CE12800 V200R005C10SPC800)", "vrp", "8.180"},
@@ -355,8 +359,16 @@ func TestCLIDialectResolvesThroughTheRegistry(t *testing.T) {
 		{"Juniper Junos 22", "juniper", true},
 		{"junos", "juniper", true},
 		{"Nokia SR OS 23", "nokia", true},
-		{"srlinux", "nokia", true},
 		{"TiMOS-B", "nokia", true},
+		// SR Linux does NOT speak the SR OS show grammar, so its profile
+		// declares no CLI dialect and this must resolve to the honest
+		// "unknown" rather than to `nokia` (tracker D-02/D-2, 2026-09-03:
+		// binding it to `nokia` sent 20 TiMOS commands at an SR Linux prompt,
+		// all of which came back `Parsing error: Unknown token 'router'`, and
+		// labelled the TAC bundle "Nokia SR OS").
+		{"srlinux", "", false},
+		{"Nokia SR Linux", "", false},
+		{"nokia SR Linux 26.3.2", "", false},
 		{"Huawei VRP", "", false}, // resolves to a profile, which declares no CLI dialect
 		{"MikroTik RouterOS", "", false},
 		{"Acme WidgetOS", "", false},
@@ -437,5 +449,134 @@ func TestEveryProfileDetectionStringResolvesToItself(t *testing.T) {
 				t.Errorf("profile %s: its own platform_contains %q resolves to %s — a lower rank stole it", p.ID, sub, got.ID)
 			}
 		}
+	}
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// TestSRLinuxOSParse — tracker D-06.
+//
+// Nokia declared os_parse for `sros` ONLY, and that row is the vendor's
+// UNCONDITIONAL default (empty sysdescr_contains_any), so every SR Linux box
+// resolved to product `sros` with an EMPTY version: the TiMOS version pattern
+// cannot match an SR Linux string, and internal/vuln.versionMatches correctly
+// refuses to match an empty version. Result on the reference lab: `assessed: 0`,
+// reason "OS version not present in sysDescr", for both spines, permanently —
+// even against a deliberately unbounded `sros` feed row.
+//
+// The fixture below is a REAL capture, not a guess: a read-only gNMI Get of
+// /system/information on 172.40.40.11 and 172.40.40.12 (2026-09-03) returns this
+// byte-identical `description` leaf, which is the leaf SR Linux serves as SNMP
+// sysDescr.0. Its `version` leaf is `v26.3.2-426-g2b38957bbca`.
+// ─────────────────────────────────────────────────────────────────────────────
+
+// srlinuxSysDescr is the live lab string (see above). Kept as a named constant
+// because three assertions below quote it.
+const srlinuxSysDescr = "SRLinux-v26.3.2-426-g2b38957bbca 7220 IXR-D3L Copyright (c) 2000-2026 Nokia. " +
+	"Kernel 5.15.0-186-generic #196-Ubuntu SMP Sat Jun 20 16:09:34 UTC 2026"
+
+func TestSRLinuxOSParse(t *testing.T) {
+	reg := Default()
+	cases := []struct {
+		name             string
+		descr            string
+		product, version string
+	}{
+		{"live lab sysDescr", srlinuxSysDescr, "srlinux", "26.3.2"},
+		// Lower-cased and spaced spellings of the same identity must resolve the
+		// same product. The lab's device rows are MANUAL and carry os="SR Linux"
+		// with no sysDescr at all, so this truncated label is what the advisory
+		// lane actually feeds ParseOS today: the PRODUCT must still come out
+		// right, and the version must stay honestly empty rather than be guessed.
+		{"truncated platform label", "SR Linux", "srlinux", ""},
+		{"lower-case", "srlinux-v24.10.1-492-g1234567 7220 IXR-D2L", "srlinux", "24.10.1"},
+		// No regression: a TiMOS string still resolves to sros with its version,
+		// and must NOT be claimed by the new, more specific srlinux row.
+		{"TiMOS unchanged", "TiMOS-B-21.10.R6 both/x86_64 Nokia 7750 SR Copyright (c) 2000-2021 Nokia.", "sros", "21.10.R6"},
+		{"TiMOS-C unchanged", "TiMOS-C-23.7.R2 cpm/x86_64 Nokia 7750 SR-14s", "sros", "23.7.R2"},
+		// A Nokia string naming neither family keeps the vendor's unconditional
+		// default (sros) with an honestly blank version — unchanged behaviour.
+		{"unnamed nokia box", "Nokia 7250 IXR chassis", "sros", ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, ok := reg.ResolveOS("nokia", tc.descr)
+			if !ok {
+				t.Fatalf("ResolveOS(nokia, %q) not resolved", tc.descr)
+			}
+			if got.Product != tc.product || got.Version != tc.version {
+				t.Errorf("ResolveOS(nokia, %q) = {%q %q}, want {%q %q}",
+					tc.descr, got.Product, got.Version, tc.product, tc.version)
+			}
+		})
+	}
+
+	// The whole point of the product half: an SR Linux device must NOT resolve
+	// to the SR OS profile any more.
+	if got, _ := reg.ResolveOS("nokia", srlinuxSysDescr); got.Product == "sros" {
+		t.Error("the live SR Linux sysDescr still resolves to product sros (D-06)")
+	}
+	p, ok := reg.ProfileForOS("nokia", srlinuxSysDescr)
+	if !ok || p.ID != "nokia/srlinux" {
+		t.Errorf("ProfileForOS(nokia, <live SR Linux sysDescr>) = (%q,%v), want nokia/srlinux", p.ID, ok)
+	}
+	// And the advisory key the feed is matched under. The QA feed used
+	// `nokia,sr_linux`; vuln.NormProduct strips the underscore, so `sr_linux`
+	// and `srlinux` are the same key — this pins the product id the profile
+	// declares, which is the half this package owns.
+	adv, err := reg.AdvisoryFor("nokia", "srlinux")
+	if err != nil {
+		t.Fatalf("AdvisoryFor(nokia/srlinux): %v", err)
+	}
+	found := false
+	for _, id := range adv.ProductIDs {
+		if id == "srlinux" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("nokia/srlinux advisory product_ids = %v, want it to declare %q", adv.ProductIDs, "srlinux")
+	}
+}
+
+// TestSRLinuxCLIDialectIsUnestablished — tracker D-02/D-2. SR Linux was bound to
+// the `nokia` CLI dialect and displayed as "Nokia SR OS"; on the lab that sent
+// 20 TiMOS commands at an SR Linux prompt (all answered `Parsing error: Unknown
+// token 'router'`) and put "Vendor: Nokia SR OS" on a "Platform: nokia SR Linux"
+// TAC bundle. The honest binding is NONE — the caller then reports an unknown
+// dialect and records whatever fallback it renders, instead of claiming one.
+func TestSRLinuxCLIDialectIsUnestablished(t *testing.T) {
+	reg := Default()
+	for _, platform := range []string{"srlinux", "sr linux", "Nokia SR Linux", "nokia SR Linux 26.3.2"} {
+		if d, ok := reg.CLIDialectForPlatform(platform); ok {
+			t.Errorf("CLIDialectForPlatform(%q) = %q — SR Linux does not speak the SR OS show grammar", platform, d)
+		}
+	}
+	// SR OS itself is untouched: it keeps its dialect and its label.
+	for _, platform := range []string{"Nokia SR OS 23", "TiMOS-B", "sros"} {
+		d, ok := reg.CLIDialectForPlatform(platform)
+		if !ok || d != "nokia" {
+			t.Errorf("CLIDialectForPlatform(%q) = (%q,%v), want (nokia,true)", platform, d, ok)
+		}
+	}
+	if d, ok := reg.CLIDialectDisplay("nokia"); !ok || d != "Nokia SR OS" {
+		t.Errorf("CLIDialectDisplay(nokia) = (%q,%v), want Nokia SR OS", d, ok)
+	}
+	// The loader requires cli.dialect and cli.display to be set TOGETHER, so a
+	// dialect-less profile cannot carry a CLI display. The operator-facing name
+	// for such a platform is its profile display_name, which must still read
+	// SR Linux — this is the string a caller should render instead of
+	// "Nokia SR OS".
+	p, ok := reg.ProfileForPlatformText("nokia SR Linux 26.3.2")
+	if !ok {
+		t.Fatal("ProfileForPlatformText(nokia SR Linux) resolved nothing")
+	}
+	if p.ID != "nokia/srlinux" {
+		t.Fatalf("platform text resolved to %q, want nokia/srlinux", p.ID)
+	}
+	if p.DisplayName != "Nokia SR Linux" {
+		t.Errorf("nokia/srlinux display_name = %q, want %q", p.DisplayName, "Nokia SR Linux")
+	}
+	if p.CLI.Dialect != "" || p.CLI.Display != "" {
+		t.Errorf("nokia/srlinux declares cli %+v, want an empty (unestablished) binding", p.CLI)
 	}
 }

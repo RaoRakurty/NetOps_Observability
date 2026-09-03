@@ -160,21 +160,70 @@ func (ix *DocsIndex) Len() int { return len(ix.chunks) }
 // All returns every chunk (tests / corpus assertions).
 func (ix *DocsIndex) All() []DocChunk { return ix.chunks }
 
-// Search runs BM25 over the corpus and returns the top hits. Honesty floor: a
-// chunk qualifies only when it matches ≥2 distinct query terms, or 1 term that
-// appears in its page/section title — a lone incidental body-word match never
-// surfaces documentation (the caller must then SAY the docs don't cover it,
-// never paraphrase from nothing).
+// docsMinSpecificity is the ABSOLUTE relevance floor (see Search). A chunk must
+// match query terms carrying at least this share of the question's total
+// information content — measured in IDF, the same quantity BM25 already scores
+// with, so the floor scales with the corpus instead of being a magic number.
+//
+// Why an absolute floor is needed at all: every other guard here is RELATIVE.
+// "≥2 matched terms" and "within 25% of the leader's score" both ask whether a
+// chunk is good COMPARED TO THE OTHERS — so a question the corpus knows nothing
+// about still returns its least-bad chunk. On the 132-page corpus that made
+// "configure vmware vsphere drs affinity for my cluster" retrieve the
+// backup-and-restore page, because "configure" and "cluster" are common words
+// that appear in it, while the four terms that actually carry the question
+// (vmware, vsphere, drs, affinity) appear nowhere. Two low-information matches
+// out of six terms is not a hit — it is the absence of one.
+//
+// The value is calibrated against the golden set, not guessed. Measured best
+// ratios on the shipped corpus:
+//
+//	0.19  "configure vmware vsphere drs affinity for my cluster"   → must decline
+//	0.27  "reset my kubernetes ingress controller certificate …"   → must decline
+//	0.34  "walk me through onboarding my very first device"        → must retrieve
+//	1.00  "how do I set up SNMP discovery"                         → must retrieve
+//
+// A third of the question's information is the line between "the corpus knows
+// what this is about" and "the corpus recognised some filler words". Both sides
+// are pinned by docs_relevance_test.go, so re-tuning it requires re-stating the
+// evidence.
+const docsMinSpecificity = 0.30
+
+// Search runs BM25 over the corpus and returns the top hits. Three honesty
+// floors, in order:
+//
+//  1. TERM COVERAGE — a chunk qualifies only when it matches ≥2 distinct query
+//     terms, or 1 term that appears in its page/section title, so a lone
+//     incidental body word never surfaces documentation.
+//  2. SPECIFICITY (absolute) — the matched terms must carry ≥ docsMinSpecificity
+//     of the query's total IDF. This is the floor that lets the index say "the
+//     corpus does not cover this" instead of always returning its best guess.
+//  3. LEAGUE (relative) — the tail is trimmed to hits in the leader's league.
+//
+// When nothing clears them the caller must SAY the docs don't cover it, never
+// paraphrase from nothing.
 func (ix *DocsIndex) Search(query string, limit int) []DocsHit {
 	qterms := tokenize(query)
 	if len(qterms) == 0 || len(ix.chunks) == 0 {
 		return nil
 	}
 	n := float64(len(ix.chunks))
+	// The question's information content, term by term. A term the corpus has
+	// never seen (df == 0) scores the MAXIMUM idf — which is the point: it is
+	// the most informative word in the question and the corpus cannot answer it.
+	qIDF := make(map[string]float64, len(qterms))
+	queryIDF := 0.0
+	for _, q := range qterms {
+		df := float64(ix.df[q])
+		v := math.Log(1 + (n-df+0.5)/(df+0.5))
+		qIDF[q] = v
+		queryIDF += v
+	}
 	type cand struct {
-		hit     DocsHit
-		matched int
-		inTitle bool
+		hit        DocsHit
+		matched    int
+		inTitle    bool
+		matchedIDF float64
 	}
 	var cands []cand
 	for i, chunk := range ix.chunks {
@@ -185,6 +234,7 @@ func (ix *DocsIndex) Search(query string, limit int) []DocsHit {
 		}
 		score := 0.0
 		matched := 0
+		matchedIDF := 0.0
 		inTitle := false
 		lowTitle := strings.ToLower(chunk.PageTitle + " " + chunk.SectionTitle + " " + strings.ReplaceAll(chunk.Slug, "/", " "))
 		for _, q := range qterms {
@@ -196,8 +246,8 @@ func (ix *DocsIndex) Search(query string, limit int) []DocsHit {
 			if strings.Contains(lowTitle, q) {
 				inTitle = true
 			}
-			df := float64(ix.df[q])
-			idf := math.Log(1 + (n-df+0.5)/(df+0.5))
+			idf := qIDF[q]
+			matchedIDF += idf
 			dl := float64(len(terms))
 			score += idf * (float64(f) * (bm25K1 + 1)) / (float64(f) + bm25K1*(1-bm25B+bm25B*dl/ix.avgLen))
 		}
@@ -214,16 +264,24 @@ func (ix *DocsIndex) Search(query string, limit int) []DocsHit {
 		case DocTierRunbook:
 			score *= 1.05
 		}
-		cands = append(cands, cand{hit: DocsHit{Chunk: chunk, Score: score}, matched: matched, inTitle: inTitle})
+		cands = append(cands, cand{
+			hit: DocsHit{Chunk: chunk, Score: score}, matched: matched, inTitle: inTitle, matchedIDF: matchedIDF,
+		})
 	}
 	var hits []DocsHit
 	for _, c := range cands {
 		// ≥2 matched terms, or a title match covering at least half the query —
 		// so "syslog" finds the Syslog page, but one incidental word ("chart" in
 		// "kubernetes helm chart autoscaling") never surfaces documentation.
-		if c.matched >= 2 || (c.inTitle && c.matched*2 >= len(qterms)) {
-			hits = append(hits, c.hit)
+		if !(c.matched >= 2 || (c.inTitle && c.matched*2 >= len(qterms))) {
+			continue
 		}
+		// Floor 2: the matched terms must carry enough of the question. Without
+		// this an out-of-scope question still gets the corpus's least-bad page.
+		if queryIDF > 0 && c.matchedIDF < docsMinSpecificity*queryIDF {
+			continue
+		}
+		hits = append(hits, c.hit)
 	}
 	sort.SliceStable(hits, func(i, j int) bool {
 		if hits[i].Score != hits[j].Score {

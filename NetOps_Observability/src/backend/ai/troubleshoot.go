@@ -70,10 +70,16 @@ type DiagnosticRequest struct {
 }
 
 // DiagnosticCommand is one curated READ-ONLY probe from the issue's bundle.
+// Error carries the per-command transport/device failure when a LIVE collection
+// was attempted and this command did not produce output — the HTTP collect
+// response has always returned it, and dropping it on the assistant's bridge is
+// what let "7 of 7 commands were rejected" be narrated as "nothing matched"
+// (QA 2026-09-03, D-4). It is empty for a catalog-only bundle.
 type DiagnosticCommand struct {
 	SpecID  string
 	Purpose string
 	Command string
+	Error   string
 }
 
 // DiagnosticFinding is one fired signature: the catalog's own verdict wording,
@@ -89,9 +95,23 @@ type DiagnosticFinding struct {
 }
 
 // DiagnosticReport is the protocoldiag answer projected for the assistant.
-// Collected=false with a non-empty NotWired is the honest "no capture transport
-// on this deployment" case — the catalog bundle is still returned so the
-// operator can paste outputs into the Protocol Diagnostics page.
+//
+// Three mutually exclusive outcomes, and the reason they are three rather than
+// two (D-4). A capture that produced ZERO bytes is NOT the same fact as a
+// capture the signatures could not explain, and the operator must never be told
+// the second when the first is true:
+//
+//	Attempted=false                 → no capture was run at all. NotWired says
+//	                                  why; the catalog bundle is returned so a
+//	                                  human can run the commands and paste them.
+//	Attempted=true, Collected=false → the capture RAN and captured nothing.
+//	                                  CollectFailed says so and every command
+//	                                  carries its own Error. This is UNKNOWN
+//	                                  state, never a clean bill of health.
+//	Attempted=true, Collected=true  → output was captured and scored. Findings
+//	                                  (or Unmatched) are meaningful. Failed>0
+//	                                  means the capture was PARTIAL — the
+//	                                  findings rest on less than the full bundle.
 type DiagnosticReport struct {
 	DeviceID       string
 	DeviceName     string
@@ -103,8 +123,17 @@ type DiagnosticReport struct {
 	Commands       []DiagnosticCommand
 	Findings       []DiagnosticFinding
 	Unmatched      string
-	Collected      bool
-	NotWired       string
+	// Collected is true only when at least one command produced output that the
+	// signatures were actually scored against.
+	Collected bool
+	// Attempted is true when a live collection was RUN (whatever its outcome).
+	Attempted bool
+	// Total / Failed are the per-command outcome counts of that collection.
+	Total  int
+	Failed int
+	// CollectFailed is the honest sentence for Attempted && !Collected.
+	CollectFailed string
+	NotWired      string
 }
 
 // FindingsQuery is a validated security-findings ask.
@@ -311,6 +340,14 @@ func (t protocolDiagnosticTool) Run(ctx context.Context, p Principal, args ToolA
 		CitationID: "diag:" + rep.IssueID + ":" + ref.ID, Kind: "finding", Text: head, Href: href,
 	})
 
+	// A PARTIAL capture is disclosed on every branch that scored one: findings
+	// drawn from 2 of 7 commands are not findings drawn from the bundle.
+	if rep.Collected && rep.Failed > 0 {
+		tr.Notes = append(tr.Notes, fmt.Sprintf(
+			"the capture was PARTIAL — %d of %d read-only commands were rejected by the device, so this verdict rests on less than the full bundle",
+			rep.Failed, rep.Total))
+	}
+
 	switch {
 	case rep.Collected && len(rep.Findings) > 0:
 		findings := rep.Findings
@@ -340,6 +377,27 @@ func (t protocolDiagnosticTool) Run(ctx context.Context, p Principal, args ToolA
 		// Fail-closed: signatures ran and none fired. Say so; never invent a cause.
 		tr.Notes = append(tr.Notes, firstNonEmpty(rep.Unmatched,
 			"no known signature matched the captured output — report that plainly and show the raw output rather than naming a cause"))
+	case rep.Attempted:
+		// D-4: the capture RAN and produced nothing. This is the outcome that
+		// used to be reported as "no known signature matched" — i.e. as if the
+		// platform had looked and found the protocol healthy. It did not look.
+		// Say what was rejected, per command, and mark the state UNKNOWN.
+		tr.Signals = append(tr.Signals, CondSignature+"="+CondSignatureUncollected)
+		tr.Notes = append(tr.Notes, firstNonEmpty(rep.CollectFailed, pdUncollectedNote(rep.Failed, rep.Total)))
+		tr.Notes = append(tr.Notes,
+			"NOTHING was captured, so no signature could be scored: treat this protocol's state as UNKNOWN, "+
+				"not healthy, and do NOT say that no problem was found")
+		for _, c := range diagCommandsHead(rep.Commands) {
+			if strings.TrimSpace(c.Error) == "" {
+				continue
+			}
+			tr.Items = append(tr.Items, EvidenceItem{
+				CitationID: "diagerr:" + rep.IssueID + ":" + c.SpecID, Kind: "device",
+				Text: clampText(fmt.Sprintf("the device rejected %q (%s): %s", c.Command, c.Purpose, c.Error),
+					maxToolTextChars),
+				Href: href,
+			})
+		}
 	default:
 		// Collection is not available on this deployment (or the caller lacks the
 		// write level a device operation needs). Be honest and useful: hand back
@@ -347,9 +405,8 @@ func (t protocolDiagnosticTool) Run(ctx context.Context, p Principal, args ToolA
 		tr.Notes = append(tr.Notes, firstNonEmpty(rep.NotWired,
 			"live collection is not wired on this deployment — no output was captured"))
 		tr.Notes = append(tr.Notes, "ask the operator to run the commands below and paste the output into Protocol Diagnostics; do NOT state a cause without output")
-		cmds := rep.Commands
-		if len(cmds) > MaxDiagCommands {
-			cmds = cmds[:MaxDiagCommands]
+		cmds := diagCommandsHead(rep.Commands)
+		if len(cmds) < len(rep.Commands) {
 			tr.Truncated = true
 		}
 		for _, c := range cmds {
@@ -361,6 +418,25 @@ func (t protocolDiagnosticTool) Run(ctx context.Context, p Principal, args ToolA
 		}
 	}
 	return tr, nil
+}
+
+// diagCommandsHead bounds a report's command list to what one tool result may
+// carry (§9: every list is bounded).
+func diagCommandsHead(cmds []DiagnosticCommand) []DiagnosticCommand {
+	if len(cmds) > MaxDiagCommands {
+		return cmds[:MaxDiagCommands]
+	}
+	return cmds
+}
+
+// pdUncollectedNote is the fallback wording for a live capture that produced no
+// output at all, used when the bridge supplied no reason of its own.
+func pdUncollectedNote(failed, total int) string {
+	if total > 0 {
+		return fmt.Sprintf("the read-only commands were rejected by the device (%d of %d failed); no output was captured",
+			failed, total)
+	}
+	return "the live capture returned no output at all; nothing could be analysed"
 }
 
 // ---- get_security_findings -------------------------------------------------

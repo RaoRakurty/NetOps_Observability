@@ -49,6 +49,7 @@ import (
 	"net/http"
 	"strings"
 
+	"netops/backend/internal/httppage"
 	"netops/backend/internal/protocoldiag"
 	"netops/backend/models"
 )
@@ -176,17 +177,48 @@ func (s *server) handleProtocolDiagCatalog(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	// §3a: gate on the per-tenant infrastructure module (read). Deriving the
-	// tenant proves the caller is a real scoped principal even though the catalog
-	// itself is tenant-invariant.
+	// tenant is not ceremony here — ?device= resolves through the CALLER'S OWN
+	// inventory below, so the catalog's dialect choice can never be steered by
+	// (or reveal) another tenant's device.
 	claims, ok := s.requirePerm(w, r, "infrastructure", LevelRead)
 	if !ok {
 		return
 	}
-	_, _ = principalTenant(claims)
+	tenant, cross := principalTenant(claims)
+
+	// A silently-ignored selector that changes which CLI commands an operator is
+	// shown is a trap: before this, `?device=spine1` was dropped and the response
+	// fell back to the Cisco IOS-XE default while looking authoritative
+	// (QA 2026-09-03, D-5). Every accepted parameter is now named, and anything
+	// else is a 400 rather than a silent no-op.
+	if err := httppage.RejectUnknownQuery(r, "vendor", "device"); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	vendorParam := strings.TrimSpace(r.URL.Query().Get("vendor"))
+	deviceParam := strings.TrimSpace(r.URL.Query().Get("device"))
+	if vendorParam != "" && deviceParam != "" {
+		writeError(w, http.StatusBadRequest,
+			errors.New("vendor and device select the same thing; supply one, not both"))
+		return
+	}
 
 	vendor := protocoldiag.VendorCiscoIOSXE
-	if v := strings.TrimSpace(r.URL.Query().Get("vendor")); v != "" {
-		vendor = protocoldiag.VendorFromPlatform(v)
+	resolvedDevice, resolvedPlatform := "", ""
+	switch {
+	case deviceParam != "":
+		// §3a: a device the caller cannot see (another tenant's, or nonexistent)
+		// is a 404 — the same rule collect applies, so the catalog is not an
+		// existence oracle for another tenant's inventory.
+		dev, found := s.discovery.Get(deviceParam)
+		if !found || !canSeeDevice(dev, tenant, cross) {
+			http.NotFound(w, r)
+			return
+		}
+		resolvedDevice, resolvedPlatform = dev.ID, pdPlatformString(dev)
+		vendor = protocoldiag.VendorFromPlatform(resolvedPlatform)
+	case vendorParam != "":
+		vendor = protocoldiag.VendorFromPlatform(vendorParam)
 	}
 
 	cat := s.pdCatalog()
@@ -203,6 +235,11 @@ func (s *server) handleProtocolDiagCatalog(w http.ResponseWriter, r *http.Reques
 		"ruleset_version": protocoldiag.RulesetVersion,
 		"vendor":          string(vendor),
 		"vendor_display":  protocoldiag.DisplayVendor(vendor),
+		// Echo what the dialect was resolved FROM when ?device= was used, so an
+		// operator can see which platform string produced these commands rather
+		// than having to trust that the selector was honoured.
+		"device":          resolvedDevice,
+		"device_platform": resolvedPlatform,
 		"protocols":       []string{string(protocoldiag.ProtocolBGP), string(protocoldiag.ProtocolOSPF), string(protocoldiag.ProtocolISIS)},
 		"issues":          byProtocol,
 	})
@@ -337,9 +374,40 @@ func (s *server) handleProtocolDiagAnalyze(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	col, _, err := pdBuildCollection(s.pdCatalog(), tenant, req.Protocol, req.IssueID, req.Device, req.Outputs)
+	col, issue, err := pdBuildCollection(s.pdCatalog(), tenant, req.Protocol, req.IssueID, req.Device, req.Outputs)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+
+	// D-4 — "nothing was collected" is NOT "nothing matched". Scoring an empty
+	// capture and returning "no known signature matched" tells an operator the
+	// platform looked and found the protocol healthy. It never looked. The two
+	// outcomes are now separate states on the wire, and the analysis is not run
+	// at all when there is nothing to run it over.
+	supplied := pdOutputsWithContent(col)
+	if supplied == 0 {
+		res := protocoldiag.AnalyzeResult{
+			Protocol:       issue.Protocol,
+			IssueID:        issue.ID,
+			IssueTitle:     issue.Title,
+			RulesetVersion: protocoldiag.RulesetVersion,
+			Unmatched:      "",
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"protocol":         string(res.Protocol),
+			"issue_id":         res.IssueID,
+			"issue_title":      res.IssueTitle,
+			"ruleset_version":  res.RulesetVersion,
+			"analyzed":         false,
+			"outputs_received": len(col.Commands),
+			"outputs_supplied": 0,
+			"matched":          false,
+			"findings":         []pdFindingView{},
+			"unmatched":        "",
+			"not_analyzed":     pdNotAnalyzedReason,
+			"tac_export":       protocoldiag.TACExport(col, res),
+		})
 		return
 	}
 
@@ -347,15 +415,38 @@ func (s *server) handleProtocolDiagAnalyze(w http.ResponseWriter, r *http.Reques
 	tac := protocoldiag.TACExport(col, res)
 
 	writeJSON(w, http.StatusOK, map[string]any{
-		"protocol":        string(res.Protocol),
-		"issue_id":        res.IssueID,
-		"issue_title":     res.IssueTitle,
-		"ruleset_version": res.RulesetVersion,
-		"matched":         res.Matched(),
-		"findings":        pdFindingViews(res),
-		"unmatched":       res.Unmatched,
-		"tac_export":      tac,
+		"protocol":         string(res.Protocol),
+		"issue_id":         res.IssueID,
+		"issue_title":      res.IssueTitle,
+		"ruleset_version":  res.RulesetVersion,
+		"analyzed":         true,
+		"outputs_received": len(col.Commands),
+		"outputs_supplied": supplied,
+		"matched":          res.Matched(),
+		"findings":         pdFindingViews(res),
+		"unmatched":        res.Unmatched,
+		"not_analyzed":     "",
+		"tac_export":       tac,
 	})
+}
+
+// pdNotAnalyzedReason is the honest statement for an analyze call that carried
+// no output. It deliberately does NOT say "no signature matched": that sentence
+// asserts the signatures were scored, and they were not.
+const pdNotAnalyzedReason = "no command output was supplied, so nothing was analysed — this is NOT " +
+	"\"no signature matched\": the protocol's state is unknown. Collect from the device or paste the " +
+	"output. If a live collect returned nothing, its per-command `error` fields say why each command failed."
+
+// pdOutputsWithContent counts the commands that actually carry output. Blank
+// and whitespace-only captures are absent evidence, never empty evidence.
+func pdOutputsWithContent(col *protocoldiag.Collection) int {
+	n := 0
+	for _, cc := range col.Commands {
+		if strings.TrimSpace(cc.Output) != "" {
+			n++
+		}
+	}
+	return n
 }
 
 func pdFindingViews(res protocoldiag.AnalyzeResult) []pdFindingView {
