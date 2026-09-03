@@ -456,6 +456,35 @@ ALLOWLIST: dict[AllowKey, str] = {
     ("scale-miniladder.py", "read_load1", "2001b246"): "host-quiet loadavg probe: returns (-1.0, 'cannot read <path>: <errno>'); host_quiet_problems turns any load1_error into 'host load is UNKNOWN' and preflight() REFUSES the run (--allow-unquiet stamps host_quiet=UNQUIET into report.json instead). The (value, error) contract is pinned by tests/test_miniladder_host_quiet.py",
     ("scale-miniladder.py", "disk_free_gib", "6e55da91"): "host-quiet disk probe: returns (-1.0, -1.0, 'cannot stat <path>: <errno>'); host_quiet_problems turns any disk_error into 'headroom is UNKNOWN' and preflight() REFUSES — the s10 clause. Same pinned contract as read_load1",
     ("scale-rca-tail.py", "engine_cohort_total", "87ac581d"): "OPTIONAL cross-check read of metrics-final.txt in a READ-ONLY analysis tool: logs cohort_metric_unavailable with path+errno and returns None, which the report prints as engine_total 'unavailable' — the reconstruction stands on its own and never claims a cross-check it did not make",
+    # ===================================================================
+    # 2026-09-03 — the licence/SBOM lane's first review (license-audit.py,
+    # sbom.py, bmp-synthetic-session.py all landed without passing through
+    # this file).
+    #
+    # THREE of the four are the shape rule 2 structurally cannot see: an
+    # escalation expressed as a RETURN VALUE that becomes the process exit
+    # status. `sys.exit(main())` is the last line of each script, so
+    # `return 2` / `return 1` from the handler IS "exit non-zero with the
+    # real error" — the errno and the path are printed to stderr first, and
+    # in license-audit.py's case make-installer.sh hard-fails the customer
+    # bundle on exactly that exit code (write_licenses()). Rewriting them as
+    # sys.exit() inside main() would satisfy the AST and change nothing an
+    # operator can observe, so they are pinned as reviewed instead of
+    # reshaped to please the checker.
+    #
+    # The FOURTH (sbom.py `_git`) is a genuine probe, and it was FIXED
+    # rather than pinned as-is: it used to return None with no output for
+    # any OSError/SubprocessError, so "git is not installed" and "git timed
+    # out" produced the same silence behind an unreproducible timestamp or a
+    # 0.0.0-unknown version. It now names the argv and the exception before
+    # answering "no". It must NOT escalate: a missing git is an expected
+    # condition with a documented fallback, and an SBOM of the dependency
+    # tree does not need a repository to be correct.
+    # ===================================================================
+    ("license-audit.py", "main", "d40d4b03"): "--write of scripts/license-data.json: prints 'cannot write <path>: <errno>' to stderr and returns 2, which IS the escalation — main()'s return value is the process exit status (sys.exit(main())), and 2 is the script's documented 'the audit itself could not run' code",
+    ("license-audit.py", "main", "22e5612b"): "--notices write of docs/THIRD_PARTY_LICENSES.md: same contract — stderr names path+errno, exit 2 propagates, and make-installer.sh's write_licenses() hard-fails the bundle on a non-zero audit exit rather than shipping a stale notice",
+    ("bmp-synthetic-session.py", "run", "0c2ffe3b"): "BMP connect failure in a lab traffic generator: prints 'connect to <host>:<port> failed: <exc>' to stderr and returns 1, which main() returns and sys.exit(main()) makes the process exit code — the run is over, not continued",
+    ("sbom.py", "_git", "3d2fa830"): "git probe for build provenance: prints 'git <argv> unavailable: <exc>' to stderr, then returns None so the documented fallbacks run (build_timestamp warns the timestamp is NOT reproducible; product_version yields 0.0.0-unknown). A missing git or non-repo dir is expected and must not fail an SBOM of the dependency tree",
 }
 
 # Rule 1: literal swallows, any text file (catches heredoc Python in .sh too).

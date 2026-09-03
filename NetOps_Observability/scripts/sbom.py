@@ -144,7 +144,14 @@ def _git(*args: str) -> str | None:
             timeout=30,
             check=False,
         )
-    except (OSError, subprocess.SubprocessError):
+    except (OSError, subprocess.SubprocessError) as exc:
+        # Not swallowed (§16.1): the reason is named on stderr before the
+        # probe answers "no". A missing git or a non-repo directory is an
+        # EXPECTED condition the callers already handle by falling back — but a
+        # timeout, an exec failure or a resource limit is not, and the operator
+        # must be able to tell which of the two produced an unreproducible
+        # timestamp or a "0.0.0-unknown" version.
+        print(f"sbom: git {' '.join(args)} unavailable: {exc!r}", file=sys.stderr)
         return None
     if res.returncode != 0:
         return None
@@ -164,6 +171,15 @@ INPUT_PATHS = (
     "src/correlation/requirements.txt",
     "deployment/docker",
 )
+
+
+# Directory NAMES pruned from the Dockerfile walk in collect_images(): every
+# one is a gitignored runtime or build-output tree (or a dependency tree with
+# its own upstream Dockerfiles that Correlix neither builds nor ships).
+SKIP_TREES = frozenset({
+    ".git", ".venv", "__pycache__", "backups", "build", "coverage", "data",
+    "dist", "node_modules", "test-results", "vendor",
+})
 
 
 def inputs_revision() -> tuple[str, str] | None:
@@ -504,9 +520,23 @@ def collect_images(root: Path = ROOT) -> list[dict[str, Any]]:
             if match := _IMAGE_RE.match(line):
                 add(match.group("ref"), f"{path.name}({service})")
 
-    for path in sorted(root.rglob("Dockerfile*")):
-        if "node_modules" in path.parts or not path.is_file():
-            continue
+    # Bounded walk, NOT `rglob`: the repo carries large gitignored runtime and
+    # output trees — data/ (live storage volumes; VictoriaMetrics rewrites files
+    # underneath a scan, which once failed a test with FileNotFoundError on a
+    # path that existed when it was listed), dist/, backups/, node_modules/,
+    # build outputs. None of them holds a Dockerfile this document describes, so
+    # they are pruned at the DIRECTORY level: that removes the race and the cost
+    # together, instead of catching (and thereby hiding) the resulting error.
+    # Paths are sorted globally afterwards, so the document stays byte-stable.
+    dockerfiles: list[Path] = []
+    for base, dirnames, filenames in os.walk(root):
+        dirnames[:] = [d for d in dirnames if d not in SKIP_TREES]
+        dockerfiles.extend(
+            Path(base) / name for name in filenames if name.startswith("Dockerfile")
+        )
+    for path in sorted(dockerfiles):
+        if not path.is_file():
+            continue  # a dangling symlink; the sorted list above is the truth
         rel = path.relative_to(root)
         for line in path.read_text(encoding="utf-8").splitlines():
             if match := _FROM_RE.match(line):
