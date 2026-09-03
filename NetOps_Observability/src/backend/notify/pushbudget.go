@@ -84,6 +84,10 @@ var ErrPushBudgetExhausted = errors.New("push budget exhausted for this push ser
 // sender aimed at that host.
 type PushBudget struct {
 	server string
+	// parse records whether `server` is a real host or a degraded fallback, so
+	// a misconfigured push server is REPORTED rather than silently becoming an
+	// odd-looking metric label (§10).
+	parse pushServerParse
 
 	mu       sync.Mutex
 	capacity float64
@@ -118,8 +122,10 @@ func NewPushBudget(server string, capacity, reserve int, now func() time.Time) *
 	if reserve > capacity-1 {
 		reserve = capacity - 1
 	}
+	key, parse := parsePushServerKey(server)
 	return &PushBudget{
-		server:   PushServerKey(server),
+		server:   key,
+		parse:    parse,
 		capacity: float64(capacity),
 		reserve:  float64(reserve),
 		perNano:  float64(capacity) / float64(time.Hour),
@@ -184,6 +190,16 @@ func (b *PushBudget) Server() string {
 	return b.server
 }
 
+// Misconfigured reports whether the configured push server could not be
+// resolved to a host, and why ("unreadable" / "no_host"). A nil bucket is not
+// misconfigured — it is a disabled guard, which is a different fact.
+func (b *PushBudget) Misconfigured() (bool, string) {
+	if b == nil {
+		return false, ""
+	}
+	return b.parse != pushServerOK, b.parse.reason()
+}
+
 // Refused counts local refusals — pushes this guard stopped before the request.
 func (b *PushBudget) Refused() uint64 {
 	if b == nil {
@@ -234,7 +250,10 @@ func (r *PushBudgets) For(server string) *PushBudget {
 	if b, ok := r.byServer[key]; ok {
 		return b
 	}
-	b := NewPushBudget(key, r.capacity, r.reserve, r.now)
+	// The ORIGINAL string, not the derived key: the bucket must reach the same
+	// verdict the map key was derived from, and re-parsing an already-degraded
+	// key could turn "unreadable" into "no_host".
+	b := NewPushBudget(server, r.capacity, r.reserve, r.now)
 	r.byServer[key] = b
 	return b
 }
@@ -244,6 +263,11 @@ type PushBudgetState struct {
 	Server    string
 	Remaining int
 	Refused   uint64
+	// Misconfigured is true when Server is a degraded fallback rather than a
+	// host parsed out of the configured URL, and Reason says which of the two
+	// degraded states it is.
+	Misconfigured bool
+	Reason        string
 }
 
 // Snapshot reports every known server's budget, sorted by host so the metric
@@ -257,29 +281,91 @@ func (r *PushBudgets) Snapshot() []PushBudgetState {
 	r.mu.Lock()
 	out := make([]PushBudgetState, 0, len(r.byServer))
 	for _, b := range r.byServer {
-		out = append(out, PushBudgetState{Server: b.Server(), Remaining: b.Remaining(), Refused: b.Refused()})
+		bad, why := b.Misconfigured()
+		out = append(out, PushBudgetState{
+			Server: b.Server(), Remaining: b.Remaining(), Refused: b.Refused(),
+			Misconfigured: bad, Reason: why,
+		})
 	}
 	r.mu.Unlock()
 	sort.Slice(out, func(i, j int) bool { return out[i].Server < out[j].Server })
 	return out
 }
 
-// PushServerKey normalizes a configured push-server URL to the HOST that a
-// rate limiter actually sees. Scheme, path, credentials and trailing slashes
-// are irrelevant to "which server's allowance am I spending", so they are
-// dropped; an unparseable value degrades to its lowercased self rather than
-// collapsing everything into one bucket.
+// pushServerParse says WHY a configured push server did not yield a host.
+//
+// "The operator typed something that is not a URL" and "it parsed, but names no
+// server" are DIFFERENT facts, and a function that collapses them reports a
+// broken configuration as an ordinary bucket key (CLAUDE.md §10). Same
+// three-state shape as internal/bgpdepth's parseASNValue.
+type pushServerParse int
+
+const (
+	// pushServerOK: the value named a host, and that host is the bucket key.
+	pushServerOK pushServerParse = iota
+	// pushServerUnreadable: the value is not a URL at all. A FAULT — the HTTP
+	// client will refuse it too, so every push to this "server" is already
+	// failing and the operator needs to see the cause here.
+	pushServerUnreadable
+	// pushServerNoHost: well-formed, but carries no authority (a bare path, a
+	// scheme with nothing after it). Not a parse fault, still unusable as a
+	// rate-limit key.
+	pushServerNoHost
+)
+
+func (p pushServerParse) reason() string {
+	switch p {
+	case pushServerUnreadable:
+		return "unreadable"
+	case pushServerNoHost:
+		return "no_host"
+	default:
+		return ""
+	}
+}
+
+// PushServerKey normalizes a configured push-server URL to the HOST that a rate
+// limiter actually sees. Scheme, path, credentials and trailing slashes are
+// irrelevant to "which server's allowance am I spending", so they are dropped.
+//
+// It is the string-only shim over parsePushServerKey, for callers that just
+// need a map key. A caller that must REPORT a broken server setting uses the
+// three states directly — NewPushBudget does, and carries the verdict into
+// PushBudget.Misconfigured and the metrics surface.
 func PushServerKey(server string) string {
-	s := strings.TrimSpace(server)
+	key, _ := parsePushServerKey(server)
+	return key
+}
+
+// parsePushServerKey is the three-state core.
+//
+// Both degraded states fall back to the value's own literal text rather than to
+// the default server: collapsing a misconfigured entry into the `ntfy.sh`
+// bucket would make it spend a REAL server's allowance, which is precisely the
+// cross-sender conflation this file exists to prevent. The fallback is
+// deterministic, so two senders configured identically-wrongly still share one
+// bucket.
+func parsePushServerKey(server string) (string, pushServerParse) {
+	raw := strings.TrimSpace(server)
+	s := raw
 	if s == "" {
-		s = DefaultNtfyServer
+		s = DefaultNtfyServer // unset is not misconfigured — it is the default
 	}
 	if !strings.Contains(s, "://") {
 		s = "https://" + s
 	}
 	u, err := url.Parse(s)
-	if err != nil || u.Host == "" {
-		return strings.ToLower(strings.Trim(strings.TrimSpace(server), "/"))
+	if err != nil {
+		return literalPushServerKey(raw), pushServerUnreadable
 	}
-	return strings.ToLower(u.Host)
+	if u.Host == "" {
+		return literalPushServerKey(raw), pushServerNoHost
+	}
+	return strings.ToLower(u.Host), pushServerOK
+}
+
+// literalPushServerKey is the degraded key: the configured text itself, folded
+// so that spelling variants of the same broken value still collide.
+func literalPushServerKey(raw string) string {
+	return strings.ToLower(strings.Trim(raw, "/"))
 }

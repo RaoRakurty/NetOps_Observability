@@ -351,3 +351,63 @@ func TestPushBudgetMetricsAreLabelledByServer(t *testing.T) {
 		t.Errorf("the per-server refusal counter is missing:\n%s", out)
 	}
 }
+
+// A configured push server that yields no host has THREE distinguishable
+// outcomes, not two. Collapsing "that is not a URL" into "it named no host"
+// (the `if err != nil || u.Host == ""` this replaced) reports a broken setting
+// as an ordinary bucket key — the caller cannot tell a typo from a well-formed
+// value that happens to carry no authority (§10).
+func TestPushServerParseKeepsTheThreeStatesApart(t *testing.T) {
+	for _, tc := range []struct {
+		in     string
+		key    string
+		parse  pushServerParse
+		reason string
+	}{
+		{"https://ntfy.sh", "ntfy.sh", pushServerOK, ""},
+		{"", "ntfy.sh", pushServerOK, ""}, // unset is the default, NOT a fault
+		{"ntfy.internal:8080", "ntfy.internal:8080", pushServerOK, ""},
+		// Not a URL at all: a FAULT the HTTP client will refuse too.
+		{"ht tp://ntfy.sh", "ht tp://ntfy.sh", pushServerUnreadable, "unreadable"},
+		// Well-formed, but names no server.
+		{"file:///var/run/ntfy", "file:///var/run/ntfy", pushServerNoHost, "no_host"},
+	} {
+		key, parse := parsePushServerKey(tc.in)
+		if key != tc.key || parse != tc.parse || parse.reason() != tc.reason {
+			t.Errorf("parsePushServerKey(%q) = (%q, %v/%q), want (%q, %v/%q)",
+				tc.in, key, parse, parse.reason(), tc.key, tc.parse, tc.reason)
+		}
+		if got := PushServerKey(tc.in); got != tc.key {
+			t.Errorf("PushServerKey(%q) = %q, want %q — the shim must agree with the core", tc.in, got, tc.key)
+		}
+	}
+
+	// A degraded server must NOT be collapsed into the default bucket: that
+	// would spend a real server's allowance under a misconfigured name.
+	c := &budgetClock{t: time.Date(2026, 9, 3, 0, 0, 0, 0, time.UTC)}
+	reg := NewPushBudgets(4, 1, c.now)
+	if reg.For("ht tp://ntfy.sh") == reg.For("https://ntfy.sh") {
+		t.Fatal("a misconfigured server shares the real server's budget")
+	}
+	// The fault is REPORTED, with its reason, and lands on the metrics surface.
+	bad, why := reg.For("ht tp://ntfy.sh").Misconfigured()
+	if !bad || why != "unreadable" {
+		t.Fatalf("Misconfigured() = (%v, %q), want (true, \"unreadable\")", bad, why)
+	}
+	if ok, why := reg.For("https://ntfy.sh").Misconfigured(); ok || why != "" {
+		t.Fatalf("a healthy server reported misconfigured: (%v, %q)", ok, why)
+	}
+	d := NewDispatcher()
+	defer d.Close()
+	d.SetPushBudgets(reg)
+	var b strings.Builder
+	d.WriteMetrics(&b)
+	out := b.String()
+	if !strings.Contains(out, `netops_notify_push_server_misconfigured{server="ht tp://ntfy.sh"} 1`) {
+		t.Errorf("the configuration fault is not surfaced:\n%s", out)
+	}
+	// Present as a 0 for a healthy server — "correct" is a value, not a gap.
+	if !strings.Contains(out, `netops_notify_push_server_misconfigured{server="ntfy.sh"} 0`) {
+		t.Errorf("the healthy server has no series at all:\n%s", out)
+	}
+}
