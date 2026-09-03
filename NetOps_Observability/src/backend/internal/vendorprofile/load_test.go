@@ -303,9 +303,14 @@ func TestLoaderAcceptsAWellFormedPcapCommandSet(t *testing.T) {
 		"pcap_cleanup_cmd":     []string{"delete flash:{file}.pcap"},
 		"pcap_remote_path":     "flash:{file}.pcap",
 		"pcap_supports_filter": true,
+		"pcap_family":          "acme_acmeos",
+		"pcap_platform_rules":  []any{map[string]any{"rank": 1, "tokens": []string{"acmeos"}}},
 	}))
 	if err != nil {
 		t.Fatalf("a well-formed pcap command set was rejected: %v", err)
+	}
+	if fam, ok := reg.PcapFamilyForPlatform("Acme AcmeOS 7.1"); !ok || fam != "acme_acmeos" {
+		t.Fatalf("PcapFamilyForPlatform did not resolve the declared family: %q %v", fam, ok)
 	}
 	c, err := reg.CaptureFor("acme/acmeos")
 	if err != nil {
@@ -324,6 +329,7 @@ func TestPcapCaptureIsDeepCopiedOut(t *testing.T) {
 		"pcap_stop_cmd":    []string{"capture {name} stop"},
 		"pcap_cleanup_cmd": []string{"delete flash:{file}.pcap"},
 		"pcap_remote_path": "flash:{file}.pcap",
+		"pcap_family":      "acme_acmeos",
 	}))
 	if err != nil {
 		t.Fatal(err)

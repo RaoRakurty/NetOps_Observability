@@ -26,6 +26,49 @@ type Registry struct {
 	cliDisp    map[string]string
 	verifyCmds map[string]map[string]string // vendor → check id → command
 	verifyAll  map[string]struct{}          // every declared command, verbatim
+
+	// ── vendor-level consumer bindings ──────────────────────────────────────
+	configCap   map[string]ConfigCapture      // vendor → config-capture binding
+	configVol   map[string][]compiledVolatile // vendor → compiled volatile rules
+	configRules []configRule                  // platform text → capture family, ascending rank
+	// configFamilies is every id ConfigCaptureVendorForPlatform can return —
+	// the participating vendors PLUS their sibling capture dialects. It is what
+	// a consumer's closed-table test iterates so a family that gains a command
+	// with no golden fails the build.
+	configFamilies []string
+	snmpGen     map[string]SNMPConfigGen      // vendor → onboarding templates
+	snmpGenIDs  []string                      // sorted vendor ids declaring one
+	devTypeText map[string][]string           // device type → text hints (union)
+	devTypeVend map[string]string             // exact vendor token → device type
+
+	// ── packet-capture families (profile level) ─────────────────────────────
+	pcapFamily map[string]string // capture family key → profile id
+	pcapKeys   []string          // sorted family keys
+	pcapRules  []pcapRule        // platform text → family, ascending rank
+}
+
+// configRule is one vendor's entry in the config-capture platform table.
+type configRule struct {
+	rank     int
+	vendor   string
+	contains []string
+}
+
+// compiledVolatile is a volatile-line rule with its pattern compiled once, at
+// load: normalization runs on every captured line of every capture, and a
+// registry that recompiled a regexp per line would make the move a performance
+// regression rather than a refactor.
+type compiledVolatile struct {
+	name string
+	re   *regexp.Regexp
+}
+
+// pcapRule is one ranked capture-family resolution rule.
+type pcapRule struct {
+	rank   int
+	family string
+	tokens []string
+	joined []string
 }
 
 type descrRule struct {
@@ -66,9 +109,19 @@ func build(docs []vendorDoc) (*Registry, error) {
 		cliDisp:    make(map[string]string),
 		verifyCmds: make(map[string]map[string]string),
 		verifyAll:  make(map[string]struct{}),
+
+		configCap:   make(map[string]ConfigCapture),
+		configVol:   make(map[string][]compiledVolatile),
+		snmpGen:     make(map[string]SNMPConfigGen),
+		devTypeText: make(map[string][]string),
+		devTypeVend: make(map[string]string),
+		pcapFamily:  make(map[string]string),
 	}
 	seenDescrRank := make(map[int]string)
 	seenPlatRank := make(map[int]string)
+	seenConfigRank := make(map[int]string)
+	seenPcapRank := make(map[int]string)
+	seenHint := make(map[string]string)
 
 	for _, doc := range docs {
 		if _, dup := r.vendors[doc.Vendor]; dup {
@@ -117,6 +170,77 @@ func build(docs []vendorDoc) (*Registry, error) {
 			}
 			r.verifyCmds[doc.Vendor] = cmds
 		}
+		// ── config-capture binding (vendor level) ────────────────────────────
+		if cc := doc.ConfigCapture; cc.PlatformRank > 0 || cc.RunningConfigCmd != "" || len(cc.VolatileRules) > 0 {
+			if cc.PlatformRank > 0 {
+				if other, dup := seenConfigRank[cc.PlatformRank]; dup {
+					return nil, fmt.Errorf("vendorprofile: config_capture platform_rank %d claimed by both %q and %q",
+						cc.PlatformRank, other, doc.Vendor)
+				}
+				seenConfigRank[cc.PlatformRank] = doc.Vendor
+				r.configRules = append(r.configRules, configRule{
+					rank: cc.PlatformRank, vendor: doc.Vendor,
+					contains: append([]string(nil), cc.PlatformContains...),
+				})
+			}
+			r.configCap[doc.Vendor] = cc
+			if err := r.indexConfigVolatile(doc.Vendor, cc.VolatileRules); err != nil {
+				return nil, err
+			}
+		}
+		// ── config-capture SIBLING dialects (a second OS under one vendor) ───
+		for _, d := range doc.ConfigCapture.PlatformDialects {
+			if _, dup := r.configCap[d.ID]; dup {
+				return nil, fmt.Errorf("vendorprofile: config_capture dialect id %q collides with an existing capture family", d.ID)
+			}
+			if other, dup := seenConfigRank[d.PlatformRank]; dup {
+				return nil, fmt.Errorf("vendorprofile: config_capture platform_rank %d claimed by both %q and %q",
+					d.PlatformRank, other, d.ID)
+			}
+			seenConfigRank[d.PlatformRank] = d.ID
+			r.configRules = append(r.configRules, configRule{
+				rank: d.PlatformRank, vendor: d.ID,
+				contains: append([]string(nil), d.PlatformContains...),
+			})
+			r.configCap[d.ID] = ConfigCapture{
+				PlatformContains: append([]string(nil), d.PlatformContains...),
+				PlatformRank:     d.PlatformRank,
+				RunningConfigCmd: d.RunningConfigCmd,
+				VolatileRules:    append([]VolatileRule(nil), d.VolatileRules...),
+			}
+			r.configFamilies = append(r.configFamilies, d.ID)
+			if err := r.indexConfigVolatile(d.ID, d.VolatileRules); err != nil {
+				return nil, err
+			}
+		}
+		if _, participates := r.configCap[doc.Vendor]; participates {
+			r.configFamilies = append(r.configFamilies, doc.Vendor)
+		}
+		// ── SNMP onboarding templates (vendor level) ─────────────────────────
+		if doc.SNMPConfigGen.V2CTemplate != "" {
+			r.snmpGen[doc.Vendor] = doc.SNMPConfigGen
+			r.snmpGenIDs = append(r.snmpGenIDs, doc.Vendor)
+		}
+		// ── device-type hints (vendor level) ─────────────────────────────────
+		for _, tok := range doc.DeviceType.VendorTokens {
+			key := strings.ToLower(strings.TrimSpace(tok))
+			if other, dup := r.devTypeVend[key]; dup && other != doc.DeviceType.VendorKind {
+				return nil, fmt.Errorf("vendorprofile: device_type vendor token %q maps to both %q and %q", key, other, doc.DeviceType.VendorKind)
+			}
+			r.devTypeVend[key] = doc.DeviceType.VendorKind
+		}
+		for kind, hints := range doc.DeviceType.TextHints {
+			for _, hint := range hints {
+				lower := strings.ToLower(hint)
+				key := kind + "\x00" + lower
+				if other, dup := seenHint[key]; dup {
+					return nil, fmt.Errorf("vendorprofile: device_type text hint %q for %q is declared by both %q and %q",
+						hint, kind, other, doc.Vendor)
+				}
+				seenHint[key] = doc.Vendor
+				r.devTypeText[kind] = append(r.devTypeText[kind], lower)
+			}
+		}
 		// ── profiles ─────────────────────────────────────────────────────────
 		var osp vendorOSParse
 		if doc.Detection.OSVersionPattern != "" {
@@ -131,6 +255,8 @@ func build(docs []vendorDoc) (*Registry, error) {
 		rec := VendorRecord{
 			ID: doc.Vendor, DisplayName: doc.DisplayName,
 			Detection: doc.Detection, Dialect: doc.Dialect, Verify: doc.Verify,
+			ConfigCapture: doc.ConfigCapture, SNMPConfigGen: doc.SNMPConfigGen,
+			DeviceType: doc.DeviceType,
 		}
 		for _, p := range doc.Profiles {
 			p.Vendor = doc.Vendor
@@ -203,6 +329,26 @@ func build(docs []vendorDoc) (*Registry, error) {
 				}
 				r.cliDisp[p.CLI.Dialect] = p.CLI.Display
 			}
+			// packet-capture family: one profile owns a family, and the family's
+			// resolution ranks are global (first match wins over one list).
+			if fam := p.Capture.PcapFamily; fam != "" {
+				if other, dup := r.pcapFamily[fam]; dup {
+					return nil, fmt.Errorf("vendorprofile: pcap_family %q claimed by both %q and %q", fam, other, p.ID)
+				}
+				r.pcapFamily[fam] = p.ID
+				r.pcapKeys = append(r.pcapKeys, fam)
+				for _, rule := range p.Capture.PcapPlatformRules {
+					if other, dup := seenPcapRank[rule.Rank]; dup {
+						return nil, fmt.Errorf("vendorprofile: pcap_platform_rules rank %d claimed by both %q and %q", rule.Rank, other, p.ID)
+					}
+					seenPcapRank[rule.Rank] = p.ID
+					r.pcapRules = append(r.pcapRules, pcapRule{
+						rank: rule.Rank, family: fam,
+						tokens: append([]string(nil), rule.Tokens...),
+						joined: append([]string(nil), rule.Joined...),
+					})
+				}
+			}
 		}
 		sort.Slice(osp.products, func(i, j int) bool { return osp.products[i].rank < osp.products[j].rank })
 		// The unconditional default must be evaluated LAST, or a marker-gated
@@ -223,6 +369,18 @@ func build(docs []vendorDoc) (*Registry, error) {
 	sort.Strings(r.vendorIDs)
 	sort.Slice(r.descrRules, func(i, j int) bool { return r.descrRules[i].rank < r.descrRules[j].rank })
 	sort.Slice(r.platRules, func(i, j int) bool { return r.platRules[i].rank < r.platRules[j].rank })
+	sort.Strings(r.snmpGenIDs)
+	sort.Strings(r.pcapKeys)
+	sort.Slice(r.configRules, func(i, j int) bool { return r.configRules[i].rank < r.configRules[j].rank })
+	sort.Slice(r.pcapRules, func(i, j int) bool { return r.pcapRules[i].rank < r.pcapRules[j].rank })
+	// The device-type hint union is assembled from a map range (non-deterministic
+	// order). Matching within a type is an OR, so order cannot change an answer —
+	// but a registry that reported its own contents in a different order on every
+	// build could not be pinned by a test, and this registry is deterministic by
+	// design.
+	for kind := range r.devTypeText {
+		sort.Strings(r.devTypeText[kind])
+	}
 	return r, nil
 }
 
@@ -249,6 +407,14 @@ func (p Profile) clone() Profile {
 	out.Capture.PcapStopCmd = cp(p.Capture.PcapStopCmd)
 	out.Capture.PcapFetchCmd = cp(p.Capture.PcapFetchCmd)
 	out.Capture.PcapCleanupCmd = cp(p.Capture.PcapCleanupCmd)
+	if p.Capture.PcapPlatformRules != nil {
+		out.Capture.PcapPlatformRules = make([]PcapPlatformRule, len(p.Capture.PcapPlatformRules))
+		for i, rule := range p.Capture.PcapPlatformRules {
+			out.Capture.PcapPlatformRules[i] = PcapPlatformRule{
+				Rank: rule.Rank, Tokens: cp(rule.Tokens), Joined: cp(rule.Joined),
+			}
+		}
+	}
 	out.Advisory.ProductIDs = cp(p.Advisory.ProductIDs)
 	out.Threat.LogRuleIDs = cp(p.Threat.LogRuleIDs)
 	out.Threat.MnemonicPrefixes = cp(p.Threat.MnemonicPrefixes)
@@ -282,7 +448,44 @@ func (v VendorRecord) clone() VendorRecord {
 	out.Detection = v.Detection.clone()
 	out.Dialect = v.Dialect.clone()
 	out.Verify = v.Verify.clone()
+	out.ConfigCapture = v.ConfigCapture.clone()
+	out.DeviceType = v.DeviceType.clone()
 	out.ProfileIDs = cp(v.ProfileIDs)
+	return out
+}
+
+// clone deep-copies the config-capture binding (its slices are shared index
+// state until copied).
+func (c ConfigCapture) clone() ConfigCapture {
+	out := c
+	out.PlatformContains = cp(c.PlatformContains)
+	if c.VolatileRules != nil {
+		out.VolatileRules = append([]VolatileRule(nil), c.VolatileRules...)
+	}
+	if c.PlatformDialects != nil {
+		out.PlatformDialects = make([]ConfigCaptureDialect, len(c.PlatformDialects))
+		for i, d := range c.PlatformDialects {
+			dc := d
+			dc.PlatformContains = cp(d.PlatformContains)
+			if d.VolatileRules != nil {
+				dc.VolatileRules = append([]VolatileRule(nil), d.VolatileRules...)
+			}
+			out.PlatformDialects[i] = dc
+		}
+	}
+	return out
+}
+
+// clone deep-copies the device-type hints, including the hint map.
+func (h DeviceTypeHints) clone() DeviceTypeHints {
+	out := h
+	out.VendorTokens = cp(h.VendorTokens)
+	if h.TextHints != nil {
+		out.TextHints = make(map[string][]string, len(h.TextHints))
+		for k, v := range h.TextHints {
+			out.TextHints[k] = cp(v)
+		}
+	}
 	return out
 }
 
@@ -600,4 +803,271 @@ func (r *Registry) VerifyCommandTable() map[string]map[string]string {
 		out[vendor] = cp
 	}
 	return out
+}
+
+// ─── config capture (vendor level) ───────────────────────────────────────────
+
+// ConfigCaptureVendorForPlatform resolves a free-form platform label ("Cisco
+// IOS-XE 17.9", "Arista EOS 4.30") onto the CAPTURE FAMILY whose config-capture
+// binding applies, via the ranked config_capture.platform_contains table, first
+// match wins. ok=false means nothing claimed the text: the caller REFUSES the
+// capture rather than issuing another family's command at a device prompt.
+//
+// A capture family is usually a vendor, but not always: a vendor that ships two
+// operating systems declares the second as a config_capture.platform_dialect
+// and this returns the DIALECT's id ("srlinux"), because SR Linux answers a
+// different command than SR OS and shares none of its volatile lines.
+//
+// The rank order is load-bearing and is why this is not ProfileForPlatformText:
+// an EOS platform string frequently names a "Cisco-compatible" CLI, and EOS
+// wants its own volatile-line rules; likewise "Nokia SR Linux" contains
+// "nokia", so the srlinux dialect must rank ahead of the nokia vendor family.
+func (r *Registry) ConfigCaptureVendorForPlatform(platform string) (string, bool) {
+	p := strings.ToLower(strings.TrimSpace(platform))
+	if p == "" {
+		return "", false
+	}
+	for _, rule := range r.configRules {
+		for _, sub := range rule.contains {
+			if strings.Contains(p, sub) {
+				return rule.vendor, true
+			}
+		}
+	}
+	return "", false
+}
+
+// indexConfigVolatile compiles and registers one family's volatile-line rules.
+func (r *Registry) indexConfigVolatile(family string, rules []VolatileRule) error {
+	for _, vr := range rules {
+		re, err := regexp.Compile(vr.Pattern)
+		if err != nil {
+			return fmt.Errorf("vendorprofile: capture family %q volatile rule %q: %w", family, vr.Name, err)
+		}
+		r.configVol[family] = append(r.configVol[family], compiledVolatile{name: vr.Name, re: re})
+	}
+	return nil
+}
+
+// ConfigCaptureFamilies returns, sorted, every capture family id the resolver
+// can return: the vendors that participate in config capture PLUS their sibling
+// dialects (Nokia's `srlinux`). A consumer pinning the closed command table
+// iterates THIS, not VendorIDs — a dialect is not a vendor and would otherwise
+// gain a command with no golden behind it.
+func (r *Registry) ConfigCaptureFamilies() []string {
+	out := append([]string(nil), r.configFamilies...)
+	sort.Strings(out)
+	return out
+}
+
+// ConfigCaptureFor returns a vendor's whole config-capture binding as a copy.
+func (r *Registry) ConfigCaptureFor(vendor string) (ConfigCapture, bool) {
+	cc, ok := r.configCap[strings.ToLower(strings.TrimSpace(vendor))]
+	if !ok {
+		return ConfigCapture{}, false
+	}
+	return cc.clone(), true
+}
+
+// ConfigCaptureCommand returns the EXACT read-only running-config command for a
+// vendor family. ok=false is the honest "this family is not bound" answer — the
+// caller refuses the capture, it never composes a command.
+func (r *Registry) ConfigCaptureCommand(vendor string) (string, bool) {
+	cc, ok := r.configCap[strings.ToLower(strings.TrimSpace(vendor))]
+	if !ok || cc.RunningConfigCmd == "" {
+		return "", false
+	}
+	return cc.RunningConfigCmd, true
+}
+
+// ConfigVolatileRuleNames returns the documented volatile-rule names for a
+// vendor, in declaration order. It is what lets a consumer's test pin the list
+// by name so a silent deletion fails the build.
+func (r *Registry) ConfigVolatileRuleNames(vendor string) []string {
+	rules := r.configVol[strings.ToLower(strings.TrimSpace(vendor))]
+	if len(rules) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(rules))
+	for _, rule := range rules {
+		out = append(out, rule.name)
+	}
+	return out
+}
+
+// IsConfigVolatileLine reports whether one captured line matches any of a
+// vendor's volatile-line rules. The patterns are compiled once at load, so this
+// is a match, not a compile, on the per-line hot path of every capture.
+func (r *Registry) IsConfigVolatileLine(vendor, line string) bool {
+	for _, rule := range r.configVol[strings.ToLower(strings.TrimSpace(vendor))] {
+		if rule.re.MatchString(line) {
+			return true
+		}
+	}
+	return false
+}
+
+// ─── SNMP onboarding templates (vendor level) ────────────────────────────────
+
+// SNMPConfigGenVendors returns, sorted, every vendor that declares a first-class
+// SNMP onboarding template. A vendor absent from this list still gets a real
+// minted credential — only the ready-to-paste CLI block is generic.
+func (r *Registry) SNMPConfigGenVendors() []string { return append([]string(nil), r.snmpGenIDs...) }
+
+// SNMPConfigGenFor returns a vendor's onboarding templates.
+func (r *Registry) SNMPConfigGenFor(vendor string) (SNMPConfigGen, bool) {
+	g, ok := r.snmpGen[strings.ToLower(strings.TrimSpace(vendor))]
+	return g, ok
+}
+
+// RenderSNMPConfig renders a vendor's onboarding CLI block for an SNMP version
+// ("v2c" or "v3") with the supplied placeholder values. ok=false means the
+// vendor declares no template for that version — the caller falls back to the
+// generic guidance, it never renders another vendor's grammar.
+//
+// SECURITY: rendering is a SINGLE LEFT-TO-RIGHT PASS, never a sequence of
+// strings.ReplaceAll. One of the values (the management subnet) is operator
+// input; with sequential replacement an operator who submitted the literal text
+// "<<auth_key>>" as their subnet would have the MINTED PRIVATE KEY substituted
+// into it by the next pass. A single pass never re-examines what it has already
+// emitted, so a value can never name a hole.
+func (r *Registry) RenderSNMPConfig(vendor, version string, vals map[string]string) (string, bool) {
+	g, ok := r.snmpGen[strings.ToLower(strings.TrimSpace(vendor))]
+	if !ok {
+		return "", false
+	}
+	tpl := g.V2CTemplate
+	if version == "v3" {
+		tpl = g.V3Template
+	}
+	if tpl == "" {
+		return "", false
+	}
+	var b strings.Builder
+	b.Grow(len(tpl))
+	for {
+		i := strings.Index(tpl, "<<")
+		if i < 0 {
+			break
+		}
+		end := strings.Index(tpl[i+2:], ">>")
+		if end < 0 {
+			break // validated at load; a malformed template renders literally
+		}
+		b.WriteString(tpl[:i])
+		b.WriteString(vals[tpl[i+2:i+2+end]])
+		tpl = tpl[i+2+end+2:]
+	}
+	b.WriteString(tpl)
+	return b.String(), true
+}
+
+// ─── functional device type ──────────────────────────────────────────────────
+
+// DeviceTypeForText infers a FUNCTIONAL device type from the free-form text an
+// operator reads (vendor + model + OS + name), evaluating DeviceTypeOrder in
+// order so a specific role (firewall, load balancer, WLC, AP, cloud gateway) is
+// always tested before the generic switch-vs-router split. ok=false means no
+// hint matched: the caller reports its own neutral default, never a guess.
+func (r *Registry) DeviceTypeForText(text string) (string, bool) {
+	t := strings.ToLower(text)
+	if strings.TrimSpace(t) == "" {
+		return "", false
+	}
+	for _, kind := range DeviceTypeOrder {
+		for _, hint := range r.devTypeText[kind] {
+			if strings.Contains(t, hint) {
+				return kind, true
+			}
+		}
+	}
+	return "", false
+}
+
+// DeviceTypeForVendorToken resolves a vendor spelling that is ITSELF a role
+// claim ("fortinet", "palo alto") to a device type. The match is exact, on the
+// whole trimmed, lower-cased vendor token: a vendor id is an identity, not a
+// substring hint.
+func (r *Registry) DeviceTypeForVendorToken(vendor string) (string, bool) {
+	kind, ok := r.devTypeVend[strings.ToLower(strings.TrimSpace(vendor))]
+	return kind, ok
+}
+
+// DeviceTypeTextHints returns, sorted, every text hint declared for one device
+// type across all vendors — the union a consumer test can pin verbatim.
+func (r *Registry) DeviceTypeTextHints(kind string) []string {
+	return append([]string(nil), r.devTypeText[kind]...)
+}
+
+// ─── packet-capture families ─────────────────────────────────────────────────
+
+// PcapFamilyKeys returns every declared capture-family key, sorted. A key here
+// is a family the registry can NAME; whether it has COMMANDS is a separate
+// question (a profile may declare the family and establish no commands, which
+// is refused honestly at the device).
+func (r *Registry) PcapFamilyKeys() []string { return append([]string(nil), r.pcapKeys...) }
+
+// PcapFamilies returns capture-family key → the profile id that declares it.
+func (r *Registry) PcapFamilies() map[string]string {
+	out := make(map[string]string, len(r.pcapFamily))
+	for k, v := range r.pcapFamily {
+		out[k] = v
+	}
+	return out
+}
+
+// PcapFamilyForPlatform resolves a device's free-form platform text onto a
+// capture-family key: an exact family key first, then the ranked token rules,
+// first match wins. ok=false means the platform is not a family this registry
+// establishes — packet capture is REFUSED, never rendered from a guess.
+func (r *Registry) PcapFamilyForPlatform(platform string) (string, bool) {
+	p := strings.ToLower(strings.TrimSpace(platform))
+	if p == "" {
+		return "", false
+	}
+	if _, ok := r.pcapFamily[p]; ok {
+		return p, true
+	}
+	tokens, joined := platformTokens(p)
+	for _, rule := range r.pcapRules {
+		for _, tok := range rule.tokens {
+			if tokens[tok] {
+				return rule.family, true
+			}
+		}
+		for _, sub := range rule.joined {
+			if strings.Contains(joined, sub) {
+				return rule.family, true
+			}
+		}
+	}
+	return "", false
+}
+
+// platformTokens splits a free-form vendor/OS/model string into lower-case
+// alphanumeric TOKENS plus their concatenation. Matching on tokens rather than
+// substrings is deliberate: a substring rule for "eos" also matches the vendor
+// string "acme-networks SomeOS", and silently rendering Arista commands at an
+// unknown device is exactly the "invent an API at a live router" failure the
+// design forbids. The joined form is used only for the two-part names ("ios-xe",
+// "nx-os") a substring test can identify unambiguously.
+func platformTokens(platform string) (map[string]bool, string) {
+	set := map[string]bool{}
+	var cur, joined strings.Builder
+	flush := func() {
+		if cur.Len() > 0 {
+			set[cur.String()] = true
+			joined.WriteString(cur.String())
+			cur.Reset()
+		}
+	}
+	for _, r := range strings.ToLower(platform) {
+		if r >= 'a' && r <= 'z' || r >= '0' && r <= '9' {
+			cur.WriteRune(r)
+			continue
+		}
+		flush()
+	}
+	flush()
+	return set, joined.String()
 }

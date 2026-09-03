@@ -8,5 +8,12 @@
     ]
   },
   "dialect": {},
+  "device_type": {
+    "text_hints": {
+      "switch": [
+        "powerconnect"
+      ]
+    }
+  },
   "profiles": []
 }

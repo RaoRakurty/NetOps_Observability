@@ -131,6 +131,66 @@ with no per-vendor code.
   profiles ship with the binary OR are operator-loadable (the offline/air-gap
   path), so a customer can add a vendor without waiting for a release.
 
+## Schema addendum — `config_capture.platform_dialects` (2026-09-02)
+
+The config-capture binding is **vendor-level**: one command per vendor family,
+because `internal/configstore` resolves a device to a family and never to a
+platform (one Junos command serves every Junos box, and the volatile header a
+device stamps is a property of the OS family, not the chassis). That holds for
+every vendor that ships one CLI.
+
+Nokia ships two. SR OS answers `admin display-config` in the classic TiMOS CLI;
+SR Linux answers `info from running flat` in a model-driven CLI that shares no
+statement with it. They cannot be two vendor documents — the document name *is*
+the vendor id — and they cannot share one command without sending one of the two
+a command it does not have. So `config_capture` gained an optional
+`platform_dialects` array: a **sibling capture family** under one vendor, with
+its own id, its own `platform_contains`/`platform_rank`, its own
+`running_config_cmd` and its own `volatile_rules`.
+
+```jsonc
+"config_capture": {
+  "platform_contains": ["nokia", "sr os", "sros", "timos", "alcatel"],
+  "platform_rank": 50,
+  "running_config_cmd": "admin display-config",
+  "volatile_rules": [ /* SR OS' # Generated / # Finished / # TiMOS- headers */ ],
+  "platform_dialects": [{
+    "id": "srlinux",
+    "platform_contains": ["sr linux", "srlinux"],
+    "platform_rank": 45,          // MUST beat its own vendor: the label contains "nokia"
+    "running_config_cmd": "info from running flat",
+    "volatile_rules": [],         // measured: the flat form stamps no header at all
+    "notes": "how the command was established"
+  }]
+}
+```
+
+Four properties are load-bearing and enforced at load:
+
+- **One rank space.** A dialect's `platform_rank` competes with every vendor's in
+  the same ranked, first-match-wins pass, and uniqueness is checked across both.
+  This is not cosmetic: "Nokia SR Linux" contains "nokia", so without rank 45 the
+  nokia family claims it and an SR Linux box is sent SR OS' command.
+- **A dialect must be reachable.** `platform_contains` and a positive rank are
+  required — a capture command nothing can resolve to is a silently dead table.
+- **The id is the key downstream.** `ConfigCaptureVendorForPlatform` returns the
+  *dialect* id, and the capture command, the volatile-rule list and the redaction
+  rule set all key on it. `ConfigCaptureFamilies()` (vendors + dialects) is what
+  a consumer's closed-table test iterates, so a new dialect cannot ship a
+  device-facing command without a golden.
+- **No inheritance.** A dialect does not inherit its vendor's volatile rules. SR
+  Linux declares none, and that is a measured claim (two consecutive captures of
+  lab spine1 were byte-identical over 728 lines), not an omission.
+
+The `capture` block on the *profile* is unchanged and still the platform's own
+command; the two may legitimately differ, and for `nokia/srlinux` they now agree.
+
+The same day, two `hardening.binding` values were added for the same reason —
+`arista` (EOS borrows IOS' *show* grammar, not its *configuration* grammar) and
+`srlinux` (which had been scored against SR OS' grammar and answering "not
+enabled" to everything). A hardening binding is a third axis, independent of both
+`cli.dialect` and the capture family.
+
 ## Net
 
 Adding SonicWall or Extreme becomes: **write one Vendor Profile** (declarative,

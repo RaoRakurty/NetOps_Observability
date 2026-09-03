@@ -39,13 +39,21 @@ package vendorprofile
 //
 // ALLOWLIST. Every call site tracker row 216 named — internal/verify's two
 // command tables, internal/protocoldiag's platform switch, internal/showparse's
-// fallback token map — is gone, and this guard is what keeps them gone. The six
-// entries in vocabularyGuardAllowlist are what the guard found ELSEWHERE when it
-// was first run: five genuine residuals in other bounded contexts (carried on
-// their own tracker row, not silently forgiven) and one legitimate
-// implementation switch. Each carries its reason inline, so the exception is
-// reviewable rather than invisible; adding a seventh should be an argument, not
-// a reflex.
+// fallback token map — is gone, and this guard is what keeps them gone. So are
+// the five residuals this guard found ELSEWHERE the first time it ran and row
+// 221 carried: internal/configstore's platform/command/volatile tables,
+// internal/snmpcred's onboarding CLI blocks, internal/pcap's capture-family
+// resolver, the root device-type inference and topology's firewall vendor hint.
+// Each moved into a profile document under its own strict-validated key
+// (config_capture, snmp_configgen, device_type, capture.pcap_family +
+// pcap_platform_rules) with a byte-parity golden in its own package proving the
+// move changed nothing, and a row pin in consumer_bindings_test.go proving the
+// data is the data that moved.
+//
+// ONE entry remains, and it is not a residual: it is a legitimate implementation
+// switch that selects Go code, not a vendor fact. It carries its reason inline,
+// so the exception is reviewable rather than invisible — and adding a second
+// should be an argument, not a reflex.
 
 import (
 	"go/ast"
@@ -72,36 +80,6 @@ var vocabularyGuardAllowlist = map[string]string{
 	// table for one vendor's private MIB; it is code, and moving the selector
 	// into the registry would only add indirection to reach the same two types.
 	"collectors/dom_adapters.go": "vendor → domAdapter implementation selection (code, not data)",
-
-	// RESIDUAL, TRACKED. Free-form text → functional NOC device type. It
-	// overlaps the registry's device_class, but it reads MODEL and HOSTNAME
-	// tokens the profiles do not carry ("uap-", "9800", "ws-c"), so closing it
-	// means widening the profile schema, not re-pointing a lookup.
-	"devicetype.go": "residual: device-type inference from vendor/model/name text — needs a profile schema extension",
-
-	// RESIDUAL, TRACKED. A second VendorFromPlatform plus a per-vendor capture
-	// command table and per-vendor volatile-line normalization rules. The
-	// closest cousin of the tables this change moved, and the obvious next one —
-	// but config capture is its own bounded context with its own goldens
-	// (CLAUDE.md §7: one bounded context per change).
-	"internal/configstore/dialect.go": "residual: config-capture command + normalization tables",
-
-	// RESIDUAL, TRACKED. The pcap command TEMPLATES already come from the
-	// registry (capture.pcap_*); only this platform-text → capture-family-key
-	// resolver is local, and its keys ("cisco_nxos") are a second id space that
-	// 500 byte-parity cases are pinned to.
-	"internal/pcap/commands.go": "residual: platform-text → capture-family key resolver (templates already registry-backed)",
-
-	// RESIDUAL, TRACKED. Per-vendor SNMP onboarding CLI blocks — genuinely
-	// vendor→command data, and the largest of the residuals. It mints secrets
-	// into the rendered block, so moving it needs a template contract with the
-	// same rigour capture.pcap_* got, not a raw string move.
-	"internal/snmpcred/configgen.go": "residual: per-vendor SNMP onboarding CLI templates",
-
-	// RESIDUAL, TRACKED. A firewall-vendor hint used only when device-type
-	// inference already returned nothing. Same shape as devicetype.go and it
-	// should close with it.
-	"topology/project.go": "residual: firewall vendor hint in node-kind inference",
 }
 
 // vocabularyGuardMinHits is how many distinct registry ids one literal must

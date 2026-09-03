@@ -70,3 +70,39 @@ func TestOfflineProviderMatches(t *testing.T) {
 		t.Fatalf("expected (nil,nil), got %+v err %v", none, err)
 	}
 }
+
+// TestFabricPlatformsAreAssessableOnceTheFeedIsProvisioned closes the honest
+// loop for the lab fabric (Arista EOS, Nokia SR Linux).
+//
+// Neither platform is "advisory-unassessed" because of anything MISSING in this
+// repository's data: the profiles bind the offline-feed provider and declare
+// the product ids NVD uses, and vuln.NormProduct folds NVD's `sr_linux` onto
+// the `srlinux` id the profile declares. They report unassessed today for one
+// reason and one reason only — the CSV feed is OPERATOR-PROVISIONED and
+// air-gapped by design (VULN_FEED_PATH, prepared by scripts/vuln-feed-prepare.py),
+// so no feed ships in the repository and every platform is unassessed until one
+// is installed. This test proves the wiring by installing one.
+func TestFabricPlatformsAreAssessableOnceTheFeedIsProvisioned(t *testing.T) {
+	rows := "" +
+		"arista,eos,CVE-2026-11111,high,7.8,,,4.36.1,,,0,2026-05-01,EOS issue\n" +
+		"nokia,sr_linux,CVE-2026-22222,medium,5.4,,,26.4.0,,,0,2026-06-01,SR Linux issue\n"
+	p := NewOfflineProvider(writeFeed(t, rows))
+
+	for _, c := range []struct {
+		vendor, platform, version, cve string
+	}{
+		// The version strings are the ones the devices report: cEOSLab
+		// 4.36.0.1F on leaf1, SR Linux v26.3.2 on spine1.
+		{"arista", "eos", "4.36.0.1F", "CVE-2026-11111"},
+		{"nokia", "srlinux", "26.3.2", "CVE-2026-22222"},
+	} {
+		got, err := p.AdvisoriesFor(context.Background(), Query{Vendor: c.vendor, Platform: c.platform, Version: c.version})
+		if err != nil {
+			t.Errorf("%s/%s: %v", c.vendor, c.platform, err)
+			continue
+		}
+		if len(got) != 1 || got[0].CVE != c.cve {
+			t.Errorf("%s/%s %s = %+v, want %s", c.vendor, c.platform, c.version, got, c.cve)
+		}
+	}
+}

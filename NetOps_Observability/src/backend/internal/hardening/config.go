@@ -49,8 +49,18 @@ const (
 	VendorCiscoIOSXE Vendor = "cisco-iosxe"
 	// VendorJuniper is bound for a declarative subset (Junos set-format).
 	VendorJuniper Vendor = "juniper"
-	// VendorNokia is bound for a declarative subset (SR OS / SR Linux).
+	// VendorNokia is bound for a declarative subset (Nokia SR OS — the classic
+	// TiMOS configuration grammar). SR Linux is NOT this dialect; see
+	// VendorSRLinux.
 	VendorNokia Vendor = "nokia"
+	// VendorArista is Arista EOS. It is its own dialect and not cisco-iosxe: EOS
+	// borrows IOS' SHOW grammar (which is why its CLI binding is cisco-iosxe)
+	// but not IOS' CONFIGURATION grammar, so the IOS rules would have scored a
+	// dozen controls against lines EOS never writes. See dialect_fabric.go.
+	VendorArista Vendor = "arista"
+	// VendorSRLinux is Nokia SR Linux — a flat `set / <path> <value>` rendering
+	// of a YANG tree that shares no configuration statement with SR OS.
+	VendorSRLinux Vendor = "srlinux"
 	// VendorUnknown is an unrecognized vendor: rules are NotApplicable.
 	VendorUnknown Vendor = ""
 )

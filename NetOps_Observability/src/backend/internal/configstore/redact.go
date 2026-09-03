@@ -93,6 +93,20 @@ var secretCommon = []secretRule{
 //	sros-password        `password "<v>"`
 //	sros-community       `community "<v>"`
 //	sros-auth-key        `authentication-key "<v>"`
+//
+// Nokia SR Linux (flat `set / …` form — a DIFFERENT grammar from SR OS, which
+// is why it is a separate family and not a shared rule list)
+//
+//	srl-crypt-value      any `$<scheme>$…` value — SR Linux writes every stored
+//	                     secret as one: `$y$…` (yescrypt local passwords),
+//	                     `$aes1$…` (SNMP communities and v3 auth/priv keys, TLS
+//	                     private keys). This is the LOAD-BEARING rule: it keys on
+//	                     the value's own shape, so a secret in a keyword this
+//	                     list has never seen is still masked.
+//	srl-password         `… password <v>` (aaa users, snmp auth/priv)
+//	srl-community        `… community <v>`
+//	srl-secret-key       `… (key|secret-key|shared-secret) <v>` (TLS profile key)
+//	srl-ssh-key          the base64 body of an authorized `ssh-<alg> AAAA…` key
 var secretRules = map[Vendor][]secretRule{
 	VendorCisco: {
 		{"enable-secret", regexp.MustCompile(`(?i)^\s*enable\s+(?:secret|password)\s+(?:\d+\s+)?(\S+)`)},
@@ -128,6 +142,13 @@ var secretRules = map[Vendor][]secretRule{
 		{"sros-community", regexp.MustCompile(`(?i)^\s*community\s+"?([^"\s]+)"?`)},
 		{"sros-auth-key", regexp.MustCompile(`(?i)\bauthentication-key\s+"?([^"\s]+)"?`)},
 	},
+	VendorSRLinux: {
+		{"srl-crypt-value", regexp.MustCompile(`(\$(?:[0-9a-z]{1,8})\$[^\s"]+)`)},
+		{"srl-password", regexp.MustCompile(`(?i)\bpassword\s+"?([^"\s]+)"?`)},
+		{"srl-community", regexp.MustCompile(`(?i)\bcommunity\s+"?([^"\s]+)"?`)},
+		{"srl-secret-key", regexp.MustCompile(`(?i)\b(?:key|secret-key|shared-secret)\s+"?([^"\s\[\]]+)"?`)},
+		{"srl-ssh-key", regexp.MustCompile(`(?i)\b(?:ssh-rsa|ssh-dss|ssh-ed25519|ecdsa-sha2-\S+)\s+([A-Za-z0-9+/=]{16,})`)},
+	},
 }
 
 func init() {
@@ -152,9 +173,15 @@ func SecretRuleNames(v Vendor) []string {
 // pemBegin / pemEnd bracket an inline private key or certificate. Everything
 // between them is masked wholesale — a PEM body has no grammar worth preserving
 // and every byte of it is key material.
+// The markers are NOT anchored to the start of the line. SR Linux' flat form
+// opens an inline PEM as `set / system tls profile P certificate "-----BEGIN
+// CERTIFICATE-----`, i.e. the marker sits mid-line behind a configuration
+// statement; an anchored pattern saw no PEM there and published the whole body.
+// Matching the marker wherever it appears is strictly wider and cannot miss the
+// column-0 case it used to catch.
 var (
-	pemBegin = regexp.MustCompile(`(?i)^\s*-+\s*begin [a-z0-9 ]*(private key|rsa private key|certificate)`)
-	pemEnd   = regexp.MustCompile(`(?i)^\s*-+\s*end [a-z0-9 ]*(private key|rsa private key|certificate)`)
+	pemBegin = regexp.MustCompile(`(?i)-+\s*begin [a-z0-9 ]*(private key|rsa private key|certificate)`)
+	pemEnd   = regexp.MustCompile(`(?i)-+\s*end [a-z0-9 ]*(private key|rsa private key|certificate)`)
 )
 
 // isHexBlobLine reports whether a line is nothing but hex digits and spaces with

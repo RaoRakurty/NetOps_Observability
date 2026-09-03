@@ -14,6 +14,19 @@
     "sysdescr_rank": 120
   },
   "dialect": {},
+  "snmp_configgen": {
+    "v2c_template": "modify sys snmp communities add { correlix-ro { community-name <<community>> access ro } }\nsave sys config",
+    "v3_template": "modify sys snmp users add { <<sec_name>> { username <<sec_name>> auth-protocol sha auth-password <<auth_key>> privacy-protocol aes privacy-password <<priv_key>> security-level auth-privacy access ro } }\nsave sys config"
+  },
+  "device_type": {
+    "text_hints": {
+      "load-balancer": [
+        "big-ip",
+        "bigip",
+        "f5 "
+      ]
+    }
+  },
   "profiles": [],
   "notes": "Ranked ABOVE linux: a BIG-IP sysDescr embeds 'Linux 3.10…' and must not resolve to the generic linux backstop."
 }

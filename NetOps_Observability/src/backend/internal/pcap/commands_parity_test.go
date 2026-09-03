@@ -40,8 +40,18 @@ type handWrittenTable struct{}
 
 func newHandWrittenCommandTable() CommandTable { return handWrittenTable{} }
 
+// goldenResolve is the platform → capture-family resolution the golden uses. It
+// goes through the SHIPPED registry, exactly as the production table does over
+// its own registry, so the comparison below isolates the TEMPLATES and nothing
+// else. (Resolution itself is pinned separately, against the token rules the
+// hand-written switch used to carry, by
+// TestPcapFamilyResolutionMatchesTheHandWrittenSwitch.)
+func goldenResolve(platform string) (string, bool) {
+	return vendorprofile.Default().PcapFamilyForPlatform(platform)
+}
+
 func (handWrittenTable) Supports(platform string) (string, bool, bool) {
-	key, ok := resolvePlatform(platform)
+	key, ok := goldenResolve(platform)
 	if !ok {
 		return "", false, false
 	}
@@ -53,7 +63,7 @@ func (handWrittenTable) Supports(platform string) (string, bool, bool) {
 }
 
 func (handWrittenTable) For(platform string, req CommandRequest) (CommandSet, error) {
-	key, ok := resolvePlatform(platform)
+	key, ok := goldenResolve(platform)
 	if !ok {
 		return CommandSet{}, ErrNoPlatform
 	}
@@ -371,5 +381,142 @@ func fetchCmdRegistry(t *testing.T) *vendorprofile.Registry {
 		"pcap_fetch_cmd":   []string{"copy flash:{file}.pcap running"},
 		"pcap_cleanup_cmd": []string{"no monitor capture {name}"},
 		"pcap_remote_path": "flash:{file}.pcap",
+		// A profile that declares capture commands must name the family they
+		// belong to — the registry refuses commands no platform could reach.
+		"pcap_family": "cisco_iosxe",
 	}))
+}
+
+// ─── capture-family RESOLUTION parity ────────────────────────────────────────
+//
+// The templates were moved into the registry earlier; the RESOLVER — free-form
+// platform text → capture-family key — moved with tracker 221. It was the last
+// vendor-keyed switch in this package, and this is its golden: the deleted
+// function, verbatim, compared against Registry.PcapFamilyForPlatform over a
+// corpus of platform strings.
+//
+// Resolution is the half of the move with the most room to go quietly wrong: a
+// rule that stops matching does not render a bad command, it renders NO command,
+// and the device is refused. That failure is honest but wrong, and a golden is
+// the only way to know the ranked rules in the profiles reproduce the order the
+// switch had (nxos before iosxe before junos before eos before the bare-vendor
+// fallback).
+
+// handWrittenPlatformTokens is the deleted tokenizer, verbatim.
+func handWrittenPlatformTokens(platform string) (map[string]bool, string) {
+	set := map[string]bool{}
+	var cur strings.Builder
+	var joined strings.Builder
+	flush := func() {
+		if cur.Len() > 0 {
+			set[cur.String()] = true
+			joined.WriteString(cur.String())
+			cur.Reset()
+		}
+	}
+	for _, r := range strings.ToLower(platform) {
+		if r >= 'a' && r <= 'z' || r >= '0' && r <= '9' {
+			cur.WriteRune(r)
+			continue
+		}
+		flush()
+	}
+	flush()
+	return set, joined.String()
+}
+
+// handWrittenResolvePlatform is the deleted resolver, verbatim, including the
+// family-key table it consulted first.
+func handWrittenResolvePlatform(platform string) (string, bool) {
+	handWrittenProfileIDForKey := map[string]string{
+		"cisco_iosxe":   "cisco/ios_xe",
+		"cisco_nxos":    "cisco/nx-os",
+		"juniper_junos": "juniper/junos",
+		"arista_eos":    "arista/eos",
+	}
+	p := strings.ToLower(strings.TrimSpace(platform))
+	if p == "" {
+		return "", false
+	}
+	if _, ok := handWrittenProfileIDForKey[p]; ok {
+		return p, true
+	}
+	tok, joined := handWrittenPlatformTokens(p)
+	switch {
+	case tok["nxos"] || tok["nexus"] || strings.Contains(joined, "nxos"):
+		return "cisco_nxos", true
+	case tok["iosxe"] || tok["catalyst"] || tok["isr"] || tok["asr"] || strings.Contains(joined, "iosxe"):
+		return "cisco_iosxe", true
+	case tok["junos"] || tok["juniper"]:
+		return "juniper_junos", true
+	case tok["eos"] || tok["arista"]:
+		return "arista_eos", true
+	case tok["cisco"]:
+		return "cisco_iosxe", true
+	}
+	return "", false
+}
+
+// resolutionCorpus is every platform string shape this resolver has ever had to
+// answer for, crossed with the separators, cases and version suffixes real
+// discovery data carries — plus the near-misses the token rule exists to refuse
+// ("acme-networks SomeOS" must not become Arista).
+func resolutionCorpus() []string {
+	bases := []string{
+		"", " ", "cisco_iosxe", "cisco_nxos", "juniper_junos", "arista_eos",
+		"cisco", "Cisco", "CISCO", "cisco ios", "Cisco IOS 15.2", "cisco ios-xe",
+		"Cisco IOS-XE 17.9", "cisco iosxe", "cisco ios xe", "IOS-XE", "iosxe",
+		"cisco ios-xr", "Cisco IOS XR 7.3", "cisco nx-os", "Cisco NX-OS 9.3",
+		"nxos", "nx-os", "Nexus 9000", "cisco nexus 93180", "catalyst", "Catalyst 9300",
+		"ISR4451", "isr 4331", "ASR1001-X", "asr 9000", "cisco asa 9.12",
+		"juniper", "Juniper Junos 21.4", "junos", "JUNOS 20.4R3", "juniper mx240",
+		"arista", "Arista EOS 4.30", "eos", "cEOS-lab", "arista dcs-7050",
+		"nokia sr os", "Nokia SR Linux", "huawei vrp", "Huawei VRP V800",
+		"acme-networks SomeOS", "SomeVendor MagicOS 1", "generic", "linux 5.15",
+		"f5 big-ip", "fortigate 100f", "palo alto pan-os", "mikrotik routeros",
+		"paloalto", "checkpoint gaia", "ubiquiti unifi", "extreme exos",
+		"arista cisco-like eos", "cisco-compatible eos", "nexus + catalyst",
+		"ios-xe on a catalyst", "somejunosbox", "not-a-junos-box", "myeoshost",
+		"asrouter", "isr", "asr", "wan-r2", "core-sw-01", "1.2.3.4", "!!!", "___",
+	}
+	seps := []string{" ", "-", "_", ".", "/", ""}
+	var out []string
+	out = append(out, bases...)
+	for _, b := range bases {
+		for _, sep := range seps {
+			out = append(out, b+sep+"17.9.3a", "vendor"+sep+b, strings.ToUpper(b)+sep+"x")
+		}
+	}
+	return out
+}
+
+// TestPcapFamilyResolutionMatchesTheHandWrittenSwitch — the resolver moved, and
+// it answers exactly what it answered before.
+func TestPcapFamilyResolutionMatchesTheHandWrittenSwitch(t *testing.T) {
+	reg := vendorprofile.Default()
+	corpus := resolutionCorpus()
+	if len(corpus) < 500 {
+		t.Fatalf("only %d resolution cases — the corpus is not exercising the rules", len(corpus))
+	}
+	for _, platform := range corpus {
+		gotKey, gotOK := reg.PcapFamilyForPlatform(platform)
+		wantKey, wantOK := handWrittenResolvePlatform(platform)
+		if gotKey != wantKey || gotOK != wantOK {
+			t.Fatalf("RESOLUTION DRIFT for %q: registry = (%q,%v), golden = (%q,%v)",
+				platform, gotKey, gotOK, wantKey, wantOK)
+		}
+	}
+	// The corpus must actually reach every family, or "identical" is vacuous.
+	seen := map[string]bool{}
+	for _, platform := range corpus {
+		if key, ok := reg.PcapFamilyForPlatform(platform); ok {
+			seen[key] = true
+		}
+	}
+	for _, key := range PlatformKeys() {
+		if !seen[key] {
+			t.Errorf("the resolution corpus never reaches family %q", key)
+		}
+	}
+	t.Logf("compared %d platform strings across %d capture families", len(corpus), len(seen))
 }

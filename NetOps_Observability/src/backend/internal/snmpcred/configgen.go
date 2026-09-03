@@ -2,25 +2,52 @@ package snmpcred
 
 // configgen.go — the SNMP onboarding credential generator (extracted P2
 // RA.14): real credential minting (crypto/rand, CLI-safe base32) and the
-// vendor device-CLI templates that mirror docs/onboard-devices. Secrets are
-// generated HERE and embedded in the returned config block — credential
-// handling, so it lives with the credential store. The HTTP handler, profile
-// persistence and once-only secret return stay with the entrypoint.
+// rendering of the vendor device-CLI block. Secrets are generated HERE and
+// embedded in the returned config block — credential handling, so it lives with
+// the credential store. The HTTP handler, profile persistence and the once-only
+// secret return stay with the entrypoint.
+//
+// WHERE THE VENDOR TEMPLATES LIVE. In the Vendor Profile registry
+// (internal/vendorprofile), under each vendor document's `snmp_configgen` block
+// (`v2c_template` / `v3_template`), beside everything else that platform
+// declares. This file owns the SECRET, not the syntax: it mints the credential,
+// supplies the placeholder values, and falls back to generic guidance for a
+// vendor with no first-class template. Onboarding a vendor is "author a
+// profile", not "add a case to a switch".
+//
+// WHY A TEMPLATE AND NOT A FORMAT STRING. The block this function returns is
+// pasted verbatim into a production device by an operator, and it carries MINTED
+// KEY MATERIAL. A positional `fmt.Sprintf` table gets that wrong silently — an
+// argument in the wrong position renders a key where a user name belongs and
+// nobody sees it until a device rejects the paste. Named `<<holes>>`, validated
+// at LOAD against a closed set (vendorprofile.SNMPConfigGenPlaceholders), make
+// that class of defect visible in the document instead.
 
 import (
 	"crypto/rand"
 	"encoding/base32"
 	"fmt"
 	"strings"
+
+	"netops/backend/internal/vendorprofile"
 )
 
-// GenVendors are the vendors with a first-class device template. Anything
-// else falls back to the generic guidance (still generates the credential).
-var GenVendors = map[string]bool{
-	"cisco": true, "juniper": true, "arista": true, "fortinet": true,
-	"paloalto": true, "f5": true, "checkpoint": true, "mikrotik": true,
-	"huawei": true, "extreme": true, "ubiquiti": true,
-}
+// GenVendors are the vendors with a first-class device template — the ones whose
+// profile declares an `snmp_configgen` block. Anything else falls back to the
+// generic guidance (and still gets a real, minted credential).
+//
+// It is built ONCE from the embedded registry: immutable reference data derived
+// from immutable reference data, the same carve-out the registry itself
+// documents for its embedded FS. The map shape is preserved because it is this
+// package's published API.
+var GenVendors = func() map[string]bool {
+	ids := vendorprofile.Default().SNMPConfigGenVendors()
+	out := make(map[string]bool, len(ids))
+	for _, id := range ids {
+		out[id] = true
+	}
+	return out
+}()
 
 // genSecret returns a URL/CLI-safe random secret of ~n characters (base32, no
 // padding, lowercased) — safe to paste into any vendor CLI (no quotes/specials).
@@ -68,116 +95,30 @@ func BuildGeneratedCredential(vendor, version, community, secName, authKey, priv
 	return c
 }
 
-// deviceSNMPConfig renders the vendor CLI block for the generated credential.
-// Pure + unit-tested. mgmtSubnet/mask default to the whole space when empty.
+// DeviceConfig renders the vendor CLI block for the generated credential. Pure
+// + unit-tested (a byte-parity golden pins every shipped vendor's block).
+// mgmtSubnet/mask default to the whole space when empty.
+//
+// A vendor whose profile declares no template gets the GENERIC guidance below:
+// the credential is real, and the operator applies it with their own vendor's
+// syntax. That is the honest answer — inventing a CLI block for a platform
+// nobody has validated would be a claim about a device we cannot make.
 func DeviceConfig(vendor, version, community, secName, authKey, privKey, mgmtSubnet, mask string) string {
 	v3 := version == "v3"
-	switch vendor {
-	case "cisco":
-		if v3 {
-			return "snmp-server group CORRELIX v3 priv\n" +
-				fmt.Sprintf("snmp-server user %s CORRELIX v3 auth sha %s priv aes 128 %s", secName, authKey, privKey)
-		}
-		return fmt.Sprintf("snmp-server community %s RO", community)
-	case "arista":
-		if v3 {
-			return "snmp-server group CORRELIX v3 priv\n" +
-				fmt.Sprintf("snmp-server user %s CORRELIX v3 auth sha %s priv aes %s", secName, authKey, privKey)
-		}
-		return fmt.Sprintf("snmp-server community %s ro", community)
-	case "juniper":
-		if v3 {
-			return fmt.Sprintf(`set snmp v3 usm local-engine user %s authentication-sha authentication-key "%s"
-set snmp v3 usm local-engine user %s privacy-aes128 privacy-key "%s"
-set snmp v3 vacm security-to-group security-model usm security-name %s group correlix-grp
-set snmp v3 vacm access group correlix-grp default-context-prefix security-model usm security-level privacy read-view all
-set snmp view all oid .1 include`, secName, authKey, secName, privKey, secName)
-		}
-		return fmt.Sprintf("set snmp community %s authorization read-only", community)
-	case "fortinet":
-		if v3 {
-			return fmt.Sprintf(`config system snmp user
-    edit "%s"
-        set status enable
-        set queries enable
-        set query-port 161
-        set security-level auth-priv
-        set auth-proto sha
-        set auth-pwd %s
-        set priv-proto aes
-        set priv-pwd %s
-    next
-end`, secName, authKey, privKey)
-		}
-		return fmt.Sprintf(`config system snmp sysinfo
-    set status enable
-end
-config system snmp community
-    edit 1
-        set name "%s"
-        set status enable
-        set query-v2c-status enable
-        config hosts
-            edit 1
-                set ip %s %s
-            next
-        end
-    next
-end`, community, orDefaultGen(mgmtSubnet, "0.0.0.0"), orDefaultGen(mask, "0.0.0.0"))
-	case "paloalto":
-		if v3 {
-			return fmt.Sprintf("set deviceconfig system snmp-setting access-setting version v3 users %s "+
-				"authpwd %s privpwd %s authprotocol sha privprotocol aes-128\ncommit", secName, authKey, privKey)
-		}
-		return fmt.Sprintf("set deviceconfig system snmp-setting access-setting version v2c snmp-community-string %s", community)
-	case "f5":
-		if v3 {
-			return fmt.Sprintf("modify sys snmp users add { %s { username %s auth-protocol sha "+
-				"auth-password %s privacy-protocol aes privacy-password %s security-level auth-privacy access ro } }\nsave sys config",
-				secName, secName, authKey, privKey)
-		}
-		return fmt.Sprintf("modify sys snmp communities add { correlix-ro { community-name %s access ro } }\nsave sys config", community)
-	case "checkpoint":
-		if v3 {
-			return fmt.Sprintf("set snmp agent-version v3-Only\nadd snmp usm user %s security-level authPriv "+
-				"auth-pass-phrase %s privacy-pass-phrase %s authentication-protocol SHA1 privacy-protocol AES\nset snmp enable\nsave config",
-				secName, authKey, privKey)
-		}
-		return fmt.Sprintf("set snmp community %s read-only\nset snmp agent-version v2\nset snmp enable\nsave config", community)
-	case "mikrotik":
-		if v3 {
-			return fmt.Sprintf("/snmp community add name=%s authentication-protocol=SHA1 authentication-password=%s "+
-				"encryption-protocol=AES encryption-password=%s security=private read-access=yes\n/snmp set enabled=yes", secName, authKey, privKey)
-		}
-		return fmt.Sprintf("/snmp community add name=%s read-access=yes\n/snmp set enabled=yes", community)
-	case "huawei":
-		if v3 {
-			return fmt.Sprintf(`snmp-agent sys-info version v3
-snmp-agent group v3 correlix-grp privacy read-view iso-view
-snmp-agent mib-view included iso-view iso
-snmp-agent usm-user v3 %s group correlix-grp
-snmp-agent usm-user v3 %s authentication-mode sha2-256 cipher %s
-snmp-agent usm-user v3 %s privacy-mode aes128 cipher %s`, secName, secName, authKey, secName, privKey)
-		}
-		return fmt.Sprintf("snmp-agent\nsnmp-agent community read cipher %s\nsnmp-agent sys-info version v2c", community)
-	case "extreme":
-		if v3 {
-			return fmt.Sprintf(`configure snmpv3 add user %s authentication sha auth-password %s privacy aes priv-password %s
-configure snmpv3 add group correlix-grp user %s sec-model usm
-configure snmpv3 add access correlix-grp sec-model usm sec-level priv read-view defaultAdminView
-enable snmp access snmp-v3`, secName, authKey, privKey, secName)
-		}
-		return fmt.Sprintf("configure snmp add community readonly %s\nenable snmp access", community)
-	case "ubiquiti":
-		if v3 {
-			return fmt.Sprintf(`set service snmp v3 user %s auth type sha
-set service snmp v3 user %s auth plaintext-key %s
-set service snmp v3 user %s privacy type aes
-set service snmp v3 user %s privacy plaintext-key %s
-set service snmp v3 user %s mode ro
-commit ; save`, secName, secName, authKey, secName, privKey, secName, secName)
-		}
-		return fmt.Sprintf("set service snmp community %s authorization ro\ncommit ; save", community)
+	// The placeholder values. Only the vendor's own template decides which of
+	// them appear in the rendered block, and the registry renders in a SINGLE
+	// left-to-right pass so an operator-supplied subnet can never name a hole
+	// and pull a minted key into itself.
+	vals := map[string]string{
+		"community":   community,
+		"sec_name":    secName,
+		"auth_key":    authKey,
+		"priv_key":    privKey,
+		"mgmt_subnet": orDefaultGen(mgmtSubnet, "0.0.0.0"),
+		"mask":        orDefaultGen(mask, "0.0.0.0"),
+	}
+	if block, ok := vendorprofile.Default().RenderSNMPConfig(vendor, version, vals); ok {
+		return block
 	}
 	// Generic fallback — the credential is real; the operator applies it with
 	// their vendor's syntax (enable SNMP + a read-only credential).

@@ -20,6 +20,10 @@
       "routeros"
     ]
   },
+  "snmp_configgen": {
+    "v2c_template": "/snmp community add name=<<community>> read-access=yes\n/snmp set enabled=yes",
+    "v3_template": "/snmp community add name=<<sec_name>> authentication-protocol=SHA1 authentication-password=<<auth_key>> encryption-protocol=AES encryption-password=<<priv_key>> security=private read-access=yes\n/snmp set enabled=yes"
+  },
   "profiles": [
     {
       "platform": "routeros",

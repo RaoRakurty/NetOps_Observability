@@ -396,6 +396,14 @@ func (m *Manager) captureClaimed(ctx context.Context, dev Device, tenant, trigge
 		m.recordFailure(ctx, dev, tenant, now, err, trigger, job)
 		return Version{}, err
 	}
+	// A CLI that REFUSED the command (exit zero, diagnostic on stdout — EOS
+	// answers a privilege-1 `show running-config` exactly this way) must fail
+	// the capture, never be stored as a version. See looksLikeCLIRefusal.
+	if line, refused := looksLikeCLIRefusal(normalized); refused {
+		err := fmt.Errorf("device refused the capture command: %s", line)
+		m.recordFailure(ctx, dev, tenant, now, err, trigger, job)
+		return Version{}, err
+	}
 	sha := SHA256Hex(normalized)
 
 	// The PREVIOUS successful version, read BEFORE this one is stored — it is

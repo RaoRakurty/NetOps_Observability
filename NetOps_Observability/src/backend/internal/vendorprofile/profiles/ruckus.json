@@ -12,5 +12,15 @@
     "sysdescr_rank": 140
   },
   "dialect": {},
+  "device_type": {
+    "text_hints": {
+      "ap": [
+        "wireless ap"
+      ],
+      "switch": [
+        "icx"
+      ]
+    }
+  },
   "profiles": []
 }

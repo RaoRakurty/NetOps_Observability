@@ -1,0 +1,167 @@
+
+! Command: show running-config at line 2
+! device: leaf1 (cEOSLab, EOS-4.36.0.1F-47425148.43601F (engineering build))
+!
+no aaa root
+!
+username admin privilege 15 role network-admin secret sha512 $6$REDACTED
+!
+management api http-commands
+   no shutdown
+!
+no service interface inactive port-id allocation disabled
+!
+service routing protocols model multi-agent
+!
+logging host 10.70.245.122
+logging format timestamp high-resolution
+logging format hostname fqdn
+logging source-interface Management0
+!
+hostname leaf1
+!
+sflow sample 1024
+sflow polling-interval 30
+sflow destination 10.70.245.122
+sflow source-interface Management0
+sflow run
+!
+snmp-server engineID local f5717f001c73ad882a00
+snmp-server contact lab-team
+snmp-server location lab-rack-DC
+snmp-server local-interface Management0
+snmp-server view ARISTA-VIEW iso included
+snmp-server community redacted-community ro
+snmp-server group ARISTA-GRP v3 priv read ARISTA-VIEW
+snmp-server user arista-monitor ARISTA-GRP v3 localized f5717f001c73ad882a00 auth sha REDACTEDAUTHKEY priv aes REDACTEDPRIVKEY
+snmp-server host 10.70.245.122 version 3 priv arista-monitor
+snmp-server host 10.70.245.122 version 2c redacted-community
+snmp-server enable traps
+!
+spanning-tree mode mstp
+!
+system l1
+   unsupported speed action error
+   unsupported error-correction action error
+!
+vlan 10
+   name web
+!
+vlan 20
+   name app
+!
+vrf instance tenant-A
+!
+management api gnmi
+   transport grpc default
+!
+management api netconf
+   transport ssh default
+!
+interface Ethernet1
+   description to-spine1
+   no switchport
+   ip address 10.0.1.1/31
+   isis enable fabric
+   isis network point-to-point
+!
+interface Ethernet2
+   description to-spine2
+   no switchport
+   ip address 10.0.1.9/31
+   isis enable fabric
+   isis network point-to-point
+!
+interface Ethernet3
+   description to-dc-host
+   switchport trunk allowed vlan 10
+   switchport mode trunk
+!
+interface Loopback0
+   ip address 10.0.0.11/32
+   isis enable fabric
+   isis network point-to-point
+!
+interface Loopback1
+   description VTEP source
+!
+interface Management0
+   ip address 172.40.40.21/24
+!
+interface Vlan10
+   vrf tenant-A
+   ip address virtual 10.10.10.1/24
+!
+interface Vlan20
+   vrf tenant-A
+   ip address virtual 10.10.20.1/24
+!
+interface Vxlan1
+   vxlan source-interface Loopback0
+   vxlan udp-port 4789
+   vxlan vlan 10 vni 10010
+   vxlan vlan 20 vni 10020
+   vxlan vrf tenant-A vni 30000
+!
+event-handler BGP-STATE
+   action bash logger -p local7.alert "[BGP] $_event_text"
+   !
+   trigger on-logging
+      regex BGP-3-NOTIFICATION|BGP-5-ADJCHANGE
+!
+event-handler CONFIG-CHANGE
+   action bash logger -p local7.info "[CONFIG] $_event_text"
+   !
+   trigger on-logging
+      regex SYS-5-CONFIG_I
+!
+event-handler LINK-FLAP
+   action bash logger -p local7.warning "[LINK] $_event_text"
+   !
+   trigger on-logging
+      regex LINEPROTO-5-UPDOWN|LINK-3-UPDOWN
+!
+ip virtual-router mac-address 00:1c:73:00:00:01
+!
+ip routing
+ip routing vrf tenant-A
+!
+ip route 0.0.0.0/0 172.40.40.1
+!
+router bgp 65000
+   router-id 10.0.0.11
+   no bgp default ipv4-unicast
+   neighbor evpn peer group
+   neighbor evpn remote-as 65000
+   neighbor evpn update-source Loopback0
+   neighbor evpn send-community extended
+   neighbor 10.0.0.1 peer group evpn
+   neighbor 10.0.0.2 peer group evpn
+   !
+   vlan 10
+      rd 10.0.0.11:10010
+      route-target both 65000:10010
+      redistribute learned
+   !
+   vlan 20
+      rd 10.0.0.11:10020
+      route-target both 65000:10020
+      redistribute learned
+   !
+   address-family evpn
+      neighbor evpn activate
+   !
+   vrf tenant-A
+      rd 10.0.0.11:30000
+      route-target import evpn 65000:30000
+      route-target export evpn 65000:30000
+      router-id 10.0.0.11
+      redistribute connected
+!
+router isis fabric
+   net 49.0001.0100.0000.0011.00
+   is-type level-2
+   !
+   address-family ipv4 unicast
+!
+end

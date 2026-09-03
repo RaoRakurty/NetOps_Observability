@@ -100,6 +100,10 @@ func (e *Engine) Evaluate(ctx context.Context, dev Device) ([]secfindings.Findin
 		f.Intended = rule.Intended
 
 		binding, bound := rule.Binding(vendor)
+		var res DetectResult
+		if haveCfg && bound {
+			res = binding.Detect(cfg)
+		}
 		switch {
 		case !haveCfg:
 			f.Severity = rule.Severity
@@ -108,8 +112,15 @@ func (e *Engine) Evaluate(ctx context.Context, dev Device) ([]secfindings.Findin
 		case !bound:
 			f.Detail = "no detection binding for " + DisplayVendor(vendor) + " — control not assessed for this platform"
 			f.SetStatus(secfindings.StatusNotApplicable)
+		case res.NotApplicable:
+			// The control has no realization on this platform (see
+			// DetectResult.NotApplicable). Say WHY it cannot apply, rather than
+			// the generic "not assessed" an UNBOUND vendor gets — the two look
+			// the same to an operator otherwise, and only one of them is a gap
+			// in our coverage.
+			f.Detail = res.Evidence
+			f.SetStatus(secfindings.StatusNotApplicable)
 		default:
-			res := binding.Detect(cfg)
 			f.Remediation = binding.Remediation
 			f.EvidenceRef = e.evidenceRef(dev, rule.ID)
 			if res.Tripped {

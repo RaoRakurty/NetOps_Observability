@@ -36,6 +36,89 @@
       "ssh_routing": "show ip bgp summary"
     }
   },
+  "config_capture": {
+    "platform_contains": [
+      "cisco",
+      "ios-xe",
+      "iosxe",
+      "ios xe",
+      "ios-xr",
+      "iosxr",
+      "nx-os",
+      "nxos"
+    ],
+    "platform_rank": 20,
+    "running_config_cmd": "show running-config",
+    "volatile_rules": [
+      {
+        "name": "building-config",
+        "pattern": "(?i)^\\s*building configuration"
+      },
+      {
+        "name": "current-config",
+        "pattern": "(?i)^\\s*current configuration\\s*:"
+      },
+      {
+        "name": "last-change",
+        "pattern": "(?i)^\\s*!\\s*last configuration change"
+      },
+      {
+        "name": "nvram-updated",
+        "pattern": "(?i)^\\s*!\\s*nvram config last updated"
+      },
+      {
+        "name": "ntp-clock-period",
+        "pattern": "(?i)^\\s*ntp clock-period\\s+\\d+"
+      },
+      {
+        "name": "time-stamp",
+        "pattern": "(?i)^\\s*!\\s*time\\s*:"
+      }
+    ]
+  },
+  "snmp_configgen": {
+    "v2c_template": "snmp-server community <<community>> RO",
+    "v3_template": "snmp-server group CORRELIX v3 priv\nsnmp-server user <<sec_name>> CORRELIX v3 auth sha <<auth_key>> priv aes 128 <<priv_key>>"
+  },
+  "device_type": {
+    "text_hints": {
+      "firewall": [
+        "asa",
+        "firepower",
+        "fpr-",
+        "ftd"
+      ],
+      "wlc": [
+        "wism",
+        "9800",
+        "mobility express"
+      ],
+      "ap": [
+        "aironet",
+        "air-ap",
+        "air-cap",
+        "meraki mr"
+      ],
+      "cloud-gw": [
+        "csr1000v",
+        "c8000v cloud"
+      ],
+      "switch": [
+        "catalyst",
+        "nexus",
+        "ws-c"
+      ],
+      "router": [
+        "asr",
+        "isr",
+        "ncs",
+        "crs",
+        "gsr",
+        "csr",
+        "c8000v"
+      ]
+    }
+  },
   "profiles": [
     {
       "platform": "ios_xr",
@@ -170,7 +253,27 @@
           "no monitor capture {name}",
           "delete /force flash:{file}.pcap"
         ],
-        "pcap_remote_path": "flash:{file}.pcap"
+        "pcap_remote_path": "flash:{file}.pcap",
+        "pcap_family": "cisco_iosxe",
+        "pcap_platform_rules": [
+          {
+            "rank": 20,
+            "tokens": [
+              "catalyst",
+              "isr",
+              "asr"
+            ],
+            "joined": [
+              "iosxe"
+            ]
+          },
+          {
+            "rank": 50,
+            "tokens": [
+              "cisco"
+            ]
+          }
+        ]
       },
       "advisory": {
         "provider": "offline-feed",
@@ -254,7 +357,19 @@
           "delete bootflash:{file}.pcap no-prompt"
         ],
         "pcap_remote_path": "/{file}.pcap",
-        "pcap_supports_filter": true
+        "pcap_supports_filter": true,
+        "pcap_family": "cisco_nxos",
+        "pcap_platform_rules": [
+          {
+            "rank": 10,
+            "tokens": [
+              "nexus"
+            ],
+            "joined": [
+              "nxos"
+            ]
+          }
+        ]
       },
       "advisory": {
         "provider": "offline-feed",

@@ -10,10 +10,13 @@ func TestVendorFromPlatform(t *testing.T) {
 		"Juniper JunOS 21":  VendorJuniper,
 		"junos":             VendorJuniper,
 		"Nokia SR OS 22":    VendorNokia,
-		"Nokia SR Linux":    VendorNokia,
-		"TiMOS-B":           VendorNokia,
-		"Acme WidgetOS":     VendorUnknown,
-		"":                  VendorUnknown,
+		// SR Linux is its OWN dialect: it shares Nokia's name with SR OS and
+		// none of its configuration grammar (dialect_fabric.go).
+		"Nokia SR Linux":  VendorSRLinux,
+		"TiMOS-B":         VendorNokia,
+		"Arista EOS 4.36": VendorArista,
+		"Acme WidgetOS":   VendorUnknown,
+		"":                VendorUnknown,
 	}
 	for platform, want := range cases {
 		if got := VendorFromPlatform(platform); got != want {

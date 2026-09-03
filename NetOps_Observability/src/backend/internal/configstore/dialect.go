@@ -2,19 +2,29 @@ package configstore
 
 import (
 	"regexp"
-	"strings"
+
+	"netops/backend/internal/vendorprofile"
 )
 
-// dialect.go — the per-vendor CLOSED command table and the per-vendor
-// NORMALIZATION rule list.
+// dialect.go — this module's VIEW of the vendor vocabulary.
+//
+// WHERE THE VENDOR KNOWLEDGE LIVES. In the Vendor Profile registry
+// (internal/vendorprofile), under each vendor document's `config_capture`
+// block: the platform-text table that names the family, the exact read-only
+// capture command, and the named volatile-line rules. This file no longer
+// carries any of those tables — it carries the module's TYPE (Vendor), the
+// vendor-INDEPENDENT normalization rules, and the resolution seam. Onboarding a
+// vendor for config backup is "author a profile", not "edit this file", and the
+// ONE VENDOR VOCABULARY guard (vendorprofile.TestNoVendorVocabularyOutsideTheRegistry)
+// is what keeps it that way.
 //
 // Two properties matter here and both are structural:
 //
 //  1. The capture command is never composed, never taken from a request and
-//     never guessed. It comes from captureCommands below, which is the same
-//     closed-allowlist shape internal/verify's command tables use, and an
-//     unrecognized platform is REFUSED (ErrNoVendor) rather than probed with a
-//     command that might not be read-only on that OS.
+//     never guessed. It is the EXACT string the vendor's profile declares —
+//     validated at load to be a read-only show/display verb with no chaining
+//     metacharacter — and an unrecognized platform is REFUSED (ErrNoVendor)
+//     rather than probed with a command that might not be read-only on that OS.
 //  2. Normalization is what makes content-addressing meaningful. A running
 //     config re-read a minute later differs in its timestamp header and its
 //     free-running counters; hashing that raw text would mint a new "version"
@@ -23,6 +33,14 @@ import (
 //     before hashing — and the list is deliberately narrow: only lines whose
 //     content is a clock or a counter, never a line that could carry
 //     configuration intent.
+//
+// WHY Default() AND NOT AN INJECTED REGISTRY. The shipped registry is EMBEDDED,
+// immutable reference data built once at start-up — the same thing the hard-
+// coded tables that used to live here were, minus the drift. The functions below
+// are pure package-level lookups used from the manager, the differ and the HTTP
+// layer alike; threading a registry through all of them would buy no testability
+// (the profiles ARE the data under test) and would give a caller the power to
+// substitute the command a device is sent.
 
 // Vendor is the canonical device-family id the tables key on. The empty value
 // is an unrecognized platform: no command, no capture, an honest refusal.
@@ -35,58 +53,47 @@ const (
 	VendorJuniper Vendor = "juniper" // Junos
 	VendorHuawei  Vendor = "huawei"  // VRP
 	VendorNokia   Vendor = "nokia"   // SR OS
+	// VendorSRLinux is Nokia SR Linux. It is a SIBLING CAPTURE FAMILY of
+	// VendorNokia, not a second vendor: the boxes are Nokia's, but SR Linux
+	// answers `info from running flat` in a model-driven CLI that shares neither
+	// SR OS' command nor its `# Generated …` header lines, so one family id
+	// could not serve both without guessing at one of them. The registry
+	// declares it as nokia.json's config_capture.platform_dialect and resolves
+	// it ahead of the nokia family (an SR Linux platform label contains
+	// "nokia"); everything here — command, volatile rules, secret rules — keys
+	// on THIS id.
+	VendorSRLinux Vendor = "srlinux"
 	VendorUnknown Vendor = ""
 )
 
 // VendorFromPlatform normalizes a free-form platform string (vendor + OS +
-// model) into a canonical Vendor. Conservative by construction: anything it does
-// not recognize is VendorUnknown, which refuses the capture rather than running
-// a foreign command at a device prompt.
+// model) into a canonical Vendor, through the registry's ranked config_capture
+// platform table. Conservative by construction: anything no vendor claims is
+// VendorUnknown, which refuses the capture rather than running a foreign command
+// at a device prompt.
+//
+// The registry's rank order carries the one subtlety this resolution has always
+// had: Arista is tested BEFORE Cisco, because EOS platform strings frequently
+// name a "Cisco-compatible" CLI and EOS wants its own volatile-line rules.
 func VendorFromPlatform(platform string) Vendor {
-	p := strings.ToLower(strings.TrimSpace(platform))
-	switch {
-	case p == "":
-		return VendorUnknown
-	// Arista is checked BEFORE Cisco: EOS platform strings frequently name
-	// "Cisco-compatible" CLIs, and EOS wants its own volatile-line rules.
-	case strings.Contains(p, "arista"), strings.Contains(p, "eos"):
-		return VendorArista
-	case strings.Contains(p, "cisco"), strings.Contains(p, "ios-xe"),
-		strings.Contains(p, "iosxe"), strings.Contains(p, "ios xe"),
-		strings.Contains(p, "ios-xr"), strings.Contains(p, "iosxr"),
-		strings.Contains(p, "nx-os"), strings.Contains(p, "nxos"):
-		return VendorCisco
-	case strings.Contains(p, "junos"), strings.Contains(p, "juniper"):
-		return VendorJuniper
-	case strings.Contains(p, "huawei"), strings.Contains(p, "vrp"):
-		return VendorHuawei
-	case strings.Contains(p, "nokia"), strings.Contains(p, "sr os"),
-		strings.Contains(p, "sros"), strings.Contains(p, "timos"),
-		strings.Contains(p, "alcatel"):
-		return VendorNokia
-	default:
+	id, ok := vendorprofile.Default().ConfigCaptureVendorForPlatform(platform)
+	if !ok {
 		return VendorUnknown
 	}
+	return Vendor(id)
 }
 
-// captureCommands is the CLOSED read-only command allowlist for running-config
-// capture — vendor → the EXACT command line. Amending this map is the ONLY way
-// a new command can ever run on a device from this module. Every entry is a
-// display/show verb: none of them mutates device state, and none of them opens
-// a shell.
-var captureCommands = map[Vendor]string{
-	VendorCisco:   "show running-config",
-	VendorArista:  "show running-config",
-	VendorJuniper: "show configuration | display set | no-more",
-	VendorHuawei:  "display current-configuration",
-	VendorNokia:   "admin display-config",
-}
-
-// CaptureCommand returns the read-only capture command for a vendor. ok=false is
-// the honest "this platform is not bound" answer (→ ErrNoVendor).
+// CaptureCommand returns the read-only capture command for a vendor family. The
+// string is the one its profile declares, verbatim; ok=false is the honest
+// "this platform is not bound" answer (→ ErrNoVendor). Amending a profile is the
+// ONLY way a new command can ever run on a device from this module, and the
+// registry validates at LOAD that every one of them is a read-only show/display
+// verb carrying no chaining metacharacter.
 func CaptureCommand(v Vendor) (string, bool) {
-	cmd, ok := captureCommands[v]
-	return cmd, ok
+	if v == VendorUnknown {
+		return "", false
+	}
+	return vendorprofile.Default().ConfigCaptureCommand(string(v))
 }
 
 // volatileRule is one documented normalization rule: a NAME (so a test and an
@@ -108,85 +115,23 @@ var volatileCommon = []volatileRule{
 	{"pager-noise", regexp.MustCompile(`(?i)^\s*---\s*more\s*---\s*$`)},
 }
 
-// volatileRules is the per-vendor volatile-line rule list. EVERY rule is
-// documented by name here; the test suite asserts the list is exercised and that
-// normalization is deterministic (same input → same sha, twice).
-//
-// Cisco (IOS / IOS-XE / IOS-XR / NX-OS)
-//
-//	building-config   "Building configuration..." progress banner
-//	current-config    "Current configuration : 12345 bytes" — a SIZE, which moves
-//	                  with any edit and is not itself configuration
-//	last-change       "! Last configuration change at …"
-//	nvram-updated     "! NVRAM config last updated at …"
-//	ntp-clock-period  "ntp clock-period 17179869" — a free-running drift counter
-//	                  the device rewrites itself
-//	time-stamp        "! Time: …" / "!Time: …"
-//
-// Arista (EOS)
-//
-//	eos-time          "! Time: …" — EOS stamps every `show running-config`
-//	eos-boot-time     "! boot system flash:…" is CONFIG and is kept; only the
-//	                  "! device: …" identification banner is volatile
-//
-// Juniper (Junos, `| display set`)
-//
-//	junos-last-commit "## Last commit: 2026-08-25 …" / "## Last changed: …"
-//	junos-version-cmt "# version banner emitted by | display set"
-//
-// Huawei (VRP)
-//
-//	vrp-last-updated  "!Last configuration was updated at …"
-//	vrp-saved-by      "!Last configuration was saved at …" / "#saved by …"
-//	vrp-software      "!Software Version …" — moves on upgrade, not on config
-//
-// Nokia (SR OS)
-//
-//	sros-generated    "# Generated THU AUG 25 …"
-//	sros-finished     "# Finished THU AUG 25 …"
-//	sros-tim-version  "# TiMOS-B-…" build banner
-var volatileRules = map[Vendor][]volatileRule{
-	VendorCisco: {
-		{"building-config", regexp.MustCompile(`(?i)^\s*building configuration`)},
-		{"current-config", regexp.MustCompile(`(?i)^\s*current configuration\s*:`)},
-		{"last-change", regexp.MustCompile(`(?i)^\s*!\s*last configuration change`)},
-		{"nvram-updated", regexp.MustCompile(`(?i)^\s*!\s*nvram config last updated`)},
-		{"ntp-clock-period", regexp.MustCompile(`(?i)^\s*ntp clock-period\s+\d+`)},
-		{"time-stamp", regexp.MustCompile(`(?i)^\s*!\s*time\s*:`)},
-	},
-	VendorArista: {
-		{"eos-time", regexp.MustCompile(`(?i)^\s*!\s*time\s*:`)},
-		{"eos-device-banner", regexp.MustCompile(`(?i)^\s*!\s*device\s*:`)},
-		{"eos-command", regexp.MustCompile(`(?i)^\s*!\s*command:\s`)},
-	},
-	VendorJuniper: {
-		{"junos-last-commit", regexp.MustCompile(`(?i)^\s*##\s*last (commit|changed)\s*:`)},
-		{"junos-version-cmt", regexp.MustCompile(`(?i)^\s*##\s*version\s`)},
-	},
-	VendorHuawei: {
-		{"vrp-last-updated", regexp.MustCompile(`(?i)^\s*!\s*last configuration was (updated|saved)`)},
-		{"vrp-saved-by", regexp.MustCompile(`(?i)^\s*#\s*saved by\s`)},
-		{"vrp-software", regexp.MustCompile(`(?i)^\s*!\s*software version`)},
-	},
-	VendorNokia: {
-		{"sros-generated", regexp.MustCompile(`(?i)^\s*#\s*generated\s`)},
-		{"sros-finished", regexp.MustCompile(`(?i)^\s*#\s*finished\s`)},
-		{"sros-tim-version", regexp.MustCompile(`(?i)^\s*#\s*timos-`)},
-	},
-}
+// The PER-VENDOR volatile-line rules — Cisco's "Building configuration…" and
+// "ntp clock-period", Arista's "! Time:", Junos' "## Last commit:", VRP's
+// "!Last configuration was updated", SR OS' "# Generated" — live in the vendor
+// profiles (config_capture.volatile_rules), each with the same documented NAME
+// the test suite pins. They are compiled once, at registry load.
 
 // VolatileRuleNames returns the documented rule names applied for a vendor
-// (common rules first). Exported so the test suite can assert the list is the
-// one this file documents rather than whatever the code happens to do.
+// (the vendor-independent common rules first, then the vendor's own). Exported
+// so the test suite can assert the list is the one the profiles document rather
+// than whatever the code happens to do.
 func VolatileRuleNames(v Vendor) []string {
-	out := make([]string, 0, len(volatileCommon)+4)
+	vendorRules := vendorprofile.Default().ConfigVolatileRuleNames(string(v))
+	out := make([]string, 0, len(volatileCommon)+len(vendorRules))
 	for _, r := range volatileCommon {
 		out = append(out, r.Name)
 	}
-	for _, r := range volatileRules[v] {
-		out = append(out, r.Name)
-	}
-	return out
+	return append(out, vendorRules...)
 }
 
 // isVolatile reports whether a line is dropped by normalization for a vendor.
@@ -196,10 +141,5 @@ func isVolatile(v Vendor, line string) bool {
 			return true
 		}
 	}
-	for _, r := range volatileRules[v] {
-		if r.Re.MatchString(line) {
-			return true
-		}
-	}
-	return false
+	return vendorprofile.Default().IsConfigVolatileLine(string(v), line)
 }

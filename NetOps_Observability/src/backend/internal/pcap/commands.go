@@ -2,7 +2,6 @@ package pcap
 
 import (
 	"fmt"
-	"sort"
 	"strconv"
 	"strings"
 
@@ -16,8 +15,10 @@ import (
 // there — one declarative place per (vendor, platform), so onboarding a
 // platform's packet capture is "author a profile", not "edit an engine". The
 // registry now carries `capture.pcap_start_cmd` / `pcap_stop_cmd` /
-// `pcap_cleanup_cmd` / `pcap_remote_path` / `pcap_supports_filter`, and
-// NewProfileCommandTable is the shipped table that reads them.
+// `pcap_cleanup_cmd` / `pcap_remote_path` / `pcap_supports_filter`, the family
+// key `capture.pcap_family` and the platform text that resolves to it
+// (`capture.pcap_platform_rules`), and NewProfileCommandTable is the shipped
+// table that reads them.
 //
 // WHY THIS IS STILL AN INTERFACE. CommandTable is what lets the whole capture
 // path be tested with no device and no registry, and it is what kept this
@@ -119,26 +120,22 @@ type CommandTable interface {
 
 // ── the shipped, registry-backed table ──────────────────────────────────────
 
-// profileIDForKey maps this package's capture-family key onto the Vendor Profile
-// registry id that DECLARES that family's commands.
-//
-// It is the only vendor-shaped table left in this file, and it is a NAMING
-// bridge rather than vendor knowledge: registry ids are "<vendor>/<platform>"
-// in the vendor's own spelling ("cisco/nx-os"), while this package's keys are
-// the flat capture-family tokens the API, the store rows and the metrics already
-// use. Everything a capture actually depends on — the commands, the on-device
-// path, whether the platform can express a filter — comes from the profile.
-var profileIDForKey = map[string]string{
-	"cisco_iosxe":   "cisco/ios_xe",
-	"cisco_nxos":    "cisco/nx-os",
-	"juniper_junos": "juniper/junos",
-	"arista_eos":    "arista/eos",
-}
+// This package no longer carries a family table at all. The capture-family key
+// ("cisco_iosxe", "cisco_nxos", "juniper_junos", "arista_eos") is declared BY
+// the profile that owns the commands (capture.pcap_family), and the platform
+// text that resolves to it is declared beside it (capture.pcap_platform_rules).
+// Onboarding a platform's packet capture is therefore one document: name the
+// family, say what platform text reaches it, author the commands.
 
 // profileTable is a CommandTable whose templates come from a Vendor Profile
 // registry. It is fully built by the constructor and never mutated afterwards,
 // so it is safe to share across goroutines.
 type profileTable struct {
+	// reg is the registry this table was built from: it supplies the templates
+	// AND the family resolution, so a table built over an operator-loaded
+	// profile directory (the design's air-gap path) resolves platforms by that
+	// directory's rules, not by the shipped ones.
+	reg       *vendorprofile.Registry
 	platforms map[string]PlatformCommands
 }
 
@@ -167,11 +164,12 @@ func NewProfileCommandTable() CommandTable {
 // declared here would never run, and a profile that describes a command nobody
 // executes is a lie about what happens at the device (§10, no silent failure).
 func NewCommandTableFrom(reg *vendorprofile.Registry) (CommandTable, error) {
-	t := &profileTable{platforms: make(map[string]PlatformCommands, len(profileIDForKey))}
 	if reg == nil {
 		return nil, fmt.Errorf("pcap: a command table needs a vendor profile registry")
 	}
-	for key, id := range profileIDForKey {
+	families := reg.PcapFamilies()
+	t := &profileTable{reg: reg, platforms: make(map[string]PlatformCommands, len(families))}
+	for key, id := range families {
 		capture, err := reg.CaptureFor(id)
 		if err != nil || !capture.HasPcapCommands() {
 			// No profile, or a profile that establishes no capture commands for
@@ -233,7 +231,7 @@ func compilePlatform(key, id string, capture vendorprofile.Capture) (PlatformCom
 
 // Supports implements CommandTable.
 func (t *profileTable) Supports(platform string) (string, bool, bool) {
-	key, ok := resolvePlatform(platform)
+	key, ok := t.reg.PcapFamilyForPlatform(platform)
 	if !ok {
 		return "", false, false
 	}
@@ -248,7 +246,7 @@ func (t *profileTable) Supports(platform string) (string, bool, bool) {
 
 // For implements CommandTable.
 func (t *profileTable) For(platform string, req CommandRequest) (CommandSet, error) {
-	key, ok := resolvePlatform(platform)
+	key, ok := t.reg.PcapFamilyForPlatform(platform)
 	if !ok {
 		return CommandSet{}, ErrNoPlatform
 	}
@@ -465,74 +463,15 @@ func groupHasEveryValue(parts []tplPart, vals map[string]string) bool {
 	return true
 }
 
-// platformTokens splits a free-form vendor/OS/model string into lower-case
-// alphanumeric tokens plus their concatenation. Matching on TOKENS rather than
-// substrings is deliberate: a substring rule for "eos" also matches the vendor
-// string "acme-networks SomeOS", and silently rendering Arista commands at an
-// unknown device is exactly the "invent an API at a live router" failure §7
-// forbids. The joined form is used only for the two-part names ("ios-xe",
-// "nx-os") that a substring test can identify unambiguously.
-func platformTokens(platform string) (map[string]bool, string) {
-	set := map[string]bool{}
-	var cur strings.Builder
-	var joined strings.Builder
-	flush := func() {
-		if cur.Len() > 0 {
-			set[cur.String()] = true
-			joined.WriteString(cur.String())
-			cur.Reset()
-		}
-	}
-	for _, r := range strings.ToLower(platform) {
-		if r >= 'a' && r <= 'z' || r >= '0' && r <= '9' {
-			cur.WriteRune(r)
-			continue
-		}
-		flush()
-	}
-	flush()
-	return set, joined.String()
-}
-
-// resolvePlatform maps a device platform token onto a table key. Order matters:
-// the specific families are tested before the bare-vendor fallback.
-func resolvePlatform(platform string) (string, bool) {
-	p := strings.ToLower(strings.TrimSpace(platform))
-	if p == "" {
-		return "", false
-	}
-	if _, ok := profileIDForKey[p]; ok {
-		return p, true
-	}
-	tok, joined := platformTokens(p)
-	switch {
-	case tok["nxos"] || tok["nexus"] || strings.Contains(joined, "nxos"):
-		return "cisco_nxos", true
-	case tok["iosxe"] || tok["catalyst"] || tok["isr"] || tok["asr"] || strings.Contains(joined, "iosxe"):
-		return "cisco_iosxe", true
-	case tok["junos"] || tok["juniper"]:
-		return "juniper_junos", true
-	case tok["eos"] || tok["arista"]:
-		return "arista_eos", true
-	case tok["cisco"]:
-		// Plain "cisco ios" is the IOS-XE command family for our purposes; the
-		// more specific families above have already claimed their devices.
-		return "cisco_iosxe", true
-	}
-	return "", false
-}
-
-// PlatformKeys lists the capture-family keys this package can name, sorted.
+// PlatformKeys lists the capture-family keys the SHIPPED profiles name, sorted.
 // Whether a given family has COMMANDS is the table's answer, not this list's: a
 // key here whose profile declares no capture commands is refused by Supports.
-func PlatformKeys() []string {
-	out := make([]string, 0, len(profileIDForKey))
-	for k := range profileIDForKey {
-		out = append(out, k)
-	}
-	sort.Strings(out)
-	return out
-}
+//
+// The resolution of free-form platform text ONTO one of these keys now lives in
+// the registry (Registry.PcapFamilyForPlatform), beside the rules that drive it:
+// this package owns the capture GRAMMAR (ValidateInterface, ValidateFilter,
+// ValidateCaptureID) and the bounds, never the vendor vocabulary.
+func PlatformKeys() []string { return vendorprofile.Default().PcapFamilyKeys() }
 
 func clampInt(v, lo, hi int) int {
 	switch {

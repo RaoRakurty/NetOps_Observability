@@ -34,8 +34,16 @@ type vendorDoc struct {
 	Detection     Detection     `json:"detection"`
 	Dialect       Dialect       `json:"dialect"`
 	Verify        VerifyBinding `json:"verify"`
-	Profiles      []Profile     `json:"profiles"`
-	Notes         string        `json:"notes,omitempty"`
+	// ConfigCapture / SNMPConfigGen / DeviceType are the VENDOR-LEVEL bindings
+	// consumed by the config-backup module, the SNMP onboarding generator and
+	// functional device-type inference. They sit at the vendor level because
+	// each of those engines resolves a device to a VENDOR FAMILY, never to a
+	// platform (see the type docs for why that is not an accident).
+	ConfigCapture ConfigCapture   `json:"config_capture"`
+	SNMPConfigGen SNMPConfigGen   `json:"snmp_configgen"`
+	DeviceType    DeviceTypeHints `json:"device_type"`
+	Profiles      []Profile       `json:"profiles"`
+	Notes         string          `json:"notes,omitempty"`
 }
 
 // ErrNotFound is returned by the lookup helpers that report an error rather than
@@ -122,6 +130,15 @@ func decodeVendorDoc(name string, b []byte) (vendorDoc, error) {
 		return vendorDoc{}, err
 	}
 	if err := validateVerify(name, doc.Verify); err != nil {
+		return vendorDoc{}, err
+	}
+	if err := validateConfigCapture(name, doc.ConfigCapture); err != nil {
+		return vendorDoc{}, err
+	}
+	if err := validateSNMPConfigGen(name, doc.SNMPConfigGen); err != nil {
+		return vendorDoc{}, err
+	}
+	if err := validateDeviceTypeHints(name, doc.DeviceType); err != nil {
 		return vendorDoc{}, err
 	}
 	for i := range doc.Profiles {
@@ -255,6 +272,9 @@ func validateProfile(name string, p Profile) error {
 	if err := validatePcapCapture(where, p.Capture); err != nil {
 		return err
 	}
+	if err := validatePcapFamily(where, p.Capture); err != nil {
+		return err
+	}
 	if (p.Hardening.Binding == "") != (p.Hardening.Display == "") {
 		return fmt.Errorf("vendorprofile: %s: hardening binding and display must be set together", where)
 	}
@@ -266,6 +286,279 @@ func validateProfile(name string, p Profile) error {
 	}
 	if len(p.Advisory.ProductIDs) > 0 && p.Advisory.Provider == "" {
 		return fmt.Errorf("vendorprofile: %s: advisory.product_ids set with no provider", where)
+	}
+	return nil
+}
+
+// ─── vendor-level consumer bindings ──────────────────────────────────────────
+
+// configCaptureForbiddenBytes are the bytes a running-config capture command may
+// never contain: shell/CLI CHAINING metacharacters and control characters.
+//
+// NOTE what is NOT here: `|`. The verification allowlist (validateVerifyCommand)
+// forbids the pipe because that engine composes a battery of commands it must
+// prove cannot carry a second one. A config capture is ONE authored constant per
+// vendor, and on Junos the only way to read a set-format configuration is
+// `show configuration | display set | no-more` — a device-CLI display filter,
+// not a shell pipeline. Forbidding it would not harden anything; it would make
+// the registry unable to state the command the module actually runs.
+var configCaptureForbiddenBytes = []string{";", "&", "`", "$", "\\", "\n", "\r", ">", "<"}
+
+// validateConfigCapture enforces the vendor-level config-capture binding: a
+// ranked, well-formed platform table, a READ-ONLY capture command, and volatile
+// rules whose patterns compile and whose names are unique.
+//
+// A vendor may declare a platform table with NO command: that is the honest
+// "we can name this family but its capture command is not established" state,
+// and internal/configstore already refuses such a device (ErrNoVendor) rather
+// than probing it. Only a rule list or a command with no way to reach them is a
+// defect.
+func validateConfigCapture(name string, c ConfigCapture) error {
+	for _, sub := range c.PlatformContains {
+		if sub == "" || sub != strings.ToLower(sub) || strings.TrimSpace(sub) != sub {
+			return fmt.Errorf("vendorprofile: %s: config_capture.platform_contains %q must be non-empty, lower-case and trimmed", name, sub)
+		}
+	}
+	if len(c.PlatformContains) > 0 && c.PlatformRank <= 0 {
+		return fmt.Errorf("vendorprofile: %s: config_capture.platform_rank must be > 0 when platform_contains is set", name)
+	}
+	if c.PlatformRank > 0 && len(c.PlatformContains) == 0 {
+		return fmt.Errorf("vendorprofile: %s: config_capture.platform_rank set with no platform_contains", name)
+	}
+	if err := validateCaptureCommand(name, "config_capture.running_config_cmd", c.RunningConfigCmd); err != nil {
+		return err
+	}
+	if len(c.VolatileRules) > 0 && len(c.PlatformContains) == 0 {
+		return fmt.Errorf("vendorprofile: %s: config_capture.volatile_rules declared for a vendor no platform text resolves to", name)
+	}
+	if err := validateVolatileRules(name, "config_capture", c.VolatileRules); err != nil {
+		return err
+	}
+	seenDialect := map[string]bool{}
+	for _, d := range c.PlatformDialects {
+		field := "config_capture.platform_dialects[" + d.ID + "]"
+		if d.ID == "" || strings.TrimSpace(d.ID) != d.ID || d.ID != strings.ToLower(d.ID) {
+			return fmt.Errorf("vendorprofile: %s: config_capture.platform_dialects id %q must be non-empty, trimmed and lower-case", name, d.ID)
+		}
+		if seenDialect[d.ID] {
+			return fmt.Errorf("vendorprofile: %s: duplicate config_capture platform dialect %q", name, d.ID)
+		}
+		seenDialect[d.ID] = true
+		// A dialect exists to be RESOLVED. Without its own platform text nothing
+		// can ever reach it, which is a silently dead command table.
+		if len(d.PlatformContains) == 0 || d.PlatformRank <= 0 {
+			return fmt.Errorf("vendorprofile: %s: %s must declare platform_contains and a platform_rank > 0", name, field)
+		}
+		for _, sub := range d.PlatformContains {
+			if sub == "" || sub != strings.ToLower(sub) || strings.TrimSpace(sub) != sub {
+				return fmt.Errorf("vendorprofile: %s: %s platform_contains %q must be non-empty, lower-case and trimmed", name, field, sub)
+			}
+		}
+		if err := validateCaptureCommand(name, field+".running_config_cmd", d.RunningConfigCmd); err != nil {
+			return err
+		}
+		if err := validateVolatileRules(name, field, d.VolatileRules); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// captureCommandVerbs are the read-only display verbs a running-config capture
+// command may start with. The list is a GUARD, not the authorization: the
+// command itself is a checked-in constant, and this only refuses a profile edit
+// that would send something other than a display verb to a device prompt.
+//
+//	show / display        — the near-universal spelling (IOS, EOS, Junos, VRP)
+//	admin display         — SR OS' classic-CLI running-config display
+//	info                  — SR Linux' CLI display verb: its configuration is read
+//	                        with `info from running flat`, and it has no `show`
+//	                        form of the running config at all.
+var captureCommandVerbs = []string{"show ", "display ", "admin display", "info "}
+
+// validateCaptureCommand enforces the read-only + no-chaining contract on ONE
+// capture command string, wherever it is declared (vendor level or dialect).
+func validateCaptureCommand(name, field, cmd string) error {
+	if cmd == "" {
+		return nil
+	}
+	if strings.TrimSpace(cmd) != cmd {
+		return fmt.Errorf("vendorprofile: %s: %s %q must be trimmed", name, field, cmd)
+	}
+	lower := strings.ToLower(cmd)
+	ok := false
+	for _, verb := range captureCommandVerbs {
+		if strings.HasPrefix(lower, verb) {
+			ok = true
+			break
+		}
+	}
+	if !ok {
+		return fmt.Errorf("vendorprofile: %s: %s %q is not a read-only show/display command", name, field, cmd)
+	}
+	for _, tok := range configCaptureForbiddenBytes {
+		if strings.Contains(cmd, tok) {
+			return fmt.Errorf("vendorprofile: %s: %s %q contains the forbidden token %q", name, field, cmd, tok)
+		}
+	}
+	for i := 0; i < len(cmd); i++ {
+		if b := cmd[i]; b < 0x20 || b == 0x7f {
+			return fmt.Errorf("vendorprofile: %s: %s %q contains a control character", name, field, cmd)
+		}
+	}
+	return nil
+}
+
+// validateVolatileRules enforces the named/unique/compilable contract on one
+// volatile-rule list.
+func validateVolatileRules(name, field string, rules []VolatileRule) error {
+	seen := map[string]bool{}
+	for _, r := range rules {
+		if r.Name == "" || strings.TrimSpace(r.Name) != r.Name || r.Name != strings.ToLower(r.Name) {
+			return fmt.Errorf("vendorprofile: %s: %s volatile rule name %q must be non-empty, trimmed and lower-case", name, field, r.Name)
+		}
+		if seen[r.Name] {
+			return fmt.Errorf("vendorprofile: %s: duplicate %s volatile rule name %q", name, field, r.Name)
+		}
+		seen[r.Name] = true
+		if r.Pattern == "" {
+			return fmt.Errorf("vendorprofile: %s: %s volatile rule %q has no pattern", name, field, r.Name)
+		}
+		if _, err := regexp.Compile(r.Pattern); err != nil {
+			return fmt.Errorf("vendorprofile: %s: %s volatile rule %q: %w", name, field, r.Name, err)
+		}
+	}
+	return nil
+}
+
+// snmpConfigGenPlaceholderSet is SNMPConfigGenPlaceholders as a set.
+var snmpConfigGenPlaceholderSet = func() map[string]bool {
+	m := make(map[string]bool, len(SNMPConfigGenPlaceholders))
+	for _, n := range SNMPConfigGenPlaceholders {
+		m[n] = true
+	}
+	return m
+}()
+
+// validateSNMPTemplate checks one onboarding template's holes and reports which
+// ones it uses. `<<` and `>>` are the ONLY structural bytes: everything else is
+// literal, because the payload is a vendor CLI block an operator pastes, not a
+// command this platform executes. A stray delimiter is an error — a template
+// that looks like it names a hole but does not would render the literal text
+// `<<auth_key>>` into somebody's device configuration.
+func validateSNMPTemplate(name, field, tpl string) (map[string]bool, error) {
+	if strings.TrimSpace(tpl) != tpl {
+		return nil, fmt.Errorf("vendorprofile: %s: snmp_configgen.%s must be trimmed", name, field)
+	}
+	for i := 0; i < len(tpl); i++ {
+		if b := tpl[i]; (b < 0x20 && b != '\n') || b == 0x7f {
+			return nil, fmt.Errorf("vendorprofile: %s: snmp_configgen.%s contains a control character", name, field)
+		}
+	}
+	used := map[string]bool{}
+	rest := tpl
+	for {
+		i := strings.Index(rest, "<<")
+		if i < 0 {
+			break
+		}
+		rest = rest[i+2:]
+		end := strings.Index(rest, ">>")
+		if end < 0 {
+			return nil, fmt.Errorf("vendorprofile: %s: snmp_configgen.%s: unterminated placeholder", name, field)
+		}
+		hole := rest[:end]
+		if !snmpConfigGenPlaceholderSet[hole] {
+			return nil, fmt.Errorf("vendorprofile: %s: snmp_configgen.%s: unknown placeholder <<%s>> (allowed: %s)",
+				name, field, hole, strings.Join(SNMPConfigGenPlaceholders, ", "))
+		}
+		used[hole] = true
+		rest = rest[end+2:]
+	}
+	if strings.Contains(rest, ">>") {
+		return nil, fmt.Errorf("vendorprofile: %s: snmp_configgen.%s: stray '>>'", name, field)
+	}
+	return used, nil
+}
+
+// validateSNMPConfigGen enforces the onboarding-template contract: both versions
+// or neither, closed placeholders, and — the rule that matters — a v3 block that
+// actually carries the minted key material. A v3 template missing <<auth_key>>
+// or <<priv_key>> would hand an operator a block that configures a user the
+// collector cannot authenticate as, which is worse than no template at all.
+func validateSNMPConfigGen(name string, g SNMPConfigGen) error {
+	if (g.V2CTemplate == "") != (g.V3Template == "") {
+		return fmt.Errorf("vendorprofile: %s: snmp_configgen must declare both v2c_template and v3_template, or neither", name)
+	}
+	if g.V2CTemplate == "" {
+		return nil
+	}
+	v2c, err := validateSNMPTemplate(name, "v2c_template", g.V2CTemplate)
+	if err != nil {
+		return err
+	}
+	if !v2c["community"] {
+		return fmt.Errorf("vendorprofile: %s: snmp_configgen.v2c_template does not carry <<community>>", name)
+	}
+	v3, err := validateSNMPTemplate(name, "v3_template", g.V3Template)
+	if err != nil {
+		return err
+	}
+	if !v3["auth_key"] || !v3["priv_key"] {
+		return fmt.Errorf("vendorprofile: %s: snmp_configgen.v3_template must carry both <<auth_key>> and <<priv_key>>", name)
+	}
+	if v3["community"] {
+		return fmt.Errorf("vendorprofile: %s: snmp_configgen.v3_template carries <<community>> — v3 has no community", name)
+	}
+	return nil
+}
+
+// deviceTypeSet is DeviceTypeOrder as a set, for validation.
+var deviceTypeSet = func() map[string]bool {
+	m := make(map[string]bool, len(DeviceTypeOrder))
+	for _, t := range DeviceTypeOrder {
+		m[t] = true
+	}
+	return m
+}()
+
+// validateDeviceTypeHints enforces the closed device-type vocabulary and the
+// shape of the two hint kinds. Text hints are the ONE string list the loader
+// does not require to be trimmed: a leading or trailing space is how " mx"
+// says "the token mx", and trimming it would silently widen the rule to every
+// model whose name contains those two letters.
+func validateDeviceTypeHints(name string, h DeviceTypeHints) error {
+	if len(h.VendorTokens) > 0 && h.VendorKind == "" {
+		return fmt.Errorf("vendorprofile: %s: device_type.vendor_tokens set with no vendor_kind", name)
+	}
+	if h.VendorKind != "" && len(h.VendorTokens) == 0 {
+		return fmt.Errorf("vendorprofile: %s: device_type.vendor_kind set with no vendor_tokens", name)
+	}
+	if h.VendorKind != "" && !deviceTypeSet[h.VendorKind] {
+		return fmt.Errorf("vendorprofile: %s: unknown device_type.vendor_kind %q (allowed: %s)", name, h.VendorKind, strings.Join(DeviceTypeOrder, ", "))
+	}
+	for _, tok := range h.VendorTokens {
+		if tok == "" || tok != strings.ToLower(tok) || strings.TrimSpace(tok) != tok {
+			return fmt.Errorf("vendorprofile: %s: device_type.vendor_token %q must be non-empty, lower-case and trimmed", name, tok)
+		}
+	}
+	for kind, hints := range h.TextHints {
+		if !deviceTypeSet[kind] {
+			return fmt.Errorf("vendorprofile: %s: unknown device_type.text_hints key %q (allowed: %s)", name, kind, strings.Join(DeviceTypeOrder, ", "))
+		}
+		if len(hints) == 0 {
+			return fmt.Errorf("vendorprofile: %s: device_type.text_hints[%s] is empty", name, kind)
+		}
+		seen := map[string]bool{}
+		for _, hint := range hints {
+			if strings.TrimSpace(hint) == "" || hint != strings.ToLower(hint) {
+				return fmt.Errorf("vendorprofile: %s: device_type.text_hints[%s] hint %q must be non-empty and lower-case", name, kind, hint)
+			}
+			if seen[hint] {
+				return fmt.Errorf("vendorprofile: %s: duplicate device_type.text_hints[%s] hint %q", name, kind, hint)
+			}
+			seen[hint] = true
+		}
 	}
 	return nil
 }
@@ -484,6 +777,47 @@ func validatePcapCapture(where string, c Capture) error {
 	}
 	if !usesFilter && c.PcapSupportsFilter {
 		return fmt.Errorf("vendorprofile: %s: pcap_supports_filter is true but no template carries {filter} — the claim would silently widen a capture", where)
+	}
+	return nil
+}
+
+// pcapFamilyToken matches a capture-family key and the tokens/joined substrings
+// of a platform rule: lower-case letters, digits and (for the family key)
+// underscores. The rule side is deliberately NARROWER than free text — the
+// resolver tokenizes a platform label into runs of [a-z0-9], so a rule carrying
+// a hyphen or a space could never match anything and would be dead data that
+// LOOKS live.
+var (
+	pcapFamilyToken = regexp.MustCompile(`^[a-z0-9_]+$`)
+	pcapRuleToken   = regexp.MustCompile(`^[a-z0-9]+$`)
+)
+
+// validatePcapFamily enforces the capture-family half of a profile's capture
+// block: a well-formed key, rules that can actually match, and no rule without
+// a family to resolve to.
+func validatePcapFamily(where string, c Capture) error {
+	if c.PcapFamily != "" && !pcapFamilyToken.MatchString(c.PcapFamily) {
+		return fmt.Errorf("vendorprofile: %s: capture.pcap_family %q must be lower-case letters, digits and underscores", where, c.PcapFamily)
+	}
+	if len(c.PcapPlatformRules) > 0 && c.PcapFamily == "" {
+		return fmt.Errorf("vendorprofile: %s: capture.pcap_platform_rules declared with no pcap_family to resolve to", where)
+	}
+	if c.PcapFamily == "" && c.HasPcapCommands() {
+		return fmt.Errorf("vendorprofile: %s: packet-capture commands declared with no capture.pcap_family — no device platform could ever reach them", where)
+	}
+	for _, rule := range c.PcapPlatformRules {
+		if rule.Rank <= 0 {
+			return fmt.Errorf("vendorprofile: %s: capture.pcap_platform_rules rank must be > 0", where)
+		}
+		if len(rule.Tokens) == 0 && len(rule.Joined) == 0 {
+			return fmt.Errorf("vendorprofile: %s: capture.pcap_platform_rules rank %d matches nothing", where, rule.Rank)
+		}
+		for _, tok := range append(append([]string(nil), rule.Tokens...), rule.Joined...) {
+			if !pcapRuleToken.MatchString(tok) {
+				return fmt.Errorf("vendorprofile: %s: capture.pcap_platform_rules token %q must be lower-case letters and digits "+
+					"(a platform label is tokenized on every other byte, so anything else is unreachable)", where, tok)
+			}
+		}
 	}
 	return nil
 }

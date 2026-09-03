@@ -3,6 +3,7 @@ package backend
 import (
 	"strings"
 
+	"netops/backend/internal/vendorprofile"
 	"netops/backend/models"
 )
 
@@ -10,9 +11,18 @@ import (
 // SNMP-derived signals (vendor + model + sysDescr/OS + name) — the same text an
 // operator reads. Returns one of: router, switch, firewall, load-balancer, ap,
 // wlc, cloud-gw, generic. An operator override in labels["device_type"] always
-// wins (the "manual" half of the SNMP-infer + manual policy). Order matters:
+// wins (the "manual" half of the SNMP-infer + manual policy).
+//
+// WHERE THE HINTS LIVE. In the Vendor Profile registry, under each vendor
+// document's `device_type.text_hints` — Cisco's "catalyst"/"9800"/"ws-c",
+// Juniper's " mx"/"qfx", Ubiquiti's "uap-", and the vendor-NEUTRAL role words
+// ("firewall", "switch", "router") in the vendor-neutral document. This file
+// owns the POLICY, not the vocabulary: which text is read, that an operator
+// override wins, and that an unmatched device is "generic" rather than a guess.
+//
+// The ORDER is policy too and stays with the registry's DeviceTypeOrder:
 // specific roles (firewall/LB/WLC/AP/cloud-gw) are tested before the generic
-// switch-vs-router split so a firewall is never mislabelled a router.
+// switch-vs-router split, so a firewall is never mislabelled a router.
 func inferDeviceType(d models.Device) string {
 	if d.Labels != nil {
 		if t := strings.TrimSpace(d.Labels["device_type"]); t != "" {
@@ -20,23 +30,8 @@ func inferDeviceType(d models.Device) string {
 		}
 	}
 	h := strings.ToLower(d.Vendor + " " + d.Model + " " + d.OS + " " + d.Name)
-	switch {
-	case hasAny(h, "fortigate", "fortios", "firewall", "asa", "palo alto", "pan-os", "panos", "checkpoint", "check point", "srx", "ngfw", "firepower", "fpr-", "ftd"):
-		return "firewall"
-	case hasAny(h, "big-ip", "bigip", "f5 ", "load-balanc", "loadbalanc", "netscaler", "citrix adc", "avi vantage"):
-		return "load-balancer"
-	case hasAny(h, "wlc", "wireless lan controller", "wism", "9800", "mobility express", "wireless controller"):
-		return "wlc"
-	// "wireless ap" catches Ruckus standalone AP banners ("… Wireless AP");
-	// "uap-" catches Ubiquiti UniFi AP model strings (UAP-AC-Pro, UAP-nanoHD).
-	case hasAny(h, "aironet", "access point", "accesspoint", "air-ap", "air-cap", "meraki mr", "wifi", "wireless ap", "uap-"):
-		return "ap"
-	case hasAny(h, "vgw", "tgw", "transit gateway", "vpn gateway", "cloud gateway", "cloudgw", "cloud-gw", "csr1000v", "c8000v cloud", "vmx cloud"):
-		return "cloud-gw"
-	case hasAny(h, "catalyst", "nexus", "qfx", " ex2", " ex3", " ex4", "arista", " eos", "dcs-", "icx", "powerconnect", "ws-c", "switch"):
-		return "switch"
-	case hasAny(h, "router", "asr", "isr", "ncs", " mx", "ptx", "crs", "gsr", "7750", "7250", "csr", "c8000v", "vmx", "vsr"):
-		return "router"
+	if t, ok := vendorprofile.Default().DeviceTypeForText(h); ok {
+		return t
 	}
 	return "generic"
 }
@@ -50,13 +45,4 @@ func withDeviceType(ds []models.Device) []models.Device {
 		}
 	}
 	return ds
-}
-
-func hasAny(hay string, needles ...string) bool {
-	for _, n := range needles {
-		if strings.Contains(hay, n) {
-			return true
-		}
-	}
-	return false
 }

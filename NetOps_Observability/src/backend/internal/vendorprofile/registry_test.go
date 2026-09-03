@@ -170,10 +170,15 @@ func TestConsumerBindings(t *testing.T) {
 	if d, ok := reg.HardeningDisplay("nokia"); !ok || d != "Nokia SR OS" {
 		t.Errorf("hardening display = %q ok=%v", d, ok)
 	}
-	// Arista has no hardening bindings in the catalog: the profile must say so
-	// rather than borrow Cisco's dialect.
-	if b, ok := reg.HardeningBindingForPlatform("Arista EOS 4.33"); ok {
-		t.Errorf("Arista bound to hardening dialect %q — the catalog ships no Arista bindings", b)
+	// Arista has its OWN hardening dialect and must never borrow Cisco's: EOS
+	// speaks IOS' show grammar but not its configuration grammar.
+	if b, ok := reg.HardeningBindingForPlatform("Arista EOS 4.33"); !ok || b != "arista" {
+		t.Errorf("Arista hardening binding = %q ok=%v, want \"arista\"", b, ok)
+	}
+	// SR Linux likewise: binding it to the SR OS rules scored a grammar the
+	// device does not write.
+	if b, ok := reg.HardeningBindingForPlatform("Nokia SR Linux"); !ok || b != "srlinux" {
+		t.Errorf("SR Linux hardening binding = %q ok=%v, want \"srlinux\"", b, ok)
 	}
 	// advisory
 	ab, err := reg.AdvisoryFor("cisco", "ios_xe")
@@ -203,13 +208,16 @@ func TestConsumerBindings(t *testing.T) {
 		len(cap.PagerOffCmds) == 0 || cap.PromptRegex == "" {
 		t.Errorf("cisco/ios_xe capture incomplete: %+v", cap)
 	}
-	// A platform whose capture commands are not established says so with empty
-	// fields rather than a guessed command.
+	// SR Linux: the command is LIVE-VERIFIED (`info from running flat`, lab
+	// spine1, 2026-09-02) and the two empty fields are now a VERIFIED emptiness
+	// rather than an unestablished one — a single non-interactive exec on this
+	// OS engages no pager and echoes no prompt, so there is nothing to turn off
+	// and nothing to match.
 	srl, err := reg.CaptureFor("nokia/srlinux")
 	if err != nil {
 		t.Fatalf("CaptureFor srlinux: %v", err)
 	}
-	if srl.RunningConfigCmd != "info from running" || len(srl.PagerOffCmds) != 0 {
+	if srl.RunningConfigCmd != "info from running flat" || len(srl.PagerOffCmds) != 0 || srl.PromptRegex != "" {
 		t.Errorf("nokia/srlinux capture = %+v", srl)
 	}
 }
@@ -396,9 +404,16 @@ func TestAristaAndHuaweiResolveByPlatformText(t *testing.T) {
 			t.Errorf("ProfileForPlatformText(%q) = (%q,%v), want %q", tc.text, p.ID, ok, tc.want)
 		}
 	}
-	// Resolving them must NOT have invented a hardening verdict: neither vendor
-	// ships hardening rule bindings, so both stay NotApplicable.
-	for _, text := range []string{"Arista EOS 4.33", "arista", "eos", "Huawei VRP", "vrp"} {
+	// Arista now HAS a hardening dialect of its own, and every Arista platform
+	// text must reach it — a row that resolves to the profile but not to the
+	// dialect would silently report NotApplicable for a bound vendor.
+	for _, text := range []string{"Arista EOS 4.33", "arista", "eos", "ceos"} {
+		if b, ok := reg.HardeningBindingForPlatform(text); !ok || b != "arista" {
+			t.Errorf("%q hardening dialect = %q ok=%v, want \"arista\"", text, b, ok)
+		}
+	}
+	// Huawei still ships none, and resolving its profile must NOT invent one.
+	for _, text := range []string{"Huawei VRP", "vrp"} {
 		if b, ok := reg.HardeningBindingForPlatform(text); ok {
 			t.Errorf("%q bound hardening dialect %q — the catalog ships no rules for it", text, b)
 		}

@@ -21,6 +21,26 @@
       "panos"
     ]
   },
+  "snmp_configgen": {
+    "v2c_template": "set deviceconfig system snmp-setting access-setting version v2c snmp-community-string <<community>>",
+    "v3_template": "set deviceconfig system snmp-setting access-setting version v3 users <<sec_name>> authpwd <<auth_key>> privpwd <<priv_key>> authprotocol sha privprotocol aes-128\ncommit"
+  },
+  "device_type": {
+    "vendor_tokens": [
+      "palo alto",
+      "paloalto",
+      "palo-alto",
+      "panw"
+    ],
+    "vendor_kind": "firewall",
+    "text_hints": {
+      "firewall": [
+        "palo alto",
+        "pan-os",
+        "panos"
+      ]
+    }
+  },
   "profiles": [
     {
       "platform": "pan-os",

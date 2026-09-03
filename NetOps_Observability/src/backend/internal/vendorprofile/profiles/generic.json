@@ -18,5 +18,45 @@
       "network-instance"
     ]
   },
+  "device_type": {
+    "text_hints": {
+      "firewall": [
+        "firewall",
+        "ngfw"
+      ],
+      "load-balancer": [
+        "load-balanc",
+        "loadbalanc",
+        "netscaler",
+        "citrix adc",
+        "avi vantage"
+      ],
+      "wlc": [
+        "wlc",
+        "wireless lan controller",
+        "wireless controller"
+      ],
+      "ap": [
+        "access point",
+        "accesspoint",
+        "wifi"
+      ],
+      "cloud-gw": [
+        "vgw",
+        "tgw",
+        "transit gateway",
+        "vpn gateway",
+        "cloud gateway",
+        "cloudgw",
+        "cloud-gw"
+      ],
+      "switch": [
+        "switch"
+      ],
+      "router": [
+        "router"
+      ]
+    }
+  },
   "profiles": []
 }

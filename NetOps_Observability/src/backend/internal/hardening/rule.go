@@ -24,6 +24,25 @@ const (
 type DetectResult struct {
 	Tripped  bool
 	Evidence string
+	// NotApplicable marks a verdict of "this control cannot exist on this
+	// platform" — the CONCEPT has no realization in the operating system, so
+	// there is nothing to observe and nothing to fix.
+	//
+	// It is distinct from both other answers and neither of them is honest in
+	// its place. A Pass would claim we looked at the device and found it
+	// hardened; leaving the vendor UNBOUND would report the generic "control not
+	// assessed for this platform", which is what we say when we have not done
+	// the work — and an operator cannot tell that from a gap in our coverage.
+	// SR Linux has no telnet server anywhere in its model and neither EOS nor SR
+	// Linux implements SSHv1, so "telnet disabled" and "SSH pinned to v2" are
+	// structurally satisfied on those platforms, and saying exactly that is the
+	// §5g-honest answer. Evidence carries the REASON, which the engine renders
+	// as the finding's Detail.
+	//
+	// A binding may only set this when the platform genuinely cannot express the
+	// insecure state. "We have not written the detection yet" is an unbound
+	// vendor, not a NotApplicable.
+	NotApplicable bool
 }
 
 // VendorBinding is a rule's per-vendor realization: the dialect-specific

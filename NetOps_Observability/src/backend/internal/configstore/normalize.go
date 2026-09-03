@@ -50,6 +50,44 @@ func Normalize(v Vendor, raw string) string {
 	return strings.Join(out, "\n") + "\n"
 }
 
+// cliRefusalPrefixes are the shapes a network CLI uses to REFUSE a command, in
+// the ONE position that matters: the first line of the response.
+//
+// Why this guard exists. The gateway checks the exec's exit status, but several
+// network operating systems answer a refused command with a diagnostic on
+// stdout and exit ZERO — EOS answers a privilege-1 `show running-config` with
+// "% Invalid input (privileged mode required)", SR OS and SR Linux have their
+// own spellings. Without this, a capture account that lost its authorization
+// stores the REFUSAL as a configuration version: the sha changes, the device
+// reports drift, the diff shows the entire configuration deleted, and the
+// sealed "restore from" artifact is one line of error text. That is the exact
+// silent failure §10 forbids, and it is worse than no capture at all.
+//
+// Deliberately narrow. Only the FIRST non-blank line is examined and only these
+// prefixes count, because a running-config legitimately contains `%` inside
+// banners, descriptions and regexes — just never as its opening statement.
+var cliRefusalPrefixes = []string{"%", "error:", "unknown command", "syntax error"}
+
+// looksLikeCLIRefusal reports whether normalized text is a CLI's refusal of the
+// capture command rather than a configuration, and returns the offending line
+// so the failure record can name what the device actually said.
+func looksLikeCLIRefusal(normalized string) (string, bool) {
+	for _, ln := range strings.Split(normalized, "\n") {
+		t := strings.TrimSpace(ln)
+		if t == "" {
+			continue
+		}
+		lower := strings.ToLower(t)
+		for _, p := range cliRefusalPrefixes {
+			if strings.HasPrefix(lower, p) {
+				return t, true
+			}
+		}
+		return "", false // the first real line is configuration — done
+	}
+	return "", false
+}
+
 // SHA256Hex is the content address of a NORMALIZED configuration — the version
 // identity. Hex, lowercase, 64 chars.
 func SHA256Hex(normalized string) string {

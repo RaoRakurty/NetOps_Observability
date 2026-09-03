@@ -33,6 +33,32 @@
       "ssh_routing": "display bgp peer"
     }
   },
+  "config_capture": {
+    "platform_contains": [
+      "huawei",
+      "vrp"
+    ],
+    "platform_rank": 40,
+    "running_config_cmd": "display current-configuration",
+    "volatile_rules": [
+      {
+        "name": "vrp-last-updated",
+        "pattern": "(?i)^\\s*!\\s*last configuration was (updated|saved)"
+      },
+      {
+        "name": "vrp-saved-by",
+        "pattern": "(?i)^\\s*#\\s*saved by\\s"
+      },
+      {
+        "name": "vrp-software",
+        "pattern": "(?i)^\\s*!\\s*software version"
+      }
+    ]
+  },
+  "snmp_configgen": {
+    "v2c_template": "snmp-agent\nsnmp-agent community read cipher <<community>>\nsnmp-agent sys-info version v2c",
+    "v3_template": "snmp-agent sys-info version v3\nsnmp-agent group v3 correlix-grp privacy read-view iso-view\nsnmp-agent mib-view included iso-view iso\nsnmp-agent usm-user v3 <<sec_name>> group correlix-grp\nsnmp-agent usm-user v3 <<sec_name>> authentication-mode sha2-256 cipher <<auth_key>>\nsnmp-agent usm-user v3 <<sec_name>> privacy-mode aes128 cipher <<priv_key>>"
+  },
   "profiles": [
     {
       "platform": "vrp",

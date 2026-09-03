@@ -2,6 +2,7 @@
   "schema_version": 1,
   "vendor": "ubiquiti",
   "display_name": "Ubiquiti",
+  "notes": "snmp_configgen.v3_template reproduces the hand-written Go table BYTE FOR BYTE, including a DEFECT it carries: the fourth line renders <<priv_key>> where the user name belongs and <<sec_name>> where the privacy key belongs (a positional fmt.Sprintf argument slip in the table this template replaced, not EdgeOS syntax). It was moved unchanged on purpose — the move is proved by a byte-parity golden (snmpcred.TestDeviceConfigIsByteIdenticalToTheHandWrittenTable), and correcting a device-facing block inside a vocabulary move would both void that proof and hide the fix from review. Correcting it is a one-line edit to this document plus the golden, and belongs on its own row.",
   "detection": {
     "sysobjectid_prefixes": [
       "1.3.6.1.4.1.41112"
@@ -15,5 +16,16 @@
     "sysdescr_rank": 100
   },
   "dialect": {},
+  "snmp_configgen": {
+    "v2c_template": "set service snmp community <<community>> authorization ro\ncommit ; save",
+    "v3_template": "set service snmp v3 user <<sec_name>> auth type sha\nset service snmp v3 user <<sec_name>> auth plaintext-key <<auth_key>>\nset service snmp v3 user <<sec_name>> privacy type aes\nset service snmp v3 user <<priv_key>> privacy plaintext-key <<sec_name>>\nset service snmp v3 user <<sec_name>> mode ro\ncommit ; save"
+  },
+  "device_type": {
+    "text_hints": {
+      "ap": [
+        "uap-"
+      ]
+    }
+  },
   "profiles": []
 }

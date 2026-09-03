@@ -34,6 +34,49 @@
       "ssh_routing": "show bgp summary"
     }
   },
+  "config_capture": {
+    "platform_contains": [
+      "junos",
+      "juniper"
+    ],
+    "platform_rank": 30,
+    "running_config_cmd": "show configuration | display set | no-more",
+    "volatile_rules": [
+      {
+        "name": "junos-last-commit",
+        "pattern": "(?i)^\\s*##\\s*last (commit|changed)\\s*:"
+      },
+      {
+        "name": "junos-version-cmt",
+        "pattern": "(?i)^\\s*##\\s*version\\s"
+      }
+    ]
+  },
+  "snmp_configgen": {
+    "v2c_template": "set snmp community <<community>> authorization read-only",
+    "v3_template": "set snmp v3 usm local-engine user <<sec_name>> authentication-sha authentication-key \"<<auth_key>>\"\nset snmp v3 usm local-engine user <<sec_name>> privacy-aes128 privacy-key \"<<priv_key>>\"\nset snmp v3 vacm security-to-group security-model usm security-name <<sec_name>> group correlix-grp\nset snmp v3 vacm access group correlix-grp default-context-prefix security-model usm security-level privacy read-view all\nset snmp view all oid .1 include"
+  },
+  "device_type": {
+    "text_hints": {
+      "firewall": [
+        "srx"
+      ],
+      "cloud-gw": [
+        "vmx cloud"
+      ],
+      "switch": [
+        "qfx",
+        " ex2",
+        " ex3",
+        " ex4"
+      ],
+      "router": [
+        " mx",
+        "ptx",
+        "vmx"
+      ]
+    }
+  },
   "profiles": [
     {
       "platform": "junos",
@@ -76,7 +119,17 @@
           "file delete /var/tmp/{file}.pcap"
         ],
         "pcap_remote_path": "/var/tmp/{file}.pcap",
-        "pcap_supports_filter": true
+        "pcap_supports_filter": true,
+        "pcap_family": "juniper_junos",
+        "pcap_platform_rules": [
+          {
+            "rank": 30,
+            "tokens": [
+              "junos",
+              "juniper"
+            ]
+          }
+        ]
       },
       "advisory": {
         "provider": "offline-feed",

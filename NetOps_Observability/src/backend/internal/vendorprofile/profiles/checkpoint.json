@@ -14,5 +14,22 @@
     "sysdescr_rank": 110
   },
   "dialect": {},
+  "snmp_configgen": {
+    "v2c_template": "set snmp community <<community>> read-only\nset snmp agent-version v2\nset snmp enable\nsave config",
+    "v3_template": "set snmp agent-version v3-Only\nadd snmp usm user <<sec_name>> security-level authPriv auth-pass-phrase <<auth_key>> privacy-pass-phrase <<priv_key>> authentication-protocol SHA1 privacy-protocol AES\nset snmp enable\nsave config"
+  },
+  "device_type": {
+    "vendor_tokens": [
+      "checkpoint",
+      "check point"
+    ],
+    "vendor_kind": "firewall",
+    "text_hints": {
+      "firewall": [
+        "checkpoint",
+        "check point"
+      ]
+    }
+  },
   "profiles": []
 }

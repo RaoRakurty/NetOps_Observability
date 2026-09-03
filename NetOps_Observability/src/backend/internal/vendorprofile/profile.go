@@ -183,6 +183,49 @@ type Capture struct {
 	// any template, and one carrying {filter} must declare true — enforced at
 	// load, so the claim and the commands cannot drift apart.
 	PcapSupportsFilter bool `json:"pcap_supports_filter,omitempty"`
+
+	// PcapFamily is the flat CAPTURE-FAMILY key internal/pcap, its API, its
+	// store rows and its metrics already use for this platform ("cisco_iosxe",
+	// "cisco_nxos", "juniper_junos", "arista_eos"). It is declared HERE so the
+	// family and the commands it names are one document: a family key is not a
+	// second id space maintained beside the registry, it is a field OF the
+	// profile that owns the commands. Empty = this platform is not a capture
+	// family (packet capture is refused for it).
+	PcapFamily string `json:"pcap_family,omitempty"`
+	// PcapPlatformRules resolve a device's FREE-FORM platform text onto this
+	// profile's PcapFamily.
+	//
+	// They are deliberately NOT Detection.PlatformContains. That table answers
+	// "which profile is this platform?" with ranked SUBSTRINGS; capture-family
+	// resolution answers "which capture grammar does this device speak?" with
+	// whole TOKENS, because a substring rule for "eos" also matches the vendor
+	// string "acme-networks SomeOS" and rendering Arista commands at an unknown
+	// device is the exact failure the capture design refuses. The two questions
+	// have different answers (a Catalyst or an ISR is the IOS-XE capture family
+	// though its platform text says neither "ios-xe" nor "iosxe"), so they are
+	// two tables, each authored for its own question.
+	PcapPlatformRules []PcapPlatformRule `json:"pcap_platform_rules,omitempty"`
+}
+
+// PcapPlatformRule is ONE ranked rule that maps free-form platform text onto a
+// capture family. A rule matches when the text carries any of its Tokens as a
+// whole token, or when the CONCATENATION of the text's tokens contains any of
+// its Joined substrings — the joined form is what identifies the two-part names
+// ("ios-xe", "nx-os") a token test alone would miss.
+//
+// Ranks are GLOBAL and unique across every profile: capture-family resolution is
+// first-match-wins over one ordered list, and the order is load-bearing (a
+// Nexus platform string also carries "cisco", so the NX-OS rule must be tested
+// before the bare-vendor fallback).
+type PcapPlatformRule struct {
+	// Rank orders this rule against every other pcap platform rule, ascending,
+	// first match wins. Must be > 0 and unique registry-wide.
+	Rank int `json:"rank"`
+	// Tokens are lower-case WHOLE tokens of the platform text.
+	Tokens []string `json:"tokens,omitempty"`
+	// Joined are lower-case substrings of the platform text's tokens
+	// CONCATENATED, for the names a separator splits ("nx-os" → "nxos").
+	Joined []string `json:"joined,omitempty"`
 }
 
 // CapturePcapPlaceholders is the CLOSED set of holes a pcap command template may
@@ -236,6 +279,155 @@ type CLIBinding struct {
 	// Dialect must declare the SAME Display (enforced at load).
 	Display string `json:"display,omitempty"`
 }
+
+// ConfigCapture is the VENDOR-LEVEL running-config capture binding: how a
+// free-form platform label resolves to this vendor family, the read-only
+// command a config-backup run issues, and the volatile lines normalization
+// strips before the capture is content-addressed.
+//
+// WHY VENDOR LEVEL, beside the per-platform Capture block. The config-backup
+// module (internal/configstore) resolves a device to a VENDOR FAMILY and never
+// to a platform: one Junos command serves every Junos box, and the volatile
+// header a device stamps on `show running-config` is a property of the OS
+// family, not of the chassis. A per-profile answer would force the module to
+// pick one platform of a vendor to speak for the rest, which is a guess. The
+// per-profile Capture.RunningConfigCmd stays what it is — the PLATFORM's
+// command — and the two may legitimately differ (Junos capture appends
+// `| no-more` to defeat the pager over the gateway).
+type ConfigCapture struct {
+	// PlatformContains are lower-cased substrings of a free-form platform label
+	// that select this VENDOR for config capture. Empty = the vendor does not
+	// participate (its devices are refused, never probed with a guess).
+	PlatformContains []string `json:"platform_contains,omitempty"`
+	// PlatformRank orders vendor resolution across ALL vendors, ascending, first
+	// match wins. It is load-bearing: an EOS platform string frequently names a
+	// "Cisco-compatible" CLI, so arista must be tested before cisco. Must be
+	// unique among participating vendors.
+	PlatformRank int `json:"platform_rank,omitempty"`
+	// RunningConfigCmd is the EXACT read-only command a capture issues at the
+	// device prompt. Empty = not established for this vendor: the capture is
+	// REFUSED rather than run with a command that might not be read-only there.
+	RunningConfigCmd string `json:"running_config_cmd,omitempty"`
+	// VolatileRules are the documented lines normalization drops before hashing.
+	// The list is deliberately narrow: only lines whose content is a clock, a
+	// counter or a build banner — never a line that could carry configuration
+	// intent, which would silently hide a change.
+	VolatileRules []VolatileRule `json:"volatile_rules,omitempty"`
+	// PlatformDialects are the SIBLING capture families a vendor ships beside
+	// its own. See ConfigCaptureDialect for why they exist and why they are not
+	// a second vendor document.
+	PlatformDialects []ConfigCaptureDialect `json:"platform_dialects,omitempty"`
+}
+
+// ConfigCaptureDialect is a capture family a vendor ships that is NOT the
+// vendor's own family — a second operating system under one vendor name whose
+// capture command and volatile lines are genuinely different.
+//
+// WHY THIS EXISTS. The vendor-level ConfigCapture answers "one command per
+// vendor family", which is right for every vendor that ships one CLI. Nokia
+// ships two: SR OS answers `admin display-config` in the classic TiMOS CLI, and
+// SR Linux answers `info from running flat` in a completely different one. They
+// are the same VENDOR, so they cannot be two vendor documents (the document name
+// IS the vendor id), and they are not the same FAMILY, so one command cannot
+// serve both — issuing SR OS' command at an SR Linux prompt is exactly the
+// "probe it and see" behaviour internal/configstore refuses to do.
+//
+// A dialect is resolved in the SAME ranked, first-match-wins pass as the vendor
+// families (its PlatformRank shares the one global rank space, and load
+// enforces uniqueness), so a dialect that must win over its own vendor simply
+// ranks lower. Everything downstream — the capture command, the volatile-rule
+// list, the redaction rule set — keys on the resolved ID, which for a dialect is
+// its own id, never the vendor's.
+type ConfigCaptureDialect struct {
+	// ID is the capture family id the resolver returns and every consumer keys
+	// on. It must be unique across ALL vendor ids and ALL dialect ids.
+	ID string `json:"id"`
+	// PlatformContains / PlatformRank are exactly the vendor-level fields, in
+	// the same global rank space.
+	PlatformContains []string `json:"platform_contains,omitempty"`
+	PlatformRank     int      `json:"platform_rank,omitempty"`
+	// RunningConfigCmd is the EXACT read-only command this family answers.
+	RunningConfigCmd string `json:"running_config_cmd,omitempty"`
+	// VolatileRules are this family's documented normalization rules. A dialect
+	// does NOT inherit its vendor's: the two CLIs stamp different headers.
+	VolatileRules []VolatileRule `json:"volatile_rules,omitempty"`
+	// Notes records how the command was established (live device, or docs).
+	Notes string `json:"notes,omitempty"`
+}
+
+// VolatileRule is one named normalization rule. The NAME is part of the
+// contract (a test and an operator talk about it by name, and a silent deletion
+// is what the rule-name pin catches); the PATTERN is a Go regexp matched against
+// a whole captured line.
+type VolatileRule struct {
+	Name    string `json:"name"`
+	Pattern string `json:"pattern"`
+}
+
+// SNMPConfigGen is the vendor's SNMP ONBOARDING CLI block: the ready-to-paste
+// configuration an operator applies to grant Correlix read-only SNMP access.
+//
+// It is a TEMPLATE, never a format string: the generator MINTS the credential
+// (crypto/rand) and the template says where it goes. SNMPConfigGenPlaceholders
+// is the closed set of holes, and a template that names anything else fails at
+// LOAD — the alternative, a positional %s table, is exactly how a minted secret
+// ends up in the wrong field of somebody's device configuration.
+//
+// A vendor declares BOTH templates or NEITHER: half a binding would silently
+// hand a v2c operator the generic fallback while claiming a first-class one.
+type SNMPConfigGen struct {
+	// V2CTemplate renders the SNMPv2c read-only community block.
+	V2CTemplate string `json:"v2c_template,omitempty"`
+	// V3Template renders the SNMPv3 authPriv user block.
+	V3Template string `json:"v3_template,omitempty"`
+}
+
+// SNMPConfigGenPlaceholders is the CLOSED set of holes an onboarding template
+// may carry, written `<<name>>`. The `<< >>` delimiters (rather than the
+// `{name}` the packet-capture templates use) are forced by the payload: several
+// vendors' onboarding syntax contains literal braces (`add { user { … } }` on
+// F5), and a template language whose delimiter appears in the text it renders
+// cannot say which is which.
+//
+//	community    — the minted v2c community string
+//	sec_name     — the v3 security (user) name
+//	auth_key     — the minted v3 authentication key
+//	priv_key     — the minted v3 privacy key
+//	mgmt_subnet  — the operator's management subnet, defaulted by the caller
+//	mask         — that subnet's mask, defaulted by the caller
+var SNMPConfigGenPlaceholders = []string{"community", "sec_name", "auth_key", "priv_key", "mgmt_subnet", "mask"}
+
+// DeviceTypeHints is the vendor's contribution to FUNCTIONAL device-type
+// inference: the free-form model/OS/hostname text its gear reads as, and the
+// vendor spellings that are themselves a role.
+//
+// WHY IT IS NOT DeviceClass. Profile.DeviceClass narrows which hardening rule
+// families apply to a KNOWN platform; this answers a different question about a
+// device the registry may not identify at all — "what does an operator call this
+// box?" — from the same text an operator reads (vendor + model + OS + name).
+// A Catalyst 9800 is device_class switch/wireless and device TYPE "wlc"; the
+// two vocabularies are not interchangeable and are kept apart on purpose.
+type DeviceTypeHints struct {
+	// VendorTokens are EXACT lower-cased spellings of the vendor field that are
+	// themselves a role claim ("fortigate", "palo alto"). They are matched whole,
+	// not as substrings: a vendor token is an identity, not a hint.
+	VendorTokens []string `json:"vendor_tokens,omitempty"`
+	// VendorKind is the device type VendorTokens imply. Required when
+	// VendorTokens is set, and drawn from DeviceTypeOrder.
+	VendorKind string `json:"vendor_kind,omitempty"`
+	// TextHints maps a device type to the lower-cased substrings of the
+	// vendor+model+OS+name text that select it. A LEADING OR TRAILING SPACE IS
+	// SIGNIFICANT (" mx" must not match "mx-series-lookalike"), so these are the
+	// one string list the loader does not require to be trimmed.
+	TextHints map[string][]string `json:"text_hints,omitempty"`
+}
+
+// DeviceTypeOrder is the CLOSED device-type vocabulary AND the order inference
+// evaluates it in. The order is the engine's policy, not a vendor's fact:
+// specific roles are tested before the generic switch-vs-router split so a
+// firewall is never mislabelled a router. A type absent here cannot be
+// authored in a profile.
+var DeviceTypeOrder = []string{"firewall", "load-balancer", "wlc", "ap", "cloud-gw", "switch", "router"}
 
 // VerifyBinding is the ACTIVE-VERIFICATION command allowlist for a VENDOR
 // FAMILY: check id -> the EXACT read-only command line the verification engine
@@ -316,7 +508,15 @@ type VendorRecord struct {
 	Dialect     Dialect
 	// Verify is the vendor's active-verification command allowlist (vendor
 	// level: the engine keys on the discovery vendor token, not on a platform).
-	Verify     VerifyBinding
+	Verify VerifyBinding
+	// ConfigCapture is the vendor's running-config capture binding (command +
+	// volatile-line rules); the config-backup module resolves to a vendor.
+	ConfigCapture ConfigCapture
+	// SNMPConfigGen is the vendor's SNMP onboarding CLI templates.
+	SNMPConfigGen SNMPConfigGen
+	// DeviceType is the vendor's contribution to functional device-type
+	// inference.
+	DeviceType DeviceTypeHints
 	ProfileIDs []string
 }
 

@@ -6,15 +6,28 @@ import (
 	"testing"
 )
 
-// vendorprofile_parity_test.go — the T9 NO-REGRESSION gate for the hardening
+// vendorprofile_parity_test.go — the NO-REGRESSION gate for the hardening
 // dialect selection. testdata/vendorprofile_parity.json was captured from the
-// PRE-migration VendorFromPlatform / DisplayVendor switches before the
+// PRE-migration (T9) VendorFromPlatform / DisplayVendor switches before the
 // substring table moved into internal/vendorprofile's `detection.platform_*`
 // and `hardening.*` fields.
 //
-// The corpus deliberately includes "Arista EOS 4.33": the catalog ships NO
-// Arista bindings, so it must still map to VendorUnknown (NotApplicable, never
-// a false Pass) rather than borrowing the Cisco dialect.
+// SIX ROWS WERE DELIBERATELY CHANGED on 2026-09-02, when the Arista EOS and
+// Nokia SR Linux hardening dialects landed (dialect_fabric.go). They are listed
+// here because a golden that changes silently is not a gate:
+//
+//	"Arista EOS 4.33" | "arista" | "eos"      ""      → "arista"
+//	                  display     "unknown vendor"    → "Arista EOS"
+//	"Nokia SR Linux" | "sr linux" | "srlinux"  "nokia" → "srlinux"
+//	                  display     "Nokia SR OS"       → "Nokia SR Linux"
+//
+// Both were BUGS the parity corpus was faithfully preserving. Arista resolved to
+// no dialect at all, so every EOS device reported NotApplicable for the whole
+// catalog. SR Linux resolved to the SR OS dialect and was scored against a
+// configuration grammar it does not write — `configure system
+// management-interface telnet-server …` never appears in an SR Linux config, so
+// the SR OS telnet rule answered a confident "not enabled" on every one of them.
+// Every OTHER row in the corpus is unchanged and still holds the line.
 
 type hardeningGolden struct {
 	VendorFromPlatform map[string]string `json:"vendor_from_platform"`
@@ -70,14 +83,14 @@ func TestDisplayVendorMatchesPreMigrationGolden(t *testing.T) {
 func TestEveryBoundVendorHasProfileBindings(t *testing.T) {
 	bound := map[Vendor]bool{}
 	for _, r := range DefaultCatalog().Rules() {
-		for _, v := range []Vendor{VendorCiscoIOSXE, VendorJuniper, VendorNokia} {
+		for _, v := range []Vendor{VendorCiscoIOSXE, VendorJuniper, VendorNokia, VendorArista, VendorSRLinux} {
 			if _, ok := r.Binding(v); ok {
 				bound[v] = true
 			}
 		}
 	}
 	reachable := map[Vendor]bool{}
-	for _, platform := range []string{"Cisco IOS-XE 17.9", "Juniper Junos 22.4", "Nokia SR OS 22", "Nokia SR Linux"} {
+	for _, platform := range []string{"Cisco IOS-XE 17.9", "Juniper Junos 22.4", "Nokia SR OS 22", "Nokia SR Linux", "Arista EOS 4.36"} {
 		reachable[VendorFromPlatform(platform)] = true
 	}
 	for v := range bound {

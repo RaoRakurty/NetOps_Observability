@@ -20,6 +20,23 @@
       "fortios"
     ]
   },
+  "snmp_configgen": {
+    "v2c_template": "config system snmp sysinfo\n    set status enable\nend\nconfig system snmp community\n    edit 1\n        set name \"<<community>>\"\n        set status enable\n        set query-v2c-status enable\n        config hosts\n            edit 1\n                set ip <<mgmt_subnet>> <<mask>>\n            next\n        end\n    next\nend",
+    "v3_template": "config system snmp user\n    edit \"<<sec_name>>\"\n        set status enable\n        set queries enable\n        set query-port 161\n        set security-level auth-priv\n        set auth-proto sha\n        set auth-pwd <<auth_key>>\n        set priv-proto aes\n        set priv-pwd <<priv_key>>\n    next\nend"
+  },
+  "device_type": {
+    "vendor_tokens": [
+      "fortinet",
+      "fortigate"
+    ],
+    "vendor_kind": "firewall",
+    "text_hints": {
+      "firewall": [
+        "fortigate",
+        "fortios"
+      ]
+    }
+  },
   "profiles": [
     {
       "platform": "fortios",

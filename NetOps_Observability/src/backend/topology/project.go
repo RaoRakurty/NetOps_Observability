@@ -4,12 +4,15 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"netops/backend/internal/vendorprofile"
 )
 
 // project.go — Project turns a tenant-scoped Input (devices, deduped links, active
 // alerts, measured paths) into the canonical, renderer-agnostic View the frontend
 // consumes. PURE: no I/O, no clocks of its own (time comes in via Input.Now), no
-// third-party imports. Every rule below is intentionally conservative and HONEST —
+// third-party imports (internal/vendorprofile is first-party, stdlib-only,
+// embedded reference data — a lookup table, not a dependency with behaviour). Every rule below is intentionally conservative and HONEST —
 // we never invent an edge without evidence, never claim "ok" for a device we
 // haven't heard from, and distinguish "0%" from "unmeasured".
 
@@ -225,10 +228,16 @@ func nodeKind(d DeviceFact) string {
 	if k := kindFromKeyword(d.Type); k != "" {
 		return k
 	}
-	// Vendor hint: dedicated firewall/SD-WAN-security vendors → firewall.
-	switch strings.ToLower(strings.TrimSpace(d.Vendor)) {
-	case "fortinet", "fortigate", "palo alto", "paloalto", "palo-alto", "panw", "checkpoint", "check point":
-		return KindFirewall
+	// Vendor hint: a vendor whose own NAME is a role claim (a dedicated
+	// firewall / SD-WAN-security vendor) resolves straight to that kind. Which
+	// vendor spellings those are is the registry's to say
+	// (device_type.vendor_tokens / vendor_kind in the vendor profiles); this
+	// file only maps the answer onto a NodeKind, through the same keyword table
+	// an explicit operator role goes through.
+	if kind, ok := vendorprofile.Default().DeviceTypeForVendorToken(d.Vendor); ok {
+		if k := kindFromKeyword(kind); k != "" {
+			return k
+		}
 	}
 	// Name hint: explicit role tokens in the hostname.
 	name := strings.ToLower(d.Name)

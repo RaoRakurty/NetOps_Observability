@@ -2,7 +2,7 @@
   "schema_version": 1,
   "vendor": "nokia",
   "display_name": "Nokia",
-  "notes": "SR OS is identified from the TiMOS sysDescr; SR Linux is a gNMI-native platform whose identity does not come from sysDescr, so it declares NO os_parse (an unconditional default would mislabel every SR OS box as SR Linux). SR Linux pager-off and prompt are left empty: not established, so capture reports unassessed rather than issuing a guessed command.",
+  "notes": "SR OS is identified from the TiMOS sysDescr; SR Linux is a gNMI-native platform whose identity does not come from sysDescr, so it declares NO os_parse (an unconditional default would mislabel every SR OS box as SR Linux). Nokia ships TWO CLIs, so config capture declares a sibling dialect: `nokia` is SR OS (admin display-config, TiMOS classic CLI) and `srlinux` is SR Linux (info from running flat). SR Linux pager_off_cmds and prompt_regex stay EMPTY, but the reason has changed from unestablished to VERIFIED (2026-09-02, lab spine1 172.40.40.11, SR Linux v26.3.2): the capture path is one non-interactive SSH exec, which SR Linux answers with no pager and no prompt echo at all, so there is nothing to turn off and no prompt to match. SR OS remains doc_claimed. The srlinux profile's platform_rank moved 31 \u2192 29 (ahead of sros at 30) to fix a real misresolution: the label \"Nokia SR Linux\" contains \"nokia\", so the broader sros row was claiming it and every SR Linux box was being described, bound and advisory-keyed as an SR OS router. The more specific row must be tested first.",
   "detection": {
     "sysobjectid_prefixes": [
       "1.3.6.1.4.1.6527"
@@ -35,6 +35,53 @@
       "ssh_iface_deep": "show port detail",
       "ssh_interfaces": "show port",
       "ssh_routing": "show router bgp summary"
+    }
+  },
+  "config_capture": {
+    "platform_contains": [
+      "nokia",
+      "sr os",
+      "sros",
+      "timos",
+      "alcatel"
+    ],
+    "platform_rank": 50,
+    "running_config_cmd": "admin display-config",
+    "volatile_rules": [
+      {
+        "name": "sros-generated",
+        "pattern": "(?i)^\\s*#\\s*generated\\s"
+      },
+      {
+        "name": "sros-finished",
+        "pattern": "(?i)^\\s*#\\s*finished\\s"
+      },
+      {
+        "name": "sros-tim-version",
+        "pattern": "(?i)^\\s*#\\s*timos-"
+      }
+    ],
+    "platform_dialects": [
+      {
+        "id": "srlinux",
+        "platform_contains": [
+          "sr linux",
+          "srlinux"
+        ],
+        "platform_rank": 45,
+        "running_config_cmd": "info from running flat",
+        "volatile_rules": [],
+        "notes": "LIVE-VERIFIED 2026-09-02 on lab spine1 (172.40.40.11, SR Linux v26.3.2, 7220 IXR-D3L) over the same single non-interactive SSH exec the capture gateway uses. Findings that shaped this row: (1) `info` with a PATH argument returns NOTHING over a non-interactive exec, and a PTY only yields terminal-control noise — only the ROOT form emits the configuration, so the command carries no path; (2) `from running` is stated explicitly rather than relying on the mode the exec happens to land in; (3) `flat` renders the `set / ...` one-statement-per-line form, which is what makes a line-oriented diff and a line-oriented volatile/secret rule set meaningful on this OS; (4) two consecutive captures were byte-identical (728 lines), and the flat form stamps NO timestamp, counter or build header — which is why volatile_rules is deliberately EMPTY here rather than inheriting SR OS\u2019 three `# Generated/# Finished/# TiMOS-` rules, none of which SR Linux ever emits. Rank 45 is load-bearing: an SR Linux platform label contains \"nokia\", so this dialect must be tested before the nokia vendor family at rank 50."
+      }
+    ]
+  },
+  "device_type": {
+    "text_hints": {
+      "router": [
+        "7750",
+        "7250",
+        "vsr"
+      ]
     }
   },
   "profiles": [
@@ -96,11 +143,13 @@
           "sr linux",
           "srlinux"
         ],
-        "platform_rank": 31
+        "platform_rank": 29
       },
       "capture": {
-        "running_config_cmd": "info from running",
-        "show_version_cmd": "show version"
+        "running_config_cmd": "info from running flat",
+        "show_version_cmd": "show version",
+        "pager_off_cmds": [],
+        "prompt_regex": ""
       },
       "advisory": {
         "provider": "offline-feed",
@@ -109,8 +158,8 @@
         ]
       },
       "hardening": {
-        "binding": "nokia",
-        "display": "Nokia SR OS"
+        "binding": "srlinux",
+        "display": "Nokia SR Linux"
       },
       "cli": {
         "dialect": "nokia",
