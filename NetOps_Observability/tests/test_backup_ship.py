@@ -262,7 +262,14 @@ def test_entrypoint_quiet_when_no_stray_kek(tmp_path):
 
 def _extract_apply_fn() -> str:
     out = subprocess.run(
-        ["sed", "-n", "/^apply_backup_intent() {/,/^}/p", str(WATCHDOG)],
+        # apply_backup_intent logs through log()/logerr(), so the helpers
+        # (and _log_stamped) must come along or the snippet dies with
+        # "log: command not found" (2026-09-03 timestamping change).
+        ["sed", "-n",
+         "-e", "/^_log_stamped() {/,/^}/p",
+         "-e", "/^log() {/,/^}/p",
+         "-e", "/^logerr() {/,/^}/p",
+         "-e", "/^apply_backup_intent() {/,/^}/p", str(WATCHDOG)],
         check=True, capture_output=True, text=True).stdout
     assert "apply_backup_intent()" in out, "apply_backup_intent not found in stack-watchdog.sh"
     return out
