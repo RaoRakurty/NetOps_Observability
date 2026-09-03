@@ -202,8 +202,10 @@ The show-first tool is now the front half of every device-scoped method.
 Also shipped in A4, the read-only **BGP operations** tools (`ai/troubleshoot_bgp.go`,
 module `bgp_operations`): `get_bgp_watchlist` · `get_bgp_rpki` ·
 `get_bgp_feed_recent(prefix?, limit)`, each through the same tenant scoping
-`/api/bgp/*` uses (FORCE-RLS watchlist, per-tenant update ring; a cross-tenant
-caller with no tenant selected is refused, not merged). The watchlist WRITE path
+`/api/bgp/*` uses (tenant-scoped watchlist — FORCE-RLS on Postgres, a
+tenant-keyed file register otherwise, isolation held by the store either way;
+per-tenant update ring; a cross-tenant caller with no tenant selected is
+refused, not merged). The watchlist WRITE path
 is deliberately unreachable. `bgp-prefix-missing` gathers rpki + feed.
 
 #### A3 backend — shipped (2026-09-02)

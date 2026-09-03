@@ -404,3 +404,79 @@ func TestPeekReadsWithoutStartingOrRefreshingAPoller(t *testing.T) {
 		t.Fatal("Peek must not cross tenants")
 	}
 }
+
+// ── per-tenant feed counters (§3a) ─────────────────────────────────────────
+//
+// The feed response is a PER-TENANT body, so the counters in it must be the
+// caller's own. The process-wide snapshot used to ride there and it carried
+// `rings` — literally the number of tenants using the feed — plus every
+// tenant's poll totals. TenantMetrics reports one tenant and nothing else; the
+// aggregates are WriteMetrics/​/metrics, which is operator surface.
+func TestTenantMetricsRevealNothingAboutOtherTenants(t *testing.T) {
+	f := newFake()
+	f.put("bgp-updates", "193.0.0.0/21", realUpdates)
+	rt := NewRuntime(f, Options{
+		Enabled: true, Interval: time.Millisecond, Idle: time.Hour,
+		Now:  func() time.Time { return time.Date(2026, 8, 31, 14, 5, 0, 0, time.UTC) },
+		Rand: func() float64 { return 0.5 },
+	})
+	defer rt.Stop()
+	ctx := context.Background()
+
+	// Only acme uses the feed.
+	if _, err := rt.Page(ctx, "acme", []string{"193.0.0.0/21"}, 0, 100); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if rt.TenantMetrics("acme")["updates_buffered_total"] > 0 {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	acme := rt.TenantMetrics("acme")
+	if acme["updates_buffered_total"] == 0 || acme["polls_total"] == 0 {
+		t.Fatalf("acme's own counters never moved: %v", acme)
+	}
+	if acme["poller_active"] != 1 {
+		t.Fatalf("acme's own poller state = %d, want 1", acme["poller_active"])
+	}
+
+	// A tenant that has never touched the feed sees ZEROS — not acme's numbers,
+	// and no hint that acme's ring exists.
+	globex := rt.TenantMetrics("globex")
+	for k, v := range globex {
+		if k == "ring_size" {
+			continue
+		}
+		if v != 0 {
+			t.Errorf("globex, which never used the feed, sees %s = %d — that is acme's activity", k, v)
+		}
+	}
+	// The keys that describe the PROCESS must not exist in a tenant body at all.
+	for _, leaked := range []string{"rings", "pollers_active", "poller_slots_free",
+		"pollers_started_total", "pollers_stopped_total", "pollers_capped_total"} {
+		if _, ok := globex[leaked]; ok {
+			t.Errorf("%q is a process-wide fact and must not be in a per-tenant body", leaked)
+		}
+	}
+	// A non-concrete tenant reads nothing rather than everything.
+	for _, bad := range []string{"", "  ", "*"} {
+		m := rt.TenantMetrics(bad)
+		for k, v := range m {
+			if k != "ring_size" && v != 0 {
+				t.Errorf("TenantMetrics(%q) leaked %s = %d", bad, k, v)
+			}
+		}
+	}
+
+	// The aggregates still exist for the operator, on the scrape surface.
+	var buf strings.Builder
+	rt.WriteMetrics(&buf)
+	out := buf.String()
+	for _, want := range []string{"netops_bgpfeed_rings", "netops_bgpfeed_polls_total", "# TYPE netops_bgpfeed_rings gauge"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("/metrics exposition is missing %q:\n%s", want, out)
+		}
+	}
+}

@@ -45,27 +45,56 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"netops/backend/internal/bgpdepth"
+	"netops/backend/internal/bgpwatch"
 )
 
-// ── watchlist store (PG, FORCE-RLS) ─────────────────────────────────────────
+// ── watchlist store (two backends, ONE contract) ────────────────────────────
 
-type bgpWatchEntry struct {
-	Resource  string    `json:"resource"`
-	Kind      string    `json:"kind"` // prefix | asn
-	Note      string    `json:"note"`
-	AddedBy   string    `json:"added_by"`
-	CreatedAt time.Time `json:"created_at"`
+// bgpWatchEntry is one watched resource. The type lives in internal/bgpwatch —
+// the domain package that also holds the file backend and the evaluator that
+// reads it — and is aliased here so the ~30 root-package call sites (handlers,
+// the RPKI/feed views, the AI tool, the tests) keep their spelling.
+type bgpWatchEntry = bgpwatch.WatchEntry
+
+// bgpWatchStore is the watchlist contract. TWO implementations satisfy it and
+// the platform ships whichever the deployment can support:
+//
+//	bgpWatchPGStore        Postgres — migration 0035's bgp_watchlist under
+//	                       tenant_iso FORCE-RLS, scoped through WithTenant.
+//	bgpwatch.WatchFileStore  everything else — a tenant-keyed JSON register
+//	                       under /data (BGP_WATCHLIST_FILE).
+//
+// It is NEVER nil (main.go picks one unconditionally): before the file backend
+// existed, a deployment without DATABASE_URL had no watchlist at all, so this
+// route answered 503, the RPKI-over-watchlist and feed views had nothing to
+// read, and the whole internal/bgpwatch evaluator could never see a prefix.
+//
+// Isolation is a property of EACH implementation, not of the handler (§3a rule
+// 4): Postgres by RLS + an explicit tenant_id predicate, the file store by its
+// tenant-keyed map. Neither exposes an unscoped list; cross=true is the platform
+// owner's Global view only, and writes refuse "" and "*" outright.
+type bgpWatchStore interface {
+	// List returns the entries visible to the caller, newest first. cross=true
+	// is the platform owner's cross-tenant Global view.
+	List(ctx context.Context, tenant string, cross bool) ([]bgpWatchEntry, error)
+	// Add upserts ONE tenant's row (re-adding a resource updates only its note).
+	Add(ctx context.Context, tenant string, e bgpWatchEntry) error
+	// Delete removes ONE tenant's row, reporting whether it existed. Another
+	// tenant's resource does not exist for this caller → (false, nil) → 404.
+	Delete(ctx context.Context, tenant string, resource string) (bool, error)
 }
 
 type bgpTenantDB interface {
 	WithTenant(ctx context.Context, tenant string, cross bool, fn func(pgx.Tx) error) error
 }
 
-type bgpWatchStore struct{ db bgpTenantDB }
+// ── Postgres backend (FORCE-RLS) ────────────────────────────────────────────
 
-func newBGPWatchStore(db bgpTenantDB) *bgpWatchStore { return &bgpWatchStore{db: db} }
+type bgpWatchPGStore struct{ db bgpTenantDB }
 
-func (s *bgpWatchStore) List(ctx context.Context, tenant string, cross bool) ([]bgpWatchEntry, error) {
+func newBGPWatchStore(db bgpTenantDB) *bgpWatchPGStore { return &bgpWatchPGStore{db: db} }
+
+func (s *bgpWatchPGStore) List(ctx context.Context, tenant string, cross bool) ([]bgpWatchEntry, error) {
 	out := []bgpWatchEntry{}
 	err := s.db.WithTenant(ctx, tenant, cross, func(tx pgx.Tx) error {
 		rows, err := tx.Query(ctx,
@@ -103,7 +132,7 @@ func bgpWatchTenant(tenant string) (string, error) {
 // (the RLS GUC is the concrete tenant, never '*'), and tenant_id is stamped
 // from the principal's tenant as a bound parameter — defense-in-depth alongside
 // the FORCE-RLS WITH CHECK, and structurally unable to stamp '*'.
-func (s *bgpWatchStore) Add(ctx context.Context, tenant string, e bgpWatchEntry) error {
+func (s *bgpWatchPGStore) Add(ctx context.Context, tenant string, e bgpWatchEntry) error {
 	t, err := bgpWatchTenant(tenant)
 	if err != nil {
 		return err
@@ -122,7 +151,7 @@ func (s *bgpWatchStore) Add(ctx context.Context, tenant string, e bgpWatchEntry)
 // Delete removes ONE tenant's row for the resource. The explicit tenant_id
 // predicate sits ON TOP of RLS (cross=false GUC): even a mis-scoped session
 // can only ever delete the caller's own row, never every tenant's (§3a).
-func (s *bgpWatchStore) Delete(ctx context.Context, tenant string, resource string) (bool, error) {
+func (s *bgpWatchPGStore) Delete(ctx context.Context, tenant string, resource string) (bool, error) {
 	t, err := bgpWatchTenant(tenant)
 	if err != nil {
 		return false, err
@@ -434,7 +463,10 @@ func (s *server) handleBGPWatchlist(w http.ResponseWriter, r *http.Request) {
 	}
 	tenant, cross := principalTenant(claims)
 	if s.bgpWatch == nil {
-		writeError(w, http.StatusServiceUnavailable, errors.New("BGP watchlist requires the relational store"))
+		// main.go always picks a backend (Postgres or the file register), so
+		// this is a construction bug, not a deployment shape. Say that rather
+		// than blaming a store the deployment was never required to have.
+		writeError(w, http.StatusServiceUnavailable, errors.New("BGP watchlist store is not initialised"))
 		return
 	}
 	// §3a: the watchlist is per-tenant data — a cross-tenant principal (platform
@@ -458,7 +490,7 @@ func (s *server) handleBGPWatchlist(w http.ResponseWriter, r *http.Request) {
 		// second, divergent endpoint. Nil-safe and honest: with the evaluator
 		// off the key carries a note instead of an empty map that would read as
 		// "nothing wrong". Remove this one call with the rest of BGP-WATCH.
-		s.bgpWatchAnnotateWatchlist(out, tenant, cross)
+		s.bgpWatchAnnotateWatchlist(out, list, tenant, cross)
 		// BGP-WATCH-END
 		writeJSON(w, http.StatusOK, out)
 	case http.MethodPost:
@@ -1009,6 +1041,10 @@ func (s *server) handleBGPFeed(w http.ResponseWriter, r *http.Request) {
 		"next":    page.Next,
 		"gap":     page.Gap,
 		"status":  page.Status,
-		"metrics": s.bgpFeed.Metrics(),
+		// THIS TENANT'S feed counters only. The process-wide snapshot used to
+		// ride here, and it carried `rings` — the number of tenants using the
+		// feed — plus every tenant's poll totals, inside one tenant's response.
+		// Those aggregates are on /metrics now, where they belong.
+		"metrics": s.bgpFeed.TenantMetrics(tenant),
 	})
 }

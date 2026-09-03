@@ -203,7 +203,17 @@ func (a *API) HandleAlerts(w http.ResponseWriter, r *http.Request) {
 	}
 	body["alerts"], body["incidents"] = alerts, incidents
 	body["status"] = a.deps.Eval.Status(tenant)
-	body["metrics"] = a.deps.Eval.Metrics().Snapshot()
+	// THIS TENANT'S counters only. The process-wide snapshot used to ride here,
+	// which meant a scoped reader could watch every other tenant's evaluation
+	// volume rise and fall in their own response body — the same leak
+	// internal/bmp/http.go's handleStats refuses for BMP message counts. The
+	// aggregates still exist; they live on /metrics, which is operator surface.
+	m, merr := a.deps.Eval.TenantMetrics(tenant)
+	if merr != nil {
+		a.deps.WriteError(w, http.StatusInternalServerError, merr)
+		return
+	}
+	body["metrics"] = m
 	a.deps.WriteJSON(w, http.StatusOK, body)
 }
 

@@ -76,6 +76,11 @@ const (
 	// EnvConfigFile is the FileStore fallback path for the per-tenant policy
 	// (expected origins / upstreams / thresholds) on a non-Postgres build.
 	EnvConfigFile = "BGP_ALERT_CONFIG_FILE"
+	// EnvWatchlistFile is the WatchFileStore path for the per-tenant WATCHLIST
+	// (which prefixes/ASNs a tenant asked us to watch) on a non-Postgres build.
+	// Postgres deployments never read it — migration 0035's FORCE-RLS table is
+	// the store there.
+	EnvWatchlistFile = "BGP_WATCHLIST_FILE"
 	// EnvBogonFeed turns the OPTIONAL Team Cymru full-bogons fetch on. Default
 	// FALSE — the embedded RFC/IANA set works with no network at all.
 	EnvBogonFeed = "FEATURE_BGP_BOGON_FEED"

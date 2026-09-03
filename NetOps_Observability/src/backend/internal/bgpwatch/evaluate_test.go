@@ -418,3 +418,90 @@ func TestRunStopsOnContextCancel(t *testing.T) {
 		t.Fatal("Run did not return on context cancellation")
 	}
 }
+
+// ── the sighting sweep is independent of the two per-tenant reads ───────────
+//
+// Regression for the 2026-09-03 live finding: the sweep used to sit at the END
+// of EvaluateTenant, after the policy read and the watchlist read, both of
+// which `return` on error. On a deployment whose watchlist store was
+// unreadable the sweep therefore never ran ONCE — /api/bgp/bogons showed
+// "none seen" while real BMP updates for a bogon prefix sat in the store.
+// Sightings depend on neither read: they are a fact about what arrived.
+func TestSightingSweepRunsEvenWhenTheTenantReadsFail(t *testing.T) {
+	for _, tc := range []struct {
+		name              string
+		policyErr, wlErr  error
+		wantEvaluateError bool
+	}{
+		{name: "watchlist unreadable", wlErr: errors.New("watchlist store down"), wantEvaluateError: true},
+		{name: "policy unreadable", policyErr: errors.New("policy store down"), wantEvaluateError: true},
+		{name: "both readable"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			now := time.Date(2026, 9, 3, 12, 0, 0, 0, time.UTC)
+			swept := 0
+			e, err := New(Deps{
+				Now:      func() time.Time { return now },
+				Interval: time.Minute,
+				Cooldown: time.Minute,
+				Tenants:  func() []string { return []string{"acme"} },
+				Watchlist: func(_ context.Context, _ string) ([]string, error) {
+					return nil, tc.wlErr
+				},
+				Policies: policyStoreFunc{err: tc.policyErr},
+				Observe: func(_ context.Context, p string) (Observation, error) {
+					return Observation{Prefix: p}, nil
+				},
+				Sightings: func(_ context.Context, tn string) ([]PrefixSighting, error) {
+					swept++
+					if tn != "acme" {
+						t.Errorf("sweep ran for %q, want the tenant it was called with", tn)
+					}
+					// 192.0.2.0/24 is RFC 5737 TEST-NET-1 — a bogon in the
+					// embedded set, so a working sweep MUST register it.
+					return []PrefixSighting{{Prefix: "192.0.2.0/24", Peer: "rrc00", Source: "bmp", At: now}}, nil
+				},
+				Bogons:   NewBogonSet(),
+				LogWarn:  func(string, map[string]any) {},
+				LogError: func(string, map[string]any) {},
+				Rand:     func() float64 { return 0.5 },
+				Sleep:    func(context.Context, time.Duration) error { return nil },
+			})
+			if err != nil {
+				t.Fatalf("New: %v", err)
+			}
+			evalErr := e.EvaluateTenant(context.Background(), "acme")
+			if tc.wantEvaluateError && evalErr == nil {
+				t.Fatal("a failed tenant read must still be REPORTED as an error")
+			}
+			if !tc.wantEvaluateError && evalErr != nil {
+				t.Fatalf("unexpected error: %v", evalErr)
+			}
+			if swept != 1 {
+				t.Fatalf("the sighting sweep ran %d times, want exactly 1 — a read failure "+
+					"upstream of it must never blind the sighting register", swept)
+			}
+			rows, err := e.Sightings("acme", 10)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(rows) != 1 || rows[0].Prefix != "192.0.2.0/24" {
+				t.Fatalf("sightings = %+v, want the swept bogon", rows)
+			}
+			if rows[0].Entry.Block == "" || rows[0].Entry.Reason == "" {
+				t.Fatalf("sighting carries no block/reason: %+v", rows[0].Entry)
+			}
+		})
+	}
+}
+
+// policyStoreFunc is a PolicyStore that fails (or succeeds emptily) on demand.
+type policyStoreFunc struct{ err error }
+
+func (p policyStoreFunc) Policy(context.Context, string) (TenantPolicy, error) {
+	return TenantPolicy{Prefixes: map[string]PolicyConfig{}}, p.err
+}
+
+func (p policyStoreFunc) SetPolicy(context.Context, string, string, TenantPolicy) error {
+	return p.err
+}

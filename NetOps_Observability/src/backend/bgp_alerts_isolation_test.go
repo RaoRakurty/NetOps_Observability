@@ -268,3 +268,76 @@ func TestBGPWatchAuthzTreatsGlobalTenantAsScopeless(t *testing.T) {
 		t.Fatalf("the global tenant returned %d; it must be refused and told to scope in", w.Code)
 	}
 }
+
+// ── per-tenant counters (no process-wide aggregate in a tenant body) ────────
+//
+// /api/bgp/alerts used to serve Evaluator.Metrics().Snapshot() — the
+// PROCESS-WIDE counter set — inside a per-tenant response. A scoped reader could
+// watch runs_total, prefixes_evaluated_total and alerts_notified_total climb
+// with every OTHER tenant's evaluation: an aggregate that reveals other
+// tenants' activity is other tenants' data (internal/bmp/http.go's handleStats
+// states the same rule and is the in-repo precedent).
+func TestBGPAlertsMetricsAreTenantScoped(t *testing.T) {
+	s := bgpWatchTestServer(t, true) // its harness already ran ONE pass for acme+globex
+
+	body := func(claims jwtClaims) map[string]int64 {
+		t.Helper()
+		w := httptest.NewRecorder()
+		s.bgpWatchAPI.HandleAlerts(w, req(http.MethodGet, "/api/bgp/alerts", "", claims))
+		if w.Code != http.StatusOK {
+			t.Fatalf("GET alerts as %s: %d %s", claims.Sub, w.Code, w.Body.String())
+		}
+		var out struct {
+			Metrics map[string]int64 `json:"metrics"`
+		}
+		if err := json.Unmarshal(w.Body.Bytes(), &out); err != nil {
+			t.Fatalf("decode: %v (%s)", err, w.Body.String())
+		}
+		if out.Metrics == nil {
+			t.Fatal("no metrics block in the alerts body")
+		}
+		return out.Metrics
+	}
+
+	acmeM := body(tAdmin("acme"))
+	globexM := body(tAdmin("globex"))
+
+	// One pass per tenant: each sees its OWN single run, never the sum.
+	for name, m := range map[string]map[string]int64{"acme": acmeM, "globex": globexM} {
+		if m["runs_total"] != 1 {
+			t.Errorf("%s runs_total = %d, want 1 (its OWN pass, not every tenant's)", name, m["runs_total"])
+		}
+		if m["prefixes_evaluated_total"] != 1 {
+			t.Errorf("%s prefixes_evaluated_total = %d, want its own 1 watched prefix", name, m["prefixes_evaluated_total"])
+		}
+	}
+	// globex's watchlist is a bogon (10.9.0.0/16) and acme's is clean, so the
+	// alert counter is a per-tenant fact that MUST differ between the two.
+	if acmeM["alerts_notified_total"] != 0 {
+		t.Errorf("acme sees %d notified alerts; it has none of its own — that is globex's activity",
+			acmeM["alerts_notified_total"])
+	}
+	// Likewise the sighting register: globex has one, acme has none.
+	if acmeM["bogon_sightings_total"] != 0 {
+		t.Errorf("acme's body carries %d bogon sightings — globex's", acmeM["bogon_sightings_total"])
+	}
+	if globexM["bogon_sightings_total"] == 0 {
+		t.Error("globex's own sighting did not reach its own counter")
+	}
+	// A counter that only exists process-wide must NOT appear in a tenant body.
+	for _, leaked := range []string{"runs_skipped_total", "bogon_feed_errors_total"} {
+		if _, ok := acmeM[leaked]; ok {
+			t.Errorf("%s is a process-wide counter and must not ride in a tenant body", leaked)
+		}
+	}
+	// A brand-new tenant sees zeros, not the platform's running totals.
+	fresh := body(tAdmin("initech"))
+	for k, v := range fresh {
+		if k == "ring_size" {
+			continue
+		}
+		if v != 0 {
+			t.Errorf("a tenant that has never been evaluated sees %s = %d", k, v)
+		}
+	}
+}

@@ -13,6 +13,9 @@ package backend
 //	Authz         → s.requirePerm(infrastructure:read) + principalTenant
 //	ResolveDevice → s.discovery.Devices() + deviceTenant (the SAME inventory
 //	                and the SAME tenant-of-a-device rule the API uses)
+//	OnAnnounce    → the bgpwatch sighting register (bgp_alerts.go), so a bogon
+//	                a router just announced is visible immediately rather than
+//	                on the evaluator's next tick
 //	Log*          → applog (structured, §10)
 //
 // The module is READ-ONLY toward the network: it accepts a feed a router
@@ -43,11 +46,17 @@ func (s *server) buildBMP() (*bmp.API, error) {
 		ResolveDevice: s.bmpResolveDevice,
 		Authz:         s.bmpAuthz,
 		Metrics:       bmp.NewMetrics(),
-		WriteJSON:     writeJSON,
-		WriteError:    writeError,
-		LogInfo:       func(m string, f map[string]any) { logInfo("bmp", m, f) },
-		LogWarn:       func(m string, f map[string]any) { logWarn("bmp", m, f) },
-		LogError:      func(m string, f map[string]any) { logError("bmp", m, f) },
+		// The bogon SIGHTING bridge (§10: a fact the receiver already has must
+		// not wait five minutes to become observable). Nil-safe on both ends —
+		// the adapter returns immediately when the evaluator is off — and read
+		// at call time, so the construction ORDER of the two modules in main.go
+		// does not matter.
+		OnAnnounce: s.bgpWatchNoteBMPAnnounce,
+		WriteJSON:  writeJSON,
+		WriteError: writeError,
+		LogInfo:    func(m string, f map[string]any) { logInfo("bmp", m, f) },
+		LogWarn:    func(m string, f map[string]any) { logWarn("bmp", m, f) },
+		LogError:   func(m string, f map[string]any) { logError("bmp", m, f) },
 	})
 }
 

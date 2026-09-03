@@ -64,6 +64,15 @@ type Deps struct {
 	// every method on *Metrics is nil-safe.
 	Metrics *Metrics
 
+	// OnAnnounce receives the prefixes a stored update announced, tenant-stamped
+	// by the store, the moment the message is applied. Optional (nil = nobody is
+	// watching). It runs ON THE SESSION'S READ GOROUTINE and outside the store
+	// lock, so an implementation MUST be cheap and non-blocking: a slow observer
+	// slows exactly one router's feed and is never allowed to slow the store.
+	// This receiver stays a leaf — it does not know or care what the observer
+	// does with the prefixes (today: the bogon sighting register).
+	OnAnnounce func(prefixes []AnnouncedPrefix)
+
 	// WriteJSON / WriteError are the platform's response writers. Required.
 	WriteJSON  func(w http.ResponseWriter, status int, body any)
 	WriteError func(w http.ResponseWriter, status int, err error)

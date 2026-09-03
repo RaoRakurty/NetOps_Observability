@@ -32,6 +32,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"io"
+	"math"
 	"math/rand"
 	"sort"
 	"strings"
@@ -80,12 +83,43 @@ type Update struct {
 }
 
 // ring is a fixed-size overwrite-oldest buffer. Constant memory by construction.
+//
+// It also carries THIS TENANT'S poll counters. They live here rather than only
+// in the process-wide atomics because the feed response is a per-tenant body:
+// reporting `rings` (how many tenants use the feed) or a global `polls_total`
+// to a scoped caller tells them about other tenants' activity. The ring
+// outlives its poller (a poller stops when idle), so it is the right home for
+// a tenant's tally.
 type ring struct {
-	mu      sync.Mutex
-	buf     [RingSize]Update
-	n       int    // entries written (saturates conceptually at seq)
-	next    uint64 // next Seq to assign; also the count ever written
-	dropped uint64 // entries overwritten before a reader saw them
+	mu         sync.Mutex
+	buf        [RingSize]Update
+	n          int    // entries written (saturates conceptually at seq)
+	next       uint64 // next Seq to assign; also the count ever written
+	dropped    uint64 // entries overwritten before a reader saw them
+	polls      uint64 // polls attempted for THIS tenant
+	pollErrors uint64 // …of which failed
+	buffered   uint64 // entries this tenant's polls appended, ever
+}
+
+// notePoll records one poll attempt for this tenant.
+func (r *ring) notePoll(appended int, failed bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.polls++
+	if failed {
+		r.pollErrors++
+		return
+	}
+	if appended > 0 {
+		r.buffered += uint64(appended)
+	}
+}
+
+// pollStats reads this tenant's poll tally.
+func (r *ring) pollStats() (polls, errs, buffered uint64) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.polls, r.pollErrors, r.buffered
 }
 
 func (r *ring) append(u Update) {
@@ -142,6 +176,13 @@ type Options struct {
 	Rand func() float64
 	// Log receives structured poller events; nil is silent.
 	Log func(msg string, fields map[string]any)
+	// OnUpdates receives the entries ONE poll just appended to a tenant's ring,
+	// tenant-stamped, so an observer can act the moment they land instead of
+	// waiting for a downstream tick. Optional (nil = nobody is watching). It
+	// runs on the tenant's poll goroutine, so an implementation must be cheap
+	// and non-blocking — a slow observer delays one tenant's next poll and
+	// nothing else.
+	OnUpdates func(tenant string, ups []Update)
 }
 
 // Runtime owns every ring and poller. One per process.
@@ -153,6 +194,7 @@ type Runtime struct {
 	now      func() time.Time
 	rnd      func() float64
 	log      func(string, map[string]any)
+	observe  func(string, []Update)
 
 	mu      sync.Mutex
 	rings   map[string]*ring
@@ -198,7 +240,8 @@ func NewRuntime(f Fetcher, o Options) *Runtime {
 	return &Runtime{
 		f: f, enabled: o.Enabled && f != nil,
 		interval: o.Interval, idle: o.Idle, now: o.Now, rnd: o.Rand, log: o.Log,
-		rings: map[string]*ring{}, pollers: map[string]*poller{}, slots: MaxPollers,
+		observe: o.OnUpdates,
+		rings:   map[string]*ring{}, pollers: map[string]*poller{}, slots: MaxPollers,
 	}
 }
 
@@ -220,6 +263,95 @@ func (rt *Runtime) Metrics() map[string]int64 {
 		"pollers_active":         int64(pollers),
 		"poller_slots_free":      int64(slots),
 		"rings":                  int64(rings),
+	}
+}
+
+// TenantMetrics returns ONE tenant's feed counters — what its own ring holds
+// and what its own poller did. It deliberately reports NOTHING about the
+// process: `rings` (the number of tenants using the feed), the global poller
+// slot count and the cross-tenant poll totals are platform facts, and a scoped
+// caller reading them in their own response body would be watching every other
+// tenant's activity. Those live on the /metrics scrape (WriteMetrics).
+//
+// An unknown tenant gets the same shape with zeros — never an error, and never
+// a hint about whether some other tenant's ring exists.
+func (rt *Runtime) TenantMetrics(tenant string) map[string]int64 {
+	t := strings.ToLower(strings.TrimSpace(tenant))
+	out := map[string]int64{
+		"polls_total":            0,
+		"poll_errors_total":      0,
+		"updates_buffered_total": 0,
+		"updates_in_ring":        0,
+		"updates_written_total":  0,
+		"updates_dropped_total":  0,
+		"ring_size":              int64(RingSize),
+		"poller_active":          0,
+	}
+	if t == "" || t == "*" {
+		return out
+	}
+	rt.mu.Lock()
+	r := rt.rings[t]
+	_, active := rt.pollers[t]
+	rt.mu.Unlock()
+	if active {
+		out["poller_active"] = 1
+	}
+	if r == nil {
+		return out
+	}
+	buffered, written, dropped := r.stats()
+	polls, errs, appended := r.pollStats()
+	out["updates_in_ring"] = int64(buffered)
+	out["updates_written_total"] = clampCounter(written)
+	out["updates_dropped_total"] = clampCounter(dropped)
+	out["polls_total"] = clampCounter(polls)
+	out["poll_errors_total"] = clampCounter(errs)
+	out["updates_buffered_total"] = clampCounter(appended)
+	return out
+}
+
+// clampCounter renders a uint64 counter as the int64 a JSON body carries,
+// SATURATING rather than wrapping. A counter past 2^63 is either a bug or an
+// eternity of uptime; MaxInt64 is wrong-but-monotonic, while a wrapped negative
+// would read as "the counter went backwards", which is a different lie (§10).
+func clampCounter(v uint64) int64 {
+	if v > math.MaxInt64 {
+		return math.MaxInt64
+	}
+	return int64(v)
+}
+
+// feedMetricHelp pairs each PROCESS-WIDE counter with its HELP line, in a fixed
+// order so a scrape is byte-stable. Declared as data so a new counter cannot
+// ship without one (the internal/bgpwatch metrics.go precedent).
+var feedMetricHelp = [][2]string{
+	{"polls_total", "Near-live BGP feed polls attempted"},
+	{"poll_errors_total", "Near-live BGP feed polls that failed"},
+	{"updates_buffered_total", "BGP update entries appended to a tenant ring"},
+	{"pollers_started_total", "Feed pollers started"},
+	{"pollers_stopped_total", "Feed pollers stopped (idle or shutdown)"},
+	{"pollers_capped_total", "Poller starts refused by the global cap"},
+	{"pollers_active", "Feed pollers currently running"},
+	{"poller_slots_free", "Free poller slots under the global cap"},
+	{"rings", "Tenant rings allocated"},
+}
+
+// WriteMetrics emits the PROCESS-WIDE counters as Prometheus exposition text.
+// This is the only place they belong: /metrics is operator surface, where a
+// cross-tenant aggregate is the point rather than a leak.
+func (rt *Runtime) WriteMetrics(w io.Writer) {
+	if rt == nil {
+		return
+	}
+	snap := rt.Metrics()
+	for _, row := range feedMetricHelp {
+		name := "netops_bgpfeed_" + row[0]
+		kind := "counter"
+		if row[0] == "pollers_active" || row[0] == "poller_slots_free" || row[0] == "rings" {
+			kind = "gauge"
+		}
+		fmt.Fprintf(w, "# HELP %s %s\n# TYPE %s %s\n%s %d\n", name, row[1], name, kind, name, snap[row[0]])
 	}
 }
 
@@ -418,16 +550,21 @@ func (rt *Runtime) run(ctx context.Context, tenant string, p *poller, r *ring) {
 			default:
 			}
 			rt.polls.Add(1)
-			n, err := rt.pollOne(ctx, res, cursor, r)
+			ups, err := rt.pollOne(ctx, res, cursor, r)
 			if err != nil {
 				failed = true
 				rt.pollErrors.Add(1)
+				r.notePoll(0, true)
 				if rt.log != nil {
 					rt.log("bgp feed poll failed", map[string]any{"tenant": tenant, "resource": res, "err": err.Error()})
 				}
 				continue
 			}
-			rt.buffered.Add(int64(n))
+			rt.buffered.Add(int64(len(ups)))
+			r.notePoll(len(ups), false)
+			if rt.observe != nil && len(ups) > 0 {
+				rt.observe(tenant, ups)
+			}
 		}
 		if failed {
 			if backoff == 0 {
@@ -445,8 +582,10 @@ func (rt *Runtime) run(ctx context.Context, tenant string, p *poller, r *ring) {
 }
 
 // pollOne fetches one resource's updates since the cursor and appends the new
-// ones. Returns how many entries were appended.
-func (rt *Runtime) pollOne(ctx context.Context, resource string, cursor map[string]time.Time, r *ring) (int, error) {
+// ones. It returns the entries it appended so the caller can hand them to the
+// observer — the ring is overwrite-oldest, so "what just arrived" is not
+// recoverable from it after the fact.
+func (rt *Runtime) pollOne(ctx context.Context, resource string, cursor map[string]time.Time, r *ring) ([]Update, error) {
 	from, ok := cursor[resource]
 	if !ok {
 		from = rt.now().UTC().Add(-feedLookback)
@@ -455,7 +594,7 @@ func (rt *Runtime) pollOne(ctx context.Context, resource string, cursor map[stri
 	// TTL 0: the feed must not be served a cached window, or it would stall.
 	data, err := rt.f.RIPEstat(ctx, "bgp-updates", resource, extra, 0)
 	if err != nil {
-		return 0, err
+		return nil, err
 	}
 	ups, newest := ParseBGPUpdates(data, resource, from, maxUpdatesPerPoll)
 	for _, u := range ups {
@@ -464,7 +603,7 @@ func (rt *Runtime) pollOne(ctx context.Context, resource string, cursor map[stri
 	if newest.After(from) {
 		cursor[resource] = newest
 	}
-	return len(ups), nil
+	return ups, nil
 }
 
 // ParseBGPUpdates normalizes a RIPEstat bgp-updates payload into ring entries

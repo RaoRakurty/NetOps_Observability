@@ -961,6 +961,19 @@ WATCHDOG_NTFY_TOPIC=
 #PLATFORM_ALERTS_NTFY_TOPIC=
 #PLATFORM_ALERTS_NTFY_SERVER=
 #PLATFORM_ALERTS_NTFY_TOKEN=
+# Alert NOISE + RATE-LIMIT control. ntfy.sh's free public server rate-limits
+# per topic/IP; on 2026-09-03 it answered 429 to this route because chronic
+# WARNINGS (vector component errors, dead letters, disk headroom) were each
+# spending a push, and a real page can be refused behind them. So: the warning
+# tier is never pushed on its own, it is summarized into ONE digest per
+# interval (a warning that resolves inside the window is folded in as
+# resolved), and an hourly token budget reserves capacity only a PAGE may
+# spend. Pages are never digested and retry with backoff on 429/5xx.
+# The values below are the code defaults; uncomment only to change them.
+# PUSH_BUDGET=-1 disables the budget guard (self-hosted ntfy with no limits).
+#PLATFORM_ALERTS_WARNING_DIGEST_INTERVAL=30m
+#PLATFORM_ALERTS_PUSH_BUDGET=30
+#PLATFORM_ALERTS_PUSH_BUDGET_PAGE_RESERVE=10
 
 # ---- Optional modules (default OFF — uncomment to enable) ---------------
 # Each block below is DORMANT unless its flag is uncommented: nothing is
@@ -1028,6 +1041,23 @@ WATCHDOG_NTFY_TOPIC=
 #FEATURE_BMP=true
 #BMP_LISTEN=:11019
 #BMP_PORT=11019
+#
+# BGP operations depth + alerting. All three default OFF and each is
+# independent; none of them configures anything on any device.
+#   FEATURE_BGP_LIVE_FEED  — a bounded RIPEstat poller keeps a per-tenant ring
+#       of recent updates for the prefixes on your watchlist. Outbound HTTPS to
+#       stat.ripe.net only, rate-limited and cached; nothing is pushed out.
+#   FEATURE_BGP_ALERTS     — the watchlist evaluator: per watched prefix it
+#       classifies visibility loss / origin change / RPKI-invalid / route leak /
+#       bogon and raises a transition alert through the normal notifier, plus
+#       evidence on the netops.bgp topic. The watchlist itself is durable with
+#       or without Postgres (file backend: BGP_WATCHLIST_FILE, default
+#       /data/bgp_watchlist.json), so this works on a single-box install.
+#   FEATURE_BGP_BOGON_FEED — layers the optional Team Cymru full-bogons list
+#       over the embedded IANA/RFC set. Off = the embedded set, no network.
+#FEATURE_BGP_LIVE_FEED=true
+#FEATURE_BGP_ALERTS=true
+#FEATURE_BGP_BOGON_FEED=true
 #
 # Parser-coverage mining bound (one run's OpenSearch scan) and the explicit
 # correlation replica list the per-process parser counters are summed over

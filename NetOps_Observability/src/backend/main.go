@@ -131,8 +131,13 @@ type server struct {
 	selfHeal      *selfheal.Healer
 	users         usersRepo
 	roles         *roleStore
-	bgpWatch      *bgpWatchStore // BGP ops watchlist (item 10, PG FORCE-RLS; nil on file backend)
-	bgpFetch      *bgpFetcher    // outbound RIPEstat/RDAP fetcher with TTL cache
+	// bgpWatch is the BGP ops watchlist (item 10). It is an INTERFACE with two
+	// durable backends — Postgres FORCE-RLS (migration 0035) and the tenant-keyed
+	// bgpwatch.WatchFileStore — and is never nil: the watchlist, the
+	// RPKI-over-watchlist view, the live-feed view and the whole alerting
+	// evaluator all read a tenant's watched prefixes through it.
+	bgpWatch bgpWatchStore
+	bgpFetch *bgpFetcher // outbound RIPEstat/RDAP fetcher with TTL cache
 	// BGP-DEPTH-BEGIN — item 10 depth (internal/bgpdepth). bgpFeed holds the
 	// per-tenant bounded ring buffers + pollers and is nil unless
 	// FEATURE_BGP_LIVE_FEED=true, so a flag-off deployment allocates nothing and
@@ -897,10 +902,23 @@ func newServer() *server {
 		srv.wireless = wireless.NewMemStore()
 	}
 	srv.wirelessActions = newWirelessActionStore()
-	// BGP Operations (item 10): watchlist needs the relational store; the
-	// fetcher is store-independent and always available.
+	// BGP Operations (item 10): the watchlist is DURABLE ON BOTH BACKENDS —
+	// Postgres (migration 0035, tenant_iso FORCE-RLS) when it is active, the
+	// tenant-keyed JSON register otherwise, exactly as the alert policy store
+	// below picks its backend. Never nil: a nil store used to mean the whole
+	// alerting evaluator saw no prefixes on every single-box install. A corrupt
+	// file still SERVES (empty watchlist) but says so — a watchlist that failed
+	// to load must never look like one a tenant never wrote. The fetcher is
+	// store-independent and always available.
 	if ps, ok := platformdb.ActivePG(); ok {
 		srv.bgpWatch = newBGPWatchStore(ps.DB())
+	} else {
+		fs := bgpwatch.NewWatchFileStore(envOr(bgpwatch.EnvWatchlistFile, "/data/bgp_watchlist.json"))
+		if err := fs.LoadErr(); err != nil {
+			logError("bgp", "the BGP watchlist file could not be read — the watchlist starts EMPTY and NO watched prefix will be evaluated until it is re-added or the file is repaired",
+				map[string]any{"err": err.Error()})
+		}
+		srv.bgpWatch = fs
 	}
 	srv.bgpFetch = newBGPFetcher()
 	// BGP-DEPTH-BEGIN — depth wiring (item 10). The ASPA provider is always
@@ -914,6 +932,10 @@ func newServer() *server {
 			Log: func(msg string, fields map[string]any) {
 				logInfo("bgp-feed", msg, fields)
 			},
+			// Screen what a poll just appended for bogons immediately; the
+			// evaluator's own tick still sweeps the ring, so this is a latency
+			// improvement and never the only path (the register dedupes).
+			OnUpdates: srv.bgpWatchNoteFeedUpdates,
 		})
 		logInfo("bgp-feed", "near-live BGP update feed enabled (RIPEstat poller; RIS Live is WebSocket-only and no websocket module is on the §6 allowlist)", map[string]any{
 			"ring_size": bgpdepth.RingSize, "max_pollers": bgpdepth.MaxPollers,
@@ -3086,6 +3108,12 @@ func (s *server) handlePromMetrics(w http.ResponseWriter, _ *http.Request) {
 	// BGP-WATCH-BEGIN
 	if s.bgpWatchEval != nil {
 		s.bgpWatchEval.Metrics().Write(w)
+	}
+	// The feed's PROCESS-WIDE counters belong here and only here: the per-tenant
+	// API body carries the caller's own ring/poll tally instead (§3a — an
+	// aggregate over every tenant is other tenants' activity).
+	if s.bgpFeed != nil {
+		s.bgpFeed.WriteMetrics(w)
 	}
 	// BGP-WATCH-END
 	if s.parserCovMetrics != nil {

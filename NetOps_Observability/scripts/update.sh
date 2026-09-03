@@ -195,6 +195,14 @@ EXPECTED = {
     "FEATURE_BMP":                   "false",
     "BMP_LISTEN":                    ":11019",
     "BMP_PORT":                      "11019",
+    # BGP depth/alerting flags. Byte-identical to the docker-compose defaults,
+    # so materializing them changes nothing — it only makes the knobs
+    # discoverable in .env after an upgrade, which is the whole point: the
+    # three passthroughs were missing from compose entirely until 2026-09-03,
+    # so no .env value could turn any of them on.
+    "FEATURE_BGP_LIVE_FEED":         "false",
+    "FEATURE_BGP_ALERTS":            "false",
+    "FEATURE_BGP_BOGON_FEED":        "false",
     "PARSERCOV_MAX_LINES":           "200000",
     "CORRELATION_REPLICA_URLS":      "",
     "CORR_SYSLOG_TOPIC":             "netops.syslog",
@@ -220,6 +228,14 @@ EXPECTED = {
     "PLATFORM_ALERTS_NTFY_TOPIC":    "",
     "PLATFORM_ALERTS_NTFY_SERVER":   "",
     "PLATFORM_ALERTS_NTFY_TOKEN":    "",
+    # Alert-noise + rate-limit control (2026-09-03). Byte-identical to the
+    # docker-compose defaults and to alertwebhook's DefaultWarningDigestInterval
+    # / DefaultPushBudget / DefaultPageReserve. Materialized so an UPGRADED
+    # install can see and tune the knobs that stop a 429 storm — the digest
+    # window and the page-reserved push budget.
+    "PLATFORM_ALERTS_WARNING_DIGEST_INTERVAL":  "30m",
+    "PLATFORM_ALERTS_PUSH_BUDGET":              "30",
+    "PLATFORM_ALERTS_PUSH_BUDGET_PAGE_RESERVE": "10",
 }
 
 alphabet = string.ascii_letters + string.digits + "!@#%^&*-_=+"

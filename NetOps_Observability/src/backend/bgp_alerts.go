@@ -191,11 +191,13 @@ func (s *server) bgpWatchTenants() []string {
 }
 
 // bgpWatchPrefixes reads ONE tenant's watched prefixes through the same
-// FORCE-RLS store the watchlist API uses (§3a rule 4). cross is ALWAYS false:
-// a worker pass is scoped to one tenant.
+// tenant-scoped store the watchlist API uses — FORCE-RLS on Postgres, the
+// tenant-keyed file register otherwise (§3a rule 4). cross is ALWAYS false: a
+// worker pass is scoped to the one tenant bgpWatchTenants handed it, so the
+// evaluator never performs a cross-tenant read on either backend.
 func (s *server) bgpWatchPrefixes(ctx context.Context, tenant string) ([]string, error) {
 	if s.bgpWatch == nil {
-		return nil, errors.New("BGP watchlist requires the relational store")
+		return nil, errors.New("BGP watchlist store is not initialised")
 	}
 	list, err := s.bgpWatch.List(ctx, tenant, false)
 	if err != nil {
@@ -453,6 +455,74 @@ func (s *server) bgpWatchSightings(_ context.Context, tenant string) ([]bgpwatch
 	return out, nil
 }
 
+// ── immediate sighting bridges (BMP + the near-live feed) ───────────────────
+//
+// The evaluator's own pass screens both rings on its tick (bgpWatchSightings
+// above), which is the DURABLE path and stays exactly as it was. These two
+// adapters are the LATENCY path: they hand the evaluator a prefix the moment it
+// arrives, so /api/bgp/bogons shows a sighting in seconds rather than after the
+// next 5-minute tick. Both are idempotent — the register dedupes on
+// (prefix, source, peer) and only bumps last_seen/count — so an update seen by
+// both paths is ONE sighting, and neither path is load-bearing for the other.
+//
+// Both run on a producer's own goroutine (a BMP session's reader, a feed
+// poller), so both are cheap by construction: NoteSighting is an in-memory
+// bogon lookup plus a bounded map write, and a prefix that is not a bogon costs
+// one lookup and returns.
+
+// bgpWatchNoteBMPAnnounce is internal/bmp's OnAnnounce observer. The tenant is
+// the one the STORE stamped from inventory at session open (§3a rule 2) — never
+// anything the router said — and a row with no concrete tenant is dropped, not
+// pooled into the global bucket.
+func (s *server) bgpWatchNoteBMPAnnounce(rows []bmp.AnnouncedPrefix) {
+	eval := s.bgpWatchEval
+	if eval == nil || len(rows) == 0 {
+		return
+	}
+	for _, r := range rows {
+		tenant := normTenant(r.TenantID)
+		if tenant == "" || tenant == TenantGlobal {
+			continue
+		}
+		// Source and Peer must match what the periodic sweep writes, or the two
+		// paths would register the same sighting twice under different keys.
+		if err := eval.NoteSighting(tenant, bgpwatch.PrefixSighting{
+			Prefix: r.Prefix.String(), Peer: r.PeerAddr, Source: "bmp", At: r.At,
+		}); err != nil {
+			// Not fatal to the feed: one unrecordable sighting must never stop
+			// a router's session. It is still SAID (§10) rather than swallowed.
+			logWarn("bgp-watch", "a BMP announcement could not be screened for bogons",
+				map[string]any{"err": err.Error()})
+		}
+	}
+}
+
+// bgpWatchNoteFeedUpdates is internal/bgpdepth's OnUpdates observer. The tenant
+// comes from the poller (one poller per tenant, keyed by the ring it fills), and
+// withdrawals are skipped: a bogon sighting is a claim that a prefix was
+// ANNOUNCED, and a withdrawal is the opposite of that claim.
+func (s *server) bgpWatchNoteFeedUpdates(tenant string, ups []bgpdepth.Update) {
+	eval := s.bgpWatchEval
+	if eval == nil || len(ups) == 0 {
+		return
+	}
+	t := normTenant(tenant)
+	if t == "" || t == TenantGlobal {
+		return
+	}
+	for _, u := range ups {
+		if u.Type != "A" {
+			continue
+		}
+		if err := eval.NoteSighting(t, bgpwatch.PrefixSighting{
+			Prefix: u.Prefix, Peer: u.Peer, Origin: u.Origin, Source: "feed", At: u.Time,
+		}); err != nil {
+			logWarn("bgp-watch", "a near-live feed update could not be screened for bogons",
+				map[string]any{"err": err.Error()})
+		}
+	}
+}
+
 // bgpWatchAnnotateWatchlist adds the incident class per watched prefix to the
 // watchlist response (tracker #5). It is the ONLY place the Prefixes view gets
 // its verdicts, so the page and the pager can never disagree: both read what
@@ -462,7 +532,29 @@ func (s *server) bgpWatchSightings(_ context.Context, tenant string) ([]bgpwatch
 // empty incident map — "we are not evaluating" and "nothing is wrong" are
 // different answers (§10). A cross-tenant reader is annotated with nothing:
 // incidents are per-tenant data and there is no wildcard read.
-func (s *server) bgpWatchAnnotateWatchlist(out map[string]any, tenant string, cross bool) {
+//
+// One annotation is answerable WITHOUT the evaluator and is therefore added
+// first: whether a watched prefix is a bogon. That is a fact about the address
+// space (the embedded IANA/RFC set, plus the optional feed overlay), not a
+// measurement — no network call, no tick, no store — so a fresh install with
+// alerting off still tells an operator that a prefix on their list cannot
+// legitimately appear in the DFZ. It reads the caller's OWN list, which the
+// handler already scoped, so it adds no new read path.
+func (s *server) bgpWatchAnnotateWatchlist(out map[string]any, list []bgpWatchEntry, tenant string, cross bool) {
+	if s.bgpWatchAPI != nil {
+		watched := map[string]bgpwatch.BogonEntry{}
+		for _, e := range list {
+			if e.Kind != "prefix" {
+				continue
+			}
+			if entry, ok := s.bgpWatchAPI.LookupPrefix(e.Resource); ok {
+				watched[e.Resource] = entry
+			}
+		}
+		if len(watched) > 0 {
+			out["watched_bogons"] = watched
+		}
+	}
 	if s.bgpWatchEval == nil {
 		out["incidents_note"] = "Incident classification is off. Set " + bgpwatch.EnvFeatureFlag +
 			"=true to run the watchlist evaluator. No incident here means NOT EVALUATED, not healthy."

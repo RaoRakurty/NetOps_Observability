@@ -274,6 +274,33 @@ func (s *Store) RecordParseError(id string) {
 	}
 }
 
+// MaxAnnouncedPerMessage bounds how many announced prefixes ONE message reports
+// back through Applied.Announced. The observer this feeds (bogon sightings) is
+// a screen, not an archive — the ring is still the record — so a jumbo update
+// contributes a bounded slice rather than an unbounded allocation on the
+// receive path (§9).
+const MaxAnnouncedPerMessage = 64
+
+// AnnouncedPrefix is ONE NLRI this receiver just stored, stamped with the
+// session's OWNING TENANT (resolved from inventory at session open — never from
+// anything the peer said). It exists so an observer can act on an announcement
+// the moment it arrives without polling the ring, and without this package
+// having to know what the observer is for.
+//
+// It deliberately carries NO origin: BGP's ORIGIN attribute is igp/egp/
+// incomplete, not an ASN, and the sighting register's Origin field is an ASN.
+// Handing one where the other is meant would put a wrong number on the page —
+// and the periodic sweep (which reads the ring) leaves it unset for BMP rows,
+// so an immediate note that filled it in would make the same sighting look
+// different depending on which path saw it first.
+type AnnouncedPrefix struct {
+	TenantID string
+	DeviceID string
+	PeerAddr string
+	Prefix   netip.Prefix
+	At       time.Time
+}
+
 // Applied reports what one message contributed, so the caller can move the
 // package-level metrics without reaching into the store's lock.
 type Applied struct {
@@ -281,6 +308,12 @@ type Applied struct {
 	DroppedUpdates      int
 	UnsupportedFamilies int
 	UnknownAttributes   int
+	// Announced carries up to MaxAnnouncedPerMessage of the prefixes this
+	// message announced, for the caller's observer. It is returned rather than
+	// dispatched from inside Apply on purpose: Apply holds the store lock, and
+	// calling an injected function under it would let a slow observer stall
+	// every session in the process.
+	Announced []AnnouncedPrefix
 }
 
 // Apply folds one parsed message into the session record.
@@ -388,6 +421,12 @@ func (st *sessionState) applyUpdate(s *Store, msg *Message) Applied {
 		out.StoredUpdates++
 		if st.ring.dropped > before {
 			out.DroppedUpdates++
+		}
+		if kind == "announce" && len(out.Announced) < MaxAnnouncedPerMessage {
+			out.Announced = append(out.Announced, AnnouncedPrefix{
+				TenantID: st.tenantID, DeviceID: st.deviceID,
+				PeerAddr: rec.PeerAddr, Prefix: prefix, At: at,
+			})
 		}
 	}
 

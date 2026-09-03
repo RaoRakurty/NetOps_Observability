@@ -50,6 +50,8 @@ FIX_PERMS = ROOT / "scripts" / "fix-permissions.sh"
 UPDATE_SH = ROOT / "scripts" / "update.sh"
 PCAP_PKG = ROOT / "src" / "backend" / "internal" / "pcap"
 ALERTWEBHOOK_PKG = ROOT / "src" / "backend" / "internal" / "alertwebhook"
+BGPWATCH_PKG = ROOT / "src" / "backend" / "internal" / "bgpwatch"
+BGPDEPTH_PKG = ROOT / "src" / "backend" / "internal" / "bgpdepth"
 
 # The sealed device-configuration blob store: container path (configstore
 # DefaultDir) → the bind-mount source under data/ that must back it.
@@ -115,6 +117,22 @@ API_ENV_DEFAULTS = {
     "PLATFORM_ALERTS_NTFY_TOPIC": "${PLATFORM_ALERTS_NTFY_TOPIC:-}",
     "PLATFORM_ALERTS_NTFY_SERVER": "${PLATFORM_ALERTS_NTFY_SERVER:-}",
     "PLATFORM_ALERTS_NTFY_TOKEN": "${PLATFORM_ALERTS_NTFY_TOKEN:-}",
+    # Alert-noise + rate-limit control (alertwebhook digest.go / pushbudget.go).
+    # These DO carry a value, unlike the topic knobs above: they are policy with
+    # a code default, not a destination. The defaults must stay byte-identical
+    # to the Go constants — see
+    # test_platform_alert_noise_defaults_match_the_go_constants.
+    "PLATFORM_ALERTS_WARNING_DIGEST_INTERVAL": "${PLATFORM_ALERTS_WARNING_DIGEST_INTERVAL:-30m}",
+    "PLATFORM_ALERTS_PUSH_BUDGET": "${PLATFORM_ALERTS_PUSH_BUDGET:-30}",
+    "PLATFORM_ALERTS_PUSH_BUDGET_PAGE_RESERVE": "${PLATFORM_ALERTS_PUSH_BUDGET_PAGE_RESERVE:-10}",
+    # BGP depth + alerting (internal/bgpdepth, internal/bgpwatch). All three
+    # are dormant-by-default flags whose Go default is FALSE. They were absent
+    # from compose entirely until 2026-09-03 — only a COMMENT mentioned them —
+    # so no .env value could enable any of them and the whole watchlist
+    # evaluator was unreachable through the supported install path.
+    "FEATURE_BGP_LIVE_FEED": "${FEATURE_BGP_LIVE_FEED:-false}",
+    "FEATURE_BGP_ALERTS": "${FEATURE_BGP_ALERTS:-false}",
+    "FEATURE_BGP_BOGON_FEED": "${FEATURE_BGP_BOGON_FEED:-false}",
 }
 
 
@@ -352,7 +370,8 @@ def test_env_template_ships_the_flags_commented_out():
     """Default OFF means ABSENT-or-commented, never `=true`."""
     src = INSTALL_PY.read_text()
     for flag in ("FEATURE_SECURITY_LANE", "FEATURE_CONFIG_BACKUP",
-                 "FEATURE_PROTOCOL_DIAG_COLLECT"):
+                 "FEATURE_PROTOCOL_DIAG_COLLECT", "FEATURE_BGP_LIVE_FEED",
+                 "FEATURE_BGP_ALERTS", "FEATURE_BGP_BOGON_FEED"):
         assert f"#{flag}=true" in src, f"{flag} must ship commented out in .env"
         assert f"\n{flag}=true" not in src, f"{flag} must not ship enabled"
     # The one variable whose EMPTY value is a real (and different) setting must
@@ -370,7 +389,11 @@ def test_update_reconciliation_enumerates_the_new_keys():
                 "CORR_SYSLOG_TOPIC", "CORR_FIDELITY_WEIGHTING",
                 "VMALERT_WEBHOOK_TOKEN", "VMALERT_WEBHOOK_COOLDOWN",
                 "PLATFORM_ALERTS_NTFY_TOPIC", "PLATFORM_ALERTS_NTFY_SERVER",
-                "PLATFORM_ALERTS_NTFY_TOKEN"):
+                "PLATFORM_ALERTS_NTFY_TOKEN",
+                "PLATFORM_ALERTS_WARNING_DIGEST_INTERVAL",
+                "PLATFORM_ALERTS_PUSH_BUDGET",
+                "PLATFORM_ALERTS_PUSH_BUDGET_PAGE_RESERVE", "FEATURE_BGP_LIVE_FEED",
+                "FEATURE_BGP_ALERTS", "FEATURE_BGP_BOGON_FEED"):
         assert f'"{key}":' in src, (
             f"{key} is missing from update.sh's EXPECTED list — an upgraded "
             f"install would never learn the knob exists.")
@@ -482,6 +505,48 @@ def test_alert_webhook_env_contract_is_fully_plumbed_to_the_api():
             f"topic fallback chain lives in the code, not in the YAML.")
 
 
+def test_platform_alert_noise_defaults_match_the_go_constants():
+    """The digest window and the push budget are POLICY with a code default, so
+    compose and the Go package must agree to the byte.
+
+    They exist because ntfy.sh answered 429 to this route on 2026-09-03 while
+    chronic warnings each spent a push. A compose default that drifts from the
+    code default would mean the stack behaves one way on a fresh install and
+    another way in the tests that prove the behaviour."""
+    src = "\n".join((ALERTWEBHOOK_PKG / f).read_text()
+                     for f in ("hostroute.go", "pushbudget.go"))
+    consts = {
+        "PLATFORM_ALERTS_WARNING_DIGEST_INTERVAL":
+            (r"DefaultWarningDigestInterval\s*=\s*(\d+)\s*\*\s*time\.Minute", "30m", "30"),
+        "PLATFORM_ALERTS_PUSH_BUDGET":
+            (r"DefaultPushBudget\s*=\s*(\d+)", "30", "30"),
+        "PLATFORM_ALERTS_PUSH_BUDGET_PAGE_RESERVE":
+            (r"DefaultPageReserve\s*=\s*(\d+)", "10", "10"),
+    }
+    env = service_env("api")
+    for var, (pattern, compose_default, go_value) in consts.items():
+        m = re.search(pattern, src)
+        assert m, f"the Go default behind {var} is gone from hostroute.go"
+        assert m.group(1) == go_value, (
+            f"{var}: the Go default moved to {m.group(1)} — update "
+            f"docker-compose.yml, scripts/install.py and scripts/update.sh with it.")
+        assert str(env[var]) == "${%s:-%s}" % (var, compose_default), (
+            f"{var}: compose default must be {compose_default}, the code's own.")
+
+
+def test_env_template_ships_the_alert_noise_knobs_commented_with_the_code_default():
+    """Discoverable but inert: an operator must be able to FIND the digest
+    window and the page reserve in .env, and a shipped uncommented value would
+    silently freeze them at install time instead of following the code."""
+    src = INSTALL_PY.read_text()
+    for var, default in (("PLATFORM_ALERTS_WARNING_DIGEST_INTERVAL", "30m"),
+                         ("PLATFORM_ALERTS_PUSH_BUDGET", "30"),
+                         ("PLATFORM_ALERTS_PUSH_BUDGET_PAGE_RESERVE", "10")):
+        assert f"#{var}={default}" in src, (
+            f"{var} must ship commented, with the code default, in the .env template")
+        assert f"\n{var}=" not in src, f"{var} must not ship with an active value"
+
+
 def test_env_template_ships_the_platform_alert_topic_commented_out():
     """Empty/absent = 'use the watchdog topic'. Shipping it SET would silently
     split platform alerts onto a topic nobody is subscribed to."""
@@ -490,3 +555,49 @@ def test_env_template_ships_the_platform_alert_topic_commented_out():
                 "PLATFORM_ALERTS_NTFY_TOKEN"):
         assert f"#{var}=" in src, f"{var} must be discoverable (commented) in the .env template"
         assert f"\n{var}=" not in src, f"{var} must not ship with a value"
+
+
+def test_bgp_feature_flags_are_fully_plumbed_to_the_api():
+    """Every FEATURE_* flag internal/bgpwatch and internal/bgpdepth declare as
+    their own `Env… = "…"` constant must be passed through on the api.
+
+    This is the guard for the defect found live on 2026-09-03: docker-compose.yml
+    carried a COMMENT naming FEATURE_BGP_LIVE_FEED / FEATURE_BGP_ALERTS /
+    FEATURE_BGP_BOGON_FEED and no passthrough for any of them, so the operator
+    could set them in .env, `docker compose up` would report success, and the
+    live feed, the watchlist evaluator and the bogon overlay would all stay
+    dormant with nothing anywhere saying why.
+
+    Scope is deliberately the FEATURE_* flags: the tuning knobs these packages
+    also declare (BGP_ALERT_INTERVAL, BGP_ALERT_COOLDOWN, BGP_BOGON_FEED_URL,
+    BGP_ASPA_PROVIDER_URL, BGP_EVIDENCE_TOPIC) and their store paths
+    (BGP_ALERT_CONFIG_FILE, BGP_WATCHLIST_FILE, whose code defaults live under
+    the api's /data volume) have working code defaults, so an unplumbed one
+    degrades to the documented default rather than to a feature that lies about
+    being on. A FLAG cannot degrade — unplumbed, it can only ever be off.
+    """
+    consts: dict[str, str] = {}
+    for pkg in (BGPWATCH_PKG, BGPDEPTH_PKG):
+        assert pkg.is_dir(), f"{pkg} is missing"
+        found = _go_env_consts(pkg)
+        assert found, (
+            f"{pkg.name} declares no Env* constant: put the env contract in the "
+            f"package (the pcap/alertwebhook precedent) so there is exactly one "
+            f"spelling of each name.")
+        for name, var in found.items():
+            consts[f"{pkg.name}.{name}"] = var
+    flags = sorted({v for v in consts.values() if v.startswith("FEATURE_")})
+    assert flags, "neither BGP package declares a FEATURE_* flag any more"
+    env = service_env("api")
+    missing = [v for v in flags if v not in env]
+    assert not missing, (
+        f"internal/bgpwatch + internal/bgpdepth gate themselves on {missing} but "
+        f"docker-compose.yml never passes them to the api — the feature cannot "
+        f"be enabled through the supported install path, and the stack reports "
+        f"success while doing nothing.")
+    for var in flags:
+        assert str(env[var]) == "${%s:-false}" % var, (
+            f"{var}: compose default {env[var]!r} must be "
+            f"${{{var}:-false}} — these flags are dormant-by-default in code, "
+            f"and a compose default that turns one on (or spells the fallback "
+            f"differently) is a config lie.")

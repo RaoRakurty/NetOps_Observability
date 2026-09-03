@@ -300,6 +300,11 @@ func (l *Listener) readLoop(conn net.Conn, id string) string {
 			l.deps.Metrics.Unsupported(KindMessageType, 1)
 		}
 		applied := l.store.Apply(id, msg)
+		if l.deps.OnAnnounce != nil && len(applied.Announced) > 0 {
+			// Outside the store lock, on this session's own goroutine: an
+			// observer that misbehaves degrades one feed, never the store.
+			l.deps.OnAnnounce(applied.Announced)
+		}
 		l.deps.Metrics.UpdatesStored(applied.StoredUpdates)
 		l.deps.Metrics.UpdatesDropped(applied.DroppedUpdates)
 		l.deps.Metrics.Unsupported(KindAddressFamily, applied.UnsupportedFamilies)

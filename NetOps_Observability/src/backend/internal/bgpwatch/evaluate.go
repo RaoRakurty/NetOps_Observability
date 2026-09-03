@@ -27,6 +27,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -182,6 +183,31 @@ type tenantState struct {
 	lastRun   time.Time
 	lastErr   string
 	runs      int64
+	// counters is THIS tenant's slice of the counter set. It exists because the
+	// per-tenant API body must never carry process-wide aggregates: "runs" and
+	// "run_errors" summed across every tenant tell a scoped reader how busy the
+	// OTHER tenants are (internal/bmp/http.go's handleStats states the same rule
+	// for BMP message volume). The process-wide totals still exist — they are
+	// the /metrics scrape, which is platform-operator surface, not tenant API.
+	// Keys come from tenantCounterNames only, so the map is bounded (§9).
+	counters map[string]int64
+}
+
+// tenantCounterNames is the CLOSED set of per-tenant counters, in the order
+// TenantMetrics reports them. Every name is filled in (zero when nothing has
+// happened) so the response shape never changes under a reader.
+var tenantCounterNames = []string{
+	"runs_total",
+	"run_errors_total",
+	"prefixes_evaluated_total",
+	"observe_errors_total",
+	"peer_errors_total",
+	"sighting_errors_total",
+	"alerts_notified_total",
+	"alerts_resolved_total",
+	"alerts_suppressed_total",
+	"bogon_sightings_total",
+	"evidence_skipped_total",
 }
 
 // Evaluator is the runtime. One per process.
@@ -310,7 +336,7 @@ func (e *Evaluator) RunOnce(ctx context.Context) {
 			return
 		}
 		if err := e.EvaluateTenant(ctx, t); err != nil && ctx.Err() == nil {
-			e.metrics.RunErrors.Add(1)
+			e.bump(e.tenantState(t), "run_errors_total", &e.metrics.RunErrors)
 			e.deps.LogError("BGP watchlist evaluation failed for a tenant", map[string]any{"err": err.Error()})
 		}
 	}
@@ -325,6 +351,20 @@ func (e *Evaluator) EvaluateTenant(ctx context.Context, tenant string) error {
 	}
 	now := e.deps.Now().UTC()
 	st := e.tenantState(t)
+
+	// The bogon SIGHTING sweep runs FIRST and unconditionally, because it
+	// depends on neither the policy nor the watchlist: sightings come from the
+	// tenant's LIVE feeds (the BMP update ring, the near-live poller ring) and
+	// are a fact about what arrived, not a verdict about what was declared.
+	//
+	// It used to sit at the END of this function, after two reads that both
+	// `return` on error. On a stack with no relational store the watchlist read
+	// failed every pass, so the sweep never ran once and /api/bgp/bogons showed
+	// "none seen" while real BMP updates for a bogon prefix were sitting in the
+	// store (found live, 2026-09-03). The file-backed watchlist removes that
+	// particular error; this ordering removes the TRAP — no future read failure
+	// upstream of it can blind the sighting register again.
+	e.checkSightings(ctx, t, now)
 
 	policy, perr := e.deps.Policies.Policy(ctx, t)
 	if perr != nil {
@@ -354,7 +394,7 @@ func (e *Evaluator) EvaluateTenant(ctx context.Context, tenant string) error {
 		obs, oerr := e.deps.Observe(ctx, p)
 		if oerr != nil {
 			obs = Observation{Prefix: p, Measured: false, Error: oerr.Error(), FetchedAt: now}
-			e.metrics.ObserveErrors.Add(1)
+			e.bump(st, "observe_errors_total", &e.metrics.ObserveErrors)
 			lastErr = oerr.Error()
 		}
 		if obs.Prefix == "" {
@@ -362,12 +402,11 @@ func (e *Evaluator) EvaluateTenant(ctx context.Context, tenant string) error {
 		}
 		cfg := policy.For(p)
 		inc := Classify(obs, cfg, e.deps.Bogons, now)
-		e.metrics.PrefixesEvaluated.Add(1)
+		e.bump(st, "prefixes_evaluated_total", &e.metrics.PrefixesEvaluated)
 		events = append(events, e.applyIncident(st, t, inc, cfg, now)...)
 	}
 
 	events = append(events, e.checkPeers(ctx, st, t, now)...)
-	e.checkSightings(ctx, t, now)
 
 	if e.evidence != nil && len(events) > 0 {
 		if _, err := e.evidence.publish(ctx, events); err != nil && ctx.Err() == nil {
@@ -377,7 +416,7 @@ func (e *Evaluator) EvaluateTenant(ctx context.Context, tenant string) error {
 		}
 	}
 	e.setLastRun(st, now, lastErr)
-	e.metrics.Runs.Add(1)
+	e.bump(st, "runs_total", &e.metrics.Runs)
 	return nil
 }
 
@@ -411,7 +450,7 @@ func (e *Evaluator) applyIncident(st *tenantState, tenant string, inc Incident, 
 
 	key := alertKey(tenant, inc.Prefix, inc.Class)
 	if !e.coolDownPassed(st, key, now) {
-		e.metrics.AlertsSuppressed.Add(1)
+		e.bump(st, "alerts_suppressed_total", &e.metrics.AlertsSuppressed)
 		return nil
 	}
 	a := Alert{
@@ -428,12 +467,12 @@ func (e *Evaluator) applyIncident(st *tenantState, tenant string, inc Incident, 
 	e.recordAlert(st, a)
 	if e.deps.Notify != nil {
 		e.deps.Notify(a)
-		e.metrics.AlertsNotified.Add(1)
+		e.bump(st, "alerts_notified_total", &e.metrics.AlertsNotified)
 	}
 
 	ev, err := EventFromIncident(tenant, inc, cfg)
 	if err != nil {
-		e.metrics.Evidence.skipped.Add(1)
+		e.bump(st, "evidence_skipped_total", &e.metrics.Evidence.skipped)
 		e.deps.LogWarn("BGP incident could not be shaped as an evidence event — it was NOT grounded", map[string]any{
 			"prefix": inc.Prefix, "class": string(inc.Class), "err": err.Error()})
 		return nil
@@ -448,7 +487,7 @@ func (e *Evaluator) checkPeers(ctx context.Context, st *tenantState, tenant stri
 	}
 	peers, err := e.deps.Peers(ctx, tenant)
 	if err != nil {
-		e.metrics.PeerErrors.Add(1)
+		e.bump(st, "peer_errors_total", &e.metrics.PeerErrors)
 		e.deps.LogWarn("BGP peer states unreadable — the peer-down rule did not run this tick", map[string]any{"err": err.Error()})
 		return nil
 	}
@@ -478,15 +517,15 @@ func (e *Evaluator) checkPeers(ctx context.Context, st *tenantState, tenant stri
 				e.recordAlert(st, a)
 				if e.deps.Notify != nil {
 					e.deps.Notify(a)
-					e.metrics.AlertsNotified.Add(1)
+					e.bump(st, "alerts_notified_total", &e.metrics.AlertsNotified)
 				}
 				if ev, eerr := EventFromPeerDown(tenant, p, now); eerr == nil {
 					out = append(out, Record{Key: tenant, Value: ev})
 				} else {
-					e.metrics.Evidence.skipped.Add(1)
+					e.bump(st, "evidence_skipped_total", &e.metrics.Evidence.skipped)
 				}
 			} else {
-				e.metrics.AlertsSuppressed.Add(1)
+				e.bump(st, "alerts_suppressed_total", &e.metrics.AlertsSuppressed)
 			}
 		}
 		if !down && wasDown && e.deps.Resolve != nil {
@@ -496,7 +535,7 @@ func (e *Evaluator) checkPeers(ctx context.Context, st *tenantState, tenant stri
 				Tenant: tenant, Resource: p.DeviceID, FiredAt: now, Resolved: true, ResolvedAt: &t,
 				Summary: fmt.Sprintf("BGP peer %s on %s is back up.", clip(p.Peer, 64), clip(p.DeviceID, 128)),
 			})
-			e.metrics.AlertsResolved.Add(1)
+			e.bump(st, "alerts_resolved_total", &e.metrics.AlertsResolved)
 		}
 	}
 	// A peer that VANISHED from the report is not a recovery — we stopped being
@@ -518,7 +557,7 @@ func (e *Evaluator) checkSightings(ctx context.Context, tenant string, now time.
 	}
 	rows, err := e.deps.Sightings(ctx, tenant)
 	if err != nil {
-		e.metrics.SightingErrors.Add(1)
+		e.bump(e.tenantState(tenant), "sighting_errors_total", &e.metrics.SightingErrors)
 		return
 	}
 	for _, r := range rows {
@@ -542,7 +581,7 @@ func (e *Evaluator) checkSightings(ctx context.Context, tenant string, now time.
 			Prefix: p.String(), Entry: entry, Source: src, Peer: clip(r.Peer, 64),
 			Origin: r.Origin, FirstSeen: at, LastSeen: at,
 		}) {
-			e.metrics.BogonSightings.Add(1)
+			e.bump(e.tenantState(tenant), "bogon_sightings_total", &e.metrics.BogonSightings)
 		}
 	}
 }
@@ -563,7 +602,7 @@ func (e *Evaluator) resolveAlert(st *tenantState, tenant string, prev Incident, 
 	if e.deps.Resolve != nil {
 		e.deps.Resolve(a)
 	}
-	e.metrics.AlertsResolved.Add(1)
+	e.bump(st, "alerts_resolved_total", &e.metrics.AlertsResolved)
 	e.mu.Lock()
 	delete(st.cooldown, key)
 	e.mu.Unlock()
@@ -589,6 +628,46 @@ func (e *Evaluator) recordAlert(st *tenantState, a Alert) {
 	if len(st.history) > AlertHistoryMax {
 		st.history = append([]Alert(nil), st.history[len(st.history)-AlertHistoryMax:]...)
 	}
+}
+
+// bump increments a counter in BOTH places it belongs: the process-wide
+// atomic (the /metrics scrape) and the one tenant's own tally (the API body).
+// It must never be called while e.mu is held.
+func (e *Evaluator) bump(st *tenantState, name string, global *atomic.Int64) {
+	if global != nil {
+		global.Add(1)
+	}
+	if st == nil {
+		return
+	}
+	e.mu.Lock()
+	if st.counters == nil {
+		st.counters = make(map[string]int64, len(tenantCounterNames))
+	}
+	st.counters[name]++
+	e.mu.Unlock()
+}
+
+// TenantMetrics returns ONE tenant's counters. There is deliberately no
+// cross-tenant read: a scoped caller asking "how is MY watchlist doing" must
+// not learn how much work every other tenant generated.
+func (e *Evaluator) TenantMetrics(tenant string) (map[string]int64, error) {
+	t, err := concreteTenant(tenant)
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[string]int64, len(tenantCounterNames))
+	for _, n := range tenantCounterNames {
+		out[n] = 0
+	}
+	e.mu.Lock()
+	if st := e.state[t]; st != nil {
+		for _, n := range tenantCounterNames {
+			out[n] = st.counters[n]
+		}
+	}
+	e.mu.Unlock()
+	return out, nil
 }
 
 func (e *Evaluator) setLastRun(st *tenantState, now time.Time, errText string) {
@@ -697,7 +776,7 @@ func (e *Evaluator) NoteSighting(tenant string, s PrefixSighting) error {
 		Prefix: p.String(), Entry: entry, Source: clip(s.Source, 16),
 		Peer: clip(s.Peer, 64), Origin: s.Origin, FirstSeen: at, LastSeen: at,
 	}) {
-		e.metrics.BogonSightings.Add(1)
+		e.bump(e.tenantState(t), "bogon_sightings_total", &e.metrics.BogonSightings)
 	}
 	return nil
 }
