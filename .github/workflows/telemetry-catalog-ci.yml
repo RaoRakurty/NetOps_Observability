@@ -37,7 +37,13 @@ jobs:
         with:
           python-version: '3.10'
       - name: install deps
-        run: pip install pyyaml==6.0.3 pytest==9.0.3
+        # test_config_change_rules.py probes the correlation engine's catalog
+        # (src/correlation/catalog.py imports pydantic), so the engine's
+        # hash-locked requirements are installed too — the same set
+        # correlation-ci installs, never a hand-picked subset that can drift.
+        run: |
+          pip install pyyaml==6.0.3 pytest==9.0.3
+          pip install --require-hashes -r ../src/correlation/requirements.txt
       - name: catalog invariants
         run: python3 catalog.py
       - name: conformance harness (fixture replay)
