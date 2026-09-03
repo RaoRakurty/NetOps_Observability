@@ -211,6 +211,16 @@ type TroubleshootDeps struct {
 	// BGPFeedRecent returns recent BGP updates from the caller's OWN per-tenant
 	// ring, optionally narrowed to one prefix.
 	BGPFeedRecent func(ctx context.Context, p Principal, prefix string, limit int) (BGPFeedReport, error)
+
+	// ── IRIS Phase B ───────────────────────────────────────────────────────
+
+	// RecallInvestigations returns the CALLER'S OWN prior concluded
+	// investigations for the entity in q (device / peer / prefix / case),
+	// newest conclusion first. READ-ONLY memory: it never returns another
+	// tenant's row, and an unkeyed query returns nothing (the store has no
+	// unscoped list). nil = investigation memory is not wired on this
+	// deployment, and `recall_investigations` is then not registered at all.
+	RecallInvestigations func(ctx context.Context, p Principal, q InvestigationQuery) ([]InvestigationRow, error)
 }
 
 // ---- shared validation -----------------------------------------------------
@@ -671,6 +681,13 @@ func (r *ToolRegistry) AddTroubleshootTools(ds DataSource, d TroubleshootDeps) {
 	if d.BGPFeedRecent != nil {
 		r.add(bgpFeedTool{deps: d})
 	}
+	// Investigation memory is entity-keyed, not device-keyed: it answers for a
+	// case, a peer or a prefix too, so it registers independently of the
+	// inventory seam (a device ARGUMENT is still resolved through ResolveDevice
+	// when one is wired).
+	if d.RecallInvestigations != nil {
+		r.add(recallInvestigationsTool{deps: d})
+	}
 	if d.ResolveDevice == nil {
 		return // every remaining tool resolves a device under the caller's tenant first
 	}
@@ -720,6 +737,8 @@ func TroubleshootToolNames() []string {
 		"get_topology_context", "get_case_timeline", "get_rca_verdict",
 		// Phase A4.
 		"get_device_state", "get_bgp_watchlist", "get_bgp_rpki", "get_bgp_feed_recent",
+		// Phase B.
+		"recall_investigations",
 	}
 	sort.Strings(out)
 	return out

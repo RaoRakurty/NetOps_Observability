@@ -126,6 +126,48 @@ var skillEntities = map[string]bool{
 	"device_id":      true, // canonical inventory id of the resolved device
 	"device":         true, // operator-facing name of the resolved device
 	"seam":           true, // seam id/type in scope
+	"peer":           true, // peer/neighbour address in scope (IRIS Phase B)
+	"prefix":         true, // prefix in scope (IRIS Phase B)
+}
+
+// liveStateTools are the gather steps that read what is TRUE NOW on a device.
+// They are the reason `recall_investigations` may never lead a gather: NetClaw's
+// rule — "never guess device state, run a show command first; never carry
+// assumptions between sessions" — is enforced structurally by the loader, not
+// left to the prose of each skill.
+var liveStateTools = map[string]bool{
+	"get_device_state":        true,
+	"run_protocol_diagnostic": true,
+}
+
+// memoryToolName is the one tool that returns PRIOR conclusions rather than
+// present facts.
+const memoryToolName = "recall_investigations"
+
+// validateMemoryOrder enforces the Phase-B gather ordering: investigation
+// memory is gathered only AFTER live state, and never first. A skill that
+// consulted memory before reading the device would be doing exactly what the
+// design forbids — carrying a past conclusion into a present diagnosis.
+func validateMemoryOrder(gather []GatherStep) error {
+	memAt := -1
+	for i, g := range gather {
+		if g.Tool == memoryToolName && memAt < 0 {
+			memAt = i
+		}
+	}
+	if memAt < 0 {
+		return nil
+	}
+	if memAt == 0 {
+		return fmt.Errorf("gather step 1 is %s: investigation memory is PRIOR CONTEXT and may never be the first evidence gathered", memoryToolName)
+	}
+	for i, g := range gather {
+		if liveStateTools[g.Tool] && i > memAt {
+			return fmt.Errorf("gather step %d (%s) reads LIVE state after %s: memory may only be gathered AFTER live state, never before",
+				i+1, g.Tool, memoryToolName)
+		}
+	}
+	return nil
 }
 
 // skillToolAllowlist is the closed set of tool names a skill may name. Every
@@ -133,6 +175,9 @@ var skillEntities = map[string]bool{
 // A skill naming anything else fails the loader — this is the structural half of
 // "the model can never request a device write" (the Policy Engine is the other).
 var skillToolAllowlist = map[string]bool{
+	// Phase-B addition: prior CONCLUDED investigations for the entity in scope.
+	// Read-only and signal-free — memory is evidence, never a routing rule.
+	"recall_investigations": true,
 	// Phase-A4 additions: the show-first state battery and the read-only BGP
 	// operations reads.
 	"get_device_state":    true,
@@ -702,6 +747,9 @@ func parseSkill(dir, raw string) (*Skill, error) {
 	}
 	if len(sk.Gather) > MaxSkillToolCalls {
 		return nil, fmt.Errorf("gather declares %d steps; the per-turn tool budget is %d", len(sk.Gather), MaxSkillToolCalls)
+	}
+	if err := validateMemoryOrder(sk.Gather); err != nil {
+		return nil, err
 	}
 
 	for _, line := range blocks["decisions"] {

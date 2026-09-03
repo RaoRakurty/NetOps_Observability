@@ -4,19 +4,21 @@ layer: method
 version: 1
 when_to_use: something is broken, site is down, users complain, network slow, not working, where do i start, troubleshoot, investigate, unknown fault, no idea
 symptom_kinds: unknown, general, triage
-tools: get_rca_verdict, get_device_state, get_case_timeline, get_topology_context, get_active_major_incidents
+tools: get_rca_verdict, get_device_state, get_case_timeline, get_topology_context, get_active_major_incidents, recall_investigations
 gather:
   - get_rca_verdict(correlation_id)
   - get_device_state(device_id, area=platform)
   - get_case_timeline(correlation_id)
   - get_active_major_incidents()
   - get_topology_context(device_id)
+  - recall_investigations(device, correlation_id)
 look_for:
   - When a device is in scope, its LIVE control-plane health — CPU, memory, uptime and last reload. A router that rebooted or is CPU-bound reframes every symptom above it, and it is read, never assumed.
   - A correlation verdict already in scope. If the engine has concluded, START THERE and narrate its conclusion — do not re-derive a cause the engine already named.
   - Absent a verdict, work the layer order bottom-up and stop at the FIRST layer that explains the symptom: physical, then L2, then IGP, then BGP, then path/seam, then application. Logs confirm; they never lead.
   - Scope before mechanism: one interface, one device, one site, or many? A single-device symptom and a site-wide symptom are different faults with different owners.
   - Whether the evidence classes agree. Two independent classes agreeing is the threshold for "confirmed"; one class alone is "suspected" at best.
+  - Whether this entity has been investigated before, and how that ended. A prior conclusion is CONTEXT to compare the live state against — never a substitute for reading it, and never a reason to skip a check. A conclusion an operator rejected is a warning, not a shortcut.
 decisions:
   - next=interface-down when verdict:phrase=interface the engine's verdict names an interface
   - next=interface-down when verdict:phrase=link the engine's verdict names a link

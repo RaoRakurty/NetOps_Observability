@@ -98,6 +98,26 @@ var routeIsolationLedger = map[string]string{
 	"/api/bgp/aspa":         "globalRef",
 	"/api/bgp/geofeed":      "globalRef",
 	"/api/bgp/aspath-graph": "globalRef",
+	// BGP alerting + bogons (tracker #1/#5/#10, internal/bgpwatch). All three
+	// are per-tenant DATA:
+	//   /api/bgp/alerts        — the tenant's own alert history and the incident
+	//     class per WATCHED prefix. Which prefixes a tenant watches, and what is
+	//     wrong with them, is tenant information; the evaluator's state is keyed
+	//     by tenant and has no unscoped read (not even an internal one).
+	//   /api/bgp/alerts/config — the tenant's DECLARED intent (expected origins,
+	//     upstream set, thresholds). PG FORCE-RLS (migration 0041) through
+	//     WithTenant on the Postgres build, a tenant-keyed map on the file
+	//     build; the owner is stamped from the token, never the body.
+	//   /api/bgp/bogons        — the embedded set is public reference, but the
+	//     SIGHTINGS are per-tenant observations from that tenant's own BMP feed
+	//     and update ring, so the route is scoped as a whole.
+	// All three refuse a cross-tenant principal outright (a platform owner must
+	// scope in with the switcher) — the /api/bgp/feed precedent. Cross-org
+	// isolation proven by bgp_alerts_isolation_test.go, which drives the
+	// production s.bgpWatchAuthz wiring.
+	"/api/bgp/alerts":        "scoped",
+	"/api/bgp/alerts/config": "scoped",
+	"/api/bgp/bogons":        "scoped",
 	// Protocol diagnostics (Troubleshooting item 7, protocol_diagnostics.go):
 	// catalog is the version-pinned 15-issue ruleset, identical for every tenant
 	// (?vendor= only picks the rendered command dialect), behind
@@ -625,6 +645,13 @@ var routeIsolationLedger = map[string]string{
 	// NMS controller webhook: JWT-exempt; authenticated by opaque path token +
 	// the connector's signature verification, tenant derived from the token row.
 	"/api/nms/webhook/": "token",
+	// vmalert Alertmanager-v2 webhook: JWT-exempt, authenticated by the
+	// VMALERT_WEBHOOK_TOKEN shared secret (Bearer/Basic, constant-time), and
+	// platform-GLOBAL plumbing — it is NOT principal-scoped and carries no
+	// tenant data: an alert arriving with a tenant/tenant_id/org label is
+	// DROPPED rather than laundered onto the global operator channels (§3a,
+	// proven by internal/alertwebhook's isolation test).
+	"/api/internal/vmalert/": "token",
 	// NMS connector catalog: static vendor specs (no tenant data, auth required).
 	"/api/nms/connectors": "globalRef",
 

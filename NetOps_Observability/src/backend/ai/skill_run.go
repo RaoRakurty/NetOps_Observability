@@ -82,6 +82,31 @@ type ToolAuditEntry struct {
 // English words are not offered to the inventory as device names.
 var reDeviceCandidate = regexp.MustCompile(`\b[A-Za-z][A-Za-z0-9]*[-._][A-Za-z0-9._-]{1,48}\b|\b[A-Za-z]{2,}[0-9]{1,6}\b`)
 
+// rePrefixToken / reIPv4Token are the strict address shapes behind the `prefix`
+// and `peer` entities. They match nothing but a dotted-quad (optionally with a
+// CIDR length), so no free-form operator text can become an entity.
+var (
+	rePrefixToken = regexp.MustCompile(`\b(?:[0-9]{1,3}\.){3}[0-9]{1,3}/[0-9]{1,2}\b`)
+	reIPv4Token   = regexp.MustCompile(`\b(?:[0-9]{1,3}\.){3}[0-9]{1,3}\b`)
+)
+
+// resolveAddrEntity binds one address-shaped entity: the UI's value when it is
+// well formed, else the FIRST match in the question. A value that does not
+// satisfy the address grammar is dropped, never passed through.
+func resolveAddrEntity(out *skillEntitySet, name, fromUI string, shape *regexp.Regexp, question string) {
+	if v := strings.TrimSpace(fromUI); v != "" && shape.MatchString(v) {
+		if v, err := validAddrArg(name, shape.FindString(v), 64); err == nil {
+			out.values[name] = v
+			return
+		}
+	}
+	if m := shape.FindString(question); m != "" {
+		if v, err := validAddrArg(name, m, 64); err == nil {
+			out.values[name] = v
+		}
+	}
+}
+
 // skillEntitySet is the resolved, server-owned entity binding for one turn.
 type skillEntitySet struct {
 	values map[string]string
@@ -108,6 +133,13 @@ func (o *Orchestrator) resolveSkillEntities(ctx context.Context, p Principal, qu
 	if seam := strings.TrimSpace(uiContext["seam"]); seam != "" {
 		out.values["seam"] = seam
 	}
+	// Routing entities (IRIS Phase B): a peer address and a prefix, resolved
+	// DETERMINISTICALLY from UI context first and then from the question's own
+	// text by a strict address shape. They are server-derived like every other
+	// entity — the model never supplies one — and they are what lets a later
+	// turn recall what was concluded about the same peer or prefix before.
+	resolveAddrEntity(&out, "prefix", uiContext["prefix"], rePrefixToken, question)
+	resolveAddrEntity(&out, "peer", uiContext["peer"], reIPv4Token, rePrefixToken.ReplaceAllString(question, " "))
 	if o.Troubleshoot.ResolveDevice == nil {
 		return out
 	}
@@ -318,7 +350,49 @@ func (o *Orchestrator) answerSkill(ctx context.Context, p Principal, question st
 	ans.Text, badges, ans.Disclaimers = verifyNarrative(ans.Text, bundleCitationIDs(bundle), badges, ans.Disclaimers)
 	ans.ModeBadges = append(ans.ModeBadges, badges...)
 	ans.MissingEvidence = skillMissingEvidence(notes)
+	o.recordConcluded(ctx, p, &ans, ent, st)
 	return ans, true
+}
+
+// recordConcluded hands the finished investigation to the server's memory seam
+// (IRIS Phase B). It runs AFTER the answer is fully built, so what is
+// remembered is exactly what the operator was shown.
+//
+// The verdict text is MODEL-WRITTEN. It is carried as DATA — stored, clipped and
+// later replayed as a cited evidence line that is escaped on render and drives
+// nothing (§15 LLM02). Nothing here can fail the answer: a conclusion that
+// cannot be named or has no entity key is simply not remembered.
+func (o *Orchestrator) recordConcluded(ctx context.Context, p Principal, ans *Answer, ent skillEntitySet, st *chainState) {
+	if o.RecordInvestigation == nil || ans == nil || strings.TrimSpace(ans.Text) == "" {
+		return
+	}
+	inv := ConcludedInvestigation{
+		DeviceID:      ent.values["device_id"],
+		DeviceName:    ent.values["device"],
+		Peer:          ent.values["peer"],
+		Prefix:        ent.values["prefix"],
+		CorrelationID: ent.values["correlation_id"],
+		Verdict:       ans.Text,
+		ConcludedAt:   time.Now().UTC(),
+	}
+	if !inv.HasKey() {
+		return // nothing to key a future recall on
+	}
+	for _, hop := range st.chain {
+		inv.Skills = append(inv.Skills, hop.Name)
+	}
+	for _, c := range ans.Citations {
+		inv.Citations = append(inv.Citations, c.ID)
+	}
+	id, err := newInvestigationID()
+	if err != nil {
+		// A conclusion we cannot NAME can never be judged, so there is nothing
+		// to remember. Handled, not ignored: the answer itself is unaffected.
+		return
+	}
+	ans.AnswerID = id
+	inv.AnswerID = id
+	o.RecordInvestigation(ctx, p, inv)
 }
 
 // runSkillRound is ONE round of the investigation: plan this skill's gather from

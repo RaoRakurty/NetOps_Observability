@@ -44,6 +44,13 @@ type Orchestrator struct {
 	// the server adds the actor (tenant + subject); entries carry argument NAMES
 	// only, never values (§8 no-PII logging).
 	ToolAudit func(ToolAuditEntry)
+	// RecordInvestigation receives one CONCLUDED skill-chain investigation (IRIS
+	// Phase B). This package never writes memory itself and holds no store: the
+	// server decides what to do with the conclusion — today it holds it until an
+	// operator judges it on the feedback call, and only then is a tenant-scoped
+	// memory row written. nil = investigation memory is not wired here, and
+	// nothing about the answer changes.
+	RecordInvestigation func(ctx context.Context, p Principal, inv ConcludedInvestigation)
 }
 
 // policy returns the configured Policy Engine, or the safe v1 default

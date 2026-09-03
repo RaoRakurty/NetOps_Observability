@@ -399,7 +399,33 @@ import (
 //	                  the subpackage — the §3a.4 failure the single-derivation
 //	                  rule exists to prevent. Net effect on §2: the whole
 //	                  receiver is in internal/bmp; ~110 lines of adapter stay.
-const rootPackageCeiling = 208
+//	2026-09-02  209  +1: bgp_alerts.go (BGP ops tracker rows #1 bogons, #5
+//	                  leak/hijack incident classes, #10 alerting — the wiring
+//	                  for internal/bgpwatch, where the DOMAIN actually lives:
+//	                  the bogon set, the incident classifier, the per-tenant
+//	                  evaluator, the evidence producer, the policy store and the
+//	                  HTTP surface, ~2.4k lines). Same Deps-wiring shape as the
+//	                  204 igpmon, 207 ifgroup and 208 bmp entries, for the same
+//	                  reason: the file holds no domain logic, only the Deps
+//	                  assembly plus the adapter methods that need the *server
+//	                  receiver to reach requirePerm + principalTenant (the gate,
+//	                  incl. the TenantGlobal→scopeless mapping), s.bgpWatch (the
+//	                  FORCE-RLS watchlist store that is the ONLY source of what
+//	                  a tenant watches), s.bgpFetch (the cached RIPEstat/RDAP
+//	                  client with the corporate-CA and SSRF gates), s.notifier
+//	                  (the shared notify.Dispatcher every other evaluator fires
+//	                  through), s.bmpAPI/s.bgpFeed (the two tenant-scoped
+//	                  sighting sources) and produceJSON (the bus bridge). Those
+//	                  are root-package identity/tenancy/transport plumbing;
+//	                  moving the adapter down would drag them with it, or
+//	                  re-derive tenant scoping inside the subpackage — the
+//	                  §3a.4 failure the single-derivation rule exists to
+//	                  prevent. It also keeps internal/bgpwatch a LEAF: the
+//	                  package never sees models.Alert or a *server, which is
+//	                  what makes the whole evaluator unit-testable offline.
+//	                  Net effect on §2: the whole feature is in
+//	                  internal/bgpwatch; ~440 lines of adapter stay.
+const rootPackageCeiling = 209
 
 func TestFlatPackageMainDoesNotGrow(t *testing.T) {
 	entries, err := os.ReadDir(".")

@@ -4,19 +4,21 @@ layer: bgp
 version: 1
 when_to_use: bgp, bgp down, bgp neighbor down, peer down, bgp idle, bgp active, session not established, bgp flap, ebgp down, ibgp down
 symptom_kinds: bgp, adjacency, routing, reachability
-tools: get_device_state, run_protocol_diagnostic, get_rca_verdict, get_topology_context, search_logs
+tools: get_device_state, run_protocol_diagnostic, get_rca_verdict, get_topology_context, search_logs, recall_investigations
 gather:
   - get_device_state(device_id, area=bgp)
   - get_rca_verdict(correlation_id)
   - run_protocol_diagnostic(device_id, protocol=bgp, issue_id=bgp-session-down)
   - get_topology_context(device_id)
   - search_logs(device, query=BGP, window=6h)
+  - recall_investigations(device, peer)
 look_for:
   - The neighbour summary read LIVE off the device. The FSM state and the accepted-prefix count come from the device itself, never from an assumption.
   - The peer's FSM state. Idle means the session is not even being attempted or was damped; Active means we are trying and the TCP connection is not completing; Connect means TCP is mid-handshake.
   - Whether the peer address is reachable at all, and by which route. An eBGP peer that is not directly connected needs multihop, and an unreachable next hop keeps the session in Active forever.
   - The last notification or reset reason, which usually names the cause outright (hold timer expired, administrative reset, bad AS number).
   - Whether the underlying interface or the path to the peer changed at the same time as the session.
+  - Whether this peer has been investigated before. A repeat of the same cause is worth saying out loud — but only after the live state confirms it, and only with the operator's earlier judgement stated.
 decisions:
   - next=interface-down when state:bgp_peer=idle the device itself reports the peer Idle, so reachability to the peer — and the link carrying it — is the next check
   - next=log-confirmation when state:collect=not_wired the neighbour table could not be read live, so the reset reason must come from the device's own words

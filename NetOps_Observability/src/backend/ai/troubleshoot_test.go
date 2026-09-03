@@ -12,7 +12,12 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 )
+
+// tsMemoryDay is the fixed conclusion date the memory fixture reports, so the
+// rendered evidence line is byte-stable across runs.
+var tsMemoryDay = time.Date(2026, 8, 30, 9, 0, 0, 0, time.UTC)
 
 // ---- fixture deps ----------------------------------------------------------
 
@@ -82,6 +87,18 @@ func tsDeps() TroubleshootDeps {
 				{Prefix: "203.0.113.0/24", Origin: "AS64500", State: "valid", ROAs: 1},
 			}}, nil
 		},
+		RecallInvestigations: func(_ context.Context, p Principal, q InvestigationQuery) ([]InvestigationRow, error) {
+			if p.Tenant != "t-a" {
+				return nil, nil // another tenant's memory is simply not there
+			}
+			return []InvestigationRow{{
+				ID: "mem-1", DeviceID: "dev-a", DeviceName: "edge-1", Peer: "10.0.0.1",
+				Skills:    []string{"bgp-session-down", "interface-down"},
+				Verdict:   "the session dropped because the uplink optic was failing",
+				Citations: []string{"diagsig:sig-1"}, Outcome: OutcomeConfirmed,
+				ResolvedAt: tsMemoryDay,
+			}}, nil
+		},
 		BGPFeedRecent: func(_ context.Context, _ Principal, prefix string, limit int) (BGPFeedReport, error) {
 			return BGPFeedReport{
 				Scope: "t-a", Resources: []string{"203.0.113.0/24"},
@@ -123,8 +140,8 @@ func mustRun(t *testing.T, reg *ToolRegistry, name string, args ToolArgs) ToolRe
 func TestTroubleshootToolsAreReadOnly(t *testing.T) {
 	reg := tsRegistry(t, tsDeps())
 	names := TroubleshootToolNames()
-	if len(names) != 9 {
-		t.Fatalf("expected 9 Phase-A/A4 tools, got %v", names)
+	if len(names) != 10 {
+		t.Fatalf("expected 10 Phase-A/A4/B tools, got %v", names)
 	}
 	for i := 1; i < len(names); i++ {
 		if names[i-1] >= names[i] {
@@ -173,7 +190,7 @@ func TestAddTroubleshootToolsRegistersOnlyWiredSeams(t *testing.T) {
 		{
 			name: "only the DataSource", ds: newMockDS(), deps: TroubleshootDeps{},
 			want:    []string{"get_rca_verdict"},
-			notWant: []string{"get_case_timeline", "run_protocol_diagnostic", "get_security_findings", "get_topology_context", "get_device_state", "get_bgp_watchlist", "get_bgp_rpki", "get_bgp_feed_recent"},
+			notWant: []string{"get_case_timeline", "run_protocol_diagnostic", "get_security_findings", "get_topology_context", "get_device_state", "get_bgp_watchlist", "get_bgp_rpki", "get_bgp_feed_recent", "recall_investigations"},
 		},
 		{
 			name: "timeline without device resolution",

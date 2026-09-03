@@ -798,7 +798,10 @@ function GroundedAnswer({ ans, onCite, onClose }: { ans: AiAnswer; onCite: () =>
   const rate = (r: "up" | "down") => {
     if (rated) return;
     setRated(r);
-    api.aiFeedback(r, ans.intent).catch(() => {}); // best-effort; never blocks the UI
+    // Send the answer's own id (IRIS Phase B) so the rating judges THIS answer,
+    // not merely the principal's most recent conclusion. Answers that carry no
+    // id fall back to that server-side rule.
+    api.aiFeedback(r, ans.intent, undefined, ans.answer_id).catch(() => {}); // best-effort; never blocks the UI
   };
   const cs = ans.current_state;
   const pr = ans.problem;

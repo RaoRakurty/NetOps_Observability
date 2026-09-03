@@ -214,6 +214,18 @@ var toolMetas = map[string]toolMeta{
 			{name: "limit", desc: "How many updates to return, 1-30 (default 15).", required: false},
 		},
 	},
+	// ── IRIS Phase B: investigation memory (read-only, tenant-scoped) ──
+	"recall_investigations": {
+		description: "Prior CONCLUDED investigations for a device, BGP peer, prefix or correlation case — what was concluded before, and whether an operator confirmed or rejected that conclusion. This is PRIOR CONTEXT, never current state: read the live state first and use memory only to compare. Says plainly when nothing is remembered.",
+		label:       "Investigation memory",
+		args: []toolArgSpec{
+			{name: "device", desc: "The device name or id exactly as it appears in the inventory.", required: false},
+			{name: "peer", desc: "A peer or neighbour address (e.g. 203.0.113.5).", required: false},
+			{name: "prefix", desc: "A prefix (e.g. 203.0.113.0/24).", required: false},
+			{name: "correlation_id", desc: "The case's correlation UUID (take it from a problem:<uuid> citation id).", required: false},
+			{name: "window", desc: "How far back to look: 24h, 7d, 30d, 90d (default) or 180d.", required: false},
+		},
+	},
 	"get_rca_verdict": {
 		description: "The engine's RCA header for one correlation case: what broke, the verdict tier and confidence, what is affected, what evidence is missing, and the recommended owner. START HERE when a case is in scope — narrate this conclusion rather than deriving a different one.",
 		label:       "RCA verdict",

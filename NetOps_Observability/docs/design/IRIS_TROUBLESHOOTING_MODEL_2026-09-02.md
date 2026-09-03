@@ -360,6 +360,69 @@ cause was hold-timer/optic"), read-only to the model, surfaced as evidence with 
 citation, never as a rule. Verify current state first (NetClaw's own rule). Builds on
 the feedback store; tenant-keyed; no cross-tenant recall.
 
+#### Phase B — shipped (2026-09-02)
+
+`ai/investigation_memory.go` (row + both backends) · `ai/investigation_pending.go`
+(the concluded→judged bridge) · `ai/recall.go` (the tool) · migration
+`0040_iris_investigations.sql`.
+
+**The row.** One CONCLUDED investigation: tenant, entity keys (device id/name,
+BGP peer, prefix, correlation id), the skill chain, the final verdict text
+(clipped to 600 chars), the citation ids it rested on, the outcome, `created_at`
+and `resolved_at`.
+
+**When it is written.** ONLY when an operator judges the answer on the existing
+`POST /api/ai/feedback` path: thumbs up → `confirmed`, thumbs down → `wrong`. A
+finished skill chain hands its conclusion to `Orchestrator.RecordInvestigation`,
+which the server holds in a bounded, per-`(tenant, subject)`, in-memory buffer
+(30-minute TTL, <= 8 per principal) keyed by a new `Answer.answer_id`; the rating
+takes it from there and writes the row. An unjudged conclusion is never
+persisted — a memory whose outcome is unknown is a claim we cannot stand behind.
+The design's second trigger — a correlation case CLOSING with a verdict — is
+**not wired, and deliberately so**: case closure is authored by the Python
+correlation engine and lands in ClickHouse; the Go backend only reads that state,
+and its one writer (`corrCurrentReconcileLoop`'s bulk orphan-close) has no
+per-object seam. Adding a state-transition observer is a correlation-lane change,
+not an AI-lane one; the `unknown` outcome and its "unverified" wording exist so
+that trigger can be added later without a schema or vocabulary change.
+
+**How it is read.** `recall_investigations(device|peer|prefix|correlation_id,
+window)` — read-only, `CapRead`, `correlations:read`, on the skill tool
+allowlist. Tenant-scoped through `TroubleshootDeps.RecallInvestigations` (nil =
+not wired = the tool is not registered); a device argument is resolved through
+the caller's OWN inventory first, so another tenant's device name is
+`ErrNotFound`, never "no memory". <= 5 rows, each clipped, cited `memory:<id>`,
+each stating the outcome in operator words — "operator confirmed" / "operator
+marked wrong" / "unverified" — and a rejected conclusion additionally flagged
+*do not repeat it without new evidence*. The evidence ids a remembered
+conclusion rested on are quoted for traceability and explicitly marked
+HISTORICAL — the citable id is the memory row, never the ids inside it. Every
+result, including the empty and
+the no-key one, carries the NetClaw rule: **prior investigations are CONTEXT, not
+current state; verify what the device and the engine report NOW.** The store has
+no unscoped list: a recall with no entity key returns nothing, for cross-tenant
+principals too.
+
+**Memory is never a rule.** `recall_investigations` declares **no**
+`ToolResult.Signals` — there is no `memory:outcome=wrong_before` fact, by
+decision. A remembered conclusion is a hypothesis an operator once accepted or
+rejected; wiring it into the deterministic router would let one past judgement
+(or one mis-click on a thumbs-down) silently re-route every future investigation
+of that entity, and would make the assistant's path depend on its own history
+rather than on the evidence in front of it. Memory informs the NARRATIVE; the
+engine's facts alone choose the next check. The loader enforces the other half:
+a skill may gather memory only AFTER a live-state step and never first
+(`validateMemoryOrder`), so a past cause can only ever be compared with what the
+device says today. `osi-bisection`, `bgp-session-down` and `interface-down`
+gather it last.
+
+**Bounds + isolation.** Per-tenant retention cap (200 conclusions, oldest-first
+eviction, applied in the same transaction as the insert on PG and in the store on
+file); `tenant_iso` FORCE-RLS + `withTenant` on Postgres, a tenant-keyed map in
+the file backend; two new server-derived entities (`peer`, `prefix`) resolved
+once per turn from UI context or a strict address shape in the question — never
+from model text.
+
 **Not in scope, by decision:** open tool choice by the model; device writes (P6 stays
 separate and human-gated); running NetClaw or OpenClaw; MCP as a trust boundary.
 

@@ -48,6 +48,10 @@ var apiRoutes = []apiRoute{
 	{"GET", "/api/bgp/geofeed", "BGP", "RFC 8805 geofeed published for a prefix or ASN, discovered per RFC 9092 from the registry object"},
 	{"GET", "/api/bgp/aspath-graph", "BGP", "AS-path node-link graph for ?prefix= from RIS collector state (deduped, edges capped at 500)"},
 	{"GET", "/api/bgp/feed", "BGP", "Near-live BGP updates for the caller's watchlist from a bounded per-tenant ring buffer (?since= cursor); requires FEATURE_BGP_LIVE_FEED"},
+	{"GET", "/api/bgp/alerts", "BGP", "The caller's BGP alert history plus the current incident class per watched prefix (visibility_loss | origin_change | rpki_invalid | route_leak | bogon | none | unknown) with the vantage points and paths that support it; answers enabled:false with an explanation unless FEATURE_BGP_ALERTS is on — an empty list is never rendered as 'all clear'"},
+	{"GET", "/api/bgp/alerts/config", "BGP", "The caller's declared alert policy: expected origin ASNs, upstream (transit) set and the visibility/corroboration thresholds, per prefix or as a tenant default"},
+	{"PUT", "/api/bgp/alerts/config", "BGP", "Replace the caller's alert policy (infrastructure:write; the owner is stamped from the token, never the body). An empty expected-origin set means the baseline is LEARNED; an empty upstream set disables the route-leak heuristic rather than guessing a transit set"},
+	{"GET", "/api/bgp/bogons", "BGP", "Bogon prefixes seen on the caller's own BMP feed and update ring, with first/last seen and the peer, plus the set actually in force: the embedded IANA/RFC special-purpose blocks (source + transcription date included) and the OPTIONAL Team Cymru full-bogons feed when FEATURE_BGP_BOGON_FEED is on"},
 	{"POST", "/api/correlations/{id}/feedback", "RCA", "Record an operator verdict on an RCA case (correct | wrong | partial, with the wrong part)"},
 	{"GET", "/api/correlations/{id}/feedback", "RCA", "List the operator verdicts on an RCA case, newest first (caller's tenant only)"},
 	{"GET", "/api/correlations/feedback/summary", "RCA", "Windowed verdict counts + false-positive RCA rate for the caller's tenant"},
@@ -198,6 +202,7 @@ var apiRoutes = []apiRoute{
 	{"GET", "/api/itsm/servicenow", "ITSM", "ServiceNow connector status + open tickets"},
 	{"GET", "/api/itsm/jira", "ITSM", "Jira connector status + open issues"},
 	{"POST", "/api/graphql", "Query", "GraphQL endpoint (devices/alerts/findings/health)"},
+	{"POST", "/api/internal/vmalert/api/v2/alerts", "Internal", "Alertmanager-v2 webhook receiver for the vmalert evaluator (shared-secret; platform-global, not a tenant surface)"},
 }
 
 // Spec builds the OpenAPI document. Pure: it takes the build version rather

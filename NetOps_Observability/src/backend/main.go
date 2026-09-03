@@ -22,6 +22,9 @@ import (
 	"netops/backend/cloud"
 	"netops/backend/cloudconn"
 	"netops/backend/internal/apikey"
+	// VMALERT-WEBHOOK-BEGIN
+	"netops/backend/internal/alertwebhook"
+	// VMALERT-WEBHOOK-END
 	"netops/backend/internal/applog"
 	"netops/backend/internal/audit"
 	// BMP-BEGIN
@@ -29,6 +32,11 @@ import (
 	// BMP-END
 	// CONFIG-BACKUP-BEGIN
 	"netops/backend/internal/bgpdepth"
+	// CONFIG-BACKUP-END
+	// BGP-WATCH-BEGIN
+	"netops/backend/internal/bgpwatch"
+	// BGP-WATCH-END
+	// CONFIG-BACKUP-BEGIN
 	"netops/backend/internal/configdrift"
 	"netops/backend/internal/configstore"
 	// CONFIG-BACKUP-END
@@ -134,6 +142,16 @@ type server struct {
 	bgpFeed *bgpdepth.Runtime
 	bgpASPA bgpdepth.ASPAProvider
 	// BGP-DEPTH-END
+	// BGP-WATCH-BEGIN — the watchlist EVALUATOR (internal/bgpwatch): incident
+	// classes per watched prefix (#5), alerting through the notify channels and
+	// the evidence bus (#10), and the bogon set (#1). bgpWatchAPI is ALWAYS
+	// built — the embedded RFC/IANA bogon set is a real answer with or without
+	// the evaluator — while bgpWatchEval is nil unless FEATURE_BGP_ALERTS=true,
+	// so a flag-off deployment starts no worker and makes no outbound call.
+	bgpWatchAPI    *bgpwatch.API
+	bgpWatchEval   *bgpwatch.Evaluator
+	bgpWatchPolicy bgpwatch.PolicyStore
+	// BGP-WATCH-END
 	// Routing-protocol diagnostics (Troubleshooting item 7). Catalog + analyzer
 	// are pure/immutable and always built; the collector is wired to the live
 	// read-only SSH command source ONLY when FEATURE_PROTOCOL_DIAG_COLLECT=true
@@ -207,14 +225,21 @@ type server struct {
 	incidentTimeline      timeintel.TimelineStore   // RCA Time Intelligence manual lifecycle events #84 (in-memory or pg)
 	incidentTimeMetrics   incidentTimeMetricsStore  // RCA Time Intelligence backfilled phase-metric snapshots #84 (in-memory or pg)
 	aiFeedback            ai.FeedbackStore          // Iris AI answer feedback (thumbs up/down), privacy-safe (in-memory or pg)
-	applications          appid.AppStore            // Application Identification registry #81 P0 (in-memory or pg)
-	appCatalog            *appCatalogHolder         // Application Identification IP→app resolver #81 P1 (in-memory LPM catalog)
-	ngfw                  *ngfwAppResolver          // Application Identification NGFW app-id overlay #81 P-NGFW pt2 (OpenSearch-fed)
-	fusion                *fusionWorker             // Application Identity Fusion Layer #81 P4 worker (opt-in via FUSION_WORKER_ENABLED)
-	appOverrides          appCatalogStore           // Application Identification operator-defined overrides #81 P1c (in-memory or pg)
-	cloud                 cloud.Store               // Cloud App Observability inventory #81 P3A (in-memory; pg over migration 0016 next)
-	bizServices           *cloud.BizSvcStore        // Business Service mapping + manual overrides #0024 (nil on file backend)
-	cloudApp              *cloudAppResolver         // Cloud identity-map → appid bridge #81 P3F+1 (consumes the cloud inventory for app naming)
+	// IRIS-MEMORY-BEGIN — IRIS Phase B investigation memory (design §3.5).
+	// irisMemory is the tenant-scoped store of CONCLUDED investigations
+	// (migration 0040 / file fallback); irisPending holds a conclusion in memory
+	// until an operator judges it on /api/ai/feedback. Both always set.
+	irisMemory  ai.InvestigationStore
+	irisPending *ai.PendingInvestigations
+	// IRIS-MEMORY-END
+	applications appid.AppStore     // Application Identification registry #81 P0 (in-memory or pg)
+	appCatalog   *appCatalogHolder  // Application Identification IP→app resolver #81 P1 (in-memory LPM catalog)
+	ngfw         *ngfwAppResolver   // Application Identification NGFW app-id overlay #81 P-NGFW pt2 (OpenSearch-fed)
+	fusion       *fusionWorker      // Application Identity Fusion Layer #81 P4 worker (opt-in via FUSION_WORKER_ENABLED)
+	appOverrides appCatalogStore    // Application Identification operator-defined overrides #81 P1c (in-memory or pg)
+	cloud        cloud.Store        // Cloud App Observability inventory #81 P3A (in-memory; pg over migration 0016 next)
+	bizServices  *cloud.BizSvcStore // Business Service mapping + manual overrides #0024 (nil on file backend)
+	cloudApp     *cloudAppResolver  // Cloud identity-map → appid bridge #81 P3F+1 (consumes the cloud inventory for app naming)
 	// Service Path Graph (frozen contract v1, docs/design/service-path-graph-contract.md):
 	// the ordered LAN→SD-WAN→carrier/cloud→application RCA spine. pathGraph is the
 	// storage (PG registries + CH observation/hop streams, or in-memory on the file
@@ -290,6 +315,22 @@ type server struct {
 	// A router PUSHES its RIB-In to us; we configure nothing on any device.
 	bmpAPI *bmp.API
 	// BMP-END
+	// VMALERT-WEBHOOK-BEGIN — the DELIVERY layer for the vmalert evaluator
+	// (internal/alertwebhook). vmalert ran with -notifier.blackhole: rules
+	// fired and nothing was ever delivered to a human (a 3h correlation outage
+	// on 2026-09-02 went unnoticed with 13 alerts standing firing). This is the
+	// Alertmanager-v2 receiver its notifier POSTs to, fanning alerts into the
+	// existing notify.Dispatcher channels.
+	//
+	// vmalertWebhook is nil unless VMALERT_WEBHOOK_TOKEN is set — fail-closed:
+	// an unauthenticated alert fan-out is never served, and the route is not
+	// registered at all. vmalertWebhookMetrics is built UNCONDITIONALLY so
+	// /metrics always carries netops_alert_webhook_enabled: "nothing was
+	// delivered because nothing fired" and "nothing was delivered because the
+	// receiver was never wired" must be distinguishable.
+	vmalertWebhook        http.HandlerFunc
+	vmalertWebhookMetrics *alertwebhook.Metrics
+	// VMALERT-WEBHOOK-END
 	// igpAPI serves the read-only OSPF/IS-IS monitoring subtree
 	// /api/protocols/{ospf|isis}/{adjacencies,summary,health} (internal/igpmon).
 	// It is always on — it collects nothing and reads only telemetry the
@@ -801,15 +842,19 @@ func newServer() *server {
 	srv.incidentTimeline = newIncidentTimelineStore()       // RCA Time Intelligence manual lifecycle events (#84)
 	srv.incidentTimeMetrics = newIncidentTimeMetricsStore() // RCA Time Intelligence backfilled snapshots (#84); ticker starts in main()
 	srv.aiFeedback = newAIFeedbackStore()                   // Iris AI feedback loop (privacy-safe ratings)
-	srv.applications = newApplicationStore()                // Application Identification registry (#81 P0)
-	srv.appCatalog = newAppCatalogHolder()                  // Application Identification IP→app resolver (#81 P1)
-	srv.ngfw = newNgfwAppResolver()                         // Application Identification NGFW app-id overlay (#81 P-NGFW pt2)
-	srv.appOverrides = newAppCatalogStore()                 // Application Identification operator-defined overrides (#81 P1c)
-	srv.cloud = newCloudStore()                             // Cloud App Observability inventory (#81 P3A)
-	srv.bizServices = newBusinessServiceStore()             // Business Service mapping + manual overrides (migration 0024)
-	srv.cloudApp = newCloudAppResolver(srv.cloud)           // Cloud identity-map → appid bridge (#81 P3F+1)
-	srv.pathGraph = newPathGraphStore()                     // Service Path Graph storage (contract v1); ingester starts in main()
-	srv.remotePaths = newRemotePathStore()                  // remote-vantage path pushes (the LAN vantage's transport)
+	// IRIS-MEMORY-BEGIN
+	srv.irisMemory = newIrisInvestigationStore()    // Iris investigation memory (migration 0040 / file fallback)
+	srv.irisPending = ai.NewPendingInvestigations() // concluded-but-unjudged buffer (in memory, bounded, never persisted)
+	// IRIS-MEMORY-END
+	srv.applications = newApplicationStore()      // Application Identification registry (#81 P0)
+	srv.appCatalog = newAppCatalogHolder()        // Application Identification IP→app resolver (#81 P1)
+	srv.ngfw = newNgfwAppResolver()               // Application Identification NGFW app-id overlay (#81 P-NGFW pt2)
+	srv.appOverrides = newAppCatalogStore()       // Application Identification operator-defined overrides (#81 P1c)
+	srv.cloud = newCloudStore()                   // Cloud App Observability inventory (#81 P3A)
+	srv.bizServices = newBusinessServiceStore()   // Business Service mapping + manual overrides (migration 0024)
+	srv.cloudApp = newCloudAppResolver(srv.cloud) // Cloud identity-map → appid bridge (#81 P3F+1)
+	srv.pathGraph = newPathGraphStore()           // Service Path Graph storage (contract v1); ingester starts in main()
+	srv.remotePaths = newRemotePathStore()        // remote-vantage path pushes (the LAN vantage's transport)
 	if n, errs := srv.appCatalog.Reload(); srv.appCatalog.FeedsDir() != "" {
 		log.Printf("appid: loaded %d catalog prefixes from %s (%d feed errors)", n, srv.appCatalog.FeedsDir(), len(errs))
 	}
@@ -875,6 +920,23 @@ func newServer() *server {
 		})
 	}
 	// BGP-DEPTH-END
+	// BGP-WATCH-BEGIN — the watchlist evaluator + its HTTP surface. The policy
+	// store and the bogon set are always built (both are cheap and both are
+	// useful with the evaluator off); the evaluator itself only under
+	// FEATURE_BGP_ALERTS. Construction failure is LOUD, never silently dormant.
+	srv.bgpWatchPolicy = newBGPAlertPolicyStore()
+	bgpBogons := bgpwatch.NewBogonSet()
+	if eval, err := srv.buildBGPWatch(srv.bgpWatchPolicy, bgpBogons); err != nil {
+		logError("bgp-watch", "BGP alerting could not be constructed — NO watchlist alert will be raised", errf(err))
+	} else {
+		srv.bgpWatchEval = eval
+	}
+	if api, err := srv.buildBGPWatchAPI(srv.bgpWatchPolicy, bgpBogons, srv.bgpWatchEval); err != nil {
+		logError("bgp-watch", "the BGP alerts/bogons routes could not be wired — they will answer 404", errf(err))
+	} else {
+		srv.bgpWatchAPI = api
+	}
+	// BGP-WATCH-END
 	// PROTOCOL-DIAG-BEGIN — Routing-protocol diagnostics (Troubleshooting item
 	// 7): the catalog + signatures are a pure, always-available library (they
 	// never touch a device). The LIVE collect transport is opt-in and
@@ -955,6 +1017,34 @@ func newServer() *server {
 	// UI-configurable email/SMS/push channels (registers live channels into the
 	// dispatcher built above). Must come after notifier is set on srv.
 	srv.notifyCfg = newNotifyConfigStore(envOr("NOTIFY_CONFIG_FILE", "/data/notify_config.json"), srv)
+	// VMALERT-WEBHOOK-BEGIN — the vmalert delivery path. Must come after the
+	// notifier is on srv (it is the fan-out target).
+	srv.vmalertWebhookMetrics = alertwebhook.NewMetrics()
+	if token := strings.TrimSpace(os.Getenv(alertwebhook.EnvToken)); token == "" {
+		// LOUD, not silent (§10): with no shared secret the receiver stays
+		// unregistered, which means vmalert's alerts go nowhere again — the
+		// exact condition this module exists to end. Name the variable so the
+		// fix is one line away.
+		logWarn("alertwebhook", "vmalert alert delivery is DISABLED: "+alertwebhook.EnvToken+" is unset — "+
+			"vmalert rules will fire and nothing will be delivered to any notification channel", map[string]any{
+			"env":      alertwebhook.EnvToken,
+			"endpoint": alertwebhook.AlertsPath,
+		})
+	} else {
+		h, err := alertwebhook.Handler(alertwebhook.Deps{
+			Dispatcher: srv.notifier,
+			Token:      token,
+			Cooldown:   alertwebhook.ParseCooldown(os.Getenv(alertwebhook.EnvCooldown), alertWebhookLog),
+			Metrics:    srv.vmalertWebhookMetrics,
+			Log:        alertWebhookLog,
+		})
+		if err != nil {
+			logError("alertwebhook", "vmalert webhook receiver could not be built — NO vmalert alert will be delivered", errf(err))
+		} else {
+			srv.vmalertWebhook = h
+		}
+	}
+	// VMALERT-WEBHOOK-END
 	srv.ldap = newLDAPConfigStore(envOr("LDAP_CONFIG_FILE", "/data/ldap_config.json"), vault)
 	srv.tacacs = newTACACSConfigStore(envOr("TACACS_CONFIG_FILE", "/data/tacacs_config.json"), vault)
 	srv.tokenPolicy = newTokenPolicyStore(envOr("TOKEN_POLICY_FILE", "/data/token_policy.json"), refresh)
@@ -1466,6 +1556,16 @@ func Run() {
 		}
 	}
 	// SECURITY-LANE-END
+	// BGP-WATCH-BEGIN — the BGP watchlist evaluator (tracker #5/#10): per
+	// tenant, on a bounded jittered ticker, classifying each watched prefix and
+	// emitting notifications + evidence on the TRANSITIONS. Opt-in and
+	// default-off (FEATURE_BGP_ALERTS=true); with the flag off nothing was
+	// constructed above and no worker starts here.
+	if srv.bgpWatchEval != nil {
+		eval := srv.bgpWatchEval
+		workers.start("bgp-watch", func() { eval.Run(ctx) })
+	}
+	// BGP-WATCH-END
 	// CONFIG-BACKUP-BEGIN — Config Backup & Drift (P3-CFG): capture over the SSH
 	// gateway → sealed, content-addressed version store → drift verdict →
 	// ConfigDrift finding onto netops.security. Opt-in and default-off; with the
@@ -1903,6 +2003,14 @@ func (s *server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/bgp/aspath-graph", s.handleBGPASPathGraph)
 	mux.HandleFunc("/api/bgp/feed", s.handleBGPFeed)
 	// BGP-DEPTH-END
+	// BGP-WATCH-BEGIN — alerting (#10), the incident classes behind it (#5) and
+	// the bogon listing (#1). All three are per-tenant DATA and are registered
+	// individually so each stays visible to the route-isolation ledger; a nil
+	// bgpWatchAPI (construction refused) answers 404 on all three.
+	mux.HandleFunc("/api/bgp/alerts", s.bgpWatchAPI.HandleAlerts)
+	mux.HandleFunc("/api/bgp/alerts/config", s.bgpWatchAPI.HandleAlertConfig)
+	mux.HandleFunc("/api/bgp/bogons", s.bgpWatchAPI.HandleBogons)
+	// BGP-WATCH-END
 	// Routing-protocol diagnostics (Troubleshooting item 7).
 	mux.HandleFunc("/api/troubleshoot/protocol-diagnostics/catalog", s.handleProtocolDiagCatalog)
 	mux.HandleFunc("/api/troubleshoot/protocol-diagnostics/analyze", s.handleProtocolDiagAnalyze)
@@ -1934,6 +2042,19 @@ func (s *server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/bgp/bmp/updates", bmpH)
 	mux.HandleFunc("/api/bgp/bmp/stats", bmpH)
 	// BMP-END
+	// VMALERT-WEBHOOK-BEGIN — the vmalert delivery path (internal/alertwebhook).
+	// SUBTREE pattern: vmalert's -notifier.url is an Alertmanager BASE url and
+	// the notifier appends /api/v2/alerts, so the real request is
+	// POST /api/internal/vmalert/api/v2/alerts. The handler pins that exact
+	// suffix and 404s everything else in the subtree.
+	//
+	// Registered ONLY when the receiver was built (VMALERT_WEBHOOK_TOKEN set):
+	// fail-closed, so an unconfigured stack exposes no unauthenticated fan-out
+	// and the mux answers 404 rather than enumerating the feature.
+	if s.vmalertWebhook != nil {
+		mux.HandleFunc("/api/internal/vmalert/", s.handleVMAlertWebhook)
+	}
+	// VMALERT-WEBHOOK-END
 	// VRF-IFACES-BEGIN — per-device interfaces grouped by routing instance
 	// (frontend-wave item 4, internal/ifgroup). READ-ONLY over telemetry the
 	// platform already collects, in the DEVICE's own dialect (VRF /
@@ -2956,6 +3077,16 @@ func (s *server) handlePromMetrics(w http.ResponseWriter, _ *http.Request) {
 	// BMP-BEGIN
 	s.bmpAPI.Metrics().Write(w) // nil-safe on both the API and the counter set
 	// BMP-END
+	// VMALERT-WEBHOOK-BEGIN — always written, even when the receiver is off, so
+	// netops_alert_webhook_enabled distinguishes "nothing fired" from "the
+	// delivery path was never wired".
+	s.vmalertWebhookMetrics.Write(w) // nil-safe
+	// VMALERT-WEBHOOK-END
+	// BGP-WATCH-BEGIN
+	if s.bgpWatchEval != nil {
+		s.bgpWatchEval.Metrics().Write(w)
+	}
+	// BGP-WATCH-END
 	if s.parserCovMetrics != nil {
 		s.parserCovMetrics.Write(w)
 	}
@@ -3355,6 +3486,30 @@ func isPublicPath(p string) bool {
 	}
 	return false
 }
+
+// VMALERT-WEBHOOK-BEGIN — the vmalert delivery path (internal/alertwebhook).
+
+// alertWebhookLog adapts the package's injected LogFunc onto the structured
+// app log (§10). The receiver NEVER passes a credential in these fields.
+func alertWebhookLog(level, msg string, fields map[string]any) {
+	applog.Log(level, "alertwebhook", msg, fields)
+}
+
+// handleVMAlertWebhook serves the Alertmanager-v2 receiver vmalert POSTs to.
+//
+// The route is registered only when the receiver was built, so a nil handler
+// here should be unreachable; it answers 404 anyway rather than panicking —
+// fail-closed is cheaper than a nil deref in the process that is supposed to
+// notice outages.
+func (s *server) handleVMAlertWebhook(w http.ResponseWriter, r *http.Request) {
+	if s.vmalertWebhook == nil {
+		http.NotFound(w, r)
+		return
+	}
+	s.vmalertWebhook(w, r)
+}
+
+// VMALERT-WEBHOOK-END
 
 // requestBodyLimit picks the byte cap for a request: the tight pre-auth cap for
 // unauthenticated routes, the global backstop for everything else.

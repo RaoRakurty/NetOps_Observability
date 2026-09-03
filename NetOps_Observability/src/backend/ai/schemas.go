@@ -99,6 +99,12 @@ type Answer struct {
 	// the UI can show "investigated: N lookups" with the same provenance the
 	// agent loop already returns.
 	Lookups []string `json:"lookups,omitempty"`
+	// AnswerID names THIS answer (IRIS Phase B). It is stamped only on a
+	// concluded skill-chain answer, and exists so a later thumbs up/down can say
+	// exactly which investigation it is judging — the judgement is what turns a
+	// conclusion into an investigation-memory row. Opaque to the UI; echo it back
+	// on POST /api/ai/feedback as `answer_id`.
+	AnswerID string `json:"answer_id,omitempty"`
 }
 
 // IncidentCounts is the normalized incident-count set (spec §6). Every count

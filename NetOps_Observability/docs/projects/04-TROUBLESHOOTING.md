@@ -124,8 +124,24 @@ troubleshooting documentation is the knowledge source).
   Fable distils to SKILL.md (+ CommandTable/signature entries) with `source:`
   citations; owner reviews prose; golden evals per skill. Spec §3.3. Waiting on
   the first drop.
+- ✅ **Phase B — investigation memory** (2026-09-02). Tenant-scoped memory of
+  CONCLUDED investigations: `ai/investigation_memory.go` (row, FileStore + PG
+  store), `ai/investigation_pending.go` (the concluded→judged bridge),
+  `ai/recall.go` (`recall_investigations`), migration
+  `0040_iris_investigations.sql` (`tenant_iso` FORCE-RLS, per-tenant retention
+  cap, no unscoped list). A row is written ONLY when an operator judges the
+  answer on the existing feedback path (up → confirmed, down → wrong); the
+  case-close trigger is not wired because no in-process hook exists (closure is
+  authored by the Python engine into ClickHouse) — recorded in the design doc.
+  Memory is surfaced as at most 5 clipped, `memory:<id>`-cited evidence rows with
+  the outcome stated and the "verify current state first" rule attached, and it
+  declares NO chain signal: memory is evidence, never a routing rule. The loader
+  refuses a skill that gathers memory before live state; `osi-bisection`,
+  `bgp-session-down` and `interface-down` gather it last. Cross-org isolation
+  test + PG RLS test shipped. Spec §3.5.
 - [ ] A4 ENGINE-side proactive sweep (unsolicited symptom rules for the
-  heartbeat list) · Phase B guide/memory · Phase C human-in-the-loop actions
+  heartbeat list) · Phase B **guide** (the remaining half: a guided,
+  operator-facing walkthrough) · Phase C human-in-the-loop actions
   (P6, separate subsystem) · Phase D interop.
 
 ## D. Frontend-wave items (owner's original 13-item list)

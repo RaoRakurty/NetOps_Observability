@@ -86,6 +86,11 @@ const (
 	// aiBGPFeedScan bounds how many ring entries are scanned to satisfy a
 	// prefix-filtered feed read.
 	aiBGPFeedScan = 200
+
+	// aiMemoryTimeout bounds one investigation-memory recall (§9: all IO has a
+	// timeout). Memory is a small, indexed, tenant-scoped read; if it cannot
+	// answer inside this, the turn is better off without it than late.
+	aiMemoryTimeout = 3 * time.Second
 )
 
 // aiStateBattery is the shipped show-first state battery, compiled ONCE. It is
@@ -127,7 +132,48 @@ func (s *server) aiTroubleshootDeps(r *http.Request, claims jwtClaims) ai.Troubl
 		deps.SecurityFindings = s.aiSecurityFindings(claims)
 	}
 	deps.CaseTimeline = s.aiCaseTimeline(claims)
+	// IRIS Phase B: investigation memory. Wired only when the store exists, so a
+	// deployment without it never exposes a tool that could only answer nothing.
+	if s.irisMemory != nil {
+		deps.RecallInvestigations = s.aiRecallInvestigations(claims)
+	}
 	return deps
+}
+
+// ---- investigation memory (IRIS Phase B) ------------------------------------
+
+// aiRecallInvestigations reads the CALLER'S OWN prior concluded investigations.
+// The tenant and the cross flag come from the CLAIMS (the token is the
+// authority), never from the query — so a recall can only ever see this
+// tenant's memory, and the store refuses an unkeyed query outright (there is no
+// tenant-wide dump to reach). A device argument was already resolved through the
+// caller's own inventory by the tool, so another tenant's device name never gets
+// this far.
+func (s *server) aiRecallInvestigations(claims jwtClaims) func(context.Context, ai.Principal, ai.InvestigationQuery) ([]ai.InvestigationRow, error) {
+	tenant, cross := principalTenant(claims)
+	return func(ctx context.Context, _ ai.Principal, q ai.InvestigationQuery) ([]ai.InvestigationRow, error) {
+		if s.irisMemory == nil {
+			return nil, ai.ErrNotImplemented
+		}
+		if q.Limit <= 0 || q.Limit > ai.MaxRecallRows {
+			q.Limit = ai.MaxRecallRows
+		}
+		ctx, cancel := context.WithTimeout(ctx, aiMemoryTimeout)
+		defer cancel()
+		return s.irisMemory.Recall(ctx, tenant, cross, q)
+	}
+}
+
+// aiRecordInvestigation is the WRITE half: a finished skill chain hands its
+// conclusion here, and it waits — in memory, bounded, per (tenant, subject) —
+// for an operator to judge it on the feedback call. Nothing is persisted until
+// then: an unjudged conclusion is forgotten, which is the correct outcome (a
+// memory row's whole value is the outcome attached to it).
+func (s *server) aiRecordInvestigation(claims jwtClaims) func(context.Context, ai.Principal, ai.ConcludedInvestigation) {
+	tenant, _ := principalTenant(claims)
+	return func(_ context.Context, _ ai.Principal, inv ai.ConcludedInvestigation) {
+		s.irisPending.Stash(tenant, claims.Sub, inv)
+	}
 }
 
 // aiToolAudit records one skill gather-step execution — or, when the tool is

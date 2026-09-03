@@ -32,7 +32,6 @@ import (
 // isolation-enforced at the store/RLS layer (see routeIsolationLedger notes);
 // the dedicated HTTP isolation test is backlog. FROZEN — do not grow.
 var isolationCoverageBaseline = map[string]string{
-	"/api/ai/feedback":                        "store/RLS-scoped; dedicated HTTP isolation test is backlog",
 	"/api/ai/modules":                         "store/RLS-scoped; dedicated HTTP isolation test is backlog",
 	"/api/apikeys/":                           "store/RLS-scoped; dedicated HTTP isolation test is backlog",
 	"/api/appid/catalog":                      "store/RLS-scoped; dedicated HTTP isolation test is backlog",

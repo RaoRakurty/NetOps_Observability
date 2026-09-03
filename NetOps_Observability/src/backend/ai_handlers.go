@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"netops/backend/ai"
+	"netops/backend/internal/platformdb"
 )
 
 // ai_handlers.go — the Iris AI HTTP surface. POST /api/ai/ask runs the
@@ -172,7 +173,24 @@ func (s *server) newOrchestrator(r *http.Request, claims jwtClaims) *ai.Orchestr
 
 		Troubleshoot: deps,                  // tenant-scoped Phase-A reads
 		ToolAudit:    s.aiToolAudit(claims), // one audit line per gather step (arg NAMES only)
+		// IRIS Phase B: where a CONCLUDED investigation goes. It is held (in
+		// memory, per principal) until an operator judges it on /api/ai/feedback;
+		// only then is a tenant-scoped memory row written.
+		RecordInvestigation: s.aiRecordInvestigation(claims),
 	}
+}
+
+// newIrisInvestigationStore picks the investigation-memory backend (IRIS Phase
+// B): RLS-scoped Postgres (migration 0040) under STORE_BACKEND=postgres, else
+// the tenant-keyed file store — the same two-backend shape every other
+// tenant-scoped register in this codebase uses. It is called from newServer's
+// IRIS-MEMORY block; it lives here so the whole memory surface stays in the AI
+// lane.
+func newIrisInvestigationStore() ai.InvestigationStore {
+	if ps, ok := platformdb.ActivePG(); ok {
+		return ai.NewPGInvestigationStore(ps.DB())
+	}
+	return ai.NewInvestigationFileStore(envOr("IRIS_MEMORY_FILE", "/data/iris_investigations.json"))
 }
 
 // aiPrincipal maps the coarse RBAC grid (overview/explore/alerts/infrastructure/
@@ -261,6 +279,11 @@ func (s *server) handleAIFeedback(w http.ResponseWriter, r *http.Request) {
 		ConversationID string `json:"conversation_id"`
 		Intent         string `json:"intent"`
 		Rating         string `json:"rating"` // up | down
+		// AnswerID names the answer being judged (Answer.answer_id, IRIS Phase
+		// B). Optional: when absent the rating is taken to judge THIS
+		// principal's most recent concluded investigation, which is what the
+		// shipped UI (one thumbs control on the latest answer) means by it.
+		AnswerID string `json:"answer_id"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, err)
@@ -283,11 +306,56 @@ func (s *server) handleAIFeedback(w http.ResponseWriter, r *http.Request) {
 			log.Printf("ai feedback persist: %v", err) // best-effort; still audit below
 		}
 	}
+	// IRIS Phase B: a rating is also the JUDGEMENT that turns the answer's
+	// concluded investigation into tenant-scoped memory. Only a rated
+	// conclusion is remembered — memory whose outcome is unknown would be a
+	// claim we cannot stand behind.
+	remembered := s.rememberJudgedInvestigation(r, claims, tenant, rating, req.AnswerID)
 	logInfo("ai", "feedback", map[string]any{
 		"tenant": claims.Tenant, "sub": claims.Sub,
 		"conversation_id": req.ConversationID, "intent": req.Intent, "rating": rating,
+		"investigation_remembered": remembered,
 	})
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// rememberJudgedInvestigation writes ONE investigation-memory row for the
+// answer this rating judged (IRIS Phase B, design §3.5). It reports whether a
+// row was written, for the audit line.
+//
+// It is deliberately BEST-EFFORT: the operator's rating is already recorded and
+// audited, and failing their request because a memory write failed would be the
+// wrong trade. A failure is LOGGED, never swallowed (§10).
+//
+// The owner is the tenant derived from the TOKEN (§3a rule 2) — the pending
+// buffer is keyed by (tenant, subject), so a rating can only ever judge an
+// investigation this principal itself concluded.
+//
+// The other write trigger the design names — a correlation case CLOSING with a
+// verdict — is NOT wired, because there is no in-process hook for it: case
+// closure is authored by the Python correlation engine and lands in ClickHouse;
+// the Go backend only ever reads that state, and the one Go writer
+// (corrCurrentReconcileLoop's bulk orphan-close) has no per-object seam. Adding
+// a state-transition detector is a correlation-lane change, not an AI-lane one,
+// so Phase B ships the operator-judgement trigger only.
+func (s *server) rememberJudgedInvestigation(r *http.Request, claims jwtClaims, tenant, rating, answerID string) bool {
+	if s.irisMemory == nil || s.irisPending == nil {
+		return false
+	}
+	inv, ok := s.irisPending.Take(tenant, claims.Sub, answerID)
+	if !ok {
+		return false
+	}
+	outcome := ai.OutcomeConfirmed
+	if rating == "down" {
+		outcome = ai.OutcomeWrong
+	}
+	row := ai.InvestigationRowFrom(tenant, inv, outcome, time.Now().UTC())
+	if err := s.irisMemory.Record(r.Context(), row); err != nil {
+		log.Printf("iris investigation memory persist: %v", err)
+		return false
+	}
+	return true
 }
 
 // handleAIFeedbackStats: GET /api/ai/feedback — the tenant-scoped feedback
