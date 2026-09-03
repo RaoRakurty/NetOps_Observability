@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# shellcheck disable=SC2317  # collectors, dcompose and cleanup are invoked indirectly (collector table, timeout wrappers, the EXIT trap); shellcheck on the CI runner reports each as unreachable, one per run
 #
 # support-bundle.sh — one redacted diagnostic bundle a pilot can send back.
 #
@@ -51,7 +52,6 @@
 # see their call sites.
 # shellcheck disable=SC2329
 set -euo pipefail
-# shellcheck disable=SC2317  # collectors, dcompose and cleanup are invoked indirectly (collector table, timeout wrappers, the EXIT trap); shellcheck on the CI runner reports each as unreachable, one per run
 export PATH="/usr/local/bin:/usr/bin:/bin:${PATH:-}"
 
 SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
