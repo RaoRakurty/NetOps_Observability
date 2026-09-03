@@ -44,7 +44,7 @@
   "overrides": {
     "webpack": "5.88.2",
     "brace-expansion": "^5.0.8",
-    "fast-uri": "^3.1.4",
+    "fast-uri": "^3.1.6",
     "svgo": "^3.3.4"
   }
 }

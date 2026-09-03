@@ -1,7 +1,7 @@
 {
   "bomFormat": "CycloneDX",
   "specVersion": "1.6",
-  "serialNumber": "urn:uuid:bb411042-eeb8-569a-8b29-588e6039bd47",
+  "serialNumber": "urn:uuid:a28adc7e-c939-5638-af3b-06ba6c93367d",
   "version": 1,
   "metadata": {
     "timestamp": "2026-09-03T06:15:15+00:00",
@@ -17731,10 +17731,10 @@
     },
     {
       "type": "library",
-      "bom-ref": "pkg:npm/fast-uri@3.1.5",
+      "bom-ref": "pkg:npm/fast-uri@3.1.7",
       "name": "fast-uri",
-      "version": "3.1.5",
-      "purl": "pkg:npm/fast-uri@3.1.5",
+      "version": "3.1.7",
+      "purl": "pkg:npm/fast-uri@3.1.7",
       "scope": "required",
       "properties": [
         {
@@ -17756,7 +17756,7 @@
       "hashes": [
         {
           "alg": "SHA-512",
-          "content": "807c00d4ef4b0c870aba730a84e6d2fc78a6c2d7a13b59cf50408a02ee53a4a81a3b5f5f716125e1b96259ed635b1545bc85f3b498e34382fc5d0d4453d7fb27"
+          "content": "74ebd95738dd65dcfba6177dbfa8c26f0c6b056ddf2ba9fc45cd02b5d98ce1bba6ccc9f1cb005886ea61e89f35f51470fe4bbeacb6de9707ccba792dbb35551e"
         }
       ]
     },

@@ -535,8 +535,12 @@ def test_platform_alert_noise_defaults_match_the_go_constants():
     chronic warnings each spent a push. A compose default that drifts from the
     code default would mean the stack behaves one way on a fresh install and
     another way in the tests that prove the behaviour."""
-    src = "\n".join((ALERTWEBHOOK_PKG / f).read_text()
-                     for f in ("hostroute.go", "pushbudget.go"))
+    # The digest window lives in alertwebhook; the push budget + page reserve
+    # moved to notify/pushbudget.go on 2026-09-03 when the bucket became
+    # per-server and shared by the product ntfy channel and the host route.
+    notify_pkg = ALERTWEBHOOK_PKG.parent.parent / "notify"
+    src = "\n".join([(ALERTWEBHOOK_PKG / "hostroute.go").read_text(),
+                      (notify_pkg / "pushbudget.go").read_text()])
     consts = {
         "PLATFORM_ALERTS_WARNING_DIGEST_INTERVAL":
             (r"DefaultWarningDigestInterval\s*=\s*(\d+)\s*\*\s*time\.Minute", "30m", "30"),
@@ -548,7 +552,7 @@ def test_platform_alert_noise_defaults_match_the_go_constants():
     env = service_env("api")
     for var, (pattern, compose_default, go_value) in consts.items():
         m = re.search(pattern, src)
-        assert m, f"the Go default behind {var} is gone from hostroute.go"
+        assert m, f"the Go default behind {var} is gone from hostroute.go / notify/pushbudget.go"
         assert m.group(1) == go_value, (
             f"{var}: the Go default moved to {m.group(1)} — update "
             f"docker-compose.yml, scripts/install.py and scripts/update.sh with it.")
