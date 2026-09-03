@@ -51,6 +51,7 @@ export const ROUTE_CHUNKS: Record<string, () => Promise<unknown>> = {
   GrafanaTab: () => import("./tabs/Grafana"),
   SearchDashboardsTab: () => import("./tabs/SearchDashboards"),
   Settings: () => import("./tabs/Settings"),
+  DataProtection: () => import("./pages/DataProtection"),
   SourceOfTruth: () => import("./tabs/SourceOfTruth"),
   StackHealth: () => import("./tabs/StackHealth"),
   AuditLog: () => import("./tabs/AuditLog"),
@@ -114,6 +115,7 @@ const MetricsExplorer = lazy(ROUTE_CHUNKS["MetricsExplorer"] as () => Promise<{ 
 const GrafanaTab = lazy(ROUTE_CHUNKS["GrafanaTab"] as () => Promise<{ default: React.ComponentType<any> }>);
 const SearchDashboardsTab = lazy(ROUTE_CHUNKS["SearchDashboardsTab"] as () => Promise<{ default: React.ComponentType<any> }>);
 const Settings = lazy(ROUTE_CHUNKS["Settings"] as () => Promise<{ default: React.ComponentType<any> }>);
+const DataProtection = lazy(ROUTE_CHUNKS["DataProtection"] as () => Promise<{ default: React.ComponentType<any> }>);
 const SourceOfTruth = lazy(ROUTE_CHUNKS["SourceOfTruth"] as () => Promise<{ default: React.ComponentType<any> }>);
 const StackHealth = lazy(ROUTE_CHUNKS["StackHealth"] as () => Promise<{ default: React.ComponentType<any> }>);
 const AuditLog = lazy(ROUTE_CHUNKS["AuditLog"] as () => Promise<{ default: React.ComponentType<any> }>);
@@ -437,6 +439,11 @@ export const NAV: NavSection[] = [
       // (/api/stack/health 403, nginx auth_request on /search, etc.).
       { id: "regions", label: "Regions", group: "Platform", platformOnly: true, render: () => <RegionsAdmin /> },
       { id: "health", label: "Stack Health", group: "Platform", platformOnly: true, render: () => <StackHealth /> },
+      // Data Protection — the backup & recovery console. It used to be one card
+      // inside Settings; a surface that restores and deletes data is a page of
+      // its own, not a row in a settings list. Platform-global, and every route
+      // behind it is requirePlatformAdmin-gated on the server.
+      { id: "data-protection", label: "Data Protection", group: "Platform", platformOnly: true, render: () => <DataProtection /> },
       { id: "grafana", label: "Self-Monitoring", group: "Platform", platformOnly: true, requiresGrafana: true, render: () => <GrafanaTab /> },
       { id: "opensearch", label: "Search Dashboards", group: "Platform", platformOnly: true, render: () => <SearchDashboardsTab /> },
       { id: "graphql", label: "GraphQL Explorer", group: "Platform", platformOnly: true, render: () => <GraphQLExplorer /> },

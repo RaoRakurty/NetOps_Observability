@@ -11,7 +11,7 @@ import { measure, printTable, type Budget } from "./harness";
 import * as synth from "./synth";
 import budgetsJson from "./budgets.json";
 
-import { api } from "../src/services/api";
+import { api, setToken } from "../src/services/api";
 
 const budgets = budgetsJson as unknown as Record<string, Budget>;
 
@@ -21,6 +21,7 @@ import Correlations from "../src/tabs/Correlations";
 import Logs from "../src/tabs/Logs";
 import Devices from "../src/pages/Devices";
 import BgpOps from "../src/pages/BgpOps";
+import DataProtection from "../src/pages/DataProtection";
 import { TopologyInventoryPanel } from "../src/features/topology/components/TopologyInventoryPanel";
 
 // ── payloads, built ONCE (outside every timed region) ────────────────────────
@@ -44,6 +45,12 @@ const BGP_FEED = synth.bgpFeed(BGP_PREFIXES, 500);
 const BGP_BMP = synth.bgpBmpSessions(30);
 const BGP_PEER_METRICS = synth.bgpPeerMetrics(30);
 const BGP_BOGONS = synth.bgpBogons(20);
+// Data Protection: a repository holding 500 recovery points, the full coverage
+// matrix and a long audit trail — the "daily policy with a long retention"
+// case, which is where an unwindowed table would blow up.
+const DP_COVERAGE = synth.backupCoverage();
+const DP_POINTS = synth.snapshotList(500);
+const DP_OPS = synth.backupOperations(200);
 const BGP_RPKI = synth.bgpRpki(BGP_PREFIXES);
 const BGP_GRAPH = synth.bgpAsPathGraph(BGP_SELECTED);
 const BGP_GEOFEED = synth.bgpGeofeed(BGP_SELECTED);
@@ -104,6 +111,21 @@ beforeEach(() => {
   vi.spyOn(api, "bgpBogons").mockResolvedValue(BGP_BOGONS as never);
   vi.spyOn(api, "bgpBmpSessions").mockResolvedValue(BGP_BMP as never);
   vi.spyOn(api, "metricsQuery").mockResolvedValue(BGP_PEER_METRICS as never);
+
+  // Data Protection console. Its five panels read independently, so all five
+  // are stubbed; the volume that matters is the 500-row recovery-point table.
+  vi.spyOn(api, "backupCoverage").mockResolvedValue(DP_COVERAGE as never);
+  vi.spyOn(api, "snapshotList").mockResolvedValue(DP_POINTS as never);
+  vi.spyOn(api, "backupOperations").mockResolvedValue(DP_OPS as never);
+  vi.spyOn(api, "snapshotPolicy").mockResolvedValue({
+    enabled: true, schedule_cron: "30 1 * * *", retention_max_count: 14,
+    retention_max_age_days: 30, next_run: "2026-09-05T01:30:00Z",
+    last_run: { status: "SUCCESS", time: "2026-09-04T01:33:00Z", duration_seconds: 180 },
+  } as never);
+  vi.spyOn(api, "backupConfig").mockResolvedValue({
+    config: { remote_url: "rsync://nas/correlix/", schedule_enabled: true, schedule_cron: "30 2 * * *" },
+    status: {},
+  } as never);
 });
 
 afterEach(() => {
@@ -216,6 +238,39 @@ describe("frontend render budgets (high-EPS payloads)", () => {
         verify: showsAll(BGP_SELECTED, "Alert history", "BGP peers", "Bogons seen", "announce"),
       },
     ),
+    180_000,
+  );
+
+  it(
+    "data protection — 500 restore points, the coverage matrix and a 200-line operations trail",
+    async () => {
+      // The console is platform-admin gated, so the measured page must be the
+      // ADMIN one: the read-only variant renders none of the per-row action
+      // buttons and would understate the DOM by three buttons per visible row.
+      setToken("perf-session");
+      vi.spyOn(api, "me").mockResolvedValue({
+        username: "root", role: "admin", platform_admin: true,
+      } as never);
+      try {
+        await scenario(
+          "data-protection",
+          "500 restore points · 7 engines · 200 operations",
+          () => <DataProtection />,
+          {
+            update: () => <DataProtection />,
+            // Proves the whole console assembled: the coverage matrix under the
+            // operator's vocabulary, the honest "not measured" cell for the
+            // engine with no successful run, and the full 500-row table behind a
+            // windowed viewport.
+            verify: (host: HTMLElement) =>
+              hasRows(500)(host) ??
+              showsAll("Metrics history", "Recovery point per engine", "not measured —")(host),
+          },
+        )();
+      } finally {
+        setToken(null);
+      }
+    },
     180_000,
   );
 });

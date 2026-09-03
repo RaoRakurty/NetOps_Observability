@@ -1276,13 +1276,210 @@ export type SnapshotPolicy = {
   last_run?: SnapshotRun;
   next_run?: string;
   detail?: string;
+  // Additive (2026-09-03). The repository itself, so the registration fact
+  // survives a failed list read; and the stored operator INTENT behind an off
+  // schedule, so a stopped policy can never look like an accident.
+  repository?: SnapshotRepositoryView;
+  disabled_reason?: string;
+  disabled_at?: string;
+  disabled_by?: string;
+  managed_by?: string;         // "gui" = the intent stored here is authoritative
 };
 export type SnapshotPolicyUpdate = {
   enabled?: boolean;
   schedule_cron?: string;
   retention_max_count?: number;
   retention_max_age_days?: number; // 0 clears the age condition
+  /** The operator's stated reason for an enable/disable; recorded with the intent. */
+  reason?: string;
 };
+// ── Data Protection console (backup & recovery, platform-global) ─────────────
+//
+// These mirror src/backend/system_backup_contract.go one-for-one. Its governing
+// rule, which the page depends on absolutely: A VALUE THE PLATFORM DID NOT
+// MEASURE IS `null`, AND IT SHIPS WITH A SIBLING `*_detail` SAYING WHY. Never
+// coerce one of these nulls to 0, "", or false on the way in — the whole point
+// is that the screen can tell "nobody looked" from "the answer is zero".
+
+/** The snapshot repository itself, not its contents. */
+export type SnapshotRepositoryView = {
+  name: string;
+  registered: boolean;
+  type?: string;
+  location?: string;
+  /** null = no verification was attempted on this read (verification writes). */
+  verified: boolean | null;
+  verified_detail: string;
+  detail?: string;
+};
+
+export type SnapshotShardTotals = { total: number; successful: number; failed: number };
+export type SnapshotShardFailure = { index: string; shard: number; reason: string };
+
+/** One restore point. */
+export type SnapshotView = {
+  name: string;
+  state: string;                      // SUCCESS | PARTIAL | IN_PROGRESS | FAILED | INCOMPATIBLE
+  indices: string[];
+  index_count: number;
+  started_at?: string;
+  ended_at?: string;                  // empty while IN_PROGRESS
+  duration_seconds: number;
+  shards: SnapshotShardTotals;
+  failures: SnapshotShardFailure[];   // capped server-side, never null
+  failures_trimmed: number;
+  /** null unless the caller asked for sizes (?sizes=1) — one call per snapshot. */
+  size_bytes: number | null;
+  size_detail: string;
+  /** true = a restore actually ran and doc counts matched; false = probed and did
+   *  not match; null = NEVER PROBED, which is not the same as fine. */
+  restorable_verified: boolean | null;
+  restorable_verified_at?: string;
+  restorable_detail: string;
+};
+
+/** GET /api/system/backup/snapshots/list */
+export type SnapshotListView = {
+  repository: SnapshotRepositoryView;
+  snapshots: SnapshotView[];          // newest first, never null
+  total: number;
+  detail?: string;
+};
+
+export type OperationKind = "snapshot_create" | "snapshot_delete" | "snapshot_restore" | "snapshot_verify";
+export type OperationState = "running" | "succeeded" | "failed";
+
+export type OperationTarget = {
+  snapshot?: string;
+  indices?: string[];
+  mode?: string;                      // restore only: renamed | in_place
+  rename_prefix?: string;
+};
+
+/** The restorability probe's evidence — counts, not a boolean claim. */
+export type VerifyResult = {
+  snapshot: string;
+  index: string;
+  temp_index: string;
+  source_docs: number;
+  restored_docs: number;
+  match: boolean;
+  temp_deleted: boolean;
+  duration_seconds: number;
+  detail?: string;
+};
+
+/** One long-running action. Every POST below answers 202 with one of these. */
+export type BackupOperation = {
+  id: string;
+  kind: OperationKind;
+  state: OperationState;
+  actor: string;
+  started_at: string;
+  ended_at: string | null;
+  target: OperationTarget;
+  progress?: string;                  // the current step, in plain words
+  verify?: VerifyResult;              // snapshot_verify only, once it ends
+  restored_indices?: string[];        // snapshot_restore only
+  error?: string;
+};
+
+/** GET /api/system/backup/operations — the bounded ring, newest first. */
+export type OperationListView = {
+  operations: BackupOperation[];
+  capacity: number;                   // so a caller knows what it cannot see
+  detail?: string;
+};
+
+export type CoverageVerdict = "yes" | "no" | "not_applicable" | "unknown";
+export type CoverageTargetKind = "none" | "local" | "remote" | "offsite";
+
+export type CoverageSchedule = {
+  enabled: boolean;
+  cron?: string;
+  timezone?: string;
+  /** false ⇒ a host cron owns it: "external, not governed here". */
+  governed_by_gui: boolean;
+  detail: string;
+};
+
+export type CoverageRun = {
+  at: string;
+  result: string;                     // success | partial | failed | pass | fail
+  detail?: string;
+};
+
+export type CoverageRetention = {
+  max_count: number | null;
+  max_age_days: number | null;
+  detail: string;
+};
+
+export type CoverageTarget = {
+  kind: CoverageTargetKind;
+  location?: string;                  // a description, never a credentialed URL
+  immutable: boolean | null;
+  immutable_detail: string;
+  encrypted: boolean | null;
+  encrypted_detail: string;
+  detail?: string;
+};
+
+/** One row of the coverage matrix. */
+export type EngineCoverage = {
+  id: string;                         // opensearch | system_bundle | clickhouse | postgres | victoriametrics | secrets_tls | device_configs
+  name: string;
+  covered: CoverageVerdict;
+  /** Always populated, for EVERY verdict including "yes". */
+  covered_reason: string;
+  schedule: CoverageSchedule | null;
+  last_attempt: CoverageRun | null;
+  /** Empty = never succeeded. That is a measurement, not a gap. */
+  last_success_at?: string;
+  /** The newest RESTORABILITY proof — not the newest copy. */
+  last_verified: CoverageRun | null;
+  size_bytes: number | null;
+  size_detail: string;
+  retention: CoverageRetention | null;
+  target: CoverageTarget;
+  /** Achieved recovery point: the age of the last good copy, in hours. */
+  rpo_hours: number | null;
+  rpo_detail: string;
+  /**
+   * The OBJECTIVE this engine is held to. The platform does not publish one
+   * yet (see docs/design/DATA_PROTECTION_PAGE_2026-09-04.md §4), so the header
+   * reports the objective as unset rather than assuming a default and calling
+   * it met. Reading it here means wiring is one field when the server adds it.
+   */
+  rpo_target_hours?: number | null;
+  detail?: string;
+};
+
+/** A scheduled job that touches this host's data but is not owned by the product. */
+export type ExternalMechanism = {
+  name: string;
+  source: string;                     // "host crontab", "systemd timer", …
+  schedule?: string;
+  detail: string;
+};
+
+/** GET /api/system/backup/coverage */
+export type BackupCoverageView = {
+  generated_at: string;
+  engines: EngineCoverage[];          // never null
+  external: ExternalMechanism[];      // never null
+  detail?: string;
+};
+
+/** POST /api/system/backup/snapshots/restore. `renamed` is the safe default. */
+export type SnapshotRestoreRequest = {
+  snapshot: string;
+  indices?: string[];                 // empty restores every index
+  mode?: "renamed" | "in_place";
+  rename_prefix?: string;             // ignored for in_place
+  confirm?: string;                   // REQUIRED for in_place; must equal snapshot
+};
+
 export type SystemNetworkStatus = {
   dns: { servers: string[]; test_host: string; resolved?: string[]; ok: boolean; error?: string };
   ntp: { results: NTPResult[]; ok: boolean; offset_ms: number };
@@ -3559,6 +3756,60 @@ export const api = {
   snapshotPolicy: () => request<SnapshotPolicy>(`/api/system/backup/snapshots`),
   setSnapshotPolicy: (upd: SnapshotPolicyUpdate) =>
     request<SnapshotPolicy>(`/api/system/backup/snapshots`, { method: "PUT", body: JSON.stringify(upd) }),
+
+  // ── Data Protection console (platform-global; requirePlatformAdmin) ────────
+  // Contract: src/backend/system_backup_contract.go + internal/openapi/openapi.go
+  // ("Data Protection" tag). Every POST here validates, enqueues and answers
+  // 202 with an Operation; the caller polls backupOperation(id).
+
+  // contract: openapi.go GET /api/system/backup/coverage
+  backupCoverage: () => request<BackupCoverageView>(`/api/system/backup/coverage`),
+
+  // contract: openapi.go GET /api/system/backup/snapshots/list
+  // `sizes` costs one _status call per snapshot against the repository, so it is
+  // opt-in: the table reads without it and shows each row's size_detail instead.
+  snapshotList: (opts: { sizes?: boolean; limit?: number } = {}) => {
+    const p = new URLSearchParams();
+    if (opts.sizes) p.set("sizes", "1");
+    if (opts.limit) p.set("limit", String(opts.limit));
+    const q = p.toString();
+    return request<SnapshotListView>(`/api/system/backup/snapshots/list${q ? `?${q}` : ""}`);
+  },
+
+  // contract: openapi.go POST /api/system/backup/snapshots/create
+  // The name is generated server-side against a closed grammar — never sent.
+  createSnapshot: (note?: string) =>
+    request<BackupOperation>(`/api/system/backup/snapshots/create`, {
+      method: "POST", body: JSON.stringify(note ? { note } : {}),
+    }),
+
+  // contract: openapi.go POST /api/system/backup/snapshots/delete
+  // Type-to-confirm: `confirm` must equal `snapshot` exactly (server re-checks).
+  deleteSnapshot: (snapshot: string, confirm: string) =>
+    request<BackupOperation>(`/api/system/backup/snapshots/delete`, {
+      method: "POST", body: JSON.stringify({ snapshot, confirm }),
+    }),
+
+  // contract: openapi.go POST /api/system/backup/snapshots/restore
+  restoreSnapshot: (req: SnapshotRestoreRequest) =>
+    request<BackupOperation>(`/api/system/backup/snapshots/restore`, {
+      method: "POST", body: JSON.stringify(req),
+    }),
+
+  // contract: openapi.go POST /api/system/backup/snapshots/verify
+  // Omitting the snapshot probes the newest SUCCESS — that is the restore drill.
+  verifySnapshot: (snapshot?: string) =>
+    request<BackupOperation>(`/api/system/backup/snapshots/verify`, {
+      method: "POST", body: JSON.stringify(snapshot ? { snapshot } : {}),
+    }),
+
+  // contract: openapi.go GET /api/system/backup/operations
+  backupOperations: () => request<OperationListView>(`/api/system/backup/operations`),
+
+  // contract: openapi.go GET /api/system/backup/operations/{id}
+  backupOperation: (id: string) =>
+    request<BackupOperation>(`/api/system/backup/operations/${encodeURIComponent(id)}`),
+
   testSystemNetwork: (host?: string) =>
     request<SystemNetworkStatus>(`/api/system/network/test${host ? `?host=${encodeURIComponent(host)}` : ""}`, { method: "POST" }),
   findings: (limit = 100, severity?: string) => {

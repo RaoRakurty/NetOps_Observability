@@ -6,5 +6,6 @@
   "log-search": { "mountMs": 500, "updateMs": 120, "nodes": 1000 },
   "device-inventory": { "mountMs": 600, "updateMs": 110, "nodes": 1350 },
   "topology-device-list": { "mountMs": 250, "updateMs": 40, "nodes": 600 },
-  "bgp-ops": { "mountMs": 900, "updateMs": 150, "nodes": 2000 }
+  "bgp-ops": { "mountMs": 900, "updateMs": 150, "nodes": 2000 },
+  "data-protection": { "mountMs": 350, "updateMs": 60, "nodes": 1300 }
 }

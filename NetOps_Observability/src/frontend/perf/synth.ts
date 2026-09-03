@@ -462,3 +462,107 @@ export function bgpWhois(resource: string) {
     },
   };
 }
+
+// ── Data Protection console ──────────────────────────────────────────────────
+//
+// The volume that matters on this surface is the restore-point list: a daily
+// policy with a long retention, or a repository shared with an operator's own
+// ad-hoc copies, reaches several hundred quickly. The budget exists to prove
+// the table stays windowed rather than rendering every row. Shapes mirror
+// src/backend/system_backup_contract.go, holes included — the honest "not
+// measured" cells are part of what the page has to render.
+
+const DP_ENGINES = [
+  "opensearch", "system_bundle", "clickhouse", "postgres",
+  "victoriametrics", "secrets_tls", "device_configs",
+] as const;
+
+/** GET /api/system/backup/coverage with one row per engine. */
+export function backupCoverage() {
+  return {
+    generated_at: new Date(T0).toISOString(),
+    engines: DP_ENGINES.map((id, i) => ({
+      id, name: id,
+      covered: i === 4 ? "no" : i === 6 ? "not_applicable" : i === 5 ? "unknown" : "yes",
+      covered_reason: "the daily policy produced a successful copy",
+      schedule: i % 2
+        ? { enabled: true, cron: "30 1 * * *", governed_by_gui: i !== 1, detail: "a host cron runs it" }
+        : null,
+      last_attempt: { at: new Date(T0 - i * 3600_000).toISOString(), result: i === 4 ? "failed" : "success" },
+      last_success_at: i === 4 ? "" : new Date(T0 - i * 3600_000).toISOString(),
+      last_verified: i < 3 ? { at: new Date(T0 - 86400_000).toISOString(), result: "pass" } : null,
+      size_bytes: i === 4 ? null : (i + 1) * 1024 ** 3,
+      size_detail: i === 4 ? "nothing has been written yet" : "",
+      retention: { max_count: 14, max_age_days: 30, detail: "" },
+      target: {
+        kind: ["offsite", "remote", "local"][i % 3],
+        location: "rsync://nas/correlix/",
+        immutable: i % 2 === 0 ? false : null,
+        immutable_detail: "a filesystem repository cannot be made immutable",
+        encrypted: true, encrypted_detail: "",
+      },
+      rpo_hours: i === 4 ? null : (i + 1) * 1.5,
+      rpo_detail: i === 4 ? "no successful copy exists" : "",
+    })),
+    external: [{
+      name: "Nightly rsync to the NAS", source: "host crontab", schedule: "0 3 * * *",
+      detail: "It was installed by hand and this page does not control it.",
+    }],
+  };
+}
+
+/** `n` restore points in the shape the console's table renders. */
+export function snapshotList(n: number) {
+  return {
+    repository: { name: "netops-fs", registered: true, type: "fs", verified: true, verified_detail: "" },
+    total: n,
+    snapshots: Array.from({ length: n }, (_, i) => {
+      const start = T0 - i * 86400_000;
+      const failed = i % 37 === 0;
+      return {
+        name: `netops-daily-${String(100000 + i)}`,
+        state: failed ? "PARTIAL" : "SUCCESS",
+        indices: [`netops-syslog-${i}`, `netops-traps-${i}`, `netops-flows-${i}`],
+        index_count: 3,
+        started_at: new Date(start).toISOString(),
+        ended_at: new Date(start + 180_000).toISOString(),
+        duration_seconds: 120 + (i % 90),
+        shards: { total: 6, successful: failed ? 4 : 6, failed: failed ? 2 : 0 },
+        failures: failed
+          ? [{ index: `netops-syslog-${i}`, shard: i % 5, reason: "NoSuchFileException: indices/0/3/__abc" }]
+          : [],
+        failures_trimmed: 0,
+        size_bytes: null,
+        size_detail: "not measured on this read — pass ?sizes=1",
+        restorable_verified: i % 11 === 0 ? true : null,
+        restorable_verified_at: i % 11 === 0 ? new Date(start + 3600_000).toISOString() : "",
+        restorable_detail: i % 11 === 0 ? "" : "no probe has ever run on this restore point",
+      };
+    }),
+  };
+}
+
+/** `n` operations for the activity panel. */
+export function backupOperations(n: number) {
+  const kinds = ["snapshot_create", "snapshot_verify", "snapshot_restore", "snapshot_delete"];
+  return {
+    capacity: 200,
+    operations: Array.from({ length: n }, (_, i) => ({
+      id: `op-${String(i).padStart(16, "0")}`,
+      kind: kinds[i % 4],
+      state: i % 13 === 0 ? "failed" : "succeeded",
+      actor: "root",
+      started_at: new Date(T0 - i * 3600_000).toISOString(),
+      ended_at: new Date(T0 - i * 3600_000 + 60_000).toISOString(),
+      target: { snapshot: `netops-daily-${String(100000 + i)}` },
+      verify: i % 4 === 1
+        ? {
+            snapshot: `netops-daily-${String(100000 + i)}`, index: `netops-flows-${i}`,
+            temp_index: `probe-${i}`, source_docs: 1200, restored_docs: 1200,
+            match: true, temp_deleted: true, duration_seconds: 42,
+          }
+        : undefined,
+      error: i % 13 === 0 ? "repository netops-fs is read-only" : "",
+    })),
+  };
+}
