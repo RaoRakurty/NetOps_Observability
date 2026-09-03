@@ -1,0 +1,253 @@
+{
+  "bomFormat": "CycloneDX",
+  "specVersion": "1.6",
+  "serialNumber": "urn:uuid:cdbaba90-3aae-5da0-8393-f699ce2ad187",
+  "version": 1,
+  "metadata": {
+    "timestamp": "2026-09-03T03:30:18+00:00",
+    "tools": {
+      "components": [
+        {
+          "type": "application",
+          "name": "correlix-sbom",
+          "version": "1.0.0"
+        }
+      ]
+    },
+    "component": {
+      "type": "application",
+      "bom-ref": "correlix@2026.09.03-g75047efb#go-backend",
+      "name": "correlix",
+      "version": "2026.09.03-g75047efb",
+      "description": "Correlix \u2014 go-backend dependency inventory"
+    },
+    "properties": [
+      {
+        "name": "correlix:class",
+        "value": "go-backend"
+      }
+    ]
+  },
+  "components": [
+    {
+      "type": "library",
+      "bom-ref": "pkg:golang/github.com/jackc/pgpassfile@v1.0.0",
+      "name": "github.com/jackc/pgpassfile",
+      "version": "v1.0.0",
+      "purl": "pkg:golang/github.com/jackc/pgpassfile@v1.0.0",
+      "scope": "required",
+      "properties": [
+        {
+          "name": "correlix:class",
+          "value": "go-backend"
+        },
+        {
+          "name": "correlix:vendored",
+          "value": "true"
+        },
+        {
+          "name": "correlix:direct",
+          "value": "false"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:golang/github.com/jackc/pgservicefile@v0.0.0-20240606120523-5a60cdf6a761",
+      "name": "github.com/jackc/pgservicefile",
+      "version": "v0.0.0-20240606120523-5a60cdf6a761",
+      "purl": "pkg:golang/github.com/jackc/pgservicefile@v0.0.0-20240606120523-5a60cdf6a761",
+      "scope": "required",
+      "properties": [
+        {
+          "name": "correlix:class",
+          "value": "go-backend"
+        },
+        {
+          "name": "correlix:vendored",
+          "value": "true"
+        },
+        {
+          "name": "correlix:direct",
+          "value": "false"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:golang/github.com/jackc/pgx/v5@v5.9.2",
+      "name": "github.com/jackc/pgx/v5",
+      "version": "v5.9.2",
+      "purl": "pkg:golang/github.com/jackc/pgx/v5@v5.9.2",
+      "scope": "required",
+      "properties": [
+        {
+          "name": "correlix:class",
+          "value": "go-backend"
+        },
+        {
+          "name": "correlix:vendored",
+          "value": "true"
+        },
+        {
+          "name": "correlix:direct",
+          "value": "true"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:golang/github.com/jackc/puddle/v2@v2.2.2",
+      "name": "github.com/jackc/puddle/v2",
+      "version": "v2.2.2",
+      "purl": "pkg:golang/github.com/jackc/puddle/v2@v2.2.2",
+      "scope": "required",
+      "properties": [
+        {
+          "name": "correlix:class",
+          "value": "go-backend"
+        },
+        {
+          "name": "correlix:vendored",
+          "value": "true"
+        },
+        {
+          "name": "correlix:direct",
+          "value": "false"
+        }
+      ]
+    },
+    {
+      "type": "platform",
+      "bom-ref": "pkg:golang/go@1.26.8",
+      "name": "go",
+      "version": "1.26.8",
+      "purl": "pkg:golang/go@1.26.8",
+      "description": "Go toolchain the backend is built with",
+      "properties": [
+        {
+          "name": "correlix:class",
+          "value": "go-backend"
+        },
+        {
+          "name": "correlix:go.mod:go",
+          "value": "1.26.0"
+        },
+        {
+          "name": "correlix:go.mod:toolchain",
+          "value": "1.26.8"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:golang/golang.org/x/crypto@v0.56.0",
+      "name": "golang.org/x/crypto",
+      "version": "v0.56.0",
+      "purl": "pkg:golang/golang.org/x/crypto@v0.56.0",
+      "scope": "required",
+      "properties": [
+        {
+          "name": "correlix:class",
+          "value": "go-backend"
+        },
+        {
+          "name": "correlix:vendored",
+          "value": "true"
+        },
+        {
+          "name": "correlix:direct",
+          "value": "true"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:golang/golang.org/x/net@v0.57.0",
+      "name": "golang.org/x/net",
+      "version": "v0.57.0",
+      "purl": "pkg:golang/golang.org/x/net@v0.57.0",
+      "scope": "required",
+      "properties": [
+        {
+          "name": "correlix:class",
+          "value": "go-backend"
+        },
+        {
+          "name": "correlix:vendored",
+          "value": "true"
+        },
+        {
+          "name": "correlix:direct",
+          "value": "true"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:golang/golang.org/x/sync@v0.22.0",
+      "name": "golang.org/x/sync",
+      "version": "v0.22.0",
+      "purl": "pkg:golang/golang.org/x/sync@v0.22.0",
+      "scope": "required",
+      "properties": [
+        {
+          "name": "correlix:class",
+          "value": "go-backend"
+        },
+        {
+          "name": "correlix:vendored",
+          "value": "true"
+        },
+        {
+          "name": "correlix:direct",
+          "value": "false"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:golang/golang.org/x/sys@v0.47.0",
+      "name": "golang.org/x/sys",
+      "version": "v0.47.0",
+      "purl": "pkg:golang/golang.org/x/sys@v0.47.0",
+      "scope": "required",
+      "properties": [
+        {
+          "name": "correlix:class",
+          "value": "go-backend"
+        },
+        {
+          "name": "correlix:vendored",
+          "value": "true"
+        },
+        {
+          "name": "correlix:direct",
+          "value": "false"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:golang/golang.org/x/text@v0.41.0",
+      "name": "golang.org/x/text",
+      "version": "v0.41.0",
+      "purl": "pkg:golang/golang.org/x/text@v0.41.0",
+      "scope": "required",
+      "properties": [
+        {
+          "name": "correlix:class",
+          "value": "go-backend"
+        },
+        {
+          "name": "correlix:vendored",
+          "value": "true"
+        },
+        {
+          "name": "correlix:direct",
+          "value": "false"
+        }
+      ]
+    }
+  ]
+}

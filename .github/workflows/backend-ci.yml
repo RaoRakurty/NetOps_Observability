@@ -100,6 +100,56 @@ jobs:
       # ("context deadline exceeded"), and 30s finds little. Run it in a scheduled
       # job (see fuzz-nightly.yml) for real exploration; seeds cover regression.
 
+  offline-build:
+    name: offline vendor build (blocking)
+    runs-on: ubuntu-latest
+    # CLAUDE.md §6 gate 2 — "offline-buildable" — enforced instead of asserted.
+    # The whole reason this tree vendors its 9 modules is that `go build` must
+    # work in a clean, network-less environment; until now nothing proved it, and
+    # `vendor/` could silently drift out of step with go.mod (a `go get` without a
+    # follow-up `go mod vendor` leaves a tree that builds fine ON THIS RUNNER,
+    # because the module cache papers over the gap, and fails on a customer's
+    # air-gapped host).
+    #
+    # This is also the backstop for the patch train: Renovate regenerates
+    # `vendor/` itself after a Go bump, and this job is what fails the PR if that
+    # regeneration ever silently does not happen.
+    #
+    # GOFLAGS=-mod=vendor  -> resolve every import from vendor/, never the cache.
+    # GOPROXY=off          -> any attempt to reach the network is a hard error.
+    #
+    # -mod=vendor also makes the toolchain cross-check vendor/modules.txt against
+    # go.mod before it compiles anything; a bump that edits go.mod without
+    # re-running `go mod vendor` fails here as "inconsistent vendoring", which is
+    # precisely the drift this job exists to catch. Note we do NOT run
+    # `go mod vendor` to check that: regenerating the tree needs the module cache
+    # and would have to reach the proxy, which would defeat the point of the job.
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          # No module cache: a warm cache is exactly what this job must not have,
+          # because it would paper over a package missing from vendor/.
+          cache: false
+      - name: go build (vendor only, no network)
+        env:
+          GOFLAGS: -mod=vendor
+          GOPROXY: off
+        run: go build ./...
+      - name: go vet (vendor only, no network)
+        env:
+          GOFLAGS: -mod=vendor
+          GOPROXY: off
+        run: go vet ./...
+      - name: go test -run=XXX (compile every test package offline)
+        # Compiles the test binaries without running them: a test-only import that
+        # is missing from vendor/ is still a broken air-gapped build.
+        env:
+          GOFLAGS: -mod=vendor
+          GOPROXY: off
+        run: go test -run='^$' -count=1 ./...
+
   pg-integration:
     name: Postgres integration (blocking)
     runs-on: ubuntu-latest
