@@ -14,6 +14,7 @@ import (
 	"net/netip"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -46,6 +47,15 @@ func (l *logSink) contains(sub string) bool {
 	return false
 }
 
+// deviceTable is the fixture's inventory: source IP → (device id, tenant).
+type deviceTable map[string][2]string
+
+// defaultKnownDevices is the inventory every fixture starts with: loopback is a
+// known, tenant-owning device, and nothing else resolves.
+func defaultKnownDevices() deviceTable {
+	return deviceTable{"127.0.0.1": {"lab-core", "acme"}, "::1": {"lab-core", "acme"}}
+}
+
 // listenerFixture runs a real listener on 127.0.0.1:0.
 type listenerFixture struct {
 	t       *testing.T
@@ -55,29 +65,59 @@ type listenerFixture struct {
 	addr    string
 	cancel  context.CancelFunc
 	done    chan struct{}
+
 	// known maps a source IP onto (device, tenant). Anything else is refused.
-	known map[string][2]string
+	//
+	// It is an atomic.Pointer, not a plain map field, because the resolver
+	// closure runs on the LISTENER'S goroutine (Run → serve → ResolveDevice)
+	// while the test runs on its own: two refusal tests assigned this field
+	// after Run had already started serving, which the Go memory model makes a
+	// genuine data race — CI's -race leg reported 4 of them on 2026-09-03. A
+	// dial does not create a happens-before edge between the two goroutines, so
+	// "the write happens first in wall-clock time" was never a defence.
+	//
+	// The type is the fix, not a comment: `f.known = someMap` no longer
+	// COMPILES, so the exact mistake cannot come back. Seed it before Run with
+	// newListenerFixtureKnowing; a test that genuinely needs to change the
+	// inventory mid-flight must Store, which is race-free by construction.
+	known atomic.Pointer[deviceTable]
+}
+
+// resolve is the ResolveDevice seam, reading the inventory snapshot.
+func (f *listenerFixture) resolve(a netip.Addr) (string, string, bool) {
+	known := f.known.Load()
+	if known == nil {
+		return "", "", false
+	}
+	v, ok := (*known)[a.String()]
+	if !ok {
+		return "", "", false
+	}
+	return v[0], v[1], true
 }
 
 func newListenerFixture(t *testing.T, tune func(*Deps)) *listenerFixture {
+	t.Helper()
+	return newListenerFixtureKnowing(t, defaultKnownDevices(), tune)
+}
+
+// newListenerFixtureKnowing seeds the resolver's inventory BEFORE the listener
+// goroutine starts. That ordering — not just the atomic — is the point: a test
+// that describes its inventory up front has no shared mutable state crossing
+// the goroutine boundary at all.
+func newListenerFixtureKnowing(t *testing.T, known deviceTable, tune func(*Deps)) *listenerFixture {
 	t.Helper()
 	f := &listenerFixture{
 		t:       t,
 		metrics: NewMetrics(),
 		logs:    &logSink{},
-		known:   map[string][2]string{"127.0.0.1": {"lab-core", "acme"}, "::1": {"lab-core", "acme"}},
 		done:    make(chan struct{}),
 	}
+	f.known.Store(&known)
 	d := Deps{
-		Now:        time.Now,
-		ListenAddr: "127.0.0.1:0",
-		ResolveDevice: func(a netip.Addr) (string, string, bool) {
-			v, ok := f.known[a.String()]
-			if !ok {
-				return "", "", false
-			}
-			return v[0], v[1], true
-		},
+		Now:                  time.Now,
+		ListenAddr:           "127.0.0.1:0",
+		ResolveDevice:        f.resolve,
 		Authz:                testAuthz,
 		Metrics:              f.metrics,
 		WriteJSON:            testWriteJSON,
@@ -211,8 +251,7 @@ func TestListenerAcceptsAKnownRouterAndStoresItsFeed(t *testing.T) {
 // ── §3a: an unattributable source is REFUSED ────────────────────────────────
 
 func TestListenerRefusesASourceItCannotAttribute(t *testing.T) {
-	f := newListenerFixture(t, nil)
-	f.known = map[string][2]string{} // nothing resolves
+	f := newListenerFixtureKnowing(t, deviceTable{}, nil) // nothing resolves
 
 	c := f.dial()
 	_, _ = c.Write(initiation("rogue", "who?"))
@@ -237,10 +276,11 @@ func TestListenerRefusesASourceItCannotAttribute(t *testing.T) {
 }
 
 func TestListenerRefusesASourceThatResolvesToAnEmptyTenant(t *testing.T) {
-	f := newListenerFixture(t, nil)
 	// A device row with no tenant is exactly the case that would pool a
 	// customer's routing table into the global bucket.
-	f.known = map[string][2]string{"127.0.0.1": {"orphan-device", ""}, "::1": {"orphan-device", ""}}
+	f := newListenerFixtureKnowing(t, deviceTable{
+		"127.0.0.1": {"orphan-device", ""}, "::1": {"orphan-device", ""},
+	}, nil)
 	c := f.dial()
 	_, _ = c.Write(initiation("orphan", "d"))
 	// Same both-facts wait as above: the counter lands before the log line, so
