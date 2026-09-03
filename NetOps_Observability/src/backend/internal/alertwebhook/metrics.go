@@ -36,10 +36,24 @@ type Metrics struct {
 	hostPushedPage     atomic.Int64
 	hostPushedWarning  atomic.Int64
 	hostPushedResolved atomic.Int64
+	hostPushedDigest   atomic.Int64
 	hostFailed         atomic.Int64 // the push was attempted and errored
 	hostNotConfigured  atomic.Int64 // no topic wired: nothing was attempted
 	hostQueueFull      atomic.Int64 // bounded queue full: the push was dropped
 	hostRouteEnabled   atomic.Int64 // 0/1 — is the host route wired at all
+
+	// Noise + rate-limit control (2026-09-03, digest.go / pushbudget.go).
+	hostRateLimited     atomic.Int64 // the server answered 429: budget, not fault
+	hostRetries         atomic.Int64 // page-tier re-sends after a transient failure
+	hostBudgetExhausted atomic.Int64 // refused locally by the token bucket
+	hostDigestFolded    atomic.Int64 // warnings aggregated instead of pushed
+	hostDigestOverflow  atomic.Int64 // distinct alertnames past the digest cap
+
+	// budget is the live token bucket, read (not stored) by Write so the
+	// remaining-tokens gauge refills between pushes instead of freezing at the
+	// value of the last take. atomic because Write runs on the /metrics
+	// goroutine while the receiver's own path takes tokens.
+	budget atomic.Pointer[pushBudget]
 }
 
 // NewMetrics builds the counter set. It is constructed even when the receiver
@@ -72,9 +86,31 @@ func (m *Metrics) incHostPushed(tier string) {
 		m.hostPushedPage.Add(1)
 	case tierResolved:
 		m.hostPushedResolved.Add(1)
+	case tierDigest:
+		m.hostPushedDigest.Add(1)
 	default:
 		m.hostPushedWarning.Add(1)
 	}
+}
+
+// attachBudget hands Write the live token bucket. Called once, at Handler
+// construction, before the receiver serves anything. A nil bucket means the
+// operator disabled the guard, and the gauge then reads -1 — "not enforced" is
+// a different fact from "empty" and must not look like one.
+func (m *Metrics) attachBudget(b *pushBudget) {
+	if m == nil {
+		return
+	}
+	m.budget.Store(b)
+}
+
+// PushBudgetRemaining exposes the gauge value for tests and any future
+// in-process health surface. -1 = no budget configured.
+func (m *Metrics) PushBudgetRemaining() int {
+	if m == nil {
+		return -1
+	}
+	return m.budget.Load().remaining()
 }
 
 func (m *Metrics) setHostRouteEnabled(on bool) {
@@ -169,6 +205,7 @@ func (m *Metrics) Write(w io.Writer) {
 		{tierPage, m.hostPushedPage.Load()},
 		{tierWarning, m.hostPushedWarning.Load()},
 		{tierResolved, m.hostPushedResolved.Load()},
+		{tierDigest, m.hostPushedDigest.Load()},
 	} {
 		fmt.Fprintf(w, "netops_alert_webhook_pushed_total{route=%q,tier=%q} %d\n", RouteHostMonitoring, s.tier, s.v)
 	}
@@ -179,10 +216,21 @@ func (m *Metrics) Write(w io.Writer) {
 		v      int64
 	}{
 		{"send_error", m.hostFailed.Load()},
+		{"rate_limited", m.hostRateLimited.Load()},
+		{"budget_exhausted", m.hostBudgetExhausted.Load()},
 		{"not_configured", m.hostNotConfigured.Load()},
 		{"queue_full", m.hostQueueFull.Load()},
 	} {
 		fmt.Fprintf(w, "netops_alert_webhook_push_failures_total{route=%q,reason=%q} %d\n", RouteHostMonitoring, s.reason, s.v)
 	}
 	g("netops_alert_webhook_host_route_enabled", "1 when platform alerts are pushed to the host-monitoring channel, 0 when no topic is configured (PLATFORM_ALERTS_NTFY_TOPIC / WATCHDOG_NTFY_TOPIC unset).", m.hostRouteEnabled.Load())
+
+	// ── noise + rate-limit control (digest.go / pushbudget.go) ──────────────
+	c("netops_alert_webhook_push_retries_total", "Page-tier host-route pushes re-sent after a transient failure (429/5xx/transport), with capped backoff.", m.hostRetries.Load())
+	c("netops_alert_webhook_digest_alerts_total", "Warning-tier alerts folded into the periodic digest instead of being pushed individually.", m.hostDigestFolded.Load())
+	c("netops_alert_webhook_digest_overflow_total", "Distinct warning rules dropped from a digest window for exceeding its bounded entry cap.", m.hostDigestOverflow.Load())
+	// The gauge the operator watches when pushes go missing: a floor of the
+	// page reserve means warnings are being held back on purpose; 0 means even
+	// a page would now be refused locally rather than by the server.
+	g("netops_alert_webhook_push_budget_remaining", "Outbound push tokens left for the host-monitoring topic this hour (-1 = no budget configured; PLATFORM_ALERTS_PUSH_BUDGET).", int64(m.budget.Load().remaining()))
 }

@@ -61,6 +61,39 @@ the watchdog's freshness probe). Counted in
 `netops_alert_webhook_pushed_total{route="host_monitoring",tier}` /
 `netops_alert_webhook_push_failures_total{route,reason}`.
 
+#### What actually goes out, per tier (noise + rate-limit control, 2026-09-03)
+
+ntfy.sh's free public server rate-limits **per topic/IP**. On 2026-09-03 ~04:00
+UTC the api log carried a repeating `platform alert push to host monitoring
+FAILED … "ntfy: status 429"` for `VectorComponentErrors` (tier `watch`): chronic
+warnings were spending one push each, and that is budget a real **page** needs
+in the next minute. The route now spends its budget deliberately.
+
+| Tier | What happens |
+|---|---|
+| `page` | **Immediate**, high priority, as before. Retries on 429/5xx/transport with capped exponential backoff + jitter (5 attempts, 2 m deadline, `Retry-After` honoured when the server sends it). A page that still never lands is logged at **ERROR** with its alertname and counted under `reason="rate_limited"` or `reason="send_error"` — never dropped silently. |
+| resolution **of a page** | **Immediate**, low priority. |
+| `watch` / everything else | **Never pushed on its own.** Folded into a per-topic **digest** — alertname × count × first/last seen × one summary line — sent at most once per `PLATFORM_ALERTS_WARNING_DIGEST_INTERVAL` (default `30m`), bounded in size and explicit about any overflow. A warning that **resolves inside the window** is folded into the same entry as `RESOLVED` and never pushed alone. A digest takes exactly **one** attempt: if it fails it is re-sent next window with the accumulated content. |
+| heartbeat | Never pushed, as before. |
+
+A **token budget** backstops all of it: `PLATFORM_ALERTS_PUSH_BUDGET` (default
+`30`/hour, `-1` disables) with `PLATFORM_ALERTS_PUSH_BUDGET_PAGE_RESERVE`
+(default `10`) that **only a page may spend** — a warning digest can never be
+the reason a page is refused. Watch
+`netops_alert_webhook_push_budget_remaining` (`-1` = no budget configured): a
+value sitting at the reserve means warnings are being held back on purpose; `0`
+means even a page is now being refused locally. Supporting series:
+`netops_alert_webhook_digest_alerts_total` (warnings folded),
+`netops_alert_webhook_digest_overflow_total`,
+`netops_alert_webhook_push_retries_total`, and
+`netops_alert_webhook_push_failures_total{reason="rate_limited"|"budget_exhausted"}`.
+
+The digest flush is driven by **request arrival**, not a timer: the always-firing
+`AlertingHeartbeat` guarantees vmalert posts on every evaluation, so a due digest
+leaves within one evaluation interval. If vmalert stops posting entirely, a
+pending digest waits — the heartbeat-freshness alert is what reports that, not a
+stale warning summary.
+
 ### The three layers (each works without the other two)
 
 | Layer | Mechanism | Survives |

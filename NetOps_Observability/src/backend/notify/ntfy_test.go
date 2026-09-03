@@ -1,11 +1,13 @@
 package notify
 
 import (
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"netops/backend/models"
 )
@@ -170,5 +172,86 @@ func TestNtfyTransportErrorNeverLeaksTheTopic(t *testing.T) {
 	}
 	if strings.Contains(err.Error(), "super-secret-topic") {
 		t.Fatalf("the topic leaked into an error that gets logged: %v", err)
+	}
+}
+
+// ── the typed status error (2026-09-03) ─────────────────────────────────────
+//
+// The platform self-health route retries a rate-limited PAGE and digests its
+// warnings, and both decisions need the STATUS and the server's Retry-After.
+// Answering with a formatted string forced the caller to parse prose; these
+// tests pin the type down instead.
+
+func TestNtfyRateLimitIsATypedRetryableError(t *testing.T) {
+	srv, _ := fakeNtfy(t, http.StatusTooManyRequests)
+	err := NewNtfy(srv.URL, "topic", "").Push(NtfyPush{Body: "b"})
+	var se *NtfyStatusError
+	if !errors.As(err, &se) {
+		t.Fatalf("err = %v (%T), want a *NtfyStatusError", err, err)
+	}
+	if se.Status != http.StatusTooManyRequests || !se.RateLimited() || !se.Retryable() {
+		t.Fatalf("429 must read as rate-limited AND retryable, got %+v", se)
+	}
+	// The wording the api log already carries must not change under operators.
+	if err.Error() != "ntfy: status 429" {
+		t.Fatalf("Error() = %q, want the established wording", err.Error())
+	}
+}
+
+func TestNtfyStatusRetryabilityLadder(t *testing.T) {
+	for _, tc := range []struct {
+		status                 int
+		retryable, rateLimited bool
+	}{
+		{http.StatusTooManyRequests, true, true},
+		{http.StatusBadGateway, true, false},
+		{http.StatusServiceUnavailable, true, false},
+		{http.StatusForbidden, false, false}, // a bad token will not fix itself
+		{http.StatusNotFound, false, false},  // nor will an unknown topic
+		{http.StatusRequestEntityTooLarge, false, false},
+	} {
+		e := &NtfyStatusError{Status: tc.status}
+		if e.Retryable() != tc.retryable || e.RateLimited() != tc.rateLimited {
+			t.Errorf("status %d: retryable=%v rateLimited=%v, want %v/%v",
+				tc.status, e.Retryable(), e.RateLimited(), tc.retryable, tc.rateLimited)
+		}
+	}
+}
+
+// Retry-After is REMOTE INPUT (§3): both spellings are read, and a hostile or
+// absurd value is clamped rather than parking a page-tier push for an hour.
+func TestNtfyRetryAfterIsParsedAndClamped(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Retry-After", r.Header.Get("Title"))
+		w.WriteHeader(http.StatusTooManyRequests)
+	}))
+	t.Cleanup(srv.Close)
+	n := NewNtfy(srv.URL, "topic", "")
+	for _, tc := range []struct {
+		header string
+		want   time.Duration
+	}{
+		{"12", 12 * time.Second},
+		{"99999", maxRetryAfter}, // clamped: a server may not park us forever
+		{"0", 0},
+		{"-3", 0},
+		{"soon", 0}, // unparseable = "the server did not say"
+		{"", 0},
+	} {
+		err := n.Push(NtfyPush{Body: "b", Title: tc.header})
+		var se *NtfyStatusError
+		if !errors.As(err, &se) {
+			t.Fatalf("Retry-After %q: err = %v, want a typed status error", tc.header, err)
+		}
+		if se.RetryAfter != tc.want {
+			t.Errorf("Retry-After %q → %v, want %v", tc.header, se.RetryAfter, tc.want)
+		}
+	}
+	// The HTTP-date spelling resolves to a positive, clamped duration.
+	if got := parseRetryAfter(time.Now().Add(20 * time.Second).UTC().Format(http.TimeFormat)); got <= 0 || got > 21*time.Second {
+		t.Errorf("HTTP-date Retry-After = %v, want ~20s", got)
+	}
+	if got := parseRetryAfter(time.Now().Add(-time.Hour).UTC().Format(http.TimeFormat)); got != 0 {
+		t.Errorf("a Retry-After in the past = %v, want 0", got)
 	}
 }

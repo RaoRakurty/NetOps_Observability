@@ -185,6 +185,20 @@ type Deps struct {
 	// Now is the injected clock, so the cool-down is testable without sleeping.
 	// nil uses time.Now.
 	Now func() time.Time
+	// Sleep is the injected wait used by the host route's page-tier retry
+	// backoff (hostroute.go). nil uses time.Sleep. Injected for the same reason
+	// Now is: a bounded exponential backoff must be assertable without spending
+	// the minutes it describes.
+	Sleep func(time.Duration)
+	// WarningDigestInterval bounds how often the accumulated WARNING tier is
+	// summarized into one host-route push (digest.go). <=0 uses
+	// DefaultWarningDigestInterval.
+	WarningDigestInterval time.Duration
+	// PushBudget is the host route's outbound allowance per hour for its topic,
+	// and PageReserve is the slice of it only a page may spend (pushbudget.go).
+	// PushBudget <= 0 disables the guard.
+	PushBudget  int
+	PageReserve int
 	// HostRoute is the HOST-MONITORING push destination (hostroute.go): the
 	// phone channel the external watchdog already uses. nil = not configured,
 	// which is COUNTED and warned about once, never an error per alert. This
@@ -243,6 +257,21 @@ type receiver struct {
 	hostRunning bool
 	hostQ       chan hostJob
 	hostOnce    sync.Once
+
+	// Warning-digest state (digest.go). digest accumulates the non-page tier
+	// keyed by alertname; digestLast is the last flush, so "at most one digest
+	// per interval" is decided on the clock rather than on the traffic.
+	// budgetLoggedAt rate-limits the budget-refusal log line.
+	digestMu       sync.Mutex
+	digest         map[string]*digestEntry
+	digestOverflow int
+	digestInterval time.Duration
+	digestLast     time.Time
+	budgetLoggedAt time.Time
+
+	// budget is the per-topic outbound token bucket (pushbudget.go). nil when
+	// the operator disabled it.
+	budget *pushBudget
 }
 
 // Handler builds the Alertmanager-v2 receiver. It returns an error rather than
@@ -268,11 +297,34 @@ func Handler(d Deps) (http.HandlerFunc, error) {
 	if r.now == nil {
 		r.now = time.Now
 	}
+	r.digestInterval = d.WarningDigestInterval
+	if r.digestInterval <= 0 {
+		r.digestInterval = DefaultWarningDigestInterval
+	}
+	// The first digest window opens at BOOT, not at the first warning: vmalert
+	// dumps every standing alert on its first post, and a window anchored there
+	// summarizes that dump instead of letting the first of it through alone.
+	r.digestLast = r.now()
 	if d.HostRoute != nil {
 		r.hostQ = make(chan hostJob, hostQueueSize)
+		// DEFAULT-ON. An unset (zero) budget takes the package default rather
+		// than "unlimited": the guard exists because the free ntfy server
+		// answered 429 on a live stack, and an integrator that forgets the knob
+		// must get the protection, not the defect. Only an explicit NEGATIVE
+		// value disables it (a self-hosted server with no limits of its own).
+		budget := d.PushBudget
+		if budget == 0 {
+			budget = DefaultPushBudget
+		}
+		reserve := d.PageReserve
+		if reserve == 0 {
+			reserve = DefaultPageReserve
+		}
+		r.budget = newPushBudget(budget, reserve, r.now)
 	}
 	d.Metrics.setEnabled(true)
 	d.Metrics.setHostRouteEnabled(d.HostRoute != nil)
+	d.Metrics.attachBudget(r.budget)
 	return r.serve, nil
 }
 
@@ -357,6 +409,13 @@ func (r *receiver) serve(w http.ResponseWriter, req *http.Request) {
 	r.deps.Metrics.add(&r.deps.Metrics.suppressed, int64(suppressed))
 	r.deps.Metrics.add(&r.deps.Metrics.droppedTenant, int64(dropped))
 	r.deps.Metrics.add(&r.deps.Metrics.droppedCustomer, int64(droppedCustomer))
+
+	// The warning digest leaves HERE, on request arrival, because the
+	// always-firing AlertingHeartbeat guarantees this handler is called on
+	// every vmalert evaluation — so a window that has elapsed is flushed within
+	// one evaluation of its deadline, with no background timer to leak and no
+	// wall-clock the tests must sleep through (digest.go).
+	r.maybeFlushDigest(r.now())
 
 	// ALWAYS 200 once authenticated and parsed. vmalert retries a 5xx forever
 	// and would turn a receiver-side bug into a self-inflicted request storm;

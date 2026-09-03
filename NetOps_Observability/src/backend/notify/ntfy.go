@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -122,9 +123,80 @@ func (n *Ntfy) Push(p NtfyPush) error {
 	}
 	defer func() { _ = resp.Body.Close() }() // best-effort: nothing actionable on close failure
 	if resp.StatusCode >= 300 {
-		return fmt.Errorf("ntfy: status %d", resp.StatusCode)
+		return &NtfyStatusError{Status: resp.StatusCode, RetryAfter: parseRetryAfter(resp.Header.Get("Retry-After"))}
 	}
 	return nil
+}
+
+// NtfyStatusError is a non-2xx answer from the ntfy server, carried as a TYPE
+// rather than a formatted string so a caller with a retry policy can tell
+// "slow down" from "you are wrong" without parsing the message.
+//
+// This exists because of a live failure (2026-09-03 ~04:00 UTC): ntfy.sh's free
+// public server rate-limits per topic/IP, the platform self-health route was
+// pushing every chronic warning individually, and the resulting `status 429`
+// storm meant a real PAGE could be refused behind a warning's budget. The
+// route's answer is a warning digest plus a retry with backoff, and both need
+// the status code and the server's own Retry-After, not a string.
+//
+// Error() keeps the exact wording the previous fmt.Errorf produced, so log
+// lines and any operator grep for "ntfy: status 429" still match — and, like
+// every other error out of this file, it NEVER contains the topic (§8: a topic
+// is a credential).
+type NtfyStatusError struct {
+	// Status is the HTTP status the server answered with.
+	Status int
+	// RetryAfter is the server's own Retry-After, normalized to a duration.
+	// Zero means the server did not say — the caller picks its own backoff.
+	RetryAfter time.Duration
+}
+
+func (e *NtfyStatusError) Error() string { return fmt.Sprintf("ntfy: status %d", e.Status) }
+
+// RateLimited reports a refusal for BUDGET reasons rather than a fault. It is
+// the one failure a caller must not answer by pushing harder.
+func (e *NtfyStatusError) RateLimited() bool { return e.Status == http.StatusTooManyRequests }
+
+// Retryable reports whether re-sending the SAME message can succeed. 429 and
+// 5xx are transient (budget / server-side); every other 4xx is a statement
+// about the request itself (bad token, unknown topic, oversize header) and
+// retrying it only burns the rate budget the 429 case needs.
+func (e *NtfyStatusError) Retryable() bool {
+	return e.Status == http.StatusTooManyRequests || e.Status >= 500
+}
+
+// maxRetryAfter bounds what a server can make us wait. Retry-After is remote
+// input (§3: never trust upstream), and an hour-long value from a hostile or
+// misconfigured server would park a page-tier push indefinitely.
+const maxRetryAfter = 2 * time.Minute
+
+// parseRetryAfter reads both RFC7231 spellings — delta-seconds and HTTP-date —
+// and clamps the result. An unparseable or negative value yields 0, which the
+// caller reads as "the server did not say".
+func parseRetryAfter(raw string) time.Duration {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return 0
+	}
+	if secs, err := strconv.Atoi(raw); err == nil {
+		if secs <= 0 {
+			return 0
+		}
+		return capRetryAfter(time.Duration(secs) * time.Second)
+	}
+	if t, err := http.ParseTime(raw); err == nil {
+		if d := time.Until(t); d > 0 {
+			return capRetryAfter(d)
+		}
+	}
+	return 0
+}
+
+func capRetryAfter(d time.Duration) time.Duration {
+	if d > maxRetryAfter {
+		return maxRetryAfter
+	}
+	return d
 }
 
 // scrub renders a transport error WITHOUT the request URL. A *url.Error's

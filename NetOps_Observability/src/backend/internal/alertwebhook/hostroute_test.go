@@ -23,9 +23,13 @@ import (
 // fakePusher is the injected host-route seam (§5). Push both RECORDS and
 // SIGNALS, so a test waits on a delivery instead of sleeping for one.
 type fakePusher struct {
-	mu     sync.Mutex
-	got    []notify.NtfyPush
-	err    error
+	mu  sync.Mutex
+	got []notify.NtfyPush
+	err error
+	// script, when non-empty, is consumed one entry per call BEFORE err takes
+	// over: "429, 429, then success" is a sequence, and a retry ladder can only
+	// be asserted against a sequence.
+	script []error
 	gate   chan struct{} // non-nil: Push blocks until it is closed
 	signal chan notify.NtfyPush
 }
@@ -41,6 +45,10 @@ func (f *fakePusher) Push(p notify.NtfyPush) error {
 	f.mu.Lock()
 	f.got = append(f.got, p)
 	err := f.err
+	if len(f.script) > 0 {
+		err = f.script[0]
+		f.script = f.script[1:]
+	}
 	f.mu.Unlock()
 	f.signal <- p
 	return err
@@ -83,6 +91,7 @@ type hostRig struct {
 	*rig
 	push *fakePusher
 	logs *logSpy
+	naps *sleepSpy
 }
 
 // logSpy captures the injected structured logs so "logged ONCE" is assertable.
@@ -109,30 +118,64 @@ func (l *logSpy) countContaining(sub string) int {
 	return n
 }
 
+// sleepSpy is the injected backoff wait (Deps.Sleep). Recording it instead of
+// serving it is what lets a five-attempt, minutes-long retry ladder be asserted
+// in microseconds — and asserted EXACTLY, which a real sleep never can.
+type sleepSpy struct {
+	mu   sync.Mutex
+	took []time.Duration
+}
+
+func (s *sleepSpy) sleep(d time.Duration) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.took = append(s.took, d)
+}
+
+func (s *sleepSpy) waits() []time.Duration {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]time.Duration, len(s.took))
+	copy(out, s.took)
+	return out
+}
+
 // newHostRig builds the receiver with the host route wired. push==nil wires NO
 // route, which is the "no topic configured" case.
 func newHostRig(t *testing.T, cooldown time.Duration, push *fakePusher) *hostRig {
+	return newHostRigWith(t, cooldown, push, nil)
+}
+
+// newHostRigWith is newHostRig plus a hook that adjusts the injected Deps —
+// the digest window, the push budget, the reserve. Kept separate so the plain
+// three-argument constructor the isolation suite uses stays exactly as it is.
+func newHostRigWith(t *testing.T, cooldown time.Duration, push *fakePusher, tune func(*Deps)) *hostRig {
 	t.Helper()
 	d := &fakeDispatcher{}
 	c := &testClock{t: time.Date(2026, 9, 3, 12, 0, 0, 0, time.UTC)}
 	m := NewMetrics()
 	spy := &logSpy{}
+	naps := &sleepSpy{}
 	deps := Deps{
 		Dispatcher: d,
 		Token:      testToken,
 		Cooldown:   cooldown,
 		Now:        c.now,
+		Sleep:      naps.sleep,
 		Metrics:    m,
 		Log:        spy.log,
 	}
 	if push != nil {
 		deps.HostRoute = push
 	}
+	if tune != nil {
+		tune(&deps)
+	}
 	h, err := Handler(deps)
 	if err != nil {
 		t.Fatalf("Handler: %v", err)
 	}
-	return &hostRig{rig: &rig{h: h, disp: d, clock: c, mx: m}, push: push, logs: spy}
+	return &hostRig{rig: &rig{h: h, disp: d, clock: c, mx: m}, push: push, logs: spy, naps: naps}
 }
 
 func alertJSON(name, severity, layer, tier, status, summary string) string {
@@ -179,23 +222,32 @@ func TestPageTierPushesOneHighPriorityPushToTheHostRoute(t *testing.T) {
 	}
 }
 
-func TestWarningTierPushesAtDefaultPriority(t *testing.T) {
+// The warning tier is NEVER pushed on its own any more (2026-09-03): it is
+// folded into the periodic digest. This is the behaviour change that ends the
+// live 429 storm, so it is asserted first — one warning in, zero pushes out,
+// one fold counted.
+func TestWarningTierIsFoldedIntoTheDigestNotPushed(t *testing.T) {
 	r := newHostRig(t, 30*time.Minute, newFakePusher())
-	// No tier label at all — the matrix's "watch" default. It must still reach
-	// the phone, just without waking anyone.
+	// No tier label at all — the matrix's "watch" default.
 	body := alertJSON("VectorEventsDiscarded", "warning", "ingest", "", "firing", "events discarded")
 	if w := r.post(t, body, bearer); w.Code != http.StatusOK {
 		t.Fatalf("status = %d", w.Code)
 	}
-	p := r.push.await(t, 1)[0]
-	if p.Priority != notify.NtfyPriorityDefault {
-		t.Errorf("Priority = %q, want %q", p.Priority, notify.NtfyPriorityDefault)
+	r.push.quiet(t)
+	if n := r.push.count(); n != 0 {
+		t.Fatalf("pushes = %d, want 0 — a chronic warning must not spend a push of its own", n)
 	}
-	if !strings.Contains(p.Title, "WARNING") {
-		t.Errorf("title %q must name the tier", p.Title)
+	txt := metricsText(r.mx)
+	if !strings.Contains(txt, "netops_alert_webhook_digest_alerts_total 1") {
+		t.Errorf("the warning was not counted as folded:\n%s", txt)
 	}
-	if !strings.Contains(metricsText(r.mx), `netops_alert_webhook_pushed_total{route="host_monitoring",tier="warning"} 1`) {
-		t.Error("the warning push was not counted under its tier")
+	if !strings.Contains(txt, `netops_alert_webhook_pushed_total{route="host_monitoring",tier="warning"} 0`) {
+		t.Errorf("the warning tier must show ZERO individual pushes:\n%s", txt)
+	}
+	// The product dispatcher is untouched: the digest is a HOST-ROUTE policy,
+	// not a change to what the configured channels receive.
+	if fired, _ := r.disp.counts(); fired != 1 {
+		t.Fatalf("product dispatches = %d, want 1 — digesting must not swallow the product leg", fired)
 	}
 }
 
@@ -207,8 +259,13 @@ func TestCriticalSeverityAloneDoesNotPage(t *testing.T) {
 	if w := r.post(t, body, bearer); w.Code != http.StatusOK {
 		t.Fatalf("status = %d", w.Code)
 	}
-	if p := r.push.await(t, 1)[0]; p.Priority != notify.NtfyPriorityDefault {
-		t.Errorf("Priority = %q, want %q — only the tier label pages", p.Priority, notify.NtfyPriorityDefault)
+	r.push.quiet(t)
+	if n := r.push.count(); n != 0 {
+		t.Fatalf("pushes = %d, want 0 — only the server-stamped tier label pages, "+
+			"and everything else is digested", n)
+	}
+	if !strings.Contains(metricsText(r.mx), "netops_alert_webhook_digest_alerts_total 1") {
+		t.Error("a critical-without-tier alert must be folded into the digest, not lost")
 	}
 }
 
@@ -383,6 +440,15 @@ func TestPushFailureIsCountedAndNeverFailsTheRequest(t *testing.T) {
 	if page, warn, res := r.mx.HostPushed(); page+warn+res != 0 {
 		t.Errorf("a failed push was counted as delivered: %d/%d/%d", page, warn, res)
 	}
+	// ONE failure is counted for the whole delivery, not one per attempt: the
+	// counter measures pages that never landed, and a retried-then-failed page
+	// is one such page.
+	if n := r.push.count(); n != hostMaxAttempts {
+		t.Errorf("attempts = %d, want %d — a page must be retried before it is given up on", n, hostMaxAttempts)
+	}
+	if n := r.logs.countContaining("error: platform alert push to host monitoring FAILED"); n != 1 {
+		t.Errorf("a page that never landed must be logged ERROR exactly once, got %d", n)
+	}
 }
 
 // The queue is BOUNDED (§9): a wedged ntfy must cost dropped pushes, not a
@@ -390,7 +456,10 @@ func TestPushFailureIsCountedAndNeverFailsTheRequest(t *testing.T) {
 func TestQueueFullDropsAreCountedNotBlocking(t *testing.T) {
 	p := newFakePusher()
 	p.gate = make(chan struct{})
-	r := newHostRig(t, time.Nanosecond, p) // every alert distinct: no suppression
+	// PAGE tier: the warning tier is digested now and never touches the queue.
+	// The budget guard is disabled (negative) so this test measures the QUEUE
+	// bound and nothing else — the budget has its own tests.
+	r := newHostRigWith(t, time.Nanosecond, p, func(d *Deps) { d.PushBudget = -1 })
 	var sb strings.Builder
 	sb.WriteString("[")
 	total := hostQueueSize + 120
@@ -398,7 +467,7 @@ func TestQueueFullDropsAreCountedNotBlocking(t *testing.T) {
 		if i > 0 {
 			sb.WriteString(",")
 		}
-		fmt.Fprintf(&sb, `{"status":"firing","labels":{"alertname":"A%d","severity":"warning","layer":"stack"}}`, i)
+		fmt.Fprintf(&sb, `{"status":"firing","labels":{"alertname":"A%d","severity":"critical","layer":"stack","tier":"page"}}`, i)
 	}
 	sb.WriteString("]")
 

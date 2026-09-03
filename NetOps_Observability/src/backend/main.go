@@ -1072,8 +1072,18 @@ func newServer() *server {
 			HostRoute:  platformAlertsHostRoute(),
 			Token:      token,
 			Cooldown:   alertwebhook.ParseCooldown(os.Getenv(alertwebhook.EnvCooldown), alertWebhookLog),
-			Metrics:    srv.vmalertWebhookMetrics,
-			Log:        alertWebhookLog,
+			// Noise + rate-limit control (2026-09-03): the warning tier is
+			// summarized into one push per window instead of buzzing per alert,
+			// and the outbound budget reserves capacity so a chronic warning can
+			// never spend the token a page needs. Env is read HERE and the
+			// values injected — the package stays env-free.
+			WarningDigestInterval: alertwebhook.ParseDigestInterval(os.Getenv(alertwebhook.EnvWarningDigestInterval), alertWebhookLog),
+			PushBudget: alertwebhook.ParseCount(os.Getenv(alertwebhook.EnvPushBudget),
+				alertwebhook.DefaultPushBudget, alertwebhook.EnvPushBudget, alertWebhookLog),
+			PageReserve: alertwebhook.ParseCount(os.Getenv(alertwebhook.EnvPushBudgetPageReserve),
+				alertwebhook.DefaultPageReserve, alertwebhook.EnvPushBudgetPageReserve, alertWebhookLog),
+			Metrics: srv.vmalertWebhookMetrics,
+			Log:     alertWebhookLog,
 		})
 		if err != nil {
 			logError("alertwebhook", "vmalert webhook receiver could not be built — NO vmalert alert will be delivered", errf(err))

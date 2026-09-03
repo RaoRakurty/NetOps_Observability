@@ -1548,6 +1548,18 @@ services:
       PLATFORM_ALERTS_NTFY_TOPIC: ${PLATFORM_ALERTS_NTFY_TOPIC:-}
       PLATFORM_ALERTS_NTFY_SERVER: ${PLATFORM_ALERTS_NTFY_SERVER:-}
       PLATFORM_ALERTS_NTFY_TOKEN: ${PLATFORM_ALERTS_NTFY_TOKEN:-}
+      # Alert-noise + rate-limit control (2026-09-03). ntfy.sh's free public
+      # server rate-limits per topic/IP and answered 429 on this route while
+      # chronic WARNINGS were pushing one message each; a real page can be
+      # refused behind them. The warning tier is therefore summarized into ONE
+      # digest per window, and the outbound budget reserves capacity that only a
+      # page may spend. Defaults here are byte-identical to the code's
+      # (alertwebhook DefaultWarningDigestInterval / DefaultPushBudget /
+      # DefaultPageReserve). PLATFORM_ALERTS_PUSH_BUDGET=-1 disables the guard
+      # for a self-hosted ntfy with no limits of its own.
+      PLATFORM_ALERTS_WARNING_DIGEST_INTERVAL: ${PLATFORM_ALERTS_WARNING_DIGEST_INTERVAL:-30m}
+      PLATFORM_ALERTS_PUSH_BUDGET: ${PLATFORM_ALERTS_PUSH_BUDGET:-30}
+      PLATFORM_ALERTS_PUSH_BUDGET_PAGE_RESERVE: ${PLATFORM_ALERTS_PUSH_BUDGET_PAGE_RESERVE:-10}
       CORRELATION_URL: "http://correlation:8000"
       # #20: export the device→tenant map (under the api's /data volume) so the
       # Vector aggregator + correlation can stamp tenant_id onto telemetry.
