@@ -1,7 +1,8 @@
-import { Component, CSSProperties, ReactNode, useEffect, useState } from "react";
+import { CSSProperties, ReactNode, useEffect, useState } from "react";
 import { api, CorrObject, FeedItem, CorrTimeline, getActiveScope, sessionTenantKey } from "../services/api";
 import { useShell } from "../context/shell";
 import PathHealthList from "../components/PathHealthList";
+import ErrorBoundary from "../components/ErrorBoundary";
 import RcaPathCausality from "../components/rca/RcaPathCausality";
 import { signatureNocTitle, signatureName, kindLabel, ownerLabel, OWNER_EXTERNAL, isInternalStackAffected, mentionsInternal } from "../components/rca/labels";
 import { CorrSignal } from "../services/api";
@@ -601,15 +602,23 @@ function TopIssueSpotlight() {
   );
 }
 
-// Error boundary so one bad panel degrades in isolation — never white-screens.
-class Safe extends Component<{ children: ReactNode }, { err: boolean }> {
-  state = { err: false };
-  static getDerivedStateFromError() { return { err: true }; }
-  render() {
-    return this.state.err
-      ? <div className="fp-panel"><div className="fp-panel-b"><EmptyReading t="This panel hit an error and was isolated." h="The rest of the page is unaffected." /></div></div>
-      : this.props.children;
-  }
+// Per-panel isolation: one bad panel degrades on its own and the other thirteen
+// keep reading. Delegates to the shared shell boundary (components/ErrorBoundary
+// — same catch, same console-only stack) but keeps this page's panel-shaped
+// reading rather than the full route fallback: an operator scanning the overview
+// wants the grid intact, not a report card in the middle of it. The route-level
+// boundary in App.tsx is what catches anything this page throws OUTSIDE a panel.
+function Safe({ children }: { children: ReactNode }) {
+  return (
+    <ErrorBoundary
+      label="This panel"
+      fallback={() => (
+        <div className="fp-panel"><div className="fp-panel-b"><EmptyReading t="This panel hit an error and was isolated." h="The rest of the page is unaffected." /></div></div>
+      )}
+    >
+      {children}
+    </ErrorBoundary>
+  );
 }
 
 export default function FrontPage() {

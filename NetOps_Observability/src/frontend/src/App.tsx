@@ -1,4 +1,4 @@
-import { Suspense, startTransition, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { ReactNode, Suspense, startTransition, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { api, Health, LANDING_PENDING_KEY } from "./services/api";
 import { useAuth } from "./hooks/useAuth";
 import { ShellContext, ShellState, TimeRange, SectionCtx } from "./context/shell";
@@ -25,6 +25,7 @@ import Login from "./pages/Login";
 import { Modal } from "./components/ui";
 import ChangePasswordCard from "./components/ChangePasswordCard";
 import TenantGate from "./components/TenantGate";
+import ErrorBoundary from "./components/ErrorBoundary";
 
 // ShellGridSizing mirrors the live pane sizes into the shell grid's track vars
 // (--ins-w / --drawer-h) so the docked Inspector/BottomDrawer reflow the center
@@ -39,6 +40,14 @@ function ShellGridSizing() {
     el.style.setProperty("--drawer-h", ws.drawer ? `${ws.drawerHeight}px` : "0px");
   }, [ws.inspector, ws.inspectorWidth, ws.drawer, ws.drawerHeight]);
   return null;
+}
+
+// RouteView renders the active route by calling the nav leaf's render thunk
+// from INSIDE the shell error boundary. Module scope (not a closure in App) so
+// its identity is stable and the page below it is never remounted by a shell
+// re-render.
+function RouteView({ build }: { build: () => ReactNode }) {
+  return <>{build()}</>;
 }
 
 export default function App() {
@@ -266,13 +275,26 @@ export default function App() {
   // ~44px would shrink the canvas and zoom the fitted network out. Section
   // siblings stay reachable via the rail flyout there.
   const pageBleed = !resourceRoute && section.id === "investigate" && leaf?.id === "topology";
-  const view = resourceRoute ? (
-    <ResourceDetail key={`${resourceRoute.kind}:${resourceRoute.id}`} kind={resourceRoute.kind} id={resourceRoute.id} />
-  ) : leaf ? (
-    leaf.render(ctx)
-  ) : section.render ? (
-    section.render(ctx)
-  ) : null;
+  // The two facts the shell's error boundary needs to name a failure honestly:
+  // what the operator calls this view, and the route it lives at. `routeKey` is
+  // also the boundary's reset key — navigating away from a view that threw
+  // clears the fallback with no operator action (see components/ErrorBoundary).
+  const viewLabel = resourceRoute ? "This resource" : leaf?.label ?? section.label;
+  const routeKey = resourceRoute
+    ? `resource:${resourceRoute.kind}:${resourceRoute.id}`
+    : `${section.id}/${leaf?.id ?? ""}`;
+  // The leaf's render thunk is EVALUATED INSIDE the boundary (see RouteView),
+  // not here: a thunk that throws while building its element would otherwise
+  // throw in App's own render, above the boundary, and blank the console —
+  // exactly the failure the boundary exists to stop.
+  const buildView = (): ReactNode =>
+    resourceRoute ? (
+      <ResourceDetail key={`${resourceRoute.kind}:${resourceRoute.id}`} kind={resourceRoute.kind} id={resourceRoute.id} />
+    ) : leaf ? (
+      leaf.render(ctx)
+    ) : section.render ? (
+      section.render(ctx)
+    ) : null;
 
   return (
     <ShellContext.Provider value={shell}>
@@ -348,7 +370,13 @@ export default function App() {
                   (nav.tsx wraps every leaf in React.lazy). Same affordance as
                   the app-boot loading state above. */}
               <Suspense fallback={<div className="page-skeleton" aria-busy="true" />}>
-                {view}
+                {/* A render exception in ANY route stops here: the rail, top bar
+                    and drawers keep rendering and only the view is replaced by
+                    a named, recoverable panel. Before this, one bad field
+                    access white-screened the whole console. */}
+                <ErrorBoundary label={viewLabel} route={hash} resetKey={routeKey}>
+                  <RouteView build={buildView} />
+                </ErrorBoundary>
               </Suspense>
             </TenantGate>
           </div>
