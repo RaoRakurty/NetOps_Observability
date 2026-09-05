@@ -79,7 +79,6 @@ the real list from the filesystem and fails if one is missing, duplicated or unk
 | Directory | Licence | Why |
 | --- | --- | --- |
 | `LICENSES/` | Apache-2.0 | The two licence texts the SPDX identifiers resolve to. The directory itself is part of the open declaration and is readable by everyone. |
-| `ai/` | Apache-2.0 | Correlix-authored knowledge inputs for the AI assist surfaces — today ai/tac/research, the per-vendor TAC escalation research (YAML issue/command catalogues plus their sourcing READMEs). It is data we wrote, cited to public vendor documentation; nothing tier-gated lives here, so the default-open rule applies. Classified 2026-09-05 when the directory appeared, so the fail-closed coverage check stays green; the lane that owns the content should refine this reason if the directory grows beyond research inputs. |
 | `deployment/` | Apache-2.0 | Compose stack, Dockerfiles, nginx/vector/storage configuration. Deployment machinery for the whole product; nothing tier-gated lives here. |
 | `docs/` | Apache-2.0 | Design records, runbooks, audits and the tracker. Documentation of the open product, including the design of the commercial split itself. |
 | `docs-portal/` | Apache-2.0 | Docusaurus customer documentation site. Ships in the frontend image; documents every tier. |

@@ -4659,6 +4659,16 @@ func (s *server) dataProtectDeps(cfg dataprotect.ConfigStore) dataprotect.Deps {
 		VerifyFile:             envOr("SNAPSHOT_VERIFY_FILE", "/data/snapshot_verify.json"),
 		BackupReportPath:       envOr("BACKUP_REPORT", "/data/backup-report.json"),
 		RestoreDrillReportPath: envOr("RESTORE_DRILL_REPORT", "/data/restore-drill.report.json"),
+		// The BUNDLE drill's report (scripts/backup-drill.sh). Distinct from the
+		// live-store canary drill above: this one proves an actual bundle
+		// ARTIFACT restores, which is what an operator holds after losing the
+		// host. The host dir data/api is the api's /data mount, so the script's
+		// default and this default name the same file from the two sides.
+		BackupDrillReportPath: envOr("BACKUP_DRILL_REPORT", "/data/backup-drill.report.json"),
+		// Optional second `fs` snapshot repository on a separately mounted path
+		// (tracker 225a). Empty = not configured, which is the shipped default
+		// and is reported as a deployment fact rather than as a fault.
+		SecondaryRepository: strings.TrimSpace(os.Getenv("OPENSEARCH_SNAPSHOT_REPO2")),
 		// Default ON: a platform that silently stops proving its backups is the
 		// failure the probe closes, so only an explicit "false" disables it.
 		ProbeEnabled:  envOr("SNAPSHOT_PROBE_ENABLED", "true") == "true",
