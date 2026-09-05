@@ -468,6 +468,14 @@
       {
         "path": "scripts/lab/twin/docker/Dockerfile",
         "why": "A stock python image with pip requirements for the lab twin. Contains no Correlix source and is never shipped."
+      },
+      {
+        "path": "tests/fixtures/oci-regression/Dockerfile.inherited",
+        "why": "Tracker 238 regression fixture: a pinned Alpine base plus one COPY, deliberately declaring nothing, so the OCI compliance scan can be proved to find INHERITED software (BusyBox) that no manifest of ours names. Contains no Correlix source, is never built for deployment and is never shipped."
+      },
+      {
+        "path": "tests/fixtures/oci-regression/Dockerfile.inherited-other-version",
+        "why": "The same fixture on Alpine 3.20, whose BusyBox is a different version from the one Correlix retains source for \u2014 it must FAIL the compliance gate. Contains no Correlix source and is never shipped."
       }
     ]
   },

@@ -2,36 +2,60 @@
   "_comment": [
     "GPL/LGPL SOURCE-OFFER MIRROR — the reviewed pin table for corresponding source.",
     "",
-    "WHY THIS FILE EXISTS. Correlix redistributes copyleft-licensed binaries as",
-    "unmodified upstream container images. GPL-2.0 s3 lets a distributor discharge",
-    "the source obligation two ways: (a) ship the corresponding source ALONGSIDE the",
-    "binary, or (b) ship a written offer good for three years. Owner decision",
-    "2026-09-04 (licence audit D2, docs/security/LICENSE_AUDIT_2026-09-03.md s4 D2)",
-    "chose (a) for syslog-ng: MIRROR the exact upstream source tarball into every",
-    "shipped release, so the obligation is discharged at hand-over and no future",
-    "hosting change, repo rename or upstream deletion can leave us unable to honour",
-    "a request. The written offer in the notices now points at the in-bundle copy.",
+    "WHY THIS FILE EXISTS. Correlix redistributes copyleft-licensed binaries — as",
+    "unmodified upstream container images, and inside the images we build ourselves.",
+    "GPL-2.0 s3 lets a distributor discharge the source obligation two ways: (a) ship",
+    "the corresponding source ALONGSIDE the binary, or (b) ship a written offer good",
+    "for three years. Owner decision 2026-09-04 (licence audit D2,",
+    "docs/security/LICENSE_AUDIT_2026-09-03.md s4 D2) chose (a) for syslog-ng, and",
+    "owner decision 2026-09-05 (tracker 238) generalised it: IF CORRELIX SHIPS THE",
+    "BINARY, CORRELIX RETAINS THE SOURCE — however the binary got into the image,",
+    "including when it was inherited from an upstream base image and named nowhere in",
+    "our Dockerfiles. Upstream availability may be recorded as provenance or used as",
+    "the retrieval source, but it is NOT by itself compliance.",
+    "",
+    "TWO SECTIONS.",
+    "  components[]  Retained corresponding-source artifacts. Each is fetched,",
+    "                checksum-verified and written into every release bundle's",
+    "                source-offer/ by scripts/make-installer.sh write_source_offer().",
+    "                `provides` says which normalized component identities the",
+    "                artifact satisfies — (package_type, source_package,",
+    "                upstream_version) — so ONE tarball covers every distro",
+    "                subpackage built from the same origin, and a different version",
+    "                matches nothing.",
+    "  deferred[]    Components with a real source obligation for which Correlix has",
+    "                NOT yet produced a retained artifact. Explicitly recorded,",
+    "                version-pinned and dated. scripts/oci-compliance.py prints them",
+    "                on every run and FAILS `--release` on them. A component in",
+    "                NEITHER section fails every mode: silence is never a pass, and a",
+    "                base-image bump changes the versions so the records stop",
+    "                matching and a human has to look again.",
     "",
     "HOW IT IS USED. scripts/make-installer.sh reads this file, fetches each entry,",
     "verifies its sha256 against the pin below, and writes it to the bundle at",
     "source-offer/<file>. A missing pin, a failed download or a checksum mismatch is",
     "a HARD BUILD FAILURE (scripts/CLAUDE.md s16.1) — an unverified tarball is never",
     "shipped, and 'the network was down' never silently produces a bundle whose",
-    "source offer is a lie.",
+    "source offer is a lie. scripts/oci-compliance.py reads the same file to decide",
+    "whether every copyleft component discovered in a FINAL OCI IMAGE has a retained,",
+    "checksum-verified artifact behind it.",
     "",
-    "ON 'upstream's published sum'. Checked 2026-09-04: the syslog-ng project",
-    "publishes NO checksum file, no signature and no release-asset digest for this",
-    "asset (the GitHub release API reports `digest: null`), and no distro packaging",
-    "we could reach republishes a sha256 for the release tarball (Arch builds from",
-    "the git tag; Alpine has no aport). So there is no upstream attestation to",
-    "verify against. The `sha256` below is therefore OUR OWN recorded measurement of",
-    "the asset downloaded from the canonical release URL, taken and reviewed on",
-    "2026-09-04 and checked in here. That is trust-on-first-use, recorded once and",
-    "then enforced forever — NOT an upstream guarantee, and it is written down here",
-    "rather than implied. `verified_against` states this for each entry so nobody",
-    "later mistakes a self-measured pin for a vendor signature.",
+    "ON 'upstream's published sum'. Each entry's `verified_against` states whether",
+    "the sha256 is an UPSTREAM-PUBLISHED digest we checked against, or OUR OWN",
+    "measurement recorded once and then enforced forever (trust-on-first-use). Those",
+    "are different strengths of evidence and the difference is written down rather",
+    "than implied, so nobody later mistakes a self-measured pin for a vendor",
+    "signature. syslog-ng publishes no checksum at all; busybox does.",
     "",
-    "UPDATING. When the pinned image version changes in deployment/docker, this file",
+    "ON EXACT CORRESPONDENCE. An upstream release tarball at a matching version is",
+    "NOT automatically the source a distribution built: distributions carry patches",
+    "and build configuration. `role` and `correspondence` keep that honest — a",
+    "`distro-packaging` artifact pinned to the SAME build reference the image's own",
+    "package database records (Alpine writes the aports commit into /lib/apk/db) is",
+    "what upgrades a component from `upstream-release` to `distro-exact`. Claiming",
+    "more than the evidence supports is worse than claiming less.",
+    "",
+    "UPDATING. When a pinned image version changes in deployment/docker, this file",
     "MUST change with it — tests/test_source_offer.py fails the build otherwise."
   ],
   "components": [
@@ -46,7 +70,1558 @@
       "size_bytes": 6877191,
       "verified_against": "self-measured 2026-09-04 from the canonical GitHub release asset; upstream publishes no checksum, signature or release-asset digest for this file",
       "license": "LGPL-2.1-or-later (core: lib/, libtest/, syslog-ng/, syslog-ng-ctl/, persist-tool/, tests/loggen/, docker/) AND GPL-2.0-or-later (modules/, scl/) — verified against COPYING at tag syslog-ng-4.7.1",
-      "notes": "No OpenSSL linking exception exists in this COPYING. The stock balabit/syslog-ng image loads all modules, so the running combination is effectively GPL-2.0-or-later. This tarball IS the corresponding source for that image's syslog-ng."
+      "notes": "No OpenSSL linking exception exists in this COPYING. The stock balabit/syslog-ng image loads all modules, so the running combination is effectively GPL-2.0-or-later. This tarball IS the corresponding source for that image's syslog-ng.",
+      "component": "syslog-ng",
+      "role": "corresponding-source",
+      "origin": "separate-container-image",
+      "correspondence": "upstream-release",
+      "provides": [
+        {
+          "package_type": "image",
+          "name": "balabit/syslog-ng",
+          "upstream_version": "4.7.1"
+        }
+      ],
+      "images": [
+        "balabit/syslog-ng:4.7.1 (separate container, redistributed unmodified)"
+      ]
+    },
+    {
+      "name": "busybox",
+      "component": "busybox",
+      "version": "1.37.0",
+      "role": "corresponding-source",
+      "origin": "inherited-base-layer",
+      "correspondence": "upstream-release",
+      "image": "nginx:1.27-alpine (base of netops-frontend and netops-nginx)",
+      "compose_pin_source": "deployment/docker/Dockerfile.frontend, deployment/docker/Dockerfile.nginx",
+      "file": "busybox-1.37.0.tar.bz2",
+      "url": "https://busybox.net/downloads/busybox-1.37.0.tar.bz2",
+      "sha256": "3311dff32e746499f4df0d5df04d7eb396382d7e108bb9250e7b519b837043a4",
+      "size_bytes": 2565764,
+      "verified_against": "upstream-published sha256 at https://busybox.net/downloads/busybox-1.37.0.tar.bz2.sha256 — fetched and matched byte-for-byte on 2026-09-05. Unlike syslog-ng this is a real upstream attestation, not a self-measurement.",
+      "license": "GPL-2.0-only — BusyBox is explicit that version 2 is the ONLY version; there is no 'or later' option. Verified against LICENSE in the tarball and against the L: field Alpine records in /lib/apk/db/installed.",
+      "provides": [
+        {
+          "package_type": "apk",
+          "source_package": "busybox",
+          "upstream_version": "1.37.0"
+        }
+      ],
+      "images": [
+        "netops-frontend (deployment/docker/Dockerfile.frontend)",
+        "netops-nginx (deployment/docker/Dockerfile.nginx)"
+      ],
+      "notes": "BusyBox is named in NO Correlix Dockerfile. It arrives inside the Alpine layers of nginx:1.27-alpine and is present in every netops-frontend and netops-nginx image we distribute, as the apk packages busybox, busybox-binsh and ssl_client — all three built from this one origin package, so this one tarball is the corresponding source for all three. That invisibility is tracker 238: the licence audit models image REFERENCES and this is a base LAYER. It is found now because scripts/oci-compliance.py scans the FINAL image, not the Dockerfile."
+    },
+    {
+      "name": "busybox",
+      "component": "busybox",
+      "version": "1.37.0-r12",
+      "role": "distro-packaging",
+      "origin": "inherited-base-layer",
+      "correspondence": "distro-exact",
+      "file": "busybox-1.37.0-r12-alpine-aports.tar.gz",
+      "url": "https://gitlab.alpinelinux.org/alpine/aports/-/archive/9c49608930ef6a9936750e9e39edec56b3db9cd5/aports-9c49608930ef6a9936750e9e39edec56b3db9cd5.tar.gz?path=main/busybox",
+      "sha256": "b384f0b478515b67ff407a431c89218cf34145fbacc798b0822e05a1f8a4737a",
+      "size_bytes": 69075,
+      "verified_against": "self-measured 2026-09-05 from the canonical GitLab archive of the aports tree at the EXACT commit Alpine records for this package; fetched twice and byte-identical. GitLab publishes no digest for a generated archive, so this is our own measurement recorded once and enforced forever. If a future GitLab archive-format change breaks it, the build FAILS rather than shipping unverified bytes — re-measure deliberately, or serve the retained copy from CORRELIX_SOURCE_MIRROR_DIR.",
+      "license": "GPL-2.0-only — the packaging is distributed under the package's own licence",
+      "distro_package": {
+        "distro": "alpine",
+        "distro_version": "3.21.3",
+        "package": "busybox",
+        "package_version": "1.37.0-r12",
+        "build_ref": "9c49608930ef6a9936750e9e39edec56b3db9cd5",
+        "build_ref_source": "the `c:` field of /lib/apk/db/installed in the shipped image — the aports commit that built this package. Syft carries it through as syft:metadata:gitCommitOfApkPort, so the claim is checked against the image, not asserted.",
+        "repository": "https://gitlab.alpinelinux.org/alpine/aports",
+        "path": "main/busybox"
+      },
+      "provides": [
+        {
+          "package_type": "apk",
+          "source_package": "busybox",
+          "upstream_version": "1.37.0"
+        }
+      ],
+      "images": [
+        "netops-frontend (deployment/docker/Dockerfile.frontend)",
+        "netops-nginx (deployment/docker/Dockerfile.nginx)"
+      ],
+      "notes": "The upstream tarball alone is not the source Alpine built. This archive is Alpine's complete packaging for busybox at the exact commit the shipped image records: the APKBUILD (which states the build configuration and the sha512 of every input), all 37 distribution patches, and busyboxconfig. Upstream tarball + this archive together are the corresponding source for the binary in the image, which is what lets scripts/oci-compliance.py report correspondence `distro-exact` instead of merely `upstream-release`."
+    }
+  ],
+  "deferred_posture": "Correlix has NOT yet produced a retained corresponding-source artifact for this component. The current posture is the de-facto one the 2026-09-03 licence audit recorded in §5 — reliance on the distribution's own published source for packages inherited unmodified from an upstream base image — which is normal industry practice and has never been ratified by the owner. Owner decision 2026-09-05 (tracker 238) says upstream availability alone is NOT compliance, so every entry below is a real, open obligation: scripts/oci-compliance.py prints them on every run and FAILS `--release` on them. Clearing one means adding a `components` entry with the upstream source (and, for a distribution package, its packaging archive) the way busybox was cleared. Removing one from a base image clears it too.",
+  "_deferred_comment": [
+    "THE REGISTER OF UNDISCHARGED SOURCE OBLIGATIONS.",
+    "",
+    "GENERATED by `scripts/oci-compliance.py --record-deferred` against the four",
+    "images publish-images.yml builds, then reviewed and checked in. It is DATA, not",
+    "a decision: recording an obligation here does not discharge it.",
+    "",
+    "WHY VERSION-PINNED. Each row names the exact package version found in the image.",
+    "A base-image bump changes those versions, the rows stop matching, and the gate",
+    "fails until somebody looks again. A blanket rule ('all Alpine packages are fine')",
+    "would hide precisely the class of defect that produced tracker 238 — software",
+    "shipped by Correlix that no Correlix inventory could see.",
+    "",
+    "WHY SO MANY ARE `license-list` OR `unknown-license`. Debian's copyright files list",
+    "every licence appearing anywhere in a source package with no stated relationship",
+    "between them, so a scanner cannot tell 'MIT AND GPL-2.0' from 'MIT OR GPL-2.0'.",
+    "The policy refuses to guess in either direction: any list containing a copyleft",
+    "term is manual-review, never a silent pass and never a blanket failure."
+  ],
+  "deferred": [
+    {
+      "component": "adduser",
+      "version": "3.152",
+      "package_type": "deb",
+      "license": "GPL-2.0-only ; GPL-2.0-or-later",
+      "license_confidence": "license-list",
+      "origin": "inherited-base-layer",
+      "images": [
+        "netops-correlation"
+      ],
+      "tracker": 238,
+      "recorded": "2026-09-05"
+    },
+    {
+      "component": "alpine-baselayout",
+      "version": "3.6.8-r1",
+      "package_type": "apk",
+      "license": "GPL-2.0-only",
+      "license_confidence": "expression",
+      "origin": "inherited-base-layer",
+      "images": [
+        "netops-frontend",
+        "netops-nginx"
+      ],
+      "tracker": 238,
+      "recorded": "2026-09-05"
+    },
+    {
+      "component": "alpine-baselayout-data",
+      "version": "3.6.8-r1",
+      "package_type": "apk",
+      "license": "GPL-2.0-only",
+      "license_confidence": "expression",
+      "origin": "inherited-base-layer",
+      "images": [
+        "netops-frontend",
+        "netops-nginx"
+      ],
+      "tracker": 238,
+      "recorded": "2026-09-05"
+    },
+    {
+      "component": "aom-libs",
+      "version": "3.11.0-r0",
+      "package_type": "apk",
+      "license": "BSD-2-Clause ; custom",
+      "license_confidence": "unknown-license",
+      "origin": "inherited-base-layer",
+      "images": [
+        "netops-frontend",
+        "netops-nginx"
+      ],
+      "tracker": 238,
+      "recorded": "2026-09-05"
+    },
+    {
+      "component": "apk-tools",
+      "version": "2.14.6-r3",
+      "package_type": "apk",
+      "license": "GPL-2.0-only",
+      "license_confidence": "expression",
+      "origin": "inherited-base-layer",
+      "images": [
+        "netops-frontend",
+        "netops-nginx"
+      ],
+      "tracker": 238,
+      "recorded": "2026-09-05"
+    },
+    {
+      "component": "apt",
+      "version": "3.0.3",
+      "package_type": "deb",
+      "license": "BSD-3-Clause ; GPL-2.0-only ; GPL-2.0-or-later ; MIT ; curl",
+      "license_confidence": "license-list",
+      "origin": "inherited-base-layer",
+      "images": [
+        "netops-correlation"
+      ],
+      "tracker": 238,
+      "recorded": "2026-09-05"
+    },
+    {
+      "component": "base-files",
+      "version": "12.4+deb12u14",
+      "package_type": "deb",
+      "license": "GPL-UNSPECIFIED",
+      "license_confidence": "family-unspecified",
+      "origin": "inherited-base-layer",
+      "images": [
+        "netops-api"
+      ],
+      "tracker": 238,
+      "recorded": "2026-09-05"
+    },
+    {
+      "component": "base-files",
+      "version": "13.8+deb13u5",
+      "package_type": "deb",
+      "license": "GPL-2.0-or-later ; GPL-UNSPECIFIED ; verbatim",
+      "license_confidence": "license-list",
+      "origin": "inherited-base-layer",
+      "images": [
+        "netops-correlation"
+      ],
+      "tracker": 238,
+      "recorded": "2026-09-05"
+    },
+    {
+      "component": "base-passwd",
+      "version": "3.6.7",
+      "package_type": "deb",
+      "license": "GPL-2.0-only ; public-domain",
+      "license_confidence": "license-list",
+      "origin": "inherited-base-layer",
+      "images": [
+        "netops-correlation"
+      ],
+      "tracker": 238,
+      "recorded": "2026-09-05"
+    },
+    {
+      "component": "bash",
+      "version": "5.2.37-2+b9",
+      "package_type": "deb",
+      "license": "BSD-4-Clause-UC ; GFDL-1.3-only ; GFDL-NIV-1.3 ; GPL-2.0-only ; GPL-2.0-or-later ; GPL-3.0-only ; GPL-3.0-or-later ; Latex2e ; MIT-like ; permissive",
+      "license_confidence": "license-list",
+      "origin": "inherited-base-layer",
+      "images": [
+        "netops-correlation"
+      ],
+      "tracker": 238,
+      "recorded": "2026-09-05"
+    },
+    {
+      "component": "bsdutils",
+      "version": "1:2.41-5",
+      "package_type": "deb",
+      "license": "BSD-2-Clause ; BSD-3-Clause ; BSD-4-Clause ; BSLA ; GPL-2.0-only ; GPL-2.0-or-later ; GPL-3.0-only ; GPL-3.0-or-later ; ISC ; LGPL-2.0-only ; LGPL-2.0-or-later ; LGPL-2.1-only ; LGPL-2.1-or-later ; LGPL-3.0-only ; LGPL-3.0-or-later ; LGPL-UNSPECIFIED ; MIT ; public-domain",
+      "license_confidence": "license-list",
+      "origin": "inherited-base-layer",
+      "images": [
+        "netops-correlation"
+      ],
+      "tracker": 238,
+      "recorded": "2026-09-05"
+    },
+    {
+      "component": "ca-certificates",
+      "version": "20250419",
+      "package_type": "deb",
+      "license": "GPL-2.0-only ; GPL-2.0-or-later ; MPL-2.0",
+      "license_confidence": "license-list",
+      "origin": "inherited-base-layer",
+      "images": [
+        "netops-correlation"
+      ],
+      "tracker": 238,
+      "recorded": "2026-09-05"
+    },
+    {
+      "component": "coreutils",
+      "version": "9.7-3",
+      "package_type": "deb",
+      "license": "BSD-4-Clause-UC ; FSFULLR ; GFDL-1.3-only ; GFDL-NIV-1.3 ; GPL-3.0-only ; GPL-3.0-or-later ; ISC",
+      "license_confidence": "license-list",
+      "origin": "inherited-base-layer",
+      "images": [
+        "netops-correlation"
+      ],
+      "tracker": 238,
+      "recorded": "2026-09-05"
+    },
+    {
+      "component": "dash",
+      "version": "0.5.12-12",
+      "package_type": "deb",
+      "license": "BSD-3-Clause ; GPL-2.0-only ; GPL-2.0-or-later ; public-domain",
+      "license_confidence": "license-list",
+      "origin": "inherited-base-layer",
+      "images": [
+        "netops-correlation"
+      ],
+      "tracker": 238,
+      "recorded": "2026-09-05"
+    },
+    {
+      "component": "debian-archive-keyring",
+      "version": "2025.1",
+      "package_type": "deb",
+      "license": "GPL-UNSPECIFIED",
+      "license_confidence": "family-unspecified",
+      "origin": "inherited-base-layer",
+      "images": [
+        "netops-correlation"
+      ],
+      "tracker": 238,
+      "recorded": "2026-09-05"
+    },
+    {
+      "component": "debianutils",
+      "version": "5.23.2",
+      "package_type": "deb",
+      "license": "GPL-2.0-only ; GPL-2.0-or-later ; SMAIL-GPL ; public-domain",
+      "license_confidence": "license-list",
+      "origin": "inherited-base-layer",
+      "images": [
+        "netops-correlation"
+      ],
+      "tracker": 238,
+      "recorded": "2026-09-05"
+    },
+    {
+      "component": "diffutils",
+      "version": "1:3.10-4",
+      "package_type": "deb",
+      "license": "FSFAP ; FSFULLR ; GFDL-1.3-only ; GFDL-NIV-1.3 ; GPL-2.0-only ; GPL-2.0-or-later ; GPL-3.0-only ; GPL-3.0-or-later ; LGPL-2.0-only ; LGPL-2.0-or-later ; LGPL-2.1-only ; LGPL-2.1-or-later ; LGPL-3.0-only ; LGPL-3.0-or-later ; X11 ; public-domain",
+      "license_confidence": "license-list",
+      "origin": "inherited-base-layer",
+      "images": [
+        "netops-correlation"
+      ],
+      "tracker": 238,
+      "recorded": "2026-09-05"
+    },
+    {
+      "component": "dpkg",
+      "version": "1.22.22",
+      "package_type": "deb",
+      "license": "GPL-2.0-only ; GPL-2.0-or-later ; public-domain-s-s-d",
+      "license_confidence": "license-list",
+      "origin": "inherited-base-layer",
+      "images": [
+        "netops-correlation"
+      ],
+      "tracker": 238,
+      "recorded": "2026-09-05"
+    },
+    {
+      "component": "findutils",
+      "version": "4.10.0-3",
+      "package_type": "deb",
+      "license": "BSD-3-Clause ; FSFAP ; FSFULLR ; GFDL-1.3-only ; GFDL-NIV-1.3+ ; GPL-2.0-only ; GPL-2.0-or-later ; GPL-3.0-only ; GPL-3.0-or-later ; GPL-UNSPECIFIED ; ISC ; LGPL-2.0-only ; LGPL-2.0-or-later ; LGPL-2.1-only ; LGPL-2.1-or-later ; LGPL-3.0-only ; LGPL-3.0-or-later ; LGPL-UNSPECIFIED ; X11 ; public-domain",
+      "license_confidence": "license-list",
+      "origin": "inherited-base-layer",
+      "images": [
+        "netops-correlation"
+      ],
+      "tracker": 238,
+      "recorded": "2026-09-05"
+    },
+    {
+      "component": "gcc-14-base",
+      "version": "14.2.0-19",
+      "package_type": "deb",
+      "license": "Artistic ; GFDL-1.2-only ; GPL-3.0-only ; GPL-UNSPECIFIED ; LGPL-UNSPECIFIED",
+      "license_confidence": "license-list",
+      "origin": "inherited-base-layer",
+      "images": [
+        "netops-correlation"
+      ],
+      "tracker": 238,
+      "recorded": "2026-09-05"
+    },
+    {
+      "component": "geoip",
+      "version": "1.6.12-r5",
+      "package_type": "apk",
+      "license": "LGPL-2.1-or-later",
+      "license_confidence": "expression",
+      "origin": "inherited-base-layer",
+      "images": [
+        "netops-frontend",
+        "netops-nginx"
+      ],
+      "tracker": 238,
+      "recorded": "2026-09-05"
+    },
+    {
+      "component": "gettext-envsubst",
+      "version": "0.22.5-r0",
+      "package_type": "apk",
+      "license": "GPL-3.0-or-later AND LGPL-2.1-or-later AND MIT",
+      "license_confidence": "expression",
+      "origin": "inherited-base-layer",
+      "images": [
+        "netops-frontend",
+        "netops-nginx"
+      ],
+      "tracker": 238,
+      "recorded": "2026-09-05"
+    },
+    {
+      "component": "grep",
+      "version": "3.11-4",
+      "package_type": "deb",
+      "license": "GPL-3.0-only ; GPL-3.0-or-later",
+      "license_confidence": "license-list",
+      "origin": "inherited-base-layer",
+      "images": [
+        "netops-correlation"
+      ],
+      "tracker": 238,
+      "recorded": "2026-09-05"
+    },
+    {
+      "component": "gzip",
+      "version": "1.13-1",
+      "package_type": "deb",
+      "license": "FSF-manpages ; GFDL-1.3+-no-invariant ; GFDL-3 ; GPL-3.0-only ; GPL-3.0-or-later",
+      "license_confidence": "license-list",
+      "origin": "inherited-base-layer",
+      "images": [
+        "netops-correlation"
+      ],
+      "tracker": 238,
+      "recorded": "2026-09-05"
+    },
+    {
+      "component": "hostname",
+      "version": "3.25",
+      "package_type": "deb",
+      "license": "GPL-2.0-only",
+      "license_confidence": "expression",
+      "origin": "inherited-base-layer",
+      "images": [
+        "netops-correlation"
+      ],
+      "tracker": 238,
+      "recorded": "2026-09-05"
+    },
+    {
+      "component": "init-system-helpers",
+      "version": "1.69~deb13u1",
+      "package_type": "deb",
+      "license": "BSD-3-Clause ; GPL-2.0-only ; GPL-2.0-or-later",
+      "license_confidence": "license-list",
+      "origin": "inherited-base-layer",
+      "images": [
+        "netops-correlation"
+      ],
+      "tracker": 238,
+      "recorded": "2026-09-05"
+    },
+    {
+      "component": "libacl1",
+      "version": "2.3.2-2+b1",
+      "package_type": "deb",
+      "license": "GPL-2.0-only ; GPL-2.0-or-later ; LGPL-2.0-or-later ; LGPL-2.1-only",
+      "license_confidence": "license-list",
+      "origin": "inherited-base-layer",
+      "images": [
+        "netops-correlation"
+      ],
+      "tracker": 238,
+      "recorded": "2026-09-05"
+    },
+    {
+      "component": "libapt-pkg7.0",
+      "version": "3.0.3",
+      "package_type": "deb",
+      "license": "BSD-3-Clause ; GPL-2.0-only ; GPL-2.0-or-later ; MIT ; curl",
+      "license_confidence": "license-list",
+      "origin": "inherited-base-layer",
+      "images": [
+        "netops-correlation"
+      ],
+      "tracker": 238,
+      "recorded": "2026-09-05"
+    },
+    {
+      "component": "libattr1",
+      "version": "1:2.5.2-3",
+      "package_type": "deb",
+      "license": "GPL-2.0-only ; GPL-2.0-or-later ; LGPL-2.0-or-later ; LGPL-2.1-only",
+      "license_confidence": "license-list",
+      "origin": "inherited-base-layer",
+      "images": [
+        "netops-correlation"
+      ],
+      "tracker": 238,
+      "recorded": "2026-09-05"
+    },
+    {
+      "component": "libaudit-common",
+      "version": "1:4.0.2-2",
+      "package_type": "deb",
+      "license": "GPL-1.0-only ; GPL-2.0-only ; LGPL-2.1-only",
+      "license_confidence": "license-list",
+      "origin": "inherited-base-layer",
+      "images": [
+        "netops-correlation"
+      ],
+      "tracker": 238,
+      "recorded": "2026-09-05"
+    },
+    {
+      "component": "libaudit1",
+      "version": "1:4.0.2-2+b2",
+      "package_type": "deb",
+      "license": "GPL-1.0-only ; GPL-2.0-only ; LGPL-2.1-only",
+      "license_confidence": "license-list",
+      "origin": "inherited-base-layer",
+      "images": [
+        "netops-correlation"
+      ],
+      "tracker": 238,
+      "recorded": "2026-09-05"
+    },
+    {
+      "component": "libblkid1",
+      "version": "2.41-5",
+      "package_type": "deb",
+      "license": "BSD-2-Clause ; BSD-3-Clause ; BSD-4-Clause ; BSLA ; GPL-2.0-only ; GPL-2.0-or-later ; GPL-3.0-only ; GPL-3.0-or-later ; ISC ; LGPL-2.0-only ; LGPL-2.0-or-later ; LGPL-2.1-only ; LGPL-2.1-or-later ; LGPL-3.0-only ; LGPL-3.0-or-later ; LGPL-UNSPECIFIED ; MIT ; public-domain",
+      "license_confidence": "license-list",
+      "origin": "inherited-base-layer",
+      "images": [
+        "netops-correlation"
+      ],
+      "tracker": 238,
+      "recorded": "2026-09-05"
+    },
+    {
+      "component": "libbsd0",
+      "version": "0.12.2-2",
+      "package_type": "deb",
+      "license": "BSD-2-Clause ; BSD-2-clause-author ; BSD-2-clause-verbatim ; BSD-3-Clause ; BSD-3-clause-John-Birrell ; BSD-3-clause-Regents ; BSD-3-clause-author ; BSD-5-clause-Peter-Wemm ; Beerware ; ISC ; ISC-Original ; MIT ; public-domain",
+      "license_confidence": "unknown-license",
+      "origin": "inherited-base-layer",
+      "images": [
+        "netops-correlation"
+      ],
+      "tracker": 238,
+      "recorded": "2026-09-05"
+    },
+    {
+      "component": "libbz2-1.0",
+      "version": "1.0.8-6",
+      "package_type": "deb",
+      "license": "BSD-variant ; GPL-2.0-only",
+      "license_confidence": "license-list",
+      "origin": "inherited-base-layer",
+      "images": [
+        "netops-correlation"
+      ],
+      "tracker": 238,
+      "recorded": "2026-09-05"
+    },
+    {
+      "component": "libc-bin",
+      "version": "2.41-12+deb13u3",
+      "package_type": "deb",
+      "license": "BSD-2-Clause ; BSD-3-clause-Berkeley ; BSD-3-clause-Carnegie ; BSD-3-clause-Oracle ; BSD-3-clause-WIDE ; BSD-like-Spencer ; BSL-1.0 ; CORE-MATH ; Carnegie ; DEC ; FSFAP ; GPL-2+-with-link-exception ; GPL-2.0-only ; GPL-2.0-or-later ; GPL-3.0-only ; GPL-3.0-or-later ; IBM ; ISC ; Inner-Net ; LGPL-2.0-only ; LGPL-2.0-or-later ; LGPL-2.1+-with-link-exception ; LGPL-2.1-only ; LGPL-2.1-or-later ; LGPL-3.0-only ; LGPL-3.0-or-later ; MIT-like-Lord ; PCRE ; SunPro ; Unicode-DFS-2016 ; Univ-Coimbra ; public-domain",
+      "license_confidence": "license-list",
+      "origin": "inherited-base-layer",
+      "images": [
+        "netops-correlation"
+      ],
+      "tracker": 238,
+      "recorded": "2026-09-05"
+    },
+    {
+      "component": "libc6",
+      "version": "2.41-12+deb13u3",
+      "package_type": "deb",
+      "license": "BSD-2-Clause ; BSD-3-clause-Berkeley ; BSD-3-clause-Carnegie ; BSD-3-clause-Oracle ; BSD-3-clause-WIDE ; BSD-like-Spencer ; BSL-1.0 ; CORE-MATH ; Carnegie ; DEC ; FSFAP ; GPL-2+-with-link-exception ; GPL-2.0-only ; GPL-2.0-or-later ; GPL-3.0-only ; GPL-3.0-or-later ; IBM ; ISC ; Inner-Net ; LGPL-2.0-only ; LGPL-2.0-or-later ; LGPL-2.1+-with-link-exception ; LGPL-2.1-only ; LGPL-2.1-or-later ; LGPL-3.0-only ; LGPL-3.0-or-later ; MIT-like-Lord ; PCRE ; SunPro ; Unicode-DFS-2016 ; Univ-Coimbra ; public-domain",
+      "license_confidence": "license-list",
+      "origin": "inherited-base-layer",
+      "images": [
+        "netops-correlation"
+      ],
+      "tracker": 238,
+      "recorded": "2026-09-05"
+    },
+    {
+      "component": "libcap-ng0",
+      "version": "0.8.5-4+b1",
+      "package_type": "deb",
+      "license": "GPL-2.0-only ; GPL-2.0-or-later ; GPL-3.0-only ; LGPL-2.1-only ; LGPL-2.1-or-later",
+      "license_confidence": "license-list",
+      "origin": "inherited-base-layer",
+      "images": [
+        "netops-correlation"
+      ],
+      "tracker": 238,
+      "recorded": "2026-09-05"
+    },
+    {
+      "component": "libcap2",
+      "version": "1:2.75-10+deb13u1+b1",
+      "package_type": "deb",
+      "license": "BSD-3-Clause ; GPL-2.0-only ; GPL-2.0-or-later",
+      "license_confidence": "license-list",
+      "origin": "inherited-base-layer",
+      "images": [
+        "netops-correlation"
+      ],
+      "tracker": 238,
+      "recorded": "2026-09-05"
+    },
+    {
+      "component": "libcrypt1",
+      "version": "1:4.4.38-1",
+      "package_type": "deb",
+      "license": "UNDETERMINED",
+      "license_confidence": "no-license",
+      "origin": "inherited-base-layer",
+      "images": [
+        "netops-correlation"
+      ],
+      "tracker": 238,
+      "recorded": "2026-09-05"
+    },
+    {
+      "component": "libdb5.3t64",
+      "version": "5.3.28+dfsg2-9",
+      "package_type": "deb",
+      "license": "Artistic ; BSD-3-Clause ; BSD-3-clause-fjord ; GPL-3.0-only ; GPL-UNSPECIFIED ; MIT-old ; MS-PL ; Sleepycat ; TCL-like ; X11 ; Zlib",
+      "license_confidence": "license-list",
+      "origin": "inherited-base-layer",
+      "images": [
+        "netops-correlation"
+      ],
+      "tracker": 238,
+      "recorded": "2026-09-05"
+    },
+    {
+      "component": "libdebconfclient0",
+      "version": "0.280",
+      "package_type": "deb",
+      "license": "BSD-2-Clause ; GPL-2.0-only ; GPL-2.0-or-later",
+      "license_confidence": "license-list",
+      "origin": "inherited-base-layer",
+      "images": [
+        "netops-correlation"
+      ],
+      "tracker": 238,
+      "recorded": "2026-09-05"
+    },
+    {
+      "component": "libffi8",
+      "version": "3.4.8-2",
+      "package_type": "deb",
+      "license": "GPL-2.0-or-later ; GPL-3.0-or-later ; GPL-UNSPECIFIED ; MIT ; MPL-1.1 ; X11 ; public-domain",
+      "license_confidence": "license-list",
+      "origin": "inherited-base-layer",
+      "images": [
+        "netops-correlation"
+      ],
+      "tracker": 238,
+      "recorded": "2026-09-05"
+    },
+    {
+      "component": "libgcc-s1",
+      "version": "14.2.0-19",
+      "package_type": "deb",
+      "license": "Artistic ; GFDL-1.2-only ; GPL-3.0-only ; GPL-UNSPECIFIED ; LGPL-UNSPECIFIED",
+      "license_confidence": "license-list",
+      "origin": "inherited-base-layer",
+      "images": [
+        "netops-correlation"
+      ],
+      "tracker": 238,
+      "recorded": "2026-09-05"
+    },
+    {
+      "component": "libgcrypt",
+      "version": "1.10.3-r1",
+      "package_type": "apk",
+      "license": "LGPL-2.1-or-later AND GPL-2.0-or-later",
+      "license_confidence": "expression",
+      "origin": "inherited-base-layer",
+      "images": [
+        "netops-frontend",
+        "netops-nginx"
+      ],
+      "tracker": 238,
+      "recorded": "2026-09-05"
+    },
+    {
+      "component": "libgdbm6t64",
+      "version": "1.24-2",
+      "package_type": "deb",
+      "license": "GFDL-NIV-1.3+ ; GPL-2.0-only ; GPL-2.0-or-later ; GPL-3.0-only ; GPL-3.0-or-later",
+      "license_confidence": "license-list",
+      "origin": "inherited-base-layer",
+      "images": [
+        "netops-correlation"
+      ],
+      "tracker": 238,
+      "recorded": "2026-09-05"
+    },
+    {
+      "component": "libgmp10",
+      "version": "2:6.3.0+dfsg-3",
+      "package_type": "deb",
+      "license": "GPL-2.0-only ; GPL-2.0-or-later ; GPL-3.0-only ; GPL-3.0-or-later ; LGPL-3.0-only ; LGPL-3.0-or-later",
+      "license_confidence": "license-list",
+      "origin": "inherited-base-layer",
+      "images": [
+        "netops-correlation"
+      ],
+      "tracker": 238,
+      "recorded": "2026-09-05"
+    },
+    {
+      "component": "libgpg-error",
+      "version": "1.51-r0",
+      "package_type": "apk",
+      "license": "GPL-2.0-or-later AND LGPL-2.1-or-later",
+      "license_confidence": "expression",
+      "origin": "inherited-base-layer",
+      "images": [
+        "netops-frontend",
+        "netops-nginx"
+      ],
+      "tracker": 238,
+      "recorded": "2026-09-05"
+    },
+    {
+      "component": "libhogweed6t64",
+      "version": "3.10.1-1",
+      "package_type": "deb",
+      "license": "GAP ; GPL-2.0-only ; GPL-2.0-or-later ; GPL-3.0-or-later ; GPL-UNSPECIFIED ; LGPL-2.0-only ; LGPL-2.0-or-later ; LGPL-3.0-or-later ; LGPL-UNSPECIFIED ; MIT ; public-domain",
+      "license_confidence": "license-list",
+      "origin": "inherited-base-layer",
+      "images": [
+        "netops-correlation"
+      ],
+      "tracker": 238,
+      "recorded": "2026-09-05"
+    },
+    {
+      "component": "libidn2",
+      "version": "2.3.7-r0",
+      "package_type": "apk",
+      "license": "GPL-2.0-or-later OR LGPL-3.0-or-later",
+      "license_confidence": "expression",
+      "origin": "inherited-base-layer",
+      "images": [
+        "netops-frontend",
+        "netops-nginx"
+      ],
+      "tracker": 238,
+      "recorded": "2026-09-05"
+    },
+    {
+      "component": "libintl",
+      "version": "0.22.5-r0",
+      "package_type": "apk",
+      "license": "LGPL-2.1-or-later",
+      "license_confidence": "expression",
+      "origin": "inherited-base-layer",
+      "images": [
+        "netops-frontend",
+        "netops-nginx"
+      ],
+      "tracker": 238,
+      "recorded": "2026-09-05"
+    },
+    {
+      "component": "libjpeg-turbo",
+      "version": "3.0.4-r0",
+      "package_type": "apk",
+      "license": "BSD-3-Clause ; IJG ; Zlib",
+      "license_confidence": "unknown-license",
+      "origin": "inherited-base-layer",
+      "images": [
+        "netops-frontend",
+        "netops-nginx"
+      ],
+      "tracker": 238,
+      "recorded": "2026-09-05"
+    },
+    {
+      "component": "liblastlog2-2",
+      "version": "2.41-5",
+      "package_type": "deb",
+      "license": "BSD-2-Clause ; BSD-3-Clause ; BSD-4-Clause ; BSLA ; GPL-2.0-only ; GPL-2.0-or-later ; GPL-3.0-only ; GPL-3.0-or-later ; ISC ; LGPL-2.0-only ; LGPL-2.0-or-later ; LGPL-2.1-only ; LGPL-2.1-or-later ; LGPL-3.0-only ; LGPL-3.0-or-later ; LGPL-UNSPECIFIED ; MIT ; public-domain",
+      "license_confidence": "license-list",
+      "origin": "inherited-base-layer",
+      "images": [
+        "netops-correlation"
+      ],
+      "tracker": 238,
+      "recorded": "2026-09-05"
+    },
+    {
+      "component": "liblz4-1",
+      "version": "1.10.0-4",
+      "package_type": "deb",
+      "license": "BSD-2-Clause ; GPL-2.0-only ; GPL-2.0-or-later",
+      "license_confidence": "license-list",
+      "origin": "inherited-base-layer",
+      "images": [
+        "netops-correlation"
+      ],
+      "tracker": 238,
+      "recorded": "2026-09-05"
+    },
+    {
+      "component": "liblzma5",
+      "version": "5.8.1-1",
+      "package_type": "deb",
+      "license": "0BSD ; FSFUL ; FSFULLR ; GPL-2.0-only ; GPL-2.0-or-later ; GPL-3.0-only ; GPL-3.0-or-later-WITH-Autoconf-exception-macro ; LGPL-2.1-only ; LGPL-2.1-or-later ; PD ; PD-debian ; noderivs ; permissive-nowarranty",
+      "license_confidence": "license-list",
+      "origin": "inherited-base-layer",
+      "images": [
+        "netops-correlation"
+      ],
+      "tracker": 238,
+      "recorded": "2026-09-05"
+    },
+    {
+      "component": "libmd",
+      "version": "1.1.0-r0",
+      "package_type": "apk",
+      "license": "BSD-2-Clause BSD-3-Clause Beerware ISC ; Domain Public",
+      "license_confidence": "unknown-license",
+      "origin": "inherited-base-layer",
+      "images": [
+        "netops-frontend",
+        "netops-nginx"
+      ],
+      "tracker": 238,
+      "recorded": "2026-09-05"
+    },
+    {
+      "component": "libmd0",
+      "version": "1.1.0-2+b1",
+      "package_type": "deb",
+      "license": "BSD-2-Clause ; BSD-3-Clause ; BSD-3-clause-Aaron-D-Gifford ; Beerware ; ISC ; public-domain-md4 ; public-domain-md5 ; public-domain-sha1",
+      "license_confidence": "unknown-license",
+      "origin": "inherited-base-layer",
+      "images": [
+        "netops-correlation"
+      ],
+      "tracker": 238,
+      "recorded": "2026-09-05"
+    },
+    {
+      "component": "libmount1",
+      "version": "2.41-5",
+      "package_type": "deb",
+      "license": "BSD-2-Clause ; BSD-3-Clause ; BSD-4-Clause ; BSLA ; GPL-2.0-only ; GPL-2.0-or-later ; GPL-3.0-only ; GPL-3.0-or-later ; ISC ; LGPL-2.0-only ; LGPL-2.0-or-later ; LGPL-2.1-only ; LGPL-2.1-or-later ; LGPL-3.0-only ; LGPL-3.0-or-later ; LGPL-UNSPECIFIED ; MIT ; public-domain",
+      "license_confidence": "license-list",
+      "origin": "inherited-base-layer",
+      "images": [
+        "netops-correlation"
+      ],
+      "tracker": 238,
+      "recorded": "2026-09-05"
+    },
+    {
+      "component": "libncursesw6",
+      "version": "6.5+20250216-2",
+      "package_type": "deb",
+      "license": "BSD-3-Clause ; MIT/X11 ; X11",
+      "license_confidence": "unknown-license",
+      "origin": "inherited-base-layer",
+      "images": [
+        "netops-correlation"
+      ],
+      "tracker": 238,
+      "recorded": "2026-09-05"
+    },
+    {
+      "component": "libnettle8t64",
+      "version": "3.10.1-1",
+      "package_type": "deb",
+      "license": "GAP ; GPL-2.0-only ; GPL-2.0-or-later ; GPL-3.0-or-later ; GPL-UNSPECIFIED ; LGPL-2.0-only ; LGPL-2.0-or-later ; LGPL-3.0-or-later ; LGPL-UNSPECIFIED ; MIT ; public-domain",
+      "license_confidence": "license-list",
+      "origin": "inherited-base-layer",
+      "images": [
+        "netops-correlation"
+      ],
+      "tracker": 238,
+      "recorded": "2026-09-05"
+    },
+    {
+      "component": "libpam-modules",
+      "version": "1.7.0-5",
+      "package_type": "deb",
+      "license": "BSD-3-Clause ; BSD-tcp_wrappers ; Beerware ; GPL-1.0-only ; GPL-2.0-only ; GPL-2.0-or-later ; GPL-3.0-only ; GPL-3.0-or-later ; LGPL-2.0-only ; LGPL-2.0-or-later ; public-domain",
+      "license_confidence": "license-list",
+      "origin": "inherited-base-layer",
+      "images": [
+        "netops-correlation"
+      ],
+      "tracker": 238,
+      "recorded": "2026-09-05"
+    },
+    {
+      "component": "libpam-modules-bin",
+      "version": "1.7.0-5",
+      "package_type": "deb",
+      "license": "BSD-3-Clause ; BSD-tcp_wrappers ; Beerware ; GPL-1.0-only ; GPL-2.0-only ; GPL-2.0-or-later ; GPL-3.0-only ; GPL-3.0-or-later ; LGPL-2.0-only ; LGPL-2.0-or-later ; public-domain",
+      "license_confidence": "license-list",
+      "origin": "inherited-base-layer",
+      "images": [
+        "netops-correlation"
+      ],
+      "tracker": 238,
+      "recorded": "2026-09-05"
+    },
+    {
+      "component": "libpam-runtime",
+      "version": "1.7.0-5",
+      "package_type": "deb",
+      "license": "BSD-3-Clause ; BSD-tcp_wrappers ; Beerware ; GPL-1.0-only ; GPL-2.0-only ; GPL-2.0-or-later ; GPL-3.0-only ; GPL-3.0-or-later ; LGPL-2.0-only ; LGPL-2.0-or-later ; public-domain",
+      "license_confidence": "license-list",
+      "origin": "inherited-base-layer",
+      "images": [
+        "netops-correlation"
+      ],
+      "tracker": 238,
+      "recorded": "2026-09-05"
+    },
+    {
+      "component": "libpam0g",
+      "version": "1.7.0-5",
+      "package_type": "deb",
+      "license": "BSD-3-Clause ; BSD-tcp_wrappers ; Beerware ; GPL-1.0-only ; GPL-2.0-only ; GPL-2.0-or-later ; GPL-3.0-only ; GPL-3.0-or-later ; LGPL-2.0-only ; LGPL-2.0-or-later ; public-domain",
+      "license_confidence": "license-list",
+      "origin": "inherited-base-layer",
+      "images": [
+        "netops-correlation"
+      ],
+      "tracker": 238,
+      "recorded": "2026-09-05"
+    },
+    {
+      "component": "libpcre2-8-0",
+      "version": "10.46-1~deb13u1",
+      "package_type": "deb",
+      "license": "BSD-2-Clause ; BSD-3-Clause ; BSD-3-clause-Cambridge ; X11 ; public-domain",
+      "license_confidence": "unknown-license",
+      "origin": "inherited-base-layer",
+      "images": [
+        "netops-correlation"
+      ],
+      "tracker": 238,
+      "recorded": "2026-09-05"
+    },
+    {
+      "component": "libreadline8t64",
+      "version": "8.2-6",
+      "package_type": "deb",
+      "license": "GFDL ; GFDL-NIV-1.3+ ; GPL-2.0-only ; GPL-2.0-or-later ; GPL-3.0-only ; GPL-3.0-or-later ; ISC-no-attribution",
+      "license_confidence": "license-list",
+      "origin": "inherited-base-layer",
+      "images": [
+        "netops-correlation"
+      ],
+      "tracker": 238,
+      "recorded": "2026-09-05"
+    },
+    {
+      "component": "libseccomp2",
+      "version": "2.6.0-2",
+      "package_type": "deb",
+      "license": "LGPL-2.1-only",
+      "license_confidence": "expression",
+      "origin": "inherited-base-layer",
+      "images": [
+        "netops-correlation"
+      ],
+      "tracker": 238,
+      "recorded": "2026-09-05"
+    },
+    {
+      "component": "libselinux1",
+      "version": "3.8.1-1",
+      "package_type": "deb",
+      "license": "GPL-2.0-only ; public-domain",
+      "license_confidence": "license-list",
+      "origin": "inherited-base-layer",
+      "images": [
+        "netops-correlation"
+      ],
+      "tracker": 238,
+      "recorded": "2026-09-05"
+    },
+    {
+      "component": "libsemanage-common",
+      "version": "3.8.1-1",
+      "package_type": "deb",
+      "license": "GPL-2.0-only ; LGPL-2.1-only ; LGPL-2.1-or-later",
+      "license_confidence": "license-list",
+      "origin": "inherited-base-layer",
+      "images": [
+        "netops-correlation"
+      ],
+      "tracker": 238,
+      "recorded": "2026-09-05"
+    },
+    {
+      "component": "libsemanage2",
+      "version": "3.8.1-1",
+      "package_type": "deb",
+      "license": "GPL-2.0-only ; LGPL-2.1-only ; LGPL-2.1-or-later",
+      "license_confidence": "license-list",
+      "origin": "inherited-base-layer",
+      "images": [
+        "netops-correlation"
+      ],
+      "tracker": 238,
+      "recorded": "2026-09-05"
+    },
+    {
+      "component": "libsepol2",
+      "version": "3.8.1-1",
+      "package_type": "deb",
+      "license": "GPL-2.0-only ; GPL-2.0-or-later ; LGPL-2.1-only ; LGPL-2.1-or-later ; Zlib",
+      "license_confidence": "license-list",
+      "origin": "inherited-base-layer",
+      "images": [
+        "netops-correlation"
+      ],
+      "tracker": 238,
+      "recorded": "2026-09-05"
+    },
+    {
+      "component": "libsmartcols1",
+      "version": "2.41-5",
+      "package_type": "deb",
+      "license": "BSD-2-Clause ; BSD-3-Clause ; BSD-4-Clause ; BSLA ; GPL-2.0-only ; GPL-2.0-or-later ; GPL-3.0-only ; GPL-3.0-or-later ; ISC ; LGPL-2.0-only ; LGPL-2.0-or-later ; LGPL-2.1-only ; LGPL-2.1-or-later ; LGPL-3.0-only ; LGPL-3.0-or-later ; LGPL-UNSPECIFIED ; MIT ; public-domain",
+      "license_confidence": "license-list",
+      "origin": "inherited-base-layer",
+      "images": [
+        "netops-correlation"
+      ],
+      "tracker": 238,
+      "recorded": "2026-09-05"
+    },
+    {
+      "component": "libsqlite3-0",
+      "version": "3.46.1-7+deb13u1",
+      "package_type": "deb",
+      "license": "GPL-2.0-only ; GPL-2.0-or-later ; public-domain",
+      "license_confidence": "license-list",
+      "origin": "inherited-base-layer",
+      "images": [
+        "netops-correlation"
+      ],
+      "tracker": 238,
+      "recorded": "2026-09-05"
+    },
+    {
+      "component": "libssl3t64",
+      "version": "3.5.6-1~deb13u1",
+      "package_type": "deb",
+      "license": "Apache-2.0 ; Artistic ; GPL-1.0-only ; GPL-1.0-or-later",
+      "license_confidence": "license-list",
+      "origin": "inherited-base-layer",
+      "images": [
+        "netops-correlation"
+      ],
+      "tracker": 238,
+      "recorded": "2026-09-05"
+    },
+    {
+      "component": "libstdc++6",
+      "version": "14.2.0-19",
+      "package_type": "deb",
+      "license": "Artistic ; GFDL-1.2-only ; GPL-3.0-only ; GPL-UNSPECIFIED ; LGPL-UNSPECIFIED",
+      "license_confidence": "license-list",
+      "origin": "inherited-base-layer",
+      "images": [
+        "netops-correlation"
+      ],
+      "tracker": 238,
+      "recorded": "2026-09-05"
+    },
+    {
+      "component": "libsystemd0",
+      "version": "257.13-1~deb13u1",
+      "package_type": "deb",
+      "license": "CC0-1.0 ; GPL-2.0-only ; GPL-2.0-or-later ; LGPL-2.1-only ; LGPL-2.1-or-later ; MIT ; public-domain",
+      "license_confidence": "license-list",
+      "origin": "inherited-base-layer",
+      "images": [
+        "netops-correlation"
+      ],
+      "tracker": 238,
+      "recorded": "2026-09-05"
+    },
+    {
+      "component": "libtinfo6",
+      "version": "6.5+20250216-2",
+      "package_type": "deb",
+      "license": "BSD-3-Clause ; MIT/X11 ; X11",
+      "license_confidence": "unknown-license",
+      "origin": "inherited-base-layer",
+      "images": [
+        "netops-correlation"
+      ],
+      "tracker": 238,
+      "recorded": "2026-09-05"
+    },
+    {
+      "component": "libudev1",
+      "version": "257.13-1~deb13u1",
+      "package_type": "deb",
+      "license": "CC0-1.0 ; GPL-2.0-only ; GPL-2.0-or-later ; LGPL-2.1-only ; LGPL-2.1-or-later ; MIT ; public-domain",
+      "license_confidence": "license-list",
+      "origin": "inherited-base-layer",
+      "images": [
+        "netops-correlation"
+      ],
+      "tracker": 238,
+      "recorded": "2026-09-05"
+    },
+    {
+      "component": "libunistring",
+      "version": "1.2-r0",
+      "package_type": "apk",
+      "license": "GPL-2.0-or-later OR LGPL-3.0-or-later",
+      "license_confidence": "expression",
+      "origin": "inherited-base-layer",
+      "images": [
+        "netops-frontend",
+        "netops-nginx"
+      ],
+      "tracker": 238,
+      "recorded": "2026-09-05"
+    },
+    {
+      "component": "libuuid1",
+      "version": "2.41-5",
+      "package_type": "deb",
+      "license": "BSD-2-Clause ; BSD-3-Clause ; BSD-4-Clause ; BSLA ; GPL-2.0-only ; GPL-2.0-or-later ; GPL-3.0-only ; GPL-3.0-or-later ; ISC ; LGPL-2.0-only ; LGPL-2.0-or-later ; LGPL-2.1-only ; LGPL-2.1-or-later ; LGPL-3.0-only ; LGPL-3.0-or-later ; LGPL-UNSPECIFIED ; MIT ; public-domain",
+      "license_confidence": "license-list",
+      "origin": "inherited-base-layer",
+      "images": [
+        "netops-correlation"
+      ],
+      "tracker": 238,
+      "recorded": "2026-09-05"
+    },
+    {
+      "component": "libxxhash0",
+      "version": "0.8.3-2",
+      "package_type": "deb",
+      "license": "BSD-2-Clause ; GPL-2.0-only ; GPL-2.0-or-later",
+      "license_confidence": "license-list",
+      "origin": "inherited-base-layer",
+      "images": [
+        "netops-correlation"
+      ],
+      "tracker": 238,
+      "recorded": "2026-09-05"
+    },
+    {
+      "component": "libzstd1",
+      "version": "1.5.7+dfsg-1",
+      "package_type": "deb",
+      "license": "BSD-3-Clause ; GPL-2.0-only ; MIT ; Zlib",
+      "license_confidence": "license-list",
+      "origin": "inherited-base-layer",
+      "images": [
+        "netops-correlation"
+      ],
+      "tracker": 238,
+      "recorded": "2026-09-05"
+    },
+    {
+      "component": "login",
+      "version": "1:4.16.0-2+really2.41-5",
+      "package_type": "deb",
+      "license": "BSD-2-Clause ; BSD-3-Clause ; BSD-4-Clause ; BSLA ; GPL-2.0-only ; GPL-2.0-or-later ; GPL-3.0-only ; GPL-3.0-or-later ; ISC ; LGPL-2.0-only ; LGPL-2.0-or-later ; LGPL-2.1-only ; LGPL-2.1-or-later ; LGPL-3.0-only ; LGPL-3.0-or-later ; LGPL-UNSPECIFIED ; MIT ; public-domain",
+      "license_confidence": "license-list",
+      "origin": "inherited-base-layer",
+      "images": [
+        "netops-correlation"
+      ],
+      "tracker": 238,
+      "recorded": "2026-09-05"
+    },
+    {
+      "component": "login.defs",
+      "version": "1:4.17.4-2",
+      "package_type": "deb",
+      "license": "BSD-3-Clause ; GPL-1.0-only ; GPL-2.0-only ; GPL-2.0-or-later",
+      "license_confidence": "license-list",
+      "origin": "inherited-base-layer",
+      "images": [
+        "netops-correlation"
+      ],
+      "tracker": 238,
+      "recorded": "2026-09-05"
+    },
+    {
+      "component": "mawk",
+      "version": "1.3.4.20250131-1",
+      "package_type": "deb",
+      "license": "CC-BY-3.0 ; GPL-2.0-only ; X11",
+      "license_confidence": "license-list",
+      "origin": "inherited-base-layer",
+      "images": [
+        "netops-correlation"
+      ],
+      "tracker": 238,
+      "recorded": "2026-09-05"
+    },
+    {
+      "component": "media-types",
+      "version": "10.0.0",
+      "package_type": "deb",
+      "license": "ad-hoc",
+      "license_confidence": "unknown-license",
+      "origin": "inherited-base-layer",
+      "images": [
+        "netops-api"
+      ],
+      "tracker": 238,
+      "recorded": "2026-09-05"
+    },
+    {
+      "component": "mount",
+      "version": "2.41-5",
+      "package_type": "deb",
+      "license": "BSD-2-Clause ; BSD-3-Clause ; BSD-4-Clause ; BSLA ; GPL-2.0-only ; GPL-2.0-or-later ; GPL-3.0-only ; GPL-3.0-or-later ; ISC ; LGPL-2.0-only ; LGPL-2.0-or-later ; LGPL-2.1-only ; LGPL-2.1-or-later ; LGPL-3.0-only ; LGPL-3.0-or-later ; LGPL-UNSPECIFIED ; MIT ; public-domain",
+      "license_confidence": "license-list",
+      "origin": "inherited-base-layer",
+      "images": [
+        "netops-correlation"
+      ],
+      "tracker": 238,
+      "recorded": "2026-09-05"
+    },
+    {
+      "component": "musl-utils",
+      "version": "1.2.5-r9",
+      "package_type": "apk",
+      "license": "MIT AND BSD-2-Clause AND GPL-2.0-or-later",
+      "license_confidence": "expression",
+      "origin": "inherited-base-layer",
+      "images": [
+        "netops-frontend",
+        "netops-nginx"
+      ],
+      "tracker": 238,
+      "recorded": "2026-09-05"
+    },
+    {
+      "component": "ncurses-base",
+      "version": "6.5+20250216-2",
+      "package_type": "deb",
+      "license": "BSD-3-Clause ; MIT/X11 ; X11",
+      "license_confidence": "unknown-license",
+      "origin": "inherited-base-layer",
+      "images": [
+        "netops-correlation"
+      ],
+      "tracker": 238,
+      "recorded": "2026-09-05"
+    },
+    {
+      "component": "ncurses-bin",
+      "version": "6.5+20250216-2",
+      "package_type": "deb",
+      "license": "BSD-3-Clause ; MIT/X11 ; X11",
+      "license_confidence": "unknown-license",
+      "origin": "inherited-base-layer",
+      "images": [
+        "netops-correlation"
+      ],
+      "tracker": 238,
+      "recorded": "2026-09-05"
+    },
+    {
+      "component": "netbase",
+      "version": "6.4",
+      "package_type": "deb",
+      "license": "GPL-2.0-only",
+      "license_confidence": "expression",
+      "origin": "inherited-base-layer",
+      "images": [
+        "netops-api"
+      ],
+      "tracker": 238,
+      "recorded": "2026-09-05"
+    },
+    {
+      "component": "netbase",
+      "version": "6.5",
+      "package_type": "deb",
+      "license": "GPL-2.0-only",
+      "license_confidence": "expression",
+      "origin": "inherited-base-layer",
+      "images": [
+        "netops-correlation"
+      ],
+      "tracker": 238,
+      "recorded": "2026-09-05"
+    },
+    {
+      "component": "nginx",
+      "version": "1.27.5-r1",
+      "package_type": "apk",
+      "license": "2-clause ; BSD-like ; license",
+      "license_confidence": "unknown-license",
+      "origin": "inherited-base-layer",
+      "images": [
+        "netops-frontend",
+        "netops-nginx"
+      ],
+      "tracker": 238,
+      "recorded": "2026-09-05"
+    },
+    {
+      "component": "nginx-module-geoip",
+      "version": "1.27.5-r1",
+      "package_type": "apk",
+      "license": "2-clause ; BSD-like ; license",
+      "license_confidence": "unknown-license",
+      "origin": "inherited-base-layer",
+      "images": [
+        "netops-frontend",
+        "netops-nginx"
+      ],
+      "tracker": 238,
+      "recorded": "2026-09-05"
+    },
+    {
+      "component": "nginx-module-image-filter",
+      "version": "1.27.5-r1",
+      "package_type": "apk",
+      "license": "2-clause ; BSD-like ; license",
+      "license_confidence": "unknown-license",
+      "origin": "inherited-base-layer",
+      "images": [
+        "netops-frontend",
+        "netops-nginx"
+      ],
+      "tracker": 238,
+      "recorded": "2026-09-05"
+    },
+    {
+      "component": "nginx-module-njs",
+      "version": "1.27.5.0.8.10-r1",
+      "package_type": "apk",
+      "license": "2-clause ; BSD-like ; license",
+      "license_confidence": "unknown-license",
+      "origin": "inherited-base-layer",
+      "images": [
+        "netops-frontend",
+        "netops-nginx"
+      ],
+      "tracker": 238,
+      "recorded": "2026-09-05"
+    },
+    {
+      "component": "nginx-module-xslt",
+      "version": "1.27.5-r1",
+      "package_type": "apk",
+      "license": "2-clause ; BSD-like ; license",
+      "license_confidence": "unknown-license",
+      "origin": "inherited-base-layer",
+      "images": [
+        "netops-frontend",
+        "netops-nginx"
+      ],
+      "tracker": 238,
+      "recorded": "2026-09-05"
+    },
+    {
+      "component": "openssl",
+      "version": "3.5.6-1~deb13u1",
+      "package_type": "deb",
+      "license": "Apache-2.0 ; Artistic ; GPL-1.0-only ; GPL-1.0-or-later",
+      "license_confidence": "license-list",
+      "origin": "inherited-base-layer",
+      "images": [
+        "netops-correlation"
+      ],
+      "tracker": 238,
+      "recorded": "2026-09-05"
+    },
+    {
+      "component": "openssl-provider-legacy",
+      "version": "3.5.6-1~deb13u1",
+      "package_type": "deb",
+      "license": "Apache-2.0 ; Artistic ; GPL-1.0-only ; GPL-1.0-or-later",
+      "license_confidence": "license-list",
+      "origin": "inherited-base-layer",
+      "images": [
+        "netops-correlation"
+      ],
+      "tracker": 238,
+      "recorded": "2026-09-05"
+    },
+    {
+      "component": "passwd",
+      "version": "1:4.17.4-2",
+      "package_type": "deb",
+      "license": "BSD-3-Clause ; GPL-1.0-only ; GPL-2.0-only ; GPL-2.0-or-later",
+      "license_confidence": "license-list",
+      "origin": "inherited-base-layer",
+      "images": [
+        "netops-correlation"
+      ],
+      "tracker": 238,
+      "recorded": "2026-09-05"
+    },
+    {
+      "component": "perl-base",
+      "version": "5.40.1-6",
+      "package_type": "deb",
+      "license": "Artistic ; Artistic-2.0 ; Artistic-dist ; BSD-3-Clause ; BSD-3-clause-GENERIC ; BSD-3-clause-with-weird-numbering ; BSD-4-clause-POWERDOG ; BZIP ; DONT-CHANGE-THE-GPL ; FSFAP ; GPL-1.0-only ; GPL-1.0-or-later ; GPL-2.0-only ; GPL-2.0-or-later ; GPL-3+-WITH-BISON-EXCEPTION ; LGPL-2.1-only ; MIT ; REGCOMP ; REGCOMP, ; SDBM-PUBLIC-DOMAIN ; TEXT-TABS ; Unicode ; Zlib",
+      "license_confidence": "license-list",
+      "origin": "inherited-base-layer",
+      "images": [
+        "netops-correlation"
+      ],
+      "tracker": 238,
+      "recorded": "2026-09-05"
+    },
+    {
+      "component": "python",
+      "version": "3.12.13",
+      "package_type": "generic",
+      "license": "UNDETERMINED",
+      "license_confidence": "no-license",
+      "origin": "inherited-base-layer",
+      "images": [
+        "netops-correlation"
+      ],
+      "tracker": 238,
+      "recorded": "2026-09-05"
+    },
+    {
+      "component": "readline-common",
+      "version": "8.2-6",
+      "package_type": "deb",
+      "license": "GFDL ; GFDL-NIV-1.3+ ; GPL-2.0-only ; GPL-2.0-or-later ; GPL-3.0-only ; GPL-3.0-or-later ; ISC-no-attribution",
+      "license_confidence": "license-list",
+      "origin": "inherited-base-layer",
+      "images": [
+        "netops-correlation"
+      ],
+      "tracker": 238,
+      "recorded": "2026-09-05"
+    },
+    {
+      "component": "scanelf",
+      "version": "1.3.8-r1",
+      "package_type": "apk",
+      "license": "GPL-2.0-only",
+      "license_confidence": "expression",
+      "origin": "inherited-base-layer",
+      "images": [
+        "netops-frontend",
+        "netops-nginx"
+      ],
+      "tracker": 238,
+      "recorded": "2026-09-05"
+    },
+    {
+      "component": "sed",
+      "version": "4.9-2+deb13u1",
+      "package_type": "deb",
+      "license": "BSD-4-Clause-UC ; BSL-1.0 ; GFDL-1.3-only ; GFDL-NIV-1.3+ ; GPL-3.0-only ; GPL-3.0-or-later ; ISC ; X11 ; pcre",
+      "license_confidence": "license-list",
+      "origin": "inherited-base-layer",
+      "images": [
+        "netops-correlation"
+      ],
+      "tracker": 238,
+      "recorded": "2026-09-05"
+    },
+    {
+      "component": "Simple Launcher",
+      "version": "1.1.0.14",
+      "package_type": "nuget",
+      "license": "UNDETERMINED",
+      "license_confidence": "no-license",
+      "origin": "inherited-base-layer",
+      "images": [
+        "netops-correlation"
+      ],
+      "tracker": 238,
+      "recorded": "2026-09-05"
+    },
+    {
+      "component": "sqv",
+      "version": "1.3.0-3+b2",
+      "package_type": "deb",
+      "license": "LGPL-2.0-only ; LGPL-2.0-or-later",
+      "license_confidence": "license-list",
+      "origin": "inherited-base-layer",
+      "images": [
+        "netops-correlation"
+      ],
+      "tracker": 238,
+      "recorded": "2026-09-05"
+    },
+    {
+      "component": "sysvinit-utils",
+      "version": "3.14-4",
+      "package_type": "deb",
+      "license": "GPL-2.0-only ; GPL-2.0-or-later ; GPL-3.0-only ; LGPL-2.1-only ; LGPL-2.1-or-later",
+      "license_confidence": "license-list",
+      "origin": "inherited-base-layer",
+      "images": [
+        "netops-correlation"
+      ],
+      "tracker": 238,
+      "recorded": "2026-09-05"
+    },
+    {
+      "component": "tar",
+      "version": "1.35+dfsg-3.1",
+      "package_type": "deb",
+      "license": "GPL-2.0-only ; GPL-2.0-or-later ; GPL-3.0-only ; GPL-3.0-or-later ; LGPL-2.1-only ; LGPL-2.1-or-later ; LGPL-3.0-only ; LGPL-3.0-or-later",
+      "license_confidence": "license-list",
+      "origin": "inherited-base-layer",
+      "images": [
+        "netops-correlation"
+      ],
+      "tracker": 238,
+      "recorded": "2026-09-05"
+    },
+    {
+      "component": "util-linux",
+      "version": "2.41-5",
+      "package_type": "deb",
+      "license": "BSD-2-Clause ; BSD-3-Clause ; BSD-4-Clause ; BSLA ; GPL-2.0-only ; GPL-2.0-or-later ; GPL-3.0-only ; GPL-3.0-or-later ; ISC ; LGPL-2.0-only ; LGPL-2.0-or-later ; LGPL-2.1-only ; LGPL-2.1-or-later ; LGPL-3.0-only ; LGPL-3.0-or-later ; LGPL-UNSPECIFIED ; MIT ; public-domain",
+      "license_confidence": "license-list",
+      "origin": "inherited-base-layer",
+      "images": [
+        "netops-correlation"
+      ],
+      "tracker": 238,
+      "recorded": "2026-09-05"
+    },
+    {
+      "component": "xz-libs",
+      "version": "5.6.3-r1",
+      "package_type": "apk",
+      "license": "0BSD GPL-2.0-or-later LGPL-2.1-or-later ; Public-Domain",
+      "license_confidence": "unknown-license",
+      "origin": "inherited-base-layer",
+      "images": [
+        "netops-frontend",
+        "netops-nginx"
+      ],
+      "tracker": 238,
+      "recorded": "2026-09-05"
     }
   ]
 }

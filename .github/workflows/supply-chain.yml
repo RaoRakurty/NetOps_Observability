@@ -108,6 +108,118 @@ jobs:
           path: sbom.cdx.json
           if-no-files-found: error
 
+  oci-compliance:
+    name: OCI image compliance (inherited layers, blocking)
+    runs-on: ubuntu-latest
+    # Tracker 238. Every gate above this one asks "what does Correlix DECLARE?".
+    # A shipped container is base image + package manager + our layers, so that
+    # question has a blind spot the size of a distribution: BusyBox (GPL-2.0-only)
+    # rides inside nginx:1.27-alpine into every netops-frontend and netops-nginx
+    # image we distribute, is named in no Dockerfile of ours, and was invisible to
+    # the licence inventory for months.
+    #
+    # This job asks "what does Correlix SHIP?" against a FINAL OCI IMAGE. The
+    # regression fixture is deliberately minimal — `FROM alpine:<digest>` plus one
+    # `COPY` — so a pass proves discovery of an INHERITED package rather than a
+    # declared one. It then verifies that the corresponding source Correlix
+    # retains for that package actually hashes to its pin.
+    #
+    # Syft is not a new scanner: publish-images.yml has generated a CycloneDX SBOM
+    # of every pushed digest since SC-006. What changed is that something reads it.
+    # Trivy stays where it is (filesystem CVEs/secrets/misconfig, above).
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          # make-installer.sh versions the bundle from `git describe`.
+          fetch-depth: 0
+
+      - name: Build the inherited-layer regression image
+        id: regr
+        working-directory: NetOps_Observability/tests/fixtures/oci-regression
+        run: |
+          set -euo pipefail
+          # The Dockerfile pins its base by digest and installs nothing; the test
+          # suite asserts it never so much as mentions BusyBox.
+          docker build -f Dockerfile.inherited -t correlix-oci-regression:ci .
+          BASE="$(grep -oP '^FROM \K\S+' Dockerfile.inherited)"
+          docker pull -q "$BASE"
+          docker image inspect "$BASE" \
+            --format '{{range .RootFS.Layers}}{{println .}}{{end}}' \
+            | sed '/^$/d' > "$RUNNER_TEMP/base-layers.txt"
+          test -s "$RUNNER_TEMP/base-layers.txt"
+          {
+            echo "digest=$(docker image inspect correlix-oci-regression:ci --format '{{.Id}}')"
+            echo "layers=$RUNNER_TEMP/base-layers.txt"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Scan the FINAL image (Syft → CycloneDX)
+        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
+        with:
+          image: correlix-oci-regression:ci
+          format: cyclonedx-json
+          output-file: ${{ runner.temp }}/regression.cdx.json
+          upload-artifact: false
+
+      # The RETAINED source, produced by the mechanism that already ships it in
+      # every release bundle (owner decision 2026-09-04, licence audit D2). No
+      # second source-archive architecture: BusyBox is one more entry in the same
+      # pin table, and this step needed no change to mirror it.
+      - name: Materialise the retained corresponding source
+        working-directory: NetOps_Observability
+        run: |
+          set -euo pipefail
+          bash scripts/make-installer.sh --source-offer-only
+
+      - name: Evaluate the final image against the source-obligation policy
+        working-directory: NetOps_Observability
+        run: |
+          set -euo pipefail
+          OFFER="$(ls -d dist/correlix-*/source-offer | head -1)"
+          test -d "$OFFER"
+          python3 scripts/oci-compliance.py \
+            --sbom "${{ runner.temp }}/regression.cdx.json" \
+            --image correlix-oci-regression \
+            --digest "${{ steps.regr.outputs.digest }}" \
+            --base-layers "${{ steps.regr.outputs.layers }}" \
+            --source-dir "$OFFER" \
+            --manifest "${{ runner.temp }}/regression.compliance.json"
+          # The point of the whole job, asserted rather than eyeballed in a log:
+          # BusyBox was DISCOVERED in an image that declares it nowhere, and the
+          # source Correlix retains for it verified against its pin.
+          python3 - "${{ runner.temp }}/regression.compliance.json" <<'PY'
+          import json, sys
+          m = json.load(open(sys.argv[1], encoding="utf-8"))
+          bb = [c for c in m["components"] if c["name"] == "busybox"]
+          if not bb:
+              sys.exit("busybox was not discovered in the final image — the "
+                       "inherited-layer scan found nothing it was built to find")
+          c = bb[0]
+          for field, want in (("license", "GPL-2.0-only"),
+                              ("origin", "inherited-base-layer"),
+                              ("source_status", "verified")):
+              if c[field] != want:
+                  sys.exit(f"busybox {field} is {c[field]!r}, expected {want!r}")
+          if not c["source_required"]:
+              sys.exit("busybox is GPL-2.0-only and must require corresponding source")
+          print(f"busybox {c['version']} {c['license']} {c['origin']} "
+                f"{c['source_status']} {c['correspondence']} "
+                f"-> {c['source_artifact']}")
+          PY
+
+      - name: Regression suite (offline — fixtures, policy, fail-closed paths)
+        working-directory: NetOps_Observability
+        run: |
+          python3 scripts/oci-compliance.py --selftest
+          pip install --no-cache-dir "pytest==9.1.1"
+          python3 -m pytest tests/test_oci_compliance.py -v
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always()
+        with:
+          name: oci-compliance-manifest
+          path: ${{ runner.temp }}/regression.compliance.json
+          if-no-files-found: warn
+
   license-gate:
     name: Third-party licence gate (blocking)
     runs-on: ubuntu-latest

@@ -194,14 +194,15 @@ def check_dockerfiles(policy: dict) -> list[Failure]:
     repack = {e["path"] for e in ci["third_party_repackage"]}
     classified = set(ours) | repack
 
+    # ANY file whose basename starts with `Dockerfile`, not a fixed list of
+    # suffixes. The suffix list this replaced ((".backend", ".correlation",
+    # ".frontend", ".full", ".nginx")) grew by hand, so a Dockerfile with a new
+    # suffix — `Dockerfile.inherited`, say — escaped check D entirely while
+    # tests/test_licensing_consistency.py still demanded it be classified. Two
+    # discovery rules for one question is one rule too many.
     on_disk = {
         os.path.relpath(p, PROJ)
-        for p in walk_sources(PROJ, policy, ("Dockerfile",))
-    }
-    on_disk |= {
-        os.path.relpath(p, PROJ)
-        for p in walk_sources(PROJ, policy, (".backend", ".correlation", ".frontend",
-                                             ".full", ".nginx"))
+        for p in walk_sources(PROJ, policy, ("",))
         if os.path.basename(p).startswith("Dockerfile")
     }
 

@@ -53,6 +53,7 @@ All of these run on every PR and push. None needs a human unless it fails.
 | 1.16a | Telemetry catalogue invariants + gNMI fixture-replay conformance | `telemetry-catalog-ci` · `invariants · conformance · pytest (blocking)` | 🟢 AUTOMATED *(required check since 2026-09-04)* |
 | 1.16b | Tracker staleness | `tracker-ci` · `tracker staleness (blocking on HIGH)` | 🟢 AUTOMATED *(deliberately **not** a required check — runbook §1.3)* |
 | 1.16c | **Third-party licence gate** | `supply-chain` · `Third-party licence gate (blocking)` | 🟢 AUTOMATED |
+| 1.16d | **OCI image compliance** — the FINAL image is the compliance boundary: inherited base-layer software (BusyBox et al.) is discovered, its corresponding-source obligation evaluated, and the Correlix-retained artifact checksum-verified. Tracker 238 | `supply-chain` · `OCI image compliance (inherited layers, blocking)`; release mode runs per pushed digest in `publish-images` | 🟢 AUTOMATED |
 | 1.17 | Fuzz corpus exploration | `fuzz-nightly` (scheduled, not per-PR) | 🟢 AUTOMATED |
 | 1.18 | **`go.mod` direct requires ⊆ the CLAUDE.md §6 allowlist** | — | 🔴 MISSING — human review only |
 
@@ -150,7 +151,7 @@ Other first-time friction, in order of likelihood:
 | 4.10 | `release-bundle.yml` artifact name, MANIFEST `profile:` line and release notes all say **full**, and the smoke step asserts the MANIFEST agrees — they can no longer drift silently. | `release-bundle.yml` | 🟢 fixed 2026-09-03 |
 | 4.11 | VM appliance images (qcow2/vmdk/vhdx) | `scripts/make-vm-image.sh` | 🟡 MANUAL |
 | 4.12 | **No root `.dockerignore`** while 8 services build with `context: ../..` (tracker 193) | — | 🔴 MISSING (build-size, not correctness) |
-| 4.14 | **GPL/LGPL corresponding source ships with the bundle.** Owner decision 2026-09-04 (licence audit D2): the source obligation is discharged under GPL-2.0 §3(a) by SHIPPING the source, not by a three-year written offer. `make-installer.sh` mirrors the pinned upstream tarball into `source-offer/`, verifies its sha256 against `scripts/source-mirror.json`, and FAILS THE BUILD on any fetch or integrity failure. Verify on the produced bundle: `test -s source-offer/syslog-ng-<ver>.tar.gz`, `grep source-offer SHA256SUMS`, and that `source-offer/README` states the terms. Re-mirror whenever the pinned image version changes | `bash scripts/make-installer.sh` (dry run: `--source-offer-only`); asserted in `release-bundle.yml`; contract guarded by `tests/test_source_offer.py` | 🟢 AUTOMATED (build-time fail-closed) |
+| 4.14 | **GPL/LGPL corresponding source ships with the bundle.** Owner decision 2026-09-04 (licence audit D2): the source obligation is discharged under GPL-2.0 §3(a) by SHIPPING the source, not by a three-year written offer. `make-installer.sh` mirrors the pinned upstream tarball into `source-offer/`, verifies its sha256 against `scripts/source-mirror.json`, and FAILS THE BUILD on any fetch or integrity failure. **Generalised 2026-09-05 (tracker 238):** the same table now also carries the source for copyleft software INHERITED from base-image layers — BusyBox is named in no Dockerfile of ours but is in every frontend/nginx image we ship. Verify on the produced bundle that EVERY pin-table component is present, hashes to its pin and appears in `SHA256SUMS` (the release-bundle smoke does this for the whole table, not one component), and that `source-offer/README` states the terms. Re-mirror whenever a pinned image or base image version changes | `bash scripts/make-installer.sh` (dry run: `--source-offer-only`); asserted in `release-bundle.yml`; contract guarded by `tests/test_source_offer.py` | 🟢 AUTOMATED (build-time fail-closed) |
 | 4.15 | **Gotenberg can no longer reach a bundle.** The `pdf` profile hides PDFtk (GPL-2.0+), a proprietary Microsoft font EULA and Google Chrome. Was a written convention; now a build failure if the image appears in the base set or any add-on pack | `scripts/make-installer.sh` licensing guards | 🟢 AUTOMATED *(2026-09-04)* |
 | 4.13 | **Pipeline debugger in the bundle** — `correlix-debug` is built (§7c), self-tested on the build host (`--help` must exit 0 before the build continues) and covered by `SHA256SUMS`. Verify on the produced bundle: `cd dist/correlix-<version> && ./correlix-debug --help` (exit 0) and `grep correlix-debug SHA256SUMS` | `bash scripts/make-installer.sh`; contract guarded by `tests/test_pipeline_debug_ship.py` | 🟢 AUTOMATED (build-time self-test) + 🟡 MANUAL on the published bundle |
 
@@ -232,6 +233,7 @@ gh api -X PUT repos/RaoRakurty/NetOps_Observability/branches/main/protection \
       {"context": "gitleaks secret scan (blocking, full history)"},
       {"context": "CIS-Docker policy gate (blocking)"},
       {"context": "Third-party licence gate (blocking)"},
+      {"context": "OCI image compliance (inherited layers, blocking)"},
       {"context": "ingest + storage contracts (blocking)"},
       {"context": "invariants · conformance · pytest (blocking)"}
     ]

@@ -173,10 +173,39 @@ jobs:
           test -d source-offer
           test -s source-offer/README
           grep -q 'THIS DIRECTORY IS THAT SOURCE' source-offer/README
-          SNG_VER="$(python3 -c "import json,os;p=os.environ['GITHUB_WORKSPACE']+'/NetOps_Observability/scripts/source-mirror.json';print(next(c['version'] for c in json.load(open(p))['components'] if c['name']=='syslog-ng'))")"
-          test -s "source-offer/syslog-ng-$SNG_VER.tar.gz"
-          tar -tzf "source-offer/syslog-ng-$SNG_VER.tar.gz" >/dev/null
-          grep -q "source-offer/syslog-ng-$SNG_VER.tar.gz" SHA256SUMS
+          # EVERY component in the pin table, not just syslog-ng. Tracker 238
+          # generalised the mechanism: BusyBox — inherited from the Alpine base
+          # of the frontend and nginx images and named in no Dockerfile of ours
+          # — is now an entry in the same table. Asserting one component by name
+          # would let the next entry ship unmirrored and unnoticed, which is the
+          # invisibility this whole line of work exists to end.
+          python3 - <<'PINCHECK'
+          import hashlib, json, os, sys
+          pins = os.environ["GITHUB_WORKSPACE"] + "/NetOps_Observability/scripts/source-mirror.json"
+          with open(pins, encoding="utf-8") as fh:
+              comps = json.load(fh)["components"]
+          if not comps:
+              sys.exit("the source pin table declares no components")
+          sums = open("SHA256SUMS", encoding="utf-8").read()
+          bad = []
+          for c in comps:
+              path = os.path.join("source-offer", c["file"])
+              if not os.path.isfile(path) or os.path.getsize(path) == 0:
+                  bad.append(f"{c['name']} {c['version']}: {path} missing or empty")
+                  continue
+              h = hashlib.sha256()
+              with open(path, "rb") as fh:
+                  for chunk in iter(lambda: fh.read(1 << 20), b""):
+                      h.update(chunk)
+              if h.hexdigest() != c["sha256"]:
+                  bad.append(f"{c['name']} {c['version']}: sha256 mismatch in the bundle")
+              if f"source-offer/{c['file']}" not in sums:
+                  bad.append(f"{c['name']} {c['version']}: not covered by SHA256SUMS")
+          if bad:
+              sys.exit("corresponding source missing from the bundle:\n  " + "\n  ".join(bad))
+          print(f"source-offer/: {len(comps)} corresponding-source artifact(s) present, "
+                f"checksum-verified and covered by SHA256SUMS")
+          PINCHECK
 
           # docker-load round-trip: exercises decompression + per-layer digest
           # verification on the exact archive a client would load.

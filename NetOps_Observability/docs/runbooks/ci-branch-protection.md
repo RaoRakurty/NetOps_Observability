@@ -18,6 +18,12 @@ be set from the CI token or from this agent).
    automerge (`docs/design/PATCH_AUTOMATION_PLAN_2026-09-03.md` §4.3: automerge is
    exactly as strong as this list).
 
+**Extended 2026-09-05** (tracker 238). The required list grew to **nineteen**:
+`supply-chain` · `OCI image compliance (inherited layers, blocking)`. It is the
+gate that makes the FINAL OCI image the compliance boundary — software inherited
+from a base image's layers (BusyBox is the confirmed case) is named in no
+manifest of ours, so every other gate on this page is blind to it.
+
 **Extended 2026-09-04** (pre-`v0.9.0-rc1`). Three changes: the required list grew
 to **eighteen** (`ingest-contract-ci` and `telemetry-catalog-ci` were blocking
 gates that nothing enforced); §2.1 documents the **tag** gate
@@ -30,7 +36,7 @@ is now machine-checked against the workflows by
 
 Use exactly these check names — they are the `name:` of each blocking job (or the
 job **id**, where a job declares no `name:`). Every one of them runs `pull_request`
-**unfiltered**, so all eighteen report on every PR to `main` (see §2).
+**unfiltered**, so all nineteen report on every PR to `main` (see §2).
 
 These three tables are the **single list**. `.github/workflows/release-gate.yml`
 (the tag gate, §2.1) calls exactly the workflows named in §1.1 + §1.2, and
@@ -60,6 +66,7 @@ check name in backticks.
 | supply-chain | `gitleaks secret scan (blocking, full history)` |
 | supply-chain | `CIS-Docker policy gate (blocking)` |
 | supply-chain | `Third-party licence gate (blocking)` |
+| supply-chain | `OCI image compliance (inherited layers, blocking)` |
 | ingest-contract-ci | `ingest + storage contracts (blocking)` |
 | telemetry-catalog-ci | `invariants · conformance · pytest (blocking)` |
 
@@ -174,6 +181,7 @@ gh api -X PUT repos/RaoRakurty/NetOps_Observability/branches/main/protection \
       {"context": "gitleaks secret scan (blocking, full history)"},
       {"context": "CIS-Docker policy gate (blocking)"},
       {"context": "Third-party licence gate (blocking)"},
+      {"context": "OCI image compliance (inherited layers, blocking)"},
       {"context": "ingest + storage contracts (blocking)"},
       {"context": "invariants · conformance · pytest (blocking)"}
     ]

@@ -133,6 +133,14 @@ def test_weak_copyleft_components_are_all_reviewed(inventory):
     exceptions = data.get("exceptions", {})
     unreviewed = [f"{c.name} ({c.license})" for c in comps
                   if c.klass == "REVIEW_REQUIRED"
+                  # Inherited base-image layers are governed by the
+                  # corresponding-source register, not by the licence-class
+                  # ladder: a distro copyright file lists every licence
+                  # appearing anywhere in a source package, so the class is
+                  # evidence and not a determination. Their obligation is
+                  # asserted in tests/test_oci_compliance.py and enforced by
+                  # scripts/oci-compliance.py.
+                  and c.usage != "inherited-base-layer"
                   and not (exceptions.get(c.name) or exceptions.get(c.key))]
     assert not unreviewed, ("weak-copyleft component with no reviewed exception: "
                             + "; ".join(unreviewed))
@@ -834,18 +842,27 @@ def test_the_only_open_findings_are_the_two_tracker_rowed_owner_decisions():
     """The acknowledged list is a queue, not a wastebasket.
 
     Every entry on it must be a question only the owner can answer, and must be
-    tracked somewhere a human actually looks. Today that is exactly two:
-    `busybox` (tracker 238) and `connector-vendor-marks` (tracker 239). If this
-    fails because a THIRD entry appeared, the entry is either an engineering fix
-    someone deferred by labelling it a decision, or a real new owner question
-    that needs a tracker row and a §4a paragraph — not a silent addition."""
+    tracked somewhere a human actually looks. It held exactly two, and BOTH were
+    ruled on 2026-09-05: `connector-vendor-marks` by tracker 239 (replace the
+    vendor marks with generic glyphs) and `busybox` by tracker 238 (if Correlix
+    ships the binary, Correlix retains the source — base-image layers included).
+    So the true end state is EMPTY.
+
+    If this fails because an entry appeared, it is either an engineering fix
+    somebody deferred by labelling it a decision, or a real new owner question
+    that needs a tracker row and a §4a paragraph — not a silent addition. The
+    two assertions below make either case say which."""
     data = license_audit.load_data()
     open_names = sorted(n for n, e in data.get("exceptions", {}).items()
                         if str(e.get("status", "")).upper().startswith("OPEN"))
-    assert open_names == ["busybox", "connector-vendor-marks"], (
-        f"the acknowledged-findings queue is {open_names}, expected "
-        f"['busybox', 'connector-vendor-marks']. Add the tracker row and the "
-        f"§4a entry, or close the finding — do not just extend this list.")
+    # The rows that owned the two closed findings, kept so a REOPENED finding is
+    # told which tracker row it belongs to instead of only being told "no".
+    known = {"busybox": 238, "connector-vendor-marks": 239}
+    assert open_names == [], (
+        f"the acknowledged-findings queue is {open_names}; both of its entries "
+        f"were ruled on 2026-09-05 and it should now be empty. Close the "
+        f"finding, or — if this is a genuinely new owner question — give it a "
+        f"tracker row and a §4a paragraph and extend this test deliberately.")
 
     audit_doc = read(os.path.join(ROOT, "docs", "security",
                                   "LICENSE_AUDIT_2026-09-03.md"))
@@ -854,11 +871,16 @@ def test_the_only_open_findings_are_the_two_tracker_rowed_owner_decisions():
             f"the audit prints '{name}' and points the reader at "
             f"docs/security/LICENSE_AUDIT_2026-09-03.md, which does not mention "
             f"it — the pointer leads nowhere")
+    # Only a finding that is STILL open needs a live tracker row. A shipped row
+    # is DELETED from the tracker (CLAUDE.md), so asserting the row exists
+    # unconditionally would fail the moment the decision it records is made —
+    # punishing the fix instead of the drift.
     tracker = read(os.path.join(ROOT, "docs", "TRACKER.md"))
-    for row in ("| 238 |", "| 239 |"):
+    for name in open_names:
+        row = f"| {known.get(name, name)} |"
         assert row in tracker, (
-            f"tracker row {row.strip('| ')} is gone but its licence finding is "
-            f"still OPEN — an owner decision with no tracker row is invisible")
+            f"licence finding '{name}' is still OPEN but its tracker row is "
+            f"gone — an owner decision with no tracker row is invisible")
 
 
 # ── D6: the UBI EULA has to reach the customer, not just the data file ───────

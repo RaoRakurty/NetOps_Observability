@@ -117,3 +117,81 @@ jobs:
           format: cyclonedx-json
           output-file: sbom-${{ matrix.name }}.cdx.json
           artifact-name: sbom-${{ matrix.name }}
+
+      # THE OCI SOURCE-COMPLIANCE GATE (tracker 238, owner decision 2026-09-05).
+      #
+      # Until this landed the SBOM above was generated, attested and then read by
+      # nobody. That is how BusyBox — GPL-2.0-only, inherited from the Alpine base
+      # of the frontend and nginx images, named in no Dockerfile of ours — could
+      # be inside every published image while the licence inventory, which models
+      # what we DECLARE, could not see it.
+      #
+      # The rule is general: IF CORRELIX SHIPS THE BINARY, CORRELIX RETAINS THE
+      # SOURCE, however the binary got into the image. Upstream availability is
+      # provenance, not compliance. `--release` therefore fails on a required
+      # source that is missing, on one whose checksum does not match, and on a
+      # merely RECORDED posture — a recorded posture keeps daily builds honest
+      # about a known gap, and must never let a customer artifact out the door.
+      #
+      # FAIL CLOSED. This step runs against the digest actually pushed, and a
+      # scanner failure, an unparsable SBOM or an SBOM with zero components is an
+      # error, never "zero affected packages". See
+      # docs/compliance/OCI_SOURCE_COMPLIANCE.md.
+      - name: Resolve the runtime base image's layers
+        id: base
+        run: |
+          set -euo pipefail
+          # The LAST FROM is the runtime stage; earlier ones are build stages
+          # whose contents never reach the published image.
+          BASE="$(grep -E '^FROM ' '${{ matrix.dockerfile }}' | tail -1 | awk '{print $2}')"
+          echo "base=$BASE"
+          if [ "$BASE" = "scratch" ]; then
+            # Nothing is inherited, so there is no base layer set to resolve.
+            # Reported as such rather than faked: origin will read `unknown`.
+            echo "layers=" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          docker pull -q "$BASE"
+          docker image inspect "$BASE" \
+            --format '{{range .RootFS.Layers}}{{println .}}{{end}}' \
+            | sed '/^$/d' > "$RUNNER_TEMP/base-layers-${{ matrix.name }}.txt"
+          test -s "$RUNNER_TEMP/base-layers-${{ matrix.name }}.txt"
+          echo "layers=$RUNNER_TEMP/base-layers-${{ matrix.name }}.txt" >> "$GITHUB_OUTPUT"
+
+      # The retained corresponding source, produced by the same mechanism that
+      # ships it in every release bundle. `--release` verifies the BYTES, so the
+      # artifacts have to exist here, not merely be pinned.
+      - name: Materialise the retained corresponding source
+        working-directory: NetOps_Observability
+        run: |
+          set -euo pipefail
+          bash scripts/make-installer.sh --source-offer-only
+
+      - name: OCI source-compliance gate (release mode, blocking)
+        working-directory: NetOps_Observability
+        run: |
+          set -euo pipefail
+          OFFER="$(ls -d dist/correlix-*/source-offer | head -1)"
+          test -d "$OFFER"
+          # An array, not a word-split string: a base-layer path with a space in
+          # it must not silently become two arguments and mark every component
+          # `unknown`.
+          base_args=()
+          if [ -n "${{ steps.base.outputs.layers }}" ]; then
+            base_args=(--base-layers "${{ steps.base.outputs.layers }}")
+          fi
+          python3 scripts/oci-compliance.py \
+            --sbom "$GITHUB_WORKSPACE/sbom-${{ matrix.name }}.cdx.json" \
+            --image "${{ steps.img.outputs.ref }}" \
+            --digest "${{ steps.build.outputs.digest }}" \
+            --source-dir "$OFFER" \
+            --manifest "$GITHUB_WORKSPACE/compliance-${{ matrix.name }}.json" \
+            --release "${base_args[@]}"
+
+      - name: Upload the compliance manifest
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: oci-compliance-${{ matrix.name }}
+          path: compliance-${{ matrix.name }}.json
+          if-no-files-found: warn
