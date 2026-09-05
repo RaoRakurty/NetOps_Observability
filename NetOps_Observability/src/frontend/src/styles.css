@@ -3841,14 +3841,20 @@ button:disabled { opacity: 0.55; cursor: not-allowed; }
   box-shadow: var(--glass-shadow-lg), inset 0 1px 0 var(--glass-hi), 0 0 0 1px color-mix(in srgb, var(--accent) 22%, transparent); }
 .conn-tile:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .conn-logo { display: inline-flex; align-items: center; justify-content: center; flex: none;
-  padding: 10px; border-radius: 14px; background: #fff; border: 1px solid var(--panel-border);
+  padding: 10px; border-radius: 14px; background: var(--surface); border: 1px solid var(--panel-border);
   box-shadow: 0 1px 2px rgba(0,0,0,.06); }
-.conn-logo.servicenow { background: #f1f7f4; }
-.conn-logo.jira { background: #f3f7ff; }
-.conn-logo.slack { background: #f7f1f7; }
-.conn-logo.pagerduty { background: #eef8f0; }
-.conn-logo.teams { background: #f0f0fb; }
-.conn-logo.sns { background: #fff6ea; color: #b25d05; }
+/* Third-party connector chips (tracker 239). ONE token-driven treatment for
+   every vendor destination — ServiceNow, Jira, Slack, PagerDuty, Teams, Twilio
+   and the cloud SNS tile alike. The chip must NOT carry a brand tint: a green
+   ServiceNow chip, a blue Atlassian chip or an AWS-orange SNS chip is
+   pseudo-branding by CSS, it hardcodes a light-mode-only colour, and it makes
+   colour a differentiator the glyph and the printed name already carry. The
+   accent wash below is the product's own, is derived from the theme token, and
+   therefore reads correctly in both light and dark. */
+.conn-logo.servicenow, .conn-logo.jira, .conn-logo.slack,
+.conn-logo.pagerduty, .conn-logo.teams, .conn-logo.twilio, .conn-logo.sns {
+  background: color-mix(in srgb, var(--accent) 8%, var(--surface));
+  color: var(--accent); }
 /* generic-icon channels: tinted chip + icon colour (Lucide strokes inherit currentColor) */
 .conn-logo.email { background: #eef2f8; color: #4b6a8a; }
 .conn-logo.mobile { background: #eef7f1; color: #2e9e6b; }

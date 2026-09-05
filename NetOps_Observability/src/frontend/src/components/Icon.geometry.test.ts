@@ -340,3 +340,54 @@ describe("rail glyph geometry", () => {
     expect(b.maxY, `${name} overflows bottom`).toBeLessThanOrEqual(VIEWBOX + 0.001);
   });
 });
+
+// ── Connector functional glyphs (tracker 239) ─────────────────────────────
+//
+// These sit in a 40px (Integrations tile) / 26px (Notifications channel) chip
+// beside a name, in a gallery where several are visible at once — so the same
+// centring requirement applies: an off-centre glyph makes the whole column of
+// chips read crooked. They render at the component's default 1.75 stroke, not
+// the rail's 2. Keep this list in sync with CONNECTOR_REGISTRY / GENERIC_CONNECTOR
+// in components/ConnectorGlyph.tsx.
+const CONNECTOR_GLYPHS = [
+  "ticket",   // ITSM (ServiceNow)
+  "board",    // issue tracking (Jira)
+  "chat",     // chat (Slack)
+  "users",    // collaboration (Microsoft Teams)
+  "phone",    // messaging (Twilio)
+  "incident", // incident response (PagerDuty)
+  "bell",     // push (ntfy)
+  "mail",     // email (SMTP)
+  "webhook",  // generic HTTP callback
+  "plug",     // the unknown-connector fallback
+];
+
+const CHIP_STROKE_WIDTH = 1.75;
+
+describe("connector glyph geometry", () => {
+  it.each(CONNECTOR_GLYPHS)("%s is horizontally centred in the 24x24 viewBox", (name) => {
+    const b = glyphBox(name, CHIP_STROKE_WIDTH);
+    const dx = b.cx - CENTRE;
+    expect(
+      Math.abs(dx),
+      `glyph "${name}" bbox x-centre is ${b.cx.toFixed(3)} (dx ${dx.toFixed(3)})`,
+    ).toBeLessThanOrEqual(TOLERANCE);
+  });
+
+  it.each(CONNECTOR_GLYPHS)("%s is vertically centred in the 24x24 viewBox", (name) => {
+    const b = glyphBox(name, CHIP_STROKE_WIDTH);
+    const dy = b.cy - CENTRE;
+    expect(
+      Math.abs(dy),
+      `glyph "${name}" bbox y-centre is ${b.cy.toFixed(3)} (dy ${dy.toFixed(3)})`,
+    ).toBeLessThanOrEqual(TOLERANCE);
+  });
+
+  it.each(CONNECTOR_GLYPHS)("%s stays inside the viewBox at the chip stroke width", (name) => {
+    const b = glyphBox(name, CHIP_STROKE_WIDTH);
+    expect(b.minX, `${name} overflows left`).toBeGreaterThanOrEqual(-0.001);
+    expect(b.minY, `${name} overflows top`).toBeGreaterThanOrEqual(-0.001);
+    expect(b.maxX, `${name} overflows right`).toBeLessThanOrEqual(VIEWBOX + 0.001);
+    expect(b.maxY, `${name} overflows bottom`).toBeLessThanOrEqual(VIEWBOX + 0.001);
+  });
+});

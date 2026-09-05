@@ -9,10 +9,12 @@
 // pass again the moment someone re-inlines a brand mark behind a flag or in a
 // component this file does not render. Reading the source catches it outright.
 //
-// SCOPE: cloud marks only. The six ITSM / notification marks (ServiceNow, Jira,
-// Slack, Twilio, PagerDuty, Teams) ARE the vendors' official artwork by
-// deliberate decision and are asserted to still be present, so a future sweep
-// cannot quietly delete them without a matching owner decision.
+// SCOPE: every mark this file ever carried. Tracker 239 (2026-09-05) removed
+// the six ITSM / notification marks (ServiceNow, Jira, Slack, Twilio,
+// PagerDuty, Microsoft Teams) the same way D5 removed the cloud three, so the
+// assertions below now guard NINE retired marks, not three. Connector identity
+// moved to components/ConnectorGlyph.tsx (generic functional glyph + the
+// vendor's name as text) and is guarded by ConnectorGlyph.test.tsx.
 
 import { describe, it, expect, afterEach } from "vitest";
 import { render, cleanup } from "@testing-library/react";
@@ -70,10 +72,11 @@ describe("ConnectorLogos — no cloud-provider trademark remains", () => {
     for (const frag of CLOUD_LOGO_PATH_FRAGMENTS) {
       expect(SOURCE_LC, `ConnectorLogos.tsx still contains logo geometry ${frag}`).not.toContain(frag);
     }
-    // The removed marks were the only <linearGradient> users besides Jira; a
-    // second gradient block would mean a cloud mark came back with its ramp.
+    // Every gradient this file ever held belonged to a retired mark (the Azure
+    // chevron ramp, the Jira blue ramp). ANY <linearGradient> here now means a
+    // brand ramp came back.
     expect(SOURCE_LC.split("<lineargradient").length - 1,
-      "only Jira's three gradients may remain").toBe(3);
+      "no gradient belongs in this file any more").toBe(0);
   });
 
   it("the cloud tiles RENDER the original glyph — inline svg, currentColor, letter tag", () => {
@@ -98,18 +101,75 @@ describe("ConnectorLogos — no cloud-provider trademark remains", () => {
     expect(svg.getAttribute("class")).toBe("ccw-mark");
   });
 
-  // Deliberately still vendor artwork — a separate owner decision, NOT D5's.
-  it("leaves the six non-cloud vendor marks in place", () => {
-    for (const [name, hex] of [
-      ["ServiceNowLogo", "#81b5a1"],
-      ["JiraLogo", "#2684ff"],
-      ["SlackLogo", "#de1c59"],
-      ["TwilioLogo", "#f22f46"],
-      ["PagerDutyLogo", "#25c151"],
-      ["TeamsLogo", "#5059c9"],
-    ] as const) {
-      expect(SOURCE, `${name} was removed without an owner decision`).toContain(name);
-      expect(SOURCE_LC, `${name} lost its brand colour`).toContain(hex);
+});
+
+// ── Tracker 239: the six ITSM / chat / comms marks are gone too ────────────
+//
+// The former ServiceNow / Jira / Slack / Twilio / PagerDuty / Teams components
+// are asserted GONE three ways, because each one alone is escapable:
+//   1. the exported symbol no longer exists (a call site cannot reach it),
+//   2. the brand hex no longer appears in the source (no recolour-in-place),
+//   3. the distinctive logo GEOMETRY no longer appears (no "same shape, new
+//      colour" lookalike, which is the failure mode a colour-only guard misses).
+
+/** Brand palette of the six retired connector marks. */
+const CONNECTOR_BRAND_HEXES = [
+  "#81b5a1",                                     // ServiceNow green-teal
+  "#0052cc", "#2684ff",                          // Atlassian Jira blue ramp
+  "#de1c59", "#35c5f0", "#2eb57d", "#ebb02e",    // Slack four-colour
+  "#f22f46",                                     // Twilio red
+  "#25c151",                                     // PagerDuty green
+  "#5059c9", "#7b83eb",                          // Microsoft Teams purple pair
+];
+
+/** Distinctive path fragments from the six retired marks — geometry, not colour. */
+const CONNECTOR_LOGO_PATH_FRAGMENTS = [
+  "m32.195 3.312",   // ServiceNow "Now" roundel
+  "m46.568 31.918",  // Jira chevron stack
+  "m27.255 80.719",  // Slack lozenge (crimson quadrant)
+  "m47.281 27.255",  // Slack lozenge (blue quadrant)
+  "m48 92.309",      // Twilio roundel dots
+  "m6.704 59.217",   // PagerDuty left bar
+  "m44 24h14",       // Teams right silhouette
+  "m11 22h18v4.2",   // Teams "T" counter
+];
+
+const RETIRED_CONNECTOR_LOGOS = [
+  "ServiceNowLogo", "JiraLogo", "SlackLogo", "TwilioLogo", "PagerDutyLogo", "TeamsLogo",
+] as const;
+
+describe("ConnectorLogos — no ITSM/chat/comms vendor trademark remains (tracker 239)", () => {
+  it("exports none of the six retired vendor mark components", () => {
+    for (const name of RETIRED_CONNECTOR_LOGOS) {
+      expect(SOURCE, `${name} came back — connectors use ConnectorGlyph, not vendor artwork`)
+        .not.toContain(name);
+    }
+  });
+
+  it("the SOURCE FILE carries no connector brand hex", () => {
+    for (const hex of CONNECTOR_BRAND_HEXES) {
+      expect(SOURCE_LC, `ConnectorLogos.tsx still contains ${hex}`).not.toContain(hex);
+    }
+  });
+
+  it("the SOURCE FILE carries no connector logo geometry (no recoloured lookalike)", () => {
+    for (const frag of CONNECTOR_LOGO_PATH_FRAGMENTS) {
+      expect(SOURCE_LC, `ConnectorLogos.tsx still contains logo geometry ${frag}`).not.toContain(frag);
+    }
+  });
+
+  it("carries NO raw colour literal at all — every glyph it renders is currentColor", () => {
+    expect(SOURCE).not.toMatch(/#[0-9a-fA-F]{3,8}\b/);
+    expect(SOURCE_LC).not.toContain("<lineargradient");
+  });
+
+  it("renders no vendor brand colour for ANY tile it still owns", () => {
+    for (const [Logo, tag] of [[AwsLogo, "AWS"], [AzureLogo, "AZ"], [GcpLogo, "GCP"]] as const) {
+      const html = render(<Logo size={40} />).container.innerHTML.toLowerCase();
+      for (const hex of [...CLOUD_BRAND_HEXES, ...CONNECTOR_BRAND_HEXES]) {
+        expect(html, `${tag} rendered ${hex}`).not.toContain(hex);
+      }
+      cleanup();
     }
   });
 });

@@ -174,7 +174,6 @@ distributed and carries no notice obligation.
 | `@xyflow/react` | 12.11.0 | MIT | minified into the served JS/CSS/font assets |
 | `@xyflow/system` | 0.0.77 | MIT | minified into the served JS/CSS/font assets |
 | `classcat` | 5.0.5 | MIT | minified into the served JS/CSS/font assets |
-| `connector-vendor-marks` | inlined brand path data | LicenseRef-Trademark-ToU | Six official vendor brand marks inlined as SVG path data with brand colours: ServiceNow (#81b5a1), Jira (#0052cc->#2684ff gradient), Slack four-colour (#de1c59/#35c5f0/#2eb57d/#ebb02e), Twilio (#f22f46), PagerDuty (#25c151) and Microsoft Teams (#5059c9/#7b83eb). Trademarks governed by each vendor's brand/partner terms, not by a copyright licence, and NO terms are recorded for any of them. Found 2026-09-04 while implementing D5. The 2026-09-03 housekeeping deleted assets/connectors/{jira,servicenow}.svg as unreferenced dead files; these are the SAME marks, inline, WITH references (tabs/admin.tsx, pages/appobs/providers.tsx) — the file was closed and the exposure was not. Declared here so the audit can see it. The AWS/Azure/GCP marks that were in the same file were replaced under D5. |
 | `csstype` | 3.2.3 | MIT | minified into the served JS/CSS/font assets |
 | `d3-color` | 3.1.0 | ISC | minified into the served JS/CSS/font assets |
 | `d3-dispatch` | 3.0.1 | ISC | minified into the served JS/CSS/font assets |
@@ -188,7 +187,7 @@ distributed and carries no notice obligation.
 | `echarts` | 6.1.0 | Apache-2.0 | minified into the served JS/CSS/font assets |
 | `elkjs` | 0.11.1 | EPL-2.0 | minified into the served JS/CSS/font assets |
 | `events` | 3.3.0 | MIT | minified into the served JS/CSS/font assets |
-| `feather-icons` | path data, in-tree copy | MIT | ~20 icons in Icon.tsx carry Feather's verbatim path coordinates (compass/activity/sliders/shield/lock/unlock/file-text/grid/x/arrow-*/maximize/log-out). Feather is MIT, (c) 2013-2023 Cole Bemis. MIT REQUIRES the copyright notice and permission text be retained in redistributions. Attribution now SHIPS: src/frontend/src/components/Icon.tsx carries the MIT notice in its header with per-icon provenance, and public/licenses/icons/feather-lucide-NOTICE.txt is served at /licenses/ by the frontend image. |
+| `feather-icons` | path data, in-tree copy | MIT | ~20 icons in Icon.tsx carry Feather's verbatim path coordinates (compass/activity/sliders/shield/lock/unlock/file-text/grid/x/arrow-*/maximize/log-out, plus phone/users/link-2 added for the connector glyphs, tracker 239). Feather is MIT, (c) 2013-2023 Cole Bemis. MIT REQUIRES the copyright notice and permission text be retained in redistributions. Attribution now SHIPS: src/frontend/src/components/Icon.tsx carries the MIT notice in its header with per-icon provenance, and public/licenses/icons/feather-lucide-NOTICE.txt is served at /licenses/ by the frontend image. |
 | `graphology` | 0.26.0 | MIT | minified into the served JS/CSS/font assets |
 | `graphology-layout` | 0.6.1 | MIT | minified into the served JS/CSS/font assets |
 | `graphology-layout-forceatlas2` | 0.10.1 | MIT | minified into the served JS/CSS/font assets |

@@ -17,7 +17,8 @@ import Wizard, { WizardStep } from "../components/Wizard";
 import { SsoIdpPanel } from "./AdminSsoIdp";
 import { StatStrip, Stat, Skeleton, InfoTip, Modal, Segmented } from "../components/ui";
 import { Group } from "../components/board/panels";
-import { ServiceNowLogo, JiraLogo, SlackLogo, TwilioLogo, PagerDutyLogo, TeamsLogo, AwsLogo } from "../components/ConnectorLogos";
+import { AwsLogo } from "../components/ConnectorLogos";
+import ConnectorGlyph from "../components/ConnectorGlyph";
 import { teamsErrors, snsErrors, hasErrors, FieldErrors } from "../lib/notifyValidation";
 import Icon from "../components/Icon";
 import { useAuth } from "../hooks/useAuth";
@@ -2885,12 +2886,17 @@ export function ExportPolicyForm() {
 // of the old split between an inline form and a separate "bidirectional sync"
 // section. Each step refuses to advance until its required fields validate.
 // PagerDuty & Slack are alert channels and are configured under Notifications.
+//
+// Each tile is identified by the vendor's NAME as plain text plus the generic
+// FUNCTIONAL glyph its category maps to in components/ConnectorGlyph.tsx
+// (ServiceNow → ITSM ticket, Jira → work-item board). No vendor mark and no
+// brand colour is rendered anywhere on this surface — tracker 239.
 
 type ConnectorId = "servicenow" | "jira";
 
-const CONNECTORS: { id: ConnectorId; name: string; tagline: string; noun: string; Logo: (p: { size?: number; className?: string }) => JSX.Element }[] = [
-  { id: "servicenow", name: "ServiceNow", noun: "incidents", tagline: "Promote critical incidents to ServiceNow via the Table API; auto-resolve when the alert clears.", Logo: ServiceNowLogo },
-  { id: "jira", name: "Jira", noun: "issues", tagline: "One deduped Jira issue per RCA root cause (policy-driven); transitioned to Done on resolve.", Logo: JiraLogo },
+const CONNECTORS: { id: ConnectorId; name: string; tagline: string; noun: string }[] = [
+  { id: "servicenow", name: "ServiceNow", noun: "incidents", tagline: "Promote critical incidents to ServiceNow via the Table API; auto-resolve when the alert clears." },
+  { id: "jira", name: "Jira", noun: "issues", tagline: "One deduped Jira issue per RCA root cause (policy-driven); transitioned to Done on resolve." },
 ];
 
 const SEV = ["info", "low", "medium", "high", "critical"];
@@ -2946,7 +2952,7 @@ export function IntegrationsAdmin() {
           const tag = !loaded ? "…" : !configured ? "Not connected" : enabled ? "Connected" : "Disabled";
           return (
             <button key={c.id} className="conn-tile" onClick={() => setOpen(c.id)} aria-label={`Configure ${c.name}`}>
-              <span className={`conn-logo ${c.id}`}><c.Logo size={40} /></span>
+              <span className={`conn-logo ${c.id}`}><ConnectorGlyph connector={c.id} size={40} /></span>
               <span className="conn-body">
                 <span className="conn-name">
                   {c.name}
@@ -3177,7 +3183,7 @@ function ConnectorSetup({ id, cfg, integration, inboundEnabled, onClose, onSaved
   ];
 
   return (
-    <Modal title={meta.name} subtitle={meta.tagline} logo={<span className={`conn-logo ${id}`}><meta.Logo size={28} /></span>} onClose={onClose}>
+    <Modal title={meta.name} subtitle={meta.tagline} logo={<span className={`conn-logo ${id}`}><ConnectorGlyph connector={id} size={28} /></span>} onClose={onClose}>
       <Wizard steps={steps} onFinish={save} onCancel={onClose} finishLabel="Save & connect" />
     </Modal>
   );
@@ -3189,15 +3195,17 @@ const SEVERITIES = ["info", "notice", "warning", "error", "critical"];
 
 // Notification channels presented as a branded tile gallery (same pattern as
 // Integrations). SMS (Twilio) and Push (ntfy) are grouped into one "SMS & Push"
-// tile since both are phone-delivery channels. Branded channels (Slack,
-// PagerDuty) use their real logos; generic ones use modern stroke icons.
+// tile since both are phone-delivery channels. EVERY tile — third-party
+// destinations included — uses a generic functional stroke glyph plus the
+// destination's name as text (components/ConnectorGlyph.tsx, tracker 239); no
+// vendor artwork and no brand colour is rendered here.
 type ChannelId = "email" | "mobile" | "slack" | "pagerduty" | "teams" | "sns";
 const CHANNELS: { id: ChannelId; name: string; tagline: string; logo: JSX.Element }[] = [
   { id: "email", name: "Email", tagline: "SMTP relay — route alert emails to your NOC distribution list.", logo: <Icon name="mail" size={26} /> },
   { id: "mobile", name: "SMS & Push", tagline: "Phone alerts — SMS via Twilio and free push via ntfy.", logo: <Icon name="smartphone" size={26} /> },
-  { id: "slack", name: "Slack", tagline: "Post alerts to a Slack channel via an Incoming Webhook.", logo: <SlackLogo size={30} /> },
-  { id: "pagerduty", name: "PagerDuty", tagline: "On-call escalation via the PagerDuty Events API v2.", logo: <PagerDutyLogo size={30} /> },
-  { id: "teams", name: "Microsoft Teams", tagline: "Post alerts to a Teams channel via an Incoming Webhook.", logo: <TeamsLogo size={30} /> },
+  { id: "slack", name: "Slack", tagline: "Post alerts to a Slack channel via an Incoming Webhook.", logo: <ConnectorGlyph connector="slack" size={26} /> },
+  { id: "pagerduty", name: "PagerDuty", tagline: "On-call escalation via the PagerDuty Events API v2.", logo: <ConnectorGlyph connector="pagerduty" size={26} /> },
+  { id: "teams", name: "Microsoft Teams", tagline: "Post alerts to a Teams channel via an Incoming Webhook.", logo: <ConnectorGlyph connector="teams" size={26} /> },
   { id: "sns", name: "Amazon SNS", tagline: "Publish to an SNS topic or SMS phone numbers — AWS credentials come from the deployment environment.", logo: <AwsLogo size={30} /> },
 ];
 
@@ -3565,7 +3573,7 @@ export function NotificationsAdmin() {
 
             {openCh === "mobile" && (
               <>
-                <h3 className="ds-modal-section"><TwilioLogo size={18} /> SMS · Twilio</h3>
+                <h3 className="ds-modal-section"><ConnectorGlyph connector="twilio" size={18} /> SMS · Twilio</h3>
                 <p className="mini-meta">Phone SMS for critical alerts. Twilio is metered — use ntfy below for free testing.</p>
                 {twilio && (
                   <>

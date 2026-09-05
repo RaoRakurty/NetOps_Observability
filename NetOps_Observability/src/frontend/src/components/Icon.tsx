@@ -40,7 +40,20 @@
 // notice covers any other glyph that matches upstream, so ADD a note rather
 // than removing one if you copy a new icon in.
 
-type Props = { name: string; size?: number; className?: string; style?: React.CSSProperties };
+type Props = {
+  name: string;
+  size?: number;
+  className?: string;
+  style?: React.CSSProperties;
+  /**
+   * Accessible name. Omit (the default) when adjacent text already names the
+   * thing — the glyph is then hidden from the accessibility tree instead of
+   * making a screen reader say it twice. Pass a label only when the glyph is
+   * the ONLY carrier of the meaning; it becomes both the accessible name and
+   * the native hover tooltip.
+   */
+  label?: string;
+};
 
 const PATHS: Record<string, JSX.Element> = {
   // Automation — a workflow: two nodes wired through a junction.
@@ -186,13 +199,18 @@ const PATHS: Record<string, JSX.Element> = {
     </>
   ),
   // Incident Response — a siren/alert with response rays.
+  // incident — a beacon/siren: the on-call paging glyph (PagerDuty and any
+  // other incident-response destination). Geometry: translated +1.5 in y
+  // (tracker 239) so its bbox centre is (12,12) like every other glyph — it
+  // was authored against the top of the box and had no consumer until the
+  // connector chips picked it up.
   incident: (
     <>
-      <path d="M7 18a5 5 0 0 1 10 0z" />
-      <line x1="5" y1="18" x2="19" y2="18" />
-      <line x1="12" y1="6" x2="12" y2="3" />
-      <line x1="6" y1="8" x2="4" y2="6" />
-      <line x1="18" y1="8" x2="20" y2="6" />
+      <path d="M7 19.5a5 5 0 0 1 10 0z" />
+      <line x1="5" y1="19.5" x2="19" y2="19.5" />
+      <line x1="12" y1="7.5" x2="12" y2="4.5" />
+      <line x1="6" y1="9.5" x2="4" y2="7.5" />
+      <line x1="18" y1="9.5" x2="20" y2="7.5" />
     </>
   ),
   // Metrics — a line chart trend.
@@ -421,9 +439,80 @@ const PATHS: Record<string, JSX.Element> = {
       <line x1="21" y1="12" x2="9" y2="12" />
     </>
   ),
+
+  // ── Connector functional glyphs (tracker 239) ────────────────────────────
+  // A third-party service connector is identified by ONE OF THESE FUNCTIONAL
+  // glyphs plus the vendor's name as plain text — never by the vendor's own
+  // mark. The glyph says what the connector DOES (ticket, board, chat, phone,
+  // page, collaborate, call back, plug in); the text says who it talks to.
+  // components/ConnectorGlyph.tsx holds the connector → glyph registry; add a
+  // connector THERE, not by drawing a new vendor-shaped glyph here.
+  // (`incident`, `mail`, `bell` and `smartphone` above serve the same role for
+  // paging, email and push, and are reused rather than duplicated.)
+
+  // ticket — a service-desk ticket stub with a perforation (ITSM request).
+  ticket: (
+    <>
+      <path d="M3 9.4a2.6 2.6 0 0 1 0 5.2V17a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-2.4a2.6 2.6 0 0 1 0-5.2V7a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2z" />
+      <path d="M9 6.5v2" />
+      <path d="M9 11v2" />
+      <path d="M9 15.5v2" />
+    </>
+  ),
+  // board — a work-item board: three cards of differing length (issue tracking).
+  board: (
+    <>
+      <rect x="3" y="4" width="18" height="16" rx="2" />
+      <path d="M8.5 8v7" />
+      <path d="M12 8v4" />
+      <path d="M15.5 8v9" />
+    </>
+  ),
+  // chat — a message bubble with a tail and three dots (channel chat).
+  chat: (
+    <>
+      <path d="M4 4h16a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2h-8.6L7 20v-4H4a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2z" />
+      <path d="M7.5 10h.01" />
+      <path d="M12 10h.01" />
+      <path d="M16.5 10h.01" />
+    </>
+  ),
+  // phone — a handset (SMS / voice messaging).
+  // upstream: Feather `phone` (MIT) — verbatim path data.
+  phone: (
+    <path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z" />
+  ),
+  // users — two collaborators (shared workspace / collaboration).
+  // upstream: Feather `users` (MIT) — verbatim path data.
+  users: (
+    <>
+      <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" />
+      <circle cx="9" cy="7" r="4" />
+      <path d="M23 21v-2a4 4 0 0 0-3-3.87" />
+      <path d="M16 3.13a4 4 0 0 1 0 7.75" />
+    </>
+  ),
+  // webhook — a link between two endpoints (generic HTTP callback).
+  // upstream: Feather `link-2` (MIT) — verbatim path data.
+  webhook: (
+    <>
+      <path d="M15 7h3a5 5 0 0 1 0 10h-3m-6 0H6a5 5 0 0 1 0-10h3" />
+      <line x1="8" y1="12" x2="16" y2="12" />
+    </>
+  ),
+  // plug — the honest fallback for a connector we have no glyph for. Never a
+  // broken image and never another vendor's glyph.
+  plug: (
+    <>
+      <path d="M6 8h12v5a6 6 0 0 1-12 0z" />
+      <path d="M9 8V2.5" />
+      <path d="M15 8V2.5" />
+      <path d="M12 19v2.5" />
+    </>
+  ),
 };
 
-export default function Icon({ name, size = 18, className, style }: Props) {
+export default function Icon({ name, size = 18, className, style, label }: Props) {
   return (
     <svg
       className={className}
@@ -436,8 +525,10 @@ export default function Icon({ name, size = 18, className, style }: Props) {
       strokeWidth="1.75"
       strokeLinecap="round"
       strokeLinejoin="round"
-      aria-hidden="true"
+      role={label ? "img" : undefined}
+      aria-hidden={label ? undefined : true}
     >
+      {label ? <title>{label}</title> : null}
       {PATHS[name] ?? PATHS.overview}
     </svg>
   );

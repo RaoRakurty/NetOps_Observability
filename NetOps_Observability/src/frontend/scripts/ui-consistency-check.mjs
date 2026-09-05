@@ -27,10 +27,14 @@ const DENY = [
   { re: /border[^:]*:\s*[^;]*#dde1e8/gi, msg: "hardcoded border — use var(--panel-border)" },
 ];
 const HEX = /#[0-9a-fA-F]{3,8}\b/g;
-// Files where raw hex is legitimate: token defs, generated, vendor logos, and the
+// Files where raw hex is legitimate: token defs, generated, and the
 // data-visualization layer (multi-hued series/gauge/graph palettes by design).
 const HEX_OK = [
-  /styles\.css$/, /theme\/prefs\.ts$/, /theme\/charts\.ts$/, /ConnectorLogos\.tsx$/, /Icon\.tsx$/, /icons?\//i,
+  // ConnectorLogos.tsx used to be exempt as "vendor logos". It no longer holds
+  // any colour literal at all (licence D5 + tracker 239), so the exemption is
+  // gone and a reintroduced brand hex is now a lint failure as well as a test
+  // failure.
+  /styles\.css$/, /theme\/prefs\.ts$/, /theme\/charts\.ts$/, /Icon\.tsx$/, /icons?\//i,
   /panels\.tsx$/, /Topology\.tsx$/, /Dashboard\.tsx$/, /\.css$/, // viz + decorative
   // Fixed-palette by design (NOT app-theme surfaces): the RCA PDF/print export is a
   // standalone light document with its own professional palette; the device terminal

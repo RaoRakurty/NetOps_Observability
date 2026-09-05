@@ -30,9 +30,11 @@ decision**. None is an emergency; all are cheap to fix. Details below.
 > **The six owner decisions in §4 (D1–D6) were all RULED ON later the same day**
 > (2026-09-04) and are recorded `status: DECIDED` — see §4, which carries each
 > ruling and what was built for it. They are no longer printed as pending.
-> **What the audit still prints is §4a: two acknowledged findings that are
-> genuinely awaiting an owner call** — `busybox` (tracker 238) and
-> `connector-vendor-marks` (tracker 239). Neither was among D1–D6.
+> **What the audit still prints is §4a: ONE acknowledged finding genuinely
+> awaiting an owner call** — `busybox` (tracker 238). The second,
+> `connector-vendor-marks` (tracker 239), was **RULED AND BUILT on 2026-09-05**
+> (option (b): replace the six marks with generic Correlix functional glyphs,
+> matching D5) and is now `status: FIXED`. Neither was among D1–D6.
 
 Scope: `NetOps_Observability/` at `feat/observability-platform`. Method and
 tooling: `scripts/license-audit.py` (re-runnable, offline), backed by the
@@ -456,10 +458,11 @@ owner calls, neither is a build failure, and neither was among the six.
 | # | Finding | Licence | Tracker | Why it is legitimately open |
 |---|---|---|---|---|
 | 1 | **`busybox`** — GPL-2.0-**only**, riding inside the Alpine/Debian base layers of images we redistribute unmodified. Printed with `(NOT MATCHED by any inventoried component)` because the inventory models image REFERENCES and busybox is a base LAYER. | GPL-2.0-only | 238 | The question is whether to mirror the base images' own source alongside each release the way syslog-ng's now is (`scripts/source-mirror.json` + `write_source_offer()`), or to keep relying on the distributions' own source availability. §5 records that relying on the distro is normal and universally accepted for unmodified base layers — that is the de-facto posture, and it has never been ratified. If the answer is "mirror", the mechanism exists and adding a component is one entry in the pin table. |
-| 2 | **`connector-vendor-marks`** — six official ITSM/chat/comms vendor marks (ServiceNow, Jira, Slack, Twilio, PagerDuty, Microsoft Teams) inlined as verbatim brand path data with brand colours in `src/frontend/src/components/ConnectorLogos.tsx` and minified into the shipped SPA. | LicenseRef-Trademark-ToU (no copyright licence) | 239 | Found 2026-09-04 while implementing D5; the owner ruled on the CLOUD marks only. Same class as D5, and it was invisible to the audit until then: the 2026-09-03 housekeeping deleted `assets/connectors/{jira,servicenow}.svg` as unreferenced dead files, but the identical marks live on inline WITH references (`tabs/admin.tsx`, `pages/appobs/providers.tsx`) — the file was closed and the exposure was not. Decide: (a) keep the six and record each mark's source package and terms URL beside it, the `cloudicons/README.md` pattern, or (b) replace with neutral connector glyphs exactly as D5 did for the clouds. |
+| 2 | ~~**`connector-vendor-marks`**~~ — **CLOSED 2026-09-05, tracker 239.** Six official ITSM/chat/comms vendor marks (ServiceNow, Jira, Slack, Twilio, PagerDuty, Microsoft Teams) were inlined as verbatim brand path data with brand colours in `src/frontend/src/components/ConnectorLogos.tsx` and minified into the shipped SPA. | LicenseRef-Trademark-ToU (no copyright licence) | 239 | Found 2026-09-04 while implementing D5; the owner ruled on the CLOUD marks only. Same class as D5, and it was invisible to the audit until then: the 2026-09-03 housekeeping deleted `assets/connectors/{jira,servicenow}.svg` as unreferenced dead files, but the identical marks lived on inline WITH references — the file was closed and the exposure was not. **Ruled option (b):** replaced with generic Correlix functional glyphs exactly as D5 did for the clouds. A connector is now identified by its FUNCTION (ITSM ticket, work-item board, chat bubble, collaborators, handset, incident beacon, plug) plus the vendor's name as plain text; the registry is `src/frontend/src/components/ConnectorGlyph.tsx` and the rule for future connectors is `docs/design/UI_CONNECTOR_MARKS.md`. The exception is now `status: FIXED` and the audit no longer prints it. |
 
-Both are registered in `scripts/license-data.json` as `status: OPEN` exceptions
-carrying an `owner_decision`, which is what makes `open_findings()` print them.
+`busybox` remains registered in `scripts/license-data.json` as a `status: OPEN`
+exception carrying an `owner_decision`, which is what makes `open_findings()`
+print it; `connector-vendor-marks` is `status: FIXED` and no longer prints.
 `tests/test_license_audit.py` guards the printing itself — including, with a
 synthetic injection, the case where an OPEN exception matches nothing in the
 inventory, which is exactly how `busybox` stayed invisible for months.
@@ -537,9 +540,10 @@ Beyond that, six items need an owner call — Grafana's AGPL posture being the o
 a customer's counsel will ask about first, and the Cisco/Arista MIB files being
 the two with the cheapest fixes.
 
-> **Where this stands now (2026-09-04, unchanged 2026-09-05).** All five
-> attribution counts above are CLOSED (§2 status update) and all six owner calls
-> are RULED (§4). What remains is **§4a: `busybox` (tracker 238) and
-> `connector-vendor-marks` (tracker 239)** — two acknowledged findings the audit
-> prints on every run and that genuinely await an owner decision. Nothing else
-> in this document is outstanding.
+> **Where this stands now (2026-09-05).** All five attribution counts above are
+> CLOSED (§2 status update) and all six owner calls are RULED (§4).
+> `connector-vendor-marks` (tracker 239) was ruled and built on 2026-09-05 —
+> the six vendor marks are gone, replaced by generic Correlix functional glyphs.
+> What remains is **§4a: `busybox` (tracker 238)** — the one acknowledged
+> finding the audit still prints and that genuinely awaits an owner decision.
+> Nothing else in this document is outstanding.
