@@ -15,9 +15,21 @@
 #     README.md                          customer quickstart (run one command)
 #     ADVANCED.md                        external-Kafka + advanced settings
 #     TROUBLESHOOTING.md                 customer-safe fixes
+#     correlix-setup                     graphical installer (7b)
+#     correlix-debug                     pipeline debugger CLI (7c)
+#     correlix-licence                   licence verify/show CLI (7d)
 #     LICENSES.md                        third-party distribution notices
 #                                        (GENERATED from docs/THIRD_PARTY_LICENSES.md
 #                                         by scripts/license-audit.py — never hand-written)
+#     LICENSE                            Correlix's OWN licence (Apache-2.0),
+#     LICENSING.md                       which directory is core vs commercial,
+#     LICENSES/                          both SPDX texts — copied verbatim from
+#                                        the repo root; LICENSES.md's footer
+#                                        points at all three, so they ship or
+#                                        the footer is a dangling reference
+#     source-offer/                      corresponding source for the copyleft
+#                                        components we redistribute (GPL/LGPL),
+#                                        mirrored per release — see write_source_offer()
 #
 # Client install (the whole thing):
 #   ./install-correlix.sh
@@ -49,6 +61,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 OUT="$ROOT/dist"
 PROFILE="full"
 LICENSES_ONLY=0
+SOURCE_OFFER_ONLY=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --core) PROFILE="core"; shift ;;
@@ -58,6 +71,11 @@ while [ $# -gt 0 ]; do
     # tarballs — so CI can assert the customer notice is correct on every
     # commit instead of only when someone cuts a bundle.
     --licenses-only) LICENSES_ONLY=1; shift ;;
+    # Dry-run for the GPL/LGPL source-offer path: mirror the corresponding
+    # source tarballs into the bundle and stop. Same shape as --licenses-only,
+    # so CI (and tests/test_source_offer.py) can prove the source offer is
+    # honoured without cutting a whole bundle.
+    --source-offer-only) SOURCE_OFFER_ONLY=1; shift ;;
     *) echo "unknown arg: $1" >&2; exit 2 ;;
   esac
 done
@@ -125,10 +143,16 @@ cat <<'FTR'
 
 ## Correlix's own code
 
-Correlix application code and this bundle's install tooling are proprietary to
-Correlix. No component above places any disclosure, relicensing or network-use
-obligation on it: nothing under a copyleft licence is linked into, or bundled
-into, any binary Correlix builds.
+Correlix is open core (owner decision 2026-09-04). The statement of record is:
+
+Correlix core is licensed under the Apache License, Version 2.0. Commercial add-on modules are licensed under the Correlix Enterprise License (LicenseRef-Correlix-Enterprise) — see LICENSING.md.
+
+The full texts ship beside this file: LICENSE (Apache-2.0), LICENSING.md (which
+directory is which) and LICENSES/ (both licence texts, by SPDX id).
+
+No component above places any disclosure, relicensing or network-use obligation
+on Correlix's own code under either licence: nothing under a copyleft licence is
+linked into, or bundled into, any binary Correlix builds.
 FTR
 } > "$BUNDLE_DIR/LICENSES.md"
 
@@ -136,7 +160,11 @@ FTR
   # this replaced). Each string below is one of the things the old hand-written
   # file got wrong or left out; if the generator or the grep above ever drops
   # them, the build stops instead of shipping incomplete attribution.
-  for want in 'syslog-ng' 'keycloak' 'elkjs' 'certifi' 'fontsource' 'jackc/pgx' 'Written offer'; do
+  # The 2026-09-04 owner decisions add three more things the customer notice
+  # must SAY, not merely imply: Grafana's AGPL posture (D1), the Red Hat UBI
+  # EULA Keycloak ships under (D6), and where the GPL source actually is (D2).
+  for want in 'syslog-ng' 'keycloak' 'elkjs' 'certifi' 'fontsource' 'jackc/pgx' \
+              'Written offer' 'Affero' 'Universal Base Image' 'source-offer/'; do
     grep -qi -- "$want" "$BUNDLE_DIR/LICENSES.md" \
       || { echo "FATAL: bundle LICENSES.md is missing '$want' — the generated third-party notices are incomplete" >&2; exit 1; }
   done
@@ -147,11 +175,192 @@ FTR
     echo "FATAL: bundle LICENSES.md claims a GPL-3.0 licence with no component to justify it (syslog-ng is LGPL-2.1+/GPL-2.0+, NOT GPL-3.0)" >&2; exit 1
   fi
   echo "   third-party notices generated ($(wc -l < "$BUNDLE_DIR/LICENSES.md") lines, licence gate green)"
+
+  # The project's OWN licence, shipped beside the third-party notices — because
+  # LICENSES.md's footer now points at it. A licence statement that names a file
+  # the customer did not receive is worse than no statement: it reads as a
+  # deliberate omission. Copied, never generated: these are the authoritative
+  # texts, and a bundle-local rewrite of a licence is exactly the drift the
+  # open-core decision (2026-09-04) exists to prevent.
+  for f in LICENSE LICENSING.md; do
+    [ -f "$ROOT/$f" ] \
+      || { echo "FATAL: $ROOT/$f is missing — the bundle's LICENSES.md footer points at it (open-core decision 2026-09-04)" >&2; exit 1; }
+    cp "$ROOT/$f" "$BUNDLE_DIR/$f"
+  done
+  [ -d "$ROOT/LICENSES" ] \
+    || { echo "FATAL: $ROOT/LICENSES/ is missing — the bundle must carry both SPDX licence texts" >&2; exit 1; }
+  rm -rf "$BUNDLE_DIR/LICENSES"
+  cp -R "$ROOT/LICENSES" "$BUNDLE_DIR/LICENSES"
+  # Both texts, by SPDX id, or the footer's third claim is false too.
+  for t in Apache-2.0 Correlix-Enterprise; do
+    [ -s "$BUNDLE_DIR/LICENSES/$t.txt" ] \
+      || { echo "FATAL: bundle LICENSES/$t.txt is missing or empty" >&2; exit 1; }
+  done
+  echo "   project licence shipped (LICENSE, LICENSING.md, LICENSES/)"
+}
+
+# --- GPL/LGPL corresponding source: MIRRORED, not merely offered ------------
+# Licence audit D2, owner decision 2026-09-04 (docs/security/LICENSE_AUDIT_2026-09-03.md
+# §4 D2). We redistribute syslog-ng as an unmodified upstream container image.
+# syslog-ng OSE 4.7.1 is LGPL-2.1-or-later for the core and GPL-2.0-or-later for
+# modules/ and scl/ (verified against COPYING at tag syslog-ng-4.7.1), with NO
+# OpenSSL linking exception. GPL-2.0 §3 lets a distributor discharge the source
+# obligation either by shipping the corresponding source WITH the binary (§3a) or
+# by a written offer good for three years (§3b). The owner chose §3a: mirror the
+# exact upstream tarball into every release. A three-year offer is a promise that
+# outlives repos, renames and companies; a tarball in the customer's hands is not.
+#
+# FAIL CLOSED (scripts/CLAUDE.md §16.1). No pin, no network, a short read or a
+# checksum mismatch is a HARD BUILD FAILURE. A bundle must never carry a
+# source-offer directory that does not contain the source it claims to — that is
+# worse than having no directory at all, because it reads as compliance.
+#
+# The pin table is scripts/source-mirror.json (reviewed, checked in; it records
+# that upstream publishes no checksum of its own, so the sha256 there is our own
+# measurement, taken once and enforced forever). Air-gapped build hosts point
+# CORRELIX_SOURCE_MIRROR_DIR at a directory of pre-fetched tarballs; the checksum
+# gate applies to those exactly as it does to a download, so the offline path is
+# a convenience, never a bypass.
+write_source_offer() {
+  echo "-- mirroring GPL/LGPL corresponding source"
+  local pins="${CORRELIX_SOURCE_PINS:-$ROOT/scripts/source-mirror.json}"
+  [ -f "$pins" ] || { echo "FATAL: source-offer pin table not found at $pins — refusing to build a bundle whose GPL source offer cannot be honoured" >&2; exit 1; }
+
+  local offer="$BUNDLE_DIR/source-offer"
+  mkdir -p "$offer"
+
+  # One tab-separated line per component. python3 is already a hard requirement
+  # above; a malformed pin table aborts here by name rather than yielding an
+  # empty loop that would silently ship no source at all.
+  local rows
+  rows="$(python3 - "$pins" <<'PYEOF'
+import json, sys
+try:
+    with open(sys.argv[1], encoding="utf-8") as fh:
+        data = json.load(fh)
+except (OSError, ValueError) as exc:
+    print(f"pin table unreadable: {exc}", file=sys.stderr)
+    raise SystemExit(1)
+comps = data.get("components") or []
+if not comps:
+    print("pin table declares no components", file=sys.stderr)
+    raise SystemExit(1)
+for c in comps:
+    missing = [k for k in ("name", "version", "file", "url", "sha256", "license") if not c.get(k)]
+    if missing:
+        print(f"component {c.get('name', '?')} is missing {missing}", file=sys.stderr)
+        raise SystemExit(1)
+    # The file name becomes a path under the bundle and the URL is fetched.
+    # Both are reviewed and checked in, but a pin table is still input: a
+    # traversing name or a plaintext URL must fail here, not be written.
+    if "/" in c["file"] or c["file"].startswith("."):
+        print(f"component {c['name']} has an unsafe file name {c['file']!r}", file=sys.stderr)
+        raise SystemExit(1)
+    if not c["url"].startswith("https://"):
+        print(f"component {c['name']} must be fetched over TLS, got {c['url']!r}", file=sys.stderr)
+        raise SystemExit(1)
+    if len(c["sha256"]) != 64 or not all(ch in "0123456789abcdef" for ch in c["sha256"]):
+        print(f"component {c['name']} has a malformed sha256", file=sys.stderr)
+        raise SystemExit(1)
+    print("\t".join((c["name"], c["version"], c["file"], c["url"], c["sha256"], c["license"], c.get("notes", ""))))
+PYEOF
+)" || { echo "FATAL: could not read the source-offer pin table ($pins)" >&2; exit 1; }
+
+  local readme="$offer/README"
+  {
+    printf 'Corresponding source for the copyleft components Correlix redistributes\n'
+    printf '=====================================================================\n\n'
+    cat <<'OFFERHDR'
+Correlix ships some third-party software under the GNU General Public License
+and the GNU Lesser General Public License. Those licences require that anyone
+who receives the binaries can also get the source they were built from.
+
+THIS DIRECTORY IS THAT SOURCE. Each archive below is the complete, unmodified
+upstream source release for the exact version of the component this bundle
+contains. Nothing here has been patched, stripped or re-packaged by Correlix —
+the checksums are recorded so you can confirm that yourself.
+
+You may use, study, modify and redistribute each component under the terms of
+its own licence, independently of Correlix. The licence texts ship inside the
+component's own archive (COPYING / GPL.txt / LGPL.txt) and the components are
+listed in LICENSES.md at the root of this bundle.
+
+Correlix's own source code is NOT placed under these licences and is not
+included here: every copyleft component runs as its own separate, unmodified
+container process, so no Correlix code is combined with or derived from it.
+
+OFFERHDR
+    printf 'Components\n----------\n\n'
+    printf '%s\n' "$rows" | while IFS="$(printf '\t')" read -r name version file url sha license notes; do
+      printf '  %s %s\n' "$name" "$version"
+      printf '    file     : %s\n' "$file"
+      printf '    licence  : %s\n' "$license"
+      printf '    upstream : %s\n' "$url"
+      printf '    sha256   : %s\n' "$sha"
+      [ -n "$notes" ] && printf '    note     : %s\n' "$notes"
+      printf '\n'
+    done
+    cat <<'OFFERFTR'
+Verifying
+---------
+
+    sha256sum -c ../SHA256SUMS 2>/dev/null | grep source-offer
+
+(The bundle-wide SHA256SUMS covers every file in this directory.)
+
+Questions about these components, or a source request for a component not
+listed here, can be sent to the address in the bundle's LICENSES.md.
+OFFERFTR
+  } > "$readme"
+
+  # Fetch + verify. A `while read` loop would run the body in a subshell, where
+  # `exit 1` cannot fail the build — so iterate in the parent shell instead.
+  local line name version file url sha license notes dest got
+  local n=0
+  while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    IFS="$(printf '\t')" read -r name version file url sha license notes <<<"$line"
+    dest="$offer/$file"
+
+    if [ -n "${CORRELIX_SOURCE_MIRROR_DIR:-}" ] && [ -f "$CORRELIX_SOURCE_MIRROR_DIR/$file" ]; then
+      # Air-gapped/offline build host: take the local copy, then verify it the
+      # same way. Local provenance is not trusted provenance.
+      echo "   $name $version <- $CORRELIX_SOURCE_MIRROR_DIR/$file (local mirror)"
+      cp "$CORRELIX_SOURCE_MIRROR_DIR/$file" "$dest"
+    else
+      echo "   $name $version <- $url"
+      command -v curl >/dev/null || { echo "FATAL: curl is required to mirror $name's corresponding source (or set CORRELIX_SOURCE_MIRROR_DIR to a directory holding $file)" >&2; exit 1; }
+      # Bounded + retried (§16.3 / CLAUDE.md §9). stderr stays visible so a real
+      # network failure is readable rather than inferred from a missing file.
+      curl -fsSL --retry 3 --retry-delay 2 --retry-all-errors \
+           --connect-timeout 20 --max-time 600 -o "$dest" "$url" \
+        || { echo "FATAL: could not fetch $name $version corresponding source from $url. A GPL/LGPL binary must never ship without its source (licence audit D2). Fix the network, or pre-fetch the file and set CORRELIX_SOURCE_MIRROR_DIR." >&2; exit 1; }
+    fi
+
+    got="$(sha256sum "$dest" | awk '{print $1}')"
+    if [ "$got" != "$sha" ]; then
+      # Do not leave the bad bytes behind for a later step to pick up.
+      rm -f "$dest"
+      echo "FATAL: checksum mismatch for $file — expected $sha, got $got. Refusing to ship an unverified source tarball (scripts/source-mirror.json is the reviewed pin; if upstream legitimately re-cut the release, re-measure and update that file deliberately)." >&2
+      exit 1
+    fi
+    echo "     sha256 OK ($sha)"
+    n=$((n + 1))
+  done <<<"$rows"
+
+  [ "$n" -gt 0 ] || { echo "FATAL: source-offer mirrored zero components — the pin table resolved nothing" >&2; exit 1; }
+  echo "   source offer complete ($n component(s) in $offer)"
 }
 
 if [ "$LICENSES_ONLY" = "1" ]; then
   write_licenses
   echo "== licences-only run: $BUNDLE_DIR/LICENSES.md"
+  exit 0
+fi
+
+if [ "$SOURCE_OFFER_ONLY" = "1" ]; then
+  write_source_offer
+  echo "== source-offer-only run: $BUNDLE_DIR/source-offer/"
   exit 0
 fi
 
@@ -209,11 +418,23 @@ fi
 if printf '%s\n' "$IMAGES" | grep -Eqi 'redis|prometheus'; then
   echo "FATAL: redis/prometheus image in bundle set — removed components (#97) must not ship" >&2; exit 1
 fi
+# Gotenberg (the `pdf` profile) must NEVER enter a customer bundle — owner
+# decision 2026-09-04, licence audit D6. Gotenberg's own code is MIT, but the
+# image bundles PDFtk (GPL-2.0-or-later), LibreOffice (MPL-2.0),
+# ttf-mscorefonts-installer (a PROPRIETARY Microsoft EULA that restricts
+# redistribution) and, on amd64, Google Chrome (proprietary, not Chromium). It
+# is also pinned to a floating `:8` major tag, so what it bundles can change
+# under us between rebuilds. This was a written convention until now; a
+# convention is worth nothing the day someone adds `--profile pdf` to
+# BASE_PROFILES, so it is a build failure instead.
+if printf '%s\n' "$IMAGES" | grep -qi 'gotenberg'; then
+  echo "FATAL: gotenberg image in bundle set — the pdf profile carries a proprietary Microsoft font EULA, PDFtk (GPL-2.0+) and Google Chrome, and must never ship to a customer (licence audit D6). Switch to a slim variant without msttcorefonts/PDFtk and re-audit before reversing this." >&2; exit 1
+fi
 printf '%s\n' "$IMAGES" | grep -q '^apache/kafka:' \
   || { echo "FATAL: apache/kafka missing from bundle image set" >&2; exit 1; }
 printf '%s\n' "$IMAGES" | grep -q '^valkey/valkey:' \
   || { echo "FATAL: valkey missing from bundle image set" >&2; exit 1; }
-echo "   licensing guards passed (kafka+valkey in; redpanda/redis/prometheus out)"
+echo "   licensing guards passed (kafka+valkey in; redpanda/redis/prometheus/gotenberg out)"
 
 # 3b. Ensure every bundled image exists locally. App images were just built;
 #     third-party ones are digest-pinned pulls that a dev host has but a fresh
@@ -266,6 +487,11 @@ for spec in $ADDONS; do
   [ -n "$PACK_IMAGES" ] || { echo "FATAL: addon $name resolved no images" >&2; exit 1; }
   if printf '%s\n' "$PACK_IMAGES" | grep -Eqi 'redpanda|redis|prometheus'; then
     echo "FATAL: forbidden image (redpanda/redis/prometheus — removed components) in addon $name" >&2; exit 1
+  fi
+  # Same rule for add-on packs: an add-on is still something the customer
+  # receives (licence audit D6).
+  if printf '%s\n' "$PACK_IMAGES" | grep -qi 'gotenberg'; then
+    echo "FATAL: gotenberg image in addon $name — proprietary Microsoft font EULA + PDFtk (GPL-2.0+) + Chrome; must never ship (licence audit D6)" >&2; exit 1
   fi
   for img in $PACK_IMAGES; do
     docker image inspect "$img" >/dev/null 2>&1 || { echo "-- pulling $img"; docker pull -q "$img"; }
@@ -339,6 +565,16 @@ cp "$ROOT/scripts/install-correlix.sh" "$BUNDLE_DIR/install-correlix.sh"
 cp "$ROOT/scripts/prepare-host.sh" "$BUNDLE_DIR/prepare-host.sh"
 chmod +x "$BUNDLE_DIR/install-correlix.sh" "$BUNDLE_DIR/prepare-host.sh"
 
+# The bundle ships THREE Go binaries (7b, 7c, 7d). Check the toolchain once, by
+# name,
+# instead of letting `go: command not found` surface as an opaque set -e abort
+# in the middle of a 20-minute build (§16.1/§16.2: a missing tool is reported by
+# name, never inferred from a broken build). There is no "skip the binary"
+# branch on purpose — a bundle silently missing a shipped artifact is the exact
+# omission this section exists to prevent.
+command -v go >/dev/null \
+  || { echo "FATAL: go toolchain not found on the build host — correlix-setup (7b), correlix-debug (7c) and correlix-licence (7d) are shipped bundle artifacts and must never be silently omitted. Install Go (see go.mod's toolchain pin) and rerun." >&2; exit 1; }
+
 # 7b. The graphical installer (correlix-setup): a static stdlib-only Go binary
 #     serving the embedded setup wizard. Built here so the customer host needs
 #     nothing — launched via `./install-correlix.sh gui` (or directly).
@@ -346,6 +582,75 @@ echo "-- building correlix-setup (graphical installer)"
 ( cd "$ROOT/scripts/installer-gui" && \
   CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o "$BUNDLE_DIR/correlix-setup" . )
 chmod +x "$BUNDLE_DIR/correlix-setup"
+
+# 7c. The pipeline debugger (correlix-debug): the host-side operator CLI that
+#     traces ONE marked synthetic record through the whole pipeline and writes
+#     one log file per module. Design docs/design/PIPELINE_DEBUGGER_2026-09-04.md
+#     §1; runbook docs/runbooks/pipeline-debug.md.
+#
+#     WHY IT SHIPS IN A CUSTOMER BUNDLE (the question §16.5 forces us to answer
+#     for every shipped artifact): the design of record says "shipped in the
+#     bundle next to the installer", and the reason is the 2026-09-02 outage —
+#     telemetry went in and did not come out for three hours while every
+#     container read `healthy`. Answering "which hop lost it?" has to be
+#     possible ON the customer's host; telling a customer to install a Go
+#     toolchain and build from the source tarball is not an answer. Shipping it
+#     grants no new authority: the four /api/debug routes it drives are
+#     requirePlatformAdmin + audited, and the CLI must log in as that admin, so
+#     the binary is useless to anyone who is not already a platform admin. It
+#     therefore stays OUT of LAB_PATHS (which is the operator-only exclude list)
+#     and IS covered by SHA256SUMS below, like correlix-setup.
+#
+#     Build convention: identical to correlix-setup above — host toolchain,
+#     CGO_ENABLED=0 (static, no glibc dependency on the customer host),
+#     -trimpath -ldflags="-s -w", and NO GOOS/GOARCH override. That is this
+#     bundle's established convention for its Go binaries; the build host is the
+#     release host and the supported customer platform is Linux x86_64 (README).
+#     Pinning a different target for this one binary would make the bundle's two
+#     executables disagree about what a bundle runs on.
+echo "-- building correlix-debug (pipeline debugger)"
+( cd "$ROOT/src/backend" && \
+  CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o "$BUNDLE_DIR/correlix-debug" ./cmd/correlix-debug )
+chmod +x "$BUNDLE_DIR/correlix-debug"
+# Prove the artifact actually runs HERE rather than on the customer's host.
+# `--help` exits 0 and touches nothing (no .env, no network, no stack), so this
+# is a pure liveness check on the bytes we are about to ship. stdout is noise we
+# have inspected (the usage text); stderr is left visible so a real failure is
+# readable (§16.1).
+"$BUNDLE_DIR/correlix-debug" --help >/dev/null \
+  || { echo "FATAL: the freshly built correlix-debug does not run (--help failed) — refusing to ship an unusable binary" >&2; exit 1; }
+
+# 7d. The licence tool (correlix-licence): the host-side CLI that VERIFIES and
+#     PRINTS a Correlix licence file. Design docs/design/LICENSING_MODEL_2026-09-04.md;
+#     operator runbook docs/runbooks/licensing.md.
+#
+#     WHY IT SHIPS IN A CUSTOMER BUNDLE (the question §16.5 forces us to answer
+#     for every shipped artifact): the product is now licence-gated, so "is this
+#     licence file valid, whose is it, when does it expire, what does it grant?"
+#     is a question a customer WILL ask — typically at 02:00, when a ceiling
+#     refusal (HTTP 402) has just appeared and the api may be the thing that is
+#     down. `verify` and `show` answer it offline, from the file alone, using
+#     the SAME internal/licence code the api verifies with, so the answer on the
+#     host cannot disagree with the answer in the product.
+#
+#     It grants no authority and leaks no secret. The binary embeds only the
+#     PUBLIC verification key; `keygen`/`sign` are issuer-side subcommands that
+#     are useless without the private signing key, which is not in this repo and
+#     never enters a bundle (§16.5). It therefore stays OUT of LAB_PATHS and IS
+#     covered by SHA256SUMS below, exactly like correlix-setup and correlix-debug.
+#
+#     Build convention: identical to 7b/7c — host toolchain, CGO_ENABLED=0,
+#     -trimpath -ldflags="-s -w", no GOOS/GOARCH override.
+echo "-- building correlix-licence (licence verification tool)"
+( cd "$ROOT/src/backend" && \
+  CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o "$BUNDLE_DIR/correlix-licence" ./cmd/correlix-licence )
+chmod +x "$BUNDLE_DIR/correlix-licence"
+# Same liveness proof as correlix-debug: `--help` exits 0, reads no file, opens
+# no socket and needs no licence, so this measures the bytes we are about to
+# ship and nothing else. stdout is the usage text (inspected noise); stderr
+# stays visible so a real failure is readable (§16.1).
+"$BUNDLE_DIR/correlix-licence" --help >/dev/null \
+  || { echo "FATAL: the freshly built correlix-licence does not run (--help failed) — refusing to ship an unusable binary" >&2; exit 1; }
 
 cat > "$BUNDLE_DIR/README.md" <<EOF
 # Correlix — Quick Start ($VERSION)
@@ -396,6 +701,7 @@ Optional add-ons (not started by default; enable any time):
 Something not working? See TROUBLESHOOTING.md.
 Larger deployments and advanced configuration: ADVANCED.md.
 Third-party license information: LICENSES.md.
+Source code for the GPL/LGPL components we redistribute: source-offer/.
 EOF
 
 cat > "$BUNDLE_DIR/ADVANCED.md" <<EOF
@@ -455,6 +761,42 @@ Correlix moves telemetry internally over a Kafka-compatible event bus.
   work (set \`CORRELIX_SKIP_OS_CHECK=1\` to bypass the gate) but is not
   validated.
 
+## Pipeline diagnostics (\`correlix-debug\`)
+
+When telemetry "goes in and does not come out", \`correlix-debug\` (shipped
+next to the installer) sends ONE marked synthetic record through the real
+ingest path and reports, hop by hop, where it was last seen:
+
+    ./correlix-debug --help
+    ./correlix-debug trace --root NetOps_Observability --kind syslog --device <device-id>
+
+It writes one log file per module under
+\`NetOps_Observability/data/debug/<timestamp>-trace-<id>/\`. Package that
+session for support with:
+
+    ./correlix-debug bundle --root NetOps_Observability --last 1
+
+It signs in as the platform administrator, never writes to a device, tags
+everything it injects as synthetic (so it is excluded from your log search),
+and any log level it raises reverts automatically.
+
+## Licence file (\`correlix-licence\`)
+
+Correlix reads its entitlements from a signed licence file. \`correlix-licence\`
+(shipped next to the installer) answers "is this file valid, and what does it
+grant?" offline — from the file alone, without the product running:
+
+    ./correlix-licence show    <licence.json>
+    ./correlix-licence verify  <licence.json>
+
+\`show\` prints the customer, tier, expiry, ceilings and features. \`verify\`
+checks the signature and the dates and exits non-zero if the file is not valid
+for this product, which is the check to run BEFORE installing one. Install the
+file itself from the product's Administration → Licence page.
+
+It uses the same verification code the product uses, so its answer and the
+product's cannot disagree. It never contacts Correlix and never phones home.
+
 ## Other settings
 
 - UI port: \`./install-correlix.sh install --ui-port 9443\`
@@ -490,6 +832,12 @@ collected data but keeps your URL and login.
 EOF
 
 write_licenses
+# The GPL/LGPL corresponding source ships in the SAME hand-over as the binaries
+# it belongs to (GPL-2.0 §3a) — see write_source_offer() above. It is mirrored
+# AFTER the notices so LICENSES.md's written offer and the tarballs it points at
+# are produced by the same build, and BEFORE SHA256SUMS so the integrity manifest
+# covers them.
+write_source_offer
 
 # Customer-doc licensing guard: nothing customer-facing mentions Redpanda
 # outside LICENSES.md's "not shipped" statement.
@@ -523,8 +871,15 @@ fi
 
 # Integrity manifest covers EVERY shipped artifact, including the
 # correlix-setup binary (design gui-installer-2026-08.md §5 H6 — a binary
-# outside SHA256SUMS is an unverifiable execution path on the customer host).
-(cd "$BUNDLE_DIR" && sha256sum ./*.tar.* ./*.md MANIFEST install-correlix.sh prepare-host.sh correlix-setup > SHA256SUMS)
+# outside SHA256SUMS is an unverifiable execution path on the customer host)
+# and, for the same reason, correlix-debug (7c) and correlix-licence (7d).
+# LICENSE and LICENSES/*.txt are listed explicitly: LICENSING.md is caught by
+# ./*.md, but the two licence TEXTS the bundle's notice points at would
+# otherwise sit outside the integrity manifest.
+# It also covers ./source-offer/* (licence audit D2): the mirrored GPL/LGPL
+# corresponding source is a compliance artifact, and a customer must be able to
+# prove the tarball they received is the one we measured.
+(cd "$BUNDLE_DIR" && sha256sum ./*.tar.* ./*.md LICENSE ./LICENSES/*.txt MANIFEST install-correlix.sh prepare-host.sh correlix-setup correlix-debug correlix-licence ./source-offer/* > SHA256SUMS)
 
 if [ -n "$SIGNING_FPR" ]; then
   gpg --batch --yes --local-user "$SIGNING_FPR" --armor \

@@ -1,5 +1,8 @@
-// CloudResourceNode.test.tsx — the cloud resource card wears the official
-// provider mark, and the cloud registry is ISOLATED from the default one.
+// CloudResourceNode.test.tsx — the cloud resource card wears the ORIGINAL
+// provider-tagged cloud glyph (licence audit D5, 2026-09-04: the providers'
+// official trademark icons were removed, so the card no longer renders an
+// <img> asset — it draws an inline <svg> whose only provider-specific element
+// is a plain letter tag). The cloud registry stays ISOLATED from the default one.
 
 import { describe, it, expect, afterEach } from "vitest";
 import { render, cleanup } from "@testing-library/react";
@@ -28,15 +31,41 @@ function renderNode(provider: string, role: string) {
   );
 }
 
+/** The tag each provider's card must carry — nothing else identifies it. */
+const TAGS: Record<string, string> = { aws: "AWS", azure: "AZ", gcp: "GCP" };
+
 describe("CloudResourceNode", () => {
-  it("renders the official provider mark for an AWS resource", () => {
+  it("renders the tagged cloud glyph for an AWS resource", () => {
     const { container } = renderNode("aws", "igw");
-    expect(container.querySelector("img")).toBeTruthy();
+    expect(container.querySelector("svg")).toBeTruthy();
+    expect([...container.querySelectorAll("text")].map((t) => t.textContent)).toContain("AWS");
   });
 
-  it("renders the official provider mark for a GCP resource", () => {
+  it("renders the tagged cloud glyph for a GCP resource", () => {
     const { container } = renderNode("gcp", "subnet");
-    expect(container.querySelector("img")).toBeTruthy();
+    expect([...container.querySelectorAll("text")].map((t) => t.textContent)).toContain("GCP");
+  });
+
+  it("carries no provider trademark asset and no provider brand colour", () => {
+    for (const provider of [...Object.keys(TAGS), "nifcloud"]) {
+      const { container } = renderNode(provider, "igw");
+      const html = container.innerHTML.toLowerCase();
+      expect(container.querySelector("img"), provider).toBeNull();
+      for (const hex of ["#ff9900", "#0078d4", "#4285f4", "#ea4335", "#34a853", "#fbbc05"]) {
+        expect(html, `${provider} leaked ${hex}`).not.toContain(hex);
+      }
+      for (const asset of ["assets/cloud/", "aws.svg", "azure.svg", "gcp.svg"]) {
+        expect(html, `${provider} leaked ${asset}`).not.toContain(asset);
+      }
+      cleanup();
+    }
+  });
+
+  it("an unrecognised provider falls back to the UNTAGGED cloud, never another provider's mark", () => {
+    const { container } = renderNode("nifcloud", "subnet");
+    const texts = [...container.querySelectorAll("text")].map((t) => t.textContent);
+    for (const tag of Object.values(TAGS)) expect(texts).not.toContain(tag);
+    expect(container.querySelector("svg path")).toBeTruthy();
   });
 
   it("cloud registry SWAPS cloudNode but leaves the default registry untouched", () => {

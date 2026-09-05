@@ -34,7 +34,8 @@ ARG BUILD_TIME=unknown
 # running process does, without starting it.
 LABEL org.opencontainers.image.revision="${GIT_SHA}" \
       org.opencontainers.image.created="${BUILD_TIME}" \
-      org.opencontainers.image.title="correlix-backend"
+      org.opencontainers.image.title="correlix-backend" \
+      org.opencontainers.image.licenses="Apache-2.0"
 COPY --from=build /out/api /api
 # SEC-020.1: the declared-transport ledger rides with the binary so the posture
 # metrics and the transport-posture view read the same inventory the preflight

@@ -101,6 +101,43 @@ Everything, in the sense that this is the first release. The highlights a new op
   *consuming* rather than merely *running*, and pages your phone independently of the product's own
   notifiers — because a notifier cannot report its own death.
 
+### Licensing and third-party components
+- **Correlix is open core.** Correlix core is licensed under the Apache License, Version 2.0.
+  Commercial add-on modules are licensed under the Correlix Enterprise License
+  (LicenseRef-Correlix-Enterprise) — see LICENSING.md. The default is open: a file with no SPDX
+  header, in a directory with no Enterprise notice file, is Apache-2.0, so nothing becomes
+  commercial by omission. `LICENSE`, `LICENSING.md` and `LICENSES/` ship at both repository roots
+  and in the offline bundle.
+- **Every third-party licence obligation is inventoried, and the inventory is generated from the
+  tree** rather than remembered. The running product serves it at `/licenses/` (account menu →
+  *Third-party licences*), the offline bundle ships it as `LICENSES.md`, and
+  `scripts/license-audit.py` fails the build if a component arrives whose licence nobody reviewed.
+- **The GPL source we owe now ships with the binaries.** syslog-ng OSE is GPL-2.0-or-later for its
+  modules and LGPL-2.1-or-later for its core. Rather than rely on a three-year written offer, every
+  bundle carries `source-offer/syslog-ng-4.7.1.tar.gz` — the complete unmodified upstream release,
+  checksummed in `SHA256SUMS`. The build fails rather than ship a bundle without it.
+- **Grafana is optional and unmodified.** Grafana is AGPL-3.0-only and reaches a deployment only
+  through the optional `self-monitoring` add-on. It runs as the stock upstream image, configured
+  only through Grafana's own settings. The proxy no longer rewrites the pages Grafana serves, so
+  the "unmodified" claim is one you can check rather than one you have to take. Correlix's own
+  source carries no AGPL obligation.
+- **Keycloak ships on a Red Hat Universal Base Image**, which is governed by the Red Hat UBI EULA
+  rather than an open-source licence. Correlix accepts that agreement and redistributes the image
+  unmodified; installing Correlix means you receive it on the same terms. Read the agreement at
+  <https://www.redhat.com/licenses/EULA_Red_Hat_Universal_Base_Image_English_20190422.pdf>. The
+  terms and the acceptance are also stated in `NOTICE`, in the generated notices, and in the
+  customer documentation. If the EULA is not acceptable in your environment, run Correlix against
+  an external identity provider instead.
+- **No vendor trademark files ship any more.** The AWS, Azure and Google Cloud marks that used to be
+  embedded in the API binary and the web interface are replaced by original Correlix cloud glyphs.
+  Cloud nodes still read as AWS, Azure or GCP; the artwork is ours.
+- **Nothing source-available is present.** No SSPL, BUSL, Elastic or RSAL-licensed software appears
+  anywhere in the product, and nothing under a copyleft licence is linked into any binary Correlix
+  builds.
+
+Full detail: [`docs/THIRD_PARTY_LICENSES.md`](THIRD_PARTY_LICENSES.md) and the customer-facing
+summary at **Deploy → Third-party components and licences** in the documentation portal.
+
 ---
 
 ## Upgrading

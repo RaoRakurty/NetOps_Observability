@@ -1,4 +1,10 @@
 FROM python:3.12-slim
+
+# The image's licence, in OCI metadata, so `docker image inspect` answers it
+# without unpacking the image. Correlix core is Apache-2.0; see LICENSING.md for
+# which parts of the tree are commercial add-ons instead. Enforced by
+# scripts/licensing-gate.py check D and tests/test_licensing_consistency.py.
+LABEL org.opencontainers.image.licenses="Apache-2.0"
 # google-auth: the GCP service-account OAuth flow needs RS256 signing that the
 # stdlib cannot do — same dependency posture as boto3 (this is the lab poller
 # container, not the stdlib-only Go backend).

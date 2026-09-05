@@ -18,6 +18,7 @@ Run:  python3 -m pytest tests/test_license_audit.py -v
 """
 import json
 import os
+import re
 import subprocess
 import sys
 
@@ -466,8 +467,17 @@ def test_icon_component_carries_its_feather_and_lucide_notices():
     assert text.count("upstream:") >= 15, (
         "Icon.tsx should record per-icon provenance for the ~20 glyphs the audit "
         "identified as verbatim Feather/Lucide path data")
+    # `Feather \`activity\`` is deliberately NOT in this list. It was the
+    # provenance of the unused `logo` entry, which nothing rendered (the top bar
+    # shows the BLOGO5 artwork and the favicon is the original network-eye SVG);
+    # the entry was deleted on 2026-09-04, so requiring its attribution would be
+    # requiring credit for path data we no longer ship. See the correction note
+    # at the top of docs/security/LICENSE_AUDIT_2026-09-03.md.
+    assert "Feather `activity`" not in text, (
+        "the `logo`/activity path data is back in Icon.tsx — if that is "
+        "deliberate, restore its provenance comment and re-add it here")
     for glyph in ("Feather `shield`", "Feather `compass`", "Feather `sliders`",
-                  "Feather `activity`", "Lucide `check`", "Lucide `mail`"):
+                  "Feather `log-out`", "Lucide `check`", "Lucide `mail`"):
         assert glyph in text, f"Icon.tsx does not record provenance for {glyph}"
 
 
@@ -483,18 +493,202 @@ def test_unreferenced_vendor_marks_were_deleted():
 
 
 def test_closed_findings_record_their_evidence():
-    """A finding flipped to FIXED without evidence is a finding nobody can
-    re-verify. OPEN ones still need an owner decision and are printed by every
-    audit run instead."""
+    """A finding flipped to FIXED or DECIDED without evidence is a finding
+    nobody can re-verify. OPEN ones still need an owner decision and are printed
+    by every audit run instead."""
     data = license_audit.load_data()
     for name, exc in data.get("exceptions", {}).items():
         status = str(exc.get("status", "")).upper()
         if status == "FIXED":
             assert exc.get("evidence"), (
                 f"exception '{name}' is FIXED but records no evidence path")
+        elif status == "DECIDED":
+            for field in ("decided", "rationale", "evidence"):
+                assert exc.get(field), (
+                    f"exception '{name}' is DECIDED but records no `{field}`. An "
+                    f"owner decision that does not say WHAT was decided, WHY, and "
+                    f"WHERE to check it is indistinguishable from a rubber stamp.")
+            assert "DECIDED" in str(exc.get("owner_decision", "")), (
+                f"exception '{name}' has status DECIDED but its owner_decision "
+                f"text still reads as pending")
+            assert "REQUIRED" not in str(exc.get("owner_decision", "")).split(".")[0], (
+                f"exception '{name}' is DECIDED but its owner_decision still "
+                f"opens by demanding a decision")
         elif status.startswith("OPEN"):
             assert "REQUIRED" in str(exc.get("owner_decision", "")), (
                 f"exception '{name}' is OPEN but names no owner decision")
+
+
+def test_an_open_finding_is_printed_even_when_it_matches_nothing():
+    """The silence bug, guarded.
+
+    `open_findings()` used to skip any exception whose name matched no
+    inventoried component. `busybox` is exactly that shape — the inventory is
+    built from image REFERENCES in compose files and Dockerfiles, and busybox is
+    a base LAYER inside other images, so it never appeared. Combined with its
+    missing `status`, an OPEN owner question was invisible for months. An
+    unmatched OPEN finding must now print, labelled."""
+    data = license_audit.load_data()
+    comps = license_audit.build_inventory(data)
+    present = {c.name for c in comps} | {c.key for c in comps}
+    unmatched_open = [n for n, e in data.get("exceptions", {}).items()
+                      if str(e.get("status", "")).upper().startswith("OPEN")
+                      and n not in present]
+    findings = license_audit.open_findings(comps, data)
+    for name in unmatched_open:
+        assert any(name in f for f in findings), (
+            f"OPEN exception '{name}' matches no inventoried component and is "
+            f"not printed — it is invisible, which is how it rotted before")
+        assert any(name in f and "NOT MATCHED" in f for f in findings), (
+            f"'{name}' is printed but not labelled as unmatched; a reader must "
+            f"be able to tell 'we ship this and it is unresolved' from 'the "
+            f"inventory cannot see this at all'")
+
+
+def test_every_exception_declares_a_status():
+    """A missing `status` is invisible, not benign.
+
+    open_findings() only prints entries whose status starts with OPEN, so an
+    exception with NO status at all is neither closed nor reported — which is
+    how `busybox` sat with an owner_decision reading 'REQUIRED' that no audit
+    run ever printed. Every exception must say where it stands."""
+    data = license_audit.load_data()
+    comps = license_audit.build_inventory(data)
+    present = {c.name for c in comps} | {c.key for c in comps}
+    allowed = {"OPEN", "FIXED", "DECIDED", "ACCEPTED"}
+    for name, exc in data.get("exceptions", {}).items():
+        if name not in present:
+            continue
+        status = str(exc.get("status", "")).upper()
+        assert status in allowed, (
+            f"exception '{name}' has status {status!r}; expected one of "
+            f"{sorted(allowed)}. An exception with no status is never printed "
+            f"by the audit and never counted as closed.")
+
+
+# ── the six owner decisions of 2026-09-04 (audit §4 D1–D6) ──────────────────
+
+def test_the_six_owner_decisions_are_recorded():
+    """D1–D6 were the audit's open owner calls. Each is now DECIDED, and this
+    asserts the record exists rather than that someone remembers making it."""
+    data = license_audit.load_data()
+    exc = data["exceptions"]
+    expected = {
+        "grafana/grafana": "keep",                     # D1
+        "balabit/syslog-ng": "mirror-source-per-release",  # D2
+        "cisco-mib-extracts": "replace-with-ietf-rfc",  # D3
+        "arista-mibs": "fetch-at-build-time",           # D4
+        "cloud-vendor-marks": "replace-with-original-glyphs",  # D5
+        "quay.io/keycloak/keycloak": "accept-ubi-eula",  # D6
+        "gotenberg/gotenberg": "never-ship",            # D6, second half
+    }
+    for name, decided in expected.items():
+        assert name in exc, f"exception '{name}' has disappeared from license-data.json"
+        assert str(exc[name].get("status", "")).upper() == "DECIDED", (
+            f"'{name}' is one of the 2026-09-04 owner decisions and must be DECIDED, "
+            f"not {exc[name].get('status')!r}")
+        assert exc[name].get("decided") == decided, (
+            f"'{name}' records decided={exc[name].get('decided')!r}, expected {decided!r}")
+
+
+def test_grafana_ui_is_not_rewritten_by_the_proxy():
+    """D1 keeps Grafana on the express basis that it ships UNMODIFIED. The nginx
+    /grafana/ route used to `sub_filter` a stylesheet into Grafana's HTML that
+    repainted it AND hid the Grafana logo. Injecting markup into the bytes an
+    AGPL program serves to a network user is exactly what the 'unmodified'
+    claim cannot survive, and stripping the mark is independently contrary to
+    Grafana Labs' trademark policy. If this test fails, either the injection is
+    back or D1 has to be re-decided."""
+    for conf in ("default.conf", "default-mtls.conf"):
+        body = read(os.path.join(ROOT, "deployment", "docker", "nginx", conf))
+        start = body.index("location /grafana/ {")
+        end = body.index("location ", start + 1)
+        # Comments in this block deliberately NAME sub_filter (the do-not-
+        # reintroduce note); only live directives count.
+        live = "\n".join(ln for ln in body[start:end].splitlines()
+                         if not ln.lstrip().startswith("#"))
+        for banned, why in (
+            ("sub_filter", "rewrites Grafana's response body"),
+            ("grafana_typelogo", "hides Grafana's branding"),
+            ("sidemenu__logo", "hides Grafana's branding"),
+            ('Accept-Encoding ""',
+             ("strips upstream compression, which is only ever needed in order "
+              "to rewrite the body")),
+        ):
+            assert banned not in live, (
+                f"nginx/{conf} {why} again ({banned!r} is a live directive in the "
+                f"/grafana/ block) — that breaks the 'unmodified' basis of "
+                f"licence-audit decision D1")
+
+
+def test_grafana_ships_only_in_the_optional_addon_pack():
+    """The other half of D1: 'optional' has to be true of the build, not just of
+    the prose. Grafana must be profile-gated and its profile must not be in the
+    base bundle's profile set."""
+    compose = read(os.path.join(ROOT, "deployment", "docker", "docker-compose.yml"))
+    idx = compose.index("\n  grafana:\n")
+    block = compose[idx:idx + 2000]
+    assert 'profiles: ["self-monitoring"]' in block, (
+        "the grafana service is no longer gated behind the self-monitoring profile")
+    installer = read(INSTALLER)
+    base = next(ln for ln in installer.splitlines() if ln.startswith("BASE_PROFILES="))
+    assert "self-monitoring" not in base, (
+        "self-monitoring joined BASE_PROFILES — Grafana (AGPL-3.0) would ship in "
+        "the CORE bundle, which is not what decision D1 ratified")
+
+
+def test_no_correlix_image_is_built_from_grafana_or_syslog_ng():
+    """'Unmodified upstream container' means no Dockerfile of ours uses one as a
+    base. A patched image would move both D1 and D2 onto entirely different
+    ground."""
+    hits = []
+    for base, dirs, files in os.walk(ROOT):
+        dirs[:] = [d for d in dirs if d not in
+                   ("node_modules", ".git", "data", "dist", "vendor", "build")]
+        for fn in files:
+            if not fn.startswith("Dockerfile"):
+                continue
+            path = os.path.join(base, fn)
+            for line in read(path).splitlines():
+                if line.strip().upper().startswith("FROM") and (
+                        "grafana" in line.lower() or "syslog-ng" in line.lower()):
+                    hits.append(f"{os.path.relpath(path, ROOT)}: {line.strip()}")
+    assert not hits, ("a Correlix image is built FROM a copyleft upstream image, "
+                      "which would make it a modified version: " + "; ".join(hits))
+
+
+def test_gotenberg_can_no_longer_reach_a_bundle():
+    """D6's second half. This was a written rule; a rule that is not a build
+    failure is a rule that lasts until the next person adds a profile."""
+    body = read(INSTALLER)
+    assert body.count("gotenberg") >= 2, (
+        "make-installer.sh has no gotenberg guard — the pdf profile bundles "
+        "PDFtk (GPL-2.0+), a proprietary Microsoft font EULA and Google Chrome")
+    base = next(ln for ln in body.splitlines() if ln.startswith("BASE_PROFILES="))
+    assert "pdf" not in base
+    addons = next(ln for ln in body.splitlines() if ln.startswith("ADDONS="))
+    assert "pdf" not in addons
+
+
+def test_notices_state_the_agpl_and_ubi_postures():
+    """D1 and D6 are discharged by what the customer RECEIVES, not by what the
+    data file says. Both must reach the generated notices."""
+    text = read(NOTICES)
+    assert "Affero" in text and "AGPL-3.0" in text, (
+        "the notices do not state Grafana's AGPL posture")
+    assert "add-on" in text.lower() and "unmodified" in text.lower()
+    assert "Universal Base Image" in text and "EULA" in text, (
+        "the notices do not state the Red Hat UBI EULA that Keycloak ships under")
+    assert "ACCEPTS" in text, (
+        "the UBI section must state the acceptance, not merely link the terms")
+
+
+def test_notice_file_states_the_agpl_and_ubi_postures():
+    """NOTICE travels with the source tarball, which is a distribution unit of
+    its own."""
+    text = read(NOTICE_FILE)
+    for needed in ("Affero", "Universal Base Image", "source-offer/syslog-ng"):
+        assert needed in text, f"NOTICE does not record {needed!r}"
 
 
 def test_the_five_attribution_findings_are_closed():
@@ -524,3 +718,277 @@ def test_go_module_allowlist_version_matches_go_mod():
         assert f"`{pinned[0]}` in `go.mod`" in guidance, (
             f"CLAUDE.md §6 does not record {module} as pinned {pinned[0]}, which "
             f"is what go.mod says")
+
+
+# ── the two mechanisms that made a finding invisible, guarded synthetically ──
+#
+# Both tests below inject their own condition instead of asserting over whatever
+# license-data.json happens to hold today. That distinction is the whole point:
+# a test that reads the real data passes VACUOUSLY the day the real data no
+# longer exercises the mechanism, which is precisely how `busybox` sat OPEN and
+# unprinted for months. These fail if the mechanism regresses, whatever the data
+# says.
+
+def test_audit_hard_fails_on_a_vendored_path_that_no_longer_exists():
+    """Attribution must track the content it covers, and the AUDIT — not just a
+    test — has to be the thing that notices.
+
+    `collect_vendored()` existence-checks every declared path. If that check
+    were ever relaxed, a deleted or relocated file would take its attribution
+    with it silently: we would either credit something we no longer ship, or
+    (worse) ship something we no longer credit. This injects a vendored entry
+    pointing at a path that cannot exist and asserts the audit refuses to build
+    an inventory at all, naming the offending path."""
+    data = license_audit.load_data()
+    poisoned = dict(data)
+    poisoned["vendored"] = dict(data.get("vendored", {}))
+    poisoned["vendored"]["ghost-marks"] = {
+        "license": "MIT",
+        "paths": ["src/frontend/src/assets/cloud/aws.svg"],  # deleted under D5
+        "usage": "bundled-runtime",
+        "unit": "frontend image (netops-frontend) — SPA bundle",
+        "version": "in-tree",
+    }
+    with pytest.raises(license_audit.AuditError) as excinfo:
+        license_audit.collect_vendored(poisoned)
+    message = str(excinfo.value)
+    assert "ghost-marks" in message, "the failure does not name the entry at fault"
+    assert "src/frontend/src/assets/cloud/aws.svg" in message, (
+        "the failure does not name the missing path, so nobody can fix it")
+
+    # And the same failure must reach the command line as a non-zero exit, not
+    # be caught and downgraded to a warning somewhere up the call stack.
+    assert license_audit.AuditError is not Exception
+    with pytest.raises(license_audit.AuditError):
+        license_audit.build_inventory(poisoned)
+
+
+def test_no_stale_cloud_asset_path_is_declared_anywhere():
+    """D5 deleted `src/frontend/src/assets/cloud/*.svg`. A leftover reference to
+    one in a `paths` list would hard-fail the audit (the test above proves it
+    would); this asserts the data file is clean of them, so the gate stays green
+    for the right reason rather than by luck."""
+    data = license_audit.load_data()
+    for section in ("vendored", "exceptions"):
+        for name, entry in data.get(section, {}).items():
+            for key in ("paths", "files"):
+                for rel in entry.get(key, []) or []:
+                    assert not rel.startswith("src/frontend/src/assets/cloud/"), (
+                        f"{section} entry '{name}' still declares {rel}, which D5 "
+                        f"deleted — the audit would hard-fail on it")
+
+
+def test_open_findings_prints_an_unmatched_exception_it_was_handed():
+    """The silence bug, guarded by injection rather than by observation.
+
+    `test_an_open_finding_is_printed_even_when_it_matches_nothing` asserts over
+    the REAL exception register, so it only bites while some real OPEN exception
+    happens to match nothing. The day `busybox` is decided, that test goes green
+    without testing anything. This one hands `open_findings()` a synthetic
+    unmatched OPEN exception and demands it be printed and labelled — so a
+    regression to the old `if name not in present: continue` behaviour fails
+    here regardless of what the register holds."""
+    comps = [license_audit.Component(
+        key="npm:test:real", name="a-real-component", version="1.0.0",
+        license="MIT", ecosystem="npm", usage="bundled-runtime",
+        unit="frontend image", source="test")]
+    data = {"exceptions": {
+        "phantom-layer": {
+            "license": "GPL-2.0-only",
+            "status": "OPEN",
+            "owner_decision": "REQUIRED — synthetic finding for the regression test",
+        },
+        "a-real-component": {
+            "license": "MIT",
+            "status": "OPEN",
+            "owner_decision": "REQUIRED — synthetic matched finding",
+        },
+        "already-settled": {
+            "license": "MIT",
+            "status": "DECIDED",
+            "owner_decision": "DECIDED — must not be printed",
+        },
+    }}
+    findings = license_audit.open_findings(comps, data)
+
+    unmatched = [f for f in findings if f.startswith("phantom-layer")]
+    assert unmatched, (
+        "an OPEN exception matching no inventoried component was NOT printed — "
+        "this is the exact regression that hid `busybox` for months")
+    assert "NOT MATCHED by any inventoried component" in unmatched[0], (
+        "the unmatched finding is printed but not labelled; a reader cannot "
+        "tell 'we ship this and it is unresolved' from 'the inventory cannot "
+        "see this at all'")
+
+    matched = [f for f in findings if f.startswith("a-real-component")]
+    assert matched, "a matched OPEN exception must still be printed"
+    assert "NOT MATCHED" not in matched[0], (
+        "a finding that DOES match an inventoried component must not be "
+        "labelled unmatched — the label would then mean nothing")
+
+    assert not any(f.startswith("already-settled") for f in findings), (
+        "a DECIDED exception must not be printed as awaiting a decision")
+
+
+def test_the_only_open_findings_are_the_two_tracker_rowed_owner_decisions():
+    """The acknowledged list is a queue, not a wastebasket.
+
+    Every entry on it must be a question only the owner can answer, and must be
+    tracked somewhere a human actually looks. Today that is exactly two:
+    `busybox` (tracker 238) and `connector-vendor-marks` (tracker 239). If this
+    fails because a THIRD entry appeared, the entry is either an engineering fix
+    someone deferred by labelling it a decision, or a real new owner question
+    that needs a tracker row and a §4a paragraph — not a silent addition."""
+    data = license_audit.load_data()
+    open_names = sorted(n for n, e in data.get("exceptions", {}).items()
+                        if str(e.get("status", "")).upper().startswith("OPEN"))
+    assert open_names == ["busybox", "connector-vendor-marks"], (
+        f"the acknowledged-findings queue is {open_names}, expected "
+        f"['busybox', 'connector-vendor-marks']. Add the tracker row and the "
+        f"§4a entry, or close the finding — do not just extend this list.")
+
+    audit_doc = read(os.path.join(ROOT, "docs", "security",
+                                  "LICENSE_AUDIT_2026-09-03.md"))
+    for name in open_names:
+        assert name in audit_doc, (
+            f"the audit prints '{name}' and points the reader at "
+            f"docs/security/LICENSE_AUDIT_2026-09-03.md, which does not mention "
+            f"it — the pointer leads nowhere")
+    tracker = read(os.path.join(ROOT, "docs", "TRACKER.md"))
+    for row in ("| 238 |", "| 239 |"):
+        assert row in tracker, (
+            f"tracker row {row.strip('| ')} is gone but its licence finding is "
+            f"still OPEN — an owner decision with no tracker row is invisible")
+
+
+# ── D6: the UBI EULA has to reach the customer, not just the data file ───────
+
+UBI_EULA_URL = ("https://www.redhat.com/licenses/"
+                "EULA_Red_Hat_Universal_Base_Image_English_20190422.pdf")
+
+
+def test_the_ubi_eula_reaches_every_ship_set_surface():
+    """D6 is discharged by DOCUMENTATION — it is the one decision with no code
+    to it — so the documentation is the whole deliverable. Every surface a
+    customer or their counsel could reasonably read must carry both halves: the
+    pointer to the terms, and our explicit acceptance of them. A page that
+    accepts without linking leaves the reader unable to check what was accepted;
+    a page that links without accepting states an obligation and not its
+    discharge."""
+    surfaces = {
+        "docs/THIRD_PARTY_LICENSES.md": NOTICES,
+        "NOTICE": NOTICE_FILE,
+        "docs-portal/docs/deploy/third-party-components.md": os.path.join(
+            ROOT, "docs-portal", "docs", "deploy", "third-party-components.md"),
+        "docs/RELEASE_NOTES_v0.9.0-rc1.md": os.path.join(
+            ROOT, "docs", "RELEASE_NOTES_v0.9.0-rc1.md"),
+        "docs/RELEASE_CHECKLIST.md": os.path.join(ROOT, "docs", "RELEASE_CHECKLIST.md"),
+    }
+    for label, path in surfaces.items():
+        assert os.path.isfile(path), f"{label} is missing"
+        text = read(path)
+        assert "Universal Base Image" in text, (
+            f"{label} does not name the Red Hat Universal Base Image that "
+            f"Keycloak ships on")
+        assert ("redhat.com/licenses/EULA_Red_Hat_Universal_Base_Image" in text
+                or "red-hat-end-user-license-agreements" in text), (
+            f"{label} states the UBI posture but carries no pointer to the "
+            f"terms — a reader cannot check what was accepted")
+        lowered = text.lower()
+        assert "accept" in lowered, (
+            f"{label} links the UBI EULA but never states that Correlix "
+            f"ACCEPTS it — an obligation named is not an obligation discharged")
+
+
+def test_the_ubi_eula_url_is_the_canonical_one_in_the_binding_surfaces():
+    """The notices and NOTICE travel with the artifact and are the ones a
+    dispute would be read against. They must carry the exact agreement URL, not
+    a landing page that could later reorganise."""
+    for label, path in (("docs/THIRD_PARTY_LICENSES.md", NOTICES),
+                        ("NOTICE", NOTICE_FILE),
+                        ("docs/RELEASE_NOTES_v0.9.0-rc1.md",
+                         os.path.join(ROOT, "docs", "RELEASE_NOTES_v0.9.0-rc1.md"))):
+        assert UBI_EULA_URL in read(path), (
+            f"{label} does not carry the canonical UBI EULA URL {UBI_EULA_URL}")
+
+
+def test_the_ubi_acceptance_is_generated_from_the_data_file():
+    """The notices are GENERATED. If the acceptance lived only in the checked-in
+    Markdown, the next `--notices` run would delete it."""
+    data = license_audit.load_data()
+    exc = data["exceptions"]["quay.io/keycloak/keycloak"]
+    assert UBI_EULA_URL in str(exc.get("obligation", "")), (
+        "the keycloak exception does not record the EULA URL, so the generated "
+        "notices cannot be traced back to a reviewed fact")
+    assert "ACCEPT" in str(exc.get("owner_decision", "")).upper()
+
+    texts = json.dumps(data.get("license_texts", data))
+    assert UBI_EULA_URL in texts, (
+        "the UBI EULA URL is not anywhere in license-data.json, so the section "
+        "in docs/THIRD_PARTY_LICENSES.md is hand-written and will be lost the "
+        "next time the notices are regenerated")
+
+
+# ── D1: the AGPL add-on posture must be stated where it is received ──────────
+
+def test_the_agpl_addon_posture_is_complete_in_the_notices():
+    """D1's ratification rests on four claims, and a customer's counsel will
+    look for all four in one place: WHICH licence, WHERE to read it, that the
+    binary is UNMODIFIED, and that it is an OPTIONAL ADD-ON rather than part of
+    the appliance. Any one of them missing turns a defensible posture into an
+    assertion."""
+    text = read(NOTICES)
+    section = text[text.index("### GNU Affero General Public License 3.0"):]
+    section = section[:section.index("\n### ", 1)]
+    assert "AGPL-3.0-only" in section
+    assert "https://www.gnu.org/licenses/agpl-3.0.html" in section, (
+        "the notices do not say where the full AGPL-3.0 text is")
+    assert "https://github.com/grafana/grafana" in section and "v11.2.0" in section, (
+        "the notices do not point at the corresponding source for the version "
+        "shipped")
+    assert "UNMODIFIED" in section.upper()
+    assert "add-on" in section.lower() and "optional" in section.lower(), (
+        "the notices do not state that Grafana reaches a deployment only "
+        "through the optional self-monitoring add-on pack")
+    assert "self-monitoring" in section, (
+        "the notices do not name the profile an operator must enable")
+
+
+def test_the_copyleft_images_are_pinned_by_digest():
+    """`test_no_correlix_image_is_built_from_grafana_or_syslog_ng` proves we do
+    not REBUILD them; this proves we can prove WHICH bytes we shipped.
+
+    'The stock upstream image' and 'the corresponding source for the exact
+    version shipped' are both claims about a specific artifact. A floating tag
+    can be re-pushed under the same name, at which point neither claim is
+    checkable — and for syslog-ng it would silently invalidate the mirrored
+    tarball, which is a compliance failure that looks like compliance."""
+    compose = read(os.path.join(ROOT, "deployment", "docker", "docker-compose.yml"))
+    for image, decision in (("grafana/grafana", "D1 (AGPL, unmodified)"),
+                            ("balabit/syslog-ng", "D2 (GPL corresponding source)")):
+        m = re.search(rf"image:\s*({re.escape(image)}:[^\s]+)", compose)
+        assert m, f"no pinned {image} image found in docker-compose.yml"
+        assert "@sha256:" in m.group(1), (
+            f"{image} is pinned as {m.group(1)} with no digest — {decision} "
+            f"rests on being able to say exactly which image was distributed")
+
+
+def test_the_self_monitoring_addon_is_cut_as_its_own_separate_archive():
+    """D1's 'optional add-on pack' has to be a real, separate artifact.
+
+    `test_grafana_ships_only_in_the_optional_addon_pack` proves the profile is
+    not in BASE_PROFILES. This proves the other half: the pack is actually cut,
+    and its image list is the profile's images MINUS the base set — so Grafana
+    lands in `correlix-addon-self-monitoring-*.tar.zst` and in nothing else. If
+    the subtraction ever went away the AGPL image would be duplicated into the
+    core archive while the prose still called it optional."""
+    installer = read(INSTALLER)
+    addons = next(ln for ln in installer.splitlines() if ln.startswith("ADDONS="))
+    assert "self-monitoring:self-monitoring" in addons, (
+        "the self-monitoring add-on pack is no longer cut — Grafana would either "
+        "vanish from the ship set or fall back into the core bundle")
+    assert "correlix-addon-$name-$VERSION.tar.zst" in installer, (
+        "add-on packs are no longer written as their own image archive")
+    assert "comm -13" in installer, (
+        "the add-on pack no longer subtracts the base image set, so an add-on "
+        "image could also be baked into the core archive")

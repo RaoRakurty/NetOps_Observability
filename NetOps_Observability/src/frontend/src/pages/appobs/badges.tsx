@@ -7,7 +7,8 @@
 
 import { ReactNode, useEffect } from "react";
 import { Chip } from "../../components/noc";
-import { providerDescriptor, providerConsoleName, ProviderIcon } from "./providers";
+import { providerDescriptor, providerConsoleName } from "./providers";
+import CloudGlyph from "../../components/CloudGlyph";
 import type { Confidence, Health, RootDomain, AttrSource, UnderlayState, RcaDrawerModel, EvidenceCategory } from "./types";
 
 // ── Origin (which cloud an investigation comes from) ─────────────────────────
@@ -26,9 +27,21 @@ function originName(p: string): string {
 
 const originShort = (p: string): string => (p === "—" ? "—" : providerDescriptor(p).short);
 
+// The mark is the ORIGINAL Correlix cloud glyph (components/CloudGlyph.tsx).
+// The providers' trademark logos this used to draw were removed by licence
+// audit D5 (2026-09-04) — no brand colour, no brand asset, no implication of
+// endorsement.
+//
+// It renders the UNTAGGED variant on purpose. The glyph family distinguishes
+// providers by a small letter tag (AWS / AZ / GCP), but here the provider NAME
+// is already printed immediately beside the mark at 14px: a tag would repeat
+// that name, be illegible at this size, and break this module's rule that the
+// mark stays decorative so a screen reader hears the provider once rather than
+// twice. The tagged variants are for the topology/RCA canvases, where the glyph
+// stands alone.
 export function ProviderMark({ provider, size = 14 }: { provider: string; size?: number }) {
   if (provider === "—") return null;
-  return <ProviderIcon provider={provider} size={size} />;
+  return <CloudGlyph size={size} />;
 }
 
 export function ProviderBadge({ provider, compact = false }: { provider: string; compact?: boolean }) {

@@ -31,10 +31,12 @@ Phase‑1 canvas:
   `CloudNode.tsx` (a generic purple cloud glyph — **no official icons**),
   `mock/cloudTopology.ts` (an **app‑dependency** view, includes workloads — the
   thing we exclude), group types incl. `vpc`/`region`/`zone`.
-- **Official icons already vendored**: `src/frontend/src/assets/cloud/aws.svg`,
-  `azure.svg` (imported as URLs; GCP = monogram fallback). Existing render
-  pattern in `src/frontend/src/components/graph/shapes.tsx` (`PROVIDER_ICON` /
-  `PROVIDER_MARK`).
+- **Provider marks** — SUPERSEDED 2026-09-04 (licence audit D5): the vendored
+  official `assets/cloud/*.svg` marks were deleted. The render pattern is now
+  ORIGINAL Correlix artwork drawn inline from
+  `src/frontend/src/components/CloudGlyph.tsx` — one cloud silhouette, a plain
+  letter tag (`AWS` / `AZ` / `GCP`) as the only difference, untagged for
+  anything else. `components/graph/shapes.tsx` embeds the same family.
 - **Cloud network DATA exists in the backend** — `src/backend/cloud/topology.go`
   loads `*-topology.json` fixtures (`deployment/docker/cloud-fixtures/
   aws-topology.json`, `azure-topology.json`): **VPC/subnet CIDRs + route‑table
@@ -165,14 +167,13 @@ confidence (~0.7), never as measured traffic.
 
 ### 3.1 Official marks
 
-- Reuse the **already‑vendored** `assets/cloud/aws.svg` + `azure.svg` (URL
-  imports). A shared `components/ProviderMark.tsx` renders them exactly like
-  `shapes.tsx` does: the official mark **as‑is**, composited onto a neutral tile
-  for contrast when the mark is transparent (Azure) — never recoloured, cropped
-  or reshaped (provider terms + `assets/cloud/README.md`). GCP with no vendored
-  official mark falls back to the **monogram badge** (`G`), so the model is
-  provider‑parametric and degrades honestly. **No new external assets** (CSP /
-  offline rule).
+- SUPERSEDED 2026-09-04 (licence audit D5). The vendored official marks were
+  removed; `features/topology/components/ProviderMark.tsx` now draws the
+  ORIGINAL glyph family inline from `components/CloudGlyph.tsx` — one
+  silhouette, a plain letter tag (`AWS` / `AZ` / `GCP`) as the ONLY provider
+  difference, the untagged generic cloud for anything else. No provider colour,
+  no provider asset, no implication of endorsement. Inline SVG means it is
+  theme‑aware (`currentColor`) and fetches nothing (CSP / offline rule).
 - Provider comes from `node.tags.provider` (`aws` | `azure` | `gcp`), stamped by
   the backend — never guessed in the component.
 
@@ -181,15 +182,17 @@ confidence (~0.7), never as measured traffic.
 `CloudResourceNode.tsx` reuses the shared `NodeCard` shell (fixed geometry, the
 calm health ring, the confidence chip, the no‑shake invariant) but:
 
-- **Icon = the official provider mark** (`<ProviderMark>`), so the card reads as
-  "an AWS/Azure resource" at a glance.
+- **Icon = the provider‑tagged cloud glyph** (`<ProviderMark>`, original
+  artwork), so the card reads as "an AWS/Azure resource" at a glance.
 - A small **role chip** (`VPC` · `Subnet` · `IGW` · `NAT` · `VGW` · `DX` · `TGW`
   · `NVA` · `Endpoint`) names the specific network function, with the CIDR in the
   hover tooltip — the operator reads *what kind of cloud box* without reading a
   paragraph.
-- Provider‑tinted accent (AWS amber `#ff9900`, Azure blue `#0078d4`, GCP
-  `#4285f4`, generic violet) on the card's left rule, so a multi‑cloud canvas is
-  visually sortable by provider without shouting.
+- A per‑provider accent on the card's left rule, so a multi‑cloud canvas is
+  visually sortable by provider without shouting. RE‑KEYED 2026-09-04 (D5) from
+  the brand hexes to the PRODUCT's own indigo→violet ramp
+  (`#4f46e5` / `#6366f1` / `#8b5cf6`, generic violet) — provider identity is
+  carried by the glyph's letter tag, never by a brand hue.
 
 ### 3.3 Containers & edges
 
@@ -328,8 +331,9 @@ reserved, so only the mapper grows.
 filter with a backend `?domain=` parameter on `/api/topology/view` that projects
 the WAN‑edge (+ tunnels store) and DC‑fabric slices server‑side.
 
-**P5 — GCP official mark.** Add a vendored GCP official icon to
-`assets/cloud/` + `cloudicons/` (kept in sync) to replace the monogram fallback.
+**P5 — GCP mark.** DONE, then SUPERSEDED by licence audit D5 (2026-09-04):
+every provider now renders the original tagged cloud glyph, so there is no
+monogram fallback and no vendored official icon left to add.
 
 **P6 — Dedicated tunnel/seam edge component** (double‑stroke) for hybrid seams,
 if the reused `InferredEdge` proves too subtle in the field.

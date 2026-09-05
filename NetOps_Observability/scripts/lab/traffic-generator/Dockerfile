@@ -3,6 +3,12 @@
 # builds offline.
 FROM python:3.12-slim
 
+# The image's licence, in OCI metadata, so `docker image inspect` answers it
+# without unpacking the image. Correlix core is Apache-2.0; see LICENSING.md for
+# which parts of the tree are commercial add-ons instead. Enforced by
+# scripts/licensing-gate.py check D and tests/test_licensing_consistency.py.
+LABEL org.opencontainers.image.licenses="Apache-2.0"
+
 # tcpdump/iproute2 handy for in-container verification; optional.
 RUN apt-get update && apt-get install -y --no-install-recommends \
         iproute2 tcpdump ca-certificates \

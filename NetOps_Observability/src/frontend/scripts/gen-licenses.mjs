@@ -275,6 +275,35 @@ function renderMarkdown(md) {
   return out.join("\n");
 }
 
+// The PROJECT licence, as distinct from the third-party notices below it. A
+// customer reading /licenses/ must be able to answer "what may I do with
+// Correlix itself?" without leaving the page. This sentence is the canonical one
+// in licensing-policy.json; scripts/licensing-gate.py check G and
+// tests/test_licensing_consistency.py both grep for it verbatim, so it is
+// duplicated here deliberately rather than derived — a build must not be able to
+// ship a page that silently lost it.
+const PROJECT_LICENCE_SENTENCE =
+  "Correlix core is licensed under the Apache License, Version 2.0. " +
+  "Commercial add-on modules are licensed under the Correlix Enterprise " +
+  "License (LicenseRef-Correlix-Enterprise) \u2014 see LICENSING.md.";
+
+function projectLicenceBlock() {
+  return `<div class="project">
+<strong>Correlix licence</strong>
+<p>${esc(PROJECT_LICENCE_SENTENCE)}</p>
+<p>Correlix is open core. The engine, the telemetry pipeline, correlation and RCA,
+the investigation surface and the tenant isolation model are Apache-2.0. A named set
+of commercial add-on modules is source-available under the Correlix Enterprise
+License. Tenant isolation is core in every edition and is never a commercial add-on.</p>
+<p>The licence texts ship with the source as <code>LICENSES/Apache-2.0.txt</code> and
+<code>LICENSES/Correlix-Enterprise.txt</code>; <code>LICENSING.md</code> maps every
+directory to one of the two.</p>
+<p>Everything below this box concerns THIRD-PARTY software Correlix redistributes,
+which keeps its own licences and its own obligations.</p>
+</div>
+`;
+}
+
 function renderPage(md, files) {
   const body = renderMarkdown(md);
   const links = files
@@ -316,6 +345,10 @@ function renderPage(md, files) {
   th, td { text-align: left; padding: 6px 10px; border-bottom: 1px solid var(--border);
            vertical-align: top; }
   th { color: var(--muted); font-weight: 600; white-space: nowrap; }
+  .project { background: var(--panel); border: 1px solid var(--accent);
+             border-radius: 10px; padding: 14px 18px; margin: 0 0 18px; }
+  .project p { margin: 8px 0; }
+  .project strong { display: block; margin-bottom: 4px; }
   .files { background: var(--panel); border: 1px solid var(--border);
            border-radius: 10px; padding: 12px 16px; margin: 18px 0 8px; }
   .files ul { margin: 8px 0 0; padding-left: 20px; }
@@ -324,7 +357,7 @@ function renderPage(md, files) {
 </head>
 <body>
 <main>
-<div class="files">
+${projectLicenceBlock()}<div class="files">
 <strong>Full licence texts shipped with this product</strong>
 <ul>
 ${links}

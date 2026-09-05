@@ -1,12 +1,25 @@
-// Real vendor brand logos for the Integrations connector gallery, inlined as
-// SVG so they render crisply at any size and carry no asset-pipeline / runtime
-// dependency. Vector data is the official brand mark for each product:
-//   • ServiceNow — the circular "Now" symbol (brand green-teal #81b5a1).
-//   • Jira       — the Atlassian Jira mark (brand blue gradient #0052cc→#2684ff).
-// `useId` namespaces the Jira gradient ids so multiple instances on a page
-// (tile + modal header) never collide.
+// Marks for the Integrations connector gallery, inlined as SVG so they render
+// crisply at any size and carry no asset-pipeline / runtime dependency.
+//
+// TWO DIFFERENT KINDS OF MARK LIVE IN THIS FILE — do not confuse them:
+//
+// 1. The SIX ITSM / notification marks (ServiceNow, Jira, Slack, Twilio,
+//    PagerDuty, Microsoft Teams) ARE the official vendor brand marks: vector
+//    data and brand palette reproduced as published.
+//      • ServiceNow — the circular "Now" symbol (brand green-teal #81b5a1).
+//      • Jira       — the Atlassian Jira mark (brand blue gradient #0052cc→#2684ff).
+//    `useId` namespaces the Jira gradient ids so multiple instances on a page
+//    (tile + modal header) never collide.
+//
+// 2. The THREE CLOUD-PROVIDER marks (AWS, Azure, GCP) are NOT vendor artwork.
+//    Licence audit D5 (2026-09-04) removed the official AWS/Azure/Google marks
+//    from this file; those tiles now draw ORIGINAL Correlix artwork from
+//    components/CloudGlyph.tsx — one cloud silhouette carrying a plain letter
+//    tag. No cloud-provider brand colour or logo path data remains here, and
+//    ConnectorLogos.test.tsx fails the build if any comes back.
 
 import { useId } from "react";
+import CloudGlyph from "./CloudGlyph";
 
 type LogoProps = { size?: number; className?: string };
 
@@ -68,59 +81,37 @@ export function TwilioLogo({ size = 40, className }: LogoProps) {
   );
 }
 
-// ── Cloud provider marks (onboarding wizard) ─────────────────────────────────
-// Provider brand marks for the connector catalog tiles. The cloud PROVIDER names
-// (AWS / Azure / GCP) are the customer's own vocabulary and are fine to show — the
-// "no backend vendor names" rule is about OUR stack, not the clouds we observe.
+// ── Cloud provider marks (onboarding wizard) ────────────────────────
+// ORIGINAL Correlix artwork — NOT the providers' marks. The official AWS Smile,
+// the Azure gradient chevron and the Google Cloud four-colour "G" were deleted
+// by licence audit D5 (2026-09-04): they were trademark vector data with only a
+// terms-of-use posture, bundled into the shipped SPA. What renders now is the
+// cloud-glyph family (components/CloudGlyph.tsx) — ONE silhouette in the
+// product's own icon style, with a plain letter tag as the only difference.
+//
+// The cloud PROVIDER names (AWS / Azure / GCP) remain fine to show — the "no
+// backend vendor names" rule is about OUR stack, not the clouds we observe —
+// and the tag is exactly that: a nominative textual reference, never a wordmark,
+// never a claim of endorsement.
+//
+// These keep the `*Logo` names and the LogoProps signature so no call site
+// churns. They render the TAGGED variant: the connector gallery shows the three
+// tiles side by side at 44px (ConnectorWizard) and the SNS channel card at 30px
+// (admin), where the glyph is the tile's primary identifier and an untagged
+// cloud on all three would make the gallery unreadable at a glance. That is the
+// opposite call from pages/appobs/badges.tsx, where the mark is 14px with the
+// provider name printed immediately beside it and a tag would only repeat it.
 
-// AWS — the Smile arrow mark in Amazon orange.
 export function AwsLogo({ size = 40, className }: LogoProps) {
-  return (
-    <svg width={size} height={size} viewBox="0 0 64 64" className={className} aria-hidden="true" role="img">
-      <path fill="#ff9900" d="M18.4 27.9c0 .8.1 1.4.2 1.9.2.5.4 1 .7 1.6.1.2.2.4.2.5 0 .2-.1.4-.4.6l-1.3.9c-.2.1-.4.2-.5.2-.2 0-.4-.1-.6-.3-.3-.3-.5-.6-.7-1-.2-.4-.4-.8-.6-1.3-1.5 1.8-3.4 2.7-5.7 2.7-1.6 0-2.9-.5-3.9-1.4s-1.4-2.2-1.4-3.7c0-1.7.6-3 1.8-4s2.8-1.5 4.8-1.5c.7 0 1.4.1 2.1.2s1.5.3 2.3.5v-1.4c0-1.4-.3-2.4-.9-3-.6-.6-1.6-.9-3-.9-.7 0-1.3.1-2 .2-.7.2-1.3.4-2 .6-.3.1-.5.2-.6.2-.1 0-.2.1-.3.1-.3 0-.4-.2-.4-.6v-1c0-.3 0-.5.1-.7.1-.1.3-.3.5-.4.7-.3 1.5-.6 2.4-.9 1-.3 2-.4 3.1-.4 2.4 0 4.1.5 5.2 1.6s1.6 2.7 1.6 5v6.6zm-7.9 3c.6 0 1.3-.1 2-.3.7-.2 1.3-.7 1.9-1.3.3-.4.6-.8.7-1.3.1-.5.2-1.1.2-1.7v-.8c-.6-.1-1.2-.3-1.8-.3-.6-.1-1.2-.1-1.8-.1-1.3 0-2.2.3-2.9.8-.6.5-.9 1.2-.9 2.2 0 .9.2 1.6.7 2 .4.6 1.1.8 1.9.8zm15.7 2.1c-.4 0-.6-.1-.8-.2-.2-.1-.3-.4-.5-.8L20.3 15c-.1-.4-.2-.7-.2-.8 0-.3.2-.5.5-.5h2c.4 0 .7.1.8.2.2.1.3.4.4.8l3.2 12.9 3-12.9c.1-.4.2-.7.4-.8s.5-.2.8-.2h1.7c.4 0 .7.1.8.2.2.1.3.4.4.8l3 13 3.3-13c.1-.4.3-.7.4-.8.2-.1.5-.2.8-.2h1.9c.3 0 .5.2.5.5 0 .1 0 .2-.1.3 0 .1-.1.3-.2.5l-4.6 14.9c-.1.4-.3.7-.5.8-.2.1-.4.2-.8.2h-1.9c-.4 0-.7-.1-.8-.2-.2-.2-.3-.4-.4-.8l-3-12.6-3 12.5c-.1.4-.2.7-.4.8-.2.2-.5.2-.8.2h-1.9zm25.1.6c-1 0-2-.1-3-.4-1-.2-1.7-.5-2.2-.8-.3-.2-.5-.4-.6-.5-.1-.2-.1-.4-.1-.5v-1c0-.4.2-.6.5-.6.1 0 .2 0 .4.1.1 0 .3.1.5.2.6.3 1.3.5 2 .6.7.1 1.4.2 2.2.2 1.1 0 2-.2 2.6-.6.6-.4.9-1 .9-1.7 0-.5-.2-.9-.5-1.2-.3-.3-.9-.6-1.8-.9l-2.6-.8c-1.3-.4-2.3-1-2.9-1.8-.6-.8-.9-1.6-.9-2.6 0-.7.2-1.4.5-2 .3-.6.7-1.1 1.3-1.5.5-.4 1.2-.7 1.9-.9.7-.2 1.5-.3 2.3-.3.4 0 .8 0 1.3.1.4.1.8.1 1.2.2.4.1.7.2 1 .3.3.1.6.2.7.4.2.1.3.2.4.4.1.1.1.3.1.5v.9c0 .4-.2.6-.5.6-.2 0-.4-.1-.8-.2-1.1-.5-2.3-.7-3.7-.7-1 0-1.8.2-2.4.5-.5.3-.8.8-.8 1.5 0 .5.2.9.5 1.2.4.3 1 .6 1.9.9l2.5.8c1.3.4 2.2 1 2.8 1.7.6.7.9 1.5.9 2.5 0 .8-.2 1.5-.5 2.1-.3.6-.8 1.2-1.3 1.6-.6.4-1.3.8-2.1 1-.8.3-1.7.4-2.7.4z" />
-      <path fill="#ff9900" d="M55.8 43.4c-6.4 4.7-15.7 7.2-23.7 7.2-11.2 0-21.3-4.1-28.9-11-.6-.5-.1-1.3.7-.9 8.2 4.8 18.4 7.7 28.9 7.7 7.1 0 15-1.5 22.2-4.5 1-.5 1.9.7.8 1.5z" />
-      <path fill="#ff9900" d="M58.5 40.3c-.8-1.1-5.4-.5-7.5-.3-.6.1-.7-.5-.1-.9 3.7-2.6 9.7-1.8 10.4-1 .7.9-.2 6.9-3.6 9.8-.5.4-1 .2-.8-.4.7-1.9 2.3-6.1 1.6-7.2z" />
-    </svg>
-  );
+  return <CloudGlyph provider="aws" size={size} className={className} />;
 }
 
-// Azure — the official gradient "A" chevron.
 export function AzureLogo({ size = 40, className }: LogoProps) {
-  const id = useId().replace(/:/g, "");
-  return (
-    <svg width={size} height={size} viewBox="0 0 64 64" className={className} aria-hidden="true" role="img">
-      <defs>
-        <linearGradient id={`${id}-a`} x1="30" y1="8" x2="18" y2="43" gradientUnits="userSpaceOnUse">
-          <stop offset="0" stopColor="#114a8b" />
-          <stop offset="1" stopColor="#0669bc" />
-        </linearGradient>
-        <linearGradient id={`${id}-b`} x1="38" y1="35" x2="35" y2="36" gradientUnits="userSpaceOnUse">
-          <stop offset="0" stopColor="#000" stopOpacity=".3" />
-          <stop offset="1" stopColor="#000" stopOpacity="0" />
-        </linearGradient>
-        <linearGradient id={`${id}-c`} x1="34" y1="7" x2="47" y2="42" gradientUnits="userSpaceOnUse">
-          <stop offset="0" stopColor="#3ccbf4" />
-          <stop offset="1" stopColor="#2892df" />
-        </linearGradient>
-      </defs>
-      <path fill={`url(#${id}-a)`} d="M23.7 9h11l-11.4 33.8a1.8 1.8 0 0 1-1.7 1.2H12.9a1.8 1.8 0 0 1-1.7-2.4L22 10.2A1.8 1.8 0 0 1 23.7 9z" />
-      <path fill="#0078d4" d="M39.6 32.8H22.1a.8.8 0 0 0-.6 1.4l11.2 10.5a1.8 1.8 0 0 0 1.2.5H44z" />
-      <path fill={`url(#${id}-b)`} d="M23.7 9a1.8 1.8 0 0 0-1.7 1.2L11.3 41.5a1.8 1.8 0 0 0 1.7 2.4h8.9a1.9 1.9 0 0 0 1.5-1.3l2.1-6.3 7.6 7.1a1.8 1.8 0 0 0 1.1.4H44l-4.4-11.2-12.8 0L34.8 9z" />
-      <path fill={`url(#${id}-c)`} d="M42 10.2A1.8 1.8 0 0 0 40.3 9H23.8a1.8 1.8 0 0 1 1.7 1.2l10.8 31.6a1.8 1.8 0 0 1-1.7 2.4h16.5a1.8 1.8 0 0 0 1.7-2.4z" />
-    </svg>
-  );
+  return <CloudGlyph provider="azure" size={size} className={className} />;
 }
 
-// Google Cloud — the four-colour hexagon "G".
 export function GcpLogo({ size = 40, className }: LogoProps) {
-  return (
-    <svg width={size} height={size} viewBox="0 0 64 64" className={className} aria-hidden="true" role="img">
-      <path fill="#ea4335" d="M40.3 22.5h1.9l5.4-5.4.3-2.3A24.3 24.3 0 0 0 9.4 26.6a2.9 2.9 0 0 1 1.9-.1l10.8-1.8s.5-.9.8-.9a13.5 13.5 0 0 1 17.6-1.4z" />
-      <path fill="#4285f4" d="M55.4 26.6a24.3 24.3 0 0 0-7.3-11.8l-7.6 7.6a13.5 13.5 0 0 1 5 10.7v1.3a6.7 6.7 0 0 1 0 13.5H37l-1.3 1.4v8.1l1.3 1.3h13.4A17.6 17.6 0 0 0 55.4 26.6z" />
-      <path fill="#34a853" d="M23.6 57.4h13.4v-10.8H23.6a6.7 6.7 0 0 1-2.8-.6l-1.9.6-5.4 5.4-.5 1.9a17.5 17.5 0 0 0 10.6 3.5z" />
-      <path fill="#fbbc05" d="M23.6 22.3A17.6 17.6 0 0 0 13 53.9l7.8-7.8a6.7 6.7 0 1 1 8.9-8.9l7.8-7.8a17.5 17.5 0 0 0-13.9-7.1z" />
-    </svg>
-  );
+  return <CloudGlyph provider="gcp" size={size} className={className} />;
 }
 
 // PagerDuty — the official green mark.

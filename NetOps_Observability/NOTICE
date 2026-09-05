@@ -1,6 +1,27 @@
 NetOps_Observability
 =====================
 
+Copyright 2026 Correlix
+
+--------------------------------------------------------------------------------
+Project licence
+--------------------------------------------------------------------------------
+
+Correlix core is licensed under the Apache License, Version 2.0. Commercial add-on modules are licensed under the Correlix Enterprise License (LicenseRef-Correlix-Enterprise) — see LICENSING.md.
+
+Correlix is open core. The full Apache-2.0 text is in LICENSES/Apache-2.0.txt;
+the Correlix Enterprise License is in LICENSES/Correlix-Enterprise.txt.
+LICENSING.md maps every directory to one of the two, and a file may also declare
+its own with an `SPDX-License-Identifier:` header. A file with no header, in a
+directory with no Enterprise notice file, is Apache-2.0 — the default is open.
+
+Tenant and organisation isolation is Apache-2.0 core in every edition. It is a
+safety property, never a commercial add-on.
+
+The rest of this file concerns THIRD-PARTY software Correlix redistributes. Those
+components keep their own licences and their own obligations; the split above
+does not apply to them.
+
 --------------------------------------------------------------------------------
 SNMP vendor device-profiles
 --------------------------------------------------------------------------------
@@ -110,6 +131,67 @@ is owed is this notice plus the source pointer (MPL sections 3.1/3.2). The same
 applies to Vector (MPL-2.0), which runs unmodified in its own container —
 vector.yaml and the VRL transforms are configuration (MPL 1.10/3.3 Larger
 Work), not modifications.
+
+--------------------------------------------------------------------------------
+syslog-ng OSE — GPL-2.0-or-later / LGPL-2.1-or-later (source SHIPPED)
+--------------------------------------------------------------------------------
+
+Correlix redistributes syslog-ng OSE 4.7.1 as the unmodified upstream container
+image `balabit/syslog-ng:4.7.1`. Its licensing is split, verified against
+COPYING at tag syslog-ng-4.7.1:
+
+  LGPL-2.1-or-later  lib/, libtest/, syslog-ng/, syslog-ng-ctl/,
+                     persist-tool/, tests/loggen/, docker/
+  GPL-2.0-or-later   modules/, scl/
+
+The stock image loads all modules, so the running combination is effectively
+GPL-2.0-or-later. There is NO OpenSSL linking exception in that COPYING.
+
+Correlix discharges the source obligation under GPL-2.0 section 3(a) — by
+SHIPPING the corresponding source, not by a written offer alone. Every offline
+installer bundle contains it:
+
+  source-offer/syslog-ng-4.7.1.tar.gz   (covered by the bundle's SHA256SUMS)
+  Upstream : https://github.com/syslog-ng/syslog-ng (tag syslog-ng-4.7.1)
+
+syslog-ng runs as its own separate, unmodified process. No Correlix code is
+linked into it and none of its code is linked into ours; our syslog-ng.conf is
+configuration. No Correlix source is placed under the GPL or LGPL.
+
+--------------------------------------------------------------------------------
+Grafana — GNU Affero General Public License 3.0 (OPTIONAL add-on, unmodified)
+--------------------------------------------------------------------------------
+
+Grafana 11.2.0 (AGPL-3.0-only) ships ONLY in the optional `self-monitoring`
+add-on pack, as the unmodified upstream image, on its own route. It is not part
+of the base appliance and is absent until an operator enables the add-on.
+
+  Licence : https://www.gnu.org/licenses/agpl-3.0.html
+  Source  : https://github.com/grafana/grafana (tag v11.2.0)
+
+Correlix does not modify Grafana — not the image, not its UI, not its branding.
+It is configured only through Grafana's own GF_* environment variables and its
+read-only provisioning directory. AGPL-3.0 section 13 binds the operator of a
+MODIFIED version; Correlix runs it unmodified as a separate process, so no
+Correlix source is subject to the AGPL.
+
+--------------------------------------------------------------------------------
+Keycloak — Apache-2.0 on a Red Hat Universal Base Image (UBI EULA accepted)
+--------------------------------------------------------------------------------
+
+Keycloak (`quay.io/keycloak/keycloak:25.0`) is Apache-2.0. Its base image is
+Red Hat's Universal Base Image 9 (ubi9-micro), which is governed by the Red Hat
+Universal Base Image End User Licence Agreement — not an open-source licence.
+
+  UBI EULA : https://www.redhat.com/licenses/EULA_Red_Hat_Universal_Base_Image_English_20190422.pdf
+
+Correlix has read and ACCEPTS that EULA and redistributes the image under it.
+The image ships exactly as published by the Keycloak project: a digest-pinned
+upstream reference with no Correlix rebuild and no Correlix layer on top. Red
+Hat provides no support or warranty for it, and nothing in Correlix's packaging
+implies a Red Hat endorsement, certification or support relationship. Recipients
+of a Correlix bundle with the `sso` profile receive this image and are likewise
+bound by the UBI EULA with respect to it.
 
 --------------------------------------------------------------------------------
 Complete inventory

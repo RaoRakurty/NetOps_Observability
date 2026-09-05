@@ -19,11 +19,15 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import random
 import re
 import shutil
 import subprocess
 import sys
 import tempfile
+import time
+import urllib.parse
+import urllib.request
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 INDEX = os.path.join(HERE, "index", "oididx.json")
@@ -244,6 +248,133 @@ NETSNMP_ROOTS = (
 )
 _TZ_RE = re.compile(r'"([^"]+)"\s+"([\d.]+)"')
 
+# ── FETCHED (not redistributed) vendor MIBs ──────────────────────────────────
+# Arista's enterprise MIBs carry "Copyright (c) 2008 Arista Networks, Inc. All
+# rights reserved." with NO redistribution grant (licence audit 2026-09-03, D4),
+# so they are NOT vendored in this repo and do NOT travel in the source tarball.
+# The ~55 other vendor MIBs already resolve at build time from a mirror; these
+# two could not, only because the SMIv1 net-snmp pass needs real files on disk.
+# They are therefore fetched into a GITIGNORED cache that the -M path includes.
+#
+# ZERO TRUST (CLAUDE.md §3): the mirror is not trusted. Every byte — freshly
+# downloaded OR already cached — is checked against the pinned sha256 before it
+# reaches the parser. A pin with no sum, a mirror whose content moved, or a
+# cache someone edited is a HARD failure with a named reason, never a skip.
+FETCHED = os.path.join(VENDORED, ".fetched")
+FETCH_TIMEOUT = 30        # seconds per attempt (CLAUDE.md §9: bounded IO)
+FETCH_ATTEMPTS = 3        # per URL, with backoff + jitter
+FETCH_MAX_BYTES = 4 << 20  # a MIB module is tens of KB; refuse an unbounded body
+#: module -> {sha256, urls}. URLs are tried in order; the sum is what is trusted.
+FETCH_PINS: dict[str, dict] = {
+    "ARISTA-SMI-MIB": {
+        "sha256": "0f909eea68ad7144ebc82c3d140653c0faa31e66f6de439921c3e4a4a11ca4e3",
+        "urls": (
+            "https://mibs.pysnmp.com/asn1/ARISTA-SMI-MIB",
+            "https://raw.githubusercontent.com/librenms/librenms/master/mibs/arista/ARISTA-SMI-MIB",
+        ),
+    },
+    "ARISTA-BRIDGE-EXT-MIB": {
+        "sha256": "9cb0cc8b5cd2cb26179d2eb1e0a7eb1d5e74e099b8459668fc039b9fa355c8ff",
+        "urls": ("https://mibs.pysnmp.com/asn1/ARISTA-BRIDGE-EXT-MIB",),
+    },
+}
+
+
+class FetchError(RuntimeError):
+    """A pinned MIB could not be obtained AND verified. Always fatal."""
+
+
+def _sha256_file(path: str) -> str:
+    h = hashlib.sha256()
+    with open(path, "rb") as fh:
+        for chunk in iter(lambda: fh.read(65536), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def _download(url: str) -> bytes:
+    """GET `url` over https with a bounded body and bounded time. Raises the
+    last error if every attempt fails — nothing here is swallowed."""
+    if urllib.parse.urlsplit(url).scheme != "https":
+        raise FetchError(f"pinned URL is not https: {url}")
+    last: Exception | None = None
+    for attempt in range(1, FETCH_ATTEMPTS + 1):
+        try:
+            req = urllib.request.Request(url, headers={"User-Agent": "correlix-gen_index"})
+            # urlopen is safe here: the scheme is asserted https above.
+            with urllib.request.urlopen(req, timeout=FETCH_TIMEOUT) as resp:
+                body = resp.read(FETCH_MAX_BYTES + 1)
+            if len(body) > FETCH_MAX_BYTES:
+                raise FetchError(f"{url}: body exceeds {FETCH_MAX_BYTES} bytes")
+            return body
+        except FetchError:
+            raise
+        except Exception as exc:  # noqa: BLE001 - never swallowed: retried, then raised
+            last = exc
+            if attempt < FETCH_ATTEMPTS:
+                # backoff + jitter (CLAUDE.md §9)
+                time.sleep(min(4.0, 0.5 * 2 ** (attempt - 1)) + random.uniform(0, 0.3))
+    raise FetchError(f"{url}: {type(last).__name__}: {last}")
+
+
+def fetch_pinned_mibs() -> tuple[list[str], list[str]]:
+    """Materialise FETCH_PINS into the gitignored cache.
+
+    Returns (verified, skipped) module names. `skipped` is non-empty ONLY when
+    the operator explicitly opted out with MIB_FETCH=0 — a DECLARED degraded
+    state the caller reports. Every other failure raises FetchError.
+    """
+    offline = os.environ.get("MIB_FETCH", "1") == "0"
+    os.makedirs(FETCHED, exist_ok=True)
+    verified: list[str] = []
+    skipped: list[str] = []
+    for mod, pin in sorted(FETCH_PINS.items()):
+        want = str(pin.get("sha256") or "")
+        if len(want) != 64 or not re.fullmatch(r"[0-9a-f]{64}", want):
+            raise FetchError(f"{mod}: no usable sha256 pin — refusing to trust the mirror")
+        dest = os.path.join(FETCHED, mod)
+        if os.path.isfile(dest):
+            got = _sha256_file(dest)
+            if got != want:
+                raise FetchError(
+                    f"{mod}: cached {dest} has sha256 {got}, pinned {want} — the "
+                    "cache is stale or tampered; delete it and re-run")
+            verified.append(mod)
+            continue
+        if offline:
+            skipped.append(mod)
+            continue
+        errors: list[str] = []
+        body: bytes | None = None
+        for url in pin["urls"]:
+            try:
+                body = _download(url)
+                break
+            except FetchError as exc:
+                errors.append(str(exc))
+        if body is None:
+            raise FetchError(
+                f"{mod}: every pinned URL failed:\n    " + "\n    ".join(errors)
+                + "\n  Set MIB_FETCH=0 to build WITHOUT it (Arista 30065.3.2 objects "
+                  "then come only from the existing index floor + STD_OVERLAY).")
+        got = hashlib.sha256(body).hexdigest()
+        if got != want:
+            raise FetchError(
+                f"{mod}: downloaded sha256 {got}, pinned {want} — upstream moved or "
+                "the transfer was tampered with; verify the new content by hand and "
+                "re-pin FETCH_PINS before trusting it")
+        tmp = dest + ".part"
+        with open(tmp, "wb") as fh:
+            fh.write(body)
+        os.replace(tmp, dest)  # atomic: a partial file never becomes the cache
+        verified.append(mod)
+    return verified, skipped
+
+
+def netsnmp_mib_dirs() -> list[str]:
+    """`-M` search path: the vendored tree first, then the fetched cache."""
+    return [d for d in (VENDORED, FETCHED) if os.path.isdir(d)]
+
 
 def netsnmp_nodes() -> dict:
     """Compile the vendored MIB tree with net-snmp and extract nodes under the
@@ -253,8 +384,9 @@ def netsnmp_nodes() -> dict:
     if not exe or not os.path.isdir(VENDORED):
         print("gen_index: net-snmp/vendored tree absent — skipping SMIv1 pass.", file=sys.stderr)
         return {}
+    mpath = ":".join(netsnmp_mib_dirs())  # net-snmp -M is colon-separated
     try:
-        tz = subprocess.run([exe, "-M", VENDORED, "-m", "ALL", "-Tz"],
+        tz = subprocess.run([exe, "-M", mpath, "-m", "ALL", "-Tz"],
                             capture_output=True, text=True, timeout=120).stdout
     except Exception:
         return {}
@@ -265,7 +397,7 @@ def netsnmp_nodes() -> dict:
         if not any(oid == r or oid.startswith(r + ".") for r in NETSNMP_ROOTS):
             continue
         try:
-            td = subprocess.run([exe, "-M", VENDORED, "-m", "ALL", "-Td", oid],
+            td = subprocess.run([exe, "-M", mpath, "-m", "ALL", "-Td", oid],
                                 capture_output=True, text=True, timeout=30).stdout
         except Exception:
             continue
@@ -301,6 +433,22 @@ def validate(nodes: dict) -> list[str]:
 
 def main() -> int:
     mibs = os.environ.get("MIBS", " ".join(DEFAULT_MIBS)).split()
+    # Pinned, checksum-verified fetch of the MIBs this repo does not redistribute.
+    # Fail closed: the ONLY non-fatal outcome is the operator's explicit opt-out,
+    # and even that is announced (scripts/CLAUDE.md §16.1 — no silent skips).
+    try:
+        fetched, skipped = fetch_pinned_mibs()
+    except FetchError as exc:
+        print(f"gen_index: FATAL: pinned MIB fetch failed — {exc}", file=sys.stderr)
+        return 1
+    if fetched:
+        print(f"gen_index: fetched+verified {len(fetched)} pinned MIB(s): {', '.join(fetched)}")
+    if skipped:
+        print("gen_index: WARNING — MIB_FETCH=0, so " + ", ".join(skipped) + " were NOT "
+              "fetched. The net-snmp pass cannot see them: Arista devices decode with the "
+              "standard MIBs, plus whatever 1.3.6.1.4.1.30065.3.2 nodes the existing index "
+              "floor and STD_OVERLAY already carry (the 30065.3.2.0.x v1-form traps). "
+              "This is a DECLARED degraded build, not a failure.", file=sys.stderr)
     # Start from the existing index as a floor — compiled MIBs ADD coverage and
     # enrich type/enum, but a network/compile miss must never regress the core.
     base: dict[str, dict] = {}

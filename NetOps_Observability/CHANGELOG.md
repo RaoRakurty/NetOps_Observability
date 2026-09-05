@@ -155,6 +155,31 @@ Anyone upgrading across this window needs each of these. Ordered oldest first; s
   watchdog already pages.
 - A pilot support bundle with two-pass secret redaction, plus an install-timing instrument.
 
+#### Licensing & third-party compliance
+- **The whole third-party inventory became derived rather than remembered.** `scripts/license-audit.py`
+  rebuilds it from the tree (Go vendor, both npm lockfiles, the pip pins, every compose/Dockerfile
+  image pin and the hand-copied in-tree content), classifies each licence, and fails the build on an
+  unreviewed arrival. `docs/THIRD_PARTY_LICENSES.md` is generated from it, served by the product at
+  `/licenses/`, baked into the frontend and correlation images and shipped as the bundle's
+  `LICENSES.md` — replacing a hand-written heredoc that listed 14 images, zero libraries, and stated
+  syslog-ng's licence wrongly.
+- Five outstanding attribution obligations closed: elkjs (EPL-2.0), four OFL-1.1 font families,
+  the Feather/Lucide icon path data, certifi (MPL-2.0) and the bundle notice itself.
+- **All six owner licence decisions ruled on (2026-09-04).**
+  - **Grafana stays**, as an optional unmodified add-on. To make "unmodified" true, the nginx proxy
+    no longer injects a stylesheet into Grafana's pages — it had been repainting the interface and
+    hiding the Grafana logo. The embedded Grafana now looks like Grafana.
+  - **syslog-ng's GPL source now ships with the binaries.** Every bundle carries
+    `source-offer/syslog-ng-4.7.1.tar.gz`, fetched against a checked-in checksum pin, covered by
+    `SHA256SUMS`, and the build fails rather than ship without it.
+  - **The Cisco-copyright MIB extracts were replaced with the canonical IETF RFC text**, and the
+    **Arista MIBs are fetched at build time instead of redistributed.**
+  - **The AWS, Azure and Google Cloud trademark files are gone**, replaced by original Correlix
+    cloud glyphs.
+  - **The Red Hat UBI EULA that Keycloak ships under is accepted and stated** in the notices, in
+    `NOTICE` and in the customer documentation.
+  - **Gotenberg can no longer reach a bundle** — the rule became a build failure.
+
 ---
 
 ### 2026-08 · 589 commits

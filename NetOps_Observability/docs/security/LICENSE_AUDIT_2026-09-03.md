@@ -27,8 +27,12 @@ decision**. None is an emergency; all are cheap to fix. Details below.
 > `verify_modules.go` path, the CLAUDE.md §6 x/crypto version) are done. Those
 > five exceptions are recorded `status: FIXED` with evidence paths in
 > `scripts/license-data.json`, so the gate no longer prints them.
-> **The six owner decisions in §4 (D1–D6) remain OPEN** and are still printed by
-> every audit run (tracker #227).
+> **The six owner decisions in §4 (D1–D6) were all RULED ON later the same day**
+> (2026-09-04) and are recorded `status: DECIDED` — see §4, which carries each
+> ruling and what was built for it. They are no longer printed as pending.
+> **What the audit still prints is §4a: two acknowledged findings that are
+> genuinely awaiting an owner call** — `busybox` (tracker 238) and
+> `connector-vendor-marks` (tracker 239). Neither was among D1–D6.
 
 Scope: `NetOps_Observability/` at `feat/observability-platform`. Method and
 tooling: `scripts/license-audit.py` (re-runnable, offline), backed by the
@@ -233,10 +237,42 @@ derivation found.
 
 ---
 
-## 4. Owner decisions required
+## 4. Owner decisions — ALL SIX DECIDED 2026-09-04
 
-Six. All are recorded as `status: OPEN` exceptions in `scripts/license-data.json`
-and printed by every `license-audit.py` run, so they cannot rot silently.
+> **STATUS 2026-09-04.** The owner ruled on all six. Each is now recorded as a
+> `status: DECIDED` exception in `scripts/license-data.json` carrying what was
+> decided (`decided`), why (`rationale`) and where to verify it (`evidence`), so
+> `license-audit.py` no longer prints them as pending. The subsections below keep
+> the original analysis and add the ruling and what was actually built.
+>
+> Two things surfaced while implementing them and are recorded honestly rather
+> than quietly fixed:
+>
+> 1. **Grafana's UI *was* being modified.** The nginx `/grafana/` route injected
+>    a stylesheet via `sub_filter` that repainted Grafana and **hid its logo** —
+>    the in-repo comment said so outright ("so the embedded console doesn't read
+>    as standard Grafana"). D1's whole defence is that Grafana ships unmodified,
+>    and D1 below already said never to do this. The injection was removed from
+>    `nginx/default.conf` and `nginx/default-mtls.conf`; visual alignment now
+>    comes only from Grafana's own `GF_USERS_DEFAULT_THEME` and kiosk mode.
+>    `tests/test_license_audit.py::test_grafana_ui_is_not_rewritten_by_the_proxy`
+>    stops it coming back. **The embedded Grafana now looks like Grafana** — a
+>    visible product change, and the direct cost of ratifying option (a).
+> 2. **NetBox gets the same treatment and still does.** The `/netbox/` route
+>    injects CSS *and JavaScript* that hides the NetBox logo and rewrites every
+>    occurrence of "NetBox" to "Source of Truth". NetBox is Apache-2.0, so this is
+>    a §4 notice-retention and trademark question rather than a copyleft one, and
+>    it is **out of scope today because NetBox ships in nothing** (the `netbox`
+>    profile is excluded from every bundle). It becomes a real issue the moment
+>    that changes. Filed as a new finding, not fixed.
+>
+> One acknowledged finding that was NOT among the six is now printed for the
+> first time: **`busybox`** carried an `owner_decision` reading "REQUIRED" but no
+> `status` field at all, so `open_findings()` never listed it. It is now
+> `status: OPEN` and genuinely awaits a call.
+
+All six were recorded as `status: OPEN` exceptions in `scripts/license-data.json`
+and printed by every `license-audit.py` run, so they could not rot silently.
 
 ### D1 — Grafana AGPL posture in the customer bundle *(highest visibility)*
 Grafana 11.2.0 is **AGPL-3.0-only** (confirmed at upstream `package.json` and
@@ -255,6 +291,25 @@ customer's legal team will grep for:
 Whichever is chosen, **never modify or rebrand the Grafana UI** — that is what
 would convert §13 into a real obligation.
 
+> **DECIDED 2026-09-04 — (a) KEEP.** Optional add-on pack, unmodified, with the
+> AGPL-3.0 text and a source offer shipped.
+>
+> **Built:** the AGPL posture is stated in the generated notices (a dedicated
+> `GNU Affero General Public License 3.0 — Grafana (OPTIONAL self-monitoring
+> add-on pack)` section saying where it is, that it is unmodified, and why no
+> Correlix source is affected) and in `NOTICE`. The "optional and separate" claim
+> is now verified rather than asserted: the `grafana` service is
+> `profiles: ["self-monitoring"]`, `self-monitoring` is not in
+> `make-installer.sh`'s `BASE_PROFILES`, and it is cut as its own
+> `correlix-addon-self-monitoring-<ver>.tar.zst`. No Dockerfile in the tree has a
+> `FROM` on grafana, so no patched image exists.
+>
+> **What had to change to make the claim true:** the nginx UI rewrite described
+> in the status note above was removed. Guarded by three tests —
+> `test_grafana_ui_is_not_rewritten_by_the_proxy`,
+> `test_grafana_ships_only_in_the_optional_addon_pack` and
+> `test_no_correlix_image_is_built_from_grafana_or_syslog_ng`.
+
 ### D2 — syslog-ng edition and source offer
 syslog-ng OSE 4.7.1, GPL-2.0-or-later combined, in the **core** archive. We must
 be able to honour a source request for three years.
@@ -266,6 +321,36 @@ be able to honour a source request for three years.
   but the old `balabit/syslog-ng-docker` build repo is deprecated. A future move
   to AxoSyslog or to the `syslog-ng/syslog-ng`-published image is worth
   considering on maintenance grounds, not licence grounds.
+
+> **DECIDED 2026-09-04 — MIRROR the tarball with every release.** GPL-2.0 §3(a)
+> (ship the source) rather than §3(b) (a three-year written offer). The fork
+> point above is exactly why: a promise has to outlive a repository that has
+> already shown it can move.
+>
+> **Built:** `scripts/source-mirror.json` is the reviewed pin table — upstream
+> URL, sha256, byte size, the verified split-licence facts and the
+> no-OpenSSL-exception note. `scripts/make-installer.sh`'s `write_source_offer()`
+> fetches it into `<bundle>/source-offer/syslog-ng-4.7.1.tar.gz`, writes a
+> `source-offer/README` stating the GPL-2.0-or-later / LGPL-2.1-or-later terms
+> and that the archive *is* the corresponding source, verifies the checksum, and
+> **fails the build** on any fetch or integrity failure. The file is covered by
+> the bundle's `SHA256SUMS`. `--source-offer-only` is the dry run;
+> `release-bundle.yml` asserts the directory, the README, the archive and its
+> checksum entry on every release, and uploads `source-offer/` members as release
+> assets. `tests/test_source_offer.py` proves the layout, the terms text, the
+> fail-closed behaviour and — the failure a mocked test would otherwise hide —
+> that the pin still matches the version `docker-compose.yml` actually pins.
+>
+> **One honesty note, recorded in the pin file itself:** the syslog-ng project
+> publishes **no** checksum, signature or release-asset digest for this tarball
+> (the GitHub release API reports `digest: null`), and no reachable distro
+> packaging republishes one. The pinned sha256 is therefore *our own*
+> measurement, taken and reviewed on 2026-09-04 — trust-on-first-use, recorded
+> once and enforced forever. It is not an upstream attestation, and the file says
+> so, so nobody later mistakes it for one.
+>
+> The written offer in the notices now points at the in-bundle copy **first**,
+> with the upstream URL as the secondary route.
 
 ### D3 — Cisco-headered MIB extracts
 `src/backend/collectors/mibs/vendored/SNMPv2-TC` and `SNMPv2-CONF` are Cisco's
@@ -312,6 +397,23 @@ reduces risk. Two gaps:
   licence. The `sso` profile IS in `BASE_PROFILES`, so this ships in the core
   bundle. UBI redistribution is permitted with conditions; those conditions need
   a read for an on-prem appliance, or Keycloak needs a non-UBI base.
+
+  > **DECIDED 2026-09-04 — ACCEPT the UBI EULA and document it in the ship set.**
+  > Not rebased. The EULA permits redistribution of the unmodified UBI image and
+  > of applications built on it without a Red Hat subscription; Correlix ships the
+  > image exactly as the Keycloak project publishes it (a digest-pinned upstream
+  > reference, no rebuild, no `FROM`, no Correlix layer), so the acceptance is a
+  > documentation duty rather than an engineering one. Rebasing would mean
+  > maintaining our own Keycloak build, a larger and riskier surface than
+  > accepting a redistribution-permitting EULA.
+  >
+  > **Built:** a `Red Hat Universal Base Image EULA — Keycloak (sso profile)`
+  > section in the generated notices carrying the terms URL, the explicit
+  > acceptance, the "no Red Hat support, no implied endorsement" statement and
+  > the fact that a bundle recipient is bound by it too; the same in `NOTICE`; a
+  > customer-facing page at `docs-portal/docs/deploy/third-party-components.md`;
+  > row 5.7b in `docs/RELEASE_CHECKLIST.md`; and a paragraph in the release
+  > notes.
 - **Gotenberg** (`pdf` profile) is the highest-risk image in the repo and, happily,
   **ships in nothing today**. Its own code is MIT, but the `debian:12-slim` image
   bundles **PDFtk (GPL-2.0-or-later)**, LibreOffice (MPL-2.0),
@@ -321,6 +423,13 @@ reduces risk. Two gaps:
   licences can change under us between rebuilds. **Rule to adopt: the `pdf`
   profile never enters a customer bundle** unless it is first switched to a slim
   variant without msttcorefonts and PDFtk.
+
+  > **DECIDED 2026-09-04 — NEVER SHIP, enforced mechanically.** The rule above was
+  > a convention, and a convention is worth nothing the day someone adds
+  > `--profile pdf` to `BASE_PROFILES`. `make-installer.sh` now hard-fails the
+  > build if a gotenberg image appears in the base image set **or in any add-on
+  > pack**, alongside the existing redpanda/redis/prometheus guards. Guarded by
+  > `test_gotenberg_can_no_longer_reach_a_bundle`.
 - **NetBox** (`netbox` profile) is Apache-2.0 for both app and image build and
   also ships in nothing. Its Ubuntu-based Python tree is unaudited *because* it
   never ships; auditing becomes necessary only if that changes.
@@ -334,6 +443,26 @@ reduces risk. Two gaps:
   `src/backend/internal/verify/modules.go`.
 - CLAUDE.md §6 records `golang.org/x/crypto` as pinned `v0.55.0`; `go.mod` says
   **`v0.56.0`**. Harmless drift, but the allowlist should match reality.
+
+---
+
+## 4a. Still open — the two findings the audit prints today
+
+D1–D6 are closed (§4). `python3 scripts/license-audit.py` nevertheless prints
+**two acknowledged findings** on every run, and this is the section its
+"see docs/security/LICENSE_AUDIT_2026-09-03.md" pointer means. Both are genuine
+owner calls, neither is a build failure, and neither was among the six.
+
+| # | Finding | Licence | Tracker | Why it is legitimately open |
+|---|---|---|---|---|
+| 1 | **`busybox`** — GPL-2.0-**only**, riding inside the Alpine/Debian base layers of images we redistribute unmodified. Printed with `(NOT MATCHED by any inventoried component)` because the inventory models image REFERENCES and busybox is a base LAYER. | GPL-2.0-only | 238 | The question is whether to mirror the base images' own source alongside each release the way syslog-ng's now is (`scripts/source-mirror.json` + `write_source_offer()`), or to keep relying on the distributions' own source availability. §5 records that relying on the distro is normal and universally accepted for unmodified base layers — that is the de-facto posture, and it has never been ratified. If the answer is "mirror", the mechanism exists and adding a component is one entry in the pin table. |
+| 2 | **`connector-vendor-marks`** — six official ITSM/chat/comms vendor marks (ServiceNow, Jira, Slack, Twilio, PagerDuty, Microsoft Teams) inlined as verbatim brand path data with brand colours in `src/frontend/src/components/ConnectorLogos.tsx` and minified into the shipped SPA. | LicenseRef-Trademark-ToU (no copyright licence) | 239 | Found 2026-09-04 while implementing D5; the owner ruled on the CLOUD marks only. Same class as D5, and it was invisible to the audit until then: the 2026-09-03 housekeeping deleted `assets/connectors/{jira,servicenow}.svg` as unreferenced dead files, but the identical marks live on inline WITH references (`tabs/admin.tsx`, `pages/appobs/providers.tsx`) — the file was closed and the exposure was not. Decide: (a) keep the six and record each mark's source package and terms URL beside it, the `cloudicons/README.md` pattern, or (b) replace with neutral connector glyphs exactly as D5 did for the clouds. |
+
+Both are registered in `scripts/license-data.json` as `status: OPEN` exceptions
+carrying an `owner_decision`, which is what makes `open_findings()` print them.
+`tests/test_license_audit.py` guards the printing itself — including, with a
+synthetic injection, the case where an OPEN exception matches nothing in the
+inventory, which is exactly how `busybox` stayed invisible for months.
 
 ---
 
@@ -407,3 +536,10 @@ and misstates syslog-ng's licence. Generating and shipping
 Beyond that, six items need an owner call — Grafana's AGPL posture being the one
 a customer's counsel will ask about first, and the Cisco/Arista MIB files being
 the two with the cheapest fixes.
+
+> **Where this stands now (2026-09-04, unchanged 2026-09-05).** All five
+> attribution counts above are CLOSED (§2 status update) and all six owner calls
+> are RULED (§4). What remains is **§4a: `busybox` (tracker 238) and
+> `connector-vendor-marks` (tracker 239)** — two acknowledged findings the audit
+> prints on every run and that genuinely await an owner decision. Nothing else
+> in this document is outstanding.

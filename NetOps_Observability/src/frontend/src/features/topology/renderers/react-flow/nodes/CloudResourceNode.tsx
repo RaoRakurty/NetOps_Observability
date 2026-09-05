@@ -1,11 +1,16 @@
 // CloudResourceNode.tsx — a CLOUD NETWORK resource card (VPC gateway / NVA /
 // subnet / endpoint …). Distinct from CloudNode (the generic cloud/WAN glyph):
-// this one wears the OFFICIAL provider mark (AWS/Azure vendored icon, GCP
-// monogram fallback) so the card reads as a specific provider's resource.
+// this one wears the provider-tagged cloud glyph — ORIGINAL Correlix artwork
+// (components/CloudGlyph.tsx), one silhouette with a plain letter tag AWS / AZ /
+// GCP — so the card reads as a specific provider's resource. The providers'
+// official trademark icons it used to render were removed by licence-audit D5
+// (2026-09-04); an unrecognised provider falls back to the untagged generic
+// cloud, never to another provider's mark.
 //
 // It composes the shared <NodeCard> shell — same fixed geometry, calm health
 // ring, confidence chip and no-shake invariant as every other node. Only the
-// icon (the provider mark) and the left-rule accent (provider colour) differ.
+// icon (the cloud glyph) and the left-rule accent (a neutral PRODUCT accent,
+// never a brand hue) differ.
 // The specific network function (IGW/NAT/VGW/…) is carried in the node label
 // and tags (drawer/tooltip) — the card face stays uniform per the skill.
 //

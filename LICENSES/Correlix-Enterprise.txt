@@ -1,0 +1,42 @@
+Correlix Enterprise License
+SPDX identifier: LicenseRef-Correlix-Enterprise
+
+CORRELIX-ENTERPRISE-TEXT-PLACEHOLDER
+
+THIS FILE DOES NOT YET CONTAIN A LICENCE.
+
+The Correlix Enterprise License has not been drafted. The terms of a
+source-available commercial licence are a legal instrument; they are the
+owner's to obtain from counsel, and nobody on the engineering side may
+invent, paraphrase, or copy them from another company. This file is a
+placeholder so that the identifier, the file layout, the SPDX headers, the
+directory map and the CI boundary gate can be built and enforced now, and
+the text dropped in when it exists.
+
+WHAT THIS MEANS TODAY
+
+Files marked `SPDX-License-Identifier: LicenseRef-Correlix-Enterprise`
+carry an identifier that resolves to no terms. They are NOT licensed to
+anyone. No grant is made or implied by this file, by the marking, or by the
+code being readable in this repository. All rights are reserved to Correlix
+until the text below is replaced.
+
+WHAT THE TEXT MUST SAY (the owner's stated intent, recorded here as a
+drafting brief for counsel — NOT as terms):
+
+  * source is provided for inspection, development and evaluation
+  * no production use without a commercial licence from Correlix
+  * no redistribution, sublicensing, or hosting as a service
+  * no warranty
+  * it applies ONLY to files and directories explicitly marked with this
+    identifier; everything else in the repository is Apache-2.0
+
+RELEASE BLOCKER
+
+`scripts/licensing-gate.py` fails its release check while the marker
+`CORRELIX-ENTERPRISE-TEXT-PLACEHOLDER` above is present. Correlix must not
+ship an artifact containing files marked under a licence that does not
+exist. See LICENSING.md and docs/design/LICENSING_MODEL_2026-09-04.md.
+
+Related: docs/design/TIERING_PLAN_2026-09-03.md names which capabilities
+this licence is intended to cover.

@@ -1,0 +1,52 @@
+{
+  "_comment": [
+    "GPL/LGPL SOURCE-OFFER MIRROR — the reviewed pin table for corresponding source.",
+    "",
+    "WHY THIS FILE EXISTS. Correlix redistributes copyleft-licensed binaries as",
+    "unmodified upstream container images. GPL-2.0 s3 lets a distributor discharge",
+    "the source obligation two ways: (a) ship the corresponding source ALONGSIDE the",
+    "binary, or (b) ship a written offer good for three years. Owner decision",
+    "2026-09-04 (licence audit D2, docs/security/LICENSE_AUDIT_2026-09-03.md s4 D2)",
+    "chose (a) for syslog-ng: MIRROR the exact upstream source tarball into every",
+    "shipped release, so the obligation is discharged at hand-over and no future",
+    "hosting change, repo rename or upstream deletion can leave us unable to honour",
+    "a request. The written offer in the notices now points at the in-bundle copy.",
+    "",
+    "HOW IT IS USED. scripts/make-installer.sh reads this file, fetches each entry,",
+    "verifies its sha256 against the pin below, and writes it to the bundle at",
+    "source-offer/<file>. A missing pin, a failed download or a checksum mismatch is",
+    "a HARD BUILD FAILURE (scripts/CLAUDE.md s16.1) — an unverified tarball is never",
+    "shipped, and 'the network was down' never silently produces a bundle whose",
+    "source offer is a lie.",
+    "",
+    "ON 'upstream's published sum'. Checked 2026-09-04: the syslog-ng project",
+    "publishes NO checksum file, no signature and no release-asset digest for this",
+    "asset (the GitHub release API reports `digest: null`), and no distro packaging",
+    "we could reach republishes a sha256 for the release tarball (Arch builds from",
+    "the git tag; Alpine has no aport). So there is no upstream attestation to",
+    "verify against. The `sha256` below is therefore OUR OWN recorded measurement of",
+    "the asset downloaded from the canonical release URL, taken and reviewed on",
+    "2026-09-04 and checked in here. That is trust-on-first-use, recorded once and",
+    "then enforced forever — NOT an upstream guarantee, and it is written down here",
+    "rather than implied. `verified_against` states this for each entry so nobody",
+    "later mistakes a self-measured pin for a vendor signature.",
+    "",
+    "UPDATING. When the pinned image version changes in deployment/docker, this file",
+    "MUST change with it — tests/test_source_offer.py fails the build otherwise."
+  ],
+  "components": [
+    {
+      "name": "syslog-ng",
+      "version": "4.7.1",
+      "image": "balabit/syslog-ng",
+      "compose_pin_source": "deployment/docker/docker-compose.yml",
+      "file": "syslog-ng-4.7.1.tar.gz",
+      "url": "https://github.com/syslog-ng/syslog-ng/releases/download/syslog-ng-4.7.1/syslog-ng-4.7.1.tar.gz",
+      "sha256": "5477189a2d12325aa4faebfcf59f5bdd9084234732f0c3ec16dd253847dacf1c",
+      "size_bytes": 6877191,
+      "verified_against": "self-measured 2026-09-04 from the canonical GitHub release asset; upstream publishes no checksum, signature or release-asset digest for this file",
+      "license": "LGPL-2.1-or-later (core: lib/, libtest/, syslog-ng/, syslog-ng-ctl/, persist-tool/, tests/loggen/, docker/) AND GPL-2.0-or-later (modules/, scl/) — verified against COPYING at tag syslog-ng-4.7.1",
+      "notes": "No OpenSSL linking exception exists in this COPYING. The stock balabit/syslog-ng image loads all modules, so the running combination is effectively GPL-2.0-or-later. This tarball IS the corresponding source for that image's syslog-ng."
+    }
+  ]
+}

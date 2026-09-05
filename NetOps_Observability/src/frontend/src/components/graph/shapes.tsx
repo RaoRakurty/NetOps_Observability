@@ -1,7 +1,5 @@
 import { useId } from "react";
-import awsMark from "../../assets/cloud/aws.svg";
-import azureMark from "../../assets/cloud/azure.svg";
-import gcpMark from "../../assets/cloud/gcp.svg";
+import { CloudGlyphShape, cloudTag } from "../CloudGlyph";
 
 // shapes.tsx — a small network-topology shape kit. Following the universal
 // convention (Cisco/Kentik/Auvik/Lucidchart): DEVICE TYPE = shape, HEALTH =
@@ -109,18 +107,20 @@ function shapeEls(kind: ShapeKind, tone: string, fill: string): JSX.Element {
 // highlight), a vivid toned stroke, and a soft glow so it pops on the dark NOC
 // canvas. `pulse` adds a breathing ring (for a fault). A faint type glyph hints
 // the device type.
-// Cloud-provider marks (VENDOR = the logo inside the shape, per the kit
-// convention above). aws/azure/gcp use the OFFICIAL icons vendored from the
-// providers' official packages (source + terms in
-// src/assets/cloud/README.md) — rendered as-is, only composited onto a tile
-// for contrast. Providers without a vendored official mark keep the
-// monogram badge fallback (none today).
-const PROVIDER_ICON: Record<string, { href: string; tile?: string }> = {
-  aws:   { href: awsMark },                // ships its own navy tile
-  azure: { href: azureMark, tile: "#FFFFFF" }, // transparent mark → white tile
-  gcp:   { href: gcpMark, tile: "#FFFFFF" },   // transparent mark → white tile
-};
-const PROVIDER_MARK: Record<string, { bg: string; fg: string; text: string }> = {};
+// Cloud-provider marks (VENDOR = the mark inside the shape, per the kit
+// convention above). Licence audit D5 (2026-09-04) removed the providers'
+// official vendored icons; what draws here now is ORIGINAL Correlix artwork
+// from components/CloudGlyph.tsx — one cloud silhouette for every provider,
+// distinguished only by a small plain letter tag (AWS / AZ / GCP). A provider
+// with no tag renders the untagged generic cloud, never another provider's
+// mark, and no provider colour appears: the glyph inherits `currentColor`.
+//
+// The glyph is authored in a 0 0 24 24 box and this kit draws in 0 0 100 100,
+// so it is placed with a translate+scale — which scales its 1.6 stroke with it,
+// keeping the glyph's weight PROPORTIONAL (the same relationship to its own box
+// as everywhere else the family is drawn).
+const PROVIDER_GLYPH_SCALE = 2;
+const PROVIDER_GLYPH_OFFSET = 50 - (24 * PROVIDER_GLYPH_SCALE) / 2; // centre the 24-box
 
 export function ShapeSVG({ kind, tone, size = 56, glyph = true, pulse = false, provider }: {
   kind: ShapeKind; tone: string; size?: number; glyph?: boolean; pulse?: boolean;
@@ -129,8 +129,10 @@ export function ShapeSVG({ kind, tone, size = 56, glyph = true, pulse = false, p
 }) {
   const uid = useId().replace(/[^a-zA-Z0-9]/g, "");
   const gid = `g-${uid}`;
-  const icon = provider ? PROVIDER_ICON[provider.toLowerCase()] : undefined;
-  const mark = provider && !icon ? PROVIDER_MARK[provider.toLowerCase()] : undefined;
+  // A declared provider replaces the generic type glyph with the cloud glyph;
+  // an unrecognised provider still draws the cloud, just untagged.
+  const providerTag = provider ? cloudTag(provider) : null;
+  const showProviderGlyph = Boolean(provider);
   return (
     <svg width={size} height={size} viewBox="0 0 100 100"
       style={{ filter: `drop-shadow(0 0 7px ${tone}88) drop-shadow(0 3px 5px rgba(0,0,0,.45))`, overflow: "visible" }}>
@@ -157,34 +159,19 @@ export function ShapeSVG({ kind, tone, size = 56, glyph = true, pulse = false, p
       {shapeEls(kind, tone, `url(#${gid})`)}
       {/* specular highlight — the "gloss" */}
       <ellipse cx="40" cy="30" rx="22" ry="13" fill="#ffffff" opacity={0.14} transform="rotate(-18 40 30)" />
-      {glyph && !mark && !icon && (
+      {glyph && !showProviderGlyph && (
         <text x="50" y="51" textAnchor="middle" dominantBaseline="central"
           fontSize="28" fill="#ffffff" opacity={0.92} style={{ fontWeight: 800 }}>
           {GLYPH[kind]}
         </text>
       )}
-      {icon && (
-        <g>
-          {/* the OFFICIAL provider mark replaces the generic glyph. The tile
-              (when the mark is transparent) sits BEHIND it for contrast — the
-              icon itself is untouched, per the providers' icon terms. */}
-          {icon.tile && (
-            <rect x="31" y="31" width="38" height="38" rx="7" fill={icon.tile}
-              stroke="#ffffff" strokeOpacity={0.25} strokeWidth={1.5} />
-          )}
-          <image href={icon.href} x="34" y="34" width="32" height="32" />
-        </g>
-      )}
-      {mark && (
-        <g>
-          {/* monogram badge fallback for providers without a vendored official mark */}
-          <rect x="28" y="36" width="44" height="28" rx="7"
-            fill={mark.bg} stroke="#ffffff" strokeOpacity={0.25} strokeWidth={1.5} />
-          <text x="50" y="50.5" textAnchor="middle" dominantBaseline="central"
-            fontSize={mark.text.length > 2 ? 16 : 18} fill={mark.fg}
-            style={{ fontWeight: 800, letterSpacing: 0.5 }}>
-            {mark.text}
-          </text>
+      {showProviderGlyph && (
+        // The cloud glyph replaces the generic type glyph. It is drawn in white
+        // on the toned shape (monochrome, no tile, no brand hue) — `color` is
+        // what the glyph's `currentColor` resolves against.
+        <g color="#ffffff" opacity={0.92}
+          transform={`translate(${PROVIDER_GLYPH_OFFSET} ${PROVIDER_GLYPH_OFFSET}) scale(${PROVIDER_GLYPH_SCALE})`}>
+          <CloudGlyphShape tag={providerTag} />
         </g>
       )}
     </svg>

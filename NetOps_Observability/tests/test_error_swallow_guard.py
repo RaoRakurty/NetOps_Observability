@@ -121,6 +121,17 @@ ALLOWLIST: dict[AllowKey, str] = {
     # carries the same numbers, so the run's timing is observable even when the
     # file is not written.
     ("install.py", "_timing_finish", "5fcaf1a7"): "install-timing.json write; warn() names path+errno, marker still carries the numbers, install verdict unchanged",
+    # Reviewed 2026-09-03 (snapshot-restorability wave). Exactly the
+    # _timing_finish shape and reviewed against it: the handler guards ONLY the
+    # write of data/opensearch-snapshots.DO-NOT-DELETE-README.txt — an operator
+    # WARNING NOTICE placed beside the snapshot repository after the seven-day
+    # unrestorable-backup incident. It is not a stack input: no service reads
+    # it, and its absence changes nothing about how the platform runs. Failing
+    # the install over it would report a correctly-installed stack as broken,
+    # and on the fail() path the raised OSError would REPLACE the real install
+    # error the operator needs. Not swallowed: warn() names the exact path and
+    # the errno, and says in one line which protection is missing.
+    ("install.py", "ensure_data_dirs", "bcb62824"): "do-not-delete notice beside data/opensearch-snapshots; warn() names path+errno, no service reads it, install verdict unchanged",
     ("install.py", "api_runtime_uid", "831da648"): "uid/gid from a .env that may not exist yet (--no-start dry paths); compose default",
     ("refresh_provider_ranges.py", "main", "0e6dd5ac"): "first-run bootstrap: no previous snapshot file => empty baseline",
     # Re-pinned 2026-08-17: shifted by the BUS_PARTITIONS planner work
@@ -485,6 +496,32 @@ ALLOWLIST: dict[AllowKey, str] = {
     ("license-audit.py", "main", "22e5612b"): "--notices write of docs/THIRD_PARTY_LICENSES.md: same contract — stderr names path+errno, exit 2 propagates, and make-installer.sh's write_licenses() hard-fails the bundle on a non-zero audit exit rather than shipping a stale notice",
     ("bmp-synthetic-session.py", "run", "0c2ffe3b"): "BMP connect failure in a lab traffic generator: prints 'connect to <host>:<port> failed: <exc>' to stderr and returns 1, which main() returns and sys.exit(main()) makes the process exit code — the run is over, not continued",
     ("sbom.py", "_git_in", "4f8b5435"): "git probe for build provenance: prints 'git <argv> unavailable: <exc>' to stderr, then returns None so the documented fallbacks run (build_timestamp warns the timestamp is NOT reproducible; product_version yields 0.0.0-unknown). A missing git or non-repo dir is expected and must not fail an SBOM of the dependency tree",
+
+    # ===================================================================
+    # 2026-09-05 — the open-core licensing lane (gen-licensing-map.py,
+    # licensing-gate.py landed without passing through this file).
+    #
+    # BOTH are the ACCUMULATOR shape of the return-value escalation already
+    # reviewed above: the handler names the path and the errno, records the
+    # site in a failure list, and the list is what makes the process exit
+    # non-zero a few lines later. There is no third outcome — neither script
+    # has a "carry on and report success" path once its list is non-empty —
+    # so rewriting either as a bare `sys.exit()` inside the loop would
+    # satisfy the AST, lose the OTHER failures the run would have reported,
+    # and change nothing an operator can observe.
+    #
+    # licensing-gate.py's site was FIXED before being pinned, not pinned
+    # as-is. It used to be `except (OSError, UnicodeDecodeError): continue`,
+    # which meant a source file the gate could not OPEN was skipped exactly
+    # as if its SPDX header had been checked and found correct — in a gate
+    # whose whole contract is to fail closed, and on the check (A) that
+    # decides whether a commercial file is marked commercial. The two causes
+    # are now separate handlers: a non-UTF-8 file genuinely has no header to
+    # assert about and is still skipped; an unreadable one is a check-A
+    # FAILURE naming the path and the errno.
+    # ===================================================================
+    ("gen-licensing-map.py", "main", "303f7f70"): "--check of a LICENSING.md target: prints 'MISSING: <target>: <errno>' to stderr and appends the target to `stale`, and a non-empty `stale` prints the regeneration command and returns 1 — main()'s return value is the process exit status (sys.exit(main())). Reported and fatal; the `continue` only lets the OTHER root's staleness be reported in the same run rather than hiding it behind the first failure",
+    ("licensing-gate.py", "check_spdx", "95be8ea1"): "a source file the SPDX check could not read: appended as a check-A Failure naming the path and the errno, which is what makes the gate exit non-zero (the gate fails closed by design). The `continue` is what lets the remaining files still be checked, so one unreadable file yields a complete report instead of a truncated one. NOT a swallow: the silent `continue` this replaced would have passed an unreadable commercial file as if its header had been verified",
 }
 
 # Rule 1: literal swallows, any text file (catches heredoc Python in .sh too).

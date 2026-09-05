@@ -17,6 +17,12 @@
 
 FROM nginx:1.27-alpine@sha256:65645c7bb6a0661892a8b03b89d0743208a18dd2f3f17a54ef4b76fb8e2f2a10
 
+# The image's licence, in OCI metadata, so `docker image inspect` answers it
+# without unpacking the image. Correlix core is Apache-2.0; see LICENSING.md for
+# which parts of the tree are commercial add-ons instead. Enforced by
+# scripts/licensing-gate.py check D and tests/test_licensing_consistency.py.
+LABEL org.opencontainers.image.licenses="Apache-2.0"
+
 COPY src/frontend/dist /usr/share/nginx/html
 
 # Third-party notices served at /licenses/ (2026-09-03 licence audit §2).

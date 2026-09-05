@@ -1,0 +1,21 @@
+Correlix Enterprise License
+SPDX-License-Identifier: LicenseRef-Correlix-Enterprise
+
+THIS DIRECTORY IS NOT APACHE-2.0.
+
+Every file in src/backend/internal/ldap is a COMMERCIAL ADD-ON MODULE of
+Correlix. It implements the `ldap` entitlement — LDAP / Active Directory
+directory authentication — which the owner has placed in the Enterprise tier.
+
+The rest of Correlix is Apache-2.0. Local authentication and OIDC single
+sign-on are core, and are unaffected by this notice.
+
+  Full terms      : LICENSES/Correlix-Enterprise.txt at the repository root
+  Directory map   : LICENSING.md
+  Which tier      : docs/design/TIERING_PLAN_2026-09-03.md
+  Why the split   : docs/design/LICENSING_MODEL_2026-09-04.md
+
+NOTE (2026-09-04): the Correlix Enterprise License text has not been drafted
+yet. Until it exists, the identifier above resolves to no terms, no licence is
+granted over this directory, and all rights are reserved to Correlix. The
+release gate refuses to ship in this state.

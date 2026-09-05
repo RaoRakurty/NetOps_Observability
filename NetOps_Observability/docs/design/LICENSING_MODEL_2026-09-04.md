@@ -104,6 +104,25 @@ header, and the installer bundle's `LICENSES.md`.
    MSP management, SAML/SCIM/LDAP) — its own wave after the current builds land.
 2. Licence file: package `internal/licence` (parse, verify, ceilings, grace), boot + page,
    `requireFeature`, the seven enforcement points, Community defaults with no file.
+   **DONE 2026-09-04.** `internal/entitlement` (closed Feature/Ceiling vocabulary, `Require`
+   /`CheckCeiling`, the structured 402, `safety_invariant_test.go`) + `internal/licence`
+   (`document.go` canonical payload, `verify.go` ed25519 + expiry/grace evaluation,
+   `state.go` honest degradation + overages, `store.go` atomic file store, `service.go`
+   entitlement projection + the two gauges, `api.go` the route) + `internal/licence/signer`
+   (never in the api's import graph). Route `GET|PUT|DELETE /api/system/licence`
+   (`requirePlatformAdmin`, audited both outcomes); file at `/data/api/licence.json`
+   (`LICENCE_FILE`). CLI `cmd/correlix-licence` (keygen/sign/verify/show). Page
+   `src/frontend/src/pages/Licence.tsx` + `licence.model.ts`. Alerts: `rules.yaml` group
+   `licence` (`LicenceExpiringSoon`/`InGrace`/`Degraded`, all `tier: warning`) with
+   `rules-tests/licence.test.yaml`. Tests: `internal/licence/licence_test.go`,
+   `internal/entitlement/{entitlement,safety_invariant}_test.go`, `licence_routes_test.go`.
+   Runbook `docs/runbooks/licensing.md`; operator page
+   `docs-portal/docs/administration/licence.md`. ENFORCED ceilings are `devices` and
+   `watched_prefixes` only; the other five are carried and labelled un-enforced. Expiry
+   policy remains the open owner decision (grace has no built-in default). `siem_export` and
+   `scim` are in the locked vocabulary with no route yet
+   (`TestLicenceGatesReadyForAbsentFeatures`). The signing key embedded today is the LAB key;
+   the production key ceremony is still pending.
 3. Metering + signed usage report + Licence page usage bars.
 4. Separate the mixed directories into clean commercial packages (tracked; today most
    commercial code shares packages with core code — `LICENSING.md` lists them).

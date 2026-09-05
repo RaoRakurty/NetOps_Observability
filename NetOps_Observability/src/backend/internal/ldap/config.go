@@ -1,3 +1,9 @@
+// SPDX-License-Identifier: LicenseRef-Correlix-Enterprise
+//
+// COMMERCIAL ADD-ON MODULE. This package implements the `ldap` entitlement
+// (Enterprise tier) and is NOT Apache-2.0 core. See the LICENSE notice file in
+// this directory, ../../../../LICENSING.md, and LICENSES/Correlix-Enterprise.txt.
+
 package ldap
 
 // config.go — the operator-facing configuration domain for the LDAP provider
