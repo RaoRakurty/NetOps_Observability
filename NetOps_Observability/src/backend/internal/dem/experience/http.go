@@ -24,6 +24,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"sort"
 	"strings"
 	"time"
 
@@ -429,14 +430,17 @@ func (a *API) aiAvailability() AIAvailability {
 // as NOT MEASURED rather than omitted, so the absence is visible.
 func hotspots(asm Assembly) []Hotspot {
 	out := []Hotspot{}
-	bySite := map[string][]JourneyHealth{}
+	// Sites are ranked by OPEN INCIDENTS, not by a score: a per-site experience
+	// score needs a prober at the site, and most deployments have one vantage.
+	// Counting incidents is a claim we can actually support.
+	incidentsPerSite := map[string]int{}
 	byApp := map[string][]JourneyHealth{}
 	for _, h := range asm.JourneyHealth {
 		byApp[h.App] = append(byApp[h.App], h)
 	}
 	for _, inc := range asm.Incidents {
 		for _, s := range inc.AffectedSites {
-			bySite[s] = append(bySite[s], JourneyHealth{})
+			incidentsPerSite[s]++
 		}
 	}
 	for app, list := range byApp {
@@ -463,11 +467,17 @@ func hotspots(asm Assembly) []Hotspot {
 		}
 		out = append(out, h)
 	}
-	for site, list := range bySite {
-		out = append(out, Hotspot{Dimension: "site", Key: site, Subjects: len(list),
-			Failing: len(list), Band: BandNotMeasured,
-			Reason: "sites are ranked by open experience incidents; a per-site score needs a prober at the site"})
+	for site, n := range incidentsPerSite {
+		out = append(out, Hotspot{Dimension: "site", Key: site, Subjects: n, Failing: n,
+			Band:   BandNotMeasured,
+			Reason: "ranked by open experience incidents; a per-site score needs a prober at that site"})
 	}
+	sort.SliceStable(out, func(i, j int) bool {
+		if out[i].Dimension != out[j].Dimension {
+			return out[i].Dimension < out[j].Dimension
+		}
+		return out[i].Key < out[j].Key
+	})
 	for _, dim := range []string{"isp", "device", "browser", "version", "network"} {
 		out = append(out, Hotspot{Dimension: dim, Band: BandNotMeasured,
 			Reason: "this breakdown needs first-party real-user telemetry, which is not collected yet"})

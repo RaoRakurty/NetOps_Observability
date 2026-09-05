@@ -1763,6 +1763,21 @@ services:
       FEATURE_DEM: ${FEATURE_DEM:-false}
       DEM_TARGETS_FILE: ${DEM_TARGETS_FILE:-/data/dem_targets.json}
       DEM_PROJECT_INTERVAL: ${DEM_PROJECT_INTERVAL:-60s}
+      # The causality layer above the catalogue (internal/dem/experience):
+      # journeys, the normalized change feed, derived experience incidents and
+      # the published score. DEM_EXPERIENCE_FILE is the file backend's store
+      # (ignored when the app-state backend is Postgres, where migration 0044's
+      # RLS tables hold it). DEM_SCORE_POLICY_FILE optionally REPLACES the
+      # shipped, versioned score policy; a policy that does not parse is refused
+      # loudly and the shipped one stays in force.
+      DEM_EXPERIENCE_FILE: ${DEM_EXPERIENCE_FILE:-/data/dem_experience.json}
+      DEM_SCORE_POLICY_FILE: ${DEM_SCORE_POLICY_FILE:-}
+      # The AI investigator explains evidence Correlix has ALREADY gathered; it
+      # never gathers its own and can never mark a cause confirmed. It needs the
+      # platform copilot AND this switch, because a feature that can send
+      # evidence to a model gets its own. Off leaves the panel visible and
+      # disabled with the reason, never hidden.
+      FEATURE_DEM_AI_INVESTIGATOR: ${FEATURE_DEM_AI_INVESTIGATOR:-false}
       # Service-level synthetic checks (HTTP/ICMP/TCP, collectors/synthetics.go).
       # HTTP + TCP need no privileges so they can run right here in the API;
       # ICMP works when the kernel's ping_group_range admits the container user

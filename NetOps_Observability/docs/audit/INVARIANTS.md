@@ -144,6 +144,8 @@ and thereby certified the blind scope as healthy.
 | Ingest ports authenticate the producer | ✅ | **BUILD** — `TestProduceCarriesIngestAuth`; fail-closed config (F-08) |
 | The security producer keys every bus record by the owning tenant | ✅ | **BUILD** — `internal/seclane`: `TestScanAllIteratesTenantsAndKeysEveryRecordByTenant` (partition key == event tenant, and a device never ships under another tenant's key), `TestScanNamesOnlyTheCallersOwnIndicesAndCHScope` |
 | One tenant's disabled detection cannot change another tenant's scan | ✅ | **BUILD** — `TestDisabledRuleIsPerTenant` (P3-EMIT, 2026-09-02) |
+| The monitored-device count and switch are per tenant | ✅ | **BUILD** — `TestMonitoringCrossOrgIsolation` (own-only usage, another tenant's device 404 on read AND write, a platform-owned device in nobody's projection, one tenant's change does not move another's number) |
+| Digital Experience is per tenant, derivation included | ✅ | **BUILD** — `TestDEMExperienceJourneysCrossOrgIsolation`, `TestDEMExperienceChangesCrossOrgIsolation`, `TestDEMExperienceDerivedViewsAreScopedAndHonest`, `TestDEMExperienceIncidentIDsAreNeverConfirmed` (own-only lists, foreign journey/change/incident id → 404, `as_tenant` narrows only, the platform owner in the Global view refused on every route, and an incident id derived under another tenant's scope never resolves — incident ids are a function of the tenant) |
 
 **Gap — the highest-value one in this file:** §3a rule 5 is mandatory and unenforced. A guard that fails when a new tenant-scoped route lacks an isolation test would close the class the way `TestNoVoidSaveLocked` closed its own.
 
@@ -378,6 +380,35 @@ would violate it.
 | Overload philosophy: prefer **"still analyzing" over an unsupported root cause** — specificity holds, recall queues | ✅ | **RIG-GATE (measured shape) + PROSE (the rule)** — at 2× the ceiling accuracy degraded by RECALL ONLY: 644/690 with specificity **1.000**, zero false positives, all 46 misses being never-evaluated windows or starved-`undetermined` objects (`HOST_CEILING_2026-08-31.md` §3). The engine never guesses; no future change may trade that for tail latency |
 | **Rebalance correctness is a RELEASE REQUIREMENT**: one identity through the handoff, gapless versions, no duplicate versions, durable offsets/signals/evidence preserved, and the measured ≤ 652 ms handoff flush not to regress | ✅ | **RIG-GATE** — the tracker-155 four-run arc (`OWNERSHIP_155_VALIDATION_2026-08-31.md`): positive pass 1.00/1.00 on both disturbed arms, v1–v10 gapless across the handoff, 0 duplicate versions, flush 210–652 ms; plus the 199 shutdown-handoff flush (`36036db5`, `corr_ownership_handoff_unflushed_total` 0 on every replica). A release that regresses any clause does not ship |
 | The **three-plane architecture is the preserved model**: Aggregation → Decision → Evidence; raw observations stay durable; suppression reduces correlation-plane work, **never drops raw evidence** | ✅ | **RIG-GATE + PROSE** — the plane's exact accounting (observed == forwarded + suppressed, §10 row above) with ingestion lossless on every graded leg including the suppressing arms (900,001 == 900,001 + 0 DLQ). **No reversion to every-observation-full-graph-work** — a change that makes the decision plane re-process raw observations, or that lets suppression touch the durable raw record, violates this row |
+
+## 11. Digital Experience evidence discipline (S17, 2026-09-05)
+
+> *A verdict is a claim about EVIDENCE. Correlix never confirms what it did not
+> independently observe, and never renders an absence as health.*
+
+| Invariant | Status | Enforced by |
+|---|---|---|
+| CONFIRMED requires two DIFFERENT anchor-capable modality classes from two observers, with a concrete independent pair | ✅ | **BUILD** — `TestIndependenceCountsKindsNotCopies`, `TestIndependentVantagesRaiseConfidence`. Repeating one source, or adding a second vantage of the SAME modality, never satisfies the rule. The vocabulary is the correlation engine's own (`src/correlation/signals.py` `ModalityClass`) |
+| A change record can corroborate but never confirm | ✅ | **BUILD** — `TestChangeBeforeEffectSupportsButNeverConfirms`. `change_record` and `business` are support-only classes, so "it happened just before" cannot reach `confirmed` however much of it there is |
+| A change AFTER first impact is shown but never scored as a cause | ✅ | **BUILD** — `Window.Aligns` + `TestChangesAreRankedByCorrelationNotProximity` |
+| Missing telemetry lowers confidence, and a missing ANCHOR-capable source blocks CONFIRMED | ✅ | **BUILD** — `TestMissingTelemetryLowersConfidenceAndBlocksConfirmation`; an UNCONFIGURED source lowers without blocking, so a gap cannot make every incident permanently unconfirmable |
+| A decisive contradiction rejects a hypothesis regardless of its support, and rejected hypotheses are kept | ✅ | **BUILD** — `TestDecisiveContradictionRejects`, `TestRejectedHypothesesAreKeptAndRankedLast` |
+| No score is published below the evidence minimum — never 0, never 100 | ✅ | **BUILD** — `TestScoreIsDecomposableVersionedAndGated`; the weight of an unmeasured dimension is redistributed, and the policy VERSION travels with every score |
+| A flaky synthetic cannot raise a high-severity incident | ✅ | **BUILD** — `TestFlakySyntheticCannotRaiseAHighSeverityIncident`; the same failure with a trustworthy check IS critical |
+| UNKNOWN and NO DATA are never healthy; an absent source visibly costs confidence | ✅ | **BUILD** — `TestDataHealthNeverCallsAbsenceHealthyAndGatesConfirmation`; `Healthy()` admits exactly one state |
+| The AI never invents evidence and never confirms | ✅ | **BUILD** — `TestInvestigatorRejectsInventedEvidenceAndCannotConfirm`: an answer citing an id it was not given is REJECTED WHOLE, a model-claimed CONFIRMED is downgraded and the downgrade is recorded, and anything above `pseudonymous_user` is withheld with the redaction stated |
+| The derivation is pure and does not mutate its evidence | ✅ | **BUILD** — `TestDetectDoesNotMutateItsInput`, `TestIncidentDerivationIsDeterministic` |
+| The end-to-end acceptance scenario holds | ✅ | **BUILD** — `TestPhaseTAcceptanceScenario`: one incident, transit confirmed across three independent modality classes, the deployment rejected by the unaffected cohort, ownership on the seam, an action with a verification plan, recovery not satisfied by the action completing |
+
+**Standing gap — the honest one.** Every row above is proven on FIXTURES. In a
+live deployment Correlix has exactly ONE anchor-capable evidence class in
+production (`active_probe`, the synthetic prober), so a live tenant reaches
+`suspected` and never `confirmed`. That is not a defect in the reasoning; it is
+a statement about the evidence, and `GET /api/dem/data-health` says so in one
+field (`can_confirm`) with a sentence. It closes when tracker 252 ships a second
+anchor-capable producer (flow-derived ART, first-party RUM, or an endpoint
+agent) — and the acceptance scenario should then be re-proven LIVE, not only on
+fixtures.
 
 ### 10b. Parser programme invariants (2026-09-02)
 
