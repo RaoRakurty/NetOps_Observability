@@ -78,10 +78,26 @@ func newAlertEpisodeStore(path string) *alerts.EpisodeStore {
 
 // ── server adapters (engine → episodes) ──────────────────────────────────────
 
+// experienceRulePrefix marks the Digital Experience rules, whose alert identity
+// is a TARGET rather than a device (dem_* series carry no `device` label).
+const experienceRulePrefix = "Experience"
+
 // alertTenant derives the owning tenant of an alert from its device. Device-less
 // (stack-level) alerts and alerts on unknown devices are platform-owned ("").
+//
+// ONE narrow exception (S17): the Digital Experience rules. Their subject is a
+// synthetic TARGET, not a device, so there is no device to follow — and their
+// `tenant` label is not attacker-influenced telemetry but a value OUR OWN
+// prober writes from the catalogue row it was handed. Following it for these
+// rules is what makes an experience page tenant-scoped instead of platform-
+// owned; the general "never the alert's labels" rule still stands for every
+// other rule, which is why this is keyed on the rule name and not on the
+// presence of a label.
 func (s *server) alertTenant(a models.Alert) string {
 	if a.DeviceID == "" {
+		if strings.HasPrefix(a.Rule, experienceRulePrefix) {
+			return strings.ToLower(strings.TrimSpace(a.Labels["tenant"]))
+		}
 		return ""
 	}
 	if d, ok := s.discovery.Get(a.DeviceID); ok {

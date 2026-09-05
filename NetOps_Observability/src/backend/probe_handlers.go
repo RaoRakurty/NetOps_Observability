@@ -1,12 +1,16 @@
 package backend
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"os"
 	"time"
 
 	"netops/backend/collectors"
+	"netops/backend/internal/dem"
+	"netops/backend/internal/platformdb"
 )
 
 // probe_handlers.go — read API for active-measurement results. STAMP metrics go
@@ -59,4 +63,132 @@ func (s *server) mergedProbePaths(local []collectors.PathResult) []collectors.Pa
 	}
 	out := append([]collectors.PathResult{}, local...)
 	return append(out, s.remotePaths.All(time.Now().UTC())...)
+}
+
+// ── Digital Experience Monitoring (S17, 2026-09-05) ──────────────────────────
+//
+// The DEM wiring lives in THIS file rather than a new one: the root package is
+// at its file-count ratchet (package_growth_guard_test.go), and the domain logic
+// is where CLAUDE.md §2 wants it — internal/dem. What is left here is only the
+// integration seam: backend selection, the RBAC gate mapping, and the
+// construction of the module's HTTP surface and its work-queue projector.
+//
+// See docs/design/DEM_PLUMBING_2026-09-05.md and docs/design/DEM_DATA_MODEL_2026-09-05.md
+// (the product design of record is docs/design/DEM_2026-09-05.md).
+
+// newDEMStore picks the catalogue backend, exactly as the BGP alert policy and
+// the security control plane do: Postgres (migration 0043, FORCE-RLS) when it is
+// active, the file store otherwise.
+//
+// A corrupt file still SERVES (an empty catalogue) but says so — a catalogue
+// that failed to load must never look like one a tenant never wrote, because the
+// visible consequence of both is the same empty table.
+func newDEMStore() dem.Catalogue {
+	if ps, ok := platformdb.ActivePG(); ok {
+		return dem.NewPGStore(ps.DB())
+	}
+	fs := dem.NewFileStore(envOr(dem.EnvTargetsFile, "/data/dem_targets.json"))
+	if err := fs.LoadErr(); err != nil {
+		logError("dem", "the experience target catalogue could not be read — it starts EMPTY and NO target will be measured until it is re-added or the file is repaired",
+			map[string]any{"err": err.Error()})
+	}
+	return fs
+}
+
+// demAuthz maps the module's gates onto the RBAC model.
+//
+// GATE CHOICE (§3a rule 3): experience targets are per-tenant OPERATOR data
+// about the tenant's own services — not platform plumbing — so both gates are
+// requirePerm(infrastructure, …) plus a tenant filter, the same gate the probe
+// path surfaces already use. A platform gate here would be wrong in BOTH
+// directions: it would lock tenant admins out of their own targets and let a
+// cross-tenant principal manage everyone's.
+func (s *server) demAuthz(w http.ResponseWriter, r *http.Request, gate dem.Gate) (dem.Principal, bool) {
+	var level int
+	switch gate {
+	case dem.GateRead:
+		level = LevelRead
+	case dem.GateWrite:
+		level = LevelWrite
+	default:
+		// The module declares exactly two gates. An unknown gate is a wiring
+		// bug, and the safe answer to a gate we cannot map is refusal.
+		writeError(w, http.StatusForbidden, errors.New("unsupported gate"))
+		return dem.Principal{}, false
+	}
+	claims, ok := s.requirePerm(w, r, "infrastructure", level)
+	if !ok {
+		return dem.Principal{}, false
+	}
+	tenant, cross := principalTenant(claims)
+	if tenant == TenantGlobal {
+		// The platform tenant is not a customer: treat it as scopeless so the
+		// module's own refusal fires rather than reading a shared bucket.
+		tenant = ""
+	}
+	return dem.Principal{Tenant: tenant, Cross: cross, Subject: claims.Sub}, true
+}
+
+// demQuerier adapts the platform's VictoriaMetrics instant-query client to the
+// module's Querier seam. The tenant scoping arrives as extra_filters[] built by
+// dem.TenantFilter — the backend AND's them into every metric in the expression,
+// which is why a crafted expression cannot evade them.
+type demQuerier struct{ s *server }
+
+func (q demQuerier) Instant(ctx context.Context, expr string, filters []string) ([]dem.Sample, error) {
+	rows, err := q.s.vmInstantScoped(ctx, expr, filters)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]dem.Sample, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, dem.Sample{Labels: r.Labels, Value: r.Value})
+	}
+	return out, nil
+}
+
+// buildDEMAPI builds the module's HTTP surface. It is built unconditionally: the
+// catalogue is manageable with the feature off (an operator must be able to
+// prepare targets before enabling collection), and every score then says the
+// feature is off instead of showing an empty table that reads as "all well".
+func (s *server) buildDEMAPI(cat dem.Catalogue) (*dem.API, error) {
+	var q dem.Querier
+	if metricsUpstreamIsVictoria(s.metricsBase()) {
+		q = demQuerier{s: s}
+	}
+	return dem.NewAPI(dem.APIDeps{
+		Authz:      s.demAuthz,
+		Targets:    cat,
+		Metrics:    q,
+		Enabled:    envBool(dem.EnvFeatureFlag),
+		Now:        func() time.Time { return time.Now().UTC() },
+		WriteJSON:  writeJSON,
+		WriteError: writeError,
+		LogWarn:    func(m string, f map[string]any) { logWarn("dem", m, f) },
+		Counters:   s.demMetrics,
+	})
+}
+
+// demPublisher is the projector's transport: the same key-value channel the WAN
+// circuit projector already uses to hand the prober its work.
+type demPublisher struct{}
+
+func (demPublisher) Publish(ctx context.Context, targets []dem.WireTarget, ttlSec int) error {
+	return collectors.PublishDEMTargets(ctx, targets, ttlSec)
+}
+
+// The three DEM route entry points. They resolve s.demAPI at REQUEST time (a
+// bound method value would capture a nil surface at registration time), and the
+// module's handlers nil-check their receiver, so an unbuilt surface answers 404
+// rather than degrading into an unscoped read.
+func (s *server) handleDEMTargets(w http.ResponseWriter, r *http.Request) {
+	s.demAPI.HandleTargets(w, r)
+}
+
+func (s *server) handleDEMTargetItem(w http.ResponseWriter, r *http.Request) {
+	s.demAPI.HandleTargetItem(w, r)
+}
+
+func (s *server) handleDEMExperience(w http.ResponseWriter, r *http.Request) {
+	s.demAPI.HandleExperience(w, r)
 }

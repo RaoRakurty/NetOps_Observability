@@ -1916,3 +1916,118 @@ groups:
         labels: { severity: critical, layer: host }
         annotations:
           summary: "Under {{ $value | humanizePercentage }} free — OpenSearch flood stage is at 5%. Every index goes read-only and ingestion stops SILENTLY."
+
+  # ── Digital Experience (S17, 2026-09-05) ────────────────────────────────────
+  # Alerts about what a USER experiences, not about what a device reports. Their
+  # subject is a synthetic TARGET from the per-tenant catalogue, so:
+  #
+  #   * the identity is (tenant, target, kind, site, app) — there is no `device`
+  #     label on a dem_* series and there deliberately never will be: a target
+  #     is a service, and the device in front of it is one hypothesis about why
+  #     it is slow, not the thing being measured;
+  #   * they are DELIVERED BY THE PRODUCT NOTIFIER (the in-API alerts engine,
+  #     which reads this same file), which resolves the owning tenant for a
+  #     device-less experience alert from the `tenant` label — a value our own
+  #     prober writes from the catalogue row, never device-supplied telemetry.
+  #     The platform vmalert→webhook lane REFUSES them on sight, exactly as it
+  #     refuses every other customer-identity alert, and that is correct: a
+  #     tenant's slow application is not a platform page.
+  #   * every threshold is a GAUGE the prober publishes beside the measurement
+  #     (dem_target_availability_budget_pct / dem_target_latency_budget_ms), so
+  #     the comparison is pure PromQL and keeps evaluating while the api — which
+  #     owns the catalogue — is the thing that is down.
+  #
+  # Tier: warning, all of them. The owner's ruling stands — exactly four
+  # conditions are page-worthy, and none of them is "an application is slow".
+  # Runbook: docs/runbooks/digital-experience.md
+  - name: noc-experience
+    interval: 60s
+    rules:
+      - alert: ExperienceAvailabilityBelowBudget
+        # Availability over the last 15 minutes against the target's OWN budget.
+        # Both sides are folded to the same label set so this is a plain vector
+        # comparison — no group_left, which is what keeps it readable and keeps
+        # the promtool test honest about the label set that comes out.
+        #
+        # The denominator is count_over_time, not a rate: probe samples arrive
+        # on the target's own interval (15s..1h) and a rate would report a
+        # 1-hour target as a hole rather than as one sample.
+        expr: >
+          100 * (
+            sum by (tenant,target,kind,site,app) (sum_over_time(dem_probe_success[15m]))
+            /
+            sum by (tenant,target,kind,site,app) (count_over_time(dem_probe_success[15m]))
+          )
+          <
+          max by (tenant,target,kind,site,app) (dem_target_availability_budget_pct)
+        for: 10m
+        labels: { severity: warning, tier: warning }
+        annotations:
+          summary: "Experience target {{ $labels.target }} ({{ $labels.kind }}) is at {{ $value | printf \"%.2f\" }}% availability, under its budget"
+          description: >-
+            Site {{ $labels.site }}, application {{ $labels.app }}. This is the SYNTHETIC view: a probe from
+            the prober's vantage failed. Confirm the failure reason on the target's drill-down (dns / tls /
+            connect_refused / connect_timeout / timeout / status) before assuming the service is down —
+            a vantage that lost its own path reports the same shape as a service that stopped answering.
+          runbook: "docs/runbooks/digital-experience.md#availability-below-budget"
+
+      - alert: ExperienceLatencyOverBudget
+        # p95 over the last 15 minutes against the target's DECLARED latency
+        # budget. The budget gauge exists only where an operator declared one,
+        # so this rule cannot fire against a threshold nobody set.
+        expr: >
+          max by (tenant,target,kind,site,app) (quantile_over_time(0.95, dem_probe_latency_ms[15m]))
+          >
+          max by (tenant,target,kind,site,app) (dem_target_latency_budget_ms)
+        for: 10m
+        labels: { severity: warning, tier: warning }
+        annotations:
+          summary: "Experience target {{ $labels.target }} ({{ $labels.kind }}) p95 is {{ $value | printf \"%.0f\" }} ms, over its declared budget"
+          description: >-
+            Site {{ $labels.site }}, application {{ $labels.app }}. Read it WITH the phase split on the
+            target's drill-down: DNS, TCP connect, TLS and time-to-first-byte fail in different places and
+            a total that doubled tells you nothing about which one moved.
+          runbook: "docs/runbooks/digital-experience.md#latency-over-budget"
+
+      - alert: ExperiencePathUnstable
+        # A forward path that keeps changing under a target that is otherwise
+        # up. It is deliberately NOT scored as an outage: a re-route is normal
+        # and only becomes evidence when it is frequent and sustained.
+        expr: sum by (tenant,target,site,app) (changes(dem_path_fingerprint[30m])) > 6
+        for: 15m
+        labels: { severity: warning, tier: warning }
+        annotations:
+          summary: "The measured path to experience target {{ $labels.target }} changed {{ $value }} times in 30m"
+          description: >-
+            Site {{ $labels.site }}. Frequent re-routing under a reachable target is the shape of an
+            unstable upstream or a flapping link, and it is usually visible in the experience numbers
+            as jitter long before it is visible as loss. The hop-by-hop view is on the target's drill-down.
+          runbook: "docs/runbooks/digital-experience.md#path-instability"
+
+      - alert: ExperienceProberNotReporting
+        # The prober is not a scrape target and exports no `up` gauge, so the
+        # only evidence it is alive is that its samples are arriving. This rule
+        # is the one that stops an empty experience page reading as "all well".
+        #
+        # Guarded exactly like CorrProbeLaneFlatlined: it fires only where
+        # samples USED to arrive, so a tenant that has declared no target — or
+        # an install where DEM was never switched on — is silent rather than
+        # paging forever about a feature nobody enabled.
+        # `unless`, not `== 0`: when the samples stop, the [15m] range is EMPTY
+        # and count_over_time returns NO SERIES at all — so `== 0` matches
+        # nothing and the rule would be silent for exactly the condition it
+        # exists to catch. Set subtraction is the shape that survives absence.
+        expr: >
+          sum by (tenant) (count_over_time(dem_probe_success[24h])) > 0
+          unless
+          sum by (tenant) (count_over_time(dem_probe_success[15m])) > 0
+        for: 15m
+        labels: { severity: warning, tier: warning }
+        annotations:
+          summary: "No experience measurement has arrived for 15m, though this tenant was being measured today"
+          description: >-
+            The experience page is now showing 'not measured' for every target, which is the honest
+            answer and NOT a healthy one. Most likely, in order: the prober container is not running
+            (docker compose --profile prober ps), FEATURE_DEM is off on it, or the api stopped
+            publishing the work queue and the published list has expired.
+          runbook: "docs/runbooks/digital-experience.md#prober-not-reporting"

@@ -251,6 +251,10 @@ def synthetic_app_signal(
         ("cert_days_to_expiry", "cert_days_to_expiry"),
         ("cert_subject", "cert_subject"), ("cert_issuer", "cert_issuer"),
         ("fail_class", "fail_class"),
+        # S17: the catalogue target id, so a DEM incident can be joined back to
+        # the row an operator declared (and to its dem_* series) rather than
+        # only to a hostname that a rename would break.
+        ("target_id", "target_id"),
     ):
         if ev.get(src_key) is not None and ev.get(src_key) != "":
             attrs[dst_key] = ev[src_key]

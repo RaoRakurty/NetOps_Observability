@@ -545,3 +545,69 @@ def test_flow_volume_episode_carries_passive_flow_provenance():
     assert sig.source is Source.FLOW
     assert sig.kind == "flow_volume_anomaly"
     assert sig.entity_id == "10.0.0.9:if7" and "10.0.0.9" in sig.entity_tokens
+
+
+# ── Digital Experience grounding (S17, 2026-09-05) ───────────────────────────
+#
+# Before this, a probe signal was an anonymous "prober->host" PATH: the
+# saas-experience RCA template promised to name "the reporting site(s)" and had
+# nothing to name them with. These tests pin the grounding that fixes it, and
+# pin that it stays ADDITIVE — an event without the DEM fields must produce
+# exactly what it produced before.
+
+_DEM_NOW = datetime(2026, 9, 5, 10, 0, 0, tzinfo=timezone.utc)
+
+
+def _dem_event(**over):
+    ev = {
+        "kind": "http", "prober": "prober", "target": "https://portal.example/health",
+        "ok": False, "loss_pct": 100.0, "rtt_ms": 0.0,
+        "ts": "2026-09-05T10:00:00Z",
+        "tenant": "acme", "target_id": "dem-abc", "site_id": "dc1",
+        "app_id": "portal", "source": "synthetic",
+    }
+    ev.update(over)
+    return ev
+
+
+def test_probe_signal_grounds_target_site_and_app():
+    from producers import probe_signals
+
+    sigs = probe_signals(_dem_event(), EpisodeDetector(), "acme", _DEM_NOW)
+    assert sigs, "a fully-lost probe must produce a loss signal"
+    sig = sigs[0]
+    assert "target:dem-abc" in sig.entity_tokens
+    assert "site:dc1" in sig.entity_tokens
+    assert "app:portal" in sig.entity_tokens
+    # Signal.site is what engine.Node.tokens() promotes for a PATH entity.
+    assert sig.site == "dc1"
+    assert sig.observer.location == "dc1"
+    assert sig.attrs["target_id"] == "dem-abc"
+    assert sig.attrs["site_id"] == "dc1"
+
+
+def test_probe_signal_never_emits_a_tenant_token():
+    """signals.py forbids a `tenant:` token prefix precisely to stop two
+    tenants' subjects merging on a shared token. The tenant belongs in
+    tenant_id, which verified_tenant() has already adjudicated."""
+    from producers import probe_signals
+
+    sig = probe_signals(_dem_event(), EpisodeDetector(), "acme", _DEM_NOW)[0]
+    for tok in sig.entity_tokens:
+        assert not tok.startswith("tenant:"), tok
+    assert sig.tenant_id == "acme"
+
+
+def test_probe_grounding_is_additive():
+    """A probe event with none of the DEM fields grounds exactly as it did
+    before: the vantage and the host, and nothing else."""
+    from producers import probe_signals
+
+    ev = {
+        "kind": "icmp", "prober": "prober", "target": "192.0.2.120",
+        "ok": False, "loss_pct": 100.0, "ts": "2026-09-05T10:00:00Z",
+    }
+    sig = probe_signals(ev, EpisodeDetector(), "acme", _DEM_NOW)[0]
+    assert sig.entity_tokens == ("prober", "192.0.2.120")
+    assert sig.site == ""
+    assert sig.attrs == {"probe_kind": "icmp", "target": "192.0.2.120"}

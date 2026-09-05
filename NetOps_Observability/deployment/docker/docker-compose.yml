@@ -1754,6 +1754,15 @@ services:
       # Lazy + mtime hot-reload; /api/vulns answers vuln_enabled:false until
       # the file exists.
       VULN_FEED_PATH: ${VULN_FEED_PATH:-/data/vuln/advisories.csv}
+      # Digital Experience Monitoring (S17). On the api side the flag turns on
+      # the CATALOGUE's projector — the worker that hands the prober its work
+      # queue — and makes the experience score say "measured" instead of
+      # "the feature is off". The catalogue itself is always readable/writable
+      # so an operator can declare targets before switching collection on.
+      # docs/design/DEM_2026-09-05.md · docs/runbooks/digital-experience.md
+      FEATURE_DEM: ${FEATURE_DEM:-false}
+      DEM_TARGETS_FILE: ${DEM_TARGETS_FILE:-/data/dem_targets.json}
+      DEM_PROJECT_INTERVAL: ${DEM_PROJECT_INTERVAL:-60s}
       # Service-level synthetic checks (HTTP/ICMP/TCP, collectors/synthetics.go).
       # HTTP + TCP need no privileges so they can run right here in the API;
       # ICMP works when the kernel's ping_group_range admits the container user
@@ -2288,6 +2297,15 @@ services:
       STAMP_TARGETS: ${STAMP_TARGETS:-}
       FEATURE_STAMP_REFLECTOR: ${FEATURE_STAMP_REFLECTOR:-false}
       STAMP_REFLECTOR_PORT: ${STAMP_REFLECTOR_PORT:-8620}
+      # Digital Experience Monitoring (S17). Unlike the env-driven synthetics
+      # below, the DEM runner takes its targets from the per-tenant catalogue
+      # the api publishes to the shared key-value channel (netops:dem:targets,
+      # short TTL), so there is no target list here: an env list has no owning
+      # tenant and its results could never be scoped to anyone. Off by default
+      # like every other active-measurement plane (ADR 0001); with the flag on
+      # and no published queue it measures nothing and reports 0 targets.
+      FEATURE_DEM: ${FEATURE_DEM:-false}
+      DEM_TIMEOUT: ${DEM_TIMEOUT:-10s}
       # Service-level synthetics (HTTP/ICMP/TCP). In the prober the ICMP check
       # can use the raw-socket fallback (NET_RAW above).
       FEATURE_SYNTHETICS: ${FEATURE_SYNTHETICS:-false}

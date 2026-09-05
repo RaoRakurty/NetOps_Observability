@@ -12546,8 +12546,17 @@ async def handle_probe(ev: dict) -> None:
     # this lane is not registry-anchored — but when the target IS an inventory
     # device, a probe claiming a DIFFERENT tenant than that device's owner is a
     # cross-tenant write and is refused.
+    #
+    # S17: a Digital Experience probe carries the owning tenant of the CATALOGUE
+    # TARGET as `tenant`. Vector's probe_normalized remap sets `.tenant_id` from
+    # the device_tenant enrichment table, which knows nothing about synthetic
+    # targets, so for a DEM measurement that field is empty and the prober's
+    # claim is the only owner information there is. It is still a CLAIM: it goes
+    # through verified_tenant like every other one, so a claim that contradicts
+    # the registry deadletters instead of being trusted.
+    claimed = str(ev.get("tenant_id") or "") or str(ev.get("tenant") or "")
     try:
-        tenant = verified_tenant(str(ev.get("tenant_id") or ""), host, "probes")
+        tenant = verified_tenant(claimed, host, "probes")
     except TenantClaimRefused as exc:
         DEADLETTER_COUNT += 1
         keep_deadletter_payload("probe", ev, exc)

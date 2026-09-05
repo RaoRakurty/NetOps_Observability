@@ -74,6 +74,30 @@ type ProbeEvent struct {
 	VantageType   string `json:"vantage_type,omitempty"`
 	Environment   string `json:"environment,omitempty"`
 	SignalPurpose string `json:"signal_purpose,omitempty"`
+
+	// Digital Experience grounding (S17, 2026-09-05). ADDITIVE and omitempty:
+	// the STAMP / traceroute / env-synthetics producers leave all four empty
+	// and their events are byte-identical to before, which is what keeps the
+	// probe-lane wire contract (src/contracts/probe_event_wire.json) and every
+	// correlation-side consumer working unchanged.
+	//
+	// Tenant is the CLAIMED owner of the measured target. It is a claim, not a
+	// fact: the correlation side still runs it through verified_tenant, so a
+	// claim that contradicts the registry deadletters instead of being trusted.
+	// It must never become a grounding TOKEN — signals.py forbids a `tenant:`
+	// prefix precisely to stop cross-tenant merges.
+	Tenant string `json:"tenant,omitempty"`
+	// TargetID is the catalogue id of the measured subject. It is the stable
+	// identity a rename of the host does not change, and the join key between
+	// this event and the dem_* series.
+	TargetID string `json:"target_id,omitempty"`
+	// AppID is the operator's application label, so RCA can say "experience
+	// degraded for app X at site Y" instead of naming a bare host.
+	AppID string `json:"app_id,omitempty"`
+	// Source is the evidence class that produced this measurement
+	// (synthetic | sdwan | wireless | flow | agent | rum). Declared now so the
+	// later experience sources land on the same lane without a schema break.
+	Source string `json:"source,omitempty"`
 }
 
 // probeEventSink returns the bus ingest URL for probe events. Defaults to the

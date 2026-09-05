@@ -16,6 +16,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"netops/backend/internal/dem"
 	"netops/backend/tlsconfig"
 )
 
@@ -525,5 +526,50 @@ func FetchWANCircuits(ctx context.Context) ([]EchoTarget, error) {
 	}
 	var out []EchoTarget
 	_ = json.Unmarshal([]byte(raw), &out) // best-effort: cache payload we authored; malformed decodes empty
+	return out, nil
+}
+
+// demTargetsKey holds the Digital Experience work queue the api's projector
+// publishes for the prober (dem.WireTarget list). Same transport, TTL and
+// failure semantics as wanCircuitsKey: the prober keeps its previous list until
+// the TTL expires, so a brief api outage degrades to "stale for a minute"
+// rather than to "stops measuring instantly".
+const demTargetsKey = "netops:dem:targets"
+
+// PublishDEMTargets writes the experience work queue for the dem collector.
+// No-op when the key-value channel isn't configured (the collector then has no
+// targets and reports 0 — never a stale list from an unknown source).
+func PublishDEMTargets(ctx context.Context, targets []dem.WireTarget, ttlSec int) error {
+	if RedisAddr() == "" {
+		return nil
+	}
+	body, err := json.Marshal(targets)
+	if err != nil {
+		return err
+	}
+	return redisSetEX(ctx, demTargetsKey, string(body), ttlSec)
+}
+
+// FetchDEMTargets reads the work queue published by the api. An ABSENT key is an
+// empty queue and not an error (the api may not have published yet); a MALFORMED
+// payload IS an error — measuring a list we could not parse, or silently
+// measuring nothing because a decode failed, are both worse than saying so.
+func FetchDEMTargets(ctx context.Context) ([]dem.WireTarget, error) {
+	c, err := redisDial(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer c.Close()
+	raw, err := redisCmd(c, "GET", demTargetsKey)
+	if err != nil {
+		return nil, err
+	}
+	if raw == "" {
+		return nil, nil
+	}
+	var out []dem.WireTarget
+	if jerr := json.Unmarshal([]byte(raw), &out); jerr != nil {
+		return nil, jerr
+	}
 	return out, nil
 }

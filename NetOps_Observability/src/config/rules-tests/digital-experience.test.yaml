@@ -1,0 +1,203 @@
+# promtool unit tests for the noc-experience group (S17, 2026-09-05).
+#
+# WHAT IS BEING PROVED. The experience rules are the first alerts in this
+# product whose subject is a TARGET rather than a device, and their thresholds
+# come from gauges the prober publishes rather than from constants in the rule.
+# Both of those are new ways to be wrong, so each rule is tested in BOTH
+# directions:
+#
+#   · it FIRES on the real fault, with the exact label set the product notifier
+#     needs to route it (tenant/target/kind/site/app — no device, by design);
+#   · it stays SILENT on the shape that would make it a liar: a target inside
+#     its budget, a target with NO declared latency budget, and a tenant that
+#     has simply never been measured.
+#
+# That last one is the CorrProbeLaneFlatlined lesson applied before it bites:
+# a lab with no targets must be quiet, not paging forever about a feature
+# nobody switched on.
+#
+# Run by scripts/preflight-configs.sh (promtool test rules); paths are as
+# mounted by that docker run.
+rule_files:
+  - /etc/prometheus/rules.yaml
+  - /etc/prometheus/rules-scale-slo.yaml
+
+evaluation_interval: 1m
+
+tests:
+  # ==========================================================================
+  # 1) ExperienceAvailabilityBelowBudget
+  # ==========================================================================
+
+  # 1a) FIRES: a target succeeding 0 of every sample against a 99% budget.
+  - interval: 1m
+    input_series:
+      - series: 'dem_probe_success{tenant="acme",target="dem-a",kind="http",site="dc1",app="portal",source="synthetic",job="netops-api",instance="api:8080"}'
+        values: "0x40"
+      - series: 'dem_target_availability_budget_pct{tenant="acme",target="dem-a",kind="http",site="dc1",app="portal",source="synthetic",job="netops-api",instance="api:8080"}'
+        values: "99x40"
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: ExperienceAvailabilityBelowBudget
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              tier: warning
+              tenant: acme
+              target: dem-a
+              kind: http
+              site: dc1
+              app: portal
+            exp_annotations:
+              summary: "Experience target dem-a (http) is at 0.00% availability, under its budget"
+              description: "Site dc1, application portal. This is the SYNTHETIC view: a probe from the prober's vantage failed. Confirm the failure reason on the target's drill-down (dns / tls / connect_refused / connect_timeout / timeout / status) before assuming the service is down — a vantage that lost its own path reports the same shape as a service that stopped answering."
+              runbook: "docs/runbooks/digital-experience.md#availability-below-budget"
+
+  # 1b) SILENT: a target inside its budget. 1 in every sample is 100%.
+  - interval: 1m
+    input_series:
+      - series: 'dem_probe_success{tenant="acme",target="dem-ok",kind="icmp",site="dc1",app="core",source="synthetic"}'
+        values: "1x40"
+      - series: 'dem_target_availability_budget_pct{tenant="acme",target="dem-ok",kind="icmp",site="dc1",app="core",source="synthetic"}'
+        values: "99x40"
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: ExperienceAvailabilityBelowBudget
+        exp_alerts: []
+
+  # ==========================================================================
+  # 2) ExperienceLatencyOverBudget
+  # ==========================================================================
+
+  # 2a) FIRES: p95 at 900 ms against a declared 250 ms budget.
+  - interval: 1m
+    input_series:
+      - series: 'dem_probe_latency_ms{tenant="acme",target="dem-slow",kind="http",site="dc1",app="portal",source="synthetic"}'
+        values: "900x40"
+      - series: 'dem_target_latency_budget_ms{tenant="acme",target="dem-slow",kind="http",site="dc1",app="portal",source="synthetic"}'
+        values: "250x40"
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: ExperienceLatencyOverBudget
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              tier: warning
+              tenant: acme
+              target: dem-slow
+              kind: http
+              site: dc1
+              app: portal
+            exp_annotations:
+              summary: "Experience target dem-slow (http) p95 is 900 ms, over its declared budget"
+              description: "Site dc1, application portal. Read it WITH the phase split on the target's drill-down: DNS, TCP connect, TLS and time-to-first-byte fail in different places and a total that doubled tells you nothing about which one moved."
+              runbook: "docs/runbooks/digital-experience.md#latency-over-budget"
+
+  # 2b) SILENT with NO declared budget: the gauge does not exist, so there is
+  #     nothing to be over. A rule that fired here would be alerting against a
+  #     threshold nobody set — the single most common way an SLO alert becomes
+  #     noise the operator learns to ignore.
+  - interval: 1m
+    input_series:
+      - series: 'dem_probe_latency_ms{tenant="acme",target="dem-nobudget",kind="http",site="dc1",app="portal",source="synthetic"}'
+        values: "5000x40"
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: ExperienceLatencyOverBudget
+        exp_alerts: []
+
+  # 2c) SILENT inside budget.
+  - interval: 1m
+    input_series:
+      - series: 'dem_probe_latency_ms{tenant="acme",target="dem-fast",kind="http",site="dc1",app="portal",source="synthetic"}'
+        values: "120x40"
+      - series: 'dem_target_latency_budget_ms{tenant="acme",target="dem-fast",kind="http",site="dc1",app="portal",source="synthetic"}'
+        values: "250x40"
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: ExperienceLatencyOverBudget
+        exp_alerts: []
+
+  # ==========================================================================
+  # 3) ExperienceProberNotReporting — the expected-activity guard
+  # ==========================================================================
+
+  # 3a) FIRES on the real fault: samples arrived all morning and then stopped.
+  #     `_x30 1x30` is 30 minutes of gap followed by 30 minutes of samples;
+  #     evaluating at the END of a fresh gap is the shape that matters, so the
+  #     series delivers for 40m and then goes absent for the rest.
+  - interval: 1m
+    input_series:
+      - series: 'dem_probe_success{tenant="acme",target="dem-a",kind="icmp",site="dc1",app="core",source="synthetic"}'
+        values: "1x40 _x60"
+    alert_rule_test:
+      - eval_time: 95m
+        alertname: ExperienceProberNotReporting
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              tier: warning
+              tenant: acme
+            exp_annotations:
+              summary: "No experience measurement has arrived for 15m, though this tenant was being measured today"
+              description: "The experience page is now showing 'not measured' for every target, which is the honest answer and NOT a healthy one. Most likely, in order: the prober container is not running (docker compose --profile prober ps), FEATURE_DEM is off on it, or the api stopped publishing the work queue and the published list has expired."
+              runbook: "docs/runbooks/digital-experience.md#prober-not-reporting"
+
+  # 3b) SILENT on a deployment that has NEVER been measured: no target declared,
+  #     or the feature never switched on. The 24h clause is what makes this
+  #     quiet, and its absence is exactly what made CorrProbeLaneFlatlined a
+  #     permanent false positive on the lab.
+  - interval: 1m
+    input_series:
+      - series: 'up{job="netops-api",instance="api:8080"}'
+        values: "1x120"
+    alert_rule_test:
+      - eval_time: 95m
+        alertname: ExperienceProberNotReporting
+        exp_alerts: []
+
+  # 3c) SILENT while samples are still arriving.
+  - interval: 1m
+    input_series:
+      - series: 'dem_probe_success{tenant="acme",target="dem-a",kind="icmp",site="dc1",app="core",source="synthetic"}'
+        values: "1x120"
+    alert_rule_test:
+      - eval_time: 95m
+        alertname: ExperienceProberNotReporting
+        exp_alerts: []
+
+  # ==========================================================================
+  # 4) ExperiencePathUnstable
+  # ==========================================================================
+
+  # 4a) FIRES: the path fingerprint changes on every sample for half an hour.
+  - interval: 1m
+    input_series:
+      - series: 'dem_path_fingerprint{tenant="acme",target="dem-a",kind="icmp",site="dc1",app="core",source="synthetic"}'
+        values: "1+1x60"
+    alert_rule_test:
+      - eval_time: 45m
+        alertname: ExperiencePathUnstable
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              tier: warning
+              tenant: acme
+              target: dem-a
+              site: dc1
+              app: core
+            exp_annotations:
+              summary: "The measured path to experience target dem-a changed 30 times in 30m"
+              description: "Site dc1. Frequent re-routing under a reachable target is the shape of an unstable upstream or a flapping link, and it is usually visible in the experience numbers as jitter long before it is visible as loss. The hop-by-hop view is on the target's drill-down."
+              runbook: "docs/runbooks/digital-experience.md#path-instability"
+
+  # 4b) SILENT on a stable path. One re-route in the window is normal and is not
+  #     evidence of anything.
+  - interval: 1m
+    input_series:
+      - series: 'dem_path_fingerprint{tenant="acme",target="dem-stable",kind="icmp",site="dc1",app="core",source="synthetic"}'
+        values: "7x30 9x30"
+    alert_rule_test:
+      - eval_time: 45m
+        alertname: ExperiencePathUnstable
+        exp_alerts: []

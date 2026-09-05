@@ -53,6 +53,7 @@ import (
 	// CONFIG-BACKUP-END
 	// DATA-PROTECTION-BEGIN
 	"netops/backend/internal/dataprotect"
+	"netops/backend/internal/dem"
 	// DATA-PROTECTION-END
 	"netops/backend/internal/discovery"
 	// CONFIG-BACKUP-BEGIN
@@ -191,6 +192,18 @@ type server struct {
 	bgpWatchEval   *bgpwatch.Evaluator
 	bgpWatchPolicy bgpwatch.PolicyStore
 	// BGP-WATCH-END
+	// DEM-BEGIN — Digital Experience Monitoring (S17). The catalogue and the
+	// HTTP surface are ALWAYS built: an operator must be able to declare targets
+	// before enabling collection, and with the feature off every score says so
+	// rather than rendering an empty table that reads as "all well". The
+	// projector — which hands the prober its work queue — runs only under
+	// FEATURE_DEM, so a flag-off deployment publishes nothing and measures
+	// nothing. See docs/design/DEM_PLUMBING_2026-09-05.md.
+	demTargets   dem.Catalogue
+	demAPI       *dem.API
+	demMetrics   *dem.Metrics
+	demProjector *dem.Projector
+	// DEM-END
 	// Routing-protocol diagnostics (Troubleshooting item 7). Catalog + analyzer
 	// are pure/immutable and always built; the collector is wired to the live
 	// read-only SSH command source ONLY when FEATURE_PROTOCOL_DIAG_COLLECT=true
@@ -691,6 +704,10 @@ func newServer() *server {
 	// SYNTHETIC_*_TARGETS lists. HTTP/TCP need no privileges; ICMP falls back
 	// to raw only where CAP_NET_RAW exists (prober sidecar).
 	pool.Enable("synthetics", os.Getenv("FEATURE_SYNTHETICS") == "true")
+	// Digital Experience checks (S17) — the catalogue-driven ICMP/TCP/DNS/HTTP
+	// runner. Targets arrive as the api-published work queue, so this collector
+	// is inert (0 targets, honestly reported) until an operator declares one.
+	pool.Enable("dem", envBool(dem.EnvFeatureFlag))
 	// WAN circuit SLA — SD-WAN/BFD-style source-bound echo (ICMP, TCP-SYN
 	// fallback) between WAN-interface endpoints. Targets are the circuits the
 	// projector publishes to Redis. Opt-in; ICMP raw needs CAP_NET_RAW.
@@ -1081,6 +1098,27 @@ func newServer() *server {
 		srv.bgpWatchAPI = api
 	}
 	// BGP-WATCH-END
+	// DEM-BEGIN — the experience target catalogue + its HTTP surface. Both are
+	// built unconditionally (see the field block); construction failure is LOUD,
+	// never silently dormant, because a nil API answers 404 and a 404 on the
+	// experience page is indistinguishable from "nothing is wrong".
+	srv.demMetrics = dem.NewMetrics()
+	srv.demTargets = newDEMStore()
+	if api, err := srv.buildDEMAPI(srv.demTargets); err != nil {
+		logError("dem", "the Digital Experience routes could not be wired — they will answer 404 and no experience score will be served", errf(err))
+	} else {
+		srv.demAPI = api
+	}
+	if envBool(dem.EnvFeatureFlag) {
+		if pr, err := dem.NewProjector(srv.demTargets, demPublisher{},
+			durationOr(dem.EnvProjectInterval, dem.DefaultProjectInterval), srv.demMetrics,
+			func(m string, f map[string]any) { logWarn("dem", m, f) }); err != nil {
+			logError("dem", "the experience work-queue projector could not be built — the prober will receive NO targets and measure nothing", errf(err))
+		} else {
+			srv.demProjector = pr
+		}
+	}
+	// DEM-END
 	// PROTOCOL-DIAG-BEGIN — Routing-protocol diagnostics (Troubleshooting item
 	// 7): the catalog + signatures are a pure, always-available library (they
 	// never touch a device). The LIVE collect transport is opt-in and
@@ -1846,6 +1884,14 @@ func Run() {
 	// killable with SNAPSHOT_PROBE_ENABLED=false (in which case the metric says
 	// so rather than reporting a fake pass).
 	workers.start("snapshot-restorability-probe", func() { srv.dataProtect.StartRestorabilityProbe(ctx) })
+	// DEM-BEGIN — publish the prober's experience work queue. Only under
+	// FEATURE_DEM (the projector is nil otherwise), and the published entry
+	// carries a short TTL so a prober that loses the api stops measuring a stale
+	// list rather than measuring deleted targets forever.
+	if srv.demProjector != nil {
+		workers.start("dem-target-projector", func() { srv.demProjector.Run(ctx) })
+	}
+	// DEM-END
 	// SNAPSHOT-RESTORABILITY-END
 	// BMP-BEGIN — BGP Monitoring Protocol receiver (internal/bmp): a TCP
 	// listener a router pushes its Adj-RIB-In to. READ-ONLY toward the network —
@@ -2155,6 +2201,7 @@ func runProber() {
 	pool.Enable("stamp-reflector", os.Getenv("FEATURE_STAMP_REFLECTOR") == "true")
 	pool.Enable("traceroute", os.Getenv("FEATURE_TRACEROUTE") == "true")
 	pool.Enable("synthetics", os.Getenv("FEATURE_SYNTHETICS") == "true")
+	pool.Enable("dem", envBool(dem.EnvFeatureFlag))
 	pool.Enable("wan-echo", os.Getenv("FEATURE_WAN_ECHO") == "true")
 	pool.Start(ctx)
 	log.Printf("netops-prober %s started (active measurement only)", version)
@@ -2275,6 +2322,25 @@ func (s *server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/bgp/alerts", s.bgpWatchAPI.HandleAlerts)
 	mux.HandleFunc("/api/bgp/alerts/config", s.bgpWatchAPI.HandleAlertConfig)
 	mux.HandleFunc("/api/bgp/bogons", s.bgpWatchAPI.HandleBogons)
+	// DEM-BEGIN — Digital Experience Monitoring (S17). Per-tenant data: the
+	// module scopes every read and write to ONE concrete tenant and answers 404
+	// for another tenant's target id.
+	//
+	// Registered UNCONDITIONALLY, and through *server methods rather than
+	// bound method values on s.demAPI: a bound method value captures the
+	// pointer AT REGISTRATION TIME, so a surface assembled after routes() runs
+	// (which is what a test harness does) would be permanently unreachable. The
+	// module's handlers nil-check their receiver and answer 404, so a
+	// construction failure is a 404 and never an unscoped read.
+	//
+	// Registered as LITERALS, not as the dem.*Path constants: the route
+	// isolation ledger's scanner reads these strings out of this file, and a
+	// route it cannot see is a route nobody classified.
+	// TestDEMRouteLiteralsMatchTheModuleConstants pins that they still agree.
+	mux.HandleFunc("/api/dem/targets", s.handleDEMTargets)
+	mux.HandleFunc("/api/dem/targets/", s.handleDEMTargetItem) // GET|PUT|DELETE {id}
+	mux.HandleFunc("/api/dem/experience", s.handleDEMExperience)
+	// DEM-END
 	// BGP-WATCH-END
 	// Routing-protocol diagnostics (Troubleshooting item 7).
 	mux.HandleFunc("/api/troubleshoot/protocol-diagnostics/catalog", s.handleProtocolDiagCatalog)
@@ -3506,6 +3572,9 @@ func (s *server) handlePromMetrics(w http.ResponseWriter, _ *http.Request) {
 	}
 	if s.tlsPeerProber != nil {
 		s.tlsPeerProber.WriteMetrics(w)
+	}
+	if s.demMetrics != nil {
+		s.demMetrics.Write(w)
 	}
 	if s.secMetrics != nil {
 		s.secMetrics.Write(w)

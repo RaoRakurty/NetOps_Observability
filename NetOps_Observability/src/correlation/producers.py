@@ -724,6 +724,47 @@ def probe_signals(
     if not ok and loss <= 0.0:
         loss = 100.0
 
+    # Digital Experience grounding (S17, 2026-09-05) — ADDITIVE.
+    #
+    # Before this, a probe signal was an anonymous "prober->host" PATH: no site,
+    # no target identity, no application. The saas-experience RCA template
+    # promised to name "the reporting site(s)" and had nothing to name them
+    # with. These three tokens are what let an RCA say "experience degraded for
+    # site X / application Y" instead of quoting a bare hostname.
+    #
+    # `site:` and `target:` are already-sanctioned token prefixes (the semantic
+    # lane in synthetic_normalize.py uses both). There is deliberately NO
+    # `tenant:` token — signals.py forbids that prefix precisely to stop two
+    # tenants' subjects merging on a shared token; the tenant lives in
+    # Signal.tenant_id, which verified_tenant() has already adjudicated.
+    site = str(ev.get("site_id") or ev.get("site") or "")
+    target_id = str(ev.get("target_id") or "")
+    app = str(ev.get("app_id") or ev.get("app") or "")
+    tokens: list[str] = [prober, host]
+    if target_id:
+        tokens.append(f"target:{target_id}")
+    if site:
+        tokens.append(f"site:{site}")
+    if app:
+        tokens.extend([app, f"app:{app}"])
+    entity_tokens = tuple(tokens)
+    # The observer's LOCATION is the vantage's site, matching the semantic lane.
+    if site:
+        observer = Observer(
+            observer_id=prober,
+            observer_type=ObserverType.VANTAGE_AGENT,
+            collection_path="direct",
+            clock_quality="unknown",
+            location=site,
+        )
+    probe_attrs = {"probe_kind": kind, "target": target}
+    if target_id:
+        probe_attrs["target_id"] = target_id
+    if site:
+        probe_attrs["site_id"] = site
+    if app:
+        probe_attrs["app"] = app
+
     out: list[Signal] = []
     if loss >= PROBE_LOSS_PCT:
         ts_ms = int(ts.timestamp() * 1000)
@@ -738,11 +779,12 @@ def probe_signals(
             entity_id=entity,
             severity=_loss_severity(loss),
             native_id=f"{prober}|{host}|{kind}|loss|{ts_ms}",
-            entity_tokens=(prober, host),
+            entity_tokens=entity_tokens,
             path_id=entity,
+            site=site,
             metric_name=f"probe_loss_pct[{kind}]",
             value=loss,
-            attrs={"probe_kind": kind, "target": target},
+            attrs=dict(probe_attrs),
         ))
     if ok and rtt > 0.0:
         ep = detector.observe(
@@ -755,7 +797,7 @@ def probe_signals(
                 modality=ModalityClass.ACTIVE_PROBE,
                 entity_type=EntityType.PATH,
                 kind_prefix="probe_rtt_anomaly",
-                entity_tokens=(prober, host),
+                entity_tokens=entity_tokens,
                 path_id=entity,
             ))
     return out

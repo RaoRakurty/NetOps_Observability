@@ -118,6 +118,13 @@ var routeIsolationLedger = map[string]string{
 	"/api/bgp/alerts":        "scoped",
 	"/api/bgp/alerts/config": "scoped",
 	"/api/bgp/bogons":        "scoped",
+	// DEM (S17) — Digital Experience. Per-tenant data end to end: the module
+	// refuses a cross-tenant principal, scopes every catalogue read/write to
+	// ONE concrete tenant, answers 404 for another tenant's target id, and
+	// filters every experience query on the series' own `tenant` label.
+	"/api/dem/targets":    "scoped",
+	"/api/dem/targets/":   "scoped",
+	"/api/dem/experience": "scoped",
 	// Protocol diagnostics (Troubleshooting item 7, protocol_diagnostics.go):
 	// catalog is the version-pinned 15-issue ruleset, identical for every tenant
 	// (?vendor= only picks the rendered command dialect), behind

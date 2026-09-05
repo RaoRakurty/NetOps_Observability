@@ -77,6 +77,32 @@ headless:
       sensitive_data:admin). Deliberately not a button; it is run deliberately,
       with an audit record, by the platform owner.
 
+  # ── Digital Experience (S17, 2026-09-05) ──────────────────────────────────
+  # These two are NOT permanently headless, and the entries below are written
+  # to be DELETED. They sit here because the ratchet on `missing_ui` says a new
+  # gap belongs in `headless` with a reason, and because the reason is a
+  # decision rather than an oversight: the owner ruled on 2026-09-05 that DEM
+  # gets a ratified design of record before any screen is built
+  # (docs/design/DEM_2026-09-05.md), so the plumbing shipped first and
+  # pages/DigitalExperience.tsx is a deliberate stub.
+  # test_allowlist_has_no_stale_entries removes them automatically the moment
+  # the page calls either route — that is the intended end state.
+  - route: /api/dem/targets
+    reason: >-
+      The per-tenant Digital Experience target catalogue (internal/dem). The
+      page that manages it is HELD until the merged DEM design of record is
+      ratified (owner, 2026-09-05); the collection, the dem_* series and the
+      experience alert rules are live meanwhile. Delete this entry when
+      pages/DigitalExperience.tsx starts calling it.
+
+  - route: /api/dem/experience
+    reason: >-
+      The Digital Experience score (availability against the error budget, p95
+      against the declared latency budget, path stability; per target and rolled
+      up per site and app). Same hold as /api/dem/targets above — the API is
+      complete and the screen is deliberately deferred, not forgotten. Delete
+      this entry when the page starts calling it.
+
 dynamic:
   - route: /api/protocols/ospf/adjacencies
     reason: >-
