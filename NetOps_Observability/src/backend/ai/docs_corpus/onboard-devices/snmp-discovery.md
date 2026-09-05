@@ -13,6 +13,13 @@ host that answers SNMP to the inventory. The scan scope is a platform-level
 decision, so the configuration is restricted to platform administrators and the
 server validates every range before it sweeps anything.
 
+What discovery produces is a **candidate list**, not a monitored fleet. A swept
+device is in the inventory and costs no licence allowance; Correlix starts
+collecting from it when you switch monitoring on in the Monitoring column of
+**Infrastructure → Inventory & Devices**. Sweep as widely as your bounds allow —
+the device ceiling counts monitored devices only. See
+[Licensing](/administration/licence).
+
 Discovery is bounded on purpose: at most 4,096 addresses across at most 32
 ranges, 32 concurrent probes, a two-second budget per host, and one sweep per
 minute. A configuration that exceeds those bounds is refused with an error

@@ -60,13 +60,16 @@ const COMMUNITY_CEILINGS = {
 };
 
 function ceiling(over: Partial<LicenceCeiling> = {}): LicenceCeiling {
-  return { name: "devices", label: "devices", limit: 25, current: 12, enforced: true, over: false, ...over };
+  return {
+    name: "devices", label: "monitored devices", unit: "monitored_devices",
+    limit: 25, current: 12, enforced: true, over: false, ...over,
+  };
 }
 
 /** The seven-row table the server always sends, enforced pair first. */
 function ceilings(): LicenceCeiling[] {
   return [
-    ceiling({ name: "devices", label: "devices", limit: 25, current: 12 }),
+    ceiling({ name: "devices", label: "monitored devices", unit: "monitored_devices", limit: 25, current: 12 }),
     ceiling({ name: "watched_prefixes", label: "watched prefixes", limit: 5, current: 2 }),
     ceiling({ name: "tenants", label: "tenants", limit: 1, current: 1, enforced: false }),
     ceiling({
@@ -199,9 +202,9 @@ function tenantProjection(over: Partial<LicenceView> = {}): LicenceView {
 }
 
 const OVERAGE: LicenceOverage = {
-  ceiling: "devices", label: "devices", current: 30, limit: 25, over: 5, lifted_by: "team",
+  ceiling: "devices", label: "monitored devices", current: 30, limit: 25, over: 5, lifted_by: "team",
   message:
-    "5 of 30 devices are over the Community ceiling of 25 — they are still here and nothing has been deleted, " +
+    "5 of 30 monitored devices are over the Community ceiling of 25 — they are still here and nothing has been deleted, " +
     "but 5 are not covered by the licence; the Team tier covers them",
 };
 
@@ -316,6 +319,27 @@ describe("current usage", () => {
     expect(screen.getByText("Licensed limit 25.")).toBeTruthy();
   });
 
+  it("says monitored devices, never just devices", async () => {
+    // The C4 unit. A bar labelled "devices" against an inventory of 500 would
+    // read as a limit on inventory rows, which is the misreading this label
+    // exists to stop.
+    setup();
+    render(<Licence />);
+    expect(await screen.findByText("monitored devices")).toBeTruthy();
+  });
+
+  it("qualifies a MEASURED number when the ceiling is holding devices back", async () => {
+    // "25 of 25" beside a network of forty is true and useless on its own.
+    const note = "10 more device(s) are in the inventory and would be monitored, but the ceiling is full — " +
+      "they are still discovered, still visible and nothing has been deleted; " +
+      "raise the licence or turn monitoring off elsewhere to start collecting from them";
+    const rows = ceilings();
+    rows[0] = ceiling({ current: 25, note });
+    setup({ view: view({ ceilings: rows }) });
+    render(<Licence />);
+    expect(await screen.findByText(note)).toBeTruthy();
+  });
+
   it("a ceiling nobody counts shows the reason, never a zero", async () => {
     setup();
     render(<Licence />);
@@ -382,7 +406,7 @@ describe("current usage", () => {
     const { container } = render(<Licence />);
     await screen.findByText("12 of 25");
     const names = [...container.querySelectorAll(".lic-usage-name")].map((n) => n.textContent);
-    expect(names.slice(0, 2)).toEqual(["devices", "watched prefixes"]);
+    expect(names.slice(0, 2)).toEqual(["monitored devices", "watched prefixes"]);
   });
 
   it("names the tier that would lift a ceiling", async () => {

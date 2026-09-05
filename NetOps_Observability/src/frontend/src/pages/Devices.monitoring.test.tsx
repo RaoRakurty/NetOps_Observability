@@ -1,0 +1,147 @@
+// Devices.monitoring.test.tsx — the inventory page's half of the C4 rule.
+//
+// The product decision this page has to carry is one sentence: DISCOVERED IS
+// NOT LICENSED. A network with five hundred discovered devices and twelve
+// monitored ones is using twelve of its allowance, and a page that shows only
+// "500 devices" beside a limit of 25 teaches the operator the opposite.
+//
+// So three things are tested here and nothing else is:
+//
+//   1. BOTH NUMBERS ARE ON THE SCREEN, named for what they are.
+//   2. THE SWITCH IS REAL. The row's control calls the server; the page does
+//      not decide anything about the licence itself.
+//   3. A REFUSAL IS AN UPGRADE CARD, NOT AN ERROR. Nothing broke, nothing was
+//      deleted, and the operator is told what to do about it.
+
+import { describe, it, expect, vi, afterEach } from "vitest";
+import { render, screen, cleanup, fireEvent, waitFor } from "@testing-library/react";
+import type { Device } from "../services/api";
+
+const mockApi = vi.hoisted(() => ({
+  devices: vi.fn(),
+  alerts: vi.fn(),
+  deviceLocations: vi.fn(),
+  sites: vi.fn(),
+  features: vi.fn(),
+  setDeviceMonitoring: vi.fn(),
+  upsertDevice: vi.fn(),
+  deleteDevice: vi.fn(),
+  setDeviceSite: vi.fn(),
+  clearDeviceSite: vi.fn(),
+}));
+
+vi.mock("../services/api", () => ({ api: mockApi }));
+vi.mock("../components/Icon", () => ({ default: () => <span /> }));
+
+import Devices, { monitoringRemedy } from "./Devices";
+
+function device(over: Partial<Device> = {}): Device {
+  return {
+    id: "leaf1", name: "leaf1", address: "10.0.0.1", source: "snmp",
+    last_seen: new Date().toISOString(), monitored: false,
+    monitor_reason: "found by subnet discovery and not yet enabled for monitoring",
+    ...over,
+  };
+}
+
+function setup(devices: Device[]) {
+  mockApi.devices.mockResolvedValue(devices);
+  mockApi.alerts.mockResolvedValue([]);
+  mockApi.deviceLocations.mockResolvedValue({ devices: [] });
+  mockApi.sites.mockResolvedValue({ sites: [], active: "internal" });
+  mockApi.features.mockResolvedValue({});
+}
+
+afterEach(() => { cleanup(); vi.clearAllMocks(); });
+
+describe("discovered is not licensed", () => {
+  it("shows the discovered count and the monitored count as different numbers", async () => {
+    setup([
+      device({ id: "d1", monitored: true, monitor_methods: ["snmp"] }),
+      device({ id: "d2" }),
+      device({ id: "d3" }),
+    ]);
+    render(<Devices />);
+    expect(await screen.findByText("Discovered devices: 3 · Monitored devices: 1")).toBeTruthy();
+    expect(screen.getByText("Discovered devices")).toBeTruthy();
+    expect(screen.getByText("Monitored devices")).toBeTruthy();
+  });
+
+  it("labels each row with whether Correlix is collecting from it", async () => {
+    setup([
+      device({ id: "d1", monitored: true, monitor_methods: ["gnmi", "snmp"] }),
+      device({ id: "d2" }),
+    ]);
+    render(<Devices />);
+    expect(await screen.findByText("Monitored")).toBeTruthy();
+    expect(screen.getByText("Not monitored")).toBeTruthy();
+    // Two telemetry methods on ONE device: shown, but still one monitored
+    // device on the count above.
+    expect(screen.getByText("gnmi · snmp")).toBeTruthy();
+    expect(screen.getByText("Discovered devices: 2 · Monitored devices: 1")).toBeTruthy();
+  });
+});
+
+describe("the monitoring switch", () => {
+  it("asks the server to start collecting", async () => {
+    setup([device({ id: "d1" })]);
+    mockApi.setDeviceMonitoring.mockResolvedValue({
+      device_id: "d1", monitored: true, reason: "monitoring was enabled", decided: true,
+    });
+    render(<Devices />);
+    fireEvent.click(await screen.findByTitle(/Start collecting/));
+    await waitFor(() => expect(mockApi.setDeviceMonitoring).toHaveBeenCalledWith("d1", true));
+  });
+
+  it("asks the server to stop, and says the device stays", async () => {
+    setup([device({ id: "d1", monitored: true })]);
+    mockApi.setDeviceMonitoring.mockResolvedValue({
+      device_id: "d1", monitored: false, reason: "monitoring was turned off", decided: true,
+    });
+    render(<Devices />);
+    const stop = await screen.findByTitle(/Stop collecting/);
+    expect(stop.getAttribute("title")).toContain("stays in the inventory");
+    fireEvent.click(stop);
+    await waitFor(() => expect(mockApi.setDeviceMonitoring).toHaveBeenCalledWith("d1", false));
+  });
+
+  it("renders a ceiling refusal as an upgrade card, not as a failure", async () => {
+    setup([device({ id: "d1" })]);
+    mockApi.setDeviceMonitoring.mockRejectedValue(new Error(
+      '402 Payment Required: {"error":"licence_ceiling","ceiling":"devices",' +
+      '"unit":"monitored_devices","current":25,"limit":25,"tier":"community","lifted_by":"team",' +
+      '"message":"your Community licence covers 25 monitored devices and 25 are in use"}',
+    ));
+    render(<Devices />);
+    fireEvent.click(await screen.findByTitle(/Start collecting/));
+
+    // The card, with the server's own sentence and the remedy.
+    expect(await screen.findByLabelText("Licence limit")).toBeTruthy();
+    expect(screen.getByText(/covers 25 monitored devices/)).toBeTruthy();
+    expect(screen.getByText(/Disable monitoring on another device/)).toBeTruthy();
+    expect(screen.getByText(/Nothing has been removed and nothing has stopped/)).toBeTruthy();
+    // And the device is still on the page: the cap is on monitoring, not on
+    // seeing.
+    expect(screen.getByText("Discovered devices: 1 · Monitored devices: 0")).toBeTruthy();
+  });
+});
+
+describe("monitoringRemedy", () => {
+  it("names the limit, the counts and what to do about it", () => {
+    const text = monitoringRemedy({
+      kind: "ceiling", ceiling: "devices", current: 25, limit: 25,
+      tier: "community", liftedBy: "team", message: "…",
+    });
+    expect(text).toContain("Community monitoring limit reached");
+    expect(text).toContain("25 of 25 monitored devices are currently enabled");
+    expect(text).toContain("Disable monitoring on another device");
+    expect(text).toContain("upgrade your licence");
+    expect(text).toContain("Nothing was deleted");
+  });
+
+  it("stays a sentence when the platform sends no counts", () => {
+    const text = monitoringRemedy({ kind: "ceiling", ceiling: "devices", tier: "community", message: "…" });
+    expect(text).toContain("Community monitoring limit reached.");
+    expect(text).not.toContain("undefined");
+  });
+});

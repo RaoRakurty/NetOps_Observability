@@ -28,10 +28,30 @@ proves the step worked.
 | [Check the data-source coverage matrix](/onboard-devices/data-sources) | See, per device, which of the four planes delivered data in the last 15 minutes. |
 | [Verify a device is being monitored](/onboard-devices/verify-monitoring) | Read the collector pool, the alerts it raises, and the honest empty states. |
 
+## Discovered, then monitored
+
+Being in the inventory and being monitored are two different states, and the
+difference is the one the licence counts.
+
+- **Discovered** — Correlix knows the device exists. Free, unlimited, and never
+  refused by a licence: a sweep that finds five hundred devices creates five
+  hundred inventory records and uses none of the device allowance.
+- **Monitored** — Correlix collects from the device. This is what the device
+  ceiling counts (25 on the Community tier), and it is what the collectors poll.
+
+A device you add by hand, declare in the devices file, or bring in from the
+source of truth is monitored from the moment it appears: adding it is asking for
+it to be collected from. A device found only by the **subnet sweep** is a
+candidate — switch monitoring on for it in the Monitoring column of
+**Infrastructure → Inventory & Devices** when you want its telemetry. Several
+telemetry methods on one device still count as one monitored device, and turning
+monitoring off leaves the device, its history and its place in the topology
+exactly where they are.
+
 ## What each step gives you
 
-Metrics arrive as soon as a device is in the inventory with a credential that
-answers. The other three planes are configured on the device and covered in
+Metrics arrive as soon as a device is in the inventory WITH MONITORING ON and a
+credential that answers. The other three planes are configured on the device and covered in
 [Send data to Correlix](/send-data/overview).
 
 | Plane | Direction | Where it is configured |

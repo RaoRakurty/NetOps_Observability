@@ -56,7 +56,7 @@ Correlix re-reads the file within five seconds of a change, so a licence placed 
 
 | Ceiling | Community limit | Enforced |
 | --- | --- | --- |
-| `devices` | 25 | Yes: discovery admission and `POST /api/devices` |
+| `devices` | 25 **monitored** devices | Yes: turning monitoring on for a device, and `POST /api/devices` |
 | `watched_prefixes` | 5 | Yes: adding a prefix to the BGP watchlist |
 | `tenants` | 1 | No |
 | `orgs` | 1 | No |
@@ -70,7 +70,19 @@ Correlix re-reads the file within five seconds of a change, so a licence placed 
 
 An unlimited ceiling, written `-1` in the file, has no percentage. A bar drawn against no limit would be an invented number, so the row shows the count in use and the word unlimited.
 
-The device count includes devices that discovery found and withheld at the ceiling, not only the ones admitted. A network of forty devices under a limit of 25 therefore reads 40 against 25, rather than reporting 25 of 25 and looking full but healthy.
+### What the device ceiling counts
+
+The Community tier supports up to **25 monitored devices**. A device consumes one entitlement when at least one supported monitoring or collector configuration is enabled for that device. Devices discovered or retained in the inventory without active monitoring configuration do not consume the monitored-device allowance.
+
+Three consequences follow, and each is deliberate:
+
+- **Discovery is free.** A subnet scan that finds five hundred devices creates five hundred inventory records and uses none of the allowance. Nothing about discovery, the inventory, the topology or a device's history is limited by the licence — only collection is.
+- **Multiple enabled telemetry methods on the same device consume one monitored-device entitlement.** SNMP polling, a gNMI subscription and a configuration capture on one box are one monitored device, not three.
+- **Temporary device or collector unreachability does not release the entitlement while monitoring remains configured.** The ceiling tracks what Correlix is configured to collect from, not what is answering today; freeing a licence during an outage would hand a customer capacity exactly when their network is broken.
+
+Turn monitoring on or off per device on **Infrastructure → Inventory & Devices**, in the Monitoring column, or through `PUT /api/devices/{id}/monitoring`. A device an operator adds by hand, an operator-authored devices file declares, or the source of truth supplies is monitored from the start — adding it is asking for it to be collected from. A device found only by the subnet scan is not, until somebody says so.
+
+When the ceiling is full and a source reports another device that would be monitored, the device still enters the inventory and its collection is withheld. The Licence page says how many are in that state beside the usage bar, and the log names each one once. Raising the licence, or turning monitoring off elsewhere, starts collecting from them without any further action.
 
 ### Read the over-ceiling list
 

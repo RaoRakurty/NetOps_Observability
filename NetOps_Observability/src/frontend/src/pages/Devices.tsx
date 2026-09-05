@@ -11,6 +11,8 @@ const DeviceTerminal = lazy(() => import("./DeviceTerminal"));
 import Wizard from "../components/Wizard";
 import DataTable, { Column, Sev } from "../components/DataTable";
 import { NocHeader, NocKpis, NocKpi, Chip, LiveChip } from "../components/noc";
+import UpgradeCard, { licenceRefusalFromError, type LicenceRefusal } from "../components/licence/UpgradeCard";
+import { tierLabel } from "./licence.model";
 
 const Req = () => <span style={{ color: "var(--bad)", marginLeft: 2 }} title="required">*</span>;
 
@@ -115,6 +117,10 @@ export default function Devices() {
   const deferredQ = useDeferredValue(q);
   const [detail, setDetail] = useState<Device | null>(null);
   const [term, setTerm] = useState<Device | null>(null);
+  // MONITORING — a licence refusal is NOT an error: nothing broke and nothing
+  // was lost, so it renders as the upgrade card, never in the red error line.
+  const [refusal, setRefusal] = useState<LicenceRefusal | null>(null);
+  const [busyMonitor, setBusyMonitor] = useState<string | null>(null);
 
   // Selecting a device opens the full-page detail view (Overview · Interfaces ·
   // Routing) — the reference design's graph rows need full width, which the narrow
@@ -170,6 +176,27 @@ export default function Devices() {
     }
   };
 
+  // Turn monitoring on or off for one device.
+  //
+  // The SERVER decides: at the licence ceiling the PUT answers the structured
+  // 402 and the card below says so. Nothing here hides the control — a UI that
+  // enforced the limit by disabling a button would be enforcing nothing.
+  const setMonitoring = async (id: string, enabled: boolean) => {
+    setBusyMonitor(id);
+    try {
+      await api.setDeviceMonitoring(id, enabled);
+      setRefusal(null);
+      setError(null);
+      await load();
+    } catch (e) {
+      const r = licenceRefusalFromError(e);
+      if (r) setRefusal(r);
+      else setError((e as Error).message);
+    } finally {
+      setBusyMonitor(null);
+    }
+  };
+
   useEffect(() => {
     load();
     api.features().then((c) => setSshEnabled(!!c.device_ssh)).catch(() => {});
@@ -179,7 +206,20 @@ export default function Devices() {
 
   const addDevice = async () => {
     if (!draft.id.trim() || !draft.address.trim()) return;
-    await api.upsertDevice(draft);
+    try {
+      // A device an operator adds by hand is one they want collected from, so
+      // it is monitored from the start — and therefore consumes one
+      // monitored-device entitlement. At the ceiling the server refuses, and
+      // that refusal is an upgrade card, not a failure.
+      await api.upsertDevice(draft);
+      setRefusal(null);
+      setError(null);
+    } catch (e) {
+      const r = licenceRefusalFromError(e);
+      if (r) setRefusal(r);
+      else setError((e as Error).message);
+      return;
+    }
     setDraft({ id: "", name: "", address: "", vendor: "" });
     setShowAdd(false);
     await load();
@@ -201,6 +241,11 @@ export default function Devices() {
     }
     return s;
   }, [alerts]);
+
+  // MONITORED is the LICENSED unit and it is not the inventory size: a fleet of
+  // 500 discovered devices with 12 enabled is using 12 of its allowance. The two
+  // numbers are shown side by side precisely so nobody reads one as the other.
+  const monitoredCount = useMemo(() => devices.filter((d) => d.monitored).length, [devices]);
 
   const health = useMemo(() => new Map(devices.map((d) => [d.id, deviceHealth(d, alertedDevices)])), [devices, alertedDevices]);
   const counts = useMemo(() => {
@@ -294,6 +339,18 @@ export default function Devices() {
       text: (d) => d.model ?? d.os ?? "", render: (d) => <span title={d.model || d.os || ""} style={{ color: "var(--fg-muted)" }}>{d.model || d.os || "—"}</span>,
     },
     {
+      key: "monitored", header: "Monitoring", width: "10%", sortable: true,
+      text: (d) => (d.monitored ? "monitored" : "not monitored"),
+      sortValue: (d) => (d.monitored ? "0" : "1"),
+      render: (d) => (
+        <MonitoringCell
+          device={d}
+          busy={busyMonitor === d.id}
+          onToggle={(next) => setMonitoring(d.id, next)}
+        />
+      ),
+    },
+    {
       key: "source", header: "Source", width: "6%",
       text: (d) => sourceLabel(d.source),
       render: (d) => <span className={`badge ${sourceTone(d.source)}`} title={`Discovery source: ${d.source || "unknown"}`}>{sourceLabel(d.source)}</span>,
@@ -304,7 +361,7 @@ export default function Devices() {
       sev: (d) => healthSev(health.get(d.id) ?? "up"),
       render: (d) => <span title={fmtDateTime(d.last_seen)}>{relTime(d.last_seen)}</span>,
     },
-  ], [health, locs, siteOptions, editableSites, siteName]);
+  ], [health, locs, siteOptions, editableSites, siteName, busyMonitor]);
 
   const chip = (key: Filter, label: string, n: number, color?: string) => (
     <button
@@ -321,11 +378,20 @@ export default function Devices() {
     <div className="dm-board">
       <NocHeader
         title="Inventory & Devices"
-        subtitle="Every discovered and declared device, with live reachability health, type and source."
-        chips={<><Chip label={`${devices.length} devices`} /><LiveChip detail="30s poll" /></>}
+        subtitle="Every discovered and declared device. Discovery is free; the licence counts the devices monitoring is switched on for."
+        chips={<>
+          <Chip label={`${devices.length} discovered`} />
+          <Chip label={`${monitoredCount} monitored`} />
+          <LiveChip detail="30s poll" />
+        </>}
       >
-        <NocKpis cols={4}>
-          <NocKpi n={devices.length} label="Inventory" interp="devices tracked" />
+        <NocKpis cols={5}>
+          <NocKpi n={devices.length} label="Discovered devices" interp="in the inventory — free" />
+          <NocKpi
+            n={monitoredCount}
+            label="Monitored devices"
+            interp="collected from — the licensed unit"
+          />
           <NocKpi
             n={counts.up}
             label="Up"
@@ -344,11 +410,27 @@ export default function Devices() {
         </p>
       )}
 
+      {refusal && (
+        <div style={{ marginBottom: 12 }}>
+          <UpgradeCard
+            refusal={refusal}
+            title="This device was not switched on for monitoring"
+            actions={<>
+              <p style={{ margin: "0 0 8px" }}>{monitoringRemedy(refusal)}</p>
+              <button className="btn" onClick={() => setRefusal(null)}>Dismiss</button>
+            </>}
+          />
+        </div>
+      )}
+
       {devices.length > 0 && <FleetComposition devices={devices} locs={locs} siteName={siteName} />}
 
       <div className="cc-panel">
         <div className="cc-panel-h">
           <h3 className="cc-panel-t">Device inventory</h3>
+          <span style={{ color: "var(--fg-muted)", fontSize: 12 }}>
+            Discovered devices: {devices.length} · Monitored devices: {monitoredCount}
+          </span>
         </div>
         <div style={{ padding: "11px 13px" }}>
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, flexWrap: "wrap", marginBottom: 11 }}>
@@ -452,6 +534,57 @@ export default function Devices() {
         </Suspense>
       )}
     </div>
+  );
+}
+
+// monitoringRemedy is the sentence an operator can act on when the ceiling
+// refuses an activation. The server's own message says what the licence covers;
+// this says what to DO about it, in the product's words.
+export function monitoringRemedy(r: LicenceRefusal): string {
+  const tier = tierLabel(r.tier) || "Your";
+  const counts =
+    r.current !== undefined && r.limit !== undefined
+      ? ` ${r.current} of ${r.limit} monitored devices are currently enabled.`
+      : "";
+  return `${tier} monitoring limit reached.${counts} Disable monitoring on another device, ` +
+    `or upgrade your licence to monitor this one. Nothing was deleted — the device stays in the inventory, ` +
+    `with its history and its place in the topology.`;
+}
+
+// MonitoringCell is the per-device switch: the state, why it is that state, and
+// the one control that changes it.
+//
+// The button is ALWAYS enabled, deliberately. The ceiling is enforced by the
+// server; a UI that greyed the control out would be hiding the reason instead
+// of showing it, and the operator would be left guessing why a device they own
+// cannot be monitored.
+function MonitoringCell({ device, busy, onToggle }: {
+  device: Device;
+  busy: boolean;
+  onToggle: (next: boolean) => void;
+}) {
+  const on = !!device.monitored;
+  const methods = (device.monitor_methods ?? []).join(" · ");
+  const title = device.monitor_reason || (on ? "Correlix is collecting from this device" : "Correlix is not collecting from this device");
+  return (
+    <span style={{ display: "inline-flex", alignItems: "center", gap: 8 }} title={title}>
+      <span className={`badge ${on ? "good" : ""}`} aria-label={on ? "Monitored" : "Not monitored"}>
+        {on ? "Monitored" : "Not monitored"}
+      </span>
+      {on && methods && (
+        <span style={{ color: "var(--fg-muted)", fontSize: 11 }} title={`Telemetry configured: ${methods} — several methods are still one monitored device`}>
+          {methods}
+        </span>
+      )}
+      <button
+        className="btn"
+        disabled={busy}
+        title={on ? "Stop collecting from this device (it stays in the inventory)" : "Start collecting from this device (uses one monitored-device entitlement)"}
+        onClick={(e) => { e.stopPropagation(); onToggle(!on); }}
+      >
+        {busy ? "…" : on ? "Stop" : "Monitor"}
+      </button>
+    </span>
   );
 }
 

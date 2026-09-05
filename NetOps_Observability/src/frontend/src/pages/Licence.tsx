@@ -339,6 +339,12 @@ function UsageRow({ row }: { row: LicenceCeiling }) {
         </span>
         {lifted && <Pill tone="muted">{lifted}</Pill>}
       </div>
+
+      {/* A qualifier on a number we DID count — today: devices the ceiling is
+          holding back. Distinct from the not-measured text above, which appears
+          only when there is no number at all. A bar reading "25 of 25" beside a
+          network of forty is true and useless without this line. */}
+      {row.note && <p className="lic-sub lic-usage-note">{row.note}</p>}
     </li>
   );
 }

@@ -27,6 +27,26 @@ type Device struct {
 	Labels           map[string]string `json:"labels,omitempty"`
 	Source           string            `json:"source"`
 	LastSeen         time.Time         `json:"last_seen"`
+
+	// Monitored — Correlix is CONFIGURED to collect telemetry from this device.
+	// It is the licensed unit (entitlement.CeilingDevices counts monitored
+	// devices, not inventory rows) and the collector pool polls only devices
+	// that carry it.
+	//
+	// SERVER-STAMPED, NEVER PERSISTED and never read from a request body: the
+	// device registry computes it from the operator's monitoring decision (or,
+	// absent one, the device's provenance) on every read — the same
+	// infer-on-read contract Type and CredentialActive follow. A client that
+	// sends it is ignored.
+	Monitored bool `json:"monitored"`
+	// MonitorReason says WHY Monitored has the value it has, in one operator
+	// sentence. Never silent: a device that is not collected from always says
+	// what would change that.
+	MonitorReason string `json:"monitor_reason,omitempty"`
+	// MonitorMethods lists the per-device telemetry the device is configured
+	// for (e.g. "snmp", "gnmi"). It is DISPLAY, not the count: several methods
+	// on one device are still one monitored device.
+	MonitorMethods []string `json:"monitor_methods,omitempty"`
 }
 
 // Metric is a single time-series sample emitted by a collector.

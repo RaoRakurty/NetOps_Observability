@@ -35,7 +35,7 @@ enforcement is contractual plus the gate below. Isolation is never commercial: i
 safety property of every tier.
 
 ## 2. Tiers (decided)
-Community: 25 devices, 1 tenant, 7-day retention, 5 watched prefixes, hardening + exposure
+Community: 25 MONITORED devices (discovery is unlimited and free), 1 tenant, 7-day retention, 5 watched prefixes, hardening + exposure
 with the default two frameworks, evidence-only Iris. Team: 250 devices, 5 tenants / 1 org,
 30-day retention, 100 prefixes + BMP, security findings + frameworks + drift + pcap + threat
 lane + advisory, BYO provider key. Enterprise: unlimited per licence, org hierarchy, 90-day +
@@ -71,7 +71,7 @@ entitled?" through one central entitlement service, never "is this Enterprise?".
 ## 4. Enforcement points (all existing chokepoints)
 | ceiling / feature | where it is enforced |
 |---|---|
-| devices | discovery admission + manual device create (`POST /api/devices`) |
+| devices (UNIT: **monitored** devices — owner C4, 2026-09-05) | the monitoring transition, wherever it happens: `PUT /api/devices/{id}/monitoring`, `POST /api/devices` (a manually created device is monitored), and a discovery SOURCE reporting a device that would default to monitored (which withholds the COLLECTION and lists it, never the inventory row). Discovery itself is never refused. The check and the write share one hold of the device registry's lock, so concurrent activations cannot both take the last slot |
 | tenants / orgs | `POST /api/tenants`, org create |
 | retention | ISM/TTL bootstrap values (already env-driven) |
 | watched prefixes | watchlist store `Add` |

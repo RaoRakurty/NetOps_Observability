@@ -40,6 +40,19 @@ func (s *server) wirelessDeviceRows(ctx context.Context, claims jwtClaims, exist
 	}
 	var out []models.Device
 
+	// MONITORING-BEGIN — a projected wireless row IS being collected from: the
+	// NMS connector polls the controller, which is what put this row here at
+	// all. Saying so keeps the fleet table honest (a blank would read as "not
+	// monitored", which is false).
+	//
+	// KNOWN GAP, recorded rather than papered over: these rows are collected
+	// through the NMS connector and are NOT counted by the device ceiling,
+	// because they live in the wireless store rather than the device registry
+	// that owns the count. Closing it is a product decision about whether an AP
+	// is a licensed device — see docs/TRACKER.md.
+	const wirelessReason = "monitoring is on: this device is polled through its wireless controller integration"
+	// MONITORING-END
+
 	ctrls, err := s.wireless.ListControllers(ctx, tenant, cross)
 	if err != nil {
 		logError("wireless", "controller projection unavailable for /api/devices",
@@ -64,6 +77,9 @@ func (s *server) wirelessDeviceRows(ctx context.Context, claims jwtClaims, exist
 			TenantID: c.TenantID,
 			Source:   "wireless",
 			LastSeen: c.LastSeen,
+
+			Monitored:     true,
+			MonitorReason: wirelessReason,
 		})
 	}
 
@@ -90,6 +106,9 @@ func (s *server) wirelessDeviceRows(ctx context.Context, claims jwtClaims, exist
 			TenantID: ap.TenantID,
 			Source:   "wireless",
 			LastSeen: ap.LastSeen,
+
+			Monitored:     true,
+			MonitorReason: wirelessReason,
 		})
 	}
 	return out

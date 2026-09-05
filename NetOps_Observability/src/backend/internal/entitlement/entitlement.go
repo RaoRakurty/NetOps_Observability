@@ -259,6 +259,10 @@ func FeatureLabel(f Feature) string {
 // commercial policy. `Enforced(name)` is the machine-readable statement of
 // which is which, and a test asserts the un-enforced ones have no call sites.
 const (
+	// CeilingDevices counts MONITORED devices — see CeilingUnit and the C4
+	// decision recorded there. The NAME stays "devices" because it is a signed
+	// field of every issued licence document (internal/licence/signer's
+	// canonical order); the UNIT it counts is monitored_devices.
 	CeilingDevices              = "devices"
 	CeilingWatchedPrefixes      = "watched_prefixes"
 	CeilingTenants              = "tenants"
@@ -267,6 +271,44 @@ const (
 	CeilingSkills               = "skills"
 	CeilingProviderTokensPerDay = "provider_tokens_per_day"
 )
+
+// Ceiling UNITS — what each ceiling actually counts, as a machine token.
+//
+// The unit is separate from the ceiling NAME on purpose. A name is a field of a
+// signed licence document and can never change without invalidating every
+// licence ever issued; the unit is the product statement of what that number
+// measures, and the owner's C4 decision (2026-09-05) changed exactly that for
+// devices: the licence counts devices Correlix is CONFIGURED TO MONITOR, not
+// rows in the inventory. Discovery is free — finding a device costs nothing and
+// consumes no allowance; collecting from one is the priced act.
+//
+// It rides in the refusal body so a client renders "25 of 25 monitored devices"
+// instead of the ambiguous "25 devices", without re-deriving product policy.
+const (
+	UnitMonitoredDevices    = "monitored_devices"
+	UnitWatchedPrefixes     = "watched_prefixes"
+	UnitTenants             = "tenants"
+	UnitOrgs                = "orgs"
+	UnitRetentionDays       = "retention_days"
+	UnitSkills              = "skills"
+	UnitProviderTokensDaily = "provider_tokens_per_day"
+)
+
+// ceilingUnits maps each ceiling to the unit it counts. Only the devices row
+// differs from its own name, and that difference is the whole C4 decision.
+var ceilingUnits = map[string]string{
+	CeilingDevices:              UnitMonitoredDevices,
+	CeilingWatchedPrefixes:      UnitWatchedPrefixes,
+	CeilingTenants:              UnitTenants,
+	CeilingOrgs:                 UnitOrgs,
+	CeilingRetentionDays:        UnitRetentionDays,
+	CeilingSkills:               UnitSkills,
+	CeilingProviderTokensPerDay: UnitProviderTokensDaily,
+}
+
+// CeilingUnit is the machine token for what a ceiling counts ("" for a name
+// outside the closed vocabulary).
+func CeilingUnit(name string) string { return ceilingUnits[name] }
 
 // Unlimited is the ceiling value meaning "no limit". It is -1 and not 0 so a
 // genuine zero stays expressible: a missing or zero field must never read as
@@ -312,7 +354,11 @@ func Enforced(name string) bool { return enforcedCeilings[name] }
 func CeilingLabel(name string) string {
 	switch name {
 	case CeilingDevices:
-		return "devices"
+		// "monitored devices", not "devices": the number counts what Correlix
+		// is configured to collect from, and an inventory of five hundred
+		// discovered candidates against a limit of 25 must never read as if
+		// those rows were the thing being limited (owner C4, 2026-09-05).
+		return "monitored devices"
 	case CeilingWatchedPrefixes:
 		return "watched prefixes"
 	case CeilingTenants:
@@ -459,6 +505,11 @@ func LiftedBy(name string, limit int, at Tier) Tier {
 type ErrLicence struct {
 	// Ceiling is the ceiling vocabulary name, or "" for a feature refusal.
 	Ceiling string `json:"ceiling,omitempty"`
+	// Unit is what the ceiling COUNTS, as a machine token (CeilingUnit) — e.g.
+	// "monitored_devices" for the devices ceiling. A client renders the unit,
+	// never the ceiling name, so a limit on monitored devices can never be
+	// mistaken for a limit on inventory rows.
+	Unit string `json:"unit,omitempty"`
 	// Feature is the feature vocabulary name, or "" for a ceiling refusal.
 	Feature Feature `json:"feature,omitempty"`
 	// Current is the caller's present value (a count, or a requested number).
@@ -604,7 +655,7 @@ func CheckCeilingValue(svc Service, name string, want, current int) error {
 		msg += " — contact Correlix to raise it"
 	}
 	return &ErrLicence{
-		Ceiling: name, Current: current, Limit: lim,
+		Ceiling: name, Unit: CeilingUnit(name), Current: current, Limit: lim,
 		Tier: at, LiftedBy: lifted, Message: msg,
 	}
 }

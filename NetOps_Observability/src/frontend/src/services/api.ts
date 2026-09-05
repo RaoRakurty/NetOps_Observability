@@ -40,6 +40,33 @@ export type Device = {
   labels?: Record<string, string>;
   source: string;
   last_seen: string;
+  /**
+   * Correlix is configured to COLLECT from this device.
+   *
+   * This is the licensed unit — the device ceiling counts monitored devices,
+   * not inventory rows — and it is what the collectors poll. Server-stamped on
+   * every read: a device discovered but never enabled is inventory, not load,
+   * and costs no allowance. Sending it on a create is ignored.
+   */
+  monitored?: boolean;
+  /** Why `monitored` has the value it has. Always present on a device read. */
+  monitor_reason?: string;
+  /** The telemetry configured for the device (snmp, gnmi, …). Several methods
+   *  are still ONE monitored device: display, never a count. */
+  monitor_methods?: string[];
+};
+
+/** GET|PUT /api/devices/{id}/monitoring. */
+export type DeviceMonitoring = {
+  device_id: string;
+  monitored: boolean;
+  reason: string;
+  methods?: string[];
+  /** false = nobody has decided; the state is the default for how the device
+   *  entered the inventory. */
+  decided: boolean;
+  decided_by?: string;
+  decided_at?: string;
 };
 
 // Subnet discovery scan scope (platform-owner; GET is redacted — the probe
@@ -4345,6 +4372,20 @@ export const api = {
     request<Device>("/api/devices", { method: "POST", body: JSON.stringify(d) }),
   deleteDevice: (id: string) =>
     request<void>(`/api/devices/${encodeURIComponent(id)}`, { method: "DELETE" }),
+  /** Whether Correlix is collecting from one device, and why. */
+  deviceMonitoring: (id: string) =>
+    request<DeviceMonitoring>(`/api/devices/${encodeURIComponent(id)}/monitoring`),
+  /**
+   * Turn monitoring on or off for one device.
+   *
+   * Enabling the first device past the licence ceiling throws the structured
+   * 402 the UpgradeCard renders — the server decides, never this call.
+   */
+  setDeviceMonitoring: (id: string, enabled: boolean) =>
+    request<DeviceMonitoring>(`/api/devices/${encodeURIComponent(id)}/monitoring`, {
+      method: "PUT",
+      body: JSON.stringify({ enabled }),
+    }),
   collectors: () => request<CollectorStatus[]>("/api/collectors"),
   discoveryConfig: () => request<DiscoveryConfigEnvelope>("/api/discovery/config"),
   saveDiscoveryConfig: (c: DiscoveryConfigInput) =>
@@ -8535,9 +8576,16 @@ export type LicenceCeiling = {
   label: string;
   /** -1 = no limit. */
   limit: number;
+  /** What the number COUNTS, as a machine token ("monitored_devices" for the
+   *  device ceiling — which is not the same thing as inventory rows). */
+  unit?: string;
   /** null = NOT COUNTED on this platform; `current_reason` says why. */
   current: number | null;
   current_reason?: string;
+  /** A qualifier on a MEASURED number (e.g. devices the ceiling is holding
+   *  back). Distinct from `current_reason`, which exists only when there is no
+   *  number at all. */
+  note?: string;
   /** false = the limit is carried in the licence but nothing gates on it. */
   enforced: boolean;
   over: boolean;

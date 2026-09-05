@@ -150,11 +150,23 @@ func New(d Deps) *API {
 // and a blank that means "we never looked" are different facts and the page
 // renders them differently.
 type CeilingView struct {
-	Name     string           `json:"name"`
-	Label    string           `json:"label"`
-	Limit    int              `json:"limit"`
-	Current  *int             `json:"current"`
-	Reason   string           `json:"current_reason,omitempty"`
+	Name  string `json:"name"`
+	Label string `json:"label"`
+	// Unit is the machine token for WHAT the number counts
+	// (entitlement.CeilingUnit) — "monitored_devices" for the devices ceiling,
+	// which is not the same thing as inventory rows. A client renders the
+	// label, but keys any behaviour off this.
+	Unit    string `json:"unit,omitempty"`
+	Limit   int    `json:"limit"`
+	Current *int   `json:"current"`
+	Reason  string `json:"current_reason,omitempty"`
+	// Note qualifies a MEASURED number — a fact the bar cannot show on its own,
+	// such as devices the ceiling is holding back. Distinct from Reason, which
+	// exists only when there is no number at all: "we counted, and here is
+	// something else you need to know" and "we never counted" are different
+	// statements and a page that conflated them would be lying in one of the
+	// two cases.
+	Note     string           `json:"note,omitempty"`
 	Enforced bool             `json:"enforced"`
 	Over     bool             `json:"over"`
 	LiftedBy entitlement.Tier `json:"lifted_by,omitempty"`
@@ -478,6 +490,7 @@ func (a *API) compose(st State, usage Usage, notes map[string]string) View {
 		row := CeilingView{
 			Name:     n,
 			Label:    entitlement.CeilingLabel(n),
+			Unit:     entitlement.CeilingUnit(n),
 			Limit:    limit,
 			Enforced: entitlement.Enforced(n),
 			LiftedBy: entitlement.LiftedBy(n, limit, st.Tier),
@@ -486,6 +499,7 @@ func (a *API) compose(st State, usage Usage, notes map[string]string) View {
 			v := cur
 			row.Current = &v
 			row.Over = entitlement.Enforced(n) && entitlement.Exceeds(cur, limit)
+			row.Note = notes[n]
 		} else {
 			row.Reason = notes[n]
 			if row.Reason == "" {

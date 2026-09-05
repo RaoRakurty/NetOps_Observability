@@ -43,14 +43,20 @@ function FleetPulse() {
     return () => { alive = false; clearInterval(id); };
   }, []);
 
-  const { monitored, reachable, unreachable } = useMemo(() => {
+  // "Monitored" is the set Correlix COLLECTS from, not the inventory size
+  // (owner decision C4, 2026-09-05): a device discovered and never enabled is
+  // an inventory record, and counting it here would report reachability for
+  // something nothing is polling. Reachability is measured over that same set,
+  // so "unreachable" cannot be inflated by devices nobody asked us to reach.
+  const { discovered, monitored, reachable, unreachable } = useMemo(() => {
     const now = Date.now();
+    const on = devices.filter((d) => d.monitored);
     let r = 0;
-    for (const d of devices) {
+    for (const d of on) {
       const seen = Date.parse(d.last_seen || "");
       if (Number.isFinite(seen) && now - seen < 5 * 60_000) r++;
     }
-    return { monitored: devices.length, reachable: r, unreachable: devices.length - r };
+    return { discovered: devices.length, monitored: on.length, reachable: r, unreachable: on.length - r };
   }, [devices]);
 
   const bySev = useMemo(() => {
@@ -68,6 +74,7 @@ function FleetPulse() {
   return (
     <>
       <StatStrip>
+        <Stat label="Discovered devices" value={discovered} />
         <Stat label="Monitored devices" value={monitored} />
         <Stat label="Reachable" value={reachable} tone="good" />
         <Stat label="Unreachable" value={unreachable} tone={unreachable > 0 ? "bad" : ""} />

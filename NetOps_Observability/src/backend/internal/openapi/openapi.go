@@ -31,6 +31,8 @@ var apiRoutes = []apiRoute{
 	{"POST", "/api/devices", "Inventory", "Create/update a device (scoped to the caller's tenant)"},
 	{"GET", "/api/devices/{id}", "Inventory", "Fetch a device by id"},
 	{"DELETE", "/api/devices/{id}", "Inventory", "Delete a device"},
+	{"GET", "/api/devices/{id}/monitoring", "Inventory", "Whether Correlix is collecting from this device, why, and which telemetry methods are configured (infrastructure:read; 404 outside the caller's tenant)"},
+	{"PUT", "/api/devices/{id}/monitoring", "Inventory", "Turn monitoring on or off for one device ({\"enabled\": true|false}; infrastructure:write). Monitored devices are the unit the licence counts — enabling the first one past the ceiling answers the structured 402, disabling releases the entitlement, and the device, its history and its topology are untouched either way"},
 	{"GET", "/api/collectors", "Inventory", "Collector pool status"},
 	{"GET", "/api/alerts", "Alerts", "Active alerts visible to the caller's tenant"},
 	{"GET", "/api/rules", "Alerts", "Alert rules"},

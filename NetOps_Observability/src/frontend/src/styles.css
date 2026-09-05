@@ -6474,6 +6474,9 @@ button.cc-kpi-btn.on::after { content: "filtered"; display: block; margin-top: 5
 .lic-usage-name { font-size: 12.5px; font-weight: 600; color: var(--fg); }
 .lic-usage-num { font-size: 12px; font-variant-numeric: tabular-nums; }
 .lic-usage-ft { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+/* A qualifier on a MEASURED usage number (e.g. devices the ceiling is holding
+   back). Sits under the bar's footer, quieter than the limit line it follows. */
+.lic-usage-note { margin: 6px 0 0; line-height: 1.45; }
 /* the track is always present; only a real percentage gets a fill */
 .lic-bar {
   height: 6px; border-radius: 999px; background: color-mix(in srgb, var(--fg-subtle) 18%, transparent);

@@ -339,10 +339,16 @@ func TestWriteRefusalRendersThe402(t *testing.T) {
 		if body["error"] != entitlement.KindCeiling {
 			t.Fatalf("error = %v, want %q", body["error"], entitlement.KindCeiling)
 		}
-		for _, k := range []string{"ceiling", "current", "limit", "tier", "lifted_by", "message"} {
+		for _, k := range []string{"ceiling", "unit", "current", "limit", "tier", "lifted_by", "message"} {
 			if _, ok := body[k]; !ok {
 				t.Fatalf("the card needs %q in the body: %v", k, body)
 			}
+		}
+		// The UNIT is what stops a client rendering a limit on collection as a
+		// limit on inventory rows. The ceiling NAME cannot say it: it is a
+		// signed field of every issued licence and can never change.
+		if body["unit"] != entitlement.UnitMonitoredDevices {
+			t.Fatalf("unit = %v, want %q", body["unit"], entitlement.UnitMonitoredDevices)
 		}
 	})
 
@@ -387,6 +393,37 @@ func TestWriteRefusalRendersThe402(t *testing.T) {
 			t.Fatal("nil is success, not a refusal")
 		}
 	})
+}
+
+// TestCeilingsSayWhatTheyCount pins the C4 decision at the vocabulary level:
+// the devices ceiling counts MONITORED devices, its name stays "devices"
+// because every issued licence signs that field, and the label an operator
+// reads says so out loud.
+func TestCeilingsSayWhatTheyCount(t *testing.T) {
+	if entitlement.CeilingDevices != "devices" {
+		t.Fatalf("the licence-file field must not be renamed: every issued document signs it (%q)", entitlement.CeilingDevices)
+	}
+	if got := entitlement.CeilingUnit(entitlement.CeilingDevices); got != entitlement.UnitMonitoredDevices {
+		t.Fatalf("unit = %q, want %q — discovery is free and inventory rows are not the licensed unit", got, entitlement.UnitMonitoredDevices)
+	}
+	if got := entitlement.CeilingLabel(entitlement.CeilingDevices); got != "monitored devices" {
+		t.Fatalf("label = %q — a bar reading \"devices\" beside a 500-device inventory teaches the wrong rule", got)
+	}
+	// Every ceiling in the closed vocabulary says what it counts; a blank unit
+	// is a row a client cannot render honestly.
+	for _, n := range entitlement.CeilingNames() {
+		if entitlement.CeilingUnit(n) == "" {
+			t.Fatalf("ceiling %q has no unit", n)
+		}
+	}
+	if entitlement.CeilingUnit("not-a-ceiling") != "" {
+		t.Fatal("a name outside the vocabulary has no unit")
+	}
+	// And the refusal sentence names it, so the message alone is unambiguous.
+	err := entitlement.CheckCeiling(community(), entitlement.CeilingDevices, 25)
+	if err == nil || !strings.Contains(err.Error(), "monitored devices") {
+		t.Fatalf("the refusal must say what is limited: %v", err)
+	}
 }
 
 // TestErrorsIsSentinel lets a caller ask "was this a licence refusal?" without

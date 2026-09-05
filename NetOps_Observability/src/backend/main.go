@@ -56,6 +56,7 @@ import (
 	"netops/backend/internal/dem"
 	"netops/backend/internal/dem/experience"
 	// DATA-PROTECTION-END
+	"netops/backend/internal/devmon"
 	"netops/backend/internal/discovery"
 	// CONFIG-BACKUP-BEGIN
 	"netops/backend/internal/hardening"
@@ -282,6 +283,12 @@ type server struct {
 	entitlements *licence.Service
 	licenceAPI   *licence.API
 	// LICENCE-END
+	// MONITORING-BEGIN — the per-device monitoring switch (C4). `devmonAPI` is
+	// GET|PUT /api/devices/{id}/monitoring; the STATE it changes lives in the
+	// device registry, which is also what counts it for the licence, so there
+	// is one definition of "monitored" and one lock protecting it.
+	devmonAPI *devmon.API
+	// MONITORING-END
 	// wanIfAddr is the interface-IP registry source (deviceID → ip → ifName) for
 	// the WAN endpoint projector. Defaults to collectors.FetchIfAddrMap; a DI seam
 	// so the projector's tenant-filter is unit-testable without Redis (§5).
@@ -640,6 +647,19 @@ func newServer() *server {
 			if dev.Address == "" {
 				continue
 			}
+			// MONITORING-BEGIN — collect only from devices monitoring is ON
+			// for (owner decision C4, 2026-09-05). This is what makes the
+			// licence count mean something: the ceiling counts MONITORED
+			// devices, and this line is the reason that number is the set the
+			// platform actually spends telemetry, storage and correlation on.
+			// A discovered candidate nobody enabled is inventory, not load.
+			//
+			// The flag is stamped by the device registry (internal/discovery),
+			// which owns the one definition — nothing here re-derives it.
+			if !dev.Monitored {
+				continue
+			}
+			// MONITORING-END
 			// SNMP credentials come only from UI-configured credential profiles
 			// (resolved via the device's credential_ref). A v3 profile threads
 			// full USM params; a v1/v2c profile threads the community. An empty
@@ -881,6 +901,24 @@ func newServer() *server {
 	if err != nil {
 		log.Fatalf("device sites store: %v", err)
 	}
+	// MONITORING-BEGIN — per-device monitoring decisions (owner decision C4,
+	// 2026-09-05): which devices Correlix collects from, and therefore which
+	// ones the licence counts.
+	//
+	// Attached to the registry BEFORE any source polls or the API serves, so a
+	// decision made yesterday is in force before the ceiling is asked about it
+	// — exactly the reason SetStore is called where it is.
+	//
+	// Tenant scoping is by construction, not by convention: the records live in
+	// the §3a tenantKV primitive keyed (tenant, device id), and the tenant is
+	// stamped from the DEVICE's own owner (server-side state), never from a
+	// request body (§3a rule 2).
+	deviceMonitoring, err := newDeviceMonitorStore(envOr("DEVICE_MONITORING_FILE", "/data/device_monitoring.json"))
+	if err != nil {
+		log.Fatalf("device monitoring store: %v", err)
+	}
+	d.SetMonitorStore(deviceMonitoring)
+	// MONITORING-END
 	wanPolicy, err := newWanPolicyStore(envOr("WAN_POLICY_FILE", "/data/wan_policy.json"))
 	if err != nil {
 		log.Fatalf("wan policy store: %v", err)
@@ -920,18 +958,23 @@ func newServer() *server {
 		refresh:          refresh,
 		snmpCreds:        snmpCreds,
 		credOverrides:    credOverrides,
-		credSentinel:     newCredSentinel(credOverrides, snmpCreds, d.Devices),
-		sshHosts:         newSSHHostStore(envOr("SSH_KNOWN_HOSTS_FILE", "/data/ssh_known_hosts.json")),
-		snmpProfiles:     snmpProfiles,
-		saved:            saved,
-		audit:            audit,
-		contactPoints:    contactPoints,
-		deviceLocations:  deviceLocations,
-		sites:            sites,
-		deviceSites:      deviceSites,
-		wanPolicy:        wanPolicy,
-		systemNet:        systemNet,
-		hub:              NewHub(),
+		// MONITORING-BEGIN — the credential sentinel probes devices over SNMP to
+		// learn which profile answers, so it must see only the devices
+		// monitoring is on for: probing one nobody enabled is collection the
+		// licence does not count (C4).
+		credSentinel: newCredSentinel(credOverrides, snmpCreds, monitoredOnly(d.Devices)),
+		// MONITORING-END
+		sshHosts:        newSSHHostStore(envOr("SSH_KNOWN_HOSTS_FILE", "/data/ssh_known_hosts.json")),
+		snmpProfiles:    snmpProfiles,
+		saved:           saved,
+		audit:           audit,
+		contactPoints:   contactPoints,
+		deviceLocations: deviceLocations,
+		sites:           sites,
+		deviceSites:     deviceSites,
+		wanPolicy:       wanPolicy,
+		systemNet:       systemNet,
+		hub:             NewHub(),
 		// #13 Vulnerability Management: operator-prepared advisory feed
 		// (scripts/vuln-feed-prepare.py → data/vuln/, mounted ro at /data/vuln).
 		vulns: vuln.NewFeed(envOr("VULN_FEED_PATH", "/data/vuln/advisories.csv"),
@@ -953,14 +996,28 @@ func newServer() *server {
 	srv.licenceStore = licence.NewFileStore(envOr("LICENCE_FILE", licence.DefaultPath), licence.FileStoreOptions{})
 	srv.entitlements = licence.NewService(srv.licenceStore)
 	srv.licenceAPI = licence.New(srv.licenceDeps())
-	// The discovery half of the device ceiling (design §4: "discovery admission
-	// + manual device create"). Injected rather than read by the aggregator, so
-	// internal/discovery keeps knowing nothing about licensing.
-	srv.discovery.SetAdmissionGate(func(current int) error {
+	// The MONITORED-DEVICE ceiling. Injected rather than read by the aggregator,
+	// so internal/discovery keeps knowing nothing about licensing: it asks
+	// "may one more device be monitored?" and honours the answer.
+	//
+	// It gates COLLECTION, never DISCOVERY (owner decision C4, 2026-09-05):
+	// finding a device costs no allowance and is never refused, so a /24 sweep
+	// that turns up 500 devices creates 500 inventory rows and uses 0 of 25.
+	// What consumes an entitlement is the transition to monitored — the first
+	// time Correlix is told to collect from a device — which is why this one
+	// closure covers every path there is: the monitoring switch, the manual
+	// create, and a source reporting a device that would default to monitored.
+	srv.discovery.SetMonitorGate(func(current int) error {
 		return entitlement.CheckCeiling(srv.entitlements, entitlement.CeilingDevices, current)
 	})
 	srv.logLicenceState()
 	// LICENCE-END
+	// MONITORING-BEGIN — the monitoring switch's route. Built here, after srv
+	// exists, because every seam it takes is a method on *server (the two
+	// permission gates, the device-visibility rule, the audit sink) — the same
+	// reason the licence and data-protection modules are built here.
+	srv.devmonAPI = devmon.New(srv.devmonDeps())
+	// MONITORING-END
 	// ITSM config store — seeds from env on first run, then admin-UI editable;
 	// builds + swaps the ServiceNow/Jira connectors into srv + the notifier.
 	srv.itsmCfg = newITSMConfigStore(srv, envOr("ITSM_CONFIG_FILE", "/data/itsm_config.json"))
@@ -1708,6 +1765,79 @@ func devicesPath() string {
 	}
 	return "/data/devices.json"
 }
+
+// MONITORING-BEGIN — the composition-root adapters for the per-device
+// monitoring switch (C4). Wiring only: the POLICY is internal/devmon and the
+// STATE is internal/discovery, and neither knows this file exists.
+
+// monitoredOnly narrows a device-list source to the devices Correlix collects
+// from. Anything that REACHES a device on a schedule reads through this, so a
+// device nobody enabled is never probed — the licence counts the monitored set,
+// and the monitored set is what the platform must actually touch.
+func monitoredOnly(all func() []models.Device) func() []models.Device {
+	return func() []models.Device {
+		devs := all()
+		out := make([]models.Device, 0, len(devs))
+		for _, d := range devs {
+			if d.Monitored {
+				out = append(out, d)
+			}
+		}
+		return out
+	}
+}
+
+// devmonGate adapts the platform's permission gate to the monitoring module's
+// seam. Monitoring is device state, so it takes exactly the gate the device
+// routes take — infrastructure:read to look, infrastructure:write to change —
+// and reports the caller's tenant scope so the module can 404 a device the
+// caller may not see.
+func (s *server) devmonGate(w http.ResponseWriter, r *http.Request, level int) (devmon.Principal, bool) {
+	claims, ok := s.requirePerm(w, r, "infrastructure", level)
+	if !ok {
+		return devmon.Principal{}, false
+	}
+	tenant, cross := principalTenant(claims)
+	return devmon.Principal{Subject: claims.Sub, Tenant: tenant, CrossTenant: cross}, true
+}
+
+// deviceMonitorStore persists the monitoring decisions on the §3a tenant-scoped
+// kv primitive, and adapts it to the registry's MonitorStore seam.
+//
+// The primitive is default-closed by construction: records are keyed
+// (tenant, device id) and there is no unscoped list except the one the REGISTRY
+// takes at boot to seed itself — the same platform-wide read DeviceStore.Devices
+// already performs, and for the same reason (the registry is the platform's
+// device state, not one tenant's view of it).
+type deviceMonitorStore struct{ kv *tenantKV[devmon.Record] }
+
+func newDeviceMonitorStore(path string) (*deviceMonitorStore, error) {
+	kv, err := newTenantKV[devmon.Record](path,
+		func(r devmon.Record) string { return r.TenantID },
+		func(r devmon.Record) string { return r.DeviceID })
+	if err != nil {
+		return nil, err
+	}
+	return &deviceMonitorStore{kv: kv}, nil
+}
+
+// MonitorRecords is the boot-time seed (see the type comment).
+func (s *deviceMonitorStore) MonitorRecords() []devmon.Record { return s.kv.All("", true) }
+
+// PutMonitor persists one decision. The caller (the registry) has already
+// stamped the owning tenant from the device record.
+func (s *deviceMonitorStore) PutMonitor(rec devmon.Record) error { return s.kv.Upsert(rec) }
+
+// DeleteMonitor removes a device's decision, scoped to the tenant that owns it —
+// never cross-tenant, so a delete can only ever reach the record it was asked
+// about. An absent record is not an error: the caller is deleting the device and
+// the decision is already gone.
+func (s *deviceMonitorStore) DeleteMonitor(tenant, deviceID string) error {
+	s.kv.Delete(tenant, false, deviceID)
+	return nil
+}
+
+// MONITORING-END
 
 // newDeviceStore wires the manual-device store onto the platform kv + logger.
 // When the active backend supports per-record persistence (both production
@@ -3345,34 +3475,36 @@ func (s *server) handleDevices(w http.ResponseWriter, r *http.Request) {
 		// The merge itself is right (same IP usually is the same device). What
 		// changes is that the caller is TOLD, and always receives the identity
 		// that actually survived.
-		// LICENCE-BEGIN — device admission is the first of the two ENFORCED
-		// ceilings (Community: 25 devices). The device is the priced unit, so this
-		// is the gate the whole per-device pricing model rests on.
+		// LICENCE-BEGIN — the MONITORED-DEVICE ceiling (Community: 25). The
+		// monitored device is the priced unit, so this is the gate the whole
+		// per-device pricing model rests on.
 		//
-		// Placed HERE, immediately before the write, and asked only when the id is
-		// genuinely new: a re-POST of a device that already exists writes no new
-		// row and must never be refused, or re-onboarding a fleet at the ceiling
-		// would fail for no reason. The residual case — a create that cross-source
-		// dedupe would have ABSORBED under a different id, arriving at exactly the
-		// ceiling — is refused, because whether it absorbs is only known after
-		// CreateOrResolve has already written. That is the conservative direction
-		// and the refusal says exactly what to do about it.
+		// The check is NOT made here. It is made inside the registry, in the
+		// same hold of the lock as the write, because that is the only place
+		// the two can be atomic: a count taken here and a write performed there
+		// lets two concurrent creates at 24 of 25 both see a free slot. The
+		// registry asks the ceiling exactly when this write turns a device that
+		// is NOT monitored into one that is — so a re-POST of an existing
+		// monitored device (re-onboarding a fleet, adding a credential ref or a
+		// gnmi label to a device already counted) is never refused, and a
+		// create absorbed by cross-source dedupe writes nothing and consumes
+		// nothing.
 		//
-		// The count is the deduplicated platform-wide fleet — the same number
-		// netops_devices_total reports and the Licence page's bar shows, so an
-		// operator can never be refused by a number they cannot see.
-		if _, exists := s.discovery.Get(d.ID); !exists {
-			if err := entitlement.CheckCeiling(s.entitlements, entitlement.CeilingDevices, len(s.discovery.Devices())); err != nil {
-				entitlement.WriteRefusal(w, err)
-				return
-			}
-		}
-		// LICENCE-END
+		// A manually created device is monitored by default: someone asking the
+		// platform to add a device is asking it to collect from that device.
+		// Devices found by subnet DISCOVERY are not — see internal/devmon.
 		canonical, kept, err := s.discovery.CreateOrResolve(d)
 		if err != nil {
+			// The ceiling refusal is the structured 402 the SPA renders as an
+			// upgrade card. Checked before the generic 500 so a commercial
+			// limit never reaches an operator as "device was not saved".
+			if entitlement.WriteRefusal(w, err) {
+				return
+			}
 			writeError(w, http.StatusInternalServerError, errors.New("device was not saved"))
 			return
 		}
+		// LICENCE-END
 		if !kept {
 			log.Printf("device create absorbed by dedupe: requested=%s canonical=%s "+
 				"(shared identity token) — no row written, caller told 200, not 201",
@@ -3417,6 +3549,15 @@ func (s *server) handleDeviceByID(w http.ResponseWriter, r *http.Request) {
 		s.handleDeviceSite(w, r)
 		return
 	}
+	// MONITORING-BEGIN — the monitoring switch: /api/devices/{id}/monitoring
+	// (get/set). Dispatched here rather than registered on the mux for the same
+	// reason the config-backup subtree is: it lives under /api/devices/ and
+	// inherits that route's tenant classification.
+	if _, ok := devmon.Path(r.URL.Path); ok {
+		s.devmonAPI.Handle(w, r)
+		return
+	}
+	// MONITORING-END
 	// CONFIG-BACKUP-BEGIN
 	if s.configAPI != nil && s.configAPI.ServeDeviceSubroute(w, r) {
 		return
@@ -3578,6 +3719,18 @@ func (s *server) handlePromMetrics(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprintf(w, "# HELP netops_devices_total Number of known devices.\n")
 	fmt.Fprintf(w, "# TYPE netops_devices_total gauge\n")
 	fmt.Fprintf(w, "netops_devices_total %d\n", len(s.discovery.Devices()))
+	// MONITORING-BEGIN — the LICENSED unit beside the inventory total, so a
+	// dashboard can show both and an operator can see the gap between what has
+	// been discovered and what is being collected from (C4). Emitted every
+	// scrape, including as a zero: a series that vanishes is indistinguishable
+	// from a scrape failure.
+	fmt.Fprintf(w, "# HELP netops_monitored_devices_total Devices Correlix is configured to collect from — the unit the licence device ceiling counts.\n")
+	fmt.Fprintf(w, "# TYPE netops_monitored_devices_total gauge\n")
+	fmt.Fprintf(w, "netops_monitored_devices_total %d\n", s.discovery.MonitoredCount())
+	fmt.Fprintf(w, "# HELP netops_monitoring_withheld_devices_total Devices that would be monitored but are not, because the licence ceiling is full.\n")
+	fmt.Fprintf(w, "# TYPE netops_monitoring_withheld_devices_total gauge\n")
+	fmt.Fprintf(w, "netops_monitoring_withheld_devices_total %d\n", s.discovery.MonitoringWithheldCount())
+	// MONITORING-END
 	fmt.Fprintf(w, "# HELP netops_alerts_active Currently active alerts.\n")
 	fmt.Fprintf(w, "# TYPE netops_alerts_active gauge\n")
 	fmt.Fprintf(w, "netops_alerts_active %d\n", len(s.alerts.Active()))
@@ -4802,6 +4955,13 @@ func (s *server) securityLaneDevices(tenant string) []seclane.Device {
 		if deviceTenant(d) != want {
 			continue
 		}
+		// MONITORING-BEGIN — assess only devices monitoring is on for: the
+		// security lane's evidence comes from the same collection the licence
+		// counts, so an unmonitored device has nothing to assess FROM (C4).
+		if !d.Monitored {
+			continue
+		}
+		// MONITORING-END
 		out = append(out, seclane.Device{
 			ID: d.ID, Name: d.Name, Address: d.Address,
 			Vendor: d.Vendor, OS: d.OS, Model: d.Model,
@@ -5023,6 +5183,47 @@ func (s *server) licenceDeps() licence.Deps {
 	}
 }
 
+// MONITORING-BEGIN
+
+// devmonDeps assembles the monitoring switch's injected collaborators.
+//
+// One function, shared by the composition root and by the tests, so what the
+// tests exercise IS the wiring the process runs — a second, test-only Deps
+// literal is how a gate ends up proven in a fixture and missing in production.
+// internal/devmon holds no ambient authority: it reads no environment and
+// reaches nothing it was not handed (the internal/licence precedent).
+func (s *server) devmonDeps() devmon.Deps {
+	return devmon.Deps{
+		Registry: s.discovery,
+		ReadGate: func(w http.ResponseWriter, r *http.Request) (devmon.Principal, bool) {
+			return s.devmonGate(w, r, LevelRead)
+		},
+		WriteGate: func(w http.ResponseWriter, r *http.Request) (devmon.Principal, bool) {
+			return s.devmonGate(w, r, LevelWrite)
+		},
+		CanSee: canSeeDevice,
+		Audit: func(r *http.Request, ev devmon.AuditRecord) {
+			if s.audit == nil {
+				return
+			}
+			claims, _ := userFrom(r.Context())
+			tenant, cross := principalTenant(claims)
+			s.audit.Record(AuditEvent{
+				Actor: ev.Actor, Tenant: tenant, Cross: cross,
+				Method: r.Method, Path: r.URL.Path, Status: ev.Status,
+				Decision: ev.Decision, Remote: auditClientIP(r), Detail: ev.Detail,
+			})
+		},
+		// A ceiling refusal reaches the module as an opaque error; this is the
+		// only place that knows it is a licence matter and renders the 402.
+		Refusal:    entitlement.WriteRefusal,
+		WriteJSON:  writeJSON,
+		WriteError: writeError,
+	}
+}
+
+// MONITORING-END
+
 // licenceGate binds the PLATFORM-admin gate (§3a rule 3) for every WRITE.
 // Installing or replacing the licence is platform-global commercial plumbing:
 // a tenant/org admin holds full administration:admin, so a scope-blind
@@ -5087,13 +5288,17 @@ func (a licenceAudit) Record(r *http.Request, ev licence.AuditRecord) {
 func (s *server) licenceUsage(ctx context.Context) licence.Usage {
 	u := licence.Usage{}
 	if s.discovery != nil {
-		// Admitted fleet PLUS the devices discovery found and withheld at the
-		// ceiling. Counting only the admitted ones would pin the bar exactly at
-		// the limit and report "25 of 25" forever — technically true and
-		// completely dishonest about a network that has forty devices in it.
-		// The excess is what State.Overages turns into the "not monitored:
-		// licence ceiling" list.
-		u[entitlement.CeilingDevices] = len(s.discovery.Devices()) + s.discovery.WithheldCount()
+		// MONITORED devices, deduplicated — the licensed unit (owner decision
+		// C4, 2026-09-05), and exactly the set the collector pool polls.
+		//
+		// Inventory size is deliberately NOT this number. A deployment that has
+		// discovered five hundred devices and enabled twelve is using twelve of
+		// its allowance, and a bar reading "500 of 25" would be a lie about what
+		// the licence covers. What the inventory holds beyond that is shown as
+		// the discovered count on the Devices page, and the devices whose
+		// monitoring the ceiling itself withheld are listed by
+		// licenceUsageNotes — nothing is hidden, and nothing is deleted.
+		u[entitlement.CeilingDevices] = s.discovery.MonitoredCount()
 	}
 	if s.bgpWatch != nil {
 		if n, err := s.watchedPrefixCount(ctx, TenantGlobal, true); err == nil {
@@ -5137,13 +5342,13 @@ func (s *server) licenceTenantUsage(ctx context.Context, tenant string) (licence
 	if s.discovery == nil {
 		notes[entitlement.CeilingDevices] = "the device registry is not available"
 	} else {
-		// Only devices THIS tenant owns. Withheld devices are deliberately not
-		// added: discovery holds them back BEFORE admission, so they have no
-		// owner to attribute them to — counting them here would put another
-		// tenant's excess on this tenant's bar.
+		// Only the MONITORED devices THIS tenant owns — the same unit the
+		// platform bar counts, through the same visibility filter the rest of
+		// the API uses. A device the tenant has discovered but not enabled is
+		// not on this bar, because it consumes nothing.
 		n := 0
 		for _, d := range s.discovery.Devices() {
-			if canSeeDevice(d, tenant, false) {
+			if d.Monitored && canSeeDevice(d, tenant, false) {
 				n++
 			}
 		}
@@ -5170,6 +5375,16 @@ func (s *server) licenceUsageNotes(_ context.Context) map[string]string {
 	}
 	if s.discovery == nil {
 		notes[entitlement.CeilingDevices] = "the device registry is not available"
+	} else if n := s.discovery.MonitoringWithheldCount(); n > 0 {
+		// The honest half of the ceiling: these devices are in the inventory,
+		// nothing about them was deleted or hidden, and Correlix is simply not
+		// collecting from them because the licence is full. Saying so beside a
+		// bar reading "25 of 25" is the difference between a limit and a
+		// mystery.
+		notes[entitlement.CeilingDevices] = fmt.Sprintf(
+			"%d more device(s) are in the inventory and would be monitored, but the ceiling is full — "+
+				"they are still discovered, still visible and nothing has been deleted; "+
+				"raise the licence or turn monitoring off elsewhere to start collecting from them", n)
 	}
 	if s.bgpWatch == nil {
 		notes[entitlement.CeilingWatchedPrefixes] = "the BGP watchlist is not available"
@@ -5372,6 +5587,14 @@ func (s *server) configBackupDevices(tenant string) []configstore.Device {
 		if deviceTenant(d) != want {
 			continue
 		}
+		// MONITORING-BEGIN — capture only from devices monitoring is on for.
+		// A configuration sweep logs into the device over SSH on a schedule;
+		// that is monitoring, and doing it to a device nobody enabled would
+		// collect from a device the licence does not count (C4).
+		if !d.Monitored {
+			continue
+		}
+		// MONITORING-END
 		out = append(out, configstore.Device{
 			ID: d.ID, Name: d.Name, Address: d.Address,
 			Vendor: d.Vendor, OS: d.OS, Model: d.Model, TenantID: deviceTenant(d),

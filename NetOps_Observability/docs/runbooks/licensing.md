@@ -40,7 +40,7 @@ A licence is **one signed JSON file**. Nothing else.
 
 | Ceiling | Community | Enforced at |
 |---|---|---|
-| `devices` | **25** | discovery admission (`SetAdmissionGate`, `main.go`) and manual create `POST /api/devices` |
+| `devices` — the unit is a **MONITORED** device | **25** | the monitoring transition, in ONE place: the device registry's `SetMonitorGate` (`internal/discovery/monitoring.go`, wired in `main.go`). It is asked by `PUT /api/devices/{id}/monitoring`, by `POST /api/devices` (a manually created device is monitored), and by a discovery SOURCE reporting a device that would default to monitored. **Discovery is never refused** — an over-ceiling device enters the inventory and its COLLECTION is withheld and listed |
 | `watched_prefixes` | **5** | the BGP watchlist `Add` path (`bgp_ops.go`) |
 
 The other five ceilings in the file — `tenants`, `orgs`, `retention_days`,
@@ -450,9 +450,18 @@ live to degraded at expiry with no grace at all.
 
 When usage exceeds an **enforced** ceiling, `State.Overages` produces a row per
 ceiling saying how many are over, that nothing has been removed, and which tier
-covers them. The Licence page renders that list. The device count deliberately
-includes devices discovery found and **withheld** at the ceiling, so a network
-with forty devices does not report a reassuring "25 of 25" forever.
+covers them. The Licence page renders that list.
+
+The device count is the **monitored** count: an inventory of five hundred
+discovered devices with twelve enabled reads 12 of 25, because discovery costs
+no allowance (owner C4, 2026-09-05). An over-ceiling number therefore only
+appears where monitoring was already in force — a Team deployment whose licence
+lapsed to Community, say — and in that case NOTHING is switched off: the
+existing monitoring keeps running, new activations are refused, and the page
+lists the excess. Devices whose default-on monitoring the ceiling withheld are
+counted separately and named in a note beside the bar
+(`netops_monitoring_withheld_devices_total`), so "25 of 25" is never the whole
+story on a network that has more.
 
 Only enforced ceilings can produce an overage. Reporting one against a limit
 nothing gates would be theatre.

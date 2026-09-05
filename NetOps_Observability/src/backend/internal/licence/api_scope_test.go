@@ -194,6 +194,42 @@ func TestReadScopeChoosesThePayload(t *testing.T) {
 		}
 	})
 
+	t.Run("a MEASURED number can still carry a qualifier", func(t *testing.T) {
+		// The withheld-devices case: "25 of 25" is true and useless on its own
+		// when the ceiling is holding ten more back. A note is NOT the
+		// not-measured reason — one says "we counted, and here is something
+		// else", the other says "we never looked", and a page that conflated
+		// them would be lying in one of the two cases.
+		const note = "10 more device(s) are in the inventory and would be monitored, but the ceiling is full"
+		a := scopeAPI(scopeAPIOpts{
+			gate:     allowCross,
+			readGate: allowTenant("acme"),
+			tenant: func(context.Context, string) (licence.Usage, map[string]string) {
+				return licence.Usage{entitlement.CeilingDevices: 25},
+					map[string]string{entitlement.CeilingDevices: note}
+			},
+		})
+		v := getView(t, a)
+		for _, r := range v["ceilings"].([]any) {
+			row := r.(map[string]any)
+			if row["name"] != entitlement.CeilingDevices {
+				continue
+			}
+			if row["current"] == nil {
+				t.Fatalf("the number was measured and must be shown: %+v", row)
+			}
+			if row["note"] != note {
+				t.Fatalf("the qualifier must reach the page: %+v", row)
+			}
+			if row["current_reason"] != nil {
+				t.Fatalf("a measured row has no not-measured reason: %+v", row)
+			}
+			if row["unit"] != entitlement.UnitMonitoredDevices {
+				t.Fatalf("the row must say what it counts: %+v", row)
+			}
+		}
+	})
+
 	t.Run("a refused licence reaches the tenant without the forensics", func(t *testing.T) {
 		bad := licence.Unlimited()
 		bad.LoadError = "signature does not verify against key k-lab-1 in /data/api/licence.json"

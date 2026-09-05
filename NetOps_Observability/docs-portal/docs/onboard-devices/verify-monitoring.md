@@ -23,10 +23,16 @@ one layer explains every layer above it.
 
 ## Steps
 
-### Step 1 — The device is in the inventory
+### Step 1 — The device is in the inventory AND monitoring is on
 
 1. Go to **Infrastructure → Devices**.
-2. Find the device and read its status dot.
+2. Find the device and read the **Monitoring** column. **Not monitored** means
+   Correlix is not collecting from it and never will until monitoring is
+   switched on — no collector will reach it, and no status dot below can be
+   read as evidence of anything. The cell's tooltip says why: a device found by
+   the subnet sweep that nobody enabled, one an operator turned off, or one the
+   licence ceiling is holding back.
+3. Read its status dot.
 
 | State | Condition |
 |---|---|

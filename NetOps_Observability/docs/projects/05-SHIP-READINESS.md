@@ -47,7 +47,7 @@ Dates are 2026-09-03 unless stated. Rows are DELETED when shipped (tracker rule)
 
 | # | Item | Status | Evidence / next step |
 |---|---|---|---|
-| C4 | Free tier vs licensed tiers — which parts of the whole solution go where (owner ask) | ✅ decided 2026-09-04 | Fable design: `docs/design/TIERING_PLAN_2026-09-03.md` — aligned with the capacity/pricing model (price per device, retention upsell, burst = SLO not billing; security findings as a per-tenant paid service). Owner decision needed on the cut lines. |
+| C4 | Free tier vs licensed tiers — which parts of the whole solution go where (owner ask) | ✅ decided 2026-09-04; **counting rule shipped 2026-09-05** | Fable design: `docs/design/TIERING_PLAN_2026-09-03.md` — aligned with the capacity/pricing model (price per device, retention upsell, burst = SLO not billing; security findings as a per-tenant paid service). **UNIT DECISION (owner, 2026-09-05): the Community ceiling of 25 counts MONITORED devices, not inventory rows.** A device consumes one entitlement when at least one monitoring/collector configuration is enabled for it; discovery is free and unlimited (500 discovered → 0 of 25), several telemetry methods on one device are one entitlement, and unreachability does not release one. Definition in `internal/devmon`, state + ceiling in `internal/discovery` (check and write under one lock, so concurrent activations cannot both take the last slot), switch at `GET|PUT /api/devices/{id}/monitoring`, usage on the Licence page and `netops_monitored_devices_total`. |
 
 ## S. Owner asks of 2026-09-04 (morning)
 
