@@ -147,6 +147,20 @@ type Deps struct {
 	// Ring is the API's bounded per-marker debug line buffer (stages 2 and 7).
 	Ring *Ring
 
+	// SessionRoot is the directory this API writes and serves session
+	// directories from (design §3). Empty = sessions are not persisted here and
+	// the session routes say so, which is the truthful answer for a build whose
+	// data volume was never given a debug directory — never an empty list that
+	// reads like "no trace was ever run".
+	SessionRoot string
+
+	// LevelReaders exposes the runtime log level of the modules whose switch
+	// this process OWNS, for the read side of /api/debug/loglevel. A module
+	// absent from the map is reported from the last change requested through
+	// this api (or as unknown), never as "info" — guessing a module's level is
+	// how a raised level goes unnoticed past its window.
+	LevelReaders map[Module]LevelReader
+
 	// Audit records an accepted debug action. Optional (nil = no sink); never
 	// used to decide anything.
 	Audit func(r *http.Request, tenant, action string, detail map[string]any)

@@ -1,0 +1,106 @@
+/* pipelineDebugger.css — styles for Administration → Platform → Tools →
+ * Pipeline Debugger.
+ *
+ * Everything is scoped under .pdbg so nothing here reaches another page, and
+ * every colour comes from a theme token so light and dark both work with no
+ * second palette. The page reuses the app's shared primitives (.btn, .card,
+ * .mono) and adds only the shapes that have no existing equivalent: the stage
+ * table with its four states, the expandable evidence block, and the
+ * command-line hint that sits beside each action.
+ */
+
+.pdbg { display: flex; flex-direction: column; gap: 14px; font-size: 12.5px; }
+
+/* ── sections ────────────────────────────────────────────────────────────── */
+.pdbg-sec { border: 1px solid var(--border); border-radius: 10px; background: var(--panel, transparent); }
+.pdbg-sec-hd {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  padding: 10px 12px; border-bottom: 1px solid var(--border);
+}
+.pdbg-sec-hd h2 { margin: 0; font-size: 13.5px; font-weight: 650; }
+.pdbg-sec-note { color: var(--muted); font-size: 12px; }
+.pdbg-sp { flex: 1 1 auto; }
+.pdbg-sec-bd { padding: 12px; display: flex; flex-direction: column; gap: 10px; }
+
+/* ── the command-line hint ───────────────────────────────────────────────── */
+.pdbg-cli {
+  display: block; font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 11.5px; color: var(--muted);
+  padding: 6px 8px; border-radius: 6px; border: 1px dashed var(--border);
+  overflow-x: auto; white-space: pre;
+}
+
+/* ── forms ───────────────────────────────────────────────────────────────── */
+.pdbg-form { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 10px; }
+.pdbg-field { display: flex; flex-direction: column; gap: 4px; }
+.pdbg-field > span { font-size: 11px; letter-spacing: .04em; text-transform: uppercase; color: var(--muted); }
+.pdbg-input {
+  padding: 6px 8px; border-radius: 7px; font-size: 12.5px;
+  border: 1px solid var(--border); background: var(--bg-2, var(--bg)); color: var(--fg);
+}
+.pdbg-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+
+/* ── the stage table ─────────────────────────────────────────────────────── */
+.pdbg-tblwrap { overflow-x: auto; }
+.pdbg-tbl { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+.pdbg-tbl th, .pdbg-tbl td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--border); vertical-align: top; }
+.pdbg-tbl th { font-size: 11px; letter-spacing: .04em; text-transform: uppercase; color: var(--muted); font-weight: 600; }
+.pdbg-tbl td.pdbg-num { width: 34px; color: var(--muted); }
+.pdbg-reason { color: var(--muted); }
+.pdbg-rowbtn {
+  background: none; border: 1px solid var(--border); border-radius: 6px;
+  color: var(--fg); padding: 2px 8px; font-size: 11.5px; cursor: pointer;
+}
+.pdbg-rowbtn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* the four states, each drawn from the severity tokens */
+.pdbg-pill {
+  display: inline-block; padding: 1px 8px; border-radius: 999px;
+  font-size: 11px; font-weight: 600; white-space: nowrap;
+  border: 1px solid currentColor;
+}
+.pdbg-good { color: var(--ok, #059669); }
+.pdbg-warn { color: var(--warn, #d97706); }
+.pdbg-bad  { color: var(--crit, var(--bad, #dc2626)); }
+.pdbg-muted { color: var(--muted); }
+
+/* ── evidence ────────────────────────────────────────────────────────────── */
+.pdbg-evidence {
+  border: 1px solid var(--border); border-radius: 8px; padding: 8px;
+  display: flex; flex-direction: column; gap: 6px; background: var(--bg-2, transparent);
+}
+.pdbg-pre {
+  margin: 0; max-height: 320px; overflow: auto; white-space: pre-wrap; word-break: break-word;
+  font-family: var(--font-mono, ui-monospace, monospace); font-size: 11.5px; line-height: 1.45;
+}
+.pdbg-lines { margin: 0; padding: 0; list-style: none; }
+.pdbg-lines li {
+  font-family: var(--font-mono, ui-monospace, monospace); font-size: 11.5px;
+  padding: 1px 0; border-bottom: 1px dotted var(--border); word-break: break-all;
+}
+
+/* ── sessions ────────────────────────────────────────────────────────────── */
+.pdbg-sessions { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.pdbg-session {
+  display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 1fr) auto; gap: 8px;
+  align-items: center; padding: 7px 9px; border: 1px solid var(--border); border-radius: 8px;
+}
+.pdbg-session.on { border-color: var(--accent); }
+.pdbg-session-id { font-family: var(--font-mono, ui-monospace, monospace); font-size: 11.5px; }
+.pdbg-session-meta { color: var(--muted); font-size: 11.5px; }
+
+/* ── honest states ───────────────────────────────────────────────────────── */
+.pdbg-honest {
+  display: flex; flex-direction: column; gap: 3px;
+  padding: 9px 11px; border-radius: 8px; border: 1px solid currentColor;
+}
+.pdbg-honest strong { font-size: 12.5px; }
+.pdbg-honest span { color: var(--muted); font-size: 12px; }
+.pdbg-loading { color: var(--muted); padding: 6px 0; }
+
+/* ── levels ──────────────────────────────────────────────────────────────── */
+.pdbg-levels { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 8px; }
+.pdbg-level { display: flex; flex-direction: column; gap: 4px; padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; }
+.pdbg-level-hd { display: flex; align-items: center; gap: 8px; }
+.pdbg-level-hd strong { font-size: 12.5px; }
+.pdbg-mono { font-family: var(--font-mono, ui-monospace, monospace); }

@@ -2439,6 +2439,14 @@ func (s *server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/debug/loglevel", s.debugAPI.HandleLogLevel)
 	mux.HandleFunc("/api/debug/parsemarker", s.debugAPI.HandleParseMarker)
 	mux.HandleFunc("/api/debug/stage/", s.debugAPI.HandleStage)
+	// The session routes (W3, the in-GUI viewer) read the debugger's own output
+	// directory: the index, one session, one MODULE LOG FILE and the redacted,
+	// checksummed bundle. Same gate and the same audit as the rest of the
+	// family, and for the same reason twice over — a module log file can carry
+	// a tenant's own log line, so it is platform-admin material and every read
+	// of one is recorded.
+	mux.HandleFunc("/api/debug/sessions", s.debugAPI.HandleSessions)
+	mux.HandleFunc("/api/debug/sessions/", s.debugAPI.HandleSession)
 	// DEBUG-ROUTES-END
 	// SECURITY-LANE-BEGIN
 	s.registerSecurityLaneRoutes(mux)
@@ -4169,10 +4177,22 @@ func (s *server) debugDeps() pipedebug.Deps {
 		ParseFilter: s.debugParseFilter,
 		UIQueryRun:  pipedebug.NewUIQueryRun(debugUIHost{s: s}),
 		Ring:        s.debugRing,
-		Audit:       s.debugAudit,
-		WriteJSON:   writeJSON,
-		WriteError:  writeError,
-		Now:         func() time.Time { return time.Now().UTC() },
+		// Where a GUI-started trace writes its §3 session directory, and where
+		// the session routes read from. Inside the api's OWN data volume by
+		// default: it is the one directory this container is guaranteed to be
+		// able to create 0700 and write. The host-side CLI keeps writing its
+		// own data/debug on the host — an operator who wants both in one place
+		// mounts that directory and sets DEBUG_SESSION_ROOT to the mount.
+		SessionRoot: envOr(pipedebug.EnvSessionRoot, filepath.Join(envOr("DATA_DIR", "/data"), "debug")),
+		// The read side of /api/debug/loglevel reports a LIVE reading only for
+		// the switch this process owns. Every other module is reported as the
+		// last change requested through this api, labelled as such — a guessed
+		// level is how a module left at debug goes unnoticed.
+		LevelReaders: map[pipedebug.Module]pipedebug.LevelReader{pipedebug.ModuleAPI: s.debugAPILevel},
+		Audit:        s.debugAudit,
+		WriteJSON:    writeJSON,
+		WriteError:   writeError,
+		Now:          func() time.Time { return time.Now().UTC() },
 	}
 }
 

@@ -40,11 +40,15 @@ const maxDebugBody = 8 << 10
 type API struct {
 	deps   Deps
 	traces *traceStore
+	// lastLevel remembers what this api last ASKED another process to do, for
+	// the read side of /api/debug/loglevel (levelstatus.go). It is never
+	// presented as a reading of that process's state.
+	lastLevel *lastLevels
 }
 
 // New builds the debug API over its injected seams.
 func New(deps Deps) *API {
-	return &API{deps: deps, traces: newTraceStore()}
+	return &API{deps: deps, traces: newTraceStore(), lastLevel: &lastLevels{}}
 }
 
 // ── POST /api/debug/trace ───────────────────────────────────────────────────
@@ -63,6 +67,13 @@ type traceRequest struct {
 	SinceSec int `json:"since_seconds"`
 	// Path narrows a passive gNMI follow to one path family.
 	Path string `json:"path"`
+	// Persist asks the api to WRITE this trace's session directory (design §3)
+	// when the follow finishes, so it can be reopened, read module by module
+	// and bundled later. It is opt-in because the host-side CLI writes its own
+	// session for the traces IT starts: defaulting to true would give every CLI
+	// run a second, half-empty session directory with no host-side stages in
+	// it. The GUI, which has no host-side collector, sets it.
+	Persist bool `json:"persist"`
 }
 
 type traceReceipt struct {
@@ -79,6 +90,15 @@ type traceReceipt struct {
 	Started   time.Time `json:"started"`
 	Synthetic bool      `json:"synthetic"`
 	StatusURL string    `json:"status_url"`
+	// SessionID is the directory this trace will be written to when the caller
+	// asked for persistence, and "" when it did not. It is returned with the
+	// RECEIPT rather than at the end so a caller that loses the connection can
+	// still find the session — and it is never returned when nothing will be
+	// written, because an id for a directory that will not exist is a lie.
+	SessionID string `json:"session_id,omitempty"`
+	// SessionNote explains why no session will be written when one was asked
+	// for. Empty when none was asked for, or when one will be.
+	SessionNote string `json:"session_note,omitempty"`
 }
 
 // HandleTrace serves POST /api/debug/trace.
@@ -137,6 +157,17 @@ func (a *API) HandleTrace(w http.ResponseWriter, r *http.Request) {
 		StatusURL: "/api/debug/trace/" + marker,
 	}
 
+	// The session id is decided HERE, from the same started time the directory
+	// name is derived from, so the receipt can name the directory the follow
+	// will write. A caller that asked for a session it cannot get is TOLD so
+	// (SessionNote) rather than handed an id for a directory that will not
+	// exist.
+	persist, persistNote := a.persistSpecFor(req.Persist, p, kind, device, tenant, marker, now, req.Passive)
+	if persist != nil {
+		receipt.SessionID = persist.ID
+	}
+	receipt.SessionNote = persistNote
+
 	if req.Passive {
 		spec := PassiveSpec{Kind: kind, Device: device, Since: ClampSince(time.Duration(req.SinceSec) * time.Second)}
 		path, perr := NormalizePathFilter(req.Path)
@@ -160,7 +191,7 @@ func (a *API) HandleTrace(w http.ResponseWriter, r *http.Request) {
 			"marker": marker, "kind": string(kind), "device": device,
 			"injected": false, "passive": true, "since_seconds": int(spec.Since.Seconds()),
 		})
-		a.traces.startPassive(a, marker, spec, tenant, p, ttl)
+		a.traces.startPassive(a, marker, spec, tenant, p, ttl, persist)
 		a.deps.WriteJSON(w, http.StatusAccepted, receipt)
 		return
 	}
@@ -183,7 +214,7 @@ func (a *API) HandleTrace(w http.ResponseWriter, r *http.Request) {
 	})
 
 	if receipt.Injected {
-		a.traces.start(a, marker, kind, device, tenant, p, ttl)
+		a.traces.start(a, marker, kind, device, tenant, p, ttl, persist)
 	}
 	a.deps.WriteJSON(w, http.StatusAccepted, receipt)
 }
@@ -283,10 +314,19 @@ type levelRequest struct {
 	ForSeconds int    `json:"for_seconds"`
 }
 
-// HandleLogLevel serves PUT /api/debug/loglevel.
+// HandleLogLevel serves PUT and GET /api/debug/loglevel.
+//
+// GET is the READ side (levelstatus.go): what is raised, until when, and which
+// modules cannot be switched at all. It shares the path — and therefore the
+// gate and the ledger entry — with the PUT that arms it, because "what is
+// raised" and "raise this" are one operator surface.
 func (a *API) HandleLogLevel(w http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodGet {
+		a.HandleLogLevelStatus(w, r)
+		return
+	}
 	if r.Method != http.MethodPut {
-		w.Header().Set("Allow", http.MethodPut)
+		w.Header().Set("Allow", "GET, PUT")
 		a.deps.WriteError(w, http.StatusMethodNotAllowed, errors.New("method not allowed"))
 		return
 	}
@@ -316,6 +356,7 @@ func (a *API) HandleLogLevel(w http.ResponseWriter, r *http.Request) {
 		a.deps.WriteError(w, http.StatusBadGateway, err)
 		return
 	}
+	a.lastLevel.record(change)
 	a.audit(r, p.Tenant, "debug.loglevel", map[string]any{
 		"module": string(module), "level": string(level),
 		"for_seconds": int(window.Seconds()), "applied": change.Applied,
@@ -348,8 +389,7 @@ func (a *API) setLevel(r *http.Request, module Module, level Level, window time.
 	case ModuleRouter:
 		return notSwitchable(module, level, VectorLevelReason), nil
 	case ModuleIngress:
-		return notSwitchable(module, level,
-			"syslog-ng's level is set in its config file and applied at (re)start; this deployment has no restart-free way to change it, and restarting the ingest edge during an incident is not an acceptable debug action"), nil
+		return notSwitchable(module, level, IngressLevelReason), nil
 	default:
 		return LevelChange{}, fmt.Errorf("module %q has no log-level control", module)
 	}

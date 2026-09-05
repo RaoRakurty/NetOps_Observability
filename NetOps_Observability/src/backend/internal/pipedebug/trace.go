@@ -28,8 +28,13 @@ const (
 	maxLiveTraces = 16
 	// pollInterval is how often an unsettled stage is re-queried.
 	pollInterval = 3 * time.Second
-	// retention is how long a finished trace stays pollable.
-	retention = 15 * time.Minute
+	// defaultRetention is how long a FINISHED trace stays pollable.
+	//
+	// It is a property of the STORE, not of the run: the run is bounded by its
+	// TTL and the result outlives it. Carrying it as a field (rather than
+	// reading this constant at the wait) is what lets the test prove both
+	// halves of that sentence in milliseconds instead of half an hour.
+	defaultRetention = 15 * time.Minute
 )
 
 // TraceStatus is what GET /api/debug/trace/{marker} returns.
@@ -49,66 +54,106 @@ type TraceStatus struct {
 	Stages []Entry `json:"stages"`
 }
 
+// traceEntry is one live-or-retained trace.
+//
+// THE TWO LIFETIMES ARE SEPARATE, and keeping them separate is the whole point
+// of this type:
+//
+//   - `cancel` bounds the RUN. It belongs to the follow's context.WithTimeout
+//     (the TTL) and is released the moment the follow finishes.
+//   - `gone` bounds the RESULT. It is closed only when the entry is actually
+//     dropped — evicted by the maxLiveTraces bound, or torn down at shutdown —
+//     and it is what the retention wait listens on.
+//
+// They used to be the same channel (the retention wait selected on the run's
+// own ctx.Done()), which meant a finished trace was forgotten the instant its
+// TTL expired: the stated 15-minute retention never once elapsed, and a caller
+// who polled a settled trace a minute later got "no such trace".
+type traceEntry struct {
+	status *TraceStatus
+	cancel context.CancelFunc
+	gone   chan struct{}
+}
+
 type traceStore struct {
 	mu   sync.Mutex
-	byID map[string]*TraceStatus
-	// cancel lets Stop tear a follow down (process shutdown, tests).
-	cancel map[string]context.CancelFunc
-	seen   []string // insertion order for the bound
+	byID map[string]*traceEntry
+	seen []string // insertion order for the bound
+	// retention is how long a finished result stays readable (seam for tests).
+	retention time.Duration
+	// stopped refuses new traces after a shutdown, so a late request cannot
+	// resurrect a store that was just torn down.
+	stopped bool
 }
 
 func newTraceStore() *traceStore {
-	return &traceStore{byID: map[string]*TraceStatus{}, cancel: map[string]context.CancelFunc{}}
+	return &traceStore{byID: map[string]*traceEntry{}, retention: defaultRetention}
 }
 
 func (s *traceStore) get(marker string) (TraceStatus, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	st, ok := s.byID[marker]
+	e, ok := s.byID[marker]
 	if !ok {
 		return TraceStatus{}, false
 	}
-	out := *st
-	out.Stages = append([]Entry(nil), st.Stages...)
+	out := *e.status
+	out.Stages = append([]Entry(nil), e.status.Stages...)
 	return out, true
 }
 
-func (s *traceStore) put(st *TraceStatus, cancel context.CancelFunc) {
+// put registers a trace and returns its DROP signal — the channel the retention
+// wait uses to notice an eviction or a shutdown. It is deliberately not the run
+// context: that one expires on schedule, and expiry is not a reason to discard
+// the evidence the run produced.
+func (s *traceStore) put(st *TraceStatus, cancel context.CancelFunc) <-chan struct{} {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.byID[st.Marker] = st
-	s.cancel[st.Marker] = cancel
+	if s.stopped {
+		cancel()
+		dead := make(chan struct{})
+		close(dead)
+		return dead
+	}
+	e := &traceEntry{status: st, cancel: cancel, gone: make(chan struct{})}
+	s.byID[st.Marker] = e
 	s.seen = append(s.seen, st.Marker)
 	for len(s.seen) > maxLiveTraces {
 		victim := s.seen[0]
 		s.seen = s.seen[1:]
-		if c, ok := s.cancel[victim]; ok {
-			c()
-			delete(s.cancel, victim)
-		}
-		delete(s.byID, victim)
+		s.dropLocked(victim)
 	}
+	return e.gone
+}
+
+// dropLocked removes one entry, cancels its run and signals its waiter. It is
+// the ONLY place `gone` is closed, and it deletes before closing, so the close
+// can never happen twice.
+func (s *traceStore) dropLocked(marker string) {
+	e, ok := s.byID[marker]
+	if !ok {
+		return
+	}
+	delete(s.byID, marker)
+	e.cancel()
+	close(e.gone)
 }
 
 func (s *traceStore) update(marker string, entries []Entry, done bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	st, ok := s.byID[marker]
+	e, ok := s.byID[marker]
 	if !ok {
 		return
 	}
-	st.Stages = entries
-	st.Done = done
+	e.status.Stages = entries
+	e.status.Done = done
 }
 
 func (s *traceStore) forget(marker string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if c, ok := s.cancel[marker]; ok {
-		c()
-		delete(s.cancel, marker)
-	}
-	delete(s.byID, marker)
+	s.dropLocked(marker)
 	kept := s.seen[:0]
 	for _, m := range s.seen {
 		if m != marker {
@@ -118,36 +163,71 @@ func (s *traceStore) forget(marker string) {
 	s.seen = kept
 }
 
+// stop tears every trace down at once: no follow keeps running and no retention
+// timer keeps a goroutine alive past the process's own life.
+func (s *traceStore) stop() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.stopped = true
+	for _, m := range s.seen {
+		s.dropLocked(m)
+	}
+	s.seen = nil
+}
+
+// retain is the tail every follow ends in: release the RUN's context, then keep
+// the finished result readable for the retention window — or until the entry is
+// evicted or the store is stopped, which is the only thing that may cut it
+// short.
+func (s *traceStore) retain(marker string, cancel context.CancelFunc, gone <-chan struct{}) {
+	cancel() // the follow is finished; its context has no further work to bound
+	t := time.NewTimer(s.retention)
+	defer t.Stop()
+	select {
+	case <-t.C:
+		s.forget(marker)
+	case <-gone:
+		// Already dropped by the bound or by stop(); nothing left to forget.
+	}
+}
+
+// Stop releases every live follow and retained result. It exists so a process
+// (or a test) can tear the debugger down deterministically instead of leaving
+// retention timers running behind it.
+func (a *API) Stop() { a.traces.stop() }
+
 // startPassive registers a PASSIVE follow. It shares the store, the bound and
 // the retention of an active trace — a debug facility must not grow a second,
 // differently-bounded lifecycle — and differs only in what it runs: no
 // injection happened, so there is nothing to wait for and passiveFollow queries
 // each stage once.
-func (s *traceStore) startPassive(a *API, marker string, spec PassiveSpec, tenant string, p Principal, ttl time.Duration) {
+func (s *traceStore) startPassive(a *API, marker string, spec PassiveSpec, tenant string, p Principal, ttl time.Duration, persist *persistSpec) {
 	now := a.deps.now()
 	st := &TraceStatus{
 		Marker: marker, Kind: spec.Kind, Device: spec.Device, Tenant: tenant,
 		Started: now, Deadline: now.Add(ttl), Passive: true,
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), ttl)
-	s.put(st, cancel)
+	gone := s.put(st, cancel)
 
 	safego.Go("pipedebug-passive", func() {
-		defer cancel()
+		defer cancel() // belt and braces: retain() cancels on every normal path
 		entries := a.passiveFollow(ctx, p, spec, marker)
 		s.update(marker, entries, true)
-		t := time.NewTimer(retention)
-		defer t.Stop()
-		select {
-		case <-t.C:
-		case <-ctx.Done():
+		// The session is written from the FINISHED entries, once, before the
+		// retention timer starts: a caller that comes back for the directory
+		// must not race the in-memory result being dropped. The status is taken
+		// through the store's own accessor — `st` is shared with update() and
+		// reading it here directly would be a data race.
+		if snap, ok := s.get(marker); ok {
+			a.persistFinished(persist, snap, entries)
 		}
-		s.forget(marker)
+		s.retain(marker, cancel, gone)
 	})
 }
 
 // start registers a trace and launches its bounded follow goroutine.
-func (s *traceStore) start(a *API, marker string, kind Kind, device, tenant string, p Principal, ttl time.Duration) {
+func (s *traceStore) start(a *API, marker string, kind Kind, device, tenant string, p Principal, ttl time.Duration, persist *persistSpec) {
 	now := a.deps.now()
 	st := &TraceStatus{
 		Marker: marker, Kind: kind, Device: device, Tenant: tenant,
@@ -157,21 +237,19 @@ func (s *traceStore) start(a *API, marker string, kind Kind, device, tenant stri
 	// context bounded by the TTL — never the request's, which is cancelled the
 	// moment the receipt is written.
 	ctx, cancel := context.WithTimeout(context.Background(), ttl)
-	s.put(st, cancel)
+	gone := s.put(st, cancel)
 
 	safego.Go("pipedebug-trace", func() {
-		defer cancel()
+		defer cancel() // belt and braces: retain() cancels on every normal path
 		entries := a.follow(ctx, p, marker, kind, tenant)
 		s.update(marker, entries, true)
-		// Retain the finished result for a bounded window so the CLI can poll
-		// it, then drop it: a debug result is evidence, not state.
-		t := time.NewTimer(retention)
-		defer t.Stop()
-		select {
-		case <-t.C:
-		case <-ctx.Done():
+		if snap, ok := s.get(marker); ok {
+			a.persistFinished(persist, snap, entries)
 		}
-		s.forget(marker)
+		// Retain the finished result for a bounded window so a poller — the CLI,
+		// or the screen — can still read it AFTER the run's own TTL has passed,
+		// then drop it: a debug result is evidence, not state.
+		s.retain(marker, cancel, gone)
 	})
 }
 

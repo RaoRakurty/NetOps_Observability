@@ -14,7 +14,6 @@ package cli
 // records which pass ran; the bundle re-states it in BUNDLE-README.txt.
 
 import (
-	"archive/tar"
 	"compress/gzip"
 	"context"
 	"crypto/sha256"
@@ -24,7 +23,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"sort"
 	"strings"
 	"time"
 
@@ -123,6 +121,12 @@ func selectSessions(opts BundleOptions) ([]string, error) {
 }
 
 // writeTar builds the tar and returns the SHA256SUMS text for its members.
+//
+// The archive itself is assembled by pipedebug.WriteBundleTar — the ONE bundle
+// writer, shared with the api's download route, so the two callers cannot drift
+// on the README, the SHA256SUMS member or the file mode. `limit` is 0 here: the
+// host path streams straight to disk and has no reason to bound what an
+// operator asked to package.
 func writeTar(path string, dirs []string) (string, error) {
 	// #nosec G304 -- path is composed from the operator's own --root/--out and a
 	// timestamp; the CLI runs as that operator on their own host.
@@ -131,63 +135,14 @@ func writeTar(path string, dirs []string) (string, error) {
 		return "", err
 	}
 	defer func() { _ = f.Close() }() // closed explicitly below on the success path
-	tw := tar.NewWriter(f)
-
-	var sums strings.Builder
-	readme := bundleReadme(dirs)
-	if err := writeTarBytes(tw, "BUNDLE-README.txt", []byte(readme)); err != nil {
-		return "", err
-	}
-	fmt.Fprintf(&sums, "%s  %s\n", sha256Hex([]byte(readme)), "BUNDLE-README.txt")
-
-	for _, dir := range dirs {
-		base := filepath.Base(dir)
-		entries, err := os.ReadDir(dir)
-		if err != nil {
-			return "", err
-		}
-		names := make([]string, 0, len(entries))
-		for _, e := range entries {
-			if !e.IsDir() {
-				names = append(names, e.Name())
-			}
-		}
-		sort.Strings(names)
-		for _, name := range names {
-			// #nosec G304 -- dir came from ListSessions/--session under the
-			// operator's own debug root; name is a directory entry, not input.
-			data, err := os.ReadFile(filepath.Join(dir, name))
-			if err != nil {
-				return "", err
-			}
-			member := filepath.Join(base, name)
-			if err := writeTarBytes(tw, member, data); err != nil {
-				return "", err
-			}
-			fmt.Fprintf(&sums, "%s  %s\n", sha256Hex(data), member)
-		}
-	}
-	if err := writeTarBytes(tw, "SHA256SUMS", []byte(sums.String())); err != nil {
-		return "", err
-	}
-	if err := tw.Close(); err != nil {
+	sums, err := pipedebug.WriteBundleTar(f, dirs, 0)
+	if err != nil {
 		return "", err
 	}
 	if err := f.Close(); err != nil {
 		return "", err
 	}
-	return sums.String(), nil
-}
-
-func writeTarBytes(tw *tar.Writer, name string, data []byte) error {
-	if err := tw.WriteHeader(&tar.Header{
-		Name: name, Mode: 0o600, Size: int64(len(data)),
-		ModTime: time.Now().UTC(), Typeflag: tar.TypeReg,
-	}); err != nil {
-		return err
-	}
-	_, err := tw.Write(data)
-	return err
+	return sums, nil
 }
 
 // compress produces the final artifact, preferring zstd when the binary exists.
@@ -237,28 +192,6 @@ func compress(ctx context.Context, tarPath string) (string, string, error) {
 		return "", "", err
 	}
 	return final, "gzip (zstd not installed on this host)", nil
-}
-
-func bundleReadme(dirs []string) string {
-	var b strings.Builder
-	b.WriteString("CORRELIX PIPELINE DEBUG BUNDLE\n==============================\n\n")
-	fmt.Fprintf(&b, "created  : %s\n", time.Now().UTC().Format(time.RFC3339))
-	fmt.Fprintf(&b, "sessions : %d\n", len(dirs))
-	for _, d := range dirs {
-		fmt.Fprintf(&b, "           %s\n", filepath.Base(d))
-	}
-	b.WriteString("\nREDACTION\n---------\n")
-	b.WriteString(pipedebug.RedactionNote + "\n")
-	b.WriteString("\nRedaction is applied when each line is WRITTEN, not when the bundle is built,\n")
-	b.WriteString("so the session directory on disk is already safe to share. Tenant identifiers\n")
-	b.WriteString("are deliberately RETAINED: support needs them to reason about isolation.\n")
-	b.WriteString("\nVERIFY\n------\nsha256sum -c SHA256SUMS   (run inside the extracted directory)\n")
-	return b.String()
-}
-
-func sha256Hex(b []byte) string {
-	sum := sha256.Sum256(b)
-	return hex.EncodeToString(sum[:])
 }
 
 func fileSHA256(path string) (string, error) {

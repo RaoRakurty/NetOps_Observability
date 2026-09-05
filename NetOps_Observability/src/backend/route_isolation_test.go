@@ -742,6 +742,17 @@ var routeIsolationLedger = map[string]string{
 	// customer's log line, §8). Gate + grammar + PII tests:
 	// internal/pipedebug/w2_test.go.
 	"/api/debug/parsemarker": "platform",
+	// The session viewer (W3). PLATFORM for the same reason as the trace that
+	// writes them, and one more: a session directory holds the per-module log
+	// files of whatever the trace crossed, so a single module file can carry a
+	// tenant's own log line. The routes are requirePlatformAdmin, every read is
+	// audited, the id and the module name are closed grammars before any path
+	// is joined, and a session whose manifest names another tenant is a 404 to
+	// a scoped principal — the same 404 an absent one gets, so an id's
+	// existence is never confirmed to a caller who may not read it (§3a rule
+	// 1). Proven by internal/pipedebug/sessions_test.go.
+	"/api/debug/sessions":  "platform",
+	"/api/debug/sessions/": "platform",
 }
 
 var validRouteCategories = map[string]bool{
