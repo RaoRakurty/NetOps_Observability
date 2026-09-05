@@ -13,32 +13,61 @@ import (
 	"netops/backend/internal/entitlement"
 )
 
-// api.go — the platform-admin Licence route.
+// api.go — the Licence route: a provider-only WRITE and a tenant-readable VIEW.
 //
 // Every handler follows the same order, and the order IS the guarantee
 // (the Data Protection precedent, internal/dataprotect/http.go):
 //
-//  1. GATE FIRST, before the verb or the body is looked at. The licence is
-//     platform-GLOBAL plumbing, so the gate is requirePlatformAdmin, NOT
-//     requireAdmin: a tenant/org admin holds full administration:admin, and a
-//     scope-blind gate here would let any tenant read the customer's commercial
-//     terms and install a licence for the whole platform (CLAUDE.md §3a rule 3).
+//  1. GATE FIRST, before the body is looked at, and gate EVERY verb. The method
+//     selects WHICH gate runs and nothing else is read before it:
+//
+//     PUT / DELETE / anything else — Gate (requirePlatformAdmin). Installing or
+//     replacing a licence is platform-GLOBAL: there is one licence file per
+//     installation and it covers every tenant on it, so a scope-blind
+//     requireAdmin here would let any tenant license the whole platform
+//     (CLAUDE.md §3a rule 3).
+//
+//     GET — ReadGate (requireAdmin + the caller's tenant). A tenant admin may
+//     see what the installation's licence puts in force FOR THEM, so the read
+//     answers a TENANT PROJECTION: tier, entitled features, the ceilings with
+//     THIS TENANT'S usage beside them (§3a rule 1 — scoped by the principal,
+//     default-closed), expiry state and who manages the licence. It carries no
+//     customer name, no licence id, no key material and no install controls —
+//     those are the provider's commercial terms, not the tenant's (§3a rule 3
+//     applied to the payload, not only to the gate). A CROSS-TENANT caller (the
+//     platform owner) gets the full provider view; narrowing with the tenant
+//     switcher (`as_tenant`) drops them to that tenant's projection, because
+//     the override may only ever NARROW.
+//
 //  2. BOUND the body and validate it — here, by verifying the signature. A
 //     document that does not verify never reaches the disk.
 //  3. AUDIT BOTH OUTCOMES. A refused platform-global write that was never
 //     recorded is indistinguishable from one that never happened.
 //
 // Nothing in this file imports package backend and nothing reads the process
-// environment: every seam is injected (the dataprotect rule).
+// environment: every seam is injected (the dataprotect rule). In particular the
+// module never derives a tenant itself — the ReadGate hands it one.
 
 // MaxDocumentBytes bounds an uploaded licence. A licence is ~1 KB; 64 KiB is
 // four orders of magnitude of headroom and still a hard stop (CLAUDE.md §9:
 // all IO bounded).
 const MaxDocumentBytes = 64 << 10
 
-// Principal is the authenticated platform administrator, as the gate resolved
-// them. The module never derives identity itself.
-type Principal struct{ Subject string }
+// Principal is the authenticated caller, as the gate resolved them. The module
+// never derives identity or scope itself: both arrive here already decided.
+//
+// Tenant/CrossTenant are meaningful for the READ gate only — the write gate
+// resolves the platform owner, who is cross-tenant by construction. The zero
+// value is a tenant-scoped principal with an EMPTY tenant, which is the
+// fail-closed direction: it matches no tenant's rows.
+type Principal struct {
+	Subject string
+	// Tenant is the caller's tenant scope, as principalTenant resolved it.
+	Tenant string
+	// CrossTenant is true only for a caller who may read across every tenant —
+	// the platform owner with no active "view as tenant" narrowing.
+	CrossTenant bool
+}
 
 // AuditRecord is what the module asks the platform to record. The request
 // envelope (method, path, client IP) is filled by the adapter, so the module
@@ -58,8 +87,18 @@ type Deps struct {
 	// Service is the entitlement projection shown on the page.
 	Service *Service
 	// Gate authenticates and authorizes the caller as a PLATFORM admin. It has
-	// already written the 401/403 when it returns ok=false.
+	// already written the 401/403 when it returns ok=false. It gates every
+	// WRITE (and any unknown verb).
 	Gate func(w http.ResponseWriter, r *http.Request) (Principal, bool)
+	// ReadGate authenticates and authorizes a GET. It admits a tenant/org admin
+	// and reports the scope its projection must be built for (Tenant,
+	// CrossTenant). It has already written the 401/403 when it returns
+	// ok=false.
+	//
+	// Nil is fail-closed and NOT an open door: the read falls back to Gate, so
+	// a build that forgets to wire the tenant view serves the provider-only
+	// route it served before, never an unscoped one.
+	ReadGate func(w http.ResponseWriter, r *http.Request) (Principal, bool)
 	// Audit records both outcomes of every write.
 	Audit interface {
 		Record(r *http.Request, ev AuditRecord)
@@ -70,6 +109,16 @@ type Deps struct {
 	Usage func(ctx context.Context) Usage
 	// UsageNotes explains, per ceiling, why a value is not measured. Optional.
 	UsageNotes func(ctx context.Context) map[string]string
+	// TenantUsage measures the ceilings for ONE tenant — the numbers beside the
+	// ceilings in the tenant projection — and the per-ceiling reason for every
+	// one it does not measure. It MUST count only rows that tenant owns; a
+	// ceiling it omits is NOT MEASURED and is shown as such, never as a
+	// reassuring zero and never as the platform-wide number, which would leak
+	// another tenant's fleet size (§3a rule 1).
+	//
+	// Nil means nothing is measured for a tenant caller: every ceiling reads
+	// "not measured", which is the fail-closed direction.
+	TenantUsage func(ctx context.Context, tenant string) (Usage, map[string]string)
 	// Now is the clock. Injected so expiry and grace are testable.
 	Now func() time.Time
 	// WriteJSON and WriteError are the platform's response helpers, so a licence
@@ -130,18 +179,64 @@ type KeyView struct {
 	Base64 string `json:"base64"`
 }
 
-// View is the GET body.
+// Scope names which of the two views a payload is, so the page renders the
+// right one instead of inferring it from a missing field.
+const (
+	// ScopePlatform — the provider view: the whole licence, the keys, the
+	// offline recipe, platform-wide usage, and the install/remove controls.
+	ScopePlatform = "platform"
+	// ScopeTenant — the tenant projection: what the installation's licence puts
+	// in force for ONE tenant, with that tenant's own usage and no commercial
+	// or key material.
+	ScopeTenant = "tenant"
+)
+
+// ManagedBy is the closed vocabulary for who may install or replace the licence
+// this deployment runs on. There is exactly one value today and it is stated
+// explicitly rather than left to be inferred from a missing button.
+const (
+	ManagedByProvider = "provider"
+)
+
+// ManagedByProviderDetail is the sentence beside it. It answers the question a
+// tenant admin actually has when the install controls are not there.
+const ManagedByProviderDetail = "There is one licence file per installation and it covers every tenant on it, " +
+	"so installing or replacing it is the provider's action. Everything shown here is what that single file puts in force for you."
+
+// TenantScopeNote states, on the page, exactly what the numbers mean in the
+// tenant projection: a shared ceiling with one tenant's slice beside it. Saying
+// it is the honest-states rule — a tenant reading "7 of 25" must not conclude
+// the installation has 18 devices spare.
+const TenantScopeNote = "The ceilings are the whole installation's and are shared with every tenant on it. " +
+	"The usage beside them counts only your tenant, so it is not the platform's total."
+
+// View is the GET body. ONE shape serves both scopes: the tenant projection is
+// the same document with Scope=tenant, the commercial and key material absent,
+// and the usage counted under the caller's tenant.
 type View struct {
-	State    State         `json:"state"`
-	Ceilings []CeilingView `json:"ceilings"`
-	Features []FeatureView `json:"features"`
-	Overages []Overage     `json:"overages"`
-	Keys     []KeyView     `json:"keys"`
+	// Scope is ScopePlatform or ScopeTenant. Always present.
+	Scope string `json:"scope"`
+	// Tenant is the tenant the usage was counted for. Empty in the platform
+	// view, where the counts are platform-wide.
+	Tenant string `json:"tenant,omitempty"`
+	// ManagedBy / ManagedByDetail — who may install or replace this licence.
+	ManagedBy       string `json:"managed_by"`
+	ManagedByDetail string `json:"managed_by_detail"`
+	// ScopeNote qualifies the usage numbers. Set in the tenant projection.
+	ScopeNote string        `json:"scope_note,omitempty"`
+	State     State         `json:"state"`
+	Ceilings  []CeilingView `json:"ceilings"`
+	Features  []FeatureView `json:"features"`
+	Overages  []Overage     `json:"overages"`
+	// Keys, Path and VerifyHint are PROVIDER-ONLY: key material and the
+	// operator's file path are not a tenant's business. Omitted, not blanked,
+	// so the page can tell "not for you" from "empty".
+	Keys []KeyView `json:"keys,omitempty"`
 	// Path is where an operator may drop a licence by hand.
-	Path string `json:"path"`
+	Path string `json:"path,omitempty"`
 	// VerifyHint is the offline verification recipe, shown verbatim on the page
 	// so a customer can check what we sent them without trusting this UI.
-	VerifyHint string `json:"verify_hint"`
+	VerifyHint string `json:"verify_hint,omitempty"`
 	// ExpirySemantics states, in the product itself, that the commercial policy
 	// for expiry is not yet decided. Saying it here rather than only in a design
 	// doc is the honest-states rule applied to our own roadmap.
@@ -173,20 +268,26 @@ const VerifyHintText = "Verify a licence offline with: correlix-licence verify <
 
 // Handle serves GET (read), PUT (install) and DELETE (remove) on
 // /api/system/licence.
+//
+// The METHOD picks the gate and nothing else is read before that gate runs. An
+// unknown verb takes the PLATFORM gate deliberately: a 405 is a fact about this
+// surface, and an unauthenticated caller must not be able to learn it.
 func (a *API) Handle(w http.ResponseWriter, r *http.Request) {
 	if a == nil || a.d.Store == nil || a.d.Gate == nil {
 		// A surface that cannot gate must not serve. 503, not a silent open door.
 		http.Error(w, "licence service unavailable", http.StatusServiceUnavailable)
 		return
 	}
-	// 1. GATE FIRST — before the verb, before the body.
+	if r.Method == http.MethodGet {
+		a.read(w, r)
+		return
+	}
+	// 1. GATE FIRST — before the body. Every write is the platform owner's.
 	caller, ok := a.d.Gate(w, r)
 	if !ok {
 		return
 	}
 	switch r.Method {
-	case http.MethodGet:
-		a.writeJSON(w, http.StatusOK, a.view(r.Context()))
 	case http.MethodPut:
 		a.install(w, r, caller)
 	case http.MethodDelete:
@@ -195,6 +296,34 @@ func (a *API) Handle(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Allow", "GET, PUT, DELETE")
 		a.writeError(w, http.StatusMethodNotAllowed, errors.New("method not allowed"))
 	}
+}
+
+// read serves the GET. The gate decides the SCOPE and the scope decides the
+// payload: a cross-tenant caller gets the provider view, everyone else gets
+// their own tenant's projection. There is no third branch and no way to ask for
+// someone else's — the tenant comes from the token, never from the request
+// (§3a rule 2).
+func (a *API) read(w http.ResponseWriter, r *http.Request) {
+	if a.d.ReadGate == nil {
+		// Fail closed: with no tenant read wired, the route is exactly what it
+		// was before the split — the PLATFORM gate and the provider view. It
+		// does not fall through to a tenant projection built from a principal
+		// whose scope nobody resolved.
+		if _, ok := a.d.Gate(w, r); !ok {
+			return
+		}
+		a.writeJSON(w, http.StatusOK, a.view(r.Context()))
+		return
+	}
+	caller, ok := a.d.ReadGate(w, r)
+	if !ok {
+		return
+	}
+	if caller.CrossTenant {
+		a.writeJSON(w, http.StatusOK, a.view(r.Context()))
+		return
+	}
+	a.writeJSON(w, http.StatusOK, a.tenantView(r.Context(), caller.Tenant))
 }
 
 func (a *API) install(w http.ResponseWriter, r *http.Request, caller Principal) {
@@ -253,10 +382,9 @@ func (a *API) remove(w http.ResponseWriter, r *http.Request, caller Principal) {
 	a.writeJSON(w, http.StatusOK, a.view(r.Context()))
 }
 
-// view assembles the page's whole payload from one State read, so every panel
-// on the page describes the same instant.
+// view assembles the PROVIDER payload from one State read, so every panel on
+// the page describes the same instant.
 func (a *API) view(ctx context.Context) View {
-	st := a.d.Store.State()
 	usage := Usage{}
 	if a.d.Usage != nil {
 		usage = a.d.Usage(ctx)
@@ -264,6 +392,84 @@ func (a *API) view(ctx context.Context) View {
 	notes := map[string]string{}
 	if a.d.UsageNotes != nil {
 		notes = a.d.UsageNotes(ctx)
+	}
+	v := a.compose(a.d.Store.State(), usage, notes)
+	v.Scope = ScopePlatform
+	keys := make([]KeyView, 0, 2)
+	for _, k := range EmbeddedKeys() {
+		keys = append(keys, KeyView{ID: k.ID, Role: k.Role, Note: k.Note, Base64: k.Base64})
+	}
+	v.Keys = keys
+	v.Path = a.d.Store.Path()
+	v.VerifyHint = VerifyHintText
+	return v
+}
+
+// tenantView assembles the TENANT PROJECTION: the same licence, seen from one
+// tenant.
+//
+// Two things are deliberately different from the provider view, and both are
+// isolation rules rather than presentation choices:
+//
+//   - the usage beside each ceiling is measured for THIS TENANT ONLY, so a
+//     tenant can never learn another tenant's fleet size from a platform-wide
+//     total (§3a rule 1);
+//   - the commercial identity of the licence (customer, licence id, issue date,
+//     support terms, signing key) and the operator's file path, keys and
+//     offline recipe are simply not in the payload. Absent, not blanked.
+//
+// What IS kept is everything the tenant needs to understand what they may do:
+// tier, entitled features, ceilings, expiry/grace/degraded state, and who
+// manages the licence.
+func (a *API) tenantView(ctx context.Context, tenant string) View {
+	usage := Usage{}
+	notes := map[string]string{}
+	if a.d.TenantUsage != nil {
+		usage, notes = a.d.TenantUsage(ctx, tenant)
+	}
+	v := a.compose(tenantState(a.d.Store.State()), usage, notes)
+	v.Scope = ScopeTenant
+	v.Tenant = tenant
+	v.ScopeNote = TenantScopeNote
+	return v
+}
+
+// tenantState strips a State down to what a tenant may see. It is a
+// value-to-value function with no IO, so what leaves it is auditable by reading
+// it: every field the projection keeps is named here, and everything else is
+// dropped by construction (the zero value), not by remembering to blank it.
+func tenantState(st State) State {
+	out := State{
+		Source:       st.Source,
+		Tier:         st.Tier,
+		Ceilings:     st.Ceilings,
+		Features:     st.Features,
+		ExpiresAt:    st.ExpiresAt,
+		InGrace:      st.InGrace,
+		Degraded:     st.Degraded,
+		Reason:       st.Reason,
+		LicensedTier: st.LicensedTier,
+		// GraceDays is part of the EXPIRY STATE, not of the commercial identity:
+		// "expired 3 days ago, inside a 30-day grace" is the sentence a tenant
+		// needs, and without the number the page would have to invent one.
+		GraceDays: st.GraceDays,
+	}
+	// A REFUSED licence is a fact the tenant must have — their ceilings fell
+	// back to Community and they need to know why their tier vanished — but the
+	// verbatim reason names a file path, a key id or a signature failure, which
+	// is provider detail. State the fact, not the forensics.
+	if st.LoadError != "" {
+		out.LoadError = "the licence installed on this platform was refused, so the Community ceilings are the ones in force — ask your provider"
+	}
+	return out
+}
+
+// compose builds the shared body of both views from one state and one usage
+// reading, so the provider view and the tenant projection can never disagree
+// about how a ceiling, a feature or an overage is rendered.
+func (a *API) compose(st State, usage Usage, notes map[string]string) View {
+	if notes == nil {
+		notes = map[string]string{}
 	}
 
 	ceilings := make([]CeilingView, 0, len(entitlement.CeilingNames()))
@@ -299,15 +505,10 @@ func (a *API) view(ctx context.Context) View {
 		})
 	}
 
-	keys := make([]KeyView, 0, 2)
-	for _, k := range EmbeddedKeys() {
-		keys = append(keys, KeyView{ID: k.ID, Role: k.Role, Note: k.Note, Base64: k.Base64})
-	}
-
 	v := View{
+		ManagedBy: ManagedByProvider, ManagedByDetail: ManagedByProviderDetail,
 		State: st, Ceilings: ceilings, Features: features,
-		Overages: st.Overages(usage), Keys: keys,
-		Path: a.d.Store.Path(), VerifyHint: VerifyHintText,
+		Overages:        st.Overages(usage),
 		ExpirySemantics: ExpirySemanticsNote,
 	}
 	if d, ok := st.DaysToExpiry(a.d.Now()); ok {

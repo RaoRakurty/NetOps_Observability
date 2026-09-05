@@ -526,7 +526,7 @@ func (s *server) handleBGPWatchlist(w http.ResponseWriter, r *http.Request) {
 		// Re-adding an existing resource only updates its note and writes no new
 		// row, so it is never refused — the same rule as device re-onboarding.
 		if kind == "prefix" {
-			if current, err := s.watchedPrefixCount(r.Context()); err == nil && !s.watchlistHasResource(r.Context(), tenant, cross, resource) {
+			if current, err := s.watchedPrefixCount(r.Context(), TenantGlobal, true); err == nil && !s.watchlistHasResource(r.Context(), tenant, cross, resource) {
 				if err := entitlement.CheckCeiling(s.entitlements, entitlement.CeilingWatchedPrefixes, current); err != nil {
 					entitlement.WriteRefusal(w, err)
 					return

@@ -36,25 +36,44 @@ var reMdHeading = regexp.MustCompile(`(?m)^#{1,3}\s+(.+?)\s*$`)
 
 // productRoutes maps a section title (lowercased substring) to a UI deep link, so
 // a "how do I …" answer can offer the exact page.
+//
+// EVERY VALUE MUST BE A ROUTE THE SHELL RESOLVES. A deep link that lands on a
+// section's first page instead of the page the answer is about is worse than no
+// link: the reader believes they are where they were sent. The routes below are
+// CANONICAL "#/<section>/<leaf>" ids taken from src/frontend/src/nav.tsx, and
+// product_kb_links_test.go resolves every one of them through the same nav
+// tables the SPA router uses — a leaf id that is renamed or moved fails the
+// build here rather than in an answer. Legacy hashes still work in the browser
+// (LEGACY_ROUTE_ALIAS rewrites them), but the assistant hands out the address
+// the page actually has.
+//
+// Two entries were stale until 2026-09-05 and are the reason for the test:
+// "#/admin/security" was never a route at all, and "#/monitoring/reports" fell
+// back to the Operations section's first page.
 var productRoutes = map[string]string{
-	"correlation":     "#/monitoring/correlations",
-	"rca":             "#/monitoring/correlations",
-	"verdict":         "#/monitoring/correlations",
-	"seam":            "#/monitoring/correlations",
-	"evidence":        "#/monitoring/correlations",
-	"incident":        "#/monitoring/correlations",
-	"troubleshooting": "#/monitoring/correlations",
-	"discovery":       "#/infrastructure/devices",
-	"snmp":            "#/infrastructure/devices",
-	"sso":             "#/admin/security",
-	"authentication":  "#/admin/security",
-	"report":          "#/monitoring/reports",
-	"itsm":            "#/incident/integrations",
-	"notification":    "#/incident/integrations",
-	"tenant":          "#/admin",
-	"configuration":   "#/admin",
-	"ui sections":     "#/dashboards/home",
-	"architecture":    "#/infrastructure/topology-canvas",
+	"correlation": "#/investigate/rca",
+	"rca":         "#/investigate/rca",
+	"verdict":     "#/investigate/rca",
+	"seam":        "#/investigate/rca",
+	"evidence":    "#/investigate/rca",
+	"incident":    "#/operations/incidents",
+	// The guided device-troubleshooting workspace, not the RCA board.
+	"troubleshooting": "#/investigate/troubleshooting",
+	"discovery":       "#/infrastructure/discovery",
+	// SNMP credentials/profiles live in Administration → Data sources.
+	"snmp": "#/admin/snmp",
+	// Authentication is PROVIDER-only plumbing and moved to the Platform
+	// section in the 2026-09-05 IA (docs/design/ADMIN_IA_2026-09-05.md §2).
+	"sso":            "#/platform/auth",
+	"authentication": "#/platform/auth",
+	"report":         "#/analytics/reports",
+	"itsm":           "#/admin/integrations",
+	"notification":   "#/admin/notifications",
+	// Tenants are a view inside Identity & Access.
+	"tenant":        "#/admin/identity",
+	"configuration": "#/admin/settings",
+	"ui sections":   "#/overview/home",
+	"architecture":  "#/investigate/topology",
 }
 
 // LoadProductKB builds the product knowledge base: the CURATED, concept-focused

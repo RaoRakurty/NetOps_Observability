@@ -4757,29 +4757,52 @@ func configBackupKeepVersions() int {
 // precedent).
 func (s *server) licenceDeps() licence.Deps {
 	return licence.Deps{
-		Store:      s.licenceStore,
-		Service:    s.entitlements,
-		Gate:       s.licenceGate,
-		Audit:      licenceAudit{s},
-		Usage:      s.licenceUsage,
-		UsageNotes: s.licenceUsageNotes,
-		Now:        func() time.Time { return time.Now().UTC() },
-		WriteJSON:  writeJSON,
-		WriteError: writeError,
+		Store:       s.licenceStore,
+		Service:     s.entitlements,
+		Gate:        s.licenceGate,
+		ReadGate:    s.licenceReadGate,
+		Audit:       licenceAudit{s},
+		Usage:       s.licenceUsage,
+		UsageNotes:  s.licenceUsageNotes,
+		TenantUsage: s.licenceTenantUsage,
+		Now:         func() time.Time { return time.Now().UTC() },
+		WriteJSON:   writeJSON,
+		WriteError:  writeError,
 	}
 }
 
-// licenceGate binds the PLATFORM-admin gate (§3a rule 3). The licence is
-// platform-global commercial plumbing: a tenant/org admin holds full
-// administration:admin, so a scope-blind requireAdmin here would let any tenant
-// read the customer's commercial terms — and install a licence for the whole
-// platform.
+// licenceGate binds the PLATFORM-admin gate (§3a rule 3) for every WRITE.
+// Installing or replacing the licence is platform-global commercial plumbing:
+// a tenant/org admin holds full administration:admin, so a scope-blind
+// requireAdmin here would let any tenant license the whole platform.
+//
+// requirePlatformAdmin resolves the platform owner, who is cross-tenant by
+// construction, so the principal it returns carries Cross=true — which is also
+// what makes the module's fail-closed ReadGate fallback serve the PROVIDER view
+// rather than an empty tenant projection.
 func (s *server) licenceGate(w http.ResponseWriter, r *http.Request) (licence.Principal, bool) {
 	claims, ok := s.requirePlatformAdmin(w, r)
 	if !ok {
 		return licence.Principal{}, false
 	}
-	return licence.Principal{Subject: claims.Sub}, true
+	return licence.Principal{Subject: claims.Sub, Tenant: TenantGlobal, CrossTenant: true}, true
+}
+
+// licenceReadGate binds the READ gate: administration:admin, at whatever scope
+// the caller holds it (§3a rule 1 — scope by the principal, default-closed).
+//
+// A tenant/org admin is ADMITTED here and gets their own tenant's projection;
+// the platform owner is cross-tenant and gets the provider view. The narrowing
+// selector (`as_tenant` / X-Acting-Tenant) is already applied to the claims by
+// the auth middleware and can only NARROW, so a scoped caller cannot use it to
+// read another tenant's usage — principalTenant ignores it for a non-owner.
+func (s *server) licenceReadGate(w http.ResponseWriter, r *http.Request) (licence.Principal, bool) {
+	claims, ok := s.requireAdmin(w, r)
+	if !ok {
+		return licence.Principal{}, false
+	}
+	tenant, cross := principalTenant(claims)
+	return licence.Principal{Subject: claims.Sub, Tenant: tenant, CrossTenant: cross}, true
 }
 
 // licenceAudit adapts the platform audit repo. The request envelope (method,
@@ -4829,6 +4852,60 @@ func (s *server) licenceUsage(ctx context.Context) licence.Usage {
 		// reassuring.
 	}
 	return u
+}
+
+// licenceTenantUsage measures the ceilings for ONE tenant — the numbers the
+// tenant projection shows beside the shared ceilings — plus the reason for
+// every ceiling it does not measure.
+//
+// ISOLATION (§3a rule 1). Every count here is taken through the SAME tenant
+// filter the rest of the API uses, with cross=false always: canSeeDevice for the
+// fleet, the watchlist store's own (tenant, cross) read for prefixes. A tenant
+// therefore never sees a number that includes another tenant's rows, and never
+// the platform-wide total — which would itself disclose the size of everyone
+// else's estate.
+//
+// UNMEASURABLE IS SAID OUT LOUD. Only the two ENFORCED ceilings can carry a
+// number at all (licence_routes_test.go pins that an un-enforced ceiling never
+// shows usage as if it bit), and two of the rest cannot be counted per tenant
+// even in principle: the withheld-at-the-ceiling devices have no owner yet, and
+// the Iris method catalog ships with the platform and is identical for every
+// tenant. Each says so rather than showing a reassuring zero.
+func (s *server) licenceTenantUsage(ctx context.Context, tenant string) (licence.Usage, map[string]string) {
+	u := licence.Usage{}
+	notes := map[string]string{}
+	for _, n := range entitlement.CeilingNames() {
+		if !entitlement.Enforced(n) {
+			notes[n] = "carried in the licence but not enforced by this build"
+		}
+	}
+	notes[entitlement.CeilingTenants] = "carried in the licence but not enforced by this build; it counts the tenants on the whole installation, which is the provider's number, not yours"
+	notes[entitlement.CeilingSkills] = "carried in the licence but not enforced by this build; the Iris method catalog ships with the platform and is the same for every tenant"
+
+	if s.discovery == nil {
+		notes[entitlement.CeilingDevices] = "the device registry is not available"
+	} else {
+		// Only devices THIS tenant owns. Withheld devices are deliberately not
+		// added: discovery holds them back BEFORE admission, so they have no
+		// owner to attribute them to — counting them here would put another
+		// tenant's excess on this tenant's bar.
+		n := 0
+		for _, d := range s.discovery.Devices() {
+			if canSeeDevice(d, tenant, false) {
+				n++
+			}
+		}
+		u[entitlement.CeilingDevices] = n
+	}
+
+	if s.bgpWatch == nil {
+		notes[entitlement.CeilingWatchedPrefixes] = "the BGP watchlist is not available"
+	} else if n, err := s.watchedPrefixCount(ctx, tenant, false); err == nil {
+		u[entitlement.CeilingWatchedPrefixes] = n
+	} else {
+		notes[entitlement.CeilingWatchedPrefixes] = "the BGP watchlist could not be read"
+	}
+	return u, notes
 }
 
 // licenceUsageNotes explains, per ceiling, why the page shows no number.

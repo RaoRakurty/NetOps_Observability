@@ -34,20 +34,33 @@
 //   - Nothing on this page can delete anything. What is over a ceiling is
 //     LISTED, and the page says so beside the list.
 //
-// GATING — and the gap the page cannot close on its own. There is ONE licence
-// file per installation, so the licence is platform-GLOBAL: /api/system/licence
-// runs licenceGate → requirePlatformAdmin ONCE, before the GET/PUT/DELETE
-// switch (internal/licence/api.go), and licence_routes_test.go asserts all
-// three verbs answer 403 to a tenant admin. That is why the page lives under
-// Platform, not Administration.
+// GATING — TWO SCOPES, and the SERVER decides which one you get. There is ONE
+// licence file per installation, so installing or replacing it stays the
+// provider's action: PUT/DELETE run licenceGate → requirePlatformAdmin
+// (internal/licence/api.go), and licence_routes_test.go asserts a tenant admin
+// is refused on both. The READ was split on 2026-09-05 (the owner's IA,
+// docs/design/ADMIN_IA_2026-09-05.md): GET runs licenceReadGate →
+// requireAdmin, so a tenant/org admin sees what the installation's licence puts
+// in force FOR THEM.
 //
-// The read-only branch below (`canEdit=false`) is therefore currently dead in
-// the product: nobody who can load the page is denied the controls. It is kept,
-// and its wording sharpened, because the owner's 2026-09-05 IA asks for a
-// tenant-level view of entitlements/usage/ceilings with the install action
-// reserved to the provider — which needs the backend to split GET onto
-// requireAdmin with a tenant projection first. Recorded in
-// docs/design/ADMIN_IA_2026-09-05.md; no frontend change can grant that read.
+// The payload says which it is — `view.scope`:
+//
+//   platform — the provider view. Everything below renders, including the
+//              install/remove controls, the trusted keys and the offline recipe.
+//   tenant   — the tenant projection. Same licence, seen from one tenant: their
+//              OWN usage beside the shared ceilings, the tier and features in
+//              force, expiry state, and who to ask to change it. The customer,
+//              the licence id, the support terms, the file path and the key
+//              material are NOT in the payload, so this page does not render a
+//              "not measured" placeholder where they would be — a fact withheld
+//              from a tenant and a fact the platform does not have are
+//              different things, and only one of them belongs on a page.
+//
+// The page therefore branches on `view.scope` (what the server actually
+// answered) rather than on the caller's platform_admin flag (what the SPA
+// believes about the caller): a platform owner narrowed into a tenant with the
+// tenant switcher gets the tenant projection, and the page must render what it
+// was given.
 
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { api, type LicenceCeiling, type LicenceKey, type LicenceView } from "../services/api";
@@ -178,6 +191,11 @@ function LicenceHeadline({ view }: { view: LicenceView }) {
   const expiry = expiryVerdict(view);
   const summary = overageSummary(view.overages);
   const support = st.support;
+  // The provider's commercial identity is not in the tenant projection at all.
+  // Those facts are OMITTED rather than rendered as "not measured": the
+  // platform knows the customer perfectly well, it simply is not this reader's
+  // business, and claiming otherwise would be the page lying on our behalf.
+  const provider = view.scope === "platform";
 
   return (
     <>
@@ -191,25 +209,29 @@ function LicenceHeadline({ view }: { view: LicenceView }) {
         </div>
 
         <dl className="lic-facts">
-          <Fact label="Customer">
-            <Value
-              m={measured(st.customer || null, "no licence names a customer on this platform")}
-              render={(v) => <span>{v}</span>}
-            />
-          </Fact>
+          {provider && (
+            <Fact label="Customer">
+              <Value
+                m={measured(st.customer || null, "no licence names a customer on this platform")}
+                render={(v) => <span>{v}</span>}
+              />
+            </Fact>
+          )}
           <Fact label="Tier in force">
             <Pill tone={h.tone === "bad" ? "bad" : h.tone === "warn" ? "warn" : "good"}>{tierLabel(st.tier)}</Pill>
             {st.licensed_tier && st.licensed_tier !== st.tier && (
               <span className="lic-sub lic-block">the licence names {tierLabel(st.licensed_tier)}</span>
             )}
           </Fact>
-          <Fact label="Licence">
-            <Value
-              m={measured(st.licence_id || null, "no licence is installed")}
-              render={(v) => <span className="mono">{v}</span>}
-            />
-            {st.issued_at && <span className="lic-sub lic-block">issued {st.issued_at}</span>}
-          </Fact>
+          {provider && (
+            <Fact label="Licence">
+              <Value
+                m={measured(st.licence_id || null, "no licence is installed")}
+                render={(v) => <span className="mono">{v}</span>}
+              />
+              {st.issued_at && <span className="lic-sub lic-block">issued {st.issued_at}</span>}
+            </Fact>
+          )}
           <Fact label="Expiry">
             {expiry.state === "none" ? (
               <span className="lic-sub">{expiry.text}</span>
@@ -226,17 +248,26 @@ function LicenceHeadline({ view }: { view: LicenceView }) {
               render={(v) => <span>{v} days, set by the issuer</span>}
             />
           </Fact>
-          <Fact label="Support">
-            <Value
-              m={measured(support?.level || null, "the licence records no support level")}
-              render={(v) => (
-                <>
-                  <span>{v}</span>
-                  {support?.contact && <span className="lic-sub lic-block">{support.contact}</span>}
-                </>
-              )}
-            />
-          </Fact>
+          {provider ? (
+            <Fact label="Support">
+              <Value
+                m={measured(support?.level || null, "the licence records no support level")}
+                render={(v) => (
+                  <>
+                    <span>{v}</span>
+                    {support?.contact && <span className="lic-sub lic-block">{support.contact}</span>}
+                  </>
+                )}
+              />
+            </Fact>
+          ) : (
+            <Fact label="Managed by">
+              {/* The pill only. The sentence explaining it belongs where the
+                  reader asks the question — beside the licence and where the
+                  install controls would be — not a third time in a fact grid. */}
+              <Pill tone="muted">{view.managed_by}</Pill>
+            </Fact>
+          )}
         </dl>
       </div>
 
@@ -312,7 +343,7 @@ function UsageRow({ row }: { row: LicenceCeiling }) {
   );
 }
 
-function Usage({ rows }: { rows: readonly LicenceCeiling[] }) {
+function Usage({ rows, note }: { rows: readonly LicenceCeiling[]; note?: string }) {
   const ordered = useMemo(() => sortedCeilings(rows), [rows]);
   if (ordered.length === 0) {
     return (
@@ -323,7 +354,21 @@ function Usage({ rows }: { rows: readonly LicenceCeiling[] }) {
       />
     );
   }
-  return <ul className="lic-usage">{ordered.map((r) => <UsageRow key={r.name} row={r} />)}</ul>;
+  return (
+    <>
+      {/* In the tenant projection the ceiling and the number beside it are not
+          the same population: the ceiling covers the installation, the number
+          counts only this tenant. Saying so is the difference between "18 to
+          spare" and "18 to spare, shared with everyone else". */}
+      {note && (
+        <div className="lic-honest lic-muted" role="note">
+          <strong>These numbers count your tenant only.</strong>
+          <span>{note}</span>
+        </div>
+      )}
+      <ul className="lic-usage">{ordered.map((r) => <UsageRow key={r.name} row={r} />)}</ul>
+    </>
+  );
 }
 
 // ── 3 · features ────────────────────────────────────────────────────────────
@@ -436,11 +481,16 @@ function InstallPanel({ view, canEdit, onInstalled }: {
   };
 
   if (!canEdit) {
+    // REACHABLE since the 2026-09-05 read split: this is what a tenant/org
+    // admin — and a platform owner narrowed into a tenant — sees where the
+    // install controls would be. The remedy sentence is the server's own
+    // managed_by_detail, so the product says WHO may change the licence in
+    // exactly one place.
     return (
       <HonestState
         tone="muted"
         headline="You are seeing this licence read-only."
-        remedy="There is one licence file per installation, and it covers every tenant on it, so installing or replacing one is a platform administrator's action. Everything above is what that single file puts in force for you."
+        remedy={view.managed_by_detail}
       />
     );
   }
@@ -553,9 +603,29 @@ function downloadText(filename: string, body: string): boolean {
   return true;
 }
 
+/**
+ * The standing statement that expiry policy is still an owner decision. Every
+ * reader gets it, in both scopes: it is a fact about the product, and the
+ * tenant projection carries it for exactly the same reason the provider view
+ * does.
+ */
+function ExpiryNote({ text }: { text: string }) {
+  return (
+    <div className="lic-honest lic-muted" role="note">
+      <strong>What expiry does, and what it never does</strong>
+      <span>{text}</span>
+    </div>
+  );
+}
+
 function Verification({ view }: { view: LicenceView }) {
   const [note, setNote] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
+  // Provider-only payload. The page renders this section only in the platform
+  // scope, so these are always present here; the fallbacks keep the component
+  // total rather than trusting that.
+  const keys = view.keys ?? [];
+  const hint = view.verify_hint ?? "";
 
   const save = (k: LicenceKey) => {
     const ok = downloadText(keyFileName(k.id), keyFileBody(k));
@@ -564,7 +634,7 @@ function Verification({ view }: { view: LicenceView }) {
 
   const copyHint = async () => {
     try {
-      await navigator.clipboard.writeText(view.verify_hint);
+      await navigator.clipboard.writeText(hint);
       setCopied(true);
       setTimeout(() => setCopied(false), 1500);
     } catch {
@@ -582,13 +652,13 @@ function Verification({ view }: { view: LicenceView }) {
 
       {/* Verbatim, because it is a command someone is going to run. */}
       <div className="lic-cmdwrap">
-        <pre className="lic-cmd">{view.verify_hint}</pre>
+        <pre className="lic-cmd">{hint}</pre>
         <button type="button" className="btn sm" onClick={() => { void copyHint(); }}>
           {copied ? "Copied" : "Copy command"}
         </button>
       </div>
 
-      {view.keys.length === 0 ? (
+      {keys.length === 0 ? (
         <HonestState
           tone="bad"
           headline="This build trusts no signing key."
@@ -596,7 +666,7 @@ function Verification({ view }: { view: LicenceView }) {
         />
       ) : (
         <ul className="lic-keys">
-          {view.keys.map((k) => (
+          {keys.map((k) => (
             <li key={k.id}>
               <div className="lic-key-hd">
                 <span className="mono lic-key-id">{k.id}</span>
@@ -617,10 +687,7 @@ function Verification({ view }: { view: LicenceView }) {
 
       {/* The standing note. It is on the page and not only in a design document
           because a policy that is still open is a fact about the product. */}
-      <div className="lic-honest lic-muted" role="note">
-        <strong>What expiry does, and what it never does</strong>
-        <span>{view.expiry_semantics}</span>
-      </div>
+      <ExpiryNote text={view.expiry_semantics} />
     </>
   );
 }
@@ -635,6 +702,10 @@ export default function Licence() {
     "The licence could not be read.",
   );
   const view = panel.data;
+  // What the SERVER answered, not what the SPA believes about the caller. Until
+  // the read lands we know nothing, and the page claims nothing.
+  const provider = view?.scope === "platform";
+  const tenantScope = view?.scope === "tenant";
 
   const body = (what: string, render: (v: LicenceView) => ReactNode): ReactNode => {
     if (panel.error) return <PanelError text={panel.error} onRetry={reload} />;
@@ -647,7 +718,11 @@ export default function Licence() {
       <Section
         id="licence"
         title="Licence"
-        note="Platform-global — one licence for every tenant on this platform"
+        note={
+          tenantScope
+            ? "What this platform's licence puts in force for your tenant"
+            : "Platform-global — one licence for every tenant on this platform"
+        }
         actions={
           <button type="button" className="btn sm" onClick={reload}>
             <Icon name="refresh" size={13} /> Re-read
@@ -655,11 +730,15 @@ export default function Licence() {
         }
       >
         {body("the licence", (v) => <LicenceHeadline view={v} />)}
-        {!authLoading && !platformAdmin && (
+        {!authLoading && view && !provider && (
           <HonestState
             tone="muted"
             headline="You are seeing this licence read-only."
-            remedy="A licence covers the whole platform rather than one tenant, so changing it requires a platform administrator. What is shown here is what is in force for everyone."
+            remedy={
+              platformAdmin
+                ? `${view.managed_by_detail} You are scoped into a tenant; return to the Global view to install or replace it.`
+                : view.managed_by_detail
+            }
           />
         )}
       </Section>
@@ -667,9 +746,13 @@ export default function Licence() {
       <Section
         id="usage"
         title="Current usage"
-        note="Where this platform stands against every ceiling the licence carries"
+        note={
+          tenantScope
+            ? "Where your tenant stands against every ceiling the licence carries"
+            : "Where this platform stands against every ceiling the licence carries"
+        }
       >
-        {body("the ceilings", (v) => <Usage rows={v.ceilings} />)}
+        {body("the ceilings", (v) => <Usage rows={v.ceilings} note={v.scope_note} />)}
       </Section>
 
       <Section
@@ -682,17 +765,28 @@ export default function Licence() {
 
       <Section
         id="install"
-        title="Install a licence"
+        title={provider ? "Install a licence" : "Changing this licence"}
         note="One licence file per installation — verified before it is written"
       >
         {body("the licence", (v) => (
-          <InstallPanel view={v} canEdit={platformAdmin} onInstalled={put} />
+          <InstallPanel view={v} canEdit={v.scope === "platform"} onInstalled={put} />
         ))}
       </Section>
 
-      <Section id="verification" title="Verification" note="Check what we sent you without trusting this page">
-        {body("the trusted keys", (v) => <Verification view={v} />)}
-      </Section>
+      {/* VERIFICATION is provider-only, because the payload is: the trusted
+          public keys and the offline recipe are not in the tenant projection.
+          The standing expiry note is NOT provider-only, so the tenant scope
+          still gets it — on its own, rather than as a heading over an empty
+          section. */}
+      {tenantScope ? (
+        <Section id="expiry" title="Expiry" note="What expiry can and cannot do">
+          {body("the expiry policy", (v) => <ExpiryNote text={v.expiry_semantics} />)}
+        </Section>
+      ) : (
+        <Section id="verification" title="Verification" note="Check what we sent you without trusting this page">
+          {body("the trusted keys", (v) => <Verification view={v} />)}
+        </Section>
+      )}
     </div>
   );
 }

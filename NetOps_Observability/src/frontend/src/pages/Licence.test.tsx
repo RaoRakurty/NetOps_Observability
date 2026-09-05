@@ -19,6 +19,14 @@
 // Everything else — the degraded state and its overage list, admin gating, the
 // public-key download, the landmarks and the copy guards — follows the same
 // shape: build the state, assert the exact sentence an operator reads.
+//
+// FIFTH, since the 2026-09-05 read split: THE TENANT PROJECTION SHOWS A TENANT
+// ONLY WHAT IS THEIRS. The same page renders two payloads — the provider view
+// and a tenant's own — and the branch is the SERVER's `scope`, never the SPA's
+// idea of who is looking. A tenant must see their tier, their features, their
+// own usage and who to ask; they must not see the customer, the licence id, the
+// support terms, the file path or the signing keys, and the page must not draw
+// a "not measured" placeholder where those would have been.
 
 import { describe, it, expect, vi, afterEach, beforeEach } from "vitest";
 import { render, screen, cleanup, fireEvent, waitFor } from "@testing-library/react";
@@ -98,8 +106,21 @@ const EXPIRY_NOTE =
   "Expiry semantics are an owner decision that is still open. Nothing is ever deleted, and no licence " +
   "state can affect tenant isolation, data separation, permissions or sign-in.";
 
+/** internal/licence.ManagedByProviderDetail. */
+const MANAGED_BY_DETAIL =
+  "There is one licence file per installation and it covers every tenant on it, so installing or replacing " +
+  "it is the provider's action. Everything shown here is what that single file puts in force for you.";
+
+/** internal/licence.TenantScopeNote. */
+const SCOPE_NOTE =
+  "The ceilings are the whole installation's and are shared with every tenant on it. The usage beside them " +
+  "counts only your tenant, so it is not the platform's total.";
+
 function view(over: Partial<LicenceView> = {}): LicenceView {
   return {
+    scope: "platform",
+    managed_by: "provider",
+    managed_by_detail: MANAGED_BY_DETAIL,
     state: state(),
     ceilings: ceilings(),
     features: [
@@ -140,6 +161,41 @@ function teamView(over: Partial<LicenceView> = {}): LicenceView {
     days_to_expiry: 119,
     ...over,
   });
+}
+
+/**
+ * The TENANT PROJECTION, exactly as internal/licence.tenantView builds it: the
+ * same licence with this tenant's own usage, and with the provider's commercial
+ * identity, file path and key material ABSENT — not blanked, absent. The
+ * fixture omits those keys for the same reason the server does.
+ */
+function tenantProjection(over: Partial<LicenceView> = {}): LicenceView {
+  return {
+    scope: "tenant",
+    tenant: "acme",
+    managed_by: "provider",
+    managed_by_detail: MANAGED_BY_DETAIL,
+    scope_note: SCOPE_NOTE,
+    state: state({
+      source: "file", tier: "team", licensed_tier: "team",
+      expires_at: "2027-01-01T00:00:00Z", grace_days: 30,
+      features: ["security_findings"],
+      ceilings: { ...COMMUNITY_CEILINGS, devices: 250, watched_prefixes: 100, tenants: 5 },
+    }),
+    ceilings: [
+      ceiling({ name: "devices", label: "devices", limit: 250, current: 7 }),
+      ceiling({ name: "watched_prefixes", label: "watched prefixes", limit: 100, current: 1 }),
+      ...ceilings().slice(2),
+    ],
+    features: [
+      feature({ name: "security_findings", label: "security findings", entitled: true, included_in: "team" }),
+      feature({ name: "saml", label: "SAML single sign-on", entitled: false, included_in: "enterprise" }),
+    ],
+    overages: [],
+    expiry_semantics: EXPIRY_NOTE,
+    days_to_expiry: 119,
+    ...over,
+  };
 }
 
 const OVERAGE: LicenceOverage = {
@@ -504,33 +560,106 @@ describe("verification", () => {
 
 // ── 6 · gating and failure ──────────────────────────────────────────────────
 
-describe("platform-admin gating", () => {
-  it("a tenant admin sees the licence read-only and is told why", async () => {
-    setup({ platformAdmin: false });
+describe("the tenant projection", () => {
+  it("a tenant admin sees the licence read-only and is told who may change it", async () => {
+    setup({ view: tenantProjection(), platformAdmin: false });
     render(<Licence />);
     // Said twice on purpose: once beside the licence itself, and again where
     // the install controls would have been.
-    await screen.findAllByText("Community");
+    expect(await screen.findByText("Team licence")).toBeTruthy();
     await waitFor(() => expect(screen.getAllByText("You are seeing this licence read-only.").length).toBe(2));
-    expect(screen.getAllByText(/requires a platform administrator/).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(MANAGED_BY_DETAIL).length).toBe(2);
+    expect(screen.getByText("Managed by")).toBeTruthy();
+    expect(screen.getByText("provider")).toBeTruthy();
   });
 
-  it("a tenant admin is shown no control that would be refused", async () => {
-    setup({ platformAdmin: false });
+  it("is shown no control that would be refused", async () => {
+    setup({ view: tenantProjection(), platformAdmin: false });
     render(<Licence />);
-    await screen.findAllByText("Community");
+    await screen.findByText("Team licence");
     expect(screen.queryByLabelText("Licence document")).toBeNull();
     expect(screen.queryByLabelText("Licence file to install")).toBeNull();
     expect(screen.queryByRole("button", { name: "Install licence" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Remove licence…" })).toBeNull();
   });
 
-  it("a tenant admin still gets the whole read-only picture", async () => {
-    setup({ view: teamView(), platformAdmin: false });
+  it("shows the tenant's OWN usage, and says so, rather than the platform total", async () => {
+    setup({ view: tenantProjection(), platformAdmin: false });
+    render(<Licence />);
+    expect(await screen.findByText("7 of 250")).toBeTruthy();
+    expect(screen.getByText("1 of 100")).toBeTruthy();
+    expect(screen.getByText(SCOPE_NOTE)).toBeTruthy();
+    expect(screen.getByText("These numbers count your tenant only.")).toBeTruthy();
+  });
+
+  it("shows the tier and the features in force, which is what the tenant came for", async () => {
+    setup({ view: tenantProjection(), platformAdmin: false });
     render(<Licence />);
     expect(await screen.findByText("Team licence")).toBeTruthy();
+    // "Team" is the tier pill AND the tier that lifts several ceilings.
+    expect(screen.getAllByText("Team").length).toBeGreaterThan(0);
+    expect(screen.getByText("expires in 119 days")).toBeTruthy();
+    expect(screen.getByText("30 days, set by the issuer")).toBeTruthy();
+    expect(screen.getByText("security findings")).toBeTruthy();
+  });
+
+  it("omits the provider's commercial identity instead of drawing a hole where it was", async () => {
+    setup({ view: tenantProjection(), platformAdmin: false });
+    const { container } = render(<Licence />);
+    await screen.findByText("Team licence");
+    // Absent, not "not measured": the platform knows the customer perfectly
+    // well, it is simply not this reader's business. Assert the fact grid
+    // itself, so a section heading called "Licence" cannot mask the check.
+    expect([...container.querySelectorAll(".lic-facts dt")].map((d) => d.textContent))
+      .toEqual(["Tier in force", "Expiry", "Grace period", "Managed by"]);
+    expect(screen.queryByText(/no licence names a customer/)).toBeNull();
+    expect(screen.queryByText(/no licence is installed/)).toBeNull();
+    // No key material, no offline recipe, no host path.
+    expect(screen.queryByText(VERIFY_HINT)).toBeNull();
+    expect(screen.queryByText(KEY.base64)).toBeNull();
+    expect(screen.queryByRole("button", { name: /Download public key/ })).toBeNull();
+    expect(screen.queryByRole("region", { name: "Verification" })).toBeNull();
+  });
+
+  it("still carries the standing note about what expiry can never do", async () => {
+    setup({ view: tenantProjection(), platformAdmin: false });
+    render(<Licence />);
+    expect(await screen.findByText(EXPIRY_NOTE)).toBeTruthy();
+    expect(screen.getByRole("region", { name: "Expiry" })).toBeTruthy();
+  });
+
+  it("a REFUSED licence still reaches the tenant, without the forensics", async () => {
+    const refusal =
+      "the licence installed on this platform was refused, so the Community ceilings are the ones in force — " +
+      "ask your provider";
+    setup({
+      view: tenantProjection({ state: state({ load_error: refusal }) }),
+      platformAdmin: false,
+    });
+    render(<Licence />);
+    expect(await screen.findByText("Installed licence refused")).toBeTruthy();
+    expect(screen.getAllByText(new RegExp(refusal)).length).toBeGreaterThan(0);
+  });
+
+  it("the platform owner narrowed into a tenant is told how to get the controls back", async () => {
+    setup({ view: tenantProjection(), platformAdmin: true });
+    render(<Licence />);
+    await screen.findByText("Team licence");
+    expect(screen.getByText(/return to the Global view to install or replace it/)).toBeTruthy();
+  });
+});
+
+describe("the provider view", () => {
+  it("keeps the whole licence, the keys and the controls", async () => {
+    setup({ view: teamView() });
+    render(<Licence />);
+    expect(await screen.findByText("Team licence")).toBeTruthy();
+    expect(screen.getByText("Acme Networks")).toBeTruthy();
     expect(screen.getByText("118 of 250")).toBeTruthy();
     expect(screen.getByText(VERIFY_HINT)).toBeTruthy();
+    expect(screen.getByLabelText("Licence document")).toBeTruthy();
+    // The platform bar is the installation's, so it carries no tenant note.
+    expect(screen.queryByText("These numbers count your tenant only.")).toBeNull();
   });
 });
 
@@ -571,6 +700,17 @@ describe("accessibility", () => {
     await screen.findAllByText("Community");
     expect([...container.querySelectorAll("[data-section]")].map((s) => s.getAttribute("data-section")))
       .toEqual(["licence", "usage", "features", "install", "verification"]);
+  });
+
+  it("the tenant projection keeps the same landmarks, with Expiry where Verification was", async () => {
+    setup({ view: tenantProjection(), platformAdmin: false });
+    const { container } = render(<Licence />);
+    await screen.findByText("Team licence");
+    expect([...container.querySelectorAll("[data-section]")].map((s) => s.getAttribute("data-section")))
+      .toEqual(["licence", "usage", "features", "install", "expiry"]);
+    for (const name of ["Licence", "Current usage", "Features", "Changing this licence", "Expiry"]) {
+      expect(screen.getByRole("region", { name })).toBeTruthy();
+    }
   });
 
   it("every control the operator types into carries a label", async () => {

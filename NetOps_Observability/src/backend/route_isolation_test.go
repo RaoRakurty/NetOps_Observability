@@ -601,15 +601,27 @@ var routeIsolationLedger = map[string]string{
 	"/api/system/backup/snapshots/":  "platform", // list/create/delete/restore/verify subtree; requirePlatformAdmin
 	"/api/system/backup/operations":  "platform", // async operation ring; requirePlatformAdmin
 	"/api/system/backup/operations/": "platform", // one operation by id; requirePlatformAdmin
-	// Licence (2026-09-04). Platform-GLOBAL commercial plumbing, NOT tenant
-	// data: a tenant/org admin holds full administration:admin, so a
-	// scope-blind requireAdmin here would let any tenant read the customer's
-	// commercial terms AND install a licence for the whole platform (§3a rule
-	// 3). requirePlatformAdmin on every verb; PUT and DELETE audited on both
-	// outcomes. No tenant rows cross this route at all, so there is
-	// deliberately no org-isolation test.
-	// Gate + grammar tests: licence_routes_test.go.
-	"/api/system/licence":         "platform", // read/install/remove the signed licence; requirePlatformAdmin
+	// Licence (2026-09-04; GET split tenant-readable 2026-09-05). SPLIT by verb,
+	// and the split is the isolation posture:
+	//
+	//   PUT/DELETE — platform-GLOBAL commercial plumbing. requirePlatformAdmin
+	//     (licenceGate), audited on both outcomes: there is one licence file per
+	//     installation and it covers every tenant on it, so a scope-blind
+	//     requireAdmin would let any tenant license the whole platform (§3a
+	//     rule 3).
+	//   GET — per-tenant DATA, hence "scoped". requireAdmin (licenceReadGate) +
+	//     principalTenant: a cross-tenant caller gets the provider view; every
+	//     other admin gets a TENANT PROJECTION whose usage is counted only over
+	//     rows that tenant owns (canSeeDevice / the watchlist store's own
+	//     (tenant, cross) read), and which carries no customer, licence id, key
+	//     material or file path. The tenant comes from the token, never from the
+	//     body or query (§3a rule 2); `as_tenant` is honored by the auth
+	//     middleware and can only NARROW.
+	//
+	// Gate + grammar tests: licence_routes_test.go. Cross-org isolation:
+	// TestLicenceTenantViewCrossOrgIsolation (tenant A's usage never counts
+	// tenant B's devices or prefixes; as_tenant into another org is ignored).
+	"/api/system/licence":         "scoped", // GET: tenant projection (requireAdmin); PUT/DELETE: requirePlatformAdmin
 	"/api/system/network/test":    "platform",
 	"/api/automation/netbox":      "platform",
 	"/api/automation/netbox/sync": "platform",

@@ -123,6 +123,19 @@ var apiRoutes = []apiRoute{
 	{"POST", "/api/troubleshoot/protocol-diagnostics/analyze", "Troubleshooting", "Run the failure signatures over supplied `show` output; returns the verdict + cause + remediation, or an honest \"no known signature matched\" (infrastructure:read). `analyzed:false` with `not_analyzed` set is the DISTINCT state for a request that carried no output at all — nothing was scored, so the protocol's state is unknown rather than clean"},
 	{"POST", "/api/troubleshoot/protocol-diagnostics/collect", "Troubleshooting", "Run an issue's read-only command bundle against one of the caller's own devices; output is secret-redacted (infrastructure:write; 503 when no command source is wired)"},
 	{"POST", "/api/troubleshoot/protocol-diagnostics/export", "Troubleshooting", "Assemble the redacted \"Send to TAC\" bundle from supplied outputs, optionally with the signature analysis folded in (infrastructure:read; audited)"},
+	// TAC escalation pack (docs/design/TAC_ESCALATION_2026-09-05.md, internal/tac).
+	// The six-step escalation an operator drives when an RCA is not confirmed:
+	// classify from evidence Correlix already holds, plan the vendor commands,
+	// collect them read-only, bundle the redacted evidence, open the case.
+	// {id} is an incident id OR a correlation id, resolved in the CALLER'S OWN
+	// scope — a foreign id and an unknown id answer the same 404.
+	{"GET", "/api/incidents/{id}/tac", "Troubleshooting", "The escalation's state for one incident: classification, plan, collection job with per-command progress, stored bundles, case outcome, and the case connectors this tenant can actually use (infrastructure:read). An escalation started before an api restart is not resumed, and the response says so rather than showing an empty one"},
+	{"POST", "/api/incidents/{id}/tac/classify", "Troubleshooting", "Classify the incident into the closed issue-class taxonomy from evidence Correlix already holds — RCA hypotheses, alerts, matched protocol signatures, the selected Iris skill, log excerpts. Returns the class, the exact evidence that scored it, every alternative that scored, and the full class list so an operator can override to any class. Nothing matched is an ANSWER (the `generic` class, stated plainly), not an error (infrastructure:read; audited)"},
+	{"POST", "/api/incidents/{id}/tac/plan", "Troubleshooting", "Build the read-only command plan for a class on one of the caller's own devices: the vendor baseline set, the class deep-dive set, Correlix's own topology context, the size/time ceiling and the redaction note — shown BEFORE anything runs. Intents this dialect does not bind are listed as unbound; a platform with no authored plan runs nothing and says so rather than rendering another vendor's commands (infrastructure:read; audited)"},
+	{"POST", "/api/incidents/{id}/tac/collect", "Troubleshooting", "Start the read-only collection of an approved plan over the SSH gateway, or fold in operator-pasted outputs, or cancel a running one. Asynchronous: returns the job, whose per-command progress is polled from GET …/tac. One collection per device at a time (409); 503 when no read-only transport is wired — never a fabricated capture (infrastructure:write; audited)"},
+	{"GET", "/api/incidents/{id}/tac/bundle", "Troubleshooting", "Download the redacted evidence bundle as a zip: MANIFEST.json, the problem statement written under the evidence-only rule, per-command outputs, the incident's evidence timeline, topology, device facts and SHA256SUMS. ?profile=full|email|link_only picks how much it carries; the email profile trims the largest outputs first and names every omission in the manifest (infrastructure:read; audited as sensitive)"},
+	{"POST", "/api/incidents/{id}/tac/case", "Troubleshooting", "Pre-fill the vendor/ITSM case form (submit:false) or perform the human-approved submission (submit:true). Case creation is never automatic. A connector without a create capability returns the paste-ready portal text and says so — a successful outcome, not a failure (infrastructure:write; audited)"},
+	{"GET", "/api/troubleshoot/tac/knowledge", "Troubleshooting", "Iris's TAC coverage: the issue-class taxonomy, the intent vocabulary, and per vendor dialect which intents are bound, which commands are verified against a real capture versus taken from vendor documentation, and which recognised platforms have NO authored plan at all. Version-pinned reference data, identical for every tenant (infrastructure:read)"},
 	// OSPF / IS-IS advanced monitoring (Project 4 D item 11, internal/igpmon).
 	// READ-ONLY: the module collects nothing and invents nothing. Adjacency
 	// HISTORY comes from the typed syslog/trap adjacency-change signals on the
@@ -257,8 +270,12 @@ var apiRoutes = []apiRoute{
 	// ── Licence ──────────────────────────────────────────────────────────────
 	// The signed licence file (ed25519, verified offline, no activation server
 	// and no phone-home) that sets this deployment's commercial ceilings and
-	// feature switches. Platform-global: requirePlatformAdmin on every verb,
-	// PUT/DELETE audited on both outcomes.
+	// feature switches. There is ONE file per installation and it covers every
+	// tenant on it, so the WRITES are platform-global (requirePlatformAdmin,
+	// audited on both outcomes) while the READ is tenant-scoped
+	// (requireAdmin): a tenant admin sees what that licence puts in force for
+	// THEM — a projection with their own tenant's usage and none of the
+	// provider's commercial or key material.
 	//
 	// Everywhere ELSE in this API, a capability the licence does not include
 	// answers 402 with {error, ceiling|feature, current, limit, tier,
@@ -266,7 +283,7 @@ var apiRoutes = []apiRoute{
 	// and never a silently empty body. Ceilings that are carried in the file
 	// but not enforced by this build say so in the payload rather than being
 	// displayed as limits that bite.
-	{"GET", "/api/system/licence", "Licence", "The licence in force: customer, tier, ceilings with CURRENT USAGE, the closed feature vocabulary with what is entitled, expiry, grace and degraded state with the over-ceiling items LISTED, the trusted public keys and the offline verification recipe. No licence installed is a normal state and reports the Community ceilings, not an error (platform admin)"},
+	{"GET", "/api/system/licence", "Licence", "The licence in force, in ONE of two scopes decided by the caller, never by the request. scope=platform (the cross-tenant platform owner): customer, tier, ceilings with PLATFORM-WIDE usage, the closed feature vocabulary with what is entitled, expiry, grace and degraded state with the over-ceiling items LISTED, the trusted public keys and the offline verification recipe. scope=tenant (any administration:admin caller, including a tenant/org admin, and the owner narrowed with as_tenant): tier, entitled features, the same ceilings with THIS TENANT'S OWN usage beside them, expiry state and managed_by — no customer, no licence id, no key material, no file path. No licence installed is a normal state and reports the Community ceilings, not an error"},
 	{"PUT", "/api/system/licence", "Licence", "Install a licence document. The signature is verified BEFORE anything is written, so a refused upload never displaces a working licence and the exact reason is returned verbatim — an unknown signing key, a modified file and a malformed one are three different answers (platform admin, audited on both outcomes)"},
 	{"DELETE", "/api/system/licence", "Licence", "Remove the installed licence and return to the Community ceilings. Nothing is deleted from the platform itself; devices and data over a Community ceiling are listed as not covered, never removed (platform admin, audited)"},
 	{"POST", "/api/graphql", "Query", "GraphQL endpoint (devices/alerts/findings/health)"},

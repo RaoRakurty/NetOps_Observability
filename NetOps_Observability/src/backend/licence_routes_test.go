@@ -29,8 +29,9 @@ import (
 //
 //  1. the CHOKEPOINTS are actually wired — a gate nobody calls is decoration,
 //     and every one of these tests drives the real handler, not a helper;
-//  2. the platform-admin GATE on /api/system/licence refuses before anything
-//     else happens;
+//  2. the GATES on /api/system/licence are the right ones per verb and run
+//     before anything else happens — requirePlatformAdmin on the writes,
+//     requireAdmin plus a TENANT-SCOPED projection on the read;
 //  3. the mux registration exists, so the route is reachable at all.
 //
 // Every test builds its own signing key: nothing here depends on, or can be
@@ -750,21 +751,25 @@ func licAPIServer(t *testing.T, k licTestKey, raw []byte) *server {
 	return s
 }
 
-// TestLicenceRouteGate is the §3a rule-3 assertion: the gate runs BEFORE the
-// verb and before the body, and a TENANT admin — who holds full
-// administration:admin — is refused.
+// TestLicenceRouteGate is the §3a rule-3 assertion, per verb: the gate runs
+// BEFORE the body, the WRITES refuse a TENANT admin — who holds full
+// administration:admin but must never be able to license the platform — and
+// every verb refuses an unauthenticated caller, including an unknown one, whose
+// 405 is a fact about this surface that an anonymous caller must not learn.
 func TestLicenceRouteGate(t *testing.T) {
 	k := newLicTestKey(t)
 	s := licAPIServer(t, k, nil)
 
-	for _, method := range []string{http.MethodGet, http.MethodPut, http.MethodDelete} {
+	for _, method := range []string{http.MethodPut, http.MethodDelete, http.MethodPatch} {
 		t.Run(method+" refuses a tenant admin", func(t *testing.T) {
 			w := httptest.NewRecorder()
 			s.licenceAPI.Handle(w, licReq(method, "/api/system/licence", `{"licence_id":"x"}`, licTenantAdminClaims()))
 			if w.Code != http.StatusForbidden {
-				t.Fatalf("status = %d, want 403 — a tenant/org admin holds administration:admin, so a scope-blind gate here would hand every tenant the platform's commercial terms and the ability to license it (§3a rule 3)", w.Code)
+				t.Fatalf("status = %d, want 403 — a tenant/org admin holds administration:admin, so a scope-blind gate on a WRITE would hand every tenant the ability to license the whole platform (§3a rule 3)", w.Code)
 			}
 		})
+	}
+	for _, method := range []string{http.MethodGet, http.MethodPut, http.MethodDelete, http.MethodPatch} {
 		t.Run(method+" refuses an unauthenticated caller", func(t *testing.T) {
 			w := httptest.NewRecorder()
 			s.licenceAPI.Handle(w, httptest.NewRequest(method, "/api/system/licence", nil))
@@ -773,6 +778,209 @@ func TestLicenceRouteGate(t *testing.T) {
 			}
 		})
 	}
+}
+
+// licTenantAdminOfClaims is a tenant admin in an arbitrary tenant. Same shape
+// as licTenantAdminClaims — full administration:admin, NOT the platform owner.
+func licTenantAdminOfClaims(tenant string) jwtClaims {
+	return jwtClaims{Sub: "admin@" + tenant + ".test", Role: rbac.RoleSuperAdmin, Tenant: tenant}
+}
+
+// licRead drives the real GET handler and decodes the body.
+func licRead(t *testing.T, s *server, c jwtClaims) map[string]any {
+	t.Helper()
+	w := httptest.NewRecorder()
+	s.licenceAPI.Handle(w, licReq(http.MethodGet, "/api/system/licence", "", c))
+	if w.Code != http.StatusOK {
+		t.Fatalf("GET = %d %s", w.Code, w.Body.String())
+	}
+	var v map[string]any
+	if err := json.Unmarshal(w.Body.Bytes(), &v); err != nil {
+		t.Fatal(err)
+	}
+	return v
+}
+
+// licCeiling pulls one ceiling row out of a view.
+func licCeiling(t *testing.T, v map[string]any, name string) map[string]any {
+	t.Helper()
+	rows, _ := v["ceilings"].([]any)
+	for _, r := range rows {
+		row, _ := r.(map[string]any)
+		if row["name"] == name {
+			return row
+		}
+	}
+	t.Fatalf("ceiling %q is missing from the view", name)
+	return nil
+}
+
+// TestLicenceTenantViewCrossOrgIsolation is the §3a rule-5 isolation test for
+// the tenant-readable GET (2026-09-05).
+//
+// The read is now open to any administration:admin caller, so the isolation is
+// no longer "the gate refuses you" — it is the PROJECTION: a tenant admin is
+// answered with their own tenant's usage, never the platform's total and never
+// another tenant's rows, and with none of the provider's commercial or key
+// material. Three tenants in different orgs, one licence file, three different
+// answers.
+func TestLicenceTenantViewCrossOrgIsolation(t *testing.T) {
+	k := newLicTestKey(t)
+	s := licAPIServer(t, k, nil)
+
+	// Six devices: three owned by acme, two by globex, one platform-owned
+	// (no tenant) — which belongs to the platform and must appear in NOBODY's
+	// tenant projection.
+	fleet := []models.Device{
+		{ID: "acme-1", Name: "acme-1", Address: "10.1.0.1", Source: "manual", TenantID: "acme"},
+		{ID: "acme-2", Name: "acme-2", Address: "10.1.0.2", Source: "manual", TenantID: "acme"},
+		{ID: "acme-3", Name: "acme-3", Address: "10.1.0.3", Source: "manual", TenantID: "acme"},
+		{ID: "globex-1", Name: "globex-1", Address: "10.2.0.1", Source: "manual", TenantID: "globex"},
+		{ID: "globex-2", Name: "globex-2", Address: "10.2.0.2", Source: "manual", TenantID: "globex"},
+		{ID: "platform-1", Name: "platform-1", Address: "10.3.0.1", Source: "manual"},
+	}
+	for _, d := range fleet {
+		if err := s.discovery.Upsert(d); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	devicesIn := func(t *testing.T, v map[string]any) float64 {
+		t.Helper()
+		row := licCeiling(t, v, entitlement.CeilingDevices)
+		cur, ok := row["current"].(float64)
+		if !ok {
+			t.Fatalf("the device ceiling must carry a measured number for a tenant, got %+v", row)
+		}
+		return cur
+	}
+
+	t.Run("each tenant sees only its own devices", func(t *testing.T) {
+		acme := licRead(t, s, licTenantAdminOfClaims("acme"))
+		if acme["scope"] != licence.ScopeTenant || acme["tenant"] != "acme" {
+			t.Fatalf("a tenant admin must get their own tenant projection, got scope=%v tenant=%v", acme["scope"], acme["tenant"])
+		}
+		if got := devicesIn(t, acme); got != 3 {
+			t.Fatalf("acme counts %v devices, want its own 3 — a tenant must never be shown the platform total (6) or another tenant's rows (§3a rule 1)", got)
+		}
+		globex := licRead(t, s, licTenantAdminOfClaims("globex"))
+		if got := devicesIn(t, globex); got != 2 {
+			t.Fatalf("globex counts %v devices, want its own 2", got)
+		}
+		empty := licRead(t, s, licTenantAdminOfClaims("initech"))
+		if got := devicesIn(t, empty); got != 0 {
+			t.Fatalf("a tenant with no devices counts %v, want 0 — and it must be a MEASURED zero, not another tenant's number", got)
+		}
+	})
+
+	t.Run("no commercial or key material reaches a tenant", func(t *testing.T) {
+		raw := k.issue(t, entitlement.TierTeam, []entitlement.Feature{entitlement.FeatureSecurityFindings}, nil)
+		w := httptest.NewRecorder()
+		s.licenceAPI.Handle(w, licReq(http.MethodPut, "/api/system/licence", string(raw), licClaims()))
+		if w.Code != http.StatusOK {
+			t.Fatalf("install = %d %s", w.Code, w.Body.String())
+		}
+		v := licRead(t, s, licTenantAdminOfClaims("acme"))
+		for _, field := range []string{"keys", "path", "verify_hint"} {
+			if _, present := v[field]; present {
+				t.Fatalf("%q is provider material and must be absent from the tenant projection: %v", field, v[field])
+			}
+		}
+		state, _ := v["state"].(map[string]any)
+		// grace_days is deliberately NOT in this list: it is part of the expiry
+		// state the tenant needs ("inside a 30-day grace"), not of the
+		// provider's commercial identity.
+		for _, field := range []string{"customer", "licence_id", "issued_at", "support", "key_id"} {
+			if _, present := state[field]; present {
+				t.Fatalf("state.%s is the provider's commercial identity and must not reach a tenant: %v", field, state[field])
+			}
+		}
+		// What the tenant DOES need is all there: the tier in force, what it
+		// entitles them to, and who to ask to change it.
+		if state["tier"] != string(entitlement.TierTeam) {
+			t.Fatalf("the tenant must be told the tier in force, got %v", state["tier"])
+		}
+		if v["managed_by"] != licence.ManagedByProvider || v["managed_by_detail"] == "" {
+			t.Fatalf("managed_by must say who may replace the licence, got %v / %v", v["managed_by"], v["managed_by_detail"])
+		}
+		if v["scope_note"] == "" {
+			t.Fatal("the projection must say that the ceilings are the installation's and the usage is only this tenant's")
+		}
+		entitled := false
+		for _, f := range v["features"].([]any) {
+			row := f.(map[string]any)
+			if row["name"] == string(entitlement.FeatureSecurityFindings) && row["entitled"] == true {
+				entitled = true
+			}
+		}
+		if !entitled {
+			t.Fatal("the tenant must see the features the installation's licence entitles them to")
+		}
+	})
+
+	t.Run("as_tenant can only narrow", func(t *testing.T) {
+		// A NON-owner carrying an acting-tenant override is still confined to
+		// its own tenant: principalTenant ignores ActingTenant for anyone but
+		// the platform owner, so this cannot become a cross-org read.
+		c := licTenantAdminOfClaims("acme")
+		c.ActingTenant = "globex"
+		v := licRead(t, s, c)
+		if v["tenant"] != "acme" {
+			t.Fatalf("a tenant admin selecting another tenant must stay in its own: %v", v["tenant"])
+		}
+		if got := devicesIn(t, v); got != 3 {
+			t.Fatalf("acme still counts its own 3 devices, got %v", got)
+		}
+		// The platform owner narrowing INTO a tenant gets that tenant's
+		// projection — the same narrowing-only rule, applied downward.
+		owner := licClaims()
+		owner.ActingTenant = "globex"
+		nv := licRead(t, s, owner)
+		if nv["scope"] != licence.ScopeTenant || nv["tenant"] != "globex" {
+			t.Fatalf("the owner scoped into a tenant must see that tenant's projection: scope=%v tenant=%v", nv["scope"], nv["tenant"])
+		}
+		if got := devicesIn(t, nv); got != 2 {
+			t.Fatalf("scoped into globex the owner counts %v devices, want 2", got)
+		}
+	})
+
+	t.Run("the platform owner keeps the full view", func(t *testing.T) {
+		v := licRead(t, s, licClaims())
+		if v["scope"] != licence.ScopePlatform {
+			t.Fatalf("scope = %v, want platform", v["scope"])
+		}
+		if keys, _ := v["keys"].([]any); len(keys) == 0 {
+			t.Fatal("the provider view still publishes the trusted public keys")
+		}
+		if v["path"] == "" || v["verify_hint"] == "" {
+			t.Fatal("the provider view still carries the licence path and the offline recipe")
+		}
+		state, _ := v["state"].(map[string]any)
+		if state["customer"] == nil || state["licence_id"] == nil {
+			t.Fatalf("the provider view still names the customer and the licence: %+v", state)
+		}
+		// Platform-wide: all six devices, including the platform-owned one that
+		// belongs to no tenant.
+		if got := devicesIn(t, v); got != 6 {
+			t.Fatalf("the platform bar counts every device on the installation, got %v want 6", got)
+		}
+	})
+
+	t.Run("un-enforced ceilings stay un-numbered in the tenant projection too", func(t *testing.T) {
+		v := licRead(t, s, licTenantAdminOfClaims("acme"))
+		for _, name := range entitlement.CeilingNames() {
+			if entitlement.Enforced(name) {
+				continue
+			}
+			row := licCeiling(t, v, name)
+			if row["current"] != nil {
+				t.Fatalf("%s is carried but not enforced: it must not show usage as if it bit (%+v)", name, row)
+			}
+			if row["current_reason"] == "" || row["current_reason"] == nil {
+				t.Fatalf("%s shows no number, so it must say why (%+v)", name, row)
+			}
+		}
+	})
 }
 
 // TestLicenceRouteLifecycle drives the whole page contract: read Community,
