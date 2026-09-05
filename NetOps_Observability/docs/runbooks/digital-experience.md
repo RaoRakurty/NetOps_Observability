@@ -122,3 +122,84 @@ ships). Scores appear within one target interval plus one projector cycle.
 * **A component that was not measured contributes nothing** and its weight is
   redistributed. A target with no declared latency budget is scored on
   availability and path stability alone, and the response says so.
+
+---
+
+## The Experience screen says a cause is only "suspected"
+
+This is usually correct, and it is the most common question the screen raises.
+
+Correlix confirms a cause only when **two different kinds of instrument, from
+two different vantages, observed the same thing** — the correlation engine's
+independence rule, applied to experience evidence. Today most deployments run
+exactly one anchor-capable evidence class, the synthetic prober, so the honest
+ceiling is `suspected`. That is a statement about the evidence, not about the
+analysis, and nothing on the screen should be read as a defect.
+
+Check it in one place:
+
+```bash
+# Which sources can anchor a verdict, and are they reporting?
+curl -sS -H "Authorization: Bearer $TOKEN" \
+  "$BASE/api/dem/data-health?window=1h" | jq '.data_health
+   | {can_confirm, anchor_sources_flowing, explanation,
+      sources: [.sources[] | {source, state, anchor_capable, confidence_influence}]}'
+```
+
+`can_confirm: false` with `anchor_sources_flowing: 1` is the expected answer on
+a synthetic-only deployment, and `explanation` is the sentence to quote. It
+becomes `true` when a second anchor-capable producer reports — flow-derived
+application response time, first-party real-user telemetry, or an endpoint
+agent (tracker 252).
+
+Open an incident and read `gate_reasons` on the leading hypothesis: it names the
+specific thing that is missing, in order. "only one independent modality class
+observed it" means the ceiling above. "a source required to confirm this
+reported nothing" means a source that WAS reporting has stopped — that one is a
+fault, and it is the same investigation as **Prober not reporting** above.
+
+## The Experience score is not shown at all
+
+The score is deliberately withheld rather than rendered as 0 or 100 whenever
+fewer than two of its six dimensions were measured. There are two reason codes
+to read and they answer different questions: `reason` at the TOP LEVEL of
+`GET /api/dem/overview` says why the whole view has nothing, and `score.reason`
+says why the score specifically was not published.
+
+Top-level `reason`:
+
+| `reason` | What it means | What to do |
+|---|---|---|
+| `feature_off` | `FEATURE_DEM` is not true on the api | Turn it on (see **Turning it on**) |
+| `no_targets` | the tenant has declared no target and no journey | Declare at least one |
+| `query_failed` | the metrics store did not answer | Investigate VictoriaMetrics; this is not a healthy result |
+
+`score.reason`:
+
+| `reason` | What it means | What to do |
+|---|---|---|
+| `below_evidence_minimum` | fewer than two dimensions had any measurement | Usually no declared latency budget and no observed path; declare a budget, or accept the two-dimension floor |
+| `no_dimensions_measured` | on one dimension: nothing produced it in this window | Expected for the two dimensions that have no producer (below) |
+| `no_score_policy` | no weights loaded for this application class | A policy-load failure; check the api log for the score-policy line |
+
+A journey's own `health.reason` is separate again: `journey_not_measured` means
+no required step is bound to a target that reported, and `step_not_bound` /
+`step_no_measurement` say which step.
+
+Two dimensions — error-free interaction and user friction — have **no producer
+yet** and will report as not measured on every deployment. That is expected and
+is stated in the response; it is not a collection fault.
+
+## A change does not appear on an incident
+
+The change feed only shows what a producer sent to `POST /api/dem/changes`.
+Three things suppress a change that exists:
+
+1. **It happened after the first impact.** It is still listed, marked
+   `precedes_impact: false`, and can never support a cause — it cannot have
+   caused what had already started.
+2. **It is outside the lookback** (90 minutes before first impact by default).
+3. **Nothing sent it.** The config-capture, cloud and BGP producers do not yet
+   write to this feed automatically; an empty feed means "nothing was reported",
+   which the response says explicitly and which is not the same as "nothing
+   changed".
