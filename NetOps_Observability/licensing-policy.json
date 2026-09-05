@@ -238,6 +238,12 @@
         "licence": "Apache-2.0",
         "state": "core",
         "reason": "Contribution process and the CLA requirement open core depends on."
+      },
+      {
+        "path": "CLA.md",
+        "licence": "Apache-2.0",
+        "state": "core",
+        "reason": "Contributor-agreement placeholder: states that the CLA text is pending counsel and that nothing constitutes signing it. Carries no legal terms; the wording is Correlix's own documentation."
       }
     ],
     "not_part_of_this_project": [

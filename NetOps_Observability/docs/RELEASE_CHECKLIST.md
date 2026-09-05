@@ -204,7 +204,7 @@ actionlint            # .github/workflows/ must be clean
 
 ### 6.2 Correct branch protection — the required job names
 
-Apply the **eighteen** names from `docs/runbooks/ci-branch-protection.md` §1.1. They are the
+Apply the **nineteen** names from `docs/runbooks/ci-branch-protection.md` §1.1. They are the
 jobs' real `name:` fields; a required check that names no real job pins every PR at
 *"Expected — Waiting for status to be reported"* forever. Requires `gh auth login` **as a repo
 admin** — this cannot be done from CI or by an agent.

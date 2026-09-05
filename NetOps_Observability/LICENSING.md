@@ -121,6 +121,7 @@ Top-level entries of the OUTER repository root that belong to this project. The 
 | `LICENSES` | Apache-2.0 | The two licence texts the identifiers resolve to. |
 | `LICENSING.md` | Apache-2.0 | The generated directory-to-licence map. |
 | `CONTRIBUTING.md` | Apache-2.0 | Contribution process and the CLA requirement open core depends on. |
+| `CLA.md` | Apache-2.0 | Contributor-agreement placeholder: states that the CLA text is pending counsel and that nothing constitutes signing it. Carries no legal terms; the wording is Correlix's own documentation. |
 
 Not part of this project, and carrying no Correlix licence declaration:
 
