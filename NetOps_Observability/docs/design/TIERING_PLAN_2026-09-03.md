@@ -85,6 +85,7 @@ Grafana perpetual free tiers). Decisions:
 | Trials | 30-day signed Team/Enterprise evaluation licence, no card, offline after issuance; Community and trial coexist. |
 | Metering (separate from entitlement) | daily per-tenant: unique + peak monitored devices, tenants/orgs, watched prefixes, effective retention; diagnostic meters for samples/log/flow/trace bytes, DEM checks, AI tokens, processor in/out ratio; **signed downloadable usage report**, no phone-home; customer and Correlix derive the same counts. |
 | SaaS (future) | device entitlement + included telemetry envelope + narrow overage (logs, flows, DEM, hosted AI), metered on **post-processor accepted** data; region as a first-class tenant property before production; migration: $0 transfer, 100 % unused-term credit, free config migration, one 60–90-day dual run, optional history. |
+| DEM (decided 2026-09-05) | **No `FeatureDEM` gate.** Advanced DEM stays on the monetizable roadmap; network-side DEM rides the monitored-device unit; DEM sessions/journeys/checks are a diagnostic meter on-prem and a possible narrow SaaS overage meter later; no RUM unit at launch. |
 | Onboarding message | "Inventory: N discovered · Monitoring: M / 25 Community monitored devices · Discovery does not consume your monitoring allowance." Measure time-to-first-useful-RCA. |
 
 Implementation workstreams from this decision are tracker rows 257–260 (grace/expiry + trial issuance +

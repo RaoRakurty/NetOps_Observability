@@ -29,18 +29,12 @@ re-listed here — `git log` is the record of what landed, and
 Not numbered: no commit will ever close these, so the staleness guard correctly
 ignores them.
 
-- **DEM packaging: is there a `FeatureDEM` entitlement, and where are its tier lines?**
-  Design of record §M.9 proposes one and §M.11 lists it as an open decision, but
-  `internal/entitlement`'s Feature vocabulary is CLOSED and LOCKED by the owner spec of
-  2026-09-04 ("adding a value takes an owner decision, not a diff"). The DEM slice
-  therefore did NOT add the constant: Digital Experience is gated on the `FEATURE_DEM`
-  env flag only, and every commercial gate around it is absent rather than guessed.
-  Decisions needed: (a) does DEM get a semantic entitlement at all; (b) the unit —
-  monitored device (the C4 rule) for network-side DEM, per monitored application for
-  RUM; (c) the tier lines (§M.9 proposes synthetics + Tier-0 + the Experience overview
-  in every tier, journeys + RUM + business events at Team, AI investigator + agent +
-  replay at Enterprise); (d) whether Digital Experience becomes the Operations landing
-  for every tenant or per-tenant.
+- **DEM packaging — DECIDED 2026-09-05 (owner: "follow the licence doc"):** no `FeatureDEM`
+  entitlement; the locked Feature vocabulary is unchanged; DEM is gated by the `FEATURE_DEM` deployment
+  flag only; network-side DEM rides the monitored-device unit; DEM sessions/journeys/checks are a
+  diagnostic meter on-prem and a possible narrow SaaS overage meter later; no RUM unit at launch
+  (TIERING_PLAN §9 "DEM", DEM design §M.9). Still open: whether Digital Experience becomes the
+  Operations landing for all tenants or per tenant (§M.11).
 
 - **O1 · GCP project + service-account key.** No `GCP_*`/`GOOGLE_*` keys exist in
   the environment at all (verified 2026-07-25). GCP is explicitly FIRST in the
