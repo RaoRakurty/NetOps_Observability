@@ -427,6 +427,7 @@ func newHarness(t *testing.T, stub *osStub, mutate ...func(*Deps)) *harness {
 		VerifyFile:             dir + "/snapshot_verify.json",
 		BackupReportPath:       dir + "/backup-report.json",
 		RestoreDrillReportPath: dir + "/restore-drill.report.json",
+		BackupDrillReportPath:  dir + "/backup-drill.report.json",
 		ProbeEnabled:           true,
 	}
 	for _, m := range mutate {

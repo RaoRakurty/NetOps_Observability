@@ -3,6 +3,8 @@ package dataprotect
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"net/http"
 	"net/url"
 	"strconv"
 	"strings"
@@ -40,15 +42,16 @@ import (
 func (s *Service) BuildCoverage(ctx context.Context) BackupCoverageView {
 	cfg := s.config()
 	bundle := s.readBackupReport()
+	drill := s.readBackupDrillReport()
 	view := BackupCoverageView{
 		GeneratedAt: s.now().UTC(),
 		Engines: []EngineCoverage{
 			s.coverageOpenSearch(ctx),
-			s.coverageSystemBundle(cfg, bundle),
-			s.coveragePostgres(cfg, bundle),
-			s.coverageClickHouse(cfg, bundle),
-			coverageVictoriaMetrics(),
-			coverageSecretsTLS(),
+			s.coverageSystemBundle(cfg, bundle, drill),
+			s.coveragePostgres(cfg, bundle, drill),
+			s.coverageClickHouse(cfg, bundle, drill),
+			s.coverageVictoriaMetrics(cfg, bundle, drill),
+			s.coverageSecretsTLS(cfg, bundle, drill),
 			s.coverageDeviceConfigs(),
 		},
 		External: externalMechanisms(),
@@ -63,9 +66,65 @@ func (s *Service) BuildCoverage(ctx context.Context) BackupCoverageView {
 	// with the honest generic one and CLEARS the sibling wherever the pointer
 	// is present (an explanation next to a value would read as a caveat on it).
 	for i := range view.Engines {
+		applyRPOObjective(&view.Engines[i])
 		normalizeCoverageNulls(&view.Engines[i])
 	}
 	return view
+}
+
+// ── the declared recovery-point objectives (S4, 2026-09-04) ─────────────────
+//
+// These are POLICY, not measurement, and they live in their own field
+// (RPOObjectiveHours) precisely so nothing can mistake them for the
+// schedule-derived RPOTargetHours. The owner's decision on 2026-09-04 set them:
+// 24 hours for every data store, and 0 for the sealed custody material.
+//
+// Why 0 for custody, and why that is not an unmeetable objective: the sealed
+// envelope is CHANGE-driven, not time-driven. scripts/backup.sh re-encrypts it
+// whenever its sha256 manifest changes and otherwise re-uses the existing one,
+// so a successful capture means the newest bundle holds the material as it
+// currently stands. Any window in which a ROTATED custody root is not in a copy
+// is not "late", it is unrecoverable — which is what an objective of 0 says.
+var rpoObjectiveHours = map[string]float64{
+	"opensearch":      24,
+	"system_bundle":   24,
+	"postgres":        24,
+	"clickhouse":      24,
+	"victoriametrics": 24,
+	"device_configs":  24,
+	"secrets_tls":     0,
+}
+
+// applyRPOObjective publishes the declared objective for a row, leaving any
+// objective a row set for itself alone. A row with no entry publishes a null
+// plus the reason, exactly like every other unmeasured value here.
+func applyRPOObjective(row *EngineCoverage) {
+	if row.RPOObjectiveHours != nil {
+		return
+	}
+	h, ok := rpoObjectiveHours[row.ID]
+	if !ok {
+		if row.RPOObjectiveDetail == "" {
+			row.RPOObjectiveDetail = "no recovery-point objective has been declared for this engine"
+		}
+		return
+	}
+	v := h
+	row.RPOObjectiveHours = &v
+	if row.RPOObjectiveDetail != "" {
+		return
+	}
+	if h == 0 {
+		row.RPOObjectiveDetail = "declared platform objective: 0h. The sealed custody envelope is CHANGE-driven, " +
+			"not time-driven — the bundle re-encrypts it whenever its checksum manifest moves — so the objective is " +
+			"that the CURRENT material is always in the newest copy, not that a copy is less than N hours old. " +
+			"This is a policy statement, not a measurement, and it is judged against the achieved figure beside it"
+	} else {
+		row.RPOObjectiveDetail = "declared platform objective: " + strconv.FormatFloat(h, 'f', -1, 64) +
+			"h for a data store (owner decision, 2026-09-04). This is a policy statement, not a measurement: " +
+			"where a real schedule exists, rpo_target_hours carries the cadence that schedule actually implies " +
+			"and is the number to judge against first"
+	}
 }
 
 // normalizeCoverageNulls enforces the per-field honesty rule for the three
@@ -238,7 +297,46 @@ func (s *Service) coverageOpenSearch(ctx context.Context) EngineCoverage {
 			row.Detail += " (the nightly probe worker is DISABLED via SNAPSHOT_PROBE_ENABLED)"
 		}
 	}
+	// The SECOND repository — the answer to target.immutable's "same failure
+	// domain as the data it protects". Optional by design (tracker 225a is a
+	// deployment decision, not a product default), so its ABSENCE is reported as
+	// a configuration fact with the fix named, never as a fault the page nags
+	// about and never as something this page could create.
+	row.Target.Detail += " " + s.secondaryRepoSentence(ctx)
 	return row
+}
+
+// secondaryRepoSentence describes the optional off-host `fs` repository. It
+// MEASURES registration rather than trusting the env var: a configured name
+// that OpenSearch has never been told about is precisely the gap between intent
+// and reality this whole surface exists to close.
+func (s *Service) secondaryRepoSentence(ctx context.Context) string {
+	name := strings.TrimSpace(s.deps.SecondaryRepository)
+	if name == "" {
+		return "No SECOND snapshot repository is configured: set OPENSEARCH_SNAPSHOT_REPO2 (a repository name) " +
+			"and OPENSEARCH_SNAPSHOT_REPO2_LOCATION (a path inside the opensearch container's path.repo, backed " +
+			"by a SEPARATELY MOUNTED device) and re-run the opensearch bootstrap. It is optional and not " +
+			"required for this deployment; without it every restore point shares one disk."
+	}
+	var body map[string]json.RawMessage
+	err := s.osDo(ctx, http.MethodGet, "/_snapshot/"+url.PathEscape(name), nil, &body, 8*time.Second)
+	switch {
+	case err == nil && len(body) > 0:
+		return "A SECOND snapshot repository " + strconv.Quote(name) + " IS registered — restore points can be " +
+			"written to a separately mounted path, off this disk. Registration is not a copy: a repository with " +
+			"no snapshot in it protects nothing, so read it together with the restore points listed on this page."
+	case err == nil:
+		return "A second snapshot repository " + strconv.Quote(name) + " is configured but OpenSearch returned no " +
+			"such repository — the bootstrap that registers it has not run since it was configured."
+	default:
+		var se *StatusError
+		if errors.As(err, &se) && se.Status == http.StatusNotFound {
+			return "A second snapshot repository " + strconv.Quote(name) + " is CONFIGURED but NOT REGISTERED " +
+				"(OpenSearch returned 404) — run the opensearch bootstrap. Until then it protects nothing."
+		}
+		return "A second snapshot repository " + strconv.Quote(name) + " is configured, but its registration could " +
+			"not be checked: " + err.Error() + ". Unverified is not registered."
+	}
 }
 
 // enabledWord carries its own article so the sentence it lands in reads.
@@ -251,7 +349,7 @@ func enabledWord(b bool) string {
 
 // ── the Correlix system bundle (scripts/backup.sh) ──────────────────────────
 
-func (s *Service) coverageSystemBundle(cfg Config, run *FullBackupRun) EngineCoverage {
+func (s *Service) coverageSystemBundle(cfg Config, run *FullBackupRun, drill *BackupDrillReport) EngineCoverage {
 	row := EngineCoverage{
 		ID:   "system_bundle",
 		Name: "Correlix system bundle (scripts/backup.sh: Postgres dump, ClickHouse export, api state, vault metadata)",
@@ -283,7 +381,77 @@ func (s *Service) coverageSystemBundle(cfg Config, run *FullBackupRun) EngineCov
 		row.RPOTargetDetail = "the bundle schedule is disabled, so no recovery-point target is in force"
 	}
 	s.applyBundleRun(&row, run)
+	// The off-host half, stated as three separate facts because they fail
+	// separately: is a destination configured, did the push happen, and were the
+	// bytes at the FAR END actually re-checksummed. Before this, "remote
+	// configured" was the whole story, and a destination that had never received
+	// a byte looked identical to one holding a verified copy.
+	row.Detail = strings.TrimSpace(row.Detail + " " + bundleRemoteSentence(cfg, run))
+	if excl := strings.TrimSpace(bundleExcludeSentence(run)); excl != "" {
+		row.Detail = strings.TrimSpace(row.Detail + " " + excl)
+	}
+	// The bundle's own restorability proof is the drill's OVERALL verdict: the
+	// artifact restores when every leg that ran against it came back.
+	s.applyBundleDrillVerdict(&row, drill)
 	return row
+}
+
+// bundleRemoteSentence is the honest off-host status line. "proven" is used for
+// exactly one state — a checksum re-verified at the destination — because that
+// is the only state in which the operator holds a copy they know is intact.
+func bundleRemoteSentence(cfg Config, run *FullBackupRun) string {
+	switch {
+	case run == nil || run.Remote == nil:
+		if strings.TrimSpace(cfg.RemoteURL) == "" {
+			return "No off-host destination is configured and no run has reported one: every copy shares the " +
+				"primary data's failure domain."
+		}
+		return "An off-host destination is configured, but no run has reported whether a copy ever reached it — " +
+			"a configured destination is an intention, not a transfer."
+	case !run.Remote.Configured:
+		return "The last run had NO off-host destination configured, so its artifact never left this host."
+	case !run.Pushed():
+		return "The last run had an off-host destination configured and the transfer did NOT succeed — " +
+			"the newest artifact is on this host only."
+	case strings.TrimSpace(run.Remote.VerifiedAt) == "":
+		return "The last run pushed the artifact off-host, but the destination copy was never re-checksummed " +
+			"(BACKUP_REMOTE_VERIFY was not enabled), so the transfer is reported as done, not as proven."
+	default:
+		return "External transfer PROVEN " + run.Remote.VerifiedAt +
+			" — the artifact, its signature and SHA256SUMS were pushed off-host and `sha256sum -c` passed at the destination."
+	}
+}
+
+// bundleExcludeSentence surfaces a NARROWED bundle. A bundle taken with
+// operator excludes is a smaller promise than a full one, and presenting the
+// two identically is the F-59 defect in miniature.
+func bundleExcludeSentence(run *FullBackupRun) string {
+	if run == nil || strings.TrimSpace(run.DataExcludes) == "" {
+		return ""
+	}
+	return "NARROWED BUNDLE: the last run excluded " + strconv.Quote(strings.TrimSpace(run.DataExcludes)) +
+		" from the data/ copy (BACKUP_EXCLUDE), so those paths are NOT in the artifact."
+}
+
+// applyBundleDrillVerdict folds the drill's overall verdict into the bundle row.
+func (s *Service) applyBundleDrillVerdict(row *EngineCoverage, drill *BackupDrillReport) {
+	if drill == nil {
+		row.LastVerified = nil
+		row.Detail = strings.TrimSpace(row.Detail + " No restorability proof exists for the bundle: " +
+			"scripts/backup-drill.sh is the mechanism that would produce one and nothing has run it on this host.")
+		return
+	}
+	result := DrillFail
+	if strings.EqualFold(strings.TrimSpace(drill.Result), DrillPass) {
+		result = DrillPass
+	}
+	row.LastVerified = &CoverageRun{
+		At:     drill.Ended,
+		Result: result,
+		Detail: "bundle restore drill " + drill.DrillID + " on " + drill.Bundle + ": " +
+			strconv.Itoa(drill.AssertionsPassed) + " assertions passed, " +
+			strconv.Itoa(drill.AssertionsFailed) + " failed",
+	}
 }
 
 // cronCadenceHours derives the interval a 5-field cron implies, for the small
@@ -431,11 +599,44 @@ func (s *Service) applyBundleRun(row *EngineCoverage, run *FullBackupRun) {
 			", " + strconv.Itoa(run.Failures) + " failures) — the newest artifact, if any, predates it"
 		row.RPODetail = "the last run failed, so there is no dateable good copy"
 	}
-	// The bundle has never been restore-tested by this product.
+	// LastVerified is filled by applyBundleDrillVerdict from the bundle drill's
+	// report — deliberately NOT here, so a run report can never be mistaken for
+	// a restore proof.
 	row.LastVerified = nil
-	if row.Detail == "" {
-		row.Detail = "no restorability proof exists for the bundle: scripts/restore-drill.sh is the only " +
-			"mechanism that would produce one and this page does not run it"
+}
+
+// componentSentence renders one store's own verdict inside the last bundle run.
+// The three states it must keep apart are exactly the three that were being
+// collapsed: this component passed, this component failed while the run
+// succeeded overall, and this report predates per-component reporting so the
+// component's fate is simply unknown.
+func componentSentence(engine, key string, run *FullBackupRun) (verdict string, sentence string) {
+	v, reported := run.componentVerdict(key)
+	if !reported {
+		return "", " The last bundle report carries no per-component verdicts (it predates them), so whether the " +
+			engine + " copy inside it succeeded is UNKNOWN — the run's overall status is not a substitute."
+	}
+	switch v {
+	case "pass":
+		return v, " The " + engine + " component of that run PASSED, so a copy of that vintage is inside the artifact."
+	case "partial":
+		// PARTIAL exists for exactly one situation and it must never round up:
+		// the ClickHouse export skips tables over BACKUP_CH_MAX_TABLE_MB, so
+		// the artifact holds their schema and none of their rows. A store whose
+		// largest tables are schema-only is not a covered store.
+		return v, " The " + engine + " component of that run was PARTIAL: some tables exceeded the per-table " +
+			"size ceiling (BACKUP_CH_MAX_TABLE_MB) and are in the artifact as SCHEMA ONLY. Their rows are " +
+			"recoverable only from the cold Parquet tier (scripts/ch-cold-export.sh), which is a different " +
+			"mechanism with its own retention — read the MANIFEST inside the artifact for the table names."
+	case "skip":
+		return v, " The " + engine + " component of that run was SKIPPED (the service was not running, or it was " +
+			"deliberately disabled), so the artifact carries NO " + engine + " copy from it."
+	case "fail":
+		return v, " The " + engine + " component of that run FAILED, so the artifact carries no usable " + engine +
+			" copy from it — the newest good one, if any, is older."
+	default:
+		return v, " The last bundle run reported an unrecognised verdict for the " + engine +
+			" component, which is not evidence of a copy."
 	}
 }
 
@@ -464,7 +665,7 @@ func (s *Service) readBackupReport() *FullBackupRun {
 
 // ── Postgres ────────────────────────────────────────────────────────────────
 
-func (s *Service) coveragePostgres(cfg Config, run *FullBackupRun) EngineCoverage {
+func (s *Service) coveragePostgres(cfg Config, run *FullBackupRun, drill *BackupDrillReport) EngineCoverage {
 	row := EngineCoverage{
 		ID:      "postgres",
 		Name:    "PostgreSQL (control plane: tenants, users, policies, incidents, config-version metadata)",
@@ -497,27 +698,50 @@ func (s *Service) coveragePostgres(cfg Config, run *FullBackupRun) EngineCoverag
 		return row
 	}
 	result := strings.ToLower(strings.TrimSpace(run.Status))
-	row.LastAttempt = &CoverageRun{At: run.Ended, Result: result, Detail: "reported by the system bundle, not by an independent job"}
-	if result == "success" || result == "ok" {
+	comp, sentence := componentSentence("Postgres", "postgres", run)
+	row.LastAttempt = &CoverageRun{At: run.Ended, Result: componentRunResult(result, comp), Detail: "reported by the system bundle, not by an independent job"}
+	row.CoveredReason += " The bundle last reported " + result + " at " + run.Ended + "." + sentence
+	// The RPO is the age of the newest bundle whose POSTGRES component passed —
+	// not the newest bundle. A run that succeeded overall with a failed dump has
+	// no Postgres recovery point at all, and reporting the run's age there would
+	// hand an operator a number for a copy that does not exist.
+	if comp == "pass" {
 		row.LastSuccessAt = run.Ended
-		row.CoveredReason += " The bundle last reported success at " + run.Ended +
-			", so a dump of that vintage exists inside that artifact."
 		if at, err := time.Parse(time.RFC3339, run.Ended); err == nil {
 			hours := s.now().Sub(at).Hours()
 			row.RPOHours = &hours
-			row.RPODetail = "age of the bundle that contains the newest dump"
+			row.RPODetail = "age of the bundle whose Postgres component passed"
+		} else {
+			row.RPODetail = "the report's end time (" + run.Ended + ") is not RFC3339, so its age cannot be computed"
 		}
 	} else {
-		row.CoveredReason += " The bundle's last run reported " + run.Status + ", so the newest dump is older than that run."
+		row.RPODetail = "the last bundle run produced no verified Postgres dump, so there is no dateable good copy"
 	}
-	row.LastVerified = nil
-	row.Detail = "no restorability proof: nothing in this product has restored a pg_dumpall from a bundle and compared it to the live database"
+	s.applyDrillVerdict(&row, drill, DrillLegPostgres)
 	return row
+}
+
+// componentRunResult reconciles the run's overall word with the component's own.
+// A component that failed inside a successful run must not be rendered with the
+// run's "success": the row is about the store, not the job.
+func componentRunResult(runResult, component string) string {
+	switch component {
+	case "pass":
+		return "success"
+	case "partial":
+		return "partial"
+	case "fail":
+		return "failed"
+	case "skip":
+		return "skipped"
+	default:
+		return runResult
+	}
 }
 
 // ── ClickHouse ──────────────────────────────────────────────────────────────
 
-func (s *Service) coverageClickHouse(cfg Config, run *FullBackupRun) EngineCoverage {
+func (s *Service) coverageClickHouse(cfg Config, run *FullBackupRun, drill *BackupDrillReport) EngineCoverage {
 	row := EngineCoverage{
 		ID:      "clickhouse",
 		Name:    "ClickHouse (OLAP tier: flows, path graph, correlation facts)",
@@ -553,97 +777,189 @@ func (s *Service) coverageClickHouse(cfg Config, run *FullBackupRun) EngineCover
 		return row
 	}
 	result := strings.ToLower(strings.TrimSpace(run.Status))
-	row.LastAttempt = &CoverageRun{At: run.Ended, Result: result, Detail: "reported by the system bundle, not by an independent job"}
-	if result == "success" || result == "ok" {
+	comp, sentence := componentSentence("ClickHouse", "clickhouse", run)
+	row.LastAttempt = &CoverageRun{At: run.Ended, Result: componentRunResult(result, comp), Detail: "reported by the system bundle, not by an independent job"}
+	row.CoveredReason += " The bundle last reported " + result + " at " + run.Ended + "." + sentence
+	if comp == "pass" {
 		row.LastSuccessAt = run.Ended
-		row.CoveredReason += " The bundle last reported success at " + run.Ended + "."
 		if at, err := time.Parse(time.RFC3339, run.Ended); err == nil {
 			hours := s.now().Sub(at).Hours()
 			row.RPOHours = &hours
-			row.RPODetail = "age of the bundle that contains the newest export"
+			row.RPODetail = "age of the bundle whose ClickHouse component passed"
+		} else {
+			row.RPODetail = "the report's end time (" + run.Ended + ") is not RFC3339, so its age cannot be computed"
 		}
 	} else {
-		row.CoveredReason += " The bundle's last run reported " + run.Status + "."
+		row.RPODetail = "the last bundle run produced no verified ClickHouse export, so there is no dateable good copy"
 	}
-	row.LastVerified = nil
+	s.applyDrillVerdict(&row, drill, DrillLegClickHouse)
 	return row
 }
 
 // ── VictoriaMetrics ─────────────────────────────────────────────────────────
 
-func coverageVictoriaMetrics() EngineCoverage {
-	no := false
-	return EngineCoverage{
-		ID:      "victoriametrics",
-		Name:    "VictoriaMetrics (time-series tier: every metric, including the ones this page's alerts fire on)",
-		Covered: CoverageNo,
-		CoveredReason: "no VictoriaMetrics snapshot caller exists in this platform; the only protection is in-place " +
-			"retention (-retentionPeriod). A lost data/victoria is unrecoverable.",
-		Schedule:          nil,
-		ScheduleDetail:    "no VictoriaMetrics snapshot mechanism exists in this platform, so there is no schedule to show",
-		LastAttempt:       nil,
-		LastAttemptDetail: "nothing has ever attempted a VictoriaMetrics snapshot, so there is no attempt to report",
-		LastVerified:      nil,
-		SizeBytes:         nil,
-		SizeDetail:        "not measured — no copy exists to size",
+func (s *Service) coverageVictoriaMetrics(cfg Config, run *FullBackupRun, drill *BackupDrillReport) EngineCoverage {
+	row := EngineCoverage{
+		ID:   "victoriametrics",
+		Name: "VictoriaMetrics (time-series tier: every metric, including the ones this page's alerts fire on)",
+		Schedule: &CoverageSchedule{
+			Enabled:       cfg.ScheduleEnabled,
+			Cron:          cfg.ScheduleCron,
+			Timezone:      "host local time",
+			GovernedByGUI: true,
+			Detail: "inherited from the system bundle's schedule — the bundle calls VictoriaMetrics' own " +
+				"/snapshot/create, copies the resulting snapshot directory and then /snapshot/delete's it, " +
+				"so there is nothing separate to enable",
+		},
+		Target: bundleTarget(cfg),
 		Retention: &CoverageRetention{
-			Detail: "in-place retention only (-retentionPeriod on the vmsingle container). Retention is not backup: " +
-				"it bounds how long data survives, not whether it survives losing the disk.",
+			Detail: "no independent retention: the snapshot lives and dies with the bundle artifact, whose " +
+				"retention is the host applier's. In-place -retentionPeriod on the vmsingle container is NOT " +
+				"backup — it bounds how long data survives, not whether it survives losing the disk",
 		},
-		Target: CoverageTarget{
-			Kind:            TargetNone,
-			Immutable:       &no,
-			ImmutableDetail: "there is no copy to protect",
-			Encrypted:       &no,
-			EncryptedDetail: "there is no copy to encrypt",
-			Detail:          "VictoriaMetrics exposes /snapshot/create; nothing in this platform calls it",
-		},
-		RPOHours:        nil,
-		RPODetail:       "there is no copy, so there is no recovery point at all",
-		RPOTargetHours:  nil,
-		RPOTargetDetail: "no schedule exists, so no recovery-point target is defined",
-		Detail: "schedule is null because no mechanism exists to schedule — showing a disabled toggle would " +
-			"imply one could be turned on here, and nothing on this page can create a VictoriaMetrics snapshot; " +
-			"last_attempt and last_verified are null for the same reason",
+		RPOTargetDetail: "no VictoriaMetrics-specific schedule exists, so no VictoriaMetrics-specific target is " +
+			"defined — the only cadence that applies is the system bundle's, on its own row",
+		// Set BEFORE the branches below so it survives every path: an operator
+		// asking "why is there no VictoriaMetrics copy" needs the mechanism
+		// explained whether or not a run has ever been reported.
+		Detail: "an rsync of the live /victoria tree is a TORN copy for the same reason a live Lucene copy is; " +
+			"the bundle therefore takes VictoriaMetrics' own point-in-time snapshot and excludes the live tree " +
+			"from the data/ copy whenever that snapshot succeeded.",
 	}
+	if run == nil {
+		row.Covered = CoverageNo
+		row.CoveredReason = "the system bundle takes a consistent VictoriaMetrics snapshot, but no backup report " +
+			"exists at " + s.deps.BackupReportPath + " on this host, so no snapshot has ever been reported. " +
+			"An unreported backup is indistinguishable from no backup."
+		row.LastAttemptDetail = "no backup report exists at " + s.deps.BackupReportPath +
+			"; this row has no independent job of its own to report on"
+		row.SizeDetail = "not measured — no reported copy to size"
+		row.RPODetail = "no reported snapshot to date, so there is no recovery point"
+		s.applyDrillVerdict(&row, drill, DrillLegVictoriaMetrics)
+		return row
+	}
+	result := strings.ToLower(strings.TrimSpace(run.Status))
+	comp, sentence := componentSentence("VictoriaMetrics", "victoriametrics", run)
+	row.LastAttempt = &CoverageRun{At: run.Ended, Result: componentRunResult(result, comp), Detail: "reported by the system bundle, not by an independent job"}
+	row.SizeDetail = "not measured — the snapshot's size is not reported separately from the bundle artifact"
+	switch comp {
+	case "pass":
+		row.Covered = CoverageYes
+		row.LastSuccessAt = run.Ended
+		row.CoveredReason = "the system bundle took a consistent VictoriaMetrics snapshot (/snapshot/create, " +
+			"copied out, then deleted) and reported it at " + run.Ended + "." + sentence
+		if at, err := time.Parse(time.RFC3339, run.Ended); err == nil {
+			hours := s.now().Sub(at).Hours()
+			row.RPOHours = &hours
+			row.RPODetail = "age of the bundle whose VictoriaMetrics component passed"
+		} else {
+			row.RPODetail = "the report's end time (" + run.Ended + ") is not RFC3339, so its age cannot be computed"
+		}
+	default:
+		row.Covered = CoverageNo
+		row.CoveredReason = "the system bundle is the only mechanism that snapshots VictoriaMetrics on this " +
+			"platform, and the last run did not produce one." + sentence
+		row.RPODetail = "the last bundle run produced no verified VictoriaMetrics snapshot, so there is no dateable good copy"
+	}
+	s.applyDrillVerdict(&row, drill, DrillLegVictoriaMetrics)
+	return row
 }
 
 // ── sealed secrets / TLS material ───────────────────────────────────────────
 
-func coverageSecretsTLS() EngineCoverage {
-	no := false
-	return EngineCoverage{
-		ID:      "secrets_tls",
-		Name:    "Sealed key material (data/swtpm, data/tls, wrapped secret keys)",
-		Covered: CoverageNo,
-		CoveredReason: "sealed key material (data/swtpm, data/tls, wrapped secret keys) is in no scheduled copy; " +
-			"losing it makes vault contents unrecoverable even from a good data backup.",
-		Schedule:          nil,
-		ScheduleDetail:    "no mechanism copies this material, so there is no schedule to show — a disabled toggle here would imply one could be turned on",
-		LastAttempt:       nil,
-		LastAttemptDetail: "nothing has ever attempted a copy of this material, so there is no attempt to report",
-		LastVerified:      nil,
-		SizeBytes:         nil,
-		SizeDetail:        "not measured — no copy exists to size",
+// coverageSecretsTLS is the row that turns a survivable data loss into an
+// unsurvivable one: a restored data backup whose KEK is gone decrypts nothing.
+//
+// It reported covered="no" unconditionally until 2026-09-04, and that was the
+// truth — nothing copied the material at all. scripts/backup.sh now ships it as
+// a SEPARATELY ENCRYPTED member (openssl enc -aes-256-cbc -pbkdf2 under
+// BACKUP_SEALED_PASSPHRASE), fail-closed: no passphrase means the component
+// FAILS rather than degrading to plaintext or silently omitting it. This row
+// reports which of those three things actually happened on the last run, and
+// never averages them into a comforting middle.
+func (s *Service) coverageSecretsTLS(cfg Config, run *FullBackupRun, drill *BackupDrillReport) EngineCoverage {
+	yes := true
+	row := EngineCoverage{
+		ID:   "secrets_tls",
+		Name: "Sealed key material (data/swtpm, data/tls, wrapped secret keys)",
+		Schedule: &CoverageSchedule{
+			Enabled:       cfg.ScheduleEnabled,
+			Cron:          cfg.ScheduleCron,
+			Timezone:      "host local time",
+			GovernedByGUI: true,
+			Detail: "inherited from the system bundle's schedule. The ENVELOPE itself is change-driven, not " +
+				"time-driven: the bundle re-encrypts it only when the material's sha256 manifest moves, and " +
+				"otherwise re-uses the existing one, so every artifact stays self-contained without " +
+				"re-encrypting a static custody root nightly",
+		},
 		Retention: &CoverageRetention{
-			Detail: "no copies are made, so there is nothing to retain",
+			Detail: "no independent retention: the encrypted envelope lives and dies with the bundle artifact",
 		},
-		Target: CoverageTarget{
-			Kind:            TargetNone,
-			Immutable:       &no,
-			ImmutableDetail: "there is no copy to protect",
-			Encrypted:       &no,
-			EncryptedDetail: "there is no copy to encrypt; the material is sealed AT REST but never copied anywhere",
-			Detail:          "custody material deliberately never leaves the host automatically — copying it is an owner decision, not a default",
-		},
-		RPOHours:        nil,
-		RPODetail:       "there is no copy, so there is no recovery point at all",
-		RPOTargetHours:  nil,
-		RPOTargetDetail: "no schedule exists, so no recovery-point target is defined",
-		Detail: "this is the row that turns a survivable data loss into an unsurvivable one: a restored data " +
-			"backup whose KEK is gone decrypts nothing. schedule, last_attempt and last_verified are null " +
-			"because no mechanism copies this material at all — there is nothing to schedule, attempt or verify",
+		SizeDetail: "not measured — the envelope's size is not reported separately from the bundle artifact",
+		RPOTargetDetail: "no custody-specific schedule exists, so no schedule-derived target is defined — the " +
+			"declared objective beside it (0h) is the number this row is judged against",
 	}
+	// The target is the bundle's destination, but the ENCRYPTION answer is this
+	// row's own and is a measured yes: the member is encrypted before it is
+	// written, independently of whatever the destination does.
+	row.Target = bundleTarget(cfg)
+	row.Target.Encrypted = &yes
+	row.Target.EncryptedDetail = "the custody envelope is encrypted with openssl enc -aes-256-cbc -pbkdf2 under " +
+		"BACKUP_SEALED_PASSPHRASE BEFORE it is written into the bundle, so it is ciphertext at rest and in " +
+		"transit regardless of what the destination provides. The passphrase is never inside the archive"
+
+	if run == nil {
+		row.Covered = CoverageNo
+		row.CoveredReason = "the system bundle now ships the sealed custody material as a separately encrypted " +
+			"member, but no backup report exists at " + s.deps.BackupReportPath + " on this host, so no copy " +
+			"has ever been reported. Losing data/swtpm makes vault contents unrecoverable even from a good data backup."
+		row.LastAttemptDetail = "no backup report exists at " + s.deps.BackupReportPath +
+			"; this row has no independent job of its own to report on"
+		row.RPODetail = "no reported copy to date, so there is no recovery point"
+		s.applyDrillVerdict(&row, drill, DrillLegSealedMaterial)
+		return row
+	}
+	result := strings.ToLower(strings.TrimSpace(run.Status))
+	comp, sentence := componentSentence("sealed custody material", "sealed_material", run)
+	row.LastAttempt = &CoverageRun{At: run.Ended, Result: componentRunResult(result, comp), Detail: "reported by the system bundle, not by an independent job"}
+	switch comp {
+	case "pass":
+		row.Covered = CoverageYes
+		row.LastSuccessAt = run.Ended
+		row.CoveredReason = "the last bundle run captured the sealed custody material (data/swtpm, data/tls, " +
+			"wrapped secret keys) as a separately encrypted member at " + run.Ended + "." + sentence
+		// CHANGE-driven, so the achieved recovery point is 0 while the material
+		// stands as captured. Stated with its caveat rather than as a bare zero.
+		zero := 0.0
+		row.RPOHours = &zero
+		row.RPODetail = "0h: the envelope is re-encrypted whenever the material's checksum manifest changes, so a " +
+			"successful capture means the newest bundle holds the material AS IT STANDS. This figure stops being " +
+			"0 the moment the custody root is rotated without a bundle run — which is exactly what the 0h " +
+			"objective is there to make visible"
+	case "fail":
+		row.Covered = CoverageNo
+		row.CoveredReason = "the last bundle run FAILED to capture the sealed custody material." + sentence +
+			" The usual cause is a fail-closed refusal: BACKUP_SEALED_PASSPHRASE is unset, and the bundle will " +
+			"never write custody material in the clear. Set it, or opt out deliberately with " +
+			"BACKUP_SEALED_MATERIAL=0 and accept that losing data/swtpm is unrecoverable."
+		row.RPODetail = "the last bundle run produced no custody envelope, so there is no dateable good copy"
+	case "skip":
+		row.Covered = CoverageNo
+		row.CoveredReason = "the sealed custody material was deliberately EXCLUDED from the last bundle run." +
+			sentence + " A restore of that artifact onto a host without data/swtpm decrypts nothing: every " +
+			"vault secret stays unrecoverable."
+		row.RPODetail = "the material is deliberately not copied, so there is no recovery point"
+	default:
+		row.Covered = CoverageUnknown
+		row.CoveredReason = "whether the last bundle run captured the sealed custody material cannot be " +
+			"determined." + sentence
+		row.RPODetail = "the last run's custody component is unknown, so no recovery point can be reported"
+	}
+	row.Detail = "data/swtpm deterministically re-derives the root KEK, so a copy of it IS the KEK. It therefore " +
+		"rides in its own encryption envelope rather than in the plaintext data/ copy: the bundle plus the .env " +
+		"inside it still cannot unseal the vault without a passphrase held outside the backup host."
+	s.applyDrillVerdict(&row, drill, DrillLegSealedMaterial)
+	return row
 }
 
 // ── device configuration versions (the in-product config-backup module) ─────

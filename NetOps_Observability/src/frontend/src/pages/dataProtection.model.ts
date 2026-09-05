@@ -393,29 +393,46 @@ export type RpoVerdict =
   | { state: "unmeasured"; reason: string };
 
 /**
- * Achieved against target.
+ * Achieved against the objective it is held to.
  *
- * The server publishes the ACHIEVED age (`rpo_hours`) but no objective yet, so
- * the common answer today is `achieved_only`: the measured age is shown, and
- * the missing half is named rather than assumed. Assuming a default objective
- * and then reporting it as met would be the exact dishonesty this page exists
- * to remove.
+ * TWO numbers can play that role and they are NOT the same claim:
+ *   - `rpo_target_hours` is MEASURED from the engine's own schedule ("the cron
+ *     runs daily, so 24h"). It is null wherever no schedule is in force.
+ *   - `rpo_objective_hours` is DECLARED policy ("24h is acceptable for a data
+ *     store; 0 for the custody material"). It exists for every engine.
+ *
+ * The schedule-derived target wins when it exists, because evidence beats
+ * intent; the declared objective is the fallback. Either way the rendered text
+ * NAMES which one it judged against — conflating them would tell an operator
+ * their backups comply with a number the platform invented for itself, which is
+ * the exact dishonesty this page exists to remove. With neither available the
+ * answer stays `achieved_only`: show the measured age, name the missing half.
  */
 export function rpoVerdict(e: EngineCoverage): RpoVerdict {
   const achieved = measured(e.rpo_hours, e.rpo_detail);
   if (!achieved.measured) return { state: "unmeasured", reason: achieved.reason };
-  const target = measured(e.rpo_target_hours, "no recovery-point objective is published for this engine");
-  if (!target.measured) {
+  const scheduled = measured(e.rpo_target_hours, "no schedule-derived recovery-point target is published for this engine");
+  const declared = measured(
+    e.rpo_objective_hours,
+    e.rpo_objective_detail || "no recovery-point objective is declared for this engine",
+  );
+  if (!scheduled.measured && !declared.measured) {
+    // Neither number exists. Name the missing DECLARED objective: an engine
+    // with no schedule is the common case, and "nobody decided what good looks
+    // like here" is the more actionable half of the answer.
     return {
       state: "achieved_only",
       text: `last good copy ${fmtHours(achieved.value)} old`,
-      reason: target.reason,
+      reason: declared.reason,
     };
   }
-  const met = achieved.value <= target.value;
+  const objective = scheduled.measured
+    ? { value: scheduled.value, label: "scheduled" }
+    : { value: (declared as { measured: true; value: number }).value, label: "declared" };
+  const met = achieved.value <= objective.value;
   return {
     state: met ? "met" : "missed",
-    text: `${fmtHours(achieved.value)} against a ${fmtHours(target.value)} objective`,
+    text: `${fmtHours(achieved.value)} against a ${fmtHours(objective.value)} ${objective.label} objective`,
   };
 }
 

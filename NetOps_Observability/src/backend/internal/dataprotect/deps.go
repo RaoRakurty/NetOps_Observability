@@ -216,6 +216,20 @@ type Deps struct {
 	BackupReportPath string
 	// RestoreDrillReportPath is the restore-drill report (RESTORE_DRILL_REPORT).
 	RestoreDrillReportPath string
+	// BackupDrillReportPath is the BUNDLE restore drill's report
+	// (BACKUP_DRILL_REPORT, written by scripts/backup-drill.sh). It is a
+	// different artefact from RestoreDrillReportPath: restore-drill.sh proves
+	// the LIVE stores' dump/restore mechanism with a canary, while
+	// backup-drill.sh proves an actual BUNDLE ARTIFACT restores — which is the
+	// thing an operator holds after losing the host. Both are read; neither is
+	// inferred from the other.
+	BackupDrillReportPath string
+	// SecondaryRepository is an OPTIONAL second `fs` snapshot repository on a
+	// separately-mounted path (OPENSEARCH_SNAPSHOT_REPO2). Empty = not
+	// configured, which is the shipped default and is reported as such rather
+	// than as a fault: an off-host repository is a deployment decision, and a
+	// page that nags for one it cannot create is noise.
+	SecondaryRepository string
 	// ProbeEnabled is the restorability probe's kill switch
 	// (SNAPSHOT_PROBE_ENABLED). Default ON in the integrator: a platform that
 	// silently stops proving its backups is the failure this closes.

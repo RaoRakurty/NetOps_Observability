@@ -883,3 +883,84 @@ groups:
             repository's blob tree had been deleted and every restore would
             have failed. Backups are unproven until this is switched back on.
           runbook: "docs/runbooks/storage-and-volume-operations.md#managing-snapshots"
+
+      # ==================================================================
+      # BUNDLE RESTORE DRILL  (S4, 2026-09-04)
+      #
+      # The snapshot rules above prove the SEARCH TIER's repository. They say
+      # nothing about the thing an operator actually holds after losing this
+      # host: one correlix-YYYYMMDD.tar.zst, carrying the Postgres dump, the
+      # ClickHouse export, the VictoriaMetrics snapshot and the sealed custody
+      # envelope. scripts/backup-drill.sh restores that artifact into disposable
+      # containers, compares row counts against the live stores, queries a
+      # series back out of the imported VM snapshot and verifies the decrypted
+      # custody tree against its own sha256 manifest. The api publishes the
+      # verdict:
+      #   netops_backup_drill_pass                          0|1
+      #   netops_backup_drill_last_timestamp_seconds        unix secs, 0 = never
+      #   netops_backup_drill_leg{leg}                      1 pass | 0 fail | -1 not run
+      #
+      # WHAT IS DELIBERATELY *NOT* AN ALERT HERE: "a drill has never run"
+      # (timestamp 0). The OpenSearch probe alerts on never-probed because that
+      # probe is automatic and on by default, so silence there is a fault. The
+      # bundle drill is operator-initiated by design, so a never-run rule would
+      # fire on every fresh deployment and stand lit until somebody ran one —
+      # and a rule that is always on is how the real ones get ignored. The
+      # coverage table reports never-run honestly (last_verified is null with
+      # the reason), which is the right surface for a standing configuration
+      # fact. Raise it with the owner rather than promoting it in a diff.
+      #
+      # TIER: warning, for the same reason the snapshot rules are. The owner
+      # approved exactly FOUR page conditions (2026-09-02) and an unproven
+      # backup is not one of them.
+      # ==================================================================
+
+      - alert: BackupRestoreDrillFailed
+        # The drill RAN and something did not come back. This is strictly worse
+        # news than a missing snapshot: it is a measured statement that the
+        # artifact on disk does not restore.
+        expr: |
+          netops_backup_drill_pass == 0
+          and netops_backup_drill_last_timestamp_seconds > 0
+        for: 15m
+        labels: { severity: warning, layer: storage, tier: warning }
+        annotations:
+          summary: "The last bundle restore drill FAILED — the backup artifact does not restore"
+          description: >-
+            scripts/backup-drill.sh restored the newest bundle into disposable
+            containers and at least one leg did not come back. Read
+            netops_backup_drill_leg{leg} to see which store: postgres,
+            clickhouse, victoriametrics or sealed_material. A failing
+            sealed_material leg is the most severe of the four — it means the
+            custody envelope will not decrypt or does not match its manifest, so
+            a restore of this artifact would bring back every byte of data and
+            unseal none of it. Taking another backup does not fix any of these;
+            the drill's own report (data/api/backup-drill.report.json) names the
+            assertion that failed.
+          runbook: "docs/runbooks/storage-and-volume-operations.md#bundle-restore-drill"
+
+      - alert: BackupRestoreDrillMissed
+        # 7 days. The drill is operator-initiated and costs a few minutes of
+        # scratch containers, so a week without one is a deliberate-feeling gap
+        # rather than a blip — and the `> 0` guard keeps a never-drilled
+        # deployment out of this rule entirely (see the block comment above).
+        # `on()` with no labels: `time() - metric` drops __name__ while
+        # `metric > 0` keeps it, so a bare `and` would never match.
+        expr: |
+          (time() - netops_backup_drill_last_timestamp_seconds) > 604800
+          and on() (netops_backup_drill_last_timestamp_seconds > 0)
+        for: 30m
+        labels: { severity: warning, layer: storage, tier: warning }
+        annotations:
+          summary: "No bundle restore drill has run in over 7 days — the restore proof is stale, not current"
+          description: >-
+            A restore proof is only worth its age. The last drill passed, so the
+            Data Protection page is still showing a green last_verified on the
+            Postgres, ClickHouse, VictoriaMetrics and sealed-custody rows — off a
+            proof that is now more than a week old. Everything the proof covered
+            can have changed since: the bundle's contents, the passphrase the
+            custody envelope was sealed under, the engine versions the dumps
+            replay into. Run scripts/backup-drill.sh against the newest artifact
+            to refresh it. Until then treat the artifact as UNVERIFIED rather
+            than good — that distinction is the whole lesson of 2026-08-26.
+          runbook: "docs/runbooks/storage-and-volume-operations.md#bundle-restore-drill"

@@ -316,6 +316,23 @@ type EngineCoverage struct {
 	RPOHours  *float64 `json:"rpo_hours"`
 	RPODetail string   `json:"rpo_detail"`
 
+	// RPOObjectiveHours is the platform's DECLARED recovery-point objective for
+	// this engine — a policy statement, deliberately kept in its own field so it
+	// can never be mistaken for RPOTargetHours below, which is measured from a
+	// real schedule. The distinction is load-bearing: "the cron implies 24h" is
+	// evidence, "we have decided 24h is acceptable" is intent, and a page that
+	// conflates them tells an operator their backups comply with a number the
+	// platform invented for itself. Both are published; the GUI judges against
+	// the schedule-derived target when one exists and falls back to the
+	// objective, naming which it used.
+	//
+	// The objectives (S4, 2026-09-04): 24h for every data store, and 0 for the
+	// sealed custody material — the custody envelope is CHANGE-driven, not
+	// time-driven, so any window in which the current material is not in a copy
+	// is unacceptable rather than merely late.
+	RPOObjectiveHours  *float64 `json:"rpo_objective_hours"`
+	RPOObjectiveDetail string   `json:"rpo_objective_detail"`
+
 	// RPOTargetHours is the recovery point the configured SCHEDULE implies —
 	// the number RPOHours is judged against. It is DERIVED from a real
 	// schedule (the SM creation cron, the bundle cron, the config-backup

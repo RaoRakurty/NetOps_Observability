@@ -222,7 +222,18 @@ describe("protection health header", () => {
       coverage: coverage({ engines: [engine({ rpo_hours: 48, rpo_target_hours: 24 })] }),
     });
     render(<DataProtection />);
-    expect(await screen.findByText("Objective missed · 2d 00h against a 1d 00h objective")).toBeTruthy();
+    // "scheduled" is load-bearing (S4): the header must say WHICH objective it
+    // judged against, because a schedule-derived cadence is evidence and a
+    // declared policy is intent.
+    expect(await screen.findByText("Objective missed · 2d 00h against a 1d 00h scheduled objective")).toBeTruthy();
+  });
+
+  it("labels a DECLARED objective as declared when no schedule is in force", async () => {
+    setup({
+      coverage: coverage({ engines: [engine({ rpo_hours: 48, rpo_objective_hours: 24 })] }),
+    });
+    render(<DataProtection />);
+    expect(await screen.findByText("Objective missed · 2d 00h against a 1d 00h declared objective")).toBeTruthy();
   });
 });
 

@@ -1,0 +1,94 @@
+# docker-compose.snapshot-repo2.yml — OPTIONAL overlay: a SECOND OpenSearch
+# snapshot repository on a separately-mounted path (S4, 2026-09-04; tracker 225a).
+#
+# ---------------------------------------------------------------------------
+# THE PROBLEM THIS SOLVES
+#
+# `netops-fs` is a filesystem repository living at data/opensearch-snapshots —
+# on the SAME disk as data/. docs/audit/BACKUP-FAILURE-DOMAIN.md names that as a
+# failure domain, and 2026-08-27 is that domain firing: one `rm -rf` in the
+# wrong directory during a disk crunch took the repository's blob tree with it
+# and every restore point in the search tier became unrestorable for seven days.
+# One filesystem failure, one full disk or one mistaken command loses the data
+# and its backup together.
+#
+# A second `fs` repository on a DIFFERENT mount — an NFS export, a second block
+# device, an object-store gateway mounted on the host — gives the search tier
+# restore points that survive losing this filesystem.
+#
+# ---------------------------------------------------------------------------
+# WHY IT IS AN OVERLAY AND NOT A DEFAULT
+#
+# Where the second mount lives is a deployment decision the product cannot make,
+# and there is no such thing as a "default off-host path": a bind mount whose
+# source does not exist makes docker create an empty directory ON THE PRIMARY
+# DISK, which is the exact opposite of what this file is for — a second
+# repository that silently shares the first one's failure domain is worse than
+# none, because the page would then report DR the platform does not have. Making
+# it opt-in means the mount is always one the operator chose.
+#
+# ---------------------------------------------------------------------------
+# HOW TO USE IT
+#
+#   1. Mount the off-host storage on the HOST, e.g. /mnt/dr (NFS, iSCSI, a
+#      second disk). Confirm it is a different device:
+#          df -h /mnt/dr  vs  df -h ./data
+#      Same filesystem = this buys you nothing. Stop and fix the mount first.
+#
+#   2. Make it writable by the opensearch container's uid (1000):
+#          sudo install -d -o 1000 -g 1000 -m 0750 /mnt/dr/correlix-snapshots
+#
+#   3. Set these in deployment/docker/.env (or the environment):
+#          OPENSEARCH_SNAPSHOT_REPO2=netops-fs-offhost
+#          OPENSEARCH_SNAPSHOT_REPO2_HOSTPATH=/mnt/dr/correlix-snapshots
+#          OPENSEARCH_SNAPSHOT_REPO2_LOCATION=/usr/share/opensearch/snapshots-offhost
+#      REPO2_LOCATION is the path INSIDE the container and must not equal
+#      /usr/share/opensearch/snapshots — apply-ism.sh refuses that, because two
+#      repository names over one blob tree is the documented OpenSearch
+#      corruption hazard, not redundancy.
+#
+#   4. Bring the stack up WITH this overlay, then re-run the bootstrap:
+#          docker compose -f docker-compose.yml -f docker-compose.snapshot-repo2.yml up -d
+#          docker compose -f docker-compose.yml -f docker-compose.snapshot-repo2.yml \
+#              run --rm opensearch-init
+#      Every later compose command needs BOTH -f flags: dropping the overlay
+#      drops the mount, and OpenSearch then refuses the repository rather than
+#      writing to a path it no longer has.
+#
+#   5. Tell the api so the Data Protection page can report it. It MEASURES
+#      registration rather than trusting the variable, so a name that was never
+#      registered reads as "configured but NOT registered", not as protection:
+#          OPENSEARCH_SNAPSHOT_REPO2=netops-fs-offhost   (on the api service)
+#
+# REGISTRATION IS NOT A COPY. Nothing writes to this repository automatically.
+# Take snapshots into it explicitly, or give it a Snapshot Management policy of
+# its own — an empty second repository protects exactly nothing, and the page
+# says so.
+#
+# Runbook: docs/runbooks/storage-and-volume-operations.md#a-second-off-host-snapshot-repository
+# ---------------------------------------------------------------------------
+
+services:
+  opensearch:
+    environment:
+      # path.repo accepts a comma-separated list. BOTH paths must be listed or
+      # OpenSearch refuses the registration with a "not in path.repo" error.
+      path.repo: "/usr/share/opensearch/snapshots,${OPENSEARCH_SNAPSHOT_REPO2_LOCATION:?set OPENSEARCH_SNAPSHOT_REPO2_LOCATION when using this overlay}"
+    volumes:
+      # The `:?` above and the required host path here are deliberate: an unset
+      # variable must fail the compose command loudly rather than silently mount
+      # an empty directory on the primary disk.
+      - ${OPENSEARCH_SNAPSHOT_REPO2_HOSTPATH:?set OPENSEARCH_SNAPSHOT_REPO2_HOSTPATH to the off-host mount}:${OPENSEARCH_SNAPSHOT_REPO2_LOCATION:?set OPENSEARCH_SNAPSHOT_REPO2_LOCATION when using this overlay}
+
+  opensearch-init:
+    environment:
+      # apply-ism.sh registers the second repository only when BOTH are set, and
+      # refuses when the location equals the primary's.
+      OPENSEARCH_SNAPSHOT_REPO2: ${OPENSEARCH_SNAPSHOT_REPO2:?set OPENSEARCH_SNAPSHOT_REPO2 to the second repository name}
+      OPENSEARCH_SNAPSHOT_REPO2_LOCATION: ${OPENSEARCH_SNAPSHOT_REPO2_LOCATION:?set OPENSEARCH_SNAPSHOT_REPO2_LOCATION when using this overlay}
+
+  api:
+    environment:
+      # Read by internal/dataprotect (Deps.SecondaryRepository). The coverage
+      # row queries OpenSearch for this name rather than trusting the variable.
+      OPENSEARCH_SNAPSHOT_REPO2: ${OPENSEARCH_SNAPSHOT_REPO2:?set OPENSEARCH_SNAPSHOT_REPO2 to the second repository name}

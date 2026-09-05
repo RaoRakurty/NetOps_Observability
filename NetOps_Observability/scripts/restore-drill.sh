@@ -114,12 +114,12 @@ cleanup() {
 trap cleanup EXIT
 
 is_running() {
-  docker compose --project-directory "$COMPOSE_DIR" ps --status running --format '{{.Service}}' 2>/dev/null | grep -qx "$1"
+  docker compose -f "$COMPOSE_DIR/docker-compose.yml" ps --status running --format '{{.Service}}' 2>/dev/null | grep -qx "$1"
 }
 
 # live_pg runs SQL against the LIVE postgres (canary write + verify only).
 live_pg() {
-  docker compose --project-directory "$COMPOSE_DIR" exec -T \
+  docker compose -f "$COMPOSE_DIR/docker-compose.yml" exec -T \
     -e PGPASSWORD="$DB_PASS_V" postgres psql -U "$DB_USER_V" -d "$DB_NAME_V" -tAc "$1"
 }
 
@@ -152,7 +152,7 @@ drill_pg() {
 
   # 2. real backup path — pg_dumpall, exactly what backup.sh captures.
   local dump="$WORK/postgres-$DRILL_ID.sql"
-  if docker compose --project-directory "$COMPOSE_DIR" exec -T \
+  if docker compose -f "$COMPOSE_DIR/docker-compose.yml" exec -T \
        -e PGPASSWORD="$DB_PASS_V" postgres pg_dumpall -U "$DB_USER_V" > "$dump" 2>"$WORK/pg.err" \
        && [ -s "$dump" ]; then
     assert ok "pg: pg_dumpall produced a non-empty dump ($(wc -c < "$dump") bytes)"
@@ -244,7 +244,7 @@ drill_pg() {
 CH_IMAGE="clickhouse/clickhouse-server:24.8-alpine@sha256:b002e56ed5c16e224c312527f6fcba7e77216fec5d7a88a7828f59efc614feb5"
 RTO_CH=""
 live_ch() {
-  docker compose --project-directory "$COMPOSE_DIR" exec -T clickhouse \
+  docker compose -f "$COMPOSE_DIR/docker-compose.yml" exec -T clickhouse \
     clickhouse-client --user "$CH_USER_V" --password "$CH_PASS_V" --query "$1"
 }
 drill_ch() {

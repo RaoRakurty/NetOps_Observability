@@ -819,6 +819,14 @@ func (s *Service) StartRestorabilityProbe(ctx context.Context) {
 // ProbeTick is one wake-up: refresh the cache, then probe if it is due. Split
 // out so the worker's decision logic is unit-testable without a ticker.
 func (s *Service) ProbeTick(ctx context.Context, interval time.Duration, lastProbe *time.Time) {
+	// FIRST, and deliberately before the early return below: the bundle
+	// restore-drill gauges are read off a local file and owe nothing to the
+	// search cluster. Refreshing them after the inventory fetch meant an
+	// unreachable OpenSearch froze the drill metrics too, and "the drill has
+	// not run in 9 days" would then have been invisible for exactly as long as
+	// the cluster was down — two independent failures reported as one.
+	s.refreshDrillMetrics()
+
 	docs, err := s.fetchSnapshots(ctx)
 	if err != nil {
 		s.deps.Log.Warn("backup.probe", "snapshot inventory unreadable — restorability metrics keep their last known value",

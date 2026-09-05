@@ -247,20 +247,48 @@ func TestBackupCoverageSpecificClaims(t *testing.T) {
 		t.Errorf("clickhouse must say the api cannot see the host cron: %q", ch.Detail)
 	}
 
-	// victoriametrics / secrets_tls: no mechanism at all.
+	// victoriametrics / secrets_tls.
+	//
+	// CHANGED BY S4 (2026-09-04). Both rows used to assert "no mechanism at
+	// all": a nil schedule and TargetNone, because nothing in the platform
+	// copied either. scripts/backup.sh now snapshots VictoriaMetrics through
+	// its own /snapshot/create and ships the sealed custody material as a
+	// separately encrypted member, so BOTH now inherit the bundle's schedule
+	// and the bundle's destination. What has NOT changed, and is what these
+	// assertions now pin, is the honesty: with no backup report on this host
+	// neither row may read as covered, and each must say why in words an
+	// operator can act on.
 	vm := rows["victoriametrics"]
-	if vm.Covered != CoverageNo || vm.Schedule != nil || vm.Target.Kind != TargetNone {
-		t.Errorf("victoriametrics: %q schedule=%v target=%q", vm.Covered, vm.Schedule, vm.Target.Kind)
+	if vm.Covered != CoverageNo {
+		t.Errorf("victoriametrics with no bundle report must be covered=no, got %q", vm.Covered)
 	}
-	if !strings.Contains(vm.CoveredReason, "unrecoverable") {
-		t.Errorf("victoriametrics reason: %q", vm.CoveredReason)
+	if vm.Schedule == nil || !vm.Schedule.GovernedByGUI {
+		t.Errorf("victoriametrics now inherits the bundle's GUI-governed schedule: %+v", vm.Schedule)
+	}
+	if !strings.Contains(vm.CoveredReason, "indistinguishable from no backup") {
+		t.Errorf("victoriametrics reason must name the unreported-run state: %q", vm.CoveredReason)
+	}
+	if !strings.Contains(vm.Detail, "TORN") {
+		t.Errorf("victoriametrics must explain why a live-tree rsync is not the mechanism: %q", vm.Detail)
 	}
 	sec := rows["secrets_tls"]
-	if sec.Covered != CoverageNo || sec.Schedule != nil {
-		t.Errorf("secrets_tls: %q schedule=%v", sec.Covered, sec.Schedule)
+	if sec.Covered != CoverageNo {
+		t.Errorf("secrets_tls with no bundle report must be covered=no, got %q", sec.Covered)
+	}
+	if sec.Schedule == nil {
+		t.Errorf("secrets_tls now inherits the bundle's schedule: %+v", sec.Schedule)
 	}
 	if !strings.Contains(sec.CoveredReason, "unrecoverable even from a good data backup") {
 		t.Errorf("secrets_tls reason: %q", sec.CoveredReason)
+	}
+	// The encryption answer on the custody row is this row's OWN and is a
+	// measured yes: the envelope is ciphertext before it is written, whatever
+	// the destination does.
+	if sec.Target.Encrypted == nil || !*sec.Target.Encrypted {
+		t.Errorf("the custody envelope is encrypted before it is written: %+v", sec.Target)
+	}
+	if !strings.Contains(sec.Target.EncryptedDetail, "openssl enc -aes-256-cbc -pbkdf2") {
+		t.Errorf("the encryption claim must name the mechanism: %q", sec.Target.EncryptedDetail)
 	}
 
 	// device_configs with the module OFF (the harness does not wire it).
@@ -355,6 +383,26 @@ func TestBackupCoverageRedactsTheRemoteDestination(t *testing.T) {
 			t.Errorf("the userinfo must be visibly redacted, not silently dropped: %q", row.Target.Location)
 		}
 		// A remote we cannot inspect must report null, not a guessed "no".
+		//
+		// The ONE exception is secrets_tls, and it is an exception because the
+		// claim is about a different thing: the custody envelope is encrypted
+		// by scripts/backup.sh BEFORE it is written into the bundle, so it is
+		// ciphertext in transit and at rest no matter what the destination
+		// provides. That is measured, not guessed — but immutability at the
+		// destination still is not, and must stay a measured "no" with its
+		// reason rather than a null.
+		if row.ID == "secrets_tls" {
+			if row.Target.Encrypted == nil || !*row.Target.Encrypted {
+				t.Errorf("the custody envelope is encrypted before it is pushed: %+v", row.Target)
+			}
+			// Immutability is still a property of the DESTINATION, which the api
+			// cannot inspect from inside its container — so it stays null with
+			// its reason on this row exactly like every other remote row.
+			if row.Target.Immutable != nil {
+				t.Errorf("immutability at the destination is not measurable from here: %+v", row.Target)
+			}
+			continue
+		}
 		if row.Target.Immutable != nil || row.Target.Encrypted != nil {
 			t.Errorf("a remote's immutability/encryption is not measurable from here — it must be null: %+v", row.Target)
 		}

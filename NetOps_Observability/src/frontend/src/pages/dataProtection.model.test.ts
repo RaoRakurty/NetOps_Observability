@@ -316,10 +316,36 @@ describe("recovery-point objective", () => {
     expect(v).toMatchObject({ text: "last good copy 10h 30m old" });
   });
 
-  it("compares against an objective once the platform publishes one", () => {
+  it("compares against the SCHEDULE-derived target, and says that is what it used", () => {
     expect(rpoVerdict(engine({ rpo_hours: 10, rpo_target_hours: 24 })))
-      .toEqual({ state: "met", text: "10h 00m against a 1d 00h objective" });
+      .toEqual({ state: "met", text: "10h 00m against a 1d 00h scheduled objective" });
     expect(rpoVerdict(engine({ rpo_hours: 48, rpo_target_hours: 24 })).state).toBe("missed");
+  });
+
+  // S4 (2026-09-04). The server now publishes TWO numbers and they are not the
+  // same claim: rpo_target_hours is measured from a real cron, while
+  // rpo_objective_hours is declared policy. Evidence beats intent, so the
+  // schedule wins when it exists — and the rendered text has to NAME which one
+  // was used, or an operator reads a platform-invented number as compliance.
+  it("falls back to the DECLARED objective when no schedule is in force, and labels it", () => {
+    expect(rpoVerdict(engine({ rpo_hours: 10, rpo_objective_hours: 24 })))
+      .toEqual({ state: "met", text: "10h 00m against a 1d 00h declared objective" });
+    expect(rpoVerdict(engine({ rpo_hours: 48, rpo_objective_hours: 24 })).state).toBe("missed");
+  });
+
+  it("prefers the schedule-derived target over the declared objective when both exist", () => {
+    // Achieved 30h: inside the declared 48h, outside the scheduled 24h. The
+    // verdict must be MISSED — measured cadence is the stronger claim, and
+    // reporting "met" off the looser declared number would be exactly the
+    // flattering arithmetic this page exists to remove.
+    expect(rpoVerdict(engine({ rpo_hours: 30, rpo_target_hours: 24, rpo_objective_hours: 48 })))
+      .toEqual({ state: "missed", text: "1d 06h against a 1d 00h scheduled objective" });
+  });
+
+  it("judges the 0h custody objective as met only at 0", () => {
+    expect(rpoVerdict(engine({ rpo_hours: 0, rpo_objective_hours: 0 })))
+      .toEqual({ state: "met", text: "0s against a 0s declared objective" });
+    expect(rpoVerdict(engine({ rpo_hours: 1, rpo_objective_hours: 0 })).state).toBe("missed");
   });
 
   it("is unmeasured, never a pass, when there is no good copy to date", () => {

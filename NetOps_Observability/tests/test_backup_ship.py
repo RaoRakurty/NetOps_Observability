@@ -49,6 +49,11 @@ WATCHDOG = SCRIPTS / "stack-watchdog.sh"
 APPLY = SCRIPTS / "apply-backup-config.sh"
 BACKUP = SCRIPTS / "backup.sh"
 DRILL = SCRIPTS / "restore-drill.sh"
+# S4: the BUNDLE restore drill. A different artefact from DRILL above —
+# restore-drill.sh proves the live stores' dump/restore MECHANISM with a canary,
+# backup-drill.sh proves an actual bundle ARTIFACT restores. It ships (it is not
+# in make-installer.sh's LAB_PATHS), so it is held to the same bar.
+BUNDLE_DRILL = SCRIPTS / "backup-drill.sh"
 # The Data Protection domain was extracted to internal/dataprotect on
 # 2026-09-03, and with it every env switch it used to read: the package now
 # reads NO environment at all, and the two report paths are resolved ONCE in
@@ -682,9 +687,17 @@ def test_drill_report_env_override_and_writer_work(tmp_path):
 
 RESTORE = SCRIPTS / "restore.sh"
 SIGN_KEY = "test-sign-key-0123456789"
+# S4 (2026-09-04): the sealed custody material is a separately encrypted member
+# and the component is FAIL-CLOSED — the material exists in this fixture, so a
+# run with no passphrase deliberately exits non-zero. Every pre-existing test
+# below is about signing/custody/retention, not about that decision, so the
+# harness now states the operator's choice explicitly. The fail-closed refusal
+# and the deliberate opt-out get tests of their own further down.
+SEALED_PASS = "test-sealed-passphrase-0123456789"
 
 
-def _real_backup_tree(tmp_path: Path, sign_key=SIGN_KEY):
+def _real_backup_tree(tmp_path: Path, sign_key=SIGN_KEY, sealed_pass=SEALED_PASS,
+                      sealed_material=None, extra_env=None):
     tmp_path.mkdir(parents=True, exist_ok=True)  # callers pass sub-trees too
     bindir = tmp_path / "bin"
     bindir.mkdir()
@@ -718,6 +731,15 @@ def _real_backup_tree(tmp_path: Path, sign_key=SIGN_KEY):
     out = data / "backups" / "correlix-20260815.tar.zst"
     env = os.environ.copy()
     env["PATH"] = f"{bindir}:{env['PATH']}"
+    # Explicit, never inherited: a stray BACKUP_SEALED_* in the developer's
+    # environment must not decide what these tests exercise.
+    env.pop("BACKUP_SEALED_PASSPHRASE", None)
+    env.pop("BACKUP_SEALED_MATERIAL", None)
+    if sealed_pass:
+        env["BACKUP_SEALED_PASSPHRASE"] = sealed_pass
+    if sealed_material is not None:
+        env["BACKUP_SEALED_MATERIAL"] = sealed_material
+    env.update(extra_env or {})
     r = subprocess.run(["bash", str(script), str(out)], env=env,
                        capture_output=True, text=True, timeout=300)
     return r, out, tmp_path
@@ -1031,7 +1053,7 @@ def test_m26_write_env_lands_0600_under_hostile_umask(tmp_path):
 # hygiene gates: every touched script parses and stays shellcheck-clean
 # ---------------------------------------------------------------------------
 
-BASH_SCRIPTS = [WATCHDOG, APPLY, BACKUP, DRILL, RESTORE,
+BASH_SCRIPTS = [WATCHDOG, APPLY, BACKUP, DRILL, RESTORE, BUNDLE_DRILL,
                 SCRIPTS / "install-watchdog.sh"]
 SH_SCRIPTS = [SEAL_HANDLER, ENTRYPOINT]
 
@@ -1047,8 +1069,8 @@ def test_touched_scripts_parse():
 
 @pytest.mark.skipif(shutil.which("shellcheck") is None, reason="shellcheck not installed")
 def test_touched_scripts_shellcheck_clean():
-    for s in [WATCHDOG, APPLY, BACKUP, RESTORE, SCRIPTS / "install-watchdog.sh",
-              SEAL_HANDLER, ENTRYPOINT]:
+    for s in [WATCHDOG, APPLY, BACKUP, RESTORE, BUNDLE_DRILL,
+              SCRIPTS / "install-watchdog.sh", SEAL_HANDLER, ENTRYPOINT]:
         r = subprocess.run(["shellcheck", str(s)], capture_output=True, text=True)
         assert r.returncode == 0, f"shellcheck {s.name}:\n{r.stdout}{r.stderr}"
     # restore-drill.sh carries pre-existing info/warning findings (out of this
@@ -1056,3 +1078,251 @@ def test_touched_scripts_shellcheck_clean():
     r = subprocess.run(["shellcheck", "--severity=error", str(DRILL)],
                        capture_output=True, text=True)
     assert r.returncode == 0, f"shellcheck -Serror restore-drill.sh:\n{r.stdout}{r.stderr}"
+
+
+# ---------------------------------------------------------------------------
+# S4 (2026-09-04) — SEALED CUSTODY MATERIAL as a separately encrypted member.
+#
+# Excluding data/swtpm from the archive (H4) closed "one file holds the KEK, the
+# DEKs and the credentials" and opened a different hole: the custody root was
+# then in NO copy at all, and losing it makes every vault secret unrecoverable
+# from even a perfect data backup. Both facts are now true at once because the
+# material rides in its own encryption envelope.
+#
+# The three behaviours worth a test are the three that can silently go wrong:
+#   * FAIL-CLOSED — no passphrase must never degrade to plaintext, and must
+#     never silently omit the one thing whose loss is unrecoverable;
+#   * the DELIBERATE opt-out is a SKIP with a loud warning, not a failure;
+#   * a captured envelope is real: it decrypts, it verifies against its own
+#     manifest, it carries data/swtpm — and the archive still holds NO
+#     plaintext custody anywhere.
+# ---------------------------------------------------------------------------
+
+def _sealed_member(out: Path, name: str) -> bytes:
+    return _member_bytes(out, f"./sealed/{name}")
+
+
+def test_s4_sealed_material_is_encrypted_and_verifiable(tmp_path):
+    r, out, _ = _real_backup_tree(tmp_path / "src-host")
+    assert r.returncode == 0, f"stdout:\n{r.stdout}\nstderr:\n{r.stderr}"
+    members = _members(out)
+    joined = "\n".join(members)
+
+    # The custody root is still ABSENT from the plaintext data/ copy (H4 holds).
+    for forbidden in ("./data/swtpm", "./data/secrets-seal"):
+        assert not any(m.startswith(forbidden) for m in members), (
+            f"{forbidden} must never ship in the clear:\n{joined}")
+
+    # ... and PRESENT as an encrypted member, with its manifest and a README.
+    for want in ("./sealed/sealed-material.tar.gz.enc",
+                 "./sealed/sealed-material.manifest",
+                 "./sealed/README"):
+        assert want in members, f"{want} missing from the archive:\n{joined}"
+
+    blob = _sealed_member(out, "sealed-material.tar.gz.enc")
+    assert blob.startswith(b"Salted__"), "openssl enc -salt output expected"
+    assert b"KEK-MATERIAL" not in blob, "the custody bytes are in the archive IN THE CLEAR"
+
+    # It decrypts with the passphrase, and only with it.
+    work = tmp_path / "dec"
+    work.mkdir()
+    enc = work / "blob.enc"
+    enc.write_bytes(blob)
+    ok = subprocess.run(
+        ["openssl", "enc", "-d", "-aes-256-cbc", "-pbkdf2", "-iter", "600000",
+         "-pass", "env:BACKUP_SEALED_PASSPHRASE", "-in", str(enc)],
+        env={**os.environ, "BACKUP_SEALED_PASSPHRASE": SEALED_PASS},
+        capture_output=True, timeout=120)
+    assert ok.returncode == 0, ok.stderr.decode()
+    tr = subprocess.run(["tar", "-xzf", "-", "-C", str(work)], input=ok.stdout,
+                        capture_output=True, timeout=120)
+    assert tr.returncode == 0, tr.stderr.decode()
+    assert (work / "swtpm" / "tpm2-00.permall").read_bytes() == b"KEK-MATERIAL"
+
+    wrong = subprocess.run(
+        ["openssl", "enc", "-d", "-aes-256-cbc", "-pbkdf2", "-iter", "600000",
+         "-pass", "env:BACKUP_SEALED_PASSPHRASE", "-in", str(enc)],
+        env={**os.environ, "BACKUP_SEALED_PASSPHRASE": "not-the-passphrase"},
+        capture_output=True, timeout=120)
+    assert wrong.returncode != 0, "the envelope decrypted under the WRONG passphrase"
+
+    # The manifest that shipped beside it verifies the decrypted tree — this is
+    # exactly what scripts/backup-drill.sh asserts, unattended.
+    man = work / "sealed-material.manifest"
+    man.write_bytes(_sealed_member(out, "sealed-material.manifest"))
+    v = subprocess.run(["sha256sum", "-c", "--quiet", str(man)], cwd=work,
+                       capture_output=True, timeout=120)
+    assert v.returncode == 0, v.stdout.decode() + v.stderr.decode()
+    assert b"swtpm/" in man.read_bytes(), "the manifest must cover the KEK-bearing custody root"
+
+    # And the passphrase is nowhere in the archive it protects.
+    assert SEALED_PASS.encode() not in _member_bytes(out, "./env.backup"), \
+        "the custody passphrase leaked into env.backup"
+
+
+def test_s4_sealed_material_fails_closed_without_a_passphrase(tmp_path):
+    """No passphrase => the component FAILS. It never writes custody material in
+    the clear, and never quietly omits it while reporting success."""
+    r, out, _ = _real_backup_tree(tmp_path / "src-host", sealed_pass=None)
+    assert r.returncode != 0, "a bundle that could not capture the custody root must exit non-zero"
+    assert "BACKUP_SEALED_PASSPHRASE" in r.stdout + r.stderr, \
+        "the refusal must name the variable that fixes it"
+    assert "BACKUP_SEALED_MATERIAL=0" in r.stdout + r.stderr, \
+        "the refusal must name the deliberate opt-out"
+    members = _members(out)
+    assert not any(m.startswith("./sealed/") for m in members), \
+        "a refused custody capture must not leave a half-written member"
+    assert not any(m.startswith("./data/swtpm") for m in members), \
+        "the refusal must NEVER fall back to shipping the custody root in the clear"
+    report = json.loads((tmp_path / "src-host" / "data" / "api" / "backup-report.json").read_text())
+    assert report["components"]["sealed_material"] == "fail", report
+
+
+def test_s4_sealed_material_opt_out_is_a_loud_skip_not_a_failure(tmp_path):
+    """BACKUP_SEALED_MATERIAL=0 is the operator's deliberate choice: a SKIP with
+    a warning that states the consequence, not an error."""
+    r, out, _ = _real_backup_tree(tmp_path / "src-host", sealed_pass=None, sealed_material="0")
+    assert r.returncode == 0, f"an explicit opt-out is not a failure:\n{r.stdout}\n{r.stderr}"
+    assert "decrypts NOTHING" in r.stderr, "the opt-out must state what it costs"
+    assert not any(m.startswith("./sealed/") for m in _members(out))
+    report = json.loads((tmp_path / "src-host" / "data" / "api" / "backup-report.json").read_text())
+    assert report["components"]["sealed_material"] == "skip", report
+
+
+def test_s4_sealed_material_is_reused_when_unchanged(tmp_path):
+    """Backed up ON CHANGE: a second run over unchanged material re-uses the
+    existing envelope instead of re-encrypting a static custody root nightly —
+    and the bundle still carries it, so it stays self-contained."""
+    host = tmp_path / "src-host"
+    r1, out, _ = _real_backup_tree(host)
+    assert r1.returncode == 0, r1.stderr
+    first = _sealed_member(out, "sealed-material.tar.gz.enc")
+
+    env = os.environ.copy()
+    env["PATH"] = f"{host / 'bin'}:{env['PATH']}"
+    env["BACKUP_SEALED_PASSPHRASE"] = SEALED_PASS
+    r2 = subprocess.run(["bash", str(host / "scripts" / "backup.sh"), str(out)],
+                        env=env, capture_output=True, text=True, timeout=300)
+    assert r2.returncode == 0, r2.stderr
+    assert "UNCHANGED" in r2.stdout, "an unchanged custody root must not be re-encrypted"
+    assert _sealed_member(out, "sealed-material.tar.gz.enc") == first, \
+        "the re-used envelope must be byte-identical, not silently re-made"
+
+    # Change the material -> the envelope is re-made, and the manifest moves.
+    (host / "data" / "swtpm" / "tpm2-00.permall").write_bytes(b"ROTATED-KEK")
+    r3 = subprocess.run(["bash", str(host / "scripts" / "backup.sh"), str(out)],
+                        env=env, capture_output=True, text=True, timeout=300)
+    assert r3.returncode == 0, r3.stderr
+    assert "RE-ENCRYPTED" in r3.stdout, "a rotated custody root must be re-captured"
+    assert _sealed_member(out, "sealed-material.tar.gz.enc") != first
+
+
+# ---------------------------------------------------------------------------
+# S4 — the run report's PER-COMPONENT verdicts and off-host record.
+#
+# internal/dataprotect reads these to render one coverage row per store. Before
+# they existed every store inherited the whole run's status, so a night on which
+# one store's copy failed reported the rest as failed too — and, worse, a night
+# on which the custody material was skipped reported a covered custody root.
+# ---------------------------------------------------------------------------
+
+def test_s4_report_carries_per_component_verdicts_and_remote_record(tmp_path):
+    host = tmp_path / "src-host"
+    r, _, _ = _real_backup_tree(host, extra_env={"BACKUP_EXCLUDE": "/postgres"})
+    assert r.returncode == 0, r.stderr
+    report = json.loads((host / "data" / "api" / "backup-report.json").read_text())
+
+    comps = report["components"]
+    # The fake `docker` in this harness exits 0 for every subcommand, so the
+    # engine legs report SKIP (nothing is "running"); what is pinned here is
+    # that each store has its OWN verdict and that none of them is invented.
+    for key in ("postgres", "clickhouse", "opensearch", "victoriametrics",
+                "sealed_material", "data_dir", "signature", "offhost"):
+        assert key in comps, f"{key} missing from the component map: {comps}"
+        assert comps[key] in ("pass", "partial", "fail", "skip"), comps
+
+    # No BACKUP_REMOTE in this run: configured=false, and "pushed" is never
+    # optimistic. verified_at stays empty — the page reserves the word "proven"
+    # for a checksum re-verified at the far end.
+    assert report["remote"] == {"configured": False, "pushed": False, "verified_at": ""}, report
+
+    # A NARROWED bundle declares itself, so the page can never present it as a
+    # full one.
+    assert report["data_excludes"] == "/postgres", report
+
+
+# ---------------------------------------------------------------------------
+# S4 — scripts/backup-drill.sh ship contract.
+#
+# The drill is the only mechanism that turns "a bundle exists" into "a bundle
+# restores", and the api renders its verdict as each engine's last_verified.
+# Three properties are worth pinning because each one, when it broke during the
+# first live runs, produced a WRONG ANSWER rather than an error:
+#
+#   * the compose file is named with `-f`. `--project-directory` alone does not
+#     change where the compose FILE is looked up, so every live-store read
+#     returned EMPTY instead of failing — and an empty baseline compared clean.
+#   * `docker exec -i` appears exactly once, on the Native INSERT that genuinely
+#     reads stdin. Anywhere else it consumes the enclosing `while read` loop's
+#     input and the loop silently ends after one iteration (the same defect this
+#     wave fixed in backup.sh, where 1 of 26 ClickHouse tables was ever dumped).
+#   * the report path is the one the api reads.
+# ---------------------------------------------------------------------------
+
+def _code_lines(path: Path) -> list[str]:
+    """Non-comment, non-blank lines. The rules below are about what the script
+    DOES, and a comment explaining a hazard must not read as the hazard."""
+    return [l.strip() for l in path.read_text().splitlines()
+            if l.strip() and not l.strip().startswith("#")]
+
+
+def test_s4_bundle_drill_names_the_compose_file_explicitly():
+    code = _code_lines(BUNDLE_DRILL) + _code_lines(DRILL)
+    offenders = [l for l in code if "--project-directory" in l]
+    assert not offenders, (
+        "`docker compose --project-directory X` does NOT change where the compose FILE "
+        "is looked up — it stays the CWD. Every call becomes an EMPTY read outside "
+        "deployment/docker, and an empty baseline compares clean rather than erroring. "
+        f"Use -f <file>: {offenders}")
+
+
+def test_s4_bundle_drill_attaches_stdin_only_where_it_is_read():
+    code = _code_lines(BUNDLE_DRILL)
+    attaching = [l for l in code if "docker exec -i " in l]
+    # Exactly two calls legitimately READ stdin: the psql replay of the
+    # pg_dumpall, and the clickhouse-client array used for the Native INSERT
+    # (and the multiquery schema replay). Both sit outside any `while read`
+    # loop. Anything else must close stdin or drop the -i.
+    assert len(attaching) == 2, (
+        "every additional `docker exec -i` is a candidate for eating a `while read` "
+        f"loop's stdin; give it `< /dev/null` or drop the -i: {attaching}")
+    # The psql replay's `docker exec -i` and its `psql` sit on separate
+    # continuation lines, so match the one token that is on the exec line.
+    assert any("PGPASSWORD" in l for l in attaching), attaching
+    assert any("chq_in=(" in l for l in attaching), attaching
+    # The read-only helpers that DO run inside loops close stdin explicitly.
+    body = BUNDLE_DRILL.read_text()
+    for helper in ("live_pg()", "live_ch()", "sqd()"):
+        i = body.index(helper)
+        assert "< /dev/null" in body[i:i + 400], f"{helper} must close its own stdin"
+
+
+def test_s4_bundle_drill_report_path_matches_what_the_api_reads():
+    body = BUNDLE_DRILL.read_text()
+    assert 'BACKUP_DRILL_REPORT' in body and 'data/api/backup-drill.report.json' in body
+    wiring = API_ENV_WIRING_GO.read_text()
+    assert 'envOr("BACKUP_DRILL_REPORT", "/data/backup-drill.report.json")' in wiring, (
+        "the api must read the drill report from the same file the script writes "
+        "(host data/api <-> container /data); a report nothing reads is a proof "
+        "that can never reach the page")
+
+
+def test_s4_bundle_drill_never_prints_the_custody_passphrase():
+    body = BUNDLE_DRILL.read_text()
+    # The passphrase crosses to openssl through the ENVIRONMENT, never argv:
+    # /proc is world-readable for as long as the process runs.
+    assert "-pass env:BACKUP_SEALED_PASSPHRASE" in body
+    assert "-pass pass:" not in body, "a passphrase in argv is world-readable in /proc"
+    for line in body.splitlines():
+        if "$BACKUP_SEALED_PASSPHRASE" in line and ("echo" in line or "log " in line or "printf" in line):
+            raise AssertionError(f"the custody passphrase must never be printed: {line.strip()}")

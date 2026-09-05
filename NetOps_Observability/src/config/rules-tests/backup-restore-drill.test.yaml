@@ -1,0 +1,164 @@
+# promtool unit tests for the BUNDLE RESTORE DRILL rules in
+# rules-scale-slo.yaml (engine-liveness group, added 2026-09-04, S4).
+#
+# WHY THIS FILE EXISTS. Until S4, nothing in this platform had ever restored a
+# BUNDLE. The snapshot rules beside these prove the OpenSearch repository; the
+# artifact an operator actually holds after losing the host — one
+# correlix-YYYYMMDD.tar.zst carrying the Postgres dump, the ClickHouse export,
+# the VictoriaMetrics snapshot and the sealed custody envelope — had never been
+# opened and put back by any automated thing. scripts/backup-drill.sh does that
+# now and the api publishes the verdict; these two rules are what makes a
+# verdict that goes bad, or goes stale, reach a human.
+#
+# The three distinctions these tests pin, each of which is one missing clause
+# away from being wrong:
+#
+#   (a) BackupRestoreDrillFailed fires on a drill that RAN and failed, and is
+#       silent on a drill that has never run. Without the `> 0` guard, the gauge
+#       pair (pass=0, timestamp=0) that every fresh deployment publishes would
+#       make this rule fire forever on installs that have simply never drilled —
+#       and a rule that is always lit is how the real ones get muted.
+#   (b) BackupRestoreDrillMissed fires on a STALE GREEN. pass is deliberately 1
+#       in the firing case: if staleness only alerted while the drill was
+#       already failing, it would be redundant with (a) and would never catch
+#       the case it exists for — a page still showing a week-old proof as
+#       current.
+#   (c) NEITHER rule fires on a never-drilled platform. That is a deliberate
+#       product decision recorded in the rules file: the bundle drill is
+#       operator-initiated, so "never run" is a standing configuration fact the
+#       coverage table reports honestly, not a page-adjacent alert. If someone
+#       later decides never-run SHOULD alert, these two negative cases are where
+#       that decision has to be made explicitly rather than by accident.
+#
+# TIMEBASE NOTE. promtool's synthetic clock starts at Unix epoch 0, so `time()`
+# at eval_time T is simply T seconds. The 7-day staleness threshold therefore
+# needs a genuinely >168h window; evaluation_interval is 30m to keep that
+# affordable, which is still well inside the rule's `for: 30m` at the eval
+# points used below.
+rule_files:
+  - /etc/prometheus/rules-scale-slo.yaml
+
+evaluation_interval: 30m
+
+tests:
+  # ==========================================================================
+  # 1) BackupRestoreDrillFailed
+  # ==========================================================================
+
+  # 1a) FIRES: the drill ran (non-zero timestamp) and did not pass.
+  - interval: 5m
+    input_series:
+      - series: 'netops_backup_drill_pass{job="netops-api",instance="api:8080"}'
+        values: "0x24"
+      - series: 'netops_backup_drill_last_timestamp_seconds{job="netops-api",instance="api:8080"}'
+        values: "600x24"
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: BackupRestoreDrillFailed
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              layer: storage
+              tier: warning
+              job: netops-api
+              instance: api:8080
+            exp_annotations:
+              summary: "The last bundle restore drill FAILED — the backup artifact does not restore"
+              description: "scripts/backup-drill.sh restored the newest bundle into disposable containers and at least one leg did not come back. Read netops_backup_drill_leg{leg} to see which store: postgres, clickhouse, victoriametrics or sealed_material. A failing sealed_material leg is the most severe of the four — it means the custody envelope will not decrypt or does not match its manifest, so a restore of this artifact would bring back every byte of data and unseal none of it. Taking another backup does not fix any of these; the drill's own report (data/api/backup-drill.report.json) names the assertion that failed."
+              runbook: "docs/runbooks/storage-and-volume-operations.md#bundle-restore-drill"
+
+  # 1b) NEGATIVE — NEVER DRILLED. pass=0 and timestamp=0 is what a fresh
+  #     deployment publishes. Delete the `> 0` guard and this goes red, which is
+  #     the point: it would then fire on every install that has never drilled.
+  - interval: 5m
+    input_series:
+      - series: 'netops_backup_drill_pass{job="netops-api",instance="api:8080"}'
+        values: "0x24"
+      - series: 'netops_backup_drill_last_timestamp_seconds{job="netops-api",instance="api:8080"}'
+        values: "0x24"
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: BackupRestoreDrillFailed
+        exp_alerts: []
+
+  # 1c) ALL-CLEAR: a passing drill is SILENT.
+  - interval: 5m
+    input_series:
+      - series: 'netops_backup_drill_pass{job="netops-api",instance="api:8080"}'
+        values: "1x24"
+      - series: 'netops_backup_drill_last_timestamp_seconds{job="netops-api",instance="api:8080"}'
+        values: "600x24"
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: BackupRestoreDrillFailed
+        exp_alerts: []
+
+  # 1d) The `for: 15m` is not decoration — at 10m the rule is still PENDING and
+  #     nothing is delivered, so one scrape taken mid-drill cannot alert.
+  - interval: 1m
+    input_series:
+      - series: 'netops_backup_drill_pass{job="netops-api",instance="api:8080"}'
+        values: "0x20"
+      - series: 'netops_backup_drill_last_timestamp_seconds{job="netops-api",instance="api:8080"}'
+        values: "600x20"
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: BackupRestoreDrillFailed
+        exp_alerts: []
+
+  # ==========================================================================
+  # 2) BackupRestoreDrillMissed  (threshold: 604800s = 7d)
+  #
+  # The drill timestamp is pinned at 600 (epoch+10m), so at eval_time 169h the
+  # age is 608_400s > 604_800s and the alert has been active past its `for: 30m`.
+  # ==========================================================================
+
+  # 2a) FIRES: a proof that PASSED and has not been refreshed in over 7 days.
+  #     pass=1 throughout — a stale GREEN is exactly what this rule is for.
+  - interval: 30m
+    input_series:
+      - series: 'netops_backup_drill_pass{job="netops-api",instance="api:8080"}'
+        values: "1x400"
+      - series: 'netops_backup_drill_last_timestamp_seconds{job="netops-api",instance="api:8080"}'
+        values: "600x400"
+    alert_rule_test:
+      - eval_time: 169h
+        alertname: BackupRestoreDrillMissed
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              layer: storage
+              tier: warning
+              job: netops-api
+              instance: api:8080
+            exp_annotations:
+              summary: "No bundle restore drill has run in over 7 days — the restore proof is stale, not current"
+              description: "A restore proof is only worth its age. The last drill passed, so the Data Protection page is still showing a green last_verified on the Postgres, ClickHouse, VictoriaMetrics and sealed-custody rows — off a proof that is now more than a week old. Everything the proof covered can have changed since: the bundle's contents, the passphrase the custody envelope was sealed under, the engine versions the dumps replay into. Run scripts/backup-drill.sh against the newest artifact to refresh it. Until then treat the artifact as UNVERIFIED rather than good — that distinction is the whole lesson of 2026-08-26."
+              runbook: "docs/runbooks/storage-and-volume-operations.md#bundle-restore-drill"
+
+  # 2b) NEGATIVE — NEVER DRILLED. Timestamp 0 makes `time() - ts` ~57 years, so
+  #     without the `> 0` guard this would fire on every fresh deployment.
+  - interval: 30m
+    input_series:
+      - series: 'netops_backup_drill_pass{job="netops-api",instance="api:8080"}'
+        values: "0x400"
+      - series: 'netops_backup_drill_last_timestamp_seconds{job="netops-api",instance="api:8080"}'
+        values: "0x400"
+    alert_rule_test:
+      - eval_time: 169h
+        alertname: BackupRestoreDrillMissed
+        exp_alerts: []
+
+  # 2c) ALL-CLEAR: a drill refreshed inside the window is SILENT. This is the
+  #     normal state of a platform that drills weekly and must never be a
+  #     standing advisory.
+  - interval: 30m
+    input_series:
+      - series: 'netops_backup_drill_pass{job="netops-api",instance="api:8080"}'
+        values: "1x400"
+      - series: 'netops_backup_drill_last_timestamp_seconds{job="netops-api",instance="api:8080"}'
+        values: "600x400"
+    alert_rule_test:
+      - eval_time: 100h
+        alertname: BackupRestoreDrillMissed
+        exp_alerts: []

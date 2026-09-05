@@ -301,6 +301,61 @@ type FullBackupRun struct {
 	DurationSeconds int    `json:"duration_seconds"`
 	Failures        int    `json:"failures"`
 	Artifact        string `json:"artifact,omitempty"`
+
+	// Components is the per-component verdict map the bundle writes
+	// ("postgres" -> pass|fail|skip, and the same for clickhouse, opensearch,
+	// victoriametrics, sealed_material, data_dir, signature, offhost).
+	//
+	// Before this existed every store's coverage row inherited the WHOLE run's
+	// status, so a night on which only the VictoriaMetrics snapshot failed
+	// reported a failed Postgres dump — and, worse, a night on which the sealed
+	// custody material was skipped reported a covered custody root. An ABSENT
+	// map means "this report predates per-component reporting", which is a
+	// different answer from "every component passed", and the coverage rows say
+	// so rather than assuming the generous reading.
+	Components map[string]string `json:"components,omitempty"`
+
+	// Remote is the off-host transfer's own record. VerifiedAt is set ONLY when
+	// the run actually re-checksummed the bytes at the destination — "the push
+	// command exited 0" is not that, and the page must be able to tell an
+	// operator which of the two it has.
+	Remote *FullBackupRemote `json:"remote,omitempty"`
+
+	// DataExcludes echoes the operator-supplied rsync exclude patterns
+	// (BACKUP_EXCLUDE) the run applied to the data/ copy. A NARROWED bundle must
+	// never be presented as a full one.
+	DataExcludes string `json:"data_excludes,omitempty"`
+}
+
+// FullBackupRemote is the off-host half of the bundle report. It deliberately
+// carries NO destination string: BACKUP_PUSH can hold a credentialed transport,
+// and the api already has (and redacts) the destination from the stored intent.
+type FullBackupRemote struct {
+	Configured bool   `json:"configured"`
+	Pushed     bool   `json:"pushed"`
+	VerifiedAt string `json:"verified_at,omitempty"` // RFC3339 UTC; empty = never proven at the destination
+}
+
+// Pushed reports whether the last run's artifact actually reached the off-host
+// destination. Nil-safe at every level: a report that predates off-host
+// reporting has not pushed anything as far as this page is concerned, which is
+// the default-closed reading.
+func (r *FullBackupRun) Pushed() bool {
+	return r != nil && r.Remote != nil && r.Remote.Pushed
+}
+
+// componentVerdict returns the bundle's verdict for one component, and whether
+// the report carried a component map at all. The two-value shape is the point:
+// "not reported" must never collapse into "passed".
+func (r *FullBackupRun) componentVerdict(name string) (verdict string, reported bool) {
+	if r == nil || len(r.Components) == 0 {
+		return "", false
+	}
+	v, ok := r.Components[name]
+	if !ok {
+		return "", false
+	}
+	return strings.ToLower(strings.TrimSpace(v)), true
 }
 
 // osSnapshotStatus queries OpenSearch for the repository + its newest snapshot.

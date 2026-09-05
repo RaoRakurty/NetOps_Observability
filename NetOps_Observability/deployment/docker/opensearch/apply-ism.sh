@@ -330,6 +330,70 @@ if [ "${SNAP_KEEP:-14}" -gt 0 ]; then
   esac
   fi
 
+  # -------------------------------------------------------------------------
+  # SECOND REPOSITORY, OFF THIS DISK (S4, 2026-09-04 — tracker 225a).
+  #
+  # netops-fs is a filesystem repository on the SAME disk as data/. That is the
+  # failure domain docs/audit/BACKUP-FAILURE-DOMAIN.md names, and 2026-08-27 is
+  # that domain firing: one `rm -rf` in the wrong directory took every restore
+  # point with it. A second `fs` repository on a SEPARATELY MOUNTED path (an NFS
+  # export, a second block device, an object-store gateway mount) gives the
+  # search tier restore points that survive losing this filesystem.
+  #
+  # OPTIONAL BY DESIGN, and the shipped default is off. Where the second mount
+  # lives is a deployment decision this bootstrap cannot make, and a stack that
+  # refused to come up without one would be wrong. Configure BOTH:
+  #
+  #   OPENSEARCH_SNAPSHOT_REPO2            repository name, e.g. netops-fs-offhost
+  #   OPENSEARCH_SNAPSHOT_REPO2_LOCATION   path INSIDE the opensearch container,
+  #                                        which must be listed in path.repo and
+  #                                        backed by a different device
+  #
+  # deployment/docker/docker-compose.snapshot-repo2.yml is the ready-made
+  # overlay that adds the mount, extends path.repo and passes both names to this
+  # bootstrap. See docs/runbooks/storage-and-volume-operations.md.
+  #
+  # The SAME single-writer guard applies, for the same reason: two repository
+  # names over one location is the documented corruption hazard. Here it is
+  # cheap to enforce exactly — a second repository pointed at the FIRST one's
+  # location is not off-host DR, it is the corruption hazard wearing a new name.
+  # -------------------------------------------------------------------------
+  REPO2_NAME="${OPENSEARCH_SNAPSHOT_REPO2:-}"
+  REPO2_LOCATION="${OPENSEARCH_SNAPSHOT_REPO2_LOCATION:-}"
+  if [ -n "$REPO2_NAME" ] && [ -z "$REPO2_LOCATION" ]; then
+    echo "ism: WARNING OPENSEARCH_SNAPSHOT_REPO2=$REPO2_NAME is set but" >&2
+    echo "ism:         OPENSEARCH_SNAPSHOT_REPO2_LOCATION is not — a repository cannot be" >&2
+    echo "ism:         registered without a location. The second repository was NOT created," >&2
+    echo "ism:         so every restore point still shares one disk." >&2
+  elif [ -n "$REPO2_NAME" ] && [ "$REPO2_LOCATION" = "$REPO_LOCATION" ]; then
+    echo "ism: REFUSING to register $REPO2_NAME — its location is the SAME path netops-fs" >&2
+    echo "ism:         uses ($REPO_LOCATION). Two repository names over one blob tree is the" >&2
+    echo "ism:         documented OpenSearch corruption hazard, and it is not off-host DR:" >&2
+    echo "ism:         point OPENSEARCH_SNAPSHOT_REPO2_LOCATION at a SEPARATELY MOUNTED path." >&2
+  elif [ -n "$REPO2_NAME" ]; then
+    echo "ism: registering second snapshot repository $REPO2_NAME at $REPO2_LOCATION ..."
+    REPO2_RESP=$(curl -s -m 30 -X PUT "$OS/_snapshot/$REPO2_NAME" \
+      -H 'Content-Type: application/json' \
+      -d "{\"type\":\"fs\",\"settings\":{\"location\":\"$REPO2_LOCATION\",\"compress\":true}}")
+    case "$REPO2_RESP" in
+      *'"acknowledged":true'*)
+        echo "ism: second snapshot repository $REPO2_NAME ready."
+        echo "ism:       NOTE: registration is not a copy. Nothing writes to it automatically —"
+        echo "ism:       take a snapshot into it (POST _snapshot/$REPO2_NAME/<name>) or add an SM"
+        echo "ism:       policy of its own, or it will protect nothing."
+        ;;
+      *)
+        # §16.1: a configured-but-unregistered second repository is worse than
+        # none, because the Data Protection page would be reporting an intent
+        # somebody reads as a copy. Say it plainly.
+        echo "ism: ERROR second snapshot repository $REPO2_NAME NOT registered: $REPO2_RESP" >&2
+        echo "ism:       -> the off-host repository does NOT exist; every restore point still" >&2
+        echo "ism:       shares the primary data's disk. Check that $REPO2_LOCATION is listed" >&2
+        echo "ism:       in path.repo on the opensearch service and is writable by the container." >&2
+        ;;
+    esac
+  fi
+
   # Snapshot Management policy: one snapshot a day, keep SNAP_KEEP of them.
   # PUT is create-only (409 if it exists) like the ISM policy above, so read
   # the seq_no first and update in place — the same trap that let the ism

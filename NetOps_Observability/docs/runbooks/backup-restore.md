@@ -9,10 +9,19 @@ what you configure, and how to prove a restore works.
 |---|---|---|---|
 | OpenSearch (search: logs, flows) | daily incremental snapshots (`netops-daily`) | **Yes**, cluster-run | `data/opensearch-snapshots` |
 | Postgres, ClickHouse, full `data/` | `scripts/backup.sh` → one tarball | **No** by default | wherever you point it |
-| Everything, off-host | `BACKUP_REMOTE` push | only if configured | your remote |
+| VictoriaMetrics (time series) | `scripts/backup.sh` calls VM's own `/snapshot/create`, copies it out, deletes it | inside the bundle | `./victoriametrics/<snap>` in the tarball |
+| Sealed custody material (`data/swtpm`, `data/tls`, wrapped keys) | `scripts/backup.sh` — a SEPARATELY ENCRYPTED member, **fail-closed** | inside the bundle | `./sealed/` in the tarball |
+| Everything, off-host | `BACKUP_REMOTE` push (+ `BACKUP_REMOTE_VERIFY=1` to re-checksum at the far end) | only if configured | your remote |
+| A second OpenSearch repository, off this disk | `docker-compose.snapshot-repo2.yml` overlay | **No**, opt-in | your separate mount |
 
-The **restore drill** (`scripts/restore-drill.sh`) proves all three actually
-restore, with content verified.
+Two drills, and they prove different things:
+
+* `scripts/restore-drill.sh` proves the **mechanism** — canary into the live
+  stores, dump, restore into scratch, canary comes back.
+* `scripts/backup-drill.sh` proves **a real bundle artifact** restores: the
+  Postgres dump, the ClickHouse export, the VictoriaMetrics snapshot and the
+  sealed custody envelope, out of the file you actually hold. See
+  `storage-and-volume-operations.md#bundle-restore-drill`.
 
 ---
 
@@ -48,9 +57,32 @@ Registered by `opensearch-init` at install: a filesystem snapshot repository
 ## 2. Full-stack backup (`backup.sh`) — configure per environment
 
 `scripts/backup.sh <out.tar.zst>` captures Postgres (`pg_dumpall`), ClickHouse
-(schema + `FORMAT Native` data), the OpenSearch snapshot, and `data/` + `.env`
-into one tarball. It exits **non-zero** on any partial dump — a cron that ignores
-that is worse than no backup.
+(schema + `FORMAT Native` data), the OpenSearch snapshot, a VictoriaMetrics
+snapshot, the sealed custody material and `data/` + `.env` into one tarball. It
+exits **non-zero** on any partial dump — a cron that ignores that is worse than
+no backup.
+
+### The knobs, and what each one costs you if you get it wrong
+
+| Variable | Default | What it does |
+|---|---|---|
+| `BACKUP_REMOTE` | unset | off-host destination. Unset = the copy shares the primary data's failure domain, and the run says so. |
+| `BACKUP_PUSH` | `rsync -a` | the transport. Word-split, so use `RSYNC_RSH` for a custom ssh rather than embedding `-e "..."`. |
+| `BACKUP_REMOTE_VERIFY` | `0` | `1` re-runs `sha256sum -c SHA256SUMS` **at the destination** over `BACKUP_SSH`. This is the only thing that turns "pushed" into **proven**, and the Data Protection page reserves that word for it. |
+| `BACKUP_SSH` | `ssh` | transport for the verification call. Word-split like `BACKUP_PUSH`. |
+| `BACKUP_SIGN_KEY` | unset | HMAC key for `$OUT.sig`. Unset = corruption is detectable, tampering is not. |
+| `BACKUP_SEALED_PASSPHRASE` | unset | passphrase for the custody envelope. **Fail-closed**: with custody material present and no passphrase, the component FAILS. It never degrades to plaintext. |
+| `BACKUP_SEALED_MATERIAL` | `1` | `0` is the deliberate opt-out — a loud SKIP, not a failure. A bundle restored onto a host without `data/swtpm` decrypts nothing. |
+| `BACKUP_VICTORIA` | `1` | `0` skips the time-series snapshot. |
+| `BACKUP_CH_MAX_TABLE_MB` | `512` | per-table ceiling on the ClickHouse `FORMAT Native` export. Larger tables ship as **schema only** and the component reports `partial`, never `pass`; their rows belong in the cold Parquet tier (`scripts/ch-cold-export.sh`). `0` disables the ceiling. |
+| `BACKUP_EXCLUDE` | unset | extra rsync excludes for the `data/` copy, space-separated and anchored at `data/` (e.g. `"/kafka /opensearch"`). Recorded in the MANIFEST **and** the run report, so a narrowed bundle can never be presented as a full one. |
+| `BACKUP_KEEP` | `7` | artifacts to keep. `0` disables pruning, loudly. |
+| `OPENSEARCH_ADMIN_CERT_DIR` | `data/tls/admin` | when `admin.crt`/`admin.key`/`ca.pem` are there, the OpenSearch snapshot call is made over the compose network with that client certificate — which is the only way it works on a stack with the security plugin enabled. |
+
+**Where the custody passphrase must NOT live:** on the backup host, next to the
+artifact. The whole point of the separate envelope is that the tarball plus the
+`.env` inside it still cannot unseal the vault. Keep it where the KEK ceremony
+keeps its material.
 
 **It is NOT scheduled by default**, on purpose: a nightly full backup on the same
 disk fills the volume it needs (this is the F-55 disk-pressure failure). Enable
