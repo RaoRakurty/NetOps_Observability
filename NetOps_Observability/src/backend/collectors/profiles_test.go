@@ -157,7 +157,7 @@ func TestValueInt(t *testing.T) {
 func TestMetricOwnershipGate(t *testing.T) {
 	bgp := SNMPMetric{Name: "device_bgp_peer_state", Owner: "gnmi", IndexLabel: "peer"}
 	ospf := SNMPMetric{Name: "device_ospf_nbr_state", IndexLabel: "neighbor"} // SNMP-owned
-	iface := SNMPMetric{Name: "device_if_in_octets"}                          // no owner
+	iface := SNMPMetric{Name: "device_if_speed"}                              // no owner (gNMI has no ifHighSpeed source)
 
 	gnmiDev := Target{ID: "leaf1", GNMICapable: true}
 	snmpDev := Target{ID: "edge-rtr", GNMICapable: false} // agentless BGP router
@@ -180,6 +180,96 @@ func TestMetricOwnershipGate(t *testing.T) {
 	// hasTransport only knows gNMI today; an unknown transport never matches.
 	if (SNMPMetric{Owner: "netconf"}).ownedElsewhere(gnmiDev) {
 		t.Error("a device is not netconf-capable just by being gNMI-capable")
+	}
+}
+
+// A canonical family must be owned CONSISTENTLY across the whole catalog: the
+// SNMP collector walks the generic profile AND the vendor profile for a device
+// (selectProfiles returns both, and their metrics are additive), so a family
+// marked Owner "gnmi" in one profile and left SNMP-owned in another is emitted
+// by SNMP anyway on every device the second profile matches — while gnmic, whose
+// ownership gate is global, has already been told to stop withholding it. That
+// asymmetry is the double-emit half of tracker 230 and it is invisible in review:
+// the two declarations sit ~150 lines apart in different vendor blocks.
+func TestMetricOwnershipIsConsistentAcrossProfiles(t *testing.T) {
+	owners := map[string]map[string][]string{} // metric -> owner -> profiles
+	for _, p := range builtinProfiles() {
+		for _, m := range p.Metrics {
+			owner := strings.ToLower(strings.TrimSpace(m.Owner))
+			if owner == "" {
+				owner = "snmp"
+			}
+			if owners[m.Name] == nil {
+				owners[m.Name] = map[string][]string{}
+			}
+			owners[m.Name][owner] = append(owners[m.Name][owner], p.Name)
+		}
+	}
+	for metric, byOwner := range owners {
+		if len(byOwner) > 1 {
+			t.Errorf("%s is owned inconsistently across profiles: %v — a family is "+
+				"owned by exactly one transport everywhere it is defined, or the "+
+				"unowned copies double-emit against the owning transport", metric, byOwner)
+		}
+	}
+}
+
+// The families gnmic canonically maps must be gNMI-owned, and the interface
+// families it does NOT map must stay SNMP-owned. This is the Go half of the
+// mirror; tests/test_gnmi_ownership_contract.py proves the same table against
+// deployment/docker/gnmic/gnmic.yaml so neither side can move alone.
+func TestGNMIMappedFamiliesAreGNMIOwned(t *testing.T) {
+	// Every canonical name the gnmic canon-names table produces for a metric a
+	// device also exposes over SNMP (tracker 230).
+	wantGNMI := map[string]bool{
+		"device_if_oper_status": true, "device_if_admin_status": true,
+		"device_if_in_octets": true, "device_if_out_octets": true,
+		"device_if_in_errors": true, "device_if_out_errors": true,
+		"device_if_in_discards": true, "device_if_out_discards": true,
+		"device_if_in_ucast_pkts": true, "device_if_in_mcast_pkts": true,
+		"device_if_in_bcast_pkts": true, "device_if_out_ucast_pkts": true,
+		"device_if_out_mcast_pkts": true, "device_if_out_bcast_pkts": true,
+		"device_cpu_percent": true, "device_mem_percent": true,
+		"device_temp_celsius": true, "device_bgp_peer_state": true,
+		"device_bgp_fsm_transitions": true,
+	}
+	// Interface families with NO gNMI source: SNMP keeps them on the very same
+	// device. If one of these ever gains an Owner the device loses it outright.
+	wantSNMP := map[string]bool{
+		"device_if_speed": true, "device_if_last_change": true,
+		"device_if_fcs_errors": true, "device_sysuptime": true,
+		"device_sensor_value": true, "device_ospf_nbr_state": true,
+	}
+	seen := map[string]bool{}
+	for _, p := range builtinProfiles() {
+		for _, m := range p.Metrics {
+			isGNMI := strings.EqualFold(m.Owner, "gnmi")
+			if wantGNMI[m.Name] {
+				seen[m.Name] = true
+				if !isGNMI {
+					t.Errorf("%s (profile %s) is mapped by gnmic and not withheld by its "+
+						"ownership gate, but is not Owner \"gnmi\" — both transports emit it",
+						m.Name, p.Name)
+				}
+			}
+			if wantSNMP[m.Name] {
+				seen[m.Name] = true
+				if m.Owner != "" && !strings.EqualFold(m.Owner, "snmp") {
+					t.Errorf("%s (profile %s) has Owner %q but gNMI has no source for it — "+
+						"a gNMI-capable device would get it from nobody", m.Name, p.Name, m.Owner)
+				}
+			}
+		}
+	}
+	for name := range wantGNMI {
+		if !seen[name] {
+			t.Errorf("%s is no longer in the built-in catalog — refresh this table", name)
+		}
+	}
+	for name := range wantSNMP {
+		if !seen[name] {
+			t.Errorf("%s is no longer in the built-in catalog — refresh this table", name)
+		}
 	}
 }
 

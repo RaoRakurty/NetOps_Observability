@@ -43,6 +43,10 @@ OVERLAY_PROCESSOR = "corr-rca-shape"
 # The canonical chain the VictoriaMetrics lane runs, in order. The correlation
 # output runs the SAME chain (incl. the ownership gate) before its shaper, so a
 # (device, family) pair stays served by exactly one transport on the bus.
+# The gate itself is empty since tracker 230 — every canonical family gnmic maps
+# is gNMI-owned — and tests/test_gnmi_ownership_contract.py is what proves the
+# SNMP side agrees. It stays in the chain because it is the only place a family
+# can be handed back to SNMP.
 CANONICAL_CHAIN = [
     "canon-override-ts", "canon-names", "canon-status-enums", "canon-bgp-enums",
     "canon-isis-enums", "canon-isis-area-info", "canon-convert", "vendor-nokia",
@@ -389,11 +393,15 @@ def test_full_chain_admits_only_gnmi_owned_rca_families():
     out = run_processors(RAW_FIXTURES, DETERMINISTIC_CHAIN + [OVERLAY_PROCESSOR])
     got = {(e["tags"]["device"], e["tags"]["metric"]) for e in out}
     assert got == {("leaf1", "device_bgp_peer_state"),
+                   ("leaf1", "device_if_in_octets"),
+                   ("leaf1", "device_if_oper_status"),
                    ("spine1", "device_mem_percent")}, (
-        "the correlation lane must carry exactly the gNMI-OWNED RCA families: "
-        "interfaces/cpu/temp are withheld by the ownership gate (SNMP owns "
-        "them), IS-IS adjacency and per-AFI prefixes by the RCA allowlist. "
-        f"got: {sorted(got)}")
+        "the correlation lane must carry exactly the gNMI-OWNED RCA families. "
+        "Interfaces joined that set with tracker 230 (the ownership gate no "
+        "longer withholds them and the SNMP profiles mark them Owner \"gnmi\"), "
+        "so they must reach the bus for a gNMI-only device. IS-IS adjacency and "
+        "per-AFI prefixes are still held back by the RCA allowlist, not by "
+        f"ownership. got: {sorted(got)}")
     bgp = next(e for e in out if e["tags"]["metric"] == "device_bgp_peer_state")
     assert bgp["tags"]["signal_family"] == "bgp"
     assert bgp["tags"]["unit"] == "state"
@@ -475,8 +483,9 @@ def test_isis_depth_families_are_not_on_the_correlation_allowlist():
 
 @needs_gnmic
 def test_shaper_explodes_multi_value_events_one_metric_each():
-    """The reshape is family-agnostic — run it without the ownership gate to see
-    the interface families it would carry the day their ownership flips."""
+    """The reshape is family-agnostic. The gate is empty since tracker 230, so
+    dropping it changes nothing here — it is dropped anyway so this stays a test
+    of the RESHAPE and keeps working whichever way a future ownership flip goes."""
     chain = [p for p in DETERMINISTIC_CHAIN if p != "ownership-gate"]
     out = run_processors(RAW_FIXTURES[:1], chain + [OVERLAY_PROCESSOR])
     assert len(out) == 2, "one 2-value event must become two single-value events"

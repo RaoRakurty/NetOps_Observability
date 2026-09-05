@@ -13538,7 +13538,15 @@ def _valid_debug_marker(marker: str) -> bool:
 
 def _debug_peek_params(body: bytes) -> dict:
     """Validate + CLAMP an untrusted peek request. Raises ValueError with an
-    operator-readable reason; never returns an unbounded value."""
+    operator-readable reason; never returns an unbounded value.
+
+    ValueError is the CONTRACT, not an accident: the sidecar handler catches
+    exactly it and answers 400 with the reason. A malformed request body is a
+    bad REQUEST, not a Python type error in our own code, and raising TypeError
+    here (what TRY004 suggests) would slip past that `except ValueError` and
+    surface to an operator as an unhandled 500 — the opposite of the honest,
+    named refusal this validator exists to give.
+    """
     if len(body) > CORR_DEBUG_MAX_BODY:
         raise ValueError("request body too large")
     try:
@@ -13546,7 +13554,7 @@ def _debug_peek_params(body: bytes) -> dict:
     except Exception as exc:                       # noqa: BLE001 — untrusted input
         raise ValueError(f"body is not JSON: {exc}") from None
     if not isinstance(req, dict):
-        raise ValueError("body must be a JSON object")
+        raise ValueError("body must be a JSON object")  # noqa: TRY004 — see the docstring: ValueError is the 400 channel
 
     topic = str(req.get("topic", "")).strip()
     if not _DEBUG_TOPIC_RE.match(topic):
@@ -13644,6 +13652,9 @@ async def _debug_kafka_peek(params: dict) -> dict:
 
 
 def _debug_level_params(body: bytes) -> dict:
+    """Validate an untrusted log-level request. Same ValueError contract as
+    _debug_peek_params above, for the same reason: the handler's
+    `except ValueError` is what turns a bad body into a 400 with a reason."""
     if len(body) > CORR_DEBUG_MAX_BODY:
         raise ValueError("request body too large")
     try:
@@ -13651,7 +13662,7 @@ def _debug_level_params(body: bytes) -> dict:
     except Exception as exc:                       # noqa: BLE001 — untrusted input
         raise ValueError(f"body is not JSON: {exc}") from None
     if not isinstance(req, dict):
-        raise ValueError("body must be a JSON object")
+        raise ValueError("body must be a JSON object")  # noqa: TRY004 — see the docstring: ValueError is the 400 channel
     level = str(req.get("level", "")).strip().lower()
     if level not in ("debug", "info"):
         raise ValueError("level must be debug or info")

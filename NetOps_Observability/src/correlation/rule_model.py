@@ -47,6 +47,7 @@ from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
+from regex_screen import pattern_screen
 from signals import Severity
 
 __all__ = [
@@ -95,8 +96,8 @@ def read_var(c: Ctx, name: str) -> Any:
     saves the second method call on each of them, which is worth ~15 % of the
     trap lane.
     """
-    v = c.vars.get(name, _MISS)
-    return c.var(name) if v is _MISS else v
+    memo = c.vars
+    return memo[name] if name in memo else c.var(name)
 
 #: Fields DERIVED on first use rather than built by the lane — `.upper()` on a
 #: 2 KB device string is not free and only a few rules read them.
@@ -178,9 +179,11 @@ class Ctx:
         self.vars = dict(self.lane_vars)
 
     def field(self, name: str) -> str:
-        v = self.base.get(name)
-        if v is not None:
-            return v
+        base = self.base
+        if name in base:
+            v = base[name]
+            if v is not None:
+                return v
         if name == "msg_u":
             v = str(self.base.get("msg", "")).upper()
         elif name == "ctoken_msg_u":
@@ -193,19 +196,28 @@ class Ctx:
     def var(self, name: str) -> Any:
         """A lane var or a memoized extraction, computed on first read.
 
-        Sentinel lookups rather than try/except: a MISS is the common case for
-        an extraction's first read, and raising + catching KeyError once per var
-        per line is measurable on the ingest hot path. `_COMPUTING` doubles as
-        the cycle guard — a spec that reads itself finds the sentinel.
+        `in` + `[]` rather than `.get(name, _MISS)`: `.get` is a bound-method
+        CALL and this is the commonest read on the ingest hot path — measured
+        90 -> 64 ns on a hit and 74 -> 41 ns on a miss (tracker 234).
+        `try: memo[name] except KeyError` is cheaper still on a hit but 3.5x
+        DEARER on a miss, which is exactly what an extraction's first read is.
+        `_COMPUTING` doubles as the cycle guard — a spec that reads itself finds
+        the sentinel.
         """
-        v = self.vars.get(name, _MISS)
-        if v is not _MISS:
+        memo = self.vars
+        if name in memo:
+            v = memo[name]
             if v is _COMPUTING:                         # pragma: no cover - guard
                 raise RuleError(f"cyclic extraction for var {name!r}")
             return v
-        spec = self.specs.get(name)
-        if spec is None:                                # pragma: no cover - guard
-            raise RuleError(f"rule reads undeclared var {name!r}")
+        # SUBSCRIPT, not `.get`: the spec table is bound per rule and every var
+        # a rule reads is declared in it, so this lookup always hits — and a
+        # bound-method call per var is not free on the ingest hot path (tracker
+        # 234). The miss is still a hard error, just raised from the KeyError.
+        try:
+            spec = self.specs[name]
+        except KeyError:                                # pragma: no cover - guard
+            raise RuleError(f"rule reads undeclared var {name!r}") from None
         self.vars[name] = _COMPUTING
         val = spec(self)
         self.vars[name] = val
@@ -251,9 +263,10 @@ def _reader(ref: str) -> Callable[[Ctx], str]:
     if ref.startswith("$"):
         name = ref[1:]
         def _var(c: Ctx) -> str:
-            v = c.vars.get(name, _MISS)
-            if v is _MISS:
-                v = c.var(name)
+            memo = c.vars
+            v = memo[name] if name in memo else c.var(name)
+            if v.__class__ is str:      # the case, for every extraction today
+                return v
             return v if isinstance(v, str) else ("" if v is None else str(v))
         return _var
     if ref in LAZY_FIELDS:
@@ -262,6 +275,55 @@ def _reader(ref: str) -> Callable[[Ctx], str]:
     # is what makes that safe — the bake refuses a rule that reads a field its
     # lane does not build.
     return lambda c: c.base[ref]
+
+
+def _eager(ref: str) -> bool:
+    """Is this operand a haystack the lane BUILT, readable with one dict index?
+
+    False for a `$var` (an extraction, resolved through the memo) and for a lazy
+    field (`msg_u`, derived on first use) — both need the general reader.
+    """
+    return not ref.startswith("$") and ref not in LAZY_FIELDS
+
+
+#: Prefix of the key a screened `re` guard caches its lower-cased haystack
+#: under. A private name (not a lane field) so it can never collide with one the
+#: catalog declares, and it lives in `base` so the TWELVE port rules that all
+#: read `pctoken` fold it once per event rather than once per rule.
+_LOW = "\x00low:"
+
+#: A literal screen only pays for itself when its literals are SELECTIVE. Both
+#: bounds are the shipped table's own numbers: the interface-name pattern
+#: screens to {gi, po, te, fa}, two characters each, which passes nearly every
+#: line and so would be pure added work — while the nine port patterns the
+#: screen does take have literals of four characters or more.
+_SCREEN_MIN_LITERAL = 4
+_SCREEN_MAX_LITERALS = 8
+
+
+def _screen_of(pattern: str) -> tuple[str, ...] | None:
+    """A SOUND set of literals a match must contain, or None for no screen.
+
+    `regex_screen.pattern_screen` is the soundness argument (it is the same
+    derivation the ingest prefilter is built from): the screen may pass a line
+    the regex then rejects, and must NEVER reject one the regex would match.
+    Anything it cannot read returns None and the guard keeps running the regex
+    on every line — failing OPEN costs microseconds, failing closed would drop
+    a signal.
+
+    Screening is worth doing because the port lane's twelve guards are
+    alternations with bounded gaps (`A|B[^\n]{0,80}C`), the one shape CPython's
+    `re` cannot answer with its literal prescan: it walks the string per
+    alternative. Measured over the golden corpus the twelve of them are 53 of
+    `port_event_signal`'s 67 us/event (tracker 234).
+    """
+    lits = pattern_screen(pattern)
+    if lits is None or len(lits) > _SCREEN_MAX_LITERALS:
+        return None
+    if min(len(lit) for lit in lits) < _SCREEN_MIN_LITERAL:
+        return None
+    # Longest first: the most selective literal decides the common case.
+    return tuple(sorted(lits, key=len, reverse=True))
 
 
 _CONTAINS, _EQ, _IN = 0, 1, 2
@@ -276,6 +338,8 @@ def _fused_contains(nodes: Any) -> tuple[tuple[int, str, Any], ...] | None:
     closure with an inline loop is worth roughly a third of the guard cost.
     Returns None (no fusion, keep the general tree) for anything else.
     """
+    if not isinstance(nodes, (list, tuple)):
+        return None
     out: list[tuple[int, str, Any]] = []
     for n in nodes:
         if not isinstance(n, dict) or len(n) != 1:
@@ -297,12 +361,44 @@ def _fused_contains(nodes: Any) -> tuple[tuple[int, str, Any], ...] | None:
     return tuple(out) or None
 
 
-def _fused_hit(kind: int, val: Any, text: str) -> bool:
-    if kind == _CONTAINS:
-        return val in text
-    if kind == _EQ:
-        return text == val
-    return text in val
+def _fused_groups(
+    nodes: Any, inner: str,
+) -> tuple[tuple[tuple[int, str, Any], ...], ...] | None:
+    """A TWO-LEVEL homogeneous tree of eager leaf tests → a table of groups.
+
+    `all` whose children are each either a bare leaf or an `any` of them (and
+    the `any`/`all` dual) is the commonest NESTED guard shape in the table —
+    thirteen of the thirty shipped rules, all of them the "marker AND one of
+    these protocol tokens" pre-check that every rule of a lane runs on every
+    admitted line. Compiled as a tree that is a Python call per node PLUS one
+    per leaf; as a group table it is one call and two inline loops.
+
+    Equivalence is structural, not incidental: a group is the inner node's
+    operand list in declaration order, the groups are the outer node's in
+    declaration order, and the loops short-circuit exactly where the tree does
+    (`all` stops at the first failing group, `any` at the first satisfied one).
+    A bare leaf becomes a one-element group, which the same loops evaluate
+    identically. Returns None the moment any leaf is not one `_fused_contains`
+    accepts, so a lazy field or a `$var` never reaches the flat form.
+    """
+    if not isinstance(nodes, (list, tuple)) or len(nodes) < 2:
+        return None
+    groups: list[tuple[tuple[int, str, Any], ...]] = []
+    nested = False
+    for n in nodes:
+        if not isinstance(n, dict) or len(n) != 1:
+            return None
+        op, arg = next(iter(n.items()))
+        if op == inner:
+            table = _fused_contains(arg)
+            nested = True
+        else:
+            table = _fused_contains((n,))
+        if table is None:
+            return None
+        groups.append(table)
+    # Nothing nested = the FLAT fusion already handles it, with one loop.
+    return tuple(groups) if nested else None
 
 
 def compile_guard(node: Any) -> Guard:
@@ -321,11 +417,38 @@ def compile_guard(node: Any) -> Guard:
             table = fused
             def _all_contains(c: Ctx) -> bool:
                 base = c.base
+                # The kind test is written INTO the loop rather than
+                # dispatched through a helper: a call per leaf was the single
+                # commonest call in either lane (tracker 234).
                 for kind, fld, val in table:
-                    if not _fused_hit(kind, val, base[fld]):
+                    text = base[fld]
+                    if kind == _CONTAINS:
+                        if val not in text:
+                            return False
+                    elif kind == _EQ:
+                        if text != val:
+                            return False
+                    elif text not in val:
                         return False
                 return True
             return _all_contains
+        groups = _fused_groups(arg, "any")
+        if groups is not None:
+            gtable = groups
+            # all(any(leaf...), leaf, ...) — the first group that admits NO leaf
+            # ends the walk, exactly as the tree's first false child does.
+            def _all_of_any(c: Ctx) -> bool:
+                base = c.base
+                for group in gtable:
+                    for kind, fld, val in group:
+                        text = base[fld]
+                        if (val in text if kind == _CONTAINS else
+                                text == val if kind == _EQ else text in val):
+                            break
+                    else:
+                        return False
+                return True
+            return _all_of_any
         subs = tuple(compile_guard(n) for n in arg)
         def _all(c: Ctx) -> bool:
             for g in subs:
@@ -339,11 +462,35 @@ def compile_guard(node: Any) -> Guard:
             table = fused
             def _any_contains(c: Ctx) -> bool:
                 base = c.base
-                for kind, fld, val in table:
-                    if _fused_hit(kind, val, base[fld]):
+                for kind, fld, val in table:        # see _all_contains
+                    text = base[fld]
+                    if kind == _CONTAINS:
+                        if val in text:
+                            return True
+                    elif kind == _EQ:
+                        if text == val:
+                            return True
+                    elif text in val:
                         return True
                 return False
             return _any_contains
+        groups = _fused_groups(arg, "all")
+        if groups is not None:
+            gtable = groups
+            # any(all(leaf...), leaf, ...) — the first group whose leaves ALL
+            # hit ends the walk, exactly as the tree's first true child does.
+            def _any_of_all(c: Ctx) -> bool:
+                base = c.base
+                for group in gtable:
+                    for kind, fld, val in group:
+                        text = base[fld]
+                        if not (val in text if kind == _CONTAINS else
+                                text == val if kind == _EQ else text in val):
+                            break
+                    else:
+                        return True
+                return False
+            return _any_of_all
         subs = tuple(compile_guard(n) for n in arg)
         def _any(c: Ctx) -> bool:
             for g in subs:
@@ -357,31 +504,73 @@ def compile_guard(node: Any) -> Guard:
     if op == "always":
         fixed = bool(arg)
         return lambda c: fixed
+    # Every leaf below reads ONE operand. When that operand is a haystack the
+    # lane built eagerly, the read is a dict index and the closure does it
+    # itself; going through `_reader` would cost a second Python call per leaf
+    # per rule per line — 8 per syslog line measured over the golden corpus
+    # (tracker 234). `$var` and lazy-field operands keep the general reader.
     if op == "contains":
         ref, lit = str(arg[0]), str(arg[1])
-        if not ref.startswith("$") and ref not in LAZY_FIELDS:
+        if _eager(ref):
             return lambda c: lit in c.base[ref]      # the hot path, fused
+        if ref in LAZY_FIELDS:                       # derived on first use
+            return lambda c: lit in c.field(ref)
         read = _reader(ref)
         return lambda c: lit in read(c)
     if op == "re":
-        read, pat = _reader(arg[0]), str(arg[1])
+        ref, pat = str(arg[0]), str(arg[1])
         rx = re.compile(pat, _flags_of(arg[2] if len(arg) > 2 else ""))
         search = rx.search
+        if _eager(ref):
+            lits = _screen_of(pat)
+            if lits is None:
+                return lambda c: search(c.base[ref]) is not None
+            low_key = _LOW + ref
+            def _re_screened(c: Ctx) -> bool:
+                # The screen is a NECESSARY condition, so a miss is a decided
+                # False; a hit still has to run the regex.
+                base = c.base
+                if low_key in base:
+                    low = base[low_key]
+                else:
+                    low = base[ref].lower()
+                    base[low_key] = low
+                for lit in lits:
+                    if lit in low:
+                        return search(base[ref]) is not None
+                return False
+            return _re_screened
+        read = _reader(ref)
         return lambda c: search(read(c)) is not None
     if op == "eq":
-        read, want = _reader(arg[0]), str(arg[1])
+        ref, want = str(arg[0]), str(arg[1])
+        if _eager(ref):
+            return lambda c: c.base[ref] == want
+        read = _reader(ref)
         return lambda c: read(c) == want
     if op == "ne":
-        read, unwanted = _reader(arg[0]), str(arg[1])
+        ref, unwanted = str(arg[0]), str(arg[1])
+        if _eager(ref):
+            return lambda c: c.base[ref] != unwanted
+        read = _reader(ref)
         return lambda c: read(c) != unwanted
     if op == "equals_any":
-        read, vals = _reader(arg[0]), frozenset(str(v) for v in arg[1])
+        ref, vals = str(arg[0]), frozenset(str(v) for v in arg[1])
+        if _eager(ref):
+            return lambda c: c.base[ref] in vals
+        read = _reader(ref)
         return lambda c: read(c) in vals
     if op == "not_in":
-        read, vals = _reader(arg[0]), frozenset(str(v) for v in arg[1])
+        ref, vals = str(arg[0]), frozenset(str(v) for v in arg[1])
+        if _eager(ref):
+            return lambda c: c.base[ref] not in vals
+        read = _reader(ref)
         return lambda c: read(c) not in vals
     if op == "truthy":
-        read = _reader(str(arg))
+        ref = str(arg)
+        if _eager(ref):
+            return lambda c: bool(c.base[ref])
+        read = _reader(ref)
         return lambda c: bool(read(c))
     if op == "var_true":
         name = str(arg)
@@ -425,9 +614,10 @@ def compile_template(tpl: str) -> tuple[Callable[[Ctx], str], tuple[str, ...]]:
         only, dflt = parts[0][1], parts[0][2]
 
         def render_one(c: Ctx) -> str:
-            v = c.vars.get(only, _MISS)
-            if v is _MISS:
-                v = c.var(only)
+            memo = c.vars
+            v = memo[only] if only in memo else c.var(only)
+            if v.__class__ is str:
+                return v or dflt
             s_ = "" if v is None else (v if isinstance(v, str) else str(v))
             return s_ or dflt
         return render_one, tuple(names)
@@ -435,13 +625,17 @@ def compile_template(tpl: str) -> tuple[Callable[[Ctx], str], tuple[str, ...]]:
     def render(c: Ctx) -> str:
         # Straight concatenation, not list+join: these templates are 2-5
         # placeholders long and the list machinery costs more than the copies.
-        cached = c.vars
+        memo = c.vars
         out = ""
         for lit, name, dflt in parts:
-            v = cached.get(name, _MISS)
-            if v is _MISS:
-                v = c.var(name)
-            s = "" if v is None else (v if isinstance(v, str) else str(v))
+            v = memo[name] if name in memo else c.var(name)
+            if v.__class__ is str:
+                # EXACT str is what every extraction returns; the general
+                # coercion below is kept for the int/bool/None spellings the DSL
+                # allows (and for a str SUBCLASS, which `__class__ is` misses).
+                s = v
+            else:
+                s = "" if v is None else (v if isinstance(v, str) else str(v))
             out += lit + (s or dflt)
         return out + tail
 
@@ -464,8 +658,8 @@ def _compile_extract_core(spec: Any) -> Extractor:
         # `field: $x` would coerce them to text).
         name = str(arg)
         def _read(c: Ctx) -> Any:
-            v = c.vars.get(name, _MISS)
-            return c.var(name) if v is _MISS else v
+            memo = c.vars
+            return memo[name] if name in memo else c.var(name)
         return _read
     if op == "lane":
         # A value only the lane can compute (the trap content rendering). Kept
@@ -478,7 +672,10 @@ def _compile_extract_core(spec: Any) -> Extractor:
         # column OIDs (ifName.7 matches the ifName column).
         prefixes = tuple(str(p) for p in arg)
         def _vb(c: Ctx) -> str:
-            for vb in c.base["ev"].get("varbinds") or ():
+            ev = c.base["ev"]
+            if "varbinds" not in ev:
+                return ""
+            for vb in ev["varbinds"] or ():
                 if not isinstance(vb, dict):
                     continue
                 oid = str(vb.get("oid") or "")
@@ -493,12 +690,17 @@ def _compile_extract_core(spec: Any) -> Extractor:
         # enterprise OID.
         subs = tuple(str(needle).lower() for needle in arg)
         def _vbname(c: Ctx) -> str:
-            for vb in c.base["ev"].get("varbinds") or ():
+            ev = c.base["ev"]
+            if "varbinds" not in ev:
+                return ""
+            for vb in ev["varbinds"] or ():
                 if not isinstance(vb, dict):
                     continue
                 nm = str(vb.get("name") or "").lower()
-                if nm and any(x in nm for x in subs):
-                    return str(vb.get("value") or "")
+                if nm:
+                    for needle in subs:     # not `any(...)`: no generator frame
+                        if needle in nm:
+                            return str(vb.get("value") or "")
             return ""
         return _vbname
     if op == "pick":
@@ -524,9 +726,10 @@ def _compile_extract_core(spec: Any) -> Extractor:
         def _ev(c: Ctx) -> str:
             ev = c.base["ev"]
             for k in keys:
-                v = ev.get(k)
-                if v:
-                    return str(v)
+                if k in ev:
+                    v = ev[k]
+                    if v:
+                        return str(v)
             return ""
         return _ev
     if op == "re":
@@ -544,8 +747,11 @@ def _compile_extract_core(spec: Any) -> Extractor:
             return ""
         return _re
     if op == "findall":
-        read, pat = _reader(arg[0]), str(arg[1])
+        ref, pat = str(arg[0]), str(arg[1])
         rx = re.compile(pat, _flags_of(arg[2] if len(arg) > 2 else ""))
+        if _eager(ref):
+            return lambda c: rx.findall(c.base[ref])
+        read = _reader(ref)
         return lambda c: rx.findall(read(c))
     if op == "nth":
         src, idx = str(arg[0]), int(arg[1])

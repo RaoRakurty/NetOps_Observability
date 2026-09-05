@@ -28,6 +28,23 @@ type SNMPMetric struct {
 	// polls it on devices that DON'T (the agentless fallback). The other transport's
 	// canonical lane mirrors the gate (see gnmic ownership-gate). Single-contract:
 	// exactly one transport per (device, family).
+	//
+	// THE MIRROR IS A HARD CONTRACT, not a convention. A family is either
+	// SNMP-owned (no Owner here AND listed in the gnmic ownership-gate's delete
+	// list) or gNMI-owned (Owner "gnmi" in EVERY profile that defines it AND
+	// absent from that delete list). Both-yield leaves a gNMI-only device with
+	// nothing — that was tracker 230, where an SR Linux spine that answers no
+	// SNMP at all got interfaces, CPU and temperature from neither transport
+	// because gnmic deleted them unconditionally while SNMP yielded them on
+	// gNMI-capable devices. Both-emit produces the same series twice.
+	// tests/test_gnmi_ownership_contract.py fails the build on either state.
+	//
+	// What Owner "gnmi" asserts, and therefore what the operator asserts by
+	// labelling a device `gnmi: "true"`: this device's gnmic subscriptions cover
+	// this family, because the SNMP poller stops emitting it there. Ownership is
+	// per (device, FAMILY) — the interface families gNMI does NOT map
+	// (device_if_speed, device_if_last_change, device_if_fcs_errors) carry no
+	// Owner and keep being polled over SNMP on the very same device.
 	Owner string
 	// IndexLabel renames a table row's index label so an SNMP-owned series matches
 	// the canonical contract the richer transport uses (e.g. bgpPeerTable index →
@@ -68,45 +85,50 @@ func builtinProfiles() []SNMPProfile {
 			Name:       "generic",
 			Enterprise: 0,
 			Metrics: []SNMPMetric{
-				{Name: "device_sysuptime", OID: []int{1, 3, 6, 1, 2, 1, 1, 3}},                          // sysUpTime
-				{Name: "device_if_oper_status", OID: []int{1, 3, 6, 1, 2, 1, 2, 2, 1, 8}, Table: true},  // ifOperStatus
-				{Name: "device_if_admin_status", OID: []int{1, 3, 6, 1, 2, 1, 2, 2, 1, 7}, Table: true}, // ifAdminStatus
+				{Name: "device_sysuptime", OID: []int{1, 3, 6, 1, 2, 1, 1, 3}},                                         // sysUpTime
+				{Name: "device_if_oper_status", OID: []int{1, 3, 6, 1, 2, 1, 2, 2, 1, 8}, Table: true, Owner: "gnmi"},  // ifOperStatus
+				{Name: "device_if_admin_status", OID: []int{1, 3, 6, 1, 2, 1, 2, 2, 1, 7}, Table: true, Owner: "gnmi"}, // ifAdminStatus
 				// ifLastChange (sysUpTime when the interface entered its current
 				// state) — the interface flap timestamp. A change in this value IS a
 				// flap; correlation can pin "this port flapped at T" against other
 				// signals. VM-only (its step-on-flap shape is not a CUSUM level).
 				{Name: "device_if_last_change", OID: []int{1, 3, 6, 1, 2, 1, 2, 2, 1, 9}, Table: true},
-				{Name: "device_if_in_octets", OID: []int{1, 3, 6, 1, 2, 1, 31, 1, 1, 1, 6}, Table: true}, // ifHCInOctets
-				{Name: "device_if_out_octets", OID: []int{1, 3, 6, 1, 2, 1, 31, 1, 1, 1, 10}, Table: true},
+				{Name: "device_if_in_octets", OID: []int{1, 3, 6, 1, 2, 1, 31, 1, 1, 1, 6}, Table: true, Owner: "gnmi"}, // ifHCInOctets
+				{Name: "device_if_out_octets", OID: []int{1, 3, 6, 1, 2, 1, 31, 1, 1, 1, 10}, Table: true, Owner: "gnmi"},
 				// ifHighSpeed (Mbps) — denominator for the utilization panels;
 				// without it inbound/outbound utilization % is empty.
 				{Name: "device_if_speed", OID: []int{1, 3, 6, 1, 2, 1, 31, 1, 1, 1, 15}, Table: true},
 				// Error/discard counters — the "interfaces with most errors" and
 				// the four error/discard graphs read these.
-				{Name: "device_if_in_errors", OID: []int{1, 3, 6, 1, 2, 1, 2, 2, 1, 14}, Table: true},    // ifInErrors
-				{Name: "device_if_out_errors", OID: []int{1, 3, 6, 1, 2, 1, 2, 2, 1, 20}, Table: true},   // ifOutErrors
-				{Name: "device_if_in_discards", OID: []int{1, 3, 6, 1, 2, 1, 2, 2, 1, 13}, Table: true},  // ifInDiscards
-				{Name: "device_if_out_discards", OID: []int{1, 3, 6, 1, 2, 1, 2, 2, 1, 19}, Table: true}, // ifOutDiscards
+				{Name: "device_if_in_errors", OID: []int{1, 3, 6, 1, 2, 1, 2, 2, 1, 14}, Table: true, Owner: "gnmi"},    // ifInErrors
+				{Name: "device_if_out_errors", OID: []int{1, 3, 6, 1, 2, 1, 2, 2, 1, 20}, Table: true, Owner: "gnmi"},   // ifOutErrors
+				{Name: "device_if_in_discards", OID: []int{1, 3, 6, 1, 2, 1, 2, 2, 1, 13}, Table: true, Owner: "gnmi"},  // ifInDiscards
+				{Name: "device_if_out_discards", OID: []int{1, 3, 6, 1, 2, 1, 2, 2, 1, 19}, Table: true, Owner: "gnmi"}, // ifOutDiscards
 				// EtherLike-MIB dot3StatsFCSErrors (RFC 3635, dot3StatsTable indexed
 				// by ifIndex). The L1 fault discriminator: FCS errors point at a
 				// physical-layer fault (bad cable/SFP/CRC) distinct from L2/L3 drops,
 				// so correlation can separate a dirty link from a congestion drop.
 				{Name: "device_if_fcs_errors", OID: []int{1, 3, 6, 1, 2, 1, 10, 7, 2, 1, 3}, Table: true},
 				// HC packet-mix counters (ifXTable) — the unicast/multicast/broadcast panels.
-				{Name: "device_if_in_ucast_pkts", OID: []int{1, 3, 6, 1, 2, 1, 31, 1, 1, 1, 7}, Table: true},
-				{Name: "device_if_in_mcast_pkts", OID: []int{1, 3, 6, 1, 2, 1, 31, 1, 1, 1, 8}, Table: true},
-				{Name: "device_if_in_bcast_pkts", OID: []int{1, 3, 6, 1, 2, 1, 31, 1, 1, 1, 9}, Table: true},
-				{Name: "device_if_out_ucast_pkts", OID: []int{1, 3, 6, 1, 2, 1, 31, 1, 1, 1, 11}, Table: true},
-				{Name: "device_if_out_mcast_pkts", OID: []int{1, 3, 6, 1, 2, 1, 31, 1, 1, 1, 12}, Table: true},
-				{Name: "device_if_out_bcast_pkts", OID: []int{1, 3, 6, 1, 2, 1, 31, 1, 1, 1, 13}, Table: true},
-				{Name: "device_cpu_percent", OID: []int{1, 3, 6, 1, 2, 1, 25, 3, 3, 1, 2}, Table: true},  // hrProcessorLoad (HOST-RESOURCES-MIB)
-				{Name: "device_sensor_value", OID: []int{1, 3, 6, 1, 2, 1, 99, 1, 1, 1, 4}, Table: true}, // entPhySensorValue (ENTITY-SENSOR-MIB)
+				{Name: "device_if_in_ucast_pkts", OID: []int{1, 3, 6, 1, 2, 1, 31, 1, 1, 1, 7}, Table: true, Owner: "gnmi"},
+				{Name: "device_if_in_mcast_pkts", OID: []int{1, 3, 6, 1, 2, 1, 31, 1, 1, 1, 8}, Table: true, Owner: "gnmi"},
+				{Name: "device_if_in_bcast_pkts", OID: []int{1, 3, 6, 1, 2, 1, 31, 1, 1, 1, 9}, Table: true, Owner: "gnmi"},
+				{Name: "device_if_out_ucast_pkts", OID: []int{1, 3, 6, 1, 2, 1, 31, 1, 1, 1, 11}, Table: true, Owner: "gnmi"},
+				{Name: "device_if_out_mcast_pkts", OID: []int{1, 3, 6, 1, 2, 1, 31, 1, 1, 1, 12}, Table: true, Owner: "gnmi"},
+				{Name: "device_if_out_bcast_pkts", OID: []int{1, 3, 6, 1, 2, 1, 31, 1, 1, 1, 13}, Table: true, Owner: "gnmi"},
+				{Name: "device_cpu_percent", OID: []int{1, 3, 6, 1, 2, 1, 25, 3, 3, 1, 2}, Table: true, Owner: "gnmi"}, // hrProcessorLoad (HOST-RESOURCES-MIB)
+				{Name: "device_sensor_value", OID: []int{1, 3, 6, 1, 2, 1, 99, 1, 1, 1, 4}, Table: true},               // entPhySensorValue (ENTITY-SENSOR-MIB)
 				// BGP4-MIB bgpPeerTable (index = bgpPeerRemoteAddr) — gNMI-OWNED where a
 				// device has gNMI (OpenConfig carries richer BGP: per-AFI prefixes, vrf),
 				// SNMP is the agentless fallback. IndexLabel "peer" matches gNMI's contract.
 				{Name: "device_bgp_peer_state", OID: []int{1, 3, 6, 1, 2, 1, 15, 3, 1, 2}, Table: true, Owner: "gnmi", IndexLabel: "peer"},       // bgpPeerState
 				{Name: "device_bgp_fsm_transitions", OID: []int{1, 3, 6, 1, 2, 1, 15, 3, 1, 15}, Table: true, Owner: "gnmi", IndexLabel: "peer"}, // bgpPeerFsmEstablishedTransitions
-				{Name: "device_bgp_in_updates", OID: []int{1, 3, 6, 1, 2, 1, 15, 3, 1, 10}, Table: true, Owner: "gnmi", IndexLabel: "peer"},      // bgpPeerInUpdates
+				// bgpPeerInUpdates has NO gNMI counterpart: neither vendor's subscription
+				// carries an UPDATE-message counter and canon-names maps nothing to it,
+				// so an Owner here would withhold it on every gNMI-capable device and
+				// hand it to nobody. SNMP-owned until a gNMI source exists (found by
+				// tests/test_gnmi_ownership_contract.py while fixing tracker 230).
+				{Name: "device_bgp_in_updates", OID: []int{1, 3, 6, 1, 2, 1, 15, 3, 1, 10}, Table: true, IndexLabel: "peer"}, // bgpPeerInUpdates
 				// OSPF-MIB neighbor/interface state — SNMP-owned (gNMI carries IS-IS here,
 				// not OSPF). IndexLabel "neighbor" is the canonical adjacency identity.
 				{Name: "device_ospf_nbr_state", OID: []int{1, 3, 6, 1, 2, 1, 14, 10, 1, 6}, Table: true, IndexLabel: "neighbor"}, // ospfNbrState
@@ -159,18 +181,18 @@ func builtinProfiles() []SNMPProfile {
 			Name:       "cisco",
 			Enterprise: 9,
 			Metrics: []SNMPMetric{
-				{Name: "device_cpu_percent", OID: []int{1, 3, 6, 1, 4, 1, 9, 9, 109, 1, 1, 1, 1, 8}, Table: true}, // cpmCPUTotal5minRev
-				{Name: "device_mem_used_bytes", OID: []int{1, 3, 6, 1, 4, 1, 9, 9, 48, 1, 1, 1, 5}, Table: true},  // ciscoMemoryPoolUsed
-				{Name: "device_temp_celsius", OID: []int{1, 3, 6, 1, 4, 1, 9, 9, 13, 1, 3, 1, 3}, Table: true},    // ciscoEnvMonTemperatureValue
+				{Name: "device_cpu_percent", OID: []int{1, 3, 6, 1, 4, 1, 9, 9, 109, 1, 1, 1, 1, 8}, Table: true, Owner: "gnmi"}, // cpmCPUTotal5minRev
+				{Name: "device_mem_used_bytes", OID: []int{1, 3, 6, 1, 4, 1, 9, 9, 48, 1, 1, 1, 5}, Table: true},                 // ciscoMemoryPoolUsed
+				{Name: "device_temp_celsius", OID: []int{1, 3, 6, 1, 4, 1, 9, 9, 13, 1, 3, 1, 3}, Table: true, Owner: "gnmi"},    // ciscoEnvMonTemperatureValue
 			},
 		},
 		{
 			Name:       "juniper",
 			Enterprise: 2636,
 			Metrics: []SNMPMetric{
-				{Name: "device_cpu_percent", OID: []int{1, 3, 6, 1, 4, 1, 2636, 3, 1, 13, 1, 8}, Table: true},  // jnxOperatingCPU
-				{Name: "device_temp_celsius", OID: []int{1, 3, 6, 1, 4, 1, 2636, 3, 1, 13, 1, 7}, Table: true}, // jnxOperatingTemp
-				{Name: "device_mem_percent", OID: []int{1, 3, 6, 1, 4, 1, 2636, 3, 1, 13, 1, 11}, Table: true}, // jnxOperatingBuffer
+				{Name: "device_cpu_percent", OID: []int{1, 3, 6, 1, 4, 1, 2636, 3, 1, 13, 1, 8}, Table: true, Owner: "gnmi"},  // jnxOperatingCPU
+				{Name: "device_temp_celsius", OID: []int{1, 3, 6, 1, 4, 1, 2636, 3, 1, 13, 1, 7}, Table: true, Owner: "gnmi"}, // jnxOperatingTemp
+				{Name: "device_mem_percent", OID: []int{1, 3, 6, 1, 4, 1, 2636, 3, 1, 13, 1, 11}, Table: true, Owner: "gnmi"}, // jnxOperatingBuffer
 			},
 		},
 		// F5 BIG-IP (F5-BIGIP-SYSTEM/LOCAL-MIB). Load-balancer health — the
@@ -243,9 +265,9 @@ func builtinProfiles() []SNMPProfile {
 			Name:       "mikrotik",
 			Enterprise: 14988,
 			Metrics: []SNMPMetric{
-				{Name: "device_temp_celsius", OID: []int{1, 3, 6, 1, 4, 1, 14988, 1, 1, 3, 10}},     // mtxrHlTemperature (scalar, deci-C on some models)
-				{Name: "device_cpu_temp_celsius", OID: []int{1, 3, 6, 1, 4, 1, 14988, 1, 1, 3, 11}}, // mtxrHlProcessorTemperature (scalar)
-				{Name: "device_voltage_dv", OID: []int{1, 3, 6, 1, 4, 1, 14988, 1, 1, 3, 8}},        // mtxrHlVoltage (scalar, deci-V)
+				{Name: "device_temp_celsius", OID: []int{1, 3, 6, 1, 4, 1, 14988, 1, 1, 3, 10}, Owner: "gnmi"}, // mtxrHlTemperature (scalar, deci-C on some models)
+				{Name: "device_cpu_temp_celsius", OID: []int{1, 3, 6, 1, 4, 1, 14988, 1, 1, 3, 11}},            // mtxrHlProcessorTemperature (scalar)
+				{Name: "device_voltage_dv", OID: []int{1, 3, 6, 1, 4, 1, 14988, 1, 1, 3, 8}},                   // mtxrHlVoltage (scalar, deci-V)
 			},
 		},
 		// Sophos SFOS / XG firewall. SFOS SNMP is sparse — most health rides the
@@ -297,9 +319,9 @@ func builtinProfiles() []SNMPProfile {
 			Name:       "huawei",
 			Enterprise: 2011,
 			Metrics: []SNMPMetric{
-				{Name: "device_cpu_percent", OID: []int{1, 3, 6, 1, 4, 1, 2011, 5, 25, 31, 1, 1, 1, 1, 5}, Table: true},   // hwEntityCpuUsage
-				{Name: "device_mem_percent", OID: []int{1, 3, 6, 1, 4, 1, 2011, 5, 25, 31, 1, 1, 1, 1, 7}, Table: true},   // hwEntityMemUsage
-				{Name: "device_temp_celsius", OID: []int{1, 3, 6, 1, 4, 1, 2011, 5, 25, 31, 1, 1, 1, 1, 11}, Table: true}, // hwEntityTemperature
+				{Name: "device_cpu_percent", OID: []int{1, 3, 6, 1, 4, 1, 2011, 5, 25, 31, 1, 1, 1, 1, 5}, Table: true, Owner: "gnmi"},   // hwEntityCpuUsage
+				{Name: "device_mem_percent", OID: []int{1, 3, 6, 1, 4, 1, 2011, 5, 25, 31, 1, 1, 1, 1, 7}, Table: true, Owner: "gnmi"},   // hwEntityMemUsage
+				{Name: "device_temp_celsius", OID: []int{1, 3, 6, 1, 4, 1, 2011, 5, 25, 31, 1, 1, 1, 1, 11}, Table: true, Owner: "gnmi"}, // hwEntityTemperature
 			},
 		},
 		// Extreme EXOS (EXTREME-SYSTEM-MIB). CPU / free memory / temperature.
@@ -308,9 +330,9 @@ func builtinProfiles() []SNMPProfile {
 			Name:       "extreme",
 			Enterprise: 1916,
 			Metrics: []SNMPMetric{
-				{Name: "device_cpu_percent", OID: []int{1, 3, 6, 1, 4, 1, 1916, 1, 32, 1, 4, 1, 4}, Table: true}, // extremeCpuMonitorTotalUtilization
-				{Name: "device_mem_free_kb", OID: []int{1, 3, 6, 1, 4, 1, 1916, 1, 32, 2, 2, 1, 3}, Table: true}, // extremeMemoryMonitorSystemFree
-				{Name: "device_temp_celsius", OID: []int{1, 3, 6, 1, 4, 1, 1916, 1, 1, 1, 8}},                    // extremeCurrentTemperature (scalar)
+				{Name: "device_cpu_percent", OID: []int{1, 3, 6, 1, 4, 1, 1916, 1, 32, 1, 4, 1, 4}, Table: true, Owner: "gnmi"}, // extremeCpuMonitorTotalUtilization
+				{Name: "device_mem_free_kb", OID: []int{1, 3, 6, 1, 4, 1, 1916, 1, 32, 2, 2, 1, 3}, Table: true},                // extremeMemoryMonitorSystemFree
+				{Name: "device_temp_celsius", OID: []int{1, 3, 6, 1, 4, 1, 1916, 1, 1, 1, 8}, Owner: "gnmi"},                    // extremeCurrentTemperature (scalar)
 			},
 		},
 		// Arista EOS — standard-MIB native: CPU/memory via HOST-RESOURCES and

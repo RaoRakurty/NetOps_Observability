@@ -44,27 +44,27 @@ targets:
     name: leaf1
     password: ${EOS_GNMI_PASS}
     insecure: true
-    subscriptions: [oc-interfaces, oc-bgp]
+    subscriptions: [oc-interfaces, oc-cpu, oc-bgp]
   172.40.40.22:6030:
     name: leaf2
     password: ${EOS_GNMI_PASS}
     insecure: true
-    subscriptions: [oc-interfaces, oc-bgp]
+    subscriptions: [oc-interfaces, oc-cpu, oc-bgp]
   172.40.40.23:6030:
     name: leaf3
     password: ${EOS_GNMI_PASS}
     insecure: true
-    subscriptions: [oc-interfaces, oc-bgp]
+    subscriptions: [oc-interfaces, oc-cpu, oc-bgp]
   172.40.40.24:6030:
     name: leaf4
     password: ${EOS_GNMI_PASS}
     insecure: true
-    subscriptions: [oc-interfaces, oc-bgp]
+    subscriptions: [oc-interfaces, oc-cpu, oc-bgp]
   172.40.40.32:6030:
     name: wan-r2
     password: ${EOS_GNMI_PASS}
     insecure: true
-    subscriptions: [oc-interfaces, oc-bgp]
+    subscriptions: [oc-interfaces, oc-cpu, oc-bgp]
 
 subscriptions:
   # OpenConfig interface counters + oper/admin status (Arista).
@@ -73,6 +73,24 @@ subscriptions:
       - "/interfaces/interface/state/counters"
       - "/interfaces/interface/state/oper-status"
       - "/interfaces/interface/state/admin-status"
+    mode: stream
+    stream-mode: sample
+    sample-interval: 30s
+
+  # Arista OpenConfig CPU utilization — the gNMI counterpart of the SNMP
+  # hrProcessorLoad table, added with tracker 230 so that flipping
+  # device_cpu_percent to gNMI ownership costs an Arista device nothing.
+  # VERIFIED LIVE against lab leaf1 (cEOS) on 2026-09-05 with a gNMI Get AND a
+  # streaming subscribe, not transcribed from a datasheet: cEOS answers with one
+  # component per core (CPU0, CPU1, ...) carrying instant/avg/min/max. We take
+  # `instant` ONLY — it is the same "load right now" sample hrProcessorLoad
+  # reports, and subscribing to the leaf keeps avg/min/max out of the canonical
+  # namespace entirely rather than relying on drop-unmapped to catch them.
+  # The per-core component key becomes the `index` label (canon-tags), which is
+  # exactly how the SNMP lane labels the hrProcessorLoad rows.
+  oc-cpu:
+    paths:
+      - "/components/component[name=*]/cpu/utilization/state/instant"
     mode: stream
     stream-mode: sample
     sample-interval: 30s
@@ -108,6 +126,14 @@ subscriptions:
   srl-bgp:
     paths:
       - "/network-instance[name=*]/protocols/bgp/neighbor[peer-address=*]/session-state"
+      # Flap counter, the SRL native counterpart of the OpenConfig
+      # established-transitions above. VERIFIED LIVE on lab spine1 (SR Linux) by
+      # a gNMI Get on 2026-09-05, not from a datasheet — SRL puts the leaf
+      # directly under the neighbor list (no /state/ container). Added with
+      # tracker 230: device_bgp_fsm_transitions is gNMI-owned, so without this
+      # path an SR Linux device labelled `gnmi: "true"` would lose the SNMP
+      # bgpPeerFsmEstablishedTransitions series and gain nothing.
+      - "/network-instance[name=*]/protocols/bgp/neighbor[peer-address=*]/established-transitions"
     mode: stream
     stream-mode: on-change
     heartbeat-interval: 30s
@@ -200,13 +226,32 @@ outputs:
   # canonical label set → OWNERSHIP GATE → fail-closed cleanup.
   #
   # Ownership rule (collision safety): a (device, family) pair is served by
-  # exactly ONE transport. gNMI coverage is currently a strict SUBSET of SNMP
-  # on interfaces (no VLANs/loopbacks/subifs, no speed/admin parity proven),
-  # so interface/cpu/temp families stay SNMP-owned and are withheld here by
-  # the ownership gate. Memory on Nokia SRL has NO SNMP source at all — gNMI
-  # owns it from day one. To flip a family to gNMI: prove parity against the
-  # raw lane, remove it from the ownership-gate delete list, and withdraw it
-  # from the SNMP profile for the affected devices in the same change.
+  # exactly ONE transport, and the decision is made PER DEVICE on the SNMP side
+  # — `SNMPMetric.Owner` + the device's `gnmi: "true"` label
+  # (src/backend/collectors/profiles.go `ownedElsewhere`). gnmic's ownership
+  # gate is the mirror of that table, and the two must agree family-for-family:
+  # a family the gate deletes must be SNMP-owned, a family it does not delete
+  # must be `Owner: "gnmi"` everywhere the SNMP profiles define it. Enforced by
+  # tests/test_gnmi_ownership_contract.py, not by convention.
+  #
+  # Every canonical family gnmic maps is now gNMI-owned (tracker 230), so the
+  # gate deletes nothing. What that costs the SNMP lane is bounded and
+  # deliberate: gNMI's interface coverage is a strict SUBSET of SNMP's, so the
+  # families gNMI does NOT map — device_if_speed, device_if_last_change,
+  # device_if_fcs_errors, device_sensor_value, device_sysuptime — keep NO Owner
+  # and are still polled over SNMP on the very same device. Ownership is per
+  # (device, FAMILY); a dual-transport device legitimately draws interface
+  # counters from gNMI and interface speed from SNMP.
+  #
+  # THE OPERATOR CONTRACT: labelling a device `gnmi: "true"` asserts that its
+  # gnmic subscriptions cover the gNMI-owned families, because the SNMP poller
+  # will stop emitting them for that device. Coverage shipped here:
+  #   interfaces  — Arista oc-interfaces + Nokia srl-interfaces  (both vendors)
+  #   BGP         — oc-bgp + srl-bgp                             (both vendors)
+  #   CPU         — Arista oc-cpu + Nokia srl-cpu                (both vendors)
+  #   memory/temp — srl-cpu                                      (Nokia only;
+  #                 no SNMP profile defines either for a vendor gnmic covers,
+  #                 so there is nothing to collide with)
   victoria-canonical:
     type: prometheus_write
     url: ${VICTORIA_WRITE_URL}  # compose supplies the plaintext default; TLS deployments point it at vmauth (SEC-010)
@@ -364,6 +409,10 @@ processors:
         - replace: {apply-on: name, old: ".*interface/statistics/out-broadcast-packets$", new: "device_if_out_bcast_pkts"}
         - replace: {apply-on: name, old: ".*interface/oper-state$", new: "device_if_oper_status"}
         - replace: {apply-on: name, old: ".*interface/admin-state$", new: "device_if_admin_status"}
+        # --- Arista control plane (OpenConfig) ---
+        # Anchored on the OpenConfig suffix; the SRL rule below anchors on
+        # `cpu/total/instant`, so the two can never cross-match.
+        - replace: {apply-on: name, old: ".*cpu/utilization/state/instant$", new: "device_cpu_percent"}
         # --- Nokia SR Linux control plane ---
         - replace: {apply-on: name, old: ".*cpu/total/instant$", new: "device_cpu_percent"}
         - replace: {apply-on: name, old: ".*memory/utilization$", new: "device_mem_percent"}
@@ -377,6 +426,11 @@ processors:
         # BGP flap counter + per-AFI prefixes received (cEOS OpenConfig). Anchored
         # so established-transitions never cross-matches session-state above.
         - replace: {apply-on: name, old: ".*bgp/neighbors/neighbor/state/established-transitions$", new: "device_bgp_fsm_transitions"}
+        # SRL native spelling: the leaf hangs straight off the neighbor list, so
+        # it ends `bgp/neighbor/established-transitions` — anchored, and the
+        # OpenConfig name above ends `neighbor/state/established-transitions`,
+        # so neither pattern can match the other vendor's value name.
+        - replace: {apply-on: name, old: ".*bgp/neighbor/established-transitions$", new: "device_bgp_fsm_transitions"}
         - replace: {apply-on: name, old: ".*bgp/neighbors/neighbor/afi-safis/afi-safi/state/prefixes/received$", new: "device_bgp_pfx_in"}
         # --- IS-IS adjacency state (IGP, SRL native) ---
         - replace: {apply-on: name, old: ".*isis/instance/interface/adjacency/state$", new: "device_isis_adj_state"}
@@ -485,7 +539,7 @@ processors:
       add: {vendor: nokia}
   vendor-arista:
     event-add-tag:
-      tags: ["^oc-(interfaces|bgp)$"]
+      tags: ["^oc-(interfaces|cpu|bgp)$"]
       add: {vendor: arista}
 
   # [5] Transport label — series provenance for watchdog freshness checks and
@@ -502,7 +556,7 @@ processors:
   # invalid Prometheus labels.
   canon-tags:
     event-strings:
-      tag-names: ["^interface_name$", "^interface_interface-name$", "^source$", "^neighbor_neighbor-address$", "^neighbor_peer-address$", "^network-instance_name$", "^adjacency_neighbor-system-id$", "^adjacency_adjacency-level$", "^afi-safi_afi-safi-name$", "^level_level-number$"]
+      tag-names: ["^interface_name$", "^interface_interface-name$", "^source$", "^neighbor_neighbor-address$", "^neighbor_peer-address$", "^network-instance_name$", "^adjacency_neighbor-system-id$", "^adjacency_adjacency-level$", "^afi-safi_afi-safi-name$", "^level_level-number$", "^component_name$"]
       transforms:
         - replace: {apply-on: name, old: "^interface_name$", new: "ifName"}
         - replace: {apply-on: name, old: "^interface_interface-name$", new: "ifName"}
@@ -523,6 +577,14 @@ processors:
         # vocabularies under one label name and silently break the join, so the
         # rename is paired with the value normalization in canon-isis-level-tag.
         - replace: {apply-on: name, old: "^level_level-number$", new: "isis_level"}
+        # Arista reports CPU utilization per CORE, one OpenConfig component
+        # each (CPU0, CPU1, ...). The SNMP lane labels the hrProcessorLoad rows
+        # `index`, so the component key becomes `index` and the two transports
+        # produce the same series shape. Nokia subscribes cpu[index=all] — one
+        # aggregate series, no per-core key — and its cpu_index path key is
+        # dropped as internal plumbing (drop-internal-tags), which is why the
+        # SRL series carries no index and must not be given a synthetic one.
+        - replace: {apply-on: name, old: "^component_name$", new: "index"}
 
   # [6b] IS-IS level VOCABULARY. canon-tags renames two different raw keys onto
   # `isis_level`: the adjacency's `adjacency-level` (already L1/L2) and the
@@ -539,15 +601,28 @@ processors:
 
   # [7] OWNERSHIP GATE — families listed here are mapped and ready but still
   # SNMP-owned; deleting them prevents double-producing the same canonical
-  # series from two transports. Flip = remove from this list + withdraw the
-  # family from the SNMP profile for the affected devices (one change).
-  # Currently gNMI-owned: device_mem_percent (no SNMP source on Nokia SRL).
+  # series from two transports. Flip = remove from this list + mark the family
+  # `Owner: "gnmi"` in the SNMP profile (src/backend/collectors/profiles.go) in
+  # the SAME change, so the two sides can never both yield (a gNMI-only device
+  # getting the family from nobody) or both emit.
+  #
+  # The list is EMPTY: every canonical family gnmic maps is now gNMI-owned, and
+  # every SNMP definition of one carries `Owner: "gnmi"`. That symmetry is not a
+  # convention, it is enforced — tests/test_gnmi_ownership_contract.py fails the
+  # build the moment one side moves without the other. The processor stays in
+  # the chain (rather than being deleted) because it is the ONLY place a family
+  # can be handed back to SNMP, and a future hand-back must be a one-line edit
+  # here plus the matching Owner removal, not a re-derivation of the mechanism.
+  #
+  # 2026-09-05 (tracker 230): device_if_* / device_cpu_percent /
+  # device_temp_celsius were deleted here UNCONDITIONALLY while the SNMP side
+  # yielded only on devices tagged gNMI-capable — so an SR Linux spine, which
+  # answers no SNMP at all, got interfaces, CPU and temperature from NOBODY.
+  # Both halves moved together: the patterns came out here and the same families
+  # gained `Owner: "gnmi"` in profiles.go.
   ownership-gate:
     event-delete:
-      value-names:
-        - "^device_if_.*$"
-        - "^device_cpu_percent$"
-        - "^device_temp_celsius$"
+      value-names: []
 
   # [8] Fail-closed: canonical names contain no '/' or '-'; anything still
   # path-shaped was never mapped and must not reach the canonical namespace.
