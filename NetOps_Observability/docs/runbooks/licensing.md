@@ -447,8 +447,18 @@ and `TestEmbeddedKeysAreUsable` covers the shipped set.
 
 ### 6.3 Key ceremony for the PRODUCTION key — **PENDING, HAS NOT HAPPENED**
 
+**The procedure is `docs/runbooks/licence-signing-ceremony.md`** (owner decision
+2026-09-05, tracker 259): generation, custodianship, backup/recovery, HSM vs
+sealed-offline storage, offline signing, audit logging, rotation, revocation,
+previous-key compatibility and disaster recovery. It is **BLOCKED ON
+CUSTODIANS** — two custodians must be named by the owner before it can be run.
+The summary below is what that runbook is for; where they differ, it wins.
+
 **No production signing key exists.** The only key any build trusts today is the
-lab/dev key of §3.1, and it issues lab and trial licences only.
+lab/dev key of §3.1, and it issues lab and trial licences only. It carries
+`purpose: PurposeLab` in `keys.go`, and `correlix-licence keys --release-check`
+exits 1 while it is the only embedded key — so a release cannot be cut in this
+state without someone overriding a refusal.
 
 The ceremony is a prerequisite for issuing any commercial licence. What it owes,
 per design §3:
