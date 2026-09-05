@@ -23,6 +23,7 @@ import (
 	"net/netip"
 	"net/url"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -341,8 +342,8 @@ func (t *Target) validateDestination() error {
 		if h, p, err := net.SplitHostPort(t.Host); err == nil {
 			host = h
 			if t.Port == 0 {
-				var pn int
-				if _, serr := fmt.Sscanf(p, "%d", &pn); serr != nil || pn < 1 || pn > 65535 {
+				pn, serr := strconv.Atoi(p)
+				if serr != nil || pn < 1 || pn > 65535 {
 					return errors.New("port in host:port is not a valid port")
 				}
 				t.Port = pn

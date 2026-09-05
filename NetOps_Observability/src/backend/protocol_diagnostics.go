@@ -970,13 +970,8 @@ SELECT top_hypothesis, hypotheses, affected,
  LIMIT 1
  FORMAT JSON`
 	rows, err := s.chRows(r, sql)
-	if err != nil {
-		// A ClickHouse failure is NOT "this incident has no correlation facts":
-		// surface it so an outage of the evidence store is visible in the log,
-		// then classify without the facts (the classifier states what it lacks).
-		logWarn("tac", "correlation facts could not be read — classifying without them", map[string]any{
-			"correlation_id": id, "error": err.Error(),
-		})
+	if err != nil { // a ClickHouse failure is NOT "no facts": log it, then classify without them
+		logWarn("tac", "correlation facts could not be read — classifying without them", map[string]any{"correlation_id": id, "error": err.Error()})
 		return tacCorrFacts{}, false
 	}
 	if len(rows) == 0 {
@@ -1688,8 +1683,7 @@ func (s *server) buildTACService() error {
 		}
 		opts = append(opts, tac.WithCollector(col))
 	}
-	store, serr := tac.NewStore(filepath.Join(envOr("DATA_DIR", "/data"), "tac"),
-		tac.WithWarn(func(m string, f map[string]any) { logWarn("tac", m, f) }))
+	store, serr := tac.NewStore(filepath.Join(envOr("DATA_DIR", "/data"), "tac"), tac.WithWarn(func(m string, f map[string]any) { logWarn("tac", m, f) }))
 	if serr != nil {
 		return fmt.Errorf("tac bundle store: %w", serr)
 	}
